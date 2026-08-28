@@ -333,6 +333,16 @@ pub struct SearchQuery {
   /// it.
   #[serde(default)]
   include_folders: bool,
+  /// Rank hits from this workspace above equally-relevant hits elsewhere.
+  ///
+  /// A TIEBREAKER inside each relevance tier, never a filter and never the top
+  /// key: an exact page-name match in another workspace still outranks a body
+  /// mention in this one. Reported 2026-08-28 — searching "claude" from a
+  /// workspace holding two passing mentions hid fifty pages actually named
+  /// after it, because the client only widened the scope when the current
+  /// workspace came back EMPTY. Preferring beats gating.
+  #[serde(default)]
+  prefer_workspace: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -389,6 +399,7 @@ pub async fn search_workspace(
     &[workspace_id],
     needle,
     query.include_folders,
+    query.prefer_workspace,
   )
   .await?;
   Ok(Json(SearchResponse { results }))
@@ -433,6 +444,7 @@ pub async fn search_all_workspaces(
     &workspace_ids,
     needle,
     query.include_folders,
+    query.prefer_workspace,
   )
   .await?;
   Ok(Json(SearchResponse { results }))
@@ -482,6 +494,7 @@ async fn search_views(
   workspace_ids: &[Uuid],
   needle: &str,
   include_folders: bool,
+  prefer_workspace: Option<Uuid>,
 ) -> ApiResult<Vec<SearchResult>> {
   if workspace_ids.is_empty() {
     return Ok(vec![]);
@@ -561,6 +574,7 @@ async fn search_views(
         AND (v.name ILIKE $2 ESCAPE '\' OR v.object_id = ANY($3))
       ORDER BY (v.name ILIKE $2 ESCAPE '\') DESC,
                (v.object_type <> 'document') DESC,
+               (v.workspace_id = $4) DESC,
                v.updated_at DESC
       LIMIT 50
     "#
@@ -576,6 +590,9 @@ async fn search_views(
     .bind(workspace_ids)
     .bind(&pattern)
     .bind(&body_ids)
+    // NULL when no preference: `workspace_id = NULL` is NULL for every row, so
+    // they all tie and the key drops out of the ordering by itself.
+    .bind(prefer_workspace)
     .fetch_all(db)
     .await?;
 
@@ -6198,7 +6215,7 @@ mod tests {
         .unwrap();
 
       // Default: the folder is invisible even though its name matches.
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", false, None).await.unwrap();
       assert_eq!(hits.len(), 1, "pages only by default: {hits:?}");
       assert_eq!(hits[0].view_id, page);
       assert!(!hits[0].is_folder);
@@ -6209,7 +6226,7 @@ mod tests {
       );
 
       // Opt in: the folder shows up, flagged, and matched by NAME.
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", true).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", true, None).await.unwrap();
       assert_eq!(hits.len(), 2, "page + folder: {hits:?}");
       let f = hits.iter().find(|h| h.view_id == folder).expect("folder hit");
       assert!(f.is_folder);
@@ -6239,7 +6256,7 @@ mod tests {
         seed_document(&db, ws_b, user_b, "部署脚本", serde_json::json!([])).await;
 
       // One workspace: the other one's page must not appear.
-      let only_a = search_views(&db, &BodyIndex::default(), &[ws_a], "部署", false).await.unwrap();
+      let only_a = search_views(&db, &BodyIndex::default(), &[ws_a], "部署", false, None).await.unwrap();
       assert_eq!(only_a.len(), 1, "scoped to one workspace: {only_a:?}");
       assert_eq!(only_a[0].view_id, page_a);
       assert_eq!(
@@ -6248,7 +6265,7 @@ mod tests {
       );
 
       // Both: two hits, each labelled with where it lives.
-      let both = search_views(&db, &BodyIndex::default(), &[ws_a, ws_b], "部署", false).await.unwrap();
+      let both = search_views(&db, &BodyIndex::default(), &[ws_a, ws_b], "部署", false, None).await.unwrap();
       assert_eq!(both.len(), 2, "both workspaces searched: {both:?}");
       let a = both.iter().find(|h| h.view_id == page_a).expect("ws_a hit");
       let b = both.iter().find(|h| h.view_id == page_b).expect("ws_b hit");
@@ -6271,7 +6288,7 @@ mod tests {
       let (ws, user) = seed_workspace(&db).await;
       seed_document(&db, ws, user, "部署手册", serde_json::json!([])).await;
 
-      let hits = search_views(&db, &BodyIndex::default(), &[], "部署", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[], "部署", false, None).await.unwrap();
       assert!(hits.is_empty(), "an empty scope finds nothing: {hits:?}");
     }
 
@@ -6314,7 +6331,7 @@ mod tests {
         .await
         .unwrap();
 
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "性能基准测试", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "性能基准测试", false, None).await.unwrap();
       assert_eq!(hits.len(), 2, "both rows match the needle: {hits:?}");
       assert_eq!(
         hits[0].view_id, wanted,
@@ -6372,7 +6389,7 @@ mod tests {
         .await
         .unwrap();
 
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", true).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", true, None).await.unwrap();
       let order: Vec<Uuid> = hits.iter().map(|h| h.view_id).collect();
       assert_eq!(
         order,
@@ -6395,31 +6412,31 @@ mod tests {
       set_content_text(&db, doc_b, "no chinese here, just english text").await;
 
       // 3+ char CJK body hit → doc A only, title_match=false, snippet has the hit.
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "全文搜索", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "全文搜索", false, None).await.unwrap();
       assert_eq!(hits.len(), 1, "one body hit: {hits:?}");
       assert_eq!(hits[0].view_id, view_a);
       assert!(!hits[0].title_match, "matched the body, not the title");
       assert!(hits[0].snippet.contains("全文搜索"), "snippet: {}", hits[0].snippet);
 
       // 2-char CJK substring still matches (substring fallback, no tokenizer).
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "索引", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "索引", false, None).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_a);
 
       // Title hit → title_match=true (body may or may not also match).
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "会议", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "会议", false, None).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_a);
       assert!(hits[0].title_match);
 
       // A latin title hit resolves the other doc.
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "roadmap", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "roadmap", false, None).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_b);
       assert!(hits[0].title_match);
 
       // A query matching neither returns nothing.
-      assert!(search_views(&db, &BodyIndex::default(), &[ws], "缺失关键词", false).await.unwrap().is_empty());
+      assert!(search_views(&db, &BodyIndex::default(), &[ws], "缺失关键词", false, None).await.unwrap().is_empty());
     }
 
     /// Scale measurement, not a regression gate — `#[ignore]`, run by hand:
@@ -6513,7 +6530,7 @@ mod tests {
         let idx = &idx;
         async move {
           let t = std::time::Instant::now();
-          let hits = search_views(&db, idx, &scope, needle, false).await.unwrap();
+          let hits = search_views(&db, idx, &scope, needle, false, None).await.unwrap();
           (t.elapsed(), hits.len())
         }
       };
@@ -6552,6 +6569,80 @@ mod tests {
       sqlx::query("DELETE FROM users WHERE id = $1").bind(user).execute(&db).await.unwrap();
     }
 
+    /// `prefer_workspace` is a TIEBREAKER, not a filter and not the top key.
+    ///
+    /// Reported 2026-08-28: searching "claude" from a workspace holding two
+    /// passing mentions showed only those two, while fifty pages actually named
+    /// after it sat in another workspace — the client only widened the scope
+    /// when the current workspace returned EMPTY, and two is not empty. The fix
+    /// is to always search wide and PREFER the current workspace, so both
+    /// halves of that have to hold: a foreign NAME hit still beats a local BODY
+    /// hit (relevance first), and among equally-relevant hits the local one
+    /// leads (proximity second).
+    #[tokio::test]
+    async fn prefer_workspace_breaks_ties_without_outranking_relevance() {
+      let Some(db) = pool().await else { return };
+      let (here, user_a) = seed_workspace(&db).await;
+      let (elsewhere, user_b) = seed_workspace(&db).await;
+
+      // A body mention in the CURRENT workspace…
+      let (local_body, doc) = seed_document(
+        &db,
+        here,
+        user_a,
+        "参数说明",
+        serde_json::json!([{ "id": "b1", "type": "paragraph", "text": "顺带提了一句 claude" }]),
+      )
+      .await;
+      let _ = doc;
+      // …versus a page NAMED after the needle, somewhere else.
+      let (foreign_name, _) =
+        seed_document(&db, elsewhere, user_b, "Claude简介", serde_json::json!([])).await;
+      // …and an equally-named page in the CURRENT workspace, staler on purpose.
+      let (local_name, _) =
+        seed_document(&db, here, user_a, "Claude配置", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET updated_at = now() - interval '90 days' WHERE id = $1")
+        .bind(local_name)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let hits = search_views(
+        &db,
+        &BodyIndex::default(),
+        &[here, elsewhere],
+        "claude",
+        false,
+        Some(here),
+      )
+      .await
+      .unwrap();
+      let order: Vec<Uuid> = hits.iter().map(|h| h.view_id).collect();
+      assert_eq!(
+        order,
+        vec![local_name, foreign_name, local_body],
+        "name tier first (local before foreign within it), body hit last even          though it is local and newer: {hits:?}"
+      );
+
+      // Without a preference the two name hits fall back to recency, which is
+      // what proves the key above was doing the work.
+      let hits = search_views(
+        &db,
+        &BodyIndex::default(),
+        &[here, elsewhere],
+        "claude",
+        false,
+        None,
+      )
+      .await
+      .unwrap();
+      assert_eq!(
+        hits.first().map(|h| h.view_id),
+        Some(foreign_name),
+        "no preference → the fresher name hit leads: {hits:?}"
+      );
+    }
+
     /// The body index is refreshed at query time by `updated_at` cursor, so an
     /// edit that lands AFTER a previous search must be visible to the next one
     /// ON THE SAME INDEX INSTANCE. The other tests build a fresh instance per
@@ -6566,7 +6657,7 @@ mod tests {
       let (view_a, doc_a) =
         seed_document(&db, ws, user, "第一篇", serde_json::json!([])).await;
       set_content_text(&db, doc_a, "冷启动就有的正文").await;
-      let hits = search_views(&db, &idx, &[ws], "冷启动就有的", false).await.unwrap();
+      let hits = search_views(&db, &idx, &[ws], "冷启动就有的", false, None).await.unwrap();
       assert_eq!(hits.len(), 1, "the first refresh loads everything: {hits:?}");
       assert_eq!(hits[0].view_id, view_a);
 
@@ -6574,7 +6665,7 @@ mod tests {
       let (view_b, doc_b) =
         seed_document(&db, ws, user, "第二篇", serde_json::json!([])).await;
       set_content_text(&db, doc_b, "后写入的独特正文").await;
-      let hits = search_views(&db, &idx, &[ws], "后写入的独特", false).await.unwrap();
+      let hits = search_views(&db, &idx, &[ws], "后写入的独特", false, None).await.unwrap();
       assert_eq!(
         hits.iter().map(|h| h.view_id).collect::<Vec<_>>(),
         vec![view_b],
@@ -6583,7 +6674,7 @@ mod tests {
 
       // An edit REPLACING an indexed body: the old text must stop matching.
       set_content_text(&db, doc_a, "改写过的另一个正文").await;
-      let hits = search_views(&db, &idx, &[ws], "冷启动就有的", false).await.unwrap();
+      let hits = search_views(&db, &idx, &[ws], "冷启动就有的", false, None).await.unwrap();
       assert!(hits.is_empty(), "stale index text kept matching: {hits:?}");
     }
 
@@ -6600,7 +6691,7 @@ mod tests {
       set_content_text(&db, doc_q, "confident to 100 percent sure").await;
 
       // Literal "100%" matches only the doc that actually contains "100%".
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "100%", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "100%", false, None).await.unwrap();
       assert_eq!(
         hits.len(),
         1,
@@ -6687,13 +6778,13 @@ mod tests {
       )
       .await;
 
-      let hits = search_views(&db, &BodyIndex::default(), &[ws], "正文内容", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "正文内容", false, None).await.unwrap();
       assert_eq!(hits.len(), 1, "body searchable at once: {hits:?}");
       assert_eq!(hits[0].view_id, view);
       assert!(!hits[0].title_match, "matched the body, not the title");
 
       assert_eq!(
-        search_views(&db, &BodyIndex::default(), &[ws], "导入页", false).await.unwrap().len(),
+        search_views(&db, &BodyIndex::default(), &[ws], "导入页", false, None).await.unwrap().len(),
         1,
         "the title is searchable too"
       );

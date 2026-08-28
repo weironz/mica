@@ -117,7 +117,6 @@
     }
   },
   "searchRecentLabel": "Recently edited",
-  "searchFallbackEverywhere": "Nothing in this workspace — showing matches from your other workspaces",
   "searchWorkspaceLabel": "Workspaces",
   "searchWorkspaceSwitch": "Switch",
   "tabNewTooltip": "New tab",

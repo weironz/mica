@@ -844,11 +844,13 @@ class ApiClient {
   /// what let the scope checkbox become an automatic empty-result fallback.
   Future<List<SearchResult>> searchAllWorkspaces(
     String token,
-    String query,
-  ) async {
+    String query, {
+    String? preferWorkspace,
+  }) async {
     final response = await _get(
       '/api/search'
-      '?q=${Uri.encodeQueryComponent(query)}&include_folders=true',
+      '?q=${Uri.encodeQueryComponent(query)}&include_folders=true'
+      '${preferWorkspace == null ? '' : '&prefer_workspace=$preferWorkspace'}',
       token,
     );
     final items = response['results'] as List<dynamic>;

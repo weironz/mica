@@ -262,58 +262,63 @@ void main() {
     });
   });
 
-  group('searchWithFallback', () {
-    test('a non-empty current-workspace answer never widens', () async {
-      var wideCalls = 0;
-      final r = await searchWithFallback<String>(
-        searchHere: () async => ['here'],
-        searchEverywhere: () async {
-          wideCalls++;
-          return ['far'];
+  group('searchScopeFor', () {
+    // The rule that broke (2026-08-28): "current workspace first, widen only
+    // when EMPTY". Searching "claude" from a workspace with two passing
+    // mentions returned exactly those two and hid fifty pages named after it
+    // one workspace away — two is not zero, so the widening never ran. Scope
+    // is now unconditional; relevance vs proximity is ranked server-side.
+    test('goes wide by default, without consulting the narrow search', () async {
+      var hereCalls = 0;
+      final r = await searchScopeFor<String>(
+        searchHere: () async {
+          hereCalls++;
+          return ['weak local hit'];
         },
+        searchEverywhere: () async => ['strong remote hit'],
       );
-      expect(r.results, ['here']);
-      expect(r.everywhere, isFalse);
-      expect(wideCalls, 0, reason: 'the near answer stands; no wide query runs');
+      expect(r, ['strong remote hit']);
+      expect(hereCalls, 0, reason: 'a local hit must not be able to veto the wide search');
     });
 
-    test('empty widens, and says so only when the widening found something',
+    test('an empty wide result stays empty — no second, narrower opinion',
         () async {
-      final hit = await searchWithFallback<String>(
-        searchHere: () async => const [],
-        searchEverywhere: () async => ['far'],
-      );
-      expect(hit.results, ['far']);
-      expect(hit.everywhere, isTrue);
-
-      final miss = await searchWithFallback<String>(
-        searchHere: () async => const [],
+      final r = await searchScopeFor<String>(
+        searchHere: () async => ['local'],
         searchEverywhere: () async => const [],
       );
-      expect(miss.results, isEmpty);
-      expect(miss.everywhere, isFalse,
-          reason: 'an empty widening is a plain no-match, not a scope change');
+      expect(r, isEmpty,
+          reason: 'the wide scan already covered the current workspace');
     });
 
-    test('a failed widening keeps the honest empty answer', () async {
-      // An old server without GET /search must not turn "no matches here"
-      // into "search failed" — the narrow search DID succeed.
-      Object? logged;
-      final r = await searchWithFallback<String>(
-        searchHere: () async => const [],
-        searchEverywhere: () async => throw StateError('404'),
-        onFallbackError: (e) => logged = e,
+    test('no global search available → the narrow one answers', () async {
+      // 本地(离线)模式: one workspace, nothing to widen to.
+      final r = await searchScopeFor<String>(
+        searchHere: () async => ['local'],
+        searchEverywhere: null,
       );
-      expect(r.results, isEmpty);
-      expect(r.everywhere, isFalse);
+      expect(r, ['local']);
+    });
+
+    test('a failing global search falls back instead of failing the query',
+        () async {
+      // An old server without GET /search must not turn a working search into
+      // an error banner.
+      Object? logged;
+      final r = await searchScopeFor<String>(
+        searchHere: () async => ['local'],
+        searchEverywhere: () async => throw StateError('404'),
+        onGlobalError: (e) => logged = e,
+      );
+      expect(r, ['local']);
       expect(logged, isA<StateError>());
     });
 
     test('the narrow search failing still throws', () async {
       await expectLater(
-        searchWithFallback<String>(
+        searchScopeFor<String>(
           searchHere: () async => throw StateError('down'),
-          searchEverywhere: () async => const [],
+          searchEverywhere: null,
         ),
         throwsStateError,
       );

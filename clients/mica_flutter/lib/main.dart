@@ -3045,10 +3045,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.searchWorkspace(session.accessToken, workspace.id, query);
   }
 
+  /// Every workspace at once, with the open one preferred among equally
+  /// relevant hits. This is the DEFAULT scope (2026-08-28) — see
+  /// `searchScopeFor` for why the old "current first, widen only when empty"
+  /// rule had to go.
   Future<List<SearchResult>> _searchAllWorkspaces(String query) async {
     final session = _session;
     if (session == null) return const [];
-    return _api.searchAllWorkspaces(session.accessToken, query);
+    return _api.searchAllWorkspaces(
+      session.accessToken,
+      query,
+      preferWorkspace: _selectedWorkspace?.id,
+    );
   }
 
   /// Open a search hit that may belong to ANOTHER workspace.

@@ -115,36 +115,42 @@ List<String> workspaceTrailFor(
   return const [];
 }
 
-/// Run [searchHere] and, only when it comes back EMPTY, widen through
-/// [searchEverywhere]. Returns the results plus whether the widening supplied
-/// them (`true` only when it actually produced hits — an empty widening is
-/// still an honest "no matches", not a scope change worth announcing).
+/// Search EVERY workspace, preferring the open one — and fall back to the
+/// current-workspace search only when there is no global search to use.
 ///
-/// The scope checkbox this replaces (2026-08-28) existed to make the user pay
-/// for cross-workspace search knowingly, back when it cost N workspaces' worth
-/// of body reads; server-side FTS M2 made the wide scan the same price as the
-/// narrow one. Current-workspace-first stays: when the nearby answer exists,
-/// mixing in look-alike pages from elsewhere buries it under far ones.
+/// [searchEverywhere] is null in the local (offline) world, which has exactly
+/// one workspace, and on a server too old for `GET /search` the call throws;
+/// both land on [searchHere]. Note the direction: the narrow search is the
+/// FALLBACK now, not the default.
 ///
-/// A widening failure is swallowed BY DESIGN (with [onFallbackError] for the
-/// log): the narrow search SUCCEEDED, and reporting the whole query as failed
-/// because the widening couldn't run — an old server without `GET /search`
-/// (pre-0.13.18, observed live), a blip — would overwrite a true answer with
-/// an error. Only the narrow search's own failure propagates to the caller.
-Future<({List<T> results, bool everywhere})> searchWithFallback<T>({
+/// **Why this replaced "current first, widen only when empty" (2026-08-28).**
+/// That rule looks reasonable and fails badly: searching "claude" from a
+/// workspace holding two passing mentions returned exactly those two, while
+/// fifty pages actually NAMED after it sat one workspace away — unreachable,
+/// because two results is not zero results, so the widening never fired. A
+/// gate on emptiness lets any weak local hit veto every strong remote one.
+///
+/// The scope checkbox that preceded both (removed the same day) existed
+/// because cross-workspace search cost N workspaces' worth of body reads.
+/// Server-side FTS M2 made the wide scan the same price as the narrow one, so
+/// there is nothing left to make the user pay for — and asking someone to tick
+/// a box to see obviously better answers is interaction cost covering for a
+/// design flaw. Relevance is ranked server-side (`prefer_workspace`): a
+/// foreign name match still beats a local body mention, and among equals the
+/// local one leads.
+Future<List<T>> searchScopeFor<T>({
   required Future<List<T>> Function() searchHere,
   required Future<List<T>> Function()? searchEverywhere,
-  void Function(Object error)? onFallbackError,
+  void Function(Object error)? onGlobalError,
 }) async {
-  final here = await searchHere();
-  if (here.isNotEmpty || searchEverywhere == null) {
-    return (results: here, everywhere: false);
-  }
+  if (searchEverywhere == null) return searchHere();
   try {
-    final wide = await searchEverywhere();
-    return (results: wide, everywhere: wide.isNotEmpty);
+    return await searchEverywhere();
   } catch (e) {
-    onFallbackError?.call(e);
-    return (results: here, everywhere: false);
+    // An old server (no `GET /search`, pre-0.13.18 — observed live) or a blip:
+    // answer from the workspace we CAN search rather than reporting the whole
+    // query as failed. Only `searchHere` throwing reaches the caller.
+    onGlobalError?.call(e);
+    return searchHere();
   }
 }

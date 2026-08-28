@@ -38,7 +38,6 @@
   "transferDestinationRoot": "工作区根目录",
   "batchDragLabel": "{count} 项",
   "searchRecentLabel": "最近编辑",
-  "searchFallbackEverywhere": "当前工作区没有匹配,以下结果来自其他工作区",
   "searchWorkspaceLabel": "工作区",
   "searchWorkspaceSwitch": "切换",
   "tabNewTooltip": "新建标签页",

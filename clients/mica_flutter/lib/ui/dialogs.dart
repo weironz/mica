@@ -233,16 +233,6 @@ class _SearchDialogState extends State<_SearchDialog> {
   /// point is to be able to pick a result without touching the mouse.
   int _selected = -1;
 
-  /// The shown results came from the automatic all-workspaces fallback (the
-  /// current workspace had none). Drawn as a hint line over the list, because
-  /// results that silently jump scope would read as "this page IS here".
-  ///
-  /// The scope checkbox this replaces (2026-08-28) existed to make the user
-  /// pay for cross-workspace search knowingly, back when it cost N workspaces'
-  /// worth of body reads. FTS M2 made the wide scan the same price as the
-  /// narrow one, so the price-tag UI lost its reason; searching wider only
-  /// when the narrow answer is empty is the remaining useful behavior.
-  bool _fellBackToEverywhere = false;
   final _listScroll = ScrollController();
 
   @override
@@ -283,19 +273,18 @@ class _SearchDialogState extends State<_SearchDialog> {
     }
     setState(() => _loading = true);
     try {
-      // Current workspace first; EMPTY widens to every workspace on its own —
-      // rationale and failure policy live on [searchWithFallback].
-      final (:results, :everywhere) = await searchWithFallback(
+      // Every workspace, ranked with this one preferred — see [searchScopeFor]
+      // for why the scope is no longer conditional.
+      final results = await searchScopeFor(
         searchHere: () => search(query),
         searchEverywhere: widget.onSearchAll == null
             ? null
             : () => widget.onSearchAll!(query),
-        onFallbackError: (e) => debugPrint('search fallback skipped: $e'),
+        onGlobalError: (e) => debugPrint('global search unavailable: $e'),
       );
       if (!mounted || _query.text.trim() != query) return;
       setState(() {
         _results = results;
-        _fellBackToEverywhere = everywhere;
         _lastQuery = query;
         _loading = false;
         _failed = false;
@@ -714,20 +703,6 @@ class _SearchDialogState extends State<_SearchDialog> {
     }
     return Column(
       children: [
-        if (_fellBackToEverywhere)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Padding(
-              padding: const EdgeInsets.only(left: 4, bottom: 6),
-              child: Text(
-                context.l10n.searchFallbackEverywhere,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: MicaTheme.of(context).text.muted,
-                ),
-              ),
-            ),
-          ),
         // How many hits, so a long list doesn't have to be counted by eye.
         Align(
           alignment: Alignment.centerLeft,
