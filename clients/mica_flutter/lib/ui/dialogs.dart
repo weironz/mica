@@ -205,7 +205,14 @@ class _SearchDialog extends StatefulWidget {
 
   /// Open a hit. The second argument is the hit's workspace, null when the
   /// server did not say — callers read that as "the workspace we searched".
-  final void Function(String viewId, String? workspaceId) onOpen;
+  ///
+  /// [inNewTab] is the accelerator-held variant (Ctrl/Cmd + click or + Enter):
+  /// put it in a fresh tab instead of replacing what is open. It matters most
+  /// for a hit from ANOTHER workspace, which otherwise takes the whole shell
+  /// there — a tab carries its own workspace, so the new-tab route can hold a
+  /// foreign page without moving the user off what they were doing.
+  final void Function(String viewId, String? workspaceId, {bool inNewTab})
+  onOpen;
 
   /// A FOLDER hit. Folders cannot be opened — there is no document behind one —
   /// so they get their own exit: locate the folder in the sidebar tree instead.
@@ -496,11 +503,24 @@ class _SearchDialogState extends State<_SearchDialog> {
   /// lives in both is a rule that will eventually only be true in one.
   void _activate(SearchResult result) {
     if (result.isFolder) {
+      // A folder has no document, so "in a new tab" has nothing to mean here —
+      // the accelerator is simply ignored rather than doing something else.
       widget.onReveal(result.viewId, result.workspaceId);
     } else {
-      widget.onOpen(result.viewId, result.workspaceId);
+      widget.onOpen(
+        result.viewId,
+        result.workspaceId,
+        inNewTab: _accelHeld,
+      );
     }
   }
+
+  /// Whether Ctrl/Cmd is down RIGHT NOW — read at activation rather than
+  /// tracked, because a modifier pressed after the list was built still counts
+  /// and one released before the click no longer does.
+  bool get _accelHeld =>
+      HardwareKeyboard.instance.isControlPressed ||
+      HardwareKeyboard.instance.isMetaPressed;
 
   /// Act on the keyboard-selected row, if there is one.
   ///

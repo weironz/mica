@@ -12697,12 +12697,19 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// [inNewTab] routes the chosen page into a fresh tab instead of replacing
-  /// what is open — the tab strip's `+` is the only caller that passes it.
-  /// Folder hits still reveal in the sidebar either way: there is no document
-  /// behind a folder, so "open it in a tab" has nothing to mean.
+  /// [inNewTab] forces EVERY hit into a fresh tab — the tab strip's `+` is the
+  /// only caller that passes it, because "open an existing page" is that menu
+  /// item's whole job. From an ordinary search the choice is per-click instead:
+  /// holding Ctrl/Cmd asks for a tab (see `_SearchDialog._accelHeld`), which is
+  /// how you follow a hit in ANOTHER workspace without the shell moving there.
+  ///
+  /// Folder hits reveal in the sidebar either way: there is no document behind
+  /// a folder, so "open it in a tab" has nothing to mean.
   void _openSearch({String? initialQuery, bool inNewTab = false}) {
     final openInNewTab = widget.onOpenInNewTabById;
+    // Captured under a different name: the closure below takes its own
+    // `inNewTab` (the per-click one), which would otherwise shadow this.
+    final forceNewTab = inNewTab;
     showDialog<void>(
       context: context,
       builder: (context) => _SearchDialog(
@@ -12722,8 +12729,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 Navigator.of(context).pop();
                 widget.onSelectWorkspaceById!(id);
               },
-        onOpen: (viewId, workspaceId) {
+        onOpen: (viewId, workspaceId, {bool inNewTab = false}) {
           Navigator.of(context).pop();
+          // The `+` menu forces it for every hit; an ordinary search leaves it
+          // to whether Ctrl/Cmd was down at the click.
+          final newTab = inNewTab || forceNewTab;
           final other = elsewhereWorkspace(
             workspaceId,
             widget.selectedWorkspace?.id,
@@ -12735,7 +12745,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // `+` can queue a page from elsewhere without moving you off what you
           // are doing. This used to fall into the branch below, which switched
           // immediately and opened in place — the tab was never created.
-          if (elsewhere && inNewTab && openInNewTab != null) {
+          if (elsewhere && newTab && openInNewTab != null) {
             openInNewTab(viewId, other);
             // Deliberately no reveal: the id is not in the tree we are showing,
             // and `_revealInTree` would park the request until that workspace's
@@ -12748,7 +12758,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // of the CURRENT workspace's tree.
           if (other != null) {
             widget.onOpenSearchHit?.call(viewId, other);
-          } else if (inNewTab && openInNewTab != null) {
+          } else if (newTab && openInNewTab != null) {
             openInNewTab(viewId, null);
           } else {
             widget.onOpenSearchResult(viewId);

@@ -198,6 +198,7 @@
   "searchResultCount": "{count} 个结果",
   "searchHintSelect": "选择",
   "searchHintOpen": "打开",
+  "searchHintNewTab": "新标签页",
   "searchHintInPage": "页内查找",
   "searchTitleMatch": "标题匹配",
   "searchFolderMatch": "文件夹 —— 在侧栏中定位",

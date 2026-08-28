@@ -345,6 +345,7 @@
   },
   "searchHintSelect": "select",
   "searchHintOpen": "open",
+  "searchHintNewTab": "new tab",
   "searchHintInPage": "find in page",
   "searchTitleMatch": "Title match",
   "searchFolderMatch": "Folder — shown in the sidebar",
