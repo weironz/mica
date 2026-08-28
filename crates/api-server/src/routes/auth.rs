@@ -286,6 +286,64 @@ pub async fn update_me(
   }))
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UserSettingsBody {
+  settings: serde_json::Value,
+}
+
+/// `GET /api/auth/me/settings` — the signed-in user's synced client settings.
+///
+/// A user with no row yet gets `{}`, not a 404: "never saved any" and "saved
+/// the empty set" are the same thing to a client deciding which toggles to
+/// apply, and a 404 would make every fresh account log an error on first boot.
+pub async fn get_settings(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+) -> ApiResult<Json<UserSettingsBody>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  let settings: Option<(serde_json::Value,)> =
+    sqlx::query_as("SELECT settings FROM user_settings WHERE user_id = $1")
+      .bind(user_id)
+      .fetch_optional(&state.db)
+      .await?;
+  Ok(Json(UserSettingsBody {
+    settings: settings.map_or_else(|| serde_json::json!({}), |(s,)| s),
+  }))
+}
+
+/// `PUT /api/auth/me/settings` — replace the synced settings blob whole.
+///
+/// PUT, not PATCH: the client owns the vocabulary and always sends its full
+/// synced set, so replace-whole is the true semantics — a merge would resurrect
+/// keys a newer client deliberately dropped. Last write wins across devices;
+/// settings are low-frequency and single-user, there is no conflict to referee.
+pub async fn put_settings(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Json(payload): Json<UserSettingsBody>,
+) -> ApiResult<StatusCode> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  if !payload.settings.is_object() {
+    return Err(ApiError::BadRequest("settings must be a JSON object".into()));
+  }
+  // A settings blob is a handful of toggles. The cap is against the table
+  // quietly becoming somebody's free key-value store, not a real limit anyone
+  // legitimate will meet.
+  const MAX_BYTES: usize = 16 * 1024;
+  if payload.settings.to_string().len() > MAX_BYTES {
+    return Err(ApiError::BadRequest("settings too large".into()));
+  }
+  sqlx::query(
+    "INSERT INTO user_settings(user_id, settings, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (user_id) DO UPDATE SET settings = excluded.settings, updated_at = now()",
+  )
+  .bind(user_id)
+  .bind(&payload.settings)
+  .execute(&state.db)
+  .await?;
+  Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {
   current_password: String,
@@ -1328,6 +1386,51 @@ mod refresh_pg {
       .await
       .unwrap();
     user
+  }
+
+  /// Settings storage semantics the client sync leans on: an account with no
+  /// row reads as `{}` (not an error), and a PUT REPLACES the blob — a merge
+  /// would resurrect keys a newer client deliberately dropped.
+  #[tokio::test]
+  async fn user_settings_default_empty_and_replace_whole() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+
+    let read = |db: sqlx::PgPool| async move {
+      let row: Option<(serde_json::Value,)> =
+        sqlx::query_as("SELECT settings FROM user_settings WHERE user_id = $1")
+          .bind(user)
+          .fetch_optional(&db)
+          .await
+          .unwrap();
+      row.map_or_else(|| serde_json::json!({}), |(s,)| s)
+    };
+    assert_eq!(read(db.clone()).await, serde_json::json!({}), "no row reads as empty");
+
+    let upsert = |db: sqlx::PgPool, v: serde_json::Value| async move {
+      sqlx::query(
+        "INSERT INTO user_settings(user_id, settings, updated_at) VALUES ($1, $2, now())
+         ON CONFLICT (user_id) DO UPDATE SET settings = excluded.settings, updated_at = now()",
+      )
+      .bind(user)
+      .bind(v)
+      .execute(&db)
+      .await
+      .unwrap();
+    };
+    upsert(db.clone(), serde_json::json!({"showPageTitle": "true", "themeMode": "dark"})).await;
+    assert_eq!(
+      read(db.clone()).await,
+      serde_json::json!({"showPageTitle": "true", "themeMode": "dark"})
+    );
+
+    // Replace-whole: themeMode dropped by the client must be GONE after PUT.
+    upsert(db.clone(), serde_json::json!({"showPageTitle": "false"})).await;
+    assert_eq!(
+      read(db.clone()).await,
+      serde_json::json!({"showPageTitle": "false"}),
+      "PUT replaces the blob; a merge would have kept themeMode"
+    );
   }
 
   const DAY: i64 = 60 * 60 * 24;

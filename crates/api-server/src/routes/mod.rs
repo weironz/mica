@@ -80,6 +80,10 @@ pub fn api_router() -> Router<AppState> {
       get(auth::me).patch(auth::update_me).delete(auth::delete_account),
     )
     .route(
+      "/auth/me/settings",
+      get(auth::get_settings).put(auth::put_settings),
+    )
+    .route(
       "/auth/me/avatar",
       // 4 MB cap enforced in the handler; the layer only has to stop axum's 2 MB
       // default from rejecting a legitimate photo before the handler can say so.

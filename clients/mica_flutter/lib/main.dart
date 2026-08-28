@@ -51,6 +51,7 @@ import 'ui/tree_selection.dart';
 import 'ui/panel_kit.dart';
 import 'ui/rename.dart';
 import 'ui/search_data.dart';
+import 'ui/settings_sync.dart';
 import 'ui/sign_in_hero.dart';
 import 'ui/sign_in_screen.dart';
 import 'ui/sign_in_pane.dart';
@@ -502,6 +503,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void initState() {
     super.initState();
     _loadPrefs();
+    // Theme and language persist inside their own controllers' setters; the
+    // sync write-through has to hear about those changes HERE, because the
+    // controllers are global and know nothing of sessions. The apply pass in
+    // _syncSettingsFromCloud sets both controllers too — the
+    // _applyingCloudSettings guard inside _schedulePushSettings is what keeps
+    // that from echoing the cloud's own values back up.
+    themeModeController.addListener(_schedulePushSettings);
+    localeController.addListener(_schedulePushSettings);
     // Desktop quits via exit(0) (see window_setup_desktop): make that hard exit
     // safe by persisting debounced local state first. No-op on web.
     appExitFlush = _flushForExit;
@@ -783,6 +792,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // frame too late: this runs from initState, inside MaterialApp's first
     // build, where notifying an ancestor cannot rebuild it. main() does it
     // before runApp instead.
+    _loadAppearancePrefs();
+    if (!kIsWeb)
+      _pending = PendingUploads.fromJson(loadPref('pendingBlobUploads'));
+  }
+
+  /// The appearance subset of [_loadPrefs] — the state that mirrors the synced
+  /// prefs. Split out so [_syncSettingsFromCloud] can re-derive exactly this
+  /// after writing cloud values into the prefs, without re-running the origin/
+  /// server migration half of [_loadPrefs] mid-session.
+  void _loadAppearancePrefs() {
     final fontScale = double.tryParse(loadPref('fontScale') ?? '');
     final fontFamily = loadPref('fontFamily');
     _appearance = EditorAppearance(
@@ -807,8 +826,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _showFormatBar = loadPref('showFormatBar') == 'true';
     _showPageTitle = loadPref('showPageTitle') != 'false';
     _aiEnabled = loadPref('aiEnabled') == 'true';
-    if (!kIsWeb)
-      _pending = PendingUploads.fromJson(loadPref('pendingBlobUploads'));
   }
 
   void _savePrefs() {
@@ -819,6 +836,72 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     savePref('showFormatBar', _showFormatBar.toString());
     savePref('showPageTitle', _showPageTitle.toString());
     savePref('aiEnabled', _aiEnabled.toString());
+    _schedulePushSettings();
+  }
+
+  // ── Settings sync (ui/settings_sync.dart has the policy) ──────────────────
+  // The account's settings follow it across devices; local prefs stay as the
+  // offline cache and the whole story for 本地模式.
+
+  Timer? _settingsPushTimer;
+
+  /// True while cloud values are being written into local state, so the
+  /// controller listeners this apply pass triggers don't push those same
+  /// values straight back up.
+  bool _applyingCloudSettings = false;
+
+  /// Debounced write-through of the synced prefs. Debounced because the font
+  /// and page-width sliders save on every detent; one PUT after the burst.
+  /// Failures are logged and dropped — the local save already happened, and a
+  /// toggle that flips back because the network blinked would be worse than a
+  /// device that catches up on its next change.
+  void _schedulePushSettings() {
+    if (_applyingCloudSettings) return;
+    final session = _session;
+    if (session == null || _activeOrigin == kLocalOrigin) return;
+    _settingsPushTimer?.cancel();
+    _settingsPushTimer = Timer(const Duration(seconds: 1), () async {
+      final s = _session;
+      if (s == null || _activeOrigin == kLocalOrigin) return;
+      try {
+        await _api.putUserSettings(s.accessToken, settingsPayload(loadPref));
+      } catch (e) {
+        debugPrint('settings push failed: $e');
+      }
+    });
+  }
+
+  /// Adopt the account's settings on sign-in/restore. Cloud wins — that is
+  /// what "synced" means from the second device's chair; the device that wrote
+  /// last IS the cloud value. An account with no blob yet gets seeded from
+  /// this device instead, so the first sign-in from the device that holds the
+  /// user's real preferences makes those the account's.
+  Future<void> _syncSettingsFromCloud(AuthSession session) async {
+    try {
+      final cloud = await _api.getUserSettings(session.accessToken);
+      if (!mounted || _session?.accessToken != session.accessToken) return;
+      final apply = cloudSettingsToApply(cloud);
+      if (apply.isEmpty) {
+        _schedulePushSettings();
+        return;
+      }
+      _applyingCloudSettings = true;
+      try {
+        apply.forEach(savePref);
+        // Re-derive everything that mirrors those prefs. The two controllers
+        // notify their own scopes; the shell state needs a rebuild.
+        loadPersistedThemeMode();
+        loadPersistedLocale();
+        setState(_loadAppearancePrefs);
+      } finally {
+        _applyingCloudSettings = false;
+      }
+      // A cloud blob from an older client may lack keys this device has: push
+      // the merged view back so the account converges instead of ping-ponging.
+      _schedulePushSettings();
+    } catch (e) {
+      debugPrint('settings sync skipped: $e');
+    }
   }
 
   /// Sign in with the dev account on startup. Falls back to registering it the
@@ -1123,6 +1206,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ..._viewsByWorkspace,
         };
       });
+      unawaited(_syncSettingsFromCloud(session));
       unawaited(_refreshAiConfigured());
       // The session we just restored carries the profile as it was at LAST
       // login — it came off disk, which is why a restart was not what fixed a
@@ -1972,6 +2056,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   @override
   void dispose() {
+    themeModeController.removeListener(_schedulePushSettings);
+    localeController.removeListener(_schedulePushSettings);
+    _settingsPushTimer?.cancel();
     _closeAllDocumentSync();
     _viewsEvents?.dispose();
     super.dispose();
@@ -2033,6 +2120,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _selectedWorkspace = workspaces.firstOrNull;
       });
       _persistSession(session);
+      unawaited(_syncSettingsFromCloud(session));
 
       unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();
@@ -6592,6 +6680,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _selectedWorkspace = workspaces.firstOrNull;
       });
       _persistSession(session);
+      unawaited(_syncSettingsFromCloud(session));
       unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();
       await _loadSelectedWorkspaceViews();

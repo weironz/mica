@@ -857,6 +857,20 @@ class ApiClient {
         .toList();
   }
 
+  /// The signed-in user's synced client settings (`GET /auth/me/settings`).
+  /// `{}` for an account that never saved any — same shape, no special case.
+  Future<Map<String, dynamic>> getUserSettings(String token) async {
+    final response = await _get('/api/auth/me/settings', token);
+    final settings = response['settings'];
+    return settings is Map<String, dynamic> ? settings : const {};
+  }
+
+  /// Replace the synced settings blob whole (`PUT /auth/me/settings`). The
+  /// client owns the vocabulary (see `ui/settings_sync.dart`), the server
+  /// stores it opaquely; last write across devices wins.
+  Future<void> putUserSettings(String token, Map<String, String> settings) =>
+      _put('/api/auth/me/settings', token, {'settings': settings});
+
   /// The pages in [workspaceId] that link TO [viewId] (reverse references).
   /// Cloud only — the local (offline) world has no backlinks endpoint, so the
   /// panel is hidden there rather than calling this.
@@ -1501,6 +1515,19 @@ class ApiClient {
     required String token,
   }) async {
     final response = await sharedHttpClient.patch(
+      _apiUri(path),
+      headers: _headers(token),
+      body: jsonEncode(body),
+    );
+    return _decode(response);
+  }
+
+  Future<Map<String, dynamic>> _put(
+    String path,
+    String token,
+    Map<String, dynamic> body,
+  ) async {
+    final response = await sharedHttpClient.put(
       _apiUri(path),
       headers: _headers(token),
       body: jsonEncode(body),
