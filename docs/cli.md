@@ -291,11 +291,34 @@ claude mcp add --scope user mica \
 
 ## Backup
 
-`mica-cli` deliberately has no `backup` command (that engine was retired). The
-pattern is **`mica-cli export` + an external backup tool**: e.g. `rustic backup
-<out>`, `rclone sync <out> remote:`, or `restic`/`borg`/`cron + tar`. The
-production stack wires `export` + `rustic` into one container — see
-[`backup.md`](backup.md).
+Two different things share the word, and the doc used to claim the second did
+not exist ("`mica-cli` deliberately has no `backup` command") while the
+production stack's container entrypoint *was* that command:
+
+- **`mica-cli export`** — every workspace as Markdown + images, for you to point
+  an external tool at: `rustic backup <out>`, `rclone sync <out> remote:`,
+  `restic`/`borg`/`cron + tar`.
+- **`mica-cli backup run` / `backup daemon`** — the scheduled off-site backup
+  that carries content *plus* the database *plus* object bytes. `run` does one
+  pass and exits non-zero if it covered less than it should; `daemon` runs one
+  on start and then daily at `BACKUP_HOUR`. See [`backup.md`](backup.md).
+
+The reason the second is code and not the `mica-backup.sh` pair it replaced: a
+shell run is just an exit code, so "backed up less than you think" and "backed
+up everything" looked identical — and did, in production, for months.
+
+### The `mica-cli` Docker image
+
+`ENTRYPOINT` is `mica-cli backup daemon`, because the image exists to be the
+production stack's backup sidecar. **To use it as an ordinary CLI, override the
+entrypoint** — otherwise every argument is parsed as a flag of `backup daemon`
+and you get `error: unexpected argument 'ws' found`:
+
+```bash
+docker run --rm --entrypoint mica-cli \
+  -e MICA_SERVER=https://your-server.example.com -e MICA_PAT=mica_pat_… \
+  <registry>/mica-cli:v0.13.37 ws list
+```
 
 ## Scripting / agents
 

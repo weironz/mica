@@ -64,12 +64,6 @@ enum Command {
   /// Export workspaces to a directory of Markdown + images (mirrored) — point an
   /// external backup tool (restic / rclone / borg) at the output.
   Export(ExportArgs),
-  /// The scheduled backup: content + database + object bytes, off-site.
-  ///
-  /// Replaces the `mica-backup.sh` / `mica-backup-loop.sh` pair. The reason it
-  /// is code and not shell is in `backup.rs`: a shell run is an exit code, so
-  /// "backed up less than you think" and "backed up everything" looked the same
-  /// — and did, in production, for months.
   /// Import archives — by default one new workspace per archive.
   ///
   /// Several archives run one after another, not at once: a big import is
@@ -85,6 +79,12 @@ enum Command {
   /// The recycle bin: see it, restore from it, empty it.
   #[command(subcommand)]
   Trash(TrashCmd),
+  /// The scheduled backup: content + database + object bytes, off-site.
+  ///
+  /// Replaces the `mica-backup.sh` / `mica-backup-loop.sh` pair. The reason it
+  /// is code and not shell is in `backup.rs`: a shell run is an exit code, so
+  /// "backed up less than you think" and "backed up everything" looked the same
+  /// — and did, in production, for months.
   #[command(subcommand)]
   Backup(BackupCmd),
   /// Serve the Mica MCP server over stdio, for any MCP client (Claude Code and
