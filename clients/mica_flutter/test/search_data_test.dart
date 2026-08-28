@@ -324,4 +324,28 @@ void main() {
       );
     });
   });
+
+  group('elsewhereWorkspace', () {
+    // Reported 2026-08-28: clicking a FOLDER hit from another workspace did
+    // nothing at all. Pages asked this question and switched workspaces first;
+    // folders never asked it, so the reveal was parked against the tree on
+    // screen — which will never contain that folder, so it waited out its
+    // budget and gave up silently. Both paths now share this one answer.
+    test('names the other workspace, or null when the hit is local', () {
+      expect(elsewhereWorkspace('ws-ai', 'ws-compute'), 'ws-ai');
+      expect(elsewhereWorkspace('ws-ai', 'ws-ai'), isNull);
+    });
+
+    test('a hit with no workspace is never elsewhere', () {
+      // An older server does not send workspace_id; callers read that as "the
+      // workspace we searched", so switching would be wrong.
+      expect(elsewhereWorkspace(null, 'ws-compute'), isNull);
+    });
+
+    test('nothing is elsewhere than nowhere', () {
+      // No workspace open: treating the hit as remote would start a switch with
+      // no destination to come back from.
+      expect(elsewhereWorkspace('ws-ai', null), isNull);
+    });
+  });
 }

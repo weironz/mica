@@ -12724,9 +12724,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
               },
         onOpen: (viewId, workspaceId) {
           Navigator.of(context).pop();
-          final elsewhere =
-              workspaceId != null &&
-              workspaceId != widget.selectedWorkspace?.id;
+          final other = elsewhereWorkspace(
+            workspaceId,
+            widget.selectedWorkspace?.id,
+          );
+          final elsewhere = other != null;
           // Asked for in a TAB, and it lives somewhere else: hand the workspace
           // over with the id and stay where we are. The tab carries that
           // workspace and `_selectTab` switches only when it is clicked, so the
@@ -12734,7 +12736,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // are doing. This used to fall into the branch below, which switched
           // immediately and opened in place — the tab was never created.
           if (elsewhere && inNewTab && openInNewTab != null) {
-            openInNewTab(viewId, workspaceId);
+            openInNewTab(viewId, other);
             // Deliberately no reveal: the id is not in the tree we are showing,
             // and `_revealInTree` would park the request until that workspace's
             // tree eventually loads — jumping the sidebar at some unrelated
@@ -12744,8 +12746,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // Anything else from another workspace still goes through the host's
           // switch-then-open path; the in-place callback resolves the view out
           // of the CURRENT workspace's tree.
-          if (elsewhere) {
-            widget.onOpenSearchHit?.call(viewId, workspaceId);
+          if (other != null) {
+            widget.onOpenSearchHit?.call(viewId, other);
           } else if (inNewTab && openInNewTab != null) {
             openInNewTab(viewId, null);
           } else {
@@ -12761,8 +12763,24 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // workspace's tree loads (see [_flushPendingReveal]).
           _revealInTree(viewId);
         },
-        onReveal: (viewId) {
+        onReveal: (viewId, workspaceId) {
           Navigator.of(context).pop();
+          // A folder in ANOTHER workspace has to be switched to before it can
+          // be located — `_revealInTree` alone just parks the request against a
+          // tree that will never contain it, which is a click that does
+          // nothing. Reported 2026-08-28, and it became the COMMON case the
+          // moment search started spanning every workspace by default: the top
+          // hits for a word like "claude" are folders named after it.
+          final other = elsewhereWorkspace(
+            workspaceId,
+            widget.selectedWorkspace?.id,
+          );
+          // Switch FIRST, then park the reveal. `_revealInTree` already knows
+          // how to wait for a tree that has not arrived ("a search hit from
+          // another workspace arrives before that workspace's views do") — what
+          // was missing is that nothing ever made that workspace arrive, so the
+          // request waited out its ~2s budget against a tree it was never in.
+          if (other != null) widget.onSelectWorkspaceById?.call(other);
           _revealInTree(viewId);
         },
       ),

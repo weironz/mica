@@ -211,7 +211,12 @@ class _SearchDialog extends StatefulWidget {
   /// so they get their own exit: locate the folder in the sidebar tree instead.
   /// Routing them through [onOpen] silently did nothing at all, because the
   /// open path already refuses folders.
-  final void Function(String viewId) onReveal;
+  ///
+  /// Carries the hit's workspace for the same reason [onOpen] does: a folder in
+  /// ANOTHER workspace cannot be located in the tree on screen, and revealing
+  /// without switching there first is a click that does nothing. Null means
+  /// "the workspace we searched" (an older server does not send the field).
+  final void Function(String viewId, String? workspaceId) onReveal;
 
   /// Pre-filled query, run immediately on open — e.g. clicking a page-property
   /// tag opens search already looking for that tag.
@@ -491,7 +496,7 @@ class _SearchDialogState extends State<_SearchDialog> {
   /// lives in both is a rule that will eventually only be true in one.
   void _activate(SearchResult result) {
     if (result.isFolder) {
-      widget.onReveal(result.viewId);
+      widget.onReveal(result.viewId, result.workspaceId);
     } else {
       widget.onOpen(result.viewId, result.workspaceId);
     }

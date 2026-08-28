@@ -154,3 +154,29 @@ Future<List<T>> searchScopeFor<T>({
     return searchHere();
   }
 }
+
+/// The workspace a hit lives in when that is NOT the one on screen — the one
+/// question both click paths have to ask, and the one they used to answer
+/// separately.
+///
+/// A null [hitWorkspaceId] means "the workspace we searched" (a server older
+/// than the field does not send it), so it is never elsewhere. A null
+/// [currentWorkspaceId] means no workspace is open, and nothing can be
+/// elsewhere than nowhere — treating that as "elsewhere" would send a click
+/// into a workspace switch with no destination.
+///
+/// Reported 2026-08-28: clicking a FOLDER from another workspace did nothing.
+/// Pages asked this question and switched first; folders never asked it at all,
+/// so the reveal was parked against the tree on screen — which will never
+/// contain that folder. Both paths now go through here, which is the point of
+/// it being a function rather than two `!=` expressions.
+/// Returns the OTHER workspace's id, or null when the hit belongs to the one on
+/// screen. Returning the id rather than a bool is deliberate: every caller then
+/// needs it, and a bool would leave them re-deriving it behind a `!` that the
+/// compiler cannot check.
+String? elsewhereWorkspace(String? hitWorkspaceId, String? currentWorkspaceId) =>
+    (hitWorkspaceId != null &&
+        currentWorkspaceId != null &&
+        hitWorkspaceId != currentWorkspaceId)
+    ? hitWorkspaceId
+    : null;
