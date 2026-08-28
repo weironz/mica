@@ -246,4 +246,77 @@ void main() {
       );
     });
   });
+
+  group('workspaceTrailFor', () {
+    // The 2026-08-28 bug in one line: a cross-workspace hit's trail was built
+    // from the CURRENT workspace's name, so a page living in `linux` presented
+    // itself as living in `devops`. These pin the replacement source of truth.
+    const all = [(id: 'w1', name: 'devops'), (id: 'w2', name: 'linux')];
+
+    test("names the hit's own workspace", () {
+      expect(workspaceTrailFor('w2', all), ['linux']);
+    });
+
+    test('an unknown workspace says nothing, never the wrong name', () {
+      expect(workspaceTrailFor('w9', all), isEmpty);
+    });
+  });
+
+  group('searchWithFallback', () {
+    test('a non-empty current-workspace answer never widens', () async {
+      var wideCalls = 0;
+      final r = await searchWithFallback<String>(
+        searchHere: () async => ['here'],
+        searchEverywhere: () async {
+          wideCalls++;
+          return ['far'];
+        },
+      );
+      expect(r.results, ['here']);
+      expect(r.everywhere, isFalse);
+      expect(wideCalls, 0, reason: 'the near answer stands; no wide query runs');
+    });
+
+    test('empty widens, and says so only when the widening found something',
+        () async {
+      final hit = await searchWithFallback<String>(
+        searchHere: () async => const [],
+        searchEverywhere: () async => ['far'],
+      );
+      expect(hit.results, ['far']);
+      expect(hit.everywhere, isTrue);
+
+      final miss = await searchWithFallback<String>(
+        searchHere: () async => const [],
+        searchEverywhere: () async => const [],
+      );
+      expect(miss.results, isEmpty);
+      expect(miss.everywhere, isFalse,
+          reason: 'an empty widening is a plain no-match, not a scope change');
+    });
+
+    test('a failed widening keeps the honest empty answer', () async {
+      // An old server without GET /search must not turn "no matches here"
+      // into "search failed" — the narrow search DID succeed.
+      Object? logged;
+      final r = await searchWithFallback<String>(
+        searchHere: () async => const [],
+        searchEverywhere: () async => throw StateError('404'),
+        onFallbackError: (e) => logged = e,
+      );
+      expect(r.results, isEmpty);
+      expect(r.everywhere, isFalse);
+      expect(logged, isA<StateError>());
+    });
+
+    test('the narrow search failing still throws', () async {
+      await expectLater(
+        searchWithFallback<String>(
+          searchHere: () async => throw StateError('down'),
+          searchEverywhere: () async => const [],
+        ),
+        throwsStateError,
+      );
+    });
+  });
 }

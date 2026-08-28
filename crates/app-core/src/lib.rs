@@ -10,6 +10,7 @@ use uuid::Uuid;
 pub mod comments;
 pub mod documents;
 pub mod rooms;
+pub mod search;
 pub mod store;
 pub mod sync;
 
@@ -38,6 +39,9 @@ pub struct AppState {
   /// Outbound email (currently just the password-reset link). Defaults to a
   /// no-op logger; the api-server binary swaps in Aliyun DirectMail from env.
   pub mailer: Arc<dyn Mailer>,
+  /// In-process body-text index behind search (see `search::BodyIndex`) —
+  /// lazily refreshed at query time, warmed once at startup.
+  pub body_index: Arc<search::BodyIndex>,
 }
 
 /// Progress of one server-side workspace import.
@@ -218,6 +222,7 @@ impl AppState {
       ai: Arc::new(RwLock::new(AiConfig::from_env())),
       import_jobs: Arc::new(RwLock::new(HashMap::new())),
       mailer,
+      body_index: Arc::new(search::BodyIndex::default()),
     }
   }
 }

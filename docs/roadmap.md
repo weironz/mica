@@ -255,17 +255,20 @@
 
 ## 性能
 
-- 🆕 **搜索正文靠 `ILIKE` 全表扫,没有文本索引**(2026-08-12 重新记入)——
-  `document_yrs_base.content_text ILIKE '%needle%'`,前置通配符,任何 B-tree 都用不上。
-  **实测(2026-08-06,生产)**:单工作区 81ms 里 **~75ms 是读 798 篇文档的正文**,
-  剩下 6ms 才是行管道。
-  **跨工作区搜索(2026-08-12,`GET /search`)把这条按可见文档数线性放大** ——
-  工作区一多就是秒级,而根因不在那条路由。
-  难点是 **CJK**:PG 自带的 `to_tsvector` 不分中文词,所以走不了标准 FTS;
-  候选是 `pg_trgm` GIN(对 CJK 子串有效,索引体积换扫描)或外部分词器。
-  **未拍板做不做,先把事实记下来** —— 这一条以前存在过、被整条删掉了,而删掉之后
-  `crates/api-server/src/routes/documents.rs` 里两处注释仍在写「见 roadmap 的搜索条目」,
-  指向一个不存在的东西。空的性能小节 + 悬空引用,合起来正好把一个已知瓶颈说成不存在。(M)
+- 🟡 **FTS M2 已落 main(2026-08-28),待发版后生产核验** —— 正文匹配从
+  `content_text ILIKE` 全表扫改为进程内 `BodyIndex`(`crates/app-core/src/search.rs`,
+  查询时按 `updated_at` 增量刷新,纯子串语义)。**拍板依据**(两份调研,2026-08-28):
+  `pg_trgm` 双重出局——1~2 字查询无 trigram 可提取、退化为全索引扫描(3-gram 模型固有),
+  且 alpine C locale 下 CJK 根本进不了 trigram;`pg_bigm`/PGroonga 能力匹配但要换掉
+  钉死的 `postgres:16-alpine` 镜像;同类(AppFlowy/AFFiNE/Notion/Obsidian)全部只做
+  单 workspace 搜索、无一家在服务端用 PG 全文检索,AFFiNE 自托管默认就是内存索引。
+  **实测**(release,10500 篇 ×2KB 中文,30 工作区,`bench_search_scale` --ignored):
+  跨 30 工作区 14~34ms(旧路径 118~167ms 且随文档数线性),单工作区持平,
+  稳态增量刷新 3~4ms、内存扫描 1~4ms,预热全量加载 220ms。
+  客户端顺势去掉「搜索所有工作区(较慢)」勾选框:当前工作区无结果自动widen到全局
+  (`searchWithFallback`),命中标注所属工作区。
+  **发版后核验**:`/api/health` 起来后在大工作区搜 1 字、2 字词,与本地基准同数量级;
+  留意 api 进程 RSS(索引常驻,~文档正文总量,预计几十 MB)。核验过就整条搬去 done。(M)
 
 ## 开发者体验 / CI / Markdown
 

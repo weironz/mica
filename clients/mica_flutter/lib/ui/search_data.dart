@@ -95,3 +95,56 @@ int moveSelection({
   final next = (current + delta) % count;
   return next < 0 ? next + count : next;
 }
+
+/// The trail to show for a hit that lives in ANOTHER workspace: that
+/// workspace's name, alone.
+///
+/// The folder chain is deliberately absent — the client only holds the tree of
+/// workspaces it has visited, and a trail invented from the CURRENT tree is the
+/// 2026-08-28 bug this function exists to fix: every cross-workspace hit wore
+/// the current workspace's name. Unknown id (not in [workspaces]) says nothing
+/// at all; a blank beats a wrong label, because the label is the one thing
+/// telling the user "this hit is not from here".
+List<String> workspaceTrailFor(
+  String workspaceId,
+  List<({String id, String name})> workspaces,
+) {
+  for (final w in workspaces) {
+    if (w.id == workspaceId) return [w.name];
+  }
+  return const [];
+}
+
+/// Run [searchHere] and, only when it comes back EMPTY, widen through
+/// [searchEverywhere]. Returns the results plus whether the widening supplied
+/// them (`true` only when it actually produced hits — an empty widening is
+/// still an honest "no matches", not a scope change worth announcing).
+///
+/// The scope checkbox this replaces (2026-08-28) existed to make the user pay
+/// for cross-workspace search knowingly, back when it cost N workspaces' worth
+/// of body reads; server-side FTS M2 made the wide scan the same price as the
+/// narrow one. Current-workspace-first stays: when the nearby answer exists,
+/// mixing in look-alike pages from elsewhere buries it under far ones.
+///
+/// A widening failure is swallowed BY DESIGN (with [onFallbackError] for the
+/// log): the narrow search SUCCEEDED, and reporting the whole query as failed
+/// because the widening couldn't run — an old server without `GET /search`
+/// (pre-0.13.18, observed live), a blip — would overwrite a true answer with
+/// an error. Only the narrow search's own failure propagates to the caller.
+Future<({List<T> results, bool everywhere})> searchWithFallback<T>({
+  required Future<List<T>> Function() searchHere,
+  required Future<List<T>> Function()? searchEverywhere,
+  void Function(Object error)? onFallbackError,
+}) async {
+  final here = await searchHere();
+  if (here.isNotEmpty || searchEverywhere == null) {
+    return (results: here, everywhere: false);
+  }
+  try {
+    final wide = await searchEverywhere();
+    return (results: wide, everywhere: wide.isNotEmpty);
+  } catch (e) {
+    onFallbackError?.call(e);
+    return (results: here, everywhere: false);
+  }
+}

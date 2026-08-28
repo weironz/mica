@@ -117,10 +117,7 @@
     }
   },
   "searchRecentLabel": "Recently edited",
-  "searchAllWorkspaces": "Search all workspaces (slower)",
-  "searchAllUnsupportedTitle": "This server has no cross-workspace search yet",
-  "searchAllUnsupportedDetail": "The server is running an older version without that endpoint. Upgrade it to enable this; until then you can search the current workspace.",
-  "searchAllUnsupportedAction": "Search this workspace only",
+  "searchFallbackEverywhere": "Nothing in this workspace — showing matches from your other workspaces",
   "searchWorkspaceLabel": "Workspaces",
   "searchWorkspaceSwitch": "Switch",
   "tabNewTooltip": "New tab",

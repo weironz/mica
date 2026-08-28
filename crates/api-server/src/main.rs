@@ -126,6 +126,15 @@ async fn main() -> anyhow::Result<()> {
   // Log by default; Aliyun DirectMail when MICA_MAIL_BACKEND=directmail is set.
   let mailer = mail::build_mailer();
   let state = AppState::new(config, db, mailer);
+  // Warm the in-process body-text index so the first search does not pay the
+  // full load (it would still work — `search_views` refreshes on every call —
+  // this only moves the one expensive pass to before traffic). Failure is a
+  // warn, not a crash: the first search will retry the same load and surface
+  // the error to an actual caller.
+  match state.body_index.refresh(&state.db).await {
+    Ok(()) => info!(documents = state.body_index.len().await, "body-text search index warmed"),
+    Err(error) => tracing::warn!(%error, "body-text index warm-up failed; first search will retry"),
+  }
   // The environment seeded `state.ai` above; a row saved by an admin replaces
   // it. Settings used to live ONLY in that lock, so every restart — i.e. every
   // deploy — quietly un-configured AI and the settings dialog could not say

@@ -153,6 +153,7 @@ class _SearchDialog extends StatefulWidget {
     this.onSearchAll,
     this.views = const [],
     this.workspaceName,
+    this.workspaceId,
     this.initialQuery,
     this.recents = const [],
     this.workspaces = const [],
@@ -184,6 +185,13 @@ class _SearchDialog extends StatefulWidget {
 
   /// Leads the trail, same as in the breadcrumb and in "copy path".
   final String? workspaceName;
+
+  /// The CURRENT workspace's id — what a hit's `workspace_id` is compared
+  /// against to decide whose trail it wears. Without this every cross-workspace
+  /// hit was dressed in the current workspace's name (2026-08-28): the trail
+  /// below is built from [workspaceName] + [views], both of which describe the
+  /// workspace being LOOKED FROM, not the one the hit lives in.
+  final String? workspaceId;
 
   /// Null when the active world has no workspace search at all (本地模式), which
   /// is not the same thing as a search that finds nothing. It used to be wired
@@ -225,17 +233,16 @@ class _SearchDialogState extends State<_SearchDialog> {
   /// point is to be able to pick a result without touching the mouse.
   int _selected = -1;
 
-  /// Whether the query runs across every workspace.
+  /// The shown results came from the automatic all-workspaces fallback (the
+  /// current workspace had none). Drawn as a hint line over the list, because
+  /// results that silently jump scope would read as "this page IS here".
   ///
-  /// Off by default and NOT remembered between openings. Cross-workspace search
-  /// reads every visible document's body, so it costs roughly N times the
-  /// per-workspace one — a preference that quietly persisted would make search
-  /// permanently slow for someone who tried it once.
-  bool _allWorkspaces = false;
-
-  /// The last failure was "this server has no cross-workspace search", not a
-  /// network problem. Kept apart from [_failed] so the panel can say which.
-  bool _scopeUnsupported = false;
+  /// The scope checkbox this replaces (2026-08-28) existed to make the user
+  /// pay for cross-workspace search knowingly, back when it cost N workspaces'
+  /// worth of body reads. FTS M2 made the wide scan the same price as the
+  /// narrow one, so the price-tag UI lost its reason; searching wider only
+  /// when the narrow answer is empty is the remaining useful behavior.
+  bool _fellBackToEverywhere = false;
   final _listScroll = ScrollController();
 
   @override
@@ -263,11 +270,7 @@ class _SearchDialogState extends State<_SearchDialog> {
   }
 
   Future<void> _run(String value) async {
-    // The toggle picks the endpoint. `onSearch` still gates the whole thing:
-    // a world with no search at all has neither.
-    final search = _allWorkspaces
-        ? (widget.onSearchAll ?? widget.onSearch)
-        : widget.onSearch;
+    final search = widget.onSearch;
     if (search == null) return; // no search in this world; see [_buildResults]
     final query = value.trim();
     if (query.isEmpty) {
@@ -280,10 +283,19 @@ class _SearchDialogState extends State<_SearchDialog> {
     }
     setState(() => _loading = true);
     try {
-      final results = await search(query);
+      // Current workspace first; EMPTY widens to every workspace on its own —
+      // rationale and failure policy live on [searchWithFallback].
+      final (:results, :everywhere) = await searchWithFallback(
+        searchHere: () => search(query),
+        searchEverywhere: widget.onSearchAll == null
+            ? null
+            : () => widget.onSearchAll!(query),
+        onFallbackError: (e) => debugPrint('search fallback skipped: $e'),
+      );
       if (!mounted || _query.text.trim() != query) return;
       setState(() {
         _results = results;
+        _fellBackToEverywhere = everywhere;
         _lastQuery = query;
         _loading = false;
         _failed = false;
@@ -297,18 +309,10 @@ class _SearchDialogState extends State<_SearchDialog> {
       // Surface the failure — a swallowed error reads as "no results" and
       // hides real breakage (this dialog masked a 404 for a while).
       //
-      // A 404 while searching ALL workspaces is not a broken network: it is a
-      // server too old to have `GET /search` (added 2026-08-12). Mica is
-      // self-hosted, so old servers are a normal thing to be talking to, and
-      // telling that user to check their network sends them to debug the one
-      // thing that is working. Observed for real against a v0.13.17 node.
-      final unsupported =
-          _allWorkspaces && e is ApiException && e.statusCode == 404;
       if (mounted) {
         setState(() {
           _loading = false;
           _failed = true;
-          _scopeUnsupported = unsupported;
           _results = const [];
           _lastQuery = query;
           _selected = -1;
@@ -380,53 +384,6 @@ class _SearchDialogState extends State<_SearchDialog> {
                 ),
               ),
             ),
-            // The scope toggle. A checkbox rather than a mode the panel
-            // remembers: it costs roughly N times a normal search, so it should
-            // be a thing you reach for, not a state you can end up in.
-            if (widget.onSearchAll != null) ...[
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(6),
-                  onTap: () {
-                    setState(() => _allWorkspaces = !_allWorkspaces);
-                    // Re-run immediately: flipping the scope with a query
-                    // already typed and leaving the old results on screen would
-                    // show the previous scope's answer under the new label.
-                    _run(_query.text);
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 4,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          _allWorkspaces
-                              ? Icons.check_box
-                              : Icons.check_box_outline_blank,
-                          size: 16,
-                          color: _allWorkspaces
-                              ? MicaTheme.of(context).accent.primary
-                              : MicaTheme.of(context).text.muted,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          context.l10n.searchAllWorkspaces,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: MicaTheme.of(context).text.muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
             const SizedBox(height: 12),
             Expanded(child: _buildResults(context)),
             // Only with results on screen: advertising ↑↓/↵ over an empty list
@@ -613,6 +570,27 @@ class _SearchDialogState extends State<_SearchDialog> {
     );
   }
 
+  /// The trail beside a hit's name — whose workspace it actually lives in.
+  ///
+  /// A hit from the CURRENT workspace resolves its folder chain out of the tree
+  /// in memory. A hit from another workspace shows that workspace's NAME and no
+  /// folders: this client only holds trees it has visited, and resolving the
+  /// chain against the current tree is how every foreign hit came to wear the
+  /// current workspace's name. `workspaceId == null` (older server) reads as
+  /// "the workspace searched", same as everywhere else in this file.
+  List<String> _trailFor(SearchResult result) {
+    final hitWs = result.workspaceId;
+    if (hitWs != null && widget.workspaceId != null && hitWs != widget.workspaceId) {
+      return workspaceTrailFor(hitWs, widget.workspaces);
+    }
+    return ancestorPathSegments(
+      workspaceName: widget.workspaceName,
+      parentViewId: result.parentViewId,
+      views: widget.views,
+      startedAt: result.viewId,
+    );
+  }
+
   Widget _buildResults(BuildContext context) {
     // Say the true thing: this world has no workspace search yet, and point at
     // the tool that does work here (in-page find). The old stub claimed instead
@@ -719,23 +697,6 @@ class _SearchDialogState extends State<_SearchDialog> {
       // title 「无匹配结果」, which told the user their workspace has no such
       // page when in fact the request never reached the server — and it hid
       // the one useful next step (retry). Separate icon, title and action.
-      if (_scopeUnsupported) {
-        // Not a failure the user can retry their way out of — the action is to
-        // untick the box, so that is the action offered.
-        return EmptyState(
-          icon: Icons.update,
-          title: context.l10n.searchAllUnsupportedTitle,
-          detail: context.l10n.searchAllUnsupportedDetail,
-          actionLabel: context.l10n.searchAllUnsupportedAction,
-          onAction: () {
-            setState(() {
-              _allWorkspaces = false;
-              _scopeUnsupported = false;
-            });
-            _run(_query.text);
-          },
-        );
-      }
       if (_failed) {
         return EmptyState(
           icon: Icons.cloud_off,
@@ -753,6 +714,20 @@ class _SearchDialogState extends State<_SearchDialog> {
     }
     return Column(
       children: [
+        if (_fellBackToEverywhere)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 6),
+              child: Text(
+                context.l10n.searchFallbackEverywhere,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: MicaTheme.of(context).text.muted,
+                ),
+              ),
+            ),
+          ),
         // How many hits, so a long list doesn't have to be counted by eye.
         Align(
           alignment: Alignment.centerLeft,
@@ -779,12 +754,7 @@ class _SearchDialogState extends State<_SearchDialog> {
             itemBuilder: (context, i) => SearchResultTile(
               result: _results[i],
               query: _lastQuery,
-              path: ancestorPathSegments(
-                workspaceName: widget.workspaceName,
-                parentViewId: _results[i].parentViewId,
-                views: widget.views,
-                startedAt: _results[i].viewId,
-              ),
+              path: _trailFor(_results[i]),
               // Offset by the workspace rows drawn above: `_selected` indexes
               // both sections, so comparing it to the raw list index would
               // highlight the wrong page whenever a workspace also matched.

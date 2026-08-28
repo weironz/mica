@@ -839,9 +839,9 @@ class ApiClient {
   /// scope. Hits carry `workspace_id`, which is what makes them openable — see
   /// [SearchResult.workspaceId].
   ///
-  /// Slower than the per-workspace search by roughly the number of workspaces:
-  /// the body match reads every visible document's text. That is why it sits
-  /// behind a toggle instead of replacing the default.
+  /// Since FTS M2 (2026-08-28) this costs about the same as the per-workspace
+  /// search — the server answers both from one in-process body index — which is
+  /// what let the scope checkbox become an automatic empty-result fallback.
   Future<List<SearchResult>> searchAllWorkspaces(
     String token,
     String query,

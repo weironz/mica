@@ -12613,6 +12613,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onSearchAll: widget.onSearchAllWorkspaces,
         views: widget.views,
         workspaceName: widget.selectedWorkspace?.name,
+        workspaceId: widget.selectedWorkspace?.id,
         initialQuery: initialQuery,
         recents: widget.searchRecents,
         workspaces: [

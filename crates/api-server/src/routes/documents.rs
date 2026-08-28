@@ -383,7 +383,14 @@ pub async fn search_workspace(
     return Ok(Json(SearchResponse { results: vec![] }));
   }
 
-  let results = search_views(&state.db, &[workspace_id], needle, query.include_folders).await?;
+  let results = search_views(
+    &state.db,
+    &state.body_index,
+    &[workspace_id],
+    needle,
+    query.include_folders,
+  )
+  .await?;
   Ok(Json(SearchResponse { results }))
 }
 
@@ -394,12 +401,12 @@ pub async fn search_workspace(
 /// workspace, and a query parameter that quietly widens it would make the path
 /// lie. Same query underneath, so ranking and folder handling cannot drift.
 ///
-/// COST: the body match is an `ILIKE` over every document's text, so this scales
-/// with the number of documents the caller can see — linearly with workspace
-/// count. That is the same bottleneck the per-workspace search already has
-/// (measured 2026-08-06: ~75 ms of an 81 ms query was reading 798 bodies), only
-/// multiplied. The fix for both is a CJK-capable text index, not this route; see
-/// the search entry in docs/roadmap.md.
+/// COST (FTS M2): the body match runs against the in-process `BodyIndex`, so
+/// widening the scope from one workspace to all of them costs nothing extra —
+/// the scan is over every indexed body either way, and workspace scope is an
+/// output filter. The `ILIKE`-per-body bottleneck this route used to multiply
+/// (measured 2026-08-06: ~75 ms of an 81 ms query reading 798 bodies) is gone;
+/// what remains per query is one incremental refresh probe plus a memory scan.
 pub async fn search_all_workspaces(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -420,7 +427,14 @@ pub async fn search_all_workspaces(
       .fetch_all(&state.db)
       .await?;
 
-  let results = search_views(&state.db, &workspace_ids, needle, query.include_folders).await?;
+  let results = search_views(
+    &state.db,
+    &state.body_index,
+    &workspace_ids,
+    needle,
+    query.include_folders,
+  )
+  .await?;
   Ok(Json(SearchResponse { results }))
 }
 
@@ -440,11 +454,13 @@ struct SearchRow {
 /// The full-text search behind [`search_workspace`], extracted so a DB test can
 /// drive the real query (the same pattern `scan_backlinks` follows).
 ///
-/// FTS M1: ONE SQL statement instead of the old per-document CRDT decode loop.
-/// `document_yrs_base.content_text` is a maintained, queryable projection of each
-/// document's body (see `mica_app_core::sync::content_text_from_doc`), so the
-/// body match is a plain `ILIKE` over a column. CJK matches by substring — no PG
-/// extension, no tokenizer (M2 adds a `pg_trgm` GIN index for speed only).
+/// FTS M1 made this ONE SQL statement over the maintained `content_text`
+/// projection (see `mica_app_core::sync::content_text_from_doc`); M2 moved the
+/// body half of the predicate into the in-process `BodyIndex` — same substring
+/// semantics, no per-body `ILIKE` reads. (The M1 note here used to promise
+/// "M2 adds a `pg_trgm` GIN index": researched 2026-08-28 and rejected — 1–2
+/// char CJK needles have no extractable trigram and the C-locale alpine image
+/// would index no CJK at all. The `BodyIndex` module doc carries the details.)
 ///
 /// LEFT JOIN, not INNER: a document keeps showing up on a TITLE hit even before
 /// it has a base row, and a document with no base simply isn't body-searchable
@@ -462,6 +478,7 @@ struct SearchRow {
 /// the next ranking change. A single-workspace search simply passes one id.
 async fn search_views(
   db: &PgPool,
+  index: &mica_app_core::search::BodyIndex,
   workspace_ids: &[Uuid],
   needle: &str,
   include_folders: bool,
@@ -469,6 +486,16 @@ async fn search_views(
   if workspace_ids.is_empty() {
     return Ok(vec![]);
   }
+  // FTS M2: the body half of the predicate is answered by the in-process index
+  // — plain substring semantics, identical to the `content_text ILIKE` it
+  // replaces (including 1–2 char CJK needles, which no Postgres index on this
+  // stock image can serve; the module doc on `BodyIndex` has the research).
+  // The ids are CANDIDATES only: the SQL below still owns workspace scope,
+  // `is_deleted`, ranking and LIMIT, so a stale index entry costs a wasted id,
+  // never a leaked or misplaced hit. The refresh is what keeps a just-pushed
+  // edit searchable in the same request that follows it.
+  index.refresh(db).await?;
+  let body_ids = index.matching_ids(needle).await;
   let pattern = like_pattern(needle);
   // Folders ride the SAME statement rather than getting their own: they have no
   // `document_yrs_base` row, so the LEFT JOIN already leaves `content_text` NULL
@@ -508,6 +535,12 @@ async fn search_views(
   // because that one is derived AFTER the rows come back — by then the LIMIT has
   // already chosen which rows exist, which is the half that mattered.
   //
+  // Within the name tier, FOLDERS before pages (asked for 2026-08-28: workspace
+  // name > folder name > page name > body; the workspace tier is client-side,
+  // drawn above this list). Folders are few and matching one by name usually
+  // means the user is navigating, not reading. The key is a no-op below the
+  // name tier: body hits are all documents, a folder having no body to hit.
+  //
   // Built by `concat!` into TWO `&'static str` constants rather than formatted at
   // runtime: sqlx 0.9 refuses a dynamic SQL string outright ("dynamic SQL strings
   // should be audited for possible injections"), and that refusal is right — the
@@ -525,8 +558,10 @@ async fn search_views(
         "#,
         $type_filter,
         r#"
-        AND (v.name ILIKE $2 ESCAPE '\' OR yb.content_text ILIKE $2 ESCAPE '\')
-      ORDER BY (v.name ILIKE $2 ESCAPE '\') DESC, v.updated_at DESC
+        AND (v.name ILIKE $2 ESCAPE '\' OR v.object_id = ANY($3))
+      ORDER BY (v.name ILIKE $2 ESCAPE '\') DESC,
+               (v.object_type <> 'document') DESC,
+               v.updated_at DESC
       LIMIT 50
     "#
       )
@@ -540,6 +575,7 @@ async fn search_views(
   let rows = sqlx::query_as::<_, SearchRow>(sql)
     .bind(workspace_ids)
     .bind(&pattern)
+    .bind(&body_ids)
     .fetch_all(db)
     .await?;
 
@@ -5090,6 +5126,7 @@ mod tests {
   }
 
   use super::*;
+  use mica_app_core::search::BodyIndex;
 
   /// The `%…%` pattern escapes LIKE metacharacters so a query for `50%` or `a_b`
   /// matches literally rather than as a wildcard (paired with `ESCAPE '\'`).
@@ -6112,7 +6149,7 @@ mod tests {
       sqlx::query(
         "INSERT INTO document_yrs_base(document_id,state,state_vector,base_rid,content_text) \
          VALUES($1,$2,$3,0,$4) \
-         ON CONFLICT (document_id) DO UPDATE SET content_text = excluded.content_text",
+         ON CONFLICT (document_id) DO UPDATE SET content_text = excluded.content_text,            updated_at = now()",
       )
       .bind(doc_id)
       .bind(Vec::<u8>::new())
@@ -6161,7 +6198,7 @@ mod tests {
         .unwrap();
 
       // Default: the folder is invisible even though its name matches.
-      let hits = search_views(&db, &[ws], "部署", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", false).await.unwrap();
       assert_eq!(hits.len(), 1, "pages only by default: {hits:?}");
       assert_eq!(hits[0].view_id, page);
       assert!(!hits[0].is_folder);
@@ -6172,7 +6209,7 @@ mod tests {
       );
 
       // Opt in: the folder shows up, flagged, and matched by NAME.
-      let hits = search_views(&db, &[ws], "部署", true).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", true).await.unwrap();
       assert_eq!(hits.len(), 2, "page + folder: {hits:?}");
       let f = hits.iter().find(|h| h.view_id == folder).expect("folder hit");
       assert!(f.is_folder);
@@ -6202,7 +6239,7 @@ mod tests {
         seed_document(&db, ws_b, user_b, "部署脚本", serde_json::json!([])).await;
 
       // One workspace: the other one's page must not appear.
-      let only_a = search_views(&db, &[ws_a], "部署", false).await.unwrap();
+      let only_a = search_views(&db, &BodyIndex::default(), &[ws_a], "部署", false).await.unwrap();
       assert_eq!(only_a.len(), 1, "scoped to one workspace: {only_a:?}");
       assert_eq!(only_a[0].view_id, page_a);
       assert_eq!(
@@ -6211,7 +6248,7 @@ mod tests {
       );
 
       // Both: two hits, each labelled with where it lives.
-      let both = search_views(&db, &[ws_a, ws_b], "部署", false).await.unwrap();
+      let both = search_views(&db, &BodyIndex::default(), &[ws_a, ws_b], "部署", false).await.unwrap();
       assert_eq!(both.len(), 2, "both workspaces searched: {both:?}");
       let a = both.iter().find(|h| h.view_id == page_a).expect("ws_a hit");
       let b = both.iter().find(|h| h.view_id == page_b).expect("ws_b hit");
@@ -6234,7 +6271,7 @@ mod tests {
       let (ws, user) = seed_workspace(&db).await;
       seed_document(&db, ws, user, "部署手册", serde_json::json!([])).await;
 
-      let hits = search_views(&db, &[], "部署", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[], "部署", false).await.unwrap();
       assert!(hits.is_empty(), "an empty scope finds nothing: {hits:?}");
     }
 
@@ -6277,7 +6314,7 @@ mod tests {
         .await
         .unwrap();
 
-      let hits = search_views(&db, &[ws], "性能基准测试", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "性能基准测试", false).await.unwrap();
       assert_eq!(hits.len(), 2, "both rows match the needle: {hits:?}");
       assert_eq!(
         hits[0].view_id, wanted,
@@ -6288,6 +6325,59 @@ mod tests {
       assert!(
         !hits[1].title_match,
         "the second hit matched on body text, not on its name"
+      );
+    }
+
+    /// Within the name tier: a FOLDER outranks a page, and both outrank a
+    /// body-only hit — the ranking asked for 2026-08-28 (workspace > folder >
+    /// page name > body; the workspace tier lives in the client, drawn above
+    /// this list). Recency stamps make each pair adversarial: the tier must
+    /// win AGAINST `updated_at`, or this is just testing insertion order.
+    #[tokio::test]
+    async fn a_folder_name_hit_outranks_pages_and_body_hits() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+
+      let folder = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by,updated_at)          VALUES($1,$2,$1,'folder'::object_type,'部署资料','0',$3,now() - interval '90 days')",
+      )
+      .bind(folder)
+      .bind(ws)
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+
+      let (named_page, _) =
+        seed_document(&db, ws, user, "部署手册", serde_json::json!([])).await;
+      let (body_page, _) = seed_document(
+        &db,
+        ws,
+        user,
+        "周会记录",
+        serde_json::json!([
+          { "id": "b1", "type": "paragraph", "text": "下周整理部署脚本" }
+        ]),
+      )
+      .await;
+      sqlx::query("UPDATE views SET updated_at = now() - interval '30 days' WHERE id = $1")
+        .bind(named_page)
+        .execute(&db)
+        .await
+        .unwrap();
+      sqlx::query("UPDATE views SET updated_at = now() WHERE id = $1")
+        .bind(body_page)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", true).await.unwrap();
+      let order: Vec<Uuid> = hits.iter().map(|h| h.view_id).collect();
+      assert_eq!(
+        order,
+        vec![folder, named_page, body_page],
+        "folder > page name > body, each against a fresher rival: {hits:?}"
       );
     }
 
@@ -6305,31 +6395,196 @@ mod tests {
       set_content_text(&db, doc_b, "no chinese here, just english text").await;
 
       // 3+ char CJK body hit → doc A only, title_match=false, snippet has the hit.
-      let hits = search_views(&db, &[ws], "全文搜索", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "全文搜索", false).await.unwrap();
       assert_eq!(hits.len(), 1, "one body hit: {hits:?}");
       assert_eq!(hits[0].view_id, view_a);
       assert!(!hits[0].title_match, "matched the body, not the title");
       assert!(hits[0].snippet.contains("全文搜索"), "snippet: {}", hits[0].snippet);
 
       // 2-char CJK substring still matches (substring fallback, no tokenizer).
-      let hits = search_views(&db, &[ws], "索引", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "索引", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_a);
 
       // Title hit → title_match=true (body may or may not also match).
-      let hits = search_views(&db, &[ws], "会议", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "会议", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_a);
       assert!(hits[0].title_match);
 
       // A latin title hit resolves the other doc.
-      let hits = search_views(&db, &[ws], "roadmap", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "roadmap", false).await.unwrap();
       assert_eq!(hits.len(), 1);
       assert_eq!(hits[0].view_id, view_b);
       assert!(hits[0].title_match);
 
       // A query matching neither returns nothing.
-      assert!(search_views(&db, &[ws], "缺失关键词", false).await.unwrap().is_empty());
+      assert!(search_views(&db, &BodyIndex::default(), &[ws], "缺失关键词", false).await.unwrap().is_empty());
+    }
+
+    /// Scale measurement, not a regression gate — `#[ignore]`, run by hand:
+    ///   DATABASE_URL=... cargo test -p mica-api-server bench_search -- --ignored --nocapture
+    /// Seeds ~10k documents of ~2KB CJK each across 30 workspaces (set-based
+    /// SQL, one statement per table), then times the legacy `content_text
+    /// ILIKE` statement against the BodyIndex path, and cleans up after itself.
+    #[tokio::test]
+    #[ignore]
+    async fn bench_search_scale() {
+      let Some(db) = pool().await else { return };
+      const WORKSPACES: i32 = 30;
+      const DOCS_PER_WS: i32 = 350;
+
+      let user = Uuid::new_v4();
+      sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'B','x')")
+        .bind(user)
+        .bind(format!("{user}@bench.test"))
+        .execute(&db)
+        .await
+        .unwrap();
+      let ws_ids: Vec<Uuid> = (0..WORKSPACES).map(|_| Uuid::new_v4()).collect();
+      sqlx::query("INSERT INTO workspaces(id,name,owner_id) SELECT unnest($1::uuid[]),'bench',$2")
+        .bind(&ws_ids)
+        .bind(user)
+        .execute(&db)
+        .await
+        .unwrap();
+      // ~2KB of CJK filler per doc; one per-row unique marker plus one global
+      // needle planted in a known subset, so hit-rate is controlled.
+      sqlx::query(
+        "WITH gen AS (
+           SELECT gen_random_uuid() AS doc_id, w.ws, g.i
+           FROM unnest($1::uuid[]) AS w(ws), generate_series(1, $2) AS g(i)
+         ), docs AS (
+           INSERT INTO documents(id,workspace_id,root_block_id,created_by)
+           SELECT doc_id, ws, 'root', $3 FROM gen RETURNING id, workspace_id
+         ), bases AS (
+           INSERT INTO document_yrs_base(document_id,state,state_vector,base_rid,content_text)
+           SELECT g.doc_id, '', '', 0,
+                  repeat('这是一段用于基准测试的中文正文内容，覆盖常见汉字组合。', 40)
+                  || CASE WHEN g.i % 100 = 7 THEN '罕见基准标记词' ELSE '' END
+           FROM gen g
+         )
+         INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by)
+         SELECT gen_random_uuid(), ws, doc_id, 'document'::object_type,
+                'bench-' || i, '0', $3
+         FROM gen",
+      )
+      .bind(&ws_ids)
+      .bind(DOCS_PER_WS)
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+
+      let legacy = |needle: &str, scope: Vec<Uuid>| {
+        let db = db.clone();
+        let pattern = like_pattern(needle);
+        async move {
+          let t = std::time::Instant::now();
+          let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT v.id FROM views v
+             LEFT JOIN document_yrs_base yb ON yb.document_id = v.object_id
+             WHERE v.workspace_id = ANY($1) AND v.is_deleted = false
+               AND v.object_type = 'document'
+               AND (v.name ILIKE $2 ESCAPE '\' OR yb.content_text ILIKE $2 ESCAPE '\')
+             ORDER BY (v.name ILIKE $2 ESCAPE '\') DESC, v.updated_at DESC
+             LIMIT 50",
+          )
+          .bind(&scope)
+          .bind(&pattern)
+          .fetch_all(&db)
+          .await
+          .unwrap();
+          (t.elapsed(), rows.len())
+        }
+      };
+
+      let idx = BodyIndex::default();
+      let warm = std::time::Instant::now();
+      idx.refresh(&db).await.unwrap();
+      let warm = warm.elapsed();
+      // Let the refresh lap close over the bulk seed (it trails the DB clock
+      // by 5s), so the loop below measures the steady state a running server
+      // sits in — not the transient right after an import.
+      tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+
+      let indexed = |needle: &'static str, scope: Vec<Uuid>| {
+        let db = db.clone();
+        let idx = &idx;
+        async move {
+          let t = std::time::Instant::now();
+          let hits = search_views(&db, idx, &scope, needle, false).await.unwrap();
+          (t.elapsed(), hits.len())
+        }
+      };
+
+      let one = vec![ws_ids[0]];
+      let all = ws_ids.clone();
+      println!("seeded {} docs; index warm load: {warm:?}", WORKSPACES * DOCS_PER_WS);
+      // Component costs, so a slow total points at its own culprit.
+      for needle in ["罕见基准标记词", "罕见", "文"] {
+        let t = std::time::Instant::now();
+        idx.refresh(&db).await.unwrap();
+        let t_refresh = t.elapsed();
+        let t = std::time::Instant::now();
+        let ids = idx.matching_ids(needle).await;
+        println!(
+          "components {needle}: refresh {t_refresh:?}, scan {:?} ({} ids)",
+          t.elapsed(),
+          ids.len()
+        );
+      }
+      for (label, needle) in [("rare 6-char", "罕见基准标记词"), ("2-char", "罕见"), ("1-char common", "文")] {
+        let (t, n) = legacy(needle, one.clone()).await;
+        println!("legacy  1 ws  {label:>14}: {t:>10?}  ({n} hits)");
+        let (t, n) = legacy(needle, all.clone()).await;
+        println!("legacy 30 ws  {label:>14}: {t:>10?}  ({n} hits)");
+        let (t, n) = indexed(needle, one.clone()).await;
+        println!("index   1 ws  {label:>14}: {t:>10?}  ({n} hits)");
+        let (t, n) = indexed(needle, all.clone()).await;
+        println!("index  30 ws  {label:>14}: {t:>10?}  ({n} hits)");
+      }
+
+      // Clean up: FK cascades take document_yrs_base with documents.
+      sqlx::query("DELETE FROM views WHERE workspace_id = ANY($1)").bind(&ws_ids).execute(&db).await.unwrap();
+      sqlx::query("DELETE FROM documents WHERE workspace_id = ANY($1)").bind(&ws_ids).execute(&db).await.unwrap();
+      sqlx::query("DELETE FROM workspaces WHERE id = ANY($1)").bind(&ws_ids).execute(&db).await.unwrap();
+      sqlx::query("DELETE FROM users WHERE id = $1").bind(user).execute(&db).await.unwrap();
+    }
+
+    /// The body index is refreshed at query time by `updated_at` cursor, so an
+    /// edit that lands AFTER a previous search must be visible to the next one
+    /// ON THE SAME INDEX INSTANCE. The other tests build a fresh instance per
+    /// call, which would stay green even with a broken cursor — this one holds
+    /// the instance across writes, which is exactly how the server holds it.
+    #[tokio::test]
+    async fn body_index_incremental_refresh_sees_later_edits() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let idx = BodyIndex::default();
+
+      let (view_a, doc_a) =
+        seed_document(&db, ws, user, "第一篇", serde_json::json!([])).await;
+      set_content_text(&db, doc_a, "冷启动就有的正文").await;
+      let hits = search_views(&db, &idx, &[ws], "冷启动就有的", false).await.unwrap();
+      assert_eq!(hits.len(), 1, "the first refresh loads everything: {hits:?}");
+      assert_eq!(hits[0].view_id, view_a);
+
+      // Written after the index has a cursor: the next search must see it.
+      let (view_b, doc_b) =
+        seed_document(&db, ws, user, "第二篇", serde_json::json!([])).await;
+      set_content_text(&db, doc_b, "后写入的独特正文").await;
+      let hits = search_views(&db, &idx, &[ws], "后写入的独特", false).await.unwrap();
+      assert_eq!(
+        hits.iter().map(|h| h.view_id).collect::<Vec<_>>(),
+        vec![view_b],
+        "an edit after the cursor was set must be searchable: {hits:?}"
+      );
+
+      // An edit REPLACING an indexed body: the old text must stop matching.
+      set_content_text(&db, doc_a, "改写过的另一个正文").await;
+      let hits = search_views(&db, &idx, &[ws], "冷启动就有的", false).await.unwrap();
+      assert!(hits.is_empty(), "stale index text kept matching: {hits:?}");
     }
 
     /// A `%` in the query is a LITERAL, not a wildcard: a search for `100%` must
@@ -6345,7 +6600,7 @@ mod tests {
       set_content_text(&db, doc_q, "confident to 100 percent sure").await;
 
       // Literal "100%" matches only the doc that actually contains "100%".
-      let hits = search_views(&db, &[ws], "100%", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "100%", false).await.unwrap();
       assert_eq!(
         hits.len(),
         1,
@@ -6432,13 +6687,13 @@ mod tests {
       )
       .await;
 
-      let hits = search_views(&db, &[ws], "正文内容", false).await.unwrap();
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "正文内容", false).await.unwrap();
       assert_eq!(hits.len(), 1, "body searchable at once: {hits:?}");
       assert_eq!(hits[0].view_id, view);
       assert!(!hits[0].title_match, "matched the body, not the title");
 
       assert_eq!(
-        search_views(&db, &[ws], "导入页", false).await.unwrap().len(),
+        search_views(&db, &BodyIndex::default(), &[ws], "导入页", false).await.unwrap().len(),
         1,
         "the title is searchable too"
       );
