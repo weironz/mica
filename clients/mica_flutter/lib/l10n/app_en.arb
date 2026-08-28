@@ -366,7 +366,7 @@
   "accountDeleteConfirm": "Delete forever",
   "aboutLegalese": "Cloud-first collaborative Markdown workspace.",
   "aboutTitle": "About",
-  "aboutSourceCode": "Source code (AGPL-3.0)",
+  "aboutSourceCode": "Source code (MIT / Apache-2.0)",
   "tokenCreated": "Token created",
   "detailsDefaultSummary": "Details",
   "commonCopied": "Copied",

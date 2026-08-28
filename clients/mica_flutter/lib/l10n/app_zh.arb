@@ -219,7 +219,7 @@
   "accountDeleteConfirm": "永久删除",
   "aboutLegalese": "云优先的协作式 Markdown 工作区。",
   "aboutTitle": "关于",
-  "aboutSourceCode": "源代码（AGPL-3.0）",
+  "aboutSourceCode": "源代码（MIT / Apache-2.0）",
   "tokenCreated": "令牌已创建",
   "detailsDefaultSummary": "详情",
   "commonCopied": "已复制",

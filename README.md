@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/weironz/mica/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/weironz/mica?label=download&color=2f7d6f"></a>
   <a href="https://github.com/weironz/mica/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/weironz/mica/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="#-license"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-2f7d6f"></a>
+  <a href="#-license"><img alt="License" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2f7d6f"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Web-2f7d6f">
 </p>
 
@@ -256,4 +256,14 @@ non-obvious ways, and `docs/lessons.md` exists because of it.
 
 ## 📄 License
 
-[AGPL-3.0-or-later](LICENSE).
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.
+
+> Releases up to and including v0.13.33 were published under AGPL-3.0-or-later.
+> Those tags keep that license; everything from the next release on is dual
+> MIT/Apache-2.0. Permissive is strictly more permission, so nothing you were
+> already allowed to do stops being allowed.

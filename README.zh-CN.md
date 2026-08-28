@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/weironz/mica/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/weironz/mica?label=download&color=2f7d6f"></a>
   <a href="https://github.com/weironz/mica/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/weironz/mica/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="#-许可证"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-2f7d6f"></a>
+  <a href="#-许可证"><img alt="License" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2f7d6f"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Web-2f7d6f">
 </p>
 
@@ -222,4 +222,11 @@ just check           # fmt + clippy + analyze
 
 ## 📄 许可证
 
-[AGPL-3.0-or-later](LICENSE)。
+[Apache License 2.0](LICENSE-APACHE) 或 [MIT](LICENSE-MIT),**任选其一**。
+
+除非你另行声明,你有意提交给本项目的任何贡献(以 Apache-2.0 的定义为准),
+都以上述双授权发布,不附加任何其他条款。
+
+> v0.13.33 及之前的版本发布于 AGPL-3.0-or-later,那些 tag 保持原许可证;
+> 从下一版起改为 MIT/Apache-2.0 双授权。宽松许可证给的权利只多不少,
+> 原本允许你做的事不会因此变成不允许。

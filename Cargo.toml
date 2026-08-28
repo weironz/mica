@@ -21,7 +21,7 @@ resolver = "2"
 # kAppVersion on release (see docs/release.md).
 version = "0.13.33"
 edition = "2024"
-license = "AGPL-3.0-or-later"
+license = "MIT OR Apache-2.0"
 rust-version = "1.85"
 
 [workspace.dependencies]

@@ -1964,9 +1964,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       applicationLegalese: context.l10n.aboutLegalese,
       children: [
         const SizedBox(height: 16),
-        // AGPL-3.0-or-later §13: anyone interacting with Mica over a network must
-        // be prominently offered the Corresponding Source. Link the public repo;
-        // the version shown above tells them which tag to check out.
+        // The link stays now that Mica is MIT/Apache-2.0 (2026-08-28) even
+        // though nothing compels it any more: it went in for AGPL §13, which
+        // required prominently offering the Corresponding Source to anyone
+        // interacting over a network. Permissive licensing removes the
+        // obligation, not the reason — the version above tells a reader which
+        // tag they are looking at, and that is worth keeping on its own.
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
