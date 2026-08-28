@@ -543,7 +543,7 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
       let src = format!("rustfs:{}", blob.src_bucket);
       let dst = format!("ossblob:{}/{}", blob.dst_bucket, blob.dst_root);
       log(&format!("rclone copy {src} → {dst} (objects, no rustic)"));
-      run_tool(
+      match run_tool(
         &settings.rclone,
         &[
           "--config",
@@ -558,8 +558,18 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
           "30s",
         ],
         "rclone copy",
-      )?;
-      report.add("objects", Leg::Ran);
+      ) {
+        // Same rule as the content leg: record and carry on. This one is LAST,
+        // so `?` here only ever skipped retention — but it was the same latent
+        // shape, and on 2026-08-29 it did fire (403 from RustFS: rclone had been
+        // handed a second, stale copy of credentials that only exist once).
+        Ok(()) => report.add("objects", Leg::Ran),
+        Err(error) => {
+          let reason = format!("{error:#}");
+          log(&format!("objects leg FAILED — {reason}"));
+          report.add("objects", Leg::failed(reason));
+        }
+      }
     }
     None => report.add(
       "objects",
