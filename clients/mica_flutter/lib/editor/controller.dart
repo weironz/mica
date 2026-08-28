@@ -778,7 +778,9 @@ class EditorController extends ChangeNotifier {
       return true;
     }
 
-    // Nothing before the first block to merge into.
+    // Nothing before the first block to merge into. The caller decides what
+    // "up" means from there (the host focuses the page title); an empty first
+    // line is consumed by [dropEmptyFirstLine] on the way out.
     if (i == 0) return false;
     final prev = nodes[i - 1];
 
@@ -860,6 +862,27 @@ class EditorController extends ChangeNotifier {
       {'type': 'delete_block', 'block_id': cur.id},
     ]);
     collapseTo(DocPosition(i - 1, junction));
+    return true;
+  }
+
+  /// Backspace on an EMPTY first line: drop it so the body rises by one line.
+  /// Returns false (and changes nothing) when the line carries text, is an
+  /// atomic block, or is the document's only block — a document always keeps
+  /// at least one.
+  ///
+  /// [mergeBackward] cannot do this: it has nothing above to merge INTO, so it
+  /// bailed and left the blank line sitting there while the caret hopped to the
+  /// page title. Reported 2026-08-28 as "Backspace on the blank line under the
+  /// title does nothing" — and it did nothing VISIBLE, which is the same thing.
+  bool dropEmptyFirstLine() {
+    if (nodes.length < 2) return false;
+    final first = nodes[0];
+    if (first.isAtomic || first.text.isNotEmpty) return false;
+    nodes.removeAt(0);
+    _sendNow([
+      {'type': 'delete_block', 'block_id': first.id},
+    ]);
+    collapseTo(const DocPosition(0, 0));
     return true;
   }
 

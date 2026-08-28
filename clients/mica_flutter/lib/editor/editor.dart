@@ -2292,10 +2292,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           _syncImeFromSelection();
           return KeyEventResult.handled;
         }
-        // Nothing above to merge into → step up into the page title.
-        if (sel.focus.node == 0 && widget.onExitTop != null) {
-          widget.onExitTop!();
-          return KeyEventResult.handled;
+        // Nothing above to merge into → step up into the page title, and take
+        // the blank line with us: an empty first line has nothing to preserve,
+        // and leaving it behind made Backspace look like a dead key (the body
+        // never rose, the page just lost focus). The drop is a no-op on a line
+        // with text and on the document's only block.
+        if (sel.focus.node == 0) {
+          final dropped = _controller.dropEmptyFirstLine();
+          if (widget.onExitTop != null) {
+            widget.onExitTop!();
+            return KeyEventResult.handled;
+          }
+          // No page title to step into (it can be hidden): the caret stays at
+          // the top of the body, now on the line that rose into the gap.
+          if (dropped) {
+            _syncImeFromSelection(force: true);
+            return KeyEventResult.handled;
+          }
         }
         return KeyEventResult.skipRemainingHandlers;
       }
