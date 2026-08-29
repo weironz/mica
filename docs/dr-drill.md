@@ -297,26 +297,56 @@ DR_HOST=<IP> ansible-playbook -i ansible/inventory.yml ansible/deploy.yml -e tar
 > `localhost:8080` 空响应是对的 —— api 不发布到宿主端口,只经 traefik 进出。
 > 别把它当成故障。
 
-### 6. `[推演]` 灌数据库
+### 6. `[已验证 2026-08-29]` 灌数据库
+
+> 🔴 **绝不要 `./dc --profile backup up -d backup`。** 那会启动 backup **daemon**,
+> 它 run-on-start 立刻**往生产的备份仓库写**,并且跑 `forget --prune` ——
+> **在演练机上 prune 掉生产的快照**。演练纪律「只读生产的备份仓库」在这里是硬约束,
+> 不是客气话。用一次性容器取:
 
 ```bash
-dc exec backup rustic snapshots --filter-label _pgdump | grep -E "^\| [0-9a-f]{8}"
+IMG=registry.cn-shenzhen.aliyuncs.com/willspace/mica-cli:v0.13.41
+docker run --rm -v /data/mica/.env.secrets:/s:ro -v /data/mica/.env:/e:ro -v /data/restore:/restore \
+  --entrypoint sh "$IMG" -c '
+    export $(grep -E "^OSS_" /e /s -h | xargs)
+    RUSTIC_PASSWORD=$(grep "^MICA_BACKUP_PASSWORD=" /s | cut -d= -f2-); export RUSTIC_PASSWORD
+    # 借 restore-config 渲染 /etc/rustic/rustic.toml(那份配置唯一的权威来源),
+    # 再在同一个容器里复用它 —— 不另抄一份 toml 进 runbook。
+    mica-cli backup restore-config --out /tmp/t >/dev/null 2>&1 || true
+    rustic restore latest /restore --filter-label _pgdump'
 ```
 
-> **别 `tail` 取最新** —— 输出按 hostname 分组(容器 id 每次部署都变),`tail` 只会
-> 给你最后一组。要 grep 出所有行再看日期。2026-08-29 我因此连续两次报错了中断时长
-> (`dr-plan` §8.2)。
+⚠️ **`OSS_BUCKET` 等非机密项在 `.env`,不在 `.env.secrets`** —— 只挂后者会得到
+`error: OSS_BUCKET is required for the backup`,而那句话听起来像凭据缺失。两个都挂。
+
+**先验证 dump 完整再灌**(判据来自 `deploy.yml` 的还原点门禁,这里同一套):
 
 ```bash
-dc exec backup rustic restore latest /tmp/pg --filter-label _pgdump
-dc exec backup sh -c 'head -3 /tmp/pg/mica.sql; grep -c "^COPY public\." /tmp/pg/mica.sql'
-dc exec backup cat /tmp/pg/mica.sql > /tmp/mica.sql
-dc exec -T postgres psql -U mica -d mica -v ON_ERROR_STOP=1 < /tmp/mica.sql
-shred -u /tmp/mica.sql     # 明文全库,含口令 hash —— 用完即毁
+D=/data/restore/var/lib/mica/export/_pgdump/mica.sql
+grep -c '^COPY public\.' "$D"                        # >= 21
+grep -c 'PostgreSQL database dump complete' "$D"     # 1,证明没被截断
 ```
 
-**判据**:`COPY public.` 段数 ≥ 21;导入无 ERROR。
-**实际**:____  **耗时**:____
+**库必须是空的**(见第 5 步开头的顺序陷阱):
+
+```bash
+./dc stop api web
+docker exec mica-postgres-1 psql -U mica -d postgres \
+  -c 'DROP DATABASE IF EXISTS mica WITH (FORCE);' -c 'CREATE DATABASE mica OWNER mica;'
+docker exec -i mica-postgres-1 psql -U mica -d mica -v ON_ERROR_STOP=1 -q < "$D"
+./dc start api web
+```
+
+**判据**:`COPY public.` 段数 ≥ 21;导入 ERROR 数 = 0;行数与生产一个量级。
+**实际**:21 段;**取快照 9.2s(634 MB)、导入 16s、0 个 ERROR**;
+`users=2 workspaces=32 views=17799 docs=14881 migrations=26`;
+`./dc start api web` 之后 api healthy、`/api/ready` 200,**迁移没有重跑**。
+**耗时**:**约 1 分钟**(含验证)。
+
+> 顺带验掉一条以前没人验过的:**pg18 的 dump 里仍然有 `deploy.yml` 还原点门禁 grep 的
+> 那两个标记**(`PostgreSQL database dump complete` / `COPY public.document_yrs_base`)。
+> pg16→18 升级之后那道门禁一直没被真正触发过(最近几版都没有新迁移),所以它成不成立
+> 此前只是假设。
 
 ### 7. `[推演]` 灌对象字节(图片)
 
