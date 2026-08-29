@@ -187,9 +187,26 @@ install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
 | **RPO**（丢多少） | ≤ 24h（每日 `BACKUP_HOUR` 一次） | ≤ 24h（2026-07-30 起，同一节拍）<br>~~∞ —— 无异地副本~~ |
 | 唯一副本位置 | 阿里云 OSS（异地，同账号） | 阿里云 OSS，`label=_pgdump`（同上，2026-07-30 起）<br>另有节点本地 `/data/mica/pre-*.sql.gz` 手工还原点 |
 | 那份副本的新鲜度 | 每天 | 每天（本地还原点仍只在**发版前手工**落） |
-| **RTO**（多久起来） | **≈ 10 分钟**（2026-08-29 实测，见下） | **同一次恢复覆盖**（≈ 10 分钟） |
+| **RTO**（多久起来） | **11 分 50 秒**（2026-08-29,CI 无人值守实测） | **同一次恢复覆盖** |
 
-**RTO：≈ 10 分钟,2026-08-29 端到端实测。** 从零开一台阿里云 ECS 到浏览器里看见完整数据,
+**RTO:11 分 50 秒 —— 由 CI 无人值守跑出来的,不是人照着 runbook 走出来的。**
+
+`.github/workflows/dr-drill.yml` 一次 `workflow_dispatch`:建机器 + DNS → provision →
+从备份还原凭据 → 起栈 → 灌库 → 灌对象 → 断言 → **销毁**,全程无人。2026-08-29 首次
+全绿的那一跑:
+
+```
+restored keys: 15
+source 6467 objects / 1042495633 bytes; destination 6467 / 1042495633
+{"status":"ok","version":"0.13.43"}
+docs|nonempty|views|workspaces = 14882|14681|17800|32
+Destroy complete! Resources: 11 destroyed.
+```
+
+**这个数字和「人照着文档走一遍」不是一回事,后者是下面这张表。** 两者都保留:出事那天
+如果 CI 也够不着,走的就是下面那条。
+
+**人工路径:≈ 10 分钟,2026-08-29 端到端实测。** 从零开一台阿里云 ECS 到浏览器里看见完整数据,
 逐步实测(工作表 [`dr-drill.md`](dr-drill.md),每步都已标 `[已验证]`):
 
 | 步骤 | 耗时 |
