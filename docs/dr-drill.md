@@ -348,18 +348,45 @@ docker exec -i mica-postgres-1 psql -U mica -d mica -v ON_ERROR_STOP=1 -q < "$D"
 > pg16→18 升级之后那道门禁一直没被真正触发过(最近几版都没有新迁移),所以它成不成立
 > 此前只是假设。
 
-### 7. `[推演]` 灌对象字节(图片)
+### 7. `[已验证 2026-08-29]` 灌对象字节(图片)
+
+**这里有个缺口**:`mica-cli` 只有**写**镜像的路径,没有把对象**取回来**的命令 ——
+`render_rclone_conf` 只在 backup run 里被调用,而那条路在演练机上是禁区(见第 6 步的
+红字)。所以这次用 rclone 的环境变量式 remote 绕过去,**它是第二处表示**,该补一个
+`mica-cli backup restore-objects`(记在 `roadmap.md`)。
 
 ```bash
-dc exec backup rclone --config /etc/rclone/rclone.conf \
-  copy ossblob:mica-backup-cloudcele/mica-blobs rustfs:mica --transfers 4 --stats 30s
+IMG=registry.cn-shenzhen.aliyuncs.com/willspace/mica-cli:v0.13.41
+g() { grep -m1 "^$1=" "$2" | cut -d= -f2-; }
+S=/data/mica/.env.secrets; E=/data/mica/.env
+docker run --rm --network mica_default --entrypoint rclone \
+  -e RCLONE_CONFIG_OSSBLOB_TYPE=s3 -e RCLONE_CONFIG_OSSBLOB_PROVIDER=Alibaba \
+  -e RCLONE_CONFIG_OSSBLOB_ENDPOINT="$(g OSS_ENDPOINT $E)" \
+  -e RCLONE_CONFIG_OSSBLOB_ACCESS_KEY_ID="$(g OSS_ACCESS_KEY_ID $S)" \
+  -e RCLONE_CONFIG_OSSBLOB_SECRET_ACCESS_KEY="$(g OSS_SECRET_ACCESS_KEY $S)" \
+  -e RCLONE_CONFIG_RUSTFS_TYPE=s3 -e RCLONE_CONFIG_RUSTFS_PROVIDER=Other \
+  -e RCLONE_CONFIG_RUSTFS_ENDPOINT=http://rustfs:9000 \
+  -e RCLONE_CONFIG_RUSTFS_FORCE_PATH_STYLE=true \
+  -e RCLONE_CONFIG_RUSTFS_ACCESS_KEY_ID="$(g RUSTFS_S3_ACCESS_KEY_ID $S)" \
+  -e RCLONE_CONFIG_RUSTFS_SECRET_ACCESS_KEY="$(g RUSTFS_S3_SECRET_ACCESS_KEY $S)" \
+  "$IMG" copy ossblob:mica-backup-cloudcele/mica-blobs rustfs:mica --transfers 8 --stats 30s
 ```
 
-**判据**:传输完成、无 403。
-**实际**:____  **耗时**:____
+⚠️ 容器必须 `--network mica_default`,否则解析不到 `rustfs`。
 
-> 403 打在**源**还是**目的**,含义完全不同:源(`rustfs:`) = 本地那对凭据不对;
-> 目的(`ossblob:`) = OSS 凭据不对。看清报错里的 bucket 名再动手。
+**判据**:`rclone size` 两端的**对象数与字节数都相等**。只看"传完了没报错"不够 ——
+`copy` 成功但传了 0 个对象也是"没报错"。
+
+```bash
+rclone size ossblob:mica-backup-cloudcele/mica-blobs
+rclone size rustfs:mica
+```
+
+**实际**:两端都是 **6467 个对象 / 994.201 MiB(1042495633 字节)**,逐字节相等。
+**耗时**:**不到 2 分钟**(同地域 OSS → ECS)。
+
+> 403 打在**源**还是**目的**,含义完全不同:目的(`rustfs:`)= 本机那对凭据不对;
+> 源(`ossblob:`)= OSS 凭据不对。看清报错里的 bucket 名再动手。
 
 ### 8. `[推演]` 核验(版本号证明不了数据回来了)
 
