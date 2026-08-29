@@ -191,9 +191,36 @@ Find a workspace's id (the `--label`/`--filter-label` value) in `rustic snapshot
 --group-by label` (the `Label` column, tagged `ws=<name>`), or in the export's
 `manifest.json`.
 
-To put content back into a Mica instance, re-import each workspace's tree (the
-app's Import / the `/api/workspaces/import` endpoint). Recreate user accounts
-separately — they are not part of a content backup.
+### What this restores, and what it does not
+
+**The content export is not an instance restore.** Putting an instance back is the
+database plus the object bytes, both below — that path is exercised end to end by
+`.github/workflows/dr-drill.yml`. The content export exists for two other things:
+
+1. **Your notes are readable without Mica.** Verified 2026-08-30: restoring one
+   workspace lineage out of the repository yields the original directory tree,
+   nesting and non-ASCII filenames intact, with plain readable Markdown in it.
+2. **A last resort if the database is unrecoverable** — rebuild the TEXT into a
+   fresh instance and accept what that loses.
+
+To do (2): restore the tree, **zip it**, and POST that to
+`/api/workspaces/import` (or use the app's Import).
+
+⚠️ **The endpoint takes a ZIP, not a directory** (`read_zip(&body)`), up to
+**256 MiB** per request — a larger workspace has to be split, and the parts can
+go into the same workspace with `workspace_id`. An earlier version of this
+document said "re-import each workspace's tree", which reads as though you could
+point the importer at the restored directory. You cannot.
+
+⚠️ **What re-importing does NOT bring back**, because it is the generic Markdown
+importer and not a Mica-specific round trip: page ids, CRDT edit history,
+comments, share links, users and memberships. Those live only in the database.
+Re-imported pages are NEW pages that happen to have the same text.
+
+⚠️ **This second segment has never been walked.** Segment one — getting the tree
+out of the repository — was verified on 2026-08-30; turning that tree back into a
+Mica workspace has not been, and carries exactly the status every step of
+`docs/dr-drill.md` carried before 2026-08-29.
 
 ## Restore the instance's credentials
 
