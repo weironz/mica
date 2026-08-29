@@ -28,52 +28,17 @@
 > **这一节空了(2026-08-05)。** 拍板不做的条目已整条删除,理由留在那次提交的信息里。
 > 留着标题是因为这是一个真实存在的分类 —— 空是个**状态**,不是这一档不存在。
 
+## 生产运维与备份
 
-
-## 生产运维与备份 🆕
-
-> 2026-07-22 新增小节。节点是单机 docker(阿里云),生产当前处于「盲飞 + 静默失败」态。
-
-- 🟢 ~~**备份恢复演练:已有脚本 + 已实跑一次,仍未自动化**~~ —— **2026-08-29 自动化了**:`.github/workflows/dr-drill.yml`,一次 `workflow_dispatch` 从零建机器、灌上生产数据、断言、销毁,**11 分 50 秒无人值守全绿**(判据含 `nonempty` 与「对象两端字节数相等」)。触发方式**定为手动**(用户 2026-08-29 拍板):不挂 `schedule:` —— 每跑一次都开一台按量付费机器,而且 Let's Encrypt 每周只发 5 张重复证书,定时跑会把额度耗在没人看的运行上。以下为历史 —— ~~纯手动、无脚本承载~~ ✅:`deploy/restore-drill.sh` + `just restore-drill <basename>`,一条命令恢复进一次性库 → 断言 → DROP(不碰 `mica`、不重启容器),并顺带跑 `rustic check`。三条硬门槛:恢复错误 0、`documents` > 0、**可读页数 > 0**(走每次读都要走的 `views→documents→document_yrs_base` join,要求 `length(state)>0 AND content_text<>''`)—— 因为一次产出空 `state` blob 的恢复能通过所有「表在不在」式断言。**首次实跑(这条路径此前从未被走过)**:错误 0、`_sqlx_migrations`=15、S5 删掉的三张表都回来了、行数与备份时记录逐项一致、32 FK + 19 PK、3331 可读页;`rustic check` 170 snapshot 全过。**残留 = 自动化,~~而它被一条刻意的安全边界挡着~~ —— 那道边界 2026-08-25 拆了,这条阻塞随之消失**:原文的理由是「CI 那把 key 不是 shell key,`~mica-deploy/.ssh/authorized_keys` 用 `restrict,command=/usr/local/sbin/mica-deploy` 钉死,只能执行 `deploy <version> <sha>`;要让 Actions 定时跑演练得在节点上装一条新的 pinned 命令 + 一把新 key,那是该由用户决定的生产侧凭据变更」。改用 Ansible 后 `DEPLOY_SSH_KEY` 已经是一把有 shell 的 root key(这笔取舍的完整账见 `docs/cd-plan.md` §4.1),**「装新 pinned 命令」这件事不再需要**:一个 `ansible/restore-drill.yml` + 一条 `schedule:` workflow 就够,不碰节点凭据。**没顺手做,因为它不在这次改造范围里**,而且「多久跑一次」是运维决策(一次真实恢复演练会占满节点 IO),该由用户定。在那之前:发版落还原点后手动 `just restore-drill` 一次,以及 `rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)`[等用户]`
-- 🟡 ~~**provisioning 层不存在:「给台新机器就能起全套」今天做不到**~~ —— **2026-08-29
-  端到端做到了并实测**(v0.13.40/41)。`ansible/provision.yml`(docker + Traefik +
-  第三方镜像)+ `deploy.yml`(现在吃得下全新节点)+ `dr/aliyun/`(tofu 开机器与 DNS)
-  + 凭据可从备份还原,**在一台全新阿里云 ECS 上从零到浏览器里看见完整数据 ≈ 10 分钟**;
-  逐步实测记录与四个撞上的坑在 `docs/dr-drill.md`,RTO 在 `docs/dr-plan.md` §3。
-  **①②已完成(2026-08-29)**:~~跑在 CI 里~~ → `.github/workflows/dr-drill.yml`,
-  11 分 50 秒无人值守全绿;~~缺 restore-objects~~ → v0.13.43 补上,且把「两端对象数
-  与字节数必须相等」做进命令(`rclone copy` 传了 0 个也退出 0)。
-  **③ 那个不安全的默认仍在**,见下。
-  〔以下为历史,留档〕~~仓库里只有 `deploy/docker-compose.yml`~~ ~~2026-08-25 起多了
-  `ansible/`,但它只管「部署」,不管 provisioning:Traefik、`/data/mica` 目录、`.env`、
-  部署密钥、ACR 登录仍然全是当年手工装的,没有一条能重放的路径。~~(受限部署账号 `mica-deploy` 和
-  `/usr/local/sbin/mica-deploy` 已随本次改造从节点删除,不再是待纳管的东西 ——
-  取而代之的是 root 的 `authorized_keys` 里一行带 `restrict` 的 CI 密钥。)
-  **Traefik 那一片的具体形状**(2026-08-06 从原「证书过期无人看守」条并入,该条已删):配置
-  本体在仓库外未纳管;ACME **平时自动续期,不需要盯** —— 唯一已知的卡死场景是**改过 DNS 之后**
-  进 issuance backoff、一直挂着 TRAEFIK DEFAULT CERT,处置是重启 Traefik
-  (`docs/deploy.md` 的 “Behind Traefik” 一节)。原条目标题写成「证书过期无人看守」,
-  读起来像随时会炸,**实际触发窗口只在你主动改 DNS 时存在**,那时人本来就在盯 —— 这是它被
-  删掉的原因。同源的第二个症状:**一个 `vX.Y.Z` tag 焊住三条节奏不同的发布线** ——
-  0.13.6 为送一行 compose 配置付了一次完整 Windows 构建 + 给所有桌面用户推了个空更新,
-  0.13.7 因单个 `images (cli)` job 挂掉整版作废。症状、拆分方案与优先级在 `docs/cd-plan.md`。
-  ~~**刻意不含实施**:最关键的一步(手工走一遍 provisioning 并记下每条命令)还没人做过,
-  没走过就写 IaC 等于把猜测固化。~~ —— **2026-08-29 走了,而且它是对的**:手工那一遍
-  当场撞出四件只有真跑才知道的事(`get.docker.com` 在国内 ECS 上连接重置、
-  `registry-1.docker.io` 完全不可达、凭据哪儿都没备、起栈顺序会把库先建满)。
-  先写 IaC 的话,这四件会被原样固化成"看起来对"的代码。(L)
-  **2026-08-06 缩掉一块**:要人肉配的凭据从三样降到**零**(v0.13.16)—— `JWT_SECRET`
-  服务端首启自铸存库;`POSTGRES_PASSWORD` 默认(两份 compose 都不发布 postgres 端口,安全);
-  **S3 那对也默认了 —— 这一个不安全,是用户当天明确拍板的取舍**:rustfs `:9000` 有意对外,
-  默认值又在公开仓库里,装机不改就是可写的桶,因此生产用着默认值会 `warn!`。
-  同批还补了自动建桶(以前是埋在 Traefik 章节的手工 `mkdir`,快速上手看不到 → 全栈 healthy
-  但上传全 404);实现走 S3 接口(`bucket::ensure_bucket`),不绑 RustFS,换 MinIO/OSS/S3 都成立 ——
-  方案与调研见 `docs/bucket-provisioning-plan.md`。主干没动(Traefik / 受限部署账号仍无可重放路径),
-  但「新机器起栈」现在只要填 `SERVER_IP` + `MICA_VERSION`。
-  **剩下的真问题不是"要填几个变量",是那个不安全的默认** —— 要彻底解掉,得让 `:9000` 不再
-  对外(nginx 同源反代 S3),那样这对凭据就能像 PG 口令一样安全地默认。当时评估为工作量与风险
-  都更大(SigV4 经代理、CORS、Traefik 栈同步),没做。文档见 `docs/deploy.md` 的
-  “Secrets: what you generate, and what generates itself” 一节。
+> **这一节空了(2026-08-29)。** 两条都做完了,整节搬去
+> [`roadmap-done.md`](roadmap-done.md):备份恢复演练**自动化**了
+> (`.github/workflows/dr-drill.yml`,11 分 50 秒无人值守全绿),provisioning 层
+> 从「做不到」变成一条命令。
+>
+> 同一节里「S3 那对凭据的默认值不安全」一条**拍板不做**,已整条删除,理由在那次
+> 提交的信息里。它并没有因此消失:`deploy/docker-compose.yml` 写着后果、
+> `docs/deploy.md` 有升级前置步骤、生产用着默认值时 api 启动会 `warn!` ——
+> **三处都在代码路径上,比留在待办清单里更难被忽略。**
 
 ## 导入 / 批量整理(0.13.21 之后剩下的)
 
@@ -83,7 +48,6 @@
   剩下的只是「把 zip 解成 `List<ArchiveFile>`」这一步。
 - 🟡 **`_selectedMarkdown` 恒为 null。** 0.13.21 删掉了唯一给它赋值的孤儿方法,状态本身
   和依赖它的显示还留着 —— 拆要动外壳 widget,单独做。
-
 
 - 🟡 **导入完成发邮件。** 扒过的四家(Notion / AppFlowy / Slack / GitHub)全都有,而且是
   "人已经关掉应用"这个场景**唯一**被共同验证过的手段,没有替代品。仓库里有 `mail.rs`,
@@ -287,7 +251,6 @@
 > **2026-07-23 进度**:三项 medium 硬缺口(关注册开关 / 账号删除 / 密码找回,后者顺带
 > 建起邮件底座)已全部落地并发版 0.12.16 上线端到端验证。剩下均为 low:AGPL 源码入口、
 > 隐私声明·条款、OFL.txt 随附。
-
 
 > **这一节空了(2026-08-05)。** 拍板不做的条目已整条删除,理由留在那次提交的信息里。
 > 留着标题是因为这是一个真实存在的分类 —— 空是个**状态**,不是这一档不存在。
