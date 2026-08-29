@@ -446,22 +446,31 @@ users=2  workspaces=32  members=32  views=17799  docs=14881  nonempty=14680  com
 
 这四条的共同点:**每一条在文档里都是"假设成立",而且看起来毫无问题。**
 
-然后:
+**下一次演练要做的**(这份清单本身就是这次的产出):
 
-1. 把每一步的 `[推演]` 改成 `[已验证]`,或写下它实际是怎么失败的。
-2. **卡住的地方就是自动化的清单** —— 那些差异才是 OpenTofu / Ansible 真正要处理的
-   东西,而不是把这份文档照着翻译一遍。
-3. `cd dr/aliyun && tofu destroy`,**当天做** —— 失败的演练最容易留下还在计费的资源。
-   (公网 IP 随实例分配、不是独立 EIP,所以 destroy 会一并收走。)
-4. 删掉测试域名的 A 记录。
+1. **仍然按这份走,并且预期会撞上新的东西。** 演练的价值不是确认它能用,是找出它哪里
+   不能用 —— 这次找出四个,下次大概率不是零。
+2. **先查 `dr-plan §9` 的前置条件**,一条命令一条命令地查。这次就是被其中一条(余额)
+   当场挡下的,而它在那之前看起来毫无问题。
+3. `cd dr/aliyun && tofu destroy`,**当天做**。DNS 记录也归 tofu(`dns.tf`),会一并
+   收走 —— 不需要再手工去删 A 记录。公网 IP 随实例分配、不是独立 EIP,同样一并收走。
+4. 🔴 **第 4 步之后,演练机持有生产凭据。** 当天销毁是硬要求,不是卫生习惯。
+   真过夜了,正确处置不是"应该没事",是**轮换那批凭据**。
 
-## 已知会卡住的地方(先说,免得你以为是自己弄错了)
+## 已知会卡住的地方(这一栏现在是实测,不是预测)
 
-| 地方 | 现象 | 为什么 |
+| 地方 | 现象 | 处置 |
 | --- | --- | --- |
-| 第 2 步 | 全靠手打 | provisioning 层不存在,这正是演练要量化的缺口 |
-| 第 3 步 | 忘了建网络,mica 栈起不来 | compose 声明 `external: true` |
-| 第 5 步 | 用裸 `docker compose` → 库用默认口令建出来 | 生产踩过一次 |
-| 第 6 步 | `tail` 看快照 → 拿到旧的那组 | 按 hostname 分组 |
-| 第 7 步 | rclone 403 | 两对凭据是否一致 |
-| 全程 | ssh 太密被上游限流 | 一次 ssh 里用 heredoc 跑完一组命令(`dr-plan` §9) |
+| 第 0 步 | `InvalidAccountStatus.NotEnoughBalance` | 余额 ≥100 元。网络层已建的部分免费,充值后再 `apply` 即可续上 |
+| 第 0 步 | 实例创建完成后 ssh 报 `Connection closed` | **不是故障**,sshd 还要 ~20 秒。别据此去查安全组 |
+| 第 2 步 | `curl get.docker.com \| sh` 连接重置 | 国内 ECS 到 `download.docker.com` 不通,走阿里云 docker-ce 镜像 |
+| 第 2 步 | 三个第三方镜像一个都拉不到 | `registry-1.docker.io` 完全不可达,`provision.yml` 已配 pull-through 代理 |
+| 第 3 步 | traefik 面板凭据"莫名其妙不对" | `.env` 里 htpasswd 哈希的 `$` 被 compose 当变量吃了,模板里已 `$` → `$$` |
+| 第 4 步 | `error: OSS_BUCKET is required for the backup` | 听起来像凭据缺失,实际是 `OSS_BUCKET` 在 `.env` 而不是 `.env.secrets`。两个文件都要挂 |
+| 第 5→6 | `ERROR: type "object_type" already exists` | 起栈时 api 跑了迁移,库不空。**顺序问题**:凭据 → 空库 → 灌 → 起 api |
+| 第 6 步 | 🔴 想 `./dc --profile backup up -d backup` | **绝对不行**:daemon run-on-start 会往生产仓库写并 `forget --prune`。用一次性容器 |
+| 第 6 步 | `tail` 看快照 → 拿到旧的那组 | 按 hostname 分组,要 `grep` 出所有行 |
+| 第 7 步 | rclone 403 | 看清报错里是**源**(`rustfs:`,本机凭据)还是**目的**(`ossblob:`,OSS 凭据) |
+| 第 7 步 | 容器里解析不到 `rustfs` | 要 `--network mica_default` |
+| 第 8 步 | 侧栏数量"对不上" | 判据别用表行数。侧栏列的是**登录用户的成员关系**,查 `workspace_members` 按用户分组 |
+| 全程 | ssh 太密被上游限流 | 一次 ssh 里用 heredoc 跑完一组命令(`dr-plan` §10) |
