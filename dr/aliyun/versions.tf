@@ -14,22 +14,32 @@ terraform {
     }
   }
 
-  # state 放本地即可:这次演练的 state 里只有实例 id / IP / 安全组 id,没有凭据。
+  # state 在 OSS,不在本地。这不是洁癖,是 CI 的硬要求:**GitHub runner 是一次性的**,
+  # 本地 state 随 job 一起消失,于是它刚建出来的机器变成 tofu 再也管不到的孤儿 ——
+  # 不会报错,只是一直计费,直到有人翻控制台才发现。
   #
-  # 真容灾时要挪到对象存储 —— 绝不能放在那台会挂的机器上。同时打开 OpenTofu 的
-  # state 加密(这是选它而非 Terraform 的决定性理由,见 dr-plan §7.2.1):
+  # 桶用现成的备份桶加一个自己的前缀。与备份互不重叠:rustic 在 OSS_ROOT=mica 下,
+  # 对象镜像在 mica-blobs/ 下,谁也 prune 不到 tofu/。
   #
-  #   backend "oss" {
-  #     bucket = "mica-backup-cloudcele"
-  #     prefix = "tofu/dr"
-  #     region = "cn-shenzhen"
+  # 凭据走 ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY,与 provider 同一对。
+  backend "oss" {
+    bucket = "mica-backup-cloudcele"
+    prefix = "tofu/dr"
+    region = "cn-shenzhen"
+  }
+
+  # state 加密**故意没开**。这份 state 里只有实例 id / 公网 IP / 安全组 id / 公钥 ——
+  # 没有一样是秘密。开了就多一个必须被携带的口令,而「要带在外面的秘密」这份清单
+  # (dr-plan §2.2)正在被努力压短,不该为了看起来周全而加长它。
+  #
+  # ⚠️ **设了 var.root_password 就必须打开**:那个值会明文进 state。这也正是选
+  # OpenTofu 而不是 Terraform 的那条决定性理由(dr-plan §7.2.1)兑现的地方:
+  #
+  #   encryption {
+  #     key_provider "pbkdf2" "main" { passphrase = ... }  # 或走 TF_ENCRYPTION 环境变量
+  #     method "aes_gcm" "main" { keys = key_provider.pbkdf2.main }
+  #     state { method = method.aes_gcm.main }
   #   }
-  #
-  # encryption {
-  #   key_provider "pbkdf2" "main" { passphrase = var.state_passphrase }
-  #   method "aes_gcm" "main" { keys = key_provider.pbkdf2.main }
-  #   state { method = method.aes_gcm.main }
-  # }
 }
 
 provider "alicloud" {

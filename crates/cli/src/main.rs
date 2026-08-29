@@ -375,6 +375,12 @@ enum BackupCmd {
     #[arg(long, default_value = "/restore")]
     out: PathBuf,
   },
+  /// Pull the object bytes (images) back from OSS into this instance's RustFS.
+  ///
+  /// Run AFTER the stack is up — it writes into the running RustFS. Refuses
+  /// unless both sides end up with the same object count and byte total: a
+  /// `rclone copy` that copied nothing exits 0 too.
+  RestoreObjects,
 }
 
 #[derive(Args)]
@@ -433,6 +439,9 @@ fn run(cli: Cli) -> Result<()> {
     Command::Backup(BackupCmd::Daemon) => cmd_backup_daemon(&cli, &cfg),
     Command::Backup(BackupCmd::RestoreConfig { out }) => {
       backup::restore_config(&backup::Settings::from_env()?, out)
+    }
+    Command::Backup(BackupCmd::RestoreObjects) => {
+      backup::restore_objects(&backup::Settings::from_env()?)
     }
     Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
     Command::RehostImages(args) => cmd_rehost_images(&cli, &cfg, args),

@@ -249,6 +249,44 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
 
 /// Run an external tool, failing with its exit status. Output is inherited so
 /// rustic's and rclone's progress reaches the container log unbuffered.
+/// Like [`run_tool`] but hands back stdout. Used where the ANSWER matters and
+/// not just the exit status — `rclone size`, whose whole point is the number.
+fn tool_stdout(bin: &str, args: &[&str], what: &str) -> Result<String> {
+  let out = Proc::new(bin)
+    .args(args)
+    .output()
+    .with_context(|| format!("could not start `{bin}` — is it on PATH?"))?;
+  if !out.status.success() {
+    bail!(
+      "{what} failed ({}) — {}",
+      out.status,
+      String::from_utf8_lossy(&out.stderr).trim()
+    );
+  }
+  Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `count` and `bytes` out of `rclone size --json`.
+///
+/// Hand-parsed rather than pulling in serde for two integers: this runs in the
+/// backup image, and the shape is two fields of a one-line object.
+fn rclone_size(rclone: &str, remote: &str) -> Result<(u64, u64)> {
+  let out = tool_stdout(rclone, &["size", "--json", remote], "rclone size")?;
+  parse_rclone_size(&out)
+    .with_context(|| format!("could not read count/bytes out of `rclone size --json {remote}`: {out}"))
+}
+
+/// Split out from [`rclone_size`] so it can be tested without rclone.
+fn parse_rclone_size(out: &str) -> Option<(u64, u64)> {
+  let field = |name: &str| -> Option<u64> {
+    let at = out.find(&format!("\"{name}\""))? + name.len() + 2;
+    let rest = out[at..].trim_start_matches([':', ' ']);
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    rest[..end].parse().ok()
+  };
+  Some((field("count")?, field("bytes")?))
+}
+
 fn run_tool(bin: &str, args: &[&str], what: &str) -> Result<()> {
   let status = Proc::new(bin)
     .args(args)
@@ -383,6 +421,49 @@ pub fn restore_config(settings: &Settings, out: &Path) -> Result<()> {
       landed.display()
     );
   }
+  Ok(())
+}
+
+/// Pull the object bytes back: OSS → this instance's RustFS. The mirror leg of
+/// [`run_once`] run backwards.
+///
+/// Why a command and not a documented rclone invocation: the 2026-08-29 drill
+/// did it by hand, with the two remotes spelled out as `RCLONE_CONFIG_*`
+/// environment variables — a second copy of what `render_rclone_conf` already
+/// knows (`force_path_style` for RustFS, `provider = Alibaba` for OSS, both
+/// found the hard way). Two spellings of one fact is the drift this repo keeps
+/// relearning; there is now one.
+///
+/// AND it is not allowed to succeed quietly: `rclone copy` exits 0 having
+/// copied nothing just as happily as having copied everything, so the drill's
+/// real criterion — the two sides agree on object count AND bytes — is checked
+/// here rather than left in a runbook for someone to remember.
+pub fn restore_objects(settings: &Settings) -> Result<()> {
+  let blob = settings.blob.as_ref().context(
+    "the object leg is not configured (RUSTFS_S3_* / OSS_BLOB_BUCKET) — nothing to restore from",
+  )?;
+  render_rclone_conf(blob, &settings.oss)?;
+  let src = format!("ossblob:{}/{}", blob.dst_bucket, blob.dst_root);
+  let dst = format!("rustfs:{}", blob.src_bucket);
+
+  log(&format!("restore objects {src} → {dst}"));
+  run_tool(
+    &settings.rclone,
+    &["copy", &src, &dst, "--transfers", "8", "--stats", "30s"],
+    "rclone copy (restore)",
+  )?;
+
+  let (src_n, src_b) = rclone_size(&settings.rclone, &src)?;
+  let (dst_n, dst_b) = rclone_size(&settings.rclone, &dst)?;
+  log(&format!(
+    "source {src_n} objects / {src_b} bytes; destination {dst_n} / {dst_b}"
+  ));
+  if (src_n, src_b) != (dst_n, dst_b) {
+    bail!(
+      "restore did not converge: {src} has {src_n} objects / {src_b} bytes but        {dst} has {dst_n} / {dst_b}. Images will be missing for exactly the        documents whose blobs did not arrive — a page still opens, the picture        is just broken, which is why this is checked and not eyeballed."
+    );
+  }
+  log("objects restored and verified");
   Ok(())
 }
 
@@ -909,6 +990,32 @@ mod tests {
   /// all — the 2026-08-29 drill reached a running, empty stack and stopped
   /// there. A silent skip would report that instance as fully backed up, which
   /// is the exact shape of the failure this module was written after.
+  /// Two integers out of one line, hand-parsed rather than with serde — so the
+  /// shapes rclone actually emits are pinned here. The one that matters is the
+  /// ZERO case: a `copy` that transferred nothing exits 0, and `{"count":0}`
+  /// parsing as None instead of Some(0) would turn "restored nothing" into
+  /// "could not check", which reads as a tooling problem rather than as the
+  /// data loss it is.
+  #[test]
+  fn rclone_size_json_is_read_correctly() {
+    assert_eq!(
+      parse_rclone_size(r#"{"count":6467,"bytes":1042495633,"sizeless":0}"#),
+      Some((6467, 1042495633))
+    );
+    // pretty-printed, which rclone emits on a terminal
+    assert_eq!(
+      parse_rclone_size("{
+	\"count\": 12,
+	\"bytes\": 34
+}"),
+      Some((12, 34))
+    );
+    assert_eq!(parse_rclone_size(r#"{"count":0,"bytes":0}"#), Some((0, 0)));
+    assert_eq!(parse_rclone_size("not json at all"), None);
+    // present but unparseable must not silently become 0
+    assert_eq!(parse_rclone_size(r#"{"count":null,"bytes":null}"#), None);
+  }
+
   #[test]
   fn an_unmounted_credentials_file_fails_the_run() {
     let r = report(&[
