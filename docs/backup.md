@@ -189,9 +189,13 @@ A fresh machine has this image and nothing else, so the restore cannot depend on
 a running stack — it runs straight from the image:
 
 ```bash
-docker run --rm -v /data/mica:/restore   -e RUSTIC_PASSWORD -e OSS_BUCKET -e OSS_ENDPOINT -e OSS_REGION   -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY   <registry>/mica-cli:<version> backup restore-config
+docker run --rm -v /data/mica:/restore   --entrypoint /usr/local/bin/mica-cli   -e RUSTIC_PASSWORD -e OSS_BUCKET -e OSS_ENDPOINT -e OSS_REGION -e OSS_ROOT   -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY   <registry>/mica-cli:<version> backup restore-config
 install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
 ```
+
+`--entrypoint` is needed because the image's entrypoint is the whole
+`mica-cli backup daemon` — without it the arguments append to that and you get
+`backup daemon backup restore-config`.
 
 `RUSTIC_PASSWORD` and the `OSS_*` pair are what you just used to reach and open
 the repository, so they come from wherever you keep them, not from here.

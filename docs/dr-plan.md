@@ -127,9 +127,14 @@ OSS_SECRET_ACCESS_KEY
 `mica-cli backup restore-config` 就是为这一刻加的(v0.13.41):
 
 ```bash
-docker run --rm -v /data/mica:/restore -e RUSTIC_PASSWORD   -e OSS_BUCKET -e OSS_ENDPOINT -e OSS_REGION -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY   <registry>/mica-cli:<版本> backup restore-config
+docker run --rm -v /data/mica:/restore --entrypoint /usr/local/bin/mica-cli   -e RUSTIC_PASSWORD -e OSS_BUCKET -e OSS_ENDPOINT -e OSS_REGION -e OSS_ROOT   -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY   <registry>/mica-cli:<版本> backup restore-config
 install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
 ```
+
+⚠️ `--entrypoint` 不能省:镜像的 ENTRYPOINT 是整条 `mica-cli backup daemon`,
+不覆盖的话参数会接在后面,拼成 `backup daemon backup restore-config`。
+〔更干净的做法是把 ENTRYPOINT 拆成 `["mica-cli"]` + `CMD ["backup","daemon"]`,
+下一版顺手改;不为一个 flag 单发一版。〕
 
 > 做成命令而不是在文档里贴一段 `rustic.toml`:那些 repository 选项只有一种写法对
 > (`enable_virtual_host_style` 是 OSS 必需的,当初是踩出来的),抄一份进 runbook 就是
