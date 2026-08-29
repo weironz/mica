@@ -185,9 +185,12 @@ separately — they are not part of a content backup.
 
 Do this FIRST in a rebuild — the steps below need them.
 
+A fresh machine has this image and nothing else, so the restore cannot depend on
+a running stack — it runs straight from the image:
+
 ```bash
-rustic restore latest /tmp/cfg --filter-label _config
-install -m 600 /tmp/cfg/etc/mica/env.secrets /data/mica/.env.secrets
+docker run --rm -v /data/mica:/restore   -e RUSTIC_PASSWORD -e OSS_BUCKET -e OSS_ENDPOINT -e OSS_REGION   -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY   <registry>/mica-cli:<version> backup restore-config
+install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
 ```
 
 `RUSTIC_PASSWORD` and the `OSS_*` pair are what you just used to reach and open

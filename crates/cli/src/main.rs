@@ -363,6 +363,18 @@ enum BackupCmd {
   /// A failed run is logged and pinged to the dead man's switch, never fatal —
   /// the loop has to survive a bad night to try again the next one.
   Daemon,
+  /// Put this instance's credentials back — run BEFORE the stack exists.
+  ///
+  /// The other half of the credentials leg: a rebuilt machine has this image
+  /// and nothing else, so restoring .env.secrets cannot depend on a running
+  /// stack. Needs OSS_* and RUSTIC_PASSWORD in the environment — the three
+  /// secrets that cannot themselves be in the backup (docs/dr-plan.md §2.2).
+  RestoreConfig {
+    /// Restore destination. The file lands at <out>/etc/mica/env.secrets,
+    /// because rustic restores the absolute path it snapshotted.
+    #[arg(long, default_value = "/restore")]
+    out: PathBuf,
+  },
 }
 
 #[derive(Args)]
@@ -419,6 +431,9 @@ fn run(cli: Cli) -> Result<()> {
     Command::Export(args) => cmd_export(&cli, &cfg, args),
     Command::Backup(BackupCmd::Run) => cmd_backup_run(&cli, &cfg),
     Command::Backup(BackupCmd::Daemon) => cmd_backup_daemon(&cli, &cfg),
+    Command::Backup(BackupCmd::RestoreConfig { out }) => {
+      backup::restore_config(&backup::Settings::from_env()?, out)
+    }
     Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
     Command::RehostImages(args) => cmd_rehost_images(&cli, &cfg, args),
     Command::Update(args) => cmd_update(&cli, args),

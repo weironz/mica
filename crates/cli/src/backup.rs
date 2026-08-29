@@ -338,6 +338,54 @@ struct Manifest {
 ///
 /// This is the whole point of the rewrite, so it is a free function with its own
 /// tests rather than a branch buried inside the run.
+/// Put an instance's credentials back BEFORE its stack exists.
+///
+/// Resolves a chicken-and-egg the 2026-08-29 drill walked straight into: the
+/// credentials come out of the backup (leg 3c), but reading the backup needs
+/// `rustic` plus a repository config — and both live in this image, which on a
+/// fresh machine is the only thing there is. So this runs standalone:
+///
+///     docker run --rm -e OSS_… -e RUSTIC_PASSWORD=… -v /data/mica:/restore ///       mica-cli backup restore-config
+///
+/// It is a command and not a documented `rustic.toml` snippet on purpose. The
+/// repository options have exactly one correct spelling (`enable_virtual_host_style`
+/// is required for OSS and was found the hard way), and a copy of them in a
+/// runbook is a second representation that drifts from `render_rustic_conf`
+/// without anything noticing — the failure this repo keeps relearning.
+///
+/// ORDER MATTERS: run this BEFORE bringing the stack up. `POSTGRES_PASSWORD` is
+/// in the restored file and Postgres uses it at initdb, so a stack started
+/// first is a database created with one password while the config names
+/// another — and nothing says so until something tries to connect.
+pub fn restore_config(settings: &Settings, out: &Path) -> Result<()> {
+  render_rustic_conf(&settings.oss)?;
+  log(&format!("restore _config → {}", out.display()));
+  run_tool(
+    &settings.rustic,
+    &[
+      "restore",
+      "latest",
+      &out.to_string_lossy(),
+      "--filter-label",
+      "_config",
+    ],
+    "rustic restore (config)",
+  )?;
+  // Say where it landed rather than leaving the caller to guess: rustic restores
+  // the ABSOLUTE path it snapshotted, so the file appears under the destination
+  // at the same path it had on the original node.
+  let landed = out.join(CONFIG_FILE.trim_start_matches('/'));
+  if landed.is_file() {
+    log(&format!("credentials at {}", landed.display()));
+  } else {
+    bail!(
+      "restore reported success but {} is not there — the snapshot may predate        v0.13.40, when the credentials leg was added (check: rustic snapshots        --filter-label _config)",
+      landed.display()
+    );
+  }
+  Ok(())
+}
+
 pub fn verdict(report: &Report, allow_partial: bool) -> Result<()> {
   let skipped = report.skipped();
   if skipped.is_empty() || allow_partial {

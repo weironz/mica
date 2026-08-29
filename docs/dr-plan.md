@@ -123,12 +123,17 @@ OSS_SECRET_ACCESS_KEY
 > 机器凭身份读桶,不带 key。今天不做:它要改 tofu、改 rustic 的凭据来源,而收益
 > 是"少存两个 Secret"。**先记着,别现在做。**
 
-**还原(必须在起栈之前)**:
+**还原(必须在起栈之前)**。新机器上只有这个镜像,所以还原不能依赖已经跑起来的栈 ——
+`mica-cli backup restore-config` 就是为这一刻加的(v0.13.41):
 
 ```bash
-rustic restore latest /tmp/cfg --filter-label _config
-install -m 600 /tmp/cfg/etc/mica/env.secrets /data/mica/.env.secrets
+docker run --rm -v /data/mica:/restore -e RUSTIC_PASSWORD   -e OSS_BUCKET -e OSS_ENDPOINT -e OSS_REGION -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY   <registry>/mica-cli:<版本> backup restore-config
+install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
 ```
+
+> 做成命令而不是在文档里贴一段 `rustic.toml`:那些 repository 选项只有一种写法对
+> (`enable_virtual_host_style` 是 OSS 必需的,当初是踩出来的),抄一份进 runbook 就是
+> 第二处表示,会和 `render_rustic_conf` 悄悄漂移。
 
 ⚠️ **顺序是硬的**:`POSTGRES_PASSWORD` 在这个文件里,而 postgres 用它 initdb。
 先起栈再还原凭据 = 库是用旧口令建的、配置写着新口令,谁都连不上。
