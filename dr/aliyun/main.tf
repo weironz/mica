@@ -29,6 +29,11 @@ locals {
   # try 而不是直接下标:匹配不到时给 null,让下面的 precondition 说出人话,
   # 而不是抛一个 "index 0 out of range" 让你去猜是镜像没了还是地域不对。
   image_id = try(data.alicloud_images.ubuntu.images[0].id, null)
+  # 内容优先于路径:CI 上没有 ~/.ssh/,只能走内容。两边都空时给 null,让下面的
+  # precondition 说清楚该怎么办 —— 而不是抛一个 file() 的原始报错。
+  public_key = trimspace(
+    var.public_key != "" ? var.public_key : try(file(pathexpand(var.public_key_path)), "")
+  )
   # 显式指定优先;否则取自动匹配到的第一个。
   # try 而不是 coalesce:coalesce 在参数全空时**自己抛错**,发生在 locals 求值阶段,
   # 于是下面那条 precondition 根本轮不到 —— 实测首次 plan 拿到的就是 "Call to
@@ -90,7 +95,14 @@ resource "alicloud_security_group_rule" "https" {
 
 resource "alicloud_ecs_key_pair" "dr" {
   key_pair_name = var.name
-  public_key    = trimspace(file(pathexpand(var.public_key_path)))
+  public_key    = local.public_key
+
+  lifecycle {
+    precondition {
+      condition     = local.public_key != ""
+      error_message = "没有公钥。本地:先 `ssh-keygen -t ed25519 -C \"mica-dr\"`(一路回车),或把 public_key_path 指到已有的 .pub。CI:设 TF_VAR_public_key 为公钥内容 —— runner 上没有 ~/.ssh/。"
+    }
+  }
 }
 
 # ── 机器 ──────────────────────────────────────────────────────────────────────

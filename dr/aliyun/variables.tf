@@ -53,10 +53,31 @@ variable "system_disk_size" {
   default     = 40
 }
 
+variable "public_key" {
+  description = <<-EOT
+    公钥**内容**(`ssh-ed25519 AAAA... comment`)。留空则去读 `public_key_path`。
+
+    **CI 用的是这个,不是路径** —— runner 上没有 `~/.ssh/`。Action 里:
+    `TF_VAR_public_key: $${{ secrets.DR_SSH_PUBLIC_KEY }}`(HCL 里 `$$` 转义 `$`)。
+
+    公钥本身不是秘密(它就是拿来公开的),放 repository **variable** 也行;
+    放 secret 只是省得每次确认它到底该不该公开。
+
+    ⚠️ **真正要命的是私钥**:Action 建出机器之后,能登进去的只有持有私钥的人。
+    所以这把私钥和 `MICA_BACKUP_PASSWORD` 一样,归宿是**密码管理器** —— 只存在
+    某台笔记本上的私钥,在那台笔记本也没了的时候等于没有。
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "public_key_path" {
   description = <<-EOT
     公钥文件路径。**必须在创建实例时注入** —— 这是整个流程里最容易漏、且事后补不了
     的一步:机器起来你进不去,ansible 也连不上。
+
+    只在 `public_key` 留空时才读。没有密钥就先建一把:
+    `ssh-keygen -t ed25519 -C "mica-dr"`(一路回车)。
   EOT
   type        = string
   default     = "~/.ssh/id_ed25519.pub"

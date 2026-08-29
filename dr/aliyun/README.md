@@ -24,8 +24,9 @@ setx ALICLOUD_SECRET_KEY "你的SK"
 ⚠️ **`setx` 只对新开的终端生效**,当前这个窗口读不到。**关掉,重开一个**,再继续:
 
 ```bash
-# 3) 公钥(没有就先 ssh-keygen -t ed25519)
-ls ~/.ssh/id_rsa.pub
+# 3) 公钥 —— 没有就现建一把(一路回车即可)
+ssh-keygen -t ed25519 -C "mica-dr"
+ls ~/.ssh/id_ed25519.pub
 
 # 4) 建机器
 cd dr/aliyun && tofu init && tofu plan     # 先看一眼再花钱
@@ -99,9 +100,23 @@ profile,填上就能用。但**默认路径是环境变量**。
         env:
           ALICLOUD_ACCESS_KEY: ${{ secrets.ALICLOUD_ACCESS_KEY }}
           ALICLOUD_SECRET_KEY: ${{ secrets.ALICLOUD_SECRET_KEY }}
+          # runner 上没有 ~/.ssh/ —— 传公钥**内容**,不是路径:
+          TF_VAR_public_key: ${{ secrets.DR_SSH_PUBLIC_KEY }}
           # state 必须放对象存储(runner 是一次性的),并开加密:
           TF_ENCRYPTION: ${{ secrets.TF_ENCRYPTION }}
 ```
+
+**公钥进 CI,私钥怎么办?** 这是这套东西真正的要害:
+
+- 公钥本身不是秘密(它就是拿来公开的),放 repository variable 或 secret 都行。
+- **私钥永远不进 CI。** Action 只负责把机器建出来 —— 之后能 ssh 进去的,是持有私钥
+  的人,也就是你。
+- ⚠️ **所以这把私钥是一份容灾凭据**,和 `MICA_BACKUP_PASSWORD` 同级:只存在某台笔记本
+  上的私钥,在那台笔记本也没了的时候等于没有。**放进密码管理器。**
+
+要"CI 建完机器自己接着装"的话,那需要私钥进 runner —— 但那意味着**一把能登进生产
+恢复机的私钥常驻在 CI**。当前不做:provisioning 之后的步骤还是手工走(`dr-drill.md`),
+等那一层真要自动化时再单独决定这个取舍。
 
 **不需要装 aliyun CLI** —— provider 直接读这两个环境变量。CLI 只是临时查东西时顺手
 (列镜像、查规格),不在关键路径上。
