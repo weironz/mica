@@ -61,11 +61,19 @@ MICA_VERSION=v0.13.39
 
 **已经写成 OpenTofu 了**:[`dr/aliyun/`](../dr/aliyun/README.md)。
 
+```powershell
+setx ALICLOUD_ACCESS_KEY "..." ; setx ALICLOUD_SECRET_KEY "..."   # 设一次
+```
+
+⚠️ **`setx` 只对新开的终端生效** —— 关掉当前窗口重开一个,否则 `tofu plan` 会说没凭据。
+
 ```bash
-export ALICLOUD_ACCESS_KEY=... ALICLOUD_SECRET_KEY=...
 cd dr/aliyun && tofu init && tofu plan     # 先看一眼再花钱
 tofu apply && tofu output
 ```
+
+完整版(含装工具、公钥、destroy)见 [`dr/aliyun/README.md`](../dr/aliyun/README.md)
+的「快速开始」。
 
 `tofu output chosen` 会给出云**实际**选中的可用区/规格/镜像 —— 抄进下表的「实际」栏。
 

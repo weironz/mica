@@ -10,6 +10,41 @@
 真容灾时 state 要放对象存储、和备份同一个桶,而只要哪天往变量里塞了口令,Terraform
 会明文写进 state。许可证与切换成本都只是加分项 —— 详见 `docs/dr-plan.md` §7.2.1。
 
+## 快速开始(照抄这一段就够)
+
+```powershell
+# 1) 装工具(各装一次)
+winget install --id=OpenTofu.Tofu -e
+
+# 2) 凭据 —— setx 写进用户环境变量,设一次就好
+setx ALICLOUD_ACCESS_KEY "你的AK"
+setx ALICLOUD_SECRET_KEY "你的SK"
+```
+
+⚠️ **`setx` 只对新开的终端生效**,当前这个窗口读不到。**关掉,重开一个**,再继续:
+
+```bash
+# 3) 公钥(没有就先 ssh-keygen -t ed25519)
+ls ~/.ssh/id_rsa.pub
+
+# 4) 建机器
+cd dr/aliyun
+tofu init
+tofu plan            # 先看一眼再花钱
+tofu apply           # 输入 yes
+tofu output          # public_ip / ssh / chosen
+```
+
+拿到 IP 后回 [`docs/dr-drill.md`](../../docs/dr-drill.md),从**第 1 步(DNS)** 继续。
+
+**演练完当天**:`tofu destroy`。
+
+> `tofu plan` 那一刻会同时回答两件事:AK 权限够不够,以及 **Ubuntu 26.04 在该地域
+> 到底有没有** —— 后者是这份配置里唯一没法离线验证的假设,`precondition` 会在那时
+> 给出可操作的报错。
+
+下面是同一件事的展开:每个选择为什么这么定、凭据还能放哪、要不要设 root 密码。
+
 ## 用之前
 
 ```bash
