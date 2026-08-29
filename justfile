@@ -275,7 +275,7 @@ restore-drill dump:
     NODE='{{node}}' bash scripts/restore-drill.sh "{{dump}}"
 [doc("List the restore points on the node, newest last")]
 restore-points:
-    ssh {{node}} "ls -lah /data/mica/*.sql.gz 2>/dev/null | tail -20 || echo '(none)'"
+    ssh {{node}} "ls -lah {{node_dir}}/*.sql.gz 2>/dev/null | tail -20 || echo '(none)'"
 
 # The web half had zero end-to-end coverage: all 14 integration tests import native
 # FFI and structurally cannot be pointed at a browser. This asserts what only a

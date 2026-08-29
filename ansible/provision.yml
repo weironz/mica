@@ -36,7 +36,6 @@
     # download.docker.com, from an Aliyun cn-shenzhen ECS). Point this at
     # https://download.docker.com/linux/ubuntu outside China.
     docker_apt_repo: "https://mirrors.aliyun.com/docker-ce/linux/ubuntu"
-    traefik_dir: /data/traefik
 
     # Docker Hub is unreachable from this node — not slow, unreachable:
     # `dial tcp 111.243.214.169:443: i/o timeout` for every pull (measured

@@ -69,6 +69,17 @@ jobs:
           [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { echo "version must be X.Y.Z"; exit 1; }
 
+      # Read out of ansible/inventory.yml rather than repeated here. The node's
+      # layout is decided in exactly one place; a copy in this file would be a
+      # second one, and the two would agree right up until somebody moved the
+      # deployment and only remembered the playbooks.
+      - name: Where does this node keep its stack?
+        run: |
+          d=$(python3 -c "import yaml;print(yaml.safe_load(open('ansible/inventory.yml'))['all']['vars']['mica_dir'])")
+          echo "MICA_DIR=$d" >> "$GITHUB_ENV"
+          echo "restore staging goes beside it, not inside: $d + .restore"
+          echo "RESTORE_DIR=${d}.restore" >> "$GITHUB_ENV"
+
       - uses: opentofu/setup-opentofu@v1
         with:
           tofu_version: "1.10.6"
@@ -162,9 +173,9 @@ jobs:
             RUSTIC_PASSWORD="$RUSTIC_PASSWORD" \
             OSS_ACCESS_KEY_ID="$OSS_ACCESS_KEY_ID" \
             OSS_SECRET_ACCESS_KEY="$OSS_SECRET_ACCESS_KEY" \
-            IMAGE="$IMAGE" bash -euo pipefail -s <<'EOSSH'
-          mkdir -p /data/mica
-          docker run --rm -v /data/mica:/restore --entrypoint /usr/local/bin/mica-cli \
+            IMAGE="$IMAGE" MICA_DIR="$MICA_DIR" RESTORE_DIR="$RESTORE_DIR" bash -euo pipefail -s <<'EOSSH'
+          mkdir -p "$MICA_DIR"
+          docker run --rm -v "$MICA_DIR":/restore --entrypoint /usr/local/bin/mica-cli \
             -e RUSTIC_PASSWORD -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY \
             -e OSS_BUCKET=mica-backup-cloudcele \
             -e OSS_ENDPOINT=https://oss-cn-shenzhen.aliyuncs.com \
@@ -172,10 +183,10 @@ jobs:
             "$IMAGE" backup restore-config
           # rustic restores the absolute path it snapshotted, so the file lands
           # under the destination at the path it had on the original node.
-          install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
-          rm -f /data/mica/etc/mica/env.secrets
-          rmdir /data/mica/etc/mica /data/mica/etc 2>/dev/null || true
-          grep -c '^[A-Z]' /data/mica/.env.secrets | sed 's/^/restored keys: /'
+          install -m 600 "$MICA_DIR"/etc/mica/env.secrets "$MICA_DIR"/.env.secrets
+          rm -f "$MICA_DIR"/etc/mica/env.secrets
+          rmdir "$MICA_DIR"/etc/mica "$MICA_DIR"/etc 2>/dev/null || true
+          grep -c '^[A-Z]' "$MICA_DIR"/.env.secrets | sed 's/^/restored keys: /'
           EOSSH
 
       # The SAME playbook production deploys with. A recovery procedure that is
@@ -210,9 +221,10 @@ jobs:
           RUSTIC_PASSWORD: ${{ secrets.MICA_BACKUP_PASSWORD }}
         run: |
           ssh root@"$DR_HOST" RUSTIC_PASSWORD="$RUSTIC_PASSWORD" IMAGE="$IMAGE" \
+            MICA_DIR="$MICA_DIR" RESTORE_DIR="$RESTORE_DIR" \
             bash -euo pipefail -s <<'EOSSH'
-          cd /data/mica
-          mkdir -p /data/restore
+          cd "$MICA_DIR"
+          mkdir -p "$RESTORE_DIR"
           # Deliberately NOT `dc --profile backup up -d backup`: that daemon runs
           # a backup on start, which would WRITE into production's repository and
           # then `forget --prune` it. Read-only means a throwaway container.
@@ -225,13 +237,13 @@ jobs:
           # /etc/rustic/rustic.toml, the one authoritative spelling of the
           # repository options. Copying that toml in here would be a second one.
           docker run --rm -e RUSTIC_PASSWORD \
-            -v /data/mica/.env.secrets:/s:ro -v /data/mica/.env:/e:ro \
-            -v /data/restore:/restore --entrypoint sh "$IMAGE" -c '
+            -v "$MICA_DIR"/.env.secrets:/s:ro -v "$MICA_DIR"/.env:/e:ro \
+            -v "$RESTORE_DIR":/restore --entrypoint sh "$IMAGE" -c '
               set -eu
               export $(grep -E "^OSS_" /e /s -h | xargs)
               mica-cli backup restore-config --out /tmp/discard >/dev/null 2>&1 || true
               rustic restore latest /restore --filter-label _pgdump'
-          D=/data/restore/var/lib/mica/export/_pgdump/mica.sql
+          D="$RESTORE_DIR"/var/lib/mica/export/_pgdump/mica.sql
           # The same two markers ansible/deploy.yml validates its own restore
           # points with. A truncated dump loads happily until it does not.
           grep -q 'PostgreSQL database dump complete' "$D"
@@ -250,9 +262,9 @@ jobs:
         env:
           DR_HOST: ${{ steps.infra.outputs.ip }}
         run: |
-          ssh root@"$DR_HOST" IMAGE="$IMAGE" bash -euo pipefail -s <<'EOSSH'
+          ssh root@"$DR_HOST" IMAGE="$IMAGE" MICA_DIR="$MICA_DIR" RESTORE_DIR="$RESTORE_DIR" bash -euo pipefail -s <<'EOSSH'
           docker run --rm --network mica_default \
-            --env-file /data/mica/.env --env-file /data/mica/.env.secrets \
+            --env-file "$MICA_DIR"/.env --env-file "$MICA_DIR"/.env.secrets \
             --entrypoint /usr/local/bin/mica-cli "$IMAGE" backup restore-objects
           EOSSH
 
@@ -268,7 +280,7 @@ jobs:
           echo "$health"
           echo "$health" | grep -q "\"version\":\"${{ inputs.version }}\""
           curl -sf --retry 5 --retry-delay 5 -o /dev/null "https://$DOMAIN/api/ready"
-          ssh root@"$DR_HOST" bash -euo pipefail -s <<'EOSSH'
+          ssh root@"$DR_HOST" MICA_DIR="$MICA_DIR" bash -euo pipefail -s <<'EOSSH'
           counts=$(docker exec mica-postgres-1 psql -U mica -d mica -tAc \
             "select (select count(*) from document_yrs_base), \
                     (select count(*) from document_yrs_base where length(state)>0 and content_text<>''), \

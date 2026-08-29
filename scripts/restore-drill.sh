@@ -9,4 +9,7 @@ NODE="${NODE:-root@mica.cloudcele.com}"
 # Ship the repo's copy each run, same as deploy-prod does with the compose:
 # a drill script that has drifted from the repo is one more thing to distrust.
 cat deploy/restore-drill.sh | ssh "${NODE}" "cat > /tmp/mica-restore-drill.sh"
-ssh "${NODE}" "bash /tmp/mica-restore-drill.sh /data/mica/$(basename "$1")"
+# Where the node keeps its stack — read from the inventory, not repeated here.
+# The layout is decided in ansible/inventory.yml and nowhere else.
+MICA_DIR=$(python3 -c "import yaml;print(yaml.safe_load(open('ansible/inventory.yml'))['all']['vars']['mica_dir'])" 2>/dev/null || echo /data/mica)
+ssh "${NODE}" "bash /tmp/mica-restore-drill.sh ${MICA_DIR}/$(basename "$1")"

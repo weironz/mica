@@ -32,4 +32,14 @@ all:
   vars:
     # Everything the node keeps lives here: .env (rendered), docker-compose.yaml
     # (shipped from the tag), and the backup dumps.
+    #
+    # THESE TWO ARE THE ONLY PLACE THE LAYOUT IS DECIDED. Move the deployment to
+    # /opt/mica and everything that writes to the node follows — the playbooks
+    # use the variables, and .github/workflows/dr-drill.yml reads mica_dir out
+    # of THIS file rather than keeping its own copy.
+    #
+    # The backup is unaffected either way: it stores the file at its CONTAINER
+    # path (/etc/mica/env.secrets), which compose decides, so a backup taken on
+    # one layout restores onto another.
     mica_dir: /data/mica
+    traefik_dir: /data/traefik
