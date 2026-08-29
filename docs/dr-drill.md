@@ -176,14 +176,18 @@ DR_HOST=$(cd dr/aliyun && tofu output -raw public_ip) ansible-playbook -i ansibl
 ```
 
 ⚠️ **控制端不能是 Windows**(ansible 装得上、一跑就 `WinError 87`)。本机没有通用
-WSL 发行版,所以借容器当控制端 —— Docker Desktop 已经在跑:
+WSL 发行版,所以借容器当控制端 —— 已经封成脚本,**不用每次重造**:
 
 ```bash
-docker run --rm -v "C:/data/codes/mica-will-laptop:/work" -v "C:/Users/willz/.ssh:/ssh:ro" -v "<scratch>/run-ansible.sh:/run.sh:ro" -e DR_HOST=<IP> -e TRAEFIK_BASIC_AUTH="admin:<hash>" --entrypoint sh alpine/ansible /run.sh ansible/provision.yml -e target=mica-dr
+DR_HOST=$(cd dr/aliyun && tofu output -raw public_ip) sh scripts/ansible-in-docker.sh ansible/provision.yml -e target=mica-dr
 ```
 
-`run-ansible.sh` 做三件事:把公钥复制出来 `chmod 600`(Windows 挂进来的权限是 0777,
-ssh 会拒绝用)、装 `ansible/requirements.yml` 里的 collection、跑 playbook。
+它做三件事:把公钥复制出来 `chmod 600`(Windows 挂进来的权限是 0777,ssh 会拒绝用)、
+装 `ansible/requirements.yml` 里的 collection、跑 playbook。
+
+> `scripts/deploy-prod.sh` 在 Windows 上是**拒绝**并让你走 CI —— 对于发版那是对的。
+> 但**恢复时不是**:你可能正站在一台笔记本前、面对一个坏掉的节点,没心情绕一圈 GitHub。
+> 这个脚本用已经装好的 Docker,十秒钟给你一个控制端。
 
 **判据**:`PLAY RECAP` 里 `failed=0`;traefik 容器 healthy;`curl https://traefik.<域名>/`
 返回 **401**(而不是连接错误)—— 401 一次证明两件事:证书签出来了、basic auth 在生效。
