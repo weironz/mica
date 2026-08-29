@@ -145,8 +145,18 @@ jobs:
         env:
           DR_HOST: ${{ steps.infra.outputs.ip }}
           RUSTIC_PASSWORD: ${{ secrets.MICA_BACKUP_PASSWORD }}
-          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
-          OSS_SECRET_ACCESS_KEY: ${{ secrets.OSS_SECRET_ACCESS_KEY }}
+          # The SAME Aliyun key pair tofu uses. Two secret names for one key was
+          # the confusion, not the safety: on this install that key already has
+          # both permissions, so naming it twice bought nothing and cost a
+          # "which one is this?" every time.
+          #
+          # These are the ENV VAR names mica-cli reads on the node — unrelated to
+          # what the secret is called here. docs/backup.md still recommends a
+          # bucket-scoped RAM key for the backup role; using the machine-creating
+          # key means one credential both reads all your data AND can create or
+          # destroy infrastructure. Recorded as a choice, not as a default.
+          OSS_ACCESS_KEY_ID: ${{ secrets.ALICLOUD_ACCESS_KEY }}
+          OSS_SECRET_ACCESS_KEY: ${{ secrets.ALICLOUD_SECRET_KEY }}
         run: |
           ssh root@"$DR_HOST" \
             RUSTIC_PASSWORD="$RUSTIC_PASSWORD" \

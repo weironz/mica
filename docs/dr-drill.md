@@ -35,7 +35,7 @@
 | 测试域名两条 A 记录 | 你的 DNS | ACME 签不出证书 |
 | `RUSTIC_PASSWORD` | 密码管理器(节点 `.env.secrets` 里叫 **`MICA_BACKUP_PASSWORD`**) | **拿到一个完好但永远打不开的仓库** |
 | OSS 读凭据 | 密码管理器 | 读不到备份 |
-| **三个**:`MICA_BACKUP_PASSWORD` + `OSS_ACCESS_KEY_ID` + `OSS_SECRET_ACCESS_KEY` | 密码管理器 **+ GitHub Secrets** | 读不到备份仓库(口令负责解密,OSS 那对负责连得上)。**其余 10 个键 v0.13.40 起在备份里**(`_config` lineage);这三个不可能在里面 —— 它们就是开锁的那套。进 Secrets 是为了恢复链路**不依赖人在场** |
+| **三个**:`MICA_BACKUP_PASSWORD` + `OSS_ACCESS_KEY_ID` + `OSS_SECRET_ACCESS_KEY`(后两个在 GitHub Secrets 里叫 `ALICLOUD_*`,同一把 key) | 密码管理器 **+ GitHub Secrets** | 读不到备份仓库(口令负责解密,OSS 那对负责连得上)。**其余 10 个键 v0.13.40 起在备份里**(`_config` lineage);这三个不可能在里面 —— 它们就是开锁的那套。进 Secrets 是为了恢复链路**不依赖人在场** |
 | 阿里云可用额度 **≥ 100 元** | 充值 | **开不出按量付费实例**——实测拦在这里(见步骤 0) |
 
 `.env.secrets` 的键名(值不在这里)。**演练不需要生产的原值** —— 除了

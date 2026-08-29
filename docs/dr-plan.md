@@ -109,6 +109,13 @@ OSS_ACCESS_KEY_ID             # 连得上 OSS 才读得到仓库
 OSS_SECRET_ACCESS_KEY
 ```
 
+> **这三个是节点上的环境变量名。** 在 GitHub Secrets 里,后两个存的是
+> **`ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY`** —— 因为这台装机上它就是同一把
+> 阿里云 key(既开机器、也读桶),给同一把钥匙起两个名字本身就是"乱"的来源。
+> **代价要说清**:于是**一把凭据既能读你全部数据、又能创建和销毁基础设施**。
+> `backup.md` 仍然推荐给备份角色单独开一把桶级最小权限的 RAM key —— 那是更好的
+> 形态,现在这个是明确选择,不是默认。
+
 这三个**全都在这个文件里**,而这个文件在仓库里。**保险柜的密码锁在保险柜里。**
 所以它们仍然必须被带在外面 —— 但**只剩这三个**,不是十三个。
 
@@ -605,7 +612,7 @@ VM 和 k8s 上一模一样。所以边界还要再推一条 —— §7.2 说「O
 | 前置条件 | 一条命令查 | 不满足会怎样 |
 | --- | --- | --- |
 | **阿里云可用额度 ≥ 100 元** | `aliyun bssopenapi QueryAccountBalance` | 开不出按量付费实例。**实测被它挡过一次** |
-| **这三个在 GitHub Secrets**:`MICA_BACKUP_PASSWORD`、`OSS_ACCESS_KEY_ID`、`OSS_SECRET_ACCESS_KEY` | `gh secret list --repo weironz/mica` | **仓库打不开或够不着,前面所有备份等于零**。这是恢复链上仅剩要「被携带」的秘密(§2.2)—— 口令解密、OSS 那对负责"连得上",少任何一个都读不到 |
+| **这三个在 GitHub Secrets**:`MICA_BACKUP_PASSWORD`、`ALICLOUD_ACCESS_KEY`、`ALICLOUD_SECRET_KEY`(后两个在节点上叫 `OSS_*`,同一把 key) | `gh secret list --repo weironz/mica` | **仓库打不开或够不着,前面所有备份等于零**。这是恢复链上仅剩要「被携带」的秘密(§2.2)—— 口令解密、OSS 那对负责"连得上",少任何一个都读不到 |
 | **DR 的 SSH 私钥在密码管理器** | 人工确认 | 机器建得出来,进不去。公钥进 CI 变量即可(它本来就公开),**要命的是私钥** —— 只存在某台笔记本上的私钥,在那台笔记本也没了的时候等于没有 |
 | **`_config` lineage 真的在产出** | `rustic snapshots --filter-label _config` | 凭据没进备份,重建到"栈起来了、是空的"就停住(v0.13.40 起该 leg 失败会让整个 run 失败,所以这条主要是防"没升上去") |
 | **`_pgdump` lineage 是新鲜的** | `rustic snapshots --filter-label _pgdump`(**别 `tail`**,输出按 hostname 分组) | §8 那次:静默中断 13 天 |
