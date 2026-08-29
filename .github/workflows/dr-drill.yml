@@ -1,0 +1,276 @@
+name: DR drill
+
+# Build a machine from nothing, put production's data on it, prove it works,
+# then delete it. NOT a production recovery: it never touches prod's DNS, and it
+# reads the backup repository without ever writing to it.
+#
+# Real recovery is this same path with two differences a person must make: point
+# the PRODUCTION name at the new machine, and decide the old one is actually
+# gone. Neither belongs in an automated job.
+#
+# Why it exists: the drill was walked by hand on 2026-08-29 (docs/dr-drill.md)
+# and found four things that would each have stopped a real recovery dead. That
+# is the argument for running it again — not to confirm it works, but to find
+# the next four. A drill that costs a free afternoon gets run once.
+#
+# RATE LIMIT, and it will bite: Let's Encrypt issues at most 5 duplicate
+# certificates per week per name set. Each run destroys the certificate volume
+# along with the machine, so each run re-issues. Past five in a week the machine
+# comes up with NO TLS and the verify step fails on something that is not Mica's
+# fault. Weekly is fine; iterating on this workflow is not. If drills ever get
+# frequent, point the drill's Traefik at the ACME staging CA.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version WITHOUT the leading v, e.g. 0.13.41'
+        required: true
+      keep:
+        description: 'Keep the machine afterwards (debugging) — IT BILLS'
+        type: boolean
+        default: false
+
+# Two drills at once would fight over one tofu state and one set of DNS records.
+# Queue rather than cancel: a cancelled run can leave a machine behind, and the
+# destroy step is the whole reason this is safe to run at all.
+concurrency:
+  group: dr-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+
+    # JOB level, not workflow level. `secrets` and `inputs` are documented as
+    # available in job-level `env`; at workflow level the answer is version- and
+    # context-dependent enough that guessing would be settled by a failed run
+    # that creates a machine first.
+    env:
+      TF_IN_AUTOMATION: "1"
+      ALICLOUD_ACCESS_KEY: ${{ secrets.ALICLOUD_ACCESS_KEY }}
+      ALICLOUD_SECRET_KEY: ${{ secrets.ALICLOUD_SECRET_KEY }}
+      IMAGE: registry.cn-shenzhen.aliyuncs.com/willspace/mica-cli:v${{ inputs.version }}
+
+    # Generous: the hand-walked path was ~10 minutes of machine time. The cap is
+    # here so a hung step cannot leave a billed machine running until somebody
+    # happens to look.
+    timeout-minutes: 60
+
+    steps:
+      # Default branch, not the tag — same reasoning as Deploy: "how to recover"
+      # follows main while "which version" follows the release. fetch-depth 0
+      # because the compose is read with `git show v<version>:…`.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Reject anything that is not X.Y.Z
+        run: |
+          [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "version must be X.Y.Z"; exit 1; }
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.10.6"
+
+      - name: Install ansible
+        run: |
+          pipx install --include-deps ansible-core
+          ansible-galaxy collection install -r ansible/requirements.yml
+
+      # The machine is created with a key CI already holds — no new secret, no
+      # new key to lose. The PUBLIC half is DERIVED rather than stored: a stored
+      # copy is one more thing that can drift out of step with the private half,
+      # and `ssh-keygen -y` cannot.
+      - name: Set up SSH, and derive the public key for tofu
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -o pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "TF_VAR_public_key=$(ssh-keygen -y -f ~/.ssh/id_ed25519)" >> "$GITHUB_ENV"
+          # A machine that did not exist a minute ago has no host key anyone
+          # could have pinned. Accepting on first sight is the only option
+          # available here; it is not verification and is not pretended to be.
+          printf 'Host *\n  StrictHostKeyChecking accept-new\n' > ~/.ssh/config
+
+      # State lives in OSS (dr/aliyun/versions.tf). On a runner that is not a
+      # nicety: local state dies with the job, and the machine it just created
+      # becomes an orphan nothing can destroy — silently, while billing.
+      - name: Create the machine and its DNS records
+        id: infra
+        working-directory: dr/aliyun
+        run: |
+          tofu init -input=false
+          tofu apply -auto-approve -input=false
+          echo "ip=$(tofu output -raw public_ip)" >> "$GITHUB_OUTPUT"
+          domain=$(tofu output -json domains | python3 -c 'import json,sys; print(json.load(sys.stdin)["DOMAIN"])')
+          echo "domain=$domain" >> "$GITHUB_OUTPUT"
+
+      - name: Say where it is
+        run: |
+          {
+            echo "### DR drill machine"
+            echo
+            echo "- App: https://${{ steps.infra.outputs.domain }}"
+            echo "- SSH: \`ssh root@${{ steps.infra.outputs.ip }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The instance reports "running" ~20 s before sshd accepts anything. The
+      # hand-walked drill read those refusals as a security-group problem and
+      # went looking in the wrong place; waiting is the whole fix.
+      - name: Wait for sshd
+        run: |
+          for _ in $(seq 1 30); do
+            if ssh -o ConnectTimeout=5 -o BatchMode=yes root@${{ steps.infra.outputs.ip }} true; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "sshd never came up"
+          exit 1
+
+      - name: Provision — docker, Traefik, third-party images
+        env:
+          DR_HOST: ${{ steps.infra.outputs.ip }}
+        run: ansible-playbook -i ansible/inventory.yml ansible/provision.yml -e target=mica-dr
+
+      # BEFORE the stack. POSTGRES_PASSWORD is in the restored file and Postgres
+      # uses it at initdb, so restoring afterwards leaves a database created with
+      # one password while the config names another — which does not fail here,
+      # it fails later, at some connection nobody was watching.
+      - name: Restore the credentials from the backup
+        env:
+          DR_HOST: ${{ steps.infra.outputs.ip }}
+          RUSTIC_PASSWORD: ${{ secrets.MICA_BACKUP_PASSWORD }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_SECRET_ACCESS_KEY: ${{ secrets.OSS_SECRET_ACCESS_KEY }}
+        run: |
+          ssh root@"$DR_HOST" \
+            RUSTIC_PASSWORD="$RUSTIC_PASSWORD" \
+            OSS_ACCESS_KEY_ID="$OSS_ACCESS_KEY_ID" \
+            OSS_SECRET_ACCESS_KEY="$OSS_SECRET_ACCESS_KEY" \
+            IMAGE="$IMAGE" bash -euo pipefail -s <<'EOSSH'
+          mkdir -p /data/mica
+          docker run --rm -v /data/mica:/restore --entrypoint /usr/local/bin/mica-cli \
+            -e RUSTIC_PASSWORD -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY \
+            -e OSS_BUCKET=mica-backup-cloudcele \
+            -e OSS_ENDPOINT=https://oss-cn-shenzhen.aliyuncs.com \
+            -e OSS_REGION=oss-cn-shenzhen -e OSS_ROOT=mica \
+            "$IMAGE" backup restore-config
+          # rustic restores the absolute path it snapshotted, so the file lands
+          # under the destination at the path it had on the original node.
+          install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
+          rm -f /data/mica/etc/mica/env.secrets
+          rmdir /data/mica/etc/mica /data/mica/etc 2>/dev/null || true
+          grep -c '^[A-Z]' /data/mica/.env.secrets | sed 's/^/restored keys: /'
+          EOSSH
+
+      # The SAME playbook production deploys with. A recovery procedure that is
+      # not the everyday procedure is a procedure nobody has tested.
+      - name: Bring the stack up
+        env:
+          DR_HOST: ${{ steps.infra.outputs.ip }}
+        run: |
+          git show "v${{ inputs.version }}:deploy/docker-compose.yml" > /tmp/compose.yml
+          ansible-playbook -i ansible/inventory.yml ansible/deploy.yml \
+            -e target=mica-dr -e version=${{ inputs.version }} -e compose_src=/tmp/compose.yml
+
+      # Starting the stack ran the migrations, so the database is NOT empty and a
+      # pg_dump cannot load over it (`type "object_type" already exists`).
+      # Emptying it here is the path the hand-walked drill actually took. The
+      # tidier alternative — teach deploy.yml to start only the data plane — is
+      # deliberately not invented before this job has run even once.
+      - name: Restore the database
+        env:
+          DR_HOST: ${{ steps.infra.outputs.ip }}
+          RUSTIC_PASSWORD: ${{ secrets.MICA_BACKUP_PASSWORD }}
+        run: |
+          ssh root@"$DR_HOST" RUSTIC_PASSWORD="$RUSTIC_PASSWORD" IMAGE="$IMAGE" \
+            bash -euo pipefail -s <<'EOSSH'
+          cd /data/mica
+          mkdir -p /data/restore
+          # Deliberately NOT `dc --profile backup up -d backup`: that daemon runs
+          # a backup on start, which would WRITE into production's repository and
+          # then `forget --prune` it. Read-only means a throwaway container.
+          #
+          # Both env files are mounted. OSS_BUCKET and friends live in .env while
+          # the keys live in .env.secrets, and mounting only the second gives you
+          # "OSS_BUCKET is required", which reads like a credentials problem.
+          #
+          # restore-config runs first for its SIDE EFFECT: it renders
+          # /etc/rustic/rustic.toml, the one authoritative spelling of the
+          # repository options. Copying that toml in here would be a second one.
+          docker run --rm -e RUSTIC_PASSWORD \
+            -v /data/mica/.env.secrets:/s:ro -v /data/mica/.env:/e:ro \
+            -v /data/restore:/restore --entrypoint sh "$IMAGE" -c '
+              set -eu
+              export $(grep -E "^OSS_" /e /s -h | xargs)
+              mica-cli backup restore-config --out /tmp/discard >/dev/null 2>&1 || true
+              rustic restore latest /restore --filter-label _pgdump'
+          D=/data/restore/var/lib/mica/export/_pgdump/mica.sql
+          # The same two markers ansible/deploy.yml validates its own restore
+          # points with. A truncated dump loads happily until it does not.
+          grep -q 'PostgreSQL database dump complete' "$D"
+          test "$(grep -c '^COPY public\.' "$D")" -ge 21
+          ./dc stop api web
+          docker exec mica-postgres-1 psql -U mica -d postgres -q \
+            -c 'DROP DATABASE IF EXISTS mica WITH (FORCE);' \
+            -c 'CREATE DATABASE mica OWNER mica;'
+          docker exec -i mica-postgres-1 psql -U mica -d mica -v ON_ERROR_STOP=1 -q < "$D"
+          ./dc start api web
+          EOSSH
+
+      # Refuses unless both sides agree on object count AND bytes — `rclone copy`
+      # exits 0 having copied nothing just as happily as having copied all of it.
+      - name: Restore the object bytes
+        env:
+          DR_HOST: ${{ steps.infra.outputs.ip }}
+        run: |
+          ssh root@"$DR_HOST" IMAGE="$IMAGE" bash -euo pipefail -s <<'EOSSH'
+          docker run --rm --network mica_default \
+            --env-file /data/mica/.env --env-file /data/mica/.env.secrets \
+            --entrypoint /usr/local/bin/mica-cli "$IMAGE" backup restore-objects
+          EOSSH
+
+      # "It came up" is not the assertion. `nonempty` is the one that matters: a
+      # restore that produced empty CRDT state passes every "is the table there"
+      # check and fails this one.
+      - name: Verify
+        env:
+          DR_HOST: ${{ steps.infra.outputs.ip }}
+          DOMAIN: ${{ steps.infra.outputs.domain }}
+        run: |
+          health=$(curl -sf --retry 10 --retry-delay 6 --retry-all-errors "https://$DOMAIN/api/health")
+          echo "$health"
+          echo "$health" | grep -q "\"version\":\"${{ inputs.version }}\""
+          curl -sf --retry 5 --retry-delay 5 -o /dev/null "https://$DOMAIN/api/ready"
+          ssh root@"$DR_HOST" bash -euo pipefail -s <<'EOSSH'
+          counts=$(docker exec mica-postgres-1 psql -U mica -d mica -tAc \
+            "select (select count(*) from document_yrs_base), \
+                    (select count(*) from document_yrs_base where length(state)>0 and content_text<>''), \
+                    (select count(*) from views), \
+                    (select count(*) from workspaces);")
+          echo "docs|nonempty|views|workspaces = $counts"
+          IFS='|' read -r docs nonempty views ws <<< "$counts"
+          test "$docs" -gt 0
+          test "$nonempty" -gt 0
+          test "$views" -gt 0
+          test "$ws" -gt 0
+          EOSSH
+          echo "::notice::drill passed — https://$DOMAIN served real data"
+
+      # ALWAYS. A failed drill is exactly when a machine gets left behind, and
+      # that machine holds a copy of production's credentials. `keep` exists for
+      # debugging, says so in its own description, and is the only way out.
+      - name: Destroy everything
+        if: ${{ always() && !inputs.keep }}
+        working-directory: dr/aliyun
+        run: tofu destroy -auto-approve -input=false
+
+      - name: Warn that a machine was left running
+        if: ${{ always() && inputs.keep }}
+        run: |
+          echo "::warning::machine ${{ steps.infra.outputs.ip }} was KEPT — it bills, and it holds a copy of production's credentials. Destroy it today: cd dr/aliyun && tofu destroy"
