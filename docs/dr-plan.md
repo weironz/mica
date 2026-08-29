@@ -131,10 +131,10 @@ docker run --rm -v /data/mica:/restore --entrypoint /usr/local/bin/mica-cli   -e
 install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
 ```
 
-⚠️ `--entrypoint` 不能省:镜像的 ENTRYPOINT 是整条 `mica-cli backup daemon`,
-不覆盖的话参数会接在后面,拼成 `backup daemon backup restore-config`。
-〔更干净的做法是把 ENTRYPOINT 拆成 `["mica-cli"]` + `CMD ["backup","daemon"]`,
-下一版顺手改;不为一个 flag 单发一版。〕
+⚠️ **v0.13.41 上 `--entrypoint` 不能省**:那一版的 ENTRYPOINT 是整条
+`mica-cli backup daemon`,不覆盖的话参数接在后面,拼成
+`backup daemon backup restore-config`。**下一版起 ENTRYPOINT 只是二进制、
+`CMD` 提供默认参数**,那时 `--entrypoint` 可有可无(留着也无害)。
 
 > 做成命令而不是在文档里贴一段 `rustic.toml`:那些 repository 选项只有一种写法对
 > (`enable_virtual_host_style` 是 OSS 必需的,当初是踩出来的),抄一份进 runbook 就是

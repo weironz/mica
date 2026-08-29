@@ -193,9 +193,10 @@ docker run --rm -v /data/mica:/restore   --entrypoint /usr/local/bin/mica-cli   
 install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
 ```
 
-`--entrypoint` is needed because the image's entrypoint is the whole
+`--entrypoint` is needed on v0.13.41, whose entrypoint is the whole
 `mica-cli backup daemon` — without it the arguments append to that and you get
-`backup daemon backup restore-config`.
+`backup daemon backup restore-config`. From the next release the entrypoint is
+just the binary and the flag is optional (harmless either way).
 
 `RUSTIC_PASSWORD` and the `OSS_*` pair are what you just used to reach and open
 the repository, so they come from wherever you keep them, not from here.

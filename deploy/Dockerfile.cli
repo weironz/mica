@@ -94,4 +94,14 @@ ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export
 # now `mica-cli backup` — the same external tools (rustic / rclone / pg_dump),
 # but the run reports which legs actually ran and refuses to exit 0 having
 # quietly covered less than a full instance. See crates/cli/src/backup.rs.
-ENTRYPOINT ["/usr/local/bin/mica-cli", "backup", "daemon"]
+# ENTRYPOINT is the BINARY; CMD is the default arguments. Written as one
+# ENTRYPOINT until 2026-08-29, which made every other subcommand unreachable
+# without `--entrypoint`: `docker run <image> backup restore-config` appended to
+# it and ran `backup daemon backup restore-config`. That is fine for the daemon
+# and wrong for a recovery, where this image is the ONLY thing on the machine
+# and you need `backup restore-config` from it (docs/dr-plan.md §2.2).
+#
+# Behaviour of the compose service is unchanged: it sets no `command:`, so CMD
+# supplies exactly the arguments the old ENTRYPOINT had.
+ENTRYPOINT ["/usr/local/bin/mica-cli"]
+CMD ["backup", "daemon"]
