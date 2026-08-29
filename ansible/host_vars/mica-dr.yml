@@ -1,0 +1,30 @@
+# The DR DRILL node's non-secret configuration.
+#
+# A near-copy of mica-prod.yml, differing only where it must: the domains (a
+# test subdomain, so repeated drills do not burn Let's Encrypt's 5-duplicate-
+# certificates-per-week limit on the real name) and MICA_BACKUP_REPO, which is
+# READ-ONLY here — a drill must never write into the production backup lineage.
+#
+# Same rule as prod: CREDENTIALS DO NOT BELONG HERE.
+mica_env:
+  DOMAIN: "mica-dr.cloudcele.com"
+  S3_DOMAIN: "mica-s3.dr.cloudcele.com"
+  MICA_REGISTRY: "registry.cn-shenzhen.aliyuncs.com/willspace"
+
+  POSTGRES_USER: "mica"
+  POSTGRES_DB: "mica"
+
+  S3_BUCKET: "mica"
+  S3_REGION: "us-east-1"
+
+  MICA_BACKUP_REPO: "opendal:s3:/mica"
+  OSS_BUCKET: "mica-backup-cloudcele"
+  OSS_BLOB_BUCKET: "mica-backup-cloudcele"
+  OSS_ENDPOINT: "https://oss-cn-shenzhen.aliyuncs.com"
+  OSS_REGION: "oss-cn-shenzhen"
+
+traefik_env:
+  TRAEFIK_IMAGE_TAG: "traefik:v3.6.10"
+  TRAEFIK_LOG_LEVEL: "INFO"
+  TRAEFIK_ACME_EMAIL: "willzhmail@gmail.com"
+  TRAEFIK_HOSTNAME: "traefik.mica-dr.cloudcele.com"

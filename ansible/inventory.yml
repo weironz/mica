@@ -16,6 +16,19 @@ all:
       ansible_host: mica.cloudcele.com
       ansible_user: root
       ansible_python_interpreter: /usr/bin/python3
+
+    # The DR drill machine. Its IP changes every drill (tofu creates it fresh),
+    # so it comes from the environment rather than being committed:
+    #
+    #     DR_HOST=$(cd dr/aliyun && tofu output -raw public_ip)
+    #
+    # Deliberately NOT generated into a file by tofu: a stale generated
+    # inventory pointing at a destroyed machine is worse than no inventory,
+    # because it looks authoritative.
+    mica-dr:
+      ansible_host: "{{ lookup('env', 'DR_HOST') }}"
+      ansible_user: root
+      ansible_python_interpreter: /usr/bin/python3
   vars:
     # Everything the node keeps lives here: .env (rendered), docker-compose.yaml
     # (shipped from the tag), and the backup dumps.

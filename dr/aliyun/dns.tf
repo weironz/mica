@@ -22,3 +22,14 @@ resource "alicloud_alidns_record" "s3" {
   value       = alicloud_instance.dr.public_ip
   ttl         = var.dns_ttl
 }
+
+# Traefik 的面板路由在 compose 里是写死存在的(那份 compose 是从生产原样抓下来的,
+# 不该为演练改它)。名字解析不到的话,traefik 会为它反复向 ACME 要证书并反复失败 ——
+# 不影响 mica-dr 的证书,但会把日志填满、也白耗签发尝试。给它一条记录最省事。
+resource "alicloud_alidns_record" "traefik" {
+  domain_name = var.dns_domain
+  rr          = "traefik.${var.dns_rr}"
+  type        = "A"
+  value       = alicloud_instance.dr.public_ip
+  ttl         = var.dns_ttl
+}
