@@ -1,11 +1,17 @@
 {{ ansible_managed | comment }}
 # Rendered by ansible/provision.yml. EDITS HERE ARE REVERTED by the next run.
 #
-# TRAEFIK_BASIC_AUTH guards the dashboard route and is a CREDENTIAL: it is read
-# from the environment of whoever runs the play, never from host_vars, and is
-# never written back to the repo. Generate one with:
+# TRAEFIK_BASIC_AUTH guards the dashboard route and is a CREDENTIAL: never in
+# host_vars, never written back to the repo. Generate one with:
 #
 #     htpasswd -nbB admin '<password>'
+#
+# It comes from the environment, or — failing that — from the node's own
+# .env.secrets, which IS in the backup. Before 2026-08-29 it came ONLY from the
+# environment, which meant it lived in exactly one place: the shell of whoever
+# last ran this play. Rebuild the node and it was gone, with nothing saying so.
+# Small stakes (a dashboard), but "in neither git nor the backup" is a category
+# that should have no members.
 #
 # The `$` doubling below is load-bearing, not defensive. Compose interpolates
 # this file, so every `$` in an htpasswd hash (`$apr1$…`, `$2y$…`) is read as a
@@ -16,4 +22,4 @@
 {% for key, value in traefik_env.items() %}
 {{ key }}={{ value }}
 {% endfor %}
-TRAEFIK_BASIC_AUTH={{ lookup('env', 'TRAEFIK_BASIC_AUTH') | replace('$', '$$') }}
+TRAEFIK_BASIC_AUTH={{ traefik_basic_auth | replace('$', '$$') }}

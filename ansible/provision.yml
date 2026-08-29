@@ -172,6 +172,14 @@
 
     # Shipped from the repo, like the Mica compose is shipped from the tag: the
     # node keeping its own copy is the drift that deploy.yml's header is about.
+    #
+    # ONE DIFFERENCE, and it matters during a rebuild: this comes from the
+    # WORKING TREE, not from a tag. deploy.yml is handed its compose by
+    # scripts/deploy-prod.sh via `git show <tag>:…` because a mis-versioned
+    # compose once reached prod that way. Here the same guarantee costs a second
+    # extraction path for a file that changes about once a year — so instead:
+    # CHECK OUT THE RELEASE TAG BEFORE RUNNING THIS during a recovery. Written
+    # down rather than enforced, on purpose, and that is a real (small) gap.
     - name: Ship the Traefik compose file
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../deploy/traefik/docker-compose.yml"
@@ -181,7 +189,40 @@
 
     # TRAEFIK_BASIC_AUTH is a credential and therefore does NOT live in
     # host_vars — same rule deploy.yml enforces for the app. It comes from the
-    # environment of whoever runs this play.
+    # environment, or from the node's .env.secrets, which the backup carries
+    # (crates/cli/src/backup.rs leg 3c). Before 2026-08-29 it had NO home at
+    # all: it existed only in the shell of whoever last ran this play, so a
+    # rebuilt node silently lost it. Small stakes — a dashboard — but "in
+    # neither git nor the backup" is a category that should have no members.
+    #
+    # On a FIRST provision the secrets file does not exist yet (it is restored
+    # in a later step), so this renders empty and the dashboard route rejects
+    # everything — fail-closed, and fixed by re-running this play after the
+    # restore. The alternative, provisioning Traefik after the credentials, puts
+    # ACME behind the restore for no gain.
+    - name: Read the node's credentials, if it already has any
+      ansible.builtin.slurp:
+        src: "{{ mica_dir }}/.env.secrets"
+      register: node_secrets
+      failed_when: false
+      check_mode: false
+
+    - name: Decide the dashboard credential
+      ansible.builtin.set_fact:
+        traefik_basic_auth: >-
+          {{ (lookup('env', 'TRAEFIK_BASIC_AUTH')
+              or ((node_secrets.content | default('') | b64decode).splitlines()
+                  | select('match', '^TRAEFIK_BASIC_AUTH=') | first | default('')
+                  | regex_replace('^TRAEFIK_BASIC_AUTH=', ''))) | trim }}
+
+    - name: Say when the dashboard will have no working credential
+      ansible.builtin.debug:
+        msg: >-
+          No TRAEFIK_BASIC_AUTH in the environment or in {{ mica_dir }}/.env.secrets —
+          the Traefik dashboard route will reject every login (fail-closed). Add it
+          to .env.secrets so the backup carries it, then re-run this play.
+      when: traefik_basic_auth | length == 0
+
     - name: Render the Traefik .env
       ansible.builtin.template:
         src: traefik-env.j2
