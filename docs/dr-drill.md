@@ -154,31 +154,47 @@ Windows 上没有 `dig`,用 `Resolve-DnsName <名字> -Server 223.5.5.5`(指定�
 > ⚠️ 真恢复时改 `mica` 那条记录**不要交给这份 tofu** —— 归 tofu 管就意味着
 > `destroy` 会删掉生产解析。`dns.tf` 里写了这条警告。
 
-### 2. `[推演]` 装底座
+### 2-3. `[已验证 2026-08-29]` 底座 + Traefik —— **一条 ansible 命令**
+
+原本这两步是手打的,理由是「`cd-plan §6`:没人手工走过的流程不该写成脚本」。走完
+之后那条理由就用完了 —— 它针对的是**恢复逻辑**(第 6、7 步),而装 Docker、起
+Traefik 是「配」那一层,本来就该是 ansible 的活(`dr-plan §7.2.2` 的分层)。
 
 ```bash
-curl -fsSL https://get.docker.com | sh
-mkdir -p /data/mica
+DR_HOST=$(cd dr/aliyun && tofu output -raw public_ip) ansible-playbook -i ansible/inventory.yml ansible/provision.yml -e target=mica-dr
 ```
 
-**判据**:`docker compose version` 有输出。
-**实际**:____  **耗时**:____
-
-> 这一层今天完全没有自动化 —— `ansible/deploy.yml` 只**更新**已有栈,它自己写着
-> CI「never install it」。这正是 `cd-plan` §3 说的 provisioning 缺口。
-
-### 3. `[推演]` 建外部网络 + 起 Traefik
+⚠️ **控制端不能是 Windows**(ansible 装得上、一跑就 `WinError 87`)。本机没有通用
+WSL 发行版,所以借容器当控制端 —— Docker Desktop 已经在跑:
 
 ```bash
-docker network create traefik-network        # 少这一步,mica 栈直接起不来
-mkdir -p /data/traefik && cd /data/traefik
-# 从仓库取 deploy/traefik/docker-compose.yml,写 .env(见上面的非机密配置 + ACME 邮箱)
-docker compose up -d
-docker compose logs traefik | grep -i acme | tail
+docker run --rm -v "C:/data/codes/mica-will-laptop:/work" -v "C:/Users/willz/.ssh:/ssh:ro" -v "<scratch>/run-ansible.sh:/run.sh:ro" -e DR_HOST=<IP> -e TRAEFIK_BASIC_AUTH="admin:<hash>" --entrypoint sh alpine/ansible /run.sh ansible/provision.yml -e target=mica-dr
 ```
 
-**判据**:容器 healthy,日志里没有反复的 ACME 失败。
-**实际**:____  **耗时**:____
+`run-ansible.sh` 做三件事:把公钥复制出来 `chmod 600`(Windows 挂进来的权限是 0777,
+ssh 会拒绝用)、装 `ansible/requirements.yml` 里的 collection、跑 playbook。
+
+**判据**:`PLAY RECAP` 里 `failed=0`;traefik 容器 healthy;`curl https://traefik.<域名>/`
+返回 **401**(而不是连接错误)—— 401 一次证明两件事:证书签出来了、basic auth 在生效。
+
+**实际**:`ok=17 changed=9 failed=0`;traefik `Up (healthy)`;dashboard 401、TLS 校验通过、
+日志 0 条 error。
+**耗时**:**约 2 分钟**(含经代理拉三个第三方镜像)。
+
+> **这一步找到了三个只有真跑才会知道的东西**,全部已固化进 `provision.yml`:
+>
+> 1. **`curl get.docker.com | sh` 在国内 ECS 上直接失败** —— `download.docker.com`
+>    连接重置。改走阿里云 docker-ce 镜像。codename 用 `ansible_distribution_release`
+>    现取而不写死:26.04 是 `resolute`,而容灾当天没人记得这个。
+> 2. **🔴 这台机器根本连不上 `registry-1.docker.io`** —— `postgres` / `rustfs` /
+>    `traefik` 三个第三方镜像一个都拉不到。**也就是说在今天之前,「给你一台新机器就能
+>    重建」这个前提是假的:栈起不来。** 生产之所以没事,只因为那些镜像早就在它上面了。
+>    → `provision.yml` 现在配 pull-through 代理,并**显式** pull 这三个镜像:失败硬停,
+>    而不是让 compose 隐式拉、再报一堆看不懂的服务错误。用代理而非自建私有副本是
+>    用户拍的板 —— 私有副本每次上游升版都要人工同步,而「记得同步」正是会被跳过的
+>    那类步骤;代价是供应链信任,所以才要求它停得响。
+> 3. **traefik `.env` 里 htpasswd 哈希的 `$` 会被 compose 当变量吃掉** ——
+>    `The "apr1" variable is not set`。凭据不是坏得响亮,是被**悄悄改错**。模板里 `$` → `$$`。
 
 ### 4. `[推演]` 放配置与凭据
 
