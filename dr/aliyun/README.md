@@ -24,32 +24,50 @@ ls ~/.ssh/id_rsa.pub    # 没有就 ssh-keygen -t ed25519
 
 ## 凭据放哪
 
-**不要写进 `.tf`,也不要写进 `.tfvars`。** 前者会被提交;后者虽然在 `.gitignore` 里,
-但它就躺在仓库目录下,一次 `git add -f` 或换台机器复制目录就泄了。
+**环境变量,本地和 CI 用同一套机制。**
 
-provider 会按这个顺序自己找(已用 `tofu providers schema` 查证):
-
-| 方式 | 怎么做 | 适合 |
-| --- | --- | --- |
-| **① 共享凭据文件(推荐)** | `aliyun configure --profile mica-dr` | 长期。文件在 `~/.aliyun/config.json`,**在仓库之外**,`aliyun` CLI 与 tofu 共用一份 |
-| ② 持久环境变量 | Windows:`setx ALICLOUD_ACCESS_KEY "..."`(新开的终端才生效) | 不想装 aliyun CLI |
-| ③ 临时环境变量 | `export ALICLOUD_ACCESS_KEY=...` | 一次性,关掉终端就没了 |
-
-用 ① 时把 profile 名填进 `terraform.tfvars`(**只有名字,没有密钥**):
-
-```hcl
-profile = "mica-dr"
+```powershell
+# Windows,设一次,新开的终端才生效
+setx ALICLOUD_ACCESS_KEY "..."
+setx ALICLOUD_SECRET_KEY "..."
 ```
 
-**给 DR 单开一个 RAM 用户**,权限只给 ECS + VPC —— 改 DNS 那步是手工的,不需要 DNS
-权限;日常那把 key 也不必因此降权。
+```bash
+# Linux/macOS 或临时用
+export ALICLOUD_ACCESS_KEY=... ALICLOUD_SECRET_KEY=...
+```
 
-> 将来做成 GitHub Action 时,凭据的归宿是 **repository secrets**,注入成上面②那种
-> 环境变量。本地这三种都不会跟着走。
+**为什么不是凭据文件**(`~/.aliyun/config.json` + `profile`,provider 也支持):
+CI 里没法干净地放一个文件,所以 Action 必然用环境变量 —— 本地再用文件,就是**同一个
+事实两套机制**。今天已经为这个形状付过两次代价(`MICA_TOKEN`/`MICA_PAT`、
+`S3_*`/`RUSTFS_S3_*`,见 `dr-plan` §8),不必再埋一颗。
 
-> ④ 还有一种:在阿里云 ECS 上跑 tofu,用实例 RAM 角色(`ecs_role_name`),**一把 key
-> 都不需要**。真容灾时如果你手上还有另一台阿里云机器,这是最干净的 —— 但它救不了
-> 「整个账号进不去」那种场景,而那正是 §5.3 已拍板不防的。
+`profile` / `shared_credentials_file` 两个变量仍然留着 —— 你若已经有 aliyun CLI 的
+profile,填上就能用。但**默认路径是环境变量**。
+
+**不要**写进 `.tf`(会被提交),**也不要**写进 `.tfvars` —— 它虽在 `.gitignore` 里,
+但就躺在仓库目录下,一次 `git add -f` 或换机复制目录就泄了。**别指望 gitignore 保护
+密钥**。
+
+**给 DR 单开一个 RAM 用户**,权限只给 **ECS + VPC**:改 DNS 是手工的,不需要 DNS 权限;
+读备份是在**新机器上**用 `.env.secrets` 里那对 OSS key,和这把无关。这样万一它泄了,
+最大损害是有人在你账号里开关机器,而不是读走全部数据。
+
+### 将来的 GitHub Action 长这样(现在写清楚,到时照抄)
+
+```yaml
+      - uses: opentofu/setup-opentofu@v1
+      - run: tofu init && tofu apply -auto-approve
+        working-directory: dr/aliyun
+        env:
+          ALICLOUD_ACCESS_KEY: ${{ secrets.ALICLOUD_ACCESS_KEY }}
+          ALICLOUD_SECRET_KEY: ${{ secrets.ALICLOUD_SECRET_KEY }}
+          # state 必须放对象存储(runner 是一次性的),并开加密:
+          TF_ENCRYPTION: ${{ secrets.TF_ENCRYPTION }}
+```
+
+**不需要装 aliyun CLI** —— provider 直接读这两个环境变量。CLI 只是临时查东西时顺手
+(列镜像、查规格),不在关键路径上。
 
 ## 设 root 密码(可选,但建议)
 

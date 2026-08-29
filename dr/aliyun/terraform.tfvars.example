@@ -1,7 +1,8 @@
 # 复制成 terraform.tfvars 再改。**这里只放名字和路径,永远不放密钥。**
 # (.gitignore 已挡掉 *.tfvars,但别依赖它 —— 密钥的正确位置是 ~/.aliyun/config.json)
 
-# 用 `aliyun configure --profile mica-dr` 建好之后,填它的名字:
+# 凭据默认走环境变量(ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY),和 CI 同一套机制。
+# 只有你已经在用 aliyun CLI 的 profile 时才需要下面这行:
 # profile = "mica-dr"
 
 # 演练与真恢复用不同的前缀,免得 destroy 错对象:
