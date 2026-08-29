@@ -1008,11 +1008,23 @@ fn cmd_backup_run(cli: &Cli, cfg: &Config) -> Result<()> {
 /// A failed run must never kill the loop — tonight's outage is not a reason to
 /// stop trying tomorrow — so failures are logged and pinged, not propagated.
 fn cmd_backup_daemon(cli: &Cli, cfg: &Config) -> Result<()> {
-  let hour: u32 = std::env::var("BACKUP_HOUR")
-    .ok()
-    .and_then(|h| h.parse().ok())
-    .filter(|h| *h < 24)
-    .unwrap_or(3);
+  // `3`, `03`, `3:00`, `03:30` all work — see [`backup::parse_backup_at`].
+  // A value that cannot be read is announced rather than swallowed: refusing to
+  // start would mean NO backups at all, which is worse than backing up at the
+  // default, but doing it silently is how you end up believing a time that was
+  // never in effect.
+  let raw = std::env::var("BACKUP_HOUR").unwrap_or_default();
+  let (hour, minute) = match backup::parse_backup_at(&raw) {
+    Some(at) => at,
+    None => {
+      if !raw.trim().is_empty() {
+        backup::log(&format!(
+          "BACKUP_HOUR={raw:?} is not a time (want H, HH or HH:MM) — falling back to 03:00"
+        ));
+      }
+      (3, 0)
+    }
+  };
   let on_start = std::env::var("BACKUP_ON_START").as_deref() != Ok("0");
 
   let run = |first: bool| {
@@ -1035,8 +1047,8 @@ fn cmd_backup_daemon(cli: &Cli, cfg: &Config) -> Result<()> {
     run(true);
   }
   loop {
-    let wait = backup::seconds_until(chrono::Local::now(), hour);
-    backup::log(&format!("sleeping {wait}s until {hour:02}:00"));
+    let wait = backup::seconds_until(chrono::Local::now(), hour, minute);
+    backup::log(&format!("sleeping {wait}s until {hour:02}:{minute:02}"));
     std::thread::sleep(std::time::Duration::from_secs(wait as u64));
     run(false);
   }

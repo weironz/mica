@@ -245,6 +245,16 @@ services:
     depends_on:
       - api
     environment:
+      # `BACKUP_HOUR` is read against LOCAL time (`chrono::Local`), and a
+      # container with no TZ has no local time — `Local` silently degrades to
+      # UTC. So `BACKUP_HOUR=3` meant 03:00 UTC = 11:00 in Beijing: a backup
+      # advertised as "nightly" that actually ran in the middle of the work day,
+      # with the config and the behaviour disagreeing and nothing saying so
+      # (spotted 2026-08-29 while checking whether the nightly run had fired).
+      #
+      # Set it to the operator's zone and the number in BACKUP_HOUR means what
+      # it says. Default matches this deployment; override per install.
+      TZ: ${TZ:-Asia/Shanghai}
       MICA_SERVER: http://api:8080
       # MICA_PAT, not MICA_TOKEN: the latter was retired in the CLI on 2026-08-15
       # and this line was not updated with it, so every backup run since failed

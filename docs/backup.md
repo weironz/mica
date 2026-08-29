@@ -111,6 +111,13 @@ hard-wired), so the token never leaves the host. It is **opt-in** behind the
    # Dead man's switch (optional): pinged on success, <URL>/fail on failure.
    HEALTHCHECK_URL=https://hc-ping.com/<uuid>
    # optional: BACKUP_HOUR=3  KEEP_DAILY=7  KEEP_WEEKLY=4  KEEP_MONTHLY=6
+   #   BACKUP_HOUR takes `3`, `03`, `3:00` or `03:30` — a wall-clock time in the
+   #   CONTAINER's zone. Set `TZ` with it (compose defaults to Asia/Shanghai):
+   #   without a TZ the container has no local time, `chrono::Local` degrades to
+   #   UTC, and `BACKUP_HOUR=3` silently means 11:00 in Beijing. That was live
+   #   until 2026-08-29 — the config said "nightly" and it ran mid-workday.
+   #   An unreadable value logs a line and falls back to 03:00; it does not
+   #   refuse to start, because no backups is worse than backups at the default.
    ```
 3. **Start the service, initialise the repo once, then trigger the first run.**
    On start the container renders `/etc/rustic/rustic.toml` from the `OSS_*` env,
@@ -126,7 +133,7 @@ hard-wired), so the token never leaves the host. It is **opt-in** behind the
    > `OSS_ROOT=<prefix>` in `.env` (else init fails, "config file already exists").
 
 The container runs `mica-cli backup daemon` (export → per-workspace snapshot → forget
---prune) at `${BACKUP_HOUR}:00` daily and once on (re)start; the staging tree
+--prune) at `BACKUP_HOUR` daily and once on (re)start; the staging tree
 lives in the `mica-prod-backup` volume.
 
 ## Daily operations (init / backup / inspect / restore)

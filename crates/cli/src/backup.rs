@@ -353,7 +353,83 @@ pub fn verdict(report: &Report, allow_partial: bool) -> Result<()> {
 ///
 /// `export` is a closure so the caller hands in the in-process exporter rather
 /// than this shelling out to its own binary.
+/// Where the run lock lives. `/tmp`, deliberately NOT the export volume: a
+/// SIGKILLed run leaves the file behind, and a lock that survives a container
+/// restart could match a PID that has since been reused (the daemon is PID 1,
+/// so a stale "1" would look alive forever and stop backups for good). `/tmp`
+/// is container-local, so a restart clears it — the worst stale lock then lives
+/// only as long as the container that made it.
+const RUN_LOCK: &str = "/tmp/mica-backup.lock";
+
+/// Whether a lock naming `pid` should be honoured, given whether that process
+/// is still alive. Split out so the decision is testable without forking.
+///
+/// A dead owner's lock is TAKEN, not respected: the alternative is a crashed
+/// run silently cancelling every future one.
+fn lock_is_live(owner_alive: bool) -> bool {
+  owner_alive
+}
+
+/// Refuses to start a second concurrent run, and releases on drop.
+///
+/// Two runs at once corrupt each other rather than merely racing: both write
+/// `_pgdump/mica.sql.tmp` and rename it into place, so one of them renames a
+/// file the other already moved and dies with `No such file or directory` —
+/// an error naming neither the real cause nor the other run. Observed
+/// 2026-08-29, when a manual `backup run` collided with the daemon's
+/// run-on-start, and it is exactly the collision a DR drill invites.
+#[derive(Debug)]
+pub struct RunLock {
+  path: std::path::PathBuf,
+}
+
+impl RunLock {
+  pub fn acquire() -> Result<Self> {
+    let path = std::path::PathBuf::from(RUN_LOCK);
+    loop {
+      match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+      {
+        Ok(mut file) => {
+          use std::io::Write;
+          let _ = write!(file, "{}", std::process::id());
+          return Ok(Self { path });
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+          let owner = std::fs::read_to_string(&path).unwrap_or_default();
+          let pid = owner.trim();
+          let alive = !pid.is_empty()
+            && std::path::Path::new(&format!("/proc/{pid}")).exists();
+          if lock_is_live(alive) {
+            bail!(
+              "another backup run is in progress (pid {pid}) — refusing to start a second.                Two runs write the same staging files and destroy each other."
+            );
+          }
+          log(&format!(
+            "clearing a stale run lock (pid {pid} is gone — a previous run was killed)"
+          ));
+          // Losing this race is harmless: whoever wins creates the lock, the
+          // loser comes back around and sees a LIVE owner.
+          let _ = std::fs::remove_file(&path);
+        }
+        Err(e) => return Err(e).context("creating the backup run lock"),
+      }
+    }
+  }
+}
+
+impl Drop for RunLock {
+  fn drop(&mut self) {
+    let _ = std::fs::remove_file(&self.path);
+  }
+}
+
 pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -> Result<Report> {
+  // Before anything touches the staging tree. Held for the whole run; released
+  // by Drop, including on the `bail!`s below.
+  let _lock = RunLock::acquire()?;
   let mut report = Report::default();
 
   render_rustic_conf(&settings.oss)?;
@@ -649,11 +725,36 @@ pub fn ping_healthcheck(suffix: &str) {
 ///
 /// Always in the future: if today's slot has already passed, this is
 /// tomorrow's. Pure so the scheduling rule is testable without waiting a day.
-pub fn seconds_until(now: chrono::DateTime<chrono::Local>, hour: u32) -> i64 {
+/// `BACKUP_HOUR` as a wall-clock time: `3`, `03`, `3:00`, `03:30`.
+///
+/// Returns `None` for anything it cannot read, so the caller can say so out loud
+/// instead of silently backing up at some other time — the old code did
+/// `.parse().ok().filter(<24).unwrap_or(3)`, which turned a typo into 03:00
+/// without a word.
+///
+/// **The name stays `BACKUP_HOUR` even though it now takes minutes.** A second
+/// name for one setting is precisely what caused two of today's incidents
+/// (`MICA_TOKEN`/`MICA_PAT`, `S3_*`/`RUSTFS_S3_*`); a slightly narrow name is
+/// the cheaper wrong thing than two names that can drift apart.
+pub fn parse_backup_at(raw: &str) -> Option<(u32, u32)> {
+  let raw = raw.trim();
+  if raw.is_empty() {
+    return None;
+  }
+  let (h, m) = match raw.split_once(':') {
+    Some((h, m)) => (h, m),
+    None => (raw, "0"),
+  };
+  let hour: u32 = h.trim().parse().ok()?;
+  let minute: u32 = m.trim().parse().ok()?;
+  (hour < 24 && minute < 60).then_some((hour, minute))
+}
+
+pub fn seconds_until(now: chrono::DateTime<chrono::Local>, hour: u32, minute: u32) -> i64 {
   use chrono::{Duration, TimeZone};
   let slot = now
     .date_naive()
-    .and_hms_opt(hour.min(23), 0, 0)
+    .and_hms_opt(hour.min(23), minute.min(59), 0)
     .unwrap_or_else(|| now.naive_local());
   let mut target = chrono::Local
     .from_local_datetime(&slot)
@@ -703,6 +804,74 @@ mod tests {
   /// passed, the healthcheck was pinged, and the only trace was a line in a
   /// container log nobody reads. The reason names the workspace, because
   /// "some workspace is missing" is not something you can act on.
+  #[test]
+  fn a_second_run_is_refused_while_the_first_holds_the_lock() {
+    // 2026-08-29:手动 `backup run` 撞上守护进程的 run-on-start,两个进程都在写
+    // `_pgdump/mica.sql.tmp` 再 rename,其中一个 rename 时文件已被抢走,报出
+    // `No such file or directory` —— 一条既不指向真正原因、也不提另一个 run
+    // 的错。演练与事故处理恰恰最容易制造这种并发。
+    let _first = match RunLock::acquire() {
+      Ok(lock) => lock,
+      // 这台机器上没有 /tmp(非 Linux 开发机)就跳过 —— 断言不了就不假装断言。
+      Err(_) => return,
+    };
+    let second = RunLock::acquire();
+    assert!(second.is_err(), "第二个 run 必须被拒绝");
+    let msg = format!("{:#}", second.unwrap_err());
+    assert!(
+      msg.contains("another backup run is in progress"),
+      "报错要说出真正的原因,而不是让下一个人去猜 rename 为什么失败: {msg}"
+    );
+  }
+
+  #[test]
+  fn the_lock_is_released_when_the_run_ends() {
+    // 否则一次失败的 run 会把之后所有 run 一起锁死 —— 比它要修的并发问题更糟。
+    match RunLock::acquire() {
+      Ok(lock) => drop(lock),
+      Err(_) => return,
+    }
+    assert!(
+      RunLock::acquire().is_ok(),
+      "锁必须在 run 结束时释放,包括失败退出的那些"
+    );
+  }
+
+  #[test]
+  fn a_dead_owners_lock_is_taken_not_respected() {
+    // 被 SIGKILL 的 run 留下的锁文件,不该让备份从此停摆。
+    assert!(lock_is_live(true), "活着的持有者:让路");
+    assert!(!lock_is_live(false), "持有者已死:接管");
+  }
+
+  #[test]
+  fn backup_hour_reads_both_a_bare_hour_and_a_wall_clock_time() {
+    // 「配置与实际一致」是这条的由来:BACKUP_HOUR=3 曾经跑在 11:00(容器无 TZ,
+    // chrono::Local 静默退化成 UTC)。TZ 修好了「3 点是哪个 3 点」,这条修的是
+    // 「3 看起来像不像一个时间」。
+    assert_eq!(parse_backup_at("3"), Some((3, 0)));
+    assert_eq!(parse_backup_at("03"), Some((3, 0)));
+    assert_eq!(parse_backup_at("3:00"), Some((3, 0)));
+    assert_eq!(parse_backup_at("03:30"), Some((3, 30)));
+    assert_eq!(parse_backup_at(" 23:59 "), Some((23, 59)));
+
+    // 读不出来就是读不出来 —— 交给调用方去出声,而不是在这里假装成 03:00。
+    // 旧代码 `.filter(<24).unwrap_or(3)` 会把下面每一个都变成 3 点,不留痕迹。
+    for bad in ["", "  ", "25", "3:60", "-1", "3:", "abc", "3:00:00", "3.5"] {
+      assert_eq!(parse_backup_at(bad), None, "should not parse: {bad:?}");
+    }
+  }
+
+  #[test]
+  fn the_schedule_honours_minutes() {
+    use chrono::TimeZone;
+    let now = chrono::Local.with_ymd_and_hms(2026, 8, 29, 5, 30, 0).unwrap();
+    // 同一天更晚的 05:45 → 15 分钟后
+    assert_eq!(seconds_until(now, 5, 45), 15 * 60);
+    // 已经过去的 05:15 → 明天,而不是负数或立刻
+    assert_eq!(seconds_until(now, 5, 15), 24 * 3600 - 15 * 60);
+  }
+
   #[test]
   fn a_failed_leg_is_not_a_skipped_one_and_shows_up_in_the_summary() {
     // 2026-08-29 事故的形状:内容导出失败过去会 `?` 掉整个 run,于是与它毫无
@@ -804,8 +973,8 @@ mod tests {
     use chrono::TimeZone;
     let now = chrono::Local.with_ymd_and_hms(2026, 7, 31, 5, 30, 0).unwrap();
     // 03:00 already passed today → tomorrow's slot, 21h30m away.
-    assert_eq!(seconds_until(now, 3), 21 * 3600 + 30 * 60);
+    assert_eq!(seconds_until(now, 3, 0), 21 * 3600 + 30 * 60);
     // 09:00 is still ahead → 3h30m away.
-    assert_eq!(seconds_until(now, 9), 3 * 3600 + 30 * 60);
+    assert_eq!(seconds_until(now, 9, 0), 3 * 3600 + 30 * 60);
   }
 }
