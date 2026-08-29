@@ -638,6 +638,17 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
   //    see that most of today's dump is yesterday's, and it compresses the
   //    chunks itself. (The hand-taken `pre-*.sql.gz` restore points are a
   //    different path and stay gzipped — one-off files, not a lineage.)
+  //
+  //    MEASURED on production 2026-08-29, so this is not just an argument:
+  //
+  //      processed 1 files, 634.2 MiB
+  //      Added to the repo: 9.4 MiB (raw: 48.6 MiB)
+  //
+  //    67x. And the line above it read `using no parent` — the container id is
+  //    the rustic hostname and changes every deploy, so there was no parent
+  //    snapshot to diff against. It deduplicated anyway, because the dedup is
+  //    content-defined chunking, not a diff against a parent. Gzip would have
+  //    made all 634 MiB look new every single day.
   let pgdump_dir = settings.export_dir.join("_pgdump");
   let dump = pgdump_dir.join("mica.sql");
   match &settings.pgurl {

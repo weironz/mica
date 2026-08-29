@@ -60,6 +60,20 @@ all GETs — a **read-scoped** token suffices.
   so a single restore point covers both. The DB dump is **only taken when
   `MICA_BACKUP_PGURL` is set** — unset, the run logs a `WARN` and produces a
   content-only backup (it never silently drops the DB image).
+  The dump rides rustic and is stored UNCOMPRESSED on purpose, which is where
+  almost all of the storage saving comes from. Measured on production
+  2026-08-29: a **634.2 MiB** dump added **9.4 MiB** to the repository — 67x,
+  and with no parent snapshot to diff against (the container id is the rustic
+  hostname and changes every deploy; the dedup is content-defined chunking, not
+  a parent diff). Gzip it and every day costs a full copy.
+
+  The object bytes deliberately do NOT ride rustic. Images are already-compressed
+  binaries with nothing in common, so chunking finds no duplicates; they are also
+  immutable and content-addressed, so `rclone copy` skipping what is already
+  there IS the incremental. The payoff is that the mirror can be read back with
+  any S3 client — no rustic, no password — which is one less dependency on the
+  day you need it.
+
 - **The instance's own credentials** — `.env.secrets`, mounted read-only into
   the backup container and snapshotted under its own lineage (`--label
   _config`). Without it a rebuilt machine reaches a running, EMPTY stack and
