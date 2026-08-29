@@ -35,10 +35,19 @@
 > 2026-07-22 新增小节。节点是单机 docker(阿里云),生产当前处于「盲飞 + 静默失败」态。
 
 - 🟡 **备份恢复演练:已有脚本 + 已实跑一次,仍未自动化**(2026-07-30)—— ~~纯手动、无脚本承载~~ ✅:`deploy/restore-drill.sh` + `just restore-drill <basename>`,一条命令恢复进一次性库 → 断言 → DROP(不碰 `mica`、不重启容器),并顺带跑 `rustic check`。三条硬门槛:恢复错误 0、`documents` > 0、**可读页数 > 0**(走每次读都要走的 `views→documents→document_yrs_base` join,要求 `length(state)>0 AND content_text<>''`)—— 因为一次产出空 `state` blob 的恢复能通过所有「表在不在」式断言。**首次实跑(这条路径此前从未被走过)**:错误 0、`_sqlx_migrations`=15、S5 删掉的三张表都回来了、行数与备份时记录逐项一致、32 FK + 19 PK、3331 可读页;`rustic check` 170 snapshot 全过。**残留 = 自动化,~~而它被一条刻意的安全边界挡着~~ —— 那道边界 2026-08-25 拆了,这条阻塞随之消失**:原文的理由是「CI 那把 key 不是 shell key,`~mica-deploy/.ssh/authorized_keys` 用 `restrict,command=/usr/local/sbin/mica-deploy` 钉死,只能执行 `deploy <version> <sha>`;要让 Actions 定时跑演练得在节点上装一条新的 pinned 命令 + 一把新 key,那是该由用户决定的生产侧凭据变更」。改用 Ansible 后 `DEPLOY_SSH_KEY` 已经是一把有 shell 的 root key(这笔取舍的完整账见 `docs/cd-plan.md` §4.1),**「装新 pinned 命令」这件事不再需要**:一个 `ansible/restore-drill.yml` + 一条 `schedule:` workflow 就够,不碰节点凭据。**没顺手做,因为它不在这次改造范围里**,而且「多久跑一次」是运维决策(一次真实恢复演练会占满节点 IO),该由用户定。在那之前:发版落还原点后手动 `just restore-drill` 一次,以及 `rustic check` 进每周节拍,每季度恢复一个 workspace diff 并记日期。(S)`[等用户]`
-- 🆕 **provisioning 层不存在:「给台新机器就能起全套」今天做不到**(2026-08-02 写下方案,未实施)——
-  ~~仓库里只有 `deploy/docker-compose.yml`~~ **2026-08-25 起多了 `ansible/`,但它只管
-  「部署」,不管 provisioning**:Traefik、`/data/mica` 目录、`.env`、部署密钥、ACR 登录
-  仍然全是当年手工装的,没有一条能重放的路径。(受限部署账号 `mica-deploy` 和
+- 🟡 ~~**provisioning 层不存在:「给台新机器就能起全套」今天做不到**~~ —— **2026-08-29
+  端到端做到了并实测**(v0.13.40/41)。`ansible/provision.yml`(docker + Traefik +
+  第三方镜像)+ `deploy.yml`(现在吃得下全新节点)+ `dr/aliyun/`(tofu 开机器与 DNS)
+  + 凭据可从备份还原,**在一台全新阿里云 ECS 上从零到浏览器里看见完整数据 ≈ 10 分钟**;
+  逐步实测记录与四个撞上的坑在 `docs/dr-drill.md`,RTO 在 `docs/dr-plan.md` §3。
+  **剩下的**:①「跑在 CI 里」还没做 —— 今天是从笔记本上的容器里跑 ansible,而真正的
+  目标是一条 workflow_dispatch;② `mica-cli` **只有写对象镜像的路径,没有取回来的命令**
+  (`render_rclone_conf` 只在 backup run 里被调用,而那条路在演练机上是禁区,因为
+  daemon 会往生产仓库写并 prune),演练时用 rclone 的环境变量式 remote 绕过去了 ——
+  **那是第二处表示,该补 `mica-cli backup restore-objects`**;③ 下面那个不安全的默认。
+  〔以下为历史,留档〕~~仓库里只有 `deploy/docker-compose.yml`~~ ~~2026-08-25 起多了
+  `ansible/`,但它只管「部署」,不管 provisioning:Traefik、`/data/mica` 目录、`.env`、
+  部署密钥、ACR 登录仍然全是当年手工装的,没有一条能重放的路径。~~(受限部署账号 `mica-deploy` 和
   `/usr/local/sbin/mica-deploy` 已随本次改造从节点删除,不再是待纳管的东西 ——
   取而代之的是 root 的 `authorized_keys` 里一行带 `restrict` 的 CI 密钥。)
   **Traefik 那一片的具体形状**(2026-08-06 从原「证书过期无人看守」条并入,该条已删):配置
@@ -49,8 +58,11 @@
   删掉的原因。同源的第二个症状:**一个 `vX.Y.Z` tag 焊住三条节奏不同的发布线** ——
   0.13.6 为送一行 compose 配置付了一次完整 Windows 构建 + 给所有桌面用户推了个空更新,
   0.13.7 因单个 `images (cli)` job 挂掉整版作废。症状、拆分方案与优先级在 `docs/cd-plan.md`。
-  **刻意不含实施**:最关键的一步(手工走一遍 provisioning 并记下每条命令)还没人做过,
-  没走过就写 IaC 等于把猜测固化。(L)`[等用户]`
+  ~~**刻意不含实施**:最关键的一步(手工走一遍 provisioning 并记下每条命令)还没人做过,
+  没走过就写 IaC 等于把猜测固化。~~ —— **2026-08-29 走了,而且它是对的**:手工那一遍
+  当场撞出四件只有真跑才知道的事(`get.docker.com` 在国内 ECS 上连接重置、
+  `registry-1.docker.io` 完全不可达、凭据哪儿都没备、起栈顺序会把库先建满)。
+  先写 IaC 的话,这四件会被原样固化成"看起来对"的代码。(L)
   **2026-08-06 缩掉一块**:要人肉配的凭据从三样降到**零**(v0.13.16)—— `JWT_SECRET`
   服务端首启自铸存库;`POSTGRES_PASSWORD` 默认(两份 compose 都不发布 postgres 端口,安全);
   **S3 那对也默认了 —— 这一个不安全,是用户当天明确拍板的取舍**:rustfs `:9000` 有意对外,
