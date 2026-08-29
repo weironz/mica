@@ -67,9 +67,15 @@ setx ALICLOUD_ACCESS_KEY "..." ; setx ALICLOUD_SECRET_KEY "..."   # 设一次
 
 ⚠️ **`setx` 只对新开的终端生效** —— 关掉当前窗口重开一个,否则 `tofu plan` 会说没凭据。
 
-```bash
-cd dr/aliyun && tofu init && tofu plan     # 先看一眼再花钱
-tofu apply && tofu output
+**一行一条,不要用 `&&` 串** —— `&&` 在 cmd 与 PowerShell 5.1 里都不是有效分隔符,
+而下面这种写法在 cmd / PowerShell / bash 里都一样能跑:
+
+```
+cd dr/aliyun
+tofu init
+tofu plan
+tofu apply
+tofu output
 ```
 
 完整版(含装工具、公钥、destroy)见 [`dr/aliyun/README.md`](../dr/aliyun/README.md)
@@ -239,7 +245,7 @@ curl -s https://dr.cloudcele.com/api/ready      # 就绪
 1. 把每一步的 `[推演]` 改成 `[已验证]`,或写下它实际是怎么失败的。
 2. **卡住的地方就是自动化的清单** —— 那些差异才是 OpenTofu / Ansible 真正要处理的
    东西,而不是把这份文档照着翻译一遍。
-3. `cd dr/aliyun && tofu destroy`,**当天做** —— 失败的演练最容易留下还在计费的资源。
+3. `cd dr/aliyun` 然后 `tofu destroy`,**当天做** —— 失败的演练最容易留下还在计费的资源。
    (公网 IP 随实例分配、不是独立 EIP,所以 destroy 会一并收走。)
 4. 删掉测试域名的 A 记录。
 
