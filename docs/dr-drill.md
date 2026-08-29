@@ -202,7 +202,7 @@ ssh 会拒绝用)、装 `ansible/requirements.yml` 里的 collection、跑 playb
 > 3. **traefik `.env` 里 htpasswd 哈希的 `$` 会被 compose 当变量吃掉** ——
 >    `The "apr1" variable is not set`。凭据不是坏得响亮,是被**悄悄改错**。模板里 `$` → `$$`。
 
-### 4. `[推演]` 还原凭据 —— **必须在起栈之前**
+### 4. `[已验证 2026-08-29]` 还原凭据 —— **必须在起栈之前**
 
 > **这一步是 8-29 当天补出来的,而且是补在错的位置之后。** 那天的实际顺序是先起栈、
 > 再手工填凭据,走得通只是因为演练机的库是用临时口令新建的。**真恢复时这个顺序是坏的**:
@@ -233,10 +233,39 @@ install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
 > 默认全开只是为了演练顺手),而且**当天必须 destroy**。如果演练机在网上过了夜,
 > 正确处置不是"应该没事",是**轮换那批凭据**。
 
-**判据**:`.env.secrets` 里有 13 个键,且 `POSTGRES_PASSWORD` 是生产的原值。
-**实际**:____  **耗时**:____
+**判据**:`.env.secrets` 里的键数与生产一致,且 `POSTGRES_PASSWORD` 是生产的原值。
+**实际**:**15 个键全部还原**(比预期多两个 —— 生产的 `.env.secrets` 里还有
+`CORTEX_MAIL_*`,是同机另一个应用的)。**输入只有三个秘密**。
+**耗时**:**2 秒**(1.0 KiB)。
+
+> **这条闭环成立了**:生产把凭据备到异地 → 新机器只凭三个携带的秘密就把整套拿回来。
+>
+> 走这一步之前先做了一次半程验证,值得抄:用一把能读桶但**故意给错口令**的凭据跑一次,
+> 报的是 `The password that has been entered, seems to be incorrect` 而**不是"连不上"**
+> —— 于是"OSS 那一半通了"和"解密这一环没验"被分开了,剩下的未知只有一个。
 
 ### 5. `[已验证 2026-08-29]` 起栈 —— **复用 `deploy.yml`,不另写一套**
+
+> 🔴 **顺序陷阱,实测撞上过**:`deploy.yml` 会把 **api 一起起来**,而 api 启动就跑
+> `sqlx::migrate!` —— 于是**库不再是空的,schema 已经建好了**,下一步的 `pg_dump`
+> 灌不进去:
+>
+> ```
+> ERROR:  type "object_type" already exists
+> ```
+>
+> 这不是某条命令写错了,是**这份文档的步骤顺序本身是错的**。真恢复要么
+> **只起 postgres → 灌库 → 再起 api**,要么像本次这样在灌之前把库重建成空的:
+>
+> ```bash
+> ./dc stop api web
+> docker exec mica-postgres-1 psql -U mica -d postgres >   -c 'DROP DATABASE IF EXISTS mica WITH (FORCE);' -c 'CREATE DATABASE mica OWNER mica;'
+> ```
+>
+> 灌完再 `./dc start api web`:那时 `_sqlx_migrations` 里已经有记录,迁移不会重跑。
+>
+> 〔为什么推演时看不出来:写文档的人知道"迁移随 api 启动跑",也知道"pg_dump 含
+> schema",但没有把这两件事放在一起。**只有真的按顺序执行一遍,它们才会相撞。**〕
 
 原计划是手工写 `.env` / 取 compose / `docker compose up`。不该这么做:**一条不是
 日常流程的恢复流程,是一条没人测过的流程**。日常发版跑的就是 `ansible/deploy.yml`,
@@ -261,10 +290,9 @@ DR_HOST=<IP> ansible-playbook -i ansible/inventory.yml ansible/deploy.yml -e tar
 > 在今天之前从来没被走过,于是"能重建"只是推断。
 
 **判据**:`PLAY RECAP` `failed=0`;`./dc ps` 全 running;`/api/health` 报对版本。
-**实际**:`ok=31 changed=6 failed=0`;api/postgres 均 healthy,web/rustfs running;
-`https://mica-dr.cloudcele.com/api/health` → `{"status":"ok","version":"0.13.39"}`,
-`/api/ready` → 200。**(这一次是在第 4 步之前跑的,见上面的警告;凭据还原之后要重跑。)**
-**耗时**:**约 1 分钟**。
+**实际**(第二次,凭据还原之后、且**删掉 `.env` 走真正的全新节点路径**):
+`ok=31 changed=5 failed=0`,**43 秒**。
+第一次(第 4 步之前跑的)也是 `failed=0`,但那个顺序是坏的 —— 见第 4 步开头的警告。
 
 > `localhost:8080` 空响应是对的 —— api 不发布到宿主端口,只经 traefik 进出。
 > 别把它当成故障。
