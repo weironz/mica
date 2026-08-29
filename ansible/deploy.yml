@@ -311,6 +311,29 @@
       # before a single byte of the node's config has been touched. Refusing to
       # migrate without a restore point is the whole point of the task.
 
+    # These pile up forever otherwise: one per migrating deploy, ~130 MB each by
+    # 2026-08, and nothing ever removed them (80 files / 2.1 GB on 2026-08-29,
+    # oldest from July). Pruning belongs HERE rather than in a cron: the file is
+    # created by this task, so the rule for how long it lives should be readable
+    # in the same place.
+    #
+    # Five is "the deploys you might still roll back", not a storage budget. A
+    # restore point older than that is neither a rollback (the schema has moved
+    # on — 0016 was irreversible) nor a disaster copy: it sits on the SAME DISK
+    # as the database it came from. The off-site rustic `_pgdump` lineage is the
+    # one that survives losing this machine, and it keeps its own retention.
+    - name: Keep only the five newest restore points
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          cd {{ mica_dir }}
+          # `ls -t` on a glob that matches nothing would error under pipefail;
+          # the `|| true` keeps a fresh node (no restore points yet) deploying.
+          ls -t pre-*.sql.gz 2>/dev/null | tail -n +6 | xargs -r rm -f || true
+      changed_when: false
+      when: needs_restore_point | bool
+
     - name: Where the restore point is
       ansible.builtin.debug:
         # Branch on `skipped` rather than leaning on a default for the missing
