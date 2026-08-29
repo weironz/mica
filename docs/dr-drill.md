@@ -202,15 +202,41 @@ ssh 会拒绝用)、装 `ansible/requirements.yml` 里的 collection、跑 playb
 > 3. **traefik `.env` 里 htpasswd 哈希的 `$` 会被 compose 当变量吃掉** ——
 >    `The "apr1" variable is not set`。凭据不是坏得响亮,是被**悄悄改错**。模板里 `$` → `$$`。
 
-### 4-5. `[已验证 2026-08-29]` 配置 + 起栈 —— **复用 `deploy.yml`,不另写一套**
+### 4. `[推演]` 还原凭据 —— **必须在起栈之前**
+
+> **这一步是 8-29 当天补出来的,而且是补在错的位置之后。** 那天的实际顺序是先起栈、
+> 再手工填凭据,走得通只是因为演练机的库是用临时口令新建的。**真恢复时这个顺序是坏的**:
+> `POSTGRES_PASSWORD` 在 `.env.secrets` 里,postgres 用它 initdb —— 先起栈就是
+> 「库用旧口令建的、配置写着新口令」,而它不会当场报错,只会在某个连接时刻才显形。
+
+新机器上只有镜像,所以还原不能依赖一个已经跑起来的栈(否则又是先有鸡还是先有蛋)。
+`mica-cli backup restore-config` 就是为这一刻加的(v0.13.41):
+
+```bash
+docker run --rm -v /data/mica:/restore --entrypoint /usr/local/bin/mica-cli \
+  -e RUSTIC_PASSWORD -e OSS_BUCKET -e OSS_ENDPOINT -e OSS_REGION -e OSS_ROOT \
+  -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY \
+  registry.cn-shenzhen.aliyuncs.com/willspace/mica-cli:v0.13.41 backup restore-config
+install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
+```
+
+⚠️ `--entrypoint` 不能省:镜像 ENTRYPOINT 是整条 `mica-cli backup daemon`。
+
+**这三个环境变量从哪来**:GitHub Secrets(`dr-plan §2.2`)。它们是恢复链上仅剩要被
+「携带」的秘密 —— 其余 10 个键从这一步还原回来。
+
+**判据**:`.env.secrets` 里有 13 个键,且 `POSTGRES_PASSWORD` 是生产的原值。
+**实际**:____  **耗时**:____
+
+### 5. `[已验证 2026-08-29]` 起栈 —— **复用 `deploy.yml`,不另写一套**
 
 原计划是手工写 `.env` / 取 compose / `docker compose up`。不该这么做:**一条不是
 日常流程的恢复流程,是一条没人测过的流程**。日常发版跑的就是 `ansible/deploy.yml`,
 它已经会做全部三件事(从 tag 取 compose、按 host_vars 渲染 `.env`、起栈)。
 
 ```bash
-git show v0.13.39:deploy/docker-compose.yml > /tmp/compose.yml
-DR_HOST=<IP> ansible-playbook -i ansible/inventory.yml ansible/deploy.yml -e target=mica-dr -e version=0.13.39 -e compose_src=/tmp/compose.yml
+git show v0.13.41:deploy/docker-compose.yml > /tmp/compose.yml
+DR_HOST=<IP> ansible-playbook -i ansible/inventory.yml ansible/deploy.yml -e target=mica-dr -e version=0.13.41 -e compose_src=/tmp/compose.yml
 ```
 
 **为此改了 `deploy.yml` 两处**(都不削弱它对生产的保护):
@@ -223,18 +249,13 @@ DR_HOST=<IP> ansible-playbook -i ansible/inventory.yml ansible/deploy.yml -e tar
    后者仍然拒绝,因为那条规则本来就是为它写的。同时全新节点**不取还原点**:没有库
    可 dump,取了只会在 `docker exec mica-postgres-1` 上失败。
 
-> 这是这次演练**改动生产路径**的唯一一处,而它恰恰是最该改的:容灾要用的那条路,
+> 这是这次演练**改动生产路径**的唯一一处,而它恰恰是最该改的:容灾要走的那条路,
 > 在今天之前从来没被走过,于是"能重建"只是推断。
-
-**凭据**:`.env.secrets` 仍是手工的(ansible 永不读写它,`deploy.yml` 只断言它存在)。
-**演练不需要生产的原值** —— 这点原来的准备清单说错了。`JWT_SECRET` / `POSTGRES_PASSWORD`
-/ `S3_*` 都可以当场 `openssl rand` 生成:它们只决定这台机器**怎么初始化自己**,不影响
-能不能把生产数据读回来。真正不可替代的只有两样,见第 6 步。
 
 **判据**:`PLAY RECAP` `failed=0`;`./dc ps` 全 running;`/api/health` 报对版本。
 **实际**:`ok=31 changed=6 failed=0`;api/postgres 均 healthy,web/rustfs running;
 `https://mica-dr.cloudcele.com/api/health` → `{"status":"ok","version":"0.13.39"}`,
-`/api/ready` → 200。
+`/api/ready` → 200。**(这一次是在第 4 步之前跑的,见上面的警告;凭据还原之后要重跑。)**
 **耗时**:**约 1 分钟**。
 
 > `localhost:8080` 空响应是对的 —— api 不发布到宿主端口,只经 traefik 进出。
