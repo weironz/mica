@@ -51,6 +51,44 @@ profile = "mica-dr"
 > 都不需要**。真容灾时如果你手上还有另一台阿里云机器,这是最干净的 —— 但它救不了
 > 「整个账号进不去」那种场景,而那正是 §5.3 已拍板不防的。
 
+## 设 root 密码(可选,但建议)
+
+```hcl
+# terraform.tfvars —— 注意下面那段警告,别就这么放着
+root_password = "改成你自己的"
+```
+
+**为什么值得设**:ssh 进不去时还剩一条路 —— 控制台 VNC。而容灾场景里「ssh 进不去」
+恰恰是常态:安全组填错、网络没通、sshd 没起来。**密钥登录救不了这些,因为它们都发生在
+ssh 之前。**
+
+**代价**:密码会**明文写进 state 文件**。所以设了密码就要把 state 加密打开 ——
+这正是选 OpenTofu 而不是 Terraform 的那条理由(`dr-plan` §7.2.1),现在轮到它兑现。
+
+OpenTofu 支持用 `TF_ENCRYPTION` 环境变量配置加密(**已实测**:给它一段非法 HCL,
+`tofu show` 会当场报解析错,证明它确实被读取),所以不必改任何 `.tf`:
+
+```bash
+export TF_ENCRYPTION='
+key_provider "pbkdf2" "main" {
+  passphrase = "一段足够长的口令,放进你的密码管理器"
+}
+method "aes_gcm" "main" {
+  keys = key_provider.pbkdf2.main
+}
+state {
+  method = method.aes_gcm.main
+}
+'
+tofu apply
+```
+
+⚠️ **口令丢了 = state 打不开 = tofu 再也管不了这些资源**(机器还在跑,但你只能去控制台
+手动删)。所以它和 `MICA_BACKUP_PASSWORD` 一样,归宿是密码管理器,不是这台机器。
+
+不想折腾加密就**别设密码** —— 只用密钥登录,state 里就没有任何秘密。演练机尤其可以
+这样:反正它当天就删。
+
 ## 跑
 
 ```bash
@@ -84,6 +122,7 @@ tofu destroy
 | `cpu_core_count` / `memory_size` | 2 / 4 | 生产实测 2 核 3.5 GiB |
 | `image_name_regex` | `^ubuntu_26_04_x64.*` | 26.04 LTS。改这里换版本(如 `^ubuntu_24_04_x64.*`);**不写死 image id** —— 同一版本在不同地域是不同的 id |
 | `system_disk_size` | 40 | docker 镜像 ~4G + 恢复的数据 ~1.5G(postgres 439MB + rustfs 1.01GB)+ 中途那份 634MB 明文 dump |
+| `root_password` | 空 | 不设 = 仅密钥登录,state 里没有秘密。设了要连带打开 state 加密 |
 | `ssh_cidr` | `0.0.0.0/0` | 演练顺手。**真恢复时收窄到你的出口 IP** —— 那台机器上会有一份完整的生产数据 |
 
 规格、镜像、可用区都走 data source 现查,不写死 id:型号会随时间和可用区变,写死的

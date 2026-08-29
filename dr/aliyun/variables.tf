@@ -92,3 +92,27 @@ variable "shared_credentials_file" {
   type        = string
   default     = ""
 }
+
+variable "root_password" {
+  description = <<-EOT
+    root 密码。留空(默认)= 不设,只能用密钥登录。
+
+    **为什么值得设**:ssh 进不去的时候还剩一条路 —— 阿里云控制台的 VNC。而容灾场景里
+    「ssh 进不去」恰恰是常态:安全组填错、网络没通、sshd 没起来。密钥登录救不了这些,
+    因为它们都发生在 ssh 之前。
+
+    **代价,必须知道**:它会**明文写进 state 文件**。所以要用就把 state 加密打开 ——
+    见 README「设 root 密码」。这正是选 OpenTofu 而不是 Terraform 的那条理由所指的
+    场景(dr-plan §7.2.1),现在轮到它兑现了。
+
+    阿里云的要求:8-30 位,大写/小写/数字/特殊字符里至少占三类。
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.root_password == "" || length(var.root_password) >= 8
+    error_message = "阿里云要求 root 密码至少 8 位(8-30,且含大小写/数字/特殊字符中的三类)。"
+  }
+}

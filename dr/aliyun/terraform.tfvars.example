@@ -12,3 +12,8 @@
 
 # 公钥路径(默认 ~/.ssh/id_rsa.pub):
 # public_key_path = "~/.ssh/id_ed25519.pub"
+
+# root 密码:设了就能在 ssh 挂掉时走控制台 VNC —— 容灾时这条路很值钱。
+# 但它会明文进 state,所以设了就要一起打开 state 加密(见 README「设 root 密码」)。
+# 不想折腾就别设,只用密钥登录。
+# root_password = "..."

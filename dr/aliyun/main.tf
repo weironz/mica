@@ -98,6 +98,9 @@ resource "alicloud_instance" "dr" {
   vswitch_id      = alicloud_vswitch.dr.id
   key_name        = alicloud_ecs_key_pair.dr.key_pair_name
 
+  # 留空则整个不传,实例保持「仅密钥登录」。设了就明文进 state —— 见变量说明。
+  password = var.root_password != "" ? var.root_password : null
+
   system_disk_category = "cloud_essd"
   system_disk_size     = var.system_disk_size
 
