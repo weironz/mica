@@ -187,40 +187,34 @@
         mode: "0644"
       notify: Restart Traefik
 
-    # TRAEFIK_BASIC_AUTH is a credential and therefore does NOT live in
-    # host_vars — same rule deploy.yml enforces for the app. It comes from the
-    # environment, or from the node's .env.secrets, which the backup carries
-    # (crates/cli/src/backup.rs leg 3c). Before 2026-08-29 it had NO home at
-    # all: it existed only in the shell of whoever last ran this play, so a
-    # rebuilt node silently lost it. Small stakes — a dashboard — but "in
-    # neither git nor the backup" is a category that should have no members.
+    # TRAEFIK_BASIC_AUTH guards the dashboard route. A credential, so NOT in
+    # host_vars — same rule deploy.yml enforces for the app — and it comes from
+    # the environment of whoever runs this play.
     #
-    # On a FIRST provision the secrets file does not exist yet (it is restored
-    # in a later step), so this renders empty and the dashboard route rejects
-    # everything — fail-closed, and fixed by re-running this play after the
-    # restore. The alternative, provisioning Traefik after the credentials, puts
-    # ACME behind the restore for no gain.
-    - name: Read the node's credentials, if it already has any
-      ansible.builtin.slurp:
-        src: "{{ mica_dir }}/.env.secrets"
-      register: node_secrets
-      failed_when: false
-      check_mode: false
-
+    # DELIBERATELY NOT BACKED UP, and the reasoning is worth keeping because the
+    # first attempt (2026-08-29) got it wrong: it was made to fall back to
+    # /data/mica/.env.secrets, which IS in the backup. That crossed a boundary
+    # this repo is otherwise careful about — that file is the MICA stack's, read
+    # by `docker compose --env-file`, whose `environment:` block is an explicit
+    # allow-list; Traefik is a separate stack that predates Mica on the node.
+    #
+    # The rule that actually applies is narrower than "everything must be in git
+    # or the backup": things whose loss is UNRECOVERABLE or SILENT must be. This
+    # is neither. `htpasswd -nbB admin '<password>'` regenerates it in one
+    # command, and losing it announces itself the moment somebody cannot log in.
+    # A rebuilt node gets a new dashboard password, and that is the whole cost.
     - name: Decide the dashboard credential
       ansible.builtin.set_fact:
-        traefik_basic_auth: >-
-          {{ (lookup('env', 'TRAEFIK_BASIC_AUTH')
-              or ((node_secrets.content | default('') | b64decode).splitlines()
-                  | select('match', '^TRAEFIK_BASIC_AUTH=') | first | default('')
-                  | regex_replace('^TRAEFIK_BASIC_AUTH=', ''))) | trim }}
+        traefik_basic_auth: "{{ lookup('env', 'TRAEFIK_BASIC_AUTH') | trim }}"
 
+    # Rendering an empty one is fail-closed (the middleware then rejects every
+    # login), which is the right default — but silent, so say it.
     - name: Say when the dashboard will have no working credential
       ansible.builtin.debug:
         msg: >-
-          No TRAEFIK_BASIC_AUTH in the environment or in {{ mica_dir }}/.env.secrets —
-          the Traefik dashboard route will reject every login (fail-closed). Add it
-          to .env.secrets so the backup carries it, then re-run this play.
+          TRAEFIK_BASIC_AUTH is not set — the Traefik dashboard route will reject
+          every login (fail-closed). Mica itself is unaffected. Generate one with
+          `htpasswd -nbB admin '<password>'` and re-run with it in the environment.
       when: traefik_basic_auth | length == 0
 
     - name: Render the Traefik .env

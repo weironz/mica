@@ -123,6 +123,13 @@ OSS_SECRET_ACCESS_KEY
 > 机器凭身份读桶,不带 key。今天不做:它要改 tofu、改 rustic 的凭据来源,而收益
 > 是"少存两个 Secret"。**先记着,别现在做。**
 
+> **有一样刻意不在这三层里**:`TRAEFIK_BASIC_AUTH`(Traefik 面板的 basic auth)。
+> 它守的是个面板不是数据、`htpasswd -nbB` 一条命令就能重生、丢了立刻可见(登不进去)。
+> 曾经把它塞进 `.env.secrets` 让备份带上,当天就退回来了 —— 那个文件是 **mica 栈**的,
+> 由 `docker compose --env-file` 消费、`environment:` 是显式允许清单,而 Traefik 是
+> 另一个栈。**真正的规则比「全都要进 git 或备份」窄:丢了找不回来、或者丢了没人知道的,
+> 才必须进。** 重建出来的节点换一个新面板口令,代价到此为止。
+
 **还原(必须在起栈之前)**。新机器上只有这个镜像,所以还原不能依赖已经跑起来的栈 ——
 `mica-cli backup restore-config` 就是为这一刻加的(v0.13.41):
 

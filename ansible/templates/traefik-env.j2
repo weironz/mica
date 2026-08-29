@@ -6,12 +6,9 @@
 #
 #     htpasswd -nbB admin '<password>'
 #
-# It comes from the environment, or — failing that — from the node's own
-# .env.secrets, which IS in the backup. Before 2026-08-29 it came ONLY from the
-# environment, which meant it lived in exactly one place: the shell of whoever
-# last ran this play. Rebuild the node and it was gone, with nothing saying so.
-# Small stakes (a dashboard), but "in neither git nor the backup" is a category
-# that should have no members.
+# It comes from the environment, and is deliberately NOT backed up: it is
+# regenerable in one command and its loss announces itself. See provision.yml
+# for why the backed-up alternative was tried and reverted.
 #
 # The `$` doubling below is load-bearing, not defensive. Compose interpolates
 # this file, so every `$` in an htpasswd hash (`$apr1$…`, `$2y$…`) is read as a
