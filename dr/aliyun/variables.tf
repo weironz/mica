@@ -59,7 +59,7 @@ variable "public_key_path" {
     的一步:机器起来你进不去,ansible 也连不上。
   EOT
   type        = string
-  default     = "~/.ssh/id_rsa.pub"
+  default     = "~/.ssh/id_ed25519.pub"
 }
 
 variable "ssh_cidr" {
@@ -115,4 +115,16 @@ variable "root_password" {
     condition     = var.root_password == "" || length(var.root_password) >= 8
     error_message = "阿里云要求 root 密码至少 8 位(8-30,且含大小写/数字/特殊字符中的三类)。"
   }
+}
+
+variable "instance_type_family" {
+  description = <<-EOT
+    实例规格族,留空 = 不限(推荐)。
+
+    曾经写死 `ecs.e`(经济型),而实测 cn-shenzhen-b 里符合 2C4G 的 ecs.e 一个都没有,
+    plan 直接失败。家族的可售性按地域/可用区变 —— 钉死它等于给自己加一个会在容灾
+    当天失效的前提。
+  EOT
+  type        = string
+  default     = ""
 }

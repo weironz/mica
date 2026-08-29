@@ -9,10 +9,13 @@ data "alicloud_zones" "available" {
 }
 
 data "alicloud_instance_types" "matched" {
-  availability_zone    = data.alicloud_zones.available.zones[0].id
-  cpu_core_count       = var.cpu_core_count
-  memory_size          = var.memory_size
-  instance_type_family = "ecs.e" # 经济型,演练够用且便宜
+  availability_zone = data.alicloud_zones.available.zones[0].id
+  cpu_core_count    = var.cpu_core_count
+  memory_size       = var.memory_size
+  # 默认不限家族:写死 "ecs.e" 时实测在 cn-shenzhen-b 一个都匹配不到(2026-08-29
+  # 首次 plan)。家族的可售性按地域/可用区变,钉死它等于给自己加一个会在容灾当天
+  # 失效的前提。
+  instance_type_family = var.instance_type_family != "" ? var.instance_type_family : null
 }
 
 data "alicloud_images" "ubuntu" {
@@ -27,9 +30,12 @@ locals {
   # 而不是抛一个 "index 0 out of range" 让你去猜是镜像没了还是地域不对。
   image_id = try(data.alicloud_images.ubuntu.images[0].id, null)
   # 显式指定优先;否则取自动匹配到的第一个。
-  instance_type = coalesce(
-    var.instance_type != "" ? var.instance_type : null,
-    try(data.alicloud_instance_types.matched.instance_types[0].id, null),
+  # try 而不是 coalesce:coalesce 在参数全空时**自己抛错**,发生在 locals 求值阶段,
+  # 于是下面那条 precondition 根本轮不到 —— 实测首次 plan 拿到的就是 "Call to
+  # function coalesce failed",既没说哪个地域没货,也没说该怎么办。
+  instance_type = var.instance_type != "" ? var.instance_type : try(
+    data.alicloud_instance_types.matched.instance_types[0].id,
+    null,
   )
 }
 
