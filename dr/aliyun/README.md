@@ -82,6 +82,7 @@ tofu destroy
 | --- | --- | --- |
 | `region` | `cn-shenzhen` | 必须与备份桶同地域,跨域拉 1.5 GB 又慢又要流量费 |
 | `cpu_core_count` / `memory_size` | 2 / 4 | 生产实测 2 核 3.5 GiB |
+| `image_name_regex` | `^ubuntu_26_04_x64.*` | 26.04 LTS。改这里换版本(如 `^ubuntu_24_04_x64.*`);**不写死 image id** —— 同一版本在不同地域是不同的 id |
 | `system_disk_size` | 40 | docker 镜像 ~4G + 恢复的数据 ~1.5G(postgres 439MB + rustfs 1.01GB)+ 中途那份 634MB 明文 dump |
 | `ssh_cidr` | `0.0.0.0/0` | 演练顺手。**真恢复时收窄到你的出口 IP** —— 那台机器上会有一份完整的生产数据 |
 

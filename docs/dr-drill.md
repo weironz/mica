@@ -81,7 +81,7 @@ tofu apply && tofu output
 | **地域** | **深圳(cn-shenzhen)** | 必须和备份桶同地域(`OSS_ENDPOINT` 是 `oss-cn-shenzhen`)。跨地域拉 1.5 GB 又慢又要流量费 | ____ |
 | 付费方式 | **按量付费** | 演练完就删;包年包月删不掉只能退 | ____ |
 | 规格 | **2 vCPU / 4 GiB**(如 `ecs.e-c1m2.large`) | 生产是 2 核 3.5G,演练要能代表生产 | ____ |
-| 镜像 | Ubuntu 22.04 或 24.04 LTS x64 | —— | ____ |
+| 镜像 | **Ubuntu 26.04 LTS x64** | tofu 里是变量 `image_name_regex`,按名字现查而非写死 id | ____ |
 | 系统盘 | **40 GiB** ESSD | 要装下:docker 镜像 ~4G + 恢复的数据 ~1.5G + 中途那份 634 MB 明文 dump。生产 `/data` 是独立 100G 盘,但那 69G 大半不是 mica 的 —— **mica 的卷加起来只有 1.5 GB**(postgres 439 MB + rustfs 1.01 GB) | ____ |
 | 数据盘 | **不要** | 演练不需要;真恢复时按生产形态挂一块再 `mkdir /data` 即可 | ____ |
 | 公网 IP | 勾选**分配公网 IPv4**,按流量计费 | ACME 与你的浏览器都要够得着 | ____ |

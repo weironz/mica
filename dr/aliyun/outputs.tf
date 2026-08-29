@@ -13,7 +13,7 @@ output "chosen" {
   value = {
     zone          = local.zone_id
     instance_type = local.instance_type
-    image         = data.alicloud_images.ubuntu.images[0].id
+    image         = local.image_id
     disk_gib      = var.system_disk_size
   }
 }

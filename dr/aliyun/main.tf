@@ -17,12 +17,15 @@ data "alicloud_instance_types" "matched" {
 
 data "alicloud_images" "ubuntu" {
   owners      = "system"
-  name_regex  = "^ubuntu_22_04_x64.*"
+  name_regex  = var.image_name_regex
   most_recent = true
 }
 
 locals {
   zone_id = data.alicloud_zones.available.zones[0].id
+  # try 而不是直接下标:匹配不到时给 null,让下面的 precondition 说出人话,
+  # 而不是抛一个 "index 0 out of range" 让你去猜是镜像没了还是地域不对。
+  image_id = try(data.alicloud_images.ubuntu.images[0].id, null)
   # 显式指定优先;否则取自动匹配到的第一个。
   instance_type = coalesce(
     var.instance_type != "" ? var.instance_type : null,
@@ -89,7 +92,7 @@ resource "alicloud_ecs_key_pair" "dr" {
 resource "alicloud_instance" "dr" {
   instance_name   = var.name
   host_name       = var.name
-  image_id        = data.alicloud_images.ubuntu.images[0].id
+  image_id        = local.image_id
   instance_type   = local.instance_type
   security_groups = [alicloud_security_group.dr.id]
   vswitch_id      = alicloud_vswitch.dr.id
@@ -116,6 +119,11 @@ resource "alicloud_instance" "dr" {
     precondition {
       condition     = local.instance_type != null && local.instance_type != ""
       error_message = "在 ${var.region} 没匹配到 ${var.cpu_core_count} 核 / ${var.memory_size} GiB 的 ecs.e 规格。显式设 instance_type,或放宽 cpu_core_count / memory_size。"
+    }
+
+    precondition {
+      condition     = local.image_id != null
+      error_message = "在 ${var.region} 没有匹配 ${var.image_name_regex} 的公共镜像。用 `aliyun ecs DescribeImages --RegionId ${var.region} --ImageOwnerAlias system` 看看有哪些,再改 image_name_regex(例如换成 ^ubuntu_24_04_x64.*)。"
     }
   }
 }

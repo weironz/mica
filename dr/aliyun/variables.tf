@@ -31,6 +31,18 @@ variable "memory_size" {
   default     = 4
 }
 
+variable "image_name_regex" {
+  description = <<-EOT
+    镜像名的正则,交给 `alicloud_images` 现查 —— 不写死 image id:同一个版本在不同
+    地域是不同的 id,而写死的那份要到 apply 才报错。
+
+    阿里云公共镜像的命名形如 `ubuntu_26_04_x64_20G_alibase_20260401.vhd`,
+    所以按前缀匹配即可。想换版本就改这里:`^ubuntu_24_04_x64.*`。
+  EOT
+  type        = string
+  default     = "^ubuntu_26_04_x64.*"
+}
+
 variable "system_disk_size" {
   description = <<-EOT
     GiB。40 是量出来的不是拍的:docker 镜像 ~4G + 恢复的数据 ~1.5G
