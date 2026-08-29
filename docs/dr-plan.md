@@ -640,6 +640,16 @@ VM 和 k8s 上一模一样。所以边界还要再推一条 —— §7.2 说「O
 不是仪式 —— 它是这类失败唯一的出口。**演练的价值也在这里得到了证明:还没开始走,
 光是准备就挖出了一起真事故。**
 
+**2026-08-30 补上了那条唯一没被这次演练碰到的根因**:`HEALTHCHECK_URL` 一直是空的 ——
+也就是说,08-16 那次静默中断的**直接原因当天并没有被修**,修的是它下游的每一样东西。
+现在配上了(healthchecks.io,一天一次 + 2 小时宽限),并实测从生产节点 ping 通(HTTP 200)。
+`mica-cli backup daemon` 失败时 ping `<URL>/fail`,所以那次事故会在**第一天**告警,
+而不是第 13 天被人在准备演练时偶然发现。
+
+顺带堵掉一个同形状的洞:ping 原来只在**传输层**失败时报警,而 URL 打错一个字符是
+404 —— `send()` 会当成成功。**一个永远不会响的开关比没有更糟**,因为它让你相信有人在看。
+现在非 2xx 也算失败(v0.13.44 起)。
+
 ## 9. 前置条件 —— 平时为真,用时才验
 
 这一节是 2026-08-29 演练逼出来的。当天第一次 `tofu apply` 被账户余额挡下(81.93,
@@ -656,6 +666,7 @@ VM 和 k8s 上一模一样。所以边界还要再推一条 —— §7.2 说「O
 | **这三个在 GitHub Secrets**:`MICA_BACKUP_PASSWORD`、`ALICLOUD_ACCESS_KEY`、`ALICLOUD_SECRET_KEY`(后两个在节点上叫 `OSS_*`,同一把 key) | `gh secret list --repo weironz/mica` | **仓库打不开或够不着,前面所有备份等于零**。这是恢复链上仅剩要「被携带」的秘密(§2.2)—— 口令解密、OSS 那对负责"连得上",少任何一个都读不到 |
 | **DR 的 SSH 私钥在密码管理器** | 人工确认 | 机器建得出来,进不去。公钥进 CI 变量即可(它本来就公开),**要命的是私钥** —— 只存在某台笔记本上的私钥,在那台笔记本也没了的时候等于没有 |
 | **`_config` lineage 真的在产出** | `rustic snapshots --filter-label _config` | 凭据没进备份,重建到"栈起来了、是空的"就停住(v0.13.40 起该 leg 失败会让整个 run 失败,所以这条主要是防"没升上去") |
+| **死人开关配着,而且够得着** | `docker exec mica-backup-1 sh -c 'curl -s -o /dev/null -w "%{http_code}" $HEALTHCHECK_URL'` → 期望 **200** | §8 那次静默 13 天,根因就是这条缺着。**只查"配了没"不够**:一个 404 的 URL 看起来配好了,而且永远不会响 |
 | **`_pgdump` lineage 是新鲜的** | `rustic snapshots --filter-label _pgdump`(**别 `tail`**,输出按 hostname 分组) | §8 那次:静默中断 13 天 |
 | **域名解析的控制权** | `aliyun alidns DescribeDomainRecords --DomainName <域名>` | 机器起来了,没人能访问 |
 

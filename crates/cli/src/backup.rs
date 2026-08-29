@@ -924,9 +924,23 @@ pub fn ping_healthcheck(suffix: &str) {
   else {
     return;
   };
-  if client.get(format!("{base}{suffix}")).send().is_err() {
+  // `error_for_status`, not just `send().is_err()`. A transport failure is the
+  // OBVIOUS way this breaks and the least likely one: the interesting failure is
+  // a URL with a typo, or a check somebody deleted — healthchecks.io answers
+  // those with 404, which `send()` reports as SUCCESS. You would then have a
+  // dead man's switch that never fires and never says why, which is strictly
+  // worse than having none: it is the belief that somebody is watching.
+  //
+  // Non-fatal on purpose, still: a backup that ran must not be reported as
+  // failed because the notification service was down. The line goes to stderr
+  // and the run's own verdict is unaffected.
+  let outcome = client
+    .get(format!("{base}{suffix}"))
+    .send()
+    .and_then(|r| r.error_for_status());
+  if let Err(err) = outcome {
     eprintln!(
-      "[{}] mica-backup: healthcheck ping failed (non-fatal)",
+      "[{}] mica-backup: healthcheck ping failed (non-fatal): {err}",
       chrono::Local::now().to_rfc3339()
     );
   }
