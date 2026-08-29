@@ -64,3 +64,19 @@ variable "bandwidth_mbps" {
   type        = number
   default     = 10
 }
+
+variable "profile" {
+  description = <<-EOT
+    共享凭据文件里的 profile 名。留空 = 用默认的那个。
+    给 DR 单开一个 profile 的好处:那把 key 可以只有 ECS + VPC 权限,
+    而日常那把不必因此降权。
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "shared_credentials_file" {
+  description = "凭据文件路径。留空 = provider 的默认(~/.aliyun/config.json)。"
+  type        = string
+  default     = ""
+}

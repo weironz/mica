@@ -1,0 +1,14 @@
+# 复制成 terraform.tfvars 再改。**这里只放名字和路径,永远不放密钥。**
+# (.gitignore 已挡掉 *.tfvars,但别依赖它 —— 密钥的正确位置是 ~/.aliyun/config.json)
+
+# 用 `aliyun configure --profile mica-dr` 建好之后,填它的名字:
+# profile = "mica-dr"
+
+# 演练与真恢复用不同的前缀,免得 destroy 错对象:
+# name = "mica-dr-drill"
+
+# 真恢复时把 ssh 收窄到你的出口 IP —— 那台机器上会有一份完整的生产数据:
+# ssh_cidr = "1.2.3.4/32"
+
+# 公钥路径(默认 ~/.ssh/id_rsa.pub):
+# public_key_path = "~/.ssh/id_ed25519.pub"

@@ -16,14 +16,40 @@
 # 1) 装 OpenTofu(Windows)
 winget install --id=OpenTofu.Tofu -e
 
-# 2) 凭据只走环境变量,永远不进文件。建议给 DR 单开一个 RAM 用户,
-#    权限只给 ECS + VPC(改 DNS 那步是手工的,不需要 DNS 权限)。
-export ALICLOUD_ACCESS_KEY=...
-export ALICLOUD_SECRET_KEY=...
+# 2) 凭据 —— 见下一节「凭据放哪」
 
 # 3) 公钥必须在创建实例时注入 —— 事后补不了(进不去机器,ansible 也连不上)
 ls ~/.ssh/id_rsa.pub    # 没有就 ssh-keygen -t ed25519
 ```
+
+## 凭据放哪
+
+**不要写进 `.tf`,也不要写进 `.tfvars`。** 前者会被提交;后者虽然在 `.gitignore` 里,
+但它就躺在仓库目录下,一次 `git add -f` 或换台机器复制目录就泄了。
+
+provider 会按这个顺序自己找(已用 `tofu providers schema` 查证):
+
+| 方式 | 怎么做 | 适合 |
+| --- | --- | --- |
+| **① 共享凭据文件(推荐)** | `aliyun configure --profile mica-dr` | 长期。文件在 `~/.aliyun/config.json`,**在仓库之外**,`aliyun` CLI 与 tofu 共用一份 |
+| ② 持久环境变量 | Windows:`setx ALICLOUD_ACCESS_KEY "..."`(新开的终端才生效) | 不想装 aliyun CLI |
+| ③ 临时环境变量 | `export ALICLOUD_ACCESS_KEY=...` | 一次性,关掉终端就没了 |
+
+用 ① 时把 profile 名填进 `terraform.tfvars`(**只有名字,没有密钥**):
+
+```hcl
+profile = "mica-dr"
+```
+
+**给 DR 单开一个 RAM 用户**,权限只给 ECS + VPC —— 改 DNS 那步是手工的,不需要 DNS
+权限;日常那把 key 也不必因此降权。
+
+> 将来做成 GitHub Action 时,凭据的归宿是 **repository secrets**,注入成上面②那种
+> 环境变量。本地这三种都不会跟着走。
+
+> ④ 还有一种:在阿里云 ECS 上跑 tofu,用实例 RAM 角色(`ecs_role_name`),**一把 key
+> 都不需要**。真容灾时如果你手上还有另一台阿里云机器,这是最干净的 —— 但它救不了
+> 「整个账号进不去」那种场景,而那正是 §5.3 已拍板不防的。
 
 ## 跑
 

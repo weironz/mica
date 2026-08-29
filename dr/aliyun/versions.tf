@@ -34,6 +34,15 @@ terraform {
 
 provider "alicloud" {
   region = var.region
-  # 凭据只从环境变量来,永远不进文件:
-  #   export ALICLOUD_ACCESS_KEY=... ALICLOUD_SECRET_KEY=...
+
+  # 凭据**永远不写在这里**。三种来源,provider 自己会找,按下面的顺序:
+  #
+  #   1. 环境变量 ALICLOUD_ACCESS_KEY / ALICLOUD_SECRET_KEY
+  #   2. 共享凭据文件(默认 ~/.aliyun/config.json,由 `aliyun configure` 生成)
+  #   3. ECS 实例 RAM 角色(在阿里云机器上跑时,连 key 都不需要)
+  #
+  # `profile` 留空就用文件里的默认 profile;想区分「日常」和「DR 专用」两套 key
+  # 时才填。见 README「凭据放哪」。
+  profile                 = var.profile
+  shared_credentials_file = var.shared_credentials_file
 }
