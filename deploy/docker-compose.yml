@@ -72,8 +72,8 @@ services:
       # key, and that key is published in this repository. That is a deliberate
       # trade for a one-command quickstart, NOT a safe default: change both on
       # any instance whose :9000 is reachable by people you do not trust.
-      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-mica}}
-      RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-mica-default-not-a-secret}}
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-mica}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-mica-default-not-a-secret}
       RUSTFS_CORS_ALLOWED_ORIGINS: "https://${DOMAIN:?set in .env.prod}"
     volumes:
       - mica-prod-rustfs:/data
@@ -143,14 +143,25 @@ services:
       # / `ALICLOUD_SECRET_KEY` by the OpenTofu provider. Renaming them would
       # simply mean nothing reads them.
       #
-      # The `${new:-${old:-default}}` chain is what keeps this from being a
-      # breaking change: every existing .env.secrets keeps working untouched, and
-      # a node that sets both gets the new one (measured, all three cases). It
-      # could go once operators have renamed their files — but it costs nothing
-      # to leave in, and a self-hoster upgrading a year from now would rather it
-      # were there.
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-mica}}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-mica-default-not-a-secret}}
+      # A COMPATIBILITY FALLBACK ON THE OLD NAMES EXISTED FOR ONE RELEASE
+      # (v0.13.42) AND WAS REMOVED IN v0.13.43, by decision, with this cost
+      # understood:
+      #
+      #   An instance still spelling them the old way does not fail. It falls
+      #   through to the defaults below — which are PUBLISHED IN THIS FILE — and
+      #   RustFS serves :9000 to the internet. That instance's object store
+      #   becomes world-readable and world-writable, and the only sign is the
+      #   api's `default_s3_secret_in_use` warning in a log nobody reads.
+      #
+      # So: UPGRADING FROM <= v0.13.41 REQUIRES RENAMING THESE THREE KEYS IN
+      # .env.secrets FIRST. Production's were renamed 2026-08-29, before the
+      # fallback went.
+      #
+      #   S3_ACCESS_KEY              -> S3_ACCESS_KEY_ID
+      #   S3_SECRET_KEY              -> S3_SECRET_ACCESS_KEY
+      #   MICA_MAIL_ACCESS_KEY_SECRET -> MICA_MAIL_SECRET_ACCESS_KEY
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-mica}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-mica-default-not-a-secret}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_PRESIGN_TTL_SECONDS: "604800"
       # Per-FILE ceiling (the workspace TOTAL is MICA_WORKSPACE_QUOTA_BYTES
@@ -226,7 +237,7 @@ services:
       MICA_MAIL_FROM: "${MICA_MAIL_FROM:-}"
       MICA_MAIL_FROM_NAME: "${MICA_MAIL_FROM_NAME:-}"
       MICA_MAIL_ACCESS_KEY_ID: "${MICA_MAIL_ACCESS_KEY_ID:-}"
-      MICA_MAIL_SECRET_ACCESS_KEY: "${MICA_MAIL_SECRET_ACCESS_KEY:-${MICA_MAIL_ACCESS_KEY_SECRET:-}}"
+      MICA_MAIL_SECRET_ACCESS_KEY: "${MICA_MAIL_SECRET_ACCESS_KEY:-}"
       MICA_MAIL_REGION: "${MICA_MAIL_REGION:-cn-hangzhou}"
       MICA_MAIL_ENDPOINT: "${MICA_MAIL_ENDPOINT:-}"
     depends_on:
@@ -321,8 +332,8 @@ services:
       # while the api using S3_* worked fine and nothing looked wrong
       # (2026-08-29, dr-plan §8). Override only if you ever give rclone its own
       # credentials, which RustFS cannot currently issue.
-      RUSTFS_S3_ACCESS_KEY_ID: ${RUSTFS_S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-}}}
-      RUSTFS_S3_SECRET_ACCESS_KEY: ${RUSTFS_S3_SECRET_ACCESS_KEY:-${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-}}}
+      RUSTFS_S3_ACCESS_KEY_ID: ${RUSTFS_S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY_ID:-}}
+      RUSTFS_S3_SECRET_ACCESS_KEY: ${RUSTFS_S3_SECRET_ACCESS_KEY:-${S3_SECRET_ACCESS_KEY:-}}
       RUSTFS_S3_ENDPOINT: ${RUSTFS_S3_ENDPOINT:-http://rustfs:9000}
       RUSTFS_S3_BUCKET: ${RUSTFS_S3_BUCKET:-mica}
       # Destination prefix in OSS. Kept under its own root so plain objects

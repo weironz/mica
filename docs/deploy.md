@@ -149,12 +149,22 @@ The last two keep their spelling because renaming them would mean nothing reads
 them. That is the whole reason the set is not uniform, and it is worth knowing
 rather than rediscovering.
 
-> **Renamed 2026-08-29, and nothing breaks.** `S3_ACCESS_KEY` → `S3_ACCESS_KEY_ID`,
-> `S3_SECRET_KEY` → `S3_SECRET_ACCESS_KEY`, `MICA_MAIL_ACCESS_KEY_SECRET` →
-> `MICA_MAIL_SECRET_ACCESS_KEY`. Compose reads the new name, falls back to the
-> old, then to the default — so an existing `.env.secrets` keeps working
-> untouched, and setting both makes the new one win. Rename yours when
-> convenient; there is no deadline.
+> ## ⚠️ Upgrading from v0.13.41 or earlier: rename three keys FIRST
+>
+> ```
+> S3_ACCESS_KEY               -> S3_ACCESS_KEY_ID
+> S3_SECRET_KEY               -> S3_SECRET_ACCESS_KEY
+> MICA_MAIL_ACCESS_KEY_SECRET -> MICA_MAIL_SECRET_ACCESS_KEY
+> ```
+>
+> v0.13.42 accepted both spellings; **v0.13.43 reads only the new ones.** An
+> instance that still uses the old names does not fail — it falls through to the
+> defaults published in `docker-compose.yml`, and RustFS serves `:9000` to the
+> internet. **That makes the object store world-readable and world-writable**,
+> with nothing but a `default_s3_secret_in_use` line in the api log to say so.
+>
+> Renaming is safe at any time while on v0.13.42, and safe before upgrading from
+> anything older. Values do not change — only the key names.
 
 ## Secrets: what you generate, and what generates itself
 
