@@ -101,15 +101,37 @@
 进备份**;没挂载则该 leg 记为 skipped,而 skipped **默认让整个 run 失败** —— 「凭据没备份」
 必须响亮,不能是日志里一行没人看的话。
 
-**有一样它解不掉,而且不可能解掉**:`RUSTIC_PASSWORD` 是打开这个仓库的钥匙,而它就在
-这个文件里。**保险柜的密码锁在保险柜里,拿不出来。** 所以它仍然必须被带在外面 ——
-但**只剩它一个**,不是十三个。
+**有三样它解不掉,而且不可能解掉。** 打开这个仓库需要:
 
-**它带在哪(2026-08-29,用户拍板)**:GitHub Secrets。好处是恢复链路上**不需要人**;
+```
+MICA_BACKUP_PASSWORD          # rustic 的仓库口令
+OSS_ACCESS_KEY_ID             # 连得上 OSS 才读得到仓库
+OSS_SECRET_ACCESS_KEY
+```
+
+这三个**全都在这个文件里**,而这个文件在仓库里。**保险柜的密码锁在保险柜里。**
+所以它们仍然必须被带在外面 —— 但**只剩这三个**,不是十三个。
+
+〔第一版这里写的是「只剩一个」,漏了 OSS 那对:只想到 rustic 的加密口令,没想到
+"连得上"本身也要凭据。这正是 §9 那类前提 —— **在真跑一遍之前,它看起来是成立的**。〕
+
+**带在哪(2026-08-29,用户拍板)**:GitHub Secrets。好处是恢复链路上**不需要人**;
 代价说清楚 —— **持有那个仓库的人就持有数据**。这与 §7.2 里「不防账号级风险」是同一档
 取舍,不是新开的口子,但它把"账号"从阿里云一家扩到了两家。
 
-**还原**:`rustic restore latest /tmp/cfg --filter-label _config`。
+> 想把三个降回一个,唯一干净的办法是**给 DR 实例挂一个 OSS 只读的 RAM 角色** ——
+> 机器凭身份读桶,不带 key。今天不做:它要改 tofu、改 rustic 的凭据来源,而收益
+> 是"少存两个 Secret"。**先记着,别现在做。**
+
+**还原(必须在起栈之前)**:
+
+```bash
+rustic restore latest /tmp/cfg --filter-label _config
+install -m 600 /tmp/cfg/etc/mica/env.secrets /data/mica/.env.secrets
+```
+
+⚠️ **顺序是硬的**:`POSTGRES_PASSWORD` 在这个文件里,而 postgres 用它 initdb。
+先起栈再还原凭据 = 库是用旧口令建的、配置写着新口令,谁都连不上。
 
 ### 2.3 Traefik / ACME 证书（2026-07-30 查实）
 
@@ -530,7 +552,7 @@ VM 和 k8s 上一模一样。所以边界还要再推一条 —— §7.2 说「O
 | 前置条件 | 一条命令查 | 不满足会怎样 |
 | --- | --- | --- |
 | **阿里云可用额度 ≥ 100 元** | `aliyun bssopenapi QueryAccountBalance` | 开不出按量付费实例。**实测被它挡过一次** |
-| **`MICA_BACKUP_PASSWORD` 在 GitHub Secrets** | `gh secret list --repo weironz/mica \| grep MICA_BACKUP_PASSWORD` | **仓库永远打不开,前面所有备份等于零**。这是恢复链上唯一还需要「被携带」的秘密(§2.2) |
+| **这三个在 GitHub Secrets**:`MICA_BACKUP_PASSWORD`、`OSS_ACCESS_KEY_ID`、`OSS_SECRET_ACCESS_KEY` | `gh secret list --repo weironz/mica` | **仓库打不开或够不着,前面所有备份等于零**。这是恢复链上仅剩要「被携带」的秘密(§2.2)—— 口令解密、OSS 那对负责"连得上",少任何一个都读不到 |
 | **DR 的 SSH 私钥在密码管理器** | 人工确认 | 机器建得出来,进不去。公钥进 CI 变量即可(它本来就公开),**要命的是私钥** —— 只存在某台笔记本上的私钥,在那台笔记本也没了的时候等于没有 |
 | **`_config` lineage 真的在产出** | `rustic snapshots --filter-label _config` | 凭据没进备份,重建到"栈起来了、是空的"就停住(v0.13.40 起该 leg 失败会让整个 run 失败,所以这条主要是防"没升上去") |
 | **`_pgdump` lineage 是新鲜的** | `rustic snapshots --filter-label _pgdump`(**别 `tail`**,输出按 hostname 分组) | §8 那次:静默中断 13 天 |

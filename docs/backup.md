@@ -67,10 +67,11 @@ all GETs — a **read-scoped** token suffices.
   only in somebody's password manager. This leg is **skipped, and a skipped leg
   fails the run**, when the file is not mounted.
 
-  One thing it cannot do, by construction: `RUSTIC_PASSWORD` opens this
-  repository and is inside that file, so a copy in the repository cannot help
-  you open the repository. **That one password still has to be kept somewhere
-  else** — it is the only one that does.
+  Three things it cannot do, by construction: `RUSTIC_PASSWORD` opens this
+  repository, and `OSS_ACCESS_KEY_ID` / `OSS_SECRET_ACCESS_KEY` are what reach
+  it at all — and all three are inside that file. A copy in the repository
+  cannot help you open the repository. **Those three still have to be kept
+  somewhere else**; they are the only ones that do.
 
 ## Aliyun OSS setup (one-time)
 
@@ -189,8 +190,12 @@ rustic restore latest /tmp/cfg --filter-label _config
 install -m 600 /tmp/cfg/etc/mica/env.secrets /data/mica/.env.secrets
 ```
 
-`RUSTIC_PASSWORD` is what you just used to open the repository, so it comes from
-wherever you keep it, not from here.
+`RUSTIC_PASSWORD` and the `OSS_*` pair are what you just used to reach and open
+the repository, so they come from wherever you keep them, not from here.
+
+**Do this before starting the stack**, not after: `POSTGRES_PASSWORD` lives in
+this file and Postgres uses it at initdb. Restore it late and the database was
+created with one password while the config names another.
 
 ## Restore the database from a `pg_dump` (full-instance DR)
 
