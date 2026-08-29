@@ -1,0 +1,204 @@
+# 容灾恢复演练 —— 手工走一遍(工作表)
+
+> **这是一份要被你改写的文档。** 每一步都标着 `[推演]`,意思是**写下来的时候没人走过**。
+> 走通一步就改成 `[已验证]` 并填耗时;卡住就把真实报错抄进「实际」栏。
+> 走完之后,这份文档才第一次配得上叫 runbook。
+>
+> **为什么必须先手工走**(`cd-plan.md` §6 早就写死了):*一个没人手工走通过的流程,不该
+> 先写成脚本 —— 没走过就写等于把推演固化成代码,而且脚本一旦存在,人就不再读文档了,
+> 错误会被放大。*
+>
+> **产出物是一个数字**:全程累计耗时 = RTO 的第一个真实值。`dr-plan.md` §3 那格空到今天。
+
+## 演练前:三条纪律
+
+1. **用测试子域,不要用 `mica.cloudcele.com`。** Let's Encrypt 对同一组域名每周只发
+   5 张重复证书,反复演练会撞上限 —— 届时机器起来了却**没有 TLS**,而那是真出事时最
+   不需要遇到的问题。建议 `dr.cloudcele.com` + `s3.dr.cloudcele.com`。
+2. **不碰生产。** 全程只读生产的**备份仓库**(OSS),不 ssh 生产、不改生产 DNS。
+3. **每步记时间。** 手机秒表或 `date` 都行,填进下面的表。
+
+## 演练前:把这些准备好(缺一样就会卡在半路)
+
+| 需要 | 从哪来 | 缺了会怎样 |
+| --- | --- | --- |
+| 一台干净 ECS(2C4G 起,Ubuntu 22.04+) | 控制台手工开 | —— |
+| SSH 公钥**在创建时注入** | ECS 密钥对 | 先有鸡还是先有蛋:进不去机器 |
+| 测试域名两条 A 记录 | 你的 DNS | ACME 签不出证书 |
+| `RUSTIC_PASSWORD` | 密码管理器(节点 `.env.secrets` 里叫 **`MICA_BACKUP_PASSWORD`**) | **拿到一个完好但永远打不开的仓库** |
+| OSS 读凭据 | 密码管理器 | 读不到备份 |
+| `.env` / `.env.secrets` 全套键 | 密码管理器 | **它们不在任何备份里**(`dr-plan` §2.2) |
+
+`.env.secrets` 的键名(值不在这里):
+
+```
+JWT_SECRET  POSTGRES_PASSWORD  S3_ACCESS_KEY  S3_SECRET_KEY
+MICA_BACKUP_TOKEN  MICA_BACKUP_PASSWORD  OSS_ACCESS_KEY_ID  OSS_SECRET_ACCESS_KEY
+MICA_MAIL_ACCESS_KEY_ID  MICA_MAIL_ACCESS_KEY_SECRET  MICA_BACKUP_PGURL
+RUSTFS_S3_ACCESS_KEY_ID  RUSTFS_S3_SECRET_ACCESS_KEY
+```
+
+> ⚠️ `RUSTFS_S3_*` 必须与 `S3_*` **相同** —— 只有一个 RustFS,它只认一对 key。
+> 两套名字曾经漂移,rclone 因此 403 了很久(`dr-plan` §8 #4)。v0.13.39 起 compose
+> 默认让前者取后者,所以**新装机可以整个不填 `RUSTFS_S3_*`**。
+
+非机密配置(可直接抄):
+
+```
+MICA_REGISTRY=registry.cn-shenzhen.aliyuncs.com/willspace
+OSS_BUCKET=mica-backup-cloudcele        OSS_BLOB_BUCKET=mica-backup-cloudcele
+OSS_ENDPOINT=https://oss-cn-shenzhen.aliyuncs.com
+OSS_REGION=oss-cn-shenzhen              OSS_ROOT=mica
+BACKUP_HOUR=3                           TZ=Asia/Shanghai
+TRAEFIK_IMAGE_TAG=traefik:v3.6.10
+DOMAIN=<测试域名>                        S3_DOMAIN=s3.<测试域名>
+MICA_VERSION=v0.13.39
+```
+
+---
+
+## 步骤
+
+### 0. `[推演]` DNS 先行 —— 顺序错了会静默烧掉签发次数
+
+把测试域名的两条 A 记录指向新机器 IP,**在起 Traefik 之前**。ACME 用 TLS-ALPN-01
+挑战打 :443,域名没解析过来就签不出证书,而它**不会响亮地失败**,只会安静地重试。
+
+```bash
+dig +short dr.cloudcele.com          # 应返回新机 IP
+dig +short s3.dr.cloudcele.com
+```
+
+**判据**:两条都返回新机 IP 才继续。
+**实际**:____  **耗时**:____
+
+### 1. `[推演]` 装底座
+
+```bash
+curl -fsSL https://get.docker.com | sh
+mkdir -p /data/mica
+```
+
+**判据**:`docker compose version` 有输出。
+**实际**:____  **耗时**:____
+
+> 这一层今天完全没有自动化 —— `ansible/deploy.yml` 只**更新**已有栈,它自己写着
+> CI「never install it」。这正是 `cd-plan` §3 说的 provisioning 缺口。
+
+### 2. `[推演]` 建外部网络 + 起 Traefik
+
+```bash
+docker network create traefik-network        # 少这一步,mica 栈直接起不来
+mkdir -p /data/traefik && cd /data/traefik
+# 从仓库取 deploy/traefik/docker-compose.yml,写 .env(见上面的非机密配置 + ACME 邮箱)
+docker compose up -d
+docker compose logs traefik | grep -i acme | tail
+```
+
+**判据**:容器 healthy,日志里没有反复的 ACME 失败。
+**实际**:____  **耗时**:____
+
+### 3. `[推演]` 放配置与凭据
+
+```bash
+cd /data/mica
+# docker-compose.yaml 从 tag 取,和生产同一份:
+git show v0.13.39:deploy/docker-compose.yml > docker-compose.yaml
+# .env(非机密)与 .env.secrets(密码管理器)手工写
+chmod 600 .env.secrets
+```
+
+**判据**:`.env.secrets` 的键都在,且 `RUSTFS_S3_*` 与 `S3_*` 一致(或干脆不写)。
+**实际**:____  **耗时**:____
+
+### 4. `[推演]` 起空栈
+
+```bash
+# ./dc 是 ansible 生成的包装器,新机器上没有 —— 手工等价物:
+alias dc='docker compose --env-file /data/mica/.env --env-file /data/mica/.env.secrets'
+dc up -d
+```
+
+> **不要用裸 `docker compose`。** 它只自动读 `.env`,而凭据在 `.env.secrets`;
+> compose 里写的是 `${VAR:-默认}` 不是 `${VAR:?}`,所以缺了**不报错**,而是拿默认值
+> 把库 initdb 出来 —— 一颗要到下次部署才炸的雷(`upgrade-infra.md` 有完整故事)。
+
+**判据**:`dc ps` 全部 running;`curl -s localhost:8080/api/health` 报对版本。
+**实际**:____  **耗时**:____
+
+### 5. `[推演]` 灌数据库
+
+```bash
+dc exec backup rustic snapshots --filter-label _pgdump | grep -E "^\| [0-9a-f]{8}"
+```
+
+> **别 `tail` 取最新** —— 输出按 hostname 分组(容器 id 每次部署都变),`tail` 只会
+> 给你最后一组。要 grep 出所有行再看日期。2026-08-29 我因此连续两次报错了中断时长
+> (`dr-plan` §8.2)。
+
+```bash
+dc exec backup rustic restore latest /tmp/pg --filter-label _pgdump
+dc exec backup sh -c 'head -3 /tmp/pg/mica.sql; grep -c "^COPY public\." /tmp/pg/mica.sql'
+dc exec backup cat /tmp/pg/mica.sql > /tmp/mica.sql
+dc exec -T postgres psql -U mica -d mica -v ON_ERROR_STOP=1 < /tmp/mica.sql
+shred -u /tmp/mica.sql     # 明文全库,含口令 hash —— 用完即毁
+```
+
+**判据**:`COPY public.` 段数 ≥ 21;导入无 ERROR。
+**实际**:____  **耗时**:____
+
+### 6. `[推演]` 灌对象字节(图片)
+
+```bash
+dc exec backup rclone --config /etc/rclone/rclone.conf \
+  copy ossblob:mica-backup-cloudcele/mica-blobs rustfs:mica --transfers 4 --stats 30s
+```
+
+**判据**:传输完成、无 403。
+**实际**:____  **耗时**:____
+
+> 403 打在**源**还是**目的**,含义完全不同:源(`rustfs:`) = 本地那对凭据不对;
+> 目的(`ossblob:`) = OSS 凭据不对。看清报错里的 bucket 名再动手。
+
+### 7. `[推演]` 核验(版本号证明不了数据回来了)
+
+```bash
+curl -s https://dr.cloudcele.com/api/health     # 版本
+curl -s https://dr.cloudcele.com/api/ready      # 就绪
+```
+
+然后**用浏览器真的看一眼**:
+
+- [ ] 能用生产的账号密码登录(证明 users 表回来了)
+- [ ] 侧栏工作区数量与生产一致
+- [ ] 打开一篇**带图片**的页面,图能显示(证明第 6 步有效)
+- [ ] 搜索一个词,结果与生产一致(证明正文与索引都在)
+- [ ] 打开一篇页面,历史/评论还在(证明 CRDT 与关联表回来了)
+
+**实际**:____  **耗时**:____
+
+---
+
+## 走完之后
+
+**累计耗时 = ____** ← 填进 `dr-plan.md` §3 的 RTO 那格,并把该节的「未实测」改掉。
+这是这次演练唯一的、也是最重要的产出。
+
+然后:
+
+1. 把每一步的 `[推演]` 改成 `[已验证]`,或写下它实际是怎么失败的。
+2. **卡住的地方就是自动化的清单** —— 那些差异才是 OpenTofu / Ansible 真正要处理的
+   东西,而不是把这份文档照着翻译一遍。
+3. 删掉演练机器与弹性 IP,**当天做** —— 失败的演练最容易留下还在计费的资源。
+4. 删掉测试域名的 A 记录。
+
+## 已知会卡住的地方(先说,免得你以为是自己弄错了)
+
+| 地方 | 现象 | 为什么 |
+| --- | --- | --- |
+| 第 1 步 | 全靠手打 | provisioning 层不存在,这正是演练要量化的缺口 |
+| 第 2 步 | 忘了建网络,mica 栈起不来 | compose 声明 `external: true` |
+| 第 4 步 | 用裸 `docker compose` → 库用默认口令建出来 | 生产踩过一次 |
+| 第 5 步 | `tail` 看快照 → 拿到旧的那组 | 按 hostname 分组 |
+| 第 6 步 | rclone 403 | 两对凭据是否一致 |
+| 全程 | ssh 太密被上游限流 | 一次 ssh 里用 heredoc 跑完一组命令(`dr-plan` §9) |
