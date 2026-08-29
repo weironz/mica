@@ -60,6 +60,17 @@ all GETs — a **read-scoped** token suffices.
   so a single restore point covers both. The DB dump is **only taken when
   `MICA_BACKUP_PGURL` is set** — unset, the run logs a `WARN` and produces a
   content-only backup (it never silently drops the DB image).
+- **The instance's own credentials** — `.env.secrets`, mounted read-only into
+  the backup container and snapshotted under its own lineage (`--label
+  _config`). Without it a rebuilt machine reaches a running, EMPTY stack and
+  stops there: putting the data back needs credentials that otherwise exist
+  only in somebody's password manager. This leg is **skipped, and a skipped leg
+  fails the run**, when the file is not mounted.
+
+  One thing it cannot do, by construction: `RUSTIC_PASSWORD` opens this
+  repository and is inside that file, so a copy in the repository cannot help
+  you open the repository. **That one password still has to be kept somewhere
+  else** — it is the only one that does.
 
 ## Aliyun OSS setup (one-time)
 
@@ -168,6 +179,18 @@ Find a workspace's id (the `--label`/`--filter-label` value) in `rustic snapshot
 To put content back into a Mica instance, re-import each workspace's tree (the
 app's Import / the `/api/workspaces/import` endpoint). Recreate user accounts
 separately — they are not part of a content backup.
+
+## Restore the instance's credentials
+
+Do this FIRST in a rebuild — the steps below need them.
+
+```bash
+rustic restore latest /tmp/cfg --filter-label _config
+install -m 600 /tmp/cfg/etc/mica/env.secrets /data/mica/.env.secrets
+```
+
+`RUSTIC_PASSWORD` is what you just used to open the repository, so it comes from
+wherever you keep it, not from here.
 
 ## Restore the database from a `pg_dump` (full-instance DR)
 

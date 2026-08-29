@@ -315,6 +315,24 @@ services:
       KEEP_MONTHLY: ${KEEP_MONTHLY:-6}
     volumes:
       - mica-prod-backup:/var/lib/mica/export
+      # The credentials, read-only, so the backup can include them. Until
+      # v0.13.40 this instance's .env.secrets was backed up nowhere: a rebuilt
+      # machine could reach a running, EMPTY stack and then stop, because
+      # restoring the data needs credentials that lived only in a password
+      # manager. See crates/cli/src/backup.rs (leg 3c) for what this does and
+      # does not solve — RUSTIC_PASSWORD is in this file and also opens the
+      # repository holding it, so that one still has to be carried out of band.
+      #
+      # A HOST PATH, not a named volume: the file is created once by a human
+      # beside the compose file and is never written by anything. `:ro` because
+      # nothing in the container has any business changing it.
+      #
+      # ⚠️ If ./.env.secrets does not exist, Docker creates a DIRECTORY with that
+      # name — and `--env-file .env.secrets` then fails on every later command.
+      # Only reachable through `--profile backup`, which needs credentials in
+      # that file anyway, and ansible/deploy.yml asserts it exists before it
+      # touches anything. Create the file first if you bring this up by hand.
+      - ./.env.secrets:/etc/mica/env.secrets:ro
 
 # No scraper here on purpose. The api exposes `/metrics` (Prometheus text
 # format, on the compose network only — see crates/api-server/src/metrics.rs);

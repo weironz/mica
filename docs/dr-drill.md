@@ -26,10 +26,12 @@
 | 测试域名两条 A 记录 | 你的 DNS | ACME 签不出证书 |
 | `RUSTIC_PASSWORD` | 密码管理器(节点 `.env.secrets` 里叫 **`MICA_BACKUP_PASSWORD`**) | **拿到一个完好但永远打不开的仓库** |
 | OSS 读凭据 | 密码管理器 | 读不到备份 |
-| `.env` / `.env.secrets` 全套键 | 密码管理器 | **它们不在任何备份里**(`dr-plan` §2.2) |
+| **只要 `MICA_BACKUP_PASSWORD` 一个** | 密码管理器 / GitHub Secrets | 打不开仓库。**其余 12 个键 v0.13.40 起在备份里**(`_config` lineage),这一个不可能在里面 —— 它就是开锁的那把 |
 | 阿里云可用额度 **≥ 100 元** | 充值 | **开不出按量付费实例**——实测拦在这里(见步骤 0) |
 
-`.env.secrets` 的键名(值不在这里):
+`.env.secrets` 的键名(值不在这里)。**演练不需要生产的原值** —— 除了
+`MICA_BACKUP_PASSWORD` 和 OSS 读凭据,其余都可以当场 `openssl rand` 生成:它们只决定
+这台机器**怎么初始化自己**,不影响能不能把生产数据读回来:
 
 ```
 JWT_SECRET  POSTGRES_PASSWORD  S3_ACCESS_KEY  S3_SECRET_KEY

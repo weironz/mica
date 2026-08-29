@@ -260,6 +260,13 @@ fn run_tool(bin: &str, args: &[&str], what: &str) -> Result<()> {
   Ok(())
 }
 
+/// Where the node's credentials file is mounted into this container, read-only.
+///
+/// A constant and not an env var on purpose: WHICH path it lands on is compose's
+/// business, and another knob here is another thing that can be pointed at the
+/// wrong file — silently backing up an empty one.
+const CONFIG_FILE: &str = "/etc/mica/env.secrets";
+
 const RUSTIC_CONF: &str = "/etc/rustic/rustic.toml";
 const RCLONE_CONF: &str = "/etc/rclone/rclone.conf";
 
@@ -602,6 +609,55 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
     )?;
   }
 
+  // 3c) The credentials themselves — the one class of thing that was backed up
+  //     NOWHERE. dr-plan.md §2.2 named it in July ("不备这类,前两类备得再好也
+  //     白搭") and nothing was done, because the cost of the gap is invisible
+  //     until the day you need it. The 2026-08-29 drill made it concrete: a
+  //     rebuilt node got all the way to a running, empty stack and then stopped
+  //     dead, because restoring the DATA needs credentials that existed only in
+  //     one person's password manager.
+  //
+  //     WHAT THIS CANNOT SOLVE, stated plainly: RUSTIC_PASSWORD opens this
+  //     repository and it is inside this file. A copy in the repo cannot help
+  //     you open the repo — the combination is in the safe. So it still has to
+  //     be carried out of band; what this leg buys is that it is the ONLY one
+  //     that must be, instead of thirteen. (2026-08-29: the carried copy lives
+  //     in GitHub Secrets, so the recovery path needs no human at all — which
+  //     also means whoever holds that repository holds the data. That trade is
+  //     recorded in dr-plan §2.2, not made silently here.)
+  //
+  //     The file is stored as-is: rustic encrypts the whole repository, so these
+  //     bytes are exactly as exposed as the documents already beside them.
+  if Path::new(CONFIG_FILE).is_file() {
+    log("snapshot credentials → label=_config");
+    run_tool(
+      &settings.rustic,
+      &[
+        "backup",
+        CONFIG_FILE,
+        "--label",
+        "_config",
+        "--tag",
+        "config",
+        "--tag",
+        "mica",
+      ],
+      "rustic backup (config)",
+    )?;
+    report.add("config", Leg::Ran);
+  } else {
+    // Skipped, therefore FAILS the run by default (see `verdict`). That is the
+    // point: an instance whose credentials are backed up nowhere cannot be
+    // rebuilt from its backups, and finding that out during the rebuild is
+    // exactly the failure mode this whole module exists to prevent.
+    report.add(
+      "config",
+      Leg::skipped(format!(
+        "{CONFIG_FILE} is not mounted — this instance's credentials are backed up          NOWHERE, so a rebuilt machine cannot be handed them back. Mount          .env.secrets there (deploy/docker-compose.yml does)."
+      )),
+    );
+  }
+
   // 4) Object bytes, S3 → S3, DELIBERATELY NOT THROUGH RUSTIC. Blobs are
   //    content-addressed and immutable — the app never rewrites a key — so there
   //    is no "the version from three days ago" to restore, and a mirror IS a
@@ -797,6 +853,24 @@ mod tests {
   #[test]
   fn a_full_run_passes() {
     assert!(verdict(&report(&[("content", None), ("database", None)]), false).is_ok());
+  }
+
+  /// The credentials leg has to fail LOUDLY when it is not configured, and this
+  /// pins that rather than trusting it to stay true. An instance whose
+  /// .env.secrets is backed up nowhere cannot be rebuilt from its backups at
+  /// all — the 2026-08-29 drill reached a running, empty stack and stopped
+  /// there. A silent skip would report that instance as fully backed up, which
+  /// is the exact shape of the failure this module was written after.
+  #[test]
+  fn an_unmounted_credentials_file_fails_the_run() {
+    let r = report(&[
+      ("content", None),
+      ("database", None),
+      ("config", Some("/etc/mica/env.secrets is not mounted")),
+    ]);
+    let err = verdict(&r, false).unwrap_err().to_string();
+    assert!(err.contains("config"), "must name the leg: {err}");
+    assert!(err.contains("not mounted"), "must give the reason: {err}");
   }
 
   /// A workspace listed by the export but never written was a log line and
