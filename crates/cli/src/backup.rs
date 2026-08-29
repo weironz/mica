@@ -271,7 +271,7 @@ fn tool_stdout(bin: &str, args: &[&str], what: &str) -> Result<String> {
 /// Hand-parsed rather than pulling in serde for two integers: this runs in the
 /// backup image, and the shape is two fields of a one-line object.
 fn rclone_size(rclone: &str, remote: &str) -> Result<(u64, u64)> {
-  let out = tool_stdout(rclone, &["size", "--json", remote], "rclone size")?;
+  let out = tool_stdout(rclone, &rclone_args(&["size", "--json", remote]), "rclone size")?;
   parse_rclone_size(&out)
     .with_context(|| format!("could not read count/bytes out of `rclone size --json {remote}`: {out}"))
 }
@@ -285,6 +285,23 @@ fn parse_rclone_size(out: &str) -> Option<(u64, u64)> {
     rest[..end].parse().ok()
   };
   Some((field("count")?, field("bytes")?))
+}
+
+/// Every rclone invocation, with `--config` already on it.
+///
+/// Not a convenience: `render_rclone_conf` writes to /etc/rclone/rclone.conf,
+/// which is NOT where rclone looks by default (~/.config/rclone/rclone.conf).
+/// Forgetting the flag does not fail loudly at the config layer — rclone starts
+/// fine and dies later with `didn't find section in config file`, naming the
+/// REMOTE, so it reads as "your credentials are wrong" rather than "you did not
+/// hand me the config". That is exactly how the first automated DR drill failed
+/// (2026-08-29): the backup leg had the flag, the restore leg written days
+/// later did not, and no test could see the difference because the argument
+/// list is only assembled at the call site. Now there is one call site.
+fn rclone_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
+  let mut all = vec!["--config", RCLONE_CONF];
+  all.extend_from_slice(args);
+  all
 }
 
 fn run_tool(bin: &str, args: &[&str], what: &str) -> Result<()> {
@@ -449,7 +466,7 @@ pub fn restore_objects(settings: &Settings) -> Result<()> {
   log(&format!("restore objects {src} → {dst}"));
   run_tool(
     &settings.rclone,
-    &["copy", &src, &dst, "--transfers", "8", "--stats", "30s"],
+    &rclone_args(&["copy", &src, &dst, "--transfers", "8", "--stats", "30s"]),
     "rclone copy (restore)",
   )?;
 
@@ -806,9 +823,7 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
       log(&format!("rclone copy {src} → {dst} (objects, no rustic)"));
       match run_tool(
         &settings.rclone,
-        &[
-          "--config",
-          RCLONE_CONF,
+        &rclone_args(&[
           "copy",
           &src,
           &dst,
@@ -817,7 +832,7 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
           "--stats-one-line",
           "--stats",
           "30s",
-        ],
+        ]),
         "rclone copy",
       ) {
         // Same rule as the content leg: record and carry on. This one is LAST,
@@ -996,6 +1011,20 @@ mod tests {
   /// parsing as None instead of Some(0) would turn "restored nothing" into
   /// "could not check", which reads as a tooling problem rather than as the
   /// data loss it is.
+  /// The invariant that the first automated DR drill died on: `--config` must
+  /// be on EVERY rclone invocation, because rclone's default config path is not
+  /// the one we render to. Cheap to pin, and the failure it prevents is
+  /// expensive to read — rclone names the REMOTE in the error, so a missing
+  /// config looks like wrong credentials.
+  #[test]
+  fn every_rclone_call_carries_the_config_path() {
+    let args = rclone_args(&["copy", "a:x", "b:y"]);
+    assert_eq!(&args[..2], &["--config", RCLONE_CONF]);
+    assert_eq!(&args[2..], &["copy", "a:x", "b:y"]);
+    // and it survives an empty tail
+    assert_eq!(rclone_args(&[]), vec!["--config", RCLONE_CONF]);
+  }
+
   #[test]
   fn rclone_size_json_is_read_correctly() {
     assert_eq!(
