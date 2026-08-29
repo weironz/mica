@@ -26,6 +26,7 @@
 | `RUSTIC_PASSWORD` | 密码管理器(节点 `.env.secrets` 里叫 **`MICA_BACKUP_PASSWORD`**) | **拿到一个完好但永远打不开的仓库** |
 | OSS 读凭据 | 密码管理器 | 读不到备份 |
 | `.env` / `.env.secrets` 全套键 | 密码管理器 | **它们不在任何备份里**(`dr-plan` §2.2) |
+| 阿里云可用额度 **≥ 100 元** | 充值 | **开不出按量付费实例**——实测拦在这里(见步骤 0) |
 
 `.env.secrets` 的键名(值不在这里):
 
@@ -71,6 +72,18 @@ setx ALICLOUD_ACCESS_KEY "..." ; setx ALICLOUD_SECRET_KEY "..."   # 设一次
 cd dr/aliyun && tofu init && tofu plan     # 先看一眼再花钱
 tofu apply && tofu output
 ```
+
+⚠️ **先查余额**。按量付费要求可用额度 **≥ 100 元**,不够就在 apply 的最后一步报
+`InvalidAccountStatus.NotEnoughBalance`(2026-08-29 首次 apply 实测:余额 81.93,
+网络层全建好、只有实例失败)。生产机是包年包月,余额低**不影响它跑** —— 所以这条
+在真出事之前完全不可见。
+
+```bash
+aliyun bssopenapi QueryAccountBalance --region cn-shenzhen
+```
+
+失败后**不用清理**:VPC / 交换机 / 安全组 / 密钥对都不计费,充值后再 `tofu apply`
+会认出它们已存在,只补那台机器。
 
 > 本机先 `pwsh` 进 PowerShell 7 —— Windows PowerShell 5.1 与 cmd 不认 `&&`。
 
