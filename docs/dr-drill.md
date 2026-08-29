@@ -21,12 +21,16 @@
 
 ## 演练前:把这些准备好(缺一样就会卡在半路)
 
+> **完整的前置条件清单在 [`dr-plan.md` §9](dr-plan.md)** —— 那一节收的是「平时为真、
+> 用时才验」那一类:余额、GitHub Secret、私钥、备份新鲜度、域名控制权。每条配一条
+> 可执行的检查命令。下表是这次演练直接要用到的那几样。
+
 | 需要 | 从哪来 | 缺了会怎样 |
 | --- | --- | --- |
 | 测试域名两条 A 记录 | 你的 DNS | ACME 签不出证书 |
 | `RUSTIC_PASSWORD` | 密码管理器(节点 `.env.secrets` 里叫 **`MICA_BACKUP_PASSWORD`**) | **拿到一个完好但永远打不开的仓库** |
 | OSS 读凭据 | 密码管理器 | 读不到备份 |
-| **只要 `MICA_BACKUP_PASSWORD` 一个** | 密码管理器 / GitHub Secrets | 打不开仓库。**其余 12 个键 v0.13.40 起在备份里**(`_config` lineage),这一个不可能在里面 —— 它就是开锁的那把 |
+| **只要 `MICA_BACKUP_PASSWORD` 一个** | 密码管理器 **+ GitHub Secrets**(`gh secret set MICA_BACKUP_PASSWORD --repo weironz/mica`) | 打不开仓库。**其余 12 个键 v0.13.40 起在备份里**(`_config` lineage),这一个不可能在里面 —— 它就是开锁的那把。存进 Secrets 是为了让恢复链路**不依赖人在场** |
 | 阿里云可用额度 **≥ 100 元** | 充值 | **开不出按量付费实例**——实测拦在这里(见步骤 0) |
 
 `.env.secrets` 的键名(值不在这里)。**演练不需要生产的原值** —— 除了
