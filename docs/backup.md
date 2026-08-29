@@ -217,10 +217,13 @@ importer and not a Mica-specific round trip: page ids, CRDT edit history,
 comments, share links, users and memberships. Those live only in the database.
 Re-imported pages are NEW pages that happen to have the same text.
 
-⚠️ **This second segment has never been walked.** Segment one — getting the tree
-out of the repository — was verified on 2026-08-30; turning that tree back into a
-Mica workspace has not been, and carries exactly the status every step of
-`docs/dr-drill.md` carried before 2026-08-29.
+**Its status, stated exactly** (decided 2026-08-30): the importer itself is a
+used, working feature — the operator has imported archives by hand. What has
+never been run as one exercise is the CHAIN: restore a lineage out of the
+repository, zip it, import it, check the result against the original. That is
+deliberately not automated, because **recovery is the database plus the objects**
+— the path the drill covers. This leg is the fallback for when that path is gone,
+and the reason your notes do not need Mica to be readable.
 
 ## Restore the instance's credentials
 
