@@ -27,7 +27,12 @@
 # and a runbook nobody has walked should not be frozen into code — the code
 # would preserve the guesses and stop anyone from reading the doc.
 - name: Deploy Mica
-  hosts: mica-prod
+  # Defaults to prod, which is what scripts/deploy-prod.sh wants and passes
+  # nothing for. `-e target=mica-dr` points the SAME playbook at the DR drill
+  # machine — reusing this rather than hand-rolling a second bring-up path is
+  # the point: a recovery procedure that is not the everyday procedure is a
+  # procedure nobody has tested.
+  hosts: "{{ target | default('mica-prod') }}"
   gather_facts: false
 
   # Every docker step is a community.docker module rather than `command: docker
@@ -204,11 +209,36 @@
     # after the compose copy, so it could refuse a deploy having already replaced
     # the node's compose. And the restore point below needs to know which version
     # is live in order to ask whether this release adds migrations.
+    # A node with NO .env at all is a different thing from a node whose .env
+    # lost its MICA_VERSION line, and only the second one is a problem. The
+    # first is a machine that has never been deployed to — the case the whole
+    # DR plan turns on, and the case this playbook refused outright until
+    # 2026-08-29, when the drill actually pointed it at a fresh machine and it
+    # died on `slurp` before any assertion could explain why.
+    - name: Is there anything deployed here yet?
+      ansible.builtin.stat:
+        path: "{{ env_file }}"
+      register: env_stat
+      check_mode: false
+
+    - name: Name that case
+      ansible.builtin.set_fact:
+        fresh_node: "{{ not env_stat.stat.exists }}"
+
+    - name: Say so
+      ansible.builtin.debug:
+        msg: >-
+          {{ env_file }} does not exist — treating this as a FIRST deploy:
+          no version to fall back to and no restore point to take, because
+          there is nothing here yet to lose.
+      when: fresh_node | bool
+
     - name: Read the version currently deployed
       ansible.builtin.slurp:
         src: "{{ env_file }}"
       register: env_before
       check_mode: false
+      when: not fresh_node | bool
 
     - name: Remember it
       ansible.builtin.set_fact:
@@ -219,16 +249,21 @@
         # unable to resolve any image tag at all. A rollback that cannot be
         # rehearsed is a rollback nobody knows the state of.
         previous_version: >-
-          {{ (env_before.content | b64decode).splitlines()
-             | select('match', '^MICA_VERSION=') | first | default('')
-             | regex_replace('^MICA_VERSION=', '') | trim }}
+          {{ '' if fresh_node | bool else
+             ((env_before.content | b64decode).splitlines()
+              | select('match', '^MICA_VERSION=') | first | default('')
+              | regex_replace('^MICA_VERSION=', '') | trim) }}
 
+    # Still refused on an EXISTING node — that is the case the rule was written
+    # for. Relaxing it for a fresh one does not weaken it: there is no rollback
+    # target because there is nothing deployed to roll back to, and the rescue
+    # block below already guards its .env restore on the same emptiness.
     - name: There must be a version to fall back to
       ansible.builtin.assert:
-        that: previous_version | length > 0
+        that: fresh_node | bool or previous_version | length > 0
         fail_msg: >-
-          {{ env_file }} has no MICA_VERSION line, so a failed deploy would have
-          nothing to restore. Refusing before anything is changed.
+          {{ env_file }} exists but has no MICA_VERSION line, so a failed deploy
+          would have nothing to restore. Refusing before anything is changed.
 
     # ── A restore point, when this release adds migrations ───────────────────
     # Migrations ride the api image: sqlx::migrate! embeds migrations/*.sql at
@@ -253,6 +288,7 @@
       changed_when: false
       check_mode: false
       failed_when: false
+      when: not fresh_node | bool
 
     - name: Decide whether a restore point is needed
       ansible.builtin.set_fact:
@@ -262,9 +298,13 @@
         # published. Treating that as "no migrations" would skip the backup in
         # precisely the case where least is known, so unknown counts as yes. The
         # cost of a wrong yes is some node IO; of a wrong no, the database.
+        # A fresh node is the one case where "unknown" does NOT mean yes: there
+        # is no database to dump, and asking for one would fail the deploy on
+        # `docker exec mica-postgres-1` against a container that does not exist.
         needs_restore_point: >-
-          {{ migration_diff.rc != 0
-             or (migration_diff.stdout_lines | default([]) | length) > 0 }}
+          {{ false if fresh_node | bool else
+             (migration_diff.rc != 0
+              or (migration_diff.stdout_lines | default([]) | length) > 0) }}
 
     - name: Say what that means
       ansible.builtin.debug:

@@ -196,33 +196,43 @@ ssh 会拒绝用)、装 `ansible/requirements.yml` 里的 collection、跑 playb
 > 3. **traefik `.env` 里 htpasswd 哈希的 `$` 会被 compose 当变量吃掉** ——
 >    `The "apr1" variable is not set`。凭据不是坏得响亮,是被**悄悄改错**。模板里 `$` → `$$`。
 
-### 4. `[推演]` 放配置与凭据
+### 4-5. `[已验证 2026-08-29]` 配置 + 起栈 —— **复用 `deploy.yml`,不另写一套**
+
+原计划是手工写 `.env` / 取 compose / `docker compose up`。不该这么做:**一条不是
+日常流程的恢复流程,是一条没人测过的流程**。日常发版跑的就是 `ansible/deploy.yml`,
+它已经会做全部三件事(从 tag 取 compose、按 host_vars 渲染 `.env`、起栈)。
 
 ```bash
-cd /data/mica
-# docker-compose.yaml 从 tag 取,和生产同一份:
-git show v0.13.39:deploy/docker-compose.yml > docker-compose.yaml
-# .env(非机密)与 .env.secrets(密码管理器)手工写
-chmod 600 .env.secrets
+git show v0.13.39:deploy/docker-compose.yml > /tmp/compose.yml
+DR_HOST=<IP> ansible-playbook -i ansible/inventory.yml ansible/deploy.yml -e target=mica-dr -e version=0.13.39 -e compose_src=/tmp/compose.yml
 ```
 
-**判据**:`.env.secrets` 的键都在,且 `RUSTFS_S3_*` 与 `S3_*` 一致(或干脆不写)。
-**实际**:____  **耗时**:____
+**为此改了 `deploy.yml` 两处**(都不削弱它对生产的保护):
 
-### 5. `[推演]` 起空栈
+1. `hosts` 从写死 `mica-prod` 改成 `{{ target | default('mica-prod') }}` ——
+   `scripts/deploy-prod.sh` 什么都不传,行为一字不变。
+2. **它以前拒绝全新节点**,而且拒得很难看:`slurp` 读不到 `.env` 就直接炸,断言根本
+   没机会说话。现在先 `stat` 分辨两种情况 —— **「压根没有 `.env`」(全新机器)** 与
+   **「`.env` 在但丢了 `MICA_VERSION`」(被手改坏的老节点)**,只放行前者。
+   后者仍然拒绝,因为那条规则本来就是为它写的。同时全新节点**不取还原点**:没有库
+   可 dump,取了只会在 `docker exec mica-postgres-1` 上失败。
 
-```bash
-# ./dc 是 ansible 生成的包装器,新机器上没有 —— 手工等价物:
-alias dc='docker compose --env-file /data/mica/.env --env-file /data/mica/.env.secrets'
-dc up -d
-```
+> 这是这次演练**改动生产路径**的唯一一处,而它恰恰是最该改的:容灾要用的那条路,
+> 在今天之前从来没被走过,于是"能重建"只是推断。
 
-> **不要用裸 `docker compose`。** 它只自动读 `.env`,而凭据在 `.env.secrets`;
-> compose 里写的是 `${VAR:-默认}` 不是 `${VAR:?}`,所以缺了**不报错**,而是拿默认值
-> 把库 initdb 出来 —— 一颗要到下次部署才炸的雷(`upgrade-infra.md` 有完整故事)。
+**凭据**:`.env.secrets` 仍是手工的(ansible 永不读写它,`deploy.yml` 只断言它存在)。
+**演练不需要生产的原值** —— 这点原来的准备清单说错了。`JWT_SECRET` / `POSTGRES_PASSWORD`
+/ `S3_*` 都可以当场 `openssl rand` 生成:它们只决定这台机器**怎么初始化自己**,不影响
+能不能把生产数据读回来。真正不可替代的只有两样,见第 6 步。
 
-**判据**:`dc ps` 全部 running;`curl -s localhost:8080/api/health` 报对版本。
-**实际**:____  **耗时**:____
+**判据**:`PLAY RECAP` `failed=0`;`./dc ps` 全 running;`/api/health` 报对版本。
+**实际**:`ok=31 changed=6 failed=0`;api/postgres 均 healthy,web/rustfs running;
+`https://mica-dr.cloudcele.com/api/health` → `{"status":"ok","version":"0.13.39"}`,
+`/api/ready` → 200。
+**耗时**:**约 1 分钟**。
+
+> `localhost:8080` 空响应是对的 —— api 不发布到宿主端口,只经 traefik 进出。
+> 别把它当成故障。
 
 ### 6. `[推演]` 灌数据库
 
