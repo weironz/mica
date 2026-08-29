@@ -190,9 +190,20 @@ jobs:
 
       # Starting the stack ran the migrations, so the database is NOT empty and a
       # pg_dump cannot load over it (`type "object_type" already exists`).
-      # Emptying it here is the path the hand-walked drill actually took. The
-      # tidier alternative — teach deploy.yml to start only the data plane — is
-      # deliberately not invented before this job has run even once.
+      # Emptying it here is the path the hand-walked drill actually took.
+      #
+      # Reviewed and KEPT 2026-08-29 rather than replaced with a "data plane
+      # only" mode on deploy.yml. The objection was that the app is briefly up
+      # against an empty database — and that only matters if somebody can reach
+      # it. Nobody can: the machine answers on its own drill name, and pointing
+      # the PRODUCTION name here is the last step of a real recovery and a human
+      # one. So the window exists on a name no user has.
+      #
+      # ⚠️ THAT is the load-bearing assumption. Automate the production DNS
+      # switch into this job and the window becomes real: visitors would see an
+      # empty Mica, and could sign up into a database that is about to be
+      # dropped. If that day comes, deploy.yml needs the data-plane-only mode
+      # first — not after.
       - name: Restore the database
         env:
           DR_HOST: ${{ steps.infra.outputs.ip }}
