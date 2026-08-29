@@ -118,7 +118,7 @@ const String kDefaultCloudUrl = String.fromEnvironment('MICA_CLOUD_URL');
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.13.39';
+const String kAppVersion = '0.13.40';
 
 /// Editor page (content column) width, as 11 discrete steps like AppFlowy —
 /// `680 · 800 · … · 1880` (min + max + 10 divisions, step 120). The DEFAULT and
