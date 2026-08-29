@@ -1,7 +1,7 @@
 # Production stack behind an EXISTING Traefik (label routing + Let's Encrypt),
 # for multi-app servers — no host ports published; HTTPS everywhere.
 #
-#   .env.prod: DOMAIN, S3_DOMAIN, S3_ACCESS_KEY, S3_SECRET_KEY, MICA_VERSION
+#   .env.prod: DOMAIN, S3_DOMAIN, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, MICA_VERSION
 #
 # JWT_SECRET and POSTGRES_PASSWORD are NOT in that list any more: the server
 # mints its own signing key, and postgres publishes no port so its password is
@@ -72,8 +72,8 @@ services:
       # key, and that key is published in this repository. That is a deliberate
       # trade for a one-command quickstart, NOT a safe default: change both on
       # any instance whose :9000 is reachable by people you do not trust.
-      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-mica}
-      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-mica-default-not-a-secret}
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-mica}}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-mica-default-not-a-secret}}
       RUSTFS_CORS_ALLOWED_ORIGINS: "https://${DOMAIN:?set in .env.prod}"
     volumes:
       - mica-prod-rustfs:/data
@@ -129,8 +129,28 @@ services:
       # Same address the backup sidecar already uses below.
       S3_INTERNAL_ENDPOINT: http://rustfs:9000
       S3_BUCKET: ${S3_BUCKET:-mica}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-mica}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-mica-default-not-a-secret}
+      # RENAMED 2026-08-29, with the old spellings kept as a fallback.
+      #
+      # Four credential pairs of ours had grown three different suffix styles —
+      # `S3_ACCESS_KEY`/`S3_SECRET_KEY`, `OSS_ACCESS_KEY_ID`/`OSS_SECRET_ACCESS_KEY`,
+      # and `MICA_MAIL_ACCESS_KEY_ID`/`MICA_MAIL_ACCESS_KEY_SECRET`. Telling them
+      # apart under pressure is exactly what a recovery asks of you, so they all
+      # read `*_ACCESS_KEY_ID` / `*_SECRET_ACCESS_KEY` now — the S3 spelling two
+      # of the four already used.
+      #
+      # NOT renamed, because those names are not ours: `RUSTFS_ACCESS_KEY` /
+      # `RUSTFS_SECRET_KEY` are read by the RustFS image, and `ALICLOUD_ACCESS_KEY`
+      # / `ALICLOUD_SECRET_KEY` by the OpenTofu provider. Renaming them would
+      # simply mean nothing reads them.
+      #
+      # The `${new:-${old:-default}}` chain is what keeps this from being a
+      # breaking change: every existing .env.secrets keeps working untouched, and
+      # a node that sets both gets the new one (measured, all three cases). It
+      # could go once operators have renamed their files — but it costs nothing
+      # to leave in, and a self-hoster upgrading a year from now would rather it
+      # were there.
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-mica}}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-mica-default-not-a-secret}}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_PRESIGN_TTL_SECONDS: "604800"
       # Per-FILE ceiling (the workspace TOTAL is MICA_WORKSPACE_QUOTA_BYTES
@@ -206,7 +226,7 @@ services:
       MICA_MAIL_FROM: "${MICA_MAIL_FROM:-}"
       MICA_MAIL_FROM_NAME: "${MICA_MAIL_FROM_NAME:-}"
       MICA_MAIL_ACCESS_KEY_ID: "${MICA_MAIL_ACCESS_KEY_ID:-}"
-      MICA_MAIL_ACCESS_KEY_SECRET: "${MICA_MAIL_ACCESS_KEY_SECRET:-}"
+      MICA_MAIL_SECRET_ACCESS_KEY: "${MICA_MAIL_SECRET_ACCESS_KEY:-${MICA_MAIL_ACCESS_KEY_SECRET:-}}"
       MICA_MAIL_REGION: "${MICA_MAIL_REGION:-cn-hangzhou}"
       MICA_MAIL_ENDPOINT: "${MICA_MAIL_ENDPOINT:-}"
     depends_on:
@@ -301,8 +321,8 @@ services:
       # while the api using S3_* worked fine and nothing looked wrong
       # (2026-08-29, dr-plan §8). Override only if you ever give rclone its own
       # credentials, which RustFS cannot currently issue.
-      RUSTFS_S3_ACCESS_KEY_ID: ${RUSTFS_S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-}}
-      RUSTFS_S3_SECRET_ACCESS_KEY: ${RUSTFS_S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-}}
+      RUSTFS_S3_ACCESS_KEY_ID: ${RUSTFS_S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-}}}
+      RUSTFS_S3_SECRET_ACCESS_KEY: ${RUSTFS_S3_SECRET_ACCESS_KEY:-${S3_SECRET_ACCESS_KEY:-${S3_SECRET_KEY:-}}}
       RUSTFS_S3_ENDPOINT: ${RUSTFS_S3_ENDPOINT:-http://rustfs:9000}
       RUSTFS_S3_BUCKET: ${RUSTFS_S3_BUCKET:-mica}
       # Destination prefix in OSS. Kept under its own root so plain objects

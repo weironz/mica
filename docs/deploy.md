@@ -47,7 +47,7 @@ docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 > **The object-store credentials default to a value published in this
 > repository**, and `:9000` is internet-facing. That is what makes the block
 > above two lines instead of five — but on any node strangers can reach, set
-> `S3_ACCESS_KEY` and `S3_SECRET_KEY` before the first start, or anyone who
+> `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` before the first start, or anyone who
 > reads the repo can read and write your files. The api warns about it in the
 > log on every production start; see
 > [Secrets](#secrets-what-you-generate-and-what-generates-itself).
@@ -129,6 +129,33 @@ reload picks up new releases (asset files are content-hashed).
   [Bucket provisioning](bucket-provisioning-plan.md) for the branch-by-branch
   reasoning and the survey it came from.
 
+## Every credential, and who chose its name
+
+Six pairs, and they used to be spelled four different ways, which is a problem
+exactly when it is least affordable: during a recovery, deciding which key opens
+which thing. As of 2026-08-29 the four that are OURS all read
+`*_ACCESS_KEY_ID` / `*_SECRET_ACCESS_KEY`.
+
+| Pair | What it opens | Name chosen by |
+| --- | --- | --- |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | this instance's own object store (RustFS) | us |
+| `RUSTFS_S3_ACCESS_KEY_ID` / `RUSTFS_S3_SECRET_ACCESS_KEY` | the same store, as rclone's *source* when mirroring off-site. Defaults to the pair above — there is only one RustFS and it accepts one pair | us |
+| `OSS_ACCESS_KEY_ID` / `OSS_SECRET_ACCESS_KEY` | the off-site **backup bucket** (read the rustic repo, write the object mirror) | us |
+| `MICA_MAIL_ACCESS_KEY_ID` / `MICA_MAIL_SECRET_ACCESS_KEY` | Aliyun DirectMail | us |
+| `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` | what RustFS itself is configured WITH — compose sets these from `S3_*`; you never set them | **the RustFS image** |
+| `ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY` | creating machines/DNS with OpenTofu (`dr/aliyun/`). Never on the node — only on a laptop or in CI | **the OpenTofu provider** |
+
+The last two keep their spelling because renaming them would mean nothing reads
+them. That is the whole reason the set is not uniform, and it is worth knowing
+rather than rediscovering.
+
+> **Renamed 2026-08-29, and nothing breaks.** `S3_ACCESS_KEY` → `S3_ACCESS_KEY_ID`,
+> `S3_SECRET_KEY` → `S3_SECRET_ACCESS_KEY`, `MICA_MAIL_ACCESS_KEY_SECRET` →
+> `MICA_MAIL_SECRET_ACCESS_KEY`. Compose reads the new name, falls back to the
+> old, then to the default — so an existing `.env.secrets` keeps working
+> untouched, and setting both makes the new one win. Rename yours when
+> convenient; there is no deadline.
+
 ## Secrets: what you generate, and what generates itself
 
 An operator can start the stack without setting any credential. Two of the three
@@ -139,7 +166,7 @@ trade, and it is the one to read.
 | --- | --- | --- |
 | `JWT_SECRET` | **none — the server mints its own** | Yes. There is no published value to leak; every install's key differs. |
 | `POSTGRES_PASSWORD` | `mica` | Yes. Neither compose file publishes a postgres port, so the database is reachable only from the other containers on the stack's own network. |
-| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | `mica` / `mica-default-not-a-secret` | **No, not on a public node.** RustFS serves `:9000` to the internet on purpose — browsers presign against it directly — so anyone who reads this repository can read and write the files of any install that kept the default. |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | `mica` / `mica-default-not-a-secret` | **No, not on a public node.** RustFS serves `:9000` to the internet on purpose — browsers presign against it directly — so anyone who reads this repository can read and write the files of any install that kept the default. |
 
 The last row is the honest cost of a two-line quickstart: it removes the last
 thing an operator had to generate, and in exchange a node left alone has a
@@ -148,8 +175,8 @@ start while the default is in use — a risk that lives only in documentation is
 one nobody meets until it matters:
 
 ```
-S3_SECRET_KEY is the published default — anyone can read and write this
-instance's files over :9000. Set S3_ACCESS_KEY and S3_SECRET_KEY in the
+S3_SECRET_ACCESS_KEY is the published default — anyone can read and write this
+instance's files over :9000. Set S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY in the
 env file this stack was started with (openssl rand -hex 32) and restart.
 ```
 

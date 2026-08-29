@@ -207,8 +207,8 @@ impl AppState {
     // the only place it was ever mentioned.
     if config.environment == Environment::Production && mica_infra::default_s3_secret_in_use() {
       tracing::warn!(
-        "S3_SECRET_KEY is the published default — anyone can read and write this \
-         instance's files over :9000. Set S3_ACCESS_KEY and S3_SECRET_KEY in the \
+        "S3_SECRET_ACCESS_KEY is the published default — anyone can read and write this \
+         instance's files over :9000. Set S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY in the \
          env file this stack was started with (openssl rand -hex 32) and restart."
       );
     }

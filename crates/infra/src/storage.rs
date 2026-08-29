@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// The `S3_SECRET_KEY` both compose files fall back to when the operator sets
-/// none (`${S3_SECRET_KEY:-…}`).
+/// The `S3_SECRET_ACCESS_KEY` both compose files fall back to when the operator sets
+/// none (`${S3_SECRET_ACCESS_KEY:-…}`).
 ///
 /// It exists so the quickstart is one command with nothing to fill in. It is NOT
 /// a secret: it is written in this file and in a public repository, and unlike
@@ -25,7 +25,7 @@ pub const DEFAULT_S3_SECRET_KEY: &str = "mica-default-not-a-secret";
 /// Separate from [`S3Config::from_env`] so the caller can decide what to do
 /// about it — in practice, warn once at startup in production.
 pub fn default_s3_secret_in_use() -> bool {
-  env::var("S3_SECRET_KEY")
+  env::var("S3_SECRET_ACCESS_KEY")
     .map(|value| value == DEFAULT_S3_SECRET_KEY)
     .unwrap_or(false)
 }
@@ -108,8 +108,8 @@ impl S3Config {
     let endpoint = non_blank("S3_ENDPOINT")?;
     let internal_endpoint = non_blank("S3_INTERNAL_ENDPOINT");
     let bucket = non_blank("S3_BUCKET")?;
-    let access_key = non_blank("S3_ACCESS_KEY")?;
-    let secret_key = non_blank("S3_SECRET_KEY")?;
+    let access_key = non_blank("S3_ACCESS_KEY_ID")?;
+    let secret_key = non_blank("S3_SECRET_ACCESS_KEY")?;
 
     let region = env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
     let presign_ttl_seconds = env::var("S3_PRESIGN_TTL_SECONDS")

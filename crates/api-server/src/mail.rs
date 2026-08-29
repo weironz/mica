@@ -67,7 +67,7 @@ impl DirectMailMailer {
   /// required variable so the caller can log exactly what to set.
   fn from_env() -> Result<Self, &'static str> {
     let access_key_id = req_env("MICA_MAIL_ACCESS_KEY_ID")?;
-    let access_key_secret = req_env("MICA_MAIL_ACCESS_KEY_SECRET")?;
+    let access_key_secret = req_env("MICA_MAIL_SECRET_ACCESS_KEY")?;
     let from_address = req_env("MICA_MAIL_FROM")?;
     let from_alias = std::env::var("MICA_MAIL_FROM_NAME")
       .ok()

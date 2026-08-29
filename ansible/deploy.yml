@@ -147,7 +147,7 @@
           is created ONCE by a human during provisioning — a deploy that wrote a
           fresh one would silently rotate every credential and orphan the data.
           On a node that predates the split, create it from the old single .env:
-          grep -E '^(JWT_SECRET|POSTGRES_PASSWORD|S3_ACCESS_KEY|...)=' .env > .env.secrets
+          grep -E '^(JWT_SECRET|POSTGRES_PASSWORD|S3_ACCESS_KEY_ID|...)=' .env > .env.secrets
 
     # Enforced, not remembered. Nothing stops someone pasting a password into
     # host_vars — where it would be committed to a public repo — except a check

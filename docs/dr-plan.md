@@ -520,7 +520,7 @@ VM 和 k8s 上一模一样。所以边界还要再推一条 —— §7.2 说「O
 | 4 | rclone 用的 RustFS 凭据,RustFS **从没听说过** | 不明(至少早于本次) | 被 #2 #3 挡在后面,修完它们才露出来。403 打在**源头**(本地 RustFS),而 api 用另一对名字、一直正常 |
 
 **#4 是「两套名字描述同一个事实」**:只有一个 RustFS,它只接受一对 key。
-`S3_ACCESS_KEY`(api 用)和 `RUSTFS_S3_ACCESS_KEY_ID`(rclone 用)是同一个事实的两套名字,
+`S3_ACCESS_KEY_ID`(api 用)和 `RUSTFS_S3_ACCESS_KEY_ID`(rclone 用)是同一个事实的两套名字,
 于是它们漂移了 —— 而从外面看什么都正常,因为 api 那半边是对的。
 
 **四个故障是逐层剥出来的**:修好一个才看得见下一个。这本身值得记:**"修好了"不等于
@@ -566,7 +566,7 @@ VM 和 k8s 上一模一样。所以边界还要再推一条 —— §7.2 说「O
 - **门禁**(`scripts/release-check.sh`):客户端版本 < 服务端版本就拒绝发版。
   Dockerfile 里那条注释**早就写明了这条不变量**,而写明它没起任何作用。
 - **rclone 凭据不再是第二套名字**:compose 里默认取 api 那对
-  (`${RUSTFS_S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY:-}}`),节点 `.env.secrets` 已就地对齐。
+  (`${RUSTFS_S3_ACCESS_KEY_ID:-${S3_ACCESS_KEY_ID:-}}`),节点 `.env.secrets` 已就地对齐。
 - **objects 腿也解耦**:它是最后一条,`?` 过去只会跳过 retention —— 但形状相同,
   而 2026-08-29 它真的触发了。
 

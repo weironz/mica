@@ -140,7 +140,7 @@ defaulted too.
 repository, and `:9000` is internet-facing.** That is what makes the install two
 lines — and it means anyone who reads this repo can read and write the files of
 an install that kept the default. On a node strangers can reach, set
-`S3_ACCESS_KEY` and `S3_SECRET_KEY` in `.env.prod` before the first start
+`S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` in `.env.prod` before the first start
 (`openssl rand -hex 32`). The API warns in its log on every production start
 while the default is in use.
 
