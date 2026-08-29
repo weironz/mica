@@ -14,7 +14,8 @@
 
 1. **用测试子域,不要用 `mica.cloudcele.com`。** Let's Encrypt 对同一组域名每周只发
    5 张重复证书,反复演练会撞上限 —— 届时机器起来了却**没有 TLS**,而那是真出事时最
-   不需要遇到的问题。建议 `dr.cloudcele.com` + `s3.dr.cloudcele.com`。
+   不需要遇到的问题。本次用 `mica-dr.cloudcele.com` + `mica-s3.dr.cloudcele.com`,
+   **由 tofu 建**(`dr/aliyun/dns.tf`),`destroy` 时一起收走。
 2. **不碰生产。** 全程只读生产的**备份仓库**(OSS),不 ssh 生产、不改生产 DNS。
 3. **每步记时间。** 手机秒表或 `date` 都行,填进下面的表。
 
@@ -126,18 +127,32 @@ ssh root@<公网IP> 'cat /etc/os-release | head -2; nproc; free -h | head -2; df
 > 💰 **演练完当天就删** —— 实例和**弹性公网 IP 要分别删**,只删实例会留下一个还在计费
 > 的 EIP。失败的演练最容易留这种尾巴。
 
-### 1. `[推演]` DNS 先行 —— 顺序错了会静默烧掉签发次数
+### 1. `[已验证 2026-08-29]` DNS 先行 —— 顺序错了会静默烧掉签发次数
 
 把测试域名的两条 A 记录指向新机器 IP,**在起 Traefik 之前**。ACME 用 TLS-ALPN-01
 挑战打 :443,域名没解析过来就签不出证书,而它**不会响亮地失败**,只会安静地重试。
 
+**这一步也归 tofu 了**(`dns.tf`):记录跟机器同生共死,`destroy` 不会留下一条指向
+已删实例的野记录 —— 那种记录不报错,只是安静地指向后来拿到这个 IP 的别人。
+
 ```bash
-dig +short dr.cloudcele.com          # 应返回新机 IP
-dig +short s3.dr.cloudcele.com
+dig +short mica-dr.cloudcele.com          # 应返回新机 IP
+dig +short mica-s3.dr.cloudcele.com
 ```
 
+Windows 上没有 `dig`,用 `Resolve-DnsName <名字> -Server 223.5.5.5`(指定权威侧的
+公共解析器,绕开本机缓存)。
+
 **判据**:两条都返回新机 IP 才继续。
-**实际**:____  **耗时**:____
+**实际**:两条都 → `47.106.118.86`。
+**耗时**:**秒级**(`tofu apply` 建记录 1s,阿里云 DNS 立即可查)。
+
+> ⏱️ **但 TTL 是 600 秒**,而阿里云**免费版解析的下限就是 600** —— 填更小会被 API 拒。
+> 这里不影响(新名字没有旧缓存),但真恢复时改的是**已经在用的** `mica` 记录,
+> 那 10 分钟传播尾巴要算进 RTO。要更快只能上付费版解析,或者别靠 DNS 切换。
+>
+> ⚠️ 真恢复时改 `mica` 那条记录**不要交给这份 tofu** —— 归 tofu 管就意味着
+> `destroy` 会删掉生产解析。`dns.tf` 里写了这条警告。
 
 ### 2. `[推演]` 装底座
 
@@ -230,8 +245,8 @@ dc exec backup rclone --config /etc/rclone/rclone.conf \
 ### 8. `[推演]` 核验(版本号证明不了数据回来了)
 
 ```bash
-curl -s https://dr.cloudcele.com/api/health     # 版本
-curl -s https://dr.cloudcele.com/api/ready      # 就绪
+curl -s https://mica-dr.cloudcele.com/api/health     # 版本
+curl -s https://mica-dr.cloudcele.com/api/ready      # 就绪
 ```
 
 然后**用浏览器真的看一眼**:

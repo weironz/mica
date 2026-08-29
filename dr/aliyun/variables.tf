@@ -149,3 +149,43 @@ variable "instance_type_family" {
   type        = string
   default     = ""
 }
+
+variable "dns_domain" {
+  description = <<-EOT
+    主域名(不带子域)。演练的两条 A 记录建在它下面,`destroy` 时一起删。
+
+    只有域名托管在**阿里云 DNS** 时这份配置才管得着 —— 换 DNS 服务商就把
+    `dns.tf` 换掉,机器那部分不受影响。
+  EOT
+  type        = string
+  default     = "cloudcele.com"
+}
+
+variable "dns_rr" {
+  description = <<-EOT
+    应用的子域前缀,最终是 `<dns_rr>.<dns_domain>`。
+
+    ⚠️ **绝不要填生产的 `mica`**:这条记录归 tofu 管,`destroy` 会删掉它。
+    真恢复时改生产解析是控制台上的手工动作,故意不在这份配置里。
+  EOT
+  type        = string
+  default     = "mica-dr"
+}
+
+variable "dns_rr_s3" {
+  description = "对象存储的子域前缀。浏览器直接 presign 到它,所以必须是独立可解析的名字。"
+  type        = string
+  default     = "mica-s3.dr"
+}
+
+variable "dns_ttl" {
+  description = <<-EOT
+    秒。阿里云**免费版解析的下限是 600** —— 填更小会被 API 拒绝。
+
+    这不只是演练的细节:它意味着「改 DNS 切到新机器」这一步天然带着**最多 10 分钟**
+    的传播尾巴,得算进 RTO。要更快就得付费版(支持到 1 秒),或者不靠 DNS 切换
+    (浮动 IP / 负载均衡)。
+  EOT
+  type        = number
+  default     = 600
+}

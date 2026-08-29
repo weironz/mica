@@ -17,3 +17,11 @@ output "chosen" {
     disk_gib      = var.system_disk_size
   }
 }
+
+output "domains" {
+  description = "演练用的两个域名 —— 填进 .env 的 DOMAIN / S3_DOMAIN。"
+  value = {
+    DOMAIN    = "${var.dns_rr}.${var.dns_domain}"
+    S3_DOMAIN = "${var.dns_rr_s3}.${var.dns_domain}"
+  }
+}
