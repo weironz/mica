@@ -22,8 +22,6 @@
 
 | 需要 | 从哪来 | 缺了会怎样 |
 | --- | --- | --- |
-| 一台干净 ECS(2C4G 起,Ubuntu 22.04+) | 控制台手工开 | —— |
-| SSH 公钥**在创建时注入** | ECS 密钥对 | 先有鸡还是先有蛋:进不去机器 |
 | 测试域名两条 A 记录 | 你的 DNS | ACME 签不出证书 |
 | `RUSTIC_PASSWORD` | 密码管理器(节点 `.env.secrets` 里叫 **`MICA_BACKUP_PASSWORD`**) | **拿到一个完好但永远打不开的仓库** |
 | OSS 读凭据 | 密码管理器 | 读不到备份 |
@@ -59,7 +57,37 @@ MICA_VERSION=v0.13.39
 
 ## 步骤
 
-### 0. `[推演]` DNS 先行 —— 顺序错了会静默烧掉签发次数
+### 0. `[推演]` 开一台机器
+
+**每一个选择,后面都会变成 `.tf` 里的一行。** 所以边开边把「实际」栏填掉 —— 这张表
+就是将来那份 OpenTofu 配置的输入,不用再猜一遍。
+
+| 项 | 选什么 | 为什么 | 实际 |
+| --- | --- | --- | --- |
+| **地域** | **深圳(cn-shenzhen)** | 必须和备份桶同地域(`OSS_ENDPOINT` 是 `oss-cn-shenzhen`)。跨地域拉 1.5 GB 又慢又要流量费 | ____ |
+| 付费方式 | **按量付费** | 演练完就删;包年包月删不掉只能退 | ____ |
+| 规格 | **2 vCPU / 4 GiB**(如 `ecs.e-c1m2.large`) | 生产是 2 核 3.5G,演练要能代表生产 | ____ |
+| 镜像 | Ubuntu 22.04 或 24.04 LTS x64 | —— | ____ |
+| 系统盘 | **40 GiB** ESSD | 要装下:docker 镜像 ~4G + 恢复的数据 ~1.5G + 中途那份 634 MB 明文 dump。生产 `/data` 是独立 100G 盘,但那 69G 大半不是 mica 的 —— **mica 的卷加起来只有 1.5 GB**(postgres 439 MB + rustfs 1.01 GB) | ____ |
+| 数据盘 | **不要** | 演练不需要;真恢复时按生产形态挂一块再 `mkdir /data` 即可 | ____ |
+| 公网 IP | 勾选**分配公网 IPv4**,按流量计费 | ACME 与你的浏览器都要够得着 | ____ |
+| 带宽 | 峰值 5 Mbps 以上 | 要从 OSS 拉 1.5 GB;太小就是干等 | ____ |
+| 安全组 | 放行 **22 / 80 / 443** 入方向 | 80 与 443 是 ACME 与访问;少 443 证书签不出来 | ____ |
+| **密钥对** | **在创建页就选中** | ⚠️ **先有鸡还是先有蛋**:不在创建时注入公钥,机器起来你就进不去,也没法用 ansible。这是整个流程里最容易漏、且**事后补不了**的一步 | ____ |
+
+开完记下公网 IP:`____________`
+
+```bash
+ssh root@<公网IP> 'cat /etc/os-release | head -2; nproc; free -h | head -2; df -h /'
+```
+
+**判据**:能免密登录(用你选的密钥对),规格与上表一致。
+**实际**:____  **耗时**:____
+
+> 💰 **演练完当天就删** —— 实例和**弹性公网 IP 要分别删**,只删实例会留下一个还在计费
+> 的 EIP。失败的演练最容易留这种尾巴。
+
+### 1. `[推演]` DNS 先行 —— 顺序错了会静默烧掉签发次数
 
 把测试域名的两条 A 记录指向新机器 IP,**在起 Traefik 之前**。ACME 用 TLS-ALPN-01
 挑战打 :443,域名没解析过来就签不出证书,而它**不会响亮地失败**,只会安静地重试。
@@ -72,7 +100,7 @@ dig +short s3.dr.cloudcele.com
 **判据**:两条都返回新机 IP 才继续。
 **实际**:____  **耗时**:____
 
-### 1. `[推演]` 装底座
+### 2. `[推演]` 装底座
 
 ```bash
 curl -fsSL https://get.docker.com | sh
@@ -85,7 +113,7 @@ mkdir -p /data/mica
 > 这一层今天完全没有自动化 —— `ansible/deploy.yml` 只**更新**已有栈,它自己写着
 > CI「never install it」。这正是 `cd-plan` §3 说的 provisioning 缺口。
 
-### 2. `[推演]` 建外部网络 + 起 Traefik
+### 3. `[推演]` 建外部网络 + 起 Traefik
 
 ```bash
 docker network create traefik-network        # 少这一步,mica 栈直接起不来
@@ -98,7 +126,7 @@ docker compose logs traefik | grep -i acme | tail
 **判据**:容器 healthy,日志里没有反复的 ACME 失败。
 **实际**:____  **耗时**:____
 
-### 3. `[推演]` 放配置与凭据
+### 4. `[推演]` 放配置与凭据
 
 ```bash
 cd /data/mica
@@ -111,7 +139,7 @@ chmod 600 .env.secrets
 **判据**:`.env.secrets` 的键都在,且 `RUSTFS_S3_*` 与 `S3_*` 一致(或干脆不写)。
 **实际**:____  **耗时**:____
 
-### 4. `[推演]` 起空栈
+### 5. `[推演]` 起空栈
 
 ```bash
 # ./dc 是 ansible 生成的包装器,新机器上没有 —— 手工等价物:
@@ -126,7 +154,7 @@ dc up -d
 **判据**:`dc ps` 全部 running;`curl -s localhost:8080/api/health` 报对版本。
 **实际**:____  **耗时**:____
 
-### 5. `[推演]` 灌数据库
+### 6. `[推演]` 灌数据库
 
 ```bash
 dc exec backup rustic snapshots --filter-label _pgdump | grep -E "^\| [0-9a-f]{8}"
@@ -147,7 +175,7 @@ shred -u /tmp/mica.sql     # 明文全库,含口令 hash —— 用完即毁
 **判据**:`COPY public.` 段数 ≥ 21;导入无 ERROR。
 **实际**:____  **耗时**:____
 
-### 6. `[推演]` 灌对象字节(图片)
+### 7. `[推演]` 灌对象字节(图片)
 
 ```bash
 dc exec backup rclone --config /etc/rclone/rclone.conf \
@@ -160,7 +188,7 @@ dc exec backup rclone --config /etc/rclone/rclone.conf \
 > 403 打在**源**还是**目的**,含义完全不同:源(`rustfs:`) = 本地那对凭据不对;
 > 目的(`ossblob:`) = OSS 凭据不对。看清报错里的 bucket 名再动手。
 
-### 7. `[推演]` 核验(版本号证明不了数据回来了)
+### 8. `[推演]` 核验(版本号证明不了数据回来了)
 
 ```bash
 curl -s https://dr.cloudcele.com/api/health     # 版本
@@ -171,7 +199,7 @@ curl -s https://dr.cloudcele.com/api/ready      # 就绪
 
 - [ ] 能用生产的账号密码登录(证明 users 表回来了)
 - [ ] 侧栏工作区数量与生产一致
-- [ ] 打开一篇**带图片**的页面,图能显示(证明第 6 步有效)
+- [ ] 打开一篇**带图片**的页面,图能显示(证明第 7 步有效)
 - [ ] 搜索一个词,结果与生产一致(证明正文与索引都在)
 - [ ] 打开一篇页面,历史/评论还在(证明 CRDT 与关联表回来了)
 
@@ -196,9 +224,9 @@ curl -s https://dr.cloudcele.com/api/ready      # 就绪
 
 | 地方 | 现象 | 为什么 |
 | --- | --- | --- |
-| 第 1 步 | 全靠手打 | provisioning 层不存在,这正是演练要量化的缺口 |
-| 第 2 步 | 忘了建网络,mica 栈起不来 | compose 声明 `external: true` |
-| 第 4 步 | 用裸 `docker compose` → 库用默认口令建出来 | 生产踩过一次 |
-| 第 5 步 | `tail` 看快照 → 拿到旧的那组 | 按 hostname 分组 |
-| 第 6 步 | rclone 403 | 两对凭据是否一致 |
+| 第 2 步 | 全靠手打 | provisioning 层不存在,这正是演练要量化的缺口 |
+| 第 3 步 | 忘了建网络,mica 栈起不来 | compose 声明 `external: true` |
+| 第 5 步 | 用裸 `docker compose` → 库用默认口令建出来 | 生产踩过一次 |
+| 第 6 步 | `tail` 看快照 → 拿到旧的那组 | 按 hostname 分组 |
+| 第 7 步 | rclone 403 | 两对凭据是否一致 |
 | 全程 | ssh 太密被上游限流 | 一次 ssh 里用 heredoc 跑完一组命令(`dr-plan` §9) |
