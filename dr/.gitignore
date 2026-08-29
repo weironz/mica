@@ -1,0 +1,10 @@
+# provider 二进制(几百 MB)与本地 state —— 都不进仓库。
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# state 里有实例 id 与 IP;真容灾时它还会指向对象存储里的加密 state。
+# 无论如何:tfvars 可能装着凭据路径之类的本机信息,也不进。
+*.tfvars
+!*.tfvars.example
