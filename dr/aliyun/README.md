@@ -106,6 +106,32 @@ profile,填上就能用。但**默认路径是环境变量**。
           TF_ENCRYPTION: ${{ secrets.TF_ENCRYPTION }}
 ```
 
+**Action 跑完,你怎么 ssh 进去?** 两件事必须由 workflow 负责,否则机器建出来了你也
+够不着:
+
+```yaml
+      # ① 把 IP 送到你看得见的地方。runner 里的 `tofu output` 你看不到,
+      #    写进 job summary 才行(公网 IP 不是秘密,不必藏)。
+      - name: Where it is
+        working-directory: dr/aliyun
+        run: |
+          ip=$(tofu output -raw public_ip)
+          echo "### 恢复机已就绪" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "ssh root@$ip" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+```
+
+然后**在你自己的机器上**执行那条 `ssh root@<ip>` —— 用的是你本地的私钥,CI 从头到尾
+没碰过它。能进去的前提只有一个:`DR_SSH_PUBLIC_KEY` 里那把公钥,对应的私钥在你手上。
+
+② **state 必须放对象存储**(见文件顶部注释里的 `backend "oss"`)。runner 是一次性的,
+本地 state 随 job 一起消失 —— 那样机器会变成 tofu 再也管不到的孤儿,只能去控制台手删,
+`tofu destroy` 也无从谈起。这一条不是优化,是这套东西能不能收尾的前提。
+
+之后要删:再跑一次带 `destroy` 输入的 workflow,或者在本地配好同一个 backend 后
+`tofu destroy` —— 两条路操作的是同一份 state。
+
 **公钥进 CI,私钥怎么办?** 这是这套东西真正的要害:
 
 - 公钥本身不是秘密(它就是拿来公开的),放 repository variable 或 secret 都行。
