@@ -23,24 +23,19 @@ setx ALICLOUD_SECRET_KEY "你的SK"
 
 ⚠️ **`setx` 只对新开的终端生效**,当前这个窗口读不到。**关掉,重开一个**,再继续:
 
-```
+```bash
 # 3) 公钥(没有就先 ssh-keygen -t ed25519)
 ls ~/.ssh/id_rsa.pub
 
-# 4) 建机器 —— 一行一条,别用 && 串起来
-cd dr/aliyun
-tofu init
-tofu plan            # 先看一眼再花钱
-tofu apply           # 输入 yes
-tofu output          # public_ip / ssh / chosen
+# 4) 建机器
+cd dr/aliyun && tofu init && tofu plan     # 先看一眼再花钱
+tofu apply                                  # 输入 yes
+tofu output                                 # public_ip / ssh / chosen
 ```
 
-> **本文档里给你在本机敲的命令,一律一行一条、不用 `&&`。** `&&` 在 cmd 和
-> PowerShell 5.1 里都不是有效分隔符(只有 PowerShell 7+ 和 bash 支持),而这份
-> runbook 不该假设你用哪个终端。
->
-> 服务器上那些命令(`docs/dr-drill.md` 第 2 步之后)是另一回事 —— 那是 Linux bash,
-> `&&` 在那边正常。
+> ⚠️ 本机**先敲 `pwsh`** 进 PowerShell 7:Windows PowerShell 5.1 和 cmd 都不认 `&&`
+> (报「不是此版本中的有效语句分隔符」)。`winget` 装的 pwsh 在 Store 路径下,所以
+> 新终端默认起的可能仍是 5.1。
 
 拿到 IP 后回 [`docs/dr-drill.md`](../../docs/dr-drill.md),从**第 1 步(DNS)** 继续。
 
