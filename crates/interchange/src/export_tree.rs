@@ -33,6 +33,8 @@ pub struct TreeNode {
   pub object_type: String,
   /// The document id whose payload lives in `payloads` (documents only).
   pub object_id: String,
+  /// Emoji / icon shown in the sidebar, if the page has one.
+  pub icon: Option<String>,
 }
 
 /// One image blob to bundle, keyed by the referencing block's `file_id`.
@@ -102,20 +104,16 @@ pub fn build_markdown_tree_zip(
         dir.push('/');
       }
       dir.push_str(&base);
-      manifest_pages.push(serde_json::json!({
-        "path": dir,
-        "title": node.name,
-        "type": "folder",
-      }));
+      manifest_pages.push(manifest_entry(node, &dir, "folder"));
       continue;
     }
     if node.object_type != "document" {
       continue;
     }
-    let Some(payload) = payloads.get(&node.object_id) else {
+    let Some(original) = payloads.get(&node.object_id) else {
       continue;
     };
-    let mut payload = payload.clone();
+    let mut payload = original.clone();
     // Internal page links (`mica://page/<viewId>`) → relative `.md` links.
     rewrite_page_links(&mut payload, folder.len(), &path_by_view);
 
@@ -155,11 +153,28 @@ pub fn build_markdown_tree_zip(
     let Some(path) = path_by_view.get(&node.id).cloned() else {
       continue;
     };
-    manifest_pages.push(serde_json::json!({
-      "path": path,
-      "title": node.name,
-      "type": "document",
-    }));
+    manifest_pages.push(manifest_entry(node, &path, "document"));
+
+    // The structural half, beside the Markdown: the block model verbatim.
+    //
+    // Serialized from `original`, NOT from the rewritten `payload`: the markdown
+    // needs internal links turned into relative `.md` paths, and this file needs
+    // the opposite — `mica://page/<viewId>` kept intact, because identity is the
+    // whole reason it exists. An importer remaps those through the manifest's
+    // ids; a relative path would have thrown that away.
+    //
+    // `assets` maps the blocks' `file_id`s to the archive paths of the bytes, so
+    // a consumer can resolve images without re-deriving the naming rules.
+    entries.push(ZipEntry {
+      name: format!("{}.mica.json", path.trim_end_matches(".md")),
+      data: serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": original.schema_version,
+        "root_block_id": original.root_block_id,
+        "blocks": original.blocks,
+        "assets": img_map,
+      }))
+      .unwrap_or_default(),
+    });
     // The title leads the text, after any front matter.
     //
     // This REVERSES a deliberate earlier decision — "the body verbatim; the page
@@ -184,7 +199,13 @@ pub fn build_markdown_tree_zip(
 
   if !manifest_pages.is_empty() {
     let manifest = serde_json::json!({
-      "version": 1,
+      // v2 (2026-08-30) adds `id` / `parent_id` / `position` / `icon` to every
+      // entry and a `<page>.mica.json` beside each `<page>.md`. v1 recorded the
+      // tree by PATH alone, which is enough to rebuild a shape but not to carry
+      // identity — links between pages, and any external reference to a page,
+      // could not survive a round trip. Readers must keep accepting v1: archives
+      // already downloaded do not get re-issued.
+      "version": 2,
       "generator": "mica",
       "pages": manifest_pages,
     });
@@ -203,6 +224,27 @@ pub fn build_markdown_tree_zip(
     });
   }
   entries
+}
+
+/// One `manifest.json` entry. `path` is where the page landed in the archive;
+/// everything else is the page's own identity, which is what v2 added.
+fn manifest_entry(node: &TreeNode, path: &str, kind: &str) -> serde_json::Value {
+  let mut e = serde_json::json!({
+    "path": path,
+    "title": node.name,
+    "type": kind,
+    "id": node.id,
+    "position": node.position,
+  });
+  // Absent rather than null: a reader that does not know these keys should see
+  // nothing, not a null it has to special-case.
+  if let Some(parent) = &node.parent_id {
+    e["parent_id"] = serde_json::json!(parent);
+  }
+  if let Some(icon) = &node.icon {
+    e["icon"] = serde_json::json!(icon);
+  }
+  e
 }
 
 /// Flatten the page tree into `(node, ancestor-folder segments, unique base)`,
@@ -368,6 +410,7 @@ mod tests {
       name: name.to_string(),
       object_type: "document".to_string(),
       object_id: format!("obj_{id}"),
+      icon: None,
     }
   }
   fn folder(id: &str, parent: Option<&str>, pos: &str, name: &str) -> TreeNode {
@@ -418,6 +461,87 @@ mod tests {
     assert!(got.contains(&"Alpha.md".to_string()), "{got:?}");
     assert!(got.contains(&"Notes/Beta.md".to_string()), "{got:?}");
     assert!(got.contains(&"manifest.json".to_string()));
+  }
+
+  /// manifest v2 carries IDENTITY, not just shape. v1 recorded `path` alone,
+  /// which can rebuild a tree but cannot tell a re-imported page that it is the
+  /// same page — so nothing pointing at it survives the round trip.
+  #[test]
+  fn manifest_v2_carries_ids_parents_and_position() {
+    let nodes = vec![
+      folder("f", None, "0000000020", "Notes"),
+      doc("b", Some("f"), "0000000010", "Beta"),
+    ];
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_b".to_string(), payload("hi"));
+    let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+    let m: serde_json::Value = serde_json::from_slice(
+      &entries.iter().find(|e| e.name == "manifest.json").unwrap().data,
+    )
+    .unwrap();
+    assert_eq!(m["version"], 2);
+    let pages = m["pages"].as_array().unwrap();
+    let beta = pages.iter().find(|p| p["title"] == "Beta").unwrap();
+    assert_eq!(beta["id"], "b");
+    assert_eq!(beta["parent_id"], "f");
+    assert_eq!(beta["position"], "0000000010");
+    // Absent, not null — a reader that does not know the key sees nothing.
+    assert!(beta.get("icon").is_none(), "{beta}");
+    let notes = pages.iter().find(|p| p["title"] == "Notes").unwrap();
+    assert_eq!(notes["id"], "f");
+    assert!(notes.get("parent_id").is_none(), "root folder has no parent: {notes}");
+  }
+
+  /// The sidecar exists so the block model survives; the Markdown beside it is
+  /// for humans. Both, not either.
+  #[test]
+  fn each_document_gets_a_block_json_beside_its_markdown() {
+    let nodes = vec![doc("a", None, "0000000010", "Alpha")];
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_a".to_string(), payload("hello"));
+    let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+    let got = names(&entries);
+    assert!(got.contains(&"Alpha.md".to_string()), "{got:?}");
+    assert!(got.contains(&"Alpha.mica.json".to_string()), "{got:?}");
+    let j: serde_json::Value =
+      serde_json::from_slice(&entries.iter().find(|e| e.name == "Alpha.mica.json").unwrap().data)
+        .unwrap();
+    assert!(j["blocks"].as_array().unwrap().iter().any(|b| b["id"] == "block_root"));
+    assert_eq!(j["root_block_id"], "block_root");
+  }
+
+  /// The two files answer to different consumers and must NOT agree here: the
+  /// Markdown needs a relative `.md` link a human/editor can follow, the JSON
+  /// needs the `mica://page/<id>` an importer can remap. Rewriting the JSON too
+  /// would throw away the identity the JSON exists to carry — and the bug would
+  /// be invisible until somebody re-imported and found the links broken.
+  #[test]
+  fn block_json_keeps_internal_links_while_markdown_relativises_them() {
+    let nodes = vec![
+      doc("a", None, "0000000010", "Alpha"),
+      doc("b", None, "0000000020", "Beta"),
+    ];
+    let mut p = payload("see beta");
+    // A link mark on the root block pointing at page "b".
+    if let Some(root) = p.blocks.iter_mut().find(|b| b.id == "block_root") {
+      root.data = serde_json::json!({
+        "marks": [{ "type": "link", "href": "mica://page/b", "start": 0, "end": 3 }]
+      });
+    }
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_a".to_string(), p);
+    payloads.insert("obj_b".to_string(), payload("beta"));
+    let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+    let j: serde_json::Value =
+      serde_json::from_slice(&entries.iter().find(|e| e.name == "Alpha.mica.json").unwrap().data)
+        .unwrap();
+    let href = j["blocks"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .find_map(|b| b["data"]["marks"][0]["href"].as_str())
+      .expect("the link mark survived into the json");
+    assert_eq!(href, "mica://page/b", "the JSON must keep identity");
   }
 
   #[test]

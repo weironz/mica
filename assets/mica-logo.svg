@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="left" x1="170" y1="220" x2="520" y2="850" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#69E6FF"/>
+      <stop offset="0.45" stop-color="#0798FF"/>
+      <stop offset="1" stop-color="#123BEF"/>
+    </linearGradient>
+    <linearGradient id="right" x1="520" y1="210" x2="850" y2="830" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#168CFF"/>
+      <stop offset="0.5" stop-color="#2440EF"/>
+      <stop offset="1" stop-color="#B33DFF"/>
+    </linearGradient>
+    <linearGradient id="top" x1="200" y1="170" x2="820" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B5F6FF"/>
+      <stop offset="0.4" stop-color="#28BFFF"/>
+      <stop offset="1" stop-color="#4D54FF"/>
+    </linearGradient>
+    <linearGradient id="inner" x1="390" y1="390" x2="650" y2="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#25BFFF"/>
+      <stop offset="0.5" stop-color="#1558F4"/>
+      <stop offset="1" stop-color="#743BFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(512 505) rotate(90) scale(190)">
+      <stop stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="0.2" stop-color="#DFFAFF" stop-opacity="0.75"/>
+      <stop offset="0.55" stop-color="#5B8CFF" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#5B8CFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+
+  <!-- Transparent background -->
+
+  <!-- Outer crystal -->
+  <path d="M512 88 L856 286 L856 682 L512 880 L168 682 L168 286 Z"
+        fill="url(#left)" opacity=".98"/>
+  <path d="M512 88 L856 286 L512 484 L168 286 Z"
+        fill="url(#top)"/>
+  <path d="M512 484 L856 286 L856 682 L512 880 Z"
+        fill="url(#right)"/>
+
+  <!-- Glass facets -->
+  <path d="M512 88 L512 484 L168 286 Z" fill="#B9F7FF" opacity=".16"/>
+  <path d="M512 484 L512 880 L168 682 L168 286 Z" fill="#087DFF" opacity=".20"/>
+  <path d="M512 484 L856 286 L856 682 L512 880 Z" fill="#7C3DFF" opacity=".12"/>
+
+  <!-- Inner cube -->
+  <path d="M512 264 L712 380 L712 612 L512 728 L312 612 L312 380 Z"
+        fill="url(#inner)" opacity=".48"/>
+  <path d="M512 264 L712 380 L512 496 L312 380 Z"
+        fill="#73E9FF" opacity=".17"/>
+  <path d="M512 496 L712 380 L712 612 L512 728 Z"
+        fill="#673CFF" opacity=".16"/>
+
+  <!-- Knowledge graph connections -->
+  <g stroke="#DDFBFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity=".88">
+    <path d="M512 230 L344 328 L344 590 L512 690 L680 590 L680 328 Z"/>
+    <path d="M512 230 L512 690"/>
+    <path d="M344 328 L680 328"/>
+    <path d="M344 590 L680 590"/>
+    <path d="M344 328 L512 426 L680 328"/>
+    <path d="M344 590 L512 494 L680 590"/>
+  </g>
+
+  <!-- Secondary graph -->
+  <g stroke="#9CEFFF" stroke-width="4" stroke-linecap="round" opacity=".45">
+    <path d="M398 360 L442 336 L512 382 L582 336 L626 360"/>
+    <path d="M398 558 L442 584 L512 538 L582 584 L626 558"/>
+    <path d="M442 336 L442 584"/>
+    <path d="M582 336 L582 584"/>
+  </g>
+
+  <!-- Nodes -->
+  <g fill="#F5FEFF">
+    <circle cx="512" cy="230" r="18"/>
+    <circle cx="344" cy="328" r="15"/>
+    <circle cx="680" cy="328" r="15"/>
+    <circle cx="344" cy="590" r="15"/>
+    <circle cx="680" cy="590" r="15"/>
+    <circle cx="512" cy="690" r="18"/>
+    <circle cx="512" cy="426" r="10"/>
+    <circle cx="512" cy="494" r="10"/>
+  </g>
+
+  <g fill="#B9F7FF" opacity=".9">
+    <circle cx="398" cy="360" r="8"/>
+    <circle cx="442" cy="336" r="8"/>
+    <circle cx="582" cy="336" r="8"/>
+    <circle cx="626" cy="360" r="8"/>
+    <circle cx="398" cy="558" r="8"/>
+    <circle cx="442" cy="584" r="8"/>
+    <circle cx="582" cy="584" r="8"/>
+    <circle cx="626" cy="558" r="8"/>
+  </g>
+
+  <!-- Central AI glow -->
+  <circle cx="512" cy="494" r="150" fill="url(#glow)"/>
+  <circle cx="512" cy="494" r="74" fill="#B7EFFF" opacity=".22" filter="url(#blur)"/>
+  <circle cx="512" cy="494" r="35" fill="#FFFFFF" opacity=".95" filter="url(#soft)"/>
+  <circle cx="512" cy="494" r="18" fill="#FFFFFF"/>
+
+  <!-- Outer crystal edges -->
+  <g stroke="#DDFBFF" stroke-linecap="round">
+    <path d="M512 88 L856 286 L856 682 L512 880 L168 682 L168 286 Z"
+          stroke-width="8" opacity=".72"/>
+    <path d="M512 88 V484 L168 286 M512 484 L856 286 M512 484 V880"
+          stroke-width="5" opacity=".42"/>
+  </g>
+
+  <!-- Subtle highlight -->
+  <path d="M218 285 Q250 238 302 207 L486 101 Q505 90 512 108 L512 166 L260 310 Q235 324 218 285Z"
+        fill="#FFFFFF" opacity=".13"/>
+</svg>

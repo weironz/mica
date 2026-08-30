@@ -92,7 +92,10 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   for e in entries {
     if e.name.to_lowercase().ends_with(".md") {
       mds.insert(e.name, String::from_utf8_lossy(&e.bytes).into_owned());
-    } else if e.name != "manifest.json" {
+    } else if e.name != "manifest.json" && !is_block_json(&e.name) {
+      // Everything left over is an attachment — which is why the structural
+      // files have to be excluded BY NAME here. `<page>.mica.json` (manifest v2)
+      // would otherwise be uploaded as an image beside the page it describes.
       files.insert(e.name, e.bytes);
     }
   }
@@ -1007,4 +1010,14 @@ mod tests {
     assert!(find(&plan, "Appendix").is_folder);
     assert_eq!(parent_title(&plan, "Refs"), Some("Appendix"));
   }
+}
+
+/// The block-model sidecar a manifest-v2 export writes beside each `<page>.md`.
+///
+/// Named as a suffix rather than listed in the manifest on purpose: the check
+/// has to work before the manifest is parsed (and when there is none), because
+/// getting it wrong does not fail — it silently uploads the file as an
+/// attachment on the page it was describing.
+fn is_block_json(name: &str) -> bool {
+  name.to_lowercase().ends_with(".mica.json")
 }

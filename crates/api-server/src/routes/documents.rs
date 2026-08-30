@@ -2986,6 +2986,7 @@ async fn build_tree_zip(
       name: v.name.clone(),
       object_type: v.object_type.clone(),
       object_id: v.object_id.to_string(),
+      icon: v.icon.clone(),
     })
     .collect();
 

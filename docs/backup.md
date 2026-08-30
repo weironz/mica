@@ -191,6 +191,32 @@ Find a workspace's id (the `--label`/`--filter-label` value) in `rustic snapshot
 --group-by label` (the `Label` column, tagged `ws=<name>`), or in the export's
 `manifest.json`.
 
+### The archive's two halves (manifest v2, 2026-08-30)
+
+Every workspace/folder export zip now carries both:
+
+```
+<page>.md          human-readable Markdown, images as relative links
+<page>.mica.json   {schema_version, root_block_id, blocks[], assets{file_id → path}}
+assets/            the image bytes, de-duplicated
+manifest.json      {version: 2, generator: "mica",
+                    pages: [{path, title, type, id, parent_id?, position, icon?}]}
+```
+
+v1 recorded the tree by **path** alone — enough to rebuild a shape, not enough to
+say "this is the same page", so nothing pointing at a page survived a round trip.
+v2 adds identity. Readers must keep accepting v1: archives already downloaded do
+not get re-issued.
+
+The two halves deliberately **disagree on one thing**: an internal page link is a
+relative `.md` path in the Markdown (so a human or an editor can follow it) and
+stays `mica://page/<viewId>` in the JSON (so an importer can remap it through the
+manifest's ids). Rewriting the JSON too would throw away the identity the JSON
+exists to carry.
+
+There is no importer for the JSON half yet — it is written so the data is not
+lost, not because something reads it back. See `docs/roadmap.md`.
+
 ### What this restores, and what it does not
 
 **The content export is not an instance restore.** Putting an instance back is the
