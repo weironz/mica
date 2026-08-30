@@ -121,6 +121,21 @@ cmp -s clients/mica_flutter/assets/tray_icon.ico \
   || fail "the tray icon and the app icon differ — they are two copies of ONE mark (tray_manager needs a bundled asset, so the file cannot be shared). Regenerate both with scripts/gen-icons.py and commit them together."
 echo "==> icons: tray == app"
 
+# ── The desktop FFI crate is not in the root workspace ───────────────────────
+# `clients/mica_flutter/rust` (rust_lib_mica_flutter) is its own cargo project,
+# so `cargo test --workspace` above never compiles it. Change a shared crate —
+# mica-interchange, mica-markdown, mica-core — and every local check can pass
+# while the desktop build is broken.
+#
+# Found 2026-08-30 the hard way: a field added to `mica_interchange::TreeNode`
+# was wired through the server's caller and not the local store's. 1481 Flutter
+# tests and the whole cargo workspace went green; `flutter run -d windows` died
+# on E0063. CI does catch it (flutter-integration.yml builds the crate via
+# cargokit) — but only AFTER the tag is pushed, which is the wrong side of the
+# gate. Seconds when warm, and it turns a failed release train into a refusal.
+(cd clients/mica_flutter/rust && cargo check --quiet)   || fail "clients/mica_flutter/rust does not compile — it is NOT part of the root workspace, so nothing above would have told you. Fix it before tagging; CI would only find this after the push."
+echo "==> desktop FFI crate compiles"
+
 # ── pg_dump must not be older than the server it dumps ───────────────────────
 # `pg_dump` REFUSES a server newer than itself. The backup image pins
 # postgresql-client-N; the stack pins postgres:M. N < M means the off-site

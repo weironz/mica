@@ -977,6 +977,10 @@ impl MicaStore {
                 name: v.name.clone(),
                 object_type: v.object_type.clone(),
                 object_id: v.object_id.clone(),
+                // The local store has no icon column — `LocalView` genuinely
+                // does not carry one, so the manifest omits the key rather than
+                // writing a null. Cloud exports fill it from `views.icon`.
+                icon: None,
             })
             .collect();
         let mut payloads = std::collections::HashMap::new();
