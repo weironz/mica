@@ -1,4 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+<!-- viewBox y=-28 居中画板:图形 y 跨 88..880(高 792),原画板上 88 下 144。
+     上移 28 后上下各 116。改的是画板,不是图形 —— 任何一个点的坐标都没动。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 -28 1024 1024" fill="none">
   <defs>
     <linearGradient id="left" x1="170" y1="220" x2="520" y2="850" gradientUnits="userSpaceOnUse">
       <stop stop-color="#69E6FF"/>
