@@ -91,6 +91,22 @@
   仍以**数据库 + 对象**为准(`docs/dr-plan.md` §3)。**把这两件事混成一件,正是这条
   条目第一版判断错的原因。**
 
+  **工作量比看上去小,大头不在正文**:`crates/markdown` 的 `Block`
+  (`{id, type, text, data, children}` + 外层 `schema_version` / `root_block_id`)
+  **已经是 `Serialize`/`Deserialize` 且带 schema 版本号** —— 它是导入/导出/MCP 共用的
+  中间表示。Outline 要专门写 `DocumentHelper.toProsemirror(document).toJSON()` 那一步,
+  我们不用写。**剩下的是"图"那一半**:views 树(id / parent / 排序 / 图标 / type)+
+  comments 写进 manifest,以及导入端读它重建 + 重新生成 id + 重写内部链接。
+
+  **导出时现解 CRDT,不要为它加一列 JSONB**。对照:Outline 的 Document 同时有
+  `state`(`DataType.BLOB`,Yjs 二进制,权威)和 `content`(`DataType.JSONB`,注释自己
+  写着 "a snapshot at the last time the state was saved");我们是 `state`(bytea)+
+  `content_text`(text,只有文字)。**看起来我们做少了,其实是刻意的** —— 宽投影多一处
+  要跟 CRDT 同步的表示(红线 #1 双表示),Outline 用 `@SkipChangeset` 承认了它是滞后的。
+  而导出所需的解码路径本来就存在(不然 markdown 导不出来)。
+  **加宽只在需要"在数据库里按结构查询"时才值得**(例如全库找某类块)—— 那是搜索需求,
+  不是导出需求,别为了导出去加一列。
+
   **优先级取决于云服务什么时候上** —— 自托管时它是"锦上添花"(运维方本来就有库),
   **一旦提供托管,它就是必答题**:用户带不走自己的数据,是产品问题不是技术问题。(M)
 
