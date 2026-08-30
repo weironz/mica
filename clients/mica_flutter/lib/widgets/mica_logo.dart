@@ -9,10 +9,10 @@ import 'package:flutter/material.dart';
 ///
 /// ONE MARK AT TWO OPTICAL SIZES (2026-08-30):
 ///
-///   * **>= 32px** — the full crystal artwork (`assets/mica-logo.svg`, bundled
+///   * **>= 128px** — the full crystal artwork (`assets/mica-logo.svg`, bundled
 ///     here as `assets/logo_crystal.png`): gradients, the inner knowledge
 ///     graph, the glowing core.
-///   * **< 32px** — [MicaLogoPainter] below: the same figure reduced to a
+///   * **< 128px** — [MicaLogoPainter] below: the same figure reduced to a
 ///     hexagon (the cube's silhouette in isometric projection) plus three
 ///     spokes to alternating vertices. That is the whole figure — which is why
 ///     it survives being 16px in a system tray, where the crystal smears into a
@@ -41,7 +41,7 @@ class MicaLogo extends StatelessWidget {
   /// Where the crystal stops being legible and the wireframe takes over. Kept
   /// in step with `icon_export_test.dart`, which packs the `.ico` frames on the
   /// same boundary.
-  static const crystalFrom = 32.0;
+  static const crystalFrom = 128.0;
 
   @override
   Widget build(BuildContext context) {
@@ -92,7 +92,16 @@ class MicaLogoPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final s = size.shortestSide;
-    final big = s >= 22;
+    // 96, not 22 (2026-08-30). The first threshold asked only "does the mark
+    // survive". A side-by-side against ChatGPT and Claude in the same taskbar
+    // asked the better question — "can you READ it" — and at 32-64px the answer
+    // was no. Those two marks are one silhouette with no interior at all; ours
+    // was a hexagon plus six corner nodes, three spokes and a centre dot: ten
+    // elements inside ~40 pixels, which merge into texture rather than a figure.
+    //
+    // Above this the detail has room and reads as detail. Below it the mark is
+    // hexagon + three spokes + one dot — the part that says "graph".
+    final big = s >= 96;
     // Stroke and node dots stick OUT past the silhouette, so the radius is what
     // is left after both — the hexagon is pointy-top, which makes the vertical
     // the binding dimension (extent = 2r, versus 1.73r across).

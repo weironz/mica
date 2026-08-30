@@ -39,6 +39,20 @@ void main() {
           ),
         ),
       );
+      // MicaLogo draws an Image.asset above its crystal threshold, and an image
+      // DECODES ASYNCHRONOUSLY — pumpAndSettle does not wait for that. Without
+      // this the golden can capture the frame before the bytes land.
+      //
+      // Not hypothetical: on 2026-08-30 the 128 frame came out BLANK while 256
+      // was fine, in the same run, and that blank went straight into
+      // app_icon.ico. A golden that is a race is worse than no golden — it
+      // fails at random and, when it does not, it bakes whatever it caught.
+      await tester.runAsync(
+        () => precacheImage(
+          const AssetImage('assets/logo_crystal.png'),
+          tester.element(find.byType(MicaLogo)),
+        ),
+      );
       await tester.pumpAndSettle();
       await expectLater(
         find.byKey(key),

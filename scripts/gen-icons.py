@@ -40,6 +40,14 @@ def main() -> int:
         if image.size != (size, size):
             print(f"{path} is {image.size}, expected {(size, size)}", file=sys.stderr)
             return 1
+        # A fully transparent frame is the failure this cannot afford to pass
+        # through. On 2026-08-30 the 128px golden captured an Image.asset before
+        # it had decoded and came out BLANK; every check upstream was green, the
+        # blank went into app_icon.ico, and it was caught only because somebody
+        # opened the file to look at it. Cheap to assert, invisible otherwise.
+        if not image.getchannel("A").getbbox():
+            print(f"{path} is fully transparent — nothing to pack", file=sys.stderr)
+            return 1
         frames.append(image)
 
     # Pillow writes one .ico containing every frame; `append_images` keeps the
