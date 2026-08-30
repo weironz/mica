@@ -42,6 +42,49 @@
 
 ## 导入 / 批量整理(0.13.21 之后剩下的)
 
+- ⏸️ **原生导出格式(`.mica`)—— 拍板不做,2026-08-30**。扒了三家实证,结论是**我们已经
+  走到只差两个字段**,而那两个字段今天没有消费者。留着这条是因为**调研结论比决定值钱**。
+
+  **我们现在有什么**(常被低估):每个导出 zip 里都有 `manifest.json`
+  (`crates/interchange/src/export_tree.rs`),`{version: 1, generator: "mica", pages: [{path, title, type}]}`,
+  **而且导入端会读它** —— 按 `generator: mica` 决定要不要剥掉正文开头那行 `# 标题`,
+  否则每次 export→import 都会叠一层标题(round-trip 红线)。**容器、版本号、generator
+  标记、消费方,四样都在了。**
+
+  **三家实证**:
+  - **Outline**(Node + Postgres + 自托管,和我们同构):有 `FileOperationFormat.JSON`。
+    zip 里是 `metadata.json`(`exportVersion: 1`)+ 每个 collection 一个 JSON,记
+    `id / parentDocumentId / documentStructure / icon / color / 作者 / 时间戳` +
+    **`data` = ProseMirror JSON**。注意它 `findByPk(id, {includeState: true})` 加载了
+    CRDT state **却不导出**,只导编辑器模型 —— 主动躲开版本耦合。连 markdown 那档都叫
+    `outline-markdown`,承认是方言。
+  - **AppFlowy**:**根本没有 `.appflowy` 格式**。入口是 `ImportAppFlowyDataFolder`,
+    直接打开另一个安装的数据目录(SQLite + collab KV)。而且它**不保 id** ——
+    `OldToNewIdMap::exchange_new_id` 给每个对象重新生成,再用 `replace_document_ref_ids`
+    把文档里所有 `mention`/`page_id`/`view_id` 重写过去。**拿着完整原生数据也选择重新 id。**
+  - **Joplin**:JEX 是真格式(`tarCreate` 打包它自己的 raw item,item 自带 id)。
+
+  **为什么它们有而我们不需要**:前两家都是 local-first,**存储本身就是唯一权威副本**,
+  没有服务端转储可用。我们是 server-first,那条无损路径叫 `pg_dump` + 对象,已端到端
+  验证(11′50″)。**另外正文保真那一轴我们用的是另一个答案**:markdown round-trip 是
+  带记分牌的不变量(641/641 + `commonmark_scoreboard.rs`),Outline 导 ProseMirror JSON
+  正是因为它没付这笔账 —— 抄它等于把已解决的问题再解决一遍。
+
+  **真实缺口只有一条**:`manifest.json` 用 path + title 记树,**不记 id**。
+
+  **为什么现在不加**(三十行的量级,但先别):① 今天没有第二个实例,没有消费者;
+  ② **保 id 不是免费的** —— 导入建的是全新的 yrs 文档,state vector 与原来无关;
+  今天不保 id 时客户端把它当新东西所以没事,**保了 id 却没保 CRDT state,客户端会拿
+  本地缓存的同 id 旧文档去和一段无关历史合并,内容会重复错乱**。要安全就得连 yrs
+  二进制一起导,而那正是 Outline 主动放弃的。
+
+  ⚠️ **它永远不会变成恢复路径**:生产 21 张表,导出能碰到 4 张的一部分;`users` 和
+  `server_secrets` 不在里面 —— 靠它"恢复"出来的实例**没有账号,谁都登不进去**。
+  备份恢复以**数据库 + 对象**为准(`docs/dr-plan.md` §3),导出是兜底。
+
+  **什么时候回来看**:真出现第二个 Mica 实例,或者要做托管版(那时用户碰不到数据库,
+  处境和 Outline 一样)。到那天先读这条,别重扒一遍。(S)
+
 - 🟡 **本地模式的 zip 导入入口。** 0.13.21 把它从「空实现、点了没反应」改成了**隐藏**,
   因为客户端没有 zip 读侧(只有 `buildStoreZip` 打包侧,解包在服务端 Rust 里)。要放出来
   得新增一个解包 FFI;资产那半已经就绪(`from_markdown_with_assets` + 本地 CAS),
