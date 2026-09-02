@@ -1,53 +1,57 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/widgets/mica_logo.dart';
 
-/// The mark is one design at two optical sizes and the switch is silent: pick
-/// the wrong branch and you get a legible-but-wrong logo, or a crystal that has
-/// smeared into a blue dot. Neither throws.
+/// `Image.asset` with a path that is not declared in `pubspec.yaml` fails at
+/// RUNTIME, not at build — so a typo ships. That is the whole first test.
 ///
-/// The asset path is the other half: `Image.asset` with a path that is not in
-/// `pubspec.yaml` fails at RUNTIME, not at build — so a typo ships.
+/// The second guards the one duplicate this mark cannot design away: the
+/// browser tab icon has to exist before Flutter boots, so `web/favicon.svg` is
+/// a COPY of the source SVG rather than something generated from it. A copy
+/// with nothing checking it is precisely how the tray icon stayed the stock
+/// Flutter logo for over a month.
 void main() {
-  Future<void> show(WidgetTester tester, Widget child) =>
-      tester.pumpWidget(MaterialApp(home: Scaffold(body: Center(child: child))));
-
-  testWidgets('at or above the threshold it draws the crystal artwork', (tester) async {
-    await show(tester, const MicaLogo(size: MicaLogo.crystalFrom));
+  testWidgets('draws the bundled mark, at the path pubspec declares', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: Center(child: MicaLogo(size: 40)))),
+    );
     final image = tester.widget<Image>(find.byType(Image));
     expect(
       (image.image as AssetImage).assetName,
-      'assets/logo_crystal.png',
+      'assets/logo_mark.png',
       reason: 'must match the path declared in pubspec.yaml',
     );
   });
 
-  testWidgets('below the threshold it draws the wireframe painter', (tester) async {
-    await show(tester, const MicaLogo(size: MicaLogo.crystalFrom - 1));
-    expect(find.byType(Image), findsNothing);
-    final painted = tester
-        .widgetList<CustomPaint>(find.byType(CustomPaint))
-        .where((c) => c.painter is MicaLogoPainter);
-    expect(painted, isNotEmpty, reason: 'the small tier is the painter');
+  testWidgets('and that asset actually resolves out of the bundle', (tester) async {
+    // Asserting the path STRING is not the same as asserting the asset exists:
+    // the string test passes just as happily against a name that pubspec no
+    // longer declares. Decoding it is what catches a rename that only got done
+    // in half the places (this widget was renamed logo_crystal -> logo_mark on
+    // 2026-09-02, which is exactly when that gap would have shipped).
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: Center(child: MicaLogo(size: 40)))),
+    );
+    await tester.runAsync(
+      () => precacheImage(
+        const AssetImage('assets/logo_mark.png'),
+        tester.element(find.byType(MicaLogo)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('a flat colour always takes the painter, at any size', (tester) async {
-    // A monochrome crystal is mud — the whole reason `color` exists is contexts
-    // that cannot show a gradient, and those must not get the artwork instead.
-    await show(tester, const MicaLogo(size: 128, color: Colors.white));
-    expect(find.byType(Image), findsNothing);
-    final painter = tester
-        .widgetList<CustomPaint>(find.byType(CustomPaint))
-        .map((c) => c.painter)
-        .whereType<MicaLogoPainter>()
-        .single;
-    expect(painter.flat, Colors.white);
-  });
-
-  testWidgets('the default size stays on the small tier', (tester) async {
-    // Callers that pass nothing get the sidebar-sized mark; if the default ever
-    // crossed the threshold they would silently start loading a 512px raster.
-    await show(tester, const MicaLogo());
-    expect(find.byType(Image), findsNothing);
+  test('web/favicon.svg is a verbatim copy of the source SVG', () {
+    String read(String p) =>
+        File(p).readAsStringSync().replaceAll('\r\n', '\n');
+    expect(
+      read('web/favicon.svg'),
+      read('../../assets/mica-logo.svg'),
+      reason: 'the tab icon is a copy of assets/mica-logo.svg — re-copy it, '
+          'do not hand-edit it',
+    );
   });
 }

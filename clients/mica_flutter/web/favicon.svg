@@ -1,35 +1,92 @@
-<!-- The Mica mark: an isometric cube wireframe with graph nodes on its vertices —
-     the knowledge graph held inside a crystal.
+<!-- 图形填满画板:原稿只占 65% 宽 x 54% 高(x 178..846,y 236..788),16px 槽位里
+     实际只画到约 10x9 个像素 —— 在像素最金贵的地方省着用。绕画板中心放大 1.3 倍后
+     占到 78..946(左右各留 7.6%),不裁切。
 
-     MIRRORS lib/widgets/mica_logo.dart. A duplicate definition is unavoidable
-     here: the tab icon has to exist before Flutter boots, so it cannot come from
-     the painter (the .ico files CAN and do — see scripts/gen-icons.py).
-
-     Geometry = that painter's formula evaluated for a 32x32 box, big variant:
-       r = 32*0.375 = 12       centre = (16,16)      stroke = 32*0.075 = 2.4
-       node r = 32*0.085 = 2.72                      centre node = x1.15 = 3.128
-       vertices = centre + r*(0,-1) (0.866,-0.5) (0.866,0.5) (0,1) (-0.866,0.5) (-0.866,-0.5)
-       spokes   = centre -> vertices 0, 2, 4 (the three edges facing the viewer)
-     The radius is 0.375 and not the silhouette's 0.5 because the stroke and the
-     node dots stick out past it; getting that wrong clipped the bottom vertex. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+     用一层 <g transform> 而不是改写路径坐标:任何一个点的原始坐标都没动,下次拿
+     设计稿重出时 diff 得出来。 -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+>
+  <g transform="translate(512,512) scale(1.3) translate(-512,-512)">
   <defs>
-    <linearGradient id="m" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2563EB"/>
-      <stop offset="1" stop-color="#7C3AED"/>
+    <linearGradient id="mica-main" x1="180" y1="180" x2="850" y2="850" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4F7CFF"/>
+      <stop offset="0.48" stop-color="#6357E8"/>
+      <stop offset="1" stop-color="#8B4DE8"/>
+    </linearGradient>
+
+    <linearGradient id="mica-left" x1="190" y1="270" x2="510" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5E8CFF"/>
+      <stop offset="1" stop-color="#4656D8"/>
+    </linearGradient>
+
+    <linearGradient id="mica-right" x1="520" y1="280" x2="840" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7968F1"/>
+      <stop offset="1" stop-color="#9B4DDA"/>
     </linearGradient>
   </defs>
-  <g stroke="url(#m)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" fill="none">
-    <polygon points="16,4 26.392,10 26.392,22 16,28 5.608,22 5.608,10"/>
-    <path d="M16 16 L16 4 M16 16 L26.392 22 M16 16 L5.608 22"/>
-  </g>
-  <g fill="url(#m)">
-    <circle cx="16" cy="4" r="2.72"/>
-    <circle cx="26.392" cy="10" r="2.72"/>
-    <circle cx="26.392" cy="22" r="2.72"/>
-    <circle cx="16" cy="28" r="2.72"/>
-    <circle cx="5.608" cy="22" r="2.72"/>
-    <circle cx="5.608" cy="10" r="2.72"/>
-    <circle cx="16" cy="16" r="3.128"/>
+
+  <!-- Main M silhouette -->
+  <path
+    fill="url(#mica-main)"
+    d="
+      M 178 282
+      Q 178 236 224 236
+      L 318 236
+      Q 342 236 358 257
+      L 512 462
+      L 666 257
+      Q 682 236 706 236
+      L 800 236
+      Q 846 236 846 282
+      L 846 742
+      Q 846 788 800 788
+      L 706 788
+      Q 674 788 674 756
+      L 674 494
+      L 558 650
+      Q 536 680 512 680
+      Q 488 680 466 650
+      L 350 494
+      L 350 756
+      Q 350 788 318 788
+      L 224 788
+      Q 178 788 178 742
+      Z
+    "
+  />
+
+  <!-- Left folded face -->
+  <path
+    fill="url(#mica-left)"
+    d="
+      M 242 302
+      L 312 302
+      L 512 570
+      L 466 632
+      L 342 466
+      L 342 726
+      L 242 726
+      Z
+    "
+  />
+
+  <!-- Right folded face -->
+  <path
+    fill="url(#mica-right)"
+    d="
+      M 782 302
+      L 712 302
+      L 512 570
+      L 558 632
+      L 682 466
+      L 682 726
+      L 782 726
+      Z
+    "
+  />
   </g>
 </svg>

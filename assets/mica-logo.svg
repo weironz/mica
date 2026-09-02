@@ -1,120 +1,92 @@
-<!-- viewBox y=-28 居中画板:图形 y 跨 88..880(高 792),原画板上 88 下 144。
-     上移 28 后上下各 116。改的是画板,不是图形 —— 任何一个点的坐标都没动。 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 -28 1024 1024" fill="none">
+<!-- 图形填满画板:原稿只占 65% 宽 x 54% 高(x 178..846,y 236..788),16px 槽位里
+     实际只画到约 10x9 个像素 —— 在像素最金贵的地方省着用。绕画板中心放大 1.3 倍后
+     占到 78..946(左右各留 7.6%),不裁切。
+
+     用一层 <g transform> 而不是改写路径坐标:任何一个点的原始坐标都没动,下次拿
+     设计稿重出时 diff 得出来。 -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+>
+  <g transform="translate(512,512) scale(1.3) translate(-512,-512)">
   <defs>
-    <linearGradient id="left" x1="170" y1="220" x2="520" y2="850" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#69E6FF"/>
-      <stop offset="0.45" stop-color="#0798FF"/>
-      <stop offset="1" stop-color="#123BEF"/>
+    <linearGradient id="mica-main" x1="180" y1="180" x2="850" y2="850" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4F7CFF"/>
+      <stop offset="0.48" stop-color="#6357E8"/>
+      <stop offset="1" stop-color="#8B4DE8"/>
     </linearGradient>
-    <linearGradient id="right" x1="520" y1="210" x2="850" y2="830" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#168CFF"/>
-      <stop offset="0.5" stop-color="#2440EF"/>
-      <stop offset="1" stop-color="#B33DFF"/>
+
+    <linearGradient id="mica-left" x1="190" y1="270" x2="510" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5E8CFF"/>
+      <stop offset="1" stop-color="#4656D8"/>
     </linearGradient>
-    <linearGradient id="top" x1="200" y1="170" x2="820" y2="350" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#B5F6FF"/>
-      <stop offset="0.4" stop-color="#28BFFF"/>
-      <stop offset="1" stop-color="#4D54FF"/>
+
+    <linearGradient id="mica-right" x1="520" y1="280" x2="840" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7968F1"/>
+      <stop offset="1" stop-color="#9B4DDA"/>
     </linearGradient>
-    <linearGradient id="inner" x1="390" y1="390" x2="650" y2="720" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#25BFFF"/>
-      <stop offset="0.5" stop-color="#1558F4"/>
-      <stop offset="1" stop-color="#743BFF"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(512 505) rotate(90) scale(190)">
-      <stop stop-color="#FFFFFF" stop-opacity="0.95"/>
-      <stop offset="0.2" stop-color="#DFFAFF" stop-opacity="0.75"/>
-      <stop offset="0.55" stop-color="#5B8CFF" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#5B8CFF" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="blur" x="-100%" y="-100%" width="300%" height="300%">
-      <feGaussianBlur stdDeviation="22"/>
-    </filter>
-    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="7"/>
-    </filter>
   </defs>
 
-  <!-- Transparent background -->
+  <!-- Main M silhouette -->
+  <path
+    fill="url(#mica-main)"
+    d="
+      M 178 282
+      Q 178 236 224 236
+      L 318 236
+      Q 342 236 358 257
+      L 512 462
+      L 666 257
+      Q 682 236 706 236
+      L 800 236
+      Q 846 236 846 282
+      L 846 742
+      Q 846 788 800 788
+      L 706 788
+      Q 674 788 674 756
+      L 674 494
+      L 558 650
+      Q 536 680 512 680
+      Q 488 680 466 650
+      L 350 494
+      L 350 756
+      Q 350 788 318 788
+      L 224 788
+      Q 178 788 178 742
+      Z
+    "
+  />
 
-  <!-- Outer crystal -->
-  <path d="M512 88 L856 286 L856 682 L512 880 L168 682 L168 286 Z"
-        fill="url(#left)" opacity=".98"/>
-  <path d="M512 88 L856 286 L512 484 L168 286 Z"
-        fill="url(#top)"/>
-  <path d="M512 484 L856 286 L856 682 L512 880 Z"
-        fill="url(#right)"/>
+  <!-- Left folded face -->
+  <path
+    fill="url(#mica-left)"
+    d="
+      M 242 302
+      L 312 302
+      L 512 570
+      L 466 632
+      L 342 466
+      L 342 726
+      L 242 726
+      Z
+    "
+  />
 
-  <!-- Glass facets -->
-  <path d="M512 88 L512 484 L168 286 Z" fill="#B9F7FF" opacity=".16"/>
-  <path d="M512 484 L512 880 L168 682 L168 286 Z" fill="#087DFF" opacity=".20"/>
-  <path d="M512 484 L856 286 L856 682 L512 880 Z" fill="#7C3DFF" opacity=".12"/>
-
-  <!-- Inner cube -->
-  <path d="M512 264 L712 380 L712 612 L512 728 L312 612 L312 380 Z"
-        fill="url(#inner)" opacity=".48"/>
-  <path d="M512 264 L712 380 L512 496 L312 380 Z"
-        fill="#73E9FF" opacity=".17"/>
-  <path d="M512 496 L712 380 L712 612 L512 728 Z"
-        fill="#673CFF" opacity=".16"/>
-
-  <!-- Knowledge graph connections -->
-  <g stroke="#DDFBFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity=".88">
-    <path d="M512 230 L344 328 L344 590 L512 690 L680 590 L680 328 Z"/>
-    <path d="M512 230 L512 690"/>
-    <path d="M344 328 L680 328"/>
-    <path d="M344 590 L680 590"/>
-    <path d="M344 328 L512 426 L680 328"/>
-    <path d="M344 590 L512 494 L680 590"/>
+  <!-- Right folded face -->
+  <path
+    fill="url(#mica-right)"
+    d="
+      M 782 302
+      L 712 302
+      L 512 570
+      L 558 632
+      L 682 466
+      L 682 726
+      L 782 726
+      Z
+    "
+  />
   </g>
-
-  <!-- Secondary graph -->
-  <g stroke="#9CEFFF" stroke-width="4" stroke-linecap="round" opacity=".45">
-    <path d="M398 360 L442 336 L512 382 L582 336 L626 360"/>
-    <path d="M398 558 L442 584 L512 538 L582 584 L626 558"/>
-    <path d="M442 336 L442 584"/>
-    <path d="M582 336 L582 584"/>
-  </g>
-
-  <!-- Nodes -->
-  <g fill="#F5FEFF">
-    <circle cx="512" cy="230" r="18"/>
-    <circle cx="344" cy="328" r="15"/>
-    <circle cx="680" cy="328" r="15"/>
-    <circle cx="344" cy="590" r="15"/>
-    <circle cx="680" cy="590" r="15"/>
-    <circle cx="512" cy="690" r="18"/>
-    <circle cx="512" cy="426" r="10"/>
-    <circle cx="512" cy="494" r="10"/>
-  </g>
-
-  <g fill="#B9F7FF" opacity=".9">
-    <circle cx="398" cy="360" r="8"/>
-    <circle cx="442" cy="336" r="8"/>
-    <circle cx="582" cy="336" r="8"/>
-    <circle cx="626" cy="360" r="8"/>
-    <circle cx="398" cy="558" r="8"/>
-    <circle cx="442" cy="584" r="8"/>
-    <circle cx="582" cy="584" r="8"/>
-    <circle cx="626" cy="558" r="8"/>
-  </g>
-
-  <!-- Central AI glow -->
-  <circle cx="512" cy="494" r="150" fill="url(#glow)"/>
-  <circle cx="512" cy="494" r="74" fill="#B7EFFF" opacity=".22" filter="url(#blur)"/>
-  <circle cx="512" cy="494" r="35" fill="#FFFFFF" opacity=".95" filter="url(#soft)"/>
-  <circle cx="512" cy="494" r="18" fill="#FFFFFF"/>
-
-  <!-- Outer crystal edges -->
-  <g stroke="#DDFBFF" stroke-linecap="round">
-    <path d="M512 88 L856 286 L856 682 L512 880 L168 682 L168 286 Z"
-          stroke-width="8" opacity=".72"/>
-    <path d="M512 88 V484 L168 286 M512 484 L856 286 M512 484 V880"
-          stroke-width="5" opacity=".42"/>
-  </g>
-
-  <!-- Subtle highlight -->
-  <path d="M218 285 Q250 238 302 207 L486 101 Q505 90 512 108 L512 166 L260 310 Q235 324 218 285Z"
-        fill="#FFFFFF" opacity=".13"/>
 </svg>

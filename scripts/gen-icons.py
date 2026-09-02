@@ -1,18 +1,18 @@
-#!/usr/bin/env python3
-"""Pack the per-size PNGs exported by the Flutter painter into the two .ico files.
+"""Pack the per-size PNGs exported from the mark's SVG into the two .ico files.
 
-The PNGs come from `clients/mica_flutter/test/tmp_icon_export_test.dart`, which
-rasterises the SHIPPING `MicaLogoPainter` — so the taskbar icon, the tray icon
-and the in-app mark are one geometry by construction rather than by discipline.
-That matters: the tray spent 2026-07-20 .. 2026-08-28 showing the stock Flutter
-logo because it was a second copy nobody remembered to replace.
+The PNGs come from `clients/mica_flutter/test/icon_export_test.dart`, which
+rasterises `assets/mica-logo.svg` — the ONE source for the mark — at each size.
+The taskbar icon, the tray icon and the in-app mark are therefore one artwork by
+construction rather than by discipline. That matters: the tray spent
+2026-07-20 .. 2026-08-28 showing the stock Flutter logo because it was a second
+copy nobody remembered to replace.
 
-Each size is its own artwork, not a downscale of the 256: the painter switches
-to a simplified variant below 22px (no corner nodes, relatively heavier stroke),
-which is the only reason the mark survives a 16px tray slot. Downscaling the big
-one instead would put the blob back.
+Each size is its own rasterisation of the vector, not a downscale of the 256.
+Measured 2026-09-02: taking 512 down to 16 softens the M's inner notch to about
+half its depth, while rasterising straight at 16 keeps it. An .ico is a
+container — it is meant to hold per-size artwork.
 
-Usage (see scripts/gen-icons.sh for the full flow):
+Usage (see assets/README.md for the full flow):
     python scripts/gen-icons.py
 """
 import pathlib

@@ -105,7 +105,7 @@ flutter:
     - assets/tray_icon.ico
     # The large-tier logo artwork (>= 32px). Generated from assets/mica-logo.svg
     # by test/icon_export_test.dart — do not hand-edit.
-    - assets/logo_crystal.png
+    - assets/logo_mark.png
   fonts:
     # Crisp CJK for the web (CanvasKit can't use system fonts by name, unlike
     # desktop which defers to 微软雅黑/苹方 — see lib/cjk_fonts.dart). Noto Sans
