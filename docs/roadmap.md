@@ -42,18 +42,21 @@
 
 ## 导入 / 批量整理(0.13.21 之后剩下的)
 
-- 🟡 **工作区级完整导出/导入(面向用户,不是灾备)** —— 2026-08-30 先判"不做",当天被
+- 🟡 **工作区级完整导入(面向用户,不是灾备)** —— **导出那半已上线(v0.13.44,manifest v2)**,
+  这里剩下的是导入端。2026-08-30 先判"不做",当天被
   推翻。**推翻的理由值得写在最前面,因为错的是问题本身**:我一直在回答「运维方要不要
   它」(不要,运维方有 `pg_dump`),而同类产品做它是在回答「**用户**要不要」。对云上的
   用户,"你有 pg_dump 啊"意味着**把多租户数据库和对象存储的凭据交给他、让他自己写脚本
   捞自己那份** —— 不可能,也不该。Outline 的 JSON 导出正是为此存在,而我上一轮甚至自己
   写过这句话,又用"Mica 只自托管"把它折价掉了 —— **那个前提是我替用户假设的。**
 
-  **我们现在有什么**(常被低估):每个导出 zip 里都有 `manifest.json`
-  (`crates/interchange/src/export_tree.rs`),`{version: 1, generator: "mica", pages: [{path, title, type}]}`,
-  **而且导入端会读它** —— 按 `generator: mica` 决定要不要剥掉正文开头那行 `# 标题`,
-  否则每次 export→import 都会叠一层标题(round-trip 红线)。**容器、版本号、generator
-  标记、消费方,四样都在了。**
+  **导出那半已经做完了(v0.13.44)**:`manifest.json` 升到 v2
+  (`crates/interchange/src/export_tree.rs`),每条带 `id / parent_id / position / icon`
+  —— 不再只是 path + title,能说出「这是同一个页面」。每个文档旁另有一份
+  `<page>.mica.json`(`{schema_version, root_block_id, blocks[], assets}`)。
+  两半刻意在一件事上不一致并配了测试:内部页面链接在 markdown 里改写成相对 `.md` 路径
+  (给人跟),在 JSON 里保持 `mica://page/<viewId>`(给导入端按 id 重映射)——
+  把 JSON 也改写掉就丢掉了它存在的全部理由。
 
   **三家实证**:
   - **Outline**(Node + Postgres + 自托管,和我们同构):有 `FileOperationFormat.JSON`。
@@ -74,12 +77,10 @@
   带记分牌的不变量(641/641 + `commonmark_scoreboard.rs`),Outline 导 ProseMirror JSON
   正是因为它没付这笔账 —— 抄它等于把已解决的问题再解决一遍。
 
-  **真实缺口只有一条**:`manifest.json` 用 path + title 记树,**不记 id**。
-
-  **要做成什么样**:`manifest.json` 扩充成工作区的完整图 —— 每个条目带
-  `id / parent_id / 排序 / 图标 / type`,再加 comments;Markdown 与 `assets/` **原样保留**
-  (那是"不依赖 Mica 也能读"的一半)。导入端读它重建结构,**重新生成 id 并重写内部
-  链接**(AppFlowy `replace_document_ref_ids` 那套)。
+  **剩下的缺口**:导入端还只会按 path 重建形状 —— 读 v2 的 `id / parent_id / position /
+  icon` 重建结构、**重新生成 id 并重写内部链接**(AppFlowy `replace_document_ref_ids`
+  那套)这一步没做。comments 也还没进 manifest。Markdown 与 `assets/` 保持**原样保留**
+  (那是"不依赖 Mica 也能读"的一半),不要动。
 
   **为什么重新生成 id 而不是保住**:保 id 的危险只存在于"导回同一个实例" —— 导入建的是
   全新的 yrs 文档,state vector 与原来无关,客户端会拿本地缓存的同 id 旧文档去和一段
@@ -95,8 +96,8 @@
   (`{id, type, text, data, children}` + 外层 `schema_version` / `root_block_id`)
   **已经是 `Serialize`/`Deserialize` 且带 schema 版本号** —— 它是导入/导出/MCP 共用的
   中间表示。Outline 要专门写 `DocumentHelper.toProsemirror(document).toJSON()` 那一步,
-  我们不用写。**剩下的是"图"那一半**:views 树(id / parent / 排序 / 图标 / type)+
-  comments 写进 manifest,以及导入端读它重建 + 重新生成 id + 重写内部链接。
+  我们不用写。**views 树那一半也已经写进 manifest v2 了**,剩下的纯粹是导入端:
+  读它重建 + 重新生成 id + 重写内部链接,外加 comments 进 manifest。
 
   **导出时现解 CRDT,不要为它加一列 JSONB**。对照:Outline 的 Document 同时有
   `state`(`DataType.BLOB`,Yjs 二进制,权威)和 `content`(`DataType.JSONB`,注释自己
