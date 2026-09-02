@@ -554,6 +554,16 @@ fn percent_decode(s: &str) -> String {
   String::from_utf8_lossy(&out).into_owned()
 }
 
+/// The block-model sidecar a manifest-v2 export writes beside each `<page>.md`.
+///
+/// Named as a suffix rather than listed in the manifest on purpose: the check
+/// has to work before the manifest is parsed (and when there is none), because
+/// getting it wrong does not fail — it silently uploads the file as an
+/// attachment on the page it was describing.
+fn is_block_json(name: &str) -> bool {
+  name.to_lowercase().ends_with(".mica.json")
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1012,12 +1022,3 @@ mod tests {
   }
 }
 
-/// The block-model sidecar a manifest-v2 export writes beside each `<page>.md`.
-///
-/// Named as a suffix rather than listed in the manifest on purpose: the check
-/// has to work before the manifest is parsed (and when there is none), because
-/// getting it wrong does not fail — it silently uploads the file as an
-/// attachment on the page it was describing.
-fn is_block_json(name: &str) -> bool {
-  name.to_lowercase().ends_with(".mica.json")
-}
