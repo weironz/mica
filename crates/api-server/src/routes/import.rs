@@ -19,6 +19,7 @@ use mica_app_core::{
 use mica_infra::{ApiError, ApiResult};
 use mica_interchange::{ImportMode, ImportPlan, plan_import, read_zip, resolve_ref};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -898,7 +899,7 @@ async fn run_import(
     // markdown/asset processing (F2 round-trip — folders survive export→import).
     if page.is_folder {
       insert_folder(
-        state,
+        &state.db,
         workspace_id,
         user_id,
         view_ids[idx],
@@ -1007,7 +1008,7 @@ async fn run_import(
     }
 
     let document_id = insert_page(
-      state,
+      &state.db,
       workspace_id,
       user_id,
       view_ids[idx],
@@ -1107,7 +1108,7 @@ async fn create_workspace(state: &AppState, user_id: Uuid, name: &str) -> ApiRes
 /// [`documents::create_folder`], used by the import executor for folder pages.
 #[allow(clippy::too_many_arguments)]
 async fn insert_folder(
-  state: &AppState,
+  db: &PgPool,
   workspace_id: Uuid,
   user_id: Uuid,
   view_id: Uuid,
@@ -1135,7 +1136,7 @@ async fn insert_folder(
   .bind(position)
   .bind(user_id)
   .bind(icon)
-  .execute(&state.db)
+  .execute(db)
   .await?;
   Ok(())
 }
@@ -1168,7 +1169,7 @@ fn page_seed(
 
 #[allow(clippy::too_many_arguments)]
 async fn insert_page(
-  state: &AppState,
+  db: &PgPool,
   workspace_id: Uuid,
   user_id: Uuid,
   view_id: Uuid,
@@ -1181,7 +1182,7 @@ async fn insert_page(
   // one the `rehost-image` endpoint takes — the one an image failure has to be
   // addressed to — is this one.
 ) -> ApiResult<Uuid> {
-  let mut tx = state.db.begin().await?;
+  let mut tx = db.begin().await?;
   let document = sqlx::query_as::<_, DocumentRecord>(
     r#"
       INSERT INTO documents (workspace_id, root_block_id, created_by)
@@ -1329,6 +1330,150 @@ mod import_job_persistence_tests {
     assert!(
       (5..=100).contains(&PERSIST_EVERY),
       "PERSIST_EVERY = {PERSIST_EVERY}: one write per page is a round-trip storm,        and hundreds of pages between checkpoints makes a stored job a lie"
+    );
+  }
+}
+
+/// The half `plan_import`'s own tests cannot reach: that what the planner
+/// produces actually LANDS in `views`.
+///
+/// Written the day after the planner learned manifest v2 (`icon`), because the
+/// two `INSERT`s were only ever compile-checked — and a bound column that never
+/// runs is exactly the "it compiles" / "it works" gap this repo keeps paying
+/// for. Skips (loudly, in CI) without DATABASE_URL, like the other `_pg` mods.
+#[cfg(test)]
+mod import_pg {
+  use super::*;
+  use mica_interchange::{TreeNode, ZipFileEntry, build_markdown_tree_zip, plan_import};
+  use std::collections::HashMap;
+
+  async fn pool() -> Option<PgPool> {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(
+        std::env::var("CI").is_err(),
+        "DATABASE_URL is unset in CI — the postgres service block regressed; \
+         these tests must not silently pass"
+      );
+      return None;
+    };
+    Some(PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed"))
+  }
+
+  async fn seed_workspace(db: &PgPool) -> (Uuid, Uuid) {
+    let user = Uuid::new_v4();
+    let ws = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+      .bind(user)
+      .bind(format!("{user}@import.test"))
+      .execute(db)
+      .await
+      .unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+      .bind(ws)
+      .bind(user)
+      .execute(db)
+      .await
+      .unwrap();
+    (ws, user)
+  }
+
+  fn node(id: &str, parent: Option<&str>, pos: &str, name: &str, ty: &str, icon: Option<&str>) -> TreeNode {
+    TreeNode {
+      id: id.to_string(),
+      parent_id: parent.map(str::to_string),
+      position: pos.to_string(),
+      name: name.to_string(),
+      object_type: ty.to_string(),
+      object_id: format!("obj-{id}"),
+      icon: icon.map(str::to_string),
+    }
+  }
+
+  /// Export a small tree, import it for real, and read `views` back.
+  ///
+  /// Asserts two things at once because they share the whole setup:
+  ///
+  /// 1. **`icon` survives.** The planner half is pinned in `mica-interchange`;
+  ///    this pins that the executor writes it.
+  /// 2. **Sibling ORDER survives without importing `position`.** The importer
+  ///    stamps its own `Uuid::now_v7()` per page in creation order, and creation
+  ///    order is the manifest's pre-order — so the manifest's `position` may
+  ///    already be redundant. That "may" is the point: three siblings created in
+  ///    one burst land in the same millisecond, so this also answers whether
+  ///    `now_v7` is monotonic there. If it is not, this test fails and the
+  ///    manifest's `position` has to be read after all.
+  #[tokio::test]
+  async fn manifest_v2_icons_and_sibling_order_reach_the_views_table() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+
+    let nodes = vec![
+      node("f1", None, "0000000010", "归档", "folder", Some("📁")),
+      node("p1", Some("f1"), "0000000010", "一月", "document", Some("😃")),
+      node("p2", Some("f1"), "0000000020", "二月", "document", None),
+      node("p3", Some("f1"), "0000000030", "三月", "document", Some("🎯")),
+    ];
+    let mut payloads = HashMap::new();
+    for id in ["p1", "p2", "p3"] {
+      payloads.insert(format!("obj-{id}"), mica_markdown::import_markdown("正文。", "root"));
+    }
+    let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
+      .into_iter()
+      .map(|z| ZipFileEntry { name: z.name, bytes: z.data })
+      .collect();
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+
+    // The executor's loop, minus the asset/link rewiring this test is not about.
+    let view_ids: Vec<Uuid> = plan.pages.iter().map(|_| Uuid::new_v4()).collect();
+    for (idx, page) in plan.pages.iter().enumerate() {
+      let parent = page.parent.map(|p| view_ids[p]);
+      if page.is_folder {
+        insert_folder(&db, ws, user, view_ids[idx], parent, &page.title, page.icon.as_deref())
+          .await
+          .unwrap();
+        continue;
+      }
+      let root_block_id = format!("block_{}", Uuid::new_v4().simple());
+      let payload = page_seed(&page.markdown, &page.title, &root_block_id);
+      insert_page(
+        &db,
+        ws,
+        user,
+        view_ids[idx],
+        parent,
+        &page.title,
+        page.icon.as_deref(),
+        &root_block_id,
+        &payload,
+      )
+      .await
+      .unwrap();
+    }
+
+    let rows: Vec<(String, Option<String>, String)> =
+      sqlx::query_as("SELECT name, icon, position FROM views WHERE workspace_id = $1 ORDER BY position")
+        .bind(ws)
+        .fetch_all(&db)
+        .await
+        .unwrap();
+
+    let icon_of = |n: &str| {
+      rows.iter().find(|r| r.0 == n).unwrap_or_else(|| panic!("{n} missing")).1.clone()
+    };
+    assert_eq!(icon_of("归档").as_deref(), Some("📁"), "folder icon reached the row");
+    assert_eq!(icon_of("一月").as_deref(), Some("😃"), "document icon reached the row");
+    assert_eq!(icon_of("二月"), None, "no icon stays NULL, not an empty string");
+    assert_eq!(icon_of("三月").as_deref(), Some("🎯"));
+
+    let order: Vec<&str> = rows
+      .iter()
+      .map(|r| r.0.as_str())
+      .filter(|n| *n != "归档")
+      .collect();
+    assert_eq!(
+      order,
+      ["一月", "二月", "三月"],
+      "siblings kept the manifest's order without the importer reading `position`"
     );
   }
 }

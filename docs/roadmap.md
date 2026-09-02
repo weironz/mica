@@ -77,10 +77,22 @@
   带记分牌的不变量(641/641 + `commonmark_scoreboard.rs`),Outline 导 ProseMirror JSON
   正是因为它没付这笔账 —— 抄它等于把已解决的问题再解决一遍。
 
-  **剩下的缺口**:导入端还只会按 path 重建形状 —— 读 v2 的 `id / parent_id / position /
-  icon` 重建结构、**重新生成 id 并重写内部链接**(AppFlowy `replace_document_ref_ids`
-  那套)这一步没做。comments 也还没进 manifest。Markdown 与 `assets/` 保持**原样保留**
-  (那是"不依赖 Mica 也能读"的一半),不要动。
+  **剩下的缺口(2026-09-02 逐项实测后收窄,比原先小得多)**:
+
+  - ✅ **`icon` 已接**(2026-09-02)。它是唯一一个**已证实在丢数据**的字段:导出写了、
+    导入丢了,而且静默 —— 缺图标和从没设过看起来一模一样。
+  - ❌ **`position` 不用做,实测。** 导入按 manifest 的 pre-order 创建页面,`insert_page`
+    自己盖 `Uuid::now_v7()`,兄弟顺序天然就是 manifest 顺序。原以为要读 `position`,
+    实际不用 —— 三个同级页面同一毫秒创建、连跑 10 次顺序都对,由
+    `import_pg::manifest_v2_icons_and_sibling_order_reach_the_views_table` 钉着。
+  - ⚠️ **「重新生成 id 并重写内部链接」的动机要重估。** 本条原先写着「v1 不记 id,所以
+    **任何**指向页面的东西都过不了一次 round trip」—— **那句是错的**,2026-09-02 实测:
+    页面间链接已经能 round-trip,导出改写成相对 `.md` 路径、导入侧 `resolve_ref` 解回
+    新页面。所以 id 重映射救的不是链接,而是**路径表达不了的引用**(指向归档之外的
+    页面、comments)。范围比原描述小很多。
+  - 🟡 **comments 进 manifest + 导入端读它** —— 这才是本条真正剩下的主体。
+
+  Markdown 与 `assets/` 保持**原样保留**(那是"不依赖 Mica 也能读"的一半),不要动。
 
   **为什么重新生成 id 而不是保住**:保 id 的危险只存在于"导回同一个实例" —— 导入建的是
   全新的 yrs 文档,state vector 与原来无关,客户端会拿本地缓存的同 id 旧文档去和一段
