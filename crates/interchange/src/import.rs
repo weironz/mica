@@ -26,6 +26,10 @@ pub struct PagePlan {
   /// `.md` of its own, or a manifest `type:"folder"` entry. The executor
   /// creates a `object_type='folder'` view (no document/snapshot) for these.
   pub is_folder: bool,
+  /// The sidebar emoji, from a manifest-v2 `icon`. None for v1 archives, for
+  /// foreign archives, and for synthetic folders we invent (a Mica export
+  /// states its folders explicitly, so those never need one).
+  pub icon: Option<String>,
 }
 
 #[derive(Debug)]
@@ -138,18 +142,25 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   // still reads the manifest, not the text.〕
   let folder_titles: HashMap<String, String> = entries
     .iter()
-    .filter(|(_, is_folder, _)| *is_folder)
-    .filter_map(|(path, _, title)| title.clone().map(|t| (path.clone(), t)))
+    .filter(|e| e.is_folder)
+    .filter_map(|e| e.title.clone().map(|t| (e.path.clone(), t)))
+    .collect();
+  // Icons for BOTH kinds, keyed by the manifest's own path (a folder's is its
+  // directory, a document's is its `.md`) — the two never collide, so one map
+  // serves both lookups below.
+  let icons: HashMap<String, String> = entries
+    .iter()
+    .filter_map(|e| e.icon.clone().map(|i| (e.path.clone(), i)))
     .collect();
   let mut ordered: Vec<(String, bool)> = Vec::new();
   let mut queued: HashSet<String> = HashSet::new();
-  for (path, is_folder, _) in entries {
-    if is_folder {
-      if queued.insert(path.clone()) {
-        ordered.push((path, true));
+  for e in entries {
+    if e.is_folder {
+      if queued.insert(e.path.clone()) {
+        ordered.push((e.path, true));
       }
-    } else if mds.contains_key(&path) && queued.insert(path.clone()) {
-      ordered.push((path, false));
+    } else if mds.contains_key(&e.path) && queued.insert(e.path.clone()) {
+      ordered.push((e.path, false));
     }
   }
   for path in order_page_paths(manifest_docs, manifest.as_deref()) {
@@ -220,6 +231,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
             parent,
             markdown: String::new(),
             is_folder: true,
+            icon: icons.get(&folder_path).cloned(),
           });
           let idx = pages.len() - 1;
           folder_page.insert(norm_folder.clone(), idx);
@@ -287,6 +299,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
             parent,
             markdown: String::new(),
             is_folder: true,
+            icon: None,
           });
           let idx = pages.len() - 1;
           folder_page.insert(own_norm.clone(), idx);
@@ -307,6 +320,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
       parent,
       markdown: body,
       is_folder: false,
+      icon: icons.get(path).cloned(),
     });
     page_by_path.insert(path.clone(), pages.len() - 1);
   }
@@ -367,6 +381,7 @@ fn wrap_in_container(plan: &mut ImportPlan, name: String) {
     parent: None,
     markdown: String::new(),
     is_folder: true,
+    icon: None,
   });
   for p in plan.pages.drain(..) {
     let parent = Some(p.parent.map(|i| i + 1).unwrap_or(0));
@@ -378,12 +393,27 @@ fn wrap_in_container(plan: &mut ImportPlan, name: String) {
   }
 }
 
-/// Parse the export `manifest.json` into `(path, is_folder, title)` in listed
-/// (pre-order) order. `title` is the entry's original display name (used to
-/// restore folder names, which have no `.md`/H1 to recover from). Entries
+/// One `pages[]` row of the export manifest.
+struct ManifestEntry {
+  path: String,
+  is_folder: bool,
+  /// The entry's original display name — used to restore folder names, which
+  /// have no `.md`/H1 to recover from.
+  title: Option<String>,
+  /// v2 only. v1 archives have no icon anywhere, so None is the honest answer
+  /// rather than a default.
+  icon: Option<String>,
+}
+
+/// Parse the export `manifest.json` in listed (pre-order) order. Entries
 /// without a `type` field default to document (v1 manifests, pre-folder).
 /// Empty/absent manifest → no entries.
-fn manifest_entries(manifest_json: Option<&str>) -> Vec<(String, bool, Option<String>)> {
+///
+/// Reads v1 and v2 with the same code: v2 only ADDED fields
+/// (`id`/`parent_id`/`position`/`icon`), so every v1 key still means what it
+/// meant. The version number is therefore not branched on — doing so would
+/// invent a second parser for one format.
+fn manifest_entries(manifest_json: Option<&str>) -> Vec<ManifestEntry> {
   let Some(json) = manifest_json else {
     return Vec::new();
   };
@@ -402,7 +432,15 @@ fn manifest_entries(manifest_json: Option<&str>) -> Vec<(String, bool, Option<St
         .get("title")
         .and_then(|t| t.as_str())
         .map(|s| s.to_string());
-      Some((path, is_folder, title))
+      // Absent OR empty both mean "no icon": the export omits the key when the
+      // page has none, but a hand-edited archive can carry `"icon": ""`, and an
+      // empty emoji would render as a blank slot rather than as no icon.
+      let icon = p
+        .get("icon")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string());
+      Some(ManifestEntry { path, is_folder, title, icon })
     })
     .collect()
 }
@@ -1019,6 +1057,82 @@ mod tests {
     assert_eq!(parent_title(&plan, "Note"), Some("Section"));
     assert!(find(&plan, "Appendix").is_folder);
     assert_eq!(parent_title(&plan, "Refs"), Some("Appendix"));
+  }
+
+  /// Icons survive export -> import.
+  ///
+  /// THE reason the import side had to learn manifest v2: v0.13.44 started
+  /// WRITING `icon` into the manifest and nothing read it, so an exported
+  /// workspace came back with every page icon blank — silently, because a
+  /// missing emoji looks exactly like a page that never had one.
+  ///
+  /// Built with the REAL exporter rather than a hand-written manifest, so the
+  /// two halves cannot drift: rename the key the export writes and this fails
+  /// here instead of in somebody's workspace.
+  #[test]
+  fn manifest_v2_icons_survive_export_then_import() {
+    use crate::export_tree::{TreeNode, build_markdown_tree_zip};
+
+    let node = |id: &str, parent: Option<&str>, name: &str, ty: &str, icon: Option<&str>| TreeNode {
+      id: id.to_string(),
+      parent_id: parent.map(str::to_string),
+      position: "0000000010".to_string(),
+      name: name.to_string(),
+      object_type: ty.to_string(),
+      object_id: format!("obj-{id}"),
+      icon: icon.map(str::to_string),
+    };
+    let nodes = vec![
+      node("f1", None, "归档", "folder", Some("📁")),
+      node("p1", Some("f1"), "周报", "document", Some("😃")),
+      // A sibling with NO icon: absent has to stay absent, not inherit.
+      node("p2", Some("f1"), "日报", "document", None),
+    ];
+    let mut payloads = HashMap::new();
+    for id in ["p1", "p2"] {
+      payloads.insert(format!("obj-{id}"), mica_markdown::import_markdown("正文。", "root"));
+    }
+    let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
+      .into_iter()
+      .map(|z| ZipFileEntry { name: z.name, bytes: z.data })
+      .collect();
+    assert!(
+      raw.iter().any(|e| e.name == "manifest.json"),
+      "precondition: the exporter wrote a manifest"
+    );
+
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    assert_eq!(find(&plan, "归档").icon.as_deref(), Some("📁"), "folder icon");
+    assert_eq!(find(&plan, "周报").icon.as_deref(), Some("😃"), "document icon");
+    assert_eq!(find(&plan, "日报").icon, None, "no icon stays no icon");
+  }
+
+  /// A v1 archive has no `icon` key anywhere. None is the honest answer — the
+  /// alternative (defaulting to something) would put an icon on pages that
+  /// never had one.
+  #[test]
+  fn a_v1_manifest_leaves_every_icon_unset() {
+    let raw = vec![
+      e("manifest.json", &manifest(&[("A.md", "A", "document")])),
+      e("A.md", "body"),
+    ];
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    assert_eq!(find(&plan, "A").icon, None);
+  }
+
+  /// `"icon": ""` is not an icon. The exporter omits the key entirely, but a
+  /// hand-edited or third-party archive can carry a blank one, and storing it
+  /// would render as an empty slot where the fallback glyph belongs.
+  #[test]
+  fn an_empty_icon_string_counts_as_no_icon() {
+    let json = serde_json::json!({
+      "version": 2, "generator": "mica",
+      "pages": [{"path": "A.md", "title": "A", "type": "document", "icon": "   "}],
+    })
+    .to_string();
+    let raw = vec![e("manifest.json", &json), e("A.md", "body")];
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    assert_eq!(find(&plan, "A").icon, None);
   }
 }
 

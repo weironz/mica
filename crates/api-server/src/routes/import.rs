@@ -904,6 +904,7 @@ async fn run_import(
         view_ids[idx],
         page.parent.map(|p| view_ids[p]).or(root_parent),
         &page.title,
+        page.icon.as_deref(),
       )
       .await?;
       {
@@ -1012,6 +1013,7 @@ async fn run_import(
       view_ids[idx],
       page.parent.map(|p| view_ids[p]).or(root_parent),
       &page.title,
+      page.icon.as_deref(),
       &root_block_id,
       &payload,
     )
@@ -1103,6 +1105,7 @@ async fn create_workspace(state: &AppState, user_id: Uuid, name: &str) -> ApiRes
 /// Insert a folder view (pure container) — no document, no snapshot. `object_id`
 /// is a fresh unreferenced uuid to satisfy the NOT NULL column. Mirrors
 /// [`documents::create_folder`], used by the import executor for folder pages.
+#[allow(clippy::too_many_arguments)]
 async fn insert_folder(
   state: &AppState,
   workspace_id: Uuid,
@@ -1110,6 +1113,7 @@ async fn insert_folder(
   view_id: Uuid,
   parent_view_id: Option<Uuid>,
   title: &str,
+  icon: Option<&str>,
 ) -> ApiResult<()> {
   let title = title.trim();
   let title = if title.is_empty() { "Untitled" } else { title };
@@ -1118,9 +1122,9 @@ async fn insert_folder(
   sqlx::query(
     r#"
       INSERT INTO views (
-        id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by
+        id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by, icon
       )
-      VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
+      VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7, $8)
     "#,
   )
   .bind(view_id)
@@ -1130,6 +1134,7 @@ async fn insert_folder(
   .bind(title)
   .bind(position)
   .bind(user_id)
+  .bind(icon)
   .execute(&state.db)
   .await?;
   Ok(())
@@ -1169,6 +1174,7 @@ async fn insert_page(
   view_id: Uuid,
   parent_view_id: Option<Uuid>,
   title: &str,
+  icon: Option<&str>,
   root_block_id: &str,
   payload: &mica_app_core::documents::DocumentSnapshotPayload,
   // Returns the DOCUMENT id, not the view id. They are different ids, and the
@@ -1203,9 +1209,9 @@ async fn insert_page(
   sqlx::query(
     r#"
       INSERT INTO views (
-        id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by
+        id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by, icon
       )
-      VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
+      VALUES ($1, $2, $3, $4, 'document', $5, $6, $7, $8)
     "#,
   )
   .bind(view_id)
@@ -1215,6 +1221,7 @@ async fn insert_page(
   .bind(title)
   .bind(position)
   .bind(user_id)
+  .bind(icon)
   .execute(&mut *tx)
   .await?;
 
