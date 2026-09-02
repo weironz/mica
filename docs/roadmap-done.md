@@ -764,3 +764,136 @@
   但上传全 404);实现走 S3 接口(`bucket::ensure_bucket`),不绑 RustFS,换 MinIO/OSS/S3 都成立 ——
   方案与调研见 `docs/bucket-provisioning-plan.md`。主干没动(Traefik / 受限部署账号仍无可重放路径),
   但「新机器起栈」现在只要填 `SERVER_IP` + `MICA_VERSION`。
+
+## 导入 / 批量整理 🆕
+
+- ~~🟡 **工作区级完整导出/导入(面向用户,不是灾备)**~~ ✅ **完成** —— 导出 v0.13.44
+  (manifest v2),导入 2026-09-02。**批注(comments)一项拍板不做**,理由在下面。
+
+  **交付了什么**:一个 zip 带走整个工作区 —— `manifest.json`(每页 id / 父 / 顺序 /
+  图标 / 类型)+ 每页 `.md` 正文 + 每页 `.mica.json` 块模型 + `assets/`;导入端重建
+  结构、正文、附件、页面间链接、图标。核心承诺(用户带得走自己的数据、且不依赖 Mica
+  也能读)已经兑现。
+
+  **逐项量下来,原描述里有两条是错的**(2026-09-02 实测):
+
+  - `position` **不用做**。导入按 manifest 的 pre-order 建页,`insert_page` 自己盖
+    `Uuid::now_v7()`,兄弟顺序天然一致 —— 三个同级页面同一毫秒创建、连跑 10 次都对
+    (`import_pg::manifest_v2_icons_and_sibling_order_reach_the_views_table` 钉着)。
+  - 「v1 不记 id,所以**任何**指向页面的东西都过不了 round trip」**是错的**。页面间
+    链接一直能 round-trip:导出改写成相对 `.md` 路径,导入侧 `resolve_ref` 解回新页面。
+    id 重映射救的从来不是链接。
+
+  真正在丢数据的只有 **`icon`** 一个:导出写了、导入丢了,而且静默 —— 缺图标和从没
+  设过看起来一模一样。已接(planner + 落库两侧都有测试,都做过变异验证)。
+
+  ### 批注为什么不做(2026-09-02,用户拍板)
+
+  **产品理由**:批注是**过程**不是**内容**。同类里 Outline 的 JSON 导出**不含**评论,
+  AppFlowy 也不导。而这条功能的核心承诺是"用户带得走自己的数据",结构/正文/附件/
+  链接/图标齐了就已经兑现;批注是收益最小、代价最大、且**失败模式最难看**的一块 ——
+  一条落在错位置的批注,比没有这条批注更糟。
+
+  **技术发现(真做的话必须先翻过这三堵墙,别从零再撞一遍)**:
+
+  1. **它和 view id 不是一回事。** `comment_threads.document_id → documents(id)`,挂在
+     **文档**上;manifest 记的是 **view id**(`TreeNode.id`),文档 id 是 `object_id`,
+     **manifest 里根本没写**。所以它和「按 id 重映射」不能顺手合成一件事。
+  2. **锚点字节不可搬运。** 锚是 yrs `StickyIndex::encode_v1`,由某份具体 `Doc` 的
+     `TextRef` 产生,编的是**那份文档历史里的位置**。导入建的是全新 yrs 文档
+     (`seed_base_tx`,全新 payload),client id / clock 与原文档无关 —— 搬字节过去
+     要么 `decode_v1` 失败,要么落在任意位置。`doc.rs` 自己写着「Never guess a
+     position — a wrong highlight is worse than none」。**导入端必须重新锚定**:
+     导出侧 `resolve_range` 能把 sticky 解成 `(block, offset)`,导入侧
+     `sticky_for_range` 能在新文档里重造 —— 所以归档要存 `(block, offset)`,不存字节。
+  3. **重新锚定需要块身份,而块 id 现在不稳定。** 导入端走
+     `import_markdown(&page.markdown, root_block_id)`,从 markdown 现生成新块 id;
+     `.mica.json` 里那份带 id 的块模型**没有任何消费方**。于是有岔路:
+     **A** 导入端改从 `.mica.json` 建文档(块 id 保住,但导入主路径整个换掉,且要先
+     拍板 `.md` 与 `.mica.json` 谁是权威);**B** 靠「第 n 个块 + `quote`」对齐重锚
+     (代价小,少数线程会变 `orphaned` —— 而 `orphaned` 本来就是表里的既有状态,
+     它的设计意图正是"锚不上就挂着 quote 显示,不硬猜")。当时倾向 B。
+  4. ⚠️ **不管将来怎么做,一条红线**:0014 迁移把 comments 放 Postgres 而非放进 yrs
+     文档,好处之一是 "a comment can never leak into an export"。放进 manifest /
+     sidecar **不违反**这条,但**绝不能进 `.md` 正文** —— 一旦漏进去,round-trip 红线
+     当场破,而且要等到有人 export→import→export 才发现。
+
+    这里剩下的是导入端。2026-08-30 先判"不做",当天被
+    推翻。**推翻的理由值得写在最前面,因为错的是问题本身**:我一直在回答「运维方要不要
+    它」(不要,运维方有 `pg_dump`),而同类产品做它是在回答「**用户**要不要」。对云上的
+    用户,"你有 pg_dump 啊"意味着**把多租户数据库和对象存储的凭据交给他、让他自己写脚本
+    捞自己那份** —— 不可能,也不该。Outline 的 JSON 导出正是为此存在,而我上一轮甚至自己
+    写过这句话,又用"Mica 只自托管"把它折价掉了 —— **那个前提是我替用户假设的。**
+
+    **导出那半已经做完了(v0.13.44)**:`manifest.json` 升到 v2
+    (`crates/interchange/src/export_tree.rs`),每条带 `id / parent_id / position / icon`
+    —— 不再只是 path + title,能说出「这是同一个页面」。每个文档旁另有一份
+    `<page>.mica.json`(`{schema_version, root_block_id, blocks[], assets}`)。
+    两半刻意在一件事上不一致并配了测试:内部页面链接在 markdown 里改写成相对 `.md` 路径
+    (给人跟),在 JSON 里保持 `mica://page/<viewId>`(给导入端按 id 重映射)——
+    把 JSON 也改写掉就丢掉了它存在的全部理由。
+
+    **三家实证**:
+    - **Outline**(Node + Postgres + 自托管,和我们同构):有 `FileOperationFormat.JSON`。
+      zip 里是 `metadata.json`(`exportVersion: 1`)+ 每个 collection 一个 JSON,记
+      `id / parentDocumentId / documentStructure / icon / color / 作者 / 时间戳` +
+      **`data` = ProseMirror JSON**。注意它 `findByPk(id, {includeState: true})` 加载了
+      CRDT state **却不导出**,只导编辑器模型 —— 主动躲开版本耦合。连 markdown 那档都叫
+      `outline-markdown`,承认是方言。
+    - **AppFlowy**:**根本没有 `.appflowy` 格式**。入口是 `ImportAppFlowyDataFolder`,
+      直接打开另一个安装的数据目录(SQLite + collab KV)。而且它**不保 id** ——
+      `OldToNewIdMap::exchange_new_id` 给每个对象重新生成,再用 `replace_document_ref_ids`
+      把文档里所有 `mention`/`page_id`/`view_id` 重写过去。**拿着完整原生数据也选择重新 id。**
+    - **Joplin**:JEX 是真格式(`tarCreate` 打包它自己的 raw item,item 自带 id)。
+
+    **为什么它们有而我们不需要**:前两家都是 local-first,**存储本身就是唯一权威副本**,
+    没有服务端转储可用。我们是 server-first,那条无损路径叫 `pg_dump` + 对象,已端到端
+    验证(11′50″)。**另外正文保真那一轴我们用的是另一个答案**:markdown round-trip 是
+    带记分牌的不变量(641/641 + `commonmark_scoreboard.rs`),Outline 导 ProseMirror JSON
+    正是因为它没付这笔账 —— 抄它等于把已解决的问题再解决一遍。
+
+    **剩下的缺口(2026-09-02 逐项实测后收窄,比原先小得多)**:
+
+    - ✅ **`icon` 已接**(2026-09-02)。它是唯一一个**已证实在丢数据**的字段:导出写了、
+      导入丢了,而且静默 —— 缺图标和从没设过看起来一模一样。
+    - ❌ **`position` 不用做,实测。** 导入按 manifest 的 pre-order 创建页面,`insert_page`
+      自己盖 `Uuid::now_v7()`,兄弟顺序天然就是 manifest 顺序。原以为要读 `position`,
+      实际不用 —— 三个同级页面同一毫秒创建、连跑 10 次顺序都对,由
+      `import_pg::manifest_v2_icons_and_sibling_order_reach_the_views_table` 钉着。
+    - ⚠️ **「重新生成 id 并重写内部链接」的动机要重估。** 本条原先写着「v1 不记 id,所以
+      **任何**指向页面的东西都过不了一次 round trip」—— **那句是错的**,2026-09-02 实测:
+      页面间链接已经能 round-trip,导出改写成相对 `.md` 路径、导入侧 `resolve_ref` 解回
+      新页面。所以 id 重映射救的不是链接,而是**路径表达不了的引用**(指向归档之外的
+      页面、comments)。范围比原描述小很多。
+    - 🟡 **comments 进 manifest + 导入端读它** —— 这才是本条真正剩下的主体。
+
+    Markdown 与 `assets/` 保持**原样保留**(那是"不依赖 Mica 也能读"的一半),不要动。
+
+    **为什么重新生成 id 而不是保住**:保 id 的危险只存在于"导回同一个实例" —— 导入建的是
+    全新的 yrs 文档,state vector 与原来无关,客户端会拿本地缓存的同 id 旧文档去和一段
+    无关历史合并。用户导出是**导到别处**,重新 id 之后这个风险自动消失,设计还更简单。
+    (灾备要的"导回同一实例"由 DB + 对象负责,不走这条路。)
+
+    ⚠️ **它不替代灾备,两件事两个消费者**:靠它"恢复"出来的实例没有账号(`users` /
+    `server_secrets` 不在里面,也不该在 —— 那是运维方的东西,不是用户的)。运维侧恢复
+    仍以**数据库 + 对象**为准(`docs/dr-plan.md` §3)。**把这两件事混成一件,正是这条
+    条目第一版判断错的原因。**
+
+    **工作量比看上去小,大头不在正文**:`crates/markdown` 的 `Block`
+    (`{id, type, text, data, children}` + 外层 `schema_version` / `root_block_id`)
+    **已经是 `Serialize`/`Deserialize` 且带 schema 版本号** —— 它是导入/导出/MCP 共用的
+    中间表示。Outline 要专门写 `DocumentHelper.toProsemirror(document).toJSON()` 那一步,
+    我们不用写。**views 树那一半也已经写进 manifest v2 了**,剩下的纯粹是导入端:
+    读它重建 + 重新生成 id + 重写内部链接,外加 comments 进 manifest。
+
+    **导出时现解 CRDT,不要为它加一列 JSONB**。对照:Outline 的 Document 同时有
+    `state`(`DataType.BLOB`,Yjs 二进制,权威)和 `content`(`DataType.JSONB`,注释自己
+    写着 "a snapshot at the last time the state was saved");我们是 `state`(bytea)+
+    `content_text`(text,只有文字)。**看起来我们做少了,其实是刻意的** —— 宽投影多一处
+    要跟 CRDT 同步的表示(红线 #1 双表示),Outline 用 `@SkipChangeset` 承认了它是滞后的。
+    而导出所需的解码路径本来就存在(不然 markdown 导不出来)。
+    **加宽只在需要"在数据库里按结构查询"时才值得**(例如全库找某类块)—— 那是搜索需求,
+    不是导出需求,别为了导出去加一列。
+
+    **优先级取决于云服务什么时候上** —— 自托管时它是"锦上添花"(运维方本来就有库),
+    **一旦提供托管,它就是必答题**:用户带不走自己的数据,是产品问题不是技术问题。(M)
