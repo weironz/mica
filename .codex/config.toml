@@ -1,0 +1,15 @@
+[mcp_servers.dart]
+command = "dart"
+args = ["mcp-server"]
+
+[mcp_servers.dart.env]
+FLUTTER_SDK = 'C:\flutter'
+
+[mcp_servers.playwright]
+command = "npx"
+args = [
+    "-y",
+    "@playwright/mcp@latest",
+    "--browser",
+    "chrome",
+]
