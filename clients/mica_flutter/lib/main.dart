@@ -33,6 +33,7 @@ import 'widgets/mica_logo.dart';
 import 'editor/pick_image.dart';
 import 'ui/auth_form.dart';
 import 'ui/autoscroll.dart';
+import 'ui/navigation_draggable.dart';
 import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
 import 'ui/copy_button.dart';
@@ -10157,10 +10158,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   /// Wrap a page row so it can be dragged to reorder among its siblings (its
-  /// subtree follows, since children render under their parent). Press and
-  /// move to start dragging — Draggable fires as soon as the pointer clears
-  /// touch slop, while a motionless click still opens the page. (Long-press
-  /// felt broken with a mouse: moving during the 500ms hold cancels it.)
+  /// subtree follows, since children render under their parent). Touch moves
+  /// scroll the tree; long-press then move reorders. Mouse drags start at once.
   /// The top/bottom half of each sibling row is a drop slot (before/after).
   Widget _draggableTreeRow(
     DocumentView view,
@@ -10170,7 +10169,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   ) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Draggable<List<DocumentView>>(
+      child: NavigationDraggable<List<DocumentView>>(
         // Grabbing a row inside a multi-selection drags the whole selection —
         // the same rule the context menu uses, so what you get is what the
         // highlight already showed you.

@@ -447,14 +447,14 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
   }
 
   /// Wrap a workspace row so it drags to reorder (mirrors the doc tree's
-  /// `_draggableTreeRow`): press-and-move to drag; a motionless tap still
-  /// selects. Top half = drop-before slot, bottom half = drop-after.
+  /// `_draggableTreeRow`): touch scrolls until held; mouse drags immediately.
+  /// A motionless tap selects. Top half = drop-before, bottom half = drop-after.
   Widget _wsDraggableRow(
     WorkspaceEntry entry,
     List<WorkspaceEntry> world,
     Widget row,
   ) {
-    return Draggable<WorkspaceEntry>(
+    return NavigationDraggable<WorkspaceEntry>(
       data: entry,
       dragAnchorStrategy: pointerDragAnchorStrategy,
       onDragStarted: () => setState(() => _dragging = true),
