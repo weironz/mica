@@ -4115,22 +4115,29 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  Future<void> _renameView(DocumentView view, String name) {
-    return _run(() async {
+  Future<bool> _renameView(DocumentView view, String name) async {
+    final workspaceId =
+        workspaceIdOfView(
+          viewsByWorkspace: _viewsByWorkspace,
+          viewId: view.id,
+        ) ??
+        _selectedWorkspace?.id;
+    var saved = false;
+    await _run(() async {
       final session = _requireSession();
-      final workspace = _requireWorkspace();
+      final targetWorkspaceId = workspaceId ?? _requireWorkspace().id;
       final renamed = await _api.updateView(
         session.accessToken,
-        workspace.id,
+        targetWorkspaceId,
         view.id,
         name,
       );
 
       setState(() {
-        final views = _viewsByWorkspace[workspace.id] ?? const [];
+        final views = _viewsByWorkspace[targetWorkspaceId] ?? const [];
         _viewsByWorkspace = {
           ..._viewsByWorkspace,
-          workspace.id: views
+          targetWorkspaceId: views
               .map((item) => item.id == renamed.id ? renamed : item)
               .toList(),
         };
@@ -4148,7 +4155,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           );
         }
       });
+      saved = true;
     });
+    return saved;
   }
 
   Future<void> _deleteView(DocumentView view) {
@@ -5426,7 +5435,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     ]);
   }
 
-  Future<void> _localRenameView(DocumentView view, String name) async {
+  Future<bool> _localRenameView(DocumentView view, String name) async {
     final title = name.trim().isEmpty ? 'Untitled' : name.trim();
     // The name belongs to the DOCUMENT (root block `title`); the view row is the
     // projection. The cloud does this inside `PATCH /views/{id}` server-side —
@@ -5446,7 +5455,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       trashed: false,
       objectType: view.objectType,
     ));
-    if (!mounted) return;
+    if (!mounted) return true;
     setState(() {
       _reloadLocalViews();
       if (_localSelectedView?.id == view.id) {
@@ -5469,6 +5478,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         }
       }
     });
+    return true;
   }
 
   /// A view and all its descendants from the on-device set (incl. trashed rows),
@@ -8441,7 +8451,7 @@ class WorkspaceView extends StatefulWidget {
   /// exists (本地模式).
   final Future<int> Function()? onPurgeAllTrash;
   final Future<void> Function(DocumentView view) onSelectView;
-  final Future<void> Function(DocumentView view, String name) onRenameView;
+  final Future<bool> Function(DocumentView view, String name) onRenameView;
 
   /// Opens the emoji picker for a view and persists the choice. Null where icons
   /// cannot be stored (the local world), which hides the menu entry entirely.
@@ -8684,6 +8694,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   final FocusNode _editorFocus = FocusNode(debugLabel: 'MicaEditorBody');
   final FocusNode _pageTitleFocus = FocusNode(debugLabel: 'PageTitle');
   Timer? _pageTitleSaveTimer;
+
+  // An edit stays pending until the document acknowledges its normalized title.
+  // The revision prevents a failed older save from releasing newer input.
+  bool _pageTitleEditPending = false;
+  int _pageTitleEditRevision = 0;
   // How many backlinks the panel below the editor is showing, and which page
   // that answer is about — a count carried over from the previous page would
   // size THIS page's canvas wrongly for one frame. See [_editorAppearance].
@@ -9000,6 +9015,22 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final bootstrap = widget.selectedBootstrap;
     final idChanged =
         bootstrap?.view.id != oldWidget.selectedBootstrap?.view.id;
+    if (idChanged) {
+      // Flush the departing page before replacing its field. A timer that
+      // reads widget later would see the newly selected page instead.
+      if (_pageTitleSaveTimer?.isActive ?? false) {
+        final oldBootstrap = oldWidget.selectedBootstrap;
+        final title = renamedTo(_pageTitle.text, oldBootstrap?.pageTitle ?? '');
+        _pageTitleSaveTimer?.cancel();
+        if (oldBootstrap != null && title != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            unawaited(oldWidget.onRenameView(oldBootstrap.view, title));
+          });
+        }
+      }
+      _pageTitleEditPending = false;
+      _pageTitleEditRevision++;
+    }
     // New page open → reseed the outline from its snapshot immediately (the new
     // editor's live publish is one frame away; this avoids a stale-headings flash).
     if (idChanged) _seedOutline();
@@ -9012,14 +9043,34 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // case this fixes — the document changed and the column had not caught up.
     if (idChanged ||
         bootstrap?.pageTitle != oldWidget.selectedBootstrap?.pageTitle) {
-      // Skip the no-op echo of our own rename: assigning .text resets the
-      // selection, which the web engine renders as select-all — one
-      // backspace in the title would select the whole name after the
-      // debounced save round-tripped. An untitled page renders empty so its
-      // placeholder shows instead of solid text.
+      // An untitled page renders empty so its placeholder shows instead of
+      // solid text.
       final name = bootstrap?.pageTitle ?? '';
       final display = isUntitledPageName(name) ? '' : name;
-      if (_pageTitle.text != display) _pageTitle.text = display;
+      // Who wins is [titleFieldSync]'s call, not this widget's: an incoming
+      // title is as likely to be the echo of our own debounced save (arriving
+      // mid-word, half a title behind the field) as it is a rename from
+      // somewhere else. Assigning unconditionally ate the rest of what the
+      // user was typing.
+      switch (titleFieldSync(
+        field: _pageTitle.text,
+        documentTitle: name,
+        displayTitle: display,
+        pageChanged: idChanged,
+        // A live IME composition counts as pending even if no keystroke has
+        // committed yet: assigning .text mid-composition drops the 拼音 in
+        // flight, which is input loss of its own.
+        editPending:
+            _pageTitleEditPending || _pageTitle.value.composing.isValid,
+      )) {
+        case TitleFieldSync.keepField:
+          break;
+        case TitleFieldSync.settled:
+          _pageTitleEditPending = false;
+        case TitleFieldSync.takeDocument:
+          _pageTitle.text = display;
+          _pageTitleEditPending = false;
+      }
     }
     // Opening a fresh/untitled page with the title shown: land the caret in the
     // title so you can name it right away (instead of on the body), matching the
@@ -10850,17 +10901,33 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   void _schedulePageTitleSave() {
+    // The field is now ahead of the document. Latched BEFORE the timer, not
+    // inside it: the point is to hold from the first keystroke, and what this
+    // guards against is the echo of a save an EARLIER timer already sent.
+    _pageTitleEditPending = true;
+    final revision = ++_pageTitleEditRevision;
     _pageTitleSaveTimer?.cancel();
-    _pageTitleSaveTimer = Timer(const Duration(milliseconds: 700), () {
+    _pageTitleSaveTimer = Timer(const Duration(milliseconds: 700), () async {
       final bootstrap = widget.selectedBootstrap;
       if (bootstrap == null) return;
       // Compared against the SAME value the field is showing. Against
-      // iew.name instead, a rename that arrived from another device would
+      // view.name instead, a rename that arrived from another device would
       // look like the user had just typed one, and this would push it back.
       final title = renamedTo(_pageTitle.text, bootstrap.pageTitle);
-      if (title == null) return;
+      if (title == null) {
+        // Nothing to send (blank, or back to the name it already had), so no
+        // echo is coming to settle the latch. Release it here, or the field
+        // would refuse every later update for the rest of this page's life.
+        _pageTitleEditPending = false;
+        return;
+      }
 
-      widget.onRenameView(bootstrap.view, title);
+      final saved = await widget.onRenameView(bootstrap.view, title);
+      // A failed request has no echo. Release only its own edit, never newer
+      // keystrokes or a different page selected while the request ran.
+      if (!saved && mounted && revision == _pageTitleEditRevision) {
+        _pageTitleEditPending = false;
+      }
     });
   }
 
