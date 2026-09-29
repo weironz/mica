@@ -171,7 +171,7 @@
   - **有效性已实测**：把 `isCurrent` 弱化成「总是返回 true」（即旧代码的 last-writer-wins）后，两条用例失败（`Expected: false / Actual: <true>`）；恢复后 5 项全过。
   - 测试写明它测的是**规则**：把「两个响应乱序到达」对着真实的 HTTP 客户端与 socket 摆出来是可行的，但「指望这个顺序在生产环境里恰好发生」正是被修掉的东西。
 
-### P1-12 Web IndexedDB 写锁早于写队列完成释放 — 已实施，未实测（环境受限）
+### P1-12 Web IndexedDB 写锁早于写队列完成释放 — DONE
 
 - **文件 / 位置**：[web_idb_doc_store.dart:359-390](clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L359-L390)、[web_idb_doc_store.dart:455-464](clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L455-L464)、[web_idb_doc_store.dart:561-569](clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L561-L569)、[web_idb_doc_store_test.dart:46-55](clients/mica_flutter/test/web_idb_doc_store_test.dart#L46-L55)。
 - **问题 / 原因**：`dispose()` 先释放单写者 Web Lock，之后才等 `_tail` 队列完成；新实例可抢锁、读到旧 outbox，再以整份 rows 覆写仍在提交的旧实例。现有重开测试总先 flush，避开这个交接时序。
@@ -180,8 +180,7 @@
 - **预计收益**：高；保护离线 outbox 的单写者语义。
 - **已实施（2026-09-29）**：`dispose()` 改为在 `_tail.whenComplete` 里**先放锁、再关连接**，即等写队列 settled 后才交接。同时重写了那段「立刻放锁」的理由 —— 原文说这样能让同 Tab 的会话重建（B3 sync-retry）马上重新拿到可写镜像，而那个取舍正是缺陷本身：后继者在窗口内 `_hydrate` 读到前任**尚未写完**的 outbox 行，再用自己那份短内存副本整份重写 `rows`，未推送的离线编辑就此消失（正是单写者锁存在的理由）。代价有界：tail 只是若干个 IndexedDB 事务，重建等的是毫秒级。失败链也会释放 —— `whenComplete` 出错也执行，且 `_mirror` 已把写失败吞进 `_broken`，不会卡住交接。
 - **回归测试**：`web_idb_doc_store_test.dart` 新增 `P1-12: a disposed store hands over only AFTER its queued writes land`。刻意**不复用** `reopen()`：那个辅助先 `flush()` 再 `dispose()`，恰好绕开要检的时序；这里改为连排 40 条 outbox 后**不 flush 直接 dispose**，再竞速重开，断言后继者看到全部 40 条。
-- **⚠️ 未实测，如实记录**：本机 `flutter test --platform chrome` 无法运行 —— 表现为测试套件加载后 Chromium 启动、随后长时间挂起（日志实测 `[+372773 ms] Shutting down Chromium`，是我自己 timeout 杀掉的；末尾的 `The Dart compiler exited unexpectedly` 是被杀之后的收尾噪音，不是编译错误）。**已确认与本次改动无关**：`git stash` 掉 P1-12 改动后跑**基线**，同样挂起；另用一个不 import 任何应用代码的平凡浏览器测试作探针，也是同样症状 → 环境问题（本机 Chrome/浏览器测试链路），不是回归。代码本身 `dart analyze` 干净。**待有可用浏览器环境时补跑该测试。**
-- **顺带排查记录**：`build/4d8a75823b0a70673c723f38357fb42a.cache.dill.track.dill` 曾只有 48 MB（同目录其它同类缓存 76–79 MB），是截断的增量 dill，已定点删除（非 `rm -rf .dart_tool/flutter_build`）。删除后症状不变，说明它不是本次挂起的原因。
+- **真实浏览器验证（2026-09-30）**：在 [CI run 36605416496](https://github.com/weironz/mica/actions/runs/36605416496) 的 Linux `web-e2e` job 中，`IndexedDB store browser regression` 已成功运行 `flutter test --platform chrome test/web_idb_doc_store_test.dart`。本机 Windows 测试服务对自己提供的 CanvasKit URL 返回 404，导致用例未加载；CI 成功结果才是本项验收依据。
 
 ### P1-13 追更判 gap 与拉取更新之间允许并发裁剪 — DONE
 
@@ -281,23 +280,23 @@
 - **预计收益**：中；部署结果更接近用户实际可用性。
 - **已实施 / 验证（2026-09-30）**：`verify-prod.sh` 现在拒绝首页 500、重定向和错误 HTML；新增离线回归脚本覆盖五种响应，实跑通过，并对当前生产 v0.13.46 执行无破坏冒烟通过。部署脚本不再把 `/mcp` 的 SPA 200 误报为 MCP 正常。
 
-### P2-08 三个 Windows 云端集成用例未进持续集成 — 已接入，待 CI 真跑
+### P2-08 三个 Windows 云端集成用例未进持续集成 — DONE
 
 - **文件 / 位置**：[flutter-integration.yml:13-18](.github/workflows/flutter-integration.yml#L13-L18)、[flutter-integration.yml:135-141](.github/workflows/flutter-integration.yml#L135-L141)；对应 `integration_test/migration_sync_test.dart`、`offline_image_reconcile_test.dart`、`page_switch_fidelity_test.dart`。
 - **问题 / 原因**：工作流明确排除需要真实对象存储的三个用例，只运行无需 S3 的 `cloud_sync_test`。因此图片上传/重连、迁移和切页的 Windows 真链路变更不能由 CI 护航。这是已知基础设施取舍，不是“所有集成测试均已覆盖”。
 - **推荐修改方式**：在支持 Linux 容器的 runner 增加可覆盖相同客户端链路的测试，或给 Windows runner 提供受控 S3 兼容服务；先确保失败不会静默跳过。
 - **风险**：当前发布前存在这三条链路的测试盲区；新增栈会增加 CI 时间和维护成本。
 - **预计收益**：中高；降低跨端存储/同步回归进入发布包的概率。
-- **已实施，待验证**：Windows cloud job 改为下载并校验与 Compose 相同的 RustFS rc.3 官方 Windows 发布包，启动 Postgres、RustFS、API 后串行运行四个 live 用例；本机已验证二进制启动与 ready=200，工作流语法检查通过。**GitHub runner 尚未执行新流程，暂不标 DONE。**
+- **已实施 / 验证（2026-09-30）**：Windows cloud job 下载并校验与 Compose 相同的 RustFS rc.3 官方 Windows 发布包，启动 Postgres、RustFS、API 后串行运行四个 live 用例；本机验证二进制启动与 ready=200。[Flutter Integration Tests run 36605416536](https://github.com/weironz/mica/actions/runs/36605416536) 全部通过，日志中依次出现 `cloud_sync_test.dart`、`migration_sync_test.dart`、`offline_image_reconcile_test.dart`、`page_switch_fidelity_test.dart` 和最终成功标记，确认没有静默跳过。
 
-### P2-09 浏览器剪贴板实际链路缺持久 E2E 回归 — 本机 DONE，待 CI
+### P2-09 浏览器剪贴板实际链路缺持久 E2E 回归 — DONE
 
 - **文件 / 位置**：[copy_markdown_test.dart:39-73](clients/mica_flutter/test/copy_markdown_test.dart#L39-L73)、[web_e2e.mjs](e2e/web_e2e.mjs)。
 - **问题 / 原因**：Dart 单测验证复制文本生成器，但 Web E2E 没有浏览器真实 Ctrl+A/C、`ClipboardItem` 与读回 `text/plain` 的断言；本次代码围栏缺陷只能靠一次性手工浏览器冒烟覆盖 UI 到系统剪贴板的组合路径。
 - **推荐修改方式**：在固定小文档的浏览器用例里，授予测试页 clipboard 权限，分别验证“单个代码块纯文本”和“跨块 Markdown”，同时校验 CRLF/LF 归一化；保存失败截图。
 - **风险**：当前控件、键盘与 Web 剪贴板 API 的接线可在单测全绿时回归；浏览器权限模拟可能带来少量测试脆弱性。
 - **预计收益**：中；让这类用户可见复制缺陷由 CI 直接发现。
-- **已实施 / 验证（2026-09-30）**：测试专用 Flutter Web 入口渲染真实 `MicaEditor`，仅用公开 hook 聚焦；Playwright 发真实 Ctrl+A/C 并读回 `ClipboardItem` 的 plain/html。单代码块得到无围栏源码，跨块得到 Markdown 围栏；本机两场景通过，CI 已接入独立构建与失败截图，待推送后观察。
+- **已实施 / 验证（2026-09-30）**：测试专用 Flutter Web 入口渲染真实 `MicaEditor`，仅用公开 hook 聚焦；Playwright 发真实 Ctrl+A/C 并读回 `ClipboardItem` 的 plain/html。单代码块得到无围栏源码，跨块得到 Markdown 围栏；本机两场景通过，[CI run 36605416496](https://github.com/weironz/mica/actions/runs/36605416496) 的 `Browser clipboard regression through the real editor` 也已通过，失败时保留截图。
 
 ### P2-10 两份 Compose 的 API 环境变量允许清单已经漂移 — DONE
 
