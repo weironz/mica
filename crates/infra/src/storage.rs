@@ -150,6 +150,33 @@ impl S3Config {
     }
   }
 
+  /// Browser upload that must create this key with the declared SHA-256 bytes.
+  /// Both headers are signed: the holder cannot drop the write-once condition
+  /// or substitute bytes with a different checksum.
+  pub fn presign_put_if_absent(&self, key: &str, checksum_sha256: &str) -> PresignedUpload {
+    let (base_url, host, canonical_uri) = self.object_location(key);
+    let url = sign_presigned(
+      &PresignRequest {
+        method: "PUT",
+        base_url: &base_url,
+        host: &host,
+        canonical_uri: &canonical_uri,
+        region: &self.region,
+        access_key: &self.access_key,
+        secret_key: &self.secret_key,
+        expires_in: self.presign_ttl_seconds,
+        write_once_checksum_sha256: Some(checksum_sha256),
+        head_checksum_mode: false,
+      },
+      Utc::now(),
+    );
+    PresignedUpload {
+      url,
+      method: "PUT",
+      expires_in: self.presign_ttl_seconds,
+    }
+  }
+
   /// Presigned `PUT` for an upload **this process** performs: avatars, imported
   /// images, anything re-hosted server-side.
   ///
@@ -218,6 +245,29 @@ impl S3Config {
     let (base_url, host, canonical_uri) =
       self.location(self.server_endpoint(), &uri_encode(key, false));
     self.sign_at("HEAD", &base_url, &host, &canonical_uri, Utc::now())
+  }
+
+  /// HEAD that asks S3 to return its recorded SHA-256 checksum. The request
+  /// header is signed, so strict SigV4 stores can verify it as well as RustFS.
+  /// The caller must send `x-amz-checksum-mode: ENABLED` with this URL.
+  pub fn presign_head_object_with_checksum(&self, key: &str) -> String {
+    let (base_url, host, canonical_uri) =
+      self.location(self.server_endpoint(), &uri_encode(key, false));
+    sign_presigned(
+      &PresignRequest {
+        method: "HEAD",
+        base_url: &base_url,
+        host: &host,
+        canonical_uri: &canonical_uri,
+        region: &self.region,
+        access_key: &self.access_key,
+        secret_key: &self.secret_key,
+        expires_in: self.presign_ttl_seconds,
+        write_once_checksum_sha256: None,
+        head_checksum_mode: true,
+      },
+      Utc::now(),
+    )
   }
 
   /// Presigned `PUT` on the bucket itself — S3 `CreateBucket`. Server-side only.
@@ -315,6 +365,8 @@ impl S3Config {
         access_key: &self.access_key,
         secret_key: &self.secret_key,
         expires_in: self.presign_ttl_seconds,
+        write_once_checksum_sha256: None,
+        head_checksum_mode: false,
       },
       now,
     )
@@ -331,6 +383,8 @@ impl S3Config {
       access_key: &self.access_key,
       secret_key: &self.secret_key,
       expires_in: self.presign_ttl_seconds,
+      write_once_checksum_sha256: None,
+      head_checksum_mode: false,
     };
     sign_presigned(&request, now)
   }
@@ -351,16 +405,25 @@ struct PresignRequest<'a> {
   access_key: &'a str,
   secret_key: &'a str,
   expires_in: u64,
+  write_once_checksum_sha256: Option<&'a str>,
+  head_checksum_mode: bool,
 }
 
 /// Produce a presigned URL using AWS Signature Version 4 (query parameters,
-/// `UNSIGNED-PAYLOAD`, `host` as the only signed header).
+/// `UNSIGNED-PAYLOAD`, and an optional signed write-once precondition).
 fn sign_presigned(request: &PresignRequest, now: DateTime<Utc>) -> String {
   let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
   let date_stamp = now.format("%Y%m%d").to_string();
   let scope = format!("{date_stamp}/{}/s3/aws4_request", request.region);
   let credential = format!("{}/{scope}", request.access_key);
 
+  let signed_headers = if request.write_once_checksum_sha256.is_some() {
+    "host;if-none-match;x-amz-checksum-sha256"
+  } else if request.head_checksum_mode {
+    "host;x-amz-checksum-mode"
+  } else {
+    "host"
+  };
   let mut params = [
     (
       "X-Amz-Algorithm".to_string(),
@@ -369,7 +432,7 @@ fn sign_presigned(request: &PresignRequest, now: DateTime<Utc>) -> String {
     ("X-Amz-Credential".to_string(), credential),
     ("X-Amz-Date".to_string(), amz_date.clone()),
     ("X-Amz-Expires".to_string(), request.expires_in.to_string()),
-    ("X-Amz-SignedHeaders".to_string(), "host".to_string()),
+    ("X-Amz-SignedHeaders".to_string(), signed_headers.to_string()),
   ];
   params.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -379,10 +442,16 @@ fn sign_presigned(request: &PresignRequest, now: DateTime<Utc>) -> String {
     .collect::<Vec<_>>()
     .join("&");
 
-  let canonical_headers = format!("host:{}\n", request.host);
+  let canonical_headers = if let Some(checksum) = request.write_once_checksum_sha256 {
+    format!("host:{}\nif-none-match:*\nx-amz-checksum-sha256:{checksum}\n", request.host)
+  } else if request.head_checksum_mode {
+    format!("host:{}\nx-amz-checksum-mode:ENABLED\n", request.host)
+  } else {
+    format!("host:{}\n", request.host)
+  };
   let canonical_request = format!(
-    "{}\n{}\n{}\n{}\nhost\nUNSIGNED-PAYLOAD",
-    request.method, request.canonical_uri, canonical_query, canonical_headers
+    "{}\n{}\n{}\n{}\n{}\nUNSIGNED-PAYLOAD",
+    request.method, request.canonical_uri, canonical_query, canonical_headers, signed_headers
   );
 
   let string_to_sign = format!(
@@ -525,6 +594,8 @@ mod tests {
       access_key: "AKIAIOSFODNN7EXAMPLE",
       secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
       expires_in: 86400,
+      write_once_checksum_sha256: None,
+      head_checksum_mode: false,
     };
 
     let url = sign_presigned(&request, now);
@@ -599,6 +670,19 @@ mod tests {
         "server-side calls must use the internal endpoint: {server_url}"
       );
     }
+  }
+
+  #[test]
+  fn browser_write_once_url_signs_the_precondition() {
+    let config = test_config(true, None);
+    let upload = config.presign_put_if_absent("a/b.png", "AAAA");
+    assert!(upload.url.contains(
+      "X-Amz-SignedHeaders=host%3Bif-none-match%3Bx-amz-checksum-sha256"
+    ));
+    assert_ne!(upload.url, config.presign_put("a/b.png").url);
+    assert!(config
+      .presign_head_object_with_checksum("a/b.png")
+      .contains("X-Amz-SignedHeaders=host%3Bx-amz-checksum-mode"));
   }
 
   /// Unset is the single-host case, where both routes are the same address.

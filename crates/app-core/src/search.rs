@@ -42,11 +42,11 @@
 //!     workspace or existence — which is also why entries for purged documents
 //!     are left to linger until restart rather than tracked.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future};
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use mica_infra::ApiResult;
@@ -81,6 +81,9 @@ struct Inner {
 /// share it immutably.
 #[derive(Default)]
 pub struct BodyIndex {
+  /// Serialize fetch-and-apply, so an older DB snapshot cannot finish last and
+  /// replace a newer body. Readers of the already-loaded index remain free.
+  refresh_lock: Mutex<()>,
   inner: RwLock<Inner>,
 }
 
@@ -95,37 +98,48 @@ impl BodyIndex {
   /// bodies of non-matching rows, so the steady-state cost is a scan of ~10k
   /// timestamps returning nothing.
   pub async fn refresh(&self, db: &PgPool) -> ApiResult<()> {
-    // Snapshot the cursor without holding the write lock across the query.
-    let since = { self.inner.read().await.seen };
-    // The next cursor comes from the DATABASE clock — comparing a client clock
-    // against `updated_at` would smuggle clock skew into the visibility rule.
-    let (rows, db_now): (Vec<(Uuid, String)>, DateTime<Utc>) = match since {
-      Some(seen) => {
-        let rows = sqlx::query_as(
-          "SELECT document_id, content_text FROM document_yrs_base
-           WHERE updated_at > $1",
-        )
-        .bind(seen)
-        .fetch_all(db)
-        .await?;
-        if rows.is_empty() {
-          // Nothing new: keep the cursor where it is (advancing it needs a
-          // clock read; an idle refresh should cost one filtered scan, full
-          // stop). The lap window stays open until a write moves it.
-          return Ok(());
-        }
-        let now: (DateTime<Utc>,) = sqlx::query_as("SELECT now()").fetch_one(db).await?;
-        (rows, now.0)
-      }
-      None => {
-        let now: (DateTime<Utc>,) = sqlx::query_as("SELECT now()").fetch_one(db).await?;
-        let now = now.0;
-        let rows =
-          sqlx::query_as("SELECT document_id, content_text FROM document_yrs_base")
+    self
+      .refresh_with(|since| async move {
+        // The next cursor comes from the DATABASE clock — comparing a client
+        // clock against `updated_at` would smuggle clock skew into visibility.
+        let snapshot: (Vec<(Uuid, String)>, DateTime<Utc>) = match since {
+          Some(seen) => {
+            let rows = sqlx::query_as(
+              "SELECT document_id, content_text FROM document_yrs_base
+             WHERE updated_at > $1",
+            )
+            .bind(seen)
             .fetch_all(db)
             .await?;
-        (rows, now)
-      }
+            if rows.is_empty() {
+              // An idle refresh costs one filtered scan; leave the lap open.
+              return Ok(None);
+            }
+            let now: (DateTime<Utc>,) = sqlx::query_as("SELECT now()").fetch_one(db).await?;
+            (rows, now.0)
+          }
+          None => {
+            let now: (DateTime<Utc>,) = sqlx::query_as("SELECT now()").fetch_one(db).await?;
+            let rows = sqlx::query_as("SELECT document_id, content_text FROM document_yrs_base")
+              .fetch_all(db)
+              .await?;
+            (rows, now.0)
+          }
+        };
+        Ok(Some(snapshot))
+      })
+      .await
+  }
+
+  async fn refresh_with<F, Fut>(&self, fetch: F) -> ApiResult<()>
+  where
+    F: FnOnce(Option<DateTime<Utc>>) -> Fut,
+    Fut: Future<Output = ApiResult<Option<(Vec<(Uuid, String)>, DateTime<Utc>)>>>,
+  {
+    let _refresh_guard = self.refresh_lock.lock().await;
+    let since = self.inner.read().await.seen;
+    let Some((rows, db_now)) = fetch(since).await? else {
+      return Ok(());
     };
     let lap = chrono::Duration::milliseconds((REFRESH_LAP_SECONDS * 1000.0) as i64);
     let next_seen = db_now - lap;
@@ -164,5 +178,63 @@ impl BodyIndex {
   /// this count anyway.
   pub async fn indexed_documents(&self) -> usize {
     self.inner.read().await.docs.len()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::{sync::Arc, time::Duration};
+
+  use tokio::{sync::oneshot, time::timeout};
+
+  use super::*;
+
+  #[tokio::test]
+  async fn concurrent_refresh_cannot_apply_an_old_snapshot_last() {
+    let index = Arc::new(BodyIndex::default());
+    let document_id = Uuid::new_v4();
+    let old_clock = Utc::now();
+    let (old_fetched_tx, old_fetched_rx) = oneshot::channel();
+    let (release_old_tx, release_old_rx) = oneshot::channel::<()>();
+
+    let old_index = Arc::clone(&index);
+    let old_refresh = tokio::spawn(async move {
+      old_index
+        .refresh_with(|since| async move {
+          assert!(since.is_none());
+          old_fetched_tx.send(()).unwrap();
+          release_old_rx.await.unwrap();
+          Ok(Some((vec![(document_id, "old text".into())], old_clock)))
+        })
+        .await
+        .unwrap();
+    });
+    old_fetched_rx.await.unwrap();
+
+    // The second fetch is immediately ready. Without refresh serialization it
+    // applies its newer body before the deliberately paused first fetch does.
+    let new_index = Arc::clone(&index);
+    let mut new_refresh = tokio::spawn(async move {
+      new_index
+        .refresh_with(|_| async move {
+          Ok(Some((
+            vec![(document_id, "new text".into())],
+            old_clock + chrono::Duration::seconds(1),
+          )))
+        })
+        .await
+        .unwrap();
+    });
+    let finished_before_old = timeout(Duration::from_millis(200), &mut new_refresh).await;
+    release_old_tx.send(()).unwrap();
+    old_refresh.await.unwrap();
+    if let Ok(result) = finished_before_old {
+      result.unwrap();
+    } else {
+      new_refresh.await.unwrap();
+    }
+
+    assert_eq!(index.matching_ids("new text").await, vec![document_id]);
+    assert!(index.matching_ids("old text").await.is_empty());
   }
 }

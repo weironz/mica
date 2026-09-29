@@ -153,6 +153,8 @@ struct BlobGcStats {
   deleted: u64,
   bytes_freed: u64,
   failures: u64,
+  eligible_orphan_objects: u64,
+  eligible_orphan_bytes: u64,
 }
 
 /// The most workspace series one scrape will emit.
@@ -267,12 +269,21 @@ impl Metrics {
       .observe(seconds);
   }
 
-  pub fn record_blob_gc(&self, scanned: u64, deleted: u64, bytes_freed: u64) {
+  pub fn record_blob_gc(
+    &self,
+    scanned: u64,
+    deleted: u64,
+    bytes_freed: u64,
+    eligible_orphan_objects: u64,
+    eligible_orphan_bytes: u64,
+  ) {
     let mut g = self.blob_gc.lock().unwrap_or_else(|e| e.into_inner());
     g.sweeps += 1;
     g.scanned += scanned;
     g.deleted += deleted;
     g.bytes_freed += bytes_freed;
+    g.eligible_orphan_objects = eligible_orphan_objects;
+    g.eligible_orphan_bytes = eligible_orphan_bytes;
   }
 
   pub fn blob_gc_failed(&self) {
@@ -590,6 +601,12 @@ fn render(state: &AppState, snapshot: Option<&DbSnapshot>) -> String {
     out.push_str("# HELP mica_blob_gc_failures_total Sweeps that ended in an error.\n");
     out.push_str("# TYPE mica_blob_gc_failures_total counter\n");
     let _ = writeln!(out, "mica_blob_gc_failures_total {}", gc.failures);
+    out.push_str("# HELP mica_blob_gc_eligible_orphan_objects Unregistered objects past the upload grace period in the last sweep.\n");
+    out.push_str("# TYPE mica_blob_gc_eligible_orphan_objects gauge\n");
+    let _ = writeln!(out, "mica_blob_gc_eligible_orphan_objects {}", gc.eligible_orphan_objects);
+    out.push_str("# HELP mica_blob_gc_eligible_orphan_bytes Bytes in those eligible unregistered objects in the last sweep.\n");
+    out.push_str("# TYPE mica_blob_gc_eligible_orphan_bytes gauge\n");
+    let _ = writeln!(out, "mica_blob_gc_eligible_orphan_bytes {}", gc.eligible_orphan_bytes);
   }
 
   // ── process (Linux) ──

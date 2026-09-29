@@ -3236,9 +3236,18 @@ class RenderDocument extends RenderBox {
     for (final rc in _remoteCursors) {
       final idx = _nodes.indexWhere((n) => n.id == rc.blockId);
       if (idx < 0 || idx >= _layouts.length) continue;
+      // A collaborator may edit far outside the viewport. Skip caret geometry
+      // and label shaping for that block, as the other paint layers do.
+      if (!_nodeVisible(_layouts[idx])) continue;
       final rect = caretRectFor(DocPosition(idx, rc.offset));
       if (rect == null) continue;
       final caret = rect.shift(offset);
+      // Node paint keeps 600px of slack, but this bar and flag need only 20px.
+      // Do not shape names for cursors that cannot enter the actual clip.
+      if (caret.bottom < _clipBounds.top ||
+          caret.top > _clipBounds.bottom + 20) {
+        continue;
+      }
       canvas.drawRRect(
         RRect.fromRectAndRadius(caret, const Radius.circular(1)),
         Paint()..color = rc.color,
@@ -3254,20 +3263,25 @@ class RenderDocument extends RenderBox {
         ),
         textDirection: TextDirection.ltr,
         maxLines: 1,
-      )..layout();
-      const padH = 4.0;
-      const padV = 2.0;
-      final flag = Rect.fromLTWH(
-        caret.left,
-        caret.top - (tp.height + padV * 2) - 1,
-        tp.width + padH * 2,
-        tp.height + padV * 2,
       );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(flag, const Radius.circular(3)),
-        Paint()..color = rc.color,
-      );
-      tp.paint(canvas, Offset(flag.left + padH, flag.top + padV));
+      try {
+        tp.layout();
+        const padH = 4.0;
+        const padV = 2.0;
+        final flag = Rect.fromLTWH(
+          caret.left,
+          caret.top - (tp.height + padV * 2) - 1,
+          tp.width + padH * 2,
+          tp.height + padV * 2,
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(flag, const Radius.circular(3)),
+          Paint()..color = rc.color,
+        );
+        tp.paint(canvas, Offset(flag.left + padH, flag.top + padV));
+      } finally {
+        tp.dispose();
+      }
     }
   }
 

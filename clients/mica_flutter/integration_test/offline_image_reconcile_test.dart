@@ -84,10 +84,18 @@ void main() {
     final upload = presign['upload'] as Map;
     final put = await http.put(
       Uri.parse(upload['upload_url'] as String),
-      headers: {'content-type': 'image/png'},
+      headers: {
+        'content-type': 'image/png',
+        'if-none-match': upload['if_none_match'] as String,
+        'x-amz-checksum-sha256': upload['checksum_sha256'] as String,
+      },
       body: bytes,
     );
-    expect(put.statusCode, inInclusiveRange(200, 299), reason: 'PUT blob → ${put.statusCode}');
+    expect(
+      put.statusCode == 412 || (put.statusCode >= 200 && put.statusCode < 300),
+      isTrue,
+      reason: 'PUT blob → ${put.statusCode}',
+    );
     final complete = await postJson<Map>('/api/workspaces/$ws/files/complete', token, {
       'object_key': presign['object_key'],
       'file_name': fileName,

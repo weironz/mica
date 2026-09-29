@@ -29,7 +29,7 @@
 //!  - Anything unexpected fails closed for the WHOLE workspace: one unreadable
 //!    document and nothing in that workspace is touched.
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mica_app_core::store;
 use sqlx::{PgPool, Row};
@@ -61,8 +61,18 @@ const UNREFERENCED_GRACE: chrono::Duration = chrono::Duration::days(30);
 /// upload looks exactly like an orphan until the page saves.
 const MIN_OBJECT_AGE: chrono::Duration = chrono::Duration::days(7);
 
+/// Browser PUT URLs stay tracked until they have expired, with another day for
+/// clock skew and in-flight completion. Newly issued URLs extend the deadline.
+const PENDING_UPLOAD_MARGIN: chrono::Duration = chrono::Duration::days(1);
+/// A missing file row is not proof that an upload was abandoned immediately.
+const PENDING_UPLOAD_GRACE: chrono::Duration = chrono::Duration::days(30);
+const PENDING_OBJECT_AGE: chrono::Duration = chrono::Duration::days(1);
+
 /// How often the sweep runs.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const PENDING_SWEEP_BATCH: i64 = 200;
+const PENDING_SWEEP_MAX_KEYS: usize = 10_000;
+const PENDING_SWEEP_TIME_BUDGET: Duration = Duration::from_secs(2 * 60);
 
 
 /// What the sweep decides for one file. Pure so the grace-period rules — the
@@ -109,6 +119,31 @@ pub struct SweepReport {
     pub re_referenced: i64,
     pub deleted: i64,
     pub bytes_freed: i64,
+    /// Eligible unregistered objects found in the pending-upload ledger.
+    pub orphan_objects: i64,
+    pub orphan_bytes: i64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PendingUploadVerdict {
+    Waiting,
+    Collect,
+}
+
+fn pending_upload_verdict(
+    now: chrono::DateTime<chrono::Utc>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    object_modified_at: chrono::DateTime<chrono::Utc>,
+    min_object_age: chrono::Duration,
+) -> PendingUploadVerdict {
+    if now - created_at < PENDING_UPLOAD_GRACE
+        || now - expires_at < PENDING_UPLOAD_MARGIN
+        || now - object_modified_at < min_object_age
+    {
+        return PendingUploadVerdict::Waiting;
+    }
+    PendingUploadVerdict::Collect
 }
 
 /// Every `file_id` reachable from a document that still exists in [workspace_id].
@@ -260,17 +295,226 @@ pub async fn sweep_workspace(
     }
 }
 
+/// Reclaim browser PUTs that never became a `files` row. The pending table is
+/// intentionally global: deleting a workspace must not erase the only record
+/// of an object that was uploaded but never completed.
+async fn sweep_pending_uploads(
+    db: &PgPool,
+    storage: &S3Config,
+    dry_run: bool,
+    report: &mut SweepReport,
+) {
+    let http = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+    {
+        Ok(http) => http,
+        Err(error) => {
+            tracing::warn!(%error, "blob gc: cannot create storage client");
+            crate::metrics::METRICS.blob_gc_failed();
+            return;
+        }
+    };
+
+    let started = Instant::now();
+    let mut cursor: Option<(chrono::DateTime<chrono::Utc>, String)> = None;
+    let mut scanned = 0usize;
+    while scanned < PENDING_SWEEP_MAX_KEYS && started.elapsed() < PENDING_SWEEP_TIME_BUDGET {
+        let batch_size = PENDING_SWEEP_BATCH.min((PENDING_SWEEP_MAX_KEYS - scanned) as i64);
+        let rows: Vec<(String, chrono::DateTime<chrono::Utc>)> = match sqlx::query_as(
+            "SELECT object_key, expires_at FROM pending_file_uploads \
+             WHERE created_at <= clock_timestamp() - ($1::bigint * interval '1 second') \
+               AND expires_at <= clock_timestamp() - ($2::bigint * interval '1 second') \
+               AND ($3::timestamptz IS NULL OR (expires_at, object_key) > ($3, $4)) \
+             ORDER BY expires_at, object_key LIMIT $5",
+        )
+        .bind(PENDING_UPLOAD_GRACE.num_seconds())
+        .bind(PENDING_UPLOAD_MARGIN.num_seconds())
+        .bind(cursor.as_ref().map(|(expires, _)| *expires))
+        .bind(cursor.as_ref().map(|(_, key)| key.as_str()))
+        .bind(batch_size)
+        .fetch_all(db)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "blob gc: cannot page through pending uploads");
+                crate::metrics::METRICS.blob_gc_failed();
+                return;
+            }
+        };
+        if rows.is_empty() {
+            break;
+        }
+        let full_batch = rows.len() == batch_size as usize;
+        for (object_key, expires_at) in rows {
+            cursor = Some((expires_at, object_key.clone()));
+            scanned += 1;
+            if let Err(error) = sweep_pending_key(
+                db,
+                storage,
+                &http,
+                &object_key,
+                dry_run,
+                PENDING_OBJECT_AGE,
+                report,
+            )
+            .await {
+                tracing::warn!(%object_key, %error, "blob gc: pending upload sweep failed, keeping ledger row");
+                crate::metrics::METRICS.blob_gc_failed();
+            }
+            if started.elapsed() >= PENDING_SWEEP_TIME_BUDGET {
+                break;
+            }
+        }
+        if !full_batch {
+            break;
+        }
+    }
+}
+
+async fn sweep_pending_key(
+    db: &PgPool,
+    storage: &S3Config,
+    http: &reqwest::Client,
+    object_key: &str,
+    dry_run: bool,
+    min_object_age: chrono::Duration,
+    report: &mut SweepReport,
+) -> mica_infra::ApiResult<()> {
+    let mut tx = db.begin().await?;
+    store::lock_file_object_key(&mut tx, object_key).await?;
+
+    // Recheck under the key lock: presign may have extended the URL lifetime
+    // after the outer candidate scan. A completed upload may have gained its
+    // file row at the same time. Both paths hold this exact lock.
+    let pending: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(
+            "SELECT created_at, expires_at FROM pending_file_uploads WHERE object_key = $1",
+        )
+        .bind(object_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some((created_at, expires_at)) = pending else {
+        return Ok(());
+    };
+    let now: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *tx)
+            .await?;
+    let registered: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM files WHERE object_key = $1)")
+            .bind(object_key)
+            .fetch_one(&mut *tx)
+            .await?;
+    if registered {
+        // Keep the ledger while a URL may still be valid. At this point both
+        // age margins have passed, so a later file-row deletion cannot turn a
+        // still-live URL into an untracked object.
+        if now - created_at >= PENDING_UPLOAD_GRACE
+            && now - expires_at >= PENDING_UPLOAD_MARGIN
+            && !dry_run
+        {
+            sqlx::query("DELETE FROM pending_file_uploads WHERE object_key = $1")
+                .bind(object_key)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+        }
+        return Ok(());
+    }
+    if now - created_at < PENDING_UPLOAD_GRACE || now - expires_at < PENDING_UPLOAD_MARGIN {
+        return Ok(());
+    }
+
+    let head = http
+        .head(storage.presign_head_object(object_key))
+        .send()
+        .await
+        .map_err(|error| mica_infra::ApiError::Internal(format!("orphan HEAD failed: {error}")))?;
+    if head.status().as_u16() == 404 {
+        if !dry_run {
+            sqlx::query("DELETE FROM pending_file_uploads WHERE object_key = $1")
+                .bind(object_key)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+        }
+        return Ok(());
+    }
+    if !head.status().is_success() {
+        return Err(mica_infra::ApiError::Internal(format!(
+            "orphan HEAD returned {}",
+            head.status()
+        )));
+    }
+    let headers = head.headers();
+    let size: i64 = headers
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| mica_infra::ApiError::Internal("orphan HEAD has no valid size".into()))?;
+    let modified = headers
+        .get(reqwest::header::LAST_MODIFIED)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .ok_or_else(|| mica_infra::ApiError::Internal("orphan HEAD has no valid Last-Modified".into()))?;
+    if pending_upload_verdict(now, created_at, expires_at, modified, min_object_age)
+        != PendingUploadVerdict::Collect
+    {
+        return Ok(());
+    }
+    report.orphan_objects += 1;
+    report.orphan_bytes += size;
+    if dry_run {
+        report.deleted += 1;
+        report.bytes_freed += size;
+        return Ok(());
+    }
+
+    // The lock covers the final DB check, storage DELETE, and ledger cleanup.
+    // On a crash after object deletion, the ledger remains and the next sweep
+    // observes 404; the opposite order would lose the object forever.
+    let deleted = http
+        .delete(storage.presign_delete(object_key))
+        .send()
+        .await
+        .map_err(|error| mica_infra::ApiError::Internal(format!("orphan DELETE failed: {error}")))?;
+    if !deleted.status().is_success() && deleted.status().as_u16() != 404 {
+        return Err(mica_infra::ApiError::Internal(format!(
+            "orphan DELETE returned {}",
+            deleted.status()
+        )));
+    }
+    sqlx::query("DELETE FROM pending_file_uploads WHERE object_key = $1")
+        .bind(object_key)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    report.deleted += 1;
+    report.bytes_freed += size;
+    tracing::info!(%object_key, byte_size = size, "blob gc: reclaimed uncompleted upload");
+    Ok(())
+}
+
 /// Sweep every workspace. [dry_run] reports what would go without touching
 /// anything.
 pub async fn sweep_all(db: &PgPool, storage: &S3Config, dry_run: bool) -> SweepReport {
     let mut report = SweepReport::default();
-    let Ok(rows) = sqlx::query("SELECT id FROM workspaces").fetch_all(db).await else {
-        return report;
-    };
-    for row in rows {
-        let workspace_id: Uuid = row.get("id");
-        sweep_workspace(db, storage, workspace_id, dry_run, &mut report).await;
+    match sqlx::query("SELECT id FROM workspaces").fetch_all(db).await {
+        Ok(rows) => {
+            for row in rows {
+                let workspace_id: Uuid = row.get("id");
+                sweep_workspace(db, storage, workspace_id, dry_run, &mut report).await;
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "blob gc: cannot list workspaces");
+            crate::metrics::METRICS.blob_gc_failed();
+        }
     }
+    sweep_pending_uploads(db, storage, dry_run, &mut report).await;
     report
 }
 
@@ -332,6 +576,8 @@ pub fn spawn(db: PgPool, storage: std::sync::Arc<S3Config>) {
                 re_referenced = report.re_referenced,
                 deleted = report.deleted,
                 bytes_freed = report.bytes_freed,
+                eligible_orphan_objects = report.orphan_objects,
+                eligible_orphan_bytes = report.orphan_bytes,
                 "blob gc: sweep complete"
             );
             // Same numbers the log line carries. A sweep that quietly stops
@@ -341,6 +587,8 @@ pub fn spawn(db: PgPool, storage: std::sync::Arc<S3Config>) {
                 report.workspaces_scanned as u64,
                 report.deleted as u64,
                 report.bytes_freed.max(0) as u64,
+                report.orphan_objects as u64,
+                report.orphan_bytes.max(0) as u64,
             );
             cleanup_lifecycle_rows(&db).await;
             tokio::time::sleep(SWEEP_INTERVAL).await;
@@ -402,5 +650,230 @@ mod tests {
         assert_eq!(verdict(now, false, Some(t(31)), t(31)), Verdict::Collect);
         assert_eq!(verdict(now, false, Some(t(29)), t(31)), Verdict::Waiting);
         assert_eq!(verdict(now, false, Some(t(31)), t(6)), Verdict::Waiting);
+    }
+
+    #[test]
+    fn pending_upload_waits_for_both_url_expiry_and_upload_age() {
+        let now = chrono::Utc::now();
+        let old = now - chrono::Duration::days(31);
+        let fresh = now - chrono::Duration::hours(1);
+        assert_eq!(
+            pending_upload_verdict(now, old, now + chrono::Duration::hours(1), old, PENDING_OBJECT_AGE),
+            PendingUploadVerdict::Waiting,
+            "a newly issued URL extends the deadline even for an old object"
+        );
+        assert_eq!(
+            pending_upload_verdict(now, old, old, fresh, PENDING_OBJECT_AGE),
+            PendingUploadVerdict::Waiting,
+            "a recent server-side PUT of the same key must survive"
+        );
+        assert_eq!(
+            pending_upload_verdict(now, fresh, old, old, PENDING_OBJECT_AGE),
+            PendingUploadVerdict::Waiting,
+            "the pending row itself needs the full grace period"
+        );
+        assert_eq!(
+            pending_upload_verdict(now, old, old, old, PENDING_OBJECT_AGE),
+            PendingUploadVerdict::Collect
+        );
+    }
+
+    /// Explicitly run against disposable Postgres and RustFS with DATABASE_URL
+    /// and S3_* set. Only these random object keys are touched. The object-age
+    /// margin is zero here because a real store cannot backdate Last-Modified;
+    /// the production margin is pinned by the pure test above.
+    #[tokio::test]
+    #[ignore = "requires disposable Postgres and S3-compatible object store"]
+    async fn pending_upload_gc_checks_real_objects_and_registration_race() {
+        let db = PgPool::connect(&std::env::var("DATABASE_URL").expect("set DATABASE_URL"))
+            .await
+            .unwrap();
+        mica_infra::run_migrations(&db).await.unwrap();
+        let storage = S3Config::from_env().expect("set S3_* for a disposable store");
+        let http = reqwest::Client::new();
+        let workspace_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES ($1,$2,'GC','x')")
+            .bind(user_id)
+            .bind(format!("{user_id}@orphan-gc.test"))
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES ($1,'GC',$2)")
+            .bind(workspace_id)
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
+
+        let key = |name: &str| format!("workspaces/{workspace_id}/{name}-{}", Uuid::new_v4());
+        let abandoned = key("abandoned");
+        let active_url = key("active-url");
+        let completed = key("completed");
+        for object_key in [&abandoned, &active_url, &completed] {
+            let put = http
+                .put(storage.presign_put_server(object_key).url)
+                .header("x-amz-checksum-sha256", "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=")
+                .body("abc")
+                .send()
+                .await
+                .unwrap();
+            assert!(put.status().is_success(), "test PUT: {}", put.status());
+            let checksum_head = http
+                .head(storage.presign_head_object_with_checksum(object_key))
+                .header("x-amz-checksum-mode", "ENABLED")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                checksum_head
+                    .headers()
+                    .get("x-amz-checksum-sha256")
+                    .and_then(|value| value.to_str().ok()),
+                Some("ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=")
+            );
+            let mut tx = db.begin().await.unwrap();
+            store::lock_file_object_key(&mut tx, object_key).await.unwrap();
+            store::record_pending_file_upload_tx(&mut tx, workspace_id, object_key, 900)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let first_expiry: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT expires_at FROM pending_file_uploads WHERE object_key = $1",
+        )
+        .bind(&active_url)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        store::record_pending_file_upload(&db, workspace_id, &active_url, 3600)
+            .await
+            .unwrap();
+        let extended_expiry: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT expires_at FROM pending_file_uploads WHERE object_key = $1",
+        )
+        .bind(&active_url)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(extended_expiry > first_expiry, "a new URL must extend GC protection");
+        sqlx::query(
+            "UPDATE pending_file_uploads SET created_at = now() - interval '31 days', \
+             expires_at = now() - interval '2 days' WHERE object_key = ANY($1)",
+        )
+        .bind(vec![abandoned.clone(), completed.clone()])
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE pending_file_uploads SET created_at = now() - interval '31 days', \
+             expires_at = now() + interval '1 hour' WHERE object_key = $1",
+        )
+        .bind(&active_url)
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let mut dry = SweepReport::default();
+        sweep_pending_key(
+            &db,
+            &storage,
+            &http,
+            &abandoned,
+            true,
+            chrono::Duration::zero(),
+            &mut dry,
+        )
+        .await
+        .unwrap();
+        assert_eq!((dry.orphan_objects, dry.orphan_bytes, dry.deleted), (1, 3, 1));
+        assert!(http.head(storage.presign_head_object(&abandoned)).send().await.unwrap().status().is_success());
+
+        let mut actual = SweepReport::default();
+        sweep_pending_key(
+            &db,
+            &storage,
+            &http,
+            &abandoned,
+            false,
+            chrono::Duration::zero(),
+            &mut actual,
+        )
+        .await
+        .unwrap();
+        assert_eq!((actual.orphan_objects, actual.deleted, actual.bytes_freed), (1, 1, 3));
+        assert_eq!(http.head(storage.presign_head_object(&abandoned)).send().await.unwrap().status().as_u16(), 404);
+        let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM pending_file_uploads WHERE object_key = $1")
+            .bind(&abandoned)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(pending, 0);
+
+        let mut active_report = SweepReport::default();
+        sweep_pending_key(
+            &db,
+            &storage,
+            &http,
+            &active_url,
+            false,
+            chrono::Duration::zero(),
+            &mut active_report,
+        )
+        .await
+        .unwrap();
+        assert_eq!(active_report.deleted, 0);
+        assert!(http.head(storage.presign_head_object(&active_url)).send().await.unwrap().status().is_success());
+
+        // `complete` has inserted but not committed yet. GC must wait on the
+        // same key lock, then observe the row after commit and leave the object.
+        let mut completion = db.begin().await.unwrap();
+        store::lock_file_object_key(&mut completion, &completed).await.unwrap();
+        store::insert_file_tx(&mut completion, workspace_id, user_id, &completed, "c.png", "image/png", 3)
+            .await
+            .unwrap();
+        let gc_db = db.clone();
+        let gc_storage = storage.clone();
+        let gc_http = http.clone();
+        let gc_key = completed.clone();
+        let mut gc = tokio::spawn(async move {
+            let mut report = SweepReport::default();
+            sweep_pending_key(
+                &gc_db,
+                &gc_storage,
+                &gc_http,
+                &gc_key,
+                false,
+                chrono::Duration::zero(),
+                &mut report,
+            )
+            .await
+            .unwrap();
+            report
+        });
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut gc).await.is_err());
+        completion.commit().await.unwrap();
+        assert_eq!(gc.await.unwrap().deleted, 0);
+        assert!(http.head(storage.presign_head_object(&completed)).send().await.unwrap().status().is_success());
+
+        for object_key in [&active_url, &completed] {
+            let deletion = http.delete(storage.presign_delete(object_key)).send().await.unwrap();
+            assert!(deletion.status().is_success(), "test cleanup: {}", deletion.status());
+        }
+        sqlx::query("DELETE FROM pending_file_uploads WHERE workspace_id = $1")
+            .bind(workspace_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM workspaces WHERE id = $1")
+            .bind(workspace_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
     }
 }

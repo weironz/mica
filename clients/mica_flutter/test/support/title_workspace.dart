@@ -97,7 +97,6 @@ Widget titleWorkspace(
       views: views ?? [bootstrap.view],
       selectedView: bootstrap.view,
       selectedBootstrap: bootstrap,
-      selectedMarkdown: null,
       presence: const [],
       message: message,
       onSelectWorkspace: (_) async {},

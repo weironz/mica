@@ -141,6 +141,28 @@ services:
       # setting it, restarting, and watching nothing change.
       S3_MAX_UPLOAD_BYTES: "${S3_MAX_UPLOAD_BYTES:-}"
       # S3_PUBLIC_BASE_URL stays UNSET: the bucket is private, GETs are signed.
+      # Keep this explicit allow-list aligned with docker-compose.yml. A value
+      # present in .env.prod but absent here never reaches the API process.
+      MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-}"
+      MICA_ADMIN_EMAIL: "${MICA_ADMIN_EMAIL:-}"
+      MICA_WORKSPACE_QUOTA_BYTES: "${MICA_WORKSPACE_QUOTA_BYTES:-}"
+      MICA_WS_MIN_PROTOCOL: "${MICA_WS_MIN_PROTOCOL:-}"
+      MICA_CATCH_UP_LIMIT: "${MICA_CATCH_UP_LIMIT:-}"
+      MICA_STREAM_KEEP_MARGIN: "${MICA_STREAM_KEEP_MARGIN:-}"
+      MICA_STREAM_PRUNE_EVERY: "${MICA_STREAM_PRUNE_EVERY:-}"
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-}"
+      ACCESS_TOKEN_TTL_SECONDS: "${ACCESS_TOKEN_TTL_SECONDS:-}"
+      REFRESH_TOKEN_TTL_SECONDS: "${REFRESH_TOKEN_TTL_SECONDS:-}"
+      DATABASE_MAX_CONNECTIONS: "${DATABASE_MAX_CONNECTIONS:-}"
+      # Quickstart serves HTTP at SERVER_IP; the Traefik form defaults to HTTPS.
+      MICA_APP_BASE_URL: "${MICA_APP_BASE_URL:-http://${SERVER_IP}}"
+      MICA_MAIL_BACKEND: "${MICA_MAIL_BACKEND:-log}"
+      MICA_MAIL_FROM: "${MICA_MAIL_FROM:-}"
+      MICA_MAIL_FROM_NAME: "${MICA_MAIL_FROM_NAME:-}"
+      MICA_MAIL_ACCESS_KEY_ID: "${MICA_MAIL_ACCESS_KEY_ID:-}"
+      MICA_MAIL_SECRET_ACCESS_KEY: "${MICA_MAIL_SECRET_ACCESS_KEY:-}"
+      MICA_MAIL_REGION: "${MICA_MAIL_REGION:-cn-hangzhou}"
+      MICA_MAIL_ENDPOINT: "${MICA_MAIL_ENDPOINT:-}"
     depends_on:
       postgres:
         condition: service_healthy

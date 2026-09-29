@@ -1,6 +1,6 @@
 # Mica 代码库优化计划
 
-审查基线：2026-09-29，`main` 的 `b838ebc`。本轮只读检查了 Rust workspace、Flutter 编辑器与外壳、Web 离线存储、测试、CI、容器与部署配置；**未修改源码，也未对生产发起破坏性验证**。仓库知识图谱项目未索引，查询返回 `project not found`，随后按 `AGENTS.md` 回退到源码与测试的定向检索。以下是可定位的风险清单，不把静态推演当作已经在生产复现的事故。
+审查基线：2026-09-29，`main` 的 `b838ebc`。初始审查只读检查了 Rust workspace、Flutter 编辑器与外壳、Web 离线存储、测试、CI、容器与部署配置；未对生产发起破坏性验证。随后按条目实施修复，实施与验证结果写在各项下。仓库知识图谱项目未索引，查询返回 `project not found`，随后按 `AGENTS.md` 回退到源码与测试的定向检索。原始风险描述保留审查时的判断；以每项后续的实测结果与剩余边界为准。
 
 优先级：**P0** 为可能静默丢失持久数据、应先修复；**P1** 为高影响的数据完整性、安全或身份问题；**P2** 为中等影响、可观测性和测试覆盖；**P3** 为清理项。每项的“风险”同时说明当前影响和修复时需要留意的回归面；“预计收益”是定性预期，不是未测量的性能数字。
 
@@ -34,7 +34,7 @@
   - **有效性已实测**：临时移除 `pg_advisory_xact_lock` 后测试失败，`left: 2, right: 1` —— 两个管理员，正是本项缺陷；恢复后 api-server 全套 209 项通过。
   - **测试自身的两处返工已修正**：(a) 初版断言「第二个请求被拒」，实际失败原因是该断言写错了（见上）；(b) 屏障断言 `assert!(blocked)` 让失败落在「没有串行点」而非「两个管理员」上，改为有界等待 + 观测，由真实不变量判定。
 
-### P1-02 预签名上传未绑定真实内容与大小 — 已实施部分防护，待补 URL 重放
+### P1-02 预签名上传未绑定真实内容与大小 — 已缓解，PUT 前大小上限仍待收紧
 
 - **文件 / 位置**：[files.rs:74-132](crates/api-server/src/routes/files.rs#L74-L132)、[storage.rs:365-388](crates/infra/src/storage.rs#L365-L388)、[store.rs:676-702](crates/app-core/src/store.rs#L676-L702)。
 - **问题 / 原因**：服务端依据客户端声明的 hash、字节数签发 object key；签名使用 `UNSIGNED-PAYLOAD`，只签 `host`，`complete` 也不读取对象校验。持有该工作区编辑权限者可用已知 key 写入不同字节覆盖既有附件，或 PUT 超大对象而不 complete，绕过元数据配额并留下难以回收的孤儿对象。攻击链基于静态代码，尚未对对象存储做破坏性复现。
@@ -43,17 +43,19 @@
 - **预计收益**：高；让配额与内容寻址具有实际约束力。
 - **已实施（2026-09-29/30）**：
   1. **`complete` 不再相信客户端**。新增 `S3Config::presign_head_object`（服务端侧 HEAD），`complete` 在建行前 HEAD 一次并把结果交给纯函数 `uploaded_object_verdict(status, stored_len, declared_len)`：404 → 拒（对象从未上传）；非 2xx → Internal；**store 没报长度 → 拒（fail closed）**，不能把「无法验证」当成「已验证」；`stored != declared` → 拒。记账用的是 **store 报的实际长度**，不是客户端声明的数。
-  2. **已存在的 key 不再签发新的上传 URL**。命中 `store::fetch_file_by_key` 时返回 `existing`（现有行 + 下载 URL）且**不含** `upload` 字段，挡住登记后再次向 API 索取 URL 的路径。不过，登记前已签发的 URL 在有效期内仍能重放，见下方待补边界。
-  3. **协议变更**：`PresignResponse` 由扁平的 `upload_url/method/expires_in/max_byte_size` 改为 `upload: Option<PresignUpload>` + `existing: Option<FileResponse>`，两者互斥且用 `skip_serializing_if` **省略**而非填 null（客户端按「有没有 `upload`」判断，null 会与「服务端丢了 URL」混淆）。已同步 Dart 客户端 [`client.dart`](clients/mica_flutter/lib/api/client.dart) 的 `uploadImage` 与集成测试里的镜像实现。
+  2. **已存在的 key 不再签发新的上传 URL**。命中 `store::fetch_file_by_key` 时返回 `existing`（现有行 + 下载 URL）且**不含** `upload` 字段，挡住登记后再次向 API 索取 URL 的路径。
+  3. **新签发的 PUT 同时绑定不可覆盖条件和真实 SHA-256**。`S3Config::presign_put_if_absent` 把 `If-None-Match: *` 与 `x-amz-checksum-sha256` 一起放进 SigV4 的签名头；客户端必须带这两个头，不能自行删除或调包。RustFS 在写入时拒绝同 key 覆盖，并按 checksum 校验实际字节。`UNSIGNED-PAYLOAD` 仍用于预签名流程，但已不能绕过这两个已签名条件。
+  4. **协议变更**：`PresignResponse` 由扁平的 `upload_url/method/expires_in/max_byte_size` 改为 `upload: Option<PresignUpload>` + `existing: Option<FileResponse>`，两者互斥且用 `skip_serializing_if` **省略**而非填 null；`upload` 还携带必须发送的 `if_none_match` 与 `checksum_sha256`。已同步 Dart 客户端 [`client.dart`](clients/mica_flutter/lib/api/client.dart) 的 `uploadImage` 与集成测试里的镜像实现。旧客户端与新服务端的上传协议不兼容，发版前需明确升级路径。
 - **回归测试**：
   - 单测 `complete_requires_the_store_to_confirm_the_upload`（404 / 5xx / 尺寸两个方向 / **无长度 fail closed** / 0 字节是合法尺寸）。
   - 单测 `an_existing_object_yields_no_upload_url`（无 `upload`、返回现有行、序列化后 `upload` **缺席而非 null**）。测试注释里如实写明了它的局限：它证明不了「查询确实执行了」，所以补了下一条。
   - **真栈端到端实测（2026-09-30）**：对着 dev 栈（api + 真 rustfs）跑完整 presign → PUT → complete。实测结论： (a) rustfs 的 HEAD **确实返回 Content-Length**，因此 `complete` 的校验不是纸面推断； (b) 谎报尺寸被拒，`{"code":"bad_request","message":"...uploaded object is 64 bytes but 9999 was declared"}`； (c) 同一 hash 二次 presign 返回 `has upload field: False` / `has existing: True`，且 `existing.file.id` 与首次 complete 的行一致。探针文件已清理。
 - **有效性已实测（判别力）**：把尺寸校验弱化成「相信客户端声明」后 `complete_requires_the_store_to_confirm_the_upload` 立刻失败；把 `skip_serializing_if` 去掉后 `an_existing_object_yields_no_upload_url` 失败在 `"upload":null`（正是客户端无法区分的那两种情形）。恢复后 api-server 全套 214 项通过。
-- **未做（如实记录）**：
-  - **URL 重放仍可覆盖已登记对象**。`complete` 后，先前签发的 PUT URL 直到过期仍有效；本地开发配置甚至将 TTL 设为 7 天。持有该 URL 者可对同一 key 再 PUT 相同长度但不同内容，HEAD 尺寸检查和“不再签发新 URL”均挡不住。需要让对象存储在写入时强制「key 不存在」条件，并把条件纳入 SigV4 签名；先在当前 RustFS 版本上实测条件 PUT 与重放拒绝，再标 DONE。AWS 的 [条件写入文档](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)描述了 `If-None-Match: *` 的语义，不能直接推定部署的 RustFS 版本也正确实现。
-  - **内容摘要校验**未做。`complete` 校验存在性与实际长度，但不校验字节摘要；客户端 PUT 仍用 `UNSIGNED-PAYLOAD`。这意味着首次写入可提交与声明 hash 不符但长度相同的内容，今后如要严格内容寻址，需流式计算真实摘要或使用对象存储可验证的校验机制。
-  - **孤儿对象（PUT 了但从未 complete）仍不可回收**。实测确认：`blob_gc::sweep_workspace` **只遍历 `files` 表**，从不枚举桶，所以没有行的对象对 GC 永远不可见。可行的收尾是枚举 `workspaces/{ws}/` 前缀、对照 `files.object_key` 删除陌生对象（带宽限期），但那是独立的 GC 设计项，不在本项「绑定内容与大小」的范围内。**已作为待办记入本文件 P2 区**（见 P2-12）。
+- **追加回归与实测（2026-09-30）**：`hex_sha256_becomes_the_s3_checksum_for_the_same_bytes` 固定了 hex→base64 摘要转换，`browser_write_once_url_signs_the_precondition` 固定签名头；针对本机实际运行的 RustFS rc.3，显式执行 `signed_conditional_put_refuses_replay`：漏签名头得 403、内容与 checksum 不符得 400、首次 PUT 成功、同一 URL 重放得 412，GET 仍是首次写入字节。浏览器预检也实测允许 `content-type,if-none-match,x-amz-checksum-sha256`。依据 [AWS 条件写入文档](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)与本机真栈结果，不把 AWS 语义未经检验地推定给 RustFS。
+- **完整登记与断线恢复**：`complete` 用要求 checksum 的 HEAD 对照对象 key 中的 SHA-256；没有登记行的新对象若缺 checksum 或摘要不符就拒绝。Dart 客户端遇到首次 PUT 已成功、重试得 412 时仍调用 `complete`，由服务端复核对象后完成登记。已有 `files` 行的重试先复核对象存在和长度，再幂等返回；旧对象没有 checksum 元数据时不阻断读取。服务端自行 PUT 也发送 SHA-256 checksum，避免重写同 key 时抹掉这项元数据。以上流程已用 RustFS 的 PUT/HEAD/replay 和客户端 412 回归测试覆盖。
+- **存量边界**：修复前已签发的旧 URL 不含写入条件，在其 TTL 到期前仍可覆盖旧对象；新服务端无法撤销对象存储已发出的旧 URL。上线后须等最长 TTL 窗口结束（当前开发配置为 7 天），才可认为全部客户端上传 URL 都受新规则约束。
+- **仍有大小缺口**：签名 SHA-256 证明对象字节与客户端申报的 hash 一致，却不能证明它与客户端申报的 `byte_size` 一致。编辑者可以先计算超大文件的真实 hash，向 presign 谎报很小的 `byte_size`，再在直连对象存储的 PUT 中上传大文件；`complete` 会拒绝登记，P2-12 最终会清理，但宽限期内的存储占用没有被预先限制。因此不能把“完成登记时严格校验”表述成“对象存储层已限制 PUT 大小”。后续需实测并采用存储端可执行的长度约束（如支持 `content-length-range` 的上传策略或等效网关），保留浏览器直传与实际尺寸回归。
+- **孤儿对象**：新签发 URL 与服务端写入路径已由 P2-12 的台账跟踪；升级前从未登记的历史对象不在台账内，仍需一次性核对清理。
 
 ### P1-03 外部图片导入的 DNS 检查与实际连接脱节 — DONE
 
@@ -225,77 +227,86 @@
   - **有效性已实测**：把检查弱化成「永不过期」（即原缺陷：只解码不查库）后测试失败，恢复后 api-server 全套 217 项通过。
   - `ensure_user_exists` 收 `&PgPool` 而非 `&AppState` —— 这样规则能对着真库测，不必构造整个 app（AI 配置、hub、mailer），与 `delete_user_and_owned` 从 `delete_account` 里拆出来是同一个理由。
 
-### P2-02 并发搜索索引刷新可用旧结果覆盖新结果
+### P2-02 并发搜索索引刷新可用旧结果覆盖新结果 — DONE
 
 - **文件 / 位置**：[search.rs:107-156](crates/app-core/src/search.rs#L107-L156)。
 - **问题 / 原因**：`BodyIndex::refresh` 在读锁下取 cursor，放锁查 DB，再拿写锁。旧查询若比新查询晚完成，仍可把旧文档内容写进 `docs`；只阻止 `seen` 回退不能阻止内容回退。这是需并发复现的时序风险。
 - **推荐修改方式**：串行化 refresh，或对每行携带单调版本/`updated_at`，只接受较新的内容；补可控的查询完成顺序测试。
 - **风险**：当前可能长期漏搜最新文本；串行化会影响刷新并发度。
 - **预计收益**：中；搜索结果与数据库状态更一致。
+- **已实施 / 验证（2026-09-30）**：`BodyIndex` 新增独立 `refresh_lock`，串行化取 cursor→数据库查询→应用快照；索引读取不持这把锁。可控交错测试让旧快照暂停、新快照就绪，断言最终只命中新文本；临时去锁后测试失败，恢复后 `mica-app-core` 44 项单测通过。代价是并发刷新排队，慢查询可能增加搜索等待时间。
 
-### P2-03 远端光标每帧创建文本布局且不释放
+### P2-03 远端光标每帧创建文本布局且不释放 — DONE
 
 - **文件 / 位置**：[render.dart:3234-3265](clients/mica_flutter/lib/editor/render.dart#L3234-L3265)。
 - **问题 / 原因**：每次 paint 为每位协作者创建、layout `TextPainter`，未调用 `dispose()`，屏外光标仍走完整绘制准备；其他绘制辅助已有显式释放的先例。
 - **推荐修改方式**：先按可视区域裁剪，再用 `try/finally` 释放布局资源；补多人长文档的重复 repaint 基准测试。
 - **风险**：当前长时间协作可能增加原生文本资源与掉帧；裁剪边界处理错误可能藏掉靠近视口边缘的光标。
 - **预计收益**：中；降低无效布局和持续重绘成本。
+- **已实施 / 验证（2026-09-30）**：先按节点与精确 clip 跳过屏外远端光标，`TextPainter` 从 layout 到 paint 都在 `try/finally` 中释放。新增 `remote_cursor_paint_test.dart` 验证远/近屏外不绘制、屏内仍可见；撤去精确裁剪后测试由 0 变 2，定向测试通过。
 
-### P2-04 资料刷新可把旧账号资料写入新会话
+### P2-04 资料刷新可把旧账号资料写入新会话 — DONE（由 P1-10 覆盖）
 
 - **文件 / 位置**：[main.dart:1033-1045](clients/mica_flutter/lib/main.dart#L1033-L1045)。
 - **问题 / 原因**：资料 HTTP 请求期间切换账号，响应回来只确认当前 session 非空，不确认仍为发起请求的用户与服务器；旧 `User` 可能被持久化进新会话。
 - **推荐修改方式**：与 P1-10 共用会话代次校验；加入资料请求等待期间切号测试。
 - **风险**：当前可显示错误头像/名称并污染缓存；修复需避免丢掉正常的资料更新。
 - **预计收益**：中；身份相关 UI 与当前凭据保持一致。
+- **已覆盖**：P1-10 的会话身份修复已让 `_refreshProfile` 在 await 后检查 `_accountIdentity`；旧账号或旧服务器响应不能写进当前 session。本项未重复加入另一套代次机制。
 
-### P2-05 目录刷新网络错误可从 `unawaited` Future 逸出
+### P2-05 目录刷新网络错误可从 `unawaited` Future 逸出 — DONE
 
 - **文件 / 位置**：[main.dart:1592](clients/mica_flutter/lib/main.dart#L1592)、[main.dart:1602-1637](clients/mica_flutter/lib/main.dart#L1602-L1637)。
 - **问题 / 原因**：WebSocket 事件触发的目录 HTTP 刷新未等待 Future，内部只捕获 `ApiException`；断网产生的客户端/Socket 异常可成为未捕获异步错误，与“瞬态错误被吞掉”的注释不一致。
 - **推荐修改方式**：统一捕获网络异常并留下低噪音诊断；测试 WS 通知后 REST 失败。
 - **风险**：当前正常离线场景可污染 crash log；过宽 catch 可能掩盖程序错误，建议只吞明确的网络类别。
 - **预计收益**：中；错误日志更准确、重连体验更稳。
+- **已实施 / 验证（2026-09-30）**：后台刷新调用边界移至 `api/tree_fetch.dart`，仅吞 `ApiException`、`ClientException`、`TimeoutException` 等预期网络失败并计数，程序错误仍向上抛；受控失败测试撤去 `ClientException` 分支后失败，恢复后定向测试通过。
 
-### P2-06 目录 WebSocket 未观察握手 Future 的失败
+### P2-06 目录 WebSocket 未观察握手 Future 的失败 — DONE
 
 - **文件 / 位置**：[views_events.dart:84-102](clients/mica_flutter/lib/api/views_events.dart#L84-L102)。
 - **问题 / 原因**：创建 `WebSocketChannel` 后只监听 stream，未观察 `channel.ready` 的异常。同仓库其他 WS 连接路径已专门 `ready.catchError`，因此这里在拒绝握手时可能抛出未捕获 zone 错误。
 - **推荐修改方式**：观察并处理 `ready` 失败，按原重连策略回退；加入服务端拒绝握手测试。
 - **风险**：当前断线诊断可能被额外未捕获异常污染；修复应避免 `ready` 与 `onDone` 重复安排重连。
 - **预计收益**：中；网络故障路径可预测。
+- **已实施 / 验证（2026-09-30）**：`ViewsEventClient` 观察 `channel.ready` 失败并交给既有重连路径；测试注入握手拒绝，去掉处理后出现未捕获 `Bad state: handshake refused`，恢复后定向测试通过。
 
-### P2-07 部署验证脚本记录状态码，却不据此失败
+### P2-07 部署验证脚本记录状态码，却不据此失败 — DONE
 
 - **文件 / 位置**：[verify-prod.sh:17-23](scripts/verify-prod.sh#L17-L23)。
 - **问题 / 原因**：脚本只强制检查 `/api/ready` 的版本和 bundle 下载；`/mcp`、`/` 的 HTTP 状态码只是 `echo`，`curl -s` 遇 4xx/5xx 也不让脚本失败。于是部署流程可在首页失效时仍显示验证成功。
-- **推荐修改方式**：为首页断言 200；为 MCP 路由断言其预期状态集合，明确失败时退出非零。部署后对版本所改功能做独立冒烟，不能只看 bundle 可下载。
-- **风险**：当前可能漏报局部生产故障；修改预期码时须尊重 `/mcp` 的真实方法语义。
+- **推荐修改方式**：为首页断言 200 且内容确为 Flutter 入口；部署后对版本所改功能做独立冒烟，不能只看 bundle 可下载。`/mcp` 实际被 SPA fallback 返回首页，MCP 是本机 `mica-cli mcp` 的 stdio 代理，故删掉误导性的 `/mcp` HTTP 探针。
+- **风险**：当前可能漏报局部生产故障；首页断言需接受正常构建产物的入口结构。
 - **预计收益**：中；部署结果更接近用户实际可用性。
+- **已实施 / 验证（2026-09-30）**：`verify-prod.sh` 现在拒绝首页 500、重定向和错误 HTML；新增离线回归脚本覆盖五种响应，实跑通过，并对当前生产 v0.13.46 执行无破坏冒烟通过。部署脚本不再把 `/mcp` 的 SPA 200 误报为 MCP 正常。
 
-### P2-08 三个 Windows 云端集成用例未进持续集成
+### P2-08 三个 Windows 云端集成用例未进持续集成 — 已接入，待 CI 真跑
 
 - **文件 / 位置**：[flutter-integration.yml:13-18](.github/workflows/flutter-integration.yml#L13-L18)、[flutter-integration.yml:135-141](.github/workflows/flutter-integration.yml#L135-L141)；对应 `integration_test/migration_sync_test.dart`、`offline_image_reconcile_test.dart`、`page_switch_fidelity_test.dart`。
 - **问题 / 原因**：工作流明确排除需要真实对象存储的三个用例，只运行无需 S3 的 `cloud_sync_test`。因此图片上传/重连、迁移和切页的 Windows 真链路变更不能由 CI 护航。这是已知基础设施取舍，不是“所有集成测试均已覆盖”。
 - **推荐修改方式**：在支持 Linux 容器的 runner 增加可覆盖相同客户端链路的测试，或给 Windows runner 提供受控 S3 兼容服务；先确保失败不会静默跳过。
 - **风险**：当前发布前存在这三条链路的测试盲区；新增栈会增加 CI 时间和维护成本。
 - **预计收益**：中高；降低跨端存储/同步回归进入发布包的概率。
+- **已实施，待验证**：Windows cloud job 改为下载并校验与 Compose 相同的 RustFS rc.3 官方 Windows 发布包，启动 Postgres、RustFS、API 后串行运行四个 live 用例；本机已验证二进制启动与 ready=200，工作流语法检查通过。**GitHub runner 尚未执行新流程，暂不标 DONE。**
 
-### P2-09 浏览器剪贴板实际链路缺持久 E2E 回归
+### P2-09 浏览器剪贴板实际链路缺持久 E2E 回归 — 本机 DONE，待 CI
 
 - **文件 / 位置**：[copy_markdown_test.dart:39-73](clients/mica_flutter/test/copy_markdown_test.dart#L39-L73)、[web_e2e.mjs](e2e/web_e2e.mjs)。
 - **问题 / 原因**：Dart 单测验证复制文本生成器，但 Web E2E 没有浏览器真实 Ctrl+A/C、`ClipboardItem` 与读回 `text/plain` 的断言；本次代码围栏缺陷只能靠一次性手工浏览器冒烟覆盖 UI 到系统剪贴板的组合路径。
 - **推荐修改方式**：在固定小文档的浏览器用例里，授予测试页 clipboard 权限，分别验证“单个代码块纯文本”和“跨块 Markdown”，同时校验 CRLF/LF 归一化；保存失败截图。
 - **风险**：当前控件、键盘与 Web 剪贴板 API 的接线可在单测全绿时回归；浏览器权限模拟可能带来少量测试脆弱性。
 - **预计收益**：中；让这类用户可见复制缺陷由 CI 直接发现。
+- **已实施 / 验证（2026-09-30）**：测试专用 Flutter Web 入口渲染真实 `MicaEditor`，仅用公开 hook 聚焦；Playwright 发真实 Ctrl+A/C 并读回 `ClipboardItem` 的 plain/html。单代码块得到无围栏源码，跨块得到 Markdown 围栏；本机两场景通过，CI 已接入独立构建与失败截图，待推送后观察。
 
-### P2-10 两份 Compose 的 API 环境变量允许清单已经漂移
+### P2-10 两份 Compose 的 API 环境变量允许清单已经漂移 — DONE
 
 - **文件 / 位置**：[docker-compose.yml:177-241](deploy/docker-compose.yml#L177-L241)、[docker-compose.single.yml:110-150](deploy/docker-compose.single.yml#L110-L150)、[.env.prod.example:79-99](deploy/.env.prod.example#L79-L99)。
 - **问题 / 原因**：Traefik 版显式转发注册、配额、邮件等配置；单机版仅转发较小子集。示例 `.env.prod` 明确教用户设置 `MICA_REGISTRATION_ENABLED` 和邮件参数，但单机 Compose 不会把这些变量交给 API，配置成为静默无效项。这既是功能问题，也是两份大段配置重复维护造成的架构漂移。
 - **推荐修改方式**：建立一份共享的 API environment 映射，或用脚本测试“示例声明的可调变量都进入两种 Compose 的 api 容器”；补 quickstart 配置冒烟。
 - **风险**：当前自托管操作者可能误以为注册或邮件已开启；合并配置时要保留两种入口各自不同的网络、域名设置。
 - **预计收益**：中；消除静默配置失效并减少重复维护。
+- **已实施 / 验证（2026-09-30）**：补齐单机 Compose 的 API 配置映射，使两份清单均为 31 键；新增 `docker compose config` 回归脚本检查 19 项可调设置的实际透传并接入 CI，本机验证通过。
 
 ### P2-11 自托管说明将旧 Compose 与任意新镜像配对 — DONE
 
@@ -310,23 +321,27 @@
   3. `scripts/release-check.sh` 新增一道**拒绝式**门槛：README.md 与 docs/deploy.md 里必须各有一个 `RELEASE=x.y.z`，且必须等于本次发布版本。选「拒绝」而非「提醒」的理由与文件里其它门槛一致 —— 「发版时记得改文档」正是这个文件存在的原因，没人记得。
 - **有效性已实测**：把 README 的 `RELEASE` 改回 `0.13.17` 后门槛拒绝（`README.md pins the quickstart to 0.13.17 but this release is 0.13.46`，退出码 1）；恢复后通过。`just release` 必经此脚本，所以漂移在发版那一刻被拦住，而不是等到有人装了才发现。
 
-### P2-12 未完成上传的孤儿对象无法回收
+### P2-12 未完成上传的孤儿对象无法回收 — DONE（新上传）
 
 - **文件 / 位置**：[blob_gc.rs:160-265](crates/api-server/src/blob_gc.rs#L160-L265)、[files.rs:71-142](crates/api-server/src/routes/files.rs#L71-L142)。
-- **问题 / 原因**：`sweep_workspace` **只遍历 `files` 表的行**（`SELECT … FROM files WHERE workspace_id = $1`），从不枚举桶里的对象。因此「PUT 了但从未调用 `complete`」的对象在库里没有行 —— 对 GC 永远不可见，既不计入配额也不被回收。P1-02 已拒绝谎报尺寸并停止为已登记对象签发新 URL，但旧 URL 重放仍待修；即使堵住重放，签名有效的首次 PUT 本来就允许上传而不 complete。
+- **问题 / 原因**：`sweep_workspace` **只遍历 `files` 表的行**（`SELECT … FROM files WHERE workspace_id = $1`），从不枚举桶里的对象。因此「PUT 了但从未调用 `complete`」的对象在库里没有行 —— 对 GC 永远不可见，既不计入配额也不被回收。P1-02 已约束新签发 URL 的尺寸、内容与重放；签名有效的首次 PUT 本来仍允许上传而不 complete。
 - **推荐修改方式**：给 sweep 增加一路「按前缀枚举」：列出 `workspaces/{ws}/` 下的对象，对照该工作区的 `files.object_key` 集合，把**陌生且早于宽限期**的对象删除（宽限期必须大于 presign TTL，否则会删掉「已 PUT、正在等 complete」的合法上传 —— 注意 dev compose 的 `S3_PRESIGN_TTL_SECONDS` 是 604800，即 7 天，远超现有的 30 天 unreferenced 宽限期这一段是安全的，但**生产节点的 TTL 配置需一并确认**）。同时加一个 gauge 暴露孤儿对象数与字节数，否则这类泄漏只会无声增长。
 - **风险**：枚举+删除是对桶的破坏性操作，前缀算错会删掉别人的对象。必须先做 dry-run 模式并对照 `files` 全表校验。宽限期设短于 presign TTL 会删掉正在进行的合法上传。
-- **预计收益**：中；堵住一条只能靠人工清理的存储泄漏。**注意**：这是独立于 P1-02 的 GC 设计项，P1-02 已把它的边界写清但未实施。
+- **预计收益**：中；堵住一条只能靠人工清理的存储泄漏。
+- **实施方式（2026-09-30）**：采用比全桶枚举更收敛的 `pending_file_uploads` 台账（migration 0027）。浏览器 presign 在返回 URL 前记录 key 与到期时间；同 key 重签只延长截止时间。服务端图片导入、字节存储及跨工作区复制也在 PUT 前提交台账，所以 PUT 成功而数据库插入失败或进程中断时，GC 仍知道该对象。`complete`、presign、PUT→登记与 GC 共用对象键事务锁；GC 在锁内再次检查台账、`files` 行、URL 到期时间和对象的 Last-Modified，30 天宽限且 URL 到期后再多等一天，只删无登记行的对象。删除后才移除台账；dry-run 只报告不删，日志和指标记录候选数与字节。候选按 200 条分页，单轮最多 1 万键或 2 分钟。
+- **验证**：纯规则测试覆盖 URL 延期、对象新近写入及宽限期；真实 PostgreSQL + RustFS 测试覆盖 dry-run、逾期孤儿删除、有效 URL 留存、`complete` 未提交时 GC 阻塞并在提交后保留，以及重复 presign 延期。`cargo check`、Clippy 和相关单测通过。
+- **剩余边界**：升级前没有台账的孤儿对象不会被这条扫描发现，需单独做一次历史盘点与人工审阅后清理；`avatar/` 前缀不属于此工作区文件 GC。若最旧的 1 万候选长期网络失败，后续候选可能被反复扫描同一批而延迟回收，后续可加入失败退避或持久游标。生产对象至少 1 天的 Last-Modified 宽限由纯规则测试覆盖，真实对象测试无法回拨存储时钟，使用零对象年龄模拟该分支。
 
 ## P3 — 可顺手清理的负担
 
-### P3-01 `_selectedMarkdown` 状态与显示分支已不可达
+### P3-01 `_selectedMarkdown` 状态与显示分支已不可达 — DONE
 
 - **文件 / 位置**：[main.dart:404](clients/mica_flutter/lib/main.dart#L404)、[main.dart:7060](clients/mica_flutter/lib/main.dart#L7060)、[main.dart:11824-11841](clients/mica_flutter/lib/main.dart#L11824-L11841)；[roadmap.md:49](docs/roadmap.md#L49) 已记录。
 - **问题 / 原因**：当前字段仅被多处置为 `null`，没有非空赋值，关联的 `selectedMarkdown != null` UI 分支不可达；状态传递和约二十处清空赋值增加外壳复杂度。
 - **推荐修改方式**：在不恢复该功能的前提下，删除字段、传参和不可达显示分支；保留一条基础外壳回归。与路线图现有条目合并实施，不再创建重复待办。
 - **风险**：当前主要是维护与理解成本；清理时注意不要误删仍被其他选择态使用的布局。
 - **预计收益**：低到中；减少死状态和分支噪音。
+- **已实施 / 验证（2026-09-30）**：删除字段、19 处无效清空、构造参数和不可达 UI 分支；全库文本检索无残留引用，Flutter 定向测试与分析通过。
 
 ## 建议执行顺序与验收
 

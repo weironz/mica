@@ -1247,10 +1247,18 @@ class ApiClient {
 
     final put = await sharedHttpClient.put(
       Uri.parse(uploadUrl),
-      headers: {'content-type': mimeType},
+      headers: {
+        'content-type': mimeType,
+        'if-none-match': upload['if_none_match'] as String,
+        'x-amz-checksum-sha256': upload['checksum_sha256'] as String,
+      },
       body: bytes,
     );
-    if (put.statusCode < 200 || put.statusCode >= 300) {
+    // A previous PUT may have landed while its `complete` response was lost.
+    // The signed write-once condition then returns 412 on retry. Let complete
+    // verify the stored checksum and record/reuse that object instead.
+    if ((put.statusCode < 200 || put.statusCode >= 300) &&
+        put.statusCode != 412) {
       throw ApiException('upload failed (HTTP ${put.statusCode})');
     }
 

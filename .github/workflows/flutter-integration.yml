@@ -6,16 +6,10 @@ name: Flutter Integration Tests
 # needs a Windows desktop runner that builds + launches the actual app —
 # exactly the gap ci.yml's header calls out as "deliberately NOT covered yet".
 #
-# Only the CLIENT-ONLY / OFFLINE files run here. Four files need the WHOLE dev
-# stack up (postgres + rustfs + api-server, demo@mica.dev auto-registered) and
-# are EXCLUDED — standing that up in plain CI is out of scope, and two of them
-# race each other on a debug-connection collision (docs/dev-environment.md ~L137).
-# Excluded, with why:
-#   - cloud_sync_test.dart          needs a live server (http://127.0.0.1:8090)
-#   - migration_sync_test.dart      needs the dev stack (api on :8080)
-#   - offline_image_reconcile_test  needs the dev stack (api on :8080) + rustfs
-#   - page_switch_fidelity_test     needs the dev stack (api on :8080)
-# Better to run the offline set reliably than the full set flakily.
+# The live-server job below now starts the official Windows RustFS binary (the
+# same rc.3 version as our Compose image) beside PostgreSQL and the API, then
+# runs all four formerly excluded tests serially. No Docker Linux service is
+# needed on the Windows runner.
 #
 # The offline files are safe here: they either need no network, deliberately
 # dial a dead socket, or stand up their OWN in-process fake WS server
@@ -132,13 +126,8 @@ jobs:
   # Linux jobs in ci.yml can: a real Windows app talking WS + CRDT to a real
   # api-server over a real Postgres.
   #
-  # Only `cloud_sync_test` of the four excluded files runs here — it is the one
-  # that needs no OBJECT STORAGE. The other three (migration_sync,
-  # offline_image_reconcile, page_switch_fidelity) upload real image bytes
-  # through presign → PUT → complete, and a Windows runner cannot start the
-  # rustfs Linux container (GitHub's Windows runners have no Linux service
-  # containers). Standing up a Windows S3 binary for them is the path if it ever
-  # matters; it is not worth it for three tests today.
+  # RustFS is the same pinned rc.3 release used by both deployment Compose
+  # forms. Download its official Windows asset and verify its SHA256 before use.
   cloud:
     name: Flutter integration_test (Windows, live server)
     runs-on: windows-latest
@@ -185,6 +174,18 @@ jobs:
       - run: flutter pub get
         working-directory: clients/mica_flutter
 
+      - name: Fetch pinned Windows RustFS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/rustfs/rustfs/releases/download/1.0.0-rc.3/rustfs-windows-x86_64-v1.0.0-rc.3.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'rustfs.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = '08e7a0bf8e3382614962dcc3f5769827147ef0acc463d36df78863c10d722bd2'
+          if ($actual -ne $expected) { throw "RustFS archive SHA256 mismatch: $actual" }
+          Expand-Archive -Path $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'rustfs')
+
       # Server and test in ONE step, deliberately.
       #
       # The first version started the api in its own step. The step reported
@@ -197,57 +198,98 @@ jobs:
       # The `skipping` guard below is the other half: this test degrades to a
       # skip when the server is absent and still exits 0, so a green here would
       # otherwise never prove the server was reachable.
-      - name: cloud_sync_test against the live server
+      - name: Four Windows integration tests against the live stack
         shell: pwsh
         run: |
           $env:APP_ENV = 'development'
-          $env:HTTP_ADDR = '127.0.0.1:8090'
+          $env:HTTP_ADDR = '127.0.0.1:8080'
           $env:DATABASE_URL = 'postgres://mica:mica@127.0.0.1:5432/mica'
           $env:JWT_SECRET = 'ci-integration-secret'
           $env:ACCESS_TOKEN_TTL_SECONDS = '86400'
+          $env:S3_ENDPOINT = 'http://127.0.0.1:9000'
+          $env:S3_INTERNAL_ENDPOINT = 'http://127.0.0.1:9000'
+          $env:S3_BUCKET = 'mica'
+          $env:S3_ACCESS_KEY_ID = 'mica'
+          $env:S3_SECRET_ACCESS_KEY = 'mica-default-not-a-secret'
+          $env:RUSTFS_ADDRESS = '127.0.0.1:9000'
+          $env:RUSTFS_ACCESS_KEY = $env:S3_ACCESS_KEY_ID
+          $env:RUSTFS_SECRET_KEY = $env:S3_SECRET_ACCESS_KEY
+          $env:RUSTFS_CONSOLE_ENABLE = 'false'
+          $env:RUSTFS_VOLUMES = Join-Path $env:RUNNER_TEMP 'rustfs-data'
+          New-Item -ItemType Directory -Path $env:RUSTFS_VOLUMES -Force | Out-Null
           # Registration stays CLOSED (the default) ON PURPOSE. The test
-          # registers one throwaway account, and on an EMPTY instance the first
-          # account is always allowed AND verified on the spot — the bootstrap
-          # exception in auth.rs. Setting MICA_REGISTRATION_ENABLED=true was
-          # tried and is WRONG: with registration open the account is created
-          # unverified, so `login` refuses it and the test cannot get a session.
-          $api = Start-Process -FilePath 'target\debug\mica-api-server.exe' `
-            -RedirectStandardOutput api.log -RedirectStandardError api.err `
-            -NoNewWindow -PassThru
+          # cloud_sync test creates the first, verified account on an EMPTY
+          # instance. The other tests use the seeded demo account below.
+          $rustfs = Start-Process -FilePath (Join-Path $env:RUNNER_TEMP 'rustfs/rustfs.exe') `
+            -ArgumentList 'server' -RedirectStandardOutput rustfs.log `
+            -RedirectStandardError rustfs.err -WindowStyle Hidden -PassThru
           try {
-            # Health-gate rather than sleep: the first boot also runs migrations
-            # and the derived-column backfill.
+            # The API provisions the bucket only at startup, so RustFS must be
+            # ready before the API process starts.
+            $storeReady = $false
+            foreach ($i in 1..60) {
+              try {
+                Invoke-WebRequest -UseBasicParsing http://127.0.0.1:9000/minio/health/ready -TimeoutSec 2 | Out-Null
+                $storeReady = $true; break
+              } catch { Start-Sleep -Seconds 2 }
+            }
+            if (-not $storeReady) { throw 'RustFS never became ready' }
+            $api = Start-Process -FilePath 'target\debug\mica-api-server.exe' `
+              -RedirectStandardOutput api.log -RedirectStandardError api.err `
+              -WindowStyle Hidden -PassThru
+            # Health-gate the API; its first boot runs migrations.
             $ok = $false
             foreach ($i in 1..60) {
               try {
-                Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8090/api/health -TimeoutSec 2 | Out-Null
+                Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8080/api/health -TimeoutSec 2 | Out-Null
                 $ok = $true; break
               } catch { Start-Sleep -Seconds 2 }
             }
             if (-not $ok) {
-              Write-Host "::error::api never became healthy"
-              Get-Content api.log, api.err -ErrorAction SilentlyContinue | Select-Object -Last 60
+              Write-Host "::error::api or RustFS never became healthy"
+              Get-Content api.log, api.err, rustfs.log, rustfs.err -ErrorAction SilentlyContinue | Select-Object -Last 100
               exit 1
             }
-            Write-Host "api healthy on :8090"
+            Write-Host "api healthy on :8080; RustFS ready on :9000"
 
-            Push-Location clients/mica_flutter
-            $out = flutter test integration_test/cloud_sync_test.dart -d windows `
-              --dart-define=MICA_TEST_API=http://127.0.0.1:8090 2>&1 | Tee-Object -Variable lines
-            $code = $LASTEXITCODE
-            Pop-Location
-            $out | ForEach-Object { Write-Host $_ }
-            if ($code -ne 0) { exit $code }
-            if ($lines -match 'skipping cloud_sync_test') {
-              Write-Host "::error::the test SKIPPED (no server) and still exited 0 — the job proved nothing"
-              exit 1
+            $tests = @(
+              'cloud_sync_test.dart',
+              'migration_sync_test.dart',
+              'offline_image_reconcile_test.dart',
+              'page_switch_fidelity_test.dart'
+            )
+            foreach ($test in $tests) {
+              Write-Host "==> $test"
+              Push-Location clients/mica_flutter
+              try {
+                $out = flutter test "integration_test/$test" -d windows `
+                  --dart-define=MICA_TEST_API=http://127.0.0.1:8080 2>&1 | Tee-Object -Variable lines
+                $code = $LASTEXITCODE
+              } finally { Pop-Location }
+              $out | ForEach-Object { Write-Host $_ }
+              if ($code -ne 0) { exit $code }
+              if ($lines -match 'skipping cloud_sync_test') {
+                Write-Host "::error::$test skipped while reporting success"
+                exit 1
+              }
+              Get-Process mica_flutter -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 3
+              if ($test -eq 'cloud_sync_test.dart') {
+                # The first-account bootstrap is now spent. Seed a verified demo
+                # account for the remaining tests without opening registration.
+                $env:PGPASSWORD = 'mica'
+                $psql = (Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\psql.exe' | Select-Object -First 1).FullName
+                & $psql -h 127.0.0.1 -U mica -d mica -v ON_ERROR_STOP=1 -f seeds/dev_seed.sql
+                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              }
             }
-            Write-Host "cloud_sync_test really ran against the live server"
+            Write-Host "all four Windows live-stack integration tests passed"
           } finally {
             if ($api -and -not $api.HasExited) { Stop-Process -Id $api.Id -Force }
+            if ($rustfs -and -not $rustfs.HasExited) { Stop-Process -Id $rustfs.Id -Force }
           }
 
       - name: api log (on failure)
         if: failure()
         shell: pwsh
-        run: Get-Content api.log, api.err -ErrorAction SilentlyContinue | Select-Object -Last 120
+        run: Get-Content api.log, api.err, rustfs.log, rustfs.err -ErrorAction SilentlyContinue | Select-Object -Last 120

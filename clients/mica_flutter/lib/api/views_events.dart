@@ -13,6 +13,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../swallowed.dart';
 import 'ws_connect.dart';
 
 /// The socket URI for one workspace's tree-change pings.
@@ -49,6 +50,7 @@ class ViewsEventsChannel {
     required this.uri,
     required this.onChanged,
     this.debounce = const Duration(milliseconds: 400),
+    this.connectSocket = connectAuthedSocket,
   });
 
   /// Built per connection ATTEMPT, not held: the URI carries the access token,
@@ -62,6 +64,10 @@ class ViewsEventsChannel {
   final void Function() onChanged;
 
   final Duration debounce;
+
+  /// Injected in the handshake-failure regression test; production uses the
+  /// same authenticated connector as document sockets.
+  final WebSocketChannel Function(Uri) connectSocket;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _messages;
@@ -82,7 +88,7 @@ class ViewsEventsChannel {
     try {
       final target = await uri();
       if (_disposed) return;
-      final channel = connectAuthedSocket(target);
+      final channel = connectSocket(target);
       _channel = channel;
       _messages = channel.stream.listen(
         // Every message means the same thing, so the payload is not even
@@ -92,9 +98,23 @@ class ViewsEventsChannel {
         onDone: _dropAndReconnect,
         onError: (Object _) => _dropAndReconnect(),
       );
-      _attempt = 0;
-      if (_everConnected) _ping();
-      _everConnected = true;
+      // A rejected handshake also fails `ready`. The stream may report the
+      // same failure, but leaving this Future unobserved escapes the reconnect
+      // path as an uncaught zone error.
+      unawaited(
+        channel.ready.then(
+          (_) {
+            if (!identical(_channel, channel) || _disposed) return;
+            _attempt = 0;
+            if (_everConnected) _ping();
+            _everConnected = true;
+          },
+          onError: (Object _) {
+            swallowed('views_ws_ready');
+            if (identical(_channel, channel)) _dropAndReconnect();
+          },
+        ),
+      );
     } catch (_) {
       _dropAndReconnect();
     } finally {

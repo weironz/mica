@@ -18,6 +18,12 @@ got=$(curl -fsS "$SITE"/api/ready)
 echo "$got"
 echo "$got" | grep -q "\"version\":\"$version\"" \
   || { echo "VERSION MISMATCH: $SITE is not serving $version"; exit 1; }
-echo "mcp:    $(curl -s -o /dev/null -w '%{http_code}' "$SITE"/mcp)"
-echo "index:  $(curl -s -o /dev/null -w '%{http_code}' "$SITE"/)"
+# MCP is served by the local `mica-cli mcp` stdio process, not by this site.
+# `/mcp` is an ordinary SPA fallback and its 200 says nothing about MCP health.
+index_status=$(curl -sS -o /dev/null -w '%{http_code}' "$SITE"/)
+echo "index:  $index_status"
+[[ "$index_status" == 200 ]] || { echo "INDEX FAILED: $SITE/ returned $index_status"; exit 1; }
+index_html=$(curl -fsS "$SITE"/)
+[[ "$index_html" == *flutter_bootstrap.js* ]] \
+  || { echo "INDEX FAILED: $SITE/ did not serve the Flutter entry page"; exit 1; }
 echo "bundle: $(curl -fsS "$SITE"/main.dart.js | md5sum | cut -c1-12)…"

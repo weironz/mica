@@ -8,6 +8,7 @@ use axum::{
   http::{HeaderMap, StatusCode},
   response::{IntoResponse, Redirect, Response},
 };
+use base64::Engine as _;
 use futures_util::StreamExt;
 use mica_app_core::{AppState, store};
 use mica_infra::{ApiError, ApiResult, S3Config};
@@ -64,6 +65,10 @@ pub struct PresignUpload {
   method: &'static str,
   expires_in: u64,
   max_byte_size: i64,
+  /// The client MUST send this header with PUT; it is covered by SigV4.
+  if_none_match: &'static str,
+  /// Base64 SHA-256 of the bytes, also covered by SigV4 and checked by S3.
+  checksum_sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,8 +98,9 @@ pub struct ResolveResponse {
 /// object storage. No metadata row is created until `complete` is called.
 ///
 /// When the object is ALREADY recorded, no NEW URL is issued — `existing` names
-/// the row instead. Previously issued URLs remain usable until expiry; this
-/// check alone does not make the object immutable (see P1-02 in the plan).
+/// the row instead. New URLs sign a write-once condition and SHA-256 checksum;
+/// only URLs issued before that change retain the old replay behavior until
+/// they expire (see P1-02 in the plan).
 pub async fn presign(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -109,15 +115,22 @@ pub async fn presign(
   ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
 
   let object_key = build_object_key(workspace_id, &payload.content_hash, &payload.file_name)?;
+  let checksum_sha256 = sha256_checksum_base64(&payload.content_hash)?;
 
-  // Same key already recorded → hand back the row and issue no new URL. The
-  // normal client skips the PUT; an older signed URL can still be replayed.
-  if let Some(existing) = store::fetch_file_by_key(&state.db, workspace_id, &object_key).await? {
+  // Serialize with orphan GC and completion for this exact key. A URL is only
+  // returned after its expiry is recorded, so GC cannot forget a live URL.
+  let mut tx = state.db.begin().await?;
+  store::lock_file_object_key(&mut tx, &object_key).await?;
+  if let Some(existing) = store::fetch_file_by_key_tx(&mut tx, workspace_id, &object_key).await? {
+    tx.commit().await?;
     let download_url = storage.download_url(&existing.object_key);
     return Ok(Json(existing_object_response(object_key, existing, download_url)));
   }
 
-  let upload = storage.presign_put(&object_key);
+  let upload = storage.presign_put_if_absent(&object_key, &checksum_sha256);
+  store::record_pending_file_upload_tx(&mut tx, workspace_id, &object_key, upload.expires_in)
+    .await?;
+  tx.commit().await?;
 
   Ok(Json(PresignResponse {
     object_key,
@@ -126,6 +139,8 @@ pub async fn presign(
       method: upload.method,
       expires_in: upload.expires_in,
       max_byte_size: storage.max_upload_bytes,
+      if_none_match: "*",
+      checksum_sha256,
     }),
     existing: None,
   }))
@@ -156,11 +171,11 @@ fn existing_object_response(
 /// Records metadata after a successful upload and returns a URL for reading the
 /// object (used as an image block's `url`).
 ///
-/// The object is CHECKED against the store before a row is written. A presigned
-/// upload URL is usable by whoever holds it, for whatever bytes they like, so
-/// everything the client says here — that it uploaded anything, and that it was
-/// this many bytes — is a claim. The `files` row is what the workspace quota is
-/// summed from, so an unverified claim is a number the client gets to choose.
+/// The object is CHECKED against the store before a row is written. The new
+/// upload URL signs a checksum and a write-once condition, but the claims in
+/// `complete` still need verification against the stored object. The `files`
+/// row is what the workspace quota is summed from, so trusting a client-supplied
+/// byte count here would make the quota meaningless.
 pub async fn complete(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -176,13 +191,26 @@ pub async fn complete(
   // skip it, or reuse one URL) and this is the call that creates the row.
   ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
   ensure_key_in_workspace(workspace_id, &payload.object_key)?;
+  let expected_checksum = checksum_for_object_key(workspace_id, &payload.object_key)?;
+
+  // Hold the same key lock as orphan GC from HEAD through the file-row commit.
+  // Otherwise GC can delete an old unregistered object just after HEAD accepts
+  // it, leaving a newly registered row pointing at nothing.
+  let mut tx = state.db.begin().await?;
+  store::lock_file_object_key(&mut tx, &payload.object_key).await?;
+  let pending = store::pending_file_upload_exists_tx(&mut tx, workspace_id, &payload.object_key).await?;
+  let existing = store::fetch_file_by_key_tx(&mut tx, workspace_id, &payload.object_key).await?;
+  if !pending && existing.is_none() {
+    return Err(ApiError::BadRequest("upload was not presigned".into()));
+  }
 
   // Ask the store what actually landed, and require it to agree with the claim.
   // Without this, `complete` could be called for a key nothing was ever written
   // to (a row pointing at nothing) or with a `byte_size` unrelated to the bytes
   // (a quota that counts a number the client invented).
   let head = reqwest::Client::new()
-    .head(storage.presign_head_object(&payload.object_key))
+    .head(storage.presign_head_object_with_checksum(&payload.object_key))
+    .header("x-amz-checksum-mode", "ENABLED")
     .send()
     .await
     .map_err(|e| ApiError::Internal(format!("storage check failed: {e}")))?;
@@ -193,9 +221,27 @@ pub async fn complete(
     .and_then(|s| s.parse::<i64>().ok());
   let byte_size =
     uploaded_object_verdict(head.status().as_u16(), stored_len, payload.byte_size)?;
+  let stored_checksum = head.headers()
+    .get("x-amz-checksum-sha256")
+    .and_then(|value| value.to_str().ok());
+  if let Some(existing) = existing {
+    // Legacy/server-side objects may predate checksum metadata. They already
+    // have a recorded row; verify existence and size, and verify the digest
+    // whenever the store has one. No new metadata is written on this retry.
+    if existing.byte_size != byte_size {
+      return Err(ApiError::BadRequest("stored file size changed".into()));
+    }
+    if stored_checksum.is_some() {
+      uploaded_checksum_verdict(stored_checksum, &expected_checksum)?;
+    }
+    tx.commit().await?;
+    let download_url = storage.download_url(&existing.object_key);
+    return Ok(Json(FileResponse { file: existing, download_url }));
+  }
+  uploaded_checksum_verdict(stored_checksum, &expected_checksum)?;
 
-  let file = store::insert_file(
-    &state.db,
+  let file = store::insert_file_tx(
+    &mut tx,
     workspace_id,
     user_id,
     &payload.object_key,
@@ -204,6 +250,7 @@ pub async fn complete(
     byte_size,
   )
   .await?;
+  tx.commit().await?;
   let download_url = storage.download_url(&file.object_key);
 
   Ok(Json(FileResponse { file, download_url }))
@@ -540,11 +587,26 @@ pub(crate) async fn fetch_and_store_image_url(
     None => format!("workspaces/{workspace_id}/{hash}"),
   };
 
+  // Commit the ledger before PUT: if the process dies after writing bytes,
+  // rollback of the PUT→insert transaction must not hide the orphan from GC.
+  store::record_pending_file_upload(
+    &state.db,
+    workspace_id,
+    &object_key,
+    storage.presign_ttl_seconds,
+  )
+  .await?;
+  // Hold the same key lock as orphan GC from PUT through registration. A key
+  // may also have an old pending browser upload, even on this server path.
+  let mut tx = state.db.begin().await?;
+  store::lock_file_object_key(&mut tx, &object_key).await?;
+
   // Upload via a self-issued presigned PUT (storage signs; we do the PUT).
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
     .header(reqwest::header::CONTENT_TYPE, &mime)
+    .header("x-amz-checksum-sha256", sha256_checksum_base64(&hash)?)
     .body(bytes.to_vec())
     .send()
     .await
@@ -557,8 +619,8 @@ pub(crate) async fn fetch_and_store_image_url(
   }
 
   let original_name = name_with_ext(&url_file_name(url, ext.as_deref()), ext.as_deref());
-  let file = store::insert_file(
-    &state.db,
+  let file = store::insert_file_tx(
+    &mut tx,
     workspace_id,
     user_id,
     &object_key,
@@ -567,6 +629,7 @@ pub(crate) async fn fetch_and_store_image_url(
     byte_size,
   )
   .await?;
+  tx.commit().await?;
 
   Ok(file)
 }
@@ -690,10 +753,20 @@ pub(crate) async fn store_bytes(
     None => format!("workspaces/{workspace_id}/{hash}"),
   };
 
+  store::record_pending_file_upload(
+    &state.db,
+    workspace_id,
+    &object_key,
+    storage.presign_ttl_seconds,
+  )
+  .await?;
+  let mut tx = state.db.begin().await?;
+  store::lock_file_object_key(&mut tx, &object_key).await?;
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
     .header(reqwest::header::CONTENT_TYPE, &mime)
+    .header("x-amz-checksum-sha256", sha256_checksum_base64(&hash)?)
     .body(bytes.to_vec())
     .send()
     .await
@@ -705,8 +778,8 @@ pub(crate) async fn store_bytes(
     )));
   }
 
-  store::insert_file(
-    &state.db,
+  let file = store::insert_file_tx(
+    &mut tx,
     workspace_id,
     user_id,
     &object_key,
@@ -714,7 +787,9 @@ pub(crate) async fn store_bytes(
     &mime,
     byte_size,
   )
-  .await
+  .await?;
+  tx.commit().await?;
+  Ok(file)
 }
 
 fn validate_mime(mime_type: &str) -> ApiResult<()> {
@@ -814,6 +889,50 @@ fn build_object_key(workspace_id: Uuid, content_hash: &str, file_name: &str) -> 
     None => hash,
   };
   Ok(format!("workspaces/{workspace_id}/{name}"))
+}
+
+/// S3 expects a base64 binary digest, while the client sends lowercase hex.
+/// Keep the two encodings tied to the same validated 32 bytes.
+fn sha256_checksum_base64(content_hash: &str) -> ApiResult<String> {
+  let hash = content_hash.trim();
+  if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+    return Err(ApiError::BadRequest(
+      "content_hash must be a hex sha256".to_string(),
+    ));
+  }
+  let digest = (0..32)
+    .map(|i| u8::from_str_radix(&hash[i * 2..i * 2 + 2], 16))
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|_| ApiError::BadRequest("content_hash must be a hex sha256".to_string()))?;
+  Ok(base64::engine::general_purpose::STANDARD.encode(digest))
+}
+
+/// `complete` receives a key, not the original hash field from `presign`.
+/// Extract the digest from the validated workspace-scoped object-key shape.
+fn checksum_for_object_key(workspace_id: Uuid, object_key: &str) -> ApiResult<String> {
+  let prefix = format!("workspaces/{workspace_id}/");
+  let suffix = object_key
+    .strip_prefix(&prefix)
+    .ok_or_else(|| ApiError::BadRequest("object_key does not belong to this workspace".into()))?;
+  let hash = suffix
+    .get(..64)
+    .ok_or_else(|| ApiError::BadRequest("object_key has no sha256 digest".into()))?;
+  if suffix.len() != 64 && !suffix[64..].starts_with('.') {
+    return Err(ApiError::BadRequest("object_key has no sha256 digest".into()));
+  }
+  sha256_checksum_base64(hash)
+}
+
+fn uploaded_checksum_verdict(stored: Option<&str>, expected: &str) -> ApiResult<()> {
+  match stored {
+    Some(actual) if actual == expected => Ok(()),
+    Some(_) => Err(ApiError::BadRequest(
+      "uploaded object checksum does not match its key".into(),
+    )),
+    None => Err(ApiError::BadRequest(
+      "storage did not provide an uploaded object checksum".into(),
+    )),
+  }
 }
 
 /// Lowercase alphanumeric extension of [file_name], or None. Ignores any query
@@ -956,6 +1075,107 @@ fn safe_file_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn hex_sha256_becomes_the_s3_checksum_for_the_same_bytes() {
+    let hex = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let checksum = "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=";
+    assert_eq!(sha256_checksum_base64(hex).unwrap(), checksum);
+    assert_eq!(sha256_checksum_base64(&hex.to_ascii_uppercase()).unwrap(), checksum);
+    assert!(sha256_checksum_base64("not-a-hash").is_err());
+  }
+
+  #[test]
+  fn complete_requires_a_matching_stored_checksum() {
+    let ws = Uuid::new_v4();
+    let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let key = format!("workspaces/{ws}/{hash}.png");
+    let expected = checksum_for_object_key(ws, &key).unwrap();
+    assert!(uploaded_checksum_verdict(Some(&expected), &expected).is_ok());
+    assert!(uploaded_checksum_verdict(Some("wrong-checksum"), &expected).is_err());
+    assert!(uploaded_checksum_verdict(None, &expected).is_err());
+    assert!(checksum_for_object_key(ws, &format!("workspaces/{ws}/arbitrary.png")).is_err());
+    assert!(checksum_for_object_key(Uuid::new_v4(), &key).is_err());
+  }
+
+  /// Run explicitly against the dev RustFS with S3_* environment variables.
+  /// Wrong bytes and missing signed headers must fail; after the first PUT, the
+  /// very same URL must not replace the object while it is still unexpired.
+  #[tokio::test]
+  #[ignore = "requires a disposable S3-compatible test bucket"]
+  async fn signed_conditional_put_refuses_replay() {
+    let storage = S3Config::from_env().expect("set S3_* for the test store");
+    let key = format!("audit-write-once/{}", Uuid::new_v4());
+    let checksum = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(b"first"));
+    let upload = storage.presign_put_if_absent(&key, &checksum);
+    let client = reqwest::Client::new();
+
+    let missing_condition = client
+      .put(&upload.url)
+      .header("x-amz-checksum-sha256", &checksum)
+      .body("first")
+      .send()
+      .await
+      .expect("PUT without signed header");
+    let wrong_bytes = client
+      .put(&upload.url)
+      .header(reqwest::header::IF_NONE_MATCH, "*")
+      .header("x-amz-checksum-sha256", &checksum)
+      .body("other")
+      .send()
+      .await
+      .expect("PUT with wrong checksum");
+    let first = client
+      .put(&upload.url)
+      .header(reqwest::header::IF_NONE_MATCH, "*")
+      .header("x-amz-checksum-sha256", &checksum)
+      .body("first")
+      .send()
+      .await
+      .expect("first conditional PUT");
+    let verified_head = client
+      .head(storage.presign_head_object_with_checksum(&key))
+      .header("x-amz-checksum-mode", "ENABLED")
+      .send()
+      .await
+      .expect("signed checksum HEAD");
+    let replay = client
+      .put(&upload.url)
+      .header(reqwest::header::IF_NONE_MATCH, "*")
+      .header("x-amz-checksum-sha256", &checksum)
+      .body("other")
+      .send()
+      .await
+      .expect("replayed conditional PUT");
+    let stored = client
+      .get(storage.download_url(&key))
+      .send()
+      .await
+      .expect("GET after replay");
+    let stored_status = stored.status();
+    let bytes = stored.bytes().await.expect("stored bytes");
+    let cleanup = client
+      .delete(storage.presign_delete(&key))
+      .send()
+      .await
+      .expect("remove test object");
+
+    assert_eq!(missing_condition.status(), StatusCode::FORBIDDEN);
+    assert_eq!(wrong_bytes.status(), StatusCode::BAD_REQUEST);
+    assert!(first.status().is_success(), "first PUT: {}", first.status());
+    assert!(verified_head.status().is_success(), "checksum HEAD: {}", verified_head.status());
+    assert_eq!(
+      verified_head
+        .headers()
+        .get("x-amz-checksum-sha256")
+        .and_then(|value| value.to_str().ok()),
+      Some(checksum.as_str())
+    );
+    assert_eq!(replay.status(), StatusCode::PRECONDITION_FAILED);
+    assert!(stored_status.is_success(), "GET: {stored_status}");
+    assert_eq!(&bytes[..], b"first");
+    assert!(cleanup.status().is_success(), "DELETE: {}", cleanup.status());
+  }
 
   #[test]
   fn object_key_is_content_addressed_and_scoped() {

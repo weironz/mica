@@ -373,6 +373,48 @@ jobs:
           node web_e2e.mjs --base http://127.0.0.1:8090 \
                            --email "$E2E_EMAIL" --password "$E2E_PASSWORD"
 
+      # This file uses real IndexedDB and Web Locks; Dart VM tests cannot run it.
+      # The local Windows Flutter test server currently 404s its own CanvasKit
+      # assets, so exercise it on Linux with the Chromium already installed for
+      # the browser E2E above. A missing browser must fail, never silently skip.
+      - name: IndexedDB store browser regression
+        run: |
+          set -euo pipefail
+          export CHROME_EXECUTABLE="$(cd e2e && node -e "const {chromium}=require('@playwright/test'); console.log(chromium.executablePath())")"
+          test -x "$CHROME_EXECUTABLE"
+          cd clients/mica_flutter
+          flutter test --platform chrome test/web_idb_doc_store_test.dart -r expanded
+
+      # The production bundle has no stable DOM handles for its self-painted
+      # editor. This separate entrypoint renders that same MicaEditor with fixed
+      # blocks, exposes only focus, then Playwright sends real Ctrl+A/C events
+      # and inspects the browser's ClipboardItem flavors.
+      - name: Browser clipboard regression through the real editor
+        run: |
+          set -euo pipefail
+          cd clients/mica_flutter
+          flutter build web --release --no-web-resources-cdn \
+            --target=e2e/clipboard_harness.dart --output="$PWD/build/clipboard_web"
+          python3 -m http.server 8091 --bind 127.0.0.1 \
+            --directory "$PWD/build/clipboard_web" > /tmp/clipboard-http.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8091/ > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8091/ > /dev/null
+          cd ../../e2e
+          node clipboard_e2e.mjs --base http://127.0.0.1:8091
+
+      - name: Clipboard failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clipboard-e2e-failure
+          path: e2e/clipboard-e2e-failure.png
+          if-no-files-found: ignore
+
       # The api's own log is the only place a server-side cause shows up; without
       # this a failure reads as "the browser did not see convergence" with no way
       # to tell whether the server ever accepted the push.
@@ -396,6 +438,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      - name: Deployment smoke-gate and Compose configuration regressions
+        run: |
+          bash scripts/test-verify-prod.sh
+          python3 scripts/test-compose-api-env.py
 
       - uses: docker/setup-buildx-action@v3
 

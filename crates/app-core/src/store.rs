@@ -691,6 +691,105 @@ pub async fn insert_file(
   mime_type: &str,
   byte_size: i64,
 ) -> ApiResult<FileRecord> {
+  let mut tx = db.begin().await?;
+  lock_file_object_key(&mut tx, object_key).await?;
+  let file = insert_file_tx(
+    &mut tx,
+    workspace_id,
+    uploaded_by,
+    object_key,
+    original_name,
+    mime_type,
+    byte_size,
+  )
+  .await?;
+  tx.commit().await?;
+  Ok(file)
+}
+
+/// Serialize object deletion and all paths that register the same key. The
+/// namespace separates this lock from unrelated advisory-lock users. A hash
+/// collision only serializes two unrelated keys; it cannot authorize deletion.
+pub async fn lock_file_object_key(
+  tx: &mut Transaction<'_, Postgres>,
+  object_key: &str,
+) -> ApiResult<()> {
+  sqlx::query("SELECT pg_advisory_xact_lock(1296646977, hashtext($1))")
+    .bind(object_key)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
+}
+
+/// Remember the latest URL expiry for this key. Must run while holding
+/// [lock_file_object_key] in the same transaction as the presign decision.
+pub async fn record_pending_file_upload_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  workspace_id: Uuid,
+  object_key: &str,
+  ttl_seconds: u64,
+) -> ApiResult<()> {
+  let ttl_seconds = i64::try_from(ttl_seconds)
+    .map_err(|_| ApiError::BadRequest("upload URL lifetime is too long".to_string()))?;
+  sqlx::query(
+    r#"
+      INSERT INTO pending_file_uploads (object_key, workspace_id, expires_at)
+      VALUES ($1, $2, now() + make_interval(secs => $3::double precision))
+      ON CONFLICT (object_key) DO UPDATE
+      SET expires_at = GREATEST(pending_file_uploads.expires_at, EXCLUDED.expires_at)
+    "#,
+  )
+  .bind(object_key)
+  .bind(workspace_id)
+  .bind(ttl_seconds)
+  .execute(&mut **tx)
+  .await?;
+  Ok(())
+}
+
+/// Server-side PUTs also need a durable ledger entry *before* sending bytes.
+/// A transaction held across PUT is not enough: a process crash would roll it
+/// back and leave an object that no sweep can discover.
+pub async fn record_pending_file_upload(
+  db: &PgPool,
+  workspace_id: Uuid,
+  object_key: &str,
+  ttl_seconds: u64,
+) -> ApiResult<()> {
+  let mut tx = db.begin().await?;
+  lock_file_object_key(&mut tx, object_key).await?;
+  record_pending_file_upload_tx(&mut tx, workspace_id, object_key, ttl_seconds).await?;
+  tx.commit().await?;
+  Ok(())
+}
+
+pub async fn pending_file_upload_exists_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  workspace_id: Uuid,
+  object_key: &str,
+) -> ApiResult<bool> {
+  sqlx::query_scalar(
+    "SELECT EXISTS (SELECT 1 FROM pending_file_uploads WHERE workspace_id = $1 AND object_key = $2)",
+  )
+  .bind(workspace_id)
+  .bind(object_key)
+  .fetch_one(&mut **tx)
+  .await
+  .map_err(ApiError::from)
+}
+
+/// Insert a file while the caller's key lock is held across its storage HEAD
+/// or PUT and this row write. `complete` needs that larger critical section:
+/// locking only the INSERT leaves a gap in which GC can delete the object.
+pub async fn insert_file_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  workspace_id: Uuid,
+  uploaded_by: Uuid,
+  object_key: &str,
+  original_name: &str,
+  mime_type: &str,
+  byte_size: i64,
+) -> ApiResult<FileRecord> {
   // Object keys are content-addressed (sha256), so re-uploading identical bytes
   // hits the UNIQUE(object_key) constraint. Treat that as dedup: return the
   // existing row rather than failing. The no-op SET lets us use RETURNING.
@@ -708,7 +807,7 @@ pub async fn insert_file(
   .bind(original_name)
   .bind(mime_type)
   .bind(byte_size)
-  .fetch_one(db)
+  .fetch_one(&mut **tx)
   .await
   .map_err(map_insert_file_error)
 }
@@ -752,6 +851,26 @@ pub async fn fetch_file_by_key(
   .bind(workspace_id)
   .bind(object_key)
   .fetch_optional(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+/// Transactional lookup for the presign/GC key-locked critical section.
+pub async fn fetch_file_by_key_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  workspace_id: Uuid,
+  object_key: &str,
+) -> ApiResult<Option<FileRecord>> {
+  sqlx::query_as::<_, FileRecord>(
+    r#"
+      SELECT id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size, created_at
+      FROM files
+      WHERE workspace_id = $1 AND object_key = $2
+    "#,
+  )
+  .bind(workspace_id)
+  .bind(object_key)
+  .fetch_optional(&mut **tx)
   .await
   .map_err(ApiError::from)
 }

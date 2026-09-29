@@ -77,6 +77,7 @@ import 'perf/switch_trace.dart';
 import 'api/models.dart';
 import 'api/profile_watch.dart';
 import 'api/session_refresher.dart';
+import 'api/tree_fetch.dart';
 import 'api/tree_request_seq.dart';
 import 'api/views_events.dart';
 import 'api/sync_client.dart';
@@ -440,7 +441,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (value != null) _activeTab.workspaceId = _selectedWorkspace?.id;
   }
 
-  String? _selectedMarkdown;
   String? _message;
   bool _isBusy = false;
 
@@ -1665,28 +1665,27 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // Claim a sequence number for THIS request. Anything older that lands later
     // is answering a question we have already replaced.
     final seq = _treeRequests.claim(workspaceId);
-    try {
-      final held = _viewsByWorkspace[workspaceId];
-      final answer = await _api.listViewsIfChanged(
+    final held = _viewsByWorkspace[workspaceId];
+    final answer = await fetchBackgroundTree(
+      () => _api.listViewsIfChanged(
         session.accessToken,
         workspaceId,
         etag: (held == null || held.isEmpty)
             ? null
             : loadPref('viewsEtag:$workspaceId'),
-      );
-      final views = answer.views;
-      if (views == null || !mounted) return; // 304 — already current.
-      // Superseded while we were in flight: a newer request exists, so this
-      // response describes a state that has already been replaced. Writing it
-      // would install the older tree AND its older ETag — and a stale ETag is
-      // the durable half of the damage, because the next cold start sends it,
-      // gets a 304, and keeps a tree the server has moved past.
-      if (!_treeRequests.isCurrent(workspaceId, seq)) return;
-      _commitTree(workspaceId: workspaceId, views: views, etag: answer.etag);
-      _cacheCloudPageTree(workspaceId: workspaceId);
-    } on ApiException {
-      // Transient; the next change notification retries the fetch.
-    }
+      ),
+    );
+    if (answer == null) return; // Transient failure; another bell retries.
+    final views = answer.views;
+    if (views == null || !mounted) return; // 304 — already current.
+    // Superseded while we were in flight: a newer request exists, so this
+    // response describes a state that has already been replaced. Writing it
+    // would install the older tree AND its older ETag — and a stale ETag is
+    // the durable half of the damage, because the next cold start sends it,
+    // gets a 304, and keeps a tree the server has moved past.
+    if (!_treeRequests.isCurrent(workspaceId, seq)) return;
+    _commitTree(workspaceId: workspaceId, views: views, etag: answer.etag);
+    _cacheCloudPageTree(workspaceId: workspaceId);
   }
 
   /// Install a freshly fetched tree together with the ETag that describes it.
@@ -1899,7 +1898,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           payload: {...boot.snapshot.payload, 'blocks': blocks},
         ),
       );
-      _selectedMarkdown = null;
     });
   }
 
@@ -2123,7 +2121,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
       setState(() {
         _selectedBootstrap = fresh;
-        _selectedMarkdown = null;
       });
     } catch (_) {
       // Transient sync refetch failures are non-fatal; the next update retries.
@@ -2245,7 +2242,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         };
         _selectedView = created.view;
         _selectedBootstrap = bootstrap;
-        _selectedMarkdown = null;
       });
 
       await _loadSelectedWorkspaceMembers();
@@ -2284,7 +2280,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           _selectedWorkspace = remaining.isNotEmpty ? remaining.first : null;
           _selectedView = null;
           _selectedBootstrap = null;
-          _selectedMarkdown = null;
         }
       });
       if (wasSelected && _selectedWorkspace != null) {
@@ -2332,7 +2327,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           // opened here — then there is genuinely nothing to show yet.
           _selectedView = remembered;
           _selectedBootstrap = null;
-          _selectedMarkdown = null;
         }
       });
       trace.mark('shell');
@@ -2405,7 +2399,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _membersByWorkspace = {..._membersByWorkspace, workspace.id: const []};
       _selectedView = firstView;
       _selectedBootstrap = bootstrap;
-      _selectedMarkdown = null;
       _offlineNav = true;
     });
     if (bootstrap != null) _reconcileSync();
@@ -2443,7 +2436,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         };
         _selectedView = created.view;
         _selectedBootstrap = bootstrap;
-        _selectedMarkdown = null;
       });
       newId = created.view.id;
     });
@@ -3661,7 +3653,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         };
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
-        _selectedMarkdown = null;
       });
     });
   }
@@ -3692,7 +3683,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         };
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
-        _selectedMarkdown = null;
       });
     });
   }
@@ -3962,7 +3952,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         };
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
-        _selectedMarkdown = null;
       });
       await _loadSelectedWorkspaceMembers();
     });
@@ -4048,7 +4037,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           wasShowingSameView: wasShowingThisView,
         )) {
           _selectedBootstrap = bootstrap;
-          _selectedMarkdown = null;
         }
       });
       // Reaching the server means we're back online — restore the real nav if we
@@ -4186,7 +4174,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       } else {
         _selectedView = null;
         _selectedBootstrap = null;
-        _selectedMarkdown = null;
       }
     });
   }
@@ -4251,7 +4238,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         if (_selectedView?.id == view.id) {
           _selectedView = null;
           _selectedBootstrap = null;
-          _selectedMarkdown = null;
         }
       });
     });
@@ -4284,7 +4270,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         if (open != null && !stillThere) {
           _selectedView = null;
           _selectedBootstrap = null;
-          _selectedMarkdown = null;
         }
       });
       // `skipped` is the server saying it did LESS than asked (already trashed,
@@ -4420,7 +4405,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           view: bootstrap.view,
           snapshot: result.snapshot,
         );
-        _selectedMarkdown = null;
       });
     });
   }
@@ -4472,7 +4456,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           view: _selectedBootstrap!.view,
           snapshot: result.snapshot,
         );
-        _selectedMarkdown = null;
       });
     } catch (error) {
       if (mounted) {
@@ -6192,7 +6175,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _selectedWorkspace = null;
       _selectedView = null;
       _selectedBootstrap = null;
-      _selectedMarkdown = null;
       _message = null;
       // P3c: signing out collapses the cloud section, it does NOT clear the
       // world — on desktop, land in the local world (its workspaces and the
@@ -6389,7 +6371,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _selectedView = viewToOpen;
         if (mayWriteBody) {
           _selectedBootstrap = bootstrap;
-          _selectedMarkdown = null;
         }
         if (bootstrapError != null) _message = bootstrapError;
       }
@@ -6498,7 +6479,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _viewsByWorkspace = rebuilt.views;
       _selectedView = firstView;
       _selectedBootstrap = bootstrap;
-      _selectedMarkdown = null;
       // Mark degraded-nav mode: roles come from the (possibly stale) mirror and
       // ownerId/objectType are defaulted until the server is reachable again
       // (see _recoverOnlineNav). The server re-checks the real role on every
@@ -7148,7 +7128,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             ? const []
             : _viewsByWorkspace[_selectedWorkspace!.id] ?? const [],
       ),
-      selectedMarkdown: local ? null : _selectedMarkdown,
       presence: local ? const [] : _presence,
       message: _message,
       importProgress: _importProgress,
@@ -8250,7 +8229,6 @@ class WorkspaceView extends StatefulWidget {
     this.onSelectWorkspaceById,
     this.onSearchAllWorkspaces,
     this.onOpenSearchHit,
-    required this.selectedMarkdown,
     required this.presence,
     required this.message,
     this.importProgress,
@@ -8508,7 +8486,6 @@ class WorkspaceView extends StatefulWidget {
   /// of the CURRENT workspace's page tree — which a workspace the user has
   /// never visited does not have in memory at all.
   final void Function(String viewId, String workspaceId)? onOpenSearchHit;
-  final String? selectedMarkdown;
   final List<PresenceUser> presence;
   final String? message;
 
@@ -11912,27 +11889,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       onLoaded: _onBacklinksLoaded,
                     ),
                   ),
-                if (widget.selectedMarkdown != null) ...[
-                  const SizedBox(height: 28),
-                  Text(
-                    'Markdown',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 12),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: MicaTheme.of(context).surface.base,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: MicaTheme.of(context).border.normal,
-                      ),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: SelectableText(widget.selectedMarkdown!),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
