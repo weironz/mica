@@ -16,7 +16,8 @@ Future<bool> copyTextToClipboard(String text) async {
   }
 }
 
-/// Copy the selection in TWO flavors: [plain] (Markdown source, what a plain
+/// Copy the selection in TWO flavors: [plain] (Markdown for multi-block
+/// selections, literal source for a single code block; what a plain
 /// editor like Notepad reads) and [richHtml] (what Markdown editors like Typora
 /// read and convert back to formatted content). On Windows both flavors are
 /// written via the raw Win32 clipboard (CF_UNICODETEXT + CF_HTML); everywhere
@@ -39,8 +40,7 @@ Future<bool> copyRichToClipboard({
 ///
 /// The HTML flavor can fail on its own here — two independent SetClipboardData
 /// calls, unlike the browsers' single atomic ClipboardItem — so the text flavor
-/// has to survive that on its own. It does, because it is Markdown; see
-/// `_copySelection`.
+/// has to survive that on its own; see `_copySelection`.
 bool _windowsWriteTextAndHtml(String plain, String html) {
   final user32 = DynamicLibrary.open('user32.dll');
   final kernel32 = DynamicLibrary.open('kernel32.dll');

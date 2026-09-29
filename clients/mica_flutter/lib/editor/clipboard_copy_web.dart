@@ -35,7 +35,8 @@ Future<bool> copyTextToClipboard(String text) async {
 }
 
 /// Copy the selection in TWO flavors via a multi-format `ClipboardItem`: [plain]
-/// (Markdown-free `text/plain`, what Notepad reads) and [richHtml] (`text/html`,
+/// (`text/plain`: Markdown across blocks, literal source within one code block)
+/// and [richHtml] (`text/html`,
 /// what Typora/Obsidian read and convert back to formatted content). Needs a
 /// secure context + ClipboardItem; falls back to writing just [plain] otherwise.
 Future<bool> copyRichToClipboard({

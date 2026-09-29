@@ -956,6 +956,21 @@ class EditorController extends ChangeNotifier {
     return true;
   }
 
+  /// Text for Ctrl+C/Ctrl+X. A selection confined to one code block is source
+  /// code, including when Ctrl+A selected its entire body; Markdown fences are
+  /// only needed when the selection crosses block boundaries.
+  String selectionClipboardText({Map<String, String>? imageUrls}) {
+    final sel = selection;
+    if (sel != null && !sel.isCollapsed && sel.start.node == sel.end.node) {
+      final i = sel.start.node;
+      if (i >= 0 && i < nodes.length && nodes[i].kind == 'code_block') {
+        final text = nodes[i].text;
+        return text.substring(sel.start.offset, sel.end.offset);
+      }
+    }
+    return selectionText(imageUrls: imageUrls);
+  }
+
   /// Serialize the current ranged selection to text (tables become GFM). Empty
   /// when the selection is collapsed/absent. [imageUrls] maps an image's
   /// `file_id` to a fresh download URL so copied Markdown links actually resolve

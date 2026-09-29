@@ -36,6 +36,41 @@ void main() {
     expect(c.selectionText(), '```py\nprint(1)\n```');
   });
 
+  test('copying only code puts literal source on the clipboard', () {
+    const code = 'print(1)\n``` stays in the source\n';
+    final c = _doc([
+      EditorNode(id: 'before', kind: 'paragraph', text: 'before'),
+      EditorNode(id: 'code', kind: 'code_block', text: code,
+          data: {'language': 'py'}),
+      EditorNode(id: 'after', kind: 'paragraph', text: 'after'),
+    ]);
+
+    expect(c.selectionClipboardText(), contains('```py\n'));
+    c.selection = const DocSelection(
+      anchor: DocPosition(1, 0),
+      focus: DocPosition(1, code.length),
+    );
+
+    expect(c.selectionClipboardText(), code);
+    expect(c.selectionHtml(), contains('<pre><code class="language-py">'));
+
+    c.selection = const DocSelection(
+      anchor: DocPosition(1, 0),
+      focus: DocPosition(1, 8),
+    );
+    expect(c.selectionClipboardText(), 'print(1)');
+  });
+
+  test('copying code together with another block keeps Markdown fences', () {
+    final c = _doc([
+      EditorNode(id: 'a', kind: 'paragraph', text: 'before'),
+      EditorNode(id: 'b', kind: 'code_block', text: 'print(1)',
+          data: {'language': 'py'}),
+    ]);
+
+    expect(c.selectionClipboardText(), 'before\n\n```py\nprint(1)\n```');
+  });
+
   test('copy keeps inline marks', () {
     final c = _doc([
       EditorNode(id: 'a', kind: 'paragraph', text: 'hi there', data: {
