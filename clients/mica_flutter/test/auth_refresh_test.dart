@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -257,6 +258,67 @@ void main() {
         sessionExpiringIn(const Duration(minutes: 1), refresh: 'mica_rt_current'),
       );
       expect(spent, ['mica_rt_current']);
+    });
+
+    /// P1-10: two DIFFERENT sign-ins must not share one refresh.
+    ///
+    /// The latch used to be a single field, so a refresh started for account A
+    /// was handed to account B that asked while it was open — B received A's
+    /// tokens, because the two were related only by timing. The key is the
+    /// refresh token, and this is the test that says so.
+    ///
+    /// Both refreshes are gated on a Completer so they are genuinely in flight
+    /// together; without the gate the first would finish before the second
+    /// started and the test would pass whatever the keying was.
+    test('two different sign-ins do not share a refresh', () async {
+      final gate = Completer<void>();
+      final spent = <String>[];
+      final r = SessionRefresher(refresh: (t) async {
+        spent.add(t);
+        await gate.future;
+        return sessionExpiringIn(const Duration(hours: 24), refresh: '$t-rotated');
+      });
+
+      final a = r.ensureFresh(
+        sessionExpiringIn(const Duration(minutes: 1), refresh: 'rt_A'),
+      );
+      final b = r.ensureFresh(
+        sessionExpiringIn(const Duration(minutes: 1), refresh: 'rt_B'),
+      );
+      // Both requests must have been made, each for its own token.
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        spent.toSet(),
+        {'rt_A', 'rt_B'},
+        reason: "one account's refresh must not be reused for another sign-in",
+      );
+
+      gate.complete();
+      final results = await Future.wait([a, b]);
+      // And each caller got the session ITS token was exchanged for.
+      expect(results[0]!.refreshToken, 'rt_A-rotated');
+      expect(results[1]!.refreshToken, 'rt_B-rotated');
+    });
+
+    /// The same sign-in, by contrast, still shares one refresh — that is rule 2
+    /// and the test above must not have been bought by breaking it.
+    test('the same sign-in still shares one refresh', () async {
+      final gate = Completer<void>();
+      var refreshes = 0;
+      final r = SessionRefresher(refresh: (_) async {
+        refreshes++;
+        await gate.future;
+        return sessionExpiringIn(const Duration(hours: 24));
+      });
+      final same = sessionExpiringIn(const Duration(minutes: 1), refresh: 'rt_one');
+
+      final first = r.ensureFresh(same);
+      final second = r.ensureFresh(same);
+      await Future<void>.delayed(Duration.zero);
+      expect(refreshes, 1, reason: 'a rotating token must not be spent twice');
+
+      gate.complete();
+      await Future.wait([first, second]);
     });
   });
 }

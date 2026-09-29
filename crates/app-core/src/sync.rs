@@ -21,6 +21,8 @@ use serde::Serialize;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::store::lock_document_tx;
+
 
 /// `MicaDoc::from_update`, but a yrs PANIC on malformed bytes becomes a
 /// `DocError` instead of unwinding out of the request handler.
@@ -494,6 +496,22 @@ pub async fn push_update(
     tuning: &SyncTuning,
 ) -> ApiResult<i64> {
     let mut tx = db.begin().await?;
+
+    // Lock the `documents` row BEFORE reading the base — the same order
+    // `store::apply_derived_operations` takes, so the two write paths serialize
+    // against each other instead of deadlocking.
+    //
+    // Without this the read-fold-write below is a lost update under READ
+    // COMMITTED: two pushes both read base B, both fold their own update onto
+    // it, and the second `ON CONFLICT DO UPDATE SET state = excluded.state`
+    // discards the first one's fold — while BOTH `workspace_updates` rows
+    // commit. The stream then claims an update the base never absorbed, so a
+    // client catching up from the stream and a client reading the base disagree
+    // permanently (red line #1: one representation, and it must be this one).
+    lock_document_tx(&mut tx, workspace_id, document_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
     let base = ensure_base_tx(&mut tx, document_id).await?;
 
     // Validate + fold: reconstruct the base, merge the update.
@@ -696,21 +714,41 @@ pub async fn restore_yrs_version(
 /// Catch a client up from `since_rid`: the incremental updates, or — when the
 /// cursor fell behind the pruned window (the gap was folded into the base) — a
 /// base to re-bootstrap from. Drives offline reconnect after stream pruning.
+///
+/// The gap decision, the base behind a rebootstrap, and the update pull all come
+/// from ONE `REPEATABLE READ` snapshot. They were three separate autocommit reads
+/// before, and a prune committing between two of them made them disagree: the
+/// gap test saw the pre-prune `MIN(rid)` (so "no gap") while the pull ran after
+/// it and returned rows starting ABOVE the client's cursor — the client advanced
+/// its cursor across a range it never received, and the missing edits exist only
+/// inside the base it was not told to re-bootstrap from. That is silent,
+/// permanent divergence, and it is the prune path — the one designed to bound
+/// growth — that triggers it.
+///
+/// `REPEATABLE READ` rather than `SERIALIZABLE`: the three reads need to agree
+/// with each other, not to be validated against concurrent commits. Prunes are
+/// already safe to interleave (they only delete rows the base has absorbed); the
+/// bug was reading their effect halfway.
 pub async fn catch_up_document(
     db: &PgPool,
     document_id: Uuid,
     since_rid: i64,
     limit: i64,
 ) -> ApiResult<CatchUp> {
+    let mut tx = db.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await?;
+
     let min_rid: Option<i64> =
         sqlx::query_scalar("SELECT MIN(rid) FROM workspace_updates WHERE document_id = $1")
             .bind(document_id)
-            .fetch_one(db)
+            .fetch_one(&mut *tx)
             .await?;
     let base_rid: i64 =
         sqlx::query_scalar("SELECT base_rid FROM document_yrs_base WHERE document_id = $1")
             .bind(document_id)
-            .fetch_optional(db)
+            .fetch_optional(&mut *tx)
             .await?
             .unwrap_or(0);
 
@@ -721,12 +759,30 @@ pub async fn catch_up_document(
         Some(m) => since_rid + 1 < m && since_rid < base_rid,
         None => since_rid < base_rid,
     };
+
     if gap {
-        return Ok(CatchUp::Rebootstrap(bootstrap_base(db, document_id).await?));
+        // Read the base in THIS snapshot too. Calling `bootstrap_base` here would
+        // open a second connection and see a later state — the same
+        // disagreeing-snapshots shape as the bug above.
+        let base = ensure_base_tx(&mut tx, document_id).await?;
+        tx.commit().await?;
+        return Ok(CatchUp::Rebootstrap(base));
     }
-    Ok(CatchUp::Updates(
-        pull_document_updates(db, document_id, since_rid, limit).await?,
-    ))
+
+    let rows = sqlx::query_as::<_, StreamUpdate>(
+        "SELECT rid, document_id, actor_id, payload
+         FROM workspace_updates
+         WHERE document_id = $1 AND rid > $2
+         ORDER BY rid
+         LIMIT $3",
+    )
+    .bind(document_id)
+    .bind(since_rid)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(CatchUp::Updates(rows))
 }
 
 /// Everything in a workspace after `after_rid` (0 = from the start), ordered by

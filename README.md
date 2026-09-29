@@ -119,15 +119,25 @@ need to bring your own.
 ```sh
 mkdir -p /data/mica && cd /data/mica
 
-# The two files the server needs. Pinned to a RELEASE TAG, not `main`: the
-# compose file and the images it pulls (MICA_VERSION) must be the same
-# generation, and `main` can be ahead of the newest release.
-curl -fsSLO https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/docker-compose.single.yml
-curl -fsSL  https://raw.githubusercontent.com/weironz/mica/v0.13.17/deploy/.env.prod.example -o .env.prod
+# Pick ONE release and use it for everything below.
+#
+# This used to be two hardcoded `v0.13.17` URLs plus a free-text "pick a
+# release" for MICA_VERSION, which let a fresh install pair a months-old compose
+# file with a new image — the compose file's `environment:` block is an explicit
+# ALLOWLIST, so a variable added by a newer image simply never reaches the
+# process, and the symptom is a setting that silently does nothing.
+RELEASE=0.13.46
 
-vi .env.prod          # Two empty lines to fill: SERVER_IP (the address
-                      # BROWSERS use) and MICA_VERSION (pick a release).
-                      # Compose refuses to resolve until both are set.
+# The two files the server needs. Pinned to a RELEASE TAG, not `main`: `main`
+# can be ahead of the newest release.
+curl -fsSLO "https://raw.githubusercontent.com/weironz/mica/v$RELEASE/deploy/docker-compose.single.yml"
+curl -fsSL  "https://raw.githubusercontent.com/weironz/mica/v$RELEASE/deploy/.env.prod.example" -o .env.prod
+
+# SERVER_IP is the address BROWSERS use. MICA_VERSION must be the SAME $RELEASE
+# above — that pairing is the whole point of naming it once.
+sed -i "s/^MICA_VERSION=.*/MICA_VERSION=$RELEASE/" .env.prod
+vi .env.prod          # fill in SERVER_IP (compose refuses to resolve until it is set)
+
 docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
 

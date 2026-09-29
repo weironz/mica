@@ -206,6 +206,20 @@ impl S3Config {
     self.presign_bucket("HEAD", Utc::now())
   }
 
+  /// Presigned `HEAD` on ONE object — "is it there, and how big is it?".
+  /// Server-side only: this process sends it, so it signs against
+  /// [`server_endpoint`](Self::server_endpoint) like the other server-side
+  /// presigns.
+  ///
+  /// This is what makes a client's `byte_size` checkable. A presigned upload URL
+  /// is usable by whoever holds it, for whatever bytes they like, so the size a
+  /// client DECLARES is a claim; the store's `Content-Length` is a measurement.
+  pub fn presign_head_object(&self, key: &str) -> String {
+    let (base_url, host, canonical_uri) =
+      self.location(self.server_endpoint(), &uri_encode(key, false));
+    self.sign_at("HEAD", &base_url, &host, &canonical_uri, Utc::now())
+  }
+
   /// Presigned `PUT` on the bucket itself — S3 `CreateBucket`. Server-side only.
   ///
   /// Pair it with [`create_bucket_body`](Self::create_bucket_body): the region

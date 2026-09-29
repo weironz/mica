@@ -62,7 +62,9 @@ void main() {
   }
 
   /// Upload bytes the way the client does (presign → PUT → complete), returning
-  /// the cloud file id (a UUID). Mirrors ApiClient.uploadImage.
+  /// the cloud file id (a UUID). Mirrors ApiClient.uploadImage, including the
+  /// dedup short-circuit: when the server already holds these bytes it returns
+  /// `existing` and no upload URL, so there is nothing to PUT or complete.
   Future<String> uploadImage(
     String token,
     String ws,
@@ -75,8 +77,13 @@ void main() {
       'byte_size': bytes.length,
       'content_hash': sha256Hex(bytes),
     });
+    final existing = presign['existing'];
+    if (existing is Map) {
+      return (existing['file'] as Map)['id'] as String;
+    }
+    final upload = presign['upload'] as Map;
     final put = await http.put(
-      Uri.parse(presign['upload_url'] as String),
+      Uri.parse(upload['upload_url'] as String),
       headers: {'content-type': 'image/png'},
       body: bytes,
     );

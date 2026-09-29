@@ -77,6 +77,7 @@ import 'perf/switch_trace.dart';
 import 'api/models.dart';
 import 'api/profile_watch.dart';
 import 'api/session_refresher.dart';
+import 'api/tree_request_seq.dart';
 import 'api/views_events.dart';
 import 'api/sync_client.dart';
 
@@ -353,9 +354,47 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   List<String> _servers = const [];
 
   AuthSession? _session;
+
+  /// A fingerprint of the CURRENT sign-in: the server it belongs to, the user it
+  /// is for, and the refresh token it holds.
+  ///
+  /// Captured before an await and re-read after, to answer "is the thing that
+  /// came back still about the session I asked on behalf of?". A cheap
+  /// generation counter would do the same job, but it needs an increment at
+  /// every place a session is assigned, and the first one anybody forgets is a
+  /// silent resurrection bug again. Reading the identity out of the session
+  /// itself cannot be forgotten.
+  ///
+  /// The refresh token is part of it deliberately: it ROTATES on every refresh,
+  /// so a result computed from a token we no longer hold is exactly the stale
+  /// one to discard — and it is also what distinguishes "same user, same server,
+  /// new token" (accept) from "different sign-in entirely" (drop).
+  String? get _sessionIdentity {
+    final account = _accountIdentity;
+    return account == null ? null : '$account|${_session!.refreshToken}';
+  }
+
+  /// Server + user only — for an await whose result describes the ACCOUNT rather
+  /// than the sign-in: the profile endpoint answers "who is this user", and a
+  /// refresh token rotating underneath it does not make that answer wrong.
+  ///
+  /// Using the strict [_sessionIdentity] there would discard a legitimate
+  /// profile update every time a refresh landed first, which is a silent
+  /// regression of its own (the avatar would simply stop refreshing on a slow
+  /// connection, where refreshes overlap polls most).
+  String? get _accountIdentity {
+    final session = _session;
+    if (session == null) return null;
+    return '$_cloudOrigin|${session.user.id}';
+  }
   List<Workspace> _workspaces = const [];
   Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
+
+  /// Which of several overlapping tree fetches for a workspace may commit. See
+  /// [TreeRequestSeq] for why the last-arriving response is not the right one to
+  /// believe.
+  final TreeRequestSeq _treeRequests = TreeRequestSeq();
   Workspace? _selectedWorkspace;
 
   /// The open tabs, left to right. Always holds at least one — a tab with a
@@ -1033,13 +1072,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _refreshProfile() async {
     final session = _session;
     if (session == null) return;
+    // Which ACCOUNT this poll is about. Loose on purpose: see [_accountIdentity].
+    final identity = _accountIdentity;
     try {
       final user = await _profileWatch.poll(session);
       // Re-read the session: the poll awaited a round trip, and a sign-out or a
       // token rotation in that window would make `session` the wrong thing to
       // build on — copyWith on the stale one would resurrect a dead token.
+      //
+      // The identity check is the other half, and the one the re-read cannot do
+      // on its own: a session that changed USER or SERVER is a different account,
+      // and writing this user's profile into it would show the wrong name and
+      // avatar — then persist them under the new server's key.
       final current = _session;
       if (user == null || current == null || !mounted) return;
+      if (_accountIdentity != identity) return;
       final updated = current.copyWith(user: user);
       setState(() => _session = updated);
       _persistSession(updated);
@@ -1054,9 +1101,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _ensureFreshSession() async {
     final session = _session;
     if (session == null) return;
+    // Bind the round trip to the sign-in it was started for. The refresh takes a
+    // network round trip, and a sign-out, a server switch, or signing in as
+    // somebody else all land inside that window — after which `setState(() =>
+    // _session = next)` would install the OLD account's tokens over the new
+    // session, and `_persistSession` would file them under whatever `_cloudOrigin`
+    // happens to be by then. That is a resurrection, not a stale read: the user
+    // is back on an account they left.
+    final identity = _sessionIdentity;
     try {
       final next = await _refresher.ensureFresh(session);
       if (next == null || !mounted) return;
+      if (_sessionIdentity != identity) return;
       setState(() => _session = next);
       // Persist immediately: the refresh token just rotated, and the copy on
       // disk is now burnt. Losing this write costs the sign-in at next launch.
@@ -1065,7 +1121,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // The server refused the refresh token: 30 days idle, revoked, or its
       // family burnt by reuse detection. Nothing to recover — say so, rather
       // than firing doomed requests and leaving the user at `unauthorized`.
-      if (error.isUnauthorized) _endExpiredSession();
+      // Only for the session that made the call: a refusal aimed at a sign-in
+      // the user has already left must not end the one they are on now.
+      if (error.isUnauthorized && _sessionIdentity == identity) {
+        _endExpiredSession();
+      }
     } catch (_) {
       // Offline / server down: keep the session. The token may well still be
       // good, and local-first means there is work to do without a network.
@@ -1602,6 +1662,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _refreshTreeFromServer(String workspaceId) async {
     final session = _session;
     if (session == null) return;
+    // Claim a sequence number for THIS request. Anything older that lands later
+    // is answering a question we have already replaced.
+    final seq = _treeRequests.claim(workspaceId);
     try {
       final held = _viewsByWorkspace[workspaceId];
       final answer = await _api.listViewsIfChanged(
@@ -1613,28 +1676,40 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
       final views = answer.views;
       if (views == null || !mounted) return; // 304 — already current.
-      if ((answer.etag ?? '').isNotEmpty) {
-        savePref('viewsEtag:$workspaceId', answer.etag!);
-      }
-      setState(() {
-        _viewsByWorkspace = {..._viewsByWorkspace, workspaceId: views};
-      });
-      // The mirror MUST move with the ETag. The workspace-load path only writes
-      // the mirror on a 200 (`answer.views != null`) and skips it on a 304, and
-      // that skip is safe only because of one invariant: **a saved ETag means
-      // the mirror already holds that tree.** Advancing the ETag here without
-      // rewriting the mirror broke it, and the break is not visible until the
-      // NEXT cold start — preheat the stale mirror, send the newer ETag, get a
-      // 304, and the app opens a page the server no longer has: a red "not
-      // found" on a tree that looks perfectly normal.
-      //
-      // Shipped that way in v0.13.31 and reported the same evening, from a
-      // second machine. Cheap to get right: the write is per-workspace, and it
-      // only runs when the server actually sent a new tree.
+      // Superseded while we were in flight: a newer request exists, so this
+      // response describes a state that has already been replaced. Writing it
+      // would install the older tree AND its older ETag — and a stale ETag is
+      // the durable half of the damage, because the next cold start sends it,
+      // gets a 304, and keeps a tree the server has moved past.
+      if (!_treeRequests.isCurrent(workspaceId, seq)) return;
+      _commitTree(workspaceId: workspaceId, views: views, etag: answer.etag);
       _cacheCloudPageTree(workspaceId: workspaceId);
     } on ApiException {
       // Transient; the next change notification retries the fetch.
     }
+  }
+
+  /// Install a freshly fetched tree together with the ETag that describes it.
+  ///
+  /// One function so the two cannot drift: the invariant the offline mirror
+  /// depends on is "_a saved ETag means the mirror already holds that tree_", and
+  /// it only holds if the tag is written in the same step as the tree it came
+  /// with. Splitting them — as the two call sites used to — is how a tree from
+  /// one response ends up paired with an ETag from another.
+  void _commitTree({
+    required String workspaceId,
+    required List<DocumentView> views,
+    String? etag,
+  }) {
+    // Only advance the tag when the server actually sent one. A 304 has no body
+    // and no tag, and keeping the old one is exactly right — it still describes
+    // the tree we are holding.
+    if ((etag ?? '').isNotEmpty) {
+      savePref('viewsEtag:$workspaceId', etag!);
+    }
+    setState(() {
+      _viewsByWorkspace = {..._viewsByWorkspace, workspaceId: views};
+    });
   }
 
   void _reconcileSync() {
@@ -6211,6 +6286,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
     }
 
+    // Claim a sequence number for THIS request. Anything older that lands later
+    // is answering a question we have already replaced.
+    final seq = _treeRequests.claim(workspace.id);
+
     // Ask conditionally, but only while actually holding a tree to fall back
     // on: a 304 answered to a client with nothing would leave the sidebar
     // empty. The tag is stored beside the tree it describes, so a mirror
@@ -6223,10 +6302,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? null
           : loadPref('viewsEtag:${workspace.id}'),
     );
+    // Superseded while we were in flight: a newer request for this workspace
+    // exists, so this response describes a state that has already been replaced.
+    // Writing it would install the older tree AND its older ETag — and the stale
+    // ETag is the durable half, because the next cold start sends it, gets a
+    // 304, and keeps a tree the server has moved past. The selection block below
+    // guards itself separately (`stillCurrent`), but the TREE and its tag had no
+    // such guard: a slower load landing last overwrote the newer one.
+    if (!_treeRequests.isCurrent(workspace.id, seq)) return;
+
     final views = answer.views ?? held ?? const <DocumentView>[];
-    if (answer.views != null && (answer.etag ?? '').isNotEmpty) {
-      savePref('viewsEtag:${workspace.id}', answer.etag!);
-    }
+    _commitTree(
+      workspaceId: workspace.id,
+      views: views,
+      etag: answer.views == null ? null : answer.etag,
+    );
     SwitchTrace.current?.mark(answer.views == null ? 'tree(304)' : 'tree');
     // Reopen the page last viewed IN THIS workspace (AppFlowy remembers the last
     // view per-workspace). On a restore or a workspace switch `_selectedView` is
@@ -6293,7 +6383,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           crdtSessionDocumentId: _sync?.documentId,
         );
     setState(() {
-      _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
+      // The tree itself was installed by `_commitTree` (with its ETag, in one
+      // step). This block owns the SELECTION and the body only.
       if (stillCurrent) {
         _selectedView = viewToOpen;
         if (mayWriteBody) {

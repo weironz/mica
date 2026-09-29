@@ -4,7 +4,7 @@ use mica_infra::{AiConfig, AiProvider, ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::routes::auth::{admin_id_from_headers, user_id_from_headers};
+use crate::routes::auth::{admin_id_from_headers, existing_user_id_from_headers, user_id_from_headers};
 
 #[derive(Debug, Deserialize)]
 pub struct AiCompleteRequest {
@@ -86,7 +86,11 @@ pub async fn complete(
   headers: HeaderMap,
   Json(payload): Json<AiCompleteRequest>,
 ) -> ApiResult<Json<AiCompleteResponse>> {
-  let _user_id = user_id_from_headers(&state, &headers).await?;
+  // `existing_user_id_…`, not the plain one: this endpoint spends the operator's
+  // AI credit, and an access token outlives the account it was minted for (a
+  // stateless JWT cannot be revoked). See the helper for why only the spending
+  // paths pay for the extra lookup.
+  let _user_id = existing_user_id_from_headers(&state, &headers).await?;
 
   let config = state
     .ai

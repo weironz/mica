@@ -674,7 +674,447 @@ async fn concurrent_first_bootstrap_returns_one_universe() {
     cleanup(&db, ws, user).await;
 }
 
-// ── FTS M1: document_yrs_base.content_text (the search index) ────────────────
+// ── P1-13: the gap decision and the pull must share one snapshot ─────────────
+
+/// P1-13: a prune committing while `catch_up_document` is deciding must not let
+/// the client skip the pruned range.
+///
+/// The bug: `catch_up_document` made three separate autocommit reads — MIN(rid),
+/// base_rid, then the pull. Each got its OWN snapshot under READ COMMITTED, so a
+/// prune landing between them produced a decision and a pull that disagreed. The
+/// gap test saw the pre-prune MIN (no gap), the pull saw the post-prune stream,
+/// and the rows it returned started ABOVE the client's cursor. The client
+/// advanced its cursor across updates it never received, and those updates now
+/// exist only inside a base nobody told it to re-bootstrap from — silent,
+/// permanent divergence, triggered by the very pruning that bounds growth.
+///
+/// The interleaving is CONSTRUCTED with a real barrier: an `ACCESS EXCLUSIVE`
+/// lock on `document_yrs_base` blocks the SECOND read (`base_rid`) while the
+/// first (MIN) is already done, and the prune commits in that window. Blocking
+/// the second read specifically is what makes this discriminating — under the
+/// fix the third read shares the transaction snapshot taken at the second, so it
+/// still sees the rows the prune removed; unfixed, it re-snapshots.
+///
+/// The assertion is the invariant a catch-up client relies on: whatever comes
+/// back, it must be usable from `since_rid` — either a contiguous run starting at
+/// `since_rid + 1`, or a re-bootstrap. A run that starts higher is the hole.
+#[tokio::test]
+async fn catch_up_decision_and_pull_share_one_snapshot() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc_bare(&db).await;
+
+    // A stream with known rids, and a base claiming to have folded up to the
+    // cursor. The payloads are never applied here — this test is about which
+    // ROWS come back, and hand-built update bytes would only add failure modes
+    // that have nothing to do with the property under test.
+    let mut rids = Vec::new();
+    for n in 0..6u8 {
+        let rid: i64 = sqlx::query_scalar(
+            "INSERT INTO workspace_updates(workspace_id, document_id, actor_id, payload)
+             VALUES ($1,$2,$3,$4) RETURNING rid",
+        )
+        .bind(ws)
+        .bind(doc)
+        .bind(user)
+        .bind(vec![n])
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        rids.push(rid);
+    }
+    // Values, not positions: `rid` comes from a TABLE-wide sequence, so this
+    // document's rows are NOT consecutive — a parallel test drawing rids leaves
+    // holes between them. Assuming `rids[i] + 1 == rids[i+1]` asserts something
+    // the schema never promised (it failed exactly that way on the first full
+    // suite run: expected 242, got 243, from an unrelated document's insert).
+    let m_old = rids[0];
+    let needed = m_old;
+    // `since_rid = m_old - 1` makes the gap test a NO-OP on the pre-prune stream
+    // (`since_rid + 1 < m_old` is false), while the client still genuinely needs
+    // `m_old` — which the prune is about to delete. That is the trap.
+    let since_rid = m_old - 1;
+    let base_rid = m_old;
+
+    // What the DECISION snapshot sees: every row the client is owed. Captured
+    // before the prune, because those are exactly the rows the pull must return.
+    let owed: Vec<i64> = sqlx::query_scalar(
+        "SELECT rid FROM workspace_updates WHERE document_id = $1 AND rid > $2 ORDER BY rid",
+    )
+    .bind(doc)
+    .bind(since_rid)
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert!(
+        owed.contains(&m_old),
+        "the row about to be pruned must be one the client still needs"
+    );
+
+    sqlx::query(
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, updated_at)
+         VALUES ($1,$2,$3,$4,now())",
+    )
+    .bind(doc)
+    .bind(vec![0u8])
+    .bind(vec![0u8])
+    .bind(base_rid)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    // Hold the base table so the SECOND read blocks. The MIN read is already
+    // done by then, which is exactly the window the bug lived in.
+    let mut blocker = db.begin().await.unwrap();
+    sqlx::query("LOCK TABLE document_yrs_base IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+
+    let db2 = db.clone();
+    let catch_up = tokio::spawn(async move {
+        sync::catch_up_document(&db2, doc, since_rid, 1000).await
+    });
+
+    // Wait until the call is actually parked on the lock — polling `pg_locks`
+    // rather than sleeping a fixed interval, so the barrier is observed rather
+    // than assumed.
+    let mut waited = 0u32;
+    loop {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_locks l
+               JOIN pg_class c ON c.oid = l.relation
+              WHERE NOT l.granted AND c.relname = 'document_yrs_base'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            break;
+        }
+        assert!(waited < 200, "catch_up never reached the blocked second read");
+        waited += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    // Commit the prune while the decision is half-made. `since_rid + 1` is gone.
+    sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1 AND rid <= $2")
+        .bind(doc)
+        .bind(needed)
+        .execute(&db)
+        .await
+        .unwrap();
+    blocker.rollback().await.unwrap();
+
+    match catch_up.await.unwrap().unwrap() {
+        sync::CatchUp::Updates(updates) => {
+            let got: Vec<i64> = updates.iter().map(|u| u.rid).collect();
+            assert_eq!(
+                got, owed,
+                "the pull must return exactly the rows the decision snapshot saw it owed \
+                 ({}); anything shorter means the client advanced its cursor across updates \
+                 it never received — the pruned row {m_old} survives only inside a base it \
+                 was not told to re-bootstrap from",
+                owed.len()
+            );
+        }
+        // A re-bootstrap is always a correct answer — the client gets the base
+        // that absorbed everything. It is simply not what the buggy code did.
+        sync::CatchUp::Rebootstrap(_) => {
+            panic!(
+                "expected an incremental run for a cursor the base has already folded past; \
+                 a re-bootstrap here means the gap test saw the post-prune stream, so this \
+                 test no longer exercises the interleaving it was written for"
+            )
+        }
+    }
+
+    cleanup(&db, ws, user).await;
+}
+
+// ── P0-01: two writers must not lose each other's fold ───────────────────────
+
+/// Text of block `id` as stored in the folded base.
+///
+/// The INVARIANT under test is about `state` — the one representation every read,
+/// export and MCP fetch consults — so the assertions decode the base rather than
+/// trusting any derived column to stand in for it.
+fn base_block_text(state: &[u8], id: &str) -> String {
+    MicaDoc::from_update(state)
+        .unwrap()
+        .to_blocks()
+        .into_iter()
+        .find(|b| b.id == id)
+        .map(|b| b.text)
+        .unwrap_or_default()
+}
+
+/// The base's `content_text` — the search projection that must move in the SAME
+/// statement as `state`, never lag it.
+async fn base_content_text(db: &PgPool, doc: Uuid) -> String {
+    sqlx::query_scalar("SELECT content_text FROM document_yrs_base WHERE document_id = $1")
+        .bind(doc)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+/// P0-01a: two concurrent WebSocket pushes must both reach the folded base.
+///
+/// The bug (`push_update` before this fix): it began a transaction and read the
+/// base with a plain unlocked SELECT. Two pushes both read base B, both folded
+/// their own update onto it, and the second `ON CONFLICT DO UPDATE SET
+/// state = excluded.state` overwrote the first's fold — while BOTH
+/// `workspace_updates` rows committed. The stream then advertised an update the
+/// base never absorbed, so a client catching up from the stream and a client
+/// reading the base disagree permanently (red line #1).
+///
+/// The interleaving is CONSTRUCTED, not raced: an outer transaction takes the
+/// `documents` row lock that `push_update` needs, the losing push is spawned and
+/// blocks on it, and only then is the winner's fold committed. That makes the
+/// pre-fix failure deterministic rather than occasional — a test that only fails
+/// under random timing is not a regression test.
+///
+/// The strongest assertion is the last one: the base must equal what folding the
+/// whole stream from scratch produces. That is exactly what the bug broke, and it
+/// holds regardless of which writer the lock happens to serialize first.
+#[tokio::test]
+async fn concurrent_pushes_both_reach_the_base() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    // Two editors, each holding the SAME stored base (nobody has pushed yet, so
+    // their state vectors agree) and each inserting its own marker at offset 5,
+    // right after "Hello".
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut a = MicaDoc::from_update(&base.state).unwrap();
+    let mut b = MicaDoc::from_update(&base.state).unwrap();
+    let sv_a = a.state_vector();
+    a.text_insert("a", 5, "AAA");
+    let update_a = a.encode_diff(&sv_a).unwrap();
+    let sv_b = b.state_vector();
+    b.text_insert("a", 5, "BBB");
+    let update_b = b.encode_diff(&sv_b).unwrap();
+
+    // Weave the lock: A's fold + stream row sit uncommitted in `tx`, holding the
+    // `documents` row lock. B's push — spawned here — must wait for it.
+    let mut tx = db.begin().await.unwrap();
+    sqlx::query(
+        "SELECT id FROM documents WHERE id = $1 AND workspace_id = $2 FOR UPDATE",
+    )
+    .bind(doc)
+    .bind(ws)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let rid_a: i64 = sqlx::query_scalar(
+        "INSERT INTO workspace_updates(workspace_id, document_id, actor_id, payload)
+         VALUES ($1,$2,$3,$4) RETURNING rid",
+    )
+    .bind(ws)
+    .bind(doc)
+    .bind(user)
+    .bind(&update_a)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (document_id) DO UPDATE SET
+             state = excluded.state, state_vector = excluded.state_vector,
+             base_rid = excluded.base_rid, content_text = excluded.content_text,
+             updated_at = now()",
+    )
+    .bind(doc)
+    .bind(a.encode_state())
+    .bind(a.state_vector())
+    .bind(rid_a)
+    .bind(sync::content_text_from_doc(&a))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+
+    let db2 = db.clone();
+    let loser = tokio::spawn(async move {
+        sync::push_update(&db2, ws, doc, user, &update_b, &tuning()).await
+    });
+    // B is now parked on the row lock. 500ms is the same margin the bootstrap
+    // test above uses to make "B has blocked" a certainty rather than a hope.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tx.commit().await.unwrap();
+
+    let rid_b = loser.await.unwrap().unwrap();
+    assert!(rid_b > rid_a, "the waiting push is serialized after the winner");
+
+    // 1. The base — the one representation — carries BOTH edits.
+    let stored: Vec<u8> =
+        sqlx::query_scalar("SELECT state FROM document_yrs_base WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    let text = base_block_text(&stored, "a");
+    assert!(
+        text.contains("AAA") && text.contains("BBB"),
+        "both pushes must survive in the base, got {text:?} — a missing marker is the \
+         lost update: both stream rows committed but the base absorbed only one"
+    );
+
+    // 2. `base_rid` points at the LAST folded push, so a client that catches up
+    //    from the stream and one that reads the base agree on where they are.
+    let base_rid: i64 =
+        sqlx::query_scalar("SELECT base_rid FROM document_yrs_base WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(base_rid, rid_b, "base_rid must name the highest folded rid");
+
+    // 3. The search projection moved with it (same statement, so it cannot lag).
+    let content = base_content_text(&db, doc).await;
+    assert!(
+        content.contains("AAA") && content.contains("BBB"),
+        "content_text is co-written with state and must hold both edits, got {content:?}"
+    );
+
+    // 4. The invariant that makes the other three meaningful: the base equals the
+    //    fold of EVERY stream row. This is what the stream promises a catching-up
+    //    client, and it is the property the lost update violated.
+    let rows: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT payload FROM workspace_updates WHERE document_id = $1 ORDER BY rid",
+    )
+    .bind(doc)
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    let mut folded = MicaDoc::from_update(&base.state).unwrap();
+    for row in &rows {
+        folded.apply_update(row).unwrap();
+    }
+    assert_eq!(
+        base_block_text(&folded.encode_state(), "a"),
+        text,
+        "folding the {} stream rows from the base must reproduce the stored base exactly",
+        rows.len()
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
+/// P0-01b: a REST/MCP op write and a WebSocket push, interleaved, must not
+/// overwrite each other.
+///
+/// The two paths take the same row lock in the same order (`documents` first) —
+/// that is the whole fix, and this is the test that would fail if only ONE of
+/// them locked. Same constructed interleaving as above: the op write's
+/// transaction holds the lock, `push_update` blocks on it, then the op commits.
+#[tokio::test]
+async fn op_write_and_push_interleave_without_losing_either() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+
+    // A push lands first, so the document has a yrs base the op path will fold
+    // into rather than seed.
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+    let sv = editing.state_vector();
+    editing.text_insert("a", 5, "-push1");
+    let first = editing.encode_diff(&sv).unwrap();
+    sync::push_update(&db, ws, doc, user, &first, &tuning()).await.unwrap();
+
+    // The concurrent pair, both against the same stored base.
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut pusher = MicaDoc::from_update(&base.state).unwrap();
+    let sv = pusher.state_vector();
+    pusher.text_insert("a", 0, "PUSH-");
+    let push_update_bytes = pusher.encode_diff(&sv).unwrap();
+
+    // Hold the lock, then let the push block on it while the op write's fold and
+    // stream row sit uncommitted inside `tx` (same shape as the test above).
+    let mut tx = db.begin().await.unwrap();
+    sqlx::query("SELECT id FROM documents WHERE id = $1 AND workspace_id = $2 FOR UPDATE")
+        .bind(doc)
+        .bind(ws)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let rid_a: i64 = sqlx::query_scalar(
+        "INSERT INTO workspace_updates(workspace_id, document_id, actor_id, payload)
+         VALUES ($1,$2,$3,$4) RETURNING rid",
+    )
+    .bind(ws)
+    .bind(doc)
+    .bind(user)
+    .bind(&push_update_bytes)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (document_id) DO UPDATE SET
+             state = excluded.state, state_vector = excluded.state_vector,
+             base_rid = excluded.base_rid, content_text = excluded.content_text,
+             updated_at = now()",
+    )
+    .bind(doc)
+    .bind(pusher.encode_state())
+    .bind(pusher.state_vector())
+    .bind(rid_a)
+    .bind(sync::content_text_from_doc(&pusher))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+
+    // The op write — the REST/MCP path — while the lock is held.
+    let db2 = db.clone();
+    let op = tokio::spawn(async move {
+        store::apply_document_operations(
+            &db2,
+            ws,
+            doc,
+            user,
+            &[mica_app_core::documents::DocumentOperation::InsertBlock {
+                block: serde_json::from_value(json!({
+                    "id":"rest","type":"paragraph","text":"rest-op"
+                }))
+                .unwrap(),
+                parent_id: "r".to_string(),
+                index: None,
+            }],
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tx.commit().await.unwrap();
+
+    let applied = op.await.unwrap().unwrap();
+    assert!(applied.yrs.is_some(), "the op path folds into the base and streams it");
+
+    let stored: Vec<u8> =
+        sqlx::query_scalar("SELECT state FROM document_yrs_base WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    let doc_now = MicaDoc::from_update(&stored).unwrap();
+    let blocks = doc_now.to_blocks();
+    assert!(
+        blocks.iter().any(|b| b.id == "rest" && b.text == "rest-op"),
+        "the REST/MCP write must survive a concurrent push"
+    );
+    let a_text = blocks
+        .iter()
+        .find(|b| b.id == "a")
+        .map(|b| b.text.clone())
+        .unwrap_or_default();
+    assert!(
+        a_text.contains("PUSH-") && a_text.contains("-push1"),
+        "both the blocked push and the earlier push must survive, got {a_text:?}"
+    );
+
+    cleanup(&db, ws, user).await;
+}
 
 /// The document's stored search text.
 /// `link_targets` as stored. `None` is the "never derived" sentinel migration

@@ -8,6 +8,7 @@ use axum::{
   http::{HeaderMap, StatusCode},
   response::{IntoResponse, Redirect, Response},
 };
+use futures_util::StreamExt;
 use mica_app_core::{AppState, store};
 use mica_infra::{ApiError, ApiResult, S3Config};
 use serde::{Deserialize, Serialize};
@@ -37,9 +38,28 @@ pub struct CompleteRequest {
   byte_size: i64,
 }
 
+/// The upload a client should perform, or the row that means none is needed.
+///
+/// `upload` and `existing` are alternatives, and exactly one is set. They are
+/// separate fields rather than a nullable `upload_url` because the client needs
+/// to tell "there is nothing to PUT" apart from "the server forgot the URL" —
+/// and because the dedup answer, when it applies, is the whole response: the
+/// caller wants the file id, not an upload it should skip.
 #[derive(Debug, Serialize)]
 pub struct PresignResponse {
   object_key: String,
+  /// Present when the client must PUT. Absent when the bytes are already stored.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  upload: Option<PresignUpload>,
+  /// Present when the bytes are already stored: the existing record, so the
+  /// caller can use the file immediately without an upload round-trip.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  existing: Option<FileResponse>,
+}
+
+/// The fields of a presigned upload the client needs.
+#[derive(Debug, Serialize)]
+pub struct PresignUpload {
   upload_url: String,
   method: &'static str,
   expires_in: u64,
@@ -71,6 +91,10 @@ pub struct ResolveResponse {
 ///
 /// Issues a presigned upload URL the client uses to PUT the object directly to
 /// object storage. No metadata row is created until `complete` is called.
+///
+/// When the object is ALREADY recorded, no NEW URL is issued — `existing` names
+/// the row instead. Previously issued URLs remain usable until expiry; this
+/// check alone does not make the object immutable (see P1-02 in the plan).
 pub async fn presign(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -85,21 +109,58 @@ pub async fn presign(
   ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
 
   let object_key = build_object_key(workspace_id, &payload.content_hash, &payload.file_name)?;
+
+  // Same key already recorded → hand back the row and issue no new URL. The
+  // normal client skips the PUT; an older signed URL can still be replayed.
+  if let Some(existing) = store::fetch_file_by_key(&state.db, workspace_id, &object_key).await? {
+    let download_url = storage.download_url(&existing.object_key);
+    return Ok(Json(existing_object_response(object_key, existing, download_url)));
+  }
+
   let upload = storage.presign_put(&object_key);
 
   Ok(Json(PresignResponse {
     object_key,
-    upload_url: upload.url,
-    method: upload.method,
-    expires_in: upload.expires_in,
-    max_byte_size: storage.max_upload_bytes,
+    upload: Some(PresignUpload {
+      upload_url: upload.url,
+      method: upload.method,
+      expires_in: upload.expires_in,
+      max_byte_size: storage.max_upload_bytes,
+    }),
+    existing: None,
   }))
+}
+
+/// The response for bytes the store already holds: the recorded row, and NO
+/// upload.
+///
+/// Split out to assert that dedup issues no new URL without needing a database
+/// and object store. A URL issued before this record existed remains valid.
+fn existing_object_response(
+  object_key: String,
+  existing: store::FileRecord,
+  download_url: String,
+) -> PresignResponse {
+  PresignResponse {
+    object_key,
+    upload: None,
+    existing: Some(FileResponse {
+      file: existing,
+      download_url,
+    }),
+  }
 }
 
 /// `POST /api/workspaces/{workspace_id}/files/complete`
 ///
 /// Records metadata after a successful upload and returns a URL for reading the
 /// object (used as an image block's `url`).
+///
+/// The object is CHECKED against the store before a row is written. A presigned
+/// upload URL is usable by whoever holds it, for whatever bytes they like, so
+/// everything the client says here — that it uploaded anything, and that it was
+/// this many bytes — is a claim. The `files` row is what the workspace quota is
+/// summed from, so an unverified claim is a number the client gets to choose.
 pub async fn complete(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -116,6 +177,23 @@ pub async fn complete(
   ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
   ensure_key_in_workspace(workspace_id, &payload.object_key)?;
 
+  // Ask the store what actually landed, and require it to agree with the claim.
+  // Without this, `complete` could be called for a key nothing was ever written
+  // to (a row pointing at nothing) or with a `byte_size` unrelated to the bytes
+  // (a quota that counts a number the client invented).
+  let head = reqwest::Client::new()
+    .head(storage.presign_head_object(&payload.object_key))
+    .send()
+    .await
+    .map_err(|e| ApiError::Internal(format!("storage check failed: {e}")))?;
+  let stored_len = head
+    .headers()
+    .get(reqwest::header::CONTENT_LENGTH)
+    .and_then(|v| v.to_str().ok())
+    .and_then(|s| s.parse::<i64>().ok());
+  let byte_size =
+    uploaded_object_verdict(head.status().as_u16(), stored_len, payload.byte_size)?;
+
   let file = store::insert_file(
     &state.db,
     workspace_id,
@@ -123,12 +201,51 @@ pub async fn complete(
     &payload.object_key,
     &safe_file_name(&payload.file_name),
     &payload.mime_type,
-    payload.byte_size,
+    byte_size,
   )
   .await?;
   let download_url = storage.download_url(&file.object_key);
 
   Ok(Json(FileResponse { file, download_url }))
+}
+
+/// Decide whether the object a client claims to have uploaded is really there and
+/// really that size.
+///
+/// Pure, so the three answers that matter — absent, wrong size, agreed — are
+/// testable without a store or a network.
+///
+/// Fails CLOSED when the store reports no length. That is the deliberate half:
+/// accepting the client's number whenever the store withholds its own would make
+/// the whole check decorative, and "we could not verify" must not read the same
+/// as "verified".
+fn uploaded_object_verdict(
+  status: u16,
+  stored_len: Option<i64>,
+  declared_len: i64,
+) -> ApiResult<i64> {
+  if status == 404 {
+    return Err(ApiError::BadRequest(
+      "no object was uploaded for this key".to_string(),
+    ));
+  }
+  if !(200..300).contains(&status) {
+    return Err(ApiError::Internal(format!(
+      "storage returned {status} when checking the uploaded object"
+    )));
+  }
+  let Some(stored) = stored_len else {
+    return Err(ApiError::BadRequest(
+      "storage did not report the uploaded object's size, so the upload cannot be verified"
+        .to_string(),
+    ));
+  };
+  if stored != declared_len {
+    return Err(ApiError::BadRequest(format!(
+      "uploaded object is {stored} bytes but {declared_len} was declared"
+    )));
+  }
+  Ok(stored)
 }
 
 /// `POST /api/workspaces/{workspace_id}/files/resolve`
@@ -156,6 +273,78 @@ pub async fn resolve(
     .collect();
 
   Ok(Json(ResolveResponse { files }))
+}
+
+/// Append one streamed chunk to `body`, refusing as soon as the running total
+/// would pass `max_bytes`.
+///
+/// Split out so the rule is testable without a network or an `AppState`: this is
+/// the whole of the memory bound, and the interesting cases (a chunk that lands
+/// exactly on the cap, one that crosses it, an empty chunk) need no HTTP.
+///
+/// `saturating_add` because both lengths are usize-derived; an overflow here
+/// would wrap small and PASS the check.
+fn append_within_cap(body: &mut Vec<u8>, chunk: &[u8], max_bytes: i64) -> ApiResult<()> {
+  let total = (body.len() as i64).saturating_add(chunk.len() as i64);
+  if total > max_bytes {
+    return Err(ApiError::BadRequest(format!(
+      "image is too large: it exceeds the {max_bytes} byte limit"
+    )));
+  }
+  body.extend_from_slice(chunk);
+  Ok(())
+}
+
+/// Is this resolved address list safe to connect to?
+///
+/// The RULE, separated from the resolver so it can be tested with a hand-written
+/// list — which is the only way to cover the case it exists for. A hostname that
+/// answers with BOTH a public and a private address is exactly how a DNS
+/// rebinding attempt looks, and it cannot be reached from a test that resolves a
+/// real name (let alone an IP literal, which yields a single address).
+///
+/// Refusing when ANY address is blocked — rather than dropping the blocked ones
+/// and keeping the rest — is the point: connecting to the public answer would
+/// leave the private one live for the next lookup, which is the attack. The whole
+/// name is refused.
+///
+/// An EMPTY list is also refused. That is not paranoia: it means resolution
+/// produced nothing usable, and treating "no addresses" as "no blocked
+/// addresses" would let an empty answer through to a client that then resolves
+/// on its own.
+fn addresses_are_safe(resolved: &[std::net::SocketAddr]) -> bool {
+  !resolved.is_empty() && !resolved.iter().any(|addr| is_blocked_addr(addr.ip()))
+}
+
+/// Resolve `url`'s host and return the addresses an import fetch is allowed to
+/// connect to, refusing the request if the resolution is unusable.
+///
+/// Split out from the handler so the handler's job is only to hand these
+/// addresses to `reqwest::ClientBuilder::resolve_to_addrs`, which is what pins
+/// the connection to what was checked.
+fn vetted_pinned_addrs(
+  url: &reqwest::Url,
+  port: u16,
+) -> ApiResult<Vec<std::net::SocketAddr>> {
+  let resolved = url.socket_addrs(|| url.port_or_known_default()).map_err(|_| {
+    ApiError::BadRequest(
+      "could not fetch the image url: DNS or network unreachable from this server".to_string(),
+    )
+  })?;
+  if !addresses_are_safe(&resolved) {
+    return Err(ApiError::BadRequest(
+      "refusing to fetch that url: it resolves to a private or loopback address".to_string(),
+    ));
+  }
+  // Re-state each address with the port the request will actually use:
+  // `socket_addrs` resolves against the URL's default, which is not necessarily
+  // the port an explicit `:8443` in the url names.
+  Ok(
+    resolved
+      .iter()
+      .map(|addr| std::net::SocketAddr::new(addr.ip(), port))
+      .collect(),
+  )
 }
 
 /// True for addresses an import fetch must never reach: loopback, private,
@@ -229,27 +418,29 @@ pub(crate) async fn fetch_and_store_image_url(
   if !matches!(parsed.scheme(), "http" | "https") {
     return Err(ApiError::BadRequest("url must be http(s)".to_string()));
   }
-  // SSRF guard: resolve the host and refuse any loopback/private/link-local
+  let host = parsed
+    .host_str()
+    .ok_or_else(|| ApiError::BadRequest("url must have a host".to_string()))?
+    .to_string();
+
+  // SSRF guard: resolve the host ONCE and refuse any loopback/private/link-local
   // target (127/8, 10/8, 172.16-31/12, 192.168/16, 169.254/16 incl. the cloud
   // metadata IP, CGNAT 100.64/10, ::1, fc00::/7, fe80::/10, IPv4-mapped v6).
-  // The `reqwest` client below re-resolves, so this is a best-effort screen (a
-  // rebinding host could still slip a later lookup), paired with redirects off
-  // so a public URL cannot 30x-bounce onto an internal address.
-  let resolved = parsed
-    .socket_addrs(|| match parsed.scheme() {
-      "https" => Some(443),
-      _ => Some(80),
-    })
-    .map_err(|_| {
-      ApiError::BadRequest(
-        "could not fetch the image url: DNS or network unreachable from this server".to_string(),
-      )
-    })?;
-  if resolved.is_empty() || resolved.iter().any(|addr| is_blocked_addr(addr.ip())) {
-    return Err(ApiError::BadRequest(
-      "refusing to fetch that url: it resolves to a private or loopback address".to_string(),
-    ));
-  }
+  //
+  // Resolving and then letting reqwest resolve AGAIN is the bug this used to
+  // have: a host whose DNS answers are attacker-controlled (or simply short-TTL)
+  // can return a public address to the check and a private one to the connection
+  // — classic DNS rebinding, and it makes the screen above decorative. So the
+  // vetted addresses are PINNED onto the client below via `resolve_to_addrs`, and
+  // the request connects to one of THESE or fails. Redirects stay off, so a
+  // public URL cannot 30x-bounce onto an internal address either.
+  //
+  // The SNI/Host header still carries the original name (reqwest sets it from the
+  // URL, not from the resolved address), so TLS and virtual hosting are
+  // unaffected — which is what makes pinning viable for CDNs rather than a
+  // rejection of them.
+  let port = parsed.port_or_known_default().unwrap_or(80);
+  let pinned = vetted_pinned_addrs(&parsed, port)?;
 
   // 8s, not 20. This timeout is only ever spent on a fetch that is going to
   // fail — a reachable host answers in well under a second, and an unreachable
@@ -259,6 +450,7 @@ pub(crate) async fn fetch_and_store_image_url(
   let client = reqwest::Client::builder()
     .timeout(Duration::from_secs(8))
     .redirect(reqwest::redirect::Policy::none())
+    .resolve_to_addrs(&host, &pinned)
     .build()
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -293,10 +485,35 @@ pub(crate) async fn fetch_and_store_image_url(
     .map(|s| s.split(';').next().unwrap_or(s).trim().to_string())
     .unwrap_or_default();
 
-  let bytes = response
-    .bytes()
-    .await
-    .map_err(|_| ApiError::BadRequest("could not read the image url".to_string()))?;
+  // Cheap up-front refusal when the server volunteers its size. This is NOT the
+  // enforcement — a lying or chunked response can omit or understate it — but it
+  // avoids reading a body we already know is too big.
+  if let Some(declared) = response
+    .headers()
+    .get(reqwest::header::CONTENT_LENGTH)
+    .and_then(|v| v.to_str().ok())
+    .and_then(|s| s.parse::<i64>().ok())
+    && declared > storage.max_upload_bytes
+  {
+    return Err(ApiError::BadRequest(format!(
+      "image is too large: {declared} bytes exceeds the {} byte limit",
+      storage.max_upload_bytes
+    )));
+  }
+
+  // Stream, counting as we go, and STOP the moment the cap is passed. The old
+  // `response.bytes().await` buffered the entire body first and only then asked
+  // whether it was allowed — so a hostile or merely enormous image source made
+  // the API hold all of it in memory before refusing, once per request. The
+  // declared `Content-Length` above cannot replace this: it is remote input.
+  let mut body: Vec<u8> = Vec::new();
+  let mut stream = response.bytes_stream();
+  while let Some(chunk) = stream.next().await {
+    let chunk =
+      chunk.map_err(|_| ApiError::BadRequest("could not read the image url".to_string()))?;
+    append_within_cap(&mut body, &chunk, storage.max_upload_bytes)?;
+  }
+  let bytes = body;
   let byte_size = bytes.len() as i64;
   ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes).await?;
 
@@ -823,6 +1040,244 @@ mod tests {
       ensure_key_in_workspace(ws, "workspaces/00000000-0000-0000-0000-000000000002/x.png"),
       Err(ApiError::BadRequest(_))
     ));
+  }
+
+  /// P1-04: the streaming read must refuse the moment the cap is passed, so the
+  /// body never grows past `max_bytes` in memory.
+  ///
+  /// The bug was `response.bytes().await` followed by `ensure_storable` — the
+  /// whole remote body landed in RAM before anyone asked whether it was allowed,
+  /// once per request. A remote source could therefore make the API hold
+  /// arbitrarily much before being told no.
+  #[test]
+  fn streamed_chunks_are_capped_before_they_are_buffered() {
+    let cap = 10i64;
+    let mut body: Vec<u8> = Vec::new();
+
+    // Under the cap: kept.
+    append_within_cap(&mut body, b"12345", cap).unwrap();
+    assert_eq!(body.len(), 5);
+
+    // EXACTLY the cap: allowed — the bound is "> cap refuses", not ">= cap".
+    append_within_cap(&mut body, b"67890", cap).unwrap();
+    assert_eq!(body.len(), 10, "a body that lands exactly on the cap is fine");
+
+    // One byte past: refused, and the buffer is left as it was — the extra byte
+    // is NOT appended before the check runs.
+    let err = append_within_cap(&mut body, b"x", cap).unwrap_err();
+    assert!(matches!(err, ApiError::BadRequest(_)));
+    assert_eq!(body.len(), 10, "the oversized chunk is not buffered");
+
+    // The refusal is about the TOTAL, not one chunk: many small chunks crossing
+    // the cap are caught too (a chunked response has no useful Content-Length).
+    let mut body2: Vec<u8> = vec![0; 9];
+    assert!(append_within_cap(&mut body2, b"12", cap).is_err());
+    assert_eq!(body2.len(), 9);
+
+    // Empty chunks are harmless (they happen on keep-alives).
+    let mut body3: Vec<u8> = Vec::new();
+    append_within_cap(&mut body3, b"", cap).unwrap();
+    assert!(body3.is_empty());
+  }
+
+  /// P1-02: `complete` must believe the STORE, not the client.
+  ///
+  /// A presigned upload URL is usable by whoever holds it, for whatever bytes
+  /// they like, so "I uploaded N bytes" is a claim — and `files.byte_size` is
+  /// what the workspace quota is summed from. Accepting the claim let a client
+  /// write a row pointing at an object that was never uploaded, and pick the
+  /// number the quota counts.
+  ///
+  /// The `None` case is the one worth arguing about: a store that reports no
+  /// length is a store we could not check, and "could not verify" must not read
+  /// the same as "verified". Failing closed there is what keeps the check from
+  /// being decorative on a non-conforming endpoint.
+  #[test]
+  fn complete_requires_the_store_to_confirm_the_upload() {
+    // There is nothing there → refused, not recorded.
+    assert!(matches!(
+      uploaded_object_verdict(404, None, 10),
+      Err(ApiError::BadRequest(_))
+    ));
+
+    // A store error is not "verified" either — and it is an Internal (our side /
+    // the store's), not a BadRequest blaming the caller.
+    assert!(matches!(
+      uploaded_object_verdict(500, Some(10), 10),
+      Err(ApiError::Internal(_))
+    ));
+    assert!(matches!(
+      uploaded_object_verdict(403, Some(10), 10),
+      Err(ApiError::Internal(_))
+    ));
+
+    // Present and the right size → the STORED length is what gets recorded.
+    assert_eq!(uploaded_object_verdict(200, Some(10), 10).unwrap(), 10);
+
+    // Present but a different size → refused. Both directions: a client that
+    // understates (to slip past the quota) and one that overstates.
+    assert!(matches!(
+      uploaded_object_verdict(200, Some(9999), 10),
+      Err(ApiError::BadRequest(_))
+    ));
+    assert!(matches!(
+      uploaded_object_verdict(200, Some(10), 9999),
+      Err(ApiError::BadRequest(_))
+    ));
+
+    // The store withheld a length → fail CLOSED rather than fall back to the
+    // client's number.
+    assert!(
+      matches!(
+        uploaded_object_verdict(200, None, 10),
+        Err(ApiError::BadRequest(_))
+      ),
+      "an unverifiable upload must not be recorded as verified"
+    );
+
+    // Zero is a real size, not a missing one: an empty object that the client
+    // also declared empty is accepted.
+    assert_eq!(uploaded_object_verdict(200, Some(0), 0).unwrap(), 0);
+    // ...but zero stored against a non-zero claim is still a mismatch.
+    assert!(matches!(
+      uploaded_object_verdict(200, Some(0), 5),
+      Err(ApiError::BadRequest(_))
+    ));
+  }
+
+  /// P1-02, the dedup half: a recorded key must yield NO NEW upload URL.
+  ///
+  /// This does not revoke a URL issued earlier for the same key. Its replay
+  /// remains an open part of P1-02.
+  ///
+  /// This test is a bit narrow and worth saying so: it pins "the dedup response
+  /// carries no upload", which is the guard, but it cannot exercise the database
+  /// lookup that decides WHEN to answer that way. A regression that skipped the
+  /// lookup entirely (always issuing a URL) would still pass this. The lookup
+  /// itself is covered end-to-end by the dedup test in `quota_pg`.
+  #[test]
+  fn an_existing_object_yields_no_upload_url() {
+    let key = format!("workspaces/{}/{}", Uuid::new_v4(), "a".repeat(64));
+    let record = store::FileRecord {
+      id: Uuid::new_v4(),
+      workspace_id: Uuid::new_v4(),
+      uploaded_by: Uuid::new_v4(),
+      object_key: key.clone(),
+      original_name: "photo.png".to_string(),
+      mime_type: "image/png".to_string(),
+      byte_size: 1234,
+      created_at: chrono::Utc::now(),
+    };
+
+    let response = existing_object_response(key.clone(), record.clone(), "https://cdn/x".into());
+
+    assert!(
+      response.upload.is_none(),
+      "no URL may be issued for an object that is already stored — that URL is \
+       the whole mechanism for overwriting it"
+    );
+    let existing = response.existing.expect("the existing row is returned");
+    assert_eq!(existing.file.id, record.id, "so the caller can use it as-is");
+    assert_eq!(existing.file.object_key, key);
+
+    // And the serialized shape: the client keys off the ABSENCE of `upload`, so
+    // emitting `"upload": null` would be indistinguishable from a server bug
+    // that lost the URL. `skip_serializing_if` keeps the two apart.
+    let json = serde_json::to_value(PresignResponse {
+      object_key: key,
+      upload: None,
+      existing: Some(FileResponse {
+        file: record,
+        download_url: "https://cdn/x".to_string(),
+      }),
+    })
+    .unwrap();
+    assert!(
+      json.get("upload").is_none(),
+      "an omitted upload must be ABSENT, not null: got {json}"
+    );
+    assert!(json.get("existing").is_some());
+  }
+
+  /// P1-02: an address is vetted ONCE and pinned, so a later lookup cannot swap
+  /// in a private target. This pins the vetting rule itself; that the handler
+  /// hands the result to `resolve_to_addrs` is what makes it binding, and is
+  /// asserted by the literal `resolve_to_addrs(&host, &pinned)` in `import_url`.
+  ///
+  /// The metadata IP is called out because it is the highest-value target: a
+  /// fetch to 169.254.169.254 on a cloud instance returns credentials.
+  #[test]
+  fn ssrf_vetting_refuses_private_and_metadata_targets() {
+    let port = 443u16;
+    // Public → allowed, and the returned address carries the REQUEST's port.
+    let public = reqwest::Url::parse("https://1.1.1.1/img.png").unwrap();
+    let pinned = vetted_pinned_addrs(&public, port).unwrap();
+    assert_eq!(pinned, vec!["1.1.1.1:443".parse().unwrap()]);
+
+    // Every blocked family this guard claims to cover, through the same entry
+    // point the handler uses (so a future refactor cannot quietly bypass one).
+    for blocked in [
+      "http://127.0.0.1/img.png",       // loopback
+      "http://10.1.2.3/img.png",        // private 10/8
+      "http://192.168.1.1/img.png",     // private 192.168/16
+      "http://172.16.5.4/img.png",      // private 172.16/12
+      "http://169.254.169.254/latest/meta-data/", // cloud metadata
+      "http://100.64.0.1/img.png",      // CGNAT
+      "http://0.0.0.0/img.png",         // unspecified
+      "http://[::1]/img.png",           // IPv6 loopback
+      "http://[fd00::1]/img.png",       // IPv6 ULA
+      "http://[fe80::1]/img.png",       // IPv6 link-local
+      "http://[::ffff:127.0.0.1]/img.png", // IPv4-mapped loopback
+    ] {
+      let url = reqwest::Url::parse(blocked).unwrap();
+      let result = vetted_pinned_addrs(&url, port);
+      assert!(
+        matches!(result, Err(ApiError::BadRequest(_))),
+        "{blocked} must be refused, got {result:?}"
+      );
+    }
+  }
+
+  /// P1-03, the half the URL-level test above CANNOT reach: a hostname that
+  /// resolves to a public AND a private address.
+  ///
+  /// Every case in the test above is an IP literal, which resolves to exactly one
+  /// address — and on a one-element list "refuse if ANY is blocked" and "refuse if
+  /// ALL are blocked" are the same predicate. An earlier version of that test
+  /// therefore passed unchanged when the rule was weakened from `any` to `all`,
+  /// i.e. it did not cover the rebinding shape at all despite being named for it.
+  /// This test is what actually discriminates, so it feeds the rule a list
+  /// directly instead of going through DNS.
+  #[test]
+  fn ssrf_vetting_refuses_a_host_with_any_private_answer() {
+    let public: std::net::SocketAddr = "93.184.216.34:443".parse().unwrap();
+    let private: std::net::SocketAddr = "10.0.0.7:443".parse().unwrap();
+    let metadata: std::net::SocketAddr = "169.254.169.254:443".parse().unwrap();
+
+    // A public answer alone is fine.
+    assert!(addresses_are_safe(&[public]));
+    // A private one alone is refused.
+    assert!(!addresses_are_safe(&[private]));
+    // THE CASE: both, in either order. This is a rebinding host, and connecting
+    // to its public answer would leave the private one available to the next
+    // lookup — so the whole name must be refused, not merely filtered.
+    assert!(
+      !addresses_are_safe(&[public, private]),
+      "a host with a private answer must be refused even when it also answers publicly"
+    );
+    assert!(
+      !addresses_are_safe(&[private, public]),
+      "order must not matter"
+    );
+    assert!(
+      !addresses_are_safe(&[public, public, metadata]),
+      "the metadata IP hiding among public answers must still be caught"
+    );
+    // An empty resolution is refused, not treated as vacuously safe.
+    assert!(
+      !addresses_are_safe(&[]),
+      "an empty answer must not be read as 'no blocked addresses'"
+    );
   }
 
   /// The refusal a person reads is chosen off the `code` FIELD OF THE JSON, not

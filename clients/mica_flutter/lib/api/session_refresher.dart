@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'models.dart';
 
 /// Keeps a signed-in session's access token fresh.
@@ -24,7 +26,22 @@ class SessionRefresher {
   /// just after the check can't outlive the token it was issued under.
   final Duration lead;
 
-  Future<AuthSession?>? _inFlight;
+  /// Keyed by the refresh token, whose entry is a [Completer] rather than the
+  /// refresh's own future — so the entry exists in the map from the first
+  /// synchronous moment of the request, whatever the refresh callback does.
+  ///
+  /// that ordering is load-bearing. Doing it the obvious way —
+  ///
+  ///   final f = refresh(key).whenComplete(() => _inFlight.remove(key));
+  ///   _inFlight[key] = f;
+  ///
+  /// — races itself when `refresh` completes without suspending: the completion
+  /// callback runs first and removes nothing, and the assignment then files an
+  /// ALREADY-COMPLETE future that no later callback will ever clear. The next
+  /// caller gets that stale future back — the previous sign-in's tokens — which
+  /// is the bug this map exists to prevent, reintroduced by the fix for it.
+  /// (Measured: it hung the shared-refresh test outright.)
+  final Map<String, Completer<AuthSession?>> _inFlight = {};
 
   /// Whether [session]'s access token is close enough to death to renew now.
   ///
@@ -45,10 +62,34 @@ class SessionRefresher {
   /// blip means "keep it and try later".
   Future<AuthSession?> ensureFresh(AuthSession session, {DateTime? now}) {
     if (!needsRenewal(session, now: now)) return Future.value(null);
-    // whenComplete, not then: a failed refresh MUST clear the latch, or every
-    // later renewal silently no-ops and the session dies anyway.
-    return _inFlight ??= refresh(session.refreshToken)
-        .then<AuthSession?>((s) => s)
-        .whenComplete(() => _inFlight = null);
+    // Same sign-in already renewing → await THAT one. Different sign-in → its
+    // own entry, so one account's refresh is never handed to another's caller.
+    final existing = _inFlight[session.refreshToken];
+    if (existing != null) return existing.future;
+
+    final key = session.refreshToken;
+    // The entry is created BEFORE the refresh is started, and that ordering is
+    // load-bearing. Doing it the obvious way —
+    //   final f = refresh(key).whenComplete(() => _inFlight.remove(key));
+    //   _inFlight[key] = f;
+    // — races itself when `refresh` completes without suspending: the
+    // completion callback runs first and removes nothing, and the assignment
+    // then files an ALREADY-COMPLETE future that no later callback will ever
+    // clear. The next caller gets that stale future back — the previous sign-in's
+    // tokens — which is the bug this whole map exists to prevent, reintroduced
+    // by the fix for it. (Measured: it hung the shared-refresh test outright.)
+    final entry = Completer<AuthSession?>();
+    _inFlight[key] = entry;
+    refresh(key).then<AuthSession?>((s) => s).then(
+      (s) {
+        _inFlight.remove(key);
+        entry.complete(s);
+      },
+      onError: (Object e, StackTrace st) {
+        _inFlight.remove(key);
+        entry.completeError(e, st);
+      },
+    );
+    return entry.future;
   }
 }

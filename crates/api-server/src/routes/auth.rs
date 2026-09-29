@@ -31,6 +31,15 @@ pub struct RegisterRequest {
   password: String,
 }
 
+/// Advisory-lock key serializing `register`.
+///
+/// A fixed number, not derived from anything: the race it closes is between two
+/// DIFFERENT addresses on an empty instance, so a per-email or per-request key
+/// would let both racers proceed. Change it only if `register` stops being the
+/// only holder — a second holder of a DIFFERENT constant would not serialize
+/// against this one.
+const REGISTRATION_LOCK_KEY: i64 = 0x6d69_6361_7265_6731;
+
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
   email: String,
@@ -149,32 +158,45 @@ pub async fn register(
   // One statement, so "is this the first account?" cannot be answered stale —
   // and `is_admin` is computed from the SAME snapshot as the guard, so the
   // account that stands the instance up is the one that can configure it
-  // (migration 0021). Asking again afterwards would be a second snapshot, and
-  // on a fresh instance two concurrent signups could both read "no users yet".
-  // Counting first and then inserting would let two concurrent requests on a
-  // fresh instance both pass the check — the guard has to be part of the write,
-  // not a look before it. The `WHERE` is evaluated against the same snapshot as
-  // the insert, so the loser gets zero rows instead of a second account.
-  let user = sqlx::query_as::<_, UserRow>(
-    r#"
-      INSERT INTO users (email, display_name, password_hash, is_admin)
-      SELECT $1, $2, $3, NOT EXISTS (SELECT 1 FROM users)
-      WHERE $4 OR NOT EXISTS (SELECT 1 FROM users)
-      RETURNING id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
-    "#,
+  // (migration 0021).
+  //
+  // The `WHERE NOT EXISTS` guard is NOT sufficient on its own, which is what
+  // this transaction and the advisory lock below exist for. A subquery in a
+  // data-modifying statement is evaluated against the STATEMENT's snapshot, and
+  // under READ COMMITTED two concurrent registrations on an empty table each
+  // take their snapshot before either insert is visible — so BOTH see "no users
+  // yet", both pass the guard, and the instance ends up with two accounts, the
+  // second of which is also `is_admin = true` because it computed the flag from
+  // the same empty snapshot. There is no constraint that could have caught it:
+  // `users_email_key` only prevents the same ADDRESS twice, and the two racers
+  // are registering different addresses by construction.
+  //
+  // The lock serializes every registration against every other one, so the
+  // second transaction's statement snapshot is taken after the first commits and
+  // its `NOT EXISTS` genuinely sees the row. It is TRANSACTION-scoped
+  // (`pg_advisory_xact_lock`, released at commit/rollback, no unlock to forget)
+  // and a constant key: registration is a low-frequency, operator-facing path,
+  // so serializing all of it costs nothing measurable, and a per-email key would
+  // not help — the race is two DIFFERENT addresses.
+  //
+  // Extracted so the concurrency test drives THIS function rather than a copy of
+  // the SQL: a test that retypes the statement passes whether or not the lock is
+  // there, which is the "test can pass in a vacuum" trap docs/lessons.md records.
+  let mut tx = state.db.begin().await?;
+  let user = insert_registered_user(
+    &mut tx,
+    &email,
+    &display_name,
+    &password_hash,
+    state.config.registration_enabled,
   )
-  .bind(email)
-  .bind(display_name)
-  .bind(password_hash)
-  .bind(state.config.registration_enabled)
-  .fetch_optional(&state.db)
-  .await
-  .map_err(map_insert_user_error)?;
+  .await?;
 
   // No row = the `WHERE` refused it: registration is closed and this instance
   // already has an account. Same 403 as before, and deliberately no hint about
   // whether the address was taken — a closed door should not answer questions.
   let Some(user) = user else {
+    tx.rollback().await?;
     return Err(ApiError::Forbidden);
   };
 
@@ -187,10 +209,13 @@ pub async fn register(
   if !state.config.registration_enabled {
     sqlx::query("UPDATE users SET email_verified_at = now() WHERE id = $1")
       .bind(user.id)
-      .execute(&state.db)
+      .execute(&mut *tx)
       .await?;
+    tx.commit().await?;
     return Ok(Json(RegisterResponse { verified: true }));
   }
+
+  tx.commit().await?;
 
   // Otherwise: the account exists but cannot be signed in to until the address is
   // confirmed. Best-effort mail — the row is already committed, so a mail outage
@@ -854,6 +879,58 @@ pub(crate) async fn user_id_from_headers(state: &AppState, headers: &HeaderMap) 
   Ok(resolve_token(state, &token).await?.user_id)
 }
 
+/// The caller's id, but only if that account still EXISTS.
+///
+/// The access token is a stateless JWT: once minted, nothing can revoke it. So a
+/// deleted account's token keeps verifying until it expires on its own, and
+/// `delete_account` cannot reach it — the cascade takes the `users` row, the
+/// `refresh_tokens` and the `api_tokens`, and the JWT in the caller's hand is
+/// none of those. The window is the token's lifetime, ~1 hour by default.
+///
+/// Deleting the account is the one action whose WHOLE POINT is that the account
+/// stops being able to do things, so a path that spends real money on the
+/// operator's behalf must not honour a token for a user who is gone. The paths
+/// that spend are the AI endpoints, and that is where this is used.
+///
+/// Deliberately a separate function rather than a change to
+/// [`user_id_from_headers`]: that one runs on nearly every request, and paying a
+/// `users` lookup on all of them to close a window that only matters where money
+/// is spent is not a trade worth making silently. The alternative — revocable
+/// tokens — is a real design (a token-version column checked per request) and out
+/// of proportion to this: the cost here is one indexed primary-key lookup on the
+/// handful of AI calls.
+pub(crate) async fn existing_user_id_from_headers(
+  state: &AppState,
+  headers: &HeaderMap,
+) -> ApiResult<Uuid> {
+  let user_id = user_id_from_headers(state, headers).await?;
+  ensure_user_exists(&state.db, user_id).await?;
+  Ok(user_id)
+}
+
+/// `Err(Unauthorized)` when the account behind [user_id] is gone.
+///
+/// Takes the pool rather than the `AppState` so the rule is testable against a
+/// real database without building a whole app (config, hub, object store,
+/// mailer) — the same reason `delete_user_and_owned` is split out of
+/// `delete_account`.
+///
+/// 401, not 404/403: a token for a user who no longer exists is not "a valid
+/// caller doing something forbidden", it is a credential that has ceased to
+/// identify anyone. Clients already treat 401 as "session over, re-authenticate",
+/// which is exactly the right instruction here.
+pub(crate) async fn ensure_user_exists(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
+  let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+  if exists {
+    Ok(())
+  } else {
+    Err(ApiError::Unauthorized)
+  }
+}
+
 /// The signed-in user's id, but only when that user administers this instance.
 ///
 /// Instance-wide settings — today the AI provider config — carry the OPERATOR's
@@ -1165,6 +1242,49 @@ fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {
   Argon2::default()
     .verify_password(password.as_bytes(), &parsed_hash)
     .map_err(|_| ApiError::Unauthorized)
+}
+
+/// Take the registration lock and attempt the insert, in one transaction.
+///
+/// `Ok(None)` means the guard refused — registration is closed and the instance
+/// already has an account. `Ok(Some(_))` means the row landed (and, on an empty
+/// instance, carries `is_admin`).
+///
+/// A free function rather than inline code in [`register`] so the concurrency
+/// test exercises THIS statement and THIS lock. A test that retypes the SQL
+/// passes identically with the lock removed, which would make it a test of the
+/// copy rather than of the behaviour.
+async fn insert_registered_user(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  email: &str,
+  display_name: &str,
+  password_hash: &str,
+  registration_enabled: bool,
+) -> ApiResult<Option<UserRow>> {
+  // Transaction-scoped: released at commit/rollback, so there is no unlock to
+  // forget on an error path. The key is constant because the race is between two
+  // DIFFERENT addresses on an empty instance — a per-email key would not
+  // serialize them.
+  sqlx::query("SELECT pg_advisory_xact_lock($1)")
+    .bind(REGISTRATION_LOCK_KEY)
+    .execute(&mut **tx)
+    .await?;
+
+  sqlx::query_as::<_, UserRow>(
+    r#"
+      INSERT INTO users (email, display_name, password_hash, is_admin)
+      SELECT $1, $2, $3, NOT EXISTS (SELECT 1 FROM users)
+      WHERE $4 OR NOT EXISTS (SELECT 1 FROM users)
+      RETURNING id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
+    "#,
+  )
+  .bind(email)
+  .bind(display_name)
+  .bind(password_hash)
+  .bind(registration_enabled)
+  .fetch_optional(&mut **tx)
+  .await
+  .map_err(map_insert_user_error)
 }
 
 fn map_insert_user_error(error: sqlx::Error) -> ApiError {
@@ -1914,5 +2034,250 @@ mod refresh_pg {
     .execute(&db)
     .await
     .ok();
+  }
+
+  /// P1-01: two concurrent registrations on an EMPTY instance must not both
+  /// become admin.
+  ///
+  /// The bug is in the ADMIN FLAG, not in the door. The statement computes both
+  /// `is_admin` and the closed-door guard from `NOT EXISTS (SELECT 1 FROM users)`
+  /// — two subqueries in one data-modifying statement, each evaluated against the
+  /// STATEMENT's snapshot. Under READ COMMITTED two concurrent registrations each
+  /// take that snapshot before the other's insert is visible, so both compute
+  /// `is_admin = true` and the instance ends up with TWO administrators. (The
+  /// recommended remedy in the plan — "the second request is refused" — describes
+  /// the CLOSED case; with registration OPEN, two accounts is correct and only
+  /// the flag is wrong. Both halves are asserted below.)
+  ///
+  /// No constraint can catch it: the two racers use different addresses by
+  /// construction, so `users_email_key` never fires, and "at most one admin" has
+  /// no schema-level expression precisely because the role is meant to be handed
+  /// over later (migration 0021 explains why it is a column, not a name).
+  ///
+  /// The interleaving is CONSTRUCTED, not raced: A takes the advisory lock and
+  /// inserts WITHOUT committing, B (the same production function) blocks on the
+  /// lock, and only then does A commit. Without the lock B does not block at all —
+  /// it reads the same empty table and computes `is_admin = true` too.
+  #[tokio::test]
+  async fn concurrent_first_registrations_cannot_both_become_admin() {
+    let Some(db) = pool().await else { return };
+    let (scratch, name) = scratch_db(&db, "mica_regrace").await;
+
+    // A: take the lock and insert, but stay uncommitted. Registration is OPEN —
+    // the race is about both requests believing they are the FIRST, whatever the
+    // door is doing.
+    let mut tx_a = scratch.begin().await.unwrap();
+    let a = insert_registered_user(&mut tx_a, "a@race.test", "A", "x", true)
+      .await
+      .unwrap();
+    assert!(a.is_some(), "the first racer lands");
+
+    // B: the SAME production function on a second connection. It must block on
+    // the advisory lock rather than read the empty table.
+    let scratch_b = scratch.clone();
+    let racer = tokio::spawn(async move {
+      let mut tx_b = scratch_b.begin().await.unwrap();
+      let result = insert_registered_user(&mut tx_b, "b@race.test", "B", "x", true).await;
+      tx_b.commit().await.unwrap();
+      result
+    });
+
+    // Observe the block rather than assuming it: a fixed sleep would let this
+    // pass on a slow machine by committing A before B ever started. The result is
+    // only logged — the assertion below is what decides, so the test fails on the
+    // DEFECT (two admins) rather than on the missing serialization point.
+    let blocked = saw_advisory_waiter(&db).await;
+    assert!(
+      blocked,
+      "expected the second registration to block on the lock; without that the \
+       assertions below would be racing rather than interleaved"
+    );
+    tx_a.commit().await.unwrap();
+
+    // With registration OPEN both accounts are expected — the door is open. The
+    // LOSER is the one that must not carry the flag.
+    let b = racer.await.unwrap().unwrap();
+    assert!(
+      b.is_some(),
+      "registration is open, so the second account is legitimately created"
+    );
+
+    let admins: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE is_admin")
+      .fetch_one(&scratch)
+      .await
+      .unwrap();
+    assert_eq!(
+      admins, 1,
+      "exactly one account may be the first-run admin; two means both racers \
+       computed is_admin from the same pre-commit snapshot"
+    );
+
+    // And the closed-door half, on a fresh empty instance: the guard must let
+    // exactly ONE account through.
+    let (scratch2, name2) = scratch_db(&db, "mica_regrace_closed").await;
+    let mut tx_c = scratch2.begin().await.unwrap();
+    assert!(
+      insert_registered_user(&mut tx_c, "c@race.test", "C", "x", false)
+        .await
+        .unwrap()
+        .is_some(),
+      "the first account gets through the closed door"
+    );
+    let scratch2_b = scratch2.clone();
+    let loser = tokio::spawn(async move {
+      let mut tx_d = scratch2_b.begin().await.unwrap();
+      let result = insert_registered_user(&mut tx_d, "d@race.test", "D", "x", false).await;
+      tx_d.commit().await.unwrap();
+      result
+    });
+    let blocked = saw_advisory_waiter(&db).await;
+    assert!(
+      blocked,
+      "expected the second (closed-door) registration to block on the lock"
+    );
+    tx_c.commit().await.unwrap();
+    assert!(
+      loser.await.unwrap().unwrap().is_none(),
+      "the closed door must admit exactly one account"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+      .fetch_one(&scratch2)
+      .await
+      .unwrap();
+    assert_eq!(count, 1, "exactly one account exists after the closed-door race");
+
+    drop_scratch_db(&db, scratch, scratch2, &name, &name2).await;
+  }
+
+  /// A throwaway database with the `users` columns these tests touch, plus the
+  /// name needed to drop it again.
+  ///
+  /// The shared dev database has users, and every test here is ABOUT emptiness,
+  /// so emptying it to prove a point would be a poor trade.
+  async fn scratch_db(db: &PgPool, prefix: &str) -> (PgPool, String) {
+    // `AssertSqlSafe` because sqlx 0.9 only accepts `&'static str` otherwise, and
+    // CREATE/DROP DATABASE cannot take a bind parameter. The name is a UUID this
+    // test just minted — no external input reaches it.
+    let name = format!("{prefix}_{}", Uuid::new_v4().simple());
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+      .execute(db)
+      .await
+      .unwrap();
+    let url = std::env::var("DATABASE_URL").unwrap();
+    let scratch_url = url
+      .rsplit_once('/')
+      .map(|(base, _)| format!("{base}/{name}"))
+      .unwrap();
+    let scratch = PgPool::connect(&scratch_url).await.unwrap();
+    sqlx::query(
+      "CREATE TABLE users (
+         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+         email text NOT NULL UNIQUE,
+         display_name text NOT NULL,
+         password_hash text NOT NULL,
+         created_at timestamptz NOT NULL DEFAULT now(),
+         avatar_key text,
+         email_verified_at timestamptz,
+         is_admin boolean NOT NULL DEFAULT false
+       )",
+    )
+    .execute(&scratch)
+    .await
+    .unwrap();
+    (scratch, name)
+  }
+
+  async fn drop_scratch_db(
+    db: &PgPool,
+    scratch: PgPool,
+    scratch2: PgPool,
+    name: &str,
+    name2: &str,
+  ) {
+    scratch.close().await;
+    scratch2.close().await;
+    for n in [name, name2] {
+      sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {n}")))
+        .execute(db)
+        .await
+        .ok();
+    }
+  }
+
+  /// Wait a bounded time for some connection to be blocked on the registration
+  /// advisory lock, and report whether one was seen.
+  ///
+  /// Polling `pg_locks` makes the barrier OBSERVED instead of assumed — a fixed
+  /// sleep would let these tests pass on a slow machine by committing before the
+  /// racer even started.
+  ///
+  /// It does NOT panic on timeout, and that is deliberate. An earlier version
+  /// asserted a waiter existed, which meant that on the pre-fix code the test
+  /// failed with "never reached the lock" — technically a failure, but it proves
+  /// only that there is no serialization point, not the thing we actually care
+  /// about (a second admin). Returning a bool lets the caller commit and let the
+  /// real invariant — the admin count — be what fails. A regression test should
+  /// break on the defect, not on the mechanism that prevents it.
+  async fn saw_advisory_waiter(db: &PgPool) -> bool {
+    for _ in 0..200 {
+      let waiting: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_locks l
+           JOIN pg_database d ON d.oid = l.database
+          WHERE l.locktype = 'advisory' AND NOT l.granted
+            AND d.datname NOT IN ('postgres', 'template0', 'template1')",
+      )
+      .fetch_one(db)
+      .await
+      .unwrap();
+      if waiting > 0 {
+        return true;
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    false
+  }
+
+  /// P2-01: a deleted account's still-valid JWT must not keep spending.
+  ///
+  /// The access token is stateless and therefore unrevocable: `delete_account`
+  /// cascades away the `users` row, the `refresh_tokens` and the `api_tokens`,
+  /// and the JWT in the caller's hand is none of those. So it keeps verifying
+  /// until `exp` (~1 hour by default), and the endpoints that spend the
+  /// operator's AI credit are the ones where that window costs real money.
+  ///
+  /// This pins the rule those endpoints call: after the row is gone, the check
+  /// refuses. Testing `ensure_user_exists` rather than the handlers is a
+  /// deliberate trade — the handlers need an `AppState` (AI config, pool,
+  /// mailer), and building one would test the scaffolding more than the rule.
+  /// The call sites are pinned by the compiler only in the weak sense that they
+  /// call the helper; what matters is that the rule itself is right.
+  #[tokio::test]
+  async fn a_deleted_account_stops_passing_the_existence_check() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+
+    // Alive: the check passes, so the endpoints behave exactly as before.
+    ensure_user_exists(&db, user).await.expect("an existing account passes");
+
+    // Deleted the way `delete_user_and_owned` does it — the row goes.
+    sqlx::query("DELETE FROM users WHERE id = $1")
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    assert!(
+      matches!(ensure_user_exists(&db, user).await, Err(ApiError::Unauthorized)),
+      "a token for a user who no longer exists must be refused (401, so clients \
+       re-authenticate) rather than spending the operator's AI credit until it \
+       expires on its own"
+    );
+
+    // And an id that never existed is refused identically — no way to tell
+    // "deleted" from "never was", which is fine, since neither identifies anyone.
+    assert!(matches!(
+      ensure_user_exists(&db, Uuid::new_v4()).await,
+      Err(ApiError::Unauthorized)
+    ));
   }
 }

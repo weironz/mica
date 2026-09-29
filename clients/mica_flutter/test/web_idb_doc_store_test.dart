@@ -216,4 +216,49 @@ void main() {
     expect(third, isNotNull);
     third.dispose();
   });
+
+  test('P1-12: a disposed store hands over only AFTER its queued writes land',
+      () async {
+    // The handover race the single-writer lock exists to prevent. `dispose()`
+    // used to release the Web Lock BEFORE waiting on the write-behind tail, so a
+    // successor could acquire, hydrate the OLD `rows` record, and then rewrite it
+    // from its own short in-memory copy — dropping un-pushed outbox entries the
+    // predecessor was still writing. `reopen()` above cannot catch this: it
+    // flushes first, which is exactly the timing that hides the bug.
+    final db = 'mica-test-${_dbSeq++}';
+    final a = await openStore(db: db, doc: 'handover');
+
+    // Queue a burst without flushing: the writes are FIFO on the tail and the
+    // outbox record is written WHOLE, so a successor that hydrates mid-sequence
+    // sees a short list.
+    const n = 40;
+    for (var i = 0; i < n; i++) {
+      a.appendOutbox(b([i]));
+    }
+
+    // Dispose immediately, no flush. Then race a reopen the way a same-tab
+    // session rebuild does.
+    a.dispose();
+    WebIdbDocStore? b2;
+    for (var attempt = 0; attempt < 100 && b2 == null; attempt++) {
+      b2 = await WebIdbDocStore.open(
+        'https://cloud.example',
+        'handover',
+        replay: concatReplay,
+        dbName: db,
+      );
+      if (b2 == null) await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(b2, isNotNull, reason: 'the lock must be released once the tail drains');
+
+    // The successor must see EVERY queued entry — that is the invariant the
+    // prompt release broke. A short list here means the handover happened
+    // mid-sequence.
+    expect(
+      b2!.outboxAfter(0).length,
+      n,
+      reason: 'all $n queued outbox entries survive the handover',
+    );
+    b2.dispose();
+  });
 }

@@ -52,7 +52,36 @@ class EditorController extends ChangeNotifier {
   double? goalX;
 
   static const Duration _debounce = Duration(milliseconds: 400);
-  final Set<String> _dirty = {}; // node ids with unsent / in-flight text
+
+  /// Block ids with an edit that has not yet been COMMITTED, mapped to the edit
+  /// generation they were last marked at (see [_editGen]).
+  ///
+  /// The generation is what makes "clear the dirty flag when the send finishes"
+  /// safe. A batch takes a while to round-trip; the user keeps typing into the
+  /// SAME block throughout. Clearing the id unconditionally on completion threw
+  /// away the mark the NEWER edit had just set, so the debounce fired, saw an
+  /// empty set, and skipped it — the keystrokes were in the document but never
+  /// sent, then a reconcile overwrote them. Only clear an id whose generation is
+  /// unchanged since the batch was built.
+  final Map<String, int> _dirty = {};
+
+  /// Bumped on every edit; the value stored in [_dirty] is this counter's reading
+  /// when the block was last touched. Comparing readings answers "did anything
+  /// happen to this block since I read it" — which an id alone cannot.
+  int _editGen = 0;
+
+  /// Backoff timer for [_scheduleRetry]; separate from [_saveTimer] so re-arming
+  /// one never cancels the other by accident.
+  Timer? _retryTimer;
+
+  /// Retries spent on the current failure streak.
+  int _retryAttempts = 0;
+
+  /// Retries before giving up on a failing commit. Bounded on purpose: a backend
+  /// that is genuinely down must not be hammered forever, and `onOpFault` has
+  /// already reported it. 5 attempts at doubling 400 ms ≈ 12 s of trying.
+  static const int _maxRetryAttempts = 5;
+
   Timer? _saveTimer;
   Future<void> _chain = Future.value();
   int _idCounter = 0;
@@ -89,6 +118,18 @@ class EditorController extends ChangeNotifier {
   /// Merge a server snapshot into the live document. Keeps the caret on the
   /// same node when possible and never overwrites the text of a node with
   /// unsent local edits.
+  ///
+  /// For a block with unsent local edits, `text` AND its inline marks travel
+  /// together. They used to be split: local text was kept (correct) while the
+  /// remote `data` was taken unconditionally — and because marks are character
+  /// OFFSETS into that text, keeping local text while adopting remote offsets
+  /// pointed them at whatever happened to sit at those indices. A bold run or a
+  /// link visibly moved, and the wrong pair was then sent to the server. A block
+  /// whose text is local must have local marks too; that is one version of the
+  /// block, not two fields that can be mixed.
+  ///
+  /// Non-format fields still merge from the server for a dirty block, so a
+  /// remote-only property change is not swallowed along with the marks.
   void reconcile(List<EditorNode> server) {
     final focusedId =
         (selection != null && selection!.focus.node < nodes.length)
@@ -101,9 +142,20 @@ class EditorController extends ChangeNotifier {
       if (cur == null) {
         next.add(src.copy());
       } else {
+        final dirty = _dirty.containsKey(cur.id);
+        // Read the LOCAL marks BEFORE overwriting `data` below.
+        final localMarks = cur.data['marks'];
         cur.kind = src.kind;
         cur.data = Map<String, dynamic>.from(src.data);
-        if (!_dirty.contains(cur.id)) {
+        if (dirty) {
+          // Local text stays (already on `cur`), so the local marks must stay
+          // with it — remote offsets into local text point at other characters.
+          if (localMarks == null) {
+            cur.data.remove('marks');
+          } else {
+            cur.data['marks'] = localMarks;
+          }
+        } else {
           cur.text = src.text;
         }
         next.add(cur);
@@ -490,19 +542,30 @@ class EditorController extends ChangeNotifier {
   }
 
   void _markDirty(String id) {
-    _dirty.add(id);
+    _dirty[id] = ++_editGen;
     _saveTimer?.cancel();
     _saveTimer = Timer(_debounce, flushPending);
   }
 
   /// Send any debounced text edits now.
-  Future<void> flushPending() {
+  ///
+  /// Resolves `true` when every edit it carried reached durable storage, `false`
+  /// when the commit failed. Returning the outcome is the point: the flags may
+  /// only be cleared on success, and the caller (page switch, dispose) needs to
+  /// know the difference between "saved" and "still only in memory".
+  Future<bool> flushPending() async {
     _saveTimer?.cancel();
     _saveTimer = null;
-    if (_dirty.isEmpty) return Future.value();
-    final ids = _dirty.toList();
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    if (_dirty.isEmpty) return true;
+
+    // Snapshot id → generation. This is what makes the completion handler safe:
+    // an edit landing while this batch is in flight bumps its block's generation,
+    // so the id is recognisably NEWER than what was sent and must stay dirty.
+    final batch = Map<String, int>.from(_dirty);
     final ops = <DocOp>[];
-    for (final id in ids) {
+    for (final id in batch.keys) {
       final node = nodes.where((n) => n.id == id).firstOrNull;
       if (node != null) {
         // Include data so shifted inline marks persist with the text.
@@ -515,13 +578,51 @@ class EditorController extends ChangeNotifier {
       }
     }
     if (ops.isEmpty) {
-      _dirty.clear();
-      return Future.value();
+      // Every dirty id was for a node that is gone. Drop only those, not the
+      // whole map: `_dirty` can have gained entries while this loop ran, and
+      // wiping them would recreate the very race this method was fixed for.
+      _clearCommitted(batch);
+      return true;
     }
-    final done = _send(ops);
-    // Keep ids in `_dirty` until the round-trip completes so an interleaved
-    // reconcile does not clobber the in-flight text.
-    return done.whenComplete(() => _dirty.removeAll(ids));
+
+    final ok = await _send(ops);
+    if (ok) {
+      _clearCommitted(batch);
+      _retryAttempts = 0;
+    } else {
+      // Keep every flag: the batch did NOT reach storage, so these blocks still
+      // hold unsent edits. Clearing them here (the old behaviour) dropped the
+      // user's typing on the floor with no retry and nothing scheduled.
+      _scheduleRetry();
+    }
+    return ok;
+  }
+
+  /// Drop the dirty flag for ids whose generation is UNCHANGED since [batch] was
+  /// built. A block edited during the round-trip keeps its flag, so the next
+  /// debounce sends the newer text instead of skipping it.
+  void _clearCommitted(Map<String, int> batch) {
+    for (final entry in batch.entries) {
+      if (_dirty[entry.key] == entry.value) _dirty.remove(entry.key);
+    }
+  }
+
+  /// Re-arm the flush after a failed commit, with a BOUNDED budget.
+  ///
+  /// Without this, a transient failure left the edits dirty and nothing scheduled
+  /// to send them: the debounce only re-arms on the next keystroke, so a user who
+  /// stopped typing (or switched pages) lost the work. Retrying forever against a
+  /// genuinely broken backend is the other failure mode, so the budget is finite —
+  /// past it the flags stay dirty and `onOpFault` has already said so.
+  void _scheduleRetry() {
+    if (_retryAttempts >= _maxRetryAttempts) return;
+    _retryAttempts++;
+    final delay = _debounce * (1 << _retryAttempts);
+    _retryTimer?.cancel();
+    _retryTimer = Timer(delay, () {
+      _retryTimer = null;
+      flushPending();
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -3263,41 +3364,71 @@ class EditorController extends ChangeNotifier {
   };
 
   /// Structural send: flush pending text first so order is correct.
+  ///
+  /// The flushed blocks carry `data` as well as `text`, exactly as [flushPending]
+  /// does. They used to send text alone, so a block whose inline marks had just
+  /// been re-offset by a text edit went to the server with NEW text and the
+  /// server's OLD marks — a link or bold run pointing at the wrong characters,
+  /// persisted. `data` is not optional decoration here: marks are offsets into
+  /// the text they describe, so shipping one without the other is always wrong.
   void _sendNow(List<DocOp> ops) {
     _saveTimer?.cancel();
     _saveTimer = null;
     final pending = <DocOp>[];
-    if (_dirty.isNotEmpty) {
-      for (final id in _dirty.toList()) {
-        final node = nodes.where((n) => n.id == id).firstOrNull;
-        // Skip ids already represented in this batch to avoid double-writes.
-        final inBatch = ops.any((o) => o['block_id'] == id);
-        if (node != null && !inBatch) {
-          pending.add({
-            'type': 'update_block',
-            'block_id': id,
-            'text': node.text,
-          });
-        }
+    final batch = Map<String, int>.from(_dirty);
+    for (final id in batch.keys) {
+      final node = nodes.where((n) => n.id == id).firstOrNull;
+      // Skip ids already represented in this batch to avoid double-writes.
+      final inBatch = ops.any((o) => o['block_id'] == id);
+      if (node != null && !inBatch) {
+        pending.add({
+          'type': 'update_block',
+          'block_id': id,
+          'text': node.text,
+          'data': node.data,
+        });
       }
-      _dirty.clear();
     }
-    _send([...pending, ...ops]);
+    // ONE batch, pending text first: a structural op that follows a text edit in
+    // the same commit is what "flush pending text first so order is correct"
+    // means. Splitting this into two `_send` calls would put them on the chain in
+    // call order but make their success/failure independently reportable, and the
+    // order guarantee is the more valuable half.
+    final all = [...pending, ...ops];
+    if (all.isEmpty) return;
+    _send(all).then((ok) {
+      if (ok) {
+        _clearCommitted(batch);
+      } else {
+        _scheduleRetry();
+      }
+    });
   }
 
-  Future<void> _send(List<DocOp> ops) {
+  /// Commit a batch, resolving `true` when it reached durable storage and `false`
+  /// when it did not.
+  ///
+  /// The boolean is the whole reason this is not `Future<void>`: a caller that
+  /// clears its pending flags on completion must be able to tell "committed" from
+  /// "failed", or it drops the user's edits the moment the backend is unhappy.
+  /// Nothing is rethrown — a broken commit must not take the editing hot path
+  /// down with it — so the flag is the only channel back.
+  Future<bool> _send(List<DocOp> ops) {
     // Record the pre-change document before this committed mutation, unless we
     // are mid-restore (undo/redo emit their own diff ops through here).
     if (!_restoring) _recordHistory();
-    final done = _chain.then((_) => onOps(ops)).catchError((Object e) {
+    final done = _chain.then((_) => onOps(ops)).then((_) => true).catchError((
+      Object e,
+    ) {
       // Do NOT swallow: a failed commit (e.g. appendOutbox StateError) means the
       // batch didn't reach durable storage. Count it and surface via [onOpFault]
       // so it's visible, but keep the chain alive — throwing here would break the
       // editing hot path for every subsequent edit.
       opFaultCount++;
       onOpFault?.call(e, opFaultCount);
+      return false;
     });
-    _chain = done;
+    _chain = done.then((_) {});
     return done;
   }
 

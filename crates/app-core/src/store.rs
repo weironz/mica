@@ -467,7 +467,16 @@ pub fn yrs_state_to_payload(state: &[u8]) -> ApiResult<DocumentSnapshotPayload> 
   })
 }
 
-async fn lock_document_tx(
+/// Take the `documents` row lock, returning the record or `None` if there is no
+/// such document in this workspace.
+///
+/// `pub(crate)` because BOTH write paths must take it, in this order, before
+/// touching `document_yrs_base`: `apply_derived_operations` here, and
+/// `sync::push_update` for the WebSocket route. A lock only mutual excludes if
+/// everyone agrees to take it — one path locking and the other not is the same
+/// lost update as nobody locking, plus a deadlock risk from the disagreement in
+/// ordering.
+pub(crate) async fn lock_document_tx(
   tx: &mut Transaction<'_, Postgres>,
   workspace_id: Uuid,
   document_id: Uuid,
@@ -718,6 +727,30 @@ pub async fn fetch_file(
   )
   .bind(file_id)
   .bind(workspace_id)
+  .fetch_optional(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+/// The row recording this object key in this workspace, if any.
+///
+/// Object keys contain a client-declared sha256. A hit here lets the caller
+/// avoid issuing a new upload URL; it does not verify the stored bytes or revoke
+/// URLs issued before this row existed.
+pub async fn fetch_file_by_key(
+  db: &PgPool,
+  workspace_id: Uuid,
+  object_key: &str,
+) -> ApiResult<Option<FileRecord>> {
+  sqlx::query_as::<_, FileRecord>(
+    r#"
+      SELECT id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size, created_at
+      FROM files
+      WHERE workspace_id = $1 AND object_key = $2
+    "#,
+  )
+  .bind(workspace_id)
+  .bind(object_key)
   .fetch_optional(db)
   .await
   .map_err(ApiError::from)

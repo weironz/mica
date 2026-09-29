@@ -27,6 +27,33 @@ use crate::routes::documents::{
   DocumentPermissions, ensure_workspace_member, permissions_for_role, workspace_role,
 };
 
+/// This connection's CURRENT permissions, re-read from the database.
+///
+/// The `permissions` a connection carries were computed once, when the socket
+/// upgraded, and a socket outlives that decision by design: it is meant to stay
+/// open for the length of a token. So a member who is removed from the
+/// workspace, or demoted to read-only, keeps whatever they had at upgrade until
+/// something re-asks — and their token's lifetime is exactly the window
+/// `docs/lessons.md` warns about, because a JWT does not re-check anything.
+///
+/// Re-reading before each WRITE makes a revocation take effect on the next
+/// keystroke instead. `Ok(None)` means the user is no longer a member at all.
+///
+/// The query is one indexed lookup on `(workspace_id, user_id)`, and writes are
+/// debounced at the client (400 ms) rather than sent per character, so this does
+/// not sit on a per-keystroke path.
+async fn current_write_permissions(
+  db: &sqlx::PgPool,
+  workspace_id: Uuid,
+  user_id: Uuid,
+) -> ApiResult<Option<DocumentPermissions>> {
+  Ok(
+    workspace_role(db, workspace_id, user_id)
+      .await?
+      .map(|role| permissions_for_role(&role)),
+  )
+}
+
 /// The WS sync protocol this server speaks.
 ///
 /// `1` = `sync.bootstrap` / `sync.pull` / `sync.push` with the optional state
@@ -412,7 +439,6 @@ async fn run_connection(
               user_id,
               workspace_id,
               document_id,
-              permissions,
             )
             .await;
             if send_all(&mut socket, replies).await.is_err() {
@@ -513,6 +539,14 @@ async fn send_bootstrap(
     .map_err(|_| ())
 }
 
+/// Handle one client frame.
+///
+/// Deliberately does NOT receive the connection's cached `DocumentPermissions`.
+/// It used to, and both write branches checked `permissions.can_write` — a value
+/// computed when the socket opened, so a member removed or demoted mid-session
+/// kept writing until their token expired. Passing it in again would invite the
+/// same mistake back; every write re-reads the role instead (see
+/// [`current_write_permissions`]).
 #[allow(clippy::too_many_arguments)]
 async fn handle_client_message(
   raw: &str,
@@ -522,7 +556,6 @@ async fn handle_client_message(
   user_id: Uuid,
   workspace_id: Uuid,
   document_id: Uuid,
-  permissions: DocumentPermissions,
 ) -> Vec<String> {
   let envelope = match serde_json::from_str::<ClientEnvelope>(raw) {
     Ok(envelope) => envelope,
@@ -555,7 +588,24 @@ async fn handle_client_message(
       Vec::new()
     }
     "document.update" => {
-      if !permissions.can_write {
+      // Re-read the role rather than trusting the connection's copy: a socket
+      // outlives the membership it was opened under, so a member removed (or
+      // demoted) mid-session would otherwise keep writing until the token
+      // expired. `None` = no longer a member at all.
+      let live = match current_write_permissions(&state.db, workspace_id, user_id).await {
+        Ok(Some(permissions)) => permissions,
+        Ok(None) => {
+          return vec![error_message(
+            ack_id,
+            "permission_denied",
+            "you are no longer a member of this workspace",
+          )];
+        }
+        Err(error) => {
+          return vec![error_message(ack_id, error_code(&error), &error.to_string())];
+        }
+      };
+      if !live.can_write {
         return vec![error_message(
           ack_id,
           "permission_denied",
@@ -664,7 +714,23 @@ async fn handle_client_message(
       }
     }
     "sync.push" => {
-      if !permissions.can_write {
+      // Same re-check as `document.update`: this is the collaborative keystroke
+      // path, and a revoked member's cached `permissions` were computed when the
+      // socket opened, not now.
+      let live = match current_write_permissions(&state.db, workspace_id, user_id).await {
+        Ok(Some(permissions)) => permissions,
+        Ok(None) => {
+          return vec![error_message(
+            ack_id,
+            "permission_denied",
+            "you are no longer a member of this workspace",
+          )];
+        }
+        Err(error) => {
+          return vec![error_message(ack_id, error_code(&error), &error.to_string())];
+        }
+      };
+      if !live.can_write {
         return vec![error_message(
           ack_id,
           "permission_denied",
@@ -1159,5 +1225,161 @@ mod tests {
   fn invalid_client_message_is_rejected() {
     let envelope = serde_json::from_str::<ClientEnvelope>("not json");
     assert!(envelope.is_err());
+  }
+
+  /// P1-05: a write must re-read the caller's role, not trust the connection.
+  ///
+  /// The socket caches `DocumentPermissions` computed at upgrade, and it is meant
+  /// to outlive that decision — it stays open for the length of a token. So a
+  /// member removed from the workspace, or demoted to read-only, kept whatever
+  /// they had when the socket opened, and a JWT does not re-check anything. The
+  /// window was the whole token lifetime.
+  ///
+  /// This drives `current_write_permissions`, which is the function both write
+  /// branches now call before writing. Testing it rather than the frame handler
+  /// is a deliberate trade: the handler needs an `AppState` (config, hub, S3,
+  /// mailer), and building one here would test the scaffolding more than the
+  /// rule. What this covers is the rule — "the role is read NOW" — and the
+  /// call sites are covered by the type system, since `handle_client_message` no
+  /// longer receives a permissions snapshot at all.
+  mod revoked_pg {
+    use super::*;
+    use sqlx::PgPool;
+
+    /// Skipping with no database is a local convenience; skipping WITH one is a
+    /// lie. A set-but-unusable `DATABASE_URL` panics, and in CI a missing one
+    /// panics too.
+    async fn pool() -> Option<PgPool> {
+      let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+          std::env::var("CI").is_err(),
+          "DATABASE_URL is unset in CI — the postgres service block regressed; \
+           these tests must not silently pass"
+        );
+        return None;
+      };
+      Some(
+        PgPool::connect(&url)
+          .await
+          .expect("DATABASE_URL is set but the connection failed"),
+      )
+    }
+
+    /// A workspace owned by `owner`, with `member` joined at `role`.
+    async fn seed(db: &PgPool, role: &str) -> (Uuid, Uuid, Uuid) {
+      let owner = Uuid::new_v4();
+      let member = Uuid::new_v4();
+      let ws = Uuid::new_v4();
+      for u in [owner, member] {
+        sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+          .bind(u)
+          .bind(format!("{u}@revoked.test"))
+          .execute(db)
+          .await
+          .unwrap();
+      }
+      sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'R',$2)")
+        .bind(ws)
+        .bind(owner)
+        .execute(db)
+        .await
+        .unwrap();
+      sqlx::query(
+        "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,$3::workspace_role)",
+      )
+      .bind(ws)
+      .bind(member)
+      .bind(role)
+      .execute(db)
+      .await
+      .unwrap();
+      (ws, owner, member)
+    }
+
+    async fn cleanup(db: &PgPool, ws: Uuid, owner: Uuid, member: Uuid) {
+      sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(db).await.ok();
+      for u in [owner, member] {
+        sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(db).await.ok();
+      }
+    }
+
+    /// THE BUG: the role changes under an open connection, and the next write
+    /// must see the new one.
+    #[tokio::test]
+    async fn a_demoted_member_loses_write_on_the_next_check() {
+      let Some(db) = pool().await else { return };
+      let (ws, owner, member) = seed(&db, "editor").await;
+
+      // At upgrade: an editor, so the connection would cache can_write = true.
+      let before = current_write_permissions(&db, ws, member).await.unwrap();
+      assert!(
+        before.expect("still a member").can_write,
+        "an editor may write, which is what the socket would have cached"
+      );
+
+      // Demoted while the socket is open. Nothing tells the socket.
+      sqlx::query("UPDATE workspace_members SET role = 'viewer' WHERE workspace_id=$1 AND user_id=$2")
+        .bind(ws)
+        .bind(member)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      let after = current_write_permissions(&db, ws, member).await.unwrap();
+      assert!(
+        !after.expect("still a member").can_write,
+        "the re-check must see the demotion; a cached value would still allow the write"
+      );
+
+      // Removed entirely: no longer even a member, which the callers report as a
+      // distinct message from "member but read-only".
+      sqlx::query("DELETE FROM workspace_members WHERE workspace_id=$1 AND user_id=$2")
+        .bind(ws)
+        .bind(member)
+        .execute(&db)
+        .await
+        .unwrap();
+      assert!(
+        current_write_permissions(&db, ws, member).await.unwrap().is_none(),
+        "a removed member reads as None, not as a stale role"
+      );
+
+      cleanup(&db, ws, owner, member).await;
+    }
+
+    /// The promotion direction, so the test above cannot pass by the query being
+    /// broken in a way that always denies.
+    #[tokio::test]
+    async fn a_promoted_member_gains_write_on_the_next_check() {
+      let Some(db) = pool().await else { return };
+      let (ws, owner, member) = seed(&db, "viewer").await;
+
+      assert!(
+        !current_write_permissions(&db, ws, member)
+          .await
+          .unwrap()
+          .expect("member")
+          .can_write,
+        "a viewer starts read-only"
+      );
+
+      sqlx::query("UPDATE workspace_members SET role = 'editor' WHERE workspace_id=$1 AND user_id=$2")
+        .bind(ws)
+        .bind(member)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      assert!(
+        current_write_permissions(&db, ws, member)
+          .await
+          .unwrap()
+          .expect("member")
+          .can_write,
+        "and gains write on the next check, without reconnecting"
+      );
+
+      cleanup(&db, ws, owner, member).await;
+    }
   }
 }

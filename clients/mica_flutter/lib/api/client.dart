@@ -1216,6 +1216,10 @@ class ApiClient {
 
   /// Upload an image: presign a content-addressed key, PUT the bytes directly to
   /// object storage, then record metadata. Returns the new file id + name.
+  ///
+  /// When the server already holds these exact bytes it says so and issues no
+  /// upload URL; this client skips the PUT and uses the stored file. Previously
+  /// issued URLs still need storage-level replay protection.
   Future<UploadedFile> uploadImage(
     String token,
     String workspaceId, {
@@ -1230,8 +1234,16 @@ class ApiClient {
       'byte_size': bytes.length,
       'content_hash': hash,
     }, token: token);
+
+    // Already stored → nothing to upload, and nothing to complete.
+    final existing = presign['existing'];
+    if (existing is Map) {
+      return UploadedFile.fromResponse(Map<String, dynamic>.from(existing));
+    }
+
     final objectKey = presign['object_key'] as String;
-    final uploadUrl = presign['upload_url'] as String;
+    final upload = presign['upload'] as Map;
+    final uploadUrl = upload['upload_url'] as String;
 
     final put = await sharedHttpClient.put(
       Uri.parse(uploadUrl),

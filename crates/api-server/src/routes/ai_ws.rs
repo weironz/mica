@@ -12,7 +12,9 @@ use mica_infra::{AiConfig, AiProvider, ApiError, ApiResult};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::routes::auth::{SESSION_COOKIE, bearer_token, cookie_value, user_id_from_token};
+use crate::routes::auth::{
+  SESSION_COOKIE, bearer_token, cookie_value, ensure_user_exists, user_id_from_token,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct AiConnectQuery {
@@ -41,7 +43,11 @@ pub async fn ai_socket(
   upgrade: WebSocketUpgrade,
 ) -> ApiResult<Response> {
   let token = token_from(&headers, &query).ok_or(ApiError::Unauthorized)?;
-  let _user_id = user_id_from_token(&state, &token)?;
+  let user_id = user_id_from_token(&state, &token)?;
+  // Same check as the REST endpoint: this socket streams completions, so it
+  // spends the operator's credit for as long as it stays open, and a deleted
+  // account's access token is still a valid JWT until it expires.
+  ensure_user_exists(&state.db, user_id).await?;
   Ok(upgrade.on_upgrade(move |socket| run(socket, state)))
 }
 

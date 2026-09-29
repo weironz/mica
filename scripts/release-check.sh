@@ -155,4 +155,24 @@ server=$(grep -oE 'image: postgres:[0-9]+' deploy/docker-compose.yml | head -1 |
   || fail "deploy/Dockerfile.cli installs postgresql-client-$client but the stack runs postgres:$server — pg_dump refuses a newer server, so the off-site DB backup would silently stop. Bump the client."
 echo "==> pg_dump: client $client >= server $server"
 
+# ── The quickstart's pinned release must not lag the version being tagged ───
+# README.md and docs/deploy.md tell a self-hoster to download the compose file
+# and `.env.prod.example` from a RELEASE TAG. That tag is hardcoded, so it only
+# moves when somebody edits the docs — and compose's `environment:` block is an
+# explicit ALLOWLIST, so a fresh install that pairs an old compose file with a
+# newer image silently loses any variable the image expects. The failure is a
+# setting that does nothing, which is invisible by construction.
+#
+# REFUSED, not warned. "Remember to update the docs at release time" is exactly
+# the kind of rule this file exists because nobody remembers; the tag is checked
+# at the one moment it is wrong.
+for doc in README.md docs/deploy.md; do
+  pinned=$(grep -oE 'RELEASE=[0-9]+\.[0-9]+\.[0-9]+' "$doc" | head -1 | cut -d= -f2)
+  [ -n "$pinned" ] \
+    || fail "$doc no longer states a \`RELEASE=x.y.z\` for the quickstart (found nothing) — this gate must not pass by failing to look. If the quickstart changed shape, update this check."
+  [ "$pinned" = "$version" ] \
+    || fail "$doc pins the quickstart to $pinned but this release is $version. Bump \`RELEASE=\` in that doc (and any \`v\$RELEASE\` it uses) — an old compose file paired with a new image loses settings silently."
+done
+echo "==> quickstart docs pinned to $version"
+
 printf '\n  release-check passed for %s\n' "$version"

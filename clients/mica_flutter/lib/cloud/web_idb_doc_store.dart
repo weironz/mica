@@ -549,20 +549,37 @@ class WebIdbDocStore implements CloudDocStore {
   /// Idempotent. Wired to the cloud session's dispose; the desktop store's
   /// [dispose] is a no-op (its MicaStore is shared and outlives any session).
   ///
-  /// The lock is freed PROMPTLY (not behind [_tail]) so the same tab rebuilding
-  /// a session for this doc — e.g. the B3 sync-retry — can immediately reacquire
-  /// the writable mirror instead of falling back to online-only. Any queued
-  /// write-behind transactions still complete against the open connection; the
-  /// connection is closed once they drain. A new owner that starts writing in
-  /// the gap is safe: IndexedDB serializes transactions across connections, and
-  /// a disposing store's last writes are best-effort (its replacement rehydrates
-  /// from whatever durably landed).
+  /// The lock is released only AFTER the write-behind tail settles, then the
+  /// connection is closed.
+  ///
+  /// It used to be freed PROMPTLY, ahead of [_tail], with the reasoning that a
+  /// same-tab session rebuild (the B3 sync-retry) could then immediately
+  /// reacquire instead of falling back to online-only. That trade was wrong, and
+  /// this is the single-writer invariant it broke: a new owner acquiring in the
+  /// gap calls `_hydrate`, reads the rows the OLD owner has not finished writing
+  /// yet — the outbox record is written whole, per doc — and then rewrites `rows`
+  /// from its own (stale, short) in-memory copy. The old owner's queued writes
+  /// land after that and are overwritten, or land before and are dropped by the
+  /// overwrite; either way an un-pushed outbox entry is gone, which is the exact
+  /// "outbox never silently dropped" property the lock exists for.
+  ///
+  /// The cost is bounded and small: the tail is a handful of IndexedDB
+  /// transactions, so a same-tab rebuild waits milliseconds rather than falling
+  /// back to online-only. Correctness of the mirror is worth that, and the
+  /// FIFO-prefix guarantee documented on [_mirror] only holds if nobody can
+  /// observe the middle of the sequence through a second connection.
+  ///
+  /// A FAILED tail still releases: `whenComplete` runs on error too, and
+  /// [_mirror] already swallows write failures into `_broken`, so the release can
+  /// never be stranded by a broken chain.
   @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
-    _releaseLock?.complete();
     _tail.whenComplete(() {
+      try {
+        _releaseLock?.complete();
+      } catch (_) {}
       try {
         _db.close();
       } catch (_) {}
