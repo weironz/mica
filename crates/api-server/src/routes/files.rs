@@ -127,7 +127,7 @@ pub async fn presign(
     return Ok(Json(existing_object_response(object_key, existing, download_url)));
   }
 
-  let upload = storage.presign_put_if_absent(&object_key, &checksum_sha256);
+  let upload = storage.presign_put_if_absent(&object_key, &checksum_sha256, payload.byte_size);
   store::record_pending_file_upload_tx(&mut tx, workspace_id, &object_key, upload.expires_in)
     .await?;
   tx.commit().await?;
@@ -1107,7 +1107,7 @@ mod tests {
     let storage = S3Config::from_env().expect("set S3_* for the test store");
     let key = format!("audit-write-once/{}", Uuid::new_v4());
     let checksum = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(b"first"));
-    let upload = storage.presign_put_if_absent(&key, &checksum);
+    let upload = storage.presign_put_if_absent(&key, &checksum, 5);
     let client = reqwest::Client::new();
 
     let missing_condition = client
@@ -1125,6 +1125,14 @@ mod tests {
       .send()
       .await
       .expect("PUT with wrong checksum");
+    let wrong_length = client
+      .put(&upload.url)
+      .header(reqwest::header::IF_NONE_MATCH, "*")
+      .header("x-amz-checksum-sha256", &checksum)
+      .body("longer")
+      .send()
+      .await
+      .expect("PUT with wrong length");
     let first = client
       .put(&upload.url)
       .header(reqwest::header::IF_NONE_MATCH, "*")
@@ -1162,6 +1170,7 @@ mod tests {
 
     assert_eq!(missing_condition.status(), StatusCode::FORBIDDEN);
     assert_eq!(wrong_bytes.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(wrong_length.status(), StatusCode::FORBIDDEN);
     assert!(first.status().is_success(), "first PUT: {}", first.status());
     assert!(verified_head.status().is_success(), "checksum HEAD: {}", verified_head.status());
     assert_eq!(

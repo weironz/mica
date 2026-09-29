@@ -410,15 +410,16 @@ async fn sweep_pending_key(
     if registered {
         // Keep the ledger while a URL may still be valid. At this point both
         // age margins have passed, so a later file-row deletion cannot turn a
-        // still-live URL into an untracked object.
+        // still-live URL into an untracked object. A workspace deletion can
+        // extend this row's expiry while we hold the key lock: it locks the
+        // workspace row first, so taking our key lock would deadlock against
+        // a concurrent complete (key -> FK workspace row). Delete only the
+        // exact ledger version we observed, never a refreshed one.
         if now - created_at >= PENDING_UPLOAD_GRACE
             && now - expires_at >= PENDING_UPLOAD_MARGIN
             && !dry_run
         {
-            sqlx::query("DELETE FROM pending_file_uploads WHERE object_key = $1")
-                .bind(object_key)
-                .execute(&mut *tx)
-                .await?;
+            prune_registered_pending_upload_tx(&mut tx, object_key, created_at, expires_at).await?;
             tx.commit().await?;
         }
         return Ok(());
@@ -496,6 +497,28 @@ async fn sweep_pending_key(
     report.bytes_freed += size;
     tracing::info!(%object_key, byte_size = size, "blob gc: reclaimed uncompleted upload");
     Ok(())
+}
+
+/// The workspace-delete transaction can replace this ledger row after the
+/// SELECT above but before our DELETE acquires its row lock. Under READ
+/// COMMITTED, a key-only DELETE would wait for that transaction and then erase
+/// its newer row. The timestamp predicate makes the stale cleanup a no-op.
+pub(crate) async fn prune_registered_pending_upload_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    object_key: &str,
+    observed_created_at: chrono::DateTime<chrono::Utc>,
+    observed_expires_at: chrono::DateTime<chrono::Utc>,
+) -> mica_infra::ApiResult<u64> {
+    Ok(sqlx::query(
+        "DELETE FROM pending_file_uploads \
+         WHERE object_key = $1 AND created_at = $2 AND expires_at = $3",
+    )
+    .bind(object_key)
+    .bind(observed_created_at)
+    .bind(observed_expires_at)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected())
 }
 
 /// Sweep every workspace. [dry_run] reports what would go without touching

@@ -31,6 +31,9 @@ mica-infra = { path = "../infra" }
 mica-interchange = { path = "../interchange" }
 rand_core.workspace = true
 reqwest.workspace = true
+# ListObjectsV2 is XML. This parser already ships transitively in Cargo.lock;
+# use it only at the S3 protocol edge of the explicit legacy-orphan audit.
+roxmltree = "=0.20.0"
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true

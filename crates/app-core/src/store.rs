@@ -721,8 +721,11 @@ pub async fn lock_file_object_key(
   Ok(())
 }
 
-/// Remember the latest URL expiry for this key. Must run while holding
-/// [lock_file_object_key] in the same transaction as the presign decision.
+/// Remember the latest URL expiry for this key. Presign callers must hold
+/// [lock_file_object_key] in the same transaction as their decision. Workspace
+/// deletion holds the workspace row lock instead, then stages every `files`
+/// key atomically with the cascade; GC's registered-row cleanup only removes
+/// the pending version it observed before a concurrent expiry extension.
 pub async fn record_pending_file_upload_tx(
   tx: &mut Transaction<'_, Postgres>,
   workspace_id: Uuid,

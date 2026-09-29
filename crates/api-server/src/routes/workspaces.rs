@@ -4,7 +4,7 @@ use axum::{
   http::{HeaderMap, StatusCode},
 };
 use chrono::{DateTime, Utc};
-use mica_app_core::AppState;
+use mica_app_core::{AppState, store};
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
@@ -307,49 +307,82 @@ pub async fn delete(
     return Err(ApiError::Forbidden);
   }
 
-  // Reclaim this workspace's stored objects BEFORE the DB cascade removes the
-  // `files` rows that hold their keys. The blob GC scans by existing workspace,
-  // so once the workspace (and its files rows) are gone the objects are
-  // unreachable orphans forever. Order is therefore load-bearing: keys first,
-  // row deletion second.
-  //
-  // Best-effort: a single object that won't delete only warns — an undeletable
-  // object must never make the workspace itself undeletable (the DB delete has
-  // to proceed regardless). Storage may also be unconfigured, in which case
-  // there is nothing to delete.
+  // Preserve every key before the cascade removes its only file row. A failed
+  // storage DELETE (or a crash before sending it) is then retried by pending
+  // upload GC. The ledger and workspace deletion commit atomically.
+  let keys = delete_workspace_records(
+    &state.db,
+    workspace_id,
+    state.storage.as_ref().map_or(7 * 24 * 60 * 60, |s| s.presign_ttl_seconds),
+  )
+  .await?;
+
   if let Some(storage) = &state.storage {
-    let keys: Vec<String> =
-      sqlx::query_scalar("SELECT DISTINCT object_key FROM files WHERE workspace_id = $1")
-        .bind(workspace_id)
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_else(|error| {
-          tracing::warn!(%workspace_id, %error, "workspace delete: cannot list objects, leaving them as orphans");
-          Vec::new()
-        });
-    if !keys.is_empty() {
-      let http = reqwest::Client::new();
-      for key in &keys {
-        // Same delete shape as the blob GC: a 404 is success (already gone).
-        match http.delete(storage.presign_delete(key)).send().await {
-          Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 404 => {}
-          Ok(resp) => {
-            tracing::warn!(%workspace_id, object_key = %key, status = %resp.status(), "workspace delete: object delete rejected, leaving orphan")
-          }
-          Err(error) => {
-            tracing::warn!(%workspace_id, object_key = %key, %error, "workspace delete: object delete failed, leaving orphan")
-          }
-        }
+    delete_objects(storage, keys.iter().map(|key| (workspace_id, key.as_str()))).await;
+  }
+
+  Ok(StatusCode::NO_CONTENT)
+}
+
+/// Keep a durable recovery path for every file before removing its workspace.
+/// `FOR UPDATE` stops a concurrent file INSERT's FK check until the cascade has
+/// finished; listing first without it can miss a just-completed upload. A
+/// listing or ledger failure rolls the entire deletion back rather than losing
+/// the last known object key.
+async fn delete_workspace_records(
+  db: &PgPool,
+  workspace_id: Uuid,
+  presign_ttl_seconds: u64,
+) -> ApiResult<Vec<String>> {
+  let mut tx = db.begin().await?;
+  let exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE")
+    .bind(workspace_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+  if exists.is_none() {
+    return Err(ApiError::NotFound);
+  }
+
+  let keys: Vec<String> = sqlx::query_scalar(
+    "SELECT object_key FROM files WHERE workspace_id = $1 ORDER BY object_key",
+  )
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+  for key in &keys {
+    // We hold the workspace row lock, so a new `files` INSERT cannot pass its
+    // FK check until this transaction commits. Do not take the key advisory
+    // lock here: `complete` takes key before FK, and reversing that order
+    // would deadlock. GC's registered-row cleanup conditionally deletes only
+    // the pending version it observed, so this UPSERT cannot be lost to it.
+    store::record_pending_file_upload_tx(&mut tx, workspace_id, key, presign_ttl_seconds).await?;
+  }
+  sqlx::query("DELETE FROM workspaces WHERE id = $1")
+    .bind(workspace_id)
+    .execute(&mut *tx)
+    .await?;
+  tx.commit().await?;
+  Ok(keys)
+}
+
+pub(crate) async fn delete_objects<'a>(
+  storage: &mica_infra::storage::S3Config,
+  keys: impl Iterator<Item = (Uuid, &'a str)>,
+) {
+  let http = reqwest::Client::new();
+  for (workspace_id, key) in keys {
+    // S3 deletion is an immediate best effort. The committed ledger remains
+    // available to GC even when this request is interrupted or S3 rejects it.
+    match http.delete(storage.presign_delete(key)).send().await {
+      Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 404 => {}
+      Ok(resp) => {
+        tracing::warn!(%workspace_id, object_key = %key, status = %resp.status(), "workspace delete: object delete rejected, pending GC retry")
+      }
+      Err(error) => {
+        tracing::warn!(%workspace_id, object_key = %key, %error, "workspace delete: object delete failed, pending GC retry")
       }
     }
   }
-
-  sqlx::query("DELETE FROM workspaces WHERE id = $1")
-    .bind(workspace_id)
-    .execute(&state.db)
-    .await?;
-
-  Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Serialize)]
@@ -867,5 +900,256 @@ mod workspace_decode_pg {
       .execute(&db)
       .await
       .ok();
+  }
+}
+
+#[cfg(test)]
+mod workspace_delete_gc_pg {
+  use super::*;
+  use std::time::Duration;
+
+  async fn fixture() -> Option<(PgPool, Uuid, Uuid)> {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(std::env::var("CI").is_err(), "DATABASE_URL must be set in CI");
+      return None;
+    };
+    let db = PgPool::connect(&url).await.expect("test Postgres must be reachable");
+    mica_infra::run_migrations(&db).await.unwrap();
+    let user = Uuid::new_v4();
+    let workspace = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'GC','x')")
+      .bind(user)
+      .bind(format!("{user}@workspace-delete-gc.test"))
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'GC',$2)")
+      .bind(workspace)
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+    Some((db, user, workspace))
+  }
+
+  async fn file(db: &PgPool, user: Uuid, workspace: Uuid, key: &str) {
+    sqlx::query(
+      "INSERT INTO files(workspace_id,uploaded_by,object_key,original_name,mime_type,byte_size) \
+       VALUES($1,$2,$3,'x.png','image/png',3)",
+    )
+    .bind(workspace)
+    .bind(user)
+    .bind(key)
+    .execute(db)
+    .await
+    .unwrap();
+  }
+
+  async fn cleanup(db: &PgPool, user: Uuid, workspace: Uuid) {
+    sqlx::query("DELETE FROM pending_file_uploads WHERE workspace_id = $1")
+      .bind(workspace)
+      .execute(db)
+      .await
+      .unwrap();
+    sqlx::query("DELETE FROM workspaces WHERE id = $1")
+      .bind(workspace)
+      .execute(db)
+      .await
+      .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+      .bind(user)
+      .execute(db)
+      .await
+      .unwrap();
+  }
+
+  /// A storage-less server still has old file rows to protect. The ledger
+  /// must commit in the same transaction that cascades those rows away.
+  #[tokio::test]
+  async fn deleting_without_storage_preserves_every_object_key_for_gc() {
+    let Some((db, user, workspace)) = fixture().await else { return };
+    let key = format!("workspaces/{workspace}/{}.png", "a".repeat(64));
+    file(&db, user, workspace, &key).await;
+
+    let keys = delete_workspace_records(&db, workspace, 7 * 24 * 60 * 60)
+      .await
+      .unwrap();
+    assert_eq!(keys, vec![key.clone()]);
+    let workspace_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM workspaces WHERE id = $1")
+      .bind(workspace)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    let file_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM files WHERE object_key = $1")
+      .bind(&key)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    let pending_rows: i64 = sqlx::query_scalar(
+      "SELECT count(*) FROM pending_file_uploads WHERE object_key = $1 AND workspace_id = $2",
+    )
+    .bind(&key)
+    .bind(workspace)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!((workspace_rows, file_rows, pending_rows), (0, 0, 1));
+    cleanup(&db, user, workspace).await;
+  }
+
+  /// An unexpected legacy key cannot be entered into the constrained ledger.
+  /// In that case keeping the workspace is safer than deleting its last index.
+  #[tokio::test]
+  async fn ledger_failure_rolls_back_workspace_deletion() {
+    let Some((db, user, workspace)) = fixture().await else { return };
+    let key = format!("legacy/{}.png", Uuid::new_v4());
+    file(&db, user, workspace, &key).await;
+
+    assert!(delete_workspace_records(&db, workspace, 900).await.is_err());
+    let workspace_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM workspaces WHERE id = $1")
+      .bind(workspace)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    let file_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM files WHERE object_key = $1")
+      .bind(&key)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert_eq!((workspace_rows, file_rows), (1, 1));
+    cleanup(&db, user, workspace).await;
+  }
+
+  /// GC may have read an expired ledger for a registered file just as workspace
+  /// deletion refreshes that ledger and cascades the file row. The stale GC
+  /// DELETE blocks on the UPSERT's row lock, then must not erase the refresh.
+  #[tokio::test]
+  async fn stale_gc_prune_cannot_erase_a_workspace_deletion_ledger() {
+    let Some((db, user, workspace)) = fixture().await else { return };
+    let key = format!("workspaces/{workspace}/{}.png", "b".repeat(64));
+    file(&db, user, workspace, &key).await;
+    store::record_pending_file_upload(&db, workspace, &key, 900)
+      .await
+      .unwrap();
+    sqlx::query(
+      "UPDATE pending_file_uploads SET created_at = now() - interval '31 days', \
+       expires_at = now() - interval '2 days' WHERE object_key = $1",
+    )
+    .bind(&key)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let mut gc = db.begin().await.unwrap();
+    store::lock_file_object_key(&mut gc, &key).await.unwrap();
+    let observed: (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+      "SELECT created_at, expires_at FROM pending_file_uploads WHERE object_key = $1",
+    )
+    .bind(&key)
+    .fetch_one(&mut *gc)
+    .await
+    .unwrap();
+    let registered: bool = sqlx::query_scalar(
+      "SELECT EXISTS (SELECT 1 FROM files WHERE object_key = $1)",
+    )
+    .bind(&key)
+    .fetch_one(&mut *gc)
+    .await
+    .unwrap();
+    assert!(registered, "GC must take its registered-file branch");
+
+    // Same operations and lock order as delete_workspace_records, paused
+    // before commit so the GC DELETE really waits on the updated ledger row.
+    let mut deleting = db.begin().await.unwrap();
+    sqlx::query("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE")
+      .bind(workspace)
+      .fetch_one(&mut *deleting)
+      .await
+      .unwrap();
+    store::record_pending_file_upload_tx(&mut deleting, workspace, &key, 900)
+      .await
+      .unwrap();
+    sqlx::query("DELETE FROM workspaces WHERE id = $1")
+      .bind(workspace)
+      .execute(&mut *deleting)
+      .await
+      .unwrap();
+
+    let gc_key = key.clone();
+    let observed_expiry = observed.1;
+    let mut prune = tokio::spawn(async move {
+      let affected = crate::blob_gc::prune_registered_pending_upload_tx(
+        &mut gc,
+        &gc_key,
+        observed.0,
+        observed.1,
+      )
+      .await
+      .unwrap();
+      gc.commit().await.unwrap();
+      affected
+    });
+    assert!(tokio::time::timeout(Duration::from_millis(100), &mut prune).await.is_err());
+    deleting.commit().await.unwrap();
+    assert_eq!(prune.await.unwrap(), 0, "stale GC must not delete the refreshed ledger");
+    let current_expiry: DateTime<Utc> = sqlx::query_scalar(
+      "SELECT expires_at FROM pending_file_uploads WHERE object_key = $1",
+    )
+    .bind(&key)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(current_expiry > observed_expiry);
+    let remaining_files: i64 = sqlx::query_scalar("SELECT count(*) FROM files WHERE object_key = $1")
+      .bind(&key)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert_eq!(remaining_files, 0);
+    cleanup(&db, user, workspace).await;
+  }
+
+  /// Run explicitly with disposable DATABASE_URL and S3_* pointing at RustFS.
+  /// The test deliberately signs DELETE with the wrong secret: the object must
+  /// survive and remain discoverable after its `files` row has cascaded away.
+  #[tokio::test]
+  #[ignore = "requires disposable Postgres and S3-compatible object store"]
+  async fn failed_rustfs_delete_keeps_a_durable_gc_key() {
+    let Some((db, user, workspace)) = fixture().await else { return };
+    let storage = mica_infra::storage::S3Config::from_env().expect("set S3_* for RustFS");
+    crate::bucket::ensure_bucket(&storage).await;
+    let key = format!("workspaces/{workspace}/{}.png", "c".repeat(64));
+    let http = reqwest::Client::new();
+    let put = http
+      .put(storage.presign_put_server(&key).url)
+      .body("abc")
+      .send()
+      .await
+      .unwrap();
+    assert!(put.status().is_success(), "test PUT: {}", put.status());
+    file(&db, user, workspace, &key).await;
+
+    let keys = delete_workspace_records(&db, workspace, 900).await.unwrap();
+    let mut wrong_credentials = storage.clone();
+    wrong_credentials.secret_key = "definitely-not-the-rustfs-secret".into();
+    let rejected = http
+      .delete(wrong_credentials.presign_delete(&key))
+      .send()
+      .await
+      .unwrap();
+    assert_eq!(rejected.status().as_u16(), 403, "the test must exercise rejected DELETE");
+    delete_objects(&wrong_credentials, keys.iter().map(|key| (workspace, key.as_str()))).await;
+    let head = http.head(storage.presign_head_object(&key)).send().await.unwrap();
+    assert!(head.status().is_success(), "failed DELETE must leave object: {}", head.status());
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM pending_file_uploads WHERE object_key = $1")
+      .bind(&key)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert_eq!(pending, 1, "GC must be able to retry after S3 recovers");
+
+    let remove = http.delete(storage.presign_delete(&key)).send().await.unwrap();
+    assert!(remove.status().is_success(), "test cleanup: {}", remove.status());
+    cleanup(&db, user, workspace).await;
   }
 }

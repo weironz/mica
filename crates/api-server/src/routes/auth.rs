@@ -14,7 +14,7 @@ use axum::{
 };
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use mica_app_core::AppState;
+use mica_app_core::{AppState, store};
 use mica_infra::{ApiError, ApiResult, Environment};
 
 use super::email_verify;
@@ -435,7 +435,8 @@ pub struct DeleteAccountRequest {
 /// they OWN: every workspace they own (its documents, versions, files, shares,
 /// CRDT base + history all cascade on `workspace_id`), plus their API/refresh
 /// tokens and memberships. The user's right-to-be-forgotten path. Gated on the
-/// current password.
+/// current password. File object keys are durably staged for GC before the DB
+/// cascade; S3 deletion is attempted immediately after commit.
 pub async fn delete_account(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -452,7 +453,19 @@ pub async fn delete_account(
   .ok_or(ApiError::Unauthorized)?;
   verify_password(&payload.password, &user.password_hash)?;
 
-  delete_user_and_owned(&state.db, user_id).await?;
+  let keys = delete_user_and_owned(
+    &state.db,
+    user_id,
+    state.storage.as_ref().map_or(7 * 24 * 60 * 60, |s| s.presign_ttl_seconds),
+  )
+  .await?;
+  if let Some(storage) = &state.storage {
+    super::workspaces::delete_objects(
+      storage,
+      keys.iter().map(|(workspace_id, key)| (*workspace_id, key.as_str())),
+    )
+    .await;
+  }
   Ok(StatusCode::NO_CONTENT)
 }
 
@@ -465,9 +478,44 @@ pub async fn delete_account(
 /// final delete is a FK violation → the whole transaction rolls back and we
 /// return a readable 409 rather than silently stripping a co-owner's document
 /// history. Atomic: either the account and everything it owns is gone, or
-/// nothing is.
-pub async fn delete_user_and_owned(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
+/// nothing is. Pending-upload ledger rows deliberately have no workspace FK,
+/// so storage failures after commit remain recoverable by blob GC.
+pub async fn delete_user_and_owned(
+  db: &sqlx::PgPool,
+  user_id: Uuid,
+  presign_ttl_seconds: u64,
+) -> ApiResult<Vec<(Uuid, String)>> {
   let mut tx = db.begin().await?;
+  // Block a concurrent workspace create's owner FK check before taking the
+  // workspace snapshot. Each workspace row lock then blocks concurrent file
+  // INSERTs until the pending ledger and cascades have committed together.
+  let user_exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+  if user_exists.is_none() {
+    return Err(ApiError::NotFound);
+  }
+  let workspace_ids: Vec<Uuid> = sqlx::query_scalar(
+    "SELECT id FROM workspaces WHERE owner_id = $1 ORDER BY id FOR UPDATE",
+  )
+  .bind(user_id)
+  .fetch_all(&mut *tx)
+  .await?;
+  let keys: Vec<(Uuid, String)> = sqlx::query_as(
+    "SELECT workspace_id, object_key FROM files \
+     WHERE workspace_id = ANY($1) ORDER BY workspace_id, object_key",
+  )
+  .bind(&workspace_ids)
+  .fetch_all(&mut *tx)
+  .await?;
+  for (workspace_id, key) in &keys {
+    // Do not take the key advisory lock while holding a workspace row lock:
+    // `complete` takes key before its file INSERT's FK workspace lock. GC's
+    // registered-row cleanup uses a version-conditional DELETE so this UPSERT
+    // cannot be removed by a stale GC observation.
+    store::record_pending_file_upload_tx(&mut tx, *workspace_id, key, presign_ttl_seconds).await?;
+  }
   sqlx::query("DELETE FROM workspaces WHERE owner_id = $1")
     .bind(user_id)
     .execute(&mut *tx)
@@ -483,7 +531,7 @@ pub async fn delete_user_and_owned(db: &sqlx::PgPool, user_id: Uuid) -> ApiResul
   {
     Ok(_) => {
       tx.commit().await?;
-      Ok(())
+      Ok(keys)
     }
     Err(error) => {
       // tx is dropped here (rolled back) before we return.
@@ -1570,6 +1618,17 @@ mod refresh_pg {
       .execute(&db)
       .await
       .unwrap();
+    let owned_key = format!("workspaces/{ws}/{}.png", "d".repeat(64));
+    sqlx::query(
+      "INSERT INTO files(workspace_id,uploaded_by,object_key,original_name,mime_type,byte_size) \
+       VALUES($1,$2,$3,'x.png','image/png',3)",
+    )
+    .bind(ws)
+    .bind(owner)
+    .bind(&owned_key)
+    .execute(&db)
+    .await
+    .unwrap();
     let doc = Uuid::new_v4();
     sqlx::query(
       "INSERT INTO documents(id,workspace_id,root_block_id,created_by) VALUES($1,$2,'root',$3)",
@@ -1587,10 +1646,31 @@ mod refresh_pg {
       .execute(&db)
       .await
       .unwrap();
+    let owned_ws2 = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W2',$2)")
+      .bind(owned_ws2)
+      .bind(owner)
+      .execute(&db)
+      .await
+      .unwrap();
+    let owned_key2 = format!("workspaces/{owned_ws2}/{}.png", "e".repeat(64));
+    sqlx::query(
+      "INSERT INTO files(workspace_id,uploaded_by,object_key,original_name,mime_type,byte_size) \
+       VALUES($1,$2,$3,'y.png','image/png',3)",
+    )
+    .bind(owned_ws2)
+    .bind(owner)
+    .bind(&owned_key2)
+    .execute(&db)
+    .await
+    .unwrap();
 
-    delete_user_and_owned(&db, owner)
+    let deleted_keys = delete_user_and_owned(&db, owner, 900)
       .await
       .expect("deleting an account that owns only its own data must succeed");
+    assert_eq!(deleted_keys.len(), 2);
+    assert!(deleted_keys.contains(&(ws, owned_key.clone())));
+    assert!(deleted_keys.contains(&(owned_ws2, owned_key2.clone())));
 
     let count = |sql: &'static str, id: Uuid| {
       let db = db.clone();
@@ -1613,6 +1693,24 @@ mod refresh_pg {
       0,
       "content in an owned workspace must cascade"
     );
+    let pending_count: i64 = sqlx::query_scalar(
+      "SELECT count(*) FROM pending_file_uploads WHERE object_key = $1 AND workspace_id = $2",
+    )
+    .bind(&owned_key)
+    .bind(ws)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(pending_count, 1, "account deletion must leave S3 keys for GC");
+    let other_pending_count: i64 = sqlx::query_scalar(
+      "SELECT count(*) FROM pending_file_uploads WHERE object_key = $1 AND workspace_id = $2",
+    )
+    .bind(&owned_key2)
+    .bind(owned_ws2)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(other_pending_count, 1);
     // A different user and their workspace are untouched.
     assert_eq!(
       count("SELECT count(*) FROM users WHERE id=$1", bystander).await,
@@ -1625,6 +1723,16 @@ mod refresh_pg {
     );
 
     // Leave the table as we found it for repeat runs.
+    sqlx::query("DELETE FROM pending_file_uploads WHERE workspace_id=$1")
+      .bind(ws)
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query("DELETE FROM pending_file_uploads WHERE workspace_id=$1")
+      .bind(owned_ws2)
+      .execute(&db)
+      .await
+      .unwrap();
     sqlx::query("DELETE FROM workspaces WHERE owner_id=$1")
       .bind(bystander)
       .execute(&db)
@@ -1635,6 +1743,59 @@ mod refresh_pg {
       .execute(&db)
       .await
       .ok();
+  }
+
+  #[tokio::test]
+  async fn account_deletion_rolls_back_if_a_file_key_cannot_be_tracked() {
+    let Some(db) = pool().await else { return };
+    let owner = seed_user(&db).await;
+    let ws = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+      .bind(ws)
+      .bind(owner)
+      .execute(&db)
+      .await
+      .unwrap();
+    let legacy_key = format!("legacy/{}", Uuid::new_v4());
+    sqlx::query(
+      "INSERT INTO files(workspace_id,uploaded_by,object_key,original_name,mime_type,byte_size) \
+       VALUES($1,$2,$3,'x.png','image/png',3)",
+    )
+    .bind(ws)
+    .bind(owner)
+    .bind(&legacy_key)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    assert!(delete_user_and_owned(&db, owner, 900).await.is_err());
+    let user_count: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = $1")
+      .bind(owner)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    let workspace_count: i64 = sqlx::query_scalar("SELECT count(*) FROM workspaces WHERE id = $1")
+      .bind(ws)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    let file_count: i64 = sqlx::query_scalar("SELECT count(*) FROM files WHERE object_key = $1")
+      .bind(&legacy_key)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert_eq!((user_count, workspace_count, file_count), (1, 1, 1));
+
+    sqlx::query("DELETE FROM workspaces WHERE id = $1")
+      .bind(ws)
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+      .bind(owner)
+      .execute(&db)
+      .await
+      .unwrap();
   }
 
   #[tokio::test]

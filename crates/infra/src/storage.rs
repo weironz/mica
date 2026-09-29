@@ -151,9 +151,15 @@ impl S3Config {
   }
 
   /// Browser upload that must create this key with the declared SHA-256 bytes.
-  /// Both headers are signed: the holder cannot drop the write-once condition
-  /// or substitute bytes with a different checksum.
-  pub fn presign_put_if_absent(&self, key: &str, checksum_sha256: &str) -> PresignedUpload {
+  /// The browser supplies Content-Length for its fixed-size byte body. Signing
+  /// it alongside the checksum and write-once condition makes the object store
+  /// reject a body larger than the byte count accepted by the API.
+  pub fn presign_put_if_absent(
+    &self,
+    key: &str,
+    checksum_sha256: &str,
+    byte_size: i64,
+  ) -> PresignedUpload {
     let (base_url, host, canonical_uri) = self.object_location(key);
     let url = sign_presigned(
       &PresignRequest {
@@ -165,7 +171,7 @@ impl S3Config {
         access_key: &self.access_key,
         secret_key: &self.secret_key,
         expires_in: self.presign_ttl_seconds,
-        write_once_checksum_sha256: Some(checksum_sha256),
+        write_once: Some((checksum_sha256, byte_size)),
         head_checksum_mode: false,
       },
       Utc::now(),
@@ -233,6 +239,38 @@ impl S3Config {
     self.presign_bucket("HEAD", Utc::now())
   }
 
+  /// List only one bucket prefix, using S3 ListObjectsV2. Used by the explicit
+  /// legacy-orphan audit; normal GC never scans the whole bucket.
+  pub fn presign_list_objects_v2(
+    &self,
+    prefix: &str,
+    continuation_token: Option<&str>,
+    max_keys: u16,
+  ) -> String {
+    let (base_url, host, canonical_uri) = self.bucket_location();
+    let limit = max_keys.clamp(1, 1000).to_string();
+    let mut query = vec![("list-type", "2"), ("prefix", prefix), ("max-keys", limit.as_str())];
+    if let Some(token) = continuation_token {
+      query.push(("continuation-token", token));
+    }
+    sign_presigned_with_query(
+      &PresignRequest {
+        method: "GET",
+        base_url: &base_url,
+        host: &host,
+        canonical_uri: &canonical_uri,
+        region: &self.region,
+        access_key: &self.access_key,
+        secret_key: &self.secret_key,
+        expires_in: self.presign_ttl_seconds,
+        write_once: None,
+        head_checksum_mode: false,
+      },
+      Utc::now(),
+      &query,
+    )
+  }
+
   /// Presigned `HEAD` on ONE object — "is it there, and how big is it?".
   /// Server-side only: this process sends it, so it signs against
   /// [`server_endpoint`](Self::server_endpoint) like the other server-side
@@ -263,7 +301,7 @@ impl S3Config {
         access_key: &self.access_key,
         secret_key: &self.secret_key,
         expires_in: self.presign_ttl_seconds,
-        write_once_checksum_sha256: None,
+        write_once: None,
         head_checksum_mode: true,
       },
       Utc::now(),
@@ -365,7 +403,7 @@ impl S3Config {
         access_key: &self.access_key,
         secret_key: &self.secret_key,
         expires_in: self.presign_ttl_seconds,
-        write_once_checksum_sha256: None,
+        write_once: None,
         head_checksum_mode: false,
       },
       now,
@@ -383,7 +421,7 @@ impl S3Config {
       access_key: &self.access_key,
       secret_key: &self.secret_key,
       expires_in: self.presign_ttl_seconds,
-      write_once_checksum_sha256: None,
+      write_once: None,
       head_checksum_mode: false,
     };
     sign_presigned(&request, now)
@@ -405,26 +443,34 @@ struct PresignRequest<'a> {
   access_key: &'a str,
   secret_key: &'a str,
   expires_in: u64,
-  write_once_checksum_sha256: Option<&'a str>,
+  write_once: Option<(&'a str, i64)>,
   head_checksum_mode: bool,
 }
 
 /// Produce a presigned URL using AWS Signature Version 4 (query parameters,
 /// `UNSIGNED-PAYLOAD`, and an optional signed write-once precondition).
 fn sign_presigned(request: &PresignRequest, now: DateTime<Utc>) -> String {
+  sign_presigned_with_query(request, now, &[])
+}
+
+fn sign_presigned_with_query(
+  request: &PresignRequest,
+  now: DateTime<Utc>,
+  extra_query: &[(&str, &str)],
+) -> String {
   let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
   let date_stamp = now.format("%Y%m%d").to_string();
   let scope = format!("{date_stamp}/{}/s3/aws4_request", request.region);
   let credential = format!("{}/{scope}", request.access_key);
 
-  let signed_headers = if request.write_once_checksum_sha256.is_some() {
-    "host;if-none-match;x-amz-checksum-sha256"
+  let signed_headers = if request.write_once.is_some() {
+    "content-length;host;if-none-match;x-amz-checksum-sha256"
   } else if request.head_checksum_mode {
     "host;x-amz-checksum-mode"
   } else {
     "host"
   };
-  let mut params = [
+  let mut params = vec![
     (
       "X-Amz-Algorithm".to_string(),
       "AWS4-HMAC-SHA256".to_string(),
@@ -434,6 +480,7 @@ fn sign_presigned(request: &PresignRequest, now: DateTime<Utc>) -> String {
     ("X-Amz-Expires".to_string(), request.expires_in.to_string()),
     ("X-Amz-SignedHeaders".to_string(), signed_headers.to_string()),
   ];
+  params.extend(extra_query.iter().map(|(key, value)| (key.to_string(), value.to_string())));
   params.sort_by(|a, b| a.0.cmp(&b.0));
 
   let canonical_query = params
@@ -442,8 +489,11 @@ fn sign_presigned(request: &PresignRequest, now: DateTime<Utc>) -> String {
     .collect::<Vec<_>>()
     .join("&");
 
-  let canonical_headers = if let Some(checksum) = request.write_once_checksum_sha256 {
-    format!("host:{}\nif-none-match:*\nx-amz-checksum-sha256:{checksum}\n", request.host)
+  let canonical_headers = if let Some((checksum, byte_size)) = request.write_once {
+    format!(
+      "content-length:{byte_size}\nhost:{}\nif-none-match:*\nx-amz-checksum-sha256:{checksum}\n",
+      request.host
+    )
   } else if request.head_checksum_mode {
     format!("host:{}\nx-amz-checksum-mode:ENABLED\n", request.host)
   } else {
@@ -594,7 +644,7 @@ mod tests {
       access_key: "AKIAIOSFODNN7EXAMPLE",
       secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
       expires_in: 86400,
-      write_once_checksum_sha256: None,
+      write_once: None,
       head_checksum_mode: false,
     };
 
@@ -675,14 +725,26 @@ mod tests {
   #[test]
   fn browser_write_once_url_signs_the_precondition() {
     let config = test_config(true, None);
-    let upload = config.presign_put_if_absent("a/b.png", "AAAA");
+    let upload = config.presign_put_if_absent("a/b.png", "AAAA", 4);
     assert!(upload.url.contains(
-      "X-Amz-SignedHeaders=host%3Bif-none-match%3Bx-amz-checksum-sha256"
+      "X-Amz-SignedHeaders=content-length%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256"
     ));
     assert_ne!(upload.url, config.presign_put("a/b.png").url);
     assert!(config
       .presign_head_object_with_checksum("a/b.png")
       .contains("X-Amz-SignedHeaders=host%3Bx-amz-checksum-mode"));
+  }
+
+  #[test]
+  fn list_objects_v2_signs_the_prefix_and_opaque_cursor() {
+    let config = test_config(true, None);
+    let url = config.presign_list_objects_v2("workspaces/", Some("a+b/="), 500);
+    assert!(url.starts_with("http://localhost:9000/mica?"));
+    assert!(url.contains("continuation-token=a%2Bb%2F%3D"));
+    assert!(url.contains("list-type=2"));
+    assert!(url.contains("max-keys=500"));
+    assert!(url.contains("prefix=workspaces%2F"));
+    assert!(url.contains("X-Amz-SignedHeaders=host"));
   }
 
   /// Unset is the single-host case, where both routes are the same address.

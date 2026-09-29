@@ -34,7 +34,7 @@
   - **有效性已实测**：临时移除 `pg_advisory_xact_lock` 后测试失败，`left: 2, right: 1` —— 两个管理员，正是本项缺陷；恢复后 api-server 全套 209 项通过。
   - **测试自身的两处返工已修正**：(a) 初版断言「第二个请求被拒」，实际失败原因是该断言写错了（见上）；(b) 屏障断言 `assert!(blocked)` 让失败落在「没有串行点」而非「两个管理员」上，改为有界等待 + 观测，由真实不变量判定。
 
-### P1-02 预签名上传未绑定真实内容与大小 — 已缓解，PUT 前大小上限仍待收紧
+### P1-02 预签名上传未绑定真实内容与大小 — DONE
 
 - **文件 / 位置**：[files.rs:74-132](crates/api-server/src/routes/files.rs#L74-L132)、[storage.rs:365-388](crates/infra/src/storage.rs#L365-L388)、[store.rs:676-702](crates/app-core/src/store.rs#L676-L702)。
 - **问题 / 原因**：服务端依据客户端声明的 hash、字节数签发 object key；签名使用 `UNSIGNED-PAYLOAD`，只签 `host`，`complete` 也不读取对象校验。持有该工作区编辑权限者可用已知 key 写入不同字节覆盖既有附件，或 PUT 超大对象而不 complete，绕过元数据配额并留下难以回收的孤儿对象。攻击链基于静态代码，尚未对对象存储做破坏性复现。
@@ -54,8 +54,8 @@
 - **追加回归与实测（2026-09-30）**：`hex_sha256_becomes_the_s3_checksum_for_the_same_bytes` 固定了 hex→base64 摘要转换，`browser_write_once_url_signs_the_precondition` 固定签名头；针对本机实际运行的 RustFS rc.3，显式执行 `signed_conditional_put_refuses_replay`：漏签名头得 403、内容与 checksum 不符得 400、首次 PUT 成功、同一 URL 重放得 412，GET 仍是首次写入字节。浏览器预检也实测允许 `content-type,if-none-match,x-amz-checksum-sha256`。依据 [AWS 条件写入文档](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)与本机真栈结果，不把 AWS 语义未经检验地推定给 RustFS。
 - **完整登记与断线恢复**：`complete` 用要求 checksum 的 HEAD 对照对象 key 中的 SHA-256；没有登记行的新对象若缺 checksum 或摘要不符就拒绝。Dart 客户端遇到首次 PUT 已成功、重试得 412 时仍调用 `complete`，由服务端复核对象后完成登记。已有 `files` 行的重试先复核对象存在和长度，再幂等返回；旧对象没有 checksum 元数据时不阻断读取。服务端自行 PUT 也发送 SHA-256 checksum，避免重写同 key 时抹掉这项元数据。以上流程已用 RustFS 的 PUT/HEAD/replay 和客户端 412 回归测试覆盖。
 - **存量边界**：修复前已签发的旧 URL 不含写入条件，在其 TTL 到期前仍可覆盖旧对象；新服务端无法撤销对象存储已发出的旧 URL。上线后须等最长 TTL 窗口结束（当前开发配置为 7 天），才可认为全部客户端上传 URL 都受新规则约束。
-- **仍有大小缺口**：签名 SHA-256 证明对象字节与客户端申报的 hash 一致，却不能证明它与客户端申报的 `byte_size` 一致。编辑者可以先计算超大文件的真实 hash，向 presign 谎报很小的 `byte_size`，再在直连对象存储的 PUT 中上传大文件；`complete` 会拒绝登记，P2-12 最终会清理，但宽限期内的存储占用没有被预先限制。因此不能把“完成登记时严格校验”表述成“对象存储层已限制 PUT 大小”。后续需实测并采用存储端可执行的长度约束（如支持 `content-length-range` 的上传策略或等效网关），保留浏览器直传与实际尺寸回归。
-- **孤儿对象**：新签发 URL 与服务端写入路径已由 P2-12 的台账跟踪；升级前从未登记的历史对象不在台账内，仍需一次性核对清理。
+- **PUT 前长度约束（2026-09-30）**：预签名 URL 将申报的 `byte_size` 作为 `Content-Length` 一并签入 SigV4。浏览器以固定长度字节数组发 PUT 时自动生成该头，JS 无法伪造；RustFS 在接收前核验签名，不匹配便返回 403 且不留下对象。真 RustFS 测试覆盖声明 4 字节却上传 6 字节被拒、声明与实际一致后可完成登记；真实 Chromium 对同一预签名机制的验证也通过。CI 新增浏览器直传回归，防止将来改用不同 HTTP 实现时失去这个约束。新服务端仍需等待旧 URL 的最长有效期结束，才能消除旧签名带来的窗口。
+- **孤儿对象**：新签发 URL 与服务端写入路径已由 P2-12 台账跟踪；升级前从未登记的历史对象由一次性 `audit-legacy-orphans` 工具盘点和回填，见 P2-12。生产回填须在发布后执行，本次未发版。
 
 ### P1-03 外部图片导入的 DNS 检查与实际连接脱节 — DONE
 
@@ -320,7 +320,7 @@
   3. `scripts/release-check.sh` 新增一道**拒绝式**门槛：README.md 与 docs/deploy.md 里必须各有一个 `RELEASE=x.y.z`，且必须等于本次发布版本。选「拒绝」而非「提醒」的理由与文件里其它门槛一致 —— 「发版时记得改文档」正是这个文件存在的原因，没人记得。
 - **有效性已实测**：把 README 的 `RELEASE` 改回 `0.13.17` 后门槛拒绝（`README.md pins the quickstart to 0.13.17 but this release is 0.13.46`，退出码 1）；恢复后通过。`just release` 必经此脚本，所以漂移在发版那一刻被拦住，而不是等到有人装了才发现。
 
-### P2-12 未完成上传的孤儿对象无法回收 — DONE（新上传）
+### P2-12 未完成上传的孤儿对象无法回收 — DONE（新上传及历史盘点工具）
 
 - **文件 / 位置**：[blob_gc.rs:160-265](crates/api-server/src/blob_gc.rs#L160-L265)、[files.rs:71-142](crates/api-server/src/routes/files.rs#L71-L142)。
 - **问题 / 原因**：`sweep_workspace` **只遍历 `files` 表的行**（`SELECT … FROM files WHERE workspace_id = $1`），从不枚举桶里的对象。因此「PUT 了但从未调用 `complete`」的对象在库里没有行 —— 对 GC 永远不可见，既不计入配额也不被回收。P1-02 已约束新签发 URL 的尺寸、内容与重放；签名有效的首次 PUT 本来仍允许上传而不 complete。
@@ -329,7 +329,9 @@
 - **预计收益**：中；堵住一条只能靠人工清理的存储泄漏。
 - **实施方式（2026-09-30）**：采用比全桶枚举更收敛的 `pending_file_uploads` 台账（migration 0027）。浏览器 presign 在返回 URL 前记录 key 与到期时间；同 key 重签只延长截止时间。服务端图片导入、字节存储及跨工作区复制也在 PUT 前提交台账，所以 PUT 成功而数据库插入失败或进程中断时，GC 仍知道该对象。`complete`、presign、PUT→登记与 GC 共用对象键事务锁；GC 在锁内再次检查台账、`files` 行、URL 到期时间和对象的 Last-Modified，30 天宽限且 URL 到期后再多等一天，只删无登记行的对象。删除后才移除台账；dry-run 只报告不删，日志和指标记录候选数与字节。候选按 200 条分页，单轮最多 1 万键或 2 分钟。
 - **验证**：纯规则测试覆盖 URL 延期、对象新近写入及宽限期；真实 PostgreSQL + RustFS 测试覆盖 dry-run、逾期孤儿删除、有效 URL 留存、`complete` 未提交时 GC 阻塞并在提交后保留，以及重复 presign 延期。`cargo check`、Clippy 和相关单测通过。
-- **剩余边界**：升级前没有台账的孤儿对象不会被这条扫描发现，需单独做一次历史盘点与人工审阅后清理；`avatar/` 前缀不属于此工作区文件 GC。若最旧的 1 万候选长期网络失败，后续候选可能被反复扫描同一批而延迟回收，后续可加入失败退避或持久游标。生产对象至少 1 天的 Last-Modified 宽限由纯规则测试覆盖，真实对象测试无法回拨存储时钟，使用零对象年龄模拟该分支。
+- **历史对象（2026-09-30）**：新增显式命令 `mica-api-server audit-legacy-orphans`，只按 `workspaces/` 前缀分页列举对象、核对 `files` 与台账并输出 JSONL；默认纯只读。人工审阅后用 `--backfill` 将未跟踪的合法内容哈希键登记进台账，由既有 GC 在至少 30 天宽限及实际对象年龄核验后回收。未知键只报告不登记，`avatars/` 不在扫描范围；游标缺失/重复、XML 错误或响应过大均中止。真实 PostgreSQL + RustFS 测试覆盖分页、只读、无工作区行的历史键、回填和幂等。生产环境尚未执行该盘点或回填，因为本次未发版。
+- **删除路径（2026-09-30）**：删除工作区和账户前，先在同一事务把每个文件键登记到台账再级联删行；S3 删除失败、S3 未配置或进程在提交后崩溃，都不会再丢失定位对象的线索。测试验证多个工作区删除后保留台账、写台账失败时整体回滚，及并发延长台账时 GC 不误删新记录。
+- **剩余边界**：若最旧的 1 万候选长期网络失败，后续候选可能被反复扫描同一批而延迟回收，后续可加入失败退避或持久游标。生产对象至少 1 天的 Last-Modified 宽限由纯规则测试覆盖，真实对象测试无法回拨存储时钟，使用零对象年龄模拟该分支。
 
 ## P3 — 可顺手清理的负担
 

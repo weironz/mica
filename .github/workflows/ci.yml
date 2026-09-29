@@ -252,6 +252,16 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U mica"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      rustfs:
+        image: rustfs/rustfs:1.0.0-rc.3
+        env:
+          RUSTFS_VOLUMES: /data
+          RUSTFS_ADDRESS: 0.0.0.0:9000
+          RUSTFS_CONSOLE_ENABLE: "false"
+          RUSTFS_ACCESS_KEY: mica
+          RUSTFS_SECRET_KEY: mica-default-not-a-secret
+          RUSTFS_CORS_ALLOWED_ORIGINS: http://127.0.0.1:8090
+        ports: ['9000:9000']
 
     env:
       DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
@@ -337,6 +347,11 @@ jobs:
           JWT_SECRET=ci-only-not-a-secret \
           MICA_SEED_TEST_USER="${E2E_EMAIL}:${E2E_PASSWORD}" \
           MICA_APP_BASE_URL=http://127.0.0.1:8090 \
+          S3_ENDPOINT=http://127.0.0.1:9000 \
+          S3_INTERNAL_ENDPOINT=http://127.0.0.1:9000 \
+          S3_BUCKET=mica \
+          S3_ACCESS_KEY_ID=mica \
+          S3_SECRET_ACCESS_KEY=mica-default-not-a-secret \
             ./target/debug/mica-api-server > /tmp/api.log 2>&1 &
 
           up=""
@@ -364,6 +379,17 @@ jobs:
             echo "nginx cannot reach the api"; docker logs mica-web-e2e; exit 1
           fi
 
+      - name: Historical object audit against PostgreSQL and RustFS
+        env:
+          S3_ENDPOINT: http://127.0.0.1:9000
+          S3_INTERNAL_ENDPOINT: http://127.0.0.1:9000
+          S3_BUCKET: mica
+          S3_ACCESS_KEY_ID: mica
+          S3_SECRET_ACCESS_KEY: mica-default-not-a-secret
+        run: |
+          cargo test -p mica-api-server --bin mica-api-server \
+            historical_audit_is_dry_by_default_and_backfill_is_idempotent -- --ignored
+
       - name: Web end-to-end assertions
         working-directory: e2e
         run: |
@@ -372,6 +398,22 @@ jobs:
           npx playwright install --with-deps chromium
           node web_e2e.mjs --base http://127.0.0.1:8090 \
                            --email "$E2E_EMAIL" --password "$E2E_PASSWORD"
+
+      - name: Browser upload length is enforced by RustFS
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          node upload_length_e2e.mjs --api http://127.0.0.1:8080 \
+            --site http://127.0.0.1:8090 \
+            --email "$E2E_EMAIL" --password "$E2E_PASSWORD"
+
+      - name: Upload length failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upload-length-e2e-failure
+          path: e2e/upload-length-e2e-failure.png
+          if-no-files-found: ignore
 
       # This file uses real IndexedDB and Web Locks; Dart VM tests cannot run it.
       # The local Windows Flutter test server currently 404s its own CanvasKit
