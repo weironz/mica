@@ -914,7 +914,9 @@ mod workspace_delete_gc_pg {
       return None;
     };
     let db = PgPool::connect(&url).await.expect("test Postgres must be reachable");
-    mica_infra::run_migrations(&db).await.unwrap();
+    // CI applies the SQL files with psql before tests (without sqlx's
+    // bookkeeping table). Running sqlx migrations again would try to create
+    // `users` a second time; the shared test schema is already prepared.
     let user = Uuid::new_v4();
     let workspace = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'GC','x')")
