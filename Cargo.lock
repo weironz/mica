@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "mica-api-server"
-version = "0.13.46"
+version = "0.13.47"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "mica-cli"
-version = "0.13.46"
+version = "0.13.47"
 dependencies = [
  "anyhow",
  "chrono",
