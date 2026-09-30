@@ -337,7 +337,7 @@
 
 ### P3-01 `_selectedMarkdown` 状态与显示分支已不可达 — DONE
 
-- **文件 / 位置**：[main.dart:404](clients/mica_flutter/lib/main.dart#L404)、[main.dart:7060](clients/mica_flutter/lib/main.dart#L7060)、[main.dart:11824-11841](clients/mica_flutter/lib/main.dart#L11824-L11841)；[roadmap.md:49](docs/roadmap.md#L49) 已记录。
+- **文件 / 位置**：原 [main.dart](clients/mica_flutter/lib/main.dart) 中的字段、19 处清空与不可达 UI 分支均已删除；路线图条目已移入 [roadmap-done.md](docs/roadmap-done.md)。
 - **问题 / 原因**：当前字段仅被多处置为 `null`，没有非空赋值，关联的 `selectedMarkdown != null` UI 分支不可达；状态传递和约二十处清空赋值增加外壳复杂度。
 - **推荐修改方式**：在不恢复该功能的前提下，删除字段、传参和不可达显示分支；保留一条基础外壳回归。与路线图现有条目合并实施，不再创建重复待办。
 - **风险**：当前主要是维护与理解成本；清理时注意不要误删仍被其他选择态使用的布局。
