@@ -126,7 +126,7 @@ mkdir -p /data/mica && cd /data/mica
 # file with a new image — the compose file's `environment:` block is an explicit
 # ALLOWLIST, so a variable added by a newer image simply never reaches the
 # process, and the symptom is a setting that silently does nothing.
-RELEASE=0.13.47
+RELEASE=0.13.48
 
 # The two files the server needs. Pinned to a RELEASE TAG, not `main`: `main`
 # can be ahead of the newest release.
