@@ -8,9 +8,9 @@
 
 ### P0-01 并发 Yrs 写入可互相覆盖 — DONE
 
-- **文件 / 位置**：[sync.rs:341-346](crates/app-core/src/sync.rs#L341-L346)、[sync.rs:496-539](crates/app-core/src/sync.rs#L496-L539)、[store.rs:470-484](crates/app-core/src/store.rs#L470-L484)。
+- **文件 / 位置**：[sync.rs:341-346](../../crates/app-core/src/sync.rs#L341-L346)、[sync.rs:496-539](../../crates/app-core/src/sync.rs#L496-L539)、[store.rs:470-484](../../crates/app-core/src/store.rs#L470-L484)。
 - **问题 / 原因**：`push_update` 在事务中普通 `SELECT` 读取旧 base，离线折叠客户端更新，最后用 `ON CONFLICT DO UPDATE SET state = excluded.state` 写回整份状态。两个并发写者可能从同一旧 base 派生，后写者覆盖先写者；两条 `workspace_updates` 却都已提交。REST 路径锁 `documents` 行，而此路径在读取 base 前不取同一锁，混合写入也存在旧读覆盖窗口。这是高置信静态并发推演，尚需可控时序的数据库复现。
-- **推荐修改方式**：在读取 base 前，以统一锁顺序锁住对应 `documents` 行；在锁内完成折叠、stream 写入和 base 更新。增加两连接并发 `push`、REST 与 `push` 交错测试，断言最终 base、`base_rid` 和搜索投影都包含两次编辑。现有 [sync_pg.rs:639](crates/app-core/tests/sync_pg.rs#L639) 只测试首次 bootstrap 并发。
+- **推荐修改方式**：在读取 base 前，以统一锁顺序锁住对应 `documents` 行；在锁内完成折叠、stream 写入和 base 更新。增加两连接并发 `push`、REST 与 `push` 交错测试，断言最终 base、`base_rid` 和搜索投影都包含两次编辑。现有 [sync_pg.rs:639](../../crates/app-core/tests/sync_pg.rs#L639) 只测试首次 bootstrap 并发。
 - **风险**：当前可能静默丢失协作编辑；增加锁后须检查其他写路径的锁顺序与吞吐，避免死锁。
 - **预计收益**：高；阻断最严重的数据完整性缺口。
 - **已实施（2026-09-29）**：`push_update` 在事务开头、读 base **之前**取 `documents` 行锁（`store::lock_document_tx`，由私有改为 `pub(crate)` 并加注释说明两条写路径必须同序取锁）。锁序与 REST 路径一致（先 `documents` 后 `document_yrs_base`），因此二者互相串行而不会死锁。折叠、stream 插入、base 更新、`views.name` 投影、版本快照与修剪全部落在锁内同一事务。
@@ -23,7 +23,7 @@
 
 ### P1-01 空实例的并发首账号注册可产生多个管理员 — DONE
 
-- **文件 / 位置**：[auth.rs:149-172](crates/api-server/src/routes/auth.rs#L149-L172)、[0001_initial.sql:3-10](migrations/0001_initial.sql#L3-L10)、[0021_ai_settings_and_admin.sql:25](migrations/0021_ai_settings_and_admin.sql#L25)。
+- **文件 / 位置**：[auth.rs:149-172](../../crates/api-server/src/routes/auth.rs#L149-L172)、[0001_initial.sql:3-10](../../migrations/0001_initial.sql#L3-L10)、[0021_ai_settings_and_admin.sql:25](../../migrations/0021_ai_settings_and_admin.sql#L25)。
 - **问题 / 原因**：首账号特殊权限依赖 `INSERT … WHERE NOT EXISTS(users)`；PostgreSQL 默认 `READ COMMITTED` 下，两个并发注册语句可都看到空表并插入不同邮箱，数据库没有“仅一个首管理员”约束。
 - **推荐修改方式**：用数据库串行化锁或原子 bootstrap 状态约束首账号创建；增加空库双请求并发测试，同时验证注册默认关闭时第二个请求被拒。
 - **风险**：初装短窗口内可能意外授予第二个已验证管理员；修改首启流程需保留合法首账号体验。
@@ -36,7 +36,7 @@
 
 ### P1-02 预签名上传未绑定真实内容与大小 — DONE
 
-- **文件 / 位置**：[files.rs:74-132](crates/api-server/src/routes/files.rs#L74-L132)、[storage.rs:365-388](crates/infra/src/storage.rs#L365-L388)、[store.rs:676-702](crates/app-core/src/store.rs#L676-L702)。
+- **文件 / 位置**：[files.rs:74-132](../../crates/api-server/src/routes/files.rs#L74-L132)、[storage.rs:365-388](../../crates/infra/src/storage.rs#L365-L388)、[store.rs:676-702](../../crates/app-core/src/store.rs#L676-L702)。
 - **问题 / 原因**：服务端依据客户端声明的 hash、字节数签发 object key；签名使用 `UNSIGNED-PAYLOAD`，只签 `host`，`complete` 也不读取对象校验。持有该工作区编辑权限者可用已知 key 写入不同字节覆盖既有附件，或 PUT 超大对象而不 complete，绕过元数据配额并留下难以回收的孤儿对象。攻击链基于静态代码，尚未对对象存储做破坏性复现。
 - **推荐修改方式**：防止覆盖已存在 key，约束实际上传长度与内容摘要，complete 前校验对象存在、实际大小及摘要；以真实 S3 兼容存储做恶意大小、重复 key、缺失对象的集成测试。
 - **风险**：当前附件完整性与存储额度可能被工作区编辑者破坏；修复会改变客户端上传协议和去重语义，须兼容现存对象。
@@ -45,7 +45,7 @@
   1. **`complete` 不再相信客户端**。新增 `S3Config::presign_head_object`（服务端侧 HEAD），`complete` 在建行前 HEAD 一次并把结果交给纯函数 `uploaded_object_verdict(status, stored_len, declared_len)`：404 → 拒（对象从未上传）；非 2xx → Internal；**store 没报长度 → 拒（fail closed）**，不能把「无法验证」当成「已验证」；`stored != declared` → 拒。记账用的是 **store 报的实际长度**，不是客户端声明的数。
   2. **已存在的 key 不再签发新的上传 URL**。命中 `store::fetch_file_by_key` 时返回 `existing`（现有行 + 下载 URL）且**不含** `upload` 字段，挡住登记后再次向 API 索取 URL 的路径。
   3. **新签发的 PUT 同时绑定不可覆盖条件和真实 SHA-256**。`S3Config::presign_put_if_absent` 把 `If-None-Match: *` 与 `x-amz-checksum-sha256` 一起放进 SigV4 的签名头；客户端必须带这两个头，不能自行删除或调包。RustFS 在写入时拒绝同 key 覆盖，并按 checksum 校验实际字节。`UNSIGNED-PAYLOAD` 仍用于预签名流程，但已不能绕过这两个已签名条件。
-  4. **协议变更**：`PresignResponse` 由扁平的 `upload_url/method/expires_in/max_byte_size` 改为 `upload: Option<PresignUpload>` + `existing: Option<FileResponse>`，两者互斥且用 `skip_serializing_if` **省略**而非填 null；`upload` 还携带必须发送的 `if_none_match` 与 `checksum_sha256`。已同步 Dart 客户端 [`client.dart`](clients/mica_flutter/lib/api/client.dart) 的 `uploadImage` 与集成测试里的镜像实现。旧客户端与新服务端的上传协议不兼容，发版前需明确升级路径。
+  4. **协议变更**：`PresignResponse` 由扁平的 `upload_url/method/expires_in/max_byte_size` 改为 `upload: Option<PresignUpload>` + `existing: Option<FileResponse>`，两者互斥且用 `skip_serializing_if` **省略**而非填 null；`upload` 还携带必须发送的 `if_none_match` 与 `checksum_sha256`。已同步 Dart 客户端 [`client.dart`](../../clients/mica_flutter/lib/api/client.dart) 的 `uploadImage` 与集成测试里的镜像实现。旧客户端与新服务端的上传协议不兼容，发版前需明确升级路径。
 - **回归测试**：
   - 单测 `complete_requires_the_store_to_confirm_the_upload`（404 / 5xx / 尺寸两个方向 / **无长度 fail closed** / 0 字节是合法尺寸）。
   - 单测 `an_existing_object_yields_no_upload_url`（无 `upload`、返回现有行、序列化后 `upload` **缺席而非 null**）。测试注释里如实写明了它的局限：它证明不了「查询确实执行了」，所以补了下一条。
@@ -59,7 +59,7 @@
 
 ### P1-03 外部图片导入的 DNS 检查与实际连接脱节 — DONE
 
-- **文件 / 位置**：[files.rs:238-270](crates/api-server/src/routes/files.rs#L238-L270)。
+- **文件 / 位置**：[files.rs:238-270](../../crates/api-server/src/routes/files.rs#L238-L270)。
 - **问题 / 原因**：先解析并过滤私网 IP，之后 `reqwest` 再次解析域名；源码注释明确承认 DNS rebinding 可在两次解析之间切换目标。禁止重定向不能堵住这一条路径。
 - **推荐修改方式**：让实际连接固定使用已验证的公网 IP，同时维持原始 Host/TLS 主机名；覆盖解析变化、IPv4/IPv6、重定向测试。
 - **风险**：当前可被用于请求内网或云元数据地址；修复涉及 DNS 与 TLS 的结合，必须防止错误拒绝正常 CDN。
@@ -72,7 +72,7 @@
 
 ### P1-04 外部图片响应在限额检查前整体进入内存 — DONE
 
-- **文件 / 位置**：[files.rs:282-302](crates/api-server/src/routes/files.rs#L282-L302)。
+- **文件 / 位置**：[files.rs:282-302](../../crates/api-server/src/routes/files.rs#L282-L302)。
 - **问题 / 原因**：`response.bytes().await` 将完整远端响应装入内存，之后才调用 `ensure_storable`。远端持续返回大数据时，API 在判定超限前已承担内存消耗。
 - **推荐修改方式**：流式读取并在超过 `max_upload_bytes` 时停止；`Content-Length` 可作提前拒绝，但不能替代实际流量计数。
 - **风险**：当前恶意或异常图片源可推高 API 内存；修改流式处理需要保留 MIME、hash 和错误映射行为。
@@ -84,7 +84,7 @@
 
 ### P1-05 已连接文档 WebSocket 不实时执行撤权 — DONE
 
-- **文件 / 位置**：[ws.rs:98-112](crates/api-server/src/routes/ws.rs#L98-L112)、[ws.rs:351-451](crates/api-server/src/routes/ws.rs#L351-L451)、[ws.rs:684-701](crates/api-server/src/routes/ws.rs#L684-L701)。
+- **文件 / 位置**：[ws.rs:98-112](../../crates/api-server/src/routes/ws.rs#L98-L112)、[ws.rs:351-451](../../crates/api-server/src/routes/ws.rs#L351-L451)、[ws.rs:684-701](../../crates/api-server/src/routes/ws.rs#L684-L701)。
 - **问题 / 原因**：连接升级时检查工作区角色，之后沿连接复用缓存的 `permissions`。成员被移除或降为只读后，原连接仍可发送 `sync.push`；JWT 默认有效期内不会自然触发角色重查。
 - **推荐修改方式**：每次写入前重新校验成员权限，或在成员权限变更时主动关闭对应连接；补“连接建立→撤权→继续推送”的测试。
 - **风险**：当前撤权不能即时阻止写入；逐次查询会增加数据库读取，主动踢连接则增加房间生命周期逻辑。
@@ -97,53 +97,53 @@
 
 ### P1-06 编辑器旧 flush 完成会清除新输入的脏标记 — DONE
 
-- **文件 / 位置**：[controller.dart:499-524](clients/mica_flutter/lib/editor/controller.dart#L499-L524)。
+- **文件 / 位置**：[controller.dart:499-524](../../clients/mica_flutter/lib/editor/controller.dart#L499-L524)。
 - **问题 / 原因**：`_dirty` 只按 block ID 记录。A 批输入开始异步提交后，同块又输入 B；A 的 `whenComplete` 无条件 `removeAll(ids)`，可清掉 B 的标记，后续 debounce 看见空集合而跳过 B。
 - **推荐修改方式**：为每块记录修改代次，只清除本批已成功提交且代次未变化的脏状态；以可控 `Completer` 覆盖 A/B 交错。
 - **风险**：当前可丢失未持久化的新输入，随后被远端 reconcile 覆盖；改动需维护输入、flush 和切页时的代次一致性。
 - **预计收益**：高；防止快速编辑时的静默丢字。
 - **已实施（2026-09-29）**：`_dirty` 由 `Set<String>` 改为 `Map<String, int>`（block id → 该块最后一次被标记时的 `_editGen` 读数）。`flushPending`/`_sendNow` 发送前快照本批的 id→代次，完成后由 `_clearCommitted(batch)` 只清「代次未变」的项；往返期间又被编辑的块保留脏标记，下一次 debounce 会发出新文本。`_markDirty` 每块自增代次。顺带把 `flushPending` 里 `ops.isEmpty` 分支的 `_dirty.clear()` 也改成只清本批 —— 否则同一竞态会从另一条路径复现。
-- **回归测试**：[editor_pending_commit_test.dart](clients/mica_flutter/test/editor_pending_commit_test.dart) 的 `an edit made while a batch is in flight is still sent afterwards`（用 `Completer` 闸住 A 批，A 在飞时输入 B，断言 B 最终落盘），外加反向用例 `a batch that carries no NEW edit does not hold back a clean block`（未被触碰的块仍要正常清脏，否则每次 flush 都会重发）。
+- **回归测试**：[editor_pending_commit_test.dart](../../clients/mica_flutter/test/editor_pending_commit_test.dart) 的 `an edit made while a batch is in flight is still sent afterwards`（用 `Completer` 闸住 A 批，A 在飞时输入 B，断言 B 最终落盘），外加反向用例 `a batch that carries no NEW edit does not hold back a clean block`（未被触碰的块仍要正常清脏，否则每次 flush 都会重发）。
 - **有效性已实测**：把 `_clearCommitted` 还原为无条件删除后，测试失败 `Expected: 'AB' / Actual: 'A'` —— 新输入被旧 flush 的完成清掉；恢复修复后通过。
 
 ### P1-07 编辑器提交失败仍会清掉待保存内容 — DONE
 
-- **文件 / 位置**：[controller.dart:521-524](clients/mica_flutter/lib/editor/controller.dart#L521-L524)、[controller.dart:3288-3300](clients/mica_flutter/lib/editor/controller.dart#L3288-L3300)、[editor_op_fault_test.dart:19-41](clients/mica_flutter/test/editor_op_fault_test.dart#L19-L41)。
+- **文件 / 位置**：[controller.dart:521-524](../../clients/mica_flutter/lib/editor/controller.dart#L521-L524)、[controller.dart:3288-3300](../../clients/mica_flutter/lib/editor/controller.dart#L3288-L3300)、[editor_op_fault_test.dart:19-41](../../clients/mica_flutter/test/editor_op_fault_test.dart#L19-L41)。
 - **问题 / 原因**：`_send` 将 `onOps` 错误转为完成的 Future；`flushPending` 的 `whenComplete` 不区分结果即清脏。已有测试只数错误回调，不验证失败后的本地内容是否还可提交。
 - **推荐修改方式**：保留明确的提交成功/失败结果；失败时保留待提交修改、提供重试，并在切页/销毁前阻止静默丢弃；增加故障注入测试。
 - **风险**：当前 outbox/存储写失败后可能丢失输入；修复需避免无限重试和重复操作。
 - **预计收益**：高；让错误处理真正保护数据耐久性。
 - **已实施（2026-09-29）**：`_send` 的签名由 `Future<void>` 改为 **`Future<bool>`**（成功 `true`／失败 `false`，仍不重抛，否则会打断编辑热路径），`flushPending` 同样返回 `Future<bool>`。失败时**保留全部脏标记**并通过 `_scheduleRetry()` 自行重排一次 flush（退避 `400ms × 2^n`，上限 5 次 ≈ 12 秒）—— 上限是刻意的：后端真的挂了不该被无限重试，且 `onOpFault` 已经报告过。原先失败后什么都不排，用户停止输入（或切页）时那段编辑就永远留在内存里。
-- **回归测试**：[editor_pending_commit_test.dart](clients/mica_flutter/test/editor_pending_commit_test.dart) 的 `a failed commit keeps the edit pending and re-sends it without new input`。判据是**重试尝试次数**（`rec.batches.length` 增加），不是「最后发出的文本」—— 失败那次本身也携带了那个文本。
+- **回归测试**：[editor_pending_commit_test.dart](../../clients/mica_flutter/test/editor_pending_commit_test.dart) 的 `a failed commit keeps the edit pending and re-sends it without new input`。判据是**重试尝试次数**（`rec.batches.length` 增加），不是「最后发出的文本」—— 失败那次本身也携带了那个文本。
   - **有效性已实测**：还原为「无条件清脏、不排重试」后测试失败，5 秒内尝试次数停在 1（永不重试）；恢复修复后通过。
   - **测试自身的两次返工已修正**：(a) 初版用「手工再调一次 `flushPending`」证明，那恰好替旧代码掩盖了缺陷 —— 换成不碰文档、只等自动重试；(b) 第二版断言「重试批次 ≠ 首批」是错的，重试本就应重放同一批 op（服务端幂等）。
 
 ### P1-08 立即结构操作冲刷 dirty 文本时遗漏格式数据 — DONE
 
-- **文件 / 位置**：[controller.dart:266-310](clients/mica_flutter/lib/editor/controller.dart#L266-L310)、[controller.dart:3266-3285](clients/mica_flutter/lib/editor/controller.dart#L3266-L3285)。
+- **文件 / 位置**：[controller.dart:266-310](../../clients/mica_flutter/lib/editor/controller.dart#L266-L310)、[controller.dart:3266-3285](../../clients/mica_flutter/lib/editor/controller.dart#L3266-L3285)。
 - **问题 / 原因**：文字编辑会更新 `data.marks` 偏移，但 `_sendNow` 为其他脏块生成的 `update_block` 只含 `text`，然后清脏；与正常 `flushPending` 同时提交 `text`、`data` 的做法不一致。带链接/粗体的文本输入后，400ms 内触发另一块的结构操作即可留下错位 mark。
 - **推荐修改方式**：立即冲刷也提交对应 `data`；增加“编辑带 mark 的块→立即 Enter/插块→重载”的回归测试。
 - **风险**：当前可能持久化错误的格式或链接范围；改动应防止重复发送覆盖新的远端格式更新。
 - **预计收益**：高；结构操作前完整保存文本与格式。
 - **已实施（2026-09-29）**：`_sendNow` 为其他脏块生成的补丁 op 补上 `'data': node.data`，与 `flushPending` 一致。判据很直接：marks 是**描述该文本的偏移**，只发其中之一永远是错的（新文本 + 服务端旧 marks = 链接/粗体指向别的字符，且会被持久化）。同时 `_sendNow` 改用与 debounce 路径相同的「快照本批代次 + 成功后 `_clearCommitted`」规则，而不是无条件 `_dirty.clear()`；并且仍然合成**一个** `_send` 批次（pending 文本在前、结构操作在后）—— 那句「先冲刷文本以保证顺序」的保证就靠这一点。
-- **回归测试**：[editor_pending_commit_test.dart](clients/mica_flutter/test/editor_pending_commit_test.dart) 的 `an immediate structural send carries the dirty block's marks, not just its text`：编辑带粗体的块（marks 偏移随新文本重算）→ 在 debounce 窗口内对**另一块**做 `splitAtCaret()`（走 `_sendNow`）。
+- **回归测试**：[editor_pending_commit_test.dart](../../clients/mica_flutter/test/editor_pending_commit_test.dart) 的 `an immediate structural send carries the dirty block's marks, not just its text`：编辑带粗体的块（marks 偏移随新文本重算）→ 在 debounce 窗口内对**另一块**做 `splitAtCaret()`（走 `_sendNow`）。
   - **有效性已实测**：去掉 `data` 后测试失败（该块的 marks 为 `null`，即发出去的是纯文本）；恢复后通过。另外用一次性探针确认过成功路径发出的确实是 `data: {marks: [{start: 0, end: 5, type: bold}]}` —— 偏移已随 `Xbold` 正确重算。
 
 ### P1-09 reconcile 保留脏文本却覆盖同一块的本地格式 — DONE
 
-- **文件 / 位置**：[controller.dart:92-120](clients/mica_flutter/lib/editor/controller.dart#L92-L120)、[cloud_reconcile_test.dart:36-54](clients/mica_flutter/test/cloud_reconcile_test.dart#L36-L54)。
+- **文件 / 位置**：[controller.dart:92-120](../../clients/mica_flutter/lib/editor/controller.dart#L92-L120)、[cloud_reconcile_test.dart:36-54](../../clients/mica_flutter/test/cloud_reconcile_test.dart#L36-L54)。
 - **问题 / 原因**：本地块为 dirty 时，`reconcile()` 保留 `cur.text`，但无条件取远端 `src.data`。文字编辑已调整的 marks 可被旧快照的偏移覆盖，稍后再把“新文本+旧 marks”提交。现有测试仅覆盖无格式文本。
 - **推荐修改方式**：dirty 时把文本与对应格式数据视为同一版本；明确远端非格式字段合并规则，补粗体、链接和远端旧快照交错测试。
 - **风险**：当前格式/链接可错位；过度保护整个 `data` 也可能吞掉远端属性变更，合并粒度须先定清楚。
 - **预计收益**：高；保住富文本编辑的一致性。
 - **已实施（2026-09-29）**：dirty 块走「本地版本」——本地 `text` 与本地 `marks` 一起保留。做法是覆盖 `data` 前先取出**本地** `data['marks']`，合入远端非格式字段后再把本地 marks 放回（本地本来没有 marks 就 `remove('marks')`，不能用远端的补上）。粒度是刻意的：只保护 marks，远端其他属性变更（如 kind、level）仍然合并，不会因为一个块的文字还在飞就整份 `data` 都不采纳。
-- **回归测试**：[editor_pending_commit_test.dart](clients/mica_flutter/test/editor_pending_commit_test.dart) 的 `reconcile keeps a dirty block's LOCAL marks alongside its local text`：本地把 `hi` 改成 `hi!`（marks 随之重算）后，收到携带**旧文本 + 旧偏移**的服务端快照。
+- **回归测试**：[editor_pending_commit_test.dart](../../clients/mica_flutter/test/editor_pending_commit_test.dart) 的 `reconcile keeps a dirty block's LOCAL marks alongside its local text`：本地把 `hi` 改成 `hi!`（marks 随之重算）后，收到携带**旧文本 + 旧偏移**的服务端快照。
   - **有效性已实测**：还原为「无条件取远端 `data`」后测试失败，`Expected: contains 'start: 0' / Actual: '[{start: 1, end: 2, type: bold}]'` —— 正是错位 mark；恢复后通过。
 - **附带清理**：初版实现里有一行 `cur.text = cur.text;` 自赋值（无意义，仅注释用），已改为注释说明。
 
 ### P1-10 旧账号的异步会话刷新可在退出后复活 — DONE
 
-- **文件 / 位置**：[main.dart:1054-1063](clients/mica_flutter/lib/main.dart#L1054-L1063)、[session_refresher.dart:43-50](clients/mica_flutter/lib/api/session_refresher.dart#L43-L50)。
+- **文件 / 位置**：[main.dart:1054-1063](../../clients/mica_flutter/lib/main.dart#L1054-L1063)、[session_refresher.dart:43-50](../../clients/mica_flutter/lib/api/session_refresher.dart#L43-L50)。
 - **问题 / 原因**：刷新发起后若用户退出、切换服务器或登录另一账号，完成时只检查 `mounted` 就覆盖 `_session`；`_persistSession` 按当前 `_cloudOrigin` 保存旧凭据。全局单飞刷新器还可能让新会话复用旧会话的结果。
 - **推荐修改方式**：刷新结果绑定发起时的用户、服务器、refresh token 与会话代次；身份变化时废弃旧结果，并用受控 Future 测试退出/切服交错。
 - **风险**：当前可能退出后重新登录旧账号或混淆不同服务器身份；改动须避免使合法的并发 401 刷新重复执行。
@@ -157,23 +157,23 @@
 
 ### P1-11 旧目录响应可覆盖新树并使 ETag 锁定陈旧内容 — DONE
 
-- **文件 / 位置**：[main.dart:6219-6229](clients/mica_flutter/lib/main.dart#L6219-L6229)、[main.dart:6245-6277](clients/mica_flutter/lib/main.dart#L6245-L6277)、[main.dart:6295-6315](clients/mica_flutter/lib/main.dart#L6295-L6315)。
+- **文件 / 位置**：[main.dart:6219-6229](../../clients/mica_flutter/lib/main.dart#L6219-L6229)、[main.dart:6245-6277](../../clients/mica_flutter/lib/main.dart#L6245-L6277)、[main.dart:6295-6315](../../clients/mica_flutter/lib/main.dart#L6295-L6315)。
 - **问题 / 原因**：目录请求收到 200 后先存 ETag，等待正文 bootstrap 才提交树；期间另一轮目录刷新可提交新树和新 ETag，旧请求晚到后再覆盖树与离线镜像。后续 304 可能使陈旧树长期保留。
 - **推荐修改方式**：按工作区使用请求代次/服务端版本，对树、ETag 和镜像实行一次性提交；加入响应乱序与 304 后续请求测试。
 - **风险**：当前目录可回退、跨重启保留陈旧状态；修复需兼顾离线镜像与树事件的顺序。
 - **预计收益**：高；避免列表与缓存互相矛盾。
 - **已实施（2026-09-30）**：
-  1. **按工作区的请求代次**（新增 [`tree_request_seq.dart`](clients/mica_flutter/lib/api/tree_request_seq.dart)）：两条取树路径（后台铃声 `_refreshTreeFromServer`、工作区加载 `_loadSelectedWorkspaceViews`）在发请求前 `claim`，响应回来后 `isCurrent` 不成立就直接丢弃。**「最后到的响应」并不等于「最新的响应」** —— 旧请求可能后到，而它带着**旧的 ETag**；ETag 会被持久化，于是损害跨重启：下次冷启动发这个 ETag、拿到 304、继续用一个服务端已经走过去的树（症状是「树看着完全正常，但某个页面显示不存在的红字」）。
+  1. **按工作区的请求代次**（新增 [`tree_request_seq.dart`](../../clients/mica_flutter/lib/api/tree_request_seq.dart)）：两条取树路径（后台铃声 `_refreshTreeFromServer`、工作区加载 `_loadSelectedWorkspaceViews`）在发请求前 `claim`，响应回来后 `isCurrent` 不成立就直接丢弃。**「最后到的响应」并不等于「最新的响应」** —— 旧请求可能后到，而它带着**旧的 ETag**；ETag 会被持久化，于是损害跨重启：下次冷启动发这个 ETag、拿到 304、继续用一个服务端已经走过去的树（症状是「树看着完全正常，但某个页面显示不存在的红字」）。
   2. **树与 ETag 一次性提交**：新增 `_commitTree(workspaceId, views, etag)`，把「写 ETag」和「写树」合成一步。它保的那条不变量写在代码注释里 —— **存了 ETag 就意味着镜像里已经有那棵树**；两个调用点原来各写各的，正是「A 响应的树配上 B 响应的 ETag」的来源。304 不带 ETag 时不推进标签（旧标签仍然正确地描述着手上这棵树）。
   3. **顺带**：加载路径里那个 `setState` 原本重复写了一遍树（`_commitTree` 已写），已收窄为只管选中项与正文。
 - **`TreeRequestSeq` 性质**：**按工作区隔离**——取 B 的树不能作废 A 的在途请求（它们各自都是自己那个问题的正确答案；用全局计数器会无故丢掉一个）。
-- **回归测试**：[`tree_request_seq_test.dart`](clients/mica_flutter/test/tree_request_seq_test.dart) 5 条：新请求开始后旧请求不再当前、**工作区之间不互相作废**、多次重叠只认最新、**未碰过的工作区首次 claim 必须算当前**（差一错误会让首次加载静默什么都不做）、`forget`/`clear` 之后编号继续增长（被遗忘的旧 claim 不会因遗忘而重新变成当前）。
+- **回归测试**：[`tree_request_seq_test.dart`](../../clients/mica_flutter/test/tree_request_seq_test.dart) 5 条：新请求开始后旧请求不再当前、**工作区之间不互相作废**、多次重叠只认最新、**未碰过的工作区首次 claim 必须算当前**（差一错误会让首次加载静默什么都不做）、`forget`/`clear` 之后编号继续增长（被遗忘的旧 claim 不会因遗忘而重新变成当前）。
   - **有效性已实测**：把 `isCurrent` 弱化成「总是返回 true」（即旧代码的 last-writer-wins）后，两条用例失败（`Expected: false / Actual: <true>`）；恢复后 5 项全过。
   - 测试写明它测的是**规则**：把「两个响应乱序到达」对着真实的 HTTP 客户端与 socket 摆出来是可行的，但「指望这个顺序在生产环境里恰好发生」正是被修掉的东西。
 
 ### P1-12 Web IndexedDB 写锁早于写队列完成释放 — DONE
 
-- **文件 / 位置**：[web_idb_doc_store.dart:359-390](clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L359-L390)、[web_idb_doc_store.dart:455-464](clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L455-L464)、[web_idb_doc_store.dart:561-569](clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L561-L569)、[web_idb_doc_store_test.dart:46-55](clients/mica_flutter/test/web_idb_doc_store_test.dart#L46-L55)。
+- **文件 / 位置**：[web_idb_doc_store.dart:359-390](../../clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L359-L390)、[web_idb_doc_store.dart:455-464](../../clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L455-L464)、[web_idb_doc_store.dart:561-569](../../clients/mica_flutter/lib/cloud/web_idb_doc_store.dart#L561-L569)、[web_idb_doc_store_test.dart:46-55](../../clients/mica_flutter/test/web_idb_doc_store_test.dart#L46-L55)。
 - **问题 / 原因**：`dispose()` 先释放单写者 Web Lock，之后才等 `_tail` 队列完成；新实例可抢锁、读到旧 outbox，再以整份 rows 覆写仍在提交的旧实例。现有重开测试总先 flush，避开这个交接时序。
 - **推荐修改方式**：在队列 settled 后才释放锁；加入延迟 IndexedDB 事务的跨实例交接测试。
 - **风险**：当前 Web 离线编辑可能在切页/重开时被覆盖；修复会延长锁占用，需处理失败队列的释放兜底。
@@ -184,7 +184,7 @@
 
 ### P1-13 追更判 gap 与拉取更新之间允许并发裁剪 — DONE
 
-- **文件 / 位置**：[sync.rs:589-603](crates/app-core/src/sync.rs#L589-L603)、[sync.rs:699-728](crates/app-core/src/sync.rs#L699-L728)。
+- **文件 / 位置**：[sync.rs:589-603](../../crates/app-core/src/sync.rs#L589-L603)、[sync.rs:699-728](../../crates/app-core/src/sync.rs#L699-L728)。
 - **问题 / 原因**：`catch_up_document` 分三次读取最小 rid、base rid、updates；并发 prune 可在第一次 gap 判断后删掉旧更新，拉取时只剩更高 rid。客户端可能前跳 cursor，遗漏被删的更新。此项为高可信时序风险，需屏障复现确认客户端行为。
 - **推荐修改方式**：在一致快照中判断并读取，或拉取后再次核对缺口、必要时返回 base 差分；补 prune 与 pull 交错测试。
 - **风险**：当前离线追更可能不完整；修复可能增加事务持续时间或全量回退次数。
@@ -196,7 +196,7 @@
 
 ### P1-14 全站 1 GiB 请求体上限让匿名端点承担导入成本 — DONE
 
-- **文件 / 位置**：[nginx.conf:15](deploy/nginx.conf#L15)、[nginx.conf:102-112](deploy/nginx.conf#L102-L112)、[routes/mod.rs:249-250](crates/api-server/src/routes/mod.rs#L249-L250)。
+- **文件 / 位置**：[nginx.conf:15](../../deploy/nginx.conf#L15)、[nginx.conf:102-112](../../deploy/nginx.conf#L102-L112)、[routes/mod.rs:249-250](../../crates/api-server/src/routes/mod.rs#L249-L250)。
 - **问题 / 原因**：为 ZIP 导入设置的 `client_max_body_size 1g` 放在 `http` 全局；登录等所有公开路径也继承 1 GiB 上限。Nginx 的 `proxy_request_buffering` 默认开启，完整请求体可在进入应用的 2/8 MiB 限制前被读取和缓冲。依据：[Nginx 请求体限制](https://nginx.org/en/docs/http/ngx_http_core_module.html#client_max_body_size)、[代理请求缓冲](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_request_buffering)。这是资源耗尽风险，未做流量攻击复现。
 - **推荐修改方式**：全局设小上限，仅给 `/api/workspaces/import` 精确路径开放 1 GiB，并保留应用端限制；增加 Nginx 配置测试验证匿名路径返回 413、合法 ZIP 仍可上传。
 - **风险**：当前无认证请求可占用大量入口层缓冲/磁盘；路径写错会阻断合法导入。
@@ -206,7 +206,7 @@
   2. 新增 `location = /api/workspaces/import`，**精确匹配**（`=`），单独放开 `1g`。必须是精确匹配：前缀匹配会让 `/api/workspaces/` 下一切继承它，等于把刚关上的匿名面重新打开。
   3. 该 location 额外设 `proxy_request_buffering off`：导入体本来就要落成临时文件，在 nginx 先缓冲一遍等于把 1 GiB 写两遍盘。上限仍然生效。
   4. **路径必须与 `routes/mod.rs` 保持同步**，两处各写 1 GiB；漂移的症状就是「大 ZIP 导入静默失败」。
-- **回归测试**：新增 [`scripts/nginx-limit-check.sh`](scripts/nginx-limit-check.sh)，沿用本仓库 `scripts/` 里「断言而非提醒」的形态（`release-check.sh` 同源）。它**按块解析配置、断言大额度可以出现在哪**，而不是 grep 一个字符串 —— 后者会连合法的那个 `1g` 一起匹配到，正好放过本项描述的形状。三项断言：http 作用域上限 ≤ 1m、导入路由存在且精确匹配并放开 ≥ 64 MiB、两个文件里的路径一致。
+- **回归测试**：新增 [`scripts/nginx-limit-check.sh`](../../scripts/nginx-limit-check.sh)，沿用本仓库 `scripts/` 里「断言而非提醒」的形态（`release-check.sh` 同源）。它**按块解析配置、断言大额度可以出现在哪**，而不是 grep 一个字符串 —— 后者会连合法的那个 `1g` 一起匹配到，正好放过本项描述的形状。三项断言：http 作用域上限 ≤ 1m、导入路由存在且精确匹配并放开 ≥ 64 MiB、两个文件里的路径一致。
   - **有效性已实测（两个方向）**：把 `1g` 挪回 `http` 全局 → 拒绝（`the http-scope body cap is '1g' … must be <= 1m`，退出码 1）；把导入 location 改成前缀匹配 → 拒绝（`no exact-match location … block`，退出码 1）；恢复后通过。
   - 顺手把提示语里的非 ASCII 省略号换成 ASCII（Windows 控制台实测出现乱码 `��import��`），并删掉了一个未跟踪的空目录 `deploy/nginx.conf;C`。
 
@@ -214,7 +214,7 @@
 
 ### P2-01 已删除账号的旧 JWT 仍能调用付费 AI — DONE
 
-- **文件 / 位置**：[auth.rs:712](crates/api-server/src/routes/auth.rs#L712)、[ai.rs:84-110](crates/api-server/src/routes/ai.rs#L84-L110)、[ai_ws.rs:37-46](crates/api-server/src/routes/ai_ws.rs#L37-L46)。
+- **文件 / 位置**：[auth.rs:712](../../crates/api-server/src/routes/auth.rs#L712)、[ai.rs:84-110](../../crates/api-server/src/routes/ai.rs#L84-L110)、[ai_ws.rs:37-46](../../crates/api-server/src/routes/ai_ws.rs#L37-L46)。
 - **问题 / 原因**：删除账号只撤销 refresh token；AI REST/WS 入口校验 JWT，却不确认 `users` 行仍存在。旧 access token 在默认约 1 小时有效期内仍可消耗实例的 AI 配额。
 - **推荐修改方式**：AI 入口校验用户仍有效，或统一引入可撤销 token 版本；增加删户后复用旧 JWT 的 REST/WS 测试。
 - **风险**：当前有短时付费资源滥用窗口；修复将增加一次身份查询或 token 状态维护。
@@ -228,7 +228,7 @@
 
 ### P2-02 并发搜索索引刷新可用旧结果覆盖新结果 — DONE
 
-- **文件 / 位置**：[search.rs:107-156](crates/app-core/src/search.rs#L107-L156)。
+- **文件 / 位置**：[search.rs:107-156](../../crates/app-core/src/search.rs#L107-L156)。
 - **问题 / 原因**：`BodyIndex::refresh` 在读锁下取 cursor，放锁查 DB，再拿写锁。旧查询若比新查询晚完成，仍可把旧文档内容写进 `docs`；只阻止 `seen` 回退不能阻止内容回退。这是需并发复现的时序风险。
 - **推荐修改方式**：串行化 refresh，或对每行携带单调版本/`updated_at`，只接受较新的内容；补可控的查询完成顺序测试。
 - **风险**：当前可能长期漏搜最新文本；串行化会影响刷新并发度。
@@ -237,7 +237,7 @@
 
 ### P2-03 远端光标每帧创建文本布局且不释放 — DONE
 
-- **文件 / 位置**：[render.dart:3234-3265](clients/mica_flutter/lib/editor/render.dart#L3234-L3265)。
+- **文件 / 位置**：[render.dart:3234-3265](../../clients/mica_flutter/lib/editor/render.dart#L3234-L3265)。
 - **问题 / 原因**：每次 paint 为每位协作者创建、layout `TextPainter`，未调用 `dispose()`，屏外光标仍走完整绘制准备；其他绘制辅助已有显式释放的先例。
 - **推荐修改方式**：先按可视区域裁剪，再用 `try/finally` 释放布局资源；补多人长文档的重复 repaint 基准测试。
 - **风险**：当前长时间协作可能增加原生文本资源与掉帧；裁剪边界处理错误可能藏掉靠近视口边缘的光标。
@@ -246,7 +246,7 @@
 
 ### P2-04 资料刷新可把旧账号资料写入新会话 — DONE（由 P1-10 覆盖）
 
-- **文件 / 位置**：[main.dart:1033-1045](clients/mica_flutter/lib/main.dart#L1033-L1045)。
+- **文件 / 位置**：[main.dart:1033-1045](../../clients/mica_flutter/lib/main.dart#L1033-L1045)。
 - **问题 / 原因**：资料 HTTP 请求期间切换账号，响应回来只确认当前 session 非空，不确认仍为发起请求的用户与服务器；旧 `User` 可能被持久化进新会话。
 - **推荐修改方式**：与 P1-10 共用会话代次校验；加入资料请求等待期间切号测试。
 - **风险**：当前可显示错误头像/名称并污染缓存；修复需避免丢掉正常的资料更新。
@@ -255,7 +255,7 @@
 
 ### P2-05 目录刷新网络错误可从 `unawaited` Future 逸出 — DONE
 
-- **文件 / 位置**：[main.dart:1592](clients/mica_flutter/lib/main.dart#L1592)、[main.dart:1602-1637](clients/mica_flutter/lib/main.dart#L1602-L1637)。
+- **文件 / 位置**：[main.dart:1592](../../clients/mica_flutter/lib/main.dart#L1592)、[main.dart:1602-1637](../../clients/mica_flutter/lib/main.dart#L1602-L1637)。
 - **问题 / 原因**：WebSocket 事件触发的目录 HTTP 刷新未等待 Future，内部只捕获 `ApiException`；断网产生的客户端/Socket 异常可成为未捕获异步错误，与“瞬态错误被吞掉”的注释不一致。
 - **推荐修改方式**：统一捕获网络异常并留下低噪音诊断；测试 WS 通知后 REST 失败。
 - **风险**：当前正常离线场景可污染 crash log；过宽 catch 可能掩盖程序错误，建议只吞明确的网络类别。
@@ -264,7 +264,7 @@
 
 ### P2-06 目录 WebSocket 未观察握手 Future 的失败 — DONE
 
-- **文件 / 位置**：[views_events.dart:84-102](clients/mica_flutter/lib/api/views_events.dart#L84-L102)。
+- **文件 / 位置**：[views_events.dart:84-102](../../clients/mica_flutter/lib/api/views_events.dart#L84-L102)。
 - **问题 / 原因**：创建 `WebSocketChannel` 后只监听 stream，未观察 `channel.ready` 的异常。同仓库其他 WS 连接路径已专门 `ready.catchError`，因此这里在拒绝握手时可能抛出未捕获 zone 错误。
 - **推荐修改方式**：观察并处理 `ready` 失败，按原重连策略回退；加入服务端拒绝握手测试。
 - **风险**：当前断线诊断可能被额外未捕获异常污染；修复应避免 `ready` 与 `onDone` 重复安排重连。
@@ -273,7 +273,7 @@
 
 ### P2-07 部署验证脚本记录状态码，却不据此失败 — DONE
 
-- **文件 / 位置**：[verify-prod.sh:17-23](scripts/verify-prod.sh#L17-L23)。
+- **文件 / 位置**：[verify-prod.sh:17-23](../../scripts/verify-prod.sh#L17-L23)。
 - **问题 / 原因**：脚本只强制检查 `/api/ready` 的版本和 bundle 下载；`/mcp`、`/` 的 HTTP 状态码只是 `echo`，`curl -s` 遇 4xx/5xx 也不让脚本失败。于是部署流程可在首页失效时仍显示验证成功。
 - **推荐修改方式**：为首页断言 200 且内容确为 Flutter 入口；部署后对版本所改功能做独立冒烟，不能只看 bundle 可下载。`/mcp` 实际被 SPA fallback 返回首页，MCP 是本机 `mica-cli mcp` 的 stdio 代理，故删掉误导性的 `/mcp` HTTP 探针。
 - **风险**：当前可能漏报局部生产故障；首页断言需接受正常构建产物的入口结构。
@@ -282,7 +282,7 @@
 
 ### P2-08 三个 Windows 云端集成用例未进持续集成 — DONE
 
-- **文件 / 位置**：[flutter-integration.yml:13-18](.github/workflows/flutter-integration.yml#L13-L18)、[flutter-integration.yml:135-141](.github/workflows/flutter-integration.yml#L135-L141)；对应 `integration_test/migration_sync_test.dart`、`offline_image_reconcile_test.dart`、`page_switch_fidelity_test.dart`。
+- **文件 / 位置**：[flutter-integration.yml:13-18](../../.github/workflows/flutter-integration.yml#L13-L18)、[flutter-integration.yml:135-141](../../.github/workflows/flutter-integration.yml#L135-L141)；对应 `integration_test/migration_sync_test.dart`、`offline_image_reconcile_test.dart`、`page_switch_fidelity_test.dart`。
 - **问题 / 原因**：工作流明确排除需要真实对象存储的三个用例，只运行无需 S3 的 `cloud_sync_test`。因此图片上传/重连、迁移和切页的 Windows 真链路变更不能由 CI 护航。这是已知基础设施取舍，不是“所有集成测试均已覆盖”。
 - **推荐修改方式**：在支持 Linux 容器的 runner 增加可覆盖相同客户端链路的测试，或给 Windows runner 提供受控 S3 兼容服务；先确保失败不会静默跳过。
 - **风险**：当前发布前存在这三条链路的测试盲区；新增栈会增加 CI 时间和维护成本。
@@ -291,7 +291,7 @@
 
 ### P2-09 浏览器剪贴板实际链路缺持久 E2E 回归 — DONE
 
-- **文件 / 位置**：[copy_markdown_test.dart:39-73](clients/mica_flutter/test/copy_markdown_test.dart#L39-L73)、[web_e2e.mjs](e2e/web_e2e.mjs)。
+- **文件 / 位置**：[copy_markdown_test.dart:39-73](../../clients/mica_flutter/test/copy_markdown_test.dart#L39-L73)、[web_e2e.mjs](../../e2e/web_e2e.mjs)。
 - **问题 / 原因**：Dart 单测验证复制文本生成器，但 Web E2E 没有浏览器真实 Ctrl+A/C、`ClipboardItem` 与读回 `text/plain` 的断言；本次代码围栏缺陷只能靠一次性手工浏览器冒烟覆盖 UI 到系统剪贴板的组合路径。
 - **推荐修改方式**：在固定小文档的浏览器用例里，授予测试页 clipboard 权限，分别验证“单个代码块纯文本”和“跨块 Markdown”，同时校验 CRLF/LF 归一化；保存失败截图。
 - **风险**：当前控件、键盘与 Web 剪贴板 API 的接线可在单测全绿时回归；浏览器权限模拟可能带来少量测试脆弱性。
@@ -300,7 +300,7 @@
 
 ### P2-10 两份 Compose 的 API 环境变量允许清单已经漂移 — DONE
 
-- **文件 / 位置**：[docker-compose.yml:177-241](deploy/docker-compose.yml#L177-L241)、[docker-compose.single.yml:110-150](deploy/docker-compose.single.yml#L110-L150)、[.env.prod.example:79-99](deploy/.env.prod.example#L79-L99)。
+- **文件 / 位置**：[docker-compose.yml:177-241](../../deploy/docker-compose.yml#L177-L241)、[docker-compose.single.yml:110-150](../../deploy/docker-compose.single.yml#L110-L150)、[.env.prod.example:79-99](../../deploy/.env.prod.example#L79-L99)。
 - **问题 / 原因**：Traefik 版显式转发注册、配额、邮件等配置；单机版仅转发较小子集。示例 `.env.prod` 明确教用户设置 `MICA_REGISTRATION_ENABLED` 和邮件参数，但单机 Compose 不会把这些变量交给 API，配置成为静默无效项。这既是功能问题，也是两份大段配置重复维护造成的架构漂移。
 - **推荐修改方式**：建立一份共享的 API environment 映射，或用脚本测试“示例声明的可调变量都进入两种 Compose 的 api 容器”；补 quickstart 配置冒烟。
 - **风险**：当前自托管操作者可能误以为注册或邮件已开启；合并配置时要保留两种入口各自不同的网络、域名设置。
@@ -309,7 +309,7 @@
 
 ### P2-11 自托管说明将旧 Compose 与任意新镜像配对 — DONE
 
-- **文件 / 位置**：[README.md:119-131](README.md#L119-L131)、[docs/deploy.md:30-44](docs/deploy.md#L30-L44)。
+- **文件 / 位置**：[README.md:119-131](../../README.md#L119-L131)、[docs/deploy.md:30-44](../../docs/deploy.md#L30-L44)。
 - **问题 / 原因**：说明要求 Compose 文件与镜像来自同一 release，却固定下载 `v0.13.17` 的 Compose 和 env 示例，同时让用户自选 `MICA_VERSION`。当前代码基线已是 v0.13.46，配置能力与镜像可能跨多个版本漂移。
 - **推荐修改方式**：示例先定义一个 release 版本变量，再用同一变量下载 Compose/env 并填写 `MICA_VERSION`；发布检查中验证文档的固定示例不会落后于目标版本。
 - **风险**：当前新装/升级可能沿用缺新配置的旧 Compose；改文档时需避免重新引用浮动 `main`。
@@ -322,7 +322,7 @@
 
 ### P2-12 未完成上传的孤儿对象无法回收 — DONE（新上传及历史盘点工具）
 
-- **文件 / 位置**：[blob_gc.rs:160-265](crates/api-server/src/blob_gc.rs#L160-L265)、[files.rs:71-142](crates/api-server/src/routes/files.rs#L71-L142)。
+- **文件 / 位置**：[blob_gc.rs:160-265](../../crates/api-server/src/blob_gc.rs#L160-L265)、[files.rs:71-142](../../crates/api-server/src/routes/files.rs#L71-L142)。
 - **问题 / 原因**：`sweep_workspace` **只遍历 `files` 表的行**（`SELECT … FROM files WHERE workspace_id = $1`），从不枚举桶里的对象。因此「PUT 了但从未调用 `complete`」的对象在库里没有行 —— 对 GC 永远不可见，既不计入配额也不被回收。P1-02 已约束新签发 URL 的尺寸、内容与重放；签名有效的首次 PUT 本来仍允许上传而不 complete。
 - **推荐修改方式**：给 sweep 增加一路「按前缀枚举」：列出 `workspaces/{ws}/` 下的对象，对照该工作区的 `files.object_key` 集合，把**陌生且早于宽限期**的对象删除（宽限期必须大于 presign TTL，否则会删掉「已 PUT、正在等 complete」的合法上传 —— 注意 dev compose 的 `S3_PRESIGN_TTL_SECONDS` 是 604800，即 7 天，远超现有的 30 天 unreferenced 宽限期这一段是安全的，但**生产节点的 TTL 配置需一并确认**）。同时加一个 gauge 暴露孤儿对象数与字节数，否则这类泄漏只会无声增长。
 - **风险**：枚举+删除是对桶的破坏性操作，前缀算错会删掉别人的对象。必须先做 dry-run 模式并对照 `files` 全表校验。宽限期设短于 presign TTL 会删掉正在进行的合法上传。
@@ -337,7 +337,7 @@
 
 ### P3-01 `_selectedMarkdown` 状态与显示分支已不可达 — DONE
 
-- **文件 / 位置**：原 [main.dart](clients/mica_flutter/lib/main.dart) 中的字段、19 处清空与不可达 UI 分支均已删除；路线图条目已移入 [roadmap-done.md](docs/roadmap-done.md)。
+- **文件 / 位置**：原 [main.dart](../../clients/mica_flutter/lib/main.dart) 中的字段、19 处清空与不可达 UI 分支均已删除；路线图条目已移入 [roadmap-done.md](../../docs/roadmap-done.md)。
 - **问题 / 原因**：当前字段仅被多处置为 `null`，没有非空赋值，关联的 `selectedMarkdown != null` UI 分支不可达；状态传递和约二十处清空赋值增加外壳复杂度。
 - **推荐修改方式**：在不恢复该功能的前提下，删除字段、传参和不可达显示分支；保留一条基础外壳回归。与路线图现有条目合并实施，不再创建重复待办。
 - **风险**：当前主要是维护与理解成本；清理时注意不要误删仍被其他选择态使用的布局。
@@ -350,4 +350,4 @@
 2. **再收紧权限和输入边界**：P1-01/02/03/04/05/10/14。上传与 SSRF 用隔离测试服务/桶验证，避免碰生产数据；会话与撤权用可控 Future、持续 WS 测试。
 3. **最后治理刷新、性能和交付**：剩余 P1、P2、P3。对搜索/渲染优化保留前后基准；Compose 和部署脚本先加配置/状态断言，再调整复用结构。
 
-本轮刻意未把**已由用户拍板接受**的公开 S3 默认凭据和单机 HTTP 快速安装重新列为待修缺陷；它们的风险已在 [AGENTS.md](AGENTS.md)、[docker-compose.single.yml](deploy/docker-compose.single.yml) 与 [roadmap.md](docs/roadmap.md) 明示。审查发现中的并发攻击/时序项需要在隔离环境用上述回归确认影响范围，不能把“CI 目前通过”解释为这些交错已被覆盖。
+本轮刻意未把**已由用户拍板接受**的公开 S3 默认凭据和单机 HTTP 快速安装重新列为待修缺陷；它们的风险已在 [AGENTS.md](../../AGENTS.md)、[docker-compose.single.yml](../../deploy/docker-compose.single.yml) 与 [roadmap.md](../../docs/roadmap.md) 明示。审查发现中的并发攻击/时序项需要在隔离环境用上述回归确认影响范围，不能把“CI 目前通过”解释为这些交错已被覆盖。
