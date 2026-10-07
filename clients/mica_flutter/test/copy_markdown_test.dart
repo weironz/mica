@@ -45,7 +45,7 @@ void main() {
       EditorNode(id: 'after', kind: 'paragraph', text: 'after'),
     ]);
 
-    expect(c.selectionClipboardText(), contains('```py\n'));
+    expect(c.selectionClipboardText(), 'before\n\n$code\n\nafter');
     c.selection = const DocSelection(
       anchor: DocPosition(1, 0),
       focus: DocPosition(1, code.length),
@@ -61,14 +61,15 @@ void main() {
     expect(c.selectionClipboardText(), 'print(1)');
   });
 
-  test('copying code together with another block keeps Markdown fences', () {
+  test('copying code across blocks keeps fences only in Markdown export', () {
     final c = _doc([
       EditorNode(id: 'a', kind: 'paragraph', text: 'before'),
       EditorNode(id: 'b', kind: 'code_block', text: 'print(1)',
           data: {'language': 'py'}),
     ]);
 
-    expect(c.selectionClipboardText(), 'before\n\n```py\nprint(1)\n```');
+    expect(c.selectionClipboardText(), 'before\n\nprint(1)');
+    expect(c.selectionText(), 'before\n\n```py\nprint(1)\n```');
   });
 
   test('copy keeps inline marks', () {

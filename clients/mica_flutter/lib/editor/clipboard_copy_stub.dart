@@ -16,13 +16,8 @@ Future<bool> copyTextToClipboard(String text) async {
   }
 }
 
-/// Copy the selection in TWO flavors: [plain] (Markdown for multi-block
-/// selections, literal source for a single code block; what a plain
-/// editor like Notepad reads) and [richHtml] (what Markdown editors like Typora
-/// read and convert back to formatted content). On Windows both flavors are
-/// written via the raw Win32 clipboard (CF_UNICODETEXT + CF_HTML); everywhere
-/// else only [plain] is set (Flutter can't write multi-flavor) — a graceful
-/// degrade, since Windows is the desktop target for this.
+/// Write literal text/plain and semantic text/html together. Windows writes
+/// CF_UNICODETEXT + CF_HTML; other desktop platforms fall back to plain text.
 Future<bool> copyRichToClipboard({
   required String plain,
   required String richHtml,

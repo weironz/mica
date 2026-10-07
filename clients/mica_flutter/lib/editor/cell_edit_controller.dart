@@ -35,6 +35,31 @@ class CellEditController extends TextEditingController {
   /// The cell content as raw Markdown, for storage.
   String serialize() => inlineToMarkdown(text, marks);
 
+  /// HTML for the selected clean text, clipping the existing marks rather than
+  /// re-parsing text as Markdown (which loses code and treats literal syntax
+  /// as formatting).
+  String selectionHtml() {
+    final sel = selection;
+    if (!sel.isValid || sel.isCollapsed) return '';
+    final clipped = <Mark>[];
+    for (final mark in marks) {
+      final start = mark.start.clamp(sel.start, sel.end);
+      final end = mark.end.clamp(sel.start, sel.end);
+      if (end > start) {
+        clipped.add(
+          Mark(
+            start - sel.start,
+            end - sel.start,
+            mark.type,
+            href: mark.href,
+            title: mark.title,
+          ),
+        );
+      }
+    }
+    return inlineToHtml(sel.textInside(text), clipped);
+  }
+
   @override
   set value(TextEditingValue newValue) {
     if (!_seeding) {

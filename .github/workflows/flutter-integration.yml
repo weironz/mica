@@ -81,6 +81,9 @@ jobs:
 
       - run: flutter pub get
 
+      - name: Verify native Windows clipboard text and HTML
+        run: flutter test test/windows_clipboard_copy_test.dart
+
       - name: Run offline integration tests (serial, kill between)
         shell: pwsh
         run: |

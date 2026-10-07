@@ -1057,39 +1057,78 @@ class EditorController extends ChangeNotifier {
     return true;
   }
 
-  /// Text for Ctrl+C/Ctrl+X. A selection confined to one code block is source
-  /// code, including when Ctrl+A selected its entire body; Markdown fences are
-  /// only needed when the selection crosses block boundaries.
+  /// Literal text for text/plain, independent of the rich HTML flavor. Marks
+  /// live separately from node.text: serializing Markdown here adds delimiters
+  /// that plain-text destinations cannot distinguish from real content.
   String selectionClipboardText({Map<String, String>? imageUrls}) {
-    final sel = selection;
-    if (sel != null && !sel.isCollapsed && sel.start.node == sel.end.node) {
-      final i = sel.start.node;
-      if (i >= 0 && i < nodes.length && nodes[i].kind == 'code_block') {
-        final text = nodes[i].text;
-        return text.substring(sel.start.offset, sel.end.offset);
+    final parts = <String>[];
+    for (final sl in _selectionSlices()) {
+      final node = nodes[sl.node];
+      if (node.kind == 'table') {
+        final table = TableData.fromBlock(node.data);
+        parts.add(
+          table.rows
+              .map(
+                (row) => row
+                    .map(
+                      (cell) => parseInline(
+                        cell,
+                      ).text.replaceAll('\t', ' ').replaceAll('\n', ' '),
+                    )
+                    .join('\t'),
+              )
+              .join('\n'),
+        );
+      } else if (node.kind == 'image') {
+        final fileId = node.data['file_id'] as String?;
+        parts.add(
+          (imageUrls?[fileId] ??
+                  node.data['url'] ??
+                  node.data['name'] ??
+                  node.text)
+              as String,
+        );
+      } else if (node.kind == 'divider') {
+        parts.add('---');
+      } else {
+        final from = sl.from.clamp(0, node.text.length);
+        final to = sl.to.clamp(0, node.text.length);
+        if (node.isCode || node.kind == 'math_block') {
+          parts.add(node.text.substring(from, to));
+        } else {
+          final marks = marksFromData(node.data);
+          final text = StringBuffer();
+          for (var i = from; i < to; i++) {
+            // A hard-break marker is stored in prose, but code/math/HTML marks
+            // can contain the same bytes literally. Inspect the original node
+            // even when the selection ends between the marker and newline.
+            final hardBreak =
+                node.text[i] == '\\' &&
+                i + 1 < node.text.length &&
+                node.text[i + 1] == '\n' &&
+                !marks.any(
+                  (m) =>
+                      i >= m.start &&
+                      i < m.end &&
+                      (m.type == 'code' ||
+                          m.type == 'math' ||
+                          m.type == 'html'),
+                );
+            if (!hardBreak) text.write(node.text[i]);
+          }
+          parts.add(text.toString());
+        }
       }
     }
-    return selectionText(imageUrls: imageUrls);
+    return parts.join('\n\n');
   }
 
-  /// Serialize the current ranged selection to text (tables become GFM). Empty
-  /// when the selection is collapsed/absent. [imageUrls] maps an image's
-  /// `file_id` to a fresh download URL so copied Markdown links actually resolve
-  /// (falling back to the external url, then the bare filename).
+  /// Serialize selected Markdown for export and AI input (tables become GFM).
+  /// [imageUrls] maps file IDs to fresh download URLs.
   String selectionText({Map<String, String>? imageUrls}) {
     final sel = selection;
     if (sel == null) return '';
-    // A caret parked ON an atomic block IS that block being selected — the same
-    // rule [_selectionSlices] encodes for the HTML flavor, and this walk has to
-    // agree with it because copy/cut gate on THIS string being non-empty.
-    //
-    // It did not, and that re-opened the 2026-08-12 bug (Ctrl+X could not cut an
-    // image) from the other side: 8c20158 moved the text/plain flavor off
-    // `selectionPlainText` — which went through the slices — onto this method,
-    // which bailed on any collapsed selection. So `plain.isEmpty` sent copy AND
-    // cut home before either looked at what the caret was on. The regression
-    // test stayed green through it all because it was still calling the method
-    // production had stopped using.
+    // Match the clipboard slices: a caret on an atomic block selects that block.
     final DocPosition s;
     final DocPosition e;
     if (sel.isCollapsed) {
@@ -1360,7 +1399,7 @@ class EditorController extends ChangeNotifier {
   }
 
   /// The (node, from, to) slices the current ranged selection covers, in order.
-  /// Empty when there is no ranged selection. Backs the `text/html` copy flavor
+  /// Empty when there is no ranged selection. Backs both clipboard flavors
   /// ([selectionText] keeps its own walk for the quote-group/list-run newline,
   /// so the collapsed-atomic rule below is spelled out there too — the two must
   /// agree on what counts as a selection).

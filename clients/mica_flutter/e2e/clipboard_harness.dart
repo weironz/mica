@@ -4,6 +4,7 @@ import 'dart:js_interop';
 
 import 'package:flutter/material.dart';
 import 'package:mica_flutter/editor/editor.dart';
+import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 
 @JS('micaClipboardHarnessFocus')
@@ -18,15 +19,41 @@ void main() {
       home: Scaffold(
         body: MicaEditor(
           rootBlockId: 'root',
-          nodes: [
-            EditorNode(
-              id: 'code',
-              kind: 'code_block',
-              text: 'print(1)\nprint(2)',
-              data: {'language': 'py'},
-            ),
-            EditorNode(id: 'after', kind: 'paragraph', text: 'after'),
-          ],
+          nodes: Uri.base.queryParameters['fixture'] == 'inline'
+              ? [
+                  EditorNode(
+                    id: 'inline',
+                    kind: 'paragraph',
+                    text: 'run command then `literal`',
+                    data: {
+                      'marks': marksToJson([Mark(4, 11, 'code')]),
+                    },
+                  ),
+                  EditorNode(id: 'after', kind: 'paragraph', text: 'after'),
+                ]
+              : Uri.base.queryParameters['fixture'] == 'table'
+              ? [
+                  EditorNode(
+                    id: 'table',
+                    kind: 'table',
+                    text: '',
+                    data: {
+                      'rows': [
+                        ['`command` then \\`literal\\`', '**bold**'],
+                        ['row', 'end'],
+                      ],
+                    },
+                  ),
+                ]
+              : [
+                  EditorNode(
+                    id: 'code',
+                    kind: 'code_block',
+                    text: 'print(1)\nprint(2)',
+                    data: {'language': 'py'},
+                  ),
+                  EditorNode(id: 'after', kind: 'paragraph', text: 'after'),
+                ],
           version: 0,
           canEdit: true,
           onApplyOperations: (_) async {},

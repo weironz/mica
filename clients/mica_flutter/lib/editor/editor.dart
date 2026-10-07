@@ -1433,34 +1433,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return false;
   }
 
-  /// Desktop Ctrl+V: pull the clipboard's plain text and run it through the
-  /// shared paste pipeline. _handleRichPaste consumes the rich cases (code,
-  /// URL/image links, formulas, multi-line markdown); a plain single line falls
-  /// through (returns false) and is inserted inline, replacing any selection —
-  /// the same outcome the web textarea produced.
-  /// Copy the current ranged selection in both flavors (text/plain +
-  /// rich text/html). False when there is nothing to copy. Shared by Ctrl+C
-  /// and the context menu.
-  ///
-  /// text/plain is Markdown for selections spanning blocks. The formats agree:
-  /// [_pasteFromClipboard] parses a plain-text paste as Markdown (that is what
-  /// makes pasting an LLM answer work). Writing a Markdown-FREE flavor and then
-  /// reading it back as Markdown is a category error, and it bit: when the HTML
-  /// flavor went missing, a copied page's `# 1. check state` — a shell COMMENT
-  /// inside a code block, which the stripped flavor emitted without its fence —
-  /// came back as an h1, and one page turned into 48 blocks of wreckage. Lists
-  /// degraded the same way (`• item` is not list syntax).
-  ///
-  /// Peers split on this, and the split follows the document model: the
-  /// Markdown-backed ones (Logseq, Notion, Obsidian, BlockNote, MarkText) all
-  /// put Markdown in text/plain. The trade is that Notepad now receives
-  /// `**bold**` rather than `bold`. A selection within one code block instead
-  /// copies its literal source, like the code block's copy button; the rich
-  /// flavor still carries <pre><code> for editors that accept it.
+  /// Copy literal text and semantic HTML. Plain destinations receive the
+  /// selected content; rich editors can reconstruct Markdown from the HTML.
+  /// Shared by the keyboard and context menu.
   bool _copySelection() {
     final plain = _controller.selectionClipboardText(imageUrls: _imageUrlCache);
-    if (plain.isEmpty) return false;
     final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
+    if (plain.isEmpty && richHtml.isEmpty) return false;
     copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
       if (mounted) _focus.requestFocus();
     });
@@ -1471,8 +1450,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// matches [_copySelection].
   bool _cutSelection() {
     final plain = _controller.selectionClipboardText(imageUrls: _imageUrlCache);
-    if (plain.isEmpty) return false;
     final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
+    if (plain.isEmpty && richHtml.isEmpty) return false;
     copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
       if (!mounted) return;
       _focus.requestFocus();
@@ -1685,7 +1664,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return false;
     }
   }
-
 
   // ---------------------------------------------------------------------------
   // Caret blink
@@ -2909,6 +2887,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     };
     focus.addListener(_cellFocusListener!);
 
+    void copyCell({required bool cut}) {
+      final sel = controller.selection;
+      if (!sel.isValid || sel.isCollapsed) return;
+      copyRichToClipboard(
+        plain: sel.textInside(controller.text),
+        richHtml: controller.selectionHtml(),
+      );
+      if (cut) {
+        controller.value = TextEditingValue(
+          text: controller.text.replaceRange(sel.start, sel.end, ''),
+          selection: TextSelection.collapsed(offset: sel.start),
+        );
+      }
+    }
+
     KeyEventResult onKey(FocusNode n, KeyEvent e) {
       if (e is! KeyDownEvent) return KeyEventResult.ignored;
       final cols = table.columns;
@@ -2949,27 +2942,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           }
           return KeyEventResult.handled;
         }
-        // Ctrl+C / Ctrl+X inside a cell. The default TextField copy puts ONLY
-        // the cell's raw markdown (`**bold**`) on the clipboard as text/plain —
-        // so pasting it into the body inserted the literal source (the body's
-        // own copy also writes a text/html flavor, which is what carries the
-        // marks across a mica→mica paste). Write both flavors here too, from the
-        // selected cell markdown; cut then deletes the run.
+        // Cell text is already clean; its formatting lives in controller.marks.
+        // Re-parsing the selected text as Markdown loses those marks and turns
+        // literal backticks into syntax.
         if ((key == LogicalKeyboardKey.keyC ||
                 key == LogicalKeyboardKey.keyX) &&
             !sel.isCollapsed) {
-          final selectedMd = sel.textInside(controller.text);
-          final parsed = parseInline(selectedMd);
-          copyRichToClipboard(
-            plain: selectedMd,
-            richHtml: inlineToHtml(parsed.text, parsed.marks),
-          );
-          if (key == LogicalKeyboardKey.keyX) {
-            controller.value = TextEditingValue(
-              text: controller.text.replaceRange(sel.start, sel.end, ''),
-              selection: TextSelection.collapsed(offset: sel.start),
-            );
-          }
+          copyCell(cut: key == LogicalKeyboardKey.keyX);
           return KeyEventResult.handled;
         }
         final mark = switch (key) {
@@ -3083,6 +3062,28 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     ),
                     child: TextField(
                       controller: controller,
+                      contextMenuBuilder: (context, state) {
+                        final items = state.contextMenuButtonItems.map((item) {
+                          if (item.type == ContextMenuButtonType.copy ||
+                              item.type == ContextMenuButtonType.cut) {
+                            return ContextMenuButtonItem(
+                              type: item.type,
+                              label: item.label,
+                              onPressed: () {
+                                copyCell(
+                                  cut: item.type == ContextMenuButtonType.cut,
+                                );
+                                state.hideToolbar();
+                              },
+                            );
+                          }
+                          return item;
+                        }).toList();
+                        return AdaptiveTextSelectionToolbar.buttonItems(
+                          anchors: state.contextMenuAnchors,
+                          buttonItems: items,
+                        );
+                      },
                       focusNode: focus,
                       autofocus: true,
                       maxLines: null,
@@ -3797,7 +3798,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _controller.resetTableColumnWidths(node);
       case 'copy':
         final table = TableData.fromBlock(_controller.nodes[node].data);
-        await copyTextToClipboard(tableToMarkdown(table));
+        _copyTableArea((
+          node: node,
+          r0: 0,
+          c0: 0,
+          r1: table.rows.length - 1,
+          c1: table.columns - 1,
+        ), cut: false);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

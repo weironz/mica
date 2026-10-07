@@ -34,11 +34,8 @@ Future<bool> copyTextToClipboard(String text) async {
   }
 }
 
-/// Copy the selection in TWO flavors via a multi-format `ClipboardItem`: [plain]
-/// (`text/plain`: Markdown across blocks, literal source within one code block)
-/// and [richHtml] (`text/html`,
-/// what Typora/Obsidian read and convert back to formatted content). Needs a
-/// secure context + ClipboardItem; falls back to writing just [plain] otherwise.
+/// Write literal text/plain and semantic text/html together. Rich destinations
+/// reconstruct formatting from HTML; plain destinations receive only content.
 Future<bool> copyRichToClipboard({
   required String plain,
   required String richHtml,
@@ -69,7 +66,45 @@ Future<bool> copyRichToClipboard({
       return true;
     }
   } catch (_) {
-    // Fall through: at least land the plain flavor.
+    // Fall through to the synchronous copy event (also works on HTTP).
+  }
+  // execCommand on a textarea alone drops HTML. Supply both flavors through
+  // the copy event so HTTP LAN clients and browsers without ClipboardItem keep
+  // code semantics too. Restore focus/selection after the temporary input.
+  final active = html.document.activeElement;
+  final input = active is html.TextAreaElement ? active : null;
+  final start = input?.selectionStart;
+  final end = input?.selectionEnd;
+  final area = html.TextAreaElement()
+    ..value = plain
+    ..setAttribute('readonly', '')
+    ..style.position = 'fixed'
+    ..style.left = '-10000px';
+  var wrote = false;
+  void onCopy(html.Event event) {
+    final data = (event as html.ClipboardEvent).clipboardData;
+    if (data == null) return;
+    data.setData('text/plain', plain);
+    data.setData('text/html', richHtml);
+    event.preventDefault();
+    wrote = true;
+  }
+
+  try {
+    html.document.addEventListener('copy', onCopy, true);
+    html.document.body?.append(area);
+    area.focus();
+    area.select();
+    if (html.document.execCommand('copy') && wrote) return true;
+  } catch (_) {
+    // Last resort: land the literal text.
+  } finally {
+    html.document.removeEventListener('copy', onCopy, true);
+    area.remove();
+    active?.focus();
+    if (input != null && start != null && end != null) {
+      input.setSelectionRange(start, end);
+    }
   }
   return copyTextToClipboard(plain);
 }
