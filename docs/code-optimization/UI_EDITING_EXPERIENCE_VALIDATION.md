@@ -23,7 +23,11 @@
 - `flutter build windows --release`：通过，259.1s。产物 `clients/mica_flutter/build/windows/x64/runner/Release/mica_flutter.exe`。
 - 浏览器 release bundle：构建通过。Playwright 的输入、撤销、中文预编辑/提交、拖选格式栏时机、浅深色、390px 设置导航、生产设置 AI 挂起/503/重试全部通过，无未捕获浏览器异常。
 - 框架完整测试首次运行：1574 通过、2 跳过、1 失败。唯一失败是旧表格间距断言：正文段间改为12px，表格工具区仍需14px；已经按实际表格 grid 两侧间距与正文节奏更新断言，保留对称和不粘连判据，相关测试通过。
-- 最终串行运行其余测试：**1570 通过、2 跳过、0 失败**（排除当前无法运行的 Windows 原生剪贴板文件）。Windows 原生剪贴板四项第二次运行失败/挂起，独立 Win32 探针（不 import 应用代码）也得到 `OpenClipboard(0)=false`、error5；当前桌面环境无法读写剪贴板。首次运行这四项曾通过，本轮没有改剪贴板源码，也没有弱化/跳过其 CI 门禁。对应测试仍由 `flutter-integration.yml` 的 Windows runner 执行。
+- 最终串行运行其余测试：**1570 通过、2 跳过、0 失败**（排除当前无法运行的 Windows 原生剪贴板文件）。Windows 原生剪贴板五项第二次运行失败/挂起，独立 Win32 探针（不 import 应用代码）也得到 `OpenClipboard(0)=false`、error5；当前桌面环境无法读写剪贴板。首次运行这五项曾通过，本轮没有改剪贴板源码，也没有弱化/跳过其 CI 门禁。对应测试仍由 `flutter-integration.yml` 的 Windows runner 执行，本次该门禁已通过。
+
+[主 CI](https://github.com/weironz/mica/actions/runs/37574471075) 全部通过：Linux Flutter 1561 通过 / 10 个平台条件跳过，Rust（含数据库测试）、容器启动、MCP、真实栈 web e2e 全部通过。新增浏览器回归在 Linux runner 也测得207块文档光标移动布局 **2 → 2**。
+
+[Windows CI](https://github.com/weironz/mica/actions/runs/37574471060) 全部通过：原生剪贴板 **5 项通过**，离线与联网集成测试全部通过。两组 CI 验证的是实现提交 `42914db9ffe752ce22061cbd99ec03bd1cb558a6`；后续提交只补充本文与方案的最终验收状态。
 
 浏览器帧间隔仅作可复查观察：这次拖选采到41个间隔，中位16.7ms、P95 50ms。它包含自动化/机器调度的影响，没有旧版同条件基准，因此**不能据此宣称达到固定帧率或提升某个百分比**。主要性能结论是选区移动消除了实测的多余布局。
 

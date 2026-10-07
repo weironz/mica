@@ -43,7 +43,7 @@
 | UX-05 / P1 | `lib/main.dart:_editorScroll/_formatBar`；新标题组件 | 页面标题弱于正文H1、长标题不换行、手机留白/工具栏空间紧张 | 标题独立可测试组件，字体与偏好协调；窄屏缩小外边距，格式工具栏在窄屏独立可滚动一行；桌面按钮分组与轻量悬停反馈 | 中：Enter进入正文和标题保存不能回归。标题长文/IME/Enter测试、390px真实界面。收益是主次明确、窄屏可编辑 | DONE |
 | UX-06 / P1 | `lib/ui/dialogs.dart:_SettingsDialog.build/_appearanceSection/_aiSection`；新settings组件 | 固定容器溢出、混合设置类别、外观缺预览、AI请求阻塞全页 | 响应式设置壳、分类标题与说明；外观分组并实时预览；AI局部加载、失败重试；成功/失败反馈区分；保留local/cloud和权限判断 | 中：重排可能丢回调、改变设置范围。320/390/768/1440px、短视口、放大文字、挂起请求回归。收益是设置可发现、手机可用、偏好易判断 | DONE |
 | UX-07 / P2 | `lib/ui/theme_tokens.dart:toMaterialTheme`；`main.dart:theme/darkTheme` | Material默认控件与自绘界面形状、颜色、字级不一致 | 明确表单、按钮、chip、switch、菜单/对话框主题，使用现有角色色与中文fallback；保留清晰焦点和合理点击面积；浅深色同时验收 | 中：全局主题影响其它对话框。对比度与组件状态测试、浅深色截图，保留警告/错误语义。收益是整体视觉统一 | DONE |
-| UX-08 / P2 | `e2e/`；测试与本文验证记录 | 主观舒适感不能只由widget测试宣称改善 | 新本地UI fixture复用生产组件与真实编辑器；Playwright真实键鼠、长文输入/拖选/取消、设置导航、浅深色与窄屏截图；记录布局次数和浏览器帧表现；完整Flutter测试/分析/Windows构建 | 低：测试夹具可能和生产接线漂移，需直接复用生产组件并检查集成。收益是可复查与后续回归基线 | 自动化完成；Win32 门禁待 CI |
+| UX-08 / P2 | `e2e/`；测试与本文验证记录 | 主观舒适感不能只由widget测试宣称改善 | 新本地UI fixture复用生产组件与真实编辑器；Playwright真实键鼠、长文输入/拖选、设置导航、浅深色与窄屏截图；取消通过真实widget pointer事件与变异测试验证；记录布局次数和浏览器帧表现；完整Flutter测试/分析/Windows构建 | 低：测试夹具可能和生产接线漂移，需直接复用生产组件并检查集成。收益是可复查与后续回归基线 | DONE |
 
 上述 `lib/` 相对 `clients/mica_flutter/`。
 
@@ -77,6 +77,6 @@
 
 ## 实施与验证记录
 
-UX-01～UX-07 已实现并通过针对性回归与浏览器实测；UX-08 的自动化脚本与 CI 门禁已实现，Windows 原生剪贴板复测受当前桌面环境限制，等待 CI Windows 门禁。微软拼音实际候选窗口位置仍需人工验收，不能由 CDP 预编辑测试代替。
+UX-01～UX-08 已实现并通过针对性回归与浏览器实测。主 CI 和 Windows 离线/联网集成测试全部通过；本机受环境限制的 Windows 原生剪贴板五项测试已由 Windows CI 门禁通过。微软拼音实际候选窗口位置仍需人工验收，不能由 CDP 预编辑测试代替。
 
 结果与截图见 [UI_EDITING_EXPERIENCE_VALIDATION.md](UI_EDITING_EXPERIENCE_VALIDATION.md)。本轮保留原有字号/页宽偏好，未新增依赖、未改数据模型、未发版。
