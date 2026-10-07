@@ -1,6 +1,11 @@
 // Real Flutter editor keyboard path → browser ClipboardItem, in a tiny fixture.
 // The fixture exposes only focus; these assertions use actual Ctrl+A/C events.
 import { chromium } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+
+// Captured from the user's Gemini page; source is an attribute, not text.
+const gemini = JSON.parse(readFileSync(new URL('../clients/mica_flutter/test/fixtures/gemini_inline_math.json', import.meta.url), 'utf8'));
+const mathPlain = gemini.plain.replace(/\$([^$]+)\$/, '$1');
 
 const baseArg = process.argv.indexOf('--base');
 const base = baseArg >= 0 ? process.argv[baseArg + 1] : 'http://127.0.0.1:8091';
@@ -106,6 +111,35 @@ async function pasteDestinations(expected) {
 }
 
 try {
+  for (const [label, html, plain, rich, expected] of [
+    ['Gemini-rendered', gemini.html, mathPlain.replace(String.raw`\rightarrow`, '→'), '<strong>部署 NextCloud</strong>', mathPlain],
+    ['Gemini-rich-and-plain-TeX', gemini.html, gemini.plain, '<strong>部署 NextCloud</strong>', mathPlain],
+    ['Gemini-list', `<ul><li>${gemini.html}</li></ul>`, gemini.plain, '<li>', mathPlain],
+    ['plain-TeX', null, gemini.plain, 'data-mica-math="1"', mathPlain],
+    ['plain-paren-TeX', null, gemini.plain.replace(/\$([^$]+)\$/, '\\($1\\)'), 'data-mica-math="1"', mathPlain],
+  ]) {
+    await openFixture('empty');
+    await page.evaluate(async ({html, plain}) => {
+      const data = { 'text/plain': new Blob([plain], { type: 'text/plain' }) };
+      if (html) data['text/html'] = new Blob([html], { type: 'text/html' });
+      await navigator.clipboard.write([new ClipboardItem(data)]);
+    }, {html, plain});
+    await page.keyboard.press('Control+V');
+    // Let the production offscreen MathPreviewer rasterize the inline atom.
+    await page.waitForTimeout(1500);
+    await page.waitForFunction(() => {
+      const state = JSON.parse(window.micaClipboardHarnessMathState());
+      return state.images[String.raw`\rightarrow`] > 0 && state.folded.includes(String.raw`\rightarrow`);
+    }, null, { timeout: 10_000 });
+    await page.keyboard.press('Home');
+    await page.screenshot({ path: `clipboard-math-${label}.png`, clip: { x: 0, y: 0, width: 950, height: 80 } });
+    await page.keyboard.press('Control+A');
+    const copied = await expectCopy(`${label}: paste keeps inline math`, expected, rich);
+    if (!copied.html.includes('data-mica-math="1"') ||
+        !copied.html.includes(String.raw`$\rightarrow$`)) {
+      throw new Error(`${label}: formula lost its source/mark: ${copied.html}`);
+    }
+  }
   await openFixture();
   await page.keyboard.press('Control+A');
   await expectCopy('single code block copies literal source without fences', source);

@@ -115,6 +115,7 @@ const _inlineTags = {
   'var',
   'time',
   'label',
+  'math',
   'ins',
   'big',
   'tt',
@@ -606,6 +607,17 @@ void _gatherOne(dom.Node child, StringBuffer sb) {
     sb.write(child.text);
     return;
   }
+  // Browser math widgets keep semantic TeX separately from their painted
+  // children. Import the source once; walking the subtree loses formulas in
+  // Gemini and duplicates KaTeX's visual + accessibility representations.
+  final mathSource = _renderedMathSource(child);
+  if (mathSource != null) {
+    // Paren delimiters also work beside digits and with dollar signs in TeX.
+    sb.write(r'\(');
+    sb.write(mathSource);
+    sb.write(r'\)');
+    return;
+  }
   final fnLabel = child.attributes['data-mica-footnote'];
   if (fnLabel != null) {
     sb.write('[^$fnLabel]');
@@ -644,6 +656,28 @@ void _gatherOne(dom.Node child, StringBuffer sb) {
       sb.write(_wrapMarks(inner.toString(), marks));
     }
   }
+}
+
+/// Only inspect formula roots, never a paragraph containing a formula: the
+/// latter would swallow surrounding prose. Gemini supplies data-math; KaTeX
+/// and MathML expose their original TeX in an explicit semantic annotation.
+String? _renderedMathSource(dom.Element element) {
+  if (element.classes.contains('math-inline')) {
+    final source = element.attributes['data-math']?.trim();
+    if (source != null && source.isNotEmpty) return source;
+  }
+  if (!element.classes.contains('katex') && _tag(element) != 'math') {
+    return null;
+  }
+  for (final annotation in element.querySelectorAll('annotation')) {
+    if (annotation.attributes['encoding']?.toLowerCase() !=
+        'application/x-tex') {
+      continue;
+    }
+    final source = annotation.text.trim();
+    if (source.isNotEmpty) return source;
+  }
+  return null;
 }
 
 /// A link/image destination: `<>`-wrap when it contains whitespace or parens

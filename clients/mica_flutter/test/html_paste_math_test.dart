@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/markdown.dart';
@@ -23,6 +26,64 @@ List<Map<String, dynamic>> mathMarks(String markdown) {
 }
 
 void main() {
+  test('actual rendered Gemini arrow restores TeX and surrounding bold', () {
+    final fixture =
+        jsonDecode(
+              File('test/fixtures/gemini_inline_math.json').readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    for (final html in [
+      fixture['html'] as String,
+      '<ul><li>${fixture['html']}</li></ul>',
+      '<table><tr><th>选择</th></tr><tr><td>${fixture['html']}</td></tr></table>',
+    ]) {
+      final md = htmlToMarkdown(html);
+      expect(md, contains(r'\(\rightarrow\)'));
+      expect(md, contains('**部署 NextCloud**'));
+      expect(
+        md,
+        isNot(contains('→')),
+        reason: 'rendered children must not duplicate the semantic source',
+      );
+      if (!html.startsWith('<table>')) {
+        final blocks = markdownToBlocks(md);
+        expect(mathMarks(md), hasLength(1));
+        expect(blocks.first.text, contains(r'\rightarrow'));
+      }
+    }
+  });
+
+  test('KaTeX MathML annotation is imported once, not both visual layers', () {
+    const html =
+        r'<p>see <span class="katex">'
+        r'<span class="katex-mathml"><math><semantics><mo>→</mo>'
+        r'<annotation encoding="application/x-tex">\rightarrow</annotation>'
+        r'</semantics></math></span>'
+        r'<span class="katex-html" aria-hidden="true">→</span></span> here</p>';
+    final md = htmlToMarkdown(html);
+    expect(md, r'see \(\rightarrow\) here');
+    expect(mathMarks(md), hasLength(1));
+  });
+
+  test('standalone MathML with TeX annotation stays in the text flow', () {
+    const html =
+        r'before <math><semantics><mo>→</mo>'
+        r'<annotation encoding="application/x-tex">\rightarrow</annotation>'
+        r'</semantics></math> after';
+    final md = htmlToMarkdown(html);
+    expect(md, r'before \(\rightarrow\) after');
+    expect(mathMarks(md), hasLength(1));
+  });
+
+  test('rendered math inside code remains literal code', () {
+    const html =
+        r'<p><code><span class="math-inline" data-math="\rightarrow">'
+        r'→</span></code> <span data-math="x">ordinary</span></p>';
+    final md = htmlToMarkdown(html);
+    expect(mathMarks(md), isEmpty);
+    expect(markdownToBlocks(md).single.text, '→ ordinary');
+  });
+
   test('a formula in pasted HTML survives into a math mark', () {
     const html =
         '<p>放大系数为 \$\\eta = 2 \\times \\frac{N - 1}{N}\$。'

@@ -1,6 +1,6 @@
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show listEquals, mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -813,7 +813,18 @@ class RenderDocument extends RenderBox {
   /// source. Fed by the host's RasterPreviewPipeline.
   Map<String, Map<String, ui.Image>> _previewImages = const {};
   set previewImages(Map<String, Map<String, ui.Image>> value) {
-    _previewImages = value;
+    // The producer mutates its maps in place when async rasters arrive or
+    // expire. Keep our own map snapshot: comparing the producer's map identity
+    // cannot detect those changes, and the text/data layout cache would keep
+    // the pre-raster source layout forever despite markNeedsLayout().
+    final changed = value.length != _previewImages.length ||
+        value.entries.any((e) => !mapEquals(e.value, _previewImages[e.key]));
+    if (changed) {
+      _previewImages = {
+        for (final entry in value.entries) entry.key: Map.of(entry.value),
+      };
+      _layoutCache.clear();
+    }
     markNeedsLayout();
   }
 

@@ -1,8 +1,9 @@
 import 'dart:ui' as ui;
 
-import 'package:flutter/painting.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
+import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';
 
@@ -24,6 +25,85 @@ InlineAtom atom(int start, int end, {int painterIndex = -1}) => InlineAtom(
 );
 
 void main() {
+  testWidgets('inline math relayouts when a mutable raster cache changes', (
+    tester,
+  ) async {
+    const source = r'\rightarrow';
+    final nodes = [
+      EditorNode(
+        id: 'math',
+        kind: 'paragraph',
+        text: source,
+        data: {
+          'marks': marksToJson([Mark(0, source.length, 'math')]),
+        },
+      ),
+    ];
+    final cache = <String, Map<String, ui.Image>>{'math': {}};
+    final blink = ValueNotifier(false);
+    addTearDown(blink.dispose);
+    Future<ui.Image> image(int width) async {
+      final recorder = ui.PictureRecorder();
+      Canvas(
+        recorder,
+      ).drawRect(Rect.fromLTWH(0, 0, width.toDouble(), 24), Paint());
+      final picture = recorder.endRecording();
+      final result = await tester.runAsync(() => picture.toImage(width, 24));
+      picture.dispose();
+      return result!;
+    }
+
+    Future<void> build() => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: DocumentSurface(
+            nodes: nodes,
+            selection: null,
+            showCaret: false,
+            caretBlink: blink,
+            appearance: const EditorAppearance(),
+            previewImages: cache,
+          ),
+        ),
+      ),
+    );
+    await build();
+    final render = tester.renderObject<RenderDocument>(
+      find.byType(DocumentSurface),
+    );
+    double endX() =>
+        render.caretRectFor(const DocPosition(0, source.length))!.left;
+    final sourceX = endX();
+    final first = await image(36);
+    final second = await image(72);
+    cache['math']![source] = first;
+    await build();
+    final foldedX = endX();
+    expect(
+      foldedX,
+      lessThan(sourceX / 2),
+      reason:
+          'new raster must replace cached source layout without editing text',
+    );
+    cache['math']![source] = second;
+    await build();
+    expect(
+      endX(),
+      greaterThan(foldedX),
+      reason: 'replacement image changes atom width',
+    );
+    cache['math']!.remove(source);
+    await build();
+    expect(
+      endX(),
+      closeTo(sourceX, 0.01),
+      reason: 'eviction must restore source layout',
+    );
+    await tester.pumpWidget(const SizedBox());
+    first.dispose();
+    second.dispose();
+  });
+
   group('FoldPlan single atom', () {
     // doc:      0123456789…   text "ab" + run [2,7) + "cd"  (len 9)
     // painter:  ab⬚cd          run is 1 unit at painter 2

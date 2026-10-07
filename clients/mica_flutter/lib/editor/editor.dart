@@ -1359,8 +1359,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // the text as inline-math marks at the caret — so "see $x$ here" keeps its
     // prose and the formula renders inline instead of jumping onto its own
     // line. Only fires when the line actually carries a formula; plain text
-    // falls through to the literal single-line paste below.
-    if (node != null &&
+    // falls through to the literal single-line paste below. Rich HTML must
+    // use its semantic formatting instead of letting the plain flavor win.
+    if (!rich &&
+        node != null &&
         !node.isAtomic &&
         !node.isCode &&
         node.kind != 'table' &&

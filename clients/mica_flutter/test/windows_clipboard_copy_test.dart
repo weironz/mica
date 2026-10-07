@@ -201,6 +201,103 @@ void main() {
     );
   }
 
+  testWidgets('Windows rich paste restores Gemini math and keeps bold', (
+    tester,
+  ) async {
+    final fixture =
+        jsonDecode(
+              File('test/fixtures/gemini_inline_math.json').readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    final plain = fixture['plain'] as String;
+    expect(
+      await copyRichToClipboard(
+        plain: plain,
+        richHtml: fixture['html'] as String,
+      ),
+      isTrue,
+    );
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    // Widget tests have no native plugin host. Bridge its reads to the actual
+    // CF_HTML buffer written above; only the platform channel is substituted.
+    messenger.setMockMethodCallHandler(const MethodChannel('pasteboard'), (
+      call,
+    ) async {
+      if (call.method == 'html') return readHtml();
+      return null;
+    });
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.getData') return {'text': plain};
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('pasteboard'),
+        null,
+      );
+      messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+    final commands = EditorCommandHook();
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: MicaEditor(
+            rootBlockId: 'root',
+            nodes: [EditorNode(id: 'empty', kind: 'paragraph', text: '')],
+            version: 0,
+            canEdit: true,
+            commandHook: commands,
+            onApplyOperations: (_) async {},
+          ),
+        ),
+      ),
+    );
+    commands.focusFirstLine();
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    // Platform reads and toImage complete on real time; wait for their result
+    // instead of assuming 30 zero-duration frames also finish native I/O.
+    for (var i = 0; i < 100; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      final surface = tester.widget<DocumentSurface>(
+        find.byType(DocumentSurface),
+      );
+      if (surface.nodes.single.text.isNotEmpty &&
+          surface.previewImages['math']?[r'\rightarrow'] != null) {
+        break;
+      }
+    }
+    final surface = tester.widget<DocumentSurface>(
+      find.byType(DocumentSurface),
+    );
+    final node = surface.nodes.single;
+    expect(node.kind, 'paragraph');
+    expect(node.text, plain.replaceAll(r'$\rightarrow$', r'\rightarrow'));
+    final marks = marksFromData(node.data);
+    expect(marks.where((m) => m.type == 'math'), hasLength(1));
+    expect(
+      marks.where((m) => m.type == 'bold'),
+      hasLength(1),
+      reason: 'rich HTML must win over single-line plain math fast path',
+    );
+    expect(
+      surface.previewImages['math']?[r'\rightarrow'],
+      isNotNull,
+      reason: 'the real editor must rasterize the arrow, not just store a mark',
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  }, skip: !Platform.isWindows);
+
   testWidgets('cut accepts an atomic image with only an HTML flavor', (
     tester,
   ) async {
