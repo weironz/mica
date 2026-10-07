@@ -1106,17 +1106,20 @@ class _SettingsDialog extends StatefulWidget {
     String? apiKey,
   })?
   onListAiModels;
+
   /// Writes one provider's config and makes it active; answers with that
   /// provider's stored state. Returns the payload so a switch can populate the
   /// form from the server rather than from a local guess.
   final Future<Map<String, dynamic>> Function({
     required String providerId,
+
     /// Every field but the id is optional, and an omitted one keeps what that
     /// provider already has. Switching provider is therefore a call carrying
     /// the id ALONE — passing the form's current values along with a switch is
     /// how one provider's endpoint used to land on another's row.
     String? provider,
     String? baseUrl,
+
     /// Null omits the field entirely — keep what is stored. An empty STRING
     /// would be sent, and would clear it.
     String? model,
@@ -1148,6 +1151,7 @@ class _SettingsDialog extends StatefulWidget {
   final void Function(bool value) onAiEnabledChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
+
   /// Null hides the import zone. Local mode has no archive importer, and an
   /// upload target that silently does nothing is worse than no target at all.
   final Future<void> Function()? onImportWorkspace;
@@ -1237,19 +1241,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// safe — 0 is whatever comes first (外观).
   int _tab = 0;
 
-  /// Gates the WHOLE dialog (build: `_loading ? spinner : the tabs`), but the
-  /// only thing it ever waits for is [_load]'s AI-settings fetch. So it starts
-  /// true only when there is a fetch: in 本地模式 [onLoadAiSettings] is null,
-  /// _load returns straight away, and every line that clears this sits after
-  /// that return — Settings was a spinner that never resolved.
+  // Only the AI category waits for this request. Appearance and navigation
+  // remain available even when the server is slow or unreachable.
   late bool _loading = widget.onLoadAiSettings != null;
+  bool _aiLoadFailed = false;
   bool _saving = false;
   bool _hasKey = false;
+
   /// Last 4 characters of the saved key, when there is one. The field itself
   /// can never show the key — the server does not return it — so without this
   /// the dialog had only a row of dots as a hint, which reads exactly like a
   /// filled-in field and left "is a key set?" unanswerable.
   String _keyHint = '';
+
   /// The vendor whose values are currently IN the fields. Not the same as
   /// `_preset` during a switch — and that gap is a bug, not a nicety: the
   /// fields save on blur, so a blur landing after the dropdown changed would
@@ -1288,14 +1292,17 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   /// this — which is also why [_fieldsProviderId] alone is not enough: it keeps
   /// the values on the right row, but says nothing about ordering.
   Future<void>? _aiSaveInFlight;
+
   /// Fetched model lists, per vendor. Switching away used to drop the list, so
   /// coming back showed a bare text box with no way to see that the stored
   /// model was one of the provider's real ones — the selection looked lost even
   /// though it was not.
   final Map<String, List<String>> _modelsByProvider = {};
+
   /// Whether this account may change the instance-wide AI settings. Instance
   /// settings carry the operator's provider key, so only an admin may.
   bool _canEdit = true;
+
   /// Models the provider itself reported, empty until fetched. Not seeded from
   /// any built-in list: a stale name that looks official is worse than no list.
   List<String> _models = const [];
@@ -1338,6 +1345,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   final _newPass = TextEditingController();
   bool _accountBusy = false;
   String? _accountMsg;
+  bool _accountMessageIsError = false;
 
   late double _fontScale = widget.appearance.fontScale;
   late String? _fontFamily = widget.appearance.fontFamily;
@@ -1374,6 +1382,42 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     );
   }
 
+  Widget _preferenceRow(String label, Widget control) => LayoutBuilder(
+    builder: (context, constraints) {
+      final labelWidget = Text(label);
+      if (constraints.maxWidth < 440) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [labelWidget, const SizedBox(height: 8), control],
+          ),
+        );
+      }
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            SizedBox(width: 108, child: labelWidget),
+            Expanded(child: control),
+          ],
+        ),
+      );
+    },
+  );
+
+  Widget _preferenceGroup(String label) => Padding(
+    padding: const EdgeInsets.only(top: 18, bottom: 10),
+    child: Text(
+      label,
+      style: TextStyle(
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+        color: MicaTheme.of(context).text.primary,
+      ),
+    ),
+  );
+
   /// Page width as 11 discrete stops (AppFlowy-style), plus a reset to the
   /// readable default. Fixed range (not window-relative) so the stops are stable
   /// "levels"; the editor caps the render at the window, so a wide stop on a
@@ -1381,44 +1425,42 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   Widget _pageWidthRow(BuildContext context) {
     final w = _pageWidth.clamp(kPageWidthMin, kPageWidthMax);
     final atDefault = w.round() == kPageWidthDefault.round();
-    return Row(
-      children: [
-        SizedBox(width: 90, child: Text(context.l10n.settingsPageWidth)),
-        Expanded(
-          child: Slider(
-            value: w,
-            min: kPageWidthMin,
-            max: kPageWidthMax,
-            divisions: kPageWidthDivisions,
-            onChanged: (value) {
-              setState(() => _pageWidth = value);
-              _applyAppearance();
-            },
+    return _preferenceRow(
+      context.l10n.settingsPageWidth,
+      Row(
+        children: [
+          Expanded(
+            child: Slider(
+              value: w,
+              min: kPageWidthMin,
+              max: kPageWidthMax,
+              divisions: kPageWidthDivisions,
+              onChanged: (value) {
+                setState(() => _pageWidth = value);
+                _applyAppearance();
+              },
+            ),
           ),
-        ),
-        SizedBox(
-          width: 52,
-          child: Text(
+          Text(
             '${w.round()} px',
-            textAlign: TextAlign.right,
             style: TextStyle(
               color: MicaTheme.of(context).text.muted,
               fontSize: 13,
             ),
           ),
-        ),
-        IconButton(
-          tooltip: context.l10n.settingsResetPageWidth,
-          visualDensity: VisualDensity.compact,
-          onPressed: atDefault
-              ? null
-              : () {
-                  setState(() => _pageWidth = kPageWidthDefault);
-                  _applyAppearance();
-                },
-          icon: const Icon(Icons.restart_alt, size: 18),
-        ),
-      ],
+          IconButton(
+            tooltip: context.l10n.settingsResetPageWidth,
+            visualDensity: VisualDensity.compact,
+            onPressed: atDefault
+                ? null
+                : () {
+                    setState(() => _pageWidth = kPageWidthDefault);
+                    _applyAppearance();
+                  },
+            icon: const Icon(Icons.restart_alt, size: 18),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1430,10 +1472,10 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     required String display,
     required ValueChanged<double> onChanged,
     int? divisions,
-  }) {
-    return Row(
+  }) => _preferenceRow(
+    label,
+    Row(
       children: [
-        SizedBox(width: 90, child: Text(label)),
         Expanded(
           child: Slider(
             value: value,
@@ -1443,20 +1485,16 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             onChanged: onChanged,
           ),
         ),
-        SizedBox(
-          width: 56,
-          child: Text(
-            display,
-            textAlign: TextAlign.right,
-            style: TextStyle(
-              color: MicaTheme.of(context).text.muted,
-              fontSize: 13,
-            ),
+        Text(
+          display,
+          style: TextStyle(
+            color: MicaTheme.of(context).text.muted,
+            fontSize: 13,
           ),
         ),
       ],
-    );
-  }
+    ),
+  );
 
   Widget _fontChip(String label, String? family) {
     return ChoiceChip(
@@ -1521,12 +1559,18 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     setState(() {
       _accountBusy = true;
       _accountMsg = null;
+      _accountMessageIsError = false;
     });
     try {
       final url = await action();
       if (mounted) setState(() => _avatarUrl = url);
     } catch (error) {
-      if (mounted) setState(() => _accountMsg = error.toString());
+      if (mounted) {
+        setState(() {
+          _accountMsg = error.toString();
+          _accountMessageIsError = true;
+        });
+      }
     } finally {
       if (mounted) setState(() => _accountBusy = false);
     }
@@ -1537,6 +1581,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     setState(() {
       _accountBusy = true;
       _accountMsg = null;
+      _accountMessageIsError = false;
     });
     try {
       await widget.onUpdateProfile!(_name.text.trim());
@@ -1544,7 +1589,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       // copied — no longer closes either; nothing in Settings does.)
       if (mounted) setState(() => _accountMsg = l10n.accountSaved);
     } catch (error) {
-      if (mounted) setState(() => _accountMsg = error.toString());
+      if (mounted) {
+        setState(() {
+          _accountMsg = error.toString();
+          _accountMessageIsError = true;
+        });
+      }
     } finally {
       if (mounted) setState(() => _accountBusy = false);
     }
@@ -1553,12 +1603,16 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   Future<void> _changeAccountPassword() async {
     final l10n = context.l10n;
     if (_newPass.text.length < 8) {
-      setState(() => _accountMsg = l10n.accountPasswordTooShort);
+      setState(() {
+        _accountMsg = l10n.accountPasswordTooShort;
+        _accountMessageIsError = true;
+      });
       return;
     }
     setState(() {
       _accountBusy = true;
       _accountMsg = null;
+      _accountMessageIsError = false;
     });
     try {
       await widget.onChangePassword!(_curPass.text, _newPass.text);
@@ -1573,7 +1627,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       // this session quietly fails to renew.
       setState(() => _accountMsg = l10n.accountPasswordChanged);
     } catch (error) {
-      if (mounted) setState(() => _accountMsg = error.toString());
+      if (mounted) {
+        setState(() {
+          _accountMsg = error.toString();
+          _accountMessageIsError = true;
+        });
+      }
     } finally {
       if (mounted) setState(() => _accountBusy = false);
     }
@@ -1639,6 +1698,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     setState(() {
       _accountBusy = true;
       _accountMsg = null;
+      _accountMessageIsError = false;
     });
     try {
       await widget.onDeleteAccount!(password);
@@ -1648,6 +1708,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       if (mounted) {
         setState(() {
           _accountMsg = error.toString();
+          _accountMessageIsError = true;
           _accountBusy = false;
         });
       }
@@ -1659,6 +1720,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // calls this unconditionally, so the absence has to be handled here.
     final load = widget.onLoadAiSettings;
     if (load == null) return;
+    setState(() {
+      _loading = true;
+      _aiLoadFailed = false;
+      _error = null;
+    });
     try {
       final settings = await load();
       if (!mounted) return;
@@ -1670,6 +1736,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       if (!mounted) return;
       setState(() {
         _error = error.toString();
+        _aiLoadFailed = true;
         _loading = false;
       });
     }
@@ -2084,53 +2151,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     );
   }
 
-  /// One settings nav row. Active = accent wash + accent ink + 600, rather than
-  /// Material's `selected` (a tinted title only), which at 180px read as barely
-  /// distinguishable from its neighbours.
-  Widget _navRow(BuildContext context, int i, String title, IconData icon) {
-    final active = _tab == i;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-      child: Material(
-        color: active ? MicaTheme.of(context).accent.wash : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => setState(() => _tab = i),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-            child: Row(
-              children: [
-                Icon(
-                  icon,
-                  size: 18,
-                  color: active
-                      ? MicaTheme.of(context).accent.primary
-                      : MicaTheme.of(context).text.muted,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                      color: active
-                          ? MicaTheme.of(context).accent.primary
-                          : MicaTheme.of(context).text.primary,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   /// Whether this token's `expires_at` is already in the past.
   ///
   /// An unparseable or absent value reads as NOT expired: guessing "expired"
@@ -2233,7 +2253,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     }
 
     return [
-      MicaEyebrow(context.l10n.tokenTitle, icon: Icons.key_outlined),
       const SizedBox(height: 4),
       Text(
         context.l10n.tokenDescription,
@@ -2488,40 +2507,32 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   }
 
   List<Widget> _appearanceSection(BuildContext context) => [
-    MicaEyebrow(context.l10n.settingsAppearance, icon: Icons.tune),
-    const SizedBox(height: 12),
-    Row(
-      children: [
-        SizedBox(width: 90, child: Text(context.l10n.languageLabel)),
-        Expanded(
-          child: Wrap(
-            spacing: 8,
-            children: [
-              _langChip(context.l10n.languageSystem, kLangSystem),
-              _langChip(context.l10n.languageChinese, kLangChinese),
-              _langChip(context.l10n.languageEnglish, kLangEnglish),
-            ],
-          ),
-        ),
-      ],
+    _preferenceGroup(context.l10n.settingsInterfaceGroup),
+    _preferenceRow(
+      context.l10n.languageLabel,
+      Wrap(
+        spacing: 8,
+        children: [
+          _langChip(context.l10n.languageSystem, kLangSystem),
+          _langChip(context.l10n.languageChinese, kLangChinese),
+          _langChip(context.l10n.languageEnglish, kLangEnglish),
+        ],
+      ),
     ),
     const SizedBox(height: 8),
-    Row(
-      children: [
-        SizedBox(width: 90, child: Text(context.l10n.themeLabel)),
-        Expanded(
-          child: Wrap(
-            spacing: 8,
-            children: [
-              _themeChip(context.l10n.themeSystem, MicaThemeMode.system),
-              _themeChip(context.l10n.themeLight, MicaThemeMode.light),
-              _themeChip(context.l10n.themeDark, MicaThemeMode.dark),
-            ],
-          ),
-        ),
-      ],
+    _preferenceRow(
+      context.l10n.themeLabel,
+      Wrap(
+        spacing: 8,
+        children: [
+          _themeChip(context.l10n.themeSystem, MicaThemeMode.system),
+          _themeChip(context.l10n.themeLight, MicaThemeMode.light),
+          _themeChip(context.l10n.themeDark, MicaThemeMode.dark),
+        ],
+      ),
     ),
     const SizedBox(height: 8),
+    _preferenceGroup(context.l10n.settingsEditorGroup),
     _pageWidthRow(context),
     _sliderRow(
       label: context.l10n.settingsFontSize,
@@ -2538,33 +2549,18 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       },
     ),
     const SizedBox(height: 4),
-    Row(
-      children: [
-        SizedBox(width: 90, child: Text(context.l10n.settingsFont)),
-        Expanded(
-          child: Wrap(
-            spacing: 8,
-            children: [
-              _fontChip(context.l10n.settingsFontSystem, null),
-              _fontChip('Serif', 'serif'),
-              _fontChip('Mono', kMonoFont),
-            ],
-          ),
-        ),
-      ],
+    _preferenceRow(
+      context.l10n.settingsFont,
+      Wrap(
+        spacing: 8,
+        children: [
+          _fontChip(context.l10n.settingsFontSystem, null),
+          _fontChip('Serif', 'serif'),
+          _fontChip('Mono', kMonoFont),
+        ],
+      ),
     ),
     const SizedBox(height: 8),
-    SwitchListTile(
-      contentPadding: EdgeInsets.zero,
-      dense: true,
-      value: _reHostImages,
-      title: Text(context.l10n.settingsReHostImages),
-      subtitle: Text(context.l10n.settingsReHostImagesSub),
-      onChanged: (value) {
-        setState(() => _reHostImages = value);
-        widget.onReHostImagesChanged(value);
-      },
-    ),
     SwitchListTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
@@ -2585,6 +2581,30 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       onChanged: (value) {
         setState(() => _showPageTitle = value);
         widget.onShowPageTitleChanged(value);
+      },
+    ),
+    const SizedBox(height: 16),
+    MicaAppearancePreview(
+      appearance: EditorAppearance(
+        fontScale: _fontScale,
+        fontFamily: _fontFamily,
+      ),
+      pageWidth: _pageWidth,
+      title: context.l10n.settingsPreviewTitle,
+      body: context.l10n.settingsPreviewBody,
+      code: context.l10n.settingsPreviewCode,
+      label: context.l10n.settingsPreview,
+    ),
+    _preferenceGroup(context.l10n.settingsPasteGroup),
+    SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      value: _reHostImages,
+      title: Text(context.l10n.settingsReHostImages),
+      subtitle: Text(context.l10n.settingsReHostImagesSub),
+      onChanged: (value) {
+        setState(() => _reHostImages = value);
+        widget.onReHostImagesChanged(value);
       },
     ),
     // Desktop only — a browser tab's close button belongs to the browser, and
@@ -2646,7 +2666,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   // add and remove them. The instance has had one row per provider since
   // migration 0022; this is the screen that finally admits it.
   List<Widget> _aiSection(BuildContext context) => [
-    MicaEyebrow(context.l10n.settingsAiProvider, icon: Icons.auto_awesome),
+    if (_loading) ...[
+      const LinearProgressIndicator(),
+      const SizedBox(height: 12),
+      Text(context.l10n.settingsAiLoading),
+      const SizedBox(height: 18),
+    ],
     SwitchListTile(
       contentPadding: EdgeInsets.zero,
       dense: true,
@@ -2659,41 +2684,55 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       },
     ),
     const SizedBox(height: 8),
-    // Side by side where there is room, stacked where there is not. The
-    // breakpoint is about the FORM, not the window: below it the endpoint field
-    // and the model row wrap into unreadable slivers, and a list stacked above
-    // a full-width form is the better trade.
-    LayoutBuilder(
-      builder: (context, constraints) {
-        final list = _aiProviderList(context);
-        final detail = _aiProviderDetail(context);
-        if (constraints.maxWidth < 460) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [list, const SizedBox(height: 18), detail],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(width: 168, child: list),
-            const SizedBox(width: 18),
-            Expanded(child: detail),
-          ],
-        );
-      },
-    ),
-    if (!_canEdit) ...[
-      const SizedBox(height: 12),
-      Text(
-        context.l10n.aiAdminOnly,
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: MicaTheme.of(context).text.muted),
+    if (_aiLoadFailed) ...[
+      if (_error != null) ErrorBanner(_error!),
+      const SizedBox(height: 8),
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: OutlinedButton.icon(
+          onPressed: _load,
+          icon: const Icon(Icons.refresh, size: 16),
+          label: Text(context.l10n.commonRetry),
+        ),
       ),
     ],
-    if (_error != null) ...[const SizedBox(height: 12), ErrorBanner(_error!)],
+    if (!_loading && !_aiLoadFailed) ...[
+      // Side by side where there is room, stacked where there is not. The
+      // breakpoint is about the FORM, not the window: below it the endpoint field
+      // and the model row wrap into unreadable slivers, and a list stacked above
+      // a full-width form is the better trade.
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final list = _aiProviderList(context);
+          final detail = _aiProviderDetail(context);
+          if (constraints.maxWidth < 460) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [list, const SizedBox(height: 18), detail],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(width: 168, child: list),
+              const SizedBox(width: 18),
+              Expanded(child: detail),
+            ],
+          );
+        },
+      ),
+      if (!_canEdit) ...[
+        const SizedBox(height: 12),
+        Text(
+          context.l10n.aiAdminOnly,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: MicaTheme.of(context).text.muted,
+          ),
+        ),
+      ],
+      if (_error != null) ...[const SizedBox(height: 12), ErrorBanner(_error!)],
+    ],
   ];
 
   /// The left column: one row per stored provider, plus the way to add one.
@@ -3297,7 +3336,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   }
 
   List<Widget> _accountSection(BuildContext context) => [
-    MicaEyebrow(context.l10n.settingsAccount, icon: Icons.person_outline),
     const SizedBox(height: 10),
     if (widget.onChangeAvatar != null) ...[
       Row(
@@ -3404,10 +3442,28 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     ),
     if (_accountMsg != null) ...[
       const SizedBox(height: 10),
-      Text(
-        _accountMsg!,
-        style: TextStyle(color: MicaTheme.of(context).text.muted, fontSize: 13),
-      ),
+      if (_accountMessageIsError)
+        ErrorBanner(_accountMsg!)
+      else
+        Row(
+          children: [
+            Icon(
+              Icons.check_circle_outline,
+              size: 18,
+              color: MicaTheme.of(context).status.success,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _accountMsg!,
+                style: TextStyle(
+                  color: MicaTheme.of(context).status.success,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
     ],
     if (widget.onDeleteAccount != null) ...[
       const Divider(height: 32),
@@ -3592,7 +3648,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  context.l10n.importHistoryProgress(label, job.done, job.total),
+                  context.l10n.importHistoryProgress(
+                    label,
+                    job.done,
+                    job.total,
+                  ),
                   style: TextStyle(fontSize: 13, color: tokens.text.primary),
                 ),
                 if (when != null)
@@ -3636,7 +3696,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   List<Widget> _dataSection(BuildContext context) => [
-    MicaEyebrow(context.l10n.settingsData, icon: Icons.import_export),
     const SizedBox(height: 12),
     Text(
       context.l10n.dataImportDescription,
@@ -3935,16 +3994,26 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     // in 本地模式 the whole 账户 group disappears, which is the same
     // null-means-absent rule the tabs themselves already follow.
     final tabs =
-        <({String group, String title, IconData icon, List<Widget> section})>[
+        <
+          ({
+            String group,
+            String title,
+            String description,
+            IconData icon,
+            List<Widget> section,
+          })
+        >[
           (
             group: context.l10n.settingsGroupGeneral,
             title: context.l10n.settingsAppearance,
+            description: context.l10n.settingsAppearanceDescription,
             icon: Icons.tune,
             section: _appearanceSection(context),
           ),
           (
             group: context.l10n.settingsGroupGeneral,
             title: context.l10n.settingsShortcuts,
+            description: context.l10n.settingsShortcutsDescription,
             icon: Icons.keyboard_outlined,
             section: _shortcutsSection(context),
           ),
@@ -3953,6 +4022,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             (
               group: context.l10n.settingsGroupAccount,
               title: context.l10n.settingsAccount,
+              description: context.l10n.settingsAccountDescription,
               icon: Icons.person_outline,
               section: _accountSection(context),
             ),
@@ -3960,12 +4030,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             (
               group: context.l10n.settingsGroupAccount,
               title: context.l10n.tokenTitle,
+              description: context.l10n.settingsTokensDescription,
               icon: Icons.key_outlined,
               section: _tokensSection(context),
             ),
           (
             group: context.l10n.settingsGroupWorkspace,
             title: context.l10n.settingsData,
+            description: context.l10n.settingsDataDescription,
             icon: Icons.import_export,
             section: _dataSection(context),
           ),
@@ -3974,6 +4046,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             (
               group: context.l10n.settingsGroupOther,
               title: context.l10n.settingsAiProvider,
+              description: context.l10n.settingsAiDescription,
               icon: Icons.auto_awesome,
               section: _aiSection(context),
             ),
@@ -3983,105 +4056,40 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             (
               group: context.l10n.settingsGroupOther,
               title: context.l10n.settingsDiagnostics,
+              description: context.l10n.settingsDiagnosticsDescription,
               icon: Icons.bug_report_outlined,
               section: _diagnosticsSection(context),
             ),
         ];
-    final titles = [for (final t in tabs) t.title];
-    final icons = [for (final t in tabs) t.icon];
-    final sections = [for (final t in tabs) t.section];
-    return AlertDialog(
-      title: Row(
-        children: [
-          const Icon(Icons.settings_outlined, size: 22),
-          const SizedBox(width: 8),
-          Text(context.l10n.settingsTitle),
-        ],
-      ),
-      contentPadding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
-      content: SizedBox(
-        width: 720,
-        height: 460,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SizedBox(
-                    width: 180,
-                    child: ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      children: [
-                        for (var i = 0; i < titles.length; i++) ...[
-                          if (i == 0 || tabs[i].group != tabs[i - 1].group)
-                            Padding(
-                              padding: EdgeInsets.only(
-                                left: 16,
-                                right: 8,
-                                top: i == 0 ? 4 : 14,
-                                bottom: 4,
-                              ),
-                              child: Text(
-                                tabs[i].group.toUpperCase(),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.6,
-                                  color: MicaTheme.of(context).text.faint,
-                                ),
-                              ),
-                            ),
-                          _navRow(context, i, titles[i], icons[i]),
-                        ],
-                        const Divider(height: 1),
-                        // About isn't a content tab — it pops the version dialog.
-                        ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.info_outline, size: 20),
-                          title: Text(context.l10n.aboutTitle),
-                          subtitle: const Text('v$kAppVersion'),
-                          onTap: () => _showAboutDialog(context),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const VerticalDivider(width: 1),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: sections[_tab],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-      ),
-      // No Save button. Everything here applies as you touch it — toggles and
-      // sliders always did, the connection switches on pick, and the AI fields
-      // commit when they lose focus. AppFlowy, AFFiNE and Notion all settle in
-      // the same place, and the button we had was worse than redundant: it only
-      // ever saved the AI section, from under every page.
-      //
-      // The spinner rides here so a commit in flight is visible without a
-      // button to host it.
-      actions: [
-        if (_saving)
-          const Padding(
-            padding: EdgeInsets.only(right: 12),
-            child: SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
+    return MicaSettingsShell(
+      title: context.l10n.settingsTitle,
+      selectedIndex: _tab,
+      onSelected: (index) => setState(() => _tab = index),
+      closeLabel: context.l10n.commonClose,
+      backLabel: context.l10n.commonBack,
+      onClose: () => Navigator.of(context).pop(),
+      busy: _saving,
+      destinations: [
+        for (final tab in tabs)
+          MicaSettingsDestination(
+            group: tab.group,
+            title: tab.title,
+            description: tab.description,
+            icon: tab.icon,
+            content: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: tab.section,
             ),
           ),
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: Text(context.l10n.commonClose),
-        ),
       ],
+      footer: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+        leading: const Icon(Icons.info_outline, size: 18),
+        title: Text(context.l10n.aboutTitle),
+        subtitle: const Text('v$kAppVersion'),
+        onTap: () => _showAboutDialog(context),
+      ),
     );
   }
 }

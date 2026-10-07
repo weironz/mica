@@ -1,0 +1,84 @@
+{
+  "results": [
+    {
+      "label": "long document caret moves keep layout",
+      "ok": true,
+      "detail": "207 blocks, layouts 2 → 2"
+    },
+    {
+      "label": "real text input updates content and layout",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "undo restores original content",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "IME preedit renders once",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "IME commit keeps one copy",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "drag selects text without showing format toolbar",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "format toolbar appears after drag release",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "browser frame intervals during selection (observation, not an FPS guarantee)",
+      "ok": true,
+      "detail": {
+        "samples": 41,
+        "medianMs": 16.699999999999818,
+        "p95Ms": 50
+      }
+    },
+    {
+      "label": "theme updates the actual editor",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "mobile settings navigation and close work",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "production appearance opens while AI requests hang",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "production AI failure has local retry",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "production AI retry issues new request and clears error",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "production mobile settings closes",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "label": "no uncaught browser exceptions",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "errors": []
+}

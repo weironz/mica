@@ -514,8 +514,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
   // Auto-scroll the surrounding page while drag-selecting near the viewport edge.
-  Timer? _autoScrollTimer;
+  int? _autoScrollFrame;
+  Duration? _lastAutoScrollTime;
   Offset? _lastDragGlobal;
+  bool _pointerDragActive = false;
+  bool _panCancelled = false;
+  ({String id, Map<String, dynamic> data, List<String> keys})?
+  _dragPreviewSnapshot;
   OverlayEntry? _cellEntry; // active table cell editor
   VoidCallback? _cellFocusListener;
   // Commit-and-close hook for the active cell editor; called when a drag
@@ -536,6 +541,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // _activeCell / _areaDrag, which clear), so Shift+click can grow the
   // rectangle from where the selection started.
   ({int node, int row, int col})? _cellSelectAnchor;
+
   /// The floating format bar's own height. A literal because the bar is placed
   /// BEFORE it is laid out, so nothing can ask it how tall it is.
   static const double _markBarHeight = 44;
@@ -644,6 +650,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
     // Load before subscribing so the initial notify doesn't setState in init.
     _controller.load(widget.nodes);
+    _lastContentRevision = _controller.contentRevision;
     _controller.addListener(_onControllerChanged);
     _focus.addListener(_onFocusChange);
     widget.scrollHook?._scroll = _scrollToBlock;
@@ -656,6 +663,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (!mounted) return;
       _publishOutline();
       _publishActiveBlock();
+      _cacheImageUrls();
       _recomputeCounts(); // seed the badge for an opened-but-unedited document
       // Re-host external image links this document arrived carrying — from an
       // import (server-side re-host 403s hosts that block its datacenter IP,
@@ -1204,15 +1212,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // stale area made Delete blank the WRONG table and stole Backspace/
       // Ctrl+C from ordinary body editing. (Cell-edit previews don't get here
       // with an area set: opening a cell editor already clears it.)
-      _render?.tableBlockSelection = null;
+      final contentChanged =
+          _lastContentRevision != _controller.contentRevision;
+      _lastContentRevision = _controller.contentRevision;
+      if (contentChanged) _render?.tableBlockSelection = null;
       setState(() {});
       _restartBlink();
       _refreshMarkBar();
-      _cacheImageUrls();
       _reportCursor();
-      _publishOutline();
       _publishActiveBlock();
-      _scheduleCountUpdate();
+      if (contentChanged) {
+        _cacheImageUrls();
+        _publishOutline();
+        _scheduleCountUpdate();
+      }
     }
 
     // notifyListeners may fire during the build/layout phase (load/reconcile).
@@ -1223,6 +1236,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       apply();
     }
   }
+
+  int _lastContentRevision = -1;
 
   /// Debounced word-count refresh. Coalesces bursts of edits into one
   /// full-document walk; the badge repaints on the next [setState] regardless,
@@ -1253,6 +1268,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       setRichImagePasteHandler(_handlePasteImage);
       _syncImeFromSelection(force: true);
     } else {
+      _stopAutoScroll();
       _detachIme();
       _blink?.cancel();
       _closeSlash();
@@ -1716,12 +1732,50 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       ),
     );
     _syncImeFromSelection(force: true);
+    _scheduleImeGeometry();
     _conn!.show();
   }
 
   void _detachIme() {
     _conn?.close();
     _conn = null;
+  }
+
+  bool _imeGeometryScheduled = false;
+
+  /// Like EditableText, report platform geometry after each rendered frame
+  /// while attached. This does not request another frame: scroll/resize paints
+  /// can update the transform without waking the editor or moving its caret.
+  void _scheduleImeGeometry() {
+    if (_imeGeometryScheduled) return;
+    _imeGeometryScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _imeGeometryScheduled = false;
+      if (!mounted || !_focus.hasFocus || _conn?.attached != true) return;
+      _updateImeGeometry();
+      _scheduleImeGeometry();
+    });
+  }
+
+  void _updateImeGeometry() {
+    final render = _render;
+    final focus = _controller.selection?.focus;
+    final conn = _conn;
+    if (render == null ||
+        !render.attached ||
+        focus == null ||
+        conn == null ||
+        !conn.attached ||
+        !_focus.hasFocus) {
+      return;
+    }
+    final rect = render.caretRectFor(focus);
+    if (rect == null) return;
+    conn.setEditableSizeAndTransform(render.size, render.getTransformTo(null));
+    conn.setCaretRect(rect);
+    // This is the platform candidate-menu anchor, distinct from setCaretRect
+    // (used by the macOS accent menu). Keep it beside the live composing caret.
+    conn.setComposingRect(rect);
   }
 
   /// Result for keys we want the platform text-input connection to act on
@@ -1763,9 +1817,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!force && value == _lastSentIme) return;
     _lastSentIme = value;
     conn.setEditingState(value);
-    final sel = _controller.selection;
-    final rect = sel == null ? null : _render?.caretRectFor(sel.focus);
-    if (rect != null) conn.setCaretRect(rect);
     _ensureCaretVisible();
   }
 
@@ -1812,6 +1863,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (render == null || !render.attached || focus == null) return;
       final rect = render.caretRectFor(focus);
       if (rect == null) return;
+      // TextPainter geometry is current only after layout. Candidate windows
+      // must follow this rect too, including ordinary typing and line wraps.
+      _updateImeGeometry();
       render.showOnScreen(
         rect: rect.inflate(_caretRevealMargin),
         duration: const Duration(milliseconds: 120),
@@ -1852,9 +1906,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       );
       _lastSentIme = value;
       _closeLinkBar();
-      final f = _controller.selection?.focus;
-      final rect = f == null ? null : _render?.caretRectFor(f);
-      if (rect != null) _conn?.setCaretRect(rect);
       // A long preedit can wrap a line too — the caret must stay visible while
       // the candidate is still being composed, not only once it commits.
       _ensureCaretVisible();
@@ -2394,6 +2445,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _apply(DocPosition target, bool shift, {bool keepGoalX = false}) {
+    _render?.tableBlockSelection = null;
     final sel = _controller.selection!;
     _controller.setSelection(
       shift
@@ -2489,6 +2541,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _selectAll() {
+    _render?.tableBlockSelection = null;
     final nodes = _controller.nodes;
     if (nodes.isEmpty) return;
     final sel = _controller.selection;
@@ -3429,6 +3482,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _refreshMarkBar() {
+    if (_pointerDragActive) {
+      _hideMarkBar();
+      return;
+    }
     final sel = _controller.selection;
     // A ranged selection inside a table cell shows the bar too (inline marks
     // only), so selecting cell text — not just Ctrl+B — can format it.
@@ -4514,6 +4571,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _onPanDown(DragDownDetails d) {
+    _panCancelled = false;
     // Captured at the REAL pointer-down spot: by the time onPanStart fires
     // the pointer has already travelled past the touch slop, and a drag that
     // STARTED on a paragraph above a diagram would read as inside it —
@@ -4527,10 +4585,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   void _onPanStart(DragStartDetails d) {
     if (!widget.canEdit) return;
+    _pointerDragActive = true;
+    _hideMarkBar();
     _tapCount = 0; // a drag ends any tap sequence (no stray triple-click)
     final r = _render;
     if (r == null) return;
     // A drag (column resize, selection…) relayouts under the floating cell
+    r.tableBlockSelection = null;
     // editor — commit it first so it never hangs detached from its cell.
     _commitCellEditor?.call();
     final local = r.globalToLocal(d.globalPosition);
@@ -4544,6 +4605,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Dragging a table column border resizes columns.
     final colBorder = r.tableColBorderAt(local);
     if (colBorder != null) {
+      final node = _controller.nodes[colBorder.node];
+      _dragPreviewSnapshot = (
+        id: node.id,
+        data: {...node.data},
+        keys: const ['width', 'widths'],
+      );
       // Seed from the EFFECTIVE (rendered) widths, not the stored weights: in
       // auto-fit mode the two differ, and starting from the stored equal
       // weights made the first drag tick snap every column to the equal split.
@@ -4570,6 +4637,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Dragging an image's right-edge handle resizes it.
     final imageResize = r.imageResizeAt(local);
     if (imageResize != null) {
+      final node = _controller.nodes[imageResize];
+      _dragPreviewSnapshot = (
+        id: node.id,
+        data: {...node.data},
+        keys: const ['width'],
+      );
       _imageResize = imageResize;
       _imageResizeWidth = r.imageWidthFor(imageResize, local.dx);
       return;
@@ -4722,10 +4795,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // Auto-scroll the page vertically when the drag nears the viewport edge so
     // the selection can extend beyond what's currently visible.
     _lastDragGlobal = d.globalPosition;
-    _autoScrollTimer ??= Timer.periodic(
-      const Duration(milliseconds: 16),
-      (_) => _autoScrollTick(),
-    );
+    _scheduleAutoScroll();
     // Auto-scroll a code block horizontally when selecting near its edges;
     // the closer to the edge, the faster (keeps up with the drag).
     if (_controller.focusedNode?.isCode ?? false) {
@@ -4739,6 +4809,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _onPanEnd(DragEndDetails d) {
+    // Flutter reports PointerCancel as onPanEnd for an already accepted drag.
+    // The raw listener distinguishes it so cancellation cannot commit a move
+    // or start the normal end-of-selection caret reveal.
+    if (_panCancelled) {
+      _panCancelled = false;
+      _onPanCancel();
+      return;
+    }
+    _pointerDragActive = false;
+    _dragPreviewSnapshot = null;
+    _stopAutoScroll();
+    _finishPan(d);
+    _refreshMarkBar();
+  }
+
+  void _finishPan(DragEndDetails d) {
     _diagramPan = null;
     _panDownDiagram = null;
     _cellDrag = null; // end any in-cell text drag-selection
@@ -4786,46 +4872,112 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _stopAutoScroll() {
-    _autoScrollTimer?.cancel();
-    _autoScrollTimer = null;
+    final frame = _autoScrollFrame;
+    if (frame != null) {
+      SchedulerBinding.instance.cancelFrameCallbackWithId(frame);
+    }
+    _autoScrollFrame = null;
+    _lastAutoScrollTime = null;
     _lastDragGlobal = null;
+  }
+
+  void _onPanCancel() {
+    _stopAutoScroll();
+    _pointerDragActive = false;
+    _dragAnchor = null;
+    _scrollbarDrag = null;
+    _blockDrag = null;
+    _diagramPan = null;
+    _panDownDiagram = null;
+    _cellDrag = null;
+    _areaDrag = null;
+    _colResize = null;
+    _imageResize = null;
+    _imageResizeWidth = null;
+    _render?.setDropIndicator(null);
+    // Resize previews mutate the live node without sending an op. Cancellation
+    // must restore that local geometry rather than silently keeping an unsaved
+    // width. Find by id in case a remote edit moved the node during the drag.
+    final snapshot = _dragPreviewSnapshot;
+    _dragPreviewSnapshot = null;
+    if (snapshot != null) {
+      final i = _controller.nodes.indexWhere((n) => n.id == snapshot.id);
+      if (i >= 0) {
+        final data = {..._controller.nodes[i].data};
+        for (final key in snapshot.keys) {
+          if (snapshot.data.containsKey(key)) {
+            data[key] = snapshot.data[key];
+          } else {
+            data.remove(key);
+          }
+        }
+        _controller.nodes[i].data = data;
+        _controller.notifyListeners();
+      }
+    }
+    _refreshMarkBar();
+  }
+
+  void _scheduleAutoScroll() {
+    if (_autoScrollFrame != null || _dragAnchor == null) return;
+    _autoScrollFrame = SchedulerBinding.instance.scheduleFrameCallback((time) {
+      _autoScrollFrame = null;
+      if (!mounted || !_pointerDragActive) return;
+      final previous = _lastAutoScrollTime;
+      _lastAutoScrollTime = time;
+      final seconds = previous == null
+          ? 0.0
+          : ((time - previous).inMicroseconds / Duration.microsecondsPerSecond)
+                .clamp(0.0, 0.05);
+      if (_autoScrollTick(seconds)) {
+        _scheduleAutoScroll();
+      } else {
+        _lastAutoScrollTime = null;
+      }
+    });
   }
 
   /// One auto-scroll step: while the held pointer is within the edge zone of the
   /// surrounding scroll view, scroll the page (faster nearer the edge) and keep
   /// extending the selection to the content now under the pointer.
-  void _autoScrollTick() {
+  bool _autoScrollTick(double seconds) {
     final scrollable = Scrollable.maybeOf(context);
     final global = _lastDragGlobal;
     final anchor = _dragAnchor;
     final r = _render;
     if (scrollable == null || global == null || anchor == null || r == null) {
-      return;
+      return false;
     }
     final box = scrollable.context.findRenderObject() as RenderBox?;
-    if (box == null) return;
+    if (box == null) return false;
     final top = box.localToGlobal(Offset.zero).dy;
     final bottom = top + box.size.height;
     const zone = 90.0; // edge band that triggers scrolling
-    const maxStep = 32.0; // px per ~16ms tick at the very edge (~2000px/s)
+    const maxSpeed = 1000.0; // logical px/second, independent of frame rate
 
     double delta = 0;
     if (global.dy < top + zone) {
-      delta = -((top + zone - global.dy) / zone).clamp(0.0, 1.0) * maxStep;
+      final proximity = ((top + zone - global.dy) / zone).clamp(0.0, 1.0);
+      delta = -proximity * proximity * maxSpeed;
     } else if (global.dy > bottom - zone) {
-      delta = ((global.dy - (bottom - zone)) / zone).clamp(0.0, 1.0) * maxStep;
+      final proximity = ((global.dy - (bottom - zone)) / zone).clamp(0.0, 1.0);
+      delta = proximity * proximity * maxSpeed;
     }
-    if (delta == 0) return;
+    if (delta == 0) return false;
 
     final pos = scrollable.position;
-    final target = (pos.pixels + delta).clamp(
+    // Seed the frame clock before moving; an initial pointer event has no
+    // elapsed frame duration yet.
+    if (seconds == 0) return true;
+    final target = (pos.pixels + delta * seconds).clamp(
       pos.minScrollExtent,
       pos.maxScrollExtent,
     );
-    if (target == pos.pixels) return;
+    if (target == pos.pixels) return false;
     pos.jumpTo(target);
     final p = r.positionAt(r.globalToLocal(global));
     _controller.setSelection(DocSelection(anchor: anchor, focus: p));
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -5951,10 +6103,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       case 'explain':
         _runCodeAi(nodeIndex, (c) => context.l10n.aiCodeExplain(c));
       case 'improve':
-        _runCodeAi(
-          nodeIndex,
-          (c) => context.l10n.aiCodeImprove(c),
-        );
+        _runCodeAi(nodeIndex, (c) => context.l10n.aiCodeImprove(c));
       case 'fix':
         _runCodeAi(nodeIndex, (c) => context.l10n.aiCodeFix(c));
       case 'custom':
@@ -6074,6 +6223,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // Capture the down timestamp (binding clock) for multi-tap counting; the
       // GestureDetector's onTapDown does not expose it.
       onPointerDown: (e) => _downStamp = e.timeStamp,
+      onPointerCancel: (_) {
+        _panCancelled = true;
+        if (_pointerDragActive) _onPanCancel();
+      },
       child: MouseRegion(
         cursor: widget.canEdit ? _cursor : MouseCursor.defer,
         onHover: _onHover,
@@ -6092,6 +6245,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             onPanStart: _onPanStart,
             onPanUpdate: _onPanUpdate,
             onPanEnd: _onPanEnd,
+            onPanCancel: _onPanCancel,
             child: Stack(
               clipBehavior: Clip.hardEdge,
               children: [
@@ -6100,6 +6254,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   child: DocumentSurface(
                     key: _surfaceKey,
                     nodes: _controller.nodes,
+                    contentRevision: _controller.contentRevision,
                     selection: _controller.selection,
                     showCaret: _focus.hasFocus && widget.canEdit,
                     caretBlink: _caretBlink,
@@ -6123,7 +6278,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 ),
                 if (_findOpen)
                   Positioned(top: 6, right: 6, child: _buildFindBar()),
-
               ],
             ),
           ),

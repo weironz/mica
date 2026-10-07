@@ -53,6 +53,9 @@ import 'ui/panel_kit.dart';
 import 'ui/rename.dart';
 import 'ui/search_data.dart';
 import 'ui/settings_sync.dart';
+import 'ui/settings_shell.dart';
+import 'ui/appearance_preview.dart';
+import 'ui/page_title_field.dart';
 import 'ui/sign_in_hero.dart';
 import 'ui/sign_in_screen.dart';
 import 'ui/sign_in_pane.dart';
@@ -63,7 +66,6 @@ import 'ui/user_avatar.dart';
 import 'ui/version_data.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'local/cache_stats.dart' show LocalCacheStats;
-import 'cjk_fonts.dart';
 import 'doc_tab.dart';
 import 'prefs.dart';
 import 'theme_controller.dart';
@@ -300,17 +302,8 @@ class MicaApp extends StatelessWidget {
           supportedLocales: kSupportedLocales,
           // Both palettes go in and `themeMode` decides, so following the OS is
           // Flutter's job rather than a brightness we resolve ourselves.
-          theme: MicaTokens.light.toMaterialTheme().copyWith(
-            // Crisp system CJK fonts on desktop (Windows 微软雅黑 / macOS 苹方 /
-            // Linux Noto CJK); the bundled font is the tail + web's only option.
-            textTheme: ThemeData(fontFamilyFallback: cjkFontFallback).textTheme,
-          ),
-          darkTheme: MicaTokens.dark_.toMaterialTheme().copyWith(
-            textTheme: ThemeData(
-              brightness: Brightness.dark,
-              fontFamilyFallback: cjkFontFallback,
-            ).textTheme,
-          ),
+          theme: MicaTokens.light.toMaterialTheme(),
+          darkTheme: MicaTokens.dark_.toMaterialTheme(),
           themeMode: themeMode.material,
           // Inside the builder, `Theme.of` reports which of the two Flutter
           // actually picked — so the tokens the rest of the app reads can never
@@ -2310,7 +2303,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// workspace being left. A TAB switch is the exception: the page is the
   /// reason for the switch, it is already loaded, and clearing it here would
   /// blank the very tab the user just clicked.
-  Future<void> _selectWorkspace(Workspace workspace, {bool keepOpenPage = false}) {
+  Future<void> _selectWorkspace(
+    Workspace workspace, {
+    bool keepOpenPage = false,
+  }) {
     savePref('lastWorkspaceId', workspace.id);
     final trace = SwitchTrace.begin(
       workspace.id,
@@ -2528,7 +2524,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             views.add(placed);
           }
         }
-        _viewsByWorkspace = {..._viewsByWorkspace, optimisticWorkspace.id: views};
+        _viewsByWorkspace = {
+          ..._viewsByWorkspace,
+          optimisticWorkspace.id: views,
+        };
       });
     }
 
@@ -4136,7 +4135,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// recent that belonged to another workspace therefore asked the CURRENT
   /// workspace for a document it does not contain, and got a 404 — the row
   /// looked broken rather than the app looking wrong.
-  Future<void> _openAcrossWorkspaces(String workspaceId, DocumentView view) async {
+  Future<void> _openAcrossWorkspaces(
+    String workspaceId,
+    DocumentView view,
+  ) async {
     if (_selectedWorkspace?.id != workspaceId) {
       Workspace? target;
       for (final w in _workspaces) {
@@ -4265,8 +4267,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         // The open page may have been anywhere inside a trashed subtree, so the
         // reloaded tree — not the requested ids — decides whether it survived.
         final open = _selectedView?.id;
-        final stillThere = (_viewsByWorkspace[workspace.id] ?? const [])
-            .any((v) => v.id == open);
+        final stillThere = (_viewsByWorkspace[workspace.id] ?? const []).any(
+          (v) => v.id == open,
+        );
         if (open != null && !stillThere) {
           _selectedView = null;
           _selectedBootstrap = null;
@@ -6037,7 +6040,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final session = _session;
     if (session == null) return null;
     try {
-      final usage = await _api.workspaceUsage(session.accessToken, workspace.id);
+      final usage = await _api.workspaceUsage(
+        session.accessToken,
+        workspace.id,
+      );
       // Remember the per-file cap for the upload error copy. This call is the
       // only place the client is told it — a presign carries it too, but the
       // presign for an oversized file is precisely the one that fails. Cached
@@ -7976,11 +7982,7 @@ enum WorldCardMode {
     return null;
   }
   if (p[2].isEmpty || p[4].isEmpty) return null;
-  return (
-    workspaceId: p[2],
-    fileId: p[4],
-    name: p.length == 7 ? p[6] : '',
-  );
+  return (workspaceId: p[2], fileId: p[4], name: p.length == 7 ? p[6] : '');
 }
 
 WorldCardMode worldCardMode({
@@ -10039,123 +10041,124 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         child: CustomScrollView(
         controller: _treeScroll,
         slivers: [
-        SliverList(
-        delegate: SliverChildListDelegate(
-        treeRows.indexed.map((entry) {
-          final (index, item) = entry;
-          // The NEXT row's depth bounds how far left an `after` drop under this
-          // row may pop out; null means "this is the last row", which is what
-          // lets the last row reach the workspace root.
-          final nextDepth = index + 1 < treeRows.length
-              ? treeRows[index + 1].depth
-              : null;
-          final row = DocumentListItem(
-            key: ValueKey(item.view.id),
-            view: item.view,
-            depth: item.depth,
-            hasChildren: item.hasChildren,
-            revealToggle: _navHovered,
-            isCollapsed: !_expandedViewIds.contains(item.view.id),
-            isSelected: item.view.id == activeId,
-            isMultiSelected: _selection.contains(item.view.id),
-            // Read-only trees get no selection: nothing in the batch menu is
-            // something a viewer could do.
-            onSelectClick: canEdit
-                ? ({required extendRange}) =>
-                      _handleSelectClick(item.view, extendRange: extendRange)
-                : null,
-            onPlainTap: () => _anchorTreeSelection(item.view),
-            batchActions: canEdit && _selection.actsOnWholeSelection(item.view.id)
-                ? () => _batchMenuItems(item.view)
-                : null,
-            canEdit: canEdit,
-            isRenaming: item.view.id == _renamingViewId,
-            onToggle: () => _toggleViewExpand(item.view),
-            onPressed: () => _navigateToView(item.view),
-            onCreateChild: () => _createInFolder(item.view, folder: false),
-            onCreateChildFolder: () =>
-                _createInFolder(item.view, folder: true),
-            onExportFolder: widget.onExportFolderZip == null
-                ? null
-                : () => _exportFolderFile(item.view),
-            // Import md / images / a nested folder UNDER this folder — both worlds
-            // (server validates parent_view_id; local prefixes the tree).
-            onImportFilesIntoFolder: item.view.objectType == 'folder'
-                ? () => _importFilesIntoFolder(item.view)
-                : null,
-            onImportFolderIntoFolder: item.view.objectType == 'folder'
-                ? () => _importFolderIntoFolder(item.view)
-                : null,
-            // Cross-workspace move/copy — cloud-only (onTransfer is null in a
-            // local workspace, which hides both entries). Works for pages and
-            // folders alike; the folder carries its subtree server-side.
-            onTransferMove: widget.onTransfer == null
-                ? null
-                : () => widget.onTransfer!([item.view], false),
-            onTransferCopy: widget.onTransfer == null
-                ? null
-                : () => widget.onTransfer!([item.view], true),
-            onClone: () => widget.onCloneView(item.view),
-            onRename: () => _promptRenameView(item.view),
-            onSetIcon: widget.onSetViewIcon == null
-                ? null
-                : () => widget.onSetViewIcon!(item.view),
-            // Pages only — a folder has no document to open in a tab. Also null
-            // in the local world, where the host passes no tab callbacks.
-            onOpenInNewTab:
-                (widget.onOpenInNewTab == null ||
-                    item.view.objectType == 'folder')
-                ? null
-                : () => widget.onOpenInNewTab!(item.view),
-            onRenameSubmit: (name) => _commitRename(item.view, name),
-            onRenameCancel: _cancelRename,
-            onDelete: () => widget.onDeleteView(item.view),
-          );
-          if (!canEdit) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: row,
-            );
-          }
-          // `childWhenDragging` only fades the row under the pointer. The rest
-          // of the selection is travelling too, so it fades with it — otherwise
-          // four rows sit there looking like they stayed behind.
-          final travelling =
-              _draggingTree &&
-              _selection.contains(item.view.id) &&
-              _selection.length > 1;
-          return _draggableTreeRow(
-            item.view,
-            item.depth,
-            nextDepth,
-            travelling ? Opacity(opacity: 0.4, child: row) : row,
-          );
-        }).toList(),
-        ),
-        ),
-        // The root drop zone. Every other drop target takes its parent from the
-        // ROW it sits on (`before`/`after` mean "sibling of that row"), so when
-        // the bottom of the tree is a nested row there was no way to say "below
-        // all of this, at the workspace root" — reported as 「放在整个页面树最底
-        // 部，让他与根路径齐平，似乎做不到」.
-        //
-        // The blank area under the tree already MEANS root: tapping it releases
-        // the located node, and the New buttons then create at the root.
-        // Accepting a drop there says the same thing with a drag, so there is
-        // nothing new to learn.
-        //
-        // `SliverFillRemaining(hasScrollBody: false)` and not a trailing box of
-        // some chosen height: it takes the LEFTOVER viewport when the tree is
-        // short — which is the whole blank area the user was aiming at — and
-        // only its own height when the tree overflows, so it adds no phantom
-        // scroll extent to a long tree. The first attempt was a 40px box and
-        // the drop silently did nothing, because the pointer was below it in
-        // blank space that still belonged to no one.
-        if (_draggingTree)
-          SliverFillRemaining(
-            hasScrollBody: false,
-            child: _rootDropZone(),
+          SliverList(
+            delegate: SliverChildListDelegate(
+              treeRows.indexed.map((entry) {
+                final (index, item) = entry;
+                // The NEXT row's depth bounds how far left an `after` drop under this
+                // row may pop out; null means "this is the last row", which is what
+                // lets the last row reach the workspace root.
+                final nextDepth = index + 1 < treeRows.length
+                    ? treeRows[index + 1].depth
+                    : null;
+                final row = DocumentListItem(
+                  key: ValueKey(item.view.id),
+                  view: item.view,
+                  depth: item.depth,
+                  hasChildren: item.hasChildren,
+                  revealToggle: _navHovered,
+                  isCollapsed: !_expandedViewIds.contains(item.view.id),
+                  isSelected: item.view.id == activeId,
+                  isMultiSelected: _selection.contains(item.view.id),
+                  // Read-only trees get no selection: nothing in the batch menu is
+                  // something a viewer could do.
+                  onSelectClick: canEdit
+                      ? ({required extendRange}) => _handleSelectClick(
+                          item.view,
+                          extendRange: extendRange,
+                        )
+                      : null,
+                  onPlainTap: () => _anchorTreeSelection(item.view),
+                  batchActions:
+                      canEdit && _selection.actsOnWholeSelection(item.view.id)
+                      ? () => _batchMenuItems(item.view)
+                      : null,
+                  canEdit: canEdit,
+                  isRenaming: item.view.id == _renamingViewId,
+                  onToggle: () => _toggleViewExpand(item.view),
+                  onPressed: () => _navigateToView(item.view),
+                  onCreateChild: () =>
+                      _createInFolder(item.view, folder: false),
+                  onCreateChildFolder: () =>
+                      _createInFolder(item.view, folder: true),
+                  onExportFolder: widget.onExportFolderZip == null
+                      ? null
+                      : () => _exportFolderFile(item.view),
+                  // Import md / images / a nested folder UNDER this folder — both worlds
+                  // (server validates parent_view_id; local prefixes the tree).
+                  onImportFilesIntoFolder: item.view.objectType == 'folder'
+                      ? () => _importFilesIntoFolder(item.view)
+                      : null,
+                  onImportFolderIntoFolder: item.view.objectType == 'folder'
+                      ? () => _importFolderIntoFolder(item.view)
+                      : null,
+                  // Cross-workspace move/copy — cloud-only (onTransfer is null in a
+                  // local workspace, which hides both entries). Works for pages and
+                  // folders alike; the folder carries its subtree server-side.
+                  onTransferMove: widget.onTransfer == null
+                      ? null
+                      : () => widget.onTransfer!([item.view], false),
+                  onTransferCopy: widget.onTransfer == null
+                      ? null
+                      : () => widget.onTransfer!([item.view], true),
+                  onClone: () => widget.onCloneView(item.view),
+                  onRename: () => _promptRenameView(item.view),
+                  onSetIcon: widget.onSetViewIcon == null
+                      ? null
+                      : () => widget.onSetViewIcon!(item.view),
+                  // Pages only — a folder has no document to open in a tab. Also null
+                  // in the local world, where the host passes no tab callbacks.
+                  onOpenInNewTab:
+                      (widget.onOpenInNewTab == null ||
+                          item.view.objectType == 'folder')
+                      ? null
+                      : () => widget.onOpenInNewTab!(item.view),
+                  onRenameSubmit: (name) => _commitRename(item.view, name),
+                  onRenameCancel: _cancelRename,
+                  onDelete: () => widget.onDeleteView(item.view),
+                );
+                if (!canEdit) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: row,
+                  );
+                }
+                // `childWhenDragging` only fades the row under the pointer. The rest
+                // of the selection is travelling too, so it fades with it — otherwise
+                // four rows sit there looking like they stayed behind.
+                final travelling =
+                    _draggingTree &&
+                    _selection.contains(item.view.id) &&
+                    _selection.length > 1;
+                return _draggableTreeRow(
+                  item.view,
+                  item.depth,
+                  nextDepth,
+                  travelling ? Opacity(opacity: 0.4, child: row) : row,
+                );
+              }).toList(),
+            ),
           ),
+          // The root drop zone. Every other drop target takes its parent from the
+          // ROW it sits on (`before`/`after` mean "sibling of that row"), so when
+          // the bottom of the tree is a nested row there was no way to say "below
+          // all of this, at the workspace root" — reported as 「放在整个页面树最底
+          // 部，让他与根路径齐平，似乎做不到」.
+          //
+          // The blank area under the tree already MEANS root: tapping it releases
+          // the located node, and the New buttons then create at the root.
+          // Accepting a drop there says the same thing with a drag, so there is
+          // nothing new to learn.
+          //
+          // `SliverFillRemaining(hasScrollBody: false)` and not a trailing box of
+          // some chosen height: it takes the LEFTOVER viewport when the tree is
+          // short — which is the whole blank area the user was aiming at — and
+          // only its own height when the tree overflows, so it adds no phantom
+          // scroll extent to a long tree. The first attempt was a 40px box and
+          // the drop silently did nothing, because the pointer was below it in
+          // blank space that still belonged to no one.
+          if (_draggingTree)
+            SliverFillRemaining(hasScrollBody: false, child: _rootDropZone()),
         ],
         ),
       );
@@ -10668,7 +10671,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (mode == _DropMode.into) {
       final children =
           widget.views
-              .where((v) => v.parentViewId == target.id && !moving.contains(v.id))
+              .where(
+                (v) => v.parentViewId == target.id && !moving.contains(v.id),
+              )
               .toList()
             ..sort((a, b) => a.position.compareTo(b.position));
       children.addAll(dragged);
@@ -11080,10 +11085,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       items: [
         PopupMenuItem(
           value: 'new',
-          child: _MenuRow(
-            icon: Icons.add,
-            label: context.l10n.tabNewPage,
-          ),
+          child: _MenuRow(icon: Icons.add, label: context.l10n.tabNewPage),
         ),
         PopupMenuItem(
           value: 'open',
@@ -11142,232 +11144,245 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
             child: LayoutBuilder(
-              builder: (context, header) => Row(
-              children: [
-                // The path comes first and takes what it needs, inside two
-                // bounds — see [_pathBudget]. It used to be a flat 260, which
-                // dropped ancestors on paths that had most of the row sitting
-                // empty beside them: an ellipsis with no visible cause.
-                //
-                // The pixel-based collapse in PageBreadcrumb stays as the last
-                // resort. It is NOT a depth rule ("collapse past 3 segments") —
-                // this repo tried that and recorded why it failed: `tools ›
-                // 笔记软件 › mica › 单机手动部署（IP 直连，不用 Traefik）` is
-                // three segments and still overruns. AppFlowy gets away with a
-                // depth rule because their breadcrumb has no width cap at all
-                // and simply scrolls, which a shared row cannot do.
-                if (widget.selectedView != null)
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: _pathBudget(
-                        header.maxWidth,
-                        barOn: widget.showFormatBar && canEdit,
-                      ),
-                    ),
-                    child: PageBreadcrumb(
-              views: widget.views,
-              current: widget.selectedView!,
-              onSelect: widget.onSelectView,
-              // Renaming from the breadcrumb tail (AppFlowy does this).
-              // Gated on the editor role: a viewer's rename would 403,
-              // and an edit affordance that cannot succeed is worse than
-              // none — same rule as everywhere else here.
-              onRename: canEdit ? widget.onRenameView : null,
-              onCopyPath: _copyPagePath,
-              workspaceName: widget.selectedWorkspace?.name,
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
+              builder: (context, header) => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Quiet sync status (nothing when synced). It STAYS
-                  // on the breadcrumb while the tools moved to the pane
-                  // header: it reports on this document, not on the app
-                  // — same reason the breadcrumb itself lives here.
-                  if (widget.syncPhase != null)
-                    _SyncBadge(widget.syncPhase!),
+                  Row(
+                    children: [
+                      // The path comes first and takes what it needs, inside two
+                      // bounds — see [_pathBudget]. It used to be a flat 260, which
+                      // dropped ancestors on paths that had most of the row sitting
+                      // empty beside them: an ellipsis with no visible cause.
+                      //
+                      // The pixel-based collapse in PageBreadcrumb stays as the last
+                      // resort. It is NOT a depth rule ("collapse past 3 segments") —
+                      // this repo tried that and recorded why it failed: `tools ›
+                      // 笔记软件 › mica › 单机手动部署（IP 直连，不用 Traefik）` is
+                      // three segments and still overruns. AppFlowy gets away with a
+                      // depth rule because their breadcrumb has no width cap at all
+                      // and simply scrolls, which a shared row cannot do.
+                      if (widget.selectedView != null)
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: _pathBudget(
+                              header.maxWidth,
+                              barOn:
+                                  widget.showFormatBar &&
+                                  canEdit &&
+                                  header.maxWidth >= 720,
+                            ),
+                          ),
+                          child: PageBreadcrumb(
+                            views: widget.views,
+                            current: widget.selectedView!,
+                            onSelect: widget.onSelectView,
+                            // Renaming from the breadcrumb tail (AppFlowy does this).
+                            // Gated on the editor role: a viewer's rename would 403,
+                            // and an edit affordance that cannot succeed is worse than
+                            // none — same rule as everywhere else here.
+                            onRename: canEdit ? widget.onRenameView : null,
+                            onCopyPath: _copyPagePath,
+                            workspaceName: widget.selectedWorkspace?.name,
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // Quiet sync status (nothing when synced). It STAYS
+                                // on the breadcrumb while the tools moved to the pane
+                                // header: it reports on this document, not on the app
+                                // — same reason the breadcrumb itself lives here.
+                                if (widget.syncPhase != null)
+                                  _SyncBadge(widget.syncPhase!),
+                              ],
+                            ),
+                          ),
+                        ),
+                      // The format bar takes whatever the path left. It is already a
+                      // horizontal SingleChildScrollView, so a narrow share does not
+                      // break it — it scrolls. [_pathBudget] guarantees that share
+                      // never drops below _formatBarFloor.
+                      Expanded(
+                        child:
+                            (widget.showFormatBar &&
+                                canEdit &&
+                                header.maxWidth >= 720)
+                            ? ListenableBuilder(
+                                listenable: _activeBlockHook,
+                                builder: (context, _) => _formatBar(context),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                      // The right-hand twin of the sidebar collapse button.
+                      // It used to live one row lower, on the title row, so
+                      // the "symmetric pair" the old comment claimed was
+                      // visibly off — different row, different size. Same
+                      // line, same density, same icon size as the left one.
+                      IconButton(
+                        tooltip: _toolsExpanded
+                            ? context.l10n.pageHideSidePanel
+                            : context.l10n.pageShowSidePanel,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () =>
+                            setState(() => _toolsExpanded = !_toolsExpanded),
+                        icon: Transform.flip(
+                          flipX: true,
+                          child: const Icon(
+                            Icons.view_sidebar_outlined,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                      if (widget.onAddComment != null)
+                        _CommentsButton(
+                          openCount: widget.commentThreads
+                              .where((t) => !t.isResolved)
+                              .length,
+                          active:
+                              _toolsExpanded && _toolsTab == _ToolsTab.comments,
+                          onTap: () {
+                            final showing =
+                                _toolsExpanded &&
+                                _toolsTab == _ToolsTab.comments;
+                            setState(() {
+                              // From anywhere else this means "show me the
+                              // comments", not "toggle the sidebar" — so it
+                              // opens the sidebar AND selects the tab. Only
+                              // a second press on an already-showing comment
+                              // tab closes it.
+                              _toolsExpanded = !showing;
+                              _toolsTab = _ToolsTab.comments;
+                            });
+                            // Closing drops the emphasis: it means "the
+                            // thread I am reading", and with the panel gone
+                            // there is no such thing — leaving it on would
+                            // strand a stronger wash with nothing to explain
+                            // it.
+                            if (showing) widget.onFocusCommentThread(null);
+                          },
+                        ),
+                      _PropertiesToggle(
+                        active: _showProperties,
+                        hasProperties: bootstrap.rootFrontMatter
+                            .trim()
+                            .isNotEmpty,
+                        onTap: () =>
+                            setState(() => _showProperties = !_showProperties),
+                      ),
+                      PopupMenuButton<String>(
+                        tooltip: context.l10n.pageMenu,
+                        // Same density as its neighbours — it used to sit alone
+                        // on the title row at the default size.
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.more_horiz, size: 20),
+                        onSelected: _onPageMenu,
+                        itemBuilder: (context) => [
+                          // Copy sits above the exports and gets its own group:
+                          // it is the cheap, frequent one (grab the text, paste
+                          // it somewhere), while everything below produces a
+                          // file. Grouping it with the exports would bury it.
+                          PopupMenuItem(
+                            value: 'copy-md',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.copy_all_outlined),
+                              title: Text(context.l10n.pageCopyContent),
+                            ),
+                          ),
+                          const PopupMenuDivider(),
+                          // One export, always a ZIP. The old "Export Markdown"
+                          // handed back a lone .md whose images pointed at
+                          // `![](photo.png)` — a file that was nowhere in the
+                          // download. A zip can carry them; a .md cannot.
+                          PopupMenuItem(
+                            value: 'export-zip',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.folder_zip_outlined),
+                              title: Text(context.l10n.rowExportZipImages),
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'export-html',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.html_outlined),
+                              title: Text(context.l10n.rowExportHtml),
+                            ),
+                          ),
+                          // PDF export: desktop drives the OS WebView2 runtime's
+                          // headless print (native bytes → download); web hands
+                          // the same self-contained HTML to the browser's own
+                          // print dialog ("Save as PDF"). Available on both.
+                          PopupMenuItem(
+                            value: 'export-pdf',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(
+                                Icons.picture_as_pdf_outlined,
+                              ),
+                              title: Text(context.l10n.rowExportPdf),
+                            ),
+                          ),
+                          const PopupMenuDivider(),
+                          PopupMenuItem(
+                            value: 'import-md',
+                            child: ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.upload_file_outlined),
+                              title: Text(context.l10n.pageImportMarkdown),
+                            ),
+                          ),
+                          if (widget.onShare != null) ...[
+                            const PopupMenuDivider(),
+                            PopupMenuItem(
+                              value: 'share',
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.public),
+                                title: Text(context.l10n.shareTitle),
+                              ),
+                            ),
+                          ],
+                          if (widget.onVersionHistory != null) ...[
+                            const PopupMenuDivider(),
+                            PopupMenuItem(
+                              value: 'version-history',
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.history),
+                                title: Text(context.l10n.versionHistoryTitle),
+                              ),
+                            ),
+                          ],
+                          if (widget.onRestoreCheckpoint != null) ...[
+                            const PopupMenuDivider(),
+                            PopupMenuItem(
+                              value: 'restore-checkpoint',
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.restore_outlined),
+                                title: Text(context.l10n.pageRestoreCheckpoint),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                  if (widget.showFormatBar && canEdit && header.maxWidth < 720)
+                    ListenableBuilder(
+                      listenable: _activeBlockHook,
+                      builder: (context, _) => _formatBar(context),
+                    ),
                 ],
               ),
-            ),
-                  ),
-                // The format bar takes whatever the path left. It is already a
-                // horizontal SingleChildScrollView, so a narrow share does not
-                // break it — it scrolls. [_pathBudget] guarantees that share
-                // never drops below _formatBarFloor.
-                Expanded(
-                  child: (widget.showFormatBar && canEdit)
-                      ? ListenableBuilder(
-                          listenable: _activeBlockHook,
-                          builder: (context, _) => _formatBar(context),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-                // The right-hand twin of the sidebar collapse button.
-                // It used to live one row lower, on the title row, so
-                // the "symmetric pair" the old comment claimed was
-                // visibly off — different row, different size. Same
-                // line, same density, same icon size as the left one.
-                IconButton(
-                  tooltip: _toolsExpanded
-                      ? context.l10n.pageHideSidePanel
-                      : context.l10n.pageShowSidePanel,
-                  visualDensity: VisualDensity.compact,
-                  onPressed: () => setState(
-                    () => _toolsExpanded = !_toolsExpanded,
-                  ),
-                  icon: Transform.flip(
-                    flipX: true,
-                    child: const Icon(
-                      Icons.view_sidebar_outlined,
-                      size: 20,
-                    ),
-                  ),
-                ),
-                if (widget.onAddComment != null)
-                  _CommentsButton(
-                    openCount: widget.commentThreads
-                        .where((t) => !t.isResolved)
-                        .length,
-                    active:
-                        _toolsExpanded &&
-                        _toolsTab == _ToolsTab.comments,
-                    onTap: () {
-                      final showing =
-                          _toolsExpanded &&
-                          _toolsTab == _ToolsTab.comments;
-                      setState(() {
-                        // From anywhere else this means "show me the
-                        // comments", not "toggle the sidebar" — so it
-                        // opens the sidebar AND selects the tab. Only
-                        // a second press on an already-showing comment
-                        // tab closes it.
-                        _toolsExpanded = !showing;
-                        _toolsTab = _ToolsTab.comments;
-                      });
-                      // Closing drops the emphasis: it means "the
-                      // thread I am reading", and with the panel gone
-                      // there is no such thing — leaving it on would
-                      // strand a stronger wash with nothing to explain
-                      // it.
-                      if (showing) widget.onFocusCommentThread(null);
-                    },
-                  ),
-                _PropertiesToggle(
-                  active: _showProperties,
-                  hasProperties: bootstrap.rootFrontMatter
-                      .trim()
-                      .isNotEmpty,
-                  onTap: () => setState(
-                    () => _showProperties = !_showProperties,
-                  ),
-                ),
-                PopupMenuButton<String>(
-                  tooltip: context.l10n.pageMenu,
-                  // Same density as its neighbours — it used to sit alone
-                  // on the title row at the default size.
-                  padding: EdgeInsets.zero,
-                  icon: const Icon(Icons.more_horiz, size: 20),
-                  onSelected: _onPageMenu,
-                  itemBuilder: (context) => [
-                    // Copy sits above the exports and gets its own group:
-                    // it is the cheap, frequent one (grab the text, paste
-                    // it somewhere), while everything below produces a
-                    // file. Grouping it with the exports would bury it.
-                    PopupMenuItem(
-                      value: 'copy-md',
-                      child: ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.copy_all_outlined),
-                        title: Text(context.l10n.pageCopyContent),
-                      ),
-                    ),
-                    const PopupMenuDivider(),
-                    // One export, always a ZIP. The old "Export Markdown"
-                    // handed back a lone .md whose images pointed at
-                    // `![](photo.png)` — a file that was nowhere in the
-                    // download. A zip can carry them; a .md cannot.
-                    PopupMenuItem(
-                      value: 'export-zip',
-                      child: ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.folder_zip_outlined),
-                        title: Text(context.l10n.rowExportZipImages),
-                      ),
-                    ),
-                    PopupMenuItem(
-                      value: 'export-html',
-                      child: ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.html_outlined),
-                        title: Text(context.l10n.rowExportHtml),
-                      ),
-                    ),
-                    // PDF export: desktop drives the OS WebView2 runtime's
-                    // headless print (native bytes → download); web hands
-                    // the same self-contained HTML to the browser's own
-                    // print dialog ("Save as PDF"). Available on both.
-                    PopupMenuItem(
-                      value: 'export-pdf',
-                      child: ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(
-                          Icons.picture_as_pdf_outlined,
-                        ),
-                        title: Text(context.l10n.rowExportPdf),
-                      ),
-                    ),
-                    const PopupMenuDivider(),
-                    PopupMenuItem(
-                      value: 'import-md',
-                      child: ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.upload_file_outlined),
-                        title: Text(context.l10n.pageImportMarkdown),
-                      ),
-                    ),
-                    if (widget.onShare != null) ...[
-                      const PopupMenuDivider(),
-                      PopupMenuItem(
-                        value: 'share',
-                        child: ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.public),
-                          title: Text(context.l10n.shareTitle),
-                        ),
-                      ),
-                    ],
-                    if (widget.onVersionHistory != null) ...[
-                      const PopupMenuDivider(),
-                      PopupMenuItem(
-                        value: 'version-history',
-                        child: ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.history),
-                          title: Text(context.l10n.versionHistoryTitle),
-                        ),
-                      ),
-                    ],
-                    if (widget.onRestoreCheckpoint != null) ...[
-                      const PopupMenuDivider(),
-                      PopupMenuItem(
-                        value: 'restore-checkpoint',
-                        child: ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.restore_outlined),
-                          title: Text(context.l10n.pageRestoreCheckpoint),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
             ),
           ),
           // The editor column is capped at widget.pageWidth (a fixed page-width
@@ -11463,7 +11478,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// of `MainAxisSize.min` on PageBreadcrumb's Row — a cap is not a demand.
   double _pathBudget(double header, {required bool barOn}) {
     final ceiling = header * 0.7;
-    if (!barOn) return ceiling;
+    if (!barOn)
+      return math.max(0, math.min(ceiling, header - _headerIconsWidth));
     return math.max(
       math.min(ceiling, header - _formatBarFloor - _headerIconsWidth),
       200.0,
@@ -11527,21 +11543,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     /// One builder rather than three near-identical `btn(...)` calls, because
     /// the toggle has to be identical across the levels and this bar and the
     /// floating one already disagreed once by being written out twice.
-    Widget headingBtn(IconData icon, String label, int level) => btn(
-      icon,
-      label,
-      () {
-        final target = headingButtonTarget(
-          kind: k,
-          // Null level on a non-heading block; 0 is never a heading level, so
-          // it can only ever answer "not the one you pressed".
-          level: lvl ?? 0,
-          pressed: level,
-        );
-        h.setBlock(target.kind, target.data);
-      },
-      active: onHeading(level),
-    );
+    Widget headingBtn(IconData icon, String label, int level) =>
+        btn(icon, label, () {
+          final target = headingButtonTarget(
+            kind: k,
+            // Null level on a non-heading block; 0 is never a heading level, so
+            // it can only ever answer "not the one you pressed".
+            level: lvl ?? 0,
+            pressed: level,
+          );
+          h.setBlock(target.kind, target.data);
+        }, active: onHeading(level));
     // TextFieldTapRegion: clicking the toolbar must not read as a tap OUTSIDE
     // the table-cell editor's TextField — onTapOutside would unfocus/commit the
     // cell on pointer-down, so the command would land after the cell closed.
@@ -11554,15 +11566,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           ),
         ),
         padding: const EdgeInsets.symmetric(vertical: 3),
-        // Align the buttons with the page's centered text column (not the pane
-        // edge): same horizontal padding + max width + left gutter as the body.
+        // Keep the compact toolbar centered and let its controls scroll within
+        // the available header width; narrow panes give it a separate row.
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 28),
+          padding: const EdgeInsets.symmetric(horizontal: 4),
           child: Center(
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: widget.pageWidth),
               child: Padding(
-                padding: const EdgeInsets.only(left: EditorTheme.gutter),
+                padding: EdgeInsets.zero,
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(
@@ -11690,10 +11702,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           _commandHook.resetDiagramViews();
         }
       },
-      child: SingleChildScrollView(
-        // Top padding moved to the pinned breadcrumb above; keeping it here too
-        // would open a gap between the pinned row and the page it belongs to.
-        padding: const EdgeInsets.fromLTRB(28, 4, 28, 28),
+      child: LayoutBuilder(builder: (context, constraints) => SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          constraints.maxWidth < 600 ? 12 : 28,
+          8,
+          constraints.maxWidth < 600 ? 12 : 28,
+          28,
+        ),
         child: Center(
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: widget.pageWidth),
@@ -11715,38 +11730,15 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                         const Spacer()
                       else
                         Expanded(
-                          child: Focus(
-                            // Intercepts keys bubbling from the title field:
-                            // ArrowDown moves into the first body line.
-                            canRequestFocus: false,
-                            skipTraversal: true,
-                            onKeyEvent: (node, event) {
-                              if (event is KeyDownEvent &&
-                                  event.logicalKey ==
-                                      LogicalKeyboardKey.arrowDown) {
-                                _commandHook.focusFirstLine();
-                                return KeyEventResult.handled;
-                              }
-                              return KeyEventResult.ignored;
-                            },
-                            child: TextField(
-                              controller: _pageTitle,
-                              focusNode: _pageTitleFocus,
-                              style: Theme.of(context).textTheme.headlineMedium,
-                              textInputAction: TextInputAction.next,
-                              onChanged: (_) => _schedulePageTitleSave(),
-                              // Enter in the title: the text after the caret
-                              // (or nothing) becomes a NEW first body line,
-                              // pushing the body down. onEditingComplete (not
-                              // onSubmitted) — it REPLACES the default
-                              // TextInputAction.next finalize, which would
-                              // otherwise nextFocus() away from the editor.
-                              onEditingComplete: _titleEnter,
-                              decoration: InputDecoration(
-                                hintText: context.l10n.untitledPage,
-                                border: InputBorder.none,
-                              ),
-                            ),
+                          child: PageTitleField(
+                            controller: _pageTitle,
+                            focusNode: _pageTitleFocus,
+                            appearance: _editorAppearance,
+                            hintText: context.l10n.untitledPage,
+                            readOnly: !canEdit,
+                            onChanged: (_) => _schedulePageTitleSave(),
+                            onEnterBody: _titleEnter,
+                            onArrowDown: _commandHook.focusFirstLine,
                           ),
                         ),
                     ],
@@ -11893,7 +11885,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             ),
           ),
         ),
-      ),
+      )),
     );
   }
 
@@ -12068,9 +12060,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ...outline,
-                    ],
+                    children: [...outline],
                   ),
                 ),
         );

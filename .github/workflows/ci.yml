@@ -449,6 +449,28 @@ jobs:
           cd ../../e2e
           node clipboard_e2e.mjs --base http://127.0.0.1:8091
 
+      - name: Writing comfort and responsive settings browser regression
+        env:
+          MICA_UI_RESULTS_DIR: ${{ runner.temp }}/ui-experience
+        run: |
+          set -euo pipefail
+          cd clients/mica_flutter
+          flutter build web --release --no-web-resources-cdn \
+            --target=e2e/ui_experience_harness.dart --output="$PWD/build/ui_experience" \
+            --dart-define=MICA_DEV_AUTOLOGIN=false \
+            --dart-define=MICA_API_BASE_URL=http://127.0.0.1:8093 \
+            --dart-define=MICA_CLOUD_URL=http://127.0.0.1:8093
+          cd ../..
+          node e2e/ui_experience_e2e.mjs
+
+      - name: Writing comfort screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-experience-e2e
+          path: ${{ runner.temp }}/ui-experience/ui-experience-*
+          if-no-files-found: ignore
+
       - name: Clipboard failure screenshot
         if: failure()
         uses: actions/upload-artifact@v4

@@ -47,6 +47,19 @@ class EditorController extends ChangeNotifier {
   final List<EditorNode> nodes = [];
   DocSelection? selection;
 
+  int _contentRevision = 0;
+
+  /// Layout and document-derived metadata follow this revision. Moving the
+  /// selection is a paint-only notification; local previews also count as
+  /// content because their geometry changes before persistence.
+  int get contentRevision => _contentRevision;
+
+  @override
+  void notifyListeners() {
+    _contentRevision++;
+    super.notifyListeners();
+  }
+
   /// Preferred x (in surface-local pixels) kept across consecutive Up/Down
   /// presses so the caret tracks a visual column. Cleared on any other move.
   double? goalX;
@@ -212,8 +225,10 @@ class EditorController extends ChangeNotifier {
 
   void setSelection(DocSelection? sel, {bool keepGoalX = false}) {
     if (!keepGoalX) goalX = null;
-    selection = _snapSelectionOutOfAtoms(sel);
-    notifyListeners();
+    final next = _snapSelectionOutOfAtoms(sel);
+    if (selection == next) return;
+    selection = next;
+    super.notifyListeners();
   }
 
   /// Keep the caret (and selection endpoints) out of the interior of a typeset
@@ -255,6 +270,14 @@ class EditorController extends ChangeNotifier {
 
   void collapseTo(DocPosition pos, {bool keepGoalX = false}) {
     setSelection(DocSelection.collapsed(pos), keepGoalX: keepGoalX);
+  }
+
+  /// Structural edits often finish by moving the caret. That last notification
+  /// must invalidate content even when the caret happens to remain identical.
+  void _collapseAfterEdit(DocPosition pos) {
+    goalX = null;
+    selection = _snapSelectionOutOfAtoms(DocSelection.collapsed(pos));
+    notifyListeners();
   }
 
   EditorNode? get focusedNode {
@@ -317,6 +340,16 @@ class EditorController extends ChangeNotifier {
     // text; a stale IME echo landing here must not clobber the block.
     if (node.isAtomic) return;
     final old = node.text;
+
+    if (old == text) {
+      setSelection(
+        DocSelection(
+          anchor: DocPosition(i, selStart.clamp(0, text.length)),
+          focus: DocPosition(i, selEnd.clamp(0, text.length)),
+        ),
+      );
+      return;
+    }
 
     if (old != text) {
       final marks = marksFromData(node.data);
@@ -650,7 +683,7 @@ class EditorController extends ChangeNotifier {
           'data': {},
         },
       ]);
-      collapseTo(DocPosition(i, 0));
+      _collapseAfterEdit(DocPosition(i, 0));
       return;
     }
 
@@ -661,7 +694,7 @@ class EditorController extends ChangeNotifier {
       final created = EditorNode(id: _genId(), kind: 'paragraph', text: '');
       nodes.insert(i, created);
       _sendNow([_insertOp(created, i)]);
-      collapseTo(DocPosition(i + 1, 0));
+      _collapseAfterEdit(DocPosition(i + 1, 0));
       return;
     }
 
@@ -694,7 +727,7 @@ class EditorController extends ChangeNotifier {
       },
       _insertOp(created, i + 1),
     ]);
-    collapseTo(DocPosition(i + 1, 0));
+    _collapseAfterEdit(DocPosition(i + 1, 0));
   }
 
   /// Split driven by a newline in the OS editing value (Enter). [before]/[after]
@@ -719,7 +752,7 @@ class EditorController extends ChangeNotifier {
           'text': '',
         },
       ]);
-      collapseTo(DocPosition(i, 0));
+      _collapseAfterEdit(DocPosition(i, 0));
       return;
     }
 
@@ -754,7 +787,7 @@ class EditorController extends ChangeNotifier {
           'data': node.data,
         },
       ]);
-      collapseTo(DocPosition(i, 0));
+      _collapseAfterEdit(DocPosition(i, 0));
       return;
     }
 
@@ -764,7 +797,7 @@ class EditorController extends ChangeNotifier {
       final created = EditorNode(id: _genId(), kind: 'paragraph', text: '');
       nodes.insert(i, created);
       _sendNow([_insertOp(created, i)]);
-      collapseTo(DocPosition(i + 1, 0));
+      _collapseAfterEdit(DocPosition(i + 1, 0));
       return;
     }
 
@@ -796,7 +829,7 @@ class EditorController extends ChangeNotifier {
       },
       _insertOp(created, i + 1),
     ]);
-    collapseTo(DocPosition(i + 1, 0));
+    _collapseAfterEdit(DocPosition(i + 1, 0));
   }
 
   /// Backspace at offset 0: merge the focused node into the previous one.
@@ -819,7 +852,9 @@ class EditorController extends ChangeNotifier {
     // Land where the block was: end of the block above, else start of the one
     // that slid up into its place.
     final target = (i - 1).clamp(0, nodes.length - 1);
-    collapseTo(DocPosition(target, i > 0 ? nodes[target].text.length : 0));
+    _collapseAfterEdit(
+      DocPosition(target, i > 0 ? nodes[target].text.length : 0),
+    );
   }
 
   bool mergeBackward() {
@@ -901,7 +936,7 @@ class EditorController extends ChangeNotifier {
       _sendNow([
         {'type': 'delete_block', 'block_id': cur.id},
       ]);
-      collapseTo(DocPosition(i - 1, 0));
+      _collapseAfterEdit(DocPosition(i - 1, 0));
       return true;
     }
 
@@ -919,7 +954,7 @@ class EditorController extends ChangeNotifier {
       _sendNow([
         {'type': 'delete_block', 'block_id': prev.id},
       ]);
-      collapseTo(DocPosition(i - 1, 0));
+      _collapseAfterEdit(DocPosition(i - 1, 0));
       return true;
     }
 
@@ -932,7 +967,7 @@ class EditorController extends ChangeNotifier {
       _sendNow([
         {'type': 'delete_block', 'block_id': prev.id},
       ]);
-      collapseTo(DocPosition(i - 1, 0));
+      _collapseAfterEdit(DocPosition(i - 1, 0));
       return true;
     }
 
@@ -962,7 +997,7 @@ class EditorController extends ChangeNotifier {
       },
       {'type': 'delete_block', 'block_id': cur.id},
     ]);
-    collapseTo(DocPosition(i - 1, junction));
+    _collapseAfterEdit(DocPosition(i - 1, junction));
     return true;
   }
 
@@ -983,7 +1018,7 @@ class EditorController extends ChangeNotifier {
     _sendNow([
       {'type': 'delete_block', 'block_id': first.id},
     ]);
-    collapseTo(const DocPosition(0, 0));
+    _collapseAfterEdit(const DocPosition(0, 0));
     return true;
   }
 
@@ -1008,7 +1043,7 @@ class EditorController extends ChangeNotifier {
         ensureNotEmpty();
         return true;
       }
-      collapseTo(DocPosition(i.clamp(0, nodes.length - 1), 0));
+      _collapseAfterEdit(DocPosition(i.clamp(0, nodes.length - 1), 0));
       return true;
     }
 
@@ -1023,7 +1058,7 @@ class EditorController extends ChangeNotifier {
       _sendNow([
         {'type': 'delete_block', 'block_id': next.id},
       ]);
-      collapseTo(DocPosition(i, cur.text.length));
+      _collapseAfterEdit(DocPosition(i, cur.text.length));
       return true;
     }
 
@@ -1053,7 +1088,7 @@ class EditorController extends ChangeNotifier {
       },
       {'type': 'delete_block', 'block_id': next.id},
     ]);
-    collapseTo(DocPosition(i, junction));
+    _collapseAfterEdit(DocPosition(i, junction));
     return true;
   }
 
@@ -1210,8 +1245,9 @@ class EditorController extends ChangeNotifier {
       // `*not bold*` or `[not a link](x)` in the source came back as emphasis
       // and as a real link when the copy was pasted — the round-trip invariant
       // broken by the one path that skipped the serializer entirely.
-      var inline =
-          marks.isEmpty ? escapeInline(sub) : inlineToMarkdown(sub, marks);
+      var inline = marks.isEmpty
+          ? escapeInline(sub)
+          : inlineToMarkdown(sub, marks);
       if (full && node.kind == 'paragraph') {
         // A copied paragraph that looks like a list/heading/divider must
         // not change kind when pasted back as markdown.
@@ -1299,7 +1335,8 @@ class EditorController extends ChangeNotifier {
       // keeps its own kind. Testing the kind missed those, so a blank line
       // went in between them — and a blank line ENDS a blockquote, so the
       // group split (`qbreak`) and the quote bar broke on paste.
-      final sameQuoteGroup = nodes[i].quoteDepth > 0 &&
+      final sameQuoteGroup =
+          nodes[i].quoteDepth > 0 &&
           nodes[i - 1].quoteDepth > 0 &&
           nodes[i].data['qbreak'] != true;
       // Consecutive list items are TIGHT: a blank line between them is what
@@ -1331,7 +1368,8 @@ class EditorController extends ChangeNotifier {
       bool inRun(EditorNode n) => n.isListKind || n.data['li'] is int;
       final childParagraph =
           nodes[i].data['li'] is int && nodes[i].kind == 'paragraph';
-      final sameListRun = inRun(nodes[i]) &&
+      final sameListRun =
+          inRun(nodes[i]) &&
           inRun(nodes[i - 1]) &&
           !childParagraph &&
           nodes[i].data['loose'] != true;
@@ -1388,7 +1426,8 @@ class EditorController extends ChangeNotifier {
   /// (the width of the marker it just emitted), which is what makes the line a
   /// continuation rather than a new paragraph on re-import.
   String _continuationPrefix(EditorNode node) {
-    final quote = '> ' * node.quoteDepth.clamp(node.kind == 'quote' ? 1 : 0, 16);
+    final quote =
+        '> ' * node.quoteDepth.clamp(node.kind == 'quote' ? 1 : 0, 16);
     if (!node.isListKind) return quote;
     final marker = switch (node.kind) {
       'todo' => 6, // `- [x] `
@@ -1729,7 +1768,7 @@ class EditorController extends ChangeNotifier {
           'data': node.data,
         },
       ]);
-      collapseTo(DocPosition(start.node, s));
+      _collapseAfterEdit(DocPosition(start.node, s));
       return true;
     }
 
@@ -1792,7 +1831,7 @@ class EditorController extends ChangeNotifier {
       ops.add({'type': 'delete_block', 'block_id': id});
     }
     _sendNow(ops);
-    collapseTo(DocPosition(start.node, s));
+    _collapseAfterEdit(DocPosition(start.node, s));
     return true;
   }
 
@@ -1859,7 +1898,7 @@ class EditorController extends ChangeNotifier {
         ops.add({'type': 'delete_block', 'block_id': id});
       }
       _sendNow(ops);
-      collapseTo(DocPosition(firstIndex, merged.length));
+      _collapseAfterEdit(DocPosition(firstIndex, merged.length));
       return;
     }
 
@@ -2165,7 +2204,7 @@ class EditorController extends ChangeNotifier {
       return;
     }
     final i = index.clamp(0, nodes.length - 1);
-    collapseTo(DocPosition(i, nodes[i].text.length));
+    _collapseAfterEdit(DocPosition(i, nodes[i].text.length));
   }
 
   /// Toggle line wrapping for a code block.
@@ -2340,7 +2379,7 @@ class EditorController extends ChangeNotifier {
           'text': rest,
         },
       ]);
-      collapseTo(DocPosition(i, 0));
+      _collapseAfterEdit(DocPosition(i, 0));
       return true;
     }
 
@@ -2401,7 +2440,7 @@ class EditorController extends ChangeNotifier {
             ops.add(_insertOp(p, after));
           }
           _sendNow(ops);
-          collapseTo(DocPosition(after, 0));
+          _collapseAfterEdit(DocPosition(after, 0));
           return true;
         }
       }
@@ -2538,7 +2577,7 @@ class EditorController extends ChangeNotifier {
         'data': node.data,
       },
     ]);
-    collapseTo(DocPosition(i, markEnd));
+    _collapseAfterEdit(DocPosition(i, markEnd));
     return true;
   }
 
@@ -2583,11 +2622,11 @@ class EditorController extends ChangeNotifier {
         ops.add(_insertOp(p, after));
       }
       _sendNow(ops);
-      collapseTo(DocPosition(after, 0));
+      _collapseAfterEdit(DocPosition(after, 0));
       return;
     }
     _sendNow(ops);
-    collapseTo(DocPosition(i, s));
+    _collapseAfterEdit(DocPosition(i, s));
   }
 
   /// Replace the link over `[start, end)` of node [i]: with an [href] the
@@ -2671,7 +2710,7 @@ class EditorController extends ChangeNotifier {
         'data': node.data,
       },
     ]);
-    collapseTo(DocPosition(i, s + text.length));
+    _collapseAfterEdit(DocPosition(i, s + text.length));
   }
 
   /// Insert [text] at the caret (replacing any ranged selection), carrying
@@ -2732,7 +2771,7 @@ class EditorController extends ChangeNotifier {
         'data': node.data,
       },
     ]);
-    collapseTo(DocPosition(i, s + text.length));
+    _collapseAfterEdit(DocPosition(i, s + text.length));
   }
 
   /// Insert a paragraph as the new first block (Enter in the page title
@@ -2744,14 +2783,14 @@ class EditorController extends ChangeNotifier {
     final created = EditorNode(id: _genId(), kind: 'paragraph', text: '');
     nodes.insert(index + 1, created);
     _sendNow([_insertOp(created, index + 1)]);
-    collapseTo(DocPosition(index + 1, 0));
+    _collapseAfterEdit(DocPosition(index + 1, 0));
   }
 
   void insertParagraphAtTop(String text) {
     final created = EditorNode(id: _genId(), kind: 'paragraph', text: text);
     nodes.insert(0, created);
     _sendNow([_insertOp(created, 0)]);
-    collapseTo(const DocPosition(0, 0));
+    _collapseAfterEdit(const DocPosition(0, 0));
   }
 
   /// Ensure a place to type when the document is empty.
@@ -2760,7 +2799,7 @@ class EditorController extends ChangeNotifier {
     final node = EditorNode(id: _genId(), kind: 'paragraph', text: '');
     nodes.add(node);
     _sendNow([_insertOp(node, 0)]);
-    collapseTo(const DocPosition(0, 0));
+    _collapseAfterEdit(const DocPosition(0, 0));
     return node;
   }
 
@@ -2815,7 +2854,7 @@ class EditorController extends ChangeNotifier {
 
     if (ops.isNotEmpty) _sendNow(ops);
     final lastIndex = (insertAt - 1).clamp(0, nodes.length - 1);
-    collapseTo(DocPosition(lastIndex, nodes[lastIndex].text.length));
+    _collapseAfterEdit(DocPosition(lastIndex, nodes[lastIndex].text.length));
   }
 
   /// Paste [specs] as blocks, replacing any ranged selection first — so Ctrl+A →
@@ -2867,7 +2906,7 @@ class EditorController extends ChangeNotifier {
     _sendNow([
       {'type': 'update_block', 'block_id': node.id, 'text': node.text},
     ]);
-    collapseTo(DocPosition(i, from + text.length));
+    _collapseAfterEdit(DocPosition(i, from + text.length));
   }
 
   /// Replace the focused node with parsed blocks (used for multi-line Markdown
@@ -2915,7 +2954,7 @@ class EditorController extends ChangeNotifier {
 
     _sendNow(ops);
     final last = (insertAt - 1).clamp(0, nodes.length - 1);
-    collapseTo(DocPosition(last, nodes[last].text.length));
+    _collapseAfterEdit(DocPosition(last, nodes[last].text.length));
   }
 
   /// Insert a divider (horizontal rule) at the caret. An empty focused
@@ -2958,7 +2997,7 @@ class EditorController extends ChangeNotifier {
       ops.add(_insertOp(p, afterIndex));
     }
     _sendNow(ops);
-    collapseTo(DocPosition(afterIndex, 0));
+    _collapseAfterEdit(DocPosition(afterIndex, 0));
   }
 
   /// Insert an image block (atomic) at the caret. Normally it carries our
@@ -3021,7 +3060,7 @@ class EditorController extends ChangeNotifier {
       ops.add(_insertOp(p, afterIndex));
     }
     _sendNow(ops);
-    collapseTo(DocPosition(afterIndex, 0));
+    _collapseAfterEdit(DocPosition(afterIndex, 0));
   }
 
   /// Replace an image's external `url` with our own `file_id` + `name` (after
@@ -3099,7 +3138,7 @@ class EditorController extends ChangeNotifier {
     final node = EditorNode(id: _genId(), kind: 'paragraph', text: '');
     nodes.add(node);
     _sendNow([_insertOp(node, nodes.length - 1)]);
-    collapseTo(DocPosition(nodes.length - 1, 0));
+    _collapseAfterEdit(DocPosition(nodes.length - 1, 0));
   }
 
   /// Clicking below the last line: focus its end, or append a paragraph when the

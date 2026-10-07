@@ -18,6 +18,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../cjk_fonts.dart';
+
 /// Backgrounds, from furthest back to nearest front.
 class SurfaceTokens {
   const SurfaceTokens({
@@ -294,17 +296,16 @@ class MicaTokens {
   final EditorTokens editor;
   final CodeTokens code;
 
-  /// The palette the app already shipped with. Every value here was a literal
-  /// somewhere — this is a re-labelling, not a redesign, so adopting the tokens
-  /// cannot change how light mode looks.
+  /// Quiet neutral chrome around a white reading surface. Text, syntax and
+  /// status colours retain their established meanings in both modes.
   static const MicaTokens light = MicaTokens(
     dark: false,
     surface: SurfaceTokens(
       base: Color(0xFFFFFFFF),
-      raised: Color(0xFFF8FAFC),
-      sunken: Color(0xFFF1F5F9),
+      raised: Color(0xFFF7F8FA),
+      sunken: Color(0xFFF2F3F5),
       overlay: Color(0xFFFFFFFF),
-      hover: Color(0xFFF4F4F6),
+      hover: Color(0xFFF0F1F3),
     ),
     text: TextTokens(
       // GitHub's ink: calmer than slate-900, still ~13:1 on white.
@@ -313,9 +314,9 @@ class MicaTokens {
       faint: Color(0xFF9AA4AF),
     ),
     border: BorderTokens(
-      subtle: Color(0xFFF1F5F9),
-      normal: Color(0xFFE2E8F0),
-      strong: Color(0xFFCBD5E1),
+      subtle: Color(0xFFF0F1F3),
+      normal: Color(0xFFE3E5E8),
+      strong: Color(0xFFC9CDD3),
     ),
     accent: AccentTokens(
       primary: Color(0xFF2563EB),
@@ -462,16 +463,122 @@ class MicaTokens {
           onSurface: text.primary,
           primary: accent.primary,
           onPrimary: accent.onPrimary,
+          primaryContainer: accent.wash,
+          onPrimaryContainer: text.primary,
+          secondary: accent.primary,
+          onSecondary: accent.onPrimary,
+          secondaryContainer: accent.wash,
+          onSecondaryContainer: text.primary,
+          surfaceContainerLowest: surface.base,
+          surfaceContainerLow: surface.raised,
+          surfaceContainer: surface.overlay,
+          surfaceContainerHigh: surface.sunken,
+          surfaceContainerHighest: surface.hover,
+          onSurfaceVariant: text.muted,
           error: status.danger,
           outline: border.normal,
+          outlineVariant: border.subtle,
         );
+    final controlShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(8),
+    );
+    final fieldBorder = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(8),
+      borderSide: BorderSide(color: border.normal),
+    );
+    final baseTheme = ThemeData(
+      brightness: dark ? Brightness.dark : Brightness.light,
+      fontFamilyFallback: cjkFontFallback,
+    );
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
+      textTheme: baseTheme.textTheme.apply(
+        bodyColor: text.primary,
+        displayColor: text.primary,
+      ),
       scaffoldBackgroundColor: surface.base,
-      dialogTheme: DialogThemeData(backgroundColor: surface.overlay),
+      dialogTheme: DialogThemeData(
+        backgroundColor: surface.overlay,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        elevation: 12,
+      ),
       canvasColor: surface.base,
       dividerColor: border.normal,
+      dividerTheme: DividerThemeData(
+        color: border.normal,
+        thickness: 1,
+        space: 1,
+      ),
+      iconTheme: IconThemeData(color: text.muted, size: 20),
+      inputDecorationTheme: InputDecorationThemeData(
+        filled: true,
+        fillColor: surface.base,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 12,
+        ),
+        border: fieldBorder,
+        enabledBorder: fieldBorder,
+        focusedBorder: fieldBorder.copyWith(
+          borderSide: BorderSide(color: accent.primary, width: 1.5),
+        ),
+        errorBorder: fieldBorder.copyWith(
+          borderSide: BorderSide(color: status.danger),
+        ),
+        focusedErrorBorder: fieldBorder.copyWith(
+          borderSide: BorderSide(color: status.danger, width: 1.5),
+        ),
+        hintStyle: TextStyle(color: text.faint, fontSize: 14),
+        labelStyle: TextStyle(color: text.muted, fontSize: 14),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          shape: controlShape,
+          minimumSize: const Size(64, 40),
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          shape: controlShape,
+          foregroundColor: text.primary,
+          side: BorderSide(color: border.normal),
+          minimumSize: const Size(64, 40),
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          shape: controlShape,
+          minimumSize: const Size(48, 40),
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+        ),
+      ),
+      chipTheme: ChipThemeData(
+        shape: controlShape,
+        side: BorderSide(color: border.normal),
+        backgroundColor: surface.base,
+        selectedColor: accent.wash,
+        labelStyle: TextStyle(color: text.primary, fontSize: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: surface.overlay,
+        surfaceTintColor: Colors.transparent,
+        shape: controlShape,
+        elevation: 6,
+      ),
+      tooltipTheme: TooltipThemeData(
+        waitDuration: const Duration(milliseconds: 500),
+        decoration: BoxDecoration(
+          color: text.primary,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        textStyle: TextStyle(color: surface.base, fontSize: 12),
+      ),
     );
   }
 }

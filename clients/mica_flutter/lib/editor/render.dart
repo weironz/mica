@@ -98,6 +98,7 @@ class EditorAppearance {
   @override
   bool operator ==(Object other) =>
       other is EditorAppearance &&
+      identical(other.tokens, tokens) &&
       other.fontScale == fontScale &&
       other.fontFamily == fontFamily &&
       other.minSurfaceHeight == minSurfaceHeight &&
@@ -105,7 +106,7 @@ class EditorAppearance {
 
   @override
   int get hashCode =>
-      Object.hash(fontScale, fontFamily, minSurfaceHeight, bottomPad);
+      Object.hash(tokens, fontScale, fontFamily, minSurfaceHeight, bottomPad);
 }
 
 /// Visual constants for the editing surface. Kept here so the look stays in one
@@ -192,16 +193,14 @@ class EditorTheme {
               color: tokens.text.primary,
               fontSize: 30,
               height: 1.3,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.5,
+              fontWeight: FontWeight.w600,
             );
           case 2:
             return TextStyle(
               color: tokens.text.primary,
               fontSize: 24,
               height: 1.35,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.3,
+              fontWeight: FontWeight.w600,
             );
           case 3:
             return TextStyle(
@@ -209,7 +208,6 @@ class EditorTheme {
               fontSize: 20,
               height: 1.4,
               fontWeight: FontWeight.w600,
-              letterSpacing: -0.2,
             );
           case 4:
             return TextStyle(
@@ -217,7 +215,6 @@ class EditorTheme {
               fontSize: 18,
               height: 1.45,
               fontWeight: FontWeight.w600,
-              letterSpacing: -0.1,
             );
           case 5:
             return TextStyle(
@@ -253,7 +250,7 @@ class EditorTheme {
         );
       case 'math_block':
         return TextStyle(
-          color: Color(0xFF7C3AED),
+          color: tokens.code.keyword,
           fontSize: 15,
           height: 1.6,
           fontFamily: kMonoFont,
@@ -310,10 +307,11 @@ class EditorTheme {
   /// Vertical gap above a node, given the previous node's kind.
   static double gapAbove(String kind, String? prevKind) {
     if (prevKind == null) return 0;
-    if (_isList(kind) && _isList(prevKind)) return kind == prevKind ? 3 : 8;
+    if (_isList(kind) && _isList(prevKind)) return kind == prevKind ? 4 : 8;
     // Headings open a section, so give them air above — a touch less between two
     // consecutive headings (title + subtitle stay related).
-    if (kind == 'heading') return prevKind == 'heading' ? 20 : 30;
+    if (kind == 'heading') return prevKind == 'heading' ? 16 : 28;
+    if (prevKind == 'heading') return 10;
     if (kind == 'code_block' || prevKind == 'code_block') return 16;
     // A table's box carries blank strips of its own — column handles above,
     // the add-row bar below — and the ordinary gap used to stack on top of
@@ -321,9 +319,9 @@ class EditorTheme {
     // the strip against the gap so the space reads the same as everywhere
     // else; the strips being equal is what keeps above and below symmetric.
     if (kind == 'table' || prevKind == 'table') {
-      return (13 - RenderDocument._tTopGutter).clamp(2.0, 13.0);
+      return (12 - RenderDocument._tTopGutter).clamp(2.0, 12.0);
     }
-    return 13; // paragraph breathing room
+    return 12; // paragraph breathing room
   }
 }
 
@@ -563,6 +561,7 @@ enum _CodeIcon { none, lang, askAi, copy, more, viewCode, viewPreview }
 class RenderDocument extends RenderBox {
   RenderDocument({
     required List<EditorNode> nodes,
+    int? contentRevision,
     required DocSelection? selection,
     required bool showCaret,
     required ValueNotifier<bool> caretBlink,
@@ -572,27 +571,62 @@ class RenderDocument extends RenderBox {
        _showCaret = showCaret,
        _caretBlink = caretBlink,
        _caretOn = caretBlink.value,
-       _appearance = appearance;
+       _appearance = appearance,
+       _contentRevision = contentRevision {
+    _hasSelectionDependentFolds = _containsDetails(nodes);
+  }
 
   List<EditorNode> _nodes;
-  set nodes(List<EditorNode> value) {
+  int? _contentRevision;
+  bool _hasSelectionDependentFolds = false;
+
+  // Details may be folded OR currently shown as source because of the selection.
+  // Inspect the content, not just the last layout, so leaving the source refolds it.
+  static bool _containsDetails(List<EditorNode> nodes) => nodes.any(
+    (node) =>
+        node.isCode &&
+        node.data['raw'] == true &&
+        (parseDetailsBlock(node.text) != null ||
+            parseDetailsOpenTag(node.text) != null),
+  );
+
+  /// Without a revision, callers keep the historical mutated-in-place behavior.
+  set nodes(List<EditorNode> value) => updateNodes(value, null);
+
+  /// Content notifications carry a revision; selection notifications retain it.
+  /// A different list still invalidates layout even with an equal revision.
+  void updateNodes(List<EditorNode> value, int? revision) {
+    final unchanged =
+        revision != null &&
+        revision == _contentRevision &&
+        identical(value, _nodes);
     _nodes = value;
+    _contentRevision = revision;
+    if (unchanged) return;
+    _hasSelectionDependentFolds = _containsDetails(value);
     markNeedsLayout();
   }
+
+  bool _caretInCode(DocSelection? selection) =>
+      selection != null &&
+      selection.isCollapsed &&
+      selection.focus.node >= 0 &&
+      selection.focus.node < _nodes.length &&
+      _nodes[selection.focus.node].isCode;
 
   DocSelection? _selection;
   set selection(DocSelection? value) {
     if (_selection == value) return;
+    final previous = _selection;
     _selection = value;
-    // Inline atoms fold unconditionally (a typeset formula is never entered —
-    // click opens an editor, the caret snaps to its edges), so fold state does
-    // not depend on the selection: a selection change genuinely only needs a
-    // repaint. This is NOT a layout fast-path in practice, though — the `nodes`
-    // setter runs first on every controller notification and relayouts the
-    // whole document unconditionally (nodes is one mutated-in-place instance,
-    // so it can't cheaply tell whether it changed). Measured cost is ~6ms for
-    // 200 nodes, folding included; don't build on an assumption that caret
-    // moves skip layout.
+    // Code horizontal auto-scroll consumes the live caret during layout. Details
+    // consumes the whole selection to expose hidden source. Keep those paths
+    // conservative; ordinary text/atom selection changes only repaint.
+    if (_hasSelectionDependentFolds ||
+        _caretInCode(previous) ||
+        _caretInCode(value)) {
+      markNeedsLayout();
+    }
     markNeedsPaint();
   }
 
@@ -777,7 +811,10 @@ class RenderDocument extends RenderBox {
   /// host (`MicaEditor`) populates this as images load and calls [setImages].
   Map<String, ui.Image> _images = {};
   set images(Map<String, ui.Image> value) {
-    _images = value;
+    // The host mutates its cache in place. Retain a snapshot so arrivals are
+    // detected, while an unchanged image cache cannot defeat selection reuse.
+    if (mapEquals(_images, value)) return;
+    _images = Map.of(value);
     markNeedsLayout();
   }
 
@@ -817,23 +854,31 @@ class RenderDocument extends RenderBox {
     // expire. Keep our own map snapshot: comparing the producer's map identity
     // cannot detect those changes, and the text/data layout cache would keep
     // the pre-raster source layout forever despite markNeedsLayout().
-    final changed = value.length != _previewImages.length ||
+    final changed =
+        value.length != _previewImages.length ||
         value.entries.any((e) => !mapEquals(e.value, _previewImages[e.key]));
     if (changed) {
       _previewImages = {
         for (final entry in value.entries) entry.key: Map.of(entry.value),
       };
       _layoutCache.clear();
+      markNeedsLayout();
     }
-    markNeedsLayout();
   }
 
-  /// See [DocumentSurface.previewBaselines]. No markNeedsLayout of its own:
-  /// baselines land strictly alongside their images, and the images setter
-  /// above already relayouts.
+  /// Baselines normally arrive with images. Snapshot them too so a later
+  /// baseline correction invalidates folded layouts without a new raster.
   Map<String, Map<String, double>> _previewBaselines = const {};
   set previewBaselines(Map<String, Map<String, double>> value) {
-    _previewBaselines = value;
+    final changed =
+        value.length != _previewBaselines.length ||
+        value.entries.any((e) => !mapEquals(e.value, _previewBaselines[e.key]));
+    if (!changed) return;
+    _previewBaselines = {
+      for (final entry in value.entries) entry.key: Map.of(entry.value),
+    };
+    _layoutCache.clear();
+    markNeedsLayout();
   }
 
   /// Ask the host pipeline for a preview of [source] under previewer [id],
@@ -1130,12 +1175,19 @@ class RenderDocument extends RenderBox {
   @override
   bool hitTestSelf(Offset position) => true;
 
+  int _layoutCount = 0;
+
+  /// Actual document layout passes, including passes triggered by content edits.
+  @visibleForTesting
+  int get debugLayoutCount => _layoutCount;
+
   /// Bottom y of the last node's box (excludes the click-below padding).
   double get contentBottom =>
       _layouts.isEmpty ? 0 : _layouts.last.boxTop + _layouts.last.boxHeight;
 
   @override
   void performLayout() {
+    _layoutCount++;
     final maxWidth = constraints.maxWidth.isFinite
         ? constraints.maxWidth
         : 600.0;
@@ -1354,7 +1406,7 @@ class RenderDocument extends RenderBox {
           final measured = r.measure(
             this,
             source,
-            (style.fontSize ?? 16) * _appearance.fontScale,
+            style.fontSize ?? 16,
             textWidth,
           );
           if (measured == null) continue; // declined: run stays styled source
@@ -3545,7 +3597,8 @@ class RenderDocument extends RenderBox {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
       if (l.hidden) continue;
-      final claimers = _renderersByKind[l.kind] ?? const <AtomicBlockRenderer>[];
+      final claimers =
+          _renderersByKind[l.kind] ?? const <AtomicBlockRenderer>[];
       if (!claimers.any((r) => r.selectsWholeBlockOnClick)) continue;
       final box = Rect.fromLTWH(
         l.boxLeft,
@@ -3662,6 +3715,7 @@ typedef CommentHighlight = ({
 class DocumentSurface extends LeafRenderObjectWidget {
   const DocumentSurface({
     required this.nodes,
+    this.contentRevision,
     required this.selection,
     required this.showCaret,
     required this.caretBlink,
@@ -3679,6 +3733,10 @@ class DocumentSurface extends LeafRenderObjectWidget {
   });
 
   final List<EditorNode> nodes;
+
+  /// Revision of node contents, separate from selection-only notifications.
+  /// Null preserves unconditional invalidation for callers without revisions.
+  final int? contentRevision;
   final DocSelection? selection;
   final bool showCaret;
 
@@ -3710,6 +3768,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
   RenderDocument createRenderObject(BuildContext context) =>
       RenderDocument(
           nodes: nodes,
+          contentRevision: contentRevision,
           selection: selection,
           showCaret: showCaret,
           caretBlink: caretBlink,
@@ -3728,7 +3787,7 @@ class DocumentSurface extends LeafRenderObjectWidget {
   @override
   void updateRenderObject(BuildContext context, RenderDocument renderObject) {
     renderObject
-      ..nodes = nodes
+      ..updateNodes(nodes, contentRevision)
       ..selection = selection
       ..showCaret = showCaret
       ..caretBlink = caretBlink

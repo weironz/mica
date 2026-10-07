@@ -28,7 +28,10 @@ void main() {
     },
   );
 
-  Future<RenderDocument> pump(WidgetTester tester, List<EditorNode> nodes) async {
+  Future<RenderDocument> pump(
+    WidgetTester tester,
+    List<EditorNode> nodes,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -69,7 +72,10 @@ void main() {
 
   testWidgets('that space stays in the page rhythm', (tester) async {
     // "Compact" against the only yardstick that means anything: the gap
-    // between two ordinary paragraphs. A table may not open a wider hole.
+    // between two ordinary paragraphs. Column/row controls occupy a reserved
+    // 12px strip; keeping 2px clear of neighbouring text can put the visible
+    // grid gap just above the compact paragraph rhythm. Measure both live
+    // layouts: changing the paragraph rhythm must not hide a large table hole.
     final r = await pump(tester, [
       EditorNode(id: 'a', kind: 'paragraph', text: '一段'),
       EditorNode(id: 'b', kind: 'paragraph', text: '又一段'),
@@ -86,13 +92,21 @@ void main() {
     final (cTop, _) = r.debugBoxAt(3);
     final below = cTop - grid.bottom;
 
-    expect(above, lessThanOrEqualTo(paragraphGap + 1));
-    expect(below, lessThanOrEqualTo(paragraphGap + 1));
+    expect(
+      above,
+      lessThanOrEqualTo(paragraphGap + 2),
+      reason: 'only the minimum control clearance may exceed paragraph space',
+    );
+    expect(
+      below,
+      lessThanOrEqualTo(paragraphGap + 2),
+      reason: 'the add-row strip must not open extra space below the grid',
+    );
     expect(above, greaterThan(6), reason: 'compact, not glued to the text');
   });
 
   testWidgets('a heading after a table keeps its air', (tester) async {
-    // The gap is charged against the table's strip, and a heading's 30px of
+    // The gap is charged against the table's strip, and a heading's 28px of
     // section air must not be charged away with it.
     final r = await pump(tester, [
       table('t'),
