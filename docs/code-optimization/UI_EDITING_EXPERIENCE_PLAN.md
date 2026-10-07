@@ -79,4 +79,4 @@
 
 UX-01～UX-08 已实现并通过针对性回归与浏览器实测。主 CI 和 Windows 离线/联网集成测试全部通过；本机受环境限制的 Windows 原生剪贴板五项测试已由 Windows CI 门禁通过。微软拼音实际候选窗口位置仍需人工验收，不能由 CDP 预编辑测试代替。
 
-结果与截图见 [UI_EDITING_EXPERIENCE_VALIDATION.md](UI_EDITING_EXPERIENCE_VALIDATION.md)。本轮保留原有字号/页宽偏好，未新增依赖、未改数据模型、未发版。
+结果与截图见 [UI_EDITING_EXPERIENCE_VALIDATION.md](UI_EDITING_EXPERIENCE_VALIDATION.md)。本轮保留原有字号/页宽偏好，未新增依赖、未改数据模型；2026-10-07 已随 v0.13.48 发布并部署生产，发布验收记录见同一验证文档。

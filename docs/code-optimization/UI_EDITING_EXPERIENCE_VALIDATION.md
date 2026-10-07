@@ -79,4 +79,14 @@ node e2e/ui_experience_e2e.mjs
 
 本轮完成的是视觉层次与明确的交互/布局问题。微软拼音实际候选窗、不同刷新率设备上的手感、生产长文与手机长期输入，仍需使用者验收；自动化不等同于这些主观与系统体验。当前中文资产只有 Regular，本轮未新增字体包，600 字重设置不代表已经提供真实多字重字体。保留用户原有字号/页宽偏好，因此已有用户的画面宽度可能与800px夹具截图不同。
 
-本轮提交推送 main，**未发版或部署**。
+开发阶段提交已推送 main；2026-10-07 随 **v0.13.48** 发布并部署生产。
+
+## v0.13.48 生产发布验收
+
+- [Release](https://github.com/weironz/mica/releases/tag/v0.13.48) 对应提交 `ad1be68`；[构建 workflow](https://github.com/weironz/mica/actions/runs/37577943258) 全部成功，四个下载文件与 API/Web/CLI 三个镜像齐备。
+- 本地发版门禁实际连接 Postgres，Rust 测试、Clippy、Flutter 分析和完整 Flutter 测试通过（1575 passed、2 skipped）；本次 Windows 原生剪贴板五项测试也通过。
+- [主 CI](https://github.com/weironz/mica/actions/runs/37577943206) 与 [Windows 离线/联网集成测试](https://github.com/weironz/mica/actions/runs/37577943211) 全部成功。
+- [Deploy](https://github.com/weironz/mica/actions/runs/37578919831) 对生产节点彩排通过后正式部署成功；实际请求 `/api/health` 返回 `status: ok`、`version: 0.13.48`。本版无新增数据库迁移。
+- 浏览器加载实际部署的 Web 资源，设置页显示 `v0.13.48` 和排版预览；390×844 视口的返回/关闭按钮位于可见范围，关闭后弹窗退出，无未捕获页面异常。使用隔离的合成账号及模拟 API，未读取或修改生产账号、工作区或偏好；此冒烟不证明真实生产登录、文档写入或同步，相关真实服务栈回归由上述 CI 覆盖。
+
+[桌面生产资源截图](assets/release-0.13.48-settings-desktop.png)、[手机生产资源截图](assets/release-0.13.48-settings-mobile.png)、[冒烟原始结果](assets/release-0.13.48-ui-smoke.json)。

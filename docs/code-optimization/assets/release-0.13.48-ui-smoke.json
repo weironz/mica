@@ -1,0 +1,11 @@
+{
+  "version": "0.13.48",
+  "productionHealth": "ok",
+  "deployedWebSettingsVersion": "0.13.48",
+  "desktopAppearancePreview": true,
+  "mobileViewport": "390x844",
+  "navigationVisible": true,
+  "closeWorks": true,
+  "pageErrors": [],
+  "scope": "Real production web assets; isolated synthetic session; API calls mocked; no production data modified"
+}
