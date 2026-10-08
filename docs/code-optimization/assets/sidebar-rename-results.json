@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "opens": 6,
+  "saves": [
+    "浏览器快速重命名"
+  ],
+  "name": "浏览器快速重命名",
+  "errors": [],
+  "scope": "Real WorkspaceView/dialog, synthetic documents and callbacks; physical canvas mouse/keyboard; semantics only for labels and screenshots"
+}

@@ -1172,6 +1172,40 @@ class _DocumentListItemState extends State<DocumentListItem> {
   // default and only the row you point at compresses to show its controls.
   bool _hovered = false;
 
+  // Count completed mouse clicks without a DoubleTapGestureRecognizer: that
+  // recognizer holds every single click until its timeout, delaying navigation.
+  PointerDownEvent? _tapDown;
+  PointerDownEvent? _lastTapDown;
+
+  void _clearClickPair() {
+    _tapDown = null;
+    _lastTapDown = null;
+  }
+
+  bool _isSecondRenameClick() {
+    final down = _tapDown;
+    final last = _lastTapDown;
+    _tapDown = null;
+    if (!widget.canEdit ||
+        widget._isFolder ||
+        down == null ||
+        down.kind != PointerDeviceKind.mouse ||
+        down.buttons != kPrimaryButton) {
+      _lastTapDown = null;
+      return false;
+    }
+    final elapsed = last == null ? null : down.timeStamp - last.timeStamp;
+    if (elapsed != null &&
+        elapsed >= kDoubleTapMinTime &&
+        elapsed <= kDoubleTapTimeout &&
+        (down.position - last!.position).distance <= kDoubleTapSlop) {
+      _lastTapDown = null; // A third click starts a new pair.
+      return true;
+    }
+    _lastTapDown = down;
+    return false;
+  }
+
   // ── Inline name editing ─────────────────────────────────────────────────────
   // Live only while `widget.isRenaming`. Enter or blur (click-away) commits; Esc
   // cancels. `_renameHandled` makes commit/cancel fire exactly once per edit
@@ -1189,6 +1223,11 @@ class _DocumentListItemState extends State<DocumentListItem> {
   @override
   void didUpdateWidget(DocumentListItem old) {
     super.didUpdateWidget(old);
+    if (widget.view.id != old.view.id ||
+        (old.isSelected && !widget.isSelected) ||
+        !widget.canEdit || widget.isRenaming) {
+      _clearClickPair();
+    }
     if (widget.isRenaming && !old.isRenaming) {
       _enterRename();
     } else if (!widget.isRenaming && old.isRenaming) {
@@ -1457,7 +1496,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
     final w = widget;
     // Show the controls when the row is hovered; a right-click works regardless.
     final showActions = w.canEdit && _hovered;
-    return MouseRegion(
+    final row = MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: Material(
@@ -1499,6 +1538,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                     ctrl: hw.isControlPressed || hw.isMetaPressed,
                     shift: hw.isShiftPressed,
                   );
+                  if (intent != TreeClickIntent.open) _clearClickPair();
                   if (intent != TreeClickIntent.open &&
                       w.onSelectClick != null) {
                     w.onSelectClick!(
@@ -1507,8 +1547,13 @@ class _DocumentListItemState extends State<DocumentListItem> {
                     return;
                   }
                   w.onPlainTap?.call();
+                  if (_isSecondRenameClick()) {
+                    w.onRename();
+                    return;
+                  }
                   w._isFolder ? w.onToggle() : w.onPressed();
                 },
+          onTapCancel: _clearClickPair,
           // A viewer gets the menu too when it has something for them: every
           // other entry is an edit, but "open in new tab" is a read. Gating the
           // whole menu on canEdit hid the one entry a viewer can actually use.
@@ -1659,6 +1704,24 @@ class _DocumentListItemState extends State<DocumentListItem> {
           ),
         ),
       ),
+    );
+    return Listener(
+      onPointerDown: (event) => _tapDown = event,
+      onPointerMove: (event) {
+        final down = _tapDown;
+        // A drag can win before InkWell delivers onTapDown, in which case it
+        // never delivers onTapCancel either. Observe the same movement slop.
+        if (down != null &&
+            (event.position - down.position).distance >
+                computeHitSlop(
+                  event.kind,
+                  MediaQuery.gestureSettingsOf(context),
+                )) {
+          _clearClickPair();
+        }
+      },
+      onPointerCancel: (_) => _clearClickPair(),
+      child: row,
     );
   }
 }

@@ -54,6 +54,7 @@ Widget titleWorkspace(
   List<WorkspaceEntry> entries = const [],
   Future<void> Function(List<WorkspaceEntry>)? onReorderWorkspaces,
   Future<void> Function(String?, List<DocumentView>)? onReorderViews,
+  Future<void> Function(DocumentView)? onSelectView,
 }) => MaterialApp(
   locale: const Locale('zh'),
   localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -111,7 +112,7 @@ Widget titleWorkspace(
       onLoadTrash: () async => [],
       onRestoreView: (_) async {},
       onPurgeView: (_) async {},
-      onSelectView: (_) async {},
+      onSelectView: onSelectView ?? (_) async {},
       onRenameView: onRename,
       onDeleteView: (_) async {},
       onDeleteViews: (_) async {},

@@ -3,6 +3,14 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart'
+    show
+        PointerDeviceKind,
+        computeHitSlop,
+        kDoubleTapMinTime,
+        kDoubleTapSlop,
+        kDoubleTapTimeout,
+        kPrimaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';

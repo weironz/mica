@@ -478,7 +478,7 @@ void main() {
     expect(submits, 0, reason: 'Esc must not commit');
   });
 
-  // Pins the "rename is F2, never double-click" decision (docs/shortcuts.md).
+  // Double-click rename must preserve immediate single-click navigation.
   // Registering an onDoubleTap on the row would put a DoubleTapGestureRecognizer
   // in the arena, and it calls hold() on the first tap — so EVERY single click
   // (open a page, expand a folder: the sidebar's hot path) would stall for
@@ -507,7 +507,7 @@ void main() {
       onDelete: () {},
     )));
 
-    await tester.tap(find.byType(DocumentListItem));
+    await tester.tap(find.byType(DocumentListItem), kind: PointerDeviceKind.mouse);
     await tester.pump(); // deliberately no settle: zero time advanced
     expect(
       opened,

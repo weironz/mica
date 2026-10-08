@@ -463,6 +463,26 @@ jobs:
           cd ../..
           node e2e/ui_experience_e2e.mjs
 
+      - name: Sidebar double-click rename browser regression
+        env:
+          MICA_RENAME_RESULTS_DIR: ${{ runner.temp }}/sidebar-rename
+        run: |
+          set -euo pipefail
+          cd clients/mica_flutter
+          flutter build web --release --no-web-resources-cdn --no-wasm-dry-run \
+            --target=e2e/sidebar_rename_harness.dart --output="$PWD/build/sidebar_rename" \
+            --dart-define=MICA_DEV_AUTOLOGIN=false
+          cd ../..
+          node e2e/sidebar_rename_e2e.mjs
+
+      - name: Sidebar rename screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidebar-rename-e2e
+          path: ${{ runner.temp }}/sidebar-rename/sidebar-rename-*
+          if-no-files-found: ignore
+
       - name: Writing comfort screenshots and results
         if: always()
         uses: actions/upload-artifact@v4
