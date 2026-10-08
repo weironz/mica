@@ -49,8 +49,8 @@ if (run0.insert !== 'seed' || !run0.attributes || run0.attributes.italic !== tru
   fail(`yrs-written italic mark not visible in yjs delta: ${JSON.stringify(delta)}`);
 }
 
-// The yrs-written int prop arrives as BigInt; mapEntriesJson must survive it
-// (the exact path that crashed the web read side live in P4-2).
+// yrs 0.28 writes small int props as JS numbers (older states use BigInt).
+// mapEntriesJson must read both without changing the integer value.
 const seedProps = Y.mapGet(seed, 'props');
 if (!seedProps || !Y.isMap(seedProps)) fail('seed.props is not a Y.Map');
 const props = JSON.parse(Y.mapEntriesJson(seedProps));

@@ -234,13 +234,10 @@
 
 ## 开发者体验 / CI / Markdown
 
-- 🟡 **不可信输入解析面 fuzz:三个面都已覆盖,yrs 那面挖出三类问题、已报上游并提 PR**(2026-08-05)—— 三个吃不可信字节的面:markdown 解析、ZIP 导入、yrs 二进制更新。**前两个**(`markdown/tests/proptest_parse.rs`、`interchange/tests/proptest_zip.rs`,2026-07-23)未挖出 panic,落成快回归门。
-  **第三个 2026-08-05 补上**(`mica-core/tests/proptest_yrs.rs`),而**搁置它的理由本身是错的**:原条目写「UB 要 cargo-fuzz + sanitizer 才抓得住,proptest 只抓 panic 不够」—— 实际普通 proptest **几秒就撞上了**,根本没用上 ASan。搁置的代价是这个面白空了两周。
-  **挖出三类**(yrs 0.27.3,最新版):① `assert!` panic(`block.rs:92`)—— unwinding,服务端 `catch_unwind` 兜得住;② **UB** `invalid value for char` —— 非 unwinding,兜不住,release 下是静默 UB;③ **无界分配** —— **21 字节让 yrs 要 215 TB**,分配失败直接 abort,debug/release 都复现。②③ 从 `push_update` 可达 = **任何已认证客户端都能打挂 api 进程**。
-  **调研结论:别人没规避掉。** y-crdt#415(2024-04 至今 open,标 bug,已指派)提交者原话是生产机器被打挂;AppFlowy 在同一 issue 下报同样问题;#373(evanw)是另一类堆损坏/segfault,同样 open。AppFlowy 的 CRDT 层用的也是 `catch_unwind`,和我们一模一样 —— **挡住的是同一类,漏掉的也是同一类**。
-  **已做的处置**:③ 的复现器发到 #415;**PR y-crdt/y-crdt#644** 修 ②③ 两类(`any.rs` 的 `with_capacity` → `try_reserve`,沿用该仓库自己在 `block.rs`/`update.rs` 的既有模式;两处 `from_utf8_unchecked` → 检查版),含回归测试,yrs 全量 375+34 通过,回滚任一处补丁测试即 abort。
-  **残留 = 等上游**。这一侧兜不住:限制输入大小没用(才 21 字节),预校验等于重写解码器,进程隔离业界无一家这么做、在单用户实例上不成比例。本地 `proptest_yrs.rs` 全部 `#[ignore]`(两类会 abort 测试进程,不 ignore 就是把 CI 打挂而不是报告),上游合并后去掉 ignore 即变回归门。
-  **⚠️ 触发条件:开放注册前必须解决。** 今天风险低是因为注册关闭、只有一个账号;有第二个用户那天,任何普通成员都能让实例反复重启,而且不需要技巧 —— 我是随机灌字节撞出来的。(残留:等上游) `[需后端]`
+- 🟡 **yrs 不可信更新:两类进程终止问题已修复,剩余普通 panic 仍需兜底**(2026-10-08)—— markdown、ZIP、yrs 三个解析面均有测试;前两个是正常运行的 property 回归门。
+  **已接入官方 `yrs 0.28.0`**,服务端与桌面 FFI 的两个锁文件同步升级,没有 fork 或 `[patch.crates-io]` 特殊配置。[#639](https://github.com/y-crdt/y-crdt/pull/639) 的 fallible allocation 已随 0.27.4 发布;[#644](https://github.com/y-crdt/y-crdt/pull/644) 的 checked UTF-8 随 0.28.0 发布。`proptest_yrs.rs` 的 **21 字节异常分配**、**非法 UTF-8** 已转为默认运行的 decode/apply 回归测试,本地无 CRC 的旧快照另有 UTF-8 回归。
+  **仍未完成**:四条「任意/变异更新永不 panic」property 仍 `#[ignore]`,因为 **0.28.0 实测仍会触发 `block.rs:92` panic**,不能把两类修复当成整个解码器已安全。[#415](https://github.com/y-crdt/y-crdt/issues/415) 继续跟踪;上游覆盖剩余 panic 后,再验证并启用这四条测试。服务端 `guarded_from_update` / `guarded_apply`、桌面 `contain_yrs_panic` 必须保留,CRC 与损坏缓存自愈也不是上游修复能替代的功能。
+  **注册配置不随依赖升级改变**;移除了已过期的「等 #644 合并 / 全部测试会 abort」说明,不据此宣称任意不可信输入已获全面安全保证。`[需后端]`
 
 ## 产品与公开发布合规 🆕
 
@@ -294,7 +291,7 @@
 | 7 | MCP 删除面三处 | S | ①② 其实是"MCP 要不要覆盖协作面",**未拍板** |
 | 8 | 多标签页剩余(快捷键 / 窄壳退化 / 是否持久化) | M | 持久化**未拍板** |
 | 9 | 跟随画布浮层的 tooltip | M | **未拍板**(3.47 已把路径确定,代价没变) |
-| 11 | yrs fuzz | — | 等上游合 PR |
+| 11 | yrs fuzz | — | 0.28.0 已接入;等剩余 panic 修复以启用四条 property |
 
 > 表里**只列未关闭的**,关掉的整条搬去 [`roadmap-done.md`](roadmap-done.md)。
 > 划掉但留在表里试过一次(2026-08-27),当场就发现不行:下一个读表的人数到的还是原来那个数,

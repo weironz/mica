@@ -1,50 +1,24 @@
-//! Property fuzz for the yrs binary-update surface — **and what it found.**
+//! Regression tests and property fuzz for untrusted yrs binary updates.
 //!
-//! This is the third of the three surfaces that eat untrusted bytes (the others
-//! are `mica-markdown`'s `proptest_parse.rs` and `mica-interchange`'s
-//! `proptest_zip.rs`, both of which came up clean). It arrived last because a
-//! hand-written xor fuzz had already found UB in yrs itself, and UB is not what
-//! proptest catches — the process was ABORTING, so the surface was parked for
-//! cargo-fuzz + a sanitizer.
+//! On yrs 0.27.3 this surface found invalid UTF-8 UB, an allocation abort
+//! (21 bytes requesting 215 TB), and ordinary unwinding panics. Fallible
+//! allocation shipped in 0.27.4 (#639); checked UTF-8 shipped in 0.28.0 (#644).
+//! The two fixed cases below are ACTIVE regression gates for decode and apply.
 //!
-//! **2026-08-04: parked was the wrong call. The surface is not clean.** Within
-//! seconds these properties turned up THREE distinct failures on yrs 0.27.3
-//! (the newest release; `unreachable_unchecked`, the old culprit, is indeed gone
-//! from its source — which is why "upstream fixed it" looked true for about ten
-//! minutes):
-//!
-//! 1. **`assert!` panic** — `yrs-0.27.3/src/block.rs:92`,
-//!    `value & Self::MASK == 0`. Unwinding, so `guarded_from_update`'s
-//!    `catch_unwind` contains it server-side. The mildest of the three.
-//! 2. **Undefined behaviour** — `invalid value for char`, a NON-unwinding panic.
-//!    `catch_unwind` structurally cannot contain it; in release the check is
-//!    compiled out and it is silent UB.
-//! 3. **Unbounded allocation** — 21 bytes make yrs ask for **215 TB**, and the
-//!    allocation failure aborts the process. Reproduces in debug AND release,
-//!    and `catch_unwind` does not stop it (see `the_21_byte_abort` below).
-//!
-//! (2) and (3) are reachable from `push_update`, i.e. by any AUTHENTICATED
-//! client, and neither is containable from this side: bounding the input does
-//! not help (21 bytes), and pre-validating would mean re-implementing the
-//! decoder. It needs an upstream fix.
-//!
-//! **Reported and fixed upstream (2026-08-05):** reproducer for (3) in
-//! y-crdt/y-crdt#415, fixes for (2) and (3) in y-crdt/y-crdt#644 — `try_reserve`
-//! for the length prefix (the pattern that crate already uses elsewhere) and
-//! checked `from_utf8` for the string content. Pending review.
-//!
-//! **Everything here is `#[ignore]`d on purpose**, not because it is flaky but
-//! because two of the three failures ABORT the test process — an un-ignored
-//! suite here would take CI down rather than report. Run it deliberately:
+//! The four stronger "never panic" properties remain ignored: yrs 0.28.0
+//! still panics on malformed updates (e.g. block.rs:92; upstream #415).
+//! Do not mistake fixing the two abort cases for a total decoder guarantee.
+//! Server and local-store catch_unwind guards remain necessary. Deliberate fuzz:
 //!
 //! ```text
 //! cargo test -p mica-core --test proptest_yrs -- --ignored
 //! ```
 //!
-//! Un-ignore these the day the upstream fix lands; they are the regression gate
-//! for it. Longer hunt: `PROPTEST_CASES=100000 …`.
-use mica_core::{Block, MicaDoc};
+//! Longer hunt: `PROPTEST_CASES=100000 …`.
+use mica_core::{Block, DocError, MicaDoc};
 use proptest::prelude::*;
+
+const TEXT: &str = "hello world";
 
 /// A small, valid document — the base the mutation strategies corrupt.
 fn sample_state() -> Vec<u8> {
@@ -52,7 +26,7 @@ fn sample_state() -> Vec<u8> {
         "r",
         &[
             Block::new("r", "page").with_children(vec!["a".into()]),
-            Block::new("a", "paragraph").with_text("hello world"),
+            Block::new("a", "paragraph").with_text(TEXT),
         ],
     )
     .encode_state()
@@ -65,7 +39,7 @@ proptest! {
     /// Almost all of it is rejected at the first header byte, which is the point
     /// — the cheap rejection path is also the one nobody looks at.
     #[test]
-    #[ignore = "aborts or fails: upstream yrs, see the module docs"]
+    #[ignore = "yrs 0.28.0 still panics on malformed updates; upstream #415"]
     fn from_update_never_panics_on_arbitrary_bytes(
         bytes in proptest::collection::vec(any::<u8>(), 0..4096),
     ) {
@@ -77,7 +51,7 @@ proptest! {
     /// lengths look plausible, and the reader walks off the end of something.
     /// Random bytes rarely get that far, which is why both strategies exist.
     #[test]
-    #[ignore = "aborts or fails: upstream yrs, see the module docs"]
+    #[ignore = "yrs 0.28.0 still panics on malformed updates; upstream #415"]
     fn from_update_never_panics_on_a_corrupted_real_state(
         idx in any::<prop::sample::Index>(),
         xor in 1u8..=255,
@@ -92,7 +66,7 @@ proptest! {
     /// ONTO an existing document. Different code from a cold decode — it merges
     /// into live structures — and it is the one an authenticated client drives.
     #[test]
-    #[ignore = "aborts or fails: upstream yrs, see the module docs"]
+    #[ignore = "yrs 0.28.0 still panics on malformed updates; upstream #415"]
     fn apply_update_never_panics_on_arbitrary_bytes(
         bytes in proptest::collection::vec(any::<u8>(), 0..4096),
     ) {
@@ -103,7 +77,7 @@ proptest! {
     /// Same path, near-miss input. Feeding a document a mutated copy of its own
     /// state exercises the merge with structurally familiar-but-wrong data.
     #[test]
-    #[ignore = "aborts or fails: upstream yrs, see the module docs"]
+    #[ignore = "yrs 0.28.0 still panics on malformed updates; upstream #415"]
     fn apply_update_never_panics_on_a_corrupted_real_update(
         idx in any::<prop::sample::Index>(),
         xor in 1u8..=255,
@@ -119,16 +93,29 @@ proptest! {
 /// The 21 bytes, kept exactly. A shrunk reproducer is the difference between a
 /// bug report someone can act on and a story about a fuzzer.
 ///
-/// `catch_unwind` is here to make the point rather than to help: the call never
-/// returns, so the assertion below is unreachable and the process dies instead.
+/// yrs 0.27.3 aborted instead of returning an allocation/decode error.
 #[test]
-#[ignore = "aborts the process: yrs 0.27.3 asks for 215 TB on 21 bytes"]
-fn the_21_byte_abort() {
+fn the_21_byte_allocation_bomb_is_rejected() {
     let hex = "d7548f54770c78002d677698fbbfd5f35730ee3240";
     let bytes: Vec<u8> = (0..hex.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
         .collect();
-    let survived = std::panic::catch_unwind(|| MicaDoc::from_update(&bytes).is_ok());
-    panic!("expected the process to abort before here, got {survived:?}");
+    assert!(matches!(MicaDoc::from_update(&bytes), Err(DocError::Decode(_))));
+    let mut doc = MicaDoc::from_update(&sample_state()).expect("sample decodes");
+    assert!(matches!(doc.apply_update(&bytes), Err(DocError::Decode(_))));
+}
+
+/// Locate the text rather than a byte offset: client IDs and map ordering vary.
+/// Changing ASCII to 0xff keeps the lengths valid but makes the UTF-8 invalid.
+#[test]
+fn invalid_utf8_is_rejected_by_decode_and_apply() {
+    let good = sample_state();
+    let mut doc = MicaDoc::from_update(&good).expect("sample decodes");
+    assert!(doc.apply_update(&good).is_ok(), "valid baseline applies");
+    let mut bad = good;
+    let at = bad.windows(TEXT.len()).position(|w| w == TEXT.as_bytes()).expect("encoded text");
+    bad[at] = 0xff;
+    assert!(matches!(MicaDoc::from_update(&bad), Err(DocError::Decode(_))));
+    assert!(matches!(doc.apply_update(&bad), Err(DocError::Decode(_))));
 }

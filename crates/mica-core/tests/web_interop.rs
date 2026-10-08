@@ -30,7 +30,7 @@ use serde_json::json;
 
 /// The yrs-written base: root → [seed], where seed carries an inline italic
 /// mark and an integer prop — the two encodings (Y.Text formatting attrs,
-/// `Any::BigInt`) that must survive the engine boundary.
+/// `Any::Number`) that must survive the engine boundary.
 fn yrs_base() -> MicaDoc {
     let root = Block::new("root", "paragraph").with_children(vec!["seed".into()]);
     let seed = Block::new("seed", "paragraph")

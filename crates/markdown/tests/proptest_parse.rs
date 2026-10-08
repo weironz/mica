@@ -8,9 +8,8 @@
 //! regression test and fix the parser. The property is simply: **never panic.**
 //!
 //! (The yrs binary-update surface has its own file now —
-//! `mica-core/tests/proptest_yrs.rs`. It was parked on the belief that its UB
-//! needed cargo-fuzz + a sanitizer; plain proptest found three failure classes
-//! in seconds. See that file.)
+//! `mica-core/tests/proptest_yrs.rs`. Its fixed UTF-8/allocation cases are active
+//! regressions; broader never-panic properties still await upstream fixes.)
 
 use mica_markdown::import_markdown;
 use proptest::prelude::*;

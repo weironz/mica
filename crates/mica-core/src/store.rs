@@ -223,18 +223,14 @@ fn blob_crc(bytes: &[u8]) -> i64 {
 
 /// Verify a stored blob against its recorded checksum BEFORE it reaches yrs.
 ///
-/// This is the one thing `contain_yrs_panic` cannot do. yrs 0.27.x can reach
-/// `hint::unreachable_unchecked` on malformed bytes — a NON-unwinding abort that
-/// `catch_unwind` cannot contain, and plain UB in a release build (see the
-/// `yrs_corrupt_input_is_unsound` test). Rejecting a bad blob here stops those
-/// bytes before `from_update_with_client_id` / `apply_update` ever see them.
+/// A damaged blob may still be a valid, decodable update with different content.
+/// Decode errors and `contain_yrs_panic` cannot detect that. The checksum is an
+/// integrity check independent of yrs's malformed-input fixes in 0.28.0.
 ///
 /// `stored_crc == None` ⇒ a legacy row written before checksums existed (or by
 /// an older app): nothing to check, so PASS and let the bytes fall through to
-/// the existing `contain_yrs_panic` guard — i.e. exactly today's behavior. Such
-/// rows keep today's exposure to the upstream UB until they are next rewritten;
-/// this feature protects data authored from here on, it does not retroactively
-/// bless the existing corpus.
+/// the existing `contain_yrs_panic` guard. Such rows gain integrity protection
+/// when next rewritten; the checksum does not retroactively bless old data.
 fn verify_blob_crc(doc_id: &str, bytes: &[u8], stored_crc: Option<i64>) -> Result<(), StoreError> {
     if let Some(expected) = stored_crc {
         if blob_crc(bytes) != expected {
@@ -1139,9 +1135,8 @@ impl LocalStore {
             Some(pair) => pair,
             None => return Ok(None),
         };
-        // Verify the base checksum BEFORE the guard and before yrs. This is THE
-        // line that defends the non-unwinding UB path: a rotted base is rejected
-        // here, so its bytes never reach from_update_with_client_id.
+        // Verify storage integrity BEFORE decoding: even a valid update may
+        // contain silently corrupted content that yrs cannot identify.
         verify_blob_crc(doc_id, &bytes, crc)?;
         // Read both logs BEFORE entering the panic guard: these are SQLite
         // errors, which are not corruption and must keep their own message. The
@@ -2759,34 +2754,10 @@ mod tests {
         assert!(matches!(passed, Ok(7)));
     }
 
-    /// UPSTREAM SOUNDNESS BUG, still present in yrs 0.27.3 (checked 2026-07-21).
-    ///
-    /// Feeding mutated bytes to `load_doc` reaches, in a debug build:
-    ///
-    /// ```text
-    /// core/src/str/validations.rs:48: unsafe precondition(s) violated:
-    ///   hint::unreachable_unchecked must never be reached
-    /// thread caused non-unwinding panic. aborting.
-    /// ```
-    ///
-    /// yrs reads unvalidated bytes as UTF-8. This is NOT containable:
-    /// `catch_unwind` cannot catch a non-unwinding abort, and in a RELEASE build
-    /// the check is compiled out, so the same input is plain undefined behavior.
-    ///
-    /// It matters well beyond the local cache: `mica-app-core`'s sync path
-    /// applies client-supplied updates server-side (`sync.rs`, `apply_update`),
-    /// so a crafted update is reachable remotely.
-    ///
-    /// `#[ignore]` because it ABORTS the test process — it cannot share a run
-    /// with other tests. Run it deliberately to check whether upstream has
-    /// fixed this:
-    ///
-    /// ```text
-    /// cargo test -p mica-core --features store -- --ignored yrs_corrupt_input_is_unsound
-    /// ```
+    /// A legacy snapshot has no checksum: invalid UTF-8 must still be rejected
+    /// as a normal decode error by yrs 0.28.0, not abort the desktop process.
     #[test]
-    #[ignore = "aborts the process: upstream yrs UB on malformed input, not containable"]
-    fn yrs_corrupt_input_is_unsound() {
+    fn invalid_utf8_in_legacy_snapshot_is_a_decode_error() {
         let store = LocalStore::open_in_memory().unwrap();
         let doc = MicaDoc::from_blocks(
             "r",
@@ -2803,20 +2774,18 @@ mod tests {
             })
             .unwrap();
 
-        for i in 0..good.len() {
-            for xor in [0xff_u8, 0x7f, 0x01] {
-                let mut bad = good.clone();
-                bad[i] ^= xor;
-                store
-                    .conn
-                    .execute(
-                        "UPDATE doc_snapshot SET state=?1 WHERE doc_id='d'",
-                        params![bad],
-                    )
-                    .unwrap();
-                let _ = store.load_doc("d", 1);
-            }
-        }
+        let mut bad = good;
+        let text = b"hello world";
+        let at = bad.windows(text.len()).position(|w| w == text).expect("encoded text");
+        bad[at] = 0xff;
+        store
+            .conn
+            .execute(
+                "UPDATE doc_snapshot SET state=?1, state_crc=NULL WHERE doc_id='d'",
+                params![bad],
+            )
+            .unwrap();
+        assert!(matches!(store.load_doc("d", 1), Err(StoreError::Doc(DocError::Decode(_)))));
     }
 
     // ── local blob checksum (docs/code-review-2026-07-20.md P0-0) ────────────
@@ -2888,8 +2857,8 @@ mod tests {
     }
 
     /// Real bit-rot: flip a byte of `state`, keep the (now-mismatched) crc → the
-    /// crc catches it BEFORE the bytes reach yrs (the only defense against the
-    /// non-unwinding UB path).
+    /// crc catches it BEFORE the bytes reach yrs, independently of whether
+    /// the altered bytes would still decode.
     #[test]
     fn bit_flip_in_state_is_caught_by_crc() {
         let (store, mut state) = stored_doc();

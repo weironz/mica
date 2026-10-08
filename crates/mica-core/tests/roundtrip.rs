@@ -107,6 +107,22 @@ fn block_attrs_preserved_alongside_marks() {
 }
 
 #[test]
+fn numeric_props_survive_yrs_number_encoding() {
+    let a = para("a", "numbers").with_data(json!({
+        "indent": 1,
+        "negative": -1,
+        "int32_max": i32::MAX,
+        "safe_integer_max": 9_007_199_254_740_991_i64,
+        "bigint": 9_007_199_254_740_993_i64,
+        "fraction": 1.25,
+        "nested": { "values": [0, -2, 0.5] },
+    }));
+    let blocks = vec![Block::new("r", "page").with_children(vec!["a".into()]), a];
+    assert_eq!(roundtrip("r", blocks.clone()), blocks);
+    assert_eq!(roundtrip_encoded("r", blocks.clone()), blocks);
+}
+
+#[test]
 fn nested_tree_dfs_order() {
     let blocks = vec![
         Block::new("r", "page").with_children(vec!["a".into(), "b".into()]),

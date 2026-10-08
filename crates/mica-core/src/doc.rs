@@ -26,7 +26,7 @@ use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
     Any, Array, ArrayPrelim, ArrayRef, Assoc, ClientID, Doc, IndexedSequence, Map, MapPrelim,
-    MapRef, OffsetKind, Options, Out, ReadTxn, StateVector, StickyIndex, Text, TextPrelim, TextRef,
+    MapRef, Number, OffsetKind, Options, Out, ReadTxn, StateVector, StickyIndex, Text, TextPrelim, TextRef,
     Transact, TransactionMut, Update,
 };
 
@@ -287,14 +287,14 @@ fn data_without_marks(data: &Value) -> Value {
 }
 
 /// serde_json::Value → yrs `Any` (the embeddable JSON-like value type). Integers
-/// stay integers (`BigInt`), so block props like `indent: 1` round-trip exactly.
+/// use `Number::Int`, so block props like `indent: 1` round-trip exactly.
 fn json_to_any(v: &Value) -> Any {
     match v {
         Value::Null => Any::Null,
         Value::Bool(b) => Any::Bool(*b),
         Value::Number(n) => match n.as_i64() {
-            Some(i) => Any::BigInt(i),
-            None => Any::Number(n.as_f64().unwrap_or(0.0)),
+            Some(i) => Any::Number(Number::Int(i)),
+            None => Any::Number(Number::Float(n.as_f64().unwrap_or(0.0))),
         },
         Value::String(s) => Any::String(s.as_str().into()),
         Value::Array(a) => Any::Array(a.iter().map(json_to_any).collect::<Vec<_>>().into()),
@@ -312,17 +312,34 @@ fn any_to_json(a: &Any) -> Value {
         // JS (yjs) has no int/float split, so an integer-valued prop like
         // `level: 2` can arrive as a float. Normalise it back to an int so it
         // matches what the desktop writes (and what the editor expects).
-        Any::Number(f) if f.is_finite() && f.fract() == 0.0 && f.abs() < 9.007e15 => {
+        Any::Number(Number::Float(f))
+            if f.is_finite() && f.fract() == 0.0 && f.abs() <= Number::F64_MAX_SAFE_INTEGER =>
+        {
             Value::Number((*f as i64).into())
         }
-        Any::Number(f) => serde_json::Number::from_f64(*f)
+        Any::Number(Number::Float(f)) => serde_json::Number::from_f64(*f)
             .map(Value::Number)
             .unwrap_or(Value::Null),
-        Any::BigInt(i) => Value::Number((*i).into()),
+        // Includes legacy BigInt wire values written by yrs 0.27.x.
+        Any::Number(Number::Int(i)) => Value::Number((*i).into()),
         Any::String(s) => Value::String(s.to_string()),
         Any::Buffer(_) => Value::Null,
         Any::Array(arr) => Value::Array(arr.iter().map(any_to_json).collect()),
         Any::Map(m) => Value::Object(m.iter().map(|(k, v)| (k.clone(), any_to_json(v))).collect()),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn legacy_bigint_wire_values_read_as_exact_json_integers() {
+    use yrs::encoding::read::Cursor;
+    // Wire tag 122 + big-endian i64 is what yrs 0.27 wrote for integer props.
+    // Use those bytes directly, not the new Number encoder under test.
+    for n in [i64::MIN, -1, 0, 1, 9_007_199_254_740_993, i64::MAX] {
+        let mut bytes = vec![122];
+        bytes.extend_from_slice(&n.to_be_bytes());
+        let decoded = Any::decode(&mut Cursor::new(&bytes)).expect("legacy BigInt decodes");
+        assert_eq!(any_to_json(&decoded), serde_json::json!(n));
     }
 }
 

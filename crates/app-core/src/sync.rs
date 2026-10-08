@@ -27,7 +27,7 @@ use crate::store::lock_document_tx;
 /// `MicaDoc::from_update`, but a yrs PANIC on malformed bytes becomes a
 /// `DocError` instead of unwinding out of the request handler.
 ///
-/// yrs 0.27.x panics (index out of bounds while integrating a crafted update)
+/// yrs can still panic on malformed updates in 0.28.0
 /// rather than returning `Err` — and on the server the bytes are client-supplied
 /// (`push_update`) or caller-supplied (`restore_yrs_version`). Without this the
 /// panic unwinds; tokio catches it at the task boundary so the PROCESS survives,
@@ -35,11 +35,10 @@ use crate::store::lock_document_tx;
 /// Wrapping the call turns it into the same `DocError` the `.map_err` at each
 /// site already handles, so the request is rejected, not dropped.
 ///
-/// This does NOT catch yrs's upstream NON-unwinding UB (the `unreachable_unchecked`
-/// path — see mica-core `store.rs` P0-0 / `yrs_corrupt_input_is_unsound`):
-/// `catch_unwind` structurally cannot, and in release it is plain UB. That needs
-/// an upstream fix; this only closes the recoverable unwinding-panic class. The
-/// server's panic strategy is `unwind` (no `panic = "abort"`), so this works.
+/// yrs 0.28.0 includes checked UTF-8 (#644) and fallible allocation (#639),
+/// but those fixes do not cover every integration panic (upstream #415).
+/// This guard only contains unwinding panics; it is not a general sandbox.
+/// The server's panic strategy is `unwind` (no `panic = "abort"`).
 pub(crate) fn guarded_from_update(bytes: &[u8]) -> Result<MicaDoc, DocError> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| MicaDoc::from_update(bytes)))
         .unwrap_or_else(|_| Err(DocError::Decode("yrs panicked while decoding an update".into())))
