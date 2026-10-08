@@ -24,6 +24,8 @@
 - Flutter分析：无新增错误/警告，仅136项既有info。
 - Playwright真实鼠标/键盘覆盖单击打开、双击只打开一次并弹窗、Enter保存一次、Esc取消、Ctrl多选和跨页面点击配对。使用真实WorkspaceView/弹窗与合成文档、回调，不访问生产数据。语义树只用于取得标签/截图；关闭其鼠标命中，让物理点击进入画布，避免无指针时间戳的语义tap代替鼠标输入。
 - CI增加同一浏览器回归，归档截图与结果。
+- 提交 `f0b6c29` 的 [主CI](https://github.com/weironz/mica/actions/runs/37721419764) 全部通过，新增浏览器用例与本机结果一致。
+- 同一提交的 [Windows离线/联网集成测试](https://github.com/weironz/mica/actions/runs/37721419904) 两组全部通过。
 
 [弹窗截图](assets/sidebar-rename-dialog.png)、[保存后截图](assets/sidebar-rename-saved.png)、[浏览器结果](assets/sidebar-rename-results.json)。
 
