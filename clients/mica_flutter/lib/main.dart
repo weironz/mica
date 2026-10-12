@@ -13169,6 +13169,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         onStream: widget.onAiStream,
         onNewPage: widget.onAiNewPage,
         onCurrentPage: widget.onAiCurrentPage,
+        currentPage: widget.onAiCurrentPage == null
+            ? null
+            : (
+                title: _pageTitle.text,
+                markdown: _commandHook.documentMarkdown() ?? '',
+              ),
         onNewWorkspace: widget.onAiNewWorkspace,
       ),
     );

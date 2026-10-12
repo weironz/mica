@@ -156,6 +156,7 @@ class EditorCommandHook {
   void Function(String text)? _insertTopParagraph;
   VoidCallback? _resetDiagramViews;
   Future<void> Function()? _flush;
+  String Function()? _documentMarkdown;
 
   void toggleMark(String type) => _toggleMark?.call(type);
   void setBlock(String kind, [Map<String, dynamic> data = const {}]) =>
@@ -182,6 +183,9 @@ class EditorCommandHook {
   /// typing isn't dropped when the editor is torn down. Returns when the edits
   /// have been emitted (and, for the cloud path, the round-trip is in flight).
   Future<void> flush() => _flush?.call() ?? Future.value();
+
+  /// Read the mounted editor's live Markdown without changing its selection.
+  String? documentMarkdown() => _documentMarkdown?.call();
 }
 
 class MicaEditor extends StatefulWidget {
@@ -1057,7 +1061,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         if (!mounted) return;
         _render?.resetAllPreviewViews();
       }
-      .._flush = _controller.flushPending;
+      .._flush = _controller.flushPending
+      .._documentMarkdown = () => mounted
+          ? _controller.documentMarkdown(imageUrls: _imageUrlCache)
+          : '';
   }
 
   /// Scroll the surrounding page so the block [blockId] is near the top.

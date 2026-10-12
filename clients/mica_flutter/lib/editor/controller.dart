@@ -1176,6 +1176,25 @@ class EditorController extends ChangeNotifier {
       e = sel.end;
     }
 
+    return _rangeMarkdown(s, e, imageUrls: imageUrls);
+  }
+
+  /// The live body, including edits not yet flushed to the backend. Uses the
+  /// same Markdown serializer as selection copy without moving the caret.
+  String documentMarkdown({Map<String, String>? imageUrls}) {
+    if (nodes.isEmpty) return '';
+    return _rangeMarkdown(
+      const DocPosition(0, 0),
+      DocPosition(nodes.length - 1, nodes.last.text.length),
+      imageUrls: imageUrls,
+    );
+  }
+
+  String _rangeMarkdown(
+    DocPosition s,
+    DocPosition e, {
+    Map<String, String>? imageUrls,
+  }) {
     String nodeBody(int i, int from, int to) {
       final node = nodes[i];
       if (node.kind == 'table') {
