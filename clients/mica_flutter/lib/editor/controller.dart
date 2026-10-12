@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'details_html.dart';
+import 'ai_edits.dart';
 import 'highlight.dart' show kCodeLanguages, detectLanguage;
 import 'marks.dart';
 import 'model.dart';
@@ -1188,6 +1189,79 @@ class EditorController extends ChangeNotifier {
       DocPosition(nodes.length - 1, nodes.last.text.length),
       imageUrls: imageUrls,
     );
+  }
+
+  EditorAiSnapshot captureAiSnapshot() => EditorAiSnapshot(rootBlockId, nodes);
+
+  /// Accept a preview as one undoable edit. Only targeted blocks are replaced;
+  /// concurrent edits elsewhere in the page remain in the live document.
+  Future<void> applyAiEdits(
+    EditorAiSnapshot source,
+    AiEditPreview preview, {
+    bool Function()? canApply,
+  }) async {
+    if (!await flushPending()) throw const AiEditSaveFailure();
+    if (canApply?.call() == false ||
+        source.rootBlockId != rootBlockId ||
+        preview.edits.isEmpty) {
+      throw const AiEditConflict();
+    }
+    final original = {for (final node in source.nodes) node.id: node};
+    final positions = {for (var i = 0; i < nodes.length; i++) nodes[i].id: i};
+    final occupied = <String>{};
+    final ranges = <({int start, int end, AiBlockEdit edit})>[];
+    // Validate EVERY range before changing anything, including its content and
+    // order. A newly inserted block inside a target range is also a conflict.
+    for (final edit in preview.edits) {
+      if (edit.blockIds.isEmpty) throw const AiEditConflict();
+      final start = positions[edit.blockIds.first];
+      if (start == null) throw const AiEditConflict();
+      for (var offset = 0; offset < edit.blockIds.length; offset++) {
+        final id = edit.blockIds[offset];
+        final before = original[id];
+        final index = start + offset;
+        if (!occupied.add(id) ||
+            before == null ||
+            index >= nodes.length ||
+            nodes[index].id != id ||
+            nodes[index].kind != before.kind ||
+            nodes[index].text != before.text ||
+            !_jsonEq(nodes[index].data, before.data)) {
+          throw const AiEditConflict();
+        }
+      }
+      ranges.add((start: start, end: start + edit.blockIds.length, edit: edit));
+    }
+    final target = List<EditorNode>.of(nodes);
+    ranges.sort((a, b) => b.start.compareTo(a.start));
+    for (final range in ranges) {
+      final replacement = <EditorNode>[
+        for (var i = 0; i < range.edit.replacement.length; i++)
+          EditorNode(
+            id: i < range.edit.blockIds.length
+                ? range.edit.blockIds[i]
+                : _genId(),
+            kind: range.edit.replacement[i].kind,
+            text: range.edit.replacement[i].text,
+            data: Map<String, dynamic>.from(range.edit.replacement[i].data),
+          ),
+      ];
+      target.replaceRange(range.start, range.end, replacement);
+    }
+    if (target.isEmpty) throw const AiEditConflict();
+    final ops = _diffOps(nodes, target);
+    if (ops.isEmpty) return;
+    nodes
+      ..clear()
+      ..addAll(target);
+    final commit = _send(ops, canSend: canApply);
+    _clampSelection();
+    notifyListeners();
+    final saved = await commit;
+    if (!saved) {
+      if (canApply?.call() == false) throw const AiEditConflict();
+      throw const AiEditSaveFailure();
+    }
   }
 
   String _rangeMarkdown(
@@ -3510,21 +3584,25 @@ class EditorController extends ChangeNotifier {
   /// "failed", or it drops the user's edits the moment the backend is unhappy.
   /// Nothing is rethrown — a broken commit must not take the editing hot path
   /// down with it — so the flag is the only channel back.
-  Future<bool> _send(List<DocOp> ops) {
+  Future<bool> _send(List<DocOp> ops, {bool Function()? canSend}) {
     // Record the pre-change document before this committed mutation, unless we
     // are mid-restore (undo/redo emit their own diff ops through here).
     if (!_restoring) _recordHistory();
-    final done = _chain.then((_) => onOps(ops)).then((_) => true).catchError((
-      Object e,
-    ) {
-      // Do NOT swallow: a failed commit (e.g. appendOutbox StateError) means the
-      // batch didn't reach durable storage. Count it and surface via [onOpFault]
-      // so it's visible, but keep the chain alive — throwing here would break the
-      // editing hot path for every subsequent edit.
-      opFaultCount++;
-      onOpFault?.call(e, opFaultCount);
-      return false;
-    });
+    final done = _chain
+        .then((_) async {
+          if (canSend?.call() == false) return false;
+          await onOps(ops);
+          return true;
+        })
+        .catchError((Object e) {
+          // Do NOT swallow: a failed commit (e.g. appendOutbox StateError) means the
+          // batch didn't reach durable storage. Count it and surface via [onOpFault]
+          // so it's visible, but keep the chain alive — throwing here would break the
+          // editing hot path for every subsequent edit.
+          opFaultCount++;
+          onOpFault?.call(e, opFaultCount);
+          return false;
+        });
     _chain = done.then((_) {});
     return done;
   }

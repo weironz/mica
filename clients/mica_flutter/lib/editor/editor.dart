@@ -9,6 +9,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import 'controller.dart';
+import 'ai_edits.dart';
 import 'highlight.dart';
 import 'markdown.dart';
 import 'marks.dart';
@@ -32,6 +33,7 @@ import '../ui/copy_button.dart';
 import '../ui/theme_tokens.dart';
 
 export 'controller.dart' show DocOp, ApplyOps;
+export 'ai_edits.dart';
 export 'markdown.dart' show markdownToBlocks, BlockSpec;
 export 'model.dart' show EditorNode;
 export 'render.dart' show EditorAppearance, EditorTheme, CommentHighlight;
@@ -157,6 +159,9 @@ class EditorCommandHook {
   VoidCallback? _resetDiagramViews;
   Future<void> Function()? _flush;
   String Function()? _documentMarkdown;
+  EditorAiSnapshot Function()? _captureAiSnapshot;
+  Future<void> Function(EditorAiSnapshot, AiEditPreview, bool Function()?)?
+  _applyAiEdits;
 
   void toggleMark(String type) => _toggleMark?.call(type);
   void setBlock(String kind, [Map<String, dynamic> data = const {}]) =>
@@ -186,6 +191,18 @@ class EditorCommandHook {
 
   /// Read the mounted editor's live Markdown without changing its selection.
   String? documentMarkdown() => _documentMarkdown?.call();
+
+  EditorAiSnapshot? captureAiSnapshot() => _captureAiSnapshot?.call();
+
+  Future<void> applyAiEdits(
+    EditorAiSnapshot source,
+    AiEditPreview preview, {
+    bool Function()? canApply,
+  }) async {
+    final apply = _applyAiEdits;
+    if (apply == null) throw const AiEditConflict();
+    await apply(source, preview, canApply);
+  }
 }
 
 class MicaEditor extends StatefulWidget {
@@ -1062,9 +1079,31 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _render?.resetAllPreviewViews();
       }
       .._flush = _controller.flushPending
-      .._documentMarkdown = () => mounted
-          ? _controller.documentMarkdown(imageUrls: _imageUrlCache)
-          : '';
+      .._documentMarkdown = () {
+        return mounted
+            ? _controller.documentMarkdown(imageUrls: _imageUrlCache)
+            : '';
+      }
+      .._captureAiSnapshot = () {
+        if (!mounted) throw const AiEditConflict();
+        return _controller.captureAiSnapshot();
+      }
+      .._applyAiEdits = (source, preview, canApply) async {
+        if (!mounted || !widget.canEdit) throw const AiEditConflict();
+        final controller = _controller;
+        await controller.applyAiEdits(
+          source,
+          preview,
+          canApply: () =>
+              mounted &&
+              widget.canEdit &&
+              identical(controller, _controller) &&
+              canApply?.call() != false,
+        );
+        if (!mounted || !identical(controller, _controller)) return;
+        _rehostExternalImages();
+        _syncImeFromSelection(force: true);
+      };
   }
 
   /// Scroll the surrounding page so the block [blockId] is near the top.

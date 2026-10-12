@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../swallowed.dart';
 import '../upload/sha256.dart';
 import 'models.dart';
+import '../editor/ai_edits.dart';
 import 'ws_connect.dart';
 
 /// `scheme://host[:port]` for [base], omitting the port when it IS the
@@ -778,6 +779,18 @@ class ApiClient {
     final response = await _post('/api/ai/complete', body, token: token);
     return response['text'] as String? ?? '';
   }
+
+  /// Validate and normalize a proposed block edit using the Rust Markdown parser.
+  Future<AiEditPreview> previewAiEdits(
+    String token,
+    String response,
+    EditorAiSnapshot source,
+  ) async => AiEditPreview.fromJson(
+    await _post('/api/ai/edits/preview', {
+      'response': response,
+      'blocks': source.blocks,
+    }, token: token),
+  );
 
   /// Stream an AI completion over WebSocket, yielding text deltas as they arrive.
   /// (Flutter Web's HTTP client can't stream responses, so AI streaming uses WS.)

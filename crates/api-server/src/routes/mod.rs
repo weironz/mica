@@ -5,6 +5,7 @@ use axum::{
 use mica_app_core::AppState;
 
 mod ai;
+mod ai_edits;
 mod ai_ws;
 pub mod auth;
 mod avatar;
@@ -125,6 +126,7 @@ pub fn api_router() -> Router<AppState> {
       get(documents::export_workspace_markdown),
     )
     .route("/ai/complete", post(ai::complete))
+    .route("/ai/edits/preview", post(ai_edits::preview))
     .route(
       "/ai/settings",
       get(ai::get_settings).patch(ai::update_settings),

@@ -2896,6 +2896,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.aiStream(session.accessToken, prompt, system: system);
   }
 
+  Future<AiEditPreview> _previewAiEdits(
+    String response,
+    EditorAiSnapshot source,
+  ) => _api.previewAiEdits(_requireSession().accessToken, response, source);
+
   Future<Uint8List> _exportPageZip() async {
     final session = _requireSession();
     final workspace = _requireWorkspace();
@@ -4472,6 +4477,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (mounted) {
         setState(() => _message = error.toString());
       }
+      rethrow;
     }
   }
 
@@ -7245,6 +7251,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           ? (_, {system}) => const Stream<String>.empty()
           : _aiStream,
       onAiNewPage: local ? (_) async {} : _aiNewPageFromMarkdown,
+      onAiPreviewEdits: local ? null : _previewAiEdits,
       onAiCurrentPage: local || _selectedBootstrap == null
           ? null
           : _aiCurrentFromMarkdown,
@@ -8278,6 +8285,7 @@ class WorkspaceView extends StatefulWidget {
     required this.onResolveImageUrls,
     required this.onAiStream,
     required this.onAiNewPage,
+    this.onAiPreviewEdits,
     required this.onAiCurrentPage,
     required this.onAiNewWorkspace,
     required this.onLoadAiSettings,
@@ -8582,6 +8590,8 @@ class WorkspaceView extends StatefulWidget {
   onResolveImageUrls;
   final Stream<String> Function(String prompt, {String? system}) onAiStream;
   final Future<void> Function(String markdown) onAiNewPage;
+  final Future<AiEditPreview> Function(String response, EditorAiSnapshot source)?
+      onAiPreviewEdits;
   final Future<void> Function(String markdown)? onAiCurrentPage;
   final Future<void> Function(String markdown) onAiNewWorkspace;
 
@@ -13161,6 +13171,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   }
 
   void _openAiDialog() {
+    final documentId = widget.selectedBootstrap?.document.id;
     showDialog<void>(
       context: context,
       builder: (context) => _AiDialog(
@@ -13176,6 +13187,29 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 markdown: _commandHook.documentMarkdown() ?? '',
               ),
         onNewWorkspace: widget.onAiNewWorkspace,
+        onPreviewEdits: widget.onAiPreviewEdits,
+        readPageForEdits: widget.onAiPreviewEdits == null
+            ? null
+            : () {
+                final source = _commandHook.captureAiSnapshot();
+                if (source == null ||
+                    documentId != widget.selectedBootstrap?.document.id) {
+                  throw const AiEditConflict();
+                }
+                return (
+                  title: _pageTitle.text,
+                  markdown: _commandHook.documentMarkdown() ?? '',
+                  source: source,
+                );
+              },
+        onApplyEdits: (source, preview) async {
+          if (documentId != widget.selectedBootstrap?.document.id) {
+            throw const AiEditConflict();
+          }
+          await _commandHook.applyAiEdits(source, preview,
+              canApply: () => mounted &&
+                  documentId == widget.selectedBootstrap?.document.id);
+        },
       ),
     );
   }
