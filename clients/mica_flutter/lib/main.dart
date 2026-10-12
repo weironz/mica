@@ -56,6 +56,7 @@ import 'ui/home_screen.dart' show HomeDocEntry;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
 import 'ui/page_tree_state.dart';
+import 'ui/page_tree_cache.dart';
 import 'ui/tree_selection.dart';
 import 'ui/panel_kit.dart';
 import 'ui/rename.dart';
@@ -8861,6 +8862,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // default). The tree opens collapsed and remembers what the user expanded;
   // navigating to / creating a nested page reveals its ancestors.
   final Set<String> _expandedViewIds = {};
+  final PageTreeCache _pageTreeCache = PageTreeCache();
   // The view whose sidebar name is in inline-rename (edit) mode — null = none.
   // Set right after creating a page/folder (so the user types its name
   // immediately, no dialog) or from the row's "重命名" action; the matching row
@@ -9056,7 +9058,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // left pad 2 + indent + toggle 18 + icon 18 + gap 6 + text + right pad 4
       // + a little slack so the glyphs never kiss the edge.
       final rowWidth = 2 + it.depth * 16 + 18 + 18 + 6 + tp.width + 4 + 14;
+      tp.dispose();
       if (rowWidth > widest) widest = rowWidth;
+      if (widest >= _navWidthMax) break;
     }
     _navWidth = widest.clamp(_navWidthMin, _navWidthMax);
   }
@@ -9094,10 +9098,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // Re-fit the sidebar to content when the tree could have changed shape:
     // switched workspace, added/removed a page, or renamed the open page.
     // (No-op once the width is user-controlled.)
-    if (wsChanged ||
-        widget.views.length != oldWidget.views.length ||
-        widget.selectedBootstrap?.view.name !=
-            oldWidget.selectedBootstrap?.view.name) {
+    if (_pageTreeCache.updateViews(widget.views) || wsChanged) {
       _fitNavWidthToContent();
     }
 
@@ -10060,9 +10061,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         controller: _treeScroll,
         slivers: [
           SliverList(
-            delegate: SliverChildListDelegate(
-              treeRows.indexed.map((entry) {
-                final (index, item) = entry;
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                final item = treeRows[index];
                 // The NEXT row's depth bounds how far left an `after` drop under this
                 // row may pop out; null means "this is the last row", which is what
                 // lets the last row reach the workspace root.
@@ -10137,6 +10138,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 );
                 if (!canEdit) {
                   return Padding(
+                    key: ValueKey(item.view.id),
                     padding: const EdgeInsets.only(bottom: 8),
                     child: row,
                   );
@@ -10148,13 +10150,20 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     _draggingTree &&
                     _selection.contains(item.view.id) &&
                     _selection.length > 1;
-                return _draggableTreeRow(
-                  item.view,
-                  item.depth,
-                  nextDepth,
-                  travelling ? Opacity(opacity: 0.4, child: row) : row,
+                return KeyedSubtree(
+                  key: ValueKey(item.view.id),
+                  child: _draggableTreeRow(
+                    item.view,
+                    item.depth,
+                    nextDepth,
+                    travelling ? Opacity(opacity: 0.4, child: row) : row,
+                  ),
                 );
-              }).toList(),
+              },
+              childCount: treeRows.length,
+              findChildIndexCallback: (key) => key is ValueKey<String>
+                  ? _pageTreeCache.visibleIndexOf(key.value)
+                  : null,
             ),
           ),
           // The root drop zone. Every other drop target takes its parent from the
@@ -10444,9 +10453,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// whatever sequence the user happened to Ctrl-click in, which nobody
   /// remembers by the time they see the result.)
   List<DocumentView> _rowsActedOnBy(String id) {
-    final byId = {for (final v in widget.views) v.id: v};
     if (!_selection.actsOnWholeSelection(id)) {
-      final one = byId[id];
+      final one = _pageTreeCache.viewById(id);
       return one == null ? const [] : [one];
     }
     final inTreeOrder = [
@@ -10455,9 +10463,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     ];
     final kept = independentSelection(
       inTreeOrder,
-      (child) => byId[child]?.parentViewId,
+      (child) => _pageTreeCache.viewById(child)?.parentViewId,
     );
-    return [for (final k in kept) ?byId[k]];
+    return [for (final k in kept) ?_pageTreeCache.viewById(k)];
   }
 
   /// The context menu shown when a right-click lands inside a multi-selection.
@@ -10723,54 +10731,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   List<({DocumentView view, int depth, bool hasChildren})>
   _visibleDocumentTree() {
-    final childrenByParent = <String?, List<DocumentView>>{};
-    for (final view in widget.views) {
-      childrenByParent.putIfAbsent(view.parentViewId, () => []).add(view);
-    }
-
-    for (final children in childrenByParent.values) {
-      children.sort((left, right) => left.position.compareTo(right.position));
-    }
-
-    final ordered = <({DocumentView view, int depth, bool hasChildren})>[];
-    final visited = <String>{};
-
-    void appendChildren(String? parentId, int depth) {
-      final children = childrenByParent[parentId] ?? const <DocumentView>[];
-      for (final child in children) {
-        if (!visited.add(child.id)) {
-          continue;
-        }
-
-        final hasChildren = (childrenByParent[child.id] ?? const []).isNotEmpty;
-        ordered.add((view: child, depth: depth, hasChildren: hasChildren));
-        if (_expandedViewIds.contains(child.id)) {
-          appendChildren(child.id, depth + 1);
-        }
-      }
-    }
-
-    appendChildren(null, 0);
-    // Surface genuine orphans (parent missing) at the top level. A node that is
-    // unvisited only because an ancestor is collapsed must stay hidden — not be
-    // dumped at depth 0 (which made new children of a collapsed parent appear as
-    // siblings of it).
-    final viewIds = {for (final view in widget.views) view.id};
-    for (final view in widget.views) {
-      if (visited.contains(view.id)) {
-        continue;
-      }
-      final parentId = view.parentViewId;
-      if (parentId != null && viewIds.contains(parentId)) {
-        continue; // hidden under a collapsed ancestor
-      }
-      if (visited.add(view.id)) {
-        final hasChildren = (childrenByParent[view.id] ?? const []).isNotEmpty;
-        ordered.add((view: view, depth: 0, hasChildren: hasChildren));
-      }
-    }
-
-    return ordered;
+    _pageTreeCache.updateViews(widget.views);
+    return _pageTreeCache.visibleRows(_expandedViewIds);
   }
 
   void _toggleViewExpand(DocumentView view) {
@@ -10947,10 +10909,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     );
   }
 
-  /// Height of one tree row. `DocumentListItem` sets a 38px floor; a read-only
-  /// workspace adds the 8px gap the builder wraps each row in.
-  double get _treeRowExtent =>
-      matchesEditRole(widget.selectedWorkspace?.role) ? 38.0 : 46.0;
+  /// Both editable drag wrappers and read-only rows add an 8px gap to the
+  /// DocumentListItem's 38px floor. Keep locating distant rows in this same unit.
+  double get _treeRowExtent => 46.0;
 
   void _revealFolder(String viewId) {
     final byId = {for (final view in widget.views) view.id: view};

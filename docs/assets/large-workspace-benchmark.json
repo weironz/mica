@@ -1,0 +1,79 @@
+{
+  "scenario": "Synthetic 3668 visible root rows, real WorkspaceView, physical page click and wheel, synthetic bootstrap, no production writes",
+  "mode": "release",
+  "browser": "Chrome",
+  "viewport": {
+    "width": 1280,
+    "height": 900
+  },
+  "measurement": "Host callback setState to post-frame callback; excludes network; invalid initial lazy Stopwatch sample discarded",
+  "baseline_source": "efbf4e33b9eea2d98328f1962b6ba23671d2319d",
+  "baseline": {
+    "records": [
+      {
+        "action": "select",
+        "ms": 2776.3
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 2581
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 3207.901
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 2740.601
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 2138.4
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 1991.599
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 2098.9
+      }
+    ],
+    "scrolledToLast": true,
+    "errors": []
+  },
+  "optimized": {
+    "records": [
+      {
+        "action": "select",
+        "ms": 52.1
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 52
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 45.101
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 55.599
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 53.699
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 44
+      },
+      {
+        "action": "sync-rebuild",
+        "ms": 41.299
+      }
+    ],
+    "scrolledToLast": true,
+    "errors": []
+  }
+}
