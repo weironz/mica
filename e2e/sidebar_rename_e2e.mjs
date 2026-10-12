@@ -1,5 +1,5 @@
 // Browser mouse and keyboard against the real WorkspaceView and rename dialog.
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
@@ -36,12 +36,18 @@ async function clickPoint(name) {
   if (sidebarPoint) return sidebarPoint;
   // The same name appears in the breadcrumb/title after opening the page.
   // Identify the actual left tree row by its rendered position.
-  for (const candidate of await page.getByText(name, { exact: true }).all()) {
-    const box = await candidate.boundingBox();
-    if (box && box.x < 220 && box.y > 200)
-      return sidebarPoint = { x: box.x + Math.min(40, box.width / 2), y: box.y + box.height / 2 };
-  }
-  throw new Error('Sidebar row missing: ' + name);
+  // Enabling Flutter semantics schedules its first DOM update for a later
+  // frame. Locator.all() takes an immediate snapshot, so wait for the actual
+  // left tree row and its rendered bounds before sending physical clicks.
+  await expect.poll(async () => {
+    for (const candidate of await page.getByText(name, { exact: true }).all()) {
+      const box = await candidate.boundingBox();
+      if (box && box.x < 220 && box.y > 200)
+        return sidebarPoint = { x: box.x + Math.min(40, box.width / 2), y: box.y + box.height / 2 };
+    }
+    return null;
+  }, { message: 'Sidebar row missing: ' + name, timeout: 15000 }).not.toBeNull();
+  return sidebarPoint;
 }
 async function pair(name) {
   const p = await clickPoint(name);
