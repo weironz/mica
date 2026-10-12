@@ -1,0 +1,35 @@
+{
+  "ok": true,
+  "version": "0.13.49",
+  "protocol": "REST",
+  "statuses": {
+    "health": 200,
+    "authenticated_preview": 200,
+    "unknown_id": 400,
+    "nested_range": 400,
+    "unauthenticated": 401,
+    "real_ai_complete": 200,
+    "real_ai_rust_preview": 200
+  },
+  "preview": {
+    "edits": [
+      {
+        "block_ids": [
+          "release-body"
+        ],
+        "before": "RELEASE\\_TARGET\\_ORIGINAL",
+        "after": "RELEASE\\_TARGET\\_REVISED",
+        "replacement": [
+          {
+            "type": "paragraph",
+            "text": "RELEASE_TARGET_REVISED",
+            "data": null
+          }
+        ]
+      }
+    ]
+  },
+  "document_writes": 0,
+  "ai_calls": 1,
+  "ws_covered": false
+}
