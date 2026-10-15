@@ -1,6 +1,6 @@
 // Real browser inputs against production widgets; all content/accounts synthetic.
 // Build clients/mica_flutter/e2e/ui_experience_harness.dart into build/ui_experience.
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
@@ -117,9 +117,23 @@ try {
   await page.getByText('外观', { exact: false }).click();
   await page.getByRole('button', { name: '返回', exact: true }).waitFor();
   await shot('ui-experience-settings-mobile.png');
-  await page.getByRole('button', { name: '返回', exact: true }).click({force: true});
-  await page.getByRole('button', { name: '关闭', exact: true }).click({force: true});
-  check('mobile settings navigation and close work', await page.getByText('排版预览', { exact: false }).count() === 0);
+  const back = page.getByRole('button', { name: '返回', exact: true });
+  const close = page.getByRole('button', { name: '关闭', exact: true });
+  const laidOut = async target => {
+    const bounds = await target.boundingBox();
+    return bounds !== null && bounds.width > 0 && bounds.height > 0;
+  };
+  await expect.poll(() => laidOut(back)).toBe(true);
+  // Flutter's compact semantics nodes overlap and can intercept a simulated
+  // pointer. Activate the accessible button, then verify the rendered result.
+  await back.evaluate(element => element.click());
+  await expect(back).toHaveCount(0); // The compact shell has returned to its list.
+  await expect.poll(() => laidOut(close)).toBe(true);
+  await close.evaluate(element => element.click());
+  // The preview already disappears on Back, so it cannot prove Close worked.
+  await expect(close).toHaveCount(0);
+  await expect(page.getByText('排版预览', { exact: false })).toHaveCount(0);
+  check('mobile settings accessible navigation and close work', true);
 
   // Full production app and private SettingsDialog, using a local fake session.
   const full = await context.newPage();
