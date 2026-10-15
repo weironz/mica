@@ -419,10 +419,45 @@ pub async fn current_payload(
   db: &PgPool,
   document_id: Uuid,
 ) -> ApiResult<Option<DocumentSnapshotPayload>> {
-  let Some(base) = crate::sync::document_base(db, document_id).await? else {
-    return Ok(None);
-  };
-  let doc = mica_core::MicaDoc::from_update(&base.state)
+  let row: Option<(Vec<u8>, String)> = sqlx::query_as(
+    "SELECT b.state, coalesce(d.root_block_id, '') FROM document_yrs_base b
+     LEFT JOIN documents d ON d.id = b.document_id WHERE b.document_id = $1",
+  )
+  .bind(document_id)
+  .fetch_optional(db)
+  .await?;
+  row
+    .map(|(state, root)| payload_from_state(document_id, &state, root))
+    .transpose()
+}
+
+/// Export the payload together with a revision of the EXACT bytes decoded.
+/// One statement avoids marking a concurrent edit as already backed up.
+pub async fn current_payload_versioned(
+  db: &PgPool,
+  document_id: Uuid,
+) -> ApiResult<Option<(DocumentSnapshotPayload, String)>> {
+  let row: Option<(Vec<u8>, String, String)> = sqlx::query_as(
+    "SELECT b.state, md5(b.state) || ':' || md5(d.root_block_id), d.root_block_id
+     FROM document_yrs_base b JOIN documents d ON d.id = b.document_id
+     WHERE b.document_id = $1",
+  )
+  .bind(document_id)
+  .fetch_optional(db)
+  .await?;
+  row
+    .map(|(state, revision, root)| {
+      payload_from_state(document_id, &state, root).map(|payload| (payload, revision))
+    })
+    .transpose()
+}
+
+fn payload_from_state(
+  document_id: Uuid,
+  state: &[u8],
+  fallback_root: String,
+) -> ApiResult<DocumentSnapshotPayload> {
+  let doc = mica_core::MicaDoc::from_update(state)
     .map_err(|error| ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}")))?;
   // A base whose `meta.root` was wiped (see `MicaDoc::set_blocks`) reports an
   // empty root, and an empty root makes every read fail with `block not found: `
@@ -430,11 +465,7 @@ pub async fn current_payload(
   // is the authoritative copy, so heal from it rather than propagate the hole.
   let mut root_block_id = doc.root_block_id();
   if root_block_id.is_empty() {
-    root_block_id = sqlx::query_scalar("SELECT root_block_id FROM documents WHERE id = $1")
-      .bind(document_id)
-      .fetch_optional(db)
-      .await?
-      .unwrap_or_default();
+    root_block_id = fallback_root;
   }
   let mut payload = DocumentSnapshotPayload {
     schema_version: 1,
@@ -446,9 +477,8 @@ pub async fn current_payload(
       .collect(),
   };
   ensure_root_block(&mut payload);
-  Ok(Some(payload))
+  Ok(payload)
 }
-
 
 /// Decode a stored yrs version blob (from `document_yrs_versions.state`) into a
 /// renderable payload — blocks in tree order — for a read-only preview of that

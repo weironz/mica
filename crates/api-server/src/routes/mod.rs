@@ -122,6 +122,14 @@ pub fn api_router() -> Router<AppState> {
       get(documents::export_workspace_zip),
     )
     .route(
+      "/workspaces/{workspace_id}/export-manifest",
+      get(documents::export_manifest),
+    )
+    .route(
+      "/workspaces/{workspace_id}/export-pages/{view_id}/export.zip",
+      get(documents::export_page_zip),
+    )
+    .route(
       "/workspaces/{workspace_id}/export/markdown",
       get(documents::export_workspace_markdown),
     )

@@ -220,15 +220,35 @@ at all. Both ask for `--confirm`, and only one of them can be taken back.
 ### `export` — export workspaces to Markdown + images
 
 ```bash
-mica-cli export --out <DIR> [--ws <WORKSPACE_ID>] [--no-prune]
+mica-cli export --out <DIR> [--ws <WORKSPACE_ID>] [--no-prune] [--full]
 ```
 
-- `--out <DIR>` — output directory. **Mirrored** by default: unchanged files are
-  kept, and content removed upstream is **pruned** from the tree (so it always
-  reflects current state — great for incremental backups that dedup well).
-- `--ws <ID>` — export only one workspace (default: all your workspaces).
-- `--no-prune` — keep files for content that no longer exists (disable mirror
-  pruning).
+- `--out <DIR>`：保存一份完整的 Markdown、结构 sidecar 与图片镜像。默认清理源端已删除的内容。
+- `--ws <ID>`：只更新这个工作区，保留输出目录中其他工作区的文件和顶层清单记录。
+- `--no-prune`：保留源端已删除的文件；若旧文件与新目录发生路径冲突，会明确失败，避免偷偷删除。
+- `--full`：忽略本地版本记录，重新获取所有页面；仍保持相同内容文件的修改时间。
+
+**默认执行源端增量导出**：首次获取全部页面；后续先读取版本清单，只请求新增、正文变化、
+引用附件元数据变化，或本地文件缺失/修改的页面。目录改名、移动、页面增删等会使该工作区
+重新导出，以重建文件路径与跨页相对链接。新增无关附件不会让其他页面失效。
+正文变化时，已经验证本地内容和服务端版本的附件会复用，不必再次从对象存储下载；
+同一轮其他页面已下载的共享附件也可复用。每次请求最多声明 64 个可复用附件，优先当前页
+上次引用的附件；超出的附件正常下载，结果仍完整。
+
+版本记录放在 `<out>/.mica-export/`，按服务器 URL、工作区 ID 和导出协议版本隔离，不保存凭据。
+缓存缺失、损坏、上轮中断时自动重建；操作系统文件锁防止两个导出进程写同一个目录，
+**运行中不要删除 `.mica-export/lock`**。缺少新接口的旧服务端会明确失败，需要同时升级服务端与 CLI。
+
+每次只下载并解开一个页面的 ZIP。变化内容先暂存到磁盘，完整下载且目录版本校验成功后，
+逐文件原子替换，再更新成功版本记录和清理旧文件。失败不创建成功版本；安装期间中断时，
+下次重建该工作区。未变化文件不改写，适合继续交给 rustic 去重快照。
+
+资源边界：清单由 PostgreSQL 扫描权威 CRDT state 的摘要，不解码正文、不下载附件，
+也不把全工作区 state 传给 API 进程；它仍有数据库扫描成本。内存以单页及该页附件总量为界，
+一个页面包含巨大附件时仍可能占用较多内存。暂存空间只保留当前工作区的变化文件。
+
+`--json` 结果额外包含 `pages_exported`、`pages_skipped`、`bytes_downloaded`、`assets_reused`，可直接验证
+是否跳过源端导出，而不必从本地文件修改时间猜测。
 
 Only GETs — a **read-scoped** token suffices.
 
@@ -237,8 +257,10 @@ Only GETs — a **read-scoped** token suffices.
 ```
 <out>/
   manifest.json                     # { tool, exported_at, workspaces:[{ id, name, dir, files }] }
+  .mica-export/                     # local version cache + OS lock; safe to rebuild when idle
   <workspace-slug>/                 # one dir per workspace (slug of the name;
     <page>.md                       #   id suffix only if two names collide)
+    <page>.mica.json                 # block structure + original links + asset mapping
     <folder>/<page>.md              # nested folders preserved
     assets/…                        # referenced images, original filenames
 ```

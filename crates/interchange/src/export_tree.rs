@@ -59,22 +59,69 @@ pub fn build_markdown_tree_zip(
   payloads: &HashMap<String, DocumentSnapshotPayload>,
   images: &HashMap<String, ImageAsset>,
 ) -> Vec<ZipEntry> {
+  build_tree_entries(nodes, root, payloads, images, false, None, &HashSet::new())
+}
+
+/// Page-at-a-time exports need asset names independent of which other pages
+/// were requested. File ids are stable identities; original names are cosmetic.
+pub fn build_incremental_markdown_tree_zip(
+  nodes: &[TreeNode],
+  payloads: &HashMap<String, DocumentSnapshotPayload>,
+  images: &HashMap<String, ImageAsset>,
+  view_id: &str,
+  omit_assets: &HashSet<String>,
+) -> Vec<ZipEntry> {
+  build_tree_entries(
+    nodes,
+    None,
+    payloads,
+    images,
+    true,
+    Some(view_id),
+    omit_assets,
+  )
+}
+
+/// The complete round-trip manifest without materializing any CRDT payload.
+pub fn markdown_tree_manifest(nodes: &[TreeNode]) -> serde_json::Value {
+  let (pages, paths) = tree_paths(nodes, None);
+  let pages: Vec<_> = pages
+    .into_iter()
+    .filter_map(|(node, folder, base)| {
+      if node.object_type == "folder" {
+        let mut path = folder.join("/");
+        if !path.is_empty() {
+          path.push('/');
+        }
+        path.push_str(&base);
+        Some(manifest_entry(node, &path, "folder"))
+      } else {
+        paths
+          .get(&node.id)
+          .map(|path| manifest_entry(node, path, "document"))
+      }
+    })
+    .collect();
+  serde_json::json!({"version": 2, "generator": "mica", "pages": pages})
+}
+
+type TreePage<'a> = (&'a TreeNode, Vec<String>, String);
+
+fn tree_paths<'a>(
+  nodes: &'a [TreeNode],
+  root: Option<&str>,
+) -> (Vec<TreePage<'a>>, HashMap<String, String>) {
   let mut by_parent: HashMap<Option<&str>, Vec<&TreeNode>> = HashMap::new();
   for n in nodes {
     by_parent.entry(n.parent_id.as_deref()).or_default().push(n);
   }
   for list in by_parent.values_mut() {
-    list.sort_by(|a, b| a.position.cmp(&b.position));
+    list.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.id.cmp(&b.id)));
   }
   let mut pages: Vec<(&TreeNode, Vec<String>, String)> = Vec::new();
   collect_page_paths(&by_parent, root, &Vec::new(), &mut pages);
 
-  let mut entries: Vec<ZipEntry> = Vec::new();
-  // Global (whole-archive) asset dedup by the caller's key.
-  let mut asset_by_key: HashMap<String, String> = HashMap::new();
-  let mut used_assets: HashSet<String> = HashSet::new();
   let mut used_paths: HashSet<String> = HashSet::new();
-  let mut manifest_pages: Vec<serde_json::Value> = Vec::new();
 
   // Final zip path per document, decided up front so page links can target
   // pages that come later in the tree.
@@ -93,8 +140,28 @@ pub fn build_markdown_tree_zip(
     path = unique_zip_path(path, &mut used_paths);
     path_by_view.insert(node.id.clone(), path);
   }
+  (pages, path_by_view)
+}
+
+fn build_tree_entries(
+  nodes: &[TreeNode],
+  root: Option<&str>,
+  payloads: &HashMap<String, DocumentSnapshotPayload>,
+  images: &HashMap<String, ImageAsset>,
+  stable_assets: bool,
+  selected_view: Option<&str>,
+  omit_assets: &HashSet<String>,
+) -> Vec<ZipEntry> {
+  let (pages, path_by_view) = tree_paths(nodes, root);
+  let mut entries: Vec<ZipEntry> = Vec::new();
+  let mut asset_by_key: HashMap<String, String> = HashMap::new();
+  let mut used_assets: HashSet<String> = HashSet::new();
+  let mut manifest_pages: Vec<serde_json::Value> = Vec::new();
 
   for (node, folder, base) in pages {
+    if selected_view.is_some_and(|id| id != node.id) {
+      continue;
+    }
     if node.object_type == "folder" {
       // A folder is a pure container: NO `.md`, just a manifest entry so the
       // directory — even an empty one — round-trips.
@@ -135,15 +202,26 @@ pub fn build_markdown_tree_zip(
       let Some(asset) = images.get(file_id) else {
         continue;
       };
-      let a = if let Some(existing) = asset_by_key.get(&asset.dedup_key) {
+      let dedup_key = if stable_assets {
+        file_id
+      } else {
+        &asset.dedup_key
+      };
+      let a = if let Some(existing) = asset_by_key.get(dedup_key) {
         existing.clone()
       } else {
-        let a = unique_asset_name(&asset.name, &mut used_assets);
-        entries.push(ZipEntry {
-          name: format!("assets/{a}"),
-          data: asset.bytes.clone(),
-        });
-        asset_by_key.insert(asset.dedup_key.clone(), a.clone());
+        let a = if stable_assets {
+          format!("{}-{}", safe_segment(file_id), safe_segment(&asset.name))
+        } else {
+          unique_asset_name(&asset.name, &mut used_assets)
+        };
+        if !omit_assets.contains(file_id) {
+          entries.push(ZipEntry {
+            name: format!("assets/{a}"),
+            data: asset.bytes.clone(),
+          });
+        }
+        asset_by_key.insert(dedup_key.clone(), a.clone());
         a
       };
       img_map.insert(file_id.clone(), format!("{rel}assets/{a}"));
@@ -461,6 +539,94 @@ mod tests {
     assert!(got.contains(&"Alpha.md".to_string()), "{got:?}");
     assert!(got.contains(&"Notes/Beta.md".to_string()), "{got:?}");
     assert!(got.contains(&"manifest.json".to_string()));
+  }
+
+  #[test]
+  fn inventory_and_single_page_export_keep_complete_tree_paths() {
+    let nodes = vec![
+      folder("f", None, "0", "Notes"),
+      doc("a", Some("f"), "0", "Same"),
+      doc("b", Some("f"), "1", "Same"),
+    ];
+    let inventory = markdown_tree_manifest(&nodes);
+    let pages = inventory["pages"].as_array().unwrap();
+    assert_eq!(pages.len(), 3);
+    assert_eq!(pages[2]["path"], "Notes/Same-2.md");
+    let mut p = payload("see same");
+    p.blocks
+      .iter_mut()
+      .find(|b| !b.text.is_empty())
+      .unwrap()
+      .data =
+      serde_json::json!({"marks":[{"type":"link","href":"mica://page/a","start":0,"end":3}]});
+    let entries = build_incremental_markdown_tree_zip(
+      &nodes,
+      &HashMap::from([("obj_b".into(), p)]),
+      &HashMap::new(),
+      "b",
+      &HashSet::new(),
+    );
+    assert!(names(&entries).contains(&"Notes/Same-2.md".into()));
+    assert!(!names(&entries).contains(&"Notes/Same.md".into()));
+    assert!(body(&entries, "Notes/Same-2.md").contains("../Notes/Same.md"));
+    assert!(names(&entries).contains(&"Notes/Same-2.mica.json".into()));
+    assert_eq!(markdown_tree_manifest(&[])["pages"], serde_json::json!([]));
+  }
+
+  #[test]
+  fn separate_page_exports_do_not_collide_on_original_asset_names() {
+    let nodes = vec![doc("a", None, "0", "A"), doc("b", None, "1", "B")];
+    let export = |page: &str, file: &str, bytes: Vec<u8>| {
+      build_incremental_markdown_tree_zip(
+        &nodes,
+        &HashMap::from([(format!("obj_{page}"), payload_with_image("picture", file))]),
+        &HashMap::from([(
+          file.into(),
+          ImageAsset {
+            name: "pasted-image.png".into(),
+            bytes,
+            dedup_key: "same-key".into(),
+          },
+        )]),
+        page,
+        &HashSet::new(),
+      )
+    };
+    let a = export("a", "file-a", vec![1]);
+    let b = export("b", "file-b", vec![2]);
+    assert!(names(&a).contains(&"assets/file-a-pasted-image.png".into()));
+    assert!(names(&b).contains(&"assets/file-b-pasted-image.png".into()));
+    let shared = export("b", "file-a", vec![1]);
+    assert!(names(&shared).contains(&"assets/file-a-pasted-image.png".into()));
+  }
+
+  #[test]
+  fn reusing_an_asset_omits_bytes_but_preserves_markdown_and_sidecar_references() {
+    let nodes = vec![doc("a", None, "0", "A")];
+    let payloads = HashMap::from([("obj_a".into(), payload_with_image("picture", "shared"))]);
+    let images = HashMap::from([(
+      "shared".into(),
+      ImageAsset {
+        name: "photo.png".into(),
+        bytes: vec![1, 2, 3],
+        dedup_key: "K".into(),
+      },
+    )]);
+    let full =
+      build_incremental_markdown_tree_zip(&nodes, &payloads, &images, "a", &HashSet::new());
+    let reused = build_incremental_markdown_tree_zip(
+      &nodes,
+      &payloads,
+      &images,
+      "a",
+      &HashSet::from(["shared".into()]),
+    );
+    assert!(names(&full).contains(&"assets/shared-photo.png".into()));
+    assert!(!names(&reused).iter().any(|p| p.starts_with("assets/")));
+    assert_eq!(body(&full, "A.md"), body(&reused, "A.md"));
+    assert_eq!(body(&full, "A.mica.json"), body(&reused, "A.mica.json"));
+    let sidecar: serde_json::Value = serde_json::from_str(&body(&reused, "A.mica.json")).unwrap();
+    assert_eq!(sidecar["assets"]["shared"], "assets/shared-photo.png");
   }
 
   /// manifest v2 carries IDENTITY, not just shape. v1 recorded `path` alone,

@@ -10,7 +10,10 @@ pub mod notion;
 pub mod order;
 pub mod zip;
 
-pub use export_tree::{ImageAsset, TreeNode, build_markdown_tree_zip};
+pub use export_tree::{
+  ImageAsset, TreeNode, build_incremental_markdown_tree_zip, build_markdown_tree_zip,
+  markdown_tree_manifest,
+};
 pub use import::{ImportMode, ImportPlan, PagePlan, plan_import, resolve_ref};
 pub use normalize::{expand_nested_zips, normalize_entries};
 pub use zip::{ZipEntry, ZipFileEntry, build_zip, read_zip};

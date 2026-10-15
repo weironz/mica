@@ -46,6 +46,29 @@ pub struct Workspace {
   pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ExportManifest {
+  pub version: u32,
+  pub structure_revision: String,
+  pub tree_revision: String,
+  pub manifest: serde_json::Value,
+  pub pages: Vec<ExportPageRevision>,
+  pub files: Vec<ExportFileRevision>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ExportFileRevision {
+  pub file_id: Uuid,
+  pub revision: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ExportPageRevision {
+  pub view_id: Uuid,
+  pub document_id: Uuid,
+  pub revision: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct WorkspaceListResponse {
   workspaces: Vec<Workspace>,
@@ -209,31 +232,76 @@ impl Client {
     Ok(list.workspaces)
   }
 
-  /// A workspace exported as a ZIP of Markdown pages + `assets/` images —
-  /// exactly what the web "export.zip" button produces (shared server code).
-  pub fn export_workspace_zip(&self, workspace_id: Uuid) -> Result<Vec<u8>> {
+  pub fn export_manifest(&self, workspace_id: Uuid) -> Result<ExportManifest> {
     let resp = self
-      .authed(self.http.get(self.url(&format!("/workspaces/{workspace_id}/export.zip"))))
-      // reqwest's BLOCKING client defaults to a 30 s timeout (the async one has
-      // none) — and zipping a large workspace server-side is minutes, not
-      // seconds. Production's biggest workspace (3079 pages) timed out on this
-      // every night, which then failed the whole backup run.
-      //
-      // Generous but not infinite: nothing is waiting on this — it runs once a
-      // day in a daemon — so the only thing a ceiling buys is that a genuinely
-      // wedged request eventually becomes a reported failure instead of a
-      // daemon that never logs again. If an export cannot finish in an hour,
-      // that IS the thing to report.
-      .timeout(std::time::Duration::from_secs(60 * 60))
+      .authed(
+        self
+          .http
+          .get(self.url(&format!("/workspaces/{workspace_id}/export-manifest"))),
+      )
+      .timeout(std::time::Duration::from_secs(180))
       .send()?;
-    Ok(Self::ok(resp)?.bytes()?.to_vec())
+    Self::ok(resp)?
+      .json()
+      .context("decoding export manifest (server and CLI must support incremental export)")
+  }
+
+  /// Only one page and its images are buffered, never a workspace archive.
+  /// The revision is derived from the exact state used to render this ZIP.
+  pub fn export_page_zip(
+    &self,
+    workspace_id: Uuid,
+    view_id: Uuid,
+    skip_assets: &[Uuid],
+  ) -> Result<(String, String, Vec<u8>)> {
+    let resp = self
+      .authed(self.http.get(self.url(&format!(
+        "/workspaces/{workspace_id}/export-pages/{view_id}/export.zip"
+      ))))
+      .query(&[(
+        "skip_assets",
+        skip_assets
+          .iter()
+          .map(Uuid::to_string)
+          .collect::<Vec<_>>()
+          .join(","),
+      )])
+      .timeout(std::time::Duration::from_secs(600))
+      .send()?;
+    let mut resp = Self::ok(resp)?;
+    let revision = resp
+      .headers()
+      .get("x-mica-export-revision")
+      .context("page export is missing its content revision")?
+      .to_str()?
+      .to_string();
+    if revision.is_empty() {
+      bail!("page export has an empty revision");
+    }
+    let structure = resp
+      .headers()
+      .get("x-mica-export-structure-revision")
+      .context("page export is missing its structure revision")?
+      .to_str()?
+      .to_string();
+    let mut bytes = Vec::new();
+    resp.copy_to(&mut bytes)?;
+    Ok((revision, structure, bytes))
+  }
+
+  pub fn server(&self) -> &str {
+    &self.base
   }
 
   /// Views (folders + document leaves) in a workspace. Trashed views are already
   /// filtered server-side.
   pub fn list_views(&self, workspace_id: Uuid) -> Result<Vec<View>> {
     let resp = self
-      .authed(self.http.get(self.url(&format!("/workspaces/{workspace_id}/views"))))
+      .authed(
+        self
+          .http
+          .get(self.url(&format!("/workspaces/{workspace_id}/views"))),
+      )
       .send()?;
     let list: ViewListResponse = Self::ok(resp)?.json()?;
     Ok(list.views)
@@ -273,7 +341,11 @@ impl Client {
   /// What is in the recycle bin. Soft-deleted, so all of it is restorable.
   pub fn list_trash(&self, workspace_id: Uuid) -> Result<Vec<View>> {
     let resp = self
-      .authed(self.http.get(self.url(&format!("/workspaces/{workspace_id}/trash"))))
+      .authed(
+        self
+          .http
+          .get(self.url(&format!("/workspaces/{workspace_id}/trash"))),
+      )
       .send()?;
     let list: ViewListResponse = Self::ok(resp)?.json()?;
     Ok(list.views)
@@ -315,7 +387,12 @@ impl Client {
     Ok(Self::ok(resp)?.json()?)
   }
 
-  fn batch_views(&self, workspace_id: Uuid, action: &str, body: serde_json::Value) -> Result<BatchOutcome> {
+  fn batch_views(
+    &self,
+    workspace_id: Uuid,
+    action: &str,
+    body: serde_json::Value,
+  ) -> Result<BatchOutcome> {
     let resp = self
       .authed(
         self
@@ -329,12 +406,20 @@ impl Client {
 
   /// Soft-delete many views (each with its subtree) in one request.
   pub fn batch_trash_views(&self, workspace_id: Uuid, view_ids: &[Uuid]) -> Result<BatchOutcome> {
-    self.batch_views(workspace_id, "batch-trash", serde_json::json!({ "view_ids": view_ids }))
+    self.batch_views(
+      workspace_id,
+      "batch-trash",
+      serde_json::json!({ "view_ids": view_ids }),
+    )
   }
 
   /// Bring many views back out of the recycle bin in one request.
   pub fn batch_restore_views(&self, workspace_id: Uuid, view_ids: &[Uuid]) -> Result<BatchOutcome> {
-    self.batch_views(workspace_id, "batch-restore", serde_json::json!({ "view_ids": view_ids }))
+    self.batch_views(
+      workspace_id,
+      "batch-restore",
+      serde_json::json!({ "view_ids": view_ids }),
+    )
   }
 
   /// Re-parent many views under one folder (None = workspace root).
@@ -354,7 +439,11 @@ impl Client {
   /// Empty the recycle bin. PERMANENT — nothing here is recoverable after.
   pub fn empty_trash(&self, workspace_id: Uuid) -> Result<serde_json::Value> {
     let resp = self
-      .authed(self.http.delete(self.url(&format!("/workspaces/{workspace_id}/trash"))))
+      .authed(
+        self
+          .http
+          .delete(self.url(&format!("/workspaces/{workspace_id}/trash"))),
+      )
       .send()?;
     Ok(Self::ok(resp)?.json()?)
   }

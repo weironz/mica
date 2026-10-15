@@ -25,7 +25,8 @@
 use anyhow::{Context, Result, bail};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command as Proc;
+use std::process::{Command as Proc, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 /// One leg's outcome. `Skipped` carries WHY, because a reason that lives only in
 /// a log line is a reason nobody reads.
@@ -247,23 +248,41 @@ fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
   Ok(())
 }
 
-/// Run an external tool, failing with its exit status. Output is inherited so
-/// rustic's and rclone's progress reaches the container log unbuffered.
-/// Like [`run_tool`] but hands back stdout. Used where the ANSWER matters and
-/// not just the exit status — `rclone size`, whose whole point is the number.
+/// Tool invocations have an overall deadline, including time spent in retry
+/// backoff. Connection timeouts alone do not bound a whole backup leg.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+const PGDUMP_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Capture the small `rclone size --json` answer on disk, not in an unbounded
+/// `.output()` buffer. stderr remains visible in the container log.
 fn tool_stdout(bin: &str, args: &[&str], what: &str) -> Result<String> {
-  let out = Proc::new(bin)
-    .args(args)
-    .output()
-    .with_context(|| format!("could not start `{bin}` — is it on PATH?"))?;
-  if !out.status.success() {
-    bail!(
-      "{what} failed ({}) — {}",
-      out.status,
-      String::from_utf8_lossy(&out.stderr).trim()
-    );
-  }
-  Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+  use std::io::{Read, Seek};
+  let path = std::env::temp_dir().join(format!("mica-tool-{}", uuid::Uuid::new_v4()));
+  let result = (|| -> Result<String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::OpenOptionsExt;
+      options.mode(0o600);
+    }
+    let mut out = options
+      .open(&path)
+      .context("creating the tool output file")?;
+    let mut command = Proc::new(bin);
+    command.args(args).stdout(out.try_clone()?);
+    run_tool_with_timeout(&mut command, what, TOOL_TIMEOUT)?;
+    out.rewind()?;
+    let mut bytes = Vec::new();
+    out.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > 64 * 1024 {
+      bail!("{what} returned more than 64 KiB — refusing an unexpected response");
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+  })();
+  let _ = std::fs::remove_file(path);
+  result
 }
 
 /// `count` and `bytes` out of `rclone size --json`.
@@ -271,9 +290,14 @@ fn tool_stdout(bin: &str, args: &[&str], what: &str) -> Result<String> {
 /// Hand-parsed rather than pulling in serde for two integers: this runs in the
 /// backup image, and the shape is two fields of a one-line object.
 fn rclone_size(rclone: &str, remote: &str) -> Result<(u64, u64)> {
-  let out = tool_stdout(rclone, &rclone_args(&["size", "--json", remote]), "rclone size")?;
-  parse_rclone_size(&out)
-    .with_context(|| format!("could not read count/bytes out of `rclone size --json {remote}`: {out}"))
+  let out = tool_stdout(
+    rclone,
+    &rclone_args(&["size", "--json", remote]),
+    "rclone size",
+  )?;
+  parse_rclone_size(&out).with_context(|| {
+    format!("could not read count/bytes out of `rclone size --json {remote}`: {out}")
+  })
 }
 
 /// Split out from [`rclone_size`] so it can be tested without rclone.
@@ -299,20 +323,128 @@ fn parse_rclone_size(out: &str) -> Option<(u64, u64)> {
 /// later did not, and no test could see the difference because the argument
 /// list is only assembled at the call site. Now there is one call site.
 fn rclone_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
-  let mut all = vec!["--config", RCLONE_CONF];
+  let mut all = vec![
+    "--config",
+    RCLONE_CONF,
+    "--transfers",
+    "2",
+    "--checkers",
+    "2",
+    "--retries",
+    "2",
+    "--low-level-retries",
+    "3",
+    "--retries-sleep",
+    "10s",
+    "--contimeout",
+    "10s",
+    "--timeout",
+    "60s",
+    "--max-duration",
+    "30m",
+    "--cutoff-mode",
+    "hard",
+  ];
   all.extend_from_slice(args);
   all
 }
 
 fn run_tool(bin: &str, args: &[&str], what: &str) -> Result<()> {
-  let status = Proc::new(bin)
-    .args(args)
-    .status()
-    .with_context(|| format!("could not start `{bin}` — is it on PATH?"))?;
+  run_tool_with_timeout(Proc::new(bin).args(args), what, TOOL_TIMEOUT)
+}
+
+/// Spawn each Unix command in its own process group: killing only a shell's
+/// PID leaves its children (and their I/O/retries) running after the deadline.
+/// Arguments are intentionally absent from errors because pg_dump's URL may
+/// contain a password.
+pub(crate) fn run_tool_with_timeout(
+  command: &mut Proc,
+  what: &str,
+  timeout: Duration,
+) -> Result<()> {
+  #[cfg(unix)]
+  {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+  }
+  let mut child = command
+    .spawn()
+    .with_context(|| format!("could not start {what}"))?;
+  let started = Instant::now();
+  loop {
+    match child.try_wait() {
+      Ok(Some(status)) => return tool_status(status, what),
+      Ok(None) if started.elapsed() < timeout => {
+        std::thread::sleep(
+          Duration::from_millis(50).min(timeout.saturating_sub(started.elapsed())),
+        );
+      }
+      outcome => {
+        terminate_tool_tree(&mut child);
+        // Reap even after kill, or the daemon accumulates zombies. If an OS
+        // call fails, retain the timeout/wait error as the primary reason.
+        let reaped = child.wait();
+        if let Err(error) = outcome {
+          return Err(error).with_context(|| format!("waiting for {what}"));
+        }
+        reaped.with_context(|| format!("reaping timed-out {what}"))?;
+        bail!(
+          "{what} timed out after {}s — terminated its process tree",
+          timeout.as_secs_f64()
+        );
+      }
+    }
+  }
+}
+
+/// Publish only a complete dump. Keep the previous complete SQL on failure,
+/// remove the partial file, and let the caller record failure before trying
+/// the independent object/config legs.
+fn write_database_dump(command: &mut Proc, directory: &Path, timeout: Duration) -> Result<()> {
+  let tmp = directory.join("mica.sql.tmp");
+  let result = (|| -> Result<()> {
+    std::fs::create_dir_all(directory)?;
+    command.stdout(std::fs::File::create(&tmp)?);
+    run_tool_with_timeout(command, "pg_dump", timeout)?;
+    std::fs::rename(&tmp, directory.join("mica.sql")).context("installing the complete pg_dump")?;
+    Ok(())
+  })();
+  if result.is_err() {
+    let _ = std::fs::remove_file(tmp);
+  }
+  result
+}
+
+fn tool_status(status: ExitStatus, what: &str) -> Result<()> {
   if !status.success() {
     bail!("{what} failed ({status})");
   }
   Ok(())
+}
+
+fn terminate_tool_tree(child: &mut std::process::Child) {
+  #[cfg(unix)]
+  {
+    unsafe extern "C" {
+      fn kill(pid: std::ffi::c_int, signal: std::ffi::c_int) -> std::ffi::c_int;
+    }
+    // SAFETY: kill takes two integer values. process_group(0) above gives
+    // this child a group whose id is its PID; a negative id targets that group.
+    // SIGKILL is 9 on the Unix targets supported by this CLI.
+    unsafe {
+      kill(-(child.id() as std::ffi::c_int), 9);
+    }
+  }
+  #[cfg(windows)]
+  {
+    let _ = Proc::new("taskkill")
+      .args(["/PID", &child.id().to_string(), "/T", "/F"])
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .status();
+  }
+  // Fallback if the group/tree has already exited or OS tree termination fails.
+  let _ = child.kill();
 }
 
 /// Where the node's credentials file is mounted into this container, read-only.
@@ -466,7 +598,7 @@ pub fn restore_objects(settings: &Settings) -> Result<()> {
   log(&format!("restore objects {src} → {dst}"));
   run_tool(
     &settings.rclone,
-    &rclone_args(&["copy", &src, &dst, "--transfers", "8", "--stats", "30s"]),
+    &rclone_args(&["copy", &src, &dst, "--stats", "30s"]),
     "rclone copy (restore)",
   )?;
 
@@ -485,6 +617,18 @@ pub fn restore_objects(settings: &Settings) -> Result<()> {
 }
 
 pub fn verdict(report: &Report, allow_partial: bool) -> Result<()> {
+  let failed: Vec<String> = report
+    .legs
+    .iter()
+    .filter_map(|(name, leg)| match leg {
+      Leg::Failed(reason) => Some(format!("{name}: {reason}")),
+      _ => None,
+    })
+    .collect();
+  if !failed.is_empty() {
+    bail!("{} leg(s) failed — {}", failed.len(), failed.join(" | "));
+  }
+
   let skipped = report.skipped();
   if skipped.is_empty() || allow_partial {
     return Ok(());
@@ -502,80 +646,62 @@ pub fn verdict(report: &Report, allow_partial: bool) -> Result<()> {
   )
 }
 
-/// Everything one scheduled run does.
-///
-/// `export` is a closure so the caller hands in the in-process exporter rather
-/// than this shelling out to its own binary.
-/// Where the run lock lives. `/tmp`, deliberately NOT the export volume: a
-/// SIGKILLed run leaves the file behind, and a lock that survives a container
-/// restart could match a PID that has since been reused (the daemon is PID 1,
-/// so a stale "1" would look alive forever and stop backups for good). `/tmp`
-/// is container-local, so a restart clears it — the worst stale lock then lives
-/// only as long as the container that made it.
-const RUN_LOCK: &str = "/tmp/mica-backup.lock";
-
-/// Whether a lock naming `pid` should be honoured, given whether that process
-/// is still alive. Split out so the decision is testable without forking.
-///
-/// A dead owner's lock is TAKEN, not respected: the alternative is a crashed
-/// run silently cancelling every future one.
-fn lock_is_live(owner_alive: bool) -> bool {
-  owner_alive
-}
-
-/// Refuses to start a second concurrent run, and releases on drop.
-///
-/// Two runs at once corrupt each other rather than merely racing: both write
-/// `_pgdump/mica.sql.tmp` and rename it into place, so one of them renames a
-/// file the other already moved and dies with `No such file or directory` —
-/// an error naming neither the real cause nor the other run. Observed
-/// 2026-08-29, when a manual `backup run` collided with the daemon's
-/// run-on-start, and it is exactly the collision a DR drill invites.
-#[derive(Debug)]
-pub struct RunLock {
-  path: std::path::PathBuf,
-}
-
-impl RunLock {
-  pub fn acquire() -> Result<Self> {
-    let path = std::path::PathBuf::from(RUN_LOCK);
-    loop {
-      match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-      {
-        Ok(mut file) => {
-          use std::io::Write;
-          let _ = write!(file, "{}", std::process::id());
-          return Ok(Self { path });
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-          let owner = std::fs::read_to_string(&path).unwrap_or_default();
-          let pid = owner.trim();
-          let alive = !pid.is_empty()
-            && std::path::Path::new(&format!("/proc/{pid}")).exists();
-          if lock_is_live(alive) {
-            bail!(
-              "another backup run is in progress (pid {pid}) — refusing to start a second.                Two runs write the same staging files and destroy each other."
-            );
-          }
-          log(&format!(
-            "clearing a stale run lock (pid {pid} is gone — a previous run was killed)"
-          ));
-          // Losing this race is harmless: whoever wins creates the lock, the
-          // loser comes back around and sees a LIVE owner.
-          let _ = std::fs::remove_file(&path);
-        }
-        Err(e) => return Err(e).context("creating the backup run lock"),
-      }
+/// Keep unrelated legs runnable when a tool fails or reaches its deadline.
+fn record_leg(report: &mut Report, name: &'static str, result: Result<Leg>) {
+  match result {
+    Ok(leg) => report.add(name, leg),
+    Err(error) => {
+      let reason = format!("{error:#}");
+      log(&format!("{name} leg FAILED — {reason}"));
+      report.add(name, Leg::failed(reason));
     }
   }
 }
 
-impl Drop for RunLock {
-  fn drop(&mut self) {
-    let _ = std::fs::remove_file(&self.path);
+/// Everything one scheduled run does.
+///
+/// The caller supplies the exporter invocation; production runs a child with a
+/// deadline, while tests can supply a deterministic failure without network IO.
+/// The inode stays in place across runs and container restarts. Only the OS
+/// lock determines ownership: stale PID text (especially PID 1) is irrelevant.
+const RUN_LOCK: &str = "/tmp/mica-backup.lock";
+
+/// Hold an exclusive OS file lock until drop. Never unlink it: removing a
+/// locked file lets a contender create a different inode and acquire a second
+/// lock while the first process is still writing the same staging files.
+#[derive(Debug)]
+pub struct RunLock {
+  _file: std::fs::File,
+}
+
+impl RunLock {
+  pub fn acquire() -> Result<Self> {
+    Self::acquire_at(Path::new(RUN_LOCK))
+  }
+
+  fn acquire_at(path: &Path) -> Result<Self> {
+    let mut file = std::fs::OpenOptions::new()
+      .read(true)
+      .write(true)
+      .create(true)
+      .truncate(false)
+      .open(path)
+      .context("opening the backup run lock")?;
+    match file.try_lock() {
+      Ok(()) => {}
+      Err(std::fs::TryLockError::WouldBlock) => {
+        bail!(
+          "another backup run is in progress — refusing to start a second. Two runs write the same staging files and destroy each other."
+        );
+      }
+      Err(std::fs::TryLockError::Error(error)) => {
+        return Err(error).context("locking the backup run lock");
+      }
+    }
+    // Diagnostic text only; write it after acquiring, never before.
+    file.set_len(0)?;
+    write!(file, "{}", std::process::id())?;
+    Ok(Self { _file: file })
   }
 }
 
@@ -590,19 +716,14 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
   // The repo must have been initialized once, deliberately NOT here: a
   // misconfigured backend must fail loudly rather than quietly create a second,
   // empty repository that then looks like a working backup.
-  if Proc::new(&settings.rustic)
-    .args(["cat", "config"])
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null())
-    .status()
-    .map(|s| !s.success())
-    .unwrap_or(true)
-  {
-    bail!(
-      "rustic repo not initialized, or the backend is unreachable. \
-       Initialize once with:  docker exec mica-backup-1 rustic init"
-    );
-  }
+  run_tool_with_timeout(
+    Proc::new(&settings.rustic)
+      .args(["cat", "config"])
+      .stdout(Stdio::null())
+      .stderr(Stdio::null()),
+    "rustic repository probe",
+    PROBE_TIMEOUT,
+  ).context("rustic repo not initialized, or the backend is unreachable. Initialize once with: docker exec mica-backup-1 rustic init")?;
 
   // 1) Content: every workspace as Markdown + images.
   //
@@ -653,26 +774,22 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
   let dump = pgdump_dir.join("mica.sql");
   match &settings.pgurl {
     Some(url) => {
-      std::fs::create_dir_all(&pgdump_dir)?;
       log(&format!("pg_dump → {}", dump.display()));
-      let tmp = pgdump_dir.join("mica.sql.tmp");
-      // Dump to a temp file and rename, so an interrupted run never leaves a
-      // half-written dump for the next snapshot to pick up.
-      let out = std::fs::File::create(&tmp)?;
-      let status = Proc::new("pg_dump")
-        .args(["--no-owner", "--no-privileges", url])
-        .stdout(out)
-        .status()
-        .context("could not start `pg_dump` — is postgresql-client installed?")?;
-      if !status.success() {
-        let _ = std::fs::remove_file(&tmp);
-        bail!("pg_dump failed ({status}) — refusing to ship a truncated dump");
+      let result = write_database_dump(
+        Proc::new("pg_dump").args(["--no-owner", "--no-privileges", url]),
+        &pgdump_dir,
+        PGDUMP_TIMEOUT,
+      );
+      if let Err(error) = result {
+        let reason = format!("{error:#}");
+        log(&format!("database leg FAILED — {reason}"));
+        report.add("database", Leg::failed(reason));
+      } else {
+        report.add("database", Leg::Ran);
       }
-      std::fs::rename(&tmp, &dump)?;
       // Drop any stale gzip from before the switch to plain SQL, or the snapshot
       // below carries both and the restore runbook has two files to choose from.
       let _ = std::fs::remove_file(pgdump_dir.join("mica.sql.gz"));
-      report.add("database", Leg::Ran);
     }
     None => report.add(
       "database",
@@ -687,70 +804,78 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
   //     snapshotting against a stale one would re-store yesterday's directories
   //     under today's date: a backup that looks fresh and is not. That is worse
   //     than an obviously missing one, so the leg is recorded as failed instead.
-  match &content_failure {
-    Some(reason) => {
-      log("skipping the content snapshot — this run wrote no manifest");
-      report.add("content", Leg::failed(reason.clone()));
-    }
-    None => {
-    // 3) Snapshot each workspace as its own retention lineage: label = the STABLE
-    //    workspace id (a rename never splits history), tag = the readable name.
-    let manifest_path = settings.export_dir.join("manifest.json");
-    let manifest: Manifest = serde_json::from_str(
-      &std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?,
-    )
-    .context("parsing the export manifest")?;
+  let content_result = match &content_failure {
+    Some(reason) => Err(anyhow::anyhow!(reason.clone())),
+    None => (|| -> Result<Leg> {
+      // 3) Snapshot each workspace as its own retention lineage: label = the STABLE
+      //    workspace id (a rename never splits history), tag = the readable name.
+      let manifest_path = settings.export_dir.join("manifest.json");
+      let manifest: Manifest = serde_json::from_str(
+        &std::fs::read_to_string(&manifest_path)
+          .with_context(|| format!("reading {}", manifest_path.display()))?,
+      )
+      .context("parsing the export manifest")?;
 
-    let mut count = 0usize;
-    let mut missed: Vec<String> = Vec::new();
-    for ws in &manifest.workspaces {
-      let path = settings.export_dir.join(&ws.dir);
-      if !path.is_dir() {
-        // A workspace the export announced but did not write. This used to be a
-        // log line and nothing else: the run still reported success and still
-        // pinged the healthcheck, so a workspace could quietly stop being backed
-        // up while every signal said the backups were fine. Collected here and
-        // turned into a skipped leg below — the whole point of the dead man's
-        // switch is that "less than you think" and "everything" must not look
-        // the same.
-        log(&format!("MISSING {}: {} not written", ws.id, path.display()));
-        missed.push(format!("{} (ws={})", ws.id, ws.name));
-        continue;
+      let mut count = 0usize;
+      let mut missed: Vec<String> = Vec::new();
+      for ws in &manifest.workspaces {
+        let path = settings.export_dir.join(&ws.dir);
+        if !path.is_dir() {
+          // A workspace the export announced but did not write. This used to be a
+          // log line and nothing else: the run still reported success and still
+          // pinged the healthcheck, so a workspace could quietly stop being backed
+          // up while every signal said the backups were fine. Collected here and
+          // turned into a skipped leg below — the whole point of the dead man's
+          // switch is that "less than you think" and "everything" must not look
+          // the same.
+          log(&format!(
+            "MISSING {}: {} not written",
+            ws.id,
+            path.display()
+          ));
+          missed.push(format!("{} (ws={})", ws.id, ws.name));
+          continue;
+        }
+        log(&format!(
+          "snapshot {} (ws={}) → label={}",
+          ws.dir, ws.name, ws.id
+        ));
+        run_tool(
+          &settings.rustic,
+          &[
+            "backup",
+            &path.to_string_lossy(),
+            "--label",
+            &ws.id,
+            "--tag",
+            &format!("ws={}", ws.name),
+            "--tag",
+            "mica",
+          ],
+          "rustic backup",
+        )?;
+        count += 1;
       }
       log(&format!(
-        "snapshot {} (ws={}) → label={}",
-        ws.dir, ws.name, ws.id
+        "snapshotted {count}/{} workspace(s)",
+        manifest.workspaces.len()
       ));
-      run_tool(
-        &settings.rustic,
-        &[
-          "backup",
-          &path.to_string_lossy(),
-          "--label",
-          &ws.id,
-          "--tag",
-          &format!("ws={}", ws.name),
-          "--tag",
-          "mica",
-        ],
-        "rustic backup",
-      )?;
-      count += 1;
-    }
-    log(&format!(
-      "snapshotted {count}/{} workspace(s)",
-      manifest.workspaces.len()
-    ));
-    report.add("content", coverage_leg(manifest.workspaces.len(), &missed));
-    }
-  }
+      Ok(coverage_leg(manifest.workspaces.len(), &missed))
+    })(),
+  };
+  record_leg(&mut report, "content", content_result);
 
   // 3b) The dump gets its own lineage (stable label `_pgdump`, never a workspace
   //     id) so retention below applies to it on the same policy.
-  if dump.is_file() {
+  if report
+    .legs
+    .iter()
+    .any(|(name, leg)| *name == "database" && *leg == Leg::Ran)
+  {
+    // A failed dump may leave yesterday's complete file in place. Never label
+    // that old file as a fresh backup after this run failed or timed out.
     log("snapshot pg_dump → label=_pgdump");
-    run_tool(
+    let result = run_tool(
       &settings.rustic,
       &[
         "backup",
@@ -763,7 +888,8 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
         "mica",
       ],
       "rustic backup (pgdump)",
-    )?;
+    );
+    record_leg(&mut report, "database snapshot", result.map(|()| Leg::Ran));
   }
 
   // 3c) The credentials themselves — the one class of thing that was backed up
@@ -787,7 +913,7 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
   //     bytes are exactly as exposed as the documents already beside them.
   if Path::new(CONFIG_FILE).is_file() {
     log("snapshot credentials → label=_config");
-    run_tool(
+    let result = run_tool(
       &settings.rustic,
       &[
         "backup",
@@ -800,8 +926,8 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
         "mica",
       ],
       "rustic backup (config)",
-    )?;
-    report.add("config", Leg::Ran);
+    );
+    record_leg(&mut report, "config", result.map(|()| Leg::Ran));
   } else {
     // Skipped, therefore FAILS the run by default (see `verdict`). That is the
     // point: an instance whose credentials are backed up nowhere cannot be
@@ -838,8 +964,6 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
           "copy",
           &src,
           &dst,
-          "--transfers",
-          "4",
           "--stats-one-line",
           "--stats",
           "30s",
@@ -871,7 +995,7 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
     "retention: keep {}d / {}w / {}m per lineage + prune",
     settings.keep_daily, settings.keep_weekly, settings.keep_monthly
   ));
-  run_tool(
+  let retention = run_tool(
     &settings.rustic,
     &[
       "forget",
@@ -886,24 +1010,15 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
       "--prune",
     ],
     "rustic forget",
-  )?;
+  );
+  record_leg(&mut report, "retention", retention.map(|()| Leg::Ran));
 
   // Every leg got its chance; now the run owes an honest verdict. Partial
   // success is NOT success — that was the original shell sin (a missing leg
   // logged a WARN and exited 0, and production went months with no off-site
   // copy). What changed here is only the ORDER: report first, fail after, so
   // one broken leg can no longer take the healthy ones down with it.
-  let failed: Vec<String> = report
-    .legs
-    .iter()
-    .filter_map(|(name, leg)| match leg {
-      Leg::Failed(reason) => Some(format!("{name}: {reason}")),
-      _ => None,
-    })
-    .collect();
-  if !failed.is_empty() {
-    bail!("{} leg(s) failed — {}", failed.len(), failed.join(" | "));
-  }
+  verdict(&report, true)?;
 
   Ok(report)
 }
@@ -1042,12 +1157,25 @@ mod tests {
   /// expensive to read — rclone names the REMOTE in the error, so a missing
   /// config looks like wrong credentials.
   #[test]
-  fn every_rclone_call_carries_the_config_path() {
+  fn every_rclone_call_is_bounded_and_carries_the_config_path() {
     let args = rclone_args(&["copy", "a:x", "b:y"]);
     assert_eq!(&args[..2], &["--config", RCLONE_CONF]);
-    assert_eq!(&args[2..], &["copy", "a:x", "b:y"]);
-    // and it survives an empty tail
-    assert_eq!(rclone_args(&[]), vec!["--config", RCLONE_CONF]);
+    assert!(args.ends_with(&["copy", "a:x", "b:y"]));
+    for pair in [
+      ["--transfers", "2"],
+      ["--checkers", "2"],
+      ["--retries", "2"],
+      ["--low-level-retries", "3"],
+      ["--contimeout", "10s"],
+      ["--timeout", "60s"],
+      ["--max-duration", "30m"],
+      ["--cutoff-mode", "hard"],
+    ] {
+      assert!(
+        args.windows(2).any(|window| window == pair),
+        "missing {pair:?}"
+      );
+    }
   }
 
   #[test]
@@ -1087,44 +1215,185 @@ mod tests {
   /// passed, the healthcheck was pinged, and the only trace was a line in a
   /// container log nobody reads. The reason names the workspace, because
   /// "some workspace is missing" is not something you can act on.
+  fn test_path() -> PathBuf {
+    std::env::temp_dir().join(format!("mica-backup-test-{}", uuid::Uuid::new_v4()))
+  }
+
   #[test]
   fn a_second_run_is_refused_while_the_first_holds_the_lock() {
-    // 2026-08-29:手动 `backup run` 撞上守护进程的 run-on-start,两个进程都在写
-    // `_pgdump/mica.sql.tmp` 再 rename,其中一个 rename 时文件已被抢走,报出
-    // `No such file or directory` —— 一条既不指向真正原因、也不提另一个 run
-    // 的错。演练与事故处理恰恰最容易制造这种并发。
-    let _first = match RunLock::acquire() {
-      Ok(lock) => lock,
-      // 这台机器上没有 /tmp(非 Linux 开发机)就跳过 —— 断言不了就不假装断言。
-      Err(_) => return,
-    };
-    let second = RunLock::acquire();
-    assert!(second.is_err(), "第二个 run 必须被拒绝");
-    let msg = format!("{:#}", second.unwrap_err());
-    assert!(
-      msg.contains("another backup run is in progress"),
-      "报错要说出真正的原因,而不是让下一个人去猜 rename 为什么失败: {msg}"
-    );
+    let path = test_path();
+    let first = RunLock::acquire_at(&path).unwrap();
+    let msg = format!("{:#}", RunLock::acquire_at(&path).unwrap_err());
+    assert!(msg.contains("another backup run is in progress"), "{msg}");
+    drop(first);
+    // The inode is retained. A third run must still coordinate with a second
+    // run that opened the file while the first held it.
+    assert!(path.exists());
+    let next = RunLock::acquire_at(&path).unwrap();
+    assert!(RunLock::acquire_at(&path).is_err());
+    drop(next);
+    std::fs::remove_file(path).unwrap();
   }
 
   #[test]
-  fn the_lock_is_released_when_the_run_ends() {
-    // 否则一次失败的 run 会把之后所有 run 一起锁死 —— 比它要修的并发问题更糟。
-    match RunLock::acquire() {
-      Ok(lock) => drop(lock),
-      Err(_) => return,
+  fn a_stale_pid_one_file_does_not_block_a_new_run() {
+    let path = test_path();
+    std::fs::write(&path, "1").unwrap();
+    let lock = RunLock::acquire_at(&path).unwrap();
+    drop(lock);
+    assert!(RunLock::acquire_at(&path).is_ok());
+    std::fs::remove_file(path).unwrap();
+  }
+
+  fn helper_command(mode: &str) -> Proc {
+    let mut command = Proc::new(std::env::current_exe().unwrap());
+    command
+      .args([
+        "--ignored",
+        "--exact",
+        "backup::tests::tool_process_helper",
+        "--nocapture",
+      ])
+      .env("MICA_BACKUP_TEST_HELPER", mode);
+    command
+  }
+
+  // A separate OS process exercises the production spawn/wait/lock paths.
+  #[test]
+  #[ignore = "subprocess helper launched by the process lifecycle tests"]
+  fn tool_process_helper() {
+    match std::env::var("MICA_BACKUP_TEST_HELPER").unwrap().as_str() {
+      "sleep" => std::thread::sleep(Duration::from_secs(30)),
+      "partial_dump" => {
+        println!("partial new SQL");
+        std::thread::sleep(Duration::from_secs(30));
+      }
+      "fail" => std::process::exit(7),
+      "lock" => {
+        let path = PathBuf::from(std::env::var_os("MICA_BACKUP_TEST_LOCK").unwrap());
+        let _lock = RunLock::acquire_at(&path).unwrap();
+        std::fs::write(path.with_extension("ready"), "ready").unwrap();
+        std::thread::sleep(Duration::from_secs(30));
+      }
+      _ => panic!("unknown helper mode"),
     }
-    assert!(
-      RunLock::acquire().is_ok(),
-      "锁必须在 run 结束时释放,包括失败退出的那些"
-    );
   }
 
   #[test]
-  fn a_dead_owners_lock_is_taken_not_respected() {
-    // 被 SIGKILL 的 run 留下的锁文件,不该让备份从此停摆。
-    assert!(lock_is_live(true), "活着的持有者:让路");
-    assert!(!lock_is_live(false), "持有者已死:接管");
+  fn a_crashed_process_releases_the_os_lock() {
+    let path = test_path();
+    let ready = path.with_extension("ready");
+    let mut child = helper_command("lock")
+      .env("MICA_BACKUP_TEST_LOCK", &path)
+      .stdout(Stdio::null())
+      .spawn()
+      .unwrap();
+    let started = Instant::now();
+    while !ready.exists() && started.elapsed() < Duration::from_secs(5) {
+      std::thread::sleep(Duration::from_millis(10));
+    }
+    let was_ready = ready.exists();
+    let refused = was_ready && RunLock::acquire_at(&path).is_err();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(was_ready, "helper failed to acquire its lock");
+    assert!(refused, "a separate process must see the held OS lock");
+    let recovered = RunLock::acquire_at(&path).unwrap();
+    drop(recovered);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(ready).unwrap();
+  }
+
+  #[test]
+  fn hung_tools_are_terminated_and_report_a_timeout() {
+    let started = Instant::now();
+    let err = run_tool_with_timeout(
+      &mut helper_command("sleep"),
+      "sleeping test tool",
+      Duration::from_millis(100),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("timed out"));
+    assert!(started.elapsed() < Duration::from_secs(5));
+  }
+
+  #[test]
+  fn tools_that_exit_unsuccessfully_are_not_reported_as_timeouts() {
+    let err = run_tool_with_timeout(
+      &mut helper_command("fail"),
+      "failing test tool",
+      Duration::from_secs(5),
+    )
+    .unwrap_err();
+    let reason = format!("{err:#}");
+    assert!(reason.contains("failed"), "{reason}");
+    assert!(!reason.contains("timed out"), "{reason}");
+  }
+
+  #[test]
+  fn a_timed_out_leg_is_recorded_without_aborting_the_next_leg() {
+    let mut report = Report::default();
+    let failed = run_tool_with_timeout(
+      &mut helper_command("sleep"),
+      "test snapshot",
+      Duration::from_millis(100),
+    );
+    record_leg(&mut report, "content", failed.map(|()| Leg::Ran));
+    record_leg(&mut report, "objects", Ok(Leg::Ran));
+    assert!(matches!(report.legs[0], ("content", Leg::Failed(_))));
+    assert_eq!(report.legs[1], ("objects", Leg::Ran));
+    assert!(verdict(&report, true).is_err());
+  }
+
+  #[test]
+  fn a_timed_out_dump_keeps_the_previous_complete_file_and_removes_the_partial() {
+    let directory = test_path();
+    std::fs::create_dir(&directory).unwrap();
+    let old_dump = directory.join("mica.sql");
+    std::fs::write(&old_dump, "previous complete SQL").unwrap();
+    let result = write_database_dump(
+      &mut helper_command("partial_dump"),
+      &directory,
+      Duration::from_millis(100),
+    );
+    assert!(format!("{:#}", result.unwrap_err()).contains("timed out"));
+    assert_eq!(
+      std::fs::read_to_string(&old_dump).unwrap(),
+      "previous complete SQL"
+    );
+    assert!(!directory.join("mica.sql.tmp").exists());
+    std::fs::remove_dir_all(directory).unwrap();
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn a_timeout_also_terminates_shell_descendants() {
+    let marker = test_path();
+    let mut command = Proc::new("sh");
+    command
+      .args([
+        "-c",
+        "(touch \"$1.ready\"; sleep 1; touch \"$1\") & wait",
+        "test",
+      ])
+      .arg(&marker)
+      .stdout(Stdio::null())
+      .stderr(Stdio::null());
+    let err = run_tool_with_timeout(
+      &mut command,
+      "shell with descendant",
+      Duration::from_millis(250),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("timed out"));
+    let ready = PathBuf::from(format!("{}.ready", marker.display()));
+    assert!(
+      ready.exists(),
+      "the shell descendant must actually have started"
+    );
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(!marker.exists(), "the descendant survived the timeout");
+    std::fs::remove_file(ready).unwrap();
   }
 
   #[test]
@@ -1206,10 +1475,7 @@ mod tests {
   /// operator diffing two lists by hand at the worst possible moment.
   #[test]
   fn every_missing_workspace_is_named() {
-    let leg = coverage_leg(
-      3,
-      &["a (ws=one)".to_string(), "b (ws=two)".to_string()],
-    );
+    let leg = coverage_leg(3, &["a (ws=one)".to_string(), "b (ws=two)".to_string()]);
     let Leg::Skipped(why) = leg else {
       panic!("two missing workspaces must not count as a clean run");
     };

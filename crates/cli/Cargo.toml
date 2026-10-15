@@ -3,7 +3,8 @@ name = "mica-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
+# OS-owned backup/export file locks use std::fs::File::try_lock (1.89).
+rust-version = "1.89"
 
 [[bin]]
 name = "mica-cli"

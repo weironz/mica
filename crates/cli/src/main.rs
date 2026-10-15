@@ -14,13 +14,14 @@
 mod backup;
 mod client;
 mod config;
+mod export;
 mod update;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use client::Client;
 use config::Config;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -394,6 +395,9 @@ struct ExportArgs {
   /// Keep files for content that no longer exists (disable mirror pruning).
   #[arg(long)]
   no_prune: bool,
+  /// Rebuild all pages instead of reusing the successful export's versions.
+  #[arg(long)]
+  full: bool,
 }
 
 fn main() {
@@ -1004,20 +1008,23 @@ fn cmd_ws_list(cli: &Cli, cfg: &Config) -> Result<()> {
 
 /// One scheduled backup, then a verdict on what it actually covered.
 ///
-/// The export runs IN PROCESS — this binary already is the exporter, so the old
-/// arrangement (a shell script shelling out to `mica-cli export`) had a Rust
-/// program being conducted by bash. Now it is the other way round.
+/// Export runs as a child so its whole lifetime (including HTTP calls and local
+/// IO) has a deadline. Credentials travel through the environment, never argv.
 fn cmd_backup_run(cli: &Cli, cfg: &Config) -> Result<()> {
   let settings = backup::Settings::from_env()?;
   let report = backup::run_once(&settings, |dir| {
-    cmd_export(
-      cli,
-      cfg,
-      &ExportArgs {
-        out: dir.to_path_buf(),
-        ws: None,
-        no_prune: false,
-      },
+    let base = resolve_server(cli, cfg).context(no_server_hint())?;
+    let token = resolve_token(cli, cfg).with_context(no_token_hint)?;
+    let mut child = std::process::Command::new(std::env::current_exe()?);
+    child
+      .args(["export", "--out"])
+      .arg(dir)
+      .env("MICA_API_BASE_URL", base)
+      .env("MICA_PAT", token);
+    backup::run_tool_with_timeout(
+      &mut child,
+      "document export",
+      std::time::Duration::from_secs(2 * 60 * 60),
     )
   })?;
   backup::log(&format!("run finished:\n{}", report.summary()));
@@ -1080,61 +1087,29 @@ fn cmd_backup_daemon(cli: &Cli, cfg: &Config) -> Result<()> {
 
 fn cmd_export(cli: &Cli, cfg: &Config, args: &ExportArgs) -> Result<()> {
   let client = authed_client(cli, cfg)?;
-  let mut workspaces = client.list_workspaces()?;
-  if let Some(id) = args.ws {
-    workspaces.retain(|w| w.id == id);
-    if workspaces.is_empty() {
-      anyhow::bail!("workspace {id} not found (or you are not a member)");
-    }
-  }
-
-  // Only disambiguate directory names with an id suffix when two workspaces
-  // actually collide on the same slug — unique names stay clean.
-  let mut slug_counts: HashMap<String, usize> = HashMap::new();
-  for w in &workspaces {
-    *slug_counts.entry(slugify(&w.name)).or_default() += 1;
-  }
-
-  let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
-  let mut summary = Vec::new();
-  for w in &workspaces {
-    let zip = client.export_workspace_zip(w.id)?;
-    let dir = workspace_dir(w, &slug_counts);
-    let mut files = 0usize;
-    for entry in mica_interchange::read_zip(&zip) {
-      if entry.name.ends_with('/') {
-        continue; // directory marker
-      }
-      desired.insert(Path::new(&dir).join(sanitize_rel(&entry.name)), entry.bytes);
-      files += 1;
-    }
-    summary.push(serde_json::json!({ "id": w.id, "name": w.name, "dir": dir, "files": files }));
-  }
-
-  let manifest = serde_json::json!({
-    "tool": concat!("mica-cli/", env!("CARGO_PKG_VERSION")),
-    "exported_at": chrono::Utc::now().to_rfc3339(),
-    "workspaces": summary,
-  });
-  desired.insert(PathBuf::from("manifest.json"), serde_json::to_vec_pretty(&manifest)?);
-
-  let stats = mirror(&args.out, &desired, !args.no_prune)?;
+  let stats = export::run(&client, args)?;
   if cli.json {
     print_json(&serde_json::json!({
       "out": args.out,
-      "workspaces": workspaces.len(),
+      "workspaces": stats.workspaces,
       "files": stats.total,
       "written": stats.written,
       "pruned": stats.pruned,
+      "pages_exported": stats.pages_exported,
+      "pages_skipped": stats.pages_skipped,
+      "bytes_downloaded": stats.bytes_downloaded,
+      "assets_reused": stats.assets_reused,
     }))?;
   } else {
     println!(
-      "Exported {} workspace(s) → {} ({} files: {} written, {} pruned)",
-      workspaces.len(),
+      "Exported {} workspace(s) → {} ({} files: {} written, {} pruned; {} pages exported, {} reused)",
+      stats.workspaces,
       args.out.display(),
       stats.total,
       stats.written,
-      stats.pruned
+      stats.pruned,
+      stats.pages_exported,
+      stats.pages_skipped,
     );
   }
   Ok(())
@@ -1333,67 +1308,11 @@ fn slugify(name: &str) -> String {
   out
 }
 
-/// Drop `..`, absolute, and prefix components so a zip entry name can only ever
-/// land inside the target directory.
-fn sanitize_rel(name: &str) -> PathBuf {
-  let mut out = PathBuf::new();
-  for comp in Path::new(name).components() {
-    if let std::path::Component::Normal(c) = comp {
-      out.push(c);
-    }
-  }
-  out
-}
-
-struct MirrorStats {
-  total: usize,
-  written: usize,
-  pruned: usize,
-}
-
-/// Reconcile `out` to exactly `desired`: write changed files, and (unless
-/// `prune` is false) delete any file that is no longer wanted, then drop empty
-/// dirs. Identical files are left untouched so an external incremental backup
-/// (restic) sees a minimal diff.
-fn mirror(out: &Path, desired: &BTreeMap<PathBuf, Vec<u8>>, prune: bool) -> Result<MirrorStats> {
-  fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-
-  let mut written = 0;
-  for (rel, bytes) in desired {
-    let path = out.join(rel);
-    if let Some(parent) = path.parent() {
-      fs::create_dir_all(parent)?;
-    }
-    let changed = match fs::read(&path) {
-      Ok(current) => &current != bytes,
-      Err(_) => true,
-    };
-    if changed {
-      fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
-      written += 1;
-    }
-  }
-
-  let mut pruned = 0;
-  if prune {
-    let mut existing = Vec::new();
-    collect_files(out, out, &mut existing)?;
-    for rel in existing {
-      if !desired.contains_key(&rel) {
-        let _ = fs::remove_file(out.join(&rel));
-        pruned += 1;
-      }
-    }
-    prune_empty_dirs(out)?;
-  }
-
-  Ok(MirrorStats { total: desired.len(), written, pruned })
-}
-
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
   for entry in fs::read_dir(dir)? {
-    let path = entry?.path();
-    if path.is_dir() {
+    let entry = entry?;
+    let path = entry.path();
+    if entry.file_type()?.is_dir() {
       collect_files(root, &path, out)?;
     } else if let Ok(rel) = path.strip_prefix(root) {
       out.push(rel.to_path_buf());
@@ -1407,8 +1326,9 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> 
 fn prune_empty_dirs(dir: &Path) -> Result<bool> {
   let mut empty = true;
   for entry in fs::read_dir(dir)? {
-    let path = entry?.path();
-    if path.is_dir() {
+    let entry = entry?;
+    let path = entry.path();
+    if entry.file_type()?.is_dir() {
       if prune_empty_dirs(&path)? {
         let _ = fs::remove_dir(&path);
       } else {
@@ -1655,24 +1575,6 @@ mod tests {
     assert_eq!(slugify(""), "");
   }
 
-  #[test]
-  fn sanitize_rel_blocks_traversal() {
-    use std::path::Component;
-    // `..`, absolute prefixes, and the root are all stripped — the result can
-    // only ever contain Normal components, so it stays inside the target dir.
-    for input in ["../../etc/passwd", "/etc/passwd", "a/../../b", "./a/b"] {
-      let out = sanitize_rel(input);
-      assert!(
-        out.components().all(|c| matches!(c, Component::Normal(_))),
-        "sanitize_rel({input:?}) leaked a non-Normal component: {out:?}"
-      );
-    }
-    // A clean relative path is preserved.
-    assert_eq!(sanitize_rel("pages/note.md"), PathBuf::from("pages").join("note.md"));
-    // The dangerous parts are dropped but the safe tail survives.
-    assert_eq!(sanitize_rel("../../etc/passwd"), PathBuf::from("etc").join("passwd"));
-  }
-
   fn ws(name: &str, id: Uuid) -> client::Workspace {
     client::Workspace {
       id,
@@ -1697,65 +1599,9 @@ mod tests {
 
     // Empty/unslugifiable name → `workspace-<8hex>`.
     let counts: HashMap<String, usize> = HashMap::new();
-    assert_eq!(workspace_dir(&ws("你好", id), &counts), "workspace-01234567");
-  }
-
-  /// A unique scratch directory under the OS temp dir (no env mutation, no
-  /// collision with parallel tests).
-  fn scratch(tag: &str) -> PathBuf {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static SEQ: AtomicU32 = AtomicU32::new(0);
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("mica-cli-test-{tag}-{}-{n}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    dir
-  }
-
-  #[test]
-  fn mirror_writes_updates_and_prunes() {
-    let out = scratch("mirror");
-
-    // First mirror: two files, both written.
-    let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
-    desired.insert(PathBuf::from("a.md"), b"alpha".to_vec());
-    desired.insert(Path::new("sub").join("b.md"), b"bravo".to_vec());
-    let stats = mirror(&out, &desired, true).unwrap();
-    assert_eq!((stats.total, stats.written, stats.pruned), (2, 2, 0));
-    assert_eq!(fs::read(out.join("a.md")).unwrap(), b"alpha");
-
-    // Re-mirror identical content: nothing rewritten (minimal diff for restic).
-    let stats = mirror(&out, &desired, true).unwrap();
-    assert_eq!((stats.written, stats.pruned), (0, 0));
-
-    // Change one file, drop the other: one written, the stale file + its now-empty
-    // dir pruned.
-    let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
-    desired.insert(PathBuf::from("a.md"), b"alpha-2".to_vec());
-    let stats = mirror(&out, &desired, true).unwrap();
-    assert_eq!((stats.total, stats.written, stats.pruned), (1, 1, 1));
-    assert_eq!(fs::read(out.join("a.md")).unwrap(), b"alpha-2");
-    assert!(!out.join("sub").join("b.md").exists());
-    assert!(!out.join("sub").exists(), "empty dir should be pruned");
-
-    let _ = fs::remove_dir_all(&out);
-  }
-
-  #[test]
-  fn mirror_no_prune_keeps_stale_files() {
-    let out = scratch("noprune");
-
-    let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
-    desired.insert(PathBuf::from("keep.md"), b"x".to_vec());
-    desired.insert(PathBuf::from("gone.md"), b"y".to_vec());
-    mirror(&out, &desired, true).unwrap();
-
-    // Drop gone.md but disable pruning → it survives on disk, count stays 0.
-    let mut desired: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
-    desired.insert(PathBuf::from("keep.md"), b"x".to_vec());
-    let stats = mirror(&out, &desired, false).unwrap();
-    assert_eq!(stats.pruned, 0);
-    assert!(out.join("gone.md").exists(), "no_prune must keep stale files");
-
-    let _ = fs::remove_dir_all(&out);
+    assert_eq!(
+      workspace_dir(&ws("你好", id), &counts),
+      "workspace-01234567"
+    );
   }
 }

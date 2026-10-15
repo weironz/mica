@@ -5,7 +5,8 @@ great, consistent **`export`**; backup — encryption, dedup, retention, remote
 targets — is the job of a dedicated tool. The production stack ships a small
 container that wires the two together: `mica-cli export` (a thin API client, no
 backup engine — see [`cli.md`](cli.md)) + **`rustic`** (external, restic-format)
-snapshotting to Aliyun OSS. `mica-cli` itself has no `backup` command anymore.
+snapshotting to Aliyun OSS. `mica-cli backup` orchestrates the external tools;
+rustic owns the backup engine.
 
 ## Topology: one repo, one bucket, one lineage per workspace
 
@@ -46,9 +47,33 @@ name rides along as a readable `ws=<name>` tag. `forget --group-by label` applie
 the keep policy **per workspace**. Restore, list, and prune are all
 per-workspace by label.
 
-`mica-cli export` unpacks each workspace's `export.zip` into a **mirrored tree**
-(not a zip), so rustic dedups properly and prunes upstream-deleted files. It is
-all GETs — a **read-scoped** token suffices.
+`mica-cli export` maintains a complete Markdown/image mirror for rustic.
+It is all read-scoped API access. Incremental export compares the server's
+revision inventory with local state; see [`cli.md`](cli.md) for the cache and
+fallback rules. The database leg still makes a complete SQL dump; rustic
+provides chunk deduplication for that file.
+
+## 并发、超时与重试
+
+备份轮次持有 `/tmp/mica-backup.lock` 的操作系统独占锁，正常退出或进程被杀时由
+系统释放。锁文件保留，里面的 PID 只用于诊断；容器重启后遗留的 `1` 不会阻止下次
+备份。**不要通过删除锁文件解除运行中备份的锁**：删除会产生新 inode，两个轮次
+就可能同时拿到不同文件的锁、写坏同一份暂存目录。
+
+外部工具均有总执行时限，包含网络重试和退避时间：仓库可达性探测 60 秒、
+`pg_dump` 10 分钟、单次 rustic/rclone 调用 30 分钟。内容导出独立运行，时限
+2 小时，以容纳首次完整导出。超时会终止工具并等待回收；Linux 上终止整个独立
+进程组，避免 shell 的子进程继续占用资源。失败明确计入本轮结果，不发成功通知。
+
+每次 rclone 调用统一使用 `--transfers 2 --checkers 2`，连接超时 10 秒、无进展
+I/O 超时 60 秒；高层尝试上限 2 次、底层请求尝试上限 3 次、高层尝试之间等待 10 秒，
+并设置 `--max-duration 30m --cutoff-mode hard`。不会无限重试到第二天。失败后保留
+已经复制的不可变对象，下次 `copy` 会继续补齐，仍不传播源端删除。
+
+数据库导出超时或失败会删除未完成的 `.tmp`，保留上一次完整 SQL，但本轮不会把
+旧 SQL 当成新备份上传。前面的内容镜像清理也保留 `_pgdump/`，避免在新 dump 成功前
+先删除旧 SQL。首次大对象复制或大量 prune 若超过上述时限会明确失败，
+需要安排受控的维护操作；这些限制用于约束每日自动备份的资源占用。
 
 ## What this is (and isn't)
 

@@ -2790,6 +2790,254 @@ pub async fn export_workspace_zip(
   Ok(zip_response(build_zip(&entries), "workspace.zip"))
 }
 
+/// v1 is the page-at-a-time protocol (including stable, file-id asset names).
+/// Bump when Markdown/sidecar generation changes, so cached output is rebuilt.
+const INCREMENTAL_EXPORT_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize)]
+pub struct ExportPageRevision {
+  view_id: Uuid,
+  document_id: Uuid,
+  revision: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExportFileRevision {
+  file_id: Uuid,
+  revision: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExportManifestResponse {
+  version: u32,
+  tree_revision: String,
+  structure_revision: String,
+  manifest: serde_json::Value,
+  pages: Vec<ExportPageRevision>,
+  files: Vec<ExportFileRevision>,
+}
+
+/// Inventory without CRDT decoding, Markdown generation or blob downloads.
+/// Hashing the authoritative bytes also detects deletion-only yrs edits (whose
+/// state vector need not change) and every writer, including imports/restores.
+/// This reads the states in Postgres; it is not a metadata-only database scan.
+pub async fn export_manifest(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+) -> ApiResult<Json<ExportManifestResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  Ok(Json(build_export_manifest(&state.db, workspace_id).await?))
+}
+
+async fn build_export_manifest(
+  db: &PgPool,
+  workspace_id: Uuid,
+) -> ApiResult<ExportManifestResponse> {
+  // One repeatable-read snapshot keeps paths, body versions and asset metadata
+  // consistent. The CLI also rechecks the inventory after fetching changed pages.
+  let mut tx = db.begin().await?;
+  sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+    .execute(&mut *tx)
+    .await?;
+  let views: Vec<View> = sqlx::query_as(
+    "SELECT id, workspace_id, parent_view_id, object_id, object_type::text, name,
+            position, icon, is_deleted, created_by, created_at, updated_at
+     FROM views WHERE workspace_id = $1 AND is_deleted = false
+     ORDER BY position ASC, id ASC",
+  )
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+  let revisions: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
+    "SELECT v.id, v.object_id,
+            coalesce(md5(y.state), 'missing') || ':' || md5(coalesce(d.root_block_id, ''))
+     FROM views v
+     LEFT JOIN documents d ON d.id = v.object_id
+     LEFT JOIN document_yrs_base y ON y.document_id = v.object_id
+     WHERE v.workspace_id = $1 AND v.is_deleted = false
+       AND v.object_type::text = 'document'
+     ORDER BY v.id",
+  )
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+  // File ids serve immutable objects in normal operation. Including the actual
+  // storage mapping also invalidates output after administrative repairs; do
+  // not include GC timestamps, which do not affect exported bytes.
+  let files: Vec<store::FileRecord> = sqlx::query_as(
+    "SELECT * FROM files
+     WHERE workspace_id = $1 ORDER BY id",
+  )
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+  tx.commit().await?;
+  let manifest = mica_interchange::markdown_tree_manifest(&export_tree_nodes(&views));
+  let structure_revision = export_structure_revision(&manifest, &files)?;
+  let tree_revision = export_revision_digest(&manifest)?;
+  let file_revisions = files
+    .iter()
+    .map(|file| {
+      Ok(ExportFileRevision {
+        file_id: file.id,
+        revision: export_revision_digest(&(
+          file.id,
+          &file.object_key,
+          &file.original_name,
+          &file.mime_type,
+          file.byte_size,
+        ))?,
+      })
+    })
+    .collect::<ApiResult<Vec<_>>>()?;
+  Ok(ExportManifestResponse {
+    version: INCREMENTAL_EXPORT_VERSION,
+    tree_revision,
+    structure_revision,
+    manifest,
+    files: file_revisions,
+    pages: revisions
+      .into_iter()
+      .map(|(view_id, document_id, revision)| ExportPageRevision {
+        view_id,
+        document_id,
+        revision,
+      })
+      .collect(),
+  })
+}
+
+fn export_structure_revision(
+  manifest: &serde_json::Value,
+  files: &[store::FileRecord],
+) -> ApiResult<String> {
+  let metadata: Vec<_> = files
+    .iter()
+    .map(|f| {
+      (
+        f.id,
+        &f.object_key,
+        &f.original_name,
+        &f.mime_type,
+        f.byte_size,
+      )
+    })
+    .collect();
+  export_revision_digest(&(manifest, metadata))
+}
+
+fn export_revision_digest(value: &impl Serialize) -> ApiResult<String> {
+  use sha2::{Digest, Sha256};
+  let mut hasher = Sha256::new();
+  hasher.update(INCREMENTAL_EXPORT_VERSION.to_be_bytes());
+  hasher.update(serde_json::to_vec(value).map_err(|e| ApiError::Internal(e.to_string()))?);
+  Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ExportPageQuery {
+  /// File UUIDs whose unchanged bytes the caller already has (up to 64).
+  /// References stay in Markdown/sidecars; only the ZIP byte entries are omitted.
+  skip_assets: Option<String>,
+}
+
+fn parse_export_skip_assets(value: Option<&str>) -> ApiResult<std::collections::HashSet<String>> {
+  let mut ids = std::collections::HashSet::new();
+  let Some(value) = value.filter(|value| !value.is_empty()) else {
+    return Ok(ids);
+  };
+  for (index, value) in value.split(',').enumerate() {
+    if index >= 64 {
+      return Err(ApiError::BadRequest(
+        "skip_assets accepts at most 64 file ids".into(),
+      ));
+    }
+    let id = Uuid::parse_str(value.trim())
+      .map_err(|_| ApiError::BadRequest("skip_assets must contain comma-separated UUIDs".into()))?;
+    ids.insert(id.to_string());
+  }
+  Ok(ids)
+}
+
+/// One page in the complete workspace's path namespace. Only this page is
+/// decoded and only its missing assets are read, bounding memory by a single page.
+pub async fn export_page_zip(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+  Query(query): Query<ExportPageQuery>,
+) -> ApiResult<Response> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  let skip_assets = parse_export_skip_assets(query.skip_assets.as_deref())?;
+  let mut tx = state.db.begin().await?;
+  sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+    .execute(&mut *tx)
+    .await?;
+  let views: Vec<View> = sqlx::query_as(
+    "SELECT id, workspace_id, parent_view_id, object_id, object_type::text, name,
+       position, icon, is_deleted, created_by, created_at, updated_at
+     FROM views WHERE workspace_id = $1 AND is_deleted = false ORDER BY position, id",
+  )
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+  let files: Vec<store::FileRecord> =
+    sqlx::query_as("SELECT * FROM files WHERE workspace_id = $1 ORDER BY id")
+      .bind(workspace_id)
+      .fetch_all(&mut *tx)
+      .await?;
+  tx.commit().await?;
+  let nodes = export_tree_nodes(&views);
+  let structure_revision =
+    export_structure_revision(&mica_interchange::markdown_tree_manifest(&nodes), &files)?;
+  let view = views
+    .iter()
+    .find(|v| v.id == view_id)
+    .ok_or(ApiError::NotFound)?;
+  if view.object_type != "document" {
+    return Err(ApiError::BadRequest(
+      "only a document can be exported this way".into(),
+    ));
+  }
+  let (payload, revision) = store::current_payload_versioned(&state.db, view.object_id)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+  let payloads = std::collections::HashMap::from([(view.object_id.to_string(), payload)]);
+  let images = fetch_export_images(
+    &state,
+    workspace_id,
+    &payloads,
+    true,
+    Some(&files),
+    &skip_assets,
+  )
+  .await?;
+  let entries = mica_interchange::build_incremental_markdown_tree_zip(
+    &nodes,
+    &payloads,
+    &images,
+    &view_id.to_string(),
+    &skip_assets,
+  );
+  let mut response = zip_response(build_zip(&entries), "page.zip");
+  response.headers_mut().insert(
+    "x-mica-export-structure-revision",
+    structure_revision
+      .parse()
+      .map_err(|e| ApiError::Internal(format!("invalid export structure revision: {e}")))?,
+  );
+  response.headers_mut().insert(
+    "x-mica-export-revision",
+    revision
+      .parse()
+      .map_err(|e| ApiError::Internal(format!("invalid export revision: {e}")))?,
+  );
+  Ok(response)
+}
+
 /// `GET /api/workspaces/export.zip` — EVERY workspace the user belongs to, in
 /// switcher (position) order, each under its own `<name>/` subdir, plus a
 /// top-level `workspaces.json` manifest. Each subdir is byte-identical to that
@@ -2977,20 +3225,10 @@ async fn build_tree_zip(
   // the SAME walk the local (SQLite) export feeds, so cloud + local produce
   // identically-structured archives and export→import stays one round-trip
   // invariant (see export_tree.rs on the cosmetic asset-name tiebreak).
-  let nodes: Vec<mica_interchange::TreeNode> = views
-    .iter()
-    .map(|v| mica_interchange::TreeNode {
-      id: v.id.to_string(),
-      parent_id: v.parent_view_id.map(|p| p.to_string()),
-      position: v.position.clone(),
-      name: v.name.clone(),
-      object_type: v.object_type.clone(),
-      object_id: v.object_id.to_string(),
-      icon: v.icon.clone(),
-    })
-    .collect();
+  let nodes = export_tree_nodes(&views);
 
-  // Each document's current payload, keyed by object_id.
+  // Only the legacy interactive workspace download gathers every payload.
+  // Scheduled exports use export_page_zip, keeping this map to a single page.
   let mut payloads: std::collections::HashMap<String, DocumentSnapshotPayload> =
     std::collections::HashMap::new();
   for v in &views {
@@ -3001,18 +3239,57 @@ async fn build_tree_zip(
       payloads.insert(v.object_id.to_string(), p);
     }
   }
+  let images = fetch_export_images(
+    state,
+    workspace_id,
+    &payloads,
+    false,
+    None,
+    &std::collections::HashSet::new(),
+  )
+  .await?;
+  let root_str = root.map(|r| r.to_string());
+  Ok(mica_interchange::build_markdown_tree_zip(
+    &nodes,
+    root_str.as_deref(),
+    &payloads,
+    &images,
+  ))
+}
 
+fn export_tree_nodes(views: &[View]) -> Vec<mica_interchange::TreeNode> {
+  views
+    .iter()
+    .map(|v| mica_interchange::TreeNode {
+      id: v.id.to_string(),
+      parent_id: v.parent_view_id.map(|p| p.to_string()),
+      position: v.position.clone(),
+      name: v.name.clone(),
+      object_type: v.object_type.clone(),
+      object_id: v.object_id.to_string(),
+      icon: v.icon.clone(),
+    })
+    .collect()
+}
+
+async fn fetch_export_images(
+  state: &AppState,
+  workspace_id: Uuid,
+  payloads: &std::collections::HashMap<String, DocumentSnapshotPayload>,
+  strict: bool,
+  file_snapshot: Option<&[store::FileRecord]>,
+  skip_assets: &std::collections::HashSet<String>,
+) -> ApiResult<std::collections::HashMap<String, mica_interchange::ImageAsset>> {
   // Referenced image blobs: file_id -> (first-seen block name), then fetch the
   // records and download the bytes. Dedup key = the storage object key, so two
   // file_ids of the same blob share one `assets/` entry (as the old walk did).
   let mut file_name: BTreeMap<String, String> = BTreeMap::new();
-  for v in &views {
-    if v.object_type != "document" {
-      continue;
-    }
-    let Some(payload) = payloads.get(&v.object_id.to_string()) else {
-      continue;
-    };
+  // HashMap iteration must not choose a different cosmetic asset name on each
+  // full export when multiple pages use one file under different names.
+  let mut document_ids: Vec<_> = payloads.keys().collect();
+  document_ids.sort();
+  for document_id in document_ids {
+    let payload = &payloads[document_id];
     for b in &payload.blocks {
       if b.kind != "image" {
         continue;
@@ -3030,50 +3307,89 @@ async fn build_tree_zip(
   }
   let mut images: std::collections::HashMap<String, mica_interchange::ImageAsset> =
     std::collections::HashMap::new();
-  if let Some(storage) = state.storage.clone() {
-    if !file_name.is_empty() {
-      let ids: Vec<Uuid> = file_name
-        .keys()
-        .filter_map(|id| Uuid::parse_str(id).ok())
-        .collect();
-      let records = store::fetch_files(&state.db, workspace_id, &ids).await?;
-      let by_id: std::collections::HashMap<String, &store::FileRecord> =
-        records.iter().map(|r| (r.id.to_string(), r)).collect();
-      let client = reqwest::Client::new();
-      for (file_id, name) in &file_name {
-        let Some(record) = by_id.get(file_id) else {
+  if !file_name.is_empty() {
+    let storage = state.storage.clone();
+    if strict && storage.is_none() && file_name.keys().any(|id| !skip_assets.contains(id)) {
+      return Err(ApiError::Unavailable(
+        "file storage is not configured".into(),
+      ));
+    }
+    let ids: Vec<Uuid> = file_name
+      .keys()
+      .filter_map(|id| Uuid::parse_str(id).ok())
+      .collect();
+    let records = match file_snapshot {
+      Some(records) => records
+        .iter()
+        .filter(|r| ids.contains(&r.id))
+        .cloned()
+        .collect(),
+      None => store::fetch_files(&state.db, workspace_id, &ids).await?,
+    };
+    let by_id: std::collections::HashMap<String, &store::FileRecord> =
+      records.iter().map(|r| (r.id.to_string(), r)).collect();
+    let client = reqwest::Client::builder()
+      .connect_timeout(std::time::Duration::from_secs(10))
+      .timeout(std::time::Duration::from_secs(120))
+      .build()
+      .map_err(|e| ApiError::Internal(e.to_string()))?;
+    for (file_id, name) in &file_name {
+      let Some(record) = by_id.get(file_id) else {
+        if strict {
+          return Err(ApiError::Unavailable(format!(
+            "export image {file_id} is missing"
+          )));
+        }
+        continue;
+      };
+      let bytes = if skip_assets.contains(file_id) {
+        Vec::new()
+      } else {
+        let Some(storage) = storage.as_ref() else {
           continue;
         };
-        let bytes = match client
+        match client
           .get(storage.download_url(&record.object_key))
           .send()
           .await
         {
           Ok(resp) if resp.status().is_success() => match resp.bytes().await {
             Ok(b) => b.to_vec(),
-            Err(_) => continue,
+            Err(e) => {
+              if strict {
+                return Err(ApiError::Unavailable(format!(
+                  "export image {file_id}: {e}"
+                )));
+              }
+              continue;
+            }
           },
-          _ => continue,
-        };
-        images.insert(
-          file_id.clone(),
-          mica_interchange::ImageAsset {
-            name: name.clone(),
-            bytes,
-            dedup_key: record.object_key.clone(),
+          _ => {
+            if strict {
+              return Err(ApiError::Unavailable(format!(
+                "failed to download export image {file_id}"
+              )));
+            }
+            continue;
+          }
+        }
+      };
+      images.insert(
+        file_id.clone(),
+        mica_interchange::ImageAsset {
+          name: if strict {
+            record.original_name.clone()
+          } else {
+            name.clone()
           },
-        );
-      }
+          bytes,
+          dedup_key: record.object_key.clone(),
+        },
+      );
     }
   }
 
-  let root_str = root.map(|r| r.to_string());
-  Ok(mica_interchange::build_markdown_tree_zip(
-    &nodes,
-    root_str.as_deref(),
-    &payloads,
-    &images,
-  ))
+  Ok(images)
 }
 
 /// The canonical, workspace-scoped path that serves one blob's bytes.
@@ -6100,6 +6416,219 @@ mod tests {
       .await
       .unwrap();
       (view_id, doc_id)
+    }
+
+    #[tokio::test]
+    async fn incremental_export_detects_body_writes_without_tree_timestamps() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (view, doc) = seed_document(&db, ws, user, "Page", serde_json::json!([])).await;
+      let initial = build_export_manifest(&db, ws).await.unwrap();
+      assert_eq!(initial.pages.len(), 1);
+      assert_eq!(initial.pages[0].view_id, view);
+      let (_, actual_revision) = store::current_payload_versioned(&db, doc)
+        .await
+        .unwrap()
+        .unwrap();
+      assert_eq!(initial.pages[0].revision, actual_revision);
+      let tree_updated_at: DateTime<Utc> =
+        sqlx::query_scalar("SELECT updated_at FROM views WHERE id = $1")
+          .bind(view)
+          .fetch_one(&db)
+          .await
+          .unwrap();
+
+      // Deliberately bypass all timestamp/revision-maintaining application code.
+      // Any state writer must invalidate the export, even one added in future.
+      let replacement = mica_core::MicaDoc::from_blocks(
+        "root",
+        &[mica_core::Block {
+          id: "root".into(),
+          kind: "paragraph".into(),
+          text: "new body".into(),
+          data: serde_json::Value::Null,
+          children: vec![],
+        }],
+      );
+      sqlx::query("UPDATE document_yrs_base SET state = $1 WHERE document_id = $2")
+        .bind(replacement.encode_state())
+        .bind(doc)
+        .execute(&db)
+        .await
+        .unwrap();
+      let changed = build_export_manifest(&db, ws).await.unwrap();
+      assert_ne!(initial.pages[0].revision, changed.pages[0].revision);
+      assert_eq!(initial.structure_revision, changed.structure_revision);
+      let (payload, actual_revision) = store::current_payload_versioned(&db, doc)
+        .await
+        .unwrap()
+        .unwrap();
+      assert_eq!(changed.pages[0].revision, actual_revision);
+      assert!(payload.blocks.iter().any(|b| b.text == "new body"));
+      assert_eq!(
+        tree_updated_at,
+        sqlx::query_scalar::<_, DateTime<Utc>>("SELECT updated_at FROM views WHERE id = $1")
+          .bind(view)
+          .fetch_one(&db)
+          .await
+          .unwrap()
+      );
+
+      sqlx::query("UPDATE views SET name = 'Renamed' WHERE id = $1")
+        .bind(view)
+        .execute(&db)
+        .await
+        .unwrap();
+      let renamed = build_export_manifest(&db, ws).await.unwrap();
+      assert_ne!(changed.structure_revision, renamed.structure_revision);
+      assert_eq!(changed.pages[0].revision, renamed.pages[0].revision);
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(view)
+        .execute(&db)
+        .await
+        .unwrap();
+      let deleted = build_export_manifest(&db, ws).await.unwrap();
+      assert!(deleted.pages.is_empty());
+      assert_eq!(deleted.manifest["pages"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn incremental_export_tracks_asset_revisions_without_invalidating_the_tree() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      seed_document(&db, ws, user, "Page", serde_json::json!([])).await;
+      let before = build_export_manifest(&db, ws).await.unwrap();
+      assert!(before.files.is_empty());
+      let file_id = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO files(id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size)
+         VALUES($1,$2,$3,$4,'photo.png','image/png',123)",
+      ).bind(file_id).bind(ws).bind(user).bind(format!("test/{file_id}"))
+        .execute(&db).await.unwrap();
+      let uploaded = build_export_manifest(&db, ws).await.unwrap();
+      assert_eq!(before.tree_revision, uploaded.tree_revision);
+      assert_ne!(before.structure_revision, uploaded.structure_revision);
+      assert_eq!(before.pages[0].revision, uploaded.pages[0].revision);
+      assert_eq!(uploaded.files.len(), 1);
+      assert_eq!(uploaded.files[0].file_id, file_id);
+
+      sqlx::query("UPDATE files SET object_key = $1 WHERE id = $2")
+        .bind(format!("replacement/{file_id}"))
+        .bind(file_id)
+        .execute(&db)
+        .await
+        .unwrap();
+      let replaced = build_export_manifest(&db, ws).await.unwrap();
+      assert_eq!(uploaded.tree_revision, replaced.tree_revision);
+      assert_ne!(uploaded.structure_revision, replaced.structure_revision);
+      assert_ne!(uploaded.files[0].revision, replaced.files[0].revision);
+      // A second, unrelated upload leaves the existing file version intact.
+      let other = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO files(id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size)
+         VALUES($1,$2,$3,$4,'another.png','image/png',456)",
+      ).bind(other).bind(ws).bind(user).bind(format!("test/{other}"))
+        .execute(&db).await.unwrap();
+      let unrelated = build_export_manifest(&db, ws).await.unwrap();
+      assert_eq!(replaced.tree_revision, unrelated.tree_revision);
+      assert_eq!(
+        replaced.files[0].revision,
+        unrelated
+          .files
+          .iter()
+          .find(|f| f.file_id == file_id)
+          .unwrap()
+          .revision
+      );
+      assert_eq!(unrelated.files.len(), 2);
+    }
+
+    #[test]
+    fn incremental_export_skip_assets_validates_ids_and_bounds_the_list() {
+      assert!(parse_export_skip_assets(None).unwrap().is_empty());
+      assert!(parse_export_skip_assets(Some("")).unwrap().is_empty());
+      assert!(parse_export_skip_assets(Some("not-a-uuid")).is_err());
+      let ids: Vec<_> = (0..64).map(|_| Uuid::new_v4().to_string()).collect();
+      assert_eq!(
+        parse_export_skip_assets(Some(&ids.join(",")))
+          .unwrap()
+          .len(),
+        64
+      );
+      let too_many = format!("{},{}", ids.join(","), Uuid::new_v4());
+      assert!(parse_export_skip_assets(Some(&too_many)).is_err());
+      assert!(parse_export_skip_assets(Some(&format!("{},", ids[0]))).is_err());
+      let uppercase = ids[0].to_uppercase();
+      assert!(
+        parse_export_skip_assets(Some(&uppercase))
+          .unwrap()
+          .contains(&ids[0])
+      );
+    }
+
+    #[tokio::test]
+    async fn incremental_export_reuses_asset_metadata_without_accessing_object_storage() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let file_id = Uuid::new_v4();
+      let (_, doc) = seed_document(
+        &db,
+        ws,
+        user,
+        "Page",
+        serde_json::json!([{
+          "id":"image", "type":"image", "data":{"file_id":file_id,"name":"photo.png"}
+        }]),
+      )
+      .await;
+      let mut config = mica_infra::AppConfig::from_env().unwrap();
+      config.jwt_secret = "incremental-export-test-secret".into();
+      config.environment = mica_infra::Environment::Test;
+      let mut state = AppState::new(
+        config,
+        db.clone(),
+        std::sync::Arc::new(mica_infra::LogMailer),
+      );
+      // No endpoint is configured: a path that attempted a download cannot pass.
+      state.storage = None;
+      let record = store::FileRecord {
+        id: file_id,
+        workspace_id: ws,
+        uploaded_by: user,
+        object_key: format!("test/{file_id}"),
+        original_name: "photo.png".into(),
+        mime_type: "image/png".into(),
+        byte_size: 3,
+        created_at: Utc::now(),
+      };
+      let payload = store::current_payload(&db, doc).await.unwrap().unwrap();
+      let payloads = std::collections::HashMap::from([(doc.to_string(), payload)]);
+      let skipped = std::collections::HashSet::from([file_id.to_string()]);
+      let images = fetch_export_images(
+        &state,
+        ws,
+        &payloads,
+        true,
+        Some(std::slice::from_ref(&record)),
+        &skipped,
+      )
+      .await
+      .unwrap();
+      let image = images.get(&file_id.to_string()).unwrap();
+      assert_eq!(image.name, "photo.png");
+      assert!(image.bytes.is_empty());
+      assert!(
+        fetch_export_images(
+          &state,
+          ws,
+          &payloads,
+          true,
+          Some(&[record]),
+          &std::collections::HashSet::new()
+        )
+        .await
+        .is_err()
+      );
     }
 
     /// A row of the backlinks endpoint's JSON response, minimal fields the tests
