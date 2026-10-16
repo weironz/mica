@@ -1,0 +1,12 @@
+# 巨石文件棘轮预算 —— 登记文件只许减不许增（docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 5 项）。
+#
+# 规则：CI（scripts/check-file-size.sh）逐行核对，当前行数超过登记值即失败；
+# 低于登记值则通过并提示可收紧基线。目的：让 4,000 行警告清单成为只收敛
+# 不扩张的目标——拆掉一个文件（或降到软上限以下）就删除对应行。
+#
+# 格式：<基线行数> <相对路径>（# 开头为注释）。新增条目 = 承认该文件当前
+# 已超软上限 4,000 行，需要一句为什么留着的理由（写在行内注释里）。
+6133 clients/mica_flutter/lib/editor/editor.dart        # 第三轮已拆出 hooks/ai/dialogs 三个 part；主体仍是编辑器 State，controller 化属行为性重构
+7007 clients/mica_flutter/lib/main_shell.dart           # import 域已 controller 化（第三轮试点）；下一步收 4 个枢纽字段进会话上下文对象
+5850 clients/mica_flutter/lib/ui/dialogs.dart           # 第三轮拆分候选：设置/对话框集合
+4953 clients/mica_flutter/lib/main_workspace_view.dart  # 展开/焦点/揭示状态已抽 SidebarTreeController（第三轮第二步）；下一步 rename 流与拖放判定

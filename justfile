@@ -156,6 +156,14 @@ check:
     cargo clippy --workspace 2>/dev/null || cargo build --workspace
     cd clients/mica_flutter && {{flutter}} analyze lib
 
+# 单文件行数门禁（docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。
+# 与 CI 的 structure job 同一条命令，三层防线：
+#   绝对限 8,000 硬失败 / 4,000 警告；棘轮（file-size-budget.txt 登记文件
+#   只许减不许增）；增量（--diff <base> 时 >2,000 行存量文件净增 >300 失败）。
+[doc("Per-file line-count gate (absolute + ratchet + delta; same as CI)")]
+check-structure:
+    bash scripts/check-file-size.sh
+
 # Rust line coverage, printed as a per-file summary. NOT wired into CI — it's a
 # heavy instrumented rebuild and too flaky to gate on; run it by hand when you
 # want to see where coverage stands. Needs the tool once:

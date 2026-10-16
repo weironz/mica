@@ -47,6 +47,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 单文件行数门禁（docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 4/5 项）：
+  # 2026-10-16 拆掉了三个巨石文件（main.dart 13,177 / routes/documents.rs 8,196 /
+  # markdown lib.rs 6,339 行）。三层防线都在 scripts/check-file-size.sh：
+  #   绝对限（8,000 硬失败 / 4,000 警告）+ 棘轮（预算文件登记的文件只许减
+  #   不许增）+ 增量（>2,000 行的存量文件一次净增 >300 行失败）。
+  # 增量门禁需要 diff 基线：fetch 全历史后取 merge-base(origin/main, HEAD)——
+  # PR 分支上等价于三分点 diff（只含本 PR 的提交）；直接推 main 时基线就是
+  # HEAD 本身，diff 为空、自然放行。秒级完成、排在最前让失败尽早可见。
+  structure:
+    name: Structure (file-size gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check per-file line limits and growth
+        run: |
+          base=$(git merge-base origin/main HEAD 2>/dev/null || true)
+          if [ -n "$base" ]; then
+            bash scripts/check-file-size.sh --diff "$base"
+          else
+            bash scripts/check-file-size.sh
+          fi
+
   rust:
     name: Rust (build + lint + tests)
     runs-on: ubuntu-latest
