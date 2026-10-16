@@ -687,28 +687,7 @@ async fn run_import(
 ) -> ApiResult<()> {
   // Unzip + plan are CPU-bound — keep them off the async workers.
   let notion = params.notion;
-  // Destination decides the "container vs flatten" shape (see import-convention
-  // research): into an existing workspace/folder the user picks `container`
-  // (auto/spill/wrap; default auto peels a single wrapper & spills, wraps only
-  // multiple loose roots); as a NEW workspace → the workspace IS the container,
-  // so `container` is moot and a redundant single wrapper is collapsed. The
-  // container fallback name is the client-supplied source name, else "Imported".
-  let mode = if params.workspace_id.is_some() {
-    let fallback = params
-      .name
-      .as_deref()
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-      .unwrap_or("Imported")
-      .to_string();
-    match params.container {
-      ContainerMode::Auto => ImportMode::Auto(fallback),
-      ContainerMode::Spill => ImportMode::IntoLocation,
-      ContainerMode::Wrap => ImportMode::IntoContainer(fallback),
-    }
-  } else {
-    ImportMode::NewWorkspace
-  };
+  let mode = import_mode(&params);
   let plan: ImportPlan =
     tokio::task::spawn_blocking(move || plan_import(read_zip(&body), notion, mode))
       .await
@@ -724,28 +703,12 @@ async fn run_import(
     ));
   }
 
-  let workspace_id = match params.workspace_id {
-    Some(id) => id,
-    None => {
-      // Client name (zip/folder) wins; else the collapsed wrapper's name
-      // (Logseq: the stripped folder names the new workspace); else "Imported".
-      let name = params
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .or(plan.wrapper_name.as_deref())
-        .unwrap_or("Imported");
-      create_workspace(state, user_id, name).await?
-    }
-  };
-  {
-    let mut jobs = state.import_jobs.write().await;
-    if let Some(job) = jobs.get_mut(&job_id) {
-      job.total = plan.pages.len();
-      job.workspace_id = Some(workspace_id);
-    }
-  }
+  let workspace_id = resolve_target_workspace(state, user_id, &params, &plan).await?;
+  update_job(state, job_id, |job| {
+    job.total = plan.pages.len();
+    job.workspace_id = Some(workspace_id);
+  })
+  .await;
   // Written immediately rather than at the next checkpoint: the page count and
   // the workspace are what make a stored job READABLE ("137 of 592, into
   // Notion 导入"), and an import interrupted early would otherwise be a row
@@ -789,95 +752,19 @@ async fn run_import(
   // Markdown, which is CPU and bounded; the fetches are the network, and that
   // is where the time actually went.
   if params.rehost_external {
-    let mut wanted: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for page in plan.pages.iter().filter(|p| !p.is_folder) {
-      let from = page.archive_path.as_deref().unwrap_or("");
-      for block in import_markdown(&page.markdown, "scan").blocks {
-        if block.kind != "image" {
-          continue;
-        }
-        let Some(url) = block.data.get("url").and_then(|v| v.as_str()) else {
-          continue;
-        };
-        // Images that resolve inside the archive are uploaded from its bytes;
-        // only real links go over the network.
-        if resolve_ref(from, url, &file_paths).is_some() {
-          continue;
-        }
-        if (url.starts_with("http://") || url.starts_with("https://"))
-          && seen.insert(url.to_string())
-        {
-          wanted.push(url.to_string());
-        }
-      }
-    }
-
-    if !wanted.is_empty() {
-      tracing::info!(count = wanted.len(), "import: pre-fetching external images");
-    }
-    let mut breaker = HostBreaker::default();
-    let mut refused = 0usize;
-    for chunk in wanted.chunks(REHOST_CONCURRENCY) {
-      if state
-        .import_jobs
-        .read()
-        .await
-        .get(&job_id)
-        .is_some_and(|j| j.cancel_requested)
-      {
-        return Ok(());
-      }
-      // The breaker is consulted between chunks, so a dead host costs at most
-      // one chunk of timeouts rather than one per image.
-      let live: Vec<&String> = chunk.iter().filter(|u| !breaker.is_open(u)).collect();
-      for url in chunk.iter().filter(|u| breaker.is_open(u)) {
-        // Refused WITHOUT a request. Recorded with the same weight as a failed
-        // fetch, because to the document there is no difference: the block is
-        // still a link. This was the most invisible of the three outcomes —
-        // nothing errored, it simply never happened, and it left only an
-        // aggregate count in a log the user never reads.
-        unfetched.insert(
-          url.clone(),
-          (
-            "host had already timed out repeatedly, so this one was skipped without a request"
-              .to_string(),
-            false,
-          ),
-        );
-      }
-      refused += chunk.len() - live.len();
-      let results = futures_util::future::join_all(live.into_iter().map(|url| async move {
-        (
-          url.clone(),
-          fetch_and_store_image_url(state, workspace_id, user_id, url).await,
-        )
-      }))
-      .await;
-      for (url, result) in results {
-        match result {
-          Ok(record) => {
-            rehosted.insert(url, (record.id.to_string(), record.original_name.clone()));
-          }
-          Err(error) => {
-            let reason = error.to_string();
-            breaker.record(&url, &reason);
-            tracing::warn!(%url, error = %reason, "import: external image re-host failed; keeping link");
-            unfetched.insert(url, (reason, true));
-          }
-        }
-      }
-    }
-    if refused > 0 {
-      // Said out loud, with the count: these images kept their links without
-      // ever being tried, and an operator who does not know that will read the
-      // import as having re-hosted everything it could.
-      tracing::warn!(
-        refused,
-        "import: images skipped unattempted — their host had already timed out repeatedly; \
-         they keep their original links (re-run `mica-cli rehost-images` from a network that \
-         can reach them)"
-      );
+    // Returns false when the import was cancelled mid-prefetch.
+    if !prefetch_external_images(
+      state,
+      job_id,
+      workspace_id,
+      user_id,
+      wanted_external_urls(&plan, &file_paths),
+      &mut rehosted,
+      &mut unfetched,
+    )
+    .await?
+    {
+      return Ok(());
     }
   }
 
@@ -886,13 +773,7 @@ async fn run_import(
     // task, so we never stop with a document created but its content half
     // written. `done` already reflects the pages that landed, and nothing is
     // rolled back — see `ImportJob::cancel_requested`.
-    if state
-      .import_jobs
-      .read()
-      .await
-      .get(&job_id)
-      .is_some_and(|j| j.cancel_requested)
-    {
+    if cancel_requested(state, job_id).await {
       return Ok(());
     }
     // A folder is a pure container: just a view, no document/snapshot, no
@@ -908,12 +789,7 @@ async fn run_import(
         page.icon.as_deref(),
       )
       .await?;
-      {
-        let mut jobs = state.import_jobs.write().await;
-        if let Some(job) = jobs.get_mut(&job_id) {
-          job.done = idx + 1;
-        }
-      }
+      update_job(state, job_id, |job| job.done = idx + 1).await;
       persist_progress(state, job_id, idx + 1).await;
       continue;
     }
@@ -932,18 +808,9 @@ async fn run_import(
         && let Some(url) = block.data.get("url").and_then(|v| v.as_str()).map(str::to_string)
       {
         if let Some(path) = resolve_ref(from, &url, &file_paths) {
-          let entry = match uploaded.get(&path) {
-            Some(hit) => hit.clone(),
-            None => {
-              let base = path.rsplit('/').next().unwrap_or(&path);
-              let record =
-                store_bytes(state, &client, workspace_id, user_id, base, &plan.files[&path])
-                  .await?;
-              let value = (record.id.to_string(), record.original_name.clone());
-              uploaded.insert(path.clone(), value.clone());
-              value
-            }
-          };
+          let entry =
+            upload_archive_image(state, &client, workspace_id, user_id, &path, &plan.files[&path], &mut uploaded)
+              .await?;
           block.data = json!({"file_id": entry.0, "name": entry.1});
         } else if params.rehost_external
           && (url.starts_with("http://") || url.starts_with("https://"))
@@ -952,29 +819,7 @@ async fn run_import(
           // best-effort — a host this server can't reach (CN routing to
           // medium/imgur/…) just keeps its link, exactly as before. The client's
           // per-image re-host remains the fallback for those.
-          let entry = match rehosted.get(&url) {
-            Some(hit) => Some(hit.clone()),
-            // Already established as unreachable by the concurrent pre-scan.
-            // Do NOT try again: the pre-scan covers every external url in the
-            // archive, so reaching here means the answer is known, and a dead
-            // host linked from forty pages used to cost forty more timeouts in
-            // series after the question was already settled.
-            None if unfetched.contains_key(&url) => None,
-            None => match fetch_and_store_image_url(state, workspace_id, user_id, &url).await {
-              Ok(record) => {
-                let value = (record.id.to_string(), record.original_name.clone());
-                rehosted.insert(url.clone(), value.clone());
-                Some(value)
-              }
-              Err(error) => {
-                let reason = error.to_string();
-                tracing::warn!(%url, error = %reason, "import: external image re-host failed; keeping link");
-                unfetched.insert(url.clone(), (reason, true));
-                None
-              }
-            },
-          };
-          match entry {
+          match rehost_external_image(state, workspace_id, user_id, &url, &mut rehosted, &mut unfetched).await {
             Some(entry) => block.data = json!({"file_id": entry.0, "name": entry.1}),
             // Left as a link, and now said out loud. `document_id` is stamped
             // after insert_page below — the page does not exist yet.
@@ -1031,17 +876,15 @@ async fn run_import(
       });
     }
 
-    {
-      let mut jobs = state.import_jobs.write().await;
-      if let Some(job) = jobs.get_mut(&job_id) {
-        job.done = idx + 1;
-        // Published as the import runs, not only at the end: a long archive
-        // against a dead host should show the damage accumulating rather than
-        // look clean until the last page lands.
-        job.image_failures_total = image_failures.len();
-        job.image_failures = capped(&image_failures);
-      }
-    }
+    update_job(state, job_id, |job| {
+      job.done = idx + 1;
+      // Published as the import runs, not only at the end: a long archive
+      // against a dead host should show the damage accumulating rather than
+      // look clean until the last page lands.
+      job.image_failures_total = image_failures.len();
+      job.image_failures = capped(&image_failures);
+    })
+    .await;
     persist_progress(state, job_id, idx + 1).await;
   }
 
@@ -1064,14 +907,251 @@ async fn run_import(
     // node_modules dump) would otherwise ship thousands of paths on every poll.
     // The client shows a count, so a truncated list still tells the truth about
     // how many — see `skipped_total`.
-    let mut jobs = state.import_jobs.write().await;
-    if let Some(job) = jobs.get_mut(&job_id) {
+    update_job(state, job_id, |job| {
       job.skipped_total = skipped.len();
       skipped.truncate(MAX_LISTED);
       job.skipped = skipped;
-    }
+    })
+    .await;
   }
   Ok(())
+}
+
+/// Destination decides the "container vs flatten" shape (see import-convention
+/// research): into an existing workspace/folder the user picks `container`
+/// (auto/spill/wrap; default auto peels a single wrapper & spills, wraps only
+/// multiple loose roots); as a NEW workspace → the workspace IS the container,
+/// so `container` is moot and a redundant single wrapper is collapsed. The
+/// container fallback name is the client-supplied source name, else "Imported".
+fn import_mode(params: &ImportParams) -> ImportMode {
+  if params.workspace_id.is_some() {
+    let fallback = params
+      .name
+      .as_deref()
+      .map(str::trim)
+      .filter(|s| !s.is_empty())
+      .unwrap_or("Imported")
+      .to_string();
+    match params.container {
+      ContainerMode::Auto => ImportMode::Auto(fallback),
+      ContainerMode::Spill => ImportMode::IntoLocation,
+      ContainerMode::Wrap => ImportMode::IntoContainer(fallback),
+    }
+  } else {
+    ImportMode::NewWorkspace
+  }
+}
+
+async fn cancel_requested(state: &AppState, job_id: Uuid) -> bool {
+  state
+    .import_jobs
+    .read()
+    .await
+    .get(&job_id)
+    .is_some_and(|j| j.cancel_requested)
+}
+
+/// The given workspace, or a fresh one — client name (zip/folder) wins; else
+/// the collapsed wrapper's name (Logseq: the stripped folder names the new
+/// workspace); else "Imported".
+async fn resolve_target_workspace(
+  state: &AppState,
+  user_id: Uuid,
+  params: &ImportParams,
+  plan: &ImportPlan,
+) -> ApiResult<Uuid> {
+  match params.workspace_id {
+    Some(id) => Ok(id),
+    None => {
+      let name = params
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or(plan.wrapper_name.as_deref())
+        .unwrap_or("Imported");
+      create_workspace(state, user_id, name).await
+    }
+  }
+}
+
+/// Mutate the job's bookkeeping under its lock. A no-op when the job row is
+/// already gone (the map is pruned on completion).
+async fn update_job<C>(state: &AppState, job_id: Uuid, mutate: C)
+where
+  C: FnOnce(&mut ImportJob),
+{
+  let mut jobs = state.import_jobs.write().await;
+  if let Some(job) = jobs.get_mut(&job_id) {
+    mutate(job);
+  }
+}
+
+/// External http(s) image urls across all pages, deduplicated. Images that
+/// resolve inside the archive are uploaded from its bytes; only real links go
+/// over the network.
+fn wanted_external_urls(plan: &ImportPlan, file_paths: &std::collections::HashSet<String>) -> Vec<String> {
+  let mut wanted = Vec::new();
+  let mut seen = std::collections::HashSet::new();
+  for page in plan.pages.iter().filter(|p| !p.is_folder) {
+    let from = page.archive_path.as_deref().unwrap_or("");
+    for block in import_markdown(&page.markdown, "scan").blocks {
+      if block.kind != "image" {
+        continue;
+      }
+      let Some(url) = block.data.get("url").and_then(|v| v.as_str()) else {
+        continue;
+      };
+      if resolve_ref(from, url, file_paths).is_some() {
+        continue;
+      }
+      if (url.starts_with("http://") || url.starts_with("https://"))
+        && seen.insert(url.to_string())
+      {
+        wanted.push(url.to_string());
+      }
+    }
+  }
+  wanted
+}
+
+/// Fetch every external image BEFORE walking the pages, several at a time.
+///
+/// The per-block path in the page loop is still the one that rewires a block,
+/// and it still works alone — this pass only fills the cache it reads. Done here
+/// because that path is deep inside two nested loops and strictly serial: an
+/// archive with a few hundred external images spent the whole import waiting on
+/// one request at a time. The scan costs a second parse of each page's Markdown,
+/// which is CPU and bounded; the fetches are the network, and that is where the
+/// time actually went.
+///
+/// Returns `false` when the import was cancelled between chunks.
+async fn prefetch_external_images(
+  state: &AppState,
+  job_id: Uuid,
+  workspace_id: Uuid,
+  user_id: Uuid,
+  wanted: Vec<String>,
+  rehosted: &mut std::collections::HashMap<String, (String, String)>,
+  unfetched: &mut std::collections::HashMap<String, (String, bool)>,
+) -> ApiResult<bool> {
+  if !wanted.is_empty() {
+    tracing::info!(count = wanted.len(), "import: pre-fetching external images");
+  }
+  let mut breaker = HostBreaker::default();
+  let mut refused = 0usize;
+  for chunk in wanted.chunks(REHOST_CONCURRENCY) {
+    if cancel_requested(state, job_id).await {
+      return Ok(false);
+    }
+    // The breaker is consulted between chunks, so a dead host costs at most
+    // one chunk of timeouts rather than one per image.
+    let live: Vec<&String> = chunk.iter().filter(|u| !breaker.is_open(u)).collect();
+    for url in chunk.iter().filter(|u| breaker.is_open(u)) {
+      // Refused WITHOUT a request. Recorded with the same weight as a failed
+      // fetch, because to the document there is no difference: the block is
+      // still a link. This was the most invisible of the three outcomes —
+      // nothing errored, it simply never happened, and it left only an
+      // aggregate count in a log the user never reads.
+      unfetched.insert(
+        url.clone(),
+        (
+          "host had already timed out repeatedly, so this one was skipped without a request"
+            .to_string(),
+          false,
+        ),
+      );
+    }
+    refused += chunk.len() - live.len();
+    let results = futures_util::future::join_all(live.into_iter().map(|url| async move {
+      (
+        url.clone(),
+        fetch_and_store_image_url(state, workspace_id, user_id, url).await,
+      )
+    }))
+    .await;
+    for (url, result) in results {
+      match result {
+        Ok(record) => {
+          rehosted.insert(url, (record.id.to_string(), record.original_name.clone()));
+        }
+        Err(error) => {
+          let reason = error.to_string();
+          breaker.record(&url, &reason);
+          tracing::warn!(%url, error = %reason, "import: external image re-host failed; keeping link");
+          unfetched.insert(url, (reason, true));
+        }
+      }
+    }
+  }
+  if refused > 0 {
+    // Said out loud, with the count: these images kept their links without
+    // ever being tried, and an operator who does not know that will read the
+    // import as having re-hosted everything it could.
+    tracing::warn!(
+      refused,
+      "import: images skipped unattempted — their host had already timed out repeatedly; \
+       they keep their original links (re-run `mica-cli rehost-images` from a network that \
+       can reach them)"
+    );
+  }
+  Ok(true)
+}
+
+/// Upload an archive-internal asset (memoized by path) and return its
+/// `{file_id, name}` pair.
+async fn upload_archive_image(
+  state: &AppState,
+  client: &reqwest::Client,
+  workspace_id: Uuid,
+  user_id: Uuid,
+  path: &str,
+  bytes: &[u8],
+  uploaded: &mut std::collections::HashMap<String, (String, String)>,
+) -> ApiResult<(String, String)> {
+  if let Some(hit) = uploaded.get(path) {
+    return Ok(hit.clone());
+  }
+  let base = path.rsplit('/').next().unwrap_or(path);
+  let record = store_bytes(state, client, workspace_id, user_id, base, bytes).await?;
+  let value = (record.id.to_string(), record.original_name.clone());
+  uploaded.insert(path.to_string(), value.clone());
+  Ok(value)
+}
+
+/// Re-host one external image (memoized). `None` means the block keeps its
+/// link — either the pre-scan already established the url is unreachable
+/// (do NOT try again: the pre-scan covers every external url in the archive,
+/// so reaching here means the answer is known, and a dead host linked from
+/// forty pages used to cost forty more timeouts in series after the question
+/// was already settled), or this attempt itself failed.
+async fn rehost_external_image(
+  state: &AppState,
+  workspace_id: Uuid,
+  user_id: Uuid,
+  url: &str,
+  rehosted: &mut std::collections::HashMap<String, (String, String)>,
+  unfetched: &mut std::collections::HashMap<String, (String, bool)>,
+) -> Option<(String, String)> {
+  if let Some(hit) = rehosted.get(url) {
+    return Some(hit.clone());
+  }
+  if unfetched.contains_key(url) {
+    return None;
+  }
+  match fetch_and_store_image_url(state, workspace_id, user_id, url).await {
+    Ok(record) => {
+      let value = (record.id.to_string(), record.original_name.clone());
+      rehosted.insert(url.to_string(), value.clone());
+      Some(value)
+    }
+    Err(error) => {
+      let reason = error.to_string();
+      tracing::warn!(%url, error = %reason, "import: external image re-host failed; keeping link");
+      unfetched.insert(url.to_string(), (reason, true));
+      None
+    }
+  }
 }
 
 async fn create_workspace(state: &AppState, user_id: Uuid, name: &str) -> ApiResult<Uuid> {

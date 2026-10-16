@@ -1,0 +1,1249 @@
+
+use axum::{
+  Json,
+  extract::{Path, State},
+  http::HeaderMap,
+};
+use mica_app_core::{
+  AppState,
+  documents::DocumentSnapshotPayload,
+  store::{self, DocumentRecord},
+};
+use mica_infra::{ApiError, ApiResult};
+use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, PgPool};
+use uuid::Uuid;
+
+use crate::routes::auth::user_id_from_headers;
+use super::*;
+
+pub async fn move_view(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+  Json(payload): Json<MoveViewRequest>,
+) -> ApiResult<Json<ViewResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  ensure_view_in_workspace(&state.db, workspace_id, view_id).await?;
+
+  if let Some(parent_view_id) = payload.parent_view_id {
+    ensure_valid_parent_view(&state.db, workspace_id, view_id, parent_view_id).await?;
+  }
+
+  let position = normalize_position(payload.position)?;
+  let view = sqlx::query_as::<_, View>(
+    r#"
+      UPDATE views
+      SET parent_view_id = $1, position = $2, updated_at = now()
+      WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
+      RETURNING
+        id,
+        workspace_id,
+        parent_view_id,
+        object_id,
+        object_type::text AS object_type,
+        name,
+        icon,
+        position,
+        is_deleted,
+        created_by,
+        created_at,
+        updated_at
+    "#,
+  )
+  .bind(payload.parent_view_id)
+  .bind(position)
+  .bind(view_id)
+  .bind(workspace_id)
+  .fetch_optional(&state.db)
+  .await?
+  .ok_or(ApiError::NotFound)?;
+
+  Ok(Json(ViewResponse { view }))
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/reorder`
+///
+/// Reorder a parent's children in ONE atomic call: every id in
+/// `ordered_view_ids` is set as a child of `parent_view_id` (null = top level)
+/// and given an evenly-spaced position in the given order. This is what a "sort
+/// this folder" operation needs — the per-view `move` endpoint would take one
+/// request per sibling and could interleave a failure. Positions are 10-spaced,
+/// zero-padded to a fixed width so they sort lexicographically like the rest.
+pub async fn reorder_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<ReorderRequest>,
+) -> ApiResult<Json<ReorderResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+
+  if payload.ordered_view_ids.is_empty() {
+    return Err(ApiError::BadRequest(
+      "ordered_view_ids cannot be empty".to_string(),
+    ));
+  }
+  // A duplicate id would leave one of the two at a stale position — reject
+  // rather than silently keep only the last.
+  let mut seen = std::collections::HashSet::new();
+  for id in &payload.ordered_view_ids {
+    if !seen.insert(*id) {
+      return Err(ApiError::BadRequest(format!("duplicate view id {id}")));
+    }
+  }
+  // Validate everything BEFORE writing anything: each id belongs to the
+  // workspace, and re-parenting under `parent_view_id` neither escapes the
+  // workspace nor forms a cycle (a view under its own descendant).
+  for id in &payload.ordered_view_ids {
+    ensure_view_in_workspace(&state.db, workspace_id, *id).await?;
+    if let Some(parent) = payload.parent_view_id {
+      ensure_valid_parent_view(&state.db, workspace_id, *id, parent).await?;
+    }
+  }
+
+  let mut tx = state.db.begin().await?;
+  for (i, id) in payload.ordered_view_ids.iter().enumerate() {
+    let position = format!("{:010}", (i + 1) * 10);
+    let affected = sqlx::query(
+      r#"
+        UPDATE views
+        SET parent_view_id = $1, position = $2, updated_at = now()
+        WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
+      "#,
+    )
+    .bind(payload.parent_view_id)
+    .bind(&position)
+    .bind(id)
+    .bind(workspace_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    // Validation ran before the tx, so a 0-row UPDATE means this view was
+    // deleted concurrently in the window. Reporting `reordered: len()` regardless
+    // (the old behavior) is the `ssh | tee` shape — a partial reorder claimed as
+    // full success, leaving one node stuck at its old parent/position (P1-3).
+    // Return the anomaly instead; the `?`/return drops `tx`, rolling everything
+    // back so the client can refetch and retry against fresh state.
+    if affected == 0 {
+      return Err(ApiError::Conflict(format!(
+        "view {id} was modified concurrently during reorder; refetch and retry"
+      )));
+    }
+  }
+  tx.commit().await?;
+
+  Ok(Json(ReorderResponse {
+    reordered: payload.ordered_view_ids.len(),
+  }))
+}
+
+
+/// `POST /api/workspaces/{workspace_id}/views/batch-move`
+///
+/// Re-parent many views at once. Unlike trash/restore this cannot be one
+/// statement: the folder-only container rule and the cycle check are per view,
+/// so every id is validated against the destination BEFORE anything is written
+/// — the same order [reorder_views] uses, and for the same reason. The writes
+/// then run in one transaction, so a view deleted underneath us rolls the whole
+/// move back instead of leaving the tree half-reorganised.
+pub async fn batch_move_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(workspace_id): Path<Uuid>,
+  Json(payload): Json<BatchMoveRequest>,
+) -> ApiResult<Json<BatchViewsResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  check_batch_ids(&payload.view_ids)?;
+
+  for id in &payload.view_ids {
+    ensure_view_in_workspace(&state.db, workspace_id, *id).await?;
+    if let Some(parent) = payload.parent_view_id {
+      ensure_valid_parent_view(&state.db, workspace_id, *id, parent).await?;
+    }
+  }
+
+  move_views_tx(
+    &state.db,
+    workspace_id,
+    &payload.view_ids,
+    payload.parent_view_id,
+  )
+  .await?;
+
+  Ok(Json(BatchViewsResponse {
+    affected: payload.view_ids.len(),
+    skipped: Vec::new(),
+  }))
+}
+
+/// Re-parent [view_ids] under [parent_view_id], in the order given, in ONE
+/// transaction.
+///
+/// Positions are `(index + 1) * 10`, so the caller's order IS the sibling order
+/// at the destination.
+///
+/// A view that no longer matches (deleted, or moved to another workspace, under
+/// us) makes the WHOLE move fail with [ApiError::Conflict] — the `?` returns
+/// before `commit`, so the transaction is dropped and every earlier row in this
+/// batch rolls back. That is the difference from trash/restore, which report
+/// what they missed in `skipped`: a half-applied reorganisation has no honest
+/// way to be reported, because the ids the caller sent no longer describe the
+/// tree it is looking at.
+///
+/// Split out of the handler so a DB test can reach it — the handler needs auth
+/// headers a database-level test cannot construct.
+pub(super) async fn move_views_tx(
+  db: &PgPool,
+  workspace_id: Uuid,
+  view_ids: &[Uuid],
+  parent_view_id: Option<Uuid>,
+) -> ApiResult<()> {
+  let mut tx = db.begin().await?;
+  for (i, id) in view_ids.iter().enumerate() {
+    let position = format!("{:010}", (i + 1) * 10);
+    let affected = sqlx::query(
+      r#"
+        UPDATE views
+        SET parent_view_id = $1, position = $2, updated_at = now()
+        WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
+      "#,
+    )
+    .bind(parent_view_id)
+    .bind(&position)
+    .bind(id)
+    .bind(workspace_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if affected == 0 {
+      return Err(ApiError::Conflict(format!(
+        "view {id} was modified concurrently during the move; refetch and retry"
+      )));
+    }
+  }
+  tx.commit().await?;
+  Ok(())
+}
+
+
+// transaction lets us beat. See docs/cross-workspace-move.md.
+
+#[derive(Debug, Deserialize)]
+pub struct TransferRequest {
+  dest_workspace_id: Uuid,
+  /// Parent folder in the destination (null = destination root).
+  #[serde(default)]
+  parent_view_id: Option<Uuid>,
+  /// true = move (soft-delete the source after copying); false = copy (keep source).
+  #[serde(default)]
+  remove_source: bool,
+  /// Report what WOULD happen (counts + dangling links) without mutating anything.
+  #[serde(default)]
+  dry_run: bool,
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/batch-transfer` — same operation,
+/// N roots, ONE transaction.
+///
+/// This exists because the alternative was N sequential single-view transfers,
+/// and that is not the same operation performed more times: a failure part-way
+/// through leaves some of the selection moved and the rest not, with no record
+/// of where it stopped. Moving five pages is one thing the user asked for, so it
+/// either happens or it does not (user, 2026-08-27).
+#[derive(Debug, Deserialize)]
+pub struct BatchTransferRequest {
+  dest_workspace_id: Uuid,
+  #[serde(default)]
+  parent_view_id: Option<Uuid>,
+  #[serde(default)]
+  remove_source: bool,
+  #[serde(default)]
+  dry_run: bool,
+  /// The selected roots, in the order the caller selected them. A root nested
+  /// inside another is dropped rather than refused (see [`independent_roots`]).
+  view_ids: Vec<Uuid>,
+}
+
+/// What both transfer routes reduce to: N roots going to one destination.
+struct TransferPlan {
+  roots: Vec<Uuid>,
+  dest_workspace_id: Uuid,
+  parent_view_id: Option<Uuid>,
+  remove_source: bool,
+  dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DanglingLink {
+  /// Name of the moved document whose link now dangles.
+  document: String,
+  /// The `mica://page/<id>` target that stays in the source workspace.
+  target_view_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransferResponse {
+  /// The first root's new id. Kept for the single-view route, whose callers
+  /// (Dart client, CLI, MCP) read exactly this field.
+  new_root_view_id: Option<Uuid>,
+  /// Every root's new id, in the order the roots were given. Empty on a dry run.
+  new_root_view_ids: Vec<Uuid>,
+  documents: usize,
+  folders: usize,
+  images: usize,
+  dangling_links: Vec<DanglingLink>,
+  removed_source: bool,
+  dry_run: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct TransferRow {
+  id: Uuid,
+  parent_view_id: Option<Uuid>,
+  object_id: Uuid,
+  object_type: String,
+  name: String,
+  position: String,
+}
+
+/// The roots of a batch transfer, with anything already inside another root
+/// dropped.
+///
+/// A multi-select can hold a folder AND a page inside it — nothing stops the
+/// user selecting both, and from the sidebar it looks entirely reasonable.
+/// Transferring both would copy that page TWICE: once as part of the folder's
+/// subtree, once on its own. The destination would show two of it, and on a move
+/// the second copy's source is already soft-deleted by the first.
+///
+/// [ancestor_pairs] is `(root, one of its ancestors)`, so a root is redundant
+/// exactly when one of its ancestors is also being transferred. Kept as pairs
+/// rather than a map so the rule is a list operation and the test can state the
+/// tree literally.
+///
+/// Input order is preserved: it is the order the user selected in, and the
+/// destination's sibling order follows it.
+pub(super) fn independent_roots(roots: &[Uuid], ancestor_pairs: &[(Uuid, Uuid)]) -> Vec<Uuid> {
+  let wanted: std::collections::HashSet<Uuid> = roots.iter().copied().collect();
+  let mut kept = Vec::new();
+  let mut seen = std::collections::HashSet::new();
+  for &root in roots {
+    // The same id twice is not an error worth refusing over — it is a click
+    // that landed twice — but it must not become two copies either.
+    if !seen.insert(root) {
+      continue;
+    }
+    let nested = ancestor_pairs
+      .iter()
+      .any(|&(child, ancestor)| child == root && wanted.contains(&ancestor));
+    if !nested {
+      kept.push(root);
+    }
+  }
+  kept
+}
+
+/// `(root, ancestor)` for every live ancestor of every root, within
+/// [workspace_id] — the input [`independent_roots`] needs.
+///
+/// Walks UP rather than down: a batch's roots are few and shallow, while their
+/// subtrees can be the whole workspace. Enumerating downward to answer "is one
+/// of these inside another" would read every page to decide something about a
+/// handful of them.
+///
+/// Split out of the handler so a DB test can reach it — the handler needs auth
+/// headers, which a database-level test has no way to construct. Same reason
+/// `empty_workspace_trash` and `purge_views_batch` live outside theirs.
+///
+/// Scoped to live rows in this workspace: an id the caller cannot actually
+/// transfer contributes no pairs, is therefore kept as "independent", and is
+/// then rejected by the caller's membership check with a real error — rather
+/// than quietly disqualifying one of its siblings.
+pub(super) async fn ancestor_pairs_of_roots(
+  db: &PgPool,
+  workspace_id: Uuid,
+  roots: &[Uuid],
+) -> ApiResult<Vec<(Uuid, Uuid)>> {
+  if roots.is_empty() {
+    return Ok(Vec::new());
+  }
+  Ok(
+    sqlx::query_as::<_, (Uuid, Uuid)>(
+      r#"
+        WITH RECURSIVE up AS (
+          SELECT id AS root, parent_view_id AS ancestor
+          FROM views
+          WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+          UNION ALL
+          SELECT u.root, v.parent_view_id
+          FROM up u JOIN views v ON v.id = u.ancestor
+          WHERE v.is_deleted = false
+        )
+        SELECT root, ancestor FROM up WHERE ancestor IS NOT NULL
+      "#,
+    )
+    .bind(roots)
+    .bind(workspace_id)
+    .fetch_all(db)
+    .await?,
+  )
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/{view_id}/transfer`
+pub async fn transfer_view(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((src_workspace_id, view_id)): Path<(Uuid, Uuid)>,
+  Json(request): Json<TransferRequest>,
+) -> ApiResult<Json<TransferResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  transfer_roots(
+    &state,
+    user_id,
+    src_workspace_id,
+    TransferPlan {
+      roots: vec![view_id],
+      dest_workspace_id: request.dest_workspace_id,
+      parent_view_id: request.parent_view_id,
+      remove_source: request.remove_source,
+      dry_run: request.dry_run,
+    },
+  )
+  .await
+  .map(Json)
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/batch-transfer`
+pub async fn batch_transfer_views(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path(src_workspace_id): Path<Uuid>,
+  Json(request): Json<BatchTransferRequest>,
+) -> ApiResult<Json<TransferResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  // Same ceiling as the other batch routes, and for the same reason — except
+  // here it also bounds how long ONE transaction holds its locks.
+  //
+  // Deliberately NOT `check_batch_ids`: that rejects a repeated id, and a repeat
+  // here is a click that landed twice on a selection, which `independent_roots`
+  // already collapses along with the nesting case it cannot be separated from.
+  if request.view_ids.is_empty() {
+    return Err(ApiError::BadRequest("view_ids must not be empty".to_string()));
+  }
+  if request.view_ids.len() > MAX_BATCH_VIEWS {
+    return Err(ApiError::BadRequest(format!(
+      "at most {MAX_BATCH_VIEWS} view_ids per request, got {}",
+      request.view_ids.len()
+    )));
+  }
+  transfer_roots(
+    &state,
+    user_id,
+    src_workspace_id,
+    TransferPlan {
+      roots: request.view_ids,
+      dest_workspace_id: request.dest_workspace_id,
+      parent_view_id: request.parent_view_id,
+      remove_source: request.remove_source,
+      dry_run: request.dry_run,
+    },
+  )
+  .await
+  .map(Json)
+}
+
+/// Copy N subtrees into another workspace, optionally soft-deleting the sources.
+///
+/// One root or twenty is the same code path — the phases below were already a
+/// loop over rows, and `topo_order_subtree` already anchors every row whose
+/// parent is outside the set, so a forest needs no special case.
+///
+/// What "atomic" does and does not mean here, stated plainly because the gap is
+/// real: phase 4 is ONE transaction, so the destination tree and the source
+/// soft-delete either both land or neither does — no half-moved selection. The
+/// blob copies in phase 3 are deliberately outside it (see the phase comment),
+/// so a failure after them can leave orphan BYTES in the destination, which its
+/// GC reclaims. That is the same guarantee a single transfer has always had.
+async fn transfer_roots(
+  state: &AppState,
+  user_id: Uuid,
+  src_workspace_id: Uuid,
+  request: TransferPlan,
+) -> ApiResult<TransferResponse> {
+  let dest_workspace_id = request.dest_workspace_id;
+  if dest_workspace_id == src_workspace_id {
+    return Err(ApiError::BadRequest(
+      "destination workspace must differ from the source".to_string(),
+    ));
+  }
+  // Editor in BOTH: to remove from the source and to create in the destination.
+  ensure_workspace_editor(&state.db, src_workspace_id, user_id).await?;
+  ensure_workspace_editor(&state.db, dest_workspace_id, user_id).await?;
+
+  // A destination parent, if given, must be a live folder in the destination.
+  if let Some(parent) = request.parent_view_id {
+    ensure_parent_accepts_children(&state.db, dest_workspace_id, parent).await?;
+  }
+
+  // 0. Drop roots that sit inside another root, BEFORE enumerating anything —
+  //    otherwise the `= ANY` walk below visits the overlap twice and the
+  //    destination gets two copies of it.
+  let ancestor_pairs = ancestor_pairs_of_roots(&state.db, src_workspace_id, &request.roots).await?;
+  let roots = independent_roots(&request.roots, &ancestor_pairs);
+  let root_ids: std::collections::HashSet<Uuid> = roots.iter().copied().collect();
+
+  // 1. Enumerate the subtrees (live rows only). Disjoint by construction after
+  //    step 0, so no row can appear twice.
+  let subtree = sqlx::query_as::<_, TransferRow>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
+        FROM views
+        WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+        UNION ALL
+        SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
+        FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        WHERE v.is_deleted = false
+      )
+      SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
+    "#,
+  )
+  .bind(&roots)
+  .bind(src_workspace_id)
+  .fetch_all(&state.db)
+  .await?;
+  let subtree_view_ids: std::collections::HashSet<Uuid> = subtree.iter().map(|r| r.id).collect();
+
+  // A root that produced no row is deleted, or in another workspace, or made up.
+  // Refuse the whole batch rather than transferring the rest: the caller asked
+  // for these N, and silently delivering N-1 is the kind of success nobody
+  // checks. This also replaces the single route's `ensure_view_in_workspace`.
+  if let Some(&missing) = roots.iter().find(|r| !subtree_view_ids.contains(r)) {
+    tracing::debug!(%missing, "transfer: root not live in the source workspace");
+    return Err(ApiError::NotFound);
+  }
+
+  // The whole batch counts as "staying together" for the dangling-link report:
+  // a link from one selected page to another is not breakage, it is a link that
+  // follows. Before the batch endpoint existed this had to be declared by the
+  // caller (`also_moving`), because each request knew only its own subtree.
+  let moving_view_ids = &subtree_view_ids;
+
+  // 2. Pre-scan documents: referenced file_ids + cross-workspace dangling links.
+  let mut payloads: std::collections::HashMap<Uuid, DocumentSnapshotPayload> =
+    std::collections::HashMap::new();
+  let mut referenced_files: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+  let mut dangling_links: Vec<DanglingLink> = Vec::new();
+  let mut documents = 0usize;
+  let mut folders = 0usize;
+  for row in &subtree {
+    if row.object_type != "document" {
+      folders += 1;
+      continue;
+    }
+    documents += 1;
+    let Some(payload) = store::current_payload(&state.db, row.object_id).await? else {
+      continue;
+    };
+    for block in &payload.blocks {
+      if let Some(fid) = block
+        .data
+        .get("file_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+      {
+        referenced_files.insert(fid);
+      }
+      for target in page_link_targets(&block.data) {
+        if let Ok(tid) = Uuid::parse_str(&target) {
+          // `moving_view_ids`, not `subtree_view_ids`: a link into another root
+          // of the same batch is not breakage, it is a link that follows.
+          if !moving_view_ids.contains(&tid) {
+            dangling_links.push(DanglingLink {
+              document: row.name.clone(),
+              target_view_id: tid,
+            });
+          }
+        }
+      }
+    }
+    payloads.insert(row.object_id, payload);
+  }
+  let images = referenced_files.len();
+
+  if request.dry_run {
+    return Ok(TransferResponse {
+      new_root_view_id: None,
+      new_root_view_ids: Vec::new(),
+      documents,
+      folders,
+      images,
+      dangling_links,
+      removed_source: false,
+      dry_run: true,
+    });
+  }
+
+  // 3. Copy blobs into the destination BEFORE the transaction: content-addressed
+  //    keys make the PUT idempotent, and a half-failure leaves only orphan bytes
+  //    in dest (its GC reclaims them), never a page with broken images.
+  let storage = state
+    .storage
+    .as_ref()
+    .ok_or_else(|| ApiError::Internal("file storage is not configured".to_string()))?;
+  let http = reqwest::Client::new();
+  let mut file_map: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
+  for &src_file_id in &referenced_files {
+    let Some(src_file) = store::fetch_file(&state.db, src_workspace_id, src_file_id).await? else {
+      continue; // dangling reference already; nothing to copy
+    };
+    let suffix = src_file
+      .object_key
+      .strip_prefix(&format!("workspaces/{src_workspace_id}/"))
+      .ok_or_else(|| ApiError::Internal("source object_key not under its workspace".to_string()))?;
+    let dest_key = format!("workspaces/{dest_workspace_id}/{suffix}");
+
+    let bytes = http
+      .get(storage.download_url(&src_file.object_key))
+      .send()
+      .await
+      .map_err(|e| ApiError::Internal(format!("blob fetch failed: {e}")))?
+      .error_for_status()
+      .map_err(|e| ApiError::Internal(format!("blob fetch returned {e}")))?
+      .bytes()
+      .await
+      .map_err(|e| ApiError::Internal(format!("blob read failed: {e}")))?;
+    // Commit this marker before PUT; a crash after writing bytes must leave a
+    // discoverable key for the orphan sweep, not a rolled-back transaction.
+    store::record_pending_file_upload(
+      &state.db,
+      dest_workspace_id,
+      &dest_key,
+      storage.presign_ttl_seconds,
+    )
+    .await?;
+    // An old browser presign may have left a pending ledger row for this same
+    // content-addressed key. Hold its lock from PUT through registration so
+    // orphan GC cannot remove a freshly copied object between those steps.
+    let mut blob_tx = state.db.begin().await?;
+    store::lock_file_object_key(&mut blob_tx, &dest_key).await?;
+    let upload = storage.presign_put_server(&dest_key);
+    let checksum = {
+      use base64::Engine as _;
+      use sha2::{Digest, Sha256};
+      base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&bytes))
+    };
+    let put = http
+      .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, &src_file.mime_type)
+      .header("x-amz-checksum-sha256", checksum)
+      .body(bytes.to_vec())
+      .send()
+      .await
+      .map_err(|e| ApiError::Internal(format!("blob upload failed: {e}")))?;
+    if !put.status().is_success() {
+      return Err(ApiError::Internal(format!(
+        "blob upload returned {}",
+        put.status()
+      )));
+    }
+
+    let dest_file = store::insert_file_tx(
+      &mut blob_tx,
+      dest_workspace_id,
+      user_id,
+      &dest_key,
+      &src_file.original_name,
+      &src_file.mime_type,
+      src_file.byte_size,
+    )
+    .await?;
+    blob_tx.commit().await?;
+    file_map.insert(src_file_id, dest_file.id);
+  }
+
+  // 4. One transaction: build the destination tree (new ids), then soft-delete
+  //    the source subtree for a move.
+  let view_map: std::collections::HashMap<Uuid, Uuid> =
+    subtree.iter().map(|r| (r.id, Uuid::new_v4())).collect();
+  let ordered = topo_order_subtree(&subtree);
+
+  // Filled as the subtree is rebuilt; each copied document gets its yrs base
+  // built after the commit (see bootstrap_bases_best_effort).
+  let mut created_document_ids: Vec<Uuid> = Vec::new();
+  let mut tx = state.db.begin().await?;
+  for row in &ordered {
+    let new_view_id = view_map[&row.id];
+    // Every root lands directly under the chosen destination parent; everything
+    // below follows its own (already remapped) parent.
+    let dest_parent = if root_ids.contains(&row.id) {
+      request.parent_view_id
+    } else {
+      row.parent_view_id.and_then(|p| view_map.get(&p).copied())
+    };
+    if row.object_type == "document" {
+      let mut payload = payloads.remove(&row.object_id).unwrap_or_else(|| {
+        // Substituting an empty payload is CORRECT for a genuinely-empty doc
+        // (current_payload returns None only when no snapshot row exists). It is
+        // NOT silent anymore: the one way this loses content — a doc with a yrs
+        // base but no snapshot row — would land here, and a move then deletes the
+        // source. Logging makes that edge diagnosable instead of invisible (P0-4).
+        tracing::warn!(
+          object_id = %row.object_id,
+          "transfer/clone: no snapshot for document — substituting empty payload"
+        );
+        DocumentSnapshotPayload {
+          schema_version: 1,
+          root_block_id: "root".to_string(),
+          blocks: Vec::new(),
+        }
+      });
+      rewrite_transferred_payload(&mut payload, &file_map, &view_map);
+      let document = sqlx::query_as::<_, DocumentRecord>(
+        r#"
+          INSERT INTO documents (workspace_id, root_block_id, created_by)
+          VALUES ($1, $2, $3)
+          RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
+        "#,
+      )
+      .bind(dest_workspace_id)
+      .bind(&payload.root_block_id)
+      .bind(user_id)
+      .fetch_one(&mut *tx)
+      .await?;
+      mica_app_core::sync::seed_base_tx(&mut tx, document.id, payload).await?;
+      created_document_ids.push(document.id);
+      sqlx::query(
+        r#"
+          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+          VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
+        "#,
+      )
+      .bind(new_view_id)
+      .bind(dest_workspace_id)
+      .bind(dest_parent)
+      .bind(document.id)
+      .bind(&row.name)
+      .bind(&row.position)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
+    } else {
+      // Folder: a view with no document. object_id is a fresh unused uuid.
+      sqlx::query(
+        r#"
+          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+          VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
+        "#,
+      )
+      .bind(new_view_id)
+      .bind(dest_workspace_id)
+      .bind(dest_parent)
+      .bind(Uuid::new_v4())
+      .bind(&row.name)
+      .bind(&row.position)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
+    }
+  }
+
+  if request.remove_source {
+    // Inside the SAME transaction as the destination tree above: that is what
+    // makes a move a move rather than a copy followed by a hopeful delete.
+    sqlx::query(
+      r#"
+        WITH RECURSIVE subtree AS (
+          SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+          UNION ALL
+          SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        )
+        UPDATE views SET is_deleted = true, updated_at = now()
+        WHERE id IN (SELECT id FROM subtree)
+      "#,
+    )
+    .bind(&roots)
+    .bind(src_workspace_id)
+    .execute(&mut *tx)
+    .await?;
+  }
+
+  tx.commit().await?;
+
+  let new_root_view_ids: Vec<Uuid> = roots.iter().map(|r| view_map[r]).collect();
+  Ok(TransferResponse {
+    new_root_view_id: new_root_view_ids.first().copied(),
+    new_root_view_ids,
+    documents,
+    folders,
+    images,
+    dangling_links,
+    removed_source: request.remove_source,
+    dry_run: false,
+  })
+}
+
+// ── Clone (duplicate a view within the same workspace) ───────────────────────
+// A same-workspace cousin of transfer: enumerate the subtree, give every node a
+// fresh id + doc + snapshot, rewrite in-subtree page links to the new ids. Two
+// deliberate differences from transfer:
+//   - Blobs are NOT copied. object_key is content-addressed and workspace-scoped
+//     (workspaces/{id}/{sha256}.{ext}); within ONE workspace the copy references
+//     the same file_id — sharing the bytes is exactly the sha256-dedup intent,
+//     and there's nothing to re-upload. So file_map stays empty and file_ids
+//     pass through unchanged.
+//   - The source is never removed, and the root copy gets a fresh name (deduped
+//     among its siblings) + a fresh position so it sits beside the original.
+
+#[derive(Debug, Deserialize)]
+pub struct CloneRequest {
+  /// Parent for the copy's root (null = the source's own parent, i.e. beside it).
+  #[serde(default)]
+  parent_view_id: Option<Uuid>,
+  /// The copy's root name, locale-aware, computed by the caller (e.g. "X 副本").
+  /// Deduped against siblings server-side. Absent → a "{source} 副本" fallback.
+  #[serde(default)]
+  name: Option<String>,
+  /// Report what WOULD happen (counts) without mutating anything.
+  #[serde(default)]
+  dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CloneResponse {
+  new_root_view_id: Option<Uuid>,
+  new_name: String,
+  documents: usize,
+  folders: usize,
+  dry_run: bool,
+}
+
+/// `POST /api/workspaces/{workspace_id}/views/{view_id}/clone`
+pub async fn clone_view(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+  Json(request): Json<CloneRequest>,
+) -> ApiResult<Json<CloneResponse>> {
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
+  ensure_view_in_workspace(&state.db, workspace_id, view_id).await?;
+
+  // 1. Enumerate the subtree (live rows only) — same shape as transfer.
+  let subtree = sqlx::query_as::<_, TransferRow>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
+        FROM views
+        WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
+        UNION ALL
+        SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
+        FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        WHERE v.is_deleted = false
+      )
+      SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
+    "#,
+  )
+  .bind(view_id)
+  .bind(workspace_id)
+  .fetch_all(&state.db)
+  .await?;
+  let Some(root) = subtree.iter().find(|r| r.id == view_id) else {
+    return Err(ApiError::NotFound);
+  };
+
+  // 2. Resolve the copy's parent: an explicit folder in this workspace, or the
+  //    source's own parent (beside the original).
+  let target_parent = match request.parent_view_id {
+    Some(parent) => {
+      ensure_parent_accepts_children(&state.db, workspace_id, parent).await?;
+      Some(parent)
+    }
+    None => root.parent_view_id,
+  };
+
+  // 3. Name the copy: caller's locale-aware base (fallback "{source} 副本"),
+  //    deduped against the live siblings under the target parent.
+  let base_name = request
+    .name
+    .clone()
+    .unwrap_or_else(|| format!("{} 副本", root.name));
+  let siblings = sqlx::query_scalar::<_, String>(
+    "SELECT name FROM views WHERE workspace_id = $1 AND is_deleted = false \
+     AND parent_view_id IS NOT DISTINCT FROM $2",
+  )
+  .bind(workspace_id)
+  .bind(target_parent)
+  .fetch_all(&state.db)
+  .await?;
+  let new_name = dedup_sibling_name(&base_name, &siblings);
+
+  // 4. Pre-scan document payloads (needed to rewrite in-subtree links). No blob
+  //    copy, no dangling-link scan: every link target stays in this workspace.
+  let mut payloads: std::collections::HashMap<Uuid, DocumentSnapshotPayload> =
+    std::collections::HashMap::new();
+  let mut documents = 0usize;
+  let mut folders = 0usize;
+  for row in &subtree {
+    if row.object_type != "document" {
+      folders += 1;
+      continue;
+    }
+    documents += 1;
+    if let Some(payload) = store::current_payload(&state.db, row.object_id).await? {
+      payloads.insert(row.object_id, payload);
+    }
+  }
+
+  if request.dry_run {
+    return Ok(Json(CloneResponse {
+      new_root_view_id: None,
+      new_name,
+      documents,
+      folders,
+      dry_run: true,
+    }));
+  }
+
+  // Filled as the subtree is rebuilt; each copied document gets its yrs base
+  // built after the commit (see bootstrap_bases_best_effort).
+  let mut created_document_ids: Vec<Uuid> = Vec::new();
+  // 5. One transaction: build the copied tree with fresh ids. file_map is empty
+  //    (blobs shared), view_map remaps in-subtree links to the new ids.
+  let view_map: std::collections::HashMap<Uuid, Uuid> =
+    subtree.iter().map(|r| (r.id, Uuid::new_v4())).collect();
+  let empty_files: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
+  let ordered = topo_order_subtree(&subtree);
+
+  let mut tx = state.db.begin().await?;
+  for row in &ordered {
+    let new_view_id = view_map[&row.id];
+    let is_root = row.id == view_id;
+    let dest_parent = if is_root {
+      target_parent
+    } else {
+      row.parent_view_id.and_then(|p| view_map.get(&p).copied())
+    };
+    // The root sits beside the original: fresh name + fresh position so it does
+    // not collide with the source under the same parent. Inner nodes keep their
+    // name/position — their parent is a new view, so nothing collides there.
+    let node_name = if is_root { &new_name } else { &row.name };
+    let node_position = if is_root {
+      Uuid::now_v7().to_string()
+    } else {
+      row.position.clone()
+    };
+
+    if row.object_type == "document" {
+      let mut payload = payloads.remove(&row.object_id).unwrap_or_else(|| {
+        // Substituting an empty payload is CORRECT for a genuinely-empty doc
+        // (current_payload returns None only when no snapshot row exists). It is
+        // NOT silent anymore: the one way this loses content — a doc with a yrs
+        // base but no snapshot row — would land here, and a move then deletes the
+        // source. Logging makes that edge diagnosable instead of invisible (P0-4).
+        tracing::warn!(
+          object_id = %row.object_id,
+          "transfer/clone: no snapshot for document — substituting empty payload"
+        );
+        DocumentSnapshotPayload {
+          schema_version: 1,
+          root_block_id: "root".to_string(),
+          blocks: Vec::new(),
+        }
+      });
+      rewrite_transferred_payload(&mut payload, &empty_files, &view_map);
+      let document = sqlx::query_as::<_, DocumentRecord>(
+        r#"
+          INSERT INTO documents (workspace_id, root_block_id, created_by)
+          VALUES ($1, $2, $3)
+          RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
+        "#,
+      )
+      .bind(workspace_id)
+      .bind(&payload.root_block_id)
+      .bind(user_id)
+      .fetch_one(&mut *tx)
+      .await?;
+      mica_app_core::sync::seed_base_tx(&mut tx, document.id, payload).await?;
+      created_document_ids.push(document.id);
+      sqlx::query(
+        r#"
+          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+          VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
+        "#,
+      )
+      .bind(new_view_id)
+      .bind(workspace_id)
+      .bind(dest_parent)
+      .bind(document.id)
+      .bind(node_name)
+      .bind(&node_position)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
+    } else {
+      sqlx::query(
+        r#"
+          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+          VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
+        "#,
+      )
+      .bind(new_view_id)
+      .bind(workspace_id)
+      .bind(dest_parent)
+      .bind(Uuid::new_v4())
+      .bind(node_name)
+      .bind(&node_position)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
+    }
+  }
+  tx.commit().await?;
+
+  Ok(Json(CloneResponse {
+    new_root_view_id: Some(view_map[&view_id]),
+    new_name,
+    documents,
+    folders,
+    dry_run: false,
+  }))
+}
+
+/// Pick a sibling-unique name: `base` if free, else `base 2`, `base 3`, … The
+/// number is locale-neutral, so the caller supplies the localized base ("X 副本"
+/// / "X copy") and we only break ties.
+fn dedup_sibling_name(base: &str, siblings: &[String]) -> String {
+  if !siblings.iter().any(|s| s == base) {
+    return base.to_string();
+  }
+  (2..)
+    .map(|n| format!("{base} {n}"))
+    .find(|c| !siblings.iter().any(|s| s == c))
+    .expect("an unused suffix always exists")
+}
+
+/// The `mica://page/<viewId>` targets referenced by a block's link marks.
+///
+/// Re-exported from app-core, which owns it because the write paths there derive
+/// `document_yrs_base.link_targets` with it. A copy here would be a second source
+/// of truth for what counts as a page link.
+use mica_app_core::sync::page_link_targets;
+
+/// Rewrite a transferred document's blocks for their new home: remap uploaded-
+/// image `file_id`s to the destination copies, and remap in-subtree page links to
+/// the new view ids. Links to pages left in the source keep their `mica://` href
+/// (they dangle — surfaced to the user as a warning before the move).
+fn rewrite_transferred_payload(
+  payload: &mut DocumentSnapshotPayload,
+  file_map: &std::collections::HashMap<Uuid, Uuid>,
+  view_map: &std::collections::HashMap<Uuid, Uuid>,
+) {
+  const SCHEME: &str = "mica://page/";
+  for block in &mut payload.blocks {
+    let Some(data) = block.data.as_object_mut() else {
+      continue;
+    };
+    // Image file_id → destination copy. Drop any cached blob `url` so the client
+    // re-resolves it against the destination workspace.
+    if let Some(new_id) = data
+      .get("file_id")
+      .and_then(|v| v.as_str())
+      .and_then(|s| Uuid::parse_str(s).ok())
+      .and_then(|old| file_map.get(&old))
+    {
+      let new_id = *new_id;
+      data.insert("file_id".into(), serde_json::json!(new_id.to_string()));
+      data.remove("url");
+    }
+    // In-subtree page links → new view ids.
+    if let Some(marks) = data.get_mut("marks").and_then(|m| m.as_array_mut()) {
+      for mark in marks {
+        let Some(obj) = mark.as_object_mut() else {
+          continue;
+        };
+        let Some(new_href) = obj
+          .get("href")
+          .and_then(|h| h.as_str())
+          .and_then(|href| href.strip_prefix(SCHEME))
+          .and_then(|id| Uuid::parse_str(id).ok())
+          .and_then(|old| view_map.get(&old))
+          .map(|new| format!("{SCHEME}{new}"))
+        else {
+          continue;
+        };
+        obj.insert("href".into(), serde_json::json!(new_href));
+      }
+    }
+  }
+}
+
+/// Order the subtree so a parent always precedes its children (root first). The
+/// recursive CTE does not guarantee parent-first, and we insert with FK-linked
+/// parents, so the order matters.
+fn topo_order_subtree(subtree: &[TransferRow]) -> Vec<&TransferRow> {
+  let ids: std::collections::HashSet<Uuid> = subtree.iter().map(|r| r.id).collect();
+  let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<&TransferRow>> =
+    std::collections::HashMap::new();
+  for r in subtree {
+    // The root's real parent is outside the subtree — anchor it at None.
+    let key = r.parent_view_id.filter(|p| ids.contains(p));
+    by_parent.entry(key).or_default().push(r);
+  }
+  let mut out: Vec<&TransferRow> = Vec::with_capacity(subtree.len());
+  let mut stack: Vec<Option<Uuid>> = vec![None];
+  while let Some(parent) = stack.pop() {
+    if let Some(children) = by_parent.get(&parent) {
+      for child in children {
+        out.push(child);
+        stack.push(Some(child.id));
+      }
+    }
+  }
+  out
+}
+
+#[cfg(test)]
+mod tests {
+  fn image_block(data: serde_json::Value) -> mica_app_core::documents::Block {
+    mica_app_core::documents::Block {
+      id: "img_1".to_string(),
+      kind: "image".to_string(),
+      text: String::new(),
+      data,
+      children: Vec::new(),
+    }
+  }
+  use super::*;
+  use mica_app_core::sync::page_link_targets;
+
+  fn text_block(id: &str, data: serde_json::Value) -> mica_app_core::documents::Block {
+    mica_app_core::documents::Block {
+      id: id.to_string(),
+      kind: "text".to_string(),
+      text: "x".to_string(),
+      data,
+      children: Vec::new(),
+    }
+  }
+
+  /// A transferred doc must point its image at the DESTINATION file copy (else
+  /// the source's per-workspace GC reclaims the bytes and the moved page breaks),
+  /// remap links to pages that came along, and leave links to pages left behind
+  /// untouched (they dangle — surfaced as a warning, not silently rewritten).
+  #[test]
+  fn transfer_rewrites_file_ids_and_in_subtree_links_only() {
+    let old_file = Uuid::new_v4();
+    let new_file = Uuid::new_v4();
+    let in_sub_old = Uuid::new_v4();
+    let in_sub_new = Uuid::new_v4();
+    let outside = Uuid::new_v4();
+
+    let file_map = std::collections::HashMap::from([(old_file, new_file)]);
+    let view_map = std::collections::HashMap::from([(in_sub_old, in_sub_new)]);
+
+    let mut payload = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: "root".to_string(),
+      blocks: vec![
+        image_block(serde_json::json!({
+          "file_id": old_file.to_string(),
+          "name": "x.png",
+          "url": format!("/api/workspaces/{}/files/{}/blob/x.png", Uuid::new_v4(), old_file),
+        })),
+        text_block(
+          "t1",
+          serde_json::json!({"marks": [
+            {"type": "link", "href": format!("mica://page/{in_sub_old}")},
+            {"type": "link", "href": format!("mica://page/{outside}")},
+          ]}),
+        ),
+      ],
+    };
+    rewrite_transferred_payload(&mut payload, &file_map, &view_map);
+
+    assert_eq!(
+      payload.blocks[0].data["file_id"],
+      serde_json::json!(new_file.to_string()),
+      "image file_id must point at the destination copy",
+    );
+    assert!(
+      payload.blocks[0].data.get("url").is_none(),
+      "stale cached blob url must be dropped so the client re-resolves",
+    );
+    let marks = payload.blocks[1].data["marks"].as_array().unwrap();
+    assert_eq!(
+      marks[0]["href"],
+      serde_json::json!(format!("mica://page/{in_sub_new}")),
+      "a link to a page that came along is remapped",
+    );
+    assert_eq!(
+      marks[1]["href"],
+      serde_json::json!(format!("mica://page/{outside}")),
+      "a link to a page left behind is preserved (dangles, warned)",
+    );
+  }
+
+  #[test]
+  fn dedup_sibling_name_only_numbers_on_collision() {
+    // Free name → used as-is.
+    assert_eq!(dedup_sibling_name("日志方案 副本", &[]), "日志方案 副本");
+    // Collision → first free numbered suffix (locale-neutral number).
+    assert_eq!(
+      dedup_sibling_name("日志方案 副本", &["日志方案 副本".into()]),
+      "日志方案 副本 2"
+    );
+    // Skips taken numbers, does not reuse them.
+    assert_eq!(
+      dedup_sibling_name(
+        "X 副本",
+        &["X 副本".into(), "X 副本 2".into(), "X 副本 4".into()]
+      ),
+      "X 副本 3"
+    );
+    // Unrelated siblings never force a suffix.
+    assert_eq!(dedup_sibling_name("X 副本", &["Y".into(), "Z".into()]), "X 副本");
+  }
+
+  #[test]
+  fn page_link_targets_extracts_only_mica_page_ids() {
+    let a = Uuid::new_v4();
+    let data = serde_json::json!({"marks": [
+      {"type": "link", "href": format!("mica://page/{a}")},
+      {"type": "link", "href": "https://example.com"},
+      {"type": "bold"},
+    ]});
+    assert_eq!(page_link_targets(&data), vec![a.to_string()]);
+    assert!(page_link_targets(&serde_json::json!({})).is_empty());
+  }
+
+  #[test]
+  fn topo_order_puts_parents_before_children() {
+    let root = Uuid::new_v4();
+    let child = Uuid::new_v4();
+    let grandchild = Uuid::new_v4();
+    let outside_parent = Uuid::new_v4(); // root's real parent, outside the subtree
+    let row = |id, parent| TransferRow {
+      id,
+      parent_view_id: parent,
+      object_id: Uuid::new_v4(),
+      object_type: "folder".to_string(),
+      name: "n".to_string(),
+      position: "0".to_string(),
+    };
+    // Deliberately not parent-first, mimicking the CTE's arbitrary order.
+    let subtree = vec![
+      row(grandchild, Some(child)),
+      row(root, Some(outside_parent)),
+      row(child, Some(root)),
+    ];
+    let ordered: Vec<Uuid> = topo_order_subtree(&subtree).iter().map(|r| r.id).collect();
+    let pos = |id: Uuid| ordered.iter().position(|&x| x == id).unwrap();
+    assert_eq!(ordered.len(), 3);
+    assert!(pos(root) < pos(child), "root must precede its child");
+    assert!(pos(child) < pos(grandchild), "child must precede its grandchild");
+  }
+
+}

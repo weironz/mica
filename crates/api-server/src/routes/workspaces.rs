@@ -658,7 +658,7 @@ async fn fetch_workspace_member(
   .map_err(ApiError::from)
 }
 
-async fn workspace_role(
+pub(crate) async fn workspace_role(
   db: &PgPool,
   workspace_id: Uuid,
   user_id: Uuid,
@@ -685,7 +685,7 @@ async fn user_id_by_email(db: &PgPool, email: &str) -> ApiResult<Option<Uuid>> {
     .map_err(ApiError::from)
 }
 
-async fn ensure_workspace_member(db: &PgPool, workspace_id: Uuid, user_id: Uuid) -> ApiResult<()> {
+pub(crate) async fn ensure_workspace_member(db: &PgPool, workspace_id: Uuid, user_id: Uuid) -> ApiResult<()> {
   workspace_role(db, workspace_id, user_id)
     .await?
     .ok_or(ApiError::NotFound)?;

@@ -548,6 +548,17 @@ async fn send_bootstrap(
 /// same mistake back; every write re-reads the role instead (see
 /// [`current_write_permissions`]).
 #[allow(clippy::too_many_arguments)]
+/// Per-message context shared by every handler arm: who is talking, on which
+/// socket, in which room/document.
+struct ClientCtx<'a> {
+  state: &'a AppState,
+  room: &'a Room,
+  connection_id: Uuid,
+  user_id: Uuid,
+  workspace_id: Uuid,
+  document_id: Uuid,
+}
+
 async fn handle_client_message(
   raw: &str,
   state: &AppState,
@@ -568,246 +579,273 @@ async fn handle_client_message(
     }
   };
   let ack_id = envelope.id.as_deref();
+  let ctx = ClientCtx {
+    state,
+    room,
+    connection_id,
+    user_id,
+    workspace_id,
+    document_id,
+  };
 
   match envelope.kind.as_str() {
     "ping" => vec![json!({ "type": "pong" }).to_string()],
-    "presence.update" => {
-      room.set_presence(PresenceEntry {
-        connection_id,
-        user_id,
-        data: envelope.payload.clone(),
-      });
-      let event = json!({
-        "type": "presence.update",
-        "document_id": document_id,
-        "connection_id": connection_id,
-        "user_id": user_id,
-        "data": envelope.payload,
-      });
-      room.broadcast(connection_id, Arc::from(event.to_string()));
-      Vec::new()
-    }
-    "document.update" => {
-      // Re-read the role rather than trusting the connection's copy: a socket
-      // outlives the membership it was opened under, so a member removed (or
-      // demoted) mid-session would otherwise keep writing until the token
-      // expired. `None` = no longer a member at all.
-      let live = match current_write_permissions(&state.db, workspace_id, user_id).await {
-        Ok(Some(permissions)) => permissions,
-        Ok(None) => {
-          return vec![error_message(
-            ack_id,
-            "permission_denied",
-            "you are no longer a member of this workspace",
-          )];
-        }
-        Err(error) => {
-          return vec![error_message(ack_id, error_code(&error), &error.to_string())];
-        }
-      };
-      if !live.can_write {
-        return vec![error_message(
-          ack_id,
-          "permission_denied",
-          "you do not have permission to edit this document",
-        )];
-      }
-
-      let payload = match serde_json::from_value::<UpdatePayload>(envelope.payload) {
-        Ok(payload) => payload,
-        Err(error) => {
-          return vec![error_message(
-            ack_id,
-            "invalid_payload",
-            &format!("invalid update payload: {error}"),
-          )];
-        }
-      };
-      if payload.operations.is_empty() {
-        return vec![error_message(
-          ack_id,
-          "invalid_payload",
-          "at least one operation is required",
-        )];
-      }
-
-      match store::apply_document_operations(
-        &state.db,
-        workspace_id,
-        document_id,
-        user_id,
-        &payload.operations,
-      )
-      .await
-      {
-        Ok(applied) => {
-          // Fan out to the rest of the room, then ack the originator directly.
-          room.broadcast(
-            connection_id,
-            Arc::from(accepted_event(&applied, None).to_string()),
-          );
-          vec![accepted_event(&applied, ack_id).to_string()]
-        }
-        Err(error) => vec![error_message(
-          ack_id,
-          error_code(&error),
-          &error.to_string(),
-        )],
-      }
-    }
+    "presence.update" => handle_presence_update(&ctx, envelope.payload),
+    "document.update" => handle_document_update(&ctx, ack_id, envelope.payload).await,
     // ── yrs CRDT sync (P2-M4), parallel to the op path above ───────────────
-    "sync.bootstrap" => {
-      // Fast-forward base for a client opening the doc: full yrs state + the rid
-      // it is current to. The base is built lazily from the op snapshot on first
-      // access, so existing documents work without a migration pass. P4-3: a
-      // client that already holds a replica may send its state vector (`sv`,
-      // base64) — it then gets the minimal diff instead of the full state (same
-      // `sync.base` shape; applying either is the same yrs operation).
-      let client_sv = client_sv(&envelope.payload);
-      match sync::bootstrap_base(&state.db, document_id).await {
-        Ok(base) => vec![base_message(&base, client_sv.as_deref(), ack_id, document_id)],
-        Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
-      }
-    }
-    "sync.pull" => {
-      // Incremental catch-up: every update for this doc after the client's cursor
-      // (cold start / offline reconnect). Rooms are per-document, so the cursor is
-      // per-document too.
-      let since_rid = envelope
-        .payload
-        .get("since_rid")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-      // P4-3: the optional client state vector turns a prune-forced re-bootstrap
-      // into a minimal diff instead of a full-doc download.
-      let client_sv = client_sv(&envelope.payload);
-      let limit = state.config.sync_tuning.catch_up_limit;
-      match sync::catch_up_document(&state.db, document_id, since_rid, limit).await {
-        // Cursor fell behind the pruned window → re-bootstrap from the base.
-        Ok(sync::CatchUp::Rebootstrap(base)) => {
-          vec![base_message(&base, client_sv.as_deref(), ack_id, document_id)]
-        }
-        Ok(sync::CatchUp::Updates(updates)) => {
-          let head = updates.last().map(|u| u.rid).unwrap_or(since_rid);
-          let encoded: Vec<Value> = updates
-            .iter()
-            .map(|u| {
-              json!({
-                "rid": u.rid,
-                "actor_id": u.actor_id,
-                "update": STANDARD.encode(&u.payload),
-              })
-            })
-            .collect();
-          vec![
-            json!({
-              "type": "sync.updates",
-              "ack_id": ack_id,
-              "document_id": document_id,
-              "updates": encoded,
-              "head": head,
-            })
-            .to_string(),
-          ]
-        }
-        Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
-      }
-    }
-    "sync.push" => {
-      // Same re-check as `document.update`: this is the collaborative keystroke
-      // path, and a revoked member's cached `permissions` were computed when the
-      // socket opened, not now.
-      let live = match current_write_permissions(&state.db, workspace_id, user_id).await {
-        Ok(Some(permissions)) => permissions,
-        Ok(None) => {
-          return vec![error_message(
-            ack_id,
-            "permission_denied",
-            "you are no longer a member of this workspace",
-          )];
-        }
-        Err(error) => {
-          return vec![error_message(ack_id, error_code(&error), &error.to_string())];
-        }
-      };
-      if !live.can_write {
-        return vec![error_message(
-          ack_id,
-          "permission_denied",
-          "you do not have permission to edit this document",
-        )];
-      }
-      let update_b64 = match envelope.payload.get("update").and_then(Value::as_str) {
-        Some(s) => s.to_string(),
-        None => {
-          return vec![error_message(
-            ack_id,
-            "invalid_payload",
-            "missing `update` (base64 yrs update)",
-          )];
-        }
-      };
-      let update = match STANDARD.decode(update_b64.as_bytes()) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-          return vec![error_message(ack_id, "invalid_payload", "update is not valid base64")];
-        }
-      };
-      // Timed as a whole: the round trip decodes and re-encodes the entire
-      // document (the write-amplification entry in docs/roadmap.md), so this
-      // histogram is the number that argument has been missing.
-      let push_started = std::time::Instant::now();
-      let push_result = sync::push_update(
-        &state.db,
-        workspace_id,
-        document_id,
-        user_id,
-        &update,
-        &state.config.sync_tuning,
-      )
-      .await;
-      crate::metrics::METRICS.record_push(
-        push_started.elapsed().as_secs_f64(),
-        update.len(),
-        push_result.is_ok(),
-      );
-      if push_result.is_err() {
-        // Red line #1 is "never diverge silently". A refused update used to be
-        // a log line only, so there was no curve to alert on before a user
-        // noticed their document was wrong.
-        crate::metrics::METRICS.integrity_failure("push");
-      }
-      match push_result
-      {
-        Ok(rid) => {
-          // Fan the update out to the rest of the room (already-have-it sender
-          // gets only the rid in its ack, below).
-          let event = json!({
-            "type": "sync.update",
-            "document_id": document_id,
-            "rid": rid,
-            "actor_id": user_id,
-            "update": update_b64,
-          });
-          room.broadcast(connection_id, Arc::from(event.to_string()));
-          vec![
-            json!({
-              "type": "sync.ack",
-              "ack_id": ack_id,
-              "document_id": document_id,
-              "rid": rid,
-            })
-            .to_string(),
-          ]
-        }
-        Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
-      }
-    }
+    "sync.bootstrap" => handle_sync_bootstrap(&ctx, ack_id, &envelope.payload).await,
+    "sync.pull" => handle_sync_pull(&ctx, ack_id, &envelope.payload).await,
+    "sync.push" => handle_sync_push(&ctx, ack_id, envelope.payload).await,
     other => vec![error_message(
       ack_id,
       "unknown_type",
       &format!("unsupported message type: {other}"),
     )],
+  }
+}
+
+fn handle_presence_update(ctx: &ClientCtx<'_>, payload: Value) -> Vec<String> {
+  ctx.room.set_presence(PresenceEntry {
+    connection_id: ctx.connection_id,
+    user_id: ctx.user_id,
+    data: payload.clone(),
+  });
+  let event = json!({
+    "type": "presence.update",
+    "document_id": ctx.document_id,
+    "connection_id": ctx.connection_id,
+    "user_id": ctx.user_id,
+    "data": payload,
+  });
+  ctx.room
+    .broadcast(ctx.connection_id, Arc::from(event.to_string()));
+  Vec::new()
+}
+
+/// Re-read the role rather than trusting the connection's copy: a socket
+/// outlives the membership it was opened under, so a member removed (or
+/// demoted) mid-session would otherwise keep writing until the token expired.
+/// `None` = no longer a member at all. Shared by `document.update` and
+/// `sync.push` — the collaborative keystroke path deserves the same re-check.
+async fn require_write_access(
+  ctx: &ClientCtx<'_>,
+  ack_id: Option<&str>,
+) -> Result<DocumentPermissions, Vec<String>> {
+  match current_write_permissions(&ctx.state.db, ctx.workspace_id, ctx.user_id).await {
+    Ok(Some(permissions)) => Ok(permissions),
+    Ok(None) => Err(vec![error_message(
+      ack_id,
+      "permission_denied",
+      "you are no longer a member of this workspace",
+    )]),
+    Err(error) => Err(vec![error_message(
+      ack_id,
+      error_code(&error),
+      &error.to_string(),
+    )]),
+  }
+}
+
+async fn handle_document_update(
+  ctx: &ClientCtx<'_>,
+  ack_id: Option<&str>,
+  payload_json: Value,
+) -> Vec<String> {
+  let live = match require_write_access(ctx, ack_id).await {
+    Ok(permissions) => permissions,
+    Err(reply) => return reply,
+  };
+  if !live.can_write {
+    return vec![error_message(
+      ack_id,
+      "permission_denied",
+      "you do not have permission to edit this document",
+    )];
+  }
+
+  let payload = match serde_json::from_value::<UpdatePayload>(payload_json) {
+    Ok(payload) => payload,
+    Err(error) => {
+      return vec![error_message(
+        ack_id,
+        "invalid_payload",
+        &format!("invalid update payload: {error}"),
+      )];
+    }
+  };
+  if payload.operations.is_empty() {
+    return vec![error_message(
+      ack_id,
+      "invalid_payload",
+      "at least one operation is required",
+    )];
+  }
+
+  match store::apply_document_operations(
+    &ctx.state.db,
+    ctx.workspace_id,
+    ctx.document_id,
+    ctx.user_id,
+    &payload.operations,
+  )
+  .await
+  {
+    Ok(applied) => {
+      // Fan out to the rest of the room, then ack the originator directly.
+      ctx.room.broadcast(
+        ctx.connection_id,
+        Arc::from(accepted_event(&applied, None).to_string()),
+      );
+      vec![accepted_event(&applied, ack_id).to_string()]
+    }
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+  }
+}
+
+/// Fast-forward base for a client opening the doc: full yrs state + the rid it
+/// is current to. The base is built lazily from the op snapshot on first
+/// access, so existing documents work without a migration pass. P4-3: a client
+/// that already holds a replica may send its state vector (`sv`, base64) — it
+/// then gets the minimal diff instead of the full state (same `sync.base`
+/// shape; applying either is the same yrs operation).
+async fn handle_sync_bootstrap(
+  ctx: &ClientCtx<'_>,
+  ack_id: Option<&str>,
+  payload: &Value,
+) -> Vec<String> {
+  let client_sv = client_sv(payload);
+  match sync::bootstrap_base(&ctx.state.db, ctx.document_id).await {
+    Ok(base) => vec![base_message(&base, client_sv.as_deref(), ack_id, ctx.document_id)],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+  }
+}
+
+/// Incremental catch-up: every update for this doc after the client's cursor
+/// (cold start / offline reconnect). Rooms are per-document, so the cursor is
+/// per-document too.
+async fn handle_sync_pull(
+  ctx: &ClientCtx<'_>,
+  ack_id: Option<&str>,
+  payload: &Value,
+) -> Vec<String> {
+  let since_rid = payload.get("since_rid").and_then(Value::as_i64).unwrap_or(0);
+  // P4-3: the optional client state vector turns a prune-forced re-bootstrap
+  // into a minimal diff instead of a full-doc download.
+  let client_sv = client_sv(payload);
+  let limit = ctx.state.config.sync_tuning.catch_up_limit;
+  match sync::catch_up_document(&ctx.state.db, ctx.document_id, since_rid, limit).await {
+    // Cursor fell behind the pruned window → re-bootstrap from the base.
+    Ok(sync::CatchUp::Rebootstrap(base)) => {
+      vec![base_message(&base, client_sv.as_deref(), ack_id, ctx.document_id)]
+    }
+    Ok(sync::CatchUp::Updates(updates)) => {
+      let head = updates.last().map(|u| u.rid).unwrap_or(since_rid);
+      let encoded: Vec<Value> = updates
+        .iter()
+        .map(|u| {
+          json!({
+            "rid": u.rid,
+            "actor_id": u.actor_id,
+            "update": STANDARD.encode(&u.payload),
+          })
+        })
+        .collect();
+      vec![
+        json!({
+          "type": "sync.updates",
+          "ack_id": ack_id,
+          "document_id": ctx.document_id,
+          "updates": encoded,
+          "head": head,
+        })
+        .to_string(),
+      ]
+    }
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+  }
+}
+
+async fn handle_sync_push(
+  ctx: &ClientCtx<'_>,
+  ack_id: Option<&str>,
+  payload: Value,
+) -> Vec<String> {
+  let live = match require_write_access(ctx, ack_id).await {
+    Ok(permissions) => permissions,
+    Err(reply) => return reply,
+  };
+  if !live.can_write {
+    return vec![error_message(
+      ack_id,
+      "permission_denied",
+      "you do not have permission to edit this document",
+    )];
+  }
+  let update_b64 = match payload.get("update").and_then(Value::as_str) {
+    Some(s) => s.to_string(),
+    None => {
+      return vec![error_message(
+        ack_id,
+        "invalid_payload",
+        "missing `update` (base64 yrs update)",
+      )];
+    }
+  };
+  let update = match STANDARD.decode(update_b64.as_bytes()) {
+    Ok(bytes) => bytes,
+    Err(_) => {
+      return vec![error_message(ack_id, "invalid_payload", "update is not valid base64")];
+    }
+  };
+  // Timed as a whole: the round trip decodes and re-encodes the entire
+  // document (the write-amplification entry in docs/roadmap.md), so this
+  // histogram is the number that argument has been missing.
+  let push_started = std::time::Instant::now();
+  let push_result = sync::push_update(
+    &ctx.state.db,
+    ctx.workspace_id,
+    ctx.document_id,
+    ctx.user_id,
+    &update,
+    &ctx.state.config.sync_tuning,
+  )
+  .await;
+  crate::metrics::METRICS.record_push(
+    push_started.elapsed().as_secs_f64(),
+    update.len(),
+    push_result.is_ok(),
+  );
+  if push_result.is_err() {
+    // Red line #1 is "never diverge silently". A refused update used to be
+    // a log line only, so there was no curve to alert on before a user
+    // noticed their document was wrong.
+    crate::metrics::METRICS.integrity_failure("push");
+  }
+  match push_result {
+    Ok(rid) => {
+      // Fan the update out to the rest of the room (already-have-it sender
+      // gets only the rid in its ack, below).
+      let event = json!({
+        "type": "sync.update",
+        "document_id": ctx.document_id,
+        "rid": rid,
+        "actor_id": ctx.user_id,
+        "update": update_b64,
+      });
+      ctx
+        .room
+        .broadcast(ctx.connection_id, Arc::from(event.to_string()));
+      vec![
+        json!({
+          "type": "sync.ack",
+          "ack_id": ack_id,
+          "document_id": ctx.document_id,
+          "rid": rid,
+        })
+        .to_string(),
+      ]
+    }
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
   }
 }
 
