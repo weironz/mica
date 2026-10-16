@@ -1,7 +1,9 @@
 # 2026-10-16 生产主机 Swap / I/O 定位
 
 对象：`mica.cloudcele.com`。时间均为 Asia/Shanghai；本轮接续 v0.13.52 备份验收，
-重点核对备份结束后的整机压力。以下采样没有修改生产配置、重启服务或清理 Swap。
+重点核对备份结束后的整机压力。初始诊断为只读；用户随后批准两项生产优化。
+Vault watcher 已应用；用户随后纠正项目范围，Datazone/UFM 操作已停止，未应用。
+以下初始采样和后续变更按时间分别记录。
 
 ## 采样边界
 
@@ -126,7 +128,7 @@ v0.13.52 的备份在本窗口休眠，不是当前持续压力源。47 个容�
 已有存量 Swap 和文件页回收竞争，当前持续 CPU/存储工作以 NeoStor 遥测为主。
 更低内存上限或清空 Swap 没有消除工作量的证据；先减少不必要的遥测和完整 CLI 周期启动。
 
-本轮没有对生产应用变更。NeoStor 要求每次生产部署另获明确批准；候选先完成代码和测试，
+初始诊断阶段没有对生产应用变更。NeoStor 要求每次生产部署另获明确批准；候选先完成代码和测试，
 再按固定 Git 提交分发，只对批准的服务应用，部署后重新测量。不得借机重启 Vault、封印/解封生产库、
 关闭采集功能、删除监控历史或扩大为整套 NeoStor 发版。
 
@@ -145,7 +147,62 @@ idc-inventory（包含新回归）、monitoring-config 和 web 已通过；记�
 保留其它所有字段。配置位于 `.34` 专用转发器的 `config/scrape.json`，固定 Compose 来自
 `releases/29e3c12de9490d464fd2725ae319da480f5210f8/compose.yaml`，队列卷保持。
 其生成模板尚未核实，不能称为已经追溯/修复的 Git 模板；应用前必须保存私有原字节、
-owner/mode、摘要和回退配置，并明确记录这个生成来源缺口。当前两项优化均等待本次生产批准。
+owner/mode、摘要和回退配置，并明确记录这个生成来源缺口。随后已获本次生产批准，实际执行见下节。
+
+## 批准后的 Vault watcher 应用与实测
+
+用户明确答复“两项都批准”。原修复 `ce2853f` 的完整 CI 已通过。
+预检核对发现运行镜像仍是旧 `1.18`，Compose 已 pin `1.18.5`；本次从固定 Git 下载源码，
+只更新 watcher 并保留原 image ID，禁止 pull/build，没有升级 Vault 镜像。
+首次重建发现原 256 MiB 运行限制未写入 Compose，命令已回退并立即恢复原限制；
+将原资源预算固化到源配置的 `e9940c1` 已推送。后续对等价匿名卷表示的校验误报也已纠正，
+最终按实际卷名、路径、目标和读写权限核对，不把 Docker 的表示差异当作换卷。
+
+最终应用时间 **11:33:37**，源码 `e9940c17e1d48249b46e7761d327018e2d721d9a`，
+image ID 保留 `sha256:20bce4b1fc21ee5ccc659e3a13fd479894cfffcf650d8ca3c0c4ae7eaecc2c81`。
+新 watcher 为 `6aac9c2fd664`，健康 HEAD=200，256 MiB/-1 资源预算、实际挂载和镜像内容均保留，
+其余 73 个容器（包含已停止的历史容器）的 ID、启动时间、运行状态未变。
+重建继承了 Docker 当前的 3 × 50 MiB json-file 默认轮转，未改 daemon 配置，数据卷未删除。
+Vault server 没有重启，也没有主动 seal/unseal 生产凭据库来做测试。
+
+后置静默采样同样丢弃前 20 秒，**11:35:25.592–11:36:37.528，共 71.936 秒**：
+
+| 指标 | 初始静默窗口 | watcher 应用后 |
+| --- | ---: | ---: |
+| watcher 单核 CPU | 1.642% | 0.0501% |
+| watcher 物理读 MiB/s | 0.599 | 0.0053 |
+| watcher cgroup 当前内存 MiB | 169.11 | 0.91 |
+| watcher 文件页 MiB | 168.01 | 0.48 |
+| VictoriaMetrics CPU | 59.789% | 58.0266% |
+| VictoriaMetrics 读 / 写 MiB/s | 2.050 / 0.232 | 2.6862 / 1.0025 |
+| 主机窗口内 Swap 换入 / 出 MiB | 19.750 / 11.768 | 107.352 / 49.730 |
+
+watcher CPU 下降约 96.9%，物理读下降约 99.1%。当前 cgroup 计费内存下降不等于主机净释放同量，
+文件页可能被共享或重新计费。两窗口相隔一小时，外部业务及其它遥测已有变化，
+不能把整机或其它服务的变化都归因于 watcher。
+后置窗口 VM 仍是主要持续压力源，观察到 max 事件至少增加 891，OOM/OOM-kill 增量为零；
+此时 UFM 减量尚未应用。主机可用内存约 1,002.5 MiB，Swap 存量约 2,017.1 MiB。
+因此本节只能证明 watcher 本身的工作量减少，不能宣称整机 Swap / I/O 已解决。
+
+私有回退目录为 `/data/neostor/ops/releases/watcher-health-20261016T033334Z`（0700）。
+恢复原字节与 owner/mode，继续使用目录中保留原 image ID 及 256 MiB 预算的 override，仅重建 watcher。
+原始前后容器配置、操作日志与回执保留主机私有目录；本机脱敏汇总为
+`mica-vault-watcher-apply-v2-20261016-receipt.json`、`mica-host-pressure-watcher-after-20261016*.json*`。
+
+UFM 现场已拆成三个任务，后续只删除 `ufm-telemetry`，保留 `ufm-optics` 和 `ufm-rest`；
+不能继续沿用旧整包 190,028/180 的减量估计。固定 renderer 来源已进一步核实为
+`weironz/ufm-ib-exporter@dec3456b0b13ff8241a7eac5748a7cea75ce129e`。
+本机 VPN 断开后，已通过云主机既有 NetBird 网关建立到 `.34` 的通道，并验证原 SSH 主机密钥，
+没有切换本机 VPN、修改路由或新建凭据。
+
+用户随后指出“这是 mica 项目”，本轮收窄回 Mica 主机性能，不再执行 Datazone/UFM 变更，
+不再要求切换 VPN。中断前该步骤已完成 prepare，只生成私有备份、候选和隔离 dry-run 验证；
+没有 apply/reload，没有写 live scrape 或启用消费策略。先前的样本减量只是候选估算，
+不能写成生产已减少。NeoStor 与 Mica 同机的资源竞争保留为诊断事实，不将排查自动延伸为
+其他项目或机房配置的执行授权。已经应用的同机 watcher 保持现状，未新增回退或其它服务变更。
+停止前 prepare 时间为 11:41:01，暂存目录为 `.34` 上的
+`ufm-neostor/consumer-policy-backups/20261016T034101546011Z`；目标机还下载了固定工具和
+renderer。它们均保留，未安装候选，不把“运行配置未变”表述为“目标机完全没有写入”。
 
 原始脱敏诊断收据保留在本机 Temp：`mica-host-pressure-window-20261016*.json*`、
 `mica-host-pressure-quiet-20261016*.json*`、`mica-resident-services-*.json`、
