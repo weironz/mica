@@ -71,7 +71,6 @@ skills-lock.json
 /.kiro/
 /.qoder/
 /.opencode.json
-/AGENTS.md
 /GEMINI.md
 /QODER.md
 /.github/*.instruction.md
