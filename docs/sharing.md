@@ -62,7 +62,7 @@ document_shares(
 | `revoke_share` | 软撤销(写 `revoked_at`) |
 | `fetch_share_by_token` | 公开读路径按 token 查活跃行 |
 
-**管理端点**(`crates/api-server/src/routes/documents.rs`,挂在 `/api` 下,带 auth +
+**管理端点**(`crates/api-server/src/routes/documents/share.rs`,挂在 `/api` 下,带 auth +
 `ensure_workspace_editor`):
 
 ```

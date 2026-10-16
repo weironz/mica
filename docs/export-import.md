@@ -38,7 +38,7 @@ client: pick .zip ──────────as-is─────────
 
 ## Workspace export (`GET /api/workspaces/{id}/export.zip`)
 
-Implemented in `crates/api-server/src/routes/documents.rs`
+Implemented in `crates/api-server/src/routes/documents/export.rs`
 (`export_workspace_zip`).
 
 - **Layout mirrors the page tree.** Each page is `<ancestors…>/<page>.md`; a

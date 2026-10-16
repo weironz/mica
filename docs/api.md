@@ -246,7 +246,7 @@ wrong for real deployments, the fix is to change the default.
 | External image fetch timeout | 8s | `routes/files.rs` |
 | Images fetched at once | 8 | `REHOST_CONCURRENCY`, `routes/import.rs` |
 | Timeouts before a host is written off | 2 | `HostBreaker::LIMIT`, `routes/import.rs` |
-| Ids per batch endpoint | 1000 | `MAX_BATCH_VIEWS`, `routes/documents.rs` |
+| Ids per batch endpoint | 1000 | `MAX_BATCH_VIEWS`, `routes/documents/mod.rs` |
 
 After two timeouts against one host, the rest of that host's images are skipped
 **unattempted** and keep their original links; the count is logged. Nothing is
