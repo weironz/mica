@@ -209,9 +209,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       defaultCloudUrl: kDefaultCloudUrl,
     );
     _loadPrefs();
-    // AFTER loadPrefs: binding during initState would fire setState before
-    // the first build (the tree controller uses the same quiet-copy pattern).
-    _registry.addListener(_syncRegistryState);
+    _registry.addListener(_syncRegistryState); // after loadPrefs: setState-in-initState throws
     _servers = _registry.servers;
     _cloudOrigin = _registry.cloudOrigin;
     _sessionCtrl = SessionController()..addListener(_syncSessionState);
@@ -471,7 +469,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // was last pointed at. That is how `flutter run` came up signed in to
     // PRODUCTION, one keystroke away from writing test data into real notes.
     const pinned = String.fromEnvironment('MICA_API_BASE_URL');
-    final base = resolveApiBase(pinned: pinned, saved: _cloudOrigin);
+    final base = resolveApiBase(pinned: pinned, saved: cloudOrigin);
     if (base != null) {
       _api.baseUri = base;
     }
