@@ -92,10 +92,9 @@ import 'upload/zip_writer.dart';
 import 'api/client.dart';
 import 'perf/switch_trace.dart';
 import 'api/models.dart';
-import 'api/profile_watch.dart';
-import 'api/session_refresher.dart';
 import 'api/views_events.dart';
 import 'api/sync_client.dart';
+import 'auth/auth_controller.dart';
 
 // The API/data layer lives in lib/api/*.dart; re-export it so existing
 // `import 'main.dart'` users (tests, tooling) still see these symbols.

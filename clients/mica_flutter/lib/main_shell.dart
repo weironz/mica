@@ -27,38 +27,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   AuthSession? _session;
 
-  /// A fingerprint of the CURRENT sign-in: the server it belongs to, the user it
-  /// is for, and the refresh token it holds.
-  ///
-  /// Captured before an await and re-read after, to answer "is the thing that
-  /// came back still about the session I asked on behalf of?". A cheap
-  /// generation counter would do the same job, but it needs an increment at
-  /// every place a session is assigned, and the first one anybody forgets is a
-  /// silent resurrection bug again. Reading the identity out of the session
-  /// itself cannot be forgotten.
-  ///
-  /// The refresh token is part of it deliberately: it ROTATES on every refresh,
-  /// so a result computed from a token we no longer hold is exactly the stale
-  /// one to discard — and it is also what distinguishes "same user, same server,
-  /// new token" (accept) from "different sign-in entirely" (drop).
-  String? get _sessionIdentity {
-    final account = _accountIdentity;
-    return account == null ? null : '$account|${_session!.refreshToken}';
-  }
+  /// The auth domain's session half — credential persistence keyed by origin,
+  /// renewal/expiry lifecycle, profile refresh, the sign-in core and the
+  /// server readiness probe — see auth/auth_controller.dart (god-class sixth
+  /// step). The legacy fields below ([_registrationOpen], [_regOrigin]) are
+  /// synced view-model copies for the build helpers; the session itself lives
+  /// in [_sessionCtrl] and every credential write goes through the
+  /// controller.
+  late final AuthController _auth;
 
-  /// Server + user only — for an await whose result describes the ACCOUNT rather
-  /// than the sign-in: the profile endpoint answers "who is this user", and a
-  /// refresh token rotating underneath it does not make that answer wrong.
-  ///
-  /// Using the strict [_sessionIdentity] there would discard a legitimate
-  /// profile update every time a refresh landed first, which is a silent
-  /// regression of its own (the avatar would simply stop refreshing on a slow
-  /// connection, where refreshes overlap polls most).
-  String? get _accountIdentity {
-    final session = _session;
-    if (session == null) return null;
-    return '$_cloudOrigin|${session.user.id}';
-  }
   /// The session/workspace hub — the four fields every domain used to touch
   /// directly, now owned by [SessionController] (god-class third step; see
   /// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). The four legacy
@@ -243,6 +220,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _servers = _registry.servers;
     _cloudOrigin = _registry.cloudOrigin;
     _sessionCtrl = SessionController()..addListener(_syncSessionState);
+    _initAuthController();
     _initViewsController();
     _initMembersController();
     _initImportController();
@@ -663,155 +641,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _registry.load(seed: origin);
   }
 
-  /// Persist the access token + user so a restart (desktop) or browser refresh
-  /// (web) restores the session instead of forcing re-login. Plaintext in the
-  /// same prefs store as other settings — a per-origin `window.localStorage`
-  /// entry on web, a JSON file on desktop (DPAPI encryption is a noted hardening
-  /// follow-up; the localStorage copy is likewise XSS-exposed). The token is
-  /// server-specific — [_signOut] (which a server switch also calls) clears it,
-  /// so a saved token always matches the configured backend.
-  // Credentials are keyed per cloud origin (P3c-2), so pointing the app at a
-  // different server doesn't destroy the previous server's session — switching
-  // back restores it without retyping.
-  /// Servers we hold credentials for — entering one costs no password.
-  ///
-  /// Keyed off `authUser:$origin` rather than the access token: the token is the
-  /// part that expires (and on web is never on disk at all), while the stored
-  /// user is what [_restoreSession] needs to rebuild a session from the refresh
-  /// token. Using the token here would mark a perfectly good sign-in as absent
-  /// every time it lapsed, which is most mornings.
-  Set<String> _signedInOrigins() => {
-    for (final origin in _servers)
-      if ((loadPref('authUser:$origin') ?? '').isNotEmpty) origin,
-  };
-
-  /// The display name stored for [origin], or null if we hold none.
-  ///
-  /// Read from prefs rather than `_session`, because the two disagree exactly
-  /// where it matters: entering 本地模式 drops the in-memory session while the
-  /// credentials stay on disk. Asking `_session` there answers "nobody is signed
-  /// in", which is how the world picker ended up demanding a password for a
-  /// server it could have walked straight into.
-  String? _storedDisplayName(String origin) {
-    final raw = loadPref('authUser:$origin');
-    if (raw == null || raw.isEmpty) return null;
-    try {
-      return User.fromJson(jsonDecode(raw) as Map<String, dynamic>).displayName;
-    } catch (_) {
-      return null; // corrupt value: treat as no stored identity
-    }
-  }
-
-  void _persistSession(AuthSession session) {
-    savePref('authToken:$_cloudOrigin', session.accessToken);
-    savePref('authUser:$_cloudOrigin', jsonEncode(session.user.toJson()));
-    // The refresh token rotates on every use, so this write is what keeps the
-    // sign-in alive across a restart: persist the replacement or the next launch
-    // spends a burnt token and the user is bounced to the login screen.
-    savePref('refreshToken:$_cloudOrigin', session.refreshToken);
-  }
-
-  void _clearPersistedSession() {
-    savePref('authToken:$_cloudOrigin', '');
-    savePref('authUser:$_cloudOrigin', '');
-    savePref('refreshToken:$_cloudOrigin', '');
-    // Also clear the legacy single-key copies so an explicit sign-out can't be
-    // resurrected by a future migration re-run.
-    savePref('authToken', '');
-    savePref('authUser', '');
-  }
-
-  /// Renews the access token before it lapses. See [SessionRefresher] for the
-  /// two rules it exists to enforce (renew early; never two at once).
-  late final SessionRefresher _refresher = SessionRefresher(
-    refresh: (token) => _api.refreshSession(token),
-  );
-
-  /// Notices a profile edited on another device — see [ProfileWatch] for why
-  /// this is a look and not a push.
-  late final ProfileWatch _profileWatch = ProfileWatch(
-    fetch: (token) => _api.fetchMe(token),
-  );
-
-  /// Adopt a profile change made elsewhere. Rate-limited and change-gated by
-  /// [ProfileWatch], so calling it from the app's hot paths is cheap and does
-  /// not churn state.
-  ///
-  /// Silent on failure by design: it rides along on other work, and a blip here
-  /// must not put a banner over an action that succeeded.
-  Future<void> _refreshProfile() async {
-    final session = _session;
-    if (session == null) return;
-    // Which ACCOUNT this poll is about. Loose on purpose: see [_accountIdentity].
-    final identity = _accountIdentity;
-    try {
-      final user = await _profileWatch.poll(session);
-      // Re-read the session: the poll awaited a round trip, and a sign-out or a
-      // token rotation in that window would make `session` the wrong thing to
-      // build on — copyWith on the stale one would resurrect a dead token.
-      //
-      // The identity check is the other half, and the one the re-read cannot do
-      // on its own: a session that changed USER or SERVER is a different account,
-      // and writing this user's profile into it would show the wrong name and
-      // avatar — then persist them under the new server's key.
-      final current = _session;
-      if (user == null || current == null || !mounted) return;
-      if (_accountIdentity != identity) return;
-      final updated = current.copyWith(user: user);
-      _sessionCtrl.adoptSession(updated);
-      _persistSession(updated);
-      // No ImageCache evict needed: the address carries the version
-      // (`ui/avatar_url.dart`), so a new picture is a new URL and the stale
-      // entry is simply never asked for again.
-    } catch (_) {
-      // Offline, or a 401 that the surrounding action already handles.
-    }
-  }
-
-  Future<void> _ensureFreshSession() async {
-    final session = _session;
-    if (session == null) return;
-    // Bind the round trip to the sign-in it was started for. The refresh takes a
-    // network round trip, and a sign-out, a server switch, or signing in as
-    // somebody else all land inside that window — after which `setState(() =>
-    // _session = next)` would install the OLD account's tokens over the new
-    // session, and `_persistSession` would file them under whatever `_cloudOrigin`
-    // happens to be by then. That is a resurrection, not a stale read: the user
-    // is back on an account they left.
-    final identity = _sessionIdentity;
-    try {
-      final next = await _refresher.ensureFresh(session);
-      if (next == null || !mounted) return;
-      if (_sessionIdentity != identity) return;
-      _sessionCtrl.adoptSession(next);
-      // Persist immediately: the refresh token just rotated, and the copy on
-      // disk is now burnt. Losing this write costs the sign-in at next launch.
-      _persistSession(next);
-    } on ApiException catch (error) {
-      // The server refused the refresh token: 30 days idle, revoked, or its
-      // family burnt by reuse detection. Nothing to recover — say so, rather
-      // than firing doomed requests and leaving the user at `unauthorized`.
-      // Only for the session that made the call: a refusal aimed at a sign-in
-      // the user has already left must not end the one they are on now.
-      if (error.isUnauthorized && _sessionIdentity == identity) {
-        _endExpiredSession();
-      }
-    } catch (_) {
-      // Offline / server down: keep the session. The token may well still be
-      // good, and local-first means there is work to do without a network.
-    }
-  }
-
-  /// The sign-in is over and cannot be renewed. Drop it and say so plainly.
-  void _endExpiredSession() {
-    if (!mounted || _session == null) return;
-    _clearPersistedSession();
-    // Only the session drops — the workspace list survives so the local
-    // world can fall back coherently (SessionController.expireSession).
-    _sessionCtrl.expireSession();
-    setState(() => _message = context.l10n.snackSessionExpired);
-    _fallBackToLocalWorld();
-  }
+  /// ── Session persistence / renewal / profile — moved verbatim into
+  /// [AuthController] (lib/auth/auth_controller.dart, god-class sixth step).
+  /// [_persistSession]/[_clearPersistedSession]/[_signedInOrigins]/
+  /// [_storedDisplayName]/[_ensureFreshSession]/[_refreshProfile] were the
+  /// State's; the call sites below now go through [_auth].
 
   /// Restore a persisted cloud/self-hosted session on startup so the user isn't
   /// forced to re-login every launch. Cheaply rejects an expired token by its
@@ -847,13 +681,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         // body field as "use the cookie".
         final recovered = await _api.refreshSession('');
         if (!mounted) return;
-        _persistSession(recovered);
+        _auth.persistSession(recovered);
         token = recovered.accessToken;
       } on ApiException catch (error) {
         // The cookie is gone or burnt (signed out elsewhere, 30 days idle,
         // reuse detected). That is a real end of session, not a transient.
         if (error.isUnauthorized) {
-          _clearPersistedSession();
+          _auth.clearPersistedSession();
           _fallBackToLocalWorld();
         }
         return;
@@ -876,7 +710,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         user: User.fromJson(jsonDecode(userJson) as Map<String, dynamic>),
       );
     } catch (_) {
-      _clearPersistedSession();
+      _auth.clearPersistedSession();
       return;
     }
 
@@ -886,21 +720,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final exp = jwtExpiry(token);
     if (exp != null && !exp.isAfter(DateTime.now().toUtc())) {
       if (refreshToken.isEmpty) {
-        _clearPersistedSession();
+        _auth.clearPersistedSession();
         _fallBackToLocalWorld();
         return;
       }
       try {
-        // Through _refresher, not _api directly: it holds the single-flight
-        // latch, and startup restore can overlap with a _run() the user just
-        // triggered. Two refreshes of one token is what the server reads as
-        // theft — we would burn the session we came here to rescue.
-        session = await _refresher.ensureFresh(session) ?? session;
+        // Through the controller's refresher, not _api directly: it holds the
+        // single-flight latch, and startup restore can overlap with a _run()
+        // the user just triggered. Two refreshes of one token is what the
+        // server reads as theft — we would burn the session we came here to
+        // rescue.
+        session = await _auth.refresher.ensureFresh(session) ?? session;
         if (!mounted) return;
-        _persistSession(session);
+        _auth.persistSession(session);
       } on ApiException catch (error) {
         if (error.isUnauthorized) {
-          _clearPersistedSession();
+          _auth.clearPersistedSession();
           _fallBackToLocalWorld();
         }
         // Anything else (server down) keeps the session for the next launch.
@@ -937,7 +772,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // The session we just restored carries the profile as it was at LAST
       // login — it came off disk, which is why a restart was not what fixed a
       // stale avatar. This is the startup counterpart to the _run() call.
-      unawaited(_refreshProfile());
+      unawaited(_auth.refreshProfile());
       await _loadSelectedWorkspaceMembers();
       await _loadSelectedWorkspaceViews();
       // The startup restore isn't a _run() action, so nothing else wires the
@@ -952,7 +787,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // "unauthorized" both missed 401s worded differently and would fire on a
       // 400 that merely mentioned the word.
       if (error is ApiException && error.isUnauthorized) {
-        _clearPersistedSession();
+        _auth.clearPersistedSession();
         _fallBackToLocalWorld();
         return;
       }
@@ -1018,8 +853,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // alongside it. Only a token that is ALREADY dead has to be replaced
       // first, because the action would just be refused.
       //
-      // Not fire-and-forget-and-swallow: _ensureFreshSession handles its own
-      // failures (401 ends the session, anything else keeps it).
+      // Not fire-and-forget-and-swallow: the auth controller's ensure-fresh
+      // handles its own failures (401 ends the session, anything else keeps it).
       final expiry = _session?.expiresAt;
       final expired =
           expiry != null &&
@@ -1027,9 +862,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             DateTime.now().toUtc().add(const Duration(seconds: 30)),
           );
       if (expired) {
-        await _ensureFreshSession();
+        await _auth.ensureFreshSession();
       } else {
-        unawaited(_ensureFreshSession());
+        unawaited(_auth.ensureFreshSession());
       }
       await action();
       _reconcileSync();
@@ -1037,14 +872,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // This is the app's most frequent "we just talked to the server anyway"
       // moment, which is what makes a profile changed elsewhere show up without
       // anything polling on a timer.
-      unawaited(_refreshProfile());
+      unawaited(_auth.refreshProfile());
     } on ApiException catch (error) {
       // A 401 that survived the renewal above: revoked, or the server's JWT
       // secret rotated. The session is unusable — say so instead of parroting
       // the server's bare `unauthorized`, which told the user nothing and left
       // the local mirror rendering a half-dead page that merely looked broken.
       if (error.isUnauthorized && _session != null) {
-        _endExpiredSession();
+        _auth.endExpiredSession();
       } else {
         setState(() => _message = _apiMessage(error));
       }
@@ -1291,7 +1126,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _viewsEventsWorkspaceId = workspaceId;
     _viewsEvents = ViewsEventsChannel(
       uri: () async {
-        await _ensureFreshSession();
+        await _auth.ensureFreshSession();
         return viewsSocketUri(
           _api.baseUri,
           workspaceId,
@@ -1430,7 +1265,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // an idle window longer than the TTL used to leave every reconnect
       // replaying a dead token: 401, back off, repeat, silently forever.
       uri: () async {
-        await _ensureFreshSession();
+        await _auth.ensureFreshSession();
         return documentSocketUri(
           _api.baseUri,
           workspace.id,
@@ -1734,6 +1569,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void dispose() {
     _registry.removeListener(_syncRegistryState);
     _sessionCtrl.removeListener(_syncSessionState);
+    _auth.removeListener(_syncAuthState);
     _membersCtrl.removeListener(_syncMembersState);
     _import.removeListener(_syncImportState);
     themeModeController.removeListener(_schedulePushSettings);
@@ -1762,6 +1598,55 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _viewsByWorkspace = _sessionCtrl.viewsByWorkspace;
       _selectedWorkspace = _sessionCtrl.selectedWorkspace;
     });
+  }
+
+  /// The auth controller's probe answers land here — the only state it
+  /// publishes as a notifier (the session itself arrives through
+  /// [_syncSessionState], via the hub it adopts into).
+  void _syncAuthState() {
+    if (!mounted) return;
+    setState(() {
+      _registrationOpen = _auth.registrationOpen;
+      _regOrigin = _auth.regOrigin;
+    });
+  }
+
+  /// Wire the auth controller (god-class sixth step): every remote call and
+  /// side effect is a closure over this State's api/prefs helpers; user-visible
+  /// outcomes come back as hooks implemented here. The controller never
+  /// touches a context, and the credential keys follow the registry's live
+  /// origin — [ServerRegistry.connect] rebinds both in one step.
+  void _initAuthController() {
+    _auth = AuthController(
+      session: _sessionCtrl,
+      origin: () => _registry.cloudOrigin,
+      servers: () => _registry.servers,
+      readPref: loadPref,
+      savePref: savePref,
+      isMounted: () => mounted,
+      register: _api.register,
+      login: _api.login,
+      listWorkspaces: _api.listWorkspaces,
+      fetchMe: _api.fetchMe,
+      refreshSession: _api.refreshSession,
+      removeAvatar: _api.removeAvatar,
+      httpGet: (uri) => http.get(uri),
+      avatarUrlFor: (version, {userId}) => _avatarUrlFor(version, userId: userId),
+      evictImage: (url) => NetworkImage(url).evict(),
+    );
+    _auth.onSessionExpired = _onSessionExpired;
+    _auth
+      ..registrationOpen = _registrationOpen
+      ..regOrigin = _regOrigin;
+    _auth.addListener(_syncAuthState);
+  }
+
+  /// The sign-in expired and was dropped by the auth controller: the half of
+  /// `_endExpiredSession` that needs a context — the banner, and the fallback
+  /// to the local world.
+  void _onSessionExpired() {
+    setState(() => _message = context.l10n.snackSessionExpired);
+    _fallBackToLocalWorld();
   }
 
   /// Wire the cloud views controller (god-class fifth step): every remote
@@ -1923,65 +1808,50 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
+  /// The sign-in form's flow — a thin adapter over [AuthController.authenticate]
+  /// (god-class sixth step): the controller owns the sequence and the refusal
+  /// KINDS; this side translates them into localized messages, shows the
+  /// register snackbar, and runs the post-sign-in loads the same _run() wrapper
+  /// always did.
   Future<void> _authenticate(AuthMode mode, AuthFormValue form) {
     return _run(() async {
-      // Registering no longer signs you in: the address has to be confirmed
-      // first, so there is no session to take. Say so and stop here — navigating
-      // into the app would be a lie about what just happened.
-      if (mode == AuthMode.register) {
-        // The FIRST account on an empty instance is verified server-side on
-        // the spot, so telling it to go check its email is two lies in one
-        // sentence: nothing was sent, and nothing needs clicking. Ask the
-        // server which case this is instead of assuming the common one.
-        final verified = await _api.register(form);
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              verified
-                  ? context.l10n.authFirstAccountReady
-                  : context.l10n.authVerifySent,
+      final outcome = await _auth.authenticate(mode, form);
+      switch (outcome) {
+        case AuthRegistered(:final verified):
+          if (!mounted) return;
+          // Registering no longer signs you in: the address has to be confirmed
+          // first, so there is no session to take. The FIRST account on an empty
+          // instance is verified server-side on the spot, so telling it to go
+          // check its email is two lies in one sentence: nothing was sent, and
+          // nothing needs clicking.
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                verified
+                    ? context.l10n.authFirstAccountReady
+                    : context.l10n.authVerifySent,
+              ),
             ),
-          ),
-        );
-        return;
+          );
+        case AuthSignedIn(:final session):
+          unawaited(_syncSettingsFromCloud(session));
+          unawaited(_refreshAiConfigured());
+          await _loadSelectedWorkspaceMembers();
+          await _loadSelectedWorkspaceViews();
+        case AuthRefused(:final refusal):
+          switch (refusal) {
+            case AuthRefusal.badCredentials:
+              throw ApiException(context.l10n.loginBadCredentials);
+            case AuthRefusal.emailTaken:
+              throw ApiException(context.l10n.loginEmailTaken);
+            case AuthRefusal.emailNotVerified:
+              if (mounted) _offerResendVerification(form.email);
+              throw ApiException(context.l10n.loginEmailNotVerified);
+          }
       }
-      final AuthSession session;
-      try {
-        session = await _api.login(form);
-      } on ApiException catch (error) {
-        // Translate the two failures a person can actually act on. Done HERE and
-        // not in `_apiMessage`, because these codes mean different things
-        // elsewhere: a 401 with a live session is an expired token (handled in
-        // _run), and `conflict` covers stale writes too. Left alone, the form
-        // showed the server's bare English word — 「unauthorized」 in a Chinese UI,
-        // which is barely better than the nothing it used to show.
-        if (error.isUnauthorized) {
-          throw ApiException(context.l10n.loginBadCredentials);
-        }
-        if (error.statusCode == 409) {
-          throw ApiException(context.l10n.loginEmailTaken);
-        }
-        // The server distinguishes "confirm your email" from "wrong password" with
-        // a code precisely so this branch can exist: one of them has a next step
-        // the person can take, and it is not the same next step.
-        if (error.code == 'email_not_verified') {
-          if (mounted) _offerResendVerification(form.email);
-          throw ApiException(context.l10n.loginEmailNotVerified);
-        }
-        rethrow;
-      }
-      final workspaces = await _api.listWorkspaces(session.accessToken);
-
-      _sessionCtrl.signIn(session, workspaces);
-      _persistSession(session);
-      unawaited(_syncSettingsFromCloud(session));
-
-      unawaited(_refreshAiConfigured());
-      await _loadSelectedWorkspaceMembers();
-      await _loadSelectedWorkspaceViews();
     });
   }
+
 
   Future<void> _refreshWorkspaces() {
     return _run(() async {
@@ -2823,7 +2693,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // ability to renew, and you'd be signed out that night.
       final updated = session.copyWith(user: user);
       _sessionCtrl.adoptSession(updated);
-      _persistSession(updated); // keep the saved display name fresh for restart
+      _auth.persistSession(updated); // keep the saved display name fresh for restart
     }
   }
 
@@ -2867,14 +2737,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
-  /// Does this server answer? Straight to `/api/health`, unauthenticated — the
-  /// point is to tell "wrong address / not running" apart from "wrong password",
-  /// which is the failure a first-time user actually hits.
   /// Whether the server at [_regOrigin] accepts new registrations, as of the
-  /// last probe. Null — including "we asked a server too old to answer" — means
-  /// DON'T KNOW, and the registration entry then stays exactly as it was.
-  /// Guessing "closed" would hide the only way into a fresh instance; guessing
-  /// "open" would show a door that 403s.
+  /// last probe — synced view-model copies of [AuthController.registrationOpen]
+  /// / [AuthController.regOrigin] (god-class sixth step). Null — including "we
+  /// asked a server too old to answer" — means DON'T KNOW, and the registration
+  /// entry then stays exactly as it was. Guessing "closed" would hide the only
+  /// way into a fresh instance; guessing "open" would show a door that 403s.
   bool? _registrationOpen;
 
   /// Which origin [_registrationOpen] describes. Kept beside it so switching
@@ -2885,44 +2753,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   bool? get _activeRegistrationOpen =>
       _regOrigin == _activeOrigin ? _registrationOpen : null;
 
-  Future<bool> _probeServer(String origin) async {
-    final base = Uri.tryParse(origin);
-    if (base == null || base.host.isEmpty) return false;
-    try {
-      // `/api/ready`, not `/api/health`. The sign-in screen's real question is
-      // "can you serve me", not "is your process alive" — an instance whose
-      // database is down cannot sign anyone in. And only the readiness probe
-      // touches the database, which is exactly what answering
-      // `registration_open` requires (a brand-new instance with no users still
-      // accepts its first account, however the flag is set).
-      final r = await http
-          .get(base.resolve('/api/ready'))
-          .timeout(const Duration(seconds: 4));
-      if (r.statusCode != 200) return false;
-      bool? open;
-      try {
-        final body = jsonDecode(r.body);
-        if (body is Map && body['registration_open'] is bool) {
-          open = body['registration_open'] as bool;
-        }
-      } catch (_) {
-        // A 200 with a body we cannot read still proves reachability, and a
-        // server older than this field simply doesn't send it. Either way the
-        // answer is "don't know", never "closed".
-      }
-      // setState only on the way OUT: this runs inside the pane's probe, and
-      // touching parent state on the way in would land during its build.
-      if (mounted) {
-        setState(() {
-          _regOrigin = origin;
-          _registrationOpen = open;
-        });
-      }
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
+  Future<bool> _probeServer(String origin) => _auth.probeServer(origin);
 
   /// The sign-in screen AS THE SCREEN — not the route.
   ///
@@ -3066,36 +2897,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       picked.bytes,
       picked.mime,
     );
-    return _applyAvatarVersion(session, version);
+    // Same copyWith discipline inside the controller: rebuilding the session
+    // would drop the refresh token, and changing your picture would cost you
+    // the ability to renew.
+    return _auth.applyAvatarVersion(session, version);
   }
 
   Future<String?> _removeAvatar() async {
     final session = _requireSession();
-    await _api.removeAvatar(session.accessToken);
-    return _applyAvatarVersion(session, null);
-  }
-
-  /// Same copyWith discipline as _updateProfile: rebuilding the session here
-  /// would drop the refresh token, and changing your picture would cost you the
-  /// ability to renew.
-  String? _applyAvatarVersion(AuthSession session, String? version) {
-    final updated = session.copyWith(
-      user: session.user.withAvatarVersion(version),
-    );
-    if (mounted) {
-      _sessionCtrl.adoptSession(updated);
-      _persistSession(updated);
-    }
-    // Derived from the version we just set, not read back out of state — the
-    // answer must be right even when this widget is already gone.
-    final url = _avatarUrlFor(version, userId: updated.user.id);
-    // The version is a content hash, so setting → removing → setting the SAME
-    // picture lands back on the exact URL that 404'd in between, and Flutter's
-    // ImageCache holds that failure for the rest of the run: the app would say
-    // you have a picture and draw your initial. Evicting here is the one moment
-    // anything knows the bytes behind this URL just changed.
-    if (url != null) NetworkImage(url).evict();
-    return url;
+    return _auth.removeAvatar(session);
   }
 
   String? _avatarUrlFor(String? version, {String? userId}) => avatarUrl(
@@ -4433,7 +4243,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           return;
         }
         final s = await _api.login(creds.$2);
-        _persistSession(s);
+        _auth.persistSession(s);
         _sessionCtrl.adoptSession(s);
       });
       session = _session;
@@ -4773,7 +4583,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   strings: _signInPaneStrings(context),
                   origins: _servers,
                   active: _activeOrigin,
-                  signedInOrigins: _signedInOrigins(),
+                  signedInOrigins: _auth.signedInOrigins(),
                   initialCloud: startOnCloud ? true : null,
                   probeHealth: _probeServer,
                   onSelect: (origin) async {
@@ -4824,7 +4634,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                   authForm:
                       worldCardMode(
                             migrating: migrate,
-                            storedName: _storedDisplayName(_cloudOrigin),
+                            storedName: _auth.storedDisplayName(_cloudOrigin),
                             cloudOrigin: _cloudOrigin,
                             activeOrigin: _activeOrigin,
                           ) !=
@@ -4833,7 +4643,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                           strings: SignedInCardStrings(
                             title: l10n.worldAlreadySignedInTitle,
                             body:
-                                '${_storedDisplayName(_cloudOrigin)} · '
+                                '${_auth.storedDisplayName(_cloudOrigin)} · '
                                 '${serverLabel(_cloudOrigin)}',
                             action: _activeOrigin == _cloudOrigin
                                 ? l10n.worldBackToApp
@@ -5576,7 +5386,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (refreshToken.isNotEmpty) {
       unawaited(_api.logout(refreshToken).catchError((_) {}));
     }
-    _clearPersistedSession();
+    _auth.clearPersistedSession();
     _disconnectCloudSession();
     // Land on the sign-in screen, not silently in 本地模式.
     //
@@ -6009,10 +5819,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ).showSnackBar(SnackBar(content: Text(context.l10n.authVerifySent)));
         return;
       }
-      final session = await _api.login(creds.$2);
-      final workspaces = await _api.listWorkspaces(session.accessToken);
-      _sessionCtrl.signIn(session, workspaces);
-      _persistSession(session);
+      final session = await _auth.signIn(creds.$2);
       unawaited(_syncSettingsFromCloud(session));
       unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();
