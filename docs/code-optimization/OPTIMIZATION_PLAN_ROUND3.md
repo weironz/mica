@@ -138,6 +138,15 @@
 
 至此 god-class 攻坚三步完成（import 域 → 侧栏树 → 会话枢纽），累计 53 个特征测试。剩余的逐域拆分（auth/sync/views 域的方法体搬迁）从此是低耦合搬运——它们的状态访问全部经控制器。
 
+### 收尾（第四步）：view 侧 rename/拖放 + 剩余域评估
+
+- **InlineRenameController**（47 行）+ **TreeDropPlanner**（83 行）：11 个特征测试钉死——rename 的「空=改主意、未变=仅访问」提交语义、cancel 幂等；拖放的环检测（含父链成环不挂死、一票否决的批量拒绝）、into/before-after 的有效父级规则、「只有文件夹和根可持有子项」、侧向层级→祖先锚点解析、断链停在最近可解祖先。`renamedTo`/`canNestUnder`/`reparentLevelFor` 三个纯函数此前已是独立函数。接线后 view 文件 4,953 → 4,920。
+- **剩余域的量化评估**（以此为收尾依据）：对 main_shell 与 editor 做全方法尺寸扫描——超过 60 行的方法仅 4 个：`showToolbar`（396 行，widget 树）、`_handleRichPaste`（166 行，粘贴决策梯，其纯助手 unwrapNestedFences/retagMislabeledFences/parseInlineMath 早已抽出有测试，梯子本体按设计读编辑器实时状态）、`_showImportImageFailures`（104 行，对话框）、`_setupCloudYrs`（95 行，tab 耦合的 CRDT 会话编排）。**两个类里不再存在 100+ 行的非 UI 逻辑块**；views/auth/sync 域的剩余方法是 3-6 行的 api 包装与 build 辅助，状态访问已全部经控制器——继续搬移是仪式而非解耦。god-class 攻坚到此收口：六个控制器（Import/SidebarTree/Session/InlineRename/TreeDropPlanner + 既有 TreeSelection）、约 90 个特征测试、枢纽状态全部集中管理。
+
+### 最终验证
+
+analyze 零 error/warning；**1,695 测试通过 / 0 失败**（本 session 净增 64 个特征测试：import 20 + tree 15 + session 18 + rename/drop 11）；三层门禁通过；棘轮预算全程单调收紧（main_shell 7,090→6,969、main_workspace_view 4,978→4,920、editor 7,094→6,133）。
+
 ## 遗留与边界
 
 - `pg_tests.rs` 的 DB 集成测试在本地无数据库时走 skip 路径（与拆分前行为一致），真实执行在 CI 的 Postgres 上——本次拆分依赖编译 + skip 路径 + CI 兜底验证。

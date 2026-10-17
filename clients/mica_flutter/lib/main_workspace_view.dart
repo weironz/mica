@@ -675,6 +675,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // Set right after creating a page/folder (so the user types its name
   // immediately, no dialog) or from the row's "重命名" action; the matching row
   // renders a focused TextField instead of the name Text.
+  /// Inline-rename (create-then-name) state — see
+  /// ui/inline_rename_controller.dart. [_renamingViewId] is the synced copy.
+  late final InlineRenameController _inlineRename;
   String? _renamingViewId;
   // The sidebar node the user last "located" — a page OR a folder (folders never
   // reach `selectedView`, so this is the only handle on a focused folder). Drives
@@ -769,6 +772,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   @override
   void initState() {
     super.initState();
+    _inlineRename = InlineRenameController()..addListener(_syncRenameState);
     _tree = SidebarTreeController();
     // Backfill from the initial selection so the very first frame shows the page
     // name (and workspace rename field) instead of an empty "Untitled" hint —
@@ -1000,6 +1004,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   @override
   void dispose() {
     _tree.removeListener(_syncTreeState);
+    _inlineRename.removeListener(_syncRenameState);
     HardwareKeyboard.instance.removeHandler(_escKeyEvent);
     _rename.dispose();
     _memberEmail.dispose();
@@ -1015,6 +1020,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     if (identical(_activeEditorFlush, _boundExitFlush))
       _activeEditorFlush = null;
     super.dispose();
+  }
+
+  void _syncRenameState() {
+    if (!mounted) return;
+    setState(() => _renamingViewId = _inlineRename.renamingId);
   }
 
   /// Copy the tree controller state into this State's view-model fields,
@@ -2362,21 +2372,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// indicator has to redraw as the pointer moves sideways.
   int? _dropLevel;
 
-  /// Resolve a level back to the row the drop is really "after": level L means
-  /// "become the next sibling of my ancestor at depth L", which is precisely
-  /// what the existing `after` drop already does — only the target changes.
-  /// That is why picking a level needed no new drop machinery.
-  DocumentView _ancestorAtLevel(DocumentView row, int depth, int level) {
-    final byId = {for (final v in widget.views) v.id: v};
-    var cursor = row;
-    for (var d = depth; d > level; d--) {
-      final parent = byId[cursor.parentViewId];
-      if (parent == null) return cursor;
-      cursor = parent;
-    }
-    return cursor;
-  }
-
   Widget _dropSlot(
     DocumentView target,
     _DropMode mode,
@@ -2397,8 +2392,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // batch into one of its own folders is the same impossibility as with
       // one row, and only needs to be true of one of them to be true.
       onWillAcceptWithDetails: (details) =>
-          !details.data.any((d) => _isSelfOrDescendant(target.id, d.id)) &&
-          _parentAllowsChildren(_dropParentId(target, mode)),
+          TreeDropPlanner(widget.views).canDrop(
+            details.data,
+            target,
+            into: mode == _DropMode.into,
+          ),
       // Only `after` re-parents, and only sideways. `details.offset` IS the
       // pointer here because the Draggable uses `pointerDragAnchorStrategy`;
       // with the default strategy it would be the feedback's top-left corner
@@ -2422,10 +2420,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       onAcceptWithDetails: (details) {
         // A level is just a different target for the SAME `after` drop:
         // "sibling of my ancestor at depth L".
-        final level = mode == _DropMode.after ? _dropLevel : null;
-        final resolved = level == null || level >= depth
-            ? target
-            : _ancestorAtLevel(target, depth, level);
+        final resolved = TreeDropPlanner(widget.views).resolveAfterTarget(
+          target,
+          depth,
+          mode == _DropMode.after ? _dropLevel : null,
+        );
         setState(() => _dropLevel = null);
         _handleDrop(details.data, resolved, mode);
         // The rows have landed somewhere new; keeping them highlighted would
@@ -2487,34 +2486,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       ),
     );
   }
-
-  /// True when [candidateId] is [rootId] itself or anywhere inside its subtree —
-  /// dropping there would create a cycle, so it must be rejected.
-  bool _isSelfOrDescendant(String candidateId, String rootId) {
-    if (candidateId == rootId) {
-      return true;
-    }
-    final parents = {for (final v in widget.views) v.id: v.parentViewId};
-    String? cursor = candidateId;
-    final seen = <String>{};
-    while (cursor != null && seen.add(cursor)) {
-      final parent = parents[cursor];
-      if (parent == rootId) {
-        return true;
-      }
-      cursor = parent;
-    }
-    return false;
-  }
-
-  /// The view a drop would reparent the dragged item under (null = workspace
-  /// root): `into` nests under the target; before/after makes it the target's
-  /// sibling, i.e. under the target's own parent.
-  String? _dropParentId(DocumentView target, _DropMode mode) =>
-      mode == _DropMode.into ? target.id : target.parentViewId;
-
-  bool _parentAllowsChildren(String? parentId) =>
-      canNestUnder(widget.views, parentId);
 
   void _handleDrop(
     List<DocumentView> dragged,
@@ -4160,15 +4131,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _promptRenameView(view);
   }
 
-  void _cancelRename() {
-    if (_renamingViewId == null) return;
-    setState(() => _renamingViewId = null);
-  }
+  void _cancelRename() => _inlineRename.cancel();
 
   Future<void> _commitRename(DocumentView view, String name) async {
-    if (_renamingViewId != null) setState(() => _renamingViewId = null);
-    // Empty or unchanged → keep the current name; see [renamedTo].
-    final next = renamedTo(name, view.name);
+    // Empty or unchanged → nothing to send (the controller's [renamedTo]).
+    final next = _inlineRename.commit(view, name);
     if (next == null) return;
     await widget.onRenameView(view, next);
   }
@@ -4178,7 +4145,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   Future<void> _createThenRename(Future<String?> Function() create) async {
     final id = await create();
     if (id == null || !mounted) return;
-    setState(() => _renamingViewId = id);
+    _inlineRename.begin(id);
     // Scroll the new row into view. Without this, creating inside a folder that
     // already holds many pages left the row below the fold: the rename box had
     // focus and swallowed the typing, but nothing on screen moved, so the page
