@@ -151,34 +151,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // Switching tabs therefore needs no special case: `_reconcileSync`'s existing
   // "already on this document?" test reads the tab being switched TO, so a tab
   // that kept its socket is recognised as connected and nothing reconnects.
+  // (Writes now go through the sync controller, which holds the tab list; the
+  // setters are gone with the writers.)
   DocumentSyncClient? get _sync => _activeTab.sync;
-  set _sync(DocumentSyncClient? value) => _activeTab.sync = value;
 
   List<PresenceUser> _presence = const [];
-  Timer? _syncRefetchTimer;
 
-  // --- Cloud yrs CRDT sync (P2-M4.5c, desktop only) ---
-  // When the server speaks the yrs sync protocol (M4.4+), the desktop cloud
-  // editor edits a CRDT replica instead of POSTing block ops: edits push yrs
-  // diffs, remote updates merge + reconcile. It activates only once bootstrap
-  // succeeds (`isReady`), so against an older server the app falls back to the
-  // op/REST path transparently. `DocumentSyncClient` stays up for presence.
-  CloudSyncSession? get _cloudSession => _activeTab.cloudSession;
-  set _cloudSession(CloudSyncSession? value) => _activeTab.cloudSession = value;
-
-  /// Bumped on every tab activation; each tab records the value it saw. See
-  /// [DocTab.lastActivated].
-  int _activationTick = 0;
-
-  BigInt? _deviceClientId;
-
-  /// Guards [_sweepPendingOutboxes] so only one cross-document drain runs at a
-  /// time (it fires on every online/reconnect).
-  bool _sweepingOutboxes = false;
-
-  /// B3: whether the "cloud sync paused" banner is up, so it shows once per
-  /// stuck episode and clears on recovery.
-  bool _syncBannerShown = false;
+  /// The sync domain — the reconcile loop that keeps the document sockets
+  /// tracking the open tab, the tree-change socket, the cross-document outbox
+  /// sweep and the sync-paused banner — see sync/sync_reconcile_controller.dart
+  /// (god-class seventh step). The sockets themselves live on the tabs; the
+  /// controller reaches them through the tab list it is handed.
+  late final SyncReconcileController _syncCtrl;
 
   // §7 upstream blob differ (desktop only): images inserted while offline land in
   // the on-device CAS under a sha256 placeholder file_id and queue here. When the
@@ -188,8 +172,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   PendingUploads _pending = PendingUploads();
   bool _reconciling = false;
 
-  // Awareness: debounce broadcasting the local caret as presence (P2).
-  Timer? _cursorTimer;
+  // --- Cloud yrs CRDT sync (P2-M4.5c, desktop only) ---
+  // When the server speaks the yrs sync protocol (M4.4+), the desktop cloud
+  // editor edits a CRDT replica instead of POSTing block ops: edits push yrs
+  // diffs, remote updates merge + reconcile. It activates only once bootstrap
+  // succeeds (`isReady`), so against an older server the app falls back to the
+  // op/REST path transparently. `DocumentSyncClient` stays up for presence.
+  CloudSyncSession? get _cloudSession => _activeTab.cloudSession;
+
+  /// Bumped on every tab activation; each tab records the value it saw. See
+  /// [DocTab.lastActivated].
+  int _activationTick = 0;
 
   // --- Local offline (P2-M3) ---
   // A single implicit local workspace + synthetic identity; the page tree and
@@ -224,6 +217,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _initViewsController();
     _initMembersController();
     _initImportController();
+    _initSyncController();
     // Theme and language persist inside their own controllers' setters; the
     // sync write-through has to hear about those changes HERE, because the
     // controllers are global and know nothing of sessions. The apply pass in
@@ -1101,41 +1095,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Open, switch, or close the document WebSocket so it always tracks the
   /// currently selected document.
-  // The tree-change socket for the workspace whose SIDEBAR is showing, plus
-  // which workspace that is — so reconcile can tell "same one" from "moved".
-  ViewsEventsChannel? _viewsEvents;
-  String? _viewsEventsWorkspaceId;
+  // The tree-change socket for the workspace whose SIDEBAR is showing lives in
+  // the sync controller now (it owns the socket + the workspace id it watches).
 
-  /// Keep the tree-change socket pointed at the sidebar's workspace.
-  ///
-  /// Separate from the document socket reconcile below on purpose: that one
-  /// keys off the OPEN DOCUMENT and bails when there is none, but an empty
-  /// workspace still has a tree that MCP can grow into — the exact case this
-  /// feature is for.
-  void _reconcileViewsEvents() {
-    final session = _session;
-    final workspaceId = _activeIsLocal ? null : _selectedWorkspace?.id;
-    if (session == null || workspaceId == null) {
-      _viewsEvents?.dispose();
-      _viewsEvents = null;
-      _viewsEventsWorkspaceId = null;
-      return;
-    }
-    if (_viewsEventsWorkspaceId == workspaceId) return;
-    _viewsEvents?.dispose();
-    _viewsEventsWorkspaceId = workspaceId;
-    _viewsEvents = ViewsEventsChannel(
-      uri: () async {
-        await _auth.ensureFreshSession();
-        return viewsSocketUri(
-          _api.baseUri,
-          workspaceId,
-          _session?.accessToken ?? session.accessToken,
-        );
-      },
-      onChanged: () => unawaited(_refreshTreeFromServer(workspaceId)),
-    )..connect();
-  }
+  /// Keep the tree-change socket pointed at the sidebar's workspace — the
+  /// sync controller owns the socket; this is the State's one-line adapter.
+  void _reconcileViewsEvents() => _syncCtrl.reconcileViewsEvents();
 
   /// Re-ask for [workspaceId]'s tree because the server said it changed.
   ///
@@ -1149,160 +1114,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _viewsCtrl.refreshTree(session.accessToken, workspaceId);
   }
 
-  void _reconcileSync() {
-    _reconcileViewsEvents();
-    final session = _session;
-    // The socket belongs to the DOCUMENT, so it takes the workspace from the
-    // tab holding it — not from `_selectedWorkspace`. Those differ for a moment
-    // whenever a tab switch also switches workspaces (the shell catches up
-    // asynchronously), and for that moment this would otherwise open
-    // `/ws/workspaces/<the one we left>/documents/<this tab's doc>`, which the
-    // server rejects because its document lookup is workspace-scoped too.
-    final workspace = _workspaceForTab(_activeTab);
-    final documentId = _selectedBootstrap?.document.id;
+  /// Open, switch, or close the document sockets so they always track the
+  /// open document — the controller's reconcile, dispatched from here (the
+  /// hooks it fires land back in this State).
+  void _reconcileSync() => _syncCtrl.reconcile();
 
-    if (session == null || workspace == null || documentId == null) {
-      _closeDocumentSync();
-      return;
-    }
-
-    if (_sync?.documentId == documentId) {
-      return;
-    }
-
-    _closeDocumentSync();
-    final sync = DocumentSyncClient(
-      documentId: documentId,
-      uri: documentSocketUri(
-        _api.baseUri,
-        workspace.id,
-        documentId,
-        session.accessToken,
-      ),
-      selfName: session.user.displayName,
-      onRemoteSeq: _handleRemoteSeq,
-      onPresence: (users) {
-        // Only the tab being LOOKED AT owns the presence row. A background tab
-        // is still connected under the cap, and without this test its roster
-        // would overwrite the visible one — the reader would see the avatars of
-        // whoever is editing some other page. `_handleRemoteSeq` already
-        // self-filters on documentId; this is the same guard for presence.
-        if (mounted && _selectedBootstrap?.document.id == documentId) {
-          setState(() => _presence = users);
-        }
-      },
-    );
-    _sync = sync;
-    setState(() => _presence = const []);
-    sync.connect();
-
-    // A new connection just came up — park the least-recently-used ones that no
-    // longer fit under the cap.
-    _enforceSyncCap();
-
-    // Open a yrs CRDT session for this doc (desktop = Rust FFI replica, web = JS
-    // yjs replica — both wire-compatible). P3d: _reconcileSync itself only runs
-    // off cloud state (session + _selectedWorkspace + _selectedBootstrap — all
-    // cloud-world fields), so the old mode guard is redundant; a local-world
-    // selection never reaches here.
-    unawaited(_setupCloudYrs(documentId, workspace, session));
-  }
-
-  Future<void> _setupCloudYrs(
-    String documentId,
-    Workspace workspace,
-    AuthSession session,
-  ) async {
-    // Desktop pins the CRDT actor to the device's stable client id; web has no
-    // on-device store, so it uses a per-session yjs actor (placeholder id here).
-    var clientId = _deviceClientId;
-    if (clientId == null) {
-      clientId = await _local.deviceClientId() ?? (kIsWeb ? BigInt.zero : null);
-      _deviceClientId = clientId;
-    }
-    if (clientId == null || !mounted) return;
-    // The selection may have moved while we awaited the device id.
-    if (_selectedBootstrap?.document.id != documentId ||
-        _sync?.documentId != documentId) {
-      return;
-    }
-    // C1: unacked local diffs persist per-document, so a crash / hard close
-    // recovers edits the server never acked. Restored here; re-pushed on connect.
-    final unackedKey = 'cloudUnacked:$documentId';
-    // Local-first (Phase 1): mirror this cloud doc to the on-device store so it
-    // reads offline across a restart. deviceClientId() above opened the store.
-    // P4-2: on web the mirror is IndexedDB-backed instead (null only when
-    // IndexedDB is unavailable → online-only, as before).
-    var persistence = _local.cloudDocStore(documentId);
-    persistence ??= await openWebDocStore(_cloudOrigin, documentId);
-    // The selection may have moved while the browser store opened. If it did,
-    // dispose the store we just opened — on web it holds a single-writer Web
-    // Lock that would otherwise leak (orphaned, never disposed → that doc can
-    // never take the writable mirror again this page load).
-    if (!mounted ||
-        _selectedBootstrap?.document.id != documentId ||
-        _sync?.documentId != documentId) {
-      persistence?.dispose();
-      return;
-    }
-    if (persistence != null) {
-      // P2b: the append-log is now the durable outbox. One-time migration — fold
-      // any legacy prefs `cloudUnacked` queue into it (append THEN delete; the
-      // reverse order would drop in-flight edits), so unpushed edits from before
-      // P2b survive and get pushed on connect.
-      final legacy = _loadUnacked(unackedKey);
-      if (legacy.isNotEmpty) {
-        for (final diff in legacy) {
-          persistence.appendOutbox(diff);
-        }
-        savePref(unackedKey, ''); // the log owns the outbox now
-      }
-    }
-    final yrs = CloudSyncSession(
-      // Rebuilt per connection attempt, and renewed first. This session lives as
-      // long as the document stays open — hours — while the access token lapses
-      // in one. Renewal is otherwise only driven by `_run()` (a user action), so
-      // an idle window longer than the TTL used to leave every reconnect
-      // replaying a dead token: 401, back off, repeat, silently forever.
-      uri: () async {
-        await _auth.ensureFreshSession();
-        return documentSocketUri(
-          _api.baseUri,
-          workspace.id,
-          documentId,
-          _session?.accessToken ?? session.accessToken,
-        );
-      },
-      clientId: clientId,
-      onReady: (_, _) {
-        _clearSyncBanner(); // B3: a fresh bootstrap means sync recovered.
-        _applyCloudBlocks(documentId);
-        // Now online for this doc: drain any images inserted offline (§7.1).
-        unawaited(_reconcilePendingUploads(documentId));
-        // Comments are anchored into this document's CRDT, so they can only be
-        // resolved once it is bootstrapped.
-        unawaited(_loadComments(documentId));
-      },
-      onRemoteBlocks: (_) => _applyCloudBlocks(documentId),
-      onFault: (reason, count) => _onCloudSyncFault(documentId, reason, count),
-      // Reaching the server means we're back online — leave the P1c offline-nav
-      // fallback (refetch workspaces/roles) AND drain every other cloud doc's
-      // un-pushed offline outbox, not just this active one.
-      onServerConnected: _onCloudOnline,
-      onSyncPhase: (phase) {
-        if (mounted) setState(() => _syncPhase = phase);
-      },
-      // Desktop's durable outbox is the append-log (persistence); web / no store
-      // keeps the in-memory queue + prefs crash-recovery (C1).
-      restoreUnacked: persistence == null ? _loadUnacked(unackedKey) : null,
-      onPersistUnacked: persistence == null
-          ? (unacked) => _saveUnacked(unackedKey, unacked)
-          : null,
-      persistence: persistence,
-    );
-    _cloudSession = yrs;
-    yrs.connect();
-  }
 
   /// Rebuild the selected bootstrap from the yrs replica's blocks so the editor
   /// reconciles to the CRDT state (preserving unsent local edits).
@@ -1342,10 +1158,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// The editor's caret moved — broadcast it (debounced) as awareness so other
   /// collaborators see this user's cursor.
   void _onEditorSelection(String? blockId, int? offset) {
-    _cursorTimer?.cancel();
-    _cursorTimer = Timer(const Duration(milliseconds: 120), () {
-      _sync?.sendCursor(blockId, offset);
-    });
+    _syncCtrl.onEditorSelection(blockId, offset);
   }
 
   /// Installed as [appExitFlush]: a fast, synchronous local-durability flush run
@@ -1374,170 +1187,28 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     } catch (_) {}
   }
 
-  /// Drop [tab]'s sockets while keeping everything the reader can see.
-  ///
-  /// The tab keeps its `view` and `bootstrap`, so it still renders the page it
-  /// was showing — it just stops receiving remote edits until it is activated
-  /// again, which reconnects it through [_reconcileSync].
-  ///
-  /// `drainAndDispose` rather than `dispose`: the outgoing replica may hold
-  /// edits the server has not acked, and dropping the session without draining
-  /// them loses content. This is the same call [_closeDocumentSync] makes, for
-  /// the same reason.
-  void _parkTabSync(DocTab tab) {
-    tab.sync?.dispose();
-    tab.sync = null;
-    final cloud = tab.cloudSession;
-    tab.cloudSession = null;
-    if (cloud != null) unawaited(cloud.drainAndDispose());
-  }
+  /// Drop [tab]'s sockets while keeping everything the reader can see — the
+  /// controller's park, dispatched from here ([DocTab] is its tab view).
+  void _parkTabSync(DocTab tab) => _syncCtrl.parkTab(tab);
 
-  /// Park live tabs past [kMaxLiveSyncTabs]; see [tabsToPark] for the choice.
-  void _enforceSyncCap() {
-    for (final tab in tabsToPark(_tabs, _activeTab)) {
-      _parkTabSync(tab);
-    }
-  }
+  /// The editor's op pipeline failed to commit a batch (red line #1: never lose
+  /// an edit without a trace) — routed through the controller so a failing
+  /// cloud session reuses the "sync paused" banner+retry.
+  void _onEditorFault(Object error, int count) =>
+      _syncCtrl.onEditorFault(error, count);
 
-  /// Tear down EVERY tab's sockets, not just the active one.
-  ///
-  /// For sign-out, server switch and app dispose. [_closeDocumentSync] is
-  /// active-tab-scoped by design (it is the doc-switch path), so those callers
-  /// would otherwise leave background tabs holding open sockets — still
-  /// authenticated with the credentials that were just discarded.
-  void _closeAllDocumentSync() {
-    for (final tab in _tabs) {
-      if (!identical(tab, _activeTab)) _parkTabSync(tab);
-    }
-    _closeDocumentSync();
-  }
+  /// Tear down EVERY tab's sockets, not just the active one (sign-out, server
+  /// switch, app dispose) — the controller's loop.
+  void _closeAllDocumentSync() => _syncCtrl.closeAllDocumentSync();
 
-  void _closeDocumentSync() {
-    _syncRefetchTimer?.cancel();
-    _syncRefetchTimer = null;
-    _cursorTimer?.cancel();
-    _sync?.dispose();
-    _sync = null;
-    final cloud = _cloudSession;
-    _cloudSession = null;
-    // C2: let the outgoing session flush + drain its outbox before closing, so a
-    // doc switch / workspace change / sign-out doesn't hard-drop unacked edits.
-    // Fire-and-forget — the page-switch path (_selectView) still awaits an
-    // explicit drainOutbox first; the app-close hard case needs C1 (outbox
-    // persistence) for a full guarantee.
-    if (cloud != null) unawaited(cloud.drainAndDispose());
-    if (_presence.isNotEmpty) {
-      setState(() => _presence = const []);
-    }
-  }
-
-  /// A cloud replica hit an integrity fault it wouldn't silently absorb (red line
-  /// #1). The session already self-heals with a capped re-bootstrap; here we log
-  /// it. Surfacing it to the user (a "sync paused — reload" banner) + resetting
-  /// on recovery is B3, the next M-R item.
-  void _onCloudSyncFault(String documentId, String reason, int count) {
-    debugPrint(
-      '[cloud-sync] integrity fault ($reason) on $documentId — #$count',
-    );
-    // The session auto-heals (capped re-bootstrap) for the first few consecutive
-    // faults; past that it's genuinely stuck (B3). Surface it once so the user
-    // knows edits may not be reaching the cloud — with a one-tap retry — instead
-    // of failing silently (red line #1).
-    if (count <= 3 || _syncBannerShown || !mounted) return;
-    _syncBannerShown = true;
-    final l10n = context.l10n;
-    ScaffoldMessenger.maybeOf(context)?.showMaterialBanner(
-      MaterialBanner(
-        content: Text(l10n.snackCloudSyncPaused),
-        leading: const Icon(Icons.cloud_off_outlined),
-        actions: [
-          TextButton(onPressed: _retryCloudSync, child: Text(l10n.commonRetry)),
-          TextButton(
-            onPressed: _clearSyncBanner,
-            child: Text(l10n.snackDismiss),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// The editor's op pipeline (controller `_send`) failed to commit a batch —
-  /// most importantly a StoreCloudDocStore.appendOutbox StateError, which used to
-  /// be swallowed by a bare `catchError`, silently dropping the edit from the
-  /// durable outbox (red line #1: never lose an edit without a trace). Count and
-  /// log it; when a cloud session is what's failing, reuse the "sync paused"
-  /// banner+retry once past its threshold. In local-only mode there's nothing to
-  /// re-bootstrap, so we just log/count (still better than the silent swallow).
-  void _onEditorFault(Object error, int count) {
-    debugPrint('[editor-op] commit failed — #$count: $error');
-    if (_cloudSession != null) {
-      _onCloudSyncFault(
-        _selectedBootstrap?.document.id ?? 'editor',
-        'editor_op_failed',
-        count,
-      );
-    }
-  }
-
-  /// Clear the sync-paused banner (B3) — recovery succeeded, doc switched, or the
-  /// user dismissed it.
-  void _clearSyncBanner() {
-    if (!_syncBannerShown) return;
-    _syncBannerShown = false;
-    if (mounted)
-      ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
-  }
+  /// Clear the sync-paused banner (B3) — recovery succeeded, doc switched, or
+  /// the user dismissed it.
+  void _clearSyncBanner() => _syncCtrl.clearSyncBanner();
 
   /// Retry a stuck cloud sync (B3): tear the session down and reconcile, which
   /// cold-bootstraps a fresh replica (unacked edits persist and replay).
-  void _retryCloudSync() {
-    _clearSyncBanner();
-    _closeDocumentSync();
-    _reconcileSync();
-  }
+  void _retryCloudSync() => _syncCtrl.retryCloudSync();
 
-  /// Load a document's persisted unacked-diff queue (C1 crash recovery). Stored
-  /// as a JSON array of base64 diffs under `cloudUnacked:<docId>`.
-  List<Uint8List> _loadUnacked(String key) {
-    final raw = loadPref(key);
-    if (raw == null || raw.isEmpty) return const [];
-    try {
-      final list = jsonDecode(raw) as List;
-      return [for (final s in list) base64.decode(s as String)];
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  void _saveUnacked(String key, List<Uint8List> unacked) {
-    savePref(
-      key,
-      unacked.isEmpty
-          ? ''
-          : jsonEncode([for (final b in unacked) base64.encode(b)]),
-    );
-  }
-
-  /// A remote (or our own, echoed) accepted update advanced the server
-  /// sequence. If it is ahead of what we hold, pull the latest snapshot. Our
-  /// own edits already updated `currentSeq` via their REST response, so their
-  /// echo is ignored here.
-  void _handleRemoteSeq(String documentId, int serverSeq) {
-    // When the yrs session owns this doc, op-model seq notifications are stale
-    // noise — remote changes arrive as CRDT updates instead.
-    if (_cloudSession?.isReady ?? false) return;
-    final bootstrap = _selectedBootstrap;
-    if (bootstrap == null ||
-        bootstrap.document.id != documentId ||
-        serverSeq <= bootstrap.document.currentSeq) {
-      return;
-    }
-
-    _syncRefetchTimer?.cancel();
-    _syncRefetchTimer = Timer(const Duration(milliseconds: 120), () {
-      _refreshSelectedBootstrap(documentId);
-    });
-  }
 
   Future<void> _refreshSelectedBootstrap(String documentId) async {
     final session = _session;
@@ -1576,7 +1247,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     localeController.removeListener(_schedulePushSettings);
     _settingsPushTimer?.cancel();
     _closeAllDocumentSync();
-    _viewsEvents?.dispose();
+    _syncCtrl.dispose();
     super.dispose();
   }
 
@@ -1806,6 +1477,75 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _importProgress = _import.progress;
       _importJobId = _import.jobId;
     });
+  }
+
+  /// Wire the sync controller (god-class seventh step): the reconcile loop,
+  /// the socket teardown family, the outbox sweep, the fault banner and the
+  /// remote-seq debounce all live there; this State contributes the shell
+  /// facts (tabs, sign-in, base URI, the on-device stores) as closures, and
+  /// implements the user-facing hooks (banner, presence row, editor body,
+  /// bootstrap refetch). The controller never touches a context.
+  void _initSyncController() {
+    _syncCtrl = SyncReconcileController(
+      session: _sessionCtrl,
+      tabs: () => _tabs,
+      activeTab: () => _activeTab,
+      workspaceForActiveTab: () => _workspaceForTab(_activeTab),
+      activeDocumentId: () => _selectedBootstrap?.document.id,
+      activeBootstrap: () => _selectedBootstrap,
+      baseUri: () => _api.baseUri,
+      activeIsLocal: () => _activeIsLocal,
+      isMounted: () => mounted,
+      isWeb: () => kIsWeb,
+      deviceClientId: () => _local.deviceClientId(),
+      cloudDocStore: (docId) => _local.cloudDocStore(docId),
+      openWebDocStore: (docId) => openWebDocStore(_cloudOrigin, docId),
+      ensureFreshSession: () => _auth.ensureFreshSession(),
+      readPref: loadPref,
+      savePref: savePref,
+      refreshTree: (workspaceId) => _refreshTreeFromServer(workspaceId),
+      applyCloudBlocks: _applyCloudBlocks,
+      loadComments: _loadComments,
+      onCloudOnline: _onCloudOnline,
+      onReadyReconcileUploads: (documentId) =>
+          _reconcilePendingUploads(documentId),
+      onSyncPhase: (phase) {
+        if (mounted) setState(() => _syncPhase = phase);
+      },
+      onFaultBanner: () {
+        if (!mounted) return;
+        final l10n = context.l10n;
+        ScaffoldMessenger.maybeOf(context)?.showMaterialBanner(
+          MaterialBanner(
+            content: Text(l10n.snackCloudSyncPaused),
+            leading: const Icon(Icons.cloud_off_outlined),
+            actions: [
+              TextButton(onPressed: _retryCloudSync, child: Text(l10n.commonRetry)),
+              TextButton(
+                onPressed: _clearSyncBanner,
+                child: Text(l10n.snackDismiss),
+              ),
+            ],
+          ),
+        );
+      },
+      onHideFaultBanner: () {
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.hideCurrentMaterialBanner();
+        }
+      },
+      onRefreshBootstrap: (documentId) =>
+          unawaited(_refreshSelectedBootstrap(documentId)),
+      onPresence: (documentId, users) {
+        // The controller's guard (documentId == activeDocumentId) has already
+        // filtered the background tabs' rosters; this is the row write.
+        setState(() => _presence = users);
+      },
+      presenceIsEmpty: () => _presence.isEmpty,
+      onPresenceCleared: () {
+        setState(() => _presence = const []);
+      },
+    );
   }
 
   /// The sign-in form's flow — a thin adapter over [AuthController.authenticate]
@@ -5413,9 +5153,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _closeAllDocumentSync();
     // The tree-change socket is a cloud thing too; without this it would keep
     // reconnecting with a token that logout just revoked.
-    _viewsEvents?.dispose();
-    _viewsEvents = null;
-    _viewsEventsWorkspaceId = null;
+    _syncCtrl.disposeViewsEvents();
     _sessionCtrl.signOut();
     _membersCtrl.clear();
     setState(() {
@@ -5577,92 +5315,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (active != null) unawaited(_reconcilePendingUploads(active));
   }
 
-  /// After coming online, drain the durable outbox of every cloud document that
-  /// has un-pushed edits — not only the one currently open.
-  ///
-  /// The cloud session is a singleton bound to the ACTIVE doc, and each doc's
-  /// outbox is only ever read by that doc's own session. So editing pages A/B/C
-  /// offline and reconnecting while viewing C pushed only C; A and B's edits sat
-  /// in the on-device append-log forever, and other devices kept showing stale
-  /// content with no hint (the same gap the image-blob differ closed for images,
-  /// never for text). This sweep closes it: for each other cloud doc with a
-  /// non-empty outbox, spin up a short-lived headless [CloudSyncSession], let it
-  /// flush + ack, and dispose it.
-  ///
-  /// Desktop only — the cross-doc durable outbox is the FFI append-log; web's
-  /// store is per-tab IndexedDB with a single active doc and no enumeration.
-  /// Best-effort and bounded: a doc with nothing pending is never even connected;
-  /// a fault just leaves the edits durable for the next sweep. Sequential, so a
-  /// backlog can't open a burst of sockets.
-  Future<void> _sweepPendingOutboxes() async {
-    if (kIsWeb || _sweepingOutboxes) return;
-    final session = _session;
-    final clientId = _deviceClientId;
-    if (session == null || clientId == null) return;
-    _sweepingOutboxes = true;
-    try {
-      // Snapshot the cloud (workspace, doc) pairs up front so we don't read
-      // widget state across the awaits below. The active doc is drained by its
-      // own live session — skip it here.
-      final activeDoc = _selectedBootstrap?.document.id;
-      final targets = <({String workspaceId, String docId})>[];
-      for (final entry in _viewsByWorkspace.entries) {
-        for (final v in entry.value) {
-          if (v.objectType != 'document' || v.objectId == activeDoc) continue;
-          targets.add((workspaceId: entry.key, docId: v.objectId));
-        }
-      }
-      for (final t in targets) {
-        if (!mounted) break;
-        // Re-check: a doc opened mid-sweep is now the active one, drained live.
-        if (t.docId == _selectedBootstrap?.document.id) continue;
-        final store = _local.cloudDocStore(t.docId);
-        if (store == null) continue;
-        if (store.outboxAfter(store.cursor().pushedClock).isEmpty) {
-          store.dispose();
-          continue;
-        }
-        await _drainDocOutbox(
-          t.workspaceId,
-          t.docId,
-          store,
-          session.accessToken,
-          clientId,
-        );
-      }
-    } finally {
-      _sweepingOutboxes = false;
-    }
-  }
+  /// After coming online, drain the durable outbox of every cloud document
+  /// that has un-pushed edits — not only the one currently open. The sweep
+  /// loop lives in the sync controller (it owns the guard flag and reads the
+  /// hub's trees); this State-level adapter keeps the call sites unchanged.
+  Future<void> _sweepPendingOutboxes() =>
+      _syncCtrl.sweepPendingOutboxes();
 
-  /// Push one non-active cloud doc's outbox through a short-lived headless
-  /// session, then dispose it. The session owns [store] (its `dispose` releases
-  /// it). Best-effort: any failure leaves the edits durable for a later sweep.
-  Future<void> _drainDocOutbox(
-    String workspaceId,
-    String docId,
-    CloudDocStore store,
-    String token,
-    BigInt clientId,
-  ) async {
-    final session = CloudSyncSession(
-      // Short-lived (drain one outbox, then dispose).
-      uri: () async =>
-          documentSocketUri(_api.baseUri, workspaceId, docId, token),
-      clientId: clientId,
-      onReady: (_, _) {},
-      onRemoteBlocks: (_) {},
-      persistence: store,
-    );
-    try {
-      session.connect();
-      await session.drainOutbox();
-    } catch (_) {
-      // Durable append-log keeps the edits; the next online sweep retries.
-    } finally {
-      session.dispose(); // also disposes `store` (persistence)
-    }
-  }
 
   /// Build a bootstrap for a cloud [view] from its on-device mirror (offline
   /// doc-open, P1c). On desktop the mirrored replica loads synchronously via

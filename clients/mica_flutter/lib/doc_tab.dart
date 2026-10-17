@@ -31,7 +31,28 @@ import 'cloud/cloud_sync_session.dart';
 /// integer and one comparison rather than a cache framework.
 const int kMaxLiveSyncTabs = 3;
 
-class DocTab {
+/// The slice of [DocTab] the sync controller (sync/sync_reconcile_controller.dart,
+/// god-class seventh step) touches: a tab's socket pair, the document its
+/// socket speaks for, and its activation stamp. An interface rather than the
+/// concrete class so that controller stays testable without the widget world —
+/// DocTab implements it with the fields it already had.
+abstract class TabSockets {
+  /// This tab's presence/op socket and CRDT replica — non-null exactly when
+  /// the tab is LIVE.
+  DocumentSyncClient? sync;
+  CloudSyncSession? cloudSession;
+
+  /// The document id this tab is synced to, or null when it holds no document.
+  String? get documentId;
+
+  /// Monotonic stamp of when this tab was last activated (the LRU choice).
+  int get lastActivated;
+
+  /// Whether this tab currently holds sockets.
+  bool get isLive => sync != null;
+}
+
+class DocTab implements TabSockets {
   DocTab({this.view, this.bootstrap});
 
   /// The page this tab points at.
@@ -63,6 +84,7 @@ class DocTab {
   /// The document id this tab is synced to, or null when it holds no document.
   /// The sync layer is keyed by document id, so this is the tab's identity as
   /// far as connections are concerned.
+  @override
   String? get documentId => bootstrap?.document.id;
 
   /// This tab's presence/op socket, and its CRDT replica. Non-null exactly when
@@ -72,7 +94,9 @@ class DocTab {
   /// `_sync` / `_cloudSession` are proxies onto the ACTIVE tab's pair, which is
   /// what lets the ~40 call sites that mean "the open document's session" keep
   /// reading a single field.
+  @override
   DocumentSyncClient? sync;
+  @override
   CloudSyncSession? cloudSession;
 
   /// Monotonic stamp of when this tab was last activated, for the LRU choice of
@@ -80,6 +104,7 @@ class DocTab {
   ///
   /// A counter rather than a clock: it only has to ORDER activations, and a
   /// wall clock would make the tests depend on timing and could go backwards.
+  @override
   int lastActivated = 0;
 
   /// Whether this tab currently holds sockets.
@@ -87,6 +112,7 @@ class DocTab {
   /// A parked tab is not broken — it keeps [view] and [bootstrap], so it still
   /// renders and still reads. It just stops receiving other people's edits
   /// until it is activated again.
+  @override
   bool get isLive => sync != null;
 }
 
@@ -111,13 +137,13 @@ String? workspaceToSwitchTo({
 /// definition the most recently activated, but it is excluded explicitly so a
 /// misconfigured [max] cannot disconnect the page the user is typing into.
 ///
-/// Pure and separate from the shell for the same reason as
-/// [activeIndexAfterClose] — this is the decision, and the caller is only the
-/// disposal. A wrong answer here silently stops a tab from receiving other
-/// people's edits, which is invisible until someone loses work.
-List<DocTab> tabsToPark(
-  List<DocTab> tabs,
-  DocTab active, {
+/// Typed against [TabSockets] (the sync controller's view of a tab) rather
+/// than [DocTab]: the decision only reads a tab's socket liveness and
+/// activation stamp, and the sync controller works in that slice. DocTab
+/// satisfies it unchanged.
+List<TabSockets> tabsToPark(
+  List<TabSockets> tabs,
+  TabSockets active, {
   int max = kMaxLiveSyncTabs,
 }) {
   final live = tabs.where((t) => t.isLive && !identical(t, active)).toList()

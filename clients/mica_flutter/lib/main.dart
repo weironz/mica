@@ -26,6 +26,7 @@ import 'cloud/workspace_migration.dart';
 import 'diagnostics.dart';
 import 'import/import_controller.dart';
 import 'server_registry.dart';
+import 'sync/sync_reconcile_controller.dart';
 import 'session/session_controller.dart';
 import 'ui/inline_rename_controller.dart';
 import 'ui/sidebar_tree_controller.dart';
@@ -92,7 +93,6 @@ import 'upload/zip_writer.dart';
 import 'api/client.dart';
 import 'perf/switch_trace.dart';
 import 'api/models.dart';
-import 'api/views_events.dart';
 import 'api/sync_client.dart';
 import 'auth/auth_controller.dart';
 
