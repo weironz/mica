@@ -190,6 +190,17 @@ analyze 零 error/warning；**1,695 测试通过 / 0 失败**（本 session 净�
 - **留下不搬**：`_applyCloudBlocks`（纯 `_selectedBootstrap` 的 setState + 编辑器版本算术——活动页签编辑器体的状态迁移，唯一工作是 setState，搬走只把编辑器写入藏进控制器不增可测试面）；`_refreshSelectedBootstrap`/`_refreshTreeFromServer`/`_reconcilePendingUploads`（await api 的编排，经钩子被控制器调用，写点在 State 侧仍是 `_selectedBootstrap`/视图树的合法域）；`_onCloudOnline`（恢复导航编排 + 三段调度的入口，留在 State 反而是控制器的钩子实现）；`_onEditorSelection` 之外的光标域无残留。`tabsToPark` 泛型化 `List<DocTab>` → `List<TabSockets>`（纯签名放宽，`isLive` 逻辑原样，doc_tab_strip_test 既有测试零改动通过）。
 - **验证**：analyze 零 error/warning（info 148 条，基线 149 内）；**1,814 测试全绿 / 2 跳过**（1,777 + 37）；三层门禁通过，预算收紧 6,454 → 6,113（main_shell 净 −341 行）。god-class 七步攻坚到此收口：import → 侧栏树 → 会话枢纽 → rename/拖放 → 服务器注册表 → views/members → auth → sync，共 8 个控制器、约 127 个特征测试，`_WorkspaceShellState` 7,090 → 6,113（−977 行，−14%），四个枢纽字段与全部域状态经控制器转移。
 
+
+### §8 markdown 解析器分解（阶段 0-3，2026-10-18 追加）
+
+对 `import_markdown_inner`（1,358 行循环体、认知复杂度 649，此前登记为豁免）完成状态结构体 + 处理器分解。触发条件复核推翻了「解析器近期无人触碰」的旧判断——7 月以来 8 个提交含一个进程级事故（NBSP 死循环），活跃度满足「先分解再动功能」的自设前提。
+
+- **阶段 0 金样本**：741 份输入（652 CommonMark 官方用例 + 24 GFM + 34 策展 fixture + 2 真实文档 + 30 条对抗输入——后者逐条编码历史事故）× 双入口的全量 `DocumentSnapshotPayload` 快照，块 id 按首现序归一化（钉结构不钉 UUID 骰子）。与既有 conformance gold 的区别：后者是有损投影（仅 root 直接子块），本快照保留全部嵌套。灵敏度实测：level 偏移一行立即 20 输入 mismatch。**制作过程中当场抓到两次**：GFM 语料 example 编号塌缩、块 id 随机性导致的跨运行漂移。
+- **阶段 1 BlockState**：9 个跨迭代局部变量收编为字段（`st.` 前缀 197 处机械替换），每个字段的不变量（谁拥有、何时置位/消费）从读代码的隐性常识升级为结构体文档。`debug_validate` 首战即证伪我自己的过强断言（「quote_active ⇒ pending_empty_quote 空」被 alert 流程合法违反）——设施的用途当场自证。
+- **阶段 2 处理器拆分**：循环体拆为 14 个构造族处理器（block_handlers.rs），主函数降到 **217 行**（前哨 + ScanCtx 构造 + 顺序分发；family 宏保住分支次序——次序即优先级即语义）。**提取过程的三次事故全部被金样本当场抓获、无一漏网**：内层 while 的 continue 误转 return（缩进代码块断裂）、quote_group 提取后漏挂调度（quote 全线退化）、st. 词替换误伤 `data.get("start")` 同名局部。这三次正是该类重构的典型风险，也是金样本存在的意义。
+- **阶段 3 不变量断言**：`debug_validate_blocks` 校验块指针一致性——open_item 的 block_idx 必须指向声明 kind 的真实块、last_list 必须指向列表块且 marker 一致。741 语料零误报（真实不变量，非猜测）。NBSP 类「口径不一致」bug 从此在开发构建即炸。
+
+净效果：认知复杂度 649 的单一函数 → 217 行编排 + 14 个独立处理器 + 显式状态结构；新块级构造的施工面从「十一个状态变量全交互」缩到「一个处理器」。ROUND2 登记的复杂度豁免可视为到期：649 不再存在。全程零行为变更——由 741 输入双入口字节级快照作证。
 ## 遗留与边界
 
 - `pg_tests.rs` 的 DB 集成测试在本地无数据库时走 skip 路径（与拆分前行为一致），真实执行在 CI 的 Postgres 上——本次拆分依赖编译 + skip 路径 + CI 兜底验证。

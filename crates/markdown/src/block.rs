@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::{Block, DocumentSnapshotPayload};
 use crate::block_handlers::*;
+use crate::html::*;
 use crate::inline::*;
 
 /// The block scanner's mutable state — everything `import_markdown_inner`
@@ -96,6 +97,51 @@ impl BlockState {
       "pending_empty_quote carries the quote depth (>= 1)"
     );
   }
+
+  /// The block-pointer invariants, checked against the live accumulators:
+  /// every state slot that names a block index must name a real block of
+  /// the kind it claims. A handler that pushes and forgets to update the
+  /// slot (or updates it to a stale index) trips here, in debug, on the
+  /// first corpus input that exercises it — not in a user's document.
+  pub(crate) fn debug_validate_blocks(&self, blocks: &[Block]) {
+    if let Some(open) = &self.open_item {
+      debug_assert!(
+        open.block_idx < blocks.len(),
+        "open_item points past the block list"
+      );
+      debug_assert!(
+        match open.kind.as_str() {
+          "quote" => blocks[open.block_idx].kind == "quote",
+          "paragraph" => blocks[open.block_idx].kind == "paragraph",
+          "bulleted_list" | "numbered_list" | "todo" => list_tag_for(&blocks[open.block_idx].kind)
+            .is_some(),
+          other => {
+            debug_assert!(false, "open_item carries an unknown kind {other}");
+            true
+          }
+        },
+        "open_item kind {} disagrees with block {}",
+        open.kind,
+        blocks[open.block_idx].kind
+      );
+    }
+    if let Some((idx, _level, marker)) = self.last_list {
+      debug_assert!(idx < blocks.len(), "last_list points past the block list");
+      debug_assert!(
+        list_tag_for(&blocks[idx].kind).is_some(),
+        "last_list points at a non-list block"
+      );
+      debug_assert!(
+        blocks[idx]
+          .data
+          .get("marker")
+          .and_then(Value::as_str)
+          .map(|m| m.starts_with(marker))
+          .unwrap_or(true),
+        "last_list marker disagrees with the block's recorded marker"
+      );
+    }
+  }
 }
 
 pub(crate) fn import_markdown_inner(
@@ -129,6 +175,7 @@ pub(crate) fn import_markdown_inner(
   let mut st = BlockState::new();
   while index < raw_lines.len() {
     st.debug_validate();
+    st.debug_validate_blocks(&blocks);
     if def_lines.contains(&index) {
       index += 1;
       continue;
