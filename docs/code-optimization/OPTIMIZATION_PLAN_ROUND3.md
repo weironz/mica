@@ -147,6 +147,17 @@
 
 analyze 零 error/warning；**1,695 测试通过 / 0 失败**（本 session 净增 64 个特征测试：import 20 + tree 15 + session 18 + rename/drop 11）；三层门禁通过；棘轮预算全程单调收紧（main_shell 7,090→6,969、main_workspace_view 4,978→4,920、editor 7,094→6,133）。
 
+### 第四步（追加）：auth 块——服务器管理 ServerRegistry
+
+收口后按「每块做完了吗」的逐块对账发现 views/auth 域仍有 34+ 个 9 行以上方法未搬（上一轮「3-6 行薄包装」的概括过度）。本步先搬 auth 块里最自洽的子块：服务器列表与 origin 绑定。
+
+- **特征测试先行**：`test/server_registry_test.dart` 11 个测试——添加不等于切换、不可解析/重复 URL 拒绝为枚举结果（l10n 留在 State）、移除时**先排空再遗忘**（凭证+镜像按键外科手术、绝不误伤他人）、移除最后一台回落构建默认且**绝不发明服务器**、同源重连仍恢复会话（cloud→本地→cloud 不该再要密码）、knownServers 的 seed 在前语义。
+- **`lib/server_registry.dart`**（143 行）：prefs/api/镜像/会话恢复全部函数注入；`connect` 带 `onChanging` 钩子——只在绑定真正移动时断开旧会话，同源路径保持活跃会话不动（修正接线时发现并规避的一个行为偏差）。
+- **State 侧**：`_addServer`/`_removeServer`/`_connectCloudServer`/`_loadPrefs`/`_adoptSignedInOrigin` 五处写点改走注册表；`_servers`/`_cloudOrigin` 降级为同步副本。`_setActiveConnection`/会话持久化（`_persistSession` 家族）不搬：前者是导航编排、后者与会话控制器在下一步合并更自然。
+- **验证**：analyze 零 error/warning；**1,706 测试全绿**（+11）；预算 6,969 → 6,960。
+
+对账后的剩余清单（auth 块余下：会话持久化/探活/头像令牌；views 块 34 个 9+ 行方法；sync 块 8 个 9+ 行方法）按同模式推进，无已知障碍。
+
 ## 遗留与边界
 
 - `pg_tests.rs` 的 DB 集成测试在本地无数据库时走 skip 路径（与拆分前行为一致），真实执行在 CI 的 Postgres 上——本次拆分依赖编译 + skip 路径 + CI 兜底验证。

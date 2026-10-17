@@ -21,6 +21,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// session. The world picker adds it back on its own side (`kLocalOrigin`).
   List<String> _servers = const [];
 
+  /// The server list + bound cloud origin — see server_registry.dart.
+  /// [_servers] and [_cloudOrigin] below are synced view-model copies.
+  late final ServerRegistry _registry;
+
   AuthSession? _session;
 
   /// A fingerprint of the CURRENT sign-in: the server it belongs to, the user it
@@ -222,7 +226,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   @override
   void initState() {
     super.initState();
+    _registry = ServerRegistry(
+      readPref: loadPref,
+      savePref: savePref,
+      forgetOrigin: (origin) async => _local.forgetOrigin(origin),
+      rebaseApi: (base) => _api.baseUri = base,
+      restoreSession: () => _restoreSession(),
+      defaultCloudUrl: kDefaultCloudUrl,
+    );
     _loadPrefs();
+    _registry.addListener(_syncRegistryState);
+    _servers = _registry.servers;
+    _cloudOrigin = _registry.cloudOrigin;
     _sessionCtrl = SessionController()..addListener(_syncSessionState);
     _initImportController();
     // Theme and language persist inside their own controllers' setters; the
@@ -279,10 +294,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// server #1, so nobody's sign-in moves. [seed] is always present, even if a
   /// stale `servers` list somehow lost it — the app must never end up pointing
   /// at a server that isn't in its own list.
-  List<String> _loadServers(String seed) =>
-      knownServers(rawPref: loadPref('servers'), seed: seed);
-
-  void _saveServers() => savePref('servers', jsonEncode(_servers));
+  // Server-list load/save lives in ServerRegistry now.
 
   /// Ask for a URL, then add it. One implementation for both entry points: the
   /// account menu and the sign-in screen. It used to live only in the menu's
@@ -387,17 +399,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Returns an error message, or null on success — a URL we can't parse must
   /// not silently become a dead entry.
   Future<String?> _addServer(String url) async {
-    final parsed = Uri.tryParse(url.trim());
-    if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) {
-      return context.l10n.serverInvalidUrl;
-    }
-    final normalized = parsed.toString();
-    if (_servers.contains(normalized)) {
-      return context.l10n.serverAlreadyAdded;
-    }
-    setState(() => _servers = [..._servers, normalized]);
-    _saveServers();
-    return null;
+    return switch (_registry.addServer(url)) {
+      ServerAddResult.added => null,
+      ServerAddResult.invalidUrl => context.l10n.serverInvalidUrl,
+      ServerAddResult.alreadyAdded => context.l10n.serverAlreadyAdded,
+    };
   }
 
   /// Forget a server completely: its credentials AND its on-device mirror.
@@ -408,56 +414,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// be pushed (offline, server gone) only ever existed here, so the caller
   /// must have said so out loud before we get here.
   Future<void> _removeServer(String origin) async {
-    if (!_servers.contains(origin)) return;
-    if (_activeOrigin == origin) {
-      await _cloudSession?.drainOutbox(timeout: const Duration(seconds: 4));
-      await _setActiveConnection('local');
-      if (!mounted) return;
-    }
-    setState(() => _servers = _servers.where((s) => s != origin).toList());
-    _saveServers();
-    // Credentials, then the mirror. Both are keyed by origin, so this is exact
-    // — no other server's data can be caught by it.
-    savePref('authToken:$origin', '');
-    savePref('authUser:$origin', '');
-    savePref('refreshToken:$origin', '');
-    _local.forgetOrigin(origin);
-    // The app must always point at a server that exists. Removing the LAST one
-    // leaves none configured — fall back to the build default (empty in public
-    // builds), and never invent a server to replace the one just deleted.
-    if (_cloudOrigin == origin) {
-      final next = _servers.firstOrNull ?? kDefaultCloudUrl;
-      if (next.isNotEmpty && !_servers.contains(next)) {
-        setState(() => _servers = [next]);
-        _saveServers();
-      }
-      setState(() => _cloudOrigin = next);
-      savePref('cloudOrigin', next);
-      final base = next.isEmpty ? null : Uri.tryParse(next);
-      if (base != null) _api.baseUri = base;
-    }
+    // The drain-and-switch runs FIRST, while a session may still exist;
+    // the registry then forgets credentials + mirror and reseeds the
+    // build default (never an invented server).
+    await _registry.removeServer(
+      origin,
+      onRemovingActive: () async {
+        if (_activeOrigin != origin) return false;
+        await _cloudSession?.drainOutbox(timeout: const Duration(seconds: 4));
+        await _setActiveConnection('local');
+        if (!mounted) return false;
+        return true;
+      },
+    );
   }
 
   Future<void> _connectCloudServer(String url) async {
-    final parsed = Uri.tryParse(url.trim());
-    if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) return;
-    final normalized = parsed.toString();
-    if (normalized == _cloudOrigin) {
-      // Nothing to rebind — which never meant nothing to do. 本地模式 drops the
-      // session but leaves _cloudOrigin pointing here, so coming back lands on
-      // this branch with credentials sitting in prefs and no session to show
-      // for them. Returning early here is what made cloud → 本地模式 → cloud
-      // ask for a password.
-      if (_session == null) await _restoreSession();
-      return;
-    }
-    _disconnectCloudSession(); // keep the old origin's stored credentials
-    setState(() => _cloudOrigin = normalized);
-    savePref('cloudOrigin', normalized);
-    _api.baseUri = parsed;
-    await _restoreSession(); // the new origin may already have stored creds
-    if (mounted && _session != null && _activeOrigin != _cloudOrigin) {
-      setState(() => _activeOrigin = _cloudOrigin);
+    // Persist + rebase + restore live in the registry; the same-origin case
+    // still restores the stored session there (cloud → 本地模式 → cloud must
+    // not cost a password).
+    final changed = await _registry.connect(
+      url,
+      // Keep the OLD origin's stored credentials while moving.
+      onChanging: () async => _disconnectCloudSession(),
+    );
+    if (!mounted) return;
+    // Land on the server even when it has no session yet: its sign-in row is
+    // how you get one, and it lives in the world you just chose.
+    if (changed && _session != null && _activeOrigin != _registry.cloudOrigin) {
+      setState(() => _activeOrigin = _registry.cloudOrigin);
       savePref('activeOrigin', _activeOrigin);
     }
   }
@@ -489,8 +474,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         savePref('authUser:$cloudOrigin', loadPref('authUser') ?? '');
       }
     }
-    _cloudOrigin = cloudOrigin;
-    _servers = _loadServers(cloudOrigin);
+    _registry.bind(cloudOrigin);
+    _registry.load(seed: cloudOrigin);
     // A blank origin means "no cloud server configured yet", NOT "point the
     // client at nothing". `Uri.tryParse('')` succeeds — it returns a perfectly
     // valid Uri with an empty host — so this used to overwrite the client's own
@@ -668,11 +653,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final origin = apiOrigin(_api.baseUri);
     if (origin.isEmpty) return;
     savePref('cloudOrigin', origin);
-    setState(() {
-      _cloudOrigin = origin;
-      _servers = _loadServers(origin);
-    });
-    _saveServers();
+    _registry.bind(origin);
+    _registry.load(seed: origin);
   }
 
   /// Persist the access token + user so a restart (desktop) or browser refresh
@@ -1806,6 +1788,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   @override
   void dispose() {
+    _registry.removeListener(_syncRegistryState);
     _sessionCtrl.removeListener(_syncSessionState);
     _import.removeListener(_syncImportState);
     themeModeController.removeListener(_schedulePushSettings);
@@ -1814,6 +1797,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _closeAllDocumentSync();
     _viewsEvents?.dispose();
     super.dispose();
+  }
+
+  void _syncRegistryState() {
+    if (!mounted) return;
+    setState(() {
+      _servers = _registry.servers;
+      _cloudOrigin = _registry.cloudOrigin;
+    });
   }
 
   /// Copy the session hub's state into this State's view-model fields, so
