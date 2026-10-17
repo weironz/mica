@@ -209,6 +209,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       defaultCloudUrl: kDefaultCloudUrl,
     );
     _loadPrefs();
+    // AFTER loadPrefs: binding during initState would fire setState before
+    // the first build (the tree controller uses the same quiet-copy pattern).
     _registry.addListener(_syncRegistryState);
     _servers = _registry.servers;
     _cloudOrigin = _registry.cloudOrigin;
