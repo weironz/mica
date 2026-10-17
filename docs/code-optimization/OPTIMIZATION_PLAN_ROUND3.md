@@ -127,6 +127,17 @@
 
 实施备注：main_workspace_view.dart 因含 Edit 工具无法解码的字节序列，全程用 awk/perl 行级编辑完成——这也解释了为何该文件此前无法用常规工具读取。
 
+### 第三步：shell 的会话枢纽收敛（SessionController）
+
+干跑分析认定的「硬仗」：`_session`（11 域）/`_selectedWorkspace`（9 域）/`_workspaces`（6 域）/`_viewsByWorkspace`（5 域）四个枢纽字段的 62 处直接赋值。实施时把被动容器改为**行为正确的转移集**——这些赋值簇本身是会话域行为：
+
+- **特征测试先行**：`test/session_controller_test.dart` 18 个测试，钉死两条**故意不同**的选择回退规则：列表重取时「选中项 id 仍在则存活、消失则落空（不落到首个）」vs 工作区删除时「落到首个剩余」；以及过期仅清会话（工作区列表存活供本地世界回退）vs 登出全清；addCreated 的追加+选中+首树播种；seedViews 的「服务器新鲜条目压过镜像」合并次序。
+- **`lib/session/session_controller.dart`**（162 行）：restore/signIn/adoptSession/expireSession/signOut/replaceWorkspaces（生存规则）/setWorkspaces（朴素赋值，与生存规则区分——导入完成/世界迁移路径原本就没有选择意见）/select/applyRename/addCreated/remove（返回 wasSelected 供调用方关页）/replaceViews/seedViews。
+- **接线**：62 处直接赋值全部改走控制器转移（审计确认仅剩字段声明与同步方法两个合法残留）；四个旧字段降级为 `_syncSessionState` 维护的视图模型副本，build 读取点零改动；`_endExpiredSession`/登出/重建的四元组各归一个转移。中途发现并规避了一个数据回退陷阱：只要还有一处绕过控制器的视图表直写，store 的陈旧副本就会在下一次转移时覆写它——因此 21 处视图写点一次全量接线，未留半迁移状态。
+- **验证**：analyze 零 error/warning；**1,684 测试通过 / 0 失败**（+18）；门禁通过，预算收紧 7,007 → 6,969。
+
+至此 god-class 攻坚三步完成（import 域 → 侧栏树 → 会话枢纽），累计 53 个特征测试。剩余的逐域拆分（auth/sync/views 域的方法体搬迁）从此是低耦合搬运——它们的状态访问全部经控制器。
+
 ## 遗留与边界
 
 - `pg_tests.rs` 的 DB 集成测试在本地无数据库时走 skip 路径（与拆分前行为一致），真实执行在 CI 的 Postgres 上——本次拆分依赖编译 + skip 路径 + CI 兜底验证。

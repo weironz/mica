@@ -55,6 +55,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (session == null) return null;
     return '$_cloudOrigin|${session.user.id}';
   }
+  /// The session/workspace hub — the four fields every domain used to touch
+  /// directly, now owned by [SessionController] (god-class third step; see
+  /// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). The four legacy
+  /// fields right below are synced view-model copies for the build helpers;
+  /// every mutation goes through a controller transition.
+  late final SessionController _sessionCtrl;
   List<Workspace> _workspaces = const [];
   Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
@@ -217,6 +223,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void initState() {
     super.initState();
     _loadPrefs();
+    _sessionCtrl = SessionController()..addListener(_syncSessionState);
     _initImportController();
     // Theme and language persist inside their own controllers' setters; the
     // sync write-through has to hear about those changes HERE, because the
@@ -763,7 +770,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (user == null || current == null || !mounted) return;
       if (_accountIdentity != identity) return;
       final updated = current.copyWith(user: user);
-      setState(() => _session = updated);
+      _sessionCtrl.adoptSession(updated);
       _persistSession(updated);
       // No ImageCache evict needed: the address carries the version
       // (`ui/avatar_url.dart`), so a new picture is a new URL and the stale
@@ -788,7 +795,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       final next = await _refresher.ensureFresh(session);
       if (next == null || !mounted) return;
       if (_sessionIdentity != identity) return;
-      setState(() => _session = next);
+      _sessionCtrl.adoptSession(next);
       // Persist immediately: the refresh token just rotated, and the copy on
       // disk is now burnt. Losing this write costs the sign-in at next launch.
       _persistSession(next);
@@ -811,10 +818,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void _endExpiredSession() {
     if (!mounted || _session == null) return;
     _clearPersistedSession();
-    setState(() {
-      _session = null;
-      _message = context.l10n.snackSessionExpired;
-    });
+    // Only the session drops — the workspace list survives so the local
+    // world can fall back coherently (SessionController.expireSession).
+    _sessionCtrl.expireSession();
+    setState(() => _message = context.l10n.snackSessionExpired);
     _fallBackToLocalWorld();
   }
 
@@ -927,21 +934,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
               ? null
               : workspaces.where((w) => w.id == savedWsId).firstOrNull) ??
           workspaces.firstOrNull;
-      setState(() {
-        _session = session;
-        _workspaces = workspaces;
-        _selectedWorkspace = restoredWs;
-        // Warm every workspace's tree from the on-device mirror, not just the
-        // one being restored. Without this the FIRST switch to any other
-        // workspace is a cache miss, and a cache miss is not merely slower —
-        // the sidebar renders "还没有页面" while the tree is still in flight,
-        // which is a lie rather than a wait. The server's answer overwrites
-        // this per workspace as it arrives.
-        _viewsByWorkspace = {
-          ..._warmTreesFromMirror(session),
-          ..._viewsByWorkspace,
-        };
-      });
+      // Warm every workspace's tree from the on-device mirror, not just the
+      // one being restored: the seed keeps server-fresh entries on top of
+      // the mirror, so a first switch to any other workspace is not a cache
+      // miss that renders "还没有页面" while the tree is in flight.
+      _sessionCtrl.restore(
+        session,
+        workspaces,
+        restoredWs,
+        {..._warmTreesFromMirror(session), ..._viewsByWorkspace},
+      );
       unawaited(_syncSettingsFromCloud(session));
       unawaited(_refreshAiConfigured());
       // The session we just restored carries the profile as it was at LAST
@@ -1151,7 +1153,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         final views = answer.views;
         if (views != null && mounted) {
           setState(() {
-            _viewsByWorkspace = {..._viewsByWorkspace, workspaceId: views};
+            _sessionCtrl.replaceViews(workspaceId, views);
           });
           view = views.where((v) => v.id == viewId).firstOrNull;
         }
@@ -1382,7 +1384,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       savePref('viewsEtag:$workspaceId', etag!);
     }
     setState(() {
-      _viewsByWorkspace = {..._viewsByWorkspace, workspaceId: views};
+      _sessionCtrl.replaceViews(workspaceId, views);
     });
   }
 
@@ -1804,6 +1806,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   @override
   void dispose() {
+    _sessionCtrl.removeListener(_syncSessionState);
     _import.removeListener(_syncImportState);
     themeModeController.removeListener(_schedulePushSettings);
     localeController.removeListener(_schedulePushSettings);
@@ -1811,6 +1814,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _closeAllDocumentSync();
     _viewsEvents?.dispose();
     super.dispose();
+  }
+
+  /// Copy the session hub's state into this State's view-model fields, so
+  /// every build helper reading them sees the values it always did.
+  void _syncSessionState() {
+    if (!mounted) return;
+    setState(() {
+      _session = _sessionCtrl.session;
+      _workspaces = _sessionCtrl.workspaces;
+      _viewsByWorkspace = _sessionCtrl.viewsByWorkspace;
+      _selectedWorkspace = _sessionCtrl.selectedWorkspace;
+    });
   }
 
   /// Wire the import controller: every remote call is a closure over this
@@ -1846,7 +1861,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
     };
     _import.onWorkspacesLoaded = (workspaces) {
-      if (mounted) setState(() => _workspaces = workspaces);
+      if (mounted) _sessionCtrl.setWorkspaces(workspaces);
     };
     _import.onLanded = (workspace) => _selectWorkspace(workspace);
     _import.onFinished = (job, stillLinked) {
@@ -1938,11 +1953,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
       final workspaces = await _api.listWorkspaces(session.accessToken);
 
-      setState(() {
-        _session = session;
-        _workspaces = workspaces;
-        _selectedWorkspace = workspaces.firstOrNull;
-      });
+      _sessionCtrl.signIn(session, workspaces);
       _persistSession(session);
       unawaited(_syncSettingsFromCloud(session));
 
@@ -1956,14 +1967,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspaces = await _api.listWorkspaces(session.accessToken);
-      setState(() {
-        _workspaces = workspaces;
-        _selectedWorkspace = _selectedWorkspace == null
-            ? workspaces.firstOrNull
-            : workspaces
-                  .where((workspace) => workspace.id == _selectedWorkspace!.id)
-                  .firstOrNull;
-      });
+      // Reconciling refetch: the selection survives when its id persists,
+      // falls to null when it does not (SessionController.replaceWorkspaces).
+      _sessionCtrl.replaceWorkspaces(workspaces);
 
       await _loadSelectedWorkspaceMembers();
       await _loadSelectedWorkspaceViews();
@@ -1984,13 +1990,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         workspace.id,
         created.document.id,
       );
+      _sessionCtrl.addCreated(workspace, [created.view]);
       setState(() {
-        _workspaces = [..._workspaces, workspace];
-        _selectedWorkspace = workspace;
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          workspace.id: [created.view],
-        };
         _selectedView = created.view;
         _selectedBootstrap = bootstrap;
       });
@@ -2007,12 +2008,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         workspace.id,
         name,
       );
-      setState(() {
-        _workspaces = _workspaces
-            .map((item) => item.id == renamed.id ? renamed : item)
-            .toList();
-        _selectedWorkspace = renamed;
-      });
+      _sessionCtrl.applyRename(renamed);
     });
   }
 
@@ -2020,19 +2016,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       await _api.deleteWorkspace(session.accessToken, workspace.id);
-      final remaining = _workspaces
-          .where((item) => item.id != workspace.id)
-          .toList();
-      final wasSelected = _selectedWorkspace?.id == workspace.id;
-      setState(() {
-        _workspaces = remaining;
-        _viewsByWorkspace = {..._viewsByWorkspace}..remove(workspace.id);
-        if (wasSelected) {
-          _selectedWorkspace = remaining.isNotEmpty ? remaining.first : null;
+      // Deletion falls the selection to the first remaining workspace;
+      // the caller closes the page it held when this was the selected one.
+      final wasSelected = _sessionCtrl.remove(workspace);
+      if (wasSelected) {
+        setState(() {
           _selectedView = null;
           _selectedBootstrap = null;
-        }
-      });
+        });
+      }
       if (wasSelected && _selectedWorkspace != null) {
         await _loadSelectedWorkspaceMembers();
         await _loadSelectedWorkspaceViews();
@@ -2073,7 +2065,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final remembered = keepOpenPage ? null : _rememberedViewOf(workspace.id);
     return _run(() async {
       setState(() {
-        _selectedWorkspace = workspace;
+        _sessionCtrl.select(workspace);
         if (!keepOpenPage) {
           // Land on the page this workspace was last on, straight from the
           // tree we already hold, so the switch selects and highlights in the
@@ -2149,7 +2141,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         : await _offlineCloudBootstrap(firstView);
     if (!mounted) return;
     setState(() {
-      _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
+      _sessionCtrl.replaceViews(workspace.id, views);
       _membersByWorkspace = {..._membersByWorkspace, workspace.id: const []};
       _selectedView = firstView;
       _selectedBootstrap = bootstrap;
@@ -2184,10 +2176,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
       setState(() {
         final views = _viewsByWorkspace[workspace.id] ?? const [];
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          workspace.id: [...views, created.view],
-        };
+        _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], created.view]);
         _selectedView = created.view;
         _selectedBootstrap = bootstrap;
       });
@@ -2217,10 +2206,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (!mounted) return;
       setState(() {
         final views = _viewsByWorkspace[workspace.id] ?? const [];
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          workspace.id: [...views, view],
-        };
+        _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], view]);
       });
       newId = view.id;
       // This workspace only. Unqualified, it wrote every workspace the mirror
@@ -2282,10 +2268,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             views.add(placed);
           }
         }
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          optimisticWorkspace.id: views,
-        };
+        _sessionCtrl.replaceViews(optimisticWorkspace.id, views);
       });
     }
 
@@ -2348,7 +2331,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         view.id,
       );
       setState(() {
-        _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
+        _sessionCtrl.replaceViews(workspace.id, views);
       });
     });
   }
@@ -2909,7 +2892,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // refresh token to '' — renaming yourself would quietly cost you the
       // ability to renew, and you'd be signed out that night.
       final updated = session.copyWith(user: user);
-      setState(() => _session = updated);
+      _sessionCtrl.adoptSession(updated);
       _persistSession(updated); // keep the saved display name fresh for restart
     }
   }
@@ -3170,7 +3153,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       user: session.user.withAvatarVersion(version),
     );
     if (mounted) {
-      setState(() => _session = updated);
+      _sessionCtrl.adoptSession(updated);
       _persistSession(updated);
     }
     // Derived from the version we just set, not read back out of state — the
@@ -3348,10 +3331,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
       setState(() {
         final views = _viewsByWorkspace[workspace.id] ?? const [];
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          workspace.id: [...views, bootstrap.view],
-        };
+        _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], bootstrap.view]);
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
       });
@@ -3378,10 +3358,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
       setState(() {
         final views = _viewsByWorkspace[workspace.id] ?? const [];
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          workspace.id: [...views, bootstrap.view],
-        };
+        _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], bootstrap.view]);
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
       });
@@ -3538,13 +3515,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         title,
         markdown,
       );
+      _sessionCtrl.addCreated(workspace, [bootstrap.view]);
       setState(() {
-        _workspaces = [..._workspaces, workspace];
-        _selectedWorkspace = workspace;
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          workspace.id: [bootstrap.view],
-        };
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
       });
@@ -3678,12 +3650,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
       setState(() {
         final views = _viewsByWorkspace[workspace.id] ?? const [];
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          workspace.id: views
+        _sessionCtrl.replaceViews(
+          workspace.id,
+          (_viewsByWorkspace[workspace.id] ?? const [])
               .map((item) => item.id == updated.id ? updated : item)
               .toList(),
-        };
+        );
       });
     });
   }
@@ -3796,12 +3768,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
       setState(() {
         final views = _viewsByWorkspace[targetWorkspaceId] ?? const [];
-        _viewsByWorkspace = {
-          ..._viewsByWorkspace,
-          targetWorkspaceId: views
+        _sessionCtrl.replaceViews(
+          targetWorkspaceId,
+          (_viewsByWorkspace[targetWorkspaceId] ?? const [])
               .map((item) => item.id == renamed.id ? renamed : item)
               .toList(),
-        };
+        );
 
         if (_selectedView?.id == renamed.id) {
           _selectedView = renamed;
@@ -3832,7 +3804,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
 
       setState(() {
-        _viewsByWorkspace = {..._viewsByWorkspace, workspace.id: views};
+        _sessionCtrl.replaceViews(workspace.id, views);
         if (_selectedView?.id == view.id) {
           _selectedView = null;
           _selectedBootstrap = null;
@@ -4586,7 +4558,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         }
         final s = await _api.login(creds.$2);
         _persistSession(s);
-        setState(() => _session = s);
+        _sessionCtrl.adoptSession(s);
       });
       session = _session;
       if (session == null || !mounted) return;
@@ -4613,7 +4585,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (!mounted) return;
       migrated = true;
       setState(() {
-        _workspaces = workspaces;
+        _sessionCtrl.setWorkspaces(workspaces);
         _message = l10n.worldMigratedMsg(localWs.name, result.docCount);
       });
     });
@@ -5770,12 +5742,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _viewsEvents?.dispose();
     _viewsEvents = null;
     _viewsEventsWorkspaceId = null;
+    _sessionCtrl.signOut();
     setState(() {
-      _session = null;
-      _workspaces = const [];
       _membersByWorkspace = const {};
-      _viewsByWorkspace = const {};
-      _selectedWorkspace = null;
       _selectedView = null;
       _selectedBootstrap = null;
       _message = null;
@@ -6075,11 +6044,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ? null
         : await _offlineCloudBootstrap(firstView);
     if (!mounted) return false;
+    _sessionCtrl.restore(session, rebuilt.workspaces, workspace, rebuilt.views);
     setState(() {
-      _session = session;
-      _workspaces = rebuilt.workspaces;
-      _selectedWorkspace = workspace;
-      _viewsByWorkspace = rebuilt.views;
       _selectedView = firstView;
       _selectedBootstrap = bootstrap;
       // Mark degraded-nav mode: roles come from the (possibly stale) mirror and
@@ -6293,7 +6259,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         final session = _requireSession();
         await _api.reorderWorkspaces(session.accessToken, ids);
         final workspaces = await _api.listWorkspaces(session.accessToken);
-        if (mounted) setState(() => _workspaces = workspaces);
+        if (mounted) _sessionCtrl.setWorkspaces(workspaces);
       });
     }
   }
@@ -6367,11 +6333,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
       final session = await _api.login(creds.$2);
       final workspaces = await _api.listWorkspaces(session.accessToken);
-      setState(() {
-        _session = session;
-        _workspaces = workspaces;
-        _selectedWorkspace = workspaces.firstOrNull;
-      });
+      _sessionCtrl.signIn(session, workspaces);
       _persistSession(session);
       unawaited(_syncSettingsFromCloud(session));
       unawaited(_refreshAiConfigured());

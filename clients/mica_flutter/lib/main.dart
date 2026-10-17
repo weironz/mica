@@ -25,6 +25,7 @@ import 'cloud/pending_uploads.dart';
 import 'cloud/workspace_migration.dart';
 import 'diagnostics.dart';
 import 'import/import_controller.dart';
+import 'session/session_controller.dart';
 import 'ui/sidebar_tree_controller.dart';
 import 'swallowed.dart';
 import 'local/local_offline.dart';
