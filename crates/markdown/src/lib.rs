@@ -11,6 +11,7 @@ use serde_json::Value;
 /// Structured page properties over the document root's raw front-matter string
 /// (front matter stays the sole authority; this is a lazy view + surgical edit).
 pub mod properties;
+mod block_handlers;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocumentSnapshotPayload {

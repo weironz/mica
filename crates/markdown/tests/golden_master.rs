@@ -124,7 +124,7 @@ fn corpus() -> Vec<(String, String)> {
 /// walk the tree. Renumber them by first appearance (`b0`, `b1`, …, the root
 /// by its given id) so the snapshot pins the STRUCTURE, not the dice.
 fn snapshot(md: &str) -> serde_json::Value {
-  let mut canon = |payload: &DocumentSnapshotPayload| {
+  let canon = |payload: &DocumentSnapshotPayload| {
     let mut value = serde_json::to_value(payload).expect("serialize payload");
     let mut ids: Vec<(String, String)> = vec![(payload.root_block_id.clone(), payload.root_block_id.clone())];
     if let Some(blocks) = value.get_mut("blocks").and_then(|v| v.as_array_mut()) {
@@ -178,7 +178,7 @@ fn golden_master() {
 
   if std::env::var("UPDATE_GOLDEN").is_ok() {
     let pretty = format!("{:#}\n", serde_json::Value::Object(
-      current.into_iter().map(|(k, v)| (k, v)).collect(),
+      current.into_iter().collect(),
     ));
     // serde_json's Map for `json!`/`Value::Object` is BTree-backed (no
     // preserve_order feature in this workspace), so the file is deterministic.
@@ -205,11 +205,10 @@ fn golden_master() {
           changed.push(id.clone());
         }
       }
-      Some(old) if old != snap => {
-        if changed.len() < 20 {
+      Some(old) if old != snap
+        && changed.len() < 20 => {
           changed.push(format!("{id} (output differs)"));
         }
-      }
       _ => {}
     }
   }
