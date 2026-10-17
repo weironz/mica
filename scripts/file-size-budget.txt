@@ -7,6 +7,6 @@
 # 格式：<基线行数> <相对路径>（# 开头为注释）。新增条目 = 承认该文件当前
 # 已超软上限 4,000 行，需要一句为什么留着的理由（写在行内注释里）。
 6133 clients/mica_flutter/lib/editor/editor.dart        # 第三轮已拆出 hooks/ai/dialogs 三个 part；主体仍是编辑器 State，controller 化属行为性重构
-6960 clients/mica_flutter/lib/main_shell.dart           # auth 块服务器管理已 ServerRegistry 化；会话持久化流程仍在此
+6647 clients/mica_flutter/lib/main_shell.dart           # views 域已 CloudViewsController/MembersController 化；会话持久化流程仍在此
 5850 clients/mica_flutter/lib/ui/dialogs.dart           # 第三轮拆分候选：设置/对话框集合
 4920 clients/mica_flutter/lib/main_workspace_view.dart  # 树状态/rename/拖放判定均已 controller 化；剩余为 build 辅助与 api 包装

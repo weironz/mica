@@ -158,6 +158,17 @@ analyze 零 error/warning；**1,695 测试通过 / 0 失败**（本 session 净�
 
 对账后的剩余清单（auth 块余下：会话持久化/探活/头像令牌；views 块 34 个 9+ 行方法；sync 块 8 个 9+ 行方法）按同模式推进，无已知障碍。
 
+### 第五步：views 块——CloudViewsController + MembersController
+
+上一轮清单里的「views 块 34 个 9+ 行方法」按内聚度归成**两个**控制器，而非逐方法搬运：
+
+- **特征测试先行**：`test/cloud_views_controller_test.dart` 33 个 + `test/members_controller_test.dart` 6 个，共 39 个测试全部先于接线跑绿。钉死的不变量——rename/setIcon 的**原位替换**（列表槽位不动，位置字段才决定视觉顺序）；create 的追加+「bootstrap 跟在 create 之后」顺序；**镜像只写一个工作区**（w2 的视图不得混入）与 304 不写镜像（2.1s 教训）；etag 只在手里有树时随请求发送、304 保留旧 tag、新树与其 OWN tag 同步落地（`_commitTree` 的原子性）；**被取代的响应树和 tag 都不落地**（stale-etag 是持久的伤害）；stillCurrent 只守选择不守树；REST 快照在 CRDT 会话持有 body 时让位；**记住的 folder 会被选中但绝不 bootstrap**（`selectedView ?? firstOpenableView`：解析成功的 remembered id 胜出，guard 只挡请求）；reorder 的乐观写入按 `pad((i+1)*10)` 与服务器同规则、**不在树里的行被补进**（create 路径竞态）、空列表不出网；batch-trash 后**重载的树**（而非请求的 ids）决定打开页去留；ensureView 从内存命中零请求、未访问工作区取一次并留存；members 的 add/update 走重载（POST 答案是单个成员）、remove 不重载（DELETE 答案即新列表）、离线切工作区写入空表。
+- **`lib/views/cloud_views_controller.dart`**（806 行，新目录）：写操作（rename/delete/deleteViews/clone/restore/reorder/createDocument/createFolder/setIcon/ensureView）+ 工作区切换树加载 `loadWorkspaceViews`（推测性 bootstrap 与树竞速、304 纪律、超序列守卫、stillCurrent/writeBody 选择门）+ 后台铃 `refreshTree` + 镜像写 `mirrorOneWorkspace`。**树本体不在此处**——经构造器注入的 `SessionController` 存取（`replaceViews`），控制器自身无通知（State 已监听会话库）；独占状态是 `TreeRequestSeq`。api/prefs/镜像/mounted/openViewId/crdtSessionDocumentId 全部函数注入；选择结果经 `onSelection`/`onOpenPageGone`/`onCloned`/`onError` 钩子回投 State。
+- **`lib/views/members_controller.dart`**（94 行）：`_membersByWorkspace` 的唯一正本，State 字段降级为 `_syncMembersState` 维护的副本；离线切换的空表经 `replace`、登出经 `clear`。
+- **State 侧**：`_treeRequests` 字段删除（随逻辑入控制器）；`_renameView`/`_deleteView`/`_deleteViews`/`_cloneView`/`_reorderViews`/`_restoreView`/`_createDocument`/`_createFolder`/`_promptSetViewIcon`/`_openElsewhereInBackgroundTab`/`_loadSelectedWorkspaceViews`/`_refreshTreeFromServer`/`_rememberedViewOf`/`_commitTree`/`_cacheCloudPageTree`/三个 member 方法变薄适配；`_openWorkspaceFromMirror` 与 `_disconnectCloudSession` 的两处 members 直写改走控制器（写点审计后确认 `_membersByWorkspace` 只剩声明与同步两处合法残留）。**两个行为偏差在接线时被发现并修正**：初版 `reorderViews` 丢了空列表早退（会多发一次空 reorder 请求）——按原样恢复并用测试钉死；`_importMarkdownAsPage` 里一处**预先就死掉**的局部 `views` 变量（上一步遗留）顺带清除。
+- **留下不搬**（判断依据：纯 `_run` 包装或深缠上下文，搬走不增可测试面）：`_loadTrash`/`_purgeView`/`_purgeAllTrash`/`_exportFolderZip`（3-6 行 api 直通，无状态写点）；`_selectView`/`_openAcrossWorkspaces`/`_openSearchHit`（CRDT 会话编排 + outbox 泄漏，其纯规则 needsBootstrapOnSelect/mayReplaceBootstrap/restSnapshotMayReplaceBody 早已抽出有测试）；`_importMarkdownAsPage`/`_aiNewPageFromMarkdown`（tab 状态直写，但树写点已走 session 控制器）；`_runServerImport`（import 控制器的编排层）。
+- **验证**：analyze 零 error/warning（info 147 条，基线内）；**1,745 测试全绿 / 2 跳过**（1,706 + 39）；三层门禁通过，预算收紧 6,960 → 6,647（main_shell 净 −313 行）。
+
 ## 遗留与边界
 
 - `pg_tests.rs` 的 DB 集成测试在本地无数据库时走 skip 路径（与拆分前行为一致），真实执行在 CI 的 Postgres 上——本次拆分依赖编译 + skip 路径 + CI 兜底验证。

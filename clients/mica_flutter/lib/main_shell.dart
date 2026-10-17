@@ -66,13 +66,17 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// every mutation goes through a controller transition.
   late final SessionController _sessionCtrl;
   List<Workspace> _workspaces = const [];
+
+  /// The workspace members map — see views/members_controller.dart. The field
+  /// below is a synced view-model copy for the build helpers.
+  late final MembersController _membersCtrl;
   Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
 
-  /// Which of several overlapping tree fetches for a workspace may commit. See
-  /// [TreeRequestSeq] for why the last-arriving response is not the right one to
-  /// believe.
-  final TreeRequestSeq _treeRequests = TreeRequestSeq();
+  /// The cloud page-tree domain (writes, loads, mirror) — see
+  /// views/cloud_views_controller.dart (god-class fifth step). The tree
+  /// itself lives in [_sessionCtrl]; this owns the fetch bookkeeping.
+  late final CloudViewsController _viewsCtrl;
   Workspace? _selectedWorkspace;
 
   /// The open tabs, left to right. Always holds at least one — a tab with a
@@ -239,6 +243,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _servers = _registry.servers;
     _cloudOrigin = _registry.cloudOrigin;
     _sessionCtrl = SessionController()..addListener(_syncSessionState);
+    _initViewsController();
+    _initMembersController();
     _initImportController();
     // Theme and language persist inside their own controllers' setters; the
     // sync write-through has to hear about those changes HERE, because the
@@ -1120,30 +1126,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (session == null) return;
 
     // The tree of a workspace this device has never opened is not in memory —
-    // `_viewsByWorkspace` fills per workspace as you visit them. Fetching it is
-    // one request, and it is the tree the tab needs anyway the moment you click
-    // it.
-    var view = _viewsByWorkspace[workspaceId]
-        ?.where((v) => v.id == viewId)
-        .firstOrNull;
-    if (view == null) {
-      try {
-        final answer = await _api.listViewsIfChanged(
-          session.accessToken,
-          workspaceId,
-        );
-        final views = answer.views;
-        if (views != null && mounted) {
-          setState(() {
-            _sessionCtrl.replaceViews(workspaceId, views);
-          });
-          view = views.where((v) => v.id == viewId).firstOrNull;
-        }
-      } on ApiException catch (error) {
-        if (mounted) setState(() => _message = error.message);
-        return;
-      }
-    }
+    // the controller fetches it (one request) and files it; the tree is what
+    // the tab needs anyway the moment you click it. An ApiException reaches
+    // the message bus through the controller's onError hook.
+    final view = await _viewsCtrl.ensureView(
+      session.accessToken,
+      workspaceId,
+      viewId,
+    );
     if (view == null || !mounted) return;
 
     // A folder has no document, so there is nothing to put in a tab. Fall back
@@ -1321,53 +1311,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _refreshTreeFromServer(String workspaceId) async {
     final session = _session;
     if (session == null) return;
-    // Claim a sequence number for THIS request. Anything older that lands later
-    // is answering a question we have already replaced.
-    final seq = _treeRequests.claim(workspaceId);
-    final held = _viewsByWorkspace[workspaceId];
-    final answer = await fetchBackgroundTree(
-      () => _api.listViewsIfChanged(
-        session.accessToken,
-        workspaceId,
-        etag: (held == null || held.isEmpty)
-            ? null
-            : loadPref('viewsEtag:$workspaceId'),
-      ),
-    );
-    if (answer == null) return; // Transient failure; another bell retries.
-    final views = answer.views;
-    if (views == null || !mounted) return; // 304 — already current.
-    // Superseded while we were in flight: a newer request exists, so this
-    // response describes a state that has already been replaced. Writing it
-    // would install the older tree AND its older ETag — and a stale ETag is
-    // the durable half of the damage, because the next cold start sends it,
-    // gets a 304, and keeps a tree the server has moved past.
-    if (!_treeRequests.isCurrent(workspaceId, seq)) return;
-    _commitTree(workspaceId: workspaceId, views: views, etag: answer.etag);
-    _cacheCloudPageTree(workspaceId: workspaceId);
-  }
-
-  /// Install a freshly fetched tree together with the ETag that describes it.
-  ///
-  /// One function so the two cannot drift: the invariant the offline mirror
-  /// depends on is "_a saved ETag means the mirror already holds that tree_", and
-  /// it only holds if the tag is written in the same step as the tree it came
-  /// with. Splitting them — as the two call sites used to — is how a tree from
-  /// one response ends up paired with an ETag from another.
-  void _commitTree({
-    required String workspaceId,
-    required List<DocumentView> views,
-    String? etag,
-  }) {
-    // Only advance the tag when the server actually sent one. A 304 has no body
-    // and no tag, and keeping the old one is exactly right — it still describes
-    // the tree we are holding.
-    if ((etag ?? '').isNotEmpty) {
-      savePref('viewsEtag:$workspaceId', etag!);
-    }
-    setState(() {
-      _sessionCtrl.replaceViews(workspaceId, views);
-    });
+    await _viewsCtrl.refreshTree(session.accessToken, workspaceId);
   }
 
   void _reconcileSync() {
@@ -1790,6 +1734,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void dispose() {
     _registry.removeListener(_syncRegistryState);
     _sessionCtrl.removeListener(_syncSessionState);
+    _membersCtrl.removeListener(_syncMembersState);
     _import.removeListener(_syncImportState);
     themeModeController.removeListener(_schedulePushSettings);
     localeController.removeListener(_schedulePushSettings);
@@ -1816,6 +1761,90 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _workspaces = _sessionCtrl.workspaces;
       _viewsByWorkspace = _sessionCtrl.viewsByWorkspace;
       _selectedWorkspace = _sessionCtrl.selectedWorkspace;
+    });
+  }
+
+  /// Wire the cloud views controller (god-class fifth step): every remote
+  /// call is a closure over this State's api/session helpers, and every
+  /// user-facing or tab-state outcome comes back as a hook implemented here.
+  /// The controller itself never touches a context.
+  void _initViewsController() {
+    _viewsCtrl = CloudViewsController(
+      session: _sessionCtrl,
+      createDocument: (token, workspaceId, name, {parentViewId}) => _api
+          .createDocument(token, workspaceId, name, parentViewId: parentViewId),
+      bootstrapDocument: (token, workspaceId, documentId) =>
+          _api.bootstrapDocument(token, workspaceId, documentId),
+      createFolder: (token, workspaceId, name, {parentViewId}) =>
+          _api.createFolder(token, workspaceId, name, parentViewId: parentViewId),
+      updateView: (token, workspaceId, viewId, name, {icon}) =>
+          _api.updateView(token, workspaceId, viewId, name, icon: icon),
+      deleteView: _api.deleteView,
+      batchTrashViews: _api.batchTrashViews,
+      cloneView: _api.cloneView,
+      reorderViews: _api.reorderViews,
+      restoreView: _api.restoreView,
+      listViewsIfChanged: _api.listViewsIfChanged,
+      readPref: loadPref,
+      savePref: savePref,
+      mirrorPageTree: (origin, workspaces, views) =>
+          _local.mirrorCloudPageTree(origin, workspaces, views),
+      origin: () => _api.baseUri.toString(),
+      isMounted: () => mounted,
+      openViewId: () => _selectedView?.id,
+      crdtSessionDocumentId: () => _sync?.documentId,
+    );
+    _viewsCtrl.onError = (message) {
+      if (mounted) setState(() => _message = message);
+    };
+    _viewsCtrl.onOpenPageGone = () {
+      // The reloaded tree decided the open page was inside a trashed subtree.
+      setState(() {
+        _selectedView = null;
+        _selectedBootstrap = null;
+      });
+    };
+    _viewsCtrl.onCloned = (report) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.cloneDone(report.newName))),
+      );
+    };
+    _viewsCtrl.onSelection = (selection) {
+      if (!mounted) return;
+      setState(() {
+        // The tree itself was installed by the controller's commit step (with
+        // its ETag, in one transaction). This block owns the SELECTION and
+        // the body only.
+        if (selection.stillCurrent) {
+          _selectedView = selection.view;
+          if (selection.writeBody) {
+            _selectedBootstrap = selection.bootstrap;
+          }
+          if (selection.bootstrapError != null) {
+            _message = selection.bootstrapError;
+          }
+        }
+      });
+    };
+  }
+
+  /// Wire the members controller and keep the legacy field a synced copy.
+  void _initMembersController() {
+    _membersCtrl = MembersController(
+      listMembers: _api.listWorkspaceMembers,
+      addMember: _api.addWorkspaceMember,
+      updateMember: _api.updateWorkspaceMember,
+      removeMember: _api.removeWorkspaceMember,
+    )..addListener(_syncMembersState);
+  }
+
+  /// The State's view-model copy of the members map — the share sheet and the
+  /// version-author projection keep reading this field unchanged.
+  void _syncMembersState() {
+    if (!mounted) return;
+    setState(() {
+      _membersByWorkspace = _membersCtrl.membersByWorkspace;
     });
   }
 
@@ -2131,9 +2160,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         ? null
         : await _offlineCloudBootstrap(firstView);
     if (!mounted) return;
+    // Members are unknowable offline — file the empty list through the
+    // controller BEFORE the setState so the sync copy below lands with it.
+    _membersCtrl.replace(workspace.id, const []);
     setState(() {
       _sessionCtrl.replaceViews(workspace.id, views);
-      _membersByWorkspace = {..._membersByWorkspace, workspace.id: const []};
       _selectedView = firstView;
       _selectedBootstrap = bootstrap;
       _offlineNav = true;
@@ -2153,23 +2184,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final created = await _api.createDocument(
+      final created = await _viewsCtrl.createDocument(
         session.accessToken,
         workspace.id,
         name,
         parentViewId: parentViewId,
       );
-      final bootstrap = await _api.bootstrapDocument(
-        session.accessToken,
-        workspace.id,
-        created.document.id,
-      );
-
       setState(() {
-        final views = _viewsByWorkspace[workspace.id] ?? const [];
-        _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], created.view]);
         _selectedView = created.view;
-        _selectedBootstrap = bootstrap;
+        _selectedBootstrap = created.bootstrap;
       });
       newId = created.view.id;
     });
@@ -2182,28 +2205,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Create a cloud folder (pure container) and add it to the tree. Unlike a
   /// document it is NOT opened in the editor (folders have no content); the
-  /// user creates pages under it. Mirrored offline via [_cacheCloudPageTree].
+  /// user creates pages under it. Mirrored offline via the controller's
+  /// mirror step (one workspace only — see its doc).
   Future<String?> _createFolder(String name, {String? parentViewId}) async {
     String? newId;
     await _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final view = await _api.createFolder(
+      newId = await _viewsCtrl.createFolder(
         session.accessToken,
         workspace.id,
         name,
         parentViewId: parentViewId,
       );
-      if (!mounted) return;
-      setState(() {
-        final views = _viewsByWorkspace[workspace.id] ?? const [];
-        _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], view]);
-      });
-      newId = view.id;
-      // This workspace only. Unqualified, it wrote every workspace the mirror
-      // had preheated into memory — which on a real account is the 2.1 s the
-      // method's own comment measured, paid on every new folder.
-      _cacheCloudPageTree(workspaceId: workspace.id);
     });
     return newId;
   }
@@ -2215,93 +2229,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Persist a new sibling order: assign evenly spaced, zero-padded positions to
   /// [orderedSiblings] (all sharing [parentViewId]) and push the ones that
   /// changed. Ordering is per-parent, so renumbering one group is self-contained.
+  /// The optimistic write and the step-of-ten rule live in the controller (see
+  /// CloudViewsController.reorderViews for the history: the per-row move loop
+  /// and the lag it caused).
   Future<void> _reorderViews(
     String? parentViewId,
     List<DocumentView> orderedSiblings,
   ) {
-    String pad(int n) => n.toString().padLeft(10, '0');
-
-    // Show the new order NOW; tell the server after.
-    //
-    // This used to await one moveView round trip PER row and only then
-    // setState, so the rows sat visibly in their old places for N requests
-    // before jumping. For a drag that reads as lag; for a freshly created page
-    // being slid up beside the located row it read as a bug — "it appears at
-    // the bottom and then moves" — and no care in the caller could hide it,
-    // because the caller was already done.
-    //
-    // Optimistic, with the server as the correction: the loop below overwrites
-    // these rows with what actually came back, and a failure surfaces through
-    // _run like any other write. The local guess uses the SAME step-of-ten rule
-    // the request does, so guess and answer agree instead of racing.
-    final optimisticWorkspace = _selectedWorkspace;
-    if (optimisticWorkspace != null) {
-      setState(() {
-        final views = [...?_viewsByWorkspace[optimisticWorkspace.id]];
-        for (var i = 0; i < orderedSiblings.length; i++) {
-          final v = orderedSiblings[i];
-          final placed = DocumentView(
-            id: v.id,
-            parentViewId: parentViewId,
-            objectId: v.objectId,
-            objectType: v.objectType,
-            name: v.name,
-            position: pad((i + 1) * 10),
-            icon: v.icon,
-            updatedAt: v.updatedAt,
-          );
-          final idx = views.indexWhere((x) => x.id == v.id);
-          // Not present yet happens on the create path: the row was added by
-          // the create's own setState in this same turn, or is about to be.
-          if (idx >= 0) {
-            views[idx] = placed;
-          } else {
-            views.add(placed);
-          }
-        }
-        _sessionCtrl.replaceViews(optimisticWorkspace.id, views);
-      });
-    }
-
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      if (orderedSiblings.isEmpty) return;
-
-      // ONE request for the whole group.
-      //
-      // This was a loop of `moveView`, awaited per sibling. It looked like it
-      // only paid for the rows that actually moved — `if (view.position !=
-      // desired)` — but a view is created with a `Uuid::now_v7()` position, so
-      // that test is TRUE for every sibling that has not been reordered before.
-      // Creating a page or folder beside a located row therefore fired one
-      // round trip per existing child of that folder, in series, with `_run`
-      // holding the whole app busy throughout. That is the lag: it grows with
-      // the size of the folder you are creating in.
-      //
-      // `/views/reorder` exists for exactly this and has since 0.13.19 — its own
-      // comment names the per-view loop as the thing not to do — but no client
-      // code had ever called it. It validates every id before writing and does
-      // the renumber in one transaction, so it also removes the half-renumbered
-      // group a failure used to leave behind.
-      //
-      // Nothing to reconcile afterwards: the optimistic setState above wrote
-      // `pad((i + 1) * 10)`, which is the same value the server assigns
-      // (`format!("{:010}", (i + 1) * 10)`), for the same ids in the same order.
-      // The reply is a count, not views, so there is nothing to correct from
-      // either.
-      //
-      // One field DOES drift until the next tree load: the server bumps
-      // `updated_at` on every reordered row, and the per-view reply used to
-      // carry that back. Left as is on purpose — "recently edited" jumping to
-      // the top because you dragged a row is the questionable behaviour here,
-      // and quietly re-teaching the client to display it is not the place to
-      // decide that.
-      await _api.reorderViews(
+      await _viewsCtrl.reorderViews(
         session.accessToken,
         workspace.id,
-        parentViewId: parentViewId,
-        orderedViewIds: [for (final v in orderedSiblings) v.id],
+        parentViewId,
+        orderedSiblings,
       );
     });
   }
@@ -2316,14 +2258,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final views = await _api.restoreView(
+      await _viewsCtrl.restoreView(
         session.accessToken,
         workspace.id,
         view.id,
       );
-      setState(() {
-        _sessionCtrl.replaceViews(workspace.id, views);
-      });
     });
   }
 
@@ -3321,7 +3260,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         markdown,
       );
       setState(() {
-        final views = _viewsByWorkspace[workspace.id] ?? const [];
         _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], bootstrap.view]);
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
@@ -3348,7 +3286,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         markdown,
       );
       setState(() {
-        final views = _viewsByWorkspace[workspace.id] ?? const [];
         _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], bootstrap.view]);
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
@@ -3632,22 +3569,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final updated = await _api.updateView(
-        session.accessToken,
-        workspace.id,
-        view.id,
-        view.name,
-        icon: picked,
-      );
-      setState(() {
-        final views = _viewsByWorkspace[workspace.id] ?? const [];
-        _sessionCtrl.replaceViews(
-          workspace.id,
-          (_viewsByWorkspace[workspace.id] ?? const [])
-              .map((item) => item.id == updated.id ? updated : item)
-              .toList(),
-        );
-      });
+      await _viewsCtrl.setViewIcon(session.accessToken, workspace.id, view, picked);
     });
   }
 
@@ -3750,7 +3672,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _run(() async {
       final session = _requireSession();
       final targetWorkspaceId = workspaceId ?? _requireWorkspace().id;
-      final renamed = await _api.updateView(
+      final renamed = await _viewsCtrl.renameView(
         session.accessToken,
         targetWorkspaceId,
         view.id,
@@ -3758,14 +3680,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       );
 
       setState(() {
-        final views = _viewsByWorkspace[targetWorkspaceId] ?? const [];
-        _sessionCtrl.replaceViews(
-          targetWorkspaceId,
-          (_viewsByWorkspace[targetWorkspaceId] ?? const [])
-              .map((item) => item.id == renamed.id ? renamed : item)
-              .toList(),
-        );
-
         if (_selectedView?.id == renamed.id) {
           _selectedView = renamed;
         }
@@ -3788,14 +3702,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final views = await _api.deleteView(
+      await _viewsCtrl.deleteView(
         session.accessToken,
         workspace.id,
         view.id,
       );
-
+      if (!mounted) return;
       setState(() {
-        _sessionCtrl.replaceViews(workspace.id, views);
         if (_selectedView?.id == view.id) {
           _selectedView = null;
           _selectedBootstrap = null;
@@ -3804,63 +3717,35 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  /// Trash a selection (cloud) in ONE request, then reload the tree.
-  ///
-  /// Reloads rather than reading a tree back from the response: `batch-trash`
-  /// reports what it TOUCHED (ids + a count), which is the honest thing for it
-  /// to report and not a page tree. One extra GET for an operation the user
-  /// invoked deliberately is a fair trade for not inventing a second shape of
-  /// truth about the tree.
+  /// Trash a selection (cloud) in ONE request, then reload the tree. The batch
+  /// call, the reload and the "did the open page survive" decision live in the
+  /// controller (CloudViewsController.deleteViews); the tab-close comes back
+  /// through its onOpenPageGone hook.
   Future<void> _deleteViews(List<String> viewIds) {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final result = await _api.batchTrashViews(
+      await _viewsCtrl.deleteViews(
         token: session.accessToken,
         workspaceId: workspace.id,
         viewIds: viewIds,
       );
-      await _loadSelectedWorkspaceViews();
-      if (!mounted) return;
-      setState(() {
-        // The open page may have been anywhere inside a trashed subtree, so the
-        // reloaded tree — not the requested ids — decides whether it survived.
-        final open = _selectedView?.id;
-        final stillThere = (_viewsByWorkspace[workspace.id] ?? const []).any(
-          (v) => v.id == open,
-        );
-        if (open != null && !stillThere) {
-          _selectedView = null;
-          _selectedBootstrap = null;
-        }
-      });
-      // `skipped` is the server saying it did LESS than asked (already trashed,
-      // or gone). Silent here on purpose: both causes mean the row is already
-      // where the user wanted it, and the reloaded tree shows exactly that.
-      if (result.skipped.isNotEmpty) {
-        debugPrint('batch-trash skipped ${result.skipped.length} ids');
-      }
     });
   }
 
   /// Duplicate [view] in place (cloud). The server copies the subtree, shares
   /// blobs, and dedupes the name; we just reload the tree to show the copy.
+  /// The snackbar fires through the controller's onCloned hook.
   Future<void> _cloneView(DocumentView view) {
     final copyName = context.l10n.cloneCopyName(view.name);
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final report = await _api.cloneView(
+      await _viewsCtrl.cloneView(
         token: session.accessToken,
         workspaceId: workspace.id,
         viewId: view.id,
         name: copyName,
-        dryRun: false,
-      );
-      await _loadSelectedWorkspaceViews();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.cloneDone(report.newName))),
       );
     });
   }
@@ -5619,13 +5504,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      await _api.addWorkspaceMember(
+      await _membersCtrl.add(
         session.accessToken,
         workspace.id,
         email,
         role.apiValue,
       );
-      await _loadSelectedWorkspaceMembers();
     });
   }
 
@@ -5636,13 +5520,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      await _api.updateWorkspaceMember(
+      await _membersCtrl.update(
         session.accessToken,
         workspace.id,
         member.userId,
         role.apiValue,
       );
-      await _loadSelectedWorkspaceMembers();
     });
   }
 
@@ -5650,14 +5533,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      final members = await _api.removeWorkspaceMember(
+      await _membersCtrl.remove(
         session.accessToken,
         workspace.id,
         member.userId,
       );
-      setState(() {
-        _membersByWorkspace = {..._membersByWorkspace, workspace.id: members};
-      });
     });
   }
 
@@ -5683,14 +5563,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (session == null || workspace == null) {
       return;
     }
-
-    final members = await _api.listWorkspaceMembers(
-      session.accessToken,
-      workspace.id,
-    );
-    setState(() {
-      _membersByWorkspace = {..._membersByWorkspace, workspace.id: members};
-    });
+    await _membersCtrl.load(session.accessToken, workspace.id);
   }
 
   /// Explicit sign-out: forget the stored credentials, then disconnect.
@@ -5734,8 +5607,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _viewsEvents = null;
     _viewsEventsWorkspaceId = null;
     _sessionCtrl.signOut();
+    _membersCtrl.clear();
     setState(() {
-      _membersByWorkspace = const {};
       _selectedView = null;
       _selectedBootstrap = null;
       _message = null;
@@ -5802,209 +5675,23 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// page shown the instant you switch is the page you end up on. A different
   /// rule here would show one page and then swap it for another.
   DocumentView? _rememberedViewOf(String workspaceId) {
-    final views = _viewsByWorkspace[workspaceId];
-    if (views == null || views.isEmpty) return null;
-    final remembered = loadPref('lastViewId:$workspaceId');
-    return views.where((view) => view.id == remembered).firstOrNull ??
-        firstOpenableView(views);
+    return _viewsCtrl.rememberedViewOf(workspaceId);
   }
 
+  /// The workspace-switch tree load — tree + ETag + auto-open, now in the
+  /// controller (see CloudViewsController.loadWorkspaceViews for the ordering
+  /// rules this preserves: the speculative bootstrap that races the tree, the
+  /// 304 discipline, the superseded-response guards, and the
+  /// stillCurrent/writeBody selection gate). The selection outcome lands back
+  /// through the controller's onSelection hook, wired in
+  /// [_initViewsController].
   Future<void> _loadSelectedWorkspaceViews() async {
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) {
       return;
     }
-
-    // Which page we are about to open is usually already known — it is the one
-    // this workspace was last on, and its tree is in memory. Asking for its
-    // content only AFTER the tree comes back spends a second round trip
-    // establishing something we could have assumed; ask for both at once and
-    // throw the guess away if the tree disagrees.
-    final guess = _rememberedViewOf(workspace.id);
-    Future<DocumentBootstrap>? guessed;
-    if (guess != null && guess.objectType != 'folder') {
-      guessed = _api.bootstrapDocument(
-        session.accessToken,
-        workspace.id,
-        guess.objectId,
-      );
-    }
-
-    // Claim a sequence number for THIS request. Anything older that lands later
-    // is answering a question we have already replaced.
-    final seq = _treeRequests.claim(workspace.id);
-
-    // Ask conditionally, but only while actually holding a tree to fall back
-    // on: a 304 answered to a client with nothing would leave the sidebar
-    // empty. The tag is stored beside the tree it describes, so a mirror
-    // preheated from disk and its tag stay in step across restarts.
-    final held = _viewsByWorkspace[workspace.id];
-    final answer = await _api.listViewsIfChanged(
-      session.accessToken,
-      workspace.id,
-      etag: (held == null || held.isEmpty)
-          ? null
-          : loadPref('viewsEtag:${workspace.id}'),
-    );
-    // Superseded while we were in flight: a newer request for this workspace
-    // exists, so this response describes a state that has already been replaced.
-    // Writing it would install the older tree AND its older ETag — and the stale
-    // ETag is the durable half, because the next cold start sends it, gets a
-    // 304, and keeps a tree the server has moved past. The selection block below
-    // guards itself separately (`stillCurrent`), but the TREE and its tag had no
-    // such guard: a slower load landing last overwrote the newer one.
-    if (!_treeRequests.isCurrent(workspace.id, seq)) return;
-
-    final views = answer.views ?? held ?? const <DocumentView>[];
-    _commitTree(
-      workspaceId: workspace.id,
-      views: views,
-      etag: answer.views == null ? null : answer.etag,
-    );
-    SwitchTrace.current?.mark(answer.views == null ? 'tree(304)' : 'tree');
-    // Reopen the page last viewed IN THIS workspace (AppFlowy remembers the last
-    // view per-workspace). On a restore or a workspace switch `_selectedView` is
-    // null, so fall back to the per-workspace saved id; a deleted/absent id just
-    // falls through to firstOpenableView below.
-    final wantViewId =
-        _selectedView?.id ?? loadPref('lastViewId:${workspace.id}');
-    final selectedView = views
-        .where((view) => view.id == wantViewId)
-        .firstOrNull;
-    // Auto-open a DOCUMENT (folders have no content to bootstrap — opening one
-    // would 404 on its unbacked object_id).
-    final viewToOpen = selectedView ?? firstOpenableView(views);
-    DocumentBootstrap? bootstrap;
-    String? bootstrapError;
-    if (viewToOpen != null && viewToOpen.objectType != 'folder') {
-      final inFlight = guessed != null && guess?.objectId == viewToOpen.objectId
-          ? guessed
-          : null;
-      if (inFlight == null) guessed?.ignore(); // guessed wrong — drop it quietly
-      try {
-        bootstrap =
-            await (inFlight ??
-                _api.bootstrapDocument(
-                  session.accessToken,
-                  workspace.id,
-                  viewToOpen.objectId,
-                ));
-      } on ApiException catch (error) {
-        // The auto-open target answered with an error (404/403 — deleted
-        // server-side, access revoked, or an unbacked folder object_id from an
-        // older client that didn't guard). listViews already succeeded, so we
-        // are demonstrably ONLINE: show the tree with nothing opened rather than
-        // letting one bad view cascade into a full offline downgrade at startup.
-        //
-        // But SAY SO. Swallowing this silently rendered an open page as empty —
-        // indistinguishable from "this page has no content", so a server-side
-        // fault (e.g. a document whose root block was lost) looked exactly like
-        // data loss: pressing refresh appeared to erase the page.
-        bootstrap = null;
-        bootstrapError = '$error';
-      }
-    } else {
-      // Nothing to open (empty workspace, or a folder was remembered) — the
-      // speculative fetch has no taker. Unignored, its failure would surface as
-      // an unhandled async error with no user-visible cause.
-      guessed?.ignore();
-    }
-
-    SwitchTrace.current?.mark('body');
-    // Two clicks in quick succession run two of these. The tree is keyed by
-    // workspace so a late arrival is harmless there, but the SELECTION is one
-    // slot: without this the slower load lands last and opens the workspace the
-    // user already switched away from. Nothing guards the entry point — there
-    // is no busy latch on the workspace rows — so it has to be caught here.
-    final stillCurrent = _selectedWorkspace?.id == workspace.id;
-    // The REST snapshot cannot merge — it is the yrs base materialised into
-    // plain JSON — so it must not land on a body a CRDT session already holds.
-    // See `restSnapshotMayReplaceBody` for what that costs when it does.
-    final mayWriteBody =
-        viewToOpen == null ||
-        restSnapshotMayReplaceBody(
-          arrivingDocumentId: viewToOpen.objectId,
-          crdtSessionDocumentId: _sync?.documentId,
-        );
-    setState(() {
-      // The tree itself was installed by `_commitTree` (with its ETag, in one
-      // step). This block owns the SELECTION and the body only.
-      if (stillCurrent) {
-        _selectedView = viewToOpen;
-        if (mayWriteBody) {
-          _selectedBootstrap = bootstrap;
-        }
-        if (bootstrapError != null) _message = bootstrapError;
-      }
-    });
-    SwitchTrace.current?.mark('paint');
-    // A 304 means the mirror ALREADY holds this tree — there is nothing to
-    // write, and writing it anyway is the whole cost. Measured on a real
-    // account: 2.1s per warm switch, against 130–320ms for everything the user
-    // waits on. (Narrowing it to one workspace was not enough on its own: the
-    // store's purge step still scans every view of the origin, and that scan is
-    // most of the cost. Not doing it at all is both faster and more obviously
-    // correct.)
-    if (answer.views != null) {
-      _cacheCloudPageTree(workspaceId: workspace.id);
-    }
-    SwitchTrace.current?.mark('mirror-write');
-  }
-
-  /// Mirror the cloud page tree (workspace list + per-workspace views) into the
-  /// on-device store so a future offline start can still list and navigate cloud
-  /// content (P2 option C — Phase 1b/1c). Origin-scoped by server URL, so
-  /// switching servers doesn't cross over. P4-2: on web the mirror is
-  /// localStorage-backed (LocalOffline web variant). The cloud is authoritative
-  /// — this is a clean replace after each successful online load.
-  /// Write the page-tree mirror for the ONE workspace whose tree just changed.
-  ///
-  /// It used to write EVERY workspace held in memory, every time. That was
-  /// nearly free while memory only held the two or three workspaces visited in
-  /// this session — and stopped being free the moment the mirror was preheated
-  /// at startup, because memory then held all of them. Measured on a real
-  /// account (35 workspaces) right after that change: a warm switch spent
-  /// **2.1 seconds** here, against 130–320ms for everything the user actually
-  /// waits on.
-  ///
-  /// Safe to narrow because `mirrorCloudPageTree` replaces per workspace: the
-  /// ones not named here keep their rows.
-  ///
-  /// [workspaceId] is REQUIRED, and that is the fix for this happening twice.
-  /// It was optional, defaulting to "write everything", and the second caller —
-  /// creating a folder — simply did not pass it. So the 2.1 s write came back on
-  /// every new folder, against a mirror that by then held ~13k views. An
-  /// optional parameter whose omission is a performance cliff is a footgun with
-  /// a safety catch; required, the compiler asks the question.
-  void _cacheCloudPageTree({required String workspaceId}) {
-    final origin = _api.baseUri.toString();
-    final workspaces = <WorkspaceData>[
-      for (final (i, w) in _workspaces.indexed)
-        (
-          id: w.id,
-          name: w.name,
-          position: ((i + 1) * 10).toString().padLeft(10, '0'),
-          role: w
-              .role, // mirror the real role so offline editing knows its rights
-        ),
-    ];
-    final views = <ViewData>[
-      for (final e in _viewsByWorkspace.entries)
-        if (e.key == workspaceId)
-        for (final v in e.value)
-          (
-            id: v.id,
-            workspaceId: e.key,
-            parentId: v.parentViewId,
-            objectId: v.objectId,
-            name: v.name,
-            position: v.position,
-            trashed: false,
-            objectType: v.objectType,
-          ),
-    ];
-    _local.mirrorCloudPageTree(origin, workspaces, views);
+    await _viewsCtrl.loadWorkspaceViews(session.accessToken, workspace.id);
   }
 
   /// The server is unreachable (offline restart / transient outage): fall back to
