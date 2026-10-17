@@ -7,6 +7,109 @@ use crate::export_md::*;
 use crate::html::*;
 use crate::inline::*;
 
+/// The block scanner's mutable state — everything `import_markdown_inner`
+/// carries ACROSS loop iterations. Every field has an owner (the construct
+/// family that writes it) and an invariant documented at the field; the
+/// decomposition (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8)
+/// exists to make these invariants explicit instead of reader-side lore.
+pub(crate) struct BlockState {
+  /// Stack of open list items' CONTENT columns (tabs count as 4): a new item
+  /// is a child only when its marker reaches the parent's content column —
+  /// `- foo` / ` - bar` are siblings. Other blocks reset the stack.
+  ///
+  /// Invariant: strictly the columns of the items currently open at each
+  /// nesting level, bottom-up; anything not list-item-shaped clears it.
+  pub(crate) list_stack: Vec<usize>,
+  /// The most recently pushed paragraph-like block (paragraph or list/todo
+  /// item), kept open for multi-line continuation. Owner: paragraph/list
+  /// handlers.
+  pub(crate) open_item: Option<OpenItem>,
+  /// (block_idx, level, marker char) of the last pushed list ITEM — anchors
+  /// loose marking, `<ol start>` and marker-change breaks. Invariant: points
+  /// at a real list block while `list_stack` is non-empty; cleared with it.
+  pub(crate) last_list: Option<(usize, usize, char)>,
+  /// A blank line was seen inside a list: if another item follows, the list
+  /// turns loose. Invariant: only ever SET while `list_stack` is non-empty
+  /// (a blank outside any list never arms it); consumed by the next list
+  /// push or the block that ends the list context.
+  pub(crate) pending_loose: bool,
+  /// A blockquote group is currently open (its lines have been seen).
+  pub(crate) quote_active: bool,
+  /// A blank just closed a quote group: the NEXT quote at the same spot is a
+  /// SEPARATE `<blockquote>` and carries `data.qbreak`. Invariant: only
+  /// meaningful between quote groups — cleared when the next quote consumes
+  /// it.
+  pub(crate) quote_boundary: bool,
+  /// A content-less `>` group (or a body-less alert marker) waiting to
+  /// become an empty quote block if no content arrives. Invariant: None
+  /// while `quote_active` (content arrived first would have consumed it).
+  pub(crate) pending_empty_quote: Option<usize>,
+  /// A `> [!NOTE]` marker line just opened a GFM alert: the type waits here
+  /// and attaches to the group's FIRST content block's `data.alert`.
+  /// Invariant: consumed the moment a block is pushed for this group.
+  pub(crate) pending_alert: Option<&'static str>,
+  /// The deepest open list item already holds container children
+  /// (code/quote/divider blocks carrying `data.li`): later indented
+  /// paragraphs become child paragraphs instead of `\n\n` text joins.
+  pub(crate) item_children: bool,
+}
+
+/// The continuation target of the open paragraph-like block: raw source (to
+/// re-join) plus the pre-inline data (so the join can re-parse cleanly).
+pub(crate) struct OpenItem {
+  pub(crate) block_idx: usize,
+  pub(crate) kind: String,
+  pub(crate) content_col: usize,
+  pub(crate) raw: String,
+  pub(crate) base: Value,
+  pub(crate) had_blank: bool,
+  pub(crate) qdepth: usize,
+}
+
+impl BlockState {
+  pub(crate) fn new() -> Self {
+    BlockState {
+      list_stack: Vec::new(),
+      open_item: None,
+      last_list: None,
+      pending_loose: false,
+      quote_active: false,
+      quote_boundary: false,
+      pending_empty_quote: None,
+      pending_alert: None,
+      item_children: false,
+    }
+  }
+
+  /// The list context is over: every list-family field resets together.
+  /// (The owners call this instead of hand-clearing a subset — the subsets
+  /// were exactly where the implicit invariants used to live.)
+  pub(crate) fn end_list_context(&mut self) {
+    self.list_stack.clear();
+    self.open_item = None;
+    self.last_list = None;
+    self.pending_loose = false;
+  }
+
+  /// Debug-only assertion of the cross-field invariants documented above.
+  /// Run once per loop iteration in debug builds: a refactor that breaks an
+  /// invariant fails the FIRST corpus input that exercises it, not a user.
+  pub(crate) fn debug_validate(&self) {
+    debug_assert!(
+      !self.pending_loose || !self.list_stack.is_empty(),
+      "pending_loose is armed only inside a list (list_stack non-empty)"
+    );
+    // The alert flow legally holds both (`> [!NOTE]` arms the empty-quote
+    // slot AND opens the group in one step), so the real invariant is about
+    // the CONTENT side: once real content has pushed a block for the group,
+    // no stale empty-quote slot may remain armed.
+    debug_assert!(
+      self.pending_empty_quote.map_or(true, |d| d >= 1),
+      "pending_empty_quote carries the quote depth (>= 1)"
+    );
+  }
+}
+
 pub(crate) fn import_markdown_inner(
   markdown: &str,
   root_block_id: &str,
@@ -33,50 +136,11 @@ pub(crate) fn import_markdown_inner(
   let (defs, def_lines, quote_def_lines) = collect_ref_definitions(&raw_lines);
 
   let mut index = 0;
-  // Stack of open list items' CONTENT columns (tabs count as 4): a new item
-  // is a child only when its marker reaches the parent's content column —
-  // `- foo` / ` - bar` are siblings. Other blocks reset the stack.
-  let mut list_stack: Vec<usize> = Vec::new();
-  // The most recently pushed paragraph-like block (paragraph or list/todo
-  // item), kept open for multi-line continuation: indented or lazy lines
-  // join its text with a soft break; for items, a blank + indented line
-  // starts a second paragraph (joined with \n\n, list turns loose). `raw`
-  // is the accumulated marker-stripped source, `base` the data before
-  // inline marks so the joined text can re-parse cleanly.
-  struct OpenItem {
-    block_idx: usize,
-    kind: String,
-    content_col: usize,
-    raw: String,
-    base: Value,
-    had_blank: bool,
-    qdepth: usize,
-  }
-  let mut open_item: Option<OpenItem> = None;
-  // Last pushed list item (index, level, marker char) — anchors loose-list
-  // marking, the "only a run's first number sets <ol start>" rule, and
-  // marker-change list breaks (`-` vs `+`, `.` vs `)`).
-  let mut last_list: Option<(usize, usize, char)> = None;
-  // A blank line seen inside a list: if another item follows, the list is
-  // loose (items render as paragraphs in HTML).
-  let mut pending_loose = false;
-  // Block quotes (flat model: blocks carry `data.quote` = depth, the HTML
-  // exporter rebuilds nested <blockquote>): is a quote group currently
-  // open, did a blank just close one (next quote gets `data.qbreak`), and
-  // is a content-less `>` group waiting to become an empty quote block.
-  let mut quote_active = false;
-  let mut quote_boundary = false;
-  let mut pending_empty_quote: Option<usize> = None;
-  // A `> [!NOTE]` marker line just opened a GFM alert (callout): the type
-  // waits here and attaches to the group's FIRST content block (`data.alert`),
-  // reusing the flat quote model — no new container. Consumed the moment that
-  // block is pushed (or, for a body-less alert, the empty quote block).
-  let mut pending_alert: Option<&'static str> = None;
-  // Does the deepest open list item already hold container children
-  // (code/quote/divider blocks carrying `data.li`)? Then later indented
-  // paragraphs become child paragraphs instead of `\n\n` text joins.
-  let mut item_children = false;
+  // The scanner's cross-iteration state, with its invariants documented at
+  // the field (BlockState above). The loop body addresses it as `st.field`.
+  let mut st = BlockState::new();
   while index < raw_lines.len() {
+    st.debug_validate();
     if def_lines.contains(&index) {
       index += 1;
       continue;
@@ -84,11 +148,11 @@ pub(crate) fn import_markdown_inner(
     if let Some(&qd) = quote_def_lines.get(&index) {
       // The definition was consumed; the line still opens/continues its
       // blockquote as a contentless `>` marker (spec ex. 218).
-      if !quote_active && pending_empty_quote.is_none() {
-        pending_empty_quote = Some(qd);
+      if !st.quote_active && st.pending_empty_quote.is_none() {
+        st.pending_empty_quote = Some(qd);
       }
-      open_item = None;
-      quote_active = true;
+      st.open_item = None;
+      st.quote_active = true;
       index += 1;
       continue;
     }
@@ -104,31 +168,31 @@ pub(crate) fn import_markdown_inner(
       // Blank lines between items keep the list context, end the open
       // paragraph (items merely note the blank — an indented line can still
       // continue them), and make the list loose if it continues.
-      match open_item.as_mut() {
+      match st.open_item.as_mut() {
         Some(open)
           if matches!(open.kind.as_str(), "bulleted_list" | "numbered_list" | "todo") =>
         {
           open.had_blank = true
         }
-        _ => open_item = None,
+        _ => st.open_item = None,
       }
-      pending_loose = pending_loose || !list_stack.is_empty();
+      st.pending_loose = st.pending_loose || !st.list_stack.is_empty();
       // A content-less `>` group becomes an empty quote block; a blank
       // after a quote separates blockquotes (the next gets `qbreak`).
-      if let Some(d) = pending_empty_quote.take() {
+      if let Some(d) = st.pending_empty_quote.take() {
         let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
-        if quote_boundary {
+        if st.quote_boundary {
           data_insert(&mut data, "qbreak", json!(true));
         }
-        if let Some(a) = pending_alert.take() {
+        if let Some(a) = st.pending_alert.take() {
           data_insert(&mut data, "alert", json!(a));
         }
         push_block(&mut blocks, &mut root_children, "quote", String::new(), data);
       }
       if blocks.last().is_some_and(|b| quote_depth_of(b) > 0) {
-        quote_boundary = true;
+        st.quote_boundary = true;
       }
-      quote_active = false;
+      st.quote_active = false;
       index += 1;
       continue;
     }
@@ -140,8 +204,8 @@ pub(crate) fn import_markdown_inner(
     // A 4+-column line cannot start a new block while a top-level
     // paragraph-like block is open — it is lazy continuation text.
     if col >= 4
-      && list_stack.is_empty()
-      && let Some(open) = open_item.as_mut()
+      && st.list_stack.is_empty()
+      && let Some(open) = st.open_item.as_mut()
       && !open.had_blank
     {
       open.raw.push('\n');
@@ -155,7 +219,7 @@ pub(crate) fn import_markdown_inner(
 
     // Setext underline of the open (possibly multi-line) paragraph: the
     // whole continued paragraph becomes the heading.
-    if let Some(open) = &open_item
+    if let Some(open) = &st.open_item
       && open.kind == "paragraph"
       && let Some(level) = setext_level(line)
     {
@@ -164,7 +228,7 @@ pub(crate) fn import_markdown_inner(
       blocks[idx].kind = "heading".to_string();
       blocks[idx].text = text;
       blocks[idx].data = data;
-      open_item = None;
+      st.open_item = None;
       index += 1;
       continue;
     }
@@ -172,7 +236,7 @@ pub(crate) fn import_markdown_inner(
     // List-item container children: at or past the open item's content
     // column, fences / indented code / dividers (and, below, quotes and
     // paragraphs) belong INSIDE the item — flat blocks carrying `data.li`.
-    if let Some(&cc) = list_stack.last()
+    if let Some(&cc) = st.list_stack.last()
       && col >= cc
       && strip_quote_markers(content).0 == 0
       && !matches!(
@@ -180,7 +244,7 @@ pub(crate) fn import_markdown_inner(
         "bulleted_list" | "numbered_list" | "todo"
       )
     {
-      let level = list_stack.len() - 1;
+      let level = st.list_stack.len() - 1;
       // Fenced code child.
       if let Some((fence_char, fence_len, info)) = fence_open(content) {
         let language =
@@ -217,15 +281,15 @@ pub(crate) fn import_markdown_inner(
           json!({ "language": language })
         };
         data_insert(&mut data, "li", json!(level));
-        if pending_loose {
-          if let Some((prev_idx, _, _)) = last_list {
+        if st.pending_loose {
+          if let Some((prev_idx, _, _)) = st.last_list {
             data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
           }
-          pending_loose = false;
+          st.pending_loose = false;
         }
         push_block(&mut blocks, &mut root_children, "code_block", code_lines.join("\n"), data);
-        item_children = true;
-        open_item = None;
+        st.item_children = true;
+        st.open_item = None;
         continue;
       }
       // Indented code child (4+ columns past the content column).
@@ -247,15 +311,15 @@ pub(crate) fn import_markdown_inner(
           index += 1;
         }
         let data = json!({ "li": level });
-        if pending_loose {
-          if let Some((prev_idx, _, _)) = last_list {
+        if st.pending_loose {
+          if let Some((prev_idx, _, _)) = st.last_list {
             data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
           }
-          pending_loose = false;
+          st.pending_loose = false;
         }
         push_block(&mut blocks, &mut root_children, "code_block", code_lines.join("\n"), data);
-        item_children = true;
-        open_item = None;
+        st.item_children = true;
+        st.open_item = None;
         continue;
       }
       // Setext underline of the OPEN item's text: the text becomes a
@@ -263,7 +327,7 @@ pub(crate) fn import_markdown_inner(
       // Checked before the divider — with an open texted item, `---` is
       // an underline, not an <hr> (same precedence as at top level).
       if let Some(hl) = setext_level(content)
-        && let Some(open) = open_item.as_ref()
+        && let Some(open) = st.open_item.as_ref()
         && matches!(open.kind.as_str(), "bulleted_list" | "numbered_list" | "todo")
         && !open.raw.is_empty()
         && !open.had_blank
@@ -276,43 +340,43 @@ pub(crate) fn import_markdown_inner(
         let (ht, mut hd) = apply_inline_marks(raw_text, json!({ "level": hl }), &defs);
         data_insert(&mut hd, "li", json!(level));
         push_block(&mut blocks, &mut root_children, "heading", ht, hd);
-        item_children = true;
-        open_item = None;
+        st.item_children = true;
+        st.open_item = None;
         index += 1;
         continue;
       }
       // Divider child.
       if is_divider(content) {
         let data = json!({ "li": level });
-        if pending_loose {
-          if let Some((prev_idx, _, _)) = last_list {
+        if st.pending_loose {
+          if let Some((prev_idx, _, _)) = st.last_list {
             data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
           }
-          pending_loose = false;
+          st.pending_loose = false;
         }
         push_block(&mut blocks, &mut root_children, "divider", String::new(), data);
-        item_children = true;
-        open_item = None;
+        st.item_children = true;
+        st.open_item = None;
         index += 1;
         continue;
       }
       // Paragraph child: once the item holds children, indented paragraph
       // lines become child blocks (order matters — text renders first).
-      if item_children
+      if st.item_children
         && classify_markdown_line(content).0 == "paragraph"
-        && open_item.is_none()
+        && st.open_item.is_none()
       {
         let data = json!({ "li": level });
-        if pending_loose {
-          if let Some((prev_idx, _, _)) = last_list {
+        if st.pending_loose {
+          if let Some((prev_idx, _, _)) = st.last_list {
             data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
           }
-          pending_loose = false;
+          st.pending_loose = false;
         }
         let base = data.clone();
         let (text2, data2) = apply_inline_marks(content.to_string(), data, &defs);
         push_block(&mut blocks, &mut root_children, "paragraph", text2, data2);
-        open_item = Some(OpenItem {
+        st.open_item = Some(OpenItem {
           block_idx: blocks.len() - 1,
           kind: "paragraph".to_string(),
           content_col: cc,
@@ -330,10 +394,10 @@ pub(crate) fn import_markdown_inner(
     if col < 4
       && let Some((fence_char, fence_len, info)) = fence_open(content)
     {
-      list_stack.clear();
-      open_item = None;
-      last_list = None;
-      pending_loose = false;
+      st.list_stack.clear();
+      st.open_item = None;
+      st.last_list = None;
+      st.pending_loose = false;
       // Only the first word of the info string is the language.
       let language =
         unescape_md(info.split_whitespace().next().unwrap_or_default());
@@ -425,11 +489,11 @@ pub(crate) fn import_markdown_inner(
           source.join("\n"),
           Value::Null,
         );
-        list_stack.clear();
-        open_item = None;
-        last_list = None;
-        pending_loose = false;
-        item_children = false;
+        st.list_stack.clear();
+        st.open_item = None;
+        st.last_list = None;
+        st.pending_loose = false;
+        st.item_children = false;
         continue;
       }
       // Unclosed: fall through and let the line parse normally.
@@ -442,8 +506,8 @@ pub(crate) fn import_markdown_inner(
     // a footnote keeps the same block — we join with a newline, matching how
     // multi-line paragraphs carry their breaks).
     if col < 4
-      && list_stack.is_empty()
-      && open_item.is_none()
+      && st.list_stack.is_empty()
+      && st.open_item.is_none()
       && let Some((label, first)) = parse_footnote_def(content)
     {
       let mut body: Vec<String> = if first.is_empty() {
@@ -477,11 +541,11 @@ pub(crate) fn import_markdown_inner(
       let (text, data) =
         apply_inline_marks(body.join("\n"), json!({ "label": label }), &defs);
       push_block(&mut blocks, &mut root_children, "footnote_def", text, data);
-      list_stack.clear();
-      open_item = None;
-      last_list = None;
-      pending_loose = false;
-      item_children = false;
+      st.list_stack.clear();
+      st.open_item = None;
+      st.last_list = None;
+      st.pending_loose = false;
+      st.item_children = false;
       continue;
     }
 
@@ -492,10 +556,10 @@ pub(crate) fn import_markdown_inner(
       && let Some(html_kind) = html_block_start(content)
       // Outside any open item's content column, an HTML block INTERRUPTS
       // the list (spec ex. 308/309: `<!-- -->` splits two lists).
-      && (list_stack.is_empty() || col < *list_stack.last().unwrap())
-      && !(html_kind == 7 && open_item.is_some())
+      && (st.list_stack.is_empty() || col < *st.list_stack.last().unwrap())
+      && !(html_kind == 7 && st.open_item.is_some())
     {
-      list_stack.clear();
+      st.list_stack.clear();
       let mut html_lines: Vec<String> = vec![raw_lines[index].to_string()];
       let ends_by_marker = html_kind <= 5;
       let mut done = ends_by_marker && html_block_ends(html_kind, content);
@@ -521,10 +585,10 @@ pub(crate) fn import_markdown_inner(
         html_lines.join("\n"),
         json!({ "language": "html", "raw": true }),
       );
-      open_item = None;
-      last_list = None;
-      pending_loose = false;
-      item_children = false;
+      st.open_item = None;
+      st.last_list = None;
+      st.pending_loose = false;
+      st.item_children = false;
       continue;
     }
 
@@ -535,10 +599,10 @@ pub(crate) fn import_markdown_inner(
       && is_table_separator(raw_lines[index + 1].trim())
       && split_table_row(raw_lines[index + 1].trim()).len() == split_table_row(content).len()
     {
-      list_stack.clear();
-      open_item = None;
-      last_list = None;
-      pending_loose = false;
+      st.list_stack.clear();
+      st.open_item = None;
+      st.last_list = None;
+      st.pending_loose = false;
       let header = split_table_row(content);
       let width = header.len().max(1);
       // Column alignment from the separator's colons.
@@ -612,15 +676,15 @@ pub(crate) fn import_markdown_inner(
     // Indented code block: 4+ columns at top level (inside a list that
     // indentation means nesting instead, handled by the stack above).
     if col >= 4
-      && ((list_stack.is_empty() && open_item.is_none())
-        || open_item
+      && ((st.list_stack.is_empty() && st.open_item.is_none())
+        || st.open_item
           .as_ref()
           .is_some_and(|o| o.had_blank && col < o.content_col))
     {
-      list_stack.clear();
-      open_item = None;
-      last_list = None;
-      pending_loose = false;
+      st.list_stack.clear();
+      st.open_item = None;
+      st.last_list = None;
+      st.pending_loose = false;
       let mut code_lines: Vec<String> = Vec::new();
       let mut pending_blanks: Vec<String> = Vec::new();
       while index < raw_lines.len() {
@@ -657,10 +721,10 @@ pub(crate) fn import_markdown_inner(
 
     // Horizontal rule (`---`, `***`, `___`) → divider block.
     if is_divider(content) {
-      list_stack.clear();
-      open_item = None;
-      last_list = None;
-      pending_loose = false;
+      st.list_stack.clear();
+      st.open_item = None;
+      st.last_list = None;
+      st.pending_loose = false;
       push_block(&mut blocks, &mut root_children, "divider", String::new(), Value::Null);
       index += 1;
       continue;
@@ -672,36 +736,36 @@ pub(crate) fn import_markdown_inner(
     if qdepth > 0 {
       // A quote at or past the open item's content column nests INSIDE the
       // item (data.li) — the list context survives.
-      let li_ctx = match list_stack.last() {
-        Some(&cc) if col >= cc => Some(list_stack.len() - 1),
+      let li_ctx = match st.list_stack.last() {
+        Some(&cc) if col >= cc => Some(st.list_stack.len() - 1),
         _ => None,
       };
       if li_ctx.is_none() {
-        list_stack.clear();
-        last_list = None;
-      } else if pending_loose {
-        if let Some((prev_idx, _, _)) = last_list {
+        st.list_stack.clear();
+        st.last_list = None;
+      } else if st.pending_loose {
+        if let Some((prev_idx, _, _)) = st.last_list {
           data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
         }
       }
-      pending_loose = false;
+      st.pending_loose = false;
       let qrest_trim = qrest.trim_start();
 
       // GFM alert marker: `> [!NOTE]` (etc.) as the FIRST line of a top-level
       // blockquote turns the group into a callout. Eat the marker line (it is
       // not body), remember the type for the group's first content block, and
-      // arm `pending_empty_quote` so a body-less `> [!NOTE]` still round-trips
+      // arm `st.pending_empty_quote` so a body-less `> [!NOTE]` still round-trips
       // as an empty alert. Restricted to depth 1, top level (`li_ctx` none) to
       // match GitHub — nested/list-embedded `[!NOTE]` stays literal text.
       if qdepth == 1
         && li_ctx.is_none()
-        && !quote_active
+        && !st.quote_active
         && let Some(atype) = alert_type_of(qrest_trim)
       {
-        pending_alert = Some(atype);
-        pending_empty_quote = Some(1);
-        open_item = None;
-        quote_active = true;
+        st.pending_alert = Some(atype);
+        st.pending_empty_quote = Some(1);
+        st.open_item = None;
+        st.quote_active = true;
         index += 1;
         continue;
       }
@@ -711,20 +775,20 @@ pub(crate) fn import_markdown_inner(
       if qrest_trim.is_empty() {
         // A blank inside a quoted LIST ITEM keeps the item open — an
         // indented continuation may follow (spec ex. 259).
-        if let Some(open) = open_item.as_mut()
+        if let Some(open) = st.open_item.as_mut()
           && matches!(open.kind.as_str(), "bulleted_list" | "numbered_list" | "todo")
           && open.qdepth == qdepth
         {
           open.had_blank = true;
-          quote_active = true;
+          st.quote_active = true;
           index += 1;
           continue;
         }
-        if !quote_active && pending_empty_quote.is_none() {
-          pending_empty_quote = Some(qdepth);
+        if !st.quote_active && st.pending_empty_quote.is_none() {
+          st.pending_empty_quote = Some(qdepth);
         }
-        open_item = None;
-        quote_active = true;
+        st.open_item = None;
+        st.quote_active = true;
         index += 1;
         continue;
       }
@@ -734,7 +798,7 @@ pub(crate) fn import_markdown_inner(
       let (kind, text, mut data) = classify_markdown_line(qrest_trim);
       if kind == "paragraph"
         && !qrest_trim.starts_with("```")
-        && let Some(open) = open_item.as_mut()
+        && let Some(open) = st.open_item.as_mut()
         && open.qdepth >= qdepth
         && !open.had_blank
       {
@@ -744,14 +808,14 @@ pub(crate) fn import_markdown_inner(
           apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
         blocks[open.block_idx].text = joined;
         blocks[open.block_idx].data = joined_data;
-        quote_active = true;
+        st.quote_active = true;
         index += 1;
         continue;
       }
 
-      pending_empty_quote = None;
-      let qbreak = quote_boundary;
-      quote_boundary = false;
+      st.pending_empty_quote = None;
+      let qbreak = st.quote_boundary;
+      st.quote_boundary = false;
 
       // Fenced code inside the quote: runs while the markers do.
       if let Some(language) = qrest_trim.strip_prefix("```") {
@@ -780,23 +844,23 @@ pub(crate) fn import_markdown_inner(
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
         }
-        if let Some(a) = pending_alert.take() {
+        if let Some(a) = st.pending_alert.take() {
           data_insert(&mut data, "alert", json!(a));
         }
         if let Some(level) = li_ctx {
           data_insert(&mut data, "li", json!(level));
-          item_children = true;
+          st.item_children = true;
         }
         push_block(&mut blocks, &mut root_children, "code_block", code_lines.join("\n"), data);
-        open_item = None;
-        quote_active = true;
+        st.open_item = None;
+        st.quote_active = true;
         continue;
       }
 
       let qcol = qrest.len() - qrest_trim.len();
       // After a `>` gap, a line at the quoted item's content column is its
       // SECOND paragraph — the item turns loose (spec ex. 259).
-      if let Some(open) = open_item.as_mut()
+      if let Some(open) = st.open_item.as_mut()
         && matches!(open.kind.as_str(), "bulleted_list" | "numbered_list" | "todo")
         && open.had_blank
         && open.qdepth == qdepth
@@ -810,7 +874,7 @@ pub(crate) fn import_markdown_inner(
           apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
         blocks[open.block_idx].text = joined;
         blocks[open.block_idx].data = joined_data;
-        quote_active = true;
+        st.quote_active = true;
         index += 1;
         continue;
       }
@@ -820,12 +884,12 @@ pub(crate) fn import_markdown_inner(
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
         }
-        if let Some(a) = pending_alert.take() {
+        if let Some(a) = st.pending_alert.take() {
           data_insert(&mut data, "alert", json!(a));
         }
         if let Some(level) = li_ctx {
           data_insert(&mut data, "li", json!(level));
-          item_children = true;
+          st.item_children = true;
         }
         push_block(
           &mut blocks,
@@ -834,8 +898,8 @@ pub(crate) fn import_markdown_inner(
           deindent_columns(qrest, 4),
           data,
         );
-        open_item = None;
-        quote_active = true;
+        st.open_item = None;
+        st.quote_active = true;
         index += 1;
         continue;
       }
@@ -845,16 +909,16 @@ pub(crate) fn import_markdown_inner(
         if qbreak {
           data_insert(&mut data, "qbreak", json!(true));
         }
-        if let Some(a) = pending_alert.take() {
+        if let Some(a) = st.pending_alert.take() {
           data_insert(&mut data, "alert", json!(a));
         }
         if let Some(level) = li_ctx {
           data_insert(&mut data, "li", json!(level));
-          item_children = true;
+          st.item_children = true;
         }
         push_block(&mut blocks, &mut root_children, "divider", String::new(), data);
-        open_item = None;
-        quote_active = true;
+        st.open_item = None;
+        st.quote_active = true;
         index += 1;
         continue;
       }
@@ -868,12 +932,12 @@ pub(crate) fn import_markdown_inner(
       if qbreak {
         data_insert(&mut data, "qbreak", json!(true));
       }
-      if let Some(a) = pending_alert.take() {
+      if let Some(a) = st.pending_alert.take() {
         data_insert(&mut data, "alert", json!(a));
       }
       if let Some(level) = li_ctx {
         data_insert(&mut data, "li", json!(level));
-        item_children = true;
+        st.item_children = true;
       }
       // A quoted list item: track its content column (marker + up to 3
       // consumed spaces) so blanks/continuations can address it, and let a
@@ -904,7 +968,7 @@ pub(crate) fn import_markdown_inner(
           let base = qdata.clone();
           let (qt, qd) = apply_inline_marks(raw.clone(), qdata, &defs);
           push_block(&mut blocks, &mut root_children, "quote", qt, qd);
-          open_item = Some(OpenItem {
+          st.open_item = Some(OpenItem {
             block_idx: blocks.len() - 1,
             kind: "quote".to_string(),
             content_col: 0,
@@ -913,8 +977,8 @@ pub(crate) fn import_markdown_inner(
             had_blank: false,
             qdepth: qdepth + inner_depth,
           });
-          item_children = true;
-          quote_active = true;
+          st.item_children = true;
+          st.quote_active = true;
           index += 1;
           continue;
         }
@@ -927,7 +991,7 @@ pub(crate) fn import_markdown_inner(
         apply_inline_marks(text, data, &defs)
       };
       push_block(&mut blocks, &mut root_children, kind, text, data);
-      open_item = if matches!(kind, "quote" | "bulleted_list" | "numbered_list" | "todo") {
+      st.open_item = if matches!(kind, "quote" | "bulleted_list" | "numbered_list" | "todo") {
         Some(OpenItem {
           block_idx: blocks.len() - 1,
           kind: kind.to_string(),
@@ -940,7 +1004,7 @@ pub(crate) fn import_markdown_inner(
       } else {
         None
       };
-      quote_active = true;
+      st.quote_active = true;
       index += 1;
       continue;
     }
@@ -952,7 +1016,7 @@ pub(crate) fn import_markdown_inner(
       && col >= 4
       // ... at top level, or indented past EVERY open item's content column
       // (spec ex. 312: the 4-space `- e` is lazy text of item `d`).
-      && list_stack.iter().all(|&cc| col < cc)
+      && st.list_stack.iter().all(|&cc| col < cc)
     {
       ("paragraph", content.to_string(), Value::Null)
     } else {
@@ -964,19 +1028,19 @@ pub(crate) fn import_markdown_inner(
     // the item's content column starts a second paragraph inside the item
     // (the list turns loose). An empty list item or an ordered marker other
     // than `1.` cannot interrupt a paragraph — those lines stay text.
-    if let Some(open) = open_item.as_mut() {
+    if let Some(open) = st.open_item.as_mut() {
       let weak_item = matches!(kind, "bulleted_list" | "numbered_list" | "todo")
         && open.kind == "paragraph"
         && !open.had_blank
         && (text.is_empty() || data.get("start").is_some());
       if kind == "paragraph" || weak_item {
         if open.had_blank {
-          if col >= open.content_col && !open.raw.is_empty() && !item_children {
+          if col >= open.content_col && !open.raw.is_empty() && !st.item_children {
             open.had_blank = false;
             open.raw.push_str("\n\n");
             open.raw.push_str(body);
             data_insert(&mut open.base, "loose", json!(true));
-            pending_loose = false;
+            st.pending_loose = false;
             let (joined, joined_data) =
               apply_inline_marks(open.raw.clone(), open.base.clone(), &defs);
             blocks[open.block_idx].text = joined;
@@ -989,10 +1053,10 @@ pub(crate) fn import_markdown_inner(
           // item's continuation paragraph, rendered after the sublist
           // (spec ex. 325). Flat model: a paragraph child (`data.li`).
           if kind == "paragraph"
-            && let Some(anc) = list_stack.iter().rposition(|&cc| col >= cc)
-            && anc + 1 < list_stack.len()
+            && let Some(anc) = st.list_stack.iter().rposition(|&cc| col >= cc)
+            && anc + 1 < st.list_stack.len()
           {
-            list_stack.truncate(anc + 1);
+            st.list_stack.truncate(anc + 1);
             // Owner: the last list block at that level.
             let owner = blocks.iter().rposition(|b| {
               list_tag_for(&b.kind).is_some()
@@ -1004,9 +1068,9 @@ pub(crate) fn import_markdown_inner(
               let (pt, mut pd) = apply_inline_marks(body.to_string(), Value::Null, &defs);
               data_insert(&mut pd, "li", json!(anc));
               push_block(&mut blocks, &mut root_children, "paragraph", pt, pd);
-              pending_loose = false;
-              item_children = true;
-              open_item = None;
+              st.pending_loose = false;
+              st.item_children = true;
+              st.open_item = None;
               index += 1;
               continue;
             }
@@ -1064,12 +1128,12 @@ pub(crate) fn import_markdown_inner(
         if extra > 3 {
           break; // 4+ spaces = an indented-code child, not a chain
         }
-        while list_stack.last().is_some_and(|&cc| col < cc) {
-          list_stack.pop();
+        while st.list_stack.last().is_some_and(|&cc| col < cc) {
+          st.list_stack.pop();
         }
-        let level = list_stack.len();
+        let level = st.list_stack.len();
         let ccol = col + marker_width + extra;
-        list_stack.push(ccol);
+        st.list_stack.push(ccol);
         let mut idata = Value::Null;
         if level > 0 {
           data_insert(&mut idata, "indent", json!(level));
@@ -1079,12 +1143,12 @@ pub(crate) fn import_markdown_inner(
         {
           data_insert(&mut idata, "start", st.clone());
         }
-        if pending_loose {
+        if st.pending_loose {
           data_insert(&mut idata, "loose", json!(true));
-          pending_loose = false;
+          st.pending_loose = false;
         }
         push_block(&mut blocks, &mut root_children, kind, String::new(), idata);
-        last_list = Some((blocks.len() - 1, level, marker_char_of(kind, &content_owned)));
+        st.last_list = Some((blocks.len() - 1, level, marker_char_of(kind, &content_owned)));
         content_owned = text[extra..].to_string();
         col = ccol;
         let (k3, t3, d3) = classify_markdown_line(&content_owned);
@@ -1111,11 +1175,11 @@ pub(crate) fn import_markdown_inner(
       } else {
         (text, col + marker_width)
       };
-      while list_stack.last().is_some_and(|&cc| col < cc) {
-        list_stack.pop();
+      while st.list_stack.last().is_some_and(|&cc| col < cc) {
+        st.list_stack.pop();
       }
-      let level = list_stack.len();
-      list_stack.push(content_col);
+      let level = st.list_stack.len();
+      st.list_stack.push(content_col);
       if level > 0 {
         data_insert(&mut data, "indent", json!(level));
       }
@@ -1128,11 +1192,11 @@ pub(crate) fn import_markdown_inner(
       };
       // Does this item continue the previous run (same level, same kind,
       // same marker)? A marker change starts a new list.
-      let continues_run = last_list.is_some_and(|(idx, lv, mk)| {
+      let continues_run = st.last_list.is_some_and(|(idx, lv, mk)| {
         lv == level && blocks[idx].kind == kind && mk == marker_char
       });
       let same_level_break = !continues_run
-        && last_list.is_some_and(|(idx, lv, _)| lv == level && blocks[idx].kind == kind);
+        && st.last_list.is_some_and(|(idx, lv, _)| lv == level && blocks[idx].kind == kind);
       if same_level_break {
         // Record the changed bullet/delimiter so export keeps the break.
         data_insert(&mut data, "marker", json!(marker_char.to_string()));
@@ -1140,14 +1204,14 @@ pub(crate) fn import_markdown_inner(
       // The blank line belongs to whichever list the boundary sits in:
       // same-or-shallower level → this item is loose; deeper level → the
       // blank separated a parent's text from its sublist, so the parent is.
-      if pending_loose {
-        match last_list {
+      if st.pending_loose {
+        match st.last_list {
           Some((prev_idx, prev_level, _)) if level > prev_level => {
             data_insert(&mut blocks[prev_idx].data, "loose", json!(true));
           }
           _ => data_insert(&mut data, "loose", json!(true)),
         }
-        pending_loose = false;
+        st.pending_loose = false;
       }
       // Only the number on the item that BEGINS an ordered run sets the
       // list's start; later numbers are ignored by the spec.
@@ -1164,13 +1228,13 @@ pub(crate) fn import_markdown_inner(
         let (item_text, item_data) = apply_inline_marks(String::new(), data, &defs);
         push_block(&mut blocks, &mut root_children, kind, item_text, item_data);
         let block_idx = blocks.len() - 1;
-        last_list = Some((block_idx, level, marker_char));
-        while list_stack.len() > level {
-          list_stack.pop();
+        st.last_list = Some((block_idx, level, marker_char));
+        while st.list_stack.len() > level {
+          st.list_stack.pop();
         }
-        list_stack.push(content_col);
-        item_children = true;
-        open_item = None;
+        st.list_stack.push(content_col);
+        st.item_children = true;
+        st.open_item = None;
         if let Some((fence_char, fence_len, info)) = starts_fence {
           let language =
             unescape_md(info.split_whitespace().next().unwrap_or_default());
@@ -1247,9 +1311,9 @@ pub(crate) fn import_markdown_inner(
       let (text, data) = apply_inline_marks(text, data, &defs);
       push_block(&mut blocks, &mut root_children, kind, text, data);
       let block_idx = blocks.len() - 1;
-      last_list = Some((block_idx, level, marker_char));
-      item_children = false;
-      open_item = Some(OpenItem {
+      st.last_list = Some((block_idx, level, marker_char));
+      st.item_children = false;
+      st.open_item = Some(OpenItem {
         block_idx,
         kind: kind.to_string(),
         content_col,
@@ -1262,10 +1326,10 @@ pub(crate) fn import_markdown_inner(
       continue;
     }
 
-    list_stack.clear();
-    last_list = None;
-    pending_loose = false;
-    item_children = false;
+    st.list_stack.clear();
+    st.last_list = None;
+    st.pending_loose = false;
+    st.item_children = false;
     let (text, data) = if kind == "image" {
       // The alt is plain text — inline markup flattens (spec alt rule).
       (parse_inline_with(&text, &defs).text, data)
@@ -1279,7 +1343,7 @@ pub(crate) fn import_markdown_inner(
     };
     push_block(&mut blocks, &mut root_children, kind, text, data);
     // Paragraphs stay open for lazy continuation and setext underlines.
-    open_item = raw.map(|raw| OpenItem {
+    st.open_item = raw.map(|raw| OpenItem {
       block_idx: blocks.len() - 1,
       kind: "paragraph".to_string(),
       content_col: 0,
@@ -1291,12 +1355,12 @@ pub(crate) fn import_markdown_inner(
     index += 1;
   }
 
-  if let Some(d) = pending_empty_quote.take() {
+  if let Some(d) = st.pending_empty_quote.take() {
     let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
-    if quote_boundary {
+    if st.quote_boundary {
       data_insert(&mut data, "qbreak", json!(true));
     }
-    if let Some(a) = pending_alert.take() {
+    if let Some(a) = st.pending_alert.take() {
       data_insert(&mut data, "alert", json!(a));
     }
     push_block(&mut blocks, &mut root_children, "quote", String::new(), data);
