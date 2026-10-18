@@ -213,18 +213,19 @@
 | C4 删账号 | 🟡 部分 | 删除后清理头像对象；409 文案改正（卡住的是作者外键，不是成员资格）。**「协作者永远删不掉账号」未改**：要么把作者改挂到工作区 owner / 墓碑用户，要么外键改 SET NULL——涉及他人工作区的内容归属，需拍板 |
 | C7 分页 / 任务属主 / 房间清理 | ✅ 已修 | 分页加 `id` 兜底排序；负 offset 回 400；导入任务查询/取消校验属主；新建房间时清理失效条目 |
 | C5 光标停在 emoji 中间 | ✅ 已修（Dart） | 左右键按字素簇移动 |
-| C6 Dart/Rust 镜像差异 | 🟡 部分 | Dart `mathRunSpans` 跳过代码段、空链接 mark 不再丢弃 |
+| C6 Dart/Rust 镜像差异 | ✅ 已修 | Dart `mathRunSpans` 跳过代码段、空链接 mark 不再丢弃；Rust 未开启的 `~` 连续段整段字面量（`tilde_runs.rs`）；Dart 改用与 Rust 相同的 Unicode White_Space 判定 |
 | C8 源码 NUL 字节 | ✅ 已修 | 改为 `\u0000` 转义 |
 | C9 IPv6 限流可绕过 | ✅ 已修 | IPv6 按 /64 计桶，IPv4 映射地址按 IPv4 |
 | C10 登录时序可枚举账号 | ✅ 已修 | 未知邮箱也对一个固定的随机哈希跑一次 Argon2 |
-| D2 PAT 请求写放大 | 🟡 部分 | `last_used_at` 一分钟内只写一次；token 仍解析两遍（要把解析结果放进请求扩展，改动面较大，未做） |
+| D2 PAT 请求写放大 | ✅ 已修 | `last_used_at` 一分钟内只写一次；`scope_guard` 把解析结果放进 task-local，`user_id_from_headers` 同 token 直接复用（客户端无法伪造） |
+| D3 整工作区导出 | 🟡 部分 | 新发现：zip 写入器把大小/偏移 `as u32`，超 4 GiB 静默截断成坏包（云端 / CLI / 桌面 FFI 共用）→ 仅在超限时启用 ZIP64，未超限逐字节不变；整树导出全服务器并发上限 2（超出 503）。**全流式化未做**：需要把图片抓取改成逐个产出，改动面大 |
+| D4 GC 解码所有文档 | ✅ 已修 | `document_yrs_base.file_ids` 派生列（migration 0030），所有写入点同语句维护 + 启动回填；GC 读列，NULL 回退解码 |
+| D5 杂项 | ✅ 已修 | `reorder` 单条批量 UPDATE；评论列表按线程预分组。「事务内等 S3」是防 GC 竞态的有意设计（持对象键锁覆盖 HEAD→登记），不改 |
 | D1 同步热路径 | ✅ 已修 | 每次 push 只拍平一次；自动版本先查再写，不再每次把整份 state 发给 Postgres |
 
-**验证状态**：Rust 侧全量 `cargo test --workspace`（连本地 Postgres 16，DB 集成测试真实执行）：
-最近一次 754 通过、12 忽略（原本就 `#[ignore]` 的）、1 失败——`mica-cli`
-`backup::tests::a_second_run_is_refused_while_the_first_holds_the_lock`。本轮未改 `crates/cli`，
-该测试单独重跑 6 次全过、上一轮全量也通过，判断为**既有的并行偶发失败**（与 `RunLock` 在同进程并行测试下的
-锁语义有关，未深究），未跳过、未改动，留作单独排查。
+**验证状态**：Rust 侧全量 `cargo test --workspace`（连本地 Postgres 16，DB 集成测试真实执行），
+最近一次（`fe0c0e0`）**761 通过、0 失败**、12 忽略（原本就 `#[ignore]` 的）。此前一轮出现过一次
+`mica-cli` 备份锁测试的并行偶发失败（本审查未改 `crates/cli`，单独重跑 6 次全过），留作单独排查。
 Dart 改动（A7/A8/A9/B9/B13/B14/C5/C6/C8）本机无 Dart 工具链，**未编译未测试**，合并前需在开发机跑
 `flutter analyze` + `flutter test`（`cloud_lag_resync_test.dart` 新增了 fakeAsync 用例）。
 
@@ -237,6 +238,6 @@ Dart 改动（A7/A8/A9/B9/B13/B14/C5/C6/C8）本机无 Dart 工具链，**未编
 - **B7 每账号工作区数 / 按账号配额**：产品决策。
 - **B11 缺依赖 update**：服务端已能检出；要拒绝，需约定错误码并让客户端收到后基于 sv 整份补推。
 - **C4 协作者删账号**：内容归属策略需拍板。
-- **C6 剩余镜像差异**：Rust 未闭合 `~` 的处理（应整段字面量）、Unicode 空白与 Dart ASCII 空白不一致。改动影响两端解析结果，需配 CommonMark/GFM 记分牌回归一起做。
-- **D2** token 解析结果复用；**D3** 整工作区导出流式化；**D4** GC 维护 `file_ids` 列；**D5** 事务内等待 S3、`reorder` 批量化、评论列表 O(线程×评论)。均为性能项，未做。
+- **D3 导出全流式化**：图片抓取改为逐个产出、边下边写 zip，单个导出的内存才能有界。
+- **`[<`×N 类恶意输入**仍为平方级（4000 个 ~0.3 s），需 `matching_bracket` 记忆化。
 
