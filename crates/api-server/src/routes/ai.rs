@@ -660,7 +660,7 @@ pub async fn list_models(
 
 #[cfg(test)]
 mod models_endpoint_tests {
-  use super::models_url_candidates;
+  use super::{models_url_candidates, same_base_url};
 
   /// The plain case: a bare host takes the OpenAI convention.
   #[test]
