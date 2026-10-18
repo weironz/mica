@@ -53,7 +53,8 @@ fn nested_link_nesting_is_not_exponential() {
 /// A plain multi-line paragraph was CUBIC: every continuation line re-parsed
 /// the whole paragraph's inlines, and `extended_autolink` copied the entire
 /// remaining text at every word boundary of each parse. 2000 lines of `a`
-/// (4 KB) took ~2 s in release, 4000 lines ~15 s; it is ~ms now.
+/// (4 KB) took ~2 s in release, 4000 lines ~15 s. Continuations now defer the
+/// inline parse to one pass at the end, and the autolink check is O(1).
 #[test]
 fn a_long_multi_line_paragraph_is_not_cubic() {
     let ms = parse_ms(&"a\n".repeat(4000));
@@ -64,8 +65,10 @@ fn a_long_multi_line_paragraph_is_not_cubic() {
 
 /// `[<` repeated with no `>` anywhere: the `<` scan ran to the end of the text
 /// from every position `matching_bracket` visits, from every `[` — cubic.
+/// (Still quadratic — every unmatched `[` scans to the end — so the size is
+/// kept where quadratic is well under the bound and cubic is far over it.)
 #[test]
 fn unclosed_angle_brackets_inside_brackets_are_not_cubic() {
-    let ms = parse_ms(&"[<".repeat(4000));
-    assert!(ms < 3000, "`[<`×4000 took {ms}ms — the `<` scan no longer stops at `<`/whitespace");
+    let ms = parse_ms(&"[<".repeat(2000));
+    assert!(ms < 3000, "`[<`×2000 took {ms}ms — the `<` scan no longer stops at `<`/whitespace");
 }

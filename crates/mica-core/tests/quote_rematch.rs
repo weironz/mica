@@ -4,9 +4,10 @@
 //! Two things are pinned here, and the second matters more than the first:
 //!
 //! 1. a thread whose anchor died over UNCHANGED text comes back — the case that
-//!    actually happens, because `set_blocks` (every REST/MCP write, every version
-//!    restore) rewrites each block's text object and kills every anchor on the
-//!    document;
+//!    happens whenever a block is deleted and re-inserted with the same content
+//!    (cut and paste, an older client). `set_blocks` — every REST/MCP write and
+//!    version restore — used to do that to EVERY block; it is a per-block diff
+//!    now, but the rescue still matters for the remaining cases;
 //! 2. the matcher REFUSES when it is not sure. A wrong anchor moves a discussion
 //!    onto words nobody commented on, silently; an orphan is at least visibly an
 //!    orphan. Every "stays None" test below is guarding that.
@@ -30,8 +31,8 @@ fn index(doc: &MicaDoc) -> QuoteIndex {
 
 #[test]
 fn a_rewritten_document_kills_anchors_and_the_quote_brings_them_back() {
-    // The motivating case end to end. `set_blocks` is what a REST/MCP write and a
-    // version restore both do; the text is IDENTICAL afterwards.
+    // The motivating case end to end: a block deleted and re-inserted with
+    // IDENTICAL text gets a new text object.
     let mut doc = doc_with(&[("a", "the quick brown fox"), ("b", "second block")]);
     let anchor = doc.sticky_for_range("a", 4, "a", 9).expect("anchor 'quick'");
     assert_eq!(
@@ -39,13 +40,14 @@ fn a_rewritten_document_kills_anchors_and_the_quote_brings_them_back() {
         Some((4, 9))
     );
 
-    let blocks = doc.to_blocks();
-    doc.set_blocks("r", &blocks);
+    let a = doc.to_blocks().into_iter().find(|b| b.id == "a").unwrap();
+    doc.delete_block("a", false);
+    doc.insert_block("r", 0, &a);
 
     let dead = doc.resolve_range(&anchor).filter(|r| !r.is_empty());
     assert!(
         dead.is_none(),
-        "set_blocks replaces every block's text object — the old anchor cannot survive"
+        "a re-inserted block has a new text object — the old anchor cannot survive"
     );
 
     let found = index(&doc).find("quick", Some("a")).expect("the quote is still there");

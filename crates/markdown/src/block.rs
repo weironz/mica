@@ -54,6 +54,9 @@ pub(crate) struct BlockState {
   /// (code/quote/divider blocks carrying `data.li`): later indented
   /// paragraphs become child paragraphs instead of `\n\n` text joins.
   pub(crate) item_children: bool,
+  /// Blocks whose `text` holds RAW continued source awaiting one inline parse
+  /// at the end of the scan (`block_handlers::defer_inline`).
+  pub(crate) stale_inline: std::collections::BTreeSet<usize>,
 }
 
 /// The continuation target of the open paragraph-like block: raw source (to
@@ -80,6 +83,7 @@ impl BlockState {
       pending_empty_quote: None,
       pending_alert: None,
       item_children: false,
+      stale_inline: std::collections::BTreeSet::new(),
     }
   }
   /// Debug-only assertion of the cross-field invariants documented above.
@@ -289,6 +293,7 @@ pub(crate) fn import_markdown_inner(
     };
     leaf_block(&mut ctx, body, c);
   }
+  crate::block_handlers::finish_deferred_inline(&mut blocks, std::mem::take(&mut st.stale_inline), &defs);
   if let Some(d) = st.pending_empty_quote.take() {
     let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
     if st.quote_boundary {
