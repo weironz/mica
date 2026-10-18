@@ -350,7 +350,10 @@ class AuthController extends ChangeNotifier {
   /// share. A listWorkspaces failure propagates BEFORE anything is signed in
   /// or persisted.
   Future<AuthSession> _completeSignIn(AuthSession signedIn) async {
+    if (!isMounted()) return signedIn;
     final workspaces = await _listWorkspaces(signedIn.accessToken);
+    // A late response must not recreate credentials after its shell is gone.
+    if (!isMounted()) return signedIn;
     session.signIn(signedIn, workspaces);
     persistSession(signedIn);
     return signedIn;
@@ -410,18 +413,34 @@ class AuthController extends ChangeNotifier {
   }
 
   Future<String?> removeAvatar(AuthSession session) async {
+    final requestOrigin = origin();
     await _removeAvatar(session.accessToken);
-    return applyAvatarVersion(session, null);
+    return applyAvatarVersion(session, null, requestOrigin: requestOrigin);
   }
+
+  /// Check before an avatar picker result starts a request against the live API.
+  bool canApplyAvatar(AuthSession value, String requestOrigin) =>
+      isMounted() &&
+      origin() == requestOrigin &&
+      session.session?.user.id == value.user.id;
 
   /// Same copyWith discipline as a profile update: rebuilding the session
   /// here would drop the refresh token, and changing your picture would cost
   /// you the ability to renew.
-  String? applyAvatarVersion(AuthSession session, String? version) {
-    final updated = session.copyWith(
-      user: session.user.withAvatarVersion(version),
-    );
-    if (isMounted()) {
+  String? applyAvatarVersion(
+    AuthSession session,
+    String? version, {
+    String? requestOrigin,
+  }) {
+    final current = this.session.session;
+    final sameAccount =
+        origin() == (requestOrigin ?? origin()) &&
+        current?.user.id == session.user.id;
+    // Preserve tokens and profile changes adopted while the avatar request
+    // awaited; an account that signed out or switched away must stay gone.
+    final basis = sameAccount ? current! : session;
+    final updated = basis.copyWith(user: basis.user.withAvatarVersion(version));
+    if (isMounted() && sameAccount) {
       this.session.adoptSession(updated);
       persistSession(updated);
     }

@@ -397,9 +397,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // build default (never an invented server).
     await _registry.removeServer(
       origin,
-      onRemovingActive: () async {
-        if (_activeOrigin != origin) return false;
+      onBeforeRemove: () async {
+        if (_activeOrigin != origin) return true;
         await _cloudSession?.drainOutbox(timeout: const Duration(seconds: 4));
+        if (!mounted) return false;
         await _setActiveConnection('local');
         if (!mounted) return false;
         return true;
@@ -1556,9 +1557,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<void> _authenticate(AuthMode mode, AuthFormValue form) {
     return _run(() async {
       final outcome = await _auth.authenticate(mode, form);
+      if (!mounted) return;
       switch (outcome) {
         case AuthRegistered(:final verified):
-          if (!mounted) return;
           // Registering no longer signs you in: the address has to be confirmed
           // first, so there is no session to take. The FIRST account on an empty
           // instance is verified server-side on the spot, so telling it to go
@@ -2630,23 +2631,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// updated and the panel you changed it in did not.)
   Future<String?> _changeAvatar() async {
     final session = _requireSession();
+    final origin = _cloudOrigin;
     final picked = await pickImage();
+    if (!_auth.canApplyAvatar(session, origin)) return null;
     if (picked == null) return _avatarUrlFor(session.user.avatarVersion);
     final version = await _api.setAvatar(
       session.accessToken,
       picked.bytes,
       picked.mime,
     );
-    // Same copyWith discipline inside the controller: rebuilding the session
-    // would drop the refresh token, and changing your picture would cost you
-    // the ability to renew.
-    return _auth.applyAvatarVersion(session, version);
+    return _auth.applyAvatarVersion(session, version, requestOrigin: origin);
   }
 
-  Future<String?> _removeAvatar() async {
-    final session = _requireSession();
-    return _auth.removeAvatar(session);
-  }
+  Future<String?> _removeAvatar() => _auth.removeAvatar(_requireSession());
 
   String? _avatarUrlFor(String? version, {String? userId}) => avatarUrl(
     base: _api.baseUri,
@@ -5479,6 +5476,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         return;
       }
       final session = await _auth.signIn(creds.$2);
+      if (!mounted) return;
       unawaited(_syncSettingsFromCloud(session));
       unawaited(_refreshAiConfigured());
       await _loadSelectedWorkspaceMembers();

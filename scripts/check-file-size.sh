@@ -6,13 +6,13 @@
 #      软上限 4,000 行（警告清单）。生成代码在 EXEMPT_RE 显式豁免。
 #   2) 棘轮：scripts/file-size-budget.txt 登记的文件只许减不许增，涨一行都失败。
 #      存量巨石因此成为只收敛的目标，而不是「每次 PR 涨一点」的温水煮青蛙。
-#   3) 增量：--diff <base> 时（CI 传 merge-base SHA），超过 2,000 行的存量文件
+#   3) 增量：--diff <base> 时（CI 传 push 前的 SHA 或 PR merge-base），超过 2,000 行的存量文件
 #      一次改动净增 >300 行即失败——在「往大文件里续写」的决策点上拦截，
 #      而不是等绝对限触发。新建文件不走增量门禁（拆分产出的新文件由绝对限管理）。
 #
 # 用法：
 #   bash scripts/check-file-size.sh                     # 绝对限 + 棘轮（`just check-structure`）
-#   bash scripts/check-file-size.sh --diff <git-ref>    # 追加增量门禁（CI 的 PR 检查）
+#   bash scripts/check-file-size.sh --diff <git-ref>    # 追加增量门禁
 #
 # 豁免是登记制：改 EXEMPT_RE / 预算文件必须留下理由，没有「惯例豁免」。
 set -uo pipefail
@@ -108,6 +108,12 @@ if [[ $mode == diff ]]; then
     # shellcheck disable=SC2312
     while read -r added removed path; do
       [[ ${added:-} =~ ^[0-9]+$ ]] || continue          # 二进制/异常行跳过
+      # 与绝对限使用同一个源文件范围；文档、测试金样本、配置不属于代码膨胀门禁。
+      case "$path" in
+        crates/*/src/*.rs|clients/mica_flutter/lib/*.dart) ;;
+        *) continue ;;
+      esac
+      [[ "$path" == */target/* ]] && continue
       [[ -f $path ]] || continue                         # 本次删除的文件
       git cat-file -e "$base:$path" 2>/dev/null || continue  # 新建文件：由绝对限管理，拆分产物不误伤
       [[ "$path" =~ $EXEMPT_RE ]] && continue

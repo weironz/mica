@@ -2,14 +2,18 @@
 //! to be `import_markdown_inner`'s 1,300-line loop body
 //! (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8, stage 2).
 //!
-//! Every handler is a verbatim move of its branch family from the loop: same
-//! logic, same comments, addresses `ctx.st.<field>` through the shared [ScanCtx].
+//! The families preserve the original loop's parsing decisions and address
+//! `ctx.st.<field>` through the shared [ScanCtx].
 //! A handler returns `Some(())` when it consumed the line (the loop
 //! `continue`s); `None` means "not mine — fall through to the next family",
 //! preserving the loop's original ordering, which IS the precedence order.
+//! `list_item` instead uses `ControlFlow` to return an unconsumed classification
+//! by ownership; the remaining families need no full text/data copy.
 //!
 //! The golden-master test (tests/golden_master.rs) pins all of this
 //! byte-for-byte: 741 corpus inputs through both entry points.
+
+use std::ops::ControlFlow;
 
 use serde_json::{Value, json};
 
@@ -27,7 +31,6 @@ use crate::Block;
 /// What the scan loop and its handlers share per invocation: the document
 /// being scanned and the two accumulators. `index` is passed by &mut.
 /// The classify result carried between families.
-#[derive(Clone)]
 pub(crate) struct ClassifiedLine {
   pub(crate) kind: &'static str,
   pub(crate) text: String,
@@ -939,26 +942,19 @@ pub(crate) fn quote_group(ctx: &mut ScanCtx, _line: &str, content: &str, body: &
       return Some(());
     }
 
-    let (_kind, _text, _data) = classify_markdown_line(content);
-    // An indented (4+ columns) marker cannot start a list at top level —
-    // the line is paragraph continuation or code, never a new item.
   None // fall through: the family guard rejected the line
 }
 
 /// (family moved from the scan loop)
-pub(crate) fn open_item_continuations(ctx: &mut ScanCtx, content: &str, body: &str, col: usize, c: ClassifiedLine) -> Option<()> {
-    // An indented (4+ columns) marker cannot start a list at top level —
-    // the line is paragraph continuation or code, never a new item.
-    let (kind, text, data) = if matches!(c.kind, "bulleted_list" | "numbered_list" | "todo")
-      && col >= 4
-      // ... at top level, or indented past EVERY open item's content column
-      // (spec ex. 312: the 4-space `- e` is lazy text of item `d`).
-      && ctx.st.list_stack.iter().all(|&cc| col < cc)
-    {
-      ("paragraph", content.to_string(), Value::Null)
-    } else {
-      (c.kind, c.text, c.data)
-    };
+pub(crate) fn open_item_continuations(
+  ctx: &mut ScanCtx,
+  body: &str,
+  col: usize,
+  c: &ClassifiedLine,
+) -> Option<()> {
+    // Classification and top-level indentation normalization already happened
+    // in the scanner. Inspect by reference so a declined family copies nothing.
+    let (kind, text, data) = (c.kind, &c.text, &c.data);
     // Continuation (CommonMark): a paragraph line joins the open block with
     // a soft break (lazy lines included); after a blank, a line indented to
     // the item's content column starts a second paragraph inside the item
@@ -1034,8 +1030,15 @@ pub(crate) fn open_item_continuations(ctx: &mut ScanCtx, content: &str, body: &s
   None // fall through: the family guard rejected the line
 }
 
-/// (family moved from the scan loop)
-pub(crate) fn list_item(ctx: &mut ScanCtx, content: &str, col: usize, c: ClassifiedLine) -> Option<()> {
+/// Consume a list line, or return its original classification to the leaf
+/// handler. Passing ownership back avoids cloning the text/data for every
+/// paragraph, heading and image that this family declines.
+pub(crate) fn list_item(
+  ctx: &mut ScanCtx,
+  content: &str,
+  col: usize,
+  c: ClassifiedLine,
+) -> ControlFlow<(), ClassifiedLine> {
     if matches!(c.kind, "bulleted_list" | "numbered_list" | "todo") {
     let (mut kind, mut text, mut data) = (c.kind, c.text, c.data);
       // `- - foo` / `1. - 2. foo`: an item whose text is ITSELF a list
@@ -1216,7 +1219,7 @@ pub(crate) fn list_item(ctx: &mut ScanCtx, content: &str, col: usize, c: Classif
           };
           data_insert(&mut cdata, "li", json!(level));
           push_block(ctx.blocks, ctx.root_children, "code_block", code_lines.join("\n"), cdata);
-          return Some(());
+          return ControlFlow::Break(());
         }
         if starts_divider {
           push_block(
@@ -1227,7 +1230,7 @@ pub(crate) fn list_item(ctx: &mut ScanCtx, content: &str, col: usize, c: Classif
             json!({ "li": level }),
           );
           (*ctx.index) += 1;
-          return Some(());
+          return ControlFlow::Break(());
         }
         if let Some(hl) = starts_heading {
           let htext = strip_atx_closing(text[hl..].trim_start()).to_string();
@@ -1235,7 +1238,7 @@ pub(crate) fn list_item(ctx: &mut ScanCtx, content: &str, col: usize, c: Classif
           data_insert(&mut hdata, "li", json!(level));
           push_block(ctx.blocks, ctx.root_children, "heading", htext, hdata);
           (*ctx.index) += 1;
-          return Some(());
+          return ControlFlow::Break(());
         }
         // starts_code: the kept extra spaces are an indented code child.
         push_block(
@@ -1246,7 +1249,7 @@ pub(crate) fn list_item(ctx: &mut ScanCtx, content: &str, col: usize, c: Classif
           json!({ "li": level }),
         );
         (*ctx.index) += 1;
-        return Some(());
+        return ControlFlow::Break(());
       }
       let raw = text.clone();
       let base = data.clone();
@@ -1265,11 +1268,11 @@ pub(crate) fn list_item(ctx: &mut ScanCtx, content: &str, col: usize, c: Classif
         qdepth: 0,
       });
       (*ctx.index) += 1;
-      return Some(());
+      return ControlFlow::Break(());
     }
 
     ctx.st.list_stack.clear();
-  None // fall through: the family guard rejected the line
+  ControlFlow::Continue(c)
 }
 
 /// (family moved from the scan loop)
@@ -1304,3 +1307,45 @@ pub(crate) fn leaf_block(ctx: &mut ScanCtx, body: &str, c: ClassifiedLine) -> Op
   Some(())
 }
 
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn declined_families_transfer_large_classification_without_copying() {
+    // The handler extraction used to clone BOTH payloads before each family,
+    // even when the line was neither a continuation nor a list item.
+    for kind in ["paragraph", "heading", "image"] {
+      let mut blocks = Vec::new();
+      let mut children = Vec::new();
+      let defs = RefDefs::new();
+      let mut index = 0;
+      let mut st = BlockState::new();
+      st.list_stack.push(2);
+      let mut ctx = ScanCtx {
+        lines: &[],
+        blocks: &mut blocks,
+        root_children: &mut children,
+        defs: &defs,
+        index: &mut index,
+        st: &mut st,
+      };
+      let c = ClassifiedLine {
+        kind,
+        text: "a".repeat(1024 * 1024),
+        data: json!({ "url": "b".repeat(1024 * 1024) }),
+      };
+      let text_ptr = c.text.as_ptr();
+      let data_ptr = c.data["url"].as_str().unwrap().as_ptr();
+      assert!(open_item_continuations(&mut ctx, "unused", 0, &c).is_none());
+      let ControlFlow::Continue(c) = list_item(&mut ctx, "unused", 0, c) else {
+        panic!("non-list classification must reach the leaf handler");
+      };
+      assert_eq!(c.text.as_ptr(), text_ptr);
+      assert_eq!(c.data["url"].as_str().unwrap().as_ptr(), data_ptr);
+      assert!(ctx.st.list_stack.is_empty());
+      assert!(ctx.blocks.is_empty());
+      assert_eq!(*ctx.index, 0);
+    }
+  }
+}

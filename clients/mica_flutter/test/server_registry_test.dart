@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/server_registry.dart';
 
@@ -54,6 +56,55 @@ void main() {
   });
 
   group('removing', () {
+    test(
+      'an aborted in-flight drain preserves the server, credentials and mirror',
+      () async {
+        final r = make();
+        const origin = 'https://a.example.com';
+        r.addServer(origin);
+        r.bind(origin);
+        prefs['authToken:$origin'] = 'access';
+        prefs['authUser:$origin'] = 'user';
+        prefs['refreshToken:$origin'] = 'refresh';
+        final before = Map<String, String>.of(prefs);
+        final drain = Completer<void>();
+        var mounted = true;
+        final removal = r.removeServer(
+          origin,
+          onBeforeRemove: () async {
+            await drain.future;
+            return mounted;
+          },
+        );
+
+        mounted = false;
+        drain.complete();
+        await removal;
+
+        expect(r.servers, [origin]);
+        expect(r.cloudOrigin, origin);
+        expect(prefs, before);
+        expect(forgotten, isEmpty);
+      },
+    );
+
+    test(
+      'an inactive server can be removed without draining the active one',
+      () async {
+        final r = make();
+        r.addServer('https://active.example.com');
+        r.addServer('https://inactive.example.com');
+        r.bind('https://active.example.com');
+        await r.removeServer(
+          'https://inactive.example.com',
+          onBeforeRemove: () async => true,
+        );
+        expect(r.servers, ['https://active.example.com']);
+        expect(r.cloudOrigin, 'https://active.example.com');
+        expect(forgotten, ['https://inactive.example.com']);
+      },
+    );
+
     test('forgets credentials AND mirror, keyed surgically by origin', () async {
       final r = make();
       r.addServer('https://a.example.com');
@@ -61,7 +112,7 @@ void main() {
       r.bind('https://a.example.com');
       await r.removeServer(
         'https://a.example.com',
-        onRemovingActive: () async {
+        onBeforeRemove: () async {
           activeRemovals.add(true);
           return true;
         },
@@ -78,7 +129,7 @@ void main() {
     test('an unknown origin is a no-op', () async {
       final r = make();
       r.addServer('https://a.example.com');
-      await r.removeServer('https://zz.example.com', onRemovingActive: () async => false);
+      await r.removeServer('https://zz.example.com', onBeforeRemove: () async => true);
       expect(r.servers, hasLength(1));
       expect(forgotten, isEmpty);
     });
@@ -87,7 +138,7 @@ void main() {
       final r = make(defaultCloudUrl: 'https://default.example.com');
       r.addServer('https://a.example.com');
       r.bind('https://a.example.com');
-      await r.removeServer('https://a.example.com', onRemovingActive: () async => false);
+      await r.removeServer('https://a.example.com', onBeforeRemove: () async => true);
       expect(r.cloudOrigin, 'https://default.example.com');
       expect(r.servers, ['https://default.example.com'],
           reason: 'the default is not in the list, so it becomes the list');
@@ -98,7 +149,7 @@ void main() {
       final r = make();
       r.addServer('https://a.example.com');
       r.bind('https://a.example.com');
-      await r.removeServer('https://a.example.com', onRemovingActive: () async => false);
+      await r.removeServer('https://a.example.com', onBeforeRemove: () async => true);
       expect(r.cloudOrigin, '');
       expect(r.servers, isEmpty);
       expect(rebased, hasLength(1),

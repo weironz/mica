@@ -66,18 +66,17 @@ class ServerRegistry extends ChangeNotifier {
 
   /// Forget [origin] completely: its credentials AND its on-device mirror
   /// ("删除就删除干净" — true for anything that reached the server, which is
-  /// why [onRemovingActive] gets its chance to push pending edits FIRST,
-  /// while a session may still exist). Only called for an origin that is
-  /// being switched away from because it is the active one.
+  /// why [onBeforeRemove] gets its chance to push pending edits FIRST,
+  /// while a session may still exist). The callback permits removal only
+  /// after any active-origin drain and switch have completed safely.
   Future<void> removeServer(
     String origin, {
-    required Future<bool> Function() onRemovingActive,
+    required Future<bool> Function() onBeforeRemove,
   }) async {
     if (!servers.contains(origin)) return;
-    if (await onRemovingActive()) {
-      // The active world moved to local; nothing else in this method may
-      // assume the old session is still meaningful.
-    }
+    // False aborts the removal (for example, its shell was disposed while
+    // draining); an inactive origin needs no drain and may return true.
+    if (!await onBeforeRemove()) return;
     servers = servers.where((s) => s != origin).toList();
     _persist();
     // Credentials, then the mirror. Both are keyed by origin, so this is

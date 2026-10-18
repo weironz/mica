@@ -1,4 +1,6 @@
 
+use std::ops::ControlFlow;
+
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -279,12 +281,12 @@ pub(crate) fn import_markdown_inner(
     // than `1.` cannot interrupt a paragraph — those lines stay text.
     // The classify result carries through the remaining families.
     let c = ClassifiedLine { kind, text, data };
-    if open_item_continuations(&mut ctx, content, body, col, c.clone()).is_some() {
+    if open_item_continuations(&mut ctx, body, col, &c).is_some() {
       continue;
     }
-    if list_item(&mut ctx, content, col, c.clone()).is_some() {
+    let ControlFlow::Continue(c) = list_item(&mut ctx, content, col, c) else {
       continue;
-    }
+    };
     leaf_block(&mut ctx, body, c);
   }
   if let Some(d) = st.pending_empty_quote.take() {

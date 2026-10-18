@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
 import 'package:mica_flutter/session/session_controller.dart';
@@ -81,7 +83,10 @@ void main() {
     store.signIn(session('t'), [ws('w1'), ws('w2')]);
   }
 
-  CloudViewsController buildController() => CloudViewsController(
+  CloudViewsController buildController({
+    Future<({List<DocumentView>? views, String? etag})> Function()? fetchTree,
+    Future<DocumentBootstrap> Function()? fetchBootstrap,
+  }) => CloudViewsController(
         session: store,
         createDocument: (token, workspaceId, name, {parentViewId}) async {
           calls.add('createDocument:$workspaceId/$name/$parentViewId');
@@ -90,6 +95,7 @@ void main() {
         },
         bootstrapDocument: (token, workspaceId, documentId) async {
           calls.add('bootstrap:$workspaceId/$documentId');
+          if (fetchBootstrap != null) return fetchBootstrap();
           return boot('v-$documentId');
         },
         createFolder: (token, workspaceId, name, {parentViewId}) async {
@@ -139,6 +145,7 @@ void main() {
         },
         listViewsIfChanged: (token, workspaceId, {etag}) async {
           calls.add('listViews:$workspaceId/etag=${etag ?? '-'}');
+          if (fetchTree != null) return fetchTree();
           final error = listViewsError;
           if (error != null) throw error;
           return viewsAnswer[workspaceId] ?? (views: null, etag: etag);
@@ -378,6 +385,59 @@ void main() {
   });
 
   group('loadWorkspaceViews (was _loadSelectedWorkspaceViews)', () {
+    test(
+      'unmount during tree fetch cannot commit tree, etag or mirror',
+      () async {
+        store.replaceViews('w1', [view('held')]);
+        prefs['viewsEtag:w1'] = 'held-etag';
+        final tree = Completer<({List<DocumentView>? views, String? etag})>();
+        final body = Completer<DocumentBootstrap>();
+        final controller = buildController(
+          fetchTree: () => tree.future,
+          fetchBootstrap: () => body.future,
+        );
+        final selections = <ViewsSelection>[];
+        listen(controller, selections);
+        final loading = controller.loadWorkspaceViews('t', 'w1');
+        mounted = false;
+        tree.complete((views: [view('late')], etag: 'late-etag'));
+        await Future<void>.delayed(Duration.zero);
+        // The speculative body now has no consumer, but its error must still be
+        // handled rather than reaching the application's uncaught-error zone.
+        body.completeError(const ApiException('speculative body failed'));
+        await loading;
+        await Future<void>.delayed(Duration.zero);
+        expect(store.viewsByWorkspace['w1']!.single.id, 'held');
+        expect(prefs['viewsEtag:w1'], 'held-etag');
+        expect(mirrored, isNull);
+        expect(selections, isEmpty);
+      },
+    );
+
+    test(
+      'unmount during bootstrap cannot publish selection or write mirror',
+      () async {
+        final body = Completer<DocumentBootstrap>();
+        final bootstrapStarted = Completer<void>();
+        viewsAnswer['w1'] = (views: [view('fresh')], etag: 'fresh-etag');
+        final controller = buildController(
+          fetchBootstrap: () {
+            bootstrapStarted.complete();
+            return body.future;
+          },
+        );
+        final selections = <ViewsSelection>[];
+        listen(controller, selections);
+        final loading = controller.loadWorkspaceViews('t', 'w1');
+        await bootstrapStarted.future;
+        mounted = false;
+        body.complete(boot('fresh'));
+        await loading;
+        expect(selections, isEmpty);
+        expect(mirrored, isNull);
+      },
+    );
+
     test('auto-open: remembered id wins, folders are never opened', () async {
       viewsAnswer['w1'] = (
         views: [view('folder', objectType: 'folder'), view('doc1')],
@@ -467,57 +527,28 @@ void main() {
         () async {
       store.replaceViews('w1', [view('held')]);
       prefs['viewsEtag:w1'] = 'e0';
+      final oldTree =
+          Completer<({List<DocumentView>? views, String? etag})>();
       var answerCount = 0;
-      final slow = CloudViewsController(
-        session: store,
-        createDocument: (t, w, n, {parentViewId}) async =>
-            throw StateError('unused'),
-        bootstrapDocument: (t, w, d) async => boot('v'),
-        createFolder: (t, w, n, {parentViewId}) async =>
-            view('f', objectType: 'folder'),
-        updateView: (t, w, i, n, {icon}) async => view(i, name: n),
-        deleteView: (t, w, i) async => const [],
-        batchTrashViews: ({
-          required token,
-          required workspaceId,
-          required viewIds,
-        }) async => (affected: 0, skipped: const <String>[]),
-        cloneView: ({
-          required token,
-          required workspaceId,
-          required viewId,
-          name,
-          required dryRun,
-        }) async => throw StateError('unused'),
-        reorderViews: (t, w,
-            {required parentViewId, required orderedViewIds}) async {},
-        restoreView: (t, w, i) async => const [],
-        listViewsIfChanged: (t, w, {etag}) async {
-          answerCount++;
-          return answerCount == 1
-              ? (views: [view('old')], etag: 'stale')
-              : (views: [view('new')], etag: 'fresh');
-        },
-        readPref: (key) => prefs[key],
-        savePref: (key, value) => prefs[key] = value,
-        mirrorPageTree: (o, w, v) {},
-        origin: () => 'https://srv',
-        isMounted: () => true,
-        openViewId: () => null,
-        crdtSessionDocumentId: () => null,
-      );
+      final controller = buildController(fetchTree: () {
+        answerCount++;
+        return answerCount == 1
+            ? oldTree.future
+            : Future.value((views: [view('new')], etag: 'fresh'));
+      });
       final selections = <ViewsSelection>[];
-      listen(slow, selections);
-      final first = slow.loadWorkspaceViews('t', 'w1');
-      // Let the first request claim; a second one claims before it answers.
-      await Future<void>.delayed(Duration.zero);
-      await slow.loadWorkspaceViews('t', 'w1');
+      listen(controller, selections);
+      final first = controller.loadWorkspaceViews('t', 'w1');
+      await controller.loadWorkspaceViews('t', 'w1');
+      // Complete the stale response only AFTER the new tree and body landed.
+      // A zero-duration delay with immediate answers does not model this race.
+      oldTree.complete((views: [view('old')], etag: 'stale'));
       await first;
-      expect(store.viewsByWorkspace['w1']!.single.id, 'new',
-          reason: 'the newer claim wins even when the older answer lands later');
-      expect(prefs['viewsEtag:w1'], 'fresh',
-          reason: 'the stale ETag is the durable half of the damage');
-      expect(selections, isNotEmpty);
+      expect(store.viewsByWorkspace['w1']!.single.id, 'new');
+      expect(prefs['viewsEtag:w1'], 'fresh');
+      expect(selections, hasLength(1));
+      expect(selections.single.view!.id, 'new');
+      expect(mirrored!.single, contains(':new:'));
     });
 
     test('stillCurrent=false when the switch moved on — the selection is not written',

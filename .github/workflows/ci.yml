@@ -52,9 +52,9 @@ jobs:
   # markdown lib.rs 6,339 行）。三层防线都在 scripts/check-file-size.sh：
   #   绝对限（8,000 硬失败 / 4,000 警告）+ 棘轮（预算文件登记的文件只许减
   #   不许增）+ 增量（>2,000 行的存量文件一次净增 >300 行失败）。
-  # 增量门禁需要 diff 基线：fetch 全历史后取 merge-base(origin/main, HEAD)——
-  # PR 分支上等价于三分点 diff（只含本 PR 的提交）；直接推 main 时基线就是
-  # HEAD 本身，diff 为空、自然放行。秒级完成、排在最前让失败尽早可见。
+  # 增量门禁：push 使用事件 before SHA（覆盖一次推送的全部提交），PR 使用
+  # base SHA 的 merge-base。首次推送或历史不可用时显式回退，不能用 origin/main
+  # 与 HEAD 比较，否则 main 直推时增量门禁恒为空。
   structure:
     name: Structure (file-size gate)
     runs-on: ubuntu-latest
@@ -62,14 +62,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Test structure gate against isolated Git fixtures
+        run: bash scripts/test-structure-gate.sh
       - name: Check per-file line limits and growth
-        run: |
-          base=$(git merge-base origin/main HEAD 2>/dev/null || true)
-          if [ -n "$base" ]; then
-            bash scripts/check-file-size.sh --diff "$base"
-          else
-            bash scripts/check-file-size.sh
-          fi
+        env:
+          STRUCTURE_PUSH_BEFORE: ${{ github.event.before }}
+          STRUCTURE_PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/check-structure-ci.sh
 
   rust:
     name: Rust (build + lint + tests)

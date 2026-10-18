@@ -571,6 +571,7 @@ class CloudViewsController extends ChangeNotifier {
   /// races the tree fetch, a conditional (ETag) request avoids re-downloading
   /// an unchanged tree, and the auto-open lands on a DOCUMENT (never a folder).
   Future<void> loadWorkspaceViews(String token, String workspaceId) async {
+    if (!isMounted()) return;
     // Which page we are about to open is usually already known — it is the one
     // this workspace was last on, and its tree is in memory. Asking for its
     // content only AFTER the tree comes back spends a second round trip
@@ -580,6 +581,11 @@ class CloudViewsController extends ChangeNotifier {
     Future<DocumentBootstrap>? guessed;
     if (guess != null && guess.objectType != 'folder') {
       guessed = _bootstrapDocument(token, workspaceId, guess.objectId);
+      // This request is speculative: an unmount, a superseding tree request,
+      // or a failed tree fetch can leave it without an awaiting consumer.
+      // Handle that branch immediately; awaiting it below still reports its
+      // failure when the returned tree actually selects this document.
+      guessed.ignore();
     }
 
     // Claim a sequence number for THIS request. Anything older that lands later
@@ -606,7 +612,7 @@ class CloudViewsController extends ChangeNotifier {
     // selection block below guards itself separately (`stillCurrent`), but the
     // TREE and its tag had no such guard: a slower load landing last
     // overwrote the newer one.
-    if (!_requests.isCurrent(workspaceId, seq)) return;
+    if (!isMounted() || !_requests.isCurrent(workspaceId, seq)) return;
 
     final views = answer.views ?? held ?? const <DocumentView>[];
     _commitTree(
@@ -656,6 +662,9 @@ class CloudViewsController extends ChangeNotifier {
       guessed?.ignore();
     }
 
+    // The shell can disappear while the body is being fetched too. The hooks
+    // only guard UI updates; the mirror write below is a durable side effect.
+    if (!isMounted()) return;
     SwitchTrace.current?.mark('body');
     // Two clicks in quick succession run two of these. The tree is keyed by
     // workspace so a late arrival is harmless there, but the SELECTION is one

@@ -333,6 +333,44 @@ void main() {
   });
 
   group('authenticate — the sign-in form flow', () {
+    for (final switcher in [false, true]) {
+      for (final disposeDuringLogin in [false, true]) {
+        test(
+          '${switcher ? 'signIn' : 'authenticate'} ignores a late ${disposeDuringLogin ? 'login' : 'workspace list'} after unmount',
+          () async {
+            final login = Completer<AuthSession>();
+            final workspaces = Completer<List<Workspace>>();
+            final listStarted = Completer<void>();
+            final auth = build(
+              login: (_) => login.future,
+              listWorkspaces: (_) {
+                listStarted.complete();
+                return workspaces.future;
+              },
+            );
+            final done = switcher
+                ? auth.signIn(form)
+                : auth.authenticate(AuthMode.login, form);
+            if (disposeDuringLogin) {
+              mountedFlag = false;
+              login.complete(session());
+            } else {
+              login.complete(session());
+              await listStarted.future;
+              mountedFlag = false;
+              workspaces.complete([ws('late')]);
+            }
+            await done;
+
+            expect(hub.session, isNull);
+            expect(hub.workspaces, isEmpty);
+            expect(prefs, isEmpty);
+            expect(listStarted.isCompleted, !disposeDuringLogin);
+          },
+        );
+      }
+    }
+
     test('register stops at the round trip and reports the server\'s verified answer', () async {
       final auth = build(register: (form) async => true);
 
@@ -551,6 +589,77 @@ void main() {
   });
 
   group('avatar version adoption', () {
+    test(
+      'an avatar removal preserves a token rotation and profile change made in flight',
+      () async {
+        final original = session(name: 'Before', avatar: 'v1', refresh: 'old');
+        hub.signIn(original, [ws('a')]);
+        final removed = Completer<void>();
+        final auth = build(removeAvatar: (_) => removed.future);
+        final done = auth.removeAvatar(original);
+        hub.adoptSession(
+          session(
+            name: 'After',
+            avatar: 'v1',
+            refresh: 'rotated',
+            access: 'new-access',
+          ),
+        );
+        removed.complete();
+        await done;
+
+        expect(hub.session!.refreshToken, 'rotated');
+        expect(hub.session!.accessToken, 'new-access');
+        expect(hub.session!.user.displayName, 'After');
+        expect(hub.session!.user.avatarVersion, isNull);
+        expect(prefs['refreshToken:$originValue'], 'rotated');
+      },
+    );
+
+    for (final transition in ['sign out', 'switch user', 'switch origin']) {
+      test(
+        'an avatar response after $transition does not adopt or persist the old account',
+        () async {
+          final original = session(user: 'u1', avatar: 'v1');
+          hub.signIn(original, [ws('a')]);
+          final removed = Completer<void>();
+          final auth = build(removeAvatar: (_) => removed.future);
+          final done = auth.removeAvatar(original);
+          switch (transition) {
+            case 'sign out':
+              hub.signOut();
+            case 'switch user':
+              hub.adoptSession(session(user: 'u2', avatar: 'other'));
+            case 'switch origin':
+              originValue = 'https://other.example';
+              hub.adoptSession(session(user: 'u1', avatar: 'other'));
+          }
+          final current = hub.session;
+          removed.complete();
+          await done;
+
+          expect(hub.session, same(current));
+          expect(prefs, isEmpty);
+        },
+      );
+    }
+
+    test(
+      'a picked avatar cannot start a request after leaving its account',
+      () {
+        final original = session();
+        hub.signIn(original, [ws('a')]);
+        final auth = build();
+        final requestOrigin = originValue;
+        expect(auth.canApplyAvatar(original, requestOrigin), isTrue);
+        hub.signOut();
+        expect(auth.canApplyAvatar(original, requestOrigin), isFalse);
+        hub.signIn(original, [ws('a')]);
+        originValue = 'https://other.example';
+        expect(auth.canApplyAvatar(original, requestOrigin), isFalse);
+      },
+    );
+
     test('applyAvatarVersion keeps the refresh token, adopts, persists, and evicts the new URL', () {
       final s = session(user: 'u1', avatar: 'v1', refresh: 'survives');
       hub.signIn(s, [ws('a')]);
