@@ -210,9 +210,11 @@ where
   // — the same coarse-but-exact primitive version restore uses. Deliberately
   // not a per-op yrs mapping: a second implementation of the op semantics is
   // precisely how the two stores drifted apart in the first place, whereas this
-  // makes the yrs state equal `next_payload` by construction. The cost is a
-  // full-document update per REST/MCP write (these are batch writes, not
-  // keystrokes) and last-writer-wins against a concurrent editor.
+  // makes the yrs state equal `next_payload` by construction. `set_blocks`
+  // diffs block by block, so blocks this write did not change keep their yrs
+  // objects and a concurrent editor's edits to them merge; only a block both
+  // sides changed is decided by the CRDT (text splices interleave, the same
+  // prop key is last-writer-wins).
   let next_blocks: Vec<mica_core::Block> = next_payload
     .blocks
     .iter()
@@ -703,10 +705,33 @@ pub async fn create_named_yrs_version(
 /// Deduplication is already reflected — `insert_file` returns the existing row for
 /// identical bytes, so re-uploading the same image adds a reference and no size.
 pub async fn workspace_bytes_used(db: &PgPool, workspace_id: Uuid) -> ApiResult<i64> {
+  workspace_bytes_used_excluding(db, workspace_id, None).await
+}
+
+/// [workspace_bytes_used] without the pending reservation of `exclude_key` —
+/// for `complete`, whose own upload is that reservation and must not be
+/// counted twice against itself.
+pub async fn workspace_bytes_used_excluding(
+  db: &PgPool,
+  workspace_id: Uuid,
+  exclude_key: Option<&str>,
+) -> ApiResult<i64> {
+  // Registered files PLUS browser uploads issued but never registered. The
+  // latter count until the orphan sweep removes their ledger row — whether or
+  // not the bytes were actually PUT, which the database cannot know; an
+  // abandoned upload costs its size for the grace period rather than letting
+  // never-completed uploads fill the store unmetered.
   sqlx::query_scalar::<_, i64>(
-    "SELECT coalesce(sum(byte_size), 0)::bigint FROM files WHERE workspace_id = $1",
+    "SELECT (
+       (SELECT coalesce(sum(byte_size), 0) FROM files WHERE workspace_id = $1)
+       + (SELECT coalesce(sum(p.byte_size), 0) FROM pending_file_uploads p
+          WHERE p.workspace_id = $1
+            AND p.object_key IS DISTINCT FROM $2
+            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key))
+     )::bigint",
   )
   .bind(workspace_id)
+  .bind(exclude_key)
   .fetch_one(db)
   .await
   .map_err(ApiError::from)
@@ -780,6 +805,22 @@ pub async fn record_pending_file_upload_tx(
   Ok(())
 }
 
+/// Record the size a browser upload URL allows, for the quota
+/// ([workspace_bytes_used]). Kept apart from [record_pending_file_upload_tx] so
+/// its many server-side callers — which meter themselves — are unaffected.
+pub async fn reserve_pending_upload_bytes_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  object_key: &str,
+  byte_size: i64,
+) -> ApiResult<()> {
+  sqlx::query("UPDATE pending_file_uploads SET byte_size = GREATEST(byte_size, $2) WHERE object_key = $1")
+    .bind(object_key)
+    .bind(byte_size)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
+}
+
 /// Server-side PUTs also need a durable ledger entry *before* sending bytes.
 /// A transaction held across PUT is not enough: a process crash would roll it
 /// back and leave an object that no sweep can discover.
@@ -825,12 +866,13 @@ pub async fn insert_file_tx(
 ) -> ApiResult<FileRecord> {
   // Object keys are content-addressed (sha256), so re-uploading identical bytes
   // hits the UNIQUE(object_key) constraint. Treat that as dedup: return the
-  // existing row rather than failing. The no-op SET lets us use RETURNING.
+  // existing row rather than failing. The SET also clears the GC mark — see
+  // [reclaim_file_tx] for why handing out an existing row must.
   sqlx::query_as::<_, FileRecord>(
     r#"
       INSERT INTO files (workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size)
       VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (object_key) DO UPDATE SET object_key = EXCLUDED.object_key
+      ON CONFLICT (object_key) DO UPDATE SET unreferenced_since = NULL
       RETURNING id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size, created_at
     "#,
   )
@@ -889,6 +931,25 @@ pub async fn fetch_file_by_key(
 }
 
 /// Transactional lookup for the presign/GC key-locked critical section.
+/// Clear the blob-GC mark on a row that is being handed out again by dedup.
+///
+/// GC's "fresh upload" guard is `MIN_OBJECT_AGE` against the row's ORIGINAL
+/// `created_at`, so a row unreferenced for 30+ days and then reused (the same
+/// image uploaded again, an import's prefetch hitting it) had no protection:
+/// a sweep landing before the new page saved deleted the object, and the page
+/// kept a dangling `file_id`. Clearing the mark restarts the full grace period.
+/// Callers hold [lock_file_object_key], the same lock GC's collect takes.
+pub async fn reclaim_file_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  file_id: Uuid,
+) -> ApiResult<()> {
+  sqlx::query("UPDATE files SET unreferenced_since = NULL WHERE id = $1 AND unreferenced_since IS NOT NULL")
+    .bind(file_id)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
+}
+
 pub async fn fetch_file_by_key_tx(
   tx: &mut Transaction<'_, Postgres>,
   workspace_id: Uuid,

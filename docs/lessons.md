@@ -44,8 +44,14 @@ snapshot → yrs base,**没有反向折叠**。云会话切成纯 yrs append-log
 update 进 `workspace_updates` 流并刷新 base。
 
 > **刻意不做逐 op 的 yrs 映射——同一语义两套实现正是这个 bug 的成因。**
-> `set_blocks` 让 yrs 状态按构造等于目标 payload,代价是每次 REST/MCP 写产生
-> 全量 update、并发块级后写胜。这个代价是知情接受的。
+> `set_blocks` 让 yrs 状态按构造等于目标 payload。
+>
+> **2026-10-18 更正**:这里原写「代价是全量 update、并发块级后写胜,知情接受」——
+> 实际代价比写的大:`set_blocks` 先删光再重插,**没被这次写入碰到的块**也换了新 yrs 对象,
+> 别人对它们的并发编辑落在已删对象上、按 CRDT 语义成为已删内容(MCP 往页尾追加一段,
+> 别人正在打的另一段静默消失)。现在 `set_blocks` 按块 id 做差量(文本 splice、props/children
+> 只改变化处),只有双方都改了的同一块才由 CRDT 裁决。教训:**写下「代价是 X」之前,先确认
+> X 的范围** —— 「块级后写胜」与「全文档后写胜」差的是整个协同。
 
 ### 已收敛(2026-07-30,v0.13.4)
 

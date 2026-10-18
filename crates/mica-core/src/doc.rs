@@ -192,6 +192,12 @@ impl MicaDoc {
         })
     }
 
+    /// Whether applied updates are parked waiting for history this doc lacks
+    /// (yrs integrates them only once their dependencies arrive).
+    pub fn has_pending_updates(&self) -> bool {
+        self.doc.transact().has_missing_updates()
+    }
+
     /// Encode the whole document state as a yrs v1 update (the base snapshot).
     pub fn encode_state(&self) -> Vec<u8> {
         self.doc
@@ -394,7 +400,12 @@ fn set_props(txn: &mut TransactionMut, bm: &MapRef, data: &Value) {
         }
     }
     for (k, v) in desired {
-        props.insert(txn, k.to_string(), json_to_any(v));
+        // Unchanged keys are not rewritten: a rewrite is a last-writer-wins
+        // map insert, and it would clobber a concurrent edit of the same key.
+        let value = json_to_any(v);
+        if !matches!(props.get(txn, k), Some(Out::Any(ref current)) if *current == value) {
+            props.insert(txn, k.to_string(), value);
+        }
     }
 }
 
@@ -430,6 +441,61 @@ fn write_block(txn: &mut TransactionMut, blocks_map: &MapRef, b: &Block) -> MapR
     set_props(txn, &bm, &b.data);
     bm.insert(txn, "children", ArrayPrelim::from(b.children.clone()));
     bm
+}
+
+/// Bring an EXISTING block's map to `b`, writing only what differs — the
+/// per-block half of [MicaDoc::set_blocks].
+fn update_block(txn: &mut TransactionMut, bm: &MapRef, b: &Block) {
+    if bm.get(txn, "ty").and_then(out_string).as_deref() != Some(b.kind.as_str()) {
+        bm.insert(txn, "ty", b.kind.clone());
+    }
+    let block_marks = marks::marks_from_data(&b.data);
+    if get_text(txn, bm).is_some() {
+        set_text_and_marks(txn, bm, &b.text, &block_marks);
+    } else {
+        let text: TextRef = bm.insert(txn, "text", TextPrelim::new(b.text.clone()));
+        for (start, len, attrs) in marks::marks_to_format_ops(&block_marks) {
+            text.format(txn, start, len, attrs);
+        }
+    }
+    set_props(txn, bm, &b.data);
+    match get_children(txn, bm) {
+        Some(arr) => {
+            let current: Vec<String> = arr.iter(txn).filter_map(out_string).collect();
+            if current.len() as u32 != arr.len(txn) {
+                // Non-string entries: not ours to splice around; rewrite.
+                bm.insert(txn, "children", ArrayPrelim::from(b.children.clone()));
+            } else {
+                splice_ids(txn, &arr, &current, &b.children);
+            }
+        }
+        None => {
+            bm.insert(txn, "children", ArrayPrelim::from(b.children.clone()));
+        }
+    }
+}
+
+/// Turn `arr` (holding `current`) into `wanted` by replacing only the middle
+/// that differs — the common prefix and suffix stay the same yrs items, so a
+/// concurrent insert elsewhere in the list survives.
+fn splice_ids(txn: &mut TransactionMut, arr: &ArrayRef, current: &[String], wanted: &[String]) {
+    let prefix = current.iter().zip(wanted).take_while(|(a, b)| a == b).count();
+    let max_suffix = current.len().min(wanted.len()) - prefix;
+    let suffix = current
+        .iter()
+        .rev()
+        .zip(wanted.iter().rev())
+        .take(max_suffix)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let remove = current.len() - prefix - suffix;
+    if remove > 0 {
+        arr.remove_range(txn, prefix as u32, remove as u32);
+    }
+    let insert = &wanted[prefix..wanted.len() - suffix];
+    if !insert.is_empty() {
+        arr.insert_range(txn, prefix as u32, insert.iter().cloned());
+    }
 }
 
 fn get_block_map<T: ReadTxn>(txn: &T, blocks_map: &MapRef, id: &str) -> Option<MapRef> {
@@ -652,21 +718,35 @@ fn set_text_and_marks(txn: &mut TransactionMut, bm: &MapRef, text: &str, block_m
 // ── editor-intent operations (each one yrs transaction) ──────────────────────
 
 impl MicaDoc {
-    /// Replace the document's ENTIRE block set with `blocks` (rooted at
-    /// `root_id`), as forward operations on THIS doc. Used by version restore:
-    /// re-applying an old *state* as an update can't revert a CRDT (merge is a
-    /// union — deletions don't un-happen, later content isn't removed), so a
-    /// restore re-derives the target content as new ops. The diff since a state
-    /// vector captured before this call IS the restore update. Every existing
-    /// block entry is cleared first, so blocks absent from `blocks` truly
-    /// disappear. Coarse by design (rewrites all blocks) — restore is rare.
+    /// Make the document's block set equal `blocks` (rooted at `root_id`), as
+    /// forward operations on THIS doc. Used by version restore (re-applying an
+    /// old *state* can't revert a CRDT — merge is a union — so a restore
+    /// re-derives the target content as new ops) and by every REST/MCP write.
+    /// The diff since a state vector captured before this call IS the update.
+    /// Blocks absent from `blocks` truly disappear.
+    ///
+    /// Written as a DIFF, block by block. It used to remove every block entry
+    /// and re-insert all of them as fresh maps/texts. That made each REST/MCP
+    /// write replace the yrs objects of blocks it never touched, and an edit
+    /// made concurrently — offline, or inside the client's push debounce — to
+    /// ANY block landed on an object that no longer existed and integrated as
+    /// deleted content: an MCP `append` at the end of a page silently erased a
+    /// paragraph someone was typing at the top. Comment anchors on every block
+    /// died the same way. Now a surviving block keeps its map, its text gets a
+    /// minimal splice ([set_text_and_marks]), props and children only change
+    /// where they differ, and only genuinely added/removed ids are
+    /// inserted/removed — so concurrent edits to other blocks, and to other
+    /// parts of the same block, merge.
     pub fn set_blocks(&mut self, root_id: &str, blocks: &[Block]) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
         let meta = self.doc.get_or_insert_map(META);
         let mut txn = self.doc.transact_mut();
+        let wanted: std::collections::HashSet<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
         let existing: Vec<String> = blocks_map.keys(&txn).map(|k| k.to_string()).collect();
         for k in existing {
-            blocks_map.remove(&mut txn, &k);
+            if !wanted.contains(k.as_str()) {
+                blocks_map.remove(&mut txn, &k);
+            }
         }
         // An empty `root_id` means "the caller does not know the root", NOT
         // "clear it". Writing it through is a last-writer-wins map insert that
@@ -676,11 +756,16 @@ impl MicaDoc {
         // empty id). It self-perpetuates, because every later write reads the
         // root back from here and writes the same empty value out again.
         // Keeping the existing root is always the safer merge.
-        if !root_id.is_empty() {
+        if !root_id.is_empty() && meta.get(&txn, ROOT_KEY).and_then(out_string).as_deref() != Some(root_id) {
             meta.insert(&mut txn, ROOT_KEY, root_id.to_string());
         }
         for b in blocks {
-            write_block(&mut txn, &blocks_map, b);
+            match get_block_map(&txn, &blocks_map, &b.id) {
+                Some(bm) => update_block(&mut txn, &bm, b),
+                None => {
+                    write_block(&mut txn, &blocks_map, b);
+                }
+            }
         }
     }
 

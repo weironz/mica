@@ -179,6 +179,39 @@
 
 （随修复提交更新。每条修复配回归测试；提交信息写根因。）
 
-| 条目 | 状态 | 提交 |
+| 条目 | 状态 | 说明 |
 | --- | --- | --- |
-| — | — | — |
+| A1 zip abort | ✅ 已修 | 预分配夹紧 + inflater 输出上限 + 1 GiB 总预算（嵌套共用）+ 偏移 saturating；`interchange/tests/zip_limits.rs` |
+| A2 owner 被降级 | ✅ 已修 | `add_member` 补守卫 + migration 0028 触发器；`workspaces.rs` `owner_role_pg` |
+| A3 set_blocks 全量重建 | ✅ 已修 | 按块 id 差量：存活块保留 map，文本 splice，props 只写变化键，children 只换中间段；`mica-core/tests/sync.rs`；lessons.md 更正 |
+| A4 批量恢复丢页 | ✅ 已修 | 同事务内提到顶层；`pg_tests.rs` |
+| A5 搜索 panic | ✅ 已修 | 小写化时记录原字符索引 |
+| A6 tagfilter 乱码 | ✅ 已修 | 整段 `push_str` |
+| A7 `[TODO]` → 数学块 | ✅ 已修 | 仅在数学块真会触发时（`\[` 独占一行或以 `\]` 结尾）写成 `&#91;`；Rust + Dart |
+| A8 段落解析立方级 | ✅ 已修 | `extended_autolink` 只看 8 字符前缀；`<` 扫描遇 `<`/空白即停；Rust + Dart；`nested_bracket_perf.rs` |
+| A9 AI key 串号 | ✅ 已修 | 按 `provider_id` 回落，且已存 key 只发往其保存时的 URL；服务端 + 客户端 |
+| B1 改密不吊销 PAT | ✅ 已修 | `revoke_user_sessions` 同事务删 PAT（同 Google app passwords） |
+| B2 重置密码强度 | ✅ 已修 | 走 `password_strength::check`，在消耗链接之前 |
+| B3 resend 不限流 | ✅ 已修 | |
+| B4 存储域同站 XSS | ⏸ 未修 | 修法需要把 Content-Type 签进预签名 PUT（并对危险类型强制 `attachment`），签名值必须与浏览器实际发送的头逐字一致——错一点全部上传失败；本环境没有 RustFS 可验证，不盲改上传主路径。方案见下文「待办」 |
+| B5 HTML 导出 XSS | ✅ 已修 | `safe_url` 滤 `javascript:`/`vbscript:`/非图片 `data:`；`--!>`/`<!-->` 注释边界；`align`/alert 白名单；导出文件加 CSP meta |
+| B6 移除成员仍收广播 | ✅ 已修 | 文档 socket 每 30 s 复查，关闭码 4403；bootstrap/pull 复查 |
+| B7 配额可绕过 | 🟡 部分 | 未完成的浏览器上传计入配额（migration 0029 + `reserve_pending_upload_bytes_tx`，指标同口径）；跨工作区移动检查目标配额。**「每账号无限建工作区」未改**：配额是按工作区还是按账号是产品决策，需拍板 |
+| B9 ack 先于广播导致 cursor 越界 | ✅ 已修（客户端） | lag 重同步与重连改发带 sv 的 `sync.bootstrap`（按状态向量补差，与 rid 到达顺序无关）；防抖窗口内的 lag 通知补发一次尾随重同步 |
+| B10 expected_seq 看不到 WS 编辑 | ✅ 已修 | `push_update` 同事务推进 `current_seq`；`sync_pg.rs` |
+| B11 缺依赖 update 被 ack | 🟡 仅告警 | `push_update` 检出 pending 时 `warn!`。拒绝需要客户端配合（收到专用错误码后整份补推），客户端改动无法在本机验证，未做 |
+| B12 presence 无限制 | ✅ 已修 | 4 KiB 上限 + 每连接 30/s 令牌桶 |
+| B13 块首转义只做首行 | ✅ 已修 | 段落/引用逐行；补 `1)`、制表符、`>x`、空标记；Rust + Dart |
+| B14 空待办丢勾选 | ✅ 已修 | 接受裸 `- [ ]`/`- [x]`；Rust + Dart |
+| B15 children 成环 abort | ✅ 已修 | 导出前 `export_safe_tree`（去重 + 深度 128 封顶并提升）；`is_descendant` 迭代 |
+| B16 GC 与去重竞态 | ✅ 已修 | 去重命中（presign/complete/`insert_file_tx`）清 GC 标记；GC 回收前持对象键锁复查标记 |
+| B17 GC 不看命名版本 | ✅ 已修 | 命名版本中的 `file_id` 计入引用集 |
+| C1 expires_in_days panic | ✅ 已修 | 限 1..=3650，否则 400 |
+| C2 AI 流中文乱码 | ✅ 已修 | 按字节缓冲，只解码完整行 |
+| C7 房间注册表不清理 | ✅ 已修 | 新建房间时清理失效条目 |
+| C5 光标停在 emoji 中间 | ✅ 已修（Dart） | 左右键按字素簇移动 |
+| C6 Dart/Rust 镜像差异 | 🟡 部分 | Dart `mathRunSpans` 跳过代码段、空链接 mark 不再丢弃 |
+| C8 源码 NUL 字节 | ✅ 已修 | 改为 `\u0000` 转义 |
+| D1 同步热路径 | ✅ 已修 | 每次 push 只拍平一次；自动版本先查再写，不再每次把整份 state 发给 Postgres |
+
+**未本机验证的部分**：Dart 改动（A7/A8/A9/B13/B14/C8）本机无 Dart 工具链，未编译未测试，需在开发机跑 `flutter analyze` + `flutter test`。

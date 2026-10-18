@@ -187,6 +187,37 @@ async fn referenced_file_ids(db: &PgPool, workspace_id: Uuid) -> Option<HashSet<
             }
         }
     }
+
+    // NAMED versions keep their blobs too. They never expire and history
+    // restore replays them, so an image removed from the page — and collected
+    // 30 days later — came back broken when someone restored the checkpoint
+    // that still showed it. (Auto versions expire after 30 days, within the
+    // unreferenced grace, so they need no pass of their own.)
+    let versions = sqlx::query(
+        r#"
+          SELECT v.state
+          FROM document_yrs_versions v
+          JOIN views w ON w.object_id = v.document_id
+          WHERE w.workspace_id = $1 AND w.object_type = 'document' AND v.label IS NOT NULL
+        "#,
+    )
+    .bind(workspace_id)
+    .fetch_all(db)
+    .await
+    .ok()?;
+    for row in versions {
+        let state: Vec<u8> = row.try_get("state").ok()?;
+        let Ok(doc) = mica_app_core::sync::guarded_from_update(&state) else {
+            tracing::warn!(%workspace_id, "blob gc: unreadable named version, skipping workspace");
+            crate::metrics::METRICS.blob_gc_failed();
+            return None;
+        };
+        for block in doc.to_blocks() {
+            if let Some(id) = block.data.get("file_id").and_then(|v| v.as_str()) {
+                refs.insert(id.to_string());
+            }
+        }
+    }
     Some(refs)
 }
 
@@ -265,6 +296,25 @@ pub async fn sweep_workspace(
             continue;
         }
 
+        // Claim before deleting: hold the key lock every registering path
+        // takes, and re-read the mark under it. The verdict above came from a
+        // snapshot; in between, dedup may have handed this row out again
+        // (clearing the mark) for a page about to reference it.
+        let Ok(mut claim) = db.begin().await else { continue };
+        if store::lock_file_object_key(&mut claim, &object_key).await.is_err() {
+            continue;
+        }
+        let still_marked: Option<Option<chrono::DateTime<chrono::Utc>>> =
+            sqlx::query_scalar("SELECT unreferenced_since FROM files WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *claim)
+                .await
+                .ok()
+                .flatten();
+        if still_marked != Some(since) {
+            continue; // reclaimed (or gone) since the snapshot: not ours to delete
+        }
+
         // Object first, row second. The crash window then leaves a row whose
         // object is gone — visible, and harmless to re-delete. The other order
         // leaks the object forever with nothing left pointing to it.
@@ -284,9 +334,10 @@ pub async fn sweep_workspace(
         }
         if sqlx::query("DELETE FROM files WHERE id = $1")
             .bind(id)
-            .execute(db)
+            .execute(&mut *claim)
             .await
             .is_ok()
+            && claim.commit().await.is_ok()
         {
             report.deleted += 1;
             report.bytes_freed += byte_size;
@@ -699,6 +750,119 @@ mod tests {
             pending_upload_verdict(now, old, old, old, PENDING_OBJECT_AGE),
             PendingUploadVerdict::Collect
         );
+    }
+
+    /// THE BUG (B16): dedup handed out a row GC had marked unreferenced 30+
+    /// days ago without clearing the mark, and GC's fresh-upload guard looks at
+    /// the row's ORIGINAL `created_at` — so the next sweep could delete the
+    /// object a page was about to reference. Re-registering the key must
+    /// restart the clock.
+    #[tokio::test]
+    async fn re_registering_a_key_clears_the_gc_mark() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+            return;
+        };
+        let db = PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed");
+        let (user_id, workspace_id) = (Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES ($1,$2,'GC','x')")
+            .bind(user_id)
+            .bind(format!("{user_id}@reclaim.test"))
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES ($1,'GC',$2)")
+            .bind(workspace_id)
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        let key = format!("workspaces/{workspace_id}/{}.png", Uuid::new_v4());
+        let first = store::insert_file(&db, workspace_id, user_id, &key, "a.png", "image/png", 3)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE files SET unreferenced_since = now() - interval '40 days' WHERE id = $1")
+            .bind(first.id)
+            .execute(&db)
+            .await
+            .unwrap();
+
+        let again = store::insert_file(&db, workspace_id, user_id, &key, "a.png", "image/png", 3)
+            .await
+            .unwrap();
+
+        assert_eq!(again.id, first.id, "dedup returns the same row");
+        let mark: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT unreferenced_since FROM files WHERE id = $1")
+                .bind(first.id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(mark, None, "handing the row out again restarts the GC clock");
+        sqlx::query("DELETE FROM workspaces WHERE id = $1").bind(workspace_id).execute(&db).await.ok();
+        sqlx::query("DELETE FROM users WHERE id = $1").bind(user_id).execute(&db).await.ok();
+    }
+
+    /// THE BUG (B17): only CURRENT content counted as a reference, so an image
+    /// that lives on only in a named checkpoint was collected, and restoring
+    /// that checkpoint brought back a broken image.
+    #[tokio::test]
+    async fn a_named_version_keeps_its_images_referenced() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+            return;
+        };
+        let db = PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed");
+        let (user, ws, doc, view) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES ($1,$2,'GC','x')")
+            .bind(user)
+            .bind(format!("{user}@versions.test"))
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES ($1,'GC',$2)")
+            .bind(ws)
+            .bind(user)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO documents(id,workspace_id,root_block_id,current_seq,created_by) VALUES($1,$2,'r',0,$3)")
+            .bind(doc)
+            .bind(ws)
+            .bind(user)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by)
+             VALUES($1,$2,$3,'document','p','0',$4)",
+        )
+        .bind(view)
+        .bind(ws)
+        .bind(doc)
+        .bind(user)
+        .execute(&db)
+        .await
+        .unwrap();
+        // The checkpoint still shows the image; the live page no longer does.
+        let old = mica_core::MicaDoc::from_blocks(
+            "r",
+            &[
+                mica_core::Block::new("r", "page").with_children(vec!["i".into()]),
+                mica_core::Block::new("i", "image").with_data(serde_json::json!({"file_id": "file-in-checkpoint"})),
+            ],
+        );
+        sqlx::query("INSERT INTO document_yrs_versions (document_id, rid, state, label) VALUES ($1, 0, $2, 'v1')")
+            .bind(doc)
+            .bind(old.encode_state())
+            .execute(&db)
+            .await
+            .unwrap();
+
+        let refs = referenced_file_ids(&db, ws).await.expect("readable workspace");
+        assert!(refs.contains("file-in-checkpoint"), "{refs:?}");
+        sqlx::query("DELETE FROM workspaces WHERE id = $1").bind(ws).execute(&db).await.ok();
+        sqlx::query("DELETE FROM users WHERE id = $1").bind(user).execute(&db).await.ok();
     }
 
     /// Explicitly run against disposable Postgres and RustFS with DATABASE_URL

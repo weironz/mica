@@ -177,6 +177,10 @@ fn is_rate_limited(path: &str) -> bool {
         || path.ends_with("/auth/password/forgot")
         // The reset page lives outside /api (no /auth segment): match it exactly.
         || path.ends_with("/reset-password")
+        // Each call mails a fresh link. Unthrottled, one loop flooded a
+        // victim's inbox (register their address once, then resend forever)
+        // and spent the operator's mail quota and sender reputation.
+        || path.ends_with("/auth/resend-verification")
 }
 
 /// Endpoints that run an Argon2 hash/verify — the ones the concurrency gate must
@@ -291,6 +295,8 @@ mod tests {
         // Password reset: both throttled, neither Argon2-gated.
         assert!(is_rate_limited("/api/auth/password/forgot"));
         assert!(is_rate_limited("/reset-password"));
+        assert!(is_rate_limited("/api/auth/resend-verification"));
+        assert!(!spends_argon2("/api/auth/resend-verification"));
         assert!(!is_rate_limited("/api/workspaces"));
         assert!(!is_rate_limited("/ws/workspaces/x/documents/y"));
         // Only login/register hash — refresh/forgot/reset must not hold an Argon2 permit.

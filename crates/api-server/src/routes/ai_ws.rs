@@ -151,13 +151,12 @@ async fn stream_completion(
   }
 
   let mut stream = response.bytes_stream();
-  let mut buffer = String::new();
+  let mut buffer: Vec<u8> = Vec::new();
   while let Some(chunk) = stream.next().await {
     let bytes = chunk.map_err(|error| format!("stream error: {error}"))?;
-    buffer.push_str(&String::from_utf8_lossy(&bytes));
+    buffer.extend_from_slice(&bytes);
 
-    while let Some(pos) = buffer.find('\n') {
-      let line: String = buffer.drain(..=pos).collect();
+    for line in drain_complete_lines(&mut buffer) {
       let line = line.trim();
       if line.is_empty() || !line.starts_with("data:") {
         continue;
@@ -179,6 +178,26 @@ async fn stream_completion(
     }
   }
   Ok(())
+}
+
+/// Take every COMPLETE line out of `buffer`, decoded; a partial last line
+/// stays for the next chunk.
+///
+/// Decoding happens per line, never per network chunk: a chunk boundary can
+/// fall inside a multi-byte character, and decoding each chunk on its own
+/// turned a split CJK character into U+FFFD — routine for Chinese output.
+/// `\n` is a single byte that never occurs inside a UTF-8 sequence, so a
+/// complete line is always whole characters.
+fn drain_complete_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+  let Some(last) = buffer.iter().rposition(|&b| b == b'\n') else {
+    return Vec::new();
+  };
+  let rest = buffer.split_off(last + 1);
+  let complete = std::mem::replace(buffer, rest);
+  complete
+    .split(|&b| b == b'\n')
+    .map(|line| String::from_utf8_lossy(line).into_owned())
+    .collect()
 }
 
 fn extract_delta(provider: AiProvider, data: &str) -> Option<String> {
@@ -230,4 +249,31 @@ fn token_from(headers: &HeaderMap, query: &AiConnectQuery) -> Option<String> {
     .as_ref()
     .map(|token| token.trim().to_string())
     .filter(|token| !token.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::drain_complete_lines;
+
+  /// THE BUG: each network chunk was decoded on its own, so a character split
+  /// across two chunks became U+FFFD.
+  #[test]
+  fn a_character_split_across_chunks_survives() {
+    let line = "data: 中文\n".as_bytes();
+    let (a, b) = line.split_at(7); // inside the 3-byte `中`
+    let mut buffer = Vec::new();
+    buffer.extend_from_slice(a);
+    assert!(drain_complete_lines(&mut buffer).is_empty(), "no complete line yet");
+    buffer.extend_from_slice(b);
+    let lines = drain_complete_lines(&mut buffer);
+    assert_eq!(lines.iter().filter(|l| !l.is_empty()).collect::<Vec<_>>(), ["data: 中文"]);
+    assert!(buffer.is_empty());
+  }
+
+  #[test]
+  fn a_partial_line_waits_for_the_rest() {
+    let mut buffer = b"data: a\ndata: b".to_vec();
+    assert_eq!(drain_complete_lines(&mut buffer), ["data: a", ""]);
+    assert_eq!(buffer, b"data: b");
+  }
 }

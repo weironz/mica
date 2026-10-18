@@ -3,7 +3,8 @@
 //! *operations* (insert/update/move) live in `mica-app-core`, archive-level
 //! interchange in `mica-interchange`. See docs/architecture.md.
 
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -218,6 +219,7 @@ pub fn export_markdown_with_assets(
       snapshot.schema_version,
     ));
   }
+  let snapshot = &*export_safe_tree(snapshot);
 
   let mut lines = Vec::new();
   let root_index = block_index(snapshot, &snapshot.root_block_id)
@@ -257,6 +259,7 @@ pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResul
       snapshot.schema_version,
     ));
   }
+  let snapshot = &*export_safe_tree(snapshot);
 
   let mut html = String::new();
   let root_index = block_index(snapshot, &snapshot.root_block_id)
@@ -285,6 +288,11 @@ pub fn export_html_document(
   content_width_px: u32,
 ) -> DocumentOperationResult<String> {
   let body = export_html(snapshot)?;
+  // The downloaded file has no server to send the share page's CSP header, so
+  // it carries the same policy as a <meta>: no script at all (raw HTML blocks
+  // pass through by design, and a `<script>` or `on*=` in one ran when the
+  // file was opened). Images stay loadable — export inlines them as `data:`,
+  // and external ones are the author's own links.
   let safe_title = escape_html(title.trim());
   // The content column matches the AUTHOR's editor page width (WYSIWYG): a doc
   // exports as wide as it was written, not a hardcoded guess. Clamped to a sane
@@ -297,6 +305,7 @@ pub fn export_html_document(
   Ok(format!(
     "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+     <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:\">\n\
      <title>{safe_title}</title>\n<style>\n\
      body{{max-width:{width}px;margin:2.5rem auto;padding:0 1.5rem;\
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
@@ -594,17 +603,203 @@ pub fn block_index(snapshot: &DocumentSnapshotPayload, block_id: &str) -> Option
 }
 
 pub fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_id: &str) -> bool {
-  let Some(index) = block_index(snapshot, parent_id) else {
-    return false;
-  };
-
-  for child_id in &snapshot.blocks[index].children {
-    if child_id == block_id || is_descendant(snapshot, block_id, child_id) {
-      return true;
+  // Iterative with a visited set: `children` comes from a CRDT any member can
+  // write, so it can hold a cycle, and the recursive walk never returned.
+  let mut seen: HashSet<&str> = HashSet::new();
+  let mut stack = vec![parent_id];
+  while let Some(id) = stack.pop() {
+    if !seen.insert(id) {
+      continue;
+    }
+    let Some(index) = block_index(snapshot, id) else {
+      continue;
+    };
+    for child_id in &snapshot.blocks[index].children {
+      if child_id == block_id {
+        return true;
+      }
+      stack.push(child_id);
     }
   }
-
   false
+}
+
+/// Deepest `children` nesting the exporters recurse into. Real documents nest
+/// a handful of levels; this is far above that and far below the stack.
+const MAX_EXPORT_DEPTH: usize = 128;
+
+/// The block tree as the recursive exporters need it: every block reached
+/// once, no deeper than [MAX_EXPORT_DEPTH].
+///
+/// The snapshot is materialised from a yrs document any workspace member can
+/// push to, and nothing on that path checks the tree's SHAPE. A block listing
+/// itself (or an ancestor) in `children` sent `export_html` / `export_markdown`
+/// into unbounded recursion — a stack overflow, which aborts the whole server
+/// process, reachable through the share page, export and MCP reads. So the
+/// exporters walk a repaired copy: a repeat visit is dropped (cycles and
+/// multi-parent blocks), and a branch past the depth cap is flattened into its
+/// ancestor at the cap, keeping the content. A well-formed tree — every real
+/// one — is returned as is, without copying.
+fn export_safe_tree(snapshot: &DocumentSnapshotPayload) -> Cow<'_, DocumentSnapshotPayload> {
+  let index: HashMap<&str, usize> = snapshot
+    .blocks
+    .iter()
+    .enumerate()
+    .map(|(i, b)| (b.id.as_str(), i))
+    .collect();
+  let Some(&root) = index.get(snapshot.root_block_id.as_str()) else {
+    return Cow::Borrowed(snapshot); // the exporter reports the missing root
+  };
+
+  let well_formed = {
+    let mut seen: HashSet<&str> = HashSet::from([snapshot.root_block_id.as_str()]);
+    let mut stack = vec![(root, 0usize)];
+    let mut ok = true;
+    'walk: while let Some((i, depth)) = stack.pop() {
+      for child in &snapshot.blocks[i].children {
+        if !seen.insert(child.as_str()) || depth + 1 > MAX_EXPORT_DEPTH {
+          ok = false;
+          break 'walk;
+        }
+        if let Some(&c) = index.get(child.as_str()) {
+          stack.push((c, depth + 1));
+        }
+      }
+    }
+    ok
+  };
+  if well_formed {
+    return Cow::Borrowed(snapshot);
+  }
+
+  let mut children: Vec<Vec<String>> = vec![Vec::new(); snapshot.blocks.len()];
+  let mut seen: HashSet<&str> = HashSet::from([snapshot.root_block_id.as_str()]);
+  let mut stack = vec![(root, 0usize)];
+  while let Some((i, depth)) = stack.pop() {
+    for child in &snapshot.blocks[i].children {
+      if !seen.insert(child.as_str()) {
+        continue;
+      }
+      let Some(&c) = index.get(child.as_str()) else {
+        children[i].push(child.clone()); // missing: the exporter reports it
+        continue;
+      };
+      children[i].push(child.clone());
+      if depth + 1 < MAX_EXPORT_DEPTH {
+        stack.push((c, depth + 1));
+        continue;
+      }
+      // At the cap: hoist the whole branch up to `i`, in document order
+      // (children pushed reversed onto a stack pop in pre-order).
+      let mut branch = vec![c];
+      while let Some(b) = branch.pop() {
+        if b != c {
+          children[i].push(snapshot.blocks[b].id.clone());
+        }
+        for grandchild in snapshot.blocks[b].children.iter().rev() {
+          if seen.insert(grandchild.as_str())
+            && let Some(&g) = index.get(grandchild.as_str())
+          {
+            branch.push(g);
+          }
+        }
+      }
+    }
+  }
+  let mut repaired = snapshot.clone();
+  for (block, kids) in repaired.blocks.iter_mut().zip(children) {
+    block.children = kids;
+  }
+  Cow::Owned(repaired)
+}
+
+#[cfg(test)]
+mod export_xss_tests {
+  use super::{export_html, export_html_document, import_markdown};
+
+  fn html(md: &str) -> String {
+    export_html(&import_markdown(md, "root")).unwrap()
+  }
+
+  /// The downloaded HTML has no CSP header, so script-capable URLs and markup
+  /// must not survive into it.
+  #[test]
+  fn script_urls_are_dropped_from_links_and_images() {
+    for md in [
+      "[x](javascript:alert(1))",
+      "[x](JaVaScRiPt:alert(1))",
+      "[x](vbscript:msgbox)",
+      "[x](data:text/html,<script>alert(1)</script>)",
+      "![x](javascript:alert(1))",
+    ] {
+      let out = html(md).to_ascii_lowercase();
+      assert!(!out.contains("javascript:") && !out.contains("vbscript:") && !out.contains("data:text"), "{md} -> {out}");
+    }
+    assert!(html("[x](https://e.com/a:b)").contains("href=\"https://e.com/a:b\""));
+    assert!(html("[x](a/b:c)").contains("href=\"a/b:c\""));
+    assert!(html("![x](data:image/png;base64,AAAA)").contains("src=\"data:image/png;base64,AAAA\""));
+  }
+
+  /// `--!>` closes a comment in browsers; the attribute stripper treated the
+  /// rest as comment and left the handler in place.
+  #[test]
+  fn a_bang_comment_close_does_not_hide_markup_from_the_stripper() {
+    let out = html("<!-- --!><img src=x onerror=alert(2)> -->\n");
+    assert!(!out.contains("onerror"), "{out}");
+    let out = html("<!--><img src=x onerror=alert(3)>\n");
+    assert!(!out.contains("onerror"), "{out}");
+  }
+
+  #[test]
+  fn the_exported_document_forbids_script() {
+    let doc = export_html_document(&import_markdown("hi", "root"), "t", 800).unwrap();
+    assert!(doc.contains("Content-Security-Policy") && doc.contains("default-src 'none'"));
+    assert!(!doc.contains("script-src"));
+  }
+}
+
+#[cfg(test)]
+mod tree_shape_tests {
+  use super::{DocumentSnapshotPayload, export_html, export_markdown, is_descendant};
+
+  fn doc(blocks: serde_json::Value) -> DocumentSnapshotPayload {
+    serde_json::from_value(serde_json::json!({
+      "schema_version": 1, "root_block_id": "root", "blocks": blocks,
+    }))
+    .unwrap()
+  }
+
+  /// THE BUG: `children` comes from a CRDT any member can write; a block that
+  /// lists itself sent the recursive exporters into a stack overflow, which
+  /// aborts the whole server process, not one request.
+  #[test]
+  fn a_cycle_in_children_exports_instead_of_overflowing() {
+    let snapshot = doc(serde_json::json!([
+      {"id": "root", "type": "page", "text": "", "data": {}, "children": ["a"]},
+      {"id": "a", "type": "quote", "text": "loop", "data": {}, "children": ["a", "root"]},
+    ]));
+    assert!(export_html(&snapshot).unwrap().contains("loop"));
+    assert!(export_markdown(&snapshot).unwrap().contains("loop"));
+    assert!(!is_descendant(&snapshot, "zzz", "a"), "terminates on the cycle");
+    assert!(is_descendant(&snapshot, "a", "root"));
+  }
+
+  /// A chain far deeper than any real document keeps all its text.
+  #[test]
+  fn a_very_deep_chain_is_flattened_not_lost() {
+    let n = 5000;
+    let mut blocks = vec![serde_json::json!(
+      {"id": "root", "type": "page", "text": "", "data": {}, "children": ["b0"]}
+    )];
+    for i in 0..n {
+      let children = if i + 1 < n { vec![format!("b{}", i + 1)] } else { vec![] };
+      blocks.push(serde_json::json!(
+        {"id": format!("b{i}"), "type": "quote", "text": format!("t{i}"), "data": {}, "children": children}
+      ));
+    }
+    let md = export_markdown(&doc(serde_json::Value::Array(blocks))).unwrap();
+    assert!(md.contains("t0") && md.contains(&format!("t{}", n - 1)));
+  }
 }
 
 #[cfg(test)]
@@ -821,7 +1016,7 @@ mod security_tests {
     let raw = "<details>\n<summary>点击展开 😀</summary>\n<script>x</script>é</details>";
     assert_eq!(
       tagfilter(raw),
-      "<details>\n<summary>点击展开 😀</summary>\n&lt;script>x</script>é</details>"
+      "<details>\n<summary>点击展开 😀</summary>\n&lt;script>x&lt;/script>é</details>"
     );
     let html = export_html(&import_markdown("<p align=\"center\">居中</p>\n", "root")).unwrap();
     assert!(html.contains("居中"), "{html}");

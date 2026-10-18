@@ -139,23 +139,30 @@ pub(crate) fn find_math_closer(chars: &[char], content_start: usize) -> Option<u
 /// boundary): bare `http(s)://…`, `www.…` (href gains `http://`) or a bare
 /// email. Returns (consumed chars, href).
 pub(crate) fn extended_autolink(chars: &[char], i: usize) -> Option<(usize, String)> {
-  let rest: String = chars[i..].iter().collect();
-  let lower = rest.to_ascii_lowercase();
+  // Only the first 8 chars decide the prefix. This used to collect and
+  // lowercase the WHOLE remaining text first — at every word boundary — which
+  // made one inline parse quadratic, and the paragraph-continuation re-parse
+  // on every line made a plain multi-line paragraph cubic (2000 short lines:
+  // seconds).
+  let head: String = chars[i..chars.len().min(i + 8)]
+    .iter()
+    .collect::<String>()
+    .to_ascii_lowercase();
   for (prefix, implied) in [
     ("https://", ""),
     ("http://", ""),
     ("ftp://", ""),
     ("www.", "http://"),
   ] {
-    if lower.starts_with(prefix) {
+    if head.starts_with(prefix) {
       // Take everything up to whitespace or '<', then trim trailing
       // punctuation per the GFM rules.
-      let mut end = rest
-        .char_indices()
-        .find(|&(_, c)| c.is_whitespace() || c == '<')
-        .map(|(k, _)| k)
-        .unwrap_or(rest.len());
-      end = trim_autolink_end(&rest[..end]);
+      let stop = chars[i..]
+        .iter()
+        .position(|&c| c.is_whitespace() || c == '<')
+        .map_or(chars.len(), |k| i + k);
+      let rest: String = chars[i..stop].iter().collect();
+      let end = trim_autolink_end(&rest);
       let candidate = &rest[..end];
       let domain = &candidate[if implied.is_empty() { prefix.len() } else { 0 }..];
       let domain = domain
@@ -698,9 +705,13 @@ pub(crate) fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
       None
     }
     '<' => {
-      // Autolink first (it constrains the closing `>`), then raw HTML.
+      // Autolink first (it constrains the closing `>`), then raw HTML. An
+      // autolink holds no whitespace and no `<`, so the scan stops there: it
+      // used to run to the next `>` anywhere, i.e. to the END on text with no
+      // `>`, from every `<` — and `matching_bracket` calls this at every
+      // position, from every `[`, which made `[<[<[<…` cubic.
       let mut j = i + 1;
-      while j < n && chars[j] != '>' {
+      while j < n && chars[j] != '>' && chars[j] != '<' && !chars[j].is_whitespace() {
         j += 1;
       }
       if j < n {
@@ -1684,8 +1695,12 @@ pub(crate) fn escape_block_leader(line: String) -> String {
   // `\[` opens a display-math block (`\[ … \]`) on re-import, and
   // `escape_inline` writes every literal `[` as `\[` — so a paragraph that was
   // just `[TODO]` came back as a math block. An entity is plain text to the
-  // inline parser and opens nothing.
-  if let Some(rest) = t.strip_prefix("\\[") {
+  // inline parser and opens nothing. Only where `math_block` would actually
+  // fire — `\[` alone on the line, or a line ending in `\]` — so every other
+  // `\[…` line keeps its familiar form.
+  if let Some(rest) = t.strip_prefix("\\[")
+    && (rest.trim().is_empty() || rest.trim_end().ends_with("\\]"))
+  {
     return format!("&#91;{rest}");
   }
   let digits = t.bytes().take_while(u8::is_ascii_digit).count();

@@ -454,11 +454,31 @@ class CloudSyncSession {
       // unacked diffs are replayed once the base arrives (see `sync.base`).
       _send({'type': 'sync.bootstrap'});
     } else {
-      // Reconnect: keep our replica (it may hold unpushed edits), just catch up
-      // from our cursor and resend everything still unacked.
-      _send({'type': 'sync.pull', 'payload': _pullPayload()});
-      _flushUnacked(resendAll: true);
+      // Reconnect: keep our replica (it may hold unpushed edits) and catch up
+      // by STATE VECTOR, not by cursor — see [_catchUpFrame]. The `sync.base`
+      // reply's handler then pulls the stream tail and resends everything
+      // still unacked.
+      _send(_catchUpFrame());
     }
+  }
+
+  /// The frame a replica we still hold catches up with: `sync.bootstrap`
+  /// carrying its state vector, answered with exactly the diff it lacks.
+  ///
+  /// NOT `sync.pull since_rid=_cursor`. The cursor is advanced by acks, and
+  /// the server can ack our push (rid 11) before it has delivered a peer's
+  /// broadcast (rid 10) on this socket — so after a lag notice dropped rid 10,
+  /// or a disconnect before it arrived, a pull from 11 skipped it for good:
+  /// later updates that depend on it park as pending, and nothing ever flags
+  /// it (red line #1). A state-vector diff is complete whatever order rids
+  /// were delivered in.
+  Map<String, dynamic> _catchUpFrame() {
+    final doc = _doc;
+    if (doc == null) return {'type': 'sync.bootstrap'};
+    return {
+      'type': 'sync.bootstrap',
+      'payload': {'sv': base64.encode(doc.stateVector())},
+    };
   }
 
   /// The sync.pull payload. P4-3: alongside the stream cursor we advertise the
@@ -832,19 +852,27 @@ class CloudSyncSession {
     if (_disposed) return;
     final now = DateTime.now();
     final last = _lastLagResync;
-    if (last != null && now.difference(last) < const Duration(seconds: 1)) {
+    const window = Duration(seconds: 1);
+    if (last != null && now.difference(last) < window) {
+      // Inside the debounce: a notice here may report a drop AFTER the
+      // catch-up already in flight was answered, so it can't just be ignored
+      // (it was, and that drop was never recovered). One trailing resync at
+      // the end of the window covers every notice in it.
+      _lagTrailingTimer ??= Timer(window - now.difference(last), () {
+        _lagTrailingTimer = null;
+        _lastLagResync = null;
+        _resyncFromLag();
+      });
       return;
     }
     _lastLagResync = now;
     debugLagResyncCount++;
-    // Offline: nothing to send now; the reconnect path re-pulls from our cursor.
+    // Offline: nothing to send now; the reconnect path catches up on its own.
     if (_channel == null) return;
-    _send(
-      _doc == null
-          ? {'type': 'sync.bootstrap'}
-          : {'type': 'sync.pull', 'payload': _pullPayload()},
-    );
+    _send(_catchUpFrame());
   }
+
+  Timer? _lagTrailingTimer;
 
   /// Test-only: feed a raw server frame through the message handler.
   @visibleForTesting
@@ -1160,6 +1188,7 @@ class CloudSyncSession {
     _disposed = true;
     _reconnectTimer?.cancel();
     _heartbeatTimer?.cancel();
+    _lagTrailingTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;

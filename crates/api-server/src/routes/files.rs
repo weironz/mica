@@ -112,7 +112,7 @@ pub async fn presign(
   let storage = storage(&state)?;
 
   validate_mime(&payload.mime_type)?;
-  ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
+  ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes, None).await?;
 
   let object_key = build_object_key(workspace_id, &payload.content_hash, &payload.file_name)?;
   let checksum_sha256 = sha256_checksum_base64(&payload.content_hash)?;
@@ -122,6 +122,7 @@ pub async fn presign(
   let mut tx = state.db.begin().await?;
   store::lock_file_object_key(&mut tx, &object_key).await?;
   if let Some(existing) = store::fetch_file_by_key_tx(&mut tx, workspace_id, &object_key).await? {
+    store::reclaim_file_tx(&mut tx, existing.id).await?;
     tx.commit().await?;
     let download_url = storage.download_url(&existing.object_key);
     return Ok(Json(existing_object_response(object_key, existing, download_url)));
@@ -130,6 +131,7 @@ pub async fn presign(
   let upload = storage.presign_put_if_absent(&object_key, &checksum_sha256, payload.byte_size);
   store::record_pending_file_upload_tx(&mut tx, workspace_id, &object_key, upload.expires_in)
     .await?;
+  store::reserve_pending_upload_bytes_tx(&mut tx, &object_key, payload.byte_size).await?;
   tx.commit().await?;
 
   Ok(Json(PresignResponse {
@@ -189,7 +191,14 @@ pub async fn complete(
   validate_mime(&payload.mime_type)?;
   // Checked again here, not just at presign: presign is advisory (a client can
   // skip it, or reuse one URL) and this is the call that creates the row.
-  ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
+  ensure_storable(
+    &state,
+    workspace_id,
+    payload.byte_size,
+    storage.max_upload_bytes,
+    Some(&payload.object_key),
+  )
+  .await?;
   ensure_key_in_workspace(workspace_id, &payload.object_key)?;
   let expected_checksum = checksum_for_object_key(workspace_id, &payload.object_key)?;
 
@@ -234,6 +243,7 @@ pub async fn complete(
     if stored_checksum.is_some() {
       uploaded_checksum_verdict(stored_checksum, &expected_checksum)?;
     }
+    store::reclaim_file_tx(&mut tx, existing.id).await?;
     tx.commit().await?;
     let download_url = storage.download_url(&existing.object_key);
     return Ok(Json(FileResponse { file: existing, download_url }));
@@ -562,7 +572,7 @@ pub(crate) async fn fetch_and_store_image_url(
   }
   let bytes = body;
   let byte_size = bytes.len() as i64;
-  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes).await?;
+  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes, None).await?;
 
   // Determine MIME + extension (header first, else the URL's extension).
   let ext = mime_to_ext(&header_mime)
@@ -732,7 +742,7 @@ pub(crate) async fn store_bytes(
 ) -> ApiResult<store::FileRecord> {
   let storage = storage(state)?;
   let byte_size = bytes.len() as i64;
-  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes).await?;
+  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes, None).await?;
 
   // The name is the first guess at the type; the BYTES are the authority when it
   // gives nothing usable (an extension-less name used to land as
@@ -821,14 +831,27 @@ async fn ensure_storable(
   workspace_id: Uuid,
   byte_size: i64,
   max_upload_bytes: i64,
+  // `complete` passes its own key: that upload's reservation is the very
+  // bytes being checked, and must not be counted twice.
+  exclude_key: Option<&str>,
 ) -> ApiResult<()> {
   validate_byte_size(byte_size, max_upload_bytes)?;
+  ensure_quota_room(state, workspace_id, byte_size, exclude_key).await
+}
 
+/// The quota half of [ensure_storable], for callers adding bytes that are not
+/// one upload (a cross-workspace move copies many files at once).
+pub(crate) async fn ensure_quota_room(
+  state: &AppState,
+  workspace_id: Uuid,
+  byte_size: i64,
+  exclude_key: Option<&str>,
+) -> ApiResult<()> {
   let quota = state.config.workspace_quota_bytes;
-  if quota <= 0 {
+  if quota <= 0 || byte_size <= 0 {
     return Ok(());
   }
-  let used = store::workspace_bytes_used(&state.db, workspace_id).await?;
+  let used = store::workspace_bytes_used_excluding(&state.db, workspace_id, exclude_key).await?;
   // `saturating_add`: both sides are i64 from the wire or the database, and an
   // overflow here would wrap negative and PASS the check.
   if used.saturating_add(byte_size) > quota {
@@ -1682,6 +1705,38 @@ mod quota_pg {
     }
   }
 
+  /// THE BUG (B7): the quota summed registered `files` only, so presigning
+  /// many distinct hashes and never calling `complete` filled the store while
+  /// "used" stayed 0. A browser upload's reservation now counts until it is
+  /// registered (then the file row counts instead — never both), and
+  /// `complete` does not count its own reservation against itself.
+  #[tokio::test]
+  async fn unregistered_browser_uploads_count_toward_the_quota() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let key = format!("workspaces/{ws}/{}.bin", Uuid::new_v4());
+    let mut tx = db.begin().await.unwrap();
+    store::record_pending_file_upload_tx(&mut tx, ws, &key, 900).await.unwrap();
+    store::reserve_pending_upload_bytes_tx(&mut tx, &key, 1234).await.unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(store::workspace_bytes_used(&db, ws).await.unwrap(), 1234);
+    assert_eq!(
+      store::workspace_bytes_used_excluding(&db, ws, Some(&key)).await.unwrap(),
+      0,
+      "complete's own reservation is not counted against it"
+    );
+
+    store::insert_file(&db, ws, user, &key, "x.bin", "application/octet-stream", 1234)
+      .await
+      .unwrap();
+    assert_eq!(
+      store::workspace_bytes_used(&db, ws).await.unwrap(),
+      1234,
+      "once registered it counts once, as a file"
+    );
+  }
+
   /// The `mica_storage_bytes` gauges must agree with the expression the quota
   /// actually enforces.
   ///
@@ -1704,11 +1759,15 @@ mod quota_pg {
 
     // The aggregate the exposition renders (metrics.rs `load_db_snapshot`).
     let (total, max): (i64, i64) = sqlx::query_as(
-      r#"SELECT
-           coalesce((SELECT sum(total) FROM
-             (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint,
-           coalesce((SELECT max(total) FROM
-             (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint"#,
+      r#"WITH usage AS (
+           SELECT w.id,
+             coalesce((SELECT sum(f.byte_size) FROM files f WHERE f.workspace_id = w.id), 0)
+             + coalesce((SELECT sum(p.byte_size) FROM pending_file_uploads p
+                WHERE p.workspace_id = w.id
+                  AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key)), 0)
+               AS total
+           FROM workspaces w)
+         SELECT coalesce(sum(total), 0)::bigint, coalesce(max(total), 0)::bigint FROM usage"#,
     )
     .fetch_one(&db)
     .await

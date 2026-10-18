@@ -1696,3 +1696,61 @@ async fn offline_reconnect_merge_measurement() {
         );
     }
 }
+
+/// THE BUG (B10): the MCP's optimistic-concurrency token is
+/// `documents.current_seq`, and only the REST/MCP path advanced it. An agent
+/// that read the outline at seq N, then a human edit over WebSocket, then the
+/// agent's write with `expected_seq = N`: it passed, and overwrote the edit.
+#[tokio::test]
+async fn a_websocket_edit_invalidates_a_stale_expected_seq() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let seq = |db: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT current_seq FROM documents WHERE id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+    };
+    let seen = seq(db.clone()).await;
+
+    // A human types over the socket.
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+    let sv = editing.state_vector();
+    editing.text_insert("a", 5, " world");
+    let edit = editing.encode_diff(&sv).unwrap();
+    sync::push_update(&db, ws, doc, user, &edit, &tuning()).await.unwrap();
+    assert!(seq(db.clone()).await > seen, "a WS edit advances the token");
+
+    // The agent's write pinned to what it read is refused, not applied.
+    let stale = store::apply_derived_operations(&db, ws, doc, user, Some(seen), |_| Ok(vec![])).await;
+    assert!(
+        matches!(stale, Err(mica_infra::ApiError::Conflict(_))),
+        "a stale expected_seq must be a 409, got {stale:?}"
+    );
+}
+
+/// D1: the auto version is still taken once per window — now with a check
+/// first instead of shipping the whole state on every push.
+#[tokio::test]
+async fn pushes_inside_one_window_take_one_auto_version() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+    for word in [" a", " b", " c"] {
+        let base = sync::bootstrap_base(&db, doc).await.unwrap();
+        let mut editing = MicaDoc::from_update(&base.state).unwrap();
+        let sv = editing.state_vector();
+        editing.text_insert("a", 5, word);
+        let edit = editing.encode_diff(&sv).unwrap();
+        sync::push_update(&db, ws, doc, user, &edit, &tuning()).await.unwrap();
+    }
+    let versions: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM document_yrs_versions WHERE document_id = $1 AND label IS NULL",
+    )
+    .bind(doc)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(versions, 1);
+}

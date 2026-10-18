@@ -39,7 +39,7 @@ use crate::store::lock_document_tx;
 /// but those fixes do not cover every integration panic (upstream #415).
 /// This guard only contains unwinding panics; it is not a general sandbox.
 /// The server's panic strategy is `unwind` (no `panic = "abort"`).
-pub(crate) fn guarded_from_update(bytes: &[u8]) -> Result<MicaDoc, DocError> {
+pub fn guarded_from_update(bytes: &[u8]) -> Result<MicaDoc, DocError> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| MicaDoc::from_update(bytes)))
         .unwrap_or_else(|_| Err(DocError::Decode("yrs panicked while decoding an update".into())))
 }
@@ -121,12 +121,12 @@ pub(crate) fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
 /// producer of `content_text`. Blank counts as absent: emptying the title falls
 /// back to whatever the name column already holds rather than blanking a page's
 /// name in the sidebar.
-fn title_from_doc(doc: &MicaDoc) -> Option<String> {
-    // Only the ROOT block is needed, and reading just it keeps this off the
-    // "flatten the whole document" cost that `content_text_from_doc` pays — this
-    // runs on every push, including a single keystroke.
-    let root_id = doc.root_block_id();
-    let root = doc.to_blocks().into_iter().find(|b| b.id == root_id)?;
+fn title_from_blocks(blocks: &[mica_core::Block], root_id: &str) -> Option<String> {
+    // Only the ROOT block is needed. (The comment here used to say reading just
+    // it avoided the full flatten — it called `to_blocks()` and flattened
+    // anyway. The push path now flattens once and shares the blocks.)
+    let root = blocks.iter().find(|b| b.id == root_id)?.clone();
+    let root_id = root_id.to_string();
     let payload = mica_markdown::DocumentSnapshotPayload {
         schema_version: 1,
         root_block_id: root_id,
@@ -142,7 +142,11 @@ fn title_from_doc(doc: &MicaDoc) -> Option<String> {
 }
 
 pub fn content_text_from_doc(doc: &MicaDoc) -> String {
-    let blocks = doc.to_blocks();
+    content_text_from_blocks(&doc.to_blocks(), &doc.root_block_id())
+}
+
+/// [content_text_from_doc] over already-flattened blocks.
+pub fn content_text_from_blocks(blocks: &[mica_core::Block], root_id: &str) -> String {
     let mut text = blocks
         .iter()
         .map(|b| b.text.trim_end_matches('\n'))
@@ -153,7 +157,6 @@ pub fn content_text_from_doc(doc: &MicaDoc) -> String {
     // Append searchable front-matter property values (tags, status, etc.). The
     // front matter is the raw string on the root block's data; parse it with the
     // markdown authority's property parser and flatten the values.
-    let root_id = doc.root_block_id();
     if let Some(fm) = blocks
         .iter()
         .find(|b| b.id == root_id)
@@ -217,8 +220,12 @@ pub use mica_core::page_link_targets;
 /// do not parse as a uuid are dropped rather than stored — the column is
 /// `uuid[]`, and a link to a non-view is not a backlink to anything.
 pub fn link_targets_from_doc(doc: &MicaDoc) -> Vec<Uuid> {
-    let mut targets: Vec<Uuid> = doc
-        .to_blocks()
+    link_targets_from_blocks(&doc.to_blocks())
+}
+
+/// [link_targets_from_doc] over already-flattened blocks.
+pub fn link_targets_from_blocks(blocks: &[mica_core::Block]) -> Vec<Uuid> {
+    let mut targets: Vec<Uuid> = blocks
         .iter()
         .flat_map(|b| page_link_targets(&b.data))
         .filter_map(|t| t.parse().ok())
@@ -518,6 +525,15 @@ pub async fn push_update(
         .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
     guarded_apply(&mut doc, update)
         .map_err(|_| ApiError::BadRequest("invalid yrs update".into()))?;
+    // An update whose dependencies the base lacks is parked by yrs as PENDING
+    // and `apply` still says Ok: the content is stored but invisible until the
+    // missing history arrives — which, for a replica holding items the server
+    // lost (e.g. after a restore from backup), is never. Not refused here
+    // (a client's de-merge retry can produce a short-lived gap that resolves
+    // on the next push), but no longer silent.
+    if doc.has_pending_updates() {
+        tracing::warn!(%document_id, %actor_id, "push left the base with unresolved pending updates");
+    }
 
     let rid: i64 = sqlx::query_scalar(
         "INSERT INTO workspace_updates(workspace_id, document_id, actor_id, payload)
@@ -534,9 +550,13 @@ pub async fn push_update(
     let state_vector = doc.state_vector();
     // content_text is re-derived from the just-folded doc and upserted in the
     // SAME statement as `state`, so the search index moves atomically with the
-    // base on every push (never a stale window between the two).
-    let content_text = content_text_from_doc(&doc);
-    let link_targets = link_targets_from_doc(&doc);
+    // base on every push (never a stale window between the two). Flattened ONCE
+    // and shared by all three projections — this runs on every debounced
+    // keystroke, inside the row lock, and used to flatten three times.
+    let blocks = doc.to_blocks();
+    let root_id = doc.root_block_id();
+    let content_text = content_text_from_blocks(&blocks, &root_id);
+    let link_targets = link_targets_from_blocks(&blocks);
     sqlx::query(
         "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, now())
@@ -568,7 +588,7 @@ pub async fn push_update(
     //
     // `name <> $1` keeps this a no-op on the overwhelmingly common push (a
     // keystroke in the body), so the hot path costs one comparison, not a write.
-    if let Some(title) = title_from_doc(&doc) {
+    if let Some(title) = title_from_blocks(&blocks, &root_id) {
         sqlx::query(
             "UPDATE views SET name = $1, updated_at = now()
              WHERE object_id = $2 AND name <> $1",
@@ -586,20 +606,40 @@ pub async fn push_update(
     // this is one indexed insert-or-nothing per push. Auto rows carry an
     // expires_at (VERSION_AUTO_RETENTION, 30 days); named rows are inserted
     // elsewhere with expires_at NULL and never expire.
-    sqlx::query(
-        "INSERT INTO document_yrs_versions (document_id, rid, state, expires_at)
-         SELECT $1, $2, $3, now() + interval '30 days'
-         WHERE NOT EXISTS (
+    // Asked first, written only when due: the single INSERT … WHERE NOT EXISTS
+    // shipped the whole `state` to Postgres on EVERY push only for it to be
+    // discarded almost every time. Same lock, so the check can't race.
+    let version_due: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS (
              SELECT 1 FROM document_yrs_versions
              WHERE document_id = $1 AND label IS NULL
                AND created_at > now() - interval '10 minutes'
          )",
     )
     .bind(document_id)
-    .bind(rid)
-    .bind(&state)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
+    if version_due {
+        sqlx::query(
+            "INSERT INTO document_yrs_versions (document_id, rid, state, expires_at)
+             VALUES ($1, $2, $3, now() + interval '30 days')",
+        )
+        .bind(document_id)
+        .bind(rid)
+        .bind(&state)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // The MCP's optimistic-concurrency token (`expected_seq`) is
+    // `documents.current_seq`, and only the REST/MCP write path advanced it — a
+    // human's WS edits left it alone, so an agent holding a seq from before
+    // those edits passed the check and overwrote them. Every write path that
+    // changes content advances it now.
+    sqlx::query("UPDATE documents SET current_seq = current_seq + 1 WHERE id = $1")
+        .bind(document_id)
+        .execute(&mut *tx)
+        .await?;
 
     // Periodically prune updates already folded into the base (keep a margin for
     // fast incremental catch-up). Bounds unbounded stream growth on big/old docs.
@@ -662,7 +702,7 @@ pub async fn set_document_title(
     // diff every time — and renaming a page to the name it already has would
     // spend a version snapshot and wake every open editor. Measured: the
     // `setting_the_same_title_twice_is_a_no_op` test failed until this existed.
-    if title_from_doc(&doc).as_deref() == Some(title) {
+    if title_from_blocks(&doc.to_blocks(), &root_id).as_deref() == Some(title) {
         return Ok((base.base_rid, Vec::new()));
     }
 

@@ -2,7 +2,7 @@
 //! folders, and expand archives nested one level deep (Notion's
 //! whole-workspace exports ship `Part-N.zip` files inside the outer ZIP).
 
-use crate::zip::{ZipFileEntry, read_zip, read_zip_within};
+use crate::zip::{ZipFileEntry, read_zip_within};
 
 /// Drop junk and peel wrapper folders: when everything lives under a single
 /// top-level folder with no file beside it (a zipped folder, macOS Finder

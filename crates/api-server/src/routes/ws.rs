@@ -319,6 +319,13 @@ pub async fn views_change_listener(state: AppState) {
 /// exactly the wrong move — the token does not come back on its own.
 pub(crate) const WS_CLOSE_TOKEN_EXPIRED: u16 = 4401;
 
+/// Close code when the user was removed from the workspace mid-session.
+pub(crate) const WS_CLOSE_NOT_A_MEMBER: u16 = 4403;
+
+/// How often an open document socket re-checks its user's membership. Bounds
+/// how long a removed member keeps receiving broadcasts.
+const MEMBERSHIP_RECHECK: Duration = Duration::from_secs(30);
+
 /// How long this socket may live, from `exp`.
 ///
 /// Returns `None` when the deadline has already passed — the caller closes at
@@ -414,9 +421,30 @@ async fn run_connection(
     time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO),
   );
   tokio::pin!(expiry);
+  // Broadcast fan-out never consults the database, so without this a member
+  // removed from the workspace kept RECEIVING every live edit on an open
+  // socket until the token expired (writes and pulls re-check on their own).
+  let mut membership = tokio::time::interval_at(
+    tokio::time::Instant::now() + MEMBERSHIP_RECHECK,
+    MEMBERSHIP_RECHECK,
+  );
 
   loop {
     tokio::select! {
+      _ = membership.tick() => {
+        if matches!(
+          current_write_permissions(&state.db, workspace_id, user_id).await,
+          Ok(None)
+        ) {
+          let _ = socket
+            .send(Message::Close(Some(CloseFrame {
+              code: WS_CLOSE_NOT_A_MEMBER,
+              reason: "no longer a member of this workspace".into(),
+            })))
+            .await;
+          break;
+        }
+      }
       () = &mut expiry => {
         // Best-effort: the client may already be gone, and there is nothing to
         // do about it if the frame does not land.
@@ -604,7 +632,20 @@ async fn handle_client_message(
   }
 }
 
+/// Largest presence payload a connection may publish. A cursor, selection and
+/// display name are well under 1 KiB; without a cap any member could fan
+/// megabytes to every peer per message.
+const MAX_PRESENCE_BYTES: usize = 4096;
+
 fn handle_presence_update(ctx: &ClientCtx<'_>, payload: Value) -> Vec<String> {
+  if payload.to_string().len() > MAX_PRESENCE_BYTES {
+    return vec![error_message(None, "invalid_payload", "presence payload too large")];
+  }
+  // Over budget: dropped silently. It shares the channel with CRDT updates,
+  // so a flood would push those out of every peer's receiver.
+  if !ctx.room.allow_presence(ctx.connection_id) {
+    return Vec::new();
+  }
   ctx.room.set_presence(PresenceEntry {
     connection_id: ctx.connection_id,
     user_id: ctx.user_id,
@@ -713,6 +754,11 @@ async fn handle_sync_bootstrap(
   ack_id: Option<&str>,
   payload: &Value,
 ) -> Vec<String> {
+  // Reads re-check membership too: the socket outlives the membership it was
+  // opened under, and a removed member could otherwise pull the whole base.
+  if let Err(reply) = require_write_access(ctx, ack_id).await {
+    return reply;
+  }
   let client_sv = client_sv(payload);
   match sync::bootstrap_base(&ctx.state.db, ctx.document_id).await {
     Ok(base) => vec![base_message(&base, client_sv.as_deref(), ack_id, ctx.document_id)],
@@ -728,6 +774,9 @@ async fn handle_sync_pull(
   ack_id: Option<&str>,
   payload: &Value,
 ) -> Vec<String> {
+  if let Err(reply) = require_write_access(ctx, ack_id).await {
+    return reply;
+  }
   let since_rid = payload.get("since_rid").and_then(Value::as_i64).unwrap_or(0);
   // P4-3: the optional client state vector turns a prune-forced re-bootstrap
   // into a minimal diff instead of a full-doc download.

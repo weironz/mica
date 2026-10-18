@@ -586,6 +586,29 @@ async fn transfer_roots(
     });
   }
 
+  // The destination's quota, for the bytes it does not hold yet. Every other
+  // byte-storing path is metered; this one copied gigabytes into a nearly
+  // full workspace unchecked.
+  let ids: Vec<Uuid> = referenced_files.iter().copied().collect();
+  let incoming: i64 = sqlx::query_scalar(
+    r#"
+      SELECT coalesce(sum(s.byte_size), 0)::bigint
+      FROM files s
+      WHERE s.workspace_id = $1 AND s.id = ANY($3)
+        AND NOT EXISTS (
+          SELECT 1 FROM files d
+          WHERE d.object_key = 'workspaces/' || $2::text || '/'
+            || substr(s.object_key, length('workspaces/' || $1::text || '/') + 1)
+        )
+    "#,
+  )
+  .bind(src_workspace_id)
+  .bind(dest_workspace_id)
+  .bind(&ids)
+  .fetch_one(&state.db)
+  .await?;
+  crate::routes::files::ensure_quota_room(state, dest_workspace_id, incoming, None).await?;
+
   // 3. Copy blobs into the destination BEFORE the transaction: content-addressed
   //    keys make the PUT idempotent, and a half-failure leaves only orphan bytes
   //    in dest (its GC reclaims them), never a page with broken images.

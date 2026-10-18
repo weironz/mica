@@ -2309,16 +2309,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final cur = sel.focus;
     DocPosition target = cur;
+    // Step by GRAPHEME, the unit Backspace/Delete already use. Stepping one
+    // UTF-16 unit put the caret between the two halves of a surrogate pair
+    // (any emoji): typing or deleting there left a lone surrogate in the text,
+    // which becomes U+FFFD once encoded for yrs.
+    final text = nodes[cur.node].text;
     if (dir < 0) {
       if (cur.offset > 0) {
-        target = cur.withOffset(cur.offset - 1);
+        final head = text.substring(0, cur.offset).characters.skipLast(1);
+        target = cur.withOffset(head.string.length);
       } else if (cur.node > 0) {
         target = DocPosition(cur.node - 1, nodes[cur.node - 1].text.length);
       }
     } else {
-      final len = nodes[cur.node].text.length;
+      final len = text.length;
       if (cur.offset < len) {
-        target = cur.withOffset(cur.offset + 1);
+        final first = text.substring(cur.offset).characters.first;
+        target = cur.withOffset(cur.offset + first.length);
       } else if (cur.node + 1 < nodes.length) {
         target = DocPosition(cur.node + 1, 0);
       }

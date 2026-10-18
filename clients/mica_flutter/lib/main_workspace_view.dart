@@ -3622,7 +3622,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   /// The outline row that stands for the page title. Not a block id — the title
   /// is not a block — so it is a sentinel no document can produce.
-  static const String _outlineTitleId = ' outline-page-title';
+  static const String _outlineTitleId = '\u0000outline-page-title';
 
   /// Put the caret at the end of the page-title field.
   ///

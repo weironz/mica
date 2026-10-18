@@ -575,6 +575,16 @@ pub(crate) fn classify_markdown_line(content: &str) -> (&'static str, String, Va
     let text = strip_atx_closing(content[level..].trim_start()).to_string();
     return ("heading", text, json!({ "level": level }));
   }
+  // An EMPTY to-do exports as `- [ ] ` and the trailing space is trimmed off
+  // the line before it gets here, so the bare marker must count too — it used
+  // to fall through to a bullet whose text was `[ ]`, losing the kind and the
+  // checked state.
+  if content == "- [ ]" {
+    return ("todo", String::new(), json!({ "checked": false }));
+  }
+  if content == "- [x]" || content == "- [X]" {
+    return ("todo", String::new(), json!({ "checked": true }));
+  }
   if let Some(rest) = content.strip_prefix("- [ ] ") {
     return ("todo", rest.to_string(), json!({ "checked": false }));
   }

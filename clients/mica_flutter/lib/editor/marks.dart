@@ -39,7 +39,12 @@ List<Mark> marksFromData(Map<String, dynamic> data) {
       final start = (m['start'] as num?)?.toInt();
       final end = (m['end'] as num?)?.toInt();
       final type = m['type'] as String?;
-      if (start != null && end != null && type != null && end > start) {
+      // Zero-width is legal for a LINK: `[](/url)` is an empty-text link the
+      // Rust engine keeps; dropping it here erased it on the next save.
+      if (start != null &&
+          end != null &&
+          type != null &&
+          (end > start || (type == 'link' && end == start))) {
         marks.add(
           Mark(
             start,
@@ -343,8 +348,18 @@ int _inlineSpanEnd(String src, int i) {
   final c = src[i];
   if (c == '`') return _codeSpanClose(src, i);
   if (c == '<') {
-    // Autolink first — it constrains the closing `>` — then raw HTML.
-    final close = src.indexOf('>', i + 1);
+    // Autolink first — it constrains the closing `>` — then raw HTML. An
+    // autolink holds no whitespace and no `<`, so the scan stops there
+    // (mirrors Rust): running to the next `>` anywhere made `[<[<…` cubic.
+    var close = -1;
+    for (var j = i + 1; j < src.length; j++) {
+      final d = src[j];
+      if (d == '>') {
+        close = j;
+        break;
+      }
+      if (d == '<' || d == ' ' || d == '\t' || d == '\n' || d == '\r') break;
+    }
     if (close > i && autolinkTarget(src.substring(i + 1, close)) != null) {
       return close + 1;
     }
@@ -590,6 +605,16 @@ List<({int start, int end})> mathRunSpans(String src) {
         continue;
       }
     }
+    // A code span binds tighter than math (§6.1) — step over it whole so a `$`
+    // inside cannot open a run. Mirrors Rust `math_run_spans`; without it
+    // "`$HOME` and $x$" produced one bogus span from the first `$`.
+    if (src[i] == '`') {
+      final after = _codeSpanClose(src, i);
+      if (after > i) {
+        i = after;
+        continue;
+      }
+    }
     if (src[i] == kDollar &&
         (i == 0 || src[i - 1] != kDollar) &&
         (i + 1 >= src.length || src[i + 1] != kDollar)) {
@@ -609,8 +634,10 @@ List<({int start, int end})> mathRunSpans(String src) {
 /// boundary): bare http(s)/ftp URLs, `www.` (href gains http://), bare
 /// emails. Returns (consumed chars, href), or null.
 (int, String)? extendedAutolink(String src, int i) {
-  final rest = src.substring(i);
-  final lower = rest.toLowerCase();
+  // Only the first 8 chars decide the prefix; copying and lowercasing the
+  // whole remaining text at every word boundary made parsing quadratic (and a
+  // re-parsed multi-line paragraph cubic). Mirrors Rust `extended_autolink`.
+  final lower = src.substring(i, (i + 8).clamp(i, src.length)).toLowerCase();
   for (final (prefix, implied) in [
     ('https://', ''),
     ('http://', ''),
@@ -618,15 +645,16 @@ List<({int start, int end})> mathRunSpans(String src) {
     ('www.', 'http://'),
   ]) {
     if (lower.startsWith(prefix)) {
-      var end = rest.length;
-      for (var k = 0; k < rest.length; k++) {
-        final c = rest[k];
+      var stop = src.length;
+      for (var k = i; k < src.length; k++) {
+        final c = src[k];
         if (c == ' ' || c == '\t' || c == '\n' || c == '<') {
-          end = k;
+          stop = k;
           break;
         }
       }
-      end = _trimAutolinkEnd(rest.substring(0, end));
+      final rest = src.substring(i, stop);
+      final end = _trimAutolinkEnd(rest);
       final candidate = rest.substring(0, end);
       final afterScheme = implied.isEmpty
           ? candidate.substring(prefix.length)
@@ -1750,8 +1778,14 @@ String escapeBlockLeader(String line) {
   }
   // `\[` opens display math on re-import and [escapeInline] writes every
   // literal `[` as `\[`: a paragraph `[TODO]` came back as a math block. An
-  // entity reference is plain text to the inline parser.
-  if (line.startsWith(r'\[')) return '&#91;${line.substring(2)}';
+  // entity reference is plain text to the inline parser. Only where the math
+  // block would actually open (`\[` alone, or a line ending in `\]`).
+  if (line.startsWith(r'\[')) {
+    final rest = line.substring(2);
+    if (rest.trim().isEmpty || rest.trimRight().endsWith(r'\]')) {
+      return '&#91;$rest';
+    }
+  }
   final numbered = RegExp(r'^(\d{1,9})([.)])').firstMatch(line);
   if (numbered != null && markerThenGap(line.substring(numbered.end))) {
     return '${numbered.group(1)}\\${numbered.group(2)}'
