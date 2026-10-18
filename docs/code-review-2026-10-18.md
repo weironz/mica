@@ -188,15 +188,16 @@
 | A5 搜索 panic | ✅ 已修 | 小写化时记录原字符索引 |
 | A6 tagfilter 乱码 | ✅ 已修 | 整段 `push_str` |
 | A7 `[TODO]` → 数学块 | ✅ 已修 | 仅在数学块真会触发时（`\[` 独占一行或以 `\]` 结尾）写成 `&#91;`；Rust + Dart |
-| A8 段落解析立方级 | ✅ 已修 | `extended_autolink` 只看 8 字符前缀；`<` 扫描遇 `<`/空白即停；Rust + Dart；`nested_bracket_perf.rs` |
+| A8 段落解析立方级 | ✅ 已修 | `extended_autolink` 只看 8 字符前缀；`<` 扫描遇 `<`/空白即停（Rust + Dart）；续行只记原文、扫描结束一次性 inline 解析（Rust）。4000 行段落 release ~15 s → 0.7 ms。`[<`×N 这类恶意输入仍为平方级（4000 个 ~0.3 s）；`nested_bracket_perf.rs` |
 | A9 AI key 串号 | ✅ 已修 | 按 `provider_id` 回落，且已存 key 只发往其保存时的 URL；服务端 + 客户端 |
 | B1 改密不吊销 PAT | ✅ 已修 | `revoke_user_sessions` 同事务删 PAT（同 Google app passwords） |
 | B2 重置密码强度 | ✅ 已修 | 走 `password_strength::check`，在消耗链接之前 |
 | B3 resend 不限流 | ✅ 已修 | |
 | B4 存储域同站 XSS | ⏸ 未修 | 修法需要把 Content-Type 签进预签名 PUT（并对危险类型强制 `attachment`），签名值必须与浏览器实际发送的头逐字一致——错一点全部上传失败；本环境没有 RustFS 可验证，不盲改上传主路径。方案见下文「待办」 |
 | B5 HTML 导出 XSS | ✅ 已修 | `safe_url` 滤 `javascript:`/`vbscript:`/非图片 `data:`；`--!>`/`<!-->` 注释边界；`align`/alert 白名单；导出文件加 CSP meta |
+| B8 认证后 Argon2 端点 | ✅ 已修 | `POST /auth/password`、`DELETE /auth/me` 纳入每 IP 限流与 Argon2 并发闸门（按方法匹配，`GET /auth/me` 不受影响） |
 | B6 移除成员仍收广播 | ✅ 已修 | 文档 socket 每 30 s 复查，关闭码 4403；bootstrap/pull 复查 |
-| B7 配额可绕过 | 🟡 部分 | 未完成的浏览器上传计入配额（migration 0029 + `reserve_pending_upload_bytes_tx`，指标同口径）；跨工作区移动检查目标配额。**「每账号无限建工作区」未改**：配额是按工作区还是按账号是产品决策，需拍板 |
+| B7 配额可绕过 | 🟡 部分 | 未完成的浏览器上传计入配额（migration 0029 + `reserve_pending_upload_bytes_tx`，指标同口径）；跨工作区移动检查目标配额，且服务端拉取改用 `presign_get_server`（不再走面向浏览器的地址）。**「每账号无限建工作区」未改**：配额是按工作区还是按账号是产品决策，需拍板 |
 | B9 ack 先于广播导致 cursor 越界 | ✅ 已修（客户端） | lag 重同步与重连改发带 sv 的 `sync.bootstrap`（按状态向量补差，与 rid 到达顺序无关）；防抖窗口内的 lag 通知补发一次尾随重同步 |
 | B10 expected_seq 看不到 WS 编辑 | ✅ 已修 | `push_update` 同事务推进 `current_seq`；`sync_pg.rs` |
 | B11 缺依赖 update 被 ack | 🟡 仅告警 | `push_update` 检出 pending 时 `warn!`。拒绝需要客户端配合（收到专用错误码后整份补推），客户端改动无法在本机验证，未做 |
@@ -208,10 +209,30 @@
 | B17 GC 不看命名版本 | ✅ 已修 | 命名版本中的 `file_id` 计入引用集 |
 | C1 expires_in_days panic | ✅ 已修 | 限 1..=3650，否则 400 |
 | C2 AI 流中文乱码 | ✅ 已修 | 按字节缓冲，只解码完整行 |
-| C7 房间注册表不清理 | ✅ 已修 | 新建房间时清理失效条目 |
+| C3 错误响应泄露 | ✅ 已修 | `Database`/`Migration` 只记日志、对外回 `internal database error`（HTTP 与 WS 同口径）；存储请求错误用 `without_url()`，不再回显预签名 URL |
+| C4 删账号 | 🟡 部分 | 删除后清理头像对象；409 文案改正（卡住的是作者外键，不是成员资格）。**「协作者永远删不掉账号」未改**：要么把作者改挂到工作区 owner / 墓碑用户，要么外键改 SET NULL——涉及他人工作区的内容归属，需拍板 |
+| C7 分页 / 任务属主 / 房间清理 | ✅ 已修 | 分页加 `id` 兜底排序；负 offset 回 400；导入任务查询/取消校验属主；新建房间时清理失效条目 |
 | C5 光标停在 emoji 中间 | ✅ 已修（Dart） | 左右键按字素簇移动 |
 | C6 Dart/Rust 镜像差异 | 🟡 部分 | Dart `mathRunSpans` 跳过代码段、空链接 mark 不再丢弃 |
 | C8 源码 NUL 字节 | ✅ 已修 | 改为 `\u0000` 转义 |
+| C9 IPv6 限流可绕过 | ✅ 已修 | IPv6 按 /64 计桶，IPv4 映射地址按 IPv4 |
+| C10 登录时序可枚举账号 | ✅ 已修 | 未知邮箱也对一个固定的随机哈希跑一次 Argon2 |
+| D2 PAT 请求写放大 | 🟡 部分 | `last_used_at` 一分钟内只写一次；token 仍解析两遍（要把解析结果放进请求扩展，改动面较大，未做） |
 | D1 同步热路径 | ✅ 已修 | 每次 push 只拍平一次；自动版本先查再写，不再每次把整份 state 发给 Postgres |
 
-**未本机验证的部分**：Dart 改动（A7/A8/A9/B13/B14/C8）本机无 Dart 工具链，未编译未测试，需在开发机跑 `flutter analyze` + `flutter test`。
+**验证状态**：Rust 侧全量 `cargo test --workspace`（连本地 Postgres 16，DB 集成测试真实执行）通过，见下方最近一次结果。
+Dart 改动（A7/A8/A9/B9/B13/B14/C5/C6/C8）本机无 Dart 工具链，**未编译未测试**，合并前需在开发机跑
+`flutter analyze` + `flutter test`（`cloud_lag_resync_test.dart` 新增了 fakeAsync 用例）。
+
+## 待办（未做 / 需拍板）
+
+- **B4 存储域同站 XSS**。建议方案：浏览器 presign 把 `content-type` 加进签名头（`content-length;content-type;host;if-none-match;x-amz-checksum-sha256`），
+  值取校验后的声明类型；对 `text/html`、`application/xhtml+xml`、`image/svg+xml`、`*/xml`、`*javascript*` 拒收或强制
+  `application/octet-stream`；服务端 PUT 对同类类型加 `Content-Disposition: attachment`；WS 升级校验 `Origin`。
+  **必须在真 RustFS 上验证**：签名头的值要与 Dart `http` 实际发出的 `content-type` 逐字一致（web 端浏览器可能改写）。
+- **B7 每账号工作区数 / 按账号配额**：产品决策。
+- **B11 缺依赖 update**：服务端已能检出；要拒绝，需约定错误码并让客户端收到后基于 sv 整份补推。
+- **C4 协作者删账号**：内容归属策略需拍板。
+- **C6 剩余镜像差异**：Rust 未闭合 `~` 的处理（应整段字面量）、Unicode 空白与 Dart ASCII 空白不一致。改动影响两端解析结果，需配 CommonMark/GFM 记分牌回归一起做。
+- **D2** token 解析结果复用；**D3** 整工作区导出流式化；**D4** GC 维护 `file_ids` 列；**D5** 事务内等待 S3、`reorder` 批量化、评论列表 O(线程×评论)。均为性能项，未做。
+

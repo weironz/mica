@@ -175,7 +175,7 @@ async fn collect_assets(
       continue;
     };
     let bytes = match client
-      .get(storage.download_url(&record.object_key))
+      .get(storage.presign_get_server(&record.object_key))
       .send()
       .await
     {
@@ -790,7 +790,7 @@ pub(super) async fn fetch_export_images(
           continue;
         };
         match client
-          .get(storage.download_url(&record.object_key))
+          .get(storage.presign_get_server(&record.object_key))
           .send()
           .await
         {
@@ -1210,7 +1210,7 @@ async fn collect_asset_data_uris(
     let Some(record) = by_id.get(&file_id) else {
       continue;
     };
-    let bytes = match client.get(storage.download_url(&record.object_key)).send().await {
+    let bytes = match client.get(storage.presign_get_server(&record.object_key)).send().await {
       Ok(resp) if resp.status().is_success() => match resp.bytes().await {
         Ok(b) => b.to_vec(),
         Err(_) => continue,

@@ -682,7 +682,7 @@ async fn require_write_access(
     Err(error) => Err(vec![error_message(
       ack_id,
       error_code(&error),
-      &error.to_string(),
+      &error.public_message(),
     )]),
   }
 }
@@ -739,7 +739,7 @@ async fn handle_document_update(
       );
       vec![accepted_event(&applied, ack_id).to_string()]
     }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 
@@ -762,7 +762,7 @@ async fn handle_sync_bootstrap(
   let client_sv = client_sv(payload);
   match sync::bootstrap_base(&ctx.state.db, ctx.document_id).await {
     Ok(base) => vec![base_message(&base, client_sv.as_deref(), ack_id, ctx.document_id)],
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 
@@ -810,7 +810,7 @@ async fn handle_sync_pull(
         .to_string(),
       ]
     }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 
@@ -894,7 +894,7 @@ async fn handle_sync_push(
         .to_string(),
       ]
     }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 

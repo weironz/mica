@@ -245,8 +245,15 @@ pub async fn login(
   )
   .bind(email)
   .fetch_optional(&state.db)
-  .await?
-  .ok_or(ApiError::Unauthorized)?;
+  .await?;
+  let Some(user) = user else {
+    // Pay the same Argon2 verify an existing account pays. Answering an
+    // unknown address immediately made "is this email registered?" a timing
+    // question any caller could ask — the oracle `forgot` and `register` are
+    // careful not to be.
+    let _ = verify_password(&payload.password, dummy_password_hash());
+    return Err(ApiError::Unauthorized);
+  };
 
   verify_password(&payload.password, &user.password_hash)?;
   // AFTER the password check, on purpose: answering "confirm your email" to a
@@ -465,6 +472,15 @@ pub async fn delete_account(
       keys.iter().map(|(workspace_id, key)| (*workspace_id, key.as_str())),
     )
     .await;
+    // The face goes too. Avatars live under `avatars/{user_id}/`, outside
+    // every workspace prefix, so neither the cascade above nor the blob GC
+    // ever reaches them — a deleted account's picture used to stay in storage
+    // forever. Best effort, after commit: the account is already gone.
+    if let Some(avatar) = user.avatar_key.as_deref().filter(|key| !key.is_empty())
+      && let Err(error) = reqwest::Client::new().delete(storage.presign_delete(avatar)).send().await
+    {
+      tracing::warn!(%user_id, error = %error.without_url(), "delete account: avatar object left behind");
+    }
   }
   Ok(StatusCode::NO_CONTENT)
 }
@@ -541,9 +557,12 @@ pub async fn delete_user_and_owned(
         .as_deref()
         == Some("23503");
       if is_fk {
+        // Not "leave those workspaces first": what blocks the delete is
+        // AUTHORSHIP (`created_by` / `uploaded_by` / `actor_id` RESTRICT),
+        // which leaving does not change — that advice was a dead end.
         Err(ApiError::Conflict(
-          "your account still has content in workspaces owned by others; \
-           leave those workspaces first, then delete."
+          "your account authored pages or files in workspaces owned by others; \
+           ask their owners to remove that content (or transfer it), then delete."
             .to_string(),
         ))
       } else {
@@ -914,10 +933,17 @@ async fn resolve_pat(state: &AppState, token: &str) -> ApiResult<Auth> {
   }
 
   // Best-effort last-used bookkeeping; a failure here must not block the request.
-  let _ = sqlx::query("UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1")
-    .bind(&hash)
-    .execute(&state.db)
-    .await;
+  // At most once a minute: every PAT request resolves the token twice (scope
+  // guard + handler), and an unconditional UPDATE was two row writes per MCP
+  // call for a "last used" that is shown to the minute anyway.
+  let _ = sqlx::query(
+    "UPDATE api_tokens SET last_used_at = now() \
+     WHERE token_hash = $1 \
+       AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
+  )
+  .bind(&hash)
+  .execute(&state.db)
+  .await;
 
   let scopes = row.scopes.iter().filter_map(|s| Scope::parse(s)).collect();
   Ok(Auth {
@@ -1295,6 +1321,16 @@ pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> a
   .execute(db)
   .await?;
   Ok(())
+}
+
+/// A real Argon2 hash (same default parameters as every stored one) of a
+/// random password nobody knows, computed once — for [login]'s unknown-email
+/// path to verify against.
+fn dummy_password_hash() -> &'static str {
+  static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+  HASH.get_or_init(|| {
+    hash_password(&Uuid::new_v4().to_string()).expect("hashing a random password")
+  })
 }
 
 fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {

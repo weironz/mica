@@ -593,6 +593,28 @@ async fn persist_progress(state: &AppState, job_id: Uuid, done: usize) {
   }
 }
 
+/// 404 when the job is recorded as another user's.
+///
+/// The in-memory map answered any signed-in caller holding a job id — status,
+/// workspace id, skipped paths — and let them cancel it. The persisted row
+/// (written when the job starts) knows the owner. A job with no row at all
+/// (its best-effort insert failed) stays reachable, as before, rather than
+/// becoming unreachable to its own owner.
+async fn ensure_not_someone_elses_job(
+  state: &AppState,
+  job_id: Uuid,
+  user_id: Uuid,
+) -> ApiResult<()> {
+  let owner: Option<Uuid> = sqlx::query_scalar("SELECT user_id FROM import_jobs WHERE id = $1")
+    .bind(job_id)
+    .fetch_optional(&state.db)
+    .await?;
+  match owner {
+    Some(owner) if owner != user_id => Err(ApiError::NotFound),
+    _ => Ok(()),
+  }
+}
+
 /// `POST /api/import/jobs/{job_id}/cancel` — ask a running import to stop.
 ///
 /// Sets a flag the import loop reads at its next page boundary; it does not abort
@@ -607,7 +629,8 @@ pub async fn cancel_import_job(
   headers: HeaderMap,
   Path(job_id): Path<Uuid>,
 ) -> ApiResult<Json<ImportJob>> {
-  user_id_from_headers(&state, &headers).await?;
+  let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_not_someone_elses_job(&state, job_id, user_id).await?;
   let mut jobs = state.import_jobs.write().await;
   let job = jobs.get_mut(&job_id).ok_or(ApiError::NotFound)?;
   if matches!(job.status, ImportJobStatus::Running) {
@@ -623,6 +646,7 @@ pub async fn import_job(
   Path(job_id): Path<Uuid>,
 ) -> ApiResult<Json<ImportJob>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
+  ensure_not_someone_elses_job(&state, job_id, user_id).await?;
   if let Some(job) = state.import_jobs.read().await.get(&job_id).cloned() {
     return Ok(Json(job));
   }

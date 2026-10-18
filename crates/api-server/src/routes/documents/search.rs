@@ -33,6 +33,10 @@ pub async fn list_views(
   {
     return Err(ApiError::BadRequest("limit must be at least 1".to_string()));
   }
+  // Postgres rejects a negative OFFSET, which surfaced as a 500.
+  if query.offset.is_some_and(|offset| offset < 0) {
+    return Err(ApiError::BadRequest("offset must not be negative".to_string()));
+  }
 
   let views = fetch_views_filtered(&state.db, workspace_id, &query).await?;
 

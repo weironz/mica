@@ -629,15 +629,15 @@ async fn transfer_roots(
     let dest_key = format!("workspaces/{dest_workspace_id}/{suffix}");
 
     let bytes = http
-      .get(storage.download_url(&src_file.object_key))
+      .get(storage.presign_get_server(&src_file.object_key))
       .send()
       .await
-      .map_err(|e| ApiError::Internal(format!("blob fetch failed: {e}")))?
+      .map_err(|e| ApiError::Internal(format!("blob fetch failed: {}", e.without_url())))?
       .error_for_status()
-      .map_err(|e| ApiError::Internal(format!("blob fetch returned {e}")))?
+      .map_err(|e| ApiError::Internal(format!("blob fetch returned: {}", e.without_url())))?
       .bytes()
       .await
-      .map_err(|e| ApiError::Internal(format!("blob read failed: {e}")))?;
+      .map_err(|e| ApiError::Internal(format!("blob read failed: {}", e.without_url())))?;
     // Commit this marker before PUT; a crash after writing bytes must leave a
     // discoverable key for the orphan sweep, not a rolled-back transaction.
     store::record_pending_file_upload(
@@ -665,7 +665,7 @@ async fn transfer_roots(
       .body(bytes.to_vec())
       .send()
       .await
-      .map_err(|e| ApiError::Internal(format!("blob upload failed: {e}")))?;
+      .map_err(|e| ApiError::Internal(format!("blob upload failed: {}", e.without_url())))?;
     if !put.status().is_success() {
       return Err(ApiError::Internal(format!(
         "blob upload returned {}",

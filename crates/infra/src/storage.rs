@@ -203,6 +203,16 @@ impl S3Config {
     }
   }
 
+  /// Presigned `GET` for a read **this process** performs (export bundling,
+  /// cross-workspace copies). The counterpart of [`presign_put_server`](Self::presign_put_server):
+  /// [`download_url`](Self::download_url) is the BROWSER's address (possibly a
+  /// CDN base URL), which the api container may not be able to reach.
+  pub fn presign_get_server(&self, key: &str) -> String {
+    let (base_url, host, canonical_uri) =
+      self.location(self.server_endpoint(), &uri_encode(key, false));
+    self.sign_at("GET", &base_url, &host, &canonical_uri, Utc::now())
+  }
+
   /// Presigned `DELETE` URL for an object. Server-side only — this is the blob
   /// GC's hand, and is never issued to a client. Not `public_base_url`: that is
   /// the read path and may be a CDN with no write access at all.
@@ -714,6 +724,7 @@ mod tests {
       config.presign_create_bucket(),
       config.presign_delete("a/b.png"),
       config.presign_put_server("a/b.png").url,
+      config.presign_get_server("a/b.png"),
     ] {
       assert!(
         server_url.starts_with("http://rustfs:9000/"),

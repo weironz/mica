@@ -222,7 +222,7 @@ pub async fn complete(
     .header("x-amz-checksum-mode", "ENABLED")
     .send()
     .await
-    .map_err(|e| ApiError::Internal(format!("storage check failed: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("storage check failed: {}", e.without_url())))?;
   let stored_len = head
     .headers()
     .get(reqwest::header::CONTENT_LENGTH)
@@ -620,7 +620,7 @@ pub(crate) async fn fetch_and_store_image_url(
     .body(bytes.to_vec())
     .send()
     .await
-    .map_err(|e| ApiError::Internal(format!("storage upload failed: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("storage upload failed: {}", e.without_url())))?;
   if !put.status().is_success() {
     return Err(ApiError::Internal(format!(
       "storage upload returned {}",
@@ -780,7 +780,7 @@ pub(crate) async fn store_bytes(
     .body(bytes.to_vec())
     .send()
     .await
-    .map_err(|e| ApiError::Internal(format!("storage upload failed: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("storage upload failed: {}", e.without_url())))?;
   if !put.status().is_success() {
     return Err(ApiError::Internal(format!(
       "storage upload returned {}",

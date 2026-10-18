@@ -121,7 +121,7 @@ pub async fn put_avatar(
     .body(body.to_vec())
     .send()
     .await
-    .map_err(|e| ApiError::Internal(format!("storage upload failed: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("storage upload failed: {}", e.without_url())))?;
   if !put.status().is_success() {
     return Err(ApiError::Internal(format!(
       "storage upload returned {}",

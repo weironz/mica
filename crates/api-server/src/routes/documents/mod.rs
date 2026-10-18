@@ -258,7 +258,7 @@ async fn fetch_views_filtered(
       FROM views v
       LEFT JOIN document_yrs_base b ON $5 AND b.document_id = v.object_id
       WHERE v.workspace_id = $1 AND v.is_deleted = false
-      ORDER BY v.parent_view_id NULLS FIRST, v.position ASC
+      ORDER BY v.parent_view_id NULLS FIRST, v.position ASC, v.id
       LIMIT $3 OFFSET $4
   "#;
   const SUBTREE: &str = r#"
@@ -283,7 +283,7 @@ async fn fetch_views_filtered(
       JOIN subtree ON subtree.id = v.id
       LEFT JOIN document_yrs_base b ON $5 AND b.document_id = v.object_id
       WHERE v.workspace_id = $1 AND v.is_deleted = false
-      ORDER BY v.parent_view_id NULLS FIRST, v.position ASC
+      ORDER BY v.parent_view_id NULLS FIRST, v.position ASC, v.id
       LIMIT $3 OFFSET $4
   "#;
 
@@ -324,7 +324,7 @@ async fn fetch_workspace_views(db: &PgPool, workspace_id: Uuid) -> ApiResult<Vec
         updated_at
       FROM views
       WHERE workspace_id = $1 AND is_deleted = false
-      ORDER BY parent_view_id NULLS FIRST, position ASC
+      ORDER BY parent_view_id NULLS FIRST, position ASC, id
     "#,
   )
   .bind(workspace_id)
