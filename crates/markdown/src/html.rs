@@ -634,6 +634,11 @@ pub(crate) fn tagfilter(s: &str) -> String {
   ];
   let bytes = s.as_bytes();
   let mut out = String::with_capacity(s.len());
+  // Copy untouched text as whole `&str` runs. Pushing `bytes[i] as char` one
+  // byte at a time reinterpreted every UTF-8 byte as Latin-1, so any non-ASCII
+  // text in raw HTML (`<summary>点击展开</summary>`) came out as mojibake. `<`
+  // is ASCII, so every cut below lands on a char boundary.
+  let mut copied = 0;
   let mut i = 0;
   while i < bytes.len() {
     if bytes[i] == b'<' {
@@ -648,14 +653,16 @@ pub(crate) fn tagfilter(s: &str) -> String {
       let name = s[name_start..j].to_ascii_lowercase();
       let boundary = matches!(bytes.get(j), None | Some(b' ' | b'\t' | b'\n' | b'>' | b'/'));
       if BAD.contains(&name.as_str()) && boundary {
+        out.push_str(&s[copied..i]);
         out.push_str("&lt;");
         i += 1;
+        copied = i;
         continue;
       }
     }
-    out.push(s.as_bytes()[i] as char);
     i += 1;
   }
+  out.push_str(&s[copied..]);
   out
 }
 

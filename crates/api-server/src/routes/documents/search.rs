@@ -453,14 +453,22 @@ pub(super) fn snippet_for(text: &str, needle_lower: &str) -> Option<String> {
   const WINDOW: usize = 160;
   /// Chars of context to keep before the match so the hit isn't flush-left.
   const LEAD: usize = 40;
-  let lower = text.to_lowercase();
-  let byte_pos = lower.find(needle_lower)?;
-  // Char index of the match start. `to_lowercase` is char-count-preserving for
-  // the scripts we search (ASCII, CJK), so counting chars in the lowercased
-  // prefix indexes the original `chars` too — an approximation that at worst
-  // shifts the window by a few chars for exotic scripts, never drops the match.
-  let match_char = lower[..byte_pos].chars().count();
   let chars: Vec<char> = text.chars().collect();
+  // Lowercase char by char, remembering which ORIGINAL char each lowered byte
+  // came from. `to_lowercase` is not length-preserving: `İ` becomes two chars,
+  // so counting chars in the lowered prefix used to over-shoot the original —
+  // a page with ~100 `İ` before the hit pushed `start` past the end of `chars`
+  // and the slice below panicked, dropping every search that matched it.
+  let mut lower = String::with_capacity(text.len());
+  let mut origin: Vec<usize> = Vec::with_capacity(text.len());
+  for (index, c) in chars.iter().enumerate() {
+    for l in c.to_lowercase() {
+      lower.push(l);
+      origin.resize(lower.len(), index);
+    }
+  }
+  let byte_pos = lower.find(needle_lower)?;
+  let match_char = origin[byte_pos];
   let start = match_char.saturating_sub(LEAD);
   let end = (start + WINDOW).min(chars.len());
   let mut out = String::new();
@@ -693,6 +701,16 @@ mod tests {
     let cjk = "这是一段很长的中文文本用来测试全文搜索索引化的片段窗口功能";
     let snip = snippet_for(cjk, "索引").unwrap();
     assert!(snip.contains("索引"), "CJK substring windowed: {snip}");
+  }
+
+  /// THE BUG: `İ` lowercases to TWO chars, so the char index counted in the
+  /// lowered text over-shot the original and slicing it panicked — one planted
+  /// page took down every search that matched it.
+  #[test]
+  fn a_snippet_survives_text_whose_lowercase_is_longer() {
+    let body = format!("{}foo", "İ".repeat(100));
+    let snip = snippet_for(&body, "foo").expect("the hit is still found");
+    assert!(snip.ends_with("foo"), "window lands on the match: {snip}");
   }
 
   fn a_view(name: &str) -> View {

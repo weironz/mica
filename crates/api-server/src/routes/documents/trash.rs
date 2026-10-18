@@ -288,27 +288,48 @@ pub(super) async fn restore_views_batch(
   workspace_id: Uuid,
   view_ids: &[Uuid],
 ) -> ApiResult<Vec<Uuid>> {
-  Ok(
-    sqlx::query_scalar::<_, Uuid>(
-      r#"
-        WITH RECURSIVE subtree AS (
-          SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
-          UNION ALL
-          SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-        )
-        UPDATE views
-        SET is_deleted = false, updated_at = now()
-        WHERE id IN (SELECT id FROM subtree)
-          AND workspace_id = $2
-          AND is_deleted = true
-        RETURNING id
-      "#,
-    )
-    .bind(view_ids)
-    .bind(workspace_id)
-    .fetch_all(db)
-    .await?,
+  let mut tx = db.begin().await?;
+  let restored = sqlx::query_scalar::<_, Uuid>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+        UNION ALL
+        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      )
+      UPDATE views
+      SET is_deleted = false, updated_at = now()
+      WHERE id IN (SELECT id FROM subtree)
+        AND workspace_id = $2
+        AND is_deleted = true
+      RETURNING id
+    "#,
   )
+  .bind(view_ids)
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+
+  // The lift single-item restore has always done, which this batch twin
+  // lacked: restoring a page whose folder is STILL in the trash left it live
+  // under a deleted parent — invisible in the tree, and then deleted for real
+  // by `parent_view_id ON DELETE CASCADE` when the trash was emptied. Same
+  // transaction, so nothing can observe the orphan in between.
+  sqlx::query(
+    r#"
+      UPDATE views
+      SET parent_view_id = NULL, updated_at = now()
+      WHERE id = ANY($1) AND workspace_id = $2 AND parent_view_id IS NOT NULL
+        AND parent_view_id NOT IN (
+          SELECT id FROM views WHERE workspace_id = $2 AND is_deleted = false
+        )
+    "#,
+  )
+  .bind(&restored)
+  .bind(workspace_id)
+  .execute(&mut *tx)
+  .await?;
+  tx.commit().await?;
+  Ok(restored)
 }
 
 batch_view_handler! {

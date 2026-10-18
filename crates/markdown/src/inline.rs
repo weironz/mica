@@ -1661,7 +1661,9 @@ pub(crate) fn escape_inline(text: &str) -> String {
 }
 
 /// A paragraph whose text LOOKS like a block marker (`- x`, `> x`, `# x`,
-/// `1. x`, `---`) must escape its leader or it changes kind on re-import.
+/// `1. x`, `1) x`, `---`, `\[`) must escape its leader or it changes kind on
+/// re-import. Applied to EVERY line of a paragraph/quote — a hard break puts a
+/// later line at a line start just as much as the first.
 pub(crate) fn escape_block_leader(line: String) -> String {
   let t = line.as_str();
   let compact: String = t.chars().filter(|c| *c != ' ').collect();
@@ -1669,22 +1671,40 @@ pub(crate) fn escape_block_leader(line: String) -> String {
   // A paragraph that would read as a setext underline gets escaped too.
   let setext_like = !t.is_empty() && (t.bytes().all(|b| b == b'=') || t.bytes().all(|b| b == b'-'));
   let divider_like = divider_like || setext_like;
-  let numbered = t
-    .find(". ")
-    .is_some_and(|dot| dot > 0 && t[..dot].bytes().all(|b| b.is_ascii_digit()));
-  if t.starts_with("- ")
-    || t.starts_with("+ ")
-    || t.starts_with("> ")
+  // A marker is followed by a space, a tab, or nothing at all (an empty item
+  // / empty heading is still that block).
+  let marker_then_gap = |rest: &str| rest.is_empty() || rest.starts_with([' ', '\t']);
+  if t.starts_with('>')
+    || ((t.starts_with('-') || t.starts_with('+')) && marker_then_gap(&t[1..]))
     || divider_like
-    || (t.starts_with('#') && t[1..].trim_start_matches('#').starts_with(' '))
+    || (t.starts_with('#') && marker_then_gap(t.trim_start_matches('#')))
   {
     return format!("\\{line}");
   }
-  if numbered {
-    let dot = t.find(". ").unwrap();
-    return format!("{}\\. {}", &t[..dot], &t[dot + 2..]);
+  // `\[` opens a display-math block (`\[ … \]`) on re-import, and
+  // `escape_inline` writes every literal `[` as `\[` — so a paragraph that was
+  // just `[TODO]` came back as a math block. An entity is plain text to the
+  // inline parser and opens nothing.
+  if let Some(rest) = t.strip_prefix("\\[") {
+    return format!("&#91;{rest}");
+  }
+  let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+  if (1..=9).contains(&digits)
+    && let Some(delim @ ('.' | ')')) = t[digits..].chars().next()
+    && marker_then_gap(&t[digits + 1..])
+  {
+    return format!("{}\\{delim}{}", &t[..digits], &t[digits + 1..]);
   }
   line
+}
+
+/// [escape_block_leader] on every line of a multi-line text.
+pub(crate) fn escape_block_leaders(text: &str) -> String {
+  text
+    .split('\n')
+    .map(|l| escape_block_leader(l.to_string()))
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 pub(crate) fn render_inline(block: &Block) -> String {

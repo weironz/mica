@@ -1785,6 +1785,37 @@ use uuid::Uuid;
       assert!(!is_deleted(&db, page).await);
     }
 
+    /// THE BUG: restoring only the PAGE out of a trashed folder left it live
+    /// under a deleted parent — invisible in the tree — and emptying the trash
+    /// then deleted it for real through `parent_view_id ON DELETE CASCADE`.
+    /// Single-item restore lifted it to the top level; the batch twin did not.
+    #[tokio::test]
+    async fn a_bulk_restore_lifts_a_page_out_of_a_still_trashed_folder() {
+      let Some(db) = pool().await else { return };
+      let (ws, folder, page, _) = seed_folder_with_page(&db).await;
+      trash_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      let restored = restore_views_batch(&db, ws, &[page]).await.unwrap();
+
+      assert_eq!(restored, vec![page]);
+      assert!(is_deleted(&db, folder).await, "the folder stays in the trash");
+      let parent: Option<Uuid> = sqlx::query_scalar("SELECT parent_view_id FROM views WHERE id = $1")
+        .bind(page)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      assert_eq!(parent, None, "lifted to the top level, like single restore");
+
+      // Purging the folder (what emptying the trash does) must not take it.
+      purge_views_batch(&db, ws, &[folder]).await.unwrap();
+      let alive: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM views WHERE id = $1)")
+        .bind(page)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      assert!(alive, "the restored page survives the purge");
+    }
+
     /// Restoring something that was never deleted changes nothing.
     #[tokio::test]
     async fn a_bulk_restore_skips_what_is_already_live() {

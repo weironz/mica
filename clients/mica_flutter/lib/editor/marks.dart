@@ -1732,24 +1732,39 @@ String escapeBlockLeader(String line) {
       line.isNotEmpty &&
       (line.split('').every((c) => c == '=') ||
           line.split('').every((c) => c == '-'));
-  // ATX: `#`+ then a space (any count, matching Rust — not just 1–6).
+  // A marker is followed by a space, a tab, or nothing (an empty item /
+  // empty heading is still that block).
+  bool markerThenGap(String rest) =>
+      rest.isEmpty || rest.startsWith(' ') || rest.startsWith('\t');
+  // ATX: `#`+ then a gap (any count, matching Rust — not just 1–6).
   final atxLike =
       line.startsWith('#') &&
-      line.replaceFirst(RegExp(r'^#+'), '').startsWith(' ');
-  if (line.startsWith('- ') ||
-      line.startsWith('+ ') ||
-      line.startsWith('> ') ||
+      markerThenGap(line.replaceFirst(RegExp(r'^#+'), ''));
+  if (line.startsWith('>') ||
+      ((line.startsWith('-') || line.startsWith('+')) &&
+          markerThenGap(line.substring(1))) ||
       dividerLike ||
       setextLike ||
       atxLike) {
     return '\\$line';
   }
-  final numbered = RegExp(r'^(\d+)\. ').firstMatch(line);
-  if (numbered != null) {
-    return '${numbered.group(1)}\\. ${line.substring(numbered.end)}';
+  // `\[` opens display math on re-import and [escapeInline] writes every
+  // literal `[` as `\[`: a paragraph `[TODO]` came back as a math block. An
+  // entity reference is plain text to the inline parser.
+  if (line.startsWith(r'\[')) return '&#91;${line.substring(2)}';
+  final numbered = RegExp(r'^(\d{1,9})([.)])').firstMatch(line);
+  if (numbered != null && markerThenGap(line.substring(numbered.end))) {
+    return '${numbered.group(1)}\\${numbered.group(2)}'
+        '${line.substring(numbered.end)}';
   }
   return line;
 }
+
+/// [escapeBlockLeader] on every line — after a hard break a later line sits
+/// at a line start just as much as the first. Mirrors Rust
+/// `escape_block_leaders`.
+String escapeBlockLeaders(String text) =>
+    text.split('\n').map(escapeBlockLeader).join('\n');
 
 /// Escape characters the inline grammar would otherwise interpret.
 String escapeInline(String text) {

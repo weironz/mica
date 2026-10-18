@@ -813,6 +813,20 @@ mod security_tests {
     assert!(svg.starts_with("<svg"), "svg tag should not be escaped: {svg}");
   }
 
+  /// THE BUG: the filter copied untouched text one BYTE at a time as `char`,
+  /// turning every UTF-8 byte into a Latin-1 char — `<summary>点击展开</summary>`
+  /// rendered as mojibake on the share page and in HTML export.
+  #[test]
+  fn tagfilter_keeps_non_ascii_text_intact() {
+    let raw = "<details>\n<summary>点击展开 😀</summary>\n<script>x</script>é</details>";
+    assert_eq!(
+      tagfilter(raw),
+      "<details>\n<summary>点击展开 😀</summary>\n&lt;script>x</script>é</details>"
+    );
+    let html = export_html(&import_markdown("<p align=\"center\">居中</p>\n", "root")).unwrap();
+    assert!(html.contains("居中"), "{html}");
+  }
+
   // The defense-in-depth layer that DOES strip the event handlers / js: URLs the
   // tagfilter leaves behind — belt-and-suspenders for no-CSP consumers.
   #[test]

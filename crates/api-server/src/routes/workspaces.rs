@@ -462,6 +462,9 @@ pub async fn add_member(
   let member_user_id = user_id_by_email(&state.db, &email)
     .await?
     .ok_or(ApiError::NotFound)?;
+  // The upsert below rewrites an EXISTING member's role, so "add" the owner's
+  // email with any role was a demotion — the one thing update/remove refuse.
+  ensure_not_workspace_owner(&state.db, workspace_id, member_user_id).await?;
 
   // New member: the workspace lands at the END of THEIR switcher. An existing
   // member (re-invite / role change) keeps their position — only role updates.
@@ -900,6 +903,98 @@ mod workspace_decode_pg {
       .execute(&db)
       .await
       .ok();
+  }
+}
+
+#[cfg(test)]
+mod owner_role_pg {
+  use super::*;
+
+  async fn pool() -> Option<PgPool> {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(
+        std::env::var("CI").is_err(),
+        "DATABASE_URL is unset in CI — these tests must not silently pass"
+      );
+      return None;
+    };
+    Some(PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed"))
+  }
+
+  /// THE BUG: `add_member` is an upsert, so an admin "adding" the owner's
+  /// email as viewer rewrote the owner's row. Owner checks read that row, so
+  /// the owner lost the workspace and could not get it back.
+  #[tokio::test]
+  async fn the_owner_cannot_be_demoted_by_any_path() {
+    let Some(db) = pool().await else { return };
+    let (owner, admin, ws) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    for u in [owner, admin] {
+      sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+        .bind(u)
+        .bind(format!("{u}@t.dev"))
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+      .bind(ws)
+      .bind(owner)
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query(
+      "INSERT INTO workspace_members(workspace_id,user_id,role,position)
+       VALUES($1,$2,'owner','0000000010'),($1,$3,'admin','0000000010')",
+    )
+    .bind(ws)
+    .bind(owner)
+    .bind(admin)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    // The API guard add_member now runs before its upsert.
+    assert!(matches!(
+      ensure_not_workspace_owner(&db, ws, owner).await,
+      Err(ApiError::Forbidden)
+    ));
+    assert!(ensure_not_workspace_owner(&db, ws, admin).await.is_ok());
+
+    // The backstop: add_member's exact upsert, aimed at the owner, is refused
+    // by the database even if a future path forgets the guard.
+    let upsert = sqlx::query(
+      "INSERT INTO workspace_members (workspace_id, user_id, role, position)
+       VALUES ($1, $2, 'viewer'::workspace_role, '0000000020')
+       ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(ws)
+    .bind(owner)
+    .execute(&db)
+    .await;
+    assert!(upsert.is_err(), "the owner's role must not change");
+    let role: String = sqlx::query_scalar(
+      "SELECT role::text FROM workspace_members WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(ws)
+    .bind(owner)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(role, "owner");
+
+    // Other members' roles still change freely.
+    sqlx::query("UPDATE workspace_members SET role='viewer' WHERE workspace_id=$1 AND user_id=$2")
+      .bind(ws)
+      .bind(admin)
+      .execute(&db)
+      .await
+      .expect("a non-owner can be demoted");
+
+    // Deleting the workspace still cascades through the owner's row.
+    sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.unwrap();
+    for u in [owner, admin] {
+      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(&db).await.ok();
+    }
   }
 }
 

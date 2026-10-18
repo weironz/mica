@@ -1109,11 +1109,15 @@ class ApiClient {
   Future<Map<String, dynamic>> listAiModels(
     String token, {
     String? provider,
+    String? providerId,
     String? baseUrl,
     String? apiKey,
   }) async {
     final query = <String, String>{
       if (provider != null && provider.isNotEmpty) 'provider': provider,
+      // Which vendor's stored key to fall back on — without it the server
+      // used the ACTIVE vendor's key against this vendor's URL.
+      if (providerId != null && providerId.isNotEmpty) 'provider_id': providerId,
       if (baseUrl != null && baseUrl.isNotEmpty) 'base_url': baseUrl,
       if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
     };

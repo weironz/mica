@@ -426,6 +426,14 @@ fn finish(text: String) -> ApiResult<String> {
   Ok(text)
 }
 
+/// Whether a stored key may be sent to `requested`: only to the URL it was
+/// saved with. The probe takes the URL from the caller, so without this a
+/// stored key would follow whatever URL was typed into the form.
+fn same_base_url(stored: &str, requested: &str) -> bool {
+  let norm = |url: &str| url.trim().trim_end_matches('/').to_ascii_lowercase();
+  norm(stored) == norm(requested)
+}
+
 /// Candidate URLs for a provider's OpenAI-compatible model list, tried in order.
 ///
 /// Ported from cc-switch (`src-tauri/src/services/model_fetch.rs`,
@@ -504,6 +512,9 @@ pub struct ListModelsQuery {
   base_url: Option<String>,
   api_key: Option<String>,
   provider: Option<String>,
+  /// Which stored vendor the form is showing. Its row — not whichever vendor
+  /// is ACTIVE — is where an omitted key comes from.
+  provider_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -527,7 +538,21 @@ pub async fn list_models(
   axum::extract::Query(query): axum::extract::Query<ListModelsQuery>,
 ) -> ApiResult<Json<ListModelsResponse>> {
   admin_id_from_headers(&state, &headers).await?;
-  let saved = state.ai.read().await.clone();
+  // The fallback is the vendor the form is ABOUT. Falling back to the active
+  // config is the bug 0022 fixed in `update_settings` and this route kept:
+  // with Zhipu selected and the key field empty (it always is — keys are never
+  // sent back), the active DeepSeek key went to Zhipu's URL. That leaked one
+  // vendor's secret to another and then reported "key rejected" for a vendor
+  // that had a perfectly good key of its own.
+  let saved = match query
+    .provider_id
+    .as_deref()
+    .map(|id| id.trim().to_lowercase())
+    .filter(|id| !id.is_empty())
+  {
+    Some(id) => AiConfig::load_provider(&state.db, &id).await,
+    None => state.ai.read().await.clone(),
+  };
 
   let base_url = query
     .base_url
@@ -539,7 +564,12 @@ pub async fn list_models(
     .api_key
     .map(|value| value.trim().to_string())
     .filter(|value| !value.is_empty())
-    .or_else(|| saved.as_ref().map(|c| c.api_key.clone()))
+    .or_else(|| {
+      saved
+        .as_ref()
+        .filter(|c| same_base_url(&c.base_url, &base_url))
+        .map(|c| c.api_key.clone())
+    })
     .unwrap_or_default();
   let provider = query
     .provider
@@ -702,6 +732,13 @@ mod models_endpoint_tests {
       models_url_candidates("http://localhost:11434/v1"),
       vec!["http://localhost:11434/v1/models"]
     );
+  }
+
+  /// A stored key only ever goes back to the URL it was stored with.
+  #[test]
+  fn a_stored_key_only_follows_its_own_url() {
+    assert!(same_base_url("https://api.deepseek.com/", "https://API.deepseek.com"));
+    assert!(!same_base_url("https://api.deepseek.com", "https://open.bigmodel.cn/api/paas/v4"));
   }
 
   #[test]

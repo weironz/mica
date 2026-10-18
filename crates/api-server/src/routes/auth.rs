@@ -778,11 +778,20 @@ pub async fn logout(
   Ok((cleared_cookie_headers(), StatusCode::NO_CONTENT))
 }
 
-/// Burn every sign-in a user has, everywhere. The access tokens already issued
-/// are JWTs and cannot be recalled — they die on their own within
-/// `access_token_ttl_seconds` (1h by default), which is the price of them being
-/// stateless. Nothing can mint a new one after this.
+/// Burn every credential a user has, everywhere: refresh tokens AND personal
+/// access tokens. The access tokens already issued are JWTs and cannot be
+/// recalled — they die on their own within `access_token_ttl_seconds` (1h by
+/// default), which is the price of them being stateless. Nothing can mint a
+/// new one after this.
+///
+/// PATs are included because both callers are password changes, made when
+/// someone thinks an intruder is in the account — and minting a PAT
+/// (`POST /auth/tokens`, never expiring by default) is exactly how an intruder
+/// would stay. Revoking only refresh tokens left that door open while the
+/// reset page told the user every device had been signed out. Same choice as
+/// Google's app passwords, which a password change revokes.
 pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
+  let mut tx = db.begin().await?;
   sqlx::query(
     r#"
       UPDATE refresh_tokens
@@ -791,8 +800,13 @@ pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult
     "#,
   )
   .bind(user_id)
-  .execute(db)
+  .execute(&mut *tx)
   .await?;
+  sqlx::query("DELETE FROM api_tokens WHERE user_id = $1")
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+  tx.commit().await?;
   Ok(())
 }
 
@@ -1907,6 +1921,40 @@ mod refresh_pg {
       rotate_refresh_token(&db, &intruder).await.is_err(),
       "every family dies, not just the one that asked"
     );
+  }
+
+  /// THE BUG: a password change revoked refresh tokens only, so a PAT an
+  /// intruder had minted kept full API access after the victim's reset.
+  #[tokio::test]
+  async fn changing_the_password_kills_personal_access_tokens_too() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let other = seed_user(&db).await;
+    for owner in [user, other] {
+      sqlx::query(
+        "INSERT INTO api_tokens (user_id, name, token_hash, scopes) VALUES ($1, 'x', $2, ARRAY['write'])",
+      )
+      .bind(owner)
+      .bind(Uuid::new_v4().to_string())
+      .execute(&db)
+      .await
+      .unwrap();
+    }
+
+    revoke_user_sessions(&db, user).await.unwrap();
+
+    let count = |u: Uuid| {
+      let db = db.clone();
+      async move {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM api_tokens WHERE user_id = $1")
+          .bind(u)
+          .fetch_one(&db)
+          .await
+          .unwrap()
+      }
+    };
+    assert_eq!(count(user).await, 0, "the intruder's PAT dies with the password");
+    assert_eq!(count(other).await, 1, "other users' tokens are untouched");
   }
 
   #[tokio::test]

@@ -23,7 +23,24 @@ fn u64le(d: &[u8], i: usize) -> u64 {
   u64::from_le_bytes([d[i], d[i + 1], d[i + 2], d[i + 3], d[i + 4], d[i + 5], d[i + 6], d[i + 7]])
 }
 
+/// Total bytes one archive may expand to (stored + inflated, all entries).
+///
+/// Uploads are capped at 256 MiB compressed, but that bounds nothing about the
+/// expansion: DEFLATE reaches ~1000:1, so a small bomb could still take every
+/// byte of RAM. Every caller holds the whole result in memory, so this is a
+/// memory ceiling, sized well above real exports (a 1192-entry wiki inflates
+/// to a few hundred MiB) and below what a small node can hold. Entries past
+/// the budget are dropped like any other unreadable entry.
+pub const MAX_INFLATED_TOTAL: usize = 1024 * 1024 * 1024;
+
 pub fn read_zip(data: &[u8]) -> Vec<ZipFileEntry> {
+  let mut budget = MAX_INFLATED_TOTAL;
+  read_zip_within(data, &mut budget)
+}
+
+/// [read_zip] drawing from a caller-held byte budget, so nested archives share
+/// ONE ceiling instead of each getting a fresh one.
+pub fn read_zip_within(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
   // Locate the end-of-central-directory record, scanning back over a
   // possible archive comment (up to 64 KiB).
   const EOCD_LEN: usize = 22;
@@ -44,7 +61,7 @@ pub fn read_zip(data: &[u8]) -> Vec<ZipFileEntry> {
     i -= 1;
   }
   let Some(eocd) = eocd else {
-    return read_local_entries(data);
+    return read_local_entries(data, budget);
   };
 
   let mut total = u64::from(u16le(data, eocd + 10));
@@ -53,8 +70,8 @@ pub fn read_zip(data: &[u8]) -> Vec<ZipFileEntry> {
   if (total == 0xffff || off == 0xffff_ffff) && eocd >= 20 {
     let loc = eocd - 20;
     if u32le(data, loc) == 0x0706_4b50 {
-      let z64 = u64le(data, loc + 8) as usize;
-      if z64 + 56 <= data.len() && u32le(data, z64) == 0x0606_4b50 {
+      let z64 = usize::try_from(u64le(data, loc + 8)).unwrap_or(usize::MAX);
+      if z64.saturating_add(56) <= data.len() && u32le(data, z64) == 0x0606_4b50 {
         total = u64le(data, z64 + 32);
         off = u64le(data, z64 + 48);
       }
@@ -62,9 +79,9 @@ pub fn read_zip(data: &[u8]) -> Vec<ZipFileEntry> {
   }
 
   let mut out = Vec::new();
-  let mut off = off as usize;
+  let mut off = usize::try_from(off).unwrap_or(usize::MAX);
   for _ in 0..total {
-    if off + 46 > data.len() || u32le(data, off) != 0x0201_4b50 {
+    if off.saturating_add(46) > data.len() || u32le(data, off) != 0x0201_4b50 {
       break;
     }
     let flags = u16le(data, off + 8);
@@ -113,19 +130,19 @@ pub fn read_zip(data: &[u8]) -> Vec<ZipFileEntry> {
 
     // The local header's name/extra lengths may differ from the central
     // directory's — read them to find where the data actually starts.
-    let local_off = local_off as usize;
-    if local_off + 30 > data.len() || u32le(data, local_off) != 0x0403_4b50 {
+    let local_off = usize::try_from(local_off).unwrap_or(usize::MAX);
+    if local_off.saturating_add(30) > data.len() || u32le(data, local_off) != 0x0403_4b50 {
       continue;
     }
     let l_name = usize::from(u16le(data, local_off + 26));
     let l_extra = usize::from(u16le(data, local_off + 28));
     let start = local_off + 30 + l_name + l_extra;
-    let comp_size = comp_size as usize;
-    if start + comp_size > data.len() {
+    let comp_size = usize::try_from(comp_size).unwrap_or(usize::MAX);
+    if start.saturating_add(comp_size) > data.len() {
       continue;
     }
-    if let Some(bytes) =
-      decode_entry(&data[start..start + comp_size], method, uncomp_size as usize)
+    let uncomp_size = usize::try_from(uncomp_size).unwrap_or(usize::MAX);
+    if let Some(bytes) = decode_entry(&data[start..start + comp_size], method, uncomp_size, budget)
     {
       out.push(ZipFileEntry { name, bytes });
     }
@@ -133,17 +150,24 @@ pub fn read_zip(data: &[u8]) -> Vec<ZipFileEntry> {
   out
 }
 
-fn decode_entry(comp: &[u8], method: u16, uncomp_size: usize) -> Option<Vec<u8>> {
-  match method {
-    0 => Some(comp.to_vec()),
-    8 => inflate(comp, uncomp_size).ok(),
-    _ => None, // unsupported compression method
-  }
+fn decode_entry(
+  comp: &[u8],
+  method: u16,
+  uncomp_size: usize,
+  budget: &mut usize,
+) -> Option<Vec<u8>> {
+  let bytes = match method {
+    0 if comp.len() <= *budget => comp.to_vec(),
+    8 => inflate(comp, uncomp_size, *budget).ok()?,
+    _ => return None, // unsupported compression method, or over budget
+  };
+  *budget -= bytes.len();
+  Some(bytes)
 }
 
 /// Fallback for archives without a readable central directory: walk local
 /// headers front-to-back (cannot handle data-descriptor entries).
-fn read_local_entries(data: &[u8]) -> Vec<ZipFileEntry> {
+fn read_local_entries(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
   let mut out = Vec::new();
   let mut i = 0;
   while i + 30 <= data.len() {
@@ -158,7 +182,7 @@ fn read_local_entries(data: &[u8]) -> Vec<ZipFileEntry> {
     let extra_len = usize::from(u16le(data, i + 28));
     let name_start = i + 30;
     let data_start = name_start + name_len + extra_len;
-    if data_start + comp_size > data.len() {
+    if data_start.saturating_add(comp_size) > data.len() {
       break;
     }
     let name = decode_name(
@@ -167,7 +191,7 @@ fn read_local_entries(data: &[u8]) -> Vec<ZipFileEntry> {
       &data[name_start + name_len..data_start],
     );
     if !name.ends_with('/')
-      && let Some(bytes) = decode_entry(&data[data_start..data_start + comp_size], method, uncomp_size)
+      && let Some(bytes) = decode_entry(&data[data_start..data_start + comp_size], method, uncomp_size, budget)
     {
       out.push(ZipFileEntry { name, bytes });
     }

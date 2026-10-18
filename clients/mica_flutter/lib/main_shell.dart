@@ -2695,6 +2695,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// takes the same session and the dialog uses them together.
   Future<Map<String, dynamic>> _listAiModels({
     String? provider,
+    String? providerId,
     String? baseUrl,
     String? apiKey,
   }) async {
@@ -2702,6 +2703,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.listAiModels(
       session.accessToken,
       provider: provider,
+      providerId: providerId,
       baseUrl: baseUrl,
       apiKey: apiKey,
     );
