@@ -220,7 +220,11 @@
 | D2 PAT 请求写放大 | 🟡 部分 | `last_used_at` 一分钟内只写一次；token 仍解析两遍（要把解析结果放进请求扩展，改动面较大，未做） |
 | D1 同步热路径 | ✅ 已修 | 每次 push 只拍平一次；自动版本先查再写，不再每次把整份 state 发给 Postgres |
 
-**验证状态**：Rust 侧全量 `cargo test --workspace`（连本地 Postgres 16，DB 集成测试真实执行）通过，见下方最近一次结果。
+**验证状态**：Rust 侧全量 `cargo test --workspace`（连本地 Postgres 16，DB 集成测试真实执行）：
+最近一次 754 通过、12 忽略（原本就 `#[ignore]` 的）、1 失败——`mica-cli`
+`backup::tests::a_second_run_is_refused_while_the_first_holds_the_lock`。本轮未改 `crates/cli`，
+该测试单独重跑 6 次全过、上一轮全量也通过，判断为**既有的并行偶发失败**（与 `RunLock` 在同进程并行测试下的
+锁语义有关，未深究），未跳过、未改动，留作单独排查。
 Dart 改动（A7/A8/A9/B9/B13/B14/C5/C6/C8）本机无 Dart 工具链，**未编译未测试**，合并前需在开发机跑
 `flutter analyze` + `flutter test`（`cloud_lag_resync_test.dart` 新增了 fakeAsync 用例）。
 
