@@ -155,11 +155,16 @@ fn pending_upload_verdict(
 /// Returns None if any document could not be read: a partial set would condemn
 /// live blobs, so the caller must skip the whole workspace instead.
 async fn referenced_file_ids(db: &PgPool, workspace_id: Uuid) -> Option<HashSet<String>> {
+    // The derived `file_ids` column (migration 0030) answers without decoding
+    // anything; only a document whose column is still NULL (not yet derived)
+    // falls back to materialising its content — once, until the backfill or
+    // its next write fills it in.
     let rows = sqlx::query(
         r#"
-          SELECT DISTINCT object_id
-          FROM views
-          WHERE workspace_id = $1 AND object_type = 'document'
+          SELECT DISTINCT v.object_id, b.file_ids
+          FROM views v
+          LEFT JOIN document_yrs_base b ON b.document_id = v.object_id
+          WHERE v.workspace_id = $1 AND v.object_type = 'document'
         "#,
     )
     .bind(workspace_id)
@@ -170,6 +175,11 @@ async fn referenced_file_ids(db: &PgPool, workspace_id: Uuid) -> Option<HashSet<
     let mut refs = HashSet::new();
     for row in rows {
         let document_id: Uuid = row.try_get("object_id").ok()?;
+        let derived: Option<Vec<String>> = row.try_get("file_ids").ok()?;
+        if let Some(ids) = derived {
+            refs.extend(ids);
+            continue;
+        }
         // A document with no payload yet is empty, not unreadable — it simply
         // contributes nothing. Any other failure poisons the workspace.
         let payload = match store::current_payload(db, document_id).await {
@@ -801,6 +811,82 @@ mod tests {
         assert_eq!(mark, None, "handing the row out again restarts the GC clock");
         sqlx::query("DELETE FROM workspaces WHERE id = $1").bind(workspace_id).execute(&db).await.ok();
         sqlx::query("DELETE FROM users WHERE id = $1").bind(user_id).execute(&db).await.ok();
+    }
+
+    /// D4: references come from the derived `file_ids` column, and a row whose
+    /// column is NULL (not derived yet) still counts — it falls back to decoding.
+    #[tokio::test]
+    async fn references_come_from_the_derived_column_with_a_decode_fallback() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+            return;
+        };
+        let db = PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed");
+        let (user, ws) = (Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES ($1,$2,'GC','x')")
+            .bind(user)
+            .bind(format!("{user}@derived.test"))
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES ($1,'GC',$2)")
+            .bind(ws)
+            .bind(user)
+            .execute(&db)
+            .await
+            .unwrap();
+        let mut docs = Vec::new();
+        for file in ["file-derived", "file-undecoded"] {
+            let (doc, view) = (Uuid::new_v4(), Uuid::new_v4());
+            sqlx::query("INSERT INTO documents(id,workspace_id,root_block_id,current_seq,created_by) VALUES($1,$2,'r',0,$3)")
+                .bind(doc)
+                .bind(ws)
+                .bind(user)
+                .execute(&db)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO views(id,workspace_id,object_id,object_type,name,position,created_by)
+                 VALUES($1,$2,$3,'document','p','0',$4)",
+            )
+            .bind(view)
+            .bind(ws)
+            .bind(doc)
+            .bind(user)
+            .execute(&db)
+            .await
+            .unwrap();
+            let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(serde_json::json!({
+                "schema_version": 1, "root_block_id": "r",
+                "blocks": [
+                    {"id": "r", "type": "page", "children": ["i"]},
+                    {"id": "i", "type": "image", "data": {"file_id": file}}
+                ]
+            }))
+            .unwrap();
+            let mut tx = db.begin().await.unwrap();
+            mica_app_core::sync::seed_base_tx(&mut tx, doc, payload).await.unwrap();
+            tx.commit().await.unwrap();
+            docs.push(doc);
+        }
+        let derived: Option<Vec<String>> =
+            sqlx::query_scalar("SELECT file_ids FROM document_yrs_base WHERE document_id = $1")
+                .bind(docs[0])
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(derived, Some(vec!["file-derived".to_string()]), "seeding derives the column");
+        // The second as if written before the column existed.
+        sqlx::query("UPDATE document_yrs_base SET file_ids = NULL WHERE document_id = $1")
+            .bind(docs[1])
+            .execute(&db)
+            .await
+            .unwrap();
+
+        let refs = referenced_file_ids(&db, ws).await.expect("readable workspace");
+        assert!(refs.contains("file-derived") && refs.contains("file-undecoded"), "{refs:?}");
+        sqlx::query("DELETE FROM workspaces WHERE id = $1").bind(ws).execute(&db).await.ok();
+        sqlx::query("DELETE FROM users WHERE id = $1").bind(user).execute(&db).await.ok();
     }
 
     /// THE BUG (B17): only CURRENT content counted as a reference, so an image

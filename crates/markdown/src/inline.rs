@@ -1273,6 +1273,17 @@ pub(crate) fn parse_inline_memo(
           continue;
         }
       }
+      // A run that does not open (3+, or no closer) is literal AS A WHOLE.
+      // Falling through emitted ONE tilde and re-scanned the rest as a shorter
+      // run, so `~~~a~~` struck `a` (GFM keeps it all literal) and `~~a~`
+      // struck too — and the Dart mirror, which already wrote the whole run,
+      // disagreed with this engine.
+      for _ in 0..n {
+        out.push('~');
+      }
+      out_len += n;
+      i += n;
+      continue;
     }
     // Inline code: an N-backtick run closes only on a run of exactly N;
     // line endings become spaces; one leading+trailing space strips when

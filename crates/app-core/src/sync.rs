@@ -235,11 +235,26 @@ pub fn link_targets_from_blocks(blocks: &[mica_core::Block]) -> Vec<Uuid> {
     targets
 }
 
+/// Every `file_id` the blocks reference — the producer of
+/// `document_yrs_base.file_ids` (migration 0030), the blob GC's reference set.
+/// Sorted and deduplicated, like [link_targets_from_blocks].
+pub fn file_ids_from_blocks(blocks: &[mica_core::Block]) -> Vec<String> {
+    let mut ids: Vec<String> = blocks
+        .iter()
+        .filter_map(|b| b.data.get("file_id").and_then(|v| v.as_str()))
+        .map(str::to_string)
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
 /// How many base rows the startup backfill decodes per DB round trip.
 const BACKFILL_BATCH: i64 = 256;
 
-/// One-time startup backfill of the two DERIVED columns on `document_yrs_base` —
-/// `content_text` (migration 0012) and `link_targets` (0019) — for rows the
+/// One-time startup backfill of the DERIVED columns on `document_yrs_base` —
+/// `content_text` (migration 0012), `link_targets` (0019) and `file_ids` (0030)
+/// — for rows the
 /// migrations could only create empty, because deriving either needs the yrs
 /// decode, which is Rust, not SQL. Run once after `run_migrations`, before the
 /// server accepts traffic.
@@ -273,7 +288,8 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
     loop {
         let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
             "SELECT document_id, state FROM document_yrs_base
-             WHERE (content_text = '' OR link_targets IS NULL) AND document_id > $1
+             WHERE (content_text = '' OR link_targets IS NULL OR file_ids IS NULL)
+               AND document_id > $1
              ORDER BY document_id
              LIMIT $2",
         )
@@ -304,8 +320,10 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
                     continue;
                 }
             };
-            let text = content_text_from_doc(&doc);
-            let targets = link_targets_from_doc(&doc);
+            let blocks = doc.to_blocks();
+            let text = content_text_from_blocks(&blocks, &doc.root_block_id());
+            let targets = link_targets_from_blocks(&blocks);
+            let files = file_ids_from_blocks(&blocks);
             // `link_targets` is written unconditionally — writing `'{}'` is the
             // whole point of the NULL sentinel, and skipping it here would leave
             // the row NULL and re-decoded forever. `content_text` keeps its own
@@ -313,12 +331,14 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
             sqlx::query(
                 "UPDATE document_yrs_base
                  SET content_text = CASE WHEN $2 = '' THEN content_text ELSE $2 END,
-                     link_targets = $3
+                     link_targets = $3,
+                     file_ids = $4
                  WHERE document_id = $1",
             )
             .bind(document_id)
             .bind(&text)
             .bind(&targets)
+            .bind(&files)
             .execute(&mut *tx)
             .await?;
             filled += 1;
@@ -409,9 +429,10 @@ pub async fn seed_base_tx(
     // only after the startup backfill.
     let content_text = content_text_from_doc(&doc);
     let link_targets = link_targets_from_doc(&doc);
+    let file_ids = file_ids_from_blocks(&blocks);
     let inserted = sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, updated_at)
-         VALUES ($1, $2, $3, 0, $4, $5, now())
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
+         VALUES ($1, $2, $3, 0, $4, $5, $6, now())
          ON CONFLICT (document_id) DO NOTHING",
     )
     .bind(document_id)
@@ -419,6 +440,7 @@ pub async fn seed_base_tx(
     .bind(&state_vector)
     .bind(&content_text)
     .bind(&link_targets)
+    .bind(&file_ids)
     .execute(&mut **tx)
     .await?;
     if inserted.rows_affected() == 0 {
@@ -557,13 +579,14 @@ pub async fn push_update(
     let root_id = doc.root_block_id();
     let content_text = content_text_from_blocks(&blocks, &root_id);
     let link_targets = link_targets_from_blocks(&blocks);
+    let file_ids = file_ids_from_blocks(&blocks);
     sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, now())
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now())
          ON CONFLICT (document_id) DO UPDATE SET
              state = excluded.state, state_vector = excluded.state_vector,
              base_rid = excluded.base_rid, content_text = excluded.content_text,
-             link_targets = excluded.link_targets,
+             link_targets = excluded.link_targets, file_ids = excluded.file_ids,
              updated_at = now()",
     )
     .bind(document_id)
@@ -572,6 +595,7 @@ pub async fn push_update(
     .bind(rid)
     .bind(&content_text)
     .bind(&link_targets)
+    .bind(&file_ids)
     .execute(&mut *tx)
     .await?;
 

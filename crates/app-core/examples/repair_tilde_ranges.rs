@@ -149,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         sqlx::query(
             "UPDATE document_yrs_base
-             SET state = $2, state_vector = $3, content_text = $4, link_targets = $5,
+             SET state = $2, state_vector = $3, content_text = $4, link_targets = $5, file_ids = NULL,
                  updated_at = now()
              WHERE document_id = $1",
         )

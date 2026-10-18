@@ -124,6 +124,9 @@ pub(crate) async fn next_member_position(db: &PgPool, user_id: Uuid) -> ApiResul
   Ok(pad_position(max.unwrap_or(0) + 10))
 }
 
+/// Upper bound on one reorder request's id list.
+const MAX_REORDER_IDS: usize = 1000;
+
 #[derive(Debug, Deserialize)]
 pub struct ReorderWorkspacesRequest {
   workspace_ids: Vec<Uuid>,
@@ -138,19 +141,44 @@ pub async fn reorder(
   Json(payload): Json<ReorderWorkspacesRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
-  let mut tx = state.db.begin().await?;
-  for (i, wid) in payload.workspace_ids.iter().enumerate() {
-    sqlx::query(
-      "UPDATE workspace_members SET position = $1 WHERE workspace_id = $2 AND user_id = $3",
-    )
-    .bind(pad_position((i as i64 + 1) * 10))
-    .bind(wid)
-    .bind(user_id)
-    .execute(&mut *tx)
-    .await?;
+  // Bounded: one user is a member of a handful of workspaces, and the list is
+  // client-supplied. (Duplicates: the first occurrence wins below.)
+  if payload.workspace_ids.len() > MAX_REORDER_IDS {
+    return Err(ApiError::BadRequest(format!(
+      "at most {MAX_REORDER_IDS} workspaces can be reordered at once"
+    )));
   }
-  tx.commit().await?;
+  reorder_member_positions(&state.db, user_id, &payload.workspace_ids).await?;
   Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Renumber `user_id`'s membership positions to follow `workspace_ids`.
+///
+/// ONE statement instead of one UPDATE per id — the list comes from the
+/// client, and N round trips inside a transaction held the rows locked for
+/// all of them. Ids the user is not a member of match nothing.
+async fn reorder_member_positions(db: &PgPool, user_id: Uuid, workspace_ids: &[Uuid]) -> ApiResult<()> {
+  let positions: Vec<String> = (1..=workspace_ids.len() as i64)
+    .map(|i| pad_position(i * 10))
+    .collect();
+  sqlx::query(
+    r#"
+      UPDATE workspace_members m
+      SET position = o.position
+      FROM (
+        SELECT DISTINCT ON (id) id, position
+        FROM unnest($1::uuid[], $2::text[]) WITH ORDINALITY AS t(id, position, n)
+        ORDER BY id, n
+      ) o
+      WHERE m.workspace_id = o.id AND m.user_id = $3
+    "#,
+  )
+  .bind(workspace_ids)
+  .bind(&positions)
+  .bind(user_id)
+  .execute(db)
+  .await?;
+  Ok(())
 }
 
 /// The workspace list query, shared with its test so what gets asserted is the
@@ -903,6 +931,77 @@ mod workspace_decode_pg {
       .execute(&db)
       .await
       .ok();
+  }
+}
+
+#[cfg(test)]
+mod reorder_pg {
+  use super::*;
+
+  #[tokio::test]
+  async fn one_statement_renumbers_only_the_callers_memberships() {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+      return;
+    };
+    let db = PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed");
+    let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+    let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    for u in [me, other] {
+      sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+        .bind(u)
+        .bind(format!("{u}@t.dev"))
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    for ws in [a, b, c] {
+      sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+        .bind(ws)
+        .bind(me)
+        .execute(&db)
+        .await
+        .unwrap();
+      sqlx::query("INSERT INTO workspace_members(workspace_id,user_id,role,position) VALUES($1,$2,'owner','0000000010')")
+        .bind(ws)
+        .bind(me)
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    sqlx::query("INSERT INTO workspace_members(workspace_id,user_id,role,position) VALUES($1,$2,'viewer','0000000099')")
+      .bind(a)
+      .bind(other)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    reorder_member_positions(&db, me, &[c, a, b, Uuid::new_v4()]).await.unwrap();
+
+    let order: Vec<Uuid> = sqlx::query_scalar(
+      "SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY position",
+    )
+    .bind(me)
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(order, vec![c, a, b]);
+    let theirs: String = sqlx::query_scalar(
+      "SELECT position FROM workspace_members WHERE user_id = $1 AND workspace_id = $2",
+    )
+    .bind(other)
+    .bind(a)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(theirs, "0000000099", "another user's order is untouched");
+
+    for ws in [a, b, c] {
+      sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.ok();
+    }
+    for u in [me, other] {
+      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(&db).await.ok();
+    }
   }
 }
 

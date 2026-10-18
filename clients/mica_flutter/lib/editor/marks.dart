@@ -467,6 +467,27 @@ int matchingBracket(String src, int open) {
 
 const kDollar = r'$';
 
+/// Unicode `White_Space` — exactly the set Rust's `char::is_whitespace`
+/// answers, which the authoritative engine uses at the autolink boundary and
+/// the math delimiters. This mirror used to test only ASCII space/tab/newline,
+/// so `中文\u3000www.example.com` autolinked in Rust but not here, and
+/// `$x\u3000$` was math here but not there.
+bool isUnicodeWhitespace(String c) {
+  if (c.isEmpty) return false;
+  final u = c.codeUnitAt(0);
+  return (u >= 0x09 && u <= 0x0D) ||
+      u == 0x20 ||
+      u == 0x85 ||
+      u == 0xA0 ||
+      u == 0x1680 ||
+      (u >= 0x2000 && u <= 0x200A) ||
+      u == 0x2028 ||
+      u == 0x2029 ||
+      u == 0x202F ||
+      u == 0x205F ||
+      u == 0x3000;
+}
+
 /// One past the closing backtick run of the code span opening at [start] (the
 /// index of its first backtick), or -1 when the run never closes — CommonMark
 /// leaves an unclosed run as literal text.
@@ -500,7 +521,7 @@ int _codeSpanClose(String src, int start) {
 int _findMathCloser(String src, int contentStart) {
   if (contentStart >= src.length) return -1;
   final first = src[contentStart];
-  if (first == ' ' || first == '\t' || first == '\n') return -1;
+  if (isUnicodeWhitespace(first)) return -1;
   var j = contentStart;
   while (j < src.length) {
     final c = src[j];
@@ -519,7 +540,7 @@ int _findMathCloser(String src, int contentStart) {
     }
     if (c == kDollar && j > contentStart) {
       final prev = src[j - 1];
-      if (prev == ' ' || prev == '\t' || prev == r'\') {
+      if (isUnicodeWhitespace(prev) || prev == r'\') {
         j++;
         continue;
       }
@@ -1441,9 +1462,7 @@ bool _labelHasLinkCached(
     // GFM extended autolinks: bare www./http(s)/ftp URLs and emails at a
     // word boundary (start, whitespace, or `*`/`_`/`~`/`(`).
     if (i == 0 ||
-        src[i - 1] == ' ' ||
-        src[i - 1] == '\t' ||
-        src[i - 1] == '\n' ||
+        isUnicodeWhitespace(src[i - 1]) ||
         '*_~('.contains(src[i - 1])) {
       final auto = allowAutolink ? extendedAutolink(src, i) : null;
       if (auto != null) {

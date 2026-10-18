@@ -227,6 +227,7 @@ pub async fn export_workspace_zip(
 ) -> ApiResult<Response> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  let _permit = tree_export_permit()?;
   let entries = build_tree_zip(&state, workspace_id, None).await?;
   Ok(zip_response(build_zip(&entries), "workspace.zip"))
 }
@@ -566,6 +567,7 @@ pub async fn export_all_workspaces_zip(
   .fetch_all(&state.db)
   .await?;
 
+  let _permit = tree_export_permit()?;
   let mut entries: Vec<ZipEntry> = Vec::new();
   let mut manifest_ws: Vec<serde_json::Value> = Vec::new();
   let mut used_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -627,6 +629,7 @@ pub async fn export_folder_zip(
     ));
   }
   let filename = format!("{}.zip", zip_safe_name(&folder.name, "folder"));
+  let _permit = tree_export_permit()?;
   let entries = build_tree_zip(&state, workspace_id, Some(view_id)).await?;
   Ok(zip_response(build_zip(&entries), &filename))
 }
@@ -656,6 +659,21 @@ fn zip_safe_name(name: &str, fallback: &str) -> String {
 /// workspace, `Some(view_id)` = that folder's children. Paths are relative to
 /// the root, image assets are de-duplicated into a shared `assets/`, and a
 /// `manifest.json` records the tree for round-tripping back through import.
+/// How many whole-tree exports may build at once, server-wide.
+///
+/// A tree export holds every page payload and every image of the subtree in
+/// memory (twice, briefly, while the archive is assembled), so a few
+/// concurrent "export all workspaces" from any members — read-only ones
+/// included — could stack gigabytes. Streaming the archive would bound one
+/// export; this bounds how many there are. Excess callers get a 503 to retry.
+static TREE_EXPORTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+fn tree_export_permit() -> ApiResult<tokio::sync::SemaphorePermit<'static>> {
+  TREE_EXPORTS.try_acquire().map_err(|_| {
+    ApiError::Unavailable("another large export is running; try again in a moment".to_string())
+  })
+}
+
 async fn build_tree_zip(
   state: &AppState,
   workspace_id: Uuid,

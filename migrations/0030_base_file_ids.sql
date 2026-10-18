@@ -1,0 +1,12 @@
+-- Every `file_id` a document's blocks reference, derived from the yrs base and
+-- co-written with it — the same pattern as `content_text` (0012) and
+-- `link_targets` (0019).
+--
+-- The blob GC used to find references by DECODING every document of every
+-- workspace on every 6-hour sweep. With this column the sweep reads an array.
+--
+-- NULL = not derived yet (pre-existing rows until the startup backfill, or a
+-- row rewritten by a tool that does not maintain it). The GC treats NULL as
+-- "unknown" and decodes that one document as before, so a missed writer can
+-- never make a live blob look unreferenced.
+ALTER TABLE document_yrs_base ADD COLUMN file_ids text[];
