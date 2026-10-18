@@ -1302,7 +1302,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       fetchMe: _api.fetchMe,
       refreshSession: _api.refreshSession,
       removeAvatar: _api.removeAvatar,
-      httpGet: (uri) => http.get(uri),
+      httpGet: (uri) => sharedHttpClient.get(uri),
       avatarUrlFor: (version, {userId}) => _avatarUrlFor(version, userId: userId),
       evictImage: (url) => NetworkImage(url).evict(),
     );

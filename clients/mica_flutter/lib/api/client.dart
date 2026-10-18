@@ -69,7 +69,26 @@ Uri? resolveApiBase({required String pinned, required String saved}) {
 /// is a BrowserClient and the browser owns the connection pool regardless, so
 /// the change is a no-op there — which is also why desktop and web timings must
 /// not be quoted as one number.
-final http.Client sharedHttpClient = _TimedClient(http.Client());
+/// See [sharedHttpClient] for why this is one shared client. Not `final` so a
+/// test can swap it before pumping the full shell (see [useHttpClientForTesting]);
+/// production never reassigns it.
+http.Client sharedHttpClient = _TimedClient(http.Client());
+
+/// Test-only: swap the shared client BEFORE the shell first issues a request.
+/// A widget test that pumps the full MicaApp cannot reach a real server, and
+/// the e2e-only startup regressions (the v0.13.53 initState crash class) lived
+/// exactly in that gap — 1,814 unit tests green, CI e2e red, feedback 10
+/// minutes. Restore with [resetHttpClientForTesting] in tearDown.
+@visibleForTesting
+void useHttpClientForTesting(http.Client client) {
+  sharedHttpClient = client;
+}
+
+/// Test-only counterpart to [useHttpClientForTesting].
+@visibleForTesting
+void resetHttpClientForTesting() {
+  sharedHttpClient = _TimedClient(http.Client());
+}
 
 /// Called after every HTTP request with how long it took to get RESPONSE
 /// HEADERS back — connect + TLS + server + first byte, but not body transfer.
