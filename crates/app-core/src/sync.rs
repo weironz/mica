@@ -511,10 +511,14 @@ pub fn diff_from_base(base: &YrsBase, client_sv: &[u8]) -> Option<Vec<u8>> {
     doc.encode_diff(client_sv).ok()
 }
 
+/// B11: whether a client at `client_sv` holds insertions `base` never received
+/// (it should push its diff against the base's state vector).
+pub fn client_is_ahead(base: &YrsBase, client_sv: &[u8]) -> bool {
+    MicaDoc::sv_has_unseen(client_sv, &base.state_vector)
+}
+
 /// Append a client's yrs `update` to the workspace stream and fold it into the
-/// document base, returning the assigned `rid`. The update is validated by
-/// applying it onto the current base first; a malformed/undecodable update is
-/// rejected (§10 integrity gate — never persist unverifiable state).
+/// document base, returning the assigned `rid`. See [`push_update_checked`].
 pub async fn push_update(
     db: &PgPool,
     workspace_id: Uuid,
@@ -523,6 +527,35 @@ pub async fn push_update(
     update: &[u8],
     tuning: &SyncTuning,
 ) -> ApiResult<i64> {
+    push_update_checked(db, workspace_id, document_id, actor_id, update, tuning)
+        .await
+        .map(|pushed| pushed.rid)
+}
+
+/// What [`push_update_checked`] stored.
+#[derive(Debug, Clone)]
+pub struct Pushed {
+    pub rid: i64,
+    /// `Some(server state vector)` when the update depends on history the base
+    /// lacks: yrs parked it as pending, so it is stored but invisible. The
+    /// pusher holds that history (it built the update on top of it) and repairs
+    /// the gap by sending its diff against this vector — the y-protocols
+    /// SyncStep1/2 exchange, initiated by the server.
+    pub missing_sv: Option<Vec<u8>>,
+}
+
+/// Append a client's yrs `update` to the workspace stream and fold it into the
+/// document base. The update is validated by applying it onto the current base
+/// first; a malformed/undecodable update is rejected (§10 integrity gate — never
+/// persist unverifiable state).
+pub async fn push_update_checked(
+    db: &PgPool,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    actor_id: Uuid,
+    update: &[u8],
+    tuning: &SyncTuning,
+) -> ApiResult<Pushed> {
     let mut tx = db.begin().await?;
 
     // Lock the `documents` row BEFORE reading the base — the same order
@@ -550,11 +583,13 @@ pub async fn push_update(
     // An update whose dependencies the base lacks is parked by yrs as PENDING
     // and `apply` still says Ok: the content is stored but invisible until the
     // missing history arrives — which, for a replica holding items the server
-    // lost (e.g. after a restore from backup), is never. Not refused here
-    // (a client's de-merge retry can produce a short-lived gap that resolves
-    // on the next push), but no longer silent.
-    if doc.has_pending_updates() {
-        tracing::warn!(%document_id, %actor_id, "push left the base with unresolved pending updates");
+    // lost (e.g. after a restore from backup), is never unless someone sends
+    // it. Not refused (a de-merge retry produces a short-lived gap that the
+    // next push closes, and an old client would only retry the same bytes):
+    // stored, and the ack asks the pusher for its diff (`missing_sv`).
+    let missing = doc.has_pending_updates();
+    if missing {
+        tracing::warn!(%document_id, %actor_id, "push left the base with unresolved pending updates; asking the client for its diff");
     }
 
     let rid: i64 = sqlx::query_scalar(
@@ -685,7 +720,10 @@ pub async fn push_update(
     }
 
     tx.commit().await?;
-    Ok(rid)
+    Ok(Pushed {
+        rid,
+        missing_sv: missing.then_some(state_vector),
+    })
 }
 
 /// Write a page's title INTO its document (the root block's `title` prop) and

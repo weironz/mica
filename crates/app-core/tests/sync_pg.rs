@@ -220,6 +220,50 @@ async fn push_pull_bootstrap_round_trip() {
     cleanup(&db, ws, user).await;
 }
 
+/// B11: an update that depends on history the server never received (a
+/// replica's acked edits lost to a restore from backup) used to be acked and
+/// parked as pending — stored, invisible, forever. The ack now carries the
+/// server's state vector so the client sends the gap, and `client_is_ahead`
+/// lets a bootstrap ask for it before any new edit arrives.
+#[tokio::test]
+async fn a_push_missing_its_history_asks_for_it_and_the_diff_heals() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping a_push_missing_its_history_asks_for_it_and_the_diff_heals: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut client = MicaDoc::from_update(&base.state).unwrap();
+
+    // Edit #1 the server will never have (as if lost to a restore).
+    client.text_insert("a", 5, " world");
+    let after_lost = client.state_vector();
+    assert!(sync::client_is_ahead(&base, &after_lost), "bootstrap must see the gap");
+    // Edit #2 builds on #1; only its own diff goes out.
+    client.text_insert("a", 11, "!");
+    let only_second = client.encode_diff(&after_lost).unwrap();
+
+    let pushed = sync::push_update_checked(&db, ws, doc, user, &only_second, &tuning())
+        .await
+        .unwrap();
+    let server_sv = pushed.missing_sv.expect("a push the base cannot integrate must ask for history");
+    let stored = sync::bootstrap_base(&db, doc).await.unwrap();
+    assert_eq!(base_block_text(&stored.state, "a"), "Hello", "parked, not visible");
+
+    // The client answers with its diff against the server's vector.
+    let repair = client.encode_diff(&server_sv).unwrap();
+    let healed = sync::push_update_checked(&db, ws, doc, user, &repair, &tuning())
+        .await
+        .unwrap();
+    assert!(healed.missing_sv.is_none(), "the gap is closed");
+    let stored = sync::bootstrap_base(&db, doc).await.unwrap();
+    assert_eq!(base_block_text(&stored.state, "a"), "Hello world!");
+    assert!(base_content_text(&db, doc).await.contains("Hello world!"));
+    assert!(!sync::client_is_ahead(&stored, &client.state_vector()));
+
+    cleanup(&db, ws, user).await;
+}
+
 #[tokio::test]
 async fn stream_prunes_and_stale_cursor_rebootstraps() {
     let Some(db) = pool().await else {

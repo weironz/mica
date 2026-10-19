@@ -213,6 +213,19 @@ impl MicaDoc {
         self.doc.transact().state_vector().encode_v1()
     }
 
+    /// Whether a peer at `peer_sv` has observed something a replica at `own_sv`
+    /// has not — i.e. `own` would gain from asking the peer for its diff. Both
+    /// v1-encoded. Insertions only: a state vector carries no deletions, so a
+    /// peer holding nothing but extra deletes reads as `false`. Undecodable →
+    /// `false` (the caller then simply doesn't ask).
+    pub fn sv_has_unseen(peer_sv: &[u8], own_sv: &[u8]) -> bool {
+        let (Ok(peer), Ok(own)) = (StateVector::decode_v1(peer_sv), StateVector::decode_v1(own_sv))
+        else {
+            return false;
+        };
+        peer.iter().any(|(client, clock)| *clock > own.get(client))
+    }
+
     /// Encode the update carrying everything THIS doc has that a peer with
     /// `remote_sv` (their v1-encoded [`Self::state_vector`]) lacks — the minimal
     /// diff to send them. Passing an empty/`StateVector::default` SV yields the
@@ -1059,4 +1072,17 @@ impl MicaDoc {
         }
         blocks_map.remove(&mut txn, id);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn sv_has_unseen_compares_insertions_per_client() {
+    let mut a = MicaDoc::from_blocks("r", &[]);
+    let before = a.state_vector();
+    assert!(!MicaDoc::sv_has_unseen(&before, &before));
+    a.insert_block("r", 0, &Block::new("x", "paragraph").with_text("hi"));
+    let after = a.state_vector();
+    assert!(MicaDoc::sv_has_unseen(&after, &before), "the edited replica is ahead");
+    assert!(!MicaDoc::sv_has_unseen(&before, &after), "and not the other way round");
+    assert!(!MicaDoc::sv_has_unseen(b"\xff\xff", &before), "garbage never asks");
 }

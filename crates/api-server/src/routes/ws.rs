@@ -859,7 +859,7 @@ async fn handle_sync_push(
   // document (the write-amplification entry in docs/roadmap.md), so this
   // histogram is the number that argument has been missing.
   let push_started = std::time::Instant::now();
-  let push_result = sync::push_update(
+  let push_result = sync::push_update_checked(
     &ctx.state.db,
     ctx.workspace_id,
     ctx.document_id,
@@ -880,7 +880,7 @@ async fn handle_sync_push(
     crate::metrics::METRICS.integrity_failure("push");
   }
   match push_result {
-    Ok(rid) => {
+    Ok(sync::Pushed { rid, missing_sv }) => {
       // Fan the update out to the rest of the room (already-have-it sender
       // gets only the rid in its ack, below).
       let event = json!({
@@ -893,15 +893,7 @@ async fn handle_sync_push(
       ctx
         .room
         .broadcast(ctx.connection_id, Arc::from(event.to_string()));
-      vec![
-        json!({
-          "type": "sync.ack",
-          "ack_id": ack_id,
-          "document_id": ctx.document_id,
-          "rid": rid,
-        })
-        .to_string(),
-      ]
+      vec![ack_message(ack_id, ctx.document_id, rid, missing_sv.as_deref())]
     }
     Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
@@ -960,9 +952,33 @@ fn client_sv(payload: &Value) -> Option<Vec<u8>> {
     .and_then(|s| STANDARD.decode(s.as_bytes()).ok())
 }
 
+/// A `sync.ack`. B11: when the push left the base with pending updates (it
+/// depends on history the server lacks), `missing` + `sv` ask the pusher for
+/// its diff against the server's state vector — it built the update on that
+/// history, so it holds it. Additive: an old client ignores both fields.
+fn ack_message(ack_id: Option<&str>, document_id: Uuid, rid: i64, missing_sv: Option<&[u8]>) -> String {
+  let mut ack = json!({
+    "type": "sync.ack",
+    "ack_id": ack_id,
+    "document_id": document_id,
+    "rid": rid,
+  });
+  if let Some(sv) = missing_sv {
+    ack["missing"] = json!(true);
+    ack["sv"] = json!(STANDARD.encode(sv));
+  }
+  ack.to_string()
+}
+
 /// A `sync.base` frame carrying either the minimal diff for `client_sv` (P4-3,
 /// when present and computable) or the full base state. Both are yrs updates —
 /// the client applies them identically; `delta` is observability only.
+///
+/// B11: the frame also carries the server's state vector, and `ahead` when the
+/// client's vector shows insertions the server never received — the other half
+/// of the y-protocols exchange (each side sends what the other's vector lacks).
+/// A client whose acked edits the server later lost (restore from a backup)
+/// otherwise keeps them forever and nobody else ever sees them. Additive.
 fn base_message(
   base: &sync::YrsBase,
   client_sv: Option<&[u8]>,
@@ -971,6 +987,7 @@ fn base_message(
 ) -> String {
   let diff = client_sv.and_then(|sv| sync::diff_from_base(base, sv));
   let delta = diff.is_some();
+  let ahead = client_sv.is_some_and(|sv| sync::client_is_ahead(base, sv));
   json!({
     "type": "sync.base",
     "ack_id": ack_id,
@@ -978,6 +995,8 @@ fn base_message(
     "base": STANDARD.encode(diff.as_deref().unwrap_or(&base.state)),
     "base_rid": base.base_rid,
     "delta": delta,
+    "sv": STANDARD.encode(&base.state_vector),
+    "ahead": ahead,
   })
   .to_string()
 }
@@ -1214,6 +1233,30 @@ mod tests {
       serde_json::from_str(&base_message(&base, Some(b"not a state vector"), None, doc_id))
         .unwrap();
     assert_eq!(bad["delta"], false);
+
+    // B11: the server's vector always rides along; `ahead` only when the client
+    // holds insertions the base never received.
+    assert_eq!(STANDARD.decode(full["sv"].as_str().unwrap()).unwrap(), base.state_vector);
+    assert_eq!(full["ahead"], false);
+    assert_eq!(warm["ahead"], false);
+    let mut edited = MicaDoc::from_update(&base.state).unwrap();
+    edited.text_insert("a", 0, "oh ");
+    let ahead: Value =
+      serde_json::from_str(&base_message(&base, Some(&edited.state_vector()), None, doc_id)).unwrap();
+    assert_eq!(ahead["ahead"], true);
+  }
+
+  /// B11: an ack only asks for history when the push left something pending;
+  /// otherwise it is byte-for-byte the frame old clients already parse.
+  #[test]
+  fn ack_asks_for_history_only_when_missing() {
+    let doc_id = Uuid::from_u128(1);
+    let plain: Value = serde_json::from_str(&ack_message(Some("3"), doc_id, 9, None)).unwrap();
+    assert_eq!(plain, json!({"type":"sync.ack","ack_id":"3","document_id":doc_id,"rid":9}));
+    let asking: Value =
+      serde_json::from_str(&ack_message(Some("3"), doc_id, 9, Some(&[1, 2]))).unwrap();
+    assert_eq!(asking["missing"], true);
+    assert_eq!(asking["sv"], STANDARD.encode([1u8, 2]));
   }
 
   /// What lets the web client stop putting a JWT in the URL: the browser

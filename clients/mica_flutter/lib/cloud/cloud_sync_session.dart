@@ -121,6 +121,26 @@ int mergeRunLength(List<int> sizes, {required int maxBytes}) {
   return sizes.length;
 }
 
+/// The server state vector a frame asks us to repair against (B11), or null.
+///
+/// Two frames ask: an ack whose push the server could not integrate
+/// (`missing`), and a base whose vector shows we hold insertions the server
+/// never received (`ahead`) — but the latter only with an empty outbox. With
+/// one, `ahead` is just our unpushed edits, which the replay already sends;
+/// pushing a repair as well would upload the whole offline stretch twice.
+///
+/// Pure and top-level for the same reason as [pushSlice].
+@visibleForTesting
+String? repairSvFor(Map<String, dynamic> frame, {required bool outboxEmpty}) {
+  final sv = frame['sv'];
+  if (sv is! String) return null;
+  return switch (frame['type']) {
+    'sync.ack' when frame['missing'] == true => sv,
+    'sync.base' when frame['ahead'] == true && outboxEmpty => sv,
+    _ => null,
+  };
+}
+
 class CloudSyncSession {
   CloudSyncSession({
     required this.uri,
@@ -309,6 +329,12 @@ class CloudSyncSession {
   /// with a poison edit that can never ack. Edits still append durably to the
   /// outbox and are retried on the next (re)connect, which clears this.
   bool _pushStalled = false;
+
+  /// History-repair pushes sent on this connection (B11). Bounded so a gap
+  /// the client cannot fill either (its own replica is missing the same
+  /// history) can't turn into an ack → repair → ack loop.
+  int _repairs = 0;
+  static const int _maxRepairs = 3;
   bool _restored = false;
   Timer? _persistTimer;
 
@@ -386,6 +412,7 @@ class CloudSyncSession {
     _deMergeFrom.clear();
     _pushRejects = 0;
     _pushStalled = false;
+    _repairs = 0;
     _restoreUnackedOnce();
     // Local-first: render the persisted replica immediately (offline read),
     // BEFORE the socket — so a cold start with no network still shows the doc.
@@ -603,6 +630,10 @@ class CloudSyncSession {
         // (including any recovered from a prior crash).
         _send({'type': 'sync.pull', 'payload': _pullPayload()});
         _flushUnacked(resendAll: true);
+        // B11: the server's vector says we hold insertions it never received
+        // — with an empty outbox, acked edits it has since lost (restore from
+        // a backup), which only we can send back. See [repairSvFor].
+        _pushRepair(repairSvFor(m, outboxEmpty: _outboxEmpty));
         _saveBaseNow(); // a base IS a snapshot — persist it now (rare event)
       case 'sync.updates':
         final ups = m['updates'];
@@ -649,6 +680,10 @@ class CloudSyncSession {
         if (_applyRemote(m) && !_disposed) onRemoteBlocks(childBlocks());
       case 'sync.ack':
         final ackId = m['ack_id'];
+        // B11: the push was stored but depends on history the server lacks
+        // (yrs parked it as pending — invisible to everyone else). We built it
+        // on that history, so send our diff against the server's vector.
+        _pushRepair(repairSvFor(m, outboxEmpty: _outboxEmpty));
         final rid = (m['rid'] as num?)?.toInt();
         if (_useAppendLog) {
           // The ack id is the pushed diff's monotonic clock. Advance pushed_clock
@@ -1014,6 +1049,27 @@ class CloudSyncSession {
   void _sendPush(_Pending p) {
     p.sent = true;
     _sendPushRaw(p.id, p.bytes);
+  }
+
+  /// Send everything our replica has that a server at state vector [svB64]
+  /// lacks (B11) — y-protocols' SyncStep2, on the server's request. Outside
+  /// the outbox on purpose: these are edits the server already acked once, so
+  /// nothing in the ack bookkeeping is waiting for them; the id is not a clock
+  /// and the ack handler's clock parse skips it.
+  void _pushRepair(String? svB64) {
+    final doc = _doc;
+    if (doc == null || svB64 == null || _channel == null) return;
+    if (_repairs >= _maxRepairs) return;
+    _repairs++;
+    final Uint8List diff;
+    try {
+      diff = doc.encodeDiffSince(base64.decode(svB64));
+    } catch (_) {
+      swallowed('cloud_repair_sv');
+      return;
+    }
+    if (diff.isEmpty) return;
+    _sendPushRaw('repair-$_repairs', diff);
   }
 
   void _sendPushRaw(String id, Uint8List bytes) {
