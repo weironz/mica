@@ -1,0 +1,14 @@
+-- Account deletion leaves a TOMBSTONE instead of removing the `users` row (C4).
+--
+-- Hard deletion could not work for anyone who ever collaborated: pages,
+-- uploads and stream updates they authored in workspaces owned by OTHERS hold
+-- `ON DELETE RESTRICT` references, so the delete failed with a 409 the user
+-- could do nothing about. Outline does the same: the row stays as an anonymous
+-- author of the shared work, everything that identifies the person goes.
+-- Comments still go with the account (0014's contract) — deleted explicitly,
+-- since a surviving row no longer cascades.
+--
+-- A tombstone has `deleted_at` set, its email replaced by a unique
+-- `deleted+<id>@deleted.invalid`, an empty name and password hash, no avatar,
+-- no tokens and no memberships. NULL = a live account.
+ALTER TABLE users ADD COLUMN deleted_at timestamptz;

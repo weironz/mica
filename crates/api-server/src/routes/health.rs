@@ -44,7 +44,7 @@ async fn registration_open(state: &AppState) -> bool {
   // No users yet → the first-account exception applies. A failed query means we
   // cannot prove the instance is empty, and the safe answer to "may strangers
   // sign up here?" is no.
-  sqlx::query_scalar::<_, bool>("SELECT NOT EXISTS (SELECT 1 FROM users)")
+  sqlx::query_scalar::<_, bool>("SELECT NOT EXISTS (SELECT 1 FROM users WHERE deleted_at IS NULL)")
     .fetch_one(&state.db)
     .await
     .unwrap_or(false)

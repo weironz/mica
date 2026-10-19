@@ -226,7 +226,9 @@ pub async fn create(
   headers: HeaderMap,
   Json(payload): Json<CreateWorkspaceRequest>,
 ) -> ApiResult<Json<WorkspaceResponse>> {
-  let user_id = user_id_from_headers(&state, &headers).await?;
+  // An access token outlives a deleted account by up to its TTL; the tombstone
+  // row (C4) would satisfy the owner FK, so check it is still a live account.
+  let user_id = super::auth::existing_user_id_from_headers(&state, &headers).await?;
   let name = normalize_workspace_name(&payload.name)?;
 
   let mut tx = state.db.begin().await?;

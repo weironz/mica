@@ -359,7 +359,7 @@ async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
   let row: (i64, i64, i64, i64) = sqlx::query_as(
     r#"
     SELECT
-      (SELECT count(*) FROM users)::bigint,
+      (SELECT count(*) FROM users WHERE deleted_at IS NULL)::bigint,
       (SELECT count(*) FROM workspaces)::bigint,
       (SELECT count(*) FROM documents)::bigint,
       (coalesce((SELECT sum(byte_size) FROM files), 0)
