@@ -14,13 +14,16 @@
 # `windows-shell` (Git Bash) instead, where the whole toolchain is present.
 set -euo pipefail
 
-fail() { printf '\n  REFUSED: %s\n' "$*" >&2; exit 1; }
+source "$(dirname "$0")/lib-local.sh"
 
-# 1. The dev database must be UP — not "warn and continue" the way `just test`
-#    does. At release time a silent skip IS the failure being prevented.
-docker exec mica-postgres pg_isready -U mica -d mica >/dev/null 2>&1 \
-  || fail "dev Postgres is down, so the DB-backed tests would SKIP and still report passed. Run 'just dev' first."
-echo "==> DB-backed tests: ON"
+# 1. A database must be UP — not "warn and continue" the way `just test` does.
+#    At release time a silent skip IS the failure being prevented. The dev
+#    stack's container, or any reachable $DATABASE_URL (a machine without the
+#    dev stack — e.g. building releases locally when CI is unavailable).
+db=$(resolve_database_url)
+[ -n "$db" ] \
+  || fail "no reachable Postgres, so the DB-backed tests would SKIP and still report passed. Run 'just dev' first (or export DATABASE_URL)."
+echo "==> DB-backed tests: ON ($db)"
 
 # 2. The three version numbers must already agree. The reading lives in
 #    scripts/manifest-version.sh because release.yml needs the same answer to
@@ -63,7 +66,7 @@ echo "==> Rust: $have_rust (toolchain + all three images agree)"
 # 3. Run the gates the SAME WAY CI runs them. `cargo check` does not run clippy,
 #    and clippy without `-D warnings` exits 0 while printing the very thing that
 #    fails CI — both have turned a pipeline red here before.
-DATABASE_URL=postgres://mica:mica@127.0.0.1:5432/mica cargo test --workspace
+DATABASE_URL=$db cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 #    The Flutter half is spelled EXACTLY as ci.yml spells it, flags included.
 #    It was `analyze lib` with no flags, which is stricter than CI — and with

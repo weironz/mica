@@ -151,6 +151,13 @@ test:
 [doc("The integration suite `just test` cannot reach: real Windows app + FFI. Needs a Windows desktop.")]
 test-integration:
     FLUTTER='{{flutter}}' bash scripts/test-integration.sh
+# The CI workflow on this machine — for when GitHub Actions cannot run (out of
+# minutes, outage). Same gates, same flags; REFUSES without a database rather
+# than letting the DB-backed tests skip. Prints what it does not cover.
+[doc("Run the CI gates locally: structure, clippy, Rust + DB tests, flutter analyze/test/web (part: all | rust | flutter)")]
+ci part="all":
+    bash scripts/local-ci.sh {{part}}
+
 [doc("Static analysis on both sides")]
 check:
     cargo clippy --workspace 2>/dev/null || cargo build --workspace
@@ -320,3 +327,31 @@ release-check:
 [doc("Just the version numbers + Cargo.lock. `just release` is the one you want.")]
 release-bump version:
     bash scripts/release-bump.sh "{{version}}"
+
+# ── Local release train (GitHub Actions unavailable) ─────────────────────────
+#
+# release.yml's jobs, on your machines. Each host builds what it can into
+# dist/vX.Y.Z/ and attaches it to a DRAFT release; publishing is a separate
+# step that refuses until every required asset is there (the in-app updater
+# reads /releases/latest, so it must never see a release without its
+# installer). docs/release.md「本地发布」has the full walk-through.
+
+[doc("Everything on this machine: release → push → artifacts → images → upload → publish")]
+ship version:
+    bash scripts/ship.sh "{{version}}"
+
+[doc("Build the release assets THIS host can build into dist/vX.Y.Z/ (Windows: installer + cli [+ linux cli via Docker])")]
+release-artifacts version *flags:
+    bash scripts/release-artifacts.sh "{{version}}" {{flags}}
+
+[doc("Attach dist/vX.Y.Z/* to the (draft) GitHub release vX.Y.Z, creating it if needed")]
+release-upload version:
+    bash scripts/release-upload.sh "{{version}}"
+
+[doc("Publish the draft release once every required asset is attached")]
+release-publish version:
+    bash scripts/release-publish.sh "{{version}}"
+
+[doc("Build + push mica-api/web/cli images to ACR and Docker Hub (PUSH=0 to only build)")]
+release-images version:
+    bash scripts/release-images.sh "{{version}}"

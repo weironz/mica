@@ -25,6 +25,34 @@ tag="v$version"
 # passes — and then the real invocation dies inside ansible's own startup with
 # `check_blocking_io` → `OSError: [WinError 87]`. Ansible supports Linux/macOS
 # controllers only. Existence was never the question; being able to run was.
+# No usable ansible here (Windows: ansible does not support it as a controller)
+# but Docker is → run THIS script inside a throwaway Linux controller. The
+# alternative was "deploy through CI", which is no answer when CI cannot run.
+# Same trick as scripts/ansible-in-docker.sh, which the DR drill proved.
+if ! ansible-playbook --version >/dev/null 2>&1 \
+  && [ -z "${MICA_DEPLOY_IN_DOCKER:-}" ] && docker info >/dev/null 2>&1; then
+  repo=$(cd "$(dirname "$0")/.." && pwd)
+  ssh_dir=${SSH_DIR:-$HOME/.ssh}
+  win() { case "$1" in /[a-zA-Z]/*) echo "$(echo "${1:1:1}" | tr a-z A-Z):${1:2}" ;; *) echo "$1" ;; esac; }
+  echo "==> ansible not usable here — running the deploy in a Linux controller container"
+  MSYS_NO_PATHCONV=1 exec docker run --rm -i \
+    -v "$(win "$repo"):/work" -v "$(win "$ssh_dir"):/ssh:ro" \
+    -e MICA_DEPLOY_IN_DOCKER=1 -e ANSIBLE_HOST_KEY_CHECKING=False \
+    --entrypoint sh alpine/ansible -s -- "$@" <<'INNER'
+set -e
+apk add --no-cache bash git curl openssh-client >/dev/null
+mkdir -p /root/.ssh
+for k in id_ed25519 id_rsa; do
+  [ -f "/ssh/$k" ] && cp "/ssh/$k" "/root/.ssh/$k" && chmod 600 "/root/.ssh/$k"
+done
+printf 'Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n' > /root/.ssh/config
+git config --global --add safe.directory /work
+cd /work
+ansible-galaxy collection install -r ansible/requirements.yml >/dev/null
+exec bash scripts/deploy-prod.sh "$@"
+INNER
+fi
+
 ansible-playbook --version >/dev/null 2>&1 || {
   cat >&2 <<'EOF'
 REFUSED: ansible-playbook is not usable here.
@@ -32,7 +60,8 @@ REFUSED: ansible-playbook is not usable here.
   This script runs on a Linux or macOS controller (a WSL distro counts).
   Install it there:  pipx install ansible-core
 
-  From Windows, deploy through CI instead — it needs nothing installed locally:
+  With Docker running, this script re-runs itself inside a Linux controller
+  container automatically. Otherwise, deploy through CI:
 
       gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 EOF

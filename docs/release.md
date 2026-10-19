@@ -76,6 +76,48 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 | `mica-api` / `mica-web` / `mica-cli` 镜像 | **CI** job `images` | **阿里云 ACR**(生产拉这里)+ Docker Hub(异地副本) |
 | 生产上线 | **你触发** `Deploy` workflow(兜底:`just deploy-prod X.Y.Z`) | node72 从 ACR pull |
 
+## 本地发布（GitHub Actions 不可用时）
+
+Actions 额度用完或故障时，**整条发布列车可以在本地机器上跑完**，Linux 与 Windows（Git Bash）通用。
+脚本和 CI 做同样的检查、产出同名产物、遵守同样的「先挂齐附件再公开」顺序。
+
+```bash
+# 0. 本地 CI 门禁（ci.yml 的本地版）：结构门禁、clippy -D warnings、带 DB 的 Rust 测试、
+#    flutter analyze / test / build web。没有可达的 Postgres 就拒绝（DB 测试会静默跳过）。
+just ci            # 或 just ci rust / just ci flutter
+
+# 一条命令走完（在主力 Windows 机上，Docker Desktop 开着）：
+just ship X.Y.Z
+#   = just release X.Y.Z → git push origin main vX.Y.Z → release-artifacts → release-images
+#     → release-upload（draft）→ release-publish（齐了才公开）
+
+# 或分步、多机器：
+just release-artifacts X.Y.Z   # 本机能构建的产物 → dist/vX.Y.Z/
+just release-upload X.Y.Z      # 建 draft release 并上传（可在多台机器各跑一次）
+just release-publish X.Y.Z     # 必需产物齐了才翻成正式版 + latest
+just release-images X.Y.Z      # 三个镜像 → 阿里云 ACR + Docker Hub（需 docker login）
+```
+
+| 产物 | 哪台机器能构建 |
+|---|---|
+| `Mica-Setup-X.Y.Z.exe`（含安装 + 启动冒烟） | Windows（Flutter + Inno Setup） |
+| `mica-cli-X.Y.Z-windows-x64.exe` | Windows |
+| `mica-cli-X.Y.Z-linux-x64`（静态） | Linux 原生（musl-tools）；**Windows / macOS 有 Docker 时在钉死版本的 rust 镜像里构建** |
+| `mica-cli-X.Y.Z-macos-arm64` | macOS（可选；`REQUIRE_MACOS=1` 时才强制） |
+| mica-api / web / cli 镜像 | 任何开着 Docker 的机器 |
+
+所以**一台开着 Docker Desktop 的 Windows 机**就能产出除 macOS CLI 外的全部产物。
+
+把关点（与 release.yml 对应）：
+- 产物只能从**正好是该 tag 的干净提交**构建，且三处版本号一致（`require_tagged_tree`）——对应 CI 的「version must match the tree」。
+- `release-upload` 只往 **draft** 上挂；已发布的 release 拒绝覆盖（`FORCE=1` 才行）。
+- `release-publish` 缺安装包 / Windows CLI / Linux CLI 任一就拒绝；公开后断言 `/releases/latest` 指向它——应用内更新读的就是这个。
+- 每台机器上传一份 `sha256-<os>.txt` 校验和。
+
+**部署**同样不依赖 Actions：`just deploy-prod X.Y.Z --check --diff`（彩排）→ `just deploy-prod X.Y.Z`。
+Windows 上没有可用的 ansible 时，`deploy-prod.sh` 会**自动在 `alpine/ansible` 容器里重跑自己**
+（与 DR 演练验证过的 `ansible-in-docker.sh` 同一手法），需要 Docker Desktop 和 `~/.ssh` 里的部署 key。
+
 ## CI 拿的是 root key —— 这是一次有代价的取舍
 
 **2026-08-25 之前**这一节讲的是相反的事:CI 那把密钥被 `authorized_keys` 的
