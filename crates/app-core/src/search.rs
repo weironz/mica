@@ -36,11 +36,19 @@
 //!     bounded by the overlap lap below, not by nobody forgetting a call site.
 //!   - Not the authority on anything. The scan yields CANDIDATE ids; the SQL
 //!     in `search_views` still applies workspace scope, `is_deleted`, ranking
-//!     and LIMIT, and re-reads `content_text` for the ≤50 rows it returns (the
-//!     snippet source stays the database column). A stale or extra entry here
-//!     costs a wasted candidate id, never a wrong answer about a document's
-//!     workspace or existence — which is also why entries for purged documents
-//!     are left to linger until restart rather than tracked.
+//!     and LIMIT. A stale or extra entry here costs a wasted candidate id,
+//!     never a wrong answer about a document's workspace or existence — which
+//!     is also why entries for purged documents are left to linger until
+//!     restart rather than tracked.
+//!
+//! The SNIPPETS come from here too (2026-10-19). The SQL used to re-read
+//! `content_text` for its ≤50 rows just to cut a one-line window out of each:
+//! on a cold cache that is every hit's whole body detoasted from disk — 253
+//! page reads measured for one query over 3,000 30 KB pages, against zero
+//! without the column — paid on exactly the "first search for something new"
+//! that felt slow. The text is already in memory, refreshed by the same call
+//! that produced the match, so the snippet now agrees with the match by
+//! construction instead of by a second read.
 
 use std::{collections::HashMap, future::Future};
 
@@ -66,13 +74,32 @@ use mica_infra::ApiResult;
 /// never again.
 const REFRESH_LAP_SECONDS: f64 = 5.0;
 
+/// One indexed body.
+struct Body {
+  /// As stored — what a snippet quotes.
+  text: String,
+  /// ASCII-lowercased copy, only when it differs from `text` (CJK and
+  /// lowercase prose need none, so the common case costs no second copy).
+  /// ASCII folding matches what `ILIKE` under the C locale folds, so the scan
+  /// agrees with the `v.name ILIKE` half still done in SQL.
+  folded: Option<String>,
+}
+
+impl Body {
+  fn new(text: String) -> Self {
+    let folded = text.bytes().any(|b| b.is_ascii_uppercase()).then(|| text.to_ascii_lowercase());
+    Self { text, folded }
+  }
+
+  fn folded(&self) -> &str {
+    self.folded.as_deref().unwrap_or(&self.text)
+  }
+}
+
 #[derive(Default)]
 struct Inner {
-  /// `document_id → ASCII-lowercased body text`. Folded at load so the scan is
-  /// one `contains` per document; ASCII folding matches what `ILIKE` under the
-  /// C locale folds (ASCII only), so the scan agrees with the `v.name ILIKE`
-  /// half still done in SQL. CJK has no case to fold.
-  docs: HashMap<Uuid, String>,
+  /// `document_id → body`.
+  docs: HashMap<Uuid, Body>,
   /// Newest `updated_at` ever loaded — the incremental cursor.
   seen: Option<DateTime<Utc>>,
 }
@@ -149,7 +176,7 @@ impl BodyIndex {
       inner.seen = Some(next_seen);
     }
     for (document_id, text) in rows {
-      inner.docs.insert(document_id, text.to_ascii_lowercase());
+      inner.docs.insert(document_id, Body::new(text));
     }
     Ok(())
   }
@@ -165,8 +192,22 @@ impl BodyIndex {
     inner
       .docs
       .iter()
-      .filter(|(_, text)| text.contains(&folded))
+      .filter(|(_, body)| body.folded().contains(&folded))
       .map(|(id, _)| *id)
+      .collect()
+  }
+
+  /// One-line snippets around `needle` for these documents, from the indexed
+  /// text (see the module doc for why not from the database). Documents with
+  /// no body here, or no occurrence of `needle` in it, are simply absent.
+  pub async fn snippets(&self, ids: &[Uuid], needle: &str) -> HashMap<Uuid, String> {
+    let inner = self.inner.read().await;
+    ids
+      .iter()
+      .filter_map(|id| {
+        let body = inner.docs.get(id)?;
+        Some((*id, mica_core::search_text::snippet(&body.text, needle)?))
+      })
       .collect()
   }
 
@@ -236,5 +277,22 @@ mod tests {
 
     assert_eq!(index.matching_ids("new text").await, vec![document_id]);
     assert!(index.matching_ids("old text").await.is_empty());
+  }
+
+  /// Matching folds ASCII case; the snippet quotes the text as written.
+  #[tokio::test]
+  async fn snippets_quote_the_original_casing_of_the_matched_body() {
+    let index = BodyIndex::default();
+    let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+    index
+      .refresh_with(|_| async move {
+        Ok(Some((vec![(a, "Deploy with Docker".into()), (b, "部署流程".into())], Utc::now())))
+      })
+      .await
+      .unwrap();
+    assert_eq!(index.matching_ids("DOCKER").await, vec![a]);
+    let snippets = index.snippets(&[a, b, Uuid::new_v4()], "docker").await;
+    assert_eq!(snippets.get(&a).map(String::as_str), Some("Deploy with Docker"));
+    assert_eq!(snippets.len(), 1, "no occurrence, no snippet");
   }
 }

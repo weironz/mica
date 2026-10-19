@@ -253,15 +253,14 @@ pub async fn search_all_workspaces(
   Ok(Json(SearchResponse { results }))
 }
 
-/// One row of the FTS M1 search query: a document view plus its indexed body
-/// text (NULL for a document that has no yrs base yet — never opened/edited).
+/// One row of the search query: a view, and nothing of its body — the snippet
+/// comes from the in-process index (see `BodyIndex::snippets`).
 #[derive(FromRow)]
 struct SearchRow {
   view_id: Uuid,
   object_id: Uuid,
   workspace_id: Uuid,
   name: String,
-  content_text: Option<String>,
   parent_view_id: Option<Uuid>,
   object_type: String,
 }
@@ -277,10 +276,12 @@ struct SearchRow {
 /// char CJK needles have no extractable trigram and the C-locale alpine image
 /// would index no CJK at all. The `BodyIndex` module doc carries the details.)
 ///
-/// LEFT JOIN, not INNER: a document keeps showing up on a TITLE hit even before
-/// it has a base row, and a document with no base simply isn't body-searchable
-/// until first edited (`content_text` NULL → the `ILIKE` is NULL/false). Only
-/// documents are searched (folders carry no body and were never title-searched).
+/// The statement reads `views` only. It used to LEFT JOIN `document_yrs_base`
+/// for each hit's `content_text`, solely to cut a snippet — on a cold cache,
+/// every hit's whole body detoasted from disk (253 pages for one query over
+/// 3,000 30 KB pages; 0 without it), which is what made the first search for
+/// something new slow. A document with no base row still matches on its TITLE,
+/// as before; it simply has no body to match or quote.
 ///
 /// Corruption note: search no longer decodes anything, so the "unreadable
 /// document" signal `search_workspace` used to log moved to where the decode now
@@ -357,6 +358,11 @@ pub(super) async fn search_views(
   // means the user is navigating, not reading. The key is a no-op below the
   // name tier: body hits are all documents, a folder having no body to hit.
   //
+  // Then how WELL the name matches (2026-10-19): the page NAMED exactly the
+  // query, then names that START with it, then names merely containing it.
+  // Searching "部署" used to rank "部署" below "旧版部署记录" whenever the
+  // latter was edited more recently — the name tier was a yes/no.
+  //
   // Built by `concat!` into TWO `&'static str` constants rather than formatted at
   // runtime: sqlx 0.9 refuses a dynamic SQL string outright ("dynamic SQL strings
   // should be audited for possible injections"), and that refusal is right — the
@@ -365,10 +371,9 @@ pub(super) async fn search_views(
     ($type_filter:literal) => {
       concat!(
         r#"
-      SELECT v.id AS view_id, v.object_id, v.workspace_id, v.name, yb.content_text,
+      SELECT v.id AS view_id, v.object_id, v.workspace_id, v.name,
              v.parent_view_id, v.object_type::text AS object_type
       FROM views v
-      LEFT JOIN document_yrs_base yb ON yb.document_id = v.object_id
       WHERE v.workspace_id = ANY($1)
         AND v.is_deleted = false
         "#,
@@ -377,6 +382,8 @@ pub(super) async fn search_views(
         AND (v.name ILIKE $2 ESCAPE '\' OR v.object_id = ANY($3))
       ORDER BY (v.name ILIKE $2 ESCAPE '\') DESC,
                (v.object_type <> 'document') DESC,
+               (v.name ILIKE $5 ESCAPE '\') DESC,
+               (v.name ILIKE $6 ESCAPE '\') DESC,
                (v.workspace_id = $4) DESC,
                v.updated_at DESC
       LIMIT 50
@@ -389,6 +396,7 @@ pub(super) async fn search_views(
   } else {
     search_sql!("AND v.object_type = 'document'")
   };
+  let escaped = escape_like(needle);
   let rows = sqlx::query_as::<_, SearchRow>(sql)
     .bind(workspace_ids)
     .bind(&pattern)
@@ -396,23 +404,23 @@ pub(super) async fn search_views(
     // NULL when no preference: `workspace_id = NULL` is NULL for every row, so
     // they all tie and the key drops out of the ordering by itself.
     .bind(prefer_workspace)
+    .bind(&escaped)
+    .bind(format!("{escaped}%"))
     .fetch_all(db)
     .await?;
 
   let needle_lower = needle.to_lowercase();
+  let object_ids: Vec<Uuid> = rows.iter().map(|row| row.object_id).collect();
+  let mut snippets = index.snippets(&object_ids, needle).await;
   Ok(
     rows
       .into_iter()
       .map(|row| {
         let title_match = row.name.to_lowercase().contains(&needle_lower);
-        // The SQL already guaranteed name OR content matched. A content-only hit
-        // yields a snippet; a title-only hit may have an empty snippet, which the
-        // client renders as a bare title result (unchanged contract).
-        let snippet = row
-          .content_text
-          .as_deref()
-          .and_then(|text| snippet_for(text, &needle_lower))
-          .unwrap_or_default();
+        // The SQL already guaranteed name OR body matched. A body hit yields a
+        // snippet; a title-only hit may have an empty one, which the client
+        // renders as a bare title result (unchanged contract).
+        let snippet = snippets.remove(&row.object_id).unwrap_or_default();
         SearchResult {
           view_id: row.view_id,
           object_id: row.object_id,
@@ -433,58 +441,25 @@ pub(super) async fn search_views(
 /// matches literally (paired with `ESCAPE '\'` in the SQL). Without this a search
 /// for `50%` would match anything.
 pub(super) fn like_pattern(needle: &str) -> String {
-  let mut out = String::with_capacity(needle.len() + 2);
-  out.push('%');
+  format!("%{}%", escape_like(needle))
+}
+
+/// `needle` with the `LIKE` metacharacters (`% _ \`) escaped, unanchored — the
+/// exact-name and name-prefix ranking keys use it bare and with a trailing `%`.
+fn escape_like(needle: &str) -> String {
+  let mut out = String::with_capacity(needle.len());
   for c in needle.chars() {
     if matches!(c, '%' | '_' | '\\') {
       out.push('\\');
     }
     out.push(c);
   }
-  out.push('%');
   out
 }
 
 // SEARCH_CONCURRENCY is gone: nothing in this file decodes documents per query
 // any more. Search reads `content_text` (0012) and backlinks read `link_targets`
 // (0019), both maintained columns — there is no fan-out left to bound.
-
-/// A ~160-char snippet of `text` centered on the first case-insensitive match of
-/// `needle_lower`, with an ellipsis on each clipped edge. `None` if the needle is
-/// absent. `text` is the whole document body (`content_text`), so unlike the old
-/// per-block snippet this must WINDOW around the hit, not take the head.
-pub(super) fn snippet_for(text: &str, needle_lower: &str) -> Option<String> {
-  const WINDOW: usize = 160;
-  /// Chars of context to keep before the match so the hit isn't flush-left.
-  const LEAD: usize = 40;
-  let chars: Vec<char> = text.chars().collect();
-  // Lowercase char by char, remembering which ORIGINAL char each lowered byte
-  // came from. `to_lowercase` is not length-preserving: `İ` becomes two chars,
-  // so counting chars in the lowered prefix used to over-shoot the original —
-  // a page with ~100 `İ` before the hit pushed `start` past the end of `chars`
-  // and the slice below panicked, dropping every search that matched it.
-  let mut lower = String::with_capacity(text.len());
-  let mut origin: Vec<usize> = Vec::with_capacity(text.len());
-  for (index, c) in chars.iter().enumerate() {
-    for l in c.to_lowercase() {
-      lower.push(l);
-      origin.resize(lower.len(), index);
-    }
-  }
-  let byte_pos = lower.find(needle_lower)?;
-  let match_char = origin[byte_pos];
-  let start = match_char.saturating_sub(LEAD);
-  let end = (start + WINDOW).min(chars.len());
-  let mut out = String::new();
-  if start > 0 {
-    out.push('…');
-  }
-  out.extend(&chars[start..end]);
-  if end < chars.len() {
-    out.push('…');
-  }
-  Some(out)
-}
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub(crate) struct Backlink {
@@ -678,43 +653,6 @@ mod tests {
     assert_eq!(like_pattern("c\\d"), "%c\\\\d%");
     // CJK carries no metacharacters — passes through, just wrapped.
     assert_eq!(like_pattern("全文搜索"), "%全文搜索%");
-  }
-
-  /// The snippet windows AROUND the first hit (not the head of the body) and
-  /// marks each clipped edge with an ellipsis. A hit in the middle of a long
-  /// body must keep context on both sides; CJK counts by character.
-  #[test]
-  fn snippet_windows_around_the_match() {
-    // Absent needle → None.
-    assert!(snippet_for("nothing here", "zzz").is_none());
-
-    // Short body: whole thing, no ellipses.
-    assert_eq!(snippet_for("hello world", "world").as_deref(), Some("hello world"));
-
-    // Case-insensitive.
-    assert_eq!(snippet_for("Hello World", "hello").as_deref(), Some("Hello World"));
-
-    // A hit deep in a long body keeps left+right context and both ellipses.
-    let body = format!("{}NEEDLE{}", "a".repeat(200), "b".repeat(200));
-    let snip = snippet_for(&body, "needle").unwrap();
-    assert!(snip.starts_with('…') && snip.ends_with('…'), "clipped both ends: {snip}");
-    assert!(snip.contains("NEEDLE"), "keeps the match: {snip}");
-    assert!(snip.chars().count() <= 162, "≈160-char window (+2 ellipses): {snip}");
-
-    // CJK windowing: a 2-char substring hit inside a longer sentence is found.
-    let cjk = "这是一段很长的中文文本用来测试全文搜索索引化的片段窗口功能";
-    let snip = snippet_for(cjk, "索引").unwrap();
-    assert!(snip.contains("索引"), "CJK substring windowed: {snip}");
-  }
-
-  /// THE BUG: `İ` lowercases to TWO chars, so the char index counted in the
-  /// lowered text over-shot the original and slicing it panicked — one planted
-  /// page took down every search that matched it.
-  #[test]
-  fn a_snippet_survives_text_whose_lowercase_is_longer() {
-    let body = format!("{}foo", "İ".repeat(100));
-    let snip = snippet_for(&body, "foo").expect("the hit is still found");
-    assert!(snip.ends_with("foo"), "window lands on the match: {snip}");
   }
 
   fn a_view(name: &str) -> View {

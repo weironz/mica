@@ -980,6 +980,46 @@ use uuid::Uuid;
       );
     }
 
+    /// Within the name tier, how WELL the name matches: exact, then prefix, then
+    /// contains — each against a fresher rival. It was a yes/no, so the page
+    /// NAMED "部署" sat below "旧版部署记录" whenever that was edited later.
+    #[tokio::test]
+    async fn an_exact_name_outranks_a_prefix_which_outranks_a_mention() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (contains, _) = seed_document(&db, ws, user, "旧版部署记录", serde_json::json!([])).await;
+      let (prefix, _) = seed_document(&db, ws, user, "部署手册", serde_json::json!([])).await;
+      let (exact, _) = seed_document(&db, ws, user, "部署", serde_json::json!([])).await;
+      for (view, age) in [(exact, "30 days"), (prefix, "10 days"), (contains, "0 days")] {
+        sqlx::query("UPDATE views SET updated_at = now() - $2::interval WHERE id = $1")
+          .bind(view)
+          .bind(age)
+          .execute(&db)
+          .await
+          .unwrap();
+      }
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", false, None).await.unwrap();
+      let order: Vec<Uuid> = hits.iter().map(|h| h.view_id).collect();
+      assert_eq!(order, vec![exact, prefix, contains], "{hits:?}");
+    }
+
+    /// The snippet is the one-line window the client can show: the match near
+    /// its start, inside the matched block, no raw newlines.
+    #[tokio::test]
+    async fn a_body_hit_snippet_shows_the_match_on_one_line() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (view, doc) = seed_document(&db, ws, user, "笔记", serde_json::json!([])).await;
+      let body = format!("{}\n第二段落：上线前检查部署流程。\n结尾", "很长的第一段".repeat(30));
+      set_content_text(&db, doc, &body).await;
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署流程", false, None).await.unwrap();
+      assert_eq!(hits[0].view_id, view);
+      let snippet = &hits[0].snippet;
+      assert!(snippet.starts_with("…第二段落"), "{snippet}");
+      assert!(!snippet.contains('\n'), "{snippet}");
+      assert!(snippet.chars().take(25).collect::<String>().contains("部署流程"), "{snippet}");
+    }
+
     /// FTS M1 end-to-end over the real query: title hits, CJK body substrings
     /// (3-char and 2-char), a body-only hit's snippet + title_match=false, and
     /// LIKE-metacharacter escaping.

@@ -101,32 +101,6 @@ pub struct LocalSearchHit {
     pub snippet: String,
 }
 
-/// A readable window around the first match, not the whole document.
-fn snippet_around(body: &str, needle_lower: &str) -> String {
-    if body.is_empty() || needle_lower.is_empty() {
-        return String::new();
-    }
-    let lower = body.to_lowercase();
-    let Some(at) = lower.find(needle_lower) else {
-        return String::new();
-    };
-    // Character-based, not byte-based: slicing a UTF-8 string at a byte offset
-    // that lands mid-codepoint panics, and CJK bodies hit that immediately.
-    let chars: Vec<char> = body.chars().collect();
-    let char_at = body[..at].chars().count();
-    let start = char_at.saturating_sub(30);
-    let end = (char_at + needle_lower.chars().count() + 60).min(chars.len());
-    let mut out = String::new();
-    if start > 0 {
-        out.push('…');
-    }
-    out.extend(&chars[start..end]);
-    if end < chars.len() {
-        out.push('…');
-    }
-    out
-}
-
 /// Plain text of a stored state, for search. Same projection the cloud keeps in
 /// `document_yrs_base.content_text`, so a page reads the same either side.
 ///
@@ -807,7 +781,11 @@ impl LocalStore {
             hits.push(LocalSearchHit {
                 view_id,
                 object_id,
-                snippet: snippet_around(&body, &needle),
+                // The shared one-line window (`search_text`): the same text the
+                // cloud shows for the same page. The copy that lived here sliced
+                // the original by an offset taken from a lowercased copy — a
+                // panic inside the store's mutex for `İ`/`ẞ` (review #3).
+                snippet: crate::search_text::snippet(&body, trimmed).unwrap_or_default(),
                 name,
                 parent_id,
                 is_folder: object_type == "folder",
@@ -3259,6 +3237,34 @@ mod tests {
 
             assert!(hit.snippet.contains("Docker"), "{:?}", hit.snippet);
             assert!(hit.snippet.chars().count() <= 95, "{:?}", hit.snippet);
+        }
+
+        /// Second-round review #3: the local snippet sliced the ORIGINAL body at a
+        /// byte offset found in a lowercased copy. `ẞ`→`ß` (3 bytes → 2) before
+        /// the hit put that offset off a char boundary — a panic inside the
+        /// store's mutex, poisoning it for every later call.
+        #[test]
+        fn a_body_whose_lowercase_is_shorter_neither_panics_nor_loses_the_hit() {
+            let store = LocalStore::open_in_memory().unwrap();
+            let mut d = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
+            d.text_insert("root", 0, &format!("{}needle here", "ẞ".repeat(50)));
+            store.save_doc("dx", &d).unwrap();
+            store
+                .save_view(&LocalView {
+                    id: "vx".into(),
+                    workspace_id: "local".into(),
+                    parent_id: None,
+                    object_id: "dx".into(),
+                    name: "页".into(),
+                    position: "0000000010".into(),
+                    trashed: false,
+                    origin: "local".into(),
+                    object_type: "document".into(),
+                })
+                .unwrap();
+            let hits = store.search_local("needle", 20).unwrap();
+            assert_eq!(hits.len(), 1);
+            assert!(hits[0].snippet.contains("needle here"), "{:?}", hits[0].snippet);
         }
 
         /// `%` is a LIKE wildcard. Unescaped, searching for it returns the whole

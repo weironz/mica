@@ -121,6 +121,20 @@ void main() {
       expect(joined(highlightRuns('aaaa', 'aa')), '[aa][aa]');
     });
 
+    // THE BUG (web): offsets found in `text.toLowerCase()` sliced the ORIGINAL,
+    // and in JavaScript `'İ'.toLowerCase()` is TWO code units — every `İ`
+    // before a hit shifted the tint one place right of the match. (The Dart VM
+    // lowercases `İ` to one unit, so on desktop the bug never showed; these
+    // expectations hold on both and the test runs on both.)
+    test(
+      'a length-changing lowercase before the hit does not shift the tint',
+      () {
+        expect(joined(highlightRuns('İİİ needle!', 'needle')), 'İİİ [needle]!');
+        expect(joined(highlightRuns('İstanbul', 'i')), '[İ]stanbul');
+        expect(highlightRuns('İİ x', 'x').map((r) => r.text).join(), 'İİ x');
+      },
+    );
+
     test('every run concatenates back to the original text', () {
       const text = 'Alpha beta ALPHA gamma';
       final runs = highlightRuns(text, 'alpha');

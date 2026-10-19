@@ -13,6 +13,7 @@ pub mod block;
 pub mod doc;
 pub mod marks;
 pub mod quote_match;
+pub mod search_text;
 #[cfg(feature = "store")]
 pub mod store;
 pub mod text_diff;

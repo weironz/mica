@@ -22,20 +22,52 @@ List<HighlightRun> highlightRuns(String text, String query) {
   if (text.isEmpty) return const [];
   if (needle.isEmpty) return [(text: text, hit: false)];
 
-  final haystack = text.toLowerCase();
+  // Lowercase rune by rune, remembering where in the ORIGINAL each lowered
+  // code unit came from. `toLowerCase` is not length-preserving (`İ` becomes
+  // two code units), so offsets found in a lowercased copy used to slice the
+  // original at the wrong place — the tint landed beside the match, or a
+  // range error dropped the row. Same rule as the server's snippet
+  // (`mica_core::search_text`).
+  final lowered = StringBuffer();
+  // For each lowered code unit, the original character it came from, as
+  // [start, end) offsets — a match that ends inside a character's expansion
+  // still covers that whole character.
+  final starts = <int>[];
+  final ends = <int>[];
+  var offset = 0;
+  for (final rune in text.runes) {
+    final ch = String.fromCharCode(rune);
+    final low = ch.toLowerCase();
+    lowered.write(low);
+    for (var i = 0; i < low.length; i++) {
+      starts.add(offset);
+      ends.add(offset + ch.length);
+    }
+    offset += ch.length;
+  }
+  final haystack = lowered.toString();
   final lowerNeedle = needle.toLowerCase();
   final runs = <HighlightRun>[];
-  var cursor = 0;
+  var cursor = 0; // in the original
+  var from = 0; // in the lowered copy
   while (true) {
-    final at = haystack.indexOf(lowerNeedle, cursor);
+    final at = haystack.indexOf(lowerNeedle, from);
     if (at < 0) break;
-    if (at > cursor) {
-      runs.add((text: text.substring(cursor, at), hit: false));
+    final start = starts[at];
+    final end = ends[at + lowerNeedle.length - 1];
+    if (start < cursor) {
+      // Overlaps the previous hit inside one expanded character; skip it.
+      from = at + 1;
+      continue;
+    }
+    if (start > cursor) {
+      runs.add((text: text.substring(cursor, start), hit: false));
     }
     // Slice out of the ORIGINAL text so a highlighted run keeps the casing the
     // document actually has.
-    runs.add((text: text.substring(at, at + needle.length), hit: true));
-    cursor = at + needle.length;
+    runs.add((text: text.substring(start, end), hit: true));
+    cursor = end;
+    from = at + lowerNeedle.length;
   }
   if (cursor < text.length) {
     runs.add((text: text.substring(cursor), hit: false));
@@ -174,7 +206,10 @@ Future<List<T>> searchScopeFor<T>({
 /// screen. Returning the id rather than a bool is deliberate: every caller then
 /// needs it, and a bool would leave them re-deriving it behind a `!` that the
 /// compiler cannot check.
-String? elsewhereWorkspace(String? hitWorkspaceId, String? currentWorkspaceId) =>
+String? elsewhereWorkspace(
+  String? hitWorkspaceId,
+  String? currentWorkspaceId,
+) =>
     (hitWorkspaceId != null &&
         currentWorkspaceId != null &&
         hitWorkspaceId != currentWorkspaceId)
