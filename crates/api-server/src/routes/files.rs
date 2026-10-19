@@ -859,21 +859,38 @@ pub(crate) async fn ensure_quota_room(
   byte_size: i64,
   exclude_key: Option<&str>,
 ) -> ApiResult<()> {
-  let quota = state.config.workspace_quota_bytes;
-  if quota <= 0 || byte_size <= 0 {
+  if byte_size <= 0 {
     return Ok(());
   }
-  let used = store::workspace_bytes_used_excluding(&state.db, workspace_id, exclude_key).await?;
-  // `saturating_add`: both sides are i64 from the wire or the database, and an
-  // overflow here would wrap negative and PASS the check.
-  if used.saturating_add(byte_size) > quota {
-    return Err(ApiError::BadRequestCode(
-      "workspace_quota_exceeded",
-      format!(
-        "workspace storage is full: {used} of {quota} bytes used, \
-         this upload needs {byte_size} more"
-      ),
-    ));
+  let quota = state.config.workspace_quota_bytes;
+  if quota > 0 {
+    let used = store::workspace_bytes_used_excluding(&state.db, workspace_id, exclude_key).await?;
+    // `saturating_add`: both sides are i64 from the wire or the database, and an
+    // overflow here would wrap negative and PASS the check.
+    if used.saturating_add(byte_size) > quota {
+      return Err(ApiError::BadRequestCode(
+        "workspace_quota_exceeded",
+        format!(
+          "workspace storage is full: {used} of {quota} bytes used, \
+           this upload needs {byte_size} more"
+        ),
+      ));
+    }
+  }
+  // B7: the per-workspace ceiling alone is multiplied by however many
+  // workspaces an account creates; this one is not.
+  let owner_quota = state.config.owner_quota_bytes;
+  if owner_quota > 0 {
+    let used = store::owner_bytes_used_excluding(&state.db, workspace_id, exclude_key).await?;
+    if used.saturating_add(byte_size) > owner_quota {
+      return Err(ApiError::BadRequestCode(
+        "owner_quota_exceeded",
+        format!(
+          "the workspace owner's storage is full: {used} of {owner_quota} bytes used \
+           across their workspaces, this upload needs {byte_size} more"
+        ),
+      ));
+    }
   }
   Ok(())
 }
@@ -1808,6 +1825,43 @@ mod quota_pg {
       1234,
       "once registered it counts once, as a file"
     );
+  }
+
+  /// B7: the per-workspace quota multiplied by however many workspaces one
+  /// account creates. The owner figure sums every workspace that account owns
+  /// (uploads by members included — charged to the owner), and nobody else's.
+  #[tokio::test]
+  async fn owner_usage_sums_every_owned_workspace_and_nothing_else() {
+    let Some(db) = pool().await else { return };
+    let (ws_a, owner) = seed_workspace(&db).await;
+    let ws_b = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'Q2',$2)")
+      .bind(ws_b)
+      .bind(owner)
+      .execute(&db)
+      .await
+      .unwrap();
+    let (ws_other, stranger) = seed_workspace(&db).await;
+
+    put(&db, ws_a, owner, &format!("workspaces/{ws_a}/{}.png", Uuid::new_v4()), 100).await;
+    // A member's upload into the owner's workspace still costs the owner.
+    put(&db, ws_b, stranger, &format!("workspaces/{ws_b}/{}.png", Uuid::new_v4()), 20).await;
+    put(&db, ws_other, stranger, &format!("workspaces/{ws_other}/{}.png", Uuid::new_v4()), 5000).await;
+    let pending = format!("workspaces/{ws_b}/{}.bin", Uuid::new_v4());
+    let mut tx = db.begin().await.unwrap();
+    store::record_pending_file_upload_tx(&mut tx, ws_b, &pending, 900).await.unwrap();
+    store::reserve_pending_upload_bytes_tx(&mut tx, &pending, 3).await.unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(store::owner_bytes_used_excluding(&db, ws_a, None).await.unwrap(), 123);
+    assert_eq!(store::owner_bytes_used_excluding(&db, ws_b, None).await.unwrap(), 123);
+    assert_eq!(
+      store::owner_bytes_used_excluding(&db, ws_a, Some(&pending)).await.unwrap(),
+      120,
+      "complete's own reservation is not counted against it"
+    );
+    assert_eq!(store::owner_bytes_used_excluding(&db, ws_other, None).await.unwrap(), 5000);
+    cleanup(&db, &[ws_a, ws_b, ws_other], &[owner, stranger]).await;
   }
 
   /// The `mica_storage_bytes` gauges must agree with the expression the quota

@@ -146,6 +146,9 @@ services:
       MICA_REGISTRATION_ENABLED: "${MICA_REGISTRATION_ENABLED:-}"
       MICA_ADMIN_EMAIL: "${MICA_ADMIN_EMAIL:-}"
       MICA_WORKSPACE_QUOTA_BYTES: "${MICA_WORKSPACE_QUOTA_BYTES:-}"
+      # Per-OWNER total across every workspace an account owns; unset = 20 GiB,
+      # `0` = no limit. Same allow-list reason as above.
+      MICA_OWNER_QUOTA_BYTES: "${MICA_OWNER_QUOTA_BYTES:-}"
       MICA_WS_MIN_PROTOCOL: "${MICA_WS_MIN_PROTOCOL:-}"
       MICA_CATCH_UP_LIMIT: "${MICA_CATCH_UP_LIMIT:-}"
       MICA_STREAM_KEEP_MARGIN: "${MICA_STREAM_KEEP_MARGIN:-}"

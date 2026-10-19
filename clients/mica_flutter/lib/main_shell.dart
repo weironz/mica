@@ -823,6 +823,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             )
           : context.l10n.uploadFileTooLarge,
       'workspace_quota_exceeded' => context.l10n.uploadWorkspaceFull,
+      'owner_quota_exceeded' => context.l10n.uploadOwnerFull,
       _ => error.toString(),
     };
   }

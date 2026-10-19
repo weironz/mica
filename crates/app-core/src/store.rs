@@ -739,6 +739,34 @@ pub async fn workspace_bytes_used_excluding(
   .map_err(ApiError::from)
 }
 
+/// Bytes stored across every workspace owned by `workspace_id`'s owner — the
+/// per-owner quota (B7). Same counting rules as [workspace_bytes_used_excluding],
+/// summed over the owner's workspaces.
+pub async fn owner_bytes_used_excluding(
+  db: &PgPool,
+  workspace_id: Uuid,
+  exclude_key: Option<&str>,
+) -> ApiResult<i64> {
+  sqlx::query_scalar::<_, i64>(
+    "WITH owned AS (
+       SELECT w.id FROM workspaces w
+       WHERE w.owner_id = (SELECT owner_id FROM workspaces WHERE id = $1)
+     )
+     SELECT (
+       (SELECT coalesce(sum(byte_size), 0) FROM files WHERE workspace_id IN (SELECT id FROM owned))
+       + (SELECT coalesce(sum(p.byte_size), 0) FROM pending_file_uploads p
+          WHERE p.workspace_id IN (SELECT id FROM owned)
+            AND p.object_key IS DISTINCT FROM $2
+            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key))
+     )::bigint",
+  )
+  .bind(workspace_id)
+  .bind(exclude_key)
+  .fetch_one(db)
+  .await
+  .map_err(ApiError::from)
+}
+
 pub async fn insert_file(
   db: &PgPool,
   workspace_id: Uuid,
