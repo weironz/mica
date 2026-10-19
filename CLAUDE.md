@@ -123,6 +123,9 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 `--check --diff`,过了才真上**。`-f check=true` 现在的意思是「彩排完就停」,
 不再是「用彩排代替上线」。
 `just --list` 看全部 recipe。
+**Actions 额度用尽时走本地链**(2026-10-19):`just ci` 本地门禁、`just ship X.Y.Z` 一条龙
+(产物先以 draft 上传,必备产物齐了才转 latest;Windows 机器出安装包 + CLI,有 Docker 时顺带
+静态 Linux CLI)。见 `docs/release.md`「本地发布」。
 
 **上面这条链不需要本地装东西**(只用 `git` / `gh`,ansible 跑在 CI runner 上)。
 兜底 `just deploy-prod` **只在 Linux/macOS 上跑** —— ansible 不支持 Windows 作控制端
