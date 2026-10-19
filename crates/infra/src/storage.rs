@@ -154,11 +154,17 @@ impl S3Config {
   /// The browser supplies Content-Length for its fixed-size byte body. Signing
   /// it alongside the checksum and write-once condition makes the object store
   /// reject a body larger than the byte count accepted by the API.
+  ///
+  /// `content_type` is signed too — pass [`stored_content_type`] of the
+  /// declared MIME. Unsigned, the uploader chose the Content-Type the object
+  /// store later SERVES, and `text/html` / `image/svg+xml` on the storage
+  /// origin is script running same-site with the app.
   pub fn presign_put_if_absent(
     &self,
     key: &str,
     checksum_sha256: &str,
     byte_size: i64,
+    content_type: &str,
   ) -> PresignedUpload {
     let (base_url, host, canonical_uri) = self.object_location(key);
     let url = sign_presigned(
@@ -171,7 +177,7 @@ impl S3Config {
         access_key: &self.access_key,
         secret_key: &self.secret_key,
         expires_in: self.presign_ttl_seconds,
-        write_once: Some((checksum_sha256, byte_size)),
+        write_once: Some((checksum_sha256, byte_size, content_type)),
         head_checksum_mode: false,
       },
       Utc::now(),
@@ -453,7 +459,7 @@ struct PresignRequest<'a> {
   access_key: &'a str,
   secret_key: &'a str,
   expires_in: u64,
-  write_once: Option<(&'a str, i64)>,
+  write_once: Option<(&'a str, i64, &'a str)>,
   head_checksum_mode: bool,
 }
 
@@ -474,7 +480,7 @@ fn sign_presigned_with_query(
   let credential = format!("{}/{scope}", request.access_key);
 
   let signed_headers = if request.write_once.is_some() {
-    "content-length;host;if-none-match;x-amz-checksum-sha256"
+    "content-length;content-type;host;if-none-match;x-amz-checksum-sha256"
   } else if request.head_checksum_mode {
     "host;x-amz-checksum-mode"
   } else {
@@ -499,9 +505,10 @@ fn sign_presigned_with_query(
     .collect::<Vec<_>>()
     .join("&");
 
-  let canonical_headers = if let Some((checksum, byte_size)) = request.write_once {
+  let canonical_headers = if let Some((checksum, byte_size, content_type)) = request.write_once {
     format!(
-      "content-length:{byte_size}\nhost:{}\nif-none-match:*\nx-amz-checksum-sha256:{checksum}\n",
+      "content-length:{byte_size}\ncontent-type:{}\nhost:{}\nif-none-match:*\nx-amz-checksum-sha256:{checksum}\n",
+      canonical_header_value(content_type),
       request.host
     )
   } else if request.head_checksum_mode {
@@ -526,6 +533,60 @@ fn sign_presigned_with_query(
     "{}?{canonical_query}&X-Amz-Signature={signature}",
     request.base_url
   )
+}
+
+/// SigV4 canonical form of a header value: trimmed, inner whitespace runs
+/// collapsed to one space — what the object store computes from the header it
+/// receives, so what we sign must match it.
+fn canonical_header_value(value: &str) -> String {
+  value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The Content-Type an object is STORED (and therefore served) with, for a
+/// declared MIME.
+///
+/// The object store serves an object with the Content-Type it was uploaded
+/// with, from an origin that is same-SITE with the app. A type a browser
+/// executes or renders as a document — HTML, SVG, XML (XSLT runs), JavaScript —
+/// or one that makes it sniff (`*/*`, `unknown/unknown`) would put the
+/// uploader's script in the app's site, so those are stored as
+/// `application/octet-stream`: a download, never rendered. Everything else is
+/// kept AS DECLARED (canonicalized only) — the browser client sends the
+/// declared type verbatim, and the signature must match what it sends.
+/// The declared MIME stays on the `files` row for display.
+pub fn stored_content_type(declared: &str) -> String {
+  let canonical = canonical_header_value(declared);
+  let essence = canonical
+    .split(';')
+    .next()
+    .unwrap_or("")
+    .trim()
+    .to_ascii_lowercase();
+  let executable = matches!(
+    essence.as_str(),
+    "" | "text/html"
+      | "application/xhtml+xml"
+      | "image/svg+xml"
+      | "application/xml"
+      | "text/xml"
+      | "text/xsl"
+      | "application/xslt+xml"
+      | "text/javascript"
+      | "application/javascript"
+      | "application/x-javascript"
+      | "application/ecmascript"
+      | "text/ecmascript"
+      | "application/x-shockwave-flash"
+      | "unknown/unknown"
+      | "application/unknown"
+      | "*/*"
+  ) || essence.ends_with("+xml")
+    || !essence.contains('/');
+  if executable {
+    "application/octet-stream".to_string()
+  } else {
+    canonical
+  }
 }
 
 fn signature_key(secret: &str, date_stamp: &str, region: &str, service: &str) -> Vec<u8> {
@@ -733,12 +794,25 @@ mod tests {
     }
   }
 
+  /// THE BUG (B4): executable types on the same-site storage origin.
+  #[test]
+  fn executable_types_are_stored_as_downloads_and_the_rest_as_declared() {
+    for t in ["text/html", "TEXT/HTML; charset=utf-8", "image/svg+xml", "application/xml",
+              "application/atom+xml", "text/javascript", "", "*/*", "garbage"] {
+      assert_eq!(stored_content_type(t), "application/octet-stream", "{t:?}");
+    }
+    for t in ["image/png", "image/jpeg", "application/pdf", "text/plain; charset=utf-8", "video/mp4"] {
+      assert_eq!(stored_content_type(t), t, "{t:?} is kept verbatim (the client sends it)");
+    }
+    assert_eq!(stored_content_type("  text/plain;  charset=utf-8 "), "text/plain; charset=utf-8");
+  }
+
   #[test]
   fn browser_write_once_url_signs_the_precondition() {
     let config = test_config(true, None);
-    let upload = config.presign_put_if_absent("a/b.png", "AAAA", 4);
+    let upload = config.presign_put_if_absent("a/b.png", "AAAA", 4, "image/png");
     assert!(upload.url.contains(
-      "X-Amz-SignedHeaders=content-length%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256"
+      "X-Amz-SignedHeaders=content-length%3Bcontent-type%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256"
     ));
     assert_ne!(upload.url, config.presign_put("a/b.png").url);
     assert!(config

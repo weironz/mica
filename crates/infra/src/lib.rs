@@ -13,5 +13,5 @@ pub use error::{ApiError, ApiResult};
 pub use mail::{LogMailer, Mail, Mailer};
 pub use storage::{
   classify_create, classify_head, default_s3_secret_in_use, BucketProbe, CreateOutcome,
-  PresignedUpload, S3Config, DEFAULT_S3_SECRET_KEY,
+  stored_content_type, PresignedUpload, S3Config, DEFAULT_S3_SECRET_KEY,
 };

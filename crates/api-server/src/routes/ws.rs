@@ -111,6 +111,12 @@ pub async fn document_socket(
   // exactly the same way, forever. The version is a public parameter and the
   // check reveals nothing, so there is no reason to make it wait behind a secret.
   let client_protocol = check_protocol(query.v, state.config.ws_min_protocol)?;
+  // CORS does not apply to WebSockets: without this, a same-site page (an
+  // uploaded HTML file on the storage origin) could open this socket with the
+  // victim's cookie and read every edit. See `crate::origin`.
+  if !crate::origin::origin_allowed(&state.config, &headers) {
+    return Err(ApiError::Forbidden);
+  }
 
   let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
   let (user_id, token_exp) = session_from_token(&state, &token)?;
@@ -170,6 +176,9 @@ pub async fn views_socket(
   headers: HeaderMap,
   upgrade: WebSocketUpgrade,
 ) -> ApiResult<Response> {
+  if !crate::origin::origin_allowed(&state.config, &headers) {
+    return Err(ApiError::Forbidden);
+  }
   let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
   let (user_id, token_exp) = session_from_token(&state, &token)?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;

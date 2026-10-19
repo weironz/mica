@@ -407,6 +407,7 @@ class WorkspaceView extends StatefulWidget {
   /// Fetch the provider's model list. Null in 本地模式, like the settings pair.
   final Future<Map<String, dynamic>> Function({
     String? provider,
+    String? providerId,
     String? baseUrl,
     String? apiKey,
   })?

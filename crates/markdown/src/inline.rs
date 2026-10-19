@@ -726,6 +726,61 @@ pub(crate) fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
   }
 }
 
+/// [matching_bracket] answers memoised for one `chars`.
+///
+/// Every `[` the parser tries asks for its match, and an unmatched one scans to
+/// the end of the text — so `[<[<[<…` (and plain `[[[[…`) cost a full scan per
+/// bracket: quadratic. One scan from `open` visits every later `[` it passes on
+/// a path that is the SAME path a scan from that `[` would take (the walk from
+/// any position is deterministic), so a stack records their answers too —
+/// exactly, matched or not. Each position is then scanned about once.
+#[derive(Default)]
+pub(crate) struct BracketMemo {
+  known: std::collections::HashMap<usize, Option<usize>>,
+}
+
+impl BracketMemo {
+  pub(crate) fn matching(&mut self, chars: &[char], open: usize) -> Option<usize> {
+    if let Some(answer) = self.known.get(&open) {
+      return *answer;
+    }
+    let n = chars.len();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut j = open;
+    let mut result = None;
+    while j < n {
+      let c = chars[j];
+      if c == '\\' && j + 1 < n {
+        j += 2;
+        continue;
+      }
+      if let Some(end) = inline_span_end(chars, j) {
+        j = end;
+        continue;
+      }
+      if c == '[' {
+        stack.push(j);
+      } else if c == ']'
+        && let Some(o) = stack.pop()
+      {
+        self.known.insert(o, Some(j));
+        if o == open {
+          result = Some(j);
+          break;
+        }
+      }
+      j += 1;
+    }
+    if result.is_none() {
+      for o in stack {
+        self.known.insert(o, None);
+      }
+      self.known.insert(open, None);
+    }
+    result
+  }
+}
+
 /// Find the `]` matching the `[` at [open], honoring nesting and escapes.
 ///
 /// Code spans, autolinks and raw inline HTML bind tighter than link brackets
@@ -886,6 +941,8 @@ pub(crate) fn parse_inline_memo(
       chars.pop();
     }
   }
+  // Bracket matches for THIS `chars`, shared by every lookup in this parse.
+  let mut brackets = BracketMemo::default();
   let mut out = String::new();
   let mut out_len: usize = 0; // UTF-16 length of `out`
   let mut marks: Vec<InlineMark> = Vec::new();
@@ -1040,7 +1097,7 @@ pub(crate) fn parse_inline_memo(
     // same bridge as links; the alt keeps its inner marks (HTML flattens
     // them to plain text, markdown re-renders them).
     if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '[' {
-      if let Some(close) = matching_bracket(&chars, i + 1) {
+      if let Some(close) = brackets.matching(&chars, i + 1) {
         let label: String = chars[i + 2..close].iter().collect();
         if !label.is_empty() {
           if close + 1 < chars.len() && chars[close + 1] == '(' {
@@ -1052,7 +1109,7 @@ pub(crate) fn parse_inline_memo(
           }
           if !defs.is_empty() {
             let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
-              match matching_bracket(&chars, close + 1) {
+              match brackets.matching(&chars, close + 1) {
                 Some(end2) => {
                   let second: String = chars[close + 2..end2].iter().collect();
                   if second.is_empty() {
@@ -1084,7 +1141,7 @@ pub(crate) fn parse_inline_memo(
     // reference round-trips to `[^x]` regardless and degrades to literal HTML).
     if chars[i] == '['
       && chars.get(i + 1) == Some(&'^')
-      && let Some(close) = matching_bracket(&chars, i)
+      && let Some(close) = brackets.matching(&chars, i)
       && close > i + 2
     {
       let label: String = chars[i + 2..close].iter().collect();
@@ -1105,7 +1162,7 @@ pub(crate) fn parse_inline_memo(
     }
     // Link: [text](dest "title") | [text][label] | [text][] | [shortcut]
     if chars[i] == '[' {
-      if let Some(close) = matching_bracket(&chars, i) {
+      if let Some(close) = brackets.matching(&chars, i) {
         let label: String = chars[i + 1..close].iter().collect();
         // A link's text may not itself contain a link (CommonMark §6.3): if
         // the label holds a top-level `[…](…)`/`[…][…]`/autolink, the OUTER
@@ -1141,7 +1198,7 @@ pub(crate) fn parse_inline_memo(
           // Reference forms (full / collapsed / shortcut).
           if !defs.is_empty() {
             let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
-              match matching_bracket(&chars, close + 1) {
+              match brackets.matching(&chars, close + 1) {
                 Some(end2) => {
                   let second: String = chars[close + 2..end2].iter().collect();
                   if second.is_empty() {

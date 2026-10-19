@@ -660,7 +660,7 @@ async fn transfer_roots(
     };
     let put = http
       .put(&upload.url)
-      .header(reqwest::header::CONTENT_TYPE, &src_file.mime_type)
+      .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&src_file.mime_type))
       .header("x-amz-checksum-sha256", checksum)
       .body(bytes.to_vec())
       .send()

@@ -64,11 +64,20 @@ fn a_long_multi_line_paragraph_is_not_cubic() {
 }
 
 /// `[<` repeated with no `>` anywhere: the `<` scan ran to the end of the text
-/// from every position `matching_bracket` visits, from every `[` — cubic.
-/// (Still quadratic — every unmatched `[` scans to the end — so the size is
-/// kept where quadratic is well under the bound and cubic is far over it.)
+/// from every position `matching_bracket` visits, from every `[` — cubic. Then
+/// quadratic (every unmatched `[` still scanned to the end), until the bracket
+/// answers were memoised per parse (`BracketMemo`): linear now.
 #[test]
 fn unclosed_angle_brackets_inside_brackets_are_not_cubic() {
-    let ms = parse_ms(&"[<".repeat(2000));
-    assert!(ms < 3000, "`[<`×2000 took {ms}ms — the `<` scan no longer stops at `<`/whitespace");
+    let ms = parse_ms(&"[<".repeat(8000));
+    assert!(ms < 3000, "`[<`×8000 took {ms}ms — the bracket memo is gone or the `<` scan no longer stops");
+}
+
+/// Long runs of unmatched brackets of every kind the parser asks about.
+#[test]
+fn unmatched_bracket_runs_are_linear() {
+    for (unit, n) in [("[", 50_000), ("![", 20_000), ("[^", 20_000)] {
+        let ms = parse_ms(&unit.repeat(n));
+        assert!(ms < 3000, "`{unit}`×{n} took {ms}ms — every `[` rescans to the end again");
+    }
 }

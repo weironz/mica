@@ -1284,7 +1284,10 @@ class ApiClient {
     final put = await sharedHttpClient.put(
       Uri.parse(uploadUrl),
       headers: {
-        'content-type': mimeType,
+        // The server signs the Content-Type into the URL and may store an
+        // executable type (HTML, SVG…) as octet-stream; send exactly what it
+        // signed. Older servers do not return it and sign no type at all.
+        'content-type': (upload['content_type'] as String?) ?? mimeType,
         'if-none-match': upload['if_none_match'] as String,
         'x-amz-checksum-sha256': upload['checksum_sha256'] as String,
       },

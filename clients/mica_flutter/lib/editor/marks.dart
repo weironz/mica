@@ -442,7 +442,19 @@ String _canonicalizeBreaks(String src) {
 /// Mirrors Rust `matching_bracket`; without the skip, ``[`a]b`](/x)`` lost
 /// its link entirely on the Dart side (confirmed drift).
 int matchingBracket(String src, int open) {
-  var depth = 0;
+  // Answers memoised per source string (mirrors Rust `BracketMemo`): an
+  // unmatched `[` scans to the end, and the parser asks for every `[`, so
+  // `[<[<[<…` cost a full scan per bracket — quadratic. One scan records, via
+  // a stack, the answer for every later `[` it passes; the walk from any
+  // position is deterministic, so those answers are exact.
+  if (!identical(src, _bracketMemoSrc)) {
+    _bracketMemoSrc = src;
+    _bracketMemo.clear();
+  }
+  final known = _bracketMemo[open];
+  if (known != null) return known;
+  final stack = <int>[];
+  var result = -1;
   var j = open;
   while (j < src.length) {
     final c = src[j];
@@ -455,15 +467,29 @@ int matchingBracket(String src, int open) {
       j = span;
       continue;
     }
-    if (c == '[') depth++;
-    if (c == ']') {
-      depth--;
-      if (depth == 0) return j;
+    if (c == '[') {
+      stack.add(j);
+    } else if (c == ']' && stack.isNotEmpty) {
+      final o = stack.removeLast();
+      _bracketMemo[o] = j;
+      if (o == open) {
+        result = j;
+        break;
+      }
     }
     j++;
   }
-  return -1;
+  if (result < 0) {
+    for (final o in stack) {
+      _bracketMemo[o] = -1;
+    }
+    _bracketMemo[open] = -1;
+  }
+  return result;
 }
+
+String? _bracketMemoSrc;
+final Map<int, int> _bracketMemo = {};
 
 const kDollar = r'$';
 
@@ -686,9 +712,11 @@ List<({int start, int end})> mathRunSpans(String src) {
       return (candidate.length, '$implied$candidate');
     }
   }
-  // Bare email.
-  if (RegExp(r'^[A-Za-z0-9]').hasMatch(rest)) {
-    final m = RegExp(r'^[A-Za-z0-9._+-]+@[A-Za-z0-9._-]+').firstMatch(rest);
+  // Bare email. Matched in place (`matchAsPrefix`), not on a copy of the
+  // rest of the text — that copy, at every word boundary, is what made inline
+  // parsing quadratic.
+  if (RegExp(r'[A-Za-z0-9]').hasMatch(src[i])) {
+    final m = RegExp(r'[A-Za-z0-9._+-]+@[A-Za-z0-9._-]+').matchAsPrefix(src, i);
     if (m != null) {
       var text = m.group(0)!;
       while (text.endsWith('.')) {

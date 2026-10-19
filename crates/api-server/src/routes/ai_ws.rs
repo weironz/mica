@@ -42,6 +42,9 @@ pub async fn ai_socket(
   headers: HeaderMap,
   upgrade: WebSocketUpgrade,
 ) -> ApiResult<Response> {
+  if !crate::origin::origin_allowed(&state.config, &headers) {
+    return Err(ApiError::Forbidden);
+  }
   let token = token_from(&headers, &query).ok_or(ApiError::Unauthorized)?;
   let user_id = user_id_from_token(&state, &token)?;
   // Same check as the REST endpoint: this socket streams completions, so it

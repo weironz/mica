@@ -952,6 +952,18 @@ async fn resolve_pat(state: &AppState, token: &str) -> ApiResult<Auth> {
   })
 }
 
+// The credential `scope_guard` already resolved for THIS request: the token
+// it saw and the user it maps to.
+//
+// Every authenticated handler resolves its caller again through
+// `user_id_from_headers` — for a JWT that is CPU only, but for a PAT (the MCP /
+// CLI path) it was a second SELECT on every call. A task-local, not a header:
+// nothing a client sends can populate it, and it lives exactly as long as the
+// request's handler future.
+tokio::task_local! {
+  static RESOLVED: (String, Uuid);
+}
+
 /// Same two sources as [`scope_guard`], and it has to stay that way.
 ///
 /// A handful of handlers read the token themselves instead of leaning on the
@@ -960,18 +972,6 @@ async fn resolve_pat(state: &AppState, token: &str) -> ApiResult<Auth> {
 /// worse than none of it accepting: it fails per-endpoint, which reads as a
 /// flaky server rather than a missing case. (Caught by the live smoke; no unit
 /// test was ever going to notice a handler it did not know existed.)
-tokio::task_local! {
-  /// The credential [`scope_guard`] already resolved for THIS request: the
-  /// token it saw and the user it maps to.
-  ///
-  /// Every authenticated handler resolves its caller again through
-  /// [`user_id_from_headers`] — for a JWT that is CPU only, but for a PAT (the
-  /// MCP / CLI path) it was a second SELECT on every call. A task-local, not a
-  /// header: nothing a client sends can populate it, and it lives exactly as
-  /// long as the request's handler future.
-  static RESOLVED: (String, Uuid);
-}
-
 pub(crate) async fn user_id_from_headers(state: &AppState, headers: &HeaderMap) -> ApiResult<Uuid> {
   let token = bearer_token(headers)
     .or_else(|| cookie_value(headers, SESSION_COOKIE))
@@ -1207,9 +1207,21 @@ pub async fn scope_guard(
   if is_public(request.uri().path()) {
     return Ok(next.run(request).await);
   }
-  let token = bearer_token(request.headers())
+  let bearer = bearer_token(request.headers());
+  let from_cookie = bearer.is_none();
+  let token = bearer
     .or_else(|| cookie_value(request.headers(), SESSION_COOKIE))
     .ok_or(ApiError::Unauthorized)?;
+  // A cookie is attached by the BROWSER, so a state-changing request riding on
+  // one must come from the app's own origin. SameSite=Strict alone let a
+  // same-site page (an uploaded HTML file on the storage origin) send them.
+  // Bearer tokens are exempt: a hostile page cannot read one to send it.
+  if from_cookie
+    && !request.method().is_safe()
+    && !crate::origin::origin_allowed(&state.config, request.headers())
+  {
+    return Err(ApiError::Forbidden);
+  }
   let auth = resolve_token(&state, &token).await?;
   let need = if request.method().is_safe() {
     Scope::Read

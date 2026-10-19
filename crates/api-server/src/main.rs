@@ -13,6 +13,7 @@ mod bucket;
 mod legacy_orphans;
 mod mail;
 mod metrics;
+mod origin;
 mod password_strength;
 mod rate_limit;
 mod routes;

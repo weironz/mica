@@ -69,6 +69,11 @@ pub struct PresignUpload {
   if_none_match: &'static str,
   /// Base64 SHA-256 of the bytes, also covered by SigV4 and checked by S3.
   checksum_sha256: String,
+  /// The Content-Type the client MUST send with the PUT — also covered by
+  /// SigV4. The declared MIME unless that is a type a browser would execute
+  /// (HTML, SVG, XML, JS…), which is stored as `application/octet-stream`; see
+  /// `mica_infra::stored_content_type`.
+  content_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,7 +133,13 @@ pub async fn presign(
     return Ok(Json(existing_object_response(object_key, existing, download_url)));
   }
 
-  let upload = storage.presign_put_if_absent(&object_key, &checksum_sha256, payload.byte_size);
+  let content_type = mica_infra::stored_content_type(&payload.mime_type);
+  let upload = storage.presign_put_if_absent(
+    &object_key,
+    &checksum_sha256,
+    payload.byte_size,
+    &content_type,
+  );
   store::record_pending_file_upload_tx(&mut tx, workspace_id, &object_key, upload.expires_in)
     .await?;
   store::reserve_pending_upload_bytes_tx(&mut tx, &object_key, payload.byte_size).await?;
@@ -143,6 +154,7 @@ pub async fn presign(
       max_byte_size: storage.max_upload_bytes,
       if_none_match: "*",
       checksum_sha256,
+      content_type,
     }),
     existing: None,
   }))
@@ -615,7 +627,7 @@ pub(crate) async fn fetch_and_store_image_url(
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
-    .header(reqwest::header::CONTENT_TYPE, &mime)
+    .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&mime))
     .header("x-amz-checksum-sha256", sha256_checksum_base64(&hash)?)
     .body(bytes.to_vec())
     .send()
@@ -775,7 +787,7 @@ pub(crate) async fn store_bytes(
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
-    .header(reqwest::header::CONTENT_TYPE, &mime)
+    .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&mime))
     .header("x-amz-checksum-sha256", sha256_checksum_base64(&hash)?)
     .body(bytes.to_vec())
     .send()
@@ -1130,11 +1142,12 @@ mod tests {
     let storage = S3Config::from_env().expect("set S3_* for the test store");
     let key = format!("audit-write-once/{}", Uuid::new_v4());
     let checksum = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(b"first"));
-    let upload = storage.presign_put_if_absent(&key, &checksum, 5);
+    let upload = storage.presign_put_if_absent(&key, &checksum, 5, "text/plain");
     let client = reqwest::Client::new();
 
     let missing_condition = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header("x-amz-checksum-sha256", &checksum)
       .body("first")
       .send()
@@ -1142,6 +1155,7 @@ mod tests {
       .expect("PUT without signed header");
     let wrong_bytes = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header(reqwest::header::IF_NONE_MATCH, "*")
       .header("x-amz-checksum-sha256", &checksum)
       .body("other")
@@ -1150,14 +1164,27 @@ mod tests {
       .expect("PUT with wrong checksum");
     let wrong_length = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header(reqwest::header::IF_NONE_MATCH, "*")
       .header("x-amz-checksum-sha256", &checksum)
       .body("longer")
       .send()
       .await
       .expect("PUT with wrong length");
+    // B4: the Content-Type is signed — an uploader cannot pick what the store
+    // will serve (here `text/html`, which would run as a page same-site).
+    let wrong_type = client
+      .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/html")
+      .header(reqwest::header::IF_NONE_MATCH, "*")
+      .header("x-amz-checksum-sha256", &checksum)
+      .body("first")
+      .send()
+      .await
+      .expect("PUT with a different content type");
     let first = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header(reqwest::header::IF_NONE_MATCH, "*")
       .header("x-amz-checksum-sha256", &checksum)
       .body("first")
@@ -1172,6 +1199,7 @@ mod tests {
       .expect("signed checksum HEAD");
     let replay = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header(reqwest::header::IF_NONE_MATCH, "*")
       .header("x-amz-checksum-sha256", &checksum)
       .body("other")
@@ -1184,6 +1212,11 @@ mod tests {
       .await
       .expect("GET after replay");
     let stored_status = stored.status();
+    let stored_type = stored
+      .headers()
+      .get(reqwest::header::CONTENT_TYPE)
+      .and_then(|v| v.to_str().ok())
+      .map(str::to_string);
     let bytes = stored.bytes().await.expect("stored bytes");
     let cleanup = client
       .delete(storage.presign_delete(&key))
@@ -1192,6 +1225,7 @@ mod tests {
       .expect("remove test object");
 
     assert_eq!(missing_condition.status(), StatusCode::FORBIDDEN);
+    assert_eq!(wrong_type.status(), StatusCode::FORBIDDEN, "content-type is signed");
     assert_eq!(wrong_bytes.status(), StatusCode::BAD_REQUEST);
     assert_eq!(wrong_length.status(), StatusCode::FORBIDDEN);
     assert!(first.status().is_success(), "first PUT: {}", first.status());
@@ -1206,7 +1240,46 @@ mod tests {
     assert_eq!(replay.status(), StatusCode::PRECONDITION_FAILED);
     assert!(stored_status.is_success(), "GET: {stored_status}");
     assert_eq!(&bytes[..], b"first");
+    assert_eq!(stored_type.as_deref(), Some("text/plain"), "served with the signed type");
     assert!(cleanup.status().is_success(), "DELETE: {}", cleanup.status());
+  }
+
+  /// B4 against a real store: a declared `text/html` is stored and SERVED as
+  /// `application/octet-stream` (a download), and the uploader cannot override
+  /// that by sending its own Content-Type.
+  #[tokio::test]
+  #[ignore = "requires a disposable S3-compatible test bucket"]
+  async fn an_html_upload_is_served_as_a_download() {
+    let storage = S3Config::from_env().expect("set S3_* for the test store");
+    let key = format!("audit-content-type/{}", Uuid::new_v4());
+    let body = b"<script>alert(1)</script>";
+    let checksum = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(body));
+    let stored = mica_infra::stored_content_type("text/html");
+    assert_eq!(stored, "application/octet-stream");
+    let upload = storage.presign_put_if_absent(&key, &checksum, body.len() as i64, &stored);
+    let client = reqwest::Client::new();
+    let put = |ct: &'static str| {
+      client
+        .put(&upload.url)
+        .header(reqwest::header::CONTENT_TYPE, ct)
+        .header(reqwest::header::IF_NONE_MATCH, "*")
+        .header("x-amz-checksum-sha256", &checksum)
+        .body(body.to_vec())
+        .send()
+    };
+    let forged = put("text/html").await.expect("forged PUT");
+    let honest = put("application/octet-stream").await.expect("PUT");
+    let served = client.get(storage.download_url(&key)).send().await.expect("GET");
+    let served_type = served
+      .headers()
+      .get(reqwest::header::CONTENT_TYPE)
+      .and_then(|v| v.to_str().ok())
+      .map(str::to_string);
+    let _ = client.delete(storage.presign_delete(&key)).send().await;
+
+    assert_eq!(forged.status(), StatusCode::FORBIDDEN);
+    assert!(honest.status().is_success(), "PUT: {}", honest.status());
+    assert_eq!(served_type.as_deref(), Some("application/octet-stream"));
   }
 
   #[test]
