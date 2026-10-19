@@ -83,8 +83,15 @@ pub struct AppConfig {
   /// refuses a paste from someone who is mid-sentence.
   pub workspace_quota_bytes: i64,
   /// Ceiling on the total bytes of stored files across every workspace one
-  /// account OWNS. `0` = unlimited. Set `MICA_OWNER_QUOTA_BYTES`; defaults to
-  /// 20 GiB (B7).
+  /// account OWNS. **Off by default** (`0` = unlimited); set
+  /// `MICA_OWNER_QUOTA_BYTES` to turn it on (B7).
+  ///
+  /// Off because a total quota was decided against on 2026-08-06 (`07a1ef01`:
+  /// totals are a billing mechanism elsewhere, a single-user self-host has no
+  /// driver for one, and the per-file + per-workspace pair is the ceiling).
+  /// This shipped first with a 20 GiB default, made without that history in
+  /// view; it stays as an opt-in for the one case that decision did not cover —
+  /// an instance that opens registration, where workspace count is unbounded.
   ///
   /// [`workspace_quota_bytes`] bounds one workspace, but creating workspaces is
   /// free, so with registration open one account could multiply it without
@@ -93,7 +100,7 @@ pub struct AppConfig {
   /// else's workspace spends that owner's room, not their own. Not a cap on the
   /// workspace COUNT: an empty workspace costs nothing, and Outline (the other
   /// comparable that limits at all) only forbids multiple teams on self-hosted
-  /// outright. 20 GiB = four full workspaces, ~350× the largest real account.
+  /// outright.
   pub owner_quota_bytes: i64,
   /// Window + cadence knobs for the yrs update stream. See [`SyncTuning`].
   pub sync_tuning: SyncTuning,
@@ -336,10 +343,23 @@ pub fn workspace_quota(raw: Option<&str>) -> i64 {
   quota_or(raw, 5 * 1024 * 1024 * 1024)
 }
 
-/// Per-owner byte ceiling from the raw `MICA_OWNER_QUOTA_BYTES` — same parsing
-/// rules as [`workspace_quota`] (garbage keeps the default), default 20 GiB.
+/// Per-owner byte ceiling from the raw `MICA_OWNER_QUOTA_BYTES`. Unset or
+/// blank = `0`, off (see the field doc).
+///
+/// Garbage cannot "keep the default" the way [`workspace_quota`] does: the
+/// default here IS unlimited, so an operator who set the variable to turn the
+/// limit on and mistyped it would silently get none. It is logged instead.
 pub fn owner_quota(raw: Option<&str>) -> i64 {
-  quota_or(raw, 20 * 1024 * 1024 * 1024)
+  match raw.map(str::trim) {
+    None | Some("") => 0,
+    Some(v) => match v.parse::<i64>() {
+      Ok(n) if n >= 0 => n,
+      _ => {
+        tracing::warn!(value = v, "MICA_OWNER_QUOTA_BYTES is not a byte count; the per-owner quota is OFF");
+        0
+      }
+    },
+  }
 }
 
 fn quota_or(raw: Option<&str>, default: i64) -> i64 {
@@ -653,13 +673,14 @@ mod quota_parse {
     }
   }
 
-  /// B7: the owner ceiling parses by the same rules, with its own default.
+  /// B7: the owner ceiling is opt-in — off unless set (the 2026-08-06
+  /// decision against total quotas), a number when set.
   #[test]
-  fn owner_quota_defaults_to_twenty_gib_and_keeps_it_on_garbage() {
-    assert_eq!(owner_quota(None), 20 * GIB);
-    assert_eq!(owner_quota(Some(" ")), 20 * GIB);
-    assert_eq!(owner_quota(Some("0")), 0);
-    assert_eq!(owner_quota(Some("-1")), 20 * GIB);
+  fn owner_quota_is_off_unless_set() {
+    assert_eq!(owner_quota(None), 0);
+    assert_eq!(owner_quota(Some(" ")), 0);
     assert_eq!(owner_quota(Some("7")), 7);
+    assert_eq!(owner_quota(Some(&(20 * GIB).to_string())), 20 * GIB);
+    assert_eq!(owner_quota(Some("-1")), 0, "garbage is logged, not guessed at");
   }
 }

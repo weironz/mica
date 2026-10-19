@@ -195,8 +195,8 @@ services:
       # smoke-testing 0.13.5 — the quota was set to 5000 on the node and an
       # over-limit upload was still accepted, because the setting went nowhere.
       MICA_WORKSPACE_QUOTA_BYTES: "${MICA_WORKSPACE_QUOTA_BYTES:-}"
-      # Per-OWNER total across every workspace an account owns; unset = 20 GiB,
-      # `0` = no limit. Same allow-list reason as above.
+      # Per-OWNER total across every workspace an account owns; OFF unless set
+      # (worth setting only when registration is open). Same allow-list reason as above.
       MICA_OWNER_QUOTA_BYTES: "${MICA_OWNER_QUOTA_BYTES:-}"
       # The rest of what config.rs reads, passed through empty so "unset in .env"
       # means "use the code default". Listed even though nothing sets them today,
