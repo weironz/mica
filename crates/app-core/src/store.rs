@@ -862,7 +862,8 @@ pub async fn reserve_pending_upload_bytes_tx(
 ///   re-reads the mark under this lock before deleting, and a cleared mark
 ///   restarts its 30-day clock). A sweep already mid-delete holds the lock, so
 ///   this waits for it and the PUT that follows restores the bytes.
-/// Phase two is the caller's [insert_file_tx] under the lock again.
+///
+/// Phase two is [register_put_file], under the lock again.
 ///
 /// The PUT used to run inside the locked transaction instead: a pooled
 /// connection and a held lock for a whole upload, and `complete` did the same
