@@ -129,3 +129,21 @@ cli+mcp-server+app-core/Flutter 重构回归/Flutter 编辑器同步/Web 端存�
 5. P2-9 `move_view` 环竞态(事务 + FOR UPDATE;纵深:递归 CTE 改 UNION/加深度上限)。
 
 **注**:`claude/eager-johnson-blcmyx` 同时**删除了** `docs/notion-gap-analysis.md`(无替代文件)。合并前需与发起方确认是误删还是有意(本文档默认按误删处理,main 上保留并更新)。
+
+---
+
+## 第三轮复核追加(2026-10-19,做 Notion 对标复核时顺带核出)
+
+两条措辞按源码 / 路线图校正,**风险结论不变**。标题保留原样,以便与两轮评审原文对照。
+
+1. **#2 的「净新增」不成立**。`purge_view` 缺 `is_deleted` 在 `docs/roadmap.md:67-68`
+   是一条**已知的**、明确写着「要不要收紧它是独立决定」的 S 项。它仍是真实风险(任意
+   editor 一条 DELETE 永久抹掉活页子树),但不是两轮评审的新发现。因此
+   `docs/notion-gap-analysis.md` 里「两轮净新增 P1 = 3」已同步改为 **2**
+   (本地 snippet panic、协作 undo)。
+2. **#8 的机制描述不准**。`reconcile()` 末尾会执行 `_present = _snapshot()`
+   (`controller.dart:184`),它对齐的是**当前基线**;被保留的是 `_undoStack` 里的
+   **历史快照**。所以缺陷不是「快照没跟上远端」,而是「历史栈里存的是远端编辑之前的全域
+   状态」——`_restore()` 整份还原后经 `_diffOps` 把远端新增块推成 `delete_block` 发给
+   所有协作者。**结论(undo 会回滚 / 删除协作者编辑)不变**;修法必须按历史栈设计,
+   不能在 `reconcile()` 里简单重置——那会顺手清掉用户自己的撤销历史。
