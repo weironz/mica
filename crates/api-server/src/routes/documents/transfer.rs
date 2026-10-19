@@ -638,8 +638,9 @@ async fn transfer_roots(
       .bytes()
       .await
       .map_err(|e| ApiError::Internal(format!("blob read failed: {}", e.without_url())))?;
-    // Commit this marker before PUT; a crash after writing bytes must leave a
-    // discoverable key for the orphan sweep, not a rolled-back transaction.
+    // Commit this marker (and clear any GC mark) before PUT: a crash after
+    // writing bytes must leave a discoverable key for the orphan sweep, and
+    // neither sweep may take the key while the PUT runs outside a transaction.
     store::record_pending_file_upload(
       &state.db,
       dest_workspace_id,
@@ -647,11 +648,6 @@ async fn transfer_roots(
       storage.presign_ttl_seconds,
     )
     .await?;
-    // An old browser presign may have left a pending ledger row for this same
-    // content-addressed key. Hold its lock from PUT through registration so
-    // orphan GC cannot remove a freshly copied object between those steps.
-    let mut blob_tx = state.db.begin().await?;
-    store::lock_file_object_key(&mut blob_tx, &dest_key).await?;
     let upload = storage.presign_put_server(&dest_key);
     let checksum = {
       use base64::Engine as _;
@@ -673,8 +669,8 @@ async fn transfer_roots(
       )));
     }
 
-    let dest_file = store::insert_file_tx(
-      &mut blob_tx,
+    let dest_file = store::register_put_file(
+      &state.db,
       dest_workspace_id,
       user_id,
       &dest_key,
@@ -683,7 +679,6 @@ async fn transfer_roots(
       src_file.byte_size,
     )
     .await?;
-    blob_tx.commit().await?;
     file_map.insert(src_file_id, dest_file.id);
   }
 

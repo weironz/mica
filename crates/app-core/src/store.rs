@@ -854,6 +854,19 @@ pub async fn reserve_pending_upload_bytes_tx(
 /// Server-side PUTs also need a durable ledger entry *before* sending bytes.
 /// A transaction held across PUT is not enough: a process crash would roll it
 /// back and leave an object that no sweep can discover.
+/// Phase one of a server-side store (D5): under the key lock, in a short
+/// transaction of its own, make both collectors leave `object_key` alone while
+/// the caller PUTs with NO transaction open —
+/// - the orphan sweep: a fresh ledger expiry (it waits a day past expiry);
+/// - the registered sweep: an existing row's unreferenced mark is cleared (it
+///   re-reads the mark under this lock before deleting, and a cleared mark
+///   restarts its 30-day clock). A sweep already mid-delete holds the lock, so
+///   this waits for it and the PUT that follows restores the bytes.
+/// Phase two is the caller's [insert_file_tx] under the lock again.
+///
+/// The PUT used to run inside the locked transaction instead: a pooled
+/// connection and a held lock for a whole upload, and `complete` did the same
+/// for its HEAD.
 pub async fn record_pending_file_upload(
   db: &PgPool,
   workspace_id: Uuid,
@@ -863,8 +876,34 @@ pub async fn record_pending_file_upload(
   let mut tx = db.begin().await?;
   lock_file_object_key(&mut tx, object_key).await?;
   record_pending_file_upload_tx(&mut tx, workspace_id, object_key, ttl_seconds).await?;
+  sqlx::query(
+    "UPDATE files SET unreferenced_since = NULL WHERE object_key = $1 AND unreferenced_since IS NOT NULL",
+  )
+  .bind(object_key)
+  .execute(&mut *tx)
+  .await?;
   tx.commit().await?;
   Ok(())
+}
+
+/// Phase two of a server-side store: register the PUT object under the key
+/// lock, in a short transaction. See [record_pending_file_upload].
+pub async fn register_put_file(
+  db: &PgPool,
+  workspace_id: Uuid,
+  uploaded_by: Uuid,
+  object_key: &str,
+  original_name: &str,
+  mime_type: &str,
+  byte_size: i64,
+) -> ApiResult<FileRecord> {
+  let mut tx = db.begin().await?;
+  lock_file_object_key(&mut tx, object_key).await?;
+  let file =
+    insert_file_tx(&mut tx, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size)
+      .await?;
+  tx.commit().await?;
+  Ok(file)
 }
 
 pub async fn pending_file_upload_exists_tx(

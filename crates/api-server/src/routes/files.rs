@@ -214,16 +214,32 @@ pub async fn complete(
   ensure_key_in_workspace(workspace_id, &payload.object_key)?;
   let expected_checksum = checksum_for_object_key(workspace_id, &payload.object_key)?;
 
-  // Hold the same key lock as orphan GC from HEAD through the file-row commit.
-  // Otherwise GC can delete an old unregistered object just after HEAD accepts
-  // it, leaving a newly registered row pointing at nothing.
+  // GC must not delete the object between the HEAD below accepting it and the
+  // row being registered. That used to be done by holding the key lock in one
+  // transaction across the HEAD; now (D5) a short locked transaction makes the
+  // sweeps leave the key alone instead, and the HEAD runs with none open: a
+  // registered row's GC mark is cleared (the registered sweep re-reads it under
+  // this lock), a pending upload's ledger expiry is refreshed (the orphan sweep
+  // waits a day past it). A sweep already mid-delete holds the lock, so this
+  // waits for it and the HEAD then reports what it left.
   let mut tx = state.db.begin().await?;
   store::lock_file_object_key(&mut tx, &payload.object_key).await?;
   let pending = store::pending_file_upload_exists_tx(&mut tx, workspace_id, &payload.object_key).await?;
   let existing = store::fetch_file_by_key_tx(&mut tx, workspace_id, &payload.object_key).await?;
-  if !pending && existing.is_none() {
-    return Err(ApiError::BadRequest("upload was not presigned".into()));
+  match &existing {
+    Some(file) => store::reclaim_file_tx(&mut tx, file.id).await?,
+    None if pending => {
+      store::record_pending_file_upload_tx(
+        &mut tx,
+        workspace_id,
+        &payload.object_key,
+        storage.presign_ttl_seconds,
+      )
+      .await?
+    }
+    None => return Err(ApiError::BadRequest("upload was not presigned".into())),
   }
+  tx.commit().await?;
 
   // Ask the store what actually landed, and require it to agree with the claim.
   // Without this, `complete` could be called for a key nothing was ever written
@@ -255,15 +271,13 @@ pub async fn complete(
     if stored_checksum.is_some() {
       uploaded_checksum_verdict(stored_checksum, &expected_checksum)?;
     }
-    store::reclaim_file_tx(&mut tx, existing.id).await?;
-    tx.commit().await?;
     let download_url = storage.download_url(&existing.object_key);
     return Ok(Json(FileResponse { file: existing, download_url }));
   }
   uploaded_checksum_verdict(stored_checksum, &expected_checksum)?;
 
-  let file = store::insert_file_tx(
-    &mut tx,
+  let file = store::register_put_file(
+    &state.db,
     workspace_id,
     user_id,
     &payload.object_key,
@@ -272,7 +286,6 @@ pub async fn complete(
     byte_size,
   )
   .await?;
-  tx.commit().await?;
   let download_url = storage.download_url(&file.object_key);
 
   Ok(Json(FileResponse { file, download_url }))
@@ -609,8 +622,9 @@ pub(crate) async fn fetch_and_store_image_url(
     None => format!("workspaces/{workspace_id}/{hash}"),
   };
 
-  // Commit the ledger before PUT: if the process dies after writing bytes,
-  // rollback of the PUT→insert transaction must not hide the orphan from GC.
+  // Commit the ledger (and clear any GC mark) before PUT: if the process dies
+  // after writing bytes, GC must still find the orphan, and neither sweep may
+  // delete the key while the PUT runs outside any transaction (D5).
   store::record_pending_file_upload(
     &state.db,
     workspace_id,
@@ -618,10 +632,6 @@ pub(crate) async fn fetch_and_store_image_url(
     storage.presign_ttl_seconds,
   )
   .await?;
-  // Hold the same key lock as orphan GC from PUT through registration. A key
-  // may also have an old pending browser upload, even on this server path.
-  let mut tx = state.db.begin().await?;
-  store::lock_file_object_key(&mut tx, &object_key).await?;
 
   // Upload via a self-issued presigned PUT (storage signs; we do the PUT).
   let upload = storage.presign_put_server(&object_key);
@@ -641,19 +651,8 @@ pub(crate) async fn fetch_and_store_image_url(
   }
 
   let original_name = name_with_ext(&url_file_name(url, ext.as_deref()), ext.as_deref());
-  let file = store::insert_file_tx(
-    &mut tx,
-    workspace_id,
-    user_id,
-    &object_key,
-    &original_name,
-    &mime,
-    byte_size,
-  )
-  .await?;
-  tx.commit().await?;
-
-  Ok(file)
+  store::register_put_file(&state.db, workspace_id, user_id, &object_key, &original_name, &mime, byte_size)
+    .await
 }
 
 /// `GET /api/workspaces/{workspace_id}/files/{file_id}/blob`
@@ -782,8 +781,6 @@ pub(crate) async fn store_bytes(
     storage.presign_ttl_seconds,
   )
   .await?;
-  let mut tx = state.db.begin().await?;
-  store::lock_file_object_key(&mut tx, &object_key).await?;
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
@@ -800,8 +797,8 @@ pub(crate) async fn store_bytes(
     )));
   }
 
-  let file = store::insert_file_tx(
-    &mut tx,
+  store::register_put_file(
+    &state.db,
     workspace_id,
     user_id,
     &object_key,
@@ -809,9 +806,7 @@ pub(crate) async fn store_bytes(
     &mime,
     byte_size,
   )
-  .await?;
-  tx.commit().await?;
-  Ok(file)
+  .await
 }
 
 fn validate_mime(mime_type: &str) -> ApiResult<()> {

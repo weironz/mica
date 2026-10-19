@@ -813,6 +813,86 @@ mod tests {
         sqlx::query("DELETE FROM users WHERE id = $1").bind(user_id).execute(&db).await.ok();
     }
 
+    /// D5: server-side PUTs (import, URL import, cross-workspace copy) and the
+    /// `complete` HEAD no longer hold the key lock across the storage round
+    /// trip. What keeps both sweeps off the key instead is phase one, committed
+    /// before the I/O: a long-marked row is unmarked (the registered sweep then
+    /// starts its 30-day clock over instead of collecting) and the ledger
+    /// expiry is fresh (the orphan sweep waits a day past it).
+    #[tokio::test]
+    async fn phase_one_keeps_both_sweeps_off_a_key_before_its_put() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+            return;
+        };
+        let db = PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed");
+        let (user_id, workspace_id) = (Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES ($1,$2,'GC','x')")
+            .bind(user_id)
+            .bind(format!("{user_id}@phase1.test"))
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES ($1,'GC',$2)")
+            .bind(workspace_id)
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        let key = format!("workspaces/{workspace_id}/{}.png", Uuid::new_v4());
+        let file = store::insert_file(&db, workspace_id, user_id, &key, "a.png", "image/png", 3)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE files SET unreferenced_since = now() - interval '40 days', \
+             created_at = now() - interval '40 days' WHERE id = $1",
+        )
+        .bind(file.id)
+        .execute(&db)
+        .await
+        .unwrap();
+        let now = chrono::Utc::now();
+        let marked: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT unreferenced_since FROM files WHERE id = $1")
+                .bind(file.id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        let created: chrono::DateTime<chrono::Utc> =
+            sqlx::query_scalar("SELECT created_at FROM files WHERE id = $1")
+                .bind(file.id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(verdict(now, false, marked, created), Verdict::Collect, "fixture is collectable");
+
+        store::record_pending_file_upload(&db, workspace_id, &key, 900).await.unwrap();
+
+        let marked: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT unreferenced_since FROM files WHERE id = $1")
+                .bind(file.id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(
+            verdict(now, false, marked, created),
+            Verdict::StartClock,
+            "the registered sweep must start over, not collect, while the PUT runs"
+        );
+        let (pending_created, expires): (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>) =
+            sqlx::query_as("SELECT created_at, expires_at FROM pending_file_uploads WHERE object_key = $1")
+                .bind(&key)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert!(expires > now, "a fresh ledger expiry keeps the orphan sweep away");
+        assert!(now - pending_created < PENDING_UPLOAD_GRACE);
+
+        sqlx::query("DELETE FROM pending_file_uploads WHERE object_key = $1").bind(&key).execute(&db).await.ok();
+        sqlx::query("DELETE FROM workspaces WHERE id = $1").bind(workspace_id).execute(&db).await.ok();
+        sqlx::query("DELETE FROM users WHERE id = $1").bind(user_id).execute(&db).await.ok();
+    }
+
     /// D4: references come from the derived `file_ids` column, and a row whose
     /// column is NULL (not derived yet) still counts — it falls back to decoding.
     #[tokio::test]
