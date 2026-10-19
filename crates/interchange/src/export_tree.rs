@@ -152,41 +152,132 @@ fn build_tree_entries(
   selected_view: Option<&str>,
   omit_assets: &HashSet<String>,
 ) -> Vec<ZipEntry> {
-  let (pages, path_by_view) = tree_paths(nodes, root);
+  let mut export = TreeExport::with_options(nodes, root, stable_assets, selected_view);
   let mut entries: Vec<ZipEntry> = Vec::new();
-  let mut asset_by_key: HashMap<String, String> = HashMap::new();
-  let mut used_assets: HashSet<String> = HashSet::new();
-  let mut manifest_pages: Vec<serde_json::Value> = Vec::new();
-
-  for (node, folder, base) in pages {
-    if selected_view.is_some_and(|id| id != node.id) {
-      continue;
+  if let Some(manifest) = export.manifest(|object_id| payloads.contains_key(object_id)) {
+    entries.push(manifest);
+  }
+  for (view_id, object_id) in export.documents() {
+    if let Some(payload) = payloads.get(object_id) {
+      entries.extend(export.page(view_id, payload, images, omit_assets));
     }
-    if node.object_type == "folder" {
-      // A folder is a pure container: NO `.md`, just a manifest entry so the
-      // directory — even an empty one — round-trips.
-      let mut dir = String::new();
-      for seg in &folder {
-        dir.push_str(seg);
-        dir.push('/');
+  }
+  if entries.is_empty() {
+    entries.push(TreeExport::empty_archive_entry());
+  }
+  entries
+}
+
+/// The tree walk, split so a caller can produce the archive ONE PAGE AT A TIME
+/// (D3): paths are planned up front from the tree alone, then each page's
+/// entries are made from that page's payload and only the images it uses.
+/// [build_markdown_tree_zip] is this run over pre-gathered maps; the server's
+/// streaming export runs it while fetching, so memory holds one page and one
+/// image instead of the whole workspace.
+///
+/// Entry order is the same either way: `manifest.json`, then per page (tree
+/// order) its first-use assets, its `.mica.json`, its `.md`; and when nothing
+/// at all was exported, [`Self::empty_archive_entry`] alone.
+pub struct TreeExport<'a> {
+  pages: Vec<TreePage<'a>>,
+  path_by_view: HashMap<String, String>,
+  stable_assets: bool,
+  selected_view: Option<String>,
+  asset_by_key: HashMap<String, String>,
+  used_assets: HashSet<String>,
+}
+
+impl<'a> TreeExport<'a> {
+  /// The plan for [build_markdown_tree_zip]'s archive (`root` as there).
+  pub fn new(nodes: &'a [TreeNode], root: Option<&str>) -> Self {
+    Self::with_options(nodes, root, false, None)
+  }
+
+  fn with_options(
+    nodes: &'a [TreeNode],
+    root: Option<&str>,
+    stable_assets: bool,
+    selected_view: Option<&str>,
+  ) -> Self {
+    let (pages, path_by_view) = tree_paths(nodes, root);
+    Self {
+      pages,
+      path_by_view,
+      stable_assets,
+      selected_view: selected_view.map(str::to_string),
+      asset_by_key: HashMap::new(),
+      used_assets: HashSet::new(),
+    }
+  }
+
+  fn selected(&self, node: &TreeNode) -> bool {
+    self.selected_view.as_deref().is_none_or(|id| id == node.id)
+  }
+
+  /// The documents to export, in archive order: `(view id, object id)`.
+  pub fn documents(&self) -> Vec<(&'a str, &'a str)> {
+    self
+      .pages
+      .iter()
+      .filter(|(node, _, _)| node.object_type == "document" && self.selected(node))
+      .map(|(node, _, _)| (node.id.as_str(), node.object_id.as_str()))
+      .collect()
+  }
+
+  /// `manifest.json`, given which documents will have a page in the archive
+  /// (`has_payload(object_id)`). `None` when there is nothing to list.
+  pub fn manifest(&self, has_payload: impl Fn(&str) -> bool) -> Option<ZipEntry> {
+    let mut manifest_pages: Vec<serde_json::Value> = Vec::new();
+    for (node, folder, base) in &self.pages {
+      if !self.selected(node) {
+        continue;
       }
-      dir.push_str(&base);
-      manifest_pages.push(manifest_entry(node, &dir, "folder"));
-      continue;
+      if node.object_type == "folder" {
+        // A folder is a pure container: NO `.md`, just a manifest entry so the
+        // directory — even an empty one — round-trips.
+        let mut dir = String::new();
+        for seg in folder {
+          dir.push_str(seg);
+          dir.push('/');
+        }
+        dir.push_str(base);
+        manifest_pages.push(manifest_entry(node, &dir, "folder"));
+      } else if node.object_type == "document" && has_payload(&node.object_id) {
+        if let Some(path) = self.path_by_view.get(&node.id) {
+          manifest_pages.push(manifest_entry(node, path, "document"));
+        }
+      }
     }
-    if node.object_type != "document" {
-      continue;
+    if manifest_pages.is_empty() {
+      return None;
     }
-    let Some(original) = payloads.get(&node.object_id) else {
-      continue;
-    };
-    let mut payload = original.clone();
-    // Internal page links (`mica://page/<viewId>`) → relative `.md` links.
-    rewrite_page_links(&mut payload, folder.len(), &path_by_view);
+    let manifest = serde_json::json!({
+      // v2 (2026-08-30) adds `id` / `parent_id` / `position` / `icon` to every
+      // entry and a `<page>.mica.json` beside each `<page>.md`. v1 recorded the
+      // tree by PATH alone, which is enough to rebuild a shape but not to carry
+      // identity — links between pages, and any external reference to a page,
+      // could not survive a round trip. Readers must keep accepting v1: archives
+      // already downloaded do not get re-issued.
+      "version": 2,
+      "generator": "mica",
+      "pages": manifest_pages,
+    });
+    Some(ZipEntry {
+      name: "manifest.json".to_string(),
+      data: serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+    })
+  }
 
-    // Image assets used by this page (de-duplicated globally by dedup key).
-    let rel = "../".repeat(folder.len());
-    let mut img_map: BTreeMap<String, String> = BTreeMap::new();
+  /// The archive's only entry when nothing else was exported.
+  pub fn empty_archive_entry() -> ZipEntry {
+    ZipEntry {
+      name: "README.md".to_string(),
+      data: b"(empty)".to_vec(),
+    }
+  }
+
+  /// Image `file_id`s a payload references, in block order, each once.
+  pub fn image_file_ids(payload: &DocumentSnapshotPayload) -> Vec<String> {
     let mut wanted: Vec<String> = Vec::new();
     for b in &payload.blocks {
       if b.kind != "image" {
@@ -198,40 +289,72 @@ fn build_tree_entries(
         }
       }
     }
-    for file_id in &wanted {
-      let Some(asset) = images.get(file_id) else {
+    wanted
+  }
+
+  /// Whether an asset's bytes still have to go into the archive, i.e. no
+  /// earlier page has written its dedup key. A streaming caller fetches only
+  /// these; for the rest, [`Self::page`] needs the [`ImageAsset`] without bytes.
+  pub fn needs_bytes(&self, file_id: &str, dedup_key: &str) -> bool {
+    let key = if self.stable_assets { file_id } else { dedup_key };
+    !self.asset_by_key.contains_key(key)
+  }
+
+  /// One page's entries: its first-use assets, its `.mica.json`, its `.md`.
+  /// `images` must hold every asset this page references that should be
+  /// bundled (absent = left as a link); bytes are read only for first uses.
+  pub fn page(
+    &mut self,
+    view_id: &str,
+    original: &DocumentSnapshotPayload,
+    images: &HashMap<String, ImageAsset>,
+    omit_assets: &HashSet<String>,
+  ) -> Vec<ZipEntry> {
+    let Some((node, folder, _)) = self.pages.iter().find(|(n, _, _)| n.id == view_id) else {
+      return Vec::new();
+    };
+    let (node, depth) = (*node, folder.len());
+    let mut entries: Vec<ZipEntry> = Vec::new();
+    let mut payload = original.clone();
+    // Internal page links (`mica://page/<viewId>`) → relative `.md` links.
+    rewrite_page_links(&mut payload, depth, &self.path_by_view);
+
+    // Image assets used by this page (de-duplicated globally by dedup key).
+    let rel = "../".repeat(depth);
+    let mut img_map: BTreeMap<String, String> = BTreeMap::new();
+    for file_id in Self::image_file_ids(&payload) {
+      let Some(asset) = images.get(&file_id) else {
         continue;
       };
-      let dedup_key = if stable_assets {
-        file_id
+      let dedup_key = if self.stable_assets {
+        file_id.clone()
       } else {
-        &asset.dedup_key
+        asset.dedup_key.clone()
       };
-      let a = if let Some(existing) = asset_by_key.get(dedup_key) {
+      let a = if let Some(existing) = self.asset_by_key.get(&dedup_key) {
         existing.clone()
       } else {
-        let a = if stable_assets {
-          format!("{}-{}", safe_segment(file_id), safe_segment(&asset.name))
+        let a = if self.stable_assets {
+          format!("{}-{}", safe_segment(&file_id), safe_segment(&asset.name))
         } else {
-          unique_asset_name(&asset.name, &mut used_assets)
+          unique_asset_name(&asset.name, &mut self.used_assets)
         };
-        if !omit_assets.contains(file_id) {
+        if !omit_assets.contains(&file_id) {
           entries.push(ZipEntry {
             name: format!("assets/{a}"),
             data: asset.bytes.clone(),
           });
         }
-        asset_by_key.insert(dedup_key.clone(), a.clone());
+        self.asset_by_key.insert(dedup_key, a.clone());
         a
       };
-      img_map.insert(file_id.clone(), format!("{rel}assets/{a}"));
+      img_map.insert(file_id, format!("{rel}assets/{a}"));
     }
 
     let body = export_markdown_with_assets(&payload, &img_map).unwrap_or_default();
-    let Some(path) = path_by_view.get(&node.id).cloned() else {
-      continue;
+    let Some(path) = self.path_by_view.get(&node.id).cloned() else {
+      return entries;
     };
-    manifest_pages.push(manifest_entry(node, &path, "document"));
 
     // The structural half, beside the Markdown: the block model verbatim.
     //
@@ -273,35 +396,8 @@ fn build_tree_entries(
       name: path,
       data: with_page_title(&body, title).into_bytes(),
     });
+    entries
   }
-
-  if !manifest_pages.is_empty() {
-    let manifest = serde_json::json!({
-      // v2 (2026-08-30) adds `id` / `parent_id` / `position` / `icon` to every
-      // entry and a `<page>.mica.json` beside each `<page>.md`. v1 recorded the
-      // tree by PATH alone, which is enough to rebuild a shape but not to carry
-      // identity — links between pages, and any external reference to a page,
-      // could not survive a round trip. Readers must keep accepting v1: archives
-      // already downloaded do not get re-issued.
-      "version": 2,
-      "generator": "mica",
-      "pages": manifest_pages,
-    });
-    entries.insert(
-      0,
-      ZipEntry {
-        name: "manifest.json".to_string(),
-        data: serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
-      },
-    );
-  }
-  if entries.is_empty() {
-    entries.push(ZipEntry {
-      name: "README.md".to_string(),
-      data: b"(empty)".to_vec(),
-    });
-  }
-  entries
 }
 
 /// One `manifest.json` entry. `path` is where the page landed in the archive;
@@ -986,4 +1082,147 @@ mod tests {
       body(&entries, "Notes/Beta.md")
     );
   }
+
+  fn fnv(b: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for &x in b {
+      h ^= x as u64;
+      h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+  }
+
+  /// Block ids from `import_markdown` are random; pins need fixed ones.
+  fn stable_ids(mut p: DocumentSnapshotPayload, tag: &str) -> DocumentSnapshotPayload {
+    let mut renamed: HashMap<String, String> = HashMap::new();
+    for (i, b) in p.blocks.iter_mut().enumerate() {
+      if b.id != p.root_block_id {
+        let id = format!("{tag}_{i}");
+        renamed.insert(std::mem::replace(&mut b.id, id.clone()), id);
+      }
+    }
+    for b in &mut p.blocks {
+      for c in &mut b.children {
+        if let Some(n) = renamed.get(c) {
+          *c = n.clone();
+        }
+      }
+    }
+    p
+  }
+
+  /// A tree with folders, a page without a payload, one blob shared by two
+  /// file ids, a blob shared by two pages, and a missing image.
+  fn pin_fixture() -> (Vec<TreeNode>, HashMap<String, DocumentSnapshotPayload>, HashMap<String, ImageAsset>) {
+    let nodes = vec![
+      doc("a", None, "0", "Alpha"),
+      folder("f", None, "1", "Notes"),
+      doc("b", Some("f"), "0", "Beta"),
+      doc("c", Some("f"), "1", "Beta"),
+      doc("ghost", None, "2", "Ghost"),
+      folder("e", Some("f"), "2", "Empty"),
+    ];
+    let payloads = HashMap::from([
+      ("obj_a".to_string(), payload_with_image("alpha", "file-1")),
+      ("obj_b".to_string(), payload_with_image("beta", "file-2")),
+      ("obj_c".to_string(), payload_with_image("gamma", "file-missing")),
+    ]);
+    let mut b = payloads["obj_b"].clone();
+    let extra = payload_with_image("x", "file-1");
+    b.blocks.extend(extra.blocks.into_iter().filter(|blk| blk.kind == "image"));
+    let mut payloads = payloads;
+    payloads.insert("obj_b".to_string(), b);
+    let payloads = payloads
+      .into_iter()
+      .map(|(k, v)| {
+        let tag = k.clone();
+        (k, stable_ids(v, &tag))
+      })
+      .collect();
+    let images = HashMap::from([
+      ("file-1".to_string(), ImageAsset { name: "p.png".into(), bytes: vec![1, 2, 3], dedup_key: "k1".into() }),
+      ("file-2".to_string(), ImageAsset { name: "p.png".into(), bytes: vec![4, 5], dedup_key: "k2".into() }),
+    ]);
+    (nodes, payloads, images)
+  }
+
+  /// JSON entries with object keys sorted. serde_json's key order follows a
+  /// cargo feature (`preserve_order`) that workspace builds unify on and a
+  /// lone `-p mica-interchange` build does not, so raw bytes would pin the
+  /// build configuration rather than the walk.
+  fn canonical(entries: Vec<ZipEntry>) -> Vec<ZipEntry> {
+    fn sort(v: serde_json::Value) -> serde_json::Value {
+      match v {
+        serde_json::Value::Object(map) => {
+          let sorted: BTreeMap<String, serde_json::Value> =
+            map.into_iter().map(|(k, v)| (k, sort(v))).collect();
+          serde_json::Value::Object(sorted.into_iter().collect())
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(items.into_iter().map(sort).collect()),
+        other => other,
+      }
+    }
+    entries
+      .into_iter()
+      .map(|e| {
+        if !e.name.ends_with(".json") {
+          return e;
+        }
+        let value: serde_json::Value = serde_json::from_slice(&e.data).unwrap();
+        ZipEntry { name: e.name, data: serde_json::to_vec_pretty(&sort(value)).unwrap() }
+      })
+      .collect()
+  }
+
+  /// D3: splitting the walk into [`TreeExport`] must not move a byte of the
+  /// archive. Fingerprints taken from the pre-split builder: whole tree,
+  /// subtree, single-page incremental with an omitted asset, empty.
+  #[test]
+  fn the_split_walk_builds_byte_identical_archives() {
+    let (nodes, payloads, images) = pin_fixture();
+    let zip = |entries: Vec<ZipEntry>| fnv(&crate::zip::build_zip(&canonical(entries)));
+    assert_eq!(zip(build_markdown_tree_zip(&nodes, None, &payloads, &images)), 0x9c57_833d_166c_3bce);
+    assert_eq!(zip(build_markdown_tree_zip(&nodes, Some("f"), &payloads, &images)), 0x5bb1_35ba_6c73_c72c);
+    let omit = HashSet::from(["file-2".to_string()]);
+    assert_eq!(
+      zip(build_incremental_markdown_tree_zip(&nodes, &payloads, &images, "b", &omit)),
+      0xbb33_9b6b_bdbf_6867
+    );
+    assert_eq!(zip(build_markdown_tree_zip(&[], None, &HashMap::new(), &HashMap::new())), 0x37ca_7d0d_b573_a5e4);
+  }
+
+  /// The streaming caller's contract: a page asks for bytes only on first use
+  /// of a blob, and gets the same archive when it passes bytes only then.
+  #[test]
+  fn a_page_at_a_time_caller_needs_each_blobs_bytes_once() {
+    let (nodes, payloads, images) = pin_fixture();
+    let mut export = TreeExport::new(&nodes, None);
+    let mut entries: Vec<ZipEntry> = export.manifest(|id| payloads.contains_key(id)).into_iter().collect();
+    let mut fetched = Vec::new();
+    for (view_id, object_id) in export.documents() {
+      let Some(payload) = payloads.get(object_id) else { continue };
+      let mut page_images = HashMap::new();
+      for file_id in TreeExport::image_file_ids(payload) {
+        let Some(asset) = images.get(&file_id) else { continue };
+        let bytes = if export.needs_bytes(&file_id, &asset.dedup_key) {
+          fetched.push(file_id.clone());
+          asset.bytes.clone()
+        } else {
+          Vec::new()
+        };
+        page_images.insert(
+          file_id,
+          ImageAsset { name: asset.name.clone(), bytes, dedup_key: asset.dedup_key.clone() },
+        );
+      }
+      entries.extend(export.page(view_id, payload, &page_images, &HashSet::new()));
+    }
+    assert_eq!(fetched, ["file-1", "file-2"], "file-1 is used twice and fetched once");
+    assert_eq!(
+      fnv(&crate::zip::build_zip(&entries)),
+      fnv(&crate::zip::build_zip(&build_markdown_tree_zip(&nodes, None, &payloads, &images)))
+    );
+  }
+
+
 }

@@ -20,7 +20,10 @@ use uuid::Uuid;
   mod parent_guard_pg {
     use super::super::*;
     use mica_app_core::AppState;
-    use super::super::export::{build_export_manifest, fetch_export_images, parse_export_skip_assets};
+    use super::super::export::{
+      build_export_manifest, fetch_export_images, gathered_tree_bytes, parse_export_skip_assets,
+      stream_tree_bytes,
+    };
     use super::super::search::{scan_backlinks, search_views, workspace_graph};
     use super::super::transfer::{ancestor_pairs_of_roots, independent_roots};
     use super::super::trash::{purge_views_batch, restore_views_batch, trash_views_batch};
@@ -591,7 +594,6 @@ use uuid::Uuid;
         &state,
         ws,
         &payloads,
-        true,
         Some(std::slice::from_ref(&record)),
         &skipped,
       )
@@ -605,12 +607,58 @@ use uuid::Uuid;
           &state,
           ws,
           &payloads,
-          true,
           Some(&[record]),
           &std::collections::HashSet::new()
         )
         .await
         .is_err()
+      );
+    }
+
+    /// D3: the tree exports stream now — one page and one image at a time
+    /// instead of every payload and image of the subtree held at once. The
+    /// archive must be the very bytes the gathered build produced, for the
+    /// whole workspace and for a folder's subtree (folders, a page inside one,
+    /// a page linking to it, a page with no body).
+    #[tokio::test]
+    async fn the_streamed_tree_export_is_byte_identical_to_the_gathered_one() {
+      let Some(db) = pool().await else { return };
+      let (ws, folder, inner, _) = seed_folder_with_page(&db).await;
+      let user = ws_owner(&db, ws).await;
+      seed_document(
+        &db,
+        ws,
+        user,
+        "Top",
+        serde_json::json!([{
+          "id": "p", "type": "paragraph", "text": "see inner",
+          "data": {"marks": [{"type": "link", "start": 4, "end": 9,
+                              "href": format!("mica://page/{inner}")}]}
+        }]),
+      )
+      .await;
+      let (empty_view, empty_doc) = seed_document(&db, ws, user, "Hollow", serde_json::json!([])).await;
+      sqlx::query("DELETE FROM document_yrs_base WHERE document_id = $1")
+        .bind(empty_doc)
+        .execute(&db)
+        .await
+        .unwrap();
+      let _ = empty_view;
+      let mut config = mica_infra::AppConfig::from_env().unwrap();
+      config.jwt_secret = "streamed-export-test-secret".into();
+      config.environment = mica_infra::Environment::Test;
+      let mut state = AppState::new(config, db.clone(), std::sync::Arc::new(mica_infra::LogMailer));
+      state.storage = None;
+
+      let streamed = stream_tree_bytes(&state, ws, None).await;
+      assert_eq!(streamed, gathered_tree_bytes(&state, ws, None).await);
+      let names: Vec<String> =
+        mica_interchange::read_zip(&streamed).into_iter().map(|e| e.name).collect();
+      assert!(names.contains(&"manifest.json".to_string()), "{names:?}");
+      assert!(names.iter().any(|n| n.ends_with("里面的页.md")), "{names:?}");
+      assert_eq!(
+        stream_tree_bytes(&state, ws, Some(folder)).await,
+        gathered_tree_bytes(&state, ws, Some(folder)).await
       );
     }
 

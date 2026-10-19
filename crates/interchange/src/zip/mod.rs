@@ -4,4 +4,4 @@ pub mod reader;
 pub mod writer;
 
 pub use reader::{MAX_INFLATED_TOTAL, ZipFileEntry, read_zip, read_zip_within};
-pub use writer::{ZipEntry, build_zip};
+pub use writer::{ZipEntry, ZipStreamWriter, build_zip};
