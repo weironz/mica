@@ -6,7 +6,7 @@ import '../server_list.dart' show knownServers;
 
 /// The server list and which cloud origin is bound, extracted verbatim from
 /// `_WorkspaceShellState`'s server-management block (god-class wrap-up;
-/// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). All prefs IO and
+/// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). All prefs IO and
 /// side effects (api rebasing, mirror forgetting, session restoring) arrive
 /// as injected functions; error RESULTS are enums so the State can localize
 /// them — the registry never sees a context.

@@ -1,5 +1,5 @@
 //! Re-anchoring an orphaned comment thread by its saved quote
-//! (docs/comments-plan.md, Phase 2 ①).
+//! (docs/features/comments-plan.md, Phase 2 ①).
 //!
 //! Two things are pinned here, and the second matters more than the first:
 //!

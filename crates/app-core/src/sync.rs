@@ -638,7 +638,7 @@ pub async fn push_update_checked(
     // same folded `doc` and written in the same transaction — the third instance
     // of the pattern `content_text` and `link_targets` already follow, and for
     // the same reason: a second STORED copy of one fact drifts, a derived one
-    // cannot (red line #1). See `docs/page-title-plan.md`.
+    // cannot (red line #1). See `docs/features/page-title-plan.md`.
     //
     // Only for documents that HAVE a title. There is no backfill, so most pages
     // carry none and keep answering from the name column exactly as before —
@@ -658,7 +658,7 @@ pub async fn push_update_checked(
         .await?;
     }
 
-    // Version history (docs/version-history-plan.md): archive the just-folded
+    // Version history (docs/features/version-history-plan.md): archive the just-folded
     // full state as an AUTO snapshot — but only if none was taken in the last
     // VERSION_AUTO_INTERVAL, so a burst of edits converges to one version per
     // window (AFFiNE's min-interval, 10 min). `state` is already in hand, so
@@ -740,7 +740,7 @@ pub async fn push_update_checked(
 /// force each one through quote-based re-anchoring — best-effort by design, so
 /// an ambiguous quote is left orphaned. A rename must not roll that dice. The
 /// two acceptance tests are in `comments.rs`; the reasoning is
-/// `docs/page-title-plan.md` §5.1.
+/// `docs/features/page-title-plan.md` §5.1.
 pub async fn set_document_title(
     db: &PgPool,
     workspace_id: Uuid,

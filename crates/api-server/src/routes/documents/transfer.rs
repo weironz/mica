@@ -229,7 +229,7 @@ pub(super) async fn move_views_tx(
 }
 
 
-// transaction lets us beat. See docs/cross-workspace-move.md.
+// transaction lets us beat. See docs/features/cross-workspace-move.md.
 
 #[derive(Debug, Deserialize)]
 pub struct TransferRequest {

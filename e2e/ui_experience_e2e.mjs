@@ -7,7 +7,7 @@ import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../clients/mica_flutter/build/ui_experience/', import.meta.url));
-const output = process.env.MICA_UI_RESULTS_DIR || fileURLToPath(new URL('../docs/code-optimization/assets/', import.meta.url));
+const output = process.env.MICA_UI_RESULTS_DIR || fileURLToPath(new URL('../docs/reviews/code-optimization/assets/', import.meta.url));
 await mkdir(output, { recursive: true });
 const mime = { '.html': 'text/html', '.js': 'application/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff2': 'font/woff2', '.png': 'image/png' };
 const server = createServer(async (req, res) => {

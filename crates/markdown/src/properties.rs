@@ -10,7 +10,7 @@
 //! and `upsert_property` / `remove_property` edit it with SURGICAL text edits
 //! that leave every untouched key (and its comments, order, quoting) byte-exact.
 //!
-//! # Round-trip invariant (deliberately relaxed — see docs/page-properties.md)
+//! # Round-trip invariant (deliberately relaxed — see docs/features/page-properties.md)
 //!
 //! Storing front matter as an opaque string gives byte-exact round-trip. The
 //! moment we let a user structurally edit a property we cannot keep that: a

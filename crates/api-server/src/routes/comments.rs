@@ -1,4 +1,4 @@
-//! Comment endpoints (docs/comments-plan.md, Phase 1).
+//! Comment endpoints (docs/features/comments-plan.md, Phase 1).
 //!
 //! Anchors are yrs sticky indexes held in Postgres, so the document's Markdown is
 //! never touched. Two consequences shape everything here:

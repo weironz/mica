@@ -336,7 +336,7 @@ pub(super) async fn search_views(
   // Worth being clear about the size of this: it is ~6 ms of row plumbing out of
   // an 81 ms query. The other ~75 ms is the ILIKE reading 798 documents' bodies,
   // and no amount of restructuring here touches that — see the search entry in
-  // docs/roadmap.md for why fixing THAT needs a CJK-capable text index.
+  // docs/plans/roadmap.md for why fixing THAT needs a CJK-capable text index.
   //
   // ORDERING: title hits first, recency second.
   //
@@ -417,7 +417,7 @@ pub(super) async fn search_views(
   let object_ids: Vec<Uuid> = rows.iter().map(|row| row.object_id).collect();
   let mut snippets = index.snippets(&object_ids, needle).await;
   let total = started.elapsed();
-  // The 2026-10-16 production investigation (docs/search-latency-2026-10-16.md)
+  // The 2026-10-16 production investigation (docs/performance/search-latency-2026-10-16.md)
   // could time requests from outside but never caught a slow one from inside,
   // so "which phase" stayed a guess. A slow search now says it. Cumulative
   // milliseconds; no query text, it is user content.

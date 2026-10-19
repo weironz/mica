@@ -530,7 +530,7 @@ fn get_text<T: ReadTxn>(txn: &T, bm: &MapRef) -> Option<TextRef> {
 /// wrong words, silently. These bytes are `StickyIndex::encode_v1`, the exact
 /// representation Yjs documents for "comments and cursors" and the one
 /// BlockSuite/AFFiNE anchors comments with. Stored in Postgres, never in the
-/// document, so the Markdown round-trip is untouched (docs/comments-plan.md).
+/// document, so the Markdown round-trip is untouched (docs/features/comments-plan.md).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommentAnchor {
     pub start_block: String,

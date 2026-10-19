@@ -93,7 +93,7 @@ pub async fn export_document_zip(
     .ok_or(ApiError::NotFound)?;
 
   // The page's name names the FILE, and since 2026-08-27 also leads the TEXT
-  // (`docs/page-title-plan.md`). Hardcoding `document.md` had silently thrown
+  // (`docs/features/page-title-plan.md`). Hardcoding `document.md` had silently thrown
   // the name away: you got a zip of "document.md" whichever page you exported,
   // and an import could only ever call it "document".
   let view_name = fetch_document_view(&state.db, workspace_id, document_id)
@@ -1219,7 +1219,7 @@ async fn workspace_markdown(
     let level = (base_level + depth).min(6);
     let payload = store::current_payload(db, view.object_id).await?;
     // The DOCUMENT's own title wins over the `views.name` column — the rule every
-    // other outlet uses (`docs/page-title-plan.md` §4.1). P1 converted the
+    // other outlet uses (`docs/features/page-title-plan.md` §4.1). P1 converted the
     // single-page and ZIP exports and missed this one: it was not in the plan's
     // list of outlets, and a v0.13.30 smoke test through MCP
     // (`mica_export_workspace` calls this) is what turned it up.

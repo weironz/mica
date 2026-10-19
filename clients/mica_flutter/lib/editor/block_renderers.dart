@@ -5,7 +5,7 @@ part of 'render.dart';
 /// `RenderDocument`'s three passes (layout, background, body/overlay paint)
 /// dispatch through [RenderDocument.atomicRenderers] instead of per-kind
 /// branches; the text pipeline stays the engine for text-bearing kinds (see
-/// docs/render-architecture.md). Adding a block type means adding a renderer
+/// docs/architecture/render-architecture.md). Adding a block type means adding a renderer
 /// here and registering it — the main loops don't change.
 abstract class AtomicBlockRenderer {
   const AtomicBlockRenderer();

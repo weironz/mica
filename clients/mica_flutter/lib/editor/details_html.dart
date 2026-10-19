@@ -27,7 +27,7 @@
 // Folding the blank-line form hides a RANGE of nodes, which the renderer does
 // with zero-height "absorbed" layouts rather than by skipping nodes —
 // `_layouts` is indexed by node position throughout render.dart. See
-// docs/render-architecture.md.
+// docs/architecture/render-architecture.md.
 library;
 
 /// A `<details>` element that this file was able to read whole.

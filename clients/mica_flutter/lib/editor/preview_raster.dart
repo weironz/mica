@@ -10,7 +10,7 @@ import '../ui/theme_tokens.dart';
 import 'render.dart' show EditorTheme;
 
 /// A "source → picture" preview producer for one previewer id ('math',
-/// 'mermaid', …). Two forms (docs/render-architecture.md, Decision 2):
+/// 'mermaid', …). Two forms (docs/architecture/render-architecture.md, Decision 2):
 ///
 /// - **Offstage**: [buildOffstage] returns a widget; the pipeline renders it
 ///   far off-screen and captures it post-frame (flutter_math today).

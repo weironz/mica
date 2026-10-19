@@ -9,7 +9,7 @@ import 'package:mica_flutter/session/session_controller.dart';
 
 /// Characterization tests for [AuthController], pinned against the behavior
 /// the session-persistence block had as `_WorkspaceShellState` methods
-/// (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7, sixth step). Nearly
+/// (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7, sixth step). Nearly
 /// every guarded branch below carries a "why" comment in the shipped code —
 /// a historical lesson — and each one is pinned here.
 void main() {

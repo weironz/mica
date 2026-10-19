@@ -1,7 +1,7 @@
 //! Mica's Markdown engine — the block model ("AST") plus parsing and
 //! rendering between it and Markdown/HTML. Pure and I/O-free; document
 //! *operations* (insert/update/move) live in `mica-app-core`, archive-level
-//! interchange in `mica-interchange`. See docs/architecture.md.
+//! interchange in `mica-interchange`. See docs/architecture/architecture.md.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -89,7 +89,7 @@ pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationR
 ///
 /// Lives on the root block's `data`, beside `front_matter` — the one place that
 /// is part of the document but is NOT a body block. That distinction is the
-/// whole point (see `docs/page-title-plan.md`): the title travels with the
+/// whole point (see `docs/features/page-title-plan.md`): the title travels with the
 /// document, so every consumer sees it, while the body's first line stays free
 /// to be whatever the author wants.
 ///
@@ -117,7 +117,7 @@ pub fn document_title(snapshot: &DocumentSnapshotPayload) -> Option<&str> {
 /// The write counterpart of [`document_title`], and deliberately the only one at
 /// the payload level. Every other writer edits a document that already exists
 /// and must go through the narrow yrs primitive (`MicaDoc::set_block_prop`), or
-/// it invalidates every comment anchor on the page — `docs/page-title-plan.md`
+/// it invalidates every comment anchor on the page — `docs/features/page-title-plan.md`
 /// §5.1. Here there is no document yet and no anchor to lose: the title rides
 /// along in the seed and costs no update at all. That is what makes importing an
 /// archive compatible with §5.3 ("400 pages must not mean 400 document writes")

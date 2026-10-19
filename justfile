@@ -1,5 +1,5 @@
 # Mica build / release orchestration.   `just --list` shows everything.
-# Full flow, prerequisites and rationale: docs/release.md
+# Full flow, prerequisites and rationale: docs/ops/release.md
 #
 # Recipes are POSIX and run under bash. On Windows that MUST be Git Bash —
 # the `bash` on PATH is C:\WINDOWS\system32\bash.exe (the WSL launcher), and
@@ -13,7 +13,7 @@ hub     := "willdockerhub"
 
 # Production node. Prod pulls its images from Aliyun ACR (first-party, fast in
 # CN); CI pushes there on every `v*` tag. `deploy-prod` is the ONLY recipe that
-# touches prod — CI never does (docs/release.md explains why).
+# touches prod — CI never does (docs/ops/release.md explains why).
 node     := "root@mica.cloudcele.com"
 node_dir := "/data/mica"
 site     := "https://mica.cloudcele.com"
@@ -163,7 +163,7 @@ check:
     cargo clippy --workspace 2>/dev/null || cargo build --workspace
     cd clients/mica_flutter && {{flutter}} analyze lib
 
-# 单文件行数门禁（docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。
+# 单文件行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。
 # 与 CI 的 structure job 同一条命令，三层防线：
 #   绝对限 8,000 硬失败 / 4,000 警告；棘轮（file-size-budget.txt 登记文件
 #   只许减不许增）；增量（--diff <base> 时 >2,000 行存量文件净增 >300 失败）。
@@ -182,7 +182,7 @@ coverage package="":
 
 # ------------------------------------------------------- local artifacts
 # The four things a release ships. 1+2 are also built by GitHub Actions on a
-# `v*` tag (docs/release.md); these recipes are for building them by hand.
+# `v*` tag (docs/ops/release.md); these recipes are for building them by hand.
 
 [doc("1/4  mica-cli binary for this host -> target/release/")]
 build-cli:
@@ -266,7 +266,7 @@ docker-push tag:
 # deploy/node-deploy-policy.sh as /usr/local/sbin/mica-deploy — the pinned
 # command that limited what the CI key could do. Ansible executes modules it
 # pushes to the host, so it cannot run behind a pinned command. What that costs
-# and why it was accepted anyway is in docs/cd-plan.md §4.
+# and why it was accepted anyway is in docs/ops/cd-plan.md §4.
 [doc("Roll prod to a published version, e.g. `just deploy-prod 0.5.1` (+ --check --diff to rehearse)")]
 deploy-prod version *flags:
     bash scripts/deploy-prod.sh "{{version}}" {{flags}}
@@ -307,7 +307,7 @@ web-e2e email="e2e@mica.test" password="e2epassword123":
      bash scripts/web-e2e.sh "{{email}}" "{{password}}"
 # ── Release gate ──────────────────────────────────────────────────────────────
 #
-# Everything docs/release.md says to check, as a command that REFUSES instead of
+# Everything docs/ops/release.md says to check, as a command that REFUSES instead of
 # a list somebody has to remember. The rule that forced this: the Postgres-backed
 # tests SKIP when DATABASE_URL is unset, and a skipped test reports as passed —
 # so "I ran the tests" and "the tests ran" were different facts, and only a human
@@ -334,7 +334,7 @@ release-bump version:
 # dist/vX.Y.Z/ and attaches it to a DRAFT release; publishing is a separate
 # step that refuses until every required asset is there (the in-app updater
 # reads /releases/latest, so it must never see a release without its
-# installer). docs/release.md「本地发布」has the full walk-through.
+# installer). docs/ops/release.md「本地发布」has the full walk-through.
 
 [doc("Everything on this machine: release → push → artifacts → images → upload → publish")]
 ship version:

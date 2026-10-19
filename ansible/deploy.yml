@@ -8,7 +8,7 @@
 # extracts it with `git show`. Running it bare fails with that message.
 #
 # This replaces the node-side `/usr/local/sbin/mica-deploy` fence. What changed
-# and why is in docs/cd-plan.md; the one thing worth repeating here is the
+# and why is in docs/ops/cd-plan.md; the one thing worth repeating here is the
 # failure it removes:
 #
 #   The node used to keep its OWN copy of docker-compose.yaml, and CI passed the
@@ -23,7 +23,7 @@
 #   released with. There is nothing left to compare.
 #
 # Provisioning (docker, directories, Traefik, first-time secrets) is NOT here.
-# docs/cd-plan.md §6 is explicit that nobody has walked that path by hand yet,
+# docs/ops/cd-plan.md §6 is explicit that nobody has walked that path by hand yet,
 # and a runbook nobody has walked should not be frozen into code — the code
 # would preserve the guesses and stop anyone from reading the doc.
 - name: Deploy Mica
@@ -272,7 +272,7 @@
     #
     # Nothing here backed that up. The backup sidecar is a periodic exporter and
     # only runs once api is already up, so it is not a point you can roll back
-    # to. Until now the pre-migration dump was step 8 of docs/release.md — a
+    # to. Until now the pre-migration dump was step 8 of docs/ops/release.md — a
     # thing a person had to remember, about the one class of change that cannot
     # be undone by redeploying the previous version.
     #

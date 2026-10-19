@@ -34,7 +34,7 @@ use crate::routes::documents::{
 /// open for the length of a token. So a member who is removed from the
 /// workspace, or demoted to read-only, keeps whatever they had at upgrade until
 /// something re-asks — and their token's lifetime is exactly the window
-/// `docs/lessons.md` warns about, because a JWT does not re-check anything.
+/// `docs/dev/lessons.md` warns about, because a JWT does not re-check anything.
 ///
 /// Re-reading before each WRITE makes a revocation take effect on the next
 /// keystroke instead. `Ok(None)` means the user is no longer a member at all.
@@ -266,7 +266,7 @@ pub const VIEWS_CHANGED_EVENT: &str = r#"{"type":"views_changed"}"#;
 ///
 /// LISTEN/NOTIFY rather than a broadcast call in every mutating route: the
 /// mutation surface is a dozen routes and growing, and one forgotten site is a
-/// silently stale tree — the N-places problem `docs/lessons.md` #2 exists to
+/// silently stale tree — the N-places problem `docs/dev/lessons.md` #2 exists to
 /// warn about. The trigger sees every writer of the table, this task is the
 /// single bridge, and the rooms only fan out.
 ///
@@ -856,7 +856,7 @@ async fn handle_sync_push(
     }
   };
   // Timed as a whole: the round trip decodes and re-encodes the entire
-  // document (the write-amplification entry in docs/roadmap.md), so this
+  // document (the write-amplification entry in docs/plans/roadmap.md), so this
   // histogram is the number that argument has been missing.
   let push_started = std::time::Instant::now();
   let push_result = sync::push_update_checked(

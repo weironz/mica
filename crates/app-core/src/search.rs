@@ -4,7 +4,7 @@
 //! `content_text` column — and left its cost where the measurement said it was:
 //! ~75 ms of an 81 ms single-workspace query is Postgres reading hundreds of
 //! TOASTed bodies to run `ILIKE` over them, and the cross-workspace route
-//! multiplies that by workspace count (docs/roadmap.md, 性能).
+//! multiplies that by workspace count (docs/plans/roadmap.md, 性能).
 //!
 //! Why not a Postgres text index (researched 2026-08-28, see the roadmap entry):
 //!   - `pg_trgm` fails BOTH ways here. A 1–2 char needle has no extractable

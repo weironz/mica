@@ -54,7 +54,7 @@ void main() {
     // paragraph holding only an image into an `image` block and drops the
     // surrounding link, where Rust keeps a paragraph carrying both marks. That
     // is a separate, pre-existing block-layer difference — see
-    // docs/code-review-2026-07-20.md — and asserting it here would conflate the
+    // docs/reviews/code-review-2026-07-20.md — and asserting it here would conflate the
     // two layers.
     final p = parseInline('[![a](/img)](/u)');
     expect(p.text, 'a');

@@ -4,7 +4,7 @@ import '../api/models.dart';
 
 /// The sidebar tree's visibility/focus state, extracted verbatim from
 /// `_WorkspaceViewState` (the second god-class step after the import pilot —
-/// see docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). Owns WHICH rows
+/// see docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). Owns WHICH rows
 /// are expanded, WHICH row is "located" (focused), and the pending-reveal
 /// bookkeeping for a row that has not arrived yet. Multi-selection already
 /// lives in `ui/tree_selection.dart` and pagination in `PageTreeCache`; this

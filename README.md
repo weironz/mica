@@ -15,7 +15,7 @@
   <a href="#-install">Download</a> ·
   <a href="#-self-hosting">Self-host</a> ·
   <a href="docs/">Documentation</a> ·
-  <a href="docs/roadmap.md">Roadmap</a>
+  <a href="docs/plans/roadmap.md">Roadmap</a>
 </p>
 
 <p align="center">
@@ -88,7 +88,7 @@ CommonMark 0.31.2 is the base — **641/641 spec examples pass on the read side*
 with GFM on top (**24/24**), plus a small dialect for what GFM cannot express:
 footnotes, front matter, Pandoc-style math. The writer emits a normalized subset,
 and **round-trip stability is an enforced invariant** with a regression floor in
-CI. See the [scoreboard](docs/commonmark-scoreboard.md).
+CI. See the [scoreboard](docs/architecture/commonmark-scoreboard.md).
 
 Where a feature has no GFM representation, the rule is: serialize to valid GFM
 that renders acceptably in any foreign viewer — never invent syntax others would
@@ -103,7 +103,7 @@ itself from the same feed.
 
 **CLI** — `mica-cli` binaries for Windows, Linux and macOS are attached to every
 release. It drives the same API and hosts the MCP server (`mica-cli mcp`). See
-[docs/cli.md](docs/cli.md).
+[docs/dev/cli.md](docs/dev/cli.md).
 
 **Web** — self-hosted, see below.
 
@@ -173,14 +173,14 @@ anything you would mind being read off the wire.
 
 `deploy/docker-compose.yml` is the canonical stack: label routing plus Let's
 Encrypt, pulling published images rather than building. Set `MICA_VERSION` to pin
-a release. See [Deployment](docs/deploy.md#behind-traefik-the-canonical-production-stack).
+a release. See [Deployment](docs/ops/deploy.md#behind-traefik-the-canonical-production-stack).
 
 </details>
 
 **Migrations are embedded in the API binary and run at startup** — there is no
 separate migration step.
 
-Full notes: [Deployment](docs/deploy.md) · [Backup](docs/backup.md) · [Release process](docs/release.md)
+Full notes: [Deployment](docs/ops/deploy.md) · [Backup](docs/ops/backup.md) · [Release process](docs/ops/release.md)
 
 ## 🧩 Repository layout
 
@@ -225,7 +225,7 @@ for `ANTHROPIC_API_KEY` and the AI endpoints.
 
 **Before changing anything structural, read [`CLAUDE.md`](CLAUDE.md)** — project
 principles, invariants, and the release process — and
-[`docs/lessons.md`](docs/lessons.md), which records what those invariants cost
+[`docs/dev/lessons.md`](docs/dev/lessons.md), which records what those invariants cost
 when they were broken.
 
 Three rules that will otherwise bite you:
@@ -236,24 +236,24 @@ Three rules that will otherwise bite you:
 2. **Every bug fix ships with a regression test**, and the commit message states
    the root cause rather than a changelog.
 3. **New render capabilities get a mechanism**, not an `if` branch in
-   `render.dart`. See [render architecture](docs/render-architecture.md).
+   `render.dart`. See [render architecture](docs/architecture/render-architecture.md).
 
 ## 📚 Documentation
 
 | | |
 | --- | --- |
-| [Architecture](docs/architecture.md) | System shape and the decisions behind it |
-| [Lessons](docs/lessons.md) | Bugs that cost the most, and why |
-| [Editor design](docs/editor.md) · [engine](docs/editor-engine.md) · [render](docs/render-architecture.md) | The editor's principles and internals |
-| [Sync and API](docs/sync-and-api.md) | REST surface and the WebSocket envelope |
-| [Export / Import](docs/export-import.md) | Archive format, Notion adaptation, round-trip rules |
-| [CommonMark scoreboard](docs/commonmark-scoreboard.md) | Spec conformance, tracked per release |
-| [Local-first](docs/local-first-plan.md) · [Vault mode](docs/vault-mode.md) | The local world |
-| [MCP server](docs/mcp-server.md) · [Connecting a client](docs/mcp-connect.md) | AI tool access |
-| [Machine setup](docs/bootstrap.md) | Clean Windows box to a working dev environment |
-| [Deployment](docs/deploy.md) · [Release](docs/release.md) · [Backup](docs/backup.md) | Running it |
-| [Shortcuts](docs/shortcuts.md) | Authoritative keyboard shortcut list |
-| [Roadmap](docs/roadmap.md) | What's next |
+| [Architecture](docs/architecture/architecture.md) | System shape and the decisions behind it |
+| [Lessons](docs/dev/lessons.md) | Bugs that cost the most, and why |
+| [Editor design](docs/architecture/editor.md) · [engine](docs/architecture/editor-engine.md) · [render](docs/architecture/render-architecture.md) | The editor's principles and internals |
+| [Sync and API](docs/architecture/sync-and-api.md) | REST surface and the WebSocket envelope |
+| [Export / Import](docs/features/export-import.md) | Archive format, Notion adaptation, round-trip rules |
+| [CommonMark scoreboard](docs/architecture/commonmark-scoreboard.md) | Spec conformance, tracked per release |
+| [Local-first](docs/architecture/local-first-plan.md) · [Vault mode](docs/features/vault-mode.md) | The local world |
+| [MCP server](docs/dev/mcp-server.md) · [Connecting a client](docs/dev/mcp-connect.md) | AI tool access |
+| [Machine setup](docs/dev/bootstrap.md) | Clean Windows box to a working dev environment |
+| [Deployment](docs/ops/deploy.md) · [Release](docs/ops/release.md) · [Backup](docs/ops/backup.md) | Running it |
+| [Shortcuts](docs/features/shortcuts.md) | Authoritative keyboard shortcut list |
+| [Roadmap](docs/plans/roadmap.md) | What's next |
 
 `CLAUDE.md` and the documents it points at are the current word where design
 documents disagree.
@@ -262,7 +262,7 @@ documents disagree.
 
 Issues and pull requests are welcome. For anything beyond a small fix, please
 open an issue first — a fair amount of this codebase is load-bearing in
-non-obvious ways, and `docs/lessons.md` exists because of it.
+non-obvious ways, and `docs/dev/lessons.md` exists because of it.
 
 ## 📄 License
 

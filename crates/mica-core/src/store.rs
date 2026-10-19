@@ -372,7 +372,7 @@ impl LocalStore {
                  updated_at INTEGER NOT NULL,
                  state_crc  INTEGER
              );
-             -- Local page version history (docs/version-history-plan.md §6). One
+             -- Local page version history (docs/features/version-history-plan.md §6). One
              -- row = one full yrs state. `label` NULL = an auto snapshot (captured
              -- on a cadence by save_doc, pruned after retention); set = a named
              -- checkpoint, kept forever. Purely additive → no SCHEMA_VERSION bump
@@ -593,7 +593,7 @@ impl LocalStore {
             )?;
         }
 
-        // Per-blob checksum columns (docs/code-review-2026-07-20.md P0-0). ADDITIVE
+        // Per-blob checksum columns (docs/reviews/code-review-2026-07-20.md P0-0). ADDITIVE
         // and NULLABLE, so — like the doc_version table before it — no SCHEMA_VERSION
         // bump: every read/write uses an explicit column list (never SELECT * / bare
         // INSERT), so an older app silently ignores the column and a NULL means "no
@@ -1068,7 +1068,7 @@ impl LocalStore {
         };
         // Verify the version blob BEFORE it becomes the live base or reaches yrs —
         // this was one of two recovery paths that previously decoded straight into
-        // yrs with no guard at all (docs/code-review-2026-07-20.md P0-0).
+        // yrs with no guard at all (docs/reviews/code-review-2026-07-20.md P0-0).
         verify_blob_crc(doc_id, &bytes, crc)?;
         // Preserve the current state so the restore can be undone. Carry its crc
         // forward (copy path).
@@ -2766,7 +2766,7 @@ mod tests {
         assert!(matches!(store.load_doc("d", 1), Err(StoreError::Doc(DocError::Decode(_)))));
     }
 
-    // ── local blob checksum (docs/code-review-2026-07-20.md P0-0) ────────────
+    // ── local blob checksum (docs/reviews/code-review-2026-07-20.md P0-0) ────────────
 
     /// Locks the polynomial/params so a silent CRC drift can't slip through.
     /// Values are the standard CRC-32/ISO-HDLC check vectors.

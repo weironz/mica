@@ -901,7 +901,7 @@ pub(crate) async fn ensure_quota_room(
 /// with 4 GiB free still rejects one oversized file, so the storage bar honestly
 /// reads "plenty of room" while the upload fails. Without a code of its own the
 /// client could only relay the English sentence or match on its text — the
-/// second representation `docs/design-adoption.md` draws a line against. So it
+/// second representation `docs/features/design-adoption.md` draws a line against. So it
 /// gets `file_too_large`, a sibling to `workspace_quota_exceeded`, and the two
 /// full-sounding failures become distinguishable without reading prose.
 fn validate_byte_size(byte_size: i64, max_upload_bytes: i64) -> ApiResult<()> {

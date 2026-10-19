@@ -321,7 +321,7 @@ pub async fn update_view(
   // A page's name now lives IN its document (root block `title`), with
   // `views.name` as the projection — so a rename has to reach the document, or
   // the next push would re-derive the OLD title over the column and silently
-  // undo the rename. See `docs/page-title-plan.md`.
+  // undo the rename. See `docs/features/page-title-plan.md`.
   //
   // The column is still written above and first: this endpoint must keep working
   // for folders (no document at all) and for the many pages that have no title

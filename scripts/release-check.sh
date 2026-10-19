@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Everything docs/release.md says to check before tagging — as a command that
+# Everything docs/ops/release.md says to check before tagging — as a command that
 # REFUSES, not a list somebody has to remember.
 #
 # The rule that forced this into existence: the Postgres-backed tests SKIP when
@@ -159,7 +159,7 @@ server=$(grep -oE 'image: postgres:[0-9]+' deploy/docker-compose.yml | head -1 |
 echo "==> pg_dump: client $client >= server $server"
 
 # ── The quickstart's pinned release must not lag the version being tagged ───
-# README.md and docs/deploy.md tell a self-hoster to download the compose file
+# README.md and docs/ops/deploy.md tell a self-hoster to download the compose file
 # and `.env.prod.example` from a RELEASE TAG. That tag is hardcoded, so it only
 # moves when somebody edits the docs — and compose's `environment:` block is an
 # explicit ALLOWLIST, so a fresh install that pairs an old compose file with a
@@ -169,7 +169,7 @@ echo "==> pg_dump: client $client >= server $server"
 # REFUSED, not warned. "Remember to update the docs at release time" is exactly
 # the kind of rule this file exists because nobody remembers; the tag is checked
 # at the one moment it is wrong.
-for doc in README.md docs/deploy.md; do
+for doc in README.md docs/ops/deploy.md; do
   pinned=$(grep -oE 'RELEASE=[0-9]+\.[0-9]+\.[0-9]+' "$doc" | head -1 | cut -d= -f2)
   [ -n "$pinned" ] \
     || fail "$doc no longer states a \`RELEASE=x.y.z\` for the quickstart (found nothing) — this gate must not pass by failing to look. If the quickstart changed shape, update this check."

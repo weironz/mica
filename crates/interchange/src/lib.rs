@@ -1,7 +1,7 @@
 //! Mica's import/export interchange engine — pure, I/O-free, dependency-free
 //! (serde_json only, for the export manifest). Bytes and structures in,
 //! plans and archive entries out; the api-server executes the side effects
-//! (database writes, object storage). See docs/export-import.md.
+//! (database writes, object storage). See docs/features/export-import.md.
 
 pub mod export_tree;
 pub mod import;

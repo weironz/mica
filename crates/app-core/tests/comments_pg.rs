@@ -1,4 +1,4 @@
-//! Postgres integration tests for comments (docs/comments-plan.md).
+//! Postgres integration tests for comments (docs/features/comments-plan.md).
 //!
 //! The anchor primitives have unit tests (`mica-core/tests/comment_anchor.rs`);
 //! what those CANNOT prove is that an anchor survives the round trip through the

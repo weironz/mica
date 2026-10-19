@@ -48,7 +48,7 @@ use mica_infra::storage::S3Config;
 /// this window. The bin never empties itself — only the user does, through
 /// restore / purge / empty-trash — so a trashed page's blobs are held for
 /// [0, until someone clears it), and this grace period starts counting only
-/// afterwards. Deliberate, see docs/roadmap.md「回收站不做自动清空」.
+/// afterwards. Deliberate, see docs/plans/roadmap.md「回收站不做自动清空」.
 ///
 /// AFFiNE's equivalent misses the reachability half: it walks the root doc with
 /// `include_trash = false`, so trashing a page frees its blobs and restoring it

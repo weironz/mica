@@ -5,7 +5,7 @@
 // The controller under test is the reconcile loop + the outbox sweep + the
 // fault banner + the views-events socket: the socket half of
 // _WorkspaceShellState (god-class seventh step; see
-// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). Everything
+// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). Everything
 // remote/stateful arrives injected; a fake tab trio stands in for the tab
 // list (the controller sees tabs only through TabSockets).
 import 'dart:convert';

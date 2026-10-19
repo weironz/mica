@@ -91,7 +91,7 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
 
 /// Inline atom registry, keyed by mark type. Adding an inline-rendered mark
 /// means adding a renderer here — render.dart must not grow `if (type == …)`
-/// branches (docs/render-architecture.md).
+/// branches (docs/architecture/render-architecture.md).
 const Map<String, InlineAtomRenderer> _inlineAtomRenderers = {
   'math': MathInlineAtomRenderer(),
 };

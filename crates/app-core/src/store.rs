@@ -24,7 +24,7 @@ pub struct DocumentRecord {
 
 
 
-/// A yrs-native version-history row (see docs/version-history-plan.md). Metadata
+/// A yrs-native version-history row (see docs/features/version-history-plan.md). Metadata
 /// only — the `state` blob is fetched separately so timeline listings stay cheap.
 /// `label` NULL = an auto snapshot; set = a named user checkpoint. `expires_at`
 /// NULL = kept forever (named rows); set = an auto row pruned after retention.
@@ -630,7 +630,7 @@ pub async fn fetch_share_by_token(db: &PgPool, token: &str) -> ApiResult<Option<
   .map_err(ApiError::from)
 }
 
-// ── yrs-native version history (docs/version-history-plan.md) ────────────────
+// ── yrs-native version history (docs/features/version-history-plan.md) ────────────────
 // The op-model history below froze with P4①b; real history routes through these.
 
 /// The document's version timeline, newest first. Metadata only (no `state`

@@ -11,7 +11,7 @@ name: CI
 # rustfs + api-server) and are excluded, listed with reasons in that file's
 # header.
 #
-# 2026-07-21 audit (docs/code-review-2026-07-20.md) found 167 tests that never
+# 2026-07-21 audit (docs/reviews/code-review-2026-07-20.md) found 167 tests that never
 # ran here. Three causes, all fixed below:
 #   - app-core / infra were simply absent from `-p`, which alone silenced SEVEN
 #     pure-Rust, zero-dependency tests — including every bit of coverage for the
@@ -47,7 +47,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 单文件行数门禁（docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 4/5 项）：
+  # 单文件行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 4/5 项）：
   # 2026-10-16 拆掉了三个巨石文件（main.dart 13,177 / routes/documents.rs 8,196 /
   # markdown lib.rs 6,339 行）。三层防线都在 scripts/check-file-size.sh：
   #   绝对限（8,000 硬失败 / 4,000 警告）+ 棘轮（预算文件登记的文件只许减

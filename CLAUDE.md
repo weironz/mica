@@ -29,18 +29,18 @@
 2. **Rust-first 数据面** —— 数据处理一律在 Rust;Dart 只做 UI 和编辑器热路径。Markdown 语法逻辑
    两端必须同步,**Rust `crates/markdown` 是权威**,Dart `editor/marks.dart`/`markdown.dart` 是镜像。
 3. **渲染架构红线** —— 新渲染能力先抽象机制(`AtomicBlockRenderer` 注册表),**严禁往 `render.dart`
-   堆 if 分支**。见 `docs/render-architecture.md`。
+   堆 if 分支**。见 `docs/architecture/render-architecture.md`。
 4. **Markdown 方言** —— CommonMark 0.31.2 底座(读侧 641/641)+ GFM(24/24)+ 方言(脚注、front
    matter、Pandoc 数学)。写侧输出规范化子集,**round-trip 是不变量**。记分牌
-   `docs/commonmark-scoreboard.md`,回归地板 `commonmark_scoreboard.rs`。
+   `docs/architecture/commonmark-scoreboard.md`,回归地板 `commonmark_scoreboard.rs`。
 5. **修复纪律** —— 每个 bug 修复配**回归测试 + 实测验证**(web 用 playwright 截图);提交信息写
    **根因**,不写流水账。
 6. **难决策先扒同类产品** —— 没有明显正确解、或自己的方案有明显代价时,拍板前先看别人怎么做。
    重点不是"它支不支持",而是"**相同约束**下它具体怎么做、又刻意**没用什么**"。最该警惕的是自己
    脑子里「必须 X 才能 Y」那类前提 —— 给出"几选一"前先问这些选项的**共同前提**验证过没有。
    参照系:AppFlowy(Flutter 同构)、AFFiNE(web/Yjs)。手段:调研子代理 + GitHub MCP 读真实源码。
-   〔两次教训见 `docs/lessons.md#7`:mermaid 曾误以为"服务端渲染必须 headless 浏览器";
-   merman 的主题曾误以为"只能改 CSS"。第三次见 `docs/markdown-boundary-comparison.md`:
+   〔两次教训见 `docs/dev/lessons.md#7`:mermaid 曾误以为"服务端渲染必须 headless 浏览器";
+   merman 的主题曾误以为"只能改 CSS"。第三次见 `docs/architecture/markdown-boundary-comparison.md`:
    曾误以为"web 没 FFI 所以 markdown 必须两端各写一份",实际根因是**服务端要能解析**这条
    产品选择 —— 两家同类都把 markdown 只放客户端,且都用现成解析器。〕
 
@@ -49,7 +49,7 @@
 | 包 | 用途 | 约束 |
 | --- | --- | --- |
 | flutter_math_fork | 数学渲染 | 复杂领域渲染器,自研不现实 |
-| window_manager | 桌面窗口大小/位置/最小尺寸/拦截关闭 | 迁移评估见 `docs/window-manager-migration.md`(结论:不迁) |
+| window_manager | 桌面窗口大小/位置/最小尺寸/拦截关闭 | 迁移评估见 `docs/plans/window-manager-migration.md`(结论:不迁) |
 | tray_manager | 系统托盘("关闭最小化到托盘") | **仅 Windows**(`trayIsSupported`);**注册失败必须降级 `minimize()`,绝不 `hide`** —— 否则窗口再也找不回来 |
 | file_picker | 桌面文件对话框 | 非 web |
 | pasteboard | 桌面富剪贴板图片读写 | 非 web |
@@ -77,7 +77,7 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
   可写的桶。所以生产环境用着默认值时 `AppState::new` 会 `warn!`(`default_s3_secret_in_use`)——
   只写在文档里的风险等于没写。另:**建桶由服务端走 S3 接口做**(`bucket::ensure_bucket`,
   启动时 HeadBucket→缺失才 CreateBucket,**任何非 404 都当"存在"、且永不阻断启动**)——
-  不绑 RustFS,换 MinIO/OSS/S3 都成立;方案见 `docs/bucket-provisioning-plan.md`。
+  不绑 RustFS,换 MinIO/OSS/S3 都成立;方案见 `docs/ops/bucket-provisioning-plan.md`。
   ⚠️ **"没设"在容器里有两种形态,别只测其中一种**:compose 的 `${VAR:-}` 把未设变量解析成
   **空字符串**,`env::var` 因此返回 `Ok("")` 而不是 `Err` —— 自铸功能第一版就栽在这:手跑二进制
   (变量真的不存在)能自铸,一进 compose 全部 crash-loop。**空白必须等同于未提供**
@@ -92,11 +92,11 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 - 登录页与首页按设计稿重做,桌面与 web 同一屏。
 - **平台现状**:Windows 出安装包并支持自动更新;`linux/` 有目录但 CI 不出桌面包;无 macOS / 移动端。
   本地(离线)模式是桌面独有,web 没有。
-- **待办总账在 `docs/roadmap.md`**(权威,**只放还要做的** —— 拍板不做的**整条删掉,不留**
+- **待办总账在 `docs/plans/roadmap.md`**(权威,**只放还要做的** —— 拍板不做的**整条删掉,不留**
   〔用户 2026-08-05 定〕,理由进那次提交的信息,`git log` 查得到;代价是同一个决定可能被
   重新翻出来做一遍,拿不准就先 `git log --grep` 搜一下);
-  已完成的整条存档在 `docs/roadmap-done.md`(只进不出,发版时搬,见 release.md 步骤 5);桌面计划与开发环境备忘
-  (stale bundle、幽灵会话、DB 取证)在 `docs/desktop-plan.md`。
+  已完成的整条存档在 `docs/plans/roadmap-done.md`(只进不出,发版时搬,见 release.md 步骤 5);桌面计划与开发环境备忘
+  (stale bundle、幽灵会话、DB 取证)在 `docs/plans/desktop-plan.md`。
 
 ## 架构速记
 
@@ -105,27 +105,29 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 - **页树不变量:folder 是唯一容器,page 是叶子**。服务端任何写 `parent_view_id` 的路径**必须**过
   `documents::ensure_parent_accepts_children`(400 + 可读原因),DB 触发器
   `views_parent_must_be_folder` 兜底(migration 0011)。〔这条以前只活在 Dart 客户端,
-  Notion 导入就造出 137 个"页面下挂页面" —— `docs/lessons.md#2`。〕
+  Notion 导入就造出 137 个"页面下挂页面" —— `docs/dev/lessons.md#2`。〕
 - **块级嵌套是扁平模型**:`data.indent`(列表层级)、`data.quote`/`qbreak`(引用深度/分组)、
   `data.li`(item 容器子块);HTML 导出端重建嵌套。
 - **代码字体**:web 上 `'monospace'` 族名不解析,一律用 `kMonoFont`(打包的 Roboto Mono,`model.dart`)。
-- **快捷键**:清单在 `docs/shortcuts.md`(权威)。加/改要**四处同步**:`editor.dart` key handler +
+- **快捷键**:清单在 `docs/features/shortcuts.md`(权威)。加/改要**四处同步**:`editor.dart` key handler +
   `main.dart` `_appShortcuts` + `dialogs.dart` `_shortcutsSection` + 该文档。
-- **踩过的坑见 `docs/lessons.md`,和本文件一起读**:双表示、不变量只写在客户端等于没写、测试真空
+- **文档按文件夹分类,索引在 `docs/README.md`**(architecture / features / plans / ops / dev /
+  performance / reviews);新文档放进对应文件夹并在索引里补一行,代码评审与修复记录进 `docs/reviews/`。
+- **踩过的坑见 `docs/dev/lessons.md`,和本文件一起读**:双表示、不变量只写在客户端等于没写、测试真空
   通过、web 通过≠桌面通过、图片 dispose 时序、round-trip 红线。本文件写**规则**,那份写规则的
   **来历** —— 规则很容易被当成"大概是这个意思"绕过去。
 
-## 发版(权威文档 `docs/release.md`)
+## 发版(权威文档 `docs/ops/release.md`)
 
 `just release X.Y.Z`(bump → 门禁 → commit → tag)→ 推 tag → CI 产出全部 7 个产物 →
-手动触发 `Deploy` workflow 上线。**手动那几下的完整清单在 `docs/release.md` 顶部**。
+手动触发 `Deploy` workflow 上线。**手动那几下的完整清单在 `docs/ops/release.md` 顶部**。
 **彩排已固化在 workflow 里**(2026-08-27):上线那一次触发会**先对真节点跑一遍
 `--check --diff`,过了才真上**。`-f check=true` 现在的意思是「彩排完就停」,
 不再是「用彩排代替上线」。
 `just --list` 看全部 recipe。
 **Actions 额度用尽时走本地链**(2026-10-19):`just ci` 本地门禁、`just ship X.Y.Z` 一条龙
 (产物先以 draft 上传,必备产物齐了才转 latest;Windows 机器出安装包 + CLI,有 Docker 时顺带
-静态 Linux CLI)。见 `docs/release.md`「本地发布」。
+静态 Linux CLI)。见 `docs/ops/release.md`「本地发布」。
 
 **上面这条链不需要本地装东西**(只用 `git` / `gh`,ansible 跑在 CI runner 上)。
 兜底 `just deploy-prod` **只在 Linux/macOS 上跑** —— ansible 不支持 Windows 作控制端
@@ -144,7 +146,7 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
   (原因仍然成立:DB 集成测试在 `DATABASE_URL` 没设时**静默跳过**,而跳过的测试报告为
   「通过」。一条需要写在这里提醒自己的规则,本身就说明它不是规则。)
 - 上线后验证 `/api/health` 报对版本,**并冒烟测这一版真正改了什么** —— 版本号证明不了功能。
-- **发版提交里同步 `docs/roadmap.md`**:这一版关掉的条目当场标掉 —— 「无 X」这类否定式条目
+- **发版提交里同步 `docs/plans/roadmap.md`**:这一版关掉的条目当场标掉 —— 「无 X」这类否定式条目
   只会静默变假,发版是唯一的执行点(release.md 步骤 4)。
 
 ## 开发机与工具链(Windows 主力机)
@@ -162,7 +164,7 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
   而本机还停在 3.44,调的是一个我们根本不发布的引擎。〕
 - **Windows 桌面出厂即 Impeller**(Flutter 3.47 起默认)。编辑器自绘唯一的非常规画布操作
   是 `render.dart` 里数学卡片阴影的 `MaskFilter.blur` —— 渲染有疑先看它,详见
-  `docs/render-architecture.md`。
+  `docs/architecture/render-architecture.md`。
 - **国内网络必须走镜像**:已设 `FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn` +
   `PUB_HOSTED_URL=https://pub.flutter-io.cn`,否则 `flutter pub get` 会卡住。
 - **`just` 的 shebang recipe 绕过 `set windows-shell`**(里面用 `cygpath`):跑之前
@@ -179,7 +181,7 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 ## 生产运维
 
 节点 `mica.cloudcele.com`(阿里云),key 认证免密。容器名 **`mica-postgres-1`**(不是 `mica-postgres`,
-那是本地 dev 栈的)。详见 `docs/deploy.md` / `docs/release.md`。
+那是本地 dev 栈的)。详见 `docs/ops/deploy.md` / `docs/ops/release.md`。
 
 - ~~⚠️ **`deploy-prod` 不做迁移前备份**~~ —— **2026-08-26 起 playbook 自己做**:比一次
   `git diff v<节点当前版本>..v<新版本> -- migrations/`,**有新迁移才**落

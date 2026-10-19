@@ -96,7 +96,7 @@ fn insert_block(
   // children:[root]}` → delete_block infinite-loops) or a second parent (a child
   // already owned elsewhere → its subtree silently vanishes on read). Children
   // are attached by their own inserts/moves; refuse them here.
-  // (docs/code-review-2026-07-20.md P0-2 / P0-3.)
+  // (docs/reviews/code-review-2026-07-20.md P0-2 / P0-3.)
   if !block.children.is_empty() {
     return Err(DocumentOperationError::InsertBlockWithChildren);
   }
@@ -156,7 +156,7 @@ fn delete_block(
   // A `seen` set bounds the walk. Without it, a block graph that ever became
   // cyclic (see the insert_block guard above) makes this loop grow delete_ids
   // without end — 100% CPU + OOM while holding the document's FOR UPDATE lock,
-  // no timeout, no log. (docs/code-review-2026-07-20.md P0-3.)
+  // no timeout, no log. (docs/reviews/code-review-2026-07-20.md P0-3.)
   let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
   seen.insert(block_id.to_string());
   let mut delete_ids = vec![block_id.to_string()];
@@ -223,7 +223,7 @@ fn validate_block(block: &Block) -> DocumentOperationResult<()> {
   // `block_index(snapshot, "")` never matches, so BlockAlreadyExists never fires,
   // and an id-`""` block lands in the CRDT with a `""` child reference that every
   // later read reports as `block not found:` — undeletable, self-perpetuating.
-  // (docs/code-review-2026-07-20.md P0-1.)
+  // (docs/reviews/code-review-2026-07-20.md P0-1.)
   if block.id.trim().is_empty() {
     return Err(DocumentOperationError::EmptyBlockId);
   }
@@ -387,7 +387,7 @@ mod tests {
     assert!(matches!(error, DocumentOperationError::ParentIsDescendant));
   }
 
-  // ── P0-1/2/3: block-level invariants (docs/code-review-2026-07-20.md) ──────
+  // ── P0-1/2/3: block-level invariants (docs/reviews/code-review-2026-07-20.md) ──────
 
   #[test]
   fn insert_block_rejects_empty_id() {

@@ -1,7 +1,7 @@
 //! Regression tests for the CommonMark P1 gap-closing work (scoreboard
 //! 589 → 620). Each case pins one fixed spec example by its markdown→HTML
 //! pair so a future change can't silently re-break it. The grouped examples
-//! mirror the sections in docs/commonmark-scoreboard.md.
+//! mirror the sections in docs/architecture/commonmark-scoreboard.md.
 
 use mica_markdown::{export_html, import_markdown};
 

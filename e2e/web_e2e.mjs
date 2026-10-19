@@ -78,7 +78,7 @@ const browser = await launch();
 // `ArgumentError: Incorrect locale information provided` before `main()` gets far
 // enough to register anything, so the app never starts at all. Pinning makes the
 // harness deterministic; the app's own fragility there is a separate finding, filed
-// in docs/roadmap.md rather than papered over here.
+// in docs/plans/roadmap.md rather than papered over here.
 const context = await browser.newContext({
   locale: 'en-US',
   timezoneId: 'UTC',

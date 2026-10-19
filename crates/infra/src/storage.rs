@@ -194,7 +194,7 @@ impl S3Config {
   ///
   /// The distinction is not cosmetic. Handing these paths the browser-facing
   /// URL is why "the API in a container cannot do server-side uploads" is a
-  /// documented dev-stack limitation (`docs/lessons.md`): `127.0.0.1:9000`
+  /// documented dev-stack limitation (`docs/dev/lessons.md`): `127.0.0.1:9000`
   /// means the api container itself, so the PUT fails with
   /// `error sending request`. In production the public address usually does
   /// resolve from inside, which makes this the worst kind of coupling — it
@@ -646,7 +646,7 @@ pub enum BucketProbe {
 }
 
 /// Classify a `HeadBucket` response. Pure so every branch is testable without
-/// an object store — see `docs/bucket-provisioning-plan.md`.
+/// an object store — see `docs/ops/bucket-provisioning-plan.md`.
 pub fn classify_head(status: u16) -> BucketProbe {
   match status {
     200..=299 => BucketProbe::Exists,

@@ -181,7 +181,7 @@ pub async fn register(
   //
   // Extracted so the concurrency test drives THIS function rather than a copy of
   // the SQL: a test that retypes the statement passes whether or not the lock is
-  // there, which is the "test can pass in a vacuum" trap docs/lessons.md records.
+  // there, which is the "test can pass in a vacuum" trap docs/dev/lessons.md records.
   let mut tx = state.db.begin().await?;
   let user = insert_registered_user(
     &mut tx,

@@ -1,6 +1,6 @@
 # 演练/容灾用的机器,只到「一台能 ssh 进去的机器」为止。
 #
-# 边界(docs/dr-plan.md §7.2):再往后一步都不许知道自己在哪家云上 —— 装 Docker、
+# 边界(docs/ops/dr-plan.md §7.2):再往后一步都不许知道自己在哪家云上 —— 装 Docker、
 # 起 Traefik、灌数据全是与云无关的,那才是跨云能力真正的来源。想换腾讯云/GCP,
 # 复制这个目录改 provider 与 resource,后面的 runbook 一个字都不用动。
 

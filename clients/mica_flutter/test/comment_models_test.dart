@@ -4,7 +4,7 @@ import 'package:mica_flutter/api/models.dart';
 // The comment DTOs decide what the editor draws, and the load-bearing rule is
 // negative: a thread whose anchor the server could NOT resolve (orphaned), or one
 // already resolved, must never be highlighted — drawing a comment over unrelated
-// words is worse than not drawing it (docs/comments-plan.md).
+// words is worse than not drawing it (docs/features/comments-plan.md).
 
 const Object _absent = Object();
 

@@ -2,7 +2,7 @@
 //!
 //! `DATABASE_URL` — skipped (passes) when unset so a machine without a database
 //! is unaffected; a SET-but-unusable one panics, and a missing one in CI panics,
-//! for the reason docs/lessons.md records as 「测试真空通过」: a skip that reads
+//! for the reason docs/dev/lessons.md records as 「测试真空通过」: a skip that reads
 //! like a pass is how a red test hides.
 //!
 //!   $env:DATABASE_URL="postgres://mica:mica@127.0.0.1:5432/mica"

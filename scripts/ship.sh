@@ -13,7 +13,7 @@
 #                                  run steps 3 + 5
 #
 # Deploying stays a separate, explicit step — building is a consequence of
-# tagging, going live is a decision (docs/release.md):
+# tagging, going live is a decision (docs/ops/release.md):
 #   just deploy-prod X.Y.Z --check --diff     (rehearse)
 #   just deploy-prod X.Y.Z
 set -euo pipefail

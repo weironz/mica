@@ -671,7 +671,7 @@ class LocalOffline implements LocalOfflineApi {
         );
         // The file name goes INTO the document, not only into the view row
         // beside it, so a vault page knows its own name by the same rule as a
-        // renamed one (`docs/page-title-plan.md`; the cloud importer does this
+        // renamed one (`docs/features/page-title-plan.md`; the cloud importer does this
         // through `mica_markdown::set_document_title`). Before the first save,
         // so it rides in the initial state instead of costing a second write.
         if (fileName.isNotEmpty) doc.setTitle(title: fileName);

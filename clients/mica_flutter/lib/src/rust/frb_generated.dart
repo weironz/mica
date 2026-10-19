@@ -5195,7 +5195,7 @@ class MicaDocumentImpl extends RustOpaque implements MicaDocument {
   /// (`mica_markdown::with_page_title`) so the two worlds cannot drift.
   ///
   /// [`title`] is the view's name; a document that carries its own title
-  /// (`root.data['title']`) wins over it. See `docs/page-title-plan.md`.
+  /// (`root.data['title']`) wins over it. See `docs/features/page-title-plan.md`.
   String exportMarkdownTitled({required String title}) =>
       RustLib.instance.api.crateApiDocumentMicaDocumentExportMarkdownTitled(
         that: this,
@@ -5257,7 +5257,7 @@ class MicaDocumentImpl extends RustOpaque implements MicaDocument {
   /// goes through the same narrow primitive for the same reason: rebuilding
   /// the blocks (`set_blocks`) would give every block a brand-new text object
   /// and invalidate every comment anchor on the page. See
-  /// `docs/page-title-plan.md` §5.1.
+  /// `docs/features/page-title-plan.md` §5.1.
   ///
   /// Returns false when nothing changed — the title already said this, or the
   /// document has no root — so the caller can skip persisting. Comparing first

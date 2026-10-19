@@ -7,7 +7,7 @@ import 'package:mica_flutter/ui/comment_panel.dart';
 // The panel is the only place an ORPHANED thread can still be read (its anchored
 // text is gone, so nothing is highlighted on the canvas). That, and "every action
 // reaches the host", are what these pin — the host owns the server round trip, so
-// the panel must not swallow a tap (docs/comments-plan.md).
+// the panel must not swallow a tap (docs/features/comments-plan.md).
 
 CommentThread thread({
   String id = 'thread-1',

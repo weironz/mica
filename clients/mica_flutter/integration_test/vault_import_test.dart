@@ -65,7 +65,7 @@ void main() {
     );
 
     // The file name travels INSIDE the document, not only in the view row
-    // beside it (`docs/page-title-plan.md` P3) — so a vault page exported or
+    // beside it (`docs/features/page-title-plan.md` P3) — so a vault page exported or
     // copied out of Mica keeps its name, and reads it by the same rule as a
     // renamed page. The cloud importer does the same thing through
     // `mica_markdown::set_document_title`; this is the local half.

@@ -4,7 +4,7 @@ import '../api/models.dart';
 import 'rename.dart' show renamedTo;
 
 /// The inline-rename (create-then-name) flow's state, extracted from
-/// `_WorkspaceViewState` (god-class wrap-up; docs/code-optimization/
+/// `_WorkspaceViewState` (god-class wrap-up; docs/reviews/code-optimization/
 /// OPTIMIZATION_PLAN_ROUND3.md §7). One nullable id and three transitions —
 /// deliberately small: the NAME VALIDATION lives in `renamedTo` (ui/rename.dart,
 /// already tested) and the dialogs stay in the State.

@@ -8,7 +8,7 @@ name: DR drill
 # the PRODUCTION name at the new machine, and decide the old one is actually
 # gone. Neither belongs in an automated job.
 #
-# Why it exists: the drill was walked by hand on 2026-08-29 (docs/dr-drill.md)
+# Why it exists: the drill was walked by hand on 2026-08-29 (docs/ops/dr-drill.md)
 # and found four things that would each have stopped a real recovery dead. That
 # is the argument for running it again — not to confirm it works, but to find
 # the next four. A drill that costs a free afternoon gets run once.
@@ -162,7 +162,7 @@ jobs:
           # "which one is this?" every time.
           #
           # These are the ENV VAR names mica-cli reads on the node — unrelated to
-          # what the secret is called here. docs/backup.md still recommends a
+          # what the secret is called here. docs/ops/backup.md still recommends a
           # bucket-scoped RAM key for the backup role; using the machine-creating
           # key means one credential both reads all your data AND can create or
           # destroy infrastructure. Recorded as a choice, not as a default.

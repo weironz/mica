@@ -9,7 +9,7 @@
 /// Front matter stays the SOLE authority: it lives verbatim as the raw inner
 /// string on the document root block's `data['front_matter']`. These functions
 /// are a lazy view + surgical edit over that string — no second representation.
-/// See docs/page-properties.md for the round-trip-invariant relaxation
+/// See docs/features/page-properties.md for the round-trip-invariant relaxation
 /// (byte-exact → normalized-subset) this enables.
 library;
 

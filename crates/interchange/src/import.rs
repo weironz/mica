@@ -106,7 +106,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
 
   let notion = notion_hint || looks_like_notion_export(mds.keys().map(String::as_str));
   // Our OWN archives now lead each page's text with `# <title>` (2026-08-27, see
-  // `docs/page-title-plan.md`), so importing one has to take that line back off
+  // `docs/features/page-title-plan.md`), so importing one has to take that line back off
   // or every export→import cycle stacks another heading — the round-trip red
   // line (CLAUDE.md #4).
   //
@@ -259,7 +259,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     //   importer ships a "remove duplicate title" step). Importing that verbatim
     //   would show the title twice on every page.
     // - **Our own exports**, since 2026-08-27 — they now write the title into
-    //   the text too (`docs/page-title-plan.md`), so this is the other half of
+    //   the text too (`docs/features/page-title-plan.md`), so this is the other half of
     //   that change. Without it every export→import cycle stacks one more
     //   heading, which is the round-trip red line (CLAUDE.md #4).
     //   〔This reverses the rule that used to live here: "a page's name is a
@@ -697,7 +697,7 @@ mod tests {
     // title OUR export wrote and it comes back off — otherwise every
     // export→import cycle stacks another one. (Before 2026-08-27 this asserted
     // the opposite, because our export did not write it; see
-    // `docs/page-title-plan.md` §7.) The name still comes from the file name.
+    // `docs/features/page-title-plan.md` §7.) The name still comes from the file name.
     assert_eq!(intro.markdown.trim(), "hello");
     assert_eq!(parent_title(&plan, "Intro"), Some("Chapter"));
   }

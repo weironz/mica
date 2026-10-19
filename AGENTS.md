@@ -40,7 +40,7 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 <!-- 代码结构约定：防单文件膨胀 -->
 ## 代码结构约定（防单文件膨胀）
 
-背景与先例见 [docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md](docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md)。改动代码前先过一遍：
+背景与先例见 [docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md](docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md)。改动代码前先过一遍：
 
 - **新代码的去处，不是「往现有大文件里续写」**：
   - API 路由进 `crates/api-server/src/routes/<域>/` 子模块（先例：`routes/documents/` 的 search/crud/export/transfer/trash/share/images）；共享 helper 与 DTO 放对应 `mod.rs` 并 `pub use` 再导出。

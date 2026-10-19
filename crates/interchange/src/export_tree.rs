@@ -382,7 +382,7 @@ impl<'a> TreeExport<'a> {
     // NAME rides on the file name + manifest `title`, never a heading welded
     // onto the text" — reversed by the user on 2026-08-27, because a file name
     // only survives as long as the file does: paste the page somewhere, copy it,
-    // read it through MCP, and the name is gone. See `docs/page-title-plan.md`.
+    // read it through MCP, and the name is gone. See `docs/features/page-title-plan.md`.
     //
     // The title comes from the DOCUMENT when it has one and falls back to the
     // view name otherwise. There is no backfill migration, so today almost every

@@ -1,14 +1,14 @@
 # 容灾/演练机器(阿里云)
 
 **职责到「一台能 ssh 进去的机器」为止。** 装 Docker、起 Traefik、灌数据全部与云无关 ——
-那才是跨云能力真正的来源(`docs/dr-plan.md` §7.2)。要换腾讯云/GCP:复制本目录、
-换 provider 与 resource,`docs/dr-drill.md` 第 1 步之后一个字都不用改。
+那才是跨云能力真正的来源(`docs/ops/dr-plan.md` §7.2)。要换腾讯云/GCP:复制本目录、
+换 provider 与 resource,`docs/ops/dr-drill.md` 第 1 步之后一个字都不用改。
 
 ## 为什么是 OpenTofu 不是 Terraform
 
 只有一条是决定性的:**state 加密**(1.7 起,用你自己的密钥,在写进 backend 之前)。
 真容灾时 state 要放对象存储、和备份同一个桶,而只要哪天往变量里塞了口令,Terraform
-会明文写进 state。许可证与切换成本都只是加分项 —— 详见 `docs/dr-plan.md` §7.2.1。
+会明文写进 state。许可证与切换成本都只是加分项 —— 详见 `docs/ops/dr-plan.md` §7.2.1。
 
 ## 快速开始(照抄这一段就够)
 
@@ -38,7 +38,7 @@ tofu output                                 # public_ip / ssh / chosen
 > (报「不是此版本中的有效语句分隔符」)。`winget` 装的 pwsh 在 Store 路径下,所以
 > 新终端默认起的可能仍是 5.1。
 
-拿到 IP 后回 [`docs/dr-drill.md`](../../docs/dr-drill.md),从**第 1 步(DNS)** 继续。
+拿到 IP 后回 [`docs/ops/dr-drill.md`](../../docs/ops/dr-drill.md),从**第 1 步(DNS)** 继续。
 
 **演练完当天**:`tofu destroy`。
 
@@ -195,10 +195,10 @@ tofu apply                # 输入 yes
 tofu output                # public_ip / ssh / chosen
 ```
 
-`chosen` 里是云**实际**给的可用区、规格、镜像 —— 抄进 `docs/dr-drill.md` 第 0 步的
+`chosen` 里是云**实际**给的可用区、规格、镜像 —— 抄进 `docs/ops/dr-drill.md` 第 0 步的
 「实际」栏,那张表就是下次的输入。
 
-拿到 IP 之后回 `docs/dr-drill.md`,从**第 1 步(DNS)** 继续手工走。
+拿到 IP 之后回 `docs/ops/dr-drill.md`,从**第 1 步(DNS)** 继续手工走。
 
 ## 用完(当天做)
 

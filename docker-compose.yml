@@ -15,7 +15,7 @@ services:
       # "in 18+, these Docker images are configured to store database data in a
       # format which is compatible with pg_ctlcluster" 然后 crash-loop。
       # (2026-08-28 升级当天在真机上撞到 —— 本地彩排用的是不带卷挂载的 docker run,
-      #  覆盖不到这一条。见 docs/upgrade-infra.md。)
+      #  覆盖不到这一条。见 docs/ops/upgrade-infra.md。)
       - mica-postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mica -d mica"]
@@ -89,7 +89,7 @@ services:
       # ...but the api does not ONLY sign: avatars, `import_url` and imported
       # images are uploaded by this process. Those used to be signed for the
       # line above, where `127.0.0.1` is the api container itself, so every one
-      # of them failed in here — the reason `docs/lessons.md` told you to run
+      # of them failed in here — the reason `docs/dev/lessons.md` told you to run
       # the api on the host instead. They now sign against this address.
       S3_INTERNAL_ENDPOINT: http://rustfs:9000
       S3_REGION: us-east-1

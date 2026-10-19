@@ -1,7 +1,7 @@
 # The Mica backup container: the mica-cli thin API client + the external `rustic`
 # CLI, packaged as a small always-on service that exports every workspace and
 # snapshots it into one rustic repo daily. mica-cli itself has NO backup engine
-# (that was retired — see docs/backup.md); rustic owns encryption/dedup/retention.
+# (that was retired — see docs/ops/backup.md); rustic owns encryption/dedup/retention.
 #   docker build -f deploy/Dockerfile.cli -t willdockerhub/mica-cli:vX.Y .
 
 # ── mica-cli (thin API client) ───────────────────────────────────────────────
@@ -99,7 +99,7 @@ ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export
 # without `--entrypoint`: `docker run <image> backup restore-config` appended to
 # it and ran `backup daemon backup restore-config`. That is fine for the daemon
 # and wrong for a recovery, where this image is the ONLY thing on the machine
-# and you need `backup restore-config` from it (docs/dr-plan.md §2.2).
+# and you need `backup restore-config` from it (docs/ops/dr-plan.md §2.2).
 #
 # Behaviour of the compose service is unchanged: it sets no `command:`, so CMD
 # supplies exactly the arguments the old ENTRYPOINT had.

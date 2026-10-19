@@ -13,7 +13,7 @@ use uuid::Uuid;
 /// Skipping without a database is a local convenience; skipping WITH one is a
 /// lie. This used to be `PgPool::connect(&url).await.ok()?`, which turned a
 /// failed connection into a skip: you could export DATABASE_URL, watch
-/// `8 passed`, and never have touched Postgres. docs/lessons.md「测试可以"真空通过"」
+/// `8 passed`, and never have touched Postgres. docs/dev/lessons.md「测试可以"真空通过"」
 /// recorded
 /// exactly that ("测试真空通过") after it hid a red test — and the code stayed.
 ///
@@ -1259,7 +1259,7 @@ async fn writes_maintain_link_targets_in_both_directions() {
 // things make it different and worth its own tests: the other two write a column
 // beside the base in the same statement, this one writes a DIFFERENT TABLE; and
 // it must be a complete no-op for the many documents that carry no title at all
-// (there is no backfill migration — `docs/page-title-plan.md` §4.1).
+// (there is no backfill migration — `docs/features/page-title-plan.md` §4.1).
 
 /// Give a seeded document a `views` row, which `seed_doc` does not — the tests
 /// that came before this one only ever looked at `document_yrs_base`, so the

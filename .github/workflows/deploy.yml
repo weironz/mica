@@ -75,7 +75,7 @@ jobs:
           # Ansible pushes modules to the host and executes them, so it cannot
           # work behind a pinned command; adopting it means giving that up.
           #
-          # The trade was made with eyes open (docs/cd-plan.md §4): this same CI
+          # The trade was made with eyes open (docs/ops/cd-plan.md §4): this same CI
           # already holds registry push credentials, so a compromised CI could
           # publish a malicious image that the node would pull and run under the
           # old fence too. The fence closed one door in a room with another door
@@ -93,7 +93,7 @@ jobs:
 
       # ALWAYS, not just when `check` is on (2026-08-27).
       #
-      # `check` used to be the whole rehearsal: `docs/release.md` step 4 told you
+      # `check` used to be the whole rehearsal: `docs/ops/release.md` step 4 told you
       # to dispatch once with it and again without, and nothing enforced the
       # first one. A step you can forget is not a gate — it is a habit with good
       # documentation, and the release it protects is exactly the moment people

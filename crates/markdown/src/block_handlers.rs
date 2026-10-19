@@ -1,6 +1,6 @@
 //! Handler functions for the block scanner — the decomposition of what used
 //! to be `import_markdown_inner`'s 1,300-line loop body
-//! (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8, stage 2).
+//! (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8, stage 2).
 //!
 //! The families preserve the original loop's parsing decisions and address
 //! `ctx.st.<field>` through the shared [ScanCtx].
@@ -390,7 +390,7 @@ pub(crate) fn fenced_code(ctx: &mut ScanCtx, _line: &str, content: &str, _body: 
     // Math block: `$$ … $$` or `\[ … \]`, single- or multi-line. The
     // LaTeX source is carried verbatim in a `math_block`; export always
     // writes the canonical `$$` form. (No spec exists — this follows the
-    // Pandoc/GitHub dollar convention; see docs/editor-engine.md.)
+    // Pandoc/GitHub dollar convention; see docs/architecture/editor-engine.md.)
   None // fall through: the family guard rejected the line
 }
 

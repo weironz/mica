@@ -1,4 +1,4 @@
-//! Comment threads + replies — the store layer (docs/comments-plan.md).
+//! Comment threads + replies — the store layer (docs/features/comments-plan.md).
 //!
 //! Anchors live HERE, in Postgres, never inside the yrs document: the Markdown
 //! body stays byte-identical, so the round-trip invariant needs no changes and a
@@ -438,7 +438,7 @@ mod tests {
     }
   }
 
-  /// **The acceptance test for `set_block_prop`** (`docs/page-title-plan.md`
+  /// **The acceptance test for `set_block_prop`** (`docs/features/page-title-plan.md`
   /// §5.1). Once the title lives on the root block, renaming a page has to write
   /// into the DOCUMENT — and the obvious way to do that, `set_blocks`, used to
   /// orphan every comment on the page: identical characters, brand-new text

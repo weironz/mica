@@ -285,7 +285,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         // the follower with `OverlayPortal.overlayChildLayoutBuilder`, which
         // would keep both — but that rewrites how these bars follow the canvas
         // (777c07c / 9c367b2 exist to make them follow it), so it is its own
-        // change. Recorded in docs/roadmap.md.
+        // change. Recorded in docs/plans/roadmap.md.
         child: TooltipVisibility(visible: false, child: child),
       ),
     );
@@ -317,7 +317,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   // Source → picture previews (math, mermaid): the pipeline owns the cache /
   // pending / off-screen-capture lifecycle, the previewers say how one source
-  // becomes a picture (docs/render-architecture.md). Mermaid only registers
+  // becomes a picture (docs/architecture/render-architecture.md). Mermaid only registers
   // where its JS engine exists (web) — elsewhere ```mermaid blocks stay
   // highlighted source via the renderer's null-decline.
   late final RasterPreviewPipeline _previews = RasterPreviewPipeline(

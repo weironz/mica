@@ -4,7 +4,7 @@ import 'package:mica_flutter/session/session_controller.dart';
 
 /// Characterization tests for [SessionController], pinned against the
 /// behavior the four hub fields had as `_WorkspaceShellState` fields
-/// (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7, third step).
+/// (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7, third step).
 /// The two selection-fallback rules differ ON PURPOSE — see
 /// [SessionController.replaceWorkspaces] and .remove.
 void main() {

@@ -1250,7 +1250,7 @@ async fn insert_folder(
 ///
 /// The name goes INTO the document, not only into the `views.name` column beside
 /// it, so an imported page knows what it is called by exactly the same rule as a
-/// page created here and renamed — `docs/page-title-plan.md`. Folded into the
+/// page created here and renamed — `docs/features/page-title-plan.md`. Folded into the
 /// seed rather than written afterwards: it rides along in the initial state and
 /// costs no update at all, which is what makes it compatible with §5.3's
 /// "importing 400 pages must not mean 400 document writes".

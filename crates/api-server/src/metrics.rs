@@ -26,7 +26,7 @@
 //!   curve at all; you would learn about it when a user said their document was
 //!   scrambled.
 //! * **Push cost** (`mica_crdt_push_*`) — every push decodes and re-encodes the
-//!   whole document (see the write-amplification entry in docs/roadmap.md).
+//!   whole document (see the write-amplification entry in docs/plans/roadmap.md).
 //!   Without a number, "how expensive is that really" stays an argument.
 //! * **Client lag** (`mica_crdt_lag_notices_total`) — the server telling a
 //!   client it fell off the broadcast window is a silent-divergence adjacent

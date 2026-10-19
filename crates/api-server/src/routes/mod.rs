@@ -314,7 +314,7 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/documents/{document_id}/drop-image",
       post(documents::drop_image),
     )
-    // Comments (docs/comments-plan.md). Anchored to the text by yrs sticky index
+    // Comments (docs/features/comments-plan.md). Anchored to the text by yrs sticky index
     // and stored BESIDE the document, so its Markdown — and the round-trip
     // invariant — stay untouched. Writes need the `commenter` role.
     .route(

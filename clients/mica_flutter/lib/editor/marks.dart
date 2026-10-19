@@ -4,7 +4,7 @@ import '../ui/theme_tokens.dart';
 
 /// Inline rich-text marks stored additively over a block's plain text (in
 /// `data.marks`). The text stays clean; a mark is a `[start, end)` range with a
-/// type (and an href for links). See docs/editor-engine.md.
+/// type (and an href for links). See docs/architecture/editor-engine.md.
 class Mark {
   Mark(this.start, this.end, this.type, {this.href, this.title});
 
@@ -1795,7 +1795,7 @@ String _processEmphasis(String text, List<Mark> marks, List<_Delim> delims) {
 /// (b) omitting setext underlines entirely. Result: a paragraph line `===` (or
 /// `--`, `-- -`) exported unescaped and, on re-import, turned the PRECEDING
 /// paragraph into a setext heading — silent round-trip data loss.
-/// (docs/code-review-2026-07-20.md P1-1.)
+/// (docs/reviews/code-review-2026-07-20.md P1-1.)
 String escapeBlockLeader(String line) {
   // Divider: strip spaces first (`-- -` is a thematic break), then >=3 dashes.
   final compact = line.replaceAll(' ', '');

@@ -931,7 +931,7 @@ class ApiClient {
     return PageGraph.fromJson(response);
   }
 
-  // ── Comments (docs/comments-plan.md) ───────────────────────────────────────
+  // ── Comments (docs/features/comments-plan.md) ───────────────────────────────────────
   // Anchors are yrs sticky indexes the SERVER owns: the client sends the range it
   // selected and gets back offsets resolved against the live document. It never
   // stores an offset itself — that is the whole point (an offset goes stale the

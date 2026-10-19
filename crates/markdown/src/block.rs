@@ -12,7 +12,7 @@ use crate::inline::*;
 /// The block scanner's mutable state — everything `import_markdown_inner`
 /// carries ACROSS loop iterations. Every field has an owner (the construct
 /// family that writes it) and an invariant documented at the field; the
-/// decomposition (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8)
+/// decomposition (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8)
 /// exists to make these invariants explicit instead of reader-side lore.
 pub(crate) struct BlockState {
   /// Stack of open list items' CONTENT columns (tabs count as 4): a new item

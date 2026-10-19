@@ -7,7 +7,7 @@ import 'theme_tokens.dart';
 /// The comment panel: every thread on the open document, with replies.
 ///
 /// Deliberately a plain list, not a second editing surface. Two rules it exists
-/// to honour (docs/comments-plan.md):
+/// to honour (docs/features/comments-plan.md):
 ///
 /// - An ORPHANED thread (its anchored text deleted) is still shown, against the
 ///   `quote` it saved — deleting a sentence must not silently delete the argument

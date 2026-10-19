@@ -1,5 +1,5 @@
 //! Comment anchors must survive concurrent edits — the whole reason they are yrs
-//! sticky indexes instead of character offsets (docs/comments-plan.md).
+//! sticky indexes instead of character offsets (docs/features/comments-plan.md).
 //!
 //! A stored offset is only correct against the version it was taken from: insert
 //! a word ahead of it and the highlight slides silently onto the wrong text,
