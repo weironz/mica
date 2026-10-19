@@ -311,8 +311,11 @@ pub(super) async fn search_views(
   // `is_deleted`, ranking and LIMIT, so a stale index entry costs a wasted id,
   // never a leaked or misplaced hit. The refresh is what keeps a just-pushed
   // edit searchable in the same request that follows it.
+  let started = std::time::Instant::now();
   index.refresh(db).await?;
+  let refreshed = started.elapsed();
   let body_ids = index.matching_ids(needle).await;
+  let scanned = started.elapsed();
   let pattern = like_pattern(needle);
   // Folders ride the SAME statement rather than getting their own: they have no
   // `document_yrs_base` row, so the LEFT JOIN already leaves `content_text` NULL
@@ -408,10 +411,27 @@ pub(super) async fn search_views(
     .bind(format!("{escaped}%"))
     .fetch_all(db)
     .await?;
+  let queried = started.elapsed();
 
   let needle_lower = needle.to_lowercase();
   let object_ids: Vec<Uuid> = rows.iter().map(|row| row.object_id).collect();
   let mut snippets = index.snippets(&object_ids, needle).await;
+  let total = started.elapsed();
+  // The 2026-10-16 production investigation (docs/search-latency-2026-10-16.md)
+  // could time requests from outside but never caught a slow one from inside,
+  // so "which phase" stayed a guess. A slow search now says it. Cumulative
+  // milliseconds; no query text, it is user content.
+  if total >= SLOW_SEARCH {
+    tracing::warn!(
+      refresh_ms = refreshed.as_millis() as u64,
+      scan_ms = scanned.as_millis() as u64,
+      sql_ms = queried.as_millis() as u64,
+      total_ms = total.as_millis() as u64,
+      candidates = body_ids.len(),
+      rows = object_ids.len(),
+      "slow search"
+    );
+  }
   Ok(
     rows
       .into_iter()
@@ -435,6 +455,9 @@ pub(super) async fn search_views(
       .collect(),
   )
 }
+
+/// A search slower than this logs its phase timings.
+const SLOW_SEARCH: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Wrap `needle` as a `%…%` `LIKE`/`ILIKE` pattern, escaping the wildcard
 /// metacharacters (`% _ \`) with a leading backslash so a query containing them
