@@ -22,20 +22,10 @@ name: CI
 #     this job must actually provision one.
 
 on:
-  push:
-    branches: [main]
-    # A markdown-only commit cannot break a build. Two docs commits on 07-28
-    # each started the full matrix; on the Windows integration workflow that is
-    # 14 minutes of runner time for a paragraph.
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-      - 'LICENSE'
-  pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-      - 'LICENSE'
+  # Manual only (2026-10-20, user's call): the Actions quota ran out, and every
+  # push / PR / tag was spending it automatically. The local gates (`just ci`,
+  # `just release`) are the default path now; run this from the Actions page
+  # when a hosted run is actually wanted.
   workflow_dispatch:
 
 # Pushing several commits in a row (five within an hour on 07-28) left four

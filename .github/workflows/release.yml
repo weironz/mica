@@ -24,9 +24,10 @@ name: Release
 # pushing a tag.
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # Manual only (2026-10-20, user's call): the Actions quota ran out, and every
+  # pushed tag was spending it automatically. The local gates (`just ci`,
+  # `just release`) are the default path now; run this from the Actions page
+  # when a hosted run is actually wanted.
   workflow_dispatch:
     inputs:
       version:

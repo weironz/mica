@@ -5,6 +5,10 @@
 推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后手动触发 `Deploy` workflow,
 生产滚到那个版本。两步,没有第三步。
 
+> **2026-10-20 起所有 workflow 都只能手动触发**(Actions 额度用完,用户定):推 tag / 推 main / 开 PR
+> 都**不再**自动跑任何东西。默认走下面「本地发布」(`just ci` / `just ship`);确实要用托管构建时,
+> 在 Actions 页面手动触发 `Release`(`version=X.Y.Z, publish=true`),它会自己建 tag 和 release。
+
 ## 你要按的那几下
 
 整个流程里手动的部分只有这些。照抄即可,`X.Y.Z` 换成版本号(补丁位递增;minor 由用户拍板)。
@@ -14,7 +18,8 @@
 #    要本地 Postgres 起着（just dev），否则当场拒绝——理由见步骤 3。
 just release X.Y.Z
 
-# 2. 推送。发布列车从这一下开始，CI 产出全部 7 个产物（约 10–15 分钟）。
+# 2. 推送。推 tag 不再自动触发 CI（2026-10-20 起全部手动）：要托管构建就手动触发
+#    Release（gh workflow run Release -f version=X.Y.Z -f publish=true），否则走「本地发布」。
 git push origin main vX.Y.Z
 
 # 3. 等 CI 绿，并确认 4 个 asset 都挂上了（草稿 release 在最后一步才翻成正式版）
