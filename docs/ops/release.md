@@ -123,6 +123,20 @@ just release-images X.Y.Z      # 三个镜像 → 阿里云 ACR + Docker Hub（�
 Windows 上没有可用的 ansible 时，`deploy-prod.sh` 会**自动在 `alpine/ansible` 容器里重跑自己**
 （与 DR 演练验证过的 `ansible-in-docker.sh` 同一手法），需要 Docker Desktop 和 `~/.ssh` 里的部署 key。
 
+## 自托管 runner（2026-10-20 起）
+
+GitHub 托管 runner 额度用完后，所有 job 改跑在两台自托管 runner 上（`runs-on: [self-hosted, Linux]` /
+`[self-hosted, Windows]`，原 `*-latest` 行注释保留）；没有 macOS runner，release 的 macOS CLI 一项已注释。
+
+- **机器要先补到托管镜像的基线，而不是让 workflow 去装**——否则同一份 YAML 在两种 runner 上行为分叉。
+  Windows：`scripts/runner-bootstrap-windows.ps1`（Chocolatey / Git+bash / pwsh / Inno Setup /
+  VS 2022 Build Tools C++ / 开发者模式），管理员 PowerShell 跑一次；没人在机器前时手动触发
+  `Runner bootstrap (Windows)` workflow 代跑（要求 runner 服务以 Local System 或管理员账号运行）。
+  Linux：需要 `musl-tools`、`pipx`。`Runner probe` workflow 报告两台机器的系统与工具现状。
+- **workflow 不得写 runner 用户的家目录**：自托管机器是人的机器。部署密钥 / known_hosts / ssh 配置
+  只进 `$RUNNER_TEMP`（`ssh -F` shim + `ANSIBLE_SSH_COMMON_ARGS`），`DOCKER_CONFIG` 也指到
+  `$RUNNER_TEMP`。〔切换当天第一次彩排就用生产密钥覆盖了 runner 用户的 `~/.ssh/id_ed25519`。〕
+
 ## CI 拿的是 root key —— 这是一次有代价的取舍
 
 **2026-08-25 之前**这一节讲的是相反的事:CI 那把密钥被 `authorized_keys` 的

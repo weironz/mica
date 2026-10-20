@@ -1,0 +1,28 @@
+name: Runner bootstrap (Windows)
+
+# Runs scripts/runner-bootstrap-windows.ps1 ON the self-hosted Windows runner,
+# for when nobody is at that machine to run it by hand. Same script, same
+# idempotence: rerunning only installs what is still missing. Manual only.
+#
+# Needs the runner SERVICE to have admin rights (Local System or an admin
+# account) — the default NETWORK SERVICE cannot install software, and the
+# script refuses up front saying so.
+on:
+  workflow_dispatch:
+
+jobs:
+  bootstrap:
+    runs-on: [self-hosted, Windows]
+    # VS Build Tools alone can take most of an hour on a first install.
+    timeout-minutes: 150
+    steps:
+      # No git on a bare machine yet: checkout falls back to the REST API.
+      - uses: actions/checkout@v5
+
+      - name: Bootstrap
+        # Windows PowerShell 5 — the one shell a bare machine is guaranteed to have.
+        shell: powershell
+        run: |
+          whoami
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\runner-bootstrap-windows.ps1 -RestartRunner
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
