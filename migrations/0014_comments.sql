@@ -1,4 +1,4 @@
--- Comments (docs/features/comments-plan.md, Phase 1).
+-- Comments (docs/comments-plan.md, Phase 1).
 --
 -- The anchor is a yrs STICKY INDEX, not a character offset: an offset is only
 -- correct against one version, and any concurrent insert before it silently

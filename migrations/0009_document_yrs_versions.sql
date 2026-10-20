@@ -1,5 +1,5 @@
 -- Page version history, yrs-native (the op-model document_versions table froze
--- with P4①b — see docs/features/version-history-plan.md). One row = one full-state yrs
+-- with P4①b — see docs/version-history-plan.md). One row = one full-state yrs
 -- snapshot of a document at a point in time. Auto rows (label IS NULL) are
 -- captured on a cadence by sync::push_update and expire by `expires_at`; named
 -- rows (label set) are user checkpoints and never expire (expires_at NULL).

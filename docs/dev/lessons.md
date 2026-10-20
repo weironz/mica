@@ -1055,3 +1055,21 @@ ansible 只支持 Linux/macOS 作控制端。于是这个检查的效果是**把
 (§1);roadmap 里「无 X」条目靠发版时逐条核(roadmap 维护规矩 #2);这一次是**对外部产品的
 否定式断言**——最危险,因为它没有代码可以兜底,也没有 test 会红。
 
+
+## 12. 「全仓替换路径」碰到了已发布的迁移 —— 注释也是 checksum 的一部分
+
+2026-10-20 发 0.13.57:docs 按文件夹重组时,把全仓 166 个文件里的旧 `docs/x.md` 路径机械改写,
+其中包括 `migrations/0009/0014/0025` **注释里**的路径。本地门禁全过(Rust + Postgres、
+Flutter 1822 测试),Release 全绿,**部署时 api 在节点上 crash-loop**:
+`migration 9 was previously applied but has been modified`,playbook 自动回滚到 0.13.56。
+
+根因:sqlx 对每个已应用迁移记的是**整个文件**的 checksum,注释也算。本地 / CI 的库都是
+用**当前**文件迁出来的,永远看不见;只有「用旧文件迁过的库」能发现 —— 也就是生产,
+而且是在部署那一刻。
+
+规则(已进 `scripts/release-check.sh`「shipped migrations unchanged」,对比每个迁移
+**首次发版的 tag**,不同即 REFUSED):
+
+1. **发过版的迁移文件是只读的,连注释都不能动。** 要改语义 → 新迁移;要改注释里的引用 →
+   不改,旧路径留着(`docs/README.md` 索引能找到新位置)。
+2. **全仓机械替换要先排除 `migrations/`**。「改的只是注释」恰恰是最容易放行的那种改动。
