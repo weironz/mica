@@ -544,6 +544,13 @@
         # `wait` replaces a hand-rolled `for i in $(seq 1 60)` health loop whose
         # docker-inspect format string was mis-escaped and reported "api NOT
         # healthy" over healthy deploys. Same 240s budget, none of the quoting.
+        #
+        # NOT in check mode. A dry-run creates nothing, so `--wait --dry-run`
+        # can only wait on the containers ALREADY there — it rehearses nothing
+        # about the new version and fails exactly when the current api is down.
+        # 2026-10-20: 0.13.58 left the node with an api that could not start,
+        # and every recovery deploy then died in the rehearsal on "mica-api-1
+        # is unhealthy" — the gate blocked the one deploy that would fix it.
         - name: Start the application services and wait for them
           community.docker.docker_compose_v2:
             project_src: "{{ mica_dir }}"
@@ -556,7 +563,7 @@
             state: present
             dependencies: false
             remove_orphans: true
-            wait: true
+            wait: "{{ not ansible_check_mode }}"
             wait_timeout: 240
 
         # The backup sidecar runs mica-cli, so it is keyed to the SAME

@@ -58,10 +58,24 @@ async fn main() -> anyhow::Result<()> {
   // sentinel, so it is cheap on every subsequent boot. Best effort: a decode
   // failure warn-logs and skips that document (it misses search / backlinks
   // until it's next edited) but never blocks startup.
-  match mica_app_core::sync::backfill_derived_columns(&db).await {
-    Ok(filled) if filled > 0 => info!("derived-column backfill: indexed {filled} document(s)"),
-    Ok(_) => {}
-    Err(error) => tracing::warn!(%error, "derived-column backfill failed; search/backlinks may miss some documents until next edit"),
+  //
+  // In the BACKGROUND, not before `bind`. A migration that adds a derived
+  // column (0030 `file_ids`) makes every row a sentinel, so the first boot
+  // after it decodes the whole table — and while that ran inline the port was
+  // closed: 0.13.58's first deploy went unhealthy on the 100 s healthcheck,
+  // was rolled back, and the previous version could not start on the migrated
+  // schema. Nothing here needs it done before traffic: search, backlinks and
+  // blob GC all treat a sentinel row as "not derived yet", and the write is
+  // conditional on the state it was derived from (see the function).
+  {
+    let db = db.clone();
+    tokio::spawn(async move {
+      match mica_app_core::sync::backfill_derived_columns(&db).await {
+        Ok(filled) if filled > 0 => info!("derived-column backfill: indexed {filled} document(s)"),
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "derived-column backfill failed; search/backlinks may miss some documents until next edit"),
+      }
+    });
   }
 
   // Test-environment convenience: keep the seeded test account's credentials
