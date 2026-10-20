@@ -24,11 +24,14 @@
                                   does not download it each time)
     - VS 2022 Build Tools, C++ desktop workload + Windows SDK
                                  (Rust's MSVC target and `flutter build windows`)
+    - rustup (machine-wide, C:\rust)
+                                 (release `windows` + flutter-integration build
+                                  the FFI crate with no toolchain step)
     - Long paths (registry + git core.longpaths)
                                  (checkout of this repo exceeds 260 chars)
     - Developer Mode             (Flutter needs symlinks for plugin builds)
-  Flutter and Rust themselves are NOT installed: the workflows fetch the pinned
-  versions (.fvmrc / rust-toolchain.toml) on their own.
+  Flutter is NOT installed: the workflows fetch the pinned version (.fvmrc).
+  rustup is, but only stable/minimal: rust-toolchain.toml pins the version.
 
 .PARAMETER RestartRunner
   Restart the runner service a minute after finishing, so it picks up the new
@@ -104,6 +107,34 @@ Ensure-Choco 'visualstudio2022buildtools' $hasVc @(
 )
 if (-not (& $hasVc)) { throw "VS Build Tools installed, but the C++ toolset is still missing" }
 
+# --- Rust (rustup) ------------------------------------------------------------
+# The hosted image ships rustup, and two Windows jobs lean on that: release.yml's
+# `windows` and flutter-integration's `integration` build the FFI crate with no
+# toolchain step of their own. Installed machine-wide under C:\rust (the runner
+# service may run as Local System, whose profile is no place for a toolchain).
+# Only stable/minimal here: rust-toolchain.toml pins the real version, which
+# rustup fetches on the first cargo call.
+$rustRoot = Join-Path $env:SystemDrive 'rust'
+$env:RUSTUP_HOME = Join-Path $rustRoot 'rustup'
+$env:CARGO_HOME = Join-Path $rustRoot 'cargo'
+$cargoBin = Join-Path $env:CARGO_HOME 'bin'
+if (Test-Path (Join-Path $cargoBin 'rustup.exe')) {
+  Say "rustup: present"
+} else {
+  Say "rustup: installing to $rustRoot"
+  $init = Join-Path $env:TEMP 'rustup-init.exe'
+  Invoke-WebRequest -UseBasicParsing -OutFile $init -Uri 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+  & $init -y --no-modify-path --profile minimal --default-toolchain stable
+  if ($LASTEXITCODE) { throw "rustup-init failed (exit $LASTEXITCODE)" }
+}
+[Environment]::SetEnvironmentVariable('RUSTUP_HOME', $env:RUSTUP_HOME, 'Machine')
+[Environment]::SetEnvironmentVariable('CARGO_HOME', $env:CARGO_HOME, 'Machine')
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+if (($machinePath -split ';') -notcontains $cargoBin) {
+  [Environment]::SetEnvironmentVariable('Path', "$machinePath;$cargoBin", 'Machine')
+}
+Refresh-Path
+
 # --- Long paths ----------------------------------------------------------------
 # The hosted image has them on; without them the first checkout of this repo on
 # a bare runner died extracting the archive (a path past 260 chars).
@@ -129,7 +160,7 @@ if ((Get-ItemProperty -Path $dev -Name AllowDevelopmentWithoutDevLicense -ErrorA
 # --- Report -----------------------------------------------------------------
 Refresh-Path
 Say "result:"
-foreach ($t in 'git', 'bash', 'pwsh', 'choco', 'iscc') {
+foreach ($t in 'git', 'bash', 'pwsh', 'choco', 'iscc', 'rustup', 'cargo') {
   $c = Get-Command $t -ErrorAction SilentlyContinue
   if (-not $c -and $t -eq 'iscc') { $c = Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue }
   '    {0,-6} {1}' -f $t, $(if ($c) { if ($c.Source) { $c.Source } else { $c.FullName } } else { 'MISSING' })
