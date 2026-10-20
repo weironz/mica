@@ -30,6 +30,25 @@ jobs:
           timeout 120 flutter --version 2>&1 | head -1 || echo "flutter: no answer in 120s"
           df -h "$RUNNER_WORKSPACE" | tail -1
 
+      # 2026-10-20: the first web image built here shipped its bundle 0600/0700
+      # and production served 403. The umask a JOB actually gets comes from the
+      # runner process (systemd unit / the shell that started it), not from a
+      # login shell's profile — so read it from the job and from the process.
+      - name: Environment that shapes build output
+        shell: bash
+        run: |
+          echo "job umask:      $(umask)"
+          echo "identity:       $(id)"
+          runner_pid=$(pgrep -f 'Runner.Listener' | head -1 || true)
+          [ -n "$runner_pid" ] && echo "runner process: pid=$runner_pid $(grep -E '^(Umask|Uid)' /proc/$runner_pid/status | tr '\n' ' ')"
+          systemctl list-units --type=service --no-legend 'actions.runner.*' 2>/dev/null | awk '{print "service:        "$1}'
+          for u in $(systemctl list-units --type=service --no-legend 'actions.runner.*' 2>/dev/null | awk '{print $1}'); do
+            systemctl show "$u" -p UMask -p User 2>/dev/null | sed 's/^/                /'
+          done
+          grep -h 'umask' /etc/login.defs /etc/profile /etc/bash.bashrc "$HOME/.profile" "$HOME/.bashrc" 2>/dev/null | grep -v '^\s*#' | sed 's/^/configured:     /' || true
+          echo "memory:         $(free -h | awk '/^Mem:/ {print $2" total, "$7" available"}')"
+          echo "uptime:         $(uptime -p 2>/dev/null || uptime)"
+
   windows:
     runs-on: [self-hosted, Windows]
     timeout-minutes: 10
@@ -48,3 +67,25 @@ jobs:
             '{0,-55} {1}' -f $p, (Test-Path $p)
           }
           Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} | Format-Table -AutoSize | Out-String
+
+      # 2026-10-20: the 0.13.60 installer job died mid-step with "the self-hosted
+      # runner lost communication with the server". These are the usual
+      # suspects on a VM: sleep, an unexpected reboot, the NIC dropping, or
+      # memory pressure — each leaves a trace below.
+      - name: Why might this machine drop off
+        shell: powershell
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          'memory:   {0:N1} GB total, {1:N1} GB free' -f ($os.TotalVisibleMemorySize/1MB), ($os.FreePhysicalMemory/1MB)
+          'cpus:     {0}' -f (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+          'booted:   {0}  (up {1})' -f $os.LastBootUpTime, ((Get-Date) - $os.LastBootUpTime).ToString('d\.hh\:mm')
+          'service:  ' + ((Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner.%'" | ForEach-Object { "$($_.Name) as $($_.StartName), $($_.State)" }) -join '; ')
+          "--- power (AC): sleep / hibernate after (seconds, 0 = never)"
+          powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE | Select-String 'Current AC Power Setting'
+          powercfg /query SCHEME_CURRENT SUB_SLEEP HIBERNATEIDLE | Select-String 'Current AC Power Setting'
+          "--- system events, last 12h: sleep/wake, unexpected shutdown, NIC down, low memory"
+          $since = (Get-Date).AddHours(-12)
+          $ids = 1, 42, 41, 6008, 27, 4202, 2004, 10400
+          Get-WinEvent -FilterHashtable @{ LogName = 'System'; StartTime = $since; Id = $ids } -ErrorAction SilentlyContinue |
+            Select-Object -First 30 TimeCreated, Id, ProviderName, @{n='Message';e={($_.Message -split "`n")[0].Trim()}} |
+            Format-Table -AutoSize -Wrap | Out-String -Width 200
