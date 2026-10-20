@@ -16,13 +16,21 @@ jobs:
     # VS Build Tools alone can take most of an hour on a first install.
     timeout-minutes: 150
     steps:
-      # No git on a bare machine yet: checkout falls back to the REST API.
-      - uses: actions/checkout@v5
-
+      # NO actions/checkout: with no git on a bare machine it falls back to a
+      # zip of the whole repo, and expanding that died on a path past 260 chars
+      # (long paths are one of the things this bootstrap turns on). Only the
+      # script is needed, so fetch just that file, at this run's commit.
       - name: Bootstrap
         # Windows PowerShell 5 — the one shell a bare machine is guaranteed to have.
         shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           whoami
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\runner-bootstrap-windows.ps1 -RestartRunner
+          [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+          $script = Join-Path $env:RUNNER_TEMP 'runner-bootstrap-windows.ps1'
+          Invoke-WebRequest -UseBasicParsing -OutFile $script `
+            -Uri "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/contents/scripts/runner-bootstrap-windows.ps1?ref=$env:GITHUB_SHA" `
+            -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github.raw' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File $script -RestartRunner
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
