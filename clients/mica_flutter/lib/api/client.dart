@@ -931,7 +931,7 @@ class ApiClient {
     return PageGraph.fromJson(response);
   }
 
-  // ── Comments (docs/comments-plan.md) ───────────────────────────────────────
+  // ── Comments (docs/features/comments-plan.md) ───────────────────────────────────────
   // Anchors are yrs sticky indexes the SERVER owns: the client sends the range it
   // selected and gets back offsets resolved against the live document. It never
   // stores an offset itself — that is the whole point (an offset goes stale the
@@ -1109,11 +1109,15 @@ class ApiClient {
   Future<Map<String, dynamic>> listAiModels(
     String token, {
     String? provider,
+    String? providerId,
     String? baseUrl,
     String? apiKey,
   }) async {
     final query = <String, String>{
       if (provider != null && provider.isNotEmpty) 'provider': provider,
+      // Which vendor's stored key to fall back on — without it the server
+      // used the ACTIVE vendor's key against this vendor's URL.
+      if (providerId != null && providerId.isNotEmpty) 'provider_id': providerId,
       if (baseUrl != null && baseUrl.isNotEmpty) 'base_url': baseUrl,
       if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
     };
@@ -1280,7 +1284,10 @@ class ApiClient {
     final put = await sharedHttpClient.put(
       Uri.parse(uploadUrl),
       headers: {
-        'content-type': mimeType,
+        // The server signs the Content-Type into the URL and may store an
+        // executable type (HTML, SVG…) as octet-stream; send exactly what it
+        // signed. Older servers do not return it and sign no type at all.
+        'content-type': (upload['content_type'] as String?) ?? mimeType,
         'if-none-match': upload['if_none_match'] as String,
         'x-amz-checksum-sha256': upload['checksum_sha256'] as String,
       },

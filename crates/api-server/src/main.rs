@@ -13,6 +13,7 @@ mod bucket;
 mod legacy_orphans;
 mod mail;
 mod metrics;
+mod origin;
 mod password_strength;
 mod rate_limit;
 mod routes;
@@ -111,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
   // time, and the screen gives the reader no way to know the fix is a database
   // row.
   if let Ok(Some((users, admins))) =
-    sqlx::query_as::<_, (i64, i64)>("SELECT count(*), count(*) FILTER (WHERE is_admin) FROM users")
+    sqlx::query_as::<_, (i64, i64)>("SELECT count(*), count(*) FILTER (WHERE is_admin) FROM users WHERE deleted_at IS NULL")
       .fetch_optional(&db)
       .await
   {

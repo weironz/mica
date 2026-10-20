@@ -6,7 +6,7 @@
 //! The old script degraded silently. With `MICA_BACKUP_PGURL` unset it logged a
 //! WARN, skipped the database, backed up the content, and **exited 0** — so the
 //! dead man's switch stayed green while production had no off-site copy of its
-//! database for months (`docs/dr-plan.md` §1.1). Nobody wrote that bug: it is
+//! database for months (`docs/ops/dr-plan.md` §1.1). Nobody wrote that bug: it is
 //! what "partial success" looks like in a language where a run is an exit code.
 //!
 //! Here a run is a [`Report`] of typed [`Leg`]s. A leg either `Ran` or was
@@ -20,7 +20,7 @@
 //! `rustic`, `rclone` and `pg_dump` stay external processes. They are the
 //! mechanism (encryption, dedup, retention, object mirroring); this module is
 //! the policy (which legs, in what order, and what counts as success). Same
-//! split the shell version had — see `docs/backup.md`.
+//! split the shell version had — see `docs/ops/backup.md`.
 
 use anyhow::{Context, Result, bail};
 use std::io::Write;
@@ -642,7 +642,7 @@ pub fn verdict(report: &Report, allow_partial: bool) -> Result<()> {
     "backup covered less than a full instance — these legs did not run:\n{detail}\n\
      Configure them, or set MICA_BACKUP_ALLOW_PARTIAL=1 to accept a partial backup \
      on purpose. Failing quietly here is what left production without an off-site \
-     database copy for months (docs/dr-plan.md §1.1)."
+     database copy for months (docs/ops/dr-plan.md §1.1)."
   )
 }
 

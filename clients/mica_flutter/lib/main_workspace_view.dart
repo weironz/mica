@@ -407,6 +407,7 @@ class WorkspaceView extends StatefulWidget {
   /// Fetch the provider's model list. Null in 本地模式, like the settings pair.
   final Future<Map<String, dynamic>> Function({
     String? provider,
+    String? providerId,
     String? baseUrl,
     String? apiKey,
   })?
@@ -812,7 +813,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   ///
   /// Registered on [HardwareKeyboard] because no focus-based binding can see
   /// the key: three were built and all three were dead, measured in the running
-  /// app (the probe story lives in `docs/shortcuts.md`). Focus sits on the page
+  /// app (the probe story lives in `docs/features/shortcuts.md`). Focus sits on the page
   /// route's own scope — an ancestor of this whole shell — and Flutter
   /// dispatches keys from the focused node UPWARD, so `Shortcuts` anywhere
   /// inside the shell is never on the path. Hardware handlers run regardless of
@@ -1880,7 +1881,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // bindings were built first and all three were dead (a local
       // `Shortcuts`/`Actions` pair, the same plus a requested FocusNode, and
       // `_appShortcuts` where Ctrl+N works); the probe story is in
-      // `docs/shortcuts.md`. Short version: when Esc arrives, focus sits on the
+      // `docs/features/shortcuts.md`. Short version: when Esc arrives, focus sits on the
       // page route's own scope — an ANCESTOR of this shell — and key dispatch
       // walks from the focused node UPWARD, so nothing registered in here is
       // ever on the path. The feature shipped without Esc for that reason
@@ -3497,7 +3498,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                 // root block's `data['front_matter']`; commits write it back
                 // through the same self-dispatching op sink the editor uses
                 // (local / cloud-CRDT / cloud-REST all handled). See
-                // docs/page-properties.md.
+                // docs/features/page-properties.md.
                 if (_showProperties)
                   PropertyPanel(
                     frontMatter: bootstrap.rootFrontMatter,
@@ -3622,7 +3623,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   /// The outline row that stands for the page title. Not a block id — the title
   /// is not a block — so it is a sentinel no document can produce.
-  static const String _outlineTitleId = ' outline-page-title';
+  static const String _outlineTitleId = '\u0000outline-page-title';
 
   /// Put the caret at the end of the page-title field.
   ///
@@ -3657,7 +3658,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // It used to be missing entirely, which reads as a bug once you notice it:
     // a document's outline that never mentions the document. The title is not a
     // heading BLOCK — it lives outside the editor's document (see
-    // `docs/page-title-plan.md`) — so the editor's live heading feed cannot
+    // `docs/features/page-title-plan.md`) — so the editor's live heading feed cannot
     // carry it. It is prepended here, where the page is known.
     //
     // Level 1 on purpose: every heading the author writes then indents under it,

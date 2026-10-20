@@ -189,7 +189,7 @@ class TreeSelection {
 /// built and all three were dead, measured in the running app. When Esc is
 /// pressed, focus sits on the page route's own scope — an ANCESTOR of the whole
 /// shell — and Flutter dispatches keys from the focused node UPWARD, so nothing
-/// registered inside the shell is on the path. (`docs/shortcuts.md` carries the
+/// registered inside the shell is on the path. (`docs/features/shortcuts.md` carries the
 /// probe results; the feature shipped without Esc for exactly this reason,
 /// until the user asked for it on 2026-08-27.)
 ///

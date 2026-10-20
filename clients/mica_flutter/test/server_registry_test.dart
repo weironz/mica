@@ -5,7 +5,7 @@ import 'package:mica_flutter/server_registry.dart';
 
 /// Characterization tests for [ServerRegistry], pinned against the
 /// server-management behavior it had as `_WorkspaceShellState` methods
-/// (god-class wrap-up; docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
+/// (god-class wrap-up; docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
 void main() {
   late Map<String, String> prefs;
   late List<String> forgotten;

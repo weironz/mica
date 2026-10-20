@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use axum::Extension;
 use axum::extract::{ConnectInfo, Request};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tokio::sync::Semaphore;
@@ -95,6 +95,7 @@ impl RateLimiter {
 
     /// `now` is injected so tests can advance time; production calls [`allow`].
     fn allow_at(&self, ip: IpAddr, now: Instant) -> bool {
+        let ip = bucket_key(ip);
         let mut buckets = self.buckets.lock().unwrap();
         // Opportunistic cleanup so a spray of unique IPs can't grow the map
         // without bound: drop buckets that have idled back to full.
@@ -124,6 +125,25 @@ impl RateLimiter {
 
     pub fn allow(&self, ip: IpAddr) -> bool {
         self.allow_at(ip, Instant::now())
+    }
+}
+
+/// The bucket an address is charged to.
+///
+/// IPv6: the /64. A single subscriber is routinely handed a whole /64 (often
+/// far more) and can pick any address in it, so a per-ADDRESS bucket let one
+/// client rotate past the limit indefinitely. IPv4-mapped IPv6 is charged as
+/// the IPv4 address it is.
+fn bucket_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
     }
 }
 
@@ -171,19 +191,31 @@ fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {
 /// NOT here: they are already token-authenticated and a shared per-IP bucket
 /// would throttle a user opening several documents at once — not worth the false
 /// positives for a low-severity authed path.
-fn is_rate_limited(path: &str) -> bool {
-    spends_argon2(path)
+fn is_rate_limited(method: &Method, path: &str) -> bool {
+    spends_argon2(method, path)
         || path.ends_with("/auth/refresh")
         || path.ends_with("/auth/password/forgot")
         // The reset page lives outside /api (no /auth segment): match it exactly.
         || path.ends_with("/reset-password")
+        // Each call mails a fresh link. Unthrottled, one loop flooded a
+        // victim's inbox (register their address once, then resend forever)
+        // and spent the operator's mail quota and sender reputation.
+        || path.ends_with("/auth/resend-verification")
 }
 
 /// Endpoints that run an Argon2 hash/verify — the ones the concurrency gate must
 /// bound. `refresh` is excluded: it is a DB token rotation, and holding a scarce
 /// Argon2 permit for it would starve real logins.
-fn spends_argon2(path: &str) -> bool {
-    path.ends_with("/auth/login") || path.ends_with("/auth/register")
+fn spends_argon2(method: &Method, path: &str) -> bool {
+    path.ends_with("/auth/login")
+        || path.ends_with("/auth/register")
+        // Signed-in, but each verifies the CURRENT password with Argon2: with a
+        // stolen access token (or cookie) these were an unthrottled password
+        // oracle, and any account could fire hundreds at once and pin every
+        // core — the flood the semaphore exists to stop. Method-aware: a GET
+        // of `/auth/me` is the profile read and must stay free.
+        || (method == Method::POST && path.ends_with("/auth/password"))
+        || (method == Method::DELETE && path.ends_with("/auth/me"))
 }
 
 /// Outer middleware: throttle the auth endpoints per client IP and cap
@@ -196,7 +228,7 @@ pub async fn auth_rate_limit(
 ) -> Response {
     let (limited, argon2) = {
         let path = req.uri().path();
-        (is_rate_limited(path), spends_argon2(path))
+        (is_rate_limited(req.method(), path), spends_argon2(req.method(), path))
     };
     if !limited {
         return next.run(req).await;
@@ -285,20 +317,48 @@ mod tests {
 
     #[test]
     fn refresh_is_rate_limited_but_not_argon2_gated() {
-        assert!(is_rate_limited("/api/auth/login"));
-        assert!(is_rate_limited("/api/auth/register"));
-        assert!(is_rate_limited("/api/auth/refresh"));
+        assert!(is_rate_limited(&Method::POST, "/api/auth/login"));
+        assert!(is_rate_limited(&Method::POST, "/api/auth/register"));
+        assert!(is_rate_limited(&Method::POST, "/api/auth/refresh"));
         // Password reset: both throttled, neither Argon2-gated.
-        assert!(is_rate_limited("/api/auth/password/forgot"));
-        assert!(is_rate_limited("/reset-password"));
-        assert!(!is_rate_limited("/api/workspaces"));
-        assert!(!is_rate_limited("/ws/workspaces/x/documents/y"));
+        assert!(is_rate_limited(&Method::POST, "/api/auth/password/forgot"));
+        assert!(is_rate_limited(&Method::POST, "/reset-password"));
+        assert!(is_rate_limited(&Method::POST, "/api/auth/resend-verification"));
+        assert!(!spends_argon2(&Method::POST, "/api/auth/resend-verification"));
+        assert!(!is_rate_limited(&Method::POST, "/api/workspaces"));
+        assert!(!is_rate_limited(&Method::POST, "/ws/workspaces/x/documents/y"));
         // Only login/register hash — refresh/forgot/reset must not hold an Argon2 permit.
-        assert!(spends_argon2("/api/auth/login"));
-        assert!(spends_argon2("/api/auth/register"));
-        assert!(!spends_argon2("/api/auth/refresh"));
-        assert!(!spends_argon2("/api/auth/password/forgot"));
-        assert!(!spends_argon2("/reset-password"));
+        assert!(spends_argon2(&Method::POST, "/api/auth/login"));
+        assert!(spends_argon2(&Method::POST, "/api/auth/register"));
+        assert!(!spends_argon2(&Method::POST, "/api/auth/refresh"));
+        assert!(!spends_argon2(&Method::POST, "/api/auth/password/forgot"));
+        assert!(!spends_argon2(&Method::POST, "/reset-password"));
+    }
+
+    #[test]
+    fn signed_in_password_checks_are_throttled_but_the_profile_read_is_not() {
+        assert!(spends_argon2(&Method::POST, "/api/auth/password"));
+        assert!(is_rate_limited(&Method::POST, "/api/auth/password"));
+        assert!(spends_argon2(&Method::DELETE, "/api/auth/me"));
+        assert!(!is_rate_limited(&Method::GET, "/api/auth/me"));
+        assert!(!is_rate_limited(&Method::PATCH, "/api/auth/me"));
+    }
+
+    /// One subscriber owns a whole /64; a per-address bucket let them rotate
+    /// past the limit forever.
+    #[test]
+    fn an_ipv6_slash_64_shares_one_bucket() {
+        let rl = RateLimiter::new(2, 0.0);
+        let now = Instant::now();
+        let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:ffff::9".parse().unwrap();
+        let other: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert!(rl.allow_at(a, now));
+        assert!(rl.allow_at(b, now));
+        assert!(!rl.allow_at(a, now), "same /64, budget spent");
+        assert!(rl.allow_at(other, now), "a different /64 is a different client");
+        let mapped: IpAddr = "::ffff:203.0.113.7".parse().unwrap();
+        assert_eq!(bucket_key(mapped), "203.0.113.7".parse::<IpAddr>().unwrap());
     }
 
     #[test]

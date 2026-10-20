@@ -62,7 +62,7 @@ class MicaEyebrow extends StatelessWidget {
 /// A white content card: hairline border, 14px radius, generous padding.
 ///
 /// Radius is **14, not the mockups' 12** — the design system pins 8/14/16 and the
-/// mockups violate their own ladder (recorded in `docs/design-adoption.md`).
+/// mockups violate their own ladder (recorded in `docs/features/design-adoption.md`).
 class MicaCard extends StatelessWidget {
   const MicaCard({
     required this.child,

@@ -1,6 +1,7 @@
 use std::{
   collections::HashMap,
   sync::{Arc, Mutex, Weak},
+  time::Instant,
 };
 
 use serde::Serialize;
@@ -11,6 +12,14 @@ use uuid::Uuid;
 /// Capacity of each room's broadcast channel. Slow receivers that fall behind
 /// this many messages observe a lag error and rebootstrap.
 const ROOM_CHANNEL_CAPACITY: usize = 256;
+
+/// Presence broadcasts one connection may burst / sustain per second.
+///
+/// Presence shares the room channel with CRDT updates and needs no write
+/// permission, so a viewer spamming it pushed real updates out of every peer's
+/// receiver (`Lagged` → resync storms). A cursor at 20 Hz never notices this.
+const PRESENCE_BURST: f64 = 30.0;
+const PRESENCE_PER_SEC: f64 = 30.0;
 
 /// A message fanned out to every live connection in a document room.
 #[derive(Clone, Debug)]
@@ -37,9 +46,31 @@ pub struct Room {
   document_id: Uuid,
   sender: broadcast::Sender<RoomMessage>,
   presence: Mutex<HashMap<Uuid, PresenceEntry>>,
+  /// Per-connection presence token bucket: (tokens, last refill).
+  presence_budget: Mutex<HashMap<Uuid, (f64, Instant)>>,
 }
 
 impl Room {
+  /// Spend one presence broadcast for `connection_id`; false = over budget,
+  /// drop it.
+  pub fn allow_presence(&self, connection_id: Uuid) -> bool {
+    self.allow_presence_at(connection_id, Instant::now())
+  }
+
+  fn allow_presence_at(&self, connection_id: Uuid, now: Instant) -> bool {
+    let mut budget = self.presence_budget.lock().expect("room presence mutex poisoned");
+    let (tokens, last) = budget.entry(connection_id).or_insert((PRESENCE_BURST, now));
+    *tokens = (*tokens + now.saturating_duration_since(*last).as_secs_f64() * PRESENCE_PER_SEC)
+      .min(PRESENCE_BURST);
+    *last = now;
+    if *tokens >= 1.0 {
+      *tokens -= 1.0;
+      true
+    } else {
+      false
+    }
+  }
+
   pub fn document_id(&self) -> Uuid {
     self.document_id
   }
@@ -63,6 +94,11 @@ impl Room {
   }
 
   pub fn remove_presence(&self, connection_id: Uuid) -> Option<PresenceEntry> {
+    self
+      .presence_budget
+      .lock()
+      .expect("room presence mutex poisoned")
+      .remove(&connection_id);
     self
       .presence
       .lock()
@@ -101,11 +137,18 @@ impl DocumentHub {
       return room;
     }
 
+    // Drop the entries of rooms that emptied. Nothing else ever removed them,
+    // so the map grew by one per distinct document ever opened, for the life
+    // of the process (and `active_ids` scanned them all). Only on the
+    // create path, which is when the map would grow anyway.
+    rooms.retain(|_, room| room.strong_count() > 0);
+
     let (sender, _receiver) = broadcast::channel(ROOM_CHANNEL_CAPACITY);
     let room = Arc::new(Room {
       document_id,
       sender,
       presence: Mutex::new(HashMap::new()),
+      presence_budget: Mutex::new(HashMap::new()),
     });
     rooms.insert(document_id, Arc::downgrade(&room));
     room
@@ -151,6 +194,31 @@ impl DocumentHub {
 mod tests {
   use super::*;
   use serde_json::json;
+
+  /// A presence flood is cut off after the burst and recovers with time; one
+  /// connection's flood does not spend another's budget.
+  #[test]
+  fn presence_is_rate_limited_per_connection() {
+    let room = DocumentHub::new().join(Uuid::nil());
+    let (spammer, other) = (Uuid::from_u128(1), Uuid::from_u128(2));
+    let t0 = Instant::now();
+    let allowed = (0..100).filter(|_| room.allow_presence_at(spammer, t0)).count();
+    assert_eq!(allowed, PRESENCE_BURST as usize);
+    assert!(room.allow_presence_at(other, t0), "budgets are per connection");
+    assert!(room.allow_presence_at(spammer, t0 + std::time::Duration::from_millis(100)));
+  }
+
+  /// Rooms that emptied are dropped from the registry when a new one opens,
+  /// instead of accumulating for the life of the process.
+  #[test]
+  fn dead_rooms_are_pruned_from_the_registry() {
+    let hub = DocumentHub::new();
+    for i in 0..10 {
+      drop(hub.join(Uuid::from_u128(i)));
+    }
+    let _live = hub.join(Uuid::from_u128(99));
+    assert_eq!(hub.rooms.lock().unwrap().len(), 1);
+  }
 
   #[test]
   fn join_reuses_live_room() {

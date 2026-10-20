@@ -1113,6 +1113,10 @@
   "@uploadWorkspaceFull": {
     "description": "Shown for the `workspace_quota_exceeded` error code. Names the delay explicitly because deleted-but-unswept bytes still count toward the quota by design."
   },
+  "uploadOwnerFull": "The owner of this workspace has used all of their storage across their workspaces. Freeing space in any of them makes room here, once the cleanup sweep has run.",
+  "@uploadOwnerFull": {
+    "description": "Shown for the `owner_quota_exceeded` error code: the per-owner total across every workspace that account owns is full, even if this workspace alone is not."
+  },
   "importProgress": "Importing {done} / {total}",
   "@importProgress": {
     "placeholders": {

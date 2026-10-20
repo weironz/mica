@@ -34,7 +34,7 @@ impl MicaDocument {
     ///
     /// This does NOT fix whatever panics first; it stops that panic from being
     /// amplified. The root cause needs the FIRST `panicked at` line from the
-    /// logs — see docs/code-review-2026-07-20.md.
+    /// logs — see docs/reviews/code-review-2026-07-20.md.
     pub(crate) fn doc(&self) -> std::sync::MutexGuard<'_, MicaDoc> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -308,7 +308,7 @@ impl MicaDocument {
     /// goes through the same narrow primitive for the same reason: rebuilding
     /// the blocks (`set_blocks`) would give every block a brand-new text object
     /// and invalidate every comment anchor on the page. See
-    /// `docs/page-title-plan.md` §5.1.
+    /// `docs/features/page-title-plan.md` §5.1.
     ///
     /// Returns false when nothing changed — the title already said this, or the
     /// document has no root — so the caller can skip persisting. Comparing first
@@ -355,7 +355,7 @@ impl MicaDocument {
     /// (`mica_markdown::with_page_title`) so the two worlds cannot drift.
     ///
     /// [`title`] is the view's name; a document that carries its own title
-    /// (`root.data['title']`) wins over it. See `docs/page-title-plan.md`.
+    /// (`root.data['title']`) wins over it. See `docs/features/page-title-plan.md`.
     #[frb(sync)]
     pub fn export_markdown_titled(&self, title: String) -> String {
         let payload = self.snapshot();
@@ -406,7 +406,7 @@ impl MicaDocument {
         }
         let body = mica_markdown::export_markdown_with_assets(&payload, &map).unwrap_or_default();
         // The title leads the text as well as naming the file — the same rule
-        // the cloud ZIP follows (`docs/page-title-plan.md`). `base` is the raw
+        // the cloud ZIP follows (`docs/features/page-title-plan.md`). `base` is the raw
         // page name here; only the FILE name gets sanitized, so it doubles as
         // the title with no extra parameter.
         let title = mica_markdown::document_title(&payload).unwrap_or(base.as_str());

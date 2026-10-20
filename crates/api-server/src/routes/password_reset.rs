@@ -142,11 +142,20 @@ pub struct ResetForm {
 
 /// `POST /reset-password` — spend the token and set the new password.
 pub async fn reset_submit(State(state): State<AppState>, Form(form): Form<ResetForm>) -> Response {
-  if form.password.len() < 8 {
-    return reset_form_page(
-      &form.token,
-      Some("Your new password must be at least 8 characters."),
-    );
+  // The SAME policy as register / change-password. This used to be its own
+  // `len() < 8` — bytes, not characters, and none of the rest of the policy —
+  // so `password`, `12345678` or three CJK characters were accepted here and
+  // only here. Checked BEFORE the token is spent, so a rejected password does
+  // not burn the link.
+  match reset_identifiers(&state.db, &form.token).await {
+    Ok(Some((email, name))) => {
+      if let Err(weak) = crate::password_strength::check(&form.password, &[&email, &name]) {
+        return reset_form_page(&form.token, Some(weak.message()));
+      }
+    }
+    Ok(None) => return reset_invalid_page(),
+    Err(ResetError::Invalid) => return reset_invalid_page(),
+    Err(ResetError::Internal) => return reset_error_page(),
   }
 
   match consume_and_reset(&state.db, &form.token, &form.password).await {
@@ -161,6 +170,28 @@ enum ResetError {
   /// Unknown, expired, or already-used token — all the same to the user.
   Invalid,
   Internal,
+}
+
+/// The email and display name of a still-spendable token's user, WITHOUT
+/// spending it — the strength check needs them as identifiers.
+async fn reset_identifiers(
+  db: &sqlx::PgPool,
+  token: &str,
+) -> Result<Option<(String, String)>, ResetError> {
+  sqlx::query_as(
+    r#"
+      SELECT u.email, u.display_name
+      FROM password_reset_tokens t JOIN users u ON u.id = t.user_id
+      WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now()
+    "#,
+  )
+  .bind(sha256_hex(token))
+  .fetch_optional(db)
+  .await
+  .map_err(|error| {
+    tracing::error!(%error, "password reset: token lookup failed");
+    ResetError::Internal
+  })
 }
 
 /// Spend the token (conditional UPDATE: the decision IS the UPDATE, so an

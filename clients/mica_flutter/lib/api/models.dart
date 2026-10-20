@@ -608,7 +608,7 @@ class GraphEdge {
 ///
 /// Null on a [CommentThread] means ORPHANED: the anchored text is gone, so the
 /// thread is shown against its `quote` and NO highlight is drawn — never guess a
-/// position (docs/comments-plan.md).
+/// position (docs/features/comments-plan.md).
 class CommentAnchorRange {
   const CommentAnchorRange({
     required this.startBlock,
@@ -925,7 +925,7 @@ class DocumentBootstrap {
 
   /// The page's title as the DOCUMENT states it, falling back to the view's
   /// name — the same rule the server applies (`mica_markdown::document_title`,
-  /// then `views.name`). See `docs/page-title-plan.md`.
+  /// then `views.name`). See `docs/features/page-title-plan.md`.
   ///
   /// The fallback is not a safety net, it is the ordinary case: there is no
   /// backfill migration, so a page carries a title in its document only once

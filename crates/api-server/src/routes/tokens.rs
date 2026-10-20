@@ -19,6 +19,9 @@ use uuid::Uuid;
 
 use crate::routes::auth::{PAT_PREFIX, Scope, sha256_hex, user_id_from_headers};
 
+/// Longest expiry a token may ask for (ten years); omit it for no expiry.
+const MAX_TOKEN_DAYS: i64 = 3650;
+
 #[derive(Debug, Deserialize)]
 pub struct CreateTokenRequest {
   name: String,
@@ -81,7 +84,18 @@ pub async fn create_token(
     req.scopes.clone()
   };
 
-  let expires_at = req.expires_in_days.map(|d| Utc::now() + Duration::days(d));
+  // Bounded: `Duration::days` and `DateTime + Duration` both PANIC out of
+  // range, so a huge `expires_in_days` took the request down instead of being
+  // refused.
+  let expires_at = match req.expires_in_days {
+    None => None,
+    Some(d @ 1..=MAX_TOKEN_DAYS) => Some(Utc::now() + Duration::days(d)),
+    Some(_) => {
+      return Err(ApiError::BadRequest(format!(
+        "expires_in_days must be between 1 and {MAX_TOKEN_DAYS}"
+      )));
+    }
+  };
 
   // 244 bits of randomness from two v4 UUIDs — no extra crate, plenty for a token.
   let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());

@@ -15,7 +15,7 @@
 //! History: this used to be `#[ignore]`, gated on a hand-captured
 //! MICA_WEB_STATE_B64 from the browser W2 self-test, because no CI job
 //! produced the state — the one honest option at the time
-//! (docs/code-review-2026-07-20.md, P2-3). The headless harness closes that
+//! (docs/reviews/code-review-2026-07-20.md, P2-3). The headless harness closes that
 //! gap; a browser capture is no longer needed (the in-browser probe,
 //! yjs_probe_web.dart, still exists for e2e work). Requires `node` on PATH —
 //! preinstalled on all GitHub-hosted runners; the harness fails loudly (not

@@ -13,7 +13,7 @@ import '../session/session_controller.dart';
 /// (rename / create / delete / reorder / clone / restore), the workspace-switch
 /// tree load, the tree-change-bell refresh, and the on-device page-tree mirror
 /// — extracted verbatim (god-class fifth step; see
-/// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
+/// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
 ///
 /// The TREE itself is not stored here: it lives in the injected
 /// [SessionController] (third step), and every mutation goes through its

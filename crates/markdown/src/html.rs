@@ -77,8 +77,14 @@ pub(crate) fn render_quote_group(
   // A callout: the group head (depth 1) carries `data.alert`. Render a styled
   // blockquote (GitHub's `markdown-alert` classes + a title row) — still the
   // quote pipeline, just extra chrome, no separate block kind.
+  // Allow-listed for the same reason as table `aligns`: it lands in a class
+  // attribute unescaped.
   let alert = if depth == 1 {
-    items.first().and_then(|b| b.data.get("alert")).and_then(Value::as_str)
+    items
+      .first()
+      .and_then(|b| b.data.get("alert"))
+      .and_then(Value::as_str)
+      .filter(|a| matches!(*a, "note" | "tip" | "important" | "warning" | "caution"))
   } else {
     None
   };
@@ -335,12 +341,12 @@ pub(crate) fn html_inline(block: &Block) -> String {
     return match &m.title {
       Some(t) => format!(
         "<a href=\"{}\" title=\"{}\"></a>",
-        escape_html(&escape_href(m.href.as_deref().unwrap_or(""))),
+        escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), false))),
         escape_html(t)
       ),
       None => format!(
         "<a href=\"{}\"></a>",
-        escape_html(&escape_href(m.href.as_deref().unwrap_or("")))
+        escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), false)))
       ),
     };
   }
@@ -413,7 +419,7 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
       };
       out.push_str(&format!(
         "<img src=\"{}\" alt=\"{}\"{title_attr} />",
-        escape_html(&escape_href(m.href.as_deref().unwrap_or(""))),
+        escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), true))),
         escape_html(&alt)
       ));
       pos = e;
@@ -433,12 +439,12 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
       "link" => match &m.title {
         Some(t) => format!(
           "<a href=\"{}\" title=\"{}\">{body}</a>",
-          escape_html(&escape_href(m.href.as_deref().unwrap_or(""))),
+          escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), false))),
           escape_html(t)
         ),
         None => format!(
           "<a href=\"{}\">{body}</a>",
-          escape_html(&escape_href(m.href.as_deref().unwrap_or("")))
+          escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), false)))
         ),
       },
       _ => body,
@@ -535,8 +541,10 @@ pub(crate) fn append_html_block(
           .and_then(Value::as_str)
           .unwrap_or("")
         {
-          "" => String::new(),
-          a => format!(" align=\"{a}\""),
+          // Allow-listed: `data` is written by any member (yrs / MCP) and
+          // nothing validates it, so a raw value broke out of the attribute.
+          a @ ("left" | "center" | "right") => format!(" align=\"{a}\""),
+          _ => String::new(),
         }
       };
       let cell_html = |cell: &Value| -> String {
@@ -587,7 +595,7 @@ pub(crate) fn append_html_block(
       out.push_str("<hr />\n");
     }
     "image" => {
-      let url = escape_html(&escape_href(block_data_str(block, "url").unwrap_or_default()));
+      let url = escape_html(&escape_href(safe_url(block_data_str(block, "url").unwrap_or_default(), true)));
       let alt = escape_html(block.text.trim());
       let title_attr = match block_data_str(block, "title") {
         Some(t) => format!(" title=\"{}\"", escape_html(t)),
@@ -634,6 +642,11 @@ pub(crate) fn tagfilter(s: &str) -> String {
   ];
   let bytes = s.as_bytes();
   let mut out = String::with_capacity(s.len());
+  // Copy untouched text as whole `&str` runs. Pushing `bytes[i] as char` one
+  // byte at a time reinterpreted every UTF-8 byte as Latin-1, so any non-ASCII
+  // text in raw HTML (`<summary>点击展开</summary>`) came out as mojibake. `<`
+  // is ASCII, so every cut below lands on a char boundary.
+  let mut copied = 0;
   let mut i = 0;
   while i < bytes.len() {
     if bytes[i] == b'<' {
@@ -648,14 +661,16 @@ pub(crate) fn tagfilter(s: &str) -> String {
       let name = s[name_start..j].to_ascii_lowercase();
       let boundary = matches!(bytes.get(j), None | Some(b' ' | b'\t' | b'\n' | b'>' | b'/'));
       if BAD.contains(&name.as_str()) && boundary {
+        out.push_str(&s[copied..i]);
         out.push_str("&lt;");
         i += 1;
+        copied = i;
         continue;
       }
     }
-    out.push(s.as_bytes()[i] as char);
     i += 1;
   }
+  out.push_str(&s[copied..]);
   out
 }
 
@@ -712,6 +727,36 @@ pub(crate) fn is_unsafe_attr(name: &str, value: &str) -> bool {
 /// byte (UTF-8 preserved by slicing at ASCII boundaries only). Comments
 /// (`<!-- -->`), declarations (`<!…>`) and processing instructions (`<?…?>`)
 /// pass through verbatim — never scanned for attributes.
+/// `url` unless its scheme can run script, in which case empty.
+///
+/// The share page has a CSP; the downloaded HTML export does not, so a plain
+/// Markdown link `[x](javascript:…)` ran when clicked in the saved file.
+/// `data:` is allowed only for images (`data:image/…` — what export inlines);
+/// an `<img>` never executes it. Matching mirrors the URL parser: leading
+/// whitespace/control chars and tabs/newlines inside the scheme are ignored,
+/// case-insensitively.
+pub(crate) fn safe_url(url: &str, for_image: bool) -> &str {
+  let normalized: String = url
+    .trim_start_matches(|c: char| c <= ' ')
+    .chars()
+    .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+    .collect::<String>()
+    .to_ascii_lowercase();
+  let Some(colon) = normalized.find(':') else {
+    return url; // no scheme: relative
+  };
+  let scheme = &normalized[..colon];
+  if !scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+    return url; // the `:` is later in a relative path, not a scheme
+  }
+  let dangerous = match scheme {
+    "javascript" | "vbscript" => true,
+    "data" => !(for_image && normalized[colon + 1..].starts_with("image/")),
+    _ => false,
+  };
+  if dangerous { "" } else { url }
+}
+
 pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
   let b = s.as_bytes();
   let mut out = String::with_capacity(s.len());
@@ -726,13 +771,23 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
       out.push_str(&s[start..i]);
       continue;
     }
-    // `<!-- … -->` comment: copy verbatim, do not scan.
+    // `<!-- … -->` comment: copy verbatim, do not scan. It must end where a
+    // BROWSER ends it, or markup the browser renders is skipped here: `<!-->`
+    // and `<!--->` are complete (abrupt) comments and `--!>` also closes one,
+    // so `<!-- --!><img onerror=…> -->` used to pass through unscanned.
     if s[i + 1..].starts_with("!--") {
-      let mut k = i + 4;
-      while k + 2 < b.len() && !(b[k] == b'-' && b[k + 1] == b'-' && b[k + 2] == b'>') {
-        k += 1;
-      }
-      let end = if k + 2 < b.len() { k + 3 } else { b.len() };
+      let rest = &s[i + 4..];
+      let end = if rest.starts_with('>') {
+        i + 5
+      } else if rest.starts_with("->") {
+        i + 6
+      } else {
+        let close = [rest.find("-->").map(|k| k + 3), rest.find("--!>").map(|k| k + 4)]
+          .into_iter()
+          .flatten()
+          .min();
+        close.map_or(b.len(), |k| i + 4 + k)
+      };
       out.push_str(&s[i..end]);
       i = end;
       continue;

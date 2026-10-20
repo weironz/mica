@@ -12,7 +12,7 @@ import '../session/session_controller.dart';
 /// credential persistence, the renewal/expiry lifecycle, the profile refresh,
 /// the sign-in core and the server readiness probe — extracted verbatim
 /// (god-class sixth step; see
-/// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
+/// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
 ///
 /// The SESSION itself is not stored here: it lives in the injected
 /// [SessionController] (third step), and every adoption goes through its

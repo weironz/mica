@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Everything docs/release.md says to check before tagging — as a command that
+# Everything docs/ops/release.md says to check before tagging — as a command that
 # REFUSES, not a list somebody has to remember.
 #
 # The rule that forced this into existence: the Postgres-backed tests SKIP when
@@ -14,13 +14,16 @@
 # `windows-shell` (Git Bash) instead, where the whole toolchain is present.
 set -euo pipefail
 
-fail() { printf '\n  REFUSED: %s\n' "$*" >&2; exit 1; }
+source "$(dirname "$0")/lib-local.sh"
 
-# 1. The dev database must be UP — not "warn and continue" the way `just test`
-#    does. At release time a silent skip IS the failure being prevented.
-docker exec mica-postgres pg_isready -U mica -d mica >/dev/null 2>&1 \
-  || fail "dev Postgres is down, so the DB-backed tests would SKIP and still report passed. Run 'just dev' first."
-echo "==> DB-backed tests: ON"
+# 1. A database must be UP — not "warn and continue" the way `just test` does.
+#    At release time a silent skip IS the failure being prevented. The dev
+#    stack's container, or any reachable $DATABASE_URL (a machine without the
+#    dev stack — e.g. building releases locally when CI is unavailable).
+db=$(resolve_database_url)
+[ -n "$db" ] \
+  || fail "no reachable Postgres, so the DB-backed tests would SKIP and still report passed. Run 'just dev' first (or export DATABASE_URL)."
+echo "==> DB-backed tests: ON ($db)"
 
 # 2. The three version numbers must already agree. The reading lives in
 #    scripts/manifest-version.sh because release.yml needs the same answer to
@@ -63,7 +66,7 @@ echo "==> Rust: $have_rust (toolchain + all three images agree)"
 # 3. Run the gates the SAME WAY CI runs them. `cargo check` does not run clippy,
 #    and clippy without `-D warnings` exits 0 while printing the very thing that
 #    fails CI — both have turned a pipeline red here before.
-DATABASE_URL=postgres://mica:mica@127.0.0.1:5432/mica cargo test --workspace
+DATABASE_URL=$db cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 #    The Flutter half is spelled EXACTLY as ci.yml spells it, flags included.
 #    It was `analyze lib` with no flags, which is stricter than CI — and with
@@ -156,7 +159,7 @@ server=$(grep -oE 'image: postgres:[0-9]+' deploy/docker-compose.yml | head -1 |
 echo "==> pg_dump: client $client >= server $server"
 
 # ── The quickstart's pinned release must not lag the version being tagged ───
-# README.md and docs/deploy.md tell a self-hoster to download the compose file
+# README.md and docs/ops/deploy.md tell a self-hoster to download the compose file
 # and `.env.prod.example` from a RELEASE TAG. That tag is hardcoded, so it only
 # moves when somebody edits the docs — and compose's `environment:` block is an
 # explicit ALLOWLIST, so a fresh install that pairs an old compose file with a
@@ -166,7 +169,7 @@ echo "==> pg_dump: client $client >= server $server"
 # REFUSED, not warned. "Remember to update the docs at release time" is exactly
 # the kind of rule this file exists because nobody remembers; the tag is checked
 # at the one moment it is wrong.
-for doc in README.md docs/deploy.md; do
+for doc in README.md docs/ops/deploy.md; do
   pinned=$(grep -oE 'RELEASE=[0-9]+\.[0-9]+\.[0-9]+' "$doc" | head -1 | cut -d= -f2)
   [ -n "$pinned" ] \
     || fail "$doc no longer states a \`RELEASE=x.y.z\` for the quickstart (found nothing) — this gate must not pass by failing to look. If the quickstart changed shape, update this check."

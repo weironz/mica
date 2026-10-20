@@ -10,7 +10,7 @@ import '../ui/theme_tokens.dart';
 /// editor; every edit recomputes the raw front-matter string via the surgical
 /// `upsertProperty` / `removeProperty` helpers (untouched keys stay byte-exact)
 /// and commits it through [onCommit], which persists it onto the root block's
-/// `data['front_matter']`. See docs/page-properties.md.
+/// `data['front_matter']`. See docs/features/page-properties.md.
 ///
 /// Layout follows AFFiNE's doc-info style: compact rows (type icon + narrow name
 /// + inline value), collapsible so a page with many properties doesn't push the

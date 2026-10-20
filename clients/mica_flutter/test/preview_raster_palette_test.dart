@@ -11,7 +11,7 @@ import 'package:mica_flutter/ui/theme_tokens.dart';
 /// dark page, where dark ink on a dark background is simply not there.
 ///
 /// This is the same shape as the bug where a content-hash image cache happily
-/// served a cached 404 (docs/lessons.md): a key that does not mention everything
+/// served a cached 404 (docs/dev/lessons.md): a key that does not mention everything
 /// the value depends on.
 void main() {
   RasterPreviewPipeline makePipeline() => RasterPreviewPipeline(

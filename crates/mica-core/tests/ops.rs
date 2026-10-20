@@ -72,7 +72,7 @@ fn text_insert_before_marks_shifts_them() {
 }
 
 /// P2 §6: the local→cloud migration replays the local block tree onto the
-/// *freshly-created cloud doc's root* (strategy (c), docs/phase2-offline-crdt.md
+/// *freshly-created cloud doc's root* (strategy (c), docs/architecture/phase2-offline-crdt.md
 /// §7.1). The key invariant: it never rewrites `meta.root`, so there is no
 /// concurrent LWW collision and no orphaned subtree — every block stays
 /// reachable from the cloud root. This mirrors exactly what `buildMigrationOps`

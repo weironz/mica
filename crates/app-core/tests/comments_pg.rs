@@ -1,4 +1,4 @@
-//! Postgres integration tests for comments (docs/comments-plan.md).
+//! Postgres integration tests for comments (docs/features/comments-plan.md).
 //!
 //! The anchor primitives have unit tests (`mica-core/tests/comment_anchor.rs`);
 //! what those CANNOT prove is that an anchor survives the round trip through the
@@ -270,13 +270,15 @@ async fn mark_orphaned_never_overwrites_a_deliberate_resolve() {
     cleanup(&db, ws, user).await;
 }
 
-/// Rewrite the whole document through the sync path, exactly as a REST or MCP
-/// write does (`apply_derived_operations` → `set_blocks` → `push_update`).
+/// Rewrite the document through the sync path with every existing block
+/// DELETED AND RE-INSERTED first (same id, same text), then `edit` applied.
 ///
 /// `edit` gets the current blocks and returns the blocks to write, so a test can
-/// rewrite with IDENTICAL content — which is the point: the text does not change,
-/// yet every block's yrs text object is replaced and every anchor on the document
-/// dies with it.
+/// keep IDENTICAL content — which is the point: the text does not change, yet
+/// every block's yrs text object is replaced and every anchor dies with it.
+/// (This used to be a plain `set_blocks`, which did exactly that to every block
+/// on every REST/MCP write; it is a per-block diff now, so the recreation is
+/// spelled out — as cut-and-paste or an older client still does it.)
 async fn rewrite_document(
     db: &PgPool,
     ws: Uuid,
@@ -286,6 +288,13 @@ async fn rewrite_document(
 ) {
     let mut editing = comments::load_doc(db, doc).await.unwrap();
     let sv = editing.state_vector();
+    let before = editing.to_blocks();
+    let root = before.iter().find(|b| b.id == "r").unwrap().clone();
+    for (index, id) in root.children.iter().enumerate() {
+        let block = before.iter().find(|b| &b.id == id).unwrap().clone();
+        editing.delete_block(id, false);
+        editing.insert_block("r", index, &block);
+    }
     let blocks = edit(editing.to_blocks());
     editing.set_blocks("r", &blocks);
     let update = editing.encode_diff(&sv).unwrap();
@@ -296,8 +305,8 @@ async fn rewrite_document(
 
 #[tokio::test]
 async fn a_full_rewrite_kills_the_anchor_and_the_quote_re_anchors_the_thread() {
-    // The case Phase 2 ① exists for, end to end through Postgres: any REST/MCP
-    // write rewrites every block, so a thread orphans over text that never
+    // The case Phase 2 ① exists for, end to end through Postgres: blocks
+    // recreated with the same text, so a thread orphans over text that never
     // changed. Matching the saved quote against the reloaded document is what
     // tells that apart from a real deletion.
     let Some(db) = pool().await else { return };

@@ -4,7 +4,7 @@ import 'package:mica_flutter/views/members_controller.dart';
 
 /// Characterization tests for [MembersController], pinned against the
 /// `_membersByWorkspace` behaviors of `_WorkspaceShellState` (god-class fifth
-/// step; docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
+/// step; docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
 void main() {
   WorkspaceMember member(String id, {String role = 'editor'}) =>
       WorkspaceMember(

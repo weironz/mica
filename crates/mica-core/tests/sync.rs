@@ -470,3 +470,60 @@ fn merging_queued_updates_is_equivalent_to_applying_them_in_order() {
         queued.iter().map(|u| u.len()).sum::<usize>()
     );
 }
+
+/// THE BUG (A3): `set_blocks` — what every REST/MCP write and version restore
+/// goes through — removed every block entry and re-inserted fresh maps/texts.
+/// A concurrent edit to a block the write never touched landed on the deleted
+/// object and integrated as deleted content: an MCP append at the end of a
+/// page silently erased what someone was typing at the top.
+#[test]
+fn a_whole_document_write_keeps_a_concurrent_edit_to_another_block() {
+  let state = MicaDoc::from_blocks_with_client_id(
+    "r",
+    &[page(&["a", "b"]), para("a", "Hello"), para("b", "World")],
+    Some(1),
+  )
+  .encode_state();
+  let mut server = replica(&state, 10);
+  let mut editor = replica(&state, 20);
+
+  // The editor types into `a` (offline / inside the debounce)…
+  editor.text_insert("a", 5, " there");
+  // …while a REST/MCP write appends `c`, re-deriving the WHOLE block set.
+  let mut target = server.to_blocks();
+  target.iter_mut().find(|x| x.id == "r").unwrap().children.push("c".into());
+  target.push(para("c", "appended"));
+  server.set_blocks("r", &target);
+
+  sync(&mut server, &mut editor);
+
+  assert_eq!(server.to_blocks(), editor.to_blocks(), "replicas converge");
+  let out = server.to_blocks();
+  let text = |id: &str| out.iter().find(|x| x.id == id).map(|x| x.text.clone());
+  assert_eq!(text("a").as_deref(), Some("Hello there"), "the concurrent edit survives");
+  assert_eq!(text("c").as_deref(), Some("appended"));
+  assert_eq!(out.iter().find(|x| x.id == "r").unwrap().children, vec!["a", "b", "c"]);
+}
+
+/// Restore semantics are unchanged: blocks absent from the target disappear,
+/// changed ones take the target's text, kind and data.
+#[test]
+fn set_blocks_still_makes_the_document_equal_the_target() {
+  let mut doc = MicaDoc::from_blocks_with_client_id(
+    "r",
+    &[page(&["a", "b"]), para("a", "Hello"), para("b", "gone")],
+    Some(1),
+  );
+  let target = vec![
+    page(&["a", "n"]),
+    Block::new("a", "heading").with_text("Hi").with_data(json!({"level": 2})),
+    para("n", "new"),
+  ];
+  doc.set_blocks("r", &target);
+  let out = doc.to_blocks();
+  assert!(out.iter().all(|x| x.id != "b"), "removed block is gone");
+  let a = out.iter().find(|x| x.id == "a").unwrap();
+  assert_eq!((a.kind.as_str(), a.text.as_str()), ("heading", "Hi"));
+  assert_eq!(a.data["level"], json!(2));
+  assert_eq!(out.iter().find(|x| x.id == "r").unwrap().children, vec!["a", "n"]);
+}

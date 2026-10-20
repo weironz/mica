@@ -26,7 +26,7 @@ services:
     # MAJOR VERSION IS PART OF THE DATA DIRECTORY. Postgres refuses to start on
     # a data dir written by a different major ("database files are incompatible
     # with server") and crash-loops — bumping 16→18 here without the dump/restore
-    # in docs/upgrade-infra.md takes the stack down and NOTHING repairs it
+    # in docs/ops/upgrade-infra.md takes the stack down and NOTHING repairs it
     # automatically. That runbook is the only supported way to move this number.
     image: postgres:18.6-alpine
     restart: unless-stopped
@@ -44,7 +44,7 @@ services:
       # "in 18+, these Docker images are configured to store database data in a
       # format which is compatible with pg_ctlcluster" 然后 crash-loop。
       # (2026-08-28 升级当天在真机上撞到 —— 本地彩排用的是不带卷挂载的 docker run,
-      #  覆盖不到这一条。见 docs/upgrade-infra.md。)
+      #  覆盖不到这一条。见 docs/ops/upgrade-infra.md。)
       - mica-prod-postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mica} -d ${POSTGRES_DB:-mica}"]
@@ -195,6 +195,9 @@ services:
       # smoke-testing 0.13.5 — the quota was set to 5000 on the node and an
       # over-limit upload was still accepted, because the setting went nowhere.
       MICA_WORKSPACE_QUOTA_BYTES: "${MICA_WORKSPACE_QUOTA_BYTES:-}"
+      # Per-OWNER total across every workspace an account owns; OFF unless set
+      # (worth setting only when registration is open). Same allow-list reason as above.
+      MICA_OWNER_QUOTA_BYTES: "${MICA_OWNER_QUOTA_BYTES:-}"
       # The rest of what config.rs reads, passed through empty so "unset in .env"
       # means "use the code default". Listed even though nothing sets them today,
       # because the allow-list above is the trap: a knob that is not named here

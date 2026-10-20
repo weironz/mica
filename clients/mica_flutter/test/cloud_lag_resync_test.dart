@@ -10,6 +10,7 @@ library;
 
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/cloud/cloud_sync_session.dart';
 
@@ -52,5 +53,25 @@ void main() {
     }
     expect(s.debugLagResyncCount, 1,
         reason: 'closely-spaced notices cost one catch-up, not a storm');
+    s.dispose();
+  });
+
+  // A notice inside the debounce window may report a drop that happened AFTER
+  // the first catch-up was answered; ignoring it lost that drop for good.
+  test('a notice inside the debounce window gets one trailing resync', () {
+    fakeAsync((async) {
+      final s = _session();
+      for (var i = 0; i < 3; i++) {
+        s.debugHandleFrame(jsonEncode({
+          'type': 'error',
+          'code': 'client_out_of_date',
+        }));
+      }
+      expect(s.debugLagResyncCount, 1);
+      async.elapse(const Duration(milliseconds: 1100));
+      expect(s.debugLagResyncCount, 2,
+          reason: 'the in-window notices are covered by one trailing resync');
+      s.dispose();
+    });
   });
 }

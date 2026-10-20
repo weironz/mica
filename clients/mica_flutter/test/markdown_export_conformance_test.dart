@@ -25,7 +25,7 @@ import 'package:mica_flutter/editor/model.dart';
 ///
 /// Note what would NOT have helped: adding more `.md` fixtures. The corpus was
 /// never the gap — the harness had no export edge. That is the lesson recorded
-/// in `docs/lessons.md` §3.
+/// in `docs/dev/lessons.md` §3.
 ///
 /// Gold is `export_markdown(import_markdown(md))` from the Rust engine,
 /// regenerated with `GEN_GOLD=1 cargo test -p mica-markdown --test conformance`.

@@ -20,7 +20,10 @@ use uuid::Uuid;
   mod parent_guard_pg {
     use super::super::*;
     use mica_app_core::AppState;
-    use super::super::export::{build_export_manifest, fetch_export_images, parse_export_skip_assets};
+    use super::super::export::{
+      build_export_manifest, fetch_export_images, gathered_tree_bytes, parse_export_skip_assets,
+      stream_tree_bytes,
+    };
     use super::super::search::{scan_backlinks, search_views, workspace_graph};
     use super::super::transfer::{ancestor_pairs_of_roots, independent_roots};
     use super::super::trash::{purge_views_batch, restore_views_batch, trash_views_batch};
@@ -591,7 +594,6 @@ use uuid::Uuid;
         &state,
         ws,
         &payloads,
-        true,
         Some(std::slice::from_ref(&record)),
         &skipped,
       )
@@ -605,12 +607,58 @@ use uuid::Uuid;
           &state,
           ws,
           &payloads,
-          true,
           Some(&[record]),
           &std::collections::HashSet::new()
         )
         .await
         .is_err()
+      );
+    }
+
+    /// D3: the tree exports stream now — one page and one image at a time
+    /// instead of every payload and image of the subtree held at once. The
+    /// archive must be the very bytes the gathered build produced, for the
+    /// whole workspace and for a folder's subtree (folders, a page inside one,
+    /// a page linking to it, a page with no body).
+    #[tokio::test]
+    async fn the_streamed_tree_export_is_byte_identical_to_the_gathered_one() {
+      let Some(db) = pool().await else { return };
+      let (ws, folder, inner, _) = seed_folder_with_page(&db).await;
+      let user = ws_owner(&db, ws).await;
+      seed_document(
+        &db,
+        ws,
+        user,
+        "Top",
+        serde_json::json!([{
+          "id": "p", "type": "paragraph", "text": "see inner",
+          "data": {"marks": [{"type": "link", "start": 4, "end": 9,
+                              "href": format!("mica://page/{inner}")}]}
+        }]),
+      )
+      .await;
+      let (empty_view, empty_doc) = seed_document(&db, ws, user, "Hollow", serde_json::json!([])).await;
+      sqlx::query("DELETE FROM document_yrs_base WHERE document_id = $1")
+        .bind(empty_doc)
+        .execute(&db)
+        .await
+        .unwrap();
+      let _ = empty_view;
+      let mut config = mica_infra::AppConfig::from_env().unwrap();
+      config.jwt_secret = "streamed-export-test-secret".into();
+      config.environment = mica_infra::Environment::Test;
+      let mut state = AppState::new(config, db.clone(), std::sync::Arc::new(mica_infra::LogMailer));
+      state.storage = None;
+
+      let streamed = stream_tree_bytes(&state, ws, None).await;
+      assert_eq!(streamed, gathered_tree_bytes(&state, ws, None).await);
+      let names: Vec<String> =
+        mica_interchange::read_zip(&streamed).into_iter().map(|e| e.name).collect();
+      assert!(names.contains(&"manifest.json".to_string()), "{names:?}");
+      assert!(names.iter().any(|n| n.ends_with("里面的页.md")), "{names:?}");
+      assert_eq!(
+        stream_tree_bytes(&state, ws, Some(folder)).await,
+        gathered_tree_bytes(&state, ws, Some(folder)).await
       );
     }
 
@@ -930,6 +978,46 @@ use uuid::Uuid;
         vec![folder, named_page, body_page],
         "folder > page name > body, each against a fresher rival: {hits:?}"
       );
+    }
+
+    /// Within the name tier, how WELL the name matches: exact, then prefix, then
+    /// contains — each against a fresher rival. It was a yes/no, so the page
+    /// NAMED "部署" sat below "旧版部署记录" whenever that was edited later.
+    #[tokio::test]
+    async fn an_exact_name_outranks_a_prefix_which_outranks_a_mention() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (contains, _) = seed_document(&db, ws, user, "旧版部署记录", serde_json::json!([])).await;
+      let (prefix, _) = seed_document(&db, ws, user, "部署手册", serde_json::json!([])).await;
+      let (exact, _) = seed_document(&db, ws, user, "部署", serde_json::json!([])).await;
+      for (view, age) in [(exact, "30 days"), (prefix, "10 days"), (contains, "0 days")] {
+        sqlx::query("UPDATE views SET updated_at = now() - $2::interval WHERE id = $1")
+          .bind(view)
+          .bind(age)
+          .execute(&db)
+          .await
+          .unwrap();
+      }
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署", false, None).await.unwrap();
+      let order: Vec<Uuid> = hits.iter().map(|h| h.view_id).collect();
+      assert_eq!(order, vec![exact, prefix, contains], "{hits:?}");
+    }
+
+    /// The snippet is the one-line window the client can show: the match near
+    /// its start, inside the matched block, no raw newlines.
+    #[tokio::test]
+    async fn a_body_hit_snippet_shows_the_match_on_one_line() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (view, doc) = seed_document(&db, ws, user, "笔记", serde_json::json!([])).await;
+      let body = format!("{}\n第二段落：上线前检查部署流程。\n结尾", "很长的第一段".repeat(30));
+      set_content_text(&db, doc, &body).await;
+      let hits = search_views(&db, &BodyIndex::default(), &[ws], "部署流程", false, None).await.unwrap();
+      assert_eq!(hits[0].view_id, view);
+      let snippet = &hits[0].snippet;
+      assert!(snippet.starts_with("…第二段落"), "{snippet}");
+      assert!(!snippet.contains('\n'), "{snippet}");
+      assert!(snippet.chars().take(25).collect::<String>().contains("部署流程"), "{snippet}");
     }
 
     /// FTS M1 end-to-end over the real query: title hits, CJK body substrings
@@ -1783,6 +1871,37 @@ use uuid::Uuid;
       assert_eq!(a, b, "restore brought back exactly what trash took");
       assert!(!is_deleted(&db, folder).await);
       assert!(!is_deleted(&db, page).await);
+    }
+
+    /// THE BUG: restoring only the PAGE out of a trashed folder left it live
+    /// under a deleted parent — invisible in the tree — and emptying the trash
+    /// then deleted it for real through `parent_view_id ON DELETE CASCADE`.
+    /// Single-item restore lifted it to the top level; the batch twin did not.
+    #[tokio::test]
+    async fn a_bulk_restore_lifts_a_page_out_of_a_still_trashed_folder() {
+      let Some(db) = pool().await else { return };
+      let (ws, folder, page, _) = seed_folder_with_page(&db).await;
+      trash_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      let restored = restore_views_batch(&db, ws, &[page]).await.unwrap();
+
+      assert_eq!(restored, vec![page]);
+      assert!(is_deleted(&db, folder).await, "the folder stays in the trash");
+      let parent: Option<Uuid> = sqlx::query_scalar("SELECT parent_view_id FROM views WHERE id = $1")
+        .bind(page)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      assert_eq!(parent, None, "lifted to the top level, like single restore");
+
+      // Purging the folder (what emptying the trash does) must not take it.
+      purge_views_batch(&db, ws, &[folder]).await.unwrap();
+      let alive: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM views WHERE id = $1)")
+        .bind(page)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      assert!(alive, "the restored page survives the purge");
     }
 
     /// Restoring something that was never deleted changes nothing.

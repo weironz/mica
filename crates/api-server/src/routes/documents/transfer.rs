@@ -229,7 +229,7 @@ pub(super) async fn move_views_tx(
 }
 
 
-// transaction lets us beat. See docs/cross-workspace-move.md.
+// transaction lets us beat. See docs/features/cross-workspace-move.md.
 
 #[derive(Debug, Deserialize)]
 pub struct TransferRequest {
@@ -586,6 +586,29 @@ async fn transfer_roots(
     });
   }
 
+  // The destination's quota, for the bytes it does not hold yet. Every other
+  // byte-storing path is metered; this one copied gigabytes into a nearly
+  // full workspace unchecked.
+  let ids: Vec<Uuid> = referenced_files.iter().copied().collect();
+  let incoming: i64 = sqlx::query_scalar(
+    r#"
+      SELECT coalesce(sum(s.byte_size), 0)::bigint
+      FROM files s
+      WHERE s.workspace_id = $1 AND s.id = ANY($3)
+        AND NOT EXISTS (
+          SELECT 1 FROM files d
+          WHERE d.object_key = 'workspaces/' || $2::text || '/'
+            || substr(s.object_key, length('workspaces/' || $1::text || '/') + 1)
+        )
+    "#,
+  )
+  .bind(src_workspace_id)
+  .bind(dest_workspace_id)
+  .bind(&ids)
+  .fetch_one(&state.db)
+  .await?;
+  crate::routes::files::ensure_quota_room(state, dest_workspace_id, incoming, None).await?;
+
   // 3. Copy blobs into the destination BEFORE the transaction: content-addressed
   //    keys make the PUT idempotent, and a half-failure leaves only orphan bytes
   //    in dest (its GC reclaims them), never a page with broken images.
@@ -606,17 +629,18 @@ async fn transfer_roots(
     let dest_key = format!("workspaces/{dest_workspace_id}/{suffix}");
 
     let bytes = http
-      .get(storage.download_url(&src_file.object_key))
+      .get(storage.presign_get_server(&src_file.object_key))
       .send()
       .await
-      .map_err(|e| ApiError::Internal(format!("blob fetch failed: {e}")))?
+      .map_err(|e| ApiError::Internal(format!("blob fetch failed: {}", e.without_url())))?
       .error_for_status()
-      .map_err(|e| ApiError::Internal(format!("blob fetch returned {e}")))?
+      .map_err(|e| ApiError::Internal(format!("blob fetch returned: {}", e.without_url())))?
       .bytes()
       .await
-      .map_err(|e| ApiError::Internal(format!("blob read failed: {e}")))?;
-    // Commit this marker before PUT; a crash after writing bytes must leave a
-    // discoverable key for the orphan sweep, not a rolled-back transaction.
+      .map_err(|e| ApiError::Internal(format!("blob read failed: {}", e.without_url())))?;
+    // Commit this marker (and clear any GC mark) before PUT: a crash after
+    // writing bytes must leave a discoverable key for the orphan sweep, and
+    // neither sweep may take the key while the PUT runs outside a transaction.
     store::record_pending_file_upload(
       &state.db,
       dest_workspace_id,
@@ -624,11 +648,6 @@ async fn transfer_roots(
       storage.presign_ttl_seconds,
     )
     .await?;
-    // An old browser presign may have left a pending ledger row for this same
-    // content-addressed key. Hold its lock from PUT through registration so
-    // orphan GC cannot remove a freshly copied object between those steps.
-    let mut blob_tx = state.db.begin().await?;
-    store::lock_file_object_key(&mut blob_tx, &dest_key).await?;
     let upload = storage.presign_put_server(&dest_key);
     let checksum = {
       use base64::Engine as _;
@@ -637,12 +656,12 @@ async fn transfer_roots(
     };
     let put = http
       .put(&upload.url)
-      .header(reqwest::header::CONTENT_TYPE, &src_file.mime_type)
+      .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&src_file.mime_type))
       .header("x-amz-checksum-sha256", checksum)
       .body(bytes.to_vec())
       .send()
       .await
-      .map_err(|e| ApiError::Internal(format!("blob upload failed: {e}")))?;
+      .map_err(|e| ApiError::Internal(format!("blob upload failed: {}", e.without_url())))?;
     if !put.status().is_success() {
       return Err(ApiError::Internal(format!(
         "blob upload returned {}",
@@ -650,8 +669,8 @@ async fn transfer_roots(
       )));
     }
 
-    let dest_file = store::insert_file_tx(
-      &mut blob_tx,
+    let dest_file = store::register_put_file(
+      &state.db,
       dest_workspace_id,
       user_id,
       &dest_key,
@@ -660,7 +679,6 @@ async fn transfer_roots(
       src_file.byte_size,
     )
     .await?;
-    blob_tx.commit().await?;
     file_map.insert(src_file_id, dest_file.id);
   }
 

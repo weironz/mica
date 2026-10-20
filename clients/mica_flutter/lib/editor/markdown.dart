@@ -544,6 +544,12 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       final body = (h.group(3) ?? '').trim();
       return ('heading', stripAtxClosing(body), {'level': h.group(1)!.length});
     }
+    // An empty to-do exports as `- [ ] ` and the trailing space is trimmed:
+    // the bare marker must count too (mirrors Rust classify_markdown_line).
+    if (content == '- [ ]') return ('todo', '', {'checked': false});
+    if (content == '- [x]' || content == '- [X]') {
+      return ('todo', '', {'checked': true});
+    }
     if (content.startsWith('- [ ] ')) {
       return ('todo', content.substring(6), {'checked': false});
     }

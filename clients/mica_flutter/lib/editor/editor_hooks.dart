@@ -6,7 +6,7 @@ part of 'editor.dart';
 /// single [Focus], a single OS text-input connection (so IME/Chinese input
 /// works), one document-wide selection, and renders every node itself through
 /// [DocumentSurface]. The caret travels the document as if it were one
-/// continuous page — no block chrome, Word/Typora feel (see docs/editor.md).
+/// continuous page — no block chrome, Word/Typora feel (see docs/architecture/editor.md).
 /// Lets a host (e.g. the page outline) ask the editor to scroll a block into
 /// view. The editor wires its scroll implementation into [_scroll] on init.
 class EditorScrollHook {

@@ -111,7 +111,7 @@ class EditorAppearance {
 
 /// Visual constants for the editing surface. Kept here so the look stays in one
 /// place; per-kind styling only changes inline typography, never block chrome
-/// (see docs/editor.md).
+/// (see docs/architecture/editor.md).
 class EditorTheme {
   // The colours that used to live here are gone. Every one of them is a role on
   // MicaTokens now (`text.*`, `editor.*`, `accent.*`), read through
@@ -335,7 +335,7 @@ class EditorTheme {
 /// unchanged. The fingerprint is the **actual [TextSpan] plus the layout width**:
 /// a span already carries text, marks, and fully-resolved style, so span
 /// equality is a complete, self-correcting input check — no hand-listed field
-/// can be silently missed (the #1 landmine in docs/editor-virtualization-plan.md).
+/// can be silently missed (the #1 landmine in docs/features/editor-virtualization-plan.md).
 ///
 /// Blocks with inline atoms (a non-null `fold`) are stored for ownership but
 /// never reused: their placeholder geometry depends on async raster readiness.
@@ -687,7 +687,7 @@ class RenderDocument extends RenderBox {
   }
 
   /// Registered atomic-block renderers, dispatched by kind in the layout and
-  /// paint passes. New block types register here (docs/render-architecture.md).
+  /// paint passes. New block types register here (docs/architecture/render-architecture.md).
   ///
   /// **Order matters within a kind**: several renderers may claim the same
   /// `kind` and the first one whose `layout()` returns non-null wins. That is
@@ -1930,7 +1930,7 @@ class RenderDocument extends RenderBox {
   /// in the buffer, editable, and every offset in this file goes on meaning what
   /// it has always meant. Putting the formula *in* the line would need a
   /// doc↔painter offset mapping through the text pipeline, and
-  /// docs/render-architecture.md calls that pipeline the load-bearing wall. The
+  /// docs/architecture/render-architecture.md calls that pipeline the load-bearing wall. The
   /// need this answers is "did I write that formula right?", not "make my notes
   /// pretty", and a card answers it for ~1% of the cost.
   ///
@@ -3690,7 +3690,7 @@ typedef RemoteCursor = ({
 });
 
 /// A comment's anchored range to wash behind the text, already resolved by the
-/// server into UTF-16 offsets against the CURRENT text (docs/comments-plan.md).
+/// server into UTF-16 offsets against the CURRENT text (docs/features/comments-plan.md).
 ///
 /// Keyed by block id, not node index: comments are anchored to blocks, and an
 /// index shifts the moment a block above is inserted or removed.

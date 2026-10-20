@@ -1,4 +1,4 @@
-//! Comment endpoints (docs/comments-plan.md, Phase 1).
+//! Comment endpoints (docs/features/comments-plan.md, Phase 1).
 //!
 //! Anchors are yrs sticky indexes held in Postgres, so the document's Markdown is
 //! never touched. Two consequences shape everything here:
@@ -229,12 +229,23 @@ pub async fn list(
   // `&mut None`: the quote index is built on the first thread that needs
   // re-anchoring, so a listing where every anchor resolves pays nothing.
   let mut quotes: Option<store::QuoteIndex> = None;
+  // Replies grouped by thread ONCE. Filtering the whole reply list per thread
+  // was O(threads × comments) — a long-discussed page paid it on every open.
+  let mut replies_by_thread: std::collections::HashMap<Uuid, Vec<CommentDto>> =
+    std::collections::HashMap::new();
+  for reply in replies {
+    replies_by_thread
+      .entry(reply.thread_id)
+      .or_default()
+      .push(comment_dto(reply));
+  }
   let mut threads = Vec::with_capacity(rows.len());
   for row in rows {
-    // Dead anchor ≠ dead thread: `set_blocks` (any REST/MCP write, any version
-    // restore) replaces every block's text object, killing anchors over text
-    // that never changed. `anchor_state` re-anchors from the saved quote when it
-    // is confident, and leaves a real deletion an orphan.
+    // Dead anchor ≠ dead thread: a block deleted and re-inserted with the
+    // same text (cut and paste, an older client) gets a new text object,
+    // killing anchors over text that never changed. `anchor_state` re-anchors
+    // from the saved quote when it is confident, and leaves a real deletion an
+    // orphan.
     let resolved = store::anchor_state(&doc, &mut quotes, &row);
     if resolved.status == store::STATUS_ORPHANED && row.status != store::STATUS_ORPHANED {
       newly_orphaned.push(row.id);
@@ -242,12 +253,7 @@ pub async fn list(
     if let Some(anchor) = resolved.fresh_anchor {
       reanchored.push((row.id, anchor));
     }
-    let comments = replies
-      .iter()
-      .filter(|c| c.thread_id == row.id)
-      .cloned()
-      .map(comment_dto)
-      .collect();
+    let comments = replies_by_thread.remove(&row.id).unwrap_or_default();
     threads.push(ThreadDto {
       id: row.id,
       status: resolved.status,

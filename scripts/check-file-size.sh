@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 单文件行数门禁 —— 防巨石文件回潮与膨胀（docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。
+# 单文件行数门禁 —— 防巨石文件回潮与膨胀（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。
 #
 # 三层防线：
 #   1) 绝对限：Rust crates/**/src 与 Flutter lib/ 单文件硬上限 8,000 行（失败）、

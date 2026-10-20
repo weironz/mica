@@ -7,7 +7,7 @@
 # Functionally identical to what production runs; commented-out blocks for an
 # unrelated app sharing that host were dropped, nothing live was changed.
 #
-# BRING-UP ORDER MATTERS — see docs/dr-plan.md:
+# BRING-UP ORDER MATTERS — see docs/ops/dr-plan.md:
 #   1. DNS A records for the app and S3 hostnames must ALREADY point here. ACME
 #      below uses the TLS-ALPN-01 challenge on :443, so a name that does not
 #      resolve to this machine cannot be issued a certificate — get this wrong

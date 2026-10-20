@@ -13,7 +13,7 @@
 # and no appetite for a round trip through GitHub. This gets you a controller in
 # ~10 seconds using the Docker that is already installed.
 #
-# Found necessary during the 2026-08-29 DR drill (docs/dr-drill.md). WSL would
+# Found necessary during the 2026-08-29 DR drill (docs/ops/dr-drill.md). WSL would
 # also work; this needs nothing installed that a Windows dev box lacks.
 set -eu
 

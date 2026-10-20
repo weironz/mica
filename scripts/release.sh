@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The whole pre-tag half of docs/release.md as ONE command.
+# The whole pre-tag half of docs/ops/release.md as ONE command.
 #
 #   just release 0.13.28
 #
@@ -20,10 +20,10 @@
 # do after the bump — run it before and it fails on the state it is meant to
 # create.
 #
-# Deliberately NOT gated on docs/roadmap.md being touched. Not every release
+# Deliberately NOT gated on docs/plans/roadmap.md being touched. Not every release
 # closes a roadmap item, so that gate would fire on releases where nothing is
 # wrong, and an alarm that cries wolf gets silenced — the same reason the CI
-# compose-drift check had to go. It stays a step in docs/release.md.
+# compose-drift check had to go. It stays a step in docs/ops/release.md.
 set -euo pipefail
 [ -d "/c/Program Files/Git/usr/bin" ] && PATH="/c/Program Files/Git/usr/bin:$PATH"
 
@@ -63,7 +63,7 @@ cat <<EOF
 
       git push origin main $tag
 
-  Then deploy — see docs/release.md. Before pushing, check that this release's
-  roadmap entries are struck off in docs/roadmap.md: negative items ("no X yet")
+  Then deploy — see docs/ops/release.md. Before pushing, check that this release's
+  roadmap entries are struck off in docs/plans/roadmap.md: negative items ("no X yet")
   only ever go stale silently, and a release is the one moment anybody looks.
 EOF

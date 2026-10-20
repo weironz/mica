@@ -2,7 +2,7 @@ import '../api/models.dart';
 
 /// The sidebar drag-drop DECISION logic, extracted verbatim from
 /// `_WorkspaceViewState`'s `_dropSlot`/`_isSelfOrDescendant`/`_ancestorAtLevel`
-/// family (god-class wrap-up; docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md
+/// family (god-class wrap-up; docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md
 /// §7). Pure tree reasoning over a view list — no widgets, no pointer math
 /// (`reparentLevelFor` in main_tree_helpers.dart already owns the pointer-to-
 /// level part, and `canNestUnder` the page-vs-folder rule).

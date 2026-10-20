@@ -15,7 +15,7 @@
 //       yrs state (which carries its own `meta.root`) would be a concurrent LWW
 //       write on the same `meta` key → non-deterministic winner → the losing
 //       root's subtree orphans. By replaying as ops onto the cloud root we never
-//       touch `meta`, so there is no collision. (See docs/phase2-offline-crdt.md
+//       touch `meta`, so there is no collision. (See docs/architecture/phase2-offline-crdt.md
 //       §7.1.) The local root block itself is not inserted — its content is
 //       carried onto the cloud root and its children re-parented there.
 //

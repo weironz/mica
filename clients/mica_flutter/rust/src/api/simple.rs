@@ -2,7 +2,7 @@
 //!
 //! Thin wrapper over the shared `mica-core` crate — keep all logic in mica-core
 //! and only expose it here. P2-M0 just validates the round-trip; the CRDT/store
-//! APIs land in later milestones (docs/phase2-offline-crdt.md).
+//! APIs land in later milestones (docs/architecture/phase2-offline-crdt.md).
 
 /// FFI round-trip smoke test (string → string), delegated to mica-core.
 #[flutter_rust_bridge::frb(sync)]

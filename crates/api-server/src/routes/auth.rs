@@ -181,7 +181,7 @@ pub async fn register(
   //
   // Extracted so the concurrency test drives THIS function rather than a copy of
   // the SQL: a test that retypes the statement passes whether or not the lock is
-  // there, which is the "test can pass in a vacuum" trap docs/lessons.md records.
+  // there, which is the "test can pass in a vacuum" trap docs/dev/lessons.md records.
   let mut tx = state.db.begin().await?;
   let user = insert_registered_user(
     &mut tx,
@@ -240,13 +240,20 @@ pub async fn login(
     r#"
       SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
       FROM users
-      WHERE email = $1
+      WHERE email = $1 AND deleted_at IS NULL
     "#,
   )
   .bind(email)
   .fetch_optional(&state.db)
-  .await?
-  .ok_or(ApiError::Unauthorized)?;
+  .await?;
+  let Some(user) = user else {
+    // Pay the same Argon2 verify an existing account pays. Answering an
+    // unknown address immediately made "is this email registered?" a timing
+    // question any caller could ask — the oracle `forgot` and `register` are
+    // careful not to be.
+    let _ = verify_password(&payload.password, dummy_password_hash());
+    return Err(ApiError::Unauthorized);
+  };
 
   verify_password(&payload.password, &user.password_hash)?;
   // AFTER the password check, on purpose: answering "confirm your email" to a
@@ -265,7 +272,7 @@ pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
     r#"
       SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
       FROM users
-      WHERE id = $1
+      WHERE id = $1 AND deleted_at IS NULL
     "#,
   )
   .bind(user_id)
@@ -387,7 +394,7 @@ pub async fn change_password(
     r#"
       SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
       FROM users
-      WHERE id = $1
+      WHERE id = $1 AND deleted_at IS NULL
     "#,
   )
   .bind(user_id)
@@ -445,7 +452,7 @@ pub async fn delete_account(
   let user_id = user_id_from_headers(&state, &headers).await?;
 
   let user = sqlx::query_as::<_, UserRow>(
-    "SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at FROM users WHERE id = $1",
+    "SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at FROM users WHERE id = $1 AND deleted_at IS NULL",
   )
   .bind(user_id)
   .fetch_optional(&state.db)
@@ -465,6 +472,15 @@ pub async fn delete_account(
       keys.iter().map(|(workspace_id, key)| (*workspace_id, key.as_str())),
     )
     .await;
+    // The face goes too. Avatars live under `avatars/{user_id}/`, outside
+    // every workspace prefix, so neither the cascade above nor the blob GC
+    // ever reaches them — a deleted account's picture used to stay in storage
+    // forever. Best effort, after commit: the account is already gone.
+    if let Some(avatar) = user.avatar_key.as_deref().filter(|key| !key.is_empty())
+      && let Err(error) = reqwest::Client::new().delete(storage.presign_delete(avatar)).send().await
+    {
+      tracing::warn!(%user_id, error = %error.without_url(), "delete account: avatar object left behind");
+    }
   }
   Ok(StatusCode::NO_CONTENT)
 }
@@ -472,14 +488,10 @@ pub async fn delete_account(
 /// The transactional cascade behind [`delete_account`], separated so a DB test
 /// can exercise it without minting a token. Deletes the user's owned workspaces
 /// (all content cascades on `workspace_id`) and the shares they authored, then
-/// the user row (api_tokens / refresh_tokens / workspace_members cascade on
-/// `user_id`). If the account still authored rows in workspaces owned by OTHERS
-/// (`created_by` / `actor_id` / `uploaded_by` are `ON DELETE RESTRICT`), the
-/// final delete is a FK violation → the whole transaction rolls back and we
-/// return a readable 409 rather than silently stripping a co-owner's document
-/// history. Atomic: either the account and everything it owns is gone, or
-/// nothing is. Pending-upload ledger rows deliberately have no workspace FK,
-/// so storage failures after commit remain recoverable by blob GC.
+/// turns the user row into a tombstone (see the body, and migration 0031).
+/// Atomic: either the account and everything it owns is gone, or nothing is.
+/// Pending-upload ledger rows deliberately have no workspace FK, so storage
+/// failures after commit remain recoverable by blob GC.
 pub async fn delete_user_and_owned(
   db: &sqlx::PgPool,
   user_id: Uuid,
@@ -489,7 +501,8 @@ pub async fn delete_user_and_owned(
   // Block a concurrent workspace create's owner FK check before taking the
   // workspace snapshot. Each workspace row lock then blocks concurrent file
   // INSERTs until the pending ledger and cascades have committed together.
-  let user_exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+  let user_exists: Option<Uuid> =
+    sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
@@ -524,33 +537,50 @@ pub async fn delete_user_and_owned(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
-  match sqlx::query("DELETE FROM users WHERE id = $1")
-    .bind(user_id)
-    .execute(&mut *tx)
-    .await
-  {
-    Ok(_) => {
-      tx.commit().await?;
-      Ok(keys)
-    }
-    Err(error) => {
-      // tx is dropped here (rolled back) before we return.
-      let is_fk = error
-        .as_database_error()
-        .and_then(|d| d.code())
-        .as_deref()
-        == Some("23503");
-      if is_fk {
-        Err(ApiError::Conflict(
-          "your account still has content in workspaces owned by others; \
-           leave those workspaces first, then delete."
-            .to_string(),
-        ))
-      } else {
-        Err(error.into())
-      }
-    }
+  // C4: a tombstone, not a DELETE. What this account authored in workspaces
+  // owned by OTHERS (pages, uploads, stream updates — `ON DELETE RESTRICT`)
+  // made a hard delete fail with a 409 nobody could act on: anyone who had
+  // ever collaborated could not leave. That work belongs to the workspace it
+  // was done in, so the row stays as an anonymous author; everything that
+  // identifies or authenticates the person goes. `email` gets a unique
+  // `.invalid` placeholder so the real address can register again.
+  //
+  // Comments are the exception, by 0014's explicit contract ("a deleted
+  // account takes its comments with it"): they used to go by cascade, and a
+  // row that is no longer deleted cascades nothing, so they go here.
+  for statement in [
+    "DELETE FROM comments WHERE author_id = $1",
+    "DELETE FROM comment_threads WHERE created_by = $1",
+    "DELETE FROM workspace_members WHERE user_id = $1",
+    "DELETE FROM api_tokens WHERE user_id = $1",
+    "DELETE FROM refresh_tokens WHERE user_id = $1",
+    "DELETE FROM password_reset_tokens WHERE user_id = $1",
+    "DELETE FROM email_verification_tokens WHERE user_id = $1",
+    "DELETE FROM import_jobs WHERE user_id = $1",
+    "DELETE FROM user_settings WHERE user_id = $1",
+  ] {
+    sqlx::query(statement)
+      .bind(user_id)
+      .execute(&mut *tx)
+      .await?;
   }
+  sqlx::query(
+    "UPDATE users SET
+       email = 'deleted+' || id::text || '@deleted.invalid',
+       display_name = '',
+       password_hash = '',
+       avatar_key = NULL,
+       email_verified_at = NULL,
+       is_admin = false,
+       deleted_at = now(),
+       updated_at = now()
+     WHERE id = $1",
+  )
+  .bind(user_id)
+  .execute(&mut *tx)
+  .await?;
+  tx.commit().await?;
+  Ok(keys)
 }
 
 /// A fresh sign-in: its own token family.
@@ -727,7 +757,7 @@ pub async fn refresh(
     r#"
       SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
       FROM users
-      WHERE id = $1
+      WHERE id = $1 AND deleted_at IS NULL
     "#,
   )
   .bind(user_id)
@@ -778,11 +808,20 @@ pub async fn logout(
   Ok((cleared_cookie_headers(), StatusCode::NO_CONTENT))
 }
 
-/// Burn every sign-in a user has, everywhere. The access tokens already issued
-/// are JWTs and cannot be recalled — they die on their own within
-/// `access_token_ttl_seconds` (1h by default), which is the price of them being
-/// stateless. Nothing can mint a new one after this.
+/// Burn every credential a user has, everywhere: refresh tokens AND personal
+/// access tokens. The access tokens already issued are JWTs and cannot be
+/// recalled — they die on their own within `access_token_ttl_seconds` (1h by
+/// default), which is the price of them being stateless. Nothing can mint a
+/// new one after this.
+///
+/// PATs are included because both callers are password changes, made when
+/// someone thinks an intruder is in the account — and minting a PAT
+/// (`POST /auth/tokens`, never expiring by default) is exactly how an intruder
+/// would stay. Revoking only refresh tokens left that door open while the
+/// reset page told the user every device had been signed out. Same choice as
+/// Google's app passwords, which a password change revokes.
 pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
+  let mut tx = db.begin().await?;
   sqlx::query(
     r#"
       UPDATE refresh_tokens
@@ -791,8 +830,13 @@ pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult
     "#,
   )
   .bind(user_id)
-  .execute(db)
+  .execute(&mut *tx)
   .await?;
+  sqlx::query("DELETE FROM api_tokens WHERE user_id = $1")
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+  tx.commit().await?;
   Ok(())
 }
 
@@ -900,16 +944,35 @@ async fn resolve_pat(state: &AppState, token: &str) -> ApiResult<Auth> {
   }
 
   // Best-effort last-used bookkeeping; a failure here must not block the request.
-  let _ = sqlx::query("UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1")
-    .bind(&hash)
-    .execute(&state.db)
-    .await;
+  // At most once a minute: every PAT request resolves the token twice (scope
+  // guard + handler), and an unconditional UPDATE was two row writes per MCP
+  // call for a "last used" that is shown to the minute anyway.
+  let _ = sqlx::query(
+    "UPDATE api_tokens SET last_used_at = now() \
+     WHERE token_hash = $1 \
+       AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
+  )
+  .bind(&hash)
+  .execute(&state.db)
+  .await;
 
   let scopes = row.scopes.iter().filter_map(|s| Scope::parse(s)).collect();
   Ok(Auth {
     user_id: row.user_id,
     scopes,
   })
+}
+
+// The credential `scope_guard` already resolved for THIS request: the token
+// it saw and the user it maps to.
+//
+// Every authenticated handler resolves its caller again through
+// `user_id_from_headers` — for a JWT that is CPU only, but for a PAT (the MCP /
+// CLI path) it was a second SELECT on every call. A task-local, not a header:
+// nothing a client sends can populate it, and it lives exactly as long as the
+// request's handler future.
+tokio::task_local! {
+  static RESOLVED: (String, Uuid);
 }
 
 /// Same two sources as [`scope_guard`], and it has to stay that way.
@@ -924,6 +987,10 @@ pub(crate) async fn user_id_from_headers(state: &AppState, headers: &HeaderMap) 
   let token = bearer_token(headers)
     .or_else(|| cookie_value(headers, SESSION_COOKIE))
     .ok_or(ApiError::Unauthorized)?;
+  // Same token the guard resolved moments ago in this request → same answer.
+  if let Ok(Some(user_id)) = RESOLVED.try_with(|(seen, user_id)| (*seen == token).then_some(*user_id)) {
+    return Ok(user_id);
+  }
   Ok(resolve_token(state, &token).await?.user_id)
 }
 
@@ -968,7 +1035,9 @@ pub(crate) async fn existing_user_id_from_headers(
 /// identify anyone. Clients already treat 401 as "session over, re-authenticate",
 /// which is exactly the right instruction here.
 pub(crate) async fn ensure_user_exists(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
-  let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+  let exists = sqlx::query_scalar::<_, bool>(
+    "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
+  )
     .bind(user_id)
     .fetch_one(db)
     .await?;
@@ -1151,9 +1220,21 @@ pub async fn scope_guard(
   if is_public(request.uri().path()) {
     return Ok(next.run(request).await);
   }
-  let token = bearer_token(request.headers())
+  let bearer = bearer_token(request.headers());
+  let from_cookie = bearer.is_none();
+  let token = bearer
     .or_else(|| cookie_value(request.headers(), SESSION_COOKIE))
     .ok_or(ApiError::Unauthorized)?;
+  // A cookie is attached by the BROWSER, so a state-changing request riding on
+  // one must come from the app's own origin. SameSite=Strict alone let a
+  // same-site page (an uploaded HTML file on the storage origin) send them.
+  // Bearer tokens are exempt: a hostile page cannot read one to send it.
+  if from_cookie
+    && !request.method().is_safe()
+    && !crate::origin::origin_allowed(&state.config, request.headers())
+  {
+    return Err(ApiError::Forbidden);
+  }
   let auth = resolve_token(&state, &token).await?;
   let need = if request.method().is_safe() {
     Scope::Read
@@ -1163,7 +1244,7 @@ pub async fn scope_guard(
   if !auth.grants(need) {
     return Err(ApiError::Forbidden);
   }
-  Ok(next.run(request).await)
+  Ok(RESOLVED.scope((token, auth.user_id), next.run(request)).await)
 }
 
 fn is_public(path: &str) -> bool {
@@ -1283,6 +1364,16 @@ pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> a
   Ok(())
 }
 
+/// A real Argon2 hash (same default parameters as every stored one) of a
+/// random password nobody knows, computed once — for [login]'s unknown-email
+/// path to verify against.
+fn dummy_password_hash() -> &'static str {
+  static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+  HASH.get_or_init(|| {
+    hash_password(&Uuid::new_v4().to_string()).expect("hashing a random password")
+  })
+}
+
 fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {
   let parsed_hash =
     PasswordHash::new(password_hash).map_err(|error| ApiError::Internal(error.to_string()))?;
@@ -1321,8 +1412,8 @@ async fn insert_registered_user(
   sqlx::query_as::<_, UserRow>(
     r#"
       INSERT INTO users (email, display_name, password_hash, is_admin)
-      SELECT $1, $2, $3, NOT EXISTS (SELECT 1 FROM users)
-      WHERE $4 OR NOT EXISTS (SELECT 1 FROM users)
+      SELECT $1, $2, $3, NOT EXISTS (SELECT 1 FROM users WHERE deleted_at IS NULL)
+      WHERE $4 OR NOT EXISTS (SELECT 1 FROM users WHERE deleted_at IS NULL)
       RETURNING id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
     "#,
   )
@@ -1682,8 +1773,12 @@ mod refresh_pg {
           .unwrap()
       }
     };
-    // The owner, their workspace, and its document (cascade) are all gone.
-    assert_eq!(count("SELECT count(*) FROM users WHERE id=$1", owner).await, 0);
+    // The owner (a tombstone now), their workspace, and its document (cascade)
+    // are all gone.
+    assert_eq!(
+      count("SELECT count(*) FROM users WHERE id=$1 AND deleted_at IS NULL", owner).await,
+      0
+    );
     assert_eq!(
       count("SELECT count(*) FROM workspaces WHERE id=$1", ws).await,
       0
@@ -1743,6 +1838,96 @@ mod refresh_pg {
       .execute(&db)
       .await
       .ok();
+  }
+
+  /// THE BUG (C4): anyone who had ever written a page or uploaded a file in a
+  /// workspace owned by someone else could not delete their account — those
+  /// rows hold `ON DELETE RESTRICT` references, and the delete answered 409
+  /// with advice the user could not act on. The account now becomes a
+  /// tombstone: the shared work stays in the other workspace, every trace of
+  /// the person goes, and the address can sign up again.
+  #[tokio::test]
+  async fn a_collaborator_can_delete_their_account_and_leaves_a_tombstone() {
+    let Some(db) = pool().await else { return };
+    let leaver = seed_user(&db).await;
+    let host = seed_user(&db).await;
+    let ws = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'H',$2)")
+      .bind(ws)
+      .bind(host)
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'editor')")
+      .bind(ws)
+      .bind(leaver)
+      .execute(&db)
+      .await
+      .unwrap();
+    let doc = Uuid::new_v4();
+    sqlx::query(
+      "INSERT INTO documents(id,workspace_id,root_block_id,created_by) VALUES($1,$2,'root',$3)",
+    )
+    .bind(doc)
+    .bind(ws)
+    .bind(leaver)
+    .execute(&db)
+    .await
+    .unwrap();
+    let email: String = sqlx::query_scalar("SELECT email FROM users WHERE id=$1")
+      .bind(leaver)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+
+    delete_user_and_owned(&db, leaver, 900)
+      .await
+      .expect("authorship in someone else's workspace must not block deletion");
+
+    let (tomb_email, name, hash, deleted): (String, String, String, bool) = sqlx::query_as(
+      "SELECT email, display_name, password_hash, deleted_at IS NOT NULL FROM users WHERE id=$1",
+    )
+    .bind(leaver)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(deleted);
+    assert_eq!(tomb_email, format!("deleted+{leaver}@deleted.invalid"));
+    assert_eq!((name.as_str(), hash.as_str()), ("", ""));
+    let doc_kept: i64 = sqlx::query_scalar("SELECT count(*) FROM documents WHERE id=$1")
+      .bind(doc)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert_eq!(doc_kept, 1, "the shared page stays in the host's workspace");
+    let memberships: i64 =
+      sqlx::query_scalar("SELECT count(*) FROM workspace_members WHERE user_id=$1")
+        .bind(leaver)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(memberships, 0);
+    assert!(
+      matches!(ensure_user_exists(&db, leaver).await, Err(ApiError::Unauthorized)),
+      "a still-valid access token must stop identifying anyone"
+    );
+    assert!(
+      matches!(delete_user_and_owned(&db, leaver, 900).await, Err(ApiError::NotFound)),
+      "a tombstone is not deleted twice"
+    );
+    // The address is free again.
+    let again = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+      .bind(again)
+      .bind(&email)
+      .execute(&db)
+      .await
+      .expect("the real address can register again");
+
+    sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.ok();
+    for u in [leaver, host, again] {
+      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(&db).await.ok();
+    }
   }
 
   #[tokio::test]
@@ -1907,6 +2092,40 @@ mod refresh_pg {
       rotate_refresh_token(&db, &intruder).await.is_err(),
       "every family dies, not just the one that asked"
     );
+  }
+
+  /// THE BUG: a password change revoked refresh tokens only, so a PAT an
+  /// intruder had minted kept full API access after the victim's reset.
+  #[tokio::test]
+  async fn changing_the_password_kills_personal_access_tokens_too() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let other = seed_user(&db).await;
+    for owner in [user, other] {
+      sqlx::query(
+        "INSERT INTO api_tokens (user_id, name, token_hash, scopes) VALUES ($1, 'x', $2, ARRAY['write'])",
+      )
+      .bind(owner)
+      .bind(Uuid::new_v4().to_string())
+      .execute(&db)
+      .await
+      .unwrap();
+    }
+
+    revoke_user_sessions(&db, user).await.unwrap();
+
+    let count = |u: Uuid| {
+      let db = db.clone();
+      async move {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM api_tokens WHERE user_id = $1")
+          .bind(u)
+          .fetch_one(&db)
+          .await
+          .unwrap()
+      }
+    };
+    assert_eq!(count(user).await, 0, "the intruder's PAT dies with the password");
+    assert_eq!(count(other).await, 1, "other users' tokens are untouched");
   }
 
   #[tokio::test]
@@ -2197,6 +2416,40 @@ mod refresh_pg {
     .ok();
   }
 
+  /// C4: a tombstone is not an account. Before tombstones, the sole user
+  /// deleting themselves left an empty instance whose next sign-up became the
+  /// first account (and admin); a leftover tombstone row must not turn that
+  /// into an instance nobody can join with registration closed.
+  #[tokio::test]
+  async fn an_instance_holding_only_tombstones_is_still_fresh() {
+    let Some(db) = pool().await else { return };
+    let (scratch, name) = scratch_db(&db, "mica_tombfresh").await;
+    sqlx::query(
+      "INSERT INTO users(email,display_name,password_hash,deleted_at) \
+       VALUES('deleted+x@deleted.invalid','','',now())",
+    )
+    .execute(&scratch)
+    .await
+    .unwrap();
+    let mut tx = scratch.begin().await.unwrap();
+    let first = insert_registered_user(&mut tx, "first@new.test", "F", "x", false)
+      .await
+      .unwrap();
+    tx.commit().await.unwrap();
+    assert!(first.is_some(), "closed registration still admits the first live account");
+    let is_admin: bool = sqlx::query_scalar("SELECT is_admin FROM users WHERE email='first@new.test'")
+      .fetch_one(&scratch)
+      .await
+      .unwrap();
+    assert!(is_admin);
+
+    scratch.close().await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
+      .execute(&db)
+      .await
+      .ok();
+  }
+
   /// P1-01: two concurrent registrations on an EMPTY instance must not both
   /// become admin.
   ///
@@ -2339,7 +2592,8 @@ mod refresh_pg {
          created_at timestamptz NOT NULL DEFAULT now(),
          avatar_key text,
          email_verified_at timestamptz,
-         is_admin boolean NOT NULL DEFAULT false
+         is_admin boolean NOT NULL DEFAULT false,
+         deleted_at timestamptz
        )",
     )
     .execute(&scratch)

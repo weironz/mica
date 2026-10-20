@@ -5,7 +5,7 @@ import 'package:mica_flutter/editor/render.dart';
 
 // RenderDocument keeps each block's shaped TextPainter across layout passes and
 // reuses it when the block's rendered span + width are unchanged (the layout-
-// side virtualization from docs/editor-virtualization-plan.md, Phase 1). The
+// side virtualization from docs/features/editor-virtualization-plan.md, Phase 1). The
 // cost of getting reuse wrong is silent geometry corruption — a stale painter
 // answering caret/hit-test queries for text it no longer holds. These pin the
 // two ways that could happen: an edited block must re-shape, and an appearance

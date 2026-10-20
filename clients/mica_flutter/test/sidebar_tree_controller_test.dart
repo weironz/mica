@@ -4,7 +4,7 @@ import 'package:mica_flutter/ui/sidebar_tree_controller.dart';
 
 /// Characterization tests for [SidebarTreeController], pinned against the
 /// behavior the state had when it was still `_WorkspaceViewState` fields
-/// (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
+/// (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
 void main() {
   DocumentView view(
     String id, {

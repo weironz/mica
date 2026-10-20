@@ -15,10 +15,30 @@ impl std::fmt::Display for InflateError {
 }
 impl std::error::Error for InflateError {}
 
-pub fn inflate(input: &[u8], size_hint: usize) -> Result<Vec<u8>, InflateError> {
+/// Largest up-front reservation [inflate] makes from the caller's size hint.
+///
+/// The hint is the archive header's DECLARED uncompressed size — attacker data.
+/// Reserving it verbatim let a 125-byte zip declaring `1<<60` bytes make the
+/// allocator fail, and a failed allocation in Rust is an abort, not a panic:
+/// no `spawn_blocking` / task boundary catches it, the whole api-server went
+/// down. Past this cap the Vec simply grows as real output arrives.
+const MAX_PREALLOC: usize = 8 * 1024 * 1024;
+
+/// Inflate `input`, refusing to produce more than `limit` bytes.
+///
+/// `limit` is what bounds a decompression bomb (a few KiB of DEFLATE can
+/// expand to gigabytes); `size_hint` is only a capacity guess and is clamped.
+pub fn inflate(input: &[u8], size_hint: usize, limit: usize) -> Result<Vec<u8>, InflateError> {
+  let reserve = size_hint
+    .min(limit)
+    .min(MAX_PREALLOC)
+    // DEFLATE's best case is ~1032:1; a hint far above that is a lie.
+    .min(input.len().saturating_mul(1032))
+    .max(64);
   Inflater {
     input,
-    out: Vec::with_capacity(size_hint.max(64)),
+    out: Vec::with_capacity(reserve),
+    limit,
     pos: 0,
     bit_buf: 0,
     bit_cnt: 0,
@@ -29,6 +49,7 @@ pub fn inflate(input: &[u8], size_hint: usize) -> Result<Vec<u8>, InflateError> 
 struct Inflater<'a> {
   input: &'a [u8],
   out: Vec<u8>,
+  limit: usize,
   pos: usize,
   bit_buf: u32,
   bit_cnt: u32,
@@ -67,6 +88,14 @@ impl Inflater<'_> {
     }
   }
 
+  /// Refuse output that would cross [Self::limit] — checked BEFORE writing.
+  fn reserve_out(&self, n: usize) -> Result<(), InflateError> {
+    if self.out.len().saturating_add(n) > self.limit {
+      return Err(InflateError("output exceeds limit"));
+    }
+    Ok(())
+  }
+
   fn bits(&mut self, need: u32) -> Result<u32, InflateError> {
     let mut val = self.bit_buf;
     while self.bit_cnt < need {
@@ -94,6 +123,7 @@ impl Inflater<'_> {
     if self.pos + len > self.input.len() {
       return Err(InflateError("truncated stored block"));
     }
+    self.reserve_out(len)?;
     self.out.extend_from_slice(&self.input[self.pos..self.pos + len]);
     self.pos += len;
     Ok(())
@@ -160,7 +190,10 @@ impl Inflater<'_> {
     loop {
       let sym = self.decode(len_code)?;
       match sym {
-        0..=255 => self.out.push(sym as u8),
+        0..=255 => {
+          self.reserve_out(1)?;
+          self.out.push(sym as u8);
+        }
         256 => return Ok(()),
         _ => {
           let li = sym - 257;
@@ -176,6 +209,7 @@ impl Inflater<'_> {
           if dist > self.out.len() {
             return Err(InflateError("distance too far back"));
           }
+          self.reserve_out(len)?;
           let from = self.out.len() - dist;
           for k in 0..len {
             let b = self.out[from + k];

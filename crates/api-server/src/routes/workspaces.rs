@@ -124,6 +124,9 @@ pub(crate) async fn next_member_position(db: &PgPool, user_id: Uuid) -> ApiResul
   Ok(pad_position(max.unwrap_or(0) + 10))
 }
 
+/// Upper bound on one reorder request's id list.
+const MAX_REORDER_IDS: usize = 1000;
+
 #[derive(Debug, Deserialize)]
 pub struct ReorderWorkspacesRequest {
   workspace_ids: Vec<Uuid>,
@@ -138,19 +141,44 @@ pub async fn reorder(
   Json(payload): Json<ReorderWorkspacesRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
-  let mut tx = state.db.begin().await?;
-  for (i, wid) in payload.workspace_ids.iter().enumerate() {
-    sqlx::query(
-      "UPDATE workspace_members SET position = $1 WHERE workspace_id = $2 AND user_id = $3",
-    )
-    .bind(pad_position((i as i64 + 1) * 10))
-    .bind(wid)
-    .bind(user_id)
-    .execute(&mut *tx)
-    .await?;
+  // Bounded: one user is a member of a handful of workspaces, and the list is
+  // client-supplied. (Duplicates: the first occurrence wins below.)
+  if payload.workspace_ids.len() > MAX_REORDER_IDS {
+    return Err(ApiError::BadRequest(format!(
+      "at most {MAX_REORDER_IDS} workspaces can be reordered at once"
+    )));
   }
-  tx.commit().await?;
+  reorder_member_positions(&state.db, user_id, &payload.workspace_ids).await?;
   Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Renumber `user_id`'s membership positions to follow `workspace_ids`.
+///
+/// ONE statement instead of one UPDATE per id — the list comes from the
+/// client, and N round trips inside a transaction held the rows locked for
+/// all of them. Ids the user is not a member of match nothing.
+async fn reorder_member_positions(db: &PgPool, user_id: Uuid, workspace_ids: &[Uuid]) -> ApiResult<()> {
+  let positions: Vec<String> = (1..=workspace_ids.len() as i64)
+    .map(|i| pad_position(i * 10))
+    .collect();
+  sqlx::query(
+    r#"
+      UPDATE workspace_members m
+      SET position = o.position
+      FROM (
+        SELECT DISTINCT ON (id) id, position
+        FROM unnest($1::uuid[], $2::text[]) WITH ORDINALITY AS t(id, position, n)
+        ORDER BY id, n
+      ) o
+      WHERE m.workspace_id = o.id AND m.user_id = $3
+    "#,
+  )
+  .bind(workspace_ids)
+  .bind(&positions)
+  .bind(user_id)
+  .execute(db)
+  .await?;
+  Ok(())
 }
 
 /// The workspace list query, shared with its test so what gets asserted is the
@@ -198,7 +226,9 @@ pub async fn create(
   headers: HeaderMap,
   Json(payload): Json<CreateWorkspaceRequest>,
 ) -> ApiResult<Json<WorkspaceResponse>> {
-  let user_id = user_id_from_headers(&state, &headers).await?;
+  // An access token outlives a deleted account by up to its TTL; the tombstone
+  // row (C4) would satisfy the owner FK, so check it is still a live account.
+  let user_id = super::auth::existing_user_id_from_headers(&state, &headers).await?;
   let name = normalize_workspace_name(&payload.name)?;
 
   let mut tx = state.db.begin().await?;
@@ -462,6 +492,9 @@ pub async fn add_member(
   let member_user_id = user_id_by_email(&state.db, &email)
     .await?
     .ok_or(ApiError::NotFound)?;
+  // The upsert below rewrites an EXISTING member's role, so "add" the owner's
+  // email with any role was a demotion — the one thing update/remove refuse.
+  ensure_not_workspace_owner(&state.db, workspace_id, member_user_id).await?;
 
   // New member: the workspace lands at the END of THEIR switcher. An existing
   // member (re-invite / role change) keeps their position — only role updates.
@@ -900,6 +933,169 @@ mod workspace_decode_pg {
       .execute(&db)
       .await
       .ok();
+  }
+}
+
+#[cfg(test)]
+mod reorder_pg {
+  use super::*;
+
+  #[tokio::test]
+  async fn one_statement_renumbers_only_the_callers_memberships() {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+      return;
+    };
+    let db = PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed");
+    let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+    let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    for u in [me, other] {
+      sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+        .bind(u)
+        .bind(format!("{u}@t.dev"))
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    for ws in [a, b, c] {
+      sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+        .bind(ws)
+        .bind(me)
+        .execute(&db)
+        .await
+        .unwrap();
+      sqlx::query("INSERT INTO workspace_members(workspace_id,user_id,role,position) VALUES($1,$2,'owner','0000000010')")
+        .bind(ws)
+        .bind(me)
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    sqlx::query("INSERT INTO workspace_members(workspace_id,user_id,role,position) VALUES($1,$2,'viewer','0000000099')")
+      .bind(a)
+      .bind(other)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    reorder_member_positions(&db, me, &[c, a, b, Uuid::new_v4()]).await.unwrap();
+
+    let order: Vec<Uuid> = sqlx::query_scalar(
+      "SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY position",
+    )
+    .bind(me)
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(order, vec![c, a, b]);
+    let theirs: String = sqlx::query_scalar(
+      "SELECT position FROM workspace_members WHERE user_id = $1 AND workspace_id = $2",
+    )
+    .bind(other)
+    .bind(a)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(theirs, "0000000099", "another user's order is untouched");
+
+    for ws in [a, b, c] {
+      sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.ok();
+    }
+    for u in [me, other] {
+      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(&db).await.ok();
+    }
+  }
+}
+
+#[cfg(test)]
+mod owner_role_pg {
+  use super::*;
+
+  async fn pool() -> Option<PgPool> {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(
+        std::env::var("CI").is_err(),
+        "DATABASE_URL is unset in CI — these tests must not silently pass"
+      );
+      return None;
+    };
+    Some(PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed"))
+  }
+
+  /// THE BUG: `add_member` is an upsert, so an admin "adding" the owner's
+  /// email as viewer rewrote the owner's row. Owner checks read that row, so
+  /// the owner lost the workspace and could not get it back.
+  #[tokio::test]
+  async fn the_owner_cannot_be_demoted_by_any_path() {
+    let Some(db) = pool().await else { return };
+    let (owner, admin, ws) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    for u in [owner, admin] {
+      sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','x')")
+        .bind(u)
+        .bind(format!("{u}@t.dev"))
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'W',$2)")
+      .bind(ws)
+      .bind(owner)
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query(
+      "INSERT INTO workspace_members(workspace_id,user_id,role,position)
+       VALUES($1,$2,'owner','0000000010'),($1,$3,'admin','0000000010')",
+    )
+    .bind(ws)
+    .bind(owner)
+    .bind(admin)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    // The API guard add_member now runs before its upsert.
+    assert!(matches!(
+      ensure_not_workspace_owner(&db, ws, owner).await,
+      Err(ApiError::Forbidden)
+    ));
+    assert!(ensure_not_workspace_owner(&db, ws, admin).await.is_ok());
+
+    // The backstop: add_member's exact upsert, aimed at the owner, is refused
+    // by the database even if a future path forgets the guard.
+    let upsert = sqlx::query(
+      "INSERT INTO workspace_members (workspace_id, user_id, role, position)
+       VALUES ($1, $2, 'viewer'::workspace_role, '0000000020')
+       ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+    )
+    .bind(ws)
+    .bind(owner)
+    .execute(&db)
+    .await;
+    assert!(upsert.is_err(), "the owner's role must not change");
+    let role: String = sqlx::query_scalar(
+      "SELECT role::text FROM workspace_members WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(ws)
+    .bind(owner)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(role, "owner");
+
+    // Other members' roles still change freely.
+    sqlx::query("UPDATE workspace_members SET role='viewer' WHERE workspace_id=$1 AND user_id=$2")
+      .bind(ws)
+      .bind(admin)
+      .execute(&db)
+      .await
+      .expect("a non-owner can be demoted");
+
+    // Deleting the workspace still cascades through the owner's row.
+    sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.unwrap();
+    for u in [owner, admin] {
+      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(&db).await.ok();
+    }
   }
 }
 

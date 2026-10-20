@@ -1,6 +1,6 @@
 //! Handler functions for the block scanner — the decomposition of what used
 //! to be `import_markdown_inner`'s 1,300-line loop body
-//! (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8, stage 2).
+//! (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8, stage 2).
 //!
 //! The families preserve the original loop's parsing decisions and address
 //! `ctx.st.<field>` through the shared [ScanCtx].
@@ -97,13 +97,54 @@ pub(crate) fn lazy_code_continuation(ctx: &mut ScanCtx, _line: &str, _content: &
     {
       open.raw.push('\n');
       open.raw.push_str(body);
-      let (joined, joined_data) = apply_inline_marks(open.raw.clone(), open.base.clone(), ctx.defs);
-      ctx.blocks[open.block_idx].text = joined;
-      ctx.blocks[open.block_idx].data = joined_data;
+      defer_inline(ctx.blocks, &mut ctx.st.stale_inline, open.block_idx, &open.raw);
       (*ctx.index) += 1;
       return Some(());
     }
   None // fall through: the family guard rejected the line
+}
+
+/// A continuation line joined an open block: store the RAW joined source and
+/// leave the inline parse for [finish_deferred_inline], once, after the scan.
+///
+/// Re-parsing the whole block on every continuation line made an n-line
+/// paragraph cost n full inline parses — quadratic in the paragraph, which
+/// on top of a quadratic inline scanner made a plain 4000-line paragraph take
+/// seconds. Any later handler that writes this block's text itself (setext,
+/// loose re-join, …) computes it from `open.raw` and clears the entry.
+fn defer_inline(
+  blocks: &mut [Block],
+  stale: &mut std::collections::BTreeSet<usize>,
+  idx: usize,
+  raw: &str,
+) {
+  blocks[idx].text.clear();
+  blocks[idx].text.push_str(raw);
+  stale.insert(idx);
+}
+
+/// Parse the inlines of every block [defer_inline] left raw. Its base data is
+/// the block's CURRENT data minus the stale `marks` — what the per-line
+/// re-parse rebuilt from, including any key a handler set directly on the
+/// block after its last continuation.
+pub(crate) fn finish_deferred_inline(
+  blocks: &mut [Block],
+  stale: std::collections::BTreeSet<usize>,
+  defs: &RefDefs,
+) {
+  for idx in stale {
+    let block = &mut blocks[idx];
+    let mut base = std::mem::take(&mut block.data);
+    if let Value::Object(map) = &mut base {
+      map.remove("marks");
+      if map.is_empty() {
+        base = Value::Null;
+      }
+    }
+    let (text, data) = apply_inline_marks(std::mem::take(&mut block.text), base, defs);
+    block.text = text;
+    block.data = data;
+  }
 }
 
 /// (family moved from the scan loop)
@@ -116,6 +157,7 @@ pub(crate) fn setext_paragraph(ctx: &mut ScanCtx, line: &str, _content: &str, _b
     {
       let (text, data) = apply_inline_marks(open.raw.clone(), json!({ "level": level }), ctx.defs);
       let idx = open.block_idx;
+      ctx.st.stale_inline.remove(&idx);
       ctx.blocks[idx].kind = "heading".to_string();
       ctx.blocks[idx].text = text;
       ctx.blocks[idx].data = data;
@@ -229,6 +271,7 @@ pub(crate) fn list_container_children(ctx: &mut ScanCtx, _line: &str, content: &
       {
         let raw_text = open.raw.clone();
         let idx = open.block_idx;
+        ctx.st.stale_inline.remove(&idx);
         let (it, id) = apply_inline_marks(String::new(), open.base.clone(), ctx.defs);
         ctx.blocks[idx].text = it;
         ctx.blocks[idx].data = id;
@@ -347,7 +390,7 @@ pub(crate) fn fenced_code(ctx: &mut ScanCtx, _line: &str, content: &str, _body: 
     // Math block: `$$ … $$` or `\[ … \]`, single- or multi-line. The
     // LaTeX source is carried verbatim in a `math_block`; export always
     // writes the canonical `$$` form. (No spec exists — this follows the
-    // Pandoc/GitHub dollar convention; see docs/editor-engine.md.)
+    // Pandoc/GitHub dollar convention; see docs/architecture/editor-engine.md.)
   None // fall through: the family guard rejected the line
 }
 
@@ -737,10 +780,7 @@ pub(crate) fn quote_group(ctx: &mut ScanCtx, _line: &str, content: &str, body: &
       {
         open.raw.push('\n');
         open.raw.push_str(strip_quote_markers(body).1.trim_start());
-        let (joined, joined_data) =
-          apply_inline_marks(open.raw.clone(), open.base.clone(), ctx.defs);
-        ctx.blocks[open.block_idx].text = joined;
-        ctx.blocks[open.block_idx].data = joined_data;
+        defer_inline(ctx.blocks, &mut ctx.st.stale_inline, open.block_idx, &open.raw);
         ctx.st.quote_active = true;
         (*ctx.index) += 1;
         return Some(());
@@ -805,6 +845,7 @@ pub(crate) fn quote_group(ctx: &mut ScanCtx, _line: &str, content: &str, body: &
         data_insert(&mut open.base, "loose", json!(true));
         let (joined, joined_data) =
           apply_inline_marks(open.raw.clone(), open.base.clone(), ctx.defs);
+        ctx.st.stale_inline.remove(&open.block_idx);
         ctx.blocks[open.block_idx].text = joined;
         ctx.blocks[open.block_idx].data = joined_data;
         ctx.st.quote_active = true;
@@ -975,6 +1016,7 @@ pub(crate) fn open_item_continuations(
             ctx.st.pending_loose = false;
             let (joined, joined_data) =
               apply_inline_marks(open.raw.clone(), open.base.clone(), ctx.defs);
+            ctx.st.stale_inline.remove(&open.block_idx);
             ctx.blocks[open.block_idx].text = joined;
             ctx.blocks[open.block_idx].data = joined_data;
             (*ctx.index) += 1;
@@ -1015,10 +1057,7 @@ pub(crate) fn open_item_continuations(
             open.raw.push('\n');
             open.raw.push_str(body);
           }
-          let (joined, joined_data) =
-            apply_inline_marks(open.raw.clone(), open.base.clone(), ctx.defs);
-          ctx.blocks[open.block_idx].text = joined;
-          ctx.blocks[open.block_idx].data = joined_data;
+          defer_inline(ctx.blocks, &mut ctx.st.stale_inline, open.block_idx, &open.raw);
           (*ctx.index) += 1;
           return Some(());
         }

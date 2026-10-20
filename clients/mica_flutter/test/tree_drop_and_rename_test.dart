@@ -4,7 +4,7 @@ import 'package:mica_flutter/ui/inline_rename_controller.dart';
 import 'package:mica_flutter/ui/tree_drop_planner.dart';
 
 /// Characterization tests for the god-class wrap-up extractions
-/// (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7): the inline-rename
+/// (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7): the inline-rename
 /// flow state and the sidebar drag-drop decision logic, pinned against the
 /// behavior they had as `_WorkspaceViewState` methods.
 void main() {

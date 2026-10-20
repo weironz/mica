@@ -15,7 +15,7 @@ import '../session/session_controller.dart';
 /// sidebar's tree-change socket, the cross-document outbox sweep, the
 /// sync-paused fault banner and the op-path remote-seq refetch — extracted
 /// verbatim (god-class seventh step; see
-/// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
+/// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7).
 ///
 /// The TABS themselves are not owned here: they arrive through the injected
 /// [tabs] / [activeIndex] accessors, and the controller touches each tab only

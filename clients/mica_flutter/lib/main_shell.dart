@@ -38,7 +38,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// The session/workspace hub — the four fields every domain used to touch
   /// directly, now owned by [SessionController] (god-class third step; see
-  /// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). The four legacy
+  /// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). The four legacy
   /// fields right below are synced view-model copies for the build helpers;
   /// every mutation goes through a controller transition.
   late final SessionController _sessionCtrl;
@@ -114,7 +114,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// carry this, since it's true for every operation and says nothing about size.
   /// The import domain's logic half (polling, second image pass), extracted
   /// from this State in the god-class pilot — see
-  /// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md. [_importProgress] and
+  /// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md. [_importProgress] and
   /// [_importJobId] below stay as this State's view-model copies, synced from
   /// the controller in [_syncImportState], so the sidebar row and its cancel
   /// button read them unchanged.
@@ -823,6 +823,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             )
           : context.l10n.uploadFileTooLarge,
       'workspace_quota_exceeded' => context.l10n.uploadWorkspaceFull,
+      'owner_quota_exceeded' => context.l10n.uploadOwnerFull,
       _ => error.toString(),
     };
   }
@@ -2695,6 +2696,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// takes the same session and the dialog uses them together.
   Future<Map<String, dynamic>> _listAiModels({
     String? provider,
+    String? providerId,
     String? baseUrl,
     String? apiKey,
   }) async {
@@ -2702,6 +2704,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _api.listAiModels(
       session.accessToken,
       provider: provider,
+      providerId: providerId,
       baseUrl: baseUrl,
       apiKey: apiKey,
     );
@@ -4301,7 +4304,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         fullscreenDialog: true,
         // StatefulBuilder because this is a ROUTE: adding or removing a server
         // calls setState on the shell, which does NOT rebuild a route already on
-        // the stack (see dialog_controllers.dart / docs/lessons.md). Without it
+        // the stack (see dialog_controllers.dart / docs/dev/lessons.md). Without it
         // you would add a server here and the list would not move.
         builder: (routeContext) => StatefulBuilder(
           builder: (routeContext, setLocal) => Scaffold(
@@ -5528,7 +5531,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// (each carries offsets against the CURRENT text, or a null anchor when
   /// orphaned). Re-fetched on open — never cached across documents, and never
   /// re-derived locally: the anchor lives in the CRDT and only the server reads
-  /// it (docs/comments-plan.md).
+  /// it (docs/features/comments-plan.md).
   List<CommentThread> _commentThreads = const [];
 
   /// The thread the reader is currently looking at, drawn stronger than the rest.

@@ -1341,10 +1341,11 @@ class EditorController extends ChangeNotifier {
       var inline = marks.isEmpty
           ? escapeInline(sub)
           : inlineToMarkdown(sub, marks);
-      if (full && node.kind == 'paragraph') {
+      if (full && (node.kind == 'paragraph' || node.kind == 'quote')) {
         // A copied paragraph that looks like a list/heading/divider must
-        // not change kind when pasted back as markdown.
-        inline = escapeBlockLeader(inline);
+        // not change kind when pasted back as markdown — on EVERY line: after
+        // a hard break, `- item` on line two started a real list.
+        inline = escapeBlockLeaders(inline);
       }
       // Prepend the block-level Markdown marker only for a fully-selected block
       // (a partial first/last line is copied as plain inline text).
@@ -1375,8 +1376,8 @@ class EditorController extends ChangeNotifier {
       // that merely LOOKS like a block leader starts a real block on re-import:
       // `d\n- e` (CommonMark ex. 312) came back as `- d` + a nested `- e`, one
       // block turning into two on copy-paste. Mirrors Rust `push_list_item`,
-      // which escapes exactly here — quote continuations keep their `>` prefix
-      // instead and are deliberately NOT escaped, on either side.
+      // which escapes exactly here. Paragraph and quote lines were already
+      // escaped line by line above.
       final escapeCont = node.isListKind;
       return [
         '$head${lines.first}',

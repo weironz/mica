@@ -3,7 +3,7 @@
 #
 # `gzip -t` proves an archive is not truncated. `zcat | grep -c "^COPY public.x"`
 # proves a table is mentioned. NEITHER proves that `psql < dump` yields a working
-# database — and docs/backup.md says it out loud: 「没恢复过的备份只是猜测」.
+# database — and docs/ops/backup.md says it out loud: 「没恢复过的备份只是猜测」.
 #
 # That went from hygiene to load-bearing with S5 (migration 0016), the first
 # irreversible migration in this schema: it dropped the op model's three tables,
@@ -36,7 +36,7 @@
 # It used to have company: node-deploy-policy.sh, the node-side deploy fence,
 # stayed in shell for the same reason. That one is gone (2026-08-25 — deploying
 # is ansible/deploy.yml now, and the fence it enforced was retired with it; see
-# docs/cd-plan.md §4.1). This is the only script left in deploy/.
+# docs/ops/cd-plan.md §4.1). This is the only script left in deploy/.
 set -euo pipefail
 
 DUMP=${1:?usage: restore-drill.sh /data/mica/<dump>.sql.gz}

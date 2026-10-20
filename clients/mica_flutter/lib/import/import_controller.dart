@@ -8,7 +8,7 @@ import '../editor/file_names.dart' show fileNameFromUrl;
 
 /// The logic half of a server-side workspace import, extracted verbatim from
 /// `_WorkspaceShellState` (the god-class controller pilot in
-/// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md). Owns the job-poll
+/// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md). Owns the job-poll
 /// state machine and the second-pass image re-host. Everything that needs a
 /// [BuildContext] — dialogs, snackbars, the busy wrapper — stays in the State
 /// and is wired in through the hooks below.

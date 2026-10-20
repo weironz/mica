@@ -1,4 +1,4 @@
-# 巨石文件棘轮预算 —— 登记文件只许减不许增（docs/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 5 项）。
+# 巨石文件棘轮预算 —— 登记文件只许减不许增（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 5 项）。
 #
 # 规则：CI（scripts/check-file-size.sh）逐行核对，当前行数超过登记值即失败；
 # 低于登记值则通过并提示可收紧基线。目的：让 4,000 行警告清单成为只收敛

@@ -1,5 +1,5 @@
 output "public_ip" {
-  description = "填进 docs/dr-drill.md 第 0 步,并把 DNS A 记录指向它。"
+  description = "填进 docs/ops/dr-drill.md 第 0 步,并把 DNS A 记录指向它。"
   value       = alicloud_instance.dr.public_ip
 }
 

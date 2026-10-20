@@ -46,6 +46,24 @@ pub enum ApiError {
   Internal(String),
 }
 
+impl ApiError {
+  /// The message a CLIENT may see. Database and migration errors carry the
+  /// raw sqlx/Postgres text (constraint and column names, sometimes values);
+  /// that is logged here and replaced with a generic line. `Internal` keeps
+  /// its message: those are written by hand for the user ("AI returned an
+  /// empty response"), and the sites that used to embed foreign error text
+  /// with secrets in it no longer do.
+  pub fn public_message(&self) -> String {
+    match self {
+      Self::Database(_) | Self::Migration(_) => {
+        tracing::error!(error = %self, "database error");
+        "internal database error".to_string()
+      }
+      _ => self.to_string(),
+    }
+  }
+}
+
 #[derive(Debug, Serialize)]
 struct ErrorBody {
   code: &'static str,
@@ -69,9 +87,26 @@ impl IntoResponse for ApiError {
 
     let body = ErrorBody {
       code,
-      message: self.to_string(),
+      message: self.public_message(),
     };
 
     (status, Json(body)).into_response()
+  }
+}
+
+#[cfg(test)]
+mod public_message_tests {
+  use super::ApiError;
+
+  /// THE BUG (C3): a database error's text — constraint, column, sometimes the
+  /// offending value — went straight into the response body.
+  #[test]
+  fn database_errors_do_not_reach_the_client_verbatim() {
+    let error = ApiError::Database(sqlx::Error::Protocol("relation \"secret_table\" does not exist".into()));
+    assert_eq!(error.public_message(), "internal database error");
+    assert!(error.to_string().contains("secret_table"), "the log keeps the detail");
+
+    let authored = ApiError::Internal("AI returned an empty response".into());
+    assert_eq!(authored.public_message(), "internal error: AI returned an empty response");
   }
 }

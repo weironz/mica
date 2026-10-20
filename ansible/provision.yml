@@ -11,7 +11,7 @@
 # comes.
 #
 # WHY THIS EXISTS AT ALL: until 2026-08-29 this layer was written down only as
-# prose in docs/dr-drill.md, and deploy.yml says in its own header that CI must
+# prose in docs/ops/dr-drill.md, and deploy.yml says in its own header that CI must
 # "never install it". Walking the drill by hand found two things that no amount
 # of re-reading the prose would have:
 #

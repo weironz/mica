@@ -285,7 +285,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         // the follower with `OverlayPortal.overlayChildLayoutBuilder`, which
         // would keep both — but that rewrites how these bars follow the canvas
         // (777c07c / 9c367b2 exist to make them follow it), so it is its own
-        // change. Recorded in docs/roadmap.md.
+        // change. Recorded in docs/plans/roadmap.md.
         child: TooltipVisibility(visible: false, child: child),
       ),
     );
@@ -317,7 +317,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   // Source → picture previews (math, mermaid): the pipeline owns the cache /
   // pending / off-screen-capture lifecycle, the previewers say how one source
-  // becomes a picture (docs/render-architecture.md). Mermaid only registers
+  // becomes a picture (docs/architecture/render-architecture.md). Mermaid only registers
   // where its JS engine exists (web) — elsewhere ```mermaid blocks stay
   // highlighted source via the renderer's null-decline.
   late final RasterPreviewPipeline _previews = RasterPreviewPipeline(
@@ -2309,16 +2309,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final cur = sel.focus;
     DocPosition target = cur;
+    // Step by GRAPHEME, the unit Backspace/Delete already use. Stepping one
+    // UTF-16 unit put the caret between the two halves of a surrogate pair
+    // (any emoji): typing or deleting there left a lone surrogate in the text,
+    // which becomes U+FFFD once encoded for yrs.
+    final text = nodes[cur.node].text;
     if (dir < 0) {
       if (cur.offset > 0) {
-        target = cur.withOffset(cur.offset - 1);
+        final head = text.substring(0, cur.offset).characters.skipLast(1);
+        target = cur.withOffset(head.string.length);
       } else if (cur.node > 0) {
         target = DocPosition(cur.node - 1, nodes[cur.node - 1].text.length);
       }
     } else {
-      final len = nodes[cur.node].text.length;
+      final len = text.length;
       if (cur.offset < len) {
-        target = cur.withOffset(cur.offset + 1);
+        final first = text.substring(cur.offset).characters.first;
+        target = cur.withOffset(cur.offset + first.length);
       } else if (cur.node + 1 < nodes.length) {
         target = DocPosition(cur.node + 1, 0);
       }

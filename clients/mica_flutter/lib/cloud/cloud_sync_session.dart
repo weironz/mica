@@ -121,6 +121,26 @@ int mergeRunLength(List<int> sizes, {required int maxBytes}) {
   return sizes.length;
 }
 
+/// The server state vector a frame asks us to repair against (B11), or null.
+///
+/// Two frames ask: an ack whose push the server could not integrate
+/// (`missing`), and a base whose vector shows we hold insertions the server
+/// never received (`ahead`) — but the latter only with an empty outbox. With
+/// one, `ahead` is just our unpushed edits, which the replay already sends;
+/// pushing a repair as well would upload the whole offline stretch twice.
+///
+/// Pure and top-level for the same reason as [pushSlice].
+@visibleForTesting
+String? repairSvFor(Map<String, dynamic> frame, {required bool outboxEmpty}) {
+  final sv = frame['sv'];
+  if (sv is! String) return null;
+  return switch (frame['type']) {
+    'sync.ack' when frame['missing'] == true => sv,
+    'sync.base' when frame['ahead'] == true && outboxEmpty => sv,
+    _ => null,
+  };
+}
+
 class CloudSyncSession {
   CloudSyncSession({
     required this.uri,
@@ -309,6 +329,12 @@ class CloudSyncSession {
   /// with a poison edit that can never ack. Edits still append durably to the
   /// outbox and are retried on the next (re)connect, which clears this.
   bool _pushStalled = false;
+
+  /// History-repair pushes sent on this connection (B11). Bounded so a gap
+  /// the client cannot fill either (its own replica is missing the same
+  /// history) can't turn into an ack → repair → ack loop.
+  int _repairs = 0;
+  static const int _maxRepairs = 3;
   bool _restored = false;
   Timer? _persistTimer;
 
@@ -386,6 +412,7 @@ class CloudSyncSession {
     _deMergeFrom.clear();
     _pushRejects = 0;
     _pushStalled = false;
+    _repairs = 0;
     _restoreUnackedOnce();
     // Local-first: render the persisted replica immediately (offline read),
     // BEFORE the socket — so a cold start with no network still shows the doc.
@@ -454,11 +481,31 @@ class CloudSyncSession {
       // unacked diffs are replayed once the base arrives (see `sync.base`).
       _send({'type': 'sync.bootstrap'});
     } else {
-      // Reconnect: keep our replica (it may hold unpushed edits), just catch up
-      // from our cursor and resend everything still unacked.
-      _send({'type': 'sync.pull', 'payload': _pullPayload()});
-      _flushUnacked(resendAll: true);
+      // Reconnect: keep our replica (it may hold unpushed edits) and catch up
+      // by STATE VECTOR, not by cursor — see [_catchUpFrame]. The `sync.base`
+      // reply's handler then pulls the stream tail and resends everything
+      // still unacked.
+      _send(_catchUpFrame());
     }
+  }
+
+  /// The frame a replica we still hold catches up with: `sync.bootstrap`
+  /// carrying its state vector, answered with exactly the diff it lacks.
+  ///
+  /// NOT `sync.pull since_rid=_cursor`. The cursor is advanced by acks, and
+  /// the server can ack our push (rid 11) before it has delivered a peer's
+  /// broadcast (rid 10) on this socket — so after a lag notice dropped rid 10,
+  /// or a disconnect before it arrived, a pull from 11 skipped it for good:
+  /// later updates that depend on it park as pending, and nothing ever flags
+  /// it (red line #1). A state-vector diff is complete whatever order rids
+  /// were delivered in.
+  Map<String, dynamic> _catchUpFrame() {
+    final doc = _doc;
+    if (doc == null) return {'type': 'sync.bootstrap'};
+    return {
+      'type': 'sync.bootstrap',
+      'payload': {'sv': base64.encode(doc.stateVector())},
+    };
   }
 
   /// The sync.pull payload. P4-3: alongside the stream cursor we advertise the
@@ -583,6 +630,10 @@ class CloudSyncSession {
         // (including any recovered from a prior crash).
         _send({'type': 'sync.pull', 'payload': _pullPayload()});
         _flushUnacked(resendAll: true);
+        // B11: the server's vector says we hold insertions it never received
+        // — with an empty outbox, acked edits it has since lost (restore from
+        // a backup), which only we can send back. See [repairSvFor].
+        _pushRepair(repairSvFor(m, outboxEmpty: _outboxEmpty));
         _saveBaseNow(); // a base IS a snapshot — persist it now (rare event)
       case 'sync.updates':
         final ups = m['updates'];
@@ -629,6 +680,10 @@ class CloudSyncSession {
         if (_applyRemote(m) && !_disposed) onRemoteBlocks(childBlocks());
       case 'sync.ack':
         final ackId = m['ack_id'];
+        // B11: the push was stored but depends on history the server lacks
+        // (yrs parked it as pending — invisible to everyone else). We built it
+        // on that history, so send our diff against the server's vector.
+        _pushRepair(repairSvFor(m, outboxEmpty: _outboxEmpty));
         final rid = (m['rid'] as num?)?.toInt();
         if (_useAppendLog) {
           // The ack id is the pushed diff's monotonic clock. Advance pushed_clock
@@ -832,19 +887,27 @@ class CloudSyncSession {
     if (_disposed) return;
     final now = DateTime.now();
     final last = _lastLagResync;
-    if (last != null && now.difference(last) < const Duration(seconds: 1)) {
+    const window = Duration(seconds: 1);
+    if (last != null && now.difference(last) < window) {
+      // Inside the debounce: a notice here may report a drop AFTER the
+      // catch-up already in flight was answered, so it can't just be ignored
+      // (it was, and that drop was never recovered). One trailing resync at
+      // the end of the window covers every notice in it.
+      _lagTrailingTimer ??= Timer(window - now.difference(last), () {
+        _lagTrailingTimer = null;
+        _lastLagResync = null;
+        _resyncFromLag();
+      });
       return;
     }
     _lastLagResync = now;
     debugLagResyncCount++;
-    // Offline: nothing to send now; the reconnect path re-pulls from our cursor.
+    // Offline: nothing to send now; the reconnect path catches up on its own.
     if (_channel == null) return;
-    _send(
-      _doc == null
-          ? {'type': 'sync.bootstrap'}
-          : {'type': 'sync.pull', 'payload': _pullPayload()},
-    );
+    _send(_catchUpFrame());
   }
+
+  Timer? _lagTrailingTimer;
 
   /// Test-only: feed a raw server frame through the message handler.
   @visibleForTesting
@@ -986,6 +1049,27 @@ class CloudSyncSession {
   void _sendPush(_Pending p) {
     p.sent = true;
     _sendPushRaw(p.id, p.bytes);
+  }
+
+  /// Send everything our replica has that a server at state vector [svB64]
+  /// lacks (B11) — y-protocols' SyncStep2, on the server's request. Outside
+  /// the outbox on purpose: these are edits the server already acked once, so
+  /// nothing in the ack bookkeeping is waiting for them; the id is not a clock
+  /// and the ack handler's clock parse skips it.
+  void _pushRepair(String? svB64) {
+    final doc = _doc;
+    if (doc == null || svB64 == null || _channel == null) return;
+    if (_repairs >= _maxRepairs) return;
+    _repairs++;
+    final Uint8List diff;
+    try {
+      diff = doc.encodeDiffSince(base64.decode(svB64));
+    } catch (_) {
+      swallowed('cloud_repair_sv');
+      return;
+    }
+    if (diff.isEmpty) return;
+    _sendPushRaw('repair-$_repairs', diff);
   }
 
   void _sendPushRaw(String id, Uint8List bytes) {
@@ -1160,6 +1244,7 @@ class CloudSyncSession {
     _disposed = true;
     _reconnectTimer?.cancel();
     _heartbeatTimer?.cancel();
+    _lagTrailingTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close();
     _channel = null;

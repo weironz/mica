@@ -15,7 +15,7 @@
 //! `classify_create`) so each branch is unit-tested without an object store.
 //! This module is only the IO around them. The reasoning behind the branches,
 //! and the survey of how Gitea / Nextcloud / AFFiNE handle this, is in
-//! `docs/bucket-provisioning-plan.md`.
+//! `docs/ops/bucket-provisioning-plan.md`.
 
 use mica_infra::{classify_create, classify_head, BucketProbe, CreateOutcome, S3Config};
 use tracing::{error, info, warn};

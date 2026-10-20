@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../api/models.dart';
 
 /// The workspace-members map of `_WorkspaceShellState`, extracted verbatim
-/// (god-class fifth step; docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md
+/// (god-class fifth step; docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md
 /// §7). Owns the only `membersByWorkspace` copy — the State keeps a synced
 /// view-model mirror for its build helpers.
 ///

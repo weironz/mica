@@ -369,7 +369,7 @@ enum BackupCmd {
   /// The other half of the credentials leg: a rebuilt machine has this image
   /// and nothing else, so restoring .env.secrets cannot depend on a running
   /// stack. Needs OSS_* and RUSTIC_PASSWORD in the environment — the three
-  /// secrets that cannot themselves be in the backup (docs/dr-plan.md §2.2).
+  /// secrets that cannot themselves be in the backup (docs/ops/dr-plan.md §2.2).
   RestoreConfig {
     /// Restore destination. The file lands at <out>/etc/mica/env.secrets,
     /// because rustic restores the absolute path it snapshotted.
@@ -1178,7 +1178,7 @@ pub(crate) fn pick_token(
 /// field.
 ///
 /// `MICA_API_BASE_URL` is the standalone MCP server's historical name, and
-/// `docs/mcp-connect.md` still (correctly) tells people to set it. It was read
+/// `docs/dev/mcp-connect.md` still (correctly) tells people to set it. It was read
 /// by `mica-cli mcp` alone: configure MCP exactly as documented, then run any
 /// other command, and you got "no server — … set MICA_SERVER" while staring at
 /// a server URL you had exported yourself. Reported 2026-08-28, as
@@ -1201,7 +1201,7 @@ pub(crate) fn pick_server(
   saved: Option<&str>,
 ) -> Option<String> {
   // Legacy name FIRST, matching what `mcp` has always done and what
-  // docs/mcp-connect.md documents as the priority order.
+  // docs/dev/mcp-connect.md documents as the priority order.
   [legacy_env, flag_or_env, saved]
     .into_iter()
     .flatten()
@@ -1354,7 +1354,7 @@ mod tests {
   /// The SERVER order, pinned for the same reason the token order is — and it
   /// is the same bug twice: `mcp` read `MICA_API_BASE_URL`, every other command
   /// read only `MICA_SERVER`, so a Claude config written exactly as
-  /// docs/mcp-connect.md says it should be made `mica-cli ws list` answer
+  /// docs/dev/mcp-connect.md says it should be made `mica-cli ws list` answer
   /// "no server" (reported 2026-08-28).
   #[test]
   fn the_legacy_mcp_variable_is_accepted_by_every_command() {

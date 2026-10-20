@@ -2,7 +2,7 @@
 // `view.name`.
 //
 // Since P2 the document is the authority (`root.data['title']`) and the
-// `views.name` column is its projection — see `docs/page-title-plan.md`. There
+// `views.name` column is its projection — see `docs/features/page-title-plan.md`. There
 // is deliberately NO backfill migration, so both halves are live at once: a page
 // renamed since P2 carries a title in its document, every other page still
 // answers from the column. `pageTitle` is the one rule that reads both, and it

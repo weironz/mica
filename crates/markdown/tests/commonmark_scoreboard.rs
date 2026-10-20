@@ -6,7 +6,7 @@
 //!
 //! Regenerate the human-readable report after engine changes:
 //!   GEN_SCOREBOARD=1 cargo test -p mica-markdown --test commonmark_scoreboard
-//! (writes docs/commonmark-scoreboard.md at the repo root)
+//! (writes docs/architecture/commonmark-scoreboard.md at the repo root)
 
 use std::collections::BTreeMap;
 
@@ -14,7 +14,7 @@ use mica_markdown::{export_html, import_markdown};
 use serde_json::Value;
 
 /// Passing examples must never decrease. Raise this when the engine improves
-/// (P4 work); the per-section detail lives in docs/commonmark-scoreboard.md.
+/// (P4 work); the per-section detail lives in docs/architecture/commonmark-scoreboard.md.
 const BASELINE_PASS: usize = 641; // 100% of 641 — GFM dialect, 2026-06-06
 
 /// CommonMark examples our GFM target dialect intentionally breaks —
@@ -78,7 +78,7 @@ fn commonmark_scoreboard() {
      commonmark_scoreboard`.\nMeasures the `import_markdown` → `export_html` \
      pipeline against the official spec\nexamples (exact-match HTML, \
      trailing whitespace forgiven). The number is a\nbaseline for P4 — see \
-     docs/editor-engine.md Milestone 8.\n\n",
+     docs/architecture/editor-engine.md Milestone 8.\n\n",
   );
   report.push_str(&format!(
     "**Total: {passed}/{total} ({:.1}%)** — {waived} GFM dialect waivers \
@@ -96,7 +96,7 @@ fn commonmark_scoreboard() {
   println!("{report}");
 
   if std::env::var("GEN_SCOREBOARD").is_ok() {
-    let out = format!("{}/../../docs/commonmark-scoreboard.md", env!("CARGO_MANIFEST_DIR"));
+    let out = format!("{}/../../docs/architecture/commonmark-scoreboard.md", env!("CARGO_MANIFEST_DIR"));
     std::fs::write(out, &report).unwrap();
   }
 

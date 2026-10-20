@@ -1,6 +1,6 @@
 //! Byte-exact golden master for the block parser — the safety net for the
 //! state-struct/handler decomposition of `import_markdown_inner`
-//! (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8).
+//! (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8).
 //!
 //! The conformance suite (tests/fixtures/conformance/) pins a LOSSY projection
 //! of the parse — root children only, marks sorted, nested blocks omitted.

@@ -139,23 +139,30 @@ pub(crate) fn find_math_closer(chars: &[char], content_start: usize) -> Option<u
 /// boundary): bare `http(s)://…`, `www.…` (href gains `http://`) or a bare
 /// email. Returns (consumed chars, href).
 pub(crate) fn extended_autolink(chars: &[char], i: usize) -> Option<(usize, String)> {
-  let rest: String = chars[i..].iter().collect();
-  let lower = rest.to_ascii_lowercase();
+  // Only the first 8 chars decide the prefix. This used to collect and
+  // lowercase the WHOLE remaining text first — at every word boundary — which
+  // made one inline parse quadratic, and the paragraph-continuation re-parse
+  // on every line made a plain multi-line paragraph cubic (2000 short lines:
+  // seconds).
+  let head: String = chars[i..chars.len().min(i + 8)]
+    .iter()
+    .collect::<String>()
+    .to_ascii_lowercase();
   for (prefix, implied) in [
     ("https://", ""),
     ("http://", ""),
     ("ftp://", ""),
     ("www.", "http://"),
   ] {
-    if lower.starts_with(prefix) {
+    if head.starts_with(prefix) {
       // Take everything up to whitespace or '<', then trim trailing
       // punctuation per the GFM rules.
-      let mut end = rest
-        .char_indices()
-        .find(|&(_, c)| c.is_whitespace() || c == '<')
-        .map(|(k, _)| k)
-        .unwrap_or(rest.len());
-      end = trim_autolink_end(&rest[..end]);
+      let stop = chars[i..]
+        .iter()
+        .position(|&c| c.is_whitespace() || c == '<')
+        .map_or(chars.len(), |k| i + k);
+      let rest: String = chars[i..stop].iter().collect();
+      let end = trim_autolink_end(&rest);
       let candidate = &rest[..end];
       let domain = &candidate[if implied.is_empty() { prefix.len() } else { 0 }..];
       let domain = domain
@@ -698,9 +705,13 @@ pub(crate) fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
       None
     }
     '<' => {
-      // Autolink first (it constrains the closing `>`), then raw HTML.
+      // Autolink first (it constrains the closing `>`), then raw HTML. An
+      // autolink holds no whitespace and no `<`, so the scan stops there: it
+      // used to run to the next `>` anywhere, i.e. to the END on text with no
+      // `>`, from every `<` — and `matching_bracket` calls this at every
+      // position, from every `[`, which made `[<[<[<…` cubic.
       let mut j = i + 1;
-      while j < n && chars[j] != '>' {
+      while j < n && chars[j] != '>' && chars[j] != '<' && !chars[j].is_whitespace() {
         j += 1;
       }
       if j < n {
@@ -712,6 +723,61 @@ pub(crate) fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
       inline_html_end(chars, i)
     }
     _ => None,
+  }
+}
+
+/// [matching_bracket] answers memoised for one `chars`.
+///
+/// Every `[` the parser tries asks for its match, and an unmatched one scans to
+/// the end of the text — so `[<[<[<…` (and plain `[[[[…`) cost a full scan per
+/// bracket: quadratic. One scan from `open` visits every later `[` it passes on
+/// a path that is the SAME path a scan from that `[` would take (the walk from
+/// any position is deterministic), so a stack records their answers too —
+/// exactly, matched or not. Each position is then scanned about once.
+#[derive(Default)]
+pub(crate) struct BracketMemo {
+  known: std::collections::HashMap<usize, Option<usize>>,
+}
+
+impl BracketMemo {
+  pub(crate) fn matching(&mut self, chars: &[char], open: usize) -> Option<usize> {
+    if let Some(answer) = self.known.get(&open) {
+      return *answer;
+    }
+    let n = chars.len();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut j = open;
+    let mut result = None;
+    while j < n {
+      let c = chars[j];
+      if c == '\\' && j + 1 < n {
+        j += 2;
+        continue;
+      }
+      if let Some(end) = inline_span_end(chars, j) {
+        j = end;
+        continue;
+      }
+      if c == '[' {
+        stack.push(j);
+      } else if c == ']'
+        && let Some(o) = stack.pop()
+      {
+        self.known.insert(o, Some(j));
+        if o == open {
+          result = Some(j);
+          break;
+        }
+      }
+      j += 1;
+    }
+    if result.is_none() {
+      for o in stack {
+        self.known.insert(o, None);
+      }
+      self.known.insert(open, None);
+    }
+    result
   }
 }
 
@@ -875,6 +941,8 @@ pub(crate) fn parse_inline_memo(
       chars.pop();
     }
   }
+  // Bracket matches for THIS `chars`, shared by every lookup in this parse.
+  let mut brackets = BracketMemo::default();
   let mut out = String::new();
   let mut out_len: usize = 0; // UTF-16 length of `out`
   let mut marks: Vec<InlineMark> = Vec::new();
@@ -1029,7 +1097,7 @@ pub(crate) fn parse_inline_memo(
     // same bridge as links; the alt keeps its inner marks (HTML flattens
     // them to plain text, markdown re-renders them).
     if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '[' {
-      if let Some(close) = matching_bracket(&chars, i + 1) {
+      if let Some(close) = brackets.matching(&chars, i + 1) {
         let label: String = chars[i + 2..close].iter().collect();
         if !label.is_empty() {
           if close + 1 < chars.len() && chars[close + 1] == '(' {
@@ -1041,7 +1109,7 @@ pub(crate) fn parse_inline_memo(
           }
           if !defs.is_empty() {
             let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
-              match matching_bracket(&chars, close + 1) {
+              match brackets.matching(&chars, close + 1) {
                 Some(end2) => {
                   let second: String = chars[close + 2..end2].iter().collect();
                   if second.is_empty() {
@@ -1073,7 +1141,7 @@ pub(crate) fn parse_inline_memo(
     // reference round-trips to `[^x]` regardless and degrades to literal HTML).
     if chars[i] == '['
       && chars.get(i + 1) == Some(&'^')
-      && let Some(close) = matching_bracket(&chars, i)
+      && let Some(close) = brackets.matching(&chars, i)
       && close > i + 2
     {
       let label: String = chars[i + 2..close].iter().collect();
@@ -1094,7 +1162,7 @@ pub(crate) fn parse_inline_memo(
     }
     // Link: [text](dest "title") | [text][label] | [text][] | [shortcut]
     if chars[i] == '[' {
-      if let Some(close) = matching_bracket(&chars, i) {
+      if let Some(close) = brackets.matching(&chars, i) {
         let label: String = chars[i + 1..close].iter().collect();
         // A link's text may not itself contain a link (CommonMark §6.3): if
         // the label holds a top-level `[…](…)`/`[…][…]`/autolink, the OUTER
@@ -1130,7 +1198,7 @@ pub(crate) fn parse_inline_memo(
           // Reference forms (full / collapsed / shortcut).
           if !defs.is_empty() {
             let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
-              match matching_bracket(&chars, close + 1) {
+              match brackets.matching(&chars, close + 1) {
                 Some(end2) => {
                   let second: String = chars[close + 2..end2].iter().collect();
                   if second.is_empty() {
@@ -1262,6 +1330,17 @@ pub(crate) fn parse_inline_memo(
           continue;
         }
       }
+      // A run that does not open (3+, or no closer) is literal AS A WHOLE.
+      // Falling through emitted ONE tilde and re-scanned the rest as a shorter
+      // run, so `~~~a~~` struck `a` (GFM keeps it all literal) and `~~a~`
+      // struck too — and the Dart mirror, which already wrote the whole run,
+      // disagreed with this engine.
+      for _ in 0..n {
+        out.push('~');
+      }
+      out_len += n;
+      i += n;
+      continue;
     }
     // Inline code: an N-backtick run closes only on a run of exactly N;
     // line endings become spaces; one leading+trailing space strips when
@@ -1661,7 +1740,9 @@ pub(crate) fn escape_inline(text: &str) -> String {
 }
 
 /// A paragraph whose text LOOKS like a block marker (`- x`, `> x`, `# x`,
-/// `1. x`, `---`) must escape its leader or it changes kind on re-import.
+/// `1. x`, `1) x`, `---`, `\[`) must escape its leader or it changes kind on
+/// re-import. Applied to EVERY line of a paragraph/quote — a hard break puts a
+/// later line at a line start just as much as the first.
 pub(crate) fn escape_block_leader(line: String) -> String {
   let t = line.as_str();
   let compact: String = t.chars().filter(|c| *c != ' ').collect();
@@ -1669,22 +1750,44 @@ pub(crate) fn escape_block_leader(line: String) -> String {
   // A paragraph that would read as a setext underline gets escaped too.
   let setext_like = !t.is_empty() && (t.bytes().all(|b| b == b'=') || t.bytes().all(|b| b == b'-'));
   let divider_like = divider_like || setext_like;
-  let numbered = t
-    .find(". ")
-    .is_some_and(|dot| dot > 0 && t[..dot].bytes().all(|b| b.is_ascii_digit()));
-  if t.starts_with("- ")
-    || t.starts_with("+ ")
-    || t.starts_with("> ")
+  // A marker is followed by a space, a tab, or nothing at all (an empty item
+  // / empty heading is still that block).
+  let marker_then_gap = |rest: &str| rest.is_empty() || rest.starts_with([' ', '\t']);
+  if t.starts_with('>')
+    || ((t.starts_with('-') || t.starts_with('+')) && marker_then_gap(&t[1..]))
     || divider_like
-    || (t.starts_with('#') && t[1..].trim_start_matches('#').starts_with(' '))
+    || (t.starts_with('#') && marker_then_gap(t.trim_start_matches('#')))
   {
     return format!("\\{line}");
   }
-  if numbered {
-    let dot = t.find(". ").unwrap();
-    return format!("{}\\. {}", &t[..dot], &t[dot + 2..]);
+  // `\[` opens a display-math block (`\[ … \]`) on re-import, and
+  // `escape_inline` writes every literal `[` as `\[` — so a paragraph that was
+  // just `[TODO]` came back as a math block. An entity is plain text to the
+  // inline parser and opens nothing. Only where `math_block` would actually
+  // fire — `\[` alone on the line, or a line ending in `\]` — so every other
+  // `\[…` line keeps its familiar form.
+  if let Some(rest) = t.strip_prefix("\\[")
+    && (rest.trim().is_empty() || rest.trim_end().ends_with("\\]"))
+  {
+    return format!("&#91;{rest}");
+  }
+  let digits = t.bytes().take_while(u8::is_ascii_digit).count();
+  if (1..=9).contains(&digits)
+    && let Some(delim @ ('.' | ')')) = t[digits..].chars().next()
+    && marker_then_gap(&t[digits + 1..])
+  {
+    return format!("{}\\{delim}{}", &t[..digits], &t[digits + 1..]);
   }
   line
+}
+
+/// [escape_block_leader] on every line of a multi-line text.
+pub(crate) fn escape_block_leaders(text: &str) -> String {
+  text
+    .split('\n')
+    .map(|l| escape_block_leader(l.to_string()))
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 pub(crate) fn render_inline(block: &Block) -> String {

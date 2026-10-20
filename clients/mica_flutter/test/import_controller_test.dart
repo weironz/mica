@@ -6,7 +6,7 @@ import 'package:mica_flutter/import/import_controller.dart';
 
 /// Characterization tests for [ImportController], pinned against the behavior
 /// the code had when it still lived in `_WorkspaceShellState` (the god-class
-/// pilot in docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md). These exist so
+/// pilot in docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md). These exist so
 /// the extraction cannot silently drift; when one fails, that is the point.
 void main() {
   group('cleanArchiveName', () {

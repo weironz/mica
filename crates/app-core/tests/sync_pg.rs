@@ -13,7 +13,7 @@ use uuid::Uuid;
 /// Skipping without a database is a local convenience; skipping WITH one is a
 /// lie. This used to be `PgPool::connect(&url).await.ok()?`, which turned a
 /// failed connection into a skip: you could export DATABASE_URL, watch
-/// `8 passed`, and never have touched Postgres. docs/lessons.md「测试可以"真空通过"」
+/// `8 passed`, and never have touched Postgres. docs/dev/lessons.md「测试可以"真空通过"」
 /// recorded
 /// exactly that ("测试真空通过") after it hid a red test — and the code stayed.
 ///
@@ -216,6 +216,50 @@ async fn push_pull_bootstrap_round_trip() {
     // Pull after the latest rid is empty; document_head reports it.
     assert!(sync::pull_document_updates(&db, doc, rid, 100).await.unwrap().is_empty());
     assert_eq!(sync::document_head(&db, doc).await.unwrap(), rid);
+
+    cleanup(&db, ws, user).await;
+}
+
+/// B11: an update that depends on history the server never received (a
+/// replica's acked edits lost to a restore from backup) used to be acked and
+/// parked as pending — stored, invisible, forever. The ack now carries the
+/// server's state vector so the client sends the gap, and `client_is_ahead`
+/// lets a bootstrap ask for it before any new edit arrives.
+#[tokio::test]
+async fn a_push_missing_its_history_asks_for_it_and_the_diff_heals() {
+    let Some(db) = pool().await else {
+        eprintln!("skipping a_push_missing_its_history_asks_for_it_and_the_diff_heals: no DATABASE_URL");
+        return;
+    };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut client = MicaDoc::from_update(&base.state).unwrap();
+
+    // Edit #1 the server will never have (as if lost to a restore).
+    client.text_insert("a", 5, " world");
+    let after_lost = client.state_vector();
+    assert!(sync::client_is_ahead(&base, &after_lost), "bootstrap must see the gap");
+    // Edit #2 builds on #1; only its own diff goes out.
+    client.text_insert("a", 11, "!");
+    let only_second = client.encode_diff(&after_lost).unwrap();
+
+    let pushed = sync::push_update_checked(&db, ws, doc, user, &only_second, &tuning())
+        .await
+        .unwrap();
+    let server_sv = pushed.missing_sv.expect("a push the base cannot integrate must ask for history");
+    let stored = sync::bootstrap_base(&db, doc).await.unwrap();
+    assert_eq!(base_block_text(&stored.state, "a"), "Hello", "parked, not visible");
+
+    // The client answers with its diff against the server's vector.
+    let repair = client.encode_diff(&server_sv).unwrap();
+    let healed = sync::push_update_checked(&db, ws, doc, user, &repair, &tuning())
+        .await
+        .unwrap();
+    assert!(healed.missing_sv.is_none(), "the gap is closed");
+    let stored = sync::bootstrap_base(&db, doc).await.unwrap();
+    assert_eq!(base_block_text(&stored.state, "a"), "Hello world!");
+    assert!(base_content_text(&db, doc).await.contains("Hello world!"));
+    assert!(!sync::client_is_ahead(&stored, &client.state_vector()));
 
     cleanup(&db, ws, user).await;
 }
@@ -1215,7 +1259,7 @@ async fn writes_maintain_link_targets_in_both_directions() {
 // things make it different and worth its own tests: the other two write a column
 // beside the base in the same statement, this one writes a DIFFERENT TABLE; and
 // it must be a complete no-op for the many documents that carry no title at all
-// (there is no backfill migration — `docs/page-title-plan.md` §4.1).
+// (there is no backfill migration — `docs/features/page-title-plan.md` §4.1).
 
 /// Give a seeded document a `views` row, which `seed_doc` does not — the tests
 /// that came before this one only ever looked at `document_yrs_base`, so the
@@ -1695,4 +1739,62 @@ async fn offline_reconnect_merge_measurement() {
             one_by_one.as_secs_f64() / merged_total.as_secs_f64(),
         );
     }
+}
+
+/// THE BUG (B10): the MCP's optimistic-concurrency token is
+/// `documents.current_seq`, and only the REST/MCP path advanced it. An agent
+/// that read the outline at seq N, then a human edit over WebSocket, then the
+/// agent's write with `expected_seq = N`: it passed, and overwrote the edit.
+#[tokio::test]
+async fn a_websocket_edit_invalidates_a_stale_expected_seq() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let seq = |db: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT current_seq FROM documents WHERE id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+    };
+    let seen = seq(db.clone()).await;
+
+    // A human types over the socket.
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut editing = MicaDoc::from_update(&base.state).unwrap();
+    let sv = editing.state_vector();
+    editing.text_insert("a", 5, " world");
+    let edit = editing.encode_diff(&sv).unwrap();
+    sync::push_update(&db, ws, doc, user, &edit, &tuning()).await.unwrap();
+    assert!(seq(db.clone()).await > seen, "a WS edit advances the token");
+
+    // The agent's write pinned to what it read is refused, not applied.
+    let stale = store::apply_derived_operations(&db, ws, doc, user, Some(seen), |_| Ok(vec![])).await;
+    assert!(
+        matches!(stale, Err(mica_infra::ApiError::Conflict(_))),
+        "a stale expected_seq must be a 409, got {stale:?}"
+    );
+}
+
+/// D1: the auto version is still taken once per window — now with a check
+/// first instead of shipping the whole state on every push.
+#[tokio::test]
+async fn pushes_inside_one_window_take_one_auto_version() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+    for word in [" a", " b", " c"] {
+        let base = sync::bootstrap_base(&db, doc).await.unwrap();
+        let mut editing = MicaDoc::from_update(&base.state).unwrap();
+        let sv = editing.state_vector();
+        editing.text_insert("a", 5, word);
+        let edit = editing.encode_diff(&sv).unwrap();
+        sync::push_update(&db, ws, doc, user, &edit, &tuning()).await.unwrap();
+    }
+    let versions: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM document_yrs_versions WHERE document_id = $1 AND label IS NULL",
+    )
+    .bind(doc)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(versions, 1);
 }

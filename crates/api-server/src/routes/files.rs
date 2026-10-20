@@ -69,6 +69,11 @@ pub struct PresignUpload {
   if_none_match: &'static str,
   /// Base64 SHA-256 of the bytes, also covered by SigV4 and checked by S3.
   checksum_sha256: String,
+  /// The Content-Type the client MUST send with the PUT — also covered by
+  /// SigV4. The declared MIME unless that is a type a browser would execute
+  /// (HTML, SVG, XML, JS…), which is stored as `application/octet-stream`; see
+  /// `mica_infra::stored_content_type`.
+  content_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,7 +117,7 @@ pub async fn presign(
   let storage = storage(&state)?;
 
   validate_mime(&payload.mime_type)?;
-  ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
+  ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes, None).await?;
 
   let object_key = build_object_key(workspace_id, &payload.content_hash, &payload.file_name)?;
   let checksum_sha256 = sha256_checksum_base64(&payload.content_hash)?;
@@ -122,14 +127,22 @@ pub async fn presign(
   let mut tx = state.db.begin().await?;
   store::lock_file_object_key(&mut tx, &object_key).await?;
   if let Some(existing) = store::fetch_file_by_key_tx(&mut tx, workspace_id, &object_key).await? {
+    store::reclaim_file_tx(&mut tx, existing.id).await?;
     tx.commit().await?;
     let download_url = storage.download_url(&existing.object_key);
     return Ok(Json(existing_object_response(object_key, existing, download_url)));
   }
 
-  let upload = storage.presign_put_if_absent(&object_key, &checksum_sha256, payload.byte_size);
+  let content_type = mica_infra::stored_content_type(&payload.mime_type);
+  let upload = storage.presign_put_if_absent(
+    &object_key,
+    &checksum_sha256,
+    payload.byte_size,
+    &content_type,
+  );
   store::record_pending_file_upload_tx(&mut tx, workspace_id, &object_key, upload.expires_in)
     .await?;
+  store::reserve_pending_upload_bytes_tx(&mut tx, &object_key, payload.byte_size).await?;
   tx.commit().await?;
 
   Ok(Json(PresignResponse {
@@ -141,6 +154,7 @@ pub async fn presign(
       max_byte_size: storage.max_upload_bytes,
       if_none_match: "*",
       checksum_sha256,
+      content_type,
     }),
     existing: None,
   }))
@@ -189,20 +203,43 @@ pub async fn complete(
   validate_mime(&payload.mime_type)?;
   // Checked again here, not just at presign: presign is advisory (a client can
   // skip it, or reuse one URL) and this is the call that creates the row.
-  ensure_storable(&state, workspace_id, payload.byte_size, storage.max_upload_bytes).await?;
+  ensure_storable(
+    &state,
+    workspace_id,
+    payload.byte_size,
+    storage.max_upload_bytes,
+    Some(&payload.object_key),
+  )
+  .await?;
   ensure_key_in_workspace(workspace_id, &payload.object_key)?;
   let expected_checksum = checksum_for_object_key(workspace_id, &payload.object_key)?;
 
-  // Hold the same key lock as orphan GC from HEAD through the file-row commit.
-  // Otherwise GC can delete an old unregistered object just after HEAD accepts
-  // it, leaving a newly registered row pointing at nothing.
+  // GC must not delete the object between the HEAD below accepting it and the
+  // row being registered. That used to be done by holding the key lock in one
+  // transaction across the HEAD; now (D5) a short locked transaction makes the
+  // sweeps leave the key alone instead, and the HEAD runs with none open: a
+  // registered row's GC mark is cleared (the registered sweep re-reads it under
+  // this lock), a pending upload's ledger expiry is refreshed (the orphan sweep
+  // waits a day past it). A sweep already mid-delete holds the lock, so this
+  // waits for it and the HEAD then reports what it left.
   let mut tx = state.db.begin().await?;
   store::lock_file_object_key(&mut tx, &payload.object_key).await?;
   let pending = store::pending_file_upload_exists_tx(&mut tx, workspace_id, &payload.object_key).await?;
   let existing = store::fetch_file_by_key_tx(&mut tx, workspace_id, &payload.object_key).await?;
-  if !pending && existing.is_none() {
-    return Err(ApiError::BadRequest("upload was not presigned".into()));
+  match &existing {
+    Some(file) => store::reclaim_file_tx(&mut tx, file.id).await?,
+    None if pending => {
+      store::record_pending_file_upload_tx(
+        &mut tx,
+        workspace_id,
+        &payload.object_key,
+        storage.presign_ttl_seconds,
+      )
+      .await?
+    }
+    None => return Err(ApiError::BadRequest("upload was not presigned".into())),
   }
+  tx.commit().await?;
 
   // Ask the store what actually landed, and require it to agree with the claim.
   // Without this, `complete` could be called for a key nothing was ever written
@@ -213,7 +250,7 @@ pub async fn complete(
     .header("x-amz-checksum-mode", "ENABLED")
     .send()
     .await
-    .map_err(|e| ApiError::Internal(format!("storage check failed: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("storage check failed: {}", e.without_url())))?;
   let stored_len = head
     .headers()
     .get(reqwest::header::CONTENT_LENGTH)
@@ -234,14 +271,13 @@ pub async fn complete(
     if stored_checksum.is_some() {
       uploaded_checksum_verdict(stored_checksum, &expected_checksum)?;
     }
-    tx.commit().await?;
     let download_url = storage.download_url(&existing.object_key);
     return Ok(Json(FileResponse { file: existing, download_url }));
   }
   uploaded_checksum_verdict(stored_checksum, &expected_checksum)?;
 
-  let file = store::insert_file_tx(
-    &mut tx,
+  let file = store::register_put_file(
+    &state.db,
     workspace_id,
     user_id,
     &payload.object_key,
@@ -250,7 +286,6 @@ pub async fn complete(
     byte_size,
   )
   .await?;
-  tx.commit().await?;
   let download_url = storage.download_url(&file.object_key);
 
   Ok(Json(FileResponse { file, download_url }))
@@ -562,7 +597,7 @@ pub(crate) async fn fetch_and_store_image_url(
   }
   let bytes = body;
   let byte_size = bytes.len() as i64;
-  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes).await?;
+  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes, None).await?;
 
   // Determine MIME + extension (header first, else the URL's extension).
   let ext = mime_to_ext(&header_mime)
@@ -587,8 +622,9 @@ pub(crate) async fn fetch_and_store_image_url(
     None => format!("workspaces/{workspace_id}/{hash}"),
   };
 
-  // Commit the ledger before PUT: if the process dies after writing bytes,
-  // rollback of the PUT→insert transaction must not hide the orphan from GC.
+  // Commit the ledger (and clear any GC mark) before PUT: if the process dies
+  // after writing bytes, GC must still find the orphan, and neither sweep may
+  // delete the key while the PUT runs outside any transaction (D5).
   store::record_pending_file_upload(
     &state.db,
     workspace_id,
@@ -596,21 +632,17 @@ pub(crate) async fn fetch_and_store_image_url(
     storage.presign_ttl_seconds,
   )
   .await?;
-  // Hold the same key lock as orphan GC from PUT through registration. A key
-  // may also have an old pending browser upload, even on this server path.
-  let mut tx = state.db.begin().await?;
-  store::lock_file_object_key(&mut tx, &object_key).await?;
 
   // Upload via a self-issued presigned PUT (storage signs; we do the PUT).
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
-    .header(reqwest::header::CONTENT_TYPE, &mime)
+    .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&mime))
     .header("x-amz-checksum-sha256", sha256_checksum_base64(&hash)?)
     .body(bytes.to_vec())
     .send()
     .await
-    .map_err(|e| ApiError::Internal(format!("storage upload failed: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("storage upload failed: {}", e.without_url())))?;
   if !put.status().is_success() {
     return Err(ApiError::Internal(format!(
       "storage upload returned {}",
@@ -619,19 +651,8 @@ pub(crate) async fn fetch_and_store_image_url(
   }
 
   let original_name = name_with_ext(&url_file_name(url, ext.as_deref()), ext.as_deref());
-  let file = store::insert_file_tx(
-    &mut tx,
-    workspace_id,
-    user_id,
-    &object_key,
-    &original_name,
-    &mime,
-    byte_size,
-  )
-  .await?;
-  tx.commit().await?;
-
-  Ok(file)
+  store::register_put_file(&state.db, workspace_id, user_id, &object_key, &original_name, &mime, byte_size)
+    .await
 }
 
 /// `GET /api/workspaces/{workspace_id}/files/{file_id}/blob`
@@ -732,7 +753,7 @@ pub(crate) async fn store_bytes(
 ) -> ApiResult<store::FileRecord> {
   let storage = storage(state)?;
   let byte_size = bytes.len() as i64;
-  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes).await?;
+  ensure_storable(state, workspace_id, byte_size, storage.max_upload_bytes, None).await?;
 
   // The name is the first guess at the type; the BYTES are the authority when it
   // gives nothing usable (an extension-less name used to land as
@@ -760,17 +781,15 @@ pub(crate) async fn store_bytes(
     storage.presign_ttl_seconds,
   )
   .await?;
-  let mut tx = state.db.begin().await?;
-  store::lock_file_object_key(&mut tx, &object_key).await?;
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
-    .header(reqwest::header::CONTENT_TYPE, &mime)
+    .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&mime))
     .header("x-amz-checksum-sha256", sha256_checksum_base64(&hash)?)
     .body(bytes.to_vec())
     .send()
     .await
-    .map_err(|e| ApiError::Internal(format!("storage upload failed: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("storage upload failed: {}", e.without_url())))?;
   if !put.status().is_success() {
     return Err(ApiError::Internal(format!(
       "storage upload returned {}",
@@ -778,8 +797,8 @@ pub(crate) async fn store_bytes(
     )));
   }
 
-  let file = store::insert_file_tx(
-    &mut tx,
+  store::register_put_file(
+    &state.db,
     workspace_id,
     user_id,
     &object_key,
@@ -787,9 +806,7 @@ pub(crate) async fn store_bytes(
     &mime,
     byte_size,
   )
-  .await?;
-  tx.commit().await?;
-  Ok(file)
+  .await
 }
 
 fn validate_mime(mime_type: &str) -> ApiResult<()> {
@@ -821,24 +838,54 @@ async fn ensure_storable(
   workspace_id: Uuid,
   byte_size: i64,
   max_upload_bytes: i64,
+  // `complete` passes its own key: that upload's reservation is the very
+  // bytes being checked, and must not be counted twice.
+  exclude_key: Option<&str>,
 ) -> ApiResult<()> {
   validate_byte_size(byte_size, max_upload_bytes)?;
+  ensure_quota_room(state, workspace_id, byte_size, exclude_key).await
+}
 
-  let quota = state.config.workspace_quota_bytes;
-  if quota <= 0 {
+/// The quota half of [ensure_storable], for callers adding bytes that are not
+/// one upload (a cross-workspace move copies many files at once).
+pub(crate) async fn ensure_quota_room(
+  state: &AppState,
+  workspace_id: Uuid,
+  byte_size: i64,
+  exclude_key: Option<&str>,
+) -> ApiResult<()> {
+  if byte_size <= 0 {
     return Ok(());
   }
-  let used = store::workspace_bytes_used(&state.db, workspace_id).await?;
-  // `saturating_add`: both sides are i64 from the wire or the database, and an
-  // overflow here would wrap negative and PASS the check.
-  if used.saturating_add(byte_size) > quota {
-    return Err(ApiError::BadRequestCode(
-      "workspace_quota_exceeded",
-      format!(
-        "workspace storage is full: {used} of {quota} bytes used, \
-         this upload needs {byte_size} more"
-      ),
-    ));
+  let quota = state.config.workspace_quota_bytes;
+  if quota > 0 {
+    let used = store::workspace_bytes_used_excluding(&state.db, workspace_id, exclude_key).await?;
+    // `saturating_add`: both sides are i64 from the wire or the database, and an
+    // overflow here would wrap negative and PASS the check.
+    if used.saturating_add(byte_size) > quota {
+      return Err(ApiError::BadRequestCode(
+        "workspace_quota_exceeded",
+        format!(
+          "workspace storage is full: {used} of {quota} bytes used, \
+           this upload needs {byte_size} more"
+        ),
+      ));
+    }
+  }
+  // B7: the per-workspace ceiling alone is multiplied by however many
+  // workspaces an account creates; this one is not.
+  let owner_quota = state.config.owner_quota_bytes;
+  if owner_quota > 0 {
+    let used = store::owner_bytes_used_excluding(&state.db, workspace_id, exclude_key).await?;
+    if used.saturating_add(byte_size) > owner_quota {
+      return Err(ApiError::BadRequestCode(
+        "owner_quota_exceeded",
+        format!(
+          "the workspace owner's storage is full: {used} of {owner_quota} bytes used \
+           across their workspaces, this upload needs {byte_size} more"
+        ),
+      ));
+    }
   }
   Ok(())
 }
@@ -854,7 +901,7 @@ async fn ensure_storable(
 /// with 4 GiB free still rejects one oversized file, so the storage bar honestly
 /// reads "plenty of room" while the upload fails. Without a code of its own the
 /// client could only relay the English sentence or match on its text — the
-/// second representation `docs/design-adoption.md` draws a line against. So it
+/// second representation `docs/features/design-adoption.md` draws a line against. So it
 /// gets `file_too_large`, a sibling to `workspace_quota_exceeded`, and the two
 /// full-sounding failures become distinguishable without reading prose.
 fn validate_byte_size(byte_size: i64, max_upload_bytes: i64) -> ApiResult<()> {
@@ -1107,11 +1154,12 @@ mod tests {
     let storage = S3Config::from_env().expect("set S3_* for the test store");
     let key = format!("audit-write-once/{}", Uuid::new_v4());
     let checksum = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(b"first"));
-    let upload = storage.presign_put_if_absent(&key, &checksum, 5);
+    let upload = storage.presign_put_if_absent(&key, &checksum, 5, "text/plain");
     let client = reqwest::Client::new();
 
     let missing_condition = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header("x-amz-checksum-sha256", &checksum)
       .body("first")
       .send()
@@ -1119,6 +1167,7 @@ mod tests {
       .expect("PUT without signed header");
     let wrong_bytes = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header(reqwest::header::IF_NONE_MATCH, "*")
       .header("x-amz-checksum-sha256", &checksum)
       .body("other")
@@ -1127,14 +1176,27 @@ mod tests {
       .expect("PUT with wrong checksum");
     let wrong_length = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header(reqwest::header::IF_NONE_MATCH, "*")
       .header("x-amz-checksum-sha256", &checksum)
       .body("longer")
       .send()
       .await
       .expect("PUT with wrong length");
+    // B4: the Content-Type is signed — an uploader cannot pick what the store
+    // will serve (here `text/html`, which would run as a page same-site).
+    let wrong_type = client
+      .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/html")
+      .header(reqwest::header::IF_NONE_MATCH, "*")
+      .header("x-amz-checksum-sha256", &checksum)
+      .body("first")
+      .send()
+      .await
+      .expect("PUT with a different content type");
     let first = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header(reqwest::header::IF_NONE_MATCH, "*")
       .header("x-amz-checksum-sha256", &checksum)
       .body("first")
@@ -1149,6 +1211,7 @@ mod tests {
       .expect("signed checksum HEAD");
     let replay = client
       .put(&upload.url)
+      .header(reqwest::header::CONTENT_TYPE, "text/plain")
       .header(reqwest::header::IF_NONE_MATCH, "*")
       .header("x-amz-checksum-sha256", &checksum)
       .body("other")
@@ -1161,6 +1224,11 @@ mod tests {
       .await
       .expect("GET after replay");
     let stored_status = stored.status();
+    let stored_type = stored
+      .headers()
+      .get(reqwest::header::CONTENT_TYPE)
+      .and_then(|v| v.to_str().ok())
+      .map(str::to_string);
     let bytes = stored.bytes().await.expect("stored bytes");
     let cleanup = client
       .delete(storage.presign_delete(&key))
@@ -1169,6 +1237,7 @@ mod tests {
       .expect("remove test object");
 
     assert_eq!(missing_condition.status(), StatusCode::FORBIDDEN);
+    assert_eq!(wrong_type.status(), StatusCode::FORBIDDEN, "content-type is signed");
     assert_eq!(wrong_bytes.status(), StatusCode::BAD_REQUEST);
     assert_eq!(wrong_length.status(), StatusCode::FORBIDDEN);
     assert!(first.status().is_success(), "first PUT: {}", first.status());
@@ -1183,7 +1252,46 @@ mod tests {
     assert_eq!(replay.status(), StatusCode::PRECONDITION_FAILED);
     assert!(stored_status.is_success(), "GET: {stored_status}");
     assert_eq!(&bytes[..], b"first");
+    assert_eq!(stored_type.as_deref(), Some("text/plain"), "served with the signed type");
     assert!(cleanup.status().is_success(), "DELETE: {}", cleanup.status());
+  }
+
+  /// B4 against a real store: a declared `text/html` is stored and SERVED as
+  /// `application/octet-stream` (a download), and the uploader cannot override
+  /// that by sending its own Content-Type.
+  #[tokio::test]
+  #[ignore = "requires a disposable S3-compatible test bucket"]
+  async fn an_html_upload_is_served_as_a_download() {
+    let storage = S3Config::from_env().expect("set S3_* for the test store");
+    let key = format!("audit-content-type/{}", Uuid::new_v4());
+    let body = b"<script>alert(1)</script>";
+    let checksum = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(body));
+    let stored = mica_infra::stored_content_type("text/html");
+    assert_eq!(stored, "application/octet-stream");
+    let upload = storage.presign_put_if_absent(&key, &checksum, body.len() as i64, &stored);
+    let client = reqwest::Client::new();
+    let put = |ct: &'static str| {
+      client
+        .put(&upload.url)
+        .header(reqwest::header::CONTENT_TYPE, ct)
+        .header(reqwest::header::IF_NONE_MATCH, "*")
+        .header("x-amz-checksum-sha256", &checksum)
+        .body(body.to_vec())
+        .send()
+    };
+    let forged = put("text/html").await.expect("forged PUT");
+    let honest = put("application/octet-stream").await.expect("PUT");
+    let served = client.get(storage.download_url(&key)).send().await.expect("GET");
+    let served_type = served
+      .headers()
+      .get(reqwest::header::CONTENT_TYPE)
+      .and_then(|v| v.to_str().ok())
+      .map(str::to_string);
+    let _ = client.delete(storage.presign_delete(&key)).send().await;
+
+    assert_eq!(forged.status(), StatusCode::FORBIDDEN);
+    assert!(honest.status().is_success(), "PUT: {}", honest.status());
+    assert_eq!(served_type.as_deref(), Some("application/octet-stream"));
   }
 
   #[test]
@@ -1682,6 +1790,75 @@ mod quota_pg {
     }
   }
 
+  /// THE BUG (B7): the quota summed registered `files` only, so presigning
+  /// many distinct hashes and never calling `complete` filled the store while
+  /// "used" stayed 0. A browser upload's reservation now counts until it is
+  /// registered (then the file row counts instead — never both), and
+  /// `complete` does not count its own reservation against itself.
+  #[tokio::test]
+  async fn unregistered_browser_uploads_count_toward_the_quota() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let key = format!("workspaces/{ws}/{}.bin", Uuid::new_v4());
+    let mut tx = db.begin().await.unwrap();
+    store::record_pending_file_upload_tx(&mut tx, ws, &key, 900).await.unwrap();
+    store::reserve_pending_upload_bytes_tx(&mut tx, &key, 1234).await.unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(store::workspace_bytes_used(&db, ws).await.unwrap(), 1234);
+    assert_eq!(
+      store::workspace_bytes_used_excluding(&db, ws, Some(&key)).await.unwrap(),
+      0,
+      "complete's own reservation is not counted against it"
+    );
+
+    store::insert_file(&db, ws, user, &key, "x.bin", "application/octet-stream", 1234)
+      .await
+      .unwrap();
+    assert_eq!(
+      store::workspace_bytes_used(&db, ws).await.unwrap(),
+      1234,
+      "once registered it counts once, as a file"
+    );
+  }
+
+  /// B7: the per-workspace quota multiplied by however many workspaces one
+  /// account creates. The owner figure sums every workspace that account owns
+  /// (uploads by members included — charged to the owner), and nobody else's.
+  #[tokio::test]
+  async fn owner_usage_sums_every_owned_workspace_and_nothing_else() {
+    let Some(db) = pool().await else { return };
+    let (ws_a, owner) = seed_workspace(&db).await;
+    let ws_b = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'Q2',$2)")
+      .bind(ws_b)
+      .bind(owner)
+      .execute(&db)
+      .await
+      .unwrap();
+    let (ws_other, stranger) = seed_workspace(&db).await;
+
+    put(&db, ws_a, owner, &format!("workspaces/{ws_a}/{}.png", Uuid::new_v4()), 100).await;
+    // A member's upload into the owner's workspace still costs the owner.
+    put(&db, ws_b, stranger, &format!("workspaces/{ws_b}/{}.png", Uuid::new_v4()), 20).await;
+    put(&db, ws_other, stranger, &format!("workspaces/{ws_other}/{}.png", Uuid::new_v4()), 5000).await;
+    let pending = format!("workspaces/{ws_b}/{}.bin", Uuid::new_v4());
+    let mut tx = db.begin().await.unwrap();
+    store::record_pending_file_upload_tx(&mut tx, ws_b, &pending, 900).await.unwrap();
+    store::reserve_pending_upload_bytes_tx(&mut tx, &pending, 3).await.unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(store::owner_bytes_used_excluding(&db, ws_a, None).await.unwrap(), 123);
+    assert_eq!(store::owner_bytes_used_excluding(&db, ws_b, None).await.unwrap(), 123);
+    assert_eq!(
+      store::owner_bytes_used_excluding(&db, ws_a, Some(&pending)).await.unwrap(),
+      120,
+      "complete's own reservation is not counted against it"
+    );
+    assert_eq!(store::owner_bytes_used_excluding(&db, ws_other, None).await.unwrap(), 5000);
+    cleanup(&db, &[ws_a, ws_b, ws_other], &[owner, stranger]).await;
+  }
+
   /// The `mica_storage_bytes` gauges must agree with the expression the quota
   /// actually enforces.
   ///
@@ -1704,11 +1881,15 @@ mod quota_pg {
 
     // The aggregate the exposition renders (metrics.rs `load_db_snapshot`).
     let (total, max): (i64, i64) = sqlx::query_as(
-      r#"SELECT
-           coalesce((SELECT sum(total) FROM
-             (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint,
-           coalesce((SELECT max(total) FROM
-             (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint"#,
+      r#"WITH usage AS (
+           SELECT w.id,
+             coalesce((SELECT sum(f.byte_size) FROM files f WHERE f.workspace_id = w.id), 0)
+             + coalesce((SELECT sum(p.byte_size) FROM pending_file_uploads p
+                WHERE p.workspace_id = w.id
+                  AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key)), 0)
+               AS total
+           FROM workspaces w)
+         SELECT coalesce(sum(total), 0)::bigint, coalesce(max(total), 0)::bigint FROM usage"#,
     )
     .fetch_one(&db)
     .await

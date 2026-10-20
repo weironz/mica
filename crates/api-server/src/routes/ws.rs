@@ -34,7 +34,7 @@ use crate::routes::documents::{
 /// open for the length of a token. So a member who is removed from the
 /// workspace, or demoted to read-only, keeps whatever they had at upgrade until
 /// something re-asks — and their token's lifetime is exactly the window
-/// `docs/lessons.md` warns about, because a JWT does not re-check anything.
+/// `docs/dev/lessons.md` warns about, because a JWT does not re-check anything.
 ///
 /// Re-reading before each WRITE makes a revocation take effect on the next
 /// keystroke instead. `Ok(None)` means the user is no longer a member at all.
@@ -111,6 +111,12 @@ pub async fn document_socket(
   // exactly the same way, forever. The version is a public parameter and the
   // check reveals nothing, so there is no reason to make it wait behind a secret.
   let client_protocol = check_protocol(query.v, state.config.ws_min_protocol)?;
+  // CORS does not apply to WebSockets: without this, a same-site page (an
+  // uploaded HTML file on the storage origin) could open this socket with the
+  // victim's cookie and read every edit. See `crate::origin`.
+  if !crate::origin::origin_allowed(&state.config, &headers) {
+    return Err(ApiError::Forbidden);
+  }
 
   let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
   let (user_id, token_exp) = session_from_token(&state, &token)?;
@@ -170,6 +176,9 @@ pub async fn views_socket(
   headers: HeaderMap,
   upgrade: WebSocketUpgrade,
 ) -> ApiResult<Response> {
+  if !crate::origin::origin_allowed(&state.config, &headers) {
+    return Err(ApiError::Forbidden);
+  }
   let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
   let (user_id, token_exp) = session_from_token(&state, &token)?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
@@ -257,7 +266,7 @@ pub const VIEWS_CHANGED_EVENT: &str = r#"{"type":"views_changed"}"#;
 ///
 /// LISTEN/NOTIFY rather than a broadcast call in every mutating route: the
 /// mutation surface is a dozen routes and growing, and one forgotten site is a
-/// silently stale tree — the N-places problem `docs/lessons.md` #2 exists to
+/// silently stale tree — the N-places problem `docs/dev/lessons.md` #2 exists to
 /// warn about. The trigger sees every writer of the table, this task is the
 /// single bridge, and the rooms only fan out.
 ///
@@ -318,6 +327,13 @@ pub async fn views_change_listener(state: AppState) {
 /// into the same backoff as an unreachable server, where waiting longer is
 /// exactly the wrong move — the token does not come back on its own.
 pub(crate) const WS_CLOSE_TOKEN_EXPIRED: u16 = 4401;
+
+/// Close code when the user was removed from the workspace mid-session.
+pub(crate) const WS_CLOSE_NOT_A_MEMBER: u16 = 4403;
+
+/// How often an open document socket re-checks its user's membership. Bounds
+/// how long a removed member keeps receiving broadcasts.
+const MEMBERSHIP_RECHECK: Duration = Duration::from_secs(30);
 
 /// How long this socket may live, from `exp`.
 ///
@@ -414,9 +430,30 @@ async fn run_connection(
     time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO),
   );
   tokio::pin!(expiry);
+  // Broadcast fan-out never consults the database, so without this a member
+  // removed from the workspace kept RECEIVING every live edit on an open
+  // socket until the token expired (writes and pulls re-check on their own).
+  let mut membership = tokio::time::interval_at(
+    tokio::time::Instant::now() + MEMBERSHIP_RECHECK,
+    MEMBERSHIP_RECHECK,
+  );
 
   loop {
     tokio::select! {
+      _ = membership.tick() => {
+        if matches!(
+          current_write_permissions(&state.db, workspace_id, user_id).await,
+          Ok(None)
+        ) {
+          let _ = socket
+            .send(Message::Close(Some(CloseFrame {
+              code: WS_CLOSE_NOT_A_MEMBER,
+              reason: "no longer a member of this workspace".into(),
+            })))
+            .await;
+          break;
+        }
+      }
       () = &mut expiry => {
         // Best-effort: the client may already be gone, and there is nothing to
         // do about it if the frame does not land.
@@ -604,7 +641,20 @@ async fn handle_client_message(
   }
 }
 
+/// Largest presence payload a connection may publish. A cursor, selection and
+/// display name are well under 1 KiB; without a cap any member could fan
+/// megabytes to every peer per message.
+const MAX_PRESENCE_BYTES: usize = 4096;
+
 fn handle_presence_update(ctx: &ClientCtx<'_>, payload: Value) -> Vec<String> {
+  if payload.to_string().len() > MAX_PRESENCE_BYTES {
+    return vec![error_message(None, "invalid_payload", "presence payload too large")];
+  }
+  // Over budget: dropped silently. It shares the channel with CRDT updates,
+  // so a flood would push those out of every peer's receiver.
+  if !ctx.room.allow_presence(ctx.connection_id) {
+    return Vec::new();
+  }
   ctx.room.set_presence(PresenceEntry {
     connection_id: ctx.connection_id,
     user_id: ctx.user_id,
@@ -641,7 +691,7 @@ async fn require_write_access(
     Err(error) => Err(vec![error_message(
       ack_id,
       error_code(&error),
-      &error.to_string(),
+      &error.public_message(),
     )]),
   }
 }
@@ -698,7 +748,7 @@ async fn handle_document_update(
       );
       vec![accepted_event(&applied, ack_id).to_string()]
     }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 
@@ -713,10 +763,15 @@ async fn handle_sync_bootstrap(
   ack_id: Option<&str>,
   payload: &Value,
 ) -> Vec<String> {
+  // Reads re-check membership too: the socket outlives the membership it was
+  // opened under, and a removed member could otherwise pull the whole base.
+  if let Err(reply) = require_write_access(ctx, ack_id).await {
+    return reply;
+  }
   let client_sv = client_sv(payload);
   match sync::bootstrap_base(&ctx.state.db, ctx.document_id).await {
     Ok(base) => vec![base_message(&base, client_sv.as_deref(), ack_id, ctx.document_id)],
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 
@@ -728,6 +783,9 @@ async fn handle_sync_pull(
   ack_id: Option<&str>,
   payload: &Value,
 ) -> Vec<String> {
+  if let Err(reply) = require_write_access(ctx, ack_id).await {
+    return reply;
+  }
   let since_rid = payload.get("since_rid").and_then(Value::as_i64).unwrap_or(0);
   // P4-3: the optional client state vector turns a prune-forced re-bootstrap
   // into a minimal diff instead of a full-doc download.
@@ -761,7 +819,7 @@ async fn handle_sync_pull(
         .to_string(),
       ]
     }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 
@@ -798,10 +856,10 @@ async fn handle_sync_push(
     }
   };
   // Timed as a whole: the round trip decodes and re-encodes the entire
-  // document (the write-amplification entry in docs/roadmap.md), so this
+  // document (the write-amplification entry in docs/plans/roadmap.md), so this
   // histogram is the number that argument has been missing.
   let push_started = std::time::Instant::now();
-  let push_result = sync::push_update(
+  let push_result = sync::push_update_checked(
     &ctx.state.db,
     ctx.workspace_id,
     ctx.document_id,
@@ -822,7 +880,7 @@ async fn handle_sync_push(
     crate::metrics::METRICS.integrity_failure("push");
   }
   match push_result {
-    Ok(rid) => {
+    Ok(sync::Pushed { rid, missing_sv }) => {
       // Fan the update out to the rest of the room (already-have-it sender
       // gets only the rid in its ack, below).
       let event = json!({
@@ -835,17 +893,9 @@ async fn handle_sync_push(
       ctx
         .room
         .broadcast(ctx.connection_id, Arc::from(event.to_string()));
-      vec![
-        json!({
-          "type": "sync.ack",
-          "ack_id": ack_id,
-          "document_id": ctx.document_id,
-          "rid": rid,
-        })
-        .to_string(),
-      ]
+      vec![ack_message(ack_id, ctx.document_id, rid, missing_sv.as_deref())]
     }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.to_string())],
+    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 
@@ -902,9 +952,33 @@ fn client_sv(payload: &Value) -> Option<Vec<u8>> {
     .and_then(|s| STANDARD.decode(s.as_bytes()).ok())
 }
 
+/// A `sync.ack`. B11: when the push left the base with pending updates (it
+/// depends on history the server lacks), `missing` + `sv` ask the pusher for
+/// its diff against the server's state vector — it built the update on that
+/// history, so it holds it. Additive: an old client ignores both fields.
+fn ack_message(ack_id: Option<&str>, document_id: Uuid, rid: i64, missing_sv: Option<&[u8]>) -> String {
+  let mut ack = json!({
+    "type": "sync.ack",
+    "ack_id": ack_id,
+    "document_id": document_id,
+    "rid": rid,
+  });
+  if let Some(sv) = missing_sv {
+    ack["missing"] = json!(true);
+    ack["sv"] = json!(STANDARD.encode(sv));
+  }
+  ack.to_string()
+}
+
 /// A `sync.base` frame carrying either the minimal diff for `client_sv` (P4-3,
 /// when present and computable) or the full base state. Both are yrs updates —
 /// the client applies them identically; `delta` is observability only.
+///
+/// B11: the frame also carries the server's state vector, and `ahead` when the
+/// client's vector shows insertions the server never received — the other half
+/// of the y-protocols exchange (each side sends what the other's vector lacks).
+/// A client whose acked edits the server later lost (restore from a backup)
+/// otherwise keeps them forever and nobody else ever sees them. Additive.
 fn base_message(
   base: &sync::YrsBase,
   client_sv: Option<&[u8]>,
@@ -913,6 +987,7 @@ fn base_message(
 ) -> String {
   let diff = client_sv.and_then(|sv| sync::diff_from_base(base, sv));
   let delta = diff.is_some();
+  let ahead = client_sv.is_some_and(|sv| sync::client_is_ahead(base, sv));
   json!({
     "type": "sync.base",
     "ack_id": ack_id,
@@ -920,6 +995,8 @@ fn base_message(
     "base": STANDARD.encode(diff.as_deref().unwrap_or(&base.state)),
     "base_rid": base.base_rid,
     "delta": delta,
+    "sv": STANDARD.encode(&base.state_vector),
+    "ahead": ahead,
   })
   .to_string()
 }
@@ -1156,6 +1233,30 @@ mod tests {
       serde_json::from_str(&base_message(&base, Some(b"not a state vector"), None, doc_id))
         .unwrap();
     assert_eq!(bad["delta"], false);
+
+    // B11: the server's vector always rides along; `ahead` only when the client
+    // holds insertions the base never received.
+    assert_eq!(STANDARD.decode(full["sv"].as_str().unwrap()).unwrap(), base.state_vector);
+    assert_eq!(full["ahead"], false);
+    assert_eq!(warm["ahead"], false);
+    let mut edited = MicaDoc::from_update(&base.state).unwrap();
+    edited.text_insert("a", 0, "oh ");
+    let ahead: Value =
+      serde_json::from_str(&base_message(&base, Some(&edited.state_vector()), None, doc_id)).unwrap();
+    assert_eq!(ahead["ahead"], true);
+  }
+
+  /// B11: an ack only asks for history when the push left something pending;
+  /// otherwise it is byte-for-byte the frame old clients already parse.
+  #[test]
+  fn ack_asks_for_history_only_when_missing() {
+    let doc_id = Uuid::from_u128(1);
+    let plain: Value = serde_json::from_str(&ack_message(Some("3"), doc_id, 9, None)).unwrap();
+    assert_eq!(plain, json!({"type":"sync.ack","ack_id":"3","document_id":doc_id,"rid":9}));
+    let asking: Value =
+      serde_json::from_str(&ack_message(Some("3"), doc_id, 9, Some(&[1, 2]))).unwrap();
+    assert_eq!(asking["missing"], true);
+    assert_eq!(asking["sv"], STANDARD.encode([1u8, 2]));
   }
 
   /// What lets the web client stop putting a JWT in the URL: the browser

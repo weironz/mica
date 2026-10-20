@@ -6,7 +6,7 @@ import '../api/models.dart';
 /// of `_WorkspaceShellState` used to touch directly (dry-run: `_session` was
 /// read by 11 semantic domains, `_selectedWorkspace` by 9, `_workspaces` by 6,
 /// `_viewsByWorkspace` by 5). Extracted in the god-class third step — see
-/// docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7. Collecting them here
+/// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7. Collecting them here
 /// is what makes the later domain extractions cheap: domains take this store
 /// instead of reaching back into the State.
 ///

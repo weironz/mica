@@ -7,7 +7,7 @@ import 'package:mica_flutter/views/cloud_views_controller.dart';
 
 /// Characterization tests for [CloudViewsController], pinned against the
 /// behavior the views-domain methods had as `_WorkspaceShellState` methods
-/// (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7, fifth step).
+/// (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7, fifth step).
 /// Every rule here existed in main_shell.dart before the move; the test names
 /// cite the original method.
 void main() {

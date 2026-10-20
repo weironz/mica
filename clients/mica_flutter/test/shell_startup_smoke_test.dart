@@ -1,12 +1,10 @@
 import 'dart:convert';
-import 'package:flutter/rendering.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:mica_flutter/api/client.dart';
-import 'package:mica_flutter/api/models.dart';
 import 'package:mica_flutter/main.dart' as app;
 import 'package:mica_flutter/prefs.dart';
 

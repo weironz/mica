@@ -2,7 +2,7 @@
 //! folders, and expand archives nested one level deep (Notion's
 //! whole-workspace exports ship `Part-N.zip` files inside the outer ZIP).
 
-use crate::zip::{ZipFileEntry, read_zip};
+use crate::zip::{ZipFileEntry, read_zip_within};
 
 /// Drop junk and peel wrapper folders: when everything lives under a single
 /// top-level folder with no file beside it (a zipped folder, macOS Finder
@@ -107,9 +107,12 @@ pub fn expand_nested_zips(entries: Vec<ZipFileEntry>) -> Vec<ZipFileEntry> {
     return entries;
   }
   let mut out = Vec::new();
+  // One budget for ALL inner archives: each getting a fresh one would let N
+  // nested bombs multiply the ceiling by N.
+  let mut budget = crate::zip::MAX_INFLATED_TOTAL;
   for e in entries {
     if e.name.to_lowercase().ends_with(".zip") {
-      out.extend(normalize_entries(read_zip(&e.bytes)));
+      out.extend(normalize_entries(read_zip_within(&e.bytes, &mut budget)));
     } else {
       out.push(e);
     }

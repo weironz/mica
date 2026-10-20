@@ -4,7 +4,7 @@ import '../ui/theme_tokens.dart';
 
 /// Inline rich-text marks stored additively over a block's plain text (in
 /// `data.marks`). The text stays clean; a mark is a `[start, end)` range with a
-/// type (and an href for links). See docs/editor-engine.md.
+/// type (and an href for links). See docs/architecture/editor-engine.md.
 class Mark {
   Mark(this.start, this.end, this.type, {this.href, this.title});
 
@@ -39,7 +39,12 @@ List<Mark> marksFromData(Map<String, dynamic> data) {
       final start = (m['start'] as num?)?.toInt();
       final end = (m['end'] as num?)?.toInt();
       final type = m['type'] as String?;
-      if (start != null && end != null && type != null && end > start) {
+      // Zero-width is legal for a LINK: `[](/url)` is an empty-text link the
+      // Rust engine keeps; dropping it here erased it on the next save.
+      if (start != null &&
+          end != null &&
+          type != null &&
+          (end > start || (type == 'link' && end == start))) {
         marks.add(
           Mark(
             start,
@@ -343,8 +348,18 @@ int _inlineSpanEnd(String src, int i) {
   final c = src[i];
   if (c == '`') return _codeSpanClose(src, i);
   if (c == '<') {
-    // Autolink first — it constrains the closing `>` — then raw HTML.
-    final close = src.indexOf('>', i + 1);
+    // Autolink first — it constrains the closing `>` — then raw HTML. An
+    // autolink holds no whitespace and no `<`, so the scan stops there
+    // (mirrors Rust): running to the next `>` anywhere made `[<[<…` cubic.
+    var close = -1;
+    for (var j = i + 1; j < src.length; j++) {
+      final d = src[j];
+      if (d == '>') {
+        close = j;
+        break;
+      }
+      if (d == '<' || d == ' ' || d == '\t' || d == '\n' || d == '\r') break;
+    }
     if (close > i && autolinkTarget(src.substring(i + 1, close)) != null) {
       return close + 1;
     }
@@ -427,7 +442,19 @@ String _canonicalizeBreaks(String src) {
 /// Mirrors Rust `matching_bracket`; without the skip, ``[`a]b`](/x)`` lost
 /// its link entirely on the Dart side (confirmed drift).
 int matchingBracket(String src, int open) {
-  var depth = 0;
+  // Answers memoised per source string (mirrors Rust `BracketMemo`): an
+  // unmatched `[` scans to the end, and the parser asks for every `[`, so
+  // `[<[<[<…` cost a full scan per bracket — quadratic. One scan records, via
+  // a stack, the answer for every later `[` it passes; the walk from any
+  // position is deterministic, so those answers are exact.
+  if (!identical(src, _bracketMemoSrc)) {
+    _bracketMemoSrc = src;
+    _bracketMemo.clear();
+  }
+  final known = _bracketMemo[open];
+  if (known != null) return known;
+  final stack = <int>[];
+  var result = -1;
   var j = open;
   while (j < src.length) {
     final c = src[j];
@@ -440,17 +467,52 @@ int matchingBracket(String src, int open) {
       j = span;
       continue;
     }
-    if (c == '[') depth++;
-    if (c == ']') {
-      depth--;
-      if (depth == 0) return j;
+    if (c == '[') {
+      stack.add(j);
+    } else if (c == ']' && stack.isNotEmpty) {
+      final o = stack.removeLast();
+      _bracketMemo[o] = j;
+      if (o == open) {
+        result = j;
+        break;
+      }
     }
     j++;
   }
-  return -1;
+  if (result < 0) {
+    for (final o in stack) {
+      _bracketMemo[o] = -1;
+    }
+    _bracketMemo[open] = -1;
+  }
+  return result;
 }
 
+String? _bracketMemoSrc;
+final Map<int, int> _bracketMemo = {};
+
 const kDollar = r'$';
+
+/// Unicode `White_Space` — exactly the set Rust's `char::is_whitespace`
+/// answers, which the authoritative engine uses at the autolink boundary and
+/// the math delimiters. This mirror used to test only ASCII space/tab/newline,
+/// so `中文\u3000www.example.com` autolinked in Rust but not here, and
+/// `$x\u3000$` was math here but not there.
+bool isUnicodeWhitespace(String c) {
+  if (c.isEmpty) return false;
+  final u = c.codeUnitAt(0);
+  return (u >= 0x09 && u <= 0x0D) ||
+      u == 0x20 ||
+      u == 0x85 ||
+      u == 0xA0 ||
+      u == 0x1680 ||
+      (u >= 0x2000 && u <= 0x200A) ||
+      u == 0x2028 ||
+      u == 0x2029 ||
+      u == 0x202F ||
+      u == 0x205F ||
+      u == 0x3000;
+}
 
 /// One past the closing backtick run of the code span opening at [start] (the
 /// index of its first backtick), or -1 when the run never closes — CommonMark
@@ -485,7 +547,7 @@ int _codeSpanClose(String src, int start) {
 int _findMathCloser(String src, int contentStart) {
   if (contentStart >= src.length) return -1;
   final first = src[contentStart];
-  if (first == ' ' || first == '\t' || first == '\n') return -1;
+  if (isUnicodeWhitespace(first)) return -1;
   var j = contentStart;
   while (j < src.length) {
     final c = src[j];
@@ -504,7 +566,7 @@ int _findMathCloser(String src, int contentStart) {
     }
     if (c == kDollar && j > contentStart) {
       final prev = src[j - 1];
-      if (prev == ' ' || prev == '\t' || prev == r'\') {
+      if (isUnicodeWhitespace(prev) || prev == r'\') {
         j++;
         continue;
       }
@@ -590,6 +652,16 @@ List<({int start, int end})> mathRunSpans(String src) {
         continue;
       }
     }
+    // A code span binds tighter than math (§6.1) — step over it whole so a `$`
+    // inside cannot open a run. Mirrors Rust `math_run_spans`; without it
+    // "`$HOME` and $x$" produced one bogus span from the first `$`.
+    if (src[i] == '`') {
+      final after = _codeSpanClose(src, i);
+      if (after > i) {
+        i = after;
+        continue;
+      }
+    }
     if (src[i] == kDollar &&
         (i == 0 || src[i - 1] != kDollar) &&
         (i + 1 >= src.length || src[i + 1] != kDollar)) {
@@ -609,8 +681,10 @@ List<({int start, int end})> mathRunSpans(String src) {
 /// boundary): bare http(s)/ftp URLs, `www.` (href gains http://), bare
 /// emails. Returns (consumed chars, href), or null.
 (int, String)? extendedAutolink(String src, int i) {
-  final rest = src.substring(i);
-  final lower = rest.toLowerCase();
+  // Only the first 8 chars decide the prefix; copying and lowercasing the
+  // whole remaining text at every word boundary made parsing quadratic (and a
+  // re-parsed multi-line paragraph cubic). Mirrors Rust `extended_autolink`.
+  final lower = src.substring(i, (i + 8).clamp(i, src.length)).toLowerCase();
   for (final (prefix, implied) in [
     ('https://', ''),
     ('http://', ''),
@@ -618,15 +692,16 @@ List<({int start, int end})> mathRunSpans(String src) {
     ('www.', 'http://'),
   ]) {
     if (lower.startsWith(prefix)) {
-      var end = rest.length;
-      for (var k = 0; k < rest.length; k++) {
-        final c = rest[k];
+      var stop = src.length;
+      for (var k = i; k < src.length; k++) {
+        final c = src[k];
         if (c == ' ' || c == '\t' || c == '\n' || c == '<') {
-          end = k;
+          stop = k;
           break;
         }
       }
-      end = _trimAutolinkEnd(rest.substring(0, end));
+      final rest = src.substring(i, stop);
+      final end = _trimAutolinkEnd(rest);
       final candidate = rest.substring(0, end);
       final afterScheme = implied.isEmpty
           ? candidate.substring(prefix.length)
@@ -637,9 +712,11 @@ List<({int start, int end})> mathRunSpans(String src) {
       return (candidate.length, '$implied$candidate');
     }
   }
-  // Bare email.
-  if (RegExp(r'^[A-Za-z0-9]').hasMatch(rest)) {
-    final m = RegExp(r'^[A-Za-z0-9._+-]+@[A-Za-z0-9._-]+').firstMatch(rest);
+  // Bare email. Matched in place (`matchAsPrefix`), not on a copy of the
+  // rest of the text — that copy, at every word boundary, is what made inline
+  // parsing quadratic.
+  if (RegExp(r'[A-Za-z0-9]').hasMatch(src[i])) {
+    final m = RegExp(r'[A-Za-z0-9._+-]+@[A-Za-z0-9._-]+').matchAsPrefix(src, i);
     if (m != null) {
       var text = m.group(0)!;
       while (text.endsWith('.')) {
@@ -1413,9 +1490,7 @@ bool _labelHasLinkCached(
     // GFM extended autolinks: bare www./http(s)/ftp URLs and emails at a
     // word boundary (start, whitespace, or `*`/`_`/`~`/`(`).
     if (i == 0 ||
-        src[i - 1] == ' ' ||
-        src[i - 1] == '\t' ||
-        src[i - 1] == '\n' ||
+        isUnicodeWhitespace(src[i - 1]) ||
         '*_~('.contains(src[i - 1])) {
       final auto = allowAutolink ? extendedAutolink(src, i) : null;
       if (auto != null) {
@@ -1720,7 +1795,7 @@ String _processEmphasis(String text, List<Mark> marks, List<_Delim> delims) {
 /// (b) omitting setext underlines entirely. Result: a paragraph line `===` (or
 /// `--`, `-- -`) exported unescaped and, on re-import, turned the PRECEDING
 /// paragraph into a setext heading — silent round-trip data loss.
-/// (docs/code-review-2026-07-20.md P1-1.)
+/// (docs/reviews/code-review-2026-07-20.md P1-1.)
 String escapeBlockLeader(String line) {
   // Divider: strip spaces first (`-- -` is a thematic break), then >=3 dashes.
   final compact = line.replaceAll(' ', '');
@@ -1732,24 +1807,45 @@ String escapeBlockLeader(String line) {
       line.isNotEmpty &&
       (line.split('').every((c) => c == '=') ||
           line.split('').every((c) => c == '-'));
-  // ATX: `#`+ then a space (any count, matching Rust — not just 1–6).
+  // A marker is followed by a space, a tab, or nothing (an empty item /
+  // empty heading is still that block).
+  bool markerThenGap(String rest) =>
+      rest.isEmpty || rest.startsWith(' ') || rest.startsWith('\t');
+  // ATX: `#`+ then a gap (any count, matching Rust — not just 1–6).
   final atxLike =
       line.startsWith('#') &&
-      line.replaceFirst(RegExp(r'^#+'), '').startsWith(' ');
-  if (line.startsWith('- ') ||
-      line.startsWith('+ ') ||
-      line.startsWith('> ') ||
+      markerThenGap(line.replaceFirst(RegExp(r'^#+'), ''));
+  if (line.startsWith('>') ||
+      ((line.startsWith('-') || line.startsWith('+')) &&
+          markerThenGap(line.substring(1))) ||
       dividerLike ||
       setextLike ||
       atxLike) {
     return '\\$line';
   }
-  final numbered = RegExp(r'^(\d+)\. ').firstMatch(line);
-  if (numbered != null) {
-    return '${numbered.group(1)}\\. ${line.substring(numbered.end)}';
+  // `\[` opens display math on re-import and [escapeInline] writes every
+  // literal `[` as `\[`: a paragraph `[TODO]` came back as a math block. An
+  // entity reference is plain text to the inline parser. Only where the math
+  // block would actually open (`\[` alone, or a line ending in `\]`).
+  if (line.startsWith(r'\[')) {
+    final rest = line.substring(2);
+    if (rest.trim().isEmpty || rest.trimRight().endsWith(r'\]')) {
+      return '&#91;$rest';
+    }
+  }
+  final numbered = RegExp(r'^(\d{1,9})([.)])').firstMatch(line);
+  if (numbered != null && markerThenGap(line.substring(numbered.end))) {
+    return '${numbered.group(1)}\\${numbered.group(2)}'
+        '${line.substring(numbered.end)}';
   }
   return line;
 }
+
+/// [escapeBlockLeader] on every line — after a hard break a later line sits
+/// at a line start just as much as the first. Mirrors Rust
+/// `escape_block_leaders`.
+String escapeBlockLeaders(String text) =>
+    text.split('\n').map(escapeBlockLeader).join('\n');
 
 /// Escape characters the inline grammar would otherwise interpret.
 String escapeInline(String text) {

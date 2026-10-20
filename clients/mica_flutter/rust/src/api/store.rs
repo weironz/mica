@@ -378,7 +378,7 @@ impl MicaStore {
         let _ = self.store().save_doc(&doc_id, &doc_guard);
     }
 
-    // ── local page version history (docs/version-history-plan.md §6) ──────────
+    // ── local page version history (docs/features/version-history-plan.md §6) ──────────
 
     /// The document's version timeline, newest first — auto snapshots (captured
     /// on a cadence by `save_doc`) and named checkpoints interleaved.
@@ -513,7 +513,7 @@ impl MicaStore {
         // such pair from an older import, and the migration refused the whole
         // workspace over it.
         //
-        // docs/lessons.md#2 one layer further out: an invariant enforced on
+        // docs/dev/lessons.md#2 one layer further out: an invariant enforced on
         // only one side of a boundary is not enforced.
         // Returns whether it was written, rather than refusing in silence — a
         // write that quietly does nothing is the failure mode this app has

@@ -1129,6 +1129,7 @@ class _SettingsDialog extends StatefulWidget {
   /// is the same fallback a failed fetch lands on.
   final Future<Map<String, dynamic>> Function({
     String? provider,
+    String? providerId,
     String? baseUrl,
     String? apiKey,
   })?
@@ -1784,6 +1785,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       final provider = _fieldsProviderId;
       final result = await fetch(
         provider: _protocol,
+        providerId: provider,
         baseUrl: _baseUrl.text.trim(),
         // Only send a key the user just typed; an empty one tells the server to
         // use the stored key, which is the common case on a configured server.

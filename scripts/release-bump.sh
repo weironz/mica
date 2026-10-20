@@ -9,7 +9,7 @@ version=$1
 old=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
 [ "$old" != "$version" ] || { echo "REFUSED: already at $version" >&2; exit 1; }
 
-# Three files, one source of truth would be better — see docs/cd-plan.md §2.
+# Three files, one source of truth would be better — see docs/ops/cd-plan.md §2.
 # Until that lands, at least stop hand-editing three places in three formats.
 sed -i "s/^version: $old/version: $version/" clients/mica_flutter/pubspec.yaml
 sed -i "s/kAppVersion = '$old'/kAppVersion = '$version'/" clients/mica_flutter/lib/main.dart

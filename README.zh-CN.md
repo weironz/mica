@@ -15,7 +15,7 @@
   <a href="#-安装">下载</a> ·
   <a href="#-自托管">自托管</a> ·
   <a href="docs/">文档</a> ·
-  <a href="docs/roadmap.md">路线图</a>
+  <a href="docs/plans/roadmap.md">路线图</a>
 </p>
 
 <p align="center">
@@ -81,7 +81,7 @@ Dart 负责绘制、光标与选区、命中测试,以及编辑器的延迟敏�
 底座是 CommonMark 0.31.2 —— **读侧 641/641 规范用例全过** —— 加 GFM(**24/24**),
 再加一小层方言补 GFM 表达不了的东西:脚注、front matter、Pandoc 数学约定。
 写侧输出规范化子集,**round-trip 是被 CI 地板钉住的不变量**。
-见[记分牌](docs/commonmark-scoreboard.md)。
+见[记分牌](docs/architecture/commonmark-scoreboard.md)。
 
 遇到 GFM 没有对应表示的特性,规则是:序列化成**合法的 GFM**,保证在任何第三方阅读器里
 都能正常渲染——绝不发明别人会渲染错的语法——同时把无损形式带在带外,
@@ -93,7 +93,7 @@ Dart 负责绘制、光标与选区、命中测试,以及编辑器的延迟敏�
 下载 `Mica-Setup-*.exe`。应用会从同一来源自动更新。
 
 **命令行** —— 每个 release 都附带 Windows / Linux / macOS 三个平台的 `mica-cli`。
-它走同一套 API,并承载 MCP 服务(`mica-cli mcp`)。见 [docs/cli.md](docs/cli.md)。
+它走同一套 API,并承载 MCP 服务(`mica-cli mcp`)。见 [docs/dev/cli.md](docs/dev/cli.md)。
 
 **Web** —— 自托管,见下。
 
@@ -140,13 +140,13 @@ docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 
 `deploy/docker-compose.yml` 是权威生产栈:label 路由 + Let's Encrypt,
 拉已发布镜像而非本地构建。用 `MICA_VERSION` 钉版本。
-见[部署文档](docs/deploy.md#behind-traefik-the-canonical-production-stack)。
+见[部署文档](docs/ops/deploy.md#behind-traefik-the-canonical-production-stack)。
 
 </details>
 
 **迁移是编译进 API 二进制的,启动时自动跑**——没有单独的迁移步骤。
 
-完整说明:[部署](docs/deploy.md) · [备份](docs/backup.md) · [发版流程](docs/release.md)
+完整说明:[部署](docs/ops/deploy.md) · [备份](docs/ops/backup.md) · [发版流程](docs/ops/release.md)
 
 ## 🧩 仓库结构
 
@@ -186,7 +186,7 @@ just check           # fmt + clippy + analyze
 不配 `S3_*` 时文件相关端点返回 `503`,其余功能正常;`ANTHROPIC_API_KEY` 同理。
 
 **动任何结构性的东西之前,先读 [`CLAUDE.md`](CLAUDE.md)**(项目原则、不变量、发版流程)
-和 [`docs/lessons.md`](docs/lessons.md)——后者记录了那些不变量被破坏时的实际代价。
+和 [`docs/dev/lessons.md`](docs/dev/lessons.md)——后者记录了那些不变量被破坏时的实际代价。
 
 三条不看就会被咬的规则:
 
@@ -194,31 +194,31 @@ just check           # fmt + clippy + analyze
    每敲一个键走一次网络)。两边由共享一致性 fixture 钉住——改一边,两套测试都要跑。
 2. **每个 bug 修复都配回归测试**,提交信息写根因,不写流水账。
 3. **新渲染能力先抽机制**,不许往 `render.dart` 堆 `if` 分支。
-   见[渲染架构](docs/render-architecture.md)。
+   见[渲染架构](docs/architecture/render-architecture.md)。
 
 ## 📚 文档
 
 | | |
 | --- | --- |
-| [架构](docs/architecture.md) | 系统形状和背后的决策 |
-| [踩过的坑](docs/lessons.md) | 代价最大的那些 bug,以及为什么 |
-| [编辑器设计](docs/editor.md) · [引擎](docs/editor-engine.md) · [渲染](docs/render-architecture.md) | 编辑器的原则与内部实现 |
-| [同步与 API](docs/sync-and-api.md) | REST 接口面和 WebSocket 消息封套 |
-| [导出/导入](docs/export-import.md) | 归档格式、Notion 适配、round-trip 规则 |
-| [CommonMark 记分牌](docs/commonmark-scoreboard.md) | 规范一致性,逐版本跟踪 |
-| [本地优先](docs/local-first-plan.md) · [Vault 模式](docs/vault-mode.md) | 本地世界 |
-| [MCP 服务](docs/mcp-server.md) · [接入客户端](docs/mcp-connect.md) | AI 工具访问 |
-| [新机搭建](docs/bootstrap.md) | 一台干净的 Windows 机器,从零到能开发 |
-| [部署](docs/deploy.md) · [发版](docs/release.md) · [备份](docs/backup.md) | 怎么跑起来 |
-| [快捷键](docs/shortcuts.md) | 权威快捷键清单 |
-| [路线图](docs/roadmap.md) | 接下来做什么 |
+| [架构](docs/architecture/architecture.md) | 系统形状和背后的决策 |
+| [踩过的坑](docs/dev/lessons.md) | 代价最大的那些 bug,以及为什么 |
+| [编辑器设计](docs/architecture/editor.md) · [引擎](docs/architecture/editor-engine.md) · [渲染](docs/architecture/render-architecture.md) | 编辑器的原则与内部实现 |
+| [同步与 API](docs/architecture/sync-and-api.md) | REST 接口面和 WebSocket 消息封套 |
+| [导出/导入](docs/features/export-import.md) | 归档格式、Notion 适配、round-trip 规则 |
+| [CommonMark 记分牌](docs/architecture/commonmark-scoreboard.md) | 规范一致性,逐版本跟踪 |
+| [本地优先](docs/architecture/local-first-plan.md) · [Vault 模式](docs/features/vault-mode.md) | 本地世界 |
+| [MCP 服务](docs/dev/mcp-server.md) · [接入客户端](docs/dev/mcp-connect.md) | AI 工具访问 |
+| [新机搭建](docs/dev/bootstrap.md) | 一台干净的 Windows 机器,从零到能开发 |
+| [部署](docs/ops/deploy.md) · [发版](docs/ops/release.md) · [备份](docs/ops/backup.md) | 怎么跑起来 |
+| [快捷键](docs/features/shortcuts.md) | 权威快捷键清单 |
+| [路线图](docs/plans/roadmap.md) | 接下来做什么 |
 
 设计文档之间有出入时,**以 `CLAUDE.md` 和它指向的文档为准**。
 
 ## 🤝 参与贡献
 
 欢迎 issue 和 PR。小修小补之外的改动,**请先开个 issue 讨论**——
-这个代码库有相当一部分是以不明显的方式承重的,`docs/lessons.md` 就是为此而生的。
+这个代码库有相当一部分是以不明显的方式承重的,`docs/dev/lessons.md` 就是为此而生的。
 
 ## 📄 许可证
 

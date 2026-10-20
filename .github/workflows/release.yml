@@ -5,7 +5,7 @@ name: Release
 #   * the Flutter Windows desktop app, packaged with Inno Setup (unsigned for
 #     now — see installer/mica.iss); this drives the in-app auto-updater.
 #   * the `mica-cli` binary for Windows / Linux / macOS (a pure, thin HTTP client
-#     over the REST API — no backup engine baked in; see docs/backup.md).
+#     over the REST API — no backup engine baked in; see docs/ops/backup.md).
 # Pushed to the container registries (`images` job):
 #   * mica-api / mica-web / mica-cli, tagged with the IMMUTABLE version.
 #
@@ -13,8 +13,8 @@ name: Release
 # the old one as if it still held: "letting CI deploy would mean putting a prod
 # root SSH key in GitHub secrets… CI only ever holds registry-push credentials."
 # Both halves stopped being true on 2026-08-25. There IS a Deploy workflow, and
-# it holds exactly that key. The trade is argued in docs/cd-plan.md §4.1 and
-# docs/release.md; the short version is that the fence closed one door in a room
+# it holds exactly that key. The trade is argued in docs/ops/cd-plan.md §4.1 and
+# docs/ops/release.md; the short version is that the fence closed one door in a room
 # with another one open — the same CI could already publish a malicious image
 # that prod would pull.
 #
@@ -145,7 +145,7 @@ jobs:
     # previous release's units. Even with hits it could only cache the Rust FFI
     # slice; the job's long pole is `flutter build windows` (Dart/C++), which no
     # Rust cache touches. rust-cache (below) stays: low overhead, and it at least
-    # keeps third-party deps. See docs/lessons.md.
+    # keeps third-party deps. See docs/dev/lessons.md.
     defaults:
       run:
         working-directory: clients/mica_flutter
@@ -579,7 +579,7 @@ jobs:
           context: .
           file: ${{ matrix.file }}
           # Was an unconditional `true`, and that was a real hole: the registry
-          # tags are IMMUTABLE by policy (`docs/release.md`), but a dry run —
+          # tags are IMMUTABLE by policy (`docs/ops/release.md`), but a dry run —
           # `publish=false`, whose whole promise is "build everything, publish
           # nothing" — pushed anyway, overwriting the images of whatever version
           # the tree happened to say. Building still happens on a dry run; only

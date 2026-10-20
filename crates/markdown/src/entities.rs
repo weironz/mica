@@ -5,7 +5,7 @@
 /// soft hyphen). Mapping an entity name to its character is this table's whole
 /// job, so the "invisible" literal is the correct value, not a typo. The lint
 /// aborted `cargo clippy` on the FIRST crate of the workspace, which is why the
-/// other eight had never been linted at all — see docs/code-review-2026-07-20.md.
+/// other eight had never been linted at all — see docs/reviews/code-review-2026-07-20.md.
 #[allow(clippy::invisible_characters)]
 pub(crate) fn named_entity(name: &str) -> Option<&'static str> {
   match name {

@@ -26,7 +26,7 @@
 //!   curve at all; you would learn about it when a user said their document was
 //!   scrambled.
 //! * **Push cost** (`mica_crdt_push_*`) — every push decodes and re-encodes the
-//!   whole document (see the write-amplification entry in docs/roadmap.md).
+//!   whole document (see the write-amplification entry in docs/plans/roadmap.md).
 //!   Without a number, "how expensive is that really" stays an argument.
 //! * **Client lag** (`mica_crdt_lag_notices_total`) — the server telling a
 //!   client it fell off the broadcast window is a silent-divergence adjacent
@@ -184,8 +184,8 @@ struct DbSnapshot {
   documents: i64,
   /// Total bytes across every workspace.
   ///
-  /// Computed with the SAME expression the quota enforces
-  /// (`sum(byte_size) FROM files WHERE workspace_id = …`, i.e.
+  /// Computed with the SAME expression the quota enforces (registered files
+  /// plus unregistered browser-upload reservations, i.e.
   /// `store::workspace_bytes_used`). If the two ever disagree the gauge is
   /// lying about who is near the wall, which is the whole reason it exists —
   /// `the_capacity_gauge_matches_what_the_quota_enforces` pins them together.
@@ -359,11 +359,13 @@ async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
   let row: (i64, i64, i64, i64) = sqlx::query_as(
     r#"
     SELECT
-      (SELECT count(*) FROM users)::bigint,
+      (SELECT count(*) FROM users WHERE deleted_at IS NULL)::bigint,
       (SELECT count(*) FROM workspaces)::bigint,
       (SELECT count(*) FROM documents)::bigint,
-      coalesce((SELECT sum(total) FROM
-        (SELECT sum(byte_size) AS total FROM files GROUP BY workspace_id) t), 0)::bigint
+      (coalesce((SELECT sum(byte_size) FROM files), 0)
+       + coalesce((SELECT sum(p.byte_size) FROM pending_file_uploads p
+          WHERE p.workspace_id IN (SELECT id FROM workspaces)
+            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key)), 0))::bigint
     "#,
   )
   .fetch_one(db)
@@ -375,10 +377,12 @@ async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
   // look different, and a missing series reads as the latter.
   let rows: Vec<(uuid::Uuid, String, i64)> = sqlx::query_as(
     r#"
-    SELECT w.id, w.name, coalesce(sum(f.byte_size), 0)::bigint AS used
+    SELECT w.id, w.name,
+      (coalesce((SELECT sum(f.byte_size) FROM files f WHERE f.workspace_id = w.id), 0)
+       + coalesce((SELECT sum(p.byte_size) FROM pending_file_uploads p
+          WHERE p.workspace_id = w.id
+            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key)), 0))::bigint AS used
     FROM workspaces w
-    LEFT JOIN files f ON f.workspace_id = w.id
-    GROUP BY w.id, w.name
     ORDER BY used DESC, w.id
     LIMIT $1
     "#,

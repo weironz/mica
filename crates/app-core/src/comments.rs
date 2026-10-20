@@ -1,4 +1,4 @@
-//! Comment threads + replies — the store layer (docs/comments-plan.md).
+//! Comment threads + replies — the store layer (docs/features/comments-plan.md).
 //!
 //! Anchors live HERE, in Postgres, never inside the yrs document: the Markdown
 //! body stays byte-identical, so the round-trip invariant needs no changes and a
@@ -264,9 +264,10 @@ pub async fn mark_orphaned(db: &PgPool, thread_ids: &[Uuid]) -> ApiResult<()> {
 /// Try to bring a dead anchor back to life from the thread's saved `quote`.
 ///
 /// Call ONLY when the stored anchor no longer resolves (or resolves empty). The
-/// common cause is not a deletion at all: `set_blocks` — every REST/MCP write and
-/// every version restore — rewrites each block's text object, so anchors die with
-/// the text untouched. Matching the quote tells that apart from a real deletion,
+/// cause is not always a deletion: a block deleted and re-inserted with the same
+/// text (cut and paste, an older client — and, before it became a per-block
+/// diff, every `set_blocks`) gets a new text object, so anchors die with the
+/// text untouched. Matching the quote tells that apart from a real deletion,
 /// where nothing is found and the thread rightly stays an orphan.
 ///
 /// Returns the range it now covers plus a FRESH anchor for it; the caller
@@ -422,23 +423,31 @@ mod tests {
 
   /// A rewritten document: identical text, brand-new text objects — what every
   /// REST/MCP write and every version restore does to a document.
+  /// Kill every anchor over UNCHANGED text: delete each block and re-insert it
+  /// with the same id and content, so its yrs text object is brand new. (This
+  /// used to be `set_blocks`, which did exactly that to every block until it
+  /// became a per-block diff; a delete-and-reinsert — cut and paste, an older
+  /// client — still does.)
   fn rewrite(doc: &mut MicaDoc) {
     let blocks = doc.to_blocks();
-    doc.set_blocks("r", &blocks);
+    let root = blocks.iter().find(|b| b.id == "r").unwrap().clone();
+    for (index, id) in root.children.iter().enumerate() {
+      let block = blocks.iter().find(|b| &b.id == id).unwrap().clone();
+      doc.delete_block(id, false);
+      doc.insert_block("r", index, &block);
+    }
   }
 
-  /// **The acceptance test for `set_block_prop`** (`docs/page-title-plan.md`
+  /// **The acceptance test for `set_block_prop`** (`docs/features/page-title-plan.md`
   /// §5.1). Once the title lives on the root block, renaming a page has to write
-  /// into the DOCUMENT — and the obvious way to do that, `set_blocks`, silently
-  /// orphans every comment on the page: identical characters, brand-new text
-  /// objects, dead sticky indexes.
+  /// into the DOCUMENT — and the obvious way to do that, `set_blocks`, used to
+  /// orphan every comment on the page: identical characters, brand-new text
+  /// objects, dead sticky indexes (no longer — see the test below).
   ///
-  /// So the narrow primitive must leave `text` alone. Proven by contrast: the
-  /// test right below performs the SAME rename through `set_blocks` and asserts
-  /// that every anchor has to be RESCUED (re-anchored by quote, at the cost of
-  /// flattening the document) — which makes "this one is untouched" a measured
-  /// difference rather than a hopeful assertion about code that might be doing
-  /// nothing at all.
+  /// So the narrow primitive must leave `text` alone. (The test below used to
+  /// prove it by contrast — the same rename through `set_blocks` forced every
+  /// anchor to be rescued. `set_blocks` now diffs per block, so it leaves them
+  /// alive too, and that test pins THAT instead.)
   #[test]
   fn renaming_through_the_narrow_primitive_keeps_comment_anchors_alive() {
     let mut doc = doc_with("hello world");
@@ -468,20 +477,14 @@ mod tests {
   /// The contrast that gives the test above its teeth — and it is NOT
   /// "the comment disappears".
   ///
-  /// Measured, after a first attempt asserted the wrong thing: a `set_blocks`
-  /// rename does kill the sticky index (so the repo's "brand-new text objects"
-  /// note is accurate), but the quote-based re-anchor then rescues it onto the
-  /// same words. So the observable difference is the RESCUE, not the loss:
-  /// every comment on the page has to be re-anchored, which costs a document
-  /// flatten (the quote index) and writes a fresh anchor back.
-  ///
-  /// That is still a good reason to have the narrow primitive, because the
-  /// rescue is best-effort by design: an ambiguous or deleted quote stays
-  /// orphaned rather than guessing (`anchor_state`'s contract — a wrong anchor
-  /// is worse than none). Renaming a page should not roll that dice on every
-  /// thread it has.
+  /// `set_blocks` used to replace every block's text object, so this test
+  /// asserted that a rename through it forced every anchor to be RESCUED by
+  /// quote. Since `set_blocks` became a per-block diff, an unchanged block
+  /// keeps its text object and its anchors simply live — the rescue (best
+  /// effort by design: an ambiguous quote stays orphaned) is no longer rolled
+  /// for every thread on every REST/MCP write.
   #[test]
-  fn renaming_through_set_blocks_forces_every_anchor_to_be_rescued() {
+  fn renaming_through_set_blocks_leaves_every_anchor_alive() {
     let mut doc = doc_with("hello world");
     let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
 
@@ -492,18 +495,8 @@ mod tests {
 
     let mut index = None;
     let state = anchor_state(&doc, &mut index, &row(&anchor, "world", STATUS_OPEN));
-    assert!(
-      state.fresh_anchor.is_some(),
-      "the original sticky index must have died and been re-anchored; if it \
-       survived, set_block_prop is buying nothing and §5.1 of the plan is stale"
-    );
-    assert!(
-      index.is_some(),
-      "re-anchoring flattens the document to search for the quote — the cost \
-       the narrow primitive avoids"
-    );
-    // The rescue landed correctly HERE because the quote is unique. It is not
-    // guaranteed to: that is the risk a rename must not take.
+    assert!(state.fresh_anchor.is_none(), "the original sticky index survived");
+    assert!(index.is_none(), "no quote index was needed");
     assert_eq!(
       state.range.map(|r| (r.start_offset, r.end_offset)),
       Some((6, 11))

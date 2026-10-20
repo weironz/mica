@@ -1,4 +1,4 @@
-//! Page version history — yrs-native (docs/version-history-plan.md). Auto
+//! Page version history — yrs-native (docs/features/version-history-plan.md). Auto
 //! snapshots are captured on a cadence in `sync::push_update`; these endpoints
 //! list them, preview one read-only, pin a named version, and restore. Restore
 //! is a NEW forward update (never a rewrite of the log), broadcast as a yrs

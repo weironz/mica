@@ -627,6 +627,7 @@
   "uploadFileTooLarge": "这个文件太大了:超过了服务器的单文件上传上限。压缩后再试,或换一个小一点的 —— 工作区本身可能还有余量。",
   "uploadFileTooLargeWithLimit": "这个文件太大了:单文件上传上限是 {limit}。压缩后再试,或换一个小一点的 —— 工作区本身可能还有余量。",
   "uploadWorkspaceFull": "工作区存储已满。删掉图片要等清理扫过之后才真正释放空间,所以数字可能不会马上下降。",
+  "uploadOwnerFull": "这个工作区的所有者在其名下全部工作区的存储总额已用完。在其中任一工作区腾出空间(清理扫过之后)即可。",
   "importProgress": "正在导入 {done} / {total}",
   "importFailed": "导入失败：{error}",
   "importJobFailed": "导入失败",

@@ -14,7 +14,6 @@ import 'package:flutter/gestures.dart'
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:http/http.dart' as http;
 
 import 'l10n/app_localizations.dart';
 import 'l10n/locale_controller.dart';
@@ -139,7 +138,7 @@ const String kDefaultCloudUrl = String.fromEnvironment('MICA_CLOUD_URL');
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.13.56';
+const String kAppVersion = '0.13.57';
 
 /// Editor page (content column) width, as 11 discrete steps like AppFlowy —
 /// `680 · 800 · … · 1880` (min + max + 10 divisions, step 120). The DEFAULT and

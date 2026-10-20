@@ -174,7 +174,9 @@ pub struct ResendRequest {
 /// Always 204, whatever happened: unknown address, already verified, mail
 /// failure. Anything else is an enumeration oracle, and this endpoint has to be
 /// unauthenticated (the whole point is that the caller cannot sign in yet). Rate
-/// limiting is the existing per-IP bucket's job — the path is under `/auth/`.
+/// limiting is the per-IP bucket's job: `rate_limit::is_rate_limited` names
+/// this path explicitly (it matches by suffix, so being under `/auth/` alone
+/// did nothing — the claim this comment used to make was false).
 pub async fn resend(
   State(state): State<AppState>,
   axum::Json(payload): axum::Json<ResendRequest>,

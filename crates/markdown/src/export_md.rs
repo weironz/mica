@@ -242,8 +242,10 @@ pub(crate) fn append_markdown_block_content(
       push_list_item(lines, block, &indent, &format!("{n}{delim} "), rich);
     }
     "quote" => {
-      // Marker prefixes are added by the children walker (depth-aware).
-      lines.extend(rich.split('\n').map(str::to_string));
+      // Marker prefixes are added by the children walker (depth-aware). The
+      // text after `> ` is at a line start too: `- a` inside a quote re-imports
+      // as a list item in the quote unless its leader is escaped.
+      lines.extend(rich.split('\n').map(|l| escape_block_leader(l.to_string())));
       lines.push(String::new());
     }
     "code_block" | "code" => {
@@ -310,7 +312,9 @@ pub(crate) fn append_markdown_block_content(
     }
     _ => {
       if !text.is_empty() {
-        let rich = escape_block_leader(rich.to_string());
+        // Every line, not just the first: after a hard break (`\` + newline)
+        // a line reading `- item` started a real list on re-import.
+        let rich = escape_block_leaders(rich);
         lines.push(format!("{indent}{rich}"));
         lines.push(String::new());
       }

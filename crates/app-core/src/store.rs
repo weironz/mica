@@ -24,7 +24,7 @@ pub struct DocumentRecord {
 
 
 
-/// A yrs-native version-history row (see docs/version-history-plan.md). Metadata
+/// A yrs-native version-history row (see docs/features/version-history-plan.md). Metadata
 /// only — the `state` blob is fetched separately so timeline listings stay cheap.
 /// `label` NULL = an auto snapshot; set = a named user checkpoint. `expires_at`
 /// NULL = kept forever (named rows); set = an auto row pruned after retention.
@@ -210,9 +210,11 @@ where
   // — the same coarse-but-exact primitive version restore uses. Deliberately
   // not a per-op yrs mapping: a second implementation of the op semantics is
   // precisely how the two stores drifted apart in the first place, whereas this
-  // makes the yrs state equal `next_payload` by construction. The cost is a
-  // full-document update per REST/MCP write (these are batch writes, not
-  // keystrokes) and last-writer-wins against a concurrent editor.
+  // makes the yrs state equal `next_payload` by construction. `set_blocks`
+  // diffs block by block, so blocks this write did not change keep their yrs
+  // objects and a concurrent editor's edits to them merge; only a block both
+  // sides changed is decided by the CRDT (text splices interleave, the same
+  // prop key is last-writer-wins).
   let next_blocks: Vec<mica_core::Block> = next_payload
     .blocks
     .iter()
@@ -241,13 +243,14 @@ where
   // line #1: content_text is a co-written pure projection of the base).
   let yrs_content_text = crate::sync::content_text_from_doc(&doc);
   let yrs_link_targets = crate::sync::link_targets_from_doc(&doc);
+  let yrs_file_ids = crate::sync::file_ids_from_blocks(&doc.to_blocks());
   sqlx::query(
-    "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, now())
+    "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (document_id) DO UPDATE SET
          state = excluded.state, state_vector = excluded.state_vector,
          base_rid = excluded.base_rid, content_text = excluded.content_text,
-         link_targets = excluded.link_targets,
+         link_targets = excluded.link_targets, file_ids = excluded.file_ids,
          updated_at = now()",
   )
   .bind(document_id)
@@ -256,6 +259,7 @@ where
   .bind(yrs_rid)
   .bind(&yrs_content_text)
   .bind(&yrs_link_targets)
+  .bind(&yrs_file_ids)
   .execute(&mut *tx)
   .await?;
 
@@ -626,7 +630,7 @@ pub async fn fetch_share_by_token(db: &PgPool, token: &str) -> ApiResult<Option<
   .map_err(ApiError::from)
 }
 
-// ── yrs-native version history (docs/version-history-plan.md) ────────────────
+// ── yrs-native version history (docs/features/version-history-plan.md) ────────────────
 // The op-model history below froze with P4①b; real history routes through these.
 
 /// The document's version timeline, newest first. Metadata only (no `state`
@@ -703,10 +707,61 @@ pub async fn create_named_yrs_version(
 /// Deduplication is already reflected — `insert_file` returns the existing row for
 /// identical bytes, so re-uploading the same image adds a reference and no size.
 pub async fn workspace_bytes_used(db: &PgPool, workspace_id: Uuid) -> ApiResult<i64> {
+  workspace_bytes_used_excluding(db, workspace_id, None).await
+}
+
+/// [workspace_bytes_used] without the pending reservation of `exclude_key` —
+/// for `complete`, whose own upload is that reservation and must not be
+/// counted twice against itself.
+pub async fn workspace_bytes_used_excluding(
+  db: &PgPool,
+  workspace_id: Uuid,
+  exclude_key: Option<&str>,
+) -> ApiResult<i64> {
+  // Registered files PLUS browser uploads issued but never registered. The
+  // latter count until the orphan sweep removes their ledger row — whether or
+  // not the bytes were actually PUT, which the database cannot know; an
+  // abandoned upload costs its size for the grace period rather than letting
+  // never-completed uploads fill the store unmetered.
   sqlx::query_scalar::<_, i64>(
-    "SELECT coalesce(sum(byte_size), 0)::bigint FROM files WHERE workspace_id = $1",
+    "SELECT (
+       (SELECT coalesce(sum(byte_size), 0) FROM files WHERE workspace_id = $1)
+       + (SELECT coalesce(sum(p.byte_size), 0) FROM pending_file_uploads p
+          WHERE p.workspace_id = $1
+            AND p.object_key IS DISTINCT FROM $2
+            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key))
+     )::bigint",
   )
   .bind(workspace_id)
+  .bind(exclude_key)
+  .fetch_one(db)
+  .await
+  .map_err(ApiError::from)
+}
+
+/// Bytes stored across every workspace owned by `workspace_id`'s owner — the
+/// per-owner quota (B7). Same counting rules as [workspace_bytes_used_excluding],
+/// summed over the owner's workspaces.
+pub async fn owner_bytes_used_excluding(
+  db: &PgPool,
+  workspace_id: Uuid,
+  exclude_key: Option<&str>,
+) -> ApiResult<i64> {
+  sqlx::query_scalar::<_, i64>(
+    "WITH owned AS (
+       SELECT w.id FROM workspaces w
+       WHERE w.owner_id = (SELECT owner_id FROM workspaces WHERE id = $1)
+     )
+     SELECT (
+       (SELECT coalesce(sum(byte_size), 0) FROM files WHERE workspace_id IN (SELECT id FROM owned))
+       + (SELECT coalesce(sum(p.byte_size), 0) FROM pending_file_uploads p
+          WHERE p.workspace_id IN (SELECT id FROM owned)
+            AND p.object_key IS DISTINCT FROM $2
+            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key))
+     )::bigint",
+  )
+  .bind(workspace_id)
+  .bind(exclude_key)
   .fetch_one(db)
   .await
   .map_err(ApiError::from)
@@ -780,9 +835,39 @@ pub async fn record_pending_file_upload_tx(
   Ok(())
 }
 
+/// Record the size a browser upload URL allows, for the quota
+/// ([workspace_bytes_used]). Kept apart from [record_pending_file_upload_tx] so
+/// its many server-side callers — which meter themselves — are unaffected.
+pub async fn reserve_pending_upload_bytes_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  object_key: &str,
+  byte_size: i64,
+) -> ApiResult<()> {
+  sqlx::query("UPDATE pending_file_uploads SET byte_size = GREATEST(byte_size, $2) WHERE object_key = $1")
+    .bind(object_key)
+    .bind(byte_size)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
+}
+
 /// Server-side PUTs also need a durable ledger entry *before* sending bytes.
 /// A transaction held across PUT is not enough: a process crash would roll it
 /// back and leave an object that no sweep can discover.
+/// Phase one of a server-side store (D5): under the key lock, in a short
+/// transaction of its own, make both collectors leave `object_key` alone while
+/// the caller PUTs with NO transaction open —
+/// - the orphan sweep: a fresh ledger expiry (it waits a day past expiry);
+/// - the registered sweep: an existing row's unreferenced mark is cleared (it
+///   re-reads the mark under this lock before deleting, and a cleared mark
+///   restarts its 30-day clock). A sweep already mid-delete holds the lock, so
+///   this waits for it and the PUT that follows restores the bytes.
+///
+/// Phase two is [register_put_file], under the lock again.
+///
+/// The PUT used to run inside the locked transaction instead: a pooled
+/// connection and a held lock for a whole upload, and `complete` did the same
+/// for its HEAD.
 pub async fn record_pending_file_upload(
   db: &PgPool,
   workspace_id: Uuid,
@@ -792,8 +877,34 @@ pub async fn record_pending_file_upload(
   let mut tx = db.begin().await?;
   lock_file_object_key(&mut tx, object_key).await?;
   record_pending_file_upload_tx(&mut tx, workspace_id, object_key, ttl_seconds).await?;
+  sqlx::query(
+    "UPDATE files SET unreferenced_since = NULL WHERE object_key = $1 AND unreferenced_since IS NOT NULL",
+  )
+  .bind(object_key)
+  .execute(&mut *tx)
+  .await?;
   tx.commit().await?;
   Ok(())
+}
+
+/// Phase two of a server-side store: register the PUT object under the key
+/// lock, in a short transaction. See [record_pending_file_upload].
+pub async fn register_put_file(
+  db: &PgPool,
+  workspace_id: Uuid,
+  uploaded_by: Uuid,
+  object_key: &str,
+  original_name: &str,
+  mime_type: &str,
+  byte_size: i64,
+) -> ApiResult<FileRecord> {
+  let mut tx = db.begin().await?;
+  lock_file_object_key(&mut tx, object_key).await?;
+  let file =
+    insert_file_tx(&mut tx, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size)
+      .await?;
+  tx.commit().await?;
+  Ok(file)
 }
 
 pub async fn pending_file_upload_exists_tx(
@@ -825,12 +936,13 @@ pub async fn insert_file_tx(
 ) -> ApiResult<FileRecord> {
   // Object keys are content-addressed (sha256), so re-uploading identical bytes
   // hits the UNIQUE(object_key) constraint. Treat that as dedup: return the
-  // existing row rather than failing. The no-op SET lets us use RETURNING.
+  // existing row rather than failing. The SET also clears the GC mark — see
+  // [reclaim_file_tx] for why handing out an existing row must.
   sqlx::query_as::<_, FileRecord>(
     r#"
       INSERT INTO files (workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size)
       VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (object_key) DO UPDATE SET object_key = EXCLUDED.object_key
+      ON CONFLICT (object_key) DO UPDATE SET unreferenced_since = NULL
       RETURNING id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size, created_at
     "#,
   )
@@ -889,6 +1001,25 @@ pub async fn fetch_file_by_key(
 }
 
 /// Transactional lookup for the presign/GC key-locked critical section.
+/// Clear the blob-GC mark on a row that is being handed out again by dedup.
+///
+/// GC's "fresh upload" guard is `MIN_OBJECT_AGE` against the row's ORIGINAL
+/// `created_at`, so a row unreferenced for 30+ days and then reused (the same
+/// image uploaded again, an import's prefetch hitting it) had no protection:
+/// a sweep landing before the new page saved deleted the object, and the page
+/// kept a dangling `file_id`. Clearing the mark restarts the full grace period.
+/// Callers hold [lock_file_object_key], the same lock GC's collect takes.
+pub async fn reclaim_file_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  file_id: Uuid,
+) -> ApiResult<()> {
+  sqlx::query("UPDATE files SET unreferenced_since = NULL WHERE id = $1 AND unreferenced_since IS NOT NULL")
+    .bind(file_id)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
+}
+
 pub async fn fetch_file_by_key_tx(
   tx: &mut Transaction<'_, Postgres>,
   workspace_id: Uuid,

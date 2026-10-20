@@ -12,7 +12,7 @@ use crate::inline::*;
 /// The block scanner's mutable state — everything `import_markdown_inner`
 /// carries ACROSS loop iterations. Every field has an owner (the construct
 /// family that writes it) and an invariant documented at the field; the
-/// decomposition (docs/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8)
+/// decomposition (docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §8)
 /// exists to make these invariants explicit instead of reader-side lore.
 pub(crate) struct BlockState {
   /// Stack of open list items' CONTENT columns (tabs count as 4): a new item
@@ -54,6 +54,9 @@ pub(crate) struct BlockState {
   /// (code/quote/divider blocks carrying `data.li`): later indented
   /// paragraphs become child paragraphs instead of `\n\n` text joins.
   pub(crate) item_children: bool,
+  /// Blocks whose `text` holds RAW continued source awaiting one inline parse
+  /// at the end of the scan (`block_handlers::defer_inline`).
+  pub(crate) stale_inline: std::collections::BTreeSet<usize>,
 }
 
 /// The continuation target of the open paragraph-like block: raw source (to
@@ -80,6 +83,7 @@ impl BlockState {
       pending_empty_quote: None,
       pending_alert: None,
       item_children: false,
+      stale_inline: std::collections::BTreeSet::new(),
     }
   }
   /// Debug-only assertion of the cross-field invariants documented above.
@@ -289,6 +293,7 @@ pub(crate) fn import_markdown_inner(
     };
     leaf_block(&mut ctx, body, c);
   }
+  crate::block_handlers::finish_deferred_inline(&mut blocks, std::mem::take(&mut st.stale_inline), &defs);
   if let Some(d) = st.pending_empty_quote.take() {
     let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
     if st.quote_boundary {
@@ -574,6 +579,16 @@ pub(crate) fn classify_markdown_line(content: &str) -> (&'static str, String, Va
   if let Some(level) = heading_prefix_level(content) {
     let text = strip_atx_closing(content[level..].trim_start()).to_string();
     return ("heading", text, json!({ "level": level }));
+  }
+  // An EMPTY to-do exports as `- [ ] ` and the trailing space is trimmed off
+  // the line before it gets here, so the bare marker must count too — it used
+  // to fall through to a bullet whose text was `[ ]`, losing the kind and the
+  // checked state.
+  if content == "- [ ]" {
+    return ("todo", String::new(), json!({ "checked": false }));
+  }
+  if content == "- [x]" || content == "- [X]" {
+    return ("todo", String::new(), json!({ "checked": true }));
   }
   if let Some(rest) = content.strip_prefix("- [ ] ") {
     return ("todo", rest.to_string(), json!({ "checked": false }));

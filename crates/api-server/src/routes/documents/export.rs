@@ -21,7 +21,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
-use mica_interchange::{ZipEntry, build_zip};
+use axum::body::Bytes;
+use mica_interchange::{ZipEntry, ZipStreamWriter, build_zip};
 use super::*;
 
 /// Whether this read should have the page's title welded onto the front.
@@ -92,7 +93,7 @@ pub async fn export_document_zip(
     .ok_or(ApiError::NotFound)?;
 
   // The page's name names the FILE, and since 2026-08-27 also leads the TEXT
-  // (`docs/page-title-plan.md`). Hardcoding `document.md` had silently thrown
+  // (`docs/features/page-title-plan.md`). Hardcoding `document.md` had silently thrown
   // the name away: you got a zip of "document.md" whichever page you exported,
   // and an import could only ever call it "document".
   let view_name = fetch_document_view(&state.db, workspace_id, document_id)
@@ -175,7 +176,7 @@ async fn collect_assets(
       continue;
     };
     let bytes = match client
-      .get(storage.download_url(&record.object_key))
+      .get(storage.presign_get_server(&record.object_key))
       .send()
       .await
     {
@@ -227,8 +228,12 @@ pub async fn export_workspace_zip(
 ) -> ApiResult<Response> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
-  let entries = build_tree_zip(&state, workspace_id, None).await?;
-  Ok(zip_response(build_zip(&entries), "workspace.zip"))
+  let permit = tree_export_permit()?;
+  Ok(streamed_zip("workspace.zip", move |mut sink| async move {
+    let _permit = permit;
+    stream_tree(&state, &mut sink, workspace_id, None, "").await?;
+    Ok(sink)
+  }))
 }
 
 /// v1 is the page-at-a-time protocol (including stable, file-id asset names).
@@ -451,7 +456,6 @@ pub async fn export_page_zip(
     &state,
     workspace_id,
     &payloads,
-    true,
     Some(&files),
     &skip_assets,
   )
@@ -566,39 +570,36 @@ pub async fn export_all_workspaces_zip(
   .fetch_all(&state.db)
   .await?;
 
-  let mut entries: Vec<ZipEntry> = Vec::new();
-  let mut manifest_ws: Vec<serde_json::Value> = Vec::new();
-  let mut used_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
-  for (ws_id, ws_name) in &workspaces {
-    // Unique subdir per workspace (two "test" workspaces must not collide).
-    let base = zip_safe_name(ws_name, "workspace");
-    let mut dir = base.clone();
-    let mut n = 2;
-    // Dedup case-insensitively so "Test" and "test" don't both unzip into the
-    // same folder on a case-insensitive filesystem (Windows / default macOS).
-    while !used_dirs.insert(dir.to_lowercase()) {
-      dir = format!("{base} ({n})");
-      n += 1;
+  let permit = tree_export_permit()?;
+  Ok(streamed_zip("mica-workspaces.zip", move |mut sink| async move {
+    let _permit = permit;
+    let mut manifest_ws: Vec<serde_json::Value> = Vec::new();
+    let mut used_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (ws_id, ws_name) in &workspaces {
+      // Unique subdir per workspace (two "test" workspaces must not collide).
+      let base = zip_safe_name(ws_name, "workspace");
+      let mut dir = base.clone();
+      let mut n = 2;
+      // Dedup case-insensitively so "Test" and "test" don't both unzip into the
+      // same folder on a case-insensitive filesystem (Windows / default macOS).
+      while !used_dirs.insert(dir.to_lowercase()) {
+        dir = format!("{base} ({n})");
+        n += 1;
+      }
+      stream_tree(&state, &mut sink, *ws_id, None, &format!("{dir}/")).await?;
+      manifest_ws.push(serde_json::json!({ "name": ws_name, "dir": dir }));
     }
-    for e in build_tree_zip(&state, *ws_id, None).await? {
-      entries.push(ZipEntry {
-        name: format!("{dir}/{}", e.name),
-        data: e.data,
-      });
-    }
-    manifest_ws.push(serde_json::json!({ "name": ws_name, "dir": dir }));
-  }
-  let manifest = serde_json::json!({
-    "version": 1,
-    "generator": "mica",
-    "kind": "workspaces",
-    "workspaces": manifest_ws,
-  });
-  entries.push(ZipEntry {
-    name: "workspaces.json".to_string(),
-    data: serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
-  });
-  Ok(zip_response(build_zip(&entries), "mica-workspaces.zip"))
+    let manifest = serde_json::json!({
+      "version": 1,
+      "generator": "mica",
+      "kind": "workspaces",
+      "workspaces": manifest_ws,
+    });
+    sink
+      .add("workspaces.json", serde_json::to_vec_pretty(&manifest).unwrap_or_default())
+      .await?;
+    Ok(sink)
+  }))
 }
 
 /// `GET /api/workspaces/{workspace_id}/views/{view_id}/export.zip`
@@ -627,8 +628,12 @@ pub async fn export_folder_zip(
     ));
   }
   let filename = format!("{}.zip", zip_safe_name(&folder.name, "folder"));
-  let entries = build_tree_zip(&state, workspace_id, Some(view_id)).await?;
-  Ok(zip_response(build_zip(&entries), &filename))
+  let permit = tree_export_permit()?;
+  Ok(streamed_zip(&filename, move |mut sink| async move {
+    let _permit = permit;
+    stream_tree(&state, &mut sink, workspace_id, Some(view_id), "").await?;
+    Ok(sink)
+  }))
 }
 
 /// A filename-safe rendition of a user-authored name, for the download's
@@ -652,50 +657,263 @@ fn zip_safe_name(name: &str, fallback: &str) -> String {
   }
 }
 
-/// Build the archive entries for a subtree: [root] `None` = the whole
-/// workspace, `Some(view_id)` = that folder's children. Paths are relative to
-/// the root, image assets are de-duplicated into a shared `assets/`, and a
-/// `manifest.json` records the tree for round-tripping back through import.
-async fn build_tree_zip(
+/// How many whole-tree exports may run at once, server-wide.
+///
+/// Each one now holds a single page and a single image at a time (see
+/// [stream_tree]) rather than the whole subtree, so this no longer guards
+/// memory so much as decode/download load. Raised from 2 because a streamed
+/// export lives as long as its download: a slow client holds its slot for the
+/// whole transfer. Excess callers get a 503 to retry.
+static TREE_EXPORTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+fn tree_export_permit() -> ApiResult<tokio::sync::SemaphorePermit<'static>> {
+  TREE_EXPORTS.try_acquire().map_err(|_| {
+    ApiError::Unavailable("another large export is running; try again in a moment".to_string())
+  })
+}
+
+/// A ZIP sent while it is built (D3): entries go to the client as they are
+/// made, and only the central directory's per-entry metadata stays behind.
+pub(super) struct ZipSink {
+  writer: ZipStreamWriter,
+  tx: tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>,
+}
+
+impl ZipSink {
+  pub(super) async fn add(&mut self, name: &str, data: Vec<u8>) -> ApiResult<()> {
+    let header = self.writer.local_header(name, &data);
+    self.send(header).await?;
+    self.send(data).await
+  }
+
+  async fn send(&self, chunk: Vec<u8>) -> ApiResult<()> {
+    if chunk.is_empty() {
+      return Ok(());
+    }
+    // A closed channel means the client went away: stop building.
+    self
+      .tx
+      .send(Ok(Bytes::from(chunk)))
+      .await
+      .map_err(|_| ApiError::Internal("export download was abandoned".to_string()))
+  }
+
+  async fn finish(self) -> ApiResult<()> {
+    let tail = self.writer.finish();
+    let tx = self.tx;
+    tx.send(Ok(Bytes::from(tail)))
+      .await
+      .map_err(|_| ApiError::Internal("export download was abandoned".to_string()))
+  }
+}
+
+/// Answer with a ZIP that `build` writes into a [ZipSink] on its own task.
+///
+/// The channel is small on purpose: it is the backpressure that keeps a slow
+/// download from buffering the archive on the server after all. An error
+/// after the first byte cannot become an HTTP status any more; the body is cut
+/// short instead (no central directory, so no unzipper takes it for whole) and
+/// the cause is logged.
+fn streamed_zip<F, Fut>(filename: &str, build: F) -> Response
+where
+  F: FnOnce(ZipSink) -> Fut + Send + 'static,
+  Fut: std::future::Future<Output = ApiResult<ZipSink>> + Send + 'static,
+{
+  let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+  let failed = tx.clone();
+  tokio::spawn(async move {
+    let sink = ZipSink { writer: ZipStreamWriter::default(), tx };
+    let result = match build(sink).await {
+      Ok(sink) => sink.finish().await,
+      Err(error) => Err(error),
+    };
+    if let Err(error) = result {
+      tracing::warn!(error = %error.public_message(), "streamed export stopped; the download is cut short");
+      let _ = failed.send(Err(std::io::Error::other(error.public_message()))).await;
+    }
+  });
+  let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+    rx.recv().await.map(|item| (item, rx))
+  });
+  (
+    [
+      (header::CONTENT_TYPE, "application/zip".to_string()),
+      (
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{filename}\""),
+      ),
+    ],
+    axum::body::Body::from_stream(stream),
+  )
+    .into_response()
+}
+
+/// One workspace's Markdown tree into `sink` (`root` = `None` for all of it,
+/// `Some(folder)` for that folder's subtree), every path under `prefix`. The
+/// same archive the gathered build produced — [`mica_interchange::TreeExport`]
+/// is that walk, run a page at a time — but it used to hold every page payload
+/// and every image of the subtree in memory, twice while the zip was
+/// assembled. Now: one decoded page and one image at a time.
+///
+/// Asset names come from the first block naming each file over EVERY page of
+/// the workspace in document-id order (as when the payloads were gathered into
+/// one map), which needs a first pass of its own; it keeps only names, not
+/// payloads, so each page is decoded twice — CPU traded for bounded memory on
+/// an occasional operation.
+pub(super) async fn stream_tree(
   state: &AppState,
+  sink: &mut ZipSink,
   workspace_id: Uuid,
   root: Option<Uuid>,
-) -> ApiResult<Vec<ZipEntry>> {
+  prefix: &str,
+) -> ApiResult<()> {
+  use mica_interchange::{ImageAsset, TreeExport};
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
-  // Store-neutral tree for the shared builder (mica_interchange::export_tree) —
-  // the SAME walk the local (SQLite) export feeds, so cloud + local produce
-  // identically-structured archives and export→import stays one round-trip
-  // invariant (see export_tree.rs on the cosmetic asset-name tiebreak).
   let nodes = export_tree_nodes(&views);
+  let root_str = root.map(|r| r.to_string());
+  let mut export = TreeExport::new(&nodes, root_str.as_deref());
 
-  // Only the legacy interactive workspace download gathers every payload.
-  // Scheduled exports use export_page_zip, keeping this map to a single page.
-  let mut payloads: std::collections::HashMap<String, DocumentSnapshotPayload> =
-    std::collections::HashMap::new();
-  for v in &views {
-    if v.object_type != "document" {
+  // Pass 1: which documents have a body, and each file's first-seen name.
+  let mut document_ids: Vec<String> = views
+    .iter()
+    .filter(|v| v.object_type == "document")
+    .map(|v| v.object_id.to_string())
+    .collect();
+  document_ids.sort();
+  document_ids.dedup();
+  let mut has_payload: std::collections::HashSet<String> = std::collections::HashSet::new();
+  let mut file_name: BTreeMap<String, String> = BTreeMap::new();
+  for id in &document_ids {
+    let Ok(uuid) = Uuid::parse_str(id) else { continue };
+    let Some(payload) = store::current_payload(&state.db, uuid).await? else {
+      continue;
+    };
+    has_payload.insert(id.clone());
+    for b in &payload.blocks {
+      if b.kind != "image" {
+        continue;
+      }
+      if let Some(file_id) = b.data.get("file_id").and_then(|x| x.as_str()) {
+        file_name.entry(file_id.to_string()).or_insert_with(|| {
+          b.data.get("name").and_then(|x| x.as_str()).unwrap_or("image").to_string()
+        });
+      }
+    }
+  }
+  let ids: Vec<Uuid> = file_name.keys().filter_map(|id| Uuid::parse_str(id).ok()).collect();
+  let records = if ids.is_empty() {
+    Vec::new()
+  } else {
+    store::fetch_files(&state.db, workspace_id, &ids).await?
+  };
+  let by_id: std::collections::HashMap<String, store::FileRecord> =
+    records.into_iter().map(|r| (r.id.to_string(), r)).collect();
+  let client = reqwest::Client::builder()
+    .connect_timeout(std::time::Duration::from_secs(10))
+    .timeout(std::time::Duration::from_secs(120))
+    .build()
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+  // Pass 2: the archive, in order.
+  let mut wrote_any = false;
+  if let Some(manifest) = export.manifest(|object_id| has_payload.contains(object_id)) {
+    sink.add(&format!("{prefix}{}", manifest.name), manifest.data).await?;
+    wrote_any = true;
+  }
+  // A blob that could not be downloaded stays a link on every page, as when
+  // it was simply missing from the gathered map.
+  let mut unavailable: std::collections::HashSet<String> = std::collections::HashSet::new();
+  for (view_id, object_id) in export.documents() {
+    if !has_payload.contains(object_id) {
       continue;
     }
-    if let Some(p) = store::current_payload(&state.db, v.object_id).await? {
+    let Ok(uuid) = Uuid::parse_str(object_id) else { continue };
+    let Some(payload) = store::current_payload(&state.db, uuid).await? else {
+      continue;
+    };
+    let mut page_images: std::collections::HashMap<String, ImageAsset> =
+      std::collections::HashMap::new();
+    for file_id in TreeExport::image_file_ids(&payload) {
+      let (Some(record), Some(name)) = (by_id.get(&file_id), file_name.get(&file_id)) else {
+        continue;
+      };
+      if unavailable.contains(&file_id) {
+        continue;
+      }
+      let bytes = if export.needs_bytes(&file_id, &record.object_key) {
+        match download_blob(state, &client, &record.object_key).await {
+          Some(bytes) => bytes,
+          None => {
+            unavailable.insert(file_id);
+            continue;
+          }
+        }
+      } else {
+        Vec::new()
+      };
+      page_images.insert(
+        file_id,
+        ImageAsset { name: name.clone(), bytes, dedup_key: record.object_key.clone() },
+      );
+    }
+    for entry in export.page(view_id, &payload, &page_images, &std::collections::HashSet::new()) {
+      sink.add(&format!("{prefix}{}", entry.name), entry.data).await?;
+      wrote_any = true;
+    }
+  }
+  if !wrote_any {
+    let entry = TreeExport::empty_archive_entry();
+    sink.add(&format!("{prefix}{}", entry.name), entry.data).await?;
+  }
+  Ok(())
+}
+
+/// Test seam: [stream_tree] run to completion, the archive collected.
+#[cfg(test)]
+pub(super) async fn stream_tree_bytes(state: &AppState, workspace_id: Uuid, root: Option<Uuid>) -> Vec<u8> {
+  let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
+  let collector = tokio::spawn(async move {
+    let mut out = Vec::new();
+    while let Some(chunk) = rx.recv().await {
+      out.extend_from_slice(&chunk.unwrap());
+    }
+    out
+  });
+  let mut sink = ZipSink { writer: ZipStreamWriter::default(), tx };
+  stream_tree(state, &mut sink, workspace_id, root, "").await.unwrap();
+  sink.finish().await.unwrap();
+  collector.await.unwrap()
+}
+
+/// Test oracle: the archive as it was built before streaming — every payload
+/// gathered into one map, then one in-memory build (no storage, so no images).
+#[cfg(test)]
+pub(super) async fn gathered_tree_bytes(state: &AppState, workspace_id: Uuid, root: Option<Uuid>) -> Vec<u8> {
+  let views = fetch_workspace_views(&state.db, workspace_id).await.unwrap();
+  let nodes = export_tree_nodes(&views);
+  let mut payloads = std::collections::HashMap::new();
+  for v in views.iter().filter(|v| v.object_type == "document") {
+    if let Some(p) = store::current_payload(&state.db, v.object_id).await.unwrap() {
       payloads.insert(v.object_id.to_string(), p);
     }
   }
-  let images = fetch_export_images(
-    state,
-    workspace_id,
-    &payloads,
-    false,
-    None,
-    &std::collections::HashSet::new(),
-  )
-  .await?;
-  let root_str = root.map(|r| r.to_string());
-  Ok(mica_interchange::build_markdown_tree_zip(
+  let root = root.map(|r| r.to_string());
+  build_zip(&mica_interchange::build_markdown_tree_zip(
     &nodes,
-    root_str.as_deref(),
+    root.as_deref(),
     &payloads,
-    &images,
+    &std::collections::HashMap::new(),
   ))
+}
+
+/// One blob's bytes from storage, or `None` (no storage, or any failure).
+async fn download_blob(state: &AppState, client: &reqwest::Client, object_key: &str) -> Option<Vec<u8>> {
+  let storage = state.storage.as_ref()?;
+  let resp = client.get(storage.presign_get_server(object_key)).send().await.ok()?;
+  if !resp.status().is_success() {
+    return None;
+  }
+  resp.bytes().await.ok().map(|b| b.to_vec())
 }
 
 fn export_tree_nodes(views: &[View]) -> Vec<mica_interchange::TreeNode> {
@@ -717,119 +935,59 @@ pub(super) async fn fetch_export_images(
   state: &AppState,
   workspace_id: Uuid,
   payloads: &std::collections::HashMap<String, DocumentSnapshotPayload>,
-  strict: bool,
   file_snapshot: Option<&[store::FileRecord]>,
   skip_assets: &std::collections::HashSet<String>,
 ) -> ApiResult<std::collections::HashMap<String, mica_interchange::ImageAsset>> {
-  // Referenced image blobs: file_id -> (first-seen block name), then fetch the
-  // records and download the bytes. Dedup key = the storage object key, so two
-  // file_ids of the same blob share one `assets/` entry (as the old walk did).
-  let mut file_name: BTreeMap<String, String> = BTreeMap::new();
-  // HashMap iteration must not choose a different cosmetic asset name on each
-  // full export when multiple pages use one file under different names.
-  let mut document_ids: Vec<_> = payloads.keys().collect();
-  document_ids.sort();
-  for document_id in document_ids {
-    let payload = &payloads[document_id];
-    for b in &payload.blocks {
-      if b.kind != "image" {
-        continue;
-      }
-      if let Some(id) = b.data.get("file_id").and_then(|x| x.as_str()) {
-        file_name.entry(id.to_string()).or_insert_with(|| {
-          b.data
-            .get("name")
-            .and_then(|x| x.as_str())
-            .unwrap_or("image")
-            .to_string()
-        });
-      }
-    }
+  // The page-at-a-time export is the only caller since the tree exports
+  // stream (D3), and it is STRICT: a missing record or a failed download fails
+  // the page rather than quietly leaving a link — the CLI's incremental backup
+  // would otherwise record an incomplete page as done. Dedup key = the storage
+  // object key, so two file_ids of one blob share one `assets/` entry.
+  let mut file_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+  for payload in payloads.values() {
+    file_ids.extend(mica_interchange::TreeExport::image_file_ids(payload));
   }
   let mut images: std::collections::HashMap<String, mica_interchange::ImageAsset> =
     std::collections::HashMap::new();
-  if !file_name.is_empty() {
-    let storage = state.storage.clone();
-    if strict && storage.is_none() && file_name.keys().any(|id| !skip_assets.contains(id)) {
-      return Err(ApiError::Unavailable(
-        "file storage is not configured".into(),
-      ));
-    }
-    let ids: Vec<Uuid> = file_name
-      .keys()
-      .filter_map(|id| Uuid::parse_str(id).ok())
-      .collect();
-    let records = match file_snapshot {
-      Some(records) => records
-        .iter()
-        .filter(|r| ids.contains(&r.id))
-        .cloned()
-        .collect(),
-      None => store::fetch_files(&state.db, workspace_id, &ids).await?,
-    };
-    let by_id: std::collections::HashMap<String, &store::FileRecord> =
-      records.iter().map(|r| (r.id.to_string(), r)).collect();
-    let client = reqwest::Client::builder()
-      .connect_timeout(std::time::Duration::from_secs(10))
-      .timeout(std::time::Duration::from_secs(120))
-      .build()
-      .map_err(|e| ApiError::Internal(e.to_string()))?;
-    for (file_id, name) in &file_name {
-      let Some(record) = by_id.get(file_id) else {
-        if strict {
-          return Err(ApiError::Unavailable(format!(
-            "export image {file_id} is missing"
-          )));
-        }
-        continue;
-      };
-      let bytes = if skip_assets.contains(file_id) {
-        Vec::new()
-      } else {
-        let Some(storage) = storage.as_ref() else {
-          continue;
-        };
-        match client
-          .get(storage.download_url(&record.object_key))
-          .send()
-          .await
-        {
-          Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-            Ok(b) => b.to_vec(),
-            Err(e) => {
-              if strict {
-                return Err(ApiError::Unavailable(format!(
-                  "export image {file_id}: {e}"
-                )));
-              }
-              continue;
-            }
-          },
-          _ => {
-            if strict {
-              return Err(ApiError::Unavailable(format!(
-                "failed to download export image {file_id}"
-              )));
-            }
-            continue;
-          }
-        }
-      };
-      images.insert(
-        file_id.clone(),
-        mica_interchange::ImageAsset {
-          name: if strict {
-            record.original_name.clone()
-          } else {
-            name.clone()
-          },
-          bytes,
-          dedup_key: record.object_key.clone(),
-        },
-      );
-    }
+  if file_ids.is_empty() {
+    return Ok(images);
   }
-
+  let storage = state.storage.clone();
+  if storage.is_none() && file_ids.iter().any(|id| !skip_assets.contains(id)) {
+    return Err(ApiError::Unavailable("file storage is not configured".into()));
+  }
+  let ids: Vec<Uuid> = file_ids.iter().filter_map(|id| Uuid::parse_str(id).ok()).collect();
+  let records = match file_snapshot {
+    Some(records) => records.iter().filter(|r| ids.contains(&r.id)).cloned().collect(),
+    None => store::fetch_files(&state.db, workspace_id, &ids).await?,
+  };
+  let by_id: std::collections::HashMap<String, &store::FileRecord> =
+    records.iter().map(|r| (r.id.to_string(), r)).collect();
+  let client = reqwest::Client::builder()
+    .connect_timeout(std::time::Duration::from_secs(10))
+    .timeout(std::time::Duration::from_secs(120))
+    .build()
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+  for file_id in &file_ids {
+    let Some(record) = by_id.get(file_id) else {
+      return Err(ApiError::Unavailable(format!("export image {file_id} is missing")));
+    };
+    let bytes = if skip_assets.contains(file_id) {
+      Vec::new()
+    } else {
+      download_blob(state, &client, &record.object_key)
+        .await
+        .ok_or_else(|| ApiError::Unavailable(format!("failed to download export image {file_id}")))?
+    };
+    images.insert(
+      file_id.clone(),
+      mica_interchange::ImageAsset {
+        name: record.original_name.clone(),
+        bytes,
+        dedup_key: record.object_key.clone(),
+      },
+    );
+  }
   Ok(images)
 }
 
@@ -1061,7 +1219,7 @@ async fn workspace_markdown(
     let level = (base_level + depth).min(6);
     let payload = store::current_payload(db, view.object_id).await?;
     // The DOCUMENT's own title wins over the `views.name` column — the rule every
-    // other outlet uses (`docs/page-title-plan.md` §4.1). P1 converted the
+    // other outlet uses (`docs/features/page-title-plan.md` §4.1). P1 converted the
     // single-page and ZIP exports and missed this one: it was not in the plan's
     // list of outlets, and a v0.13.30 smoke test through MCP
     // (`mica_export_workspace` calls this) is what turned it up.
@@ -1210,7 +1368,7 @@ async fn collect_asset_data_uris(
     let Some(record) = by_id.get(&file_id) else {
       continue;
     };
-    let bytes = match client.get(storage.download_url(&record.object_key)).send().await {
+    let bytes = match client.get(storage.presign_get_server(&record.object_key)).send().await {
       Ok(resp) if resp.status().is_success() => match resp.bytes().await {
         Ok(b) => b.to_vec(),
         Err(_) => continue,
