@@ -4,30 +4,47 @@ name: Runner probe
 # the other workflows assume — so `runs-on:` can be pointed at real machines
 # instead of guessed labels (2026-10-20: the hosted quota ran out and two
 # self-hosted runners were added). Manual only, like everything else here.
+#
+# One job per OS label, which also proves the label routes: a job whose label
+# no runner carries just sits queued.
 on:
   workflow_dispatch:
 
 jobs:
-  probe:
-    # Two copies so that, with both runners idle, each one picks up a job.
-    strategy:
-      fail-fast: false
-      matrix:
-        copy: [1, 2]
-    runs-on: self-hosted
+  linux:
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 10
     steps:
       - name: Who am I
         shell: bash
         run: |
           echo "runner:  $RUNNER_NAME  os=$RUNNER_OS  arch=$RUNNER_ARCH"
-          echo "workdir: $RUNNER_WORKSPACE"
-          uname -a || true
-          cat /etc/os-release 2>/dev/null | head -2 || true
-          for t in git bash docker cargo rustc flutter dart ansible-playbook python3 node gh iscc just psql; do
+          uname -a
+          head -2 /etc/os-release 2>/dev/null || true
+          for t in git docker cargo rustc flutter ansible-playbook python3 gh just psql; do
             if command -v "$t" >/dev/null 2>&1; then printf '%-17s %s\n' "$t" "$(command -v "$t")"; else printf '%-17s MISSING\n' "$t"; fi
           done
-          docker info --format 'docker server {{.ServerVersion}}' 2>&1 | head -1 || true
-          cargo --version 2>/dev/null || true
-          flutter --version 2>/dev/null | head -1 || true
-          df -h . | tail -1 || true
+          # Each probe bounded: a daemon that is down makes `docker info` block.
+          timeout 20 docker info --format 'docker server {{.ServerVersion}}' 2>&1 | head -1 || echo "docker: no answer in 20s"
+          timeout 20 cargo --version 2>&1 || true
+          timeout 120 flutter --version 2>&1 | head -1 || echo "flutter: no answer in 120s"
+          df -h "$RUNNER_WORKSPACE" | tail -1
+
+  windows:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 10
+    steps:
+      - name: Who am I
+        # pwsh, not bash: whether bash exists here is one of the questions.
+        shell: powershell
+        run: |
+          "runner:  $env:RUNNER_NAME  os=$env:RUNNER_OS  arch=$env:RUNNER_ARCH"
+          (Get-CimInstance Win32_OperatingSystem).Caption
+          foreach ($t in 'git','bash','pwsh','docker','cargo','rustc','flutter','python','gh','iscc','just') {
+            $c = Get-Command $t -ErrorAction SilentlyContinue
+            if ($c) { '{0,-10} {1}' -f $t, $c.Source } else { '{0,-10} MISSING' -f $t }
+          }
+          foreach ($p in 'C:\Program Files\Git\bin\bash.exe','C:\Program Files (x86)\Inno Setup 6\ISCC.exe','C:\flutter\bin\flutter.bat') {
+            '{0,-55} {1}' -f $p, (Test-Path $p)
+          }
+          Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} | Format-Table -AutoSize | Out-String
