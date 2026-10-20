@@ -1,0 +1,85 @@
+name: Prod diagnostics
+
+# Read-only look at the production node, for when the person diagnosing it
+# cannot SSH there themselves (the cloud session that runs releases has HTTPS
+# egress only). The self-hosted Linux runner SSHes in with the deploy key — the
+# same path Deploy uses — and runs a FIXED set of read-only commands.
+#
+# Fixed on purpose: no free-form command input. A "run this command" box would
+# be a root shell on production for anyone who can dispatch a workflow.
+#
+# THIS REPO IS PUBLIC, and so are these logs. Print resource figures, container
+# names/states, timings and counts — never env, config contents, tokens,
+# hostnames of other services, or user data.
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 10
+    steps:
+      # Same isolation as deploy.yml: nothing in the runner user's ~/.ssh.
+      - name: Set up the deploy key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -o pipefail
+          d="$RUNNER_TEMP/deploy-ssh"
+          install -m 700 -d "$d"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$d/id_ed25519"
+          chmod 600 "$d/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$d/known_hosts"
+          printf 'Host *\n  IdentityFile %s/id_ed25519\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/known_hosts\n  BatchMode yes\n  ConnectTimeout 15\n' \
+            "$d" "$d" > "$d/config"
+
+      - name: Node
+        run: |
+          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@mica.cloudcele.com 'bash -s' <<'EOS'
+          echo "--- host"; uptime; nproc | sed 's/^/cpus: /'
+          echo "--- memory (MiB)"; free -m
+          echo "--- swap devices"; swapon --show 2>/dev/null || echo "(none)"
+          echo "--- swap activity, 5 x 1s (si/so = pages in/out per second)"; vmstat 1 5
+          echo "--- disk"; df -h / /data 2>/dev/null | uniq
+          echo "--- containers"; docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+          echo "--- container usage"; docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}'
+          EOS
+
+      - name: Mica api
+        run: |
+          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@mica.cloudcele.com 'bash -s' <<'EOS'
+          echo "--- version"; docker exec mica-api-1 curl -fsS http://127.0.0.1:8080/api/health
+          echo; echo "--- api started"; docker inspect -f '{{.State.StartedAt}} restarts={{.RestartCount}}' mica-api-1
+          echo "--- startup lines since start"
+          docker logs mica-api-1 2>&1 | grep -E 'body-text search index warmed|derived-column backfill|HTTP server listening' | tail -5
+          # `slow search` carries phase timings and counts only, never the query.
+          echo "--- slow searches since start (cumulative ms per phase)"
+          docker logs mica-api-1 2>&1 | grep 'slow search' | sed -E 's/^.*(refresh_ms.*)$/\1/' | tail -15
+          echo "--- log levels since start (counts)"
+          docker logs mica-api-1 2>&1 | grep -oE ' (ERROR|WARN) ' | sort | uniq -c
+          echo "--- migrations"
+          docker exec mica-postgres-1 psql -U mica -d mica -Atc "select max(version), count(*), bool_and(success) from _sqlx_migrations"
+          echo "--- documents indexed by search"
+          docker exec mica-postgres-1 psql -U mica -d mica -Atc "select count(*) || ' docs, ' || pg_size_pretty(sum(octet_length(content_text))::bigint) || ' of body text' from document_yrs_base"
+          EOS
+
+      # For deciding how a session without SSH could reach this node. Mode and
+      # rule counts only — the tunnel token and hostnames stay off a public log.
+      - name: Tunnels present on the node
+        run: |
+          ssh -F "$RUNNER_TEMP/deploy-ssh/config" root@mica.cloudcele.com 'bash -s' <<'EOS'
+          for c in $(docker ps --format '{{.Names}}' | grep -iE 'cloudflared|netbird'); do
+            echo "--- $c"
+            docker inspect -f 'image={{.Config.Image}} network={{.HostConfig.NetworkMode}} restart={{.HostConfig.RestartPolicy.Name}}' "$c"
+            args=$(docker inspect -f '{{join .Config.Cmd " "}} {{join .Config.Entrypoint " "}}' "$c")
+            envs=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" | cut -d= -f1 | tr '\n' ' ')
+            case "$args $envs" in *TUNNEL_TOKEN*|*--token*) echo "mode: token (ingress managed in the Cloudflare dashboard)";; esac
+            case "$args" in *--config*|*config.y*) echo "mode: local config file";; esac
+            echo "env var names: $envs"
+          done
+          EOS
+
+      - name: Remove the deploy key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"
