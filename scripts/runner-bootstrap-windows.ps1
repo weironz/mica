@@ -20,6 +20,7 @@
     - Git for Windows + bash     (actions/checkout, every `shell: bash` step,
                                   dtolnay/rust-toolchain, Flutter itself)
     - PowerShell 7 (pwsh)        (every `shell: pwsh` step)
+    - jq, unzip, 7zip            (subosito/flutter-action)
     - Inno Setup 6               (the installer; preinstalled so the release job
                                   does not download it each time)
     - VS 2022 Build Tools, C++ desktop workload + Windows SDK
@@ -95,6 +96,13 @@ function Ensure-Choco($name, $present, $extra = @()) {
 Ensure-Choco 'git' { Test-Path "$env:ProgramFiles\Git\bin\bash.exe" } `
   @('--params', '"/GitAndUnixToolsOnPath /NoShellIntegration /NoAutoCrlf"')
 Ensure-Choco 'powershell-core' { Test-Path "$env:ProgramFiles\PowerShell\7\pwsh.exe" }
+# What subosito/flutter-action shells out to (the hosted image has all three):
+# jq reads Flutter's release manifest, unzip / 7z unpack the SDK archive. The
+# first real release run on this machine died on `jq not found`.
+Ensure-Choco 'jq' { Get-Command jq -ErrorAction SilentlyContinue }
+Ensure-Choco 'unzip' { Get-Command unzip -ErrorAction SilentlyContinue }
+Ensure-Choco '7zip' { Test-Path "$env:ProgramFiles\7-Zip\7z.exe" }
+
 Ensure-Choco 'innosetup' { Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
 
 # The MSVC toolchain. `--wait` keeps choco from returning while the VS
@@ -160,7 +168,7 @@ if ((Get-ItemProperty -Path $dev -Name AllowDevelopmentWithoutDevLicense -ErrorA
 # --- Report -----------------------------------------------------------------
 Refresh-Path
 Say "result:"
-foreach ($t in 'git', 'bash', 'pwsh', 'choco', 'iscc', 'rustup', 'cargo') {
+foreach ($t in 'git', 'bash', 'pwsh', 'choco', 'iscc', 'rustup', 'cargo', 'jq', 'unzip', '7z') {
   $c = Get-Command $t -ErrorAction SilentlyContinue
   if (-not $c -and $t -eq 'iscc') { $c = Get-Item "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" -ErrorAction SilentlyContinue }
   '    {0,-6} {1}' -f $t, $(if ($c) { if ($c.Source) { $c.Source } else { $c.FullName } } else { 'MISSING' })
