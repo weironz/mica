@@ -178,4 +178,30 @@ for doc in README.md docs/ops/deploy.md; do
 done
 echo "==> quickstart docs pinned to $version"
 
+# ── A migration that has shipped is frozen, comments included ────────────────
+# sqlx records a checksum of every applied migration's WHOLE file and refuses to
+# start when one no longer matches ("migration 9 was previously applied but has
+# been modified"). Comments count. Every DB here and in CI is migrated from the
+# current files, so nothing but a node that applied the OLD file can notice —
+# i.e. prod, at deploy time.
+#
+# Found 2026-10-20: the docs reorganisation rewrote `docs/x.md` paths inside the
+# comments of 0009/0014/0025, the whole gate passed, and the 0.13.57 api
+# crash-looped on the node until the playbook rolled it back.
+#
+# Compared against the FIRST tag that shipped each file: that is the content
+# every node which ran that version applied. A file no tag contains yet is still
+# free to change.
+git tag --list 'v*' | grep -q . \
+  || fail "no v* tags in this clone, so shipped migrations cannot be told apart from new ones — this gate must not pass by failing to look. Fetch the tags."
+for f in migrations/*.sql; do
+  added=$(git log --diff-filter=A --format=%H -1 -- "$f")
+  [ -n "$added" ] || continue
+  first=$(git tag --contains "$added" --list 'v*' --sort=v:refname | head -1)
+  [ -n "$first" ] || continue
+  git diff --quiet "$first" -- "$f" \
+    || fail "$f differs from what $first shipped. A node that ran $first has its checksum recorded and the api will refuse to start. Restore it (git checkout $first -- $f) and put the change in a NEW migration."
+done
+echo "==> shipped migrations unchanged"
+
 printf '\n  release-check passed for %s\n' "$version"

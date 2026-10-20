@@ -7,7 +7,7 @@
 -- because the mutation surface is wide (create/rename/move/reorder/trash/
 -- restore/purge/batch-*/transfer/import — a dozen sites and counting) and one
 -- forgotten site is a silently stale tree. The docs call this out as the
--- pattern to avoid (`docs/dev/lessons.md` #2: an invariant enforced in N places is
+-- pattern to avoid (`docs/lessons.md` #2: an invariant enforced in N places is
 -- enforced in N-1 of them). Every writer goes through this table, including
 -- whatever route gets added next year.
 --
