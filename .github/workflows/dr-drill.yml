@@ -39,7 +39,8 @@ concurrency:
 
 jobs:
   drill:
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
 
     # JOB level, not workflow level. `secrets` and `inputs` are documented as
     # available in job-level `env`; at workflow level the answer is version- and

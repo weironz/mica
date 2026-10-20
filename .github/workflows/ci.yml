@@ -47,7 +47,8 @@ jobs:
   # 与 HEAD 比较，否则 main 直推时增量门禁恒为空。
   structure:
     name: Structure (file-size gate)
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -62,7 +63,8 @@ jobs:
 
   rust:
     name: Rust (build + lint + tests)
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
 
     # sync_pg.rs asserts against real SQL (a conditional UPDATE IS the
     # concurrency guard); a mock would test nothing. Cheap here — one container.
@@ -148,7 +150,8 @@ jobs:
     # client registered ZERO tools while we believed it worked. A conforming
     # client is the only thing that reads what we actually declare.
     name: MCP (official inspector against mica-cli mcp)
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -196,7 +199,8 @@ jobs:
 
   flutter:
     name: Flutter (analyze + Dart unit tests)
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
     defaults:
       run:
         working-directory: clients/mica_flutter
@@ -250,7 +254,8 @@ jobs:
   # api, and a browser harness failing must not be reported as "analyze failed".
   web-e2e:
     name: Web e2e (browser against a real stack)
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
 
     # Same block as the `rust` job above, for the same reason: the assertions are
     # about the real server folding real CRDT updates into real Postgres.
@@ -532,7 +537,8 @@ jobs:
   # exactly this and was therefore rarely run. A check nobody runs catches nothing.
   container:
     name: Container (api image + stack boots)
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v5
 

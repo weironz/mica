@@ -39,7 +39,8 @@ jobs:
   # load-bearing here too — it is the same check that catches a bare `git tag`
   # without `just release`.
   version:
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
