@@ -43,7 +43,8 @@ concurrency:
 jobs:
   integration:
     name: Flutter integration_test (Windows, offline set)
-    runs-on: windows-latest
+    # runs-on: windows-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Windows]
     defaults:
       run:
         working-directory: clients/mica_flutter
@@ -123,7 +124,8 @@ jobs:
   # forms. Download its official Windows asset and verify its SHA256 before use.
   cloud:
     name: Flutter integration_test (Windows, live server)
-    runs-on: windows-latest
+    # runs-on: windows-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Windows]
     steps:
       - uses: actions/checkout@v5
 

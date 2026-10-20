@@ -23,7 +23,8 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
+    runs-on: [self-hosted, Linux]
 
     # Kept for the deployment history / audit trail on the repo, NOT as a gate:
     # this environment deliberately carries no required reviewer.
