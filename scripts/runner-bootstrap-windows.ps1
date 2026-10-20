@@ -24,6 +24,8 @@
                                   does not download it each time)
     - VS 2022 Build Tools, C++ desktop workload + Windows SDK
                                  (Rust's MSVC target and `flutter build windows`)
+    - Long paths (registry + git core.longpaths)
+                                 (checkout of this repo exceeds 260 chars)
     - Developer Mode             (Flutter needs symlinks for plugin builds)
   Flutter and Rust themselves are NOT installed: the workflows fetch the pinned
   versions (.fvmrc / rust-toolchain.toml) on their own.
@@ -96,6 +98,18 @@ Ensure-Choco 'visualstudio2022buildtools' $hasVc @(
   '"--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --wait --locale en-US"'
 )
 if (-not (& $hasVc)) { throw "VS Build Tools installed, but the C++ toolset is still missing" }
+
+# --- Long paths ----------------------------------------------------------------
+# The hosted image has them on; without them the first checkout of this repo on
+# a bare runner died extracting the archive (a path past 260 chars).
+$fs = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+if ((Get-ItemProperty -Path $fs -Name LongPathsEnabled -ErrorAction SilentlyContinue).LongPathsEnabled -eq 1) {
+  Say "long paths: on"
+} else {
+  Say "long paths: enabling"
+  Set-ItemProperty -Path $fs -Name LongPathsEnabled -Value 1 -Type DWord
+}
+& git config --system core.longpaths true
 
 # --- Developer Mode (symlinks for Flutter plugin builds) --------------------
 $dev = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
