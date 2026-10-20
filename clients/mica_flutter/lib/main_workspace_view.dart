@@ -405,13 +405,7 @@ class WorkspaceView extends StatefulWidget {
   final Future<List<ImportHistoryEntry>> Function()? onLoadImportHistory;
 
   /// Fetch the provider's model list. Null in 本地模式, like the settings pair.
-  final Future<Map<String, dynamic>> Function({
-    String? provider,
-    String? providerId,
-    String? baseUrl,
-    String? apiKey,
-  })?
-  onListAiModels;
+  final ListAiModels? onListAiModels;
   final Future<Map<String, dynamic>> Function({
     required String providerId,
     String? provider,

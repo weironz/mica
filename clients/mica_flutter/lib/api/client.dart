@@ -104,6 +104,16 @@ void Function(String method, String path, Duration headers)? apiRequestObserver;
 /// Times every request without any call site knowing. Wrapping the Client
 /// rather than the 14 call sites means uploads, downloads and anything added
 /// later are covered by construction.
+/// The settings dialog's "list this provider's models" call: the shell's
+/// implementation over [ApiClient.listAiModels], threaded through the workspace
+/// view into the dialog (null in 本地模式). One shape, declared once.
+typedef ListAiModels = Future<Map<String, dynamic>> Function({
+  String? provider,
+  String? providerId,
+  String? baseUrl,
+  String? apiKey,
+});
+
 class _TimedClient extends http.BaseClient {
   _TimedClient(this._inner);
 

@@ -424,4 +424,29 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  // ← / → step by grapheme: one UTF-16 step landed between the halves of an
+  // emoji's surrogate pair, and typing there wrote a lone surrogate (U+FFFD
+  // once encoded for yrs).
+  testWidgets('arrow keys step over an emoji as one character', (tester) async {
+    await pumpEditor(tester, [paragraph('a', 'a\u{1F600}b')]);
+    await tester.tapAt(const Offset(50, 14));
+    await tester.pump();
+    int caret() =>
+        tester.widget<DocumentSurface>(find.byType(DocumentSurface)).selection!.focus.offset;
+    for (var i = 0; i < 6; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    }
+    await tester.pump();
+    expect(caret(), 0);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(caret(), 1);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(caret(), 3, reason: 'one step crosses both UTF-16 units of the emoji');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(caret(), 1, reason: 'and back again, never stopping inside it');
+  });
 }
