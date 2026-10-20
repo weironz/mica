@@ -328,17 +328,23 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
             // whole point of the NULL sentinel, and skipping it here would leave
             // the row NULL and re-decoded forever. `content_text` keeps its own
             // rule: leave a genuinely-empty body as ''.
+            //
+            // `AND state = $5`: this runs alongside live traffic, so an edit
+            // can land between the read above and this write. That edit already
+            // wrote columns derived from the NEWER state; overwriting them with
+            // ours would leave search/backlinks stale until the next edit.
             sqlx::query(
                 "UPDATE document_yrs_base
                  SET content_text = CASE WHEN $2 = '' THEN content_text ELSE $2 END,
                      link_targets = $3,
                      file_ids = $4
-                 WHERE document_id = $1",
+                 WHERE document_id = $1 AND state = $5",
             )
             .bind(document_id)
             .bind(&text)
             .bind(&targets)
             .bind(&files)
+            .bind(state)
             .execute(&mut *tx)
             .await?;
             filled += 1;
