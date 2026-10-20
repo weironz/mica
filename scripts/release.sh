@@ -49,8 +49,19 @@ echo "==> 2/4  gate (this is the part that used to be skippable)"
 bash scripts/release-check.sh
 
 echo "==> 3/4  commit"
-git add -A
-git commit -q -m "chore(release): $version"
+# The bump's files BY NAME, not `git add -A`. The tree was clean at the start,
+# but the gate takes ~15 minutes and the tree is not frozen while it runs:
+# 2026-10-20, an uncommitted ansible/deploy.yml edit that was still waiting on
+# the owner's decision was written during the 0.13.59 gate, `-A` swept it into
+# "chore(release): 0.13.59", and it reached main unreviewed. Anything else that
+# changed meanwhile now stays in the working tree, visible, for its own commit.
+bump_files=(Cargo.toml Cargo.lock clients/mica_flutter/pubspec.yaml clients/mica_flutter/lib/main.dart)
+git add -- "${bump_files[@]}"
+git commit -q -m "chore(release): $version" -- "${bump_files[@]}"
+if ! { git diff --quiet && git diff --cached --quiet; }; then
+  echo "  NOTE: other files changed while the gate ran; they were left out of this commit:"
+  git status --short
+fi
 
 echo "==> 4/4  tag"
 git tag "$tag"

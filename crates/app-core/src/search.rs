@@ -74,25 +74,41 @@ use mica_infra::ApiResult;
 /// never again.
 const REFRESH_LAP_SECONDS: f64 = 5.0;
 
-/// One indexed body.
+/// One indexed body: ONE copy of the text, as stored.
+///
+/// It briefly held a second, ASCII-lowercased copy beside this one (0.13.57–59)
+/// so the scan could stay a plain `contains`. On production's 15k documents that
+/// doubled the index for every body with a capital letter, the node went into
+/// swap, and the in-memory scan went from milliseconds to 4–50 SECONDS
+/// (`slow search scan_ms`, 2026-10-20). Case-insensitivity is paid at match
+/// time instead, and only where it can matter — see [`Body::contains`].
 struct Body {
-  /// As stored — what a snippet quotes.
+  /// As stored — what a snippet quotes and what the scan reads.
   text: String,
-  /// ASCII-lowercased copy, only when it differs from `text` (CJK and
-  /// lowercase prose need none, so the common case costs no second copy).
-  /// ASCII folding matches what `ILIKE` under the C locale folds, so the scan
-  /// agrees with the `v.name ILIKE` half still done in SQL.
-  folded: Option<String>,
+  /// Whether `text` has any ASCII capital. Without one, `text` already IS its
+  /// own ASCII fold, so a plain `contains` is exact.
+  has_upper: bool,
 }
 
 impl Body {
   fn new(text: String) -> Self {
-    let folded = text.bytes().any(|b| b.is_ascii_uppercase()).then(|| text.to_ascii_lowercase());
-    Self { text, folded }
+    let has_upper = text.bytes().any(|b| b.is_ascii_uppercase());
+    Self { text, has_upper }
   }
 
-  fn folded(&self) -> &str {
-    self.folded.as_deref().unwrap_or(&self.text)
+  /// Whether the body contains `folded` (an ASCII-lowercased needle), ASCII-
+  /// case-insensitively — what `ILIKE` under the C locale folds, so the scan
+  /// agrees with the `v.name ILIKE` half still done in SQL.
+  ///
+  /// A plain `contains` is exact unless BOTH sides have ASCII letters in play:
+  /// folding only rewrites `A`–`Z`, so a needle with no ASCII letter (every
+  /// CJK query) can only match bytes the fold leaves alone.
+  fn contains(&self, folded: &str) -> bool {
+    if !self.has_upper || !folded.bytes().any(|b| b.is_ascii_lowercase()) {
+      return self.text.contains(folded);
+    }
+    let (hay, needle) = (self.text.as_bytes(), folded.as_bytes());
+    hay.len() >= needle.len() && hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
   }
 }
 
@@ -192,7 +208,7 @@ impl BodyIndex {
     inner
       .docs
       .iter()
-      .filter(|(_, body)| body.folded().contains(&folded))
+      .filter(|(_, body)| body.contains(&folded))
       .map(|(id, _)| *id)
       .collect()
   }
@@ -294,5 +310,26 @@ mod tests {
     let snippets = index.snippets(&[a, b, Uuid::new_v4()], "docker").await;
     assert_eq!(snippets.get(&a).map(String::as_str), Some("Deploy with Docker"));
     assert_eq!(snippets.len(), 1, "no occurrence, no snippet");
+  }
+
+  /// The scan keeps ONE copy of each body and folds at match time; it must
+  /// answer exactly what folding the whole body first (the old second copy)
+  /// answered — for CJK, digits, punctuation, mixed case and lengths at the edge.
+  #[test]
+  fn matching_without_a_folded_copy_equals_folding_first() {
+    let bodies = [
+      "Deploy with Docker", "部署 Docker 流程", "docker only lowercase", "ÉCOLE École",
+      "v1.2.3 Release", "ALLCAPS", "", "A", "部署", "x\nY\nz", "İstanbul DOCKER",
+    ];
+    let needles = ["docker", "DOCKER", "部署", "v1.2", "release", "allcaps", "a", "école", "y\nz", "ü", "docker 流程", "istanbul"];
+    for body in bodies {
+      let indexed = Body::new(body.to_string());
+      assert!(indexed.text == body, "one copy, as stored");
+      for needle in needles {
+        let folded = needle.to_ascii_lowercase();
+        let reference = body.to_ascii_lowercase().contains(&folded);
+        assert_eq!(indexed.contains(&folded), reference, "body {body:?} needle {needle:?}");
+      }
+    }
   }
 }

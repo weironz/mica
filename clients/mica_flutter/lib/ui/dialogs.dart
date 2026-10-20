@@ -1127,13 +1127,7 @@ class _SettingsDialog extends StatefulWidget {
   /// Ask the provider what models it has. Null in 本地模式 and on a server too
   /// old to have the route — the model field stays free text either way, which
   /// is the same fallback a failed fetch lands on.
-  final Future<Map<String, dynamic>> Function({
-    String? provider,
-    String? providerId,
-    String? baseUrl,
-    String? apiKey,
-  })?
-  onListAiModels;
+  final ListAiModels? onListAiModels;
 
   /// Writes one provider's config and makes it active; answers with that
   /// provider's stored state. Returns the payload so a switch can populate the

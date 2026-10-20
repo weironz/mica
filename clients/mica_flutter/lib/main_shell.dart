@@ -2694,21 +2694,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// The provider's live model list. Kept next to [_loadAiSettings] because it
   /// takes the same session and the dialog uses them together.
-  Future<Map<String, dynamic>> _listAiModels({
-    String? provider,
-    String? providerId,
-    String? baseUrl,
-    String? apiKey,
-  }) async {
-    final session = _requireSession();
-    return _api.listAiModels(
-      session.accessToken,
-      provider: provider,
-      providerId: providerId,
-      baseUrl: baseUrl,
-      apiKey: apiKey,
-    );
-  }
+  Future<Map<String, dynamic>> _listAiModels({String? provider, String? providerId, String? baseUrl, String? apiKey}) async =>
+      _api.listAiModels(_requireSession().accessToken,
+          provider: provider, providerId: providerId, baseUrl: baseUrl, apiKey: apiKey);
 
   /// Whether the server has a usable AI provider ([_aiReady]). Failure leaves
   /// AI hidden.

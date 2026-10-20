@@ -208,3 +208,16 @@ class PageLinkTarget {
   final String title;
 }
 
+
+// Horizontal caret steps move by GRAPHEME, the unit Backspace/Delete already
+// use. Stepping one UTF-16 unit put the caret between the two halves of a
+// surrogate pair (any emoji): typing or deleting there left a lone surrogate in
+// the text, which becomes U+FFFD once encoded for yrs.
+
+/// The grapheme boundary just before [offset] (requires `offset > 0`).
+int _prevGraphemeOffset(String text, int offset) =>
+    text.substring(0, offset).characters.skipLast(1).string.length;
+
+/// The grapheme boundary just after [offset] (requires `offset < text.length`).
+int _nextGraphemeOffset(String text, int offset) =>
+    offset + text.substring(offset).characters.first.length;
