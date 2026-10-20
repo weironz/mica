@@ -521,6 +521,13 @@ jobs:
           - img: cli
             file: deploy/Dockerfile.cli
     steps:
+      # Registry logins and buildx state go to this job's temp dir, not the
+      # runner user's ~/.docker: on a self-hosted machine login-action would
+      # overwrite their saved credentials and its post-step `docker logout`
+      # would sign them out. (Job-level `env:` cannot see `runner.temp`.)
+      - name: Keep docker credentials out of the runner user's home
+        run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v5
 
       - name: Resolve version
