@@ -119,8 +119,9 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 
 ## 发版(权威文档 `docs/ops/release.md`)
 
-`just release X.Y.Z`(bump → 门禁 → commit → tag)→ 推 tag → CI 产出全部 7 个产物 →
-手动触发 `Deploy` workflow 上线。**手动那几下的完整清单在 `docs/ops/release.md` 顶部**。
+`just release X.Y.Z`(bump → 门禁 → commit → tag)→ 推 tag → 产出全部 7 个产物 →
+手动触发 `Deploy` workflow 上线。**2026-10-20 起所有 workflow 只能手动触发**(Actions 额度用完,
+用户定):推 tag / main / PR 都不自动跑 CI,产物默认走本地链(见下),要托管构建就手动触发 `Release`。**手动那几下的完整清单在 `docs/ops/release.md` 顶部**。
 **彩排已固化在 workflow 里**(2026-08-27):上线那一次触发会**先对真节点跑一遍
 `--check --diff`,过了才真上**。`-f check=true` 现在的意思是「彩排完就停」,
 不再是「用彩排代替上线」。

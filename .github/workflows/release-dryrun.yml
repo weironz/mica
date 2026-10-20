@@ -21,18 +21,10 @@ name: Release dry-run
 # day like that one. Ordinary source changes are already covered — CI builds the
 # same crates, and the release jobs only repackage them.
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/release.yml'
-      - '.github/workflows/release-dryrun.yml'
-      # The toolchain pins. Both can break a release leg while CI stays green.
-      - 'rust-toolchain.toml'
-      - '.fvmrc'
-      # What the images job builds from.
-      - 'deploy/Dockerfile.api'
-      - 'deploy/Dockerfile.cli'
-      - 'deploy/Dockerfile.web'
+  # Manual only (2026-10-20, user's call): the Actions quota ran out, and every
+  # push / PR / tag was spending it automatically. The local gates (`just ci`,
+  # `just release`) are the default path now; run this from the Actions page
+  # when a hosted run is actually wanted.
   workflow_dispatch:
 
 # A second push while one is running supersedes it: the newest tree is the only
