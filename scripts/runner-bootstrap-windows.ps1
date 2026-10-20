@@ -137,9 +137,15 @@ $svc = Get-Service -Name 'actions.runner.*' -ErrorAction SilentlyContinue
 if ($RestartRunner -and $svc) {
   $names = ($svc | ForEach-Object { $_.Name }) -join ','
   Say "restarting runner service(s) in ~60s: $names"
-  $at = (Get-Date).AddSeconds(60).ToString('HH:mm')
-  $cmd = "powershell -NoProfile -Command `"Restart-Service -Name $(($svc | ForEach-Object { "'$($_.Name)'" }) -join ',') -Force`""
-  schtasks /Create /F /RU SYSTEM /SC ONCE /ST $at /TN 'mica-runner-restart' /TR $cmd | Out-Null
+  # Scheduled-task cmdlets, not schtasks.exe: Windows PowerShell 5 mangles the
+  # embedded quotes when passing a /TR command line to a native exe (first run,
+  # 2026-10-20: "Invalid argument/option - '-Name'", and the restart never
+  # happened). The cmdlets take the arguments as data, no command line to split.
+  $quoted = ($svc | ForEach-Object { "'$($_.Name)'" }) -join ','
+  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -Command Restart-Service -Name $quoted -Force"
+  $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(60)
+  Register-ScheduledTask -TaskName 'mica-runner-restart' -Action $action -Trigger $trigger `
+    -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 } elseif ($svc) {
   Say "done. Restart the runner service so its jobs see the new PATH: Restart-Service '$($svc[0].Name)'"
 } else {
