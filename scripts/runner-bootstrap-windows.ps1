@@ -65,7 +65,12 @@ function Refresh-Path {
 }
 
 # --- Chocolatey -------------------------------------------------------------
-if (Get-Command choco -ErrorAction SilentlyContinue) {
+# By path, not just `Get-Command`: a runner service that has not restarted yet
+# still has the old PATH, and the second run re-ran the installer over a
+# perfectly good install.
+$chocoExe = Join-Path $env:ProgramData 'chocolatey\bin\choco.exe'
+if ((Get-Command choco -ErrorAction SilentlyContinue) -or (Test-Path $chocoExe)) {
+  if (-not (Get-Command choco -ErrorAction SilentlyContinue)) { $env:Path += ";$(Split-Path $chocoExe)" }
   Say "chocolatey: present"
 } else {
   Say "chocolatey: installing"
