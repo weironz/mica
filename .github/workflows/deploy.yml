@@ -85,12 +85,27 @@ jobs:
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -o pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
+          # A self-hosted runner is somebody's machine: NEVER write ~/.ssh. On
+          # 2026-10-20 this step wrote the prod key over the runner user's own
+          # ~/.ssh/id_ed25519 (and known_hosts) on the first self-hosted run.
+          # Everything lives in this job's $RUNNER_TEMP instead; `-F` makes ssh,
+          # sftp and scp read only this config, so the user's ~/.ssh/config and
+          # keys are neither read nor touched. A PATH shim covers direct `ssh`
+          # calls; ANSIBLE_SSH_COMMON_ARGS covers ansible's ssh/sftp/scp.
+          d="$RUNNER_TEMP/deploy-ssh"
+          install -m 700 -d "$d" "$d/bin"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$d/id_ed25519"
+          chmod 600 "$d/id_ed25519"
           # Pinned, not ssh-keyscan'd at runtime: scanning now would trust
           # whatever answers, which is not verification.
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$d/known_hosts"
+          printf 'Host *\n  IdentityFile %s/id_ed25519\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/known_hosts\n%b' \
+            "$d" "$d" "${SSH_EXTRA:-}" > "$d/config"
+          real_ssh=$(command -v ssh)
+          printf '#!/bin/sh\nexec %s -F %s/config "$@"\n' "$real_ssh" "$d" > "$d/bin/ssh"
+          chmod 755 "$d/bin/ssh"
+          echo "$d/bin" >> "$GITHUB_PATH"
+          echo "ANSIBLE_SSH_COMMON_ARGS=-F $d/config" >> "$GITHUB_ENV"
 
       # ALWAYS, not just when `check` is on (2026-08-27).
       #
@@ -136,3 +151,10 @@ jobs:
       - name: Note that nothing was deployed
         if: ${{ inputs.check }}
         run: echo "::notice::rehearsal only — prod was not changed"
+
+      # The runner empties $RUNNER_TEMP between jobs, but a cancelled or crashed
+      # job should not leave a root key to production on someone's disk until
+      # the NEXT job happens to start.
+      - name: Remove the deploy key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"

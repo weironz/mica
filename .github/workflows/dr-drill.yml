@@ -99,14 +99,29 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           set -o pipefail
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          echo "TF_VAR_public_key=$(ssh-keygen -y -f ~/.ssh/id_ed25519)" >> "$GITHUB_ENV"
+          # A self-hosted runner is somebody's machine: NEVER write ~/.ssh. On
+          # 2026-10-20 this step wrote the prod key over the runner user's own
+          # ~/.ssh/id_ed25519 (and known_hosts) on the first self-hosted run.
+          # Everything lives in this job's $RUNNER_TEMP instead; `-F` makes ssh,
+          # sftp and scp read only this config, so the user's ~/.ssh/config and
+          # keys are neither read nor touched. A PATH shim covers direct `ssh`
+          # calls; ANSIBLE_SSH_COMMON_ARGS covers ansible's ssh/sftp/scp.
+          d="$RUNNER_TEMP/deploy-ssh"
+          install -m 700 -d "$d" "$d/bin"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$d/id_ed25519"
+          chmod 600 "$d/id_ed25519"
+          echo "TF_VAR_public_key=$(ssh-keygen -y -f "$d/id_ed25519")" >> "$GITHUB_ENV"
           # A machine that did not exist a minute ago has no host key anyone
           # could have pinned. Accepting on first sight is the only option
           # available here; it is not verification and is not pretended to be.
-          printf 'Host *\n  StrictHostKeyChecking accept-new\n' > ~/.ssh/config
+          SSH_EXTRA='  StrictHostKeyChecking accept-new\n'
+          printf 'Host *\n  IdentityFile %s/id_ed25519\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/known_hosts\n%b' \
+            "$d" "$d" "${SSH_EXTRA:-}" > "$d/config"
+          real_ssh=$(command -v ssh)
+          printf '#!/bin/sh\nexec %s -F %s/config "$@"\n' "$real_ssh" "$d" > "$d/bin/ssh"
+          chmod 755 "$d/bin/ssh"
+          echo "$d/bin" >> "$GITHUB_PATH"
+          echo "ANSIBLE_SSH_COMMON_ARGS=-F $d/config" >> "$GITHUB_ENV"
 
       # State lives in OSS (dr/aliyun/versions.tf). On a runner that is not a
       # nicety: local state dies with the job, and the machine it just created
@@ -308,3 +323,10 @@ jobs:
         if: ${{ always() && inputs.keep }}
         run: |
           echo "::warning::machine ${{ steps.infra.outputs.ip }} was KEPT — it bills, and it holds a copy of production's credentials. Destroy it today: cd dr/aliyun && tofu destroy"
+
+      # The runner empties $RUNNER_TEMP between jobs, but a cancelled or crashed
+      # job should not leave a root key to production on someone's disk until
+      # the NEXT job happens to start.
+      - name: Remove the deploy key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"
