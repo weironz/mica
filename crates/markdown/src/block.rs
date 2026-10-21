@@ -1037,10 +1037,26 @@ pub(crate) fn strip_quote_markers(content: &str) -> (usize, &str) {
   (depth, &content[i..])
 }
 
+/// Upper bound on every nesting depth stored in block data — `data.quote`,
+/// `data.li`, `data.indent` — as READ by the renderers and exporters. Mirrors
+/// the Dart editor's `kMaxNestingDepth` (`clients/mica_flutter/lib/editor/
+/// model.dart`); change both together. Non-destructive: the stored value is
+/// untouched, only the depth the engines act on is bound — so both engines
+/// render the same data the same way, and a hostile value can't drive
+/// `render_quote_group`/`render_html_list` recursion (stack overflow) or a
+/// `" ".repeat(depth)` (multi-GB allocation). P1-6 / 10-19 #6a.
+pub(crate) const MAX_NESTING_DEPTH: u64 = 8;
+
+/// A depth stored in `data[key]`, clamped to `MAX_NESTING_DEPTH`. `None` when
+/// the key is absent or not a non-negative integer.
+pub(crate) fn data_depth(block: &Block, key: &str) -> Option<usize> {
+  block.data.get(key).and_then(Value::as_u64).map(|v| v.min(MAX_NESTING_DEPTH) as usize)
+}
+
 /// Quote nesting depth of a block: the `quote` kind is depth ≥ 1, any other
-/// kind inside a quote carries `data.quote`.
+/// kind inside a quote carries `data.quote`. Clamped (`MAX_NESTING_DEPTH`).
 pub(crate) fn quote_depth_of(block: &Block) -> usize {
-  let d = block.data.get("quote").and_then(Value::as_u64).unwrap_or(0) as usize;
+  let d = data_depth(block, "quote").unwrap_or(0);
   if block.kind == "quote" { d.max(1) } else { d }
 }
 

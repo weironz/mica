@@ -15,6 +15,14 @@ library;
 /// indentation (YAML!) nearly invisible.
 const String kMonoFont = 'RobotoMono';
 
+/// Upper bound on every nesting depth read from block data (`data.indent`,
+/// `data.quote`, `data.li`). Mirrors Rust `MAX_NESTING_DEPTH`
+/// (`crates/markdown/src/block.rs`) — change both together: the two engines
+/// must render the same data at the same depth, and an unbounded value from a
+/// non-editor client (REST/MCP) or a line of thousands of `>` must not drive
+/// recursion or a `' ' * depth` string (P1-6).
+const int kMaxNestingDepth = 8;
+
 /// A single block-level node. `kind` matches the backend block `type`
 /// (`paragraph`, `heading`, `bulleted_list`, `numbered_list`, `todo`, `quote`,
 /// `code_block`). `data` mirrors the backend block `data` map (heading level,
@@ -58,12 +66,14 @@ class EditorNode {
           (data['view'] as String?) != 'code');
 
   /// Nesting level for list/todo items (0 = top level), clamped for safety.
-  int get indent => ((data['indent'] as num?)?.toInt() ?? 0).clamp(0, 8);
+  int get indent =>
+      ((data['indent'] as num?)?.toInt() ?? 0).clamp(0, kMaxNestingDepth);
 
   /// Quote nesting depth: the `quote` kind is depth ≥ 1; any other kind
   /// inside a blockquote carries `data.quote` (markdown import).
   int get quoteDepth {
-    final d = ((data['quote'] as num?)?.toInt() ?? 0).clamp(0, 8);
+    final d =
+        ((data['quote'] as num?)?.toInt() ?? 0).clamp(0, kMaxNestingDepth);
     return kind == 'quote' && d < 1 ? 1 : d;
   }
 
@@ -71,7 +81,7 @@ class EditorNode {
   /// block is not nested in an item.
   int? get liLevel {
     final v = data['li'];
-    return v is num ? v.toInt().clamp(0, 8) : null;
+    return v is num ? v.toInt().clamp(0, kMaxNestingDepth) : null;
   }
 
   bool get isListKind =>

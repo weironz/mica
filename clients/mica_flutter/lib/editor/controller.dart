@@ -1437,7 +1437,9 @@ class EditorController extends ChangeNotifier {
       }
       final li = node.data['li'];
       if (li is! int || body.isEmpty) return body;
-      final pad = '    ' * (li + 1);
+      // Clamped like every other depth read (`kMaxNestingDepth`): a `data.li`
+      // written by an API client as 1e9 made this a multi-GB string (P1-6).
+      final pad = '    ' * (li.clamp(0, kMaxNestingDepth) + 1);
       return body.split('\n').map((l) => l.isEmpty ? '' : '$pad$l').join('\n');
     }
 
