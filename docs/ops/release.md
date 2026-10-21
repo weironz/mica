@@ -136,6 +136,9 @@ GitHub 托管 runner 额度用完后，所有 job 改跑在两台自托管 runne
 - **workflow 不得写 runner 用户的家目录**：自托管机器是人的机器。部署密钥 / known_hosts / ssh 配置
   只进 `$RUNNER_TEMP`（`ssh -F` shim + `ANSIBLE_SSH_COMMON_ARGS`），`DOCKER_CONFIG` 也指到
   `$RUNNER_TEMP`。〔切换当天第一次彩排就用生产密钥覆盖了 runner 用户的 `~/.ssh/id_ed25519`。〕
+- **runner 服务的 umask 必须是 `0022`**(systemd `UMask=0022`):`0077` 下 checkout 出的文件只有 owner 可读,
+  进了 nginx 镜像就是全站 403(0.13.60)。`Dockerfile.web` 已显式 `--chmod` 并在构建期自检,但别的镜像没有这层保护。
+  详见 `docs/dev/lessons.md` §15。
 
 ## CI 拿的是 root key —— 这是一次有代价的取舍
 

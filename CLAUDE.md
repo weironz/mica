@@ -114,7 +114,8 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
 - **文档按文件夹分类,索引在 `docs/README.md`**(architecture / features / plans / ops / dev /
   performance / reviews);新文档放进对应文件夹并在索引里补一行,代码评审与修复记录进 `docs/reviews/`。
 - **踩过的坑见 `docs/dev/lessons.md`,和本文件一起读**:双表示、不变量只写在客户端等于没写、测试真空
-  通过、web 通过≠桌面通过、图片 dispose 时序、round-trip 红线。本文件写**规则**,那份写规则的
+  通过、web 通过≠桌面通过、图片 dispose 时序、round-trip 红线、启动关键路径与迁移单向门、
+  "常驻内存"在 swap 主机上不成立、自托管 runner 的隐含前提。本文件写**规则**,那份写规则的
   **来历** —— 规则很容易被当成"大概是这个意思"绕过去。
 
 ## 发版(权威文档 `docs/ops/release.md`)
