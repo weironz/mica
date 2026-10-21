@@ -25,7 +25,9 @@ use uuid::Uuid;
       stream_tree_bytes,
     };
     use super::super::search::{scan_backlinks, search_views, workspace_graph};
-    use super::super::transfer::{ancestor_pairs_of_roots, independent_roots};
+    use super::super::transfer::{
+      ancestor_pairs_of_roots, independent_roots, live_subtree, remove_moved_source,
+    };
     use super::super::trash::{purge_one, purge_views_batch, restore_views_batch, trash_views_batch};
     use mica_app_core::search::BodyIndex;
     use mica_infra::ApiError;
@@ -2177,6 +2179,103 @@ use uuid::Uuid;
         parent, None,
         "the first view must NOT have been left re-parented"
       );
+    }
+
+    /// Seed `folder` (top level) with one live child page; returns (folder, child).
+    async fn seed_folder_with_child(db: &PgPool, ws: Uuid, user: Uuid) -> (Uuid, Uuid) {
+      let folder = seed_view(db, ws, user, "folder").await;
+      let child = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id,workspace_id,parent_view_id,object_id,object_type,name,position,created_by) \
+         VALUES($1,$2,$3,$4,'document'::object_type,'旧子页','0',$5)",
+      )
+      .bind(child)
+      .bind(ws)
+      .bind(folder)
+      .bind(Uuid::new_v4())
+      .bind(user)
+      .execute(db)
+      .await
+      .unwrap();
+      (folder, child)
+    }
+
+    /// C1 (review 2026-10-21): a cross-workspace MOVE enumerates the subtree,
+    /// copies blobs (slow — network), builds the copy, and only then
+    /// soft-deletes the source — by walking the subtree AGAIN. A page a
+    /// collaborator created in that window was in the second walk but not the
+    /// first: soft-deleted at the source, never copied, while the user was
+    /// told "moved". The second walk now has to agree with the first, or the
+    /// whole move (copy included) rolls back with a 409.
+    #[tokio::test]
+    async fn a_page_created_during_a_move_fails_it_instead_of_being_binned() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (folder, child) = seed_folder_with_child(&db, ws, user).await;
+
+      // Phase 1 of the move: what gets copied.
+      let copied: std::collections::HashSet<Uuid> =
+        live_subtree(&db, &[folder], ws).await.unwrap().iter().map(|r| r.id).collect();
+      assert_eq!(copied, [folder, child].into_iter().collect());
+
+      // A collaborator adds a page while the blobs are copying …
+      let (late, _late_doc) = seed_document(&db, ws, user, "移动中新建", serde_json::json!([])).await;
+      sqlx::query("UPDATE views SET parent_view_id = $1 WHERE id = $2")
+        .bind(folder)
+        .bind(late)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      // … then the move's transaction removes the source.
+      let mut tx = db.begin().await.unwrap();
+      let result = remove_moved_source(&mut tx, ws, &[folder], &copied).await;
+      let err = result.expect_err("a subtree that changed since the copy must not be removed");
+      assert!(matches!(err, ApiError::Conflict(_)), "{err:?}");
+      drop(tx); // the handler's `?` drops it: rollback, the copy goes too
+
+      assert!(!is_deleted(&db, late).await, "the uncopied page must stay live");
+      assert!(!is_deleted(&db, folder).await, "nothing of the source was removed");
+      assert!(!is_deleted(&db, child).await);
+    }
+
+    /// The unchanged case still moves: exactly the copied rows go to the bin.
+    #[tokio::test]
+    async fn an_unchanged_subtree_is_removed_after_the_copy() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (folder, child) = seed_folder_with_child(&db, ws, user).await;
+      let copied: std::collections::HashSet<Uuid> =
+        live_subtree(&db, &[folder], ws).await.unwrap().iter().map(|r| r.id).collect();
+
+      let mut tx = db.begin().await.unwrap();
+      remove_moved_source(&mut tx, ws, &[folder], &copied).await.unwrap();
+      tx.commit().await.unwrap();
+
+      assert!(is_deleted(&db, folder).await);
+      assert!(is_deleted(&db, child).await);
+    }
+
+    /// Once the move holds its locks, a page created under the subtree has to
+    /// wait for it — and then finds the folder in the bin and is refused
+    /// (migration 0033), rather than landing live under a source that was just
+    /// moved away.
+    #[tokio::test]
+    async fn a_page_created_after_the_check_waits_for_the_move() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (folder, _child) = seed_folder_with_child(&db, ws, user).await;
+      let copied: std::collections::HashSet<Uuid> =
+        live_subtree(&db, &[folder], ws).await.unwrap().iter().map(|r| r.id).collect();
+
+      let mut tx = db.begin().await.unwrap();
+      remove_moved_source(&mut tx, ws, &[folder], &copied).await.unwrap();
+      let db2 = db.clone();
+      let late = tokio::spawn(async move { insert_child(&db2, ws, user, folder).await });
+      tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+      assert!(!late.is_finished(), "the insert must wait for the move to commit");
+      tx.commit().await.unwrap();
+      assert!(late.await.unwrap().is_err(), "and then be refused: its folder is in the bin");
     }
 
     /// Selecting a folder AND a page inside it must not transfer that page
