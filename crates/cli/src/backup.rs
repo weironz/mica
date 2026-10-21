@@ -1219,6 +1219,25 @@ mod tests {
     std::env::temp_dir().join(format!("mica-backup-test-{}", uuid::Uuid::new_v4()))
   }
 
+  /// Take the lock right after a `drop` released it.
+  ///
+  /// flock belongs to the open file DESCRIPTION, and the process-lifecycle
+  /// tests in this binary fork helpers concurrently: a child forked in the
+  /// instant before the `drop` shares the description until its exec closes it
+  /// (CLOEXEC), so an immediate re-acquire can see WouldBlock. That window
+  /// failed two of these tests intermittently (0.13.64 release gate). A real
+  /// leak never releases, so the deadline still catches one.
+  fn reacquire(path: &Path) -> RunLock {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+      match RunLock::acquire_at(path) {
+        Ok(lock) => return lock,
+        Err(error) => assert!(std::time::Instant::now() < deadline, "never released: {error:#}"),
+      }
+      std::thread::sleep(Duration::from_millis(10));
+    }
+  }
+
   #[test]
   fn a_second_run_is_refused_while_the_first_holds_the_lock() {
     let path = test_path();
@@ -1229,7 +1248,7 @@ mod tests {
     // The inode is retained. A third run must still coordinate with a second
     // run that opened the file while the first held it.
     assert!(path.exists());
-    let next = RunLock::acquire_at(&path).unwrap();
+    let next = reacquire(&path);
     assert!(RunLock::acquire_at(&path).is_err());
     drop(next);
     std::fs::remove_file(path).unwrap();
@@ -1241,7 +1260,7 @@ mod tests {
     std::fs::write(&path, "1").unwrap();
     let lock = RunLock::acquire_at(&path).unwrap();
     drop(lock);
-    assert!(RunLock::acquire_at(&path).is_ok());
+    drop(reacquire(&path));
     std::fs::remove_file(path).unwrap();
   }
 
