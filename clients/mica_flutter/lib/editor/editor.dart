@@ -202,7 +202,6 @@ String? pastedFormulaSource(String line) {
   return m?.group(1)?.trim();
 }
 
-
 class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   late final EditorController _controller;
   late final FocusNode _focus =
@@ -6083,6 +6082,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           onKeyEvent: _onKey,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
+            supportedDevices: _selectionDragDevices,
             onTapDown: _onTapDown,
             onSecondaryTapDown: _onSecondaryTapDown,
             onPanDown: _onPanDown,
