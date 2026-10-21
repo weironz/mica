@@ -94,13 +94,29 @@
 - **不升 rmcp 的 major 版本**:漏洞只在我们没用的 HTTP 服务端传输里。
 - **`ws_min_protocol` 暂不提高到 1**:会断开还没升级的老客户端，需要用户拍板，并配合一次发版公告。
 
-## 需要用户拍板的
+## 用户拍板(2026-10-21)
 
-1. `purge_view` 是否收紧为只能删回收站里的页面(推荐收紧)。
-2. `add_member` 目前不需要对方同意，任何成员都能把工作区加进别人的切换器里;是否改成邀请制。
-3. `legacy_orphans.rs` 的删除时机。
-4. 协作 Undo 短期降级方案的产品表现。
+1. `purge_view` 收紧为只能删回收站里的页面 —— **已做**。
+2. 添加成员改为**邀请制** —— **已做**(见 `docs/features/workspace-invitations.md`)。
+3. `legacy_orphans.rs` **立即删除** —— **已做**。
+4. 协作 Undo 的降级表现交由我决定 —— **已做**:协作时 Ctrl+Z 只撤销自己的改动;协作者在那一步之后改过/加过/删过的块保持当前状态。单人编辑不变。
 
 ## 实施记录
 
-(按阶段追加：日期、提交、验证方式。)
+### 2026-10-21:全部 P1 + 四项拍板
+
+| 项 | 提交(主题) | 验证 |
+| --- | --- | --- |
+| P1-8 purge_view | `fix(trash): 单条永久删除只能删回收站里的页面` | pg 测试：去掉过滤时失败，恢复后通过 |
+| legacy_orphans | `chore(api): 删除一次性的 audit-legacy-orphans 工具与 roxmltree 依赖` | clippy / 编译 |
+| P1-2/3/4 | `fix(editor): 切页签不丢最后的输入;撤销拖动同步到后端;协作时撤销不碰别人的块` | 7 个新测试，修前失败、修后通过;外壳切页签的 flush 仅代码路径保证 |
+| P1-1 + C11 | `fix(mcp): 工具参数 id 改为 Uuid,杜绝路径穿越;改动文档的工具清读缓存` | 线路级测试：修前真的发出 `DELETE /api/workspaces/…`,修后 8 种攻击输入零请求 |
+| P1-5 | `fix(interchange): 自家导出包的文档按 manifest title 命名,剥标题跳过 front matter` | 真导出器闭环;导出→导入→导出逐字节相同 |
+| P1-6 | `fix(markdown)` 深度上限(Rust + Dart 同值 8) | 修前 SIGABRT / 4 GB 输出;修后通过 |
+| P1-7 | `fix(markdown)` 内联嵌套缓存 + 预算 32(Rust + Dart) | 修前每 2 层翻倍;修后 k=60 < 1 ms;CommonMark 641/641、golden 740 不变 |
+| 邀请制 | `feat(api)` / `feat(flutter)` / `docs` 三个提交;迁移 0032 | 5 个 pg 测试 + 8 个 Flutter 测试 |
+
+全量门禁(合并后):clippy 0 警告;Rust 全量 + DB 测试通过(api-server 267);markdown/interchange 219;
+`flutter test` 1846 通过;`flutter analyze` 无新增;结构门禁通过。
+
+顺带发现、未修(已排为独立任务):图片 alt 导出不转义 `[`/`]`;「alt 内含链接」导出成「链接包图片」。

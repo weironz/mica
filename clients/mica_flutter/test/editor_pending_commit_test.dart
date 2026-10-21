@@ -253,4 +253,43 @@ void main() {
     expect(rec.lastTextFor('b1'), 'hi!');
     expect(rec.lastMarksFor('b1'), contains('bold@0-2'));
   });
+  // ── 2026-10-21 review P1-2 ───────────────────────────────────────────────
+  //
+  // The shell routes `onOps` by its ACTIVE state, so anything a controller sends
+  // after its editor is gone lands in whatever page is open NOW. A tab switch
+  // disposes the editor; the shell flushes before switching, and a disposed
+  // controller must stay silent from then on.
+
+  test('a failed commit\'s retry does not fire after dispose', () async {
+    final rec = _Recorder();
+    final c = EditorController(rootBlockId: 'root', onOps: rec.call);
+    c.load([_para('b1', '')]);
+    c.setSelection(const DocSelection.collapsed(DocPosition(0, 0)));
+    c.setFocusedText('A', 1, 1);
+    rec.fail = true;
+    expect(await c.flushPending(), isFalse, reason: 'the commit failed');
+    final sent = rec.batches.length;
+    rec.fail = false;
+
+    c.dispose(); // the tab switched away
+    // Past the first retry delay (debounce × 2).
+    await Future<void>.delayed(const Duration(milliseconds: 1000));
+    expect(
+      rec.batches.length,
+      sent,
+      reason: 'the retry fired after dispose — into the newly active page',
+    );
+  });
+
+  test('a stale flush hook on a disposed controller sends nothing', () async {
+    final rec = _Recorder();
+    final c = EditorController(rootBlockId: 'root', onOps: rec.call);
+    c.load([_para('b1', '')]);
+    c.setSelection(const DocSelection.collapsed(DocPosition(0, 0)));
+    c.setFocusedText('A', 1, 1);
+    c.dispose();
+    await c.flushPending();
+    await settle();
+    expect(rec.batches, isEmpty);
+  });
 }

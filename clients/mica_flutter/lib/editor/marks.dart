@@ -447,13 +447,18 @@ int matchingBracket(String src, int open) {
   // `[<[<[<…` cost a full scan per bracket — quadratic. One scan records, via
   // a stack, the answer for every later `[` it passes; the walk from any
   // position is deterministic, so those answers are exact.
+  // The same scan records each matched `[`'s NESTING (bracket levels opening
+  // inside it) for [bracketNesting] — mirrors Rust `BracketMemo::nesting`.
   if (!identical(src, _bracketMemoSrc)) {
     _bracketMemoSrc = src;
     _bracketMemo.clear();
+    _bracketNest.clear();
   }
   final known = _bracketMemo[open];
   if (known != null) return known;
   final stack = <int>[];
+  // Deepest nesting seen inside each open `[` on [stack], index-aligned.
+  final inner = <int>[];
   var result = -1;
   var j = open;
   while (j < src.length) {
@@ -469,9 +474,13 @@ int matchingBracket(String src, int open) {
     }
     if (c == '[') {
       stack.add(j);
+      inner.add(0);
     } else if (c == ']' && stack.isNotEmpty) {
       final o = stack.removeLast();
+      final depth = inner.removeLast();
       _bracketMemo[o] = j;
+      _bracketNest[o] = depth;
+      if (inner.isNotEmpty && inner.last < depth + 1) inner.last = depth + 1;
       if (o == open) {
         result = j;
         break;
@@ -490,6 +499,26 @@ int matchingBracket(String src, int open) {
 
 String? _bracketMemoSrc;
 final Map<int, int> _bracketMemo = {};
+final Map<int, int> _bracketNest = {};
+
+/// Bracket levels nested inside the `[` at [open] (0 for `[a]`, 1 for
+/// `[[a]]`); 0 when it has no match. Mirrors Rust `BracketMemo::nesting`.
+int bracketNesting(String src, int open) {
+  if (matchingBracket(src, open) < 0) return 0;
+  return _bracketNest[open] ?? 0;
+}
+
+/// Link / image labels nested deeper than this are not parsed as links or
+/// images: their brackets stay literal text (the content inside still parses).
+/// Mirrors Rust `MAX_INLINE_NESTING` (`crates/markdown/src/inline.rs`) —
+/// change both together.
+///
+/// Every recognized label is parsed by a recursive call, so nesting was
+/// recursion depth: `![![![…a](u)](u)](u)` thousands deep overflowed the stack.
+/// The bound is structural — a label is allowed only while fewer than this
+/// many bracket levels open inside it ([bracketNesting]) — so it depends on
+/// the label text alone and the label cache stays a pure memo.
+const int kMaxInlineNesting = 32;
 
 const kDollar = r'$';
 
@@ -1195,19 +1224,13 @@ String? autolinkTarget(String inner) {
 /// inside link text, so when true the surrounding brackets stay literal. Images
 /// are fine (`[![alt](img)](url)`), so only `link` marks count.
 ///
-/// Memoized, with the cache SHARED across the recursive parses of one top-level
-/// parse. Without sharing, a label that DOES contain a link is parsed twice per
-/// nesting level — once for this check, then again by the scan that falls
-/// through the rejected outer brackets — giving T(n) = 2·T(n-1), exponential on
-/// `[[[a](/u)](/u)](/u)`. Pure function + pure cache: output cannot change.
+/// Goes through the label cache ([_parseLabelCached]), shared with [addLink].
 bool _labelHasLinkCached(
   String label,
   Map<String, ({String dest, String? title})> defs,
-  Map<String, bool> cache,
+  _LabelCache cache,
 ) {
-  final hit = cache[label];
-  if (hit != null) return hit;
-  // `allowAutolink: false` is the whole point of this call.
+  // `allowAutolink: false` (inside [_parseLabelCached]) is the whole point.
   //
   // CommonMark forbids a link inside a link, and this guard enforces it — but
   // it used to ask "does the label parse to anything with a link mark", and a
@@ -1217,15 +1240,41 @@ bool _labelHasLinkCached(
   // and paste it in again — was refused and fell through to literal text. The
   // nesting rule is about explicit link CONSTRUCTS, not about text that would
   // have autolinked had it been left alone. Mirrors `label_has_link_cached` in
-  // crates/markdown/src/lib.rs.
-  final answer = _parseInlineMemo(
-    label,
-    defs,
-    cache,
-    allowAutolink: false,
-  ).marks.any((m) => m.type == 'link');
-  cache[label] = answer;
-  return answer;
+  // crates/markdown/src/inline.rs.
+  return _parseLabelCached(label, defs, cache).marks.any((m) => m.type == 'link');
+}
+
+/// Parsed link/image LABELS, keyed by label text and SHARED across the
+/// recursive parses of one top-level parse — by the nested-link check AND by
+/// `addLink`, which both ask the same pure question. Mirrors Rust `LinkCache`.
+///
+/// Without sharing, a label that DOES contain a link is parsed twice per
+/// nesting level (the check, then the scan falling through the rejected outer
+/// brackets): T(n) = 2·T(n-1) on `[[[a](/u)](/u)](/u)`. That was fixed for the
+/// check alone; `addLink` still parsed through a FRESH cache, so links and
+/// images ALTERNATING (`[![[![…a](u)](u)](u)](u)`) re-ran every check below
+/// an image: P(k) = 2·P(k-2) (P1-7).
+typedef _LabelCache = Map<String, ({String text, List<Mark> marks})>;
+
+/// Parse a link's (or image's) LABEL through the shared [_LabelCache].
+///
+/// Autolinks off: the label is about to become the link's TEXT, and text inside
+/// a link never autolinks. With it on, a URL-shaped label got a second link
+/// mark of its own — `[https://a](https://b)` produced TWO overlapping marks
+/// over the same range, one pointing at `a` and one at `b`, and which one wins
+/// becomes a question about mark order that has no right answer.
+/// Pure function + pure cache: output cannot change. Mirrors Rust
+/// `parse_label_cached`.
+({String text, List<Mark> marks}) _parseLabelCached(
+  String label,
+  Map<String, ({String dest, String? title})> defs,
+  _LabelCache cache,
+) {
+  final hit = cache[label];
+  if (hit != null) return hit;
+  final parsed = _parseInlineMemo(label, defs, cache, allowAutolink: false);
+  cache[label] = parsed;
+  return parsed;
 }
 
 /// Parse inline Markdown (`**b**`, `*i*`/`_i_`, `` `c` ``, `~~s~~`,
@@ -1233,28 +1282,15 @@ bool _labelHasLinkCached(
 ({String text, List<Mark> marks}) parseInline(
   String src, {
   Map<String, ({String dest, String? title})> defs = const {},
-}) => _parseInlineMemo(src, defs, <String, bool>{});
-
-/// Parse a link's (or image's) LABEL.
-///
-/// Autolinks off: the label is about to become the link's TEXT, and text inside
-/// a link never autolinks. With it on, a URL-shaped label got a second link
-/// mark of its own — `[https://a](https://b)` produced TWO overlapping marks
-/// over the same range, one pointing at `a` and one at `b`, and which one wins
-/// becomes a question about mark order that has no right answer.
-/// Mirrors `parse_inline_label` in crates/markdown/src/lib.rs.
-({String text, List<Mark> marks}) _parseInlineLabel(
-  String src,
-  Map<String, ({String dest, String? title})> defs,
-) => _parseInlineMemo(src, defs, <String, bool>{}, allowAutolink: false);
+}) => _parseInlineMemo(src, defs, {});
 
 ({String text, List<Mark> marks}) _parseInlineMemo(
   String rawSrc,
   Map<String, ({String dest, String? title})> defs,
-  Map<String, bool> cache, {
+  _LabelCache cache, {
   // Whether GFM extended autolinks (bare `www.`/`http(s)://`/email) are
   // recognized. Off ONLY while parsing a link LABEL — see
-  // [_labelHasLinkCached] and [_parseInlineLabel].
+  // [_labelHasLinkCached] and [_parseLabelCached].
   bool allowAutolink = true,
 }) {
   final src = _canonicalizeBreaks(rawSrc);
@@ -1275,7 +1311,7 @@ bool _labelHasLinkCached(
 
   void addLink(String kind, String label, String href, String? title) {
     final start = out.length;
-    final parsed = _parseInlineLabel(label, defs);
+    final parsed = _parseLabelCached(label, defs, cache);
     out.write(parsed.text);
     for (final m in parsed.marks) {
       marks.add(m.shifted(start));
@@ -1359,9 +1395,11 @@ bool _labelHasLinkCached(
     // Image: ![alt](dest "title") | ![alt][label] | ![alt][] | ![alt] —
     // same bridge as links; the alt keeps its inner marks (HTML flattens
     // them to plain text, markdown re-renders them).
+    // Past `kMaxInlineNesting` the brackets stay literal (see there).
     if (src[i] == '!' && i + 1 < src.length && src[i + 1] == '[') {
       final close = matchingBracket(src, i + 1);
-      if (close > i + 2) {
+      if (close > i + 2 &&
+          bracketNesting(src, i + 1) < kMaxInlineNesting) {
         final label = src.substring(i + 2, close);
         if (close + 1 < src.length && src[close + 1] == '(') {
           final suffix = parseLinkSuffix(src, close + 2);
@@ -1419,7 +1457,7 @@ bool _labelHasLinkCached(
       // between server import and client paste. The reference forms below still
       // require a non-empty label, matching Rust's `!label.is_empty()`.
       // (-1 = no match, so `> i` also rejects that.)
-      if (close > i) {
+      if (close > i && bracketNesting(src, i) < kMaxInlineNesting) {
         final label = src.substring(i + 1, close);
         // CommonMark §6.3: a link's text may not itself contain a link. When
         // the label already holds one, the OUTER brackets stay literal and the

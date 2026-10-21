@@ -77,6 +77,6 @@ pub fn looks_like_notion_export<'a>(md_paths: impl Iterator<Item = &'a str>) -> 
 
 fn base_no_ext(path: &str) -> &str {
   let base = path.rsplit('/').next().unwrap_or(path);
-  base.strip_suffix(".md").or_else(|| base.strip_suffix(".MD")).unwrap_or(base)
+  crate::import::strip_md_ext(base)
 }
 

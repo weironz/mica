@@ -80,58 +80,19 @@ pub async fn restore_view(
   Ok(Json(ViewListResponse { views }))
 }
 
-/// Permanently delete a view subtree AND the `documents` those views back,
-/// returning `(views_deleted, docs_deleted)`.
+/// Permanently remove one page + its subtree AND the documents they back (so no
+/// orphaned content/shares survive "永久删除") — but only from the BIN.
 ///
-/// `views.object_id -> documents.id` is NOT a foreign key (object_id may be a
-/// folder, which has no document), so deleting views alone stranded the document
-/// plus its yrs base / snapshots / versions / shares — content "永久删除" claimed
-/// to erase kept living (a privacy hole, incl. a still-valid public share token)
-/// and leaked disk. Deleting the `documents` row cascades (ON DELETE CASCADE) to
-/// every document_* table: document_yrs_base (the CRDT content), snapshots,
-/// versions, op updates, and document_shares (revokes the public link). Blobs are
-/// content-addressed and may be shared by another page, so they are reclaimed
-/// lazily by blob_gc once their last referencing block is gone — never here.
-///
-/// One atomic statement: `subtree` gathers the view ids + object ids/types,
-/// `deleted_views` removes the views and returns what they backed, `purged_docs`
-/// removes the documents of the document-typed ones. Extracted so a DB test can
-/// prove the cascade without the full HTTP handler.
-pub(super) async fn purge_view_subtree(
-  db: &PgPool,
-  workspace_id: Uuid,
-  view_id: Uuid,
-) -> ApiResult<(i64, i64)> {
-  let row = sqlx::query_as::<_, (i64, i64)>(
-    r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id, object_id, object_type FROM views WHERE id = $1 AND workspace_id = $2
-        UNION ALL
-        SELECT v.id, v.object_id, v.object_type
-        FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      ),
-      deleted_views AS (
-        DELETE FROM views
-        WHERE id IN (SELECT id FROM subtree) AND workspace_id = $2
-        RETURNING object_id, object_type
-      ),
-      purged_docs AS (
-        DELETE FROM documents
-        WHERE id IN (
-          SELECT object_id FROM deleted_views WHERE object_type::text = 'document'
-        )
-        RETURNING id
-      )
-      SELECT
-        (SELECT count(*) FROM deleted_views)::bigint,
-        (SELECT count(*) FROM purged_docs)::bigint
-    "#,
-  )
-  .bind(view_id)
-  .bind(workspace_id)
-  .fetch_one(db)
-  .await?;
-  Ok(row)
+/// This used to run its own statement whose seed had no `is_deleted` filter, so
+/// one DELETE from any editor erased a LIVE page with no recoverable step
+/// (2026-10-21 review P1-8; the batch purge never had that hole). It is now the
+/// batch purge of one id: one statement, one rule. Not in the bin — or not in
+/// this workspace — is a 404 either way.
+pub(super) async fn purge_one(db: &PgPool, workspace_id: Uuid, view_id: Uuid) -> ApiResult<()> {
+  if purge_views_batch(db, workspace_id, &[view_id]).await?.is_empty() {
+    return Err(ApiError::NotFound);
+  }
+  Ok(())
 }
 
 pub async fn purge_view(
@@ -142,15 +103,7 @@ pub async fn purge_view(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
-  // Permanently remove the page + its subtree AND the documents they back (so no
-  // orphaned content/shares survive "永久删除"). See [`purge_view_subtree`].
-  let (views_deleted, _docs_deleted) =
-    purge_view_subtree(&state.db, workspace_id, view_id).await?;
-
-  if views_deleted == 0 {
-    return Err(ApiError::NotFound);
-  }
-
+  purge_one(&state.db, workspace_id, view_id).await?;
   let views = fetch_deleted_workspace_views(&state.db, workspace_id).await?;
 
   Ok(Json(ViewListResponse { views }))
@@ -349,7 +302,7 @@ batch_view_handler! {
   /// trashed comes back in `skipped`, so the caller is told what did not happen
   /// rather than quietly getting less than it asked for.
   ///
-  /// Same cascade as [purge_view_subtree]: the documents behind those views go
+  /// The documents behind those views go
   /// too, taking their yrs base, snapshots, versions and public share tokens with
   /// them. Blobs are left to `blob_gc` — they are content-addressed and may still
   /// be referenced by a page that is staying.

@@ -80,6 +80,8 @@
 
 ### P1-1 MCP 工具 id 路径穿越：一次提示注入就能硬删整个工作区 【复核】
 
+**状态:✅ 已修(2026-10-21,id 全部改为 Uuid;C11 缓存失效一并修)**
+
 - **位置**:`crates/mcp-server/src/lib.rs:137` `url()` 直接 `format!` 拼接;args 里的 id 全是 `String`(`args.rs:41` 等)。
 - **触发**:
   1. 页面内容里的提示注入，诱导模型调用 `mica_unshare(document_id="../../../workspaces/<V>#")`。
@@ -89,6 +91,8 @@
 - **修法**:args 里的 id 改成 `uuid::Uuid`(schemars 开 uuid 特性);路径段改用 `Url::path_segments_mut` 拼接。
 
 ### P1-2 切换页签丢掉最后 ≤400ms 的输入,retry 定时器把旧文档的 op 发给当前会话 【复核】
+
+**状态:✅ 已修(2026-10-21)**
 
 - **位置**:
   - `main_shell.dart:1020` `_selectTab` 切换前不 flush。对照侧栏的 `main_workspace_view.dart:4703`,那里会先 `await _commandHook.flush()`。
@@ -102,15 +106,21 @@
 
 ### P1-3 撤销拖拽移动只改本地顺序,CRDT 里仍是移动后的顺序 【读码】
 
+**状态:✅ 已修(2026-10-21)**
+
 - **位置**:`moveBlock`(`controller.dart:3386`)发 `move_block`;`_diffOps`(`:3672-3700`)注释写着「编辑器从不重排块」,不会生成移动 op。
 - **触发**:拖动一个块后按 Ctrl+Z,本地顺序还原了，但服务端/CRDT 没有。之后按下标插入的 `insert_block` 会落到错误位置，重载后块又跳回去。
 - **测试是真空通过的**:`move_block_test.dart:40` 只断言了本地顺序，没检查发出的 op。
 
 ### P1-4 协作模式下 Undo 会回滚/删除协作者的编辑(10-19 #8,仍未修) 【读码】
 
+**状态:🟡 已降级修复(2026-10-21):撤销只还原此后没人碰过的块;彻底方案见计划阶段 5**
+
 机制按 10-19 第三轮复核的描述:历史栈里存的是远端编辑之前的全域快照,`_restore()` 整份还原后,`_diffOps` 会把远端新增的块推成 `delete_block`。修法要按历史栈来设计，见计划阶段 5。
 
 ### P1-5 导出再导入，页面标题被改名 + 正文多出一个标题(round-trip 红线) 【复核:代码路径】
+
+**状态:✅ 已修(2026-10-21,含 front matter 与 `.Md` 后缀)**
 
 - **位置**:`interchange/src/import.rs:275`,`title = fallback`。文档页的名字取自 sanitize 过的文件名,manifest 里的 `title` 只给 folder 用(`:143-147`)。
 - **触发**:
@@ -122,6 +132,8 @@
 
 ### P1-6 quote/li 深度无上限 → 栈溢出或 `repeat` 内存耗尽，进程 abort(10-19 #6a,仍未修) 【复核】
 
+**状态:✅ 已修(2026-10-21,`MAX_NESTING_DEPTH`=8,两端同值)**
+
 - **位置**:`markdown/src/block.rs:1042` `quote_depth_of`、`html.rs:149` `li_of` 都不 clamp(Dart 侧已 clamp 到 0..8,`model.dart:66/74`)。
 - **触发路径 ①**:一行几万个 `>` → 渲染时 `render_quote_group` 递归 N 层 → 栈溢出。分享页和 HTML 导出都会触发。
 - **触发路径 ②**:成员经 MCP/REST 写入 `data.li=1e9`(`validate_block` 不校验 data)→ `export_md.rs:94` 执行 `" ".repeat(4e9)` → 内存耗尽。
@@ -129,11 +141,15 @@
 
 ### P1-7 内联链接/图片交替嵌套，疑似指数级回溯(连同 10-19 #6b) 【读码,需实测】
 
+**状态:✅ 已修(2026-10-21):实测确为指数级(221 字节 release 1.3 s);缓存贯穿 + 嵌套预算 32,修后 <1 ms**
+
 - **位置**:`inline.rs:976/869`。`push_link` 每次都新建 `LinkCache`。
 - **触发**:`[![[![…a](u)](u)](u)](u)`。递推大约是 P(k)=2·P(k-2),几百字节就能卡死导入、MCP,以及 Dart 编辑器(`marks.dart:1278` 结构相同)。现有的 `nested_bracket_perf.rs` 只测了纯链接和纯括号。
 - **修法**:缓存贯穿整次解析，再加深度预算(例如 32 层)。超出预算按字面文本处理。
 
 ### P1-8 `purge_view` 能直接永久删除活页面(已知，待拍板)
+
+**状态:✅ 已修(2026-10-21,用户拍板收紧：只能删回收站里的页面)**
 
 `trash.rs:108`。今天只有回收站界面会调它，所以「不咬人」。但 P1-1 那条路径和任意 REST 客户端都能直接打到它。顺带的修法见「精简」一节：单条操作复用批量函数，批量版本身就带 `is_deleted` 过滤。
 

@@ -118,7 +118,14 @@ GET    /api/workspaces/{workspace_id}/members
 POST   /api/workspaces/{workspace_id}/members
 PATCH  /api/workspaces/{workspace_id}/members/{user_id}
 DELETE /api/workspaces/{workspace_id}/members/{user_id}
+GET    /api/workspaces/{workspace_id}/invitations
+DELETE /api/workspaces/{workspace_id}/invitations/{invitation_id}
+GET    /api/invitations
+POST   /api/invitations/{invitation_id}/accept
+POST   /api/invitations/{invitation_id}/decline
 ```
+
+`POST …/members` creates an invitation (see `docs/features/workspace-invitations.md`).
 
 ### Views / Page Tree
 

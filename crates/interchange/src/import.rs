@@ -94,7 +94,7 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   let mut files: HashMap<String, Vec<u8>> = HashMap::new();
   let mut mds: HashMap<String, String> = HashMap::new();
   for e in entries {
-    if e.name.to_lowercase().ends_with(".md") {
+    if is_markdown_path(&e.name) {
       mds.insert(e.name, String::from_utf8_lossy(&e.bytes).into_owned());
     } else if e.name != "manifest.json" && !is_block_json(&e.name) {
       // Everything left over is an attachment — which is why the structural
@@ -131,20 +131,35 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   // A folder has no `.md`/H1 to recover its display name from — its real name
   // lives only in the manifest `title`. Key by the folder's dir path so the
   // chain walk restores the true name instead of the sanitized path segment
-  // (spaces/punctuation collapse to `_` in the path). Documents are unaffected:
-  // their name round-trips through the manifest `title` and the file name.
+  // (spaces/punctuation collapse to `_` in the path).
   //
-  // 〔This used to read "their name round-trips through the `# {name}` H1 the
-  // export prepends" — false for however long, since the export wrote the body
-  // verbatim, and the rule 100 lines below said exactly that in as many words.
-  // Two contradicting comments in one file cost a reader several wrong turns on
-  // 2026-08-27. The export DOES write that heading again now, but this code path
-  // still reads the manifest, not the text.〕
+  // Documents need the same, for the same reason: `Meeting notes` is exported as
+  // `Meeting_notes.md`, a second `Same` as `Same-2.md`. Reading the name off the
+  // file renamed the page on every round trip, and then the `# Meeting notes`
+  // the export wrote no longer matched that name and stayed in the body too.
+  // Only for OUR archives (`mica_export`): a foreign manifest's `title` is not
+  // known to mean what ours does, and foreign behaviour is unchanged.
+  //
+  // 〔An earlier version of this comment said documents round-trip "through the
+  // manifest `title` and the file name". The file name half was never true for
+  // any name `safe_segment` rewrites, and nothing read the manifest half.〕
   let folder_titles: HashMap<String, String> = entries
     .iter()
     .filter(|e| e.is_folder)
     .filter_map(|e| e.title.clone().map(|t| (e.path.clone(), t)))
     .collect();
+  let doc_titles: HashMap<String, String> = if mica_export {
+    entries
+      .iter()
+      .filter(|e| !e.is_folder)
+      .filter_map(|e| {
+        let title = e.title.as_deref()?.trim();
+        (!title.is_empty()).then(|| (e.path.clone(), title.to_string()))
+      })
+      .collect()
+  } else {
+    HashMap::new()
+  };
   // Icons for BOTH kinds, keyed by the manifest's own path (a folder's is its
   // directory, a document's is its `.md`) — the two never collide, so one map
   // serves both lookups below.
@@ -248,11 +263,14 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     }
     let markdown = &mds[path];
     let base = parts.last().unwrap_or(&"");
-    let fallback = clean(
-      base.strip_suffix(".md").or_else(|| base.strip_suffix(".MD")).unwrap_or(base),
-    );
-    // The file name IS the page name. A leading `# <that name>` is stripped in
-    // exactly two cases, and left alone in every other:
+    // The page's name as the archive's PATH spells it. It keys the tree (the
+    // page-with-subpages split below matches it against directory names), so it
+    // stays the path's spelling even when the display name differs.
+    let stem = clean(strip_md_ext(base));
+    // The display name: the manifest `title` for our own archives (see
+    // `doc_titles`), the file name for everything else. A leading
+    // `# <that name>` is stripped in exactly two cases, and left alone in every
+    // other:
     //
     // - **Notion exports**, which put the title in the file name AND repeat it
     //   as the body's first `# H1` (which is why every third-party Notion
@@ -271,10 +289,12 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     // A foreign archive (no manifest, or a manifest some other tool wrote) is
     // NOT stripped: its leading heading is the author's content. And the match
     // is exact in both cases, so a heading that merely happens to lead the page
-    // survives.
-    let title = fallback;
+    // survives. The heading is looked for after any front matter, which is
+    // where `with_page_title` writes it; `mica_markdown::strip_page_title` is
+    // its inverse and lives beside it so the two cannot drift.
+    let title = doc_titles.get(path).cloned().unwrap_or_else(|| stem.clone());
     let body = if notion || mica_export {
-      strip_leading_h1(markdown, &title)
+      mica_markdown::strip_page_title(markdown, &title)
     } else {
       markdown.clone()
     };
@@ -284,10 +304,11 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     // are leaves — so split it: the folder keeps the name and the children, and
     // the body moves into a same-named leaf page inside it. A parent with no
     // body of its own is just a folder; don't leave an empty page behind.
+    // Matched by `stem`: directory names are path spellings, not display names.
     let own_norm = if norm_folder.is_empty() {
-      title.clone()
+      stem.clone()
     } else {
-      format!("{norm_folder}/{title}")
+      format!("{norm_folder}/{stem}")
     };
     if dirs_with_children.contains(&own_norm) {
       let folder_idx = match folder_page.get(&own_norm).copied() {
@@ -445,24 +466,19 @@ fn manifest_entries(manifest_json: Option<&str>) -> Vec<ManifestEntry> {
     .collect()
 }
 
-/// Drop a leading `# <title>` that duplicates the page name. Notion-import only
-/// — see the call site. Exact match, nothing else: a leading heading that says
-/// something different is the author's content and must survive.
-fn strip_leading_h1(markdown: &str, title: &str) -> String {
-  let mut lines = markdown.lines();
-  let mut head = Vec::new();
-  for line in lines.by_ref() {
-    if line.trim().is_empty() {
-      head.push(line);
-      continue;
-    }
-    if line.trim().strip_prefix("# ").map(str::trim) == Some(title) {
-      return lines.collect::<Vec<_>>().join("
-");
-    }
-    break;
+/// `name` without its `.md` extension, in any case (`.md`, `.MD`, `.Md`, `.mD`)
+/// — the same set [`is_markdown_path`] accepts, so a file that is read as
+/// Markdown never keeps its extension in the page name.
+pub(crate) fn strip_md_ext(name: &str) -> &str {
+  match name.len().checked_sub(3).and_then(|at| name.get(at..).map(|ext| (at, ext))) {
+    Some((at, ext)) if ext.eq_ignore_ascii_case(".md") => &name[..at],
+    _ => name,
   }
-  markdown.to_string()
+}
+
+/// Whether an archive entry is a Markdown page (by extension, any case).
+fn is_markdown_path(name: &str) -> bool {
+  strip_md_ext(name).len() != name.len()
 }
 
 /// Resolve a Markdown reference (`../assets/图 1.png`, `Page%20<id>.md`)
@@ -915,7 +931,7 @@ mod tests {
   /// The export/import pair, closed end to end and byte for byte.
   ///
   /// Export writes `# {title}` into the text (`mica_markdown::with_page_title`);
-  /// import takes exactly that line back off (`strip_leading_h1`) and the caller
+  /// import takes exactly that line back off (`strip_page_title`) and the caller
   /// puts the title on the document's root instead
   /// (`mica_markdown::set_document_title`, done in `api-server`'s importer).
   /// Each half is pinned on its own above; what this pins is that the two
@@ -959,7 +975,7 @@ mod tests {
   }
 
   /// The same loop for a page whose body genuinely opens with a heading of its
-  /// own. `strip_leading_h1` matches exactly, so that heading is content and
+  /// own. `strip_page_title` matches exactly, so that heading is content and
   /// must survive — and the title still has to come back exactly once, above it.
   #[test]
   fn a_body_that_opens_with_its_own_heading_round_trips_too() {
@@ -1105,6 +1121,107 @@ mod tests {
     assert_eq!(find(&plan, "归档").icon.as_deref(), Some("📁"), "folder icon");
     assert_eq!(find(&plan, "周报").icon.as_deref(), Some("😃"), "document icon");
     assert_eq!(find(&plan, "日报").icon, None, "no icon stays no icon");
+  }
+
+  /// Export → import → export with the REAL exporter, for exactly the names the
+  /// old loop test (`季度回顾`) could not see: ones `safe_segment` rewrites.
+  ///
+  /// The page name used to come from the file name, so `Meeting notes` came back
+  /// as `Meeting_notes`, and the `# Meeting notes` the export wrote no longer
+  /// matched it and stayed in the body — renamed AND doubled. The `-2` a
+  /// duplicate sibling gets is the same failure without any punctuation at all.
+  /// A page with properties lost differently: the title sits AFTER the front
+  /// matter, and the stripper only looked at the very first line.
+  #[test]
+  fn names_the_file_name_cannot_carry_survive_export_then_import() {
+    use crate::export_tree::{TreeNode, build_markdown_tree_zip};
+
+    let node = |id: &str, parent: Option<&str>, name: &str, ty: &str| TreeNode {
+      id: id.to_string(),
+      parent_id: parent.map(str::to_string),
+      position: format!("00000000{id:0>2}"),
+      name: name.to_string(),
+      object_type: ty.to_string(),
+      object_id: format!("obj-{id}"),
+      icon: None,
+    };
+    let nodes = vec![
+      node("p1", None, "Meeting notes", "document"),
+      node("p2", None, "Q&A: 2026/10", "document"),
+      node("p3", None, "带属性的页", "document"),
+      node("f1", None, "Notes", "folder"),
+      node("p4", Some("f1"), "Same", "document"),
+      node("p5", Some("f1"), "Same", "document"),
+    ];
+    let mut payloads = HashMap::new();
+    for id in ["p1", "p2", "p4", "p5"] {
+      payloads.insert(format!("obj-{id}"), mica_markdown::import_markdown("正文。", "root"));
+    }
+    payloads.insert(
+      "obj-p3".to_string(),
+      mica_markdown::import_markdown("---\ntags: [a]\nstatus: draft\n---\n正文。", "root"),
+    );
+    let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
+      .into_iter()
+      .map(|z| ZipFileEntry { name: z.name, bytes: z.data })
+      .collect();
+    let exported: HashMap<String, String> = raw
+      .iter()
+      .map(|e| (e.name.clone(), String::from_utf8_lossy(&e.bytes).into_owned()))
+      .collect();
+    // Preconditions: the names really were rewritten on the way out, so this
+    // test is about the case the file name cannot carry.
+    for path in ["Meeting_notes.md", "Q_A_2026_10.md", "Notes/Same-2.md"] {
+      assert!(exported.contains_key(path), "precondition: {path} in {:?}", exported.keys());
+    }
+    assert!(
+      exported["带属性的页.md"].starts_with("---\ntags: [a]\nstatus: draft\n---\n# 带属性的页\n"),
+      "precondition: the title sits after the front matter: {:?}",
+      exported["带属性的页.md"]
+    );
+
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let mut names: Vec<&str> =
+      plan.pages.iter().filter(|p| !p.is_folder).map(|p| p.title.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["Meeting notes", "Q&A: 2026/10", "Same", "Same", "带属性的页"]);
+
+    for page in plan.pages.iter().filter(|p| !p.is_folder) {
+      let path = page.archive_path.as_deref().expect("a document has a path");
+      assert!(
+        !page.markdown.contains(&format!("# {}", page.title)),
+        "{path}: the title line came off: {:?}",
+        page.markdown
+      );
+      // What the importer stores, and what exporting THAT produces.
+      let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
+      assert!(mica_markdown::set_document_title(&mut reimported, &page.title));
+      let re_exported = mica_markdown::with_page_title(
+        &mica_markdown::export_markdown(&reimported).expect("re-export"),
+        mica_markdown::document_title(&reimported).expect("title"),
+      );
+      assert_eq!(re_exported, exported[path], "{path}: export → import → export is not stable");
+    }
+
+    // The properties came through as properties, not as text.
+    let with_props = find(&plan, "带属性的页");
+    let reimported = mica_markdown::import_markdown(&with_props.markdown, "root");
+    assert_eq!(
+      reimported.blocks[0].data.get("front_matter").and_then(|v| v.as_str()),
+      Some("tags: [a]\nstatus: draft")
+    );
+    assert_eq!(parent_title(&plan, "Same"), Some("Notes"));
+  }
+
+  /// `.Md` counts as Markdown when the archive is read, so it has to come off the
+  /// name too — otherwise the page is called `Note.Md`.
+  #[test]
+  fn the_md_extension_comes_off_whatever_its_case() {
+    let raw = vec![e("a/Note.Md", "x"), e("a/Other.mD", "y"), e("a/Third.MD", "z")];
+    let plan = plan_import(raw, false, ImportMode::AsIs);
+    for name in ["Note", "Other", "Third"] {
+      assert!(!find(&plan, name).is_folder, "{name}");
+    }
   }
 
   /// A v1 archive has no `icon` key anywhere. None is the honest answer — the

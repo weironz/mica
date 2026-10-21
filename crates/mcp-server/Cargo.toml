@@ -21,7 +21,13 @@ tracing-subscriber.workspace = true
 # `macros` = the #[tool]/#[tool_router] attributes. Pinned at the crate level
 # (not the workspace) since it's this binary's concern only.
 rmcp = { version = "0.9", features = ["server", "transport-io", "macros"] }
-schemars = "1"
+# `uuid1`: tool-argument ids are `Uuid` (see args.rs), schema'd as a uuid string.
+schemars = { version = "1", features = ["uuid1"] }
+uuid.workspace = true
 # MCP carries image bytes as base64 in an ImageContent block — that IS the wire
 # format, so `mica_read_image` has to encode.
 base64 = "0.22"
+
+[dev-dependencies]
+# The wire tests run a fake Mica API on a local TcpListener.
+tokio = { workspace = true, features = ["net", "io-util"] }

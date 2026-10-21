@@ -65,7 +65,14 @@ impl MicaMcp {
       .and_then(Value::as_array)
       .into_iter()
       .flatten()
-      .find(|w| w.get("id").and_then(Value::as_str) == Some(workspace_id.as_str()))
+      // Compare as UUIDs, not strings: the API's casing/hyphenation is not the
+      // caller's to match.
+      .find(|w| {
+        w.get("id")
+          .and_then(Value::as_str)
+          .and_then(|id| id.parse::<uuid::Uuid>().ok())
+          == Some(workspace_id)
+      })
       .and_then(|w| w.get("name").and_then(Value::as_str))
       .map(str::to_string);
     // Refusals come back as tool errors, not protocol errors: the model can act
@@ -88,7 +95,9 @@ impl MicaMcp {
       )));
     }
     let deleted = self.delete(&format!("/api/workspaces/{workspace_id}")).await;
-    action_ack(deleted, "deleted", &workspace_id)
+    // Every cached page belonged to SOME workspace; this one's are gone.
+    self.cache_clear();
+    action_ack(deleted, "deleted", workspace_id)
   }
 
   #[tool(

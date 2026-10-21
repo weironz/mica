@@ -19,6 +19,7 @@ use crate::*;
 use crate::args::*;
 use crate::markdown_windows::*;
 use crate::results::*;
+use uuid::Uuid;
 
 #[tool_router(router = write_router, vis = "pub(crate)")]
 impl MicaMcp {
@@ -123,8 +124,8 @@ impl MicaMcp {
     }
     match self
       .write_markdown(
-        &workspace_id,
-        &document_id,
+        workspace_id,
+        document_id,
         &mode,
         markdown.as_deref(),
         anchor,
@@ -147,8 +148,8 @@ impl MicaMcp {
   #[allow(clippy::too_many_arguments)]
   pub(crate) async fn write_markdown(
     &self,
-    workspace_id: &str,
-    document_id: &str,
+    workspace_id: Uuid,
+    document_id: Uuid,
     mode: &str,
     markdown: Option<&str>,
     anchor: Option<String>,
@@ -239,8 +240,8 @@ impl MicaMcp {
   /// answering it by position deletes a section the caller never saw.
   pub(crate) async fn resolve_anchor(
     &self,
-    ws: &str,
-    doc: &str,
+    ws: Uuid,
+    doc: Uuid,
     anchor: Option<String>,
     strict: bool,
   ) -> Result<Option<String>, McpError> {
@@ -307,8 +308,8 @@ impl MicaMcp {
       let seq = if i == 0 { expected_seq } else { None };
       match self
         .write_markdown(
-          &workspace_id,
-          &document_id,
+          workspace_id,
+          document_id,
           &mode,
           markdown.as_deref(),
           anchor,

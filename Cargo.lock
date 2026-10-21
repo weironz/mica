@@ -2101,7 +2101,6 @@ dependencies = [
  "mica-markdown",
  "rand_core 0.6.4",
  "reqwest",
- "roxmltree",
  "serde",
  "serde_json",
  "sha1 0.10.6",
@@ -2223,6 +2222,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -3371,6 +3371,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

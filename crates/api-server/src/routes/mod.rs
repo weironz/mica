@@ -16,6 +16,7 @@ mod health;
 mod legal;
 mod history;
 mod import;
+mod invitations;
 mod email_verify;
 mod password_reset;
 mod tokens;
@@ -167,6 +168,18 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/members/{user_id}",
       patch(workspaces::update_member).delete(workspaces::remove_member),
     )
+    // Invitations (invitations.rs). All signed-in: nothing here is public.
+    .route(
+      "/workspaces/{workspace_id}/invitations",
+      get(invitations::list_for_workspace),
+    )
+    .route(
+      "/workspaces/{workspace_id}/invitations/{invitation_id}",
+      delete(invitations::revoke),
+    )
+    .route("/invitations", get(invitations::list_received))
+    .route("/invitations/{invitation_id}/accept", post(invitations::accept))
+    .route("/invitations/{invitation_id}/decline", post(invitations::decline))
     .route(
       "/workspaces/{workspace_id}/views",
       get(documents::list_views),

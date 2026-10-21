@@ -8,8 +8,9 @@ import '../api/models.dart';
 /// view-model mirror for its build helpers.
 ///
 /// Rules pinned by tests, all inherited from the original code:
-///  - add and update RELOAD the member list afterwards (the server's POST
-///    answer is a single member, not the list);
+///  - update RELOADS the member list afterwards (the server's PATCH answer
+///    is a single member, not the list). Adding is an invitation now and
+///    lives in invitations_controller.dart — it changes no member list;
 ///  - remove does NOT reload — the server's DELETE answer already IS the new
 ///    list, and refetching after a deliberate act is a wasted round trip;
 ///  - the offline world cannot know members, so a mirror-driven workspace
@@ -17,7 +18,6 @@ import '../api/models.dart';
 class MembersController extends ChangeNotifier {
   MembersController({
     required this.listMembers,
-    required this.addMember,
     required this.updateMember,
     required this.removeMember,
   });
@@ -26,12 +26,6 @@ class MembersController extends ChangeNotifier {
     String token,
     String workspaceId,
   ) listMembers;
-  final Future<void> Function(
-    String token,
-    String workspaceId,
-    String email,
-    String role,
-  ) addMember;
   final Future<void> Function(
     String token,
     String workspaceId,
@@ -52,18 +46,7 @@ class MembersController extends ChangeNotifier {
     replace(workspaceId, members);
   }
 
-  /// Invite: the server's answer is the new member, not the list — reload.
-  Future<void> add(
-    String token,
-    String workspaceId,
-    String email,
-    String role,
-  ) async {
-    await addMember(token, workspaceId, email, role);
-    await load(token, workspaceId);
-  }
-
-  /// Change a role: same reload contract as [add].
+  /// Change a role: the answer is one member, not the list — reload.
   Future<void> update(
     String token,
     String workspaceId,

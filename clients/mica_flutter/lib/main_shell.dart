@@ -47,6 +47,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// The workspace members map — see views/members_controller.dart. The field
   /// below is a synced view-model copy for the build helpers.
   late final MembersController _membersCtrl;
+  /// Workspace invitations (views/invitations_controller.dart).
+  late final InvitationsController _invites = InvitationsController(
+    api: _api,
+    token: () => _sessionCtrl.session?.accessToken,
+    onJoined: (w) => _refreshWorkspaces().then((_) => _selectWorkspaceById(w.id)),
+  );
   Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
 
@@ -259,19 +265,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return host == '127.0.0.1' || host == 'localhost' || host == '::1';
   }
 
-  /// Persist a new server choice and switch the live client to it. Switching
-  /// invalidates the current session (different backend), so we sign out — the
-  /// login screen then targets the newly selected server.
-  /// Point the app at a different cloud server (P3c-2 — replaces the legacy
-  /// mode switch). The current cloud session is disconnected but its stored
-  /// credentials are KEPT under the old origin's keys, so switching back signs
-  /// in again without retyping; the new origin's stored session (if any) is
-  /// restored immediately.
-  /// The configured servers, seeded from the single-server world that came
-  /// before: whatever `cloudOrigin` the legacy migration settled on becomes
-  /// server #1, so nobody's sign-in moves. [seed] is always present, even if a
-  /// stale `servers` list somehow lost it — the app must never end up pointing
-  /// at a server that isn't in its own list.
   // Server-list load/save lives in ServerRegistry now.
 
   /// Ask for a URL, then add it. One implementation for both entry points: the
@@ -636,17 +629,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _registry.load(seed: origin);
   }
 
-  /// ── Session persistence / renewal / profile — moved verbatim into
-  /// [AuthController] (lib/auth/auth_controller.dart, god-class sixth step).
-  /// [_persistSession]/[_clearPersistedSession]/[_signedInOrigins]/
-  /// [_storedDisplayName]/[_ensureFreshSession]/[_refreshProfile] were the
-  /// State's; the call sites below now go through [_auth].
+  // Session persistence / renewal / profile live in [AuthController].
 
-  /// Restore a persisted cloud/self-hosted session on startup so the user isn't
-  /// forced to re-login every launch. Cheaply rejects an expired token by its
-  /// JWT `exp`, then validates the rest by loading workspaces: a 401 (revoked /
-  /// server JWT-secret changed) drops the token; a transient network error keeps
-  /// it (this launch shows login, the next retries).
   /// Losing the cloud credentials (expired/revoked token) leaves a stale cloud
   /// activeOrigin behind — fall back to the local world (desktop) so a restart
   /// doesn't keep opening an empty cloud pane (matches _signOut's semantics).
@@ -656,6 +640,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     savePref('activeOrigin', _activeOrigin);
   }
 
+  /// Restore a persisted cloud/self-hosted session on startup so the user isn't
+  /// forced to re-login every launch. Cheaply rejects an expired token by its
+  /// JWT `exp`, then validates the rest by loading workspaces: a 401 (revoked /
+  /// server JWT-secret changed) drops the token; a transient network error keeps
+  /// it (this launch shows login, the next retries).
   Future<void> _restoreSession() async {
     if (_session != null) return;
     var token = loadPref('authToken:$_cloudOrigin');
@@ -902,6 +891,28 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// The caller then loads into it through the ordinary open/create path, so
   /// "in a new tab" and "here" reach the server identically — the only
   /// difference is which [DocTab] is active while it happens.
+  /// Commit the mounted editor's debounced (≤400ms) typing to the document it
+  /// was typed into, BEFORE anything changes which document is active.
+  ///
+  /// Editor ops are routed by the shell's ACTIVE state (cloud session / local
+  /// doc), and the editor's own dispose does not flush — so a tab switch used to
+  /// unmount the editor with the last keystrokes still debounced, and they were
+  /// never committed (2026-10-21 review P1-2). The sidebar path already awaited
+  /// this; every other way of changing the active document now does too.
+  Future<void> _flushActiveEditor() async {
+    try {
+      await _activeEditorFlush?.call();
+    } catch (_) {}
+  }
+
+  /// Flush, then open a fresh tab and run [load] into it.
+  Future<void> _inNewTab(Future<void> Function() load) async {
+    await _flushActiveEditor();
+    if (!mounted) return;
+    _pushTab();
+    await load();
+  }
+
   void _pushTab() {
     setState(() {
       _tabs.add(DocTab()..lastActivated = ++_activationTick);
@@ -927,8 +938,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       unawaited(_openElsewhereInBackgroundTab(viewId, elsewhere));
       return;
     }
-    _pushTab();
-    unawaited(_openViewById(viewId));
+    unawaited(_inNewTab(() => _openViewById(viewId)));
   }
 
   /// Queue a page from ANOTHER workspace into a background tab, without moving
@@ -1003,22 +1013,22 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// only honest answer — guessing the last-focused folder would put pages
   /// somewhere the user never pointed at.
   void _createDocumentInNewTab(String name) {
-    _pushTab();
-    unawaited(_createDocument(name));
+    unawaited(_inNewTab(() => _createDocument(name)));
   }
 
   /// Open [view] in a NEW tab and switch to it. The sidebar row's context menu.
   void _openViewInNewTab(DocumentView view) {
-    _pushTab();
-    // Deliberately AFTER the new tab is active: `_selectView` skips the load
+    // The load runs AFTER the new tab is active: `_selectView` skips the load
     // when the target is already open, and it tests that against the ACTIVE
     // tab. A fresh tab has a null view, so the same page opening in a second
     // tab is correctly treated as "not open here" and loads.
-    unawaited(_selectView(view));
+    unawaited(_inNewTab(() => _selectView(view)));
   }
 
-  void _selectTab(int index) {
+  Future<void> _selectTab(int index) async {
     if (index < 0 || index >= _tabs.length || index == _activeTabIndex) return;
+    await _flushActiveEditor();
+    if (!mounted || index >= _tabs.length || index == _activeTabIndex) return;
     final target = _tabs[index];
     setState(() {
       _activeTabIndex = index;
@@ -1058,13 +1068,21 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// "no tabs at all" is not a state the shell can render. AFFiNE makes the
   /// same call. Closing the ACTIVE tab activates the one that slides into its
   /// place (the tab to the right), falling back to the new last tab.
-  void _closeTab(int index) {
+  Future<void> _closeTab(int index) async {
     if (_tabs.length <= 1 || index < 0 || index >= _tabs.length) return;
+    // Only the active tab has a mounted editor with typing to commit.
+    if (index == _activeTabIndex) {
+      final closing = _tabs[index];
+      await _flushActiveEditor();
+      if (!mounted) return;
+      index = _tabs.indexOf(closing);
+      if (_tabs.length <= 1 || index < 0) return;
+    }
     // BEFORE the removal, and unconditionally: once the tab is out of `_tabs`
     // nothing reaches its sockets, and `_reconcileSync` below only ever touches
     // the ACTIVE tab — so a closed background tab would keep a live WebSocket
     // and an undrained replica for the rest of the session.
-    _parkTabSync(_tabs[index]);
+    _syncCtrl.parkTab(_tabs[index]);
     setState(() {
       final next = activeIndexAfterClose(
         closing: index,
@@ -1095,14 +1113,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return null;
   }
 
-  /// Open, switch, or close the document WebSocket so it always tracks the
-  /// currently selected document.
   // The tree-change socket for the workspace whose SIDEBAR is showing lives in
   // the sync controller now (it owns the socket + the workspace id it watches).
-
-  /// Keep the tree-change socket pointed at the sidebar's workspace — the
-  /// sync controller owns the socket; this is the State's one-line adapter.
-  void _reconcileViewsEvents() => _syncCtrl.reconcileViewsEvents();
 
   /// Re-ask for [workspaceId]'s tree because the server said it changed.
   ///
@@ -1120,7 +1132,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// open document — the controller's reconcile, dispatched from here (the
   /// hooks it fires land back in this State).
   void _reconcileSync() => _syncCtrl.reconcile();
-
 
   /// Rebuild the selected bootstrap from the yrs replica's blocks so the editor
   /// reconciles to the CRDT state (preserving unsent local edits).
@@ -1189,28 +1200,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     } catch (_) {}
   }
 
-  /// Drop [tab]'s sockets while keeping everything the reader can see — the
-  /// controller's park, dispatched from here ([DocTab] is its tab view).
-  void _parkTabSync(DocTab tab) => _syncCtrl.parkTab(tab);
-
   /// The editor's op pipeline failed to commit a batch (red line #1: never lose
   /// an edit without a trace) — routed through the controller so a failing
   /// cloud session reuses the "sync paused" banner+retry.
   void _onEditorFault(Object error, int count) =>
       _syncCtrl.onEditorFault(error, count);
-
-  /// Tear down EVERY tab's sockets, not just the active one (sign-out, server
-  /// switch, app dispose) — the controller's loop.
-  void _closeAllDocumentSync() => _syncCtrl.closeAllDocumentSync();
-
-  /// Clear the sync-paused banner (B3) — recovery succeeded, doc switched, or
-  /// the user dismissed it.
-  void _clearSyncBanner() => _syncCtrl.clearSyncBanner();
-
-  /// Retry a stuck cloud sync (B3): tear the session down and reconcile, which
-  /// cold-bootstraps a fresh replica (unacked edits persist and replay).
-  void _retryCloudSync() => _syncCtrl.retryCloudSync();
-
 
   Future<void> _refreshSelectedBootstrap(String documentId) async {
     final session = _session;
@@ -1244,11 +1238,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _sessionCtrl.removeListener(_syncSessionState);
     _auth.removeListener(_syncAuthState);
     _membersCtrl.removeListener(_syncMembersState);
+    _invites.dispose();
     _import.removeListener(_syncImportState);
     themeModeController.removeListener(_schedulePushSettings);
     localeController.removeListener(_schedulePushSettings);
     _settingsPushTimer?.cancel();
-    _closeAllDocumentSync();
+    _syncCtrl.closeAllDocumentSync();
     _syncCtrl.dispose();
     super.dispose();
   }
@@ -1265,6 +1260,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// every build helper reading them sees the values it always did.
   void _syncSessionState() {
     if (!mounted) return;
+    // The invitee inbox rides on every new workspace list (startup, sign-in,
+    // refresh; sign-out clears it). No push — a list refresh is the moment.
+    final newList = !identical(_sessionCtrl.workspaces, _workspaces);
+    if (newList) unawaited(_invites.refreshReceived());
     setState(() {
       _session = _sessionCtrl.session;
       _workspaces = _sessionCtrl.workspaces;
@@ -1391,7 +1390,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void _initMembersController() {
     _membersCtrl = MembersController(
       listMembers: _api.listWorkspaceMembers,
-      addMember: _api.addWorkspaceMember,
       updateMember: _api.updateWorkspaceMember,
       removeMember: _api.removeWorkspaceMember,
     )..addListener(_syncMembersState);
@@ -1522,9 +1520,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             content: Text(l10n.snackCloudSyncPaused),
             leading: const Icon(Icons.cloud_off_outlined),
             actions: [
-              TextButton(onPressed: _retryCloudSync, child: Text(l10n.commonRetry)),
+              TextButton(onPressed: _syncCtrl.retryCloudSync, child: Text(l10n.commonRetry)),
               TextButton(
-                onPressed: _clearSyncBanner,
+                onPressed: _syncCtrl.clearSyncBanner,
                 child: Text(l10n.snackDismiss),
               ),
             ],
@@ -1593,7 +1591,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
     });
   }
-
 
   Future<void> _refreshWorkspaces() {
     return _run(() async {
@@ -1696,6 +1693,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
     final remembered = keepOpenPage ? null : _rememberedViewOf(workspace.id);
     return _run(() async {
+      // Leaving the open page: commit its typing first (see _flushActiveEditor).
+      if (!keepOpenPage) await _flushActiveEditor();
+      if (!mounted) return;
       setState(() {
         _sessionCtrl.select(workspace);
         if (!keepOpenPage) {
@@ -1786,7 +1786,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // its sidebar still wants tree-change pings — MCP growing a first page
     // into an empty workspace is this feature's founding case. Idempotent when
     // the line above already ran.
-    _reconcileViewsEvents();
+    _syncCtrl.reconcileViewsEvents();
   }
 
   /// Returns the new view's id (null on failure) so the caller can drop it into
@@ -2938,7 +2938,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
     }());
   }
-
 
   Future<void> _aiCurrentFromMarkdown(String markdown) {
     return _run(() async {
@@ -5038,19 +5037,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  Future<void> _addWorkspaceMember(String email, WorkspaceRole role) {
-    return _run(() async {
-      final session = _requireSession();
-      final workspace = _requireWorkspace();
-      await _membersCtrl.add(
-        session.accessToken,
-        workspace.id,
-        email,
-        role.apiValue,
-      );
-    });
-  }
-
   Future<void> _updateWorkspaceMember(
     WorkspaceMember member,
     WorkspaceRole role,
@@ -5138,7 +5124,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// credentials — used by sign-out (after wiping creds) and by switching
   /// cloud servers (which deliberately keeps the old origin's creds, P3c-2).
   void _disconnectCloudSession() {
-    _closeAllDocumentSync();
+    _syncCtrl.closeAllDocumentSync();
     // The tree-change socket is a cloud thing too; without this it would keep
     // reconnecting with a token that logout just revoked.
     _syncCtrl.disposeViewsEvents();
@@ -5273,7 +5259,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // its sidebar still wants tree-change pings — MCP growing a first page
     // into an empty workspace is this feature's founding case. Idempotent when
     // the line above already ran.
-    _reconcileViewsEvents();
+    _syncCtrl.reconcileViewsEvents();
     return true;
   }
 
@@ -5309,7 +5295,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// hub's trees); this State-level adapter keeps the call sites unchanged.
   Future<void> _sweepPendingOutboxes() =>
       _syncCtrl.sweepPendingOutboxes();
-
 
   /// Build a bootstrap for a cloud [view] from its on-device mirror (offline
   /// doc-open, P1c). On desktop the mirrored replica loads synchronously via
@@ -6047,7 +6032,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // form still rendered and still accepted an email, because local entries
       // carry role 'owner' so canManage was true — you could invite someone and
       // nothing whatsoever happened.
-      onAddMember: local ? null : _addWorkspaceMember,
+      invitations: local ? null : _invites,
       onLoadWorkspaceUsage: local ? null : _loadWorkspaceUsage,
       onUpdateMember: local ? null : _updateWorkspaceMember,
       onRemoveMember: local ? null : _removeWorkspaceMember,

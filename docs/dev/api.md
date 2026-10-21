@@ -202,8 +202,15 @@ Trashing is a soft delete and reversible; purging is neither.
 | GET/PATCH/DELETE | `/workspaces/{ws}` | Read / rename / delete |
 | POST | `/workspaces/reorder` | Sidebar order |
 | GET | `/workspaces/{ws}/usage` | Bytes used |
-| GET/POST | `/workspaces/{ws}/members` | List / invite |
+| GET/POST | `/workspaces/{ws}/members` | List / invite (POST creates an invitation, not a member) |
 | PATCH/DELETE | `/workspaces/{ws}/members/{user_id}` | Change role / remove |
+| GET | `/workspaces/{ws}/invitations` | Pending invitations (owner/admin) |
+| DELETE | `/workspaces/{ws}/invitations/{id}` | Revoke an invitation |
+| GET | `/invitations` | Invitations addressed to me (verified email) |
+| POST | `/invitations/{id}/accept` | Accept: join the workspace |
+| POST | `/invitations/{id}/decline` | Decline |
+
+See [`features/workspace-invitations.md`](../features/workspace-invitations.md).
 
 ## Import
 

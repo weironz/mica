@@ -136,18 +136,21 @@ pub(crate) fn render_quote_group(
 }
 
 pub(crate) fn list_indent(block: &Block) -> usize {
-  // Cap at 8 to mirror the Dart editor's read (model.dart `indent` getter,
-  // `.clamp(0, 8)`). Without this cap the two engines DISAGREE on a block whose
+  // Cap at `MAX_NESTING_DEPTH` (8) to mirror the Dart editor's read
+  // (model.dart `indent` getter, `kMaxNestingDepth`). Without this cap the two engines DISAGREE on a block whose
   // `data.indent` was written past 8 by a non-editor client (MCP/REST/API-token,
   // or an import): Rust rendered N levels, Dart rendered 8 — same data, two
   // outputs, violating the round-trip/parity invariant. (P1-4.) Non-destructive,
   // like Dart's: the stored value is untouched, only the rendered depth is bound.
-  (block.data.get("indent").and_then(Value::as_u64).unwrap_or(0) as usize).min(8)
+  data_depth(block, "indent").unwrap_or(0)
 }
 
 /// Is this block a container child of a list item, and at which level?
+/// Clamped like `list_indent` (Dart `liLevel`): an unbounded `data.li` drove
+/// `render_html_list` one recursion per level and `export_md`'s
+/// `" ".repeat(level * 4 + 4)` — `li: 1e9` was a 4 GB string (P1-6).
 pub(crate) fn li_of(block: &Block) -> Option<usize> {
-  block.data.get("li").and_then(Value::as_u64).map(|v| v as usize)
+  data_depth(block, "li")
 }
 
 /// The effective list level a block sits at: items by `data.indent`,

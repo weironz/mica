@@ -436,8 +436,12 @@ locale 探测、`runZonedGuarded` 之前**。于是 `main()` 走不到 `register
 ## 6. 导出/导入:round-trip 是不变量
 
 - **Mica 自己的导出没有单层顶壳** → 导入时不触发剥壳/造壳,原样还原。这是红线。
-- **folder 的名字只在 manifest `title` 里**(它没有 `.md`/H1 可兜底),
-  导入必须读 `title`,否则拿到的是路径里被 sanitize 过的名字(空格标点变 `_`)。
+- **folder 和文档的名字都以 manifest `title` 为准**,导入必须读 `title`,否则拿到的是
+  路径里被 sanitize 过的名字(空格标点变 `_`,重名加 `-2`)。
+  〔文档这一半到 2026-10-21(评审 P1-5)才补上:之前只有 folder 读 `title`,文档从文件名取名,
+  于是「Meeting notes」导入成 `Meeting_notes`,而导出写的 `# Meeting notes` 又因不再精确匹配
+  留在正文 —— 改名 + 标题重复。唯一的闭环测试用的「季度回顾」sanitize 改不动它,测不到。
+  **闭环测试的输入要专挑会被编码改写的值**(空格、标点、重名、带 front matter)。〕
 - **页面的名字是页面的属性,不是正文里的一行 —— 但这个属性住在文档里。**
   〔2026-08-27 改写。原文是「导出不写 `# {name}`,导入不从正文提取」,已被
   `page-title-plan.md` 推翻:名字曾经只在 `views.name` 列上,于是文本一离开 Mica
@@ -445,8 +449,10 @@ locale 探测、`runZonedGuarded` 之前**。于是 `main()` 走不到 `register
   导入把它**剥回**属性。「不是正文里的一行」这条继续成立:root 块不是正文块。〕
   剥离只对**自家归档**(manifest `generator: mica`)和 **Notion**(它把标题同时塞进
   文件名和正文首个 H1)生效,且**只在精确匹配时** —— 一个恰好在开头的标题是作者的内容。
-  两侧(`with_page_title` / `strip_leading_h1`)**必须一起改**;`interchange` 里那条
-  `a_mica_export_survives_import_and_re_export_byte_for_byte` 是唯一同时走过两边的测试。
+  两侧(`with_page_title` / `strip_page_title`,都在 `mica_markdown`,相邻、共用同一个
+  标题行判定和 front matter 拆分)**必须一起改**;剥离要**跳过 front matter** 去找,因为写侧
+  把标题放在它后面。`interchange` 里 `a_mica_export_survives_import_and_re_export_byte_for_byte`
+  与 `names_the_file_name_cannot_carry_survive_export_then_import` 同时走过两边。
 - **一条规则被推翻时,要搜的是它的每一处表述,不是改掉最先看到的那处。** 这一条自己就是
   证据:P1 改了 `export-import.md` 第 67 行、漏了同一份文档第 130 行的整段,也漏了上面
   这条 —— 三处说的是同一件事,后两处到 P3 才补上,中间隔了一整轮实施。

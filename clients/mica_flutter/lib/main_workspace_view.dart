@@ -134,7 +134,7 @@ class WorkspaceView extends StatefulWidget {
     this.onClearMirrorCache,
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
-    this.onAddMember,
+    this.invitations,
     this.onLoadWorkspaceUsage,
     this.onUpdateMember,
     this.onRemoveMember,
@@ -509,7 +509,7 @@ class WorkspaceView extends StatefulWidget {
   ///
   /// NULL, not a no-op. It used to be `(_, _, {notion}) async {}`, so local
   /// mode kept offering "import a workspace archive" and did nothing at all
-  /// when you used it. That is the shape `onAddMember` was fixed for two doors
+  /// when you used it. That is the shape the member form was fixed for two doors
   /// down, and the note there already says why: a no-op still renders, still
   /// accepts the input, and leaves the user believing something happened.
   final Future<void> Function(String fileName, Uint8List bytes, {bool notion})?
@@ -517,10 +517,10 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
   onImportWorkspaceTreeInto;
 
-  /// All three are null in 本地模式, where membership does not exist. Absent
-  /// rather than inert: see the member section in
-  /// [_WorkspaceViewState._openWorkspaceSettingsDialog].
-  final Future<void> Function(String email, WorkspaceRole role)? onAddMember;
+  /// Null in 本地模式, where membership does not exist (as are the two member
+  /// callbacks below). Absent rather than inert: see the member section in
+  /// [_WorkspaceViewState._openWorkspaceSettingsDialog]. Inviting goes here.
+  final InvitationsController? invitations;
 
   /// Storage this workspace occupies + the limit in force. Null in 本地模式:
   /// there is no server to ask and no quota to be near.
@@ -575,7 +575,6 @@ class WorkspaceView extends StatefulWidget {
 
 class _WorkspaceViewState extends State<WorkspaceView> {
   final _rename = TextEditingController();
-  final _memberEmail = TextEditingController();
   final _pageTitle = TextEditingController();
   final FocusNode _editorFocus = FocusNode(debugLabel: 'MicaEditorBody');
   final FocusNode _pageTitleFocus = FocusNode(debugLabel: 'PageTitle');
@@ -713,7 +712,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // toggles (AppFlowy-style: they live in their own slim column, opacity 0
   // at rest so the page icons keep one aligned column).
   bool _navHovered = false;
-  WorkspaceRole _memberRole = WorkspaceRole.editor;
   bool _toolsExpanded = false;
   bool _navCollapsed = false;
   // Narrow shell only: the sidebar is an overlay, and this is whether it is up.
@@ -1002,7 +1000,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _inlineRename.removeListener(_syncRenameState);
     HardwareKeyboard.instance.removeHandler(_escKeyEvent);
     _rename.dispose();
-    _memberEmail.dispose();
     _pageTitle.dispose();
     _editorFocus.dispose();
     _pageTitleFocus.dispose();
@@ -1450,6 +1447,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     ),
                   ],
                 ),
+                if (widget.invitations case final invitations?)
+                  ReceivedInvitationsCard(controller: invitations),
                 if (widget.message != null) ...[
                   const SizedBox(height: 12),
                   ErrorBanner(widget.message!),
@@ -3818,7 +3817,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // The role check alone was not enough: local entries are minted as
           // 'owner', so it said yes in a world with no membership API.
           final canManage =
-              matchesManageRole(ws.role) && widget.onAddMember != null;
+              matchesManageRole(ws.role) && widget.invitations != null;
           final members = widget.members;
           return AlertDialog(
             title: Text(l10n.workspaceSettings),
@@ -3885,7 +3884,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       ),
                     ),
                     const SizedBox(height: 22),
-                    if (widget.onAddMember == null)
+                    if (widget.invitations == null)
                       EmptyState(
                         icon: Icons.group_outlined,
                         title: l10n.workspaceMembersLocalTitle,
@@ -3906,7 +3905,10 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                       ),
                       const SizedBox(height: 12),
                       if (canManage) ...[
-                        _addMemberForm(setLocal),
+                        MemberInviteSection(
+                          controller: widget.invitations!,
+                          workspaceId: ws.id,
+                        ),
                         const SizedBox(height: 14),
                       ],
                       if (members.isEmpty)
@@ -3953,54 +3955,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           );
         },
       ),
-    );
-  }
-
-  /// Add-member form for the settings dialog. [setLocal] rebuilds the dialog
-  /// (role dropdown selection + the refreshed member list after an add).
-  Widget _addMemberForm(void Function(void Function()) setLocal) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          controller: _memberEmail,
-          keyboardType: TextInputType.emailAddress,
-          decoration: InputDecoration(
-            labelText: context.l10n.workspaceMemberEmail,
-            prefixIcon: const Icon(Icons.alternate_email),
-            border: const OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 10),
-        DropdownButtonFormField<WorkspaceRole>(
-          initialValue: _memberRole,
-          decoration: InputDecoration(
-            labelText: context.l10n.widgetRoleLabel,
-            border: const OutlineInputBorder(),
-          ),
-          items: WorkspaceRole.values
-              .map(
-                (role) =>
-                    DropdownMenuItem(value: role, child: Text(role.apiValue)),
-              )
-              .toList(),
-          onChanged: (role) {
-            if (role == null) return;
-            setLocal(() => _memberRole = role);
-          },
-        ),
-        const SizedBox(height: 10),
-        FilledButton.icon(
-          onPressed: () async {
-            // Non-null: this form only renders when canManage, which requires it.
-            await widget.onAddMember!(_memberEmail.text, _memberRole);
-            _memberEmail.clear();
-            setLocal(() {});
-          },
-          icon: const Icon(Icons.person_add),
-          label: Text(context.l10n.workspaceMemberAdd),
-        ),
-      ],
     );
   }
 

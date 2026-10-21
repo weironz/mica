@@ -861,7 +861,36 @@
   "workspaceMembersLocalDetail": "It lives only on this device — no account, no sharing. Use \"Move to cloud…\" in the workspace menu to turn it into a cloud workspace and invite people.",
   "workspaceNoMembers": "No members loaded.",
   "workspaceMemberEmail": "Member email",
-  "workspaceMemberAdd": "Add",
+  "workspaceMemberInvite": "Invite",
+  "workspaceInviteSent": "Invitation sent. They join once they accept.",
+  "workspaceInviteAlreadyMember": "That address is already a member.",
+  "workspaceInvitesPending": "Pending invitations",
+  "workspaceInvitePendingBadge": "Pending",
+  "workspaceInviteRevoke": "Revoke invitation",
+  "invitationsReceivedTitle": "Invitations for you",
+  "invitationInvitedBy": "{name} invited you as {role}",
+  "@invitationInvitedBy": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "role": {
+        "type": "String"
+      }
+    }
+  },
+  "invitationInvitedAs": "Invited as {role}",
+  "@invitationInvitedAs": {
+    "placeholders": {
+      "role": {
+        "type": "String"
+      }
+    }
+  },
+  "invitationAccept": "Accept",
+  "invitationDecline": "Decline",
+  "invitationGone": "That invitation is no longer available.",
+  "invitationActionFailed": "That didn't go through. Please try again.",
   "workspaceCloudNeedsSignIn": "Sign in to create a cloud workspace.",
   "workspaceKindLocal": "Local",
   "workspaceKindCloud": "Cloud",

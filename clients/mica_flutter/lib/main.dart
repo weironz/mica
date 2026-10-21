@@ -32,6 +32,8 @@ import 'ui/sidebar_tree_controller.dart';
 import 'ui/tree_drop_planner.dart';
 import 'views/cloud_views_controller.dart';
 import 'views/members_controller.dart';
+import 'views/invitations_controller.dart';
+import 'ui/workspace_invitations.dart';
 import 'swallowed.dart';
 import 'local/local_offline.dart';
 import 'editor/word_count.dart';

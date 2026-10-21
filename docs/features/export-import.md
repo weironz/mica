@@ -142,10 +142,22 @@ and plans; the executor (`crates/api-server/src/routes/import.rs`) then:
    what it overturns.〕
 
    The pairing is what matters: `with_page_title` on the way out and
-   `strip_leading_h1` on the way in remove exactly each other, so
-   export→import→export is byte-stable (CLAUDE.md #4) and a cycle never stacks a
-   second heading. `a_mica_export_survives_import_and_re_export_byte_for_byte`
-   (`interchange/src/import.rs`) is the test that walks all of it.
+   `strip_page_title` on the way in (both in `mica_markdown`, side by side,
+   sharing one heading predicate and the parser's own front-matter split) remove
+   exactly each other, so export→import→export is byte-stable (CLAUDE.md #4) and
+   a cycle never stacks a second heading. The title is looked for **after any
+   front matter**, because that is where the writer puts it.
+   `a_mica_export_survives_import_and_re_export_byte_for_byte` and
+   `names_the_file_name_cannot_carry_survive_export_then_import`
+   (`interchange/src/import.rs`) walk all of it.
+
+   A document in our own archive takes its **name from the manifest `title`**,
+   exactly like a folder — not from the file name, which `safe_segment` and the
+   sibling `-2` suffix rewrite (`Meeting notes` → `Meeting_notes.md`). Reading
+   the file name renamed such pages on every round trip, and the renamed page
+   then no longer matched its own `# Meeting notes`, which stayed in the body.
+   (Fixed 2026-10-21, review P1-5.) Notion and foreign archives still take the
+   file name, extension removed in any case (`.md`/`.MD`/`.Md`).
 
    Stripping happens for **our own archives** (manifest `generator: mica`) and
    for **Notion archives** — Notion puts the title in the file name *and* repeats

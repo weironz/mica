@@ -142,13 +142,13 @@ pub(crate) fn batch_ack(applied: usize, last: Option<Value>) -> Result<CallToolR
 pub(crate) fn action_ack(
   result: Result<Value, McpError>,
   action: &str,
-  view_id: &str,
+  view_id: impl std::fmt::Display,
 ) -> Result<CallToolResult, McpError> {
   match result {
     Ok(_) => tool_result(Ok(json!({
         "ok": true,
         "action": action,
-        "view_id": view_id,
+        "view_id": view_id.to_string(),
     }))),
     Err(error) => Ok(tool_error(error)),
   }

@@ -26,7 +26,7 @@ use uuid::Uuid;
     };
     use super::super::search::{scan_backlinks, search_views, workspace_graph};
     use super::super::transfer::{ancestor_pairs_of_roots, independent_roots};
-    use super::super::trash::{purge_views_batch, restore_views_batch, trash_views_batch};
+    use super::super::trash::{purge_one, purge_views_batch, restore_views_batch, trash_views_batch};
     use mica_app_core::search::BodyIndex;
     use mica_infra::ApiError;
     use sqlx::PgPool;
@@ -1622,7 +1622,7 @@ use uuid::Uuid;
       assert_eq!((again_views, again_docs), (0, 0));
     }
 
-    /// Permanent delete (`purge_view_subtree`) must erase the document AND every
+    /// Permanent delete (`purge_one`, behind `purge_view`) must erase the document AND every
     /// thing that hangs off it — not just the `views` row. Otherwise "永久删除"
     /// leaves the CRDT content, snapshots and a still-valid public share token
     /// behind (privacy hole + disk leak). This pins the ON DELETE CASCADE chain.
@@ -1645,9 +1645,9 @@ use uuid::Uuid;
       .await
       .unwrap();
 
-      let (views_deleted, docs_deleted) = purge_view_subtree(&db, ws, view).await.unwrap();
-      assert!(views_deleted >= 1, "the view subtree was removed");
-      assert_eq!(docs_deleted, 1, "the backing document was removed");
+      // Only the bin can be purged, so it goes there first — the way the UI does it.
+      trash_views_batch(&db, ws, &[view]).await.unwrap();
+      purge_one(&db, ws, view).await.unwrap();
 
       // Nothing that referenced the document may survive — the view, the
       // document, and every cascaded child table (CRDT base, snapshot, share).
@@ -1688,13 +1688,35 @@ use uuid::Uuid;
       );
     }
 
+    /// The single purge must refuse a page that is not in the bin.
+    ///
+    /// It used to have its own statement with no `is_deleted` filter: one
+    /// DELETE from any editor permanently erased a LIVE page and its subtree,
+    /// with no recoverable step (2026-10-21 review P1-8). It is now the batch
+    /// purge of one id, so this pins the call the handler actually makes.
+    #[tokio::test]
+    async fn a_single_purge_leaves_a_live_page_alone() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let (view, doc) = seed_document(&db, ws, user, "活页", serde_json::json!([])).await;
+
+      assert!(
+        matches!(purge_one(&db, ws, view).await, Err(ApiError::NotFound)),
+        "purging a page that is not in the bin must 404"
+      );
+      let alive: i64 = sqlx::query_scalar("SELECT count(*) FROM documents WHERE id=$1")
+        .bind(doc)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      assert_eq!(alive, 1, "the live page's document was erased");
+    }
+
     /// The bulk purge must refuse to touch a page that was never trashed.
     ///
-    /// This is where it deliberately differs from `purge_view`, which has no
-    /// such filter and WILL permanently erase a live page. Batching that
-    /// behaviour would turn one call into "destroy 300 pages nobody deleted,
-    /// with no recoverable step" — a new capability, not a faster old one. So
-    /// the untrashed id has to survive, and come back as skipped.
+    /// Batching a purge that skipped the bin check would turn one call into
+    /// "destroy 300 pages nobody deleted, with no recoverable step". So the
+    /// untrashed id has to survive, and come back as skipped.
     #[tokio::test]
     async fn a_bulk_purge_leaves_pages_that_are_not_in_the_bin() {
       let Some(db) = pool().await else { return };
@@ -2153,10 +2175,8 @@ use uuid::Uuid;
     }
 
     /// A trashed FOLDER carries its children, and the children's documents go
-    /// with them — the same cascade `purge_view_subtree` guarantees for one id.
-    /// Seeded from a set instead, which is the only part that is new, and the
-    /// part that would silently strand documents if the recursive arm were
-    /// written wrong.
+    /// with them — seeded from a set, which is the part that would silently
+    /// strand documents if the recursive arm were written wrong.
     #[tokio::test]
     async fn a_bulk_purge_takes_the_whole_subtree_and_its_documents() {
       let Some(db) = pool().await else { return };

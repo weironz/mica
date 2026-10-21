@@ -478,49 +478,15 @@ pub async fn list_members(
   Ok(Json(WorkspaceMemberListResponse { members }))
 }
 
+/// `POST /workspaces/{workspace_id}/members` — creates an INVITATION, not a
+/// membership; see invitations.rs for why and for the rules.
 pub async fn add_member(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<AddWorkspaceMemberRequest>,
-) -> ApiResult<Json<WorkspaceMemberResponse>> {
-  let actor_id = user_id_from_headers(&state, &headers).await?;
-  ensure_can_manage_members(&state.db, workspace_id, actor_id).await?;
-
-  let email = normalize_email(&payload.email)?;
-  let role = normalize_member_role(&payload.role)?;
-  let member_user_id = user_id_by_email(&state.db, &email)
-    .await?
-    .ok_or(ApiError::NotFound)?;
-  // The upsert below rewrites an EXISTING member's role, so "add" the owner's
-  // email with any role was a demotion — the one thing update/remove refuse.
-  ensure_not_workspace_owner(&state.db, workspace_id, member_user_id).await?;
-
-  // New member: the workspace lands at the END of THEIR switcher. An existing
-  // member (re-invite / role change) keeps their position — only role updates.
-  let member_pos = next_member_position(&state.db, member_user_id).await?;
-  sqlx::query(
-    r#"
-      INSERT INTO workspace_members (workspace_id, user_id, role, position)
-      VALUES ($1, $2, $3::workspace_role, $4)
-      ON CONFLICT (workspace_id, user_id) DO UPDATE
-      SET role = EXCLUDED.role
-    "#,
-  )
-  .bind(workspace_id)
-  .bind(member_user_id)
-  .bind(role)
-  .bind(member_pos)
-  .execute(&state.db)
-  .await?;
-
-  let member = fetch_workspace_member(&state.db, workspace_id, member_user_id)
-    .await?
-    .ok_or(ApiError::Internal(
-      "workspace member was not found".to_string(),
-    ))?;
-
-  Ok(Json(WorkspaceMemberResponse { member }))
+) -> ApiResult<Json<super::invitations::InvitationResponse>> {
+  super::invitations::invite_member(&state, &headers, workspace_id, &payload.email, &payload.role).await
 }
 
 pub async fn update_member(
@@ -588,7 +554,7 @@ pub async fn remove_member(
   Ok(Json(WorkspaceMemberListResponse { members }))
 }
 
-async fn fetch_workspace_for_user(
+pub(crate) async fn fetch_workspace_for_user(
   db: &PgPool,
   workspace_id: Uuid,
   user_id: Uuid,
@@ -710,14 +676,6 @@ pub(crate) async fn workspace_role(
   .map_err(ApiError::from)
 }
 
-async fn user_id_by_email(db: &PgPool, email: &str) -> ApiResult<Option<Uuid>> {
-  sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE email = $1")
-    .bind(email)
-    .fetch_optional(db)
-    .await
-    .map_err(ApiError::from)
-}
-
 pub(crate) async fn ensure_workspace_member(db: &PgPool, workspace_id: Uuid, user_id: Uuid) -> ApiResult<()> {
   workspace_role(db, workspace_id, user_id)
     .await?
@@ -726,7 +684,7 @@ pub(crate) async fn ensure_workspace_member(db: &PgPool, workspace_id: Uuid, use
   Ok(())
 }
 
-async fn ensure_can_manage_members(
+pub(crate) async fn ensure_can_manage_members(
   db: &PgPool,
   workspace_id: Uuid,
   user_id: Uuid,
@@ -771,16 +729,7 @@ fn normalize_workspace_name(name: &str) -> ApiResult<String> {
   Ok(name)
 }
 
-fn normalize_email(email: &str) -> ApiResult<String> {
-  let email = email.trim().to_ascii_lowercase();
-  if email.is_empty() || !email.contains('@') {
-    return Err(ApiError::BadRequest("valid email is required".to_string()));
-  }
-
-  Ok(email)
-}
-
-fn normalize_member_role(role: &str) -> ApiResult<String> {
+pub(crate) fn normalize_member_role(role: &str) -> ApiResult<String> {
   let role = role.trim().to_ascii_lowercase();
   if matches!(role.as_str(), "admin" | "editor" | "commenter" | "viewer") {
     return Ok(role);
