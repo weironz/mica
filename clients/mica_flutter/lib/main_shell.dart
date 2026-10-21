@@ -47,6 +47,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// The workspace members map — see views/members_controller.dart. The field
   /// below is a synced view-model copy for the build helpers.
   late final MembersController _membersCtrl;
+  /// Workspace invitations (views/invitations_controller.dart).
+  late final InvitationsController _invites = InvitationsController(
+    api: _api,
+    token: () => _sessionCtrl.session?.accessToken,
+    onJoined: (w) => _refreshWorkspaces().then((_) => _selectWorkspaceById(w.id)),
+  );
   Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
 
@@ -1232,6 +1238,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _sessionCtrl.removeListener(_syncSessionState);
     _auth.removeListener(_syncAuthState);
     _membersCtrl.removeListener(_syncMembersState);
+    _invites.dispose();
     _import.removeListener(_syncImportState);
     themeModeController.removeListener(_schedulePushSettings);
     localeController.removeListener(_schedulePushSettings);
@@ -1253,6 +1260,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// every build helper reading them sees the values it always did.
   void _syncSessionState() {
     if (!mounted) return;
+    // The invitee inbox rides on every new workspace list (startup, sign-in,
+    // refresh; sign-out clears it). No push — a list refresh is the moment.
+    final newList = !identical(_sessionCtrl.workspaces, _workspaces);
+    if (newList) unawaited(_invites.refreshReceived());
     setState(() {
       _session = _sessionCtrl.session;
       _workspaces = _sessionCtrl.workspaces;
@@ -1379,7 +1390,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   void _initMembersController() {
     _membersCtrl = MembersController(
       listMembers: _api.listWorkspaceMembers,
-      addMember: _api.addWorkspaceMember,
       updateMember: _api.updateWorkspaceMember,
       removeMember: _api.removeWorkspaceMember,
     )..addListener(_syncMembersState);
@@ -5027,19 +5037,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  Future<void> _addWorkspaceMember(String email, WorkspaceRole role) {
-    return _run(() async {
-      final session = _requireSession();
-      final workspace = _requireWorkspace();
-      await _membersCtrl.add(
-        session.accessToken,
-        workspace.id,
-        email,
-        role.apiValue,
-      );
-    });
-  }
-
   Future<void> _updateWorkspaceMember(
     WorkspaceMember member,
     WorkspaceRole role,
@@ -6035,7 +6032,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // form still rendered and still accepted an email, because local entries
       // carry role 'owner' so canManage was true — you could invite someone and
       // nothing whatsoever happened.
-      onAddMember: local ? null : _addWorkspaceMember,
+      invitations: local ? null : _invites,
       onLoadWorkspaceUsage: local ? null : _loadWorkspaceUsage,
       onUpdateMember: local ? null : _updateWorkspaceMember,
       onRemoveMember: local ? null : _removeWorkspaceMember,

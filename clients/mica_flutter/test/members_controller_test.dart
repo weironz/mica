@@ -27,9 +27,6 @@ void main() {
           calls.add('list:$workspaceId');
           return listAnswer;
         },
-        addMember: (token, workspaceId, email, role) async {
-          calls.add('add:$workspaceId/$email/$role');
-        },
         updateMember: (token, workspaceId, userId, role) async {
           calls.add('update:$workspaceId/$userId/$role');
         },
@@ -38,14 +35,6 @@ void main() {
           return listAnswer;
         },
       );
-
-  test('add RELOADS the list afterwards (the POST answer is one member)',
-      () async {
-    final c = build();
-    await c.add('t', 'w1', 'a@t.dev', 'editor');
-    expect(calls, ['add:w1/a@t.dev/editor', 'list:w1'],
-        reason: 'addWorkspaceMember answered a member, not the list');
-  });
 
   test('update RELOADS the list afterwards', () async {
     final c = build();

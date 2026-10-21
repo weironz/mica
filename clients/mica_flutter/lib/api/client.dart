@@ -338,7 +338,10 @@ class ApiClient {
         .toList();
   }
 
-  Future<WorkspaceMember> addWorkspaceMember(
+  /// Invite [email] into the workspace. Adding a member is an invitation now:
+  /// the person joins only when THEY accept, and the answer is the same whether
+  /// or not the address has an account. 409 when it already is a member.
+  Future<WorkspaceInvitation> inviteWorkspaceMember(
     String token,
     String workspaceId,
     String email,
@@ -348,7 +351,60 @@ class ApiClient {
       'email': email,
       'role': role,
     }, token: token);
-    return WorkspaceMember.fromJson(response['member'] as Map<String, dynamic>);
+    return WorkspaceInvitation.fromJson(
+      response['invitation'] as Map<String, dynamic>,
+    );
+  }
+
+  /// Pending invitations of a workspace (admins only).
+  Future<List<WorkspaceInvitation>> listWorkspaceInvitations(
+    String token,
+    String workspaceId,
+  ) async {
+    final response = await _get(
+      '/api/workspaces/$workspaceId/invitations',
+      token,
+    );
+    return (response['invitations'] as List<dynamic>)
+        .map((i) => WorkspaceInvitation.fromJson(i as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> revokeWorkspaceInvitation(
+    String token,
+    String workspaceId,
+    String invitationId,
+  ) async {
+    await _delete(
+      '/api/workspaces/$workspaceId/invitations/$invitationId',
+      token,
+    );
+  }
+
+  /// Invitations addressed to the signed-in user's (verified) email.
+  Future<List<ReceivedInvitation>> listReceivedInvitations(String token) async {
+    final response = await _get('/api/invitations', token);
+    return (response['invitations'] as List<dynamic>)
+        .map((i) => ReceivedInvitation.fromJson(i as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Accept: the answer is the workspace just joined, ready to switch to.
+  Future<Workspace> acceptInvitation(String token, String invitationId) async {
+    final response = await _post(
+      '/api/invitations/$invitationId/accept',
+      const {},
+      token: token,
+    );
+    return Workspace.fromJson(response['workspace'] as Map<String, dynamic>);
+  }
+
+  Future<void> declineInvitation(String token, String invitationId) async {
+    await _post(
+      '/api/invitations/$invitationId/decline',
+      const {},
+      token: token,
+    );
   }
 
   Future<WorkspaceMember> updateWorkspaceMember(

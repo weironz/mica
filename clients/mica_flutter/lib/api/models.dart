@@ -452,6 +452,62 @@ class WorkspaceMember {
   final String? avatarVersion;
 }
 
+/// A pending invitation as the workspace's admins see it
+/// (`GET /workspaces/{id}/invitations`, and the answer to `POST …/members`).
+///
+/// Keyed by email, never by user id: whether that address has an account is
+/// exactly what the server will not say.
+class WorkspaceInvitation {
+  const WorkspaceInvitation({
+    required this.id,
+    required this.workspaceId,
+    required this.email,
+    required this.role,
+  });
+
+  factory WorkspaceInvitation.fromJson(Map<String, dynamic> json) {
+    return WorkspaceInvitation(
+      id: json['id'] as String,
+      workspaceId: json['workspace_id'] as String,
+      email: json['email'] as String,
+      role: json['role'] as String,
+    );
+  }
+
+  final String id;
+  final String workspaceId;
+  final String email;
+  final String role;
+}
+
+/// An invitation addressed to the signed-in user (`GET /invitations`).
+class ReceivedInvitation {
+  const ReceivedInvitation({
+    required this.id,
+    required this.workspaceId,
+    required this.workspaceName,
+    required this.role,
+    required this.invitedByName,
+  });
+
+  factory ReceivedInvitation.fromJson(Map<String, dynamic> json) {
+    return ReceivedInvitation(
+      id: json['id'] as String,
+      workspaceId: json['workspace_id'] as String,
+      workspaceName: json['workspace_name'] as String,
+      role: json['role'] as String,
+      // Empty for an inviter whose account has since been deleted.
+      invitedByName: json['invited_by_name'] as String? ?? '',
+    );
+  }
+
+  final String id;
+  final String workspaceId;
+  final String workspaceName;
+  final String role;
+  final String invitedByName;
+}
+
 class SearchResult {
   const SearchResult({
     required this.viewId,
