@@ -50,6 +50,7 @@
 | [page-title-plan.md](features/page-title-plan.md) | 页面标题:从视图属性改为文档的一部分 |
 | [page-properties.md](features/page-properties.md) | 页面属性 / 标签 |
 | [sharing.md](features/sharing.md) | 页面分享(Publish-to-web) |
+| [workspace-invitations.md](features/workspace-invitations.md) | 工作区邀请:添加成员改为对方接受后加入 |
 | [export-import.md](features/export-import.md) | 导出 / 导入设计 |
 | [cross-workspace-move.md](features/cross-workspace-move.md) | 跨工作区移动 / 复制 |
 | [vault-mode.md](features/vault-mode.md) | Vault 模式(本地 Markdown 文件) |
