@@ -2118,6 +2118,7 @@ name = "mica-app-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "libc",
  "mica-core",
  "mica-infra",
  "mica-markdown",

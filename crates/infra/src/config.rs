@@ -102,6 +102,12 @@ pub struct AppConfig {
   /// comparable that limits at all) only forbids multiple teams on self-hosted
   /// outright.
   pub owner_quota_bytes: i64,
+  /// Pin the search index's bodies in RAM (`mlock`) so the kernel cannot page
+  /// them out — `MICA_SEARCH_INDEX_MLOCK`, ON unless set to off/0/false/no.
+  /// Needs CAP_IPC_LOCK in the container; without it the index logs a warning
+  /// and stays swappable, it does not fail to start. See app-core
+  /// `body_arena` for the production numbers behind it.
+  pub search_index_mlock: bool,
   /// Window + cadence knobs for the yrs update stream. See [`SyncTuning`].
   pub sync_tuning: SyncTuning,
   /// Public origin the app is reached at, e.g. `https://mica.example.com` — used
@@ -284,6 +290,7 @@ impl AppConfig {
     let workspace_quota_bytes =
       workspace_quota(env::var("MICA_WORKSPACE_QUOTA_BYTES").ok().as_deref());
     let owner_quota_bytes = owner_quota(env::var("MICA_OWNER_QUOTA_BYTES").ok().as_deref());
+    let search_index_mlock = search_index_mlock(env::var("MICA_SEARCH_INDEX_MLOCK").ok().as_deref());
 
     let sync_tuning = SyncTuning::from_env();
 
@@ -309,6 +316,7 @@ impl AppConfig {
       registration_enabled,
       workspace_quota_bytes,
       owner_quota_bytes,
+      search_index_mlock,
       sync_tuning,
       app_base_url,
     })
@@ -327,6 +335,17 @@ pub fn registration_open(raw: Option<String>) -> bool {
       "true" | "1" | "yes" | "on"
     )
   })
+}
+
+/// `MICA_SEARCH_INDEX_MLOCK`: on unless explicitly off. The opposite polarity
+/// from [`registration_open`] on purpose — this one protects latency and costs
+/// nothing to leave on, so a typo or a blank (compose's `${VAR:-}` passes "")
+/// keeps it ON rather than silently dropping it.
+pub fn search_index_mlock(raw: Option<&str>) -> bool {
+  !matches!(
+    raw.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+    Some("off" | "0" | "false" | "no")
+  )
 }
 
 /// Per-workspace byte ceiling from the raw `MICA_WORKSPACE_QUOTA_BYTES`.
@@ -675,6 +694,17 @@ mod quota_parse {
 
   /// B7: the owner ceiling is opt-in — off unless set (the 2026-08-06
   /// decision against total quotas), a number when set.
+  #[test]
+  fn search_index_mlock_is_on_unless_turned_off() {
+    use super::search_index_mlock;
+    for on in [None, Some(""), Some("  "), Some("on"), Some("1"), Some("yes"), Some("ture")] {
+      assert!(search_index_mlock(on), "{on:?} must leave it on");
+    }
+    for off in ["off", "OFF", " 0 ", "false", "No"] {
+      assert!(!search_index_mlock(Some(off)), "{off:?} must turn it off");
+    }
+  }
+
   #[test]
   fn owner_quota_is_off_unless_set() {
     assert_eq!(owner_quota(None), 0);
