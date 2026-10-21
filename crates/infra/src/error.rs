@@ -46,6 +46,21 @@ pub enum ApiError {
   Internal(String),
 }
 
+/// The constraint name the page-tree trigger raises with (migrations 0011 and
+/// 0033): the parent was not a live folder in the child's workspace AT THE
+/// MOMENT OF THE WRITE. The API checks the same rule up front and answers 400 /
+/// 404 there, so reaching the trigger means the tree changed in between — a
+/// folder trashed while an import was still filling it. That is the caller's
+/// conflict to resolve, not a server fault.
+const PARENT_GUARD_CONSTRAINT: &str = "views_parent_must_be_folder";
+
+fn is_parent_guard(error: &sqlx::Error) -> bool {
+  error
+    .as_database_error()
+    .and_then(|e| e.constraint())
+    .is_some_and(|c| c == PARENT_GUARD_CONSTRAINT)
+}
+
 impl ApiError {
   /// The message a CLIENT may see. Database and migration errors carry the
   /// raw sqlx/Postgres text (constraint and column names, sometimes values);
@@ -55,6 +70,11 @@ impl ApiError {
   /// with secrets in it no longer do.
   pub fn public_message(&self) -> String {
     match self {
+      Self::Database(e) if is_parent_guard(e) => {
+        "the target folder changed while this ran — it was deleted, or is not a folder in \
+         this workspace; refresh and try again"
+          .to_string()
+      }
       Self::Database(_) | Self::Migration(_) => {
         tracing::error!(error = %self, "database error");
         "internal database error".to_string()
@@ -80,6 +100,7 @@ impl IntoResponse for ApiError {
       Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
       Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
       Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable"),
+      Self::Database(e) if is_parent_guard(e) => (StatusCode::CONFLICT, "conflict"),
       Self::Database(_) | Self::Migration(_) | Self::Internal(_) => {
         (StatusCode::INTERNAL_SERVER_ERROR, "internal")
       }

@@ -482,7 +482,12 @@ async fn ensure_view_in_workspace(db: &PgPool, workspace_id: Uuid, view_id: Uuid
 /// folders contain (see `migrations/0011_pages_are_leaves.sql`, which repairs
 /// the trees that predate this and enforces the same rule at the DB as a
 /// backstop). Every path that sets `parent_view_id` goes through here so the
-/// caller gets a 400 with a reason instead of tripping the trigger's 500.
+/// caller gets a 400 with a reason up front.
+///
+/// Up front is all it is: a long write (an import runs for minutes) can see
+/// the folder trashed after this returned. The trigger re-checks the same rule
+/// — live, folder, same workspace — at each write (migration 0033), and its
+/// refusal reaches the caller as a 409 (`mica_infra::ApiError`).
 pub(crate) async fn ensure_parent_accepts_children(
   db: &PgPool,
   workspace_id: Uuid,

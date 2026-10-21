@@ -739,6 +739,176 @@ use uuid::Uuid;
       );
     }
 
+    /// Insert a LIVE document view straight into the table under `parent`
+    /// (in `ws`) — the shape of the import executor's per-page INSERT, with
+    /// no API guard in front of it.
+    async fn insert_child(db: &PgPool, ws: Uuid, user: Uuid, parent: Uuid) -> Result<(), sqlx::Error> {
+      sqlx::query(
+        "INSERT INTO views(workspace_id,parent_view_id,object_id,object_type,name,position,created_by) \
+         VALUES($1,$2,$3,'document'::object_type,'V','0',$4)",
+      )
+      .bind(ws)
+      .bind(parent)
+      .bind(Uuid::new_v4())
+      .bind(user)
+      .execute(db)
+      .await
+      .map(|_| ())
+    }
+
+    async fn status_of(error: sqlx::Error) -> (axum::http::StatusCode, String) {
+      use axum::response::IntoResponse;
+      let response = ApiError::from(error).into_response();
+      let status = response.status();
+      let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+      (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    /// C2 (review 2026-10-21): `ensure_parent_accepts_children` runs once, at
+    /// the START of a request — and an import runs for minutes after it. A
+    /// folder trashed in that window kept receiving pages: live rows under a
+    /// deleted parent, invisible in the tree, then deleted for real by
+    /// `parent_view_id ON DELETE CASCADE` when the bin was emptied, leaving
+    /// their `documents`/share rows behind. The trigger is the only check that
+    /// runs at the moment of the write, so it has to know about the bin.
+    #[tokio::test]
+    async fn the_trigger_refuses_a_live_child_under_a_trashed_folder() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let folder = seed_view(&db, ws, user, "folder").await;
+      // The request-time check passed …
+      ensure_parent_accepts_children(&db, ws, folder).await.unwrap();
+      // … then the folder went to the bin while the import kept running.
+      trash_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      let error = insert_child(&db, ws, user, folder)
+        .await
+        .expect_err("a live page must not land under a trashed folder");
+      // A conflict the caller can act on (refresh, pick another folder), not
+      // a 500 — and not the raw Postgres text either.
+      let (status, body) = status_of(error).await;
+      assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
+      assert!(body.contains("folder"), "{body}");
+      assert!(!body.contains(&folder.to_string()), "no raw database text: {body}");
+    }
+
+    /// The window the trigger itself could leave open: a trash of the folder
+    /// that has written the row but not yet committed. A plain read inside the
+    /// trigger sees the old, live row and lets the child in; `FOR SHARE` makes
+    /// the insert wait for the trash to commit and then see the bin.
+    #[tokio::test]
+    async fn an_insert_racing_an_uncommitted_trash_waits_and_is_refused() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let folder = seed_view(&db, ws, user, "folder").await;
+
+      let mut trash = db.begin().await.unwrap();
+      sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+        .bind(folder)
+        .execute(&mut *trash)
+        .await
+        .unwrap();
+      let db2 = db.clone();
+      let insert = tokio::spawn(async move { insert_child(&db2, ws, user, folder).await });
+      tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+      assert!(!insert.is_finished(), "the insert must wait on the trash, not read past it");
+      trash.commit().await.unwrap();
+
+      assert!(
+        insert.await.unwrap().is_err(),
+        "after the trash commits, the waiting insert sees the bin and is refused"
+      );
+    }
+
+    #[tokio::test]
+    async fn the_trigger_refuses_moving_a_live_page_under_a_trashed_folder() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let folder = seed_view(&db, ws, user, "folder").await;
+      let page = seed_view(&db, ws, user, "document").await;
+      trash_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      let moved = sqlx::query("UPDATE views SET parent_view_id = $1 WHERE id = $2")
+        .bind(folder)
+        .bind(page)
+        .execute(&db)
+        .await;
+      assert!(moved.is_err(), "a move is a write of parent_view_id too");
+    }
+
+    /// The same rule's other half: nothing checks at write time that a parent
+    /// lives in the CHILD's workspace — a cross-workspace edge makes a subtree
+    /// that one workspace's queries walk into the other's rows.
+    #[tokio::test]
+    async fn the_trigger_refuses_a_parent_in_another_workspace() {
+      let Some(db) = pool().await else { return };
+      let (ws_a, user) = seed_workspace(&db).await;
+      let (ws_b, _) = seed_workspace(&db).await;
+      let folder_in_a = seed_view(&db, ws_a, user, "folder").await;
+
+      let error = insert_child(&db, ws_b, user, folder_in_a)
+        .await
+        .expect_err("a parent from another workspace must be refused");
+      assert_eq!(status_of(error).await.0, axum::http::StatusCode::CONFLICT);
+      // The ordinary path is untouched.
+      insert_child(&db, ws_a, user, folder_in_a).await.unwrap();
+    }
+
+    /// What must keep working under the stricter trigger: the bin itself. A
+    /// trashed child may sit under a trashed folder (that is what trashing a
+    /// folder produces), and restoring a page whose folder is STILL in the bin
+    /// lifts it to the top level instead of being refused — the trigger fires
+    /// on writes of `parent_view_id`, never on `is_deleted` flips.
+    #[tokio::test]
+    async fn the_bin_round_trip_survives_the_stricter_trigger() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let folder = seed_view(&db, ws, user, "folder").await;
+      let child = Uuid::new_v4();
+      sqlx::query(
+        "INSERT INTO views(id,workspace_id,parent_view_id,object_id,object_type,name,position,created_by) \
+         VALUES($1,$2,$3,$4,'document'::object_type,'V','0',$5)",
+      )
+      .bind(child)
+      .bind(ws)
+      .bind(folder)
+      .bind(Uuid::new_v4())
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+
+      let trashed = trash_views_batch(&db, ws, &[folder]).await.unwrap();
+      assert_eq!(trashed.len(), 2, "folder and child go to the bin together");
+      // A trashed row may still be written under a trashed parent.
+      sqlx::query("UPDATE views SET parent_view_id = $1 WHERE id = $2")
+        .bind(folder)
+        .bind(child)
+        .execute(&db)
+        .await
+        .expect("trashed under trashed is the bin's own shape");
+
+      // Restore just the child: its folder is still in the bin → lifted.
+      restore_views_batch(&db, ws, &[child]).await.unwrap();
+      let (deleted, parent): (bool, Option<Uuid>) =
+        sqlx::query_as("SELECT is_deleted, parent_view_id FROM views WHERE id = $1")
+          .bind(child)
+          .fetch_one(&db)
+          .await
+          .unwrap();
+      assert!(!deleted);
+      assert_eq!(parent, None, "lifted to the top level, not refused");
+
+      // And the folder restores too.
+      restore_views_batch(&db, ws, &[folder]).await.unwrap();
+      let live: bool = sqlx::query_scalar("SELECT NOT is_deleted FROM views WHERE id = $1")
+        .bind(folder)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+      assert!(live);
+    }
+
     /// Give a seeded document a search index row with known `content_text`. The
     /// derivation of that text from the yrs base is covered in app-core's
     /// sync_pg.rs; here we insert it directly to exercise the SEARCH SQL (join,
