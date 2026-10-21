@@ -20,5 +20,10 @@ tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 uuid.workspace = true
 
+# `mlock` for the search index (src/body_arena.rs). Already in the lockfile as a
+# transitive dependency of tokio; this only makes the binding direct.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

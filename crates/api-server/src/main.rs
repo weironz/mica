@@ -161,7 +161,16 @@ async fn main() -> anyhow::Result<()> {
   // warn, not a crash: the first search will retry the same load and surface
   // the error to an actual caller.
   match state.body_index.refresh(&state.db).await {
-    Ok(()) => info!(documents = state.body_index.indexed_documents().await, "body-text search index warmed"),
+    Ok(()) => {
+      let (live, reserved, lock) = state.body_index.footprint().await;
+      info!(
+        documents = state.body_index.indexed_documents().await,
+        body_mb = live >> 20,
+        reserved_mb = reserved >> 20,
+        memory = %lock,
+        "body-text search index warmed"
+      );
+    }
     Err(error) => tracing::warn!(%error, "body-text index warm-up failed; first search will retry"),
   }
   // The environment seeded `state.ai` above; a row saved by an admin replaces

@@ -7,6 +7,7 @@ use sqlx::PgPool;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+mod body_arena;
 pub mod comments;
 pub mod documents;
 pub mod rooms;
@@ -213,6 +214,7 @@ impl AppState {
       );
     }
 
+    let body_index = Arc::new(search::BodyIndex::new(config.search_index_mlock));
     Self {
       config: Arc::new(config),
       db,
@@ -222,7 +224,7 @@ impl AppState {
       ai: Arc::new(RwLock::new(AiConfig::from_env())),
       import_jobs: Arc::new(RwLock::new(HashMap::new())),
       mailer,
-      body_index: Arc::new(search::BodyIndex::default()),
+      body_index,
     }
   }
 }

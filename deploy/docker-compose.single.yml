@@ -108,6 +108,11 @@ services:
     image: ${MICA_REGISTRY:-willdockerhub}/mica-api:${MICA_VERSION:?set MICA_VERSION in .env.prod — pick one from https://github.com/weironz/mica/releases}
     restart: unless-stopped
     logging: *default-logging
+    # mlock for the search index (MICA_SEARCH_INDEX_MLOCK): keeps ~75 MB of
+    # bodies out of swap so a search after idle is not a page-in storm — on the
+    # prod node one took 6-37 s. Drop this line (or set the variable to off)
+    # and the index just stays swappable; nothing else needs the capability.
+    cap_add: [IPC_LOCK]
     environment:
       # Identify as production: enables the restrictive CORS default and
       # hard-ignores any MICA_SEED_TEST_USER. Without this the server defaults to
@@ -149,6 +154,8 @@ services:
       # Per-OWNER total across every workspace an account owns; OFF unless set
       # (worth setting only when registration is open). Same allow-list reason as above.
       MICA_OWNER_QUOTA_BYTES: "${MICA_OWNER_QUOTA_BYTES:-}"
+      # Lock the search index in RAM; ON unless off/0/false/no. Same allow-list reason.
+      MICA_SEARCH_INDEX_MLOCK: "${MICA_SEARCH_INDEX_MLOCK:-}"
       MICA_WS_MIN_PROTOCOL: "${MICA_WS_MIN_PROTOCOL:-}"
       MICA_CATCH_UP_LIMIT: "${MICA_CATCH_UP_LIMIT:-}"
       MICA_STREAM_KEEP_MARGIN: "${MICA_STREAM_KEEP_MARGIN:-}"

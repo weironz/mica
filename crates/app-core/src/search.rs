@@ -59,6 +59,9 @@ use uuid::Uuid;
 
 use mica_infra::ApiResult;
 
+pub use crate::body_arena::LockState;
+use crate::body_arena::Arena;
+
 /// Safety lap for the refresh cursor. `updated_at` is `now()` *of the writing
 /// transaction's start*, so a row can become visible bearing a timestamp older
 /// than rows already indexed; the cursor therefore trails the DATABASE clock by
@@ -74,55 +77,16 @@ use mica_infra::ApiResult;
 /// never again.
 const REFRESH_LAP_SECONDS: f64 = 5.0;
 
-/// One indexed body: ONE copy of the text, as stored.
-///
-/// It briefly held a second, ASCII-lowercased copy beside this one (0.13.57–59)
-/// so the scan could stay a plain `contains`. On production's 15k documents that
-/// doubled the index for every body with a capital letter, the node went into
-/// swap, and the in-memory scan went from milliseconds to 4–50 SECONDS
-/// (`slow search scan_ms`, 2026-10-20). Case-insensitivity is paid at match
-/// time instead, and only where it can matter — see [`Body::contains`].
-struct Body {
-  /// As stored — what a snippet quotes and what the scan reads.
-  text: String,
-  /// Whether `text` has any ASCII capital. Without one, `text` already IS its
-  /// own ASCII fold, so a plain `contains` is exact.
-  has_upper: bool,
-}
-
-impl Body {
-  fn new(text: String) -> Self {
-    let has_upper = text.bytes().any(|b| b.is_ascii_uppercase());
-    Self { text, has_upper }
-  }
-
-  /// Whether the body contains `folded` (an ASCII-lowercased needle), ASCII-
-  /// case-insensitively — what `ILIKE` under the C locale folds, so the scan
-  /// agrees with the `v.name ILIKE` half still done in SQL.
-  ///
-  /// A plain `contains` is exact unless BOTH sides have ASCII letters in play:
-  /// folding only rewrites `A`–`Z`, so a needle with no ASCII letter (every
-  /// CJK query) can only match bytes the fold leaves alone.
-  fn contains(&self, folded: &str) -> bool {
-    if !self.has_upper || !folded.bytes().any(|b| b.is_ascii_lowercase()) {
-      return self.text.contains(folded);
-    }
-    let (hay, needle) = (self.text.as_bytes(), folded.as_bytes());
-    hay.len() >= needle.len() && hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
-  }
-}
-
-#[derive(Default)]
 struct Inner {
-  /// `document_id → body`.
-  docs: HashMap<Uuid, Body>,
+  /// `document_id → body`, all bodies in one (optionally locked) buffer —
+  /// see `body_arena` for why one buffer and why locked.
+  arena: Arena,
   /// Newest `updated_at` ever loaded — the incremental cursor.
   seen: Option<DateTime<Utc>>,
 }
 
 /// The index. One per process, on `AppState`; interior-mutable so routes can
 /// share it immutably.
-#[derive(Default)]
 pub struct BodyIndex {
   /// Serialize fetch-and-apply, so an older DB snapshot cannot finish last and
   /// replace a newer body. Readers of the already-loaded index remain free.
@@ -130,7 +94,24 @@ pub struct BodyIndex {
   inner: RwLock<Inner>,
 }
 
+/// Unlocked: what tests and anything not given the operator's choice get.
+impl Default for BodyIndex {
+  fn default() -> Self {
+    Self::new(false)
+  }
+}
+
 impl BodyIndex {
+  /// `lock_in_memory`: try to `mlock` the bodies (`MICA_SEARCH_INDEX_MLOCK`,
+  /// on by default). Refusal by the OS is logged once and the index carries
+  /// on unlocked — see [`LockState`].
+  pub fn new(lock_in_memory: bool) -> Self {
+    Self {
+      refresh_lock: Mutex::new(()),
+      inner: RwLock::new(Inner { arena: Arena::new(lock_in_memory), seen: None }),
+    }
+  }
+
   /// Pull every row changed since the last refresh (all of them, first time).
   ///
   /// Called by `search_views` before each scan and once at startup to take the
@@ -191,9 +172,7 @@ impl BodyIndex {
     if inner.seen.is_none_or(|s| next_seen > s) {
       inner.seen = Some(next_seen);
     }
-    for (document_id, text) in rows {
-      inner.docs.insert(document_id, Body::new(text));
-    }
+    inner.arena.insert_all(rows);
     Ok(())
   }
 
@@ -204,13 +183,7 @@ impl BodyIndex {
   /// scheme above stumbled on.
   pub async fn matching_ids(&self, needle: &str) -> Vec<Uuid> {
     let folded = needle.to_ascii_lowercase();
-    let inner = self.inner.read().await;
-    inner
-      .docs
-      .iter()
-      .filter(|(_, body)| body.contains(&folded))
-      .map(|(id, _)| *id)
-      .collect()
+    self.inner.read().await.arena.matching(&folded)
   }
 
   /// One-line snippets around `needle` for these documents, from the indexed
@@ -221,8 +194,8 @@ impl BodyIndex {
     ids
       .iter()
       .filter_map(|id| {
-        let body = inner.docs.get(id)?;
-        Some((*id, mica_core::search_text::snippet(&body.text, needle)?))
+        let body = inner.arena.body(id)?;
+        Some((*id, mica_core::search_text::snippet(body, needle)?))
       })
       .collect()
   }
@@ -234,7 +207,13 @@ impl BodyIndex {
   /// no rows is a database with no documents, which the caller learns from
   /// this count anyway.
   pub async fn indexed_documents(&self) -> usize {
-    self.inner.read().await.docs.len()
+    self.inner.read().await.arena.documents()
+  }
+
+  /// `(live bytes, reserved bytes, lock state)` of the bodies, for the
+  /// startup log line that says whether the index can be paged out.
+  pub async fn footprint(&self) -> (usize, usize, LockState) {
+    self.inner.read().await.arena.footprint()
   }
 }
 
@@ -323,12 +302,14 @@ mod tests {
     ];
     let needles = ["docker", "DOCKER", "部署", "v1.2", "release", "allcaps", "a", "école", "y\nz", "ü", "docker 流程", "istanbul"];
     for body in bodies {
-      let indexed = Body::new(body.to_string());
-      assert!(indexed.text == body, "one copy, as stored");
+      let id = Uuid::new_v4();
+      let mut indexed = Arena::new(false);
+      indexed.insert_all(vec![(id, body.to_string())]);
+      assert_eq!(indexed.body(&id), Some(body), "one copy, as stored");
       for needle in needles {
         let folded = needle.to_ascii_lowercase();
         let reference = body.to_ascii_lowercase().contains(&folded);
-        assert_eq!(indexed.contains(&folded), reference, "body {body:?} needle {needle:?}");
+        assert_eq!(indexed.matching(&folded) == vec![id], reference, "body {body:?} needle {needle:?}");
       }
     }
   }
