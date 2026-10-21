@@ -260,6 +260,7 @@ abstract class RustLibApi extends BaseApi {
 
   Future<List<LocalBacklink>> crateApiStoreMicaStoreBacklinksLocal({
     required MicaStore that,
+    required String workspaceId,
     required String viewId,
   });
 
@@ -328,6 +329,7 @@ abstract class RustLibApi extends BaseApi {
 
   Future<LocalGraph> crateApiStoreMicaStoreGraphLocal({
     required MicaStore that,
+    required String workspaceId,
   });
 
   List<String> crateApiStoreMicaStoreListDocs({required MicaStore that});
@@ -427,6 +429,7 @@ abstract class RustLibApi extends BaseApi {
 
   Future<List<LocalSearchHit>> crateApiStoreMicaStoreSearchLocal({
     required MicaStore that,
+    required String workspaceId,
     required String query,
     required int limit,
   });
@@ -1579,6 +1582,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<List<LocalBacklink>> crateApiStoreMicaStoreBacklinksLocal({
     required MicaStore that,
+    required String workspaceId,
     required String viewId,
   }) {
     return handler.executeNormal(
@@ -1589,6 +1593,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(workspaceId, serializer);
           sse_encode_String(viewId, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -1602,7 +1607,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreBacklinksLocalConstMeta,
-        argValues: [that, viewId],
+        argValues: [that, workspaceId, viewId],
         apiImpl: this,
       ),
     );
@@ -1611,7 +1616,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreBacklinksLocalConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_backlinks_local",
-        argNames: ["that", "viewId"],
+        argNames: ["that", "workspaceId", "viewId"],
       );
 
   @override
@@ -2024,6 +2029,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<LocalGraph> crateApiStoreMicaStoreGraphLocal({
     required MicaStore that,
+    required String workspaceId,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2033,6 +2039,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(workspaceId, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2045,7 +2052,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreGraphLocalConstMeta,
-        argValues: [that],
+        argValues: [that, workspaceId],
         apiImpl: this,
       ),
     );
@@ -2054,7 +2061,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreGraphLocalConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_graph_local",
-        argNames: ["that"],
+        argNames: ["that", "workspaceId"],
       );
 
   @override
@@ -2690,6 +2697,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<List<LocalSearchHit>> crateApiStoreMicaStoreSearchLocal({
     required MicaStore that,
+    required String workspaceId,
     required String query,
     required int limit,
   }) {
@@ -2701,6 +2709,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(workspaceId, serializer);
           sse_encode_String(query, serializer);
           sse_encode_u_32(limit, serializer);
           pdeCallFfi(
@@ -2715,7 +2724,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreSearchLocalConstMeta,
-        argValues: [that, query, limit],
+        argValues: [that, workspaceId, query, limit],
         apiImpl: this,
       ),
     );
@@ -2724,7 +2733,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreSearchLocalConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_search_local",
-        argNames: ["that", "query", "limit"],
+        argNames: ["that", "workspaceId", "query", "limit"],
       );
 
   @override
@@ -5426,11 +5435,14 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// NOT `#[frb(sync)]`, same reason as `search_local`: this runs on every page
   /// open, and the panel is explicitly allowed to land a frame or two late
   /// rather than hold up the document that the user actually asked for.
-  Future<List<LocalBacklink>> backlinksLocal({required String viewId}) =>
-      RustLib.instance.api.crateApiStoreMicaStoreBacklinksLocal(
-        that: this,
-        viewId: viewId,
-      );
+  Future<List<LocalBacklink>> backlinksLocal({
+    required String workspaceId,
+    required String viewId,
+  }) => RustLib.instance.api.crateApiStoreMicaStoreBacklinksLocal(
+    that: this,
+    workspaceId: workspaceId,
+    viewId: viewId,
+  );
 
   /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
   /// points (doc open/close) so a later corruption can be rolled back.
@@ -5554,8 +5566,10 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   ///
   /// NOT `#[frb(sync)]`: it reads every view and every link row. The view has
   /// its own loading state; the frame does not.
-  Future<LocalGraph> graphLocal() =>
-      RustLib.instance.api.crateApiStoreMicaStoreGraphLocal(that: this);
+  Future<LocalGraph> graphLocal({required String workspaceId}) => RustLib
+      .instance
+      .api
+      .crateApiStoreMicaStoreGraphLocal(that: this, workspaceId: workspaceId);
 
   /// Ids of all stored documents (sorted).
   List<String> listDocs() =>
@@ -5699,15 +5713,20 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
       .api
       .crateApiStoreMicaStoreSaveWorkspace(that: this, workspace: workspace);
 
-  /// Search this device's documents by title and body.
+  /// Search one LOCAL workspace's documents by title and body. Scoped like
+  /// the cloud's per-workspace search: this store also holds the other local
+  /// workspaces and every cloud mirror. Backlinks and the graph take the same
+  /// `workspace_id`.
   ///
   /// NOT `#[frb(sync)]`: it touches every indexed document, and the one thing a
   /// search box must never do is freeze the frame you are typing into.
   Future<List<LocalSearchHit>> searchLocal({
+    required String workspaceId,
     required String query,
     required int limit,
   }) => RustLib.instance.api.crateApiStoreMicaStoreSearchLocal(
     that: this,
+    workspaceId: workspaceId,
     query: query,
     limit: limit,
   );

@@ -741,7 +741,17 @@ impl LocalStore {
     /// Rows whose `content_text` is NULL (written before the column existed, or
     /// undecodable) still match on their NAME. Not being indexed costs a page its
     /// body matches, never its existence.
-    pub fn search_local(&self, query: &str, limit: usize) -> Result<Vec<LocalSearchHit>, StoreError> {
+    ///
+    /// Scoped to ONE local workspace (`origin='local' AND workspace_id=?`): this
+    /// store also holds the other local workspaces and the cloud mirrors
+    /// (origin = server URL), and the cloud's search is per-workspace too. The
+    /// same scope applies to [`Self::backlinks_local`] / [`Self::graph_local`].
+    pub fn search_local(
+        &self,
+        workspace_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<LocalSearchHit>, StoreError> {
         let trimmed = query.trim();
         if trimmed.is_empty() {
             return Ok(Vec::new());
@@ -758,11 +768,12 @@ impl LocalStore {
              FROM local_view v
              LEFT JOIN doc_snapshot s ON s.doc_id = v.object_id
              WHERE v.trashed = 0
+               AND v.origin = 'local' AND v.workspace_id = ?3
                AND (v.name LIKE ?1 ESCAPE '\\' OR s.content_text LIKE ?1 ESCAPE '\\')
              ORDER BY (v.name LIKE ?1 ESCAPE '\\') DESC, v.name
              LIMIT ?2",
         )?;
-        let rows = stmt.query_map(params![pattern, limit as i64], |r| {
+        let rows = stmt.query_map(params![pattern, limit as i64, workspace_id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
@@ -808,19 +819,24 @@ impl LocalStore {
     /// `json_each` over the stored array, so a row that predates the column
     /// (NULL) simply contributes nothing rather than erroring. A page linking to
     /// itself is not a backlink. Trashed sources are excluded, matching search.
-    pub fn backlinks_local(&self, view_id: &str) -> Result<Vec<LocalBacklink>, StoreError> {
+    pub fn backlinks_local(
+        &self,
+        workspace_id: &str,
+        view_id: &str,
+    ) -> Result<Vec<LocalBacklink>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT v.id, v.object_id, v.name
              FROM local_view v
              JOIN doc_snapshot s ON s.doc_id = v.object_id
              WHERE v.trashed = 0
+               AND v.origin = 'local' AND v.workspace_id = ?2
                AND v.object_type = 'document'
                AND v.id <> ?1
                AND s.link_targets IS NOT NULL
                AND EXISTS (SELECT 1 FROM json_each(s.link_targets) WHERE value = ?1)
              ORDER BY v.name, v.id",
         )?;
-        let rows = stmt.query_map(params![view_id], |r| {
+        let rows = stmt.query_map(params![view_id, workspace_id], |r| {
             Ok(LocalBacklink {
                 view_id: r.get(0)?,
                 object_id: r.get(1)?,
@@ -842,20 +858,25 @@ impl LocalStore {
     /// An edge survives only if BOTH ends are live documents here: a link to a
     /// trashed or foreign page is a dangling reference, and drawing it would
     /// invent a node that is not in the workspace.
-    pub fn graph_local(&self) -> Result<LocalGraph, StoreError> {
+    pub fn graph_local(&self, workspace_id: &str) -> Result<LocalGraph, StoreError> {
+        // Both ends scoped: the target join is by bare id, and ids are only
+        // unique per origin — a cloud mirror page with the same id would
+        // otherwise add a second copy of every edge into it.
         let mut stmt = self.conn.prepare(
             "SELECT src.id, tgt.id
              FROM local_view src
              JOIN doc_snapshot s ON s.doc_id = src.object_id
              JOIN json_each(s.link_targets) j
              JOIN local_view tgt ON tgt.id = j.value AND tgt.trashed = 0
+                 AND tgt.origin = 'local' AND tgt.workspace_id = ?1
              WHERE src.trashed = 0
+               AND src.origin = 'local' AND src.workspace_id = ?1
                AND src.object_type = 'document'
                AND s.link_targets IS NOT NULL
                AND src.id <> j.value",
         )?;
         let edges: Vec<LocalGraphEdge> = stmt
-            .query_map([], |r| {
+            .query_map(params![workspace_id], |r| {
                 Ok(LocalGraphEdge {
                     source: r.get(0)?,
                     target: r.get(1)?,
@@ -871,10 +892,11 @@ impl LocalStore {
 
         let mut stmt = self.conn.prepare(
             "SELECT id, name FROM local_view
-             WHERE trashed = 0 AND object_type = 'document'",
+             WHERE trashed = 0 AND object_type = 'document'
+               AND origin = 'local' AND workspace_id = ?1",
         )?;
         let named: Vec<(String, String)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .query_map(params![workspace_id], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<_, _>>()?;
 
         let mut nodes = Vec::new();
@@ -1070,30 +1092,50 @@ impl LocalStore {
         // this was one of two recovery paths that previously decoded straight into
         // yrs with no guard at all (docs/reviews/code-review-2026-07-20.md P0-0).
         verify_blob_crc(doc_id, &bytes, crc)?;
-        // Preserve the current state so the restore can be undone. Carry its crc
-        // forward (copy path).
-        if let Some((cur, cur_crc)) = self
-            .conn
-            .query_row(
-                "SELECT state, state_crc FROM doc_snapshot WHERE doc_id=?1",
-                params![doc_id],
-                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Option<i64>>(1)?)),
-            )
-            .optional()?
-        {
-            self.conn.execute(
+        // Decode BEFORE anything is written: a crc only proves the bytes are the
+        // ones stored, not that yrs can read them. Writing first made a bad
+        // version the live base (with the log already dropped) and only then
+        // failed — the page went from fine to unopenable. Unwind guard too, not
+        // just the crc: a legacy version blob (crc NULL) still reaches yrs here.
+        let doc = contain_yrs_panic(doc_id, || {
+            Ok(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?)
+        })?;
+        // Preserve the current state so the restore can be undone — the FULL
+        // current state, base + logs. The base row alone misses every edit still
+        // in the log, and those are exactly what the restore is about to drop.
+        let archive: Option<(Vec<u8>, Option<i64>)> = match self.load_doc(doc_id, client_id) {
+            Ok(Some(cur)) => {
+                let state = cur.encode_state();
+                let crc = blob_crc(&state);
+                Some((state, Some(crc)))
+            }
+            Ok(None) => None,
+            // A current state that will not load is the usual reason to restore
+            // at all; it must not block the way out. Keep its raw base (crc
+            // carried forward, copy path) — the best record of it there is.
+            Err(StoreError::CorruptDoc { .. } | StoreError::Doc(_)) => self
+                .conn
+                .query_row(
+                    "SELECT state, state_crc FROM doc_snapshot WHERE doc_id=?1",
+                    params![doc_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?,
+            Err(e) => return Err(e),
+        };
+        // Archive + base swap + log drop commit together (10-19 P2-12). Split, a
+        // crash between the swap and the drop left the old log to replay over
+        // the restored base on the next open — the discarded edits came back.
+        let tx = self.conn.unchecked_transaction()?;
+        if let Some((cur, cur_crc)) = archive {
+            tx.execute(
                 "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,NULL,?3,?4,?5)",
                 params![uuid::Uuid::new_v4().to_string(), doc_id, now_millis(), cur, cur_crc],
             )?;
         }
         self.upsert_snapshot(doc_id, bytes.as_ref(), crc)?;
-        self.conn
-            .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
-        // Unwind guard too, not just the crc: a legacy version blob (crc NULL) still
-        // reaches yrs here, so match load_doc's containment.
-        let doc = contain_yrs_panic(doc_id, || {
-            Ok(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?)
-        })?;
+        tx.execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+        tx.commit()?;
         Ok(Some(doc))
     }
 
@@ -1180,30 +1222,7 @@ impl LocalStore {
         rid: i64,
         update: &[u8],
     ) -> Result<(), StoreError> {
-        self.conn.execute_batch("BEGIN;")?;
-        let result: Result<(), StoreError> = (|| {
-            self.conn.execute(
-                "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload,payload_crc) VALUES(?1,?2,?3,?4)",
-                params![doc_id, rid, update, blob_crc(update)],
-            )?;
-            self.conn.execute(
-                "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,0)
-                 ON CONFLICT(doc_id) DO UPDATE SET
-                     last_synced_rid=MAX(last_synced_rid, excluded.last_synced_rid)",
-                params![doc_id, rid],
-            )?;
-            Ok(())
-        })();
-        match result {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT;")?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK;");
-                Err(e)
-            }
-        }
+        self.append_remote_updates(doc_id, &[(rid, update.to_vec())])
     }
 
     /// Batch variant of [`Self::append_remote_update`]: all rows + the cursor
@@ -1218,36 +1237,23 @@ impl LocalStore {
         if items.is_empty() {
             return Ok(());
         }
-        self.conn.execute_batch("BEGIN;")?;
-        let result: Result<(), StoreError> = (|| {
-            let mut max_rid = i64::MIN;
-            for (rid, update) in items {
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload,payload_crc) VALUES(?1,?2,?3,?4)",
-                    params![doc_id, rid, update, blob_crc(update)],
-                )?;
-                if *rid > max_rid {
-                    max_rid = *rid;
-                }
-            }
-            self.conn.execute(
-                "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,0)
-                 ON CONFLICT(doc_id) DO UPDATE SET
-                     last_synced_rid=MAX(last_synced_rid, excluded.last_synced_rid)",
-                params![doc_id, max_rid],
+        let tx = self.conn.unchecked_transaction()?;
+        let mut max_rid = i64::MIN;
+        for (rid, update) in items {
+            tx.execute(
+                "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload,payload_crc) VALUES(?1,?2,?3,?4)",
+                params![doc_id, rid, update, blob_crc(update)],
             )?;
-            Ok(())
-        })();
-        match result {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT;")?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK;");
-                Err(e)
-            }
+            max_rid = max_rid.max(*rid);
         }
+        tx.execute(
+            "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,0)
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 last_synced_rid=MAX(last_synced_rid, excluded.last_synced_rid)",
+            params![doc_id, max_rid],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// A document's persisted remote-stream tail, ordered by `rid`. Each row's
@@ -1294,11 +1300,22 @@ impl LocalStore {
     /// checksum is verified before it is returned (same rationale as
     /// [`Self::doc_remote_updates`]).
     pub fn doc_updates(&self, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT clock,payload,payload_crc FROM doc_update WHERE doc_id=?1 ORDER BY clock")?;
+        self.updates_after(doc_id, i64::MIN)
+    }
+
+    /// Updates with `clock > after` — the queue still to push to the cloud.
+    ///
+    /// Checksums verified here, for [`Self::doc_updates`] too (one reader, so
+    /// the two cannot disagree again — this one used to skip the check). It is
+    /// the outbox: a rotted row pushed upstream would be integrated by the
+    /// server and every peer, the one place a local bit-flip becomes
+    /// everyone's problem.
+    pub fn updates_after(&self, doc_id: &str, after: i64) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT clock,payload,payload_crc FROM doc_update WHERE doc_id=?1 AND clock>?2 ORDER BY clock",
+        )?;
         let rows = stmt
-            .query_map(params![doc_id], |r| {
+            .query_map(params![doc_id, after], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, Vec<u8>>(1)?,
@@ -1312,17 +1329,6 @@ impl LocalStore {
             out.push((clock, payload));
         }
         Ok(out)
-    }
-
-    /// Updates with `clock > after` — the queue still to push to the cloud.
-    pub fn updates_after(&self, doc_id: &str, after: i64) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT clock,payload FROM doc_update WHERE doc_id=?1 AND clock>?2 ORDER BY clock",
-        )?;
-        let rows = stmt
-            .query_map(params![doc_id, after], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
     }
 
     /// Drop acked log entries (`clock ≤ up_to_clock`) to bound the append-log,
@@ -1370,31 +1376,17 @@ impl LocalStore {
         // One transaction: fold + trim + clear commit together (crash mid-way
         // was already safe via replay idempotency, but structural atomicity is
         // cheaper to reason about than a CRDT argument).
-        self.conn.execute_batch("BEGIN;")?;
-        let result: Result<(), StoreError> = (|| {
-            self.upsert_snapshot(doc_id, state.as_ref(), Some(crc))?;
-            self.conn.execute(
-                "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
-                params![doc_id, pushed],
-            )?;
-            // The remote log is fully folded into the new base (it has no
-            // un-pushed semantics — the server already owns these updates).
-            self.conn.execute(
-                "DELETE FROM doc_remote_update WHERE doc_id=?1",
-                params![doc_id],
-            )?;
-            Ok(())
-        })();
-        match result {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT;")?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK;");
-                Err(e)
-            }
-        }
+        let tx = self.conn.unchecked_transaction()?;
+        self.upsert_snapshot(doc_id, state.as_ref(), Some(crc))?;
+        tx.execute(
+            "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
+            params![doc_id, pushed],
+        )?;
+        // The remote log is fully folded into the new base (it has no
+        // un-pushed semantics — the server already owns these updates).
+        tx.execute("DELETE FROM doc_remote_update WHERE doc_id=?1", params![doc_id])?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Fold every logged update into the base and clear the log — the
@@ -1441,20 +1433,10 @@ impl LocalStore {
         // One transaction: the fold and the clear commit together. Replay is
         // idempotent so a crash between them would be survivable anyway, but a
         // reader shouldn't have to reconstruct that argument to trust the file.
-        self.conn.execute_batch("BEGIN;")?;
-        let result: Result<(), StoreError> = (|| {
-            self.upsert_snapshot(doc_id, state.as_ref(), Some(crc))?;
-            self.conn
-                .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
-            Ok(())
-        })();
-        match result {
-            Ok(()) => self.conn.execute_batch("COMMIT;")?,
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK;");
-                return Err(e);
-            }
-        }
+        let tx = self.conn.unchecked_transaction()?;
+        self.upsert_snapshot(doc_id, state.as_ref(), Some(crc))?;
+        tx.execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+        tx.commit()?;
         self.capture_auto_version(doc_id, &state, crc)?;
         Ok(true)
     }
@@ -1499,18 +1481,26 @@ impl LocalStore {
         Ok(ids)
     }
 
-    /// Delete a document.
+    /// Delete a document — every row keyed by its `doc_id`, in one transaction.
+    ///
+    /// This is what 「永久删除」 and removing a server's mirror promise, so the
+    /// list must cover every table that holds the document's CONTENT — the
+    /// version history (`doc_version`, full states) was missing, leaving the
+    /// whole text on disk after the page was gone. A test enumerates every
+    /// table with a `doc_id` column, so a new one cannot be forgotten silently.
     pub fn delete_doc(&self, doc_id: &str) -> Result<(), StoreError> {
+        let tx = self.conn.unchecked_transaction()?;
         for table in [
             "doc_snapshot",
             "doc_snapshot_backup",
             "doc_update",
             "doc_remote_update",
             "sync_cursor",
+            "doc_version",
         ] {
-            self.conn
-                .execute(&format!("DELETE FROM {table} WHERE doc_id=?1"), params![doc_id])?;
+            tx.execute(&format!("DELETE FROM {table} WHERE doc_id=?1"), params![doc_id])?;
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1553,14 +1543,17 @@ impl LocalStore {
             None => return Ok(None),
         };
         // The other previously-unguarded decode path (P0-0): verify the backup
-        // before it becomes the live base or reaches yrs.
+        // before it becomes the live base or reaches yrs — and decode it before
+        // writing, then swap + drop in one transaction (same reasons as
+        // `restore_local_version`).
         verify_blob_crc(doc_id, &bytes, crc)?;
-        self.upsert_snapshot(doc_id, bytes.as_ref(), crc)?;
-        self.conn
-            .execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
         let doc = contain_yrs_panic(doc_id, || {
             Ok(MicaDoc::from_update_with_client_id(&bytes, Some(client_id))?)
         })?;
+        let tx = self.conn.unchecked_transaction()?;
+        self.upsert_snapshot(doc_id, bytes.as_ref(), crc)?;
+        tx.execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+        tx.commit()?;
         Ok(Some(doc))
     }
 
@@ -3048,7 +3041,7 @@ mod tests {
         fn lists_every_page_that_links_here() {
             let store = seeded();
             let names: Vec<String> = store
-                .backlinks_local("v3")
+                .backlinks_local("local", "v3")
                 .unwrap()
                 .into_iter()
                 .map(|b| b.name)
@@ -3058,7 +3051,7 @@ mod tests {
 
         #[test]
         fn a_page_nobody_links_to_has_none() {
-            assert!(seeded().backlinks_local("v4").unwrap().is_empty());
+            assert!(seeded().backlinks_local("local", "v4").unwrap().is_empty());
         }
 
         /// The half that rots silently. An index that only ever GAINS entries
@@ -3068,11 +3061,11 @@ mod tests {
         #[test]
         fn deleting_the_link_removes_the_backlink() {
             let store = seeded();
-            assert_eq!(store.backlinks_local("v3").unwrap().len(), 2);
+            assert_eq!(store.backlinks_local("local", "v3").unwrap().len(), 2);
 
             store.save_doc("d1", &linking_doc(&[])).unwrap();
             let names: Vec<String> = store
-                .backlinks_local("v3")
+                .backlinks_local("local", "v3")
                 .unwrap()
                 .into_iter()
                 .map(|b| b.name)
@@ -3087,7 +3080,7 @@ mod tests {
         #[test]
         fn the_graph_carries_edges_and_counts_the_rest() {
             let store = seeded();
-            let g = store.graph_local().unwrap();
+            let g = store.graph_local("local").unwrap();
 
             assert_eq!(g.edges.len(), 2, "{:?}", g.edges);
             assert!(g.edges.iter().all(|e| e.target == "v3"));
@@ -3113,7 +3106,7 @@ mod tests {
             v3.trashed = true;
             store.save_view(&v3).unwrap();
 
-            let g = store.graph_local().unwrap();
+            let g = store.graph_local("local").unwrap();
             assert!(g.edges.is_empty(), "dangling edges survived: {:?}", g.edges);
             assert!(g.nodes.is_empty(), "{:?}", g.nodes);
         }
@@ -3123,7 +3116,7 @@ mod tests {
             let store = LocalStore::open_in_memory().unwrap();
             store.save_doc("d1", &linking_doc(&["v1"])).unwrap();
             store.save_view(&view("v1", "d1", "自引")).unwrap();
-            assert!(store.backlinks_local("v1").unwrap().is_empty());
+            assert!(store.backlinks_local("local", "v1").unwrap().is_empty());
         }
 
         #[test]
@@ -3133,7 +3126,7 @@ mod tests {
             v.trashed = true;
             store.save_view(&v).unwrap();
             let names: Vec<String> = store
-                .backlinks_local("v3")
+                .backlinks_local("local", "v3")
                 .unwrap()
                 .into_iter()
                 .map(|b| b.name)
@@ -3152,7 +3145,7 @@ mod tests {
                 .execute("UPDATE doc_snapshot SET link_targets=NULL WHERE doc_id='d1'", [])
                 .unwrap();
             let names: Vec<String> = store
-                .backlinks_local("v3")
+                .backlinks_local("local", "v3")
                 .unwrap()
                 .into_iter()
                 .map(|b| b.name)
@@ -3161,7 +3154,7 @@ mod tests {
 
             // …and the backfill picks it up.
             assert!(store.backfill_content_text(100).unwrap() >= 1);
-            assert_eq!(store.backlinks_local("v3").unwrap().len(), 2);
+            assert_eq!(store.backlinks_local("local", "v3").unwrap().len(), 2);
         }
     }
 
@@ -3205,7 +3198,7 @@ mod tests {
         #[test]
         fn finds_pages_by_title_and_by_body() {
             let store = seeded();
-            let hits = store.search_local("部署", 20).unwrap();
+            let hits = store.search_local("local", "部署", 20).unwrap();
             let names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
 
             assert!(names.contains(&"部署流程"), "title hit missing: {names:?}");
@@ -3218,7 +3211,7 @@ mod tests {
         #[test]
         fn a_title_hit_comes_first_and_is_labelled() {
             let store = seeded();
-            let hits = store.search_local("部署", 20).unwrap();
+            let hits = store.search_local("local", "部署", 20).unwrap();
 
             assert_eq!(hits[0].name, "部署流程");
             assert!(hits[0].title_match);
@@ -3229,7 +3222,7 @@ mod tests {
         fn the_snippet_is_a_window_not_the_whole_document() {
             let store = seeded();
             let hit = store
-                .search_local("Docker", 20)
+                .search_local("local", "Docker", 20)
                 .unwrap()
                 .into_iter()
                 .find(|h| h.name == "部署流程")
@@ -3262,7 +3255,7 @@ mod tests {
                     object_type: "document".into(),
                 })
                 .unwrap();
-            let hits = store.search_local("needle", 20).unwrap();
+            let hits = store.search_local("local", "needle", 20).unwrap();
             assert_eq!(hits.len(), 1);
             assert!(hits[0].snippet.contains("needle here"), "{:?}", hits[0].snippet);
         }
@@ -3273,8 +3266,8 @@ mod tests {
         #[test]
         fn wildcards_in_the_query_are_literal() {
             let store = seeded();
-            assert!(store.search_local("%", 20).unwrap().is_empty());
-            assert!(store.search_local("_", 20).unwrap().is_empty());
+            assert!(store.search_local("local", "%", 20).unwrap().is_empty());
+            assert!(store.search_local("local", "_", 20).unwrap().is_empty());
         }
 
         #[test]
@@ -3295,7 +3288,7 @@ mod tests {
                 .unwrap();
 
             let names: Vec<String> = store
-                .search_local("部署", 20)
+                .search_local("local", "部署", 20)
                 .unwrap()
                 .into_iter()
                 .map(|h| h.name)
@@ -3306,7 +3299,7 @@ mod tests {
         #[test]
         fn an_empty_query_returns_nothing_rather_than_everything() {
             let store = seeded();
-            assert!(store.search_local("   ", 20).unwrap().is_empty());
+            assert!(store.search_local("local", "   ", 20).unwrap().is_empty());
         }
 
         /// A row written before the column existed still matches on its name, and
@@ -3320,17 +3313,323 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                store.search_local("部署", 20).unwrap().len(),
+                store.search_local("local", "部署", 20).unwrap().len(),
                 1,
                 "the title hit must survive an un-indexed store"
             );
 
             assert_eq!(store.backfill_content_text(100).unwrap(), 3);
-            assert_eq!(store.search_local("部署", 20).unwrap().len(), 2);
+            assert_eq!(store.search_local("local", "部署", 20).unwrap().len(), 2);
             assert_eq!(
                 store.backfill_content_text(100).unwrap(),
                 0,
                 "a second pass has nothing left to do"
+            );
+        }
+    }
+
+    /// docs/reviews/code-review-2026-10-21.md C3/C4/C7 + 10-19 P2-11 — the local
+    /// store's data-correctness group. Each test is phrased as what the user
+    /// would observe, not as which statement runs.
+    mod local_data_correctness {
+        use super::super::*;
+        use crate::block::Block;
+        use crate::marks::Mark;
+
+        fn page(text: &str, link_targets: &[&str]) -> MicaDoc {
+            let marks: Vec<Mark> = link_targets
+                .iter()
+                .map(|t| Mark {
+                    start: 0,
+                    end: text.chars().count() as u32,
+                    ty: "link".to_string(),
+                    href: Some(format!("mica://page/{t}")),
+                    title: None,
+                })
+                .collect();
+            let mut doc = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
+            doc.set_block_text("root", text, &marks);
+            doc
+        }
+
+        fn put(store: &LocalStore, at: (&str, &str), id: &str, doc_id: &str, name: &str, doc: &MicaDoc) {
+            store.save_doc(doc_id, doc).unwrap();
+            store
+                .save_view(&LocalView {
+                    id: id.into(),
+                    workspace_id: at.1.into(),
+                    parent_id: None,
+                    object_id: doc_id.into(),
+                    name: name.into(),
+                    position: "0000000010".into(),
+                    trashed: false,
+                    origin: at.0.into(),
+                    object_type: "document".into(),
+                })
+                .unwrap();
+        }
+
+        const CLOUD: &str = "https://mica.example";
+
+        /// One store, three worlds that must not see each other: local workspace
+        /// `w1`, local workspace `w2`, and a cloud mirror whose workspace id is
+        /// ALSO `w1` (ids are only unique per origin) and which even reuses the
+        /// view id `v3`. Every source page mentions 部署 and links to `v3`.
+        fn three_worlds() -> LocalStore {
+            let store = LocalStore::open_in_memory().unwrap();
+            put(&store, ("local", "w1"), "v1", "d1", "部署 甲", &page("部署 see", &["v3"]));
+            put(&store, ("local", "w1"), "v3", "d3", "目标", &page("target", &[]));
+            put(&store, ("local", "w2"), "v2", "d2", "部署 乙", &page("部署 see", &["v3"]));
+            put(&store, (CLOUD, "w1"), "c1", "dc1", "部署 云", &page("部署 see", &["v3"]));
+            put(&store, (CLOUD, "w1"), "v3", "dc3", "云目标", &page("cloud", &[]));
+            store
+        }
+
+        /// C4: local search used to read every `local_view` row — the other
+        /// local workspace and the cloud mirror's pages came back as hits.
+        #[test]
+        fn search_stays_inside_the_open_local_workspace() {
+            let store = three_worlds();
+            let ids: Vec<String> = store
+                .search_local("w1", "部署", 20)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.view_id)
+                .collect();
+            assert_eq!(ids, vec!["v1".to_string()]);
+        }
+
+        #[test]
+        fn backlinks_stay_inside_the_open_local_workspace() {
+            let store = three_worlds();
+            let ids: Vec<String> = store
+                .backlinks_local("w1", "v3")
+                .unwrap()
+                .into_iter()
+                .map(|b| b.view_id)
+                .collect();
+            assert_eq!(ids, vec!["v1".to_string()]);
+        }
+
+        /// The graph had two leaks: sources from every world, and the target
+        /// join by bare id — a cloud page with the same id became a second edge.
+        #[test]
+        fn the_graph_stays_inside_the_open_local_workspace() {
+            let store = three_worlds();
+            let g = store.graph_local("w1").unwrap();
+            let edges: Vec<(String, String)> =
+                g.edges.into_iter().map(|e| (e.source, e.target)).collect();
+            assert_eq!(edges, vec![("v1".to_string(), "v3".to_string())]);
+            let mut nodes: Vec<String> = g.nodes.into_iter().map(|n| n.view_id).collect();
+            nodes.sort();
+            assert_eq!(nodes, vec!["v1".to_string(), "v3".to_string()]);
+            assert_eq!(g.unlinked, 0, "nothing from w2 or the cloud is counted");
+        }
+
+        /// C3: 「永久删除」 must leave no copy of the document's content behind.
+        /// Checked against EVERY table with a `doc_id` column, so a content
+        /// table added later without joining `delete_doc` fails here too.
+        #[test]
+        fn delete_doc_leaves_nothing_keyed_by_the_doc() {
+            let store = LocalStore::open_in_memory().unwrap();
+            let doc = page("secret body", &[]);
+            store.save_doc("d", &doc).unwrap(); // also captures an auto version
+            store.create_local_version("d", "named").unwrap().unwrap();
+            store.checkpoint_doc("d").unwrap();
+            store.append_update("d", &doc.encode_state()).unwrap();
+            store.append_remote_update("d", 1, &doc.encode_state()).unwrap();
+
+            store.delete_doc("d").unwrap();
+
+            let tables: Vec<String> = store
+                .conn
+                .prepare(
+                    "SELECT m.name FROM sqlite_master m
+                     WHERE m.type='table'
+                       AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) WHERE name='doc_id')",
+                )
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert!(tables.contains(&"doc_version".to_string()), "{tables:?}");
+            for t in tables {
+                let n: i64 = store
+                    .conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {t} WHERE doc_id='d'"), [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(n, 0, "{t} still holds the deleted document");
+            }
+            assert!(store.list_local_versions("d").unwrap().is_empty());
+        }
+
+        /// P2-11: the outbox reader handed rotted rows to the network unchecked,
+        /// while its sibling `doc_updates` verified them.
+        #[test]
+        fn updates_after_refuses_a_rotted_row() {
+            let store = LocalStore::open_in_memory().unwrap();
+            store.save_doc("d", &page("x", &[])).unwrap();
+            store.append_update("d", b"\x00\x01\x02").unwrap();
+            store
+                .conn
+                .execute("UPDATE doc_update SET payload_crc = payload_crc + 1 WHERE doc_id='d'", [])
+                .unwrap();
+            assert!(matches!(store.updates_after("d", 0), Err(StoreError::CorruptDoc { .. })));
+        }
+
+        fn base_doc(cid: u64) -> MicaDoc {
+            MicaDoc::from_blocks_with_client_id(
+                "r",
+                &[
+                    Block::new("r", "page").with_children(vec!["a".into()]),
+                    Block::new("a", "paragraph").with_text("base"),
+                ],
+                Some(cid),
+            )
+        }
+
+        /// Append " logged" to `doc` through the LOG (not a full save) — the
+        /// shape every local page has between two compactions.
+        fn log_edit(store: &LocalStore, doc: &mut MicaDoc) {
+            let sv = doc.state_vector();
+            doc.text_insert("a", 4, " logged");
+            store.append_update("d", &doc.encode_diff(&sv).unwrap()).unwrap();
+        }
+
+        fn text_of(doc: &MicaDoc) -> String {
+            doc.to_blocks().into_iter().find(|b| b.id == "a").map(|b| b.text).unwrap_or_default()
+        }
+
+        fn raw_base(store: &LocalStore) -> Vec<u8> {
+            store
+                .conn
+                .query_row("SELECT state FROM doc_snapshot WHERE doc_id='d'", [], |r| r.get(0))
+                .unwrap()
+        }
+
+        fn count(store: &LocalStore, sql: &str) -> i64 {
+            store.conn.query_row(sql, [], |r| r.get(0)).unwrap()
+        }
+
+        /// Bytes that pass the checksum (it was computed over them) but are not
+        /// a yrs update — the shape a buggy writer leaves, which a crc cannot see.
+        const GARBAGE: [u8; 4] = [9, 9, 9, 9];
+
+        /// C7: restore wrote the version as the live base and dropped the log
+        /// BEFORE decoding it — a bad version replaced a good page with an
+        /// unopenable one. A failed restore must change nothing.
+        #[test]
+        fn a_version_that_will_not_decode_leaves_the_page_untouched() {
+            let store = LocalStore::open_in_memory().unwrap();
+            let cid = store.identity().unwrap().client_id;
+            let mut doc = base_doc(cid);
+            store.save_doc("d", &doc).unwrap();
+            log_edit(&store, &mut doc);
+            store
+                .conn
+                .execute(
+                    "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc)
+                     VALUES('bad','d','bad',0,?1,?2)",
+                    params![GARBAGE.to_vec(), blob_crc(&GARBAGE)],
+                )
+                .unwrap();
+            let base_before = raw_base(&store);
+            let versions_before = count(&store, "SELECT COUNT(*) FROM doc_version");
+
+            assert!(store.restore_local_version("d", "bad", cid).is_err());
+
+            assert_eq!(raw_base(&store), base_before, "the bad version became the live base");
+            assert_eq!(count(&store, "SELECT COUNT(*) FROM doc_update"), 1, "the log was dropped");
+            assert_eq!(count(&store, "SELECT COUNT(*) FROM doc_version"), versions_before);
+            assert_eq!(text_of(&store.load_doc("d", cid).unwrap().unwrap()), "base logged");
+        }
+
+        #[test]
+        fn a_checkpoint_that_will_not_decode_leaves_the_page_untouched() {
+            let store = LocalStore::open_in_memory().unwrap();
+            let cid = store.identity().unwrap().client_id;
+            let mut doc = base_doc(cid);
+            store.save_doc("d", &doc).unwrap();
+            log_edit(&store, &mut doc);
+            store
+                .conn
+                .execute(
+                    "INSERT INTO doc_snapshot_backup(doc_id,state,updated_at,state_crc) VALUES('d',?1,0,?2)",
+                    params![GARBAGE.to_vec(), blob_crc(&GARBAGE)],
+                )
+                .unwrap();
+            let base_before = raw_base(&store);
+
+            assert!(store.rollback_doc("d", cid).is_err());
+
+            assert_eq!(raw_base(&store), base_before, "the bad checkpoint became the live base");
+            assert_eq!(count(&store, "SELECT COUNT(*) FROM doc_update"), 1, "the log was dropped");
+            assert_eq!(text_of(&store.load_doc("d", cid).unwrap().unwrap()), "base logged");
+        }
+
+        /// C7 / 10-19 P2-12: archive + base swap + log drop were separate
+        /// statements. Any of them failing part-way (power loss, disk full —
+        /// injected here with a trigger) left a half-restore on disk; with the
+        /// base swapped but the log kept, the discarded edits replay on the next
+        /// open and silently come back. All or nothing.
+        #[test]
+        fn a_restore_that_fails_mid_write_commits_nothing() {
+            let store = LocalStore::open_in_memory().unwrap();
+            let cid = store.identity().unwrap().client_id;
+            let mut doc = base_doc(cid);
+            store.save_doc("d", &doc).unwrap();
+            let v = store.create_local_version("d", "v").unwrap().unwrap();
+            store.checkpoint_doc("d").unwrap();
+            log_edit(&store, &mut doc);
+            store.save_doc("d", &doc).unwrap(); // base now differs from v / the checkpoint
+            store
+                .conn
+                .execute_batch(
+                    "CREATE TRIGGER inject_failure BEFORE DELETE ON doc_update
+                     BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+                )
+                .unwrap();
+            let base_before = raw_base(&store);
+            let versions_before = count(&store, "SELECT COUNT(*) FROM doc_version");
+
+            assert!(store.restore_local_version("d", &v.id, cid).is_err());
+            assert_eq!(raw_base(&store), base_before, "restore: base swapped without the log drop");
+            assert_eq!(
+                count(&store, "SELECT COUNT(*) FROM doc_version"),
+                versions_before,
+                "restore: the archive row outlived the failed restore"
+            );
+
+            assert!(store.rollback_doc("d", cid).is_err());
+            assert_eq!(raw_base(&store), base_before, "rollback: base swapped without the log drop");
+        }
+
+        /// C7: the pre-restore archive (what makes a restore undoable) copied
+        /// only the BASE row. Edits still in the log were in neither the archive
+        /// nor the restored page — undo could not bring them back.
+        #[test]
+        fn the_pre_restore_archive_includes_logged_edits() {
+            let store = LocalStore::open_in_memory().unwrap();
+            let cid = store.identity().unwrap().client_id;
+            let mut doc = base_doc(cid);
+            store.save_doc("d", &doc).unwrap();
+            let v = store.create_local_version("d", "v").unwrap().unwrap();
+            log_edit(&store, &mut doc);
+
+            let restored = store.restore_local_version("d", &v.id, cid).unwrap().unwrap();
+            assert_eq!(text_of(&restored), "base");
+
+            let archived: Vec<String> = store
+                .list_local_versions("d")
+                .unwrap()
+                .into_iter()
+                .filter_map(|ver| store.local_version_state("d", &ver.id).unwrap())
+                .map(|bytes| text_of(&MicaDoc::from_update(&bytes).unwrap()))
+                .collect();
+            assert!(
+                archived.iter().any(|t| t == "base logged"),
+                "the logged edit is in no version: {archived:?}"
             );
         }
     }

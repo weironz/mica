@@ -432,13 +432,16 @@ impl MicaStore {
 
     // ── page tree (views) — P2-M3 ────────────────────────────────────────────
 
-    /// Search this device's documents by title and body.
+    /// Search one LOCAL workspace's documents by title and body. Scoped like
+    /// the cloud's per-workspace search: this store also holds the other local
+    /// workspaces and every cloud mirror. Backlinks and the graph take the same
+    /// `workspace_id`.
     ///
     /// NOT `#[frb(sync)]`: it touches every indexed document, and the one thing a
     /// search box must never do is freeze the frame you are typing into.
-    pub fn search_local(&self, query: String, limit: u32) -> Vec<LocalSearchHit> {
+    pub fn search_local(&self, workspace_id: String, query: String, limit: u32) -> Vec<LocalSearchHit> {
         self.store()
-            .search_local(&query, limit as usize)
+            .search_local(&workspace_id, &query, limit as usize)
             .unwrap_or_default()
             .into_iter()
             .map(Into::into)
@@ -450,9 +453,9 @@ impl MicaStore {
     /// NOT `#[frb(sync)]`, same reason as `search_local`: this runs on every page
     /// open, and the panel is explicitly allowed to land a frame or two late
     /// rather than hold up the document that the user actually asked for.
-    pub fn backlinks_local(&self, view_id: String) -> Vec<LocalBacklink> {
+    pub fn backlinks_local(&self, workspace_id: String, view_id: String) -> Vec<LocalBacklink> {
         self.store()
-            .backlinks_local(&view_id)
+            .backlinks_local(&workspace_id, &view_id)
             .unwrap_or_default()
             .into_iter()
             .map(Into::into)
@@ -463,9 +466,9 @@ impl MicaStore {
     ///
     /// NOT `#[frb(sync)]`: it reads every view and every link row. The view has
     /// its own loading state; the frame does not.
-    pub fn graph_local(&self) -> LocalGraph {
+    pub fn graph_local(&self, workspace_id: String) -> LocalGraph {
         self.store()
-            .graph_local()
+            .graph_local(&workspace_id)
             .map(Into::into)
             .unwrap_or(LocalGraph {
                 nodes: Vec::new(),

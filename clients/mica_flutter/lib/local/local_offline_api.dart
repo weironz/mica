@@ -81,26 +81,34 @@ abstract interface class LocalOfflineApi {
   void forgetOrigin(String origin);
   List<ViewData> listViews({String origin});
 
-  /// Search this device's pages by title and body.
+  /// Search local workspace [workspaceId]'s pages by title and body.
+  ///
+  /// Scoped, like the two below: the store holds every local workspace AND the
+  /// cloud mirrors, and an unscoped query answered with all of them.
   ///
   /// Async where most of this facade is sync: it reads every indexed document,
   /// and the one thing a search box must not do is freeze the frame being typed
   /// into. Empty on web — there is no on-device store there at all, which is a
   /// different thing from "found nothing" and the caller has to keep telling
   /// them apart (see `onSearch: null` in main.dart).
-  Future<List<SearchResult>> searchLocal(String query, {int limit});
+  Future<List<SearchResult>> searchLocal(
+    String workspaceId,
+    String query, {
+    int limit,
+  });
 
-  /// The pages on this device that link TO [viewId] — the backlinks panel.
+  /// The pages in local workspace [workspaceId] that link TO [viewId] — the
+  /// backlinks panel.
   ///
   /// Async for the same reason as [searchLocal], and empty on web for the same
   /// reason too: there is no on-device store there. Unlike search, the caller
   /// does NOT have to tell "no store" from "no backlinks" apart — a page with no
   /// backlinks renders nothing either way, so the panel simply stays hidden.
-  Future<List<Backlink>> backlinksLocal(String viewId);
+  Future<List<Backlink>> backlinksLocal(String workspaceId, String viewId);
 
-  /// The page-link graph of this device's workspace, for the graph view.
+  /// The page-link graph of local workspace [workspaceId], for the graph view.
   /// Empty on web — no on-device store.
-  Future<PageGraph> graphLocal();
+  Future<PageGraph> graphLocal(String workspaceId);
 
   /// Index up to [limit] documents saved before the search projection existed.
   /// Returns how many it did; fewer than [limit] means the backlog is done.

@@ -2325,12 +2325,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Local-world search: straight to the on-device index.
-  ///
-  /// No session, no workspace id — a local world is one device's store, and
-  /// there is nothing to scope to.
+  /// Local-world search: straight to the on-device index, scoped to the open
+  /// local workspace — the store also holds the other local workspaces and the
+  /// cloud mirrors. Backlinks and the graph below take the same [_localWsId].
+  String get _localWsId => _localSelectedWorkspace?.id ?? 'local';
   Future<List<SearchResult>> _searchLocalWorkspace(String query) =>
-      _local.searchLocal(query);
+      _local.searchLocal(_localWsId, query);
 
   Future<List<SearchResult>> _searchWorkspace(String query) async {
     final session = _session;
@@ -2411,7 +2411,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// nothing either way, so the panel just stays hidden.
   /// The page-link graph of the open workspace, from whichever world it is.
   Future<PageGraph> _loadGraph() async {
-    if (_activeIsLocal) return _local.graphLocal();
+    if (_activeIsLocal) return _local.graphLocal(_localWsId);
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return PageGraph.empty;
@@ -2419,7 +2419,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<List<Backlink>> _loadBacklinks(String viewId) async {
-    if (_activeIsLocal) return _local.backlinksLocal(viewId);
+    if (_activeIsLocal) return _local.backlinksLocal(_localWsId, viewId);
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return const [];
@@ -3503,7 +3503,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     for (final v in _local.listViews()) {
       if (v.id == viewId) return v.workspaceId;
     }
-    return _localSelectedWorkspace?.id ?? 'local';
+    return _localWsId;
   }
 
   DocumentBootstrap _localBootstrapFrom(

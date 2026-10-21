@@ -198,10 +198,18 @@ class LocalOffline implements LocalOfflineApi {
     ];
   }
 
-  Future<List<SearchResult>> searchLocal(String query, {int limit = 50}) async {
+  Future<List<SearchResult>> searchLocal(
+    String workspaceId,
+    String query, {
+    int limit = 50,
+  }) async {
     final store = _store;
     if (store == null) return const [];
-    final hits = await store.searchLocal(query: query, limit: limit);
+    final hits = await store.searchLocal(
+      workspaceId: workspaceId,
+      query: query,
+      limit: limit,
+    );
     return [
       for (final h in hits)
         SearchResult(
@@ -216,19 +224,22 @@ class LocalOffline implements LocalOfflineApi {
     ];
   }
 
-  Future<List<Backlink>> backlinksLocal(String viewId) async {
+  Future<List<Backlink>> backlinksLocal(String workspaceId, String viewId) async {
     final store = _store;
     if (store == null) return const [];
     return [
-      for (final b in await store.backlinksLocal(viewId: viewId))
+      for (final b in await store.backlinksLocal(
+        workspaceId: workspaceId,
+        viewId: viewId,
+      ))
         Backlink(viewId: b.viewId, documentId: b.objectId, title: b.name),
     ];
   }
 
-  Future<PageGraph> graphLocal() async {
+  Future<PageGraph> graphLocal(String workspaceId) async {
     final store = _store;
     if (store == null) return PageGraph.empty;
-    final g = await store.graphLocal();
+    final g = await store.graphLocal(workspaceId: workspaceId);
     return PageGraph(
       nodes: [
         for (final n in g.nodes)
