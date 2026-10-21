@@ -26,7 +26,7 @@ use mica_app_core::AppState;
 use mica_infra::{ApiError, ApiResult};
 
 use crate::routes::auth::user_id_from_headers;
-use crate::routes::files::{mime_to_ext, storage};
+use crate::routes::files::{ext_to_mime, mime_to_ext, sniff_image_ext, storage};
 
 /// Avatars are displayed at 32 px. Four megabytes is already absurdly generous
 /// for that, and the point of a cap well under the workspace upload limit is
@@ -93,11 +93,7 @@ pub async fn put_avatar(
     .and_then(|v| v.to_str().ok())
     .map(|s| s.split(';').next().unwrap_or(s).trim().to_ascii_lowercase())
     .unwrap_or_default();
-  // The extension lookup doubles as the format check: a MIME we cannot name an
-  // extension for is one we are not willing to serve back.
-  let ext = mime_to_ext(&mime).ok_or_else(|| {
-    ApiError::BadRequest("avatar must be a PNG, JPEG, GIF, WebP or AVIF image".to_string())
-  })?;
+  let (ext, content_type) = avatar_format(&mime, &body)?;
 
   let hash: String = {
     let mut hasher = Sha256::new();
@@ -117,7 +113,7 @@ pub async fn put_avatar(
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
-    .header(reqwest::header::CONTENT_TYPE, &mime)
+    .header(reqwest::header::CONTENT_TYPE, &content_type)
     .body(body.to_vec())
     .send()
     .await
@@ -135,6 +131,38 @@ pub async fn put_avatar(
   Ok(Json(AvatarResponse {
     avatar_version: Some(avatar_version(&object_key)),
   }))
+}
+
+/// The formats an avatar may be: raster only.
+///
+/// Not `mime_to_ext`'s whole list — that one also names SVG, which is right for
+/// workspace files (they are stored as `application/octet-stream` by
+/// `stored_content_type`) and wrong here: an avatar is a PUBLIC 302 to the
+/// storage origin, and an SVG served there is a script-capable document.
+const AVATAR_EXTS: [&str; 6] = ["png", "jpg", "gif", "webp", "avif", "bmp"];
+
+/// The extension and stored `Content-Type` for an avatar upload.
+///
+/// The header has to claim a raster image, and the BYTES have to be one — by
+/// magic number, the same sniff the importer trusts over a url. The stored type
+/// is derived from the sniff, never copied from the request: what the storage
+/// origin answers with is ours to decide, not the uploader's.
+fn avatar_format(declared: &str, bytes: &[u8]) -> ApiResult<(&'static str, String)> {
+  let refuse =
+    || ApiError::BadRequest("avatar must be a PNG, JPEG, GIF, WebP, AVIF or BMP image".to_string());
+  mime_to_ext(declared).filter(|ext| AVATAR_EXTS.contains(ext)).ok_or_else(refuse)?;
+  let ext = sniff_image_ext(bytes).filter(|ext| AVATAR_EXTS.contains(ext)).ok_or_else(refuse)?;
+  let mime = ext_to_mime(ext).ok_or_else(refuse)?;
+  Ok((ext, mica_infra::stored_content_type(mime)))
+}
+
+/// Whether a stored key names a format [AVATAR_EXTS] allows. Keys written
+/// before S1 may end in `.svg` (stored with `image/svg+xml`); those are not
+/// redirected to, so an existing upload cannot keep serving script.
+fn is_servable_avatar_key(key: &str) -> bool {
+  key
+    .rsplit_once('.')
+    .is_some_and(|(_, ext)| AVATAR_EXTS.contains(&ext))
 }
 
 /// `DELETE /api/auth/me/avatar` — go back to the initial-letter circle.
@@ -216,6 +244,11 @@ pub async fn get_avatar(State(state): State<AppState>, Path(user_id): Path<Uuid>
     // call to render (it draws the initial), and a served placeholder would
     // make every avatar-less account look like a broken upload.
     None => (StatusCode::NOT_FOUND, Json(json!({"error": "no avatar"}))).into_response(),
+    // A pre-S1 SVG avatar reads as "no picture" (the client draws the
+    // initial) rather than as a link to a script-capable document.
+    Some(key) if !is_servable_avatar_key(&key) => {
+      (StatusCode::NOT_FOUND, Json(json!({"error": "no avatar"}))).into_response()
+    }
     Some(key) => Redirect::temporary(&storage.download_url(&key)).into_response(),
   }
 }
@@ -247,6 +280,57 @@ mod tests {
       avatar_version(key),
       avatar_version("avatars/55b3e5ff-4117-4d65-9434-0b17922d8e87/abc123def4567890aa.jpeg")
     );
+  }
+
+  const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+  const JPEG: &[u8] = b"\xff\xd8\xff\xe0\0\x10JFIF";
+  const SVG: &[u8] =
+    b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+
+  /// S1 (review 2026-10-21): an avatar is served by a PUBLIC 302 straight to the
+  /// storage origin, with the Content-Type it was uploaded with. Accepting
+  /// `image/svg+xml` there meant a script-carrying document on that origin for
+  /// anyone holding the link — the hole `stored_content_type` closed for
+  /// workspace files (B4), reopened through the avatar path.
+  #[test]
+  fn an_svg_avatar_is_refused() {
+    assert!(matches!(avatar_format("image/svg+xml", SVG), Err(ApiError::BadRequest(_))));
+  }
+
+  /// The header is the client's claim; the bytes are the file. SVG bytes
+  /// declared as PNG must not get through by lying about the type.
+  #[test]
+  fn svg_bytes_under_a_raster_label_are_refused() {
+    assert!(matches!(avatar_format("image/png", SVG), Err(ApiError::BadRequest(_))));
+    assert!(matches!(
+      avatar_format("image/png", b"<?xml version=\"1.0\"?><svg/>"),
+      Err(ApiError::BadRequest(_))
+    ));
+  }
+
+  /// And the stored type follows the bytes too, not the header — what the
+  /// storage origin answers with is decided here, by what the file IS.
+  #[test]
+  fn the_stored_type_comes_from_the_bytes() {
+    let (ext, content_type) = avatar_format("image/png", PNG).unwrap();
+    assert_eq!((ext, content_type.as_str()), ("png", "image/png"));
+    let (ext, content_type) = avatar_format("image/png", JPEG).unwrap();
+    assert_eq!((ext, content_type.as_str()), ("jpg", "image/jpeg"));
+  }
+
+  #[test]
+  fn a_non_image_header_is_still_refused() {
+    assert!(matches!(avatar_format("text/html", PNG), Err(ApiError::BadRequest(_))));
+  }
+
+  /// The existing-data half: an SVG avatar stored before the upload check
+  /// existed must stop being redirected to.
+  #[test]
+  fn a_legacy_svg_key_is_not_served() {
+    let user = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
+    assert!(!is_servable_avatar_key(&format!("avatars/{user}/abc123.svg")));
+    assert!(is_servable_avatar_key(&format!("avatars/{user}/abc123.png")));
+    assert!(is_servable_avatar_key(&format!("avatars/{user}/abc123.jpg")));
   }
 
   #[test]
