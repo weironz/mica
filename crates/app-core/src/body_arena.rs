@@ -69,19 +69,20 @@ struct Buffer {
 }
 
 impl Buffer {
-  /// A buffer with exactly `capacity` bytes reserved, locked if `lock`.
-  /// Returns the lock error, if any, instead of failing: an unlocked index
+  fn with_capacity(capacity: usize) -> Self {
+    Buffer { text: String::with_capacity(capacity), locked: false }
+  }
+
+  /// Pin every reserved page. Called only once the buffer is FILLED (see
+  /// [`Arena::insert_all`]): locking forces the whole reservation resident at
+  /// once, and doing that while the incoming rows were still alive doubled
+  /// the peak — on a node already in swap that held the 0.13.62 api past its
+  /// healthcheck. Returns the error instead of failing: an unlocked index
   /// still answers searches.
-  fn with_capacity(capacity: usize, lock: bool) -> (Self, Option<String>) {
-    let mut buffer = Buffer { text: String::with_capacity(capacity), locked: false };
-    let mut error = None;
-    if lock && buffer.text.capacity() > 0 {
-      match os::lock(buffer.text.as_ptr(), buffer.text.capacity()) {
-        Ok(()) => buffer.locked = true,
-        Err(why) => error = Some(why),
-      }
-    }
-    (buffer, error)
+  fn lock(&mut self) -> Result<(), String> {
+    os::lock(self.text.as_ptr(), self.text.capacity())?;
+    self.locked = true;
+    Ok(())
   }
 }
 
@@ -116,6 +117,8 @@ impl Arena {
 
   /// Insert or replace bodies. Room for the whole batch is made once, so the
   /// startup load of every body is one allocation (and one lock), not dozens.
+  /// Rows are consumed one by one, each freed right after its copy, and the
+  /// lock comes last — the peak is one corpus, not two.
   pub(crate) fn insert_all(&mut self, rows: Vec<(Uuid, String)>) {
     let incoming: usize = rows.iter().map(|(_, text)| text.len()).sum();
     if self.buffer.text.len() + incoming > self.buffer.text.capacity() {
@@ -132,22 +135,25 @@ impl Arena {
       self.slots.insert(id, Slot { start, len: text.len(), has_upper });
       self.live += text.len();
     }
+    if self.lock == LockState::Locked && !self.buffer.locked && self.buffer.text.capacity() > 0 {
+      if let Err(why) = self.buffer.lock() {
+        tracing::warn!(
+          reason = %why,
+          "search index could not be locked in memory; it stays swappable \
+           (needs CAP_IPC_LOCK — compose `cap_add: [IPC_LOCK]` — or set MICA_SEARCH_INDEX_MLOCK=off)"
+        );
+        self.lock = LockState::Failed(why);
+      }
+    }
   }
 
   /// Move the live bodies into a fresh buffer sized for `need` plus headroom,
-  /// dropping every dead byte on the way. The old buffer is unlocked and freed.
+  /// dropping every dead byte on the way. The old buffer is unlocked and freed;
+  /// the new one is locked by the caller once filled.
   fn regrow(&mut self, need: usize) {
     let capacity = need + ((need as f64 * HEADROOM) as usize).max(MIN_HEADROOM);
-    let want_lock = self.lock == LockState::Locked;
-    let (mut next, error) = Buffer::with_capacity(capacity, want_lock);
-    if let Some(why) = error {
-      tracing::warn!(
-        reason = %why,
-        "search index could not be locked in memory; it stays swappable \
-         (needs CAP_IPC_LOCK — compose `cap_add: [IPC_LOCK]` — or set MICA_SEARCH_INDEX_MLOCK=off)"
-      );
-      self.lock = LockState::Failed(why);
-    }
+    // Unlocked for now: `insert_all` locks it once it is filled.
+    let mut next = Buffer::with_capacity(capacity);
     for slot in self.slots.values_mut() {
       let start = next.text.len();
       next.text.push_str(&self.buffer.text[slot.start..slot.start + slot.len]);

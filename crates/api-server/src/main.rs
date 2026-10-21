@@ -156,22 +156,35 @@ async fn main() -> anyhow::Result<()> {
   let mailer = mail::build_mailer();
   let state = AppState::new(config, db, mailer);
   // Warm the in-process body-text index so the first search does not pay the
-  // full load (it would still work — `search_views` refreshes on every call —
-  // this only moves the one expensive pass to before traffic). Failure is a
-  // warn, not a crash: the first search will retry the same load and surface
-  // the error to an actual caller.
-  match state.body_index.refresh(&state.db).await {
-    Ok(()) => {
-      let (live, reserved, lock) = state.body_index.footprint().await;
-      info!(
-        documents = state.body_index.indexed_documents().await,
-        body_mb = live >> 20,
-        reserved_mb = reserved >> 20,
-        memory = %lock,
-        "body-text search index warmed"
-      );
-    }
-    Err(error) => tracing::warn!(%error, "body-text index warm-up failed; first search will retry"),
+  // full load (it would still work — `search_views` refreshes on every call,
+  // and the refresh lock makes an early search wait for this load instead of
+  // starting a second one). Failure is a warn, not a crash: the first search
+  // will retry the same load and surface the error to an actual caller.
+  //
+  // In the BACKGROUND, not before `bind` — the same rule as the backfill above
+  // (docs/dev/lessons.md §13: nothing proportional to the data on the startup
+  // path). 0.13.62 kept it inline and made it heavier — the whole corpus copied
+  // into one buffer and locked in RAM — and on the swapping production node
+  // the api stayed closed past the healthcheck: the deploy rolled back.
+  {
+    let index = state.body_index.clone();
+    let db = state.db.clone();
+    tokio::spawn(async move {
+      match index.refresh(&db).await {
+        Ok(()) => {
+          let (live, reserved, lock) = index.footprint().await;
+          let documents = index.indexed_documents().await;
+          info!(
+            documents,
+            body_mb = live >> 20,
+            reserved_mb = reserved >> 20,
+            memory = %lock,
+            "body-text search index warmed"
+          );
+        }
+        Err(error) => tracing::warn!(%error, "body-text index warm-up failed; first search will retry"),
+      }
+    });
   }
   // The environment seeded `state.ai` above; a row saved by an admin replaces
   // it. Settings used to live ONLY in that lock, so every restart — i.e. every
