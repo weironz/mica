@@ -167,7 +167,6 @@ class EditorCommandHook {
   }
 }
 
-
 /// Should ONE pasted block be woven into the caret's line as inline text
 /// instead of landing as a block of its own?
 ///
@@ -208,7 +207,6 @@ class PageLinkTarget {
   final String title;
 }
 
-
 // Horizontal caret steps move by GRAPHEME, the unit Backspace/Delete already
 // use. Stepping one UTF-16 unit put the caret between the two halves of a
 // surrogate pair (any emoji): typing or deleting there left a lone surrogate in
@@ -221,3 +219,19 @@ int _prevGraphemeOffset(String text, int offset) =>
 /// The grapheme boundary just after [offset] (requires `offset < text.length`).
 int _nextGraphemeOffset(String text, int offset) =>
     offset + text.substring(offset).characters.first.length;
+
+/// Every pointer kind the editor's tap/drag gestures answer — all but
+/// `trackpad`. A precision touchpad's two-finger swipe arrives as PointerPanZoom
+/// events of that kind, and a drag recognizer accepts those as a drag. A brisk
+/// swipe's first report clears both the scroll view's slop and the selection
+/// pan's in one event, the deeper editor is asked first, and the swipe drew a
+/// selection instead of scrolling (2026-10-21). Clicks and press-and-drag on a
+/// touchpad are `mouse` events, so selecting with it still works;
+/// `test/trackpad_scroll_test.dart` pins the swipe.
+const Set<PointerDeviceKind> _selectionDragDevices = {
+  PointerDeviceKind.touch,
+  PointerDeviceKind.mouse,
+  PointerDeviceKind.stylus,
+  PointerDeviceKind.invertedStylus,
+  PointerDeviceKind.unknown,
+};
