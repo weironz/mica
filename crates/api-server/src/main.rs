@@ -10,7 +10,6 @@ use tracing::info;
 
 mod blob_gc;
 mod bucket;
-mod legacy_orphans;
 mod mail;
 mod metrics;
 mod origin;
@@ -22,23 +21,16 @@ mod routes;
 async fn main() -> anyhow::Result<()> {
   init_tracing();
 
-  let args: Vec<_> = std::env::args().skip(1).collect();
-  let legacy_audit = match args.as_slice() {
-    [] => None,
-    [command] if command == "audit-legacy-orphans" => Some(false),
-    [command, flag] if command == "audit-legacy-orphans" && flag == "--backfill" => Some(true),
-    _ => anyhow::bail!("usage: mica-api-server [audit-legacy-orphans [--backfill]]"),
-  };
+  // No subcommands: `audit-legacy-orphans` was a one-time tool, retired once
+  // its production backfill had run (v0.13.47; removed 2026-10-21).
+  if std::env::args().len() > 1 {
+    anyhow::bail!("usage: mica-api-server (takes no arguments)");
+  }
 
   let config = AppConfig::from_env().context("failed to load configuration")?;
   let db = connect_pg_pool(&config)
     .await
     .context("failed to connect to PostgreSQL")?;
-  if let Some(backfill) = legacy_audit {
-    let storage = mica_infra::storage::S3Config::from_env()
-      .context("S3 configuration is required for legacy orphan audit")?;
-    return legacy_orphans::run(&db, &storage, backfill).await;
-  }
   run_migrations(&db)
     .await
     .context("failed to run database migrations")?;
