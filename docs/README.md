@@ -32,6 +32,7 @@
 | [editor-engine.md](architecture/editor-engine.md) | 编辑器引擎设计(自绘画布、marks 模型) |
 | [render-architecture.md](architecture/render-architecture.md) | 块渲染架构(`AtomicBlockRenderer` 注册表,渲染红线) |
 | [sync-and-api.md](architecture/sync-and-api.md) | 同步、历史与 API 草案 |
+| [search.md](architecture/search.md) | 全文搜索:进程内正文索引、可锁定内存、开关与观测点、各版本根因 |
 | [markdown-boundary-comparison.md](architecture/markdown-boundary-comparison.md) | Markdown 引擎放在哪 —— AppFlowy / AFFiNE 源码级对照 |
 | [commonmark-scoreboard.md](architecture/commonmark-scoreboard.md) | CommonMark 0.31.2 / GFM 记分牌 |
 | [local-first-plan.md](architecture/local-first-plan.md) | Local-first 统一改造(option C) |
