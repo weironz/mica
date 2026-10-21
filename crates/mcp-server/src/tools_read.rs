@@ -140,7 +140,7 @@ impl MicaMcp {
     // window is what saves tokens on a big page; the cache is what makes a
     // re-read local.
     let full = match self
-      .full_markdown(&workspace_id, &document_id, refresh)
+      .full_markdown(workspace_id, document_id, refresh)
       .await
     {
       Ok(full) => full,
@@ -187,7 +187,7 @@ impl MicaMcp {
           .map(|v| ("outline", v))
       } else {
         self
-          .full_markdown(&workspace_id, id, false)
+          .full_markdown(workspace_id, *id, false)
           .await
           .map(|md| ("markdown", json!(md)))
       };

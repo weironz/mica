@@ -48,7 +48,9 @@ impl MicaMcp {
     let trashed = self
       .delete(&format!("/api/workspaces/{workspace_id}/views/{view_id}"))
       .await;
-    action_ack(trashed, "trashed", &view_id)
+    // Changes which documents exist/read back; see `cache` for why it's all of it.
+    self.cache_clear();
+    action_ack(trashed, "trashed", view_id)
   }
 
   #[tool(
@@ -77,14 +79,15 @@ impl MicaMcp {
         None,
       ));
     }
-    tool_result(
-      self
-        .post(
-          &format!("/api/workspaces/{workspace_id}/views/batch-trash"),
-          json!({ "view_ids": view_ids }),
-        )
-        .await,
-    )
+    let done = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/views/batch-trash"),
+        json!({ "view_ids": view_ids }),
+      )
+      .await;
+    // Changes which documents exist/read back; see `cache` for why it's all of it.
+    self.cache_clear();
+    tool_result(done)
   }
 
   #[tool(
@@ -102,14 +105,15 @@ impl MicaMcp {
     if let Err(error) = self.ensure_writable() {
       return Ok(tool_error(error));
     }
-    tool_result(
-      self
-        .post(
-          &format!("/api/workspaces/{workspace_id}/views/batch-restore"),
-          json!({ "view_ids": view_ids }),
-        )
-        .await,
-    )
+    let done = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/views/batch-restore"),
+        json!({ "view_ids": view_ids }),
+      )
+      .await;
+    // Changes which documents exist/read back; see `cache` for why it's all of it.
+    self.cache_clear();
+    tool_result(done)
   }
 
   #[tool(
@@ -163,11 +167,12 @@ impl MicaMcp {
         None,
       ));
     }
-    tool_result(
-      self
-        .delete(&format!("/api/workspaces/{workspace_id}/trash"))
-        .await,
-    )
+    let done = self
+      .delete(&format!("/api/workspaces/{workspace_id}/trash"))
+      .await;
+    // Changes which documents exist/read back; see `cache` for why it's all of it.
+    self.cache_clear();
+    tool_result(done)
   }
 
   #[tool(
@@ -196,7 +201,9 @@ impl MicaMcp {
     let purged = self
       .delete(&format!("/api/workspaces/{workspace_id}/trash/{view_id}"))
       .await;
-    action_ack(purged, "purged", &view_id)
+    // Changes which documents exist/read back; see `cache` for why it's all of it.
+    self.cache_clear();
+    action_ack(purged, "purged", view_id)
   }
 
   #[tool(
@@ -229,14 +236,15 @@ impl MicaMcp {
         None,
       ));
     }
-    tool_result(
-      self
-        .post(
-          &format!("/api/workspaces/{workspace_id}/views/batch-purge"),
-          json!({ "view_ids": view_ids }),
-        )
-        .await,
-    )
+    let done = self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/views/batch-purge"),
+        json!({ "view_ids": view_ids }),
+      )
+      .await;
+    // Changes which documents exist/read back; see `cache` for why it's all of it.
+    self.cache_clear();
+    tool_result(done)
   }
 
 }

@@ -17,6 +17,7 @@ use rmcp::{
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct MicaMcp {
@@ -32,7 +33,13 @@ struct MicaMcp {
   /// edits. It does NOT poll for edits made ELSEWHERE (none happen concurrently,
   /// per design); `refresh: true` on a read forces a refetch if ever needed.
   /// Shared across clones via Arc so the single stdio process has one cache.
-  cache: Arc<Mutex<HashMap<String, String>>>,
+  ///
+  /// "Every write" means every tool that changes what a document reads as, not
+  /// just the Markdown writes: restoring a version rewrites the page, and
+  /// trash/restore/purge/transfer change whether it exists at all. Those act on
+  /// view ids, which don't map to a document id without a lookup, so they
+  /// drop the whole cache ([cache_clear]) — they are rare, a refetch is cheap.
+  cache: Arc<Mutex<HashMap<Uuid, String>>>,
   tool_router: ToolRouter<Self>,
 }
 
@@ -63,18 +70,25 @@ impl MicaMcp {
 
   /// Cached full Markdown for a doc, if warm. The guard is dropped before any
   /// await (we clone out) so it never crosses an async point.
-  fn cache_get(&self, document_id: &str) -> Option<String> {
-    self.cache.lock().ok()?.get(document_id).cloned()
+  fn cache_get(&self, document_id: Uuid) -> Option<String> {
+    self.cache.lock().ok()?.get(&document_id).cloned()
   }
-  fn cache_put(&self, document_id: &str, markdown: &str) {
+  fn cache_put(&self, document_id: Uuid, markdown: &str) {
     if let Ok(mut c) = self.cache.lock() {
-      c.insert(document_id.to_string(), markdown.to_string());
+      c.insert(document_id, markdown.to_string());
     }
   }
   /// Drop a doc's cached copy — called after any write so the next read is fresh.
-  fn cache_invalidate(&self, document_id: &str) {
+  fn cache_invalidate(&self, document_id: Uuid) {
     if let Ok(mut c) = self.cache.lock() {
-      c.remove(document_id);
+      c.remove(&document_id);
+    }
+  }
+  /// Drop every cached doc — after a tool that changes documents it names only
+  /// by VIEW id (trash, restore, purge, transfer, workspace delete).
+  fn cache_clear(&self) {
+    if let Ok(mut c) = self.cache.lock() {
+      c.clear();
     }
   }
 
@@ -83,8 +97,8 @@ impl MicaMcp {
   /// tools share, so caching is uniform.
   async fn full_markdown(
     &self,
-    workspace_id: &str,
-    document_id: &str,
+    workspace_id: Uuid,
+    document_id: Uuid,
     refresh: bool,
   ) -> Result<String, McpError> {
     if !refresh
@@ -329,12 +343,13 @@ mod tests {
   #[test]
   fn warm_cache_put_get_invalidate() {
     let m = MicaMcp::new("http://x".into(), "t".into(), false);
-    assert!(m.cache_get("d1").is_none(), "cold cache misses");
-    m.cache_put("d1", "# hi");
-    assert_eq!(m.cache_get("d1").as_deref(), Some("# hi"), "warm hit");
+    let d1 = Uuid::new_v4();
+    assert!(m.cache_get(d1).is_none(), "cold cache misses");
+    m.cache_put(d1, "# hi");
+    assert_eq!(m.cache_get(d1).as_deref(), Some("# hi"), "warm hit");
     // A write invalidates so the next read is fresh.
-    m.cache_invalidate("d1");
-    assert!(m.cache_get("d1").is_none(), "invalidated → miss");
+    m.cache_invalidate(d1);
+    assert!(m.cache_get(d1).is_none(), "invalidated → miss");
   }
 
   #[test]
@@ -877,7 +892,7 @@ mod handshake_tests {
     let server = MicaMcp::new("https://example.invalid".into(), "pat".into(), true);
     let result = server
       .mica_create_document(Parameters(CreateDocArgs {
-        workspace_id: "w".into(),
+        workspace_id: Uuid::nil(),
         name: "n".into(),
         markdown: None,
         parent_view_id: None,
@@ -894,7 +909,7 @@ mod handshake_tests {
     let mangled = format!("$x {}imes y$", '\u{0009}');
     let result = server
       .mica_create_document(Parameters(CreateDocArgs {
-        workspace_id: "w".into(),
+        workspace_id: Uuid::nil(),
         name: "n".into(),
         markdown: Some(mangled),
         parent_view_id: None,
@@ -906,6 +921,313 @@ mod handshake_tests {
     assert!(
       text.contains("doubled"),
       "the message must tell the caller how to fix it, got: {text}"
+    );
+  }
+}
+
+/// Wire-level tests: a real MCP `tools/call` (JSON-RPC over an in-memory pipe)
+/// against a fake Mica API on a local TcpListener that records every request
+/// line. This is the layer P1-1 lived in — no test above ever looked at the URL
+/// a tool actually sends, so a path built from a model-supplied string went
+/// unchallenged.
+#[cfg(test)]
+mod wire_tests {
+  use super::*;
+  use serde_json::json;
+  use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+  const WS: &str = "11111111-1111-4111-8111-111111111111";
+  const DOC: &str = "22222222-2222-4222-8222-222222222222";
+  const VIEW: &str = "33333333-3333-4333-8333-333333333333";
+  const VICTIM: &str = "99999999-9999-4999-8999-999999999999";
+
+  type Log = Arc<Mutex<Vec<String>>>;
+
+  /// A fake API: answers every request `200 {}` and records "METHOD /path?query".
+  async fn fake_api() -> (String, Log) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let seen: Log = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+      loop {
+        let Ok((sock, _)) = listener.accept().await else { return };
+        let log = log.clone();
+        tokio::spawn(async move {
+          let mut reader = BufReader::new(sock);
+          let mut request_line = String::new();
+          if reader.read_line(&mut request_line).await.unwrap_or(0) == 0 {
+            return;
+          }
+          let mut content_length = 0usize;
+          loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header).await.unwrap_or(0) == 0 || header == "\r\n" {
+              break;
+            }
+            if let Some(v) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+              content_length = v.trim().parse().unwrap_or(0);
+            }
+          }
+          let mut body = vec![0u8; content_length];
+          let _ = reader.read_exact(&mut body).await;
+          let mut parts = request_line.split_whitespace();
+          let method = parts.next().unwrap_or("").to_string();
+          let target = parts.next().unwrap_or("").to_string();
+          log.lock().unwrap().push(format!("{method} {target}"));
+          let _ = reader
+            .get_mut()
+            .write_all(
+              b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                Content-Length: 2\r\nConnection: close\r\n\r\n{}",
+            )
+            .await;
+        });
+      }
+    });
+    (base, seen)
+  }
+
+  /// One MCP session over an in-memory pipe, driven with raw JSON-RPC lines —
+  /// exactly what a client sends, so argument deserialization is the real one.
+  struct Session {
+    to_server: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    from_server: BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    next_id: u64,
+  }
+
+  impl Session {
+    async fn start(server: MicaMcp) -> Self {
+      let (client_io, server_io) = tokio::io::duplex(1 << 20);
+      tokio::spawn(async move {
+        let (r, w) = tokio::io::split(server_io);
+        if let Ok(running) = server.serve((r, w)).await {
+          let _ = running.waiting().await;
+        }
+      });
+      let (r, w) = tokio::io::split(client_io);
+      let mut s = Session {
+        to_server: w,
+        from_server: BufReader::new(r),
+        next_id: 1,
+      };
+      s.request(
+        "initialize",
+        json!({
+          "protocolVersion": "2025-03-26",
+          "capabilities": {},
+          "clientInfo": { "name": "wire-test", "version": "0" }
+        }),
+      )
+      .await;
+      s.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+        .await;
+      s
+    }
+
+    async fn send(&mut self, msg: Value) {
+      let mut line = msg.to_string();
+      line.push('\n');
+      self.to_server.write_all(line.as_bytes()).await.unwrap();
+    }
+
+    async fn request(&mut self, method: &str, params: Value) -> Value {
+      let id = self.next_id;
+      self.next_id += 1;
+      self
+        .send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+        .await;
+      loop {
+        let mut line = String::new();
+        let n = self.from_server.read_line(&mut line).await.unwrap();
+        assert!(n > 0, "server closed the pipe");
+        let msg: Value = serde_json::from_str(&line).unwrap();
+        if msg.get("id") == Some(&json!(id)) {
+          return msg;
+        }
+      }
+    }
+
+    async fn call(&mut self, tool: &str, arguments: Value) -> Value {
+      self
+        .request("tools/call", json!({ "name": tool, "arguments": arguments }))
+        .await
+    }
+  }
+
+  /// A refusal is either a JSON-RPC error (bad params never reached the tool)
+  /// or an `isError` tool result. Anything else means the call went through.
+  fn refused(reply: &Value) -> bool {
+    reply.get("error").is_some() || reply.pointer("/result/isError") == Some(&json!(true))
+  }
+
+  /// P1-1. Each of these used to be spliced straight into the request URL;
+  /// reqwest resolves `..` and drops everything after `#`, so the first one
+  /// turned "unshare a document" into `DELETE /api/workspaces/<victim>` —
+  /// around every confirm/expect_name guard. Every id the API routes on is a
+  /// UUID, so anything else must be refused before a single byte is sent.
+  #[tokio::test]
+  async fn a_path_shaped_id_is_refused_without_any_request() {
+    let (base, seen) = fake_api().await;
+    let mut mcp = Session::start(MicaMcp::new(base, "pat".into(), false)).await;
+
+    let attacks = [
+      (
+        "mica_unshare",
+        json!({ "workspace_id": WS, "document_id": format!("../../../workspaces/{VICTIM}#") }),
+      ),
+      (
+        "mica_unshare",
+        json!({ "workspace_id": format!("{VICTIM}#"), "document_id": DOC }),
+      ),
+      (
+        "mica_get_outline",
+        json!({ "workspace_id": WS, "document_id": format!("{DOC}/../../{VICTIM}") }),
+      ),
+      (
+        "mica_trash_view",
+        json!({
+          "workspace_id": WS,
+          "view_id": format!("../../../workspaces/{VICTIM}#"),
+          "confirm": true
+        }),
+      ),
+      (
+        "mica_list_pages",
+        json!({ "workspace_id": WS, "parent_view_id": format!("{VIEW}&depth=1#") }),
+      ),
+      (
+        "mica_read_documents",
+        json!({ "workspace_id": WS, "document_ids": [format!("../{VICTIM}")], "mode": "outline" }),
+      ),
+      (
+        "mica_restore_version",
+        json!({ "workspace_id": WS, "document_id": DOC, "version_id": "../x" }),
+      ),
+      (
+        "mica_read_image",
+        json!({ "workspace_id": WS, "file_id": format!("x/../../{VICTIM}") }),
+      ),
+    ];
+    for (tool, args) in attacks {
+      let reply = mcp.call(tool, args.clone()).await;
+      let sent = seen.lock().unwrap().clone();
+      assert!(sent.is_empty(), "{tool} {args} must send nothing, sent {sent:?}");
+      assert!(refused(&reply), "{tool} {args} must be refused, got {reply}");
+    }
+
+    // Not vacuous: the same harness DOES observe a legitimate call.
+    let reply = mcp
+      .call("mica_unshare", json!({ "workspace_id": WS, "document_id": DOC }))
+      .await;
+    assert!(!refused(&reply), "a real uuid must go through: {reply}");
+    assert_eq!(seen.lock().unwrap().len(), 1, "the harness sees requests");
+  }
+
+  /// The guard for the NEXT id someone adds: every `*_id` / `*_ids` argument of
+  /// every tool is schema'd as a uuid string — which is only true when the
+  /// field is a `Uuid`, i.e. when it cannot carry a path. A new `String` id
+  /// fails here instead of shipping P1-1 again.
+  #[test]
+  fn every_id_argument_is_a_uuid() {
+    let mut checked = 0;
+    for t in MicaMcp::full_tool_router().list_all() {
+      let Some(props) = t.input_schema.get("properties").and_then(Value::as_object) else {
+        continue;
+      };
+      for (name, schema) in props {
+        let schema = if name.ends_with("_ids") {
+          schema.get("items").unwrap_or(&Value::Null)
+        } else if name.ends_with("_id") {
+          schema
+        } else {
+          continue;
+        };
+        assert_eq!(
+          schema.get("format").and_then(Value::as_str),
+          Some("uuid"),
+          "{}.{name} must be a Uuid, not a free string: {schema}",
+          t.name
+        );
+        assert_eq!(schema.get("type").and_then(Value::as_str), Some("string"));
+        checked += 1;
+      }
+    }
+    assert!(checked > 50, "walked the real schemas, not an empty list: {checked}");
+  }
+
+  /// C11. The warm cache is only safe if every tool that changes what a page
+  /// reads as drops it. Restoring a version rewrites the page; trash, restore,
+  /// purge and transfer change whether it exists. Any of them leaving the old
+  /// text cached means the next anchored edit is planned against a page that
+  /// is no longer there.
+  #[tokio::test]
+  async fn tools_that_change_documents_drop_the_read_cache() {
+    let (base, seen) = fake_api().await;
+    let server = MicaMcp::new(base, "pat".into(), false);
+    let probe = server.clone(); // shares the Arc'd cache
+    let mut mcp = Session::start(server).await;
+    let doc: Uuid = DOC.parse().unwrap();
+    let ver = "44444444-4444-4444-8444-444444444444";
+    let dest = "55555555-5555-4555-8555-555555555555";
+
+    // Control: a read-only tool leaves it warm, so a miss below is the tool's
+    // doing and not a probe that never shared the cache.
+    probe.cache_put(doc, "stale");
+    let reply = mcp.call("mica_list_trash", json!({ "workspace_id": WS })).await;
+    assert!(!refused(&reply), "{reply}");
+    assert_eq!(probe.cache_get(doc).as_deref(), Some("stale"));
+
+    let changers = [
+      (
+        "mica_restore_version",
+        json!({ "workspace_id": WS, "document_id": DOC, "version_id": ver }),
+      ),
+      ("mica_trash_view", json!({ "workspace_id": WS, "view_id": VIEW, "confirm": true })),
+      ("mica_trash_views", json!({ "workspace_id": WS, "view_ids": [VIEW], "confirm": true })),
+      ("mica_restore_view", json!({ "workspace_id": WS, "view_id": VIEW })),
+      ("mica_restore_views", json!({ "workspace_id": WS, "view_ids": [VIEW] })),
+      ("mica_purge_view", json!({ "workspace_id": WS, "view_id": VIEW, "confirm": true })),
+      ("mica_purge_views", json!({ "workspace_id": WS, "view_ids": [VIEW], "confirm": true })),
+      ("mica_empty_trash", json!({ "workspace_id": WS, "confirm": true })),
+      (
+        "mica_transfer_view",
+        json!({ "workspace_id": WS, "view_id": VIEW, "dest_workspace_id": dest }),
+      ),
+    ];
+    for (tool, args) in changers {
+      probe.cache_put(doc, "stale");
+      let before = seen.lock().unwrap().len();
+      let reply = mcp.call(tool, args).await;
+      assert!(!refused(&reply), "{tool}: {reply}");
+      assert_eq!(seen.lock().unwrap().len(), before + 1, "{tool} reached the API");
+      assert!(probe.cache_get(doc).is_none(), "{tool} left a stale cached page");
+    }
+  }
+
+  /// The positive half: a well-formed UUID builds exactly the documented path.
+  #[tokio::test]
+  async fn a_uuid_builds_the_exact_path() {
+    let (base, seen) = fake_api().await;
+    let mut mcp = Session::start(MicaMcp::new(base, "pat".into(), false)).await;
+
+    let reply = mcp
+      .call("mica_unshare", json!({ "workspace_id": WS, "document_id": DOC }))
+      .await;
+    assert!(!refused(&reply), "{reply}");
+    let reply = mcp
+      .call(
+        "mica_list_pages",
+        json!({ "workspace_id": WS, "parent_view_id": VIEW, "depth": 1 }),
+      )
+      .await;
+    assert!(!refused(&reply), "{reply}");
+    assert_eq!(
+      *seen.lock().unwrap(),
+      vec![
+        format!("DELETE /api/workspaces/{WS}/documents/{DOC}/share"),
+        format!("GET /api/workspaces/{WS}/views?parent_view_id={VIEW}&depth=1"),
+      ]
     );
   }
 }

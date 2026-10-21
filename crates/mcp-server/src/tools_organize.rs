@@ -43,7 +43,7 @@ impl MicaMcp {
         body,
       )
       .await;
-    action_ack(moved, "moved", &view_id)
+    action_ack(moved, "moved", view_id)
   }
 
   #[tool(
@@ -79,7 +79,9 @@ impl MicaMcp {
         body,
       )
       .await;
-    action_ack(done, if copy { "copied" } else { "moved" }, &view_id)
+    // A move trashes the source; see `cache` for why it's all of it.
+    self.cache_clear();
+    action_ack(done, if copy { "copied" } else { "moved" }, view_id)
   }
 
   #[tool(
@@ -113,7 +115,7 @@ impl MicaMcp {
         body,
       )
       .await;
-    action_ack(done, "cloned", &view_id)
+    action_ack(done, "cloned", view_id)
   }
 
   #[tool(
@@ -257,7 +259,9 @@ impl MicaMcp {
         json!({}),
       )
       .await;
-    action_ack(restored, "restored", &view_id)
+    // Changes which documents exist/read back; see `cache` for why it's all of it.
+    self.cache_clear();
+    action_ack(restored, "restored", view_id)
   }
 
   #[tool(
@@ -350,6 +354,10 @@ impl MicaMcp {
         json!({ "version_id": version_id }),
       )
       .await;
+    // The restore rewrote the page: a cached copy is now the pre-restore text,
+    // and the next find_replace/insert_at would be planned against it. Dropped
+    // whatever the outcome — a request that errored may still have landed.
+    self.cache_invalidate(document_id);
     match restored {
       Ok(_) => tool_result(Ok(json!({
         "ok": true, "action": "restored_version", "version_id": version_id
