@@ -113,6 +113,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [code-review-2026-10-21.md](reviews/code-review-2026-10-21.md) | 第三轮全项目评审(重构后):P1×8、工具实跑结果、旧条目核对、精简估算 |
 | [code-review-2026-10-19.md](reviews/code-review-2026-10-19.md) | 第二轮全项目评审(与 10-18 互补) |
 | [code-review-2026-10-18.md](reviews/code-review-2026-10-18.md) | 全项目评审,A–D 级问题与逐条修复、决策、验证 |
 | [code-review-2026-07-20.md](reviews/code-review-2026-07-20.md) | 2026-07-20 全项目评审 |
@@ -120,6 +121,7 @@
 | [code-optimization/OPTIMIZATION_PLAN.md](reviews/code-optimization/OPTIMIZATION_PLAN.md) | 代码库优化计划(第一轮) |
 | [code-optimization/OPTIMIZATION_PLAN_ROUND2.md](reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md) | 第二轮:巨石文件拆分 |
 | [code-optimization/OPTIMIZATION_PLAN_ROUND3.md](reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md) | 第三轮:长尾收敛 |
+| [code-optimization/OPTIMIZATION_PLAN_ROUND4.md](reviews/code-optimization/OPTIMIZATION_PLAN_ROUND4.md) | 第四轮:10-21 评审的分阶段修复与结构收口计划 |
 | [code-optimization/UI_EDITING_EXPERIENCE_PLAN.md](reviews/code-optimization/UI_EDITING_EXPERIENCE_PLAN.md) | UI 与编辑舒适感方案 |
 | [code-optimization/UI_EDITING_EXPERIENCE_VALIDATION.md](reviews/code-optimization/UI_EDITING_EXPERIENCE_VALIDATION.md) | UI 与编辑舒适感:实施与验证 |
 | [code-optimization/SIDEBAR_QUICK_RENAME.md](reviews/code-optimization/SIDEBAR_QUICK_RENAME.md) | 目录树双击快速重命名 |
