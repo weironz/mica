@@ -246,12 +246,12 @@ where
   let yrs_file_ids = crate::sync::file_ids_from_blocks(&doc.to_blocks());
   sqlx::query(
     "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp())
      ON CONFLICT (document_id) DO UPDATE SET
          state = excluded.state, state_vector = excluded.state_vector,
          base_rid = excluded.base_rid, content_text = excluded.content_text,
          link_targets = excluded.link_targets, file_ids = excluded.file_ids,
-         updated_at = now()",
+         updated_at = clock_timestamp()",
   )
   .bind(document_id)
   .bind(&yrs_state)

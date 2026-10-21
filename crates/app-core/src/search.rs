@@ -62,12 +62,15 @@ use mica_infra::ApiResult;
 pub use crate::body_arena::LockState;
 use crate::body_arena::Arena;
 
-/// Safety lap for the refresh cursor. `updated_at` is `now()` *of the writing
-/// transaction's start*, so a row can become visible bearing a timestamp older
-/// than rows already indexed; the cursor therefore trails the DATABASE clock by
-/// this much instead of standing on the newest timestamp seen. A row is missed
-/// only if its transaction ran longer than this before committing — push
-/// transactions here are per-request and short.
+/// Safety lap for the refresh cursor. `updated_at` is `clock_timestamp()` *of
+/// the writing statement* (it was `now()`, the transaction's START, until
+/// 2026-10-21 — so a push that waited on the document lock committed a stamp
+/// from before the wait), and a row still becomes visible only at COMMIT,
+/// bearing a timestamp older than rows already indexed; the cursor therefore
+/// trails the DATABASE clock by this much instead of standing on the newest
+/// timestamp seen. A row is missed only if more than this passes between its
+/// write and its commit — the base write sits at the end of short, already
+/// locked transactions, and the startup backfill commits every few hundred rows.
 ///
 /// Trailing the CLOCK, not the data, is what makes the window close: the first
 /// cut trailed `max(updated_at)`, and a bulk import writes thousands of rows
