@@ -168,9 +168,11 @@ pub fn set_document_title(snapshot: &mut DocumentSnapshotPayload, title: &str) -
 /// 3. **Nothing at all for an empty title**, so an untitled page does not export
 ///    a bare `# `.
 ///
-/// The counterpart is `strip_leading_h1` on import (`mica_interchange`), which
-/// removes exactly what this writes so export→import stays stable
-/// (CLAUDE.md #4). The two must move together.
+/// The counterpart is [`strip_page_title`] right below, which import
+/// (`mica_interchange`) uses to remove exactly what this writes so
+/// export→import stays stable (CLAUDE.md #4). Both find the heading through
+/// [`is_page_title_line`] and the front matter through `split_front_matter`, so
+/// the format the pair agrees on is defined once.
 pub fn with_page_title(markdown: &str, title: &str) -> String {
   let title = title.trim();
   if title.is_empty() {
@@ -182,7 +184,7 @@ pub fn with_page_title(markdown: &str, title: &str) -> String {
   // private copy of that rule here would be the double-representation this
   // codebase keeps getting burned by.
   let (front, body) = split_front_matter(markdown);
-  if leading_heading(body).map(str::trim) == Some(heading.as_str()) {
+  if leading_heading(body).is_some_and(|line| is_page_title_line(line, title)) {
     return markdown.to_string();
   }
   let body = body.trim_start_matches('\n');
@@ -197,6 +199,51 @@ pub fn with_page_title(markdown: &str, title: &str) -> String {
     return format!("{prefix}{heading}\n");
   }
   format!("{prefix}{heading}\n\n{body}")
+}
+
+/// The inverse of [`with_page_title`]: take the `# {title}` line it wrote back
+/// off a page's text, leaving any front matter in place above the body.
+///
+/// For import of archives whose title is KNOWN to be welded onto the text (our
+/// own exports, and Notion's). The writer's rules, mirrored:
+///
+/// - the heading is looked for **after the front matter**, because that is
+///   where the writer puts it (a stripper that only looked at the first line of
+///   the file missed it on every page with properties);
+/// - **exact match only** — a leading heading that says something else is the
+///   author's content and survives;
+/// - **an empty title strips nothing.**
+///
+/// The blank lines the writer puts between heading and body go with it;
+/// everything else, front matter included, comes back verbatim.
+pub fn strip_page_title(markdown: &str, title: &str) -> String {
+  let title = title.trim();
+  if title.is_empty() {
+    return markdown.to_string();
+  }
+  let (_, body) = split_front_matter(markdown);
+  // `body` is a suffix of `markdown`, so this is the front matter exactly as
+  // written, fences included ("" when there is none).
+  let front = &markdown[..markdown.len() - body.len()];
+  let mut offset = 0;
+  for line in body.split_inclusive('\n') {
+    offset += line.len();
+    if line.trim().is_empty() {
+      continue;
+    }
+    if !is_page_title_line(line, title) {
+      break;
+    }
+    let rest = body[offset..].trim_start_matches(['\n', '\r']);
+    return format!("{front}{rest}");
+  }
+  markdown.to_string()
+}
+
+/// Whether `line` is the heading [`with_page_title`] writes for `title`
+/// (already trimmed): `# {title}`, tolerant of surrounding whitespace only.
+fn is_page_title_line(line: &str, title: &str) -> bool {
+  line.trim().strip_prefix("# ").map(str::trim) == Some(title)
 }
 
 /// The first non-blank line, if it is an ATX heading; otherwise `None`.
@@ -804,7 +851,9 @@ mod tree_shape_tests {
 
 #[cfg(test)]
 mod page_title_tests {
-  use super::{DocumentSnapshotPayload, document_title, set_document_title, with_page_title};
+  use super::{
+    DocumentSnapshotPayload, document_title, set_document_title, strip_page_title, with_page_title,
+  };
 
   fn doc(root_data: serde_json::Value) -> DocumentSnapshotPayload {
     serde_json::from_value(serde_json::json!({
@@ -975,6 +1024,50 @@ mod page_title_tests {
   fn an_unterminated_fence_is_treated_as_text() {
     let md = "---\n没有收尾\n";
     assert_eq!(with_page_title(md, "我的页"), "# 我的页\n\n---\n没有收尾\n");
+  }
+
+  /// The pair, closed: whatever the writer adds, the stripper takes back off —
+  /// for every shape the writer has a rule for.
+  #[test]
+  fn stripping_undoes_writing() {
+    for (md, title) in [
+      ("正文。\n", "我的页"),
+      ("---\ntags: [a]\n---\n正文。\n", "我的页"),
+      ("---\n---\n正文。\n", "我的页"),
+      ("---\ntags: [a]\n---\n", "我的页"),
+      ("", "我的页"),
+      ("# 别的标题\n\n正文。\n", "我的页"),
+      ("---\n没有收尾\n", "我的页"),
+      ("正文。\n", "Q&A: 2026/10"),
+    ] {
+      let titled = with_page_title(md, title);
+      assert_eq!(strip_page_title(&titled, title), md, "{titled:?}");
+    }
+  }
+
+  /// The case that used to leak: the title sits after the front matter, so a
+  /// stripper looking only at the file's first line never saw it.
+  #[test]
+  fn the_title_is_stripped_from_after_front_matter() {
+    assert_eq!(
+      strip_page_title("---\ntags: [a]\n---\n# 我的页\n\n正文。\n", "我的页"),
+      "---\ntags: [a]\n---\n正文。\n"
+    );
+  }
+
+  /// Exact match only: a different leading heading, a heading at another level,
+  /// or a matching heading that is not the first thing in the body is content.
+  #[test]
+  fn only_the_exact_leading_title_is_stripped() {
+    for md in [
+      "# 别的标题\n\n正文。\n",
+      "## 我的页\n\n正文。\n",
+      "正文。\n\n# 我的页\n",
+      "---\ntags: [a]\n---\n正文。\n\n# 我的页\n",
+    ] {
+      assert_eq!(strip_page_title(md, "我的页"), md);
+    }
+    assert_eq!(strip_page_title("# \n\n正文。\n", ""), "# \n\n正文。\n");
   }
 }
 

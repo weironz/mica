@@ -229,10 +229,10 @@ fn plan_full_archive_with_manifest_links_and_assets() {
   assert!(plan.pages[0].is_folder && !plan.pages[1].is_folder);
   assert_eq!(plan.pages[2].parent, Some(0)); // Zeta/Sub.md under the Zeta FOLDER
   assert_eq!(plan.pages[3].parent, None);
-  // Body verbatim: our own archives never weld the name into the text, so there
-  // is nothing to strip and a leading heading is the author's, not ours to eat.
-  // (Notion archives DO repeat the title as an H1 — that one case is stripped at
-  // import; see `strip_leading_h1`'s call site.)
+  // Body verbatim: this fixture's manifest predates `generator: "mica"`, so it is
+  // not known to be ours and a leading heading is the author's, not ours to eat.
+  // (Our current exports and Notion's DO weld the title on as an H1 — those are
+  // stripped at import; see `mica_markdown::strip_page_title`'s call site.)
   assert!(plan.pages[1].markdown.contains("see [Sub](Zeta/Sub.md)"));
   assert!(plan.pages[1].markdown.contains("# Zeta"));
   // Asset present and resolvable from the page that references it.
