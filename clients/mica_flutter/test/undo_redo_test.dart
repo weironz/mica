@@ -158,4 +158,78 @@ void main() {
     await h.drain();
     expect(h.c.nodes[0].text, '');
   });
+  // ── 2026-10-21 review P1-4: undo while collaborating ──────────────────────
+  //
+  // History holds whole-document snapshots. Restoring one verbatim used to roll
+  // back what a collaborator wrote since — and DELETE blocks they added, sent
+  // to everyone. Undo now leaves every block someone else touched as it is.
+
+  test('undo leaves a collaborator\'s edits and new blocks alone', () async {
+    final h = _Harness([_p('a', 'mine'), _p('b', 'theirs')]);
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 4));
+    h.c.setFocusedText('mine!', 5, 5);
+    h.c.flushPending();
+    await h.drain();
+
+    // A collaborator rewrites b and adds c; our own edit echoes back unchanged.
+    h.c.reconcile([
+      _p('a', 'mine!'),
+      _p('b', 'theirs, edited'),
+      _p('c', 'new'),
+    ]);
+    h.batches.clear();
+
+    h.c.undo();
+    await h.drain();
+    expect(
+      [for (final n in h.c.nodes) n.text],
+      ['mine', 'theirs, edited', 'new'],
+    );
+    final sent = [for (final b in h.batches) ...b];
+    expect(
+      sent.where((o) => o['type'] == 'delete_block'),
+      isEmpty,
+      reason: 'undo deleted a block a collaborator added',
+    );
+    expect(
+      sent.where((o) => o['block_id'] == 'b'),
+      isEmpty,
+      reason: 'undo rolled back a collaborator\'s edit',
+    );
+    expect(sent.single['block_id'], 'a', reason: 'only our own edit is undone');
+
+    // And redo brings ours back without touching theirs.
+    h.batches.clear();
+    h.c.redo();
+    await h.drain();
+    expect(
+      [for (final n in h.c.nodes) n.text],
+      ['mine!', 'theirs, edited', 'new'],
+    );
+  });
+
+  test('a block a collaborator deleted stays deleted on undo', () async {
+    final h = _Harness([_p('a', 'x'), _p('b', 'gone soon')]);
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 1));
+    h.c.setFocusedText('xy', 2, 2);
+    h.c.flushPending();
+    await h.drain();
+    h.c.reconcile([_p('a', 'xy')]); // b deleted remotely
+    h.c.undo();
+    await h.drain();
+    expect([for (final n in h.c.nodes) n.id], ['a']);
+    expect(h.c.nodes.single.text, 'x');
+  });
+
+  test('alone, undo behaves exactly as before', () async {
+    final h = _Harness([_p('a', 'one')]);
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 3));
+    h.c.setFocusedText('one two', 7, 7);
+    h.c.flushPending();
+    await h.drain();
+    h.c.reconcile([_p('a', 'one two')]); // our own echo: nothing foreign
+    h.c.undo();
+    await h.drain();
+    expect(h.c.nodes.single.text, 'one');
+  });
 }

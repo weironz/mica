@@ -125,6 +125,7 @@ class EditorController extends ChangeNotifier {
     _clampSelection();
     _undoStack.clear();
     _redoStack.clear();
+    _touchedAt.clear();
     _present = _snapshot();
     notifyListeners();
   }
@@ -151,12 +152,29 @@ class EditorController extends ChangeNotifier {
         : null;
     final byId = {for (final n in nodes) n.id: n};
     final next = <EditorNode>[];
+    // Blocks this merge CHANGED are someone else's edits: undo must leave them
+    // alone (see [_restore]). Our own ops echo back identical, so they never
+    // count. Deleted remotely = in `nodes` but not in `server`.
+    final serverIds = {for (final n in server) n.id};
+    final touched = <String>[
+      for (final n in nodes)
+        if (!serverIds.contains(n.id)) n.id,
+    ];
     for (final src in server) {
       final cur = byId[src.id];
       if (cur == null) {
+        touched.add(src.id);
         next.add(src.copy());
       } else {
         final dirty = _dirty.containsKey(cur.id);
+        if (cur.kind != src.kind ||
+            (!dirty && cur.text != src.text) ||
+            !_jsonEq(
+              _withoutMarks(cur.data, dirty),
+              _withoutMarks(src.data, dirty),
+            )) {
+          touched.add(cur.id);
+        }
         // Read the LOCAL marks BEFORE overwriting `data` below.
         final localMarks = cur.data['marks'];
         cur.kind = src.kind;
@@ -178,6 +196,12 @@ class EditorController extends ChangeNotifier {
     nodes
       ..clear()
       ..addAll(next);
+    if (touched.isNotEmpty) {
+      _remoteGen++;
+      for (final id in touched) {
+        _touchedAt[id] = _remoteGen;
+      }
+    }
     _remapSelection(focusedId);
     // The server snapshot is the new committed baseline; keep `_present` aligned
     // so the next change records a correct "before" state. History is preserved.
@@ -588,6 +612,10 @@ class EditorController extends ChangeNotifier {
   /// only be cleared on success, and the caller (page switch, dispose) needs to
   /// know the difference between "saved" and "still only in memory".
   Future<bool> flushPending() async {
+    // A disposed controller sends nothing: its ops would be routed to whatever
+    // document is active NOW (the shell dispatches by active state), not the
+    // one they were typed into. The shell flushes before every switch.
+    if (_disposed) return _dirty.isEmpty;
     _saveTimer?.cancel();
     _saveTimer = null;
     _retryTimer?.cancel();
@@ -3626,7 +3654,62 @@ class EditorController extends ChangeNotifier {
   _DocSnapshot _snapshot() => _DocSnapshot(
     nodes: [for (final n in nodes) n.copy()],
     selection: selection,
+    remoteGen: _remoteGen,
   );
+
+  // ── Collaboration-safe undo (2026-10-21 review P1-4) ──────────────────────
+  //
+  // History holds WHOLE-document snapshots. Restoring one verbatim while
+  // collaborating rolled back — or, through [_diffOps], DELETED — what others
+  // had written since. The rule now: undo/redo only reverts blocks nobody else
+  // has touched since the snapshot was taken. A block a collaborator changed,
+  // added or removed after it keeps its CURRENT state. Single-user editing is
+  // unaffected (nothing is ever marked). The full fix — recording our own ops'
+  // inverses, Yjs UndoManager style — is a separate structural change.
+
+  /// Bumped by every [reconcile] that changed something.
+  int _remoteGen = 0;
+
+  /// Block id → the [_remoteGen] at which a merge last changed it.
+  final Map<String, int> _touchedAt = {};
+
+  /// [target] with every block touched remotely since it was captured replaced
+  /// by its current version (dropped if it is gone now), and remotely added
+  /// blocks kept, each right after the block that precedes it now.
+  List<EditorNode> _withForeignEdits(_DocSnapshot target) {
+    bool foreign(String id) => (_touchedAt[id] ?? 0) > target.remoteGen;
+    final current = {for (final n in nodes) n.id: n};
+    final out = <EditorNode>[
+      for (final n in target.nodes)
+        if (!foreign(n.id))
+          n.copy()
+        else if (current[n.id] != null)
+          current[n.id]!.copy(),
+    ];
+    final inOut = {for (final n in out) n.id};
+    for (var i = 0; i < nodes.length; i++) {
+      final n = nodes[i];
+      if (inOut.contains(n.id) || !foreign(n.id)) continue;
+      var at = 0;
+      for (var j = i - 1; j >= 0; j--) {
+        final k = out.indexWhere((o) => o.id == nodes[j].id);
+        if (k >= 0) {
+          at = k + 1;
+          break;
+        }
+      }
+      out.insert(at, n.copy());
+      inOut.add(n.id);
+    }
+    return out;
+  }
+
+  /// [data] for "did the merge change it": a dirty block keeps its LOCAL marks
+  /// (see [reconcile]), so marks are not a remote change there.
+  static Object? _withoutMarks(Map<String, dynamic> data, bool dirty) {
+    if (!dirty || !data.containsKey('marks')) return data;
+    return Map<String, dynamic>.from(data)..remove('marks');
+  }
 
   void undo() {
     // Commit any *pending* debounced typing first so its burst is its own undo
@@ -3651,10 +3734,11 @@ class EditorController extends ChangeNotifier {
   /// backend follows. Does not touch the history stacks (the caller did).
   void _restore(_DocSnapshot target) {
     _restoring = true;
-    final ops = _diffOps(nodes, target.nodes);
+    final restored = _withForeignEdits(target);
+    final ops = _diffOps(nodes, restored);
     nodes
       ..clear()
-      ..addAll(target.nodes.map((n) => n.copy()));
+      ..addAll(restored);
     selection = target.selection;
     _clampSelection();
     // The initial-load baseline may have no selection; keep a caret so editing
@@ -3669,24 +3753,55 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Block-op diff transforming the [from] document into [to]. The editor never
-  /// reorders existing blocks, so deletes + position-indexed inserts + content
-  /// updates fully reconstruct order (no `move_block` needed).
+  /// Block-op diff transforming the [from] document into [to]: deletes, then
+  /// inserts and `move_block`s in [to] order, then content updates.
+  ///
+  /// It used to assume the editor never reorders blocks — but [moveBlock]
+  /// (gutter drag) does, so undoing a drag restored the order locally while the
+  /// CRDT kept the moved one; later index-based inserts landed in the wrong
+  /// place and a reload jumped the block back (2026-10-21 review P1-3).
+  ///
+  /// Blocks on the longest run already in the right relative order stay put;
+  /// only the others move — so undoing one drag is one `move_block`, not one
+  /// per block. Each insert/move lands right after its [to]-predecessor in the
+  /// order as the ops apply sequentially (the backends' semantics: a move
+  /// removes, then inserts at `index` in what remains).
   List<DocOp> _diffOps(List<EditorNode> from, List<EditorNode> to) {
     final fromById = {for (final n in from) n.id: n};
     final toIds = {for (final n in to) n.id};
     final ops = <DocOp>[];
+    final order = <String>[]; // the sibling order as the ops so far leave it
     for (final n in from) {
-      if (!toIds.contains(n.id)) {
+      if (toIds.contains(n.id)) {
+        order.add(n.id);
+      } else {
         ops.add({'type': 'delete_block', 'block_id': n.id});
       }
     }
+    final stay = _inOrderIds(order, to);
+    int after(int index) =>
+        index == 0 ? 0 : order.indexOf(to[index - 1].id) + 1;
     for (var index = 0; index < to.length; index++) {
       final n = to[index];
       final old = fromById[n.id];
       if (old == null) {
-        ops.add(_insertOp(n, index));
-      } else if (old.kind != n.kind ||
+        final at = after(index);
+        order.insert(at, n.id);
+        ops.add(_insertOp(n, at));
+        continue;
+      }
+      if (!stay.contains(n.id)) {
+        order.remove(n.id);
+        final at = after(index);
+        order.insert(at, n.id);
+        ops.add({
+          'type': 'move_block',
+          'block_id': n.id,
+          'parent_id': rootBlockId,
+          'index': at,
+        });
+      }
+      if (old.kind != n.kind ||
           old.text != n.text ||
           !_jsonEq(old.data, n.data)) {
         ops.add({
@@ -3699,6 +3814,38 @@ class EditorController extends ChangeNotifier {
       }
     }
     return ops;
+  }
+
+  /// Ids of [order] forming a longest subsequence whose relative order already
+  /// matches [to] — the blocks a reorder diff can leave where they are.
+  static Set<String> _inOrderIds(List<String> order, List<EditorNode> to) {
+    final rank = {for (var i = 0; i < to.length; i++) to[i].id: i};
+    final seq = [for (final id in order) rank[id]!];
+    // Patience LIS with back-pointers, O(n log n).
+    final tails = <int>[]; // index into seq of the smallest tail per length
+    final prev = List<int>.filled(seq.length, -1);
+    for (var i = 0; i < seq.length; i++) {
+      var lo = 0, hi = tails.length;
+      while (lo < hi) {
+        final mid = (lo + hi) >> 1;
+        if (seq[tails[mid]] < seq[i]) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+      if (lo > 0) prev[i] = tails[lo - 1];
+      if (lo == tails.length) {
+        tails.add(i);
+      } else {
+        tails[lo] = i;
+      }
+    }
+    final keep = <String>{};
+    for (var i = tails.isEmpty ? -1 : tails.last; i >= 0; i = prev[i]) {
+      keep.add(order[i]);
+    }
+    return keep;
   }
 
   static bool _jsonEq(Object? a, Object? b) {
@@ -3723,19 +3870,33 @@ class EditorController extends ChangeNotifier {
   String _genId() =>
       'block_${DateTime.now().microsecondsSinceEpoch}_${_idCounter++}';
 
+  bool _disposed = false;
+
   @override
   void dispose() {
+    _disposed = true;
     _saveTimer?.cancel();
+    // A pending retry would fire after the tab switch and commit this page's
+    // blocks into the newly active document (2026-10-21 review P1-2).
+    _retryTimer?.cancel();
     super.dispose();
   }
 }
 
 /// An immutable point-in-time copy of the document for the undo/redo stacks.
 class _DocSnapshot {
-  _DocSnapshot({required this.nodes, required this.selection});
+  _DocSnapshot({
+    required this.nodes,
+    required this.selection,
+    required this.remoteGen,
+  });
 
   final List<EditorNode> nodes; // deep-copied; never mutated in place
   final DocSelection? selection; // DocSelection/DocPosition are immutable
+
+  /// [EditorController._remoteGen] when captured: blocks touched by a merge
+  /// after this are someone else's, and restoring this snapshot keeps them.
+  final int remoteGen;
 }
 
 extension _FirstOrNull<E> on Iterable<E> {
