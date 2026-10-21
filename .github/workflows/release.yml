@@ -294,6 +294,25 @@ jobs:
             Start-Sleep -Seconds 10
             $app.Refresh()
             if ($app.HasExited) {
+              # STATUS_DLL_NOT_FOUND says A DLL is missing, never which one.
+              # Name it here so the next failure needs no post-mortem: walk every
+              # installed binary's import table (dumpbin ships with the C++ build
+              # tools this job already needs) and print each import that resolves
+              # neither next to the exe nor in System32. api-ms-/ext-ms- are API
+              # sets the loader maps virtually; they are never files.
+              if ($app.ExitCode -eq [int]0xC0000135) {
+                $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+                $vs = & $vswhere -latest -products * -property installationPath
+                $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -Last 1
+                Get-ChildItem $installDir -Recurse -Include *.exe,*.dll | ForEach-Object {
+                  $bin = $_
+                  & $dumpbin.FullName /nologo /dependents $bin.FullName |
+                    ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[\w.-]+\.dll$' } |
+                    Where-Object { $_ -notmatch '^(api|ext)-ms-' } |
+                    Where-Object { -not (Test-Path (Join-Path $installDir $_)) -and -not (Test-Path (Join-Path "$env:SystemRoot\System32" $_)) } |
+                    ForEach-Object { Write-Host "MISSING: $($bin.Name) imports $_" }
+                }
+              }
               throw "Mica exited within 10s (exit code 0x$('{0:X8}' -f $app.ExitCode)) - install/launch smoke FAILED"
             }
             Write-Host "Mica still alive 10s after launch (pid $($app.Id)) - smoke OK"

@@ -67,6 +67,12 @@ jobs:
             '{0,-55} {1}' -f $p, (Test-Path $p)
           }
           Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}} | Format-Table -AutoSize | Out-String
+          # The installer does not bundle the MSVC runtime: the app loads these
+          # from System32. Missing = the smoke test dies with 0xC0000135.
+          foreach ($d in 'vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll') {
+            $f = Join-Path "$env:SystemRoot\System32" $d
+            if (Test-Path $f) { '{0,-20} {1}' -f $d, (Get-Item $f).VersionInfo.FileVersion } else { '{0,-20} MISSING' -f $d }
+          }
 
       # 2026-10-20: the 0.13.60 installer job died mid-step with "the self-hosted
       # runner lost communication with the server". These are the usual
