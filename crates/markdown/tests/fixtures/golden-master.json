@@ -7797,6 +7797,970 @@
       "schema_version": 1
     }
   },
+  "fixture-43-inline-nesting-budget": {
+    "fragment": {
+      "blocks": [
+        {
+          "children": [
+            "b1",
+            "b2",
+            "b3",
+            "b4",
+            "b5",
+            "b6",
+            "b7",
+            "b8"
+          ],
+          "id": "root",
+          "text": "",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "id": "b1",
+          "text": "Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "data": {
+            "marks": [
+              {
+                "end": 28,
+                "href": "u",
+                "start": 27,
+                "type": "image"
+              },
+              {
+                "end": 28,
+                "href": "u",
+                "start": 27,
+                "type": "link"
+              },
+              {
+                "end": 28,
+                "href": "u",
+                "start": 27,
+                "type": "image"
+              },
+              {
+                "end": 32,
+                "href": "u",
+                "start": 26,
+                "type": "image"
+              },
+              {
+                "end": 36,
+                "href": "u",
+                "start": 25,
+                "type": "image"
+              },
+              {
+                "end": 40,
+                "href": "u",
+                "start": 24,
+                "type": "image"
+              },
+              {
+                "end": 44,
+                "href": "u",
+                "start": 23,
+                "type": "image"
+              },
+              {
+                "end": 48,
+                "href": "u",
+                "start": 22,
+                "type": "image"
+              },
+              {
+                "end": 52,
+                "href": "u",
+                "start": 21,
+                "type": "image"
+              },
+              {
+                "end": 56,
+                "href": "u",
+                "start": 20,
+                "type": "image"
+              },
+              {
+                "end": 60,
+                "href": "u",
+                "start": 19,
+                "type": "image"
+              },
+              {
+                "end": 64,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 68,
+                "href": "u",
+                "start": 17,
+                "type": "image"
+              },
+              {
+                "end": 72,
+                "href": "u",
+                "start": 16,
+                "type": "image"
+              },
+              {
+                "end": 76,
+                "href": "u",
+                "start": 15,
+                "type": "image"
+              },
+              {
+                "end": 80,
+                "href": "u",
+                "start": 14,
+                "type": "image"
+              },
+              {
+                "end": 84,
+                "href": "u",
+                "start": 13,
+                "type": "image"
+              }
+            ]
+          },
+          "id": "b2",
+          "text": "[![[![[![[![[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "id": "b3",
+          "text": "Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "data": {
+            "marks": [
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              }
+            ]
+          },
+          "id": "b4",
+          "text": "x ![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "id": "b5",
+          "text": "Links 40 deep: the innermost link wins, as CommonMark says anyway.",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "data": {
+            "marks": [
+              {
+                "end": 40,
+                "href": "u",
+                "start": 39,
+                "type": "link"
+              }
+            ]
+          },
+          "id": "b6",
+          "text": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "id": "b7",
+          "text": "Within the budget nothing changes:",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "data": {
+            "marks": [
+              {
+                "end": 15,
+                "href": "u",
+                "start": 14,
+                "type": "image"
+              },
+              {
+                "end": 15,
+                "href": "u",
+                "start": 14,
+                "type": "link"
+              },
+              {
+                "end": 15,
+                "href": "u",
+                "start": 14,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 13,
+                "type": "image"
+              },
+              {
+                "end": 23,
+                "href": "u",
+                "start": 12,
+                "type": "image"
+              },
+              {
+                "end": 27,
+                "href": "u",
+                "start": 11,
+                "type": "image"
+              },
+              {
+                "end": 31,
+                "href": "u",
+                "start": 10,
+                "type": "image"
+              },
+              {
+                "end": 35,
+                "href": "u",
+                "start": 9,
+                "type": "image"
+              },
+              {
+                "end": 39,
+                "href": "u",
+                "start": 8,
+                "type": "image"
+              },
+              {
+                "end": 43,
+                "href": "u",
+                "start": 7,
+                "type": "image"
+              },
+              {
+                "end": 47,
+                "href": "u",
+                "start": 6,
+                "type": "image"
+              },
+              {
+                "end": 51,
+                "href": "u",
+                "start": 5,
+                "type": "image"
+              },
+              {
+                "end": 55,
+                "href": "u",
+                "start": 4,
+                "type": "image"
+              },
+              {
+                "end": 59,
+                "href": "u",
+                "start": 3,
+                "type": "image"
+              },
+              {
+                "end": 63,
+                "href": "u",
+                "start": 2,
+                "type": "image"
+              },
+              {
+                "end": 67,
+                "href": "u",
+                "start": 1,
+                "type": "image"
+              }
+            ]
+          },
+          "id": "b8",
+          "text": "[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)",
+          "type": "paragraph"
+        }
+      ],
+      "root_block_id": "root",
+      "schema_version": 1
+    },
+    "full": {
+      "blocks": [
+        {
+          "children": [
+            "b1",
+            "b2",
+            "b3",
+            "b4",
+            "b5",
+            "b6",
+            "b7",
+            "b8"
+          ],
+          "id": "root",
+          "text": "",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "id": "b1",
+          "text": "Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "data": {
+            "marks": [
+              {
+                "end": 28,
+                "href": "u",
+                "start": 27,
+                "type": "image"
+              },
+              {
+                "end": 28,
+                "href": "u",
+                "start": 27,
+                "type": "link"
+              },
+              {
+                "end": 28,
+                "href": "u",
+                "start": 27,
+                "type": "image"
+              },
+              {
+                "end": 32,
+                "href": "u",
+                "start": 26,
+                "type": "image"
+              },
+              {
+                "end": 36,
+                "href": "u",
+                "start": 25,
+                "type": "image"
+              },
+              {
+                "end": 40,
+                "href": "u",
+                "start": 24,
+                "type": "image"
+              },
+              {
+                "end": 44,
+                "href": "u",
+                "start": 23,
+                "type": "image"
+              },
+              {
+                "end": 48,
+                "href": "u",
+                "start": 22,
+                "type": "image"
+              },
+              {
+                "end": 52,
+                "href": "u",
+                "start": 21,
+                "type": "image"
+              },
+              {
+                "end": 56,
+                "href": "u",
+                "start": 20,
+                "type": "image"
+              },
+              {
+                "end": 60,
+                "href": "u",
+                "start": 19,
+                "type": "image"
+              },
+              {
+                "end": 64,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 68,
+                "href": "u",
+                "start": 17,
+                "type": "image"
+              },
+              {
+                "end": 72,
+                "href": "u",
+                "start": 16,
+                "type": "image"
+              },
+              {
+                "end": 76,
+                "href": "u",
+                "start": 15,
+                "type": "image"
+              },
+              {
+                "end": 80,
+                "href": "u",
+                "start": 14,
+                "type": "image"
+              },
+              {
+                "end": 84,
+                "href": "u",
+                "start": 13,
+                "type": "image"
+              }
+            ]
+          },
+          "id": "b2",
+          "text": "[![[![[![[![[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "id": "b3",
+          "text": "Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "data": {
+            "marks": [
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 18,
+                "type": "image"
+              }
+            ]
+          },
+          "id": "b4",
+          "text": "x ![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "id": "b5",
+          "text": "Links 40 deep: the innermost link wins, as CommonMark says anyway.",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "data": {
+            "marks": [
+              {
+                "end": 40,
+                "href": "u",
+                "start": 39,
+                "type": "link"
+              }
+            ]
+          },
+          "id": "b6",
+          "text": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "id": "b7",
+          "text": "Within the budget nothing changes:",
+          "type": "paragraph"
+        },
+        {
+          "children": [],
+          "data": {
+            "marks": [
+              {
+                "end": 15,
+                "href": "u",
+                "start": 14,
+                "type": "image"
+              },
+              {
+                "end": 15,
+                "href": "u",
+                "start": 14,
+                "type": "link"
+              },
+              {
+                "end": 15,
+                "href": "u",
+                "start": 14,
+                "type": "image"
+              },
+              {
+                "end": 19,
+                "href": "u",
+                "start": 13,
+                "type": "image"
+              },
+              {
+                "end": 23,
+                "href": "u",
+                "start": 12,
+                "type": "image"
+              },
+              {
+                "end": 27,
+                "href": "u",
+                "start": 11,
+                "type": "image"
+              },
+              {
+                "end": 31,
+                "href": "u",
+                "start": 10,
+                "type": "image"
+              },
+              {
+                "end": 35,
+                "href": "u",
+                "start": 9,
+                "type": "image"
+              },
+              {
+                "end": 39,
+                "href": "u",
+                "start": 8,
+                "type": "image"
+              },
+              {
+                "end": 43,
+                "href": "u",
+                "start": 7,
+                "type": "image"
+              },
+              {
+                "end": 47,
+                "href": "u",
+                "start": 6,
+                "type": "image"
+              },
+              {
+                "end": 51,
+                "href": "u",
+                "start": 5,
+                "type": "image"
+              },
+              {
+                "end": 55,
+                "href": "u",
+                "start": 4,
+                "type": "image"
+              },
+              {
+                "end": 59,
+                "href": "u",
+                "start": 3,
+                "type": "image"
+              },
+              {
+                "end": 63,
+                "href": "u",
+                "start": 2,
+                "type": "image"
+              },
+              {
+                "end": 67,
+                "href": "u",
+                "start": 1,
+                "type": "image"
+              }
+            ]
+          },
+          "id": "b8",
+          "text": "[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)",
+          "type": "paragraph"
+        }
+      ],
+      "root_block_id": "root",
+      "schema_version": 1
+    }
+  },
   "gfm-0": {
     "fragment": {
       "blocks": [

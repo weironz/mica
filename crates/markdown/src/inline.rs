@@ -734,9 +734,16 @@ pub(crate) fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
 /// a path that is the SAME path a scan from that `[` would take (the walk from
 /// any position is deterministic), so a stack records their answers too —
 /// exactly, matched or not. Each position is then scanned about once.
+///
+/// The same scan also records each matched `[`'s NESTING — how many bracket
+/// levels open inside it — which is what `MAX_INLINE_NESTING` is checked
+/// against. It is a property of the label text alone, so it cannot make a
+/// label parse differently depending on where it was reached from (which is
+/// what keeps the label cache, `LinkCache`, a pure memo).
 #[derive(Default)]
 pub(crate) struct BracketMemo {
   known: std::collections::HashMap<usize, Option<usize>>,
+  nesting: std::collections::HashMap<usize, usize>,
 }
 
 impl BracketMemo {
@@ -745,7 +752,8 @@ impl BracketMemo {
       return *answer;
     }
     let n = chars.len();
-    let mut stack: Vec<usize> = Vec::new();
+    // (position of `[`, deepest nesting seen inside it so far)
+    let mut stack: Vec<(usize, usize)> = Vec::new();
     let mut j = open;
     let mut result = None;
     while j < n {
@@ -759,11 +767,15 @@ impl BracketMemo {
         continue;
       }
       if c == '[' {
-        stack.push(j);
+        stack.push((j, 0));
       } else if c == ']'
-        && let Some(o) = stack.pop()
+        && let Some((o, inner)) = stack.pop()
       {
         self.known.insert(o, Some(j));
+        self.nesting.insert(o, inner);
+        if let Some(parent) = stack.last_mut() {
+          parent.1 = parent.1.max(inner + 1);
+        }
         if o == open {
           result = Some(j);
           break;
@@ -772,14 +784,34 @@ impl BracketMemo {
       j += 1;
     }
     if result.is_none() {
-      for o in stack {
+      for (o, _) in stack {
         self.known.insert(o, None);
       }
       self.known.insert(open, None);
     }
     result
   }
+
+  /// Bracket levels nested inside the `[` at `open` (0 for `[a]`, 1 for
+  /// `[[a]]`). Meaningful once `matching(open)` returned `Some`.
+  pub(crate) fn nesting(&self, open: usize) -> usize {
+    self.nesting.get(&open).copied().unwrap_or(0)
+  }
 }
+
+/// Link / image labels nested deeper than this are not parsed as links or
+/// images: their brackets stay literal text (the content inside still parses).
+/// Mirrors Dart `kMaxInlineNesting` (`clients/mica_flutter/lib/editor/
+/// marks.dart`) — change both together.
+///
+/// Each recognized link/image label is parsed by a recursive call, so nesting
+/// was recursion depth: `![![![…a](u)](u)](u)` 2000 deep (~10 KB) overflowed a
+/// 2 MiB stack in release and aborted the process (10-19 #6b). The bound is
+/// structural — a label is allowed only while fewer than this many bracket
+/// levels open inside it (`BracketMemo::nesting`) — and every recursion goes
+/// strictly deeper into the brackets, so recursion stays under it too.
+/// CommonMark's suite nests a handful of levels at most.
+pub(crate) const MAX_INLINE_NESTING: usize = 32;
 
 /// Find the `]` matching the `[` at [open], honoring nesting and escapes.
 ///
@@ -815,48 +847,22 @@ pub(crate) fn matching_bracket(chars: &[char], open: usize) -> Option<usize> {
   None
 }
 
-/// Mirror of the Flutter `parseInline`: returns clean text (no markers) and the
-/// marks over it, with offsets in UTF-16 code units.
-/// Memo of `label_contains_link` results, keyed by label text and SHARED across
-/// the recursive parses of one top-level parse.
+/// Memo of parsed link/image LABELS, keyed by label text and SHARED across the
+/// recursive parses of one top-level parse — by the nested-link check
+/// (`label_has_link_cached`) AND by `push_link`, which turns the label into the
+/// link's text. Both ask the same pure question: `parse_inline_memo(label,
+/// autolinks off)`.
 ///
-/// Without it, a label that DOES contain a link is parsed twice per nesting
+/// Without sharing, a label that DOES contain a link is parsed twice per nesting
 /// level — once to answer the check, then again by the scan that falls through
 /// the rejected outer brackets — giving T(n) = 2·T(n-1), i.e. exponential on
-/// `[[[a](/u)](/u)](/u)`. The memo makes the second visit a hash hit.
-pub(crate) type LinkCache = std::collections::HashMap<String, bool>;
+/// `[[[a](/u)](/u)](/u)`. That was fixed for the check alone; `push_link` still
+/// parsed through a FRESH cache, so with links and images ALTERNATING
+/// (`[![[![…a](u)](u)](u)](u)`) every image label re-ran the link checks below
+/// it from scratch: P(k) = 2·P(k-2), 221 bytes = 1.3 s in release (P1-7).
+pub(crate) type LinkCache = std::collections::HashMap<String, ParsedInline>;
 
-/// Does this link-label content already contain a link (inline, reference, or
-/// autolink)? CommonMark §6.3 forbids links nested inside link text, so when
-/// this is true the surrounding brackets must stay literal. Images are fine
-/// (`[![alt](img)](url)` is a valid linked image), so only `link` marks count.
-///
-/// Memoized: pure function + pure cache, so this cannot change any output —
-/// only how often the answer is recomputed.
-pub(crate) fn label_has_link_cached(label: &str, defs: &RefDefs, cache: &mut LinkCache) -> bool {
-  if let Some(&hit) = cache.get(label) {
-    return hit;
-  }
-  // `allow_autolink: false` is the whole point of this call.
-  //
-  // CommonMark forbids a link inside a link, and this guard enforces it — but
-  // it used to ask "does the label parse to anything with a link mark", and a
-  // GFM *extended autolink* produces exactly that mark. So a label that was
-  // itself a bare URL counted as a nested link, and `[https://x](https://x)`
-  // — precisely what you get when you copy a link out of Mica and paste it
-  // back — was refused and fell through to literal text. GitHub renders that
-  // as an ordinary link; the nesting rule is about explicit link CONSTRUCTS,
-  // not about text that would have autolinked had it been left alone. It never
-  // is: once the label becomes a link's text, nothing autolinks inside it.
-  let answer = parse_inline_memo(label, defs, cache, false)
-    .marks
-    .iter()
-    .any(|m| m.kind == "link");
-  cache.insert(label.to_string(), answer);
-  answer
-}
-
-/// Parse a link's (or image's) LABEL.
+/// Parse a link's (or image's) LABEL, through the shared [LinkCache].
 ///
 /// Autolinks off: the label is about to become the link's TEXT, and text inside
 /// a link never autolinks — that is the same rule `label_has_link_cached`
@@ -865,11 +871,38 @@ pub(crate) fn label_has_link_cached(label: &str, defs: &RefDefs, cache: &mut Lin
 /// TWO overlapping marks over the same range, one pointing at `a` (the
 /// autolink) and one at `b` (the real destination). Which one wins is then a
 /// question about mark order, and there is no answer to it that is right.
-pub(crate) fn parse_inline_label(src: &str, defs: &RefDefs) -> ParsedInline {
-  let mut cache = LinkCache::new();
-  parse_inline_memo(src, defs, &mut cache, false)
+///
+/// Pure function + pure cache: this cannot change any output, only how often a
+/// label is re-parsed.
+pub(crate) fn parse_label_cached<'c>(label: &str, defs: &RefDefs, cache: &'c mut LinkCache) -> &'c ParsedInline {
+  if !cache.contains_key(label) {
+    let parsed = parse_inline_memo(label, defs, cache, false);
+    cache.insert(label.to_string(), parsed);
+  }
+  &cache[label]
 }
 
+/// Does this link-label content already contain a link (inline, reference, or
+/// autolink)? CommonMark §6.3 forbids links nested inside link text, so when
+/// this is true the surrounding brackets must stay literal. Images are fine
+/// (`[![alt](img)](url)` is a valid linked image), so only `link` marks count.
+///
+/// Autolinks off (see `parse_label_cached`) is the whole point of this call.
+/// CommonMark forbids a link inside a link, and this guard enforces it — but
+/// it used to ask "does the label parse to anything with a link mark", and a
+/// GFM *extended autolink* produces exactly that mark. So a label that was
+/// itself a bare URL counted as a nested link, and `[https://x](https://x)`
+/// — precisely what you get when you copy a link out of Mica and paste it
+/// back — was refused and fell through to literal text. GitHub renders that
+/// as an ordinary link; the nesting rule is about explicit link CONSTRUCTS,
+/// not about text that would have autolinked had it been left alone. It never
+/// is: once the label becomes a link's text, nothing autolinks inside it.
+pub(crate) fn label_has_link_cached(label: &str, defs: &RefDefs, cache: &mut LinkCache) -> bool {
+  parse_label_cached(label, defs, cache).marks.iter().any(|m| m.kind == "link")
+}
+
+/// Mirror of the Flutter `parseInline`: returns clean text (no markers) and the
+/// marks over it, with offsets in UTF-16 code units.
 pub(crate) fn parse_inline_with(src: &str, defs: &RefDefs) -> ParsedInline {
   let mut cache = LinkCache::new();
   parse_inline_memo(src, defs, &mut cache, true)
@@ -964,25 +997,28 @@ pub(crate) fn parse_inline_memo(
     None
   };
 
-  // Emit a resolved link or image into out/marks (text parsed recursively).
+  // Emit a resolved link or image into out/marks (text parsed recursively,
+  // through the label cache the nested-link check shares).
+  #[allow(clippy::too_many_arguments)]
   let push_link = |kind: &str,
                    label: &str,
                    href: String,
                    title: Option<String>,
                    out: &mut String,
                    out_len: &mut usize,
-                   marks: &mut Vec<InlineMark>| {
+                   marks: &mut Vec<InlineMark>,
+                   cache: &mut LinkCache| {
     let start = *out_len;
-    let parsed = parse_inline_label(label, defs);
+    let parsed = parse_label_cached(label, defs, cache);
     out.push_str(&parsed.text);
     *out_len += parsed.text.encode_utf16().count();
-    for m in parsed.marks {
+    for m in &parsed.marks {
       marks.push(InlineMark {
         start: m.start + start,
         end: m.end + start,
-        kind: m.kind,
-        href: m.href,
-        title: m.title,
+        kind: m.kind.clone(),
+        href: m.href.clone(),
+        title: m.title.clone(),
       });
     }
     marks.push(InlineMark {
@@ -1096,38 +1132,40 @@ pub(crate) fn parse_inline_memo(
     // Image: ![alt](dest "title") | ![alt][label] | ![alt][] | ![alt] —
     // same bridge as links; the alt keeps its inner marks (HTML flattens
     // them to plain text, markdown re-renders them).
-    if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '[' {
-      if let Some(close) = brackets.matching(&chars, i + 1) {
-        let label: String = chars[i + 2..close].iter().collect();
-        if !label.is_empty() {
-          if close + 1 < chars.len() && chars[close + 1] == '(' {
-            if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
-              push_link("image", &label, href, title, &mut out, &mut out_len, &mut marks);
-              i = next;
-              continue;
-            }
+    // Past `MAX_INLINE_NESTING` the brackets stay literal (see there).
+    if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '['
+      && let Some(close) = brackets.matching(&chars, i + 1)
+      && brackets.nesting(i + 1) < MAX_INLINE_NESTING
+    {
+      let label: String = chars[i + 2..close].iter().collect();
+      if !label.is_empty() {
+        if close + 1 < chars.len() && chars[close + 1] == '(' {
+          if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
+            push_link("image", &label, href, title, &mut out, &mut out_len, &mut marks, cache);
+            i = next;
+            continue;
           }
-          if !defs.is_empty() {
-            let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
-              match brackets.matching(&chars, close + 1) {
-                Some(end2) => {
-                  let second: String = chars[close + 2..end2].iter().collect();
-                  if second.is_empty() {
-                    (label.clone(), end2 + 1) // collapsed ![alt][]
-                  } else {
-                    (second, end2 + 1) // full ![alt][label]
-                  }
+        }
+        if !defs.is_empty() {
+          let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
+            match brackets.matching(&chars, close + 1) {
+              Some(end2) => {
+                let second: String = chars[close + 2..end2].iter().collect();
+                if second.is_empty() {
+                  (label.clone(), end2 + 1) // collapsed ![alt][]
+                } else {
+                  (second, end2 + 1) // full ![alt][label]
                 }
-                None => (label.clone(), close + 1),
               }
-            } else {
-              (label.clone(), close + 1) // shortcut ![alt]
-            };
-            if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
-              push_link("image", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
-              i = next;
-              continue;
+              None => (label.clone(), close + 1),
             }
+          } else {
+            (label.clone(), close + 1) // shortcut ![alt]
+          };
+          if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
+            push_link("image", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks, cache);
+            i = next;
+            continue;
           }
         }
       }
@@ -1161,63 +1199,66 @@ pub(crate) fn parse_inline_memo(
       }
     }
     // Link: [text](dest "title") | [text][label] | [text][] | [shortcut]
-    if chars[i] == '[' {
-      if let Some(close) = brackets.matching(&chars, i) {
-        let label: String = chars[i + 1..close].iter().collect();
-        // A link's text may not itself contain a link (CommonMark §6.3): if
-        // the label holds a top-level `[…](…)`/`[…][…]`/autolink, the OUTER
-        // brackets stay literal and the inner link wins. `[foo [bar](/uri)]`
-        // is therefore `[foo <a>bar</a>]`, not a nested anchor.
-        // The nested-link check is (a) computed LAZILY — it only ever gates the
-        // two link forms below, so computing it up-front made EVERY bracket pay
-        // a recursive re-parse — and (b) memoized through a cache SHARED across
-        // the whole parse (see `LinkCache`), which is what removes the second
-        // re-parse of a label that DOES contain a link.
-        //
-        // Both together turn parsing from exponential to flat on nested input.
-        // Measured (release, `import_markdown`), before -> after:
-        //   `[[[[a]]]]`            depth 24:   ~6s   -> 0ms
-        //   `[[[a](/u)](/u)](/u)`  depth 20:  834ms  -> 0ms   (depth 32: 0ms)
-        // This matters because `import_markdown` runs on user-supplied markdown
-        // (import + MCP), so ~170 bytes used to pin a core for minutes.
-        //
-        // Output is unchanged: laziness is `!A && X` -> `X && !A` with both pure
-        // (differential-fuzzed, ~2.8M inputs, zero divergence), and the memo is a
-        // pure cache over a pure function. Pinned by tests/nested_bracket_perf.rs.
-        // Inline form — empty text is allowed (`[](/url)` → empty anchor).
-        if close + 1 < chars.len() && chars[close + 1] == '(' {
-          if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
-            if !label_has_link_cached(&label, defs, cache) {
-              push_link("link", &label, href, title, &mut out, &mut out_len, &mut marks);
-              i = next;
-              continue;
-            }
+    if chars[i] == '['
+      && let Some(close) = brackets.matching(&chars, i)
+      && brackets.nesting(i) < MAX_INLINE_NESTING
+    {
+      let label: String = chars[i + 1..close].iter().collect();
+      // A link's text may not itself contain a link (CommonMark §6.3): if
+      // the label holds a top-level `[…](…)`/`[…][…]`/autolink, the OUTER
+      // brackets stay literal and the inner link wins. `[foo [bar](/uri)]`
+      // is therefore `[foo <a>bar</a>]`, not a nested anchor.
+      // The nested-link check is (a) computed LAZILY — it only ever gates the
+      // two link forms below, so computing it up-front made EVERY bracket pay
+      // a recursive re-parse — and (b) memoized through a cache SHARED across
+      // the whole parse (see `LinkCache`), which is what removes the second
+      // re-parse of a label that DOES contain a link.
+      //
+      // Both together turn parsing from exponential to flat on nested input.
+      // Measured (release, `import_markdown`), before -> after:
+      //   `[[[[a]]]]`            depth 24:   ~6s   -> 0ms
+      //   `[[[a](/u)](/u)](/u)`  depth 20:  834ms  -> 0ms   (depth 32: 0ms)
+      //   `[![[![…a](u)](u)](u)](u)` depth 40: 1317ms -> 0ms (the cache now
+      //   also feeds `push_link`; it used to cover the check only — P1-7)
+      // This matters because `import_markdown` runs on user-supplied markdown
+      // (import + MCP), so ~170 bytes used to pin a core for minutes.
+      //
+      // Output is unchanged: laziness is `!A && X` -> `X && !A` with both pure
+      // (differential-fuzzed, ~2.8M inputs, zero divergence), and the memo is a
+      // pure cache over a pure function. Pinned by tests/nested_bracket_perf.rs.
+      // Inline form — empty text is allowed (`[](/url)` → empty anchor).
+      if close + 1 < chars.len() && chars[close + 1] == '(' {
+        if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
+          if !label_has_link_cached(&label, defs, cache) {
+            push_link("link", &label, href, title, &mut out, &mut out_len, &mut marks, cache);
+            i = next;
+            continue;
           }
         }
-        if !label.is_empty() {
-          // Reference forms (full / collapsed / shortcut).
-          if !defs.is_empty() {
-            let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
-              match brackets.matching(&chars, close + 1) {
-                Some(end2) => {
-                  let second: String = chars[close + 2..end2].iter().collect();
-                  if second.is_empty() {
-                    (label.clone(), end2 + 1) // collapsed [text][]
-                  } else {
-                    (second, end2 + 1) // full [text][label]
-                  }
+      }
+      if !label.is_empty() {
+        // Reference forms (full / collapsed / shortcut).
+        if !defs.is_empty() {
+          let (ref_label, next) = if close + 1 < chars.len() && chars[close + 1] == '[' {
+            match brackets.matching(&chars, close + 1) {
+              Some(end2) => {
+                let second: String = chars[close + 2..end2].iter().collect();
+                if second.is_empty() {
+                  (label.clone(), end2 + 1) // collapsed [text][]
+                } else {
+                  (second, end2 + 1) // full [text][label]
                 }
-                None => (label.clone(), close + 1),
               }
-            } else {
-              (label.clone(), close + 1) // shortcut [text]
-            };
-            if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
-              if !label_has_link_cached(&label, defs, cache) {
-                push_link("link", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks);
-                i = next;
-                continue;
-              }
+              None => (label.clone(), close + 1),
+            }
+          } else {
+            (label.clone(), close + 1) // shortcut [text]
+          };
+          if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
+            if !label_has_link_cached(&label, defs, cache) {
+              push_link("link", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks, cache);
+              i = next;
+              continue;
             }
           }
         }

@@ -81,3 +81,56 @@ fn unmatched_bracket_runs_are_linear() {
         assert!(ms < 3000, "`{unit}`×{n} took {ms}ms — every `[` rescans to the end again");
     }
 }
+
+/// `[![[![…a](u)](u)](u)](u)` — links and images ALTERNATING. The shared
+/// `LinkCache` above only memoised the link CHECK; an image's label was parsed
+/// by `push_link` through a FRESH cache, so every link level below an image
+/// re-ran its check from scratch: P(k) = 2·P(k-2). Measured before the fix
+/// (`import_markdown`, ms; doubles every two levels):
+///
+/// | k  | bytes | debug  | release |
+/// |----|-------|--------|---------|
+/// | 20 |  111  |    7.8 |       — |
+/// | 24 |  133  |   31.7 |     5.0 |
+/// | 32 |  177  |  515   |    86   |
+/// | 36 |  199  | 2029   |   326   |
+/// | 40 |  221  | ~8000  |  1317   |
+///
+/// so k = 60 (~330 bytes) was ~20 min of CPU in release. Label parses are now
+/// memoised whole, keyed by (label, depth), and shared by the check and by
+/// `push_link`; nesting past `MAX_INLINE_NESTING` stays literal.
+#[test]
+fn alternating_link_image_nesting_is_not_exponential() {
+    for k in [20, 40, 60] {
+        let mut src = String::new();
+        for d in 0..k {
+            src.push_str(if d % 2 == 0 { "[" } else { "![" });
+        }
+        src.push('a');
+        src.push_str(&"](u)".repeat(k));
+        let ms = parse_ms(&src);
+        assert!(
+            ms < 3000,
+            "depth-{k} ALTERNATING link/image nesting took {ms}ms — image labels \
+             are parsed outside the shared label cache again (P(k) = 2·P(k-2))"
+        );
+    }
+}
+
+/// `![![![…a](u)](u)](u)` thousands deep: each image label is parsed by a
+/// recursive call, so ~10 KB of input recursed ~2000 frames and overflowed a
+/// 2 MiB stack (tokio's worker default) — a process abort, not a panic. 10-19 #6b.
+#[test]
+fn deep_image_nesting_does_not_overflow_the_stack() {
+    for unit in ["![", "["] {
+        let src = format!("{}a{}", unit.repeat(5000), "](u)".repeat(5000));
+        let payload = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || mica_markdown::import_markdown(&src, "root"))
+            .unwrap()
+            .join()
+            .expect("must not panic");
+        let text = &payload.blocks[1].text;
+        assert!(text.contains('a'), "content survives: {}", &text[..text.len().min(80)]);
+    }
+}

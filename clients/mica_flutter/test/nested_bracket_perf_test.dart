@@ -35,6 +35,32 @@ void main() {
             'check is eager again (exponential even for non-links)');
   });
 
+  // `[![[![…a](u)](u)](u)](u)`: the shared memo covered only the link CHECK;
+  // an image label was parsed by `addLink` through a FRESH cache, so every
+  // link check below an image re-ran from scratch — P(k) = 2·P(k-2). Mirrors
+  // the Rust case in crates/markdown/tests/nested_bracket_perf.rs (P1-7).
+  test('alternating link/image nesting is not exponential', () {
+    for (final k in [20, 40, 60]) {
+      final open = [for (var d = 0; d < k; d++) d.isEven ? '[' : '!['].join();
+      final ms = parseMs('${open}a${'](u)' * k}');
+      expect(ms < 3000, isTrue,
+          reason: 'depth-$k ALTERNATING nesting took ${ms}ms — image labels '
+              'are parsed outside the shared label cache again');
+    }
+  });
+
+  // Each recognized label is a recursive call: thousands of nested images were
+  // a stack overflow. Past `kMaxInlineNesting` the openers stay literal.
+  test('deep image nesting stays within the nesting budget', () {
+    for (final unit in ['![', '[']) {
+      final parsed = parseInline('${unit * 5000}a${'](u)' * 5000}');
+      expect(parsed.text, contains('a'));
+      expect(
+          parsed.marks.where((m) => m.type == 'image').length,
+          lessThanOrEqualTo(kMaxInlineNesting));
+    }
+  });
+
   test('nested-link nesting is not exponential', () {
     const depth = 24;
     final ms = parseMs('${'[' * depth}a${'](/u)' * depth}');
