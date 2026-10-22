@@ -51,7 +51,13 @@ pub async fn ai_socket(
   // spends the operator's credit for as long as it stays open, and a deleted
   // account's access token is still a valid JWT until it expires.
   ensure_user_exists(&state.db, user_id).await?;
-  Ok(upgrade.on_upgrade(move |socket| run(socket, state)))
+  Ok(
+    upgrade
+      // A prompt can carry a selection of the document, so the same 2 MB the
+      // REST `/ai/complete` body gets — not axum's 64 MiB default.
+      .max_message_size(2 * 1024 * 1024)
+      .on_upgrade(move |socket| run(socket, state)),
+  )
 }
 
 async fn run(mut socket: WebSocket, state: AppState) {

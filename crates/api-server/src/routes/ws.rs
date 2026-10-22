@@ -89,6 +89,18 @@ struct UpdatePayload {
   operations: Vec<DocumentOperation>,
 }
 
+/// Largest frame a document socket accepts. axum's default is 64 MiB, and a
+/// `sync.push` is held three times over while it is decoded (text, base64,
+/// bytes), so one editor could pin ~200 MB per message. 16 MiB still carries a
+/// 12 MiB update — the whole-replica repair push for a very large document —
+/// which a 4 MiB cap would not: an over-limit frame closes the socket, the
+/// client reconnects and resends the same frame, and that document never syncs
+/// again. Everyday pushes are a few hundred bytes.
+const DOC_SOCKET_MAX_MESSAGE: usize = 16 * 1024 * 1024;
+
+/// The views feed: its clients only ever send small control messages.
+const VIEWS_SOCKET_MAX_MESSAGE: usize = 64 * 1024;
+
 /// `GET /ws/workspaces/{workspace_id}/documents/{document_id}`
 ///
 /// Authenticates the upgrade request (see [`token_from_request`] for the three
@@ -143,7 +155,7 @@ pub async fn document_socket(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-  Ok(upgrade.on_upgrade(move |socket| {
+  Ok(upgrade.max_message_size(DOC_SOCKET_MAX_MESSAGE).on_upgrade(move |socket| {
     run_connection(
       socket,
       state,
@@ -185,6 +197,7 @@ pub async fn views_socket(
 
   Ok(
     upgrade
+      .max_message_size(VIEWS_SOCKET_MAX_MESSAGE)
       .on_upgrade(move |socket| run_views_connection(socket, state, workspace_id, token_exp)),
   )
 }
