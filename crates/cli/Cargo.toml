@@ -22,6 +22,7 @@ clap.workspace = true
 mica-interchange = { path = "../interchange" }
 mica-mcp-server = { path = "../mcp-server" }
 reqwest = { workspace = true, features = ["blocking", "json"] }
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

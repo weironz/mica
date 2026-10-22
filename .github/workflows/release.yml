@@ -468,6 +468,9 @@ jobs:
             built="target/release/${{ matrix.bin }}"
           fi
           cp "$built" "$asset"
+          # `mica-cli update` checks the download against any sha256-*.txt
+          # asset of the release; the local chain publishes one per machine.
+          sha256sum "$asset" > "sha256-$asset.txt"
           echo "asset=$asset" >> "$GITHUB_OUTPUT"
 
       # Prove the Linux binary is actually static — the whole point of the musl
@@ -511,7 +514,9 @@ jobs:
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
-          files: ${{ steps.stage.outputs.asset }}
+          files: |
+            ${{ steps.stage.outputs.asset }}
+            sha256-${{ steps.stage.outputs.asset }}.txt
 
   images:
     # The three images compose runs in prod (api, web, and cli — the `backup`

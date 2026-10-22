@@ -67,6 +67,72 @@ fn latest_version(http: &reqwest::blocking::Client) -> Result<String> {
   Ok(tag.trim_start_matches('v').to_string())
 }
 
+/// `a` is a strictly higher `X.Y.Z` than `b`. Anything that does not parse
+/// as three numbers compares as "not newer", leaving the old behaviour.
+fn is_newer(a: &str, b: &str) -> bool {
+  fn parts(v: &str) -> Option<(u64, u64, u64)> {
+    let mut it = v.trim_start_matches('v').split('.').map(|p| p.parse().ok());
+    let t = (it.next()??, it.next()??, it.next()??);
+    it.next().is_none().then_some(t)
+  }
+  matches!((parts(a), parts(b)), (Some(x), Some(y)) if x > y)
+}
+
+/// The sha256 the release publishes for `asset`, from any of its
+/// `sha256-*.txt` assets (`sha256sum` format; one build machine can list
+/// several platforms' files). `None` when the release lists none for it.
+fn published_checksum(
+  http: &reqwest::blocking::Client,
+  version: &str,
+  asset: &str,
+) -> Result<Option<String>> {
+  let url = format!("https://api.github.com/repos/{REPO}/releases/tags/v{version}");
+  let release: serde_json::Value = http
+    .get(&url)
+    .send()
+    .with_context(|| format!("asking GitHub for release v{version}"))?
+    .error_for_status()
+    .with_context(|| format!("GitHub has no release v{version}"))?
+    .json()
+    .context("reading the release JSON")?;
+  let sums = release["assets"]
+    .as_array()
+    .into_iter()
+    .flatten()
+    .filter(|a| a["name"].as_str().is_some_and(|n| n.starts_with("sha256-") && n.ends_with(".txt")))
+    .filter_map(|a| a["browser_download_url"].as_str());
+  for sums_url in sums {
+    let text = http
+      .get(sums_url)
+      .send()
+      .and_then(|r| r.error_for_status())
+      .and_then(|r| r.text())
+      .with_context(|| format!("downloading {sums_url}"))?;
+    if let Some(hash) = checksum_for(&text, asset) {
+      return Ok(Some(hash));
+    }
+  }
+  Ok(None)
+}
+
+/// The hash on `asset`'s line of a `sha256sum` listing (`<hex>  <name>`, or
+/// `<hex> *<name>` in binary mode).
+fn checksum_for(listing: &str, asset: &str) -> Option<String> {
+  listing.lines().find_map(|line| {
+    let (hash, name) = line.trim().split_once(char::is_whitespace)?;
+    (name.trim_start().trim_start_matches('*') == asset && hash.len() == 64)
+      .then(|| hash.to_ascii_lowercase())
+  })
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+  use sha2::{Digest, Sha256};
+  let mut file = std::fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+  let mut hasher = Sha256::new();
+  std::io::copy(&mut file, &mut hasher).with_context(|| format!("reading {}", path.display()))?;
+  Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
 pub struct UpdateOutcome {
   pub from: String,
   pub to: String,
@@ -88,13 +154,32 @@ pub fn run(json: bool, want: Option<String>, check_only: bool, force: bool) -> R
     // GitHub's API 403s a request with no User-Agent — the same trap
     // install.ps1 calls out.
     .user_agent(concat!("mica-cli/", env!("CARGO_PKG_VERSION")))
-    .timeout(std::time::Duration::from_secs(120))
+    // A connect deadline, and a whole-request one generous enough for the
+    // binary itself: the old 120s total covered the body too, so a slow link
+    // failed every update partway through the download.
+    .connect_timeout(std::time::Duration::from_secs(15))
+    .timeout(std::time::Duration::from_secs(15 * 60))
     .build()?;
 
-  let target = match want {
+  let target = match &want {
     Some(v) => v.trim_start_matches('v').to_string(),
     None => latest_version(&http)?,
   };
+
+  // Never step BACKWARDS by accident: a build newer than the latest release
+  // (a dev build, a release still in draft) would otherwise be "updated" to an
+  // older one. Naming a version explicitly is how to downgrade on purpose.
+  if want.is_none() && !force && is_newer(&current, &target) {
+    if !json {
+      println!("mica-cli {current} is newer than the latest release ({target}); nothing to do.");
+    }
+    return Ok(UpdateOutcome {
+      from: current.clone(),
+      to: current,
+      replaced: false,
+      path: exe,
+    });
+  }
 
   if target == current && !force {
     if !json {
@@ -128,8 +213,24 @@ pub fn run(json: bool, want: Option<String>, check_only: bool, force: bool) -> R
   // Staged BESIDE the target, so the rename below is a same-filesystem move —
   // atomic on Unix, and the only shape Windows allows at all while the exe is
   // running.
+  let expected = published_checksum(&http, &target, &asset)?;
   let staged = exe.with_extension("new");
   download(&http, &url, &staged)?;
+
+  // The release's own `sha256-<os>.txt`, when it has one (the local release
+  // chain publishes it; a hosted-CI release may not). A mismatch is fatal; a
+  // release without one is said out loud rather than passed off as checked.
+  match expected {
+    Some(want_hash) => {
+      let got = sha256_file(&staged)?;
+      if !got.eq_ignore_ascii_case(&want_hash) {
+        let _ = std::fs::remove_file(&staged);
+        bail!("checksum mismatch for {asset}: expected {want_hash}, got {got}; nothing was replaced");
+      }
+    }
+    None if !json => println!("note: release v{target} publishes no checksum for {asset}; skipped that check"),
+    None => {}
+  }
 
   // Run what was just downloaded BEFORE letting it become the installed binary.
   //
@@ -197,7 +298,9 @@ fn verify(staged: &Path, want: &str) -> Result<()> {
     );
   }
   let text = String::from_utf8_lossy(&out.stdout);
-  if !text.contains(want) {
+  // The version token itself, not a substring: `contains("0.13.5")` accepted
+  // a binary reporting 0.13.55.
+  if text.split_whitespace().last() != Some(want) {
     bail!("downloaded binary reports {:?}, expected {want}", text.trim());
   }
   Ok(())
@@ -278,6 +381,26 @@ fn sweep_displaced(exe: &Path) {
 
 #[cfg(test)]
 mod tests {
+
+  /// Issue #38: compare versions as numbers, never as substrings.
+  #[test]
+  fn versions_compare_numerically() {
+    assert!(is_newer("0.13.55", "0.13.5"));
+    assert!(is_newer("0.14.0", "0.13.99"));
+    assert!(!is_newer("0.13.5", "0.13.55"), "a release must not count as older");
+    assert!(!is_newer("0.13.5", "0.13.5"));
+    assert!(!is_newer("dev", "0.13.5"));
+  }
+
+  #[test]
+  fn checksum_lines_match_the_exact_asset() {
+    let h = "a".repeat(64);
+    let listing = format!("{h}  mica-cli-0.13.55-linux-x64\n{}  mica-cli-0.13.5-linux-x64\n", "b".repeat(64));
+    assert_eq!(checksum_for(&listing, "mica-cli-0.13.5-linux-x64"), Some("b".repeat(64)));
+    assert_eq!(checksum_for(&format!("{h} *x.exe"), "x.exe"), Some(h.clone()));
+    assert_eq!(checksum_for(&listing, "mica-cli-0.13.5-macos-arm64"), None);
+  }
+
   use super::*;
 
   /// The three targets release CI builds, and a refusal for anything else.
