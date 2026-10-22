@@ -638,10 +638,15 @@ pub(crate) fn list_tag_for(kind: &str) -> Option<&'static str> {
 
 /// GFM tagfilter: escape the opening `<` of the nine disallowed raw-HTML
 /// tags so they render inert while everything else passes through.
+///
+/// Plus one of Mica's own: `meta`. `<meta http-equiv="refresh" content="0;
+/// url=…">` is honoured even in `<body>` and no CSP directive governs it, so a
+/// shared page would redirect every visitor wherever its author chose. No
+/// document body has a legitimate use for `<meta>`.
 pub(crate) fn tagfilter(s: &str) -> String {
   const BAD: &[&str] = &[
     "title", "textarea", "style", "xmp", "iframe", "noembed", "noframes",
-    "script", "plaintext",
+    "script", "plaintext", "meta",
   ];
   let bytes = s.as_bytes();
   let mut out = String::with_capacity(s.len());

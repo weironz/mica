@@ -137,8 +137,12 @@ pub async fn public_share_page(
 
 /// CSP for the public share page. No `script-src` -> inline scripts and `on*`
 /// event handlers are blocked via the `default-src 'none'` fallback.
-const SHARE_CSP: &str =
-  "default-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
+///
+/// `form-action` and `base-uri` do not fall back to `default-src`, so they are
+/// spelled out: raw HTML could otherwise put a credential-phishing `<form>` on
+/// this same-origin page, or a `<base>` that re-points every relative link.
+const SHARE_CSP: &str = "default-src 'none'; img-src 'self' data: https:; \
+   style-src 'self' 'unsafe-inline'; font-src 'self' data:; form-action 'none'; base-uri 'none'";
 
 /// Wrap the HTML export fragment in a standalone, readable page. `noindex`
 /// unless the share opted into indexing, so a shared page is not silently
@@ -180,3 +184,14 @@ fn escape_html_min(s: &str) -> String {
     .replace('>', "&gt;")
 }
 
+
+#[cfg(test)]
+mod csp_tests {
+  /// Issue #31: neither directive falls back to `default-src`.
+  #[test]
+  fn share_csp_blocks_forms_and_base() {
+    assert!(super::SHARE_CSP.contains("form-action 'none'"));
+    assert!(super::SHARE_CSP.contains("base-uri 'none'"));
+    assert!(!super::SHARE_CSP.contains("  "), "{}", super::SHARE_CSP);
+  }
+}

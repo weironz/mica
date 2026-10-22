@@ -352,7 +352,7 @@ pub fn export_html_document(
   Ok(format!(
     "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-     <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:\">\n\
+     <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'\">\n\
      <title>{safe_title}</title>\n<style>\n\
      body{{max-width:{width}px;margin:2.5rem auto;padding:0 1.5rem;\
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
@@ -1099,6 +1099,18 @@ mod security_tests {
     let svg = tagfilter("<svg onload=\"steal()\">");
     assert!(svg.contains("onload"), "tagfilter unexpectedly stripped onload: {svg}");
     assert!(svg.starts_with("<svg"), "svg tag should not be escaped: {svg}");
+  }
+
+  /// Issue #31: what `default-src` does not cover. A raw-HTML `<form>` could
+  /// post a fake sign-in to anywhere, `<base href>` re-points every relative
+  /// link, and a meta refresh redirects with no CSP directive able to stop it.
+  #[test]
+  fn export_blocks_forms_base_and_meta_refresh() {
+    let md = "<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\">\n\nhi\n";
+    let doc = super::export_html_document(&import_markdown(md, "root"), "t", 800).unwrap();
+    assert!(doc.contains("form-action 'none'") && doc.contains("base-uri 'none'"));
+    assert!(!doc.contains("<meta http-equiv=\"refresh\""), "{doc}");
+    assert!(tagfilter("<META http-equiv=refresh>").starts_with("&lt;META"));
   }
 
   /// THE BUG: the filter copied untouched text one BYTE at a time as `char`,
