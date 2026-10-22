@@ -242,6 +242,44 @@ void main() {
       expect(errors2, ['localized fallback']);
     });
 
+    test('a transient poll failure is retried; the import still finishes', () async {
+      // Issue #52: one network blip used to end the watch as a failure.
+      var calls = 0;
+      final h = _script(
+        jobStatusOverride: (id) async {
+          calls++;
+          if (calls == 2) throw const ApiException('connection reset');
+          if (calls == 3) throw const ApiException('bad gateway', statusCode: 502);
+          return calls < 5
+              ? const ImportJobStatus(status: 'running', total: 4, done: 1)
+              : const ImportJobStatus(status: 'done', total: 4, done: 4, workspaceId: 'ws1');
+        },
+        workspaces: [_ws('ws1')],
+      );
+      final errors = <String>[];
+      h.controller.onError = errors.add;
+      var finished = false;
+      h.controller.onFinished = (_, _) => finished = true;
+      await h.controller.watch('token', 'job1', null, 'fallback', pollDelay: Duration.zero);
+      expect(errors, isEmpty);
+      expect(finished, isTrue);
+    });
+
+    test('a 4xx while polling is final, not retried', () async {
+      var calls = 0;
+      final h = _script(
+        jobStatusOverride: (id) async {
+          calls++;
+          throw const ApiException('not found', statusCode: 404);
+        },
+      );
+      final errors = <String>[];
+      h.controller.onError = errors.add;
+      await h.controller.watch('token', 'job1', null, 'fallback', pollDelay: Duration.zero);
+      expect(calls, 1);
+      expect(errors, ['not found']);
+    });
+
     test('a transport failure during polling lands in onError, state clears', () async {
       final h = _script(jobStatusOverride: (id) => throw ApiException('network down'));
       final errors = <String>[];

@@ -159,6 +159,10 @@ class ImportController extends ChangeNotifier {
     return remaining;
   }
 
+  /// Consecutive failed polls tolerated before the watch gives up. With the
+  /// default 600 ms poll and doubling backoff that is ~2.5 minutes of outage.
+  static const _maxPollMisses = 8;
+
   /// Poll a running import to completion, updating [progress].
   ///
   /// Owns its error reporting: a failure here still has to reach the user (via
@@ -173,8 +177,25 @@ class ImportController extends ChangeNotifier {
   }) async {
     try {
       ImportJobStatus job;
+      var misses = 0;
       while (true) {
-        job = await jobStatus(id);
+        try {
+          job = await jobStatus(id);
+          misses = 0;
+        } catch (error) {
+          // One dropped poll is not a failed import: the job runs server-side
+          // and is still going. Giving up on the first blip told the user it
+          // had failed, skipped the workspace reload and the image second
+          // pass, and took the cancel button away — for an import that then
+          // finished fine. Retry transient failures with backoff; a 4xx (the
+          // job is gone, the session ended) is an answer, not a blip.
+          final definitive = error is ApiException &&
+              (error.statusCode ?? 0) >= 400 &&
+              (error.statusCode ?? 0) < 500;
+          if (definitive || ++misses > _maxPollMisses) rethrow;
+          await Future<void>.delayed(pollDelay * (1 << (misses - 1)));
+          continue;
+        }
         // The server reports done/total all along; surfacing it is what keeps
         // a 96-page import from reading as one indeterminate spinner.
         if (job.total > 0) {
