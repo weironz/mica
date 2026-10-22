@@ -140,7 +140,7 @@ pub fn api_router() -> Router<AppState> {
       "/ai/settings",
       get(ai::get_settings).patch(ai::update_settings),
     )
-    .route("/ai/models", get(ai::list_models))
+    .route("/ai/models", get(ai::list_models).post(ai::list_models_post))
     .route(
       "/ai/providers/{provider_id}",
       axum::routing::delete(ai::delete_provider),

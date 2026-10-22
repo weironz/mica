@@ -1179,18 +1179,16 @@ class ApiClient {
     String? baseUrl,
     String? apiKey,
   }) async {
-    final query = <String, String>{
+    // POST, not GET: an unsaved key in a query string ends up in the proxy's
+    // access log.
+    return _post('/api/ai/models', {
       if (provider != null && provider.isNotEmpty) 'provider': provider,
       // Which vendor's stored key to fall back on — without it the server
       // used the ACTIVE vendor's key against this vendor's URL.
       if (providerId != null && providerId.isNotEmpty) 'provider_id': providerId,
       if (baseUrl != null && baseUrl.isNotEmpty) 'base_url': baseUrl,
       if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
-    };
-    final suffix = query.isEmpty
-        ? ''
-        : '?${query.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}').join('&')}';
-    return _get('/api/ai/models$suffix', token);
+    }, token: token);
   }
 
   /// Write one provider's config, and make it the one in use.

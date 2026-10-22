@@ -525,17 +525,44 @@ pub struct ListModelsResponse {
   endpoint: String,
 }
 
-/// `GET /api/ai/models` — the provider's own model list.
+/// `POST /api/ai/models` — the provider's own model list.
+///
+/// POST because the probe may carry a key the admin has typed but not saved,
+/// and a query string is the one place a secret must not go: it lands in the
+/// nginx access log and in the request-span logs. The parameters travel as the
+/// JSON body instead.
+pub async fn list_models_post(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  Json(query): Json<ListModelsQuery>,
+) -> ApiResult<Json<ListModelsResponse>> {
+  probe_models(state, headers, query).await
+}
+
+/// `GET /api/ai/models` — kept for clients from before the POST form. It no
+/// longer reads `api_key` from the query (that is the leak the POST exists to
+/// close); an older client probing an UNSAVED key gets the stored one, and the
+/// saved-settings case — which is most probes — keeps working.
+pub async fn list_models(
+  State(state): State<AppState>,
+  headers: HeaderMap,
+  axum::extract::Query(mut query): axum::extract::Query<ListModelsQuery>,
+) -> ApiResult<Json<ListModelsResponse>> {
+  query.api_key = None;
+  probe_models(state, headers, query).await
+}
+
+/// The provider's own model list.
 ///
 /// Admin-only, and not merely because it is a settings screen: the probe spends
 /// the operator's key against a URL the caller supplies. That is also why the
 /// model list is never hardcoded — every vendor renames and retires models on
 /// its own schedule, and a list baked into this binary is wrong the day after
 /// it ships. Asking the provider is the only answer that stays true.
-pub async fn list_models(
-  State(state): State<AppState>,
+async fn probe_models(
+  state: AppState,
   headers: HeaderMap,
-  axum::extract::Query(query): axum::extract::Query<ListModelsQuery>,
+  query: ListModelsQuery,
 ) -> ApiResult<Json<ListModelsResponse>> {
   admin_id_from_headers(&state, &headers).await?;
   // The fallback is the vendor the form is ABOUT. Falling back to the active
