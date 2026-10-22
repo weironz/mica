@@ -481,7 +481,7 @@ pub async fn delete_account(
     // ever reaches them — a deleted account's picture used to stay in storage
     // forever. Best effort, after commit: the account is already gone.
     if let Some(avatar) = user.avatar_key.as_deref().filter(|key| !key.is_empty())
-      && let Err(error) = reqwest::Client::new().delete(storage.presign_delete(avatar)).send().await
+      && let Err(error) = crate::http::client().delete(storage.presign_delete(avatar)).send().await
     {
       tracing::warn!(%user_id, error = %error.without_url(), "delete account: avatar object left behind");
     }

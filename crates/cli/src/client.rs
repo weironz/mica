@@ -169,8 +169,14 @@ struct TokenListResponse {
 impl Client {
   pub fn new(base: impl Into<String>, token: Option<String>) -> Result<Self> {
     let base = base.into().trim_end_matches('/').to_string();
+    // The blocking client's default is a 30 s TOTAL timeout, body included:
+    // it cut off a large Notion upload mid-stream and reported failure for an
+    // `empty_trash` the server went on to finish. Ordinary calls get a roomier
+    // default; the bulk transfers set their own per request (see LONG_REQUEST).
     let http = reqwest::blocking::Client::builder()
       .user_agent(concat!("mica-cli/", env!("CARGO_PKG_VERSION")))
+      .connect_timeout(std::time::Duration::from_secs(15))
+      .timeout(std::time::Duration::from_secs(120))
       .build()
       .context("building HTTP client")?;
     Ok(Self { base, token, http })
@@ -266,7 +272,7 @@ impl Client {
           .collect::<Vec<_>>()
           .join(","),
       )])
-      .timeout(std::time::Duration::from_secs(600))
+      .timeout(LONG_REQUEST)
       .send()?;
     let mut resp = Self::ok(resp)?;
     let revision = resp
@@ -444,6 +450,7 @@ impl Client {
           .http
           .delete(self.url(&format!("/workspaces/{workspace_id}/trash"))),
       )
+      .timeout(LONG_REQUEST)
       .send()?;
     Ok(Self::ok(resp)?.json()?)
   }
@@ -486,6 +493,7 @@ impl Client {
           .query(&query)
           .body(zip),
       )
+      .timeout(LONG_REQUEST)
       .send()?;
     let started: ImportStart = Self::ok(resp)?.json().context("decoding import start")?;
     Ok(started.job_id)
@@ -609,6 +617,7 @@ impl Client {
           .query(&[("block_id", block_id), ("file_name", file_name)])
           .body(bytes),
       )
+      .timeout(LONG_REQUEST)
       .send()?;
     Self::ok(resp)?;
     Ok(())
@@ -642,6 +651,10 @@ impl Client {
     Ok(())
   }
 }
+
+/// Requests that move a whole archive or a large body: an import upload (up
+/// to 1 GB), a page export, an image re-host, emptying a large bin.
+const LONG_REQUEST: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 /// The `rehost-image` endpoint's body limit.
 const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;

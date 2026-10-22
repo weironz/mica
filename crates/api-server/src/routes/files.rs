@@ -245,7 +245,7 @@ pub async fn complete(
   // Without this, `complete` could be called for a key nothing was ever written
   // to (a row pointing at nothing) or with a `byte_size` unrelated to the bytes
   // (a quota that counts a number the client invented).
-  let head = reqwest::Client::new()
+  let head = crate::http::client()
     .head(storage.presign_head_object_with_checksum(&payload.object_key))
     .header("x-amz-checksum-mode", "ENABLED")
     .send()
@@ -1122,7 +1122,7 @@ mod tests {
     let key = format!("audit-write-once/{}", Uuid::new_v4());
     let checksum = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(b"first"));
     let upload = storage.presign_put_if_absent(&key, &checksum, 5, "text/plain");
-    let client = reqwest::Client::new();
+    let client = crate::http::client();
 
     let missing_condition = client
       .put(&upload.url)
@@ -1236,7 +1236,7 @@ mod tests {
     let stored = mica_infra::stored_content_type("text/html");
     assert_eq!(stored, "application/octet-stream");
     let upload = storage.presign_put_if_absent(&key, &checksum, body.len() as i64, &stored);
-    let client = reqwest::Client::new();
+    let client = crate::http::client();
     let put = |ct: &'static str| {
       client
         .put(&upload.url)

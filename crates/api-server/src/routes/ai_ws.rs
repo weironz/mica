@@ -130,7 +130,7 @@ async fn stream_completion(
     }),
   };
 
-  let mut request = reqwest::Client::new()
+  let mut request = crate::http::client()
     .post(config.endpoint())
     .header("content-type", "application/json")
     .json(&body);

@@ -29,7 +29,7 @@ use tracing::{error, info, warn};
 /// text half works fine without attachments. Every path that cannot be fixed
 /// from here logs at ERROR with what to do instead.
 pub async fn ensure_bucket(storage: &S3Config) {
-    let http = reqwest::Client::new();
+    let http = crate::http::client();
 
     let probe = match http.head(storage.presign_head_bucket()).send().await {
         Ok(response) => classify_head(response.status().as_u16()),

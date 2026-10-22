@@ -90,7 +90,7 @@ impl DirectMailMailer {
       from_alias,
       endpoint,
       region_id,
-      client: reqwest::Client::new(),
+      client: crate::http::client(),
     })
   }
 
@@ -237,7 +237,7 @@ mod tests {
       from_alias: None,
       endpoint: "https://dm.aliyuncs.com/".into(),
       region_id: "cn-hangzhou".into(),
-      client: reqwest::Client::new(),
+      client: crate::http::client(),
     }
   }
 

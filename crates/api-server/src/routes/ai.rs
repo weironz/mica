@@ -347,7 +347,7 @@ async fn generate_anthropic(config: &AiConfig, system: &str, prompt: &str) -> Ap
   });
 
   let payload = send(
-    reqwest::Client::new()
+    crate::http::client()
       .post(config.endpoint())
       .header("x-api-key", &config.api_key)
       .header("anthropic-version", &config.anthropic_version)
@@ -384,7 +384,7 @@ async fn generate_openai(config: &AiConfig, system: &str, prompt: &str) -> ApiRe
     ],
   });
 
-  let mut request = reqwest::Client::new()
+  let mut request = crate::http::client()
     .post(config.endpoint())
     .header("content-type", "application/json")
     .json(&body);
@@ -633,7 +633,7 @@ async fn probe_models(
     )));
   }
 
-  let client = reqwest::Client::new();
+  let client = crate::http::client();
   let mut last_status: Option<String> = None;
   for url in &candidates {
     let mut request = client

@@ -84,6 +84,11 @@ void useHttpClientForTesting(http.Client client) {
   sharedHttpClient = client;
 }
 
+/// Test-only: the production wrapper around [inner], with a short deadline.
+@visibleForTesting
+http.Client timedClientForTesting(http.Client inner, Duration headerTimeout) =>
+    _TimedClient(inner, headerTimeout: headerTimeout);
+
 /// Test-only counterpart to [useHttpClientForTesting].
 @visibleForTesting
 void resetHttpClientForTesting() {
@@ -115,20 +120,39 @@ typedef ListAiModels = Future<Map<String, dynamic>> Function({
 });
 
 class _TimedClient extends http.BaseClient {
-  _TimedClient(this._inner);
+  _TimedClient(this._inner, {this.headerTimeout = const Duration(seconds: 45)});
 
   final http.Client _inner;
+
+  /// How long an ordinary request may wait for response headers. Without it a
+  /// server that accepted the connection and went quiet left the caller — a
+  /// page load, a save, a sign-in — waiting forever with no error to show.
+  ///
+  /// Only for requests whose body is at most [_boundedBody]: an upload's
+  /// headers come back after the whole body has gone up, which takes as long as
+  /// the link needs, so a fixed deadline would fail a large import on a slow
+  /// connection — the very thing the CLI's 30 s total timeout used to do.
+  final Duration headerTimeout;
+  static const _boundedBody = 1024 * 1024;
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final observer = apiRequestObserver;
-    if (observer == null) return _inner.send(request);
     final watch = Stopwatch()..start();
     try {
-      return await _inner.send(request);
+      final sent = _inner.send(request);
+      final length = request.contentLength;
+      if (length == null || length > _boundedBody) return await sent;
+      return await sent.timeout(
+        headerTimeout,
+        onTimeout: () => throw http.ClientException(
+          'no response within ${headerTimeout.inSeconds}s',
+          request.url,
+        ),
+      );
     } finally {
       watch.stop();
-      observer(request.method, request.url.path, watch.elapsed);
+      observer?.call(request.method, request.url.path, watch.elapsed);
     }
   }
 

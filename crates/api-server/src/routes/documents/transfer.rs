@@ -810,7 +810,7 @@ async fn transfer_roots(
     .storage
     .as_ref()
     .ok_or_else(|| ApiError::Internal("file storage is not configured".to_string()))?;
-  let http = reqwest::Client::new();
+  let http = crate::http::client();
   // Each blob is a GET and a PUT against object storage; done one by one, a
   // subtree with a few hundred images took minutes. Bounded, so a large move
   // cannot open hundreds of connections at once. The first failure fails the

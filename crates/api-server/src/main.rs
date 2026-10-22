@@ -9,6 +9,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::info;
 
 mod blob_gc;
+mod http;
 mod bucket;
 mod mail;
 mod metrics;

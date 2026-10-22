@@ -168,7 +168,7 @@ async fn collect_assets(
   let by_id: std::collections::HashMap<String, &store::FileRecord> =
     records.iter().map(|r| (r.id.to_string(), r)).collect();
 
-  let client = reqwest::Client::new();
+  let client = crate::http::client();
   let mut map = BTreeMap::new();
   let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
   for (file_id, name) in wanted {
@@ -1362,7 +1362,7 @@ async fn collect_asset_data_uris(
   let by_id: std::collections::HashMap<String, &store::FileRecord> =
     records.iter().map(|r| (r.id.to_string(), r)).collect();
 
-  let client = reqwest::Client::new();
+  let client = crate::http::client();
   let mut map = BTreeMap::new();
   for file_id in wanted {
     let Some(record) = by_id.get(&file_id) else {

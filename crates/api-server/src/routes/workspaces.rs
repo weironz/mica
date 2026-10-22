@@ -399,7 +399,7 @@ pub(crate) async fn delete_objects<'a>(
   storage: &mica_infra::storage::S3Config,
   keys: impl Iterator<Item = (Uuid, &'a str)>,
 ) {
-  let http = reqwest::Client::new();
+  let http = crate::http::client();
   for (workspace_id, key) in keys {
     // S3 deletion is an immediate best effort. The committed ledger remains
     // available to GC even when this request is interrupted or S3 rejects it.
@@ -1266,7 +1266,7 @@ mod workspace_delete_gc_pg {
     let storage = mica_infra::storage::S3Config::from_env().expect("set S3_* for RustFS");
     crate::bucket::ensure_bucket(&storage).await;
     let key = format!("workspaces/{workspace}/{}.png", "c".repeat(64));
-    let http = reqwest::Client::new();
+    let http = crate::http::client();
     let put = http
       .put(storage.presign_put_server(&key).url)
       .body("abc")

@@ -240,7 +240,7 @@ pub async fn sweep_workspace(
     dry_run: bool,
     report: &mut SweepReport,
 ) {
-    let http = reqwest::Client::new();
+    let http = crate::http::client();
     let Some(referenced) = referenced_file_ids(db, workspace_id).await else {
         report.workspaces_skipped += 1;
         return;
@@ -1043,7 +1043,7 @@ mod tests {
             .unwrap();
         mica_infra::run_migrations(&db).await.unwrap();
         let storage = S3Config::from_env().expect("set S3_* for a disposable store");
-        let http = reqwest::Client::new();
+        let http = crate::http::client();
         let workspace_id = Uuid::new_v4();
         let user_id = Uuid::new_v4();
         sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES ($1,$2,'GC','x')")

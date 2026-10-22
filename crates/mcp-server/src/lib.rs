@@ -46,7 +46,14 @@ struct MicaMcp {
 impl MicaMcp {
   fn new(base: String, pat: String, read_only: bool) -> Self {
     Self {
-      http: reqwest::Client::new(),
+      // Bounded: with no timeouts a server that stopped answering left the
+      // agent's tool call hanging for good. The read timeout is per stall, so
+      // a large read still completes.
+      http: reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("building the HTTP client"),
       base: base.trim_end_matches('/').to_string(),
       pat,
       read_only,
