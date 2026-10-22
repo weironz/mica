@@ -87,17 +87,22 @@ void main() {
     );
     cache['math']![source] = second;
     await build();
+    final replacedX = endX();
     expect(
-      endX(),
+      replacedX,
       greaterThan(foldedX),
       reason: 'replacement image changes atom width',
     );
     cache['math']!.remove(source);
     await build();
+    // #62: eviction drops the pixels, not the formula's size. It used to fall
+    // back to the source layout, which reflowed the line and made layout ask
+    // for the raster again — past the cache cap, a loop. The box stays; paint
+    // asks for the pixels back.
     expect(
       endX(),
-      closeTo(sourceX, 0.01),
-      reason: 'eviction must restore source layout',
+      closeTo(replacedX, 0.01),
+      reason: 'eviction keeps the folded layout at the last raster size',
     );
     await tester.pumpWidget(const SizedBox());
     first.dispose();

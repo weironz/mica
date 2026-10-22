@@ -114,30 +114,111 @@ class RasterPreviewPipeline {
   /// the source string, which naturally retries.
   final Map<String, Set<String>> _failed = {};
 
-  /// Insertion-order cap per previewer. Without it, every distinct source
-  /// string ever previewed kept its full-res texture for the life of the
-  /// editor State — sources edited away included (freeze-audit CONFIRMED
-  /// leak). Evicted images are disposed POST-frame, never mid-frame:
-  /// `request()` runs during layout, and the current frame's paint must not
-  /// draw a disposed image — dropping the map entry keeps it out of the NEXT
-  /// paint, the deferred dispose keeps the current rasterizer safe.
+  /// LRU cap per previewer. Without it, every distinct source string ever
+  /// previewed kept its full-res texture for the life of the editor State —
+  /// sources edited away included (freeze-audit CONFIRMED leak). Evicted
+  /// images are disposed POST-frame, never mid-frame (see [_capNow]).
+  ///
+  /// It used to evict in INSERTION order, at insert time, while the renderer
+  /// asked for a raster for every formula in the document on every layout.
+  /// Past the cap that never settled (#62): each arrival evicted the oldest —
+  /// often one on screen —, the arrival relayouted, layout asked for the
+  /// evicted one again, and so on every frame, formulas flickering between
+  /// source and typeset. Now:
+  /// - the map's order is recency: the canvas calls [request] for every raster
+  ///   it PAINTS, and a request for a cached source moves it to the fresh end;
+  /// - eviction waits for the end of the frame that showed the arrivals
+  ///   ([_scheduleCap]), so the canvas has recorded their SIZES — it keeps
+  ///   those after eviction (render.dart `_previewDims`), so an evicted
+  ///   off-screen formula neither reflows nor gets re-requested by layout; paint
+  ///   asks for it once it is back on screen;
+  /// - a raster drawn by that latest painting frame is never evicted: the cap
+  ///   goes soft rather than take pixels from under the viewport (that is
+  ///   exactly the loop).
   static const int _maxPerPreviewer = 48;
+
+  /// Same order of magnitude as the canvas's remembered sizes; a double each.
+  static const int _maxBaselines = 4096;
   final List<ui.Image> _evictedPendingDispose = [];
 
-  void _capAfterInsert(String id) {
+  /// Sources the canvas painted during the most recent frame that painted any
+  /// (see [_markPainted]); protected from eviction.
+  Map<String, Set<String>> _painted = {};
+  bool _paintFrameOpen = false;
+  bool _capScheduled = false;
+  bool _disposed = false;
+
+  /// A request for a source we hold comes from paint (layout only asks for
+  /// sources it has never seen a size for): bump it to most-recent and record
+  /// it as on screen. The set is replaced on the first paint of each frame, so
+  /// it always describes the LATEST frame that drew rasters.
+  void _markPainted(String id, String source) {
     final map = imagesOf(id);
-    while (map.length > _maxPerPreviewer) {
-      final oldest = map.keys.first;
-      final img = map.remove(oldest);
-      _baselines[id]?.remove(oldest);
-      if (img != null) _evictedPendingDispose.add(img);
+    final img = map.remove(source);
+    if (img != null) map[source] = img;
+    if (!_paintFrameOpen) {
+      _paintFrameOpen = true;
+      _painted = {};
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _paintFrameOpen = false,
+      );
     }
+    (_painted[id] ??= {}).add(source);
+  }
+
+  void _capAfterInsert(String id) {
     // The negative cache holds only strings, but a broken block being typed
     // in mints one per keystroke — trim it too.
     final failed = _failed[id];
     while (failed != null && failed.length > 256) {
       failed.remove(failed.first);
     }
+    _scheduleCap();
+  }
+
+  /// Run [_capNow] at the end of the next frame — the one the arrival's
+  /// rebuild lays out and paints.
+  void _scheduleCap() {
+    if (_capScheduled) return;
+    _capScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _capScheduled = false;
+      if (!_disposed) _capNow();
+    });
+  }
+
+  void _capNow() {
+    var evicted = false;
+    for (final MapEntry(key: id, value: map) in _cache.entries) {
+      if (map.length > _maxPerPreviewer) {
+        final keep = _painted[id] ?? const <String>{};
+        // Oldest-first snapshot; mutate the map, not the list being walked.
+        for (final source in map.keys.toList(growable: false)) {
+          if (map.length <= _maxPerPreviewer) break;
+          if (keep.contains(source)) continue;
+          final img = map.remove(source);
+          // The baseline stays: like the size, it describes the formula, not
+          // the pixels, and folded layout keeps using it while they are away.
+          if (img != null) {
+            _evictedPendingDispose.add(img);
+            evicted = true;
+          }
+        }
+      }
+      // Baselines of evicted rasters are kept (above), so bound them too; one
+      // is only dropped once its raster is gone as well.
+      final baselines = _baselines[id];
+      if (baselines != null && baselines.length > _maxBaselines) {
+        for (final source in baselines.keys.toList(growable: false)) {
+          if (baselines.length <= _maxBaselines) break;
+          if (!map.containsKey(source)) baselines.remove(source);
+        }
+      }
+    }
+    if (!evicted) return;
+    // The canvas still holds the evicted rasters in its snapshot: rebuild so
+    // the next frame drops them, and dispose only after THAT frame.
+    requestRebuild(() {});
     _disposeEvictedPostFrame();
   }
 
@@ -161,6 +242,7 @@ class RasterPreviewPipeline {
   /// Same timing contract as the editor's `_imageCache` disposal: called from
   /// `State.dispose`, after the last frame that painted them.
   void dispose() {
+    _disposed = true;
     for (final map in _cache.values) {
       for (final img in map.values) {
         img.dispose();
@@ -190,13 +272,17 @@ class RasterPreviewPipeline {
   /// All captured baselines, per previewer id — the render object's view.
   Map<String, Map<String, double>> get baselines => _baselines;
 
-  /// Ask for a preview of [source]. Safe to call from layout: work is
-  /// deferred post-frame. No-op when cached, already pending, or unknown id.
+  /// Ask for a preview of [source]. Safe to call from layout and paint: work
+  /// is deferred post-frame. No-op when already pending, failed, or unknown
+  /// id; for a cached source it is the "painted now" signal ([_markPainted]).
   /// [targetWidth] reaches direct-form producers (see [RasterPreviewer.produce]).
   void request(String id, String source, [double targetWidth = 800]) {
     final previewer = _byId(id);
     if (previewer == null) return;
-    if (imagesOf(id).containsKey(source)) return;
+    if (imagesOf(id).containsKey(source)) {
+      _markPainted(id, source);
+      return;
+    }
     if (_failed[id]?.contains(source) ?? false) return;
     final pending = _pending[id] ??= {};
     if (pending.contains(source)) return;

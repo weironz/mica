@@ -383,9 +383,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // Upper bound on decoded textures kept resident. [_imageCache] is a
   // LinkedHashMap used as an LRU: [_touchImage] bumps a key to the freshest
   // (last) slot on every paint, [_evictImages] drops the least-recently-PAINTED
-  // stills once the cap is exceeded. 64 sits far above how many image blocks the
-  // viewport (plus render cull slack) can show at once, so nothing on screen is
-  // ever a candidate — see [_evictImages].
+  // stills once the cap is exceeded — at the end of a frame, never at insert
+  // time ([_scheduleImageEviction]). 64 sits far above how many image blocks
+  // the viewport (plus render cull slack) can show at once, so nothing on
+  // screen is ever a candidate — see [_evictImages].
   static const int _maxCachedImages = 64;
   // The file_id/url currently shown in the fullscreen viewer, if any. Its
   // texture must never be evicted from under the open [RawImage] — the viewer is
@@ -3100,7 +3101,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     setState(() {
       _imageCache[key] = frame.image;
       _touchImage(key); // freshest
-      _evictImages(key); // bound resident textures
+      _scheduleImageEviction(); // bound resident textures
     });
     previous?.dispose(); // never orphan the handle we just replaced
   }
@@ -3120,7 +3121,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       setState(() {
         _imageCache[key] = frame;
         _touchImage(key);
-        _evictImages(key);
+        _scheduleImageEviction();
       });
       return;
     }
@@ -3156,29 +3157,63 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (img != null) _imageCache[key] = img;
   }
 
-  /// Evict least-recently-painted STILLS until the cache is back under
-  /// [_maxCachedImages], disposing each evicted [ui.Image]. Dispose safety (the
-  /// lessons.md image-decode timing is load-bearing): a candidate is only ever a
-  /// still that is NOT on screen — the oldest keys here are ones no recent paint
-  /// touched, and the cap sits far above the viewport's simultaneous-image count,
-  /// so nothing being drawn this frame is reachable. We also skip:
-  ///  - [protect] (the just-inserted key — already freshest),
+  bool _imageEvictionScheduled = false;
+
+  /// Run [_evictImages] at the end of the frame the arrival's setState builds,
+  /// lays out and PAINTS — never at insert time (#62).
+  ///
+  /// Evicting at insert time looped once a document held more than
+  /// [_maxCachedImages] pictures: layout asked for every image, each arrival
+  /// evicted another, the evicted block fell back to the 180px placeholder,
+  /// and layout asked for it again — on every frame, the page jumping. A burst
+  /// of arrivals could also evict each other (or what is on screen) before the
+  /// canvas ever saw them. Deferred, the canvas has (a) recorded each arrival's
+  /// SIZE, which it keeps after eviction so the block holds its box and layout
+  /// does not re-request it (render.dart `_imageDims`), and (b) painted what is
+  /// on screen, which [_onImagePainted] bumped to the fresh end of the LRU.
+  void _scheduleImageEviction() {
+    if (_imageEvictionScheduled) return;
+    _imageEvictionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _imageEvictionScheduled = false;
+      if (!mounted) return;
+      final evicted = _evictImages();
+      if (evicted.isEmpty) return;
+      // The canvas still holds them in its snapshot: rebuild so the next
+      // frame drops them, and dispose only after THAT frame has painted.
+      setState(() {});
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final img in evicted) {
+          img.dispose();
+        }
+      });
+    });
+  }
+
+  /// Drop least-recently-painted STILLS until the cache is back under
+  /// [_maxCachedImages]; returns them for the caller to dispose after the
+  /// canvas has let go. A candidate is never on screen: the canvas bumps every
+  /// picture it paints (viewport-culled) to the fresh end, and the cap sits far
+  /// above how many image blocks the viewport plus cull slack can show. Also
+  /// skipped:
   ///  - animated keys (`_imageAnims`): their frames are owned by a live
   ///    [ImageAnimator] loop and get disposed through its own lifecycle,
   ///  - [_viewerKey] (bound to an open fullscreen [RawImage]).
-  /// An evicted still that scrolls back re-fetches via [_requestImage] (its key
-  /// is no longer cached/loading/errored), so eviction is transparent.
-  void _evictImages(String protect) {
-    if (_imageCache.length <= _maxCachedImages) return;
+  /// An evicted still that scrolls back is re-requested by the canvas's paint
+  /// (its key is no longer cached/loading/errored) into the box it kept.
+  List<ui.Image> _evictImages() {
+    final evicted = <ui.Image>[];
+    if (_imageCache.length <= _maxCachedImages) return evicted;
     // Oldest-first snapshot; mutate the map, not the list being walked.
     for (final key in _imageCache.keys.toList(growable: false)) {
       if (_imageCache.length <= _maxCachedImages) break;
-      if (key == protect || key == _viewerKey) continue;
+      if (key == _viewerKey) continue;
       if (_imageAnims.containsKey(key)) continue;
       final img = _imageCache.remove(key);
       _imagePainted.remove(key);
-      img?.dispose();
+      if (img != null) evicted.add(img);
     }
+    return evicted;
   }
 
   /// The image name to hang off a blob url, url-encoded. Cosmetic only (the
@@ -6130,4 +6165,3 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
   }
 }
-

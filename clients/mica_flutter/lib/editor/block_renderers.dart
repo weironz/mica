@@ -93,16 +93,18 @@ class MathBlockRenderer extends AtomicBlockRenderer {
     // Empty source, or raster not captured yet: request it and decline — the
     // text pipeline shows the editable LaTeX source meanwhile.
     if (node.text.trim().isEmpty) return null;
-    final img = host._previewImages['math']?[node.text];
-    if (img == null) {
+    // Sized from the raster's dimensions, which outlive its pixels: an evicted
+    // formula keeps its box and paint asks for the pixels back (#62).
+    final px = host._previewSize('math', node.text);
+    if (px == null) {
       host.onRequestPreview?.call('math', node.text, maxWidth);
       return null;
     }
     // Rendered formula: centered, sized from the capture (image is at device
     // pixel ratio; draw at logical size, downscale to fit).
     const dpr = EditorTheme.mathPixelRatio;
-    var w = img.width / dpr;
-    var h = img.height / dpr;
+    var w = px.width / dpr;
+    var h = px.height / dpr;
     final avail = (maxWidth - EditorTheme.gutter - 24).clamp(
       40.0,
       double.infinity,
@@ -118,7 +120,6 @@ class MathBlockRenderer extends AtomicBlockRenderer {
       ..contentLeft =
           EditorTheme.gutter +
           ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
-      ..mathImage = img
       ..mathSize = Size(w, h)
       ..boxTop = y
       ..textTop = y + 10
@@ -159,7 +160,8 @@ class MathBlockRenderer extends AtomicBlockRenderer {
     _NodeLayout l,
     int index,
   ) {
-    final img = l.mathImage;
+    final source = host._nodes[index].text;
+    final img = host._previewForPaint('math', source, l.mathSize.width);
     if (img == null) return;
     final dst = Rect.fromLTWH(
       offset.dx + l.contentLeft,
@@ -207,7 +209,10 @@ class ImageRenderer extends AtomicBlockRenderer {
     // whether to actually fetch a url (it skips fetching when auto-re-hosting,
     // since the url will soon become a file_id).
     final key = (node.data['file_id'] ?? node.data['url']) as String?;
-    final img = key == null ? null : host._images[key];
+    // Sized from the picture's dimensions, which outlive its pixels: only a
+    // never-loaded picture is requested from layout. An evicted one keeps its
+    // box (no jump to the placeholder) and [paint] asks for it back (#62).
+    final img = key == null ? null : host._imageSize(key);
     if (img == null && key != null && !host._imageErrors.contains(key)) {
       host.onRequestImage?.call(key);
     }
@@ -222,8 +227,8 @@ class ImageRenderer extends AtomicBlockRenderer {
 
     double w, h;
     if (img != null) {
-      final natW = img.width.toDouble();
-      final natH = img.height.toDouble();
+      final natW = img.width;
+      final natH = img.height;
       w = (requested ?? natW).clamp(40.0, maxW);
       h = w * (natH / (natW == 0 ? 1 : natW));
     } else {
@@ -324,6 +329,10 @@ class ImageRenderer extends AtomicBlockRenderer {
       Paint()..color = host._appearance.tokens.editor.codeBg,
     );
     final isError = key != null && host._imageErrors.contains(key);
+    // On screen without pixels — evicted while scrolled away, its box kept by
+    // the remembered size: ask for it back. Paint is viewport-culled, so this
+    // never re-fetches what nobody is looking at (#62).
+    if (key != null && !isError) host.onRequestImage?.call(key);
     final icon = isError ? Icons.broken_image_outlined : Icons.image_outlined;
     final glyph = TextPainter(
       text: TextSpan(
@@ -915,7 +924,8 @@ class MermaidRenderer extends AtomicBlockRenderer {
       40.0,
       double.infinity,
     );
-    final img = host._previewImages['mermaid']?[node.text];
+    // Dimensions outlive the pixels (#62): see MathBlockRenderer.layout.
+    final img = host._previewSize('mermaid', node.text);
     if (img == null) {
       host.onRequestPreview?.call('mermaid', node.text, avail);
       return null;
@@ -927,7 +937,7 @@ class MermaidRenderer extends AtomicBlockRenderer {
     // clips and centers), so zooming never reflows the page.
     final zoom = host._previewZoom[node.id] ?? 1.0;
     final w = avail;
-    final h = w * (img.height / img.width.clamp(1, 1 << 30));
+    final h = w * (img.height / img.width.clamp(1, double.infinity));
     final wz = w * zoom;
     final hz = h * zoom;
     // The painter must be laid out: code_block is a TEXT kind, so pointer
@@ -947,7 +957,6 @@ class MermaidRenderer extends AtomicBlockRenderer {
       ..contentLeft =
           EditorTheme.gutter +
           ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
-      ..mathImage = img
       ..mathSize = Size(wz, hz)
       ..boxTop = y
       // Visually it IS the picture: no card, near-zero block padding.
@@ -974,7 +983,11 @@ class MermaidRenderer extends AtomicBlockRenderer {
     _NodeLayout l,
     int index,
   ) {
-    final img = l.mathImage;
+    final img = host._previewForPaint(
+      'mermaid',
+      host._nodes[index].text,
+      l.mathSize.width / (host._previewZoom[l.nodeId] ?? 1.0),
+    );
     if (img == null) return;
     // No backdrop, no card: the user is here for the diagram, so the block
     // chrome disappears and the picture sits directly on the page. The block

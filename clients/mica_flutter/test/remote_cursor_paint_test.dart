@@ -32,10 +32,13 @@ void main() {
       for (var i = 0; i < 80; i++)
         EditorNode(id: 'b$i', kind: 'paragraph', text: 'line $i'),
     ];
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
+            controller: scroll,
             child: DocumentSurface(
               nodes: nodes,
               selection: null,
@@ -74,6 +77,19 @@ void main() {
     // The recording canvas does not clip invocations itself: any remote shape
     // here means we wasted paint work on a cursor far below the viewport.
     expect(_remoteShapes(render, const Rect.fromLTWH(0, 0, 800, 100)), 0);
+    // What the app actually hands paint: the scroll viewport is a repaint
+    // boundary, so it clips with a LAYER and the canvas reports no clip at all
+    // (±1e9). Culling has to come from the viewport itself (#62) — reading the
+    // canvas alone, this painted every block of the document.
+    expect(
+      _remoteShapes(render, const Rect.fromLTRB(-1e9, -1e9, 1e9, 1e9)),
+      2,
+      reason: 'only the on-screen cursor paints (bar + flag); the far-below '
+          'one is culled even with an unclipped canvas',
+    );
+    // Scroll the real viewport down to it; then it paints.
+    scroll.jumpTo(remoteY - 100);
+    await tester.pump();
     expect(
       _remoteShapes(render, Rect.fromLTWH(0, remoteY - 20, 800, 100)),
       2,

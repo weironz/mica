@@ -52,7 +52,10 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
     double maxWidth,
   ) {
     if (source.trim().isEmpty) return null;
-    final img = host._previewImages['math']?[source];
+    // Sized from the raster's dimensions, which outlive its pixels: only a
+    // never-typeset source is requested from layout (#62) — an evicted one
+    // keeps its box and [paint] asks for the pixels back.
+    final img = host._previewSize('math', source);
     if (img == null) {
       // Deferred-safe (request() only registers; rebuilds are post-frame),
       // and the raster landing relayouts via the previewImages setter.
@@ -78,8 +81,8 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
 
   @override
   void paint(RenderDocument host, Canvas canvas, Rect rect, String source) {
-    final img = host._previewImages['math']?[source];
-    if (img == null) return; // evicted between layout and paint: skip a frame
+    final img = host._previewForPaint('math', source, 0);
+    if (img == null) return; // evicted: requested back, lands next frame
     canvas.drawImageRect(
       img,
       Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),

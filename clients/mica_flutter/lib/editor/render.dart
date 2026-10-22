@@ -429,8 +429,7 @@ class _NodeLayout {
   String kind = 'paragraph';
   bool todoChecked = false;
   int quoteDepth = 0; // blockquote nesting (bars on the left)
-  ui.Image? mathImage; // rendered formula (math_block), if captured
-  Size mathSize = Size.zero;
+  Size mathSize = Size.zero; // drawn size of a preview raster (math/mermaid)
   bool quoteBreak = false; // a blank separated this quote from the previous
   // The GFM callout type this quoted block belongs to (propagated to every
   // block of the group, not just the head): tints the bg + colors the bar.
@@ -815,7 +814,65 @@ class RenderDocument extends RenderBox {
     // detected, while an unchanged image cache cannot defeat selection reuse.
     if (mapEquals(_images, value)) return;
     _images = Map.of(value);
+    for (final e in value.entries) {
+      _rememberDims(_imageDims, e.key, e.value);
+    }
     markNeedsLayout();
+  }
+
+  /// Natural pixel size of every picture / preview raster this canvas has been
+  /// handed, KEPT after the host evicts the pixels (#62).
+  ///
+  /// The host caches are capped (64 images, 48 rasters per previewer). Layout
+  /// used to size a block from the pixels alone, so an evicted one fell back to
+  /// its placeholder / source form — the page reflowed, and layout asked for
+  /// the pixels again, which evicted something else: a loop that never settled
+  /// once a document held more than the cap. Same split as a browser's `<img>`:
+  /// the decoded pixels are disposable, the intrinsic size is not. Layout sizes
+  /// from [_imageSize] / [_previewSize]; only PAINT — which is culled to the
+  /// viewport — asks for missing pixels back.
+  final Map<String, Size> _imageDims = {};
+  final Map<String, Map<String, Size>> _previewDims = {};
+
+  /// A Size per distinct key ever seen; bounded so typing in a formula (one
+  /// source string per keystroke) can't grow it forever. A document with more
+  /// than this many distinct pictures/formulas can loop again — far beyond any
+  /// real page.
+  static const int _maxRememberedDims = 4096;
+
+  static void _rememberDims(Map<String, Size> dims, String key, ui.Image img) {
+    final size = Size(img.width.toDouble(), img.height.toDouble());
+    if (dims[key] == size) return;
+    dims.remove(key);
+    dims[key] = size;
+    while (dims.length > _maxRememberedDims) {
+      dims.remove(dims.keys.first);
+    }
+  }
+
+  /// Pixel size of picture [key]: decoded, or remembered from before eviction.
+  Size? _imageSize(String key) {
+    final img = _images[key];
+    if (img != null) return Size(img.width.toDouble(), img.height.toDouble());
+    return _imageDims[key];
+  }
+
+  /// Pixel size of preview [source] under previewer [id], decoded or
+  /// remembered. Null = never produced: layout requests it and declines.
+  Size? _previewSize(String id, String source) {
+    final img = _previewImages[id]?[source];
+    if (img != null) return Size(img.width.toDouble(), img.height.toDouble());
+    return _previewDims[id]?[source];
+  }
+
+  /// The raster to PAINT for [source], from paint only. Always tells the host
+  /// (`request`): for a cached raster that is the LRU "in use" signal that
+  /// keeps it from eviction, for an evicted one it is the re-request — paint is
+  /// viewport-culled, so only what is on (or near) screen is ever asked back.
+  /// Null while the pixels are on their way; the box is already the right size.
+  ui.Image? _previewForPaint(String id, String source, double targetWidth) {
+    onRequestPreview?.call(id, source, targetWidth);
+    return _previewImages[id]?[source];
   }
 
   /// Swap in a new frame of an animated image (GIF / animated WebP).
@@ -861,6 +918,12 @@ class RenderDocument extends RenderBox {
       _previewImages = {
         for (final entry in value.entries) entry.key: Map.of(entry.value),
       };
+      for (final entry in value.entries) {
+        final dims = _previewDims[entry.key] ??= {};
+        for (final e in entry.value.entries) {
+          _rememberDims(dims, e.key, e.value);
+        }
+      }
       _layoutCache.clear();
       markNeedsLayout();
     }
@@ -1850,6 +1913,13 @@ class RenderDocument extends RenderBox {
   /// and gives animations headroom to resume before entry. With no clip
   /// (e.g. a full-document toImage capture) the bounds are infinite and
   /// everything paints, as before.
+  ///
+  /// ⚠️ The canvas clip alone never worked in the app (found with #62): a
+  /// scroll viewport is a repaint boundary, hence always composited, so it
+  /// clips with a LAYER — the canvas this box paints into carries no clip and
+  /// `getLocalClipBounds` is ±1e9. Every block was painted on every repaint,
+  /// and every formula / picture counted as "on screen" for the caches. The
+  /// band is now also bounded by the ancestor viewport ([_viewportShownRect]).
   double _visTop = double.negativeInfinity;
   double _visBottom = double.infinity;
   static const double _cullSlack = 600;
@@ -1861,6 +1931,20 @@ class RenderDocument extends RenderBox {
   /// a selection wash or a scrollbar into the gap it left behind.
   bool _nodeVisible(_NodeLayout l) =>
       !l.hidden && l.boxTop + l.boxHeight >= _visTop && l.boxTop <= _visBottom;
+
+  /// The part of this box the nearest ancestor scroll viewport shows, in local
+  /// coordinates; null when there is no viewport (a detached capture). Read at
+  /// paint time, when layout — and so every transform — is settled.
+  Rect? _viewportShownRect() {
+    final viewport = RenderAbstractViewport.maybeOf(this);
+    if (viewport is! RenderBox) return null;
+    final box = viewport as RenderBox;
+    if (!box.hasSize) return null;
+    return MatrixUtils.inverseTransformRect(
+      getTransformTo(box),
+      Offset.zero & box.size,
+    );
+  }
 
   /// A zero-height stand-in for a node another block absorbed. It keeps
   /// `_layouts` index-aligned with `_nodes` without drawing anything.
@@ -1884,8 +1968,15 @@ class RenderDocument extends RenderBox {
   void paint(PaintingContext context, Offset offset) {
     final canvas = context.canvas;
     final clip = canvas.getLocalClipBounds();
-    _visTop = clip.top - offset.dy - _cullSlack;
-    _visBottom = clip.bottom - offset.dy + _cullSlack;
+    var visTop = clip.top - offset.dy;
+    var visBottom = clip.bottom - offset.dy;
+    final shown = _viewportShownRect();
+    if (shown != null) {
+      if (shown.top > visTop) visTop = shown.top;
+      if (shown.bottom < visBottom) visBottom = shown.bottom;
+    }
+    _visTop = visTop - _cullSlack;
+    _visBottom = visBottom + _cullSlack;
     // The EXACT clip, no cull slack: floating chrome (hover tooltips) has to be
     // placed inside what the user can actually see, and the culling bounds are
     // deliberately 600px generous in both directions.
@@ -1964,13 +2055,10 @@ class RenderDocument extends RenderBox {
     final source = node.text.substring(s, e);
     if (source.trim().isEmpty) return;
 
-    final img = _previewImages['math']?[source];
-    if (img == null) {
-      // Safe from inside paint: request() only registers and schedules — every
-      // rebuild it causes is behind an addPostFrameCallback.
-      onRequestPreview?.call('math', source, 0);
-      return; // the card appears on the frame the raster lands
-    }
+    // Safe from inside paint: request() only registers and schedules — every
+    // rebuild it causes is behind an addPostFrameCallback.
+    final img = _previewForPaint('math', source, 0);
+    if (img == null) return; // the card appears on the frame the raster lands
 
     final boxes = l.painter.getBoxesForSelection(
       TextSelection(baseOffset: s, extentOffset: e),
