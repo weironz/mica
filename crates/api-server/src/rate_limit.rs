@@ -38,7 +38,15 @@ use tokio::sync::Semaphore;
 /// proxy chain appended, so it is never reached. Fall back to the socket peer
 /// when XFF is absent or entirely private (e.g. a same-LAN client — acceptable,
 /// mica's real clients reach it over the internet).
+///
+/// XFF is only consulted when the socket peer is itself a proxy hop. If the
+/// API is reached directly (a hand-rolled deployment that publishes the port),
+/// the header is whatever the client chose to send, and trusting it would let
+/// every request claim a fresh IP and walk around the per-IP limits.
 pub fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
+    if !is_proxy_hop(peer.ip()) {
+        return peer.ip();
+    }
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         for part in xff.rsplit(',') {
             if let Ok(ip) = part.trim().parse::<IpAddr>() {
@@ -61,6 +69,10 @@ fn is_proxy_hop(ip: IpAddr) -> bool {
                 || v4.is_unspecified()
                 // 100.64.0.0/10 (CGNAT)
                 || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
+        }
+        // A dual-stack listener reports IPv4 peers as ::ffff:a.b.c.d.
+        IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some() => {
+            is_proxy_hop(IpAddr::V4(v6.to_ipv4_mapped().unwrap()))
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -300,6 +312,20 @@ mod tests {
     fn all_private_or_no_xff_falls_back_to_the_socket_peer() {
         assert_eq!(client_ip(&hm(Some("10.0.0.1, 10.0.0.2")), PEER), PEER.ip());
         assert_eq!(client_ip(&hm(None), PEER), PEER.ip());
+    }
+
+    #[test]
+    fn xff_from_a_direct_public_peer_is_ignored() {
+        // Issue #34: no proxy in front, so the header is attacker-controlled.
+        let public: SocketAddr = "198.51.100.9:5000".parse().unwrap();
+        assert_eq!(client_ip(&hm(Some("203.0.113.7")), public), public.ip());
+        assert_eq!(client_ip(&hm(None), public), public.ip());
+        // A docker hop seen through a dual-stack socket is still a proxy.
+        let mapped: SocketAddr = "[::ffff:172.20.0.5]:40000".parse().unwrap();
+        assert_eq!(
+            client_ip(&hm(Some("203.0.113.7")), mapped),
+            "203.0.113.7".parse::<IpAddr>().unwrap()
+        );
     }
 
     #[test]

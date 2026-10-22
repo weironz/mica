@@ -713,6 +713,24 @@ pub async fn metrics_handler(State(state): State<AppState>) -> Response {
     .into_response()
 }
 
+/// The method as a label: the standard verbs by name, anything else as
+/// `OTHER`. hyper accepts any token as a method, so an unauthenticated client
+/// sending random verbs would otherwise mint a new series (and a histogram)
+/// per request — the same unbounded-cardinality bug the matched path avoids.
+fn method_label(m: &axum::http::Method) -> &'static str {
+  use axum::http::Method;
+  match *m {
+    Method::GET => "GET",
+    Method::POST => "POST",
+    Method::PUT => "PUT",
+    Method::PATCH => "PATCH",
+    Method::DELETE => "DELETE",
+    Method::HEAD => "HEAD",
+    Method::OPTIONS => "OPTIONS",
+    _ => "OTHER",
+  }
+}
+
 /// Time every request and file it under its MATCHED path.
 ///
 /// The matched path (`/api/workspaces/{id}`) rather than the requested one
@@ -721,7 +739,7 @@ pub async fn metrics_handler(State(state): State<AppState>) -> Response {
 /// no route share one bucket for the same reason.
 pub async fn track(req: Request<axum::body::Body>, next: Next) -> Response {
   let _in_flight = METRICS.request_started();
-  let method = req.method().as_str().to_string();
+  let method = method_label(req.method());
   let route = req
     .extensions()
     .get::<MatchedPath>()
@@ -730,7 +748,7 @@ pub async fn track(req: Request<axum::body::Body>, next: Next) -> Response {
   let started = Instant::now();
   let res = next.run(req).await;
   METRICS.record_http(
-    &method,
+    method,
     &route,
     res.status().as_u16(),
     started.elapsed().as_secs_f64(),
@@ -741,6 +759,15 @@ pub async fn track(req: Request<axum::body::Body>, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// Issue #33: a made-up verb must not become its own label value.
+  #[test]
+  fn nonstandard_methods_share_one_label() {
+    use axum::http::Method;
+    assert_eq!(method_label(&Method::GET), "GET");
+    assert_eq!(method_label(&Method::from_bytes(b"XYZZY").unwrap()), "OTHER");
+    assert_eq!(method_label(&Method::from_bytes(b"QWERTY1").unwrap()), "OTHER");
+  }
 
   /// The exposition has to parse as Prometheus text, and the easiest way to get
   /// that wrong is a label value carrying a quote.
