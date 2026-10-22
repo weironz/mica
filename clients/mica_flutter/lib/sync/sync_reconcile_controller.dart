@@ -252,12 +252,16 @@ class SyncReconcileController extends ChangeNotifier {
     closeActiveDocumentSync();
     final sync = DocumentSyncClient(
       documentId: documentId,
-      uri: documentSocketUri(
-        baseUri(),
-        workspace.id,
-        documentId,
-        session.accessToken,
-      ),
+      // Renewed per attempt, same as the CRDT session below.
+      uri: () async {
+        await ensureFreshSession();
+        return documentSocketUri(
+          baseUri(),
+          workspace.id,
+          documentId,
+          this.session.session?.accessToken ?? session.accessToken,
+        );
+      },
       selfName: session.user.displayName,
       onRemoteSeq: handleRemoteSeq,
       onPresence: (users) {

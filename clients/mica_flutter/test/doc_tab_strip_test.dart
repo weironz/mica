@@ -34,7 +34,7 @@ DocTab _liveTab(int tick) => DocTab()
   ..lastActivated = tick
   ..sync = DocumentSyncClient(
     documentId: 'doc-$tick',
-    uri: Uri.parse('ws://localhost/ws'),
+    uri: () async => Uri.parse('ws://localhost/ws'),
     selfName: 'tester',
     onRemoteSeq: (_, _) {},
     onPresence: (_) {},

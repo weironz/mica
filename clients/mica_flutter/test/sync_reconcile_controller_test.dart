@@ -42,7 +42,7 @@ class _Tab implements TabSockets {
 /// under test (park/close/liveness) is bookkeeping, not protocol.
 DocumentSyncClient _docSync(String documentId) => DocumentSyncClient(
       documentId: documentId,
-      uri: Uri.parse('wss://unused.example/doc'),
+      uri: () async => Uri.parse('wss://unused.example/doc'),
       selfName: 'test',
       onRemoteSeq: (_, _) {},
       onPresence: (_) {},

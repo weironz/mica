@@ -26,33 +26,94 @@ class DocumentSyncClient {
     required this.selfName,
     required this.onRemoteSeq,
     required this.onPresence,
+    this.connectSocket = connectAuthedSocket,
   });
 
   final String documentId;
-  final Uri uri;
+
+  /// Built per connection ATTEMPT, not held: the URI carries the access token,
+  /// which lapses in an hour while a document stays open all day. A plain
+  /// `Uri` here meant the socket, once dropped, could never come back with a
+  /// valid token — see `CloudSyncSession.uri` for the same incident.
+  final Future<Uri> Function() uri;
   final String selfName;
   final RemoteSeqCallback onRemoteSeq;
   final PresenceCallback onPresence;
+
+  /// Injected by tests; production uses the authenticated connector.
+  final WebSocketChannel Function(Uri) connectSocket;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
   String? _connectionId;
   final Map<String, PresenceUser> _presence = {};
   bool _disposed = false;
+  bool _connecting = false;
+  Timer? _reconnectTimer;
+  int _attempt = 0;
 
   void connect() {
-    final channel = connectAuthedSocket(uri);
-    _channel = channel;
-    // See cloud_sync_session.connect: the connect failure lands on `ready` too,
-    // and an unobserved future error becomes an uncaught zone error. Dropped, but
-    // counted — swallowed.dart explains why these are not faults.
-    unawaited(channel.ready.catchError((_) => swallowed('presence_ws_ready')));
-    _subscription = channel.stream.listen(
-      _onMessage,
-      onError: (_) => swallowed('presence_ws_stream'),
-      onDone: () {},
-      cancelOnError: false,
-    );
+    if (_disposed || _connecting || _channel != null) return;
+    _connecting = true;
+    unawaited(_open());
+  }
+
+  Future<void> _open() async {
+    try {
+      final target = await uri();
+      if (_disposed) return;
+      final channel = connectSocket(target);
+      _channel = channel;
+      // See cloud_sync_session.connect: the connect failure lands on `ready`
+      // too, and an unobserved future error becomes an uncaught zone error.
+      // Dropped, but counted — swallowed.dart explains why these are not faults.
+      unawaited(
+        channel.ready.catchError((_) {
+          swallowed('presence_ws_ready');
+          if (identical(_channel, channel)) _dropAndReconnect();
+        }),
+      );
+      _subscription = channel.stream.listen(
+        _onMessage,
+        onError: (_) {
+          swallowed('presence_ws_stream');
+          if (identical(_channel, channel)) _dropAndReconnect();
+        },
+        // It used to do nothing here: one dropped connection (a network blip,
+        // a server restart) ended presence and cursors for as long as the
+        // document stayed open.
+        onDone: () {
+          if (identical(_channel, channel)) _dropAndReconnect();
+        },
+        cancelOnError: false,
+      );
+    } catch (_) {
+      // Could not build a URI (renewal failed): offline, back off and retry.
+      _dropAndReconnect();
+    } finally {
+      _connecting = false;
+    }
+  }
+
+  void _dropAndReconnect() {
+    _subscription?.cancel();
+    _subscription = null;
+    _channel?.sink.close();
+    _channel = null;
+    // The roster belonged to the dead connection; the next bootstrap resends
+    // it. Showing stale avatars meanwhile would be the lie this fixes.
+    if (_presence.isNotEmpty) {
+      _presence.clear();
+      _emitPresence();
+    }
+    if (_disposed || _reconnectTimer != null) return;
+    // 1s, 2s, 4s … capped at 30s, like the views channel.
+    final seconds = 1 << _attempt.clamp(0, 5);
+    _attempt += 1;
+    _reconnectTimer = Timer(Duration(seconds: seconds > 30 ? 30 : seconds), () {
+      _reconnectTimer = null;
+      connect();
+    });
   }
 
   void _onMessage(dynamic raw) {
@@ -69,6 +130,7 @@ class DocumentSyncClient {
 
     switch (message['type']) {
       case 'document.bootstrap':
+        _attempt = 0; // a live connection resets the backoff
         _connectionId = message['connection_id'] as String?;
         _sendPresence();
       case 'document.update.accepted':
@@ -161,6 +223,7 @@ class DocumentSyncClient {
 
   void dispose() {
     _disposed = true;
+    _reconnectTimer?.cancel();
     _subscription?.cancel();
     _channel?.sink.close();
     _channel = null;
