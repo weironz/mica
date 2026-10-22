@@ -64,7 +64,11 @@ fn decode_raw_name(raw: &[u8], flags: u16, extra: &[u8]) -> String {
 /// Decode GBK/cp936 bytes. Bytes < 0x80 pass through as ASCII; invalid
 /// sequences become U+FFFD.
 pub fn decode_gbk(bytes: &[u8]) -> String {
-  let table: Vec<char> = GBK_TABLE.chars().collect();
+  // Built once: the table is ~24k chars, and this runs once per entry NAME of
+  // a GBK archive — collecting it per call made a 10k-entry import rebuild it
+  // 10k times.
+  static TABLE: std::sync::OnceLock<Vec<char>> = std::sync::OnceLock::new();
+  let table = TABLE.get_or_init(|| GBK_TABLE.chars().collect());
   let mut out = String::with_capacity(bytes.len());
   let mut i = 0;
   while i < bytes.len() {

@@ -1,18 +1,18 @@
 
 use serde_json::Value;
 
-use crate::{Block, DocumentOperationError, DocumentOperationResult, DocumentSnapshotPayload};
-use crate::{block_index, mermaid_id, render_math, render_mermaid_svg_with_id};
+use crate::{Block, DocumentOperationError, DocumentOperationResult};
+use crate::{Tree, mermaid_id, render_math, render_mermaid_svg_with_id};
 use crate::block::*;
 use crate::export_md::*;
 use crate::inline::*;
 
 pub(crate) fn append_html_children(
-  snapshot: &DocumentSnapshotPayload,
+  snapshot: &Tree,
   parent_id: &str,
   out: &mut String,
 ) -> DocumentOperationResult<()> {
-  let parent_index = block_index(snapshot, parent_id)
+  let parent_index = snapshot.index_of(parent_id)
     .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
   let child_ids = snapshot.blocks[parent_index].children.clone();
 
@@ -69,7 +69,7 @@ pub(crate) fn append_html_children(
 /// nested `<blockquote>`: deeper runs recurse, `quote`-kind blocks are the
 /// paragraphs, list items group into lists, anything else renders normally.
 pub(crate) fn render_quote_group(
-  snapshot: &DocumentSnapshotPayload,
+  snapshot: &Tree,
   items: &[&Block],
   depth: usize,
   out: &mut String,
@@ -169,7 +169,7 @@ pub(crate) fn li_level(block: &Block) -> usize {
 /// `data.loose`) wraps item text in `<p>`, and `data.start` on the first
 /// item of an ordered run becomes `<ol start="n">`.
 pub(crate) fn render_html_list(
-  snapshot: &DocumentSnapshotPayload,
+  snapshot: &Tree,
   items: &[&Block],
   level: usize,
   out: &mut String,
@@ -258,7 +258,7 @@ pub(crate) fn render_html_list(
 /// as their blocks (quote runs rebuild <blockquote>); anything deeper is a
 /// nested list run.
 pub(crate) fn render_li_children(
-  snapshot: &DocumentSnapshotPayload,
+  snapshot: &Tree,
   items: &[&Block],
   level: usize,
   loose: bool,
@@ -458,7 +458,7 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
 }
 
 pub(crate) fn append_html_block(
-  snapshot: &DocumentSnapshotPayload,
+  snapshot: &Tree,
   block: &Block,
   out: &mut String,
 ) -> DocumentOperationResult<()> {
@@ -620,10 +620,10 @@ pub(crate) fn append_html_block(
 }
 
 pub(crate) fn block_for<'a>(
-  snapshot: &'a DocumentSnapshotPayload,
+  snapshot: &'a Tree<'a>,
   block_id: &str,
 ) -> DocumentOperationResult<&'a Block> {
-  let index = block_index(snapshot, block_id)
+  let index = snapshot.index_of(block_id)
     .ok_or_else(|| DocumentOperationError::BlockNotFound(block_id.to_string()))?;
   Ok(&snapshot.blocks[index])
 }

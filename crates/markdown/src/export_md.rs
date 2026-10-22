@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use crate::{Block, DocumentOperationError, DocumentOperationResult, DocumentSnapshotPayload};
-use crate::block_index;
+use crate::{Block, DocumentOperationError, DocumentOperationResult};
+use crate::Tree;
 use crate::block::*;
 use crate::html::*;
 use crate::inline::*;
@@ -40,13 +40,13 @@ pub(crate) fn escape_html(input: &str) -> String {
 
 
 pub(crate) fn append_markdown_children(
-  snapshot: &DocumentSnapshotPayload,
+  snapshot: &Tree,
   parent_id: &str,
   depth: usize,
   lines: &mut Vec<String>,
   images: &BTreeMap<String, String>,
 ) -> DocumentOperationResult<()> {
-  let parent_index = block_index(snapshot, parent_id)
+  let parent_index = snapshot.index_of(parent_id)
     .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
   let child_ids = snapshot.blocks[parent_index].children.clone();
 
@@ -56,7 +56,7 @@ pub(crate) fn append_markdown_children(
   let mut prev_was_item = false;
   let mut prev_quote = 0usize;
   for child_id in child_ids {
-    let child_index = block_index(snapshot, &child_id)
+    let child_index = snapshot.index_of(&child_id)
       .ok_or_else(|| DocumentOperationError::BlockNotFound(child_id.clone()))?;
     let child = &snapshot.blocks[child_index];
     let quote = quote_depth_of(child);
@@ -121,7 +121,7 @@ pub(crate) fn append_markdown_children(
 }
 
 pub(crate) fn append_markdown_block(
-  snapshot: &DocumentSnapshotPayload,
+  snapshot: &Tree,
   block: &Block,
   depth: usize,
   lines: &mut Vec<String>,

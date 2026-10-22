@@ -266,7 +266,8 @@ pub fn export_markdown_with_assets(
       snapshot.schema_version,
     ));
   }
-  let snapshot = &*export_safe_tree(snapshot);
+  let safe = export_safe_tree(snapshot);
+  let snapshot = &Tree::new(&safe);
 
   let mut lines = Vec::new();
   let root_index = block_index(snapshot, &snapshot.root_block_id)
@@ -306,7 +307,8 @@ pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResul
       snapshot.schema_version,
     ));
   }
-  let snapshot = &*export_safe_tree(snapshot);
+  let safe = export_safe_tree(snapshot);
+  let snapshot = &Tree::new(&safe);
 
   let mut html = String::new();
   let root_index = block_index(snapshot, &snapshot.root_block_id)
@@ -641,6 +643,39 @@ pub fn import_markdown_fragment(markdown: &str, root_block_id: &str) -> Document
   import_markdown_inner(markdown, root_block_id, false)
 }
 
+
+/// A snapshot plus an id → position map, built once per export.
+///
+/// The exporters look up every child by id; [block_index] is a linear scan, so
+/// a document of B blocks cost O(B²) — 20k paragraphs took 3.2 s to export
+/// (and `/ai/edits/preview` paid it per request). Derefs to the snapshot, so
+/// everything that only reads `blocks` takes it unchanged.
+pub(crate) struct Tree<'a> {
+  snapshot: &'a DocumentSnapshotPayload,
+  index: HashMap<&'a str, usize>,
+}
+
+impl<'a> Tree<'a> {
+  pub(crate) fn new(snapshot: &'a DocumentSnapshotPayload) -> Self {
+    // First occurrence wins, as with the linear scan it replaces.
+    let mut index = HashMap::with_capacity(snapshot.blocks.len());
+    for (i, b) in snapshot.blocks.iter().enumerate() {
+      index.entry(b.id.as_str()).or_insert(i);
+    }
+    Self { snapshot, index }
+  }
+
+  pub(crate) fn index_of(&self, block_id: &str) -> Option<usize> {
+    self.index.get(block_id).copied()
+  }
+}
+
+impl std::ops::Deref for Tree<'_> {
+  type Target = DocumentSnapshotPayload;
+  fn deref(&self) -> &DocumentSnapshotPayload {
+    self.snapshot
+  }
+}
 
 pub fn block_index(snapshot: &DocumentSnapshotPayload, block_id: &str) -> Option<usize> {
   snapshot
