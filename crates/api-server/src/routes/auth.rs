@@ -1313,61 +1313,64 @@ pub async fn scope_guard(
   Ok(RESOLVED.scope((token, auth.user_id), next.run(request)).await)
 }
 
+/// The routes that take no credential, as ROUTE TEMPLATES (`{}` = exactly one
+/// path segment), relative to `/api`.
+///
+/// Matched whole, segment by segment. It used to be `path.ends_with(…)`: any
+/// route whose last parameter could be chosen by the caller became public by
+/// choosing it — `DELETE /api/ai/providers/logout` ended in `/logout`, so it
+/// skipped authentication, scopes and the CSRF Origin check entirely.
+///
+/// Why each is public:
+/// - `health` / `ready`: probes.
+/// - `login` / `register`: the caller has no session yet.
+/// - `password/forgot`: the caller has no session — that is the whole point.
+///   The reset itself happens on the server-rendered /reset-password page
+///   (mounted outside /api entirely).
+/// - `resend-verification`: by definition the caller CANNOT sign in yet. It
+///   answered 401 to every call until it was listed — found by testing, the
+///   same way the blob endpoint was silently broken for a month (below).
+/// - `refresh`: you refresh BECAUSE the access token is dead; its credential is
+///   the refresh token in the body.
+/// - `logout`: must work with a dead access token — the normal case for
+///   someone who left the app closed.
+/// - the avatar read: an `<img>` cannot carry a bearer token (avatar.rs).
+/// - the blob capability link (+ a cosmetic filename segment): the unguessable
+///   file_id is the capability, which is why a copied Markdown image still
+///   renders in Typora or a browser (files::blob). The router-wide guard
+///   shipped with PATs (a46db0a) and silently 401'd it for a month.
+const PUBLIC_ROUTES: &[&str] = &[
+  "/health",
+  "/ready",
+  "/auth/login",
+  "/auth/register",
+  "/auth/password/forgot",
+  "/auth/resend-verification",
+  "/auth/refresh",
+  "/auth/logout",
+  "/users/{}/avatar",
+  "/workspaces/{}/files/{}/blob",
+  "/workspaces/{}/files/{}/blob/{}",
+];
+
 fn is_public(path: &str) -> bool {
-  path.ends_with("/health")
-    || path.ends_with("/ready")
-    || path.ends_with("/auth/login")
-    || path.ends_with("/auth/register")
-    // Forgot-password: the caller has no session (that is the whole point). The
-    // email address in the body is all it takes; the reset itself happens on the
-    // server-rendered /reset-password page (mounted outside /api entirely).
-    || path.ends_with("/auth/password/forgot")
-    // Resend a verification link: by definition the caller CANNOT sign in yet, so
-    // requiring a session would make the endpoint unreachable exactly when it is
-    // needed. Found by testing, not by reading — it answered 401 to every call
-    // until this line existed, which is the same way the blob endpoint was
-    // silently broken for a month (see below).
-    || path.ends_with("/auth/resend-verification")
-    // You refresh precisely BECAUSE the access token is dead — demanding a live
-    // one here would be a deadlock, and the endpoint's own credential is the
-    // refresh token in its body. The same router-wide `scope_guard` already
-    // silently 401'd the blob endpoint for a month (see below), so this is
-    // pinned by a test rather than left to be rediscovered.
-    || path.ends_with("/auth/refresh")
-    // Signing out must work with a dead access token — that is the normal case
-    // for someone who left the app closed. The refresh token in the body is the
-    // credential.
-    || path.ends_with("/auth/logout")
-    // A profile picture has to load from an <img> tag, which cannot carry a
-    // bearer token — see avatar.rs. Pinned by tests/avatar_public.rs for the
-    // same reason the blob path is.
-    || is_avatar_path(path)
-    || is_blob_path(path)
+  PUBLIC_ROUTES.iter().any(|t| api_path_matches(path, t))
 }
 
-/// `/users/{user_id}/avatar` — the profile-picture read route.
-fn is_avatar_path(path: &str) -> bool {
-  let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-  let Some(i) = segs.iter().position(|s| *s == "users") else {
-    return false;
-  };
-  segs.get(i + 2) == Some(&"avatar") && segs.len() == i + 3
-}
-
-/// `…/files/{file_id}/blob` (+ an optional cosmetic filename segment) — the
-/// image capability link. Public BY DESIGN: the unguessable file_id is the
-/// capability, which is the only reason a copied Markdown image still renders
-/// in Typora / a browser (files::blob). This router-wide `scope_guard` shipped
-/// with PATs (a46db0a) and silently 401'd it for a month, quietly breaking the
-/// copy-portability the endpoint exists for — hence the explicit test in
-/// the `image_blob_link_is_public` test below.
-fn is_blob_path(path: &str) -> bool {
-  let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-  let Some(i) = segs.iter().position(|s| *s == "files") else {
-    return false;
-  };
-  // files / {file_id} / blob   [ / {filename} ]
-  segs.get(i + 2) == Some(&"blob") && (segs.len() == i + 3 || segs.len() == i + 4)
+/// `path` is exactly the route `template` (relative to `/api`; `{}` matches one
+/// segment). Accepts the path with or without the `/api` prefix, since the
+/// scope guard sees it inside the nest and the rate limiter outside it.
+pub(crate) fn api_path_matches(path: &str, template: &str) -> bool {
+  let path = path.strip_prefix("/api").filter(|p| p.starts_with('/')).unwrap_or(path);
+  let mut segs = path.split('/').filter(|s| !s.is_empty());
+  let mut parts = template.split('/').filter(|s| !s.is_empty());
+  loop {
+    match (parts.next(), segs.next()) {
+      (None, None) => return true,
+      (Some(t), Some(s)) if t == "{}" || t == s => {}
+      _ => return false,
+    }
+  }
 }
 
 pub(crate) fn normalize_email(email: &str) -> ApiResult<String> {
@@ -1565,6 +1568,21 @@ mod tests {
   // browser. This router-wide guard once swallowed it for a month without a
   // peep; nothing else notices, because in-app rendering uses a different
   // (authenticated) path. Hence pinning it here.
+  /// Issue #80: a caller-chosen last segment must not make a route public.
+  #[test]
+  fn a_parameter_that_spells_a_public_suffix_stays_guarded() {
+    for path in [
+      "/api/ai/providers/logout",
+      "/api/ai/providers/health",
+      "/api/ai/providers/login",
+      "/api/workspaces/w/views/ready",
+      "/api/x/auth/login",
+    ] {
+      assert!(!is_public(path), "{path} must not be public");
+    }
+    assert!(is_public("/auth/logout"), "path relative to the /api nest");
+  }
+
   #[test]
   fn image_blob_link_is_public() {
     const WS: &str = "/api/workspaces/5a398481-bcf5-4a5e-83f0-a891bf0bad7e";

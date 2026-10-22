@@ -208,29 +208,36 @@ fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {
 /// positives for a low-severity authed path.
 fn is_rate_limited(method: &Method, path: &str) -> bool {
     spends_argon2(method, path)
-        || path.ends_with("/auth/refresh")
-        || path.ends_with("/auth/password/forgot")
-        // The reset page lives outside /api (no /auth segment): match it exactly.
-        || path.ends_with("/reset-password")
+        || matches_any(path, &["/auth/refresh", "/auth/password/forgot"])
+        // The reset page lives outside /api (no /auth segment).
+        || path == "/reset-password"
         // Each call mails a fresh link. Unthrottled, one loop flooded a
         // victim's inbox (register their address once, then resend forever)
         // and spent the operator's mail quota and sender reputation.
-        || path.ends_with("/auth/resend-verification")
+        || matches_any(path, &["/auth/resend-verification"])
 }
 
 /// Endpoints that run an Argon2 hash/verify — the ones the concurrency gate must
 /// bound. `refresh` is excluded: it is a DB token rotation, and holding a scarce
 /// Argon2 permit for it would starve real logins.
 fn spends_argon2(method: &Method, path: &str) -> bool {
-    path.ends_with("/auth/login")
-        || path.ends_with("/auth/register")
+    matches_any(path, &["/auth/login", "/auth/register"])
         // Signed-in, but each verifies the CURRENT password with Argon2: with a
         // stolen access token (or cookie) these were an unthrottled password
         // oracle, and any account could fire hundreds at once and pin every
         // core — the flood the semaphore exists to stop. Method-aware: a GET
         // of `/auth/me` is the profile read and must stay free.
-        || (method == Method::POST && path.ends_with("/auth/password"))
-        || (method == Method::DELETE && path.ends_with("/auth/me"))
+        || (method == Method::POST && matches_any(path, &["/auth/password"]))
+        || (method == Method::DELETE && matches_any(path, &["/auth/me"]))
+}
+
+/// Exact route match, the same rule the scope guard's public list uses. These
+/// were `ends_with` suffix tests, which also throttled any route whose caller-
+/// chosen last segment happened to spell one.
+fn matches_any(path: &str, templates: &[&str]) -> bool {
+    templates
+        .iter()
+        .any(|t| crate::routes::auth::api_path_matches(path, t))
 }
 
 /// Outer middleware: throttle the auth endpoints per client IP and cap
