@@ -146,10 +146,13 @@ class EditorController extends ChangeNotifier {
   /// Non-format fields still merge from the server for a dirty block, so a
   /// remote-only property change is not swallowed along with the marks.
   void reconcile(List<EditorNode> server) {
-    final focusedId =
-        (selection != null && selection!.focus.node < nodes.length)
-        ? nodes[selection!.focus.node].id
-        : null;
+    String? idAt(DocPosition? p) =>
+        (p != null && p.node < nodes.length) ? nodes[p.node].id : null;
+    final focusedId = idAt(selection?.focus);
+    final anchorId = idAt(selection?.anchor);
+    // Pre-merge text of every block whose text the merge replaces, so the
+    // selection endpoints can be carried through that change (#51).
+    final oldText = <String, String>{};
     final byId = {for (final n in nodes) n.id: n};
     final next = <EditorNode>[];
     // Blocks this merge CHANGED are someone else's edits: undo must leave them
@@ -188,6 +191,7 @@ class EditorController extends ChangeNotifier {
             cur.data['marks'] = localMarks;
           }
         } else {
+          if (cur.text != src.text) oldText[cur.id] = cur.text;
           cur.text = src.text;
         }
         next.add(cur);
@@ -202,27 +206,127 @@ class EditorController extends ChangeNotifier {
         _touchedAt[id] = _remoteGen;
       }
     }
-    _remapSelection(focusedId);
+    _remapSelection(anchorId, focusedId, oldText);
     // The server snapshot is the new committed baseline; keep `_present` aligned
     // so the next change records a correct "before" state. History is preserved.
     _present = _snapshot();
     notifyListeners();
   }
 
-  void _remapSelection(String? focusedId) {
+  /// Carry the selection across a reconcile: each endpoint follows its block
+  /// by id and its offset through that block's text change (#51).
+  ///
+  /// It used to keep only the focus's NUMERIC offset and collapse: a remote
+  /// insert before the caret left it pointing at an earlier character (the next
+  /// keystroke landed in the wrong place), and a drag selection in progress was
+  /// dropped, which also broke "replace selection". Now — like a Yjs relative
+  /// position — anchor and focus are each mapped by [_mapThroughRemoteEdit];
+  /// endpoints in blocks whose text didn't change are untouched.
+  ///
+  /// If the anchor's block was deleted remotely, the selection collapses at the
+  /// mapped focus; if the focus's block is gone, the indices are just clamped.
+  void _remapSelection(
+    String? anchorId,
+    String? focusedId,
+    Map<String, String> oldText,
+  ) {
     if (nodes.isEmpty) {
       selection = null;
       return;
     }
-    if (focusedId != null) {
-      final idx = nodes.indexWhere((n) => n.id == focusedId);
-      if (idx >= 0) {
-        final off = selection!.focus.offset.clamp(0, nodes[idx].text.length);
-        selection = DocSelection.collapsed(DocPosition(idx, off));
-        return;
-      }
+    final sel = selection;
+    if (sel == null || focusedId == null) {
+      _clampSelection();
+      return;
     }
-    _clampSelection();
+    final focusIdx = nodes.indexWhere((n) => n.id == focusedId);
+    if (focusIdx < 0) {
+      _clampSelection();
+      return;
+    }
+    final anchorIdx = anchorId == null
+        ? -1
+        : nodes.indexWhere((n) => n.id == anchorId);
+    if (sel.isCollapsed || anchorIdx < 0) {
+      final off = _mapThroughRemoteEdit(
+        focusIdx,
+        sel.focus.offset,
+        oldText,
+        stickRight: false,
+      );
+      selection = _snapSelectionOutOfAtoms(
+        DocSelection.collapsed(DocPosition(focusIdx, off)),
+      );
+      return;
+    }
+    // Inward stickiness: remote text inserted exactly at a boundary is never
+    // pulled into the selection.
+    final forward = sel.anchor.compareTo(sel.focus) <= 0;
+    var anchor = DocPosition(
+      anchorIdx,
+      _mapThroughRemoteEdit(
+        anchorIdx,
+        sel.anchor.offset,
+        oldText,
+        stickRight: forward,
+      ),
+    );
+    var focus = DocPosition(
+      focusIdx,
+      _mapThroughRemoteEdit(
+        focusIdx,
+        sel.focus.offset,
+        oldText,
+        stickRight: !forward,
+      ),
+    );
+    // Every selected character deleted: the inward-sticky ends crossed over.
+    if ((anchor.compareTo(focus) <= 0) != forward) {
+      final at = forward ? focus : anchor;
+      anchor = at;
+      focus = at;
+    }
+    selection = _snapSelectionOutOfAtoms(
+      DocSelection(anchor: anchor, focus: focus),
+    );
+  }
+
+  /// Map [offset] in node [i] through the remote text change recorded in
+  /// [oldText] (none recorded → unchanged, clamped).
+  ///
+  /// The change is the prefix/suffix diff `[prefix, oldEnd) → [prefix, newEnd)`.
+  /// Offsets before it stay, offsets after it shift by the length delta. An
+  /// offset on or inside the changed span goes to its edge: after it when
+  /// [stickRight], before it otherwise. The caret uses `stickRight: false` — text
+  /// a collaborator types exactly at my caret stays AFTER it, so two people
+  /// typing at one spot don't interleave each other's characters (a caret that
+  /// jumped past their insert would then push THEIR caret on my next key).
+  /// A selection is sticky inward (start right, end left), so remote text at
+  /// either boundary stays outside it.
+  ///
+  /// Limits of a text diff (we only see snapshots, not the CRDT ops): two
+  /// separate remote edits in one block merge into one span, and an insert that
+  /// repeats its neighbours is placed at the rightmost equivalent spot.
+  int _mapThroughRemoteEdit(
+    int i,
+    int offset,
+    Map<String, String> oldText, {
+    required bool stickRight,
+  }) {
+    final node = nodes[i];
+    final text = node.text;
+    final old = oldText[node.id];
+    // Atomic blocks hold no caret-editable text; their offset is not a
+    // position in the serialized source.
+    if (old == null || node.isAtomic) return offset.clamp(0, text.length);
+    final x = offset.clamp(0, old.length);
+    final prefix = _commonPrefix(old, text);
+    final suffix = _commonSuffix(old, text, prefix);
+    final oldEnd = old.length - suffix;
+    final newEnd = text.length - suffix;
+    if (x < prefix) return x;
+    if (x > oldEnd) return x + (newEnd - oldEnd);
+    return stickRight ? newEnd : prefix;
   }
 
   void _clampSelection() {
