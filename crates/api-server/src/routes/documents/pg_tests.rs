@@ -2201,6 +2201,58 @@ use uuid::Uuid;
       assert_eq!(moved, ids, "sibling order follows the request");
     }
 
+    /// Issue #46: two concurrent opposite moves (A under B, B under A) must not
+    /// both pass the cycle check. Racing them repeatedly; at most one wins.
+    #[tokio::test]
+    async fn concurrent_opposite_moves_never_form_a_cycle() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      for _ in 0..40 {
+        let a = seed_view(&db, ws, user, "folder").await;
+        let b = seed_view(&db, ws, user, "folder").await;
+        let (ab, ba) = ([a], [b]);
+        let (r1, r2) = tokio::join!(
+          move_views_tx(&db, ws, &ab, Some(b)),
+          move_views_tx(&db, ws, &ba, Some(a)),
+        );
+        assert!(r1.is_err() || r2.is_err(), "both moves succeeded: a cycle");
+        let parents: Vec<Option<Uuid>> =
+          sqlx::query_scalar("SELECT parent_view_id FROM views WHERE id = ANY($1)")
+            .bind([a, b])
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        assert!(parents.iter().any(Option::is_none), "{parents:?}");
+      }
+    }
+
+    /// A cycle already in the data (written before the lock existed) must not
+    /// send the recursive walks into an endless loop.
+    #[tokio::test]
+    async fn tree_walks_terminate_on_an_existing_cycle() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let a = seed_view(&db, ws, user, "folder").await;
+      let b = seed_view(&db, ws, user, "folder").await;
+      for (child, parent) in [(a, b), (b, a)] {
+        sqlx::query("UPDATE views SET parent_view_id = $1 WHERE id = $2")
+          .bind(parent)
+          .bind(child)
+          .execute(&db)
+          .await
+          .unwrap();
+      }
+      let walk = async {
+        let c = seed_view(&db, ws, user, "folder").await;
+        assert!(move_views_tx(&db, ws, &[c], Some(a)).await.is_ok());
+        assert_eq!(trash_views_batch(&db, ws, &[a]).await.unwrap().len(), 3);
+        assert_eq!(restore_views_batch(&db, ws, &[a]).await.unwrap().len(), 3);
+      };
+      tokio::time::timeout(std::time::Duration::from_secs(10), walk)
+        .await
+        .expect("a recursive walk looped on the cycle");
+    }
+
     /// A view that vanished under us rolls the WHOLE batch back.
     ///
     /// This is the one behaviour that separates move from trash/restore, and the

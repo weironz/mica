@@ -169,7 +169,7 @@ pub(super) async fn trash_views_batch(
       r#"
         WITH RECURSIVE subtree AS (
           SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
-          UNION ALL
+          UNION
           SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
         )
         UPDATE views
@@ -222,7 +222,7 @@ pub(super) async fn restore_views_batch(
       WITH RECURSIVE subtree AS (
         SELECT id, is_deleted, deleted_at AS stamp
         FROM views WHERE id = ANY($1) AND workspace_id = $2
-        UNION ALL
+        UNION
         SELECT v.id, v.is_deleted, CASE WHEN s.is_deleted THEN s.stamp ELSE v.deleted_at END
         FROM views v JOIN subtree s ON v.parent_view_id = s.id
         WHERE NOT s.is_deleted OR (v.is_deleted AND v.deleted_at IS NOT DISTINCT FROM s.stamp)
@@ -311,7 +311,7 @@ pub(super) async fn purge_views_batch(
       WITH RECURSIVE subtree AS (
         SELECT id, object_id, object_type FROM views
         WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = true
-        UNION ALL
+        UNION
         SELECT v.id, v.object_id, v.object_type
         FROM views v JOIN subtree s ON v.parent_view_id = s.id
       ),

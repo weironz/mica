@@ -273,14 +273,14 @@ async fn fetch_views_filtered(
         JOIN subtree s ON c.parent_view_id = s.id
         WHERE c.workspace_id = $1 AND c.is_deleted = false
           AND ($6::int IS NULL OR s.lvl < $6)
-      )
+      ) CYCLE id SET is_cycle USING path
       SELECT
         v.id, v.workspace_id, v.parent_view_id, v.object_id,
         v.object_type::text AS object_type, v.name, v.icon, v.position,
         v.is_deleted, v.created_by, v.created_at, v.updated_at,
         octet_length(b.state)::bigint AS state_bytes
       FROM views v
-      JOIN subtree ON subtree.id = v.id
+      JOIN subtree ON subtree.id = v.id AND NOT subtree.is_cycle
       LEFT JOIN document_yrs_base b ON $5 AND b.document_id = v.object_id
       WHERE v.workspace_id = $1 AND v.is_deleted = false
       ORDER BY v.parent_view_id NULLS FIRST, v.position ASC, v.id
@@ -489,7 +489,7 @@ async fn ensure_view_in_workspace(db: &PgPool, workspace_id: Uuid, view_id: Uuid
 /// — live, folder, same workspace — at each write (migration 0033), and its
 /// refusal reaches the caller as a 409 (`mica_infra::ApiError`).
 pub(crate) async fn ensure_parent_accepts_children(
-  db: &PgPool,
+  db: impl sqlx::PgExecutor<'_>,
   workspace_id: Uuid,
   parent_view_id: Uuid,
 ) -> ApiResult<()> {
@@ -509,54 +509,6 @@ pub(crate) async fn ensure_parent_accepts_children(
   if object_type != "folder" {
     return Err(ApiError::BadRequest(
       "parent_view_id must be a folder — pages cannot contain pages".to_string(),
-    ));
-  }
-
-  Ok(())
-}
-
-async fn ensure_valid_parent_view(
-  db: &PgPool,
-  workspace_id: Uuid,
-  view_id: Uuid,
-  parent_view_id: Uuid,
-) -> ApiResult<()> {
-  if parent_view_id == view_id {
-    return Err(ApiError::BadRequest(
-      "parent_view_id cannot be the same view".to_string(),
-    ));
-  }
-
-  ensure_parent_accepts_children(db, workspace_id, parent_view_id).await?;
-
-  let would_cycle = sqlx::query_scalar::<_, bool>(
-    r#"
-      WITH RECURSIVE descendants (id) AS (
-        SELECT id
-        FROM views
-        WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
-        UNION ALL
-        SELECT v.id
-        FROM views v
-        INNER JOIN descendants d ON v.parent_view_id = d.id
-        WHERE v.workspace_id = $2 AND v.is_deleted = false
-      )
-      SELECT EXISTS (
-        SELECT 1
-        FROM descendants
-        WHERE id = $3
-      )
-    "#,
-  )
-  .bind(view_id)
-  .bind(workspace_id)
-  .bind(parent_view_id)
-  .fetch_one(db)
-  .await?;
-
-  if would_cycle {
-    return Err(ApiError::BadRequest(
-      "parent_view_id cannot be a descendant view".to_string(),
     ));
   }
 

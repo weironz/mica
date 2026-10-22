@@ -25,19 +25,11 @@ pub async fn move_view(
 ) -> ApiResult<Json<ViewResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
-  ensure_view_in_workspace(&state.db, workspace_id, view_id).await?;
-
-  if let Some(parent_view_id) = payload.parent_view_id {
-    ensure_valid_parent_view(&state.db, workspace_id, view_id, parent_view_id).await?;
-  }
-
   let position = normalize_position(payload.position)?;
+  reparent_tx(&state.db, workspace_id, &[view_id], payload.parent_view_id, &[position]).await?;
   let view = sqlx::query_as::<_, View>(
     r#"
-      UPDATE views
-      SET parent_view_id = $1, position = $2, updated_at = now()
-      WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
-      RETURNING
+      SELECT
         id,
         workspace_id,
         parent_view_id,
@@ -50,10 +42,10 @@ pub async fn move_view(
         created_by,
         created_at,
         updated_at
+      FROM views
+      WHERE id = $1 AND workspace_id = $2
     "#,
   )
-  .bind(payload.parent_view_id)
-  .bind(position)
   .bind(view_id)
   .bind(workspace_id)
   .fetch_optional(&state.db)
@@ -80,59 +72,17 @@ pub async fn reorder_views(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
-  if payload.ordered_view_ids.is_empty() {
-    return Err(ApiError::BadRequest(
-      "ordered_view_ids cannot be empty".to_string(),
-    ));
-  }
-  // A duplicate id would leave one of the two at a stale position — reject
-  // rather than silently keep only the last.
-  let mut seen = std::collections::HashSet::new();
-  for id in &payload.ordered_view_ids {
-    if !seen.insert(*id) {
-      return Err(ApiError::BadRequest(format!("duplicate view id {id}")));
-    }
-  }
-  // Validate everything BEFORE writing anything: each id belongs to the
-  // workspace, and re-parenting under `parent_view_id` neither escapes the
-  // workspace nor forms a cycle (a view under its own descendant).
-  for id in &payload.ordered_view_ids {
-    ensure_view_in_workspace(&state.db, workspace_id, *id).await?;
-    if let Some(parent) = payload.parent_view_id {
-      ensure_valid_parent_view(&state.db, workspace_id, *id, parent).await?;
-    }
-  }
-
-  let mut tx = state.db.begin().await?;
-  for (i, id) in payload.ordered_view_ids.iter().enumerate() {
-    let position = format!("{:010}", (i + 1) * 10);
-    let affected = sqlx::query(
-      r#"
-        UPDATE views
-        SET parent_view_id = $1, position = $2, updated_at = now()
-        WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
-      "#,
-    )
-    .bind(payload.parent_view_id)
-    .bind(&position)
-    .bind(id)
-    .bind(workspace_id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    // Validation ran before the tx, so a 0-row UPDATE means this view was
-    // deleted concurrently in the window. Reporting `reordered: len()` regardless
-    // (the old behavior) is the `ssh | tee` shape — a partial reorder claimed as
-    // full success, leaving one node stuck at its old parent/position (P1-3).
-    // Return the anomaly instead; the `?`/return drops `tx`, rolling everything
-    // back so the client can refetch and retry against fresh state.
-    if affected == 0 {
-      return Err(ApiError::Conflict(format!(
-        "view {id} was modified concurrently during reorder; refetch and retry"
-      )));
-    }
-  }
-  tx.commit().await?;
+  // Same limits as every batch endpoint: non-empty, no duplicates, and at
+  // most MAX_BATCH_VIEWS — this one had none, and validated each id with three
+  // queries of its own.
+  check_batch_ids(&payload.ordered_view_ids)?;
+  move_views_tx(
+    &state.db,
+    workspace_id,
+    &payload.ordered_view_ids,
+    payload.parent_view_id,
+  )
+  .await?;
 
   Ok(Json(ReorderResponse {
     reordered: payload.ordered_view_ids.len(),
@@ -157,13 +107,6 @@ pub async fn batch_move_views(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   check_batch_ids(&payload.view_ids)?;
-
-  for id in &payload.view_ids {
-    ensure_view_in_workspace(&state.db, workspace_id, *id).await?;
-    if let Some(parent) = payload.parent_view_id {
-      ensure_valid_parent_view(&state.db, workspace_id, *id, parent).await?;
-    }
-  }
 
   move_views_tx(
     &state.db,
@@ -201,28 +144,116 @@ pub(super) async fn move_views_tx(
   view_ids: &[Uuid],
   parent_view_id: Option<Uuid>,
 ) -> ApiResult<()> {
+  let positions: Vec<String> =
+    (1..=view_ids.len()).map(|i| format!("{:010}", i * 10)).collect();
+  reparent_tx(db, workspace_id, view_ids, parent_view_id, &positions).await
+}
+
+/// Put [view_ids] under [parent_view_id] at [positions] — validation and
+/// write in ONE transaction, under a per-workspace lock.
+///
+/// The cycle check used to run before, and outside, the write: two concurrent
+/// moves (A under B, B under A) could each pass it against a tree that did not
+/// yet contain the other's change, and together form a cycle — which the
+/// recursive walks then followed forever. Moves are the only writes that can
+/// close a loop (creates add leaves, restores lift to the top), so they
+/// serialise on an advisory lock for the workspace and check what is
+/// committed after it.
+///
+/// Fixed query count whatever the batch size: one existence check, one parent
+/// check, one descendant walk seeded with every id, one UPDATE — it used to be
+/// three queries per id.
+pub(super) async fn reparent_tx(
+  db: &PgPool,
+  workspace_id: Uuid,
+  view_ids: &[Uuid],
+  parent_view_id: Option<Uuid>,
+  positions: &[String],
+) -> ApiResult<()> {
   let mut tx = db.begin().await?;
-  for (i, id) in view_ids.iter().enumerate() {
-    let position = format!("{:010}", (i + 1) * 10);
-    let affected = sqlx::query(
-      r#"
-        UPDATE views
-        SET parent_view_id = $1, position = $2, updated_at = now()
-        WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
-      "#,
-    )
-    .bind(parent_view_id)
-    .bind(&position)
-    .bind(id)
+  sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('mica.views.tree:' || $1::text, 0))")
     .bind(workspace_id)
     .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    if affected == 0 {
-      return Err(ApiError::Conflict(format!(
-        "view {id} was modified concurrently during the move; refetch and retry"
-      )));
+    .await?;
+
+  let live: Vec<Uuid> = sqlx::query_scalar(
+    "SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false",
+  )
+  .bind(view_ids)
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+  if let Some(missing) = view_ids.iter().find(|id| !live.contains(id)) {
+    let exists: bool =
+      sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM views WHERE id = $1 AND workspace_id = $2)")
+        .bind(missing)
+        .bind(workspace_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    // Not here at all is a bad id; here but in the bin means the tree changed
+    // since the caller looked — refetch, as the rest of the move errors say.
+    return Err(if exists {
+      ApiError::Conflict(format!(
+        "view {missing} was modified concurrently during the move; refetch and retry"
+      ))
+    } else {
+      ApiError::NotFound
+    });
+  }
+
+  if let Some(parent) = parent_view_id {
+    if view_ids.contains(&parent) {
+      return Err(ApiError::BadRequest(
+        "parent_view_id cannot be the same view".to_string(),
+      ));
     }
+    ensure_parent_accepts_children(&mut *tx, workspace_id, parent).await?;
+    let would_cycle: bool = sqlx::query_scalar(
+      r#"
+        WITH RECURSIVE descendants (id) AS (
+          SELECT id FROM views
+          WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+          UNION
+          SELECT v.id FROM views v
+          JOIN descendants d ON v.parent_view_id = d.id
+          WHERE v.workspace_id = $2 AND v.is_deleted = false
+        )
+        SELECT EXISTS (SELECT 1 FROM descendants WHERE id = $3)
+      "#,
+    )
+    .bind(view_ids)
+    .bind(workspace_id)
+    .bind(parent)
+    .fetch_one(&mut *tx)
+    .await?;
+    if would_cycle {
+      return Err(ApiError::BadRequest(
+        "parent_view_id cannot be a descendant view".to_string(),
+      ));
+    }
+  }
+
+  let affected = sqlx::query(
+    r#"
+      UPDATE views
+      SET parent_view_id = $1, position = u.position, updated_at = now()
+      FROM unnest($2::uuid[], $3::text[]) AS u(id, position)
+      WHERE views.id = u.id AND views.workspace_id = $4 AND views.is_deleted = false
+    "#,
+  )
+  .bind(parent_view_id)
+  .bind(view_ids)
+  .bind(positions)
+  .bind(workspace_id)
+  .execute(&mut *tx)
+  .await?
+  .rows_affected();
+  // Trash does not take the tree lock: a view binned between the check and
+  // here leaves the UPDATE short. Dropping `tx` rolls every row back.
+  if affected != view_ids.len() as u64 {
+    return Err(ApiError::Conflict(
+      "a view was modified concurrently during the move; refetch and retry".to_string(),
+    ));
   }
   tx.commit().await?;
   Ok(())
@@ -324,7 +355,7 @@ pub(super) async fn live_subtree<'e>(
           SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
           FROM views
           WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
-          UNION ALL
+          UNION
           SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
           FROM views v JOIN subtree s ON v.parent_view_id = s.id
           WHERE v.is_deleted = false
@@ -366,7 +397,7 @@ pub(super) async fn remove_moved_source(
     r#"
       WITH RECURSIVE subtree AS (
         SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
-        UNION ALL
+        UNION
         SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
         WHERE v.is_deleted = false
       )
@@ -469,7 +500,7 @@ pub(super) async fn ancestor_pairs_of_roots(
           SELECT id AS root, parent_view_id AS ancestor
           FROM views
           WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
-          UNION ALL
+          UNION
           SELECT u.root, v.parent_view_id
           FROM up u JOIN views v ON v.id = u.ancestor
           WHERE v.is_deleted = false
@@ -918,7 +949,7 @@ pub async fn clone_view(
         SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
         FROM views
         WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
-        UNION ALL
+        UNION
         SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
         FROM views v JOIN subtree s ON v.parent_view_id = s.id
         WHERE v.is_deleted = false
