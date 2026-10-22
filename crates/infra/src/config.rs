@@ -8,11 +8,16 @@ pub enum Environment {
 }
 
 impl Environment {
-  fn from_env_value(value: &str) -> Self {
-    match value {
-      "prod" | "production" => Self::Production,
-      "test" => Self::Test,
-      _ => Self::Development,
+  /// Fail closed: only an explicit `development`/`dev` or `test` loosens
+  /// anything. A typo, `Production`, trailing whitespace or an unset variable
+  /// all mean production — the relaxed mode turns off the CSRF Origin check,
+  /// the JWT strength check, CORS and `Secure` cookies, so getting there by
+  /// accident is the failure that must not happen.
+  fn from_env_value(value: Option<&str>) -> Self {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+      Some("development" | "dev") => Self::Development,
+      Some("test") => Self::Test,
+      _ => Self::Production,
     }
   }
 }
@@ -196,9 +201,7 @@ impl AppConfig {
   pub fn from_env() -> Result<Self, ConfigError> {
     let _ = dotenvy::dotenv();
 
-    let environment = env::var("APP_ENV")
-      .map(|value| Environment::from_env_value(&value))
-      .unwrap_or(Environment::Development);
+    let environment = Environment::from_env_value(env::var("APP_ENV").ok().as_deref());
 
     let http_addr = env::var("HTTP_ADDR")
       .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
@@ -712,5 +715,22 @@ mod quota_parse {
     assert_eq!(owner_quota(Some("7")), 7);
     assert_eq!(owner_quota(Some(&(20 * GIB).to_string())), 20 * GIB);
     assert_eq!(owner_quota(Some("-1")), 0, "garbage is logged, not guessed at");
+  }
+}
+
+#[cfg(test)]
+mod environment_tests {
+  use super::Environment;
+
+  /// Issue #36: anything that isn't plainly dev/test must land on production.
+  #[test]
+  fn app_env_fails_closed() {
+    assert_eq!(Environment::from_env_value(Some("development")), Environment::Development);
+    assert_eq!(Environment::from_env_value(Some(" Dev ")), Environment::Development);
+    assert_eq!(Environment::from_env_value(Some("test")), Environment::Test);
+    for v in ["production", "Production", "prod", "developmnet", "staging", ""] {
+      assert_eq!(Environment::from_env_value(Some(v)), Environment::Production, "{v:?}");
+    }
+    assert_eq!(Environment::from_env_value(None), Environment::Production);
   }
 }
