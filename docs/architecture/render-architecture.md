@@ -43,7 +43,10 @@ a `_NodeLayout`, marked `hidden`, of zero height.
   columns layout) gets it for free.
 - `_nodeVisible` — already the single cull predicate every paint layer runs
   through — returns false for `hidden`, so *nothing* paints: no quote bar, no
-  selection wash, no scrollbar, no backdrop.
+  selection wash, no scrollbar, no backdrop. (Its visible band is the canvas
+  clip intersected with the enclosing viewport's shown rect: inside the app's
+  `SingleChildScrollView` the canvas clip alone is ±1e9, so culling did nothing
+  until #62 — see `docs/dev/lessons.md` §8.)
 - Zero height is not enough on its own. Four paths needed explicit skips
   because they answer with an index rather than by geometry, and each has a
   red test in `test/details_fold_test.dart`: `positionAt`'s "past the last

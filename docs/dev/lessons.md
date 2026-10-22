@@ -489,6 +489,15 @@ locale 探测、`runZonedGuarded` 之前**。于是 `main()` 走不到 `register
 - 编辑器侧真正的持续负载源(审计实锤):无界的预览栅格缓存、
   没有视口裁剪的 paint 循环、无上限的图片解码、setState 驱动的光标闪烁
   (会触发全文档 relayout)。这几处都已修,修法记在 git log 里。
+- **「视口裁剪已修」曾经是假的,而且测试一直是绿的。** `RenderDocument` 靠
+  `canvas.getLocalClipBounds()` 判断可见区,但应用里它外面是 `SingleChildScrollView`
+  的视口(repaint boundary,以图层裁剪),画布上看到的 clip 是 ±1e9 —— 每次重绘都画
+  整篇文档,每个公式/图片都算「在屏幕上」。`remote_cursor_paint_test` 能过,是因为它
+  **自己伪造了画布 clip**(§3 测试真空通过的又一例)。直到修 #62(缓存「驱逐 → 重请求」
+  死循环)时才发现。现在可见区与最近祖先视口的可见矩形取交集(`_viewportShownRect`),
+  测试改为滚动真实视口。教训:**裁剪/可见性测试必须用应用里真实的组件树形状,
+  不能替渲染对象伪造它的输入。** 遗留:`_clipBounds`(浮动 chrome 定位用)在应用里仍是
+  ±1e9。
 
 ---
 
