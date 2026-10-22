@@ -333,11 +333,22 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
             // can land between the read above and this write. That edit already
             // wrote columns derived from the NEWER state; overwriting them with
             // ours would leave search/backlinks stale until the next edit.
+            //
+            // `updated_at` moves exactly when `content_text` does: it is the
+            // search index's refresh cursor (`search::BodyIndex`), and this
+            // runs AFTER the startup warm-up — a body filled in without moving
+            // the stamp sits behind the cursor and is never pulled. Only then,
+            // because an upgrade visits every row (link_targets/file_ids NULL)
+            // and re-stamping all of them would re-pull the whole corpus.
+            // `clock_timestamp()`, not `now()`, for the reason given at the
+            // push upsert. The CASE reads the row's OLD values.
             sqlx::query(
                 "UPDATE document_yrs_base
                  SET content_text = CASE WHEN $2 = '' THEN content_text ELSE $2 END,
                      link_targets = $3,
-                     file_ids = $4
+                     file_ids = $4,
+                     updated_at = CASE WHEN $2 = '' OR content_text = $2
+                                       THEN updated_at ELSE clock_timestamp() END
                  WHERE document_id = $1 AND state = $5",
             )
             .bind(document_id)
@@ -438,7 +449,7 @@ pub async fn seed_base_tx(
     let file_ids = file_ids_from_blocks(&blocks);
     let inserted = sqlx::query(
         "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
-         VALUES ($1, $2, $3, 0, $4, $5, $6, now())
+         VALUES ($1, $2, $3, 0, $4, $5, $6, clock_timestamp())
          ON CONFLICT (document_id) DO NOTHING",
     )
     .bind(document_id)
@@ -616,6 +627,13 @@ pub async fn push_update_checked(
     // base on every push (never a stale window between the two). Flattened ONCE
     // and shared by all three projections — this runs on every debounced
     // keystroke, inside the row lock, and used to flatten three times.
+    //
+    // `updated_at` is the search index's refresh cursor, so it is stamped with
+    // `clock_timestamp()` — the moment of THIS write — not `now()`, which is the
+    // transaction's start: a push that waited on the document lock longer than
+    // `search::REFRESH_LAP_SECONDS` would otherwise commit a stamp the cursor
+    // had already passed, and its body would never reach the index. Every
+    // writer of this table follows the same rule.
     let blocks = doc.to_blocks();
     let root_id = doc.root_block_id();
     let content_text = content_text_from_blocks(&blocks, &root_id);
@@ -623,12 +641,12 @@ pub async fn push_update_checked(
     let file_ids = file_ids_from_blocks(&blocks);
     sqlx::query(
         "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp())
          ON CONFLICT (document_id) DO UPDATE SET
              state = excluded.state, state_vector = excluded.state_vector,
              base_rid = excluded.base_rid, content_text = excluded.content_text,
              link_targets = excluded.link_targets, file_ids = excluded.file_ids,
-             updated_at = now()",
+             updated_at = clock_timestamp()",
     )
     .bind(document_id)
     .bind(&state)

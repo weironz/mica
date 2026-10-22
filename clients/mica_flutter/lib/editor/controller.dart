@@ -3726,6 +3726,12 @@ class EditorController extends ChangeNotifier {
   }
 
   void redo() {
+    // Same as undo: typing still in the debounce is a step of its own. Without
+    // this, undo → type → redo within 400ms restored the redo target over the
+    // new text, and `_restore`'s `_dirty.clear()` dropped it from history too
+    // (2026-10-21 review C8). Committing it first records it — which clears the
+    // redo stack, exactly as typing after an undo always should.
+    if (_saveTimer != null) flushPending();
     if (_redoStack.isEmpty) return;
     final target = _redoStack.removeLast();
     _undoStack.add(_present);

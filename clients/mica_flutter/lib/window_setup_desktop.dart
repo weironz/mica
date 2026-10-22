@@ -38,13 +38,21 @@ Future<void> Function()? appExitFlush;
 /// "quit" into "hang": the awaited work is a local apply, not a network
 /// round-trip, so it resolves in well under this cap in practice.
 Future<void> _quitNow() async {
+  await flushBeforeExit();
+  exit(0);
+}
+
+/// Run [appExitFlush], bounded, swallowing failures. Every path that ends the
+/// process calls this first — including the updater, which used to `exit(0)`
+/// straight past it and drop the last ≤400ms of typing plus the local/cloud
+/// durability flush (2026-10-21 review U4).
+Future<void> flushBeforeExit() async {
   try {
     final f = appExitFlush?.call();
     if (f != null) await f.timeout(const Duration(milliseconds: 1500));
   } catch (_) {
     // A flush failure (or the timeout) must not wedge the quit — exit regardless.
   }
-  exit(0);
 }
 
 bool get _isDesktop =>

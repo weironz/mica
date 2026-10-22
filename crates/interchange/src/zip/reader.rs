@@ -105,7 +105,11 @@ pub fn read_zip_within(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
         let size = usize::from(u16le(extra, p + 2));
         if id == 0x0001 {
           let mut q = p + 4;
-          let end = p + 4 + size;
+          // The field's own `size` is untrusted: bound it by the bytes that
+          // are actually there, or a record claiming more than it carries
+          // reads past `extra` (C10). A short field then leaves the marker in
+          // place and the entry is dropped as unlocatable below.
+          let end = (p + 4 + size).min(extra.len());
           if uncomp_size == 0xffff_ffff && q + 8 <= end {
             uncomp_size = u64le(extra, q);
             q += 8;

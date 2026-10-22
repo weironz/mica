@@ -58,3 +58,82 @@ fn entries_past_the_shared_budget_are_dropped() {
   assert_eq!(entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["a.md"]);
   assert_eq!(budget, 50);
 }
+
+/// One STORE entry whose CENTRAL record carries `cd_sizes` and `extra` verbatim,
+/// hand-assembled so the extra field can lie about its own length.
+fn zip_with_central_extra(name: &str, data: &[u8], cd_sizes: u32, extra: &[u8]) -> Vec<u8> {
+  let mut out = Vec::new();
+  // Local header (honest sizes, no extra).
+  out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+  out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+  out.extend_from_slice(&0x0800u16.to_le_bytes()); // UTF-8 names
+  out.extend_from_slice(&[0; 2 + 2 + 2 + 4]); // method, time, date, crc
+  out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+  out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+  out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+  out.extend_from_slice(&0u16.to_le_bytes());
+  out.extend_from_slice(name.as_bytes());
+  out.extend_from_slice(data);
+
+  let cd = out.len();
+  out.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+  out.extend_from_slice(&45u16.to_le_bytes()); // made by
+  out.extend_from_slice(&45u16.to_le_bytes()); // needed
+  out.extend_from_slice(&0x0800u16.to_le_bytes());
+  out.extend_from_slice(&[0; 2 + 2 + 2 + 4]); // method, time, date, crc
+  out.extend_from_slice(&cd_sizes.to_le_bytes()); // compressed
+  out.extend_from_slice(&cd_sizes.to_le_bytes()); // uncompressed
+  out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+  out.extend_from_slice(&(extra.len() as u16).to_le_bytes());
+  out.extend_from_slice(&[0; 2 + 2 + 2 + 4]); // comment len, disk, attrs
+  out.extend_from_slice(&0u32.to_le_bytes()); // local header offset
+  out.extend_from_slice(name.as_bytes());
+  out.extend_from_slice(extra);
+  let cd_len = out.len() - cd;
+
+  out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+  out.extend_from_slice(&[0; 4]); // disk numbers
+  out.extend_from_slice(&1u16.to_le_bytes());
+  out.extend_from_slice(&1u16.to_le_bytes());
+  out.extend_from_slice(&(cd_len as u32).to_le_bytes());
+  out.extend_from_slice(&(cd as u32).to_le_bytes());
+  out.extend_from_slice(&0u16.to_le_bytes());
+  out
+}
+
+/// C10 (review 2026-10-21): the ZIP64 extra field (0x0001) declares its own
+/// length, and the reader bounded its reads by THAT (`end = p + 4 + size`)
+/// without checking it against the bytes actually present. A record claiming
+/// 16 bytes while carrying 4 indexed past the slice → a panic inside the
+/// import's `spawn_blocking`, i.e. a 500 instead of "no pages found" (400).
+#[test]
+fn a_zip64_extra_longer_than_the_field_is_skipped_not_a_panic() {
+  // id 0x0001, declared size 16, but only 4 payload bytes follow.
+  let extra = [0x01, 0x00, 0x10, 0x00, 0xaa, 0xbb, 0xcc, 0xdd];
+  let zip = zip_with_central_extra("a.md", b"# hi", 0xffff_ffff, &extra);
+
+  let entries = std::panic::catch_unwind(|| read_zip(&zip)).expect("read_zip must not panic");
+  // The sizes are still the 0xffffffff markers, so the entry cannot be located
+  // and is dropped like any other unreadable entry.
+  assert!(entries.is_empty(), "{entries:?}");
+
+  // What the server's import does with that: no pages → the coded 400
+  // (`import_no_markdown`), not a panicked task.
+  let plan = mica_interchange::plan_import(entries, false, mica_interchange::ImportMode::AsIs);
+  assert!(plan.pages.is_empty());
+}
+
+/// The well-formed twin: a ZIP64 extra that really carries both sizes is read,
+/// so the bound did not simply switch ZIP64 off.
+#[test]
+fn a_well_formed_zip64_extra_still_reads() {
+  let data = b"# hi";
+  let mut extra = vec![0x01, 0x00, 0x10, 0x00];
+  extra.extend_from_slice(&(data.len() as u64).to_le_bytes()); // uncompressed
+  extra.extend_from_slice(&(data.len() as u64).to_le_bytes()); // compressed
+  let zip = zip_with_central_extra("a.md", data, 0xffff_ffff, &extra);
+
+  let entries = read_zip(&zip);
+  assert_eq!(entries.len(), 1);
+  assert_eq!(entries[0].bytes, data);
+}

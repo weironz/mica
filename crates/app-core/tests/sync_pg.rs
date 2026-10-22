@@ -1570,6 +1570,119 @@ async fn backfill_fills_valid_and_skips_corrupt() {
     cleanup(&db, ws, user).await;
 }
 
+/// The warm-up / backfill race (review 2026-10-21, 0.13.63): the search index
+/// is warmed at startup while the derived-column backfill runs in the
+/// background. The index refreshes by `updated_at` cursor, and the backfill
+/// filled `content_text` WITHOUT touching `updated_at` — so a body backfilled
+/// after the warm-up sat behind the cursor and was never pulled: that document
+/// was unsearchable by body until someone edited it.
+#[tokio::test]
+async fn a_body_backfilled_after_warm_up_reaches_the_search_index() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc_bare(&db).await;
+    let needle = format!("回填竞态{}", Uuid::new_v4().simple());
+
+    // The pre-0012 shape: a real base, `content_text` still ''. Stamped an hour
+    // ago — an old row, as every row the backfill visits on an upgrade is.
+    let base = MicaDoc::from_blocks("r", &[para("r", ""), para("a", &needle)]);
+    sqlx::query(
+        "INSERT INTO document_yrs_base(document_id,state,state_vector,base_rid,updated_at)
+         VALUES ($1,$2,$3,0,now() - interval '1 hour')",
+    )
+    .bind(doc)
+    .bind(base.encode_state())
+    .bind(base.state_vector())
+    .execute(&db)
+    .await
+    .unwrap();
+
+    // Warm-up first (the cursor now stands at db-now minus the lap) …
+    let index = mica_app_core::search::BodyIndex::default();
+    index.refresh(&db).await.unwrap();
+    assert!(!index.matching_ids(&needle).await.contains(&doc), "not derived yet");
+
+    // … then the backfill derives the body, then a search refreshes.
+    sync::backfill_derived_columns(&db).await.unwrap();
+    assert_eq!(stored_content_text(&db, doc).await, needle);
+    index.refresh(&db).await.unwrap();
+    assert!(
+        index.matching_ids(&needle).await.contains(&doc),
+        "the backfilled body must be pulled by the incremental refresh"
+    );
+
+    // A pass that derives nothing new must not re-stamp the row: on an upgrade
+    // every row is visited (link_targets/file_ids NULL), and bumping them all
+    // would re-pull the whole corpus into the index for nothing.
+    let stamp = |db: PgPool| async move {
+        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+            "SELECT updated_at FROM document_yrs_base WHERE document_id = $1",
+        )
+        .bind(doc)
+        .fetch_one(&db)
+        .await
+        .unwrap()
+    };
+    let before = stamp(db.clone()).await;
+    sqlx::query("UPDATE document_yrs_base SET link_targets = NULL WHERE document_id = $1")
+        .bind(doc)
+        .execute(&db)
+        .await
+        .unwrap();
+    sync::backfill_derived_columns(&db).await.unwrap();
+    assert_eq!(stamp(db.clone()).await, before, "unchanged body, unchanged stamp");
+
+    cleanup(&db, ws, user).await;
+}
+
+/// The other half of the same cursor rule: `updated_at` used to be `now()`, the
+/// writing TRANSACTION's start. A push that waited on the document lock longer
+/// than the refresh lap committed a row stamped before the cursor that had
+/// already moved past it — invisible to the incremental refresh. The stamp must
+/// be the moment of the write (`clock_timestamp()`), not of the BEGIN.
+///
+/// Constructed like `concurrent_pushes_both_reach_the_base`: an outer
+/// transaction holds the `documents` row lock, the push begins and blocks on
+/// it, and the database clock is read while it waits.
+#[tokio::test]
+async fn a_push_that_waited_on_the_lock_is_stamped_when_it_wrote() {
+    let Some(db) = pool().await else { return };
+    let (ws, doc, user) = seed_doc(&db).await;
+    let base = sync::bootstrap_base(&db, doc).await.unwrap();
+    let mut a = MicaDoc::from_update(&base.state).unwrap();
+    let sv = a.state_vector();
+    a.text_insert("a", 5, " world");
+    let update = a.encode_diff(&sv).unwrap();
+
+    let mut lock = db.begin().await.unwrap();
+    sqlx::query("SELECT id FROM documents WHERE id = $1 FOR UPDATE")
+        .bind(doc)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let db2 = db.clone();
+    let push =
+        tokio::spawn(async move { sync::push_update(&db2, ws, doc, user, &update, &tuning()).await });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let while_waiting: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&db).await.unwrap();
+    lock.commit().await.unwrap();
+    push.await.unwrap().unwrap();
+
+    let stamped: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT updated_at FROM document_yrs_base WHERE document_id = $1")
+            .bind(doc)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert!(
+        stamped > while_waiting,
+        "stamped {stamped} — before the push even got the lock ({while_waiting}): \
+         that is the transaction's start, not the write"
+    );
+
+    cleanup(&db, ws, user).await;
+}
+
 /// S5's invariant, in the strongest form it can take: the op-model tables are
 /// GONE, so "a write does not grow them" is enforced by the schema itself rather
 /// than by a count.

@@ -120,3 +120,30 @@
 `flutter test` 1846 通过;`flutter analyze` 无新增;结构门禁通过。
 
 顺带发现、未修(已排为独立任务):图片 alt 导出不转义 `[`/`]`;「alt 内含链接」导出成「链接包图片」。
+
+### 2026-10-22:阶段 0 + 阶段 1 收尾
+
+| 项 | 提交(主题) | 验证 |
+| --- | --- | --- |
+| 依赖漏洞 / 未用依赖 / `just check` | `chore(deps): 升级 12 个依赖漏洞公告涉及的 crate…` | `cargo audit` 归零(rmcp 一条记入 `.cargo/audit.toml` 并写明不适用的理由);`cargo machete` 无未用依赖 |
+| C10 ZIP64 | `fix(interchange): ZIP64 extra 字段按实际长度截断…` | 修前 panic,修后丢弃该项(+ 合法 ZIP64 对照) |
+| S1 头像 SVG | `fix(avatar): 头像只收位图，按字节嗅探定类型…` | 3 个测试修前失败 |
+| 预热/回填竞态 | `fix(search): 回填正文时推进 updated_at,base 写入改用 clock_timestamp()` | 回填后增量刷新能拉到;等锁的 push 按写入时刻盖章 |
+| C2 父节点 TOCTOU | `fix(views): 触发器在写入时刻要求父节点未删除且同工作区(迁移 0033)` | 4 个测试修前失败;存量修复实测 3+1 条归零;触发器拒绝映射为 409 |
+| C1 transfer 竞态 | `fix(transfer): 移动在事务内锁定并复核子树…` | 修前 Ok 且新页被软删，修后 409、源端完好 |
+| C3/C4/C7 + P2-11/12 | `fix(store): 本地库删除/搜索/恢复的数据正确性…` | 各项修前失败(残留 doc_version、搜索混入云端与他工作区、坏版本成为 live base、事务半途) |
+| C5 | `fix(ffi): clone_view 改用共享的子树遍历…` | 修前环上超时、回收站页面被复活 |
+| C6 | `fix(local): appendUpdate 失败时用 live doc 全量 saveDoc 自愈…` | 修前不触发全量保存 |
+| U4 / `kDevAutoLogin` | `fix(desktop): 更新并重启前先落盘;正式版不再自动用 demo 账号登录/注册` | flushBeforeExit 测试 |
+| C8 | `fix(editor): redo 前先提交防抖中的输入(C8)` | 修前失败 |
+| U1/U2/U3 | `fix(shell): 页面加载/会话恢复/后台页签失败的三处竞态` | 无整壳测试，代码路径保证(已开 issue) |
+
+门禁:clippy 0 警告;Rust 825 + 本地库 163 + FFI 39 通过(DB 实跑);`flutter test` 1851;analyzer 无新增;结构门禁通过。
+**迁移 0033 是单向门**:发版后不能回滚到 0.13.64。它会把「活页面挂在回收站文件夹/跨工作区父节点下」的存量行提到顶层(这些页面原本在树里不可见)。
+
+### 跟踪方式(2026-10-22 起)
+
+剩余条目全部转为 GitHub issue(#29–#90,62 条),归入 milestone「评审 2026-10-21 修复」,标签三维:
+优先级(`P1-严重`/`P2-中等`/`P3-优化`)、类型(`类型/bug|安全|性能|代码精简|架构|特性|测试|工程链`)、
+模块(`模块/服务端|编辑器|外壳|markdown|本地库|mcp-cli|CI`)。**进度以 issue 为准**,本文件不再逐条勾选;
+修复 PR 用 `Closes #N` 自动关闭。用户选择安全类也公开建 issue。

@@ -300,13 +300,104 @@ pub struct TransferResponse {
 }
 
 #[derive(Debug, FromRow)]
-struct TransferRow {
-  id: Uuid,
+pub(super) struct TransferRow {
+  pub(super) id: Uuid,
   parent_view_id: Option<Uuid>,
   object_id: Uuid,
   object_type: String,
   name: String,
   position: String,
+}
+
+/// The LIVE subtrees under `roots` in `workspace_id` — what a transfer copies.
+/// One query for both reads of it: the enumeration up front, and the re-check
+/// inside the move's transaction ([remove_moved_source]).
+pub(super) async fn live_subtree<'e>(
+  db: impl sqlx::PgExecutor<'e>,
+  roots: &[Uuid],
+  workspace_id: Uuid,
+) -> ApiResult<Vec<TransferRow>> {
+  Ok(
+    sqlx::query_as::<_, TransferRow>(
+      r#"
+        WITH RECURSIVE subtree AS (
+          SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
+          FROM views
+          WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+          UNION ALL
+          SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
+          FROM views v JOIN subtree s ON v.parent_view_id = s.id
+          WHERE v.is_deleted = false
+        )
+        SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
+      "#,
+    )
+    .bind(roots)
+    .bind(workspace_id)
+    .fetch_all(db)
+    .await?,
+  )
+}
+
+/// Soft-delete a move's source subtrees, inside the move's transaction —
+/// exactly the rows that were copied (`copied`), or nothing.
+///
+/// The copy was built from an enumeration taken before the blob copies, which
+/// can take minutes. This used to re-walk the subtree here and bin whatever it
+/// found, so a page a collaborator created in between was soft-deleted at the
+/// source and never copied — while the response said "moved" (C1). Now:
+///
+/// 1. Lock the live subtree rows (`FOR UPDATE`). From here on nobody can hang
+///    a page under them: the parent trigger's `FOR SHARE` and the FK's
+///    `KEY SHARE` both wait for this transaction, and then find the folder in
+///    the bin (migration 0033). A writer already in flight is waited for here.
+/// 2. Re-enumerate in a NEW statement, so it sees everything committed up to
+///    the lock — and compare with what was copied. Any difference (a page
+///    added, moved out, trashed) is a 409, and the caller's `?` drops the
+///    transaction: the destination copy rolls back with it.
+/// 3. Bin exactly the copied set.
+pub(super) async fn remove_moved_source(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  src_workspace_id: Uuid,
+  roots: &[Uuid],
+  copied: &std::collections::HashSet<Uuid>,
+) -> ApiResult<()> {
+  sqlx::query(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+        UNION ALL
+        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        WHERE v.is_deleted = false
+      )
+      SELECT v.id FROM views v WHERE v.id IN (SELECT id FROM subtree) FOR UPDATE OF v
+    "#,
+  )
+  .bind(roots)
+  .bind(src_workspace_id)
+  .execute(&mut **tx)
+  .await?;
+
+  let now: std::collections::HashSet<Uuid> = live_subtree(&mut **tx, roots, src_workspace_id)
+    .await?
+    .into_iter()
+    .map(|row| row.id)
+    .collect();
+  if &now != copied {
+    return Err(ApiError::Conflict(format!(
+      "the pages being moved changed while they were copied ({} now, {} copied); \
+       nothing was moved — refresh and try again",
+      now.len(),
+      copied.len()
+    )));
+  }
+
+  let ids: Vec<Uuid> = copied.iter().copied().collect();
+  sqlx::query("UPDATE views SET is_deleted = true, updated_at = now() WHERE id = ANY($1)")
+    .bind(&ids)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
 }
 
 /// The roots of a batch transfer, with anything already inside another root
@@ -496,24 +587,7 @@ async fn transfer_roots(
 
   // 1. Enumerate the subtrees (live rows only). Disjoint by construction after
   //    step 0, so no row can appear twice.
-  let subtree = sqlx::query_as::<_, TransferRow>(
-    r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
-        FROM views
-        WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
-        UNION ALL
-        SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
-        FROM views v JOIN subtree s ON v.parent_view_id = s.id
-        WHERE v.is_deleted = false
-      )
-      SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
-    "#,
-  )
-  .bind(&roots)
-  .bind(src_workspace_id)
-  .fetch_all(&state.db)
-  .await?;
+  let subtree = live_subtree(&state.db, &roots, src_workspace_id).await?;
   let subtree_view_ids: std::collections::HashSet<Uuid> = subtree.iter().map(|r| r.id).collect();
 
   // A root that produced no row is deleted, or in another workspace, or made up.
@@ -771,21 +845,7 @@ async fn transfer_roots(
   if request.remove_source {
     // Inside the SAME transaction as the destination tree above: that is what
     // makes a move a move rather than a copy followed by a hopeful delete.
-    sqlx::query(
-      r#"
-        WITH RECURSIVE subtree AS (
-          SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
-          UNION ALL
-          SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-        )
-        UPDATE views SET is_deleted = true, updated_at = now()
-        WHERE id IN (SELECT id FROM subtree)
-      "#,
-    )
-    .bind(&roots)
-    .bind(src_workspace_id)
-    .execute(&mut *tx)
-    .await?;
+    remove_moved_source(&mut tx, src_workspace_id, &roots, &subtree_view_ids).await?;
   }
 
   tx.commit().await?;

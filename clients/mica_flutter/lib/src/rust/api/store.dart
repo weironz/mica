@@ -52,7 +52,10 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// NOT `#[frb(sync)]`, same reason as `search_local`: this runs on every page
   /// open, and the panel is explicitly allowed to land a frame or two late
   /// rather than hold up the document that the user actually asked for.
-  Future<List<LocalBacklink>> backlinksLocal({required String viewId});
+  Future<List<LocalBacklink>> backlinksLocal({
+    required String workspaceId,
+    required String viewId,
+  });
 
   /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
   /// points (doc open/close) so a later corruption can be rolled back.
@@ -144,7 +147,7 @@ abstract class MicaStore implements RustOpaqueInterface {
   ///
   /// NOT `#[frb(sync)]`: it reads every view and every link row. The view has
   /// its own loading state; the frame does not.
-  Future<LocalGraph> graphLocal();
+  Future<LocalGraph> graphLocal({required String workspaceId});
 
   /// Ids of all stored documents (sorted).
   List<String> listDocs();
@@ -244,11 +247,15 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Upsert a workspace (create / rename / reorder).
   void saveWorkspace({required LocalWorkspace workspace});
 
-  /// Search this device's documents by title and body.
+  /// Search one LOCAL workspace's documents by title and body. Scoped like
+  /// the cloud's per-workspace search: this store also holds the other local
+  /// workspaces and every cloud mirror. Backlinks and the graph take the same
+  /// `workspace_id`.
   ///
   /// NOT `#[frb(sync)]`: it touches every indexed document, and the one thing a
   /// search box must never do is freeze the frame you are typing into.
   Future<List<LocalSearchHit>> searchLocal({
+    required String workspaceId,
     required String query,
     required int limit,
   });

@@ -1525,6 +1525,7 @@ fn wire__crate__api__store__MicaStore_backlinks_local_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_workspace_id = <String>::sse_decode(&mut deserializer);
       let api_view_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       move |context| {
@@ -1543,6 +1544,7 @@ fn wire__crate__api__store__MicaStore_backlinks_local_impl(
           let api_that_guard = api_that_guard.unwrap();
           let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::backlinks_local(
             &*api_that_guard,
+            api_workspace_id,
             api_view_id,
           ))?;
           Ok(output_ok)
@@ -2146,6 +2148,7 @@ fn wire__crate__api__store__MicaStore_graph_local_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_workspace_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       move |context| {
         transform_result_sse::<_, ()>((move || {
@@ -2161,8 +2164,10 @@ fn wire__crate__api__store__MicaStore_graph_local_impl(
             }
           }
           let api_that_guard = api_that_guard.unwrap();
-          let output_ok =
-            Result::<_, ()>::Ok(crate::api::store::MicaStore::graph_local(&*api_that_guard))?;
+          let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::graph_local(
+            &*api_that_guard,
+            api_workspace_id,
+          ))?;
           Ok(output_ok)
         })())
       }
@@ -3074,6 +3079,7 @@ fn wire__crate__api__store__MicaStore_search_local_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_workspace_id = <String>::sse_decode(&mut deserializer);
       let api_query = <String>::sse_decode(&mut deserializer);
       let api_limit = <u32>::sse_decode(&mut deserializer);
       deserializer.end();
@@ -3093,6 +3099,7 @@ fn wire__crate__api__store__MicaStore_search_local_impl(
           let api_that_guard = api_that_guard.unwrap();
           let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::search_local(
             &*api_that_guard,
+            api_workspace_id,
             api_query,
             api_limit,
           ))?;

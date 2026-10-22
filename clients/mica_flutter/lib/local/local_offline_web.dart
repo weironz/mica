@@ -114,14 +114,20 @@ class LocalOffline implements LocalOfflineApi {
   List<ViewData> listViews({String origin = 'local'}) => const [];
 
   @override
-  Future<List<SearchResult>> searchLocal(String query, {int limit = 50}) async =>
-      const [];
+  Future<List<SearchResult>> searchLocal(
+    String workspaceId,
+    String query, {
+    int limit = 50,
+  }) async => const [];
 
   @override
-  Future<List<Backlink>> backlinksLocal(String viewId) async => const [];
+  Future<List<Backlink>> backlinksLocal(
+    String workspaceId,
+    String viewId,
+  ) async => const [];
 
   @override
-  Future<PageGraph> graphLocal() async => PageGraph.empty;
+  Future<PageGraph> graphLocal(String workspaceId) async => PageGraph.empty;
 
   @override
   Future<int> backfillSearchIndex(int limit) async => 0;

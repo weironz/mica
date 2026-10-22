@@ -232,4 +232,27 @@ void main() {
     await h.drain();
     expect(h.c.nodes.single.text, 'one');
   });
+
+  test('typing between undo and redo is kept, not overwritten (C8)', () async {
+    final h = _Harness([_p('a', 'one')]);
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 3));
+    h.c.setFocusedText('one two', 7, 7);
+    h.c.flushPending();
+    await h.drain();
+    h.c.undo();
+    await h.drain();
+    expect(h.c.nodes.single.text, 'one');
+
+    // Type within the debounce window, then redo before it fires.
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 3));
+    h.c.setFocusedText('one three', 9, 9);
+    h.c.redo();
+    await h.drain();
+    expect(h.c.nodes.single.text, 'one three',
+        reason: 'redo overwrote text typed after the undo');
+    // And the new typing is in history: undo takes it back.
+    h.c.undo();
+    await h.drain();
+    expect(h.c.nodes.single.text, 'one');
+  });
 }

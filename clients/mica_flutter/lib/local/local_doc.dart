@@ -14,8 +14,11 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import '../src/rust/api/document.dart';
 import '../src/rust/api/store.dart';
+import '../swallowed.dart';
 import 'doc_ops.dart';
 import 'local_offline_api.dart';
 
@@ -154,8 +157,25 @@ class LocalDocBackend {
     }
     final diff = _doc.encodeDiffSince(stateVector: sv);
     if (diff.isEmpty) return; // a no-op batch writes nothing
-    _store.appendUpdate(docId: docId, update: diff);
+    if (_store.appendUpdate(docId: docId, update: diff) == 0) {
+      _healFailedAppend();
+      return;
+    }
     _maybeCompact();
+  }
+
+  /// `appendUpdate` returned 0: the store errored (busy / disk full / io) and
+  /// the FFI swallowed it, so this edit exists only in memory. Ignoring that
+  /// lost it for good — the next `compactLocal` rebuilds the base FROM DISK.
+  /// Same remedy as the cloud session's `_healPersistFailure`: write the live
+  /// doc as the base. It holds every edit so far, this one included, so a
+  /// later successful append is again a complete record. Counted under
+  /// Settings → 诊断 rather than thrown: the editor has nothing better to do
+  /// with it, and the save above is the recovery.
+  void _healFailedAppend() {
+    final n = swallowed('local_append_failed');
+    debugPrint('mica: local append failed for $docId (#$n); saved full doc');
+    _store.saveDoc(docId: docId, doc: _doc);
   }
 
   /// Bound the log without a timer: every [_compactCheckEvery] appends, check

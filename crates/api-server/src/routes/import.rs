@@ -551,7 +551,10 @@ pub async fn start_import(
             Ok(()) => job.status = ImportJobStatus::Done,
             Err(e) => {
               job.status = ImportJobStatus::Error;
-              job.error = Some(e.to_string());
+              // The client shows this string, so it gets what a response body
+              // would: a readable reason for the target folder being trashed
+              // mid-import (C2), never raw Postgres text.
+              job.error = Some(e.public_message());
             }
           }
           Some(job.clone())
@@ -1579,5 +1582,56 @@ mod import_pg {
       ["一月", "二月", "三月"],
       "siblings kept the manifest's order without the importer reading `position`"
     );
+  }
+
+  /// C2 (review 2026-10-21), on the executor itself: `start_import` checks the
+  /// target folder once and the import then runs for minutes. Trash the folder
+  /// in between and every later page used to land under it — live rows under a
+  /// deleted parent, CASCADE-deleted with the bin, their `documents` rows left
+  /// behind. Now the write itself is refused, as a conflict, and the page's
+  /// transaction takes its `documents` row down with it.
+  #[tokio::test]
+  async fn a_target_folder_trashed_mid_import_stops_the_writes() {
+    use axum::response::IntoResponse;
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let folder = Uuid::new_v4();
+    insert_folder(&db, ws, user, folder, None, "目标", None).await.unwrap();
+    // The request-time check passes …
+    crate::routes::documents::ensure_parent_accepts_children(&db, ws, folder).await.unwrap();
+    // … then someone trashes the folder while the import is still running.
+    sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
+      .bind(folder)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    let root_block_id = format!("block_{}", Uuid::new_v4().simple());
+    let payload = page_seed("正文。", "后来的页", &root_block_id);
+    let page = insert_page(
+      &db, ws, user, Uuid::new_v4(), Some(folder), "后来的页", None, &root_block_id, &payload,
+    )
+    .await
+    .expect_err("a page must not land under a folder that is in the bin");
+    assert_eq!(page.into_response().status(), axum::http::StatusCode::CONFLICT);
+    let sub = insert_folder(&db, ws, user, Uuid::new_v4(), Some(folder), "子", None)
+      .await
+      .expect_err("nor may a folder");
+    assert_eq!(sub.into_response().status(), axum::http::StatusCode::CONFLICT);
+
+    let documents: i64 = sqlx::query_scalar("SELECT count(*) FROM documents WHERE workspace_id = $1")
+      .bind(ws)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert_eq!(documents, 0, "the refused page's documents row rolled back with it");
+    let live_children: i64 = sqlx::query_scalar(
+      "SELECT count(*) FROM views WHERE parent_view_id = $1 AND is_deleted = false",
+    )
+    .bind(folder)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(live_children, 0);
   }
 }

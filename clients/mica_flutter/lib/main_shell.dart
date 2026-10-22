@@ -647,6 +647,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// it (this launch shows login, the next retries).
   Future<void> _restoreSession() async {
     if (_session != null) return;
+    // Every write below is keyed by the origin at WRITE time. A server switch
+    // (or a manual sign-in) during an await used to persist this server's
+    // token under the other's key and send it there (2026-10-21 review U2).
+    final origin = _cloudOrigin;
+    bool stale() => !mounted || _cloudOrigin != origin || _session != null;
     var token = loadPref('authToken:$_cloudOrigin');
     final userJson = loadPref('authUser:$_cloudOrigin');
     // Web keeps the access token in MEMORY only, so a fresh page never has one —
@@ -664,7 +669,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         // Empty string, not the missing token: the server reads an absent/blank
         // body field as "use the cookie".
         final recovered = await _api.refreshSession('');
-        if (!mounted) return;
+        if (stale()) return;
         _auth.persistSession(recovered);
         token = recovered.accessToken;
       } on ApiException catch (error) {
@@ -715,7 +720,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         // server reads as theft — we would burn the session we came here to
         // rescue.
         session = await _auth.refresher.ensureFresh(session) ?? session;
-        if (!mounted) return;
+        if (stale()) return;
         _auth.persistSession(session);
       } on ApiException catch (error) {
         if (error.isUnauthorized) {
@@ -733,7 +738,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // replaced it, and spending the dead one here would 401 and throw the
       // freshly-renewed sign-in away.
       final workspaces = await _api.listWorkspaces(session.accessToken);
-      if (!mounted) return;
+      if (stale()) return;
       // Land on the workspace + page open at last quit, not always the first.
       final savedWsId = loadPref('lastWorkspaceId');
       final restoredWs =
@@ -765,7 +770,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // typing before that silently rode the REST fallback with no mirror.
       _reconcileSync();
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || _cloudOrigin != origin) return; // never clear the NEW server's
       // Revoked/invalid token → drop it; desktop falls back to the local world.
       // Keyed on the status, not on the message text: sniffing for the word
       // "unauthorized" both missed 401s worded differently and would fire on a
@@ -999,10 +1004,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // showing a spinner is a worse answer than the error, because it looks
       // like it is still working.
       if (!mounted) return;
-      setState(() {
-        _tabs.remove(tab);
-        _message = error.message;
-      });
+      setState(() => _message = error.message);
+      // Through _closeTab: the user may have clicked into this tab while it
+      // loaded, and a bare remove left _activeTabIndex past the end (RangeError)
+      // and the tab's socket live (2026-10-21 review U3).
+      final i = _tabs.indexOf(tab);
+      if (i >= 0) await _closeTab(i);
     }
   }
 
@@ -2325,12 +2332,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Local-world search: straight to the on-device index.
-  ///
-  /// No session, no workspace id — a local world is one device's store, and
-  /// there is nothing to scope to.
+  /// Local-world search: straight to the on-device index, scoped to the open
+  /// local workspace — the store also holds the other local workspaces and the
+  /// cloud mirrors. Backlinks and the graph below take the same [_localWsId].
+  String get _localWsId => _localSelectedWorkspace?.id ?? 'local';
   Future<List<SearchResult>> _searchLocalWorkspace(String query) =>
-      _local.searchLocal(query);
+      _local.searchLocal(_localWsId, query);
 
   Future<List<SearchResult>> _searchWorkspace(String query) async {
     final session = _session;
@@ -2411,7 +2418,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// nothing either way, so the panel just stays hidden.
   /// The page-link graph of the open workspace, from whichever world it is.
   Future<PageGraph> _loadGraph() async {
-    if (_activeIsLocal) return _local.graphLocal();
+    if (_activeIsLocal) return _local.graphLocal(_localWsId);
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return PageGraph.empty;
@@ -2419,7 +2426,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<List<Backlink>> _loadBacklinks(String viewId) async {
-    if (_activeIsLocal) return _local.backlinksLocal(viewId);
+    if (_activeIsLocal) return _local.backlinksLocal(_localWsId, viewId);
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return const [];
@@ -3018,6 +3025,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // _reconcileSync will dispose this session right after, and a still
       // in-flight push would be dropped (= lost content). Short timeout so a
       // slow/offline server can't wedge the page switch.
+      // The tab this load is FOR. The user can switch tabs or click another page
+      // while it is in flight; writing the result to whichever tab is active at
+      // the end put this page into the wrong one (2026-10-21 review U1).
+      final tab = _activeTab;
+      final seq = ++tab.navSeq;
       await _cloudSession?.drainOutbox(timeout: const Duration(seconds: 4));
       final session = _requireSession();
       final workspace = _requireWorkspace();
@@ -3051,14 +3063,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         'blocks=${(bootstrap?.snapshot.payload['blocks'] as List?)?.length ?? -1} '
         'source=${reachedServer ? 'server' : 'mirror'}',
       );
-      final wasShowingThisView =
-          _selectedView?.id == view.id && _selectedBootstrap != null;
+      if (!mounted || !_tabs.contains(tab) || tab.navSeq != seq) return;
+      final wasShowingThisView = tab.view?.id == view.id && tab.bootstrap != null;
       // Per-workspace last view (AppFlowy model): switching back to a workspace
       // reopens the page you left there.
       final wsId = _selectedWorkspace?.id;
       if (wsId != null) savePref('lastViewId:$wsId', view.id);
       setState(() {
-        _selectedView = view;
+        tab.view = view;
         // Never blank a page that is already on screen. `bootstrap` is null
         // when the server was unreachable AND the doc has no on-device mirror;
         // for a doc we are already rendering, keeping what we have beats
@@ -3068,7 +3080,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           haveNewBootstrap: bootstrap != null,
           wasShowingSameView: wasShowingThisView,
         )) {
-          _selectedBootstrap = bootstrap;
+          tab.bootstrap = bootstrap;
         }
       });
       // Reaching the server means we're back online — restore the real nav if we
@@ -3503,7 +3515,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     for (final v in _local.listViews()) {
       if (v.id == viewId) return v.workspaceId;
     }
-    return _localSelectedWorkspace?.id ?? 'local';
+    return _localWsId;
   }
 
   DocumentBootstrap _localBootstrapFrom(

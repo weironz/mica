@@ -160,7 +160,9 @@ ci part="all":
 
 [doc("Static analysis on both sides")]
 check:
-    cargo clippy --workspace 2>/dev/null || cargo build --workspace
+    # Was `clippy 2>/dev/null || cargo build`: a clippy failure got swallowed
+    # and a plain build that passed made the recipe green. Same flags as CI now.
+    cargo clippy --workspace --all-targets -- -D warnings
     cd clients/mica_flutter && {{flutter}} analyze lib
 
 # 单文件行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。

@@ -432,13 +432,16 @@ impl MicaStore {
 
     // ── page tree (views) — P2-M3 ────────────────────────────────────────────
 
-    /// Search this device's documents by title and body.
+    /// Search one LOCAL workspace's documents by title and body. Scoped like
+    /// the cloud's per-workspace search: this store also holds the other local
+    /// workspaces and every cloud mirror. Backlinks and the graph take the same
+    /// `workspace_id`.
     ///
     /// NOT `#[frb(sync)]`: it touches every indexed document, and the one thing a
     /// search box must never do is freeze the frame you are typing into.
-    pub fn search_local(&self, query: String, limit: u32) -> Vec<LocalSearchHit> {
+    pub fn search_local(&self, workspace_id: String, query: String, limit: u32) -> Vec<LocalSearchHit> {
         self.store()
-            .search_local(&query, limit as usize)
+            .search_local(&workspace_id, &query, limit as usize)
             .unwrap_or_default()
             .into_iter()
             .map(Into::into)
@@ -450,9 +453,9 @@ impl MicaStore {
     /// NOT `#[frb(sync)]`, same reason as `search_local`: this runs on every page
     /// open, and the panel is explicitly allowed to land a frame or two late
     /// rather than hold up the document that the user actually asked for.
-    pub fn backlinks_local(&self, view_id: String) -> Vec<LocalBacklink> {
+    pub fn backlinks_local(&self, workspace_id: String, view_id: String) -> Vec<LocalBacklink> {
         self.store()
-            .backlinks_local(&view_id)
+            .backlinks_local(&workspace_id, &view_id)
             .unwrap_or_default()
             .into_iter()
             .map(Into::into)
@@ -463,9 +466,9 @@ impl MicaStore {
     ///
     /// NOT `#[frb(sync)]`: it reads every view and every link row. The view has
     /// its own loading state; the frame does not.
-    pub fn graph_local(&self) -> LocalGraph {
+    pub fn graph_local(&self, workspace_id: String) -> LocalGraph {
         self.store()
-            .graph_local()
+            .graph_local(&workspace_id)
             .map(Into::into)
             .unwrap_or(LocalGraph {
                 nodes: Vec::new(),
@@ -731,15 +734,21 @@ impl MicaStore {
 
     /// `view_id` plus every descendant, in `list_views` order.
     ///
-    /// The recursive walk the three subtree operations below share, and the
-    /// local mirror of the server's recursive-CTE cascade.
-    fn subtree_ids(&self, view_id: &str) -> Vec<String> {
+    /// The recursive walk every subtree operation below shares (trash, restore,
+    /// purge, clone), and the local mirror of the server's recursive-CTE
+    /// cascade. `live_only` stops at trashed nodes like the server's
+    /// `is_deleted = false` CTE: a trashed node is left out, and so is
+    /// everything under it.
+    fn subtree_ids(&self, view_id: &str, live_only: bool) -> Vec<String> {
         let all = self.list_views("local".to_string());
         let mut ids: Vec<String> = Vec::new();
         let mut queue = vec![view_id.to_string()];
         while let Some(id) = queue.pop() {
             if ids.iter().any(|k| k == &id) {
                 continue; // a cycle must not wedge the walk
+            }
+            if live_only && !all.iter().any(|v| v.id == id && !v.trashed) {
+                continue;
             }
             queue.extend(
                 all.iter()
@@ -762,7 +771,7 @@ impl MicaStore {
     /// the children survive as orphans pointing at a trashed parent.
     #[frb(sync)]
     pub fn trash_view_subtree(&self, view_id: String) -> Vec<String> {
-        let ids = self.subtree_ids(&view_id);
+        let ids = self.subtree_ids(&view_id, false);
         self.set_trashed(&ids, true);
         ids
     }
@@ -774,7 +783,7 @@ impl MicaStore {
     /// invisible with no way back. Mirrors the server's `restore_view`.
     #[frb(sync)]
     pub fn restore_view_subtree(&self, view_id: String) -> Vec<String> {
-        let ids = self.subtree_ids(&view_id);
+        let ids = self.subtree_ids(&view_id, false);
         self.set_trashed(&ids, false);
 
         let all = self.list_views("local".to_string());
@@ -799,7 +808,7 @@ impl MicaStore {
     /// Returns the affected ids. There is no undo past this point.
     #[frb(sync)]
     pub fn purge_view_subtree(&self, view_id: String) -> Vec<String> {
-        let ids = self.subtree_ids(&view_id);
+        let ids = self.subtree_ids(&view_id, false);
         let all = self.list_views("local".to_string());
         for id in &ids {
             if let Some(v) = all.iter().find(|v| &v.id == id) {
@@ -827,24 +836,21 @@ impl MicaStore {
     /// Dart copy outright. Mirrors `export_folder_zip` above, the composite
     /// that was already de-duplicated this way.
     ///
-    /// Returns `None` when the view is gone.
+    /// Returns `None` when the view is gone or in the recycle bin.
     #[frb(sync)]
     pub fn clone_view(&self, view_id: String, root_name: String) -> Option<CloneViewResult> {
+        // The shared walk, live nodes only. It had its own copy of the walk,
+        // without the visited set — a parent cycle looped here (on the UI
+        // thread) until OOM — and without a trash filter, so a binned page
+        // inside the subtree came back as a live one in the copy. The server's
+        // copy enumerates live rows only; a trashed node stays behind together
+        // with everything under it.
+        let ids = self.subtree_ids(&view_id, true);
         let all = self.list_views("local".to_string());
-        let root: &LocalView = all.iter().find(|v| v.id == view_id)?;
-
-        // Subtree = root + every descendant. Walked by REFERENCE: `LocalView`
-        // is an frb wire struct with no `Clone`, and the only copies we
-        // actually want are the new rows written at the end.
-        let mut subtree: Vec<&LocalView> = Vec::new();
-        let mut queue: Vec<&LocalView> = vec![root];
-        while let Some(v) = queue.pop() {
-            queue.extend(
-                all.iter()
-                    .filter(|c| c.parent_id.as_deref() == Some(v.id.as_str())),
-            );
-            subtree.push(v);
-        }
+        let root: &LocalView = all.iter().find(|v| v.id == view_id && !v.trashed)?;
+        // By REFERENCE: `LocalView` is an frb wire struct with no `Clone`, and
+        // the only copies we actually want are the new rows written at the end.
+        let subtree: Vec<&LocalView> = all.iter().filter(|v| ids.contains(&v.id)).collect();
 
         // Dedup against LIVE siblings under the same parent; position comes
         // from the shared rule so a clone lands exactly where a newly created
@@ -1299,6 +1305,59 @@ mod clone_view_tests {
         );
     }
 
+    /// Review 2026-10-21 C5: clone_view walked the subtree with no visited set
+    /// — the walk its siblings share has one. On a parent cycle it never
+    /// finished: the queue grew until OOM, on the UI thread (`frb(sync)`).
+    /// Run on a worker with a deadline, so the failure is a red test rather
+    /// than a hung suite.
+    #[test]
+    fn cloning_inside_a_parent_cycle_terminates() {
+        let (store, _dir) = tmp_store();
+        // Written past the folders-only check, like the trash test above: such
+        // data exists (older builds, sync peers) whatever new writes refuse.
+        store.store().save_view(&folder("a", Some("b"), "A", "0000000010").into()).unwrap();
+        store.store().save_view(&folder("b", Some("a"), "B", "0000000020").into()).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let out = store.clone_view("a".into(), "A".into()).map(|o| o.docs);
+            let _ = tx.send((out, store.list_views("local".to_string()).len()));
+        });
+        let (docs, rows) = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("clone_view did not terminate on a parent cycle");
+        assert_eq!(docs, Some(0), "both nodes walked once (neither had a document)");
+        assert_eq!(rows, 4, "two originals + one copy of each");
+    }
+
+    /// C5: a page in the recycle bin inside the cloned subtree came back as a
+    /// LIVE page in the copy (`trashed: false`). The server's copy enumerates
+    /// live rows only; a trashed node stays behind with everything under it.
+    #[test]
+    fn cloning_leaves_trashed_descendants_behind() {
+        let (store, _dir) = tmp_store();
+        store.save_view(folder("root", None, "Parent", "0000000010"));
+        store.save_view(view("live", Some("root"), "Live", "0000000020"));
+        store.save_view(folder("binned", Some("root"), "Binned", "0000000030"));
+        store.save_view(view("under", Some("binned"), "Under binned", "0000000040"));
+        store.trash_view_subtree("binned".into());
+
+        let out = store.clone_view("root".into(), "Parent".into()).unwrap();
+        assert_eq!(out.docs, 0);
+        let all = store.list_views("local".to_string());
+        let names: Vec<&str> = all
+            .iter()
+            .filter(|v| !["root", "live", "binned", "under"].contains(&v.id.as_str()))
+            .map(|v| v.name.as_str())
+            .collect();
+        assert_eq!(names.len(), 2, "copied: {names:?}");
+        assert!(names.contains(&"Live"), "{names:?}");
+        assert!(!names.contains(&"Binned") && !names.contains(&"Under binned"), "{names:?}");
+        assert!(all.iter().filter(|v| v.trashed).count() == 2, "the originals stay in the bin");
+
+        // A trashed root is not cloneable at all — same as the server.
+        assert!(store.clone_view("binned".into(), "Binned".into()).is_none());
+    }
+
     #[test]
     fn trashing_a_folder_takes_its_whole_subtree() {
         let (store, _dir) = tmp_store();
@@ -1446,7 +1505,6 @@ mod clone_view_tests {
         );
     }
 
-    #[test]
     /// Folders are the only containers — the same rule the server enforces in
     /// `ensure_parent_accepts_children`. It used to live only up there, so a
     /// page could sit under a page on device and the workspace failed as a

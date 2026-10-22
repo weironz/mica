@@ -1007,7 +1007,7 @@ pub(crate) fn mime_to_ext(mime: &str) -> Option<&'static str> {
   }
 }
 
-fn ext_to_mime(ext: &str) -> Option<&'static str> {
+pub(crate) fn ext_to_mime(ext: &str) -> Option<&'static str> {
   match ext {
     "png" => Some("image/png"),
     "jpg" | "jpeg" => Some("image/jpeg"),
@@ -1047,7 +1047,7 @@ fn url_file_name(url: &str, ext: Option<&str>) -> String {
 /// name/url can't be trusted for it. A url whose last segment carries no
 /// extension otherwise lands as `application/octet-stream`, which browsers
 /// refuse to render as an image.
-fn sniff_image_ext(bytes: &[u8]) -> Option<&'static str> {
+pub(crate) fn sniff_image_ext(bytes: &[u8]) -> Option<&'static str> {
   match bytes {
     [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, ..] => Some("png"),
     [0xff, 0xd8, 0xff, ..] => Some("jpg"),

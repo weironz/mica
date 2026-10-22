@@ -1,0 +1,9 @@
+# `cargo audit` exceptions. Each one says why it does not apply HERE.
+[advisories]
+ignore = [
+  # rmcp DNS rebinding — only the Streamable HTTP *server* transport is
+  # affected. mica-mcp-server speaks stdio only (crates/mcp-server/src/lib.rs
+  # `transport::stdio`), and the fix needs rmcp 1.x, a major upgrade.
+  # Revisit if an HTTP transport is ever enabled.
+  "RUSTSEC-2026-0189",
+]
