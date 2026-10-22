@@ -5,6 +5,7 @@
 
 pub mod export_tree;
 pub mod import;
+pub mod net;
 pub mod normalize;
 pub mod notion;
 pub mod order;

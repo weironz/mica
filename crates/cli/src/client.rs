@@ -514,16 +514,56 @@ impl Client {
     Ok(Self::ok(resp)?.json()?)
   }
 
-  /// Download a URL's bytes over THIS machine's network (no auth). The whole
-  /// point of CLI re-hosting: the client reaches hosts (AppFlowy, imgur) that a
+  /// Download an image over THIS machine's network (no auth). The whole point
+  /// of CLI re-hosting: the client reaches hosts (AppFlowy, imgur) that a
   /// CN-hosted server 403s.
+  ///
+  /// The URL comes from a document, i.e. from any collaborator, and the bytes
+  /// go back into the workspace — so without limits this is an SSRF on the
+  /// operator's own network: plant `http://192.168.1.1/…` as an image, wait
+  /// for someone to run the sweep, read the router's admin page in the
+  /// workspace. Hence the same rules the server's `import-url` follows: only
+  /// public addresses, resolved once and pinned (no DNS rebinding), redirects
+  /// followed by hand so every hop is checked, an image or nothing, and a size
+  /// cap matching what `rehost-image` accepts.
   pub fn download_bytes(&self, url: &str) -> Result<Vec<u8>> {
-    let resp = self
-      .http
-      .get(url)
-      .send()
-      .with_context(|| format!("downloading {url}"))?;
-    Ok(Self::ok(resp)?.bytes()?.to_vec())
+    const MAX_HOPS: usize = 5;
+    let mut current = reqwest::Url::parse(url).with_context(|| format!("bad url {url}"))?;
+    for _ in 0..=MAX_HOPS {
+      let resp = fetch_public(&current)?;
+      if resp.status().is_redirection() {
+        let location = resp
+          .headers()
+          .get(reqwest::header::LOCATION)
+          .and_then(|v| v.to_str().ok())
+          .with_context(|| format!("{current} redirected without a Location"))?;
+        current = current
+          .join(location)
+          .with_context(|| format!("{current} redirected to a bad url"))?;
+        continue;
+      }
+      let resp = Self::ok(resp)?;
+      let mime = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(';').next().unwrap_or(v).trim().to_ascii_lowercase())
+        .unwrap_or_default();
+      use std::io::Read as _;
+      let mut bytes = Vec::new();
+      resp
+        .take(MAX_IMAGE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("downloading {current}"))?;
+      if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        bail!("{current} is larger than {} MiB", MAX_IMAGE_BYTES >> 20);
+      }
+      if !mime.starts_with("image/") && !looks_like_raster_image(&bytes) {
+        bail!("{current} is not an image (content-type {mime:?})");
+      }
+      return Ok(bytes);
+    }
+    bail!("{url}: more than {MAX_HOPS} redirects")
   }
 
   /// Store already-downloaded image [bytes] into Mica and repoint image
@@ -600,5 +640,88 @@ impl Client {
       .send()?;
     Self::ok(resp)?;
     Ok(())
+  }
+}
+
+/// The `rehost-image` endpoint's body limit.
+const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// One request to `url`, only if its host resolves exclusively to public
+/// addresses — and connecting to exactly those (`resolve_to_addrs`), so a
+/// second DNS answer cannot swap in a private one. Redirects are not followed;
+/// the caller does that, through here again.
+fn fetch_public(url: &reqwest::Url) -> Result<reqwest::blocking::Response> {
+  if !matches!(url.scheme(), "http" | "https") {
+    bail!("refusing {url}: only http(s) urls are fetched");
+  }
+  let host = url.host_str().with_context(|| format!("{url} has no host"))?;
+  let addrs = url
+    .socket_addrs(|| url.port_or_known_default())
+    .with_context(|| format!("resolving {host}"))?;
+  if addrs.is_empty()
+    || addrs
+      .iter()
+      .any(|a| mica_interchange::net::is_blocked_addr(a.ip()))
+  {
+    bail!("refusing {url}: it resolves to a private or loopback address");
+  }
+  reqwest::blocking::Client::builder()
+    .user_agent(concat!("mica-cli/", env!("CARGO_PKG_VERSION")))
+    .redirect(reqwest::redirect::Policy::none())
+    .resolve_to_addrs(host, &addrs)
+    .connect_timeout(std::time::Duration::from_secs(10))
+    .timeout(std::time::Duration::from_secs(120))
+    .build()
+    .context("building HTTP client")?
+    .get(url.clone())
+    .send()
+    .with_context(|| format!("downloading {url}"))
+}
+
+/// For hosts that serve images as `application/octet-stream` (or no type at
+/// all): the magic bytes of the raster formats a document image can be.
+/// Deliberately not SVG — that is markup, and an internal page could pass as it.
+fn looks_like_raster_image(b: &[u8]) -> bool {
+  b.starts_with(b"\x89PNG\r\n\x1a\n")
+    || b.starts_with(&[0xFF, 0xD8, 0xFF])
+    || b.starts_with(b"GIF87a")
+    || b.starts_with(b"GIF89a")
+    || (b.len() >= 12 && &b[..4] == b"RIFF" && &b[8..12] == b"WEBP")
+    // BMP: "BM" alone is too weak a signature; its reserved words are zero.
+    || (b.len() >= 14 && b.starts_with(b"BM") && b[6..10] == [0, 0, 0, 0])
+    || b.starts_with(&[0, 0, 1, 0])
+    || (b.len() >= 12 && &b[4..8] == b"ftyp" && matches!(&b[8..12], b"avif" | b"avis" | b"heic" | b"heix" | b"mif1"))
+}
+
+#[cfg(test)]
+mod download_tests {
+  use super::*;
+
+  /// Issue #32: a document image pointing into the operator's LAN (or at the
+  /// cloud metadata address) is refused before any request is made.
+  #[test]
+  fn private_targets_are_refused_without_a_request() {
+    for url in [
+      "http://127.0.0.1:9/x.png",
+      "http://192.168.1.1/admin",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://[::1]/x.png",
+      "http://localhost:9/x.png",
+      "file:///etc/passwd",
+    ] {
+      let err = fetch_public(&reqwest::Url::parse(url).unwrap()).unwrap_err();
+      let msg = format!("{err:#}");
+      assert!(msg.contains("refusing"), "{url}: {msg}");
+    }
+  }
+
+  #[test]
+  fn raster_sniff_accepts_images_and_rejects_markup() {
+    assert!(looks_like_raster_image(b"\x89PNG\r\n\x1a\n...."));
+    assert!(looks_like_raster_image(&[0xFF, 0xD8, 0xFF, 0xE0]));
+    assert!(looks_like_raster_image(b"RIFF\0\0\0\0WEBPVP8 "));
+    assert!(!looks_like_raster_image(b"<html><body>router admin</body></html>"));
+    assert!(!looks_like_raster_image(b"{\"AccessKeyId\":\"x\"}"));
+    assert!(!looks_like_raster_image(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
   }
 }
