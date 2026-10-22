@@ -66,6 +66,10 @@ class DocTab implements TabSockets {
   /// or deleted out from under an open tab.
   DocumentBootstrap? bootstrap;
 
+  /// Bumped by every page load started in this tab; a load whose number is no
+  /// longer current was overtaken by a newer one and must not write its result.
+  int navSeq = 0;
+
   /// Which workspace this tab's page belongs to.
   ///
   /// Tabs outlive a workspace switch — switching clears only the ACTIVE tab, so
