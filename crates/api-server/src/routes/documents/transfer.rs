@@ -12,6 +12,7 @@ use mica_app_core::{
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
+use futures_util::{StreamExt, TryStreamExt};
 use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
@@ -590,6 +591,83 @@ pub async fn batch_transfer_views(
 /// blob copies in phase 3 are deliberately outside it (see the phase comment),
 /// so a failure after them can leave orphan BYTES in the destination, which its
 /// GC reclaims. That is the same guarantee a single transfer has always had.
+/// How many documents / blobs a transfer works on at once.
+const TRANSFER_CONCURRENCY: usize = 8;
+
+/// Copy one source file into the destination workspace; `(src, dest)` ids, or
+/// `None` for a reference to a file that no longer exists.
+async fn copy_blob(
+  state: &AppState,
+  storage: &mica_infra::S3Config,
+  http: &reqwest::Client,
+  user_id: Uuid,
+  src_workspace_id: Uuid,
+  dest_workspace_id: Uuid,
+  src_file_id: Uuid,
+) -> ApiResult<Option<(Uuid, Uuid)>> {
+  let Some(src_file) = store::fetch_file(&state.db, src_workspace_id, src_file_id).await? else {
+    return Ok(None); // dangling reference already; nothing to copy
+  };
+  let suffix = src_file
+    .object_key
+    .strip_prefix(&format!("workspaces/{src_workspace_id}/"))
+    .ok_or_else(|| ApiError::Internal("source object_key not under its workspace".to_string()))?;
+  let dest_key = format!("workspaces/{dest_workspace_id}/{suffix}");
+
+  let bytes = http
+    .get(storage.presign_get_server(&src_file.object_key))
+    .send()
+    .await
+    .map_err(|e| ApiError::Internal(format!("blob fetch failed: {}", e.without_url())))?
+    .error_for_status()
+    .map_err(|e| ApiError::Internal(format!("blob fetch returned: {}", e.without_url())))?
+    .bytes()
+    .await
+    .map_err(|e| ApiError::Internal(format!("blob read failed: {}", e.without_url())))?;
+  // Commit this marker (and clear any GC mark) before PUT: a crash after
+  // writing bytes must leave a discoverable key for the orphan sweep, and
+  // neither sweep may take the key while the PUT runs outside a transaction.
+  store::record_pending_file_upload(
+    &state.db,
+    dest_workspace_id,
+    &dest_key,
+    storage.presign_ttl_seconds,
+  )
+  .await?;
+  let upload = storage.presign_put_server(&dest_key);
+  let checksum = {
+    use base64::Engine as _;
+    use sha2::{Digest, Sha256};
+    base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&bytes))
+  };
+  let put = http
+    .put(&upload.url)
+    .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&src_file.mime_type))
+    .header("x-amz-checksum-sha256", checksum)
+    .body(bytes.to_vec())
+    .send()
+    .await
+    .map_err(|e| ApiError::Internal(format!("blob upload failed: {}", e.without_url())))?;
+  if !put.status().is_success() {
+    return Err(ApiError::Internal(format!(
+      "blob upload returned {}",
+      put.status()
+    )));
+  }
+
+  let dest_file = store::register_put_file(
+    &state.db,
+    dest_workspace_id,
+    user_id,
+    &dest_key,
+    &src_file.original_name,
+    &src_file.mime_type,
+    src_file.byte_size,
+  )
+  .await?;
+  Ok(Some((src_file_id, dest_file.id)))
+}
+
 async fn transfer_roots(
   state: &AppState,
   user_id: Uuid,
@@ -643,15 +721,24 @@ async fn transfer_roots(
     std::collections::HashMap::new();
   let mut referenced_files: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
   let mut dangling_links: Vec<DanglingLink> = Vec::new();
-  let mut documents = 0usize;
-  let mut folders = 0usize;
-  for row in &subtree {
-    if row.object_type != "document" {
-      folders += 1;
-      continue;
-    }
-    documents += 1;
-    let Some(payload) = store::current_payload(&state.db, row.object_id).await? else {
+  let doc_ids: Vec<Uuid> = subtree
+    .iter()
+    .filter(|r| r.object_type == "document")
+    .map(|r| r.object_id)
+    .collect();
+  let documents = doc_ids.len();
+  let folders = subtree.len() - documents;
+  // Loaded TRANSFER_CONCURRENCY at a time: one at a time made a 500-page
+  // subtree 500 sequential round trips before anything else could start.
+  let db = &state.db;
+  let loaded: Vec<Option<DocumentSnapshotPayload>> = futures_util::stream::iter(doc_ids)
+    .map(|id| store::current_payload(db, id))
+    .buffered(TRANSFER_CONCURRENCY)
+    .try_collect()
+    .await?;
+  let doc_rows = subtree.iter().filter(|r| r.object_type == "document");
+  for (row, payload) in doc_rows.zip(loaded) {
+    let Some(payload) = payload else {
       continue;
     };
     for block in &payload.blocks {
@@ -724,70 +811,20 @@ async fn transfer_roots(
     .as_ref()
     .ok_or_else(|| ApiError::Internal("file storage is not configured".to_string()))?;
   let http = reqwest::Client::new();
-  let mut file_map: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
-  for &src_file_id in &referenced_files {
-    let Some(src_file) = store::fetch_file(&state.db, src_workspace_id, src_file_id).await? else {
-      continue; // dangling reference already; nothing to copy
-    };
-    let suffix = src_file
-      .object_key
-      .strip_prefix(&format!("workspaces/{src_workspace_id}/"))
-      .ok_or_else(|| ApiError::Internal("source object_key not under its workspace".to_string()))?;
-    let dest_key = format!("workspaces/{dest_workspace_id}/{suffix}");
-
-    let bytes = http
-      .get(storage.presign_get_server(&src_file.object_key))
-      .send()
-      .await
-      .map_err(|e| ApiError::Internal(format!("blob fetch failed: {}", e.without_url())))?
-      .error_for_status()
-      .map_err(|e| ApiError::Internal(format!("blob fetch returned: {}", e.without_url())))?
-      .bytes()
-      .await
-      .map_err(|e| ApiError::Internal(format!("blob read failed: {}", e.without_url())))?;
-    // Commit this marker (and clear any GC mark) before PUT: a crash after
-    // writing bytes must leave a discoverable key for the orphan sweep, and
-    // neither sweep may take the key while the PUT runs outside a transaction.
-    store::record_pending_file_upload(
-      &state.db,
-      dest_workspace_id,
-      &dest_key,
-      storage.presign_ttl_seconds,
-    )
-    .await?;
-    let upload = storage.presign_put_server(&dest_key);
-    let checksum = {
-      use base64::Engine as _;
-      use sha2::{Digest, Sha256};
-      base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&bytes))
-    };
-    let put = http
-      .put(&upload.url)
-      .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&src_file.mime_type))
-      .header("x-amz-checksum-sha256", checksum)
-      .body(bytes.to_vec())
-      .send()
-      .await
-      .map_err(|e| ApiError::Internal(format!("blob upload failed: {}", e.without_url())))?;
-    if !put.status().is_success() {
-      return Err(ApiError::Internal(format!(
-        "blob upload returned {}",
-        put.status()
-      )));
-    }
-
-    let dest_file = store::register_put_file(
-      &state.db,
-      dest_workspace_id,
-      user_id,
-      &dest_key,
-      &src_file.original_name,
-      &src_file.mime_type,
-      src_file.byte_size,
-    )
-    .await?;
-    file_map.insert(src_file_id, dest_file.id);
-  }
+  // Each blob is a GET and a PUT against object storage; done one by one, a
+  // subtree with a few hundred images took minutes. Bounded, so a large move
+  // cannot open hundreds of connections at once. The first failure fails the
+  // move (the rest are dropped mid-flight) — still before the transaction, so
+  // at worst orphan bytes in the destination, as before.
+  let file_map: std::collections::HashMap<Uuid, Uuid> =
+    futures_util::stream::iter(referenced_files.iter().copied())
+      .map(|src_file_id| {
+        copy_blob(state, storage, &http, user_id, src_workspace_id, dest_workspace_id, src_file_id)
+      })
+      .buffer_unordered(TRANSFER_CONCURRENCY)
+      .try_filter_map(|copied| async move { Ok(copied) })
+      .try_collect()
+      .await?;
 
   // 4. One transaction: build the destination tree (new ids), then soft-delete
   //    the source subtree for a move.
