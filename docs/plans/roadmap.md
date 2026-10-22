@@ -16,10 +16,10 @@
 >    文档说「没有」而实际有了,什么都不会响。所以它们要定期对着代码核,而不是靠记性。
 > 3. **核实结论写进条目本身**(日期 + 依据文件),下一个人才知道这条是新鲜的还是祖传的。
 
-> **2026-10-21 第三轮全项目评审的修复清单**在
-> [`../reviews/code-optimization/OPTIMIZATION_PLAN_ROUND4.md`](../reviews/code-optimization/OPTIMIZATION_PLAN_ROUND4.md)
-> (P1×8,分 6 个阶段)。条目太多不逐条搬进这里;做完一个阶段就在那份计划的「实施记录」里落一笔,
-> 全部完成后把这条指针整条搬去存档。其中需要拍板的 4 项列在该计划末尾。
+> **2026-10-21 第三轮全项目评审的剩余条目在 GitHub issue 里跟踪**:milestone「评审 2026-10-21 修复」
+> (#29–#90,标签：优先级 / 类型 / 模块)。不逐条搬进这里，免得两处各记一份;计划与已完成记录见
+> [`../reviews/code-optimization/OPTIMIZATION_PLAN_ROUND4.md`](../reviews/code-optimization/OPTIMIZATION_PLAN_ROUND4.md)。
+> milestone 关完后把这条指针整条搬去存档。
 
 ## 可靠性与同步
 
