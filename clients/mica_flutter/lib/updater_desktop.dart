@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 
 import 'l10n/locale_controller.dart';
 import 'updater_common.dart';
+import 'window_setup_desktop.dart' show flushBeforeExit;
 
 export 'updater_common.dart';
 
@@ -140,6 +141,8 @@ Future<void> downloadAndApplyUpdate(
   // prompt beats a silent rollback; the log is there to read when someone
   // reports "it didn't update".
   final logPath = '${dir.path}\\inno-install.log';
+  // Persist edits BEFORE Setup starts its countdown on our PID.
+  await flushBeforeExit();
   await Process.start(
     setup.path,
     setupArgs(logPath: logPath, waitPid: pid),

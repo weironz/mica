@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 import 'package:flutter/gestures.dart'
     show
         PointerDeviceKind,
@@ -113,7 +113,12 @@ part 'main_tree_helpers.dart';
 /// Dev convenience: when true, the app signs in automatically on startup so you
 /// don't have to log in on every reload. Turn it off for a real login screen:
 /// `flutter run --dart-define=MICA_DEV_AUTOLOGIN=false`.
-const bool kDevAutoLogin = bool.fromEnvironment(
+///
+/// Never in a release build: no release recipe passes the define, so every
+/// shipped app used to try demo/password123 — and then REGISTER it — against
+/// any localhost backend, held back only by the server's weak-password list
+/// (2026-10-21 review).
+const bool kDevAutoLogin = !kReleaseMode && bool.fromEnvironment(
   'MICA_DEV_AUTOLOGIN',
   defaultValue: true,
 );
