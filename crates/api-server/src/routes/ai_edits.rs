@@ -73,8 +73,21 @@ pub async fn preview(
   Json(payload): Json<PreviewRequest>,
 ) -> ApiResult<Json<PreviewResponse>> {
   existing_user_id_from_headers(&state, &headers).await?;
-  Ok(Json(build_preview(payload)?))
+  if payload.response.len() > MAX_RESPONSE_BYTES {
+    return Err(invalid("AI edit response is too large to preview"));
+  }
+  // Parsing and re-exporting Markdown is CPU work proportional to the input,
+  // and some inline constructs are worse than linear; on a tokio worker it
+  // stalls every socket scheduled there for as long as it takes.
+  let preview = tokio::task::spawn_blocking(move || build_preview(payload))
+    .await
+    .map_err(|error| ApiError::Internal(error.to_string()))??;
+  Ok(Json(preview))
 }
+
+/// Far above any real model reply (a 32k-token answer is ~130 KB), far below
+/// the 2 MB request body that bounded it before.
+const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
 fn invalid(message: &str) -> ApiError {
   ApiError::BadRequest(message.to_string())
