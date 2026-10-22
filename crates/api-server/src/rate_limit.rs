@@ -170,7 +170,7 @@ pub struct AuthGuard {
 
 impl AuthGuard {
     pub fn from_env() -> Arc<Self> {
-        // Per-IP: burst then ~`per_min` sustained. Argon2: ~cores concurrent.
+        // Per-IP: burst then ~`per_min` sustained. Argon2: ~cores/2 concurrent.
         let burst = env_parse("AUTH_RATE_BURST").unwrap_or(10);
         let per_min = env_parse::<f64>("AUTH_RATE_PER_MIN").unwrap_or(5.0);
         let permits = env_parse("AUTH_ARGON2_MAX_CONCURRENCY")
@@ -183,10 +183,13 @@ impl AuthGuard {
     }
 }
 
+/// Half the cores: the hashes now run on the blocking pool, which would
+/// otherwise let them take every core and starve the async workers anyway.
 fn default_argon2_permits() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
+        .map(|n| n.get() / 2)
+        .unwrap_or(2)
+        .max(1)
 }
 
 fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {

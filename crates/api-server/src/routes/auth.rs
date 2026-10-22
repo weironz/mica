@@ -153,7 +153,7 @@ pub async fn register(
   // account is that the password is made out of its own name.
   validate_password(&payload.password, &[&email, &display_name])?;
 
-  let password_hash = hash_password(&payload.password)?;
+  let password_hash = hash_password(&payload.password).await?;
 
   // One statement, so "is this the first account?" cannot be answered stale —
   // and `is_admin` is computed from the SAME snapshot as the guard, so the
@@ -251,11 +251,11 @@ pub async fn login(
     // unknown address immediately made "is this email registered?" a timing
     // question any caller could ask — the oracle `forgot` and `register` are
     // careful not to be.
-    let _ = verify_password(&payload.password, dummy_password_hash());
+    verify_against_dummy(&payload.password).await;
     return Err(ApiError::Unauthorized);
   };
 
-  verify_password(&payload.password, &user.password_hash)?;
+  verify_password(&payload.password, &user.password_hash).await?;
   // AFTER the password check, on purpose: answering "confirm your email" to a
   // wrong password would tell a stranger the address is registered. Reaching this
   // line means the caller already knows the credentials.
@@ -402,12 +402,12 @@ pub async fn change_password(
   .await?
   .ok_or(ApiError::Unauthorized)?;
 
-  verify_password(&payload.current_password, &user.password_hash)?;
+  verify_password(&payload.current_password, &user.password_hash).await?;
   // AFTER the current password is proven, and with this user's own identifiers:
   // the row had to be fetched anyway, and checking first would let an
   // unauthenticated caller probe which passwords the policy accepts.
   validate_password(&payload.new_password, &[&user.email, &user.display_name])?;
-  let password_hash = hash_password(&payload.new_password)?;
+  let password_hash = hash_password(&payload.new_password).await?;
 
   sqlx::query(
     r#"
@@ -458,7 +458,7 @@ pub async fn delete_account(
   .fetch_optional(&state.db)
   .await?
   .ok_or(ApiError::Unauthorized)?;
-  verify_password(&payload.password, &user.password_hash)?;
+  verify_password(&payload.password, &user.password_hash).await?;
 
   let keys = delete_user_and_owned(
     &state.db,
@@ -1327,7 +1327,23 @@ fn validate_password(password: &str, identifiers: &[&str]) -> ApiResult<()> {
     .map_err(|weak| ApiError::BadRequest(weak.message().to_string()))
 }
 
-pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
+/// Argon2 is ~tens of ms of pure CPU per call by design. Run on a tokio worker
+/// it stalls every task scheduled there — WebSocket fan-out, `/ready` — for
+/// that long, and a handful of concurrent logins stall all of them. So every
+/// hash and verify goes through the blocking pool; the Argon2 semaphore in
+/// `AuthGuard` still bounds how many run at once.
+async fn off_runtime<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> ApiResult<T> {
+  tokio::task::spawn_blocking(f)
+    .await
+    .map_err(|error| ApiError::Internal(error.to_string()))
+}
+
+pub(crate) async fn hash_password(password: &str) -> ApiResult<String> {
+  let password = password.to_owned();
+  off_runtime(move || hash_password_blocking(&password)).await?
+}
+
+fn hash_password_blocking(password: &str) -> ApiResult<String> {
   let salt = SaltString::generate(&mut OsRng);
   Argon2::default()
     .hash_password(password.as_bytes(), &salt)
@@ -1341,7 +1357,7 @@ pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
 /// variable there).
 pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> anyhow::Result<()> {
   let password_hash =
-    hash_password(password).map_err(|error| anyhow::anyhow!("hash failed: {error:?}"))?;
+    hash_password(password).await.map_err(|error| anyhow::anyhow!("hash failed: {error:?}"))?;
   // Seeded already-verified, and this is not optional: a seeded account has no
   // inbox anyone can check, so leaving `email_verified_at` NULL would make the
   // whole mechanism useless — the account would exist and be unable to sign in.
@@ -1370,11 +1386,23 @@ pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> a
 fn dummy_password_hash() -> &'static str {
   static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
   HASH.get_or_init(|| {
-    hash_password(&Uuid::new_v4().to_string()).expect("hashing a random password")
+    hash_password_blocking(&Uuid::new_v4().to_string()).expect("hashing a random password")
   })
 }
 
-fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {
+async fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {
+  let (password, password_hash) = (password.to_owned(), password_hash.to_owned());
+  off_runtime(move || verify_password_blocking(&password, &password_hash)).await?
+}
+
+/// The unknown-email path of [login]: the same verify cost, against a hash
+/// that is itself built lazily — so both happen off the runtime.
+async fn verify_against_dummy(password: &str) {
+  let password = password.to_owned();
+  let _ = off_runtime(move || verify_password_blocking(&password, dummy_password_hash())).await;
+}
+
+fn verify_password_blocking(password: &str, password_hash: &str) -> ApiResult<()> {
   let parsed_hash =
     PasswordHash::new(password_hash).map_err(|error| ApiError::Internal(error.to_string()))?;
 
@@ -2694,5 +2722,30 @@ mod refresh_pg {
       ensure_user_exists(&db, Uuid::new_v4()).await,
       Err(ApiError::Unauthorized)
     ));
+  }
+}
+
+#[cfg(test)]
+mod argon2_runtime_tests {
+  use super::*;
+  use std::sync::atomic::{AtomicU32, Ordering};
+  use std::sync::Arc;
+
+  /// Issue #42: on a single-threaded runtime, a hash that ran inline would
+  /// leave a concurrently spawned task unpolled until it finished.
+  #[tokio::test(flavor = "current_thread")]
+  async fn hashing_leaves_the_runtime_free() {
+    let ticks = Arc::new(AtomicU32::new(0));
+    let t = ticks.clone();
+    let ticker = tokio::spawn(async move {
+      loop {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        t.fetch_add(1, Ordering::Relaxed);
+      }
+    });
+    let hash = hash_password("correct horse battery").await.unwrap();
+    verify_password("correct horse battery", &hash).await.unwrap();
+    ticker.abort();
+    assert!(ticks.load(Ordering::Relaxed) >= 3, "runtime was blocked");
   }
 }

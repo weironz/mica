@@ -227,7 +227,7 @@ async fn consume_and_reset(
     return Err(ResetError::Invalid);
   };
 
-  let password_hash = hash_password(new_password).map_err(|error| {
+  let password_hash = hash_password(new_password).await.map_err(|error| {
     tracing::error!(%error, "password reset: hashing failed");
     ResetError::Internal
   })?;
