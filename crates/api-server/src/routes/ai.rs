@@ -130,7 +130,22 @@ pub async fn get_settings(
   let mut response = settings_response(config.as_ref());
   response.can_edit = can_edit;
   response.configured_providers = configured_providers(&state).await;
+  if !can_edit {
+    redact_for_member(&mut response);
+  }
   Ok(Json(response))
+}
+
+/// What a non-admin may see: whether AI is usable (`has_key` + `model`, which
+/// is what decides the Ask-AI button) and which vendor is selected — not where
+/// the operator points it or which key it uses. The endpoint URL can be an
+/// internal gateway, and the key hint is a fragment of a secret.
+fn redact_for_member(response: &mut AiSettingsResponse) {
+  response.base_url.clear();
+  response.key_hint.clear();
+  for p in &mut response.configured_providers {
+    p.base_url.clear();
+  }
 }
 
 /// `PATCH /api/ai/settings` — choose the provider / base URL / model / key.
@@ -771,5 +786,39 @@ mod models_endpoint_tests {
   #[test]
   fn an_empty_base_has_no_candidates() {
     assert!(models_url_candidates("   ").is_empty());
+  }
+}
+
+#[cfg(test)]
+mod member_view_tests {
+  use super::*;
+
+  /// Issue #35: a plain member's view keeps what decides the Ask-AI button
+  /// and drops the operator's endpoint and key fragment.
+  #[test]
+  fn member_view_hides_endpoint_and_key_hint() {
+    let mut r = AiSettingsResponse {
+      configured: true,
+      provider_id: "deepseek".into(),
+      configured_providers: vec![ConfiguredProvider {
+        provider_id: "deepseek".into(),
+        has_key: true,
+        model: "m".into(),
+        base_url: "http://10.0.0.5/v1".into(),
+        protocol: "openai".into(),
+        active: true,
+      }],
+      can_edit: false,
+      provider: "openai".into(),
+      base_url: "http://10.0.0.5/v1".into(),
+      model: "m".into(),
+      max_tokens: 2048,
+      has_key: true,
+      key_hint: "abcd".into(),
+    };
+    redact_for_member(&mut r);
+    assert!(r.base_url.is_empty() && r.key_hint.is_empty());
+    assert!(r.configured_providers[0].base_url.is_empty());
+    assert!(r.has_key && r.model == "m" && r.configured);
   }
 }
