@@ -34,46 +34,12 @@ pub async fn restore_view(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
-  // Restore the page and the subtree that was deleted with it.
-  let result = sqlx::query(
-    r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id FROM views WHERE id = $1 AND workspace_id = $2
-        UNION ALL
-        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      )
-      UPDATE views
-      SET is_deleted = false, updated_at = now()
-      WHERE id IN (SELECT id FROM subtree)
-        AND workspace_id = $2
-        AND is_deleted = true
-    "#,
-  )
-  .bind(view_id)
-  .bind(workspace_id)
-  .execute(&state.db)
-  .await?;
-
-  if result.rows_affected() == 0 {
+  // The batch restore of one id: one statement, one rule, one transaction
+  // (this used to be two separate statements, with the orphan lift outside
+  // any transaction). Nothing restored — not in the bin, or not here — is 404.
+  if restore_views_batch(&state.db, workspace_id, &[view_id]).await?.is_empty() {
     return Err(ApiError::NotFound);
   }
-
-  // If the restored page's parent is no longer an active view, lift it to the
-  // top level so it does not become an orphan.
-  sqlx::query(
-    r#"
-      UPDATE views
-      SET parent_view_id = NULL, updated_at = now()
-      WHERE id = $1 AND workspace_id = $2 AND parent_view_id IS NOT NULL
-        AND parent_view_id NOT IN (
-          SELECT id FROM views WHERE workspace_id = $2 AND is_deleted = false
-        )
-    "#,
-  )
-  .bind(view_id)
-  .bind(workspace_id)
-  .execute(&state.db)
-  .await?;
 
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
 
@@ -207,7 +173,7 @@ pub(super) async fn trash_views_batch(
           SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
         )
         UPDATE views
-        SET is_deleted = true, updated_at = now()
+        SET is_deleted = true, deleted_at = now(), updated_at = now()
         WHERE id IN (SELECT id FROM subtree)
           AND workspace_id = $2
           AND is_deleted = false
@@ -242,15 +208,27 @@ pub(super) async fn restore_views_batch(
   view_ids: &[Uuid],
 ) -> ApiResult<Vec<Uuid>> {
   let mut tx = db.begin().await?;
+  // Only what went to the bin WITH each requested page: the walk carries the
+  // seed's `deleted_at` and descends only into rows trashed in that same
+  // action. A child the user had trashed on its own before deleting its folder
+  // stays in the bin — restoring the folder used to resurrect it. Rows from
+  // before the stamp existed are all NULL and so still restore as one batch.
+  //
+  // A live seed carries no stamp of its own, so beneath it the walk descends
+  // only through other live rows and every trashed descendant restores — the
+  // long-standing "restore a live folder brings its trashed pages back".
   let restored = sqlx::query_scalar::<_, Uuid>(
     r#"
       WITH RECURSIVE subtree AS (
-        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+        SELECT id, is_deleted, deleted_at AS stamp
+        FROM views WHERE id = ANY($1) AND workspace_id = $2
         UNION ALL
-        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        SELECT v.id, v.is_deleted, CASE WHEN s.is_deleted THEN s.stamp ELSE v.deleted_at END
+        FROM views v JOIN subtree s ON v.parent_view_id = s.id
+        WHERE NOT s.is_deleted OR (v.is_deleted AND v.deleted_at IS NOT DISTINCT FROM s.stamp)
       )
       UPDATE views
-      SET is_deleted = false, updated_at = now()
+      SET is_deleted = false, deleted_at = NULL, updated_at = now()
       WHERE id IN (SELECT id FROM subtree)
         AND workspace_id = $2
         AND is_deleted = true

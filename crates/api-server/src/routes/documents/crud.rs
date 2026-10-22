@@ -381,27 +381,9 @@ pub async fn delete_view(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
-  // Soft-delete (move to the recycle bin) the page and its whole subtree.
-  let result = sqlx::query(
-    r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id FROM views WHERE id = $1 AND workspace_id = $2
-        UNION ALL
-        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      )
-      UPDATE views
-      SET is_deleted = true, updated_at = now()
-      WHERE id IN (SELECT id FROM subtree)
-        AND workspace_id = $2
-        AND is_deleted = false
-    "#,
-  )
-  .bind(view_id)
-  .bind(workspace_id)
-  .execute(&state.db)
-  .await?;
-
-  if result.rows_affected() == 0 {
+  // Soft-delete (move to the recycle bin) the page and its whole subtree —
+  // the batch trash of one id, so both paths stamp `deleted_at` alike.
+  if super::trash::trash_views_batch(&state.db, workspace_id, &[view_id]).await?.is_empty() {
     return Err(ApiError::NotFound);
   }
 

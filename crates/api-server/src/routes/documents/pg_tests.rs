@@ -856,6 +856,62 @@ use uuid::Uuid;
       insert_child(&db, ws_a, user, folder_in_a).await.unwrap();
     }
 
+    /// Issue #47: restoring a folder brings back what was deleted WITH it, not
+    /// a child the user had trashed on its own before. Rows trashed before the
+    /// `deleted_at` stamp existed (NULL) still restore together, as before.
+    #[tokio::test]
+    async fn restore_brings_back_only_what_was_deleted_together() {
+      let Some(db) = pool().await else { return };
+      let (ws, user) = seed_workspace(&db).await;
+      let folder = seed_view(&db, ws, user, "folder").await;
+      let child = |db: PgPool| async move {
+        let id: Uuid = sqlx::query_scalar(
+          "INSERT INTO views(workspace_id,parent_view_id,object_id,object_type,name,position,created_by) \
+           VALUES($1,$2,$3,'document'::object_type,'V','0',$4) RETURNING id",
+        )
+        .bind(ws)
+        .bind(folder)
+        .bind(Uuid::new_v4())
+        .bind(user)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        id
+      };
+      let early = child(db.clone()).await;
+      let kept = child(db.clone()).await;
+      let deleted = |id: Uuid| {
+        let db = db.clone();
+        async move {
+          sqlx::query_scalar::<_, bool>("SELECT is_deleted FROM views WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+      };
+
+      trash_views_batch(&db, ws, &[early]).await.unwrap();
+      // A distinct action, so a distinct stamp.
+      tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+      trash_views_batch(&db, ws, &[folder]).await.unwrap();
+
+      let restored = restore_views_batch(&db, ws, &[folder]).await.unwrap();
+      assert_eq!(restored.len(), 2, "{restored:?}");
+      assert!(!deleted(folder).await && !deleted(kept).await);
+      assert!(deleted(early).await, "trashed on its own earlier: it stays in the bin");
+
+      // Legacy rows (no stamp) behave as one batch.
+      trash_views_batch(&db, ws, &[folder]).await.unwrap();
+      sqlx::query("UPDATE views SET deleted_at = NULL WHERE workspace_id = $1")
+        .bind(ws)
+        .execute(&db)
+        .await
+        .unwrap();
+      restore_views_batch(&db, ws, &[folder]).await.unwrap();
+      assert!(!deleted(early).await && !deleted(kept).await);
+    }
+
     /// What must keep working under the stricter trigger: the bin itself. A
     /// trashed child may sit under a trashed folder (that is what trashing a
     /// folder produces), and restoring a page whose folder is STILL in the bin

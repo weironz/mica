@@ -393,7 +393,9 @@ pub(super) async fn remove_moved_source(
   }
 
   let ids: Vec<Uuid> = copied.iter().copied().collect();
-  sqlx::query("UPDATE views SET is_deleted = true, updated_at = now() WHERE id = ANY($1)")
+  sqlx::query(
+    "UPDATE views SET is_deleted = true, deleted_at = now(), updated_at = now() WHERE id = ANY($1)",
+  )
     .bind(&ids)
     .execute(&mut **tx)
     .await?;
