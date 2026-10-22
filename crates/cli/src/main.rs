@@ -937,6 +937,13 @@ fn cmd_logout(cfg: &mut Config) -> Result<()> {
 }
 
 fn cmd_token_create(cli: &Cli, cfg: &Config, args: &TokenCreateArgs) -> Result<()> {
+  // The server refuses this with a bare 403; say why before asking it.
+  if resolve_token(cli, cfg).is_some_and(|t| t.starts_with("mica_pat_")) {
+    anyhow::bail!(
+      "creating a token needs a password sign-in (`mica-cli auth login`); \
+       a personal access token cannot mint another"
+    );
+  }
   let client = authed_client(cli, cfg)?;
   let scopes = if args.scopes.is_empty() {
     vec!["read".to_string()]

@@ -113,6 +113,10 @@ struct UserRow {
 struct Claims {
   sub: String,
   exp: usize,
+  /// Issued-at (unix seconds). Optional only so tokens minted before it existed
+  /// still decode; they expire within the hour. Read by [`pat_minter`].
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  iat: Option<usize>,
 }
 
 /// `POST /api/auth/register`
@@ -599,6 +603,7 @@ async fn auth_response_in_family(
   let claims = Claims {
     sub: user.id.to_string(),
     exp: expires_at.timestamp() as usize,
+    iat: Some(Utc::now().timestamp() as usize),
   };
   let access_token = encode(
     &Header::default(),
@@ -820,8 +825,16 @@ pub async fn logout(
 /// would stay. Revoking only refresh tokens left that door open while the
 /// reset page told the user every device had been signed out. Same choice as
 /// Google's app passwords, which a password change revokes.
+///
+/// It also stamps `credential_epoch`: the access JWTs it cannot recall may
+/// still read and write until they expire, but they can no longer mint a PAT —
+/// see [`pat_minter`].
 pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
   let mut tx = db.begin().await?;
+  sqlx::query("UPDATE users SET credential_epoch = now() WHERE id = $1")
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
   sqlx::query(
     r#"
       UPDATE refresh_tokens
@@ -929,8 +942,12 @@ pub(crate) async fn resolve_token(state: &AppState, token: &str) -> ApiResult<Au
 
 async fn resolve_pat(state: &AppState, token: &str) -> ApiResult<Auth> {
   let hash = sha256_hex(token);
+  // Joined to a LIVE user: account deletion removes the account's tokens, but
+  // a token must not outlive its owner on the strength of that one DELETE.
   let row = sqlx::query_as::<_, PatRow>(
-    "SELECT user_id, scopes, expires_at FROM api_tokens WHERE token_hash = $1",
+    "SELECT t.user_id, t.scopes, t.expires_at FROM api_tokens t \
+     JOIN users u ON u.id = t.user_id AND u.deleted_at IS NULL \
+     WHERE t.token_hash = $1",
   )
   .bind(&hash)
   .fetch_optional(&state.db)
@@ -1188,6 +1205,55 @@ fn cleared_cookie_headers() -> HeaderMap {
 
 pub(crate) fn user_id_from_token(state: &AppState, token: &str) -> ApiResult<Uuid> {
   session_from_token(state, token).map(|(user_id, _)| user_id)
+}
+
+/// Who may mint a personal access token: only a signed-in session (a JWT, from
+/// the header or the cookie), and only one issued since the account's
+/// credentials last changed.
+///
+/// A PAT is refused because a short-lived or narrowly scoped PAT minting a
+/// permanent one is an escalation. A JWT issued before the last password
+/// change is refused because that change is the owner saying "someone else may
+/// be in here": the JWT cannot be recalled, but it must not be able to turn
+/// itself into a credential that outlives the change.
+pub(crate) async fn pat_minter(state: &AppState, headers: &HeaderMap) -> ApiResult<Uuid> {
+  let token = bearer_token(headers)
+    .or_else(|| cookie_value(headers, SESSION_COOKIE))
+    .ok_or(ApiError::Unauthorized)?;
+  if token.starts_with(PAT_PREFIX) {
+    return Err(ApiError::Forbidden);
+  }
+  let claims = decode::<Claims>(
+    &token,
+    &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+    &Validation::default(),
+  )
+  .map_err(|_| ApiError::Unauthorized)?
+  .claims;
+  let user_id = Uuid::parse_str(&claims.sub).map_err(|_| ApiError::Unauthorized)?;
+  ensure_issued_after_epoch(&state.db, user_id, claims.iat).await?;
+  Ok(user_id)
+}
+
+/// The database half of [`pat_minter`]. A token without `iat` predates the
+/// claim; it is accepted only while the account has never changed credentials.
+/// Compared at whole seconds because `iat` is: signing in again in the same
+/// second as the password change must not be refused.
+async fn ensure_issued_after_epoch(
+  db: &sqlx::PgPool,
+  user_id: Uuid,
+  iat: Option<usize>,
+) -> ApiResult<()> {
+  let epoch: Option<Option<DateTime<Utc>>> =
+    sqlx::query_scalar("SELECT credential_epoch FROM users WHERE id = $1 AND deleted_at IS NULL")
+      .bind(user_id)
+      .fetch_optional(db)
+      .await?;
+  match (epoch.ok_or(ApiError::Unauthorized)?, iat) {
+    (None, _) => Ok(()),
+    (Some(epoch), Some(iat)) if iat as i64 >= epoch.timestamp() => Ok(()),
+    (Some(_), _) => Err(ApiError::Unauthorized),
+  }
 }
 
 /// The user AND the moment this token stops being valid (`exp`, unix seconds).
@@ -2097,6 +2163,24 @@ mod refresh_pg {
 
     revoke_family(&db, family).await.unwrap();
     assert!(rotate_refresh_token(&db, &token).await.is_err());
+  }
+
+  /// Issue #29: after a password change, an access JWT issued before it can
+  /// no longer mint a PAT; one issued after it can.
+  #[tokio::test]
+  async fn a_jwt_from_before_the_password_change_cannot_mint() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let now = || Utc::now().timestamp() as usize;
+    let before = now() - 30;
+    assert!(ensure_issued_after_epoch(&db, user, Some(before)).await.is_ok());
+    assert!(ensure_issued_after_epoch(&db, user, None).await.is_ok(), "never changed");
+
+    revoke_user_sessions(&db, user).await.unwrap();
+
+    assert!(ensure_issued_after_epoch(&db, user, Some(before)).await.is_err());
+    assert!(ensure_issued_after_epoch(&db, user, None).await.is_err());
+    assert!(ensure_issued_after_epoch(&db, user, Some(now())).await.is_ok(), "fresh sign-in");
   }
 
   #[tokio::test]

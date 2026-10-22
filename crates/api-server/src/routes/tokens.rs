@@ -3,7 +3,8 @@
 //! The plaintext token (`mica_pat_<hex>`) is returned ONCE on creation; only its
 //! SHA-256 hash is stored. Auth + scope enforcement for these routes is handled
 //! by the `scope_guard` middleware (create/revoke need `write`, list needs
-//! `read`), so a read-only token can list its own tokens but not mint new ones.
+//! `read`), so a read-only token can list its own tokens. Minting additionally
+//! needs a signed-in session: no PAT, of any scope, can mint another.
 
 use axum::{
   Json,
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::routes::auth::{PAT_PREFIX, Scope, sha256_hex, user_id_from_headers};
+use crate::routes::auth::{PAT_PREFIX, Scope, pat_minter, sha256_hex, user_id_from_headers};
 
 /// Longest expiry a token may ask for (ten years); omit it for no expiry.
 const MAX_TOKEN_DAYS: i64 = 3650;
@@ -59,12 +60,14 @@ pub struct TokenListResponse {
 }
 
 /// `POST /api/auth/tokens` — mint a new token (returns the secret once).
+///
+/// Needs a signed-in session, not a PAT — see [`pat_minter`].
 pub async fn create_token(
   State(state): State<AppState>,
   headers: HeaderMap,
   Json(req): Json<CreateTokenRequest>,
 ) -> ApiResult<Json<CreatedToken>> {
-  let user_id = user_id_from_headers(&state, &headers).await?;
+  let user_id = pat_minter(&state, &headers).await?;
 
   let name = req.name.trim().to_string();
   if name.is_empty() {
