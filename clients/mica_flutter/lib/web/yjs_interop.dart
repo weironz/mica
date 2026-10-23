@@ -21,6 +21,15 @@ extension type MicaYjs._(JSObject _) implements JSObject {
   external JSUint8Array encodeStateVector(JSObject doc);
   external JSUint8Array encodeDiff(JSObject doc, JSUint8Array sv);
 
+  external void beginHistoryBatch(JSObject doc);
+  external void endHistoryBatch(JSObject doc);
+  external void resetHistory(JSObject doc);
+  external bool undo(JSObject doc);
+  external bool redo(JSObject doc);
+  external bool canUndo(JSObject doc);
+  external bool canRedo(JSObject doc);
+  external JSArray<JSNumber> historyDepths(JSObject doc);
+
   external JSObject getMap(JSObject doc, String name);
   external JSAny? mapGet(JSObject m, String k);
   external void mapSet(JSObject m, String k, JSAny v);

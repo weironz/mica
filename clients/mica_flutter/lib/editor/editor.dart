@@ -32,7 +32,8 @@ import '../l10n/locale_controller.dart';
 import '../ui/copy_button.dart';
 import '../ui/theme_tokens.dart';
 
-export 'controller.dart' show DocOp, ApplyOps;
+export 'controller.dart'
+    show DocOp, ApplyOps, ApplyHistory, HistoryAction, EditorHistoryState;
 export 'ai_edits.dart';
 export 'markdown.dart' show markdownToBlocks, BlockSpec;
 export 'model.dart' show EditorNode;
@@ -41,6 +42,8 @@ export 'render.dart' show EditorAppearance, EditorTheme, CommentHighlight;
 part 'editor_hooks.dart';
 part 'editor_ai.dart';
 part 'editor_dialogs.dart';
+part 'editor_resources.dart';
+part 'editor_history_ui.dart';
 
 class MicaEditor extends StatefulWidget {
   const MicaEditor({
@@ -49,6 +52,7 @@ class MicaEditor extends StatefulWidget {
     required this.version,
     required this.canEdit,
     required this.onApplyOperations,
+    this.onApplyHistory,
     this.onOpFault,
     this.onSelectionChanged,
     this.remoteCursors = const [],
@@ -85,6 +89,7 @@ class MicaEditor extends StatefulWidget {
   final int version;
   final bool canEdit;
   final ApplyOps onApplyOperations;
+  final ApplyHistory? onApplyHistory;
 
   /// Fired when committing an op batch fails (e.g. the durable outbox write
   /// throws) — routed to the controller so a dropped edit is counted and can be
@@ -380,18 +385,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   final ValueNotifier<int> _imageFrameTick = ValueNotifier(0);
   // file_id -> fresh download URL, for copy/export of images.
   final Map<String, String> _imageUrlCache = {};
-  // Upper bound on decoded textures kept resident. [_imageCache] is a
-  // LinkedHashMap used as an LRU: [_touchImage] bumps a key to the freshest
-  // (last) slot on every paint, [_evictImages] drops the least-recently-PAINTED
-  // stills once the cap is exceeded. 64 sits far above how many image blocks the
-  // viewport (plus render cull slack) can show at once, so nothing on screen is
-  // ever a candidate — see [_evictImages].
+  // Paint-touch LRU with a soft resident budget. Current near demand and the
+  // fullscreen viewer are protected even when they exceed 64 entries; only
+  // cold resources are evicted (see editor_resources.dart).
   static const int _maxCachedImages = 64;
   // The file_id/url currently shown in the fullscreen viewer, if any. Its
   // texture must never be evicted from under the open [RawImage] — the viewer is
   // a modal over the (possibly not-repainting) canvas, so its LRU recency goes
   // stale and it would otherwise look like a cold, evictable still.
   String? _viewerKey;
+  Set<String> _wantedImages = {};
+  bool _imageDemandScheduled = false;
+
+  void _resourceSetState(VoidCallback fn) => setState(fn);
 
   // Word/character counts shown in the corner badge. Recomputed off a debounce
   // (a full-document rune walk is wasted work on every keystroke); the badge
@@ -464,6 +470,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller = EditorController(
       rootBlockId: widget.rootBlockId,
       onOps: widget.onApplyOperations,
+      onHistory: widget.onApplyHistory,
       onOpFault: widget.onOpFault,
     );
     // Load before subscribing so the initial notify doesn't setState in init.
@@ -798,11 +805,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   void _registerCommandHook() {
     final hook = widget.commandHook;
     if (hook == null) return;
-    void refocus() {
-      _focus.requestFocus();
-      _syncImeFromSelection(force: true);
-    }
-
     hook
       .._toggleMark = (type) {
         if (!mounted || !widget.canEdit) return;
@@ -846,16 +848,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _promptLink();
       }
       .._undo = () {
-        if (!mounted || !widget.canEdit) return;
-        _focus.requestFocus();
-        _controller.undo();
-        refocus();
+        unawaited(_applyEditorHistory(redo: false));
       }
       .._redo = () {
-        if (!mounted || !widget.canEdit) return;
-        _focus.requestFocus();
-        _controller.redo();
-        refocus();
+        unawaited(_applyEditorHistory(redo: true));
       }
       .._focusFirstLine = () {
         if (!mounted) return;
@@ -1731,6 +1727,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _composing = value.composing.isValid ? value.composing : TextRange.empty;
     final node = _controller.focusedNode;
     if (node == null) return;
+    if (_controller.isApplyingHistory) {
+      _controller.setFocusedText(
+        value.text,
+        value.selection.baseOffset < 0
+            ? value.text.length
+            : value.selection.baseOffset,
+        value.selection.extentOffset < 0
+            ? value.text.length
+            : value.selection.extentOffset,
+      );
+      _lastSentIme = value;
+      _ensureCaretVisible();
+      return;
+    }
 
     // IME composition in progress (pinyin/kana): mirror the marked text into the
     // focused block so it shows, and keep our editing value — including the
@@ -1913,6 +1923,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
+    if (_controller.isApplyingHistory) return _keyDuringHistory(event);
     final key = event.logicalKey;
     final hw = HardwareKeyboard.instance;
     final shift = hw.isShiftPressed;
@@ -1930,12 +1941,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // than a key-routing one.
     if (accel &&
         (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
-      if (key == LogicalKeyboardKey.keyY || shift) {
-        _controller.redo();
-      } else {
-        _controller.undo();
-      }
-      _syncImeFromSelection(force: true);
+      unawaited(_applyEditorHistory(
+        redo: key == LogicalKeyboardKey.keyY || shift,
+      ));
       return KeyEventResult.handled;
     }
 
@@ -2308,7 +2316,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final cur = sel.focus;
     DocPosition target = cur;
-    final text = nodes[cur.node].text; // stepped by grapheme, see editor_hooks.dart
+    final text =
+        nodes[cur.node].text; // stepped by grapheme, see editor_hooks.dart
     if (dir < 0) {
       if (cur.offset > 0) {
         target = cur.withOffset(_prevGraphemeOffset(text, cur.offset));
@@ -2833,11 +2842,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               key == LogicalKeyboardKey.keyY ||
               HardwareKeyboard.instance.isShiftPressed;
           _closeCellEditor();
-          if (redo) {
-            _controller.redo();
-          } else {
-            _controller.undo();
-          }
+          unawaited(_applyEditorHistory(redo: redo));
           return KeyEventResult.handled;
         }
         // Cell text is already clean; its formatting lives in controller.marks.
@@ -3014,171 +3019,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!committed) focus.requestFocus();
     });
-  }
-
-  /// Lazily fetch + decode an image for [fileId] (called from layout). Repaints
-  /// when the image is ready or fails. No-op if already cached/loading/errored.
-  void _requestImage(String fileId) {
-    if (_imageCache.containsKey(fileId) ||
-        _imageLoading.contains(fileId) ||
-        _imageErrors.contains(fileId)) {
-      return;
-    }
-    // An external url with a re-host in flight: don't CORS-fetch it, it will
-    // become a file_id shortly. Any other url — re-hosting off, already
-    // failed, or a block that never went through the paste path at all — is
-    // fetched best-effort. See [_rehostPending].
-    final isUrl = fileId.startsWith('http://') || fileId.startsWith('https://');
-    if (isUrl && _rehostPending.contains(fileId)) return;
-    final load = widget.onLoadImageBytes;
-    if (load == null) return;
-    _imageLoading.add(fileId);
-    load(fileId).then((bytes) async {
-      if (!mounted) return;
-      if (bytes == null) {
-        _imageLoading.remove(fileId);
-        setState(() => _imageErrors.add(fileId));
-        return;
-      }
-      try {
-        await _decodeInto(fileId, bytes);
-      } catch (e, st) {
-        if (!mounted) return;
-        // Do NOT swallow silently: a decode failure here shows a blank image
-        // block with zero signal — that swallow cost hours to diagnose once.
-        // Surface it so a reproduction pins the real cause from the console.
-        debugPrint('mica: image decode failed for "$fileId": $e\n$st');
-        _imageLoading.remove(fileId);
-        setState(() => _imageErrors.add(fileId));
-      }
-    });
-  }
-
-  /// Decode [bytes] under [key] and put them on the canvas: a still image once,
-  /// an animated one (GIF / animated WebP) frame by frame via [ImageAnimator].
-  Future<void> _decodeInto(String key, Uint8List bytes) async {
-    // Claim the key before the first await, so it is claimed synchronously with
-    // the call. _primeImage decodes bytes we already hold, but inserting the
-    // block relayouts immediately — and the renderer, seeing nothing decoded
-    // yet, would ask the host to FETCH the very image we just uploaded. That
-    // second decode then overwrote this one's ui.Image without disposing it.
-    _imageLoading.add(key);
-    // Cap the decode at what this machine can display — see [decodeCapped],
-    // which also documents the dispose order this depends on. Floor 2048 keeps
-    // a later move to a sharper monitor decent; ceiling 4096 bounds the
-    // texture. Export/copy paths use the original bytes, not this texture.
-    final capPx = mounted
-        ? View.of(context).physicalSize.width.round().clamp(2048, 4096)
-        : 2048;
-    final codec = await decodeCapped(bytes, capPx);
-    if (!mounted) {
-      codec.dispose();
-      return;
-    }
-    if (codec.frameCount > 1) {
-      _imageAnims.remove(key)?.dispose();
-      // Seed the paint mark: nothing has drawn this yet, and the very first
-      // frame is what gives the canvas something to draw.
-      _imagePainted.add(key);
-      final anim = ImageAnimator(
-        CodecFrameSource(codec),
-        onFrame: (frame) => _onImageFrame(key, frame),
-      );
-      _imageAnims[key] = anim;
-      anim.start();
-      return;
-    }
-    final frame = await codec.getNextFrame();
-    codec.dispose();
-    if (!mounted) {
-      frame.image.dispose();
-      return;
-    }
-    final previous = _imageCache[key];
-    _imageLoading.remove(key);
-    _imageErrors.remove(key);
-    setState(() {
-      _imageCache[key] = frame.image;
-      _touchImage(key); // freshest
-      _evictImages(key); // bound resident textures
-    });
-    previous?.dispose(); // never orphan the handle we just replaced
-  }
-
-  /// One frame of an animated image, owned by us from here on.
-  void _onImageFrame(String key, ui.Image frame) {
-    if (!mounted) {
-      frame.dispose();
-      return;
-    }
-    final first = !_imageCache.containsKey(key);
-    if (first) {
-      _imageLoading.remove(key);
-      _imageErrors.remove(key);
-      // The first frame settles the block's natural size, so it has to go
-      // through layout. Every frame after is the same size — paint only.
-      setState(() {
-        _imageCache[key] = frame;
-        _touchImage(key);
-        _evictImages(key);
-      });
-      return;
-    }
-    final previous = _imageCache[key];
-    _imageCache[key] = frame;
-    _render?.replaceImage(key, frame);
-    _imageFrameTick.value++;
-    previous?.dispose();
-
-    // Nothing drew the last frame: the block was deleted or its source
-    // replaced, and decoding on would burn CPU on a picture no one sees. The
-    // canvas re-arms the mark whenever it paints, so a block that comes back
-    // (undo) revives the loop in [_onImagePainted].
-    if (!_imagePainted.remove(key)) _imageAnims[key]?.pause();
-  }
-
-  void _onImagePainted(String key) {
-    // Called from paint for every image block the viewport shows — this is the
-    // LRU "recently used" signal (visible stills get re-bumped every frame, so
-    // they sink to the freshest end and never fall to [_evictImages]).
-    _touchImage(key);
-    _imagePainted.add(key);
-    final anim = _imageAnims[key];
-    if (anim != null && !anim.isPlaying) anim.start();
-  }
-
-  /// Bump [key] to the most-recently-used (last) slot of the [_imageCache]
-  /// LinkedHashMap. No parallel structure: the map's own iteration order IS the
-  /// LRU order. Cheap remove+reinsert; order is otherwise irrelevant (every
-  /// consumer looks up by key, and dispose iterates values regardless of order).
-  void _touchImage(String key) {
-    final img = _imageCache.remove(key);
-    if (img != null) _imageCache[key] = img;
-  }
-
-  /// Evict least-recently-painted STILLS until the cache is back under
-  /// [_maxCachedImages], disposing each evicted [ui.Image]. Dispose safety (the
-  /// lessons.md image-decode timing is load-bearing): a candidate is only ever a
-  /// still that is NOT on screen — the oldest keys here are ones no recent paint
-  /// touched, and the cap sits far above the viewport's simultaneous-image count,
-  /// so nothing being drawn this frame is reachable. We also skip:
-  ///  - [protect] (the just-inserted key — already freshest),
-  ///  - animated keys (`_imageAnims`): their frames are owned by a live
-  ///    [ImageAnimator] loop and get disposed through its own lifecycle,
-  ///  - [_viewerKey] (bound to an open fullscreen [RawImage]).
-  /// An evicted still that scrolls back re-fetches via [_requestImage] (its key
-  /// is no longer cached/loading/errored), so eviction is transparent.
-  void _evictImages(String protect) {
-    if (_imageCache.length <= _maxCachedImages) return;
-    // Oldest-first snapshot; mutate the map, not the list being walked.
-    for (final key in _imageCache.keys.toList(growable: false)) {
-      if (_imageCache.length <= _maxCachedImages) break;
-      if (key == protect || key == _viewerKey) continue;
-      if (_imageAnims.containsKey(key)) continue;
-      final img = _imageCache.remove(key);
-      _imagePainted.remove(key);
-      img?.dispose();
-    }
   }
 
   /// The image name to hang off a blob url, url-encoded. Cosmetic only (the
@@ -5848,55 +5688,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _syncImeFromSelection(force: true);
   }
 
-  /// Rewrite the SELECTED text with AI.
-  ///
-  /// Nothing reaches the document until the user picks 「replace」 or 「insert
-  /// below」 — closing the dialog, an error mid-stream, or a model that answers
-  /// with prose all leave the page exactly as it was. That staging is what all
-  /// three references do (Notion previews, AFFiNE panels, AppFlowy writes into
-  /// its own block); none of them types into the document as it streams,
-  /// because an accepted rewrite has to be ONE undoable step and a stream is
-  /// hundreds of them.
-  Future<void> _runSelectionAi() async {
-    final stream = widget.onAiStream;
-    final sel = _controller.selection;
-    if (stream == null || sel == null || sel.isCollapsed) return;
-    final source = _controller.selectionText(imageUrls: _imageUrlCache);
-    if (source.trim().isEmpty) return;
-    final l10n = context.l10n;
-
-    final result = await showDialog<_AiResult>(
-      context: context,
-      builder: (context) => _InlineAiDialog(
-        onStream: stream,
-        system: kAiRewriteSystem,
-        contextText: source,
-        allowReplace: true,
-        presets: [
-          (label: l10n.aiPresetImprove, prompt: l10n.aiPresetImprovePrompt),
-          (label: l10n.aiPresetFix, prompt: l10n.aiPresetFixPrompt),
-          (label: l10n.aiPresetShorter, prompt: l10n.aiPresetShorterPrompt),
-          (label: l10n.aiPresetLonger, prompt: l10n.aiPresetLongerPrompt),
-        ],
-      ),
-    );
-    if (result == null || result.markdown.trim().isEmpty || !mounted) return;
-
-    final specs = markdownToBlocks(result.markdown);
-    if (specs.isEmpty) return;
-    if (result.replace) {
-      _controller.insertBlocksReplacingSelection(specs);
-    } else {
-      // Collapse to the END first: `insertBlocksAfterFocus` works off the
-      // focus, and a backwards drag leaves that at the selection's START —
-      // which would drop the rewrite ABOVE the text it rewrote.
-      _controller.collapseTo(sel.end);
-      _controller.insertBlocksAfterFocus(specs);
-    }
-    _rehostExternalImages();
-    _syncImeFromSelection(force: true);
-  }
-
   /// Code-block "Ask AI": a small menu of preset actions over this block's code
   /// (AppFlowy-style). Each preset streams its result via the shared AI dialog
   /// and inserts the Markdown right after the code block.
@@ -6108,6 +5899,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     previewImages: _previews.images,
                     previewBaselines: _previews.baselines,
                     onRequestPreview: _previews.request,
+                     onResourceDemand: _onResourceDemand,
+                     onPreviewPainted: _previews.touch,
                     onRequestImage: _requestImage,
                     onImagePainted: _onImagePainted,
                     remoteCursors: widget.remoteCursors,
@@ -6130,4 +5923,3 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
   }
 }
-

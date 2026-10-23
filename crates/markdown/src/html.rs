@@ -6,6 +6,7 @@ use crate::{block_index, mermaid_id, render_math, render_mermaid_svg_with_id};
 use crate::block::*;
 use crate::export_md::*;
 use crate::inline::*;
+use crate::span_walk::{SpanTies, SpanWalker};
 
 pub(crate) fn append_html_children(
   snapshot: &DocumentSnapshotPayload,
@@ -360,26 +361,21 @@ pub(crate) fn html_inline(block: &Block) -> String {
 pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> String {
   let mut out = String::new();
   let mut pos = lo;
+  // The pick used to rescan the WHOLE slice per emitted span (and the overlap
+  // set again): O(marks²) on a paragraph of sibling marks. The sweep keeps the
+  // same selection — earliest clipped start, then widest span; on an exact
+  // range tie (the strong+em pair of `***foo***`, delimiters collapsed to the
+  // same edges) the mark matched LAST in `process_emphasis` is the outer one
+  // (higher index) — behind one sort (issue #61).
+  let mut walker = SpanWalker::new(marks, hi, SpanTies::Html);
   while pos < hi {
-    let next = marks
-      .iter()
-      .enumerate()
-      .filter_map(|(i, m)| {
-        let s = m.start.max(pos);
-        let e = m.end.min(hi);
-        (e > s).then_some((s, e, i))
-      })
-      // Earliest start, then widest span. On an exact range tie (e.g. the
-      // strong+em pair of `***foo***`, whose delimiters all collapse to the
-      // same edges) the mark matched LAST in `process_emphasis` is the outer
-      // one, so prefer the higher index to nest it on the outside.
-      .min_by_key(|&(s, e, i)| (s, usize::MAX - e, usize::MAX - i));
-    let Some((s, e, picked)) = next else {
+    let Some(pick) = walker.next_pick(pos) else {
       out.push_str(&html_text(&String::from_utf16_lossy(&units[pos..hi])));
       break;
     };
+    let (s, e) = (pick.s, pick.e);
     out.push_str(&html_text(&String::from_utf16_lossy(&units[pos..s])));
-    let m = marks[picked];
+    let m = pick.mark;
     if m.kind == "code" {
       let raw = String::from_utf16_lossy(&units[s..e]);
       out.push_str(&format!("<code>{}</code>", escape_html(&raw)));
@@ -428,12 +424,7 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
       pos = e;
       continue;
     }
-    let inner: Vec<&InlineMark> = marks
-      .iter()
-      .enumerate()
-      .filter(|&(i, x)| i != picked && x.end.min(e) > x.start.max(s))
-      .map(|(_, x)| *x)
-      .collect();
+    let inner = walker.inner(&pick);
     let body = html_span(units, s, e, &inner);
     out.push_str(&match m.kind.as_str() {
       "bold" => format!("<strong>{body}</strong>"),

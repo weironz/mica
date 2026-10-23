@@ -8,12 +8,11 @@
 // natural for exactly this reason.
 //
 // The fields start as the ones that were previously singular. Per-tab sync
-// (`DocumentSyncClient` / `CloudSyncSession`) moves in when the connection cap
-// lands — a tab beyond the live limit keeps its `view`/`bootstrap` but gives up
-// its sockets, so those have to be nullable *per tab*, not per app.
+// ([CloudSyncSession]) moves in when the connection cap lands — a tab beyond
+// the live limit keeps its `view`/`bootstrap` but gives up its sockets, so
+// those have to be nullable *per tab*, not per app.
 
 import 'api/models.dart';
-import 'api/sync_client.dart';
 import 'cloud/cloud_sync_session.dart';
 
 /// How many tabs may hold live sockets at once.
@@ -37,10 +36,16 @@ const int kMaxLiveSyncTabs = 3;
 /// concrete class so that controller stays testable without the widget world —
 /// DocTab implements it with the fields it already had.
 abstract class TabSockets {
-  /// This tab's presence/op socket and CRDT replica — non-null exactly when
-  /// the tab is LIVE.
-  DocumentSyncClient? sync;
+  /// This tab's CRDT session (which also carries presence) — non-null exactly
+  /// when the tab is LIVE.
   CloudSyncSession? cloudSession;
+
+  /// The document this tab's sync is FOR, or null when it has none. Set
+  /// synchronously by reconcile — the session itself attaches a few awaits
+  /// later, and without this marker a same-document reconcile in that gap
+  /// looks like "no sync yet" and starts a second session (the A→B→A
+  /// double-session bug). Cleared by every teardown that parks the tab.
+  String? syncDocumentId;
 
   /// The document id this tab is synced to, or null when it holds no document.
   String? get documentId;
@@ -49,7 +54,7 @@ abstract class TabSockets {
   int get lastActivated;
 
   /// Whether this tab currently holds sockets.
-  bool get isLive => sync != null;
+  bool get isLive => syncDocumentId != null;
 }
 
 class DocTab implements TabSockets {
@@ -91,17 +96,18 @@ class DocTab implements TabSockets {
   @override
   String? get documentId => bootstrap?.document.id;
 
-  /// This tab's presence/op socket, and its CRDT replica. Non-null exactly when
-  /// the tab is LIVE — connected and receiving remote edits.
+  /// This tab's CRDT session (which also carries presence). Non-null exactly
+  /// when the tab is LIVE — connected and receiving remote edits.
   ///
   /// Per tab, not per app, so a background tab can keep syncing. The shell's
-  /// `_sync` / `_cloudSession` are proxies onto the ACTIVE tab's pair, which is
+  /// `_cloudSession` is a proxy onto the ACTIVE tab's session, which is
   /// what lets the ~40 call sites that mean "the open document's session" keep
   /// reading a single field.
   @override
-  DocumentSyncClient? sync;
-  @override
   CloudSyncSession? cloudSession;
+
+  @override
+  String? syncDocumentId;
 
   /// Monotonic stamp of when this tab was last activated, for the LRU choice of
   /// what to park when more than [kMaxLiveSyncTabs] tabs want to be live.
@@ -117,7 +123,7 @@ class DocTab implements TabSockets {
   /// renders and still reads. It just stops receiving other people's edits
   /// until it is activated again.
   @override
-  bool get isLive => sync != null;
+  bool get isLive => syncDocumentId != null;
 }
 
 /// The workspace a tab switch must land in, or null when no switch is needed.

@@ -275,6 +275,7 @@ pub(crate) fn append_markdown_block_content(
           .to_string(),
       };
       // Keep an empty alt empty — `![](url)` must round-trip unchanged.
+      let text = escape_inline(text);
       match block_data_str(block, "title") {
         Some(t) => lines.push(format!("![{text}]({target} \"{}\")", t.replace('"', "\\\""))),
         None => lines.push(format!("![{text}]({target})")),

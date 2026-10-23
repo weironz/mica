@@ -81,6 +81,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onDeleteBlock,
     required this.onMoveBlock,
     required this.onApplyOperations,
+    this.onApplyHistory,
+    this.onApplyMaintenanceOperations,
     required this.onUploadImage,
     required this.onImportImageUrl,
     required this.onLoadImageBytes,
@@ -298,7 +300,8 @@ class WorkspaceView extends StatefulWidget {
   final void Function(String workspaceId)? onSelectWorkspaceById;
 
   /// The same search across every workspace. Null hides the scope toggle.
-  final Future<List<SearchResult>> Function(String query)? onSearchAllWorkspaces;
+  final Future<List<SearchResult>> Function(String query)?
+  onSearchAllWorkspaces;
 
   /// Open a hit that belongs to [workspaceId], switching there first.
   ///
@@ -364,8 +367,6 @@ class WorkspaceView extends StatefulWidget {
   /// returns the refreshed tree while this one refreshes it itself.
   final Future<void> Function(List<String> viewIds) onDeleteViews;
 
-  /// Duplicate a view's subtree in place (cloud or local). Always provided —
-  /// clone works in both, unlike onTransfer.
   final Future<void> Function(DocumentView view) onCloneView;
   final Future<void> Function(String text) onUpdateRootBlockText;
   final Future<void> Function(DocumentBlockKind kind, String text) onAddBlock;
@@ -379,6 +380,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(DocumentBlock block, int targetIndex) onMoveBlock;
   final Future<void> Function(List<Map<String, dynamic>> operations)
   onApplyOperations;
+  final ApplyHistory? onApplyHistory;
+  final ApplyOps? onApplyMaintenanceOperations;
   final Future<({String fileId, String name})?> Function(
     Uint8List bytes,
     String fileName,
@@ -392,8 +395,11 @@ class WorkspaceView extends StatefulWidget {
   onResolveImageUrls;
   final Stream<String> Function(String prompt, {String? system}) onAiStream;
   final Future<void> Function(String markdown) onAiNewPage;
-  final Future<AiEditPreview> Function(String response, EditorAiSnapshot source)?
-      onAiPreviewEdits;
+  final Future<AiEditPreview> Function(
+    String response,
+    EditorAiSnapshot source,
+  )?
+  onAiPreviewEdits;
   final Future<void> Function(String markdown)? onAiCurrentPage;
   final Future<void> Function(String markdown) onAiNewWorkspace;
 
@@ -479,6 +485,7 @@ class WorkspaceView extends StatefulWidget {
     String title,
   )
   onExportPage;
+
   /// The open page as Markdown TEXT, for the clipboard. Distinct from
   /// [onExportPage], which packages images into a ZIP — see `_pageMarkdownText`.
   final Future<String> Function() onCopyPageMarkdown;
@@ -627,6 +634,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       _backlinkCount = count;
     });
   }
+
   // Page properties are hidden by default (AFFiNE-style): revealed by the info
   // toggle next to the breadcrumb, so a page with many properties never pushes
   // the body down until you ask for it.
@@ -996,8 +1004,21 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   @override
   void dispose() {
+    // Exit-flush the debounced page-title save: a plain `cancel` below would
+    // silently drop the last typed name (the same reason didUpdateWidget
+    // flushes before replacing the field).
+    if (_pageTitleSaveTimer?.isActive ?? false) {
+      _pageTitleSaveTimer!.cancel();
+      final bootstrap = widget.selectedBootstrap;
+      final title = renamedTo(_pageTitle.text, bootstrap?.pageTitle ?? '');
+      if (bootstrap != null && title != null) {
+        unawaited(widget.onRenameView(bootstrap.view, title));
+      }
+    }
     _tree.removeListener(_syncTreeState);
+    _tree.dispose();
     _inlineRename.removeListener(_syncRenameState);
+    _inlineRename.dispose();
     HardwareKeyboard.instance.removeHandler(_escKeyEvent);
     _rename.dispose();
     _pageTitle.dispose();
@@ -1431,7 +1452,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     IconButton(
                       tooltip: context.l10n.graphTitle,
                       visualDensity: VisualDensity.compact,
-                      onPressed: widget.onLoadGraph == null ||
+                      onPressed:
+                          widget.onLoadGraph == null ||
                               widget.selectedWorkspace == null
                           ? null
                           : _openGraph,
@@ -1567,7 +1589,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       ),
     );
   }
-
 
   /// Search-box-shaped button: looks like an input, opens the search dialog
   /// (Notion-style — the real query field lives in the dialog).
@@ -1891,12 +1912,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     String? activeId,
   ) {
     return
-      // The auto-scroll region wraps the list EXACTLY, so its box is the
-      // viewport the edge zones are measured against.
-      DragAutoScrollRegion(
-        enabled: _draggingTree,
-        controller: _treeScroll,
-        child: CustomScrollView(
+    // The auto-scroll region wraps the list EXACTLY, so its box is the
+    // viewport the edge zones are measured against.
+    DragAutoScrollRegion(
+      enabled: _draggingTree,
+      controller: _treeScroll,
+      child: CustomScrollView(
         controller: _treeScroll,
         slivers: [
           SliverList(
@@ -2026,8 +2047,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           if (_draggingTree)
             SliverFillRemaining(hasScrollBody: false, child: _rootDropZone()),
         ],
-        ),
-      );
+      ),
+    );
   }
 
   /// "Move to the workspace root, at the end." Exists only during a drag.
@@ -2378,105 +2399,102 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // the row's own depth — the level never moved, in either direction.
     return Builder(
       builder: (slotContext) => DragTarget<List<DocumentView>>(
-      // The whole zone must be droppable; DragTarget defaults to deferToChild,
-      // which would limit the hit area to the thin indicator. These overlays
-      // only exist during a drag, so opaque is safe (no taps to intercept).
-      hitTestBehavior: HitTestBehavior.opaque,
-      // Refused if the target sits inside ANY of the dragged rows: dropping a
-      // batch into one of its own folders is the same impossibility as with
-      // one row, and only needs to be true of one of them to be true.
-      onWillAcceptWithDetails: (details) =>
-          TreeDropPlanner(widget.views).canDrop(
-            details.data,
+        // The whole zone must be droppable; DragTarget defaults to deferToChild,
+        // which would limit the hit area to the thin indicator. These overlays
+        // only exist during a drag, so opaque is safe (no taps to intercept).
+        hitTestBehavior: HitTestBehavior.opaque,
+        // Refused if the target sits inside ANY of the dragged rows: dropping a
+        // batch into one of its own folders is the same impossibility as with
+        // one row, and only needs to be true of one of them to be true.
+        onWillAcceptWithDetails: (details) => TreeDropPlanner(
+          widget.views,
+        ).canDrop(details.data, target, into: mode == _DropMode.into),
+        // Only `after` re-parents, and only sideways. `details.offset` IS the
+        // pointer here because the Draggable uses `pointerDragAnchorStrategy`;
+        // with the default strategy it would be the feedback's top-left corner
+        // and every level would read one chip-width to the right.
+        onMove: mode != _DropMode.after
+            ? null
+            : (details) {
+                final box = slotContext.findRenderObject() as RenderBox?;
+                if (box == null || !box.hasSize) return;
+                final local = box.globalToLocal(details.offset);
+                final level = reparentLevelFor(
+                  pointerX: local.dx,
+                  rowDepth: depth,
+                  nextRowDepth: nextDepth,
+                );
+                if (level != _dropLevel) setState(() => _dropLevel = level);
+              },
+        onLeave: (_) {
+          if (_dropLevel != null) setState(() => _dropLevel = null);
+        },
+        onAcceptWithDetails: (details) {
+          // A level is just a different target for the SAME `after` drop:
+          // "sibling of my ancestor at depth L".
+          final resolved = TreeDropPlanner(widget.views).resolveAfterTarget(
             target,
-            into: mode == _DropMode.into,
-          ),
-      // Only `after` re-parents, and only sideways. `details.offset` IS the
-      // pointer here because the Draggable uses `pointerDragAnchorStrategy`;
-      // with the default strategy it would be the feedback's top-left corner
-      // and every level would read one chip-width to the right.
-      onMove: mode != _DropMode.after
-          ? null
-          : (details) {
-              final box = slotContext.findRenderObject() as RenderBox?;
-              if (box == null || !box.hasSize) return;
-              final local = box.globalToLocal(details.offset);
-              final level = reparentLevelFor(
-                pointerX: local.dx,
-                rowDepth: depth,
-                nextRowDepth: nextDepth,
-              );
-              if (level != _dropLevel) setState(() => _dropLevel = level);
-            },
-      onLeave: (_) {
-        if (_dropLevel != null) setState(() => _dropLevel = null);
-      },
-      onAcceptWithDetails: (details) {
-        // A level is just a different target for the SAME `after` drop:
-        // "sibling of my ancestor at depth L".
-        final resolved = TreeDropPlanner(widget.views).resolveAfterTarget(
-          target,
-          depth,
-          mode == _DropMode.after ? _dropLevel : null,
-        );
-        setState(() => _dropLevel = null);
-        _handleDrop(details.data, resolved, mode);
-        // The rows have landed somewhere new; keeping them highlighted would
-        // leave a selection describing where they used to be.
-        _clearTreeSelection();
-      },
-      builder: (context, candidate, rejected) {
-        // `rejected` is how a DragTarget says "something is over me and I
-        // refused it" — the case that used to draw nothing at all.
-        final state = candidate.isNotEmpty
-            ? DropIndicatorState.allowed
-            : rejected.isNotEmpty
-            ? DropIndicatorState.blocked
-            : DropIndicatorState.idle;
-        if (mode == _DropMode.into) {
-          // Nesting: highlight the whole target row. Warning-coloured when the
-          // nest is refused — dropping a folder inside its own subtree is the
-          // one people actually try, and it is exactly where silence was worst.
-          final tokens = MicaTheme.of(context);
-          final edge = switch (state) {
-            DropIndicatorState.idle => Colors.transparent,
-            DropIndicatorState.allowed => tokens.accent.primary,
-            DropIndicatorState.blocked => tokens.status.warning,
-          };
-          return Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: edge, width: 2),
-              color: edge == Colors.transparent
-                  ? Colors.transparent
-                  : edge.withValues(alpha: 0.08),
+            depth,
+            mode == _DropMode.after ? _dropLevel : null,
+          );
+          setState(() => _dropLevel = null);
+          _handleDrop(details.data, resolved, mode);
+          // The rows have landed somewhere new; keeping them highlighted would
+          // leave a selection describing where they used to be.
+          _clearTreeSelection();
+        },
+        builder: (context, candidate, rejected) {
+          // `rejected` is how a DragTarget says "something is over me and I
+          // refused it" — the case that used to draw nothing at all.
+          final state = candidate.isNotEmpty
+              ? DropIndicatorState.allowed
+              : rejected.isNotEmpty
+              ? DropIndicatorState.blocked
+              : DropIndicatorState.idle;
+          if (mode == _DropMode.into) {
+            // Nesting: highlight the whole target row. Warning-coloured when the
+            // nest is refused — dropping a folder inside its own subtree is the
+            // one people actually try, and it is exactly where silence was worst.
+            final tokens = MicaTheme.of(context);
+            final edge = switch (state) {
+              DropIndicatorState.idle => Colors.transparent,
+              DropIndicatorState.allowed => tokens.accent.primary,
+              DropIndicatorState.blocked => tokens.status.warning,
+            };
+            return Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: edge, width: 2),
+                color: edge == Colors.transparent
+                    ? Colors.transparent
+                    : edge.withValues(alpha: 0.08),
+              ),
+            );
+          }
+          // Indented to the level this drop lands at, with a terminal dot at the
+          // head — AFFiNE's tree indicator, which is Atlassian's
+          // pragmatic-drag-and-drop shape: an 8px hollow circle, and a 2px line
+          // leaving its centre.
+          //
+          // The dot is not decoration. It is the thing you aim with: while
+          // dragging under the last row of a subtree, moving the pointer left
+          // steps the dot out one level at a time, and where it lands is where
+          // the row lands.
+          //
+          // When blocked, the mark is drawn at the level you were ASKING for, in
+          // the warning colour — the desired instruction, not nothing.
+          return Align(
+            alignment: mode == _DropMode.before
+                ? Alignment.topLeft
+                : Alignment.bottomLeft,
+            child: _DropIndicator(
+              inset: dropIndicatorInset(
+                state == DropIndicatorState.idle ? depth : _dropLevel ?? depth,
+              ),
+              state: state,
             ),
           );
-        }
-        // Indented to the level this drop lands at, with a terminal dot at the
-        // head — AFFiNE's tree indicator, which is Atlassian's
-        // pragmatic-drag-and-drop shape: an 8px hollow circle, and a 2px line
-        // leaving its centre.
-        //
-        // The dot is not decoration. It is the thing you aim with: while
-        // dragging under the last row of a subtree, moving the pointer left
-        // steps the dot out one level at a time, and where it lands is where
-        // the row lands.
-        //
-        // When blocked, the mark is drawn at the level you were ASKING for, in
-        // the warning colour — the desired instruction, not nothing.
-        return Align(
-          alignment: mode == _DropMode.before
-              ? Alignment.topLeft
-              : Alignment.bottomLeft,
-          child: _DropIndicator(
-            inset: dropIndicatorInset(
-              state == DropIndicatorState.idle ? depth : _dropLevel ?? depth,
-            ),
-            state: state,
-          ),
-        );
-      },
+        },
       ),
     );
   }
@@ -2616,8 +2634,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// until the row is on screen.
   /// Locate [viewId] when its tree has it, and remember it either way —
   /// the row may belong to a workspace whose views have not arrived yet.
-  void _revealInTree(String viewId) =>
-      _tree.revealInTree(widget.views, viewId);
+  void _revealInTree(String viewId) => _tree.revealInTree(widget.views, viewId);
 
   /// Scroll the pending row into view, then stop asking.
   ///
@@ -2648,8 +2665,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // clamp below pins the target to that stale, smaller maximum. The shortfall
     // is exactly the height of the rows just revealed, which is why it looked
     // like "scrolled, but you still have to drag a bit further".
-    if (widget.views.any((v) => v.id == id) &&
-        !_tree.isExpanded(id)) {
+    if (widget.views.any((v) => v.id == id) && !_tree.isExpanded(id)) {
       _revealFolder(id);
       return; // re-entered next frame, against the grown list
     }
@@ -2682,20 +2698,17 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   /// Locate [viewId] and expand it plus its ancestors; an id not in this
   /// workspace's tree does nothing. Logic in the tree controller.
-  void _revealFolder(String viewId) =>
-      _tree.revealFolder(widget.views, viewId);
+  void _revealFolder(String viewId) => _tree.revealFolder(widget.views, viewId);
 
   /// Expand every ANCESTOR of [id] so a (possibly nested) node is revealed in
   /// the sidebar — used on navigate/create so the active/new page is never
   /// hidden under a collapsed parent (AppFlowy/Notion "reveal current page").
   /// The node itself is not expanded (that would show ITS children).
-  void _revealAncestors(String id) =>
-      _tree.revealAncestors(widget.views, id);
+  void _revealAncestors(String id) => _tree.revealAncestors(widget.views, id);
 
   /// Expand [id] itself (so a freshly-created/dropped child under it is visible)
   /// plus its ancestor chain.
-  void _expandForChildOf(String id) =>
-      _tree.expandForChildOf(widget.views, id);
+  void _expandForChildOf(String id) => _tree.expandForChildOf(widget.views, id);
 
   void _schedulePageTitleSave() {
     // The field is now ahead of the document. Latched BEFORE the timer, not
@@ -3115,23 +3128,23 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           // narrow pane — so no measured max is needed here.
           Expanded(
             child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: _editorScroll(context, canEdit, bootstrap),
-                      ),
-                      // Bottom-right of the PANE, so it reads as a status
-                      // readout that is always where you left it — not a chip
-                      // that lands wherever the text happens to stop.
-                      Positioned(
-                        right: 12,
-                        bottom: 8,
-                        child: ValueListenableBuilder<DocCounts>(
-                          valueListenable: _counts,
-                          builder: (context, counts, _) => counts.chars == 0
-                              ? const SizedBox.shrink()
-                              : _WordCountBadge(counts: counts),
-                        ),
-                      ),
+              children: [
+                Positioned.fill(
+                  child: _editorScroll(context, canEdit, bootstrap),
+                ),
+                // Bottom-right of the PANE, so it reads as a status
+                // readout that is always where you left it — not a chip
+                // that lands wherever the text happens to stop.
+                Positioned(
+                  right: 12,
+                  bottom: 8,
+                  child: ValueListenableBuilder<DocCounts>(
+                    valueListenable: _counts,
+                    builder: (context, counts, _) => counts.chars == 0
+                        ? const SizedBox.shrink()
+                        : _WordCountBadge(counts: counts),
+                  ),
+                ),
               ],
             ),
           ),
@@ -3427,190 +3440,177 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           _commandHook.resetDiagramViews();
         }
       },
-      child: LayoutBuilder(builder: (context, constraints) => SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(
-          constraints.maxWidth < 600 ? 12 : 28,
-          8,
-          constraints.maxWidth < 600 ? 12 : 28,
-          28,
-        ),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: widget.pageWidth),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // The editor canvas reserves EditorTheme.gutter on the left
-                // for the block drag handles, so its text starts at x=gutter.
-                // Inset the title + meta rows by the same amount to keep the
-                // page's text column aligned (handles float in the margin).
-                Padding(
-                  padding: const EdgeInsets.only(left: EditorTheme.gutter),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // Settings can hide the title; the row itself stays for
-                      // the page menu + side-panel toggle.
-                      if (!widget.showPageTitle)
-                        const Spacer()
-                      else
-                        Expanded(
-                          child: PageTitleField(
-                            controller: _pageTitle,
-                            focusNode: _pageTitleFocus,
-                            appearance: _editorAppearance,
-                            hintText: context.l10n.untitledPage,
-                            readOnly: !canEdit,
-                            onChanged: (_) => _schedulePageTitleSave(),
-                            onEnterBody: _titleEnter,
-                            onArrowDown: _commandHook.focusFirstLine,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 4),
-                // Collaborator presence, right-aligned under the title row —
-                // shown ONLY when someone else is here. Solo, this was an
-                // "Only you" line that just widened the title↔body gap for no
-                // reason (the space the user flagged).
-                if (widget.presence.isNotEmpty) ...[
+      child: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            constraints.maxWidth < 600 ? 12 : 28,
+            8,
+            constraints.maxWidth < 600 ? 12 : 28,
+            28,
+          ),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: widget.pageWidth),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // The editor canvas reserves EditorTheme.gutter on the left
+                  // for the block drag handles, so its text starts at x=gutter.
+                  // Inset the title + meta rows by the same amount to keep the
+                  // page's text column aligned (handles float in the margin).
                   Padding(
                     padding: const EdgeInsets.only(left: EditorTheme.gutter),
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        const Spacer(),
-                        _PresenceBar(presence: widget.presence),
+                        // Settings can hide the title; the row itself stays for
+                        // the page menu + side-panel toggle.
+                        if (!widget.showPageTitle)
+                          const Spacer()
+                        else
+                          Expanded(
+                            child: PageTitleField(
+                              controller: _pageTitle,
+                              focusNode: _pageTitleFocus,
+                              appearance: _editorAppearance,
+                              hintText: context.l10n.untitledPage,
+                              readOnly: !canEdit,
+                              onChanged: (_) => _schedulePageTitleSave(),
+                              onEnterBody: _titleEnter,
+                              onArrowDown: _commandHook.focusFirstLine,
+                            ),
+                          ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 4),
-                ],
-                // Page properties (front-matter) — a structured, editable view
-                // of the document's YAML front matter, above the body. Reads the
-                // root block's `data['front_matter']`; commits write it back
-                // through the same self-dispatching op sink the editor uses
-                // (local / cloud-CRDT / cloud-REST all handled). See
-                // docs/features/page-properties.md.
-                if (_showProperties)
-                  PropertyPanel(
-                    frontMatter: bootstrap.rootFrontMatter,
-                    canEdit: canEdit,
-                    // Clicking a tag opens workspace search for `#tag` — the
-                    // precise token the index stores for list/tag values, so it
-                    // finds pages that CARRY the tag, not ones that merely
-                    // mention the word in their body (M2).
-                    onOpenTag: (v) => _openSearch(initialQuery: '#$v'),
-                    onCommit: (fm) {
-                      final data = Map<String, dynamic>.from(
-                        bootstrap.rootData,
-                      );
-                      if (fm.isEmpty) {
-                        data.remove('front_matter');
-                      } else {
-                        data['front_matter'] = fm;
-                      }
-                      return widget.onApplyOperations([
-                        {
-                          'type': 'update_block',
-                          'block_id': bootstrap.document.rootBlockId,
-                          'data': data,
-                        },
-                      ]);
-                    },
-                  ),
-                Padding(
-                  key: _editorSurfaceKey,
-                  padding: const EdgeInsets.only(top: 4),
-                  child: MicaEditor(
-                    countsSink: _counts,
-                    key: ValueKey(
-                      '${bootstrap.document.id}#${widget.editorEpoch}',
+                  // Collaborator presence, right-aligned under the title row —
+                  // shown ONLY when someone else is here. Solo, this was an
+                  // "Only you" line that just widened the title↔body gap for no
+                  // reason (the space the user flagged).
+                  if (widget.presence.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(left: EditorTheme.gutter),
+                      child: Row(
+                        children: [
+                          const Spacer(),
+                          _PresenceBar(presence: widget.presence),
+                        ],
+                      ),
                     ),
-                    focusNode: _editorFocus,
-                    rootBlockId: bootstrap.document.rootBlockId,
-                    nodes: [
-                      for (final b in bootstrap.childBlocks)
-                        EditorNode(
-                          id: b.id,
-                          kind: b.kind,
-                          text: b.text,
-                          data: Map<String, dynamic>.from(b.data),
-                        ),
-                    ],
-                    version: bootstrap.snapshot.versionSeq,
-                    canEdit: canEdit,
-                    onSelectionChanged: widget.onCursorChanged,
-                    commentHighlights: widget.commentHighlights,
-                    onAddComment: widget.onAddComment == null
-                        ? null
-                        : (sb, so, eb, eo, quote) async {
-                            await widget.onAddComment!(sb, so, eb, eo, quote);
-                            // You just wrote it; showing it should not cost
-                            // another click. Only for a comment THIS user made:
-                            // opening because a collaborator commented would be
-                            // an interruption, not a convenience.
-                            if (mounted) {
-                              setState(() {
-                                _toolsExpanded = true;
-                                _toolsTab = _ToolsTab.comments;
-                              });
-                            }
+                    const SizedBox(height: 4),
+                  ],
+                  // Page properties (front-matter) — a structured, editable view
+                  // of the document's YAML front matter, above the body. Reads the
+                  // root block's `data['front_matter']`; commits write it back
+                  // through the same self-dispatching op sink the editor uses
+                  // (local / cloud-CRDT / cloud-REST all handled). See
+                  // docs/features/page-properties.md.
+                  if (_showProperties)
+                    PropertyPanel(
+                      frontMatter: bootstrap.rootFrontMatter,
+                      canEdit: canEdit,
+                      // Clicking a tag opens workspace search for `#tag` — the
+                      // precise token the index stores for list/tag values, so it
+                      // finds pages that CARRY the tag, not ones that merely
+                      // mention the word in their body (M2).
+                      onOpenTag: (v) => _openSearch(initialQuery: '#$v'),
+                      onCommit: (fm) {
+                        final data = Map<String, dynamic>.from(
+                          bootstrap.rootData,
+                        );
+                        if (fm.isEmpty) {
+                          data.remove('front_matter');
+                        } else {
+                          data['front_matter'] = fm;
+                        }
+                        return (widget.onApplyMaintenanceOperations ??
+                            widget.onApplyOperations)([
+                          {
+                            'type': 'update_block',
+                            'block_id': bootstrap.document.rootBlockId,
+                            'data': data,
                           },
-                    remoteCursors: [
-                      for (final p in widget.presence)
-                        if (p.hasCursor)
-                          (
-                            blockId: p.cursorBlockId!,
-                            offset: p.cursorOffset!,
-                            color: p.color,
-                            label: p.name,
-                          ),
-                    ],
-                    onApplyOperations: widget.onApplyOperations,
-                    onOpFault: widget.onEditorFault,
-                    onUploadImage: widget.onUploadImage,
-                    onImportImageUrl: widget.onImportImageUrl,
-                    onLoadImageBytes: widget.onLoadImageBytes,
-                    onResolveImageUrls: widget.onResolveImageUrls,
-                    onAiStream: widget.showAi ? widget.onAiStream : null,
-                    reHostImages: widget.reHostImages,
-                    scrollHook: _scrollHook,
-                    commandHook: _commandHook,
-                    outlineHook: _outlineHook,
-                    findHook: _findHook,
-                    activeBlockHook: _activeBlockHook,
-                    onExitTop: _focusPageTitle,
-                    appearance: _editorAppearance,
-                    onOpenPage: _openPageLink,
-                    pageLinks: () => [
-                      for (final v in widget.views)
-                        if (v.objectType == 'document')
-                          PageLinkTarget(id: v.id, title: v.name),
-                    ],
-                  ),
-                ),
-                // Reverse references — the cloud pages that link to this one.
-                // Cloud + documents only (folders have no body); lazy-loaded so
-                // it never blocks the page opening. Hidden entirely in 本地模式
-                // (onLoadBacklinks null there).
-                if (widget.onLoadBacklinks != null &&
-                    widget.selectedView?.objectType == 'document')
+                        ]);
+                      },
+                    ),
                   Padding(
-                    padding: const EdgeInsets.only(left: EditorTheme.gutter),
-                    child: _BacklinksPanel(
-                      key: ValueKey('backlinks#${widget.selectedView!.id}'),
-                      viewId: widget.selectedView!.id,
-                      load: widget.onLoadBacklinks!,
-                      onOpen: widget.onOpenSearchResult,
-                      onLoaded: _onBacklinksLoaded,
+                    key: _editorSurfaceKey,
+                    padding: const EdgeInsets.only(top: 4),
+                    child: MicaEditor(
+                      countsSink: _counts,
+                      key: ValueKey(
+                        '${bootstrap.document.id}#${widget.editorEpoch}',
+                      ),
+                      focusNode: _editorFocus,
+                      rootBlockId: bootstrap.document.rootBlockId,
+                      nodes: _editorNodes(bootstrap.childBlocks),
+                      version: bootstrap.snapshot.versionSeq,
+                      canEdit: canEdit,
+                      onSelectionChanged: widget.onCursorChanged,
+                      commentHighlights: widget.commentHighlights,
+                      onAddComment: widget.onAddComment == null
+                          ? null
+                          : (sb, so, eb, eo, quote) async {
+                              await widget.onAddComment!(sb, so, eb, eo, quote);
+                              // You just wrote it; showing it should not cost
+                              // another click. Only for a comment THIS user made:
+                              // opening because a collaborator commented would be
+                              // an interruption, not a convenience.
+                              if (mounted) {
+                                setState(() {
+                                  _toolsExpanded = true;
+                                  _toolsTab = _ToolsTab.comments;
+                                });
+                              }
+                            },
+                      remoteCursors: _editorCursors(widget.presence),
+                      onApplyOperations: widget.onApplyOperations,
+                      onApplyHistory: widget.onApplyHistory,
+                      onOpFault: widget.onEditorFault,
+                      onUploadImage: widget.onUploadImage,
+                      onImportImageUrl: widget.onImportImageUrl,
+                      onLoadImageBytes: widget.onLoadImageBytes,
+                      onResolveImageUrls: widget.onResolveImageUrls,
+                      onAiStream: widget.showAi ? widget.onAiStream : null,
+                      reHostImages: widget.reHostImages,
+                      scrollHook: _scrollHook,
+                      commandHook: _commandHook,
+                      outlineHook: _outlineHook,
+                      findHook: _findHook,
+                      activeBlockHook: _activeBlockHook,
+                      onExitTop: _focusPageTitle,
+                      appearance: _editorAppearance,
+                      onOpenPage: _openPageLink,
+                      pageLinks: () => [
+                        for (final v in widget.views)
+                          if (v.objectType == 'document')
+                            PageLinkTarget(id: v.id, title: v.name),
+                      ],
                     ),
                   ),
-              ],
+                  // Reverse references — the cloud pages that link to this one.
+                  // Cloud + documents only (folders have no body); lazy-loaded so
+                  // it never blocks the page opening. Hidden entirely in 本地模式
+                  // (onLoadBacklinks null there).
+                  if (widget.onLoadBacklinks != null &&
+                      widget.selectedView?.objectType == 'document')
+                    Padding(
+                      padding: const EdgeInsets.only(left: EditorTheme.gutter),
+                      child: _BacklinksPanel(
+                        key: ValueKey('backlinks#${widget.selectedView!.id}'),
+                        viewId: widget.selectedView!.id,
+                        load: widget.onLoadBacklinks!,
+                        onOpen: widget.onOpenSearchResult,
+                        onLoaded: _onBacklinksLoaded,
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
-      )),
+      ),
     );
   }
 
@@ -3730,8 +3730,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     icon: Icons.toc,
                     label: context.l10n.pageOutlineTitle,
                     active: tab == _ToolsTab.outline,
-                    onTap: () =>
-                        setState(() => _toolsTab = _ToolsTab.outline),
+                    onTap: () => setState(() => _toolsTab = _ToolsTab.outline),
                   ),
                   const SizedBox(width: 4),
                   _ToolsTabButton(
@@ -3744,8 +3743,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
                     badge: widget.commentThreads
                         .where((t) => !t.isResolved)
                         .length,
-                    onTap: () =>
-                        setState(() => _toolsTab = _ToolsTab.comments),
+                    onTap: () => setState(() => _toolsTab = _ToolsTab.comments),
                   ),
                   const Spacer(),
                 ],
@@ -4859,9 +4857,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           if (documentId != widget.selectedBootstrap?.document.id) {
             throw const AiEditConflict();
           }
-          await _commandHook.applyAiEdits(source, preview,
-              canApply: () => mounted &&
-                  documentId == widget.selectedBootstrap?.document.id);
+          await _commandHook.applyAiEdits(
+            source,
+            preview,
+            canApply: () =>
+                mounted && documentId == widget.selectedBootstrap?.document.id,
+          );
         },
       ),
     );

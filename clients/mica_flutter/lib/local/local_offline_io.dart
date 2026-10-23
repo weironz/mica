@@ -10,6 +10,7 @@ import 'cache_stats.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import '../editor/operation_history.dart';
 
 // The interface makes every member an override; 35 `@override` annotations
 // would drown the real signal in enforcement noise, so the lint is off here.
@@ -224,7 +225,10 @@ class LocalOffline implements LocalOfflineApi {
     ];
   }
 
-  Future<List<Backlink>> backlinksLocal(String workspaceId, String viewId) async {
+  Future<List<Backlink>> backlinksLocal(
+    String workspaceId,
+    String viewId,
+  ) async {
     final store = _store;
     if (store == null) return const [];
     return [
@@ -544,8 +548,17 @@ class LocalOffline implements LocalOfflineApi {
   }
 
   /// Apply the editor's op batch to the active document.
-  Future<void> applyOps(List<Map<String, dynamic>> ops) async {
-    await _active?.applyOps(ops);
+  Future<void> applyOps(
+    List<Map<String, dynamic>> ops, {
+    bool trackHistory = false,
+  }) async {
+    await _active?.applyOps(ops, trackHistory: trackHistory);
+  }
+
+  Future<EditorHistoryState> applyHistory(HistoryAction action) async {
+    final backend = _active;
+    if (backend == null) throw StateError('No active local document');
+    return backend.applyHistory(action);
   }
 
   /// Import a pre-walked tree of files as local documents, mirroring the

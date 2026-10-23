@@ -227,8 +227,9 @@ async fn discard_object(state: &AppState, previous: Option<&str>, keeping: &str)
 ///
 /// A stable link to a user's picture: 302 to a freshly-signed storage URL on
 /// every request, so the link itself never expires. Unauthenticated — see the
-/// module docs; kept public by `auth::is_avatar_path`, pinned by that module's
-/// `avatar_read_route_is_public` test.
+/// module docs; mounted without the scope guard in
+/// `routes::public_api_router`, pinned by the router-level probe tests there
+/// (`route_layer_tests` in routes/mod.rs).
 pub async fn get_avatar(State(state): State<AppState>, Path(user_id): Path<Uuid>) -> Response {
   let Ok(storage) = storage(&state) else {
     return StatusCode::NOT_FOUND.into_response();

@@ -48,6 +48,32 @@ class MicaYDoc {
       micaYjs.encodeDiff(_doc, sv.toJS).toDart;
   bool applyUpdate(Uint8List bytes) => micaYjs.applyUpdate(_doc, bytes.toJS);
 
+  void beginHistoryBatch() => micaYjs.beginHistoryBatch(_doc);
+  void endHistoryBatch() => micaYjs.endHistoryBatch(_doc);
+  void resetHistory() {
+    micaYjs.resetHistory(_doc);
+    seedDataCache();
+  }
+
+  bool undo() {
+    final changed = micaYjs.undo(_doc);
+    seedDataCache();
+    return changed;
+  }
+
+  bool redo() {
+    final changed = micaYjs.redo(_doc);
+    seedDataCache();
+    return changed;
+  }
+
+  bool canUndo() => micaYjs.canUndo(_doc);
+  bool canRedo() => micaYjs.canRedo(_doc);
+  (int, int) historyDepths() {
+    final depths = micaYjs.historyDepths(_doc).toDart;
+    return (depths[0].toDartInt, depths[1].toDartInt);
+  }
+
   // ── shared-type accessors ──
   JSObject _blocksMap() => micaYjs.getMap(_doc, 'blocks');
   JSObject _metaMap() => micaYjs.getMap(_doc, 'meta');
@@ -261,7 +287,12 @@ class MicaYDoc {
   }
 
   Map<String, dynamic> _markMap(
-      int start, int end, String ty, String? href, String? title) {
+    int start,
+    int end,
+    String ty,
+    String? href,
+    String? title,
+  ) {
     final m = <String, dynamic>{'start': start, 'end': end, 'type': ty};
     if (href != null) m['href'] = href;
     if (title != null) m['title'] = title;
@@ -346,7 +377,11 @@ class MicaYDoc {
   }
 
   /// Replace a block's whole text + marks (mirrors `set_text_and_marks`).
-  void _setTextAndMarks(JSObject bm, String text, List<Map<String, dynamic>> marks) {
+  void _setTextAndMarks(
+    JSObject bm,
+    String text,
+    List<Map<String, dynamic>> marks,
+  ) {
     final t = micaYjs.mapGet(bm, 'text');
     if (t == null || !micaYjs.isText(t)) {
       final nt = micaYjs.newText(text);
@@ -411,7 +446,6 @@ class MicaYDoc {
     for (final t in Mark.types) t: null,
   });
 
-
   void _insertBlock(String parentId, int index, Map<String, dynamic> block) {
     final blocks = _blocksMap();
     final id = block['id'] as String;
@@ -439,12 +473,19 @@ class MicaYDoc {
     }
   }
 
-  void _updateBlock(String id, String? kind, String? text, Map<String, dynamic>? data) {
+  void _updateBlock(
+    String id,
+    String? kind,
+    String? text,
+    Map<String, dynamic>? data,
+  ) {
     final bm = _blockMap(id);
     if (bm == null) return;
     if (kind != null) micaYjs.mapSet(bm, 'ty', kind.toJS);
     if (text != null) {
-      final marks = data != null ? _marksFromData(data) : const <Map<String, dynamic>>[];
+      final marks = data != null
+          ? _marksFromData(data)
+          : const <Map<String, dynamic>>[];
       _setTextAndMarks(bm, text, marks);
     }
     if (data != null) {

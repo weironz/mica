@@ -16,18 +16,23 @@ void main() {
     tester,
   ) async {
     StateSetter? rebuild;
+    BuildContext? host;
     final pipeline = RasterPreviewPipeline(
       previewers: const [MathPreviewer()],
       // The widget may not be pumped yet when request() defers its first
       // callback; run the mutation regardless and rebuild when we can.
-      requestRebuild: (fn) => rebuild == null ? fn() : rebuild!(fn),
+      requestRebuild: (fn) {
+        if (host?.mounted ?? false) rebuild!(fn);
+      },
     );
+    addTearDown(pipeline.dispose);
 
     await tester.pumpWidget(
       MaterialApp(
         home: StatefulBuilder(
           builder: (context, setState) {
             rebuild = setState;
+            host = context;
             return Stack(
               clipBehavior: Clip.hardEdge,
               children: [

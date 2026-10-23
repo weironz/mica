@@ -10,6 +10,7 @@
 // Build (produces ../../web/yjs_bundle.js, committed):
 //   cd tool/yjs && npm install && npm run build
 import * as Y from 'yjs';
+import {applyHistory} from './history_placements.js';
 
 // yrs encodes integer `Any` values as BigInt-typed ints; yjs surfaces them as
 // JS BigInt, which JSON.stringify rejects (TypeError). Props integers written
@@ -23,6 +24,35 @@ import * as Y from 'yjs';
 // would round-trip back into the CRDT and sync out. No prop is that large today
 // (this is the tripwire if one is ever added — carry it as a string instead).
 const bigIntSafe = (_k, v) => (typeof v === 'bigint' ? Number(v) : v);
+
+// History follows explicit editor batches, never bootstrap/remote application.
+const editorOrigin = Symbol('mica-editor');
+const histories = new WeakMap();
+const activeBatches = new WeakMap();
+const sameJson = (a, b) => {
+  if (typeof a === 'bigint') a = Number(a);
+  if (typeof b === 'bigint') b = Number(b);
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length &&
+    keys.every(key => Object.hasOwn(b, key) && sameJson(a[key], b[key]));
+};
+const history = doc => {
+  let manager = histories.get(doc);
+  if (!manager) {
+    manager = new Y.UndoManager(doc.getMap('blocks'), {
+      trackedOrigins: new Set([editorOrigin]),
+      captureTimeout: Number.MAX_SAFE_INTEGER,
+    });
+    histories.set(doc, manager);
+  }
+  return manager;
+};
+const edit = (type, fn) => type.doc
+  ? type.doc.transact(fn, activeBatches.has(type.doc) ? editorOrigin : null)
+  : fn();
 
 globalThis.micaYjs = {
   // ── lifecycle / sync primitives (mirror MicaDocument's FFI surface) ──
@@ -45,17 +75,48 @@ globalThis.micaYjs = {
   encodeDiff: (doc, sv) => Y.encodeStateAsUpdate(doc, sv),
   transact: (doc, fn) => doc.transact(fn),
 
+  beginHistoryBatch: doc => {
+    const depth = activeBatches.get(doc) || 0;
+    if (depth === 0) history(doc).stopCapturing();
+    activeBatches.set(doc, depth + 1);
+  },
+  endHistoryBatch: doc => {
+    const depth = activeBatches.get(doc) || 0;
+    if (depth > 1) activeBatches.set(doc, depth - 1);
+    else if (depth === 1) {
+      activeBatches.delete(doc);
+      history(doc).stopCapturing();
+    }
+  },
+  resetHistory: doc => {
+    activeBatches.delete(doc);
+    history(doc).clear();
+    history(doc).stopCapturing();
+  },
+  undo: doc => !activeBatches.has(doc) && applyHistory(doc, history(doc), false),
+  redo: doc => !activeBatches.has(doc) && applyHistory(doc, history(doc), true),
+  canUndo: doc => history(doc).undoStack.length > 0,
+  canRedo: doc => history(doc).redoStack.length > 0,
+  historyDepths: doc => [history(doc).undoStack.length, history(doc).redoStack.length],
+
   // ── shared-type access (read side) ──
   getMap: (doc, name) => doc.getMap(name),
   mapGet: (m, k) => m.get(k),
-  mapSet: (m, k, v) => m.set(k, v),
+  mapSet: (m, k, v) => {
+    if (m.doc && m.get(k) === v) return;
+    return edit(m, () => m.set(k, v));
+  },
   mapHas: (m, k) => m.has(k),
-  mapDelete: (m, k) => m.delete(k),
+  mapDelete: (m, k) => edit(m, () => m.delete(k)),
   mapKeys: (m) => Array.from(m.keys()),
   // Field-level props (P2-M4.7): set/read a nested Y.Map's entries as JSON, so
   // concurrent edits to different props keys converge. JSON.parse yields plain
   // JS values (yjs stores them like yrs `Any`).
-  mapSetJson: (m, k, jsonStr) => m.set(k, JSON.parse(jsonStr)),
+  mapSetJson: (m, k, jsonStr) => {
+    const value = JSON.parse(jsonStr);
+    if (m.doc && sameJson(m.get(k), value)) return;
+    return edit(m, () => m.set(k, value));
+  },
   mapEntriesJson: (m) => JSON.stringify(Object.fromEntries(m.entries()), bigIntSafe),
 
   // ── nested-type constructors (write side, for W2) ──
@@ -66,22 +127,22 @@ globalThis.micaYjs = {
   // ── Y.Text ──
   textToString: (t) => (t && typeof t.toString === 'function' ? t.toString() : ''),
   textLength: (t) => (t ? t.length : 0),
-  textInsert: (t, i, s) => t.insert(i, s),
-  textDelete: (t, i, len) => t.delete(i, len),
-  textFormat: (t, i, len, attrs) => t.format(i, len, attrs),
+  textInsert: (t, i, s) => edit(t, () => t.insert(i, s)),
+  textDelete: (t, i, len) => edit(t, () => t.delete(i, len)),
+  textFormat: (t, i, len, attrs) => edit(t, () => t.format(i, len, attrs)),
   // delta is [{insert, attributes?}, ...] — drives marks reconstruction in Dart.
   textDelta: (t) => t.toDelta(),
   // JSON-bridged variants so Dart passes/reads structured values as strings
   // instead of building/inspecting JS objects over js_interop.
   textDeltaJson: (t) => JSON.stringify(t.toDelta(), bigIntSafe),
-  textFormatJson: (t, i, len, attrsJson) => t.format(i, len, JSON.parse(attrsJson)),
+  textFormatJson: (t, i, len, attrsJson) => edit(t, () => t.format(i, len, JSON.parse(attrsJson))),
 
   // ── Y.Array ──
   arrayToList: (a) => (a && typeof a.toArray === 'function' ? a.toArray() : []),
   arrayLength: (a) => (a ? a.length : 0),
-  arrayInsert: (a, i, items) => a.insert(i, items),
-  arrayInsertJson: (a, i, itemsJson) => a.insert(i, JSON.parse(itemsJson)),
-  arrayDelete: (a, i, len) => a.delete(i, len),
+  arrayInsert: (a, i, items) => edit(a, () => a.insert(i, items)),
+  arrayInsertJson: (a, i, itemsJson) => edit(a, () => a.insert(i, JSON.parse(itemsJson))),
+  arrayDelete: (a, i, len) => edit(a, () => a.delete(i, len)),
 
   // ── type guards ──
   isText: (x) => x instanceof Y.Text,

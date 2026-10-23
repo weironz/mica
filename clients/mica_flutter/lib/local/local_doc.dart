@@ -13,6 +13,9 @@
 // `!kIsWeb`.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
+import '../editor/operation_history.dart';
+import '../sync/pending_doc_update.dart';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 
@@ -41,6 +44,8 @@ class LocalDocBackend {
   // Shared editor-op → yrs translator (also used by the cloud sync session), so
   // local and cloud interpret edits identically.
   final DocOpMirror _mirror = DocOpMirror();
+  late final _localUpdates = PendingDocUpdate(persist: _persistLocalUpdate);
+  List<DocOp>? _mirroredOpsAwaitingSave;
 
   /// Appends since the last compaction check. Same shape and same numbers as
   /// the cloud store's `_maybeCompact` — this file and that one now persist the
@@ -126,8 +131,8 @@ class LocalDocBackend {
   }
 
   Map<String, Map<String, dynamic>> _blocksById() {
-    final all =
-        (jsonDecode(_doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
+    final all = (jsonDecode(_doc.toBlocksJson()) as List)
+        .cast<Map<String, dynamic>>();
     return {for (final b in all) b['id'] as String: b};
   }
 
@@ -150,18 +155,62 @@ class LocalDocBackend {
   ///     has to remember to [flush] first (several callers in
   ///     `local_offline_io.dart` did exactly that, and forgetting produced an
   ///     export of an older document than the one on screen).
-  Future<void> applyOps(List<DocOp> ops) async {
-    final sv = _doc.stateVector();
-    for (final op in ops) {
-      _mirror.apply(_doc, op);
-    }
-    final diff = _doc.encodeDiffSince(stateVector: sv);
-    if (diff.isEmpty) return; // a no-op batch writes nothing
-    if (_store.appendUpdate(docId: docId, update: diff) == 0) {
-      _healFailedAppend();
+  Future<void> applyOps(List<DocOp> ops, {bool trackHistory = false}) async {
+    _localUpdates.flush();
+    if (identical(_mirroredOpsAwaitingSave, ops)) {
+      _mirroredOpsAwaitingSave = null;
       return;
     }
-    _maybeCompact();
+    final sv = _doc.stateVector();
+    if (trackHistory) _doc.beginHistoryBatch();
+    try {
+      for (final op in ops) {
+        _mirror.apply(_doc, op);
+      }
+    } finally {
+      if (trackHistory) _doc.endHistoryBatch();
+    }
+    _mirroredOpsAwaitingSave = ops;
+    _localUpdates.publish(_doc.encodeDiffSince(stateVector: sv));
+    _mirroredOpsAwaitingSave = null;
+  }
+
+  void _persistLocalUpdate(Uint8List diff) {
+    if (_store.appendUpdate(docId: docId, update: diff) == 0) {
+      _healFailedAppend();
+    } else {
+      _maybeCompact();
+    }
+  }
+
+  Future<EditorHistoryState> applyHistory(HistoryAction action) async {
+    Object? persistenceError;
+    if (action == HistoryAction.reset) {
+      _doc.resetHistory();
+    } else {
+      try {
+        _localUpdates.flush();
+        final sv = _doc.stateVector();
+        if (action == HistoryAction.undo) {
+          _doc.undo();
+        } else {
+          _doc.redo();
+        }
+        _localUpdates.publish(_doc.encodeDiffSince(stateVector: sv));
+      } catch (error) {
+        persistenceError = error;
+      }
+    }
+    _mirror.seedFrom(_doc);
+    final depths = _doc.historyDepths();
+    return EditorHistoryState.fromBlocks(
+      childBlocks(),
+      canUndo: _doc.canUndo(),
+      canRedo: _doc.canRedo(),
+      undoDepth: depths.$1,
+      redoDepth: depths.$2,
+      persistenceError: persistenceError,
+    );
   }
 
   /// `appendUpdate` returned 0: the store errored (busy / disk full / io) and
@@ -199,6 +248,7 @@ class LocalDocBackend {
   /// nothing is lost if this never runs. It is compaction, and it leaves a
   /// closed document as a single clean base.
   void flush() {
+    _localUpdates.flush();
     _appendsSinceCheck = 0;
     _store.compactLocal(docId: docId);
   }
@@ -207,5 +257,11 @@ class LocalDocBackend {
   List<Map<String, dynamic>> allBlocks() =>
       (jsonDecode(_doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
 
-  void dispose() => flush();
+  void dispose() {
+    try {
+      flush();
+    } finally {
+      _localUpdates.dispose();
+    }
+  }
 }

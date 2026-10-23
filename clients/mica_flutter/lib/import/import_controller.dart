@@ -170,11 +170,32 @@ class ImportController extends ChangeNotifier {
     String? workspaceId,
     String failedMessage, {
     Duration pollDelay = const Duration(milliseconds: 600),
+    Duration retryDelay = const Duration(seconds: 1),
+    int maxPollRetries = 3,
   }) async {
     try {
       ImportJobStatus job;
+      var consecutiveErrors = 0;
       while (true) {
-        job = await jobStatus(id);
+        try {
+          job = await jobStatus(id);
+          consecutiveErrors = 0;
+        } catch (error) {
+          // A network wobble (socket reset, 5xx, gateway timeout) must not
+          // declare the import failed — the server keeps importing, and
+          // calling it dead here meant the workspace never reloaded, the
+          // image second pass never ran, and the cancel button vanished
+          // while the job was still going. Back off and retry; only a 4xx
+          // (job gone, wrong workspace) is terminal.
+          final isTerminal = error is ApiException &&
+              error.statusCode != null &&
+              error.statusCode! >= 400 &&
+              error.statusCode! < 500;
+          if (isTerminal || consecutiveErrors >= maxPollRetries) rethrow;
+          consecutiveErrors++;
+          await Future<void>.delayed(retryDelay * consecutiveErrors);
+          continue;
+        }
         // The server reports done/total all along; surfacing it is what keeps
         // a 96-page import from reading as one indeterminate spinner.
         if (job.total > 0) {

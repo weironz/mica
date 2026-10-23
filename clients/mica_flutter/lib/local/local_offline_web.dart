@@ -13,6 +13,7 @@
 // ignore_for_file: annotate_overrides
 import 'dart:convert';
 import 'dart:typed_data';
+import '../editor/operation_history.dart';
 
 import 'cache_stats.dart';
 
@@ -169,7 +170,8 @@ class LocalOffline implements LocalOfflineApi {
     final kept = <ViewData>[
       for (final v
           in cachedCloudPageTree(serverUrl)?.views ?? const <ViewData>[])
-        if (!incoming.contains(v.workspaceId) && live.contains(v.workspaceId)) v,
+        if (!incoming.contains(v.workspaceId) && live.contains(v.workspaceId))
+          v,
     ];
     views = [...kept, ...views];
     savePref(
@@ -289,7 +291,12 @@ class LocalOffline implements LocalOfflineApi {
 
   DocData? openDoc(String docId) => null;
 
-  Future<void> applyOps(List<Map<String, dynamic>> ops) async {}
+  Future<void> applyOps(
+    List<Map<String, dynamic>> ops, {
+    bool trackHistory = false,
+  }) async {}
+  Future<EditorHistoryState> applyHistory(HistoryAction action) async =>
+      throw UnsupportedError('local offline is not available on web');
 
   Future<VaultImportResult> importVaultTree(
     List<({String path, List<int> bytes})> entries,

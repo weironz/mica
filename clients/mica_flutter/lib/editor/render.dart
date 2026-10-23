@@ -13,10 +13,14 @@ import 'details_html.dart';
 import 'highlight.dart';
 import 'marks.dart';
 import 'model.dart';
+import 'resource_demand.dart';
+
+export 'resource_demand.dart';
 import 'table.dart';
 
 part 'block_renderers.dart';
 part 'inline_atoms.dart';
+part 'render_resources.dart';
 
 /// User-adjustable editor appearance (document font). Page width is applied by
 /// the surrounding page layout, not here.
@@ -429,7 +433,6 @@ class _NodeLayout {
   String kind = 'paragraph';
   bool todoChecked = false;
   int quoteDepth = 0; // blockquote nesting (bars on the left)
-  ui.Image? mathImage; // rendered formula (math_block), if captured
   Size mathSize = Size.zero;
   bool quoteBreak = false; // a blank separated this quote from the previous
   // The GFM callout type this quoted block belongs to (propagated to every
@@ -604,6 +607,7 @@ class RenderDocument extends RenderBox {
     _contentRevision = revision;
     if (unchanged) return;
     _hasSelectionDependentFolds = _containsDetails(value);
+    _resourceReferencesDirty = true;
     markNeedsLayout();
   }
 
@@ -815,7 +819,20 @@ class RenderDocument extends RenderBox {
     // detected, while an unchanged image cache cannot defeat selection reuse.
     if (mapEquals(_images, value)) return;
     _images = Map.of(value);
-    markNeedsLayout();
+    var geometryChanged = false;
+    for (final entry in value.entries) {
+      final size = Size(
+        entry.value.width.toDouble(),
+        entry.value.height.toDouble(),
+      );
+      if (_imageSizes[entry.key] != size) geometryChanged = true;
+      _imageSizes[entry.key] = size;
+    }
+    if (geometryChanged) {
+      markNeedsLayout();
+    } else {
+      markNeedsPaint();
+    }
   }
 
   /// Swap in a new frame of an animated image (GIF / animated WebP).
@@ -826,10 +843,11 @@ class RenderDocument extends RenderBox {
   /// picture that hasn't changed shape. A frame that somehow *does* differ in
   /// size falls back to a relayout rather than painting into a stale box.
   void replaceImage(String key, ui.Image frame) {
-    final old = _images[key];
+    final oldSize = _imageSizes[key];
+    final newSize = Size(frame.width.toDouble(), frame.height.toDouble());
     _images[key] = frame;
-    if (old != null &&
-        (old.width != frame.width || old.height != frame.height)) {
+    _imageSizes[key] = newSize;
+    if (oldSize != null && oldSize != newSize) {
       markNeedsLayout();
     } else {
       markNeedsPaint();
@@ -861,8 +879,20 @@ class RenderDocument extends RenderBox {
       _previewImages = {
         for (final entry in value.entries) entry.key: Map.of(entry.value),
       };
-      _layoutCache.clear();
-      markNeedsLayout();
+      final geometryChanges = <PreviewResourceKey>{};
+      for (final group in value.entries) {
+        for (final entry in group.value.entries) {
+          final key = (id: group.key, source: entry.key);
+          final size = Size(
+            entry.value.width.toDouble(),
+            entry.value.height.toDouble(),
+          );
+          if (_previewSizes[key] != size) geometryChanges.add(key);
+          _previewSizes[key] = size;
+        }
+      }
+      _invalidatePreviewGeometry(geometryChanges);
+      markNeedsPaint();
     }
   }
 
@@ -877,13 +907,28 @@ class RenderDocument extends RenderBox {
     _previewBaselines = {
       for (final entry in value.entries) entry.key: Map.of(entry.value),
     };
-    _layoutCache.clear();
-    markNeedsLayout();
+    final geometryChanges = <PreviewResourceKey>{};
+    for (final group in value.entries) {
+      for (final entry in group.value.entries) {
+        final key = (id: group.key, source: entry.key);
+        if (_retainedBaselines[key] != entry.value) geometryChanges.add(key);
+        _retainedBaselines[key] = entry.value;
+      }
+    }
+    _invalidatePreviewGeometry(geometryChanges);
   }
 
   /// Ask the host pipeline for a preview of [source] under previewer [id],
   /// to be displayed [targetWidth] logical px wide.
   void Function(String id, String source, double targetWidth)? onRequestPreview;
+  ValueChanged<EditorResourceDemand>? onResourceDemand;
+  void Function(String id, String source)? onPreviewPainted;
+
+  final Map<PreviewResourceKey, Size> _previewSizes = {};
+  final Map<PreviewResourceKey, double> _retainedBaselines = {};
+  final Map<String, Size> _imageSizes = {};
+  final Map<PreviewResourceKey, Set<String>> _previewDependents = {};
+  bool _resourceReferencesDirty = true;
 
   /// Which rectangular cell AREA of a table is block-selected (rows r0–r1 ×
   /// columns c0–c1, inclusive). Row select = one row × all columns; column
@@ -1188,6 +1233,7 @@ class RenderDocument extends RenderBox {
   @override
   void performLayout() {
     _layoutCount++;
+    _pruneResourceGeometry();
     final maxWidth = constraints.maxWidth.isFinite
         ? constraints.maxWidth
         : 600.0;
@@ -1883,13 +1929,14 @@ class RenderDocument extends RenderBox {
   @override
   void paint(PaintingContext context, Offset offset) {
     final canvas = context.canvas;
-    final clip = canvas.getLocalClipBounds();
-    _visTop = clip.top - offset.dy - _cullSlack;
-    _visBottom = clip.bottom - offset.dy + _cullSlack;
+    final clip = _resourceClip(canvas.getLocalClipBounds().shift(-offset));
+    _visTop = clip.top - _cullSlack;
+    _visBottom = clip.bottom + _cullSlack;
     // The EXACT clip, no cull slack: floating chrome (hover tooltips) has to be
     // placed inside what the user can actually see, and the culling bounds are
     // deliberately 600px generous in both directions.
-    _clipBounds = clip;
+    _clipBounds = clip.shift(offset);
+    _publishResourceDemand(clip);
     // Block backgrounds first, so the selection highlight (next) is not hidden
     // behind a code block's fill.
     _paintBlockBackgrounds(canvas, offset);
@@ -1947,6 +1994,7 @@ class RenderDocument extends RenderBox {
     final i = sel.focus.node;
     if (i < 0 || i >= _layouts.length || i >= _nodes.length) return;
     final l = _layouts[i];
+    if (!_nodeVisible(l)) return;
     if (EditorNode.isAtomicKind(l.kind) ||
         l.kind == 'code_block' ||
         l.renderedBy != null) {
@@ -1968,7 +2016,6 @@ class RenderDocument extends RenderBox {
     if (img == null) {
       // Safe from inside paint: request() only registers and schedules — every
       // rebuild it causes is behind an addPostFrameCallback.
-      onRequestPreview?.call('math', source, 0);
       return; // the card appears on the frame the raster lands
     }
 
@@ -2023,6 +2070,7 @@ class RenderDocument extends RenderBox {
         ..strokeWidth = 1
         ..color = _appearance.tokens.border.normal,
     );
+    onPreviewPainted?.call('math', source);
     canvas.drawImageRect(
       img,
       Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
@@ -3675,6 +3723,10 @@ class RenderDocument extends RenderBox {
     _painterCache.clear();
     // Painters were freed via _painterCache; these layouts only referenced them.
     _layoutCache.clear();
+    _previewSizes.clear();
+    _retainedBaselines.clear();
+    _imageSizes.clear();
+    _previewDependents.clear();
     super.dispose();
   }
 }
@@ -3727,6 +3779,8 @@ class DocumentSurface extends LeafRenderObjectWidget {
     this.previewImages = const {},
     this.previewBaselines = const {},
     this.onRequestPreview,
+    this.onResourceDemand,
+    this.onPreviewPainted,
     this.remoteCursors = const [],
     this.commentHighlights = const [],
     super.key,
@@ -3763,6 +3817,8 @@ class DocumentSurface extends LeafRenderObjectWidget {
   final Map<String, Map<String, double>> previewBaselines;
   final void Function(String id, String source, double targetWidth)?
   onRequestPreview;
+  final ValueChanged<EditorResourceDemand>? onResourceDemand;
+  final void Function(String id, String source)? onPreviewPainted;
 
   @override
   RenderDocument createRenderObject(BuildContext context) =>
@@ -3777,6 +3833,8 @@ class DocumentSurface extends LeafRenderObjectWidget {
         ..onRequestImage = onRequestImage
         ..onImagePainted = onImagePainted
         ..onRequestPreview = onRequestPreview
+        ..onResourceDemand = onResourceDemand
+        ..onPreviewPainted = onPreviewPainted
         ..imageErrors = imageErrors
         ..previewImages = previewImages
         ..previewBaselines = previewBaselines
@@ -3795,6 +3853,8 @@ class DocumentSurface extends LeafRenderObjectWidget {
       ..onRequestImage = onRequestImage
       ..onImagePainted = onImagePainted
       ..onRequestPreview = onRequestPreview
+      ..onResourceDemand = onResourceDemand
+      ..onPreviewPainted = onPreviewPainted
       ..imageErrors = imageErrors
       ..previewImages = previewImages
       ..previewBaselines = previewBaselines

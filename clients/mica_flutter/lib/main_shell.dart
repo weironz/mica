@@ -47,11 +47,13 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// The workspace members map — see views/members_controller.dart. The field
   /// below is a synced view-model copy for the build helpers.
   late final MembersController _membersCtrl;
+
   /// Workspace invitations (views/invitations_controller.dart).
   late final InvitationsController _invites = InvitationsController(
     api: _api,
     token: () => _sessionCtrl.session?.accessToken,
-    onJoined: (w) => _refreshWorkspaces().then((_) => _selectWorkspaceById(w.id)),
+    onJoined: (w) =>
+        _refreshWorkspaces().then((_) => _selectWorkspaceById(w.id)),
   );
   Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
   Map<String, List<DocumentView>> _viewsByWorkspace = const {};
@@ -149,18 +151,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   bool _aiEnabled = false;
   bool _aiConfigured = false;
 
-  // The ACTIVE tab's sockets. Proxies, for the same reason `_selectedBootstrap`
-  // is one: every call site here means "the open document's session", and that
-  // is exactly the active tab's. Background tabs keep their own pair in
-  // [DocTab.sync] / [DocTab.cloudSession] and are reached only by the cap.
-  //
-  // Switching tabs therefore needs no special case: `_reconcileSync`'s existing
-  // "already on this document?" test reads the tab being switched TO, so a tab
-  // that kept its socket is recognised as connected and nothing reconnects.
-  // (Writes now go through the sync controller, which holds the tab list; the
-  // setters are gone with the writers.)
-  DocumentSyncClient? get _sync => _activeTab.sync;
-
+  // The ACTIVE tab's sync session (see `_cloudSession` below); background tabs
+  // keep their own in [DocTab.cloudSession], reached only by the cap. Writes
+  // go through the sync controller, which holds the tab list.
   List<PresenceUser> _presence = const [];
 
   /// The sync domain — the reconcile loop that keeps the document sockets
@@ -183,7 +176,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // editor edits a CRDT replica instead of POSTing block ops: edits push yrs
   // diffs, remote updates merge + reconcile. It activates only once bootstrap
   // succeeds (`isReady`), so against an older server the app falls back to the
-  // op/REST path transparently. `DocumentSyncClient` stays up for presence.
+  // op/REST path transparently. The same session now also carries presence
+  // (folded in from the old standalone socket, which never reconnected).
   CloudSyncSession? get _cloudSession => _activeTab.cloudSession;
 
   /// Bumped on every tab activation; each tab records the value it saw. See
@@ -215,7 +209,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       defaultCloudUrl: kDefaultCloudUrl,
     );
     _loadPrefs();
-    _registry.addListener(_syncRegistryState); // after loadPrefs: setState-in-initState throws
+    _registry.addListener(
+      _syncRegistryState,
+    ); // after loadPrefs: setState-in-initState throws
     _servers = _registry.servers;
     _cloudOrigin = _registry.cloudOrigin;
     _sessionCtrl = SessionController()..addListener(_syncSessionState);
@@ -750,12 +746,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // one being restored: the seed keeps server-fresh entries on top of
       // the mirror, so a first switch to any other workspace is not a cache
       // miss that renders "还没有页面" while the tree is in flight.
-      _sessionCtrl.restore(
-        session,
-        workspaces,
-        restoredWs,
-        {..._warmTreesFromMirror(session), ..._viewsByWorkspace},
-      );
+      _sessionCtrl.restore(session, workspaces, restoredWs, {
+        ..._warmTreesFromMirror(session),
+        ..._viewsByWorkspace,
+      });
       unawaited(_syncSettingsFromCloud(session));
       unawaited(_refreshAiConfigured());
       // The session we just restored carries the profile as it was at LAST
@@ -770,7 +764,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // typing before that silently rode the REST fallback with no mirror.
       _reconcileSync();
     } catch (error) {
-      if (!mounted || _cloudOrigin != origin) return; // never clear the NEW server's
+      if (!mounted || _cloudOrigin != origin)
+        return; // never clear the NEW server's
       // Revoked/invalid token → drop it; desktop falls back to the local world.
       // Keyed on the status, not on the message text: sniffing for the word
       // "unauthorized" both missed 401s worded differently and would fire on a
@@ -811,11 +806,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // lazily (settings dialog), so someone whose first action is an oversized
       // paste has never been told the number. Quoting a guess would be worse
       // than omitting it — the whole point of this copy is to be believable.
-      'file_too_large' => _maxUploadBytes > 0
-          ? context.l10n.uploadFileTooLargeWithLimit(
-              formatBytesBinary(_maxUploadBytes),
-            )
-          : context.l10n.uploadFileTooLarge,
+      'file_too_large' =>
+        _maxUploadBytes > 0
+            ? context.l10n.uploadFileTooLargeWithLimit(
+                formatBytesBinary(_maxUploadBytes),
+              )
+            : context.l10n.uploadFileTooLarge,
       'workspace_quota_exceeded' => context.l10n.uploadWorkspaceFull,
       'owner_quota_exceeded' => context.l10n.uploadOwnerFull,
       _ => error.toString(),
@@ -1241,12 +1237,20 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   @override
   void dispose() {
+    // Owned here (initState): detach AND dispose, or the notifier leaks.
+    // themeMode/locale are app-level singletons, detached only.
     _registry.removeListener(_syncRegistryState);
     _sessionCtrl.removeListener(_syncSessionState);
     _auth.removeListener(_syncAuthState);
     _membersCtrl.removeListener(_syncMembersState);
-    _invites.dispose();
     _import.removeListener(_syncImportState);
+    _registry.dispose();
+    _sessionCtrl.dispose();
+    _auth.dispose();
+    _viewsCtrl.dispose();
+    _membersCtrl.dispose();
+    _import.dispose();
+    _invites.dispose();
     themeModeController.removeListener(_schedulePushSettings);
     localeController.removeListener(_schedulePushSettings);
     _settingsPushTimer?.cancel();
@@ -1310,7 +1314,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       refreshSession: _api.refreshSession,
       removeAvatar: _api.removeAvatar,
       httpGet: (uri) => sharedHttpClient.get(uri),
-      avatarUrlFor: (version, {userId}) => _avatarUrlFor(version, userId: userId),
+      avatarUrlFor: (version, {userId}) =>
+          _avatarUrlFor(version, userId: userId),
       evictImage: (url) => NetworkImage(url).evict(),
     );
     _auth.onSessionExpired = _onSessionExpired;
@@ -1339,8 +1344,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           .createDocument(token, workspaceId, name, parentViewId: parentViewId),
       bootstrapDocument: (token, workspaceId, documentId) =>
           _api.bootstrapDocument(token, workspaceId, documentId),
-      createFolder: (token, workspaceId, name, {parentViewId}) =>
-          _api.createFolder(token, workspaceId, name, parentViewId: parentViewId),
+      createFolder: (token, workspaceId, name, {parentViewId}) => _api
+          .createFolder(token, workspaceId, name, parentViewId: parentViewId),
       updateView: (token, workspaceId, viewId, name, {icon}) =>
           _api.updateView(token, workspaceId, viewId, name, icon: icon),
       deleteView: _api.deleteView,
@@ -1356,7 +1361,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       origin: () => _api.baseUri.toString(),
       isMounted: () => mounted,
       openViewId: () => _selectedView?.id,
-      crdtSessionDocumentId: () => _sync?.documentId,
+      crdtSessionDocumentId: () => _cloudSession?.documentId,
     );
     _viewsCtrl.onError = (message) {
       if (mounted) setState(() => _message = message);
@@ -1420,9 +1425,15 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       jobStatus: (id) =>
           _api.importJobStatus(_requireSession().accessToken, id),
       listWorkspaces: () => _api.listWorkspaces(_requireSession().accessToken),
-      rehostImage: (token, workspaceId, documentId,
-              {required blockId, required fileName, required bytes}) =>
-          _api.rehostImage(
+      rehostImage:
+          (
+            token,
+            workspaceId,
+            documentId, {
+            required blockId,
+            required fileName,
+            required bytes,
+          }) => _api.rehostImage(
             token,
             workspaceId,
             documentId,
@@ -1527,7 +1538,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             content: Text(l10n.snackCloudSyncPaused),
             leading: const Icon(Icons.cloud_off_outlined),
             actions: [
-              TextButton(onPressed: _syncCtrl.retryCloudSync, child: Text(l10n.commonRetry)),
+              TextButton(
+                onPressed: _syncCtrl.retryCloudSync,
+                child: Text(l10n.commonRetry),
+              ),
               TextButton(
                 onPressed: _syncCtrl.clearSyncBanner,
                 child: Text(l10n.snackDismiss),
@@ -1877,11 +1891,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      await _viewsCtrl.restoreView(
-        session.accessToken,
-        workspace.id,
-        view.id,
-      );
+      await _viewsCtrl.restoreView(session.accessToken, workspace.id, view.id);
     });
   }
 
@@ -2218,7 +2228,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
-    final name = title.trim().isEmpty ? context.l10n.untitledPage : title.trim();
+    final name = title.trim().isEmpty
+        ? context.l10n.untitledPage
+        : title.trim();
     final html = _local.exportDocHtml(
       bootstrap.document.id,
       name,
@@ -2241,7 +2253,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
-    final base = title.trim().isEmpty ? context.l10n.untitledPage : title.trim();
+    final base = title.trim().isEmpty
+        ? context.l10n.untitledPage
+        : title.trim();
     final result = _local.exportDocMarkdown(bootstrap.document.id, base);
     if (result == null) {
       throw ApiException(context.l10n.exportEmptyContent);
@@ -2442,7 +2456,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // ability to renew, and you'd be signed out that night.
       final updated = session.copyWith(user: user);
       _sessionCtrl.adoptSession(updated);
-      _auth.persistSession(updated); // keep the saved display name fresh for restart
+      _auth.persistSession(
+        updated,
+      ); // keep the saved display name fresh for restart
     }
   }
 
@@ -2701,9 +2717,18 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// The provider's live model list. Kept next to [_loadAiSettings] because it
   /// takes the same session and the dialog uses them together.
-  Future<Map<String, dynamic>> _listAiModels({String? provider, String? providerId, String? baseUrl, String? apiKey}) async =>
-      _api.listAiModels(_requireSession().accessToken,
-          provider: provider, providerId: providerId, baseUrl: baseUrl, apiKey: apiKey);
+  Future<Map<String, dynamic>> _listAiModels({
+    String? provider,
+    String? providerId,
+    String? baseUrl,
+    String? apiKey,
+  }) async => _api.listAiModels(
+    _requireSession().accessToken,
+    provider: provider,
+    providerId: providerId,
+    baseUrl: baseUrl,
+    apiKey: apiKey,
+  );
 
   /// Whether the server has a usable AI provider ([_aiReady]). Failure leaves
   /// AI hidden.
@@ -2805,7 +2830,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         markdown,
       );
       setState(() {
-        _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], bootstrap.view]);
+        _sessionCtrl.replaceViews(workspace.id, [
+          ..._viewsByWorkspace[workspace.id] ?? const [],
+          bootstrap.view,
+        ]);
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
       });
@@ -2831,7 +2859,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         markdown,
       );
       setState(() {
-        _sessionCtrl.replaceViews(workspace.id, [..._viewsByWorkspace[workspace.id] ?? const [], bootstrap.view]);
+        _sessionCtrl.replaceViews(workspace.id, [
+          ..._viewsByWorkspace[workspace.id] ?? const [],
+          bootstrap.view,
+        ]);
         _selectedView = bootstrap.view;
         _selectedBootstrap = bootstrap;
       });
@@ -3064,7 +3095,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         'source=${reachedServer ? 'server' : 'mirror'}',
       );
       if (!mounted || !_tabs.contains(tab) || tab.navSeq != seq) return;
-      final wasShowingThisView = tab.view?.id == view.id && tab.bootstrap != null;
+      final wasShowingThisView =
+          tab.view?.id == view.id && tab.bootstrap != null;
       // Per-workspace last view (AppFlowy model): switching back to a workspace
       // reopens the page you left there.
       final wsId = _selectedWorkspace?.id;
@@ -3118,7 +3150,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      await _viewsCtrl.setViewIcon(session.accessToken, workspace.id, view, picked);
+      await _viewsCtrl.setViewIcon(
+        session.accessToken,
+        workspace.id,
+        view,
+        picked,
+      );
     });
   }
 
@@ -3148,7 +3185,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       viewId: viewId,
     );
     if (workspaceId == null) return;
-    for (final view in _viewsByWorkspace[workspaceId] ?? const <DocumentView>[]) {
+    for (final view
+        in _viewsByWorkspace[workspaceId] ?? const <DocumentView>[]) {
       if (view.id != viewId) continue;
       unawaited(_openAcrossWorkspaces(workspaceId, view));
       return;
@@ -3251,11 +3289,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       final workspace = _requireWorkspace();
-      await _viewsCtrl.deleteView(
-        session.accessToken,
-        workspace.id,
-        view.id,
-      );
+      await _viewsCtrl.deleteView(session.accessToken, workspace.id, view.id);
       if (!mounted) return;
       setState(() {
         if (_selectedView?.id == view.id) {
@@ -3405,60 +3439,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  /// Apply editor operations without toggling the global busy state, so inline
-  /// typing in the block editor stays smooth. Errors surface in the banner.
-  /// The ONE editor-op entry point (P3d). Local world → the on-device backend;
-  /// cloud world → the CRDT session once it's ready (a mirrored doc is ready
-  /// even offline — edits land in the durable append-log outbox, P2b). The
-  /// REST fallback below is only reachable in the pre-ready window of a
-  /// never-mirrored doc's cold bootstrap (online): offline-with-mirror never
-  /// gets here (isReady), and offline-without-mirror has no editor to type in
-  /// (P1c shows the empty state) — so it cannot bypass the outbox.
+  /// Editor writes stay on the local-origin CRDT, including cold bootstrap.
   Future<void> _applyEditorOperations(
-    List<Map<String, dynamic>> operations,
-  ) async {
+    List<Map<String, dynamic>> operations, {
+    bool trackHistory = true,
+  }) async {
     if (_activeIsLocal) {
-      await _local.applyOps(operations);
-      // The editor owns its in-memory nodes; no bootstrap rebuild needed.
+      await _local.applyOps(operations, trackHistory: trackHistory);
       return;
     }
-    final yrs = _cloudSession;
-    if (yrs != null && yrs.isReady) {
-      yrs.applyLocalOps(operations);
-      return;
+    final documentId = _selectedBootstrap?.document.id;
+    if (documentId == null) throw StateError('No active editor document');
+    final replica = await _syncCtrl.readyForDocument(documentId);
+    if (!mounted ||
+        _activeIsLocal ||
+        _selectedBootstrap?.document.id != documentId) {
+      throw StateError('Editor document changed');
     }
-
-    final session = _session;
-    final workspace = _selectedWorkspace;
-    final bootstrap = _selectedBootstrap;
-    if (session == null || workspace == null || bootstrap == null) {
-      return;
-    }
-
-    try {
-      final result = await _api.applyDocumentUpdate(
-        session.accessToken,
-        workspace.id,
-        bootstrap.document.id,
-        operations,
-      );
-      if (!mounted ||
-          _selectedBootstrap?.document.id != bootstrap.document.id) {
-        return;
-      }
-      setState(() {
-        _selectedBootstrap = DocumentBootstrap(
-          document: result.document,
-          view: _selectedBootstrap!.view,
-          snapshot: result.snapshot,
-        );
-      });
-    } catch (error) {
-      if (mounted) {
-        setState(() => _message = error.toString());
-      }
-      rethrow;
-    }
+    replica.applyLocalOps(operations, trackHistory: trackHistory);
   }
 
   // ── Local offline (P2-M3) ──────────────────────────────────────────────────
@@ -5305,8 +5303,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// that has un-pushed edits — not only the one currently open. The sweep
   /// loop lives in the sync controller (it owns the guard flag and reads the
   /// hub's trees); this State-level adapter keeps the call sites unchanged.
-  Future<void> _sweepPendingOutboxes() =>
-      _syncCtrl.sweepPendingOutboxes();
+  Future<void> _sweepPendingOutboxes() => _syncCtrl.sweepPendingOutboxes();
 
   /// Build a bootstrap for a cloud [view] from its on-device mirror (offline
   /// doc-open, P1c). On desktop the mirrored replica loads synchronously via
@@ -5731,7 +5728,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       activeOrigin: _activeOrigin,
       // Cloud-only: the badge is meaningless for a local world or with no live
       // cloud session, so it's simply absent there.
-      syncPhase: (local || _sync == null) ? null : _syncPhase,
+      syncPhase: (local || _cloudSession == null) ? null : _syncPhase,
       // Comments are a cloud feature (they live in Postgres beside the document),
       // so the local world gets none and shows no entry point.
       commentThreads: local ? const [] : _commentThreads,
@@ -5814,7 +5811,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
                 unawaited(_openSearchHit(viewId, workspaceId)),
       searchRecents: buildWorkspaceRecents(
         context,
-        workspaceId: local ? _localSelectedWorkspace?.id : _selectedWorkspace?.id,
+        workspaceId: local
+            ? _localSelectedWorkspace?.id
+            : _selectedWorkspace?.id,
         workspaceName:
             (local ? _localSelectedWorkspace : _selectedWorkspace)?.name ?? '',
         views: local
@@ -5915,6 +5914,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onMoveBlock: local ? (_, _) async {} : _moveBlock,
       onApplyOperations:
           _applyEditorOperations, // P3d: one entry, self-dispatches
+      onApplyHistory: _editorHistoryForDocument(),
+      onApplyMaintenanceOperations: (ops) =>
+          _applyEditorOperations(ops, trackHistory: false),
       onEditorFault: _onEditorFault,
       onUploadImage: local ? _localUploadImage : _uploadEditorImage,
       onImportImageUrl: local ? _localImportImageUrl : _importEditorImageUrl,
@@ -5997,7 +5999,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // search» is a different statement from «nothing matched», and the dialog
       // says a different thing for each. A stub returning `const []` used to
       // collapse the two, telling every local user their page was not there.
-      onSearch: local ? (kIsWeb ? null : _searchLocalWorkspace) : _searchWorkspace,
+      onSearch: local
+          ? (kIsWeb ? null : _searchLocalWorkspace)
+          : _searchWorkspace,
       onOpenSearchResult: local ? _openLocalViewById : _openViewById,
       // Both worlds now answer this — `_loadBacklinks` picks the on-device index
       // in 本地模式 and the endpoint in the cloud. It used to be `local ? null`,
@@ -6096,4 +6100,3 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 /// ([_WorkspaceShellState._flushForExit]) can drain the last <=400ms of typing
 /// before quitting. Null when no editor is on screen (settings, empty state).
 Future<void> Function()? _activeEditorFlush;
-

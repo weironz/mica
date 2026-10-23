@@ -7,7 +7,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
-import 'package:mica_flutter/api/sync_client.dart';
 import 'package:mica_flutter/doc_tab.dart';
 import 'package:mica_flutter/ui/doc_tab_strip.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';
@@ -28,17 +27,11 @@ Widget _host(Widget child) => MaterialApp(
   ),
 );
 
-/// A tab holding a socket. `DocumentSyncClient`'s constructor is inert —
-/// `connect()` is a separate call — so this opens nothing.
+/// A tab holding a socket. Liveness is the synchronous marker the reconcile
+/// loop sets before the session attaches — no real session needed here.
 DocTab _liveTab(int tick) => DocTab()
   ..lastActivated = tick
-  ..sync = DocumentSyncClient(
-    documentId: 'doc-$tick',
-    uri: Uri.parse('ws://localhost/ws'),
-    selfName: 'tester',
-    onRemoteSeq: (_, _) {},
-    onPresence: (_) {},
-  );
+  ..syncDocumentId = 'doc-$tick';
 
 void main() {
   group('workspaceToSwitchTo', () {

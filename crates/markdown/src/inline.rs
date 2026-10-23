@@ -4,18 +4,8 @@ use serde_json::{Value, json};
 use crate::Block;
 use crate::block::*;
 use crate::entities::*;
-
-/// Find the two-char sequence `a``b` starting at `from`.
-pub(crate) fn find_pair(chars: &[char], from: usize, a: char, b: char) -> Option<usize> {
-  let mut j = from;
-  while j + 1 < chars.len() {
-    if chars[j] == a && chars[j + 1] == b {
-      return Some(j);
-    }
-    j += 1;
-  }
-  None
-}
+use crate::scan_memo::{ScanMemo, next_math_closer_table, next_pair_table};
+use crate::span_walk::{SpanTies, SpanWalker};
 
 /// One past the closing backtick run of the code span opening at `start` (the
 /// index of its first backtick), or None when the run never closes — CommonMark
@@ -59,12 +49,20 @@ pub(crate) fn code_span_close(chars: &[char], start: usize) -> Option<usize> {
 pub fn math_run_spans(src: &str) -> Vec<(usize, usize)> {
   let chars: Vec<char> = src.chars().collect();
   let mut out = Vec::new();
+  // One \(\)→`\)` next-table (built lazily) and the shared failure memos:
+  // repeated unclosed `\(`/`$`/backticks rescanned the whole suffix before
+  // (quadratic; issue #61 — the MCP write guard calls this per write).
+  let mut scans = ScanMemo::new();
+  let mut close_paren: Option<Vec<u32>> = None;
   let mut i = 0;
   while i < chars.len() {
     // `\( … \)` first — the escape arm below would otherwise eat the `\(`.
     if chars[i] == '\\'
       && chars.get(i + 1) == Some(&'(')
-      && let Some(close) = find_pair(&chars, i + 2, '\\', ')')
+      && let Some(close) = {
+        let table = close_paren.get_or_insert_with(|| next_pair_table(&chars, '\\', ')'));
+        (table[i + 2] != u32::MAX).then_some(table[i + 2] as usize)
+      }
     {
       out.push((i, close + 2));
       i = close + 2;
@@ -73,14 +71,14 @@ pub fn math_run_spans(src: &str) -> Vec<(usize, usize)> {
     // A code span binds tighter than math (§6.1) — step over it whole so a `$`
     // inside cannot open a run.
     if chars[i] == '`'
-      && let Some(after) = code_span_close(&chars, i)
+      && let Some(after) = scans.code_span_close(&chars, i)
     {
       i = after;
       continue;
     }
     if chars[i] == '$'
       && chars.get(i + 1) != Some(&'$')
-      && let Some(close) = find_math_closer(&chars, i + 1)
+      && let Some(close) = find_math_closer(&chars, i + 1, &mut scans)
     {
       out.push((i, close + 1));
       i = close + 1;
@@ -93,15 +91,44 @@ pub fn math_run_spans(src: &str) -> Vec<(usize, usize)> {
 
 /// A valid `$` math closer per the Pandoc rules: content non-empty with
 /// non-space edges, closer not followed by a digit, no newline inside, and no
-/// crossing into a code span.
-pub(crate) fn find_math_closer(chars: &[char], content_start: usize) -> Option<usize> {
+/// crossing into a code span. `memo` carries the failure knowledge forward:
+/// every `$` opener used to rescan the whole suffix when no closer exists
+/// (issue #61); see [`ScanMemo`] for why the recorded frontier is exact.
+pub(crate) fn find_math_closer(chars: &[char], content_start: usize, memo: &mut ScanMemo) -> Option<usize> {
+  if memo.math_dead_through >= content_start {
+    return None; // a previous failure already settled this whole stretch
+  }
+  if let Some(table) = &memo.math_valid_closer
+    && table[content_start] == u32::MAX
+  {
+    // No position ahead is even VALID as a closer — and the closer checks are
+    // all position facts — so no scan from here can succeed, however the code
+    // spans fall. This is what keeps `$a``a`b `×n (every closer-candidate
+    // invalid, a code span between every opener) linear.
+    return None;
+  }
   if chars.get(content_start).is_none_or(|c| c.is_whitespace()) {
     return None;
   }
+  // Record what a failure at/after `horizon` proves for later starts.
+  fn record(chars: &[char], content_start: usize, horizon: usize, memo: &mut ScanMemo) {
+    let table = memo
+      .math_valid_closer
+      .get_or_insert_with(|| next_math_closer_table(chars));
+    if table[content_start] == u32::MAX {
+      memo.math_dead_through = usize::MAX; // no valid closer anywhere ahead
+    } else {
+      memo.math_dead_through = memo.math_dead_through.max(horizon);
+    }
+  }
+  // First backtick whose run CLOSES ahead: up to it the walk is char-for-char,
+  // so a failure settles later starts only that far (see [`ScanMemo`]).
+  let mut skip_open: Option<usize> = None;
   let mut j = content_start;
   while j < chars.len() {
     let c = chars[j];
     if c == '\n' {
+      record(chars, content_start, skip_open.unwrap_or(j), memo);
       return None; // inline math stays on one line
     }
     if c == '`' {
@@ -111,9 +138,13 @@ pub(crate) fn find_math_closer(chars: &[char], content_start: usize) -> Option<u
       // over the span whole; scanning through it is what let `` `$HOME` `` be
       // eaten by an earlier `$`. An unclosed run is literal text: fall through
       // and keep scanning, exactly as CommonMark reads it.
-      if let Some(after) = code_span_close(chars, j) {
+      if let Some(after) = memo.code_span_close(chars, j) {
         if chars[j..after].contains(&'\n') {
+          record(chars, content_start, skip_open.unwrap_or(j), memo);
           return None; // the span folds a line break; inline math may not
+        }
+        if skip_open.is_none() {
+          skip_open = Some(j);
         }
         j = after;
         continue;
@@ -132,13 +163,20 @@ pub(crate) fn find_math_closer(chars: &[char], content_start: usize) -> Option<u
     }
     j += 1;
   }
+  record(chars, content_start, skip_open.unwrap_or(usize::MAX), memo);
   None
 }
 
 /// GFM extended autolink starting at chars[i] (the caller checks the word
 /// boundary): bare `http(s)://…`, `www.…` (href gains `http://`) or a bare
-/// email. Returns (consumed chars, href).
-pub(crate) fn extended_autolink(chars: &[char], i: usize) -> Option<(usize, String)> {
+/// email. Returns (consumed chars, href). `email_dead` memoises the bare-email
+/// charset scan: without it `_a`×n rescans the local part to the end from
+/// every boundary (issue #61); [`ScanMemo::email_dead`] states why it is exact.
+pub(crate) fn extended_autolink(
+  chars: &[char],
+  i: usize,
+  email_dead: &mut Option<(usize, usize)>,
+) -> Option<(usize, String)> {
   // Only the first 8 chars decide the prefix. This used to collect and
   // lowercase the WHOLE remaining text first — at every word boundary — which
   // made one inline parse quadratic, and the paragraph-continuation re-parse
@@ -182,6 +220,12 @@ pub(crate) fn extended_autolink(chars: &[char], i: usize) -> Option<(usize, Stri
   // Bare email: local@domain.tld — `+` allowed before the @ only; the last
   // character must be alphanumeric.
   if chars[i].is_ascii_alphanumeric() {
+    if let Some((from, through)) = *email_dead
+      && from < i
+      && i <= through
+    {
+      return None; // same stop, same `@`, same domain verdict — proven equal
+    }
     let mut j = i;
     while chars
       .get(j)
@@ -189,6 +233,7 @@ pub(crate) fn extended_autolink(chars: &[char], i: usize) -> Option<(usize, Stri
     {
       j += 1;
     }
+    let mut found = None;
     if chars.get(j) == Some(&'@') {
       let local_len = j - i;
       let mut k = j + 1;
@@ -208,9 +253,13 @@ pub(crate) fn extended_autolink(chars: &[char], i: usize) -> Option<(usize, Stri
         && chars[j + 1..k].contains(&'.')
       {
         let text: String = chars[i..k].iter().collect();
-        return Some((k - i, format!("mailto:{text}")));
+        found = Some((k - i, format!("mailto:{text}")));
       }
     }
+    if found.is_none() {
+      *email_dead = Some((i, j));
+    }
+    return found;
   }
   None
 }
@@ -720,7 +769,7 @@ pub(crate) fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
           return Some(j + 1);
         }
       }
-      inline_html_end(chars, i)
+      inline_html_end(chars, i, None)
     }
     _ => None,
   }
@@ -976,6 +1025,10 @@ pub(crate) fn parse_inline_memo(
   }
   // Bracket matches for THIS `chars`, shared by every lookup in this parse.
   let mut brackets = BracketMemo::default();
+  // Unclosed-construct scans memoised for THIS parse (issue #61): unclosed
+  // `\(`, `$`, backticks and `<` used to rescan the suffix from every opener.
+  let mut scans = ScanMemo::new();
+  let mut close_paren: Option<Vec<u32>> = None;
   let mut out = String::new();
   let mut out_len: usize = 0; // UTF-16 length of `out`
   let mut marks: Vec<InlineMark> = Vec::new();
@@ -1035,7 +1088,10 @@ pub(crate) fn parse_inline_memo(
     // Checked before the escape arm, which would otherwise eat the `\(`.
     if chars[i] == '\\'
       && chars.get(i + 1) == Some(&'(')
-      && let Some(close) = find_pair(&chars, i + 2, '\\', ')')
+      && let Some(close) = {
+        let table = close_paren.get_or_insert_with(|| next_pair_table(&chars, '\\', ')'));
+        (table[i + 2] != u32::MAX).then_some(table[i + 2] as usize)
+      }
     {
       let inner: String = chars[i + 2..close].iter().collect();
       let inner = inner.trim().to_string();
@@ -1058,7 +1114,7 @@ pub(crate) fn parse_inline_memo(
     // by whitespace, the closer may not be preceded by whitespace or
     // followed by a digit (the Pandoc rules; keeps `$5 and $10` literal).
     if chars[i] == '$' && chars.get(i + 1) != Some(&'$') {
-      if let Some(close) = find_math_closer(&chars, i + 1) {
+      if let Some(close) = find_math_closer(&chars, i + 1, &mut scans) {
         let inner: String = chars[i + 1..close].iter().collect();
         let start = out_len;
         out.push_str(&inner);
@@ -1092,28 +1148,34 @@ pub(crate) fn parse_inline_memo(
       continue;
     }
     // Autolink: <https://…> or <user@host> — the URL is both text and target.
-    if chars[i] == '<' {
-      if let Some(close) = find_from(i + 1, &['>']) {
-        let inner: String = chars[i + 1..close].iter().collect();
-        let href = autolink_target(&inner);
-        if let Some(href) = href {
-          let start = out_len;
-          out.push_str(&inner);
-          out_len += inner.encode_utf16().count();
-          marks.push(InlineMark {
-            start,
-            end: out_len,
-            kind: "link".into(),
-            href: Some(href),
-            title: None,
-          });
-          i = close + 1;
-          continue;
+    // With no `>` anywhere at/after here, BOTH sub-scans below are known to
+    // fail (each needs one): the whole arm falls through in O(1).
+    if chars[i] == '<' && i < scans.gt_dead_from {
+      if i + 1 < scans.gt_dead_from {
+        if let Some(close) = find_from(i + 1, &['>']) {
+          let inner: String = chars[i + 1..close].iter().collect();
+          let href = autolink_target(&inner);
+          if let Some(href) = href {
+            let start = out_len;
+            out.push_str(&inner);
+            out_len += inner.encode_utf16().count();
+            marks.push(InlineMark {
+              start,
+              end: out_len,
+              kind: "link".into(),
+              href: Some(href),
+              title: None,
+            });
+            i = close + 1;
+            continue;
+          }
+        } else {
+          scans.gt_dead_from = i + 1;
         }
       }
       // Raw inline HTML: a valid tag/comment/PI/declaration/CDATA shape
       // passes through verbatim under an `html` mark.
-      if let Some(end) = inline_html_end(&chars, i) {
+      if let Some(end) = inline_html_end(&chars, i, Some(&mut scans)) {
         let raw: String = chars[i..end].iter().collect();
         let start = out_len;
         out.push_str(&raw);
@@ -1299,7 +1361,7 @@ pub(crate) fn parse_inline_memo(
       && (i == 0
         || chars[i - 1].is_whitespace()
         || matches!(chars[i - 1], '*' | '_' | '~' | '('))
-      && let Some((len, href)) = extended_autolink(&chars, i)
+      && let Some((len, href)) = extended_autolink(&chars, i, &mut scans.email_dead)
     {
       let text: String = chars[i..i + len].iter().collect();
       let start = out_len;
@@ -1391,21 +1453,30 @@ pub(crate) fn parse_inline_memo(
       while i + n < chars.len() && chars[i + n] == '`' {
         n += 1;
       }
-      let mut j = i + n;
+      // No run of length N anywhere ahead? An earlier failure already proved
+      // it (run lengths are position facts) — backtick runs unclosed used to
+      // cost one full suffix scan each (issue #61).
       let mut close = None;
-      while j < chars.len() {
-        if chars[j] == '`' {
-          let mut m = 0;
-          while j + m < chars.len() && chars[j + m] == '`' {
-            m += 1;
+      if !scans.code_dead.get(&n).is_some_and(|&from| from <= i + n) {
+        let mut j = i + n;
+        while j < chars.len() {
+          if chars[j] == '`' {
+            let mut m = 0;
+            while j + m < chars.len() && chars[j + m] == '`' {
+              m += 1;
+            }
+            if m == n {
+              close = Some(j);
+              break;
+            }
+            j += m;
+          } else {
+            j += 1;
           }
-          if m == n {
-            close = Some(j);
-            break;
-          }
-          j += m;
-        } else {
-          j += 1;
+        }
+        if close.is_none() {
+          let entry = scans.code_dead.entry(n).or_insert(usize::MAX);
+          *entry = (*entry).min(i + n);
         }
       }
       if let Some(end) = close {
@@ -1860,35 +1931,24 @@ pub(crate) fn renders_terminal(kind: &str) -> bool {
 pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMark]) -> String {
   let mut out = String::new();
   let mut pos = lo;
+  // The pick used to rescan the WHOLE slice per emitted span (and the overlap
+  // set again): O(marks²) on a paragraph of sibling marks. The sweep keeps the
+  // same selection — clipped start, widest end, nestable on exact-range ties,
+  // outer (later-appended) mark last — behind one sort (issue #61).
+  let mut walker = SpanWalker::new(marks, hi, SpanTies::Markdown);
   while pos < hi {
-    // The next mark by clipped start; ties prefer the widest (outermost), then
-    // the nestable one — a terminal kind sorts last so it renders INSIDE.
-    let next = marks
-      .iter()
-      .enumerate()
-      .filter_map(|(i, m)| {
-        let s = m.start.max(pos);
-        let e = m.end.min(hi);
-        (e > s).then_some((s, e, i))
-      })
-      .min_by_key(|&(s, e, i)| (s, usize::MAX - e, renders_terminal(&marks[i].kind)));
-    let Some((s, e, picked)) = next else {
+    let Some(pick) = walker.next_pick(pos) else {
       out.push_str(&escape_inline(&String::from_utf16_lossy(&units[pos..hi])));
       break;
     };
+    let (s, e) = (pick.s, pick.e);
+    let m = pick.mark;
     let mut lead = escape_inline(&String::from_utf16_lossy(&units[pos..s]));
-    if marks[picked].kind == "link" && lead.ends_with('!') {
+    if m.kind == "link" && lead.ends_with('!') {
       lead.pop();
       lead.push_str("\\!");
     }
     out.push_str(&lead);
-    let inner: Vec<&InlineMark> = marks
-      .iter()
-      .enumerate()
-      .filter(|&(i, m)| i != picked && m.end.min(e) > m.start.max(s))
-      .map(|(_, m)| *m)
-      .collect();
-    let m = marks[picked];
     if m.kind == "html" {
       // Raw inline HTML writes back verbatim.
       out.push_str(&String::from_utf16_lossy(&units[s..e]));
@@ -1936,6 +1996,7 @@ pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineM
       pos = e;
       continue;
     }
+    let inner = walker.inner(&pick);
     let body = render_span(units, s, e, &inner);
     out.push_str(&match m.kind.as_str() {
       "bold" => format!("**{body}**"),

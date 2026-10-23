@@ -1202,6 +1202,8 @@ mod entities;
 mod export_md;
 mod html;
 mod inline;
+mod scan_memo;
+mod span_walk;
 
 pub use inline::math_run_spans;
 

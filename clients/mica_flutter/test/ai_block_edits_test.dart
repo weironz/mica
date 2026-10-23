@@ -136,7 +136,8 @@ void main() {
       controller.undo();
       await _drain();
       expect(_state(controller), before);
-      expect(writes, hasLength(2));
+      expect(writes, hasLength(3), reason: 'save the failed batch before undo');
+      expect(identical(writes[0], writes[1]), isTrue);
       expect(writes.last.single['text'], 'original');
     },
   );

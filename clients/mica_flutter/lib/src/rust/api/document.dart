@@ -14,6 +14,14 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// bytes don't decode (caller should resync rather than trust local state).
   bool applyUpdate({required List<int> update});
 
+  /// Start a local editor undo group. Loading and remote updates are never
+  /// captured; all editor operations until end_history_batch share one step.
+  void beginHistoryBatch();
+
+  bool canRedo();
+
+  bool canUndo();
+
   void deleteBlock({required String id, required bool bringChildren});
 
   /// The minimal update carrying everything added since `state_vector` was
@@ -22,6 +30,8 @@ abstract class MicaDocument implements RustOpaqueInterface {
 
   /// Encode the full document state (the base snapshot to persist locally).
   Uint8List encodeState();
+
+  void endHistoryBatch();
 
   /// Export this page as a self-contained HTML document, through the same Rust
   /// engine the server uses — so a LOCAL page's export matches a cloud page's
@@ -128,6 +138,9 @@ abstract class MicaDocument implements RustOpaqueInterface {
     clientId: clientId,
   );
 
+  /// Stack lengths for aligning selection metadata after skipped remote edits.
+  (int, int) historyDepths();
+
   void insertBlockJson({
     required String parentId,
     required int index,
@@ -141,6 +154,11 @@ abstract class MicaDocument implements RustOpaqueInterface {
     required String newParent,
     required int index,
   });
+
+  bool redo();
+
+  /// Clear the previous editor session's personal history.
+  void resetHistory();
 
   String rootBlockId();
 
@@ -187,6 +205,9 @@ abstract class MicaDocument implements RustOpaqueInterface {
 
   /// The document as a JSON array of blocks (tree order).
   String toBlocksJson();
+
+  /// Undo one closed editor batch and preserve remote changes.
+  bool undo();
 
   /// Mirror the editor's coarse `update_block` op: apply any subset of
   /// kind/text/data to a block in one call. Inline marks travel *inside* the

@@ -33,6 +33,9 @@ use yrs::{
 use crate::block::Block;
 use crate::marks::{self, Mark};
 
+mod history;
+use history::EditorHistory;
+
 const BLOCKS: &str = "blocks";
 const META: &str = "meta";
 const ROOT_KEY: &str = "root";
@@ -48,6 +51,7 @@ pub enum DocError {
 /// A Mica document backed by a yrs CRDT doc.
 pub struct MicaDoc {
     doc: Doc,
+    history: Option<EditorHistory>,
 }
 
 impl MicaDoc {
@@ -95,7 +99,10 @@ impl MicaDoc {
                 write_block(&mut txn, &blocks_map, b);
             }
         }
-        MicaDoc { doc }
+        MicaDoc {
+            doc,
+            history: None,
+        }
     }
 
     /// The root block id (empty string if unset).
@@ -263,7 +270,10 @@ impl MicaDoc {
             txn.apply_update(update)
                 .map_err(|e| DocError::Apply(e.to_string()))?;
         }
-        Ok(MicaDoc { doc })
+        Ok(MicaDoc {
+            doc,
+            history: None,
+        })
     }
 }
 
@@ -826,7 +836,7 @@ impl MicaDoc {
     /// Insert `block` as a child of `parent_id` at `index` (clamped to the end).
     pub fn insert_block(&mut self, parent_id: &str, index: usize, block: &Block) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         write_block(&mut txn, &blocks_map, block);
         if let Some(parent) = get_block_map(&txn, &blocks_map, parent_id) {
             if let Some(children) = get_children(&txn, &parent) {
@@ -839,9 +849,11 @@ impl MicaDoc {
     /// Change a block's kind/flavour.
     pub fn update_block_kind(&mut self, id: &str, kind: &str) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
-            bm.insert(&mut txn, "ty", kind.to_string());
+            if bm.get(&txn, "ty").and_then(out_string).as_deref() != Some(kind) {
+                bm.insert(&mut txn, "ty", kind.to_string());
+            }
         }
     }
 
@@ -849,25 +861,25 @@ impl MicaDoc {
     /// [`Self::text_insert`]/[`Self::text_delete`]/[`Self::text_format`]).
     pub fn set_block_text(&mut self, id: &str, text: &str, block_marks: &[Mark]) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
             set_text_and_marks(&mut txn, &bm, text, block_marks);
         }
     }
 
-    /// Replace a block's inline marks while keeping its text, by clearing all
-    /// known formatting over the whole text and re-applying `block_marks`. Use
+    /// Replace a block's inline marks while keeping its text, writing only
+    /// changed ranges. An identical data-only retry must not add history. Use
     /// this when the editor's authoritative marks (in `data`) change without a
     /// text edit — e.g. a turn-into that resets `data` and so should drop marks.
     pub fn set_block_marks(&mut self, id: &str, block_marks: &[Mark]) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
             if let Some(t) = get_text(&txn, &bm) {
-                let len = t.len(&txn);
-                if len > 0 {
-                    t.format(&mut txn, 0, len, marks::clear_all_attrs());
-                    for (start, l, attrs) in marks::marks_to_format_ops(block_marks) {
+                if t.len(&txn) > 0 {
+                    for (start, l, attrs) in
+                        marks::marks_diff_format_ops(&text_runs(&txn, &t), block_marks)
+                    {
                         t.format(&mut txn, start, l, attrs);
                     }
                 }
@@ -879,7 +891,7 @@ impl MicaDoc {
     /// `marks` key in `data` is ignored here.
     pub fn set_block_data(&mut self, id: &str, data: &Value) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
             set_props(&mut txn, &bm, data);
         }
@@ -888,7 +900,7 @@ impl MicaDoc {
     /// Insert `s` into a block's text at UTF-16 offset `at` (character-level CRDT).
     pub fn text_insert(&mut self, id: &str, at: u32, s: &str) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
             if let Some(t) = get_text(&txn, &bm) {
                 let at = at.min(t.len(&txn));
@@ -900,7 +912,7 @@ impl MicaDoc {
     /// Delete `len` UTF-16 units from a block's text starting at `at`.
     pub fn text_delete(&mut self, id: &str, at: u32, len: u32) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
             if let Some(t) = get_text(&txn, &bm) {
                 let total = t.len(&txn);
@@ -919,7 +931,7 @@ impl MicaDoc {
             return;
         }
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         if let Some(bm) = get_block_map(&txn, &blocks_map, id) {
             if let Some(t) = get_text(&txn, &bm) {
                 for (start, l, attrs) in marks::marks_to_format_ops(std::slice::from_ref(mark)) {
@@ -935,7 +947,7 @@ impl MicaDoc {
     /// entry is removed either way.
     pub fn delete_block(&mut self, id: &str, bring_children_to_parent: bool) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         let child_ids: Vec<String> = get_block_map(&txn, &blocks_map, id)
             .and_then(|bm| get_children(&txn, &bm))
             .map(|c| c.iter(&txn).filter_map(out_string).collect())
@@ -957,7 +969,7 @@ impl MicaDoc {
     /// Move a block to be a child of `new_parent` at `index`.
     pub fn move_block(&mut self, id: &str, new_parent: &str, index: usize) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         if let Some((old, oidx)) = find_parent(&txn, &blocks_map, id) {
             if let Some(oc) = get_children(&txn, &old) {
                 oc.remove(&mut txn, oidx);
@@ -988,7 +1000,7 @@ impl MicaDoc {
     /// (`Text.split`/`join`) both do read-modify-write. (P2: researched, decided.)
     pub fn split_block(&mut self, id: &str, at: u32, new_id: &str, new_kind: &str) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         let orig = match self.read_block(&txn, &blocks_map, id) {
             Some(b) => b,
             None => return,
@@ -1030,7 +1042,7 @@ impl MicaDoc {
     /// `id`. No-op if `id` has no previous sibling.
     pub fn join_into_prev(&mut self, id: &str) {
         let blocks_map = self.doc.get_or_insert_map(BLOCKS);
-        let mut txn = self.doc.transact_mut();
+        let mut txn = self.editor_transaction();
         let (parent, idx) = match find_parent(&txn, &blocks_map, id) {
             Some(x) => x,
             None => return,

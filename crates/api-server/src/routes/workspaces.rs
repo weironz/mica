@@ -621,7 +621,7 @@ async fn fetch_workspace_members(
         u.avatar_key
       FROM workspace_members wm
       INNER JOIN users u ON u.id = wm.user_id
-      WHERE wm.workspace_id = $1
+      WHERE wm.workspace_id = $1 AND u.deleted_at IS NULL
       ORDER BY wm.joined_at ASC
     "#,
   )
@@ -647,7 +647,7 @@ async fn fetch_workspace_member(
         u.avatar_key
       FROM workspace_members wm
       INNER JOIN users u ON u.id = wm.user_id
-      WHERE wm.workspace_id = $1 AND wm.user_id = $2
+      WHERE wm.workspace_id = $1 AND wm.user_id = $2 AND u.deleted_at IS NULL
     "#,
   )
   .bind(workspace_id)
@@ -719,14 +719,7 @@ async fn ensure_not_workspace_owner(
 }
 
 fn normalize_workspace_name(name: &str) -> ApiResult<String> {
-  let name = name.trim().to_string();
-  if name.is_empty() {
-    return Err(ApiError::BadRequest(
-      "workspace name is required".to_string(),
-    ));
-  }
-
-  Ok(name)
+  super::names::normalize_name(name, "workspace name")
 }
 
 pub(crate) fn normalize_member_role(role: &str) -> ApiResult<String> {
@@ -743,6 +736,10 @@ pub(crate) fn normalize_member_role(role: &str) -> ApiResult<String> {
 fn can_update_workspace(role: &str) -> bool {
   matches!(role, "owner" | "admin")
 }
+
+#[cfg(test)]
+#[path = "workspaces_tombstone_tests.rs"]
+mod tombstone_tests;
 
 #[cfg(test)]
 mod usage_wire {

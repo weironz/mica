@@ -60,17 +60,16 @@ void _applyTheme(MicaTokens tokens) {
 }
 
 int _renderSeq = 0;
+Future<void> _rendering = Future<void>.value();
 
-/// Render mermaid [source] to a rasterized image: mermaid.js → SVG → blob
-/// `<img>` → 2x offscreen canvas → PNG bytes → ui.Image. Any failure (load,
-/// syntax, raster) resolves to null; the preview pipeline records it and the
-/// block stays on its highlighted source form.
-Future<ui.Image?> renderMermaid(
-  String source,
-  double targetWidth,
-  MicaTokens tokens,
-) async {
+Future<String> _renderSvg(String source, MicaTokens tokens) async {
+  // Mermaid queues renders internally, but initialize mutates global state
+  // immediately. Keep that state unchanged until this render has finished.
+  final previous = _rendering;
+  final completed = Completer<void>();
+  _rendering = completed.future;
   try {
+    await previous;
     await _ensureLoaded();
     _ensureTheme(tokens);
     final mermaid = globalContext.getProperty('mermaid'.toJS) as JSObject;
@@ -82,7 +81,24 @@ Future<ui.Image?> renderMermaid(
             )
             as JSPromise<JSObject>;
     final result = await promise.toDart;
-    final svg = (result.getProperty('svg'.toJS) as JSString).toDart;
+    return (result.getProperty('svg'.toJS) as JSString).toDart;
+  } finally {
+    // A syntax error must release the queue too, so later diagrams can render.
+    completed.complete();
+  }
+}
+
+/// Render mermaid [source] to a rasterized image: mermaid.js → SVG → blob
+/// `<img>` → 2x offscreen canvas → PNG bytes → ui.Image. Any failure (load,
+/// syntax, raster) resolves to null; the preview pipeline records it and the
+/// block stays on its highlighted source form.
+Future<ui.Image?> renderMermaid(
+  String source,
+  double targetWidth,
+  MicaTokens tokens,
+) async {
+  try {
+    final svg = await _renderSvg(source, tokens);
 
     // SVG → <img>. A blob URL keeps it same-origin so the canvas isn't
     // tainted (mermaid inlines its styles; nothing external is referenced).

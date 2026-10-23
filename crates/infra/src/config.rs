@@ -24,19 +24,13 @@ pub struct AppConfig {
   pub database_url: String,
   pub database_max_connections: u32,
   pub jwt_secret: String,
-  /// Lifetime of the stateless access JWT. It cannot be revoked before it
-  /// expires (the price of being stateless), so this doubles as the worst-case
-  /// revocation window — kept short; the client refreshes transparently.
   /// Lowest WS sync-protocol version this server still accepts.
   ///
-  /// **Defaults to 0, which rejects nobody** — the gate ships inert on purpose.
-  /// Its job is to exist BEFORE it is needed: desktop clients are user-installed
-  /// binaries that drift at their own pace, and the op-model REST fallback is
-  /// what silently catches an old client today. When that fallback is removed
-  /// (op-model retirement S4), an old client would start failing in confusing
-  /// ways instead of being told why — so the floor is raised at that point, to a
-  /// server that already knows how to say "your client is too old".
+  /// Defaults to 1 after op-model retirement. Older clients receive
+  /// `client_too_old` and must upgrade. `MICA_WS_MIN_PROTOCOL` can override it.
   pub ws_min_protocol: u32,
+  /// Lifetime of the stateless access JWT. It cannot be revoked before it
+  /// expires, so this also bounds the revocation window.
   pub access_token_ttl_seconds: i64,
   /// How long a sign-in survives without touching the password again. The
   /// access token above stays short — it is an unrevocable JWT — and the
@@ -161,7 +155,10 @@ impl SyncTuning {
   fn from_env() -> Self {
     let d = Self::default();
     Self {
-      catch_up_limit: positive_or(env::var("MICA_CATCH_UP_LIMIT").ok().as_deref(), d.catch_up_limit),
+      catch_up_limit: positive_or(
+        env::var("MICA_CATCH_UP_LIMIT").ok().as_deref(),
+        d.catch_up_limit,
+      ),
       keep_margin: positive_or(
         env::var("MICA_STREAM_KEEP_MARGIN").ok().as_deref(),
         d.keep_margin,
@@ -222,17 +219,13 @@ impl AppConfig {
     // because every instance's value is its own.
     let jwt_secret = resolve_jwt_secret(env::var("JWT_SECRET").ok(), environment)?;
 
+    // The op-model fallback has retired; unversioned clients need an upgrade.
+    let ws_min_protocol = ws_protocol_floor(env::var("MICA_WS_MIN_PROTOCOL").ok().as_deref());
+
     // 1h default (was 24h). Because the client refreshes transparently, a
     // shorter access token shrinks the window in which a token that SHOULD be
     // dead (password changed, session revoked) still works, at no user-visible
     // cost. Override with ACCESS_TOKEN_TTL_SECONDS.
-    // 0 = accept every client, including ones predating the version parameter.
-    // Raise to WS_PROTOCOL_VERSION once the op-model fallback is gone (S4).
-    let ws_min_protocol = env::var("MICA_WS_MIN_PROTOCOL")
-      .ok()
-      .and_then(|value| value.parse::<u32>().ok())
-      .unwrap_or(0);
-
     let access_token_ttl_seconds = env::var("ACCESS_TOKEN_TTL_SECONDS")
       .ok()
       .and_then(|value| value.parse::<i64>().ok())
@@ -290,7 +283,8 @@ impl AppConfig {
     let workspace_quota_bytes =
       workspace_quota(env::var("MICA_WORKSPACE_QUOTA_BYTES").ok().as_deref());
     let owner_quota_bytes = owner_quota(env::var("MICA_OWNER_QUOTA_BYTES").ok().as_deref());
-    let search_index_mlock = search_index_mlock(env::var("MICA_SEARCH_INDEX_MLOCK").ok().as_deref());
+    let search_index_mlock =
+      search_index_mlock(env::var("MICA_SEARCH_INDEX_MLOCK").ok().as_deref());
 
     let sync_tuning = SyncTuning::from_env();
 
@@ -320,6 +314,26 @@ impl AppConfig {
       sync_tuning,
       app_base_url,
     })
+  }
+}
+
+/// Resolve the WS floor without depending on process-wide environment state.
+pub fn ws_protocol_floor(raw: Option<&str>) -> u32 {
+  raw.and_then(|value| value.parse().ok()).unwrap_or(1)
+}
+
+#[cfg(test)]
+mod ws_protocol_tests {
+  use super::ws_protocol_floor;
+
+  #[test]
+  fn retired_op_clients_are_rejected_by_default() {
+    for raw in [None, Some(""), Some("invalid"), Some("-1")] {
+      assert_eq!(ws_protocol_floor(raw), 1);
+    }
+    assert_eq!(ws_protocol_floor(Some("0")), 0);
+    assert_eq!(ws_protocol_floor(Some("1")), 1);
+    assert_eq!(ws_protocol_floor(Some("2")), 2);
   }
 }
 
@@ -374,7 +388,10 @@ pub fn owner_quota(raw: Option<&str>) -> i64 {
     Some(v) => match v.parse::<i64>() {
       Ok(n) if n >= 0 => n,
       _ => {
-        tracing::warn!(value = v, "MICA_OWNER_QUOTA_BYTES is not a byte count; the per-owner quota is OFF");
+        tracing::warn!(
+          value = v,
+          "MICA_OWNER_QUOTA_BYTES is not a byte count; the per-owner quota is OFF"
+        );
         0
       }
     },
@@ -540,7 +557,7 @@ mod jwt_secret_strength {
 /// not.
 #[cfg(test)]
 mod jwt_secret_resolution {
-  use super::{resolve_jwt_secret, Environment};
+  use super::{Environment, resolve_jwt_secret};
 
   const GOOD: &str = "0123456789abcdef0123456789abcdef";
 
@@ -550,7 +567,10 @@ mod jwt_secret_resolution {
   fn blank_means_mint_it_in_production() {
     let resolved = resolve_jwt_secret(Some(String::new()), Environment::Production)
       .expect("a blank JWT_SECRET must reach the self-minting path, not fail startup");
-    assert!(resolved.is_empty(), "blank must resolve to the mint sentinel");
+    assert!(
+      resolved.is_empty(),
+      "blank must resolve to the mint sentinel"
+    );
   }
 
   /// A value that is only whitespace is not a key either.
@@ -608,7 +628,9 @@ mod registration_switch {
   /// switch guarding who may create accounts.
   #[test]
   fn anything_else_including_a_typo_stays_closed() {
-    for off in ["", " ", "false", "0", "no", "off", "ture", "enabled", "maybe"] {
+    for off in [
+      "", " ", "false", "0", "no", "off", "ture", "enabled", "maybe",
+    ] {
       assert!(
         !registration_open(Some(off.to_string())),
         "{off:?} must NOT open registration"
@@ -697,7 +719,15 @@ mod quota_parse {
   #[test]
   fn search_index_mlock_is_on_unless_turned_off() {
     use super::search_index_mlock;
-    for on in [None, Some(""), Some("  "), Some("on"), Some("1"), Some("yes"), Some("ture")] {
+    for on in [
+      None,
+      Some(""),
+      Some("  "),
+      Some("on"),
+      Some("1"),
+      Some("yes"),
+      Some("ture"),
+    ] {
       assert!(search_index_mlock(on), "{on:?} must leave it on");
     }
     for off in ["off", "OFF", " 0 ", "false", "No"] {
@@ -711,6 +741,10 @@ mod quota_parse {
     assert_eq!(owner_quota(Some(" ")), 0);
     assert_eq!(owner_quota(Some("7")), 7);
     assert_eq!(owner_quota(Some(&(20 * GIB).to_string())), 20 * GIB);
-    assert_eq!(owner_quota(Some("-1")), 0, "garbage is logged, not guessed at");
+    assert_eq!(
+      owner_quota(Some("-1")),
+      0,
+      "garbage is logged, not guessed at"
+    );
   }
 }

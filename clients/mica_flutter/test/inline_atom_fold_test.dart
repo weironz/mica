@@ -58,6 +58,7 @@ void main() {
         home: Scaffold(
           body: DocumentSurface(
             nodes: nodes,
+            contentRevision: 0,
             selection: null,
             showCaret: false,
             caretBlink: blink,
@@ -92,13 +93,16 @@ void main() {
       greaterThan(foldedX),
       reason: 'replacement image changes atom width',
     );
+    final rasterX = endX();
+    final layouts = render.debugLayoutCount;
     cache['math']!.remove(source);
     await build();
     expect(
       endX(),
-      closeTo(sourceX, 0.01),
-      reason: 'eviction must restore source layout',
+      closeTo(rasterX, 0.01),
+      reason: 'texture eviction must retain measured atom geometry',
     );
+    expect(render.debugLayoutCount, layouts);
     await tester.pumpWidget(const SizedBox());
     first.dispose();
     second.dispose();

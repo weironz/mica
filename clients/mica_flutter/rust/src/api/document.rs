@@ -445,6 +445,51 @@ impl MicaDocument {
             .unwrap_or_default()
     }
 
+    /// Start a local editor undo group. Loading and remote updates are never
+    /// captured; all editor operations until end_history_batch share one step.
+    #[frb(sync)]
+    pub fn begin_history_batch(&self) {
+        self.doc().begin_history_batch();
+    }
+
+    #[frb(sync)]
+    pub fn end_history_batch(&self) {
+        self.doc().end_history_batch();
+    }
+
+    /// Clear the previous editor session's personal history.
+    #[frb(sync)]
+    pub fn reset_history(&self) {
+        self.doc().reset_history();
+    }
+
+    /// Undo one closed editor batch and preserve remote changes.
+    #[frb(sync)]
+    pub fn undo(&self) -> bool {
+        self.doc().undo()
+    }
+
+    #[frb(sync)]
+    pub fn redo(&self) -> bool {
+        self.doc().redo()
+    }
+
+    /// Stack lengths for aligning selection metadata after skipped remote edits.
+    #[frb(sync)]
+    pub fn history_depths(&self) -> (u32, u32) {
+        self.doc().history_depths()
+    }
+
+    #[frb(sync)]
+    pub fn can_undo(&self) -> bool {
+        self.doc().can_undo()
+    }
+
+    #[frb(sync)]
+    pub fn can_redo(&self) -> bool {
+        self.doc().can_redo()
+    }
+
     /// Merge a remote yrs update into this doc (CRDT merge). Returns false if the
     /// bytes don't decode (caller should resync rather than trust local state).
     #[frb(sync)]
@@ -567,6 +612,62 @@ impl MicaDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_history_groups_coarse_updates_and_exposes_boolean_state() {
+        let doc = MicaDocument::from_blocks_json(
+            "r".into(),
+            r#"[{"id":"r","type":"page","text":"","data":null,"children":["a"]},{"id":"a","type":"paragraph","text":"hello","data":null,"children":[]}]"#.into(),
+        );
+        let before = doc.to_blocks_json();
+        doc.reset_history();
+        assert!(!doc.can_undo());
+        assert!(!doc.can_redo());
+        doc.begin_history_batch();
+        doc.update_block(
+            "a".into(),
+            Some("heading".into()),
+            Some("hello!".into()),
+            Some(r#"{"level":2,"marks":[{"start":0,"end":5,"type":"bold"}]}"#.into()),
+        );
+        doc.end_history_batch();
+        let after = doc.to_blocks_json();
+        let encoded = doc.encode_state();
+        doc.begin_history_batch();
+        doc.update_block(
+            "a".into(),
+            Some("heading".into()),
+            Some("hello!".into()),
+            Some(r#"{"level":2,"marks":[{"start":0,"end":5,"type":"bold"}]}"#.into()),
+        );
+        doc.end_history_batch();
+        assert_eq!(doc.history_depths(), (1, 0));
+        assert_eq!(doc.encode_state(), encoded);
+        doc.begin_history_batch();
+        doc.update_block(
+            "a".into(),
+            Some("heading".into()),
+            None,
+            Some(r#"{"level":2,"marks":[{"start":0,"end":5,"type":"bold"}]}"#.into()),
+        );
+        doc.end_history_batch();
+        assert_eq!(doc.history_depths(), (1, 0));
+        assert_eq!(doc.encode_state(), encoded);
+        assert_ne!(before, after);
+        assert!(doc.can_undo());
+        assert_eq!(doc.history_depths(), (1, 0));
+        assert!(doc.undo());
+        assert_eq!(doc.history_depths(), (0, 1));
+        assert_eq!(doc.to_blocks_json(), before);
+        assert!(!doc.can_undo(), "kind, text, marks and props are one step");
+        assert!(doc.can_redo());
+        assert!(doc.redo());
+        assert_eq!(doc.to_blocks_json(), after);
+        assert!(!doc.can_redo());
+        doc.reset_history();
+        assert!(!doc.can_undo());
+        assert!(!doc.can_redo());
+    }
 
     /// The bug the user hit: a panic elsewhere poisons the mutex, and every
     /// later read panics too, so the page goes blank until the app restarts.

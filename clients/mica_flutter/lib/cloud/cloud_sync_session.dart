@@ -21,11 +21,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import '../editor/operation_history.dart';
+import '../sync/pending_doc_update.dart';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../swallowed.dart';
+import '../api/models.dart' show PresenceUser;
 import 'cloud_doc_store.dart';
 import '../api/ws_connect.dart';
 import 'sync_doc_replica.dart';
@@ -153,6 +156,10 @@ class CloudSyncSession {
     this.restoreUnacked,
     this.onPersistUnacked,
     this.persistence,
+    this.documentId,
+    this.selfName,
+    this.onPresence,
+    this.onAcceptedSeq,
   });
 
   /// Builds the document WebSocket URI — called once per connection ATTEMPT,
@@ -217,9 +224,52 @@ class CloudSyncSession {
   /// store, web the IndexedDB store; null → online-only (e.g. private mode).
   final CloudDocStore? persistence;
 
+  /// Identity marker: the document this session speaks for. The session itself
+  /// never needs it (the URI carries it) — it's how the shell tells "the tab's
+  /// socket" from "some other document's" without holding a second field.
+  final String? documentId;
+
+  /// ── Presence (folded in from the old `DocumentSyncClient`) ────────────────
+  ///
+  /// One connection now carries BOTH the CRDT stream and cursor awareness —
+  /// the server fans presence out to every connection in the room, so a second
+  /// socket only ever duplicated the roster. The separate presence client went
+  /// silent on every drop (`onDone: () {}` — no reconnect, a token baked into
+  /// its URI at construction), which is exactly what this session already
+  /// solves with backoff reconnect + per-attempt token renewal. `null`
+  /// [selfName] opts a session out (headless drains, probes).
+
+  /// The display name published as this connection's awareness payload.
+  final String? selfName;
+
+  /// The OTHER connections' roster changed (own connection filtered out).
+  final void Function(List<PresenceUser> users)? onPresence;
+
+  /// The op-model accepted-update sequence advanced — for shell paths that
+  /// still refetch by seq until [onReady] makes CRDT updates authoritative.
+  final void Function(int serverSeq)? onAcceptedSeq;
+
+  /// Our connection id, learned from the per-(re)connect `document.bootstrap`
+  /// — what we filter out of the roster so the user never sees themselves.
+  String? _connectionId;
+
+  /// Everyone in the room who sent presence, keyed by connection id.
+  final Map<String, PresenceUser> _presence = {};
+
+  /// The local caret (block id + offset), or null; re-announced on reconnect.
+  Map<String, dynamic>? _presenceCursor;
+
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   SyncDocReplica? _doc;
+  List<DocOp>? _mirroredOpsAwaitingSave;
+  int _localPersistFaults = 0;
+  late final _localUpdates = PendingDocUpdate(
+    persist: _enqueue,
+    onPendingChanged: _updateSyncPhase,
+    onRetryError: (_) =>
+        onFault?.call('local_update_persist_failed', ++_localPersistFaults),
+  );
   String _rootBlockId = '';
 
   /// Highest stream rid this replica has applied (per-document cursor).
@@ -352,9 +402,11 @@ class CloudSyncSession {
   bool get _useAppendLog => persistence != null;
 
   /// True when nothing local is still waiting for a server ack.
-  bool get _outboxEmpty => _useAppendLog
-      ? persistence!.outboxAfter(persistence!.cursor().pushedClock).isEmpty
-      : _unacked.isEmpty;
+  bool get _outboxEmpty =>
+      !_localUpdates.hasPending &&
+      (_useAppendLog
+          ? persistence!.outboxAfter(persistence!.cursor().pushedClock).isEmpty
+          : _unacked.isEmpty);
 
   /// Resolves once the session has bootstrapped (cold start complete).
   Future<void> get ready => _readyCompleter.future;
@@ -580,6 +632,31 @@ class CloudSyncSession {
       onServerConnected?.call();
     }
     switch (m['type']) {
+      case 'document.bootstrap':
+        // Sent on EVERY connect: new connection id, and the reason to
+        // (re)announce ourselves — a reconnect otherwise leaves this client in
+        // nobody's roster until the caret happens to move again.
+        _connectionId = m['connection_id'] as String?;
+        _sendPresence();
+      case 'presence.state':
+        _presence.clear();
+        final list = m['presences'];
+        if (list is List<dynamic>) {
+          for (final entry in list) {
+            if (entry is Map<String, dynamic>) _upsertPresence(entry);
+          }
+        }
+        _emitPresence();
+      case 'presence.update':
+        _upsertPresence(m);
+        _emitPresence();
+      case 'presence.leave':
+        final connectionId = m['connection_id'];
+        if (connectionId is String) _presence.remove(connectionId);
+        _emitPresence();
+      case 'document.update.accepted':
+        final seq = m['server_seq'];
+        if (seq is int) onAcceptedSeq?.call(seq);
       case 'sync.base':
         final b64 = m['base'];
         if (b64 is! String) return;
@@ -809,6 +886,65 @@ class CloudSyncSession {
     }
   }
 
+  /// Broadcast the local caret (block id + offset) as awareness; null clears it.
+  void sendCursor(String? blockId, int? offset) {
+    _presenceCursor = (blockId != null && offset != null)
+        ? {'block': blockId, 'offset': offset}
+        : null;
+    _sendPresence();
+  }
+
+  void _sendPresence() {
+    final name = selfName;
+    if (name == null) return; // headless session: opt out of awareness
+    _channel?.sink.add(
+      jsonEncode({
+        'type': 'presence.update',
+        'payload': {
+          'name': name,
+          if (_presenceCursor != null) 'cursor': _presenceCursor,
+        },
+      }),
+    );
+  }
+
+  void _upsertPresence(Map<String, dynamic> message) {
+    final connectionId = message['connection_id'];
+    final userId = message['user_id'];
+    if (connectionId is! String || userId is! String) return;
+
+    var name = userId;
+    String? cursorBlock;
+    int? cursorOffset;
+    final data = message['data'];
+    if (data is Map<String, dynamic>) {
+      if (data['name'] is String) name = data['name'] as String;
+      final cursor = data['cursor'];
+      if (cursor is Map &&
+          cursor['block'] is String &&
+          cursor['offset'] is int) {
+        cursorBlock = cursor['block'] as String;
+        cursorOffset = cursor['offset'] as int;
+      }
+    }
+
+    _presence[connectionId] = PresenceUser(
+      connectionId: connectionId,
+      userId: userId,
+      name: name,
+      cursorBlockId: cursorBlock,
+      cursorOffset: cursorOffset,
+    );
+  }
+
+  void _emitPresence() {
+    if (_disposed) return;
+    final others = _presence.values
+        .where((user) => user.connectionId != _connectionId)
+        .toList();
+    onPresence?.call(others);
+  }
+
   bool _applyRemote(Map<String, dynamic> u, {bool persist = true}) {
     final doc = _doc;
     if (doc == null) return false;
@@ -913,6 +1049,14 @@ class CloudSyncSession {
   @visibleForTesting
   void debugHandleFrame(String raw) => _onMessage(raw);
 
+  @visibleForTesting
+  void debugAttachReplica(SyncDocReplica replica) {
+    _doc = replica;
+    _rootBlockId = replica.rootBlockId();
+    _ready = true;
+    if (!_readyCompleter.isCompleted) _readyCompleter.complete();
+  }
+
   /// The in-memory outbox as data — what is queued, what went out, what came
   /// back rejected. Read-only; the only way to see the queue react to acks and
   /// rejections without a socket.
@@ -924,17 +1068,60 @@ class CloudSyncSession {
   /// Apply the editor's op batch to the local replica and push the resulting
   /// CRDT diff to the cloud. The same op stream the offline backend consumes, so
   /// local and cloud editing behave identically.
-  void applyLocalOps(List<DocOp> ops) {
+  void applyLocalOps(List<DocOp> ops, {bool trackHistory = false}) {
     final doc = _doc;
-    if (doc == null) return; // not bootstrapped yet
-    final sv = doc.stateVector();
-    for (final op in ops) {
-      doc.applyEditorOp(op);
+    if (doc == null) throw StateError('Cloud document is not ready');
+    _localUpdates.flush();
+    if (identical(_mirroredOpsAwaitingSave, ops)) {
+      _mirroredOpsAwaitingSave = null;
+      _updateSyncPhase();
+      return;
     }
-    final diff = doc.encodeDiffSince(sv);
-    if (diff.isEmpty) return;
-    _enqueue(diff);
-    _updateSyncPhase(); // a local edit → at least one unsynced diff now
+    final sv = doc.stateVector();
+    if (trackHistory) doc.beginHistoryBatch();
+    try {
+      for (final op in ops) {
+        doc.applyEditorOp(op);
+      }
+    } finally {
+      if (trackHistory) doc.endHistoryBatch();
+    }
+    _mirroredOpsAwaitingSave = ops;
+    _localUpdates.publish(doc.encodeDiffSince(sv));
+    _mirroredOpsAwaitingSave = null;
+    _updateSyncPhase();
+  }
+
+  EditorHistoryState applyHistory(HistoryAction action) {
+    final doc = _doc;
+    if (doc == null) throw StateError('Cloud document is not ready');
+    Object? persistenceError;
+    if (action == HistoryAction.reset) {
+      doc.resetHistory();
+    } else {
+      try {
+        _localUpdates.flush();
+        final sv = doc.stateVector();
+        if (action == HistoryAction.undo) {
+          doc.undo();
+        } else {
+          doc.redo();
+        }
+        _localUpdates.publish(doc.encodeDiffSince(sv));
+      } catch (error) {
+        persistenceError = error;
+      }
+    }
+    _updateSyncPhase();
+    final depths = doc.historyDepths();
+    return EditorHistoryState.fromBlocks(
+      childBlocks(),
+      canUndo: doc.canUndo(),
+      canRedo: doc.canRedo(),
+      undoDepth: depths.$1,
+      redoDepth: depths.$2,
+      persistenceError: persistenceError,
+    );
   }
 
   /// Persist a local diff to the outbox and send it if we're connected.
@@ -994,10 +1181,9 @@ class CloudSyncSession {
       // which entry the server refuses, and re-merging would hide it again.
       final deMerging = _deMergeFrom.contains(pending.first.clock);
       if (!deMerging && pending.length >= _mergeMinRun) {
-        final run = mergeRunLength(
-          [for (final e in pending) e.bytes.length],
-          maxBytes: _mergeMaxBytes,
-        );
+        final run = mergeRunLength([
+          for (final e in pending) e.bytes.length,
+        ], maxBytes: _mergeMaxBytes);
         final head = pending.take(run).toList();
         final merged = _doc?.mergeUpdates([for (final e in head) e.bytes]);
         if (merged != null) {
@@ -1144,9 +1330,13 @@ class CloudSyncSession {
   void _updateSyncPhase() {
     final cb = onSyncPhase;
     if (cb == null) return;
-    final pending = persistence != null
-        ? persistence!.outboxAfter(persistence!.cursor().pushedClock).isNotEmpty
-        : _unacked.isNotEmpty;
+    final pending =
+        _localUpdates.hasPending ||
+        (persistence != null
+            ? persistence!
+                  .outboxAfter(persistence!.cursor().pushedClock)
+                  .isNotEmpty
+            : _unacked.isNotEmpty);
     final phase = deriveSyncPhase(online: _online, pending: pending);
     if (phase == _lastSyncPhase) return;
     _lastSyncPhase = phase;
@@ -1228,10 +1418,17 @@ class CloudSyncSession {
   /// call site.
   void flushForExit() {
     if (_disposed) return;
+    _localUpdates.flush();
     _persistNow();
   }
 
   void dispose() {
+    try {
+      _localUpdates.flush();
+    } catch (_) {
+      onFault?.call('local_update_persist_failed', ++_localPersistFaults);
+    }
+    _localUpdates.dispose();
     // Best-effort: if the socket is still live, transmit anything not yet sent
     // before we close. Does not wait for acks — [drainAndDispose] is the
     // awaitable path. Then flush the unacked queue to persistence synchronously

@@ -1386,7 +1386,8 @@ async fn collect_asset_data_uris(
 /// that reads `url` (export_html) can show it. Uploaded images store
 /// `{file_id, name}` and NO `url`, so without this they render `<img src="">`.
 /// External images (already a `url`) are left alone. The blob path is a public
-/// capability URL (`is_blob_path`), so it resolves on an unauthenticated share
+/// capability URL (mounted without the scope guard in
+/// `routes::public_api_router`), so it resolves on an unauthenticated share
 /// page too.
 pub(super) fn inline_blob_hrefs(blocks: &mut [mica_app_core::documents::Block], workspace_id: Uuid) {
   for block in blocks {

@@ -1044,12 +1044,9 @@ mod tests {
   use mica_app_core::store::{self, DocumentRecord};
   use serde_json::json;
 
-  /// The gate ships INERT: the default floor is 0, so every client — including
-  /// ones that predate the `v` parameter entirely — still connects. That is the
-  /// whole point of landing it early; a gate that started rejecting on the day
-  /// it shipped would break every desktop install that had not updated yet.
+  /// Operators may explicitly set the floor to 0 for legacy compatibility.
   #[test]
-  fn the_default_floor_rejects_nobody() {
+  fn an_explicit_zero_floor_rejects_nobody() {
     assert_eq!(check_protocol(None, 0).unwrap(), 0, "a pre-parameter client");
     assert_eq!(check_protocol(Some(1), 0).unwrap(), 1);
     assert_eq!(check_protocol(Some(99), 0).unwrap(), 99, "a client newer than us");
@@ -1121,6 +1118,21 @@ mod tests {
     assert_eq!(
       WS_PROTOCOL_VERSION, 1,
       "bump kSyncProtocolVersion in sync_client.dart in the same commit"
+    );
+  }
+
+  #[test]
+  fn default_floor_rejects_unversioned_clients_and_accepts_current_protocol() {
+    let floor = mica_infra::config::ws_protocol_floor(None);
+    for announced in [None, Some(0)] {
+      assert!(matches!(
+        check_protocol(announced, floor),
+        Err(ApiError::BadRequestCode("client_too_old", _))
+      ));
+    }
+    assert_eq!(
+      check_protocol(Some(WS_PROTOCOL_VERSION), floor).unwrap(),
+      WS_PROTOCOL_VERSION
     );
   }
 

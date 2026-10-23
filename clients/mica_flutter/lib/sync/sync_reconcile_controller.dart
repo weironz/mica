@@ -3,8 +3,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import '../api/doc_socket_uri.dart';
 import '../api/models.dart';
-import '../api/sync_client.dart';
 import '../api/views_events.dart';
 import '../cloud/cloud_sync_session.dart';
 import '../doc_tab.dart';
@@ -25,7 +25,9 @@ import '../session/session_controller.dart';
 /// bookkeeping: the tree-change socket, the refetch debounce timer, the sweep
 /// guard, the banner-once flag, and the device client id.
 ///
-/// The sessions it builds ([DocumentSyncClient] / [CloudSyncSession]) are
+/// The sessions it builds ([CloudSyncSession] — which since 2026-10 also
+/// carries presence; the old separate presence socket never reconnected and
+/// baked its token in at construction) are
 /// constructed directly — they are already injectable models — while
 /// everything the SHELL knows (base URI, sign-in, the on-device stores,
 /// `mounted`) arrives as injected functions. User feedback (the banner pair,
@@ -184,6 +186,42 @@ class SyncReconcileController extends ChangeNotifier {
   /// need it synchronously.
   BigInt? _clientId;
 
+  /// Monotonic stamp bumped by every fresh [reconcile] and every
+  /// [closeActiveDocumentSync]. [_setupCloudYrs] awaits before attaching its
+  /// session, and in that gap the selection can move A→B→A — a guard that only
+  /// compares document ids then lets BOTH A setups attach: two live sessions
+  /// for one document, the older never disposed. A captured generation fails
+  /// the continuation the moment anything newer started.
+  int _syncGeneration = 0;
+  Future<void>? _activeSetup;
+
+  /// Keep cold-start editor writes on their local-origin replica. Sending them
+  /// through REST first would make bootstrap classify our own input as remote.
+  Future<CloudSyncSession> readyForDocument(String documentId) async {
+    reconcile();
+    final tab = activeTab();
+    if (tab.syncDocumentId != documentId)
+      throw StateError('Editor document changed');
+    if (tab.cloudSession == null) {
+      await _activeSetup?.timeout(const Duration(seconds: 15));
+    }
+    final replica = tab.cloudSession;
+    if (!isMounted() ||
+        activeTab() != tab ||
+        activeDocumentId() != documentId ||
+        replica == null) {
+      throw StateError('Editor document changed');
+    }
+    await replica.ready.timeout(const Duration(seconds: 15));
+    if (!isMounted() ||
+        activeTab() != tab ||
+        activeDocumentId() != documentId ||
+        tab.cloudSession != replica) {
+      throw StateError('Editor document changed');
+    }
+    return replica;
+  }
+
   // ── Reconcile loop ────────────────────────────────────────────────────────
 
   /// Keep the tree-change socket pointed at the sidebar's workspace.
@@ -194,9 +232,7 @@ class SyncReconcileController extends ChangeNotifier {
   /// feature is for.
   void reconcileViewsEvents() {
     final auth = session.session;
-    final workspaceId = activeIsLocal()
-        ? null
-        : session.selectedWorkspace?.id;
+    final workspaceId = activeIsLocal() ? null : session.selectedWorkspace?.id;
     if (auth == null || workspaceId == null) {
       disposeViewsEvents();
       return;
@@ -245,52 +281,37 @@ class SyncReconcileController extends ChangeNotifier {
     }
 
     final active = activeTab();
-    if (active.sync?.documentId == documentId) {
+    if (active.syncDocumentId == documentId) {
       return;
     }
 
     closeActiveDocumentSync();
-    final sync = DocumentSyncClient(
-      documentId: documentId,
-      uri: documentSocketUri(
-        baseUri(),
-        workspace.id,
-        documentId,
-        session.accessToken,
-      ),
-      selfName: session.user.displayName,
-      onRemoteSeq: handleRemoteSeq,
-      onPresence: (users) {
-        // Only the tab being LOOKED AT owns the presence row. A background tab
-        // is still connected under the cap, and without this test its roster
-        // would overwrite the visible one — the reader would see the avatars of
-        // whoever is editing some other page. `handleRemoteSeq` already
-        // self-filters on documentId; this is the same guard for presence.
-        if (isMounted() && activeDocumentId() == documentId) {
-          onPresence(documentId, users);
-        }
-      },
-    );
-    active.sync = sync;
+    // Set the marker BEFORE the async session setup below: it is what a
+    // same-document reconcile checks in the gap between teardown and attach,
+    // and what tabsToPark counts as liveness.
+    active.syncDocumentId = documentId;
     onPresenceCleared();
-    sync.connect();
 
-    // A new connection just came up — park the least-recently-used ones that no
+    // A new connection is coming up — park the least-recently-used ones that no
     // longer fit under the cap.
     enforceSyncCap();
 
     // Open a yrs CRDT session for this doc (desktop = Rust FFI replica, web = JS
-    // yjs replica — both wire-compatible). P3d: reconcile itself only runs
+    // yjs replica — both wire-compatible). It also carries presence and the
+    // op-path accepted-seq notice. P3d: reconcile itself only runs
     // off cloud state (session + workspace + bootstrap — all cloud-world
     // fields), so the old mode guard is redundant; a local-world selection
     // never reaches here.
-    unawaited(_setupCloudYrs(documentId, workspace, session));
+    final generation = ++_syncGeneration;
+    _activeSetup = _setupCloudYrs(documentId, workspace, session, generation);
+    unawaited(_activeSetup);
   }
 
   Future<void> _setupCloudYrs(
     String documentId,
     Workspace workspace,
     AuthSession session,
+    int generation,
   ) async {
     // Desktop pins the CRDT actor to the device's stable client id; web has no
     // on-device store, so it uses a per-session yjs actor (placeholder id here).
@@ -299,9 +320,12 @@ class SyncReconcileController extends ChangeNotifier {
       clientId = await deviceClientId() ?? (isWeb() ? BigInt.zero : null);
       _clientId = clientId;
     }
-    if (clientId == null || !isMounted()) return;
+    if (clientId == null || !isMounted() || generation != _syncGeneration) {
+      return;
+    }
     // The selection may have moved while we awaited the device id.
-    if (activeDocumentId() != documentId || _activeSyncDocumentId() != documentId) {
+    if (activeDocumentId() != documentId ||
+        _activeSyncDocumentId() != documentId) {
       return;
     }
     // C1: unacked local diffs persist per-document, so a crash / hard close
@@ -318,6 +342,7 @@ class SyncReconcileController extends ChangeNotifier {
     // Lock that would otherwise leak (orphaned, never disposed → that doc can
     // never take the writable mirror again this page load).
     if (!isMounted() ||
+        generation != _syncGeneration ||
         activeDocumentId() != documentId ||
         _activeSyncDocumentId() != documentId) {
       persistence?.dispose();
@@ -352,6 +377,18 @@ class SyncReconcileController extends ChangeNotifier {
         );
       },
       clientId: clientId,
+      documentId: documentId,
+      // Presence rides this same socket: only the tab being LOOKED AT owns the
+      // presence row. A background tab is still connected under the cap, and
+      // without this test its roster would overwrite the visible one — the
+      // reader would see the avatars of whoever is editing some other page.
+      selfName: session.user.displayName,
+      onPresence: (users) {
+        if (isMounted() && activeDocumentId() == documentId) {
+          onPresence(documentId, users);
+        }
+      },
+      onAcceptedSeq: (seq) => handleRemoteSeq(documentId, seq),
       onReady: (_, _) {
         clearSyncBanner(); // B3: a fresh bootstrap means sync recovered.
         applyCloudBlocks(documentId);
@@ -376,13 +413,19 @@ class SyncReconcileController extends ChangeNotifier {
           : null,
       persistence: persistence,
     );
-    activeTab().cloudSession = yrs;
+    final tab = activeTab();
+    // Never overwrite a live session silently: if one is still attached (the
+    // generation guard above normally prevents this), drain + dispose it
+    // rather than leaking an open socket that keeps syncing a dead replica.
+    final old = tab.cloudSession;
+    tab.cloudSession = yrs;
     yrs.connect();
+    if (old != null) unawaited(old.drainAndDispose());
   }
 
-  /// The ACTIVE tab's doc socket document id, if any (the liveness guard
+  /// The document the ACTIVE tab's sync is for, if any (the liveness guard
   /// `_setupCloudYrs` re-checks after its awaits).
-  String? _activeSyncDocumentId() => activeTab().sync?.documentId;
+  String? _activeSyncDocumentId() => activeTab().syncDocumentId;
 
   // ── Socket teardown ───────────────────────────────────────────────────────
 
@@ -397,8 +440,7 @@ class SyncReconcileController extends ChangeNotifier {
   /// them loses content. This is the same call [closeActiveDocumentSync] makes,
   /// for the same reason.
   void parkTab(TabSockets tab) {
-    tab.sync?.dispose();
-    tab.sync = null;
+    tab.syncDocumentId = null;
     final cloud = tab.cloudSession;
     tab.cloudSession = null;
     if (cloud != null) unawaited(cloud.drainAndDispose());
@@ -434,8 +476,10 @@ class SyncReconcileController extends ChangeNotifier {
     _syncRefetchTimer?.cancel();
     _syncRefetchTimer = null;
     _cursorTimer?.cancel();
-    active.sync?.dispose();
-    active.sync = null;
+    // Any in-flight _setupCloudYrs continuation is now stale and must not
+    // attach its session (the A→B→A double-session bug).
+    _syncGeneration++;
+    active.syncDocumentId = null;
     final cloud = active.cloudSession;
     active.cloudSession = null;
     // C2: let the outgoing session flush + drain its outbox before closing, so a
@@ -456,7 +500,7 @@ class SyncReconcileController extends ChangeNotifier {
   void onEditorSelection(String? blockId, int? offset) {
     _cursorTimer?.cancel();
     _cursorTimer = Timer(const Duration(milliseconds: 120), () {
-      activeTab().sync?.sendCursor(blockId, offset);
+      activeTab().cloudSession?.sendCursor(blockId, offset);
     });
   }
 
@@ -594,6 +638,10 @@ class SyncReconcileController extends ChangeNotifier {
       for (final entry in this.session.viewsByWorkspace.entries) {
         for (final v in entry.value) {
           if (v.objectType != 'document' || v.objectId == activeDoc) continue;
+          // A doc still live in a BACKGROUND tab (under the cap) is drained by
+          // its own session — a second connection here would fight it for the
+          // same outbox and ack stream.
+          if (tabs().any((tab) => tab.syncDocumentId == v.objectId)) continue;
           targets.add((workspaceId: entry.key, docId: v.objectId));
         }
       }
@@ -623,11 +671,8 @@ class SyncReconcileController extends ChangeNotifier {
   /// The headless drain step, injectable so tests can observe WHICH docs a
   /// sweep touched without opening sockets. Production runs the default
   /// (`null`) — the real short-lived session below.
-  Future<void> Function(
-    String workspaceId,
-    String docId,
-    CloudDocStore store,
-  )? _sweepDrain;
+  Future<void> Function(String workspaceId, String docId, CloudDocStore store)?
+  _sweepDrain;
 
   /// Test seam for [_sweepDrain]; see its doc.
   @visibleForTesting
@@ -636,7 +681,8 @@ class SyncReconcileController extends ChangeNotifier {
       String workspaceId,
       String docId,
       CloudDocStore store,
-    )? drain,
+    )?
+    drain,
   ) {
     _sweepDrain = drain;
   }
@@ -657,9 +703,18 @@ class SyncReconcileController extends ChangeNotifier {
       return;
     }
     final session = CloudSyncSession(
-      // Short-lived (drain one outbox, then dispose).
-      uri: () async =>
-          documentSocketUri(baseUri(), workspaceId, docId, token),
+      // Short-lived (drain one outbox, then dispose). Renew the token per
+      // attempt like the live session does — a long-offline sweep otherwise
+      // reconnects with the stale token captured when it started.
+      uri: () async {
+        await ensureFreshSession();
+        return documentSocketUri(
+          baseUri(),
+          workspaceId,
+          docId,
+          this.session.session?.accessToken ?? token,
+        );
+      },
       clientId: clientId,
       onReady: (_, _) {},
       onRemoteBlocks: (_) {},

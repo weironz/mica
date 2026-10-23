@@ -1,3 +1,5 @@
+import 'dart:async';
+
 // dart:js_util resolves only for the web compile target (this file is reached
 // solely via a dart.library.html conditional import); the VM-targeted analyzer
 // can't see it, so silence that single false-positive here.
@@ -90,11 +92,24 @@ Future<bool> _copyViaExecCommand(Uint8List bytes, String mime) async {
     ..style.position = 'fixed'
     ..style.left = '-10000px'
     ..style.top = '0';
-  final img = html.ImageElement(src: url);
+  final img = html.ImageElement();
+  final loaded = Completer<bool>();
+  void finishLoading(bool success) {
+    if (!loaded.isCompleted) loaded.complete(success);
+  }
+
+  final loadSub = img.onLoad.listen((_) => finishLoading(true));
+  final errorSub = img.onError.listen((_) => finishLoading(false));
   holder.append(img);
   html.document.body?.append(holder);
   try {
-    await img.onLoad.first;
+    img.src = url;
+    if (!await loaded.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => false,
+    )) {
+      return false;
+    }
     final range = html.Range()..selectNode(img);
     final selection = html.window.getSelection();
     selection
@@ -106,6 +121,8 @@ Future<bool> _copyViaExecCommand(Uint8List bytes, String mime) async {
   } catch (_) {
     return false;
   } finally {
+    await loadSub.cancel();
+    await errorSub.cancel();
     holder.remove();
     html.Url.revokeObjectUrl(url);
   }

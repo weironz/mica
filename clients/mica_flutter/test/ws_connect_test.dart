@@ -12,7 +12,7 @@
 // headers — and the last test states that difference so it reads as a decision
 // rather than an oversight.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/api/sync_client.dart';
+import 'package:mica_flutter/api/doc_socket_uri.dart';
 import 'package:mica_flutter/api/ws_connect_stub.dart' as io_variant;
 import 'package:mica_flutter/api/ws_connect_web.dart' as web_variant;
 

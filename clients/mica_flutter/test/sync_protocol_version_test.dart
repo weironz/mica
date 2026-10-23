@@ -1,13 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/api/sync_client.dart';
+import 'package:mica_flutter/api/doc_socket_uri.dart';
 
 /// 客户端必须**声明**自己说的协议版本,服务端才有可能在需要时把太老的客户端挡在
 /// 门外(`client_too_old`)而不是让它连上来再以谁也解释不清的方式出错。
 ///
-/// 今天服务端的地板是 0,谁都不拒 —— 所以这条声明现在一分钱不值,而这正是它的意义:
-/// 桌面端是用户自装的二进制,更新节奏不由我们定。等 op 模型退役(S4)把那条默默兜住
-/// 老客户端的 REST 后路撤掉时,还在连的恰恰是这些从不更新的安装 —— 到那时才加声明
-/// 已经晚了,因为要挡的就是那批没有声明的客户端。
+/// op 模型退役后,服务端默认最低协议版本为 1。桌面端由用户自行更新,
+/// 未声明版本的旧客户端会收到 `client_too_old`;这里保证当前客户端始终声明版本,
+/// 且声明值与服务端保持一致。
 void main() {
   test('WS URI 带上协议版本', () {
     final uri = documentSocketUri(

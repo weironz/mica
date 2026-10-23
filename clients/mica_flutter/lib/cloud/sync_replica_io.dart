@@ -18,8 +18,10 @@ import 'sync_doc_replica.dart';
 /// so all of a device's edits share one CRDT actor across sessions. Null when
 /// the bytes don't decode — the caller treats that as corrupt/absent.
 SyncDocReplica? replicaFromState(Uint8List state, BigInt clientId) {
-  final doc =
-      MicaDocument.fromStateWithClientId(bytes: state, clientId: clientId);
+  final doc = MicaDocument.fromStateWithClientId(
+    bytes: state,
+    clientId: clientId,
+  );
   if (doc == null) return null;
   return _YrsReplica(doc);
 }
@@ -54,6 +56,37 @@ class _YrsReplica implements SyncDocReplica {
 
   @override
   void applyEditorOp(DocOp op) => _mirror.apply(_doc, op);
+
+  @override
+  void beginHistoryBatch() => _doc.beginHistoryBatch();
+  @override
+  void endHistoryBatch() => _doc.endHistoryBatch();
+  @override
+  void resetHistory() {
+    _doc.resetHistory();
+    _mirror.seedFrom(_doc);
+  }
+
+  @override
+  bool undo() {
+    final changed = _doc.undo();
+    _mirror.seedFrom(_doc);
+    return changed;
+  }
+
+  @override
+  bool redo() {
+    final changed = _doc.redo();
+    _mirror.seedFrom(_doc);
+    return changed;
+  }
+
+  @override
+  bool canUndo() => _doc.canUndo();
+  @override
+  bool canRedo() => _doc.canRedo();
+  @override
+  (int, int) historyDepths() => _doc.historyDepths();
 
   @override
   Uint8List mergeUpdates(List<Uint8List> updates) {

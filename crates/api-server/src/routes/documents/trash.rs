@@ -174,52 +174,87 @@ pub(super) async fn empty_workspace_trash(db: &PgPool, workspace_id: Uuid) -> Ap
 batch_view_handler! {
   /// `POST /api/workspaces/{workspace_id}/views/batch-trash`
   ///
-  /// Soft-delete many pages (each with its whole subtree) in ONE statement. Same
-  /// recursive CTE as [delete_view], seeded from a set instead of a single id, so
-  /// 300 pages cost one query rather than 300 round trips.
+  /// Soft-delete many subtrees together. Lock parents first, then update using
+  /// a fresh statement snapshot so concurrent inserts are included.
   pub async fn batch_trash_views, trash_views_batch
 }
 
 
-/// Soft-delete [view_ids] and everything under them. Returns the ids it changed.
-///
-/// Split out of the handler for the same reason [purge_views_batch] is: the
-/// handler needs auth headers a DB-level test cannot construct. Until 2026-08-27
-/// this statement lived inline and had no test at all — the guarantee was "the
-/// SQL parses and the route table has no conflict", not "300 ids in, the right
-/// rows out".
-///
-/// `is_deleted = false` is in the WHERE, not the seed: a row already in the bin
-/// must not be re-stamped (that would move its `updated_at` and make it look
-/// freshly deleted) and must come back in `skipped` so the caller is told it did
-/// less than it asked.
+/// Move one subtree to the bin, preserving the single-item route's 404.
+pub(super) async fn trash_one(db: &PgPool, workspace_id: Uuid, view_id: Uuid) -> ApiResult<()> {
+  if trash_views_batch(db, workspace_id, &[view_id]).await?.is_empty() {
+    return Err(ApiError::NotFound);
+  }
+  Ok(())
+}
+
+/// Lock parents before discovering their children, using a fresh snapshot at
+/// each level. Migration 0033 takes FOR SHARE on the immediate parent when a
+/// child is inserted or moved. Waiting in the recursive UPDATE itself is too
+/// late: its snapshot predates the writer's commit and misses that child.
+/// Locking only the roots would leave the same race under nested folders.
+async fn lock_trash_subtrees(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  workspace_id: Uuid,
+  roots: &[Uuid],
+) -> ApiResult<()> {
+  let mut level = sqlx::query_scalar::<_, Uuid>(
+    "SELECT id FROM views WHERE workspace_id = $1 AND id = ANY($2) ORDER BY id FOR UPDATE",
+  )
+  .bind(workspace_id)
+  .bind(roots)
+  .fetch_all(&mut **tx)
+  .await?;
+  let mut locked: std::collections::HashSet<Uuid> = level.iter().copied().collect();
+  while !level.is_empty() {
+    level = sqlx::query_scalar::<_, Uuid>(
+      "SELECT id FROM views WHERE workspace_id = $1 AND parent_view_id = ANY($2) \
+       ORDER BY id FOR UPDATE",
+    )
+    .bind(workspace_id)
+    .bind(&level)
+    .fetch_all(&mut **tx)
+    .await?;
+    level.retain(|id| locked.insert(*id));
+  }
+  Ok(())
+}
+
+/// Soft-delete the requested subtrees in one transaction. Already-trashed rows
+/// keep their timestamps and are omitted from the returned changed IDs.
 pub(super) async fn trash_views_batch(
   db: &PgPool,
   workspace_id: Uuid,
   view_ids: &[Uuid],
 ) -> ApiResult<Vec<Uuid>> {
-  Ok(
-    sqlx::query_scalar::<_, Uuid>(
-      r#"
-        WITH RECURSIVE subtree AS (
-          SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
-          UNION ALL
-          SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-        )
-        UPDATE views
-        SET is_deleted = true, updated_at = now()
-        WHERE id IN (SELECT id FROM subtree)
-          AND workspace_id = $2
-          AND is_deleted = false
-        RETURNING id
-      "#,
-    )
-    .bind(view_ids)
-    .bind(workspace_id)
-    .fetch_all(db)
-    .await?,
+  let mut tx = db.begin().await?;
+  lock_trash_subtrees(&mut tx, workspace_id, view_ids).await?;
+  let touched = sqlx::query_scalar::<_, Uuid>(
+    r#"
+      WITH RECURSIVE subtree AS (
+        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+        UNION ALL
+        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      )
+      UPDATE views
+      SET is_deleted = true, updated_at = now()
+      WHERE id IN (SELECT id FROM subtree)
+        AND workspace_id = $2
+        AND is_deleted = false
+      RETURNING id
+    "#,
   )
+  .bind(view_ids)
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+  tx.commit().await?;
+  Ok(touched)
 }
+
+#[cfg(test)]
+#[path = "trash_concurrency_tests.rs"]
+mod concurrency_tests;
 
 batch_view_handler! {
   /// `POST /api/workspaces/{workspace_id}/views/batch-restore`

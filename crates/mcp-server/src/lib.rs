@@ -1124,6 +1124,79 @@ mod wire_tests {
     assert_eq!(seen.lock().unwrap().len(), 1, "the harness sees requests");
   }
 
+  /// A missing confirmation is actionable tool feedback, with no API side effects.
+  #[tokio::test]
+  async fn confirmation_refusals_are_tool_errors_without_any_request() {
+    let (base, seen) = fake_api().await;
+    let server = MicaMcp::new(base, "pat".into(), false);
+    let probe = server.clone();
+    let doc: Uuid = DOC.parse().unwrap();
+    probe.cache_put(doc, "cached page");
+    let mut mcp = Session::start(server).await;
+
+    let guarded = [
+      (
+        "mica_delete_workspace",
+        json!({ "workspace_id": WS, "expect_name": "My workspace" }),
+        "refusing to delete a workspace without confirm=true — this cannot be undone",
+        true,
+      ),
+      (
+        "mica_trash_view",
+        json!({ "workspace_id": WS, "view_id": VIEW }),
+        "refusing to trash without confirm=true",
+        false,
+      ),
+      (
+        "mica_trash_views",
+        json!({ "workspace_id": WS, "view_ids": [VIEW, DOC] }),
+        "refusing to trash 2 view(s) without confirm=true",
+        true,
+      ),
+      (
+        "mica_empty_trash",
+        json!({ "workspace_id": WS }),
+        "refusing to empty the recycle bin without confirm=true — this cannot be undone",
+        true,
+      ),
+      (
+        "mica_purge_view",
+        json!({ "workspace_id": WS, "view_id": VIEW }),
+        "refusing to purge without confirm=true — this cannot be undone",
+        false,
+      ),
+      (
+        "mica_purge_views",
+        json!({ "workspace_id": WS, "view_ids": [VIEW, DOC] }),
+        "refusing to permanently delete 2 view(s) without confirm=true — this cannot be undone",
+        true,
+      ),
+    ];
+    for (tool, mut args, reason, defaults_to_false) in guarded {
+      // Only the tools with a serde default accept an omitted confirmation.
+      for omitted in [false, true] {
+        if omitted && !defaults_to_false {
+          continue;
+        }
+        if omitted {
+          args.as_object_mut().unwrap().remove("confirm");
+        } else {
+          args["confirm"] = json!(false);
+        }
+        let reply = mcp.call(tool, args.clone()).await;
+        assert!(reply.get("error").is_none(), "{tool}: {reply}");
+        assert_eq!(reply.pointer("/result/isError"), Some(&json!(true)), "{tool}: {reply}");
+        assert_eq!(
+          reply.pointer("/result/content/0/text").and_then(Value::as_str),
+          Some(reason),
+          "{tool}: {reply}"
+        );
+        assert!(seen.lock().unwrap().is_empty(), "{tool} must send no API requests");
+        assert_eq!(probe.cache_get(doc).as_deref(), Some("cached page"), "{tool}");
+      }
+    }
+  }
+
   /// The guard for the NEXT id someone adds: every `*_id` / `*_ids` argument of
   /// every tool is schema'd as a uuid string — which is only true when the
   /// field is a `Uuid`, i.e. when it cannot carry a path. A new `String` id

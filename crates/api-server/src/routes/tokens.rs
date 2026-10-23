@@ -66,10 +66,7 @@ pub async fn create_token(
 ) -> ApiResult<Json<CreatedToken>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
 
-  let name = req.name.trim().to_string();
-  if name.is_empty() {
-    return Err(ApiError::BadRequest("name is required".to_string()));
-  }
+  let name = super::names::normalize_name(&req.name, "name")?;
 
   let scopes: Vec<String> = if req.scopes.is_empty() {
     vec![Scope::Read.as_str().to_string()]

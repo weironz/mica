@@ -507,11 +507,7 @@ class _SearchDialogState extends State<_SearchDialog> {
       // the accelerator is simply ignored rather than doing something else.
       widget.onReveal(result.viewId, result.workspaceId);
     } else {
-      widget.onOpen(
-        result.viewId,
-        result.workspaceId,
-        inNewTab: _accelHeld,
-      );
+      widget.onOpen(result.viewId, result.workspaceId, inNewTab: _accelHeld);
     }
   }
 
@@ -594,7 +590,9 @@ class _SearchDialogState extends State<_SearchDialog> {
   /// "the workspace searched", same as everywhere else in this file.
   List<String> _trailFor(SearchResult result) {
     final hitWs = result.workspaceId;
-    if (hitWs != null && widget.workspaceId != null && hitWs != widget.workspaceId) {
+    if (hitWs != null &&
+        widget.workspaceId != null &&
+        hitWs != widget.workspaceId) {
       return workspaceTrailFor(hitWs, widget.workspaces);
     }
     return ancestorPathSegments(
@@ -672,10 +670,7 @@ class _SearchDialogState extends State<_SearchDialog> {
               borderRadius: BorderRadius.circular(6),
               onTap: () => widget.onOpenWorkspace?.call(hits[i].id),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 8,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 child: Row(
                   children: [
                     Icon(
@@ -1711,12 +1706,14 @@ class _SettingsDialogState extends State<_SettingsDialog> {
         );
       },
     );
-    if (confirmed != true) {
-      passCtl.dispose();
-      return;
-    }
-    final password = passCtl.text;
-    passCtl.dispose();
+    final password = confirmed == true ? passCtl.text : null;
+    // The pop transition still renders the field after the future resolves —
+    // disposing its controller now is the lessons-file "used after dispose"
+    // crash. Dispose once the transition has finished.
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 300), passCtl.dispose),
+    );
+    if (password == null) return;
     setState(() {
       _accountBusy = true;
       _accountMsg = null;
@@ -1775,8 +1772,8 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       _fetchingModels = true;
       _modelsError = null;
     });
+    final provider = _fieldsProviderId;
     try {
-      final provider = _fieldsProviderId;
       final result = await fetch(
         provider: _protocol,
         providerId: provider,
@@ -1802,19 +1799,19 @@ class _SettingsDialogState extends State<_SettingsDialog> {
       if (!mounted) return;
       setState(() {
         _fetchingModels = false;
-        _modelsError = _modelsFailure(context, error);
+        // Same filing rule as success: not the vendor now selected.
+        if (_fieldsProviderId == provider) {
+          _modelsError = _modelsFailure(context, error);
+        }
       });
     }
   }
 
-  /// Turn a fetch failure into something the reader can act on.
-  ///
-  /// The raw exception was `not found` — four grey words that read like the
-  /// button did nothing, when in fact the answer was specific and actionable:
-  /// this route does not exist on the server being talked to, i.e. the api is
-  /// older than this build. Status codes, not message text: the message is
-  /// English server prose and matching on it lets a reworded sentence break
-  /// this silently.
+  /// Turn a fetch failure into something the reader can act on. By status
+  /// code, not message text — the message is English server prose a reworded
+  /// sentence would break. 404 means this route is missing on the server being
+  /// talked to (the api is older than this build), not a bare grey `not found`
+  /// that reads like the button did nothing.
   String _modelsFailure(BuildContext context, Object error) {
     final status = error is ApiException ? error.statusCode : null;
     return switch (status) {
@@ -4320,8 +4317,8 @@ class _AiDialogState extends State<_AiDialog> {
           () => _error = error is AiEditConflict
               ? context.l10n.aiEditConflict
               : error is AiEditSaveFailure
-                  ? context.l10n.aiEditSaveFailure
-                  : error.toString(),
+              ? context.l10n.aiEditSaveFailure
+              : error.toString(),
         );
       }
     } finally {
@@ -4804,13 +4801,15 @@ class _TransferDialogState extends State<_TransferDialog> {
         dryRun: true,
       );
       // Superseded by a newer pick — of EITHER control.
-      if (!mounted || _destId != destId || _parentViewId != parentViewId) return;
+      if (!mounted || _destId != destId || _parentViewId != parentViewId)
+        return;
       setState(() {
         _preview = report;
         _loadingPreview = false;
       });
     } catch (error) {
-      if (!mounted || _destId != destId || _parentViewId != parentViewId) return;
+      if (!mounted || _destId != destId || _parentViewId != parentViewId)
+        return;
       setState(() {
         _error = context.l10n.transferFailed(error.toString());
         _loadingPreview = false;

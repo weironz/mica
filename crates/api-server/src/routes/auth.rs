@@ -303,7 +303,7 @@ pub async fn update_me(
     r#"
       UPDATE users
       SET display_name = $1, updated_at = now()
-      WHERE id = $2
+      WHERE id = $2 AND deleted_at IS NULL
       RETURNING id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
     "#,
   )
@@ -822,6 +822,15 @@ pub async fn logout(
 /// Google's app passwords, which a password change revokes.
 pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
   let mut tx = db.begin().await?;
+  revoke_user_sessions_in_tx(&mut tx, user_id).await?;
+  tx.commit().await?;
+  Ok(())
+}
+
+pub(super) async fn revoke_user_sessions_in_tx(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  user_id: Uuid,
+) -> ApiResult<()> {
   sqlx::query(
     r#"
       UPDATE refresh_tokens
@@ -830,13 +839,12 @@ pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult
     "#,
   )
   .bind(user_id)
-  .execute(&mut *tx)
+  .execute(&mut **tx)
   .await?;
   sqlx::query("DELETE FROM api_tokens WHERE user_id = $1")
     .bind(user_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-  tx.commit().await?;
   Ok(())
 }
 
@@ -1209,17 +1217,17 @@ pub(crate) fn session_from_token(state: &AppState, token: &str) -> ApiResult<(Uu
   Ok((user_id, token.claims.exp as u64))
 }
 
-/// Axum middleware: authenticate every non-public `/api` request and enforce the
-/// scope its HTTP method needs (safe methods → `read`, mutating → `write`). JWT
-/// (password) sessions carry full scope; PATs are checked against their grant.
+/// Axum middleware: authenticate every request on the routes it is layered
+/// over and enforce the scope its HTTP method needs (safe methods → `read`,
+/// mutating → `write`). The public half of `/api` is mounted WITHOUT this
+/// guard (`routes::layered_api`) — there is no path table here to keep in
+/// sync with the router. JWT (password) sessions carry full scope; PATs are
+/// checked against their grant.
 pub async fn scope_guard(
   State(state): State<AppState>,
   request: Request,
   next: Next,
 ) -> Result<Response, ApiError> {
-  if is_public(request.uri().path()) {
-    return Ok(next.run(request).await);
-  }
   let bearer = bearer_token(request.headers());
   let from_cookie = bearer.is_none();
   let token = bearer
@@ -1247,63 +1255,15 @@ pub async fn scope_guard(
   Ok(RESOLVED.scope((token, auth.user_id), next.run(request)).await)
 }
 
-fn is_public(path: &str) -> bool {
-  path.ends_with("/health")
-    || path.ends_with("/ready")
-    || path.ends_with("/auth/login")
-    || path.ends_with("/auth/register")
-    // Forgot-password: the caller has no session (that is the whole point). The
-    // email address in the body is all it takes; the reset itself happens on the
-    // server-rendered /reset-password page (mounted outside /api entirely).
-    || path.ends_with("/auth/password/forgot")
-    // Resend a verification link: by definition the caller CANNOT sign in yet, so
-    // requiring a session would make the endpoint unreachable exactly when it is
-    // needed. Found by testing, not by reading — it answered 401 to every call
-    // until this line existed, which is the same way the blob endpoint was
-    // silently broken for a month (see below).
-    || path.ends_with("/auth/resend-verification")
-    // You refresh precisely BECAUSE the access token is dead — demanding a live
-    // one here would be a deadlock, and the endpoint's own credential is the
-    // refresh token in its body. The same router-wide `scope_guard` already
-    // silently 401'd the blob endpoint for a month (see below), so this is
-    // pinned by a test rather than left to be rediscovered.
-    || path.ends_with("/auth/refresh")
-    // Signing out must work with a dead access token — that is the normal case
-    // for someone who left the app closed. The refresh token in the body is the
-    // credential.
-    || path.ends_with("/auth/logout")
-    // A profile picture has to load from an <img> tag, which cannot carry a
-    // bearer token — see avatar.rs. Pinned by tests/avatar_public.rs for the
-    // same reason the blob path is.
-    || is_avatar_path(path)
-    || is_blob_path(path)
-}
-
-/// `/users/{user_id}/avatar` — the profile-picture read route.
-fn is_avatar_path(path: &str) -> bool {
-  let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-  let Some(i) = segs.iter().position(|s| *s == "users") else {
-    return false;
-  };
-  segs.get(i + 2) == Some(&"avatar") && segs.len() == i + 3
-}
-
-/// `…/files/{file_id}/blob` (+ an optional cosmetic filename segment) — the
-/// image capability link. Public BY DESIGN: the unguessable file_id is the
-/// capability, which is the only reason a copied Markdown image still renders
-/// in Typora / a browser (files::blob). This router-wide `scope_guard` shipped
-/// with PATs (a46db0a) and silently 401'd it for a month, quietly breaking the
-/// copy-portability the endpoint exists for — hence the explicit test in
-/// the `image_blob_link_is_public` test below.
-fn is_blob_path(path: &str) -> bool {
-  let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-  let Some(i) = segs.iter().position(|s| *s == "files") else {
-    return false;
-  };
-  // files / {file_id} / blob   [ / {filename} ]
-  segs.get(i + 2) == Some(&"blob") && (segs.len() == i + 3 || segs.len() == i + 4)
-}
-
+// The unguarded routes (health probes and the mail-link endpoints whose
+// caller can by definition not sign in yet) are mounted WITHOUT this guard in
+// `routes::public_api_router`. That used to be an `is_public` path-suffix
+// table here, kept in sync with the router by hand: the blob link and
+// resend-verification were each silently misclassified that way, and a
+// `{param}` value spelling one of the suffixes (e.g.
+// `DELETE /ai/providers/health`) bypassed the guard. The coverage those
+// entries' tests carried now runs as real requests through the assembled
+// routers — see `route_layer_tests` in routes/mod.rs.
 pub(crate) fn normalize_email(email: &str) -> ApiResult<String> {
   let email = email.trim().to_ascii_lowercase();
   if email.is_empty() || !email.contains('@') {
@@ -1314,12 +1274,7 @@ pub(crate) fn normalize_email(email: &str) -> ApiResult<String> {
 }
 
 fn normalize_display_name(display_name: &str) -> ApiResult<String> {
-  let display_name = display_name.trim().to_string();
-  if display_name.is_empty() {
-    return Err(ApiError::BadRequest("display_name is required".to_string()));
-  }
-
-  Ok(display_name)
+  super::names::normalize_name(display_name, "display_name")
 }
 
 fn validate_password(password: &str, identifiers: &[&str]) -> ApiResult<()> {
@@ -1466,64 +1421,11 @@ mod tests {
     assert!(a.grants(Scope::Write));
   }
 
-  // The image blob link is a capability url (the file_id IS the credential) —
-  // public on purpose so a copied Markdown image still renders in Typora / a
-  // browser. This router-wide guard once swallowed it for a month without a
-  // peep; nothing else notices, because in-app rendering uses a different
-  // (authenticated) path. Hence pinning it here.
-  #[test]
-  fn image_blob_link_is_public() {
-    const WS: &str = "/api/workspaces/5a398481-bcf5-4a5e-83f0-a891bf0bad7e";
-    const FID: &str = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
-    assert!(is_public(&format!("{WS}/files/{FID}/blob")));
-    // …and with the cosmetic filename segment.
-    assert!(is_public(&format!("{WS}/files/{FID}/blob/diagram.png")));
-    assert!(is_public(&format!("{WS}/files/{FID}/blob/%E5%9B%BE.png")));
-  }
-
-  #[test]
-  fn only_the_blob_link_is_public_under_files() {
-    const WS: &str = "/api/workspaces/5a398481-bcf5-4a5e-83f0-a891bf0bad7e";
-    const FID: &str = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
-    // Metadata, upload plumbing and deletion all stay authenticated.
-    assert!(!is_public(&format!("{WS}/files/{FID}")));
-    assert!(!is_public(&format!("{WS}/files/presign")));
-    assert!(!is_public(&format!("{WS}/files/complete")));
-    assert!(!is_public(&format!("{WS}/files/resolve")));
-    assert!(!is_public(&format!("{WS}/files/import-url")));
-    // Nothing deeper than one filename segment is a blob link.
-    assert!(!is_public(&format!("{WS}/files/{FID}/blob/a/b")));
-    // And the word "blob" elsewhere doesn't open a door.
-    assert!(!is_public(&format!("{WS}/documents/{FID}/blob")));
-  }
-
-  // A profile picture is loaded by an <img> tag, which cannot carry a bearer
-  // token — the web client's token lives in localStorage. Guarded here for the
-  // same reason as the blob link: nothing in the app would notice the 401,
-  // because a missing avatar looks exactly like an account that never set one.
-  #[test]
-  fn avatar_read_route_is_public() {
-    const UID: &str = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
-    assert!(is_public(&format!("/api/users/{UID}/avatar")));
-  }
-
-  #[test]
-  fn changing_your_own_avatar_stays_authenticated() {
-    const UID: &str = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
-    // Writing is not reading: the upload/removal endpoint must not ride along.
-    assert!(!is_public("/api/auth/me/avatar"));
-    // Nothing else under /users opens up, and the word alone is not a door.
-    assert!(!is_public(&format!("/api/users/{UID}")));
-    assert!(!is_public(&format!("/api/users/{UID}/avatar/raw")));
-    assert!(!is_public(&format!("/api/documents/{UID}/avatar")));
-  }
-
-  #[test]
-  fn ordinary_endpoints_stay_guarded() {
-    assert!(!is_public("/api/workspaces"));
-    assert!(!is_public("/api/documents/abc"));
-    assert!(is_public("/api/health"));
-  }
+  // The is_public table these used to probe is gone — the blob/avatar
+  // capability links and the "cannot sign in yet" mail endpoints are mounted
+  // in `routes::public_api_router`, and their probe coverage now runs as real
+  // requests through the assembled routers (`route_layer_tests` in
+  // routes/mod.rs).
 
   #[test]
   fn read_only_cannot_write() {
@@ -1560,15 +1462,6 @@ mod tests {
     assert_ne!(h, sha256_hex("mica_pat_other"));
   }
 
-  #[test]
-  fn public_paths_bypass_auth() {
-    assert!(is_public("/api/health"));
-    assert!(is_public("/api/auth/login"));
-    assert!(is_public("/api/auth/register"));
-    assert!(!is_public("/api/workspaces"));
-    assert!(!is_public("/api/auth/tokens"));
-  }
-
   /// The first account on an empty instance is verified on the spot, but both
   /// cases used to answer `204 No Content` — so the client could not tell them
   /// apart, guessed "check your email", and sent the very first operator of a
@@ -1582,23 +1475,11 @@ mod tests {
     assert_eq!(later, serde_json::json!({"verified": false}));
   }
 
-  #[test]
-  fn refresh_is_public_or_it_could_never_be_called() {
-    // Refreshing needs no access token by definition — the whole point is that
-    // yours has expired. If the router-wide guard ever claims this path, every
-    // client is locked out at the 24h mark with no way back except a re-login,
-    // which is the exact bug refresh exists to kill.
-    assert!(is_public("/api/auth/refresh"));
-  }
-
-  #[test]
-  fn resending_a_verification_link_is_public_or_it_could_never_be_called() {
-    // Same shape as refresh, and it shipped broken until an end-to-end probe
-    // caught it: whoever needs another confirmation link is, by definition,
-    // someone who cannot sign in — so requiring a session makes the endpoint
-    // unreachable exactly when it matters. It answered 401 to every call.
-    assert!(is_public("/api/auth/resend-verification"));
-  }
+  // Refresh and resend-verification MUST stay reachable with no access token
+  // (the caller's is dead / does not exist yet — that is the whole point);
+  // both shipped broken under a router-wide guard before. They are covered
+  // now by `route_layer_tests::the_credential_and_mail_endpoints_are_throttled`
+  // in routes/mod.rs, which drives them through the real router.
 }
 
 /// The rotation's correctness IS its SQL — the conditional UPDATE is what makes

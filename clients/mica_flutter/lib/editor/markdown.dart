@@ -1318,15 +1318,19 @@ List<BlockSpec> markdownToBlocks(String markdown) {
     final b = result[k];
     if (b.kind != 'paragraph' || b.text.isEmpty) continue;
     final marks = (b.data['marks'] as List?) ?? const [];
-    for (final m in marks) {
-      if (m['type'] == 'image' && m['start'] == 0 && m['end'] == b.text.length) {
-        result[k] = (kind: 'image', text: b.text, data: {
-          'url': m['href'] ?? '',
-          if (m['title'] != null) 'title': m['title'],
-        });
-        break;
-      }
-    }
+    // Enclosing marks follow their children: an earlier link is inside the
+    // alt, while a later full-range link wraps the image and must survive.
+    final imageIndex = marks.lastIndexWhere((m) =>
+        m['type'] == 'image' && m['start'] == 0 && m['end'] == b.text.length);
+    if (imageIndex < 0) continue;
+    final wrappedInLink = marks.skip(imageIndex + 1).any((m) =>
+        m['type'] == 'link' && m['start'] == 0 && m['end'] == b.text.length);
+    if (wrappedInLink) continue;
+    final image = marks[imageIndex];
+    result[k] = (kind: 'image', text: b.text, data: {
+      'url': image['href'] ?? '',
+      if (image['title'] != null) 'title': image['title'],
+    });
   }
 
   if (result.isEmpty) {

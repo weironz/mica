@@ -73,7 +73,7 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Dart copy outright. Mirrors `export_folder_zip` above, the composite
   /// that was already de-duplicated this way.
   ///
-  /// Returns `None` when the view is gone.
+  /// Returns `None` when the view is gone or in the recycle bin.
   CloneViewResult? cloneView({
     required String viewId,
     required String rootName,

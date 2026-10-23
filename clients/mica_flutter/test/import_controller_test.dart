@@ -246,10 +246,56 @@ void main() {
       final h = _script(jobStatusOverride: (id) => throw ApiException('network down'));
       final errors = <String>[];
       h.controller.onError = errors.add;
-      await h.controller.watch('token', 'job1', null, 'fallback', pollDelay: Duration.zero);
+      await h.controller.watch(
+        'token', 'job1', null, 'fallback',
+        pollDelay: Duration.zero, retryDelay: Duration.zero,
+      );
       expect(errors, ['network down']);
       expect(h.controller.progress, isNull);
       expect(h.controller.jobId, isNull);
+    });
+
+    test('a transient wobble is retried, not reported as failure', () async {
+      var calls = 0;
+      final h = _script(
+        workspaces: [_ws('ws1')],
+        jobStatusOverride: (id) async {
+          calls++;
+          if (calls <= 2) throw ApiException('network down');
+          return const ImportJobStatus(
+            status: 'done', total: 2, done: 2, workspaceId: 'ws1',
+          );
+        },
+      );
+      final errors = <String>[];
+      h.controller.onError = errors.add;
+      var finished = false;
+      h.controller.onFinished = (_, __) => finished = true;
+      await h.controller.watch(
+        'token', 'job1', null, 'fallback',
+        pollDelay: Duration.zero, retryDelay: Duration.zero,
+      );
+      expect(errors, isEmpty, reason: 'wobbles that recover are not shown as failures');
+      expect(calls, 3);
+      expect(finished, isTrue);
+    });
+
+    test('a 4xx during polling is terminal immediately, no retries', () async {
+      var calls = 0;
+      final h = _script(
+        jobStatusOverride: (id) async {
+          calls++;
+          throw const ApiException('job not found', statusCode: 404);
+        },
+      );
+      final errors = <String>[];
+      h.controller.onError = errors.add;
+      await h.controller.watch(
+        'token', 'job1', null, 'fallback',
+        pollDelay: Duration.zero, retryDelay: Duration.zero,
+      );
+      expect(calls, 1);
+      expect(errors, ['job not found']);
     });
 
     test('the second image pass runs before finish and reports survivors', () async {

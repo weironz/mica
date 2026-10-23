@@ -7,7 +7,15 @@ import 'ai_edits.dart';
 import 'highlight.dart' show kCodeLanguages, detectLanguage;
 import 'marks.dart';
 import 'model.dart';
+import 'operation_history.dart';
+import 'selection_reconcile.dart';
 import 'table.dart';
+
+export 'operation_history.dart'
+    show ApplyHistory, EditorHistoryState, HistoryAction;
+
+part 'controller_history.dart';
+part 'controller_commits.dart';
 
 /// A change to the backend block document, in the JSON shape the API expects
 /// (`insert_block` / `update_block` / `delete_block` / `move_block`).
@@ -28,11 +36,13 @@ class EditorController extends ChangeNotifier {
   EditorController({
     required this.rootBlockId,
     required this.onOps,
+    this.onHistory,
     this.onOpFault,
   });
 
   final String rootBlockId;
   final ApplyOps onOps;
+  final ApplyHistory? onHistory;
 
   /// Fired when committing an op batch through [onOps] fails — most importantly a
   /// StoreCloudDocStore.appendOutbox failure (it throws a StateError precisely so
@@ -46,7 +56,12 @@ class EditorController extends ChangeNotifier {
   int opFaultCount = 0;
 
   final List<EditorNode> nodes = [];
-  DocSelection? selection;
+  DocSelection? _selection;
+  DocSelection? get selection => _selection;
+  set selection(DocSelection? value) {
+    _selection = value;
+    _rememberHistorySelection(value);
+  }
 
   int _contentRevision = 0;
 
@@ -57,6 +72,7 @@ class EditorController extends ChangeNotifier {
 
   @override
   void notifyListeners() {
+    _finishHistorySelection();
     _contentRevision++;
     super.notifyListeners();
   }
@@ -98,19 +114,23 @@ class EditorController extends ChangeNotifier {
 
   Timer? _saveTimer;
   Future<void> _chain = Future.value();
+  final List<_PendingEditorCommit> _pendingCommits = [];
+  List<DocOp>? _compoundOps;
   int _idCounter = 0;
 
-  // --- Undo / redo -----------------------------------------------------------
-  // Snapshot history. Every committed change (the single `_send` choke point)
-  // pushes the prior document onto [_undoStack] and clears [_redoStack].
-  // [_present] mirrors the current committed document so a snapshot is captured
-  // without re-walking the live nodes. Undo/redo restore a snapshot and emit the
-  // block-op diff to bring the backend along. `_restoring` suppresses recording
-  // while a restore is in flight.
-  final List<_DocSnapshot> _undoStack = [];
-  final List<_DocSnapshot> _redoStack = [];
-  late _DocSnapshot _present = _snapshot();
+  // One current baseline; history stores local inverse operations.
+  final List<_HistoryEntry> _undoStack = [];
+  final List<_HistoryEntry> _redoStack = [];
+  List<EditorNode> _historyBaseline = [];
+  DocSelection? _historySelection;
   bool _restoring = false;
+  bool _historyBusy = false;
+  Future<void>? _historyFuture;
+  final Map<String, _HistoryDraft> _historyDrafts = {};
+  _HistoryEntry? _historyAwaitingSelection;
+
+  /// Text input is buffered during engine history; structural commands wait.
+  bool get isApplyingHistory => _historyBusy;
   static const int _maxHistory = 200;
 
   // ---------------------------------------------------------------------------
@@ -125,8 +145,14 @@ class EditorController extends ChangeNotifier {
     _clampSelection();
     _undoStack.clear();
     _redoStack.clear();
-    _touchedAt.clear();
-    _present = _snapshot();
+    _adoptHistoryBaseline();
+    if (onHistory != null) {
+      _chain = _chain
+          .then((_) async {
+            if (!_disposed) await onHistory!(HistoryAction.reset);
+          })
+          .catchError(_historyFault);
+    }
     notifyListeners();
   }
 
@@ -146,35 +172,16 @@ class EditorController extends ChangeNotifier {
   /// Non-format fields still merge from the server for a dirty block, so a
   /// remote-only property change is not swallowed along with the marks.
   void reconcile(List<EditorNode> server) {
-    final focusedId =
-        (selection != null && selection!.focus.node < nodes.length)
-        ? nodes[selection!.focus.node].id
-        : null;
+    final previousSelection = ReconcileSelection(nodes, selection);
     final byId = {for (final n in nodes) n.id: n};
     final next = <EditorNode>[];
-    // Blocks this merge CHANGED are someone else's edits: undo must leave them
-    // alone (see [_restore]). Our own ops echo back identical, so they never
-    // count. Deleted remotely = in `nodes` but not in `server`.
-    final serverIds = {for (final n in server) n.id};
-    final touched = <String>[
-      for (final n in nodes)
-        if (!serverIds.contains(n.id)) n.id,
-    ];
     for (final src in server) {
       final cur = byId[src.id];
       if (cur == null) {
-        touched.add(src.id);
         next.add(src.copy());
       } else {
-        final dirty = _dirty.containsKey(cur.id);
-        if (cur.kind != src.kind ||
-            (!dirty && cur.text != src.text) ||
-            !_jsonEq(
-              _withoutMarks(cur.data, dirty),
-              _withoutMarks(src.data, dirty),
-            )) {
-          touched.add(cur.id);
-        }
+        final dirty =
+            _dirty.containsKey(cur.id) || _historyDrafts.containsKey(cur.id);
         // Read the LOCAL marks BEFORE overwriting `data` below.
         final localMarks = cur.data['marks'];
         cur.kind = src.kind;
@@ -196,33 +203,10 @@ class EditorController extends ChangeNotifier {
     nodes
       ..clear()
       ..addAll(next);
-    if (touched.isNotEmpty) {
-      _remoteGen++;
-      for (final id in touched) {
-        _touchedAt[id] = _remoteGen;
-      }
-    }
-    _remapSelection(focusedId);
-    // The server snapshot is the new committed baseline; keep `_present` aligned
-    // so the next change records a correct "before" state. History is preserved.
-    _present = _snapshot();
+    selection = previousSelection.remap(nodes);
+    // Dirty text is still local intent, not the committed baseline.
+    _historyBaseline = [for (final n in server) historyCopyNode(n)];
     notifyListeners();
-  }
-
-  void _remapSelection(String? focusedId) {
-    if (nodes.isEmpty) {
-      selection = null;
-      return;
-    }
-    if (focusedId != null) {
-      final idx = nodes.indexWhere((n) => n.id == focusedId);
-      if (idx >= 0) {
-        final off = selection!.focus.offset.clamp(0, nodes[idx].text.length);
-        selection = DocSelection.collapsed(DocPosition(idx, off));
-        return;
-      }
-    }
-    _clampSelection();
   }
 
   void _clampSelection() {
@@ -302,6 +286,7 @@ class EditorController extends ChangeNotifier {
   void _collapseAfterEdit(DocPosition pos) {
     goalX = null;
     selection = _snapSelectionOutOfAtoms(DocSelection.collapsed(pos));
+    _finishHistorySelection();
     notifyListeners();
   }
 
@@ -365,6 +350,18 @@ class EditorController extends ChangeNotifier {
     // text; a stale IME echo landing here must not clobber the block.
     if (node.isAtomic) return;
     final old = node.text;
+    if (_historyBusy && old != text) {
+      final draft = _historyDrafts.putIfAbsent(
+        node.id,
+        () => _HistoryDraft(historyCopyNode(node)),
+      );
+      draft
+        ..text = text
+        ..selection = DocSelection(
+          anchor: DocPosition(0, selStart.clamp(0, text.length)),
+          focus: DocPosition(0, selEnd.clamp(0, text.length)),
+        );
+    }
 
     if (old == text) {
       setSelection(
@@ -424,7 +421,7 @@ class EditorController extends ChangeNotifier {
       focus: DocPosition(i, selEnd.clamp(0, text.length)),
     );
     goalX = null;
-    _markDirty(node.id);
+    if (!_historyBusy) _markDirty(node.id);
     notifyListeners();
   }
 
@@ -435,6 +432,7 @@ class EditorController extends ChangeNotifier {
   /// covering exactly the new source (or collapses away when that is empty).
   /// The caret lands just past the atom, or at [start] on deletion.
   bool setInlineMathSource(int i, int start, int end, String newSource) {
+    if (_historyBusy) return false;
     if (i < 0 || i >= nodes.length) return false;
     final node = nodes[i];
     final old = node.text;
@@ -476,6 +474,7 @@ class EditorController extends ChangeNotifier {
   /// formula. Returns false when no run ends there (caller falls through to the
   /// ordinary grapheme delete).
   bool deleteMathAtomBackward() {
+    if (_historyBusy) return false;
     final sel = selection;
     if (sel == null || !sel.isCollapsed) return false;
     final i = sel.focus.node;
@@ -486,6 +485,7 @@ class EditorController extends ChangeNotifier {
 
   /// Delete with the caret at a formula's leading edge deletes it whole.
   bool deleteMathAtomForward() {
+    if (_historyBusy) return false;
     final sel = selection;
     if (sel == null || !sel.isCollapsed) return false;
     final i = sel.focus.node;
@@ -502,6 +502,7 @@ class EditorController extends ChangeNotifier {
   /// leading whitespace of the line the break ends, so nested code keeps its
   /// column. The caret lands after the copied indent.
   void insertCodeNewline(int caret) {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null) return;
     final i = sel.focus.node;
@@ -555,6 +556,7 @@ class EditorController extends ChangeNotifier {
   /// Toggle an inline mark over the current ranged (single-node) selection.
   /// For links, pass [href] to add; call without href on a linked range to remove.
   void toggleMark(String type, {String? href}) {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null || sel.isCollapsed || sel.isMultiNode) return;
     final i = sel.focus.node;
@@ -612,15 +614,21 @@ class EditorController extends ChangeNotifier {
   /// only be cleared on success, and the caller (page switch, dispose) needs to
   /// know the difference between "saved" and "still only in memory".
   Future<bool> flushPending() async {
+    final history = _historyFuture;
+    if (history != null) await history;
+    return _flushPending();
+  }
+
+  Future<bool> _flushPending() async {
     // A disposed controller sends nothing: its ops would be routed to whatever
     // document is active NOW (the shell dispatches by active state), not the
     // one they were typed into. The shell flushes before every switch.
-    if (_disposed) return _dirty.isEmpty;
+    if (_disposed) return _dirty.isEmpty && _pendingCommits.isEmpty;
     _saveTimer?.cancel();
     _saveTimer = null;
     _retryTimer?.cancel();
     _retryTimer = null;
-    if (_dirty.isEmpty) return true;
+    if (_dirty.isEmpty) return _retryPendingCommits();
 
     // Snapshot id → generation. This is what makes the completion handler safe:
     // an edit landing while this batch is in flight bumps its block's generation,
@@ -651,11 +659,6 @@ class EditorController extends ChangeNotifier {
     if (ok) {
       _clearCommitted(batch);
       _retryAttempts = 0;
-    } else {
-      // Keep every flag: the batch did NOT reach storage, so these blocks still
-      // hold unsent edits. Clearing them here (the old behaviour) dropped the
-      // user's typing on the floor with no retry and nothing scheduled.
-      _scheduleRetry();
     }
     return ok;
   }
@@ -693,6 +696,7 @@ class EditorController extends ChangeNotifier {
 
   /// Enter: split the focused node at the caret, or exit an empty list item.
   void splitAtCaret() {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null || !sel.isCollapsed) return;
     final i = sel.focus.node;
@@ -762,6 +766,7 @@ class EditorController extends ChangeNotifier {
   /// Split driven by a newline in the OS editing value (Enter). [before]/[after]
   /// are the text on each side of the newline. An empty list item exits the list.
   void applyNewlineSplit(String before, String after) {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null) return;
     final i = sel.focus.node;
@@ -869,24 +874,27 @@ class EditorController extends ChangeNotifier {
   /// what removing a picture means — they were one copy of this apiece, and the
   /// cut half simply did not exist.
   void _removeAtomicBlock(int i) {
-    final node = nodes[i];
-    nodes.removeAt(i);
-    _sendNow([
-      {'type': 'delete_block', 'block_id': node.id},
-    ]);
-    if (nodes.isEmpty) {
-      ensureNotEmpty();
-      return;
-    }
-    // Land where the block was: end of the block above, else start of the one
-    // that slid up into its place.
-    final target = (i - 1).clamp(0, nodes.length - 1);
-    _collapseAfterEdit(
-      DocPosition(target, i > 0 ? nodes[target].text.length : 0),
-    );
+    _compoundEdit(() {
+      final node = nodes[i];
+      nodes.removeAt(i);
+      _sendNow([
+        {'type': 'delete_block', 'block_id': node.id},
+      ]);
+      if (nodes.isEmpty) {
+        ensureNotEmpty();
+        return;
+      }
+      // Land where the block was: end of the block above, else start of the one
+      // that slid up into its place.
+      final target = (i - 1).clamp(0, nodes.length - 1);
+      _collapseAfterEdit(
+        DocPosition(target, i > 0 ? nodes[target].text.length : 0),
+      );
+    });
   }
 
   bool mergeBackward() {
+    if (_historyBusy) return false;
     final sel = selection;
     if (sel == null || !sel.isCollapsed) return false;
     final i = sel.focus.node;
@@ -1040,6 +1048,7 @@ class EditorController extends ChangeNotifier {
   /// page title. Reported 2026-08-28 as "Backspace on the blank line under the
   /// title does nothing" — and it did nothing VISIBLE, which is the same thing.
   bool dropEmptyFirstLine() {
+    if (_historyBusy) return false;
     if (nodes.length < 2) return false;
     final first = nodes[0];
     if (first.isAtomic || first.text.isNotEmpty) return false;
@@ -1053,6 +1062,7 @@ class EditorController extends ChangeNotifier {
 
   /// Delete at end of node: merge the next node into the focused one.
   bool mergeForward() {
+    if (_historyBusy) return false;
     final sel = selection;
     if (sel == null || !sel.isCollapsed) return false;
     final i = sel.focus.node;
@@ -1311,9 +1321,10 @@ class EditorController extends ChangeNotifier {
         // BLOCK keeps its title in `data`, and dropping it here lost it on
         // every copy of a titled image.
         final title = node.data['title'] as String?;
+        final alt = escapeInline(node.text);
         return title == null
-            ? '![${node.text}]($target)'
-            : '![${node.text}]($target "${title.replaceAll('"', r'\"')}")';
+            ? '![$alt]($target)'
+            : '![$alt]($target "${title.replaceAll('"', r'\"')}")';
       }
       if (node.kind == 'divider') return '---';
       // A math block is LaTeX source, not prose: it needs its `$$` fence and
@@ -1851,6 +1862,7 @@ class EditorController extends ChangeNotifier {
   /// and the nodes in between are removed. The document never becomes empty.
   /// Returns false when the selection is absent or collapsed.
   bool deleteSelection() {
+    if (_historyBusy) return false;
     final sel = selection;
     if (sel == null) return false;
     // Cutting an image: the caret parked on an atomic block means that block is
@@ -1961,6 +1973,7 @@ class EditorController extends ChangeNotifier {
 
   /// Change the focused node's kind (turn-into / slash menu).
   void setFocusedKind(String kind, [Map<String, dynamic>? data]) {
+    if (_historyBusy) return;
     final node = focusedNode;
     if (node == null) return;
     node.kind = kind;
@@ -1980,6 +1993,7 @@ class EditorController extends ChangeNotifier {
   /// turning a multi-line selection into a list / quote / heading / todo, or
   /// merging the lines into one code block. Inline marks are preserved.
   void setSelectedBlocksKind(String kind, {Map<String, dynamic>? data}) {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null || nodes.isEmpty) return;
     final lo = sel.start.node.clamp(0, nodes.length - 1);
@@ -2078,6 +2092,7 @@ class EditorController extends ChangeNotifier {
 
   /// Set a code block's language (null/`auto` clears it, re-enabling detection).
   void setCodeLanguage(int index, String? language) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'code_block') return;
@@ -2099,6 +2114,7 @@ class EditorController extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   void setTableCell(int index, int row, int col, String text) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'table') return;
@@ -2119,6 +2135,7 @@ class EditorController extends ChangeNotifier {
   /// [setTableCell] on commit. A no-op when the text is unchanged, so a mere
   /// selection change doesn't trigger a relayout.
   void previewTableCell(int index, int row, int col, String text) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'table') return;
@@ -2149,6 +2166,7 @@ class EditorController extends ChangeNotifier {
   /// Blank every cell in the inclusive [r0],[c0]–[r1],[c1] rectangle (one op) —
   /// Delete/Backspace/cut on a cell-area selection.
   void clearTableCells(int index, int r0, int c0, int r1, int c1) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     var changed = false;
@@ -2175,6 +2193,7 @@ class EditorController extends ChangeNotifier {
   /// auto-fit-to-content mode, so this re-enables automatic column widths after
   /// manual resizes.
   void resetTableColumnWidths(int index) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     for (var c = 0; c < table.widths.length; c++) {
@@ -2184,6 +2203,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void insertTableRow(int index, int at) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     table.insertRow(at);
@@ -2191,6 +2211,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void deleteTableRow(int index, int at) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     table.deleteRow(at);
@@ -2198,6 +2219,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void insertTableColumn(int index, int at) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     table.insertColumn(at);
@@ -2205,6 +2227,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void deleteTableColumn(int index, int at) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     table.deleteColumn(at);
@@ -2214,6 +2237,7 @@ class EditorController extends ChangeNotifier {
   /// Reorder a column by [delta] positions (the column menu's move
   /// left/right). Cell contents and the column width travel together.
   void moveTableColumn(int index, int col, int delta) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     final to = col + delta;
@@ -2234,6 +2258,7 @@ class EditorController extends ChangeNotifier {
 
   /// Reorder a body row by [delta] positions (the header row stays put).
   void moveTableRow(int index, int row, int delta) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     final first = table.header ? 1 : 0;
@@ -2250,6 +2275,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void setTableAlign(int index, String align) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     _writeTable(
@@ -2267,6 +2293,7 @@ class EditorController extends ChangeNotifier {
   /// Live preview of column widths during a drag (no op sent / no save).
   /// Live preview of the overall table width while dragging its right edge.
   void previewTableWidth(int index, double fraction) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     nodes[index].data = TableData(
@@ -2281,6 +2308,7 @@ class EditorController extends ChangeNotifier {
 
   /// Persist the overall table width (drag end).
   void setTableWidth(int index, double fraction) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     _writeTable(
@@ -2296,6 +2324,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void previewTableColumnWidths(int index, List<double> widths) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     for (var i = 0; i < table.widths.length && i < widths.length; i++) {
@@ -2306,6 +2335,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void setTableColumnWidths(int index, List<double> widths) {
+    if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
     for (var i = 0; i < table.widths.length && i < widths.length; i++) {
@@ -2317,22 +2347,26 @@ class EditorController extends ChangeNotifier {
   /// Remove a node entirely (used to delete a table). Keeps the document
   /// non-empty.
   void deleteNode(int index) {
-    if (index < 0 || index >= nodes.length) return;
-    final removed = nodes[index].id;
-    nodes.removeAt(index);
-    _sendNow([
-      {'type': 'delete_block', 'block_id': removed},
-    ]);
-    if (nodes.isEmpty) {
-      ensureNotEmpty();
-      return;
-    }
-    final i = index.clamp(0, nodes.length - 1);
-    _collapseAfterEdit(DocPosition(i, nodes[i].text.length));
+    _compoundEdit(() {
+      if (_historyBusy) return;
+      if (index < 0 || index >= nodes.length) return;
+      final removed = nodes[index].id;
+      nodes.removeAt(index);
+      _sendNow([
+        {'type': 'delete_block', 'block_id': removed},
+      ]);
+      if (nodes.isEmpty) {
+        ensureNotEmpty();
+        return;
+      }
+      final i = index.clamp(0, nodes.length - 1);
+      _collapseAfterEdit(DocPosition(i, nodes[i].text.length));
+    });
   }
 
   /// Toggle line wrapping for a code block.
   void toggleCodeWrap(int index) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'code_block') return;
@@ -2351,6 +2385,7 @@ class EditorController extends ChangeNotifier {
 
   /// Toggle the line-number gutter for a code block (data.lineNumbers).
   void toggleLineNumbers(int index) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'code_block') return;
@@ -2370,6 +2405,7 @@ class EditorController extends ChangeNotifier {
   /// Set (or clear, with an empty string) a code block's bottom caption
   /// (data.title). A display-only prop; it does not round-trip to Markdown.
   void setCodeTitle(int index, String title) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'code_block') return;
@@ -2390,6 +2426,7 @@ class EditorController extends ChangeNotifier {
   /// Set (or clear, with an empty string) an image's caption (data.caption) —
   /// a centered line below the picture. Display-only, like a code title.
   void setImageCaption(int index, String caption) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'image') return;
@@ -2412,6 +2449,7 @@ class EditorController extends ChangeNotifier {
   /// false = user-expanded. Toggling stores the negation of the current
   /// effective state. Keep the 20-line threshold in sync with render.dart.
   void toggleCollapsed(int index) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'code_block') return;
@@ -2447,6 +2485,7 @@ class EditorController extends ChangeNotifier {
   /// and source editing. Stored as data.view ('code'); absent = preview, the
   /// default — readers want the picture, not the source.
   void setCodeView(int index, String view) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'code_block') return;
@@ -2464,6 +2503,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void toggleTodo(int index) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'todo') return;
@@ -2479,6 +2519,7 @@ class EditorController extends ChangeNotifier {
   /// the user just typed, convert the block and strip the marker. Returns true
   /// if a conversion happened. Chained: `- ` → bullet, then `[ ] ` → todo.
   bool applyInputRules() {
+    if (_historyBusy) return false;
     final sel = selection;
     if (sel == null || !sel.isCollapsed) return false;
     final i = sel.focus.node;
@@ -2713,6 +2754,7 @@ class EditorController extends ChangeNotifier {
     String kind,
     Map<String, dynamic> data,
   ) {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null) return;
     final i = sel.focus.node;
@@ -2757,6 +2799,7 @@ class EditorController extends ChangeNotifier {
   /// range gets that link; with null the link is removed (text untouched).
   /// Used by the link hover toolbar (edit / remove).
   void setLinkRange(int i, int start, int end, String? href) {
+    if (_historyBusy) return;
     if (i < 0 || i >= nodes.length) return;
     final node = nodes[i];
     final marks = marksFromData(node.data);
@@ -2780,6 +2823,7 @@ class EditorController extends ChangeNotifier {
   /// Replace `[from, to)` in the focused node with [title] carrying a link
   /// mark to [href] — used by the `[[` page-link picker.
   void insertPageLink(int from, int to, String title, String href) {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null) return;
     replaceLink(sel.focus.node, from, to, title, href);
@@ -2790,6 +2834,7 @@ class EditorController extends ChangeNotifier {
   /// Existing marks are shifted across the replacement; the caret lands after
   /// the link.
   void replaceLink(int i, int start, int end, String text, String href) {
+    if (_historyBusy) return;
     if (i < 0 || i >= nodes.length) return;
     final node = nodes[i];
     if (node.isAtomic || node.kind == 'code_block' || node.kind == 'table') {
@@ -2849,6 +2894,7 @@ class EditorController extends ChangeNotifier {
     String text,
     List<Mark> spans,
   ) {
+    if (_historyBusy) return;
     if (i < 0 || i >= nodes.length) return;
     final node = nodes[i];
     if (node.isAtomic || node.kind == 'code_block' || node.kind == 'table') {
@@ -2903,6 +2949,7 @@ class EditorController extends ChangeNotifier {
   /// Insert an empty paragraph right after [index] and put the caret in it —
   /// how ↓ exits a table that is the document's last block.
   void insertParagraphAfter(int index) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final created = EditorNode(id: _genId(), kind: 'paragraph', text: '');
     nodes.insert(index + 1, created);
@@ -2911,6 +2958,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void insertParagraphAtTop(String text) {
+    if (_historyBusy) return;
     final created = EditorNode(id: _genId(), kind: 'paragraph', text: text);
     nodes.insert(0, created);
     _sendNow([_insertOp(created, 0)]);
@@ -2933,6 +2981,7 @@ class EditorController extends ChangeNotifier {
   void insertBlocksAfterFocus(
     List<({String kind, String text, Map<String, dynamic> data})> specs,
   ) {
+    if (_historyBusy) return;
     if (specs.isEmpty) return;
     final sel = selection;
     var focusIndex = (sel != null && sel.focus.node < nodes.length)
@@ -2991,23 +3040,27 @@ class EditorController extends ChangeNotifier {
   void insertBlocksReplacingSelection(
     List<({String kind, String text, Map<String, dynamic> data})> specs,
   ) {
-    if (specs.isEmpty) return;
-    final sel = selection;
-    if (sel != null && !sel.isCollapsed) {
-      deleteSelection();
-      final leftover = focusedNode;
-      if (leftover != null && leftover.text.isEmpty) {
-        replaceFocusedWithBlocks(specs);
-        return;
+    _compoundEdit(() {
+      if (_historyBusy) return;
+      if (specs.isEmpty) return;
+      final sel = selection;
+      if (sel != null && !sel.isCollapsed) {
+        deleteSelection();
+        final leftover = focusedNode;
+        if (leftover != null && leftover.text.isEmpty) {
+          replaceFocusedWithBlocks(specs);
+          return;
+        }
       }
-    }
-    insertBlocksAfterFocus(specs);
+      insertBlocksAfterFocus(specs);
+    });
   }
 
   /// Insert raw text at the caret within the focused node (replacing any
   /// in-node selection), preserving newlines. Used to paste into a code block so
   /// the content stays inside it.
   void insertTextAtCaret(String text) {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null) return;
     final i = sel.focus.node;
@@ -3039,6 +3092,7 @@ class EditorController extends ChangeNotifier {
   void replaceFocusedWithBlocks(
     List<({String kind, String text, Map<String, dynamic> data})> specs,
   ) {
+    if (_historyBusy) return;
     if (specs.isEmpty) return;
     final sel = selection;
     if (sel == null) return;
@@ -3086,6 +3140,7 @@ class EditorController extends ChangeNotifier {
   /// focused node. A trailing paragraph is ensured so the caret has a text node
   /// to land on (the divider itself is atomic / non-focusable).
   void insertDivider() {
+    if (_historyBusy) return;
     final sel = selection;
     if (sel == null) return;
     final i = sel.focus.node;
@@ -3137,6 +3192,7 @@ class EditorController extends ChangeNotifier {
     String alt = '',
     String? align,
   }) {
+    if (_historyBusy) return;
     assert((fileId != null) != (url != null), 'pass exactly one of fileId/url');
     final sel = selection;
     if (sel == null) return;
@@ -3195,6 +3251,10 @@ class EditorController extends ChangeNotifier {
     required String fileId,
     required String name,
   }) {
+    if (_historyBusy) {
+      _afterHistory(() => setImageSource(nodeId, fileId: fileId, name: name));
+      return;
+    }
     final node = nodes.where((n) => n.id == nodeId).firstOrNull;
     if (node == null || node.kind != 'image') return;
     if (node.data['file_id'] == fileId) return;
@@ -3212,6 +3272,10 @@ class EditorController extends ChangeNotifier {
   /// the "replace with a link" path. When re-hosting is on the caller then runs
   /// the usual ladder, which swaps it back to a file_id if it can.
   void setImageUrl(String nodeId, String url) {
+    if (_historyBusy) {
+      _afterHistory(() => setImageUrl(nodeId, url));
+      return;
+    }
     final node = nodes.where((n) => n.id == nodeId).firstOrNull;
     if (node == null || node.kind != 'image') return;
     final name = Uri.tryParse(url)?.pathSegments.lastOrNull ?? '';
@@ -3225,6 +3289,7 @@ class EditorController extends ChangeNotifier {
   }
 
   void setImageAlign(int index, String align) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'image') return;
@@ -3237,6 +3302,7 @@ class EditorController extends ChangeNotifier {
 
   /// Live preview of an image's display width during a drag (no op sent).
   void previewImageWidth(int index, double width) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'image') return;
@@ -3246,6 +3312,7 @@ class EditorController extends ChangeNotifier {
 
   /// Commit an image's display width.
   void setImageWidth(int index, double width) {
+    if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
     if (node.kind != 'image') return;
@@ -3259,6 +3326,7 @@ class EditorController extends ChangeNotifier {
   /// Append an empty paragraph after the last node and move the caret into it.
   /// Used as the downward escape from a trailing code block.
   void addParagraphAfterLast() {
+    if (_historyBusy) return;
     final node = EditorNode(id: _genId(), kind: 'paragraph', text: '');
     nodes.add(node);
     _sendNow([_insertOp(node, nodes.length - 1)]);
@@ -3268,6 +3336,7 @@ class EditorController extends ChangeNotifier {
   /// Clicking below the last line: focus its end, or append a paragraph when the
   /// last node already has content.
   void appendOrFocusLast() {
+    if (_historyBusy) return;
     if (nodes.isEmpty) {
       ensureNotEmpty();
       return;
@@ -3298,6 +3367,7 @@ class EditorController extends ChangeNotifier {
 
   /// Replace a block's text wholesale (math source editing etc.).
   void setBlockText(String id, String text) {
+    if (_historyBusy) return;
     final node = nodes.where((n) => n.id == id).firstOrNull;
     if (node == null || node.text == text) return;
     node.text = text;
@@ -3324,6 +3394,7 @@ class EditorController extends ChangeNotifier {
   /// Returns false on an out-of-range request (e.g. the document shifted under
   /// a stale match).
   bool replaceRange(int i, int start, int end, String replacement) {
+    if (_historyBusy) return false;
     if (i < 0 || i >= nodes.length) return false;
     final node = nodes[i];
     final old = node.text;
@@ -3414,6 +3485,7 @@ class EditorController extends ChangeNotifier {
   /// Move the block at [from] to insertion [index] (0..nodes.length) — the
   /// gutter drag handle. Emits a `move_block` op; undo snapshots apply.
   bool moveBlock(int from, int index) {
+    if (_historyBusy) return false;
     if (from < 0 || from >= nodes.length) return false;
     final to = index.clamp(0, nodes.length);
     if (to == from || to == from + 1) return false;
@@ -3473,6 +3545,7 @@ class EditorController extends ChangeNotifier {
   /// to / detach from the preceding list item as container children
   /// (`data.li`). Returns true when anything changed.
   bool indentSelection(int delta) {
+    if (_historyBusy) return false;
     final sel = selection;
     if (sel == null || nodes.isEmpty) return false;
     final lo = sel.start.node.clamp(0, nodes.length - 1);
@@ -3574,6 +3647,11 @@ class EditorController extends ChangeNotifier {
   /// persisted. `data` is not optional decoration here: marks are offsets into
   /// the text they describe, so shipping one without the other is always wrong.
   void _sendNow(List<DocOp> ops) {
+    final compound = _compoundOps;
+    if (compound != null) {
+      compound.addAll(ops);
+      return;
+    }
     _saveTimer?.cancel();
     _saveTimer = null;
     final pending = <DocOp>[];
@@ -3599,11 +3677,7 @@ class EditorController extends ChangeNotifier {
     final all = [...pending, ...ops];
     if (all.isEmpty) return;
     _send(all).then((ok) {
-      if (ok) {
-        _clearCommitted(batch);
-      } else {
-        _scheduleRetry();
-      }
+      if (ok) _clearCommitted(batch);
     });
   }
 
@@ -3616,24 +3690,25 @@ class EditorController extends ChangeNotifier {
   /// Nothing is rethrown — a broken commit must not take the editing hot path
   /// down with it — so the flag is the only channel back.
   Future<bool> _send(List<DocOp> ops, {bool Function()? canSend}) {
-    // Record the pre-change document before this committed mutation, unless we
-    // are mid-restore (undo/redo emit their own diff ops through here).
-    if (!_restoring) _recordHistory();
-    final done = _chain
-        .then((_) async {
-          if (canSend?.call() == false) return false;
-          await onOps(ops);
-          return true;
-        })
-        .catchError((Object e) {
-          // Do NOT swallow: a failed commit (e.g. appendOutbox StateError) means the
-          // batch didn't reach durable storage. Count it and surface via [onOpFault]
-          // so it's visible, but keep the chain alive — throwing here would break the
-          // editing hot path for every subsequent edit.
-          opFaultCount++;
-          onOpFault?.call(e, opFaultCount);
-          return false;
-        });
+    final rollback = canSend == null
+        ? null
+        : OperationInverse.capture(_historyBaseline, nodes, ops);
+    final previousRedo = canSend == null
+        ? null
+        : List<_HistoryEntry>.of(_redoStack);
+    final entry = _restoring ? null : _recordHistory(ops);
+    final batch = _PendingEditorCommit(
+      ops,
+      entry,
+      canSend: canSend,
+      rollback: rollback,
+      previousRedo: previousRedo,
+    );
+    _pendingCommits.add(batch);
+    final done = _chain.then((_) async {
+      await _drainPendingCommits();
+      return batch.saved;
+    });
     _chain = done.then((_) {});
     return done;
   }
@@ -3642,124 +3717,12 @@ class EditorController extends ChangeNotifier {
   // Undo / redo
   // ---------------------------------------------------------------------------
 
-  bool get canUndo => _undoStack.isNotEmpty || _dirty.isNotEmpty;
-  bool get canRedo => _redoStack.isNotEmpty;
+  bool get canUndo =>
+      !_historyBusy && (_undoStack.isNotEmpty || _dirty.isNotEmpty);
+  bool get canRedo => !_historyBusy && _redoStack.isNotEmpty;
 
-  /// Push the prior committed state and adopt the just-applied one as current.
-  void _recordHistory() {
-    _undoStack.add(_present);
-    if (_undoStack.length > _maxHistory) _undoStack.removeAt(0);
-    _redoStack.clear();
-    _present = _snapshot();
-  }
-
-  _DocSnapshot _snapshot() => _DocSnapshot(
-    nodes: [for (final n in nodes) n.copy()],
-    selection: selection,
-    remoteGen: _remoteGen,
-  );
-
-  // ── Collaboration-safe undo (2026-10-21 review P1-4) ──────────────────────
-  //
-  // History holds WHOLE-document snapshots. Restoring one verbatim while
-  // collaborating rolled back — or, through [_diffOps], DELETED — what others
-  // had written since. The rule now: undo/redo only reverts blocks nobody else
-  // has touched since the snapshot was taken. A block a collaborator changed,
-  // added or removed after it keeps its CURRENT state. Single-user editing is
-  // unaffected (nothing is ever marked). The full fix — recording our own ops'
-  // inverses, Yjs UndoManager style — is a separate structural change.
-
-  /// Bumped by every [reconcile] that changed something.
-  int _remoteGen = 0;
-
-  /// Block id → the [_remoteGen] at which a merge last changed it.
-  final Map<String, int> _touchedAt = {};
-
-  /// [target] with every block touched remotely since it was captured replaced
-  /// by its current version (dropped if it is gone now), and remotely added
-  /// blocks kept, each right after the block that precedes it now.
-  List<EditorNode> _withForeignEdits(_DocSnapshot target) {
-    bool foreign(String id) => (_touchedAt[id] ?? 0) > target.remoteGen;
-    final current = {for (final n in nodes) n.id: n};
-    final out = <EditorNode>[
-      for (final n in target.nodes)
-        if (!foreign(n.id))
-          n.copy()
-        else if (current[n.id] != null)
-          current[n.id]!.copy(),
-    ];
-    final inOut = {for (final n in out) n.id};
-    for (var i = 0; i < nodes.length; i++) {
-      final n = nodes[i];
-      if (inOut.contains(n.id) || !foreign(n.id)) continue;
-      var at = 0;
-      for (var j = i - 1; j >= 0; j--) {
-        final k = out.indexWhere((o) => o.id == nodes[j].id);
-        if (k >= 0) {
-          at = k + 1;
-          break;
-        }
-      }
-      out.insert(at, n.copy());
-      inOut.add(n.id);
-    }
-    return out;
-  }
-
-  /// [data] for "did the merge change it": a dirty block keeps its LOCAL marks
-  /// (see [reconcile]), so marks are not a remote change there.
-  static Object? _withoutMarks(Map<String, dynamic> data, bool dirty) {
-    if (!dirty || !data.containsKey('marks')) return data;
-    return Map<String, dynamic>.from(data)..remove('marks');
-  }
-
-  void undo() {
-    // Commit any *pending* debounced typing first so its burst is its own undo
-    // step (and restorable via redo), then step back. A non-null timer means
-    // there are uncommitted edits; ids that linger in `_dirty` after a flush are
-    // merely in-flight (already recorded) and must not be re-sent here.
-    if (_saveTimer != null) flushPending();
-    if (_undoStack.isEmpty) return;
-    final target = _undoStack.removeLast();
-    _redoStack.add(_present);
-    _restore(target);
-  }
-
-  void redo() {
-    // Same as undo: typing still in the debounce is a step of its own. Without
-    // this, undo → type → redo within 400ms restored the redo target over the
-    // new text, and `_restore`'s `_dirty.clear()` dropped it from history too
-    // (2026-10-21 review C8). Committing it first records it — which clears the
-    // redo stack, exactly as typing after an undo always should.
-    if (_saveTimer != null) flushPending();
-    if (_redoStack.isEmpty) return;
-    final target = _redoStack.removeLast();
-    _undoStack.add(_present);
-    _restore(target);
-  }
-
-  /// Replace the live document with [target] and send the block-op diff so the
-  /// backend follows. Does not touch the history stacks (the caller did).
-  void _restore(_DocSnapshot target) {
-    _restoring = true;
-    final restored = _withForeignEdits(target);
-    final ops = _diffOps(nodes, restored);
-    nodes
-      ..clear()
-      ..addAll(restored);
-    selection = target.selection;
-    _clampSelection();
-    // The initial-load baseline may have no selection; keep a caret so editing
-    // can resume immediately after undoing all the way back.
-    if (selection == null && nodes.isNotEmpty) {
-      selection = const DocSelection.collapsed(DocPosition(0, 0));
-    }
-    _dirty.clear();
-    if (ops.isNotEmpty) _send(ops);
-    _present = _snapshot();
-    _restoring = false;
-    notifyListeners();
-  }
+  Future<void> undo() => _stepHistory(redo: false);
+  Future<void> redo() => _stepHistory(redo: true);
 
   /// Block-op diff transforming the [from] document into [to]: deletes, then
   /// inserts and `move_block`s in [to] order, then content updates.
@@ -3889,22 +3852,6 @@ class EditorController extends ChangeNotifier {
     _retryTimer?.cancel();
     super.dispose();
   }
-}
-
-/// An immutable point-in-time copy of the document for the undo/redo stacks.
-class _DocSnapshot {
-  _DocSnapshot({
-    required this.nodes,
-    required this.selection,
-    required this.remoteGen,
-  });
-
-  final List<EditorNode> nodes; // deep-copied; never mutated in place
-  final DocSelection? selection; // DocSelection/DocPosition are immutable
-
-  /// [EditorController._remoteGen] when captured: blocks touched by a merge
-  /// after this are someone else's, and restoring this snapshot keeps them.
-  final int remoteGen;
 }
 
 extension _FirstOrNull<E> on Iterable<E> {

@@ -47,6 +47,23 @@ class _YjsReplica implements SyncDocReplica {
   void applyEditorOp(DocOp op) => _doc.applyOp(op);
 
   @override
+  void beginHistoryBatch() => _doc.beginHistoryBatch();
+  @override
+  void endHistoryBatch() => _doc.endHistoryBatch();
+  @override
+  void resetHistory() => _doc.resetHistory();
+  @override
+  bool undo() => _doc.undo();
+  @override
+  bool redo() => _doc.redo();
+  @override
+  bool canUndo() => _doc.canUndo();
+  @override
+  bool canRedo() => _doc.canRedo();
+  @override
+  (int, int) historyDepths() => _doc.historyDepths();
+
+  @override
   Uint8List mergeUpdates(List<Uint8List> updates) {
     // A fresh Y.Doc is genuinely empty — nothing to strip, unlike a doc built
     // from blocks, whose `meta.root` write would ride along in the merged bytes

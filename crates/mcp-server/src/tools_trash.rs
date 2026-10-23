@@ -40,10 +40,10 @@ impl MicaMcp {
       return Ok(tool_error(error));
     }
     if !confirm {
-      return Err(McpError::invalid_params(
+      return Ok(tool_error(McpError::invalid_params(
         "refusing to trash without confirm=true".to_string(),
         None,
-      ));
+      )));
     }
     let trashed = self
       .delete(&format!("/api/workspaces/{workspace_id}/views/{view_id}"))
@@ -74,10 +74,10 @@ impl MicaMcp {
       return Ok(tool_error(error));
     }
     if !confirm {
-      return Err(McpError::invalid_params(
+      return Ok(tool_error(McpError::invalid_params(
         format!("refusing to trash {} view(s) without confirm=true", view_ids.len()),
         None,
-      ));
+      )));
     }
     let done = self
       .post(
@@ -161,11 +161,11 @@ impl MicaMcp {
       return Ok(tool_error(error));
     }
     if !confirm {
-      return Err(McpError::invalid_params(
+      return Ok(tool_error(McpError::invalid_params(
         "refusing to empty the recycle bin without confirm=true — this cannot be undone"
           .to_string(),
         None,
-      ));
+      )));
     }
     let done = self
       .delete(&format!("/api/workspaces/{workspace_id}/trash"))
@@ -193,10 +193,10 @@ impl MicaMcp {
       return Ok(tool_error(error));
     }
     if !confirm {
-      return Err(McpError::invalid_params(
+      return Ok(tool_error(McpError::invalid_params(
         "refusing to purge without confirm=true — this cannot be undone".to_string(),
         None,
-      ));
+      )));
     }
     let purged = self
       .delete(&format!("/api/workspaces/{workspace_id}/trash/{view_id}"))
@@ -228,13 +228,13 @@ impl MicaMcp {
       return Ok(tool_error(error));
     }
     if !confirm {
-      return Err(McpError::invalid_params(
+      return Ok(tool_error(McpError::invalid_params(
         format!(
           "refusing to permanently delete {} view(s) without confirm=true — this cannot be undone",
           view_ids.len()
         ),
         None,
-      ));
+      )));
     }
     let done = self
       .post(

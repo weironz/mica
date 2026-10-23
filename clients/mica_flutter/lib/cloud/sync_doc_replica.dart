@@ -42,6 +42,15 @@ abstract interface class SyncDocReplica {
   /// Replay one coarse editor op onto the replica.
   void applyEditorOp(DocOp op);
 
+  void beginHistoryBatch();
+  void endHistoryBatch();
+  void resetHistory();
+  bool undo();
+  bool redo();
+  bool canUndo();
+  bool canRedo();
+  (int, int) historyDepths();
+
   /// Combine [updates] into ONE update with the same effect as applying them in
   /// order. Used on reconnect: a long offline stretch queues hundreds of tiny
   /// diffs, and pushing them one by one costs one server round trip EACH — the

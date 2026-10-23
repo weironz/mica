@@ -48,10 +48,10 @@ impl MicaMcp {
       return Ok(tool_error(error));
     }
     if !confirm {
-      return Err(McpError::invalid_params(
+      return Ok(tool_error(McpError::invalid_params(
         "refusing to delete a workspace without confirm=true — this cannot be undone".to_string(),
         None,
-      ));
+      )));
     }
     // Read the name back and compare BEFORE deleting anything. The check is
     // worth a round trip precisely because the alternative is unrecoverable:

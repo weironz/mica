@@ -30,7 +30,7 @@ use mica_infra::{ApiResult, Mail};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::auth::{hash_password, normalize_email, revoke_user_sessions, sha256_hex};
+use super::auth::{hash_password, normalize_email, revoke_user_sessions_in_tx, sha256_hex};
 
 /// Reset links carry this prefix so a stray token is recognizable in a log the
 /// way `mica_rt_` / `mica_pat_` are. 244 bits of randomness follow.
@@ -62,7 +62,10 @@ pub async fn forgot(
   if let Some(user_id) = user_id_for_email(&state.db, &email).await? {
     match mint_reset_token(&state.db, user_id).await {
       Ok(token) => {
-        let link = format!("{}/reset-password?token={}", state.config.app_base_url, token);
+        let link = format!(
+          "{}/reset-password?token={}",
+          state.config.app_base_url, token
+        );
         let mail = Mail {
           to: email,
           subject: "Reset your Mica password".to_string(),
@@ -87,7 +90,7 @@ pub async fn forgot(
 
 async fn user_id_for_email(db: &sqlx::PgPool, email: &str) -> ApiResult<Option<Uuid>> {
   Ok(
-    sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE email = $1")
+    sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL")
       .bind(email)
       .fetch_optional(db)
       .await?,
@@ -183,6 +186,7 @@ async fn reset_identifiers(
       SELECT u.email, u.display_name
       FROM password_reset_tokens t JOIN users u ON u.id = t.user_id
       WHERE t.token_hash = $1 AND t.used_at IS NULL AND t.expires_at > now()
+        AND u.deleted_at IS NULL
     "#,
   )
   .bind(sha256_hex(token))
@@ -204,6 +208,14 @@ async fn consume_and_reset(
   new_password: &str,
 ) -> Result<(), ResetError> {
   let token_hash = sha256_hex(token);
+  let password_hash = hash_password(new_password).map_err(|error| {
+    tracing::error!(%error, "password reset: hashing failed");
+    ResetError::Internal
+  })?;
+  let mut tx = db.begin().await.map_err(|error| {
+    tracing::error!(%error, "password reset: beginning transaction failed");
+    ResetError::Internal
+  })?;
 
   // Atomically mark it used only if it is still unused AND unexpired, returning
   // the user it belongs to. No row back → the link is not spendable.
@@ -216,7 +228,7 @@ async fn consume_and_reset(
     "#,
   )
   .bind(&token_hash)
-  .fetch_optional(db)
+  .fetch_optional(&mut *tx)
   .await
   .map_err(|error| {
     tracing::error!(%error, "password reset: token spend query failed");
@@ -227,25 +239,31 @@ async fn consume_and_reset(
     return Err(ResetError::Invalid);
   };
 
-  let password_hash = hash_password(new_password).map_err(|error| {
-    tracing::error!(%error, "password reset: hashing failed");
+  let updated = sqlx::query(
+    "UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 AND deleted_at IS NULL",
+  )
+  .bind(password_hash)
+  .bind(user_id)
+  .execute(&mut *tx)
+  .await
+  .map_err(|error| {
+    tracing::error!(%error, "password reset: setting the new password failed");
     ResetError::Internal
   })?;
 
-  sqlx::query("UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2")
-    .bind(password_hash)
-    .bind(user_id)
-    .execute(db)
+  if updated.rows_affected() == 0 {
+    return Err(ResetError::Invalid);
+  }
+
+  // Kill every sign-in in the same transaction as spending the reset link.
+  revoke_user_sessions_in_tx(&mut tx, user_id)
     .await
     .map_err(|error| {
-      tracing::error!(%error, "password reset: setting the new password failed");
+      tracing::error!(%error, "password reset: revoking sessions failed");
       ResetError::Internal
     })?;
-
-  // Kill every sign-in, exactly like change_password: whoever the reset was
-  // defending against loses their refresh token too.
-  revoke_user_sessions(db, user_id).await.map_err(|error| {
-    tracing::error!(%error, "password reset: revoking sessions failed");
+  tx.commit().await.map_err(|error| {
+    tracing::error!(%error, "password reset: committing failed");
     ResetError::Internal
   })?;
 
@@ -254,9 +272,15 @@ async fn consume_and_reset(
 
 /// The two page routes, mounted OUTSIDE `/api` (like the share page) so the auth
 /// scope-guard never sees them — the token in the form is the only credential.
+/// Per-IP throttled on both methods (the POST is a token-guessing surface and
+/// the POST-only hash happens AFTER a valid token spends, so no Argon2 gate);
+/// the GET riding along is harmless — it renders a static page.
 pub fn router() -> axum::Router<AppState> {
   use axum::routing::get;
-  axum::Router::new().route("/reset-password", get(reset_page).post(reset_submit))
+  axum::Router::new().route(
+    "/reset-password",
+    crate::rate_limit::ip_throttled(get(reset_page).post(reset_submit)),
+  )
 }
 
 // ---- HTML (server-rendered, no JavaScript) -------------------------------
@@ -345,7 +369,10 @@ fn reset_invalid_page() -> Response {
 fn reset_error_page() -> Response {
   let inner = "<h1>Something went wrong</h1>\
      <p>We couldn't reset your password just now. Please try again in a moment.</p>";
-  html_response(StatusCode::INTERNAL_SERVER_ERROR, page_shell("Error", inner))
+  html_response(
+    StatusCode::INTERNAL_SERVER_ERROR,
+    page_shell("Error", inner),
+  )
 }
 
 fn reset_email_html(link: &str) -> String {
@@ -400,7 +427,10 @@ mod tests {
 
   #[test]
   fn escaping_covers_the_five_dangerous_chars() {
-    assert_eq!(escape_html("a&b<c>d\"e'f"), "a&amp;b&lt;c&gt;d&quot;e&#39;f");
+    assert_eq!(
+      escape_html("a&b<c>d\"e'f"),
+      "a&amp;b&lt;c&gt;d&quot;e&#39;f"
+    );
   }
 
   #[test]
@@ -410,6 +440,10 @@ mod tests {
     assert!(html.contains("expires in one hour"));
   }
 }
+
+#[cfg(test)]
+#[path = "password_reset_atomicity_tests.rs"]
+mod atomicity_tests;
 
 /// The reset flow's correctness IS its SQL — the single-use spend is a
 /// conditional UPDATE, so these run against a real Postgres, gated on
@@ -521,11 +555,13 @@ mod reset_pg {
 
     let token = mint_reset_token(&db, user).await.unwrap();
     // Backdate its expiry past now.
-    sqlx::query("UPDATE password_reset_tokens SET expires_at = now() - interval '1 minute' WHERE user_id=$1")
-      .bind(user)
-      .execute(&db)
-      .await
-      .unwrap();
+    sqlx::query(
+      "UPDATE password_reset_tokens SET expires_at = now() - interval '1 minute' WHERE user_id=$1",
+    )
+    .bind(user)
+    .execute(&db)
+    .await
+    .unwrap();
 
     assert!(
       matches!(

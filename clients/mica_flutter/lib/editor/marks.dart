@@ -508,6 +508,199 @@ int bracketNesting(String src, int open) {
   return _bracketNest[open] ?? 0;
 }
 
+/// Per-source "next occurrence from position i" tables for the inline
+/// scanner's closer searches. Issue #61: an opener without a closer made its
+/// search run to the END of the string, and the scanner tries an opener at
+/// (nearly) every position — unclosed `\(`, `<…>` autolinks, `$…$` math,
+/// backtick runs and GFM autolink probes were each O(N) per position and
+/// O(N²) per parse. Every answer here is a pure function of (src, position),
+/// so one right-to-left pass records it for all positions and later lookups
+/// are O(1). Behavior is unchanged by construction; the tables only replace
+/// WHERE the linear scan happens (once, ahead of time) — same fix class as
+/// the Rust engine's pre-scan memoization.
+class _ScanMemo {
+  _ScanMemo(this.src);
+
+  final String src;
+
+  static final RegExp _digit = RegExp(r'[0-9]');
+
+  List<int>? _closeParen; // next `\)` starting at/after i
+  List<int>? _gt; //         next '>'
+  List<int>? _nl; //         next '\n'
+  List<int>? _backtick; //   next '`'
+  List<int>? _stop; //       next ' '/'\t'/'\n'/'<' (extended-autolink run end)
+  List<int>? _at; //         next '@'
+  List<int>? _dollarCloser; // next '$' passing the local Pandoc closer rules
+  List<int>? _dquote; //     next '"'
+  List<int>? _squote; //     next "'"
+  List<int>? _emailLocalBreak; //  first index NOT in [A-Za-z0-9._+-]
+  List<int>? _emailDomainBreak; // first index NOT in [A-Za-z0-9._-]
+  List<int>? _codeSpanAns; // codeSpanClose() answer, per backtick-RUN START
+  final Map<String, List<int>> _patterns =
+      {}; // inline-HTML tail patterns (`-->`, `]]>`, `?>`)
+
+  /// The first `@` whose email-candidate validation failed. The regex
+  /// candidate's TAIL (everything after the `@`) is identical for every word
+  /// boundary inside the same local-part run, and trimming only touches that
+  /// tail — so the lookahead verdict (`@` present, domain has a dot, ends
+  /// alphanumeric) is the same for all of them, and re-running the regex at
+  /// each boundary of `_a_a_a_…@…` was pure waste (issue #61).
+  int emailFailAt = -1;
+
+  List<int> _nextTable(bool Function(int i) matches) {
+    final t = List<int>.filled(src.length + 1, -1);
+    var next = -1;
+    for (var i = src.length - 1; i >= 0; i--) {
+      if (matches(i)) next = i;
+      t[i] = next;
+    }
+    return t;
+  }
+
+  int _lookup(List<int> t, int from) => from >= src.length ? -1 : t[from];
+
+  int closeParenFrom(int from) => _lookup(
+    _closeParen ??= _nextTable(
+      (i) =>
+          i + 1 < src.length &&
+          src.codeUnitAt(i) == 0x5C /* \ */ &&
+          src.codeUnitAt(i + 1) == 0x29 /* ) */,
+    ),
+    from,
+  );
+
+  int gtFrom(int from) =>
+      _lookup(_gt ??= _nextTable((i) => src[i] == '>'), from);
+
+  int nlFrom(int from) =>
+      _lookup(_nl ??= _nextTable((i) => src[i] == '\n'), from);
+
+  int backtickFrom(int from) =>
+      _lookup(_backtick ??= _nextTable((i) => src[i] == '`'), from);
+
+  int atFrom(int from) =>
+      _lookup(_at ??= _nextTable((i) => src[i] == '@'), from);
+
+  int patternFrom(int from, String pat) => _lookup(
+    _patterns.putIfAbsent(pat, () => _nextTable((i) => src.startsWith(pat, i))),
+    from,
+  );
+
+  int quoteFrom(int from, String quote) => quote == '"'
+      ? _lookup(_dquote ??= _nextTable((i) => src[i] == '"'), from)
+      : _lookup(_squote ??= _nextTable((i) => src[i] == "'"), from);
+
+  /// First index ≥ i of an extended-autolink stop char (space/tab/newline/
+  /// `<`), or src.length — same set the old hand-rolled scan used.
+  int autolinkStopAt(int i) {
+    final v = _lookup(
+      _stop ??= _nextTable(
+        (j) =>
+            src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '<',
+      ),
+      i,
+    );
+    return v < 0 ? src.length : v;
+  }
+
+  /// Next `$` at/after [from] that passes the LOCAL Pandoc closer checks (not
+  /// preceded by whitespace/backslash, not followed by a digit). Whether it
+  /// actually closes math from a given opener additionally depends on
+  /// newlines and code spans between them — [_findMathCloser] combines these.
+  int dollarCloserFrom(int from) => _lookup(
+    _dollarCloser ??= _nextTable(
+      (i) =>
+          src[i] == kDollar &&
+          i > 0 &&
+          !isUnicodeWhitespace(src[i - 1]) &&
+          src[i - 1] != r'\' &&
+          (i + 1 >= src.length || !_digit.hasMatch(src[i + 1])),
+    ),
+    from,
+  );
+
+  static bool _isAsciiAlnum(String c) {
+    final u = c.codeUnitAt(0);
+    return (u | 0x20) >= 0x61 && (u | 0x20) <= 0x7A || (u >= 0x30 && u <= 0x39);
+  }
+
+  List<int> _breakTable(bool Function(String c) inClass) {
+    final t = List<int>.filled(src.length + 1, src.length);
+    for (var i = src.length - 1; i >= 0; i--) {
+      t[i] = inClass(src[i]) ? t[i + 1] : i;
+    }
+    return t;
+  }
+
+  /// First index ≥ i NOT in the email LOCAL-part class `[A-Za-z0-9._+-]`
+  /// (src.length when the run reaches the end).
+  int emailLocalBreakAt(int i) => i >= src.length
+      ? src.length
+      : (_emailLocalBreak ??= _breakTable(
+          (c) =>
+              _isAsciiAlnum(c) || c == '.' || c == '_' || c == '+' || c == '-',
+        ))[i];
+
+  /// First index ≥ i NOT in the email DOMAIN class `[A-Za-z0-9._-]`.
+  int emailDomainBreakAt(int i) => i >= src.length
+      ? src.length
+      : (_emailDomainBreak ??= _breakTable(
+          (c) => _isAsciiAlnum(c) || c == '.' || c == '_' || c == '-',
+        ))[i];
+
+  /// One past the closing run of equal length for the backtick run STARTING
+  /// at [start], or -1 — the full answer of `_codeSpanClose`. One
+  /// right-to-left pass keeps, per run length, the next run start of that
+  /// length: that run (plus its length) is exactly what the old scan returned
+  /// — an unclosed run no longer rescans to the end for every later opener
+  /// (part of issue #61).
+  int codeSpanClose(int start) =>
+      (_codeSpanAns ??= _buildCodeSpanClose())[start];
+
+  List<int> _buildCodeSpanClose() {
+    final n = src.length;
+    final ans = List<int>.filled(n, -1);
+    final lastRunStartByLen = <int, int>{};
+    var i = n - 1;
+    while (i >= 0) {
+      if (src[i] != '`') {
+        i--;
+        continue;
+      }
+      var s = i;
+      while (s > 0 && src[s - 1] == '`') {
+        s--;
+      }
+      final len = i - s + 1;
+      final later = lastRunStartByLen[len];
+      ans[s] = later == null ? -1 : later + len;
+      lastRunStartByLen[len] = s;
+      i = s - 1;
+    }
+    return ans;
+  }
+}
+
+/// Memos keyed by source string CONTENT, bounded: the scanner alternates
+/// between a paragraph and the recursive parses of its link labels, so a
+/// single slot (like the bracket memo's) would evict-and-rebuild on every
+/// alternation. Rebuilds are one linear pass each, only for tables actually
+/// used.
+const int _kScanMemoSlots = 8;
+final Map<String, _ScanMemo> _scanMemos = {};
+
+_ScanMemo _scanMemoFor(String src) {
+  final hit = _scanMemos[src];
+  if (hit != null) return hit;
+  final memo = _ScanMemo(src);
+  if (_scanMemos.length >= _kScanMemoSlots) {
+    _scanMemos.remove(_scanMemos.keys.first);
+  }
+  _scanMemos[src] = memo;
+  return memo;
+}
+
 /// Link / image labels nested deeper than this are not parsed as links or
 /// images: their brackets stay literal text (the content inside still parses).
 /// Mirrors Rust `MAX_INLINE_NESTING` (`crates/markdown/src/inline.rs`) —
@@ -551,7 +744,21 @@ bool isUnicodeWhitespace(String c) {
 /// authoritative — CLAUDE.md #2). Deliberately separate from the inline-code
 /// scanner, which also strips padding and folds newlines; this only needs the
 /// extent.
+///
+/// Answers come from the [_ScanMemo] run table: an unclosed run used to
+/// rescan to the end of the string for EVERY later opener (issue #61).
 int _codeSpanClose(String src, int start) {
+  if (start > 0 && src[start - 1] == '`') {
+    // The memo is keyed on run STARTS; a mid-run start is only reachable
+    // through an escape-skip landing inside a run — take the plain scan.
+    return _codeSpanCloseForward(src, start);
+  }
+  return _scanMemoFor(src).codeSpanClose(start);
+}
+
+/// The plain forward scan of [_codeSpanClose], kept for mid-run starts (the
+/// memo table only holds run starts).
+int _codeSpanCloseForward(String src, int start) {
   var n = 0;
   while (start + n < src.length && src[start + n] == '`') {
     n++;
@@ -573,10 +780,37 @@ int _codeSpanClose(String src, int start) {
 }
 
 /// A valid `\$` math closer per the Pandoc rules, or -1.
+///
+/// Fast path via [_ScanMemo]: the walk can only succeed at a `$` passing the
+/// LOCAL closer checks (prev not whitespace/backslash, next not a digit), so
+/// the memoised next-valid-closer, next-newline and next-backtick positions
+/// decide the outcome in O(1) whenever no backtick region intervenes:
+///
+/// - no valid closer at all → the walk necessarily fails;
+/// - a newline before that closer → the walk hits it and fails (a code span
+///   straddling the newline fails the same way);
+/// - no backtick in between → the walk reaches that closer untouched.
+///
+/// Only the backtick case needs the span-aware walk. Failed searches used to
+/// rescan the whole tail at every `$` — `$a $b $c …` was quadratic (#61).
 int _findMathCloser(String src, int contentStart) {
   if (contentStart >= src.length) return -1;
   final first = src[contentStart];
   if (isUnicodeWhitespace(first)) return -1;
+  final memo = _scanMemoFor(src);
+  final close = memo.dollarCloserFrom(contentStart + 1);
+  if (close < 0) return -1;
+  final nl = memo.nlFrom(contentStart);
+  if (nl >= 0 && nl < close) return -1;
+  final bt = memo.backtickFrom(contentStart);
+  if (bt < 0 || bt >= close) return close;
+  return _findMathCloserWalk(src, contentStart);
+}
+
+/// The span-aware walk of [_findMathCloser], used when a backtick region lies
+/// between opener and the table-derived closer (a `$` inside a code span is
+/// literal and cannot close).
+int _findMathCloserWalk(String src, int contentStart) {
   var j = contentStart;
   while (j < src.length) {
     final c = src[j];
@@ -625,7 +859,9 @@ int _findMathCloser(String src, int contentStart) {
   while (i < src.length) {
     // Inline math, LaTeX form: \( … \).
     if (src[i] == r'\' && i + 1 < src.length && src[i + 1] == '(') {
-      final close = src.indexOf(r'\)', i + 2);
+      // Memoised next-`\)` lookup (issue #61): an unclosed `\(` used to make
+      // indexOf scan to the end of the string at every opener.
+      final close = _scanMemoFor(src).closeParenFrom(i + 2);
       if (close > i) {
         final inner = src.substring(i + 2, close).trim();
         if (inner.isNotEmpty) {
@@ -674,7 +910,9 @@ List<({int start, int end})> mathRunSpans(String src) {
   var i = 0;
   while (i < src.length) {
     if (src[i] == r'\' && i + 1 < src.length && src[i + 1] == '(') {
-      final close = src.indexOf(r'\)', i + 2);
+      // Memoised next-`\)` lookup (issue #61): an unclosed `\(` used to make
+      // indexOf scan to the end of the string at every opener.
+      final close = _scanMemoFor(src).closeParenFrom(i + 2);
       if (close > i && src.substring(i + 2, close).trim().isNotEmpty) {
         spans.add((start: i, end: close + 2));
         i = close + 2;
@@ -721,14 +959,9 @@ List<({int start, int end})> mathRunSpans(String src) {
     ('www.', 'http://'),
   ]) {
     if (lower.startsWith(prefix)) {
-      var stop = src.length;
-      for (var k = i; k < src.length; k++) {
-        final c = src[k];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '<') {
-          stop = k;
-          break;
-        }
-      }
+      // The run-end lookup is memoised (issue #61): the old per-boundary scan
+      // for the next space/tab/newline/`<` ran to the end on run-dense input.
+      final stop = _scanMemoFor(src).autolinkStopAt(i);
       final rest = src.substring(i, stop);
       final end = _trimAutolinkEnd(rest);
       final candidate = rest.substring(0, end);
@@ -741,51 +974,82 @@ List<({int start, int end})> mathRunSpans(String src) {
       return (candidate.length, '$implied$candidate');
     }
   }
-  // Bare email. Matched in place (`matchAsPrefix`), not on a copy of the
-  // rest of the text — that copy, at every word boundary, is what made inline
-  // parsing quadratic.
+  // Bare email. Two memoised gates issue #61's `_a_a_a_…` vector, where the
+  // regex rescanned the whole tail at every word boundary:
+  //
+  // 1. A match needs an `@` IMMEDIATELY after the local-part run — no `@`, or
+  //    anything else breaking the run first, fails in O(1) without the regex.
+  //    (The classes exclude `@`, so next-at can't lie inside the run.)
+  // 2. Every boundary inside one local-part run asks the same question, and
+  //    the validation verdict depends only on the candidate's tail after the
+  //    `@` — identical for all of them — so a failure is remembered per `@`.
   if (RegExp(r'[A-Za-z0-9]').hasMatch(src[i])) {
-    final m = RegExp(r'[A-Za-z0-9._+-]+@[A-Za-z0-9._-]+').matchAsPrefix(src, i);
-    if (m != null) {
-      var text = m.group(0)!;
-      while (text.endsWith('.')) {
-        text = text.substring(0, text.length - 1);
+    final memo = _scanMemoFor(src);
+    final at = memo.atFrom(i);
+    if (at == memo.emailLocalBreakAt(i) &&
+        memo.emailDomainBreakAt(at + 1) > at + 1 &&
+        memo.emailFailAt != at) {
+      final m = RegExp(
+        r'[A-Za-z0-9._+-]+@[A-Za-z0-9._-]+',
+      ).matchAsPrefix(src, i);
+      if (m != null) {
+        var text = m.group(0)!;
+        while (text.endsWith('.')) {
+          text = text.substring(0, text.length - 1);
+        }
+        final atInText = text.indexOf('@');
+        final domain = atInText >= 0 ? text.substring(atInText + 1) : '';
+        if (atInText > 0 &&
+            domain.contains('.') &&
+            RegExp(r'[A-Za-z0-9]$').hasMatch(text)) {
+          return (text.length, 'mailto:$text');
+        }
       }
-      final at = text.indexOf('@');
-      final domain = at >= 0 ? text.substring(at + 1) : '';
-      if (at > 0 &&
-          domain.contains('.') &&
-          RegExp(r'[A-Za-z0-9]$').hasMatch(text)) {
-        return (text.length, 'mailto:$text');
-      }
+      memo.emailFailAt = at;
     }
   }
   return null;
 }
 
 int _trimAutolinkEnd(String s) {
-  var end = s.length;
+  final n = s.length;
+  if (n == 0) return 0;
+  // Index-based walk over prefix-count tables: the old version rebuilt `kept`
+  // and rescanned it for parens/`&` on EVERY trim step — O(len) per step,
+  // O(len²) on `www.a))))…` — while only ever asking prefix questions
+  // (paren balance over s[0..e), last `&` before e). Same answers, one pass.
+  final opens = List<int>.filled(n + 1, 0);
+  final closes = List<int>.filled(n + 1, 0);
+  final prevAmp = List<int>.filled(n + 1, -1);
+  final alnum = RegExp(r'[A-Za-z0-9]');
+  for (var k = 0; k < n; k++) {
+    opens[k + 1] = opens[k] + (s[k] == '(' ? 1 : 0);
+    closes[k + 1] = closes[k] + (s[k] == ')' ? 1 : 0);
+    prevAmp[k + 1] = s[k] == '&' ? k : prevAmp[k];
+  }
+  var end = n;
   while (end > 0) {
-    final kept = s.substring(0, end);
-    final last = kept[kept.length - 1];
+    final last = s[end - 1];
     if ('?!.,:*_~\'"'.contains(last)) {
       end -= 1;
       continue;
     }
     if (last == ')') {
-      final opens = '('.allMatches(kept).length;
-      final closes = ')'.allMatches(kept).length;
-      if (closes > opens) {
+      if (closes[end] > opens[end]) {
         end -= 1;
         continue;
       }
       return end;
     }
     if (last == ';') {
-      final amp = kept.lastIndexOf('&');
+      final amp = prevAmp[end];
       if (amp >= 0) {
-        final body = kept.substring(amp + 1, end - 1);
-        if (body.isNotEmpty && RegExp(r'^[A-Za-z0-9]+$').hasMatch(body)) {
+        // body = s[amp + 1 .. end - 1)
+        var bodyOk = end - amp > 2;
+        for (var k = amp + 1; bodyOk && k < end - 1; k++) {
+          if (!alnum.hasMatch(s[k])) bodyOk = false;
+        }
+        if (bodyOk) {
           end = amp;
           continue;
         }
@@ -814,7 +1078,12 @@ bool _validAutolinkDomain(String domain) {
 /// index, or -1. Mirrors the Rust engine's inline_html_end.
 int inlineHtmlEnd(String src, int i) {
   if (i >= src.length || src[i] != '<') return -1;
-  int findPat(int from, String pat) => src.indexOf(pat, from);
+  // Pattern/quote searches go through the memoised next-occurrence tables
+  // (issue #61): an unterminated comment or attribute value otherwise scanned
+  // to the end of the string on every `<` the parser tries.
+  final memo = _scanMemoFor(src);
+  int findPat(int from, String pat) =>
+      pat == '>' ? memo.gtFrom(from) : memo.patternFrom(from, pat);
   // Comment (<!--> and <!---> count as empty comments).
   if (src.startsWith('!--', i + 1)) {
     if (src.startsWith('>', i + 4)) return i + 5;
@@ -884,11 +1153,8 @@ int inlineHtmlEnd(String src, int i) {
       if (v >= src.length) return -1;
       final quote = src[v];
       if (quote == '"' || quote == "'") {
-        var w = v + 1;
-        while (w < src.length && src[w] != quote) {
-          w++;
-        }
-        if (w >= src.length) return -1;
+        final w = memo.quoteFrom(v + 1, quote);
+        if (w < 0) return -1;
         p = w + 1;
       } else {
         var w = v;
@@ -1241,7 +1507,11 @@ bool _labelHasLinkCached(
   // nesting rule is about explicit link CONSTRUCTS, not about text that would
   // have autolinked had it been left alone. Mirrors `label_has_link_cached` in
   // crates/markdown/src/inline.rs.
-  return _parseLabelCached(label, defs, cache).marks.any((m) => m.type == 'link');
+  return _parseLabelCached(
+    label,
+    defs,
+    cache,
+  ).marks.any((m) => m.type == 'link');
 }
 
 /// Parsed link/image LABELS, keyed by label text and SHARED across the
@@ -1323,7 +1593,9 @@ typedef _LabelCache = Map<String, ({String text, List<Mark> marks})>;
     // Inline math, LaTeX form: \( ... \) — checked before the escape arm,
     // which would otherwise eat the `\(`.
     if (src[i] == r'\' && i + 1 < src.length && src[i + 1] == '(') {
-      final close = src.indexOf(r'\)', i + 2);
+      // Memoised next-`\)` lookup (issue #61): an unclosed `\(` used to make
+      // indexOf scan to the end of the string at every opener.
+      final close = _scanMemoFor(src).closeParenFrom(i + 2);
       if (close > i) {
         final inner = src.substring(i + 2, close).trim();
         if (inner.isNotEmpty) {
@@ -1368,7 +1640,9 @@ typedef _LabelCache = Map<String, ({String text, List<Mark> marks})>;
     }
     // Autolink: <https://…> / <user@host> — the URL is both text and target.
     if (src[i] == '<') {
-      final close = src.indexOf('>', i + 1);
+      // Memoised next-'>' lookup: without it every unclosed `<` scanned to
+      // the end of the string (issue #61).
+      final close = _scanMemoFor(src).gtFrom(i + 1);
       if (close > i) {
         final inner = src.substring(i + 1, close);
         final href = autolinkTarget(inner);
@@ -1398,8 +1672,7 @@ typedef _LabelCache = Map<String, ({String text, List<Mark> marks})>;
     // Past `kMaxInlineNesting` the brackets stay literal (see there).
     if (src[i] == '!' && i + 1 < src.length && src[i + 1] == '[') {
       final close = matchingBracket(src, i + 1);
-      if (close > i + 2 &&
-          bracketNesting(src, i + 1) < kMaxInlineNesting) {
+      if (close > i + 2 && bracketNesting(src, i + 1) < kMaxInlineNesting) {
         final label = src.substring(i + 2, close);
         if (close + 1 < src.length && src[close + 1] == '(') {
           final suffix = parseLinkSuffix(src, close + 2);
@@ -1593,23 +1866,11 @@ typedef _LabelCache = Map<String, ({String text, List<Mark> marks})>;
       while (i + n < src.length && src[i + n] == '`') {
         n++;
       }
-      var j = i + n;
-      var close = -1;
-      while (j < src.length) {
-        if (src[j] == '`') {
-          var m = 0;
-          while (j + m < src.length && src[j + m] == '`') {
-            m++;
-          }
-          if (m == n) {
-            close = j;
-            break;
-          }
-          j += m;
-        } else {
-          j++;
-        }
-      }
+      // Same search as _codeSpanClose, through its memoised run table — an
+      // unclosed run no longer rescans the tail per opener (issue #61). The
+      // helper answers one-past the closing run; this branch needs its start.
+      final after = _codeSpanClose(src, i);
+      final close = after >= 0 ? after - n : -1;
       if (close >= 0) {
         var inner = src.substring(i + n, close).replaceAll('\n', ' ');
         // The "content isn't blank" guard is «not all SPACES» (§6.1), not
@@ -1908,7 +2169,8 @@ String escapeInline(String text) {
 /// becomes an `<autolink>`. Mirrors the Rust engine's render_span.
 String inlineToMarkdown(String text, List<Mark> marks) {
   if (marks.isEmpty) return text;
-  return _renderSpan(text, 0, text.length, marks);
+  final sorted = _sortedForRender(marks);
+  return _renderSpan(text, 0, text.length, sorted, sorted.length, {});
 }
 
 /// Marks whose rendering is TERMINAL: the branch writes the span literally and
@@ -1919,34 +2181,191 @@ String inlineToMarkdown(String text, List<Mark> marks) {
 bool _rendersTerminal(String kind) =>
     kind == 'code' || kind == 'math' || kind == 'html' || kind == 'footnote';
 
-String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
+/// A [Mark] plus its index in the caller's list. The index reproduces the old
+/// per-span min-over-all-marks scan's tie-breaking exactly — it matters
+/// because the parser APPENDS outer marks later for identical ranges.
+class _RenderMark {
+  _RenderMark(this.mark, this.index);
+
+  final Mark mark;
+  final int index;
+
+  bool? _term;
+  bool get term => _term ??= _rendersTerminal(mark.type);
+}
+
+/// Marks prepared for rendering: sorted by start (ties keep caller order) so
+/// the span picker streams candidates instead of rescans of the whole list at
+/// every span — issue #61's O(M²) per-span minimisation.
+List<_RenderMark> _sortedForRender(List<Mark> marks) {
+  final wrapped = [
+    for (var i = 0; i < marks.length; i++) _RenderMark(marks[i], i),
+  ];
+  wrapped.sort((a, b) {
+    if (a.mark.start != b.mark.start) return a.mark.start - b.mark.start;
+    return a.index - b.index;
+  });
+  return wrapped;
+}
+
+/// First index in `marks[0..count)` whose start is >= [start] (binary search;
+/// the list is start-sorted). Marks starting at or after a span's end cannot
+/// overlap it, so a recursion level only ever needs this prefix — the old
+/// code filtered a fresh `inner` list per span instead.
+int _startBoundBelow(List<_RenderMark> marks, int count, int start) {
+  var lo = 0, hi = count;
+  while (lo < hi) {
+    final mid = (lo + hi) >> 1;
+    if (marks[mid].mark.start < start) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+/// Heap of the marks currently covering the render position of one render
+/// level, best pick on top. "Best" reproduces the old scan's exact ordering:
+/// widest clipped end wins; exact (start, end) ties prefer the non-terminal
+/// kind (Markdown only), then the LATEST mark in the caller's list.
+class _ActiveMarks {
+  _ActiveMarks({required this.hi, required this.termRank});
+
+  final int hi;
+  final bool termRank;
+  final List<_RenderMark> _items = [];
+
+  bool get isEmpty => _items.isEmpty;
+
+  int _clipEnd(_RenderMark m) => m.mark.end > hi ? hi : m.mark.end;
+
+  bool _better(_RenderMark a, _RenderMark b) {
+    final ea = _clipEnd(a), eb = _clipEnd(b);
+    if (ea != eb) return ea > eb;
+    if (termRank && a.term != b.term) return !a.term;
+    return a.index > b.index;
+  }
+
+  void add(_RenderMark m) {
+    _items.add(m);
+    var i = _items.length - 1;
+    while (i > 0) {
+      final parent = (i - 1) >> 1;
+      if (!_better(_items[i], _items[parent])) break;
+      final tmp = _items[parent];
+      _items[parent] = _items[i];
+      _items[i] = tmp;
+      i = parent;
+    }
+  }
+
+  void removeTop() {
+    final last = _items.removeLast();
+    if (_items.isEmpty) return;
+    _items[0] = last;
+    var i = 0;
+    while (true) {
+      var best = i;
+      final l = 2 * i + 1, r = l + 1;
+      if (l < _items.length && _better(_items[l], _items[best])) best = l;
+      if (r < _items.length && _better(_items[r], _items[best])) best = r;
+      if (best == i) return;
+      final tmp = _items[best];
+      _items[best] = _items[i];
+      _items[i] = tmp;
+      i = best;
+    }
+  }
+
+  /// The best live mark at [pos] (widest clipped end > pos), or null.
+  _RenderMark? topAt(int pos) {
+    while (_items.isNotEmpty && _clipEnd(_items.first) <= pos) {
+      removeTop();
+    }
+    return _items.isEmpty ? null : _items.first;
+  }
+}
+
+/// One level of a [_renderSpan] recursion: streams the mark opening each
+/// successive span in exactly the order the old min-over-all-marks scan
+/// picked them. Candidates come from the start-sorted list: marks already
+/// started live in an [_ActiveMarks] heap; when none are live, the next span
+/// opens at the next candidate's own start.
+class _RenderLevel {
+  _RenderLevel(this.marks, this.count, this.hi, this.skip, this.termRank);
+
+  final List<_RenderMark> marks;
+  final int count;
+  final int hi;
+
+  /// Marks picked by an ANCESTOR recursion level and therefore ineligible
+  /// here — the shared identity set the render recursion maintains (the old
+  //  code passed a fresh list with its pick removed at every level instead).
+  final Set<_RenderMark> skip;
+  final bool termRank;
+
+  late final _ActiveMarks _active = _ActiveMarks(hi: hi, termRank: termRank);
+  var _k = 0; // next not-yet-activated candidate
+
+  /// The mark opening the span at [pos], or null when no mark covers
+  /// anything in [pos, hi) — its clipped start/end are ps/pe to the caller.
+  _RenderMark? nextPick(int pos) {
+    while (_k < count && marks[_k].mark.start <= pos) {
+      final cand = marks[_k];
+      if (!skip.contains(cand) && cand.mark.end > pos) _active.add(cand);
+      _k++;
+    }
+    final top = _active.topAt(pos);
+    if (top != null) return top;
+    // Nothing live covers pos: the next span opens at the next mark's own
+    // start. Marks SHARING that start all tied in the old scan, so the whole
+    // group is ranked by the same rule; groups with no live member are dead.
+    while (_k < count) {
+      final s = marks[_k].mark.start;
+      if (s >= hi) {
+        _k = count;
+        return null;
+      }
+      var gEnd = _k + 1;
+      while (gEnd < count && marks[gEnd].mark.start == s) {
+        gEnd++;
+      }
+      _RenderMark? best;
+      for (var t = _k; t < gEnd; t++) {
+        final cand = marks[t];
+        if (skip.contains(cand)) continue;
+        final e = cand.mark.end > hi ? hi : cand.mark.end;
+        if (e <= s) continue;
+        if (best == null || _active._better(cand, best)) best = cand;
+      }
+      if (best != null) return best;
+      _k = gEnd;
+    }
+    return null;
+  }
+}
+
+String _renderSpan(
+  String text,
+  int lo,
+  int hi,
+  List<_RenderMark> marks,
+  int count,
+  Set<_RenderMark> skip,
+) {
   final out = StringBuffer();
+  final level = _RenderLevel(marks, count, hi, skip, true);
   var pos = lo;
   while (pos < hi) {
-    // Next mark by clipped start; ties prefer the widest (outermost), then the
-    // nestable one — a terminal kind sorts last so it renders INSIDE.
-    Mark? pick;
-    var ps = 0, pe = 0;
-    var pickTerm = false;
-    for (final m in marks) {
-      final s = m.start < pos ? pos : m.start;
-      final e = m.end > hi ? hi : m.end;
-      if (e <= s) continue;
-      final term = _rendersTerminal(m.type);
-      if (pick == null ||
-          s < ps ||
-          (s == ps && e > pe) ||
-          (s == ps && e == pe && pickTerm && !term)) {
-        pick = m;
-        ps = s;
-        pe = e;
-        pickTerm = term;
-      }
-    }
-    if (pick == null) {
+    final pickW = level.nextPick(pos);
+    if (pickW == null) {
       out.write(escapeInline(text.substring(pos, hi)));
       break;
     }
+    final pick = pickW.mark;
+    final ps = pick.start < pos ? pos : pick.start;
+    final pe = pick.end > hi ? hi : pick.end;
     var lead = escapeInline(text.substring(pos, ps));
     if (pick.type == 'link' && lead.endsWith('!')) {
       lead = '${lead.substring(0, lead.length - 1)}\\!';
@@ -1997,11 +2416,25 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
       pos = pe;
       continue;
     }
-    final inner = [
-      for (final m in marks)
-        if (!identical(m, pick) && m.end > ps && m.start < pe) m,
-    ];
-    final body = _renderSpan(text, ps, pe, inner);
+    // Inner candidates are the shared start-sorted list up to the first mark
+    // starting at/after pe (none of those overlap the pick). Marks that can't
+    // clip into [ps, pe) are retired by the picker itself.
+    final innerCount = _startBoundBelow(marks, count, pe);
+    // Whether the pick has any inner mark to lose — gates the link
+    // shorthands below, which DISCARD inner marks (``[`x`](x)`` must stay
+    // bracketed).
+    final hasInner = marks
+        .take(innerCount)
+        .any(
+          (t) =>
+              !identical(t, pickW) &&
+              !skip.contains(t) &&
+              t.mark.end > ps &&
+              t.mark.start < pe,
+        );
+    skip.add(pickW);
+    final body = _renderSpan(text, ps, pe, marks, innerCount, skip);
+    skip.remove(pickW);
     switch (pick.type) {
       case 'bold':
         out.write('**$body**');
@@ -2012,17 +2445,14 @@ String _renderSpan(String text, int lo, int hi, List<Mark> marks) {
       case 'link':
         final href = pick.href ?? '';
         final plain = text.substring(ps, pe);
-        // Both shorthands below write `plain`, so they DISCARD inner marks —
-        // only take them when there are none to lose (``[`x`](x)`` must stay
-        // bracketed).
         if (pick.title == null &&
-            inner.isEmpty &&
+            !hasInner &&
             plain.startsWith('www.') &&
             href == 'http://$plain') {
           // A bare `www.` link writes back bare (GFM re-links it on read).
           out.write(plain);
         } else if (pick.title == null &&
-            inner.isEmpty &&
+            !hasInner &&
             (href == plain || href == 'mailto:$plain')) {
           out.write('<$plain>');
         } else {
@@ -2063,29 +2493,34 @@ String escapeHtmlAttr(String s) => escapeHtml(s).replaceAll('"', '&quot;');
 /// (Typora, Obsidian) read `text/html` and keep the formatting. Mirrors
 /// [inlineToMarkdown]'s outermost-first recursion so nested emphasis nests; HTML
 /// needs only entity-escaping (no delimiter fencing).
-String inlineToHtml(String text, List<Mark> marks) =>
-    _renderSpanHtml(text, 0, text.length, marks);
+String inlineToHtml(String text, List<Mark> marks) {
+  final sorted = _sortedForRender(marks);
+  return _renderSpanHtml(text, 0, text.length, sorted, sorted.length, {});
+}
 
-String _renderSpanHtml(String text, int lo, int hi, List<Mark> marks) {
+String _renderSpanHtml(
+  String text,
+  int lo,
+  int hi,
+  List<_RenderMark> marks,
+  int count,
+  Set<_RenderMark> skip,
+) {
   final out = StringBuffer();
+  // Same streamed selection as _renderSpan; html's tie-break has no terminal
+  // clause — on identical ranges the LATER mark in the caller's list wins
+  // (the parser appends the outer mark last).
+  final level = _RenderLevel(marks, count, hi, skip, false);
   var pos = lo;
   while (pos < hi) {
-    Mark? pick;
-    var ps = 0, pe = 0;
-    for (final m in marks) {
-      final s = m.start < pos ? pos : m.start;
-      final e = m.end > hi ? hi : m.end;
-      if (e <= s) continue;
-      if (pick == null || s < ps || (s == ps && e > pe)) {
-        pick = m;
-        ps = s;
-        pe = e;
-      }
-    }
-    if (pick == null) {
+    final pickW = level.nextPick(pos);
+    if (pickW == null) {
       out.write(escapeHtml(text.substring(pos, hi)));
       break;
     }
+    final pick = pickW.mark;
+    final ps = pick.start < pos ? pos : pick.start;
+    final pe = pick.end > hi ? hi : pick.end;
     out.write(escapeHtml(text.substring(pos, ps)));
     // Literal-content leaves (no nested marks).
     if (pick.type == 'code') {
@@ -2122,11 +2557,16 @@ String _renderSpanHtml(String text, int lo, int hi, List<Mark> marks) {
       pos = pe;
       continue;
     }
-    final inner = [
-      for (final m in marks)
-        if (!identical(m, pick) && m.end > ps && m.start < pe) m,
-    ];
-    final body = _renderSpanHtml(text, ps, pe, inner);
+    skip.add(pickW);
+    final body = _renderSpanHtml(
+      text,
+      ps,
+      pe,
+      marks,
+      _startBoundBelow(marks, count, pe),
+      skip,
+    );
+    skip.remove(pickW);
     switch (pick.type) {
       case 'bold':
         out.write('<strong>$body</strong>');

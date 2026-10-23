@@ -2,7 +2,7 @@ use anyhow::Context;
 use axum::Router;
 use mica_app_core::AppState;
 use mica_infra::{
-  ApiError, AppConfig, Environment, connect_pg_pool, run_migrations, telemetry::init_tracing,
+  AppConfig, Environment, connect_pg_pool, run_migrations, telemetry::init_tracing,
 };
 use tokio::net::TcpListener;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -267,23 +267,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn app_router(state: AppState) -> Router {
-  // Authenticate + enforce token scopes on every /api route (public ones opt out
-  // inside the guard). WebSocket routes keep their own query-token auth.
-  let api = routes::api_router()
-    .layer(axum::middleware::from_fn_with_state(
-      state.clone(),
-      routes::auth::scope_guard,
-    ))
-    // An unmatched /api path answered with axum's default 404: status only,
-    // EMPTY body. Every other error here carries `{code, message}`, so the one
-    // response you get while guessing at the API was the one that told you
-    // nothing — and with no published spec, guessing is how people find it.
-    // Registered AFTER the scope guard on purpose: a path that does not exist
-    // is a 404 for everyone, and answering 401 first sends people hunting for a
-    // credential problem they do not have.
-    .fallback(|| async { ApiError::NotFound });
+  // `layered_api` assembles /api: the guarded half under the scope guard
+  // (authenticate + enforce token scopes), the signed-in Argon2 pair under
+  // guard + throttle, and the public half bare. WebSocket routes keep their
+  // own query-token auth.
   Router::new()
-    .nest("/api", api)
+    .nest("/api", routes::layered_api(&state))
     .merge(routes::ws_router())
     .merge(routes::share_router())
     .merge(routes::legal_router())
@@ -292,17 +281,17 @@ fn app_router(state: AppState) -> Router {
     // proxies /api, /ws, /s and the two mail links, so this is reachable from
     // the compose network and not from the internet. See metrics.rs.
     .route("/metrics", axum::routing::get(metrics::metrics_handler))
-    // Outermost of our own layers, so a request rejected by the rate limiter or
-    // by CORS is still counted — those are exactly the requests you want to see
-    // during an incident, and a middleware that only observes the happy path
-    // reports calm while the front door is on fire.
+    // Outermost of our own layers, so a request that never reaches a handler —
+    // the route-level throttles answer 429 inside it — is still counted. Those
+    // are exactly the requests you want to see during an incident, and a
+    // middleware that only observes the happy path reports calm while the
+    // front door is on fire.
     .layer(axum::middleware::from_fn(metrics::track))
     .layer(TraceLayer::new_for_http())
-    // Throttle the auth endpoints per client IP + cap Argon2 concurrency. Inner
-    // to CORS (so a preflight is answered before the limiter sees it); the
-    // Extension carries the shared guard the middleware extracts.
-    .layer(axum::middleware::from_fn(rate_limit::auth_rate_limit))
+    // The shared per-IP limiter + Argon2 semaphore the route-level throttles
+    // (rate_limit.rs) extract.
     .layer(axum::Extension(rate_limit::AuthGuard::from_env()))
+    // Outermost: a CORS preflight is answered before any inner layer sees it.
     .layer(cors_layer(&state.config))
     .with_state(state)
 }
@@ -369,6 +358,7 @@ async fn shutdown_signal() {
 mod not_found_body_tests {
   use super::*;
   use axum::response::IntoResponse;
+  use mica_infra::ApiError;
 
   /// The payload `app_router`'s `/api` fallback answers with. Pinned because an
   /// unmatched path used to come back as a bare status with NO body, which is

@@ -48,3 +48,6 @@ mica-core = { path = "../mica-core" }
 # guard), so its tests run against a real Postgres — see the DATABASE_URL-gated
 # module in routes/auth.rs.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Test-only: `ServiceExt::oneshot` drives the assembled routers in the
+# route-layering tests (routes/mod.rs and rate_limit.rs's route tests).
+tower = { version = "0.5", features = ["util"] }

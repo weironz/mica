@@ -35,6 +35,10 @@ use uuid::Uuid;
 use super::auth::{normalize_email, sha256_hex};
 use super::password_reset::{escape_attr, html_response, page_shell};
 
+#[cfg(test)]
+#[path = "email_verify_atomicity_tests.rs"]
+mod atomicity_tests;
+
 /// Prefix so a leaked string is recognisable in a log or a bug report as a
 /// verification link rather than an unlabelled secret.
 const VERIFY_PREFIX: &str = "mica_ev_";
@@ -125,9 +129,20 @@ pub async fn verify_page(
     return invalid_page();
   };
 
-  // Spend the token atomically, only if still unused AND unexpired, returning
-  // whose it is. No row back → not spendable, and we say so without saying why.
-  let spent: Result<Option<Uuid>, sqlx::Error> = sqlx::query_scalar(
+  match consume_and_verify(&state.db, token).await {
+    Ok(true) => done_page(&state.config.app_base_url),
+    Ok(false) => invalid_page(),
+    Err(error) => {
+      tracing::error!(%error, "email verification failed");
+      error_page()
+    }
+  }
+}
+
+async fn consume_and_verify(db: &sqlx::PgPool, token: &str) -> ApiResult<bool> {
+  let mut tx = db.begin().await?;
+  // A failed user update rolls token consumption back, so the link can be retried.
+  let user_id: Option<Uuid> = sqlx::query_scalar(
     r#"
       UPDATE email_verification_tokens
       SET used_at = now()
@@ -136,32 +151,23 @@ pub async fn verify_page(
     "#,
   )
   .bind(sha256_hex(token))
-  .fetch_optional(&state.db)
-  .await;
-
-  let user_id = match spent {
-    Ok(Some(id)) => id,
-    Ok(None) => return invalid_page(),
-    Err(error) => {
-      tracing::error!(%error, "email verification: token spend query failed");
-      return error_page();
-    }
+  .fetch_optional(&mut *tx)
+  .await?;
+  let Some(user_id) = user_id else {
+    return Ok(false);
   };
-
-  // `coalesce` keeps the FIRST confirmation time, so a second link — or a
-  // pre-fetching mail client followed by a real click — cannot rewrite history.
-  if let Err(error) = sqlx::query(
-    "UPDATE users SET email_verified_at = coalesce(email_verified_at, now()) WHERE id = $1",
+  // Preserve the first confirmation time and refuse tombstoned accounts.
+  let updated = sqlx::query(
+    "UPDATE users SET email_verified_at = coalesce(email_verified_at, now()) WHERE id = $1 AND deleted_at IS NULL",
   )
   .bind(user_id)
-  .execute(&state.db)
-  .await
-  {
-    tracing::error!(%error, "email verification: marking the user verified failed");
-    return error_page();
+  .execute(&mut *tx)
+  .await?;
+  if updated.rows_affected() == 0 {
+    return Ok(false);
   }
-
-  done_page(&state.config.app_base_url)
+  tx.commit().await?;
+  Ok(true)
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,9 +180,8 @@ pub struct ResendRequest {
 /// Always 204, whatever happened: unknown address, already verified, mail
 /// failure. Anything else is an enumeration oracle, and this endpoint has to be
 /// unauthenticated (the whole point is that the caller cannot sign in yet). Rate
-/// limiting is the per-IP bucket's job: `rate_limit::is_rate_limited` names
-/// this path explicitly (it matches by suffix, so being under `/auth/` alone
-/// did nothing — the claim this comment used to make was false).
+/// limiting is the per-IP bucket's job: `rate_limit::ip_throttled` is attached
+/// where the route is mounted (`routes::public_api_router`).
 pub async fn resend(
   State(state): State<AppState>,
   axum::Json(payload): axum::Json<ResendRequest>,
@@ -185,11 +190,12 @@ pub async fn resend(
 
   // Only an existing, still-unverified account gets a link. Re-sending to an
   // already-verified address would be a free mail cannon aimed at a real inbox.
-  let target: Option<Uuid> =
-    sqlx::query_scalar("SELECT id FROM users WHERE email = $1 AND email_verified_at IS NULL")
-      .bind(&email)
-      .fetch_optional(&state.db)
-      .await?;
+  let target: Option<Uuid> = sqlx::query_scalar(
+    "SELECT id FROM users WHERE email = $1 AND email_verified_at IS NULL AND deleted_at IS NULL",
+  )
+  .bind(&email)
+  .fetch_optional(&state.db)
+  .await?;
 
   if let Some(user_id) = target {
     mint_and_send(&state, user_id, &email).await;

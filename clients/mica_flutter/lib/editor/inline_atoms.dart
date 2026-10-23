@@ -20,6 +20,8 @@ abstract class InlineAtomRenderer {
   /// The mark type this renderer folds ('math').
   String get markType;
 
+  PreviewResourceKey? previewKey(String source);
+
   /// Size + baseline (logical px, top-to-alphabetic) the atom wants at
   /// [fontSize] text, at most [maxWidth] wide. Null declines the fold.
   ({Size size, double? baseline})? measure(
@@ -45,6 +47,10 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
   String get markType => 'math';
 
   @override
+  PreviewResourceKey? previewKey(String source) =>
+      source.trim().isEmpty ? null : (id: 'math', source: source);
+
+  @override
   ({Size size, double? baseline})? measure(
     RenderDocument host,
     String source,
@@ -52,24 +58,19 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
     double maxWidth,
   ) {
     if (source.trim().isEmpty) return null;
-    final img = host._previewImages['math']?[source];
-    if (img == null) {
-      // Deferred-safe (request() only registers; rebuilds are post-frame),
-      // and the raster landing relayouts via the previewImages setter.
-      host.onRequestPreview?.call('math', source, 0);
-      return null;
-    }
+    final pixels = host._previewSizes[(id: 'math', source: source)];
+    if (pixels == null) return null;
     const dpr = EditorTheme.mathPixelRatio;
     var scale = (fontSize / EditorTheme.mathRasterFontSize) / dpr;
-    var w = img.width * scale;
+    var w = pixels.width * scale;
     if (w > maxWidth && w > 0) {
       // A formula wider than the wrap width would silently overflow the line
       // box (placeholders don't clip); shrink it to fit instead.
       scale *= maxWidth / w;
       w = maxWidth;
     }
-    final h = img.height * scale;
-    final rawBaseline = host._previewBaselines['math']?[source];
+    final h = pixels.height * scale;
+    final rawBaseline = host._retainedBaselines[(id: 'math', source: source)];
     // Baseline is logical at capture size; the image is captured at dpr×, so
     // the scale from capture-logical to draw-logical is (scale * dpr).
     final baseline = rawBaseline == null ? null : rawBaseline * scale * dpr;
@@ -80,6 +81,7 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
   void paint(RenderDocument host, Canvas canvas, Rect rect, String source) {
     final img = host._previewImages['math']?[source];
     if (img == null) return; // evicted between layout and paint: skip a frame
+    host.onPreviewPainted?.call('math', source);
     canvas.drawImageRect(
       img,
       Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),

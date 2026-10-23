@@ -13,6 +13,7 @@
 // drift surface — and live only here now.
 import 'cache_stats.dart';
 import 'dart:typed_data';
+import '../editor/operation_history.dart';
 
 import '../cloud/cloud_doc_store.dart';
 import '../api/models.dart';
@@ -182,7 +183,11 @@ abstract interface class LocalOfflineApi {
   ({String docId, String rootBlockId, List<Map<String, dynamic>> blocks})
   newDoc();
   DocData? openDoc(String docId);
-  Future<void> applyOps(List<Map<String, dynamic>> ops);
+  Future<void> applyOps(
+    List<Map<String, dynamic>> ops, {
+    bool trackHistory = false,
+  });
+  Future<EditorHistoryState> applyHistory(HistoryAction action);
   Future<VaultImportResult> importVaultTree(
     List<({String path, List<int> bytes})> entries,
     String workspaceId, {

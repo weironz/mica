@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use axum::Extension;
 use axum::extract::{ConnectInfo, Request};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tokio::sync::Semaphore;
@@ -181,72 +181,59 @@ fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {
     std::env::var(key).ok()?.trim().parse().ok()
 }
 
-/// Per-IP throttled: the credential endpoints. `refresh` is included (a rotating
-/// refresh-token endpoint is an abuse vector) but does NOT hash, so it skips the
-/// Argon2 gate below. The password-reset pair is here too — `forgot` could be
-/// used to spam a victim's inbox or probe timing, and `/reset-password` POST is
-/// a token-guessing surface — but neither is Argon2-gated: `forgot` doesn't
-/// hash, and `/reset-password` only hashes AFTER a valid token spends (an
-/// attacker without one never reaches the hash). WS connects are deliberately
-/// NOT here: they are already token-authenticated and a shared per-IP bucket
-/// would throttle a user opening several documents at once — not worth the false
-/// positives for a low-severity authed path.
-fn is_rate_limited(method: &Method, path: &str) -> bool {
-    spends_argon2(method, path)
-        || path.ends_with("/auth/refresh")
-        || path.ends_with("/auth/password/forgot")
-        // The reset page lives outside /api (no /auth segment): match it exactly.
-        || path.ends_with("/reset-password")
-        // Each call mails a fresh link. Unthrottled, one loop flooded a
-        // victim's inbox (register their address once, then resend forever)
-        // and spent the operator's mail quota and sender reputation.
-        || path.ends_with("/auth/resend-verification")
-}
-
-/// Endpoints that run an Argon2 hash/verify — the ones the concurrency gate must
-/// bound. `refresh` is excluded: it is a DB token rotation, and holding a scarce
-/// Argon2 permit for it would starve real logins.
-fn spends_argon2(method: &Method, path: &str) -> bool {
-    path.ends_with("/auth/login")
-        || path.ends_with("/auth/register")
-        // Signed-in, but each verifies the CURRENT password with Argon2: with a
-        // stolen access token (or cookie) these were an unthrottled password
-        // oracle, and any account could fire hundreds at once and pin every
-        // core — the flood the semaphore exists to stop. Method-aware: a GET
-        // of `/auth/me` is the profile read and must stay free.
-        || (method == Method::POST && path.ends_with("/auth/password"))
-        || (method == Method::DELETE && path.ends_with("/auth/me"))
-}
-
-/// Outer middleware: throttle the auth endpoints per client IP and cap
-/// concurrent Argon2 work. Every non-auth path passes straight through.
-pub async fn auth_rate_limit(
+/// Route middleware: throttle THIS route per client IP. Attached where the
+/// route is registered (`routes::public_api_router`, `api_argon2_router`,
+/// `password_reset::router`) — route-layered by design rather than matched
+/// against a path table that must be hand-synced with the router (the blob
+/// link and resend-verification were each silently misclassified that way).
+///
+/// On these routes by policy: `/auth/refresh` (a rotating refresh-token
+/// endpoint is an abuse vector, but it does NO hashing so it skips the Argon2
+/// gate below), the password-reset pair (`forgot` could spam a victim's inbox
+/// or probe timing; the `/reset-password` POST is a token-guessing surface),
+/// and `/auth/resend-verification` (each call mails a fresh link — unthrottled,
+/// one loop flooded a victim's inbox and spent the operator's mail quota and
+/// sender reputation). WS connects are deliberately NOT throttled: they are
+/// already token-authenticated and a shared per-IP bucket would throttle a
+/// user opening several documents at once — not worth the false positives for
+/// a low-severity authed path.
+pub async fn throttle_ip(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Extension(guard): Extension<Arc<AuthGuard>>,
     req: Request,
     next: Next,
 ) -> Response {
-    let (limited, argon2) = {
-        let path = req.uri().path();
-        (is_rate_limited(req.method(), path), spends_argon2(req.method(), path))
-    };
-    if !limited {
-        return next.run(req).await;
-    }
     let ip = client_ip(req.headers(), peer);
     if !guard.limiter.allow(ip) {
         return throttled("too many attempts; slow down and try again shortly");
     }
-    // login/register also share a global Argon2 concurrency budget; drop the
-    // permit when the request ends. `refresh` is rate-limited above but does no
-    // hashing, so it holds no permit (that would starve real logins).
-    let _permit = if argon2 {
-        match guard.argon2.clone().try_acquire_owned() {
-            Ok(permit) => Some(permit),
-            Err(_) => return throttled("the server is busy; try again in a moment"),
-        }
-    } else {
-        None
+    next.run(req).await
+}
+
+/// Route middleware: [`throttle_ip`] plus the global Argon2 concurrency gate,
+/// for the routes whose handler runs an Argon2 hash/verify (`/auth/login`,
+/// `/auth/register`, `POST /auth/password`, `DELETE /auth/me`). The permit is
+/// held for the whole request — its dominant cost IS the Argon2 op — so excess
+/// concurrent attempts shed with 429 instead of pinning every core.
+///
+/// `POST /auth/password` and `DELETE /auth/me` are signed-in, but each
+/// verifies the CURRENT password with Argon2: with a stolen access token (or
+/// cookie) they were an unthrottled password oracle, and any account could
+/// fire hundreds at once and pin every core — the flood the semaphore exists
+/// to stop. The `GET`/`PATCH` methods on `/auth/me` carry neither the throttle
+/// nor the gate: a GET of `/auth/me` is the profile read and must stay free.
+pub async fn throttle_argon2(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(guard): Extension<Arc<AuthGuard>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let ip = client_ip(req.headers(), peer);
+    if !guard.limiter.allow(ip) {
+        return throttled("too many attempts; slow down and try again shortly");
+    }
+    let Ok(_permit) = guard.argon2.clone().try_acquire_owned() else {
+        return throttled("the server is busy; try again in a moment");
     };
     next.run(req).await
 }
@@ -315,35 +302,6 @@ mod tests {
         assert!(!rl.allow_at(ip, t0 + Duration::from_secs(1)));
     }
 
-    #[test]
-    fn refresh_is_rate_limited_but_not_argon2_gated() {
-        assert!(is_rate_limited(&Method::POST, "/api/auth/login"));
-        assert!(is_rate_limited(&Method::POST, "/api/auth/register"));
-        assert!(is_rate_limited(&Method::POST, "/api/auth/refresh"));
-        // Password reset: both throttled, neither Argon2-gated.
-        assert!(is_rate_limited(&Method::POST, "/api/auth/password/forgot"));
-        assert!(is_rate_limited(&Method::POST, "/reset-password"));
-        assert!(is_rate_limited(&Method::POST, "/api/auth/resend-verification"));
-        assert!(!spends_argon2(&Method::POST, "/api/auth/resend-verification"));
-        assert!(!is_rate_limited(&Method::POST, "/api/workspaces"));
-        assert!(!is_rate_limited(&Method::POST, "/ws/workspaces/x/documents/y"));
-        // Only login/register hash — refresh/forgot/reset must not hold an Argon2 permit.
-        assert!(spends_argon2(&Method::POST, "/api/auth/login"));
-        assert!(spends_argon2(&Method::POST, "/api/auth/register"));
-        assert!(!spends_argon2(&Method::POST, "/api/auth/refresh"));
-        assert!(!spends_argon2(&Method::POST, "/api/auth/password/forgot"));
-        assert!(!spends_argon2(&Method::POST, "/reset-password"));
-    }
-
-    #[test]
-    fn signed_in_password_checks_are_throttled_but_the_profile_read_is_not() {
-        assert!(spends_argon2(&Method::POST, "/api/auth/password"));
-        assert!(is_rate_limited(&Method::POST, "/api/auth/password"));
-        assert!(spends_argon2(&Method::DELETE, "/api/auth/me"));
-        assert!(!is_rate_limited(&Method::GET, "/api/auth/me"));
-        assert!(!is_rate_limited(&Method::PATCH, "/api/auth/me"));
-    }
-
     /// One subscriber owns a whole /64; a per-address bucket let them rotate
     /// past the limit forever.
     #[test]
@@ -370,5 +328,133 @@ mod tests {
         assert!(rl.allow_at(a, t0));
         assert!(!rl.allow_at(a, t0));
         assert!(rl.allow_at(b, t0), "a different IP has its own bucket");
+    }
+}
+
+/// The middlewares themselves, exercised AS route layers (drive an assembled
+/// router rather than a table — the classifications they encode now live on
+/// the routes, asserted per-route in `routes::mod`'s `router_tests`).
+#[cfg(test)]
+mod route_layer_tests {
+    use super::*;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::routing::post;
+    use std::net::Ipv4Addr;
+    use tower::ServiceExt;
+
+    async fn ok() -> &'static str {
+        "ok"
+    }
+
+    const CLIENT: SocketAddr =
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)), 40000);
+
+    fn post_req(path: &str) -> Request<Body> {
+        let mut req = Request::post(path).body(Body::empty()).unwrap();
+        req.extensions_mut().insert(ConnectInfo(CLIENT));
+        req
+    }
+
+    /// A 2-token burst that never refills, and `permits` Argon2 slots.
+    fn guard(permits: usize) -> Arc<AuthGuard> {
+        Arc::new(AuthGuard {
+            limiter: RateLimiter::new(2, 0.0),
+            argon2: Arc::new(Semaphore::new(permits)),
+        })
+    }
+
+    #[tokio::test]
+    async fn throttle_ip_allows_the_burst_then_answers_429() {
+        let app = Router::new()
+            .route("/x", post(ok).route_layer(axum::middleware::from_fn(throttle_ip)))
+            .layer(Extension(guard(1)));
+        for _ in 0..2 {
+            let response = app.clone().oneshot(post_req("/x")).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let response = app.oneshot(post_req("/x")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn throttle_ip_holds_no_argon2_permit() {
+        let guard = guard(1);
+        // The only permit is already held: `throttle_ip` (refresh / forgot /
+        // reset / resend-verification) must still serve — holding one would
+        // starve real logins, the exact failure the split exists to prevent.
+        let _held = guard.argon2.clone().try_acquire_owned().unwrap();
+        let app = Router::new()
+            .route("/x", post(ok).route_layer(axum::middleware::from_fn(throttle_ip)))
+            .layer(Extension(guard));
+        let response = app.oneshot(post_req("/x")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn throttle_argon2_sheds_when_every_permit_is_held() {
+        let guard = guard(1);
+        let _held = guard.argon2.clone().try_acquire_owned().unwrap();
+        let app = Router::new()
+            .route("/x", post(ok).route_layer(axum::middleware::from_fn(throttle_argon2)))
+            .layer(Extension(guard));
+        let response = app.oneshot(post_req("/x")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn throttle_argon2_tracks_the_bucket_too() {
+        let app = Router::new()
+            .route("/x", post(ok).route_layer(axum::middleware::from_fn(throttle_argon2)))
+            .layer(Extension(guard(4)));
+        for _ in 0..2 {
+            let response = app.clone().oneshot(post_req("/x")).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let response = app.oneshot(post_req("/x")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+}
+
+/// [`throttle_ip`] attached as a `route_layer` on one method router — the
+/// spelling used at each mount, so a route's throttle travels with its
+/// registration instead of with a table.
+pub fn ip_throttled<S>(route: axum::routing::MethodRouter<S>) -> axum::routing::MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    route.route_layer(axum::middleware::from_fn(throttle_ip))
+}
+
+/// [`throttle_argon2`] attached as a `route_layer` on one method router.
+pub fn argon2_throttled<S>(route: axum::routing::MethodRouter<S>) -> axum::routing::MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    route.route_layer(axum::middleware::from_fn(throttle_argon2))
+}
+
+/// Route-layer tests in `routes::mod` build a guard through here: a 2-token
+/// burst that never refills and `permits` Argon2 slots, so "throttled" and
+/// "gated" each show up deterministically on the third rapid call from one
+/// client.
+#[cfg(test)]
+pub fn test_guard(permits: usize) -> Arc<AuthGuard> {
+    Arc::new(AuthGuard {
+        limiter: RateLimiter::new(2, 0.0),
+        argon2: Arc::new(Semaphore::new(permits)),
+    })
+}
+
+#[cfg(test)]
+impl AuthGuard {
+    /// Seize one Argon2 permit and hold it — the "every permit is taken" state
+    /// the shed-429 tests are built on.
+    pub fn argon2_hog(self: &Arc<Self>) -> tokio::sync::OwnedSemaphorePermit {
+        self
+            .argon2
+            .clone()
+            .try_acquire_owned()
+            .expect("test_semaphore has permits left")
     }
 }

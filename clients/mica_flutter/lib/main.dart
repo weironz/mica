@@ -94,18 +94,19 @@ import 'upload/zip_writer.dart';
 import 'api/client.dart';
 import 'perf/switch_trace.dart';
 import 'api/models.dart';
-import 'api/sync_client.dart';
+import 'api/doc_socket_uri.dart';
 import 'auth/auth_controller.dart';
 
 // The API/data layer lives in lib/api/*.dart; re-export it so existing
 // `import 'main.dart'` users (tests, tooling) still see these symbols.
 export 'api/client.dart';
 export 'api/models.dart';
-export 'api/sync_client.dart';
+export 'api/doc_socket_uri.dart';
 
 part 'ui/dialogs.dart';
 part 'ui/widgets.dart';
 part 'main_shell.dart';
+part 'main_editor_history.dart';
 part 'main_workspace_view.dart';
 part 'main_panels.dart';
 part 'main_tree_helpers.dart';
@@ -118,10 +119,9 @@ part 'main_tree_helpers.dart';
 /// shipped app used to try demo/password123 — and then REGISTER it — against
 /// any localhost backend, held back only by the server's weak-password list
 /// (2026-10-21 review).
-const bool kDevAutoLogin = !kReleaseMode && bool.fromEnvironment(
-  'MICA_DEV_AUTOLOGIN',
-  defaultValue: true,
-);
+const bool kDevAutoLogin =
+    !kReleaseMode &&
+    bool.fromEnvironment('MICA_DEV_AUTOLOGIN', defaultValue: true);
 const String kDevEmail = String.fromEnvironment(
   'MICA_DEV_EMAIL',
   defaultValue: 'demo@mica.dev',
@@ -347,4 +347,3 @@ class WorkspaceShell extends StatefulWidget {
   @override
   State<WorkspaceShell> createState() => _WorkspaceShellState();
 }
-

@@ -8,6 +8,7 @@ use crate::{Block, DocumentSnapshotPayload};
 use crate::block_handlers::*;
 use crate::html::*;
 use crate::inline::*;
+use crate::scan_memo::ScanMemo;
 
 /// The block scanner's mutable state — everything `import_markdown_inner`
 /// carries ACROSS loop iterations. Every field has an owner (the construct
@@ -317,26 +318,22 @@ pub(crate) fn import_markdown_inner(
       continue;
     }
     let marks = b.data.get("marks").and_then(Value::as_array);
-    // A whole-line image promotes to a standalone image block — unless it is
-    // wrapped in a link (`[![alt](img)](url)`), which must stay an inline
-    // anchored image inside the paragraph.
-    let wrapped_in_link = marks.is_some_and(|ms| {
-      ms.iter().any(|m| {
+    // The parser appends enclosing marks after their children. A full-range
+    // link BEFORE the image belongs to its alt; one AFTER wraps the image and
+    // must survive as an anchored image inside a paragraph.
+    let promoted = marks.and_then(|ms| {
+      let image_index = ms.iter().rposition(|m| {
+        m.get("type").and_then(Value::as_str) == Some("image")
+          && m.get("start").and_then(Value::as_u64) == Some(0)
+          && m.get("end").and_then(Value::as_u64) == Some(full as u64)
+      })?;
+      let wrapped_in_link = ms[image_index + 1..].iter().any(|m| {
         m.get("type").and_then(Value::as_str) == Some("link")
           && m.get("start").and_then(Value::as_u64) == Some(0)
           && m.get("end").and_then(Value::as_u64) == Some(full as u64)
-      })
-    });
-    let promoted = (!wrapped_in_link)
-      .then_some(marks)
-      .flatten()
-      .and_then(|ms| {
-        ms.iter().find(|m| {
-          m.get("type").and_then(Value::as_str) == Some("image")
-            && m.get("start").and_then(Value::as_u64) == Some(0)
-            && m.get("end").and_then(Value::as_u64) == Some(full as u64)
-        })
       });
+      (!wrapped_in_link).then_some(&ms[image_index])
+    });
     if let Some(image) = promoted {
       let url = image.get("href").and_then(Value::as_str).unwrap_or_default();
       let mut data = json!({ "url": url });
@@ -755,7 +752,7 @@ pub(crate) fn html_block_start(content: &str) -> Option<u8> {
   }
   // Type 7: a COMPLETE open/closing tag (any other name) alone on the line.
   let chars: Vec<char> = content.chars().collect();
-  if let Some(end) = inline_html_end(&chars, 0)
+  if let Some(end) = inline_html_end(&chars, 0, None)
     && chars[1] != '!'
     && chars[1] != '?'
     && !matches!(name.as_str(), "pre" | "script" | "style" | "textarea")
@@ -786,21 +783,44 @@ pub(crate) fn html_block_ends(kind: u8, line: &str) -> bool {
 
 /// Inline raw HTML at chars[i] == '<': open tag, closing tag, comment,
 /// processing instruction, declaration or CDATA. Returns the exclusive end.
-pub(crate) fn inline_html_end(chars: &[char], i: usize) -> Option<usize> {
+///
+/// `memo` (the inline parser passes one per parse) memoises the terminator
+/// searches: an unclosed `<!--` used to rescan the whole suffix from every
+/// later `<` (issue #61). A failed search means "no terminator at or after
+/// `from`", and later starts only move forward, so the frontier stays valid.
+pub(crate) fn inline_html_end(chars: &[char], i: usize, mut memo: Option<&mut ScanMemo>) -> Option<usize> {
   if chars.get(i) != Some(&'<') {
     return None;
   }
   let starts = |from: usize, pat: &str| -> bool {
     pat.chars().enumerate().all(|(k, c)| chars.get(from + k) == Some(&c))
   };
-  let find = |from: usize, pat: &str| -> Option<usize> {
-    let pat: Vec<char> = pat.chars().collect();
+  let mut find = |from: usize, pat: &'static str| -> Option<usize> {
+    if let Some(m) = memo.as_deref_mut() {
+      let dead = if pat == ">" {
+        Some(m.gt_dead_from)
+      } else {
+        m.html_dead.get(pat).copied()
+      };
+      if dead.is_some_and(|f| f <= from) {
+        return None;
+      }
+    }
+    let needle: Vec<char> = pat.chars().collect();
     let mut j = from;
-    while j + pat.len() <= chars.len() {
-      if chars[j..j + pat.len()] == pat[..] {
+    while j + needle.len() <= chars.len() {
+      if chars[j..j + needle.len()] == needle[..] {
         return Some(j);
       }
       j += 1;
+    }
+    if let Some(m) = memo.as_deref_mut() {
+      if pat == ">" {
+        m.gt_dead_from = m.gt_dead_from.min(from);
+      } else {
+        let entry = m.html_dead.entry(pat).or_insert(usize::MAX);
+        *entry = (*entry).min(from);
+      }
     }
     None
   };

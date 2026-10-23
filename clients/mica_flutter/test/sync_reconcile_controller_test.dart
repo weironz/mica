@@ -13,7 +13,6 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
-import 'package:mica_flutter/api/sync_client.dart';
 import 'package:mica_flutter/cloud/cloud_sync_session.dart';
 import 'package:mica_flutter/doc_tab.dart';
 import 'package:mica_flutter/session/session_controller.dart';
@@ -30,42 +29,32 @@ class _Tab implements TabSockets {
   @override
   int lastActivated;
   @override
-  DocumentSyncClient? sync;
+  String? syncDocumentId;
   @override
   CloudSyncSession? cloudSession;
 
   @override
-  bool get isLive => sync != null;
+  bool get isLive => syncDocumentId != null;
 }
-
-/// A doc-sync client that never opens a socket — the shell-side behavior
-/// under test (park/close/liveness) is bookkeeping, not protocol.
-DocumentSyncClient _docSync(String documentId) => DocumentSyncClient(
-      documentId: documentId,
-      uri: Uri.parse('wss://unused.example/doc'),
-      selfName: 'test',
-      onRemoteSeq: (_, _) {},
-      onPresence: (_) {},
-    );
 
 /// A cloud session that never connects — safe to construct and dispose.
 CloudSyncSession _cloudSession(String documentId) => CloudSyncSession(
-      uri: () async => Uri.parse('wss://unused.example/doc'),
-      clientId: BigInt.one,
-      onReady: (_, _) {},
-      onRemoteBlocks: (_) {},
-    );
+  uri: () async => Uri.parse('wss://unused.example/doc'),
+  clientId: BigInt.one,
+  onReady: (_, _) {},
+  onRemoteBlocks: (_) {},
+);
 
 /// A cloud session that reports READY — only the `isReady` guard under test
 /// reads it; the session is never connected.
 class _ReadySession extends CloudSyncSession {
   _ReadySession()
-      : super(
-          uri: () async => Uri.parse('wss://unused.example/doc'),
-          clientId: BigInt.one,
-          onReady: (_, _) {},
-          onRemoteBlocks: (_) {},
-        );
+    : super(
+        uri: () async => Uri.parse('wss://unused.example/doc'),
+        clientId: BigInt.one,
+        onReady: (_, _) {},
+        onRemoteBlocks: (_) {},
+      );
 
   @override
   bool get isReady => true;
@@ -77,12 +66,8 @@ AuthSession _session() => const AuthSession(
   user: User(id: 'u1', email: 'u@x', displayName: 'U'),
 );
 
-Workspace _ws([String id = 'w1']) => Workspace(
-  id: id,
-  name: 'ws-$id',
-  ownerId: 'u1',
-  role: 'owner',
-);
+Workspace _ws([String id = 'w1']) =>
+    Workspace(id: id, name: 'ws-$id', ownerId: 'u1', role: 'owner');
 
 DocumentBootstrap _boot(String documentId, {int currentSeq = 0}) =>
     DocumentBootstrap(
@@ -137,8 +122,11 @@ class _FakeDocStore implements CloudDocStore {
   }
 
   @override
-  List<({int clock, Uint8List bytes})> outboxAfter(int pushedClock) => hasPending
-      ? [(clock: 2, bytes: Uint8List.fromList([1]))]
+  List<({int clock, Uint8List bytes})> outboxAfter(int pushedClock) =>
+      hasPending
+      ? [
+          (clock: 2, bytes: Uint8List.fromList([1])),
+        ]
       : const [];
 
   @override
@@ -167,11 +155,20 @@ class _FakeDocStore implements CloudDocStore {
   void dispose() => disposed = true;
 }
 
+class _SeedReplica implements SyncDocReplica {
+  @override
+  String rootBlockId() => 'r';
+  @override
+  Uint8List encodeState() => Uint8List.fromList([0, 0]);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 /// Everything the controller needs from the shell, scripted per test.
 class _Harness {
   _Harness({List<_Tab> tabs = const [], int activeIndex = 0})
-      : tabs = tabs.isEmpty ? [_Tab()] : List.of(tabs),
-        _activeIndex = activeIndex {
+    : tabs = tabs.isEmpty ? [_Tab()] : List.of(tabs),
+      _activeIndex = activeIndex {
     controller = SyncReconcileController(
       session: sessions,
       tabs: () => this.tabs,
@@ -266,38 +263,81 @@ class _Harness {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('editor writes wait for the session created after cold setup', () async {
+    final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
+    h.sessions.restore(_session(), [_ws()], _ws(), const {});
+    final waiting = h.controller.readyForDocument('d1');
+    expect(
+      h.tabs[0].cloudSession,
+      isNull,
+      reason: 'device identity setup is asynchronous',
+    );
+    await Future<void>.delayed(Duration.zero);
+    final created = h.tabs[0].cloudSession!;
+    expect(created.isReady, isFalse);
+    created.debugAttachReplica(_SeedReplica());
+    expect(await waiting, same(created));
+    h.controller.closeAllDocumentSync();
+    h.controller.disposeViewsEvents();
+  });
+
+  test('a cold history waiter cannot mutate the next document', () async {
+    final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
+    h.sessions.restore(_session(), [_ws()], _ws(), const {});
+    final waiting = h.controller.readyForDocument('d1');
+    final rejected = expectLater(waiting, throwsStateError);
+    await Future<void>.delayed(Duration.zero);
+    final created = h.tabs[0].cloudSession!;
+    h.tabs[0].documentId = 'd2';
+    created.debugAttachReplica(_SeedReplica());
+    await rejected;
+    h.controller.closeAllDocumentSync();
+    h.controller.disposeViewsEvents();
+  });
+
   test('no session closes the document socket instead of connecting', () {
     final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
     h.controller.reconcile();
-    expect(h.tabs[0].sync, isNull);
+    expect(h.tabs[0].syncDocumentId, isNull);
     expect(h.tabs[0].cloudSession, isNull);
   });
 
-  test('a live document opens a doc socket and a cloud session', () async {
+  test('a live document stamps the marker and opens a cloud session', () async {
     final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
     h.sessions.restore(_session(), [_ws()], _ws(), const {});
     h.controller.reconcile();
     await Future<void>.delayed(Duration.zero);
-    expect(h.tabs[0].sync, isNotNull,
-        reason: 'the doc socket follows the open document');
-    expect(h.tabs[0].cloudSession, isNotNull,
-        reason: 'the yrs session is set up for the doc');
-    expect(h.tabs[0].cloudSession!.isReady, isFalse,
-        reason: 'not connected to anything real');
+    expect(
+      h.tabs[0].syncDocumentId,
+      'd1',
+      reason: 'the doc socket follows the open document',
+    );
+    expect(
+      h.tabs[0].cloudSession,
+      isNotNull,
+      reason: 'the yrs session is set up for the doc',
+    );
+    expect(
+      h.tabs[0].cloudSession!.isReady,
+      isFalse,
+      reason: 'not connected to anything real',
+    );
   });
 
   test('already on this document reconnects nothing', () async {
     final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
     h.sessions.restore(_session(), [_ws()], _ws(), const {});
     await h.openDocument('d1');
-    final existingSync = h.tabs[0].sync;
     final existingCloud = h.tabs[0].cloudSession;
 
     h.controller.reconcile();
 
-    expect(h.tabs[0].sync, same(existingSync));
-    expect(h.tabs[0].cloudSession, same(existingCloud),
-        reason: 'the "already on this document" guard must not rebuild');
+    expect(h.tabs[0].syncDocumentId, 'd1');
+    expect(
+      h.tabs[0].cloudSession,
+      same(existingCloud),
+      reason: 'the "already on this document" guard must not rebuild',
+    );
   });
 
   test('switching documents drains the outgoing cloud session', () async {
@@ -308,8 +348,11 @@ void main() {
 
     await h.openDocument('d2');
 
-    expect(h.tabs[0].cloudSession, isNot(same(first)),
-        reason: 'a fresh session is built for the new doc');
+    expect(
+      h.tabs[0].cloudSession,
+      isNot(same(first)),
+      reason: 'a fresh session is built for the new doc',
+    );
     expect(first.isReady, isFalse, reason: 'the old one is torn down');
   });
 
@@ -320,9 +363,13 @@ void main() {
     h.workspaceForDoc = 'gone';
     h.activeBoot = _boot('d1');
     h.controller.reconcile();
-    expect(h.tabs[0].sync, isNull,
-        reason: 'a workspace-less tab must not open a socket into the wrong '
-            'workspace — the server rejects workspace-scoped doc lookups');
+    expect(
+      h.tabs[0].syncDocumentId,
+      isNull,
+      reason:
+          'a workspace-less tab must not open a socket into the wrong '
+          'workspace — the server rejects workspace-scoped doc lookups',
+    );
   });
 
   test('reconcile clears the presence row once per document change', () async {
@@ -337,15 +384,18 @@ void main() {
     expect(h.presenceCleared, 1);
   });
 
-  test('parkTab keeps the doc id but drops both sockets', () async {
+  test('parkTab keeps the doc id but drops the session', () async {
     final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
     h.sessions.restore(_session(), [_ws()], _ws(), const {});
     await h.openDocument('d1');
     h.controller.parkTab(h.tabs[0]);
-    expect(h.tabs[0].sync, isNull);
+    expect(h.tabs[0].syncDocumentId, isNull);
     expect(h.tabs[0].cloudSession, isNull);
-    expect(h.tabs[0].documentId, 'd1',
-        reason: 'the tab keeps rendering; only its sockets are parked');
+    expect(
+      h.tabs[0].documentId,
+      'd1',
+      reason: 'the tab keeps rendering; only its sockets are parked',
+    );
   });
 
   test('the sync cap parks least-recently-activated live tabs first', () async {
@@ -357,39 +407,55 @@ void main() {
       _Tab(documentId: 'd4', lastActivated: 7),
     ];
     final h = _Harness(tabs: tabs, activeIndex: 0);
-    // Real clients (never connected — dispose is safe without a socket).
+    // Live markers — liveness is the marker, not a connected socket.
     for (final t in tabs) {
-      t.sync = _docSync(t.documentId!);
+      t.syncDocumentId = t.documentId;
     }
     // 4 live background tabs compete for 2 slots (cap 3 minus the active
     // one): the two OLDEST activations park.
     h.controller.enforceSyncCap();
-    expect(tabs[1].sync, isNull, reason: 'LRU (activated 1) parks first');
-    expect(tabs[3].sync, isNull, reason: 'next LRU (activated 3) parks');
-    expect(tabs[2].sync, isNotNull,
-        reason: 'newer (activated 5) stays');
-    expect(tabs[4].sync, isNotNull,
-        reason: 'newest background (activated 7) stays');
-    expect(tabs[0].sync, isNotNull,
-        reason: 'the ACTIVE tab is never parked');
+    expect(
+      tabs[1].syncDocumentId,
+      isNull,
+      reason: 'LRU (activated 1) parks first',
+    );
+    expect(
+      tabs[3].syncDocumentId,
+      isNull,
+      reason: 'next LRU (activated 3) parks',
+    );
+    expect(
+      tabs[2].syncDocumentId,
+      isNotNull,
+      reason: 'newer (activated 5) stays',
+    );
+    expect(
+      tabs[4].syncDocumentId,
+      isNotNull,
+      reason: 'newest background (activated 7) stays',
+    );
+    expect(
+      tabs[0].syncDocumentId,
+      isNotNull,
+      reason: 'the ACTIVE tab is never parked',
+    );
   });
 
-  test('closeAllDocumentSync parks background tabs and closes the active one',
-      () async {
-    final tabs = [
-      _Tab(documentId: 'd0'),
-      _Tab(documentId: 'd1'),
-    ];
-    final h = _Harness(tabs: tabs, activeIndex: 0);
-    h.sessions.restore(_session(), [_ws()], _ws(), const {});
-    for (final t in tabs) {
-      t.sync = _docSync(t.documentId!);
-      t.cloudSession = _cloudSession(t.documentId!);
-    }
-    h.controller.closeAllDocumentSync();
-    expect(tabs.every((t) => t.sync == null), isTrue);
-    expect(tabs.every((t) => t.cloudSession == null), isTrue);
-  });
+  test(
+    'closeAllDocumentSync parks background tabs and closes the active one',
+    () async {
+      final tabs = [_Tab(documentId: 'd0'), _Tab(documentId: 'd1')];
+      final h = _Harness(tabs: tabs, activeIndex: 0);
+      h.sessions.restore(_session(), [_ws()], _ws(), const {});
+      for (final t in tabs) {
+        t.syncDocumentId = t.documentId;
+        t.cloudSession = _cloudSession(t.documentId!);
+      }
+      h.controller.closeAllDocumentSync();
+      expect(tabs.every((t) => t.syncDocumentId == null), isTrue);
+      expect(tabs.every((t) => t.cloudSession == null), isTrue);
+    },
+  );
 
   group('views events socket', () {
     test('signs in and opens the socket for the selected workspace', () {
@@ -405,8 +471,11 @@ void main() {
       h.controller.reconcileViewsEvents();
       final first = h.controller.viewsEventsWorkspaceId;
       h.controller.reconcileViewsEvents();
-      expect(h.controller.viewsEventsWorkspaceId, same(first),
-          reason: 'the idempotence guard: same workspace, same socket');
+      expect(
+        h.controller.viewsEventsWorkspaceId,
+        same(first),
+        reason: 'the idempotence guard: same workspace, same socket',
+      );
     });
 
     test('switching workspaces re-points the socket', () {
@@ -431,8 +500,11 @@ void main() {
       expect(h.controller.viewsEventsWorkspaceId, 'w1');
       h.isLocal = true;
       h.controller.reconcileViewsEvents();
-      expect(h.controller.viewsEventsWorkspaceId, isNull,
-          reason: 'a local world has no cloud tree to watch');
+      expect(
+        h.controller.viewsEventsWorkspaceId,
+        isNull,
+        reason: 'a local world has no cloud tree to watch',
+      );
     });
 
     test('disposeViewsEvents tears the socket down for sign-out', () {
@@ -450,13 +522,19 @@ void main() {
       for (var i = 1; i <= 3; i++) {
         h.controller.onCloudSyncFault('d1', 'push_rejected', i);
       }
-      expect(h.faultBannerCalls, 0,
-          reason: 'the session self-heals for the first few faults');
+      expect(
+        h.faultBannerCalls,
+        0,
+        reason: 'the session self-heals for the first few faults',
+      );
       h.controller.onCloudSyncFault('d1', 'push_rejected', 4);
       expect(h.faultBannerCalls, 1);
       h.controller.onCloudSyncFault('d1', 'push_rejected', 5);
-      expect(h.faultBannerCalls, 1,
-          reason: 'B3: the banner shows once per stuck episode');
+      expect(
+        h.faultBannerCalls,
+        1,
+        reason: 'B3: the banner shows once per stuck episode',
+      );
     });
 
     test('an unmounted shell never raises the banner', () {
@@ -479,19 +557,24 @@ void main() {
       expect(h.hideFaultBannerCalls, 1);
     });
 
-    test('an editor fault with a live cloud session routes to the same banner',
-        () {
-      final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
-      h.tabs[0].cloudSession = _cloudSession('d1');
-      h.controller.onEditorFault(StateError('outbox append failed'), 4);
-      expect(h.faultBannerCalls, 1);
-    });
+    test(
+      'an editor fault with a live cloud session routes to the same banner',
+      () {
+        final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
+        h.tabs[0].cloudSession = _cloudSession('d1');
+        h.controller.onEditorFault(StateError('outbox append failed'), 4);
+        expect(h.faultBannerCalls, 1);
+      },
+    );
 
     test('an editor fault with no cloud session only logs', () {
       final h = _Harness();
       h.controller.onEditorFault(StateError('x'), 9);
-      expect(h.faultBannerCalls, 0,
-          reason: 'local-only mode: nothing to re-bootstrap, log only');
+      expect(
+        h.faultBannerCalls,
+        0,
+        reason: 'local-only mode: nothing to re-bootstrap, log only',
+      );
     });
   });
 
@@ -502,12 +585,14 @@ void main() {
       h.tabs[0].cloudSession = _ReadySession();
       h.activeBoot = _boot('d1');
       h.controller.handleRemoteSeq('d1', 10);
-      expect(h.refreshBootstrapCalls, isEmpty,
-          reason: 'yrs owns the doc → op seq notifications are stale noise');
+      expect(
+        h.refreshBootstrapCalls,
+        isEmpty,
+        reason: 'yrs owns the doc → op seq notifications are stale noise',
+      );
     });
 
-    test('a burst of seq bumps collapses into ONE delayed refetch',
-        () async {
+    test('a burst of seq bumps collapses into ONE delayed refetch', () async {
       final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
       h.sessions.restore(_session(), [_ws()], _ws(), const {});
       h.activeBoot = _boot('d1');
@@ -523,8 +608,11 @@ void main() {
       h.activeBoot = _boot('d1');
       h.controller.handleRemoteSeq('d1', 5);
       await Future<void>.delayed(const Duration(milliseconds: 40));
-      expect(h.refreshBootstrapCalls, isEmpty,
-          reason: 'the 120ms debounce absorbs a burst before firing');
+      expect(
+        h.refreshBootstrapCalls,
+        isEmpty,
+        reason: 'the 120ms debounce absorbs a burst before firing',
+      );
     });
 
     test('a seq at or below currentSeq is our own echo', () async {
@@ -532,8 +620,11 @@ void main() {
       h.activeBoot = _boot('d1', currentSeq: 5);
       h.controller.handleRemoteSeq('d1', 5);
       await Future<void>.delayed(const Duration(milliseconds: 250));
-      expect(h.refreshBootstrapCalls, isEmpty,
-          reason: 'our own edits already advanced currentSeq; echo ignored');
+      expect(
+        h.refreshBootstrapCalls,
+        isEmpty,
+        reason: 'our own edits already advanced currentSeq; echo ignored',
+      );
     });
 
     test('a seq for a different document is ignored', () async {
@@ -573,10 +664,16 @@ void main() {
       );
       await h.controller.sweepPendingOutboxes();
       expect(swept, containsAll(['d1', 'd2']));
-      expect(swept, isNot(contains('d0')),
-          reason: 'the active doc is drained by its own live session');
-      expect(swept, isNot(contains('f1')),
-          reason: 'folders have no document to drain');
+      expect(
+        swept,
+        isNot(contains('d0')),
+        reason: 'the active doc is drained by its own live session',
+      );
+      expect(
+        swept,
+        isNot(contains('f1')),
+        reason: 'folders have no document to drain',
+      );
     });
 
     test('a store with nothing pending is never connected', () async {
@@ -590,8 +687,11 @@ void main() {
         (workspaceId, docId, s) async => fail('never connected'),
       );
       await h.controller.sweepPendingOutboxes();
-      expect(store.disposed, isTrue,
-          reason: 'a doc with nothing pending is never even connected');
+      expect(
+        store.disposed,
+        isTrue,
+        reason: 'a doc with nothing pending is never even connected',
+      );
     });
 
     test('is re-entrancy guarded (no double sweep)', () async {
@@ -611,8 +711,11 @@ void main() {
       final a = h.controller.sweepPendingOutboxes();
       final b = h.controller.sweepPendingOutboxes();
       await Future.wait([a, b]);
-      expect(maxInFlight, 1,
-          reason: 'the sweep guard admits one cross-document drain at a time');
+      expect(
+        maxInFlight,
+        1,
+        reason: 'the sweep guard admits one cross-document drain at a time',
+      );
     });
 
     test('web never sweeps', () async {
@@ -626,39 +729,46 @@ void main() {
       await h.controller.sweepPendingOutboxes();
     });
 
-    test('no client id yet means no sweep (nothing CRDT-side ever opened)',
-        () async {
-      final h = _Harness(tabs: [_Tab(documentId: 'd0')])
-        ..deviceClientId = null;
-      h.sessions.restore(_session(), [_ws()], _ws(), const {});
-      h.sessions.replaceViews('w1', [_viewOf('d1')]);
-      h.stores['d1'] = _FakeDocStore(hasPending: true);
-      h.controller.debugSetSweepDrain(
-        (workspaceId, docId, store) async => fail('no client id, no sweep'),
-      );
-      await h.controller.sweepPendingOutboxes();
-    });
+    test(
+      'no client id yet means no sweep (nothing CRDT-side ever opened)',
+      () async {
+        final h = _Harness(tabs: [_Tab(documentId: 'd0')])
+          ..deviceClientId = null;
+        h.sessions.restore(_session(), [_ws()], _ws(), const {});
+        h.sessions.replaceViews('w1', [_viewOf('d1')]);
+        h.stores['d1'] = _FakeDocStore(hasPending: true);
+        h.controller.debugSetSweepDrain(
+          (workspaceId, docId, store) async => fail('no client id, no sweep'),
+        );
+        await h.controller.sweepPendingOutboxes();
+      },
+    );
 
-    test('a mid-sweep activation of a doc skips it (live session owns it)',
-        () async {
-      final h = _Harness(tabs: [_Tab(documentId: 'd0')]);
-      h.sessions.restore(_session(), [_ws()], _ws(), const {});
-      await h.openDocument('d0'); // learn the client id
-      h.sessions.replaceViews('w1', [_viewOf('d1'), _viewOf('d2')]);
-      h.stores['d1'] = _FakeDocStore(hasPending: true);
-      h.stores['d2'] = _FakeDocStore(hasPending: true);
-      final swept = <String>[];
-      h.controller.debugSetSweepDrain((workspaceId, docId, store) async {
-        // d1's drain flips the active tab onto d1 mid-sweep.
-        if (docId == 'd1') {
-          h.tabs[0].documentId = 'd2';
-        }
-        swept.add(docId);
-      });
-      await h.controller.sweepPendingOutboxes();
-      expect(swept, isNot(contains('d2')),
-          reason: 'a doc opened mid-sweep is now the active one, drained live');
-    });
+    test(
+      'a mid-sweep activation of a doc skips it (live session owns it)',
+      () async {
+        final h = _Harness(tabs: [_Tab(documentId: 'd0')]);
+        h.sessions.restore(_session(), [_ws()], _ws(), const {});
+        await h.openDocument('d0'); // learn the client id
+        h.sessions.replaceViews('w1', [_viewOf('d1'), _viewOf('d2')]);
+        h.stores['d1'] = _FakeDocStore(hasPending: true);
+        h.stores['d2'] = _FakeDocStore(hasPending: true);
+        final swept = <String>[];
+        h.controller.debugSetSweepDrain((workspaceId, docId, store) async {
+          // d1's drain flips the active tab onto d1 mid-sweep.
+          if (docId == 'd1') {
+            h.tabs[0].documentId = 'd2';
+          }
+          swept.add(docId);
+        });
+        await h.controller.sweepPendingOutboxes();
+        expect(
+          swept,
+          isNot(contains('d2')),
+          reason: 'a doc opened mid-sweep is now the active one, drained live',
+        );
+      },
+    );
   });
 
   group('unacked prefs (legacy path)', () {
@@ -683,26 +793,43 @@ void main() {
 
     test('saveUnacked round-trips and clears on empty', () {
       final h = _Harness();
-      h.controller.saveUnacked('k', [Uint8List.fromList([9])]);
-      expect(h.prefs['k'], jsonEncode([base64.encode([9])]));
+      h.controller.saveUnacked('k', [
+        Uint8List.fromList([9]),
+      ]);
+      expect(
+        h.prefs['k'],
+        jsonEncode([
+          base64.encode([9]),
+        ]),
+      );
       h.controller.saveUnacked('k', const []);
       expect(h.prefs['k'], '');
     });
 
-    test('a legacy prefs queue migrates into the store, then the key clears',
-        () async {
-      final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
-      h.sessions.restore(_session(), [_ws()], _ws(), const {});
-      final store = _FakeDocStore();
-      h.stores['d1'] = store;
-      h.prefs['cloudUnacked:d1'] = jsonEncode([base64.encode([9])]);
-      h.controller.reconcile();
-      await Future<void>.delayed(Duration.zero);
-      expect(store.appended.length, 1,
-          reason: 'legacy prefs entries fold into the durable append-log');
-      expect(h.prefs['cloudUnacked:d1'], '',
-          reason: 'append THEN delete; the reverse drops in-flight edits');
-    });
+    test(
+      'a legacy prefs queue migrates into the store, then the key clears',
+      () async {
+        final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
+        h.sessions.restore(_session(), [_ws()], _ws(), const {});
+        final store = _FakeDocStore();
+        h.stores['d1'] = store;
+        h.prefs['cloudUnacked:d1'] = jsonEncode([
+          base64.encode([9]),
+        ]);
+        h.controller.reconcile();
+        await Future<void>.delayed(Duration.zero);
+        expect(
+          store.appended.length,
+          1,
+          reason: 'legacy prefs entries fold into the durable append-log',
+        );
+        expect(
+          h.prefs['cloudUnacked:d1'],
+          '',
+          reason: 'append THEN delete; the reverse drops in-flight edits',
+        );
+      },
+    );
   });
 
   test('dispose cancels the timers and the views-events socket', () async {
