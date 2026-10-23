@@ -1306,28 +1306,6 @@ Set<String> ancestorIds(Iterable<DocumentView> views, String id) {
   return out;
 }
 
-Set<String> collectSubtreeIds(
-  Iterable<({String id, String? parentId})> nodes,
-  String rootId,
-) {
-  final byParent = <String?, List<String>>{};
-  var hasRoot = false;
-  for (final n in nodes) {
-    (byParent[n.parentId] ??= <String>[]).add(n.id);
-    if (n.id == rootId) hasRoot = true;
-  }
-  if (!hasRoot) return <String>{};
-  final out = <String>{};
-  final stack = <String>[rootId];
-  while (stack.isNotEmpty) {
-    final id = stack.removeLast();
-    if (!out.add(id)) continue; // already visited → cycle guard
-    final kids = byParent[id];
-    if (kids != null) stack.addAll(kids);
-  }
-  return out;
-}
-
 class DocumentRecord {
   const DocumentRecord({
     required this.id,

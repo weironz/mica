@@ -32,7 +32,6 @@ pub enum DocumentOperation {
   },
 }
 
-
 pub fn apply_operations(
   mut snapshot: DocumentSnapshotPayload,
   operations: &[DocumentOperation],
@@ -80,7 +79,6 @@ fn apply_operation(
     } => move_block(snapshot, block_id, parent_id, *index),
   }
 }
-
 
 fn insert_block(
   snapshot: &mut DocumentSnapshotPayload,
@@ -233,7 +231,6 @@ fn validate_block(block: &Block) -> DocumentOperationResult<()> {
 
   Ok(())
 }
-
 
 fn insert_child(children: &mut Vec<String>, block_id: String, index: Option<usize>) {
   let index = index.unwrap_or(children.len()).min(children.len());
@@ -427,7 +424,10 @@ mod tests {
       }],
     )
     .expect_err("insert with children must be rejected");
-    assert!(matches!(err, DocumentOperationError::InsertBlockWithChildren));
+    assert!(matches!(
+      err,
+      DocumentOperationError::InsertBlockWithChildren
+    ));
   }
 
   #[test]
@@ -725,4 +725,3 @@ mod tests {
     assert_eq!(html, "<p>a &lt; b &amp; c</p>");
   }
 }
-

@@ -31,7 +31,9 @@ pub fn config_path() -> Result<PathBuf> {
   } else if let Ok(appdata) = std::env::var("APPDATA") {
     PathBuf::from(appdata)
   } else {
-    anyhow::bail!("cannot locate a config dir — set MICA_CONFIG, HOME, XDG_CONFIG_HOME, or APPDATA");
+    anyhow::bail!(
+      "cannot locate a config dir — set MICA_CONFIG, HOME, XDG_CONFIG_HOME, or APPDATA"
+    );
   };
   Ok(base.join("mica").join("config.json"))
 }
@@ -90,8 +92,14 @@ mod tests {
     let cfg = Config::default();
     assert_eq!(serde_json::to_string(&cfg).unwrap(), "{}");
 
-    let cfg = Config { server: Some("https://s".to_string()), token: None };
-    assert_eq!(serde_json::to_string(&cfg).unwrap(), r#"{"server":"https://s"}"#);
+    let cfg = Config {
+      server: Some("https://s".to_string()),
+      token: None,
+    };
+    assert_eq!(
+      serde_json::to_string(&cfg).unwrap(),
+      r#"{"server":"https://s"}"#
+    );
   }
 
   #[test]

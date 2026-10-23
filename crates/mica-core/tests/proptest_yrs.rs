@@ -22,14 +22,14 @@ const TEXT: &str = "hello world";
 
 /// A small, valid document — the base the mutation strategies corrupt.
 fn sample_state() -> Vec<u8> {
-    MicaDoc::from_blocks(
-        "r",
-        &[
-            Block::new("r", "page").with_children(vec!["a".into()]),
-            Block::new("a", "paragraph").with_text(TEXT),
-        ],
-    )
-    .encode_state()
+  MicaDoc::from_blocks(
+    "r",
+    &[
+      Block::new("r", "page").with_children(vec!["a".into()]),
+      Block::new("a", "paragraph").with_text(TEXT),
+    ],
+  )
+  .encode_state()
 }
 
 proptest! {
@@ -96,26 +96,35 @@ proptest! {
 /// yrs 0.27.3 aborted instead of returning an allocation/decode error.
 #[test]
 fn the_21_byte_allocation_bomb_is_rejected() {
-    let hex = "d7548f54770c78002d677698fbbfd5f35730ee3240";
-    let bytes: Vec<u8> = (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-        .collect();
-    assert!(matches!(MicaDoc::from_update(&bytes), Err(DocError::Decode(_))));
-    let mut doc = MicaDoc::from_update(&sample_state()).expect("sample decodes");
-    assert!(matches!(doc.apply_update(&bytes), Err(DocError::Decode(_))));
+  let hex = "d7548f54770c78002d677698fbbfd5f35730ee3240";
+  let bytes: Vec<u8> = (0..hex.len())
+    .step_by(2)
+    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+    .collect();
+  assert!(matches!(
+    MicaDoc::from_update(&bytes),
+    Err(DocError::Decode(_))
+  ));
+  let mut doc = MicaDoc::from_update(&sample_state()).expect("sample decodes");
+  assert!(matches!(doc.apply_update(&bytes), Err(DocError::Decode(_))));
 }
 
 /// Locate the text rather than a byte offset: client IDs and map ordering vary.
 /// Changing ASCII to 0xff keeps the lengths valid but makes the UTF-8 invalid.
 #[test]
 fn invalid_utf8_is_rejected_by_decode_and_apply() {
-    let good = sample_state();
-    let mut doc = MicaDoc::from_update(&good).expect("sample decodes");
-    assert!(doc.apply_update(&good).is_ok(), "valid baseline applies");
-    let mut bad = good;
-    let at = bad.windows(TEXT.len()).position(|w| w == TEXT.as_bytes()).expect("encoded text");
-    bad[at] = 0xff;
-    assert!(matches!(MicaDoc::from_update(&bad), Err(DocError::Decode(_))));
-    assert!(matches!(doc.apply_update(&bad), Err(DocError::Decode(_))));
+  let good = sample_state();
+  let mut doc = MicaDoc::from_update(&good).expect("sample decodes");
+  assert!(doc.apply_update(&good).is_ok(), "valid baseline applies");
+  let mut bad = good;
+  let at = bad
+    .windows(TEXT.len())
+    .position(|w| w == TEXT.as_bytes())
+    .expect("encoded text");
+  bad[at] = 0xff;
+  assert!(matches!(
+    MicaDoc::from_update(&bad),
+    Err(DocError::Decode(_))
+  ));
+  assert!(matches!(doc.apply_update(&bad), Err(DocError::Decode(_))));
 }

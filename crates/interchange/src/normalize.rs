@@ -38,7 +38,10 @@ pub fn normalize_entries(entries: Vec<ZipFileEntry>) -> Vec<ZipFileEntry> {
     let cut = top.len() + 1;
     out = out
       .into_iter()
-      .map(|e| ZipFileEntry { name: e.name[cut..].to_string(), bytes: e.bytes })
+      .map(|e| ZipFileEntry {
+        name: e.name[cut..].to_string(),
+        bytes: e.bytes,
+      })
       .collect();
   }
   out
@@ -103,7 +106,10 @@ fn is_junk(path: &str) -> bool {
 /// Expand archives nested one level inside [entries]; inner content is
 /// normalized, unreadable inner archives are dropped.
 pub fn expand_nested_zips(entries: Vec<ZipFileEntry>) -> Vec<ZipFileEntry> {
-  if !entries.iter().any(|e| e.name.to_lowercase().ends_with(".zip")) {
+  if !entries
+    .iter()
+    .any(|e| e.name.to_lowercase().ends_with(".zip"))
+  {
     return entries;
   }
   let mut out = Vec::new();

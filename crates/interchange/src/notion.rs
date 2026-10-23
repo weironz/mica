@@ -6,7 +6,11 @@
 /// 32-hex run or a dashed UUID, separated by space/`-`/`_`. No-op for
 /// ordinary names.
 pub fn strip_notion_id(segment: &str) -> &str {
-  if let Some(cut) = suffix_start(segment) { &segment[..cut] } else { segment }
+  if let Some(cut) = suffix_start(segment) {
+    &segment[..cut]
+  } else {
+    segment
+  }
 }
 
 fn suffix_start(segment: &str) -> Option<usize> {
@@ -79,4 +83,3 @@ fn base_no_ext(path: &str) -> &str {
   let base = path.rsplit('/').next().unwrap_or(path);
   crate::import::strip_md_ext(base)
 }
-

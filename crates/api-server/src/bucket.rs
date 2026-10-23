@@ -17,7 +17,7 @@
 //! and the survey of how Gitea / Nextcloud / AFFiNE handle this, is in
 //! `docs/ops/bucket-provisioning-plan.md`.
 
-use mica_infra::{classify_create, classify_head, BucketProbe, CreateOutcome, S3Config};
+use mica_infra::{BucketProbe, CreateOutcome, S3Config, classify_create, classify_head};
 use tracing::{error, info, warn};
 
 /// Probe for the bucket and create it if it is provably absent.
@@ -29,62 +29,62 @@ use tracing::{error, info, warn};
 /// text half works fine without attachments. Every path that cannot be fixed
 /// from here logs at ERROR with what to do instead.
 pub async fn ensure_bucket(storage: &S3Config) {
-    let http = reqwest::Client::new();
+  let http = reqwest::Client::new();
 
-    let probe = match http.head(storage.presign_head_bucket()).send().await {
-        Ok(response) => classify_head(response.status().as_u16()),
-        // A transport error is not evidence of absence — the store may simply
-        // not be up yet while this container is. Say so and move on rather than
-        // creating anything.
-        Err(err) => {
-            warn!("could not probe the object-store bucket ({err}); assuming it exists");
-            return;
-        }
-    };
-
-    match probe {
-        BucketProbe::Exists => return,
-        BucketProbe::Unknown => {
-            // Almost always credentials scoped to one bucket: they can read and
-            // write objects but not introspect the bucket. Creating on this
-            // signal is the Nextcloud bug (nextcloud/server#36427).
-            info!("object-store bucket could not be introspected; assuming it exists");
-            return;
-        }
-        BucketProbe::Missing => {}
+  let probe = match http.head(storage.presign_head_bucket()).send().await {
+    Ok(response) => classify_head(response.status().as_u16()),
+    // A transport error is not evidence of absence — the store may simply
+    // not be up yet while this container is. Say so and move on rather than
+    // creating anything.
+    Err(err) => {
+      warn!("could not probe the object-store bucket ({err}); assuming it exists");
+      return;
     }
+  };
 
-    let mut request = http.put(storage.presign_create_bucket());
-    if let Some(body) = storage.create_bucket_body() {
-        request = request.body(body);
+  match probe {
+    BucketProbe::Exists => return,
+    BucketProbe::Unknown => {
+      // Almost always credentials scoped to one bucket: they can read and
+      // write objects but not introspect the bucket. Creating on this
+      // signal is the Nextcloud bug (nextcloud/server#36427).
+      info!("object-store bucket could not be introspected; assuming it exists");
+      return;
     }
+    BucketProbe::Missing => {}
+  }
 
-    let response = match request.send().await {
-        Ok(response) => response,
-        Err(err) => {
-            error!("object-store bucket is missing and creating it failed: {err}");
-            return;
-        }
-    };
+  let mut request = http.put(storage.presign_create_bucket());
+  if let Some(body) = storage.create_bucket_body() {
+    request = request.body(body);
+  }
 
-    let status = response.status().as_u16();
-    let body = response.text().await.unwrap_or_default();
+  let response = match request.send().await {
+    Ok(response) => response,
+    Err(err) => {
+      error!("object-store bucket is missing and creating it failed: {err}");
+      return;
+    }
+  };
 
-    match classify_create(status, &body) {
-        CreateOutcome::Created => info!("created the object-store bucket"),
-        CreateOutcome::AlreadyOurs => info!("object-store bucket already existed"),
-        CreateOutcome::Denied => error!(
-            "the object-store bucket does not exist and these credentials may not create it. \
+  let status = response.status().as_u16();
+  let body = response.text().await.unwrap_or_default();
+
+  match classify_create(status, &body) {
+    CreateOutcome::Created => info!("created the object-store bucket"),
+    CreateOutcome::AlreadyOurs => info!("object-store bucket already existed"),
+    CreateOutcome::Denied => error!(
+      "the object-store bucket does not exist and these credentials may not create it. \
              Create it yourself, or use credentials that can — until then every file upload \
              will fail."
-        ),
-        CreateOutcome::NameTaken => error!(
-            "the object-store bucket name is already taken by another account (S3 bucket names \
+    ),
+    CreateOutcome::NameTaken => error!(
+      "the object-store bucket name is already taken by another account (S3 bucket names \
              are globally unique on AWS). Pick a different S3_BUCKET — every file upload will \
              fail until you do."
-        ),
-        CreateOutcome::Failed { status } => error!(
-            "the object-store bucket does not exist and creating it returned {status}: {body}"
-        ),
+    ),
+    CreateOutcome::Failed { status } => {
+      error!("the object-store bucket does not exist and creating it returned {status}: {body}")
     }
+  }
 }

@@ -20,7 +20,10 @@ fn strong_closes_after_cjk_period() {
     "<p>结论：<strong>不能只靠日志。</strong>它是入口</p>",
   );
   // Japanese / Korean forms from the reference implementation.
-  html_eq("**この文章。**次の文\n", "<p><strong>この文章。</strong>次の文</p>");
+  html_eq(
+    "**この文章。**次の文\n",
+    "<p><strong>この文章。</strong>次の文</p>",
+  );
   html_eq(
     "**이 별표。**이 문장\n",
     "<p><strong>이 별표。</strong>이 문장</p>",

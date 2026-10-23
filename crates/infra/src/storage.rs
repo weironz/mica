@@ -265,7 +265,11 @@ impl S3Config {
   ) -> String {
     let (base_url, host, canonical_uri) = self.bucket_location();
     let limit = max_keys.clamp(1, 1000).to_string();
-    let mut query = vec![("list-type", "2"), ("prefix", prefix), ("max-keys", limit.as_str())];
+    let mut query = vec![
+      ("list-type", "2"),
+      ("prefix", prefix),
+      ("max-keys", limit.as_str()),
+    ];
     if let Some(token) = continuation_token {
       query.push(("continuation-token", token));
     }
@@ -494,9 +498,16 @@ fn sign_presigned_with_query(
     ("X-Amz-Credential".to_string(), credential),
     ("X-Amz-Date".to_string(), amz_date.clone()),
     ("X-Amz-Expires".to_string(), request.expires_in.to_string()),
-    ("X-Amz-SignedHeaders".to_string(), signed_headers.to_string()),
+    (
+      "X-Amz-SignedHeaders".to_string(),
+      signed_headers.to_string(),
+    ),
   ];
-  params.extend(extra_query.iter().map(|(key, value)| (key.to_string(), value.to_string())));
+  params.extend(
+    extra_query
+      .iter()
+      .map(|(key, value)| (key.to_string(), value.to_string())),
+  );
   params.sort_by(|a, b| a.0.cmp(&b.0));
 
   let canonical_query = params
@@ -756,8 +767,13 @@ mod tests {
     assert_eq!(config.create_bucket_body(), None);
 
     config.region = "eu-west-1".to_string();
-    let body = config.create_bucket_body().expect("non-default region states itself");
-    assert!(body.contains("<LocationConstraint>eu-west-1</LocationConstraint>"), "{body}");
+    let body = config
+      .create_bucket_body()
+      .expect("non-default region states itself");
+    assert!(
+      body.contains("<LocationConstraint>eu-west-1</LocationConstraint>"),
+      "{body}"
+    );
   }
 
   /// The split that makes server-side S3 work at all: what the BROWSER is sent
@@ -797,14 +813,36 @@ mod tests {
   /// THE BUG (B4): executable types on the same-site storage origin.
   #[test]
   fn executable_types_are_stored_as_downloads_and_the_rest_as_declared() {
-    for t in ["text/html", "TEXT/HTML; charset=utf-8", "image/svg+xml", "application/xml",
-              "application/atom+xml", "text/javascript", "", "*/*", "garbage"] {
+    for t in [
+      "text/html",
+      "TEXT/HTML; charset=utf-8",
+      "image/svg+xml",
+      "application/xml",
+      "application/atom+xml",
+      "text/javascript",
+      "",
+      "*/*",
+      "garbage",
+    ] {
       assert_eq!(stored_content_type(t), "application/octet-stream", "{t:?}");
     }
-    for t in ["image/png", "image/jpeg", "application/pdf", "text/plain; charset=utf-8", "video/mp4"] {
-      assert_eq!(stored_content_type(t), t, "{t:?} is kept verbatim (the client sends it)");
+    for t in [
+      "image/png",
+      "image/jpeg",
+      "application/pdf",
+      "text/plain; charset=utf-8",
+      "video/mp4",
+    ] {
+      assert_eq!(
+        stored_content_type(t),
+        t,
+        "{t:?} is kept verbatim (the client sends it)"
+      );
     }
-    assert_eq!(stored_content_type("  text/plain;  charset=utf-8 "), "text/plain; charset=utf-8");
+    assert_eq!(
+      stored_content_type("  text/plain;  charset=utf-8 "),
+      "text/plain; charset=utf-8"
+    );
   }
 
   #[test]
@@ -815,9 +853,11 @@ mod tests {
       "X-Amz-SignedHeaders=content-length%3Bcontent-type%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256"
     ));
     assert_ne!(upload.url, config.presign_put("a/b.png").url);
-    assert!(config
-      .presign_head_object_with_checksum("a/b.png")
-      .contains("X-Amz-SignedHeaders=host%3Bx-amz-checksum-mode"));
+    assert!(
+      config
+        .presign_head_object_with_checksum("a/b.png")
+        .contains("X-Amz-SignedHeaders=host%3Bx-amz-checksum-mode")
+    );
   }
 
   #[test]
@@ -837,9 +877,11 @@ mod tests {
   fn without_an_internal_endpoint_everything_uses_the_public_one() {
     let config = test_config(true, None);
     assert_eq!(config.server_endpoint(), "http://localhost:9000");
-    assert!(config
-      .presign_head_bucket()
-      .starts_with("http://localhost:9000/mica?"));
+    assert!(
+      config
+        .presign_head_bucket()
+        .starts_with("http://localhost:9000/mica?")
+    );
   }
 
   #[test]
@@ -866,7 +908,10 @@ mod tests {
       CreateOutcome::NameTaken
     );
     assert_eq!(classify_create(403, ""), CreateOutcome::Denied);
-    assert_eq!(classify_create(500, ""), CreateOutcome::Failed { status: 500 });
+    assert_eq!(
+      classify_create(500, ""),
+      CreateOutcome::Failed { status: 500 }
+    );
   }
 
   #[test]
@@ -910,7 +955,11 @@ mod tests {
       DEFAULT,
       "compose resolves an unset ${{VAR:-}} to empty, NOT to absent"
     );
-    assert_eq!(max_upload_bytes(Some("   ")), DEFAULT, "whitespace is blank");
+    assert_eq!(
+      max_upload_bytes(Some("   ")),
+      DEFAULT,
+      "whitespace is blank"
+    );
     assert_eq!(max_upload_bytes(Some("abc")), DEFAULT, "garbage");
 
     // A real value wins, whitespace and all.

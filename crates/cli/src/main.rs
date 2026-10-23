@@ -27,7 +27,11 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Parser)]
-#[command(name = "mica-cli", version, about = "Command-line client for a Mica server")]
+#[command(
+  name = "mica-cli",
+  version,
+  about = "Command-line client for a Mica server"
+)]
 struct Cli {
   /// Server base URL, e.g. https://mica.example.com (overrides the saved config).
   #[arg(long, global = true, env = "MICA_SERVER")]
@@ -483,7 +487,10 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
     None => HashMap::new(),
   };
   if !remap.is_empty() && !cli.json {
-    println!("Remapping {} image(s) to a replacement source.", remap.len());
+    println!(
+      "Remapping {} image(s) to a replacement source.",
+      remap.len()
+    );
   }
   let to_drop: std::collections::HashSet<String> = match &args.drop {
     Some(path) => parse_url_list(
@@ -496,7 +503,11 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
   }
   let workspaces: Vec<Uuid> = match args.ws {
     Some(ws) => vec![ws],
-    None => client.list_workspaces()?.into_iter().map(|w| w.id).collect(),
+    None => client
+      .list_workspaces()?
+      .into_iter()
+      .map(|w| w.id)
+      .collect(),
   };
 
   let (mut rehosted, mut dropped, mut failed) = (0usize, 0usize, 0usize);
@@ -548,7 +559,11 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
           Ok(()) => {
             rehosted += 1;
             if !cli.json {
-              let via = if source == url { String::new() } else { format!(" (via {source})") };
+              let via = if source == url {
+                String::new()
+              } else {
+                format!(" (via {source})")
+              };
               println!("  re-hosted [{}] {url}{via}", view.name);
             }
           }
@@ -577,7 +592,10 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
 
 fn cmd_import(cli: &Cli, cfg: &Config, args: &ImportArgs) -> Result<()> {
   if args.name.is_some() && args.archives.len() > 1 {
-    bail!("--name works with one archive; {} were given (drop it and each is named after its file)", args.archives.len());
+    bail!(
+      "--name works with one archive; {} were given (drop it and each is named after its file)",
+      args.archives.len()
+    );
   }
   let client = authed_client(cli, cfg)?;
   let mut results: Vec<serde_json::Value> = Vec::new();
@@ -585,8 +603,14 @@ fn cmd_import(cli: &Cli, cfg: &Config, args: &ImportArgs) -> Result<()> {
   for path in &args.archives {
     let zip = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     // Workspace name from the filename, the way the app names an import.
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Imported");
-    let name = args.name.as_deref().or(if args.ws.is_some() { None } else { Some(stem) });
+    let stem = path
+      .file_stem()
+      .and_then(|s| s.to_str())
+      .unwrap_or("Imported");
+    let name = args
+      .name
+      .as_deref()
+      .or(if args.ws.is_some() { None } else { Some(stem) });
 
     if !cli.json {
       println!("==> {} ({} bytes)", path.display(), zip.len());
@@ -625,13 +649,20 @@ fn cmd_import(cli: &Cli, cfg: &Config, args: &ImportArgs) -> Result<()> {
           if job.skipped.is_empty() {
             String::new()
           } else {
-            format!(", {} archive entry(ies) unreferenced and skipped", job.skipped.len())
+            format!(
+              ", {} archive entry(ies) unreferenced and skipped",
+              job.skipped.len()
+            )
           }
         ),
         other => eprintln!(
           "    {other}: {} page(s) landed{}",
           job.done,
-          job.error.as_deref().map(|e| format!(" — {e}")).unwrap_or_default()
+          job
+            .error
+            .as_deref()
+            .map(|e| format!(" — {e}"))
+            .unwrap_or_default()
         ),
       }
       if let Some(ws) = job.workspace_id {
@@ -669,13 +700,20 @@ fn print_views(views: &[client::View], with_stats: bool) {
     return;
   }
   for v in views {
-    let kind = if v.object_type == "folder" { "folder" } else { "page  " };
+    let kind = if v.object_type == "folder" {
+      "folder"
+    } else {
+      "page  "
+    };
     let size = match (with_stats, v.state_bytes) {
       (true, Some(bytes)) => format!("  {bytes:>9}"),
       (true, None) => "          -".to_string(),
       _ => String::new(),
     };
-    println!("{kind}  view={}  object={}{size}  {}", v.id, v.object_id, v.name);
+    println!(
+      "{kind}  view={}  object={}{size}  {}",
+      v.id, v.object_id, v.name
+    );
   }
   println!("\n{} view(s).", views.len());
 }
@@ -718,15 +756,25 @@ fn cmd_page_read(cli: &Cli, cfg: &Config, args: &PageReadArgs) -> Result<()> {
     print_json(&result)?;
     return Ok(());
   }
-  for doc in result.get("documents").and_then(|d| d.as_array()).unwrap_or(&vec![]) {
-    let id = doc.get("document_id").and_then(|v| v.as_str()).unwrap_or("?");
+  for doc in result
+    .get("documents")
+    .and_then(|d| d.as_array())
+    .unwrap_or(&vec![])
+  {
+    let id = doc
+      .get("document_id")
+      .and_then(|v| v.as_str())
+      .unwrap_or("?");
     match doc.get("error").and_then(|v| v.as_str()) {
       // Named, not swallowed: a survey that quietly drops pages is worse than
       // one that says which it could not read.
       Some(error) => eprintln!("--- {id}: {error}"),
       None => {
         println!("--- {id}");
-        println!("{}", doc.get("markdown").and_then(|v| v.as_str()).unwrap_or(""));
+        println!(
+          "{}",
+          doc.get("markdown").and_then(|v| v.as_str()).unwrap_or("")
+        );
       }
     }
   }
@@ -865,7 +913,11 @@ fn rehostable_image(block: &serde_json::Value) -> Option<(&str, &str)> {
   }
   let data = block.get("data")?;
   // Already a Mica file → nothing to do.
-  if data.get("file_id").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
+  if data
+    .get("file_id")
+    .and_then(|v| v.as_str())
+    .is_some_and(|s| !s.is_empty())
+  {
     return None;
   }
   let url = data
@@ -1068,7 +1120,10 @@ fn cmd_backup_daemon(cli: &Cli, cfg: &Config) -> Result<()> {
         backup::ping_healthcheck("");
       }
       Err(error) => {
-        eprintln!("[{}] mica-backup: run FAILED — {error:#}", chrono::Local::now().to_rfc3339());
+        eprintln!(
+          "[{}] mica-backup: run FAILED — {error:#}",
+          chrono::Local::now().to_rfc3339()
+        );
         backup::ping_healthcheck("/fail");
       }
     }
@@ -1361,7 +1416,11 @@ mod tests {
     // Legacy name leads — that is the order `mcp` always had and the order the
     // MCP doc states, so unifying must not quietly reverse it.
     assert_eq!(
-      pick_server(Some("https://flag"), Some("https://legacy"), Some("https://saved")),
+      pick_server(
+        Some("https://flag"),
+        Some("https://legacy"),
+        Some("https://saved")
+      ),
       Some("https://legacy".to_string())
     );
     // With no legacy variable set, --server / MICA_SERVER wins over the saved
@@ -1403,7 +1462,10 @@ mod tests {
       pick_token(None, Some("pat"), Some("saved")).as_deref(),
       Some("pat")
     );
-    assert_eq!(pick_token(None, None, Some("saved")).as_deref(), Some("saved"));
+    assert_eq!(
+      pick_token(None, None, Some("saved")).as_deref(),
+      Some("saved")
+    );
   }
 
   #[test]
@@ -1478,7 +1540,10 @@ mod tests {
        https://dead.example.com/c.png\n",
     );
     assert_eq!(m.len(), 2, "a line with no separator is not a mapping");
-    assert_eq!(m["https://dead.example.com/a.png"], "https://live.example.com/a.png");
+    assert_eq!(
+      m["https://dead.example.com/a.png"],
+      "https://live.example.com/a.png"
+    );
     assert_eq!(
       m["https://dead.example.com/b.png"], "https://live.example.com/b.png",
       "comma is accepted when there is no tab"
@@ -1524,7 +1589,11 @@ mod tests {
       "type": "image",
       "data": { "file_id": "7f3d1c92-0000-4000-8000-0000000000aa", "url": "" }
     });
-    assert_eq!(rehostable_image(&already_ours), None, "already in Mica storage");
+    assert_eq!(
+      rehostable_image(&already_ours),
+      None,
+      "already in Mica storage"
+    );
 
     // Import leftovers point at paths, not hosts; there is nothing to download.
     for url in ["assets/图片.png", "data:image/png;base64,iVBORw0K", ""] {
@@ -1547,9 +1616,15 @@ mod tests {
   #[test]
   fn url_file_name_variants() {
     // Normal path → last segment.
-    assert_eq!(url_file_name("https://example.com/a/b/photo.png"), "photo.png");
+    assert_eq!(
+      url_file_name("https://example.com/a/b/photo.png"),
+      "photo.png"
+    );
     // Query string is dropped (the server derives the mime from the name).
-    assert_eq!(url_file_name("https://example.com/a/photo.png?v=123&x=y"), "photo.png");
+    assert_eq!(
+      url_file_name("https://example.com/a/photo.png?v=123&x=y"),
+      "photo.png"
+    );
     // Query directly after the segment.
     assert_eq!(url_file_name("https://example.com/img?token=abc"), "img");
     // Trailing slash → nothing usable → default.

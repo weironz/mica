@@ -12,6 +12,10 @@ anyhow.workspace = true
 # guard must judge formulas by the same rules the parser does, not its own.
 mica-markdown = { path = "../markdown" }
 reqwest = { workspace = true, features = ["json"] }
+# join_all, for the outline mode of mica_read_documents: no batch route exists
+# for outlines, so the per-doc fetches are joined in bounded waves instead of
+# awaited one at a time.
+futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

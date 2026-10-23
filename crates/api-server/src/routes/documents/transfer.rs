@@ -1,4 +1,3 @@
-
 use axum::{
   Json,
   extract::{Path, State},
@@ -14,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::routes::auth::user_id_from_headers;
 use super::*;
+use crate::routes::auth::user_id_from_headers;
 
 pub async fn move_view(
   State(state): State<AppState>,
@@ -32,26 +31,16 @@ pub async fn move_view(
   }
 
   let position = normalize_position(payload.position)?;
-  let view = sqlx::query_as::<_, View>(
+  let view = sqlx::query_as::<_, View>(concat!(
     r#"
       UPDATE views
       SET parent_view_id = $1, position = $2, updated_at = now()
       WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
       RETURNING
-        id,
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type::text AS object_type,
-        name,
-        icon,
-        position,
-        is_deleted,
-        created_by,
-        created_at,
-        updated_at
-    "#,
-  )
+        "#,
+    view_columns!(),
+    "\n    ",
+  ))
   .bind(payload.parent_view_id)
   .bind(position)
   .bind(view_id)
@@ -138,7 +127,6 @@ pub async fn reorder_views(
     reordered: payload.ordered_view_ids.len(),
   }))
 }
-
 
 /// `POST /api/workspaces/{workspace_id}/views/batch-move`
 ///
@@ -227,7 +215,6 @@ pub(super) async fn move_views_tx(
   tx.commit().await?;
   Ok(())
 }
-
 
 // transaction lets us beat. See docs/features/cross-workspace-move.md.
 
@@ -521,7 +508,9 @@ pub async fn batch_transfer_views(
   // here is a click that landed twice on a selection, which `independent_roots`
   // already collapses along with the nesting case it cannot be separated from.
   if request.view_ids.is_empty() {
-    return Err(ApiError::BadRequest("view_ids must not be empty".to_string()));
+    return Err(ApiError::BadRequest(
+      "view_ids must not be empty".to_string(),
+    ));
   }
   if request.view_ids.len() > MAX_BATCH_VIEWS {
     return Err(ApiError::BadRequest(format!(
@@ -730,7 +719,10 @@ async fn transfer_roots(
     };
     let put = http
       .put(&upload.url)
-      .header(reqwest::header::CONTENT_TYPE, mica_infra::stored_content_type(&src_file.mime_type))
+      .header(
+        reqwest::header::CONTENT_TYPE,
+        mica_infra::stored_content_type(&src_file.mime_type),
+      )
       .header("x-amz-checksum-sha256", checksum)
       .body(bytes.to_vec())
       .send()
@@ -762,9 +754,6 @@ async fn transfer_roots(
     subtree.iter().map(|r| (r.id, Uuid::new_v4())).collect();
   let ordered = topo_order_subtree(&subtree);
 
-  // Filled as the subtree is rebuilt; each copied document gets its yrs base
-  // built after the commit (see bootstrap_bases_best_effort).
-  let mut created_document_ids: Vec<Uuid> = Vec::new();
   let mut tx = state.db.begin().await?;
   for row in &ordered {
     let new_view_id = view_map[&row.id];
@@ -775,71 +764,22 @@ async fn transfer_roots(
     } else {
       row.parent_view_id.and_then(|p| view_map.get(&p).copied())
     };
-    if row.object_type == "document" {
-      let mut payload = payloads.remove(&row.object_id).unwrap_or_else(|| {
-        // Substituting an empty payload is CORRECT for a genuinely-empty doc
-        // (current_payload returns None only when no snapshot row exists). It is
-        // NOT silent anymore: the one way this loses content — a doc with a yrs
-        // base but no snapshot row — would land here, and a move then deletes the
-        // source. Logging makes that edge diagnosable instead of invisible (P0-4).
-        tracing::warn!(
-          object_id = %row.object_id,
-          "transfer/clone: no snapshot for document — substituting empty payload"
-        );
-        DocumentSnapshotPayload {
-          schema_version: 1,
-          root_block_id: "root".to_string(),
-          blocks: Vec::new(),
-        }
-      });
-      rewrite_transferred_payload(&mut payload, &file_map, &view_map);
-      let document = sqlx::query_as::<_, DocumentRecord>(
-        r#"
-          INSERT INTO documents (workspace_id, root_block_id, created_by)
-          VALUES ($1, $2, $3)
-          RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
-        "#,
-      )
-      .bind(dest_workspace_id)
-      .bind(&payload.root_block_id)
-      .bind(user_id)
-      .fetch_one(&mut *tx)
-      .await?;
-      mica_app_core::sync::seed_base_tx(&mut tx, document.id, payload).await?;
-      created_document_ids.push(document.id);
-      sqlx::query(
-        r#"
-          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
-          VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
-        "#,
-      )
-      .bind(new_view_id)
-      .bind(dest_workspace_id)
-      .bind(dest_parent)
-      .bind(document.id)
-      .bind(&row.name)
-      .bind(&row.position)
-      .bind(user_id)
-      .execute(&mut *tx)
-      .await?;
-    } else {
-      // Folder: a view with no document. object_id is a fresh unused uuid.
-      sqlx::query(
-        r#"
-          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
-          VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
-        "#,
-      )
-      .bind(new_view_id)
-      .bind(dest_workspace_id)
-      .bind(dest_parent)
-      .bind(Uuid::new_v4())
-      .bind(&row.name)
-      .bind(&row.position)
-      .bind(user_id)
-      .execute(&mut *tx)
-      .await?;
-    }
+    insert_subtree_tx(
+      &mut tx,
+      row,
+      new_view_id,
+      SubtreeNode {
+        workspace_id: dest_workspace_id,
+        user_id,
+        dest_parent,
+        name: &row.name,
+        position: &row.position,
+      },
+      &mut payloads,
+      &file_map,
+      &view_map,
+    )
+    .await?;
   }
 
   if request.remove_source {
@@ -985,9 +925,6 @@ pub async fn clone_view(
     }));
   }
 
-  // Filled as the subtree is rebuilt; each copied document gets its yrs base
-  // built after the commit (see bootstrap_bases_best_effort).
-  let mut created_document_ids: Vec<Uuid> = Vec::new();
   // 5. One transaction: build the copied tree with fresh ids. file_map is empty
   //    (blobs shared), view_map remaps in-subtree links to the new ids.
   let view_map: std::collections::HashMap<Uuid, Uuid> =
@@ -1014,70 +951,22 @@ pub async fn clone_view(
       row.position.clone()
     };
 
-    if row.object_type == "document" {
-      let mut payload = payloads.remove(&row.object_id).unwrap_or_else(|| {
-        // Substituting an empty payload is CORRECT for a genuinely-empty doc
-        // (current_payload returns None only when no snapshot row exists). It is
-        // NOT silent anymore: the one way this loses content — a doc with a yrs
-        // base but no snapshot row — would land here, and a move then deletes the
-        // source. Logging makes that edge diagnosable instead of invisible (P0-4).
-        tracing::warn!(
-          object_id = %row.object_id,
-          "transfer/clone: no snapshot for document — substituting empty payload"
-        );
-        DocumentSnapshotPayload {
-          schema_version: 1,
-          root_block_id: "root".to_string(),
-          blocks: Vec::new(),
-        }
-      });
-      rewrite_transferred_payload(&mut payload, &empty_files, &view_map);
-      let document = sqlx::query_as::<_, DocumentRecord>(
-        r#"
-          INSERT INTO documents (workspace_id, root_block_id, created_by)
-          VALUES ($1, $2, $3)
-          RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
-        "#,
-      )
-      .bind(workspace_id)
-      .bind(&payload.root_block_id)
-      .bind(user_id)
-      .fetch_one(&mut *tx)
-      .await?;
-      mica_app_core::sync::seed_base_tx(&mut tx, document.id, payload).await?;
-      created_document_ids.push(document.id);
-      sqlx::query(
-        r#"
-          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
-          VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
-        "#,
-      )
-      .bind(new_view_id)
-      .bind(workspace_id)
-      .bind(dest_parent)
-      .bind(document.id)
-      .bind(node_name)
-      .bind(&node_position)
-      .bind(user_id)
-      .execute(&mut *tx)
-      .await?;
-    } else {
-      sqlx::query(
-        r#"
-          INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
-          VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
-        "#,
-      )
-      .bind(new_view_id)
-      .bind(workspace_id)
-      .bind(dest_parent)
-      .bind(Uuid::new_v4())
-      .bind(node_name)
-      .bind(&node_position)
-      .bind(user_id)
-      .execute(&mut *tx)
-      .await?;
-    }
+    insert_subtree_tx(
+      &mut tx,
+      row,
+      new_view_id,
+      SubtreeNode {
+        workspace_id,
+        user_id,
+        dest_parent,
+        name: node_name,
+        position: &node_position,
+      },
+      &mut payloads,
+      &empty_files,
+      &view_map,
+    )
+    .await?;
   }
   tx.commit().await?;
 
@@ -1109,6 +998,99 @@ fn dedup_sibling_name(base: &str, siblings: &[String]) -> String {
 /// `document_yrs_base.link_targets` with it. A copy here would be a second source
 /// of truth for what counts as a page link.
 use mica_app_core::sync::page_link_targets;
+
+/// What ONE copied node needs that differs per call site: the destination
+/// parent (transfer anchors every root at the request's parent; clone anchors
+/// only its own root) and the name/position (clone renames and repositions
+/// only its root). Everything else about inserting it is one sequence.
+struct SubtreeNode<'a> {
+  workspace_id: Uuid,
+  user_id: Uuid,
+  dest_parent: Option<Uuid>,
+  name: &'a str,
+  position: &'a str,
+}
+
+/// Insert one copied node into the transfer/clone tree, inside the caller's
+/// transaction: for a document — a fresh `documents` row, its payload rewritten
+/// for the new home and seeded as the yrs base, plus the view; for a folder —
+/// just the view, `object_id` a fresh unused uuid. Both routes used to carry
+/// this whole branch inline, the "no snapshot" fallback inside it copied twice.
+async fn insert_subtree_tx(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  row: &TransferRow,
+  new_view_id: Uuid,
+  node: SubtreeNode<'_>,
+  payloads: &mut std::collections::HashMap<Uuid, DocumentSnapshotPayload>,
+  file_map: &std::collections::HashMap<Uuid, Uuid>,
+  view_map: &std::collections::HashMap<Uuid, Uuid>,
+) -> ApiResult<()> {
+  if row.object_type == "document" {
+    let mut payload = payloads.remove(&row.object_id).unwrap_or_else(|| {
+      // Substituting an empty payload is CORRECT for a genuinely-empty doc
+      // (current_payload returns None only when no snapshot row exists). It is
+      // NOT silent anymore: the one way this loses content — a doc with a yrs
+      // base but no snapshot row — would land here, and a move then deletes the
+      // source. Logging makes that edge diagnosable instead of invisible (P0-4).
+      tracing::warn!(
+        object_id = %row.object_id,
+        "transfer/clone: no snapshot for document — substituting empty payload"
+      );
+      DocumentSnapshotPayload {
+        schema_version: 1,
+        root_block_id: "root".to_string(),
+        blocks: Vec::new(),
+      }
+    });
+    rewrite_transferred_payload(&mut payload, file_map, view_map);
+    let document = sqlx::query_as::<_, DocumentRecord>(
+      r#"
+        INSERT INTO documents (workspace_id, root_block_id, created_by)
+        VALUES ($1, $2, $3)
+        RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
+      "#,
+    )
+    .bind(node.workspace_id)
+    .bind(&payload.root_block_id)
+    .bind(node.user_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    mica_app_core::sync::seed_base_tx(&mut *tx, document.id, payload).await?;
+    sqlx::query(
+      r#"
+        INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+        VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
+      "#,
+    )
+    .bind(new_view_id)
+    .bind(node.workspace_id)
+    .bind(node.dest_parent)
+    .bind(document.id)
+    .bind(node.name)
+    .bind(node.position)
+    .bind(node.user_id)
+    .execute(&mut **tx)
+    .await?;
+  } else {
+    // Folder: a view with no document. object_id is a fresh unused uuid.
+    sqlx::query(
+      r#"
+        INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
+        VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
+      "#,
+    )
+    .bind(new_view_id)
+    .bind(node.workspace_id)
+    .bind(node.dest_parent)
+    .bind(Uuid::new_v4())
+    .bind(node.name)
+    .bind(node.position)
+    .bind(node.user_id)
+    .execute(&mut **tx)
+    .await?;
+  }
+  Ok(())
+}
 
 /// Rewrite a transferred document's blocks for their new home: remap uploaded-
 /// image `file_id`s to the destination copies, and remap in-subtree page links to
@@ -1282,7 +1264,10 @@ mod tests {
       "X 副本 3"
     );
     // Unrelated siblings never force a suffix.
-    assert_eq!(dedup_sibling_name("X 副本", &["Y".into(), "Z".into()]), "X 副本");
+    assert_eq!(
+      dedup_sibling_name("X 副本", &["Y".into(), "Z".into()]),
+      "X 副本"
+    );
   }
 
   #[test]
@@ -1321,7 +1306,9 @@ mod tests {
     let pos = |id: Uuid| ordered.iter().position(|&x| x == id).unwrap();
     assert_eq!(ordered.len(), 3);
     assert!(pos(root) < pos(child), "root must precede its child");
-    assert!(pos(child) < pos(grandchild), "child must precede its grandchild");
+    assert!(
+      pos(child) < pos(grandchild),
+      "child must precede its grandchild"
+    );
   }
-
 }

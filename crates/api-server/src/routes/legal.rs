@@ -12,10 +12,10 @@
 //! and not a Rust string literal. Compiled in with `include_str!` so the binary
 //! carries its own terms: a deploy can never leave the pages behind.
 use axum::{
+  Router,
   http::header,
   response::{Html, IntoResponse, Response},
   routing::get,
-  Router,
 };
 
 use crate::AppState;
@@ -75,8 +75,8 @@ mod tests {
   #[test]
   fn both_documents_render_to_html() {
     for (name, md) in [("privacy", PRIVACY_MD), ("terms", TERMS_MD)] {
-      let html = mica_markdown::export_html(&mica_markdown::import_markdown(md, "root"))
-        .unwrap_or_default();
+      let html =
+        mica_markdown::export_html(&mica_markdown::import_markdown(md, "root")).unwrap_or_default();
       assert!(html.contains("<h1"), "{name} lost its heading: {html:.120}");
       assert!(html.len() > 500, "{name} rendered suspiciously short");
     }
@@ -88,7 +88,10 @@ mod tests {
   #[test]
   fn privacy_states_the_claims_the_instance_relies_on() {
     for claim in ["telemetry", "AI 服务商", "opt-in", "阿里云"] {
-      assert!(PRIVACY_MD.contains(claim), "privacy.md no longer mentions {claim}");
+      assert!(
+        PRIVACY_MD.contains(claim),
+        "privacy.md no longer mentions {claim}"
+      );
     }
   }
 }

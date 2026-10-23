@@ -167,9 +167,7 @@ impl AiConfig {
   /// schema could not answer at all, which is how it came to claim a key was
   /// configured for a provider that had never had one.
   #[allow(clippy::type_complexity)]
-  pub async fn list(
-    db: &PgPool,
-  ) -> Vec<(String, String, String, bool, String, String, String)> {
+  pub async fn list(db: &PgPool) -> Vec<(String, String, String, bool, String, String, String)> {
     sqlx::query_as::<_, (String, String, String, bool, String, String, String)>(
       "SELECT provider_id, model, api_key, is_active, '', base_url, protocol \
        FROM ai_provider_settings ORDER BY provider_id",

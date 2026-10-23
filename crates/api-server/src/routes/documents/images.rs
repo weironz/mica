@@ -1,4 +1,3 @@
-
 use axum::{
   Json,
   body::Bytes,
@@ -14,9 +13,9 @@ use mica_infra::ApiResult;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use super::*;
 use crate::routes::auth::user_id_from_headers;
 use crate::routes::ws;
-use super::*;
 
 #[derive(Debug, Deserialize)]
 pub struct RehostImageParams {
@@ -73,8 +72,14 @@ pub async fn drop_image(
         return Err(format!("block {block_id} is not an image"));
       }
       let data = &block.data;
-      if data.get("file_id").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()) {
-        return Err(format!("block {block_id} is stored in Mica, not an external link"));
+      if data
+        .get("file_id")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.is_empty())
+      {
+        return Err(format!(
+          "block {block_id} is stored in Mica, not an external link"
+        ));
       }
       let current = data.get("url").and_then(|v| v.as_str()).unwrap_or_default();
       if current != expected_url {
@@ -82,7 +87,9 @@ pub async fn drop_image(
           "block {block_id} no longer points at the checked url — it was edited since"
         ));
       }
-      Ok(vec![DocumentOperation::DeleteBlock { block_id: block_id.clone() }])
+      Ok(vec![DocumentOperation::DeleteBlock {
+        block_id: block_id.clone(),
+      }])
     },
   )
   .await?;
@@ -164,4 +171,3 @@ pub async fn rehost_image(
     update: applied.update,
   }))
 }
-

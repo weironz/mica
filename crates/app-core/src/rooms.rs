@@ -58,7 +58,10 @@ impl Room {
   }
 
   fn allow_presence_at(&self, connection_id: Uuid, now: Instant) -> bool {
-    let mut budget = self.presence_budget.lock().expect("room presence mutex poisoned");
+    let mut budget = self
+      .presence_budget
+      .lock()
+      .expect("room presence mutex poisoned");
     let (tokens, last) = budget.entry(connection_id).or_insert((PRESENCE_BURST, now));
     *tokens = (*tokens + now.saturating_duration_since(*last).as_secs_f64() * PRESENCE_PER_SEC)
       .min(PRESENCE_BURST);
@@ -202,9 +205,14 @@ mod tests {
     let room = DocumentHub::new().join(Uuid::nil());
     let (spammer, other) = (Uuid::from_u128(1), Uuid::from_u128(2));
     let t0 = Instant::now();
-    let allowed = (0..100).filter(|_| room.allow_presence_at(spammer, t0)).count();
+    let allowed = (0..100)
+      .filter(|_| room.allow_presence_at(spammer, t0))
+      .count();
     assert_eq!(allowed, PRESENCE_BURST as usize);
-    assert!(room.allow_presence_at(other, t0), "budgets are per connection");
+    assert!(
+      room.allow_presence_at(other, t0),
+      "budgets are per connection"
+    );
     assert!(room.allow_presence_at(spammer, t0 + std::time::Duration::from_millis(100)));
   }
 

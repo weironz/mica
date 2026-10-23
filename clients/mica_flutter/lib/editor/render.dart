@@ -172,9 +172,6 @@ class EditorTheme {
   /// Inline atoms scale the raster by (text font size / this).
   static const double mathRasterFontSize = 18.0;
 
-  /// Keep-off distance for the inline-math preview card (_paintMathPreview).
-  static const double mathCardMargin = 8.0;
-
   static const double caretWidth = 2;
   static const double bottomPad = 96;
 
@@ -946,32 +943,14 @@ class RenderDocument extends RenderBox {
 
   /// The cell of table [node] nearest [local] — the point is clamped into the
   /// grid first, so a drag that wanders past the table's edge still resolves to
-  /// an edge cell (keeps a cross-cell area drag live outside the borders).
+  /// an edge cell (keeps a cross-cell area drag live outside the borders). The
+  /// table renderer answers; see [TableRenderer.cellNear].
   ({int row, int col})? tableCellNear(int node, Offset local) {
     if (node < 0 || node >= _layouts.length) return null;
     final l = _layouts[node];
-    if (l.kind != 'table' || l.tableCells.isEmpty) return null;
-    final grid = l.tableGridRect;
-    final p = grid == null
-        ? local
-        : Offset(
-            local.dx.clamp(grid.left + 0.5, grid.right - 0.5),
-            local.dy.clamp(grid.top + 0.5, grid.bottom - 0.5),
-          );
-    for (final cell in l.tableCells) {
-      if (cell.rect.contains(p)) return (row: cell.row, col: cell.col);
-    }
-    // On a border line: fall back to the nearest cell center.
-    _TableCell? best;
-    var bestD = double.infinity;
-    for (final cell in l.tableCells) {
-      final d = (cell.rect.center - p).distanceSquared;
-      if (d < bestD) {
-        bestD = d;
-        best = cell;
-      }
-    }
-    return best == null ? null : (row: best.row, col: best.col);
+    final r = l.renderedBy;
+    if (r is! TableRenderer) return null;
+    return r.cellNear(l, local);
   }
 
   /// `file_id`s that failed to load — painted as a broken-image placeholder.
@@ -1027,66 +1006,100 @@ class RenderDocument extends RenderBox {
     int? node;
     var icon = _CodeIcon.none;
     int? image;
+    int? block;
+    ({int node, int col})? border;
+    ({int node, int row})? rowH;
+    ({int node, int col})? colH;
+    ({int node, bool column})? add;
+    ({int node, int row, int col, Rect rect})? cell;
     if (local != null) {
+      // Blocks tile the surface top-to-bottom without vertical overlap, so ONE
+      // dy scan finds the only block that can contain the pointer; every
+      // hit-test below then inspects just that block. This used to be seven
+      // full scans over _layouts per mouse move.
+      int? leIdx; // closed-interval hit (code/table/image chrome): `<=`
+      int? ltIdx; // open-interval hit (drag handle block + table hover): `<`
       for (var i = 0; i < _layouts.length; i++) {
         final l = _layouts[i];
         if (l.hidden) continue; // folded away: nothing to hover
-        if (l.kind == 'image') {
-          if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) {
-            image = i;
-          }
-          continue;
-        }
-        if (l.kind != 'code_block' && l.kind != 'table') continue;
-        if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) {
-          node = i;
-          if (l.askAiButton?.contains(local) ?? false) {
-            icon = _CodeIcon.askAi;
-          } else if (l.copyButton?.contains(local) ?? false) {
-            icon = _CodeIcon.copy;
-          } else if (l.moreButton?.contains(local) ?? false) {
-            icon = _CodeIcon.more;
-          } else if (l.langLabel?.contains(local) ?? false) {
-            icon = _CodeIcon.lang;
-          } else if (l.viewCodeTab?.contains(local) ?? false) {
-            icon = _CodeIcon.viewCode;
-          } else if (l.viewPreviewTab?.contains(local) ?? false) {
-            icon = _CodeIcon.viewPreview;
-          }
+        if (local.dy < l.boxTop) break; // stacked ascending: later blocks too
+        final bottom = l.boxTop + l.boxHeight;
+        if (leIdx == null && local.dy <= bottom) leIdx = i;
+        if (local.dy < bottom) {
+          ltIdx = i;
           break;
         }
       }
-    }
-    final border = local == null ? null : tableColBorderAt(local);
-    int? block;
-    if (local != null) {
-      for (var i = 0; i < _layouts.length; i++) {
-        final l = _layouts[i];
-        if (l.hidden) continue;
-        if (local.dy >= l.boxTop && local.dy < l.boxTop + l.boxHeight) {
-          block = i;
-          break;
+      if (leIdx != null) {
+        final l = _layouts[leIdx];
+        if (l.renderedBy is ImageRenderer) {
+          image = leIdx;
+        } else if (l.kind == 'code_block' || l.kind == 'table') {
+          // A table rides the same "hovered block" state (TableRenderer.paint
+          // gates its affordances on _hoverCode); only a code block has the
+          // toolbar rects below, so probing them on a table hit nothing.
+          node = leIdx;
+          if (l.kind == 'code_block') {
+            if (l.askAiButton?.contains(local) ?? false) {
+              icon = _CodeIcon.askAi;
+            } else if (l.copyButton?.contains(local) ?? false) {
+              icon = _CodeIcon.copy;
+            } else if (l.moreButton?.contains(local) ?? false) {
+              icon = _CodeIcon.more;
+            } else if (l.langLabel?.contains(local) ?? false) {
+              icon = _CodeIcon.lang;
+            } else if (l.viewCodeTab?.contains(local) ?? false) {
+              icon = _CodeIcon.viewCode;
+            } else if (l.viewPreviewTab?.contains(local) ?? false) {
+              icon = _CodeIcon.viewPreview;
+            }
+          }
+        }
+      }
+      block = ltIdx;
+      if (ltIdx != null) {
+        final l = _layouts[ltIdx];
+        // A table's cells/handles/add-strips/borders are all laid out inside
+        // its own box (see the table renderer), so the containing block is
+        // the only block these can belong to; the renderer answers one probe
+        // with everything the point touches (its regions overlap).
+        final tr = l.renderedBy;
+        if (tr is TableRenderer) {
+          final hit = tr.hitTest(this, l, local);
+          if (hit != null) {
+            final hBorder = hit.colBorder;
+            if (hBorder != null) border = (node: ltIdx, col: hBorder);
+            final hCell = hit.cell;
+            if (hCell != null) {
+              cell = (
+                node: ltIdx,
+                row: hCell.row,
+                col: hCell.col,
+                rect: hCell.rect,
+              );
+            }
+            final hRow = hit.rowHandle;
+            if (hRow != null) rowH = (node: ltIdx, row: hRow);
+            final hCol = hit.colHandle;
+            if (hCol != null) colH = (node: ltIdx, col: hCol);
+            final hAdd = hit.addColumn;
+            if (hAdd != null) add = (node: ltIdx, column: hAdd);
+          }
         }
       }
     }
     // Which table cell / row-column handle / add-strip the pointer is over —
     // so each affordance reveals only for the row/column being pointed at.
     _TableHover? tableHover;
-    if (local != null) {
-      final cell = tableCellAt(local);
-      final rowH = tableRowHandleAt(local);
-      final colH = tableColHandleAt(local);
-      final add = tableAddAt(local);
-      final tnode = cell?.node ?? rowH?.node ?? colH?.node ?? add?.node;
-      if (tnode != null) {
-        tableHover = _TableHover(
-          node: tnode,
-          row: cell?.row ?? rowH?.row,
-          col: cell?.col ?? colH?.col,
-          onAddCol: add?.column == true,
-          onAddRow: add != null && !add.column,
-        );
-      }
+    final tnode = cell?.node ?? rowH?.node ?? colH?.node ?? add?.node;
+    if (tnode != null) {
+      tableHover = _TableHover(
+        node: tnode,
+        row: cell?.row ?? rowH?.row,
+        col: cell?.col ?? colH?.col,
+        onAddCol: add?.column == true,
+        onAddRow: add != null && !add.column,
+      );
     }
 
     if (node != _hoverCode ||
@@ -1967,116 +1980,6 @@ class RenderDocument extends RenderBox {
     _paintScrollbars(canvas, offset);
     _paintCaret(canvas, offset);
     _paintRemoteCursors(canvas, offset);
-    // Last: it floats over everything, including the caret it belongs to.
-    _paintMathPreview(canvas, offset);
-  }
-
-  /// The typeset formula for the math run the caret is inside, floated above it.
-  ///
-  /// Deliberately NOT inline typesetting. The LaTeX stays exactly where it is —
-  /// in the buffer, editable, and every offset in this file goes on meaning what
-  /// it has always meant. Putting the formula *in* the line would need a
-  /// doc↔painter offset mapping through the text pipeline, and
-  /// docs/architecture/render-architecture.md calls that pipeline the load-bearing wall. The
-  /// need this answers is "did I write that formula right?", not "make my notes
-  /// pretty", and a card answers it for ~1% of the cost.
-  ///
-  /// It also keeps the `$` misfires loud: `--master_addr=$MASTER_ADDR` still
-  /// reads as purple source, because nothing about the line is rewritten.
-  ///
-  /// Reuses the block previewer whole — same 'math' id, same source-keyed cache,
-  /// same 18pt raster. A popup wants that size anyway, which is why this needs
-  /// no previewer of its own and no font-size in the cache key.
-  void _paintMathPreview(Canvas canvas, Offset offset) {
-    final sel = _selection;
-    // Only a resting caret. A drag is selecting text, not asking to look.
-    if (sel == null || !sel.isCollapsed) return;
-    final i = sel.focus.node;
-    if (i < 0 || i >= _layouts.length || i >= _nodes.length) return;
-    final l = _layouts[i];
-    if (!_nodeVisible(l)) return;
-    if (EditorNode.isAtomicKind(l.kind) ||
-        l.kind == 'code_block' ||
-        l.renderedBy != null) {
-      return;
-    }
-    final node = _nodes[i];
-    final len = node.text.length;
-    final caret = sel.focus.offset.clamp(0, len);
-
-    final run = mathRunAt(marksFromData(node.data), caret);
-    if (run == null) return;
-    final s = run.start.clamp(0, len);
-    final e = run.end.clamp(0, len);
-    if (e <= s) return;
-    final source = node.text.substring(s, e);
-    if (source.trim().isEmpty) return;
-
-    final img = _previewImages['math']?[source];
-    if (img == null) {
-      // Safe from inside paint: request() only registers and schedules — every
-      // rebuild it causes is behind an addPostFrameCallback.
-      return; // the card appears on the frame the raster lands
-    }
-
-    final boxes = l.painter.getBoxesForSelection(
-      TextSelection(baseOffset: s, extentOffset: e),
-      boxHeightStyle: ui.BoxHeightStyle.tight,
-    );
-    if (boxes.isEmpty) return;
-    final anchor = boxes.first.toRect().shift(
-      offset + Offset(l.contentLeft, l.textTop),
-    );
-
-    const dpr = EditorTheme.mathPixelRatio;
-    var w = img.width / dpr;
-    var h = img.height / dpr;
-    const pad = 8.0;
-    // A long formula shrinks to fit rather than running off the pane.
-    final avail = size.width - 2 * EditorTheme.mathCardMargin - 2 * pad;
-    if (w > avail && w > 0) {
-      h *= avail / w;
-      w = avail;
-    }
-
-    final cardW = w + 2 * pad;
-    final cardH = h + 2 * pad;
-    // Above the run, nudged onto the pane; below it when there is no room up
-    // there (the first line of a document).
-    var left = anchor.left - pad;
-    left = left.clamp(
-      EditorTheme.mathCardMargin,
-      (size.width - EditorTheme.mathCardMargin - cardW).clamp(
-        EditorTheme.mathCardMargin,
-        double.infinity,
-      ),
-    );
-    var top = anchor.top - cardH - 6;
-    if (top < offset.dy + EditorTheme.mathCardMargin) top = anchor.bottom + 6;
-    final card = Rect.fromLTWH(left, top, cardW, cardH);
-    final rr = RRect.fromRectAndRadius(card, const Radius.circular(6));
-
-    canvas.drawRRect(
-      rr.shift(const Offset(0, 1)),
-      Paint()
-        ..color = const Color(0x1A000000)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
-    );
-    canvas.drawRRect(rr, Paint()..color = _appearance.tokens.surface.overlay);
-    canvas.drawRRect(
-      rr,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = _appearance.tokens.border.normal,
-    );
-    onPreviewPainted?.call('math', source);
-    canvas.drawImageRect(
-      img,
-      Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
-      Rect.fromLTWH(card.left + pad, card.top + pad, w, h),
-      Paint()..filterQuality = FilterQuality.medium,
-    );
   }
 
   /// Highlight selected atomic nodes (image/divider/table) on top of their
@@ -2113,70 +2016,15 @@ class RenderDocument extends RenderBox {
     required bool border,
   }) {
     final l = _layouts[i];
-    // A selected table hugs the grid exactly — no tint in the top gutter (column
-    // handles) or the bottom add-row bar, and no rounded spill past the outer
-    // lines. The highlight lands between the grid's top and bottom lines.
-    if (l.kind == 'table' && l.tableGridRect != null) {
-      final box = l.tableGridRect!.shift(offset);
-      canvas.drawRect(
-        box,
-        Paint()..color = _appearance.tokens.editor.selection,
-      );
-      if (border) {
-        canvas.drawRect(
-          box,
-          Paint()
-            ..color = _appearance.tokens.editor.caret
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 2,
-        );
-      }
-      return;
-    }
-    // A selected image gets JUST a thick blue border — no tint or shadow over
-    // the picture (a shadow with a transparent occluder bled grey across the
-    // whole image). A light tint stays only when the image is part of a
-    // multi-block range select, to read as "included".
-    if (l.kind == 'image' && l.imageDst != null) {
-      final box = l.imageDst!.shift(offset);
-      final rr = RRect.fromRectAndRadius(box, const Radius.circular(6));
-      if (border) {
-        canvas.drawRRect(
-          rr,
-          Paint()
-            ..color = _appearance.tokens.editor.caret
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 3,
-        );
-      } else {
-        canvas.drawRRect(
-          rr,
-          Paint()..color = _appearance.tokens.editor.selection,
-        );
-      }
-      return;
-    }
-    // Start at the block's own left edge — drawing from x=0 spilled the
-    // tint into the drag-handle gutter, left of the page's text column.
-    final box = Rect.fromLTWH(
-      offset.dx + l.boxLeft,
-      offset.dy + l.boxTop,
-      size.width - l.boxLeft,
-      l.boxHeight,
-    );
-    final rr = RRect.fromRectAndRadius(
-      box.inflate(border ? 2 : 0),
-      const Radius.circular(6),
-    );
-    canvas.drawRRect(rr, Paint()..color = _appearance.tokens.editor.selection);
-    if (border) {
-      canvas.drawRRect(
-        rr,
-        Paint()
-          ..color = _appearance.tokens.editor.caret
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2,
-      );
+    // The renderer that produced the block owns its selection shape (a table
+    // hugs its grid, an image strokes just the picture) — see
+    // [AtomicBlockRenderer.paintSelection]. A renderer-LESS atomic (a plain
+    // code block) gets the generic rounded-rect tint the default shares.
+    final renderer = l.renderedBy;
+    if (renderer != null) {
+      renderer.paintSelection(this, canvas, offset, l, border: border);
+    } else {
+      paintAtomicBlockSelection(this, canvas, offset, l, border: border);
     }
   }
 
@@ -3196,18 +3044,27 @@ class RenderDocument extends RenderBox {
     }
   }
 
-  /// Table cell under [local], or null.
-  ({int node, int row, int col, Rect rect})? tableCellAt(Offset local) {
+  /// The table node's index and renderer hit under [local], or null. Blocks
+  /// tile the surface without overlap, so at most one table can claim a
+  /// point — the FIRST claimed hit is the only one, and the public probes
+  /// below just read their slot of it (a miss on one slot does not end the
+  /// table's claim, exactly as the old per-slot scans behaved).
+  ({int node, TableHit hit})? _tableClaiming(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
-      final l = _layouts[i];
-      if (l.kind != 'table') continue;
-      for (final cell in l.tableCells) {
-        if (cell.rect.contains(local)) {
-          return (node: i, row: cell.row, col: cell.col, rect: cell.rect);
-        }
-      }
+      final r = _layouts[i].renderedBy;
+      if (r is! TableRenderer) continue;
+      final hit = r.hitTest(this, _layouts[i], local);
+      if (hit != null) return (node: i, hit: hit);
     }
     return null;
+  }
+
+  /// Table cell under [local], or null.
+  ({int node, int row, int col, Rect rect})? tableCellAt(Offset local) {
+    final found = _tableClaiming(local);
+    final cell = found?.hit.cell;
+    if (found == null || cell == null) return null;
+    return (node: found.node, row: cell.row, col: cell.col, rect: cell.rect);
   }
 
   /// Local rect of a specific table cell, or null.
@@ -3223,68 +3080,46 @@ class RenderDocument extends RenderBox {
 
   /// Row handle (left gutter) under [local] → (node, row), or null.
   ({int node, int row})? tableRowHandleAt(Offset local) {
-    for (var i = 0; i < _layouts.length; i++) {
-      final l = _layouts[i];
-      if (l.kind != 'table') continue;
-      for (var r = 0; r < l.rowHandles.length; r++) {
-        if (l.rowHandles[r].contains(local)) return (node: i, row: r);
-      }
-    }
-    return null;
+    final found = _tableClaiming(local);
+    final row = found?.hit.rowHandle;
+    if (found == null || row == null) return null;
+    return (node: found.node, row: row);
   }
 
   /// Column handle (top gutter) under [local] → (node, col), or null.
   ({int node, int col})? tableColHandleAt(Offset local) {
-    for (var i = 0; i < _layouts.length; i++) {
-      final l = _layouts[i];
-      if (l.kind != 'table') continue;
-      for (var c = 0; c < l.colHandles.length; c++) {
-        if (l.colHandles[c].contains(local)) return (node: i, col: c);
-      }
-    }
-    return null;
+    final found = _tableClaiming(local);
+    final col = found?.hit.colHandle;
+    if (found == null || col == null) return null;
+    return (node: found.node, col: col);
   }
 
   /// Table block handle (top-left) under [local] → node, or null.
   int? tableHandleAt(Offset local) {
-    for (var i = 0; i < _layouts.length; i++) {
-      if (_layouts[i].kind != 'table') continue;
-      if (_layouts[i].tableHandle?.contains(local) ?? false) return i;
-    }
-    return null;
+    final found = _tableClaiming(local);
+    return (found != null && found.hit.blockHandle) ? found.node : null;
   }
 
   /// Table delete icon (top-right) under [local] → node, or null.
   int? tableDeleteAt(Offset local) {
-    for (var i = 0; i < _layouts.length; i++) {
-      if (_layouts[i].kind != 'table') continue;
-      if (_layouts[i].tableDelete?.contains(local) ?? false) return i;
-    }
-    return null;
+    final found = _tableClaiming(local);
+    return (found != null && found.hit.delete) ? found.node : null;
   }
 
   /// Add-row / add-column bar under [local] → (node, isColumn), or null.
   ({int node, bool column})? tableAddAt(Offset local) {
-    for (var i = 0; i < _layouts.length; i++) {
-      final l = _layouts[i];
-      if (l.kind != 'table') continue;
-      if (l.addColBar?.contains(local) ?? false) return (node: i, column: true);
-      if (l.addRowBar?.contains(local) ?? false)
-        return (node: i, column: false);
-    }
-    return null;
+    final found = _tableClaiming(local);
+    final column = found?.hit.addColumn;
+    if (found == null || column == null) return null;
+    return (node: found.node, column: column);
   }
 
   /// Column border under [local] for resize → (node, rightCol), or null.
   ({int node, int col})? tableColBorderAt(Offset local) {
-    for (var i = 0; i < _layouts.length; i++) {
-      final l = _layouts[i];
-      if (l.kind != 'table') continue;
-      for (final b in l.colBorders) {
-        if (b.rect.contains(local)) return (node: i, col: b.col);
-      }
-    }
-    return null;
+    final found = _tableClaiming(local);
+    final col = found?.hit.colBorder;
+    if (found == null || col == null) return null;
+    return (node: found.node, col: col);
   }
 
   /// Current normalized column weights of a table node (for resize math).
@@ -3659,34 +3494,50 @@ class RenderDocument extends RenderBox {
     return null;
   }
 
-  /// Node index of the image whose painted rect contains [local], or null.
-  int? imageAt(Offset local) {
+  /// The image node's index and renderer hit under [local], or null — the
+  /// image counterpart of [_tableClaiming]: at most one image can claim a
+  /// point, so the first claimed hit is the only one.
+  ({int node, ImageHit hit})? _imageClaiming(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
-      final l = _layouts[i];
-      if (l.kind == 'image' && (l.imageDst?.contains(local) ?? false)) return i;
+      final r = _layouts[i].renderedBy;
+      if (r is! ImageRenderer) continue;
+      final hit = r.hitTest(this, _layouts[i], local);
+      if (hit != null) return (node: i, hit: hit);
     }
     return null;
+  }
+
+  /// Node index of the image whose painted rect contains [local], or null.
+  int? imageAt(Offset local) {
+    final found = _imageClaiming(local);
+    return (found != null && found.hit.body) ? found.node : null;
+  }
+
+  /// The hovered image's hit under [local], or null. Hover-gated so the
+  /// (invisible) chrome can't be triggered when not shown.
+  ({int node, ImageHit hit})? _hoveredImageHit(Offset local) {
+    final i = _hoverImage;
+    if (i == null || i >= _layouts.length) return null;
+    final r = _layouts[i].renderedBy;
+    if (r is! ImageRenderer) return null;
+    final hit = r.hitTest(this, _layouts[i], local);
+    if (hit == null) return null;
+    return (node: i, hit: hit);
   }
 
   /// Toolbar action under [local] for the hovered image, or null. Gated on hover
   /// so the (invisible) bar can't be triggered when not shown.
   ({int node, String action})? imageActionAt(Offset local) {
-    final i = _hoverImage;
-    if (i == null || i >= _layouts.length) return null;
-    final l = _layouts[i];
-    for (var k = 0; k < l.imageButtons.length; k++) {
-      if (l.imageButtons[k].contains(local)) {
-        return (node: i, action: _imageActions[k]);
-      }
-    }
-    return null;
+    final hit = _hoveredImageHit(local);
+    final action = hit?.hit.action;
+    if (hit == null || action == null) return null;
+    return (node: hit.node, action: action);
   }
 
   /// Image node whose right-edge resize handle is under [local] (hover-gated).
   int? imageResizeAt(Offset local) {
-    final i = _hoverImage;
-    if (i == null || i >= _layouts.length) return null;
-    return (_layouts[i].imageResize?.contains(local) ?? false) ? i : null;
+    final hit = _hoveredImageHit(local);
+    return (hit != null && hit.hit.resize) ? hit.node : null;
   }
 
   /// Width the image at [index] would take if its right edge were dragged to

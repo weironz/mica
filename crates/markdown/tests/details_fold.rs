@@ -35,7 +35,10 @@ fn the_blank_line_form_is_an_opener_a_body_and_a_bare_closer() {
   assert_eq!(
     shape(GITHUB_FORM),
     vec![
-      ("code_block".into(), "<details>\n<summary>Tips</summary>".into()),
+      (
+        "code_block".into(),
+        "<details>\n<summary>Tips</summary>".into()
+      ),
       ("paragraph".into(), "Body markdown here.".into()),
       ("bulleted_list".into(), "one".into()),
       ("bulleted_list".into(), "two".into()),

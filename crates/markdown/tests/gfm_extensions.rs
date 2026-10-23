@@ -38,14 +38,20 @@ fn gfm_extension_scoreboard() {
       entry.0 += 1;
       passed += 1;
     } else if std::env::var("GFM_VERBOSE").is_ok() {
-      println!("FAIL [{}]\nMD {:?}\nWANT {:?}\nGOT {:?}\n", ex["section"], md, expected, got);
+      println!(
+        "FAIL [{}]\nMD {:?}\nWANT {:?}\nGOT {:?}\n",
+        ex["section"], md, expected, got
+      );
     }
   }
   println!("GFM extensions: {passed}/{}", examples.len());
   for (sec, (ok, n)) in &per_section {
     println!("  {sec}: {ok}/{n}");
   }
-  assert!(passed >= BASELINE_PASS, "GFM regressed: {passed} < {BASELINE_PASS}");
+  assert!(
+    passed >= BASELINE_PASS,
+    "GFM regressed: {passed} < {BASELINE_PASS}"
+  );
 }
 
 /// A link whose LABEL is itself a URL.
@@ -89,14 +95,21 @@ fn a_url_shaped_label_is_still_a_link() {
     marks.contains("\"start\":0") && marks.contains("\"end\":22"),
     "one link mark spanning the whole label, got {marks}"
   );
-  assert!(marks.contains("https://github.com/a/b"), "href kept: {marks}");
+  assert!(
+    marks.contains("https://github.com/a/b"),
+    "href kept: {marks}"
+  );
 
   // Differing label and href still works, and the label is not autolinked into
   // a second, nested link.
   let (text2, marks2) = one("[https://a.example](https://b.example)\n");
   assert_eq!(text2, "https://a.example");
   assert!(marks2.contains("https://b.example"), "href wins: {marks2}");
-  assert_eq!(marks2.matches("\"type\"").count(), 1, "exactly one mark: {marks2}");
+  assert_eq!(
+    marks2.matches("\"type\"").count(),
+    1,
+    "exactly one mark: {marks2}"
+  );
 
   // The rule it must NOT break: a genuinely nested EXPLICIT link is still
   // refused, per CommonMark.
@@ -149,14 +162,23 @@ fn a_single_tilde_between_word_characters_is_a_range() {
   // Same shape with CJK numerals — `一~二` is the same range written the
   // other way, and the CJK flanking amendment must not let it through.
   let (text, marks) = one("大约 一~二 个，再来 一~二 个");
-  assert!(!marks.contains("strike"), "CJK range is not strike: {marks} {text:?}");
+  assert!(
+    !marks.contains("strike"),
+    "CJK range is not strike: {marks} {text:?}"
+  );
 
   // What must KEEP working: a single tilde with word boundaries around it,
   // which is the GFM spec's own single-tilde form.
   let (_, marks) = one("Hello, ~there~ world!");
-  assert!(marks.contains("strike"), "spaced single tilde still strikes: {marks}");
+  assert!(
+    marks.contains("strike"),
+    "spaced single tilde still strikes: {marks}"
+  );
 
   // And the double tilde is untouched in every position, intraword included.
   let (_, marks) = one("~~Hi~~ and a1~~b~~c2");
-  assert!(marks.contains("strike"), "double tilde still strikes: {marks}");
+  assert!(
+    marks.contains("strike"),
+    "double tilde still strikes: {marks}"
+  );
 }

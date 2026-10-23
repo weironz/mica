@@ -11,15 +11,15 @@ pub mod auth;
 mod avatar;
 mod comments;
 mod documents;
+mod email_verify;
 mod files;
 mod health;
-mod legal;
 mod history;
 mod import;
 mod invitations;
-mod email_verify;
-mod password_reset;
+mod legal;
 mod names;
+mod password_reset;
 mod tokens;
 mod workspaces;
 pub mod ws;
@@ -146,7 +146,9 @@ pub fn layered_api(state: &AppState) -> Router<AppState> {
       auth::scope_guard,
     ))
     // Added last = runs first: throttle outside the guard (see above).
-    .layer(axum::middleware::from_fn(crate::rate_limit::throttle_argon2));
+    .layer(axum::middleware::from_fn(
+      crate::rate_limit::throttle_argon2,
+    ));
   guarded
     .merge(argon2)
     .merge(public_api_router())
@@ -158,10 +160,7 @@ pub fn layered_api(state: &AppState) -> Router<AppState> {
 
 pub fn api_router() -> Router<AppState> {
   Router::new()
-    .route(
-      "/auth/me",
-      get(auth::me).patch(auth::update_me),
-    )
+    .route("/auth/me", get(auth::me).patch(auth::update_me))
     .route(
       "/auth/me/settings",
       get(auth::get_settings).put(auth::put_settings),
@@ -188,10 +187,7 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/export.zip",
       get(documents::export_all_workspaces_zip),
     )
-    .route(
-      "/workspaces/export/stats",
-      get(documents::export_all_stats),
-    )
+    .route("/workspaces/export/stats", get(documents::export_all_stats))
     .route(
       "/workspaces/{workspace_id}/export.zip",
       get(documents::export_workspace_zip),
@@ -252,8 +248,14 @@ pub fn api_router() -> Router<AppState> {
       delete(invitations::revoke),
     )
     .route("/invitations", get(invitations::list_received))
-    .route("/invitations/{invitation_id}/accept", post(invitations::accept))
-    .route("/invitations/{invitation_id}/decline", post(invitations::decline))
+    .route(
+      "/invitations/{invitation_id}/accept",
+      post(invitations::accept),
+    )
+    .route(
+      "/invitations/{invitation_id}/decline",
+      post(invitations::decline),
+    )
     .route(
       "/workspaces/{workspace_id}/views",
       get(documents::list_views),
@@ -274,10 +276,7 @@ pub fn api_router() -> Router<AppState> {
       "/workspaces/{workspace_id}/views/{view_id}/backlinks",
       get(documents::backlinks),
     )
-    .route(
-      "/workspaces/{workspace_id}/graph",
-      get(documents::graph),
-    )
+    .route("/workspaces/{workspace_id}/graph", get(documents::graph))
     .route(
       "/workspaces/{workspace_id}/views/{view_id}/move",
       post(documents::move_view),
@@ -488,7 +487,9 @@ mod router_tests {
   /// conflict between the halves would panic here, at merge time.
   #[test]
   fn the_route_table_is_unambiguous() {
-    let _ = api_router().merge(public_api_router()).merge(api_argon2_router());
+    let _ = api_router()
+      .merge(public_api_router())
+      .merge(api_argon2_router());
     let _ = ws_router();
     let _ = share_router();
     let _ = legal_router();
@@ -574,7 +575,10 @@ mod route_layer_tests {
   #[tokio::test]
   async fn the_public_half_answers_without_a_token() {
     let app = app();
-    assert_eq!(send(&app, Method::GET, "/api/health", "198.51.100.1").await, StatusCode::OK);
+    assert_eq!(
+      send(&app, Method::GET, "/api/health", "198.51.100.1").await,
+      StatusCode::OK
+    );
     // The avatar <img> and the blob capability links: 404 here (no storage in
     // this harness), what matters is NOT 401.
     for path in [
@@ -584,7 +588,11 @@ mod route_layer_tests {
       format!("{WS}/files/{FID}/blob/%E5%9B%BE.png"),
     ] {
       let status = send(&app, Method::GET, &path, "198.51.100.1").await;
-      assert_ne!(status, StatusCode::UNAUTHORIZED, "{path} must not need a session");
+      assert_ne!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "{path} must not need a session"
+      );
     }
   }
 
@@ -615,7 +623,11 @@ mod route_layer_tests {
       "/api/documents/abc".to_string(),
     ] {
       let status = send(&app, Method::GET, &path, "198.51.100.2").await;
-      assert_eq!(status, StatusCode::NOT_FOUND, "{path} should be a plain 404");
+      assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "{path} should be a plain 404"
+      );
     }
   }
 
@@ -626,7 +638,13 @@ mod route_layer_tests {
   async fn a_route_param_named_health_does_not_bypass_the_guard() {
     let app = app();
     assert_eq!(
-      send(&app, Method::DELETE, "/api/ai/providers/health", "198.51.100.3").await,
+      send(
+        &app,
+        Method::DELETE,
+        "/api/ai/providers/health",
+        "198.51.100.3"
+      )
+      .await,
       StatusCode::UNAUTHORIZED,
       "the param VALUE must never opt the route out of the scope guard"
     );
@@ -642,7 +660,11 @@ mod route_layer_tests {
       (Method::POST, "/api/auth/register", "198.51.100.11"),
       (Method::POST, "/api/auth/refresh", "198.51.100.12"),
       (Method::POST, "/api/auth/password/forgot", "198.51.100.13"),
-      (Method::POST, "/api/auth/resend-verification", "198.51.100.14"),
+      (
+        Method::POST,
+        "/api/auth/resend-verification",
+        "198.51.100.14",
+      ),
     ];
     for (method, path, xff) in cases {
       for attempt in 1..=3 {
@@ -655,7 +677,11 @@ mod route_layer_tests {
              — the caller has no session yet)"
           );
         } else {
-          assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{path} must be throttled on the 3rd call");
+          assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{path} must be throttled on the 3rd call"
+          );
         }
       }
     }
@@ -682,7 +708,13 @@ mod route_layer_tests {
         StatusCode::UNAUTHORIZED
       );
       assert_ne!(
-        send(&app, Method::GET, "/ws/workspaces/x/documents/y", "198.51.100.20").await,
+        send(
+          &app,
+          Method::GET,
+          "/ws/workspaces/x/documents/y",
+          "198.51.100.20"
+        )
+        .await,
         StatusCode::TOO_MANY_REQUESTS
       );
     }
@@ -719,7 +751,11 @@ mod route_layer_tests {
       ("/reset-password", "198.51.100.34"),
     ] {
       let status = send(&app, Method::POST, path, xff).await;
-      assert_ne!(status, StatusCode::TOO_MANY_REQUESTS, "{path} holds no Argon2 permit");
+      assert_ne!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{path} holds no Argon2 permit"
+      );
     }
   }
 
@@ -733,8 +769,14 @@ mod route_layer_tests {
       (Method::POST, "/api/auth/password", "198.51.100.40"),
       (Method::DELETE, "/api/auth/me", "198.51.100.41"),
     ] {
-      assert_eq!(send(&app, method.clone(), path, xff).await, StatusCode::UNAUTHORIZED);
-      assert_eq!(send(&app, method.clone(), path, xff).await, StatusCode::UNAUTHORIZED);
+      assert_eq!(
+        send(&app, method.clone(), path, xff).await,
+        StatusCode::UNAUTHORIZED
+      );
+      assert_eq!(
+        send(&app, method.clone(), path, xff).await,
+        StatusCode::UNAUTHORIZED
+      );
       assert_eq!(
         send(&app, method, path, xff).await,
         StatusCode::TOO_MANY_REQUESTS,

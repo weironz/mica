@@ -15,16 +15,16 @@
 //! and column lists spelled out beat a `SELECT *` that drifts with the schema).
 
 use chrono::{DateTime, Utc};
-use mica_core::doc::CommentAnchor;
 use mica_core::MicaDoc;
+use mica_core::doc::CommentAnchor;
 use mica_infra::{ApiError, ApiResult};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
+pub use mica_core::QuoteIndex;
 /// Re-exported so callers (the API layer) can name an anchor/range without taking
 /// a direct dependency on `mica-core` — this module is their door to comments.
 pub use mica_core::doc::{CommentAnchor as Anchor, CommentRange};
-pub use mica_core::QuoteIndex;
 
 pub const STATUS_OPEN: &str = "open";
 pub const STATUS_RESOLVED: &str = "resolved";
@@ -311,11 +311,7 @@ pub struct AnchorState {
 /// `index` is the listing's lazily-built quote index: pass `&mut None` and it is
 /// built on the first thread that needs it, so a document whose anchors all still
 /// resolve — the normal case — never pays for flattening its text.
-pub fn anchor_state(
-  doc: &MicaDoc,
-  index: &mut Option<QuoteIndex>,
-  row: &ThreadRow,
-) -> AnchorState {
+pub fn anchor_state(doc: &MicaDoc, index: &mut Option<QuoteIndex>, row: &ThreadRow) -> AnchorState {
   // "Unresolvable" and "collapsed to nothing" are the same thing to a reader:
   // yrs keeps tombstones, so deleting the anchored text usually collapses the
   // range instead of failing to resolve.
@@ -495,7 +491,10 @@ mod tests {
 
     let mut index = None;
     let state = anchor_state(&doc, &mut index, &row(&anchor, "world", STATUS_OPEN));
-    assert!(state.fresh_anchor.is_none(), "the original sticky index survived");
+    assert!(
+      state.fresh_anchor.is_none(),
+      "the original sticky index survived"
+    );
     assert!(index.is_none(), "no quote index was needed");
     assert_eq!(
       state.range.map(|r| (r.start_offset, r.end_offset)),
@@ -527,7 +526,10 @@ mod tests {
     let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
     rewrite(&mut doc);
     assert!(
-      doc.resolve_range(&anchor).filter(|r| !r.is_empty()).is_none(),
+      doc
+        .resolve_range(&anchor)
+        .filter(|r| !r.is_empty())
+        .is_none(),
       "the rewrite must kill the anchor — otherwise this proves nothing"
     );
 

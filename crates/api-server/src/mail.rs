@@ -135,7 +135,11 @@ impl DirectMailMailer {
       .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
       .collect::<Vec<_>>()
       .join("&");
-    let string_to_sign = format!("POST&{}&{}", percent_encode("/"), percent_encode(&canonical));
+    let string_to_sign = format!(
+      "POST&{}&{}",
+      percent_encode("/"),
+      percent_encode(&canonical)
+    );
 
     let mut mac = Hmac::<Sha1>::new_from_slice(format!("{}&", self.access_key_secret).as_bytes())
       .expect("HMAC accepts any key length");
@@ -197,8 +201,7 @@ fn req_env(name: &'static str) -> Result<String, &'static str> {
 fn percent_encode(input: &str) -> String {
   let mut out = String::with_capacity(input.len() * 3);
   for &byte in input.as_bytes() {
-    let unreserved =
-      byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
+    let unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
     if unreserved {
       out.push(byte as char);
     } else {

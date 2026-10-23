@@ -31,13 +31,20 @@ fn parse_to_gold(markdown: &str) -> Value {
       // Language-neutral data shape: absent data is `{}`, and marks are
       // sorted by range — array order is semantically irrelevant and the
       // two implementations emit it differently.
-      let mut data = if b.data.is_null() { json!({}) } else { b.data.clone() };
+      let mut data = if b.data.is_null() {
+        json!({})
+      } else {
+        b.data.clone()
+      };
       if let Some(marks) = data.get_mut("marks").and_then(Value::as_array_mut) {
         marks.sort_by_key(|m| {
           (
             m.get("start").and_then(Value::as_u64).unwrap_or(0),
             m.get("end").and_then(Value::as_u64).unwrap_or(0),
-            m.get("type").and_then(Value::as_str).unwrap_or("").to_string(),
+            m.get("type")
+              .and_then(Value::as_str)
+              .unwrap_or("")
+              .to_string(),
           )
         });
       }
@@ -90,7 +97,10 @@ fn fixtures_export_match_gold() {
     checked += 1;
   }
   if !generate {
-    assert!(checked >= 10, "expected at least 10 export fixtures, found {checked}");
+    assert!(
+      checked >= 10,
+      "expected at least 10 export fixtures, found {checked}"
+    );
   }
 }
 
@@ -113,16 +123,19 @@ fn fixtures_match_gold() {
       std::fs::write(&gold_path, serde_json::to_string_pretty(&got).unwrap()).unwrap();
       continue;
     }
-    let gold: Value =
-      serde_json::from_str(&std::fs::read_to_string(&gold_path).unwrap_or_else(|_| {
-        panic!("missing gold for {path:?} — run with GEN_GOLD=1 to create")
-      }))
-      .unwrap();
+    let gold: Value = serde_json::from_str(
+      &std::fs::read_to_string(&gold_path)
+        .unwrap_or_else(|_| panic!("missing gold for {path:?} — run with GEN_GOLD=1 to create")),
+    )
+    .unwrap();
     assert_eq!(got, gold, "grammar drift in {path:?}");
     checked += 1;
   }
   if !generate {
-    assert!(checked >= 10, "expected at least 10 fixtures, found {checked}");
+    assert!(
+      checked >= 10,
+      "expected at least 10 fixtures, found {checked}"
+    );
   }
 }
 
@@ -137,8 +150,7 @@ fn fixtures_round_trip() {
     }
     let markdown = std::fs::read_to_string(&path).unwrap();
     let first = parse_to_gold(&markdown);
-    let exported =
-      mica_markdown::export_markdown(&import_markdown(&markdown, "root")).unwrap();
+    let exported = mica_markdown::export_markdown(&import_markdown(&markdown, "root")).unwrap();
     let second = parse_to_gold(&exported);
     assert_eq!(first, second, "round-trip drift in {path:?}");
   }

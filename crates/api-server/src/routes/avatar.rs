@@ -150,8 +150,12 @@ const AVATAR_EXTS: [&str; 6] = ["png", "jpg", "gif", "webp", "avif", "bmp"];
 fn avatar_format(declared: &str, bytes: &[u8]) -> ApiResult<(&'static str, String)> {
   let refuse =
     || ApiError::BadRequest("avatar must be a PNG, JPEG, GIF, WebP, AVIF or BMP image".to_string());
-  mime_to_ext(declared).filter(|ext| AVATAR_EXTS.contains(ext)).ok_or_else(refuse)?;
-  let ext = sniff_image_ext(bytes).filter(|ext| AVATAR_EXTS.contains(ext)).ok_or_else(refuse)?;
+  mime_to_ext(declared)
+    .filter(|ext| AVATAR_EXTS.contains(ext))
+    .ok_or_else(refuse)?;
+  let ext = sniff_image_ext(bytes)
+    .filter(|ext| AVATAR_EXTS.contains(ext))
+    .ok_or_else(refuse)?;
   let mime = ext_to_mime(ext).ok_or_else(refuse)?;
   Ok((ext, mica_infra::stored_content_type(mime)))
 }
@@ -285,8 +289,7 @@ mod tests {
 
   const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
   const JPEG: &[u8] = b"\xff\xd8\xff\xe0\0\x10JFIF";
-  const SVG: &[u8] =
-    b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+  const SVG: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
 
   /// S1 (review 2026-10-21): an avatar is served by a PUBLIC 302 straight to the
   /// storage origin, with the Content-Type it was uploaded with. Accepting
@@ -295,14 +298,20 @@ mod tests {
   /// workspace files (B4), reopened through the avatar path.
   #[test]
   fn an_svg_avatar_is_refused() {
-    assert!(matches!(avatar_format("image/svg+xml", SVG), Err(ApiError::BadRequest(_))));
+    assert!(matches!(
+      avatar_format("image/svg+xml", SVG),
+      Err(ApiError::BadRequest(_))
+    ));
   }
 
   /// The header is the client's claim; the bytes are the file. SVG bytes
   /// declared as PNG must not get through by lying about the type.
   #[test]
   fn svg_bytes_under_a_raster_label_are_refused() {
-    assert!(matches!(avatar_format("image/png", SVG), Err(ApiError::BadRequest(_))));
+    assert!(matches!(
+      avatar_format("image/png", SVG),
+      Err(ApiError::BadRequest(_))
+    ));
     assert!(matches!(
       avatar_format("image/png", b"<?xml version=\"1.0\"?><svg/>"),
       Err(ApiError::BadRequest(_))
@@ -321,7 +330,10 @@ mod tests {
 
   #[test]
   fn a_non_image_header_is_still_refused() {
-    assert!(matches!(avatar_format("text/html", PNG), Err(ApiError::BadRequest(_))));
+    assert!(matches!(
+      avatar_format("text/html", PNG),
+      Err(ApiError::BadRequest(_))
+    ));
   }
 
   /// The existing-data half: an SVG avatar stored before the upload check
@@ -329,9 +341,15 @@ mod tests {
   #[test]
   fn a_legacy_svg_key_is_not_served() {
     let user = "55b3e5ff-4117-4d65-9434-0b17922d8e87";
-    assert!(!is_servable_avatar_key(&format!("avatars/{user}/abc123.svg")));
-    assert!(is_servable_avatar_key(&format!("avatars/{user}/abc123.png")));
-    assert!(is_servable_avatar_key(&format!("avatars/{user}/abc123.jpg")));
+    assert!(!is_servable_avatar_key(&format!(
+      "avatars/{user}/abc123.svg"
+    )));
+    assert!(is_servable_avatar_key(&format!(
+      "avatars/{user}/abc123.png"
+    )));
+    assert!(is_servable_avatar_key(&format!(
+      "avatars/{user}/abc123.jpg"
+    )));
   }
 
   #[test]

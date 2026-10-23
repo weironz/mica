@@ -33,12 +33,8 @@ impl Weakness {
   pub fn message(&self) -> &'static str {
     match self {
       Weakness::TooShort => "password must be at least 8 characters",
-      Weakness::TooCommon => {
-        "that password is one of the most commonly used ones — pick another"
-      }
-      Weakness::NoVariety => {
-        "that password is a single repeated character or a straight sequence"
-      }
+      Weakness::TooCommon => "that password is one of the most commonly used ones — pick another",
+      Weakness::NoVariety => "that password is a single repeated character or a straight sequence",
       Weakness::LooksLikeYou => {
         "password must not be built from your email address or display name"
       }

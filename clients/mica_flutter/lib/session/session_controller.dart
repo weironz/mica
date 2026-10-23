@@ -149,14 +149,4 @@ class SessionController extends ChangeNotifier {
     };
     notifyListeners();
   }
-
-  /// Seed view trees ON TOP of what is already held — the mirror warm-up on
-  /// restore: existing (server-fresh) entries win, the mirror only fills gaps.
-  void seedViews(Map<String, List<DocumentView>> overlay) {
-    viewsByWorkspace = {
-      ...overlay,
-      ...viewsByWorkspace,
-    };
-    notifyListeners();
-  }
 }

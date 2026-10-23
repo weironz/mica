@@ -76,7 +76,18 @@ use sqlx::PgPool;
 /// far enough out to still record the requests that made 2026-08-03 look fine
 /// to a liveness check.
 const BUCKETS: [f64; 12] = [
-  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, f64::INFINITY,
+  0.005,
+  0.01,
+  0.025,
+  0.05,
+  0.1,
+  0.25,
+  0.5,
+  1.0,
+  2.5,
+  5.0,
+  10.0,
+  f64::INFINITY,
 ];
 
 /// How long a database-derived snapshot is reused. The scrape interval is 15s
@@ -597,8 +608,16 @@ fn render(state: &AppState, snapshot: Option<&DbSnapshot>) -> String {
     let _ = writeln!(out, "mica_blob_gc_sweeps_total {}", gc.sweeps);
     out.push_str("# HELP mica_blob_gc_objects_total Blobs seen and reclaimed.\n");
     out.push_str("# TYPE mica_blob_gc_objects_total counter\n");
-    let _ = writeln!(out, "mica_blob_gc_objects_total{{op=\"scanned\"}} {}", gc.scanned);
-    let _ = writeln!(out, "mica_blob_gc_objects_total{{op=\"deleted\"}} {}", gc.deleted);
+    let _ = writeln!(
+      out,
+      "mica_blob_gc_objects_total{{op=\"scanned\"}} {}",
+      gc.scanned
+    );
+    let _ = writeln!(
+      out,
+      "mica_blob_gc_objects_total{{op=\"deleted\"}} {}",
+      gc.deleted
+    );
     out.push_str("# HELP mica_blob_gc_bytes_freed_total Bytes reclaimed.\n");
     out.push_str("# TYPE mica_blob_gc_bytes_freed_total counter\n");
     let _ = writeln!(out, "mica_blob_gc_bytes_freed_total {}", gc.bytes_freed);
@@ -607,10 +626,18 @@ fn render(state: &AppState, snapshot: Option<&DbSnapshot>) -> String {
     let _ = writeln!(out, "mica_blob_gc_failures_total {}", gc.failures);
     out.push_str("# HELP mica_blob_gc_eligible_orphan_objects Unregistered objects past the upload grace period in the last sweep.\n");
     out.push_str("# TYPE mica_blob_gc_eligible_orphan_objects gauge\n");
-    let _ = writeln!(out, "mica_blob_gc_eligible_orphan_objects {}", gc.eligible_orphan_objects);
+    let _ = writeln!(
+      out,
+      "mica_blob_gc_eligible_orphan_objects {}",
+      gc.eligible_orphan_objects
+    );
     out.push_str("# HELP mica_blob_gc_eligible_orphan_bytes Bytes in those eligible unregistered objects in the last sweep.\n");
     out.push_str("# TYPE mica_blob_gc_eligible_orphan_bytes gauge\n");
-    let _ = writeln!(out, "mica_blob_gc_eligible_orphan_bytes {}", gc.eligible_orphan_bytes);
+    let _ = writeln!(
+      out,
+      "mica_blob_gc_eligible_orphan_bytes {}",
+      gc.eligible_orphan_bytes
+    );
   }
 
   // ── process (Linux) ──
@@ -638,7 +665,11 @@ fn render(state: &AppState, snapshot: Option<&DbSnapshot>) -> String {
     let _ = writeln!(out, "mica_documents_total {}", s.documents);
     out.push_str("# HELP mica_storage_bytes Stored bytes across the instance.\n");
     out.push_str("# TYPE mica_storage_bytes gauge\n");
-    let _ = writeln!(out, "mica_storage_bytes{{scope=\"total\"}} {}", s.bytes_total);
+    let _ = writeln!(
+      out,
+      "mica_storage_bytes{{scope=\"total\"}} {}",
+      s.bytes_total
+    );
 
     // Per workspace, shaped like node_exporter's per-filesystem series: expose
     // the fact for EVERY workspace and let the alert rule own the threshold.

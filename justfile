@@ -125,13 +125,16 @@ test:
     # SKIP when DATABASE_URL is unset — and a skipped test reports as PASSED.
     # That is exactly how two broken tests reached main on 07-27: locally
     # "108 passed", in CI "106 passed; 2 failed" for four days. So run them for
-    # real against the dev database when it is up, and say so out loud when it
-    # is not, instead of quietly testing less than CI does.
-    if docker exec mica-postgres pg_isready -U mica -d mica >/dev/null 2>&1; then \
-        echo "==> Postgres-backed tests: ON (dev database)"; \
-        DATABASE_URL=postgres://mica:mica@127.0.0.1:5432/mica cargo test --workspace; \
+    # real against a reachable database when one exists, and say so out loud
+    # when it is not, instead of quietly testing less than CI does.
+    # Same resolver as `just ci` (lib-local) — which REFUSES where this warns,
+    # deliberately: `just test` is the dev loop, `just ci` is the CI twin.
+    db=$(source scripts/lib-local.sh && resolve_database_url); \
+    if [ -n "$db" ]; then \
+        echo "==> Postgres-backed tests: ON ($db)"; \
+        DATABASE_URL=$db cargo test --workspace; \
     else \
-        echo "==> WARNING: dev Postgres is down, so the Postgres-backed tests will SKIP"; \
+        echo "==> WARNING: no reachable Postgres, so the Postgres-backed tests will SKIP"; \
         echo "    (a skipped test still reports as passed). Run 'just dev' to include them."; \
         cargo test --workspace; \
     fi
@@ -165,11 +168,14 @@ check:
     cargo clippy --workspace --all-targets -- -D warnings
     cd clients/mica_flutter && {{flutter}} analyze lib
 
-# 单文件行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。
-# 与 CI 的 structure job 同一条命令，三层防线：
-#   绝对限 8,000 硬失败 / 4,000 警告；棘轮（file-size-budget.txt 登记文件
-#   只许减不许增）；增量（--diff <base> 时 >2,000 行存量文件净增 >300 失败）。
-[doc("Per-file line-count gate (absolute + ratchet + delta; same as CI)")]
+# 单元行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md）。
+# 与 CI 的 structure job 同一条命令，三层防线，计量单位（#87）：
+#   Dart 按 library（root + 全部 part 合计，拆 part 绕不过门禁）；Rust 按单文件，
+#   FFI crate（clients/mica_flutter/rust/src）同在扫描范围。
+#   绝对限 8,000 硬失败 / 4,000 警告；棘轮（file-size-budget.txt 登记单元
+#   只许减不许增）；增量（--diff <base> 时 >2,000 行存量单元净增 >300 失败，
+#   按单元聚合）。
+[doc("Per-unit line-count gate (Dart library = root + parts; absolute + ratchet + delta; same as CI)")]
 check-structure:
     bash scripts/check-file-size.sh
 

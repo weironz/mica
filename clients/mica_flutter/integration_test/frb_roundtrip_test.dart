@@ -16,14 +16,6 @@ void main() {
   setUpAll(() async => RustLib.init());
   tearDownAll(() async => RustLib.dispose());
 
-  test('frb round-trip: string in/out via mica-core', () {
-    expect(greet(name: 'Mica'), 'Hello from mica-core, Mica');
-  });
-
-  test('frb round-trip: integers across the boundary', () {
-    expect(add(a: 2, b: 40), 42);
-  });
-
   test('native core reports a version', () {
     expect(coreVersion(), isNotEmpty);
   });

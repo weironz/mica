@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::routes::auth::{PAT_PREFIX, Scope, sha256_hex, user_id_from_headers};
+use crate::routes::auth::{PAT_PREFIX, Scope, mint_secret, sha256_hex, user_id_from_headers};
 
 /// Longest expiry a token may ask for (ten years); omit it for no expiry.
 const MAX_TOKEN_DAYS: i64 = 3650;
@@ -94,9 +94,7 @@ pub async fn create_token(
     }
   };
 
-  // 244 bits of randomness from two v4 UUIDs — no extra crate, plenty for a token.
-  let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-  let token = format!("{PAT_PREFIX}{secret}");
+  let token = mint_secret(PAT_PREFIX);
   let token_hash = sha256_hex(&token);
 
   let (id, created_at) = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(

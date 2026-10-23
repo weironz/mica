@@ -2006,12 +2006,44 @@ final Map<String, _Lang> _langs = {
 };
 
 /// Resolve the effective language: explicit choice, or auto-detected when the
-/// choice is null/empty/`auto`.
+/// choice is null/empty/`auto`. The auto branch is memoized (see
+/// [_ResolveLangKey]).
 String resolveCodeLanguage(String code, String? selected) {
   final choice = canonicalCodeLanguage(selected ?? '');
   if (choice.isNotEmpty && choice != 'auto') return choice;
-  return detectLanguage(code);
+  final key = _ResolveLangKey(code);
+  final hit = _resolveLangMemo.remove(key);
+  if (hit != null) {
+    _resolveLangMemo[key] = hit; // reinsert => most-recently-used
+    return hit;
+  }
+  final lang = detectLanguage(code);
+  _resolveLangMemo[key] = lang;
+  if (_resolveLangMemo.length > _resolveLangMemoMax) {
+    _resolveLangMemo.remove(_resolveLangMemo.keys.first); // evict LRU
+  }
+  return lang;
 }
+
+/// Memo for [resolveCodeLanguage]'s auto branch. [detectLanguage] runs dozens
+/// of regexes over the whole block, and the editor re-resolves on every caret
+/// move inside a code block — a code block holding the caret is excluded from
+/// render.dart's whole-layout reuse, so the slow path ran the full scan per
+/// arrow key. Identity IS freshness: the controller reassigns a block's text
+/// instance on every edit, so an unchanged block always keys on the same
+/// String object. Small bounded LRU, same discipline as [_codeSpanMemo].
+class _ResolveLangKey {
+  const _ResolveLangKey(this.code);
+  final String code;
+  @override
+  bool operator ==(Object other) =>
+      other is _ResolveLangKey && identical(other.code, code);
+  @override
+  int get hashCode => identityHashCode(code);
+}
+
+final Map<_ResolveLangKey, String> _resolveLangMemo = {};
+const int _resolveLangMemoMax = 128;
 
 /// The language whose *structural syntax* the code plainly uses, or null when
 /// nothing is conclusive.

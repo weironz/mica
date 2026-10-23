@@ -6,13 +6,5 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-/// FFI round-trip smoke test (string → string), delegated to mica-core.
-String greet({required String name}) =>
-    RustLib.instance.api.crateApiSimpleGreet(name: name);
-
-/// FFI round-trip smoke test (ints), delegated to mica-core.
-PlatformInt64 add({required PlatformInt64 a, required PlatformInt64 b}) =>
-    RustLib.instance.api.crateApiSimpleAdd(a: a, b: b);
-
 /// Version of the bound native core, so Dart can confirm the dylib it loaded.
 String coreVersion() => RustLib.instance.api.crateApiSimpleCoreVersion();

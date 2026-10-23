@@ -9,9 +9,8 @@ use axum::{
 use mica_app_core::{
   AppState,
   documents::{
-    DocumentSnapshotPayload, document_title, export_html_document,
-    export_markdown_with_assets, set_image_srcs,
-    with_page_title,
+    DocumentSnapshotPayload, document_title, export_html_document, export_markdown_with_assets,
+    set_image_srcs, with_page_title,
   },
   store::{self},
 };
@@ -20,10 +19,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::*;
 use crate::routes::auth::user_id_from_headers;
 use axum::body::Bytes;
-use mica_interchange::{ZipEntry, ZipStreamWriter, build_zip};
-use super::*;
+use mica_interchange::{
+  ZipEntry, ZipStreamWriter, build_zip, percent_decode, safe_segment, unique_asset_name,
+};
 
 /// Whether this read should have the page's title welded onto the front.
 ///
@@ -73,7 +74,6 @@ pub async fn export_document_markdown(
 
   Ok(Json(MarkdownExportResponse { markdown }))
 }
-
 
 /// `GET /api/workspaces/{workspace_id}/documents/{document_id}/export.zip`
 ///
@@ -194,25 +194,6 @@ async fn collect_assets(
     map.insert(file_id, format!("assets/{asset}"));
   }
   Ok(map)
-}
-
-/// Make a unique `assets/` filename, appending `-1`, `-2`… on collision.
-fn unique_asset_name(name: &str, used: &mut std::collections::HashSet<String>) -> String {
-  if used.insert(name.to_string()) {
-    return name.to_string();
-  }
-  let (stem, ext) = match name.rsplit_once('.') {
-    Some((s, e)) => (s.to_string(), format!(".{e}")),
-    None => (name.to_string(), String::new()),
-  };
-  let mut n = 1;
-  loop {
-    let candidate = format!("{stem}-{n}{ext}");
-    if used.insert(candidate.clone()) {
-      return candidate;
-    }
-    n += 1;
-  }
 }
 
 /// `GET /api/workspaces/{workspace_id}/export.zip`
@@ -389,7 +370,9 @@ pub struct ExportPageQuery {
   skip_assets: Option<String>,
 }
 
-pub(super) fn parse_export_skip_assets(value: Option<&str>) -> ApiResult<std::collections::HashSet<String>> {
+pub(super) fn parse_export_skip_assets(
+  value: Option<&str>,
+) -> ApiResult<std::collections::HashSet<String>> {
   let mut ids = std::collections::HashSet::new();
   let Some(value) = value.filter(|value| !value.is_empty()) else {
     return Ok(ids);
@@ -452,14 +435,8 @@ pub async fn export_page_zip(
     .await?
     .ok_or(ApiError::NotFound)?;
   let payloads = std::collections::HashMap::from([(view.object_id.to_string(), payload)]);
-  let images = fetch_export_images(
-    &state,
-    workspace_id,
-    &payloads,
-    Some(&files),
-    &skip_assets,
-  )
-  .await?;
+  let images =
+    fetch_export_images(&state, workspace_id, &payloads, Some(&files), &skip_assets).await?;
   let entries = mica_interchange::build_incremental_markdown_tree_zip(
     &nodes,
     &payloads,
@@ -571,35 +548,41 @@ pub async fn export_all_workspaces_zip(
   .await?;
 
   let permit = tree_export_permit()?;
-  Ok(streamed_zip("mica-workspaces.zip", move |mut sink| async move {
-    let _permit = permit;
-    let mut manifest_ws: Vec<serde_json::Value> = Vec::new();
-    let mut used_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (ws_id, ws_name) in &workspaces {
-      // Unique subdir per workspace (two "test" workspaces must not collide).
-      let base = zip_safe_name(ws_name, "workspace");
-      let mut dir = base.clone();
-      let mut n = 2;
-      // Dedup case-insensitively so "Test" and "test" don't both unzip into the
-      // same folder on a case-insensitive filesystem (Windows / default macOS).
-      while !used_dirs.insert(dir.to_lowercase()) {
-        dir = format!("{base} ({n})");
-        n += 1;
+  Ok(streamed_zip(
+    "mica-workspaces.zip",
+    move |mut sink| async move {
+      let _permit = permit;
+      let mut manifest_ws: Vec<serde_json::Value> = Vec::new();
+      let mut used_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+      for (ws_id, ws_name) in &workspaces {
+        // Unique subdir per workspace (two "test" workspaces must not collide).
+        let base = zip_safe_name(ws_name, "workspace");
+        let mut dir = base.clone();
+        let mut n = 2;
+        // Dedup case-insensitively so "Test" and "test" don't both unzip into the
+        // same folder on a case-insensitive filesystem (Windows / default macOS).
+        while !used_dirs.insert(dir.to_lowercase()) {
+          dir = format!("{base} ({n})");
+          n += 1;
+        }
+        stream_tree(&state, &mut sink, *ws_id, None, &format!("{dir}/")).await?;
+        manifest_ws.push(serde_json::json!({ "name": ws_name, "dir": dir }));
       }
-      stream_tree(&state, &mut sink, *ws_id, None, &format!("{dir}/")).await?;
-      manifest_ws.push(serde_json::json!({ "name": ws_name, "dir": dir }));
-    }
-    let manifest = serde_json::json!({
-      "version": 1,
-      "generator": "mica",
-      "kind": "workspaces",
-      "workspaces": manifest_ws,
-    });
-    sink
-      .add("workspaces.json", serde_json::to_vec_pretty(&manifest).unwrap_or_default())
-      .await?;
-    Ok(sink)
-  }))
+      let manifest = serde_json::json!({
+        "version": 1,
+        "generator": "mica",
+        "kind": "workspaces",
+        "workspaces": manifest_ws,
+      });
+      sink
+        .add(
+          "workspaces.json",
+          serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+        )
+        .await?;
+      Ok(sink)
+    },
+  ))
 }
 
 /// `GET /api/workspaces/{workspace_id}/views/{view_id}/export.zip`
@@ -722,14 +705,19 @@ where
   let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
   let failed = tx.clone();
   tokio::spawn(async move {
-    let sink = ZipSink { writer: ZipStreamWriter::default(), tx };
+    let sink = ZipSink {
+      writer: ZipStreamWriter::default(),
+      tx,
+    };
     let result = match build(sink).await {
       Ok(sink) => sink.finish().await,
       Err(error) => Err(error),
     };
     if let Err(error) = result {
       tracing::warn!(error = %error.public_message(), "streamed export stopped; the download is cut short");
-      let _ = failed.send(Err(std::io::Error::other(error.public_message()))).await;
+      let _ = failed
+        .send(Err(std::io::Error::other(error.public_message())))
+        .await;
     }
   });
   let stream = futures_util::stream::unfold(rx, |mut rx| async move {
@@ -784,7 +772,9 @@ pub(super) async fn stream_tree(
   let mut has_payload: std::collections::HashSet<String> = std::collections::HashSet::new();
   let mut file_name: BTreeMap<String, String> = BTreeMap::new();
   for id in &document_ids {
-    let Ok(uuid) = Uuid::parse_str(id) else { continue };
+    let Ok(uuid) = Uuid::parse_str(id) else {
+      continue;
+    };
     let Some(payload) = store::current_payload(&state.db, uuid).await? else {
       continue;
     };
@@ -795,12 +785,19 @@ pub(super) async fn stream_tree(
       }
       if let Some(file_id) = b.data.get("file_id").and_then(|x| x.as_str()) {
         file_name.entry(file_id.to_string()).or_insert_with(|| {
-          b.data.get("name").and_then(|x| x.as_str()).unwrap_or("image").to_string()
+          b.data
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("image")
+            .to_string()
         });
       }
     }
   }
-  let ids: Vec<Uuid> = file_name.keys().filter_map(|id| Uuid::parse_str(id).ok()).collect();
+  let ids: Vec<Uuid> = file_name
+    .keys()
+    .filter_map(|id| Uuid::parse_str(id).ok())
+    .collect();
   let records = if ids.is_empty() {
     Vec::new()
   } else {
@@ -817,7 +814,9 @@ pub(super) async fn stream_tree(
   // Pass 2: the archive, in order.
   let mut wrote_any = false;
   if let Some(manifest) = export.manifest(|object_id| has_payload.contains(object_id)) {
-    sink.add(&format!("{prefix}{}", manifest.name), manifest.data).await?;
+    sink
+      .add(&format!("{prefix}{}", manifest.name), manifest.data)
+      .await?;
     wrote_any = true;
   }
   // A blob that could not be downloaded stays a link on every page, as when
@@ -827,7 +826,9 @@ pub(super) async fn stream_tree(
     if !has_payload.contains(object_id) {
       continue;
     }
-    let Ok(uuid) = Uuid::parse_str(object_id) else { continue };
+    let Ok(uuid) = Uuid::parse_str(object_id) else {
+      continue;
+    };
     let Some(payload) = store::current_payload(&state.db, uuid).await? else {
       continue;
     };
@@ -853,24 +854,41 @@ pub(super) async fn stream_tree(
       };
       page_images.insert(
         file_id,
-        ImageAsset { name: name.clone(), bytes, dedup_key: record.object_key.clone() },
+        ImageAsset {
+          name: name.clone(),
+          bytes,
+          dedup_key: record.object_key.clone(),
+        },
       );
     }
-    for entry in export.page(view_id, &payload, &page_images, &std::collections::HashSet::new()) {
-      sink.add(&format!("{prefix}{}", entry.name), entry.data).await?;
+    for entry in export.page(
+      view_id,
+      &payload,
+      &page_images,
+      &std::collections::HashSet::new(),
+    ) {
+      sink
+        .add(&format!("{prefix}{}", entry.name), entry.data)
+        .await?;
       wrote_any = true;
     }
   }
   if !wrote_any {
     let entry = TreeExport::empty_archive_entry();
-    sink.add(&format!("{prefix}{}", entry.name), entry.data).await?;
+    sink
+      .add(&format!("{prefix}{}", entry.name), entry.data)
+      .await?;
   }
   Ok(())
 }
 
 /// Test seam: [stream_tree] run to completion, the archive collected.
 #[cfg(test)]
-pub(super) async fn stream_tree_bytes(state: &AppState, workspace_id: Uuid, root: Option<Uuid>) -> Vec<u8> {
+pub(super) async fn stream_tree_bytes(
+  state: &AppState,
+  workspace_id: Uuid,
+  root: Option<Uuid>,
+) -> Vec<u8> {
   let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
   let collector = tokio::spawn(async move {
     let mut out = Vec::new();
@@ -879,8 +897,13 @@ pub(super) async fn stream_tree_bytes(state: &AppState, workspace_id: Uuid, root
     }
     out
   });
-  let mut sink = ZipSink { writer: ZipStreamWriter::default(), tx };
-  stream_tree(state, &mut sink, workspace_id, root, "").await.unwrap();
+  let mut sink = ZipSink {
+    writer: ZipStreamWriter::default(),
+    tx,
+  };
+  stream_tree(state, &mut sink, workspace_id, root, "")
+    .await
+    .unwrap();
   sink.finish().await.unwrap();
   collector.await.unwrap()
 }
@@ -888,12 +911,21 @@ pub(super) async fn stream_tree_bytes(state: &AppState, workspace_id: Uuid, root
 /// Test oracle: the archive as it was built before streaming — every payload
 /// gathered into one map, then one in-memory build (no storage, so no images).
 #[cfg(test)]
-pub(super) async fn gathered_tree_bytes(state: &AppState, workspace_id: Uuid, root: Option<Uuid>) -> Vec<u8> {
-  let views = fetch_workspace_views(&state.db, workspace_id).await.unwrap();
+pub(super) async fn gathered_tree_bytes(
+  state: &AppState,
+  workspace_id: Uuid,
+  root: Option<Uuid>,
+) -> Vec<u8> {
+  let views = fetch_workspace_views(&state.db, workspace_id)
+    .await
+    .unwrap();
   let nodes = export_tree_nodes(&views);
   let mut payloads = std::collections::HashMap::new();
   for v in views.iter().filter(|v| v.object_type == "document") {
-    if let Some(p) = store::current_payload(&state.db, v.object_id).await.unwrap() {
+    if let Some(p) = store::current_payload(&state.db, v.object_id)
+      .await
+      .unwrap()
+    {
       payloads.insert(v.object_id.to_string(), p);
     }
   }
@@ -907,9 +939,17 @@ pub(super) async fn gathered_tree_bytes(state: &AppState, workspace_id: Uuid, ro
 }
 
 /// One blob's bytes from storage, or `None` (no storage, or any failure).
-async fn download_blob(state: &AppState, client: &reqwest::Client, object_key: &str) -> Option<Vec<u8>> {
+async fn download_blob(
+  state: &AppState,
+  client: &reqwest::Client,
+  object_key: &str,
+) -> Option<Vec<u8>> {
   let storage = state.storage.as_ref()?;
-  let resp = client.get(storage.presign_get_server(object_key)).send().await.ok()?;
+  let resp = client
+    .get(storage.presign_get_server(object_key))
+    .send()
+    .await
+    .ok()?;
   if !resp.status().is_success() {
     return None;
   }
@@ -954,11 +994,20 @@ pub(super) async fn fetch_export_images(
   }
   let storage = state.storage.clone();
   if storage.is_none() && file_ids.iter().any(|id| !skip_assets.contains(id)) {
-    return Err(ApiError::Unavailable("file storage is not configured".into()));
+    return Err(ApiError::Unavailable(
+      "file storage is not configured".into(),
+    ));
   }
-  let ids: Vec<Uuid> = file_ids.iter().filter_map(|id| Uuid::parse_str(id).ok()).collect();
+  let ids: Vec<Uuid> = file_ids
+    .iter()
+    .filter_map(|id| Uuid::parse_str(id).ok())
+    .collect();
   let records = match file_snapshot {
-    Some(records) => records.iter().filter(|r| ids.contains(&r.id)).cloned().collect(),
+    Some(records) => records
+      .iter()
+      .filter(|r| ids.contains(&r.id))
+      .cloned()
+      .collect(),
     None => store::fetch_files(&state.db, workspace_id, &ids).await?,
   };
   let by_id: std::collections::HashMap<String, &store::FileRecord> =
@@ -970,14 +1019,18 @@ pub(super) async fn fetch_export_images(
     .map_err(|e| ApiError::Internal(e.to_string()))?;
   for file_id in &file_ids {
     let Some(record) = by_id.get(file_id) else {
-      return Err(ApiError::Unavailable(format!("export image {file_id} is missing")));
+      return Err(ApiError::Unavailable(format!(
+        "export image {file_id} is missing"
+      )));
     };
     let bytes = if skip_assets.contains(file_id) {
       Vec::new()
     } else {
       download_blob(state, &client, &record.object_key)
         .await
-        .ok_or_else(|| ApiError::Unavailable(format!("failed to download export image {file_id}")))?
+        .ok_or_else(|| {
+          ApiError::Unavailable(format!("failed to download export image {file_id}"))
+        })?
     };
     images.insert(
       file_id.clone(),
@@ -1071,7 +1124,10 @@ fn parse_blob_href(href: &str, workspace_id: Uuid) -> Option<(String, String)> {
 /// quietly downgrade every uploaded image into an external link pointing at
 /// itself — still rendering, but no longer a reference, so blob GC would stop
 /// counting it and eventually delete the bytes out from under the page.
-pub(super) fn rewire_blob_hrefs(blocks: &mut [mica_app_core::documents::Block], workspace_id: Uuid) {
+pub(super) fn rewire_blob_hrefs(
+  blocks: &mut [mica_app_core::documents::Block],
+  workspace_id: Uuid,
+) {
   for block in blocks {
     if block.kind != "image" {
       continue;
@@ -1082,50 +1138,6 @@ pub(super) fn rewire_blob_hrefs(blocks: &mut [mica_app_core::documents::Block], 
     if let Some((file_id, name)) = parse_blob_href(url, workspace_id) {
       block.data = serde_json::json!({"file_id": file_id, "name": name});
     }
-  }
-}
-
-/// Decode `%XX` escapes back to a UTF-8 string; leave malformed escapes alone.
-/// In-house rather than a dependency: this is the only percent-decode in the
-/// server, and it is a dozen lines.
-pub(super) fn percent_decode(input: &str) -> String {
-  let bytes = input.as_bytes();
-  let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-  let mut i = 0;
-  while i < bytes.len() {
-    if bytes[i] == b'%'
-      && i + 2 < bytes.len()
-      && let Ok(byte) = u8::from_str_radix(&input[i + 1..i + 3], 16)
-    {
-      out.push(byte);
-      i += 3;
-    } else {
-      out.push(bytes[i]);
-      i += 1;
-    }
-  }
-  String::from_utf8_lossy(&out).into_owned()
-}
-
-/// A path segment safe for a filename: keep letters/digits of any script plus
-/// `-_.`, collapse other runs to `_`; never empty.
-pub(super) fn safe_segment(name: &str) -> String {
-  let mut out = String::new();
-  let mut prev_us = false;
-  for ch in name.chars() {
-    if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-      out.push(ch);
-      prev_us = ch == '_';
-    } else if !prev_us {
-      out.push('_');
-      prev_us = true;
-    }
-  }
-  let tidy = out.trim_matches('_').to_string();
-  if tidy.is_empty() {
-    "untitled".to_string()
-  } else {
-    tidy
   }
 }
 
@@ -1357,7 +1369,10 @@ async fn collect_asset_data_uris(
     .storage
     .clone()
     .ok_or_else(|| ApiError::Unavailable("file storage is not configured".to_string()))?;
-  let ids: Vec<Uuid> = wanted.iter().filter_map(|id| Uuid::parse_str(id).ok()).collect();
+  let ids: Vec<Uuid> = wanted
+    .iter()
+    .filter_map(|id| Uuid::parse_str(id).ok())
+    .collect();
   let records = store::fetch_files(&state.db, workspace_id, &ids).await?;
   let by_id: std::collections::HashMap<String, &store::FileRecord> =
     records.iter().map(|r| (r.id.to_string(), r)).collect();
@@ -1368,7 +1383,11 @@ async fn collect_asset_data_uris(
     let Some(record) = by_id.get(&file_id) else {
       continue;
     };
-    let bytes = match client.get(storage.presign_get_server(&record.object_key)).send().await {
+    let bytes = match client
+      .get(storage.presign_get_server(&record.object_key))
+      .send()
+      .await
+    {
       Ok(resp) if resp.status().is_success() => match resp.bytes().await {
         Ok(b) => b.to_vec(),
         Err(_) => continue,
@@ -1389,7 +1408,10 @@ async fn collect_asset_data_uris(
 /// capability URL (mounted without the scope guard in
 /// `routes::public_api_router`), so it resolves on an unauthenticated share
 /// page too.
-pub(super) fn inline_blob_hrefs(blocks: &mut [mica_app_core::documents::Block], workspace_id: Uuid) {
+pub(super) fn inline_blob_hrefs(
+  blocks: &mut [mica_app_core::documents::Block],
+  workspace_id: Uuid,
+) {
   for block in blocks {
     if block.kind != "image" {
       continue;
@@ -1416,7 +1438,6 @@ pub(super) fn inline_blob_hrefs(blocks: &mut [mica_app_core::documents::Block], 
     }
   }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1525,5 +1546,4 @@ mod tests {
     assert_eq!(safe_segment("///"), "untitled");
     assert_eq!(safe_segment(""), "untitled");
   }
-
 }

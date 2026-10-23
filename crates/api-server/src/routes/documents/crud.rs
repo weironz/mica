@@ -1,4 +1,3 @@
-
 use axum::{
   Json,
   extract::{Path, State},
@@ -7,19 +6,18 @@ use axum::{
 use mica_app_core::{
   AppState,
   documents::{
-    DocumentOperation,
-    export_markdown_with_assets, import_markdown, import_markdown_fragment,
+    DocumentOperation, export_markdown_with_assets, import_markdown, import_markdown_fragment,
   },
-  store::{self, DocumentRecord},
+  store,
 };
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::export::{blob_asset_map, rewire_blob_hrefs};
+use super::*;
 use crate::routes::auth::user_id_from_headers;
 use crate::routes::ws;
-use super::*;
-use super::export::{blob_asset_map, rewire_blob_hrefs};
 
 pub async fn create_document(
   State(state): State<AppState>,
@@ -36,71 +34,20 @@ pub async fn create_document(
     ensure_parent_accepts_children(&state.db, workspace_id, parent_view_id).await?;
   }
 
-  let mut tx = state.db.begin().await?;
-  let root_block_id = format!("block_{}", Uuid::new_v4().simple());
-
-  let document = sqlx::query_as::<_, DocumentRecord>(
-    r#"
-      INSERT INTO documents (workspace_id, root_block_id, created_by)
-      VALUES ($1, $2, $3)
-      RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
-    "#,
-  )
-  .bind(workspace_id)
-  .bind(&root_block_id)
-  .bind(user_id)
-  .fetch_one(&mut *tx)
-  .await?;
-
-  // A new page owns its yrs base from birth, written in the same transaction as
-  // its `documents` row. Before S4 this wrote an op-model snapshot instead and
-  // the base was built afterwards, best-effort — so a document could exist for a
-  // moment with no content to read, and stayed unsearchable until first open.
-  mica_app_core::sync::seed_base_tx(
-    &mut tx,
-    document.id,
-    mica_app_core::sync::empty_payload(&document.root_block_id),
+  let root_block_id = new_root_block_id();
+  let (document, view) = insert_page(
+    &state.db,
+    workspace_id,
+    user_id,
+    InsertPage {
+      view_id: None,
+      parent_view_id: payload.parent_view_id,
+      name: &name,
+      icon: None,
+      seed: mica_app_core::sync::empty_payload(&root_block_id),
+    },
   )
   .await?;
-
-  let position = Uuid::now_v7().to_string();
-  let view = sqlx::query_as::<_, View>(
-    r#"
-      INSERT INTO views (
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type,
-        name,
-        position,
-        created_by
-      )
-      VALUES ($1, $2, $3, 'document', $4, $5, $6)
-      RETURNING
-        id,
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type::text AS object_type,
-        name,
-        icon,
-        position,
-        is_deleted,
-        created_by,
-        created_at,
-        updated_at
-    "#,
-  )
-  .bind(workspace_id)
-  .bind(payload.parent_view_id)
-  .bind(document.id)
-  .bind(name)
-  .bind(position)
-  .bind(user_id)
-  .fetch_one(&mut *tx)
-  .await?;
-
-  tx.commit().await?;
 
   Ok(Json(DocumentCreateResponse { document, view }))
 }
@@ -131,7 +78,7 @@ pub async fn create_folder(
   // uuid purely to satisfy the NOT NULL column; nothing references it.
   let object_id = Uuid::new_v4();
   let position = Uuid::now_v7().to_string();
-  let view = sqlx::query_as::<_, View>(
+  let view = sqlx::query_as::<_, View>(concat!(
     r#"
       INSERT INTO views (
         workspace_id,
@@ -144,20 +91,10 @@ pub async fn create_folder(
       )
       VALUES ($1, $2, $3, 'folder', $4, $5, $6)
       RETURNING
-        id,
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type::text AS object_type,
-        name,
-        icon,
-        position,
-        is_deleted,
-        created_by,
-        created_at,
-        updated_at
-    "#,
-  )
+        "#,
+    view_columns!(),
+    "\n    ",
+  ))
   .bind(workspace_id)
   .bind(payload.parent_view_id)
   .bind(object_id)
@@ -189,74 +126,28 @@ pub async fn import_document_markdown(
     ensure_parent_accepts_children(&state.db, workspace_id, parent_view_id).await?;
   }
 
-  let mut tx = state.db.begin().await?;
-  let root_block_id = format!("block_{}", Uuid::new_v4().simple());
-
-  let document = sqlx::query_as::<_, DocumentRecord>(
-    r#"
-      INSERT INTO documents (workspace_id, root_block_id, created_by)
-      VALUES ($1, $2, $3)
-      RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
-    "#,
-  )
-  .bind(workspace_id)
-  .bind(&root_block_id)
-  .bind(user_id)
-  .fetch_one(&mut *tx)
-  .await?;
-
+  let root_block_id = new_root_block_id();
   let mut imported = import_markdown(&payload.markdown, &root_block_id);
   rewire_blob_hrefs(&mut imported.blocks, workspace_id);
-  // Seed the yrs base with the imported content, in the import's own
-  // transaction. This also makes the body searchable immediately: `content_text`
-  // (the FTS index) is co-written with the base, so an imported-but-never-opened
-  // page is findable by its body, not just its title.
-  mica_app_core::sync::seed_base_tx(&mut tx, document.id, imported.clone()).await?;
   let snapshot = store::AppliedContent {
     version_seq: 0,
     schema_version: imported.schema_version,
     payload: serde_json::to_value(&imported)
       .map_err(|error| ApiError::Internal(error.to_string()))?,
   };
-
-  let position = Uuid::now_v7().to_string();
-  let view = sqlx::query_as::<_, View>(
-    r#"
-      INSERT INTO views (
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type,
-        name,
-        position,
-        created_by
-      )
-      VALUES ($1, $2, $3, 'document', $4, $5, $6)
-      RETURNING
-        id,
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type::text AS object_type,
-        name,
-        icon,
-        position,
-        is_deleted,
-        created_by,
-        created_at,
-        updated_at
-    "#,
+  let (document, view) = insert_page(
+    &state.db,
+    workspace_id,
+    user_id,
+    InsertPage {
+      view_id: None,
+      parent_view_id: payload.parent_view_id,
+      name: &name,
+      icon: None,
+      seed: imported,
+    },
   )
-  .bind(workspace_id)
-  .bind(payload.parent_view_id)
-  .bind(document.id)
-  .bind(name)
-  .bind(position)
-  .bind(user_id)
-  .fetch_one(&mut *tx)
   .await?;
-
-  tx.commit().await?;
 
   Ok(Json(DocumentBootstrapResponse {
     document,
@@ -283,7 +174,7 @@ pub async fn update_view(
       return Err(ApiError::BadRequest("icon is too long".into()));
     }
   }
-  let view = sqlx::query_as::<_, View>(
+  let view = sqlx::query_as::<_, View>(concat!(
     r#"
       UPDATE views
       SET name = $1,
@@ -296,20 +187,10 @@ pub async fn update_view(
           updated_at = now()
       WHERE id = $2 AND workspace_id = $3 AND is_deleted = false
       RETURNING
-        id,
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type::text AS object_type,
-        name,
-        icon,
-        position,
-        is_deleted,
-        created_by,
-        created_at,
-        updated_at
-    "#,
-  )
+        "#,
+    view_columns!(),
+    "\n    ",
+  ))
   .bind(name)
   .bind(view_id)
   .bind(workspace_id)
@@ -387,7 +268,6 @@ pub async fn delete_view(
 
   Ok(Json(ViewListResponse { views }))
 }
-
 
 pub async fn bootstrap_document(
   State(state): State<AppState>,
@@ -723,7 +603,6 @@ pub async fn update_document_markdown(
   }))
 }
 
-
 /// Pure: derive the block ops that write [markdown] into a doc whose current
 /// state is [current]. `replace_all` first deletes the root's top-level children
 /// (delete cascades their subtrees); then the parsed markdown tree is grafted
@@ -938,7 +817,6 @@ fn graft_ops(
   }
 }
 
-
 #[cfg(test)]
 mod markdown_update_tests {
   use super::*;
@@ -1016,8 +894,8 @@ mod markdown_update_tests {
   fn insert_at_does_not_swallow_content_between_dashes() {
     let mut req = request(MarkdownUpdateMode::InsertAt, "---\nbody\n---\ntail");
     req.anchor = Some("p1".to_string());
-    let ops =
-      markdown_update_ops(&current_doc(), &req, Uuid::new_v4()).expect("insert_at should build ops");
+    let ops = markdown_update_ops(&current_doc(), &req, Uuid::new_v4())
+      .expect("insert_at should build ops");
     assert_eq!(inserted_texts(&ops), vec!["body", "tail"]);
   }
 
@@ -1069,7 +947,6 @@ mod markdown_update_tests {
     );
   }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1264,7 +1141,9 @@ mod tests {
     let ops = markdown_update_ops(&current, &request, Uuid::new_v4()).unwrap();
     assert_eq!(
       ops,
-      [DocumentOperation::DeleteBlock { block_id: "b".into() }],
+      [DocumentOperation::DeleteBlock {
+        block_id: "b".into()
+      }],
       "one targeted op — deleting a block must not rewrite the page around it"
     );
   }
@@ -1285,7 +1164,10 @@ mod tests {
     let mut gone = upd(MarkdownUpdateMode::Delete, "");
     gone.anchor = Some("vanished".into());
     let err = markdown_update_ops(&current, &gone, Uuid::new_v4()).unwrap_err();
-    assert!(err.contains("vanished"), "the error names the anchor: {err}");
+    assert!(
+      err.contains("vanished"),
+      "the error names the anchor: {err}"
+    );
 
     // No anchor at all must not be read as "delete nothing, succeed".
     let bare = upd(MarkdownUpdateMode::Delete, "");
@@ -1377,5 +1259,4 @@ mod tests {
       "empty replace_all must not wipe the doc, got: {err}",
     );
   }
-
 }

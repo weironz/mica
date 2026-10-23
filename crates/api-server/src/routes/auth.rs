@@ -356,7 +356,9 @@ pub async fn put_settings(
 ) -> ApiResult<StatusCode> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   if !payload.settings.is_object() {
-    return Err(ApiError::BadRequest("settings must be a JSON object".into()));
+    return Err(ApiError::BadRequest(
+      "settings must be a JSON object".into(),
+    ));
   }
   // A settings blob is a handful of toggles. The cap is against the table
   // quietly becoming somebody's free key-value store, not a real limit anyone
@@ -463,13 +465,18 @@ pub async fn delete_account(
   let keys = delete_user_and_owned(
     &state.db,
     user_id,
-    state.storage.as_ref().map_or(7 * 24 * 60 * 60, |s| s.presign_ttl_seconds),
+    state
+      .storage
+      .as_ref()
+      .map_or(7 * 24 * 60 * 60, |s| s.presign_ttl_seconds),
   )
   .await?;
   if let Some(storage) = &state.storage {
     super::workspaces::delete_objects(
       storage,
-      keys.iter().map(|(workspace_id, key)| (*workspace_id, key.as_str())),
+      keys
+        .iter()
+        .map(|(workspace_id, key)| (*workspace_id, key.as_str())),
     )
     .await;
     // The face goes too. Avatars live under `avatars/{user_id}/`, outside
@@ -477,7 +484,10 @@ pub async fn delete_account(
     // ever reaches them — a deleted account's picture used to stay in storage
     // forever. Best effort, after commit: the account is already gone.
     if let Some(avatar) = user.avatar_key.as_deref().filter(|key| !key.is_empty())
-      && let Err(error) = reqwest::Client::new().delete(storage.presign_delete(avatar)).send().await
+      && let Err(error) = reqwest::Client::new()
+        .delete(storage.presign_delete(avatar))
+        .send()
+        .await
     {
       tracing::warn!(%user_id, error = %error.without_url(), "delete account: avatar object left behind");
     }
@@ -503,18 +513,17 @@ pub async fn delete_user_and_owned(
   // INSERTs until the pending ledger and cascades have committed together.
   let user_exists: Option<Uuid> =
     sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+      .bind(user_id)
+      .fetch_optional(&mut *tx)
+      .await?;
   if user_exists.is_none() {
     return Err(ApiError::NotFound);
   }
-  let workspace_ids: Vec<Uuid> = sqlx::query_scalar(
-    "SELECT id FROM workspaces WHERE owner_id = $1 ORDER BY id FOR UPDATE",
-  )
-  .bind(user_id)
-  .fetch_all(&mut *tx)
-  .await?;
+  let workspace_ids: Vec<Uuid> =
+    sqlx::query_scalar("SELECT id FROM workspaces WHERE owner_id = $1 ORDER BY id FOR UPDATE")
+      .bind(user_id)
+      .fetch_all(&mut *tx)
+      .await?;
   let keys: Vec<(Uuid, String)> = sqlx::query_as(
     "SELECT workspace_id, object_key FROM files \
      WHERE workspace_id = ANY($1) ORDER BY workspace_id, object_key",
@@ -618,6 +627,16 @@ async fn auth_response_in_family(
   })
 }
 
+/// Mint one prefixed secret: the prefix makes a leaked string recognisable in
+/// a log (`mica_rt_` refresh token, `mica_pat_` PAT, `mica_ev_` verification,
+/// `mica_pr_` reset), followed by 244 bits of randomness from two v4 UUIDs —
+/// no extra crate, plenty for a token. All four sites minted by the same two
+/// `format!` lines; this is them, recited once.
+pub(crate) fn mint_secret(prefix: &str) -> String {
+  let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+  format!("{prefix}{secret}")
+}
+
 pub const REFRESH_PREFIX: &str = "mica_rt_";
 
 async fn issue_refresh_token(
@@ -644,10 +663,7 @@ pub async fn mint_refresh_token(
   user_id: Uuid,
   family_id: Uuid,
 ) -> ApiResult<String> {
-  // 244 bits of randomness from two v4 UUIDs — same recipe as a PAT
-  // (tokens.rs), no extra crate.
-  let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-  let token = format!("{REFRESH_PREFIX}{secret}");
+  let token = mint_secret(REFRESH_PREFIX);
   let expires_at = Utc::now() + Duration::seconds(ttl_seconds);
 
   // Never mint into a family that has been revoked. `refresh` spends the old
@@ -996,7 +1012,9 @@ pub(crate) async fn user_id_from_headers(state: &AppState, headers: &HeaderMap) 
     .or_else(|| cookie_value(headers, SESSION_COOKIE))
     .ok_or(ApiError::Unauthorized)?;
   // Same token the guard resolved moments ago in this request → same answer.
-  if let Ok(Some(user_id)) = RESOLVED.try_with(|(seen, user_id)| (*seen == token).then_some(*user_id)) {
+  if let Ok(Some(user_id)) =
+    RESOLVED.try_with(|(seen, user_id)| (*seen == token).then_some(*user_id))
+  {
     return Ok(user_id);
   }
   Ok(resolve_token(state, &token).await?.user_id)
@@ -1046,9 +1064,9 @@ pub(crate) async fn ensure_user_exists(db: &sqlx::PgPool, user_id: Uuid) -> ApiR
   let exists = sqlx::query_scalar::<_, bool>(
     "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)",
   )
-    .bind(user_id)
-    .fetch_one(db)
-    .await?;
+  .bind(user_id)
+  .fetch_one(db)
+  .await?;
   if exists {
     Ok(())
   } else {
@@ -1159,6 +1177,35 @@ pub(crate) fn bearer_token(headers: &HeaderMap) -> Option<String> {
     .filter(|token| !token.is_empty())
 }
 
+/// The token for a WebSocket handshake, from three sources in descending order
+/// of how deliberate they are — the one function both WS routes (`ws.rs`, the
+/// document and tree sockets; `ai_ws.rs`, the AI stream) call, after each used
+/// to carry its own copy of this sequence.
+///
+/// 1. `Authorization: Bearer` — desktop. An explicit header is an explicit act.
+/// 2. The session **cookie** — web. The WS handshake is an ordinary HTTP
+///    request, so the browser attaches it by itself. This is what lets the web
+///    client stop putting a JWT in the URL: "browsers cannot authenticate a
+///    WebSocket" is only true of custom headers, and taking it as true of
+///    cookies too is what kept the token in the query string for so long.
+/// 3. `?token=` — the compatibility tail (`query_token`). Still read so an
+///    older web build (and any non-browser client) keeps working; it is no
+///    longer written by ours.
+pub(crate) fn token_from_request(headers: &HeaderMap, query_token: Option<&str>) -> Option<String> {
+  if let Some(token) = bearer_token(headers) {
+    return Some(token);
+  }
+
+  if let Some(token) = cookie_value(headers, SESSION_COOKIE) {
+    return Some(token);
+  }
+
+  query_token
+    .map(str::trim)
+    .filter(|token| !token.is_empty())
+    .map(str::to_string)
+}
+
 /// The `Set-Cookie` pair for a freshly minted session.
 fn auth_cookie_headers(state: &AppState, response: &AuthResponse) -> HeaderMap {
   let secure = state.config.environment == Environment::Production;
@@ -1252,7 +1299,11 @@ pub async fn scope_guard(
   if !auth.grants(need) {
     return Err(ApiError::Forbidden);
   }
-  Ok(RESOLVED.scope((token, auth.user_id), next.run(request)).await)
+  Ok(
+    RESOLVED
+      .scope((token, auth.user_id), next.run(request))
+      .await,
+  )
 }
 
 // The unguarded routes (health probes and the mail-link endpoints whose
@@ -1324,9 +1375,8 @@ pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> a
 /// path to verify against.
 fn dummy_password_hash() -> &'static str {
   static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-  HASH.get_or_init(|| {
-    hash_password(&Uuid::new_v4().to_string()).expect("hashing a random password")
-  })
+  HASH
+    .get_or_init(|| hash_password(&Uuid::new_v4().to_string()).expect("hashing a random password"))
 }
 
 fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {
@@ -1398,7 +1448,10 @@ impl From<UserRow> for UserResponse {
       email: user.email,
       display_name: user.display_name,
       created_at: user.created_at,
-      avatar_version: user.avatar_key.as_deref().map(crate::routes::avatar::avatar_version),
+      avatar_version: user
+        .avatar_key
+        .as_deref()
+        .map(crate::routes::avatar::avatar_version),
     }
   }
 }
@@ -1545,7 +1598,11 @@ mod refresh_pg {
           .unwrap();
       row.map_or_else(|| serde_json::json!({}), |(s,)| s)
     };
-    assert_eq!(read(db.clone()).await, serde_json::json!({}), "no row reads as empty");
+    assert_eq!(
+      read(db.clone()).await,
+      serde_json::json!({}),
+      "no row reads as empty"
+    );
 
     let upsert = |db: sqlx::PgPool, v: serde_json::Value| async move {
       sqlx::query(
@@ -1558,7 +1615,11 @@ mod refresh_pg {
       .await
       .unwrap();
     };
-    upsert(db.clone(), serde_json::json!({"showPageTitle": "true", "themeMode": "dark"})).await;
+    upsert(
+      db.clone(),
+      serde_json::json!({"showPageTitle": "true", "themeMode": "dark"}),
+    )
+    .await;
     assert_eq!(
       read(db.clone()).await,
       serde_json::json!({"showPageTitle": "true", "themeMode": "dark"})
@@ -1657,7 +1718,11 @@ mod refresh_pg {
     // The owner (a tombstone now), their workspace, and its document (cascade)
     // are all gone.
     assert_eq!(
-      count("SELECT count(*) FROM users WHERE id=$1 AND deleted_at IS NULL", owner).await,
+      count(
+        "SELECT count(*) FROM users WHERE id=$1 AND deleted_at IS NULL",
+        owner
+      )
+      .await,
       0
     );
     assert_eq!(
@@ -1677,7 +1742,10 @@ mod refresh_pg {
     .fetch_one(&db)
     .await
     .unwrap();
-    assert_eq!(pending_count, 1, "account deletion must leave S3 keys for GC");
+    assert_eq!(
+      pending_count, 1,
+      "account deletion must leave S3 keys for GC"
+    );
     let other_pending_count: i64 = sqlx::query_scalar(
       "SELECT count(*) FROM pending_file_uploads WHERE object_key = $1 AND workspace_id = $2",
     )
@@ -1789,11 +1857,17 @@ mod refresh_pg {
         .unwrap();
     assert_eq!(memberships, 0);
     assert!(
-      matches!(ensure_user_exists(&db, leaver).await, Err(ApiError::Unauthorized)),
+      matches!(
+        ensure_user_exists(&db, leaver).await,
+        Err(ApiError::Unauthorized)
+      ),
       "a still-valid access token must stop identifying anyone"
     );
     assert!(
-      matches!(delete_user_and_owned(&db, leaver, 900).await, Err(ApiError::NotFound)),
+      matches!(
+        delete_user_and_owned(&db, leaver, 900).await,
+        Err(ApiError::NotFound)
+      ),
       "a tombstone is not deleted twice"
     );
     // The address is free again.
@@ -1805,9 +1879,17 @@ mod refresh_pg {
       .await
       .expect("the real address can register again");
 
-    sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.ok();
+    sqlx::query("DELETE FROM workspaces WHERE id=$1")
+      .bind(ws)
+      .execute(&db)
+      .await
+      .ok();
     for u in [leaver, host, again] {
-      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(&db).await.ok();
+      sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(u)
+        .execute(&db)
+        .await
+        .ok();
     }
   }
 
@@ -2005,7 +2087,11 @@ mod refresh_pg {
           .unwrap()
       }
     };
-    assert_eq!(count(user).await, 0, "the intruder's PAT dies with the password");
+    assert_eq!(
+      count(user).await,
+      0,
+      "the intruder's PAT dies with the password"
+    );
     assert_eq!(count(other).await, 1, "other users' tokens are untouched");
   }
 
@@ -2254,14 +2340,15 @@ mod refresh_pg {
     // CREATE/DROP DATABASE cannot take a bind parameter. The name is a UUID this
     // test just minted — no external input reaches it.
     let name = format!("mica_firstrun_{}", Uuid::new_v4().simple());
-    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-      "CREATE DATABASE {name}"
-    )))
-    .execute(&db)
-    .await
-    .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
+      .execute(&db)
+      .await
+      .unwrap();
     let url = std::env::var("DATABASE_URL").unwrap();
-    let scratch_url = url.rsplit_once('/').map(|(base, _)| format!("{base}/{name}")).unwrap();
+    let scratch_url = url
+      .rsplit_once('/')
+      .map(|(base, _)| format!("{base}/{name}"))
+      .unwrap();
     let scratch = PgPool::connect(&scratch_url).await.unwrap();
     sqlx::query(
       "CREATE TABLE users (
@@ -2279,22 +2366,24 @@ mod refresh_pg {
 
     // Closed — and it still goes through, because there is nobody here yet.
     assert!(
-      try_register(&scratch, "first@new.test", false).await.is_some(),
+      try_register(&scratch, "first@new.test", false)
+        .await
+        .is_some(),
       "the first account must be creatable on an empty instance"
     );
     // ...and the door shuts behind it.
     assert!(
-      try_register(&scratch, "second@new.test", false).await.is_none(),
+      try_register(&scratch, "second@new.test", false)
+        .await
+        .is_none(),
       "the second account must be refused while registration is closed"
     );
 
     scratch.close().await;
-    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-      "DROP DATABASE {name}"
-    )))
-    .execute(&db)
-    .await
-    .ok();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
+      .execute(&db)
+      .await
+      .ok();
   }
 
   /// C4: a tombstone is not an account. Before tombstones, the sole user
@@ -2317,11 +2406,15 @@ mod refresh_pg {
       .await
       .unwrap();
     tx.commit().await.unwrap();
-    assert!(first.is_some(), "closed registration still admits the first live account");
-    let is_admin: bool = sqlx::query_scalar("SELECT is_admin FROM users WHERE email='first@new.test'")
-      .fetch_one(&scratch)
-      .await
-      .unwrap();
+    assert!(
+      first.is_some(),
+      "closed registration still admits the first live account"
+    );
+    let is_admin: bool =
+      sqlx::query_scalar("SELECT is_admin FROM users WHERE email='first@new.test'")
+        .fetch_one(&scratch)
+        .await
+        .unwrap();
     assert!(is_admin);
 
     scratch.close().await;
@@ -2439,7 +2532,10 @@ mod refresh_pg {
       .fetch_one(&scratch2)
       .await
       .unwrap();
-    assert_eq!(count, 1, "exactly one account exists after the closed-door race");
+    assert_eq!(
+      count, 1,
+      "exactly one account exists after the closed-door race"
+    );
 
     drop_scratch_db(&db, scratch, scratch2, &name, &name2).await;
   }
@@ -2553,7 +2649,9 @@ mod refresh_pg {
     let user = seed_user(&db).await;
 
     // Alive: the check passes, so the endpoints behave exactly as before.
-    ensure_user_exists(&db, user).await.expect("an existing account passes");
+    ensure_user_exists(&db, user)
+      .await
+      .expect("an existing account passes");
 
     // Deleted the way `delete_user_and_owned` does it — the row goes.
     sqlx::query("DELETE FROM users WHERE id = $1")
@@ -2563,7 +2661,10 @@ mod refresh_pg {
       .unwrap();
 
     assert!(
-      matches!(ensure_user_exists(&db, user).await, Err(ApiError::Unauthorized)),
+      matches!(
+        ensure_user_exists(&db, user).await,
+        Err(ApiError::Unauthorized)
+      ),
       "a token for a user who no longer exists must be refused (401, so clients \
        re-authenticate) rather than spending the operator's AI credit until it \
        expires on its own"

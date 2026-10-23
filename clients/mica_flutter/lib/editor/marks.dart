@@ -150,9 +150,10 @@ bool rangeHasMark(List<Mark> marks, int from, int to, String type) {
   return marks.any((m) => m.type == type && m.start <= from && m.end >= to);
 }
 
-/// The math run a caret at [caret] sits inside, or null — what decides whether
-/// the editor floats a typeset preview over the formula you are editing
-/// (`_paintMathPreview` in render.dart).
+/// The math run a caret at [caret] sits inside, or null — the core of the
+/// "a formula is one atom" rule: selections snap OUT of a run (see
+/// [snapOutOfMathRun]) and arrow keys step over the whole run (editor.dart's
+/// horizontal move).
 ///
 /// STRICTLY inside. A caret on an edge belongs to the text as much as to the
 /// formula, and calling that a hit would pop the card open every time you typed

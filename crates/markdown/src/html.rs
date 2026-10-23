@@ -1,65 +1,72 @@
+use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::{Block, DocumentOperationError, DocumentOperationResult, DocumentSnapshotPayload};
-use crate::{block_index, mermaid_id, render_math, render_mermaid_svg_with_id};
 use crate::block::*;
 use crate::export_md::*;
 use crate::inline::*;
 use crate::span_walk::{SpanTies, SpanWalker};
+use crate::{Block, DocumentOperationError, DocumentOperationResult, DocumentSnapshotPayload};
+use crate::{mermaid_id, render_math, render_mermaid_svg_with_id};
 
+/// `index` is the id→position map `export_safe_tree` already built for this
+/// snapshot — the recursion looks up every child by id, so threaded through
+/// instead of re-scanned.
 pub(crate) fn append_html_children(
   snapshot: &DocumentSnapshotPayload,
+  index: &HashMap<&str, usize>,
   parent_id: &str,
   out: &mut String,
 ) -> DocumentOperationResult<()> {
-  let parent_index = block_index(snapshot, parent_id)
+  let parent_index = index
+    .get(parent_id)
+    .copied()
     .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
   let child_ids = snapshot.blocks[parent_index].children.clone();
 
-  let mut index = 0;
-  while index < child_ids.len() {
-    let child = block_for(snapshot, &child_ids[index])?;
+  let mut pos = 0;
+  while pos < child_ids.len() {
+    let child = block_for(snapshot, index, &child_ids[pos])?;
     if quote_depth_of(child) > 0 && li_of(child).is_none() {
       // Collect one quote group (a `qbreak` starts the next blockquote)
       // and rebuild the nested <blockquote> structure from `data.quote`.
-      let run_start = index;
-      index += 1;
-      while index < child_ids.len() {
-        let b = block_for(snapshot, &child_ids[index])?;
+      let run_start = pos;
+      pos += 1;
+      while pos < child_ids.len() {
+        let b = block_for(snapshot, index, &child_ids[pos])?;
         if quote_depth_of(b) == 0 || b.data.get("qbreak").is_some() {
           break;
         }
-        index += 1;
+        pos += 1;
       }
-      let items: Vec<&Block> = child_ids[run_start..index]
+      let items: Vec<&Block> = child_ids[run_start..pos]
         .iter()
-        .map(|id| block_for(snapshot, id))
+        .map(|id| block_for(snapshot, index, id))
         .collect::<DocumentOperationResult<_>>()?;
-      render_quote_group(snapshot, &items, 1, out)?;
+      render_quote_group(snapshot, index, &items, 1, out)?;
     } else if list_tag_for(&child.kind).is_some() {
       // Collect the maximal run of list items (any tag, any `data.indent`
       // level) plus their container children (`data.li`) and render the
       // nested <ul>/<ol> structure.
-      let run_start = index;
-      while index < child_ids.len() {
-        let b = block_for(snapshot, &child_ids[index])?;
+      let run_start = pos;
+      while pos < child_ids.len() {
+        let b = block_for(snapshot, index, &child_ids[pos])?;
         let is_li_child = li_of(b).is_some();
         if (list_tag_for(&b.kind).is_none() && !is_li_child)
           || (quote_depth_of(b) > 0 && !is_li_child)
         {
           break;
         }
-        index += 1;
+        pos += 1;
       }
-      let items: Vec<&Block> = child_ids[run_start..index]
+      let items: Vec<&Block> = child_ids[run_start..pos]
         .iter()
-        .map(|id| block_for(snapshot, id))
+        .map(|id| block_for(snapshot, index, id))
         .collect::<DocumentOperationResult<_>>()?;
-      render_html_list(snapshot, &items, 0, out)?;
+      render_html_list(snapshot, index, &items, 0, out)?;
     } else {
-      append_html_block(snapshot, child, out)?;
-      index += 1;
+      append_html_block(snapshot, index, child, out)?;
+      pos += 1;
     }
   }
 
@@ -71,6 +78,7 @@ pub(crate) fn append_html_children(
 /// paragraphs, list items group into lists, anything else renders normally.
 pub(crate) fn render_quote_group(
   snapshot: &DocumentSnapshotPayload,
+  index: &HashMap<&str, usize>,
   items: &[&Block],
   depth: usize,
   out: &mut String,
@@ -111,7 +119,7 @@ pub(crate) fn render_quote_group(
       {
         i += 1;
       }
-      render_html_list(snapshot, &items[s..i], 0, out)?;
+      render_html_list(snapshot, index, &items[s..i], 0, out)?;
       continue;
     }
     if quote_depth_of(items[i]) > depth {
@@ -119,7 +127,7 @@ pub(crate) fn render_quote_group(
       while i < items.len() && quote_depth_of(items[i]) > depth {
         i += 1;
       }
-      render_quote_group(snapshot, &items[s..i], depth + 1, out)?;
+      render_quote_group(snapshot, index, &items[s..i], depth + 1, out)?;
       continue;
     }
     if items[i].kind == "quote" {
@@ -128,7 +136,7 @@ pub(crate) fn render_quote_group(
         out.push_str(&format!("<p>{text}</p>\n"));
       }
     } else {
-      append_html_block(snapshot, items[i], out)?;
+      append_html_block(snapshot, index, items[i], out)?;
     }
     i += 1;
   }
@@ -171,6 +179,7 @@ pub(crate) fn li_level(block: &Block) -> usize {
 /// item of an ordered run becomes `<ol start="n">`.
 pub(crate) fn render_html_list(
   snapshot: &DocumentSnapshotPayload,
+  index: &HashMap<&str, usize>,
   items: &[&Block],
   level: usize,
   out: &mut String,
@@ -186,7 +195,7 @@ pub(crate) fn render_html_list(
       {
         i += 1;
       }
-      render_html_list(snapshot, &items[s..i], level + 1, out)?;
+      render_html_list(snapshot, index, &items[s..i], level + 1, out)?;
       continue;
     }
     let tag = list_tag_for(&items[i].kind).unwrap_or("ul");
@@ -236,7 +245,7 @@ pub(crate) fn render_html_list(
           out.push_str(&format!("<p>{para}</p>\n"));
         }
         if has_children {
-          render_li_children(snapshot, &items[head + 1..end], level, true, out)?;
+          render_li_children(snapshot, index, &items[head + 1..end], level, true, out)?;
         }
         out.push_str("</li>\n");
       } else {
@@ -244,7 +253,7 @@ pub(crate) fn render_html_list(
         out.push_str(&body);
         if has_children {
           out.push('\n');
-          render_li_children(snapshot, &items[head + 1..end], level, false, out)?;
+          render_li_children(snapshot, index, &items[head + 1..end], level, false, out)?;
         }
         out.push_str("</li>\n");
       }
@@ -260,6 +269,7 @@ pub(crate) fn render_html_list(
 /// nested list run.
 pub(crate) fn render_li_children(
   snapshot: &DocumentSnapshotPayload,
+  index: &HashMap<&str, usize>,
   items: &[&Block],
   level: usize,
   loose: bool,
@@ -284,7 +294,7 @@ pub(crate) fn render_li_children(
         // Base depth = the group head's own depth: inside a quoted list
         // (`> 1. > q`) the child carries the ABSOLUTE depth, but the
         // enclosing <blockquote>s are already open around the list.
-        render_quote_group(snapshot, &items[s..i], quote_depth_of(items[s]), out)?;
+        render_quote_group(snapshot, index, &items[s..i], quote_depth_of(items[s]), out)?;
         continue;
       }
       if b.kind == "paragraph" {
@@ -302,7 +312,7 @@ pub(crate) fn render_li_children(
           }
         }
       } else {
-        append_html_block(snapshot, b, out)?;
+        append_html_block(snapshot, index, b, out)?;
       }
       i += 1;
       continue;
@@ -312,7 +322,7 @@ pub(crate) fn render_li_children(
     while i < items.len() && (li_level(items[i]) > level || li_of(items[i]) == Some(level + 1)) {
       i += 1;
     }
-    render_html_list(snapshot, &items[s..i], level + 1, out)?;
+    render_html_list(snapshot, index, &items[s..i], level + 1, out)?;
   }
   Ok(())
 }
@@ -345,12 +355,18 @@ pub(crate) fn html_inline(block: &Block) -> String {
     return match &m.title {
       Some(t) => format!(
         "<a href=\"{}\" title=\"{}\"></a>",
-        escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), false))),
+        escape_html(&escape_href(safe_url(
+          m.href.as_deref().unwrap_or(""),
+          false
+        ))),
         escape_html(t)
       ),
       None => format!(
         "<a href=\"{}\"></a>",
-        escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), false)))
+        escape_html(&escape_href(safe_url(
+          m.href.as_deref().unwrap_or(""),
+          false
+        )))
       ),
     };
   }
@@ -385,7 +401,9 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
     if m.kind == "html" {
       // Raw inline HTML passes through unescaped (GFM tagfilter applied, then
       // an event-handler / `javascript:`-URL scrub for no-CSP consumers).
-      out.push_str(&strip_unsafe_attrs(&tagfilter(&String::from_utf16_lossy(&units[s..e]))));
+      out.push_str(&strip_unsafe_attrs(&tagfilter(&String::from_utf16_lossy(
+        &units[s..e],
+      ))));
       pos = e;
       continue;
     }
@@ -393,7 +411,10 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
       let latex = String::from_utf16_lossy(&units[s..e]);
       match render_math(&latex, false) {
         Some(mathml) => out.push_str(&mathml),
-        None => out.push_str(&format!("<span class=\"math\">{}</span>", escape_html(&latex))),
+        None => out.push_str(&format!(
+          "<span class=\"math\">{}</span>",
+          escape_html(&latex)
+        )),
       }
       pos = e;
       continue;
@@ -401,7 +422,10 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
     if m.kind == "footnote" {
       // GFM reference shape: superscript backlink-anchored to the definition.
       // The label is the href; the visible text is the label too.
-      let label = m.href.clone().unwrap_or_else(|| String::from_utf16_lossy(&units[s..e]));
+      let label = m
+        .href
+        .clone()
+        .unwrap_or_else(|| String::from_utf16_lossy(&units[s..e]));
       let id = escape_html(&label);
       out.push_str(&format!(
         "<sup id=\"fnref-{id}\"><a href=\"#fn-{id}\">{id}</a></sup>"
@@ -418,7 +442,10 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
       };
       out.push_str(&format!(
         "<img src=\"{}\" alt=\"{}\"{title_attr} />",
-        escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), true))),
+        escape_html(&escape_href(safe_url(
+          m.href.as_deref().unwrap_or(""),
+          true
+        ))),
         escape_html(&alt)
       ));
       pos = e;
@@ -433,12 +460,18 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
       "link" => match &m.title {
         Some(t) => format!(
           "<a href=\"{}\" title=\"{}\">{body}</a>",
-          escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), false))),
+          escape_html(&escape_href(safe_url(
+            m.href.as_deref().unwrap_or(""),
+            false
+          ))),
           escape_html(t)
         ),
         None => format!(
           "<a href=\"{}\">{body}</a>",
-          escape_html(&escape_href(safe_url(m.href.as_deref().unwrap_or(""), false)))
+          escape_html(&escape_href(safe_url(
+            m.href.as_deref().unwrap_or(""),
+            false
+          )))
         ),
       },
       _ => body,
@@ -450,6 +483,7 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
 
 pub(crate) fn append_html_block(
   snapshot: &DocumentSnapshotPayload,
+  index: &HashMap<&str, usize>,
   block: &Block,
   out: &mut String,
 ) -> DocumentOperationResult<()> {
@@ -458,7 +492,7 @@ pub(crate) fn append_html_block(
     "heading" => {
       let level = heading_level(block, 0);
       out.push_str(&format!("<h{level}>{text}</h{level}>\n"));
-      append_html_children(snapshot, &block.id, out)?;
+      append_html_children(snapshot, index, &block.id, out)?;
     }
     "todo" => {
       let checked = if block_data_bool(block, "checked") {
@@ -469,7 +503,7 @@ pub(crate) fn append_html_block(
       out.push_str(&format!(
         "<div class=\"todo\"><input type=\"checkbox\" disabled{checked}> {text}</div>\n"
       ));
-      append_html_children(snapshot, &block.id, out)?;
+      append_html_children(snapshot, index, &block.id, out)?;
     }
     "quote" => {
       if text.is_empty() {
@@ -477,7 +511,7 @@ pub(crate) fn append_html_block(
       } else {
         out.push_str(&format!("<blockquote>\n<p>{text}</p>\n</blockquote>\n"));
       }
-      append_html_children(snapshot, &block.id, out)?;
+      append_html_children(snapshot, index, &block.id, out)?;
     }
     "code_block" | "code" => {
       if block_data_bool(block, "raw") {
@@ -507,7 +541,7 @@ pub(crate) fn append_html_block(
           out.push_str("<div class=\"mermaid\">");
           out.push_str(&svg);
           out.push_str("</div>\n");
-          append_html_children(snapshot, &block.id, out)?;
+          append_html_children(snapshot, index, &block.id, out)?;
           return Ok(());
         }
       }
@@ -522,7 +556,7 @@ pub(crate) fn append_html_block(
         format!("{}\n", escape_html(&block.text))
       };
       out.push_str(&format!("<pre><code{class}>{body}</code></pre>\n"));
-      append_html_children(snapshot, &block.id, out)?;
+      append_html_children(snapshot, index, &block.id, out)?;
     }
     "table" => {
       let Some(rows) = block.data.get("rows").and_then(Value::as_array) else {
@@ -573,14 +607,13 @@ pub(crate) fn append_html_block(
       }
       out.push_str("</table>\n");
     }
-    "math_block" => {
-      match render_math(&block.text, true) {
-        Some(mathml) => out.push_str(&format!("<div class=\"math\">{mathml}</div>\n")),
-        None => {
-          out.push_str(&format!("<div class=\"math\">{}</div>\n", escape_html(&block.text)))
-        }
-      }
-    }
+    "math_block" => match render_math(&block.text, true) {
+      Some(mathml) => out.push_str(&format!("<div class=\"math\">{mathml}</div>\n")),
+      None => out.push_str(&format!(
+        "<div class=\"math\">{}</div>\n",
+        escape_html(&block.text)
+      )),
+    },
     "footnote_def" => {
       // Definitions are not rendered in document order — they are gathered
       // into a single trailing <section class="footnotes"> by export_html.
@@ -589,7 +622,10 @@ pub(crate) fn append_html_block(
       out.push_str("<hr />\n");
     }
     "image" => {
-      let url = escape_html(&escape_href(safe_url(block_data_str(block, "url").unwrap_or_default(), true)));
+      let url = escape_html(&escape_href(safe_url(
+        block_data_str(block, "url").unwrap_or_default(),
+        true,
+      )));
       let alt = escape_html(block.text.trim());
       let title_attr = match block_data_str(block, "title") {
         Some(t) => format!(" title=\"{}\"", escape_html(t)),
@@ -603,7 +639,7 @@ pub(crate) fn append_html_block(
       if !text.is_empty() {
         out.push_str(&format!("<p>{text}</p>\n"));
       }
-      append_html_children(snapshot, &block.id, out)?;
+      append_html_children(snapshot, index, &block.id, out)?;
     }
   }
 
@@ -612,11 +648,13 @@ pub(crate) fn append_html_block(
 
 pub(crate) fn block_for<'a>(
   snapshot: &'a DocumentSnapshotPayload,
+  index: &HashMap<&str, usize>,
   block_id: &str,
 ) -> DocumentOperationResult<&'a Block> {
-  let index = block_index(snapshot, block_id)
-    .ok_or_else(|| DocumentOperationError::BlockNotFound(block_id.to_string()))?;
-  Ok(&snapshot.blocks[index])
+  let Some(&i) = index.get(block_id) else {
+    return Err(DocumentOperationError::BlockNotFound(block_id.to_string()));
+  };
+  Ok(&snapshot.blocks[i])
 }
 
 pub(crate) fn list_tag_for(kind: &str) -> Option<&'static str> {
@@ -631,8 +669,15 @@ pub(crate) fn list_tag_for(kind: &str) -> Option<&'static str> {
 /// tags so they render inert while everything else passes through.
 pub(crate) fn tagfilter(s: &str) -> String {
   const BAD: &[&str] = &[
-    "title", "textarea", "style", "xmp", "iframe", "noembed", "noframes",
-    "script", "plaintext",
+    "title",
+    "textarea",
+    "style",
+    "xmp",
+    "iframe",
+    "noembed",
+    "noframes",
+    "script",
+    "plaintext",
   ];
   let bytes = s.as_bytes();
   let mut out = String::with_capacity(s.len());
@@ -653,7 +698,10 @@ pub(crate) fn tagfilter(s: &str) -> String {
         j += 1;
       }
       let name = s[name_start..j].to_ascii_lowercase();
-      let boundary = matches!(bytes.get(j), None | Some(b' ' | b'\t' | b'\n' | b'>' | b'/'));
+      let boundary = matches!(
+        bytes.get(j),
+        None | Some(b' ' | b'\t' | b'\n' | b'>' | b'/')
+      );
       if BAD.contains(&name.as_str()) && boundary {
         out.push_str(&s[copied..i]);
         out.push_str("&lt;");
@@ -671,7 +719,12 @@ pub(crate) fn tagfilter(s: &str) -> String {
 /// Names of attributes whose value is fetched as a URL — the vectors for a
 /// `javascript:`/`vbscript:` scheme injection. Lower-cased for comparison.
 pub(crate) const URL_ATTRS: &[&str] = &[
-  "href", "src", "xlink:href", "action", "formaction", "poster",
+  "href",
+  "src",
+  "xlink:href",
+  "action",
+  "formaction",
+  "poster",
 ];
 
 /// Is `name`+`value` a dangerous attribute that must be dropped?
@@ -740,7 +793,10 @@ pub(crate) fn safe_url(url: &str, for_image: bool) -> &str {
     return url; // no scheme: relative
   };
   let scheme = &normalized[..colon];
-  if !scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+  if !scheme
+    .chars()
+    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+  {
     return url; // the `:` is later in a relative path, not a scheme
   }
   let dangerous = match scheme {
@@ -776,10 +832,13 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
       } else if rest.starts_with("->") {
         i + 6
       } else {
-        let close = [rest.find("-->").map(|k| k + 3), rest.find("--!>").map(|k| k + 4)]
-          .into_iter()
-          .flatten()
-          .min();
+        let close = [
+          rest.find("-->").map(|k| k + 3),
+          rest.find("--!>").map(|k| k + 4),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         close.map_or(b.len(), |k| i + 4 + k)
       };
       out.push_str(&s[i..end]);
@@ -912,7 +971,10 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
           }
           _ => {
             let vs = k;
-            while b.get(k).is_some_and(|c| !c.is_ascii_whitespace() && *c != b'>') {
+            while b
+              .get(k)
+              .is_some_and(|c| !c.is_ascii_whitespace() && *c != b'>')
+            {
               k += 1;
             }
             value = &s[vs..k];
@@ -935,5 +997,3 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
   }
   out
 }
-
-

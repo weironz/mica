@@ -232,3 +232,30 @@ abstract interface class LocalOfflineApi {
   Uint8List? exportFolderZip(String workspaceId, String folderId);
   Future<Uint8List?> htmlToPdf(String html);
 }
+
+/// Sniff an image's MIME from its magic bytes — the local blob CAS keys by
+/// sha256 and keeps no extension, so a `data:` URI (or a cloud upload during
+/// migration) has nowhere else to learn the type. Defaults to PNG (the format
+/// editor paste/upload produces).
+String sniffImageMime(Uint8List b) {
+  if (b.length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) {
+    return 'image/jpeg';
+  }
+  if (b.length >= 4 && b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) {
+    return 'image/gif';
+  }
+  if (b.length >= 12 &&
+      b[0] == 0x52 &&
+      b[1] == 0x49 &&
+      b[2] == 0x46 &&
+      b[8] == 0x57 &&
+      b[9] == 0x45 &&
+      b[10] == 0x42 &&
+      b[11] == 0x50) {
+    return 'image/webp';
+  }
+  if (b.isNotEmpty && b[0] == 0x3C) {
+    return 'image/svg+xml';
+  }
+  return 'image/png';
+}

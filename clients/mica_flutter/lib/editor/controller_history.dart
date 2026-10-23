@@ -164,7 +164,7 @@ extension _ControllerHistory on EditorController {
   void _replayHistoryDraft(_HistoryDraft draft) {
     final before = draft.before.text;
     if (before == draft.text || nodes.isEmpty) return;
-    var start = _commonPrefix(before, draft.text);
+    var start = commonPrefix(before, draft.text);
     // Never split a UTF-16 surrogate when two emoji share the high surrogate.
     if (start > 0 &&
         start < before.length &&
@@ -172,7 +172,7 @@ extension _ControllerHistory on EditorController {
         before.codeUnitAt(start) <= 0xdfff) {
       start--;
     }
-    final suffix = _commonSuffix(before, draft.text, start);
+    final suffix = commonSuffix(before, draft.text, start);
     var oldEnd = before.length - suffix;
     var newEnd = draft.text.length - suffix;
     if (oldEnd < before.length &&

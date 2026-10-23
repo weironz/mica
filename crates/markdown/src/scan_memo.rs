@@ -92,7 +92,10 @@ pub(crate) struct ScanMemo {
 
 impl ScanMemo {
   pub(crate) fn new() -> Self {
-    ScanMemo { gt_dead_from: usize::MAX, ..Default::default() }
+    ScanMemo {
+      gt_dead_from: usize::MAX,
+      ..Default::default()
+    }
   }
 
   /// [`crate::inline::code_span_close`], memoised on the run length: a
@@ -103,7 +106,11 @@ impl ScanMemo {
     while start + n < chars.len() && chars[start + n] == '`' {
       n += 1;
     }
-    if self.code_dead.get(&n).is_some_and(|&from| from <= start + n) {
+    if self
+      .code_dead
+      .get(&n)
+      .is_some_and(|&from| from <= start + n)
+    {
       return None;
     }
     let close = crate::inline::code_span_close(chars, start);

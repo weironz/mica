@@ -44,10 +44,10 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 
 - **新代码的去处，不是「往现有大文件里续写」**：
   - API 路由进 `crates/api-server/src/routes/<域>/` 子模块（先例：`routes/documents/` 的 search/crud/export/transfer/trash/share/images）；共享 helper 与 DTO 放对应 `mod.rs` 并 `pub use` 再导出。
-  - Flutter 拆大库文件用 `part` / `part of`（先例：`main.dart` 及其 `main_*.dart`，`editor/render.dart`）；私有标识符同库可见，纯移动零风险。
+  - Flutter 拆大库文件用 `part` / `part of`（先例：`main.dart` 及其 `main_*.dart`，`editor/render.dart`）；私有标识符同库可见，纯移动零风险。**注意（#87）：门禁按库计行数，拆 part 只降单文件数、不降库合计——真正减负要拆成独立 library（新 root 文件）。**
   - markdown 引擎按管线归位：block / inline / html / export_md / entities；公开 API 留在 `lib.rs`。
-- **门禁三层**（`just check-structure` = CI `structure` job = `scripts/check-file-size.sh`）：
-  1. 绝对限：Rust `crates/**/src` 与 Flutter `lib/` 单文件硬上限 8,000 行（失败），软上限 4,000 行（警告）。
-  2. 棘轮：`scripts/file-size-budget.txt` 登记的文件**只许减不许增**——动这些文件（editor.dart、main_shell.dart、ui/dialogs.dart、main_workspace_view.dart）前先看预算，涨一行 CI 就红。
-  3. 增量：超过 2,000 行的存量文件一次改动净增 >300 行会被拦下。要加大量逻辑时开新文件，不要续写。
+- **门禁三层**（`just check-structure` = CI `structure` job = `scripts/check-file-size.sh`；计量单位见 #87）：
+  1. 绝对限：Dart 按 **library**（root + 全部 `part` 合计）、Rust 按单文件（含 FFI crate `clients/mica_flutter/rust/src`），单元硬上限 8,000 行（失败），软上限 4,000 行（警告）。
+  2. 棘轮：`scripts/file-size-budget.txt` 登记的单元**只许减不许增**——动这几个库（main.dart、editor/editor.dart、editor/render.dart、editor/controller.dart，按 library root 登记）前先看预算，涨一行 CI 就红。
+  3. 增量：超过 2,000 行的存量单元一次改动净增 >300 行会被拦下（按单元聚合：同一库两个 part 各 +200 合计 +400 也算超）。要加大量逻辑时开新文件，不要续写。
 - **豁免是登记制**：生成代码等豁免必须写进脚本 `EXEMPT_RE` 或预算文件并附理由；没有「惯例豁免」。提交前跑 `just check-structure` 自查。

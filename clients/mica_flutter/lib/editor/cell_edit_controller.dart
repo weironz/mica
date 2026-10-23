@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import 'marks.dart';
 import '../ui/theme_tokens.dart';
+import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
 /// A [TextEditingController] for a table cell that renders inline MARKS live
 /// (WYSIWYG) instead of the raw Markdown source. Its [text] is the clean cell
@@ -68,8 +69,8 @@ class CellEditController extends TextEditingController {
       if (neu != old) {
         // A single contiguous edit: everything between the shared prefix and
         // suffix was replaced. Shift the marks to track it.
-        final prefix = _commonPrefix(old, neu);
-        final suffix = _commonSuffix(old, neu, prefix);
+        final prefix = commonPrefix(old, neu);
+        final suffix = commonSuffix(old, neu, prefix);
         marks = shiftMarks(
           marks,
           prefix,
@@ -111,24 +112,5 @@ class CellEditController extends TextEditingController {
       style ?? const TextStyle(),
       MicaTheme.of(context),
     );
-  }
-
-  int _commonPrefix(String a, String b) {
-    final n = a.length < b.length ? a.length : b.length;
-    var i = 0;
-    while (i < n && a.codeUnitAt(i) == b.codeUnitAt(i)) {
-      i++;
-    }
-    return i;
-  }
-
-  int _commonSuffix(String a, String b, int prefix) {
-    final max = (a.length < b.length ? a.length : b.length) - prefix;
-    var i = 0;
-    while (i < max &&
-        a.codeUnitAt(a.length - 1 - i) == b.codeUnitAt(b.length - 1 - i)) {
-      i++;
-    }
-    return i;
   }
 }

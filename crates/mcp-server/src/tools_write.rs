@@ -1,24 +1,16 @@
-//! Mica MCP server — a thin proxy that exposes the Mica REST API as MCP tools so
-//! an AI (Claude Desktop / Code / any MCP client) can list, read, create, and
-//! write Mica documents. It calls the API over HTTP with a PAT; it holds no DB
-//! or storage access of its own. "Backup/restore" here is just export/import —
-//! real backups are the job of external tools pointed at the exports.
-//!
-//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
-//! server URL + PAT through its usual chain — env, flags, saved login — and
-//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
-//! time while the read tools stay listed.
+//! The writing tools: create/import documents, edit ops, versions, images.
 use rmcp::{
   ErrorData as McpError,
   handler::server::wrapper::Parameters,
-  model::{CallToolResult, Content}, tool, tool_router,
+  model::{CallToolResult, Content},
+  tool, tool_router,
 };
 use serde_json::{Value, json};
 
-use crate::*;
 use crate::args::*;
 use crate::markdown_windows::*;
 use crate::results::*;
+use crate::*;
 use uuid::Uuid;
 
 #[tool_router(router = write_router, vis = "pub(crate)")]
@@ -36,9 +28,7 @@ impl MicaMcp {
       parent_view_id,
     }): Parameters<CreateDocArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     // Markdown → the import endpoint (parses content server-side); empty →
     // the plain create endpoint.
     if let Some(markdown) = markdown {
@@ -81,9 +71,7 @@ impl MicaMcp {
     &self,
     Parameters(CreateWorkspaceArgs { name }): Parameters<CreateWorkspaceArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     match self.post("/api/workspaces", json!({ "name": name })).await {
       Ok(value) => write_ack(value),
       Err(error) => Ok(tool_error(error)),
@@ -119,9 +107,7 @@ impl MicaMcp {
       expected_seq,
     }): Parameters<UpdateDocArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     match self
       .write_markdown(
         workspace_id,
@@ -283,9 +269,7 @@ impl MicaMcp {
       expected_seq,
     }): Parameters<ApplyEditsArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     if edits.is_empty() {
       return Ok(tool_error(McpError::invalid_params(
         "edits is empty — pass at least one edit".to_string(),
@@ -354,9 +338,7 @@ impl MicaMcp {
     &self,
     Parameters(AddImageArgs { workspace_id, url }): Parameters<AddImageArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let stored = self
       .post(
         &format!("/api/workspaces/{workspace_id}/files/import-url"),
@@ -422,11 +404,13 @@ impl MicaMcp {
       .pointer("/file/mime_type")
       .and_then(Value::as_str)
       .unwrap_or("");
-    let size = meta
-      .pointer("/file/byte_size")
-      .and_then(Value::as_i64)
-      .unwrap_or(0);
-    if size as usize > MAX_INLINE_IMAGE_BYTES {
+    // A MISSING byte_size must not read as 0 — unknown is not small. Only a
+    // recorded size large enough to fail can refuse here; anything else falls
+    // through to the real checks below (Content-Length, then the bytes).
+    let size = meta.pointer("/file/byte_size").and_then(Value::as_i64);
+    if let Some(size) = size
+      && size as usize > MAX_INLINE_IMAGE_BYTES
+    {
       return Ok(tool_error(McpError::invalid_params(
         format!(
           "that image is {size} bytes — too large to inline (limit \
@@ -436,7 +420,7 @@ impl MicaMcp {
       )));
     }
 
-    let (bytes, served) = match self.get_bytes(download_url).await {
+    let (bytes, served) = match self.get_bytes(download_url, MAX_INLINE_IMAGE_BYTES).await {
       Ok(pair) => pair,
       Err(error) => return Ok(tool_error(error)),
     };
@@ -470,5 +454,4 @@ impl MicaMcp {
       mime,
     )]))
   }
-
 }

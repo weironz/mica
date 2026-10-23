@@ -8,10 +8,18 @@ use mica_markdown::{export_html, export_markdown, import_markdown};
 
 fn head_alert(md: &str) -> Option<String> {
   let payload = import_markdown(md, "root");
-  let root = payload.blocks.iter().find(|b| b.id == payload.root_block_id).unwrap();
+  let root = payload
+    .blocks
+    .iter()
+    .find(|b| b.id == payload.root_block_id)
+    .unwrap();
   let first = root.children.first()?;
   let block = payload.blocks.iter().find(|b| &b.id == first)?;
-  block.data.get("alert").and_then(|v| v.as_str()).map(str::to_string)
+  block
+    .data
+    .get("alert")
+    .and_then(|v| v.as_str())
+    .map(str::to_string)
 }
 
 #[test]
@@ -31,7 +39,10 @@ fn all_five_types_set_alert() {
 #[test]
 fn type_is_case_insensitive() {
   assert_eq!(head_alert("> [!note]\n> x\n").as_deref(), Some("note"));
-  assert_eq!(head_alert("> [!Warning]\n> x\n").as_deref(), Some("warning"));
+  assert_eq!(
+    head_alert("> [!Warning]\n> x\n").as_deref(),
+    Some("warning")
+  );
 }
 
 #[test]
@@ -60,7 +71,10 @@ fn body_less_alert_survives_round_trip() {
   // `> [!NOTE]` alone keeps its type via an empty quote head.
   assert_eq!(head_alert("> [!NOTE]\n").as_deref(), Some("note"));
   let exported = export_markdown(&import_markdown("> [!NOTE]\n", "root")).unwrap();
-  assert!(exported.contains("[!NOTE]"), "marker lost on export: {exported:?}");
+  assert!(
+    exported.contains("[!NOTE]"),
+    "marker lost on export: {exported:?}"
+  );
   assert_eq!(head_alert(&exported).as_deref(), Some("note"));
 }
 
@@ -73,7 +87,10 @@ fn export_normalizes_marker_to_uppercase() {
 #[test]
 fn html_carries_alert_classes_and_title() {
   let html = export_html(&import_markdown("> [!WARNING]\n> careful\n", "root")).unwrap();
-  assert!(html.contains("markdown-alert markdown-alert-warning"), "classes: {html}");
+  assert!(
+    html.contains("markdown-alert markdown-alert-warning"),
+    "classes: {html}"
+  );
   assert!(html.contains("markdown-alert-title"), "title row: {html}");
   assert!(html.contains(">Warning<"), "title text: {html}");
   assert!(html.contains("careful"), "body: {html}");
@@ -90,7 +107,11 @@ fn plain_quote_html_unchanged() {
 fn alert_then_plain_quote_boundary() {
   let md = "> [!NOTE]\n> in the alert\n\n> not an alert\n";
   let payload = import_markdown(md, "root");
-  let root = payload.blocks.iter().find(|b| b.id == payload.root_block_id).unwrap();
+  let root = payload
+    .blocks
+    .iter()
+    .find(|b| b.id == payload.root_block_id)
+    .unwrap();
   let kinds: Vec<Option<&str>> = root
     .children
     .iter()
@@ -99,5 +120,9 @@ fn alert_then_plain_quote_boundary() {
       b.data.get("alert").and_then(|v| v.as_str())
     })
     .collect();
-  assert_eq!(kinds, vec![Some("note"), None], "alert head then plain quote");
+  assert_eq!(
+    kinds,
+    vec![Some("note"), None],
+    "alert head then plain quote"
+  );
 }

@@ -196,17 +196,16 @@ pub(crate) fn parse_entity(chars: &[char], i: usize) -> Option<(String, usize)> 
       Some(h) => (h, 16),
       None => (rest, 10),
     };
-    if digits.is_empty()
-      || digits.len() > 7
-      || !digits.chars().all(|c| c.is_digit(radix))
-    {
+    if digits.is_empty() || digits.len() > 7 || !digits.chars().all(|c| c.is_digit(radix)) {
       return None;
     }
     let n = u32::from_str_radix(digits, radix).ok()?;
-    let c = if n == 0 { '\u{FFFD}' } else { char::from_u32(n).unwrap_or('\u{FFFD}') };
+    let c = if n == 0 {
+      '\u{FFFD}'
+    } else {
+      char::from_u32(n).unwrap_or('\u{FFFD}')
+    };
     return Some((c.to_string(), semi - i + 1));
   }
   named_entity(&body).map(|v| (v.to_string(), semi - i + 1))
 }
-
-

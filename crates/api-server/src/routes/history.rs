@@ -156,9 +156,11 @@ pub async fn restore(
       "actor_id": user_id,
       "update": STANDARD.encode(&update),
     });
-    state
-      .hub
-      .broadcast_if_active(document_id, Uuid::nil(), std::sync::Arc::from(event.to_string()));
+    state.hub.broadcast_if_active(
+      document_id,
+      Uuid::nil(),
+      std::sync::Arc::from(event.to_string()),
+    );
   }
 
   Ok(Json(RestoreResponse { rid }))

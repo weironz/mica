@@ -1,14 +1,13 @@
-
 use std::ops::ControlFlow;
 
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::{Block, DocumentSnapshotPayload};
 use crate::block_handlers::*;
 use crate::html::*;
 use crate::inline::*;
 use crate::scan_memo::ScanMemo;
+use crate::{Block, DocumentSnapshotPayload};
 
 /// The block scanner's mutable state — everything `import_markdown_inner`
 /// carries ACROSS loop iterations. Every field has an owner (the construct
@@ -120,8 +119,8 @@ impl BlockState {
         match open.kind.as_str() {
           "quote" => blocks[open.block_idx].kind == "quote",
           "paragraph" => blocks[open.block_idx].kind == "paragraph",
-          "bulleted_list" | "numbered_list" | "todo" => list_tag_for(&blocks[open.block_idx].kind)
-            .is_some(),
+          "bulleted_list" | "numbered_list" | "todo" =>
+            list_tag_for(&blocks[open.block_idx].kind).is_some(),
           other => {
             debug_assert!(false, "open_item carries an unknown kind {other}");
             true
@@ -219,7 +218,11 @@ pub(crate) fn import_markdown_inner(
     }
     let mut col: usize = 0;
     for c in line[..line.len() - content.len()].chars() {
-      col = if c == '\t' { (col / 4 + 1) * 4 } else { col + 1 };
+      col = if c == '\t' {
+        (col / 4 + 1) * 4
+      } else {
+        col + 1
+      };
     }
 
     // The families in ORDER — this is the precedence order of the old loop
@@ -294,16 +297,30 @@ pub(crate) fn import_markdown_inner(
     };
     leaf_block(&mut ctx, body, c);
   }
-  crate::block_handlers::finish_deferred_inline(&mut blocks, std::mem::take(&mut st.stale_inline), &defs);
+  crate::block_handlers::finish_deferred_inline(
+    &mut blocks,
+    std::mem::take(&mut st.stale_inline),
+    &defs,
+  );
   if let Some(d) = st.pending_empty_quote.take() {
-    let mut data = if d > 1 { json!({ "quote": d }) } else { Value::Null };
+    let mut data = if d > 1 {
+      json!({ "quote": d })
+    } else {
+      Value::Null
+    };
     if st.quote_boundary {
       data_insert(&mut data, "qbreak", json!(true));
     }
     if let Some(a) = st.pending_alert.take() {
       data_insert(&mut data, "alert", json!(a));
     }
-    push_block(&mut blocks, &mut root_children, "quote", String::new(), data);
+    push_block(
+      &mut blocks,
+      &mut root_children,
+      "quote",
+      String::new(),
+      data,
+    );
   }
 
   // Promote a paragraph that is exactly one image (e.g. a reference-form
@@ -335,7 +352,10 @@ pub(crate) fn import_markdown_inner(
       (!wrapped_in_link).then_some(&ms[image_index])
     });
     if let Some(image) = promoted {
-      let url = image.get("href").and_then(Value::as_str).unwrap_or_default();
+      let url = image
+        .get("href")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
       let mut data = json!({ "url": url });
       if let Some(t) = image.get("title").and_then(Value::as_str) {
         data_insert(&mut data, "title", json!(t));
@@ -512,7 +532,9 @@ pub(crate) fn parse_footnote_def(content: &str) -> Option<(String, String)> {
   }
   let label: String = chars[2..close].iter().collect();
   if label.is_empty()
-    || label.chars().any(|c| c.is_whitespace() || matches!(c, '[' | ']' | '^'))
+    || label
+      .chars()
+      .any(|c| c.is_whitespace() || matches!(c, '[' | ']' | '^'))
   {
     return None;
   }
@@ -696,14 +718,69 @@ pub(crate) fn numbered_list_marker(content: &str) -> Option<(u64, &str)> {
 
 /// Block-level HTML tag names (CommonMark type-6 start condition).
 pub(crate) const HTML_BLOCK_TAGS: &[&str] = &[
-  "address", "article", "aside", "base", "basefont", "blockquote", "body",
-  "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
-  "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
-  "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
-  "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem",
-  "nav", "noframes", "ol", "optgroup", "option", "p", "param", "search",
-  "section", "summary", "table", "tbody", "td", "template", "tfoot", "th",
-  "thead", "title", "tr", "track", "ul",
+  "address",
+  "article",
+  "aside",
+  "base",
+  "basefont",
+  "blockquote",
+  "body",
+  "caption",
+  "center",
+  "col",
+  "colgroup",
+  "dd",
+  "details",
+  "dialog",
+  "dir",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "frame",
+  "frameset",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "head",
+  "header",
+  "hr",
+  "html",
+  "iframe",
+  "legend",
+  "li",
+  "link",
+  "main",
+  "menu",
+  "menuitem",
+  "nav",
+  "noframes",
+  "ol",
+  "optgroup",
+  "option",
+  "p",
+  "param",
+  "search",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "template",
+  "tfoot",
+  "th",
+  "thead",
+  "title",
+  "tr",
+  "track",
+  "ul",
 ];
 
 /// CommonMark HTML block start conditions. Returns the kind (1–7), which
@@ -739,14 +816,10 @@ pub(crate) fn html_block_start(content: &str) -> Option<u8> {
   let name: String = name_rest[..name_len].to_ascii_lowercase();
   let after = &name_rest[name_len..];
   let boundary = after.is_empty() || after.starts_with([' ', '\t', '>']);
-  if !closing
-    && matches!(name.as_str(), "pre" | "script" | "style" | "textarea")
-    && boundary
-  {
+  if !closing && matches!(name.as_str(), "pre" | "script" | "style" | "textarea") && boundary {
     return Some(1);
   }
-  if HTML_BLOCK_TAGS.contains(&name.as_str())
-    && (boundary || (!closing && after.starts_with("/>")))
+  if HTML_BLOCK_TAGS.contains(&name.as_str()) && (boundary || (!closing && after.starts_with("/>")))
   {
     return Some(6);
   }
@@ -788,12 +861,19 @@ pub(crate) fn html_block_ends(kind: u8, line: &str) -> bool {
 /// searches: an unclosed `<!--` used to rescan the whole suffix from every
 /// later `<` (issue #61). A failed search means "no terminator at or after
 /// `from`", and later starts only move forward, so the frontier stays valid.
-pub(crate) fn inline_html_end(chars: &[char], i: usize, mut memo: Option<&mut ScanMemo>) -> Option<usize> {
+pub(crate) fn inline_html_end(
+  chars: &[char],
+  i: usize,
+  mut memo: Option<&mut ScanMemo>,
+) -> Option<usize> {
   if chars.get(i) != Some(&'<') {
     return None;
   }
   let starts = |from: usize, pat: &str| -> bool {
-    pat.chars().enumerate().all(|(k, c)| chars.get(from + k) == Some(&c))
+    pat
+      .chars()
+      .enumerate()
+      .all(|(k, c)| chars.get(from + k) == Some(&c))
   };
   let mut find = |from: usize, pat: &'static str| -> Option<usize> {
     if let Some(m) = memo.as_deref_mut() {
@@ -854,7 +934,10 @@ pub(crate) fn inline_html_end(chars: &[char], i: usize, mut memo: Option<&mut Sc
   if !chars.get(p).is_some_and(|c| c.is_ascii_alphabetic()) {
     return None;
   }
-  while chars.get(p).is_some_and(|c| c.is_ascii_alphanumeric() || *c == '-') {
+  while chars
+    .get(p)
+    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '-')
+  {
     p += 1;
   }
   let skip_ws = |mut q: usize| -> usize {
@@ -878,7 +961,10 @@ pub(crate) fn inline_html_end(chars: &[char], i: usize, mut memo: Option<&mut Sc
       return None; // an attribute needs whitespace before it
     }
     // Attribute name.
-    if !chars.get(q).is_some_and(|c| c.is_ascii_alphabetic() || *c == '_' || *c == ':') {
+    if !chars
+      .get(q)
+      .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_' || *c == ':')
+    {
       return None;
     }
     let mut r = q + 1;
@@ -984,8 +1070,7 @@ pub(crate) fn expand_marker_tabs(line: &str) -> String {
       while j < b.len() && b[j].is_ascii_digit() && j - i < 9 {
         j += 1;
       }
-      if matches!(b.get(j), Some(b'.' | b')'))
-        && matches!(b.get(j + 1), Some(b'\t' | b' ')) {
+      if matches!(b.get(j), Some(b'.' | b')')) && matches!(b.get(j + 1), Some(b'\t' | b' ')) {
         j + 1 - i
       } else {
         0
@@ -1070,7 +1155,11 @@ pub(crate) const MAX_NESTING_DEPTH: u64 = 8;
 /// A depth stored in `data[key]`, clamped to `MAX_NESTING_DEPTH`. `None` when
 /// the key is absent or not a non-negative integer.
 pub(crate) fn data_depth(block: &Block, key: &str) -> Option<usize> {
-  block.data.get(key).and_then(Value::as_u64).map(|v| v.min(MAX_NESTING_DEPTH) as usize)
+  block
+    .data
+    .get(key)
+    .and_then(Value::as_u64)
+    .map(|v| v.min(MAX_NESTING_DEPTH) as usize)
 }
 
 /// Quote nesting depth of a block: the `quote` kind is depth ≥ 1, any other
@@ -1139,5 +1228,3 @@ pub(crate) fn parse_markdown_image(content: &str) -> Option<(String, String, Opt
   let alt: String = chars[2..close].iter().collect();
   Some((alt, href, title))
 }
-
-

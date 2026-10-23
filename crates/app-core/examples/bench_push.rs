@@ -37,34 +37,34 @@ use std::time::Instant;
 /// — sizing by text instead is how the first cut of this bench ended up
 /// measuring documents 3x larger than any that exist.
 const CASES: [(&str, usize); 3] = [
-    ("p50   ~7 kB", 14),
-    ("p99  ~68 kB", 141),
-    ("max ~312 kB", 648),
+  ("p50   ~7 kB", 14),
+  ("p99  ~68 kB", 141),
+  ("max ~312 kB", 648),
 ];
 
 fn main() {
-    for (label, blocks) in CASES {
-        let mut bs = vec![mica_core::Block::new("r", "page")
-            .with_children((0..blocks).map(|i| format!("b{i}")).collect())];
-        for i in 0..blocks {
-            bs.push(
-                mica_core::Block::new(format!("b{i}"), "paragraph").with_text("字".repeat(120)),
-            );
-        }
-        let state = mica_core::MicaDoc::from_blocks("r", &bs).encode_state();
-
-        // The three things push_update does that scale with the document.
-        let n = 300;
-        let t = Instant::now();
-        for _ in 0..n {
-            let d = mica_core::MicaDoc::from_update(&state).unwrap();
-            std::hint::black_box(d.encode_state());
-            std::hint::black_box(d.to_blocks());
-        }
-        println!(
-            "{label}   state = {:>7} B   decode + re-encode + to_blocks = {:>5.2} ms",
-            state.len(),
-            t.elapsed().as_secs_f64() * 1000.0 / n as f64
-        );
+  for (label, blocks) in CASES {
+    let mut bs = vec![
+      mica_core::Block::new("r", "page")
+        .with_children((0..blocks).map(|i| format!("b{i}")).collect()),
+    ];
+    for i in 0..blocks {
+      bs.push(mica_core::Block::new(format!("b{i}"), "paragraph").with_text("字".repeat(120)));
     }
+    let state = mica_core::MicaDoc::from_blocks("r", &bs).encode_state();
+
+    // The three things push_update does that scale with the document.
+    let n = 300;
+    let t = Instant::now();
+    for _ in 0..n {
+      let d = mica_core::MicaDoc::from_update(&state).unwrap();
+      std::hint::black_box(d.encode_state());
+      std::hint::black_box(d.to_blocks());
+    }
+    println!(
+      "{label}   state = {:>7} B   decode + re-encode + to_blocks = {:>5.2} ms",
+      state.len(),
+      t.elapsed().as_secs_f64() * 1000.0 / n as f64
+    );
+  }
 }

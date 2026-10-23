@@ -296,7 +296,11 @@ impl<'a> TreeExport<'a> {
   /// earlier page has written its dedup key. A streaming caller fetches only
   /// these; for the rest, [`Self::page`] needs the [`ImageAsset`] without bytes.
   pub fn needs_bytes(&self, file_id: &str, dedup_key: &str) -> bool {
-    let key = if self.stable_assets { file_id } else { dedup_key };
+    let key = if self.stable_assets {
+      file_id
+    } else {
+      dedup_key
+    };
     !self.asset_by_key.contains_key(key)
   }
 
@@ -543,7 +547,13 @@ fn unique_zip_path(candidate: String, used: &mut HashSet<String>) -> String {
 }
 
 /// Make a unique `assets/` filename, appending `-1`, `-2`… on collision.
-fn unique_asset_name(name: &str, used: &mut HashSet<String>) -> String {
+///
+/// Collisions compare CASE-INSENSITIVELY: an archive is extracted onto real
+/// filesystems, and on Windows/macOS `Shot.png` and `shot.png` are the same
+/// file — a case-sensitive dedup would let both into the ZIP and silently
+/// overwrite on extract. The single page exports (api-server, the desktop FFI)
+/// share this one rule so every Mica ZIP names assets the same way.
+pub fn unique_asset_name(name: &str, used: &mut HashSet<String>) -> String {
   if used.insert(name.to_lowercase()) {
     return name.to_string();
   }
@@ -563,7 +573,7 @@ fn unique_asset_name(name: &str, used: &mut HashSet<String>) -> String {
 
 /// Sanitize a page name into a filesystem-safe path segment (alphanumerics,
 /// `-_.` kept; runs of anything else collapse to a single `_`).
-fn safe_segment(name: &str) -> String {
+pub fn safe_segment(name: &str) -> String {
   let mut out = String::new();
   let mut prev_us = false;
   for ch in name.chars() {
@@ -628,7 +638,15 @@ mod tests {
     entries.iter().map(|e| e.name.clone()).collect()
   }
   fn body(entries: &[ZipEntry], name: &str) -> String {
-    String::from_utf8(entries.iter().find(|e| e.name == name).unwrap().data.clone()).unwrap()
+    String::from_utf8(
+      entries
+        .iter()
+        .find(|e| e.name == name)
+        .unwrap()
+        .data
+        .clone(),
+    )
+    .unwrap()
   }
 
   #[test]
@@ -943,7 +961,11 @@ mod tests {
     payloads.insert("obj_b".to_string(), payload("hi"));
     let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
     let m: serde_json::Value = serde_json::from_slice(
-      &entries.iter().find(|e| e.name == "manifest.json").unwrap().data,
+      &entries
+        .iter()
+        .find(|e| e.name == "manifest.json")
+        .unwrap()
+        .data,
     )
     .unwrap();
     assert_eq!(m["version"], 2);
@@ -956,7 +978,10 @@ mod tests {
     assert!(beta.get("icon").is_none(), "{beta}");
     let notes = pages.iter().find(|p| p["title"] == "Notes").unwrap();
     assert_eq!(notes["id"], "f");
-    assert!(notes.get("parent_id").is_none(), "root folder has no parent: {notes}");
+    assert!(
+      notes.get("parent_id").is_none(),
+      "root folder has no parent: {notes}"
+    );
   }
 
   /// The sidecar exists so the block model survives; the Markdown beside it is
@@ -970,10 +995,21 @@ mod tests {
     let got = names(&entries);
     assert!(got.contains(&"Alpha.md".to_string()), "{got:?}");
     assert!(got.contains(&"Alpha.mica.json".to_string()), "{got:?}");
-    let j: serde_json::Value =
-      serde_json::from_slice(&entries.iter().find(|e| e.name == "Alpha.mica.json").unwrap().data)
-        .unwrap();
-    assert!(j["blocks"].as_array().unwrap().iter().any(|b| b["id"] == "block_root"));
+    let j: serde_json::Value = serde_json::from_slice(
+      &entries
+        .iter()
+        .find(|e| e.name == "Alpha.mica.json")
+        .unwrap()
+        .data,
+    )
+    .unwrap();
+    assert!(
+      j["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|b| b["id"] == "block_root")
+    );
     assert_eq!(j["root_block_id"], "block_root");
   }
 
@@ -999,9 +1035,14 @@ mod tests {
     payloads.insert("obj_a".to_string(), p);
     payloads.insert("obj_b".to_string(), payload("beta"));
     let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
-    let j: serde_json::Value =
-      serde_json::from_slice(&entries.iter().find(|e| e.name == "Alpha.mica.json").unwrap().data)
-        .unwrap();
+    let j: serde_json::Value = serde_json::from_slice(
+      &entries
+        .iter()
+        .find(|e| e.name == "Alpha.mica.json")
+        .unwrap()
+        .data,
+    )
+    .unwrap();
     let href = j["blocks"]
       .as_array()
       .unwrap()
@@ -1021,7 +1062,11 @@ mod tests {
     payloads.insert("obj_b".to_string(), payload("hi"));
     // Rooted at the folder → its child sits at the archive root, not under Notes/.
     let entries = build_markdown_tree_zip(&nodes, Some("f"), &payloads, &HashMap::new());
-    assert!(names(&entries).contains(&"Beta.md".to_string()), "{:?}", names(&entries));
+    assert!(
+      names(&entries).contains(&"Beta.md".to_string()),
+      "{:?}",
+      names(&entries)
+    );
   }
 
   #[test]
@@ -1036,7 +1081,10 @@ mod tests {
     payloads.insert("obj_d".to_string(), payload("x"));
     let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
     let got = names(&entries);
-    let md_count = got.iter().filter(|n| n.ends_with(".md") && *n != "README.md").count();
+    let md_count = got
+      .iter()
+      .filter(|n| n.ends_with(".md") && *n != "README.md")
+      .count();
     // Exactly one `.md` file (the document); the folder emits none. No collision.
     assert_eq!(md_count, 1, "{got:?}");
   }
@@ -1113,7 +1161,11 @@ mod tests {
 
   /// A tree with folders, a page without a payload, one blob shared by two
   /// file ids, a blob shared by two pages, and a missing image.
-  fn pin_fixture() -> (Vec<TreeNode>, HashMap<String, DocumentSnapshotPayload>, HashMap<String, ImageAsset>) {
+  fn pin_fixture() -> (
+    Vec<TreeNode>,
+    HashMap<String, DocumentSnapshotPayload>,
+    HashMap<String, ImageAsset>,
+  ) {
     let nodes = vec![
       doc("a", None, "0", "Alpha"),
       folder("f", None, "1", "Notes"),
@@ -1125,11 +1177,15 @@ mod tests {
     let payloads = HashMap::from([
       ("obj_a".to_string(), payload_with_image("alpha", "file-1")),
       ("obj_b".to_string(), payload_with_image("beta", "file-2")),
-      ("obj_c".to_string(), payload_with_image("gamma", "file-missing")),
+      (
+        "obj_c".to_string(),
+        payload_with_image("gamma", "file-missing"),
+      ),
     ]);
     let mut b = payloads["obj_b"].clone();
     let extra = payload_with_image("x", "file-1");
-    b.blocks.extend(extra.blocks.into_iter().filter(|blk| blk.kind == "image"));
+    b.blocks
+      .extend(extra.blocks.into_iter().filter(|blk| blk.kind == "image"));
     let mut payloads = payloads;
     payloads.insert("obj_b".to_string(), b);
     let payloads = payloads
@@ -1140,8 +1196,22 @@ mod tests {
       })
       .collect();
     let images = HashMap::from([
-      ("file-1".to_string(), ImageAsset { name: "p.png".into(), bytes: vec![1, 2, 3], dedup_key: "k1".into() }),
-      ("file-2".to_string(), ImageAsset { name: "p.png".into(), bytes: vec![4, 5], dedup_key: "k2".into() }),
+      (
+        "file-1".to_string(),
+        ImageAsset {
+          name: "p.png".into(),
+          bytes: vec![1, 2, 3],
+          dedup_key: "k1".into(),
+        },
+      ),
+      (
+        "file-2".to_string(),
+        ImageAsset {
+          name: "p.png".into(),
+          bytes: vec![4, 5],
+          dedup_key: "k2".into(),
+        },
+      ),
     ]);
     (nodes, payloads, images)
   }
@@ -1158,7 +1228,9 @@ mod tests {
             map.into_iter().map(|(k, v)| (k, sort(v))).collect();
           serde_json::Value::Object(sorted.into_iter().collect())
         }
-        serde_json::Value::Array(items) => serde_json::Value::Array(items.into_iter().map(sort).collect()),
+        serde_json::Value::Array(items) => {
+          serde_json::Value::Array(items.into_iter().map(sort).collect())
+        }
         other => other,
       }
     }
@@ -1169,7 +1241,10 @@ mod tests {
           return e;
         }
         let value: serde_json::Value = serde_json::from_slice(&e.data).unwrap();
-        ZipEntry { name: e.name, data: serde_json::to_vec_pretty(&sort(value)).unwrap() }
+        ZipEntry {
+          name: e.name,
+          data: serde_json::to_vec_pretty(&sort(value)).unwrap(),
+        }
       })
       .collect()
   }
@@ -1181,14 +1256,35 @@ mod tests {
   fn the_split_walk_builds_byte_identical_archives() {
     let (nodes, payloads, images) = pin_fixture();
     let zip = |entries: Vec<ZipEntry>| fnv(&crate::zip::build_zip(&canonical(entries)));
-    assert_eq!(zip(build_markdown_tree_zip(&nodes, None, &payloads, &images)), 0x9c57_833d_166c_3bce);
-    assert_eq!(zip(build_markdown_tree_zip(&nodes, Some("f"), &payloads, &images)), 0x5bb1_35ba_6c73_c72c);
+    assert_eq!(
+      zip(build_markdown_tree_zip(&nodes, None, &payloads, &images)),
+      0x9c57_833d_166c_3bce
+    );
+    assert_eq!(
+      zip(build_markdown_tree_zip(
+        &nodes,
+        Some("f"),
+        &payloads,
+        &images
+      )),
+      0x5bb1_35ba_6c73_c72c
+    );
     let omit = HashSet::from(["file-2".to_string()]);
     assert_eq!(
-      zip(build_incremental_markdown_tree_zip(&nodes, &payloads, &images, "b", &omit)),
+      zip(build_incremental_markdown_tree_zip(
+        &nodes, &payloads, &images, "b", &omit
+      )),
       0xbb33_9b6b_bdbf_6867
     );
-    assert_eq!(zip(build_markdown_tree_zip(&[], None, &HashMap::new(), &HashMap::new())), 0x37ca_7d0d_b573_a5e4);
+    assert_eq!(
+      zip(build_markdown_tree_zip(
+        &[],
+        None,
+        &HashMap::new(),
+        &HashMap::new()
+      )),
+      0x37ca_7d0d_b573_a5e4
+    );
   }
 
   /// The streaming caller's contract: a page asks for bytes only on first use
@@ -1197,13 +1293,20 @@ mod tests {
   fn a_page_at_a_time_caller_needs_each_blobs_bytes_once() {
     let (nodes, payloads, images) = pin_fixture();
     let mut export = TreeExport::new(&nodes, None);
-    let mut entries: Vec<ZipEntry> = export.manifest(|id| payloads.contains_key(id)).into_iter().collect();
+    let mut entries: Vec<ZipEntry> = export
+      .manifest(|id| payloads.contains_key(id))
+      .into_iter()
+      .collect();
     let mut fetched = Vec::new();
     for (view_id, object_id) in export.documents() {
-      let Some(payload) = payloads.get(object_id) else { continue };
+      let Some(payload) = payloads.get(object_id) else {
+        continue;
+      };
       let mut page_images = HashMap::new();
       for file_id in TreeExport::image_file_ids(payload) {
-        let Some(asset) = images.get(&file_id) else { continue };
+        let Some(asset) = images.get(&file_id) else {
+          continue;
+        };
         let bytes = if export.needs_bytes(&file_id, &asset.dedup_key) {
           fetched.push(file_id.clone());
           asset.bytes.clone()
@@ -1212,17 +1315,25 @@ mod tests {
         };
         page_images.insert(
           file_id,
-          ImageAsset { name: asset.name.clone(), bytes, dedup_key: asset.dedup_key.clone() },
+          ImageAsset {
+            name: asset.name.clone(),
+            bytes,
+            dedup_key: asset.dedup_key.clone(),
+          },
         );
       }
       entries.extend(export.page(view_id, payload, &page_images, &HashSet::new()));
     }
-    assert_eq!(fetched, ["file-1", "file-2"], "file-1 is used twice and fetched once");
+    assert_eq!(
+      fetched,
+      ["file-1", "file-2"],
+      "file-1 is used twice and fetched once"
+    );
     assert_eq!(
       fnv(&crate::zip::build_zip(&entries)),
-      fnv(&crate::zip::build_zip(&build_markdown_tree_zip(&nodes, None, &payloads, &images)))
+      fnv(&crate::zip::build_zip(&build_markdown_tree_zip(
+        &nodes, None, &payloads, &images
+      )))
     );
   }
-
-
 }

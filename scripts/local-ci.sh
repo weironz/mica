@@ -20,8 +20,15 @@ part=${1:-all}
 case "$part" in all | rust | flutter) ;; *) fail "unknown part '$part' (all | rust | flutter)" ;; esac
 
 if [ "$part" != flutter ]; then
-  note "structure: per-file size gate"
+  note "structure: per-unit size gate"
   bash scripts/check-file-size.sh
+
+  # rustfmt.toml was the law on paper only — nothing ran it, and 2/4-space
+  # indentation mixed inside single files (2026-10-21 review 工程链). Same
+  # command as ci.yml's rust job; the existing tree's one-time normalization
+  # is a whitespace-only commit of its own (see #88). Root workspace only.
+  note "rust: fmt (--check, as CI)"
+  cargo fmt --all --check
 
   db=$(resolve_database_url)
   [ -n "$db" ] || fail "no reachable Postgres, so the DB-backed tests would SKIP and still report passed.
@@ -42,10 +49,7 @@ if [ "$part" != flutter ]; then
 fi
 
 if [ "$part" != rust ]; then
-  want=$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)
-  have=$("$FLUTTER" --version 2>/dev/null | sed -n 's/^Flutter \([0-9][^ ]*\).*/\1/p' | head -1)
-  [ "$have" = "$want" ] || fail "local Flutter is '$have', the pin is $want (.fvmrc) — CI tests the pin"
-  note "flutter $have (matches .fvmrc)"
+  require_flutter_pin "CI tests the pin"
   (
     cd clients/mica_flutter
     "$FLUTTER" pub get

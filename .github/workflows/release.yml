@@ -155,11 +155,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version-file: .fvmrc
-          cache: true
+      - uses: ./.github/actions/setup-flutter
 
       - name: Resolve version
         id: ver
@@ -404,7 +400,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           targets: ${{ matrix.target }}
 
@@ -566,12 +562,8 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       # Only the web image needs a Flutter bundle baked in.
-      - uses: subosito/flutter-action@v2
+      - uses: ./.github/actions/setup-flutter
         if: ${{ matrix.flutter }}
-        with:
-          channel: stable
-          flutter-version-file: .fvmrc
-          cache: true
 
       - name: Build + stage the web bundle
         if: ${{ matrix.flutter }}

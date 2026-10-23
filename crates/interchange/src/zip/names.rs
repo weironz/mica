@@ -53,18 +53,22 @@ fn decode_raw_name(raw: &[u8], flags: u16, extra: &[u8]) -> String {
         return s.to_string();
       }
       let g = decode_gbk(raw);
-      if g.contains('\u{FFFD}') { s.to_string() } else { g }
+      if g.contains('\u{FFFD}') {
+        s.to_string()
+      } else {
+        g
+      }
     }
     Err(_) => decode_gbk(raw),
   }
 }
 
-
-
 /// Decode GBK/cp936 bytes. Bytes < 0x80 pass through as ASCII; invalid
 /// sequences become U+FFFD.
 pub fn decode_gbk(bytes: &[u8]) -> String {
-  let table: Vec<char> = GBK_TABLE.chars().collect();
+  // The 24k-char lookup table is built once per process, not per entry name.
+  static TABLE: std::sync::OnceLock<Vec<char>> = std::sync::OnceLock::new();
+  let table = TABLE.get_or_init(|| GBK_TABLE.chars().collect());
   let mut out = String::with_capacity(bytes.len());
   let mut i = 0;
   while i < bytes.len() {
@@ -77,8 +81,7 @@ pub fn decode_gbk(bytes: &[u8]) -> String {
     if (0x81..=0xFE).contains(&b) && i + 1 < bytes.len() {
       let t = bytes[i + 1];
       if (0x40..=0xFE).contains(&t) && t != 0x7F {
-        let idx = (usize::from(b) - 0x81) * 190 + (usize::from(t) - 0x40)
-          - usize::from(t > 0x7F);
+        let idx = (usize::from(b) - 0x81) * 190 + (usize::from(t) - 0x40) - usize::from(t > 0x7F);
         out.push(table[idx]);
         i += 2;
         continue;

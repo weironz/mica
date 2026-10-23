@@ -47,26 +47,6 @@ pub struct ZipAsset {
     pub bytes: Vec<u8>,
 }
 
-/// Make a unique `assets/` filename, appending `-1`, `-2`… on collision —
-/// mirrors the server's `unique_asset_name` so local ZIPs match cloud ones.
-fn unique_asset_name(name: &str, used: &mut std::collections::HashSet<String>) -> String {
-    if used.insert(name.to_string()) {
-        return name.to_string();
-    }
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) => (s.to_string(), format!(".{e}")),
-        None => (name.to_string(), String::new()),
-    };
-    let mut n = 1;
-    loop {
-        let candidate = format!("{stem}-{n}{ext}");
-        if used.insert(candidate.clone()) {
-            return candidate;
-        }
-        n += 1;
-    }
-}
-
 /// Sanitize a page title into a ZIP-safe `.md` base name (drop path separators
 /// and reserved chars); empty → "document", matching the cloud export.
 fn safe_base(name: &str) -> String {
@@ -96,25 +76,16 @@ impl MicaDocument {
     /// Build a document by parsing Markdown with the authoritative engine
     /// (CommonMark + GFM). Used by local vault import (S-tier): the file stays the
     /// user's, parsing stays in Rust (and round-trips with `export_markdown`). A
-    /// fresh root id is minted; `mica_markdown::Block` mirrors `mica_core::Block`
-    /// field-for-field, so no schema translation is needed.
+    /// fresh root id is minted; `mica_markdown::Block` IS `mica_core::Block`
+    /// (re-exported), so no schema translation is needed.
     #[frb(sync)]
     pub fn from_markdown(markdown: String) -> MicaDocument {
         let root_id = format!("block_{}", uuid::Uuid::new_v4());
         let payload = mica_markdown::import_markdown(&markdown, &root_id);
-        let blocks: Vec<Block> = payload
-            .blocks
-            .into_iter()
-            .map(|b| Block {
-                id: b.id,
-                kind: b.kind,
-                text: b.text,
-                data: b.data,
-                children: b.children,
-            })
-            .collect();
+        // `mica_markdown::Block` IS `mica_core::Block` (re-exported), so no
+        // schema translation is needed.
         MicaDocument {
-            inner: Mutex::new(MicaDoc::from_blocks(&payload.root_block_id, &blocks)),
+            inner: Mutex::new(MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks)),
         }
     }
 
@@ -177,12 +148,11 @@ impl MicaDocument {
         let blocks: Vec<Block> = payload
             .blocks
             .into_iter()
-            .map(|b| {
+            .map(|mut b| {
                 // Nested rather than a let-chain: this crate is not on the 2024
                 // edition, where those became legal.
-                let mut data = b.data;
                 if b.kind == "image" {
-                    if let Some(url) = data.get("url").and_then(|v| v.as_str()) {
+                    if let Some(url) = b.data.get("url").and_then(|v| v.as_str()) {
                         if let Some(hit) =
                             mica_interchange::resolve_ref(from_path, url, &paths)
                         {
@@ -192,7 +162,7 @@ impl MicaDocument {
                                 // name, and no url.
                                 let name =
                                     hit.rsplit('/').next().unwrap_or(&hit).to_string();
-                                data = serde_json::json!({
+                                b.data = serde_json::json!({
                                     "file_id": file_id,
                                     "name": name,
                                 });
@@ -200,13 +170,7 @@ impl MicaDocument {
                         }
                     }
                 }
-                Block {
-                    id: b.id,
-                    kind: b.kind,
-                    text: b.text,
-                    data,
-                    children: b.children,
-                }
+                b
             })
             .collect();
 
@@ -270,25 +234,12 @@ impl MicaDocument {
 
     /// The doc as the engine's snapshot payload — shared by the markdown exports
     /// and the local folder-tree export (`api::store`).
-    /// mica_core::Block and mica_markdown::Block mirror each other field-for-field.
     pub(crate) fn snapshot(&self) -> mica_markdown::DocumentSnapshotPayload {
         let doc = self.doc();
-        let root_block_id = doc.root_block_id();
-        let blocks = doc
-            .to_blocks()
-            .into_iter()
-            .map(|b| mica_markdown::Block {
-                id: b.id,
-                kind: b.kind,
-                text: b.text,
-                data: b.data,
-                children: b.children,
-            })
-            .collect();
         mica_markdown::DocumentSnapshotPayload {
             schema_version: 1,
-            root_block_id,
-            blocks,
+            root_block_id: doc.root_block_id(),
+            blocks: doc.to_blocks(),
         }
     }
 
@@ -397,7 +348,7 @@ impl MicaDocument {
         let mut used = std::collections::HashSet::new();
         let mut map = std::collections::BTreeMap::new();
         for (file_id, name) in wanted {
-            let asset = unique_asset_name(&name, &mut used);
+            let asset = mica_interchange::unique_asset_name(&name, &mut used);
             entries.push(mica_interchange::ZipEntry {
                 name: format!("assets/{asset}"),
                 data: bytes_by_id.get(&file_id).cloned().unwrap_or_default(),

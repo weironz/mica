@@ -27,7 +27,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [architecture.md](architecture/architecture.md) | 云优先 Markdown 工作区的整体架构 |
+| [architecture.md](architecture/architecture.md) | 系统现状架构:crate 地图、存储/同步/搜索、本地优先与部署 |
 | [editor.md](architecture/editor.md) | 编辑器设计原则 |
 | [editor-engine.md](architecture/editor-engine.md) | 编辑器引擎设计(自绘画布、marks 模型) |
 | [render-architecture.md](architecture/render-architecture.md) | 块渲染架构(`AtomicBlockRenderer` 注册表,渲染红线) |

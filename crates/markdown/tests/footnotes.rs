@@ -56,7 +56,11 @@ fn reference_strips_to_bare_label_with_a_footnote_mark() {
 #[test]
 fn definition_carries_label_and_inline_content() {
   let snap = import_markdown("[^n]: see **here**.", "root");
-  let def = snap.blocks.iter().find(|b| b.kind == "footnote_def").unwrap();
+  let def = snap
+    .blocks
+    .iter()
+    .find(|b| b.kind == "footnote_def")
+    .unwrap();
   assert_eq!(def.data["label"], "n");
   // The bold marker is parsed to an inline mark, not left literal.
   assert_eq!(def.text, "see here.");
@@ -74,7 +78,10 @@ fn html_export_uses_gfm_reference_and_section() {
     "got:\n{html}"
   );
   // Definition: trailing section with the body and a backref to the reference.
-  assert!(html.contains("<section class=\"footnotes\">"), "got:\n{html}");
+  assert!(
+    html.contains("<section class=\"footnotes\">"),
+    "got:\n{html}"
+  );
   assert!(html.contains("<li id=\"fn-1\">"), "got:\n{html}");
   assert!(html.contains("href=\"#fnref-1\""), "got:\n{html}");
   assert!(html.contains("The body."), "got:\n{html}");
@@ -85,7 +92,11 @@ fn multiline_definition_joins_indented_continuation() {
   // A continuation line indented 4 columns is part of the same definition.
   let md = "[^long]: first line\n    second line";
   let snap = import_markdown(md, "root");
-  let def = snap.blocks.iter().find(|b| b.kind == "footnote_def").unwrap();
+  let def = snap
+    .blocks
+    .iter()
+    .find(|b| b.kind == "footnote_def")
+    .unwrap();
   assert_eq!(def.text, "first line\nsecond line");
   let back = export_markdown(&snap).unwrap();
   assert_eq!(back.trim_end(), md);

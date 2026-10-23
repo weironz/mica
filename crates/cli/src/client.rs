@@ -584,12 +584,17 @@ impl Client {
     if let Some(days) = expires_in_days {
       body["expires_in_days"] = serde_json::json!(days);
     }
-    let resp = self.authed(self.http.post(self.url("/auth/tokens"))).json(&body).send()?;
+    let resp = self
+      .authed(self.http.post(self.url("/auth/tokens")))
+      .json(&body)
+      .send()?;
     Self::ok(resp)?.json().context("decoding created token")
   }
 
   pub fn list_tokens(&self) -> Result<Vec<TokenInfo>> {
-    let resp = self.authed(self.http.get(self.url("/auth/tokens"))).send()?;
+    let resp = self
+      .authed(self.http.get(self.url("/auth/tokens")))
+      .send()?;
     let list: TokenListResponse = Self::ok(resp)?.json()?;
     Ok(list.tokens)
   }

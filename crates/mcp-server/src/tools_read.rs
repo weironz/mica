@@ -1,24 +1,16 @@
-//! Mica MCP server — a thin proxy that exposes the Mica REST API as MCP tools so
-//! an AI (Claude Desktop / Code / any MCP client) can list, read, create, and
-//! write Mica documents. It calls the API over HTTP with a PAT; it holds no DB
-//! or storage access of its own. "Backup/restore" here is just export/import —
-//! real backups are the job of external tools pointed at the exports.
-//!
-//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
-//! server URL + PAT through its usual chain — env, flags, saved login — and
-//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
-//! time while the read tools stay listed.
+//! The read tools: workspaces, page tree, search, document reads, outline.
 use rmcp::{
   ErrorData as McpError,
   handler::server::wrapper::Parameters,
-  model::{CallToolResult, Content}, tool, tool_router,
+  model::{CallToolResult, Content},
+  tool, tool_router,
 };
 use serde_json::{Value, json};
 
-use crate::*;
 use crate::args::*;
 use crate::markdown_windows::*;
 use crate::results::*;
+use crate::*;
 
 #[tool_router(router = read_router, vis = "pub(crate)")]
 impl MicaMcp {
@@ -53,29 +45,27 @@ impl MicaMcp {
       with_stats,
     }): Parameters<ListPagesArgs>,
   ) -> Result<CallToolResult, McpError> {
-    let mut qs: Vec<String> = Vec::new();
+    // Pairs left out when unset, matching the old hand-built query string:
+    // the server treats an absent pair and a defaulted one the same here, and
+    // omitting keeps the URL clean.
+    let mut query: Vec<(&str, String)> = Vec::new();
     if let Some(parent) = parent_view_id {
-      qs.push(format!("parent_view_id={parent}"));
+      query.push(("parent_view_id", parent.to_string()));
     }
     if let Some(depth) = depth {
-      qs.push(format!("depth={depth}"));
+      query.push(("depth", depth.to_string()));
     }
     if let Some(limit) = limit {
-      qs.push(format!("limit={limit}"));
+      query.push(("limit", limit.to_string()));
     }
     if let Some(offset) = offset {
-      qs.push(format!("offset={offset}"));
+      query.push(("offset", offset.to_string()));
     }
     if with_stats {
-      qs.push("with_stats=true".to_string());
+      query.push(("with_stats", "true".to_string()));
     }
-    let query = if qs.is_empty() {
-      String::new()
-    } else {
-      format!("?{}", qs.join("&"))
-    };
     let listed = self
-      .get(&format!("/api/workspaces/{workspace_id}/views{query}"))
+      .get_with_query(&format!("/api/workspaces/{workspace_id}/views"), &query)
       .await;
     // `slim_pages` keeps state_bytes when it is there — see its field list.
     tool_result(listed.map(slim_pages))
@@ -106,15 +96,15 @@ impl MicaMcp {
       query,
     }): Parameters<SearchArgs>,
   ) -> Result<CallToolResult, McpError> {
-    let q = urlencode(&query);
     // Folders are opt-in server-side because the APP's search dialog opens a hit
     // as a page. An agent is the caller that both wants them and can tell them
     // apart (`is_folder`), so this layer is where the opt-in belongs.
     tool_result(
       self
-        .get(&format!(
-          "/api/workspaces/{workspace_id}/search?q={q}&include_folders=true"
-        ))
+        .get_with_query(
+          &format!("/api/workspaces/{workspace_id}/search"),
+          &[("q", query), ("include_folders", "true".to_string())],
+        )
         .await,
     )
   }
@@ -139,10 +129,7 @@ impl MicaMcp {
     // Full markdown from the warm cache (or fetched + cached), then sliced — the
     // window is what saves tokens on a big page; the cache is what makes a
     // re-read local.
-    let full = match self
-      .full_markdown(workspace_id, document_id, refresh)
-      .await
-    {
+    let full = match self.full_markdown(workspace_id, document_id, refresh).await {
       Ok(full) => full,
       Err(error) => return Ok(tool_error(error)),
     };
@@ -171,32 +158,115 @@ impl MicaMcp {
         None,
       )));
     }
+    if document_ids.len() > MAX_BATCH_DOCUMENTS {
+      return Ok(tool_error(McpError::invalid_params(
+        format!(
+          "at most {MAX_BATCH_DOCUMENTS} document_ids per call, got {}",
+          document_ids.len()
+        ),
+        None,
+      )));
+    }
     let outline = mode.as_deref() == Some("outline");
+    if !outline {
+      return self.batch_read_full(workspace_id, &document_ids).await;
+    }
+    // Outline has no server batch route, so it stays one fetch per doc — but
+    // joined in small waves rather than awaited one at a time, and still
+    // cheap: always fresh, carries seq.
+    const OUTLINE_CONCURRENCY: usize = 32;
     let mut out = Vec::with_capacity(document_ids.len());
-    for id in &document_ids {
+    for chunk in document_ids.chunks(OUTLINE_CONCURRENCY) {
+      let results = futures_util::future::join_all(chunk.iter().map(|id| {
+        let path = format!("/api/workspaces/{workspace_id}/documents/{id}/outline");
+        async move { self.get(&path).await }
+      }))
+      .await;
+      for (id, fetched) in chunk.iter().zip(results) {
+        let mut row = serde_json::Map::new();
+        row.insert("document_id".to_string(), json!(id));
+        match fetched {
+          Ok(v) => {
+            row.insert("outline".to_string(), v);
+          }
+          Err(error) => {
+            row.insert("error".to_string(), json!(error.message.to_string()));
+          }
+        }
+        out.push(Value::Object(row));
+      }
+    }
+    tool_result(Ok(json!({ "documents": out })))
+  }
+
+  /// The "full" mode of [MicaMcp::mica_read_documents]: the server's
+  /// batch-read turns N export/markdown round trips into ONE request. The
+  /// endpoint rejects duplicate ids, so dedup on the way out and map results
+  /// back onto the caller's list as given — order and repeats preserved.
+  async fn batch_read_full(
+    &self,
+    workspace_id: Uuid,
+    document_ids: &[Uuid],
+  ) -> Result<CallToolResult, McpError> {
+    let mut unique: Vec<Uuid> = Vec::with_capacity(document_ids.len());
+    let mut seen = std::collections::HashSet::with_capacity(document_ids.len());
+    for id in document_ids {
+      if seen.insert(*id) {
+        unique.push(*id);
+      }
+    }
+    let value = match self
+      .post(
+        &format!("/api/workspaces/{workspace_id}/documents/batch-read"),
+        json!({ "document_ids": unique }),
+      )
+      .await
+    {
+      Ok(value) => value,
+      Err(error) => return Ok(tool_error(error)),
+    };
+    let mut by_id: std::collections::HashMap<Uuid, (Option<String>, Option<String>)> =
+      std::collections::HashMap::with_capacity(unique.len());
+    if let Some(items) = value.get("documents").and_then(Value::as_array) {
+      for item in items {
+        let Some(id) = item
+          .get("document_id")
+          .and_then(|v| serde_json::from_value::<Uuid>(v.clone()).ok())
+        else {
+          continue;
+        };
+        let markdown = item
+          .get("markdown")
+          .and_then(Value::as_str)
+          .map(str::to_string);
+        let error = item
+          .get("error")
+          .and_then(Value::as_str)
+          .map(str::to_string);
+        // Warm the cache exactly as the single-read path does, so a follow-up
+        // read anywhere stays local.
+        if let Some(md) = &markdown {
+          self.cache_put(id, md);
+        }
+        by_id.insert(id, (markdown, error));
+      }
+    }
+    let mut out = Vec::with_capacity(document_ids.len());
+    for id in document_ids {
       let mut row = serde_json::Map::new();
       row.insert("document_id".to_string(), json!(id));
-      // outline stays a direct fetch (cheap, always fresh, carries seq); full
-      // markdown rides the warm cache like the single read.
-      let fetched = if outline {
-        self
-          .get(&format!(
-            "/api/workspaces/{workspace_id}/documents/{id}/outline"
-          ))
-          .await
-          .map(|v| ("outline", v))
-      } else {
-        self
-          .full_markdown(workspace_id, *id, false)
-          .await
-          .map(|md| ("markdown", json!(md)))
-      };
-      match fetched {
-        Ok((key, v)) => {
-          row.insert(key.to_string(), v);
+      match by_id.get(id) {
+        Some((Some(markdown), _)) => {
+          row.insert("markdown".to_string(), json!(markdown));
         }
-        Err(error) => {
-          row.insert("error".to_string(), json!(error.message.to_string()));
+        Some((None, Some(error))) => {
+          row.insert("error".to_string(), json!(error));
+        }
+        _ => {
+          row.insert(
+            "error".to_string(),
+            json!("the server returned no result for that id"),
+          );
         }
       }
       out.push(Value::Object(row));
@@ -226,5 +296,4 @@ impl MicaMcp {
         .await,
     )
   }
-
 }

@@ -156,19 +156,6 @@ void main() {
       expect(c.viewsByWorkspace['b'], hasLength(1));
     });
 
-    test('seedViews fills only the gaps — held entries win', () {
-      final c = SessionController();
-      c.restore(session('t'), [ws('a'), ws('b')], ws('a'), {
-        'a': [view('server-fresh')],
-      });
-      c.seedViews({
-        'a': [view('mirror-stale')],
-        'b': [view('mirror-only')],
-      });
-      expect(c.viewsByWorkspace['a']!.single.id, 'server-fresh',
-          reason: 'the server overwrites the mirror as it arrives');
-      expect(c.viewsByWorkspace['b']!.single.id, 'mirror-only');
-    });
   });
 
   group('plain list replacement', () {

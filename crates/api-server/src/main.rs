@@ -65,7 +65,9 @@ async fn main() -> anyhow::Result<()> {
       match mica_app_core::sync::backfill_derived_columns(&db).await {
         Ok(filled) if filled > 0 => info!("derived-column backfill: indexed {filled} document(s)"),
         Ok(_) => {}
-        Err(error) => tracing::warn!(%error, "derived-column backfill failed; search/backlinks may miss some documents until next edit"),
+        Err(error) => {
+          tracing::warn!(%error, "derived-column backfill failed; search/backlinks may miss some documents until next edit")
+        }
       }
     });
   }
@@ -117,10 +119,11 @@ async fn main() -> anyhow::Result<()> {
   // dialog with no explanation — which is exactly how it surfaced the first
   // time, and the screen gives the reader no way to know the fix is a database
   // row.
-  if let Ok(Some((users, admins))) =
-    sqlx::query_as::<_, (i64, i64)>("SELECT count(*), count(*) FILTER (WHERE is_admin) FROM users WHERE deleted_at IS NULL")
-      .fetch_optional(&db)
-      .await
+  if let Ok(Some((users, admins))) = sqlx::query_as::<_, (i64, i64)>(
+    "SELECT count(*), count(*) FILTER (WHERE is_admin) FROM users WHERE deleted_at IS NULL",
+  )
+  .fetch_optional(&db)
+  .await
   {
     if users > 0 && admins == 0 {
       tracing::warn!(
@@ -174,7 +177,9 @@ async fn main() -> anyhow::Result<()> {
             "body-text search index warmed"
           );
         }
-        Err(error) => tracing::warn!(%error, "body-text index warm-up failed; first search will retry"),
+        Err(error) => {
+          tracing::warn!(%error, "body-text index warm-up failed; first search will retry")
+        }
       }
     });
   }
@@ -295,8 +300,6 @@ fn app_router(state: AppState) -> Router {
     .layer(cors_layer(&state.config))
     .with_state(state)
 }
-
-
 
 /// CORS policy. The bundled web app is served same-origin with `/api`, so it
 /// never triggers CORS; this only governs third-party browser reads. In

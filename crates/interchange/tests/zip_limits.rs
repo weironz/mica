@@ -22,7 +22,10 @@ fn a_huge_declared_size_is_not_reserved_up_front() {
 
 #[test]
 fn an_archive_lying_about_its_entry_size_still_reads() {
-  let mut zip = build_zip(&[ZipEntry { name: "a.md".into(), data: EMPTY_DEFLATE.to_vec() }]);
+  let mut zip = build_zip(&[ZipEntry {
+    name: "a.md".into(),
+    data: EMPTY_DEFLATE.to_vec(),
+  }]);
   // Rewrite the STORE entry as DEFLATE and make the central directory claim
   // 4 GiB uncompressed — the shape of the crafted upload.
   let local = 0;
@@ -50,12 +53,21 @@ fn inflate_refuses_output_past_its_limit() {
 #[test]
 fn entries_past_the_shared_budget_are_dropped() {
   let zip = build_zip(&[
-    ZipEntry { name: "a.md".into(), data: vec![b'a'; 100] },
-    ZipEntry { name: "b.md".into(), data: vec![b'b'; 100] },
+    ZipEntry {
+      name: "a.md".into(),
+      data: vec![b'a'; 100],
+    },
+    ZipEntry {
+      name: "b.md".into(),
+      data: vec![b'b'; 100],
+    },
   ]);
   let mut budget = 150;
   let entries = read_zip_within(&zip, &mut budget);
-  assert_eq!(entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["a.md"]);
+  assert_eq!(
+    entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+    ["a.md"]
+  );
   assert_eq!(budget, 50);
 }
 

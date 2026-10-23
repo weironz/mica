@@ -23,7 +23,6 @@ use uuid::Uuid;
 
 use crate::store::lock_document_tx;
 
-
 /// `MicaDoc::from_update`, but a yrs PANIC on malformed bytes becomes a
 /// `DocError` instead of unwinding out of the request handler.
 ///
@@ -40,16 +39,24 @@ use crate::store::lock_document_tx;
 /// This guard only contains unwinding panics; it is not a general sandbox.
 /// The server's panic strategy is `unwind` (no `panic = "abort"`).
 pub fn guarded_from_update(bytes: &[u8]) -> Result<MicaDoc, DocError> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| MicaDoc::from_update(bytes)))
-        .unwrap_or_else(|_| Err(DocError::Decode("yrs panicked while decoding an update".into())))
+  std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| MicaDoc::from_update(bytes)))
+    .unwrap_or_else(|_| {
+      Err(DocError::Decode(
+        "yrs panicked while decoding an update".into(),
+      ))
+    })
 }
 
 /// [`MicaDoc::apply_update`] with the same panic containment as
 /// [`guarded_from_update`] — the client-update apply in `push_update` is the
 /// primary remotely-reachable path.
 fn guarded_apply(doc: &mut MicaDoc, update: &[u8]) -> Result<(), DocError> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| doc.apply_update(update)))
-        .unwrap_or_else(|_| Err(DocError::Decode("yrs panicked while applying an update".into())))
+  std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| doc.apply_update(update)))
+    .unwrap_or_else(|_| {
+      Err(DocError::Decode(
+        "yrs panicked while applying an update".into(),
+      ))
+    })
 }
 
 /// The stream window + prune cadence, re-exported so callers of [`push_update`]
@@ -63,36 +70,26 @@ pub use mica_infra::SyncTuning;
 /// updates, or a base to re-bootstrap from when the cursor fell behind the
 /// pruned window (P2-M4 §10 large-doc / stream-growth control).
 pub enum CatchUp {
-    Updates(Vec<StreamUpdate>),
-    Rebootstrap(YrsBase),
+  Updates(Vec<StreamUpdate>),
+  Rebootstrap(YrsBase),
 }
 
 /// One update on the per-workspace stream, returned by catch-up pulls.
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct StreamUpdate {
-    pub rid: i64,
-    pub document_id: Uuid,
-    pub actor_id: Uuid,
-    pub payload: Vec<u8>,
+  pub rid: i64,
+  pub document_id: Uuid,
+  pub actor_id: Uuid,
+  pub payload: Vec<u8>,
 }
 
 /// The bootstrap base a fresh client applies before pulling stream updates.
 #[derive(Debug, Clone)]
 pub struct YrsBase {
-    pub state: Vec<u8>,
-    pub state_vector: Vec<u8>,
-    /// Highest stream `rid` already folded into `state`.
-    pub base_rid: i64,
-}
-
-pub(crate) fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
-    CoreBlock {
-        id: b.id,
-        kind: b.kind,
-        text: b.text,
-        data: b.data,
-        children: b.children,
-    }
+  pub state: Vec<u8>,
+  pub state_vector: Vec<u8>,
+  /// Highest stream `rid` already folded into `state`.
+  pub base_rid: i64,
 }
 
 /// The document's plain, queryable text: every block's clean `text` in tree
@@ -122,56 +119,49 @@ pub(crate) fn to_core_block(b: mica_markdown::Block) -> CoreBlock {
 /// back to whatever the name column already holds rather than blanking a page's
 /// name in the sidebar.
 fn title_from_blocks(blocks: &[mica_core::Block], root_id: &str) -> Option<String> {
-    // Only the ROOT block is needed. (The comment here used to say reading just
-    // it avoided the full flatten — it called `to_blocks()` and flattened
-    // anyway. The push path now flattens once and shares the blocks.)
-    let root = blocks.iter().find(|b| b.id == root_id)?.clone();
-    let root_id = root_id.to_string();
-    let payload = mica_markdown::DocumentSnapshotPayload {
-        schema_version: 1,
-        root_block_id: root_id,
-        blocks: vec![mica_markdown::Block {
-            id: root.id,
-            kind: root.kind,
-            text: root.text,
-            data: root.data,
-            children: root.children,
-        }],
-    };
-    mica_markdown::document_title(&payload).map(str::to_string)
+  // Only the ROOT block is needed. (The comment here used to say reading just
+  // it avoided the full flatten — it called `to_blocks()` and flattened
+  // anyway. The push path now flattens once and shares the blocks.)
+  let root = blocks.iter().find(|b| b.id == root_id)?.clone();
+  let payload = mica_markdown::DocumentSnapshotPayload {
+    schema_version: 1,
+    root_block_id: root_id.to_string(),
+    blocks: vec![root],
+  };
+  mica_markdown::document_title(&payload).map(str::to_string)
 }
 
 pub fn content_text_from_doc(doc: &MicaDoc) -> String {
-    content_text_from_blocks(&doc.to_blocks(), &doc.root_block_id())
+  content_text_from_blocks(&doc.to_blocks(), &doc.root_block_id())
 }
 
 /// [content_text_from_doc] over already-flattened blocks.
 pub fn content_text_from_blocks(blocks: &[mica_core::Block], root_id: &str) -> String {
-    let mut text = blocks
-        .iter()
-        .map(|b| b.text.trim_end_matches('\n'))
-        .filter(|t| !t.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
+  let mut text = blocks
+    .iter()
+    .map(|b| b.text.trim_end_matches('\n'))
+    .filter(|t| !t.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n");
 
-    // Append searchable front-matter property values (tags, status, etc.). The
-    // front matter is the raw string on the root block's data; parse it with the
-    // markdown authority's property parser and flatten the values.
-    if let Some(fm) = blocks
-        .iter()
-        .find(|b| b.id == root_id)
-        .and_then(|b| b.data.get("front_matter"))
-        .and_then(|v| v.as_str())
-    {
-        let meta = searchable_metadata(fm);
-        if !meta.is_empty() {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(&meta);
-        }
+  // Append searchable front-matter property values (tags, status, etc.). The
+  // front matter is the raw string on the root block's data; parse it with the
+  // markdown authority's property parser and flatten the values.
+  if let Some(fm) = blocks
+    .iter()
+    .find(|b| b.id == root_id)
+    .and_then(|b| b.data.get("front_matter"))
+    .and_then(|v| v.as_str())
+  {
+    let meta = searchable_metadata(fm);
+    if !meta.is_empty() {
+      if !text.is_empty() {
+        text.push('\n');
+      }
+      text.push_str(&meta);
     }
-    text
+  }
+  text
 }
 
 /// Flatten a page's front-matter property VALUES into a space-joined string for
@@ -184,24 +174,22 @@ pub fn content_text_from_blocks(blocks: &[mica_core::Block], root_id: &str) -> S
 /// that carries the tag, not one whose body merely mentions "work". A plain typed
 /// search for `work` still finds it, because `work` is a substring of `#work`.
 fn searchable_metadata(front_matter: &str) -> String {
-    use mica_markdown::properties::PropertyValue;
-    let mut parts: Vec<String> = Vec::new();
-    for prop in mica_markdown::properties::parse_properties(front_matter) {
-        match prop.value {
-            PropertyValue::List(items) => {
-                parts.extend(items.into_iter().map(|it| format!("#{it}")))
-            }
-            PropertyValue::Text(s) if !s.is_empty() => parts.push(s),
-            PropertyValue::Date(s) => parts.push(s),
-            PropertyValue::Number(n) => parts.push(if n.fract() == 0.0 && n.abs() < 1e15 {
-                (n as i64).to_string()
-            } else {
-                n.to_string()
-            }),
-            PropertyValue::Text(_) | PropertyValue::Checkbox(_) => {}
-        }
+  use mica_markdown::properties::PropertyValue;
+  let mut parts: Vec<String> = Vec::new();
+  for prop in mica_markdown::properties::parse_properties(front_matter) {
+    match prop.value {
+      PropertyValue::List(items) => parts.extend(items.into_iter().map(|it| format!("#{it}"))),
+      PropertyValue::Text(s) if !s.is_empty() => parts.push(s),
+      PropertyValue::Date(s) => parts.push(s),
+      PropertyValue::Number(n) => parts.push(if n.fract() == 0.0 && n.abs() < 1e15 {
+        (n as i64).to_string()
+      } else {
+        n.to_string()
+      }),
+      PropertyValue::Text(_) | PropertyValue::Checkbox(_) => {}
     }
-    parts.join(" ")
+  }
+  parts.join(" ")
 }
 
 /// Re-exported so api-server keeps one import path. The definition lives in
@@ -220,33 +208,186 @@ pub use mica_core::page_link_targets;
 /// do not parse as a uuid are dropped rather than stored — the column is
 /// `uuid[]`, and a link to a non-view is not a backlink to anything.
 pub fn link_targets_from_doc(doc: &MicaDoc) -> Vec<Uuid> {
-    link_targets_from_blocks(&doc.to_blocks())
+  link_targets_from_blocks(&doc.to_blocks())
 }
 
 /// [link_targets_from_doc] over already-flattened blocks.
 pub fn link_targets_from_blocks(blocks: &[mica_core::Block]) -> Vec<Uuid> {
-    let mut targets: Vec<Uuid> = blocks
-        .iter()
-        .flat_map(|b| page_link_targets(&b.data))
-        .filter_map(|t| t.parse().ok())
-        .collect();
-    targets.sort_unstable();
-    targets.dedup();
-    targets
+  let mut targets: Vec<Uuid> = blocks
+    .iter()
+    .flat_map(|b| page_link_targets(&b.data))
+    .filter_map(|t| t.parse().ok())
+    .collect();
+  targets.sort_unstable();
+  targets.dedup();
+  targets
 }
 
 /// Every `file_id` the blocks reference — the producer of
 /// `document_yrs_base.file_ids` (migration 0030), the blob GC's reference set.
 /// Sorted and deduplicated, like [link_targets_from_blocks].
 pub fn file_ids_from_blocks(blocks: &[mica_core::Block]) -> Vec<String> {
-    let mut ids: Vec<String> = blocks
-        .iter()
-        .filter_map(|b| b.data.get("file_id").and_then(|v| v.as_str()))
-        .map(str::to_string)
-        .collect();
-    ids.sort_unstable();
-    ids.dedup();
-    ids
+  let mut ids: Vec<String> = blocks
+    .iter()
+    .filter_map(|b| b.data.get("file_id").and_then(|v| v.as_str()))
+    .map(str::to_string)
+    .collect();
+  ids.sort_unstable();
+  ids.dedup();
+  ids
+}
+
+/// A folded doc flattened ONCE, carrying everything a base write needs:
+/// `state`+`state_vector` for the row itself and the three projections it
+/// co-writes (`content_text`, `link_targets`, `file_ids`), all computed from
+/// that same flattening. One flatten — the `*_from_doc` helpers each call
+/// `to_blocks()`, so deriving the columns separately used to flatten three or
+/// four times inside the document row lock, which runs on every keystroke.
+#[derive(Debug)]
+pub(crate) struct FlatBase {
+  pub state: Vec<u8>,
+  pub state_vector: Vec<u8>,
+  /// The flattened blocks and root, kept for callers that ALSO need them
+  /// (the views.name projection); derived data comes from these same blocks.
+  pub blocks: Vec<CoreBlock>,
+  pub root_id: String,
+  pub content_text: String,
+  pub link_targets: Vec<Uuid>,
+  pub file_ids: Vec<String>,
+}
+
+impl FlatBase {
+  pub(crate) fn from_doc(doc: &MicaDoc) -> Self {
+    let state = doc.encode_state();
+    let state_vector = doc.state_vector();
+    let blocks = doc.to_blocks();
+    let root_id = doc.root_block_id();
+    let content_text = content_text_from_blocks(&blocks, &root_id);
+    let link_targets = link_targets_from_blocks(&blocks);
+    let file_ids = file_ids_from_blocks(&blocks);
+    Self {
+      state,
+      state_vector,
+      blocks,
+      root_id,
+      content_text,
+      link_targets,
+      file_ids,
+    }
+  }
+}
+
+/// THE upsert of `document_yrs_base`, shared by every write path
+/// ([`push_update_checked`], `store::apply_derived_operations`) so the
+/// statement and its invariants are written once (red line #1: the derived
+/// columns come from the SAME [FlatBase] as `state`, so they cannot diverge
+/// from the base they index).
+///
+/// `updated_at` is the search index's refresh cursor, so it is stamped with
+/// `clock_timestamp()` — the moment of THIS write — not `now()`, which is the
+/// transaction's start: a write that waited on the document lock longer than
+/// `search::REFRESH_LAP_SECONDS` would otherwise commit a stamp the cursor had
+/// already passed, and its body would never reach the index. Every writer of
+/// this table follows the same rule.
+pub(crate) async fn write_base_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  document_id: Uuid,
+  base_rid: i64,
+  base: &FlatBase,
+) -> ApiResult<()> {
+  sqlx::query(
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp())
+         ON CONFLICT (document_id) DO UPDATE SET
+             state = excluded.state, state_vector = excluded.state_vector,
+             base_rid = excluded.base_rid, content_text = excluded.content_text,
+             link_targets = excluded.link_targets, file_ids = excluded.file_ids,
+             updated_at = clock_timestamp()",
+    )
+    .bind(document_id)
+    .bind(&base.state)
+    .bind(&base.state_vector)
+    .bind(base_rid)
+    .bind(&base.content_text)
+    .bind(&base.link_targets)
+    .bind(&base.file_ids)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
+}
+
+/// `views.name` is a PROJECTION of the document's own title, derived from the
+/// same folded doc and written in the same transaction — the third instance of
+/// the pattern `content_text` and `link_targets` already follow, and for the
+/// same reason: a second STORED copy of one fact drifts, a derived one cannot
+/// (red line #1). See `docs/features/page-title-plan.md`. Every base write
+/// path runs it, or the sidebar name drifts from the title (the REST/MCP path
+/// used to skip it).
+///
+/// Only for documents that HAVE a title. There is no backfill, so most pages
+/// carry none and keep answering from the name column exactly as before —
+/// a `None` here must therefore leave the column alone, never blank it.
+/// Folders never reach this code at all (they have no document).
+///
+/// `name <> $2` keeps this a no-op on the overwhelmingly common write (a
+/// keystroke in the body), so the hot path costs one comparison, not a write.
+pub(crate) async fn sync_view_name_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  document_id: Uuid,
+  base: &FlatBase,
+) -> ApiResult<()> {
+  if let Some(title) = title_from_blocks(&base.blocks, &base.root_id) {
+    sqlx::query(
+      "UPDATE views SET name = $1, updated_at = now()
+             WHERE object_id = $2 AND name <> $1",
+    )
+    .bind(&title)
+    .bind(document_id)
+    .execute(&mut **tx)
+    .await?;
+  }
+  Ok(())
+}
+
+/// Version history (docs/features/version-history-plan.md): archive the
+/// just-folded full state as an AUTO snapshot — but only if none was taken in
+/// the last 10 minutes, so a burst of edits converges to one version per
+/// window (AFFiNE's min-interval). Auto rows carry a 30-day `expires_at`;
+/// named rows are inserted elsewhere with expires_at NULL and are never
+/// touched by this or by retention.
+///
+/// Asked first, written only when due: the single INSERT … WHERE NOT EXISTS
+/// shipped the whole `state` to Postgres on EVERY write only for it to be
+/// discarded almost every time. Same document row lock, so the check can't
+/// race.
+pub(crate) async fn archive_auto_version_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  document_id: Uuid,
+  rid: i64,
+  state: &[u8],
+) -> ApiResult<()> {
+  let version_due: bool = sqlx::query_scalar(
+    "SELECT NOT EXISTS (
+             SELECT 1 FROM document_yrs_versions
+             WHERE document_id = $1 AND label IS NULL
+               AND created_at > now() - interval '10 minutes'
+         )",
+  )
+  .bind(document_id)
+  .fetch_one(&mut **tx)
+  .await?;
+  if version_due {
+    sqlx::query(
+      "INSERT INTO document_yrs_versions (document_id, rid, state, expires_at)
+             VALUES ($1, $2, $3, now() + interval '30 days')",
+    )
+    .bind(document_id)
+    .bind(rid)
+    .bind(state)
+    .execute(&mut **tx)
+    .await?;
+  }
+  Ok(())
 }
 
 /// How many base rows the startup backfill decodes per DB round trip.
@@ -279,90 +420,90 @@ const BACKFILL_BATCH: i64 = 256;
 ///
 /// Returns how many rows were updated (for the startup log line).
 pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
-    let mut filled = 0usize;
-    // Byte-wise uuid cursor; `Uuid::nil()` is the minimum, so `> $cursor` starts
-    // from the first row. Advancing by document_id (not by re-querying the
-    // sentinels) guarantees the loop terminates within a pass even when every row
-    // in a batch derives nothing or fails to decode.
-    let mut cursor = Uuid::nil();
-    loop {
-        let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
-            "SELECT document_id, state FROM document_yrs_base
+  let mut filled = 0usize;
+  // Byte-wise uuid cursor; `Uuid::nil()` is the minimum, so `> $cursor` starts
+  // from the first row. Advancing by document_id (not by re-querying the
+  // sentinels) guarantees the loop terminates within a pass even when every row
+  // in a batch derives nothing or fails to decode.
+  let mut cursor = Uuid::nil();
+  loop {
+    let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
+      "SELECT document_id, state FROM document_yrs_base
              WHERE (content_text = '' OR link_targets IS NULL OR file_ids IS NULL)
                AND document_id > $1
              ORDER BY document_id
              LIMIT $2",
-        )
-        .bind(cursor)
-        .bind(BACKFILL_BATCH)
-        .fetch_all(db)
-        .await?;
-        if rows.is_empty() {
-            break;
+    )
+    .bind(cursor)
+    .bind(BACKFILL_BATCH)
+    .fetch_all(db)
+    .await?;
+    if rows.is_empty() {
+      break;
+    }
+    // One transaction per batch, not per row. Measured 2026-08-05 on a
+    // restored production snapshot (3784 rows): 43.8 s as autocommit
+    // singletons — the decodes are only ~3 s of that, the rest was 3784
+    // separate round-trips each paying a commit. This runs before the server
+    // accepts traffic, so those seconds were startup downtime on the first
+    // boot after a deploy.
+    let mut tx = db.begin().await?;
+    for (document_id, state) in &rows {
+      cursor = *document_id;
+      let doc = match guarded_from_update(state) {
+        Ok(doc) => doc,
+        Err(error) => {
+          tracing::warn!(
+              document_id = %document_id,
+              %error,
+              "derived-column backfill: skipping undecodable yrs base"
+          );
+          continue;
         }
-        // One transaction per batch, not per row. Measured 2026-08-05 on a
-        // restored production snapshot (3784 rows): 43.8 s as autocommit
-        // singletons — the decodes are only ~3 s of that, the rest was 3784
-        // separate round-trips each paying a commit. This runs before the server
-        // accepts traffic, so those seconds were startup downtime on the first
-        // boot after a deploy.
-        let mut tx = db.begin().await?;
-        for (document_id, state) in &rows {
-            cursor = *document_id;
-            let doc = match guarded_from_update(state) {
-                Ok(doc) => doc,
-                Err(error) => {
-                    tracing::warn!(
-                        document_id = %document_id,
-                        %error,
-                        "derived-column backfill: skipping undecodable yrs base"
-                    );
-                    continue;
-                }
-            };
-            let blocks = doc.to_blocks();
-            let text = content_text_from_blocks(&blocks, &doc.root_block_id());
-            let targets = link_targets_from_blocks(&blocks);
-            let files = file_ids_from_blocks(&blocks);
-            // `link_targets` is written unconditionally — writing `'{}'` is the
-            // whole point of the NULL sentinel, and skipping it here would leave
-            // the row NULL and re-decoded forever. `content_text` keeps its own
-            // rule: leave a genuinely-empty body as ''.
-            //
-            // `AND state = $5`: this runs alongside live traffic, so an edit
-            // can land between the read above and this write. That edit already
-            // wrote columns derived from the NEWER state; overwriting them with
-            // ours would leave search/backlinks stale until the next edit.
-            //
-            // `updated_at` moves exactly when `content_text` does: it is the
-            // search index's refresh cursor (`search::BodyIndex`), and this
-            // runs AFTER the startup warm-up — a body filled in without moving
-            // the stamp sits behind the cursor and is never pulled. Only then,
-            // because an upgrade visits every row (link_targets/file_ids NULL)
-            // and re-stamping all of them would re-pull the whole corpus.
-            // `clock_timestamp()`, not `now()`, for the reason given at the
-            // push upsert. The CASE reads the row's OLD values.
-            sqlx::query(
-                "UPDATE document_yrs_base
+      };
+      let blocks = doc.to_blocks();
+      let text = content_text_from_blocks(&blocks, &doc.root_block_id());
+      let targets = link_targets_from_blocks(&blocks);
+      let files = file_ids_from_blocks(&blocks);
+      // `link_targets` is written unconditionally — writing `'{}'` is the
+      // whole point of the NULL sentinel, and skipping it here would leave
+      // the row NULL and re-decoded forever. `content_text` keeps its own
+      // rule: leave a genuinely-empty body as ''.
+      //
+      // `AND state = $5`: this runs alongside live traffic, so an edit
+      // can land between the read above and this write. That edit already
+      // wrote columns derived from the NEWER state; overwriting them with
+      // ours would leave search/backlinks stale until the next edit.
+      //
+      // `updated_at` moves exactly when `content_text` does: it is the
+      // search index's refresh cursor (`search::BodyIndex`), and this
+      // runs AFTER the startup warm-up — a body filled in without moving
+      // the stamp sits behind the cursor and is never pulled. Only then,
+      // because an upgrade visits every row (link_targets/file_ids NULL)
+      // and re-stamping all of them would re-pull the whole corpus.
+      // `clock_timestamp()`, not `now()`, for the reason given at the
+      // push upsert. The CASE reads the row's OLD values.
+      sqlx::query(
+        "UPDATE document_yrs_base
                  SET content_text = CASE WHEN $2 = '' THEN content_text ELSE $2 END,
                      link_targets = $3,
                      file_ids = $4,
                      updated_at = CASE WHEN $2 = '' OR content_text = $2
                                        THEN updated_at ELSE clock_timestamp() END
                  WHERE document_id = $1 AND state = $5",
-            )
-            .bind(document_id)
-            .bind(&text)
-            .bind(&targets)
-            .bind(&files)
-            .bind(state)
-            .execute(&mut *tx)
-            .await?;
-            filled += 1;
-        }
-        tx.commit().await?;
+      )
+      .bind(document_id)
+      .bind(&text)
+      .bind(&targets)
+      .bind(&files)
+      .bind(state)
+      .execute(&mut *tx)
+      .await?;
+      filled += 1;
     }
-    Ok(filled)
+    tx.commit().await?;
+  }
+  Ok(filled)
 }
 
 /// Load the document's folded yrs base, seeding an EMPTY one if it has none.
@@ -379,47 +520,46 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
 /// document which somehow lost its base opens as an empty page instead of 404ing
 /// forever.
 pub(crate) async fn ensure_base_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    document_id: Uuid,
+  tx: &mut Transaction<'_, Postgres>,
+  document_id: Uuid,
 ) -> ApiResult<YrsBase> {
-    if let Some((state, state_vector, base_rid)) =
-        sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64)>(
-            "SELECT state, state_vector, base_rid FROM document_yrs_base WHERE document_id = $1",
-        )
-        .bind(document_id)
-        .fetch_optional(&mut **tx)
-        .await?
-    {
-        return Ok(YrsBase {
-            state,
-            state_vector,
-            base_rid,
-        });
-    }
+  if let Some((state, state_vector, base_rid)) = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64)>(
+    "SELECT state, state_vector, base_rid FROM document_yrs_base WHERE document_id = $1",
+  )
+  .bind(document_id)
+  .fetch_optional(&mut **tx)
+  .await?
+  {
+    return Ok(YrsBase {
+      state,
+      state_vector,
+      base_rid,
+    });
+  }
 
-    let root: String = sqlx::query_scalar("SELECT root_block_id FROM documents WHERE id = $1")
-        .bind(document_id)
-        .fetch_optional(&mut **tx)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    seed_base_tx(tx, document_id, empty_payload(&root)).await
+  let root: String = sqlx::query_scalar("SELECT root_block_id FROM documents WHERE id = $1")
+    .bind(document_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+  seed_base_tx(tx, document_id, empty_payload(&root)).await
 }
 
 /// A brand-new page: a single empty paragraph that IS the root. This is the
 /// exact shape `store::insert_initial_snapshot` used to write into
 /// `document_snapshots`; since S4 it goes straight into the yrs base instead.
 pub fn empty_payload(root_block_id: &str) -> DocumentSnapshotPayload {
-    DocumentSnapshotPayload {
-        schema_version: 1,
-        root_block_id: root_block_id.to_string(),
-        blocks: vec![mica_markdown::Block {
-            id: root_block_id.to_string(),
-            kind: "paragraph".to_string(),
-            text: String::new(),
-            data: serde_json::Value::Null,
-            children: Vec::new(),
-        }],
-    }
+  DocumentSnapshotPayload {
+    schema_version: 1,
+    root_block_id: root_block_id.to_string(),
+    blocks: vec![mica_markdown::Block {
+      id: root_block_id.to_string(),
+      kind: "paragraph".to_string(),
+      text: String::new(),
+      data: serde_json::Value::Null,
+      children: Vec::new(),
+    }],
+  }
 }
 
 /// Write a document's FIRST yrs base straight from `payload`, in the caller's
@@ -433,21 +573,20 @@ pub fn empty_payload(root_block_id: &str) -> DocumentSnapshotPayload {
 /// A no-op when a base already exists (`ON CONFLICT DO NOTHING`), returning the
 /// stored one — see the race note below for why the stored winner and not ours.
 pub async fn seed_base_tx(
-    tx: &mut Transaction<'_, Postgres>,
-    document_id: Uuid,
-    payload: DocumentSnapshotPayload,
+  tx: &mut Transaction<'_, Postgres>,
+  document_id: Uuid,
+  payload: DocumentSnapshotPayload,
 ) -> ApiResult<YrsBase> {
-    let blocks: Vec<CoreBlock> = payload.blocks.into_iter().map(to_core_block).collect();
-    let doc = MicaDoc::from_blocks(&payload.root_block_id, &blocks);
-    let state = doc.encode_state();
-    let state_vector = doc.state_vector();
-    // content_text derived from the SAME doc (red line #1) — co-written with the
-    // base it indexes, so this first-touch base is searchable immediately, not
-    // only after the startup backfill.
-    let content_text = content_text_from_doc(&doc);
-    let link_targets = link_targets_from_doc(&doc);
-    let file_ids = file_ids_from_blocks(&blocks);
-    let inserted = sqlx::query(
+  let doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
+  // Every derived column from the SAME doc, in one flatten (red line #1) —
+  // co-written with the base it indexes, so this first-touch base is
+  // searchable immediately, not only after the startup backfill.
+  let flat = FlatBase::from_doc(&doc);
+  let state = flat.state;
+  let state_vector = flat.state_vector;
+  // Insert-only, unlike [write_base_tx]: a seed must never overwrite an
+  // existing base — the conflict branch below re-reads the stored winner.
+  let inserted = sqlx::query(
         "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
          VALUES ($1, $2, $3, 0, $4, $5, $6, clock_timestamp())
          ON CONFLICT (document_id) DO NOTHING",
@@ -455,62 +594,47 @@ pub async fn seed_base_tx(
     .bind(document_id)
     .bind(&state)
     .bind(&state_vector)
-    .bind(&content_text)
-    .bind(&link_targets)
-    .bind(&file_ids)
+    .bind(&flat.content_text)
+    .bind(&flat.link_targets)
+    .bind(&flat.file_ids)
     .execute(&mut **tx)
     .await?;
-    if inserted.rows_affected() == 0 {
-        // Lost the first-bootstrap race: a concurrent connection built and
-        // committed its own base while we were building ours. The two encodings
-        // are NOT interchangeable — `MicaDoc::from_blocks` mints a fresh random
-        // yrs actor, so our local twin lives in a parallel CRDT universe.
-        // Handing it out would strand this client: every peer edit references
-        // the stored base's structs and parks as pending forever (applyUpdate
-        // still returns Ok — permanent, silent divergence; red line #1). Return
-        // the stored winner instead. Our INSERT waited on the winner's unique-
-        // index lock until it committed, so this re-read sees its row.
-        let (state, state_vector, base_rid) = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64)>(
-            "SELECT state, state_vector, base_rid FROM document_yrs_base WHERE document_id = $1",
-        )
-        .bind(document_id)
-        .fetch_one(&mut **tx)
-        .await?;
-        return Ok(YrsBase {
-            state,
-            state_vector,
-            base_rid,
-        });
-    }
-    Ok(YrsBase {
-        state,
-        state_vector,
-        base_rid: 0,
-    })
-}
-
-/// The document's current bootstrap base (None if never touched via yrs sync).
-pub async fn document_base(db: &PgPool, document_id: Uuid) -> ApiResult<Option<YrsBase>> {
-    let row = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64)>(
-        "SELECT state, state_vector, base_rid FROM document_yrs_base WHERE document_id = $1",
+  if inserted.rows_affected() == 0 {
+    // Lost the first-bootstrap race: a concurrent connection built and
+    // committed its own base while we were building ours. The two encodings
+    // are NOT interchangeable — `MicaDoc::from_blocks` mints a fresh random
+    // yrs actor, so our local twin lives in a parallel CRDT universe.
+    // Handing it out would strand this client: every peer edit references
+    // the stored base's structs and parks as pending forever (applyUpdate
+    // still returns Ok — permanent, silent divergence; red line #1). Return
+    // the stored winner instead. Our INSERT waited on the winner's unique-
+    // index lock until it committed, so this re-read sees its row.
+    let (state, state_vector, base_rid) = sqlx::query_as::<_, (Vec<u8>, Vec<u8>, i64)>(
+      "SELECT state, state_vector, base_rid FROM document_yrs_base WHERE document_id = $1",
     )
     .bind(document_id)
-    .fetch_optional(db)
+    .fetch_one(&mut **tx)
     .await?;
-    Ok(row.map(|(state, state_vector, base_rid)| YrsBase {
-        state,
-        state_vector,
-        base_rid,
-    }))
+    return Ok(YrsBase {
+      state,
+      state_vector,
+      base_rid,
+    });
+  }
+  Ok(YrsBase {
+    state,
+    state_vector,
+    base_rid: 0,
+  })
 }
 
 /// The document's bootstrap base, building it from the op-model snapshot on first
 /// access. Use this for the WS bootstrap of a client opening the document.
 pub async fn bootstrap_base(db: &PgPool, document_id: Uuid) -> ApiResult<YrsBase> {
-    let mut tx = db.begin().await?;
-    let base = ensure_base_tx(&mut tx, document_id).await?;
-    tx.commit().await?;
-    Ok(base)
+  let mut tx = db.begin().await?;
+  let base = ensure_base_tx(&mut tx, document_id).await?;
+  tx.commit().await?;
+  Ok(base)
 }
 
 /// P4-3 (state-vector fast reconciliation): the minimal yrs update that brings a
@@ -524,41 +648,41 @@ pub async fn bootstrap_base(db: &PgPool, document_id: Uuid) -> ApiResult<YrsBase
 /// full base (both are yrs updates), which keeps the protocol change purely
 /// additive: old clients never send an sv and old servers ignore it.
 pub fn diff_from_base(base: &YrsBase, client_sv: &[u8]) -> Option<Vec<u8>> {
-    let doc = guarded_from_update(&base.state).ok()?;
-    doc.encode_diff(client_sv).ok()
+  let doc = guarded_from_update(&base.state).ok()?;
+  doc.encode_diff(client_sv).ok()
 }
 
 /// B11: whether a client at `client_sv` holds insertions `base` never received
 /// (it should push its diff against the base's state vector).
 pub fn client_is_ahead(base: &YrsBase, client_sv: &[u8]) -> bool {
-    MicaDoc::sv_has_unseen(client_sv, &base.state_vector)
+  MicaDoc::sv_has_unseen(client_sv, &base.state_vector)
 }
 
 /// Append a client's yrs `update` to the workspace stream and fold it into the
 /// document base, returning the assigned `rid`. See [`push_update_checked`].
 pub async fn push_update(
-    db: &PgPool,
-    workspace_id: Uuid,
-    document_id: Uuid,
-    actor_id: Uuid,
-    update: &[u8],
-    tuning: &SyncTuning,
+  db: &PgPool,
+  workspace_id: Uuid,
+  document_id: Uuid,
+  actor_id: Uuid,
+  update: &[u8],
+  tuning: &SyncTuning,
 ) -> ApiResult<i64> {
-    push_update_checked(db, workspace_id, document_id, actor_id, update, tuning)
-        .await
-        .map(|pushed| pushed.rid)
+  push_update_checked(db, workspace_id, document_id, actor_id, update, tuning)
+    .await
+    .map(|pushed| pushed.rid)
 }
 
 /// What [`push_update_checked`] stored.
 #[derive(Debug, Clone)]
 pub struct Pushed {
-    pub rid: i64,
-    /// `Some(server state vector)` when the update depends on history the base
-    /// lacks: yrs parked it as pending, so it is stored but invisible. The
-    /// pusher holds that history (it built the update on top of it) and repairs
-    /// the gap by sending its diff against this vector — the y-protocols
-    /// SyncStep1/2 exchange, initiated by the server.
-    pub missing_sv: Option<Vec<u8>>,
+  pub rid: i64,
+  /// `Some(server state vector)` when the update depends on history the base
+  /// lacks: yrs parked it as pending, so it is stored but invisible. The
+  /// pusher holds that history (it built the update on top of it) and repairs
+  /// the gap by sending its diff against this vector — the y-protocols
+  /// SyncStep1/2 exchange, initiated by the server.
+  pub missing_sv: Option<Vec<u8>>,
 }
 
 /// Append a client's yrs `update` to the workspace stream and fold it into the
@@ -566,188 +690,105 @@ pub struct Pushed {
 /// first; a malformed/undecodable update is rejected (§10 integrity gate — never
 /// persist unverifiable state).
 pub async fn push_update_checked(
-    db: &PgPool,
-    workspace_id: Uuid,
-    document_id: Uuid,
-    actor_id: Uuid,
-    update: &[u8],
-    tuning: &SyncTuning,
+  db: &PgPool,
+  workspace_id: Uuid,
+  document_id: Uuid,
+  actor_id: Uuid,
+  update: &[u8],
+  tuning: &SyncTuning,
 ) -> ApiResult<Pushed> {
-    let mut tx = db.begin().await?;
+  let mut tx = db.begin().await?;
 
-    // Lock the `documents` row BEFORE reading the base — the same order
-    // `store::apply_derived_operations` takes, so the two write paths serialize
-    // against each other instead of deadlocking.
-    //
-    // Without this the read-fold-write below is a lost update under READ
-    // COMMITTED: two pushes both read base B, both fold their own update onto
-    // it, and the second `ON CONFLICT DO UPDATE SET state = excluded.state`
-    // discards the first one's fold — while BOTH `workspace_updates` rows
-    // commit. The stream then claims an update the base never absorbed, so a
-    // client catching up from the stream and a client reading the base disagree
-    // permanently (red line #1: one representation, and it must be this one).
-    lock_document_tx(&mut tx, workspace_id, document_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
+  // Lock the `documents` row BEFORE reading the base — the same order
+  // `store::apply_derived_operations` takes, so the two write paths serialize
+  // against each other instead of deadlocking.
+  //
+  // Without this the read-fold-write below is a lost update under READ
+  // COMMITTED: two pushes both read base B, both fold their own update onto
+  // it, and the second `ON CONFLICT DO UPDATE SET state = excluded.state`
+  // discards the first one's fold — while BOTH `workspace_updates` rows
+  // commit. The stream then claims an update the base never absorbed, so a
+  // client catching up from the stream and a client reading the base disagree
+  // permanently (red line #1: one representation, and it must be this one).
+  lock_document_tx(&mut tx, workspace_id, document_id)
+    .await?
+    .ok_or(ApiError::NotFound)?;
 
-    let base = ensure_base_tx(&mut tx, document_id).await?;
+  let base = ensure_base_tx(&mut tx, document_id).await?;
 
-    // Validate + fold: reconstruct the base, merge the update.
-    let mut doc = guarded_from_update(&base.state)
-        .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
-    guarded_apply(&mut doc, update)
-        .map_err(|_| ApiError::BadRequest("invalid yrs update".into()))?;
-    // An update whose dependencies the base lacks is parked by yrs as PENDING
-    // and `apply` still says Ok: the content is stored but invisible until the
-    // missing history arrives — which, for a replica holding items the server
-    // lost (e.g. after a restore from backup), is never unless someone sends
-    // it. Not refused (a de-merge retry produces a short-lived gap that the
-    // next push closes, and an old client would only retry the same bytes):
-    // stored, and the ack asks the pusher for its diff (`missing_sv`).
-    let missing = doc.has_pending_updates();
-    if missing {
-        tracing::warn!(%document_id, %actor_id, "push left the base with unresolved pending updates; asking the client for its diff");
-    }
+  // Validate + fold: reconstruct the base, merge the update.
+  let mut doc = guarded_from_update(&base.state)
+    .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
+  guarded_apply(&mut doc, update).map_err(|_| ApiError::BadRequest("invalid yrs update".into()))?;
+  // An update whose dependencies the base lacks is parked by yrs as PENDING
+  // and `apply` still says Ok: the content is stored but invisible until the
+  // missing history arrives — which, for a replica holding items the server
+  // lost (e.g. after a restore from backup), is never unless someone sends
+  // it. Not refused (a de-merge retry produces a short-lived gap that the
+  // next push closes, and an old client would only retry the same bytes):
+  // stored, and the ack asks the pusher for its diff (`missing_sv`).
+  let missing = doc.has_pending_updates();
+  if missing {
+    tracing::warn!(%document_id, %actor_id, "push left the base with unresolved pending updates; asking the client for its diff");
+  }
 
-    let rid: i64 = sqlx::query_scalar(
-        "INSERT INTO workspace_updates(workspace_id, document_id, actor_id, payload)
+  let rid: i64 = sqlx::query_scalar(
+    "INSERT INTO workspace_updates(workspace_id, document_id, actor_id, payload)
          VALUES ($1, $2, $3, $4) RETURNING rid",
-    )
-    .bind(workspace_id)
-    .bind(document_id)
-    .bind(actor_id)
-    .bind(update)
-    .fetch_one(&mut *tx)
-    .await?;
+  )
+  .bind(workspace_id)
+  .bind(document_id)
+  .bind(actor_id)
+  .bind(update)
+  .fetch_one(&mut *tx)
+  .await?;
 
-    let state = doc.encode_state();
-    let state_vector = doc.state_vector();
-    // content_text is re-derived from the just-folded doc and upserted in the
-    // SAME statement as `state`, so the search index moves atomically with the
-    // base on every push (never a stale window between the two). Flattened ONCE
-    // and shared by all three projections — this runs on every debounced
-    // keystroke, inside the row lock, and used to flatten three times.
-    //
-    // `updated_at` is the search index's refresh cursor, so it is stamped with
-    // `clock_timestamp()` — the moment of THIS write — not `now()`, which is the
-    // transaction's start: a push that waited on the document lock longer than
-    // `search::REFRESH_LAP_SECONDS` would otherwise commit a stamp the cursor
-    // had already passed, and its body would never reach the index. Every
-    // writer of this table follows the same rule.
-    let blocks = doc.to_blocks();
-    let root_id = doc.root_block_id();
-    let content_text = content_text_from_blocks(&blocks, &root_id);
-    let link_targets = link_targets_from_blocks(&blocks);
-    let file_ids = file_ids_from_blocks(&blocks);
-    sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp())
-         ON CONFLICT (document_id) DO UPDATE SET
-             state = excluded.state, state_vector = excluded.state_vector,
-             base_rid = excluded.base_rid, content_text = excluded.content_text,
-             link_targets = excluded.link_targets, file_ids = excluded.file_ids,
-             updated_at = clock_timestamp()",
-    )
+  // content_text is re-derived from the just-folded doc and upserted in the
+  // SAME statement as `state`, so the search index moves atomically with the
+  // base on every push (never a stale window between the two). Flattened ONCE
+  // and shared by all three projections — this runs on every debounced
+  // keystroke, inside the row lock. The upsert, the views.name projection and
+  // the version archive are now the shared `*_tx` helpers, so every write
+  // path writes the base the same way.
+  let flat = FlatBase::from_doc(&doc);
+  write_base_tx(&mut tx, document_id, rid, &flat).await?;
+  sync_view_name_tx(&mut tx, document_id, &flat).await?;
+  archive_auto_version_tx(&mut tx, document_id, rid, &flat.state).await?;
+
+  // The MCP's optimistic-concurrency token (`expected_seq`) is
+  // `documents.current_seq`, and only the REST/MCP write path advanced it — a
+  // human's WS edits left it alone, so an agent holding a seq from before
+  // those edits passed the check and overwrote them. Every write path that
+  // changes content advances it now.
+  sqlx::query("UPDATE documents SET current_seq = current_seq + 1 WHERE id = $1")
     .bind(document_id)
-    .bind(&state)
-    .bind(&state_vector)
-    .bind(rid)
-    .bind(&content_text)
-    .bind(&link_targets)
-    .bind(&file_ids)
     .execute(&mut *tx)
     .await?;
 
-    // `views.name` is a PROJECTION of the document's own title, derived from the
-    // same folded `doc` and written in the same transaction — the third instance
-    // of the pattern `content_text` and `link_targets` already follow, and for
-    // the same reason: a second STORED copy of one fact drifts, a derived one
-    // cannot (red line #1). See `docs/features/page-title-plan.md`.
-    //
-    // Only for documents that HAVE a title. There is no backfill, so most pages
-    // carry none and keep answering from the name column exactly as before —
-    // a `None` here must therefore leave the column alone, never blank it.
-    // Folders never reach this code at all (they have no document).
-    //
-    // `name <> $1` keeps this a no-op on the overwhelmingly common push (a
-    // keystroke in the body), so the hot path costs one comparison, not a write.
-    if let Some(title) = title_from_blocks(&blocks, &root_id) {
-        sqlx::query(
-            "UPDATE views SET name = $1, updated_at = now()
-             WHERE object_id = $2 AND name <> $1",
-        )
-        .bind(&title)
-        .bind(document_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    // Version history (docs/features/version-history-plan.md): archive the just-folded
-    // full state as an AUTO snapshot — but only if none was taken in the last
-    // VERSION_AUTO_INTERVAL, so a burst of edits converges to one version per
-    // window (AFFiNE's min-interval, 10 min). `state` is already in hand, so
-    // this is one indexed insert-or-nothing per push. Auto rows carry an
-    // expires_at (VERSION_AUTO_RETENTION, 30 days); named rows are inserted
-    // elsewhere with expires_at NULL and never expire.
-    // Asked first, written only when due: the single INSERT … WHERE NOT EXISTS
-    // shipped the whole `state` to Postgres on EVERY push only for it to be
-    // discarded almost every time. Same lock, so the check can't race.
-    let version_due: bool = sqlx::query_scalar(
-        "SELECT NOT EXISTS (
-             SELECT 1 FROM document_yrs_versions
-             WHERE document_id = $1 AND label IS NULL
-               AND created_at > now() - interval '10 minutes'
-         )",
+  // Periodically prune updates already folded into the base (keep a margin for
+  // fast incremental catch-up). Bounds unbounded stream growth on big/old docs.
+  if rid % tuning.prune_every == 0 {
+    sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1 AND rid <= $2")
+      .bind(document_id)
+      .bind(rid - tuning.keep_margin)
+      .execute(&mut *tx)
+      .await?;
+    // Same cadence, retention pass: drop expired auto versions. Named
+    // versions (expires_at IS NULL) are kept forever.
+    sqlx::query(
+      "DELETE FROM document_yrs_versions
+             WHERE document_id = $1 AND expires_at IS NOT NULL AND expires_at < now()",
     )
     .bind(document_id)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
-    if version_due {
-        sqlx::query(
-            "INSERT INTO document_yrs_versions (document_id, rid, state, expires_at)
-             VALUES ($1, $2, $3, now() + interval '30 days')",
-        )
-        .bind(document_id)
-        .bind(rid)
-        .bind(&state)
-        .execute(&mut *tx)
-        .await?;
-    }
+  }
 
-    // The MCP's optimistic-concurrency token (`expected_seq`) is
-    // `documents.current_seq`, and only the REST/MCP write path advanced it — a
-    // human's WS edits left it alone, so an agent holding a seq from before
-    // those edits passed the check and overwrote them. Every write path that
-    // changes content advances it now.
-    sqlx::query("UPDATE documents SET current_seq = current_seq + 1 WHERE id = $1")
-        .bind(document_id)
-        .execute(&mut *tx)
-        .await?;
-
-    // Periodically prune updates already folded into the base (keep a margin for
-    // fast incremental catch-up). Bounds unbounded stream growth on big/old docs.
-    if rid % tuning.prune_every == 0 {
-        sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1 AND rid <= $2")
-            .bind(document_id)
-            .bind(rid - tuning.keep_margin)
-            .execute(&mut *tx)
-            .await?;
-        // Same cadence, retention pass: drop expired auto versions. Named
-        // versions (expires_at IS NULL) are kept forever.
-        sqlx::query(
-            "DELETE FROM document_yrs_versions
-             WHERE document_id = $1 AND expires_at IS NOT NULL AND expires_at < now()",
-        )
-        .bind(document_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    tx.commit().await?;
-    Ok(Pushed {
-        rid,
-        missing_sv: missing.then_some(state_vector),
-    })
+  tx.commit().await?;
+  Ok(Pushed {
+    rid,
+    missing_sv: missing.then_some(flat.state_vector),
+  })
 }
 
 /// Write a page's title INTO its document (the root block's `title` prop) and
@@ -766,42 +807,42 @@ pub async fn push_update_checked(
 /// two acceptance tests are in `comments.rs`; the reasoning is
 /// `docs/features/page-title-plan.md` §5.1.
 pub async fn set_document_title(
-    db: &PgPool,
-    workspace_id: Uuid,
-    document_id: Uuid,
-    actor_id: Uuid,
-    title: &str,
-    tuning: &SyncTuning,
+  db: &PgPool,
+  workspace_id: Uuid,
+  document_id: Uuid,
+  actor_id: Uuid,
+  title: &str,
+  tuning: &SyncTuning,
 ) -> ApiResult<(i64, Vec<u8>)> {
-    let base = bootstrap_base(db, document_id).await?;
-    let mut doc = guarded_from_update(&base.state)
-        .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
-    let root_id = doc.root_block_id();
-    if root_id.is_empty() {
-        // A document with no root is not one we can title. Bail rather than
-        // inventing a block — the caller still updated `views.name` directly.
-        return Ok((base.base_rid, Vec::new()));
-    }
+  let base = bootstrap_base(db, document_id).await?;
+  let mut doc = guarded_from_update(&base.state)
+    .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
+  let root_id = doc.root_block_id();
+  if root_id.is_empty() {
+    // A document with no root is not one we can title. Bail rather than
+    // inventing a block — the caller still updated `views.name` directly.
+    return Ok((base.base_rid, Vec::new()));
+  }
 
-    // Compare BEFORE writing. A yrs map insert is an operation whether or not
-    // the value changed, so writing unconditionally would produce a non-empty
-    // diff every time — and renaming a page to the name it already has would
-    // spend a version snapshot and wake every open editor. Measured: the
-    // `setting_the_same_title_twice_is_a_no_op` test failed until this existed.
-    if title_from_blocks(&doc.to_blocks(), &root_id).as_deref() == Some(title) {
-        return Ok((base.base_rid, Vec::new()));
-    }
+  // Compare BEFORE writing. A yrs map insert is an operation whether or not
+  // the value changed, so writing unconditionally would produce a non-empty
+  // diff every time — and renaming a page to the name it already has would
+  // spend a version snapshot and wake every open editor. Measured: the
+  // `setting_the_same_title_twice_is_a_no_op` test failed until this existed.
+  if title_from_blocks(&doc.to_blocks(), &root_id).as_deref() == Some(title) {
+    return Ok((base.base_rid, Vec::new()));
+  }
 
-    let sv = doc.state_vector();
-    doc.set_block_prop(&root_id, "title", &serde_json::json!(title));
-    let update = doc
-        .encode_diff(&sv)
-        .map_err(|e| ApiError::Internal(format!("title diff: {e}")))?;
-    if update.is_empty() {
-        return Ok((base.base_rid, Vec::new()));
-    }
-    let rid = push_update(db, workspace_id, document_id, actor_id, &update, tuning).await?;
-    Ok((rid, update))
+  let sv = doc.state_vector();
+  doc.set_block_prop(&root_id, "title", &serde_json::json!(title));
+  let update = doc
+    .encode_diff(&sv)
+    .map_err(|e| ApiError::Internal(format!("title diff: {e}")))?;
+  if update.is_empty() {
+    return Ok((base.base_rid, Vec::new()));
+  }
+  let rid = push_update(db, workspace_id, document_id, actor_id, &update, tuning).await?;
+  Ok((rid, update))
 }
 
 /// Restore a document to a stored version's content, CRDT-safely. Re-applying
@@ -811,29 +852,29 @@ pub async fn set_document_title(
 /// assigned `rid` and the update bytes to broadcast so open editors converge —
 /// or `(current_rid, empty)` when the target already matches the live state.
 pub async fn restore_yrs_version(
-    db: &PgPool,
-    workspace_id: Uuid,
-    document_id: Uuid,
-    actor_id: Uuid,
-    version_state: &[u8],
-    tuning: &SyncTuning,
+  db: &PgPool,
+  workspace_id: Uuid,
+  document_id: Uuid,
+  actor_id: Uuid,
+  version_state: &[u8],
+  tuning: &SyncTuning,
 ) -> ApiResult<(i64, Vec<u8>)> {
-    let base = bootstrap_base(db, document_id).await?;
-    let mut doc = guarded_from_update(&base.state)
-        .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
-    let target = guarded_from_update(version_state)
-        .map_err(|e| ApiError::BadRequest(format!("corrupt version state: {e}")))?;
+  let base = bootstrap_base(db, document_id).await?;
+  let mut doc = guarded_from_update(&base.state)
+    .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
+  let target = guarded_from_update(version_state)
+    .map_err(|e| ApiError::BadRequest(format!("corrupt version state: {e}")))?;
 
-    let sv = doc.state_vector();
-    doc.set_blocks(&target.root_block_id(), &target.to_blocks());
-    let update = doc
-        .encode_diff(&sv)
-        .map_err(|e| ApiError::Internal(format!("restore diff: {e}")))?;
-    if update.is_empty() {
-        return Ok((base.base_rid, Vec::new()));
-    }
-    let rid = push_update(db, workspace_id, document_id, actor_id, &update, tuning).await?;
-    Ok((rid, update))
+  let sv = doc.state_vector();
+  doc.set_blocks(&target.root_block_id(), &target.to_blocks());
+  let update = doc
+    .encode_diff(&sv)
+    .map_err(|e| ApiError::Internal(format!("restore diff: {e}")))?;
+  if update.is_empty() {
+    return Ok((base.base_rid, Vec::new()));
+  }
+  let rid = push_update(db, workspace_id, document_id, actor_id, &update, tuning).await?;
+  Ok((rid, update))
 }
 
 /// Catch a client up from `since_rid`: the incremental updates, or — when the
@@ -855,423 +896,353 @@ pub async fn restore_yrs_version(
 /// already safe to interleave (they only delete rows the base has absorbed); the
 /// bug was reading their effect halfway.
 pub async fn catch_up_document(
-    db: &PgPool,
-    document_id: Uuid,
-    since_rid: i64,
-    limit: i64,
+  db: &PgPool,
+  document_id: Uuid,
+  since_rid: i64,
+  limit: i64,
 ) -> ApiResult<CatchUp> {
-    let mut tx = db.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *tx)
-        .await?;
-
-    let min_rid: Option<i64> =
-        sqlx::query_scalar("SELECT MIN(rid) FROM workspace_updates WHERE document_id = $1")
-            .bind(document_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    let base_rid: i64 =
-        sqlx::query_scalar("SELECT base_rid FROM document_yrs_base WHERE document_id = $1")
-            .bind(document_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .unwrap_or(0);
-
-    // A gap exists when the earliest retained update is beyond `since_rid + 1`
-    // (or the stream is empty) AND the base is ahead of the cursor — i.e. the
-    // missing range was pruned. Fast-forward from the base in that case.
-    let gap = match min_rid {
-        Some(m) => since_rid + 1 < m && since_rid < base_rid,
-        None => since_rid < base_rid,
-    };
-
-    if gap {
-        // Read the base in THIS snapshot too. Calling `bootstrap_base` here would
-        // open a second connection and see a later state — the same
-        // disagreeing-snapshots shape as the bug above.
-        let base = ensure_base_tx(&mut tx, document_id).await?;
-        tx.commit().await?;
-        return Ok(CatchUp::Rebootstrap(base));
-    }
-
-    let rows = sqlx::query_as::<_, StreamUpdate>(
-        "SELECT rid, document_id, actor_id, payload
-         FROM workspace_updates
-         WHERE document_id = $1 AND rid > $2
-         ORDER BY rid
-         LIMIT $3",
-    )
-    .bind(document_id)
-    .bind(since_rid)
-    .bind(limit)
-    .fetch_all(&mut *tx)
+  let mut tx = db.begin().await?;
+  sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+    .execute(&mut *tx)
     .await?;
+
+  let min_rid: Option<i64> =
+    sqlx::query_scalar("SELECT MIN(rid) FROM workspace_updates WHERE document_id = $1")
+      .bind(document_id)
+      .fetch_one(&mut *tx)
+      .await?;
+  let base_rid: i64 =
+    sqlx::query_scalar("SELECT base_rid FROM document_yrs_base WHERE document_id = $1")
+      .bind(document_id)
+      .fetch_optional(&mut *tx)
+      .await?
+      .unwrap_or(0);
+
+  // A gap exists when the earliest retained update is beyond `since_rid + 1`
+  // (or the stream is empty) AND the base is ahead of the cursor — i.e. the
+  // missing range was pruned. Fast-forward from the base in that case.
+  let gap = match min_rid {
+    Some(m) => since_rid + 1 < m && since_rid < base_rid,
+    None => since_rid < base_rid,
+  };
+
+  if gap {
+    // Read the base in THIS snapshot too. Calling `bootstrap_base` here would
+    // open a second connection and see a later state — the same
+    // disagreeing-snapshots shape as the bug above.
+    let base = ensure_base_tx(&mut tx, document_id).await?;
     tx.commit().await?;
-    Ok(CatchUp::Updates(rows))
-}
+    return Ok(CatchUp::Rebootstrap(base));
+  }
 
-/// Everything in a workspace after `after_rid` (0 = from the start), ordered by
-/// `rid`, capped at `limit`. Drives both cold bootstrap and offline reconnect.
-pub async fn pull_workspace_updates(
-    db: &PgPool,
-    workspace_id: Uuid,
-    after_rid: i64,
-    limit: i64,
-) -> ApiResult<Vec<StreamUpdate>> {
-    let rows = sqlx::query_as::<_, StreamUpdate>(
-        "SELECT rid, document_id, actor_id, payload
-         FROM workspace_updates
-         WHERE workspace_id = $1 AND rid > $2
-         ORDER BY rid
-         LIMIT $3",
-    )
-    .bind(workspace_id)
-    .bind(after_rid)
-    .bind(limit)
-    .fetch_all(db)
-    .await?;
-    Ok(rows)
-}
-
-/// A single document's updates after `after_rid` (0 = from the start), ordered
-/// by `rid`, capped at `limit`. Drives the per-document WS catch-up path (rooms
-/// are per-document, so the client keeps a per-document cursor).
-pub async fn pull_document_updates(
-    db: &PgPool,
-    document_id: Uuid,
-    after_rid: i64,
-    limit: i64,
-) -> ApiResult<Vec<StreamUpdate>> {
-    let rows = sqlx::query_as::<_, StreamUpdate>(
-        "SELECT rid, document_id, actor_id, payload
+  let rows = sqlx::query_as::<_, StreamUpdate>(
+    "SELECT rid, document_id, actor_id, payload
          FROM workspace_updates
          WHERE document_id = $1 AND rid > $2
          ORDER BY rid
          LIMIT $3",
-    )
-    .bind(document_id)
-    .bind(after_rid)
-    .bind(limit)
-    .fetch_all(db)
-    .await?;
-    Ok(rows)
-}
-
-/// The current high-water `rid` of a single document (0 if none yet).
-pub async fn document_head(db: &PgPool, document_id: Uuid) -> ApiResult<i64> {
-    let head: Option<i64> = sqlx::query_scalar(
-        "SELECT MAX(rid) FROM workspace_updates WHERE document_id = $1",
-    )
-    .bind(document_id)
-    .fetch_one(db)
-    .await?;
-    Ok(head.unwrap_or(0))
-}
-
-/// The current high-water `rid` of a workspace (0 if it has no updates yet).
-pub async fn workspace_head(db: &PgPool, workspace_id: Uuid) -> ApiResult<i64> {
-    let head: Option<i64> = sqlx::query_scalar(
-        "SELECT MAX(rid) FROM workspace_updates WHERE workspace_id = $1",
-    )
-    .bind(workspace_id)
-    .fetch_one(db)
-    .await?;
-    Ok(head.unwrap_or(0))
+  )
+  .bind(document_id)
+  .bind(since_rid)
+  .bind(limit)
+  .fetch_all(&mut *tx)
+  .await?;
+  tx.commit().await?;
+  Ok(CatchUp::Updates(rows))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+  use super::*;
+  use serde_json::json;
 
-    // content_text is the plain body text in tree order, block-separated by
-    // newlines, with empty blocks (page root, images) dropped. Proving it here
-    // (no DB) pins the exact projection every write path co-writes with the base.
-    #[test]
-    fn content_text_is_block_text_in_tree_order() {
-        let doc = MicaDoc::from_blocks(
-            "r",
-            &[
-                CoreBlock::new("r", "page").with_children(vec!["h".into(), "p".into(), "img".into()]),
-                CoreBlock::new("h", "heading").with_text("标题一"),
-                CoreBlock::new("p", "paragraph").with_text("正文内容 hello"),
-                CoreBlock::new("img", "image"), // no text — must not add a blank line
-            ],
-        );
-        assert_eq!(content_text_from_doc(&doc), "标题一\n正文内容 hello");
-    }
+  // content_text is the plain body text in tree order, block-separated by
+  // newlines, with empty blocks (page root, images) dropped. Proving it here
+  // (no DB) pins the exact projection every write path co-writes with the base.
+  #[test]
+  fn content_text_is_block_text_in_tree_order() {
+    let doc = MicaDoc::from_blocks(
+      "r",
+      &[
+        CoreBlock::new("r", "page").with_children(vec!["h".into(), "p".into(), "img".into()]),
+        CoreBlock::new("h", "heading").with_text("标题一"),
+        CoreBlock::new("p", "paragraph").with_text("正文内容 hello"),
+        CoreBlock::new("img", "image"), // no text — must not add a blank line
+      ],
+    );
+    assert_eq!(content_text_from_doc(&doc), "标题一\n正文内容 hello");
+  }
 
-    // M2: front-matter property VALUES (tags + scalars) are appended to
-    // content_text so a workspace search finds a page by its properties, while
-    // keys and booleans are dropped. This pins that the search index carries the
-    // metadata, keeping it a pure projection of the (front-matter-bearing) base.
-    #[test]
-    fn content_text_appends_front_matter_property_values() {
-        let doc = MicaDoc::from_blocks(
-            "r",
-            &[
-                CoreBlock::new("r", "page")
-                    .with_children(vec!["p".into()])
-                    .with_data(json!({
-                        "front_matter": "tags: [rust, crdt]\nstatus: 进行中\ndone: false\ncount: 3"
-                    })),
-                CoreBlock::new("p", "paragraph").with_text("正文"),
-            ],
-        );
-        // Body first, then property values: tags as `#item` (precise click),
-        // scalars plain. `done` (a bool) and the keys are not indexed.
-        assert_eq!(
-            content_text_from_doc(&doc),
-            "正文\n#rust #crdt 进行中 3"
-        );
-    }
+  // M2: front-matter property VALUES (tags + scalars) are appended to
+  // content_text so a workspace search finds a page by its properties, while
+  // keys and booleans are dropped. This pins that the search index carries the
+  // metadata, keeping it a pure projection of the (front-matter-bearing) base.
+  #[test]
+  fn content_text_appends_front_matter_property_values() {
+    let doc = MicaDoc::from_blocks(
+      "r",
+      &[
+        CoreBlock::new("r", "page")
+          .with_children(vec!["p".into()])
+          .with_data(json!({
+              "front_matter": "tags: [rust, crdt]\nstatus: 进行中\ndone: false\ncount: 3"
+          })),
+        CoreBlock::new("p", "paragraph").with_text("正文"),
+      ],
+    );
+    // Body first, then property values: tags as `#item` (precise click),
+    // scalars plain. `done` (a bool) and the keys are not indexed.
+    assert_eq!(content_text_from_doc(&doc), "正文\n#rust #crdt 进行中 3");
+  }
 
-    // A page with front matter but no body still indexes its properties (no
-    // leading blank line).
-    #[test]
-    fn content_text_from_metadata_only_page() {
-        let doc = MicaDoc::from_blocks(
-            "r",
-            &[CoreBlock::new("r", "page").with_data(json!({
-                "front_matter": "tags: [urgent]"
-            }))],
-        );
-        assert_eq!(content_text_from_doc(&doc), "#urgent");
-    }
+  // A page with front matter but no body still indexes its properties (no
+  // leading blank line).
+  #[test]
+  fn content_text_from_metadata_only_page() {
+    let doc = MicaDoc::from_blocks(
+      "r",
+      &[CoreBlock::new("r", "page").with_data(json!({
+          "front_matter": "tags: [urgent]"
+      }))],
+    );
+    assert_eq!(content_text_from_doc(&doc), "#urgent");
+  }
 
-    // An encode→decode round trip (what the server stores + re-reads) preserves
-    // the derived text exactly, so the index a query reads equals the projection
-    // the writer computed.
-    #[test]
-    fn content_text_survives_encode_decode() {
-        let doc = MicaDoc::from_blocks(
-            "r",
-            &[
-                CoreBlock::new("r", "page").with_children(vec!["a".into()]),
-                CoreBlock::new("a", "paragraph").with_text("汉字子串搜索"),
-            ],
-        );
-        let restored = MicaDoc::from_update(&doc.encode_state()).unwrap();
-        assert_eq!(
-            content_text_from_doc(&doc),
-            content_text_from_doc(&restored)
-        );
-        assert_eq!(content_text_from_doc(&restored), "汉字子串搜索");
-    }
+  // An encode→decode round trip (what the server stores + re-reads) preserves
+  // the derived text exactly, so the index a query reads equals the projection
+  // the writer computed.
+  #[test]
+  fn content_text_survives_encode_decode() {
+    let doc = MicaDoc::from_blocks(
+      "r",
+      &[
+        CoreBlock::new("r", "page").with_children(vec!["a".into()]),
+        CoreBlock::new("a", "paragraph").with_text("汉字子串搜索"),
+      ],
+    );
+    let restored = MicaDoc::from_update(&doc.encode_state()).unwrap();
+    assert_eq!(
+      content_text_from_doc(&doc),
+      content_text_from_doc(&restored)
+    );
+    assert_eq!(content_text_from_doc(&restored), "汉字子串搜索");
+  }
 
-    /// A malformed update that makes yrs PANIC must come back as a `DocError`,
-    /// not unwind out of the server handler. Byte 9 flipped survives `decode_v1`
-    /// and blows up during integration (the same class the desktop store hit in
-    /// P0-0). With the guard removed, `guarded_from_update` panics and this test
-    /// fails — the mutation-kills-test guarantee.
-    #[test]
-    fn a_panicking_update_becomes_an_error_not_a_panic() {
-        // PIN the client id — `from_blocks` mints a RANDOM one, which makes the
-        // encoded bytes (and therefore which yrs failure mode a flip triggers)
-        // differ per run. That non-determinism made the sibling test in
-        // mica-core's store.rs flaky in CI; don't repeat it here.
-        let good = MicaDoc::from_blocks_with_client_id(
-            "r",
-            &[
-                CoreBlock::new("r", "page").with_children(vec!["a".into()]),
-                CoreBlock::new("a", "paragraph").with_text("hello world"),
-            ],
-            Some(1),
-        )
-        .encode_state();
-        // Sanity: the healthy blob decodes fine through the guard.
-        assert!(guarded_from_update(&good).is_ok());
+  /// A malformed update that makes yrs PANIC must come back as a `DocError`,
+  /// not unwind out of the server handler. Byte 9 flipped survives `decode_v1`
+  /// and blows up during integration (the same class the desktop store hit in
+  /// P0-0). With the guard removed, `guarded_from_update` panics and this test
+  /// fails — the mutation-kills-test guarantee.
+  #[test]
+  fn a_panicking_update_becomes_an_error_not_a_panic() {
+    // PIN the client id — `from_blocks` mints a RANDOM one, which makes the
+    // encoded bytes (and therefore which yrs failure mode a flip triggers)
+    // differ per run. That non-determinism made the sibling test in
+    // mica-core's store.rs flaky in CI; don't repeat it here.
+    let good = MicaDoc::from_blocks_with_client_id(
+      "r",
+      &[
+        CoreBlock::new("r", "page").with_children(vec!["a".into()]),
+        CoreBlock::new("a", "paragraph").with_text("hello world"),
+      ],
+      Some(1),
+    )
+    .encode_state();
+    // Sanity: the healthy blob decodes fine through the guard.
+    assert!(guarded_from_update(&good).is_ok());
 
-        let mut bad = good.clone();
-        bad[0] ^= 0xff;
-        // The contract: a malformed update comes back as an Err instead of
-        // unwinding out of the request handler. Both failure modes (decode_v1
-        // rejecting it, or the guard converting an integration panic) surface as
-        // `DocError`, and which one fires depends on the bytes — so assert the
-        // invariant, not a mode. The catch_unwind mechanism itself is pinned
-        // deterministically by mica-core's
-        // `contain_yrs_panic_converts_a_panic_into_corrupt_doc`.
-        assert!(
-            guarded_from_update(&bad).is_err(),
-            "a malformed blob must be contained as an error, not unwind"
-        );
+    let mut bad = good.clone();
+    bad[0] ^= 0xff;
+    // The contract: a malformed update comes back as an Err instead of
+    // unwinding out of the request handler. Both failure modes (decode_v1
+    // rejecting it, or the guard converting an integration panic) surface as
+    // `DocError`, and which one fires depends on the bytes — so assert the
+    // invariant, not a mode. The catch_unwind mechanism itself is pinned
+    // deterministically by mica-core's
+    // `contain_yrs_panic_converts_a_panic_into_corrupt_doc`.
+    assert!(
+      guarded_from_update(&bad).is_err(),
+      "a malformed blob must be contained as an error, not unwind"
+    );
 
-        let mut doc =
-            MicaDoc::from_blocks_with_client_id("r", &[CoreBlock::new("r", "page")], Some(1));
-        assert!(
-            guarded_apply(&mut doc, &bad).is_err(),
-            "guarded_apply must contain it as well"
-        );
-    }
+    let mut doc = MicaDoc::from_blocks_with_client_id("r", &[CoreBlock::new("r", "page")], Some(1));
+    assert!(
+      guarded_apply(&mut doc, &bad).is_err(),
+      "guarded_apply must contain it as well"
+    );
+  }
 
-    // The lazy-migration bridge: an op-model snapshot payload must reconstruct
-    // into a yrs doc whose blocks/marks survive an encode→decode round trip (the
-    // exact path `ensure_base_tx` takes when building a base for an existing doc).
-    #[test]
-    fn snapshot_payload_bridges_into_yrs_round_trip() {
-        let root_id = "r".to_string();
-        let payload = DocumentSnapshotPayload {
-            schema_version: 1,
-            root_block_id: root_id.clone(),
-            blocks: vec![
-                mica_markdown::Block {
-                    id: "r".into(),
-                    kind: "page".into(),
-                    text: String::new(),
-                    data: json!(null),
-                    children: vec!["a".into(), "b".into()],
-                },
-                mica_markdown::Block {
-                    id: "a".into(),
-                    kind: "paragraph".into(),
-                    text: "Hello".into(),
-                    data: json!({ "marks": [{ "start": 0, "end": 5, "type": "bold" }] }),
-                    children: vec![],
-                },
-                mica_markdown::Block {
-                    id: "b".into(),
-                    kind: "heading".into(),
-                    text: "Title".into(),
-                    data: json!({ "level": 1 }),
-                    children: vec![],
-                },
-            ],
-        };
+  // The lazy-migration bridge: an op-model snapshot payload must reconstruct
+  // into a yrs doc whose blocks/marks survive an encode→decode round trip (the
+  // exact path `ensure_base_tx` takes when building a base for an existing doc).
+  #[test]
+  fn snapshot_payload_bridges_into_yrs_round_trip() {
+    let root_id = "r".to_string();
+    let payload = DocumentSnapshotPayload {
+      schema_version: 1,
+      root_block_id: root_id.clone(),
+      blocks: vec![
+        mica_markdown::Block {
+          id: "r".into(),
+          kind: "page".into(),
+          text: String::new(),
+          data: json!(null),
+          children: vec!["a".into(), "b".into()],
+        },
+        mica_markdown::Block {
+          id: "a".into(),
+          kind: "paragraph".into(),
+          text: "Hello".into(),
+          data: json!({ "marks": [{ "start": 0, "end": 5, "type": "bold" }] }),
+          children: vec![],
+        },
+        mica_markdown::Block {
+          id: "b".into(),
+          kind: "heading".into(),
+          text: "Title".into(),
+          data: json!({ "level": 1 }),
+          children: vec![],
+        },
+      ],
+    };
 
-        let blocks: Vec<CoreBlock> = payload.blocks.into_iter().map(to_core_block).collect();
-        let doc = MicaDoc::from_blocks(&root_id, &blocks);
-        // What the server persists + serves: encode → decode.
-        let restored = MicaDoc::from_update(&doc.encode_state()).unwrap();
-        let out = restored.to_blocks();
+    let doc = MicaDoc::from_blocks(&root_id, &payload.blocks);
+    // What the server persists + serves: encode → decode.
+    let restored = MicaDoc::from_update(&doc.encode_state()).unwrap();
+    let out = restored.to_blocks();
 
-        let root = out.iter().find(|b| b.id == "r").unwrap();
-        assert_eq!(root.children, vec!["a", "b"]);
-        let a = out.iter().find(|b| b.id == "a").unwrap();
-        assert_eq!(a.text, "Hello");
-        assert_eq!(a.data["marks"][0]["type"], "bold");
-        let b = out.iter().find(|b| b.id == "b").unwrap();
-        assert_eq!(b.kind, "heading");
-        assert_eq!(b.data["level"], 1);
-    }
+    let root = out.iter().find(|b| b.id == "r").unwrap();
+    assert_eq!(root.children, vec!["a", "b"]);
+    let a = out.iter().find(|b| b.id == "a").unwrap();
+    assert_eq!(a.text, "Hello");
+    assert_eq!(a.data["marks"][0]["type"], "bold");
+    let b = out.iter().find(|b| b.id == "b").unwrap();
+    assert_eq!(b.kind, "heading");
+    assert_eq!(b.data["level"], 1);
+  }
 
-    // A peer's update applied onto the base converges the same as the local
-    // merge — proving the server-side fold in `push_update` is sound.
-    #[test]
-    fn server_fold_matches_client_merge() {
-        let base = MicaDoc::from_blocks(
-            "r",
-            &[
-                CoreBlock::new("r", "page").with_children(vec!["a".into()]),
-                CoreBlock::new("a", "paragraph").with_text("Hi"),
-            ],
-        );
-        let state = base.encode_state();
+  // A peer's update applied onto the base converges the same as the local
+  // merge — proving the server-side fold in `push_update` is sound.
+  #[test]
+  fn server_fold_matches_client_merge() {
+    let base = MicaDoc::from_blocks(
+      "r",
+      &[
+        CoreBlock::new("r", "page").with_children(vec!["a".into()]),
+        CoreBlock::new("a", "paragraph").with_text("Hi"),
+      ],
+    );
+    let state = base.encode_state();
 
-        // Client edits its replica and ships the diff.
-        let mut client = MicaDoc::from_update(&state).unwrap();
-        let sv = client.state_vector();
-        client.text_insert("a", 2, " there");
-        let update = client.encode_diff(&sv).unwrap();
+    // Client edits its replica and ships the diff.
+    let mut client = MicaDoc::from_update(&state).unwrap();
+    let sv = client.state_vector();
+    client.text_insert("a", 2, " there");
+    let update = client.encode_diff(&sv).unwrap();
 
-        // Server folds the update onto its base copy.
-        let mut server = MicaDoc::from_update(&state).unwrap();
-        server.apply_update(&update).unwrap();
+    // Server folds the update onto its base copy.
+    let mut server = MicaDoc::from_update(&state).unwrap();
+    server.apply_update(&update).unwrap();
 
-        assert_eq!(server.to_blocks(), client.to_blocks());
-        assert_eq!(
-            server.to_blocks().into_iter().find(|b| b.id == "a").unwrap().text,
-            "Hi there"
-        );
-    }
+    assert_eq!(server.to_blocks(), client.to_blocks());
+    assert_eq!(
+      server
+        .to_blocks()
+        .into_iter()
+        .find(|b| b.id == "a")
+        .unwrap()
+        .text,
+      "Hi there"
+    );
+  }
 
-    // P4-3: a warm client's sv yields a diff that (a) converges it to the base
-    // and (b) is much smaller than the full base; a garbage sv falls back (None).
-    #[test]
-    fn diff_from_base_converges_and_shrinks() {
-        // A doc with enough content that "full base ≫ one-edit diff" is obvious.
-        let mut server = MicaDoc::from_blocks(
-            "r",
-            &[
-                CoreBlock::new("r", "page").with_children(vec!["a".into()]),
-                CoreBlock::new("a", "paragraph")
-                    .with_text("lorem ipsum dolor sit amet ".repeat(50)),
-            ],
-        );
-        // Client seeded from this state (its on-device mirror).
-        let mut client = MicaDoc::from_update(&server.encode_state()).unwrap();
-        let client_sv = client.state_vector();
-        // The doc moves on server-side (a peer edit folded into the base).
-        server.text_insert("a", 0, "peer: ");
-        let base = YrsBase {
-            state: server.encode_state(),
-            state_vector: server.state_vector(),
-            base_rid: 7,
-        };
+  // P4-3: a warm client's sv yields a diff that (a) converges it to the base
+  // and (b) is much smaller than the full base; a garbage sv falls back (None).
+  #[test]
+  fn diff_from_base_converges_and_shrinks() {
+    // A doc with enough content that "full base ≫ one-edit diff" is obvious.
+    let mut server = MicaDoc::from_blocks(
+      "r",
+      &[
+        CoreBlock::new("r", "page").with_children(vec!["a".into()]),
+        CoreBlock::new("a", "paragraph").with_text("lorem ipsum dolor sit amet ".repeat(50)),
+      ],
+    );
+    // Client seeded from this state (its on-device mirror).
+    let mut client = MicaDoc::from_update(&server.encode_state()).unwrap();
+    let client_sv = client.state_vector();
+    // The doc moves on server-side (a peer edit folded into the base).
+    server.text_insert("a", 0, "peer: ");
+    let base = YrsBase {
+      state: server.encode_state(),
+      state_vector: server.state_vector(),
+      base_rid: 7,
+    };
 
-        let diff = diff_from_base(&base, &client_sv).expect("valid sv → diff");
-        assert!(
-            diff.len() * 10 < base.state.len(),
-            "diff ({}) should be far smaller than the full base ({})",
-            diff.len(),
-            base.state.len()
-        );
-        client.apply_update(&diff).unwrap();
-        assert_eq!(client.to_blocks(), server.to_blocks());
+    let diff = diff_from_base(&base, &client_sv).expect("valid sv → diff");
+    assert!(
+      diff.len() * 10 < base.state.len(),
+      "diff ({}) should be far smaller than the full base ({})",
+      diff.len(),
+      base.state.len()
+    );
+    client.apply_update(&diff).unwrap();
+    assert_eq!(client.to_blocks(), server.to_blocks());
 
-        // Garbage sv → None (caller falls back to the full base).
-        assert!(diff_from_base(&base, b"not a state vector").is_none());
-    }
+    // Garbage sv → None (caller falls back to the full base).
+    assert!(diff_from_base(&base, b"not a state vector").is_none());
+  }
 }
 
 #[cfg(test)]
 mod base_compaction {
-    use mica_core::{Block, MicaDoc};
+  use mica_core::{Block, MicaDoc};
 
-    /// The base does NOT keep deleted content — and that is load-bearing.
-    ///
-    /// roadmap carried «yrs base has no squash/GC, grows without bound: only the
-    /// stream is pruned, the base just keeps rolling up» as an open item. Measured
-    /// 2026-08-03, it is false: 40 000 deleted characters leave the encoded base
-    /// at 150 bytes, not 40 KB. yrs collects deleted content on load (the doc is
-    /// built with `Options::default()`, i.e. `skip_gc = false`), so the full
-    /// decode→encode round trip `push_update` performs on EVERY write is itself a
-    /// squash.
-    ///
-    /// Which sets up the trap this test exists to spring. The *other* open item —
-    /// «every push rebuilds and re-encodes the whole document» — is real, and the
-    /// obvious fix is to stop rebuilding the base on every push (append updates,
-    /// squash later). **That fix would create the unbounded growth the first item
-    /// wrongly claimed already existed.** The two are not one root cause; one is
-    /// the reason the other does not happen. Anyone changing the write path will
-    /// see this go red and read the paragraph above before deciding.
-    #[test]
-    fn deleted_content_does_not_survive_in_the_base() {
-        let mut doc = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
-        let empty = doc.encode_state().len();
+  /// The base does NOT keep deleted content — and that is load-bearing.
+  ///
+  /// roadmap carried «yrs base has no squash/GC, grows without bound: only the
+  /// stream is pruned, the base just keeps rolling up» as an open item. Measured
+  /// 2026-08-03, it is false: 40 000 deleted characters leave the encoded base
+  /// at 150 bytes, not 40 KB. yrs collects deleted content on load (the doc is
+  /// built with `Options::default()`, i.e. `skip_gc = false`), so the full
+  /// decode→encode round trip `push_update` performs on EVERY write is itself a
+  /// squash.
+  ///
+  /// Which sets up the trap this test exists to spring. The *other* open item —
+  /// «every push rebuilds and re-encodes the whole document» — is real, and the
+  /// obvious fix is to stop rebuilding the base on every push (append updates,
+  /// squash later). **That fix would create the unbounded growth the first item
+  /// wrongly claimed already existed.** The two are not one root cause; one is
+  /// the reason the other does not happen. Anyone changing the write path will
+  /// see this go red and read the paragraph above before deciding.
+  #[test]
+  fn deleted_content_does_not_survive_in_the_base() {
+    let mut doc = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
+    let empty = doc.encode_state().len();
 
-        doc.text_insert("root", 0, &"x".repeat(40_000));
-        let grown = doc.encode_state().len();
-        assert!(
-            grown > 40_000,
-            "40k characters should be in there before we delete them, got {grown}"
-        );
+    doc.text_insert("root", 0, &"x".repeat(40_000));
+    let grown = doc.encode_state().len();
+    assert!(
+      grown > 40_000,
+      "40k characters should be in there before we delete them, got {grown}"
+    );
 
-        doc.text_delete("root", 0, 40_000);
-        let after_delete = doc.encode_state().len();
+    doc.text_delete("root", 0, 40_000);
+    let after_delete = doc.encode_state().len();
 
-        // A tombstone range costs a few bytes; the TEXT must be gone. The margin
-        // is deliberately loose — this pins "collected", not an exact encoding.
-        assert!(
-            after_delete < empty + 1_000,
-            "deleted text is still in the base: {after_delete} bytes vs {empty} empty.              If yrs GC was turned off (`skip_gc`), the base now grows without bound              and the roadmap entry that says so becomes true."
-        );
+    // A tombstone range costs a few bytes; the TEXT must be gone. The margin
+    // is deliberately loose — this pins "collected", not an exact encoding.
+    assert!(
+      after_delete < empty + 1_000,
+      "deleted text is still in the base: {after_delete} bytes vs {empty} empty.              If yrs GC was turned off (`skip_gc`), the base now grows without bound              and the roadmap entry that says so becomes true."
+    );
 
-        // And the round trip on the write path keeps it that way, rather than
-        // re-inflating from the stored blob.
-        let round_tripped = MicaDoc::from_update(&doc.encode_state())
-            .expect("the base must decode")
-            .encode_state()
-            .len();
-        assert_eq!(round_tripped, after_delete);
-    }
+    // And the round trip on the write path keeps it that way, rather than
+    // re-inflating from the stored blob.
+    let round_tripped = MicaDoc::from_update(&doc.encode_state())
+      .expect("the base must decode")
+      .encode_state()
+      .len();
+    assert_eq!(round_tripped, after_delete);
+  }
 }

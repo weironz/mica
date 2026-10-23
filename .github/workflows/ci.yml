@@ -37,13 +37,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 单文件行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 4/5 项）：
+  # 单元行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 4/5 项）：
   # 2026-10-16 拆掉了三个巨石文件（main.dart 13,177 / routes/documents.rs 8,196 /
   # markdown lib.rs 6,339 行）。三层防线都在 scripts/check-file-size.sh：
-  #   绝对限（8,000 硬失败 / 4,000 警告）+ 棘轮（预算文件登记的文件只许减
-  #   不许增）+ 增量（>2,000 行的存量文件一次净增 >300 行失败）。
-  # 增量门禁：push 使用事件 before SHA（覆盖一次推送的全部提交），PR 使用
-  # base SHA 的 merge-base。首次推送或历史不可用时显式回退，不能用 origin/main
+  #   绝对限（8,000 硬失败 / 4,000 警告）+ 棘轮（预算文件登记的单元只许减
+  #   不许增）+ 增量（>2,000 行的存量单元一次净增 >300 行失败）。
+  # 2026-10-23（#87）起按「单元」计：Dart library = root + 全部 part 合计
+  # （拆 part 绕不过门禁），Rust 单文件，FFI crate 同在扫描范围。
+  # 增量门禁基线：PR 使用 base SHA 的 merge-base；手动触发回退 HEAD^（覆盖
+  # 最新一个提交）。首次推送或历史不可用时显式回退，不能用 origin/main
   # 与 HEAD 比较，否则 main 直推时增量门禁恒为空。
   structure:
     name: Structure (file-size gate)
@@ -55,9 +57,8 @@ jobs:
           fetch-depth: 0
       - name: Test structure gate against isolated Git fixtures
         run: bash scripts/test-structure-gate.sh
-      - name: Check per-file line limits and growth
+      - name: Check per-unit line limits and growth
         env:
-          STRUCTURE_PUSH_BEFORE: ${{ github.event.before }}
           STRUCTURE_PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/check-structure-ci.sh
 
@@ -85,7 +86,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
+      # rustfmt.toml was the law on paper only — nothing ran it, and 2/4-space
+      # indentation mixed inside single files (2026-10-21 review 工程链). This
+      # gate stops NEW drift; the existing tree's one-time normalization is a
+      # whitespace-only commit of its own (see #88). Root workspace only — the
+      # FFI crate is dominated by generated frb_generated.rs.
+      - name: rustfmt (deny drift)
+        run: cargo fmt --all --check
       # rust-cache, NOT a hand-rolled actions/cache of `target`: caching the
       # whole target dir stored ~2.5GB PER ENTRY (and entries are scoped per
       # ref, so every tag push doubled it) — 5.1GB of the repo's 10GB cache
@@ -97,11 +105,11 @@ jobs:
         with:
           key: workspace
       # rust-toolchain.toml pins an EXACT version (+ rustfmt, clippy); rustup
-      # honors it, so the `@stable` above only guarantees that rustup exists.
-      # 〔This said "pins `stable`" until 2026-08-27 — stale since the commit
-      # that replaced the channel with a number. Believing it is what let the
-      # release workflow's `targets:` add a std slice to the wrong toolchain;
-      # see the `cli` job in release.yml.〕
+      # honors it, so the composite action's `@stable` only guarantees that
+      # rustup exists. 〔This said "pins `stable`" until 2026-08-27 — stale
+      # since the commit that replaced the channel with a number. Believing it
+      # is what let the release workflow's `targets:` add a std slice to the
+      # wrong toolchain; see the `cli` job in release.yml.〕
       # sqlx uses the runtime query API (not compile-time macros), so the
       # workspace builds without a live database.
       - name: Build workspace
@@ -127,7 +135,7 @@ jobs:
           done
 
       # mica-core's web_interop.rs is the yjs↔yrs cross-engine gate (CLAUDE.md
-      # dependency exemption #7's load-bearing premise): it shells out to `node`
+      # dependency exemption for yjs — its load-bearing premise): it shells out to `node`
       # (preinstalled on GitHub-hosted runners) to run the COMMITTED web bundle
       # (clients/mica_flutter/web/yjs_bundle.js) headlessly against the yrs
       # side. No setup-node needed; on a bare self-hosted runner without node
@@ -154,7 +162,7 @@ jobs:
     runs-on: [self-hosted, Linux]
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           key: workspace
@@ -206,11 +214,7 @@ jobs:
         working-directory: clients/mica_flutter
     steps:
       - uses: actions/checkout@v5
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version-file: .fvmrc
-          cache: true
+      - uses: ./.github/actions/setup-flutter
       - run: flutter pub get
       # Warnings ARE fatal as of 2026-08-25. This comment used to say a separate
       # cleanup pass would address the pre-existing info/warning lints; what
@@ -293,7 +297,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       # Same cache key as the `rust` job so this reuses that build rather than
       # compiling the workspace a second time.
       - uses: Swatinem/rust-cache@v2
@@ -312,11 +316,7 @@ jobs:
       - name: Build the api
         run: cargo build -p mica-api-server
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version-file: .fvmrc
-          cache: true
+      - uses: ./.github/actions/setup-flutter
       # Same flags as the release build. A bundle built differently from the one we
       # ship would make the CDN and caching assertions meaningless.
       - name: Build the web bundle
@@ -427,7 +427,7 @@ jobs:
 
       - name: Upload length failure screenshot
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: upload-length-e2e-failure
           path: e2e/upload-length-e2e-failure.png
@@ -495,7 +495,7 @@ jobs:
 
       - name: Sidebar rename screenshots and results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: sidebar-rename-e2e
           path: ${{ runner.temp }}/sidebar-rename/sidebar-rename-*
@@ -503,7 +503,7 @@ jobs:
 
       - name: Writing comfort screenshots and results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ui-experience-e2e
           path: ${{ runner.temp }}/ui-experience/ui-experience-*
@@ -511,7 +511,7 @@ jobs:
 
       - name: Clipboard failure screenshot
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: clipboard-e2e-failure
           path: e2e/clipboard-e2e-failure.png
@@ -547,7 +547,7 @@ jobs:
           bash scripts/test-verify-prod.sh
           python3 scripts/test-compose-api-env.py
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Same action and cache scope shape as release.yml, so a warm layer cache
       # is shared and a repeat run is cheap. `load` puts the image in the local

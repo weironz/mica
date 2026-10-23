@@ -9,11 +9,11 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 
 import 'l10n/locale_controller.dart';
 import 'updater_common.dart';
+import 'upload/sha256.dart';
 import 'window_setup_desktop.dart' show flushBeforeExit;
 
 export 'updater_common.dart';
@@ -200,7 +200,7 @@ List<String> setupArgs({required String logPath, required int waitPid}) => [
 bool installerMatches(List<int> bytes, {int? size, String? sha256}) {
   if (size != null && bytes.length != size) return false;
   if (sha256 == null) return false;
-  return crypto.sha256.convert(bytes).toString() == sha256;
+  return sha256Hex(bytes) == sha256;
 }
 
 /// Best-effort delete of a rejected/failed installer download, so a corrupt file

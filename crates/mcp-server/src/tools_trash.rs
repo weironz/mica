@@ -1,23 +1,13 @@
-//! Mica MCP server — a thin proxy that exposes the Mica REST API as MCP tools so
-//! an AI (Claude Desktop / Code / any MCP client) can list, read, create, and
-//! write Mica documents. It calls the API over HTTP with a PAT; it holds no DB
-//! or storage access of its own. "Backup/restore" here is just export/import —
-//! real backups are the job of external tools pointed at the exports.
-//!
-//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
-//! server URL + PAT through its usual chain — env, flags, saved login — and
-//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
-//! time while the read tools stay listed.
+//! The recycle-bin tools: trash, restore, move, purge, empty.
 use rmcp::{
-  ErrorData as McpError,
-  handler::server::wrapper::Parameters,
-  model::CallToolResult, tool, tool_router,
+  ErrorData as McpError, handler::server::wrapper::Parameters, model::CallToolResult, tool,
+  tool_router,
 };
 use serde_json::json;
 
-use crate::*;
 use crate::args::*;
 use crate::results::*;
+use crate::*;
 
 #[tool_router(router = trash_router, vis = "pub(crate)")]
 impl MicaMcp {
@@ -36,9 +26,7 @@ impl MicaMcp {
       confirm,
     }): Parameters<TrashArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     if !confirm {
       return Ok(tool_error(McpError::invalid_params(
         "refusing to trash without confirm=true".to_string(),
@@ -60,7 +48,11 @@ impl MicaMcp {
                    pass the folder rather than listing its children. The reply reports what was \
                    ACTUALLY trashed (`affected`, counting subtrees) and which requested ids were \
                    `skipped` because they were already gone.",
-    annotations(title = "Trash pages (bulk)", read_only_hint = false, destructive_hint = true)
+    annotations(
+      title = "Trash pages (bulk)",
+      read_only_hint = false,
+      destructive_hint = true
+    )
   )]
   pub(crate) async fn mica_trash_views(
     &self,
@@ -70,12 +62,13 @@ impl MicaMcp {
       confirm,
     }): Parameters<BatchViewsArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     if !confirm {
       return Ok(tool_error(McpError::invalid_params(
-        format!("refusing to trash {} view(s) without confirm=true", view_ids.len()),
+        format!(
+          "refusing to trash {} view(s) without confirm=true",
+          view_ids.len()
+        ),
         None,
       )));
     }
@@ -102,9 +95,7 @@ impl MicaMcp {
       view_ids,
     }): Parameters<BatchRestoreArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let done = self
       .post(
         &format!("/api/workspaces/{workspace_id}/views/batch-restore"),
@@ -131,9 +122,7 @@ impl MicaMcp {
       parent_view_id,
     }): Parameters<BatchMoveArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     tool_result(
       self
         .post(
@@ -148,7 +137,11 @@ impl MicaMcp {
     description = "PERMANENTLY delete everything in the recycle bin. This is NOT recoverable — \
                    unlike mica_trash_views, nothing survives it. Requires confirm=true. Returns \
                    how many views and documents were destroyed.",
-    annotations(title = "Empty recycle bin", read_only_hint = false, destructive_hint = true)
+    annotations(
+      title = "Empty recycle bin",
+      read_only_hint = false,
+      destructive_hint = true
+    )
   )]
   pub(crate) async fn mica_empty_trash(
     &self,
@@ -157,9 +150,7 @@ impl MicaMcp {
       confirm,
     }): Parameters<ConfirmArg>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     if !confirm {
       return Ok(tool_error(McpError::invalid_params(
         "refusing to empty the recycle bin without confirm=true — this cannot be undone"
@@ -179,7 +170,11 @@ impl MicaMcp {
     description = "PERMANENTLY delete ONE trashed page/folder (and its subtree) from the recycle \
                    bin. Not recoverable. Requires confirm=true. Use mica_empty_trash to clear the \
                    whole bin.",
-    annotations(title = "Purge one from bin", read_only_hint = false, destructive_hint = true)
+    annotations(
+      title = "Purge one from bin",
+      read_only_hint = false,
+      destructive_hint = true
+    )
   )]
   pub(crate) async fn mica_purge_view(
     &self,
@@ -189,9 +184,7 @@ impl MicaMcp {
       confirm,
     }): Parameters<TrashArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     if !confirm {
       return Ok(tool_error(McpError::invalid_params(
         "refusing to purge without confirm=true — this cannot be undone".to_string(),
@@ -214,7 +207,11 @@ impl MicaMcp {
                    mica_trash_views), then purge. Ids that are not trashed come back in \
                    `skipped` and are left alone — this tool cannot destroy a live page, on \
                    purpose. `affected` counts what actually went, subtrees included.",
-    annotations(title = "Purge pages (bulk)", read_only_hint = false, destructive_hint = true)
+    annotations(
+      title = "Purge pages (bulk)",
+      read_only_hint = false,
+      destructive_hint = true
+    )
   )]
   pub(crate) async fn mica_purge_views(
     &self,
@@ -224,9 +221,7 @@ impl MicaMcp {
       confirm,
     }): Parameters<BatchViewsArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     if !confirm {
       return Ok(tool_error(McpError::invalid_params(
         format!(
@@ -246,5 +241,4 @@ impl MicaMcp {
     self.cache_clear();
     tool_result(done)
   }
-
 }

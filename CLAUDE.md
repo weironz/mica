@@ -49,16 +49,22 @@
 | 包 | 用途 | 约束 |
 | --- | --- | --- |
 | flutter_math_fork | 数学渲染 | 复杂领域渲染器,自研不现实 |
+| http | REST 传输(`api/client.dart` 等) | Dart 官方包;协议库不自研 |
+| web_socket_channel | WS 同步客户端(views_events / cloud sync) | Dart 官方包;同上 |
 | window_manager | 桌面窗口大小/位置/最小尺寸/拦截关闭 | 迁移评估见 `docs/plans/window-manager-migration.md`(结论:不迁) |
+| screen_retriever | 读显示器边界,窗口落屏外时回正 | 仅桌面;leanflutter 家族(与 window_manager 同门) |
 | tray_manager | 系统托盘("关闭最小化到托盘") | **仅 Windows**(`trayIsSupported`);**注册失败必须降级 `minimize()`,绝不 `hide`** —— 否则窗口再也找不回来 |
 | file_picker | 桌面文件对话框 | 非 web |
 | pasteboard | 桌面富剪贴板图片读写 | 非 web |
 | merman | 纯 Rust headless mermaid 引擎(FFI) | 离线渲染;配色走它的 host theme profile |
+| ratex-*(Rust) | `crates/markdown` `render` feature 的 LaTeX→MathML/SVG | 领域渲染器,自研不现实;随 mica-markdown 进 FFI 与导出 |
+| webview2-com(Rust) | FFI crate 里 Windows 无头打印 PDF(WebView2 runtime) | 仅 `cfg(windows)`;Tauri `wry` 同款绑定 |
 | flutter_svg | 把 merman 的 SVG 栅格成 `ui.Image` | 非 web |
 | yjs(JS) | **web-only** CRDT 引擎 | Rust `yrs` 的 JS 对端,编码层字节兼容(已实证);只进 web bundle |
 | xml / html | 纯 Dart 解析库 | — |
 
-除 flutter_math_fork / yjs 外,**均只在 `_stub`/`_web` 变体里用**,条件导入隔离,不进 web bundle。
+yjs 只进 web bundle;http / web_socket_channel / flutter_math_fork 走全平台主路径;
+其余 Dart 包**只在 `_stub`/`_web` 变体里用**,条件导入隔离,不进 web bundle。
 merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_svg_inline.dart` 把 CSS 拍平进属性
 (merman 文档把这列为 host 边界)。
 
@@ -104,8 +110,11 @@ merman 的 SVG 主题用 CSS 而纯 Dart 渲染器不解析 → 自研 `mermaid_
   `TextInputClient`;硬换行的存储约定 = 文本里的 `\` + 换行。
 - **页树不变量:folder 是唯一容器,page 是叶子**。服务端任何写 `parent_view_id` 的路径**必须**过
   `documents::ensure_parent_accepts_children`(400 + 可读原因),DB 触发器
-  `views_parent_must_be_folder` 兜底(migration 0011)。〔这条以前只活在 Dart 客户端,
-  Notion 导入就造出 137 个"页面下挂页面" —— `docs/dev/lessons.md#2`。〕
+  `views_parent_must_be_folder` 兜底(migration 0011 立,**0033 收紧**:父必须是 folder、
+  与子同 workspace、且父不在回收站——存活页面不许挂进已删文件夹,长导入中途目标被删也拦)。
+  〔这条以前只活在 Dart 客户端,Notion 导入就造出 137 个"页面下挂页面" ——
+  `docs/dev/lessons.md#2`;0033 的来历是 2026-10-21 评审 C2(导入跑了数分钟后目标
+  文件夹进回收站,后续页面挂在"活但不可见"的位置,清空回收站把它们真删了)。〕
 - **块级嵌套是扁平模型**:`data.indent`(列表层级)、`data.quote`/`qbreak`(引用深度/分组)、
   `data.li`(item 容器子块);HTML 导出端重建嵌套。
 - **代码字体**:web 上 `'monospace'` 族名不解析,一律用 `kMonoFont`(打包的 Roboto Mono,`model.dart`)。

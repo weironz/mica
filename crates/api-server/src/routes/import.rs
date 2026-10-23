@@ -13,14 +13,12 @@ use axum::{
   extract::{Path, Query, State},
   http::HeaderMap,
 };
-use mica_app_core::{
-  AppState, ImportJob, ImportJobStatus, documents::import_markdown, store::DocumentRecord,
-};
+use mica_app_core::{AppState, ImportJob, ImportJobStatus, documents::import_markdown};
 use mica_infra::{ApiError, ApiResult};
 use mica_interchange::{ImportMode, ImportPlan, plan_import, read_zip, resolve_ref};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use serde_json::json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
@@ -232,7 +230,10 @@ mod tests {
         job.cancel_requested = true;
       }
 
-      assert!(!job.cancel_requested, "{finished:?} must not accept a cancel");
+      assert!(
+        !job.cancel_requested,
+        "{finished:?} must not accept a cancel"
+      );
       assert_eq!(job.status, finished, "status unchanged");
     }
   }
@@ -247,7 +248,11 @@ mod tests {
       }
     }
     assert!(job.cancel_requested);
-    assert_eq!(job.status, ImportJobStatus::Running, "cancel does not itself end the job");
+    assert_eq!(
+      job.status,
+      ImportJobStatus::Running,
+      "cancel does not itself end the job"
+    );
   }
 
   /// The skipped set is "what the archive carried that no page pointed at" —
@@ -292,7 +297,10 @@ mod tests {
 
     assert_eq!(skipped.len(), MAX_LISTED);
     assert_eq!(total, 4000, "the reported total is the real one");
-    assert_eq!(skipped[0], "junk/0000.bin", "truncation keeps the head, sorted");
+    assert_eq!(
+      skipped[0], "junk/0000.bin",
+      "truncation keeps the head, sorted"
+    );
   }
 
   fn failure(url: &str) -> mica_app_core::ImageFailure {
@@ -327,7 +335,10 @@ mod tests {
   /// Under the cap, nothing is dropped — the common case is a handful.
   #[test]
   fn a_short_failure_list_is_passed_through_whole() {
-    let all = vec![failure("https://a.example/1.png"), failure("https://b/2.png")];
+    let all = vec![
+      failure("https://a.example/1.png"),
+      failure("https://b/2.png"),
+    ];
     assert_eq!(capped(&all), all);
   }
 
@@ -442,7 +453,10 @@ mod tests {
   fn rehost_external_defaults_on_and_can_be_turned_off() {
     // Absent → on: import brings external images in unless the caller opts out.
     let d: ImportParams = serde_json::from_value(serde_json::json!({})).unwrap();
-    assert!(d.rehost_external, "import re-hosts external images by default");
+    assert!(
+      d.rehost_external,
+      "import re-hosts external images by default"
+    );
     // The client mirrors its "转存网络图片" toggle through this flag.
     let off: ImportParams =
       serde_json::from_value(serde_json::json!({ "rehost_external": false })).unwrap();
@@ -468,7 +482,9 @@ where
   let raw: Option<String> = serde::Deserialize::deserialize(deserializer)?;
   match raw.as_deref() {
     None | Some("") => Ok(None),
-    Some(v) => Uuid::parse_str(v).map(Some).map_err(serde::de::Error::custom),
+    Some(v) => Uuid::parse_str(v)
+      .map(Some)
+      .map_err(serde::de::Error::custom),
   }
 }
 
@@ -573,7 +589,6 @@ pub async fn start_import(
 
   Ok(Json(ImportStartResponse { job_id }))
 }
-
 
 /// Mirror progress into `import_jobs`, but only every [`PERSIST_EVERY`] pages.
 ///
@@ -832,12 +847,23 @@ async fn run_import(
       // Mica's {file_id, name} form. External http(s) links: re-host into our
       // storage too (best-effort) when `rehost_external` is on, else stay links.
       if block.kind == "image"
-        && let Some(url) = block.data.get("url").and_then(|v| v.as_str()).map(str::to_string)
+        && let Some(url) = block
+          .data
+          .get("url")
+          .and_then(|v| v.as_str())
+          .map(str::to_string)
       {
         if let Some(path) = resolve_ref(from, &url, &file_paths) {
-          let entry =
-            upload_archive_image(state, &client, workspace_id, user_id, &path, &plan.files[&path], &mut uploaded)
-              .await?;
+          let entry = upload_archive_image(
+            state,
+            &client,
+            workspace_id,
+            user_id,
+            &path,
+            &plan.files[&path],
+            &mut uploaded,
+          )
+          .await?;
           block.data = json!({"file_id": entry.0, "name": entry.1});
         } else if params.rehost_external
           && (url.starts_with("http://") || url.starts_with("https://"))
@@ -846,7 +872,16 @@ async fn run_import(
           // best-effort — a host this server can't reach (CN routing to
           // medium/imgur/…) just keeps its link, exactly as before. The client's
           // per-image re-host remains the fallback for those.
-          match rehost_external_image(state, workspace_id, user_id, &url, &mut rehosted, &mut unfetched).await {
+          match rehost_external_image(
+            state,
+            workspace_id,
+            user_id,
+            &url,
+            &mut rehosted,
+            &mut unfetched,
+          )
+          .await
+          {
             Some(entry) => block.data = json!({"file_id": entry.0, "name": entry.1}),
             // Left as a link, and now said out loud. `document_id` is stamped
             // after insert_page below — the page does not exist yet.
@@ -874,7 +909,10 @@ async fn run_import(
           else {
             continue;
           };
-          obj.insert("href".into(), json!(format!("mica://page/{}", view_ids[*target])));
+          obj.insert(
+            "href".into(),
+            json!(format!("mica://page/{}", view_ids[*target])),
+          );
         }
       }
     }
@@ -1017,7 +1055,10 @@ where
 /// External http(s) image urls across all pages, deduplicated. Images that
 /// resolve inside the archive are uploaded from its bytes; only real links go
 /// over the network.
-fn wanted_external_urls(plan: &ImportPlan, file_paths: &std::collections::HashSet<String>) -> Vec<String> {
+fn wanted_external_urls(
+  plan: &ImportPlan,
+  file_paths: &std::collections::HashSet<String>,
+) -> Vec<String> {
   let mut wanted = Vec::new();
   let mut seen = std::collections::HashSet::new();
   for page in plan.pages.iter().filter(|p| !p.is_folder) {
@@ -1032,8 +1073,7 @@ fn wanted_external_urls(plan: &ImportPlan, file_paths: &std::collections::HashSe
       if resolve_ref(from, url, file_paths).is_some() {
         continue;
       }
-      if (url.starts_with("http://") || url.starts_with("https://"))
-        && seen.insert(url.to_string())
+      if (url.starts_with("http://") || url.starts_with("https://")) && seen.insert(url.to_string())
       {
         wanted.push(url.to_string());
       }
@@ -1274,6 +1314,9 @@ fn page_seed(
   payload
 }
 
+/// Insert one planned page: the transaction itself is shared with the two
+/// document-creation routes ([`crate::routes::documents::insert_page`]); the
+/// executor only preprocesses the title and keeps the pre-assigned view id.
 #[allow(clippy::too_many_arguments)]
 async fn insert_page(
   db: &PgPool,
@@ -1283,60 +1326,31 @@ async fn insert_page(
   parent_view_id: Option<Uuid>,
   title: &str,
   icon: Option<&str>,
-  root_block_id: &str,
+  // Kept in the signature even though `payload` carries the same id: callers
+  // pre-generate it to seed the page, and the argument documents that pairing.
+  _root_block_id: &str,
   payload: &mica_app_core::documents::DocumentSnapshotPayload,
   // Returns the DOCUMENT id, not the view id. They are different ids, and the
   // one the `rehost-image` endpoint takes — the one an image failure has to be
   // addressed to — is this one.
 ) -> ApiResult<Uuid> {
-  let mut tx = db.begin().await?;
-  let document = sqlx::query_as::<_, DocumentRecord>(
-    r#"
-      INSERT INTO documents (workspace_id, root_block_id, created_by)
-      VALUES ($1, $2, $3)
-      RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
-    "#,
-  )
-  .bind(workspace_id)
-  .bind(root_block_id)
-  .bind(user_id)
-  .fetch_one(&mut *tx)
-  .await?;
-
-  // Seed the yrs base with the page's content, in the import's own transaction.
-  // `content_text` (the FTS index) is co-written with the base, so each imported
-  // page's BODY is searchable at once — batch import of a whole Notion workspace
-  // is the case that motivated this (100+ pages a user searches before opening
-  // any). Before S4 this wrote an op-model snapshot and built the base
-  // afterwards, best-effort and per page.
-  mica_app_core::sync::seed_base_tx(&mut tx, document.id, payload.clone()).await?;
-
   let title = title.trim();
   let title = if title.is_empty() { "Untitled" } else { title };
-  let position = Uuid::now_v7().to_string();
-  sqlx::query(
-    r#"
-      INSERT INTO views (
-        id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by, icon
-      )
-      VALUES ($1, $2, $3, $4, 'document', $5, $6, $7, $8)
-    "#,
+  let (document, _view) = crate::routes::documents::insert_page(
+    db,
+    workspace_id,
+    user_id,
+    crate::routes::documents::InsertPage {
+      view_id: Some(view_id),
+      parent_view_id,
+      name: title,
+      icon,
+      seed: payload.clone(),
+    },
   )
-  .bind(view_id)
-  .bind(workspace_id)
-  .bind(parent_view_id)
-  .bind(document.id)
-  .bind(title)
-  .bind(position)
-  .bind(user_id)
-  .bind(icon)
-  .execute(&mut *tx)
   .await?;
-
-  tx.commit().await?;
   Ok(document.id)
 }
-
 
 #[cfg(test)]
 mod page_seed_tests {
@@ -1357,8 +1371,14 @@ mod page_seed_tests {
   /// own title would make it export as `# Untitled` on a page nobody named.
   #[test]
   fn a_nameless_entry_stores_no_title_and_keeps_falling_back() {
-    assert_eq!(mica_markdown::document_title(&page_seed("正文。", "", "root")), None);
-    assert_eq!(mica_markdown::document_title(&page_seed("正文。", "  ", "root")), None);
+    assert_eq!(
+      mica_markdown::document_title(&page_seed("正文。", "", "root")),
+      None
+    );
+    assert_eq!(
+      mica_markdown::document_title(&page_seed("正文。", "  ", "root")),
+      None
+    );
   }
 
   /// The title lives on the root block beside `front_matter`, and a page's front
@@ -1369,7 +1389,10 @@ mod page_seed_tests {
     let seed = page_seed("---\ntags: [a]\n---\n\n正文。", "名字", "root");
     assert_eq!(mica_markdown::document_title(&seed), Some("名字"));
     let root = seed.blocks.iter().find(|b| b.id == "root").expect("root");
-    assert_eq!(root.data.get("front_matter").and_then(|v| v.as_str()), Some("tags: [a]"));
+    assert_eq!(
+      root.data.get("front_matter").and_then(|v| v.as_str()),
+      Some("tags: [a]")
+    );
   }
 
   /// The body is untouched: the title is metadata on the root, never a block.
@@ -1463,7 +1486,11 @@ mod import_pg {
       );
       return None;
     };
-    Some(PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed"))
+    Some(
+      PgPool::connect(&url)
+        .await
+        .expect("DATABASE_URL is set but the connection failed"),
+    )
   }
 
   async fn seed_workspace(db: &PgPool) -> (Uuid, Uuid) {
@@ -1484,7 +1511,14 @@ mod import_pg {
     (ws, user)
   }
 
-  fn node(id: &str, parent: Option<&str>, pos: &str, name: &str, ty: &str, icon: Option<&str>) -> TreeNode {
+  fn node(
+    id: &str,
+    parent: Option<&str>,
+    pos: &str,
+    name: &str,
+    ty: &str,
+    icon: Option<&str>,
+  ) -> TreeNode {
     TreeNode {
       id: id.to_string(),
       parent_id: parent.map(str::to_string),
@@ -1516,17 +1550,37 @@ mod import_pg {
 
     let nodes = vec![
       node("f1", None, "0000000010", "归档", "folder", Some("📁")),
-      node("p1", Some("f1"), "0000000010", "一月", "document", Some("😃")),
+      node(
+        "p1",
+        Some("f1"),
+        "0000000010",
+        "一月",
+        "document",
+        Some("😃"),
+      ),
       node("p2", Some("f1"), "0000000020", "二月", "document", None),
-      node("p3", Some("f1"), "0000000030", "三月", "document", Some("🎯")),
+      node(
+        "p3",
+        Some("f1"),
+        "0000000030",
+        "三月",
+        "document",
+        Some("🎯"),
+      ),
     ];
     let mut payloads = HashMap::new();
     for id in ["p1", "p2", "p3"] {
-      payloads.insert(format!("obj-{id}"), mica_markdown::import_markdown("正文。", "root"));
+      payloads.insert(
+        format!("obj-{id}"),
+        mica_markdown::import_markdown("正文。", "root"),
+      );
     }
     let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
       .into_iter()
-      .map(|z| ZipFileEntry { name: z.name, bytes: z.data })
+      .map(|z| ZipFileEntry {
+        name: z.name,
+        bytes: z.data,
+      })
       .collect();
     let plan = plan_import(raw, false, ImportMode::AsIs);
 
@@ -1535,9 +1589,17 @@ mod import_pg {
     for (idx, page) in plan.pages.iter().enumerate() {
       let parent = page.parent.map(|p| view_ids[p]);
       if page.is_folder {
-        insert_folder(&db, ws, user, view_ids[idx], parent, &page.title, page.icon.as_deref())
-          .await
-          .unwrap();
+        insert_folder(
+          &db,
+          ws,
+          user,
+          view_ids[idx],
+          parent,
+          &page.title,
+          page.icon.as_deref(),
+        )
+        .await
+        .unwrap();
         continue;
       }
       let root_block_id = format!("block_{}", Uuid::new_v4().simple());
@@ -1557,19 +1619,37 @@ mod import_pg {
       .unwrap();
     }
 
-    let rows: Vec<(String, Option<String>, String)> =
-      sqlx::query_as("SELECT name, icon, position FROM views WHERE workspace_id = $1 ORDER BY position")
-        .bind(ws)
-        .fetch_all(&db)
-        .await
-        .unwrap();
+    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
+      "SELECT name, icon, position FROM views WHERE workspace_id = $1 ORDER BY position",
+    )
+    .bind(ws)
+    .fetch_all(&db)
+    .await
+    .unwrap();
 
     let icon_of = |n: &str| {
-      rows.iter().find(|r| r.0 == n).unwrap_or_else(|| panic!("{n} missing")).1.clone()
+      rows
+        .iter()
+        .find(|r| r.0 == n)
+        .unwrap_or_else(|| panic!("{n} missing"))
+        .1
+        .clone()
     };
-    assert_eq!(icon_of("归档").as_deref(), Some("📁"), "folder icon reached the row");
-    assert_eq!(icon_of("一月").as_deref(), Some("😃"), "document icon reached the row");
-    assert_eq!(icon_of("二月"), None, "no icon stays NULL, not an empty string");
+    assert_eq!(
+      icon_of("归档").as_deref(),
+      Some("📁"),
+      "folder icon reached the row"
+    );
+    assert_eq!(
+      icon_of("一月").as_deref(),
+      Some("😃"),
+      "document icon reached the row"
+    );
+    assert_eq!(
+      icon_of("二月"),
+      None,
+      "no icon stays NULL, not an empty string"
+    );
     assert_eq!(icon_of("三月").as_deref(), Some("🎯"));
 
     let order: Vec<&str> = rows
@@ -1596,9 +1676,13 @@ mod import_pg {
     let Some(db) = pool().await else { return };
     let (ws, user) = seed_workspace(&db).await;
     let folder = Uuid::new_v4();
-    insert_folder(&db, ws, user, folder, None, "目标", None).await.unwrap();
+    insert_folder(&db, ws, user, folder, None, "目标", None)
+      .await
+      .unwrap();
     // The request-time check passes …
-    crate::routes::documents::ensure_parent_accepts_children(&db, ws, folder).await.unwrap();
+    crate::routes::documents::ensure_parent_accepts_children(&db, ws, folder)
+      .await
+      .unwrap();
     // … then someone trashes the folder while the import is still running.
     sqlx::query("UPDATE views SET is_deleted = true WHERE id = $1")
       .bind(folder)
@@ -1609,22 +1693,40 @@ mod import_pg {
     let root_block_id = format!("block_{}", Uuid::new_v4().simple());
     let payload = page_seed("正文。", "后来的页", &root_block_id);
     let page = insert_page(
-      &db, ws, user, Uuid::new_v4(), Some(folder), "后来的页", None, &root_block_id, &payload,
+      &db,
+      ws,
+      user,
+      Uuid::new_v4(),
+      Some(folder),
+      "后来的页",
+      None,
+      &root_block_id,
+      &payload,
     )
     .await
     .expect_err("a page must not land under a folder that is in the bin");
-    assert_eq!(page.into_response().status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+      page.into_response().status(),
+      axum::http::StatusCode::CONFLICT
+    );
     let sub = insert_folder(&db, ws, user, Uuid::new_v4(), Some(folder), "子", None)
       .await
       .expect_err("nor may a folder");
-    assert_eq!(sub.into_response().status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+      sub.into_response().status(),
+      axum::http::StatusCode::CONFLICT
+    );
 
-    let documents: i64 = sqlx::query_scalar("SELECT count(*) FROM documents WHERE workspace_id = $1")
-      .bind(ws)
-      .fetch_one(&db)
-      .await
-      .unwrap();
-    assert_eq!(documents, 0, "the refused page's documents row rolled back with it");
+    let documents: i64 =
+      sqlx::query_scalar("SELECT count(*) FROM documents WHERE workspace_id = $1")
+        .bind(ws)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+      documents, 0,
+      "the refused page's documents row rolled back with it"
+    );
     let live_children: i64 = sqlx::query_scalar(
       "SELECT count(*) FROM views WHERE parent_view_id = $1 AND is_deleted = false",
     )

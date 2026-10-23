@@ -6,14 +6,24 @@ use mica_interchange::zip::ZipFileEntry;
 use mica_interchange::{build_zip, normalize_entries, plan_import, read_zip, resolve_ref};
 
 fn fixture(name: &str) -> Vec<u8> {
-  std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+  std::fs::read(format!(
+    "{}/tests/fixtures/{name}",
+    env!("CARGO_MANIFEST_DIR")
+  ))
+  .unwrap()
 }
 
 #[test]
 fn reads_own_store_archives_round_trip() {
   let entries = vec![
-    mica_interchange::ZipEntry { name: "Guide.md".into(), data: b"# Guide".to_vec() },
-    mica_interchange::ZipEntry { name: "assets/\u{56fe}.png".into(), data: vec![1, 2, 3] },
+    mica_interchange::ZipEntry {
+      name: "Guide.md".into(),
+      data: b"# Guide".to_vec(),
+    },
+    mica_interchange::ZipEntry {
+      name: "assets/\u{56fe}.png".into(),
+      data: vec![1, 2, 3],
+    },
   ];
   let zip = build_zip(&entries);
   let back = read_zip(&zip);
@@ -51,12 +61,18 @@ fn reads_zip64_marked_archive() {
 fn reads_data_descriptor_archive() {
   let entries = read_zip(&fixture("dd.zip"));
   assert_eq!(entries[0].name, "stream.md");
-  assert_eq!(String::from_utf8_lossy(&entries[0].bytes), "streamed content");
+  assert_eq!(
+    String::from_utf8_lossy(&entries[0].bytes),
+    "streamed content"
+  );
 }
 
 #[test]
 fn normalize_peels_wrappers_and_drops_junk() {
-  let e = |name: &str| ZipFileEntry { name: name.into(), bytes: Vec::new() };
+  let e = |name: &str| ZipFileEntry {
+    name: name.into(),
+    bytes: Vec::new(),
+  };
   let out = normalize_entries(vec![
     e("__MACOSX/notes/._a.md"),
     e("vault/.obsidian/app.json"),
@@ -76,7 +92,11 @@ fn normalize_peels_wrappers_and_drops_junk() {
 
 #[test]
 fn nested_part_zip_expands_through_plan() {
-  let plan = plan_import(read_zip(&fixture("nested.zip")), false, mica_interchange::ImportMode::AsIs);
+  let plan = plan_import(
+    read_zip(&fixture("nested.zip")),
+    false,
+    mica_interchange::ImportMode::AsIs,
+  );
   assert!(plan.notion); // names carry 32-hex ids → auto-detected
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
   // `Guide.md` has a `Guide/` of children → folder "Guide" + leaf "Guide" holding
@@ -90,7 +110,10 @@ fn nested_part_zip_expands_through_plan() {
 
 #[test]
 fn notion_helpers() {
-  assert_eq!(strip_notion_id("My Page 1f2e3d4c5b6a7890abcdef1234567890"), "My Page");
+  assert_eq!(
+    strip_notion_id("My Page 1f2e3d4c5b6a7890abcdef1234567890"),
+    "My Page"
+  );
   assert_eq!(
     strip_notion_id("Export-1f2e3d4c-5b6a-7890-abcd-ef1234567890"),
     "Export"
@@ -102,7 +125,12 @@ fn notion_helpers() {
     ["apple 31f57556969b56ade626c2502854fc6d.md", "notes.md"].into_iter()
   ));
   assert!(!looks_like_notion_export(
-    ["Guide.md", "Notes.md", "x 0123456789abcdef0123456789abcdef.md"].into_iter()
+    [
+      "Guide.md",
+      "Notes.md",
+      "x 0123456789abcdef0123456789abcdef.md"
+    ]
+    .into_iter()
   ));
 }
 
@@ -117,9 +145,14 @@ fn notion_folder_and_page_pair_up_across_differing_ids() {
   };
   let plan = plan_import(
     vec![
-      e("apple 31f57556969b56ade626c2502854fc6d.md", "# apple\n\nfruit"),
-      e("apple 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f/iphone 31f57556969b81b5973cf30d40c5b6f1.md",
-        "# iphone\n\nphone"),
+      e(
+        "apple 31f57556969b56ade626c2502854fc6d.md",
+        "# apple\n\nfruit",
+      ),
+      e(
+        "apple 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f/iphone 31f57556969b81b5973cf30d40c5b6f1.md",
+        "# iphone\n\nphone",
+      ),
     ],
     true,
     mica_interchange::ImportMode::AsIs,
@@ -136,14 +169,25 @@ fn ordering_rules() {
   let manifest = r#"{"version":1,"pages":[{"path":"Z.md"},{"path":"Z/I.md"},{"path":"A.md"}]}"#;
   assert_eq!(
     order_page_paths(
-      vec!["A.md".into(), "Z/I.md".into(), "Z.md".into(), "New.md".into()],
+      vec![
+        "A.md".into(),
+        "Z/I.md".into(),
+        "Z.md".into(),
+        "New.md".into()
+      ],
       Some(manifest)
     ),
     ["Z.md", "Z/I.md", "A.md", "New.md"]
   );
   assert_eq!(
     order_page_paths(
-      vec!["b/10.md".into(), "b/2.md".into(), "b.md".into(), "10 篇.md".into(), "2 篇.md".into()],
+      vec![
+        "b/10.md".into(),
+        "b/2.md".into(),
+        "b.md".into(),
+        "10 篇.md".into(),
+        "2 篇.md".into()
+      ],
       None
     ),
     ["2 篇.md", "10 篇.md", "b.md", "b/2.md", "b/10.md"]
@@ -174,7 +218,12 @@ fn resolve_ref_rules() {
   );
   // Root-relative fallback + percent decoding.
   assert_eq!(
-    resolve_ref("Guide/Setup/Linux.md", "assets/%E5%9B%BE%E7%89%87.png", &paths).as_deref(),
+    resolve_ref(
+      "Guide/Setup/Linux.md",
+      "assets/%E5%9B%BE%E7%89%87.png",
+      &paths
+    )
+    .as_deref(),
     Some("assets/图片.png")
   );
   assert_eq!(resolve_ref("a.md", "https://x.com/i.png", &paths), None);
@@ -215,13 +264,20 @@ fn resolve_ref_rules() {
     Some("assets/Screen Shot.png"),
     "a space in a filename is not a size suffix"
   );
-  assert_eq!(resolve_ref("a.md", "data:image/png;base64,xx", &paths), None);
+  assert_eq!(
+    resolve_ref("a.md", "data:image/png;base64,xx", &paths),
+    None
+  );
   assert_eq!(resolve_ref("a.md", "nope.png", &paths), None);
 }
 
 #[test]
 fn plan_full_archive_with_manifest_links_and_assets() {
-  let plan = plan_import(read_zip(&fixture("plan.zip")), false, mica_interchange::ImportMode::AsIs);
+  let plan = plan_import(
+    read_zip(&fixture("plan.zip")),
+    false,
+    mica_interchange::ImportMode::AsIs,
+  );
   assert!(!plan.notion);
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
   // Manifest order, not alphabetical. `Zeta.md` owns `Zeta/` → folder + leaf.

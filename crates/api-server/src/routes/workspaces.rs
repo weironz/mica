@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use mica_app_core::{AppState, store};
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
@@ -157,7 +157,11 @@ pub async fn reorder(
 /// ONE statement instead of one UPDATE per id — the list comes from the
 /// client, and N round trips inside a transaction held the rows locked for
 /// all of them. Ids the user is not a member of match nothing.
-async fn reorder_member_positions(db: &PgPool, user_id: Uuid, workspace_ids: &[Uuid]) -> ApiResult<()> {
+async fn reorder_member_positions(
+  db: &PgPool,
+  user_id: Uuid,
+  workspace_ids: &[Uuid],
+) -> ApiResult<()> {
   let positions: Vec<String> = (1..=workspace_ids.len() as i64)
     .map(|i| pad_position(i * 10))
     .collect();
@@ -214,9 +218,9 @@ pub async fn list(
   let user_id = user_id_from_headers(&state, &headers).await?;
 
   let workspaces = sqlx::query_as::<_, Workspace>(LIST_WORKSPACES_SQL)
-  .bind(user_id)
-  .fetch_all(&state.db)
-  .await?;
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await?;
 
   Ok(Json(WorkspaceListResponse { workspaces }))
 }
@@ -261,7 +265,7 @@ pub async fn create(
   .execute(&mut *tx)
   .await?;
 
-  let workspace = fetch_workspace_for_user_in_tx(&mut tx, workspace_id, user_id)
+  let workspace = fetch_workspace_for_user(&mut *tx, workspace_id, user_id)
     .await?
     .ok_or(ApiError::Internal(
       "created workspace was not found".to_string(),
@@ -343,7 +347,10 @@ pub async fn delete(
   let keys = delete_workspace_records(
     &state.db,
     workspace_id,
-    state.storage.as_ref().map_or(7 * 24 * 60 * 60, |s| s.presign_ttl_seconds),
+    state
+      .storage
+      .as_ref()
+      .map_or(7 * 24 * 60 * 60, |s| s.presign_ttl_seconds),
   )
   .await?;
 
@@ -365,20 +372,20 @@ async fn delete_workspace_records(
   presign_ttl_seconds: u64,
 ) -> ApiResult<Vec<String>> {
   let mut tx = db.begin().await?;
-  let exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE")
-    .bind(workspace_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+  let exists: Option<Uuid> =
+    sqlx::query_scalar("SELECT id FROM workspaces WHERE id = $1 FOR UPDATE")
+      .bind(workspace_id)
+      .fetch_optional(&mut *tx)
+      .await?;
   if exists.is_none() {
     return Err(ApiError::NotFound);
   }
 
-  let keys: Vec<String> = sqlx::query_scalar(
-    "SELECT object_key FROM files WHERE workspace_id = $1 ORDER BY object_key",
-  )
-  .bind(workspace_id)
-  .fetch_all(&mut *tx)
-  .await?;
+  let keys: Vec<String> =
+    sqlx::query_scalar("SELECT object_key FROM files WHERE workspace_id = $1 ORDER BY object_key")
+      .bind(workspace_id)
+      .fetch_all(&mut *tx)
+      .await?;
   for key in &keys {
     // We hold the workspace row lock, so a new `files` INSERT cannot pass its
     // FK check until this transaction commits. Do not take the key advisory
@@ -486,7 +493,14 @@ pub async fn add_member(
   Path(workspace_id): Path<Uuid>,
   Json(payload): Json<AddWorkspaceMemberRequest>,
 ) -> ApiResult<Json<super::invitations::InvitationResponse>> {
-  super::invitations::invite_member(&state, &headers, workspace_id, &payload.email, &payload.role).await
+  super::invitations::invite_member(
+    &state,
+    &headers,
+    workspace_id,
+    &payload.email,
+    &payload.role,
+  )
+  .await
 }
 
 pub async fn update_member(
@@ -554,8 +568,11 @@ pub async fn remove_member(
   Ok(Json(WorkspaceMemberListResponse { members }))
 }
 
-pub(crate) async fn fetch_workspace_for_user(
-  db: &PgPool,
+/// One generic executor covers both the pool call sites and the
+/// in-transaction one; the `_in_tx` twin used to hold the only statement the
+/// two did not share — nothing, as it turned out.
+pub(crate) async fn fetch_workspace_for_user<'e>(
+  db: impl sqlx::PgExecutor<'e>,
   workspace_id: Uuid,
   user_id: Uuid,
 ) -> ApiResult<Option<Workspace>> {
@@ -576,32 +593,6 @@ pub(crate) async fn fetch_workspace_for_user(
   .bind(workspace_id)
   .bind(user_id)
   .fetch_optional(db)
-  .await
-  .map_err(ApiError::from)
-}
-
-async fn fetch_workspace_for_user_in_tx(
-  tx: &mut Transaction<'_, Postgres>,
-  workspace_id: Uuid,
-  user_id: Uuid,
-) -> ApiResult<Option<Workspace>> {
-  sqlx::query_as::<_, Workspace>(
-    r#"
-      SELECT
-        w.id,
-        w.name,
-        w.owner_id,
-        wm.role::text AS role,
-        w.created_at,
-        w.updated_at
-      FROM workspaces w
-      INNER JOIN workspace_members wm ON wm.workspace_id = w.id
-      WHERE w.id = $1 AND wm.user_id = $2
-    "#,
-  )
-  .bind(workspace_id)
-  .bind(user_id)
-  .fetch_optional(&mut **tx)
   .await
   .map_err(ApiError::from)
 }
@@ -676,7 +667,11 @@ pub(crate) async fn workspace_role(
   .map_err(ApiError::from)
 }
 
-pub(crate) async fn ensure_workspace_member(db: &PgPool, workspace_id: Uuid, user_id: Uuid) -> ApiResult<()> {
+pub(crate) async fn ensure_workspace_member(
+  db: &PgPool,
+  workspace_id: Uuid,
+  user_id: Uuid,
+) -> ApiResult<()> {
   workspace_role(db, workspace_id, user_id)
     .await?
     .ok_or(ApiError::NotFound)?;
@@ -851,7 +846,7 @@ mod workspace_decode_pg {
     assert_eq!(short.page_count, 0, "absent column means 0, not an error");
 
     let mut tx = db.begin().await.unwrap();
-    let in_tx = fetch_workspace_for_user_in_tx(&mut tx, ws, user)
+    let in_tx = fetch_workspace_for_user(&mut *tx, ws, user)
       .await
       .expect("the create SELECT must decode")
       .expect("the row exists");
@@ -892,7 +887,9 @@ mod reorder_pg {
       assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
       return;
     };
-    let db = PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed");
+    let db = PgPool::connect(&url)
+      .await
+      .expect("DATABASE_URL is set but the connection failed");
     let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
     let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     for u in [me, other] {
@@ -924,7 +921,9 @@ mod reorder_pg {
       .await
       .unwrap();
 
-    reorder_member_positions(&db, me, &[c, a, b, Uuid::new_v4()]).await.unwrap();
+    reorder_member_positions(&db, me, &[c, a, b, Uuid::new_v4()])
+      .await
+      .unwrap();
 
     let order: Vec<Uuid> = sqlx::query_scalar(
       "SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY position",
@@ -945,10 +944,18 @@ mod reorder_pg {
     assert_eq!(theirs, "0000000099", "another user's order is untouched");
 
     for ws in [a, b, c] {
-      sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.ok();
+      sqlx::query("DELETE FROM workspaces WHERE id=$1")
+        .bind(ws)
+        .execute(&db)
+        .await
+        .ok();
     }
     for u in [me, other] {
-      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(&db).await.ok();
+      sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(u)
+        .execute(&db)
+        .await
+        .ok();
     }
   }
 }
@@ -965,7 +972,11 @@ mod owner_role_pg {
       );
       return None;
     };
-    Some(PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed"))
+    Some(
+      PgPool::connect(&url)
+        .await
+        .expect("DATABASE_URL is set but the connection failed"),
+    )
   }
 
   /// THE BUG: `add_member` is an upsert, so an admin "adding" the owner's
@@ -1038,9 +1049,17 @@ mod owner_role_pg {
       .expect("a non-owner can be demoted");
 
     // Deleting the workspace still cascades through the owner's row.
-    sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.unwrap();
+    sqlx::query("DELETE FROM workspaces WHERE id=$1")
+      .bind(ws)
+      .execute(&db)
+      .await
+      .unwrap();
     for u in [owner, admin] {
-      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(&db).await.ok();
+      sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(u)
+        .execute(&db)
+        .await
+        .ok();
     }
   }
 }
@@ -1052,10 +1071,15 @@ mod workspace_delete_gc_pg {
 
   async fn fixture() -> Option<(PgPool, Uuid, Uuid)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(std::env::var("CI").is_err(), "DATABASE_URL must be set in CI");
+      assert!(
+        std::env::var("CI").is_err(),
+        "DATABASE_URL must be set in CI"
+      );
       return None;
     };
-    let db = PgPool::connect(&url).await.expect("test Postgres must be reachable");
+    let db = PgPool::connect(&url)
+      .await
+      .expect("test Postgres must be reachable");
     // CI applies the SQL files with psql before tests (without sqlx's
     // bookkeeping table). Running sqlx migrations again would try to create
     // `users` a second time; the shared test schema is already prepared.
@@ -1111,7 +1135,9 @@ mod workspace_delete_gc_pg {
   /// must commit in the same transaction that cascades those rows away.
   #[tokio::test]
   async fn deleting_without_storage_preserves_every_object_key_for_gc() {
-    let Some((db, user, workspace)) = fixture().await else { return };
+    let Some((db, user, workspace)) = fixture().await else {
+      return;
+    };
     let key = format!("workspaces/{workspace}/{}.png", "a".repeat(64));
     file(&db, user, workspace, &key).await;
 
@@ -1145,7 +1171,9 @@ mod workspace_delete_gc_pg {
   /// In that case keeping the workspace is safer than deleting its last index.
   #[tokio::test]
   async fn ledger_failure_rolls_back_workspace_deletion() {
-    let Some((db, user, workspace)) = fixture().await else { return };
+    let Some((db, user, workspace)) = fixture().await else {
+      return;
+    };
     let key = format!("legacy/{}.png", Uuid::new_v4());
     file(&db, user, workspace, &key).await;
 
@@ -1169,7 +1197,9 @@ mod workspace_delete_gc_pg {
   /// DELETE blocks on the UPSERT's row lock, then must not erase the refresh.
   #[tokio::test]
   async fn stale_gc_prune_cannot_erase_a_workspace_deletion_ledger() {
-    let Some((db, user, workspace)) = fixture().await else { return };
+    let Some((db, user, workspace)) = fixture().await else {
+      return;
+    };
     let key = format!("workspaces/{workspace}/{}.png", "b".repeat(64));
     file(&db, user, workspace, &key).await;
     store::record_pending_file_upload(&db, workspace, &key, 900)
@@ -1193,13 +1223,12 @@ mod workspace_delete_gc_pg {
     .fetch_one(&mut *gc)
     .await
     .unwrap();
-    let registered: bool = sqlx::query_scalar(
-      "SELECT EXISTS (SELECT 1 FROM files WHERE object_key = $1)",
-    )
-    .bind(&key)
-    .fetch_one(&mut *gc)
-    .await
-    .unwrap();
+    let registered: bool =
+      sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM files WHERE object_key = $1)")
+        .bind(&key)
+        .fetch_one(&mut *gc)
+        .await
+        .unwrap();
     assert!(registered, "GC must take its registered-file branch");
 
     // Same operations and lock order as delete_workspace_records, paused
@@ -1223,32 +1252,37 @@ mod workspace_delete_gc_pg {
     let observed_expiry = observed.1;
     let mut prune = tokio::spawn(async move {
       let affected = crate::blob_gc::prune_registered_pending_upload_tx(
-        &mut gc,
-        &gc_key,
-        observed.0,
-        observed.1,
+        &mut gc, &gc_key, observed.0, observed.1,
       )
       .await
       .unwrap();
       gc.commit().await.unwrap();
       affected
     });
-    assert!(tokio::time::timeout(Duration::from_millis(100), &mut prune).await.is_err());
+    assert!(
+      tokio::time::timeout(Duration::from_millis(100), &mut prune)
+        .await
+        .is_err()
+    );
     deleting.commit().await.unwrap();
-    assert_eq!(prune.await.unwrap(), 0, "stale GC must not delete the refreshed ledger");
-    let current_expiry: DateTime<Utc> = sqlx::query_scalar(
-      "SELECT expires_at FROM pending_file_uploads WHERE object_key = $1",
-    )
-    .bind(&key)
-    .fetch_one(&db)
-    .await
-    .unwrap();
+    assert_eq!(
+      prune.await.unwrap(),
+      0,
+      "stale GC must not delete the refreshed ledger"
+    );
+    let current_expiry: DateTime<Utc> =
+      sqlx::query_scalar("SELECT expires_at FROM pending_file_uploads WHERE object_key = $1")
+        .bind(&key)
+        .fetch_one(&db)
+        .await
+        .unwrap();
     assert!(current_expiry > observed_expiry);
-    let remaining_files: i64 = sqlx::query_scalar("SELECT count(*) FROM files WHERE object_key = $1")
-      .bind(&key)
-      .fetch_one(&db)
-      .await
-      .unwrap();
+    let remaining_files: i64 =
+      sqlx::query_scalar("SELECT count(*) FROM files WHERE object_key = $1")
+        .bind(&key)
+        .fetch_one(&db)
+        .await
+        .unwrap();
     assert_eq!(remaining_files, 0);
     cleanup(&db, user, workspace).await;
   }
@@ -1259,7 +1293,9 @@ mod workspace_delete_gc_pg {
   #[tokio::test]
   #[ignore = "requires disposable Postgres and S3-compatible object store"]
   async fn failed_rustfs_delete_keeps_a_durable_gc_key() {
-    let Some((db, user, workspace)) = fixture().await else { return };
+    let Some((db, user, workspace)) = fixture().await else {
+      return;
+    };
     let storage = mica_infra::storage::S3Config::from_env().expect("set S3_* for RustFS");
     crate::bucket::ensure_bucket(&storage).await;
     let key = format!("workspaces/{workspace}/{}.png", "c".repeat(64));
@@ -1281,19 +1317,44 @@ mod workspace_delete_gc_pg {
       .send()
       .await
       .unwrap();
-    assert_eq!(rejected.status().as_u16(), 403, "the test must exercise rejected DELETE");
-    delete_objects(&wrong_credentials, keys.iter().map(|key| (workspace, key.as_str()))).await;
-    let head = http.head(storage.presign_head_object(&key)).send().await.unwrap();
-    assert!(head.status().is_success(), "failed DELETE must leave object: {}", head.status());
-    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM pending_file_uploads WHERE object_key = $1")
-      .bind(&key)
-      .fetch_one(&db)
+    assert_eq!(
+      rejected.status().as_u16(),
+      403,
+      "the test must exercise rejected DELETE"
+    );
+    delete_objects(
+      &wrong_credentials,
+      keys.iter().map(|key| (workspace, key.as_str())),
+    )
+    .await;
+    let head = http
+      .head(storage.presign_head_object(&key))
+      .send()
       .await
       .unwrap();
+    assert!(
+      head.status().is_success(),
+      "failed DELETE must leave object: {}",
+      head.status()
+    );
+    let pending: i64 =
+      sqlx::query_scalar("SELECT count(*) FROM pending_file_uploads WHERE object_key = $1")
+        .bind(&key)
+        .fetch_one(&db)
+        .await
+        .unwrap();
     assert_eq!(pending, 1, "GC must be able to retry after S3 recovers");
 
-    let remove = http.delete(storage.presign_delete(&key)).send().await.unwrap();
-    assert!(remove.status().is_success(), "test cleanup: {}", remove.status());
+    let remove = http
+      .delete(storage.presign_delete(&key))
+      .send()
+      .await
+      .unwrap();
+    assert!(
+      remove.status().is_success(),
+      "test cleanup: {}",
+      remove.status()
+    );
     cleanup(&db, user, workspace).await;
   }
 }

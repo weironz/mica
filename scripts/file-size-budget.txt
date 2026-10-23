@@ -1,12 +1,17 @@
-# 巨石文件棘轮预算 —— 登记文件只许减不许增（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 5 项）。
+# 巨石单元棘轮预算 —— 登记单元只许减不许增（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 5 项）。
 #
 # 规则：CI（scripts/check-file-size.sh）逐行核对，当前行数超过登记值即失败；
 # 低于登记值则通过并提示可收紧基线。目的：让 4,000 行警告清单成为只收敛
-# 不扩张的目标——拆掉一个文件（或降到软上限以下）就删除对应行。
+# 不扩张的目标——拆掉一个单元（或降到软上限以下）就删除对应行。
 #
-# 格式：<基线行数> <相对路径>（# 开头为注释）。新增条目 = 承认该文件当前
-# 已超软上限 4,000 行，需要一句为什么留着的理由（写在行内注释里）。
-6133 clients/mica_flutter/lib/editor/editor.dart        # 第三轮已拆出 hooks/ai/dialogs 三个 part；主体仍是编辑器 State，controller 化属行为性重构
-6099 clients/mica_flutter/lib/main_shell.dart           # views/auth/sync 域全部控制器化（CloudViews/Members/Auth/SyncReconcile），god-class 攻坚收口
-5845 clients/mica_flutter/lib/ui/dialogs.dart           # 第三轮拆分候选：设置/对话框集合
-4869 clients/mica_flutter/lib/main_workspace_view.dart  # 树状态/rename/拖放判定均已 controller 化；剩余为 build 辅助与 api 包装
+# 2026-10-23（#87）起计量单位改为「库」：Dart 条目 = library root + 其全部
+# part 的合计（拆 part 不再绕过棘轮）；Rust 仍按文件。登记过棘轮的单元跳过
+# 8,000 硬限——棘轮本身更紧（涨一行即失败）。原按文件分立的 part 条目
+# （dialogs / main_shell / main_workspace_view / editor）随之并为库条目。
+#
+# 格式：<基线行数> <library root 相对路径>（# 开头为注释）。新增条目 = 承认该单元
+# 当前已超软上限 4,000 行，需要一句为什么留着的理由（写在行内注释里）。
+18663 clients/mica_flutter/lib/main.dart               # 外壳一整库（main_shell/workspace_view/dialogs/widgets 等全部 part 合计）；views/auth/sync 域已控制器化，god-class 攻坚收口中
+7192 clients/mica_flutter/lib/editor/editor.dart       # 编辑器 State 主体 + hooks/ai/dialogs/resources/history_ui 五个 part 的合计
+5721 clients/mica_flutter/lib/editor/render.dart      # 自绘渲染管线 + block_renderers/inline_atoms/render_resources part 的合计（含并行车道在途改动）
+4170 clients/mica_flutter/lib/editor/controller.dart  # 编辑器 controller + history/commits part 的合计

@@ -1,417 +1,171 @@
-# Cloud-first Markdown Workspace Architecture
+# Mica Architecture
 
-## Goal
+> Rewritten 2026-10-23 (issue #90) to describe what IS, replacing the original
+> inception-era planning document (Tantivy / Redis / "no embedded Rust core
+> through Dart FFI" / separate auth-workspace-folder-collab-history crates /
+> comrak / op-model tables — none of which survived contact with the product).
+> The detailed designs live in the sibling documents; this page is the map.
 
-Build a cloud-first collaborative Markdown workspace aligned with AppFlowy's core ideas, but without AppFlowy's local-first client runtime. Data lives in the cloud. Clients use REST and WebSocket APIs. The backend is pure Rust.
+## What Mica is
 
-The first-class product surface is Web. Desktop and mobile should reuse the same backend protocol and document model.
+A collaborative Markdown workspace with a **Rust backend and a Flutter client**
+(web + Windows desktop). It started cloud-only; the shipped shape is **hybrid**:
 
-## Key Decisions
+- The cloud (PostgreSQL + S3-compatible storage) is the collaboration plane:
+  accounts, workspaces, page trees, real-time co-editing, history, search.
+- The desktop app additionally runs an **offline local mode** through Dart FFI
+  to the same Rust data plane (`mica-core`) — no backend involved. Web cannot
+  do this (no FFI there) and stays cloud-only. A unification of the two worlds
+  into one local-first storage with an optional sync layer is designed in
+  [`local-first-plan.md`](local-first-plan.md); what is merged so far is noted
+  there.
 
-- Cloud is the source of truth.
-- No local-first storage, no RocksDB client core, no embedded Rust core through Dart FFI.
-- Frontend can be Flutter, but it should communicate with the backend over network APIs.
-- Internal document state is a block model, not raw Markdown.
-- Markdown is an import/export and authoring format.
-- Real-time sync is operation/update based.
-- History is implemented with snapshots plus append-only updates.
-- Infinite canvas is out of scope.
+The editor is **entirely self-painted** (one `RenderBox`, no contenteditable, no
+third-party editor package) — see [`editor.md`](editor.md) and
+[`render-architecture.md`](render-architecture.md) for the principles and the
+renderer registry red line.
+
+## Key decisions that still bind
+
 - **Rust by default for the data plane.** Anything that parses files, walks
-  archives, batches, hashes or talks to storage belongs in the Rust backend
-  (see `crates/interchange` + `docs/features/export-import.md` for the reference
-  shape: a pure engine crate, side effects in api-server, the client only
-  uploads and polls). Dart/Flutter owns what only a client can own: painting,
-  caret/selection, hit-testing, and the editor's latency-critical hot paths.
-- **Editor hot paths stay client-side by design.** Live input rules
-  (`**b**` as you type), paste-to-blocks, copy-as-markdown (clipboard APIs
-  must produce data inside the user gesture) cannot take a network round
-  trip per keystroke. This means a small, deliberate duplication of the
-  markdown/inline-marks grammar in Dart (`lib/editor/marks.dart`,
-  `markdown.dart`) mirroring the Rust engine (`crates/markdown`). The two
-  are pinned together by shared conformance fixtures
-  (`crates/markdown/tests/fixtures/conformance` — gold `.blocks.json` files
-  asserted by both `cargo test -p mica-markdown` and the Dart
-  `markdown_conformance_test.dart`; regenerate with `GEN_GOLD=1` after an
-  intentional grammar change). The long-term in-house path to a single
-  implementation is compiling the Rust engine to WASM for the client.
-- **CommonMark is the parsing base, GFM the target dialect, and anything
-  beyond degrades gracefully.** The reader aims at full CommonMark + GFM
-  (see editor-engine.md Milestone 8). For model features GFM cannot express
-  (table width/per-column align, future callouts/toggles…), the extension
-  convention is: (1) serialize to VALID GFM that renders acceptably in any
-  foreign viewer — never invent syntax others would misrender; (2) carry
-  the lossless form out-of-band where one exists (block data, the export
-  manifest); (3) re-importing our own export restores what GFM dropped
-  when possible. Round-trip stability stays the invariant.
-- **The Markdown engine is a named crate.** `mica-markdown` owns the block
-  model ("AST") and Markdown/HTML parsing+rendering (like SiYuan's lute);
-  `mica-app-core` keeps document *operations* and re-exports the engine;
-  `mica-interchange` builds archive-level import/export on top.
+  archives, batches, hashes or talks to storage belongs in Rust; Dart/Flutter
+  owns what only a client can own: painting, caret/selection, hit-testing,
+  and the editor's latency-critical hot paths (a network round trip per
+  keystroke is not a latency budget).
+- **The internal document state is a block model, not raw Markdown**;
+  Markdown is the import/export/authoring format, and **round-trip
+  stability** (our export re-imports losslessly) is the invariant.
+- **CommonMark 0.31.2 is the parsing base, GFM the target dialect**, and
+  anything beyond degrades gracefully: serialize to valid GFM any foreign
+  viewer renders acceptably, carry the lossless form out-of-band, never
+  invent syntax others would misrender.
+- **Minimal third-party dependencies** (in-house first for the core data
+  plane); every exception is registered in CLAUDE.md's dependency exemption
+  list with its reason — there is no "customary exemption".
+- **Infinite canvas is out of scope.**
 
-## AppFlowy Alignment
-
-AppFlowy uses:
-
-- Flutter UI.
-- Rust local core.
-- Dart FFI event dispatch.
-- Protobuf-generated event wrappers.
-- AppFlowy-Collab / Yrs for collaborative objects.
-- Local persistence through RocksDB/SQLite.
-- AppFlowy Cloud as a sync provider.
-
-This project should reuse the architectural ideas, not the exact client architecture.
-
-Keep:
-
-- Workspace / folder / document / database separation.
-- Block-based document model.
-- Action-based edit pipeline.
-- Collab object type system.
-- Snapshot-based history.
-- Awareness/presence model.
-- Flutter editor transaction adapter pattern.
-
-Do not copy:
-
-- Dart FFI event bus.
-- Client-side Rust `AppFlowyCore`.
-- Local mode.
-- RocksDB/SQLite as primary client state.
-- LocalServer/AppFlowyCloud dual-provider complexity.
-
-## Target Architecture
+## The shape
 
 ```text
-Flutter Web / Desktop / Mobile
-  Editor UI
-  Workspace UI
-  REST client
-  WebSocket sync client
+Flutter client  (clients/mica_flutter)
+  web:     yjs (JS) + IndexedDB, no FFI
+  windows: flutter_rust_bridge FFI -> rust_lib_mica_flutter -> mica-core (SQLite store)
         |
-        | HTTPS + WSS
+        | REST (JWT) + WebSocket document rooms
         v
-Rust Cloud Backend
-  Axum API
-  Auth
-  Workspace service
-  Page/folder service
-  Document service
-  Sync service
-  History service
-  Search service
-  Storage service
+Rust backend  (crates/)
+  api-server   Axum HTTP + WS entrypoint, routes per domain
+  app-core     document/sync domain + AppState (BodyIndex search, sync, store)
+  mica-core    storage/transport-agnostic data plane (block DTO, marks, yrs, SQLite)
+  markdown     the CommonMark+GFM engine (block model, MD/HTML, render)
+  interchange  archive-level import/export (serde_json only)
+  infra        config, db pool, errors, mailer
+  mcp-server   MCP tool surface for AI clients (REST + PAT, no direct DB)
+  cli          backup / export / admin CLI (same REST API)
         |
-        +-- PostgreSQL
-        +-- Redis optional: presence, pub/sub, rate limits
-        +-- S3/MinIO: files and exports
-        +-- Tantivy: full-text search
+        +-- PostgreSQL        document_yrs_base (CRDT state), views, auth, …
+        +-- S3-compatible     rustfs (files, exports); MinIO/OSS would work too
+        +-- in-process memory BodyIndex full-text search (NO Tantivy, NO Redis)
 ```
 
-## Backend Workspace Layout
+## Storage model
 
-Recommended Rust workspace:
+- **Document content lives in `document_yrs_base`** as yrs (the Rust `yrs`
+  CRDT)
+  state — the op-model tables (`document_snapshots` / `document_updates` /
+  `document_versions`) were retired in S0–S5 (migration 0016); the split-brain
+  trap that forced this is documented in the S5 notes. Per-workspace update
+  streams live in `workspace_updates` (rid-ordered, folded).
+- **The page tree is `views`**: folders are the only containers, pages are
+  leaves. The invariant is enforced in the API guard
+  (`ensure_parent_accepts_children`) AND a DB trigger
+  (`views_parent_must_be_folder`, migration 0011, tightened by 0033: parent
+  must be a folder, in the same workspace, and not in the bin when the child
+  is live).
+- **History is yrs-native** (see `routes/history.rs`): auto-snapshots captured
+  on a cadence inside `sync::push_update`; endpoints list / preview / pin a
+  named version / restore. Restore is a NEW forward update broadcast as a yrs
+  `sync.update`, never a rewrite of the log.
+- **Search** is an in-process, lockable-memory substring index over document
+  bodies (`BodyIndex`) — index proposes candidates, SQL disposes (workspace
+  scope, deleted, ordering). Why not Postgres text indexes or Tantivy:
+  [`search.md`](search.md).
 
-```text
-crates/
-  api-server/        Axum HTTP/WebSocket entrypoint
-  app-core/          service composition and shared application state
-  auth/              auth/session/user model
-  workspace/         workspace, membership, permissions
-  folder/            page tree and navigation model
-  document/          block document model and operations
-  collab/            real-time room, update validation, broadcast
-  history/           snapshots, versions, restore
-  storage/           file uploads and object storage
-  search/            indexing and query
-  markdown/          import/export
-  infra/             config, tracing, errors, database pool
-apps/
-  flutter_app/
-docs/
-```
+## Sync and collaboration
 
-Use AppFlowy-style module boundaries, but expose network APIs instead of FFI events.
+WebSocket document rooms. The client sends yrs updates; the server validates
+permissions **per message** (re-read from the DB, not cached at connect),
+applies, appends, and broadcasts. The reconnect protocol is rid-based:
+`sync.bootstrap → sync.base`, `sync.pull{since_rid} → sync.updates{head}`,
+`sync.push → sync.ack{rid}`. Presence/awareness rides the same socket.
 
-## Backend Stack
-
-- Rust async runtime: Tokio
-- HTTP/WebSocket: Axum
-- SQL: SQLx
-- Database: PostgreSQL
-- Object storage: S3-compatible API
-- Serialization: Serde JSON for public APIs, optional protobuf/bincode internally
-- Search: Tantivy
-- Markdown: `comrak` or `markdown-rs`
-- Observability: tracing, OpenTelemetry later
-
-## Frontend Stack
-
-Recommended:
-
-- Flutter for product UI if cross-platform consistency is the priority.
-- A document editor based on AppFlowy's `appflowy_editor` ideas.
-- Client state management: Bloc or Riverpod; choose one and keep it consistent.
-
-Risk note:
-
-Flutter Web can work, but the editor is the highest-risk area. If Web editing quality becomes a blocker, isolate the editor behind an adapter so the Web client can switch to a ProseMirror/Tiptap editor without changing backend contracts.
-
-## Domain Model
-
-### Workspace
-
-```text
-Workspace
-  id
-  name
-  owner_id
-  created_at
-  updated_at
-```
-
-### Membership
-
-```text
-WorkspaceMember
-  workspace_id
-  user_id
-  role: owner | admin | editor | commenter | viewer
-  joined_at
-```
-
-### Page/View
-
-AppFlowy uses "views" for objects in the page tree. Keep that idea.
-
-```text
-View
-  id
-  workspace_id
-  parent_view_id
-  object_id
-  object_type: document | database
-  name
-  icon
-  position
-  is_deleted
-  created_by
-  created_at
-  updated_at
-```
-
-### Document
-
-The document object contains block state.
-
-```text
-Document
-  id
-  workspace_id
-  root_block_id
-  created_by
-  created_at
-  updated_at
-```
-
-### Block
-
-Store blocks as structured JSON in PostgreSQL, but treat operations as the source of history.
-
-```text
-Block
-  id
-  document_id
-  parent_id
-  type
-  data: jsonb
-  external_id
-  external_type
-  position
-  created_at
-  updated_at
-```
-
-`external_id` is useful for AppFlowy-style long rich text deltas:
-
-```text
-block.data       -> structural attributes
-external_text    -> rich text delta / text CRDT state
-```
-
-## Document Storage Strategy
-
-MVP storage should be simple:
-
-- Store current document state in `document_snapshots`.
-- Store every accepted operation/update in `document_updates`.
-- Periodically compact current state into snapshots.
-
-Do not write every block into normalized SQL tables first unless needed for query. JSON snapshots are easier to evolve while the editor model changes.
-
-Later, add indexed block tables for search, backlinks, and analytics.
-
-## Operation Model
-
-Client edits should be converted to backend operations:
-
-```json
-{
-  "op_id": "uuid",
-  "document_id": "uuid",
-  "base_version": 42,
-  "ops": [
-    {
-      "type": "insert_block",
-      "block": {
-        "id": "block_id",
-        "type": "paragraph",
-        "data": {},
-        "external_id": "text_id",
-        "external_type": "text"
-      },
-      "parent_id": "root",
-      "previous_id": "prev_block"
-    }
-  ]
-}
-```
-
-Initial operation types:
-
-- `insert_block`
-- `update_block`
-- `delete_block`
-- `move_block`
-- `update_text_delta`
-- `set_awareness`
-
-## Real-time Sync
-
-Each open document has a room:
-
-```text
-/ws/workspaces/{workspace_id}/documents/{document_id}
-```
-
-Client connects, authenticates, receives:
-
-- Current document snapshot version.
-- Missing updates since client version.
-- Presence state.
-
-Client sends:
-
-- Document operations.
-- Text delta updates.
-- Cursor/selection awareness.
-
-Server:
-
-- Validates permissions.
-- Validates operation shape.
-- Applies operation to authoritative document state.
-- Appends accepted update.
-- Broadcasts accepted update with server sequence.
-- Emits snapshot tasks.
-
-## History
-
-Use three concepts:
-
-- Update: every accepted operation or collab update.
-- Snapshot: compact full document state at a version.
-- Named version: user-visible history checkpoint.
-
-```text
-document_updates
-  id
-  document_id
-  seq
-  actor_id
-  update_kind
-  payload
-  created_at
-
-document_snapshots
-  id
-  document_id
-  version_seq
-  payload
-  created_at
-
-document_versions
-  id
-  document_id
-  snapshot_id
-  name
-  created_by
-  created_at
-```
-
-Restore flow:
-
-1. Load target snapshot.
-2. Create a new update of kind `restore_snapshot`.
-3. Broadcast restored state.
-4. Keep old history immutable.
-
-## Permissions
-
-All write paths must enforce workspace membership and object permissions.
-
-Minimum roles:
-
-- owner: all permissions
-- admin: workspace management except ownership transfer
-- editor: create/update/delete content
-- commenter: comment only
-- viewer: read only
-
-Never trust client operations just because they came through an authenticated WebSocket.
+The web client runs the **JS yjs engine** against the server's **Rust yrs**;
+byte-compatibility of the update encoding is pinned by the cross-engine
+conformance gate `mica-core/tests/web_interop.rs` (runs the committed web
+bundle headlessly against the Rust side). The two ends of that gate are
+deliberately the two engines real users run.
 
 ## Markdown
 
-Markdown should be implemented as converters:
+One Rust engine: `crates/markdown` (CommonMark 0.31.2 641/641 + GFM 24/24 +
+dialect extensions: footnotes, front matter, Pandoc math; scoreboard in
+[`commonmark-scoreboard.md`](commonmark-scoreboard.md)). It powers the server
+(HTML render, export) and, via the FFI crate's `render` feature (merman +
+ratex), the desktop editor's live mermaid/math preview — one engine
+everywhere except web, which uses its JS counterparts.
 
-```text
-Markdown -> AST -> DocumentData
-DocumentData -> AST -> Markdown
-DocumentData -> HTML
-```
+The editor's **latency-critical hot paths stay in Dart** (input rules, paste,
+clipboard) with a deliberate mirror of the inline-marks grammar
+(`lib/editor/marks.dart`), pinned to the Rust engine by shared conformance
+fixtures. Round-trip stability (export → re-import loses nothing) is the
+invariant. Where the boundary sits and why:
+[`markdown-boundary-comparison.md`](markdown-boundary-comparison.md).
 
-MVP support:
+## Auth
 
-- headings
-- paragraphs
-- bold/italic/inline code
-- links
-- unordered/ordered lists
-- task lists
-- blockquote
-- code block
-- tables if editor supports them
+Email/password → short-lived JWT access token + single-use rotating refresh
+token (reuse detection). Registration is **closed by default**; opening it
+still requires email verification, and workspace membership for new users
+arrives via invitations (migration 0032). The first account on a fresh
+install is auto-verified (otherwise self-hosting cannot bootstrap). The
+desktop local mode has no auth layer at all — it talks straight to the local
+SQLite store over FFI.
 
-Avoid making Markdown text the primary storage, or Notion/AppFlowy-style block features will become fragile.
+## Engineering gates worth knowing
 
-## Risks
+- **Structure gate** (`scripts/check-file-size.sh`, = CI `structure` job =
+  `just check-structure`): per-unit line budget — Dart libraries are measured
+  as root+parts, Rust per file (FFI crate included); absolute limits + a
+  shrink-only ratchet + a delta gate.
+- **rustfmt / clippy / analyze** run in CI (`ci.yml`) and locally
+  (`just ci`, `scripts/release-check.sh`) with the same flags.
+- **Web e2e** against a real stack (nginx + api + rustfs) and the Windows
+  **integration suite** (real FFI) run in their own workflows.
+- **MCP conformance**: `mica-cli mcp` is driven by the official MCP
+  inspector; a conforming client is the only thing that reads what we
+  actually declare.
 
-- Flutter Web editor quality is the largest frontend risk.
-- Collaborative editing semantics are the largest backend risk.
-- Markdown round-trip fidelity can consume large time if not scoped.
-- History restore must be immutable and auditable.
-- Permission checks must run on both REST and WebSocket paths.
+## Deployment
 
-## Initial Recommendation
+Single node (docker compose: postgres, rustfs, api, web behind nginx), images
+published from CI to Aliyun ACR + Docker Hub. `Deploy` is the only path that
+touches prod — it rehearses against the real node first (`--check --diff`
+via ansible), snapshots pre-migration, and restores `MICA_VERSION` on failure.
+Off-site backups + a restore drill (`just restore-drill`) are part of the
+loop. Details: [`../ops/release.md`](../ops/release.md),
+[`../ops/deploy.md`](../ops/deploy.md).
 
-Build the Rust backend and document protocol first. Keep frontend replaceable behind a document client adapter.
+## Where the details live
 
-The first proof of concept should demonstrate:
-
-- Create workspace.
-- Create document.
-- Open same document in two clients.
-- Edit blocks in real time.
-- See history entries.
-- Restore a previous version.
-- Export Markdown.
+| Topic | Document |
+| --- | --- |
+| Editor UX principles | [`editor.md`](editor.md) |
+| Editor engine (self-painted canvas, marks model) | [`editor-engine.md`](editor-engine.md) |
+| Block rendering registry (the red line) | [`render-architecture.md`](render-architecture.md) |
+| Sync / history design notes | [`sync-and-api.md`](sync-and-api.md) (endpoints: `../dev/api.md`) |
+| Full-text search | [`search.md`](search.md) |
+| Markdown engine boundary | [`markdown-boundary-comparison.md`](markdown-boundary-comparison.md) |
+| CommonMark scoreboard | [`commonmark-scoreboard.md`](commonmark-scoreboard.md) |
+| Local-first unification plan | [`local-first-plan.md`](local-first-plan.md) |
+| Version history (yrs-native) | [`../features/version-history-plan.md`](../features/version-history-plan.md) |
+| Release / deploy / DR | [`../ops/`](../ops/) |

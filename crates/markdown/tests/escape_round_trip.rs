@@ -79,12 +79,20 @@ fn quote_text_keeps_its_leader_escaped() {
 fn an_empty_todo_stays_a_todo_with_its_checked_state() {
   for checked in [false, true] {
     let mut payload = import_markdown("- [ ] placeholder\n", "root");
-    let todo = payload.blocks.iter_mut().find(|b| b.kind == "todo").expect("a todo");
+    let todo = payload
+      .blocks
+      .iter_mut()
+      .find(|b| b.kind == "todo")
+      .expect("a todo");
     todo.text.clear();
     todo.data = serde_json::json!({ "checked": checked });
     let md = export_markdown(&payload).expect("export");
     let again = import_markdown(&md, "root");
-    let todo = again.blocks.iter().find(|b| b.id != again.root_block_id).expect("a block");
+    let todo = again
+      .blocks
+      .iter()
+      .find(|b| b.id != again.root_block_id)
+      .expect("a block");
     assert_eq!(todo.kind, "todo", "{md:?}");
     assert_eq!(todo.text, "");
     assert_eq!(todo.data["checked"], serde_json::json!(checked));

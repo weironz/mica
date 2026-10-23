@@ -1,4 +1,3 @@
-
 use serde_json::{Value, json};
 
 use crate::Block;
@@ -94,7 +93,11 @@ pub fn math_run_spans(src: &str) -> Vec<(usize, usize)> {
 /// crossing into a code span. `memo` carries the failure knowledge forward:
 /// every `$` opener used to rescan the whole suffix when no closer exists
 /// (issue #61); see [`ScanMemo`] for why the recorded frontier is exact.
-pub(crate) fn find_math_closer(chars: &[char], content_start: usize, memo: &mut ScanMemo) -> Option<usize> {
+pub(crate) fn find_math_closer(
+  chars: &[char],
+  content_start: usize,
+  memo: &mut ScanMemo,
+) -> Option<usize> {
   if memo.math_dead_through >= content_start {
     return None; // a previous failure already settled this whole stretch
   }
@@ -203,10 +206,7 @@ pub(crate) fn extended_autolink(
       let end = trim_autolink_end(&rest);
       let candidate = &rest[..end];
       let domain = &candidate[if implied.is_empty() { prefix.len() } else { 0 }..];
-      let domain = domain
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
+      let domain = domain.split(['/', '?', '#']).next().unwrap_or_default();
       if !valid_autolink_domain(domain) {
         return None;
       }
@@ -269,8 +269,13 @@ pub(crate) fn trim_autolink_end(s: &str) -> usize {
   let mut end = s.len();
   loop {
     let kept = &s[..end];
-    let Some(last) = kept.chars().last() else { return 0 };
-    if matches!(last, '?' | '!' | '.' | ',' | ':' | '*' | '_' | '~' | '\'' | '"') {
+    let Some(last) = kept.chars().last() else {
+      return 0;
+    };
+    if matches!(
+      last,
+      '?' | '!' | '.' | ',' | ':' | '*' | '_' | '~' | '\'' | '"'
+    ) {
       end -= last.len_utf8();
       continue;
     }
@@ -316,7 +321,6 @@ pub(crate) fn valid_autolink_domain(domain: &str) -> bool {
     .iter()
     .any(|s| s.contains('_'))
 }
-
 
 /// Parse inline Markdown (`**b**`, `*i*`/`_i_`, `` `c` ``, `~~s~~`, `[t](url)`)
 /// in [text] into clean text plus marks merged into [data] under `"marks"`.
@@ -365,13 +369,18 @@ pub(crate) type RefDefs = std::collections::HashMap<String, (String, Option<Stri
 /// line indices.
 pub(crate) fn collect_ref_definitions(
   raw_lines: &[&str],
-) -> (RefDefs, std::collections::HashSet<usize>, std::collections::HashMap<usize, usize>) {
+) -> (
+  RefDefs,
+  std::collections::HashSet<usize>,
+  std::collections::HashMap<usize, usize>,
+) {
   let mut defs = RefDefs::new();
   let mut def_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
   // Definitions inside blockquotes (`> [foo]: /url`) — line → quote depth.
   // They define globally; the line itself renders as a contentless `>`
   // (spec ex. 218: the quote ends up empty, the def still resolves).
-  let mut quote_def_lines: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+  let mut quote_def_lines: std::collections::HashMap<usize, usize> =
+    std::collections::HashMap::new();
   let mut in_fence: Option<(u8, usize)> = None;
   let mut prev_para = false; // an open paragraph means a def can't start
   let mut i = 0;
@@ -419,8 +428,7 @@ pub(crate) fn collect_ref_definitions(
       let qrest = qrest.trim_start();
       if qd > 0
         && qrest.starts_with('[')
-        && let Some((label, dest, title, used)) =
-          parse_ref_definition_multi(&[qrest], 0)
+        && let Some((label, dest, title, used)) = parse_ref_definition_multi(&[qrest], 0)
         && used == 1
       {
         defs.entry(normalize_label(&label)).or_insert((dest, title));
@@ -635,7 +643,10 @@ pub(crate) fn unescape_md(s: &str) -> String {
 
 /// Parse an inline-link suffix `(dest "title")` starting right AFTER the `(`.
 /// Returns (href, title, index just past the closing `)`).
-pub(crate) fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String, Option<String>, usize)> {
+pub(crate) fn parse_link_suffix(
+  chars: &[char],
+  mut i: usize,
+) -> Option<(String, Option<String>, usize)> {
   // Only ASCII whitespace separates destination and title — U+00A0 and
   // friends are CONTENT (spec ex. 507: the whole thing becomes the href).
   fn md_ws(c: char) -> bool {
@@ -716,7 +727,11 @@ pub(crate) fn parse_link_suffix(chars: &[char], mut i: usize) -> Option<(String,
       i += 1;
     }
   }
-  if i < n && chars[i] == ')' { Some((dest, title, i + 1)) } else { None }
+  if i < n && chars[i] == ')' {
+    Some((dest, title, i + 1))
+  } else {
+    None
+  }
 }
 
 // NOTE: the uncached `label_contains_link` was removed — every caller now goes
@@ -923,7 +938,11 @@ pub(crate) type LinkCache = std::collections::HashMap<String, ParsedInline>;
 ///
 /// Pure function + pure cache: this cannot change any output, only how often a
 /// label is re-parsed.
-pub(crate) fn parse_label_cached<'c>(label: &str, defs: &RefDefs, cache: &'c mut LinkCache) -> &'c ParsedInline {
+pub(crate) fn parse_label_cached<'c>(
+  label: &str,
+  defs: &RefDefs,
+  cache: &'c mut LinkCache,
+) -> &'c ParsedInline {
   if !cache.contains_key(label) {
     let parsed = parse_inline_memo(label, defs, cache, false);
     cache.insert(label.to_string(), parsed);
@@ -947,7 +966,10 @@ pub(crate) fn parse_label_cached<'c>(label: &str, defs: &RefDefs, cache: &'c mut
 /// not about text that would have autolinked had it been left alone. It never
 /// is: once the label becomes a link's text, nothing autolinks inside it.
 pub(crate) fn label_has_link_cached(label: &str, defs: &RefDefs, cache: &mut LinkCache) -> bool {
-  parse_label_cached(label, defs, cache).marks.iter().any(|m| m.kind == "link")
+  parse_label_cached(label, defs, cache)
+    .marks
+    .iter()
+    .any(|m| m.kind == "link")
 }
 
 /// Mirror of the Flutter `parseInline`: returns clean text (no markers) and the
@@ -1195,7 +1217,9 @@ pub(crate) fn parse_inline_memo(
     // same bridge as links; the alt keeps its inner marks (HTML flattens
     // them to plain text, markdown re-renders them).
     // Past `MAX_INLINE_NESTING` the brackets stay literal (see there).
-    if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '['
+    if chars[i] == '!'
+      && i + 1 < chars.len()
+      && chars[i + 1] == '['
       && let Some(close) = brackets.matching(&chars, i + 1)
       && brackets.nesting(i + 1) < MAX_INLINE_NESTING
     {
@@ -1203,7 +1227,16 @@ pub(crate) fn parse_inline_memo(
       if !label.is_empty() {
         if close + 1 < chars.len() && chars[close + 1] == '(' {
           if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
-            push_link("image", &label, href, title, &mut out, &mut out_len, &mut marks, cache);
+            push_link(
+              "image",
+              &label,
+              href,
+              title,
+              &mut out,
+              &mut out_len,
+              &mut marks,
+              cache,
+            );
             i = next;
             continue;
           }
@@ -1225,7 +1258,16 @@ pub(crate) fn parse_inline_memo(
             (label.clone(), close + 1) // shortcut ![alt]
           };
           if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
-            push_link("image", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks, cache);
+            push_link(
+              "image",
+              &label,
+              dest.clone(),
+              title.clone(),
+              &mut out,
+              &mut out_len,
+              &mut marks,
+              cache,
+            );
             i = next;
             continue;
           }
@@ -1245,7 +1287,10 @@ pub(crate) fn parse_inline_memo(
       && close > i + 2
     {
       let label: String = chars[i + 2..close].iter().collect();
-      if !label.chars().any(|c| c.is_whitespace() || matches!(c, '[' | ']' | '^')) {
+      if !label
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '[' | ']' | '^'))
+      {
         let start = out_len;
         out.push_str(&label);
         out_len += label.encode_utf16().count();
@@ -1292,7 +1337,16 @@ pub(crate) fn parse_inline_memo(
       if close + 1 < chars.len() && chars[close + 1] == '(' {
         if let Some((href, title, next)) = parse_link_suffix(&chars, close + 2) {
           if !label_has_link_cached(&label, defs, cache) {
-            push_link("link", &label, href, title, &mut out, &mut out_len, &mut marks, cache);
+            push_link(
+              "link",
+              &label,
+              href,
+              title,
+              &mut out,
+              &mut out_len,
+              &mut marks,
+              cache,
+            );
             i = next;
             continue;
           }
@@ -1318,7 +1372,16 @@ pub(crate) fn parse_inline_memo(
           };
           if let Some((dest, title)) = defs.get(&normalize_label(&ref_label)) {
             if !label_has_link_cached(&label, defs, cache) {
-              push_link("link", &label, dest.clone(), title.clone(), &mut out, &mut out_len, &mut marks, cache);
+              push_link(
+                "link",
+                &label,
+                dest.clone(),
+                title.clone(),
+                &mut out,
+                &mut out_len,
+                &mut marks,
+                cache,
+              );
               i = next;
               continue;
             }
@@ -1358,9 +1421,7 @@ pub(crate) fn parse_inline_memo(
     // GFM extended autolinks: bare www./http(s):// URLs and emails at a
     // word boundary (start, whitespace, or `*`/`_`/`~`/`(`).
     if allow_autolink
-      && (i == 0
-        || chars[i - 1].is_whitespace()
-        || matches!(chars[i - 1], '*' | '_' | '~' | '('))
+      && (i == 0 || chars[i - 1].is_whitespace() || matches!(chars[i - 1], '*' | '_' | '~' | '('))
       && let Some((len, href)) = extended_autolink(&chars, i, &mut scans.email_dead)
     {
       let text: String = chars[i..i + len].iter().collect();
@@ -1428,7 +1489,15 @@ pub(crate) fn parse_inline_memo(
         }
         if let Some(end) = close {
           let inner: String = chars[i + n..end].iter().collect();
-          push_inner(&inner, "strike", None, defs, &mut out, &mut out_len, &mut marks);
+          push_inner(
+            &inner,
+            "strike",
+            None,
+            defs,
+            &mut out,
+            &mut out_len,
+            &mut marks,
+          );
           i = end + n;
           continue;
         }
@@ -1621,7 +1690,11 @@ pub(crate) fn flanking(c: char, prev: Option<char>, next: Option<char>) -> (bool
 /// The spec's process-emphasis: pair closers with the nearest valid opener
 /// (same char, rule-of-3), strong before em, deleting used delimiter
 /// characters and emitting bold/italic marks over the content between.
-pub(crate) fn process_emphasis(out: &mut String, marks: &mut Vec<InlineMark>, delims: &mut [Delim]) {
+pub(crate) fn process_emphasis(
+  out: &mut String,
+  marks: &mut Vec<InlineMark>,
+  delims: &mut [Delim],
+) {
   if delims.is_empty() {
     return;
   }
@@ -1659,7 +1732,11 @@ pub(crate) fn process_emphasis(out: &mut String, marks: &mut Vec<InlineMark>, de
       continue;
     };
 
-    let use_n = if delims[oi].count >= 2 && delims[closer_i].count >= 2 { 2 } else { 1 };
+    let use_n = if delims[oi].count >= 2 && delims[closer_i].count >= 2 {
+      2
+    } else {
+      1
+    };
     // Opener consumes from its right edge; closer from its left edge.
     delims[oi].count -= use_n;
     let o_del = delims[oi].start + delims[oi].count;
@@ -1735,7 +1812,9 @@ pub(crate) fn autolink_target(inner: &str) -> Option<String> {
     if scheme.len() >= 2
       && scheme.len() <= 32
       && scheme.as_bytes()[0].is_ascii_alphabetic()
-      && scheme.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.')
+      && scheme
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.')
       && colon + 1 < inner.len()
     {
       return Some(inner.to_string());
@@ -1748,7 +1827,11 @@ pub(crate) fn autolink_target(inner: &str) -> Option<String> {
   if let Some(at) = inner.find('@') {
     let (local, host) = inner.split_at(at);
     let host = &host[1..];
-    if !local.is_empty() && host.contains('.') && !host.ends_with('.') && bytes.iter().filter(|&&b| b == b'@').count() == 1 {
+    if !local.is_empty()
+      && host.contains('.')
+      && !host.ends_with('.')
+      && bytes.iter().filter(|&&b| b == b'@').count() == 1
+    {
       return Some(format!("mailto:{inner}"));
     }
   }
@@ -1964,7 +2047,10 @@ pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineM
     if m.kind == "footnote" {
       // The span text IS the label; the `[^…]` reference syntax is restored
       // from the mark's href (the label survives even if the span was edited).
-      let label = m.href.clone().unwrap_or_else(|| String::from_utf16_lossy(&units[s..e]));
+      let label = m
+        .href
+        .clone()
+        .unwrap_or_else(|| String::from_utf16_lossy(&units[s..e]));
       out.push_str(&format!("[^{label}]"));
       pos = e;
       continue;
@@ -2050,5 +2136,3 @@ pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineM
   }
   out
 }
-
-

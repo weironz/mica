@@ -184,7 +184,8 @@ List<Property> parseProperties(String frontMatter) {
 
 /// Infer a typed value from a user's raw single-line input (what the property
 /// editor commits): empty → empty text, otherwise the same bool/number/date/
-/// list/text inference `parseProperties` uses. Mirrors `infer_value`.
+/// list/text inference `parseProperties` uses. Mirrors the Rust side's
+/// scalar inference in `properties.rs`.
 PropertyValue inferValue(String raw) {
   final t = raw.trim();
   if (t.isEmpty) return const PropText('');

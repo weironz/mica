@@ -109,7 +109,9 @@ pub(crate) async fn create_invitation(
   .fetch_one(db)
   .await?;
   if already_member {
-    return Err(ApiError::Conflict("already a member of this workspace".to_string()));
+    return Err(ApiError::Conflict(
+      "already a member of this workspace".to_string(),
+    ));
   }
 
   let invitation = sqlx::query_as::<_, Invitation>(
@@ -153,12 +155,13 @@ pub(crate) async fn revoke_invitation(
   invitation_id: Uuid,
 ) -> ApiResult<()> {
   ensure_can_manage_members(db, workspace_id, actor_id).await?;
-  let deleted = sqlx::query("DELETE FROM workspace_invitations WHERE id = $1 AND workspace_id = $2")
-    .bind(invitation_id)
-    .bind(workspace_id)
-    .execute(db)
-    .await?
-    .rows_affected();
+  let deleted =
+    sqlx::query("DELETE FROM workspace_invitations WHERE id = $1 AND workspace_id = $2")
+      .bind(invitation_id)
+      .bind(workspace_id)
+      .execute(db)
+      .await?
+      .rows_affected();
   if deleted == 0 {
     return Err(ApiError::NotFound);
   }
@@ -167,7 +170,10 @@ pub(crate) async fn revoke_invitation(
 
 // ---- invitee side ------------------------------------------------------------
 
-pub(crate) async fn received_invitations(db: &PgPool, user_id: Uuid) -> ApiResult<Vec<ReceivedInvitation>> {
+pub(crate) async fn received_invitations(
+  db: &PgPool,
+  user_id: Uuid,
+) -> ApiResult<Vec<ReceivedInvitation>> {
   let rows = sqlx::query_as::<_, ReceivedInvitation>(
     r#"
       SELECT i.id, i.workspace_id, w.name AS workspace_name, i.role::text AS role,
@@ -191,7 +197,11 @@ pub(crate) async fn received_invitations(db: &PgPool, user_id: Uuid) -> ApiResul
 /// 403, which would confirm the id exists. Joining is `ON CONFLICT DO NOTHING`:
 /// accepting while already a member never rewrites a role (the 0028 lesson — an
 /// upsert here would let a stale invitation demote someone).
-pub(crate) async fn accept_invitation(db: &PgPool, user_id: Uuid, invitation_id: Uuid) -> ApiResult<Uuid> {
+pub(crate) async fn accept_invitation(
+  db: &PgPool,
+  user_id: Uuid,
+  invitation_id: Uuid,
+) -> ApiResult<Uuid> {
   let mut tx = db.begin().await?;
   // `FOR SHARE`: a concurrent account deletion locks this row `FOR UPDATE`, so
   // it cannot interleave with the membership insert below.
@@ -200,10 +210,10 @@ pub(crate) async fn accept_invitation(db: &PgPool, user_id: Uuid, invitation_id:
      WHERE id = $1 AND deleted_at IS NULL AND email_verified_at IS NOT NULL
      FOR SHARE",
   )
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(ApiError::NotFound)?;
+  .bind(user_id)
+  .fetch_optional(&mut *tx)
+  .await?
+  .ok_or(ApiError::NotFound)?;
   // DELETE … RETURNING is the claim: of two concurrent accepts only one gets
   // the row, the other sees nothing and answers 404.
   let (workspace_id, role): (Uuid, String) = sqlx::query_as(
@@ -232,7 +242,11 @@ pub(crate) async fn accept_invitation(db: &PgPool, user_id: Uuid, invitation_id:
   Ok(workspace_id)
 }
 
-pub(crate) async fn decline_invitation(db: &PgPool, user_id: Uuid, invitation_id: Uuid) -> ApiResult<()> {
+pub(crate) async fn decline_invitation(
+  db: &PgPool,
+  user_id: Uuid,
+  invitation_id: Uuid,
+) -> ApiResult<()> {
   let deleted = sqlx::query(
     "DELETE FROM workspace_invitations WHERE id = $1 AND email = (
        SELECT email FROM users
@@ -337,7 +351,11 @@ mod invitations_pg {
       );
       return None;
     };
-    Some(PgPool::connect(&url).await.expect("DATABASE_URL is set but the connection failed"))
+    Some(
+      PgPool::connect(&url)
+        .await
+        .expect("DATABASE_URL is set but the connection failed"),
+    )
   }
 
   /// A verified, live account with a unique address.
@@ -378,20 +396,30 @@ mod invitations_pg {
   }
 
   async fn role_of(db: &PgPool, ws: Uuid, user: Uuid) -> Option<String> {
-    sqlx::query_scalar("SELECT role::text FROM workspace_members WHERE workspace_id=$1 AND user_id=$2")
-      .bind(ws)
-      .bind(user)
-      .fetch_optional(db)
-      .await
-      .unwrap()
+    sqlx::query_scalar(
+      "SELECT role::text FROM workspace_members WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(ws)
+    .bind(user)
+    .fetch_optional(db)
+    .await
+    .unwrap()
   }
 
   async fn cleanup(db: &PgPool, workspaces: &[Uuid], users: &[Uuid]) {
     for ws in workspaces {
-      sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(db).await.ok();
+      sqlx::query("DELETE FROM workspaces WHERE id=$1")
+        .bind(ws)
+        .execute(db)
+        .await
+        .ok();
     }
     for u in users {
-      sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(db).await.ok();
+      sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(u)
+        .execute(db)
+        .await
+        .ok();
     }
   }
 
@@ -406,11 +434,21 @@ mod invitations_pg {
     let ws = workspace(&db, owner).await;
 
     // Mixed case and padding: normalized like users.email.
-    let inv = create_invitation(&db, ws, owner, &format!("  {}  ", invitee_email.to_uppercase()), "editor")
-      .await
-      .unwrap();
+    let inv = create_invitation(
+      &db,
+      ws,
+      owner,
+      &format!("  {}  ", invitee_email.to_uppercase()),
+      "editor",
+    )
+    .await
+    .unwrap();
     assert_eq!(inv.email, invitee_email);
-    assert_eq!(role_of(&db, ws, invitee).await, None, "an invitation is not a membership");
+    assert_eq!(
+      role_of(&db, ws, invitee).await,
+      None,
+      "an invitation is not a membership"
+    );
 
     let received = received_invitations(&db, invitee).await.unwrap();
     assert_eq!(received.len(), 1);
@@ -421,10 +459,18 @@ mod invitations_pg {
     assert_eq!(accept_invitation(&db, invitee, inv.id).await.unwrap(), ws);
     assert_eq!(role_of(&db, ws, invitee).await.as_deref(), Some("editor"));
     assert!(received_invitations(&db, invitee).await.unwrap().is_empty());
-    assert!(list_workspace_invitations(&db, ws, owner).await.unwrap().is_empty());
+    assert!(
+      list_workspace_invitations(&db, ws, owner)
+        .await
+        .unwrap()
+        .is_empty()
+    );
 
     // Repeat accept: nothing left to consume, membership untouched.
-    assert!(matches!(accept_invitation(&db, invitee, inv.id).await, Err(ApiError::NotFound)));
+    assert!(matches!(
+      accept_invitation(&db, invitee, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
     assert_eq!(role_of(&db, ws, invitee).await.as_deref(), Some("editor"));
 
     // Inviting an existing member is a 409, not a silent role rewrite.
@@ -438,7 +484,10 @@ mod invitations_pg {
       .fetch_one(&db)
       .await
       .unwrap();
-    assert!(matches!(create_invitation(&db, ws, owner, &owner_email, "viewer").await, Err(ApiError::Conflict(_))));
+    assert!(matches!(
+      create_invitation(&db, ws, owner, &owner_email, "viewer").await,
+      Err(ApiError::Conflict(_))
+    ));
     assert!(matches!(
       create_invitation(&db, ws, owner, "someone@else.test", "owner").await,
       Err(ApiError::BadRequest(_))
@@ -451,7 +500,9 @@ mod invitations_pg {
       .execute(&db)
       .await
       .unwrap();
-    let again = create_invitation(&db, ws, owner, &invitee_email, "viewer").await.unwrap();
+    let again = create_invitation(&db, ws, owner, &invitee_email, "viewer")
+      .await
+      .unwrap();
     accept_invitation(&db, invitee, again.id).await.unwrap();
     assert_eq!(role_of(&db, ws, invitee).await.as_deref(), Some("viewer"));
 
@@ -464,13 +515,21 @@ mod invitations_pg {
     let (owner, _) = user(&db).await;
     let (invitee, invitee_email) = user(&db).await;
     let ws = workspace(&db, owner).await;
-    let inv = create_invitation(&db, ws, owner, &invitee_email, "viewer").await.unwrap();
+    let inv = create_invitation(&db, ws, owner, &invitee_email, "viewer")
+      .await
+      .unwrap();
 
     decline_invitation(&db, invitee, inv.id).await.unwrap();
     assert_eq!(role_of(&db, ws, invitee).await, None);
     assert!(received_invitations(&db, invitee).await.unwrap().is_empty());
-    assert!(matches!(decline_invitation(&db, invitee, inv.id).await, Err(ApiError::NotFound)));
-    assert!(matches!(accept_invitation(&db, invitee, inv.id).await, Err(ApiError::NotFound)));
+    assert!(matches!(
+      decline_invitation(&db, invitee, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
+    assert!(matches!(
+      accept_invitation(&db, invitee, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
 
     cleanup(&db, &[ws], &[owner, invitee]).await;
   }
@@ -485,11 +544,24 @@ mod invitations_pg {
     let (invitee, invitee_email) = user(&db).await;
     let (stranger, _) = user(&db).await;
     let ws = workspace(&db, owner).await;
-    let inv = create_invitation(&db, ws, owner, &invitee_email, "editor").await.unwrap();
+    let inv = create_invitation(&db, ws, owner, &invitee_email, "editor")
+      .await
+      .unwrap();
 
-    assert!(received_invitations(&db, stranger).await.unwrap().is_empty());
-    assert!(matches!(accept_invitation(&db, stranger, inv.id).await, Err(ApiError::NotFound)));
-    assert!(matches!(decline_invitation(&db, stranger, inv.id).await, Err(ApiError::NotFound)));
+    assert!(
+      received_invitations(&db, stranger)
+        .await
+        .unwrap()
+        .is_empty()
+    );
+    assert!(matches!(
+      accept_invitation(&db, stranger, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
+    assert!(matches!(
+      decline_invitation(&db, stranger, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
     assert_eq!(role_of(&db, ws, stranger).await, None);
 
     // Unverified address: the invitation stays invisible and unusable.
@@ -499,7 +571,10 @@ mod invitations_pg {
       .await
       .unwrap();
     assert!(received_invitations(&db, invitee).await.unwrap().is_empty());
-    assert!(matches!(accept_invitation(&db, invitee, inv.id).await, Err(ApiError::NotFound)));
+    assert!(matches!(
+      accept_invitation(&db, invitee, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
 
     // Tombstone (C4), even if a row somehow kept the address and a verified mark.
     sqlx::query("UPDATE users SET email_verified_at = now(), deleted_at = now() WHERE id=$1")
@@ -508,7 +583,10 @@ mod invitations_pg {
       .await
       .unwrap();
     assert!(received_invitations(&db, invitee).await.unwrap().is_empty());
-    assert!(matches!(accept_invitation(&db, invitee, inv.id).await, Err(ApiError::NotFound)));
+    assert!(matches!(
+      accept_invitation(&db, invitee, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
     assert_eq!(role_of(&db, ws, invitee).await, None);
 
     // Non-admins cannot invite, list or revoke.
@@ -518,9 +596,18 @@ mod invitations_pg {
       .execute(&db)
       .await
       .unwrap();
-    assert!(matches!(create_invitation(&db, ws, stranger, "x@y.test", "viewer").await, Err(ApiError::Forbidden)));
-    assert!(matches!(list_workspace_invitations(&db, ws, stranger).await, Err(ApiError::Forbidden)));
-    assert!(matches!(revoke_invitation(&db, ws, stranger, inv.id).await, Err(ApiError::Forbidden)));
+    assert!(matches!(
+      create_invitation(&db, ws, stranger, "x@y.test", "viewer").await,
+      Err(ApiError::Forbidden)
+    ));
+    assert!(matches!(
+      list_workspace_invitations(&db, ws, stranger).await,
+      Err(ApiError::Forbidden)
+    ));
+    assert!(matches!(
+      revoke_invitation(&db, ws, stranger, inv.id).await,
+      Err(ApiError::Forbidden)
+    ));
 
     cleanup(&db, &[ws], &[owner, invitee, stranger]).await;
   }
@@ -537,27 +624,48 @@ mod invitations_pg {
     let nobody_email = format!("{}@nobody.test", Uuid::new_v4());
 
     let a = serde_json::to_value(InvitationResponse {
-      invitation: create_invitation(&db, ws, owner, &registered_email, "viewer").await.unwrap(),
+      invitation: create_invitation(&db, ws, owner, &registered_email, "viewer")
+        .await
+        .unwrap(),
     })
     .unwrap();
     let b = serde_json::to_value(InvitationResponse {
-      invitation: create_invitation(&db, ws, owner, &nobody_email, "viewer").await.unwrap(),
+      invitation: create_invitation(&db, ws, owner, &nobody_email, "viewer")
+        .await
+        .unwrap(),
     })
     .unwrap();
     let keys = |v: &serde_json::Value| {
-      let mut k: Vec<String> = v["invitation"].as_object().unwrap().keys().cloned().collect();
+      let mut k: Vec<String> = v["invitation"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
       k.sort();
       k
     };
     assert_eq!(keys(&a), keys(&b));
-    assert!(!a.to_string().contains(&registered.to_string()), "the invitee's user id must not leak");
+    assert!(
+      !a.to_string().contains(&registered.to_string()),
+      "the invitee's user id must not leak"
+    );
     assert_eq!(a["invitation"]["role"], b["invitation"]["role"]);
 
     // Re-inviting updates the role in place (one row per address).
-    create_invitation(&db, ws, owner, &nobody_email, "editor").await.unwrap();
+    create_invitation(&db, ws, owner, &nobody_email, "editor")
+      .await
+      .unwrap();
     let pending = list_workspace_invitations(&db, ws, owner).await.unwrap();
     assert_eq!(pending.len(), 2);
-    assert_eq!(pending.iter().find(|i| i.email == nobody_email).unwrap().role, "editor");
+    assert_eq!(
+      pending
+        .iter()
+        .find(|i| i.email == nobody_email)
+        .unwrap()
+        .role,
+      "editor"
+    );
 
     // The unregistered address registers later and finds the invitation.
     let late = Uuid::new_v4();
@@ -582,20 +690,35 @@ mod invitations_pg {
     let ws = workspace(&db, owner).await;
     let other_ws = workspace(&db, owner).await;
 
-    let inv = create_invitation(&db, ws, owner, &invitee_email, "viewer").await.unwrap();
-    // Revoking through the wrong workspace finds nothing.
-    assert!(matches!(revoke_invitation(&db, other_ws, owner, inv.id).await, Err(ApiError::NotFound)));
-    revoke_invitation(&db, ws, owner, inv.id).await.unwrap();
-    assert!(received_invitations(&db, invitee).await.unwrap().is_empty());
-    assert!(matches!(accept_invitation(&db, invitee, inv.id).await, Err(ApiError::NotFound)));
-
-    create_invitation(&db, ws, owner, &invitee_email, "viewer").await.unwrap();
-    sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(&db).await.unwrap();
-    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM workspace_invitations WHERE workspace_id=$1")
-      .bind(ws)
-      .fetch_one(&db)
+    let inv = create_invitation(&db, ws, owner, &invitee_email, "viewer")
       .await
       .unwrap();
+    // Revoking through the wrong workspace finds nothing.
+    assert!(matches!(
+      revoke_invitation(&db, other_ws, owner, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
+    revoke_invitation(&db, ws, owner, inv.id).await.unwrap();
+    assert!(received_invitations(&db, invitee).await.unwrap().is_empty());
+    assert!(matches!(
+      accept_invitation(&db, invitee, inv.id).await,
+      Err(ApiError::NotFound)
+    ));
+
+    create_invitation(&db, ws, owner, &invitee_email, "viewer")
+      .await
+      .unwrap();
+    sqlx::query("DELETE FROM workspaces WHERE id=$1")
+      .bind(ws)
+      .execute(&db)
+      .await
+      .unwrap();
+    let left: i64 =
+      sqlx::query_scalar("SELECT count(*) FROM workspace_invitations WHERE workspace_id=$1")
+        .bind(ws)
+        .fetch_one(&db)
+        .await
+        .unwrap();
     assert_eq!(left, 0, "deleting the workspace cascades its invitations");
     assert!(received_invitations(&db, invitee).await.unwrap().is_empty());
 

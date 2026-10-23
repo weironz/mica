@@ -1,12 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
-use crate::{Block, DocumentOperationError, DocumentOperationResult, DocumentSnapshotPayload};
-use crate::block_index;
 use crate::block::*;
 use crate::html::*;
 use crate::inline::*;
+use crate::{Block, DocumentOperationError, DocumentOperationResult, DocumentSnapshotPayload};
 
 /// Percent-encode a URL for an href attribute (cmark's houdini set: keep
 /// alphanumerics and `-_.+!*'(),%#@?=;:/,&$~`; encode the rest per UTF-8
@@ -38,25 +37,35 @@ pub(crate) fn escape_html(input: &str) -> String {
   out
 }
 
-
+/// `index` is the id→position map `export_safe_tree` already built for this
+/// snapshot — every child is looked up by id, so threaded through instead of
+/// re-scanned (an O(B) `blocks` scan per lookup made a flat export O(B²)).
 pub(crate) fn append_markdown_children(
   snapshot: &DocumentSnapshotPayload,
+  index: &HashMap<&str, usize>,
   parent_id: &str,
   depth: usize,
   lines: &mut Vec<String>,
   images: &BTreeMap<String, String>,
 ) -> DocumentOperationResult<()> {
-  let parent_index = block_index(snapshot, parent_id)
+  let parent_index = index
+    .get(parent_id)
+    .copied()
     .ok_or_else(|| DocumentOperationError::BlockNotFound(parent_id.to_string()))?;
   let child_ids = snapshot.blocks[parent_index].children.clone();
 
   let is_item = |kind: &str| {
-    matches!(kind, "bulleted_list" | "bullet_list" | "numbered_list" | "number_list" | "todo")
+    matches!(
+      kind,
+      "bulleted_list" | "bullet_list" | "numbered_list" | "number_list" | "todo"
+    )
   };
   let mut prev_was_item = false;
   let mut prev_quote = 0usize;
   for child_id in child_ids {
-    let child_index = block_index(snapshot, &child_id)
+    let child_index = index
+      .get(child_id.as_str())
+      .copied()
       .ok_or_else(|| DocumentOperationError::BlockNotFound(child_id.clone()))?;
     let child = &snapshot.blocks[child_index];
     let quote = quote_depth_of(child);
@@ -87,7 +96,7 @@ pub(crate) fn append_markdown_children(
       lines.push(format!("> [!{}]", a.to_ascii_uppercase()));
     }
     let from = lines.len();
-    append_markdown_block(snapshot, child, depth, lines, images)?;
+    append_markdown_block(snapshot, index, child, depth, lines, images)?;
     if quote > 0 {
       // Re-prefix every emitted line with the quote markers; blanks become
       // bare `>` so paragraph breaks stay inside the quote.
@@ -122,6 +131,7 @@ pub(crate) fn append_markdown_children(
 
 pub(crate) fn append_markdown_block(
   snapshot: &DocumentSnapshotPayload,
+  index: &HashMap<&str, usize>,
   block: &Block,
   depth: usize,
   lines: &mut Vec<String>,
@@ -130,35 +140,35 @@ pub(crate) fn append_markdown_block(
   match block.kind.as_str() {
     "heading" => {
       append_markdown_block_content(block, depth, lines, images);
-      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
+      append_markdown_children(snapshot, index, &block.id, depth, lines, images)?;
     }
     "todo" => {
       append_markdown_block_content(block, depth, lines, images);
-      append_markdown_children(snapshot, &block.id, depth + 1, lines, images)?;
+      append_markdown_children(snapshot, index, &block.id, depth + 1, lines, images)?;
     }
     "bulleted_list" | "bullet_list" => {
       append_markdown_block_content(block, depth, lines, images);
-      append_markdown_children(snapshot, &block.id, depth + 1, lines, images)?;
+      append_markdown_children(snapshot, index, &block.id, depth + 1, lines, images)?;
     }
     "numbered_list" | "number_list" => {
       append_markdown_block_content(block, depth, lines, images);
-      append_markdown_children(snapshot, &block.id, depth + 1, lines, images)?;
+      append_markdown_children(snapshot, index, &block.id, depth + 1, lines, images)?;
     }
     "quote" => {
       append_markdown_block_content(block, depth, lines, images);
-      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
+      append_markdown_children(snapshot, index, &block.id, depth, lines, images)?;
     }
     "code_block" | "code" => {
       append_markdown_block_content(block, depth, lines, images);
-      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
+      append_markdown_children(snapshot, index, &block.id, depth, lines, images)?;
     }
     "image" => {
       append_markdown_block_content(block, depth, lines, images);
-      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
+      append_markdown_children(snapshot, index, &block.id, depth, lines, images)?;
     }
     _ => {
       append_markdown_block_content(block, depth, lines, images);
-      append_markdown_children(snapshot, &block.id, depth, lines, images)?;
+      append_markdown_children(snapshot, index, &block.id, depth, lines, images)?;
     }
   }
 
@@ -168,7 +178,13 @@ pub(crate) fn append_markdown_block(
 /// Emit one list/todo item: a leading blank if the item is loose (so the
 /// list re-imports loose), the marker line, then continuation lines indented
 /// to the item's content column.
-pub(crate) fn push_list_item(lines: &mut Vec<String>, block: &Block, indent: &str, marker: &str, rich: &str) {
+pub(crate) fn push_list_item(
+  lines: &mut Vec<String>,
+  block: &Block,
+  indent: &str,
+  marker: &str,
+  rich: &str,
+) {
   if block_data_bool(block, "loose") {
     lines.push(String::new());
   }
@@ -184,7 +200,10 @@ pub(crate) fn push_list_item(lines: &mut Vec<String>, block: &Block, indent: &st
       // export(import(md)) stopped parsing to the blocks it came from. The
       // paragraph path has escaped its leader all along (that is how the `===`
       // setext drift was fixed); item continuations never did.
-      lines.push(format!("{indent}{pad}{}", escape_block_leader(l.to_string())));
+      lines.push(format!(
+        "{indent}{pad}{}",
+        escape_block_leader(l.to_string())
+      ));
     }
   }
 }
@@ -200,7 +219,10 @@ pub(crate) fn append_markdown_block_content(
   // keep the children-tree depth indent. `list_indent` applies the same 0..=8
   // cap the Dart editor uses, so both engines indent identically (P1-4).
   let level = list_indent(block);
-  let indent = if matches!(block.kind.as_str(), "bulleted_list" | "bullet_list" | "numbered_list" | "number_list" | "todo") {
+  let indent = if matches!(
+    block.kind.as_str(),
+    "bulleted_list" | "bullet_list" | "numbered_list" | "number_list" | "todo"
+  ) {
     "    ".repeat(level)
   } else {
     "  ".repeat(depth)
@@ -277,7 +299,10 @@ pub(crate) fn append_markdown_block_content(
       // Keep an empty alt empty — `![](url)` must round-trip unchanged.
       let text = escape_inline(text);
       match block_data_str(block, "title") {
-        Some(t) => lines.push(format!("![{text}]({target} \"{}\")", t.replace('"', "\\\""))),
+        Some(t) => lines.push(format!(
+          "![{text}]({target} \"{}\")",
+          t.replace('"', "\\\"")
+        )),
         None => lines.push(format!("![{text}]({target})")),
       }
       lines.push(String::new());
@@ -323,7 +348,6 @@ pub(crate) fn append_markdown_block_content(
   }
 }
 
-
 /// Encode a table cell from its raw inline-Markdown source into the unified
 /// stored form: a cell with inline marks becomes `{"text","marks"}` (matching
 /// paragraphs); a mark-free cell stays the plain source string (keeps simple
@@ -345,7 +369,11 @@ pub(crate) fn decode_table_cell(cell: &Value) -> (String, Value) {
   match cell {
     Value::String(s) => apply_inline_marks(s.clone(), Value::Null, &RefDefs::new()),
     Value::Object(map) => {
-      let text = map.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+      let text = map
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
       let mut data = serde_json::Map::new();
       if let Some(marks) = map.get("marks")
         && marks.as_array().is_some_and(|a| !a.is_empty())
@@ -370,7 +398,10 @@ pub(crate) fn table_cell_markdown(cell: &Value) -> String {
     data,
     children: Vec::new(),
   });
-  md.replace('|', "\\|").replace('\n', "<br>").trim().to_string()
+  md.replace('|', "\\|")
+    .replace('\n', "<br>")
+    .trim()
+    .to_string()
 }
 
 pub(crate) fn append_table_markdown(block: &Block, lines: &mut Vec<String>) {
@@ -440,7 +471,3 @@ pub(crate) fn block_data_bool(block: &Block, key: &str) -> bool {
     .and_then(Value::as_bool)
     .unwrap_or(false)
 }
-
-
-
-

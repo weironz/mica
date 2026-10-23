@@ -21,5 +21,9 @@ fn an_unopened_tilde_run_stays_literal() {
 fn matched_runs_still_strike() {
   assert_eq!(html("~~a~~"), "<p><del>a</del></p>");
   assert_eq!(html("~a~"), "<p><del>a</del></p>");
-  assert_eq!(html("1~2 and 3~4"), "<p>1~2 and 3~4</p>", "intraword single tildes stay literal");
+  assert_eq!(
+    html("1~2 and 3~4"),
+    "<p>1~2 and 3~4</p>",
+    "intraword single tildes stay literal"
+  );
 }

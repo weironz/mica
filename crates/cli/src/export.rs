@@ -947,7 +947,10 @@ mod tests {
       (0, 2, 0)
     );
     assert_eq!(server.page_requests(), 2);
-    assert_eq!(fs::read(args.out.join("_pgdump/mica.sql")).unwrap(), b"previous complete dump");
+    assert_eq!(
+      fs::read(args.out.join("_pgdump/mica.sql")).unwrap(),
+      b"previous complete dump"
+    );
     {
       let mut state = server.remote.lock().unwrap();
       state.inventories.insert(

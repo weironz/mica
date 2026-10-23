@@ -10,6 +10,7 @@ import 'model.dart';
 import 'operation_history.dart';
 import 'selection_reconcile.dart';
 import 'table.dart';
+import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
 export 'operation_history.dart'
     show ApplyHistory, EditorHistoryState, HistoryAction;
@@ -376,8 +377,8 @@ class EditorController extends ChangeNotifier {
     if (old != text) {
       final marks = marksFromData(node.data);
       if (marks.isNotEmpty) {
-        var prefix = _commonPrefix(old, text);
-        var oldEnd = old.length - _commonSuffix(old, text, prefix);
+        var prefix = commonPrefix(old, text);
+        var oldEnd = old.length - commonSuffix(old, text, prefix);
         // The naive diff is ambiguous when removed text repeats its neighbors
         // (deleting a linked "AA" before another "A" aligns on the wrong "A").
         // The edit must cover the previous ranged selection — widen to it so
@@ -580,25 +581,6 @@ class EditorController extends ChangeNotifier {
       },
     ]);
     notifyListeners();
-  }
-
-  int _commonPrefix(String a, String b) {
-    final n = a.length < b.length ? a.length : b.length;
-    var i = 0;
-    while (i < n && a.codeUnitAt(i) == b.codeUnitAt(i)) {
-      i++;
-    }
-    return i;
-  }
-
-  int _commonSuffix(String a, String b, int prefix) {
-    final max = (a.length < b.length ? a.length : b.length) - prefix;
-    var i = 0;
-    while (i < max &&
-        a.codeUnitAt(a.length - 1 - i) == b.codeUnitAt(b.length - 1 - i)) {
-      i++;
-    }
-    return i;
   }
 
   void _markDirty(String id) {

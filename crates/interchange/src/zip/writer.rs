@@ -62,7 +62,13 @@ impl Default for ZipStreamWriter {
 
 impl ZipStreamWriter {
   fn with_limits(size_limit: u64, count_limit: u64) -> Self {
-    Self { size_limit, count_limit, written: 0, central: Vec::new(), any_zip64: false }
+    Self {
+      size_limit,
+      count_limit,
+      written: 0,
+      central: Vec::new(),
+      any_zip64: false,
+    }
   }
 
   /// The local header for one entry. Emit it, then `data` itself, before the
@@ -96,7 +102,12 @@ impl ZipStreamWriter {
       out.extend_from_slice(&size.to_le_bytes()); // uncompressed
       out.extend_from_slice(&size.to_le_bytes()); // compressed
     }
-    self.central.push(CentralRecord { name: name.to_string(), crc, size, offset: self.written });
+    self.central.push(CentralRecord {
+      name: name.to_string(),
+      crc,
+      size,
+      offset: self.written,
+    });
     self.written += out.len() as u64 + size;
     out
   }
@@ -224,12 +235,24 @@ mod tests {
   #[test]
   fn zip64_layout_round_trips_through_the_reader() {
     let entries = vec![
-      ZipEntry { name: "a.md".to_string(), data: vec![b'a'; 300] },
-      ZipEntry { name: "图/b.png".to_string(), data: vec![7; 10] },
-      ZipEntry { name: "c.txt".to_string(), data: b"tail".to_vec() },
+      ZipEntry {
+        name: "a.md".to_string(),
+        data: vec![b'a'; 300],
+      },
+      ZipEntry {
+        name: "图/b.png".to_string(),
+        data: vec![7; 10],
+      },
+      ZipEntry {
+        name: "c.txt".to_string(),
+        data: b"tail".to_vec(),
+      },
     ];
     let zip = build_zip_with_limit(&entries, 100, 2);
-    assert!(zip.windows(4).any(|w| w == 0x0606_4b50u32.to_le_bytes()), "zip64 EOCD present");
+    assert!(
+      zip.windows(4).any(|w| w == 0x0606_4b50u32.to_le_bytes()),
+      "zip64 EOCD present"
+    );
     let back = crate::zip::read_zip(&zip);
     let got: Vec<(String, Vec<u8>)> = back.into_iter().map(|e| (e.name, e.bytes)).collect();
     let want: Vec<(String, Vec<u8>)> = entries.into_iter().map(|e| (e.name, e.data)).collect();
@@ -239,7 +262,10 @@ mod tests {
   /// Below the limits nothing changes byte-wise (the golden fixtures depend on it).
   #[test]
   fn small_archives_keep_the_classic_layout() {
-    let zip = build_zip(&[ZipEntry { name: "a.txt".to_string(), data: b"hi".to_vec() }]);
+    let zip = build_zip(&[ZipEntry {
+      name: "a.txt".to_string(),
+      data: b"hi".to_vec(),
+    }]);
     assert!(!zip.windows(4).any(|w| w == 0x0606_4b50u32.to_le_bytes()));
   }
 
@@ -251,9 +277,7 @@ mod tests {
     }]);
     assert_eq!(&zip[0..4], &0x0403_4b50u32.to_le_bytes()); // local header
     // EOCD signature near the end.
-    assert!(zip
-      .windows(4)
-      .any(|w| w == 0x0605_4b50u32.to_le_bytes()));
+    assert!(zip.windows(4).any(|w| w == 0x0605_4b50u32.to_le_bytes()));
   }
 }
 
@@ -269,12 +293,39 @@ mod byte_pins {
     h
   }
   fn cases() -> Vec<(Vec<ZipEntry>, u64, u64)> {
-    let mk = |n: &str, d: Vec<u8>| ZipEntry { name: n.to_string(), data: d };
+    let mk = |n: &str, d: Vec<u8>| ZipEntry {
+      name: n.to_string(),
+      data: d,
+    };
     vec![
-      (vec![mk("a.txt", b"hi".to_vec())], u64::from(u32::MAX), u64::from(u16::MAX)),
-      (vec![mk("a.md", vec![b'a'; 300]), mk("图/b.png", vec![7; 10]), mk("c.txt", b"tail".to_vec())], 100, 2),
-      (vec![mk("x", vec![1; 50]), mk("y", vec![2; 60]), mk("z", vec![3; 5])], 100, 100),
-      (vec![mk("1", vec![]), mk("2", vec![9]), mk("3", vec![8; 3])], 1000, 3),
+      (
+        vec![mk("a.txt", b"hi".to_vec())],
+        u64::from(u32::MAX),
+        u64::from(u16::MAX),
+      ),
+      (
+        vec![
+          mk("a.md", vec![b'a'; 300]),
+          mk("图/b.png", vec![7; 10]),
+          mk("c.txt", b"tail".to_vec()),
+        ],
+        100,
+        2,
+      ),
+      (
+        vec![
+          mk("x", vec![1; 50]),
+          mk("y", vec![2; 60]),
+          mk("z", vec![3; 5]),
+        ],
+        100,
+        100,
+      ),
+      (
+        vec![mk("1", vec![]), mk("2", vec![9]), mk("3", vec![8; 3])],
+        1000,
+        3,
+      ),
     ]
   }
   /// D3: the streaming rewrite must not move a byte. These fingerprints were
@@ -282,7 +333,12 @@ mod byte_pins {
   /// ZIP64 triggers (entry size, offset, entry count).
   #[test]
   fn streaming_writer_is_byte_identical_to_the_old_one() {
-    let pins = [0x82b7_7c20_e15a_55ca_u64, 0x8031_7b83_ca95_a5c4, 0xbb20_86ae_9ea2_4591, 0x9040_327f_9705_7508];
+    let pins = [
+      0x82b7_7c20_e15a_55ca_u64,
+      0x8031_7b83_ca95_a5c4,
+      0xbb20_86ae_9ea2_4591,
+      0x9040_327f_9705_7508,
+    ];
     for ((e, s, c), pin) in cases().into_iter().zip(pins) {
       assert_eq!(fnv(&build_zip_with_limit(&e, s, c)), pin);
     }

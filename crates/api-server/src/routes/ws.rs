@@ -12,7 +12,6 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use mica_app_core::{
   AppState, PresenceEntry, Room,
-  documents::DocumentOperation,
   store::{self, AppliedUpdate},
   sync,
 };
@@ -22,7 +21,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
-use crate::routes::auth::{SESSION_COOKIE, bearer_token, cookie_value, session_from_token};
+use crate::routes::auth::{session_from_token, token_from_request};
 use crate::routes::documents::{
   DocumentPermissions, ensure_workspace_member, permissions_for_role, workspace_role,
 };
@@ -84,11 +83,6 @@ struct ClientEnvelope {
   payload: Value,
 }
 
-#[derive(Debug, Deserialize)]
-struct UpdatePayload {
-  operations: Vec<DocumentOperation>,
-}
-
 /// `GET /ws/workspaces/{workspace_id}/documents/{document_id}`
 ///
 /// Authenticates the upgrade request (see [`token_from_request`] for the three
@@ -118,7 +112,7 @@ pub async fn document_socket(
     return Err(ApiError::Forbidden);
   }
 
-  let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
+  let token = token_from_request(&headers, query.token.as_deref()).ok_or(ApiError::Unauthorized)?;
   let (user_id, token_exp) = session_from_token(&state, &token)?;
   if client_protocol < WS_PROTOCOL_VERSION {
     // The signal that decides when the floor can be raised. Logged only for
@@ -131,7 +125,8 @@ pub async fn document_socket(
     );
   }
 
-  ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  // One membership query, not two: `ensure_workspace_member` is this same
+  // SELECT with the role discarded, and "not a member" is NotFound either way.
   let role = workspace_role(&state.db, workspace_id, user_id)
     .await?
     .ok_or(ApiError::NotFound)?;
@@ -179,14 +174,11 @@ pub async fn views_socket(
   if !crate::origin::origin_allowed(&state.config, &headers) {
     return Err(ApiError::Forbidden);
   }
-  let token = token_from_request(&headers, &query).ok_or(ApiError::Unauthorized)?;
+  let token = token_from_request(&headers, query.token.as_deref()).ok_or(ApiError::Unauthorized)?;
   let (user_id, token_exp) = session_from_token(&state, &token)?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
-  Ok(
-    upgrade
-      .on_upgrade(move |socket| run_views_connection(socket, state, workspace_id, token_exp)),
-  )
+  Ok(upgrade.on_upgrade(move |socket| run_views_connection(socket, state, workspace_id, token_exp)))
 }
 
 async fn run_views_connection(
@@ -202,9 +194,8 @@ async fn run_views_connection(
   // Same deadline rule as the document socket: the socket outlives the token
   // check that let it in, so it carries the token's own expiry. Without it a
   // revoked member would keep learning that a workspace they lost is changing.
-  let expiry = tokio::time::sleep(
-    time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO),
-  );
+  let expiry =
+    tokio::time::sleep(time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO));
   tokio::pin!(expiry);
 
   loop {
@@ -291,9 +282,11 @@ pub async fn views_change_listener(state: AppState) {
     }
 
     for workspace_id in state.views_hub.active_ids() {
-      state
-        .views_hub
-        .broadcast_if_active(workspace_id, Uuid::nil(), Arc::from(VIEWS_CHANGED_EVENT));
+      state.views_hub.broadcast_if_active(
+        workspace_id,
+        Uuid::nil(),
+        Arc::from(VIEWS_CHANGED_EVENT),
+      );
     }
 
     loop {
@@ -306,9 +299,11 @@ pub async fn views_change_listener(state: AppState) {
             );
             continue;
           };
-          state
-            .views_hub
-            .broadcast_if_active(workspace_id, Uuid::nil(), Arc::from(VIEWS_CHANGED_EVENT));
+          state.views_hub.broadcast_if_active(
+            workspace_id,
+            Uuid::nil(),
+            Arc::from(VIEWS_CHANGED_EVENT),
+          );
         }
         Err(error) => {
           tracing::warn!(%error, "views-change listener: connection lost; reconnecting");
@@ -359,36 +354,12 @@ fn check_protocol(announced: Option<u32>, floor: u32) -> ApiResult<u32> {
   if client_protocol < floor {
     return Err(ApiError::BadRequestCode(
       "client_too_old",
-      format!("client speaks sync protocol {client_protocol}; this server requires at least {floor}"),
+      format!(
+        "client speaks sync protocol {client_protocol}; this server requires at least {floor}"
+      ),
     ));
   }
   Ok(client_protocol)
-}
-
-/// Three sources, in descending order of how deliberate they are.
-///
-/// 1. `Authorization: Bearer` — desktop. An explicit header is an explicit act.
-/// 2. The session **cookie** — web. The WS handshake is an ordinary HTTP
-///    request, so the browser attaches it by itself. This is what lets the web
-///    client stop putting a JWT in the URL: "browsers cannot authenticate a
-///    WebSocket" is only true of custom headers, and taking it as true of
-///    cookies too is what kept the token in the query string for so long.
-/// 3. `?token=` — the compatibility tail. Still read so an older web build (and
-///    any non-browser client) keeps working; it is no longer written by ours.
-fn token_from_request(headers: &HeaderMap, query: &ConnectQuery) -> Option<String> {
-  if let Some(token) = bearer_token(headers) {
-    return Some(token);
-  }
-
-  if let Some(token) = cookie_value(headers, SESSION_COOKIE) {
-    return Some(token);
-  }
-
-  query
-    .token
-    .as_ref()
-    .map(|token| token.trim().to_string())
-    .filter(|token| !token.is_empty())
 }
 
 async fn run_connection(
@@ -426,9 +397,8 @@ async fn run_connection(
   // The socket outlives the token check that let it in, so it carries its own
   // deadline. Armed once: `sleep` is not reset by traffic, which is the point —
   // a busy socket must not be able to hold an expired session open forever.
-  let expiry = tokio::time::sleep(
-    time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO),
-  );
+  let expiry =
+    tokio::time::sleep(time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO));
   tokio::pin!(expiry);
   // Broadcast fan-out never consults the database, so without this a member
   // removed from the workspace kept RECEIVING every live edit on an open
@@ -628,8 +598,6 @@ async fn handle_client_message(
   match envelope.kind.as_str() {
     "ping" => vec![json!({ "type": "pong" }).to_string()],
     "presence.update" => handle_presence_update(&ctx, envelope.payload),
-    "document.update" => handle_document_update(&ctx, ack_id, envelope.payload).await,
-    // ── yrs CRDT sync (P2-M4), parallel to the op path above ───────────────
     "sync.bootstrap" => handle_sync_bootstrap(&ctx, ack_id, &envelope.payload).await,
     "sync.pull" => handle_sync_pull(&ctx, ack_id, &envelope.payload).await,
     "sync.push" => handle_sync_push(&ctx, ack_id, envelope.payload).await,
@@ -648,7 +616,11 @@ const MAX_PRESENCE_BYTES: usize = 4096;
 
 fn handle_presence_update(ctx: &ClientCtx<'_>, payload: Value) -> Vec<String> {
   if payload.to_string().len() > MAX_PRESENCE_BYTES {
-    return vec![error_message(None, "invalid_payload", "presence payload too large")];
+    return vec![error_message(
+      None,
+      "invalid_payload",
+      "presence payload too large",
+    )];
   }
   // Over budget: dropped silently. It shares the channel with CRDT updates,
   // so a flood would push those out of every peer's receiver.
@@ -667,7 +639,8 @@ fn handle_presence_update(ctx: &ClientCtx<'_>, payload: Value) -> Vec<String> {
     "user_id": ctx.user_id,
     "data": payload,
   });
-  ctx.room
+  ctx
+    .room
     .broadcast(ctx.connection_id, Arc::from(event.to_string()));
   Vec::new()
 }
@@ -675,8 +648,8 @@ fn handle_presence_update(ctx: &ClientCtx<'_>, payload: Value) -> Vec<String> {
 /// Re-read the role rather than trusting the connection's copy: a socket
 /// outlives the membership it was opened under, so a member removed (or
 /// demoted) mid-session would otherwise keep writing until the token expired.
-/// `None` = no longer a member at all. Shared by `document.update` and
-/// `sync.push` — the collaborative keystroke path deserves the same re-check.
+/// `None` = no longer a member at all. Shared by every sync handler — the
+/// collaborative keystroke path deserves the same re-check.
 async fn require_write_access(
   ctx: &ClientCtx<'_>,
   ack_id: Option<&str>,
@@ -693,62 +666,6 @@ async fn require_write_access(
       error_code(&error),
       &error.public_message(),
     )]),
-  }
-}
-
-async fn handle_document_update(
-  ctx: &ClientCtx<'_>,
-  ack_id: Option<&str>,
-  payload_json: Value,
-) -> Vec<String> {
-  let live = match require_write_access(ctx, ack_id).await {
-    Ok(permissions) => permissions,
-    Err(reply) => return reply,
-  };
-  if !live.can_write {
-    return vec![error_message(
-      ack_id,
-      "permission_denied",
-      "you do not have permission to edit this document",
-    )];
-  }
-
-  let payload = match serde_json::from_value::<UpdatePayload>(payload_json) {
-    Ok(payload) => payload,
-    Err(error) => {
-      return vec![error_message(
-        ack_id,
-        "invalid_payload",
-        &format!("invalid update payload: {error}"),
-      )];
-    }
-  };
-  if payload.operations.is_empty() {
-    return vec![error_message(
-      ack_id,
-      "invalid_payload",
-      "at least one operation is required",
-    )];
-  }
-
-  match store::apply_document_operations(
-    &ctx.state.db,
-    ctx.workspace_id,
-    ctx.document_id,
-    ctx.user_id,
-    &payload.operations,
-  )
-  .await
-  {
-    Ok(applied) => {
-      // Fan out to the rest of the room, then ack the originator directly.
-      ctx.room.broadcast(
-        ctx.connection_id,
-        Arc::from(accepted_event(&applied, None).to_string()),
-      );
-      vec![accepted_event(&applied, ack_id).to_string()]
-    }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
   }
 }
 
@@ -770,8 +687,17 @@ async fn handle_sync_bootstrap(
   }
   let client_sv = client_sv(payload);
   match sync::bootstrap_base(&ctx.state.db, ctx.document_id).await {
-    Ok(base) => vec![base_message(&base, client_sv.as_deref(), ack_id, ctx.document_id)],
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
+    Ok(base) => vec![base_message(
+      &base,
+      client_sv.as_deref(),
+      ack_id,
+      ctx.document_id,
+    )],
+    Err(error) => vec![error_message(
+      ack_id,
+      error_code(&error),
+      &error.public_message(),
+    )],
   }
 }
 
@@ -786,7 +712,10 @@ async fn handle_sync_pull(
   if let Err(reply) = require_write_access(ctx, ack_id).await {
     return reply;
   }
-  let since_rid = payload.get("since_rid").and_then(Value::as_i64).unwrap_or(0);
+  let since_rid = payload
+    .get("since_rid")
+    .and_then(Value::as_i64)
+    .unwrap_or(0);
   // P4-3: the optional client state vector turns a prune-forced re-bootstrap
   // into a minimal diff instead of a full-doc download.
   let client_sv = client_sv(payload);
@@ -794,7 +723,12 @@ async fn handle_sync_pull(
   match sync::catch_up_document(&ctx.state.db, ctx.document_id, since_rid, limit).await {
     // Cursor fell behind the pruned window → re-bootstrap from the base.
     Ok(sync::CatchUp::Rebootstrap(base)) => {
-      vec![base_message(&base, client_sv.as_deref(), ack_id, ctx.document_id)]
+      vec![base_message(
+        &base,
+        client_sv.as_deref(),
+        ack_id,
+        ctx.document_id,
+      )]
     }
     Ok(sync::CatchUp::Updates(updates)) => {
       let head = updates.last().map(|u| u.rid).unwrap_or(since_rid);
@@ -819,7 +753,11 @@ async fn handle_sync_pull(
         .to_string(),
       ]
     }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
+    Err(error) => vec![error_message(
+      ack_id,
+      error_code(&error),
+      &error.public_message(),
+    )],
   }
 }
 
@@ -852,7 +790,11 @@ async fn handle_sync_push(
   let update = match STANDARD.decode(update_b64.as_bytes()) {
     Ok(bytes) => bytes,
     Err(_) => {
-      return vec![error_message(ack_id, "invalid_payload", "update is not valid base64")];
+      return vec![error_message(
+        ack_id,
+        "invalid_payload",
+        "update is not valid base64",
+      )];
     }
   };
   // Timed as a whole: the round trip decodes and re-encodes the entire
@@ -893,9 +835,18 @@ async fn handle_sync_push(
       ctx
         .room
         .broadcast(ctx.connection_id, Arc::from(event.to_string()));
-      vec![ack_message(ack_id, ctx.document_id, rid, missing_sv.as_deref())]
+      vec![ack_message(
+        ack_id,
+        ctx.document_id,
+        rid,
+        missing_sv.as_deref(),
+      )]
     }
-    Err(error) => vec![error_message(ack_id, error_code(&error), &error.public_message())],
+    Err(error) => vec![error_message(
+      ack_id,
+      error_code(&error),
+      &error.public_message(),
+    )],
   }
 }
 
@@ -956,7 +907,12 @@ fn client_sv(payload: &Value) -> Option<Vec<u8>> {
 /// depends on history the server lacks), `missing` + `sv` ask the pusher for
 /// its diff against the server's state vector — it built the update on that
 /// history, so it holds it. Additive: an old client ignores both fields.
-fn ack_message(ack_id: Option<&str>, document_id: Uuid, rid: i64, missing_sv: Option<&[u8]>) -> String {
+fn ack_message(
+  ack_id: Option<&str>,
+  document_id: Uuid,
+  rid: i64,
+  missing_sv: Option<&[u8]>,
+) -> String {
   let mut ack = json!({
     "type": "sync.ack",
     "ack_id": ack_id,
@@ -1039,6 +995,7 @@ async fn send_all(socket: &mut WebSocket, messages: Vec<String>) -> Result<(), (
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::routes::auth::SESSION_COOKIE;
   use axum::http::header::{AUTHORIZATION, COOKIE};
   use chrono::Utc;
   use mica_app_core::store::{self, DocumentRecord};
@@ -1047,9 +1004,17 @@ mod tests {
   /// Operators may explicitly set the floor to 0 for legacy compatibility.
   #[test]
   fn an_explicit_zero_floor_rejects_nobody() {
-    assert_eq!(check_protocol(None, 0).unwrap(), 0, "a pre-parameter client");
+    assert_eq!(
+      check_protocol(None, 0).unwrap(),
+      0,
+      "a pre-parameter client"
+    );
     assert_eq!(check_protocol(Some(1), 0).unwrap(), 1);
-    assert_eq!(check_protocol(Some(99), 0).unwrap(), 99, "a client newer than us");
+    assert_eq!(
+      check_protocol(Some(99), 0).unwrap(),
+      99,
+      "a client newer than us"
+    );
   }
 
   /// Once the floor is raised (op-model retirement S4 removes the REST fallback
@@ -1063,7 +1028,10 @@ mod tests {
       ApiError::BadRequestCode(code, _) => assert_eq!(code, "client_too_old"),
       other => panic!("expected a machine code the client can branch on, got {other:?}"),
     }
-    assert!(check_protocol(Some(1), 1).is_ok(), "exactly at the floor is fine");
+    assert!(
+      check_protocol(Some(1), 1).is_ok(),
+      "exactly at the floor is fine"
+    );
   }
 
   /// A socket authenticates ONCE, at the upgrade, and then lives as long as it
@@ -1183,10 +1151,7 @@ mod tests {
   fn client_sv_decodes_base64_and_rejects_garbage() {
     use base64::Engine;
     let sv = STANDARD.encode([1u8, 2, 3]);
-    assert_eq!(
-      client_sv(&json!({ "sv": sv })),
-      Some(vec![1u8, 2, 3])
-    );
+    assert_eq!(client_sv(&json!({ "sv": sv })), Some(vec![1u8, 2, 3]));
     // Absent / non-string / non-base64 → None (full-base path).
     assert_eq!(client_sv(&json!({})), None);
     assert_eq!(client_sv(&json!({ "sv": 5 })), None);
@@ -1211,8 +1176,7 @@ mod tests {
     let doc_id = Uuid::from_u128(1);
 
     // No sv → full base, delta=false, base bytes are the full state.
-    let full: Value =
-      serde_json::from_str(&base_message(&base, None, Some("c1"), doc_id)).unwrap();
+    let full: Value = serde_json::from_str(&base_message(&base, None, Some("c1"), doc_id)).unwrap();
     assert_eq!(full["type"], "sync.base");
     assert_eq!(full["delta"], false);
     assert_eq!(full["base_rid"], 7);
@@ -1228,7 +1192,8 @@ mod tests {
       serde_json::from_str(&base_message(&base, Some(&empty_sv), None, doc_id)).unwrap();
     assert_eq!(delta["delta"], true);
     let delta_bytes = STANDARD.decode(delta["base"].as_str().unwrap()).unwrap();
-    let mut applied = MicaDoc::from_update(&empty_sv).unwrap_or_else(|_| MicaDoc::from_blocks("r", &[]));
+    let mut applied =
+      MicaDoc::from_update(&empty_sv).unwrap_or_else(|_| MicaDoc::from_blocks("r", &[]));
     applied.apply_update(&delta_bytes).unwrap();
     assert_eq!(applied.to_blocks(), doc.to_blocks());
 
@@ -1241,20 +1206,32 @@ mod tests {
     assert!(warm_bytes.len() < base.state.len());
 
     // Garbage sv → diff_from_base returns None → full-base fallback (delta=false).
-    let bad: Value =
-      serde_json::from_str(&base_message(&base, Some(b"not a state vector"), None, doc_id))
-        .unwrap();
+    let bad: Value = serde_json::from_str(&base_message(
+      &base,
+      Some(b"not a state vector"),
+      None,
+      doc_id,
+    ))
+    .unwrap();
     assert_eq!(bad["delta"], false);
 
     // B11: the server's vector always rides along; `ahead` only when the client
     // holds insertions the base never received.
-    assert_eq!(STANDARD.decode(full["sv"].as_str().unwrap()).unwrap(), base.state_vector);
+    assert_eq!(
+      STANDARD.decode(full["sv"].as_str().unwrap()).unwrap(),
+      base.state_vector
+    );
     assert_eq!(full["ahead"], false);
     assert_eq!(warm["ahead"], false);
     let mut edited = MicaDoc::from_update(&base.state).unwrap();
     edited.text_insert("a", 0, "oh ");
-    let ahead: Value =
-      serde_json::from_str(&base_message(&base, Some(&edited.state_vector()), None, doc_id)).unwrap();
+    let ahead: Value = serde_json::from_str(&base_message(
+      &base,
+      Some(&edited.state_vector()),
+      None,
+      doc_id,
+    ))
+    .unwrap();
     assert_eq!(ahead["ahead"], true);
   }
 
@@ -1264,7 +1241,10 @@ mod tests {
   fn ack_asks_for_history_only_when_missing() {
     let doc_id = Uuid::from_u128(1);
     let plain: Value = serde_json::from_str(&ack_message(Some("3"), doc_id, 9, None)).unwrap();
-    assert_eq!(plain, json!({"type":"sync.ack","ack_id":"3","document_id":doc_id,"rid":9}));
+    assert_eq!(
+      plain,
+      json!({"type":"sync.ack","ack_id":"3","document_id":doc_id,"rid":9})
+    );
     let asking: Value =
       serde_json::from_str(&ack_message(Some("3"), doc_id, 9, Some(&[1, 2]))).unwrap();
     assert_eq!(asking["missing"], true);
@@ -1283,9 +1263,12 @@ mod tests {
         .parse()
         .unwrap(),
     );
-    let query = ConnectQuery { token: None, v: None };
+    let query = ConnectQuery {
+      token: None,
+      v: None,
+    };
     assert_eq!(
-      token_from_request(&headers, &query),
+      token_from_request(&headers, query.token.as_deref()),
       Some("cookie-token".to_string())
     );
   }
@@ -1301,9 +1284,12 @@ mod tests {
       COOKIE,
       format!("{SESSION_COOKIE}=cookie-token").parse().unwrap(),
     );
-    let query = ConnectQuery { token: None, v: None };
+    let query = ConnectQuery {
+      token: None,
+      v: None,
+    };
     assert_eq!(
-      token_from_request(&headers, &query),
+      token_from_request(&headers, query.token.as_deref()),
       Some("header-token".to_string())
     );
   }
@@ -1322,7 +1308,7 @@ mod tests {
       v: None,
     };
     assert_eq!(
-      token_from_request(&headers, &query),
+      token_from_request(&headers, query.token.as_deref()),
       Some("cookie-token".to_string())
     );
   }
@@ -1334,8 +1320,11 @@ mod tests {
   fn an_unrelated_cookie_jar_yields_nothing() {
     let mut headers = HeaderMap::new();
     headers.insert(COOKIE, "theme=dark; locale=zh".parse().unwrap());
-    let query = ConnectQuery { token: None, v: None };
-    assert_eq!(token_from_request(&headers, &query), None);
+    let query = ConnectQuery {
+      token: None,
+      v: None,
+    };
+    assert_eq!(token_from_request(&headers, query.token.as_deref()), None);
   }
 
   #[test]
@@ -1347,7 +1336,7 @@ mod tests {
       v: None,
     };
     assert_eq!(
-      token_from_request(&headers, &query),
+      token_from_request(&headers, query.token.as_deref()),
       Some("header-token".to_string())
     );
   }
@@ -1360,7 +1349,7 @@ mod tests {
       v: None,
     };
     assert_eq!(
-      token_from_request(&headers, &query),
+      token_from_request(&headers, query.token.as_deref()),
       Some("query-token".to_string())
     );
   }
@@ -1368,8 +1357,11 @@ mod tests {
   #[test]
   fn token_missing_is_none() {
     let headers = HeaderMap::new();
-    let query = ConnectQuery { token: None, v: None };
-    assert_eq!(token_from_request(&headers, &query), None);
+    let query = ConnectQuery {
+      token: None,
+      v: None,
+    };
+    assert_eq!(token_from_request(&headers, query.token.as_deref()), None);
   }
 
   #[test]
@@ -1448,9 +1440,17 @@ mod tests {
     }
 
     async fn cleanup(db: &PgPool, ws: Uuid, owner: Uuid, member: Uuid) {
-      sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(ws).execute(db).await.ok();
+      sqlx::query("DELETE FROM workspaces WHERE id=$1")
+        .bind(ws)
+        .execute(db)
+        .await
+        .ok();
       for u in [owner, member] {
-        sqlx::query("DELETE FROM users WHERE id=$1").bind(u).execute(db).await.ok();
+        sqlx::query("DELETE FROM users WHERE id=$1")
+          .bind(u)
+          .execute(db)
+          .await
+          .ok();
       }
     }
 
@@ -1469,12 +1469,14 @@ mod tests {
       );
 
       // Demoted while the socket is open. Nothing tells the socket.
-      sqlx::query("UPDATE workspace_members SET role = 'viewer' WHERE workspace_id=$1 AND user_id=$2")
-        .bind(ws)
-        .bind(member)
-        .execute(&db)
-        .await
-        .unwrap();
+      sqlx::query(
+        "UPDATE workspace_members SET role = 'viewer' WHERE workspace_id=$1 AND user_id=$2",
+      )
+      .bind(ws)
+      .bind(member)
+      .execute(&db)
+      .await
+      .unwrap();
 
       let after = current_write_permissions(&db, ws, member).await.unwrap();
       assert!(
@@ -1491,7 +1493,10 @@ mod tests {
         .await
         .unwrap();
       assert!(
-        current_write_permissions(&db, ws, member).await.unwrap().is_none(),
+        current_write_permissions(&db, ws, member)
+          .await
+          .unwrap()
+          .is_none(),
         "a removed member reads as None, not as a stale role"
       );
 
@@ -1514,12 +1519,14 @@ mod tests {
         "a viewer starts read-only"
       );
 
-      sqlx::query("UPDATE workspace_members SET role = 'editor' WHERE workspace_id=$1 AND user_id=$2")
-        .bind(ws)
-        .bind(member)
-        .execute(&db)
-        .await
-        .unwrap();
+      sqlx::query(
+        "UPDATE workspace_members SET role = 'editor' WHERE workspace_id=$1 AND user_id=$2",
+      )
+      .bind(ws)
+      .bind(member)
+      .execute(&db)
+      .await
+      .unwrap();
 
       assert!(
         current_write_permissions(&db, ws, member)

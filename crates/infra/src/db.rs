@@ -50,47 +50,49 @@ pub async fn ping_pg_pool(pool: &PgPool) -> Result<(), sqlx::Error> {
 /// value rather than overwriting it — which would have invalidated the tokens
 /// the winner had already signed.
 pub async fn ensure_jwt_secret(db: &PgPool, configured: &str) -> Result<String, sqlx::Error> {
-    if !configured.trim().is_empty() {
-        return Ok(configured.to_string());
-    }
-    if let Some(found) = read_secret(db, JWT_SECRET_NAME).await? {
-        return Ok(found);
-    }
-    let minted = random_hex_32();
-    sqlx::query("INSERT INTO server_secrets(name, value) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING")
-        .bind(JWT_SECRET_NAME)
-        .bind(&minted)
-        .execute(db)
-        .await?;
-    // Re-read rather than returning `minted`: if a concurrent boot won the
-    // insert, the row holds THEIR value and ours was discarded.
-    let stored = read_secret(db, JWT_SECRET_NAME)
-        .await?
-        .unwrap_or_else(|| minted.clone());
-    if stored == minted {
-        tracing::info!(
-            "no JWT_SECRET configured — minted one for this instance and stored it \
+  if !configured.trim().is_empty() {
+    return Ok(configured.to_string());
+  }
+  if let Some(found) = read_secret(db, JWT_SECRET_NAME).await? {
+    return Ok(found);
+  }
+  let minted = random_hex_32();
+  sqlx::query(
+    "INSERT INTO server_secrets(name, value) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING",
+  )
+  .bind(JWT_SECRET_NAME)
+  .bind(&minted)
+  .execute(db)
+  .await?;
+  // Re-read rather than returning `minted`: if a concurrent boot won the
+  // insert, the row holds THEIR value and ours was discarded.
+  let stored = read_secret(db, JWT_SECRET_NAME)
+    .await?
+    .unwrap_or_else(|| minted.clone());
+  if stored == minted {
+    tracing::info!(
+      "no JWT_SECRET configured — minted one for this instance and stored it \
              (the `jwt_secret` row of `server_secrets`). Sessions survive restarts; \
              set JWT_SECRET only if you want to supply your own."
-        );
-    }
-    Ok(stored)
+    );
+  }
+  Ok(stored)
 }
 
 const JWT_SECRET_NAME: &str = "jwt_secret";
 
 async fn read_secret(db: &PgPool, name: &str) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar::<_, String>("SELECT value FROM server_secrets WHERE name = $1")
-        .bind(name)
-        .fetch_optional(db)
-        .await
+  sqlx::query_scalar::<_, String>("SELECT value FROM server_secrets WHERE name = $1")
+    .bind(name)
+    .fetch_optional(db)
+    .await
 }
 
 /// 32 bytes of OS randomness as lowercase hex — the same shape (and strength)
 /// the docs used to ask operators to produce with `openssl rand -hex 32`.
 fn random_hex_32() -> String {
-    use rand_core::RngCore as _;
-    let mut bytes = [0u8; 32];
-    rand_core::OsRng.fill_bytes(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+  use rand_core::RngCore as _;
+  let mut bytes = [0u8; 32];
+  rand_core::OsRng.fill_bytes(&mut bytes);
+  bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

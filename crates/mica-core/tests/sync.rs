@@ -5,71 +5,82 @@ use mica_core::{Block, MicaDoc};
 use serde_json::json;
 
 fn para(id: &str, text: &str) -> Block {
-    Block::new(id, "paragraph").with_text(text)
+  Block::new(id, "paragraph").with_text(text)
 }
 
 fn page(children: &[&str]) -> Block {
-    Block::new("r", "page").with_children(children.iter().map(|s| s.to_string()).collect())
+  Block::new("r", "page").with_children(children.iter().map(|s| s.to_string()).collect())
 }
 
 /// A fresh replica of a shared base, with its own actor id.
 fn replica(base_state: &[u8], client_id: u64) -> MicaDoc {
-    MicaDoc::from_update_with_client_id(base_state, Some(client_id)).expect("decode base")
+  MicaDoc::from_update_with_client_id(base_state, Some(client_id)).expect("decode base")
 }
 
 fn base() -> Vec<u8> {
-    MicaDoc::from_blocks_with_client_id("r", &[page(&["a"]), para("a", "Hello")], Some(1))
-        .encode_state()
+  MicaDoc::from_blocks_with_client_id("r", &[page(&["a"]), para("a", "Hello")], Some(1))
+    .encode_state()
 }
 
 /// One round of mutual sync: each side sends the other only what its state
 /// vector is missing, then applies it. After this both have all updates.
 fn sync(a: &mut MicaDoc, b: &mut MicaDoc) {
-    let a_sv = a.state_vector();
-    let b_sv = b.state_vector();
-    let a_to_b = a.encode_diff(&b_sv).unwrap();
-    let b_to_a = b.encode_diff(&a_sv).unwrap();
-    a.apply_update(&b_to_a).unwrap();
-    b.apply_update(&a_to_b).unwrap();
+  let a_sv = a.state_vector();
+  let b_sv = b.state_vector();
+  let a_to_b = a.encode_diff(&b_sv).unwrap();
+  let b_to_a = b.encode_diff(&a_sv).unwrap();
+  a.apply_update(&b_to_a).unwrap();
+  b.apply_update(&a_to_b).unwrap();
 }
 
 #[test]
 fn concurrent_edits_converge() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
 
-    // Concurrent, non-conflicting: A appends to a block's text, B adds a block.
-    a.text_insert("a", 5, " from A");
-    b.insert_block("r", 1, &para("b", "from B"));
+  // Concurrent, non-conflicting: A appends to a block's text, B adds a block.
+  a.text_insert("a", 5, " from A");
+  b.insert_block("r", 1, &para("b", "from B"));
 
-    sync(&mut a, &mut b);
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
-    let out = a.to_blocks();
-    let block_a = out.iter().find(|x| x.id == "a").unwrap();
-    assert_eq!(block_a.text, "Hello from A");
-    assert!(out.iter().any(|x| x.id == "b" && x.text == "from B"));
-    assert_eq!(out.iter().find(|x| x.id == "r").unwrap().children, vec!["a", "b"]);
+  assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+  let out = a.to_blocks();
+  let block_a = out.iter().find(|x| x.id == "a").unwrap();
+  assert_eq!(block_a.text, "Hello from A");
+  assert!(out.iter().any(|x| x.id == "b" && x.text == "from B"));
+  assert_eq!(
+    out.iter().find(|x| x.id == "r").unwrap().children,
+    vec!["a", "b"]
+  );
 }
 
 #[test]
 fn concurrent_text_into_same_block_converges() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
 
-    // Both insert different text at the SAME offset of the SAME block's Text.
-    // yrs merges character-level; the actor ids give a deterministic order.
-    a.text_insert("a", 5, "[A]");
-    b.text_insert("a", 5, "[B]");
+  // Both insert different text at the SAME offset of the SAME block's Text.
+  // yrs merges character-level; the actor ids give a deterministic order.
+  a.text_insert("a", 5, "[A]");
+  b.text_insert("a", 5, "[B]");
 
-    sync(&mut a, &mut b);
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks(), "same block text converges");
-    let text = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text;
-    assert!(text.contains("[A]") && text.contains("[B]"), "both edits survive: {text}");
-    assert!(text.starts_with("Hello"));
+  assert_eq!(a.to_blocks(), b.to_blocks(), "same block text converges");
+  let text = a
+    .to_blocks()
+    .into_iter()
+    .find(|x| x.id == "a")
+    .unwrap()
+    .text;
+  assert!(
+    text.contains("[A]") && text.contains("[B]"),
+    "both edits survive: {text}"
+  );
+  assert!(text.starts_with("Hello"));
 }
 
 /// Two people typing into ONE paragraph, through the path the editor actually
@@ -90,32 +101,41 @@ fn concurrent_text_into_same_block_converges() {
 /// ranges. Convergence was never the broken part — what they converged ON was.
 #[test]
 fn concurrent_typing_in_one_block_interleaves_not_duplicates() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
 
-    // Each editor sends its block's full new text, exactly as `update_block`
-    // does: A typed at the front, B typed at the end.
-    a.set_block_text("a", "AHello", &[]);
-    b.set_block_text("a", "HelloB", &[]);
+  // Each editor sends its block's full new text, exactly as `update_block`
+  // does: A typed at the front, B typed at the end.
+  a.set_block_text("a", "AHello", &[]);
+  b.set_block_text("a", "HelloB", &[]);
 
-    sync(&mut a, &mut b);
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
-    let text = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text;
-    assert_eq!(text, "AHelloB", "both edits, once each");
+  assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+  let text = a
+    .to_blocks()
+    .into_iter()
+    .find(|x| x.id == "a")
+    .unwrap()
+    .text;
+  assert_eq!(text, "AHelloB", "both edits, once each");
 
-    // The fine-grained path agrees — the two are no longer two behaviours.
-    let mut c = replica(&state, 10);
-    let mut d = replica(&state, 20);
-    c.text_insert("a", 0, "A");
-    d.text_insert("a", 5, "B");
-    sync(&mut c, &mut d);
-    assert_eq!(
-        c.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text,
-        text,
-        "coarse update_block and text_insert now land the same thing",
-    );
+  // The fine-grained path agrees — the two are no longer two behaviours.
+  let mut c = replica(&state, 10);
+  let mut d = replica(&state, 20);
+  c.text_insert("a", 0, "A");
+  d.text_insert("a", 5, "B");
+  sync(&mut c, &mut d);
+  assert_eq!(
+    c.to_blocks()
+      .into_iter()
+      .find(|x| x.id == "a")
+      .unwrap()
+      .text,
+    text,
+    "coarse update_block and text_insert now land the same thing",
+  );
 }
 
 /// The same, with the edits INSIDE the word and with CJK — the offsets are
@@ -123,23 +143,25 @@ fn concurrent_typing_in_one_block_interleaves_not_duplicates() {
 /// in half rather than merge.
 #[test]
 fn concurrent_typing_survives_cjk_and_interior_edits() {
-    let state = MicaDoc::from_blocks_with_client_id(
-        "r",
-        &[page(&["a"]), para("a", "笔记软件")],
-        Some(1),
-    )
-    .encode_state();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
+  let state =
+    MicaDoc::from_blocks_with_client_id("r", &[page(&["a"]), para("a", "笔记软件")], Some(1))
+      .encode_state();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
 
-    a.set_block_text("a", "笔记好软件", &[]); // insert at 2
-    b.set_block_text("a", "笔记软件很棒", &[]); // append at 4
+  a.set_block_text("a", "笔记好软件", &[]); // insert at 2
+  b.set_block_text("a", "笔记软件很棒", &[]); // append at 4
 
-    sync(&mut a, &mut b);
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks());
-    let text = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap().text;
-    assert_eq!(text, "笔记好软件很棒");
+  assert_eq!(a.to_blocks(), b.to_blocks());
+  let text = a
+    .to_blocks()
+    .into_iter()
+    .find(|x| x.id == "a")
+    .unwrap()
+    .text;
+  assert_eq!(text, "笔记好软件很棒");
 }
 
 /// A concurrent edit must not be swallowed by the OTHER replica's re-format.
@@ -147,110 +169,133 @@ fn concurrent_typing_survives_cjk_and_interior_edits() {
 /// the coarse half cannot eat the fine half's text.
 #[test]
 fn a_concurrent_format_does_not_eat_a_concurrent_keystroke() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
 
-    // A bolds the whole word without changing a character; B types.
-    // Built the way the editor does: marks arrive inside the block's `data`.
-    let bold = mica_core::marks_from_data(&json!({
-        "marks": [{"start": 0, "end": 5, "type": "bold"}]
-    }));
-    a.set_block_text("a", "Hello", &bold);
-    b.set_block_text("a", "Hello!", &[]);
+  // A bolds the whole word without changing a character; B types.
+  // Built the way the editor does: marks arrive inside the block's `data`.
+  let bold = mica_core::marks_from_data(&json!({
+      "marks": [{"start": 0, "end": 5, "type": "bold"}]
+  }));
+  a.set_block_text("a", "Hello", &bold);
+  b.set_block_text("a", "Hello!", &[]);
 
-    sync(&mut a, &mut b);
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks());
-    let out = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap();
-    assert_eq!(out.text, "Hello!", "the keystroke survives the re-format");
+  assert_eq!(a.to_blocks(), b.to_blocks());
+  let out = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap();
+  assert_eq!(out.text, "Hello!", "the keystroke survives the re-format");
 }
 
 #[test]
 fn concurrent_props_fields_converge() {
-    // A block whose data already has one prop key.
-    let state = MicaDoc::from_blocks_with_client_id(
-        "r",
-        &[
-            page(&["a"]),
-            Block::new("a", "paragraph")
-                .with_text("x")
-                .with_data(json!({ "indent": 1 })),
-        ],
-        Some(1),
-    )
-    .encode_state();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
+  // A block whose data already has one prop key.
+  let state = MicaDoc::from_blocks_with_client_id(
+    "r",
+    &[
+      page(&["a"]),
+      Block::new("a", "paragraph")
+        .with_text("x")
+        .with_data(json!({ "indent": 1 })),
+    ],
+    Some(1),
+  )
+  .encode_state();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
 
-    // Concurrent edits to DIFFERENT props fields of the SAME block. With the old
-    // whole-blob string props this was last-write-wins (one edit lost); with the
-    // field-level MapRef (P2-M4.7) both survive.
-    a.set_block_data("a", &json!({ "indent": 1, "checked": true }));
-    b.set_block_data("a", &json!({ "indent": 1, "level": 2 }));
+  // Concurrent edits to DIFFERENT props fields of the SAME block. With the old
+  // whole-blob string props this was last-write-wins (one edit lost); with the
+  // field-level MapRef (P2-M4.7) both survive.
+  a.set_block_data("a", &json!({ "indent": 1, "checked": true }));
+  b.set_block_data("a", &json!({ "indent": 1, "level": 2 }));
 
-    sync(&mut a, &mut b);
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
-    let data = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap().data;
-    assert_eq!(data["indent"], 1, "untouched field kept");
-    assert_eq!(data["checked"], true, "A's field survives");
-    assert_eq!(data["level"], 2, "B's field survives");
+  assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+  let data = a
+    .to_blocks()
+    .into_iter()
+    .find(|x| x.id == "a")
+    .unwrap()
+    .data;
+  assert_eq!(data["indent"], 1, "untouched field kept");
+  assert_eq!(data["checked"], true, "A's field survives");
+  assert_eq!(data["level"], 2, "B's field survives");
 }
 
 #[test]
 fn apply_is_idempotent() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
-    b.insert_block("r", 1, &para("b", "B"));
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
+  b.insert_block("r", 1, &para("b", "B"));
 
-    let diff = b.encode_diff(&a.state_vector()).unwrap();
-    a.apply_update(&diff).unwrap();
-    let once = a.to_blocks();
-    // Re-applying the same update changes nothing.
-    a.apply_update(&diff).unwrap();
-    assert_eq!(a.to_blocks(), once, "re-applying an update is a no-op");
+  let diff = b.encode_diff(&a.state_vector()).unwrap();
+  a.apply_update(&diff).unwrap();
+  let once = a.to_blocks();
+  // Re-applying the same update changes nothing.
+  a.apply_update(&diff).unwrap();
+  assert_eq!(a.to_blocks(), once, "re-applying an update is a no-op");
 }
 
 #[test]
 fn merge_is_order_independent() {
-    let state = base();
-    // Three actors each make one edit.
-    let mut x = replica(&state, 10);
-    let mut y = replica(&state, 20);
-    let mut z = replica(&state, 30);
-    x.text_insert("a", 5, "X");
-    y.insert_block("r", 1, &para("b", "Y"));
-    z.update_block_kind("a", "heading");
+  let state = base();
+  // Three actors each make one edit.
+  let mut x = replica(&state, 10);
+  let mut y = replica(&state, 20);
+  let mut z = replica(&state, 30);
+  x.text_insert("a", 5, "X");
+  y.insert_block("r", 1, &para("b", "Y"));
+  z.update_block_kind("a", "heading");
 
-    let dx = x.encode_diff(&MicaDoc::from_update_with_client_id(&state, Some(99)).unwrap().state_vector()).unwrap();
-    let dy = y.encode_diff(&MicaDoc::from_update_with_client_id(&state, Some(99)).unwrap().state_vector()).unwrap();
-    let dz = z.encode_diff(&MicaDoc::from_update_with_client_id(&state, Some(99)).unwrap().state_vector()).unwrap();
+  let dx = x
+    .encode_diff(
+      &MicaDoc::from_update_with_client_id(&state, Some(99))
+        .unwrap()
+        .state_vector(),
+    )
+    .unwrap();
+  let dy = y
+    .encode_diff(
+      &MicaDoc::from_update_with_client_id(&state, Some(99))
+        .unwrap()
+        .state_vector(),
+    )
+    .unwrap();
+  let dz = z
+    .encode_diff(
+      &MicaDoc::from_update_with_client_id(&state, Some(99))
+        .unwrap()
+        .state_vector(),
+    )
+    .unwrap();
 
-    // Apply the three diffs onto two fresh replicas in DIFFERENT orders.
-    let mut p = replica(&state, 40);
-    let mut q = replica(&state, 50);
-    for d in [&dx, &dy, &dz] {
-        p.apply_update(d).unwrap();
-    }
-    for d in [&dz, &dx, &dy] {
-        q.apply_update(d).unwrap();
-    }
-    assert_eq!(p.to_blocks(), q.to_blocks(), "merge order doesn't matter");
+  // Apply the three diffs onto two fresh replicas in DIFFERENT orders.
+  let mut p = replica(&state, 40);
+  let mut q = replica(&state, 50);
+  for d in [&dx, &dy, &dz] {
+    p.apply_update(d).unwrap();
+  }
+  for d in [&dz, &dx, &dy] {
+    q.apply_update(d).unwrap();
+  }
+  assert_eq!(p.to_blocks(), q.to_blocks(), "merge order doesn't matter");
 }
 
 /// Marks of a block, as `{start,end,type}` triples, for readable assertions.
 fn marks_of(d: &MicaDoc, id: &str) -> Vec<(u32, u32, String)> {
-    let b = d.to_blocks().into_iter().find(|x| x.id == id).unwrap();
-    mica_core::marks_from_data(&b.data)
-        .into_iter()
-        .map(|m| (m.start, m.end, m.ty))
-        .collect()
+  let b = d.to_blocks().into_iter().find(|x| x.id == id).unwrap();
+  mica_core::marks_from_data(&b.data)
+    .into_iter()
+    .map(|m| (m.start, m.end, m.ty))
+    .collect()
 }
 
 fn marks(v: serde_json::Value) -> Vec<mica_core::Mark> {
-    mica_core::marks_from_data(&json!({ "marks": v }))
+  mica_core::marks_from_data(&json!({ "marks": v }))
 }
 
 /// Two people formatting DIFFERENT words at the same time must both win.
@@ -261,35 +306,32 @@ fn marks(v: serde_json::Value) -> Vec<mica_core::Mark> {
 /// about the text changed in either edit — this is purely the formatting half.
 #[test]
 fn concurrent_formatting_of_different_words_both_survive() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
-    a.set_block_text("a", "Hello world", &[]);
-    sync(&mut a, &mut b);
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
+  a.set_block_text("a", "Hello world", &[]);
+  sync(&mut a, &mut b);
 
-    a.set_block_text(
-        "a",
-        "Hello world",
-        &marks(json!([{"start": 0, "end": 5, "type": "bold"}])),
-    );
-    b.set_block_text(
-        "a",
-        "Hello world",
-        &marks(json!([{"start": 6, "end": 11, "type": "italic"}])),
-    );
-    sync(&mut a, &mut b);
+  a.set_block_text(
+    "a",
+    "Hello world",
+    &marks(json!([{"start": 0, "end": 5, "type": "bold"}])),
+  );
+  b.set_block_text(
+    "a",
+    "Hello world",
+    &marks(json!([{"start": 6, "end": 11, "type": "italic"}])),
+  );
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
-    let mut got = marks_of(&a, "a");
-    got.sort();
-    assert_eq!(
-        got,
-        vec![
-            (0, 5, "bold".to_string()),
-            (6, 11, "italic".to_string()),
-        ],
-        "both formats survive"
-    );
+  assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+  let mut got = marks_of(&a, "a");
+  got.sort();
+  assert_eq!(
+    got,
+    vec![(0, 5, "bold".to_string()), (6, 11, "italic".to_string()),],
+    "both formats survive"
+  );
 }
 
 /// Removing a mark is now expressible over just its own range, so an un-bold
@@ -299,81 +341,81 @@ fn concurrent_formatting_of_different_words_both_survive() {
 /// word. The un-bold must land AND the italic must survive it.
 #[test]
 fn an_unbold_does_not_erase_a_concurrent_italic() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
-    let bold_all = marks(json!([{"start": 0, "end": 11, "type": "bold"}]));
-    a.set_block_text("a", "Hello world", &bold_all);
-    sync(&mut a, &mut b);
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
+  let bold_all = marks(json!([{"start": 0, "end": 11, "type": "bold"}]));
+  a.set_block_text("a", "Hello world", &bold_all);
+  sync(&mut a, &mut b);
 
-    a.set_block_text("a", "Hello world", &[]);
-    b.set_block_text(
-        "a",
-        "Hello world",
-        &marks(json!([
-            {"start": 0, "end": 11, "type": "bold"},
-            {"start": 6, "end": 11, "type": "italic"},
-        ])),
-    );
-    sync(&mut a, &mut b);
+  a.set_block_text("a", "Hello world", &[]);
+  b.set_block_text(
+    "a",
+    "Hello world",
+    &marks(json!([
+        {"start": 0, "end": 11, "type": "bold"},
+        {"start": 6, "end": 11, "type": "italic"},
+    ])),
+  );
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
-    let got = marks_of(&a, "a");
-    assert!(
-        !got.iter().any(|(_, _, t)| t == "bold"),
-        "the un-bold lands: {got:?}"
-    );
-    assert!(
-        got.contains(&(6, 11, "italic".to_string())),
-        "the concurrent italic survives it: {got:?}"
-    );
+  assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+  let got = marks_of(&a, "a");
+  assert!(
+    !got.iter().any(|(_, _, t)| t == "bold"),
+    "the un-bold lands: {got:?}"
+  );
+  assert!(
+    got.contains(&(6, 11, "italic".to_string())),
+    "the concurrent italic survives it: {got:?}"
+  );
 }
 
 /// Un-bolding ONE word leaves the other bold — the removal is scoped to the
 /// range it was asked for, not to the block.
 #[test]
 fn unbolding_one_word_leaves_the_other_bold() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    a.set_block_text(
-        "a",
-        "Hello world",
-        &marks(json!([{"start": 0, "end": 11, "type": "bold"}])),
-    );
-    a.set_block_text(
-        "a",
-        "Hello world",
-        &marks(json!([{"start": 6, "end": 11, "type": "bold"}])),
-    );
-    assert_eq!(marks_of(&a, "a"), vec![(6, 11, "bold".to_string())]);
+  let state = base();
+  let mut a = replica(&state, 10);
+  a.set_block_text(
+    "a",
+    "Hello world",
+    &marks(json!([{"start": 0, "end": 11, "type": "bold"}])),
+  );
+  a.set_block_text(
+    "a",
+    "Hello world",
+    &marks(json!([{"start": 6, "end": 11, "type": "bold"}])),
+  );
+  assert_eq!(marks_of(&a, "a"), vec![(6, 11, "bold".to_string())]);
 }
 
 /// Formatting and typing at the same time, in the same block: neither is lost.
 /// The text splice and the format delta touch disjoint ranges by construction.
 #[test]
 fn a_concurrent_format_and_keystroke_both_land() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
-    a.set_block_text("a", "Hello world", &[]);
-    sync(&mut a, &mut b);
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
+  a.set_block_text("a", "Hello world", &[]);
+  sync(&mut a, &mut b);
 
-    a.set_block_text(
-        "a",
-        "Hello world",
-        &marks(json!([{"start": 0, "end": 5, "type": "bold"}])),
-    );
-    b.set_block_text("a", "Hello world!", &[]);
-    sync(&mut a, &mut b);
+  a.set_block_text(
+    "a",
+    "Hello world",
+    &marks(json!([{"start": 0, "end": 5, "type": "bold"}])),
+  );
+  b.set_block_text("a", "Hello world!", &[]);
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
-    let out = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap();
-    assert_eq!(out.text, "Hello world!", "the keystroke survives");
-    assert_eq!(
-        marks_of(&a, "a"),
-        vec![(0, 5, "bold".to_string())],
-        "and so does the bold"
-    );
+  assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+  let out = a.to_blocks().into_iter().find(|x| x.id == "a").unwrap();
+  assert_eq!(out.text, "Hello world!", "the keystroke survives");
+  assert_eq!(
+    marks_of(&a, "a"),
+    vec![(0, 5, "bold".to_string())],
+    "and so does the bold"
+  );
 }
 
 /// A removal must not be undone by someone else's unrelated formatting.
@@ -383,35 +425,35 @@ fn a_concurrent_format_and_keystroke_both_land() {
 /// the first word that A had just removed, resurrecting it.
 #[test]
 fn a_concurrent_format_elsewhere_does_not_resurrect_a_removed_bold() {
-    let state = base();
-    let mut a = replica(&state, 10);
-    let mut b = replica(&state, 20);
-    a.set_block_text(
-        "a",
-        "one two three",
-        &marks(json!([{"start": 0, "end": 3, "type": "bold"}])),
-    );
-    sync(&mut a, &mut b);
+  let state = base();
+  let mut a = replica(&state, 10);
+  let mut b = replica(&state, 20);
+  a.set_block_text(
+    "a",
+    "one two three",
+    &marks(json!([{"start": 0, "end": 3, "type": "bold"}])),
+  );
+  sync(&mut a, &mut b);
 
-    // A un-bolds "one"; B, still seeing it bold, bolds "three" as well.
-    a.set_block_text("a", "one two three", &[]);
-    b.set_block_text(
-        "a",
-        "one two three",
-        &marks(json!([
-            {"start": 0, "end": 3, "type": "bold"},
-            {"start": 8, "end": 13, "type": "bold"},
-        ])),
-    );
-    sync(&mut a, &mut b);
+  // A un-bolds "one"; B, still seeing it bold, bolds "three" as well.
+  a.set_block_text("a", "one two three", &[]);
+  b.set_block_text(
+    "a",
+    "one two three",
+    &marks(json!([
+        {"start": 0, "end": 3, "type": "bold"},
+        {"start": 8, "end": 13, "type": "bold"},
+    ])),
+  );
+  sync(&mut a, &mut b);
 
-    assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
-    let got = marks_of(&a, "a");
-    assert_eq!(
-        got,
-        vec![(8, 13, "bold".to_string())],
-        "the removal holds and only the new bold is there: {got:?}"
-    );
+  assert_eq!(a.to_blocks(), b.to_blocks(), "replicas converge");
+  let got = marks_of(&a, "a");
+  assert_eq!(
+    got,
+    vec![(8, 13, "bold".to_string())],
+    "the removal holds and only the new bold is there: {got:?}"
+  );
 }
 
 /// Merging queued updates must not change what they MEAN.
@@ -426,49 +468,52 @@ fn a_concurrent_format_elsewhere_does_not_resurrect_a_removed_bold() {
 /// that starts EMPTY and encoding its state, which is what this mirrors.
 #[test]
 fn merging_queued_updates_is_equivalent_to_applying_them_in_order() {
-    let state = base();
-    let mut client = replica(&state, 77);
+  let state = base();
+  let mut client = replica(&state, 77);
 
-    // A long offline stretch: many small edits to the same block, which is the
-    // shape that folds best (every intermediate text state is superseded).
-    let mut queued = Vec::new();
-    let mut text = String::from("Hello");
-    for i in 0..40 {
-        let before = client.state_vector();
-        text.push_str(&format!(" w{i}"));
-        client.set_block_text("a", &text, &[]);
-        queued.push(client.encode_diff(&before).unwrap());
-    }
+  // A long offline stretch: many small edits to the same block, which is the
+  // shape that folds best (every intermediate text state is superseded).
+  let mut queued = Vec::new();
+  let mut text = String::from("Hello");
+  for i in 0..40 {
+    let before = client.state_vector();
+    text.push_str(&format!(" w{i}"));
+    client.set_block_text("a", &text, &[]);
+    queued.push(client.encode_diff(&before).unwrap());
+  }
 
-    // `[0, 0]` is an empty update: zero clients, empty delete set. A scratch
-    // seeded from anything with content would fold that content in as a
-    // concurrent write — `from_blocks("r", &[])` writes `meta.root`, which is
-    // exactly the trap.
-    let mut scratch = MicaDoc::from_update(&[0, 0]).expect("empty update decodes");
-    assert!(scratch.to_blocks().is_empty(), "the scratch must start empty");
-    for u in &queued {
-        scratch.apply_update(u).unwrap();
-    }
-    let merged = scratch.encode_state();
+  // `[0, 0]` is an empty update: zero clients, empty delete set. A scratch
+  // seeded from anything with content would fold that content in as a
+  // concurrent write — `from_blocks("r", &[])` writes `meta.root`, which is
+  // exactly the trap.
+  let mut scratch = MicaDoc::from_update(&[0, 0]).expect("empty update decodes");
+  assert!(
+    scratch.to_blocks().is_empty(),
+    "the scratch must start empty"
+  );
+  for u in &queued {
+    scratch.apply_update(u).unwrap();
+  }
+  let merged = scratch.encode_state();
 
-    let mut one_by_one = replica(&state, 1);
-    for u in &queued {
-        one_by_one.apply_update(u).unwrap();
-    }
-    let mut folded = replica(&state, 2);
-    folded.apply_update(&merged).unwrap();
+  let mut one_by_one = replica(&state, 1);
+  for u in &queued {
+    one_by_one.apply_update(u).unwrap();
+  }
+  let mut folded = replica(&state, 2);
+  folded.apply_update(&merged).unwrap();
 
-    assert_eq!(
-        one_by_one.to_blocks(),
-        folded.to_blocks(),
-        "the folded update must land the same document"
-    );
-    assert!(
-        merged.len() < queued.iter().map(|u| u.len()).sum::<usize>(),
-        "folding should also shrink the bytes ({} vs {})",
-        merged.len(),
-        queued.iter().map(|u| u.len()).sum::<usize>()
-    );
+  assert_eq!(
+    one_by_one.to_blocks(),
+    folded.to_blocks(),
+    "the folded update must land the same document"
+  );
+  assert!(
+    merged.len() < queued.iter().map(|u| u.len()).sum::<usize>(),
+    "folding should also shrink the bytes ({} vs {})",
+    merged.len(),
+    queued.iter().map(|u| u.len()).sum::<usize>()
+  );
 }
 
 /// THE BUG (A3): `set_blocks` — what every REST/MCP write and version restore
@@ -491,7 +536,12 @@ fn a_whole_document_write_keeps_a_concurrent_edit_to_another_block() {
   editor.text_insert("a", 5, " there");
   // …while a REST/MCP write appends `c`, re-deriving the WHOLE block set.
   let mut target = server.to_blocks();
-  target.iter_mut().find(|x| x.id == "r").unwrap().children.push("c".into());
+  target
+    .iter_mut()
+    .find(|x| x.id == "r")
+    .unwrap()
+    .children
+    .push("c".into());
   target.push(para("c", "appended"));
   server.set_blocks("r", &target);
 
@@ -500,9 +550,16 @@ fn a_whole_document_write_keeps_a_concurrent_edit_to_another_block() {
   assert_eq!(server.to_blocks(), editor.to_blocks(), "replicas converge");
   let out = server.to_blocks();
   let text = |id: &str| out.iter().find(|x| x.id == id).map(|x| x.text.clone());
-  assert_eq!(text("a").as_deref(), Some("Hello there"), "the concurrent edit survives");
+  assert_eq!(
+    text("a").as_deref(),
+    Some("Hello there"),
+    "the concurrent edit survives"
+  );
   assert_eq!(text("c").as_deref(), Some("appended"));
-  assert_eq!(out.iter().find(|x| x.id == "r").unwrap().children, vec!["a", "b", "c"]);
+  assert_eq!(
+    out.iter().find(|x| x.id == "r").unwrap().children,
+    vec!["a", "b", "c"]
+  );
 }
 
 /// Restore semantics are unchanged: blocks absent from the target disappear,
@@ -516,7 +573,9 @@ fn set_blocks_still_makes_the_document_equal_the_target() {
   );
   let target = vec![
     page(&["a", "n"]),
-    Block::new("a", "heading").with_text("Hi").with_data(json!({"level": 2})),
+    Block::new("a", "heading")
+      .with_text("Hi")
+      .with_data(json!({"level": 2})),
     para("n", "new"),
   ];
   doc.set_blocks("r", &target);
@@ -525,5 +584,8 @@ fn set_blocks_still_makes_the_document_equal_the_target() {
   let a = out.iter().find(|x| x.id == "a").unwrap();
   assert_eq!((a.kind.as_str(), a.text.as_str()), ("heading", "Hi"));
   assert_eq!(a.data["level"], json!(2));
-  assert_eq!(out.iter().find(|x| x.id == "r").unwrap().children, vec!["a", "n"]);
+  assert_eq!(
+    out.iter().find(|x| x.id == "r").unwrap().children,
+    vec!["a", "n"]
+  );
 }

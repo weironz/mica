@@ -9,10 +9,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+mod block_handlers;
 /// Structured page properties over the document root's raw front-matter string
 /// (front matter stays the sole authority; this is a lazy view + surgical edit).
 pub mod properties;
-mod block_handlers;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocumentSnapshotPayload {
@@ -36,6 +36,35 @@ pub struct Block {
   pub children: Vec<String>,
 }
 
+impl Block {
+  /// A block with just an id and kind — the seed the builders below grow.
+  /// (`mica-core` re-exports this type, so `mica_core::Block::new` is the same
+  /// constructor the yrs model has always had.)
+  pub fn new(id: impl Into<String>, kind: impl Into<String>) -> Self {
+    Block {
+      id: id.into(),
+      kind: kind.into(),
+      text: String::new(),
+      data: Value::Null,
+      children: Vec::new(),
+    }
+  }
+
+  pub fn with_text(mut self, text: impl Into<String>) -> Self {
+    self.text = text.into();
+    self
+  }
+
+  pub fn with_data(mut self, data: Value) -> Self {
+    self.data = data;
+    self
+  }
+
+  pub fn with_children(mut self, children: Vec<String>) -> Self {
+    self.children = children;
+    self
+  }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentOperationError {
@@ -60,13 +89,13 @@ pub enum DocumentOperationError {
   #[error("block id is required")]
   EmptyBlockId,
 
-  #[error("a newly inserted block must be a leaf (empty children); attach children with their own inserts")]
+  #[error(
+    "a newly inserted block must be a leaf (empty children); attach children with their own inserts"
+  )]
   InsertBlockWithChildren,
 }
 
 pub type DocumentOperationResult<T> = Result<T, DocumentOperationError>;
-
-
 
 pub fn payload_from_value(value: Value) -> DocumentOperationResult<DocumentSnapshotPayload> {
   let payload = serde_json::from_value::<DocumentSnapshotPayload>(value)
@@ -79,7 +108,6 @@ pub fn payload_from_value(value: Value) -> DocumentOperationResult<DocumentSnaps
 
   Ok(payload)
 }
-
 
 pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
   export_markdown_with_assets(snapshot, &BTreeMap::new())
@@ -101,8 +129,7 @@ pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationR
 /// Blank is treated as absent, so an emptied title falls back rather than
 /// rendering as nothing.
 pub fn document_title(snapshot: &DocumentSnapshotPayload) -> Option<&str> {
-  let root = block_index(snapshot, &snapshot.root_block_id)
-    .map(|i| &snapshot.blocks[i])?;
+  let root = block_index(snapshot, &snapshot.root_block_id).map(|i| &snapshot.blocks[i])?;
   root
     .data
     .get("title")
@@ -266,10 +293,13 @@ pub fn export_markdown_with_assets(
       snapshot.schema_version,
     ));
   }
-  let snapshot = &*export_safe_tree(snapshot);
+  let (safe, index) = export_safe_tree(snapshot);
+  let snapshot = &*safe;
 
   let mut lines = Vec::new();
-  let root_index = block_index(snapshot, &snapshot.root_block_id)
+  let root_index = index
+    .get(snapshot.root_block_id.as_str())
+    .copied()
     .ok_or_else(|| DocumentOperationError::BlockNotFound(snapshot.root_block_id.clone()))?;
   let root = &snapshot.blocks[root_index];
 
@@ -291,7 +321,14 @@ pub fn export_markdown_with_assets(
     append_markdown_block_content(root, 0, &mut lines, images);
   }
 
-  append_markdown_children(snapshot, &snapshot.root_block_id, 0, &mut lines, images)?;
+  append_markdown_children(
+    snapshot,
+    &index,
+    &snapshot.root_block_id,
+    0,
+    &mut lines,
+    images,
+  )?;
 
   while lines.last().is_some_and(|line: &String| line.is_empty()) {
     lines.pop();
@@ -306,17 +343,20 @@ pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResul
       snapshot.schema_version,
     ));
   }
-  let snapshot = &*export_safe_tree(snapshot);
+  let (safe, index) = export_safe_tree(snapshot);
+  let snapshot = &*safe;
 
   let mut html = String::new();
-  let root_index = block_index(snapshot, &snapshot.root_block_id)
+  let root_index = index
+    .get(snapshot.root_block_id.as_str())
+    .copied()
     .ok_or_else(|| DocumentOperationError::BlockNotFound(snapshot.root_block_id.clone()))?;
   let root = &snapshot.blocks[root_index];
   if !root.text.trim().is_empty() {
     html.push_str(&format!("<p>{}</p>\n", escape_html(root.text.trim())));
   }
 
-  append_html_children(snapshot, &snapshot.root_block_id, &mut html)?;
+  append_html_children(snapshot, &index, &snapshot.root_block_id, &mut html)?;
   append_footnotes_section(snapshot, &mut html);
 
   Ok(html.trim_end().to_string())
@@ -421,8 +461,8 @@ pub fn set_image_srcs(snapshot: &mut DocumentSnapshotPayload, srcs: &BTreeMap<St
 /// error → caller keeps the raw LaTeX. `display` picks Display vs Text style.
 #[cfg(feature = "render")]
 fn render_math(latex: &str, display: bool) -> Option<String> {
-  use ratex_layout::{layout, to_display_list, LayoutOptions};
-  use ratex_svg::{render_to_svg, SvgOptions};
+  use ratex_layout::{LayoutOptions, layout, to_display_list};
+  use ratex_svg::{SvgOptions, render_to_svg};
   use ratex_types::math_style::MathStyle;
 
   let nodes = ratex_parser::parse(latex).ok()?;
@@ -450,7 +490,10 @@ fn render_math(latex: &str, display: bool) -> Option<String> {
   let style = if display {
     format!("height:{height_em:.4}em")
   } else {
-    format!("height:{height_em:.4}em;vertical-align:-{:.4}em", list.depth)
+    format!(
+      "height:{height_em:.4}em;vertical-align:-{:.4}em",
+      list.depth
+    )
   };
   Some(restyle_math_svg(&svg, &style, display))
 }
@@ -641,7 +684,6 @@ pub fn import_markdown_fragment(markdown: &str, root_block_id: &str) -> Document
   import_markdown_inner(markdown, root_block_id, false)
 }
 
-
 pub fn block_index(snapshot: &DocumentSnapshotPayload, block_id: &str) -> Option<usize> {
   snapshot
     .blocks
@@ -687,7 +729,13 @@ const MAX_EXPORT_DEPTH: usize = 128;
 /// multi-parent blocks), and a branch past the depth cap is flattened into its
 /// ancestor at the cap, keeping the content. A well-formed tree — every real
 /// one — is returned as is, without copying.
-fn export_safe_tree(snapshot: &DocumentSnapshotPayload) -> Cow<'_, DocumentSnapshotPayload> {
+///
+/// Also returns the id→index map this walk already builds: the recursive
+/// exporters look up EVERY child by id, and re-scanning `blocks` per lookup is
+/// O(B²) on a flat document — passing the map down makes each lookup O(1).
+fn export_safe_tree(
+  snapshot: &DocumentSnapshotPayload,
+) -> (Cow<'_, DocumentSnapshotPayload>, HashMap<&str, usize>) {
   let index: HashMap<&str, usize> = snapshot
     .blocks
     .iter()
@@ -695,7 +743,8 @@ fn export_safe_tree(snapshot: &DocumentSnapshotPayload) -> Cow<'_, DocumentSnaps
     .map(|(i, b)| (b.id.as_str(), i))
     .collect();
   let Some(&root) = index.get(snapshot.root_block_id.as_str()) else {
-    return Cow::Borrowed(snapshot); // the exporter reports the missing root
+    // The exporter reports the missing root.
+    return (Cow::Borrowed(snapshot), index);
   };
 
   let well_formed = {
@@ -716,7 +765,7 @@ fn export_safe_tree(snapshot: &DocumentSnapshotPayload) -> Cow<'_, DocumentSnaps
     ok
   };
   if well_formed {
-    return Cow::Borrowed(snapshot);
+    return (Cow::Borrowed(snapshot), index);
   }
 
   let mut children: Vec<Vec<String>> = vec![Vec::new(); snapshot.blocks.len()];
@@ -757,7 +806,7 @@ fn export_safe_tree(snapshot: &DocumentSnapshotPayload) -> Cow<'_, DocumentSnaps
   for (block, kids) in repaired.blocks.iter_mut().zip(children) {
     block.children = kids;
   }
-  Cow::Owned(repaired)
+  (Cow::Owned(repaired), index)
 }
 
 #[cfg(test)]
@@ -780,11 +829,16 @@ mod export_xss_tests {
       "![x](javascript:alert(1))",
     ] {
       let out = html(md).to_ascii_lowercase();
-      assert!(!out.contains("javascript:") && !out.contains("vbscript:") && !out.contains("data:text"), "{md} -> {out}");
+      assert!(
+        !out.contains("javascript:") && !out.contains("vbscript:") && !out.contains("data:text"),
+        "{md} -> {out}"
+      );
     }
     assert!(html("[x](https://e.com/a:b)").contains("href=\"https://e.com/a:b\""));
     assert!(html("[x](a/b:c)").contains("href=\"a/b:c\""));
-    assert!(html("![x](data:image/png;base64,AAAA)").contains("src=\"data:image/png;base64,AAAA\""));
+    assert!(
+      html("![x](data:image/png;base64,AAAA)").contains("src=\"data:image/png;base64,AAAA\"")
+    );
   }
 
   /// `--!>` closes a comment in browsers; the attribute stripper treated the
@@ -827,7 +881,10 @@ mod tree_shape_tests {
     ]));
     assert!(export_html(&snapshot).unwrap().contains("loop"));
     assert!(export_markdown(&snapshot).unwrap().contains("loop"));
-    assert!(!is_descendant(&snapshot, "zzz", "a"), "terminates on the cycle");
+    assert!(
+      !is_descendant(&snapshot, "zzz", "a"),
+      "terminates on the cycle"
+    );
     assert!(is_descendant(&snapshot, "a", "root"));
   }
 
@@ -839,7 +896,11 @@ mod tree_shape_tests {
       {"id": "root", "type": "page", "text": "", "data": {}, "children": ["b0"]}
     )];
     for i in 0..n {
-      let children = if i + 1 < n { vec![format!("b{}", i + 1)] } else { vec![] };
+      let children = if i + 1 < n {
+        vec![format!("b{}", i + 1)]
+      } else {
+        vec![]
+      };
       blocks.push(serde_json::json!(
         {"id": format!("b{i}"), "type": "quote", "text": format!("t{i}"), "data": {}, "children": children}
       ));
@@ -900,7 +961,10 @@ mod page_title_tests {
     assert!(set_document_title(&mut page, "名字"));
     assert_eq!(document_title(&page), Some("名字"));
     assert_eq!(
-      page.blocks[0].data.get("front_matter").and_then(|v| v.as_str()),
+      page.blocks[0]
+        .data
+        .get("front_matter")
+        .and_then(|v| v.as_str()),
       Some("tags: [a]")
     );
   }
@@ -930,7 +994,10 @@ mod page_title_tests {
   fn surrounding_whitespace_is_trimmed_on_the_way_in() {
     let mut page = doc(serde_json::json!({}));
     assert!(set_document_title(&mut page, "  有空格  "));
-    assert_eq!(page.blocks[0].data.get("title").and_then(|v| v.as_str()), Some("有空格"));
+    assert_eq!(
+      page.blocks[0].data.get("title").and_then(|v| v.as_str()),
+      Some("有空格")
+    );
   }
 
   /// A blank title must fall back, not render as an empty heading.
@@ -958,7 +1025,10 @@ mod page_title_tests {
 
   #[test]
   fn the_title_leads_an_ordinary_page() {
-    assert_eq!(with_page_title("正文。\n", "我的页"), "# 我的页\n\n正文。\n");
+    assert_eq!(
+      with_page_title("正文。\n", "我的页"),
+      "# 我的页\n\n正文。\n"
+    );
   }
 
   /// The rule that makes this more than a string concat.
@@ -1093,12 +1163,24 @@ mod security_tests {
     // Event handlers on non-blacklisted tags survive UNCHANGED. These are the
     // token-theft vectors the CSP has to catch at the response layer.
     let img = tagfilter("<img src=x onerror=\"steal()\">");
-    assert!(img.contains("onerror"), "tagfilter unexpectedly stripped onerror: {img}");
-    assert!(img.starts_with("<img"), "img tag should not be escaped: {img}");
+    assert!(
+      img.contains("onerror"),
+      "tagfilter unexpectedly stripped onerror: {img}"
+    );
+    assert!(
+      img.starts_with("<img"),
+      "img tag should not be escaped: {img}"
+    );
 
     let svg = tagfilter("<svg onload=\"steal()\">");
-    assert!(svg.contains("onload"), "tagfilter unexpectedly stripped onload: {svg}");
-    assert!(svg.starts_with("<svg"), "svg tag should not be escaped: {svg}");
+    assert!(
+      svg.contains("onload"),
+      "tagfilter unexpectedly stripped onload: {svg}"
+    );
+    assert!(
+      svg.starts_with("<svg"),
+      "svg tag should not be escaped: {svg}"
+    );
   }
 
   /// THE BUG: the filter copied untouched text one BYTE at a time as `char`,
@@ -1130,7 +1212,10 @@ mod security_tests {
 
     // Mixed case + unquoted value.
     let c = strip_unsafe_attrs("<body OnLoad=x>");
-    assert!(!c.to_ascii_lowercase().contains("onload"), "OnLoad survived: {c}");
+    assert!(
+      !c.to_ascii_lowercase().contains("onload"),
+      "OnLoad survived: {c}"
+    );
     assert_eq!(c, "<body>");
 
     // Unquoted handler with call syntax.
@@ -1145,15 +1230,24 @@ mod security_tests {
 
     // Leading whitespace + mixed case.
     let b = strip_unsafe_attrs("<a href=\"  JAVAScript:x\">x</a>");
-    assert!(!b.to_ascii_lowercase().contains("javascript"), "js href survived: {b}");
+    assert!(
+      !b.to_ascii_lowercase().contains("javascript"),
+      "js href survived: {b}"
+    );
 
     // Embedded tab in the scheme (browser-normalized bypass).
     let c = strip_unsafe_attrs("<a href=\"java\tscript:x\">x</a>");
-    assert!(!c.to_ascii_lowercase().contains("script:"), "tab-split js href survived: {c}");
+    assert!(
+      !c.to_ascii_lowercase().contains("script:"),
+      "tab-split js href survived: {c}"
+    );
 
     // vbscript: on a URL attribute other than href.
     let d = strip_unsafe_attrs("<img src=\"vbscript:msgbox(1)\">");
-    assert!(!d.to_ascii_lowercase().contains("vbscript"), "vbscript src survived: {d}");
+    assert!(
+      !d.to_ascii_lowercase().contains("vbscript"),
+      "vbscript src survived: {d}"
+    );
   }
 
   #[test]
@@ -1163,7 +1257,10 @@ mod security_tests {
     assert_eq!(img, "<img src=\"x.png\" alt=\"turn on the light\">");
 
     // A class literally named "on" — the substring must not trip the on* rule.
-    assert_eq!(strip_unsafe_attrs("<div class=\"on\">"), "<div class=\"on\">");
+    assert_eq!(
+      strip_unsafe_attrs("<div class=\"on\">"),
+      "<div class=\"on\">"
+    );
 
     // Valueless (boolean) attribute survives.
     assert_eq!(strip_unsafe_attrs("<input disabled>"), "<input disabled>");
@@ -1172,7 +1269,10 @@ mod security_tests {
     assert_eq!(strip_unsafe_attrs("a < b and on=off"), "a < b and on=off");
 
     // A comment mentioning onerror is NOT scanned — passes through verbatim.
-    assert_eq!(strip_unsafe_attrs("<!-- onerror=x -->"), "<!-- onerror=x -->");
+    assert_eq!(
+      strip_unsafe_attrs("<!-- onerror=x -->"),
+      "<!-- onerror=x -->"
+    );
 
     // Self-closing tag terminator preserved; multibyte text intact.
     assert_eq!(strip_unsafe_attrs("café <br/> more"), "café <br/> more");
@@ -1191,9 +1291,18 @@ mod security_tests {
     let md = "<div>\n<img src=x onerror=\"steal(document.cookie)\">\n</div>\n";
     let snapshot = import_markdown(md, "root");
     let html = export_html(&snapshot).expect("export_html");
-    assert!(!html.contains("onerror"), "onerror leaked into export: {html}");
-    assert!(!html.contains("steal("), "handler body leaked into export: {html}");
-    assert!(html.contains("<img"), "the img tag itself should survive: {html}");
+    assert!(
+      !html.contains("onerror"),
+      "onerror leaked into export: {html}"
+    );
+    assert!(
+      !html.contains("steal("),
+      "handler body leaked into export: {html}"
+    );
+    assert!(
+      html.contains("<img"),
+      "the img tag itself should survive: {html}"
+    );
   }
 }
 

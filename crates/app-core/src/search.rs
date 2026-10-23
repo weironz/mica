@@ -59,8 +59,8 @@ use uuid::Uuid;
 
 use mica_infra::ApiResult;
 
-pub use crate::body_arena::LockState;
 use crate::body_arena::Arena;
+pub use crate::body_arena::LockState;
 
 /// Safety lap for the refresh cursor. `updated_at` is `clock_timestamp()` *of
 /// the writing statement* (it was `now()`, the transaction's START, until
@@ -111,7 +111,10 @@ impl BodyIndex {
   pub fn new(lock_in_memory: bool) -> Self {
     Self {
       refresh_lock: Mutex::new(()),
-      inner: RwLock::new(Inner { arena: Arena::new(lock_in_memory), seen: None }),
+      inner: RwLock::new(Inner {
+        arena: Arena::new(lock_in_memory),
+        seen: None,
+      }),
     }
   }
 
@@ -284,13 +287,19 @@ mod tests {
     let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
     index
       .refresh_with(|_| async move {
-        Ok(Some((vec![(a, "Deploy with Docker".into()), (b, "部署流程".into())], Utc::now())))
+        Ok(Some((
+          vec![(a, "Deploy with Docker".into()), (b, "部署流程".into())],
+          Utc::now(),
+        )))
       })
       .await
       .unwrap();
     assert_eq!(index.matching_ids("DOCKER").await, vec![a]);
     let snippets = index.snippets(&[a, b, Uuid::new_v4()], "docker").await;
-    assert_eq!(snippets.get(&a).map(String::as_str), Some("Deploy with Docker"));
+    assert_eq!(
+      snippets.get(&a).map(String::as_str),
+      Some("Deploy with Docker")
+    );
     assert_eq!(snippets.len(), 1, "no occurrence, no snippet");
   }
 
@@ -300,10 +309,32 @@ mod tests {
   #[test]
   fn matching_without_a_folded_copy_equals_folding_first() {
     let bodies = [
-      "Deploy with Docker", "部署 Docker 流程", "docker only lowercase", "ÉCOLE École",
-      "v1.2.3 Release", "ALLCAPS", "", "A", "部署", "x\nY\nz", "İstanbul DOCKER",
+      "Deploy with Docker",
+      "部署 Docker 流程",
+      "docker only lowercase",
+      "ÉCOLE École",
+      "v1.2.3 Release",
+      "ALLCAPS",
+      "",
+      "A",
+      "部署",
+      "x\nY\nz",
+      "İstanbul DOCKER",
     ];
-    let needles = ["docker", "DOCKER", "部署", "v1.2", "release", "allcaps", "a", "école", "y\nz", "ü", "docker 流程", "istanbul"];
+    let needles = [
+      "docker",
+      "DOCKER",
+      "部署",
+      "v1.2",
+      "release",
+      "allcaps",
+      "a",
+      "école",
+      "y\nz",
+      "ü",
+      "docker 流程",
+      "istanbul",
+    ];
     for body in bodies {
       let id = Uuid::new_v4();
       let mut indexed = Arena::new(false);
@@ -312,7 +343,11 @@ mod tests {
       for needle in needles {
         let folded = needle.to_ascii_lowercase();
         let reference = body.to_ascii_lowercase().contains(&folded);
-        assert_eq!(indexed.matching(&folded) == vec![id], reference, "body {body:?} needle {needle:?}");
+        assert_eq!(
+          indexed.matching(&folded) == vec![id],
+          reference,
+          "body {body:?} needle {needle:?}"
+        );
       }
     }
   }

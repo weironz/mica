@@ -1,0 +1,17 @@
+# The pinned Flutter SDK, as used by every workflow that builds or tests the
+# app: the version comes from .fvmrc at the repo root (the single pin — see
+# CLAUDE.md 开发机与工具链), stable channel, SDK download cached by the action.
+#
+# Extracted from six identical 4-line blocks (#88). Jobs that need rust-cache
+# or a different working directory keep those in their own steps — this action
+# only owns the SDK setup.
+name: setup-flutter
+description: Flutter SDK pinned by .fvmrc (stable channel, cached)
+runs:
+  using: composite
+  steps:
+    - uses: subosito/flutter-action@v2
+      with:
+        channel: stable
+        flutter-version-file: .fvmrc
+        cache: true

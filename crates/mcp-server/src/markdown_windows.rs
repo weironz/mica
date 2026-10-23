@@ -1,16 +1,6 @@
-//! Mica MCP server — a thin proxy that exposes the Mica REST API as MCP tools so
-//! an AI (Claude Desktop / Code / any MCP client) can list, read, create, and
-//! write Mica documents. It calls the API over HTTP with a PAT; it holds no DB
-//! or storage access of its own. "Backup/restore" here is just export/import —
-//! real backups are the job of external tools pointed at the exports.
-//!
-//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
-//! server URL + PAT through its usual chain — env, flags, saved login — and
-//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
-//! time while the read tools stay listed.
+//! Markdown windowing (anchor / section reads) plus the mangled-LaTeX guard.
 use rmcp::ErrorData as McpError;
 use serde_json::Value;
-
 
 /// The markdown string out of whatever `/export/markdown` answered with.
 ///
@@ -88,7 +78,11 @@ pub(crate) fn window_markdown(
 /// design (a caller says "Setup", not the exact heading), and generosity that
 /// is fine for choosing an insert position is not fine for choosing what to
 /// destroy.
-pub(crate) fn pick_anchor(headings: Option<&Value>, anchor: &str, strict: bool) -> Result<String, String> {
+pub(crate) fn pick_anchor(
+  headings: Option<&Value>,
+  anchor: &str,
+  strict: bool,
+) -> Result<String, String> {
   let needle = anchor.to_lowercase();
   let hits: Vec<(&str, &str)> = headings
     .and_then(Value::as_array)
@@ -97,7 +91,10 @@ pub(crate) fn pick_anchor(headings: Option<&Value>, anchor: &str, strict: bool) 
     .filter_map(|h| {
       let text = h.get("text").and_then(Value::as_str)?;
       let block_id = h.get("block_id").and_then(Value::as_str)?;
-      text.to_lowercase().contains(&needle).then_some((text, block_id))
+      text
+        .to_lowercase()
+        .contains(&needle)
+        .then_some((text, block_id))
     })
     .collect();
 

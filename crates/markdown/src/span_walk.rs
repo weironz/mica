@@ -49,7 +49,13 @@ pub(crate) struct SpanWalker<'m> {
 /// `Less` = `a` sorts before `b` = `a` wins the pick at equal (clipped) start:
 /// widest clipped end, then the renderer tie-break, then the HIGHER slice
 /// index (the parser appends equal-range outer marks last).
-fn cmp_candidates(marks: &[&InlineMark], hi: usize, ties: SpanTies, a: usize, b: usize) -> Ordering {
+fn cmp_candidates(
+  marks: &[&InlineMark],
+  hi: usize,
+  ties: SpanTies,
+  a: usize,
+  b: usize,
+) -> Ordering {
   let (ma, mb) = (marks[a], marks[b]);
   mb.end
     .min(hi)
@@ -72,7 +78,14 @@ impl<'m> SpanWalker<'m> {
         .cmp(&marks[b].start)
         .then_with(|| cmp_candidates(marks, hi, ties, a, b))
     });
-    SpanWalker { marks, order, next: 0, active: Vec::new(), hi, ties }
+    SpanWalker {
+      marks,
+      order,
+      next: 0,
+      active: Vec::new(),
+      hi,
+      ties,
+    }
   }
 
   /// The next mark to emit at scan position `pos`; `pos` only ever advances.
@@ -99,7 +112,12 @@ impl<'m> SpanWalker<'m> {
     });
     if let Some(a) = best {
       let m = self.marks[a];
-      return Some(Pick { s: pos, e: m.end.min(self.hi), idx: a, mark: m });
+      return Some(Pick {
+        s: pos,
+        e: m.end.min(self.hi),
+        idx: a,
+        mark: m,
+      });
     }
     // No active candidate: pending starts only grow from here and the sort IS
     // the selection order, so the first qualified pending mark is the pick.
@@ -110,7 +128,12 @@ impl<'m> SpanWalker<'m> {
         self.next += 1; // zero-width in range: can never qualify
         continue;
       }
-      return Some(Pick { s: m.start, e: m.end.min(self.hi), idx: a, mark: m });
+      return Some(Pick {
+        s: m.start,
+        e: m.end.min(self.hi),
+        idx: a,
+        mark: m,
+      });
     }
     None
   }

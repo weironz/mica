@@ -1,0 +1,21 @@
+# rustup on PATH for Rust jobs. The exact toolchain is NOT chosen here: the
+# repo pins it in rust-toolchain.toml and cargo/rustup honour that pin, so
+# `@stable` below only guarantees that rustup exists (the ci.yml rust job
+# explains how assuming otherwise broke a release).
+#
+# Extracted from five identical steps (#88). `targets` exists for the release
+# cross-compile matrix (e.g. x86_64-unknown-linux-musl); empty means host only.
+# rust-cache stays in the calling job — its key differs per job.
+name: setup-rust
+description: rustup on PATH (exact version pinned by rust-toolchain.toml)
+inputs:
+  targets:
+    description: Extra rustup target triples (comma-separated), or empty for host only.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.targets }}

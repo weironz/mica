@@ -2,9 +2,10 @@ part of 'render.dart';
 
 /// Renderer for one atomic block kind (divider, image, math, table, …).
 ///
-/// `RenderDocument`'s three passes (layout, background, body/overlay paint)
-/// dispatch through [RenderDocument.atomicRenderers] instead of per-kind
-/// branches; the text pipeline stays the engine for text-bearing kinds (see
+/// `RenderDocument`'s passes (layout, background, body/overlay paint,
+/// hit-test, whole-block selection paint) dispatch through
+/// [RenderDocument.atomicRenderers] instead of per-kind branches; the text
+/// pipeline stays the engine for text-bearing kinds (see
 /// docs/architecture/render-architecture.md). Adding a block type means adding a renderer
 /// here and registering it — the main loops don't change.
 abstract class AtomicBlockRenderer {
@@ -74,6 +75,71 @@ abstract class AtomicBlockRenderer {
     _NodeLayout l,
     int index,
   ) {}
+
+  /// Pointer probe over the block's content and chrome, in the host's LOCAL
+  /// coordinates. Returns a renderer-owned hit description ([TableHit],
+  /// [ImageHit], …) or null on a miss. The host's public probes
+  /// ([RenderDocument.tableCellAt], [RenderDocument.imageAt], …) are thin
+  /// dispatch over this: scan the layouts, ask the renderer that produced
+  /// each, cast the answer back to the renderer's own hit type. Default:
+  /// nothing is hit.
+  Object? hitTest(RenderDocument host, _NodeLayout l, Offset local) => null;
+
+  /// Paint the block's whole-block selection highlight — the layer
+  /// [RenderDocument] draws on top of a selected atomic node's opaque
+  /// content: [border] true is the collapsed caret-stop form (tint + a
+  /// caret-coloured stroke edge), false the "part of a ranged selection"
+  /// tint. A renderer with a tighter shape than the block box overrides this
+  /// (the table hugs its grid, the image strokes just the picture); the
+  /// default is the generic rounded-rect tint, which is also what
+  /// renderer-LESS atomic nodes (a plain code block) get from the host.
+  void paintSelection(
+    RenderDocument host,
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l, {
+    required bool border,
+  }) {
+    paintAtomicBlockSelection(host, canvas, offset, l, border: border);
+  }
+}
+
+/// The default whole-block selection highlight for an atomic node: a rounded
+/// selection tint over the block's full box, plus a caret-stroke edge when
+/// [border] — shared by [AtomicBlockRenderer.paintSelection]'s default and by
+/// host painting of atomic nodes no renderer claimed.
+void paintAtomicBlockSelection(
+  RenderDocument host,
+  Canvas canvas,
+  Offset offset,
+  _NodeLayout l, {
+  required bool border,
+}) {
+  // Start at the block's own left edge — drawing from x=0 spilled the
+  // tint into the drag-handle gutter, left of the page's text column.
+  final box = Rect.fromLTWH(
+    offset.dx + l.boxLeft,
+    offset.dy + l.boxTop,
+    host.size.width - l.boxLeft,
+    l.boxHeight,
+  );
+  final rr = RRect.fromRectAndRadius(
+    box.inflate(border ? 2 : 0),
+    const Radius.circular(6),
+  );
+  canvas.drawRRect(
+    rr,
+    Paint()..color = host._appearance.tokens.editor.selection,
+  );
+  if (border) {
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = host._appearance.tokens.editor.caret
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -186,6 +252,23 @@ class MathBlockRenderer extends AtomicBlockRenderer {
 // -----------------------------------------------------------------------------
 // Image
 // -----------------------------------------------------------------------------
+
+/// Everything a point on an image touches, in one pass: the hover toolbar
+/// sits INSIDE the picture's rect and the resize handle straddles its right
+/// edge, so one probe answers every host hit-test at once. A slot per probe;
+/// [ImageRenderer.hitTest] returns null when no slot hit.
+final class ImageHit {
+  const ImageHit({this.body = false, this.action, this.resize = false});
+
+  /// The point is inside the painted picture rect ([_NodeLayout.imageDst]).
+  final bool body;
+
+  /// Toolbar button action under the point (see `_imageActions`), or null.
+  final String? action;
+
+  /// The point is inside the right-edge resize handle.
+  final bool resize;
+}
 
 class ImageRenderer extends AtomicBlockRenderer {
   const ImageRenderer();
@@ -415,6 +498,58 @@ class ImageRenderer extends AtomicBlockRenderer {
   }
 
   @override
+  ImageHit? hitTest(RenderDocument host, _NodeLayout l, Offset local) {
+    String? action;
+    for (var k = 0; k < l.imageButtons.length; k++) {
+      if (l.imageButtons[k].contains(local)) {
+        action = _imageActions[k];
+        break;
+      }
+    }
+    final resize = l.imageResize?.contains(local) ?? false;
+    final body = l.imageDst?.contains(local) ?? false;
+    if (!body && action == null && !resize) return null;
+    return ImageHit(body: body, action: action, resize: resize);
+  }
+
+  @override
+  void paintSelection(
+    RenderDocument host,
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l, {
+    required bool border,
+  }) {
+    final dst = l.imageDst;
+    if (dst == null) {
+      super.paintSelection(host, canvas, offset, l, border: border);
+      return;
+    }
+    // A selected image gets JUST a thick blue border — no tint or shadow over
+    // the picture (a shadow with a transparent occluder bled grey across the
+    // whole image). A light tint stays only when the image is part of a
+    // multi-block range select, to read as "included".
+    final rr = RRect.fromRectAndRadius(
+      dst.shift(offset),
+      const Radius.circular(6),
+    );
+    if (border) {
+      canvas.drawRRect(
+        rr,
+        Paint()
+          ..color = host._appearance.tokens.editor.caret
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3,
+      );
+    } else {
+      canvas.drawRRect(
+        rr,
+        Paint()..color = host._appearance.tokens.editor.selection,
+      );
+    }
+  }
+
+  @override
   void paintOverlay(
     RenderDocument host,
     Canvas canvas,
@@ -475,6 +610,46 @@ class ImageRenderer extends AtomicBlockRenderer {
 // -----------------------------------------------------------------------------
 // Table
 // -----------------------------------------------------------------------------
+
+/// Everything a point inside a table touches, in one pass. A table's hit
+/// regions OVERLAP by design — the 12px resize border sits on the last pixels
+/// of the cell left of it, and the row handle is inside the row's first
+/// cell — so one probe answers every host hit-test at once. A slot per probe;
+/// null/false = miss for that probe. [TableRenderer.hitTest] returns null
+/// when no slot hit.
+final class TableHit {
+  const TableHit({
+    this.cell,
+    this.rowHandle,
+    this.colHandle,
+    this.blockHandle = false,
+    this.delete = false,
+    this.addColumn,
+    this.colBorder,
+  });
+
+  /// Cell under the point: row, column, and its local rect.
+  final ({int row, int col, Rect rect})? cell;
+
+  /// Left-gutter row index under the point.
+  final int? rowHandle;
+
+  /// Top-gutter column index under the point.
+  final int? colHandle;
+
+  /// The point is inside the top-left block-drag handle.
+  final bool blockHandle;
+
+  /// The point is inside the top-right delete icon.
+  final bool delete;
+
+  /// On an append strip: true = the add-column strip, false = the add-row bar.
+  final bool? addColumn;
+
+  /// On a column-resize border: the column to the border's RIGHT (editor's
+  /// resize math and menu consume that id).
+  final int? colBorder;
+}
 
 class TableRenderer extends AtomicBlockRenderer {
   const TableRenderer();
@@ -690,6 +865,125 @@ class TableRenderer extends AtomicBlockRenderer {
             gridHeight,
           );
     return layout;
+  }
+
+  @override
+  TableHit? hitTest(RenderDocument host, _NodeLayout l, Offset local) {
+    ({int row, int col, Rect rect})? cell;
+    int? rowHandle;
+    int? colHandle;
+    int? colBorder;
+    bool? addColumn;
+    for (final c in l.tableCells) {
+      if (c.rect.contains(local)) {
+        cell = (row: c.row, col: c.col, rect: c.rect);
+        break;
+      }
+    }
+    for (var r = 0; r < l.rowHandles.length; r++) {
+      if (l.rowHandles[r].contains(local)) {
+        rowHandle = r;
+        break;
+      }
+    }
+    for (var c = 0; c < l.colHandles.length; c++) {
+      if (l.colHandles[c].contains(local)) {
+        colHandle = c;
+        break;
+      }
+    }
+    final blockHandle = l.tableHandle?.contains(local) ?? false;
+    final delete = l.tableDelete?.contains(local) ?? false;
+    if (l.addColBar?.contains(local) ?? false) {
+      addColumn = true;
+    } else if (l.addRowBar?.contains(local) ?? false) {
+      addColumn = false;
+    }
+    for (final b in l.colBorders) {
+      if (b.rect.contains(local)) {
+        colBorder = b.col;
+        break;
+      }
+    }
+    if (cell == null &&
+        rowHandle == null &&
+        colHandle == null &&
+        !blockHandle &&
+        !delete &&
+        addColumn == null &&
+        colBorder == null) {
+      return null;
+    }
+    return TableHit(
+      cell: cell,
+      rowHandle: rowHandle,
+      colHandle: colHandle,
+      blockHandle: blockHandle,
+      delete: delete,
+      addColumn: addColumn,
+      colBorder: colBorder,
+    );
+  }
+
+  /// The cell of table layout [l] nearest [local] — the point is clamped into
+  /// the grid first, so a drag that wanders past the table's edge still
+  /// resolves to an edge cell (keeps a cross-cell area drag live outside the
+  /// borders).
+  ({int row, int col})? cellNear(_NodeLayout l, Offset local) {
+    if (l.tableCells.isEmpty) return null;
+    final grid = l.tableGridRect;
+    final p = grid == null
+        ? local
+        : Offset(
+            local.dx.clamp(grid.left + 0.5, grid.right - 0.5),
+            local.dy.clamp(grid.top + 0.5, grid.bottom - 0.5),
+          );
+    for (final cell in l.tableCells) {
+      if (cell.rect.contains(p)) return (row: cell.row, col: cell.col);
+    }
+    // On a border line: fall back to the nearest cell center.
+    _TableCell? best;
+    var bestD = double.infinity;
+    for (final cell in l.tableCells) {
+      final d = (cell.rect.center - p).distanceSquared;
+      if (d < bestD) {
+        bestD = d;
+        best = cell;
+      }
+    }
+    return best == null ? null : (row: best.row, col: best.col);
+  }
+
+  @override
+  void paintSelection(
+    RenderDocument host,
+    Canvas canvas,
+    Offset offset,
+    _NodeLayout l, {
+    required bool border,
+  }) {
+    final grid = l.tableGridRect;
+    if (grid == null) {
+      super.paintSelection(host, canvas, offset, l, border: border);
+      return;
+    }
+    // A selected table hugs the grid exactly — no tint in the top gutter (column
+    // handles) or the bottom add-row bar, and no rounded spill past the outer
+    // lines. The highlight lands between the grid's top and bottom lines.
+    final box = grid.shift(offset);
+    canvas.drawRect(
+      box,
+      Paint()..color = host._appearance.tokens.editor.selection,
+    );
+    if (border) {
+      canvas.drawRect(
+        box,
+        Paint()
+          ..color = host._appearance.tokens.editor.caret
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+    }
   }
 
   @override

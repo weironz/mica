@@ -4185,7 +4185,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
             token,
             cloudWs.id,
             fileName: 'image',
-            mimeType: _sniffImageMime(bytes),
+            mimeType: sniffImageMime(bytes),
             bytes: bytes,
           );
           idMap[sha] = up.id;
@@ -4259,24 +4259,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       }
     }
     return out;
-  }
-
-  /// Sniff an image MIME from magic bytes (local image blocks store only a name,
-  /// not a MIME). A wrong-but-decodable type is cosmetic; default to PNG.
-  String _sniffImageMime(Uint8List b) {
-    if (b.length >= 2 && b[0] == 0x89 && b[1] == 0x50) return 'image/png';
-    if (b.length >= 2 && b[0] == 0xFF && b[1] == 0xD8) return 'image/jpeg';
-    if (b.length >= 3 && b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) {
-      return 'image/gif';
-    }
-    if (b.length >= 12 &&
-        b[8] == 0x57 &&
-        b[9] == 0x45 &&
-        b[10] == 0x42 &&
-        b[11] == 0x50) {
-      return 'image/webp';
-    }
-    return 'image/png';
   }
 
   /// Minimal modal collecting cloud credentials for migration. Returns the auth

@@ -70,7 +70,10 @@ struct Buffer {
 
 impl Buffer {
   fn with_capacity(capacity: usize) -> Self {
-    Buffer { text: String::with_capacity(capacity), locked: false }
+    Buffer {
+      text: String::with_capacity(capacity),
+      locked: false,
+    }
   }
 
   /// Pin every reserved page. Called only once the buffer is FILLED (see
@@ -108,10 +111,17 @@ pub(crate) struct Arena {
 impl Arena {
   pub(crate) fn new(lock: bool) -> Self {
     Arena {
-      buffer: Buffer { text: String::new(), locked: false },
+      buffer: Buffer {
+        text: String::new(),
+        locked: false,
+      },
       slots: HashMap::new(),
       live: 0,
-      lock: if lock { LockState::Locked } else { LockState::Disabled },
+      lock: if lock {
+        LockState::Locked
+      } else {
+        LockState::Disabled
+      },
     }
   }
 
@@ -132,7 +142,14 @@ impl Arena {
       let start = self.buffer.text.len();
       self.buffer.text.push_str(&text);
       let has_upper = text.bytes().any(|b| b.is_ascii_uppercase());
-      self.slots.insert(id, Slot { start, len: text.len(), has_upper });
+      self.slots.insert(
+        id,
+        Slot {
+          start,
+          len: text.len(),
+          has_upper,
+        },
+      );
       self.live += text.len();
     }
     if self.lock == LockState::Locked && !self.buffer.locked && self.buffer.text.capacity() > 0 {
@@ -156,7 +173,9 @@ impl Arena {
     let mut next = Buffer::with_capacity(capacity);
     for slot in self.slots.values_mut() {
       let start = next.text.len();
-      next.text.push_str(&self.buffer.text[slot.start..slot.start + slot.len]);
+      next
+        .text
+        .push_str(&self.buffer.text[slot.start..slot.start + slot.len]);
       slot.start = start;
     }
     self.buffer = next;
@@ -185,7 +204,10 @@ impl Arena {
           return text.contains(folded);
         }
         let hay = text.as_bytes();
-        hay.len() >= needle.len() && hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+        hay.len() >= needle.len()
+          && hay
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
       })
       .map(|(id, _)| *id)
       .collect()
@@ -255,14 +277,26 @@ mod tests {
       seed ^= seed << 17;
       seed
     };
-    let words = ["部署", "Docker", "docker", "备份", "Mica", "search", "会议纪要", "x"];
+    let words = [
+      "部署",
+      "Docker",
+      "docker",
+      "备份",
+      "Mica",
+      "search",
+      "会议纪要",
+      "x",
+    ];
     let mut max_live = 0usize;
     for round in 0..300 {
       let batch: Vec<(Uuid, String)> = (0..(next() % 5 + 1))
         .map(|_| {
           let id = ids[(next() % ids.len() as u64) as usize];
           let len = (next() % 400) as usize;
-          let text: String = (0..len).map(|_| words[(next() % words.len() as u64) as usize]).collect::<Vec<_>>().join(" ");
+          let text: String = (0..len)
+            .map(|_| words[(next() % words.len() as u64) as usize])
+            .collect::<Vec<_>>()
+            .join(" ");
           (id, format!("{round} {text}"))
         })
         .collect();
@@ -292,7 +326,10 @@ mod tests {
       let (live, reserved, _) = arena.footprint();
       max_live = max_live.max(live);
       let bound = max_live + ((max_live as f64 * HEADROOM) as usize).max(MIN_HEADROOM) + 64 * 1024;
-      assert!(reserved <= bound, "round {round}: reserved {reserved} > bound {bound} (live {live})");
+      assert!(
+        reserved <= bound,
+        "round {round}: reserved {reserved} > bound {bound} (live {live})"
+      );
     }
   }
 
@@ -307,7 +344,10 @@ mod tests {
     let mut on = Arena::new(true);
     let id = Uuid::new_v4();
     on.insert_all(vec![(id, "Deploy with Docker".into())]);
-    assert!(matches!(on.footprint().2, LockState::Locked | LockState::Failed(_)));
+    assert!(matches!(
+      on.footprint().2,
+      LockState::Locked | LockState::Failed(_)
+    ));
     assert_eq!(on.matching("docker"), vec![id]);
   }
 }

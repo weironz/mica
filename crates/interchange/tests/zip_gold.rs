@@ -43,8 +43,8 @@ fn store_zip_matches_gold() {
     std::fs::write(&path, &built).unwrap();
     return;
   }
-  let gold = std::fs::read(&path)
-    .expect("missing tests/fixtures/store_zip.gold — generate with GEN_GOLD=1");
+  let gold =
+    std::fs::read(&path).expect("missing tests/fixtures/store_zip.gold — generate with GEN_GOLD=1");
   assert_eq!(
     built, gold,
     "STORE-ZIP bytes drifted from the gold fixture; if the format change is \

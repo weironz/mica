@@ -736,10 +736,6 @@ class SyncReconcileController extends ChangeNotifier {
   /// socket is down).
   String? get viewsEventsWorkspaceId => _viewsEventsWorkspaceId;
 
-  /// The device client id once learned — the shell reads it back to seed the
-  /// §6 migrator; null before the first CRDT session.
-  BigInt? get knownClientId => _clientId;
-
   @override
   void dispose() {
     _syncRefetchTimer?.cancel();

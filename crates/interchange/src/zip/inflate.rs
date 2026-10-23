@@ -70,7 +70,9 @@ const DIST_EXTRA: [u8; 30] = [
   0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
 ];
 /// Order in which code-length code lengths are stored (RFC 1951 §3.2.7).
-const CL_ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+const CL_ORDER: [usize; 19] = [
+  16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+];
 
 impl Inflater<'_> {
   fn run(mut self) -> Result<Vec<u8>, InflateError> {
@@ -124,7 +126,9 @@ impl Inflater<'_> {
       return Err(InflateError("truncated stored block"));
     }
     self.reserve_out(len)?;
-    self.out.extend_from_slice(&self.input[self.pos..self.pos + len]);
+    self
+      .out
+      .extend_from_slice(&self.input[self.pos..self.pos + len]);
     self.pos += len;
     Ok(())
   }

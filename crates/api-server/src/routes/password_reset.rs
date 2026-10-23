@@ -30,7 +30,9 @@ use mica_infra::{ApiResult, Mail};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::auth::{hash_password, normalize_email, revoke_user_sessions_in_tx, sha256_hex};
+use super::auth::{
+  hash_password, mint_secret, normalize_email, revoke_user_sessions_in_tx, sha256_hex,
+};
 
 /// Reset links carry this prefix so a stray token is recognizable in a log the
 /// way `mica_rt_` / `mica_pat_` are. 244 bits of randomness follow.
@@ -107,9 +109,7 @@ async fn mint_reset_token(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<String>
     .execute(db)
     .await?;
 
-  // 244 bits from two v4 UUIDs — same recipe as a refresh token.
-  let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-  let token = format!("{RESET_PREFIX}{secret}");
+  let token = mint_secret(RESET_PREFIX);
   let expires_at = Utc::now() + Duration::hours(RESET_TTL_HOURS);
 
   sqlx::query(

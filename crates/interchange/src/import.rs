@@ -116,10 +116,18 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   let mica_export = manifest
     .as_deref()
     .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-    .and_then(|m| m.get("generator").and_then(|g| g.as_str()).map(|g| g == "mica"))
+    .and_then(|m| {
+      m.get("generator")
+        .and_then(|g| g.as_str())
+        .map(|g| g == "mica")
+    })
     .unwrap_or(false);
   let clean = |s: &str| -> String {
-    if notion { strip_notion_id(s).to_string() } else { s.to_string() }
+    if notion {
+      strip_notion_id(s).to_string()
+    } else {
+      s.to_string()
+    }
   };
   // Planning order: manifest entries first (they carry pre-order + explicit
   // `type`, so folders — even empty ones with no `.md` — round-trip), then any
@@ -190,7 +198,11 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   let mut dirs_with_children: HashSet<String> = HashSet::new();
   for (path, is_folder) in &ordered {
     let parts: Vec<&str> = path.split('/').collect();
-    let chain = if *is_folder { parts.len() } else { parts.len().saturating_sub(1) };
+    let chain = if *is_folder {
+      parts.len()
+    } else {
+      parts.len().saturating_sub(1)
+    };
     let mut acc = String::new();
     for seg in parts.iter().take(chain) {
       if !acc.is_empty() {
@@ -211,7 +223,11 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     let parts: Vec<&str> = path.split('/').collect();
     // For a folder entry the whole path is the folder chain; for a document the
     // ancestors are folders and the last segment is the file.
-    let chain = if *is_folder { parts.len() } else { parts.len().saturating_sub(1) };
+    let chain = if *is_folder {
+      parts.len()
+    } else {
+      parts.len().saturating_sub(1)
+    };
 
     let mut parent: Option<usize> = None;
     let mut folder_path = String::new();
@@ -292,7 +308,10 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
     // survives. The heading is looked for after any front matter, which is
     // where `with_page_title` writes it; `mica_markdown::strip_page_title` is
     // its inverse and lives beside it so the two cannot drift.
-    let title = doc_titles.get(path).cloned().unwrap_or_else(|| stem.clone());
+    let title = doc_titles
+      .get(path)
+      .cloned()
+      .unwrap_or_else(|| stem.clone());
     let body = if notion || mica_export {
       mica_markdown::strip_page_title(markdown, &title)
     } else {
@@ -461,7 +480,12 @@ fn manifest_entries(manifest_json: Option<&str>) -> Vec<ManifestEntry> {
         .and_then(|t| t.as_str())
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.to_string());
-      Some(ManifestEntry { path, is_folder, title, icon })
+      Some(ManifestEntry {
+        path,
+        is_folder,
+        title,
+        icon,
+      })
     })
     .collect()
 }
@@ -470,7 +494,11 @@ fn manifest_entries(manifest_json: Option<&str>) -> Vec<ManifestEntry> {
 /// — the same set [`is_markdown_path`] accepts, so a file that is read as
 /// Markdown never keeps its extension in the page name.
 pub(crate) fn strip_md_ext(name: &str) -> &str {
-  match name.len().checked_sub(3).and_then(|at| name.get(at..).map(|ext| (at, ext))) {
+  match name
+    .len()
+    .checked_sub(3)
+    .and_then(|at| name.get(at..).map(|ext| (at, ext)))
+  {
     Some((at, ext)) if ext.eq_ignore_ascii_case(".md") => &name[..at],
     _ => name,
   }
@@ -576,7 +604,9 @@ pub fn resolve_ref(from_file: &str, href: &str, paths: &HashSet<String>) -> Opti
 }
 
 fn has_scheme(s: &str) -> bool {
-  let Some(colon) = s.find(':') else { return false };
+  let Some(colon) = s.find(':') else {
+    return false;
+  };
   let prefix = &s[..colon];
   if let Some(slash) = s.find('/')
     && slash < colon
@@ -584,11 +614,20 @@ fn has_scheme(s: &str) -> bool {
     return false;
   }
   !prefix.is_empty()
-    && prefix.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-    && prefix.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
+    && prefix
+      .chars()
+      .next()
+      .is_some_and(|c| c.is_ascii_alphabetic())
+    && prefix
+      .chars()
+      .all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
 }
 
-fn percent_decode(s: &str) -> String {
+/// Decode `%XX` escapes back to a UTF-8 string; leave malformed escapes alone.
+///
+/// Byte-based on purpose: a `%` followed by a multi-byte char must stay
+/// literal, and slicing the `str` there would not be on a char boundary.
+pub fn percent_decode(s: &str) -> String {
   let b = s.as_bytes();
   let mut out = Vec::with_capacity(b.len());
   let mut i = 0;
@@ -623,7 +662,10 @@ mod tests {
   use super::*;
 
   fn e(name: &str, bytes: &str) -> ZipFileEntry {
-    ZipFileEntry { name: name.to_string(), bytes: bytes.as_bytes().to_vec() }
+    ZipFileEntry {
+      name: name.to_string(),
+      bytes: bytes.as_bytes().to_vec(),
+    }
   }
 
   fn paths(items: &[&str]) -> HashSet<String> {
@@ -655,7 +697,10 @@ mod tests {
   fn an_exact_path_is_preferred_over_a_basename_match() {
     let ps = paths(&["photo.png", "assets/photo.png"]);
     // `photo.png` from root resolves to the ROOT file, not the subfolder one.
-    assert_eq!(resolve_ref("note.md", "photo.png", &ps), Some("photo.png".to_string()));
+    assert_eq!(
+      resolve_ref("note.md", "photo.png", &ps),
+      Some("photo.png".to_string())
+    );
   }
 
   /// An ambiguous basename must NOT be guessed — two `logo.png` in different
@@ -686,10 +731,16 @@ mod tests {
   }
 
   fn find<'a>(plan: &'a ImportPlan, title: &str) -> &'a PagePlan {
-    plan.pages.iter().find(|p| p.title == title).expect("page present")
+    plan
+      .pages
+      .iter()
+      .find(|p| p.title == title)
+      .expect("page present")
   }
   fn parent_title<'a>(plan: &'a ImportPlan, title: &str) -> Option<&'a str> {
-    find(plan, title).parent.map(|i| plan.pages[i].title.as_str())
+    find(plan, title)
+      .parent
+      .map(|i| plan.pages[i].title.as_str())
   }
 
   // A pure folder with a child document (the new Mica export shape): the folder
@@ -697,10 +748,13 @@ mod tests {
   #[test]
   fn folder_with_child_imports_as_folder() {
     let raw = vec![
-      e("manifest.json", &manifest(&[
-        ("Chapter", "Chapter", "folder"),
-        ("Chapter/Intro.md", "Intro", "document"),
-      ])),
+      e(
+        "manifest.json",
+        &manifest(&[
+          ("Chapter", "Chapter", "folder"),
+          ("Chapter/Intro.md", "Intro", "document"),
+        ]),
+      ),
       e("Chapter/Intro.md", "# Intro\n\nhello"),
     ];
     let plan = plan_import(raw, false, ImportMode::AsIs);
@@ -726,7 +780,10 @@ mod tests {
   #[test]
   fn a_differently_named_leading_heading_survives_our_own_import() {
     let raw = vec![
-      e("manifest.json", &manifest(&[("Intro.md", "Intro", "document")])),
+      e(
+        "manifest.json",
+        &manifest(&[("Intro.md", "Intro", "document")]),
+      ),
       e("Intro.md", "# 别的标题\n\nhello"),
     ];
     let plan = plan_import(raw, false, ImportMode::AsIs);
@@ -765,9 +822,10 @@ mod tests {
   // round-trip — this is what the manifest folder entry buys us.
   #[test]
   fn empty_folder_survives_via_manifest() {
-    let raw = vec![
-      e("manifest.json", &manifest(&[("Empty", "Empty", "folder")])),
-    ];
+    let raw = vec![e(
+      "manifest.json",
+      &manifest(&[("Empty", "Empty", "folder")]),
+    )];
     let plan = plan_import(raw, false, ImportMode::AsIs);
     assert_eq!(plan.pages.len(), 1);
     let empty = find(&plan, "Empty");
@@ -780,10 +838,16 @@ mod tests {
   // container) and reports its name for naming the workspace.
   #[test]
   fn new_workspace_collapses_single_wrapper() {
-    let raw = vec![e("MyProject/a.md", "# a\n\nhi"), e("MyProject/sub/b.md", "# b\n\nyo")];
+    let raw = vec![
+      e("MyProject/a.md", "# a\n\nhi"),
+      e("MyProject/sub/b.md", "# b\n\nyo"),
+    ];
     let plan = plan_import(raw, false, ImportMode::NewWorkspace);
     assert_eq!(plan.wrapper_name.as_deref(), Some("MyProject"));
-    assert!(plan.pages.iter().all(|p| p.title != "MyProject"), "wrapper removed");
+    assert!(
+      plan.pages.iter().all(|p| p.title != "MyProject"),
+      "wrapper removed"
+    );
     assert_eq!(parent_title(&plan, "a"), None);
     assert_eq!(parent_title(&plan, "sub"), None);
     assert_eq!(parent_title(&plan, "b"), Some("sub"));
@@ -804,7 +868,11 @@ mod tests {
   // A lone top-level DOCUMENT is never collapsed (it IS the content).
   #[test]
   fn new_workspace_single_document_not_collapsed() {
-    let plan = plan_import(vec![e("solo.md", "# solo\n\nhi")], false, ImportMode::NewWorkspace);
+    let plan = plan_import(
+      vec![e("solo.md", "# solo\n\nhi")],
+      false,
+      ImportMode::NewWorkspace,
+    );
     assert_eq!(plan.wrapper_name, None);
     assert_eq!(parent_title(&plan, "solo"), None);
   }
@@ -833,9 +901,17 @@ mod tests {
       false,
       ImportMode::IntoContainer("backup".into()),
     );
-    let tops: Vec<&str> =
-      plan.pages.iter().filter(|p| p.parent.is_none()).map(|p| p.title.as_str()).collect();
-    assert_eq!(tops, vec!["MyProject"], "single container = wrapper name, not fallback");
+    let tops: Vec<&str> = plan
+      .pages
+      .iter()
+      .filter(|p| p.parent.is_none())
+      .map(|p| p.title.as_str())
+      .collect();
+    assert_eq!(
+      tops,
+      vec!["MyProject"],
+      "single container = wrapper name, not fallback"
+    );
     assert!(plan.pages.iter().all(|p| p.title != "backup"));
     assert_eq!(parent_title(&plan, "a"), Some("MyProject"));
     assert_eq!(parent_title(&plan, "sub"), Some("MyProject"));
@@ -849,10 +925,18 @@ mod tests {
   // destination root (outcome X), NOT re-wrapped under the folder's name.
   #[test]
   fn auto_spills_single_wrapper_to_root() {
-    let raw = vec![e("MyFolder/SubA/a.md", "# a"), e("MyFolder/SubB/b.md", "# b")];
+    let raw = vec![
+      e("MyFolder/SubA/a.md", "# a"),
+      e("MyFolder/SubB/b.md", "# b"),
+    ];
     let plan = plan_import(raw, false, ImportMode::Auto("MyFolder.zip".into()));
     // Wrapper peeled: no "MyFolder" / no fallback container at the top.
-    assert!(plan.pages.iter().all(|p| p.title != "MyFolder" && p.title != "MyFolder.zip"));
+    assert!(
+      plan
+        .pages
+        .iter()
+        .all(|p| p.title != "MyFolder" && p.title != "MyFolder.zip")
+    );
     assert_eq!(parent_title(&plan, "SubA"), None, "SubA at root");
     assert_eq!(parent_title(&plan, "SubB"), None, "SubB at root");
     assert_eq!(parent_title(&plan, "a"), Some("SubA"));
@@ -876,7 +960,11 @@ mod tests {
   // A lone top-level entry is never wrapped (nothing to declutter).
   #[test]
   fn auto_spills_single_entry() {
-    let plan = plan_import(vec![e("solo.md", "# solo")], false, ImportMode::Auto("z".into()));
+    let plan = plan_import(
+      vec![e("solo.md", "# solo")],
+      false,
+      ImportMode::Auto("z".into()),
+    );
     assert!(plan.pages.iter().all(|p| p.title != "z"));
     assert_eq!(parent_title(&plan, "solo"), None);
   }
@@ -892,7 +980,10 @@ mod tests {
       false,
       ImportMode::IntoLocation,
     );
-    assert!(plan.pages.iter().all(|p| !p.is_folder), "no container created");
+    assert!(
+      plan.pages.iter().all(|p| !p.is_folder),
+      "no container created"
+    );
     assert_eq!(parent_title(&plan, "a"), None);
     assert_eq!(parent_title(&plan, "b"), None);
   }
@@ -904,26 +995,46 @@ mod tests {
   #[test]
   fn page_with_subpages_splits_into_folder_plus_leaf() {
     let raw = vec![
-      e("manifest.json", &manifest(&[
-        ("Doc.md", "Doc", "document"),
-        ("Doc/Child.md", "Child", "document"),
-      ])),
+      e(
+        "manifest.json",
+        &manifest(&[
+          ("Doc.md", "Doc", "document"),
+          ("Doc/Child.md", "Child", "document"),
+        ]),
+      ),
       e("Doc.md", "# Doc\n\nparent body"),
       e("Doc/Child.md", "# Child\n\nchild body"),
     ];
     let plan = plan_import(raw, false, ImportMode::AsIs);
-    let folder = plan.pages.iter().find(|p| p.title == "Doc" && p.is_folder).expect("folder");
+    let folder = plan
+      .pages
+      .iter()
+      .find(|p| p.title == "Doc" && p.is_folder)
+      .expect("folder");
     assert!(folder.parent.is_none() && folder.markdown.is_empty());
-    let leaf = plan.pages.iter().find(|p| p.title == "Doc" && !p.is_folder).expect("leaf");
+    let leaf = plan
+      .pages
+      .iter()
+      .find(|p| p.title == "Doc" && !p.is_folder)
+      .expect("leaf");
     // `# Doc` is the title our own export wrote (manifest `generator: mica`),
     // so it is stripped and only the body remains — see
     // `folder_with_child_imports_as_folder` for why this flipped.
     assert_eq!(leaf.markdown.trim(), "parent body");
-    assert_eq!(leaf.parent.map(|i| &plan.pages[i]).map(|p| p.title.as_str()), Some("Doc"));
+    assert_eq!(
+      leaf
+        .parent
+        .map(|i| &plan.pages[i])
+        .map(|p| p.title.as_str()),
+      Some("Doc")
+    );
     assert_eq!(parent_title(&plan, "Child"), Some("Doc"));
     // The child hangs off the FOLDER, not off the leaf page.
     let child_parent = find(&plan, "Child").parent.expect("has parent");
-    assert!(plan.pages[child_parent].is_folder, "child nests under the folder");
+    assert!(
+      plan.pages[child_parent].is_folder,
+      "child nests under the folder"
+    );
     // Invariant: no page ever has a page as its parent.
     assert_no_page_under_page(&plan);
   }
@@ -952,10 +1063,16 @@ mod tests {
       &mica_markdown::export_markdown(&source).expect("export"),
       title,
     );
-    assert!(exported.starts_with("# 季度回顾\n\n"), "precondition: {exported:?}");
+    assert!(
+      exported.starts_with("# 季度回顾\n\n"),
+      "precondition: {exported:?}"
+    );
 
     let raw = vec![
-      e("manifest.json", &manifest(&[("季度回顾.md", title, "document")])),
+      e(
+        "manifest.json",
+        &manifest(&[("季度回顾.md", title, "document")]),
+      ),
       e("季度回顾.md", &exported),
     ];
     let plan = plan_import(raw, false, ImportMode::AsIs);
@@ -964,14 +1081,20 @@ mod tests {
 
     // What the importer then builds and stores.
     let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
-    assert!(mica_markdown::set_document_title(&mut reimported, &page.title));
+    assert!(mica_markdown::set_document_title(
+      &mut reimported,
+      &page.title
+    ));
 
     // And what exporting THAT produces.
     let re_exported = mica_markdown::with_page_title(
       &mica_markdown::export_markdown(&reimported).expect("re-export"),
       mica_markdown::document_title(&reimported).expect("title travelled in the document"),
     );
-    assert_eq!(re_exported, exported, "export → import → export is not stable");
+    assert_eq!(
+      re_exported, exported,
+      "export → import → export is not stable"
+    );
   }
 
   /// The same loop for a page whose body genuinely opens with a heading of its
@@ -987,12 +1110,18 @@ mod tests {
     );
 
     let raw = vec![
-      e("manifest.json", &manifest(&[("周报.md", title, "document")])),
+      e(
+        "manifest.json",
+        &manifest(&[("周报.md", title, "document")]),
+      ),
       e("周报.md", &exported),
     ];
     let plan = plan_import(raw, false, ImportMode::AsIs);
     let page = find(&plan, title);
-    assert!(page.markdown.trim_start().starts_with("# 另一个标题"), "content kept");
+    assert!(
+      page.markdown.trim_start().starts_with("# 另一个标题"),
+      "content kept"
+    );
 
     let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
     mica_markdown::set_document_title(&mut reimported, &page.title);
@@ -1009,12 +1138,18 @@ mod tests {
   fn empty_page_with_subpages_becomes_only_a_folder() {
     let raw = vec![
       e("Doc 1234567890abcdef1234567890abcdef.md", "# Doc\n"),
-      e("Doc 1234567890abcdef1234567890abcdef/Child 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f.md",
-        "# Child\n\nchild body"),
+      e(
+        "Doc 1234567890abcdef1234567890abcdef/Child 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f.md",
+        "# Child\n\nchild body",
+      ),
     ];
     let plan = plan_import(raw, true, ImportMode::AsIs);
     let docs: Vec<&PagePlan> = plan.pages.iter().filter(|p| p.title == "Doc").collect();
-    assert_eq!(docs.len(), 1, "one node named Doc, not a folder + empty page");
+    assert_eq!(
+      docs.len(),
+      1,
+      "one node named Doc, not a folder + empty page"
+    );
     assert!(docs[0].is_folder);
     assert_eq!(parent_title(&plan, "Child"), Some("Doc"));
     assert_no_page_under_page(&plan);
@@ -1027,8 +1162,7 @@ mod tests {
         assert!(
           plan.pages[parent].is_folder,
           "'{}' nests under the page '{}' — pages are leaves",
-          p.title,
-          plan.pages[parent].title,
+          p.title, plan.pages[parent].title,
         );
       }
     }
@@ -1040,15 +1174,21 @@ mod tests {
   #[test]
   fn folder_name_with_spaces_round_trips_via_manifest_title() {
     let raw = vec![
-      e("manifest.json", &manifest(&[
-        ("My_Folder", "My Folder", "folder"),
-        ("My_Folder/Note.md", "Note", "document"),
-      ])),
+      e(
+        "manifest.json",
+        &manifest(&[
+          ("My_Folder", "My Folder", "folder"),
+          ("My_Folder/Note.md", "Note", "document"),
+        ]),
+      ),
       e("My_Folder/Note.md", "# Note\n\nbody"),
     ];
     let plan = plan_import(raw, false, ImportMode::AsIs);
     let folder = find(&plan, "My Folder");
-    assert!(folder.is_folder, "folder keeps its real name from the manifest");
+    assert!(
+      folder.is_folder,
+      "folder keeps its real name from the manifest"
+    );
     assert_eq!(parent_title(&plan, "Note"), Some("My Folder"));
     // The sanitized path segment must NEVER leak in as a display name.
     assert!(
@@ -1089,15 +1229,16 @@ mod tests {
   fn manifest_v2_icons_survive_export_then_import() {
     use crate::export_tree::{TreeNode, build_markdown_tree_zip};
 
-    let node = |id: &str, parent: Option<&str>, name: &str, ty: &str, icon: Option<&str>| TreeNode {
-      id: id.to_string(),
-      parent_id: parent.map(str::to_string),
-      position: "0000000010".to_string(),
-      name: name.to_string(),
-      object_type: ty.to_string(),
-      object_id: format!("obj-{id}"),
-      icon: icon.map(str::to_string),
-    };
+    let node =
+      |id: &str, parent: Option<&str>, name: &str, ty: &str, icon: Option<&str>| TreeNode {
+        id: id.to_string(),
+        parent_id: parent.map(str::to_string),
+        position: "0000000010".to_string(),
+        name: name.to_string(),
+        object_type: ty.to_string(),
+        object_id: format!("obj-{id}"),
+        icon: icon.map(str::to_string),
+      };
     let nodes = vec![
       node("f1", None, "归档", "folder", Some("📁")),
       node("p1", Some("f1"), "周报", "document", Some("😃")),
@@ -1106,11 +1247,17 @@ mod tests {
     ];
     let mut payloads = HashMap::new();
     for id in ["p1", "p2"] {
-      payloads.insert(format!("obj-{id}"), mica_markdown::import_markdown("正文。", "root"));
+      payloads.insert(
+        format!("obj-{id}"),
+        mica_markdown::import_markdown("正文。", "root"),
+      );
     }
     let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
       .into_iter()
-      .map(|z| ZipFileEntry { name: z.name, bytes: z.data })
+      .map(|z| ZipFileEntry {
+        name: z.name,
+        bytes: z.data,
+      })
       .collect();
     assert!(
       raw.iter().any(|e| e.name == "manifest.json"),
@@ -1118,8 +1265,16 @@ mod tests {
     );
 
     let plan = plan_import(raw, false, ImportMode::AsIs);
-    assert_eq!(find(&plan, "归档").icon.as_deref(), Some("📁"), "folder icon");
-    assert_eq!(find(&plan, "周报").icon.as_deref(), Some("😃"), "document icon");
+    assert_eq!(
+      find(&plan, "归档").icon.as_deref(),
+      Some("📁"),
+      "folder icon"
+    );
+    assert_eq!(
+      find(&plan, "周报").icon.as_deref(),
+      Some("😃"),
+      "document icon"
+    );
     assert_eq!(find(&plan, "日报").icon, None, "no icon stays no icon");
   }
 
@@ -1155,7 +1310,10 @@ mod tests {
     ];
     let mut payloads = HashMap::new();
     for id in ["p1", "p2", "p4", "p5"] {
-      payloads.insert(format!("obj-{id}"), mica_markdown::import_markdown("正文。", "root"));
+      payloads.insert(
+        format!("obj-{id}"),
+        mica_markdown::import_markdown("正文。", "root"),
+      );
     }
     payloads.insert(
       "obj-p3".to_string(),
@@ -1163,16 +1321,28 @@ mod tests {
     );
     let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
       .into_iter()
-      .map(|z| ZipFileEntry { name: z.name, bytes: z.data })
+      .map(|z| ZipFileEntry {
+        name: z.name,
+        bytes: z.data,
+      })
       .collect();
     let exported: HashMap<String, String> = raw
       .iter()
-      .map(|e| (e.name.clone(), String::from_utf8_lossy(&e.bytes).into_owned()))
+      .map(|e| {
+        (
+          e.name.clone(),
+          String::from_utf8_lossy(&e.bytes).into_owned(),
+        )
+      })
       .collect();
     // Preconditions: the names really were rewritten on the way out, so this
     // test is about the case the file name cannot carry.
     for path in ["Meeting_notes.md", "Q_A_2026_10.md", "Notes/Same-2.md"] {
-      assert!(exported.contains_key(path), "precondition: {path} in {:?}", exported.keys());
+      assert!(
+        exported.contains_key(path),
+        "precondition: {path} in {:?}",
+        exported.keys()
+      );
     }
     assert!(
       exported["带属性的页.md"].starts_with("---\ntags: [a]\nstatus: draft\n---\n# 带属性的页\n"),
@@ -1181,10 +1351,23 @@ mod tests {
     );
 
     let plan = plan_import(raw, false, ImportMode::AsIs);
-    let mut names: Vec<&str> =
-      plan.pages.iter().filter(|p| !p.is_folder).map(|p| p.title.as_str()).collect();
+    let mut names: Vec<&str> = plan
+      .pages
+      .iter()
+      .filter(|p| !p.is_folder)
+      .map(|p| p.title.as_str())
+      .collect();
     names.sort_unstable();
-    assert_eq!(names, ["Meeting notes", "Q&A: 2026/10", "Same", "Same", "带属性的页"]);
+    assert_eq!(
+      names,
+      [
+        "Meeting notes",
+        "Q&A: 2026/10",
+        "Same",
+        "Same",
+        "带属性的页"
+      ]
+    );
 
     for page in plan.pages.iter().filter(|p| !p.is_folder) {
       let path = page.archive_path.as_deref().expect("a document has a path");
@@ -1195,19 +1378,28 @@ mod tests {
       );
       // What the importer stores, and what exporting THAT produces.
       let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
-      assert!(mica_markdown::set_document_title(&mut reimported, &page.title));
+      assert!(mica_markdown::set_document_title(
+        &mut reimported,
+        &page.title
+      ));
       let re_exported = mica_markdown::with_page_title(
         &mica_markdown::export_markdown(&reimported).expect("re-export"),
         mica_markdown::document_title(&reimported).expect("title"),
       );
-      assert_eq!(re_exported, exported[path], "{path}: export → import → export is not stable");
+      assert_eq!(
+        re_exported, exported[path],
+        "{path}: export → import → export is not stable"
+      );
     }
 
     // The properties came through as properties, not as text.
     let with_props = find(&plan, "带属性的页");
     let reimported = mica_markdown::import_markdown(&with_props.markdown, "root");
     assert_eq!(
-      reimported.blocks[0].data.get("front_matter").and_then(|v| v.as_str()),
+      reimported.blocks[0]
+        .data
+        .get("front_matter")
+        .and_then(|v| v.as_str()),
       Some("tags: [a]\nstatus: draft")
     );
     assert_eq!(parent_title(&plan, "Same"), Some("Notes"));
@@ -1217,7 +1409,11 @@ mod tests {
   /// name too — otherwise the page is called `Note.Md`.
   #[test]
   fn the_md_extension_comes_off_whatever_its_case() {
-    let raw = vec![e("a/Note.Md", "x"), e("a/Other.mD", "y"), e("a/Third.MD", "z")];
+    let raw = vec![
+      e("a/Note.Md", "x"),
+      e("a/Other.mD", "y"),
+      e("a/Third.MD", "z"),
+    ];
     let plan = plan_import(raw, false, ImportMode::AsIs);
     for name in ["Note", "Other", "Third"] {
       assert!(!find(&plan, name).is_folder, "{name}");
@@ -1252,4 +1448,3 @@ mod tests {
     assert_eq!(find(&plan, "A").icon, None);
   }
 }
-

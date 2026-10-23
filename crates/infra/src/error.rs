@@ -123,11 +123,19 @@ mod public_message_tests {
   /// offending value — went straight into the response body.
   #[test]
   fn database_errors_do_not_reach_the_client_verbatim() {
-    let error = ApiError::Database(sqlx::Error::Protocol("relation \"secret_table\" does not exist".into()));
+    let error = ApiError::Database(sqlx::Error::Protocol(
+      "relation \"secret_table\" does not exist".into(),
+    ));
     assert_eq!(error.public_message(), "internal database error");
-    assert!(error.to_string().contains("secret_table"), "the log keeps the detail");
+    assert!(
+      error.to_string().contains("secret_table"),
+      "the log keeps the detail"
+    );
 
     let authored = ApiError::Internal("AI returned an empty response".into());
-    assert_eq!(authored.public_message(), "internal error: AI returned an empty response");
+    assert_eq!(
+      authored.public_message(),
+      "internal error: AI returned an empty response"
+    );
   }
 }

@@ -18,7 +18,10 @@ fn inline_code_in_a_cell_round_trips() {
   // HTML render turns the inline source into real <code>/<strong>.
   let html = export_html(&snap).unwrap();
   assert!(html.contains("<td><code>code</code></td>"), "got:\n{html}");
-  assert!(html.contains("<td><strong>bold</strong></td>"), "got:\n{html}");
+  assert!(
+    html.contains("<td><strong>bold</strong></td>"),
+    "got:\n{html}"
+  );
 }
 
 #[test]
@@ -63,7 +66,11 @@ fn rich_cells_import_as_the_unified_marks_form() {
   let rows = table.data.get("rows").and_then(|v| v.as_array()).unwrap();
 
   // Mark-free header cell "plain" stays a string.
-  assert!(rows[0][0].is_string(), "mark-free cell must stay a string: {:?}", rows[0][0]);
+  assert!(
+    rows[0][0].is_string(),
+    "mark-free cell must stay a string: {:?}",
+    rows[0][0]
+  );
   // "**bold**" becomes {text:"bold", marks:[bold 0..4]}.
   let bold = &rows[0][1];
   assert_eq!(bold.get("text").and_then(|v| v.as_str()), Some("bold"));
@@ -86,7 +93,10 @@ fn rich_cell_round_trips_read_write_read() {
 
   // Every construct survives the serializer verbatim (GFM-canonical).
   assert!(back.contains("| **bold *it*** | [t](/u) |"), "got:\n{back}");
-  assert!(back.contains("| b `\\|` az |  |"), "escaped pipe in code lost:\n{back}");
+  assert!(
+    back.contains("| b `\\|` az |  |"),
+    "escaped pipe in code lost:\n{back}"
+  );
 
   // Second cycle is a fixed point (the round-trip invariant).
   let snap2 = import_markdown(&back, "root");
@@ -95,7 +105,13 @@ fn rich_cell_round_trips_read_write_read() {
 
   // The stored form is unified marks, and HTML renders the marks.
   let html = export_html(&snap).unwrap();
-  assert!(html.contains("<strong>bold <em>it</em></strong>"), "nested marks:\n{html}");
+  assert!(
+    html.contains("<strong>bold <em>it</em></strong>"),
+    "nested marks:\n{html}"
+  );
   assert!(html.contains("<a href=\"/u\">t</a>"), "link:\n{html}");
-  assert!(html.contains("<code>|</code>"), "escaped pipe code span:\n{html}");
+  assert!(
+    html.contains("<code>|</code>"),
+    "escaped pipe code span:\n{html}"
+  );
 }

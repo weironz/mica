@@ -13,7 +13,8 @@ flutter_rust_bridge = "=2.12.0"
 mica-core = { path = "../../../crates/mica-core", features = ["store"] }
 # The authoritative Markdown engine (CommonMark 100% + GFM), reused for local
 # vault import so parsing stays Rust-first + round-trip-stable with export. Its
-# `Block` mirrors `mica-core::Block` exactly, so no schema translation is needed.
+# `Block` IS `mica-core::Block` (mica-core re-exports it), so no schema
+# translation is needed.
 # `render` feature ON: pulls the merman Mermaid engine + LaTeX→MathML so the
 # editor's live diagram preview AND the HTML/PDF export share ONE Rust engine
 # (the Dart `merman` package is dropped — this crate is the only mermaid engine

@@ -9,9 +9,10 @@
 //! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
 //! time while the read tools stay listed.
 use rmcp::{
-  ErrorData as McpError, ServerHandler, ServiceExt, tool_handler,
+  ErrorData as McpError, ServerHandler, ServiceExt,
   handler::server::router::tool::ToolRouter,
   model::{Implementation, ServerCapabilities, ServerInfo},
+  tool_handler,
   transport::stdio,
 };
 use serde_json::Value;
@@ -101,9 +102,7 @@ impl MicaMcp {
     document_id: Uuid,
     refresh: bool,
   ) -> Result<String, McpError> {
-    if !refresh
-      && let Some(cached) = self.cache_get(document_id)
-    {
+    if !refresh && let Some(cached) = self.cache_get(document_id) {
       return Ok(cached);
     }
     let value = self
@@ -155,6 +154,16 @@ impl MicaMcp {
   async fn get(&self, path: &str) -> Result<Value, McpError> {
     self.send(self.http.get(self.url(path))).await
   }
+  /// GET with query pairs, encoded by reqwest itself — the pair list is
+  /// percent-encoded properly (no hand-rolled `urlencode`), and an empty list
+  /// is a plain GET with no bare `?` appended.
+  async fn get_with_query(&self, path: &str, query: &[(&str, String)]) -> Result<Value, McpError> {
+    let mut request = self.http.get(self.url(path));
+    if !query.is_empty() {
+      request = request.query(query);
+    }
+    self.send(request).await
+  }
   async fn post(&self, path: &str, body: Value) -> Result<Value, McpError> {
     self.send(self.http.post(self.url(path)).json(&body)).await
   }
@@ -165,9 +174,16 @@ impl MicaMcp {
     self.send(self.http.delete(self.url(path))).await
   }
 
-  /// Fetch raw bytes (not JSON) plus the served content type. Used only for
-  /// blobs, which are the one thing here that is not text.
-  async fn get_bytes(&self, url: &str) -> Result<(Vec<u8>, Option<String>), McpError> {
+  /// Fetch raw bytes (not JSON) plus the served content type, refusing anything
+  /// over `max_bytes`. Used only for blobs, which are the one thing here that
+  /// is not text. The cap is enforced BEFORE the body lands — Content-Length
+  /// first, then the stream as it arrives — so an oversized blob is refused
+  /// early instead of buffered whole and rejected after the fact.
+  async fn get_bytes(
+    &self,
+    url: &str,
+    max_bytes: usize,
+  ) -> Result<(Vec<u8>, Option<String>), McpError> {
     let resp = self
       .http
       .get(url)
@@ -181,20 +197,56 @@ impl MicaMcp {
         None,
       ));
     }
+    if let Some(len) = resp.content_length()
+      && len as usize > max_bytes
+    {
+      return Err(McpError::internal_error(
+        format!("Mica blob is {len} bytes — over the {max_bytes}-byte limit"),
+        None,
+      ));
+    }
     let mime = resp
       .headers()
       .get(reqwest::header::CONTENT_TYPE)
       .and_then(|v| v.to_str().ok())
       .map(|v| v.split(';').next().unwrap_or(v).trim().to_string());
-    let bytes = resp
-      .bytes()
+    let mut bytes = Vec::new();
+    let mut resp = resp;
+    while let Some(chunk) = resp
+      .chunk()
       .await
-      .map_err(|e| McpError::internal_error(format!("Mica blob read failed: {e}"), None))?;
-    Ok((bytes.to_vec(), mime))
+      .map_err(|e| McpError::internal_error(format!("Mica blob read failed: {e}"), None))?
+    {
+      bytes.extend_from_slice(&chunk);
+      if bytes.len() > max_bytes {
+        return Err(McpError::internal_error(
+          format!(
+            "Mica blob is over {max_bytes} bytes (stopped at {})",
+            bytes.len()
+          ),
+          None,
+        ));
+      }
+    }
+    Ok((bytes, mime))
   }
 }
 
-/// Refuse to inline an image so large it would blow the context it is being
+/// Refuse the enclosing tool when this server runs read-only
+/// ([MicaMcp::ensure_writable]). A macro because the plain form is three lines
+/// of early-return boilerplate in front of every one of the ~24 mutating
+/// tools: the guard must stay the FIRST thing a write does — ahead of
+/// validation, ahead of any HTTP call — so the refusal is unconditional and
+/// uniform. `$crate::` paths keep it independent of the caller's imports.
+/// Declared before the `mod`s below: textual scoping, like the std `#[macro_use]`.
+macro_rules! writable {
+  ($self:ident) => {
+    if let Err(error) = $self.ensure_writable() {
+      return Ok($crate::results::tool_error(error));
+    }
+  };
+}
+
 mod args;
 mod markdown_windows;
 mod results;
@@ -300,18 +352,6 @@ impl ServerHandler for MicaMcp {
   }
 }
 
-/// Minimal percent-encoding for a query value (space + a few reserved chars).
-fn urlencode(s: &str) -> String {
-  let mut out = String::with_capacity(s.len());
-  for b in s.bytes() {
-    match b {
-      b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-      _ => out.push_str(&format!("%{b:02X}")),
-    }
-  }
-  out
-}
-
 /// Serve the Mica MCP server over stdio until the client disconnects.
 ///
 /// A LIBRARY entry rather than a binary: `mica-cli mcp` is the shipped front
@@ -338,7 +378,9 @@ pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::markdown_windows::{pick_anchor, reject_mangled_latex, section_markdown, unwrap_markdown, window_markdown};
+  use crate::markdown_windows::{
+    pick_anchor, reject_mangled_latex, section_markdown, unwrap_markdown, window_markdown,
+  };
 
   #[test]
   fn warm_cache_put_get_invalidate() {
@@ -390,11 +432,17 @@ mod tests {
 
     // insert_at takes the first — inserting in the wrong place is visible and
     // undoable, and this is the behaviour callers already rely on.
-    assert_eq!(pick_anchor(Some(&headings), "setup", false).unwrap(), "block_a");
+    assert_eq!(
+      pick_anchor(Some(&headings), "setup", false).unwrap(),
+      "block_a"
+    );
 
     let err = pick_anchor(Some(&headings), "setup", true).unwrap_err();
     assert!(err.contains("matches 2 headings"), "says how many: {err}");
-    assert!(err.contains("block_a") && err.contains("block_b"), "lists them: {err}");
+    assert!(
+      err.contains("block_a") && err.contains("block_b"),
+      "lists them: {err}"
+    );
 
     // Unambiguous text still resolves under strict.
     assert_eq!(
@@ -409,7 +457,10 @@ mod tests {
     let err = pick_anchor(Some(&headings), "Setup", true).unwrap_err();
     assert!(err.starts_with("delete:"), "the error names delete: {err}");
     let err = pick_anchor(Some(&headings), "Setup", false).unwrap_err();
-    assert!(err.starts_with("insert_at:"), "the error names insert_at: {err}");
+    assert!(
+      err.starts_with("insert_at:"),
+      "the error names insert_at: {err}"
+    );
     // A doc with no headings at all must not panic or resolve to something.
     assert!(pick_anchor(None, "Setup", true).is_err());
   }
@@ -425,9 +476,12 @@ mod tests {
 
 body" });
     let full = unwrap_markdown(body);
-    assert_eq!(full, "# Title
+    assert_eq!(
+      full,
+      "# Title
 
-body");
+body"
+    );
     assert_eq!(full.lines().count(), 3, "must be real newlines, not \n");
   }
 
@@ -445,10 +499,13 @@ step
 
 more" });
     let full = unwrap_markdown(body);
-    assert_eq!(section_markdown(&full, "Setup"), "## Setup
+    assert_eq!(
+      section_markdown(&full, "Setup"),
+      "## Setup
 
 step
-");
+"
+    );
     assert!(
       window_markdown(&full, Some(1), Some(2), None).starts_with("[lines 1-2 of 9]"),
       "got {:?}",
@@ -483,13 +540,6 @@ step
   fn section_miss_is_a_readable_note_not_a_panic() {
     let out = section_markdown("# Only\n\nbody", "nope");
     assert!(out.contains("no heading contains"));
-  }
-
-  #[test]
-  fn urlencode_escapes_reserved_keeps_unreserved() {
-    assert_eq!(urlencode("hello world"), "hello%20world");
-    assert_eq!(urlencode("a&b=c/d?e"), "a%26b%3Dc%2Fd%3Fe");
-    assert_eq!(urlencode("keep-_.~AZaz09"), "keep-_.~AZaz09");
   }
 
   /// Byte-for-byte what reached the database from a real MCP write of
@@ -545,8 +595,9 @@ step
 
 #[cfg(test)]
 mod handshake_tests {
-  use crate::args::CreateDocArgs;  use rmcp::handler::server::wrapper::Parameters;
+  use crate::args::CreateDocArgs;
   use crate::results::*;
+  use rmcp::handler::server::wrapper::Parameters;
   use serde_json::json;
   /// A write must answer "what happened", never hand the document back. The
   /// REST payload carries the whole block tree for the editor's benefit; a
@@ -951,7 +1002,9 @@ mod wire_tests {
     let log = seen.clone();
     tokio::spawn(async move {
       loop {
-        let Ok((sock, _)) = listener.accept().await else { return };
+        let Ok((sock, _)) = listener.accept().await else {
+          return;
+        };
         let log = log.clone();
         tokio::spawn(async move {
           let mut reader = BufReader::new(sock);
@@ -1050,7 +1103,10 @@ mod wire_tests {
 
     async fn call(&mut self, tool: &str, arguments: Value) -> Value {
       self
-        .request("tools/call", json!({ "name": tool, "arguments": arguments }))
+        .request(
+          "tools/call",
+          json!({ "name": tool, "arguments": arguments }),
+        )
         .await
     }
   }
@@ -1112,13 +1168,22 @@ mod wire_tests {
     for (tool, args) in attacks {
       let reply = mcp.call(tool, args.clone()).await;
       let sent = seen.lock().unwrap().clone();
-      assert!(sent.is_empty(), "{tool} {args} must send nothing, sent {sent:?}");
-      assert!(refused(&reply), "{tool} {args} must be refused, got {reply}");
+      assert!(
+        sent.is_empty(),
+        "{tool} {args} must send nothing, sent {sent:?}"
+      );
+      assert!(
+        refused(&reply),
+        "{tool} {args} must be refused, got {reply}"
+      );
     }
 
     // Not vacuous: the same harness DOES observe a legitimate call.
     let reply = mcp
-      .call("mica_unshare", json!({ "workspace_id": WS, "document_id": DOC }))
+      .call(
+        "mica_unshare",
+        json!({ "workspace_id": WS, "document_id": DOC }),
+      )
       .await;
     assert!(!refused(&reply), "a real uuid must go through: {reply}");
     assert_eq!(seen.lock().unwrap().len(), 1, "the harness sees requests");
@@ -1185,14 +1250,27 @@ mod wire_tests {
         }
         let reply = mcp.call(tool, args.clone()).await;
         assert!(reply.get("error").is_none(), "{tool}: {reply}");
-        assert_eq!(reply.pointer("/result/isError"), Some(&json!(true)), "{tool}: {reply}");
         assert_eq!(
-          reply.pointer("/result/content/0/text").and_then(Value::as_str),
+          reply.pointer("/result/isError"),
+          Some(&json!(true)),
+          "{tool}: {reply}"
+        );
+        assert_eq!(
+          reply
+            .pointer("/result/content/0/text")
+            .and_then(Value::as_str),
           Some(reason),
           "{tool}: {reply}"
         );
-        assert!(seen.lock().unwrap().is_empty(), "{tool} must send no API requests");
-        assert_eq!(probe.cache_get(doc).as_deref(), Some("cached page"), "{tool}");
+        assert!(
+          seen.lock().unwrap().is_empty(),
+          "{tool} must send no API requests"
+        );
+        assert_eq!(
+          probe.cache_get(doc).as_deref(),
+          Some("cached page"),
+          "{tool}"
+        );
       }
     }
   }
@@ -1226,7 +1304,10 @@ mod wire_tests {
         checked += 1;
       }
     }
-    assert!(checked > 50, "walked the real schemas, not an empty list: {checked}");
+    assert!(
+      checked > 50,
+      "walked the real schemas, not an empty list: {checked}"
+    );
   }
 
   /// C11. The warm cache is only safe if every tool that changes what a page
@@ -1247,7 +1328,9 @@ mod wire_tests {
     // Control: a read-only tool leaves it warm, so a miss below is the tool's
     // doing and not a probe that never shared the cache.
     probe.cache_put(doc, "stale");
-    let reply = mcp.call("mica_list_trash", json!({ "workspace_id": WS })).await;
+    let reply = mcp
+      .call("mica_list_trash", json!({ "workspace_id": WS }))
+      .await;
     assert!(!refused(&reply), "{reply}");
     assert_eq!(probe.cache_get(doc).as_deref(), Some("stale"));
 
@@ -1256,13 +1339,34 @@ mod wire_tests {
         "mica_restore_version",
         json!({ "workspace_id": WS, "document_id": DOC, "version_id": ver }),
       ),
-      ("mica_trash_view", json!({ "workspace_id": WS, "view_id": VIEW, "confirm": true })),
-      ("mica_trash_views", json!({ "workspace_id": WS, "view_ids": [VIEW], "confirm": true })),
-      ("mica_restore_view", json!({ "workspace_id": WS, "view_id": VIEW })),
-      ("mica_restore_views", json!({ "workspace_id": WS, "view_ids": [VIEW] })),
-      ("mica_purge_view", json!({ "workspace_id": WS, "view_id": VIEW, "confirm": true })),
-      ("mica_purge_views", json!({ "workspace_id": WS, "view_ids": [VIEW], "confirm": true })),
-      ("mica_empty_trash", json!({ "workspace_id": WS, "confirm": true })),
+      (
+        "mica_trash_view",
+        json!({ "workspace_id": WS, "view_id": VIEW, "confirm": true }),
+      ),
+      (
+        "mica_trash_views",
+        json!({ "workspace_id": WS, "view_ids": [VIEW], "confirm": true }),
+      ),
+      (
+        "mica_restore_view",
+        json!({ "workspace_id": WS, "view_id": VIEW }),
+      ),
+      (
+        "mica_restore_views",
+        json!({ "workspace_id": WS, "view_ids": [VIEW] }),
+      ),
+      (
+        "mica_purge_view",
+        json!({ "workspace_id": WS, "view_id": VIEW, "confirm": true }),
+      ),
+      (
+        "mica_purge_views",
+        json!({ "workspace_id": WS, "view_ids": [VIEW], "confirm": true }),
+      ),
+      (
+        "mica_empty_trash",
+        json!({ "workspace_id": WS, "confirm": true }),
+      ),
       (
         "mica_transfer_view",
         json!({ "workspace_id": WS, "view_id": VIEW, "dest_workspace_id": dest }),
@@ -1273,8 +1377,15 @@ mod wire_tests {
       let before = seen.lock().unwrap().len();
       let reply = mcp.call(tool, args).await;
       assert!(!refused(&reply), "{tool}: {reply}");
-      assert_eq!(seen.lock().unwrap().len(), before + 1, "{tool} reached the API");
-      assert!(probe.cache_get(doc).is_none(), "{tool} left a stale cached page");
+      assert_eq!(
+        seen.lock().unwrap().len(),
+        before + 1,
+        "{tool} reached the API"
+      );
+      assert!(
+        probe.cache_get(doc).is_none(),
+        "{tool} left a stale cached page"
+      );
     }
   }
 
@@ -1285,7 +1396,10 @@ mod wire_tests {
     let mut mcp = Session::start(MicaMcp::new(base, "pat".into(), false)).await;
 
     let reply = mcp
-      .call("mica_unshare", json!({ "workspace_id": WS, "document_id": DOC }))
+      .call(
+        "mica_unshare",
+        json!({ "workspace_id": WS, "document_id": DOC }),
+      )
       .await;
     assert!(!refused(&reply), "{reply}");
     let reply = mcp

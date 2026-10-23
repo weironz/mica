@@ -1,4 +1,3 @@
-
 use chrono::{DateTime, Utc};
 use mica_app_core::{
   documents::DocumentOperation,
@@ -8,7 +7,6 @@ use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
-
 
 #[derive(Debug, Deserialize)]
 pub struct CreateDocumentRequest {
@@ -150,6 +148,113 @@ pub struct ViewResponse {
   view: View,
 }
 
+/// The views-table column list a [View] row decodes from. Spelled once and
+/// concatenated into every SELECT/RETURNING below: the copies had already
+/// drifted in shape (two textual orders, one unaliased cast), and adding a
+/// column one place used to mean hunting the rest.
+///
+/// A macro rather than a `const` because `concat!` expands only literals and
+/// macros, never const items: runtime formatting would cost the `&'static str`
+/// shape every statement here relies on.
+macro_rules! view_columns {
+  () => {
+    concat!(
+      "id, workspace_id, parent_view_id, object_id, object_type::text AS object_type, ",
+      "name, icon, position, is_deleted, created_by, created_at, updated_at",
+    )
+  };
+}
+
+/// The same list qualified `v.`, for statements that alias views.
+macro_rules! prefixed_view_columns {
+  () => {
+    concat!(
+      "v.id, v.workspace_id, v.parent_view_id, v.object_id, ",
+      "v.object_type::text AS object_type, v.name, v.icon, v.position, v.is_deleted, ",
+      "v.created_by, v.created_at, v.updated_at",
+    )
+  };
+}
+
+/// The `documents.root_block_id` every new page starts from.
+pub(crate) fn new_root_block_id() -> String {
+  format!("block_{}", Uuid::new_v4().simple())
+}
+
+/// The choices [`insert_page`] cannot make for its caller: an importer
+/// pre-assigns view ids (so a page that arrives in the archive before its
+/// parent can still refer to it) and may carry an icon; the plain create
+/// routes want neither.
+pub(crate) struct InsertPage<'a> {
+  /// The new view's id. `None` = a fresh v4 — exactly what the column's
+  /// `uuid_generate_v4()` default produced when the INSERT omitted it.
+  pub view_id: Option<Uuid>,
+  pub parent_view_id: Option<Uuid>,
+  pub name: &'a str,
+  pub icon: Option<&'a str>,
+  /// The page's opening content; its `root_block_id` becomes the document's.
+  /// A blank page seeds with `mica_app_core::sync::empty_payload`.
+  pub seed: mica_app_core::documents::DocumentSnapshotPayload,
+}
+
+/// Insert a whole new page in ONE transaction: the `documents` row, its yrs
+/// base seeded from `page.seed`, and the matching `views` row. A page that
+/// existed for even a moment without content was unreadable and unsearchable
+/// (before S4 the base was built afterwards, best-effort), and seeding the
+/// base here co-writes `content_text` (the FTS index), so a just-created or
+/// just-imported page is findable by its body before anyone opens it.
+///
+/// Three paths had each written this sequence out by hand ([create_document],
+/// [import_document_markdown], and the import executor's `insert_page`); the
+/// statements never differed, only the byproducts each caller kept.
+pub(crate) async fn insert_page(
+  db: &PgPool,
+  workspace_id: Uuid,
+  user_id: Uuid,
+  page: InsertPage<'_>,
+) -> ApiResult<(DocumentRecord, View)> {
+  let mut tx = db.begin().await?;
+  let document = sqlx::query_as::<_, DocumentRecord>(
+    r#"
+      INSERT INTO documents (workspace_id, root_block_id, created_by)
+      VALUES ($1, $2, $3)
+      RETURNING id, workspace_id, root_block_id, current_seq, created_by, created_at, updated_at
+    "#,
+  )
+  .bind(workspace_id)
+  .bind(&page.seed.root_block_id)
+  .bind(user_id)
+  .fetch_one(&mut *tx)
+  .await?;
+
+  mica_app_core::sync::seed_base_tx(&mut tx, document.id, page.seed).await?;
+
+  let view = sqlx::query_as::<_, View>(concat!(
+    r#"
+      INSERT INTO views (
+        id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by, icon
+      )
+      VALUES ($1, $2, $3, $4, 'document', $5, $6, $7, $8)
+      RETURNING
+        "#,
+    view_columns!(),
+    "\n    ",
+  ))
+  .bind(page.view_id.unwrap_or_else(Uuid::new_v4))
+  .bind(workspace_id)
+  .bind(page.parent_view_id)
+  .bind(document.id)
+  .bind(page.name)
+  .bind(Uuid::now_v7().to_string())
+  .bind(user_id)
+  .bind(page.icon)
+  .fetch_one(&mut *tx)
+  .await?;
+
+  tx.commit().await?;
+  Ok((document, view))
+}
+
 #[derive(Debug, Serialize, FromRow)]
 pub struct View {
   id: Uuid,
@@ -199,7 +304,6 @@ pub struct ListViewsQuery {
   with_stats: bool,
 }
 
-
 /// Reject an empty, oversized, or duplicate-bearing id list once, so each batch
 /// handler below is just its statement. Duplicates are an error rather than
 /// silently deduped: in a set operation they mean the caller's list is not what
@@ -226,9 +330,12 @@ fn check_batch_ids(view_ids: &[Uuid]) -> ApiResult<()> {
 /// The requested ids the statement did not reach, given the seed ids it did.
 fn skipped_ids(requested: &[Uuid], touched: &[Uuid]) -> Vec<Uuid> {
   let hit: std::collections::HashSet<Uuid> = touched.iter().copied().collect();
-  requested.iter().copied().filter(|id| !hit.contains(id)).collect()
+  requested
+    .iter()
+    .copied()
+    .filter(|id| !hit.contains(id))
+    .collect()
 }
-
 
 /// [list_views] with its filters applied.
 ///
@@ -242,26 +349,26 @@ async fn fetch_views_filtered(
   workspace_id: Uuid,
   query: &ListViewsQuery,
 ) -> ApiResult<Vec<View>> {
-  // Both statements are whole literals rather than fragments assembled at
-  // runtime: sqlx only accepts `&'static str`, and the rule is a good one to
-  // keep even when every piece would have been a constant. The column list is
-  // therefore spelled twice — adding a column means touching both.
+  // Both statements are built from `concat!`ed `'static` pieces rather than
+  // assembled at runtime: sqlx only accepts `&'static str`, and the rule is a
+  // good one to keep even when every piece would have been a constant.
   //
   // `$5` (with_stats) gates the join itself, so a plain listing never touches
   // the content table.
-  const FLAT: &str = r#"
-      SELECT
-        v.id, v.workspace_id, v.parent_view_id, v.object_id,
-        v.object_type::text AS object_type, v.name, v.icon, v.position,
-        v.is_deleted, v.created_by, v.created_at, v.updated_at,
+  const FLAT: &str = concat!(
+    "\n      SELECT\n        ",
+    prefixed_view_columns!(),
+    r#",
         octet_length(b.state)::bigint AS state_bytes
       FROM views v
       LEFT JOIN document_yrs_base b ON $5 AND b.document_id = v.object_id
       WHERE v.workspace_id = $1 AND v.is_deleted = false
       ORDER BY v.parent_view_id NULLS FIRST, v.position ASC, v.id
       LIMIT $3 OFFSET $4
-  "#;
-  const SUBTREE: &str = r#"
+  "#,
+  );
+  const SUBTREE: &str = concat!(
+    r#"
       WITH RECURSIVE subtree AS (
         SELECT id, 1 AS lvl
         FROM views
@@ -275,9 +382,9 @@ async fn fetch_views_filtered(
           AND ($6::int IS NULL OR s.lvl < $6)
       )
       SELECT
-        v.id, v.workspace_id, v.parent_view_id, v.object_id,
-        v.object_type::text AS object_type, v.name, v.icon, v.position,
-        v.is_deleted, v.created_by, v.created_at, v.updated_at,
+        "#,
+    prefixed_view_columns!(),
+    r#",
         octet_length(b.state)::bigint AS state_bytes
       FROM views v
       JOIN subtree ON subtree.id = v.id
@@ -285,7 +392,8 @@ async fn fetch_views_filtered(
       WHERE v.workspace_id = $1 AND v.is_deleted = false
       ORDER BY v.parent_view_id NULLS FIRST, v.position ASC, v.id
       LIMIT $3 OFFSET $4
-  "#;
+  "#,
+  );
 
   let filtered = query.parent_view_id.is_some() || query.depth.is_some();
   let sql = if filtered { SUBTREE } else { FLAT };
@@ -307,26 +415,15 @@ async fn fetch_views_filtered(
 }
 
 async fn fetch_workspace_views(db: &PgPool, workspace_id: Uuid) -> ApiResult<Vec<View>> {
-  sqlx::query_as::<_, View>(
+  sqlx::query_as::<_, View>(concat!(
+    "\n      SELECT\n        ",
+    view_columns!(),
     r#"
-      SELECT
-        id,
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type::text AS object_type,
-        name,
-        icon,
-        position,
-        is_deleted,
-        created_by,
-        created_at,
-        updated_at
       FROM views
       WHERE workspace_id = $1 AND is_deleted = false
       ORDER BY parent_view_id NULLS FIRST, position ASC, id
     "#,
-  )
+  ))
   .bind(workspace_id)
   .fetch_all(db)
   .await
@@ -334,26 +431,15 @@ async fn fetch_workspace_views(db: &PgPool, workspace_id: Uuid) -> ApiResult<Vec
 }
 
 async fn fetch_deleted_workspace_views(db: &PgPool, workspace_id: Uuid) -> ApiResult<Vec<View>> {
-  sqlx::query_as::<_, View>(
+  sqlx::query_as::<_, View>(concat!(
+    "\n      SELECT\n        ",
+    view_columns!(),
     r#"
-      SELECT
-        id,
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type::text AS object_type,
-        name,
-        icon,
-        position,
-        is_deleted,
-        created_by,
-        created_at,
-        updated_at
       FROM views
       WHERE workspace_id = $1 AND is_deleted = true
       ORDER BY updated_at DESC
     "#,
-  )
+  ))
   .bind(workspace_id)
   .fetch_all(db)
   .await
@@ -365,26 +451,15 @@ async fn fetch_document_view(
   workspace_id: Uuid,
   document_id: Uuid,
 ) -> ApiResult<Option<View>> {
-  sqlx::query_as::<_, View>(
+  sqlx::query_as::<_, View>(concat!(
+    "\n      SELECT\n        ",
+    view_columns!(),
     r#"
-      SELECT
-        id,
-        workspace_id,
-        parent_view_id,
-        object_id,
-        object_type::text AS object_type,
-        name,
-        icon,
-        position,
-        is_deleted,
-        created_by,
-        created_at,
-        updated_at
       FROM views
       WHERE workspace_id = $1 AND object_id = $2 AND object_type = 'document' AND is_deleted = false
       LIMIT 1
     "#,
-  )
+  ))
   .bind(workspace_id)
   .bind(document_id)
   .fetch_optional(db)
@@ -436,7 +511,6 @@ pub(crate) fn permissions_for_role(role: &str) -> DocumentPermissions {
     can_comment,
   }
 }
-
 
 pub(crate) use super::workspaces::{ensure_workspace_member, workspace_role};
 
@@ -631,13 +705,13 @@ mod export;
 mod images;
 mod search;
 mod share;
-mod trash;
 mod transfer;
+mod trash;
 
 pub use crud::*;
 pub use export::*;
 pub use images::*;
 pub use search::*;
 pub use share::*;
-pub use trash::*;
 pub use transfer::*;
+pub use trash::*;

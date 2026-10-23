@@ -14,6 +14,8 @@ use mica_core::{
     LocalVersion as CoreVersion,
     LocalView as CoreView, LocalWorkspace as CoreWorkspace, SyncCursor as CoreSyncCursor,
 };
+// The page-tree subtree operations live in mica-core now (issue #67): one
+// recursive CTE + one transaction per operation, called by the wrappers below.
 
 use crate::api::document::MicaDocument;
 
@@ -72,42 +74,6 @@ pub struct CloneViewResult {
     pub root_view_id: String,
     pub new_name: String,
     pub docs: u32,
-}
-
-/// Copy a view row field-by-field.
-///
-/// `LocalView` is an frb wire struct and deliberately not `Clone` — the bridge
-/// owns its shape. The subtree operations need a copy to edit one field of, so
-/// this spells it out rather than deriving a trait onto the wire type.
-fn clone_view_row(v: &LocalView) -> LocalView {
-    LocalView {
-        id: v.id.clone(),
-        workspace_id: v.workspace_id.clone(),
-        parent_id: v.parent_id.clone(),
-        object_id: v.object_id.clone(),
-        name: v.name.clone(),
-        position: v.position.clone(),
-        trashed: v.trashed,
-        origin: v.origin.clone(),
-        object_type: v.object_type.clone(),
-    }
-}
-
-/// `base` if free among `siblings`, else `base 2`, `base 3`, … — the number is
-/// locale-neutral, the caller supplies the localized base.
-///
-/// Same rule as the server's `dedup_sibling_name` (api-server documents.rs) so
-/// a page cloned offline and one cloned in the cloud settle on the same name.
-/// Kept a free function: pure, and that is what makes it testable without a
-/// store.
-fn dedup_sibling_name(base: &str, siblings: &[String]) -> String {
-    if !siblings.iter().any(|s| s == base) {
-        return base.to_string();
-    }
-    (2..)
-        .map(|n| format!("{base} {n}"))
-        .find(|c| !siblings.iter().any(|s| s == c))
-        .expect("an unused suffix always exists")
 }
 
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
@@ -532,21 +498,23 @@ impl MicaStore {
     /// another origin's) is accepted — this guards the shape that is visible
     /// here, and the server checks again on the way up.
     fn parent_accepts_children(&self, view: &LocalView) -> bool {
-        let Some(parent_id) = view.parent_id.as_deref() else {
-            return true;
-        };
-        // The view's OWN origin, not a hardcoded "local". Views are namespaced
-        // by origin (v4 composite PK), so a parent lives in the same namespace
-        // as its child — a cloud mirror's folder is under the server URL, never
-        // under "local". Asking the wrong namespace made this answer about a
-        // DIFFERENT view that happened to share an id, and refuse writes that
-        // were fine: cloning a subtree and detaching a cloud workspace each came
-        // out one view short. It went unnoticed for twenty consecutive red runs
-        // of the integration suite, because `just test` does not cover it.
-        self.list_views(view.origin.clone())
-            .iter()
-            .find(|v| v.id == parent_id)
-            .is_none_or(|p| p.object_type == "folder")
+        // Answered by one indexed lookup in mica-core now (issue #67) — it used
+        // to be a full `list_views` scan per write. The origin rule still
+        // stands: the view's OWN origin, not a hardcoded "local". Views are
+        // namespaced by origin (v4 composite PK), so a parent lives in the same
+        // namespace as its child — a cloud mirror's folder is under the server
+        // URL, never under "local". Asking the wrong namespace made this answer
+        // about a DIFFERENT view that happened to share an id, and refuse
+        // writes that were fine: cloning a subtree and detaching a cloud
+        // workspace each came out one view short. It went unnoticed for twenty
+        // consecutive red runs of the integration suite, because `just test`
+        // does not cover it.
+        self.store()
+            .parent_accepts_children(&view.origin, view.parent_id.as_deref())
+            // On a read error accept, as the old unwrap_or_default() list did:
+            // refusing every write over a transient read failure is worse, and
+            // the server re-checks on the way up.
+            .unwrap_or(true)
     }
 
     /// Permanently remove one `origin`'s view row (delete its document via
@@ -565,16 +533,13 @@ impl MicaStore {
     /// create path, the Dart reorder path and `clone_view` below — three copies
     /// of a convention where a single disagreement puts a new page in the wrong
     /// spot. The gap of ten is what leaves room to drop something between two
-    /// siblings without renumbering them.
+    /// siblings without renumbering them. Answered by one query in mica-core
+    /// now (issue #67) rather than a full `list_views` scan here.
     fn next_position(&self, parent_id: Option<&str>) -> String {
-        let max = self
-            .list_views("local".to_string())
-            .iter()
-            .filter(|v| !v.trashed && v.parent_id.as_deref() == parent_id)
-            .filter_map(|v| v.position.parse::<i64>().ok())
-            .max()
-            .unwrap_or(0);
-        format!("{:010}", max + 10)
+        self.store()
+            .next_child_position("local", parent_id)
+            // The old unwrap_or_default() list meant max = 0 on error.
+            .unwrap_or_else(|_| format!("{:010}", 10))
     }
 
     /// Create a page or folder row under `parent_id` and return its id.
@@ -612,29 +577,17 @@ impl MicaStore {
 
     /// Renumber `ordered_ids` as consecutive children of `parent_id`.
     ///
-    /// Positions restart at 10 and step by ten, matching
-    /// [`Self::next_position`] so a later insert still lands after them. Rows
-    /// already in the right place are left alone — an untouched row is one less
-    /// write and one less sync update. Reparenting is part of the same move:
-    /// dragging into another folder changes both.
+    /// The move itself runs in mica-core (issue #67): ONE transaction over
+    /// point UPDATEs instead of a full `list_views` scan plus one whole-row
+    /// upsert per moved row — a crash mid-drag used to leave a half-renumbered
+    /// sibling list. Same observable rules as before: positions restart at 10
+    /// and step by ten, rows already in the right place are left alone, and an
+    /// unknown id is skipped rather than inventing a row.
     #[frb(sync)]
     pub fn reorder_views(&self, parent_id: Option<String>, ordered_ids: Vec<String>) {
-        let all = self.list_views("local".to_string());
-        for (i, id) in ordered_ids.iter().enumerate() {
-            let Some(v) = all.iter().find(|v| &v.id == id) else {
-                continue;
-            };
-            let position = format!("{:010}", (i as i64 + 1) * 10);
-            if v.position == position && v.parent_id == parent_id {
-                continue;
-            }
-            self.save_view(LocalView {
-                parent_id: parent_id.clone(),
-                position,
-                trashed: false,
-                ..clone_view_row(v)
-            });
-        }
+        let _ = self
+            .store()
+            .reorder_views("local", parent_id.as_deref(), &ordered_ids);
     }
 
     /// Where the next workspace goes — the same step-of-ten rule as
@@ -732,187 +685,67 @@ impl MicaStore {
         }
     }
 
-    /// `view_id` plus every descendant, in `list_views` order.
-    ///
-    /// The recursive walk every subtree operation below shares (trash, restore,
-    /// purge, clone), and the local mirror of the server's recursive-CTE
-    /// cascade. `live_only` stops at trashed nodes like the server's
-    /// `is_deleted = false` CTE: a trashed node is left out, and so is
-    /// everything under it.
-    fn subtree_ids(&self, view_id: &str, live_only: bool) -> Vec<String> {
-        let all = self.list_views("local".to_string());
-        let mut ids: Vec<String> = Vec::new();
-        let mut queue = vec![view_id.to_string()];
-        while let Some(id) = queue.pop() {
-            if ids.iter().any(|k| k == &id) {
-                continue; // a cycle must not wedge the walk
-            }
-            if live_only && !all.iter().any(|v| v.id == id && !v.trashed) {
-                continue;
-            }
-            queue.extend(
-                all.iter()
-                    .filter(|v| v.parent_id.as_deref() == Some(id.as_str()))
-                    .map(|v| v.id.clone()),
-            );
-            ids.push(id);
-        }
-        // Report in tree order, not pop order — the caller shows these.
-        all.iter()
-            .filter(|v| ids.iter().any(|k| k == &v.id))
-            .map(|v| v.id.clone())
-            .collect()
-    }
-
     /// Move `view_id` and its whole subtree to the recycle bin. Returns the
     /// affected ids so the caller can close an editor that was inside it.
     ///
     /// A folder carries its children: trashing one must trash the subtree, or
-    /// the children survive as orphans pointing at a trashed parent.
+    /// the children survive as orphans pointing at a trashed parent. Runs in
+    /// mica-core (issue #67): one recursive CTE for the subtree + ONE
+    /// transaction for the flag flip — the old per-row upserts left a
+    /// half-trashed tree on disk when the app died mid-operation.
     #[frb(sync)]
     pub fn trash_view_subtree(&self, view_id: String) -> Vec<String> {
-        let ids = self.subtree_ids(&view_id, false);
-        self.set_trashed(&ids, true);
-        ids
+        self.store()
+            .trash_view_subtree("local", &view_id)
+            .unwrap_or_default()
     }
 
     /// Bring `view_id` and the subtree trashed with it back out of the bin.
     ///
     /// If the restored ROOT's parent is no longer a live view, the root is
     /// lifted to the top level — restoring into a trashed parent would leave it
-    /// invisible with no way back. Mirrors the server's `restore_view`.
+    /// invisible with no way back. Mirrors the server's `restore_view`. Runs in
+    /// mica-core (issue #67), one transaction, un-trash and lift together.
     #[frb(sync)]
     pub fn restore_view_subtree(&self, view_id: String) -> Vec<String> {
-        let ids = self.subtree_ids(&view_id, false);
-        self.set_trashed(&ids, false);
-
-        let all = self.list_views("local".to_string());
-        let parent_is_gone = all
-            .iter()
-            .find(|v| v.id == view_id)
-            .and_then(|root| root.parent_id.clone())
-            .is_some_and(|pid| !all.iter().any(|v| v.id == pid && !v.trashed));
-        if parent_is_gone {
-            if let Some(root) = all.iter().find(|v| v.id == view_id) {
-                self.save_view(LocalView {
-                    parent_id: None,
-                    trashed: false,
-                    ..clone_view_row(root)
-                });
-            }
-        }
-        ids
+        self.store()
+            .restore_view_subtree("local", &view_id)
+            .unwrap_or_default()
     }
 
     /// Permanently remove `view_id` and its subtree, documents included.
-    /// Returns the affected ids. There is no undo past this point.
+    /// Returns the affected ids. There is no undo past this point. Runs in
+    /// mica-core (issue #67): the old path committed each document and each
+    /// view row separately, so a crash could orphan view rows pointing at
+    /// deleted documents; everything commits together now.
     #[frb(sync)]
     pub fn purge_view_subtree(&self, view_id: String) -> Vec<String> {
-        let ids = self.subtree_ids(&view_id, false);
-        let all = self.list_views("local".to_string());
-        for id in &ids {
-            if let Some(v) = all.iter().find(|v| &v.id == id) {
-                self.delete_doc(v.object_id.clone());
-            }
-            self.purge_view("local".to_string(), id.clone());
-        }
-        ids
-    }
-
-    /// Flip `trashed` on exactly `ids`, leaving every other field alone.
-    fn set_trashed(&self, ids: &[String], trashed: bool) {
-        let all = self.list_views("local".to_string());
-        for v in all.iter().filter(|v| ids.iter().any(|k| k == &v.id)) {
-            self.save_view(LocalView { trashed, ..clone_view_row(v) });
-        }
+        self.store()
+            .purge_view_subtree("local", &view_id)
+            .unwrap_or_default()
     }
 
     /// Duplicate `view_id` and everything under it, beside the original.
     ///
-    /// The WHOLE operation, not a helper: subtree walk, fresh ids, doc copies,
-    /// sibling-name dedup and positioning all happen here. That is the point —
-    /// moving a leaf helper across the bridge would leave the tree rules
-    /// duplicated and pay a crossing per node; moving the operation deletes the
-    /// Dart copy outright. Mirrors `export_folder_zip` above, the composite
-    /// that was already de-duplicated this way.
+    /// The WHOLE operation lives in mica-core now (issue #67): subtree walk
+    /// (one recursive CTE over live rows only), fresh ids, doc copies,
+    /// sibling-name dedup and positioning all commit in ONE transaction — the
+    /// per-node upserts it replaced could leave a half-copied tree behind
+    /// after a crash.
     ///
-    /// Returns `None` when the view is gone or in the recycle bin.
+    /// Returns `None` when the view is gone or in the recycle bin — or when
+    /// the transaction failed, in which case nothing was written instead of
+    /// half of it.
     #[frb(sync)]
     pub fn clone_view(&self, view_id: String, root_name: String) -> Option<CloneViewResult> {
-        // The shared walk, live nodes only. It had its own copy of the walk,
-        // without the visited set — a parent cycle looped here (on the UI
-        // thread) until OOM — and without a trash filter, so a binned page
-        // inside the subtree came back as a live one in the copy. The server's
-        // copy enumerates live rows only; a trashed node stays behind together
-        // with everything under it.
-        let ids = self.subtree_ids(&view_id, true);
-        let all = self.list_views("local".to_string());
-        let root: &LocalView = all.iter().find(|v| v.id == view_id && !v.trashed)?;
-        // By REFERENCE: `LocalView` is an frb wire struct with no `Clone`, and
-        // the only copies we actually want are the new rows written at the end.
-        let subtree: Vec<&LocalView> = all.iter().filter(|v| ids.contains(&v.id)).collect();
-
-        // Dedup against LIVE siblings under the same parent; position comes
-        // from the shared rule so a clone lands exactly where a newly created
-        // page would.
-        let sibling_names: Vec<String> = all
-            .iter()
-            .filter(|v| v.parent_id == root.parent_id && !v.trashed)
-            .map(|v| v.name.clone())
-            .collect();
-        let new_name = dedup_sibling_name(&root_name, &sibling_names);
-        let root_position = self.next_position(root.parent_id.as_deref());
-
-        // Fresh id per node. The ROOT keeps its parent (it lands beside the
-        // original); inner nodes point at their COPIED parent.
-        let id_map: std::collections::HashMap<String, String> = subtree
-            .iter()
-            .map(|v| (v.id.clone(), format!("view_{}", uuid::Uuid::new_v4())))
-            .collect();
-        let mut docs: u32 = 0;
-        for v in &subtree {
-            let is_root = v.id == view_id;
-            let new_doc_id = format!("doc_{}", uuid::Uuid::new_v4());
-            match self.load_doc(v.object_id.clone()) {
-                Ok(Some(doc)) => {
-                    self.save_doc(new_doc_id.clone(), &doc);
-                    docs += 1;
-                }
-                // A view with no document — or one whose snapshot won't decode —
-                // still gets an empty one, or the copy opens to nothing.
-                _ => self.save_doc(
-                    new_doc_id.clone(),
-                    &MicaDocument::from_markdown(String::new()),
-                ),
-            }
-            self.save_view(LocalView {
-                id: id_map[&v.id].clone(),
-                workspace_id: v.workspace_id.clone(),
-                parent_id: if is_root {
-                    v.parent_id.clone()
-                } else {
-                    v.parent_id.as_ref().and_then(|p| id_map.get(p).cloned())
-                },
-                object_id: new_doc_id,
-                name: if is_root {
-                    new_name.clone()
-                } else {
-                    v.name.clone()
-                },
-                position: if is_root {
-                    root_position.clone()
-                } else {
-                    v.position.clone()
-                },
-                trashed: false,
-                origin: "local".to_string(),
-                object_type: v.object_type.clone(),
-            });
-        }
+        let out = self
+            .store()
+            .clone_view("local", &view_id, &root_name, self.client_id)
+            .ok()??;
         Some(CloneViewResult {
-            root_view_id: id_map[&view_id].clone(),
-            new_name,
-            docs,
+            root_view_id: out.root_view_id,
+            new_name: out.new_name,
+            docs: out.docs,
         })
     }
 
@@ -1141,6 +974,9 @@ impl MicaStore {
 #[cfg(test)]
 mod clone_view_tests {
     use super::*;
+    // The naming rule clone_view applies; it moved to mica-core with the
+    // operation (issue #67 — one definition, shared with the server's rule).
+    use mica_core::view_ops::dedup_sibling_name;
 
     // Mirrors the server's own test (api-server documents.rs) on purpose: the
     // two implementations have to agree, so they are checked against the same

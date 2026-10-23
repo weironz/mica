@@ -76,7 +76,12 @@ pub struct UpdateOutcome {
 }
 
 /// Download the target version and swap it in for the running binary.
-pub fn run(json: bool, want: Option<String>, check_only: bool, force: bool) -> Result<UpdateOutcome> {
+pub fn run(
+  json: bool,
+  want: Option<String>,
+  check_only: bool,
+  force: bool,
+) -> Result<UpdateOutcome> {
   let current = env!("CARGO_PKG_VERSION").to_string();
   let exe = std::env::current_exe().context("locating this executable")?;
   // A symlinked install (Homebrew, ~/.local/bin pointing elsewhere) must be
@@ -164,8 +169,12 @@ fn download(http: &reqwest::blocking::Client, url: &str, to: &Path) -> Result<()
     .with_context(|| format!("downloading {url}"))?
     .error_for_status()
     .with_context(|| format!("downloading {url}"))?;
-  let mut file = std::fs::File::create(to)
-    .with_context(|| format!("writing {} — is the install directory writable?", to.display()))?;
+  let mut file = std::fs::File::create(to).with_context(|| {
+    format!(
+      "writing {} — is the install directory writable?",
+      to.display()
+    )
+  })?;
   // A connection that dies mid-stream leaves a partial file. Remove it rather
   // than leaving half a binary sitting next to the real one wearing a name that
   // says it is the next version.
@@ -198,7 +207,10 @@ fn verify(staged: &Path, want: &str) -> Result<()> {
   }
   let text = String::from_utf8_lossy(&out.stdout);
   if !text.contains(want) {
-    bail!("downloaded binary reports {:?}, expected {want}", text.trim());
+    bail!(
+      "downloaded binary reports {:?}, expected {want}",
+      text.trim()
+    );
   }
   Ok(())
 }

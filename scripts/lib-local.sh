@@ -67,6 +67,24 @@ resolve_database_url() {
   echo ""
 }
 
+# The Flutter pin CI reads — .fvmrc's "flutter" version (every flutter-action
+# step in the workflows resolves this file; local scripts must agree with it).
+# The parsing used to live in local-ci.sh and release-check.sh separately (#88).
+flutter_pin() {
+  sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc
+}
+
+# Refuse unless the local Flutter IS the pin. The "why" is the caller's —
+# `just ci` tests the pin, release-check builds what it ships with it.
+require_flutter_pin() {
+  local want have
+  want=$(flutter_pin)
+  [ -n "$want" ] || fail ".fvmrc has no \"flutter\" version — that file is the pin CI reads"
+  have=$("$FLUTTER" --version 2>/dev/null | sed -n 's/^Flutter \([0-9][^ ]*\).*/\1/p' | head -1)
+  [ "$have" = "$want" ] || fail "local Flutter is '$have', the pin is $want (.fvmrc) — $*"
+  note "flutter $have (matches .fvmrc)"
+}
+
 # The `gh` CLI, authenticated, and the repo it should talk to.
 GH_REPO=${GH_REPO:-weironz/mica}
 require_gh() {

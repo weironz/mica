@@ -1,4 +1,3 @@
-
 use axum::{
   Json,
   extract::{Path, Query, State},
@@ -11,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use crate::routes::auth::user_id_from_headers;
 use super::*;
+use crate::routes::auth::user_id_from_headers;
 
 pub async fn list_views(
   State(state): State<AppState>,
@@ -35,7 +34,9 @@ pub async fn list_views(
   }
   // Postgres rejects a negative OFFSET, which surfaced as a 500.
   if query.offset.is_some_and(|offset| offset < 0) {
-    return Err(ApiError::BadRequest("offset must not be negative".to_string()));
+    return Err(ApiError::BadRequest(
+      "offset must not be negative".to_string(),
+    ));
   }
 
   let views = fetch_views_filtered(&state.db, workspace_id, &query).await?;
@@ -62,7 +63,12 @@ pub async fn list_views(
     .is_some_and(|v| etag_matches(v, &etag))
   {
     return Ok(
-      (axum::http::StatusCode::NOT_MODIFIED, [(header::ETAG, etag)], ()).into_response(),
+      (
+        axum::http::StatusCode::NOT_MODIFIED,
+        [(header::ETAG, etag)],
+        (),
+      )
+        .into_response(),
     );
   }
 
@@ -605,13 +611,21 @@ pub(super) async fn workspace_graph(db: &PgPool, workspace_id: Uuid) -> ApiResul
   let mut unlinked = 0i64;
   for (view_id, name) in named {
     match degree.get(&view_id) {
-      Some(&d) => nodes.push(GraphNode { view_id, name, degree: d }),
+      Some(&d) => nodes.push(GraphNode {
+        view_id,
+        name,
+        degree: d,
+      }),
       None => unlinked += 1,
     }
   }
   nodes.sort_by(|a, b| b.degree.cmp(&a.degree).then(a.view_id.cmp(&b.view_id)));
 
-  Ok(GraphResponse { nodes, edges, unlinked })
+  Ok(GraphResponse {
+    nodes,
+    edges,
+    unlinked,
+  })
 }
 
 /// The backlink lookup behind [`backlinks`], extracted so tests exercise the real
@@ -660,11 +674,10 @@ pub(super) async fn scan_backlinks(
   )
 }
 
-
 #[cfg(test)]
 mod tests {
-  use super::*;
   use super::super::{ListViewsQuery, View};
+  use super::*;
 
   /// The `%…%` pattern escapes LIKE metacharacters so a query for `50%` or `a_b`
   /// matches literally rather than as a wildcard (paired with `ESCAPE '\'`).
@@ -749,7 +762,10 @@ mod tests {
   fn if_none_match_is_compared_the_way_the_header_is_written() {
     let tag = "\"abc123\"";
     assert!(etag_matches("\"abc123\"", tag));
-    assert!(etag_matches("*", tag), "the wildcard matches anything we have");
+    assert!(
+      etag_matches("*", tag),
+      "the wildcard matches anything we have"
+    );
     // A list, as a client with several cached copies would send.
     assert!(etag_matches("\"other\", \"abc123\"", tag));
     // A proxy may mark it weak on the way through. Refusing that would silently
@@ -759,5 +775,4 @@ mod tests {
     assert!(!etag_matches("\"abc124\"", tag));
     assert!(!etag_matches("", tag));
   }
-
 }

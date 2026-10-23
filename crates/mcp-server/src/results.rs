@@ -1,19 +1,9 @@
-//! Mica MCP server — a thin proxy that exposes the Mica REST API as MCP tools so
-//! an AI (Claude Desktop / Code / any MCP client) can list, read, create, and
-//! write Mica documents. It calls the API over HTTP with a PAT; it holds no DB
-//! or storage access of its own. "Backup/restore" here is just export/import —
-//! real backups are the job of external tools pointed at the exports.
-//!
-//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
-//! server URL + PAT through its usual chain — env, flags, saved login — and
-//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
-//! time while the read tools stay listed.
+//! Turning API payloads into thrifty tool results the model can act on.
 use rmcp::{
   ErrorData as McpError,
   model::{CallToolResult, Content},
 };
 use serde_json::{Value, json};
-
 
 /// Return an API payload as MCP text content.
 ///
@@ -76,21 +66,9 @@ pub(crate) fn write_ack(value: Value) -> Result<CallToolResult, McpError> {
     .and_then(Value::as_array)
   {
     ack.insert("blocks".to_string(), json!(blocks.len()));
-    // The last top-level block id — the natural anchor for the NEXT insert_at
-    // after an append, so the caller chains edits without re-reading the doc.
-    if let Some(root_id) = value
-      .pointer("/snapshot/payload/root_block_id")
-      .and_then(Value::as_str)
-      && let Some(last) = blocks
-        .iter()
-        .find(|b| b.get("id").and_then(Value::as_str) == Some(root_id))
-        .and_then(|root| root.get("children"))
-        .and_then(Value::as_array)
-        .and_then(|children| children.last())
-        .and_then(Value::as_str)
-    {
-      ack.insert("last_block_id".to_string(), json!(last));
-    }
+  }
+  if let Some(last) = last_block_id(&value) {
+    ack.insert("last_block_id".to_string(), json!(last));
   }
   if let Some(seq) = value.pointer("/update/seq").and_then(Value::as_i64) {
     ack.insert("seq".to_string(), json!(seq));
@@ -113,24 +91,31 @@ pub(crate) fn batch_ack(applied: usize, last: Option<Value>) -> Result<CallToolR
     if let Some(seq) = value.pointer("/update/seq").and_then(Value::as_i64) {
       ack.insert("seq".to_string(), json!(seq));
     }
-    if let Some(blocks) = value
-      .pointer("/snapshot/payload/blocks")
-      .and_then(Value::as_array)
-      && let Some(root_id) = value
-        .pointer("/snapshot/payload/root_block_id")
-        .and_then(Value::as_str)
-      && let Some(last_block) = blocks
-        .iter()
-        .find(|b| b.get("id").and_then(Value::as_str) == Some(root_id))
-        .and_then(|root| root.get("children"))
-        .and_then(Value::as_array)
-        .and_then(|children| children.last())
-        .and_then(Value::as_str)
-    {
+    if let Some(last_block) = last_block_id(&value) {
       ack.insert("last_block_id".to_string(), json!(last_block));
     }
   }
   tool_result(Ok(Value::Object(ack)))
+}
+
+/// The last top-level block id of a write's snapshot — the natural anchor for
+/// the NEXT insert_at after an append, so the caller chains edits without
+/// re-reading the doc. Shared by [`write_ack`] and [`batch_ack`]; `None` when
+/// the payload has no recognisable root/children shape.
+fn last_block_id(value: &Value) -> Option<&str> {
+  let blocks = value
+    .pointer("/snapshot/payload/blocks")
+    .and_then(Value::as_array)?;
+  let root_id = value
+    .pointer("/snapshot/payload/root_block_id")
+    .and_then(Value::as_str)?;
+  blocks
+    .iter()
+    .find(|b| b.get("id").and_then(Value::as_str) == Some(root_id))
+    .and_then(|root| root.get("children"))
+    .and_then(Value::as_array)
+    .and_then(|children| children.last())
+    .and_then(Value::as_str)
 }
 
 /// Answer a write whose endpoint replies with a LIST rather than the thing
@@ -201,4 +186,3 @@ pub(crate) fn slim_pages(value: Value) -> Value {
     .collect();
   json!({ "pages": slim })
 }
-

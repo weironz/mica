@@ -1,16 +1,16 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
 
-// Pins the one decision behind the floating math preview (`_paintMathPreview`
-// in render.dart): which math run, if any, does the caret sit inside?
+// Pins the one decision behind math-run caret snapping (`snapOutOfMathRun` in
+// marks.dart, consumed by selection snaps and arrow-key travel): which math
+// run, if any, does the caret sit inside?
 //
 // This imports the REAL function rather than restating the rule. A test that
 // re-implements the thing it tests passes while the bug ships — that is exactly
 // how a footer bug got past a green suite in this repo before.
 //
-// The rest of _paintMathPreview is a canvas draw: no offsets are remapped, no
-// text layout changes, so there is nothing else here that can be wrong in a way
-// a unit test would catch. The card's placement needs eyes.
+// "Strictly inside" is load-bearing: a caret ON a run's edge must not count as
+// inside, or the snap would pull caret travel across the edge off course.
 
 void main() {
   // `let $x^2$ be` — the math run covers "x^2" at [4, 7).

@@ -44,12 +44,7 @@ echo "==> version: $version (three places agree)"
 #     Checked HERE because CI cannot see a laptop. The pins themselves live in
 #     .fvmrc (read by every flutter-action step) and rust-toolchain.toml (read by
 #     rustup); this only asserts the machine agrees with them.
-want_flutter=$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)
-[ -n "$want_flutter" ] || fail ".fvmrc has no \"flutter\" version — that file is the pin CI reads"
-have_flutter=$("${FLUTTER:-flutter}" --version | sed -n 's/^Flutter \([0-9][^ ]*\).*/\1/p' | head -1)
-[ "$have_flutter" = "$want_flutter" ] || fail \
-  "local Flutter is $have_flutter, the pin is $want_flutter (.fvmrc) — CI builds what you are about to ship with the PIN, so testing on anything else tests a different engine. Run 'flutter upgrade', or check out $want_flutter."
-echo "==> Flutter: $have_flutter (matches .fvmrc)"
+require_flutter_pin "CI builds what you are about to ship with the PIN, so testing on anything else tests a different engine. Run 'flutter upgrade', or check out the pin."
 
 want_rust=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
 have_rust=$(rustc --version | awk '{print $2}')

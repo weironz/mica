@@ -24,11 +24,12 @@ thiserror = { workspace = true }
 # workspace, but `cargo test -p mica-core` resolves the whole workspace).
 rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 uuid = { workspace = true, optional = true }
+# The markdown authority — owns the `Block` DTO itself (mica-core re-exports
+# it), so the yrs document model and the markdown/REST model cannot drift.
+# markdown does NOT depend on mica-core, so no cycle.
+mica-markdown = { path = "../markdown" }
 
 [dev-dependencies]
-# The markdown authority — for the round-trip invariant test: md → blocks →
-# MicaDoc → blocks → md must equal md → blocks → md directly.
-mica-markdown = { path = "../markdown" }
 # Decode the base64 yjs state captured from the browser (web→yjs interop test).
 base64 = "0.22"
 # Property fuzz for the yrs binary-update surface (tests/proptest_yrs.rs) —

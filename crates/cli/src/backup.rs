@@ -305,7 +305,9 @@ fn parse_rclone_size(out: &str) -> Option<(u64, u64)> {
   let field = |name: &str| -> Option<u64> {
     let at = out.find(&format!("\"{name}\""))? + name.len() + 2;
     let rest = out[at..].trim_start_matches([':', ' ']);
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let end = rest
+      .find(|c: char| !c.is_ascii_digit())
+      .unwrap_or(rest.len());
     rest[..end].parse().ok()
   };
   Some((field("count")?, field("bytes")?))
@@ -1186,10 +1188,12 @@ mod tests {
     );
     // pretty-printed, which rclone emits on a terminal
     assert_eq!(
-      parse_rclone_size("{
+      parse_rclone_size(
+        "{
 	\"count\": 12,
 	\"bytes\": 34
-}"),
+}"
+      ),
       Some((12, 34))
     );
     assert_eq!(parse_rclone_size(r#"{"count":0,"bytes":0}"#), Some((0, 0)));
@@ -1232,7 +1236,10 @@ mod tests {
     loop {
       match RunLock::acquire_at(path) {
         Ok(lock) => return lock,
-        Err(error) => assert!(std::time::Instant::now() < deadline, "never released: {error:#}"),
+        Err(error) => assert!(
+          std::time::Instant::now() < deadline,
+          "never released: {error:#}"
+        ),
       }
       std::thread::sleep(Duration::from_millis(10));
     }
@@ -1436,7 +1443,9 @@ mod tests {
   #[test]
   fn the_schedule_honours_minutes() {
     use chrono::TimeZone;
-    let now = chrono::Local.with_ymd_and_hms(2026, 8, 29, 5, 30, 0).unwrap();
+    let now = chrono::Local
+      .with_ymd_and_hms(2026, 8, 29, 5, 30, 0)
+      .unwrap();
     // 同一天更晚的 05:45 → 15 分钟后
     assert_eq!(seconds_until(now, 5, 45), 15 * 60);
     // 已经过去的 05:15 → 明天,而不是负数或立刻
@@ -1465,7 +1474,10 @@ mod tests {
     );
 
     let summary = report.summary();
-    assert!(summary.contains("content: FAILED — operation timed out"), "{summary}");
+    assert!(
+      summary.contains("content: FAILED — operation timed out"),
+      "{summary}"
+    );
     assert!(summary.contains("database: ran"), "{summary}");
     assert!(summary.contains("objects: SKIPPED"), "{summary}");
   }
@@ -1539,7 +1551,9 @@ mod tests {
   #[test]
   fn the_next_run_is_always_in_the_future() {
     use chrono::TimeZone;
-    let now = chrono::Local.with_ymd_and_hms(2026, 7, 31, 5, 30, 0).unwrap();
+    let now = chrono::Local
+      .with_ymd_and_hms(2026, 7, 31, 5, 30, 0)
+      .unwrap();
     // 03:00 already passed today → tomorrow's slot, 21h30m away.
     assert_eq!(seconds_until(now, 3, 0), 21 * 3600 + 30 * 60);
     // 09:00 is still ahead → 3h30m away.

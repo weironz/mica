@@ -1,23 +1,13 @@
-//! Mica MCP server — a thin proxy that exposes the Mica REST API as MCP tools so
-//! an AI (Claude Desktop / Code / any MCP client) can list, read, create, and
-//! write Mica documents. It calls the API over HTTP with a PAT; it holds no DB
-//! or storage access of its own. "Backup/restore" here is just export/import —
-//! real backups are the job of external tools pointed at the exports.
-//!
-//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
-//! server URL + PAT through its usual chain — env, flags, saved login — and
-//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
-//! time while the read tools stay listed.
+//! Workspace-admin tools: delete a workspace, share links, export.zip.
 use rmcp::{
-  ErrorData as McpError,
-  handler::server::wrapper::Parameters,
-  model::CallToolResult, tool, tool_router,
+  ErrorData as McpError, handler::server::wrapper::Parameters, model::CallToolResult, tool,
+  tool_router,
 };
 use serde_json::{Value, json};
 
-use crate::*;
 use crate::args::*;
 use crate::results::*;
+use crate::*;
 
 #[tool_router(router = admin_router, vis = "pub(crate)")]
 impl MicaMcp {
@@ -44,9 +34,7 @@ impl MicaMcp {
       confirm,
     }): Parameters<DeleteWorkspaceArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     if !confirm {
       return Ok(tool_error(McpError::invalid_params(
         "refusing to delete a workspace without confirm=true — this cannot be undone".to_string(),
@@ -94,7 +82,9 @@ impl MicaMcp {
         None,
       )));
     }
-    let deleted = self.delete(&format!("/api/workspaces/{workspace_id}")).await;
+    let deleted = self
+      .delete(&format!("/api/workspaces/{workspace_id}"))
+      .await;
     // Every cached page belonged to SOME workspace; this one's are gone.
     self.cache_clear();
     action_ack(deleted, "deleted", workspace_id)
@@ -113,9 +103,7 @@ impl MicaMcp {
       document_id,
     }): Parameters<DocArg>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let shared = self
       .post(
         &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
@@ -150,9 +138,7 @@ impl MicaMcp {
       document_id,
     }): Parameters<DocArg>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let done = self
       .delete(&format!(
         "/api/workspaces/{workspace_id}/documents/{document_id}/share"

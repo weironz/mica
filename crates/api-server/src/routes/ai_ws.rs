@@ -12,9 +12,8 @@ use mica_infra::{AiConfig, AiProvider, ApiError, ApiResult};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::routes::auth::{
-  SESSION_COOKIE, bearer_token, cookie_value, ensure_user_exists, user_id_from_token,
-};
+use crate::routes::ai::{DEFAULT_SYSTEM, build_request};
+use crate::routes::auth::{ensure_user_exists, token_from_request, user_id_from_token};
 
 #[derive(Debug, Deserialize)]
 pub struct AiConnectQuery {
@@ -27,10 +26,6 @@ struct AiStreamRequest {
   #[serde(default)]
   system: Option<String>,
 }
-
-const DEFAULT_SYSTEM: &str = "You are a writing assistant inside a Markdown document editor. \
-Respond with clean GitHub-Flavored Markdown only — no preamble, no code fences around the whole \
-answer, no commentary. Use headings, lists, and tables where helpful.";
 
 /// `GET /ws/ai` — stream an AI completion token-by-token so the client can show
 /// the response as it is generated. The client sends one JSON text frame
@@ -45,7 +40,7 @@ pub async fn ai_socket(
   if !crate::origin::origin_allowed(&state.config, &headers) {
     return Err(ApiError::Forbidden);
   }
-  let token = token_from(&headers, &query).ok_or(ApiError::Unauthorized)?;
+  let token = token_from_request(&headers, query.token.as_deref()).ok_or(ApiError::Unauthorized)?;
   let user_id = user_id_from_token(&state, &token)?;
   // Same check as the REST endpoint: this socket streams completions, so it
   // spends the operator's credit for as long as it stays open, and a deleted
@@ -105,24 +100,7 @@ async fn stream_completion(
   system: &str,
   prompt: &str,
 ) -> Result<(), String> {
-  let body = match config.provider {
-    AiProvider::Anthropic => json!({
-      "model": config.model,
-      "max_tokens": config.max_tokens,
-      "stream": true,
-      "system": system,
-      "messages": [ { "role": "user", "content": prompt } ],
-    }),
-    AiProvider::OpenAi => json!({
-      "model": config.model,
-      "max_tokens": config.max_tokens,
-      "stream": true,
-      "messages": [
-        { "role": "system", "content": system },
-        { "role": "user", "content": prompt },
-      ],
-    }),
-  };
+  let body = build_request(config, system, prompt, true);
 
   let mut request = reqwest::Client::new()
     .post(config.endpoint())
@@ -237,23 +215,6 @@ async fn send_error(socket: &mut WebSocket, message: &str) {
     .await;
 }
 
-/// Header, then cookie, then the query tail — the same order as the document
-/// socket (`ws.rs` `token_from_request`). The AI stream is a WebSocket too, so
-/// web reaches it with a cookie and nothing in the URL.
-fn token_from(headers: &HeaderMap, query: &AiConnectQuery) -> Option<String> {
-  if let Some(token) = bearer_token(headers) {
-    return Some(token);
-  }
-  if let Some(token) = cookie_value(headers, SESSION_COOKIE) {
-    return Some(token);
-  }
-  query
-    .token
-    .as_ref()
-    .map(|token| token.trim().to_string())
-    .filter(|token| !token.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
   use super::drain_complete_lines;
@@ -266,10 +227,16 @@ mod tests {
     let (a, b) = line.split_at(7); // inside the 3-byte `中`
     let mut buffer = Vec::new();
     buffer.extend_from_slice(a);
-    assert!(drain_complete_lines(&mut buffer).is_empty(), "no complete line yet");
+    assert!(
+      drain_complete_lines(&mut buffer).is_empty(),
+      "no complete line yet"
+    );
     buffer.extend_from_slice(b);
     let lines = drain_complete_lines(&mut buffer);
-    assert_eq!(lines.iter().filter(|l| !l.is_empty()).collect::<Vec<_>>(), ["data: 中文"]);
+    assert_eq!(
+      lines.iter().filter(|l| !l.is_empty()).collect::<Vec<_>>(),
+      ["data: 中文"]
+    );
     assert!(buffer.is_empty());
   }
 

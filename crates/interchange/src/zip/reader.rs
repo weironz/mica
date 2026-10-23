@@ -20,7 +20,16 @@ fn u32le(d: &[u8], i: usize) -> u32 {
   u32::from_le_bytes([d[i], d[i + 1], d[i + 2], d[i + 3]])
 }
 fn u64le(d: &[u8], i: usize) -> u64 {
-  u64::from_le_bytes([d[i], d[i + 1], d[i + 2], d[i + 3], d[i + 4], d[i + 5], d[i + 6], d[i + 7]])
+  u64::from_le_bytes([
+    d[i],
+    d[i + 1],
+    d[i + 2],
+    d[i + 3],
+    d[i + 4],
+    d[i + 5],
+    d[i + 6],
+    d[i + 7],
+  ])
 }
 
 /// Total bytes one archive may expand to (stored + inflated, all entries).
@@ -195,7 +204,12 @@ fn read_local_entries(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
       &data[name_start + name_len..data_start],
     );
     if !name.ends_with('/')
-      && let Some(bytes) = decode_entry(&data[data_start..data_start + comp_size], method, uncomp_size, budget)
+      && let Some(bytes) = decode_entry(
+        &data[data_start..data_start + comp_size],
+        method,
+        uncomp_size,
+        budget,
+      )
     {
       out.push(ZipFileEntry { name, bytes });
     }

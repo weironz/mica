@@ -1,13 +1,4 @@
-//! Mica MCP server — a thin proxy that exposes the Mica REST API as MCP tools so
-//! an AI (Claude Desktop / Code / any MCP client) can list, read, create, and
-//! write Mica documents. It calls the API over HTTP with a PAT; it holds no DB
-//! or storage access of its own. "Backup/restore" here is just export/import —
-//! real backups are the job of external tools pointed at the exports.
-//!
-//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
-//! server URL + PAT through its usual chain — env, flags, saved login — and
-//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
-//! time while the read tools stay listed.
+//! The Parameters<T> argument structs every tool deserialises its call into.
 //!
 //! Every id here is a `Uuid`, never a `String`. The tools splice ids into
 //! request paths, and reqwest resolves a URL the WHATWG way — `..` segments
@@ -22,13 +13,17 @@ use rmcp::schemars;
 use serde::Deserialize;
 use uuid::Uuid;
 
-
 /// Refuse to inline an image so large it would blow the context it is being
 /// read into. MCP has no streaming for ImageContent — it is one base64 string
 /// in one tool result — and base64 inflates by 4/3 before the model's encoder
 /// ever sees it. A cap with a readable reason beats a 40MB reply that wedges
 /// the conversation; the href still works in a browser.
 pub(crate) const MAX_INLINE_IMAGE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Same ceiling the server puts on its batch-read route (see
+/// `MAX_BATCH_VIEWS` in api-server). Enforced here too so an over-large list is
+/// refused with a readable message instead of a 400 after the round trip.
+pub(crate) const MAX_BATCH_DOCUMENTS: usize = 1000;
 
 // ── Tool parameters ─────────────────────────────────────────────────────────
 
@@ -88,7 +83,6 @@ pub(crate) struct ReadDocumentsArgs {
   #[serde(default)]
   pub(crate) mode: Option<String>,
 }
-
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct CreateDocArgs {
@@ -389,4 +383,3 @@ pub(crate) struct TrashArgs {
 }
 
 // ── Tools ───────────────────────────────────────────────────────────────────
-

@@ -15,7 +15,10 @@ fn html_eq(md: &str, expected: &str) {
 #[test]
 fn emphasis_nesting_order() {
   // `***foo***` is em-outside-strong, not the reverse (spec ex. 416/467/468).
-  html_eq("foo***bar***baz\n", "<p>foo<em><strong>bar</strong></em>baz</p>");
+  html_eq(
+    "foo***bar***baz\n",
+    "<p>foo<em><strong>bar</strong></em>baz</p>",
+  );
   html_eq("***foo***\n", "<p><em><strong>foo</strong></em></p>");
   html_eq(
     "_____foo_____\n",

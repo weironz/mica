@@ -21,11 +21,11 @@
 //! whole point of that role existing.
 
 use axum::{
+  Json,
   extract::{Path, State},
   http::HeaderMap,
-  Json,
 };
-use mica_app_core::{comments as store, AppState};
+use mica_app_core::{AppState, comments as store};
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

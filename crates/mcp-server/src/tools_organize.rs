@@ -1,23 +1,13 @@
-//! Mica MCP server — a thin proxy that exposes the Mica REST API as MCP tools so
-//! an AI (Claude Desktop / Code / any MCP client) can list, read, create, and
-//! write Mica documents. It calls the API over HTTP with a PAT; it holds no DB
-//! or storage access of its own. "Backup/restore" here is just export/import —
-//! real backups are the job of external tools pointed at the exports.
-//!
-//! Shipped as `mica-cli mcp` (this crate is a library; the CLI resolves the
-//! server URL + PAT through its usual chain — env, flags, saved login — and
-//! calls [serve_stdio]). Read-only mode makes every write tool refuse at call
-//! time while the read tools stay listed.
+//! Tree-organising tools: move, transfer, clone, reorder, rename, folders.
 use rmcp::{
-  ErrorData as McpError,
-  handler::server::wrapper::Parameters,
-  model::CallToolResult, tool, tool_router,
+  ErrorData as McpError, handler::server::wrapper::Parameters, model::CallToolResult, tool,
+  tool_router,
 };
 use serde_json::{Value, json};
 
-use crate::*;
 use crate::args::*;
 use crate::results::*;
+use crate::*;
 
 #[tool_router(router = organize_router, vis = "pub(crate)")]
 impl MicaMcp {
@@ -33,9 +23,7 @@ impl MicaMcp {
       parent_view_id,
     }): Parameters<MoveDocArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let body = json!({ "parent_view_id": parent_view_id });
     let moved = self
       .post(
@@ -65,9 +53,7 @@ impl MicaMcp {
       copy,
     }): Parameters<TransferArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let body = json!({
       "dest_workspace_id": dest_workspace_id,
       "parent_view_id": parent_view_id,
@@ -102,9 +88,7 @@ impl MicaMcp {
       name,
     }): Parameters<CloneArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let body = json!({
       "parent_view_id": parent_view_id,
       "name": name,
@@ -133,9 +117,7 @@ impl MicaMcp {
       ordered_view_ids,
     }): Parameters<ReorderArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let count = ordered_view_ids.len();
     let body = json!({
       "parent_view_id": parent_view_id,
@@ -168,9 +150,7 @@ impl MicaMcp {
       name,
     }): Parameters<RenameArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let renamed = self
       .patch(
         &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
@@ -198,9 +178,7 @@ impl MicaMcp {
       parent_view_id,
     }): Parameters<CreateFolderArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let created = self
       .post(
         &format!("/api/workspaces/{workspace_id}/folders"),
@@ -250,9 +228,7 @@ impl MicaMcp {
       view_id,
     }): Parameters<ViewArg>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let restored = self
       .post(
         &format!("/api/workspaces/{workspace_id}/views/{view_id}/restore"),
@@ -305,9 +281,7 @@ impl MicaMcp {
       name,
     }): Parameters<CreateVersionArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let created = self
       .post(
         &format!("/api/workspaces/{workspace_id}/documents/{document_id}/versions"),
@@ -345,9 +319,7 @@ impl MicaMcp {
       version_id,
     }): Parameters<RestoreVersionArgs>,
   ) -> Result<CallToolResult, McpError> {
-    if let Err(error) = self.ensure_writable() {
-      return Ok(tool_error(error));
-    }
+    writable!(self);
     let restored = self
       .post(
         &format!("/api/workspaces/{workspace_id}/documents/{document_id}/restore"),
@@ -365,5 +337,4 @@ impl MicaMcp {
       Err(error) => Ok(tool_error(error)),
     }
   }
-
 }

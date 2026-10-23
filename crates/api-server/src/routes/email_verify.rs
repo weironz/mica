@@ -32,7 +32,7 @@ use mica_infra::{ApiError, ApiResult, Mail};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use super::auth::{normalize_email, sha256_hex};
+use super::auth::{mint_secret, normalize_email, sha256_hex};
 use super::password_reset::{escape_attr, html_response, page_shell};
 
 #[cfg(test)]
@@ -91,9 +91,7 @@ async fn mint_token(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<String> {
     .execute(db)
     .await?;
 
-  // 244 bits from two v4 UUIDs — the same recipe as a refresh token.
-  let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-  let token = format!("{VERIFY_PREFIX}{secret}");
+  let token = mint_secret(VERIFY_PREFIX);
   let expires_at = Utc::now() + Duration::hours(VERIFY_TTL_HOURS);
 
   sqlx::query(

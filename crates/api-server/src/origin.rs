@@ -21,13 +21,20 @@ use mica_infra::{AppConfig, Environment};
 fn origin_of(url: &str) -> String {
   let url = url.trim();
   let after_scheme = url.find("://").map_or(0, |i| i + 3);
-  let end = url[after_scheme..].find('/').map_or(url.len(), |i| after_scheme + i);
+  let end = url[after_scheme..]
+    .find('/')
+    .map_or(url.len(), |i| after_scheme + i);
   url[..end].to_ascii_lowercase()
 }
 
 /// Whether `headers` come from a page the app trusts (see the module doc).
 pub fn origin_allowed(config: &AppConfig, headers: &HeaderMap) -> bool {
-  allowed(config.environment, &config.app_base_url, &config.cors_allowed_origins, headers)
+  allowed(
+    config.environment,
+    &config.app_base_url,
+    &config.cors_allowed_origins,
+    headers,
+  )
 }
 
 fn allowed(env: Environment, app_base_url: &str, extra: &[String], headers: &HeaderMap) -> bool {
@@ -56,7 +63,12 @@ mod tests {
   use axum::http::HeaderValue;
 
   fn check(env: Environment, h: &HeaderMap) -> bool {
-    allowed(env, "https://mica.example.com", &["https://alias.example.com".to_string()], h)
+    allowed(
+      env,
+      "https://mica.example.com",
+      &["https://alias.example.com".to_string()],
+      h,
+    )
   }
 
   fn with_origin(o: &str) -> HeaderMap {
@@ -81,12 +93,18 @@ mod tests {
   #[test]
   fn non_browser_clients_and_development_are_not_affected() {
     assert!(check(Environment::Production, &HeaderMap::new()));
-    assert!(check(Environment::Development, &with_origin("http://localhost:5555")));
+    assert!(check(
+      Environment::Development,
+      &with_origin("http://localhost:5555")
+    ));
   }
 
   #[test]
   fn origin_of_strips_paths() {
-    assert_eq!(origin_of("https://Mica.example.com/app/"), "https://mica.example.com");
+    assert_eq!(
+      origin_of("https://Mica.example.com/app/"),
+      "https://mica.example.com"
+    );
     assert_eq!(origin_of("http://10.0.0.1"), "http://10.0.0.1");
   }
 }

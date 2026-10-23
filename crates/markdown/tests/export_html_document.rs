@@ -30,8 +30,14 @@ fn wraps_fragment_in_standalone_document() {
 fn escapes_title() {
   let snapshot = import_markdown("body", "root");
   let html = export_html_document(&snapshot, "a <b> & \"c\"", 1160).expect("export");
-  assert!(html.contains("<title>a &lt;b&gt; &amp; "), "title escaped: {html}");
-  assert!(!html.contains("<title>a <b>"), "no raw angle brackets in title");
+  assert!(
+    html.contains("<title>a &lt;b&gt; &amp; "),
+    "title escaped: {html}"
+  );
+  assert!(
+    !html.contains("<title>a <b>"),
+    "no raw angle brackets in title"
+  );
 }
 
 #[test]
@@ -50,8 +56,14 @@ fn set_image_srcs_rewrites_matching_file_id() {
   }
 
   let mut srcs = BTreeMap::new();
-  srcs.insert("abc123".to_string(), "data:image/png;base64,Zm9v".to_string());
-  srcs.insert("unused".to_string(), "data:image/png;base64,YmFy".to_string());
+  srcs.insert(
+    "abc123".to_string(),
+    "data:image/png;base64,Zm9v".to_string(),
+  );
+  srcs.insert(
+    "unused".to_string(),
+    "data:image/png;base64,YmFy".to_string(),
+  );
   set_image_srcs(&mut snapshot, &srcs);
 
   let html = export_html_document(&snapshot, "T", 900).expect("export");
@@ -67,7 +79,10 @@ fn set_image_srcs_leaves_unmatched_blocks_untouched() {
   let before = snapshot.clone();
   // A map that matches no block's file_id.
   let mut srcs = BTreeMap::new();
-  srcs.insert("nomatch".to_string(), "data:image/png;base64,Zm9v".to_string());
+  srcs.insert(
+    "nomatch".to_string(),
+    "data:image/png;base64,Zm9v".to_string(),
+  );
   set_image_srcs(&mut snapshot, &srcs);
   assert_eq!(snapshot, before, "no file_id match → snapshot unchanged");
 }

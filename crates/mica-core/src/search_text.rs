@@ -43,12 +43,17 @@ pub fn snippet(text: &str, needle: &str) -> Option<String> {
       origin.push(i);
     }
   }
-  let at = folded.windows(needle.len()).position(|w| w == needle.as_slice())?;
+  let at = folded
+    .windows(needle.len())
+    .position(|w| w == needle.as_slice())?;
   let hit = origin[at];
 
   // Never open before the start of the hit's own block: a lead taken from the
   // previous block is text the hit has nothing to do with.
-  let block_start = chars[..hit].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+  let block_start = chars[..hit]
+    .iter()
+    .rposition(|&c| c == '\n')
+    .map_or(0, |i| i + 1);
   let start = hit.saturating_sub(LEAD).max(block_start);
   let end = (start + WINDOW).min(chars.len());
 
@@ -126,7 +131,10 @@ mod tests {
 
   #[test]
   fn case_insensitive_and_absent_and_empty() {
-    assert_eq!(snippet("Hello World", "world").as_deref(), Some("Hello World"));
+    assert_eq!(
+      snippet("Hello World", "world").as_deref(),
+      Some("Hello World")
+    );
     assert_eq!(snippet("Hello", "xyz"), None);
     assert_eq!(snippet("", "a"), None);
     assert_eq!(snippet("abc", ""), None);

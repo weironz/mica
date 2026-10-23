@@ -1668,6 +1668,7 @@ dependencies = [
 name = "mica-core"
 version = "0.1.0"
 dependencies = [
+ "mica-markdown",
  "rusqlite",
  "serde",
  "serde_json",

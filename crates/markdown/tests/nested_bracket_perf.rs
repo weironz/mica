@@ -19,35 +19,35 @@
 //! catch a return to exponential without flaking on a loaded CI box.
 
 fn parse_ms(src: &str) -> u128 {
-    let started = std::time::Instant::now();
-    let payload = mica_markdown::import_markdown(src, "root");
-    assert!(!payload.blocks.is_empty(), "sanity: it should still parse");
-    started.elapsed().as_millis()
+  let started = std::time::Instant::now();
+  let payload = mica_markdown::import_markdown(src, "root");
+  assert!(!payload.blocks.is_empty(), "sanity: it should still parse");
+  started.elapsed().as_millis()
 }
 
 #[test]
 fn plain_bracket_nesting_is_not_exponential() {
-    let depth = 24;
-    let src = format!("{}a{}", "[".repeat(depth), "]".repeat(depth));
-    let ms = parse_ms(&src);
-    assert!(
-        ms < 3000,
-        "depth-{depth} PLAIN nesting took {ms}ms — the nested-link check is \
+  let depth = 24;
+  let src = format!("{}a{}", "[".repeat(depth), "]".repeat(depth));
+  let ms = parse_ms(&src);
+  assert!(
+    ms < 3000,
+    "depth-{depth} PLAIN nesting took {ms}ms — the nested-link check is \
          eager again (exponential even for non-links); keep it lazy"
-    );
+  );
 }
 
 #[test]
 fn nested_link_nesting_is_not_exponential() {
-    let depth = 24;
-    let src = format!("{}a{}", "[".repeat(depth), "](/u)".repeat(depth));
-    let ms = parse_ms(&src);
-    assert!(
-        ms < 3000,
-        "depth-{depth} NESTED-LINK nesting took {ms}ms — the label_contains_link \
+  let depth = 24;
+  let src = format!("{}a{}", "[".repeat(depth), "](/u)".repeat(depth));
+  let ms = parse_ms(&src);
+  assert!(
+    ms < 3000,
+    "depth-{depth} NESTED-LINK nesting took {ms}ms — the label_contains_link \
          memo is no longer shared across the recursive parses, so each level is \
          re-parsed twice again (T(n) = 2*T(n-1)); keep LinkCache threaded"
-    );
+  );
 }
 
 /// A plain multi-line paragraph was CUBIC: every continuation line re-parsed
@@ -57,10 +57,15 @@ fn nested_link_nesting_is_not_exponential() {
 /// inline parse to one pass at the end, and the autolink check is O(1).
 #[test]
 fn a_long_multi_line_paragraph_is_not_cubic() {
-    let ms = parse_ms(&"a\n".repeat(4000));
-    assert!(ms < 3000, "4000-line paragraph took {ms}ms — extended_autolink copies the rest of the text again");
-    let ms = parse_ms(&"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod\n".repeat(400));
-    assert!(ms < 3000, "400 wrapped prose lines took {ms}ms");
+  let ms = parse_ms(&"a\n".repeat(4000));
+  assert!(
+    ms < 3000,
+    "4000-line paragraph took {ms}ms — extended_autolink copies the rest of the text again"
+  );
+  let ms = parse_ms(
+    &"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod\n".repeat(400),
+  );
+  assert!(ms < 3000, "400 wrapped prose lines took {ms}ms");
 }
 
 /// `[<` repeated with no `>` anywhere: the `<` scan ran to the end of the text
@@ -69,17 +74,23 @@ fn a_long_multi_line_paragraph_is_not_cubic() {
 /// answers were memoised per parse (`BracketMemo`): linear now.
 #[test]
 fn unclosed_angle_brackets_inside_brackets_are_not_cubic() {
-    let ms = parse_ms(&"[<".repeat(8000));
-    assert!(ms < 3000, "`[<`×8000 took {ms}ms — the bracket memo is gone or the `<` scan no longer stops");
+  let ms = parse_ms(&"[<".repeat(8000));
+  assert!(
+    ms < 3000,
+    "`[<`×8000 took {ms}ms — the bracket memo is gone or the `<` scan no longer stops"
+  );
 }
 
 /// Long runs of unmatched brackets of every kind the parser asks about.
 #[test]
 fn unmatched_bracket_runs_are_linear() {
-    for (unit, n) in [("[", 50_000), ("![", 20_000), ("[^", 20_000)] {
-        let ms = parse_ms(&unit.repeat(n));
-        assert!(ms < 3000, "`{unit}`×{n} took {ms}ms — every `[` rescans to the end again");
-    }
+  for (unit, n) in [("[", 50_000), ("![", 20_000), ("[^", 20_000)] {
+    let ms = parse_ms(&unit.repeat(n));
+    assert!(
+      ms < 3000,
+      "`{unit}`×{n} took {ms}ms — every `[` rescans to the end again"
+    );
+  }
 }
 
 /// `[![[![…a](u)](u)](u)](u)` — links and images ALTERNATING. The shared
@@ -101,20 +112,20 @@ fn unmatched_bracket_runs_are_linear() {
 /// `push_link`; nesting past `MAX_INLINE_NESTING` stays literal.
 #[test]
 fn alternating_link_image_nesting_is_not_exponential() {
-    for k in [20, 40, 60] {
-        let mut src = String::new();
-        for d in 0..k {
-            src.push_str(if d % 2 == 0 { "[" } else { "![" });
-        }
-        src.push('a');
-        src.push_str(&"](u)".repeat(k));
-        let ms = parse_ms(&src);
-        assert!(
-            ms < 3000,
-            "depth-{k} ALTERNATING link/image nesting took {ms}ms — image labels \
-             are parsed outside the shared label cache again (P(k) = 2·P(k-2))"
-        );
+  for k in [20, 40, 60] {
+    let mut src = String::new();
+    for d in 0..k {
+      src.push_str(if d % 2 == 0 { "[" } else { "![" });
     }
+    src.push('a');
+    src.push_str(&"](u)".repeat(k));
+    let ms = parse_ms(&src);
+    assert!(
+      ms < 3000,
+      "depth-{k} ALTERNATING link/image nesting took {ms}ms — image labels \
+             are parsed outside the shared label cache again (P(k) = 2·P(k-2))"
+    );
+  }
 }
 
 /// `![![![…a](u)](u)](u)` thousands deep: each image label is parsed by a
@@ -122,15 +133,19 @@ fn alternating_link_image_nesting_is_not_exponential() {
 /// 2 MiB stack (tokio's worker default) — a process abort, not a panic. 10-19 #6b.
 #[test]
 fn deep_image_nesting_does_not_overflow_the_stack() {
-    for unit in ["![", "["] {
-        let src = format!("{}a{}", unit.repeat(5000), "](u)".repeat(5000));
-        let payload = std::thread::Builder::new()
-            .stack_size(2 * 1024 * 1024)
-            .spawn(move || mica_markdown::import_markdown(&src, "root"))
-            .unwrap()
-            .join()
-            .expect("must not panic");
-        let text = &payload.blocks[1].text;
-        assert!(text.contains('a'), "content survives: {}", &text[..text.len().min(80)]);
-    }
+  for unit in ["![", "["] {
+    let src = format!("{}a{}", unit.repeat(5000), "](u)".repeat(5000));
+    let payload = std::thread::Builder::new()
+      .stack_size(2 * 1024 * 1024)
+      .spawn(move || mica_markdown::import_markdown(&src, "root"))
+      .unwrap()
+      .join()
+      .expect("must not panic");
+    let text = &payload.blocks[1].text;
+    assert!(
+      text.contains('a'),
+      "content survives: {}",
+      &text[..text.len().min(80)]
+    );
+  }
 }

@@ -395,10 +395,12 @@ pub mod import_store {
   /// was added to end. Returns how many were corrected, so the log can say it
   /// out loud: a deploy that interrupts an import is worth one line.
   pub async fn mark_interrupted(db: &PgPool) -> u64 {
-    sqlx::query("UPDATE import_jobs SET status = 'interrupted', updated_at = now() WHERE status = 'running'")
-      .execute(db)
-      .await
-      .map(|r| r.rows_affected())
-      .unwrap_or(0)
+    sqlx::query(
+      "UPDATE import_jobs SET status = 'interrupted', updated_at = now() WHERE status = 'running'",
+    )
+    .execute(db)
+    .await
+    .map(|r| r.rows_affected())
+    .unwrap_or(0)
   }
 }

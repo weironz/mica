@@ -4,7 +4,9 @@ use mica_infra::{AiConfig, AiProvider, ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::routes::auth::{admin_id_from_headers, existing_user_id_from_headers, user_id_from_headers};
+use crate::routes::auth::{
+  admin_id_from_headers, existing_user_id_from_headers, user_id_from_headers,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct AiCompleteRequest {
@@ -75,9 +77,48 @@ pub struct UpdateAiSettingsRequest {
   max_tokens: Option<u32>,
 }
 
-const DEFAULT_SYSTEM: &str = "You are a writing assistant inside a Markdown document editor. \
+pub(crate) const DEFAULT_SYSTEM: &str = "You are a writing assistant inside a Markdown document editor. \
 Respond with clean GitHub-Flavored Markdown only — no preamble, no code fences around the whole \
 answer, no commentary. Use headings, lists, and tables where helpful.";
+
+/// The JSON body of one completion call, shared by this route (one-shot) and
+/// the WS route (`ai_ws.rs`, streamed) — the two had written every field of
+/// both provider shapes out twice.
+///
+/// `stream` is written verbatim for the OpenAI shape either way (the one-shot
+/// body has always carried `"stream": false`), while the Anthropic body only
+/// carries the field when it is true — the REST body never had it, and adding
+/// it now would change a wire shape for no reason.
+pub(crate) fn build_request(
+  config: &AiConfig,
+  system: &str,
+  prompt: &str,
+  stream: bool,
+) -> serde_json::Value {
+  match config.provider {
+    AiProvider::Anthropic => {
+      let mut body = json!({
+        "model": config.model,
+        "max_tokens": config.max_tokens,
+        "system": system,
+        "messages": [ { "role": "user", "content": prompt } ],
+      });
+      if stream {
+        body["stream"] = json!(true);
+      }
+      body
+    }
+    AiProvider::OpenAi => json!({
+      "model": config.model,
+      "max_tokens": config.max_tokens,
+      "stream": stream,
+      "messages": [
+        { "role": "system", "content": system },
+        { "role": "user", "content": prompt },
+      ],
+    }),
+  }
+}
 
 /// `POST /api/ai/complete` — generate Markdown from a prompt. Requires a signed-in
 /// user; returns 503 when the server has no AI provider configured.
@@ -160,11 +201,9 @@ pub async fn update_settings(
   // config meant selecting Zhipu handed it DeepSeek's key, and the screen then
   // reported a configured key for a provider that had never had one.
   let stored = mica_infra::AiConfig::load_provider(&state.db, &provider_id).await;
-  let base = stored.as_ref().or_else(|| {
-    current
-      .as_ref()
-      .filter(|c| c.provider_id == provider_id)
-  });
+  let base = stored
+    .as_ref()
+    .or_else(|| current.as_ref().filter(|c| c.provider_id == provider_id));
 
   let provider = match payload.provider.as_deref() {
     Some(value) => AiProvider::parse(value)
@@ -306,7 +345,14 @@ fn key_hint(key: &str) -> String {
   if key.chars().count() < 8 {
     return String::new();
   }
-  key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect()
+  key
+    .chars()
+    .rev()
+    .take(4)
+    .collect::<Vec<_>>()
+    .into_iter()
+    .rev()
+    .collect()
 }
 
 fn default_base_url(provider: AiProvider) -> String {
@@ -324,12 +370,7 @@ async fn generate(config: &AiConfig, system: &str, prompt: &str) -> ApiResult<St
 }
 
 async fn generate_anthropic(config: &AiConfig, system: &str, prompt: &str) -> ApiResult<String> {
-  let body = json!({
-    "model": config.model,
-    "max_tokens": config.max_tokens,
-    "system": system,
-    "messages": [ { "role": "user", "content": prompt } ],
-  });
+  let body = build_request(config, system, prompt, false);
 
   let payload = send(
     reqwest::Client::new()
@@ -359,15 +400,7 @@ async fn generate_anthropic(config: &AiConfig, system: &str, prompt: &str) -> Ap
 }
 
 async fn generate_openai(config: &AiConfig, system: &str, prompt: &str) -> ApiResult<String> {
-  let body = json!({
-    "model": config.model,
-    "max_tokens": config.max_tokens,
-    "stream": false,
-    "messages": [
-      { "role": "system", "content": system },
-      { "role": "user", "content": prompt },
-    ],
-  });
+  let body = build_request(config, system, prompt, false);
 
   let mut request = reqwest::Client::new()
     .post(config.endpoint())
@@ -594,9 +627,7 @@ pub async fn list_models(
   let client = reqwest::Client::new();
   let mut last_status: Option<String> = None;
   for url in &candidates {
-    let mut request = client
-      .get(url)
-      .timeout(std::time::Duration::from_secs(15));
+    let mut request = client.get(url).timeout(std::time::Duration::from_secs(15));
     if !api_key.is_empty() {
       request = match provider {
         AiProvider::Anthropic => request.header("x-api-key", &api_key),
@@ -646,9 +677,7 @@ pub async fn list_models(
       last_status = Some(status.to_string());
       continue;
     }
-    return Err(ApiError::Unavailable(format!(
-      "{url} answered {status}"
-    )));
+    return Err(ApiError::Unavailable(format!("{url} answered {status}")));
   }
 
   Err(ApiError::Unavailable(format!(
@@ -737,8 +766,14 @@ mod models_endpoint_tests {
   /// A stored key only ever goes back to the URL it was stored with.
   #[test]
   fn a_stored_key_only_follows_its_own_url() {
-    assert!(same_base_url("https://api.deepseek.com/", "https://API.deepseek.com"));
-    assert!(!same_base_url("https://api.deepseek.com", "https://open.bigmodel.cn/api/paas/v4"));
+    assert!(same_base_url(
+      "https://api.deepseek.com/",
+      "https://API.deepseek.com"
+    ));
+    assert!(!same_base_url(
+      "https://api.deepseek.com",
+      "https://open.bigmodel.cn/api/paas/v4"
+    ));
   }
 
   #[test]

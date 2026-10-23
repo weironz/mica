@@ -5,9 +5,7 @@ use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::documents::{
-  DocumentOperation, DocumentSnapshotPayload, apply_operations,
-};
+use crate::documents::{DocumentOperation, DocumentSnapshotPayload, apply_operations};
 
 /// Persistent document row. Shared by the REST and WebSocket write paths so
 /// both go through exactly one storage representation.
@@ -21,8 +19,6 @@ pub struct DocumentRecord {
   pub created_at: DateTime<Utc>,
   pub updated_at: DateTime<Utc>,
 }
-
-
 
 /// A yrs-native version-history row (see docs/features/version-history-plan.md). Metadata
 /// only — the `state` blob is fetched separately so timeline listings stay cheap.
@@ -168,7 +164,7 @@ where
   // base on first touch (folding a leftover snapshot, or empty), so documents
   // from either era keep working unchanged.
   let base = crate::sync::ensure_base_tx(&mut tx, document_id).await?;
-  let mut doc = mica_core::MicaDoc::from_update(&base.state)
+  let mut doc = crate::sync::guarded_from_update(&base.state)
     .map_err(|error| ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}")))?;
   let state_vector_before = doc.state_vector();
   // A yrs base whose `meta.root` was wiped (see `MicaDoc::set_blocks`) reports an
@@ -186,11 +182,7 @@ where
   let mut current_payload = DocumentSnapshotPayload {
     schema_version: 1,
     root_block_id,
-    blocks: doc
-      .to_blocks()
-      .into_iter()
-      .map(md_block_from_core)
-      .collect(),
+    blocks: doc.to_blocks(),
   };
   // Heal a lost root before deriving ops against it, otherwise every write to a
   // damaged document fails the whole batch on `block not found`. Unlike the read
@@ -215,12 +207,7 @@ where
   // objects and a concurrent editor's edits to them merge; only a block both
   // sides changed is decided by the CRDT (text splices interleave, the same
   // prop key is last-writer-wins).
-  let next_blocks: Vec<mica_core::Block> = next_payload
-    .blocks
-    .iter()
-    .cloned()
-    .map(crate::sync::to_core_block)
-    .collect();
+  let next_blocks: Vec<mica_core::Block> = next_payload.blocks.clone();
   doc.set_blocks(&next_payload.root_block_id, &next_blocks);
   let yrs_update = doc
     .encode_diff(&state_vector_before)
@@ -235,59 +222,24 @@ where
   .bind(&yrs_update)
   .fetch_one(&mut *tx)
   .await?;
-  let yrs_state = doc.encode_state();
-  let yrs_state_vector = doc.state_vector();
-  // Derive the search text from the SAME `doc` that produced `yrs_state` and
-  // upsert it in one statement — the REST/MCP write path keeps content_text in
-  // lockstep with the base exactly as the collaborative push path does (red
-  // line #1: content_text is a co-written pure projection of the base).
-  let yrs_content_text = crate::sync::content_text_from_doc(&doc);
-  let yrs_link_targets = crate::sync::link_targets_from_doc(&doc);
-  let yrs_file_ids = crate::sync::file_ids_from_blocks(&doc.to_blocks());
-  sqlx::query(
-    "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp())
-     ON CONFLICT (document_id) DO UPDATE SET
-         state = excluded.state, state_vector = excluded.state_vector,
-         base_rid = excluded.base_rid, content_text = excluded.content_text,
-         link_targets = excluded.link_targets, file_ids = excluded.file_ids,
-         updated_at = clock_timestamp()",
-  )
-  .bind(document_id)
-  .bind(&yrs_state)
-  .bind(&yrs_state_vector)
-  .bind(yrs_rid)
-  .bind(&yrs_content_text)
-  .bind(&yrs_link_targets)
-  .bind(&yrs_file_ids)
-  .execute(&mut *tx)
-  .await?;
-
+  // Flatten ONCE and write the base exactly the way the collaborative push
+  // path does: same statement, same derived columns from the SAME flatten
+  // (red line #1 — the projections cannot diverge from the state they index).
+  // These helpers used to be duplicated here as a separate upsert that
+  // flattened three more times (one per projection) and shipped the whole
+  // state to Postgres on every write for its version-window check.
+  let flat = crate::sync::FlatBase::from_doc(&doc);
+  crate::sync::write_base_tx(&mut tx, document_id, yrs_rid, &flat).await?;
+  // `views.name` rides every base write, or the sidebar name drifts from the
+  // title — this path used to skip it, the push path did not.
+  crate::sync::sync_view_name_tx(&mut tx, document_id, &flat).await?;
   // Version history: archive the just-folded state as an AUTO snapshot, exactly
   // as the collaborative sync path does (`sync::push_update`). REST/MCP writes
   // land here and never touch that path, so without this a document maintained
-  // purely over MCP/REST accrues no user-visible version history at all. `state`
-  // is already in hand, so this is one indexed insert-or-nothing — gated, like
-  // the sync path, to at most one auto version per 10-minute window (a burst of
-  // writes converges to a single version rather than flooding the table). Auto
-  // rows carry a 30-day `expires_at`; named checkpoints (label set, expires_at
-  // NULL) are written elsewhere and are never touched by this or by retention.
-  // This only writes the version-history archive from the yrs `state` already
-  // computed above — it introduces no second representation of the content.
-  sqlx::query(
-    "INSERT INTO document_yrs_versions (document_id, rid, state, expires_at)
-     SELECT $1, $2, $3, now() + interval '30 days'
-     WHERE NOT EXISTS (
-         SELECT 1 FROM document_yrs_versions
-         WHERE document_id = $1 AND label IS NULL
-           AND created_at > now() - interval '10 minutes'
-     )",
-  )
-  .bind(document_id)
-  .bind(yrs_rid)
-  .bind(&yrs_state)
-  .execute(&mut *tx)
-  .await?;
+  // purely over MCP/REST accrues no user-visible version history at all — and
+  // this only writes the archive from the yrs `state` already in hand: no
+  // second representation of the content.
+  crate::sync::archive_auto_version_tx(&mut tx, document_id, yrs_rid, &flat.state).await?;
 
   let next_payload_value =
     serde_json::to_value(next_payload).map_err(|error| ApiError::Internal(error.to_string()))?;
@@ -358,18 +310,6 @@ pub async fn fetch_document(
   .fetch_optional(db)
   .await
   .map_err(ApiError::from)
-}
-
-/// Convert a yrs-core block into the op-model/markdown block shape. The two
-/// structs are field-identical; this is the inverse of `sync::to_core_block`.
-fn md_block_from_core(b: mica_core::Block) -> crate::documents::Block {
-  crate::documents::Block {
-    id: b.id,
-    kind: b.kind,
-    text: b.text,
-    data: b.data,
-    children: b.children,
-  }
 }
 
 /// Rebuild a root block that the yrs base lost, so a damaged document still
@@ -461,7 +401,7 @@ fn payload_from_state(
   state: &[u8],
   fallback_root: String,
 ) -> ApiResult<DocumentSnapshotPayload> {
-  let doc = mica_core::MicaDoc::from_update(state)
+  let doc = crate::sync::guarded_from_update(state)
     .map_err(|error| ApiError::Internal(format!("corrupt yrs base for {document_id}: {error}")))?;
   // A base whose `meta.root` was wiped (see `MicaDoc::set_blocks`) reports an
   // empty root, and an empty root makes every read fail with `block not found: `
@@ -474,11 +414,7 @@ fn payload_from_state(
   let mut payload = DocumentSnapshotPayload {
     schema_version: 1,
     root_block_id,
-    blocks: doc
-      .to_blocks()
-      .into_iter()
-      .map(md_block_from_core)
-      .collect(),
+    blocks: doc.to_blocks(),
   };
   ensure_root_block(&mut payload);
   Ok(payload)
@@ -488,16 +424,12 @@ fn payload_from_state(
 /// renderable payload — blocks in tree order — for a read-only preview of that
 /// version. Same yrs→blocks path as [`current_payload`], on an arbitrary blob.
 pub fn yrs_state_to_payload(state: &[u8]) -> ApiResult<DocumentSnapshotPayload> {
-  let doc = mica_core::MicaDoc::from_update(state)
+  let doc = crate::sync::guarded_from_update(state)
     .map_err(|error| ApiError::BadRequest(format!("corrupt version state: {error}")))?;
   Ok(DocumentSnapshotPayload {
     schema_version: 1,
     root_block_id: doc.root_block_id(),
-    blocks: doc
-      .to_blocks()
-      .into_iter()
-      .map(md_block_from_core)
-      .collect(),
+    blocks: doc.to_blocks(),
   })
 }
 
@@ -636,10 +568,7 @@ pub async fn fetch_share_by_token(db: &PgPool, token: &str) -> ApiResult<Option<
 /// The document's version timeline, newest first. Metadata only (no `state`
 /// blobs) so the panel loads cheaply. Auto rows and named rows are interleaved
 /// by `created_at`.
-pub async fn list_yrs_versions(
-  db: &PgPool,
-  document_id: Uuid,
-) -> ApiResult<Vec<YrsVersionMeta>> {
+pub async fn list_yrs_versions(db: &PgPool, document_id: Uuid) -> ApiResult<Vec<YrsVersionMeta>> {
   sqlx::query_as::<_, YrsVersionMeta>(
     r#"
       SELECT id, document_id, rid, label, created_by, created_at
@@ -843,11 +772,13 @@ pub async fn reserve_pending_upload_bytes_tx(
   object_key: &str,
   byte_size: i64,
 ) -> ApiResult<()> {
-  sqlx::query("UPDATE pending_file_uploads SET byte_size = GREATEST(byte_size, $2) WHERE object_key = $1")
-    .bind(object_key)
-    .bind(byte_size)
-    .execute(&mut **tx)
-    .await?;
+  sqlx::query(
+    "UPDATE pending_file_uploads SET byte_size = GREATEST(byte_size, $2) WHERE object_key = $1",
+  )
+  .bind(object_key)
+  .bind(byte_size)
+  .execute(&mut **tx)
+  .await?;
   Ok(())
 }
 
@@ -900,9 +831,16 @@ pub async fn register_put_file(
 ) -> ApiResult<FileRecord> {
   let mut tx = db.begin().await?;
   lock_file_object_key(&mut tx, object_key).await?;
-  let file =
-    insert_file_tx(&mut tx, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size)
-      .await?;
+  let file = insert_file_tx(
+    &mut tx,
+    workspace_id,
+    uploaded_by,
+    object_key,
+    original_name,
+    mime_type,
+    byte_size,
+  )
+  .await?;
   tx.commit().await?;
   Ok(file)
 }
@@ -976,30 +914,6 @@ pub async fn fetch_file(
   .map_err(ApiError::from)
 }
 
-/// The row recording this object key in this workspace, if any.
-///
-/// Object keys contain a client-declared sha256. A hit here lets the caller
-/// avoid issuing a new upload URL; it does not verify the stored bytes or revoke
-/// URLs issued before this row existed.
-pub async fn fetch_file_by_key(
-  db: &PgPool,
-  workspace_id: Uuid,
-  object_key: &str,
-) -> ApiResult<Option<FileRecord>> {
-  sqlx::query_as::<_, FileRecord>(
-    r#"
-      SELECT id, workspace_id, uploaded_by, object_key, original_name, mime_type, byte_size, created_at
-      FROM files
-      WHERE workspace_id = $1 AND object_key = $2
-    "#,
-  )
-  .bind(workspace_id)
-  .bind(object_key)
-  .fetch_optional(db)
-  .await
-  .map_err(ApiError::from)
-}
-
 /// Transactional lookup for the presign/GC key-locked critical section.
 /// Clear the blob-GC mark on a row that is being handed out again by dedup.
 ///
@@ -1009,14 +923,13 @@ pub async fn fetch_file_by_key(
 /// a sweep landing before the new page saved deleted the object, and the page
 /// kept a dangling `file_id`. Clearing the mark restarts the full grace period.
 /// Callers hold [lock_file_object_key], the same lock GC's collect takes.
-pub async fn reclaim_file_tx(
-  tx: &mut Transaction<'_, Postgres>,
-  file_id: Uuid,
-) -> ApiResult<()> {
-  sqlx::query("UPDATE files SET unreferenced_since = NULL WHERE id = $1 AND unreferenced_since IS NOT NULL")
-    .bind(file_id)
-    .execute(&mut **tx)
-    .await?;
+pub async fn reclaim_file_tx(tx: &mut Transaction<'_, Postgres>, file_id: Uuid) -> ApiResult<()> {
+  sqlx::query(
+    "UPDATE files SET unreferenced_since = NULL WHERE id = $1 AND unreferenced_since IS NOT NULL",
+  )
+  .bind(file_id)
+  .execute(&mut **tx)
+  .await?;
   Ok(())
 }
 

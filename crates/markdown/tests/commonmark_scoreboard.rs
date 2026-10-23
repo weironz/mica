@@ -29,8 +29,7 @@ const BASELINE_PASS: usize = 641; // 100% of 641 — GFM dialect, 2026-06-06
 /// breaks / setext headings:
 /// - 96: `---\nFoo\n---\nBar…` — spec sees setext H2s, we see front matter;
 /// - 98: `---\n---` — spec sees two thematic breaks, we see empty front matter.
-const GFM_DIALECT_WAIVERS: &[u64] =
-  &[608, 611, 612, 170, 171, 172, 173, 174, 175, 96, 98];
+const GFM_DIALECT_WAIVERS: &[u64] = &[608, 611, 612, 170, 171, 172, 173, 174, 175, 96, 98];
 
 fn normalize(html: &str) -> String {
   // The official runner compares exact HTML; we only forgive trailing
@@ -96,7 +95,10 @@ fn commonmark_scoreboard() {
   println!("{report}");
 
   if std::env::var("GEN_SCOREBOARD").is_ok() {
-    let out = format!("{}/../../docs/architecture/commonmark-scoreboard.md", env!("CARGO_MANIFEST_DIR"));
+    let out = format!(
+      "{}/../../docs/architecture/commonmark-scoreboard.md",
+      env!("CARGO_MANIFEST_DIR")
+    );
     std::fs::write(out, &report).unwrap();
   }
 

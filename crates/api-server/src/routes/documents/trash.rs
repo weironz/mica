@@ -1,4 +1,3 @@
-
 use axum::{
   Json,
   extract::{Path, State},
@@ -10,8 +9,8 @@ use mica_infra::{ApiError, ApiResult};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::routes::auth::user_id_from_headers;
 use super::*;
+use crate::routes::auth::user_id_from_headers;
 
 pub async fn list_trash(
   State(state): State<AppState>,
@@ -34,46 +33,7 @@ pub async fn restore_view(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
-  // Restore the page and the subtree that was deleted with it.
-  let result = sqlx::query(
-    r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id FROM views WHERE id = $1 AND workspace_id = $2
-        UNION ALL
-        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      )
-      UPDATE views
-      SET is_deleted = false, updated_at = now()
-      WHERE id IN (SELECT id FROM subtree)
-        AND workspace_id = $2
-        AND is_deleted = true
-    "#,
-  )
-  .bind(view_id)
-  .bind(workspace_id)
-  .execute(&state.db)
-  .await?;
-
-  if result.rows_affected() == 0 {
-    return Err(ApiError::NotFound);
-  }
-
-  // If the restored page's parent is no longer an active view, lift it to the
-  // top level so it does not become an orphan.
-  sqlx::query(
-    r#"
-      UPDATE views
-      SET parent_view_id = NULL, updated_at = now()
-      WHERE id = $1 AND workspace_id = $2 AND parent_view_id IS NOT NULL
-        AND parent_view_id NOT IN (
-          SELECT id FROM views WHERE workspace_id = $2 AND is_deleted = false
-        )
-    "#,
-  )
-  .bind(view_id)
-  .bind(workspace_id)
-  .execute(&state.db)
-  .await?;
+  restore_one(&state.db, workspace_id, view_id).await?;
 
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
 
@@ -89,7 +49,10 @@ pub async fn restore_view(
 /// batch purge of one id: one statement, one rule. Not in the bin — or not in
 /// this workspace — is a 404 either way.
 pub(super) async fn purge_one(db: &PgPool, workspace_id: Uuid, view_id: Uuid) -> ApiResult<()> {
-  if purge_views_batch(db, workspace_id, &[view_id]).await?.is_empty() {
+  if purge_views_batch(db, workspace_id, &[view_id])
+    .await?
+    .is_empty()
+  {
     return Err(ApiError::NotFound);
   }
   Ok(())
@@ -130,8 +93,7 @@ pub async fn purge_workspace_trash(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
-  let (views_deleted, documents_deleted) =
-    empty_workspace_trash(&state.db, workspace_id).await?;
+  let (views_deleted, documents_deleted) = empty_workspace_trash(&state.db, workspace_id).await?;
 
   Ok(Json(PurgeTrashResponse {
     views_deleted,
@@ -144,7 +106,10 @@ pub async fn purge_workspace_trash(
 ///
 /// Split out of the handler so a test can reach it: the handler needs auth
 /// headers, which a DB-level test has no way to construct.
-pub(super) async fn empty_workspace_trash(db: &PgPool, workspace_id: Uuid) -> ApiResult<(i64, i64)> {
+pub(super) async fn empty_workspace_trash(
+  db: &PgPool,
+  workspace_id: Uuid,
+) -> ApiResult<(i64, i64)> {
   let row = sqlx::query_as::<_, (i64, i64)>(
     r#"
       WITH deleted_views AS (
@@ -170,7 +135,6 @@ pub(super) async fn empty_workspace_trash(db: &PgPool, workspace_id: Uuid) -> Ap
   Ok((row.0, row.1))
 }
 
-
 batch_view_handler! {
   /// `POST /api/workspaces/{workspace_id}/views/batch-trash`
   ///
@@ -179,10 +143,12 @@ batch_view_handler! {
   pub async fn batch_trash_views, trash_views_batch
 }
 
-
 /// Move one subtree to the bin, preserving the single-item route's 404.
 pub(super) async fn trash_one(db: &PgPool, workspace_id: Uuid, view_id: Uuid) -> ApiResult<()> {
-  if trash_views_batch(db, workspace_id, &[view_id]).await?.is_empty() {
+  if trash_views_batch(db, workspace_id, &[view_id])
+    .await?
+    .is_empty()
+  {
     return Err(ApiError::NotFound);
   }
   Ok(())
@@ -265,6 +231,17 @@ batch_view_handler! {
   pub async fn batch_restore_views, restore_views_batch
 }
 
+/// Bring one page (and the subtree trashed with it) back from the bin,
+/// preserving the single-item route's 404. The mirror of [`trash_one`].
+pub(super) async fn restore_one(db: &PgPool, workspace_id: Uuid, view_id: Uuid) -> ApiResult<()> {
+  if restore_views_batch(db, workspace_id, &[view_id])
+    .await?
+    .is_empty()
+  {
+    return Err(ApiError::NotFound);
+  }
+  Ok(())
+}
 
 /// Bring [view_ids] and their trashed subtrees back. Returns the ids it changed.
 ///
@@ -344,7 +321,6 @@ batch_view_handler! {
   pub async fn batch_purge_views, purge_views_batch
 }
 
-
 /// Permanently delete the trashed views named by [view_ids], each with its
 /// subtree, and the documents they back. Returns every view id that went.
 ///
@@ -393,4 +369,3 @@ pub(super) async fn purge_views_batch(
   .await?;
   Ok(touched)
 }
-
