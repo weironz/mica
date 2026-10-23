@@ -176,15 +176,43 @@
     # WORKING TREE, not from a tag. deploy.yml is handed its compose by
     # scripts/deploy-prod.sh via `git show <tag>:…` because a mis-versioned
     # compose once reached prod that way. Here the same guarantee costs a second
-    # extraction path for a file that changes about once a year — so instead:
-    # CHECK OUT THE RELEASE TAG BEFORE RUNNING THIS during a recovery. Written
-    # down rather than enforced, on purpose, and that is a real (small) gap.
+    # extraction path. Use a reviewed checkout containing the 2026-10-23
+    # working-set fix or newer, even when recovering an older app release;
+    # old infrastructure templates would drop the independent protection.
+    # App Compose/image provenance is still handled separately by deploy.yml.
+    - name: Check for the cgroup v2 controller interface
+      ansible.builtin.stat:
+        path: /sys/fs/cgroup/cgroup.controllers
+      register: traefik_cgroup_v2
+
+    - name: Require systemd and cgroup v2 for Traefik working-set protection
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.service_mgr == 'systemd'
+          - traefik_cgroup_v2.stat.exists
+        fail_msg: "Traefik protection requires systemd and cgroup v2; see docs/ops/traefik-working-set.md."
+
+    - name: Install the independent Traefik slice
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../deploy/traefik/traefik.slice"
+        dest: /etc/systemd/system/traefik.slice
+        mode: "0644"
+        backup: true
+      register: traefik_slice_unit
+
+    - name: Enable Traefik protection before starting its container
+      ansible.builtin.systemd_service:
+        name: traefik.slice
+        daemon_reload: "{{ traefik_slice_unit.changed }}"
+        enabled: true
+        state: started
+
     - name: Ship the Traefik compose file
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../deploy/traefik/docker-compose.yml"
-        dest: "{{ traefik_dir }}/docker-compose.yml"
+        dest: "{{ traefik_dir }}/docker-compose.yaml"
         mode: "0644"
-      notify: Restart Traefik
+        backup: true
 
     # TRAEFIK_BASIC_AUTH guards the dashboard route. A credential, so NOT in
     # host_vars — same rule deploy.yml enforces for the app — and it comes from
@@ -221,11 +249,12 @@
         src: traefik-env.j2
         dest: "{{ traefik_dir }}/.env"
         mode: "0600"
-      notify: Restart Traefik
 
     - name: Bring Traefik up
       community.docker.docker_compose_v2:
         project_src: "{{ traefik_dir }}"
+        files: [docker-compose.yaml]
+        services: [traefik]
         state: present
         wait: true
         wait_timeout: 120
@@ -235,10 +264,3 @@
       ansible.builtin.systemd_service:
         name: docker
         state: restarted
-
-    - name: Restart Traefik
-      community.docker.docker_compose_v2:
-        project_src: "{{ traefik_dir }}"
-        state: restarted
-        wait: true
-        wait_timeout: 120

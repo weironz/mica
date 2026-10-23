@@ -51,10 +51,11 @@ carry a manual `docker update --memory` setting into a new container. Persist
 PostgreSQL/RustFS caps as `MICA_POSTGRES_MEMORY_LIMIT` and
 `MICA_RUSTFS_MEMORY_LIMIT`; both default to `0` (unlimited, matching previous
 Compose defaults). A nonzero cap must be at least that service's reservation.
-The corresponding `MICA_POSTGRES_MEMORYSWAP_LIMIT` and
-`MICA_RUSTFS_MEMORYSWAP_LIMIT` default to Docker's `0` behavior. Set `-1` with
-an explicit nonzero memory cap when preserving unlimited swap; Docker requires
-a compatible combined memory/swap value when adding a hard cap at runtime.
+两份 Compose 当前对 PostgreSQL / RustFS 固定使用 YAML 整数
+`memswap_limit: -1`（允许无限使用宿主机可用 swap），**没有**
+`MICA_*_MEMORYSWAP_LIMIT` 环境变量入口；旧版生产 Compose 不接受插值后的字符串
+`"-1"`。这是 2026-10-23 排查时新增的策略，改前没有采集原 `MemorySwap`，不能说
+前后策略相同。调整前应记录实际硬上限、swap 上限与占用，不要仅凭 swap 已用量归因。
 
 To undo, restore the previous environment and Compose configuration, recreate
 only the same four Mica services, then disable the empty `mica.slice` unit.
@@ -412,6 +413,11 @@ There's no rush: **PG16 gets upstream support until ~2028** (five-year cycle), s
 this is a deliberate maintenance task, never a casual `image:` tag bump.
 
 ## Behind Traefik (the canonical production stack)
+
+共享入口的最终资源配置、根因、部署保护与验收步骤见
+[Traefik 工作集保护](traefik-working-set.md)：**上限 256 MiB、独立根 slice 与容器
+两层保护各 128 MiB**。仓库 Compose 和 provisioning 均保存此配置；普通 Mica 发版
+不管理 Traefik。已有生产节点已应用，**不要仅为同步文档再次重建共享入口**。
 
 `deploy/docker-compose.yml` — used for mica.cloudcele.com. No host
 ports; Traefik (label routing, `letsencrypt` certresolver) terminates TLS

@@ -76,6 +76,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [release.md](ops/release.md) | **发版与构建**(含 Actions 不可用时的本地发布链) |
+| [traefik-working-set.md](ops/traefik-working-set.md) | 共享入口最终配置、缺页 I/O 根因、部署保留方式与空闲 TLS / 目录验收 |
 | [deploy.md](ops/deploy.md) | 部署、凭据、管理员、删账号 |
 | [backup.md](ops/backup.md) | 备份与恢复 |
 | [dr-plan.md](ops/dr-plan.md) | 容灾方案 |
@@ -104,7 +105,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [search-latency-2026-10-16.md](performance/search-latency-2026-10-16.md) | 生产全局搜索偶发延迟定位(及 2026-10-19 的修复) |
-| [general-latency-2026-10-23.md](performance/general-latency-2026-10-23.md) | 新建与目录切换卡顿：Mica 独立资源组已上线；直连改善，公网/TLS 仍有尖峰 |
+| [general-latency-2026-10-23.md](performance/general-latency-2026-10-23.md) | 新建与目录切换卡顿：Mica 与 Traefik 工作集保护；最终空闲 TLS 约 30 ms，保留早期慢样本与验收边界 |
 | [large-workspace-performance.md](performance/large-workspace-performance.md) | 大工作区目录性能 |
 | [workspace-switch-latency.md](performance/workspace-switch-latency.md) | 工作区切换延迟 |
 | [mcp-performance.md](performance/mcp-performance.md) | MCP 性能与 token 优化(权威) |

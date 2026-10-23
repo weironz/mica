@@ -1,0 +1,9 @@
+[Unit]
+Description=Traefik working set protection
+
+[Slice]
+MemoryAccounting=yes
+MemoryLow=128M
+
+[Install]
+WantedBy=slices.target

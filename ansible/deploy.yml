@@ -22,10 +22,9 @@
 #   because the node's compose is by construction the one this version was
 #   released with. There is nothing left to compare.
 #
-# Provisioning (docker, directories, Traefik, first-time secrets) is NOT here.
-# docs/ops/cd-plan.md §6 is explicit that nobody has walked that path by hand yet,
-# and a runbook nobody has walked should not be frozen into code — the code
-# would preserve the guesses and stop anyone from reading the doc.
+# Provisioning (Docker, directories, Traefik) is separate: provision.yml owns
+# that lifecycle. An ordinary Mica release must not overwrite/restart the
+# shared ingress or remove its independent slice; see traefik-working-set.md.
 - name: Deploy Mica
   # Defaults to prod, which is what scripts/deploy-prod.sh wants and passes
   # nothing for. `-e target=mica-dr` points the SAME playbook at the DR drill

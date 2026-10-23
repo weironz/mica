@@ -4,8 +4,9 @@
 # CAPTURED FROM THE RUNNING NODE on 2026-07-31, not designed from scratch: this
 # stack predates the repo and lived only on the server (`/data/traefik`), which
 # meant a fresh machine could bring Mica up and still have no way to serve it.
-# Functionally identical to what production runs; commented-out blocks for an
-# unrelated app sharing that host were dropped, nothing live was changed.
+# Resource protection was updated from production on 2026-10-23; see
+# docs/ops/traefik-working-set.md. Other services on the shared host are not
+# managed by this stack.
 #
 # BRING-UP ORDER MATTERS — see docs/ops/dr-plan.md:
 #   1. DNS A records for the app and S3 hostnames must ALREADY point here. ACME
@@ -14,7 +15,7 @@
 #      and the first boot quietly burns retries instead of failing loudly.
 #   2. `docker network create traefik-network` — the app stack declares that
 #      network `external: true` and refuses to start without it.
-#   3. This stack.
+#   3. Install/start deploy/traefik/traefik.slice, then this stack.
 #   4. The Mica stack (deploy/docker-compose.yml).
 name: traefik
 
@@ -23,6 +24,13 @@ services:
     # The WHOLE image reference, not just the tag, despite the variable's name —
     # e.g. `traefik:v3.6.10`. Mirrored as-is from the node.
     image: ${TRAEFIK_IMAGE_TAG}
+    # Both the root slice and leaf need protection on cgroup v2. Raising only
+    # the cap did not prevent idle TLS timeouts under shared-host reclaim.
+    mem_limit: 256m
+    mem_reservation: 128m
+    # Keep a YAML integer: the production Compose rejects the string "-1".
+    memswap_limit: -1
+    cgroup_parent: traefik.slice
     command:
       - "--log.level=${TRAEFIK_LOG_LEVEL}"
       - "--accesslog=true"

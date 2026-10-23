@@ -1,5 +1,6 @@
-"""Catch API environment allow-list drift between the two deployment forms."""
+"""Catch API allow-list drift and loss of shared-ingress working-set protection."""
 
+import configparser
 import json
 import os
 import pathlib
@@ -42,6 +43,46 @@ def api_environment(compose: str, env: dict[str, str]) -> dict[str, str]:
     return json.loads(result.stdout)["services"]["api"]["environment"]
 
 
+def check_traefik_working_set(env: dict[str, str]) -> None:
+    probe_env = env | {
+        "TRAEFIK_IMAGE_TAG": "traefik:v3.6.10",
+        "TRAEFIK_LOG_LEVEL": "WARN",
+        "TRAEFIK_ACME_EMAIL": "admin@example.test",
+        "TRAEFIK_HOSTNAME": "traefik.example.test",
+        "TRAEFIK_BASIC_AUTH": "test:unused",
+    }
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(ROOT / "deploy/traefik/docker-compose.yml"),
+         "config", "--format", "json"],
+        cwd=ROOT, env=probe_env, check=True, capture_output=True, text=True,
+    )
+    service = json.loads(result.stdout)["services"]["traefik"]
+    expected = {
+        "mem_limit": 256 * 1024 * 1024,
+        "mem_reservation": 128 * 1024 * 1024,
+        "memswap_limit": -1,
+        "cgroup_parent": "traefik.slice",
+    }
+    for key, value in expected.items():
+        actual = service.get(key)
+        # Compose versions serialize byte counts as either numbers or strings.
+        if isinstance(value, int) and actual is not None:
+            actual = int(actual)
+        if actual != value:
+            raise AssertionError(f"Traefik {key}: expected {value!r}, got {actual!r}")
+    unit = configparser.ConfigParser()
+    unit.read(ROOT / "deploy/traefik" / service["cgroup_parent"], encoding="utf-8")
+    if unit["Slice"].get("MemoryLow") != "128M":
+        raise AssertionError("Traefik root protection must match its 128 MiB leaf reservation")
+    if unit["Slice"].get("MemoryMin", "0") != "0":
+        raise AssertionError("Traefik must use soft protection, not MemoryMin")
+    if unit["Slice"].get("MemoryAccounting", "").lower() != "yes":
+        raise AssertionError("Traefik slice must account for memory")
+    if unit["Install"].get("WantedBy") != "slices.target":
+        raise AssertionError("Traefik slice must remain enabled across boots")
+    print("Traefik: 256 MiB cap, 128 MiB root/leaf protection, unlimited swap")
+
+
 def main() -> None:
     env = os.environ.copy()
     env.update(
@@ -68,6 +109,7 @@ def main() -> None:
         raise AssertionError("Traefik reset-link default must use its HTTPS domain")
     if api_environment("docker-compose.single.yml", default_env)["MICA_APP_BASE_URL"] != "http://127.0.0.1":
         raise AssertionError("quickstart reset-link default must use its HTTP address")
+    check_traefik_working_set(env)
     print(f"API allow-lists match ({len(single)} keys); {len(PROBES)} settings pass through both forms")
 
 
