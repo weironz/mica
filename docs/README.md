@@ -104,6 +104,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [search-latency-2026-10-16.md](performance/search-latency-2026-10-16.md) | 生产全局搜索偶发延迟定位(及 2026-10-19 的修复) |
+| [general-latency-2026-10-23.md](performance/general-latency-2026-10-23.md) | 新建与目录切换卡顿：Mica 独立资源组已上线；直连改善，公网/TLS 仍有尖峰 |
 | [large-workspace-performance.md](performance/large-workspace-performance.md) | 大工作区目录性能 |
 | [workspace-switch-latency.md](performance/workspace-switch-latency.md) | 工作区切换延迟 |
 | [mcp-performance.md](performance/mcp-performance.md) | MCP 性能与 token 优化(权威) |

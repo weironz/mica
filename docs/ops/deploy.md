@@ -8,6 +8,60 @@ Two compose files ship in `deploy/`:
 - **`docker-compose.single.yml`** — a simpler **single-server** variant (nginx on
   port 80, no Traefik), documented in the next section.
 
+## Working-set protection on a shared Linux host
+
+On systemd hosts using cgroup v2, Mica can use its own root-level slice so
+ordinary navigation does not lose its working set while other workloads are
+reclaiming memory. This is optional and does not change the images, database
+format, memory hard limits, or host VM settings.
+
+The Compose files expose `MICA_CGROUP_PARENT` and soft reservations for API
+(192 MiB), PostgreSQL (256 MiB), RustFS (256 MiB), and Web (16 MiB). The supplied
+`deploy/mica.slice` protects up to 720 MiB in aggregate. This is best effort
+reclaim protection, not an allocation. A zero-protection ancestor can limit
+effective protection even when the container's own `memory.low` is nonzero;
+see the [kernel's cgroup v2 documentation](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html#memory-interface-files).
+
+From a checkout, install and start the Mica-only unit before opting in:
+
+```sh
+sudo install -m 644 deploy/mica.slice /etc/systemd/system/mica.slice
+sudo systemctl daemon-reload
+sudo systemctl enable --now mica.slice
+```
+
+Set `MICA_CGROUP_PARENT=mica.slice` in the environment file used by the stack.
+On the managed production stack, operator overrides belong in `.env.secrets`
+because Ansible rewrites `.env` during deployment. Validate with `./dc config
+--quiet`, then recreate only `postgres rustfs api web` using `./dc up -d
+--no-deps postgres rustfs api web`. On a quickstart stack, use its normal
+`docker compose --env-file ... -f ...` prefix instead. Changing cgroup parent
+requires recreation, so schedule the Mica interruption; volumes and image
+versions must remain unchanged. The backup sidecar stays outside the protected
+slice so a batch export cannot displace the interactive services within it.
+
+Verify the actual container `HostConfig.CgroupParent`, each leaf's `memory.low`,
+and `/sys/fs/cgroup/mica.slice/memory.low`, then test create, directory loads,
+document opens, and search after idle. Merely setting `mem_reservation` does
+not prove effective residency. Keep the slice's `MemoryLow` consistent with
+the intended aggregate protection when tuning individual reservations.
+
+Record existing runtime-only hard limits before recreation: Docker does not
+carry a manual `docker update --memory` setting into a new container. Persist
+PostgreSQL/RustFS caps as `MICA_POSTGRES_MEMORY_LIMIT` and
+`MICA_RUSTFS_MEMORY_LIMIT`; both default to `0` (unlimited, matching previous
+Compose defaults). A nonzero cap must be at least that service's reservation.
+The corresponding `MICA_POSTGRES_MEMORYSWAP_LIMIT` and
+`MICA_RUSTFS_MEMORYSWAP_LIMIT` default to Docker's `0` behavior. Set `-1` with
+an explicit nonzero memory cap when preserving unlimited swap; Docker requires
+a compatible combined memory/swap value when adding a hard cap at runtime.
+
+To undo, restore the previous environment and Compose configuration, recreate
+only the same four Mica services, then disable the empty `mica.slice` unit.
+Back up configuration first and preserve existing secrets and hard limits.
+The [2026-10-23 investigation](../performance/general-latency-2026-10-23.md)
+records the production measurements and limitations.
+
 ## Single server (IP + port 80)
 
 nginx serves the Flutter bundle and reverse-proxies `/api` + `/ws` to the Rust

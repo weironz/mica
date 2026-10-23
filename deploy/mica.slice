@@ -1,0 +1,12 @@
+[Unit]
+Description=Mica working set protection
+Documentation=https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html
+
+[Slice]
+MemoryAccounting=yes
+# Sum of the default per-container reservations (192 + 256 + 256 + 16 MiB).
+# Best effort reclaim protection, not an allocation or a hard limit.
+MemoryLow=720M
+
+[Install]
+WantedBy=slices.target
