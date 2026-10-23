@@ -6,8 +6,13 @@ name: Release
 #     now — see installer/mica.iss); this drives the in-app auto-updater.
 #   * the `mica-cli` binary for Windows / Linux / macOS (a pure, thin HTTP client
 #     over the REST API — no backup engine baked in; see docs/ops/backup.md).
-# Pushed to the container registries (`images` job):
-#   * mica-api / mica-web / mica-cli, tagged with the IMMUTABLE version.
+  # Pushed to the container registries (`images` job):
+  #   * mica-api / mica-web / mica-cli, tagged with the IMMUTABLE version.
+  #
+  # The `cli` job also writes `sha256-<os>.txt` next to each binary: `mica-cli
+  # update` refuses to install bytes it cannot verify against that manifest
+  # (issue #38), so every release has to carry one — same `sha256sum` format
+  # `scripts/release-artifacts.sh` writes for locally-built releases.
 #
 # Deploying is not here, but the reason changed and this comment used to state
 # the old one as if it still held: "letting CI deploy would mean putting a prod
@@ -355,6 +360,7 @@ jobs:
           - os: [self-hosted, Windows]
             bin: mica-cli.exe
             suffix: windows-x64.exe
+            osname: windows
           # STATIC musl, not the runner's glibc.
           #
           # `ubuntu-latest` is 24.04, so a default build links GLIBC_2.39 and
@@ -374,11 +380,13 @@ jobs:
             bin: mica-cli
             suffix: linux-x64
             target: x86_64-unknown-linux-musl
+            osname: linux
           # macOS：没有 macOS 自托管 runner，这一项会永远排队（2026-10-20 注释）。
           # publish 不要求 macOS 产物，所以停掉它不影响发布。
           # - os: macos-latest
           #   bin: mica-cli
           #   suffix: macos-arm64
+          #   osname: macos
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -488,18 +496,32 @@ jobs:
               ;;
           esac
 
+      # `mica-cli update` refuses to install a binary it cannot verify against
+      # the release's sha256-<os>.txt (issue #38), so every release must carry
+      # the manifest for the assets it ships — the same `sha256sum` format
+      # scripts/release-artifacts.sh writes for locally-built releases.
+      # Written unconditionally (also on dry runs, where the artifact upload
+      # below is the only place to inspect it); only the ATTACH step is gated.
+      - name: Write the checksum manifest
+        shell: bash
+        run: |
+          sha256sum "${{ steps.stage.outputs.asset }}" > "sha256-${{ matrix.osname }}.txt"
+          cat "sha256-${{ matrix.osname }}.txt"
+
       - name: Upload cli artifact
         uses: actions/upload-artifact@v5
         with:
           name: mica-cli-${{ matrix.suffix }}
-          path: ${{ steps.stage.outputs.asset }}
+          path: |
+            ${{ steps.stage.outputs.asset }}
+            sha256-${{ matrix.osname }}.txt
           if-no-files-found: error
 
-      - name: Attach cli binary to the draft release
+      - name: Attach cli binary + checksums to the draft release
         # Same gate as the installer: tag pushes always publish; manual runs only
         # when publish=true (else dry-run = build + artifact only). The draft
         # release already exists (the `draft` job created it) — this only attaches
-        # a file, and `draft: true` keeps it unpublished until `publish` runs.
+        # files, and `draft: true` keeps it unpublished until `publish` runs.
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
@@ -507,7 +529,9 @@ jobs:
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
-          files: ${{ steps.stage.outputs.asset }}
+          files: |
+            ${{ steps.stage.outputs.asset }}
+            sha256-${{ matrix.osname }}.txt
 
   images:
     # The three images compose runs in prod (api, web, and cli — the `backup`

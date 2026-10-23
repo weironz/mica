@@ -477,8 +477,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     // build, where notifying an ancestor cannot rebuild it. main() does it
     // before runApp instead.
     _loadAppearancePrefs();
-    if (!kIsWeb)
+    if (!kIsWeb) {
       _pending = PendingUploads.fromJson(loadPref('pendingBlobUploads'));
+    }
   }
 
   /// The appearance subset of [_loadPrefs] — the state that mirrors the synced
@@ -773,8 +774,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       // typing before that silently rode the REST fallback with no mirror.
       _reconcileSync();
     } catch (error) {
-      if (!mounted || _cloudOrigin != origin)
+      if (!mounted || _cloudOrigin != origin) {
         return; // never clear the NEW server's
+      }
       // Revoked/invalid token → drop it; desktop falls back to the local world.
       // Keyed on the status, not on the message text: sniffing for the word
       // "unauthorized" both missed 401s worded differently and would fire on a
@@ -4035,8 +4037,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         if (bytes == null) {
           // Bytes evicted from the CAS — unrecoverable; drop so we don't retry
           // forever.
-          if (_pending.remove(workspace.id, documentId, entry.sha))
+          if (_pending.remove(workspace.id, documentId, entry.sha)) {
             changed = true;
+          }
           continue;
         }
         String uuid;
@@ -4062,8 +4065,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           toId: uuid,
         );
         if (ops.isNotEmpty) cloud.applyLocalOps(ops);
-        if (_pending.remove(workspace.id, documentId, entry.sha))
+        if (_pending.remove(workspace.id, documentId, entry.sha)) {
           changed = true;
+        }
       }
       if (changed) {
         savePref('pendingBlobUploads', _pending.toJson());

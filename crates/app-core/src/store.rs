@@ -377,6 +377,29 @@ pub async fn current_payload(
 
 /// Export the payload together with a revision of the EXACT bytes decoded.
 /// One statement avoids marking a concurrent edit as already backed up.
+/// Many documents' current payloads in ONE query — a bulk pre-scan (transfer /
+/// clone of a large subtree) otherwise round-trips per document with
+/// [current_payload], paying N sequential DB awaits before any copy work can
+/// start. Documents without a yrs base are ABSENT from the map, exactly as
+/// [current_payload] returns None for them; then map lookup is the caller's
+/// "no payload" branch.
+pub async fn current_payloads(
+  db: &PgPool,
+  document_ids: &[Uuid],
+) -> ApiResult<std::collections::HashMap<Uuid, DocumentSnapshotPayload>> {
+  let rows: Vec<(Uuid, Vec<u8>, String)> = sqlx::query_as(
+    "SELECT b.document_id, b.state, coalesce(d.root_block_id, '') FROM document_yrs_base b
+     LEFT JOIN documents d ON d.id = b.document_id WHERE b.document_id = ANY($1)",
+  )
+  .bind(document_ids)
+  .fetch_all(db)
+  .await?;
+  rows
+    .into_iter()
+    .map(|(id, state, root)| payload_from_state(id, &state, root).map(|p| (id, p)))
+    .collect()
+}
+
 pub async fn current_payload_versioned(
   db: &PgPool,
   document_id: Uuid,

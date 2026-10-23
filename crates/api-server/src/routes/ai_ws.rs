@@ -46,7 +46,7 @@ pub async fn ai_socket(
   // spends the operator's credit for as long as it stays open, and a deleted
   // account's access token is still a valid JWT until it expires.
   ensure_user_exists(&state.db, user_id).await?;
-  Ok(upgrade.on_upgrade(move |socket| run(socket, state)))
+  Ok(crate::routes::ws::capped_socket(upgrade).on_upgrade(move |socket| run(socket, state)))
 }
 
 async fn run(mut socket: WebSocket, state: AppState) {
@@ -102,7 +102,7 @@ async fn stream_completion(
 ) -> Result<(), String> {
   let body = build_request(config, system, prompt, true);
 
-  let mut request = reqwest::Client::new()
+  let mut request = crate::http_client::ai_stream_client()
     .post(config.endpoint())
     .header("content-type", "application/json")
     .json(&body);

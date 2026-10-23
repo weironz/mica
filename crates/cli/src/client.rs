@@ -11,10 +11,39 @@ use uuid::Uuid;
 #[cfg(test)]
 mod contract_tests;
 
+/// Client-side cap for a `download_bytes` rehost fetch, matching the server's
+/// default upload cap (`S3_MAX_UPLOAD_BYTES`, 25 MiB). The server still
+/// enforces ITS configured limit when the bytes land; this one is about not
+/// buffering an unbounded body over a hostile connection.
+const MAX_DOWNLOAD_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Outbound-call bounds (#45): the blocking client used to carry NO timeout at
+/// all on an ordinary call and a hard total on none of the big ones — a wedged
+/// connection parked a command forever, while nothing stopped a stalled server
+/// answer. Ordinary calls get connect + total bounds (the total is generous
+/// for a REST call; exports override per request); uploads get connect only,
+/// because a total bound there kills a large Notion import mid-body.
+/// `MICA_HTTP_TIMEOUT_SECS` overrides the ordinary-call total for slow links.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn request_timeout() -> std::time::Duration {
+  std::env::var("MICA_HTTP_TIMEOUT_SECS")
+    .ok()
+    .and_then(|v| v.trim().parse::<u64>().ok())
+    .filter(|secs| *secs > 0)
+    .map(std::time::Duration::from_secs)
+    .unwrap_or(DEFAULT_REQUEST_TIMEOUT)
+}
+
 pub struct Client {
   base: String,
   token: Option<String>,
   http: reqwest::blocking::Client,
+  /// Connect-bound but NOT total-bound: only `start_import` uses it, because an
+  /// archive of hundreds of MB must not be cut off by the ordinary-call total
+  /// (#45 — the 30s default "finished" server-side work looked like a failure).
+  upload: reqwest::blocking::Client,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -172,11 +201,24 @@ struct TokenListResponse {
 impl Client {
   pub fn new(base: impl Into<String>, token: Option<String>) -> Result<Self> {
     let base = base.into().trim_end_matches('/').to_string();
+    let user_agent = concat!("mica-cli/", env!("CARGO_PKG_VERSION"));
     let http = reqwest::blocking::Client::builder()
-      .user_agent(concat!("mica-cli/", env!("CARGO_PKG_VERSION")))
+      .user_agent(user_agent)
+      .connect_timeout(CONNECT_TIMEOUT)
+      .timeout(request_timeout())
       .build()
       .context("building HTTP client")?;
-    Ok(Self { base, token, http })
+    let upload = reqwest::blocking::Client::builder()
+      .user_agent(user_agent)
+      .connect_timeout(CONNECT_TIMEOUT)
+      .build()
+      .context("building upload HTTP client")?;
+    Ok(Self {
+      base,
+      token,
+      http,
+      upload,
+    })
   }
 
   fn url(&self, path: &str) -> String {
@@ -447,6 +489,10 @@ impl Client {
           .http
           .delete(self.url(&format!("/workspaces/{workspace_id}/trash"))),
       )
+      // Purging a large bin can run well past the ordinary-call total while
+      // the server is still working fine — and a client that gives up reports
+      // a failure for work that actually completed (#45).
+      .timeout(std::time::Duration::from_secs(300))
       .send()?;
     Ok(Self::ok(resp)?.json()?)
   }
@@ -484,7 +530,9 @@ impl Client {
     let resp = self
       .authed(
         self
-          .http
+          // The upload client, not the ordinary one: an archive of hundreds of
+          // MB legitimately outlasts the ordinary call's total timeout (#45).
+          .upload
           .post(self.url("/workspaces/import"))
           .query(&query)
           .body(zip),
@@ -520,13 +568,92 @@ impl Client {
   /// Download a URL's bytes over THIS machine's network (no auth). The whole
   /// point of CLI re-hosting: the client reaches hosts (AppFlowy, imgur) that a
   /// CN-hosted server 403s.
+  ///
+  /// SSRF-guarded — the SAME rule as the server's `fetch_and_store_image_url`,
+  /// because the threat moved with the fetch: a collaborator who drops an
+  /// internal URL into an image block must not get the machine running
+  /// `rehost-images` to pull intranet content up into the workspace. So the
+  /// URL is vetted BEFORE any request (http(s) only, public addresses only,
+  /// every resolved answer checked) and the vetted addresses are PINNED onto a
+  /// purpose-built client (`resolve_to_addrs`), closing the DNS-rebinding gap
+  /// where a host answers the check publicly and the connection privately.
+  /// Redirects stay OFF so a public URL cannot 30x-bounce onto an internal
+  /// address. The body must be an image (`image/*` header, or sniff as one by
+  /// magic number when the host mislabels it) and is size-capped while
+  /// streaming, not after buffering.
   pub fn download_bytes(&self, url: &str) -> Result<Vec<u8>> {
-    let resp = self
-      .http
+    let parsed = reqwest::Url::parse(url).with_context(|| format!("parsing {url}"))?;
+    let pinned = crate::ssrf::vetted_pinned_addrs(&parsed)?;
+    // Safe: vetted_pinned_addrs already refused a host-less URL.
+    let host = parsed.host_str().unwrap_or_default().to_string();
+
+    // A dedicated client, not `self.http`: the API client follows redirects and
+    // resolves freely, which is exactly what this fetch must never do.
+    let client = reqwest::blocking::Client::builder()
+      .user_agent(concat!("mica-cli/", env!("CARGO_PKG_VERSION")))
+      .timeout(std::time::Duration::from_secs(8))
+      .redirect(reqwest::redirect::Policy::none())
+      .resolve_to_addrs(&host, &pinned)
+      .build()
+      .context("building the guarded download client")?;
+    let resp = client
       .get(url)
       .send()
       .with_context(|| format!("downloading {url}"))?;
-    Ok(Self::ok(resp)?.bytes()?.to_vec())
+    // `Self::ok` only fails 401/4xx/5xx; a 3xx must not pass here — with
+    // redirects off, following it is the refusal, not reqwest's default.
+    if resp.status().is_redirection() {
+      bail!(
+        "image url returned {} — redirects are not followed",
+        resp.status()
+      );
+    }
+    let resp = Self::ok(resp)?;
+
+    let header_mime = resp
+      .headers()
+      .get(reqwest::header::CONTENT_TYPE)
+      .and_then(|v| v.to_str().ok())
+      .map(|s| s.split(';').next().unwrap_or(s).trim().to_string());
+
+    // Cheap up-front refusal when the server volunteers its size. NOT the
+    // enforcement — a lying or chunked response can omit or understate it; the
+    // capped read below is.
+    if let Some(declared) = resp
+      .headers()
+      .get(reqwest::header::CONTENT_LENGTH)
+      .and_then(|v| v.to_str().ok())
+      .and_then(|s| s.parse::<u64>().ok())
+      && declared > MAX_DOWNLOAD_BYTES
+    {
+      bail!("image is too large: {declared} bytes exceeds the {MAX_DOWNLOAD_BYTES} byte limit");
+    }
+
+    // Read at most MAX+1 bytes: the moment the cap is passed the fetch is
+    // refused, instead of buffering a hostile body first and asking after.
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    resp
+      .take(MAX_DOWNLOAD_BYTES + 1)
+      .read_to_end(&mut bytes)
+      .context("reading the image body")?;
+    if bytes.len() as u64 > MAX_DOWNLOAD_BYTES {
+      bail!("image is too large: body exceeds the {MAX_DOWNLOAD_BYTES} byte limit");
+    }
+
+    // Must actually be an image: an `image/*` content type, or bytes that
+    // sniff as one when the host mislabels (an octet-stream PNG is still a
+    // PNG). Anything else — HTML, JSON, an intranet error page — is refused.
+    let from_header = header_mime
+      .as_deref()
+      .is_some_and(|m| m.starts_with("image/"));
+    if !from_header && crate::ssrf::sniff_image_ext(&bytes).is_none() {
+      bail!(
+        "url is not an image (content-type: {})",
+        header_mime.as_deref().unwrap_or("<none>")
+      );
+    }
+    Ok(bytes)
   }
 
   /// Store already-downloaded image [bytes] into Mica and repoint image

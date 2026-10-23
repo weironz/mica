@@ -8,11 +8,20 @@ pub enum Environment {
 }
 
 impl Environment {
+  /// Fail-CLOSED (#36): only an exact `development` or `test` opts out of
+  /// production. A typo (`prodution`), a guess (`Production` used to pass,
+  /// mixed-case did not), or trailing whitespace must never widen into the
+  /// permissive development posture — Development skips the JWT strength
+  /// check, widens CORS, disables the CSRF Origin check, and drops the
+  /// `Secure` cookie flag, every one of which is the WRONG failure mode for a
+  /// misconfigured self-hosted node. Unknown values therefore resolve to
+  /// Production, the strict environment — the same polarity
+  /// [`registration_open`] uses, where a typo leaves the door shut.
   fn from_env_value(value: &str) -> Self {
     match value {
-      "prod" | "production" => Self::Production,
+      "development" => Self::Development,
       "test" => Self::Test,
-      _ => Self::Development,
+      _ => Self::Production,
     }
   }
 }
@@ -193,6 +202,8 @@ impl AppConfig {
   pub fn from_env() -> Result<Self, ConfigError> {
     let _ = dotenvy::dotenv();
 
+    // Unset is the local fast path (bare `cargo run`, no .env); a SET value is
+    // parsed fail-closed — see `Environment::from_env_value`.
     let environment = env::var("APP_ENV")
       .map(|value| Environment::from_env_value(&value))
       .unwrap_or(Environment::Development);
@@ -499,6 +510,44 @@ pub fn validate_jwt_secret(raw: &str, environment: Environment) -> Result<(), Co
     });
   }
   Ok(())
+}
+
+#[cfg(test)]
+mod environment_parse {
+  use super::Environment;
+
+  #[test]
+  fn the_two_opt_out_values_are_recognized() {
+    assert_eq!(
+      Environment::from_env_value("development"),
+      Environment::Development
+    );
+    assert_eq!(Environment::from_env_value("test"), Environment::Test);
+  }
+
+  /// #36: the whole point of the rewrite — a mistyped or misguessed value
+  /// must land on the STRICT environment, not the permissive one.
+  #[test]
+  fn typos_and_guesses_fall_closed_to_production() {
+    for bad in [
+      "prodution",
+      "develop",
+      "dev",
+      "Development ", // trailing whitespace
+      "PRODUCTION",
+      "production",
+      "prod",
+      "staging",
+      "",
+      "  ",
+    ] {
+      assert_eq!(
+        Environment::from_env_value(bad),
+        Environment::Production,
+        "{bad:?} must resolve to Production, never Development"
+      );
+    }
+  }
 }
 
 #[cfg(test)]

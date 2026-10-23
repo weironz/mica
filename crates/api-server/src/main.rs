@@ -10,6 +10,7 @@ use tracing::info;
 
 mod blob_gc;
 mod bucket;
+mod http_client;
 mod mail;
 mod metrics;
 mod origin;
@@ -299,13 +300,51 @@ fn app_router(state: AppState) -> Router {
     // middleware that only observes the happy path reports calm while the
     // front door is on fire.
     .layer(axum::middleware::from_fn(metrics::track))
-    .layer(TraceLayer::new_for_http())
+    .layer(TraceLayer::new_for_http().make_span_with(http_trace_span))
     // The shared per-IP limiter + Argon2 semaphore the route-level throttles
     // (rate_limit.rs) extract.
     .layer(axum::Extension(rate_limit::AuthGuard::from_env()))
     // Outermost: a CORS preflight is answered before any inner layer sees it.
     .layer(cors_layer(&state.config))
     .with_state(state)
+}
+
+/// Trace span for the HTTP layer (#37). `tower_http`'s default span records
+/// the raw URI, and the WS/auth compatibility tail still carries the bearer
+/// token in `?token=` (`auth::token_from_request`) — so any configuration
+/// that turns request tracing up writes live tokens to the logs. The URI is
+/// recorded through [`redacted_uri`]: path and every other query parameter
+/// survive, the token value does not.
+fn http_trace_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {
+  tracing::info_span!(
+    "request",
+    method = %request.method(),
+    uri = %redacted_uri(request.uri()),
+  )
+}
+
+/// The URI with sensitive query values replaced: `?token=abc` logs as
+/// `?token=[redacted]` while the path and other parameters stay legible in
+/// the log line, which is what makes a trace useful at all.
+fn redacted_uri(uri: &axum::http::Uri) -> String {
+  const SECRET_PARAMS: [&str; 1] = ["token"];
+  let path = uri.path();
+  let Some(query) = uri.query() else {
+    return path.to_string();
+  };
+  let redacted = query
+    .split('&')
+    .map(|pair| {
+      let key = pair.split('=').next().unwrap_or(pair);
+      if SECRET_PARAMS.contains(&key) {
+        format!("{key}=[redacted]")
+      } else {
+        pair.to_string()
+      }
+    })
+    .collect::<Vec<_>>()
+    .join("&");
+  format!("{path}?{redacted}")
 }
 
 /// CORS policy. The bundled web app is served same-origin with `/api`, so it
@@ -361,6 +400,39 @@ async fn shutdown_signal() {
   tokio::select! {
     _ = ctrl_c => {},
     _ = terminate => {},
+  }
+}
+
+#[cfg(test)]
+mod trace_log_tests {
+  use super::redacted_uri;
+
+  fn redacted(uri: &str) -> String {
+    redacted_uri(&uri.parse().expect("a valid URI in a test"))
+  }
+
+  /// #37: the WS compatibility tail still puts the bearer token in the query
+  /// string; a trace line must never carry it.
+  #[test]
+  fn the_token_value_is_redacted_wherever_it_sits() {
+    assert_eq!(redacted("/ws?token=secret-token"), "/ws?token=[redacted]");
+    assert_eq!(
+      redacted("/ai/ws?workspace=abc&token=secret-token&version=3"),
+      "/ai/ws?workspace=abc&token=[redacted]&version=3"
+    );
+  }
+
+  /// A URI that carries no secret must survive UNTOUCHED — the trace is only
+  /// useful if the rest of the request line stays legible.
+  #[test]
+  fn everything_else_is_left_alone() {
+    assert_eq!(redacted("/api/health"), "/api/health");
+    assert_eq!(
+      redacted("/api/documents?workspace_id=abc&limit=10"),
+      "/api/documents?workspace_id=abc&limit=10"
+    );
+    // Only the exact parameter name counts; lookalikes are not credentials.
+    assert_eq!(redacted("/x?tokens=1&mytoken=2"), "/x?tokens=1&mytoken=2");
   }
 }
 

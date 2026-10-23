@@ -2109,6 +2109,7 @@ dependencies = [
  "sha2 0.10.9",
  "sqlx",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-http",
  "tracing",
@@ -2142,8 +2143,10 @@ dependencies = [
  "mica-interchange",
  "mica-mcp-server",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "uuid",
 ]

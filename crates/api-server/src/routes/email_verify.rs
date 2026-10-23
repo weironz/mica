@@ -61,12 +61,7 @@ const VERIFY_TTL_HOURS: i64 = 24;
 pub async fn mint_and_send(state: &AppState, user_id: Uuid, email: &str) -> bool {
   match mint_token(&state.db, user_id).await {
     Ok(token) => {
-      let link = format!("{}/verify-email?token={}", state.config.app_base_url, token);
-      let mail = Mail {
-        to: email.to_string(),
-        subject: "Confirm your Mica email address".to_string(),
-        html_body: verify_email_html(&link),
-      };
+      let mail = verification_mail(state, email, &token);
       match state.mailer.send(&mail).await {
         Ok(()) => true,
         Err(error) => {
@@ -79,6 +74,39 @@ pub async fn mint_and_send(state: &AppState, user_id: Uuid, email: &str) -> bool
       tracing::warn!(%error, "failed to mint verification token");
       false
     }
+  }
+}
+
+/// [`mint_and_send`]'s twin for a no-oracle endpoint (#39): the response must
+/// not wait on SMTP, because "registered address answers slower" was the
+/// exact timing channel awaiting closed over — a uniform 204 means nothing if
+/// it arrives at different times. Minting stays in the request (a DB query
+/// has the same shape either way); only the send moves off-task. Used by
+/// [`resend`]; registration keeps [`mint_and_send`], whose caller wants to
+/// know whether the mail went out.
+pub async fn mint_and_spawn(state: &AppState, user_id: Uuid, email: &str) {
+  match mint_token(&state.db, user_id).await {
+    Ok(token) => {
+      let mail = verification_mail(state, email, &token);
+      let mailer = state.mailer.clone();
+      tokio::spawn(async move {
+        if let Err(error) = mailer.send(&mail).await {
+          tracing::warn!(%error, "failed to send verification email");
+        }
+      });
+    }
+    Err(error) => {
+      tracing::warn!(%error, "failed to mint verification token");
+    }
+  }
+}
+
+fn verification_mail(state: &AppState, email: &str, token: &str) -> Mail {
+  let link = format!("{}/verify-email?token={}", state.config.app_base_url, token);
+  Mail {
+    to: email.to_string(),
+    subject: "Confirm your Mica email address".to_string(),
+    html_body: verify_email_html(&link),
   }
 }
 
@@ -196,7 +224,10 @@ pub async fn resend(
   .await?;
 
   if let Some(user_id) = target {
-    mint_and_send(&state, user_id, &email).await;
+    // Off-task send (#39): awaiting the mail made a registered, unverified
+    // address answer measurably later than an unknown one — the timing oracle
+    // the uniform 204 exists to deny.
+    mint_and_spawn(&state, user_id, &email).await;
   }
 
   Ok(StatusCode::NO_CONTENT)
@@ -277,4 +308,116 @@ fn error_page() -> Response {
 pub fn router() -> axum::Router<AppState> {
   use axum::routing::get;
   axum::Router::new().route("/verify-email", get(verify_page))
+}
+
+/// #39: `resend` answers in the same time however the address resolves —
+/// awaiting the send made a registered, unverified address measurably slower.
+/// The mailer's send parks behind a gate, so the test needs no wall-clock
+/// guessing. Gated on `DATABASE_URL` like the other pg tests (skipped green
+/// locally, a hard error in CI).
+#[cfg(test)]
+mod resend_timing_pg {
+  use super::*;
+  use mica_infra::Mailer;
+  use std::sync::{Arc, Mutex};
+
+  async fn pool() -> Option<sqlx::PgPool> {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+      assert!(
+        std::env::var("CI").is_err(),
+        "DATABASE_URL is unset in CI — the postgres service block regressed"
+      );
+      return None;
+    };
+    Some(
+      sqlx::PgPool::connect(&url)
+        .await
+        .expect("DATABASE_URL is set but the connection failed"),
+    )
+  }
+
+  /// A mailer whose send blocks until released, recording what it was asked
+  /// to send — the deterministic stand-in for "SMTP is slow".
+  #[derive(Default)]
+  struct GateMailer {
+    release: tokio::sync::Notify,
+    sent: Mutex<Vec<Mail>>,
+  }
+
+  #[async_trait::async_trait]
+  impl Mailer for GateMailer {
+    async fn send(&self, mail: &Mail) -> anyhow::Result<()> {
+      self.release.notified().await;
+      self.sent.lock().unwrap().push(mail.clone());
+      Ok(())
+    }
+  }
+
+  fn timing_config() -> mica_infra::AppConfig {
+    mica_infra::AppConfig {
+      environment: mica_infra::Environment::Test,
+      http_addr: "127.0.0.1:0".parse().unwrap(),
+      database_url: String::new(),
+      database_max_connections: 1,
+      jwt_secret: "resend-timing-test-secret".to_string(),
+      ws_min_protocol: 1,
+      access_token_ttl_seconds: 60,
+      refresh_token_ttl_seconds: 60,
+      cors_allowed_origins: Vec::new(),
+      seed_test_user: None,
+      registration_enabled: false,
+      workspace_quota_bytes: 0,
+      owner_quota_bytes: 0,
+      search_index_mlock: false,
+      sync_tuning: Default::default(),
+      app_base_url: "http://localhost:8080".to_string(),
+    }
+  }
+
+  #[tokio::test]
+  async fn resend_answers_204_before_the_mail_goes_out() {
+    let Some(db) = pool().await else { return };
+    let user = Uuid::new_v4();
+    let email = format!("{user}@verify.test");
+    sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'T','h')")
+      .bind(user)
+      .bind(&email)
+      .execute(&db)
+      .await
+      .unwrap();
+    let mailer = Arc::new(GateMailer::default());
+    let state = AppState::new(timing_config(), db.clone(), mailer.clone());
+
+    let response = tokio::time::timeout(
+      std::time::Duration::from_secs(5),
+      resend(
+        axum::extract::State(state),
+        axum::Json(ResendRequest {
+          email: email.clone(),
+        }),
+      ),
+    )
+    .await
+    .expect("resend must not wait on the mail — that wait was the #39 oracle")
+    .expect("resend answers Ok");
+    assert_eq!(response, StatusCode::NO_CONTENT);
+
+    // The mail still goes out — off-task — once the gate opens.
+    mailer.release.notify_one();
+    for _ in 0..100 {
+      if !mailer.sent.lock().unwrap().is_empty() {
+        break;
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let sent = mailer.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1, "the verification mail must still be sent");
+    assert_eq!(sent[0].to, email);
+
+    sqlx::query("DELETE FROM users WHERE id=$1")
+      .bind(user)
+      .execute(&db)
+      .await
+      .ok();
+  }
 }

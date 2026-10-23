@@ -208,6 +208,27 @@ struct DbSnapshot {
   workspaces_truncated: i64,
 }
 
+/// The method label a request is filed under. Only standard verbs get their
+/// own label; anything else folds into `OTHER`.
+///
+/// The request method is REMOTE input — hyper accepts any token, no login
+/// required — so keying the route map on it verbatim gave every made-up verb
+/// (`FOO`, `get`, one per spoofed packet) its own permanent HashMap entry and
+/// histogram: unbounded memory growth cardinality, the same class of bug the
+/// matched-path choice below exists to prevent, one label earlier.
+fn method_label(method: &str) -> &'static str {
+  match method {
+    "GET" => "GET",
+    "HEAD" => "HEAD",
+    "POST" => "POST",
+    "PUT" => "PUT",
+    "PATCH" => "PATCH",
+    "DELETE" => "DELETE",
+    "OPTIONS" => "OPTIONS",
+    _ => "OTHER",
+  }
+}
+
 /// Everything this process counts.
 ///
 /// The per-family `Mutex` on the request path is a contention point in
@@ -239,7 +260,7 @@ impl Metrics {
   fn record_http(&self, method: &str, route: &str, status: u16, seconds: f64) {
     let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
     let stat = routes
-      .entry((method.to_string(), route.to_string()))
+      .entry((method_label(method).to_string(), route.to_string()))
       .or_default();
     *stat.by_status.entry(status).or_insert(0) += 1;
     stat.latency.observe(seconds);
@@ -831,6 +852,51 @@ mod tests {
     assert_eq!(stat.by_status[&200], 2);
     assert_eq!(stat.by_status[&500], 1);
     assert_eq!(stat.latency.count, 3, "the histogram counts every request");
+  }
+
+  /// The method comes off the wire, no login required — a spray of made-up
+  /// verb names must NOT mint a permanent map entry and histogram each.
+  /// Standard verbs keep their own label; everything else folds into `OTHER`.
+  #[test]
+  fn non_standard_methods_fold_into_other() {
+    let m = Metrics::new();
+    m.record_http("GET", "/api/x", 200, 0.01);
+    m.record_http("PROPFIND", "/api/x", 405, 0.01);
+    m.record_http("get", "/api/x", 200, 0.01); // lowercase is not a standard verb spelling
+    m.record_http("A".repeat(64).as_str(), "/api/x", 400, 0.01);
+
+    let routes = m.routes.lock().unwrap();
+    assert_eq!(
+      routes.len(),
+      2,
+      "junk methods must not mint labels of their own ({} registered)",
+      routes.len()
+    );
+    assert!(routes.contains_key(&("GET".to_string(), "/api/x".to_string())));
+    let other = &routes[&("OTHER".to_string(), "/api/x".to_string())];
+    assert_eq!(
+      other.latency.count, 3,
+      "all non-standard verbs land in OTHER"
+    );
+    assert_eq!(other.by_status[&405], 1);
+    assert_eq!(other.by_status[&400], 1);
+  }
+
+  #[test]
+  fn the_standard_verbs_stay_distinct() {
+    for (verb, expected) in [
+      ("GET", "GET"),
+      ("HEAD", "HEAD"),
+      ("POST", "POST"),
+      ("PUT", "PUT"),
+      ("PATCH", "PATCH"),
+      ("DELETE", "DELETE"),
+      ("OPTIONS", "OPTIONS"),
+    ] {
+      assert_eq!(method_label(verb), expected);
+    }
+    assert_eq!(method_label("PROPFIND"), "OTHER");
+    assert_eq!(method_label(""), "OTHER");
   }
 
   /// The gauges must come back down on an early return or a panic, or a few

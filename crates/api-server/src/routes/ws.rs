@@ -66,6 +66,23 @@ async fn current_write_permissions(
 /// compatible changes would force upgrades nobody needed.
 pub const WS_PROTOCOL_VERSION: u32 = 1;
 
+/// Cap on one INCOMING WS message, on every mica socket (#43). Axum's default
+/// here is 64 MiB — sized for "no legitimate message is that big", not for what
+/// mica actually carries: the REST routes taking the same class of write stop
+/// at axum's 2 MB body limit, so a `sync.push` whose base64 alone exceeded
+/// ~4 MiB could not have come through REST either. Each accepted frame is also
+/// decoded into several transient copies (tungstenite buffer → text → JSON →
+/// base64), so at the default ONE editor socket could pin >200 MB. Outgoing
+/// frames are deliberately NOT capped: `max_message_size` governs reads only,
+/// and bootstrap/fan-out must carry whatever the document actually is.
+pub(crate) const MAX_INCOMING_MESSAGE: usize = 4 * 1024 * 1024;
+
+/// Every socket's upgrade, capped — one function so the message-size test
+/// drives the exact configuration the real sockets use rather than a copy.
+pub(crate) fn capped_socket(upgrade: WebSocketUpgrade) -> WebSocketUpgrade {
+  upgrade.max_message_size(MAX_INCOMING_MESSAGE)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ConnectQuery {
   token: Option<String>,
@@ -138,7 +155,7 @@ pub async fn document_socket(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-  Ok(upgrade.on_upgrade(move |socket| {
+  Ok(capped_socket(upgrade).on_upgrade(move |socket| {
     run_connection(
       socket,
       state,
@@ -178,28 +195,64 @@ pub async fn views_socket(
   let (user_id, token_exp) = session_from_token(&state, &token)?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
 
-  Ok(upgrade.on_upgrade(move |socket| run_views_connection(socket, state, workspace_id, token_exp)))
+  Ok(capped_socket(upgrade).on_upgrade(move |socket| {
+    run_views_connection(socket, state, workspace_id, user_id, token_exp)
+  }))
+}
+
+/// Whether this connection's user is still a member of the workspace — the
+/// question the views socket's periodic re-check asks. The document socket's
+/// equivalent is [`current_write_permissions`], which needs the role too.
+///
+/// A database error reads as "still a member" on purpose (fail open, matching
+/// the document socket's re-check): a blip must not close every live sidebar,
+/// and the next tick retries.
+async fn still_a_member(db: &sqlx::PgPool, workspace_id: Uuid, user_id: Uuid) -> bool {
+  matches!(workspace_role(db, workspace_id, user_id).await, Ok(Some(_)))
 }
 
 async fn run_views_connection(
   mut socket: WebSocket,
   state: AppState,
   workspace_id: Uuid,
+  user_id: Uuid,
   token_exp: u64,
 ) {
   let connection_id = Uuid::new_v4();
   let room = state.views_hub.join(workspace_id);
   let mut events = room.subscribe();
 
-  // Same deadline rule as the document socket: the socket outlives the token
-  // check that let it in, so it carries the token's own expiry. Without it a
-  // revoked member would keep learning that a workspace they lost is changing.
+  // Same two rules as the document socket, because this socket has the same
+  // property it does: it outlives the checks that let it in. The token's own
+  // expiry bounds the socket, and membership is re-checked on a timer —
+  // without that second half, a member removed from the workspace kept
+  // learning that a workspace they no longer had access to was changing,
+  // until their token expired (issue #40).
   let expiry =
     tokio::time::sleep(time_left(token_exp, SystemTime::now()).unwrap_or(Duration::ZERO));
   tokio::pin!(expiry);
+  let mut membership = tokio::time::interval_at(
+    tokio::time::Instant::now() + MEMBERSHIP_RECHECK,
+    MEMBERSHIP_RECHECK,
+  );
 
   loop {
     tokio::select! {
+      _ = membership.tick() => {
+        // Fan-out never consults the database, so without this arm the ping
+        // kept reaching a removed member for the life of their token — the
+        // same hole the document socket closed for live edits in
+        // `run_connection`.
+        if !still_a_member(&state.db, workspace_id, user_id).await {
+          let _ = socket
+            .send(Message::Close(Some(CloseFrame {
+              code: WS_CLOSE_NOT_A_MEMBER,
+              reason: "no longer a member of this workspace".into(),
+            })))
+            .await;
+          break;
+        }
+      }
       () = &mut expiry => {
         let _ = socket
           .send(Message::Close(Some(CloseFrame {
@@ -326,8 +379,8 @@ pub(crate) const WS_CLOSE_TOKEN_EXPIRED: u16 = 4401;
 /// Close code when the user was removed from the workspace mid-session.
 pub(crate) const WS_CLOSE_NOT_A_MEMBER: u16 = 4403;
 
-/// How often an open document socket re-checks its user's membership. Bounds
-/// how long a removed member keeps receiving broadcasts.
+/// How often an open socket — document or views — re-checks its user's
+/// membership. Bounds how long a removed member keeps receiving broadcasts.
 const MEMBERSHIP_RECHECK: Duration = Duration::from_secs(30);
 
 /// How long this socket may live, from `exp`.
@@ -1539,5 +1592,121 @@ mod tests {
 
       cleanup(&db, ws, owner, member).await;
     }
+
+    /// #40: the views socket re-checks membership on the same 30s timer the
+    /// document socket uses; `still_a_member` is the predicate that arm runs.
+    /// A member removed mid-session must fail it on the NEXT tick, not at
+    /// token expiry — which is what the views ping used to wait out.
+    #[tokio::test]
+    async fn the_views_recheck_drops_a_removed_member_on_the_next_tick() {
+      let Some(db) = pool().await else { return };
+      let (ws, owner, member) = seed(&db, "editor").await;
+
+      assert!(
+        still_a_member(&db, ws, member).await,
+        "a live member passes the re-check"
+      );
+
+      sqlx::query("DELETE FROM workspace_members WHERE workspace_id=$1 AND user_id=$2")
+        .bind(ws)
+        .bind(member)
+        .execute(&db)
+        .await
+        .unwrap();
+
+      assert!(
+        !still_a_member(&db, ws, member).await,
+        "a removed member must fail the views re-check; waiting out the token was the bug"
+      );
+
+      cleanup(&db, ws, owner, member).await;
+    }
+  }
+}
+
+/// #43: every mica socket caps one incoming message at
+/// [`MAX_INCOMING_MESSAGE`] (axum's default was 64 MiB). This drives the REAL
+/// wiring — [`capped_socket`], the exact function the document/views/AI
+/// upgrades call — over a live socket: a normal frame survives, one over the
+/// cap ends the connection. No database: the handshake is served by a bare
+/// echo route, because what is under test is the cap, not the auth in front
+/// of it.
+///
+/// This is why [`capped_socket`] exists as a function at all rather than an
+/// inline `.max_message_size(...)` at each upgrade site: an inline test would
+/// retype the configuration (a copy that passes whether or not the real
+/// sockets carry it), the same trap `insert_registered_user`'s doc records.
+#[cfg(test)]
+mod message_cap_tests {
+  use super::*;
+  use axum::Router;
+  use axum::routing::get;
+  use futures_util::{SinkExt, StreamExt};
+  use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+  async fn echo(upgrade: WebSocketUpgrade) -> Response {
+    capped_socket(upgrade).on_upgrade(|mut socket| async move {
+      while let Some(Ok(message)) = socket.recv().await {
+        if socket.send(message).await.is_err() {
+          break;
+        }
+      }
+      // Dropping the socket closes the connection: an oversized frame made
+      // `recv` error, the loop leaves, and the peer observes the end.
+    })
+  }
+
+  /// Bind the echo route on an ephemeral port; returns the client URL and the
+  /// server's abort handle.
+  async fn serve() -> (String, tokio::task::AbortHandle) {
+    let app = Router::new().route("/ws", get(echo));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+      axum::serve(listener, app).await.unwrap();
+    });
+    (format!("ws://{addr}/ws"), server.abort_handle())
+  }
+
+  #[tokio::test]
+  async fn an_ordinary_frame_round_trips_through_the_cap() {
+    let (url, server) = serve().await;
+    let (mut socket, _response) = tokio_tungstenite::connect_async(url).await.unwrap();
+    socket
+      .send(ClientMessage::text(r#"{"type":"sync.push","payload":{}}"#))
+      .await
+      .unwrap();
+    let echoed = socket.next().await.unwrap().unwrap();
+    assert_eq!(
+      echoed.into_text().unwrap(),
+      r#"{"type":"sync.push","payload":{}}"#
+    );
+    socket.close(None).await.unwrap();
+    server.abort();
+  }
+
+  /// The cap itself: one frame past [`MAX_INCOMING_MESSAGE`] ends the
+  /// connection instead of being buffered, decoded and re-encoded — the
+  /// >200 MB-per-editor amplification #43 records. The boundary itself
+  /// (exactly at the cap) is accepted: tungstenite's check is strictly `>`.
+  #[tokio::test]
+  async fn an_oversized_frame_ends_the_connection() {
+    let (url, server) = serve().await;
+    let (mut socket, _response) = tokio_tungstenite::connect_async(url).await.unwrap();
+
+    // Just past the cap — not megabytes past, so the test measures the
+    // boundary, not how fast it can shovel bytes. The send itself may or may
+    // not complete: the server refuses the frame WHILE it is still arriving,
+    // so a broken flush is the cap working, not a flake.
+    let huge = "x".repeat(MAX_INCOMING_MESSAGE + 1);
+    let _ = socket.send(ClientMessage::text(huge)).await;
+    match socket.next().await {
+      // Every one of these is "the connection ended". The failure #43
+      // describes is the opposite: the frame being accepted, processed and
+      // echoed — any surviving data message is that.
+      None | Some(Err(_)) | Some(Ok(ClientMessage::Close(_))) => {}
+      Some(Ok(other)) => panic!("an oversized frame must end the connection, got {other:?}"),
+    }
+    server.abort();
   }
 }

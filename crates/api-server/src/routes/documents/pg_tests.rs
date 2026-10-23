@@ -2224,6 +2224,40 @@ mod parent_guard_pg {
     assert!(!is_deleted(&db, page).await);
   }
 
+  /// gh#47: restoring a parent must NOT resurrect a child that was trashed on
+  /// its own BEFORE the parent went. Trash stamps every row it takes with one
+  /// `now()`; the earlier-trashed child carries a different timestamp and
+  /// stays in the bin.
+  ///
+  /// The purge at the end is the other half of why the child staying matters:
+  /// resurrected, it would have been indistinguishable from a page the user
+  /// meant to keep; still-binned, a purge takes exactly it.
+  #[tokio::test]
+  async fn a_restore_does_not_resurrect_a_child_trashed_earlier_on_its_own() {
+    let Some(db) = pool().await else { return };
+    let (ws, folder, page, _) = seed_folder_with_page(&db).await;
+    trash_views_batch(&db, ws, &[page]).await.unwrap();
+    trash_views_batch(&db, ws, &[folder]).await.unwrap();
+
+    let restored = restore_views_batch(&db, ws, &[folder]).await.unwrap();
+
+    assert_eq!(
+      restored,
+      vec![folder],
+      "only the parent's own batch returns"
+    );
+    assert!(
+      is_deleted(&db, page).await,
+      "the child's separate tombstone stands"
+    );
+
+    purge_views_batch(&db, ws, &[page]).await.unwrap();
+    assert!(
+      !is_deleted(&db, folder).await,
+      "the restored parent never felt the child's purge"
+    );
+  }
+
   /// THE BUG: restoring only the PAGE out of a trashed folder left it live
   /// under a deleted parent — invisible in the tree — and emptying the trash
   /// then deleted it for real through `parent_view_id ON DELETE CASCADE`.
@@ -2343,6 +2377,49 @@ mod parent_guard_pg {
       parent, None,
       "the first view must NOT have been left re-parented"
     );
+  }
+
+  /// gh#46: the cycle check runs INSIDE the move's transaction — re-parenting
+  /// a folder under one of its own descendants is refused there. Checked
+  /// against the state the transaction sees, never a snapshot another mover
+  /// could have invalidated; the workspace tree lock (same transaction) keeps
+  /// two concurrent swaps from both passing it.
+  ///
+  /// Asserted on state, not just on the error: a refused move must leave the
+  /// folder at the top level, or the caller's retry lands on a different tree.
+  #[tokio::test]
+  async fn a_bulk_move_under_an_own_descendant_is_refused_inside_the_transaction() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let outer = seed_view(&db, ws, user, "folder").await;
+    let inner = Uuid::new_v4();
+    sqlx::query(
+      "INSERT INTO views(id,workspace_id,parent_view_id,object_id,object_type,name,position,created_by) \
+       VALUES($1,$2,$3,$4,'folder'::object_type,'内层','0',$5)",
+    )
+    .bind(inner)
+    .bind(ws)
+    .bind(outer)
+    .bind(Uuid::new_v4())
+    .bind(user)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let err = move_views_tx(&db, ws, &[outer], Some(inner))
+      .await
+      .unwrap_err();
+
+    assert!(
+      matches!(err, ApiError::BadRequest(ref msg) if msg.contains("descendant")),
+      "{err:?}"
+    );
+    let parent: Option<Uuid> = sqlx::query_scalar("SELECT parent_view_id FROM views WHERE id = $1")
+      .bind(outer)
+      .fetch_one(&db)
+      .await
+      .unwrap();
+    assert_eq!(parent, None, "the refused move did not re-parent anything");
   }
 
   /// Seed `folder` (top level) with one live child page; returns (folder, child).

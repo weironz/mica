@@ -16,9 +16,7 @@
 // the production contract — the picker's walk lives outside this function).
 // The tree planning itself (Rust, `MicaStore.importVaultTree`) stays covered
 // by the integration test.
-import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/local/local_offline.dart';
@@ -72,7 +70,7 @@ void main() {
     } catch (_) {}
   });
 
-  final blobsDir = () => Directory('${root.path}/local/blobs');
+  Directory blobsDir() => Directory('${root.path}/local/blobs');
   int blobCount() =>
       blobsDir().existsSync() ? blobsDir().listSync().length : 0;
 

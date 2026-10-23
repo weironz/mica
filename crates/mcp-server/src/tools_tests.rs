@@ -327,11 +327,11 @@ async fn mangled_latex_is_refused_in_every_write_path_before_any_network() {
     .await
     .expect("validation must be a tool error, not a protocol error");
   assert_eq!(find_replace.is_error, Some(true));
-  let text = text(&find_replace);
-  assert!(text.contains("doubled"), "says how to fix it: {text}");
+  let fr_text = text(&find_replace);
+  assert!(fr_text.contains("doubled"), "says how to fix it: {fr_text}");
   assert!(
-    !text.contains(NETWORK_ERROR),
-    "must not reach the network: {text}"
+    !fr_text.contains(NETWORK_ERROR),
+    "must not reach the network: {fr_text}"
   );
 
   let batch = server
@@ -351,11 +351,14 @@ async fn mangled_latex_is_refused_in_every_write_path_before_any_network() {
     .await
     .expect("validation must be a tool error, not a protocol error");
   assert_eq!(batch.is_error, Some(true));
-  let text = text(&batch);
-  assert!(text.contains("doubled"), "says how to fix it: {text}");
+  let batch_text = text(&batch);
   assert!(
-    !text.contains(NETWORK_ERROR),
-    "must not reach the network: {text}"
+    batch_text.contains("doubled"),
+    "says how to fix it: {batch_text}"
+  );
+  assert!(
+    !batch_text.contains(NETWORK_ERROR),
+    "must not reach the network: {batch_text}"
   );
 }
 

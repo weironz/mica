@@ -15,6 +15,7 @@ mod backup;
 mod client;
 mod config;
 mod export;
+mod ssrf;
 mod update;
 
 use anyhow::{Context, Result, bail};
@@ -211,6 +212,9 @@ struct UpdateArgs {
   check: bool,
   /// Install this version instead of the latest (with or without the `v`).
   ///
+  /// An OLDER version than the one running needs `--force` as well — a
+  /// downgrade is a decision, not a side effect of `latest` lagging behind.
+  ///
   /// Going BACKWARDS past the release that introduced this command leaves you
   /// with a binary that has no `update` — recover with the installer line from
   /// the README. Measured, not guessed: 0.13.27 refuses the subcommand.
@@ -220,7 +224,8 @@ struct UpdateArgs {
   /// version and exit instead of doing what it plainly reads as.
   #[arg(long, value_name = "X.Y.Z")]
   to: Option<String>,
-  /// Re-install even when the target version is the one already running.
+  /// Re-install even when the target version is the one already running —
+  /// and the only way to install an OLDER one.
   #[arg(long)]
   force: bool,
 }

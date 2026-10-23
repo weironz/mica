@@ -123,7 +123,7 @@ pub async fn rehost_image(
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
 
-  let client = reqwest::Client::new();
+  let client = crate::http_client::outbound_client();
   let file = crate::routes::files::store_bytes(
     &state,
     &client,

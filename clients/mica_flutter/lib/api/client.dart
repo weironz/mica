@@ -119,13 +119,23 @@ class _TimedClient extends http.BaseClient {
 
   final http.Client _inner;
 
+  /// Ceiling on the wait for RESPONSE HEADERS (#45): without any timeout a
+  /// wedged connection parked every request — and the UI awaiting it —
+  /// forever. This is time-to-headers only (the same span [apiRequestObserver]
+  /// measures), so a large attachment upload/download keeps streaming after
+  /// this resolves and is NOT cut off; on web, where BrowserClient buffers the
+  /// whole body before resolving, the payloads are bounded small anyway.
+  static const Duration defaultRequestTimeout = Duration(seconds: 60);
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final observer = apiRequestObserver;
-    if (observer == null) return _inner.send(request);
+    if (observer == null) {
+      return _inner.send(request).timeout(defaultRequestTimeout);
+    }
     final watch = Stopwatch()..start();
     try {
-      return await _inner.send(request);
+      return await _inner.send(request).timeout(defaultRequestTimeout);
     } finally {
       watch.stop();
       observer(request.method, request.url.path, watch.elapsed);
@@ -1172,6 +1182,9 @@ class ApiClient {
   /// The provider's own list of models, fetched server-side with the operator's
   /// key. Optional overrides let an admin see a provider's models BEFORE saving
   /// the switch — picking a model you cannot see the name of is not a choice.
+  ///
+  /// POST with a body, never GET with a query string: the key must not land in
+  /// an access log (#30).
   Future<Map<String, dynamic>> listAiModels(
     String token, {
     String? provider,
@@ -1179,7 +1192,7 @@ class ApiClient {
     String? baseUrl,
     String? apiKey,
   }) async {
-    final query = <String, String>{
+    final body = <String, dynamic>{
       if (provider != null && provider.isNotEmpty) 'provider': provider,
       // Which vendor's stored key to fall back on — without it the server
       // used the ACTIVE vendor's key against this vendor's URL.
@@ -1187,10 +1200,7 @@ class ApiClient {
       if (baseUrl != null && baseUrl.isNotEmpty) 'base_url': baseUrl,
       if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
     };
-    final suffix = query.isEmpty
-        ? ''
-        : '?${query.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}').join('&')}';
-    return _get('/api/ai/models$suffix', token);
+    return _post('/api/ai/models', body, token: token);
   }
 
   /// Write one provider's config, and make it the one in use.

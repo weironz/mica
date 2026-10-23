@@ -4,6 +4,8 @@
 //! SHA-256 hash is stored. Auth + scope enforcement for these routes is handled
 //! by the `scope_guard` middleware (create/revoke need `write`, list needs
 //! `read`), so a read-only token can list its own tokens but not mint new ones.
+//! Minting additionally requires a session JWT no older than the account's
+//! credential epoch (#29) — see `create_token`.
 
 use axum::{
   Json,
@@ -17,7 +19,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::routes::auth::{PAT_PREFIX, Scope, mint_secret, sha256_hex, user_id_from_headers};
+use crate::routes::auth::{
+  PAT_PREFIX, SESSION_COOKIE, Scope, bearer_token, cookie_value, ensure_pat_mint_allowed,
+  mint_secret, sha256_hex, user_and_iat_from_token, user_id_from_headers,
+};
 
 /// Longest expiry a token may ask for (ten years); omit it for no expiry.
 const MAX_TOKEN_DAYS: i64 = 3650;
@@ -59,12 +64,31 @@ pub struct TokenListResponse {
 }
 
 /// `POST /api/auth/tokens` — mint a new token (returns the secret once).
+///
+/// Minting is privileged beyond "has write scope" (#29):
+///
+/// * the credential must be a **session JWT**, never another PAT — otherwise a
+///   short-lived write-scoped PAT converts itself into a permanent one, and a
+///   read-only token's "I can list my tokens" stops being a boundary;
+/// * the JWT must be no older than the account's credential epoch — a token
+///   stolen before a password change (or left over from a deleted account)
+///   would otherwise mint a PAT that outlives the rotation by years.
 pub async fn create_token(
   State(state): State<AppState>,
   headers: HeaderMap,
   Json(req): Json<CreateTokenRequest>,
 ) -> ApiResult<Json<CreatedToken>> {
-  let user_id = user_id_from_headers(&state, &headers).await?;
+  let token = bearer_token(&headers)
+    .or_else(|| cookie_value(&headers, SESSION_COOKIE))
+    .ok_or(ApiError::Unauthorized)?;
+  if token.starts_with(PAT_PREFIX) {
+    // 403, not 401: the credential resolves fine — minting is simply not
+    // something a PAT may do, and re-authenticating with the same token
+    // changes nothing.
+    return Err(ApiError::Forbidden);
+  }
+  let (user_id, iat) = user_and_iat_from_token(&state, &token)?;
+  ensure_pat_mint_allowed(&state.db, user_id, iat).await?;
 
   let name = super::names::normalize_name(&req.name, "name")?;
 

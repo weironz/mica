@@ -1049,8 +1049,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     _treeScroll.dispose();
     // Only clear the exit-flush slot if it still points at ours (a remounting
     // sibling may have already claimed it).
-    if (identical(_activeEditorFlush, _boundExitFlush))
+    if (identical(_activeEditorFlush, _boundExitFlush)) {
       _activeEditorFlush = null;
+    }
     super.dispose();
   }
 

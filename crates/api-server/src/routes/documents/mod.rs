@@ -380,14 +380,14 @@ async fn fetch_views_filtered(
         JOIN subtree s ON c.parent_view_id = s.id
         WHERE c.workspace_id = $1 AND c.is_deleted = false
           AND ($6::int IS NULL OR s.lvl < $6)
-      )
+      ) CYCLE id SET is_cycle USING cycle_path
       SELECT
         "#,
     prefixed_view_columns!(),
     r#",
         octet_length(b.state)::bigint AS state_bytes
       FROM views v
-      JOIN subtree ON subtree.id = v.id
+      JOIN subtree ON subtree.id = v.id AND NOT subtree.is_cycle
       LEFT JOIN document_yrs_base b ON $5 AND b.document_id = v.object_id
       WHERE v.workspace_id = $1 AND v.is_deleted = false
       ORDER BY v.parent_view_id NULLS FIRST, v.position ASC, v.id
@@ -530,7 +530,11 @@ pub(crate) async fn ensure_workspace_editor(
   Ok(())
 }
 
-async fn ensure_view_in_workspace(db: &PgPool, workspace_id: Uuid, view_id: Uuid) -> ApiResult<()> {
+async fn ensure_view_in_workspace(
+  db: impl sqlx::PgExecutor<'_>,
+  workspace_id: Uuid,
+  view_id: Uuid,
+) -> ApiResult<()> {
   let exists = sqlx::query_scalar::<_, bool>(
     r#"
       SELECT EXISTS (
@@ -563,7 +567,7 @@ async fn ensure_view_in_workspace(db: &PgPool, workspace_id: Uuid, view_id: Uuid
 /// — live, folder, same workspace — at each write (migration 0033), and its
 /// refusal reaches the caller as a 409 (`mica_infra::ApiError`).
 pub(crate) async fn ensure_parent_accepts_children(
-  db: &PgPool,
+  db: impl sqlx::PgExecutor<'_>,
   workspace_id: Uuid,
   parent_view_id: Uuid,
 ) -> ApiResult<()> {
@@ -589,8 +593,31 @@ pub(crate) async fn ensure_parent_accepts_children(
   Ok(())
 }
 
+/// Serialize tree-reparenting within a workspace for the rest of the
+/// transaction (gh#46). Two moves that swap a folder and one of its
+/// descendants each passed the cycle check against a snapshot taken before the
+/// other committed, then wrote — and produced a cycle no live-subtree walk
+/// could ever return from. Taking this lock BEFORE validating means the second
+/// transaction re-reads AFTER the first committed and the check sees the real
+/// tree. Scoped to the workspace: moves in one workspace never wait on another.
+pub(crate) async fn lock_workspace_tree(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  workspace_id: Uuid,
+) -> ApiResult<()> {
+  sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+    .bind(workspace_id)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
+}
+
+/// gh#46 made this transaction-bound: both call sites reparent views inside a
+/// transaction behind [lock_workspace_tree], and the cycle check must read the
+/// SAME snapshot as the write that follows it — a pool read could validate
+/// against a tree a concurrent move has since rewritten. A `&mut PgConnection`
+/// reborrows per query; the two checks below share the caller's connection.
 async fn ensure_valid_parent_view(
-  db: &PgPool,
+  db: &mut sqlx::PgConnection,
   workspace_id: Uuid,
   view_id: Uuid,
   parent_view_id: Uuid,
@@ -601,8 +628,13 @@ async fn ensure_valid_parent_view(
     ));
   }
 
-  ensure_parent_accepts_children(db, workspace_id, parent_view_id).await?;
+  ensure_parent_accepts_children(&mut *db, workspace_id, parent_view_id).await?;
 
+  // `CYCLE`: without it this walk has no way home if a cycle ever lands in
+  // the table (one pre-cycle-guard row pair, one stray trigger, one dbadmin
+  // fix-up), and the query would recurse until the session gives up. A
+  // repeated row is NOT a descendant of `$1` — it was reached on a loop — so
+  // it must not answer the cycle question either.
   let would_cycle = sqlx::query_scalar::<_, bool>(
     r#"
       WITH RECURSIVE descendants (id) AS (
@@ -614,18 +646,18 @@ async fn ensure_valid_parent_view(
         FROM views v
         INNER JOIN descendants d ON v.parent_view_id = d.id
         WHERE v.workspace_id = $2 AND v.is_deleted = false
-      )
+      ) CYCLE id SET is_cycle USING cycle_path
       SELECT EXISTS (
         SELECT 1
         FROM descendants
-        WHERE id = $3
+        WHERE id = $3 AND NOT is_cycle
       )
     "#,
   )
   .bind(view_id)
   .bind(workspace_id)
   .bind(parent_view_id)
-  .fetch_one(db)
+  .fetch_one(&mut *db)
   .await?;
 
   if would_cycle {

@@ -18,7 +18,25 @@ use rmcp::{
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use uuid::Uuid;
+
+/// Outbound-call bounds (#45): a bare `reqwest::Client::new()` waits forever,
+/// so one wedged connection would have parked the MCP tool call (and the agent
+/// waiting on it) with no error at all. Connect and total bounds cover every
+/// tool uniformly; the total is generous because export/markdown reads a whole
+/// document. `MICA_HTTP_TIMEOUT_SECS` overrides the total for slow links.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn request_timeout() -> Duration {
+  std::env::var("MICA_HTTP_TIMEOUT_SECS")
+    .ok()
+    .and_then(|v| v.trim().parse::<u64>().ok())
+    .filter(|secs| *secs > 0)
+    .map(Duration::from_secs)
+    .unwrap_or(DEFAULT_REQUEST_TIMEOUT)
+}
 
 #[derive(Clone)]
 struct MicaMcp {
@@ -47,7 +65,11 @@ struct MicaMcp {
 impl MicaMcp {
   fn new(base: String, pat: String, read_only: bool) -> Self {
     Self {
-      http: reqwest::Client::new(),
+      http: reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(request_timeout())
+        .build()
+        .expect("building the MCP HTTP client (TLS backend init)"),
       base: base.trim_end_matches('/').to_string(),
       pat,
       read_only,

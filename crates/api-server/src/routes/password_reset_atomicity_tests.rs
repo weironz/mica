@@ -16,7 +16,7 @@ async fn fixture() -> Option<PgPool> {
     .await
     .unwrap();
   sqlx::raw_sql(
-    "CREATE TEMP TABLE users (id uuid PRIMARY KEY, password_hash text, updated_at timestamptz, deleted_at timestamptz);
+    "CREATE TEMP TABLE users (id uuid PRIMARY KEY, password_hash text, updated_at timestamptz, deleted_at timestamptz, credential_epoch bigint DEFAULT 0);
      CREATE TEMP TABLE password_reset_tokens (token_hash text PRIMARY KEY, user_id uuid, expires_at timestamptz, used_at timestamptz);
      CREATE TEMP TABLE refresh_tokens (user_id uuid, revoked_at timestamptz CHECK (revoked_at IS NULL));
      CREATE TEMP TABLE api_tokens (user_id uuid);",

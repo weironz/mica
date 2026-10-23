@@ -406,7 +406,7 @@ pub(crate) async fn delete_objects<'a>(
   storage: &mica_infra::storage::S3Config,
   keys: impl Iterator<Item = (Uuid, &'a str)>,
 ) {
-  let http = reqwest::Client::new();
+  let http = crate::http_client::outbound_client();
   for (workspace_id, key) in keys {
     // S3 deletion is an immediate best effort. The committed ledger remains
     // available to GC even when this request is interrupted or S3 rejects it.

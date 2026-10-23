@@ -107,7 +107,7 @@ pub async fn put_avatar(
   let object_key = format!("avatars/{user_id}/{hash}.{ext}");
 
   // Same self-issued presigned PUT the importer uses (files::store_bytes).
-  let client = reqwest::Client::new();
+  let client = crate::http_client::outbound_client();
   // Server-side upload: this process sends the PUT, so it must be signed for
   // the address THIS process can reach, not the browser's.
   let upload = storage.presign_put_server(&object_key);
@@ -222,7 +222,11 @@ async fn discard_object(state: &AppState, previous: Option<&str>, keeping: &str)
   }
   let Ok(storage) = storage(state) else { return };
   let url = storage.presign_delete(previous);
-  if let Err(error) = reqwest::Client::new().delete(&url).send().await {
+  if let Err(error) = crate::http_client::outbound_client()
+    .delete(&url)
+    .send()
+    .await
+  {
     tracing::warn!(%previous, %error, "avatar: could not delete the replaced object");
   }
 }

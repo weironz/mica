@@ -23,14 +23,34 @@
 //! On Unix the rename is atomic on the same filesystem and the running process
 //! keeps its inode, so the same "download beside it, then rename into place"
 //! shape works there without the aside step.
+//!
+//! Before any of that, the download is held to three checks (issue #38): the
+//! bytes must match the release's `sha256-<os>.txt` manifest, the binary must
+//! run and report exactly the version it claims, and the version must not be
+//! OLDER than the one running unless `--force` says so. A self-update that
+//! silently swaps in a tampered, broken, or older binary is worse than no
+//! update at all.
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Where releases come from. Hardcoded rather than configurable: this command
 /// replaces the binary you are running, and "which repo do I trust to hand me an
 /// executable" is not a knob worth having.
 const REPO: &str = "weironz/mica";
+
+/// Budget for the small requests — the release JSON and the checksum manifest,
+/// a few KB each. Anything this slow is a stuck connection, not a slow one.
+const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whole-request budget for the binary download. This used to be a client-wide
+/// 120s that covered the download BODY too, which aborted slow-but-healthy
+/// transfers of an ~8 MB binary — the tight cap belongs to the metadata, and
+/// the payload gets a generous one of its own.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The asset this platform can actually run.
 ///
@@ -54,6 +74,7 @@ fn latest_version(http: &reqwest::blocking::Client) -> Result<String> {
   let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
   let body: serde_json::Value = http
     .get(&url)
+    .timeout(METADATA_TIMEOUT)
     .send()
     .context("asking GitHub for the latest release")?
     .error_for_status()
@@ -65,6 +86,25 @@ fn latest_version(http: &reqwest::blocking::Client) -> Result<String> {
     .and_then(serde_json::Value::as_str)
     .context("the latest release has no tag_name")?;
   Ok(tag.trim_start_matches('v').to_string())
+}
+
+/// Parse a version the way updates are JUDGED: as a `semver::Version`, never as
+/// text. Textual handling is where `contains("0.13.5")` used to accept
+/// `0.13.55`, and where a "latest" older than the running build looked
+/// installable.
+fn parse_version(raw: &str) -> Result<semver::Version> {
+  raw
+    .trim()
+    .trim_start_matches('v')
+    .parse()
+    .with_context(|| format!("{raw:?} is not a release version (want X.Y.Z)"))
+}
+
+/// The first version-shaped word in `--version` output (`mica-cli 0.13.64`).
+fn version_in(text: &str) -> Option<semver::Version> {
+  text
+    .split_whitespace()
+    .find_map(|word| word.trim_start_matches('v').parse().ok())
 }
 
 pub struct UpdateOutcome {
@@ -82,7 +122,7 @@ pub fn run(
   check_only: bool,
   force: bool,
 ) -> Result<UpdateOutcome> {
-  let current = env!("CARGO_PKG_VERSION").to_string();
+  let current = parse_version(env!("CARGO_PKG_VERSION"))?;
   let exe = std::env::current_exe().context("locating this executable")?;
   // A symlinked install (Homebrew, ~/.local/bin pointing elsewhere) must be
   // followed, or the update replaces the LINK with a regular file and the real
@@ -93,12 +133,15 @@ pub fn run(
     // GitHub's API 403s a request with no User-Agent — the same trap
     // install.ps1 calls out.
     .user_agent(concat!("mica-cli/", env!("CARGO_PKG_VERSION")))
-    .timeout(std::time::Duration::from_secs(120))
+    // Connection-level only: a client-wide timeout also covers the download
+    // body, which is how 120s used to cut off transfers that were merely slow
+    // (see DOWNLOAD_TIMEOUT for the other half of this split).
+    .connect_timeout(METADATA_TIMEOUT)
     .build()?;
 
   let target = match want {
-    Some(v) => v.trim_start_matches('v').to_string(),
-    None => latest_version(&http)?,
+    Some(v) => parse_version(&v)?,
+    None => parse_version(&latest_version(&http)?)?,
   };
 
   if target == current && !force {
@@ -106,19 +149,29 @@ pub fn run(
       println!("mica-cli {current} is already the latest release.");
     }
     return Ok(UpdateOutcome {
-      from: current.clone(),
-      to: target,
+      from: current.to_string(),
+      to: target.to_string(),
       replaced: false,
       path: exe,
     });
+  }
+  // A downgrade must be a decision someone made with `--force`, never a side
+  // effect of "latest" lagging behind the running build — a dev build, or a
+  // rolled-back release. The old code replaced the newer binary with the older
+  // one without a word.
+  if target < current && !force {
+    bail!(
+      "mica-cli {current} is NEWER than {target} — refusing to downgrade. \
+       Pass --force to install {target} anyway."
+    );
   }
   if check_only {
     if !json {
       println!("mica-cli {current} -> {target} available. Run `mica-cli update` to install it.");
     }
     return Ok(UpdateOutcome {
-      from: current,
-      to: target,
+      from: current.to_string(),
+      to: target.to_string(),
       replaced: false,
       path: exe,
     });
@@ -136,12 +189,21 @@ pub fn run(
   let staged = exe.with_extension("new");
   download(&http, &url, &staged)?;
 
+  // Checksum BEFORE anything executes the bytes: a tampered or truncated
+  // download dies here, while the real binary is still in place and untouched.
+  // The manifest is published by the same chain that builds the binary; a
+  // release without one (or without our asset's line) is an error, not a skip —
+  // "no checksum available" must never quietly mean "no verification".
+  if let Err(error) = verify_checksum(&http, &target, &asset, &staged) {
+    let _ = std::fs::remove_file(&staged);
+    return Err(error);
+  }
+
   // Run what was just downloaded BEFORE letting it become the installed binary.
   //
-  // This is the check a size or a status code cannot make: it proves the bytes
-  // are a working executable for THIS machine and are the version they claim. A
-  // truncated download, an HTML error page saved as a binary, or the wrong
-  // architecture all fail here — while the real binary is still in place and
+  // This is the check a checksum cannot make: it proves the bytes are a working
+  // executable for THIS machine and are the version they claim. The wrong
+  // architecture still fails here — while the real binary is still in place and
   // untouched.
   if let Err(error) = verify(&staged, &target) {
     let _ = std::fs::remove_file(&staged);
@@ -155,8 +217,8 @@ pub fn run(
     println!("Any running MCP client keeps the OLD binary until it restarts.");
   }
   Ok(UpdateOutcome {
-    from: current,
-    to: target,
+    from: current.to_string(),
+    to: target.to_string(),
     replaced: true,
     path: exe,
   })
@@ -165,6 +227,7 @@ pub fn run(
 fn download(http: &reqwest::blocking::Client, url: &str, to: &Path) -> Result<()> {
   let mut resp = http
     .get(url)
+    .timeout(DOWNLOAD_TIMEOUT)
     .send()
     .with_context(|| format!("downloading {url}"))?
     .error_for_status()
@@ -193,8 +256,90 @@ fn download(http: &reqwest::blocking::Client, url: &str, to: &Path) -> Result<()
   Ok(())
 }
 
-/// `<staged> --version` must run and report [want].
-fn verify(staged: &Path, want: &str) -> Result<()> {
+/// Verify the staged download against the release's `sha256-<os>.txt`.
+///
+/// The manifest is what the release chain publishes alongside every asset
+/// (`scripts/release-artifacts.sh` locally, the release workflow in CI):
+/// `sha256sum` output, one `<digest>  <name>` line per file.
+fn verify_checksum(
+  http: &reqwest::blocking::Client,
+  target: &semver::Version,
+  asset: &str,
+  staged: &Path,
+) -> Result<()> {
+  let url = format!(
+    "https://github.com/{REPO}/releases/download/v{target}/sha256-{}.txt",
+    std::env::consts::OS
+  );
+  let manifest = http
+    .get(&url)
+    .timeout(METADATA_TIMEOUT)
+    .send()
+    .with_context(|| format!("fetching {url}"))?
+    .error_for_status()
+    .with_context(|| {
+      format!(
+        "{url} is missing — this release carries no checksums, so its binaries cannot be verified"
+      )
+    })?
+    .text()
+    .context("reading the checksum manifest")?;
+  let expected = checksum_for(&manifest, asset).with_context(|| {
+    format!("no checksum for {asset} in {url} — refusing to install unverified bytes")
+  })?;
+  let actual = sha256_of(staged)?;
+  if !expected.eq_ignore_ascii_case(&actual) {
+    bail!(
+      "checksum mismatch for {asset}: the release says {expected}, the \
+       download says {actual} — nothing was replaced"
+    );
+  }
+  Ok(())
+}
+
+/// The digest `sha256sum` writes for `asset`, out of a manifest.
+///
+/// Matches the WHOLE file name, never a substring — `contains`-style matching
+/// would hand back the linux digest for the windows asset.
+fn checksum_for(manifest: &str, asset: &str) -> Option<String> {
+  for line in manifest.lines() {
+    let mut fields = line.split_whitespace();
+    let (Some(digest), Some(name)) = (fields.next(), fields.next()) else {
+      continue;
+    };
+    // `sha256sum` marks binary-mode lines `*name`; both spellings must match.
+    if name.strip_prefix('*').unwrap_or(name) == asset {
+      return Some(digest.to_ascii_lowercase());
+    }
+  }
+  None
+}
+
+/// The sha256 of a file on disk, hex, lower-case — streamed, because the
+/// binary it hashes is several MB.
+fn sha256_of(path: &Path) -> Result<String> {
+  let mut file = std::fs::File::open(path)
+    .with_context(|| format!("reading {} back for its checksum", path.display()))?;
+  let mut hasher = Sha256::new();
+  let mut buffer = [0u8; 64 * 1024];
+  loop {
+    let read = file
+      .read(&mut buffer)
+      .with_context(|| format!("reading {}", path.display()))?;
+    if read == 0 {
+      break;
+    }
+    hasher.update(&buffer[..read]);
+  }
+  Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// `<staged> --version` must run and report EXACTLY [want].
+///
+/// This used to be `text.contains(want)`, which accepted a binary reporting
+/// `0.13.55` when `0.13.5` was wanted — a prefix is not a version. The output
+/// is parsed and compared as a whole version instead.
+fn verify(staged: &Path, want: &semver::Version) -> Result<()> {
   let out = std::process::Command::new(staged)
     .arg("--version")
     .output()
@@ -206,11 +351,14 @@ fn verify(staged: &Path, want: &str) -> Result<()> {
     );
   }
   let text = String::from_utf8_lossy(&out.stdout);
-  if !text.contains(want) {
-    bail!(
-      "downloaded binary reports {:?}, expected {want}",
+  let reported = version_in(&text).with_context(|| {
+    format!(
+      "the downloaded binary printed no version ({:?})",
       text.trim()
-    );
+    )
+  })?;
+  if reported != *want {
+    bail!("downloaded binary reports {reported}, expected {want}");
   }
   Ok(())
 }
@@ -353,5 +501,122 @@ mod tests {
       name.starts_with("mica-cli.old-"),
       "{name} would not match the sweep prefix"
     );
+  }
+
+  /// The three checks issue #38 asked for, pinned at the pure-function level:
+  /// semver ordering (not textual), exact version match (not `contains`),
+  /// and whole-name checksum lookup (not substring).
+
+  /// Ordering must be semver, not textual: "0.13.10" sorts after "0.13.9" as
+  /// versions, and "0.13.55" after "0.13.5" — the exact pair the old string
+  /// compare could not tell apart.
+  #[test]
+  fn versions_order_by_semver_not_text() {
+    assert!(parse_version("0.13.10").unwrap() > parse_version("0.13.9").unwrap());
+    assert!(parse_version("0.13.55").unwrap() > parse_version("0.13.5").unwrap());
+    assert!(parse_version("0.14.0").unwrap() > parse_version("0.13.99").unwrap());
+    // A release is NEWER than its own pre-release, the way a downgrade guard
+    // has to see it.
+    assert!(parse_version("0.14.0").unwrap() > parse_version("0.14.0-rc.1").unwrap());
+  }
+
+  /// The old `--version` check was `text.contains(want)`, so a binary
+  /// reporting 0.13.55 passed a want of 0.13.5.
+  #[test]
+  fn a_version_prefix_is_not_that_version() {
+    let want = parse_version("0.13.5").unwrap();
+    assert_eq!(version_in("mica-cli 0.13.5\n").unwrap(), want);
+    assert_ne!(version_in("mica-cli 0.13.55\n").unwrap(), want);
+  }
+
+  #[test]
+  fn version_in_reads_the_announced_version_and_rejects_the_rest() {
+    assert_eq!(
+      version_in("mica-cli 0.13.64\n").unwrap().to_string(),
+      "0.13.64"
+    );
+    assert_eq!(version_in("mica-cli v1.2.3").unwrap().to_string(), "1.2.3");
+    assert_eq!(
+      version_in("0.14.0-rc.1\n").unwrap().to_string(),
+      "0.14.0-rc.1"
+    );
+    assert!(
+      version_in("no version in here").is_none(),
+      "no word parses as a version"
+    );
+  }
+
+  /// `--to` accepts (and `latest_version` returns) strings; anything that is
+  /// not X.Y.Z must be refused before a URL is built from it.
+  #[test]
+  fn parse_version_strips_the_v_and_refuses_garbage() {
+    assert_eq!(parse_version("v0.13.5").unwrap().to_string(), "0.13.5");
+    assert_eq!(parse_version(" 0.13.5 ").unwrap().to_string(), "0.13.5");
+    assert!(parse_version("0.13").is_err(), "two components");
+    assert!(parse_version("latest").is_err(), "a word is not a version");
+    assert!(parse_version("").is_err(), "empty");
+  }
+
+  /// The manifest lookup must match the whole asset name: `contains`-style
+  /// matching would hand back the linux digest for the windows asset, and a
+  /// digest for a version you did not ask for.
+  #[test]
+  fn checksum_for_matches_the_whole_asset_name() {
+    let manifest = "1111111111111111111111111111111111111111111111111111111111111111  Mica-Setup-0.13.64.exe\n\
+                    2222222222222222222222222222222222222222222222222222222222222222  mica-cli-0.13.64-windows-x64.exe\n\
+                    3333333333333333333333333333333333333333333333333333333333333333  mica-cli-0.13.64-linux-x64\n";
+    assert_eq!(
+      checksum_for(manifest, "mica-cli-0.13.64-windows-x64.exe").unwrap(),
+      "2222222222222222222222222222222222222222222222222222222222222222"
+    );
+    assert_eq!(
+      checksum_for(manifest, "mica-cli-0.13.64-linux-x64").unwrap(),
+      "3333333333333333333333333333333333333333333333333333333333333333"
+    );
+    assert!(
+      checksum_for(manifest, "mica-cli-0.13.65-windows-x64.exe").is_none(),
+      "a version that is not in the manifest has no checksum"
+    );
+    assert!(checksum_for("", "anything").is_none());
+    // `sha256sum` binary mode writes `*name`; both spellings must match.
+    assert_eq!(
+      checksum_for(
+        "4444444444444444444444444444444444444444444444444444444444444444 *asset.bin",
+        "asset.bin"
+      )
+      .unwrap(),
+      "4444444444444444444444444444444444444444444444444444444444444444"
+    );
+    // Uppercase digests come back normalized, so the comparison cannot fail on
+    // spelling alone.
+    assert_eq!(
+      checksum_for(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA  asset.bin",
+        "asset.bin"
+      )
+      .unwrap(),
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+  }
+
+  /// The staged file is hashed from disk, streamed — the digest must be the
+  /// contents', not the path's.
+  #[test]
+  fn sha256_of_hashes_the_file_contents() {
+    let path = std::env::temp_dir().join(format!(
+      "mica-cli-sha-test-{}-{:x}.bin",
+      std::process::id(),
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+    ));
+    std::fs::write(&path, b"hello\n").unwrap();
+    // sha256("hello\n"), known independently of this code.
+    assert_eq!(
+      sha256_of(&path).unwrap(),
+      "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+    );
+    let _ = std::fs::remove_file(&path);
   }
 }

@@ -113,6 +113,11 @@ struct UserRow {
 struct Claims {
   sub: String,
   exp: usize,
+  /// Issued-at (unix seconds). Optional on the way IN so tokens minted before
+  /// #29 still decode — the PAT-mint epoch check treats a missing `iat` as 0,
+  /// which is exactly as untrusted as those tokens are.
+  #[serde(default)]
+  iat: Option<usize>,
 }
 
 /// `POST /api/auth/register`
@@ -153,7 +158,7 @@ pub async fn register(
   // account is that the password is made out of its own name.
   validate_password(&payload.password, &[&email, &display_name])?;
 
-  let password_hash = hash_password(&payload.password)?;
+  let password_hash = hash_password(&payload.password).await?;
 
   // One statement, so "is this the first account?" cannot be answered stale —
   // and `is_admin` is computed from the SAME snapshot as the guard, so the
@@ -251,11 +256,11 @@ pub async fn login(
     // unknown address immediately made "is this email registered?" a timing
     // question any caller could ask — the oracle `forgot` and `register` are
     // careful not to be.
-    let _ = verify_password(&payload.password, dummy_password_hash());
+    let _ = verify_password(&payload.password, dummy_password_hash().await).await;
     return Err(ApiError::Unauthorized);
   };
 
-  verify_password(&payload.password, &user.password_hash)?;
+  verify_password(&payload.password, &user.password_hash).await?;
   // AFTER the password check, on purpose: answering "confirm your email" to a
   // wrong password would tell a stranger the address is registered. Reaching this
   // line means the caller already knows the credentials.
@@ -404,17 +409,18 @@ pub async fn change_password(
   .await?
   .ok_or(ApiError::Unauthorized)?;
 
-  verify_password(&payload.current_password, &user.password_hash)?;
+  verify_password(&payload.current_password, &user.password_hash).await?;
   // AFTER the current password is proven, and with this user's own identifiers:
   // the row had to be fetched anyway, and checking first would let an
   // unauthenticated caller probe which passwords the policy accepts.
   validate_password(&payload.new_password, &[&user.email, &user.display_name])?;
-  let password_hash = hash_password(&payload.new_password)?;
+  let password_hash = hash_password(&payload.new_password).await?;
 
   sqlx::query(
     r#"
       UPDATE users
-      SET password_hash = $1, updated_at = now()
+      SET password_hash = $1, updated_at = now(),
+          credential_epoch = extract(epoch from now())::bigint
       WHERE id = $2
     "#,
   )
@@ -460,7 +466,7 @@ pub async fn delete_account(
   .fetch_optional(&state.db)
   .await?
   .ok_or(ApiError::Unauthorized)?;
-  verify_password(&payload.password, &user.password_hash)?;
+  verify_password(&payload.password, &user.password_hash).await?;
 
   let keys = delete_user_and_owned(
     &state.db,
@@ -484,7 +490,7 @@ pub async fn delete_account(
     // ever reaches them — a deleted account's picture used to stay in storage
     // forever. Best effort, after commit: the account is already gone.
     if let Some(avatar) = user.avatar_key.as_deref().filter(|key| !key.is_empty())
-      && let Err(error) = reqwest::Client::new()
+      && let Err(error) = crate::http_client::outbound_client()
         .delete(storage.presign_delete(avatar))
         .send()
         .await
@@ -604,10 +610,12 @@ async fn auth_response_in_family(
   user: UserRow,
   family_id: Uuid,
 ) -> ApiResult<AuthResponse> {
-  let expires_at = Utc::now() + Duration::seconds(state.config.access_token_ttl_seconds);
+  let now = Utc::now();
+  let expires_at = now + Duration::seconds(state.config.access_token_ttl_seconds);
   let claims = Claims {
     sub: user.id.to_string(),
     exp: expires_at.timestamp() as usize,
+    iat: Some(now.timestamp() as usize),
   };
   let access_token = encode(
     &Header::default(),
@@ -942,7 +950,7 @@ pub(crate) fn sha256_hex(input: &str) -> String {
 /// access token (full scope) — into the caller's id and scopes.
 pub(crate) async fn resolve_token(state: &AppState, token: &str) -> ApiResult<Auth> {
   if token.starts_with(PAT_PREFIX) {
-    return resolve_pat(state, token).await;
+    return resolve_pat(&state.db, token).await;
   }
   let user_id = user_id_from_token(state, token)?;
   Ok(Auth {
@@ -951,13 +959,24 @@ pub(crate) async fn resolve_token(state: &AppState, token: &str) -> ApiResult<Au
   })
 }
 
-async fn resolve_pat(state: &AppState, token: &str) -> ApiResult<Auth> {
+/// Resolve a PAT against the tokens table AND a live `users` row (#29): a
+/// tombstoned account's tokens die with it. Ordinarily that is redundant —
+/// `delete_account` deletes the rows outright — but a tombstone can also come
+/// from an admin operation, and the join keeps "deleted means done" true at
+/// the edge that matters rather than relying on every writer remembering.
+///
+/// Takes the pool, not `AppState`, for the same reason `ensure_user_exists`
+/// does: the rule stays testable against a real database alone.
+async fn resolve_pat(db: &sqlx::PgPool, token: &str) -> ApiResult<Auth> {
   let hash = sha256_hex(token);
   let row = sqlx::query_as::<_, PatRow>(
-    "SELECT user_id, scopes, expires_at FROM api_tokens WHERE token_hash = $1",
+    "SELECT t.user_id, t.scopes, t.expires_at \
+     FROM api_tokens t \
+     JOIN users u ON u.id = t.user_id AND u.deleted_at IS NULL \
+     WHERE t.token_hash = $1",
   )
   .bind(&hash)
-  .fetch_optional(&state.db)
+  .fetch_optional(db)
   .await?
   .ok_or(ApiError::Unauthorized)?;
 
@@ -977,7 +996,7 @@ async fn resolve_pat(state: &AppState, token: &str) -> ApiResult<Auth> {
        AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
   )
   .bind(&hash)
-  .execute(&state.db)
+  .execute(db)
   .await;
 
   let scopes = row.scopes.iter().filter_map(|s| Scope::parse(s)).collect();
@@ -1068,6 +1087,41 @@ pub(crate) async fn ensure_user_exists(db: &sqlx::PgPool, user_id: Uuid) -> ApiR
   .fetch_one(db)
   .await?;
   if exists {
+    Ok(())
+  } else {
+    Err(ApiError::Unauthorized)
+  }
+}
+
+/// May this caller MINT a personal access token? (#29)
+///
+/// Two checks the JWT itself cannot carry:
+///
+/// * the account must be LIVE — a stateless JWT keeps verifying after the
+///   account behind it was deleted, and minting a durable token for a
+///   tombstone resurrects it;
+/// * the JWT must be no older than the account's `credential_epoch` — bumped
+///   by password change and reset, so a token stolen from BEFORE the rotation
+///   can keep reading for its remaining hour but cannot convert itself into a
+///   PAT that outlives the rotation by years.
+///
+/// A missing `iat` (every token minted before #29 shipped) reads as 0: valid
+/// only against an account that has never rotated, same as before this check
+/// existed. 401, not 403 — the answer to "your credential predates this
+/// account" is to sign in again.
+pub(crate) async fn ensure_pat_mint_allowed(
+  db: &sqlx::PgPool,
+  user_id: Uuid,
+  iat: Option<u64>,
+) -> ApiResult<()> {
+  let epoch = sqlx::query_scalar::<_, i64>(
+    "SELECT credential_epoch FROM users WHERE id = $1 AND deleted_at IS NULL",
+  )
+  .bind(user_id)
+  .fetch_optional(db)
+  .await?
+  .ok_or(ApiError::Unauthorized)?;
+  if iat.unwrap_or(0) as i64 >= epoch {
     Ok(())
   } else {
     Err(ApiError::Unauthorized)
@@ -1253,15 +1307,31 @@ pub(crate) fn user_id_from_token(state: &AppState, token: &str) -> ApiResult<Uui
 /// stayed authorised for hours. Handing the deadline out here lets the socket
 /// enforce it — see `ws.rs`, which closes with 4401 when it passes.
 pub(crate) fn session_from_token(state: &AppState, token: &str) -> ApiResult<(Uuid, u64)> {
+  let claims = claims_from_token(state, token)?;
+  let user_id = Uuid::parse_str(&claims.sub).map_err(|_| ApiError::Unauthorized)?;
+  Ok((user_id, claims.exp as u64))
+}
+
+/// The user AND the issued-at of a signed access token. `session_from_token`
+/// answers "who and until when"; the PAT-mint route (#29) also needs "issued
+/// at" to weigh the token against the account's credential epoch.
+pub(crate) fn user_and_iat_from_token(
+  state: &AppState,
+  token: &str,
+) -> ApiResult<(Uuid, Option<u64>)> {
+  let claims = claims_from_token(state, token)?;
+  let user_id = Uuid::parse_str(&claims.sub).map_err(|_| ApiError::Unauthorized)?;
+  Ok((user_id, claims.iat.map(|iat| iat as u64)))
+}
+
+fn claims_from_token(state: &AppState, token: &str) -> ApiResult<Claims> {
   let token = decode::<Claims>(
     token,
     &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
     &Validation::default(),
   )
   .map_err(|_| ApiError::Unauthorized)?;
-
-  let user_id = Uuid::parse_str(&token.claims.sub).map_err(|_| ApiError::Unauthorized)?;
-  Ok((user_id, token.claims.exp as u64))
+  Ok(token.claims)
 }
 
 /// Axum middleware: authenticate every request on the routes it is layered
@@ -1333,12 +1403,22 @@ fn validate_password(password: &str, identifiers: &[&str]) -> ApiResult<()> {
     .map_err(|weak| ApiError::BadRequest(weak.message().to_string()))
 }
 
-pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
-  let salt = SaltString::generate(&mut OsRng);
-  Argon2::default()
-    .hash_password(password.as_bytes(), &salt)
-    .map(|hash| hash.to_string())
-    .map_err(|error| ApiError::Internal(error.to_string()))
+/// Argon2 is deliberately expensive CPU work (tens of ms and ~19 MiB per op),
+/// so it runs on `spawn_blocking` (#42): on a tokio worker it stalls every
+/// other task that worker multiplexes — the WS loops, `/ready` — and a few
+/// concurrent logins were visible as exactly that. How many may run at once is
+/// separately bounded by the Argon2 semaphore (rate_limit.rs).
+pub(crate) async fn hash_password(password: &str) -> ApiResult<String> {
+  let password = password.to_string();
+  tokio::task::spawn_blocking(move || {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+      .hash_password(password.as_bytes(), &salt)
+      .map(|hash| hash.to_string())
+      .map_err(|error| ApiError::Internal(error.to_string()))
+  })
+  .await
+  .map_err(|error| ApiError::Internal(error.to_string()))?
 }
 
 /// Startup hook for `MICA_SEED_TEST_USER`: upsert the test account so E2E
@@ -1346,8 +1426,9 @@ pub(crate) fn hash_password(password: &str) -> ApiResult<String> {
 /// it already exists. Production never reaches here (AppConfig strips the
 /// variable there).
 pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> anyhow::Result<()> {
-  let password_hash =
-    hash_password(password).map_err(|error| anyhow::anyhow!("hash failed: {error:?}"))?;
+  let password_hash = hash_password(password)
+    .await
+    .map_err(|error| anyhow::anyhow!("hash failed: {error:?}"))?;
   // Seeded already-verified, and this is not optional: a seeded account has no
   // inbox anyone can check, so leaving `email_verified_at` NULL would make the
   // whole mechanism useless — the account would exist and be unable to sign in.
@@ -1372,20 +1453,32 @@ pub async fn seed_test_user(db: &sqlx::PgPool, email: &str, password: &str) -> a
 
 /// A real Argon2 hash (same default parameters as every stored one) of a
 /// random password nobody knows, computed once — for [login]'s unknown-email
-/// path to verify against.
-fn dummy_password_hash() -> &'static str {
-  static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// path to verify against. An async cell because the one-time hash goes through
+/// [`hash_password`]'s `spawn_blocking` like every other one.
+async fn dummy_password_hash() -> &'static str {
+  static HASH: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
   HASH
-    .get_or_init(|| hash_password(&Uuid::new_v4().to_string()).expect("hashing a random password"))
+    .get_or_init(|| async {
+      hash_password(&Uuid::new_v4().to_string())
+        .await
+        .expect("hashing a random password")
+    })
+    .await
 }
 
-fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {
-  let parsed_hash =
-    PasswordHash::new(password_hash).map_err(|error| ApiError::Internal(error.to_string()))?;
+async fn verify_password(password: &str, password_hash: &str) -> ApiResult<()> {
+  let password = password.to_string();
+  let password_hash = password_hash.to_string();
+  tokio::task::spawn_blocking(move || {
+    let parsed_hash =
+      PasswordHash::new(&password_hash).map_err(|error| ApiError::Internal(error.to_string()))?;
 
-  Argon2::default()
-    .verify_password(password.as_bytes(), &parsed_hash)
-    .map_err(|_| ApiError::Unauthorized)
+    Argon2::default()
+      .verify_password(password.as_bytes(), &parsed_hash)
+      .map_err(|_| ApiError::Unauthorized)
+  })
+  .await
+  .map_err(|error| ApiError::Internal(error.to_string()))?
 }
 
 /// Take the registration lock and attempt the insert, in one transaction.
@@ -1532,11 +1625,41 @@ mod tests {
     assert_eq!(later, serde_json::json!({"verified": false}));
   }
 
+  /// Tokens minted before #29 carry no `iat`; they must still decode, with the
+  /// absence visible so the PAT-mint epoch check can weigh them as "`iat` 0".
+  #[test]
+  fn claims_without_iat_still_decode() {
+    let legacy: Claims = serde_json::from_str(r#"{"sub":"u","exp":1}"#).unwrap();
+    assert_eq!(legacy.iat, None);
+    let current: Claims = serde_json::from_str(r#"{"sub":"u","exp":1,"iat":5}"#).unwrap();
+    assert_eq!(current.iat, Some(5));
+  }
+
   // Refresh and resend-verification MUST stay reachable with no access token
   // (the caller's is dead / does not exist yet — that is the whole point);
   // both shipped broken under a router-wide guard before. They are covered
   // now by `route_layer_tests::the_credential_and_mail_endpoints_are_throttled`
   // in routes/mod.rs, which drives them through the real router.
+
+  /// #42: hash and verify now cross `spawn_blocking`, so the roundtrip has to
+  /// complete as a FUTURE on a runtime — the sync version's "works" said
+  /// nothing about the async wiring (a panic or JoinError inside the closure
+  /// surfaces here as an ApiError, not as a hang).
+  #[tokio::test]
+  async fn hashed_passwords_verify_across_the_blocking_boundary() {
+    let hash = hash_password("correct horse battery staple").await.unwrap();
+    assert!(
+      verify_password("correct horse battery staple", &hash)
+        .await
+        .is_ok()
+    );
+    assert!(matches!(
+      verify_password("Tr0ub4dor&3", &hash).await,
+      Err(ApiError::Unauthorized)
+    ));
+    // The unknown-email decoy must be a real, parseable Argon2 hash too.
+    assert!(PasswordHash::new(dummy_password_hash().await).is_ok());
+  }
 }
 
 /// The rotation's correctness IS its SQL — the conditional UPDATE is what makes
@@ -2097,6 +2220,84 @@ mod refresh_pg {
       "the intruder's PAT dies with the password"
     );
     assert_eq!(count(other).await, 1, "other users' tokens are untouched");
+  }
+
+  /// #29: `resolve_pat` used to answer from `api_tokens` alone, so a tombstoned
+  /// account's surviving rows kept working. The join with a live `users` row is
+  /// what makes "deleted means done" hold at the credential edge.
+  #[tokio::test]
+  async fn a_pat_dies_with_its_account() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let token = mint_secret(PAT_PREFIX);
+    sqlx::query(
+      "INSERT INTO api_tokens (user_id, name, token_hash, scopes) VALUES ($1, 'x', $2, ARRAY['write'])",
+    )
+    .bind(user)
+    .bind(sha256_hex(&token))
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let auth = resolve_pat(&db, &token)
+      .await
+      .expect("a live account's PAT resolves");
+    assert_eq!(auth.user_id, user);
+
+    sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    assert!(
+      matches!(resolve_pat(&db, &token).await, Err(ApiError::Unauthorized)),
+      "a tombstoned account's PAT must not resolve, even while its row exists"
+    );
+  }
+
+  /// #29: minting a PAT is refused to a JWT older than the account's
+  /// `credential_epoch` — a credential stolen before a password rotation can
+  /// otherwise turn a one-hour compromise into a permanent one.
+  #[tokio::test]
+  async fn a_jwt_older_than_the_credential_epoch_cannot_mint_a_pat() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+
+    // A fresh account has epoch 0: every JWT passes, including pre-#29 tokens
+    // with no `iat` at all — nothing has rotated yet.
+    assert!(ensure_pat_mint_allowed(&db, user, Some(100)).await.is_ok());
+    assert!(ensure_pat_mint_allowed(&db, user, None).await.is_ok());
+
+    sqlx::query("UPDATE users SET credential_epoch = 200 WHERE id = $1")
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    assert!(
+      ensure_pat_mint_allowed(&db, user, Some(199)).await.is_err(),
+      "issued before the rotation"
+    );
+    assert!(
+      ensure_pat_mint_allowed(&db, user, None).await.is_err(),
+      "a token without `iat` predates every rotation"
+    );
+    assert!(
+      ensure_pat_mint_allowed(&db, user, Some(200)).await.is_ok(),
+      "issued AT the rotation counts as fresh"
+    );
+
+    // No live row at all — a tombstone cannot mint, whatever the token says.
+    sqlx::query("UPDATE users SET deleted_at = now() WHERE id = $1")
+      .bind(user)
+      .execute(&db)
+      .await
+      .unwrap();
+    assert!(matches!(
+      ensure_pat_mint_allowed(&db, user, Some(u64::MAX)).await,
+      Err(ApiError::Unauthorized)
+    ));
   }
 
   #[tokio::test]

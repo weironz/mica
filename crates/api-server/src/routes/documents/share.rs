@@ -10,6 +10,7 @@ use mica_app_core::{
   store::{self},
 };
 use mica_infra::ApiResult;
+use mica_markdown::SAFE_HTML_CSP;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -120,23 +121,22 @@ pub async fn public_share_page(
   (
     [
       (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-      // The share page is server-rendered static HTML that needs no JS. A
-      // strict CSP with no `script-src` falls back to `default-src 'none'`,
-      // which neutralizes inline `<script>` AND `on*` event handlers (e.g.
-      // `<img onerror>`) that survive the GFM tagfilter in raw-HTML content —
-      // the storage-XSS -> token-theft vector. `img-src`/`font-src`/`style-src`
-      // match what `render_share_shell` actually uses (inline CSS, blob/data
-      // images, system fonts).
-      (header::CONTENT_SECURITY_POLICY, SHARE_CSP),
+      // The share page is server-rendered static HTML that needs no JS. It
+      // carries THE SAME policy the HTML export embeds as a <meta>
+      // (`SAFE_HTML_CSP` — one constant, so the two surfaces cannot drift):
+      // no `script-src` falls back to `default-src 'none'`, which neutralizes
+      // inline `<script>` AND `on*` event handlers (e.g. `<img onerror>`) that
+      // survive the GFM tagfilter in raw-HTML content — the storage-XSS ->
+      // token-theft vector. `form-action 'none'` blocks same-origin form
+      // phishing, `base-uri 'none'` blocks relative-link hijacking, and
+      // `img-src`/`font-src`/`style-src` match what `render_share_shell`
+      // actually uses (inline CSS, blob/data images, system fonts).
+      (header::CONTENT_SECURITY_POLICY, SAFE_HTML_CSP),
     ],
     html,
   )
     .into_response()
 }
-
-/// CSP for the public share page. No `script-src` -> inline scripts and `on*`
-/// event handlers are blocked via the `default-src 'none'` fallback.
-const SHARE_CSP: &str = "default-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:";
 
 /// Wrap the HTML export fragment in a standalone, readable page. `noindex`
 /// unless the share opted into indexing, so a shared page is not silently

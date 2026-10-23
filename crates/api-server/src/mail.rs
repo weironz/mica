@@ -90,7 +90,7 @@ impl DirectMailMailer {
       from_alias,
       endpoint,
       region_id,
-      client: reqwest::Client::new(),
+      client: crate::http_client::outbound_client(),
     })
   }
 

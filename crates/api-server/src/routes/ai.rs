@@ -157,6 +157,12 @@ pub async fn complete(
 }
 
 /// `GET /api/ai/settings` — current AI configuration (never returns the key).
+///
+/// The full shape is for admins; a plain signed-in user learns only whether
+/// the operator has configured AI at all (#35). The endpoint, model, key hint
+/// and stored-vendor list describe infrastructure the operator did not choose
+/// to publish — on an open-registration instance "signed in" includes
+/// strangers, and `base_url` alone is worth a targeted attack.
 pub async fn get_settings(
   State(state): State<AppState>,
   headers: HeaderMap,
@@ -168,8 +174,11 @@ pub async fn get_settings(
     .fetch_optional(&state.db)
     .await?
     .unwrap_or(false);
+  if !can_edit {
+    return Ok(Json(AiSettingsResponse::for_non_admin(config.is_some())));
+  }
   let mut response = settings_response(config.as_ref());
-  response.can_edit = can_edit;
+  response.can_edit = true;
   response.configured_providers = configured_providers(&state).await;
   Ok(Json(response))
 }
@@ -309,6 +318,19 @@ pub async fn delete_provider(
   Ok(Json(response))
 }
 
+impl AiSettingsResponse {
+  /// The everything-scrubbed shape a non-admin gets (#35): `configured` answers
+  /// "may I offer the AI buttons", `can_edit` stays false, and nothing else
+  /// the operator set is visible.
+  fn for_non_admin(configured: bool) -> Self {
+    AiSettingsResponse {
+      configured,
+      can_edit: false,
+      ..settings_response(None)
+    }
+  }
+}
+
 fn settings_response(config: Option<&AiConfig>) -> AiSettingsResponse {
   match config {
     Some(config) => AiSettingsResponse {
@@ -373,7 +395,7 @@ async fn generate_anthropic(config: &AiConfig, system: &str, prompt: &str) -> Ap
   let body = build_request(config, system, prompt, false);
 
   let payload = send(
-    reqwest::Client::new()
+    crate::http_client::ai_client()
       .post(config.endpoint())
       .header("x-api-key", &config.api_key)
       .header("anthropic-version", &config.anthropic_version)
@@ -402,7 +424,7 @@ async fn generate_anthropic(config: &AiConfig, system: &str, prompt: &str) -> Ap
 async fn generate_openai(config: &AiConfig, system: &str, prompt: &str) -> ApiResult<String> {
   let body = build_request(config, system, prompt, false);
 
-  let mut request = reqwest::Client::new()
+  let mut request = crate::http_client::ai_client()
     .post(config.endpoint())
     .header("content-type", "application/json")
     .json(&body);
@@ -538,11 +560,14 @@ fn models_url_candidates(base_url: &str) -> Vec<String> {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ListModelsQuery {
+pub struct ListModelsRequest {
   /// Probe THESE settings instead of the saved ones, so an admin can pick a
   /// provider and see its models before committing the change. Omitted fields
   /// fall back to what is stored.
   base_url: Option<String>,
+  /// In the BODY, never the query string (#30): a URL lands in nginx access
+  /// logs and every request-logging layer along the way, and a key in it is a
+  /// key leaked to everyone who can read logs.
   api_key: Option<String>,
   provider: Option<String>,
   /// Which stored vendor the form is showing. Its row — not whichever vendor
@@ -558,17 +583,20 @@ pub struct ListModelsResponse {
   endpoint: String,
 }
 
-/// `GET /api/ai/models` — the provider's own model list.
+/// `POST /api/ai/models` — the provider's own model list.
 ///
 /// Admin-only, and not merely because it is a settings screen: the probe spends
 /// the operator's key against a URL the caller supplies. That is also why the
 /// model list is never hardcoded — every vendor renames and retires models on
 /// its own schedule, and a list baked into this binary is wrong the day after
 /// it ships. Asking the provider is the only answer that stays true.
+///
+/// POST with a JSON body (#30), not GET with a query string: the body carries
+/// the API key, and a key in a URL is a key in the access log.
 pub async fn list_models(
   State(state): State<AppState>,
   headers: HeaderMap,
-  axum::extract::Query(query): axum::extract::Query<ListModelsQuery>,
+  Json(query): Json<ListModelsRequest>,
 ) -> ApiResult<Json<ListModelsResponse>> {
   admin_id_from_headers(&state, &headers).await?;
   // The fallback is the vendor the form is ABOUT. Falling back to the active
@@ -624,7 +652,7 @@ pub async fn list_models(
     )));
   }
 
-  let client = reqwest::Client::new();
+  let client = crate::http_client::ai_client();
   let mut last_status: Option<String> = None;
   for url in &candidates {
     let mut request = client.get(url).timeout(std::time::Duration::from_secs(15));
@@ -689,7 +717,7 @@ pub async fn list_models(
 
 #[cfg(test)]
 mod models_endpoint_tests {
-  use super::{models_url_candidates, same_base_url};
+  use super::{AiSettingsResponse, models_url_candidates, same_base_url};
 
   /// The plain case: a bare host takes the OpenAI convention.
   #[test]
@@ -779,5 +807,28 @@ mod models_endpoint_tests {
   #[test]
   fn an_empty_base_has_no_candidates() {
     assert!(models_url_candidates("   ").is_empty());
+  }
+
+  /// #35: the non-admin shape must not carry a single byte of the operator's
+  /// config — assert it on the SERIALIZED response, because a field scrubbed in
+  /// Rust but still named in JSON is leaked by a later refactor.
+  #[test]
+  fn non_admin_settings_reveal_only_whether_ai_is_configured() {
+    for configured in [true, false] {
+      let json = serde_json::to_value(AiSettingsResponse::for_non_admin(configured)).unwrap();
+      assert_eq!(json["configured"], configured);
+      assert_eq!(json["can_edit"], false);
+      assert_eq!(json["has_key"], false);
+      for field in ["provider_id", "provider", "base_url", "model", "key_hint"] {
+        assert_eq!(json[field], "", "{field} must be scrubbed");
+      }
+      // Only the hardcoded default — nothing the operator ever set.
+      assert_eq!(json["max_tokens"], 2048);
+      assert_eq!(
+        json["configured_providers"],
+        serde_json::json!([]),
+        "the stored-vendor list is admin-only"
+      );
+    }
   }
 }

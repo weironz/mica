@@ -48,6 +48,9 @@ mica-core = { path = "../mica-core" }
 # guard), so its tests run against a real Postgres — see the DATABASE_URL-gated
 # module in routes/auth.rs.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Test-only: the WS client half for the incoming-message cap test (ws.rs) —
+# same version axum's `ws` feature already builds, so it adds no new code.
+tokio-tungstenite = "0.29"
 # Test-only: `ServiceExt::oneshot` drives the assembled routers in the
 # route-layering tests (routes/mod.rs and rate_limit.rs's route tests).
 tower = { version = "0.5", features = ["util"] }

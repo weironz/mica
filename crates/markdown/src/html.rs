@@ -879,10 +879,13 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
       i += 1;
       continue;
     }
-    // Emit `<`, optional `/`, then the tag name.
-    out.push('<');
+    // The tag is assembled in `tag` first and only appended once it has been
+    // fully parsed: a `<meta http-equiv=…>` must be DROPPED, and that is only
+    // knowable after its attributes have been scanned.
+    let mut tag = String::new();
+    tag.push('<');
     if closing {
-      out.push('/');
+      tag.push('/');
     }
     let name_start = j;
     while b
@@ -891,7 +894,15 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
     {
       j += 1;
     }
-    out.push_str(&s[name_start..j]);
+    let tag_name = &s[name_start..j];
+    tag.push_str(tag_name);
+    // `<meta http-equiv="refresh" content="0;url=…">` is a client-side redirect
+    // no CSP can veto (`form-action`/`base-uri` do not cover it): on the share
+    // page it makes a trusted URL bounce to an arbitrary site. No http-equiv
+    // value is meaningful in body content, so the whole tag is dropped. A
+    // `<meta>` WITHOUT http-equiv (charset, name=…) is inert and kept.
+    let is_meta = !closing && tag_name.eq_ignore_ascii_case("meta");
+    let mut meta_has_http_equiv = false;
     // Attribute region: loop until the tag terminator (`>` / `/>` / EOF).
     loop {
       let ws_start = j;
@@ -901,18 +912,18 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
       let ws = &s[ws_start..j];
       match b.get(j) {
         None => {
-          out.push_str(ws);
+          tag.push_str(ws);
           break;
         }
         Some(&b'>') => {
-          out.push_str(ws);
-          out.push('>');
+          tag.push_str(ws);
+          tag.push('>');
           j += 1;
           break;
         }
         Some(&b'/') if b.get(j + 1) == Some(&b'>') => {
-          out.push_str(ws);
-          out.push_str("/>");
+          tag.push_str(ws);
+          tag.push_str("/>");
           j += 2;
           break;
         }
@@ -929,8 +940,8 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
       if j == attr_start {
         // A stray char (e.g. a lone '/') that isn't a tag end — emit and move on
         // so the scanner can't stall.
-        out.push_str(ws);
-        out.push(b[j] as char);
+        tag.push_str(ws);
+        tag.push(b[j] as char);
         j += 1;
         continue;
       }
@@ -983,12 +994,18 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
         j = k;
       }
       let attr_text = &s[attr_start..j];
+      if is_meta && name.eq_ignore_ascii_case("http-equiv") {
+        meta_has_http_equiv = true;
+      }
       if is_unsafe_attr(name, value) {
         // Drop: skip the leading whitespace AND the attribute entirely.
       } else {
-        out.push_str(ws);
-        out.push_str(attr_text);
+        tag.push_str(ws);
+        tag.push_str(attr_text);
       }
+    }
+    if !(is_meta && meta_has_http_equiv) {
+      out.push_str(&tag);
     }
     // Advance the outer cursor past the tag the attribute loop just consumed
     // (`j` walked to the `>` / `/>` / EOF). Without this the outer `while` would

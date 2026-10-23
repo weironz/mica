@@ -362,6 +362,20 @@ pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResul
   Ok(html.trim_end().to_string())
 }
 
+/// The ONE Content Security Policy for every static page Mica renders onto a
+/// same-origin or offline surface: the HTTP header on the public share page AND
+/// the `<meta http-equiv>` of a downloaded HTML export carry this exact string,
+/// so the two surfaces cannot drift into different strengths. No `script-src`,
+/// so the `default-src 'none'` fallback blocks all script (tags AND `on*`
+/// handlers). `form-action 'none'` stops a raw `<form action=…>` from phishing
+/// off the trusted origin; `base-uri 'none'` stops a raw `<base href>` from
+/// hijacking relative links. (`<meta http-equiv="refresh">` slips past ANY of
+/// these directives — that one is dropped by the renderer itself, in
+/// `html.rs`'s `strip_unsafe_attrs`.) `img-src` allows `self`/data/https and —
+/// for exports opened from `file://`, whose image links are the author's own —
+/// plain http; nothing else can fetch anything anywhere.
+pub const SAFE_HTML_CSP: &str = "default-src 'none'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; form-action 'none'; base-uri 'none'";
+
 /// Wrap the [export_html] fragment in a standalone, self-contained HTML5
 /// document: UTF-8, a `<title>`/`<h1>` from `title`, and an embedded stylesheet
 /// giving readable typography for headings/code/tables/quotes/images. No
@@ -376,10 +390,10 @@ pub fn export_html_document(
 ) -> DocumentOperationResult<String> {
   let body = export_html(snapshot)?;
   // The downloaded file has no server to send the share page's CSP header, so
-  // it carries the same policy as a <meta>: no script at all (raw HTML blocks
-  // pass through by design, and a `<script>` or `on*=` in one ran when the
-  // file was opened). Images stay loadable — export inlines them as `data:`,
-  // and external ones are the author's own links.
+  // it carries the SAME policy as a <meta> ([SAFE_HTML_CSP]): no script at all
+  // (raw HTML blocks pass through by design, and a `<script>` or `on*=` in one
+  // ran when the file was opened). Images stay loadable — export inlines them
+  // as `data:`, and external ones are the author's own links.
   let safe_title = escape_html(title.trim());
   // The content column matches the AUTHOR's editor page width (WYSIWYG): a doc
   // exports as wide as it was written, not a hardcoded guess. Clamped to a sane
@@ -392,7 +406,7 @@ pub fn export_html_document(
   Ok(format!(
     "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-     <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:\">\n\
+     <meta http-equiv=\"Content-Security-Policy\" content=\"{SAFE_HTML_CSP}\">\n\
      <title>{safe_title}</title>\n<style>\n\
      body{{max-width:{width}px;margin:2.5rem auto;padding:0 1.5rem;\
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
@@ -1143,7 +1157,10 @@ mod page_title_tests {
 
 #[cfg(test)]
 mod security_tests {
-  use super::{export_html, import_markdown, strip_unsafe_attrs, tagfilter};
+  use super::{
+    SAFE_HTML_CSP, export_html, export_html_document, import_markdown, strip_unsafe_attrs,
+    tagfilter,
+  };
 
   // Pins what the GFM tagfilter does — and, crucially, what it does NOT do — for
   // raw HTML rendered onto a Mica same-origin surface (the public share page).
@@ -1302,6 +1319,78 @@ mod security_tests {
     assert!(
       html.contains("<img"),
       "the img tag itself should survive: {html}"
+    );
+  }
+
+  // Issue #31: `<meta http-equiv="refresh">` is a client-side redirect NO CSP
+  // directive covers, so a raw-HTML one made a trusted share URL bounce to an
+  // arbitrary site. The renderer drops the tag outright.
+  #[test]
+  fn meta_http_equiv_tags_are_dropped() {
+    let r =
+      strip_unsafe_attrs("<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\">");
+    assert!(r.is_empty(), "refresh meta survived: {r}");
+
+    // Case-insensitive in BOTH tag and attribute name — browsers are.
+    let m = strip_unsafe_attrs("<META HTTP-EQUIV=Refresh CONTENT=\"0; URL=//evil\">");
+    assert!(m.is_empty(), "mixed-case refresh meta survived: {m}");
+
+    // Unquoted / valueless http-equiv is still http-equiv.
+    let u = strip_unsafe_attrs("<meta http-equiv>");
+    assert!(u.is_empty(), "valueless http-equiv meta survived: {u}");
+
+    // A meta WITHOUT http-equiv is inert in body content — kept byte-for-byte.
+    assert_eq!(
+      strip_unsafe_attrs("<meta name=\"description\" content=\"笔记\">"),
+      "<meta name=\"description\" content=\"笔记\">"
+    );
+
+    // Dropping must not swallow the document around it.
+    assert_eq!(
+      strip_unsafe_attrs("前<meta http-equiv=\"refresh\" content=\"0;url=x\">后"),
+      "前后"
+    );
+  }
+
+  #[test]
+  fn meta_refresh_gone_from_the_full_export_pipeline() {
+    let md =
+      "<div>\n<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\">\n</div>\n";
+    let snapshot = import_markdown(md, "root");
+    let html = export_html(&snapshot).expect("export_html");
+    assert!(
+      !html.to_ascii_lowercase().contains("http-equiv"),
+      "meta refresh leaked into export: {html}"
+    );
+    assert!(
+      !html.contains("evil.example"),
+      "redirect target leaked into export: {html}"
+    );
+  }
+
+  // The constant the share page sends as a header and the export embeds as a
+  // <meta> is ONE string — pin the directives both surfaces must carry, and
+  // that the export actually embeds it.
+  #[test]
+  fn shared_csp_covers_form_action_and_base_uri() {
+    assert!(
+      SAFE_HTML_CSP.contains("form-action 'none'"),
+      "{SAFE_HTML_CSP}"
+    );
+    assert!(SAFE_HTML_CSP.contains("base-uri 'none'"), "{SAFE_HTML_CSP}");
+    assert!(
+      SAFE_HTML_CSP.contains("default-src 'none'"),
+      "{SAFE_HTML_CSP}"
+    );
+    assert!(!SAFE_HTML_CSP.contains("script-src"), "{SAFE_HTML_CSP}");
+
+    let doc = export_html_document(&import_markdown("正文。\n", "root"), "标题", 800)
+      .expect("export_html_document");
+    assert!(
+      doc.contains(&format!(
+        "http-equiv=\"Content-Security-Policy\" content=\"{SAFE_HTML_CSP}\""
+      )),
+      "the export must embed the shared policy verbatim: {doc}"
     );
   }
 }

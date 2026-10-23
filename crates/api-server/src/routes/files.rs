@@ -257,7 +257,7 @@ pub async fn complete(
   // Without this, `complete` could be called for a key nothing was ever written
   // to (a row pointing at nothing) or with a `byte_size` unrelated to the bytes
   // (a quota that counts a number the client invented).
-  let head = reqwest::Client::new()
+  let head = crate::http_client::outbound_client()
     .head(storage.presign_head_object_with_checksum(&payload.object_key))
     .header("x-amz-checksum-mode", "ENABLED")
     .send()

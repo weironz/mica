@@ -19,9 +19,13 @@ mica-cli update --to 0.13.28
 
 It talks to the GitHub release, not to a Mica server, so it works before
 `auth login` and while your server is down — which is when you may most need a
-newer CLI. It downloads beside the current binary, **runs `--version` on the
-download before installing it** (a truncated file or the wrong architecture
-fails there, while the real binary is still in place), then swaps it in.
+newer CLI. It downloads beside the current binary, **verifies the download
+against the release's `sha256-<os>.txt` manifest**, **runs `--version` on it and
+requires the exact version** (a truncated file, a tampered file, or the wrong
+architecture fails there, while the real binary is still in place), then swaps
+it in. It also **refuses to downgrade** — a release older than the running build
+needs `--force`, so "latest" lagging behind a dev build can never quietly swap
+in an older binary.
 
 Windows note, and the reason this is not a plain overwrite: Windows refuses to
 overwrite a **running** image but will happily rename it — and anyone using the

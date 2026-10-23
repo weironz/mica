@@ -73,11 +73,17 @@ pub async fn forgot(
           subject: "Reset your Mica password".to_string(),
           html_body: reset_email_html(&link),
         };
-        // Best-effort: a mail failure must not change the response (that would
-        // leak "this address exists"), so we only log it.
-        if let Err(error) = state.mailer.send(&mail).await {
-          tracing::warn!(%error, "failed to send password-reset email");
-        }
+        // SPAWN, don't await (#39): awaiting the send answered a registered
+        // address measurably later than an unknown one — SMTP latency is tens
+        // to hundreds of milliseconds, a timing oracle that re-opens the
+        // enumeration the uniform 204 exists to close. Best-effort unchanged:
+        // a mail failure only logs, never changes the response.
+        let mailer = state.mailer.clone();
+        tokio::spawn(async move {
+          if let Err(error) = mailer.send(&mail).await {
+            tracing::warn!(%error, "failed to send password-reset email");
+          }
+        });
       }
       Err(error) => {
         // Same reasoning: swallow so the timing/response can't be read as a
@@ -208,7 +214,7 @@ async fn consume_and_reset(
   new_password: &str,
 ) -> Result<(), ResetError> {
   let token_hash = sha256_hex(token);
-  let password_hash = hash_password(new_password).map_err(|error| {
+  let password_hash = hash_password(new_password).await.map_err(|error| {
     tracing::error!(%error, "password reset: hashing failed");
     ResetError::Internal
   })?;
@@ -240,7 +246,7 @@ async fn consume_and_reset(
   };
 
   let updated = sqlx::query(
-    "UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 AND deleted_at IS NULL",
+    "UPDATE users SET password_hash = $1, updated_at = now(), credential_epoch = extract(epoch from now())::bigint WHERE id = $2 AND deleted_at IS NULL",
   )
   .bind(password_hash)
   .bind(user_id)
@@ -488,6 +494,90 @@ mod reset_pg {
       .fetch_one(db)
       .await
       .unwrap()
+  }
+
+  /// A mailer whose send blocks until released, recording what it was asked
+  /// to send — the deterministic stand-in for "SMTP is slow", so the #39
+  /// timing test needs no sleep-based guessing about wall-clock durations.
+  #[derive(Default)]
+  struct GateMailer {
+    release: tokio::sync::Notify,
+    sent: std::sync::Mutex<Vec<Mail>>,
+  }
+
+  #[async_trait::async_trait]
+  impl mica_infra::Mailer for GateMailer {
+    async fn send(&self, mail: &Mail) -> anyhow::Result<()> {
+      self.release.notified().await;
+      self.sent.lock().unwrap().push(mail.clone());
+      Ok(())
+    }
+  }
+
+  fn timing_config() -> mica_infra::AppConfig {
+    mica_infra::AppConfig {
+      environment: mica_infra::Environment::Test,
+      http_addr: "127.0.0.1:0".parse().unwrap(),
+      database_url: String::new(),
+      database_max_connections: 1,
+      jwt_secret: "reset-timing-test-secret".to_string(),
+      ws_min_protocol: 1,
+      access_token_ttl_seconds: 60,
+      refresh_token_ttl_seconds: 60,
+      cors_allowed_origins: Vec::new(),
+      seed_test_user: None,
+      registration_enabled: false,
+      workspace_quota_bytes: 0,
+      owner_quota_bytes: 0,
+      search_index_mlock: false,
+      sync_tuning: Default::default(),
+      app_base_url: "http://localhost:8080".to_string(),
+    }
+  }
+
+  /// #39: awaiting the send made a REGISTERED address answer measurably later
+  /// than an unknown one — the timing oracle the uniform 204 exists to deny.
+  /// With the send parked behind the gate, the handler must still answer; the
+  /// mail then goes out once the gate opens.
+  #[tokio::test]
+  async fn forgot_answers_204_before_the_mail_goes_out() {
+    let Some(db) = pool().await else { return };
+    let user = seed_user(&db).await;
+    let email = format!("{user}@reset.test");
+    let mailer = std::sync::Arc::new(GateMailer::default());
+    let state = AppState::new(timing_config(), db.clone(), mailer.clone());
+
+    let response = tokio::time::timeout(
+      std::time::Duration::from_secs(5),
+      forgot(
+        axum::extract::State(state),
+        axum::Json(ForgotRequest {
+          email: email.clone(),
+        }),
+      ),
+    )
+    .await
+    .expect("forgot must not wait on the mail — that wait was the #39 oracle")
+    .expect("forgot answers Ok");
+    assert_eq!(response, StatusCode::NO_CONTENT);
+
+    // The mail still goes out — off-task — once the send is let through.
+    mailer.release.notify_one();
+    for _ in 0..100 {
+      if !mailer.sent.lock().unwrap().is_empty() {
+        break;
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let sent = mailer.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1, "the reset mail must still be sent");
+    assert_eq!(sent[0].to, email);
+
+    sqlx::query("DELETE FROM users WHERE id=$1")
+      .bind(user)
+      .execute(&db)
+      .await
+      .ok();
   }
 
   #[tokio::test]

@@ -10,7 +10,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -54,13 +54,42 @@ pub fn save(config: &Config) -> Result<()> {
     std::fs::create_dir_all(parent)?;
   }
   let json = serde_json::to_vec_pretty(config)?;
-  std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
-  // The token is a bearer credential — keep it owner-only where the OS supports it.
-  #[cfg(unix)]
-  {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+  write_private(&path, &json)?;
+  Ok(())
+}
+
+/// Write `bytes` to `path` so the file is never readable beyond its owner —
+/// not even in the window between the write and a follow-up chmod.
+///
+/// The old `fs::write` + `set_permissions` created the file with the umask
+/// default (typically 0644) and only tightened it AFTER the token had hit the
+/// disk — a world-readable window for a bearer credential. Creating with mode
+/// 0600 closes that; a file that already exists with loose permissions (an
+/// older CLI's write, or a copied-in config) is tightened BEFORE the new
+/// token is written, since `.mode()` applies only at creation.
+#[cfg(unix)]
+fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+  use std::io::Write;
+  use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+  if path.exists() {
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
   }
+  let mut file = std::fs::OpenOptions::new()
+    .write(true)
+    .create(true)
+    .truncate(true)
+    .mode(0o600)
+    .open(path)
+    .with_context(|| format!("writing {}", path.display()))?;
+  file
+    .write_all(bytes)
+    .with_context(|| format!("writing {}", path.display()))?;
+  Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+  std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
   Ok(())
 }
 
@@ -112,5 +141,64 @@ mod tests {
     // An empty object is a valid, all-None config.
     let cfg: Config = serde_json::from_str("{}").unwrap();
     assert!(cfg.server.is_none() && cfg.token.is_none());
+  }
+
+  // These write to an explicit path in the temp dir — unlike
+  // `config_path`/`load`/`save`, no environment variable is resolved, so the
+  // reasons above (unsafe env mutation under edition 2024, racing other
+  // tests) do not apply.
+
+  /// A scratch path unique to this test run, so parallel runs never share one.
+  fn scratch_path(label: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .unwrap()
+      .as_nanos();
+    std::env::temp_dir().join(format!(
+      "mica-cli-{label}-{}-{nanos:x}.json",
+      std::process::id()
+    ))
+  }
+
+  /// #41: the token is a bearer credential, and a file that lands with the
+  /// umask default (typically 0644) is world-readable for as long as it
+  /// exists that way. The old write-then-chmod left exactly that window; the
+  /// file must be born 0600 instead.
+  #[test]
+  fn a_new_file_is_born_owner_only() {
+    let path = scratch_path("born");
+    write_private(&path, br#"{"token":"secret"}"#).unwrap();
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(on_disk.contains("secret"), "the bytes must land");
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+      assert_eq!(
+        mode & 0o777,
+        0o600,
+        "a token file must never exist group/world-readable — not even briefly"
+      );
+    }
+    let _ = std::fs::remove_file(&path);
+  }
+
+  /// The repair half: `.mode()` only applies at creation, so a file that
+  /// already sits there with loose permissions (written by an older CLI, or
+  /// copied in) must be tightened by the next save — before the new token is
+  /// written into it, not after.
+  #[cfg(unix)]
+  #[test]
+  fn a_loose_existing_file_is_tightened_by_the_next_save() {
+    use std::os::unix::fs::PermissionsExt;
+    let path = scratch_path("tighten");
+    std::fs::write(&path, br#"{"token":"old"}"#).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    write_private(&path, br#"{"token":"new"}"#).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let _ = std::fs::remove_file(&path);
   }
 }

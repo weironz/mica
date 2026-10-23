@@ -67,18 +67,39 @@ struct ReplacementBlock {
 
 /// `POST /api/ai/edits/preview`: authenticated, pure validation of supplied
 /// editor content. No workspace/document ID is accepted or loaded from storage.
+///
+/// The whole build runs on `spawn_blocking` (#44): it parses Markdown —
+/// the mica engine has had quadratic corners (see the `*_perf.rs` tests), and
+/// even a clean linear parse of a large plan is tens of milliseconds a tokio
+/// worker cannot spare — and the caps below bound what it can be handed in
+/// the first place, so the blocking thread always comes back promptly.
 pub async fn preview(
   State(state): State<AppState>,
   headers: HeaderMap,
   Json(payload): Json<PreviewRequest>,
 ) -> ApiResult<Json<PreviewResponse>> {
   existing_user_id_from_headers(&state, &headers).await?;
-  Ok(Json(build_preview(payload)?))
+  let preview = tokio::task::spawn_blocking(move || build_preview(payload))
+    .await
+    .map_err(|error| ApiError::Internal(error.to_string()))??;
+  Ok(Json(preview))
 }
 
 fn invalid(message: &str) -> ApiError {
   ApiError::BadRequest(message.to_string())
 }
+
+/// Input ceilings for the preview (#44). The route already sits under axum's
+/// 2 MB default body limit, but that is a framework accident, not a decision
+/// about THIS payload: nothing on this path is stored, and a parse is only
+/// worth what its input is plausible as. Every cap below is an order of
+/// magnitude over what a real edit produces — an AI replacement for a block
+/// range, or the page snapshot it applies to — while keeping the Markdown
+/// engine's input small enough that even a returning quadratic corner
+/// (review D4) costs milliseconds, not seconds, on the blocking thread.
+const MAX_BLOCKS: usize = 10_000;
+const MAX_EDITS: usize = 1_000;
+const MAX_EDIT_MARKDOWN: usize = 512 * 1024;
 
 /// Accept only a JSON object, optionally surrounded by ONE whole-response JSON
 /// fence. Do not fish a JSON-looking substring out of prose or a truncated reply.
@@ -106,6 +127,9 @@ fn build_preview(payload: PreviewRequest) -> ApiResult<PreviewResponse> {
   if payload.blocks.is_empty() {
     return Err(invalid("Current page has no editable blocks"));
   }
+  if payload.blocks.len() > MAX_BLOCKS {
+    return Err(invalid("Current page snapshot is too large to preview"));
+  }
   let mut positions = HashMap::new();
   for (index, block) in payload.blocks.iter().enumerate() {
     if block.id.trim().is_empty() || positions.insert(block.id.as_str(), index).is_some() {
@@ -122,10 +146,18 @@ fn build_preview(payload: PreviewRequest) -> ApiResult<PreviewResponse> {
   if plan.edits.is_empty() {
     return Err(invalid("AI edit plan must contain at least one edit"));
   }
+  if plan.edits.len() > MAX_EDITS {
+    return Err(invalid("AI edit plan has too many edits"));
+  }
 
   let mut touched = HashSet::new();
   let mut ordered = Vec::with_capacity(plan.edits.len());
   for edit in plan.edits {
+    // Checked before anything is parsed: the cap's whole point is that the
+    // engine never sees an input this size.
+    if edit.markdown.len() > MAX_EDIT_MARKDOWN {
+      return Err(invalid("An AI edit replacement is too large to preview"));
+    }
     if edit.block_ids.is_empty() {
       return Err(invalid("Each AI edit must target at least one block"));
     }
@@ -564,5 +596,61 @@ mod tests {
       payload.response = response.into();
       assert!(build_preview(payload).is_err(), "{response}");
     }
+  }
+
+  /// #44: the input ceilings. Each is an order of magnitude over a real edit,
+  /// and each must refuse BEFORE the Markdown engine ever sees the input —
+  /// that ordering is the cap's entire value, so the tests take the input
+  /// right up to the boundary and one past it.
+  #[test]
+  fn ai_edits_reject_inputs_over_the_ceilings() {
+    // One-past-the-cap replacement markdown.
+    let mut payload = request(json!({"edits":[{"block_ids":["b"],"markdown":"New"}]}));
+    payload.response =
+      json!({"edits":[{"block_ids":["b"],"markdown":"x".repeat(MAX_EDIT_MARKDOWN + 1)}]})
+        .to_string();
+    assert!(build_preview(payload).is_err());
+
+    // One past the edit count.
+    let edits: Vec<_> = (0..=MAX_EDITS)
+      .map(|_| json!({"block_ids":["b"],"markdown":"x"}))
+      .collect();
+    assert!(build_preview(request(json!({"edits": edits}))).is_err());
+
+    // One past the page snapshot's block count.
+    let mut payload = request(json!({"edits":[{"block_ids":["b"],"markdown":"New"}]}));
+    payload.blocks = (0..=MAX_BLOCKS)
+      .map(|index| SourceBlock {
+        id: format!("b{index}"),
+        kind: "paragraph".into(),
+        text: "Keep".into(),
+        data: Value::Null,
+        children: vec![],
+      })
+      .collect();
+    payload.response = json!({"edits":[{"block_ids":["b0"],"markdown":"New"}]}).to_string();
+    assert!(build_preview(payload).is_err());
+  }
+
+  /// The ceilings sit far above anything real, so legitimate traffic must not
+  /// notice them: a replacement a hundredth of the cap, on a page a tenth of
+  /// the block cap, previews unchanged.
+  #[test]
+  fn ai_edits_ceiling_adjacent_inputs_still_preview() {
+    let mut payload = request(json!({}));
+    payload.blocks = (0..MAX_BLOCKS / 10)
+      .map(|index| SourceBlock {
+        id: format!("b{index}"),
+        kind: "paragraph".into(),
+        text: "Keep".into(),
+        data: Value::Null,
+        children: vec![],
+      })
+      .collect();
+    let markdown = "para\n\n".repeat(MAX_EDIT_MARKDOWN / 100 / 6);
+    payload.response = json!({"edits":[{"block_ids":["b0"],"markdown": markdown}]}).to_string();
+    let preview =
+      build_preview(payload).expect("an input well under every ceiling previews normally");
+    assert_eq!(preview.edits[0].block_ids, ["b0"]);
   }
 }

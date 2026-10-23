@@ -579,13 +579,14 @@ async fn rejects_garbage_update() {
   // no row on the stream.
   let err = sync::push_update(&db, ws, doc, user, &[9, 9, 9, 9], &tuning()).await;
   assert!(err.is_err(), "garbage update is rejected");
-  let head: i64 =
-    sqlx::query_scalar("SELECT MAX(rid) FROM workspace_updates WHERE document_id = $1")
-      .bind(doc)
-      .fetch_one(&db)
-      .await
-      .unwrap()
-      .unwrap_or(0);
+  let head: i64 = sqlx::query_scalar::<_, Option<i64>>(
+    "SELECT MAX(rid) FROM workspace_updates WHERE document_id = $1",
+  )
+  .bind(doc)
+  .fetch_one(&db)
+  .await
+  .unwrap()
+  .unwrap_or(0);
   assert_eq!(head, 0, "nothing persisted");
   cleanup(&db, ws, user).await;
 }
@@ -1419,6 +1420,34 @@ async fn a_title_written_into_the_document_moves_the_view_name() {
 
   assert!(!update.is_empty(), "a real title change produces an update");
   assert_eq!(stored_view_name(&db, doc).await, "新标题");
+
+  cleanup(&db, ws, user).await;
+}
+
+/// The REST/MCP op-model write path maintains the SAME projection: an
+/// `UpdateBlock` rewriting the root block's title renames the page (#50 — the
+/// sidebar name used to wait for the next collaborative push).
+#[tokio::test]
+async fn an_op_write_to_the_root_title_moves_the_view_name() {
+  let Some(db) = pool().await else {
+    eprintln!("skipping an_op_write_to_the_root_title_moves_the_view_name: no DATABASE_URL");
+    return;
+  };
+  let (ws, doc, user) = seed_doc(&db).await;
+  seed_view_for(&db, ws, doc, user, "原来的名字").await;
+
+  use mica_app_core::documents::DocumentOperation;
+  let ops = vec![DocumentOperation::UpdateBlock {
+    block_id: "r".to_string(),
+    kind: None,
+    text: None,
+    data: Some(json!({ "title": "REST 改的标题" })),
+  }];
+  store::apply_document_operations(&db, ws, doc, user, &ops)
+    .await
+    .unwrap();
+
+  assert_eq!(stored_view_name(&db, doc).await, "REST 改的标题");
 
   cleanup(&db, ws, user).await;
 }

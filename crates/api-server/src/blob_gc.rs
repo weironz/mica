@@ -239,7 +239,7 @@ pub async fn sweep_workspace(
   dry_run: bool,
   report: &mut SweepReport,
 ) {
-  let http = reqwest::Client::new();
+  let http = crate::http_client::outbound_client();
   let Some(referenced) = referenced_file_ids(db, workspace_id).await else {
     report.workspaces_skipped += 1;
     return;

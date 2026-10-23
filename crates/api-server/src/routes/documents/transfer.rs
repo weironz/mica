@@ -3,6 +3,7 @@ use axum::{
   extract::{Path, State},
   http::HeaderMap,
 };
+use futures_util::StreamExt as _;
 use mica_app_core::{
   AppState,
   documents::DocumentSnapshotPayload,
@@ -24,10 +25,17 @@ pub async fn move_view(
 ) -> ApiResult<Json<ViewResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
-  ensure_view_in_workspace(&state.db, workspace_id, view_id).await?;
 
+  // gh#46: validate and write in ONE transaction, behind the workspace tree
+  // lock. The cycle check used to run against the pool's latest snapshot and
+  // the UPDATE in a separate statement, so two moves that traded a folder and
+  // one of its descendants each validated before the other committed and both
+  // wrote — a cycle.
+  let mut tx = state.db.begin().await?;
+  lock_workspace_tree(&mut tx, workspace_id).await?;
+  ensure_view_in_workspace(&mut *tx, workspace_id, view_id).await?;
   if let Some(parent_view_id) = payload.parent_view_id {
-    ensure_valid_parent_view(&state.db, workspace_id, view_id, parent_view_id).await?;
+    ensure_valid_parent_view(&mut *tx, workspace_id, view_id, parent_view_id).await?;
   }
 
   let position = normalize_position(payload.position)?;
@@ -45,9 +53,10 @@ pub async fn move_view(
   .bind(position)
   .bind(view_id)
   .bind(workspace_id)
-  .fetch_optional(&state.db)
+  .fetch_optional(&mut *tx)
   .await?
   .ok_or(ApiError::NotFound)?;
+  tx.commit().await?;
 
   Ok(Json(ViewResponse { view }))
 }
@@ -69,57 +78,118 @@ pub async fn reorder_views(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
-  if payload.ordered_view_ids.is_empty() {
-    return Err(ApiError::BadRequest(
-      "ordered_view_ids cannot be empty".to_string(),
-    ));
+  // The same gate every other batch route takes — this one had NEITHER: no
+  // ceiling on the list, and a duplicate id would leave one of the two at a
+  // stale position (#48).
+  check_batch_ids(&payload.ordered_view_ids)?;
+
+  let mut tx = state.db.begin().await?;
+  // gh#46: validate INSIDE the transaction and behind the workspace tree
+  // lock. Validating from the pool first and writing second let two
+  // concurrent reorders/moves see compatible snapshots and write a cycle.
+  lock_workspace_tree(&mut tx, workspace_id).await?;
+
+  // Validate everything BEFORE writing anything, in SET terms (#48): one
+  // membership query for the whole list (a missing id gets the same 404 the
+  // per-id check gave), then — when re-parenting — one folder check and one
+  // cycle check with the recursive walk seeded from ALL ids at once. The old
+  // loop spent three round trips per id proving these same facts.
+  let live: std::collections::HashSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
+    r#"
+      SELECT id
+      FROM views
+      WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+    "#,
+  )
+  .bind(&payload.ordered_view_ids)
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?
+  .into_iter()
+  .collect();
+  if let Some(&missing) = payload
+    .ordered_view_ids
+    .iter()
+    .find(|id| !live.contains(id))
+  {
+    tracing::debug!(%missing, "reorder: view not live in the workspace");
+    return Err(ApiError::NotFound);
   }
-  // A duplicate id would leave one of the two at a stale position — reject
-  // rather than silently keep only the last.
-  let mut seen = std::collections::HashSet::new();
-  for id in &payload.ordered_view_ids {
-    if !seen.insert(*id) {
-      return Err(ApiError::BadRequest(format!("duplicate view id {id}")));
+
+  if let Some(parent) = payload.parent_view_id {
+    if payload.ordered_view_ids.contains(&parent) {
+      return Err(ApiError::BadRequest(
+        "parent_view_id cannot be the same view".to_string(),
+      ));
     }
-  }
-  // Validate everything BEFORE writing anything: each id belongs to the
-  // workspace, and re-parenting under `parent_view_id` neither escapes the
-  // workspace nor forms a cycle (a view under its own descendant).
-  for id in &payload.ordered_view_ids {
-    ensure_view_in_workspace(&state.db, workspace_id, *id).await?;
-    if let Some(parent) = payload.parent_view_id {
-      ensure_valid_parent_view(&state.db, workspace_id, *id, parent).await?;
+    ensure_parent_accepts_children(&mut *tx, workspace_id, parent).await?;
+
+    let would_cycle = sqlx::query_scalar::<_, bool>(
+      r#"
+        WITH RECURSIVE descendants (id) AS (
+          SELECT id
+          FROM views
+          WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
+          UNION ALL
+          SELECT v.id
+          FROM views v
+          INNER JOIN descendants d ON v.parent_view_id = d.id
+          WHERE v.workspace_id = $2 AND v.is_deleted = false
+        ) CYCLE id SET is_cycle USING cycle_path
+        SELECT EXISTS (
+          SELECT 1
+          FROM descendants
+          WHERE id = $3 AND NOT is_cycle
+        )
+      "#,
+    )
+    .bind(&payload.ordered_view_ids)
+    .bind(workspace_id)
+    .bind(parent)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if would_cycle {
+      return Err(ApiError::BadRequest(
+        "parent_view_id cannot be a descendant view".to_string(),
+      ));
     }
   }
 
-  let mut tx = state.db.begin().await?;
-  for (i, id) in payload.ordered_view_ids.iter().enumerate() {
-    let position = format!("{:010}", (i + 1) * 10);
-    let affected = sqlx::query(
-      r#"
-        UPDATE views
-        SET parent_view_id = $1, position = $2, updated_at = now()
-        WHERE id = $3 AND workspace_id = $4 AND is_deleted = false
-      "#,
-    )
-    .bind(payload.parent_view_id)
-    .bind(&position)
-    .bind(id)
-    .bind(workspace_id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    // Validation ran before the tx, so a 0-row UPDATE means this view was
-    // deleted concurrently in the window. Reporting `reordered: len()` regardless
-    // (the old behavior) is the `ssh | tee` shape — a partial reorder claimed as
-    // full success, leaving one node stuck at its old parent/position (P1-3).
-    // Return the anomaly instead; the `?`/return drops `tx`, rolling everything
-    // back so the client can refetch and retry against fresh state.
-    if affected == 0 {
-      return Err(ApiError::Conflict(format!(
-        "view {id} was modified concurrently during reorder; refetch and retry"
-      )));
-    }
+  // ONE statement for the whole batch. RETURNING says exactly which ids
+  // matched, so a row that stopped matching between validation and write is a
+  // 409 naming that id — not a partial reorder reported as full success (P1-3).
+  // The `?`/return drops `tx`, rolling the whole batch back so the client can
+  // refetch and retry against fresh state.
+  let positions: Vec<String> = (1..=payload.ordered_view_ids.len())
+    .map(|i| format!("{:010}", i * 10))
+    .collect();
+  let touched: Vec<Uuid> = sqlx::query_scalar::<_, Uuid>(
+    r#"
+      UPDATE views v
+      SET parent_view_id = $1, position = t.position, updated_at = now()
+      FROM unnest($2::uuid[], $3::text[]) AS t(id, position)
+      WHERE v.id = t.id AND v.workspace_id = $4 AND v.is_deleted = false
+      RETURNING v.id
+    "#,
+  )
+  .bind(payload.parent_view_id)
+  .bind(&payload.ordered_view_ids)
+  .bind(&positions)
+  .bind(workspace_id)
+  .fetch_all(&mut *tx)
+  .await?;
+
+  if touched.len() != payload.ordered_view_ids.len() {
+    let hit: std::collections::HashSet<Uuid> = touched.iter().copied().collect();
+    let id = payload
+      .ordered_view_ids
+      .iter()
+      .find(|id| !hit.contains(id))
+      .expect("fewer touched rows than requested means some id missed");
+    return Err(ApiError::Conflict(format!(
+      "view {id} was modified concurrently during reorder; refetch and retry"
+    )));
   }
   tx.commit().await?;
 
@@ -146,13 +216,9 @@ pub async fn batch_move_views(
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   check_batch_ids(&payload.view_ids)?;
 
-  for id in &payload.view_ids {
-    ensure_view_in_workspace(&state.db, workspace_id, *id).await?;
-    if let Some(parent) = payload.parent_view_id {
-      ensure_valid_parent_view(&state.db, workspace_id, *id, parent).await?;
-    }
-  }
-
+  // Validation moved inside [move_views_tx] (gh#46): the cycle check must run
+  // in the same transaction as the write, behind the workspace tree lock, or
+  // two concurrent moves can validate on each other's pre-commit snapshots.
   move_views_tx(
     &state.db,
     workspace_id,
@@ -190,6 +256,16 @@ pub(super) async fn move_views_tx(
   parent_view_id: Option<Uuid>,
 ) -> ApiResult<()> {
   let mut tx = db.begin().await?;
+  lock_workspace_tree(&mut tx, workspace_id).await?;
+  // gh#46: the membership and cycle checks belong to this transaction — a
+  // mover that validated against an older snapshot and wrote here could
+  // re-parent a folder under a descendant its check never saw.
+  for id in view_ids {
+    ensure_view_in_workspace(&mut *tx, workspace_id, *id).await?;
+    if let Some(parent) = parent_view_id {
+      ensure_valid_parent_view(&mut *tx, workspace_id, *id, parent).await?;
+    }
+  }
   for (i, id) in view_ids.iter().enumerate() {
     let position = format!("{:010}", (i + 1) * 10);
     let affected = sqlx::query(
@@ -325,8 +401,10 @@ pub(super) async fn live_subtree<'e>(
           SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
           FROM views v JOIN subtree s ON v.parent_view_id = s.id
           WHERE v.is_deleted = false
-        )
-        SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
+        ) CYCLE id SET is_cycle USING cycle_path
+        SELECT id, parent_view_id, object_id, object_type, name, position
+        FROM subtree
+        WHERE NOT is_cycle
       "#,
     )
     .bind(roots)
@@ -366,8 +444,10 @@ pub(super) async fn remove_moved_source(
         UNION ALL
         SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
         WHERE v.is_deleted = false
-      )
-      SELECT v.id FROM views v WHERE v.id IN (SELECT id FROM subtree) FOR UPDATE OF v
+      ) CYCLE id SET is_cycle USING cycle_path
+      SELECT v.id FROM views v
+      WHERE v.id IN (SELECT id FROM subtree WHERE NOT is_cycle)
+      FOR UPDATE OF v
     "#,
   )
   .bind(roots)
@@ -468,8 +548,8 @@ pub(super) async fn ancestor_pairs_of_roots(
           SELECT u.root, v.parent_view_id
           FROM up u JOIN views v ON v.id = u.ancestor
           WHERE v.is_deleted = false
-        )
-        SELECT root, ancestor FROM up WHERE ancestor IS NOT NULL
+        ) CYCLE root, ancestor SET is_cycle USING cycle_path
+        SELECT root, ancestor FROM up WHERE ancestor IS NOT NULL AND NOT is_cycle
       "#,
     )
     .bind(roots)
@@ -605,44 +685,53 @@ async fn transfer_roots(
   let moving_view_ids = &subtree_view_ids;
 
   // 2. Pre-scan documents: referenced file_ids + cross-workspace dangling links.
-  let mut payloads: std::collections::HashMap<Uuid, DocumentSnapshotPayload> =
-    std::collections::HashMap::new();
+  //    ONE query fetches every yrs base (the old loop round-tripped per document
+  //    — a large subtree paid N sequential awaits before the first blob moved,
+  //    #49); the per-document decode + scan then runs from memory.
+  let document_ids: Vec<Uuid> = subtree
+    .iter()
+    .filter(|r| r.object_type == "document")
+    .map(|r| r.object_id)
+    .collect();
+  let mut payloads = store::current_payloads(&state.db, &document_ids).await?;
   let mut referenced_files: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
   let mut dangling_links: Vec<DanglingLink> = Vec::new();
   let mut documents = 0usize;
   let mut folders = 0usize;
   for row in &subtree {
-    if row.object_type != "document" {
-      folders += 1;
-      continue;
-    }
-    documents += 1;
-    let Some(payload) = store::current_payload(&state.db, row.object_id).await? else {
-      continue;
-    };
-    for block in &payload.blocks {
-      if let Some(fid) = block
-        .data
-        .get("file_id")
-        .and_then(|v| v.as_str())
-        .and_then(|s| Uuid::parse_str(s).ok())
-      {
-        referenced_files.insert(fid);
-      }
-      for target in page_link_targets(&block.data) {
-        if let Ok(tid) = Uuid::parse_str(&target) {
-          // `moving_view_ids`, not `subtree_view_ids`: a link into another root
-          // of the same batch is not breakage, it is a link that follows.
-          if !moving_view_ids.contains(&tid) {
-            dangling_links.push(DanglingLink {
-              document: row.name.clone(),
-              target_view_id: tid,
-            });
+    if row.object_type == "document" {
+      documents += 1;
+      // Iterate the subtree rows (not the map) so links keep the deterministic
+      // tree order the report always had, and a payload-less document is still
+      // counted — both exactly as the old loop did.
+      let Some(payload) = payloads.get(&row.object_id) else {
+        continue;
+      };
+      for block in &payload.blocks {
+        if let Some(fid) = block
+          .data
+          .get("file_id")
+          .and_then(|v| v.as_str())
+          .and_then(|s| Uuid::parse_str(s).ok())
+        {
+          referenced_files.insert(fid);
+        }
+        for target in page_link_targets(&block.data) {
+          if let Ok(tid) = Uuid::parse_str(&target) {
+            // `moving_view_ids`, not `subtree_view_ids`: a link into another root
+            // of the same batch is not breakage, it is a link that follows.
+            if !moving_view_ids.contains(&tid) {
+              dangling_links.push(DanglingLink {
+                document: row.name.clone(),
+                target_view_id: tid,
+              });
+            }
           }
         }
       }
+    } else {
+      folders += 1;
     }
-    payloads.insert(row.object_id, payload);
   }
   let images = referenced_files.len();
 
@@ -689,73 +778,99 @@ async fn transfer_roots(
     .storage
     .as_ref()
     .ok_or_else(|| ApiError::Internal("file storage is not configured".to_string()))?;
-  let http = reqwest::Client::new();
-  let mut file_map: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
-  for &src_file_id in &referenced_files {
-    let Some(src_file) = store::fetch_file(&state.db, src_workspace_id, src_file_id).await? else {
-      continue; // dangling reference already; nothing to copy
-    };
-    let suffix = src_file
-      .object_key
-      .strip_prefix(&format!("workspaces/{src_workspace_id}/"))
-      .ok_or_else(|| ApiError::Internal("source object_key not under its workspace".to_string()))?;
-    let dest_key = format!("workspaces/{dest_workspace_id}/{suffix}");
+  let http = crate::http_client::outbound_client();
 
-    let bytes = http
-      .get(storage.presign_get_server(&src_file.object_key))
-      .send()
-      .await
-      .map_err(|e| ApiError::Internal(format!("blob fetch failed: {}", e.without_url())))?
-      .error_for_status()
-      .map_err(|e| ApiError::Internal(format!("blob fetch returned: {}", e.without_url())))?
-      .bytes()
-      .await
-      .map_err(|e| ApiError::Internal(format!("blob read failed: {}", e.without_url())))?;
-    // Commit this marker (and clear any GC mark) before PUT: a crash after
-    // writing bytes must leave a discoverable key for the orphan sweep, and
-    // neither sweep may take the key while the PUT runs outside a transaction.
-    store::record_pending_file_upload(
-      &state.db,
-      dest_workspace_id,
-      &dest_key,
-      storage.presign_ttl_seconds,
-    )
-    .await?;
-    let upload = storage.presign_put_server(&dest_key);
-    let checksum = {
-      use base64::Engine as _;
-      use sha2::{Digest, Sha256};
-      base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&bytes))
-    };
-    let put = http
-      .put(&upload.url)
-      .header(
-        reqwest::header::CONTENT_TYPE,
-        mica_infra::stored_content_type(&src_file.mime_type),
+  // Resolve every source row in ONE query, then plan one copy per DESTINATION
+  // KEY ([plan_blob_copies]): content-addressed keys mean two source rows can
+  // be the same bytes, and the old serial loop PUT + registered them twice.
+  // A referenced id with no row is a dangling reference already; nothing to
+  // copy, and the payload keeps its stale id — the old loop's `continue`.
+  let src_files = store::fetch_files(&state.db, src_workspace_id, &ids).await?;
+  let (copies, dest_key_of_src) = plan_blob_copies(src_workspace_id, dest_workspace_id, src_files)?;
+
+  // Bounded parallelism: the old loop fetched, lock-marked and re-uploaded one
+  // blob fully before starting the next, so a large subtree paid every network
+  // round trip in series and a move ran minutes (#49). The STEPS per blob keep
+  // their order — pending marker before PUT, registration after — only
+  // different blobs overlap. `buffered` yields results in input order, so a
+  // multi-blob failure reports the EARLIEST blob's error, deterministically,
+  // like the serial loop. The cap bounds concurrent in-memory bytes.
+  const BLOB_COPY_CONCURRENCY: usize = 4;
+  let results = futures_util::stream::iter(copies.into_iter().map(|(src_file, dest_key)| {
+    let http = &http;
+    async move {
+      let bytes = http
+        .get(storage.presign_get_server(&src_file.object_key))
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob fetch failed: {}", e.without_url())))?
+        .error_for_status()
+        .map_err(|e| ApiError::Internal(format!("blob fetch returned: {}", e.without_url())))?
+        .bytes()
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob read failed: {}", e.without_url())))?;
+      // Commit this marker (and clear any GC mark) before PUT: a crash after
+      // writing bytes must leave a discoverable key for the orphan sweep, and
+      // neither sweep may take the key while the PUT runs outside a transaction.
+      store::record_pending_file_upload(
+        &state.db,
+        dest_workspace_id,
+        &dest_key,
+        storage.presign_ttl_seconds,
       )
-      .header("x-amz-checksum-sha256", checksum)
-      .body(bytes.to_vec())
-      .send()
-      .await
-      .map_err(|e| ApiError::Internal(format!("blob upload failed: {}", e.without_url())))?;
-    if !put.status().is_success() {
-      return Err(ApiError::Internal(format!(
-        "blob upload returned {}",
-        put.status()
-      )));
-    }
+      .await?;
+      let upload = storage.presign_put_server(&dest_key);
+      let checksum = {
+        use base64::Engine as _;
+        use sha2::{Digest, Sha256};
+        base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&bytes))
+      };
+      let put = http
+        .put(&upload.url)
+        .header(
+          reqwest::header::CONTENT_TYPE,
+          mica_infra::stored_content_type(&src_file.mime_type),
+        )
+        .header("x-amz-checksum-sha256", checksum)
+        .body(bytes.to_vec())
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("blob upload failed: {}", e.without_url())))?;
+      if !put.status().is_success() {
+        return Err(ApiError::Internal(format!(
+          "blob upload returned {}",
+          put.status()
+        )));
+      }
 
-    let dest_file = store::register_put_file(
-      &state.db,
-      dest_workspace_id,
-      user_id,
-      &dest_key,
-      &src_file.original_name,
-      &src_file.mime_type,
-      src_file.byte_size,
-    )
-    .await?;
-    file_map.insert(src_file_id, dest_file.id);
+      let dest_file = store::register_put_file(
+        &state.db,
+        dest_workspace_id,
+        user_id,
+        &dest_key,
+        &src_file.original_name,
+        &src_file.mime_type,
+        src_file.byte_size,
+      )
+      .await?;
+      Ok::<_, ApiError>((dest_key, dest_file.id))
+    }
+  }))
+  .buffered(BLOB_COPY_CONCURRENCY)
+  .collect::<Vec<_>>()
+  .await;
+
+  let mut dest_file_by_key: std::collections::HashMap<String, Uuid> =
+    std::collections::HashMap::new();
+  for result in results {
+    let (dest_key, dest_file_id) = result?;
+    dest_file_by_key.insert(dest_key, dest_file_id);
+  }
+  let mut file_map: std::collections::HashMap<Uuid, Uuid> = std::collections::HashMap::new();
+  for (src_file_id, dest_key) in &dest_key_of_src {
+    if let Some(&dest_file_id) = dest_file_by_key.get(dest_key) {
+      file_map.insert(*src_file_id, dest_file_id);
+    }
   }
 
   // 4. One transaction: build the destination tree (new ids), then soft-delete
@@ -811,6 +926,45 @@ async fn transfer_roots(
     removed_source: request.remove_source,
     dry_run: false,
   })
+}
+
+/// Plan one blob copy per DESTINATION key for a transfer.
+///
+/// Keys are content-addressed (`workspaces/{ws}/{sha256}.{ext}`), so two source
+/// rows can carry the SAME bytes — one sha, two file rows. Copying such a pair
+/// CONCURRENTLY would race the pending-upload marker and the files-table
+/// upsert for the same key, so the plan holds one copy per key; every source
+/// id sharing a key later maps to the one destination row for it — exactly the
+/// rows the old serial loop's UNIQUE(object_key) upsert produced.
+///
+/// Returns the copies (source row + destination key, first-row-wins order) plus
+/// each source file's destination key. A source row whose key is not under its
+/// own workspace prefix is corrupt bookkeeping, not an empty input — Internal,
+/// as the old loop's in-place check was.
+fn plan_blob_copies(
+  src_workspace_id: Uuid,
+  dest_workspace_id: Uuid,
+  src_files: Vec<store::FileRecord>,
+) -> ApiResult<(
+  Vec<(store::FileRecord, String)>,
+  std::collections::HashMap<Uuid, String>,
+)> {
+  let mut dest_key_of_src: std::collections::HashMap<Uuid, String> =
+    std::collections::HashMap::new();
+  let mut copies: Vec<(store::FileRecord, String)> = Vec::new();
+  let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+  for src_file in src_files {
+    let suffix = src_file
+      .object_key
+      .strip_prefix(&format!("workspaces/{src_workspace_id}/"))
+      .ok_or_else(|| ApiError::Internal("source object_key not under its workspace".to_string()))?;
+    let dest_key = format!("workspaces/{dest_workspace_id}/{suffix}");
+    dest_key_of_src.insert(src_file.id, dest_key.clone());
+    if seen_keys.insert(dest_key.clone()) {
+      copies.push((src_file, dest_key));
+    }
+  }
+  Ok((copies, dest_key_of_src))
 }
 
 // ── Clone (duplicate a view within the same workspace) ───────────────────────
@@ -870,8 +1024,10 @@ pub async fn clone_view(
         SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
         FROM views v JOIN subtree s ON v.parent_view_id = s.id
         WHERE v.is_deleted = false
-      )
-      SELECT id, parent_view_id, object_id, object_type, name, position FROM subtree
+      ) CYCLE id SET is_cycle USING cycle_path
+      SELECT id, parent_view_id, object_id, object_type, name, position
+      FROM subtree
+      WHERE NOT is_cycle
     "#,
   )
   .bind(view_id)
@@ -1291,6 +1447,68 @@ mod tests {
     ]});
     assert_eq!(page_link_targets(&data), vec![a.to_string()]);
     assert!(page_link_targets(&serde_json::json!({})).is_empty());
+  }
+
+  // ── plan_blob_copies (#49) ─────────────────────────────────────────────────
+
+  fn src_file(workspace_id: Uuid, suffix: &str) -> store::FileRecord {
+    store::FileRecord {
+      id: Uuid::new_v4(),
+      workspace_id,
+      uploaded_by: Uuid::new_v4(),
+      object_key: format!("workspaces/{workspace_id}/{suffix}"),
+      original_name: suffix.to_string(),
+      mime_type: "image/png".to_string(),
+      byte_size: 7,
+      created_at: chrono::Utc::now(),
+    }
+  }
+
+  /// Two source rows can be the SAME bytes (content-addressed keys): the plan
+  /// must hold ONE copy for the pair, with both source ids pointing at the one
+  /// destination key — concurrent copies of one key would race each other.
+  #[test]
+  fn plan_blob_copies_dedupes_identical_bytes() {
+    let src = Uuid::new_v4();
+    let dest = Uuid::new_v4();
+    let a = src_file(src, "aaa.png");
+    let a_id = a.id;
+    let b = src_file(src, "aaa.png");
+    let b_id = b.id;
+    let c = src_file(src, "ccc.png");
+    let c_id = c.id;
+
+    let (copies, dest_key_of_src) = plan_blob_copies(src, dest, vec![a, b, c]).unwrap();
+
+    assert_eq!(
+      copies.len(),
+      2,
+      "two distinct keys → two copies, never three"
+    );
+    assert_eq!(
+      dest_key_of_src[&a_id], dest_key_of_src[&b_id],
+      "identical bytes share the one destination key"
+    );
+    assert_ne!(dest_key_of_src[&a_id], dest_key_of_src[&c_id]);
+    assert!(
+      copies
+        .iter()
+        .all(|(_, key)| key.starts_with(&format!("workspaces/{dest}/"))),
+      "every copy lands under the destination workspace"
+    );
+  }
+
+  /// A source row whose key is not under its own workspace prefix is corrupt
+  /// bookkeeping — Internal, never a copy into an arbitrary key.
+  #[test]
+  fn plan_blob_copies_refuses_a_key_outside_its_workspace() {
+    let src = Uuid::new_v4();
+    let dest = Uuid::new_v4();
+    let mut stray = src_file(src, "x.png");
+    stray.object_key = format!("workspaces/{}/elsewhere.png", Uuid::new_v4());
+
+    let err = plan_blob_copies(src, dest, vec![stray]).unwrap_err();
+    assert!(matches!(err, ApiError::Internal(_)), "got {err:?}");
   }
 
   #[test]

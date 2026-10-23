@@ -627,3 +627,160 @@ async fn clone_view_duplicates_a_subtree_in_the_same_workspace() {
   assert_eq!(orig_position, src_position);
   assert_eq!(current_blocks_json(&db, doc).await, before);
 }
+
+// ── reorder (gh#48) ──────────────────────────────────────────────────────────
+// #48 replaced reorder's per-id validation (three queries each) and per-id
+// writes with set operations, kept inside the gh#46 tree lock. These pin the
+// BEHAVIOUR — reparenting, spacing, and each refusal — whatever the query count.
+
+use super::transfer::reorder_views;
+
+/// `POST /api/workspaces/{ws}/views/reorder` re-parents every listed view and
+/// hands out 10-spaced, zero-padded positions in the caller's order.
+#[tokio::test]
+async fn reorder_views_reparents_in_one_call_with_spaced_positions() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let ws = seed_workspace(&db, user).await;
+  let folder = seed_folder(&db, ws, user, None, "F").await;
+  let (a, _) = seed_document(&db, ws, user, None, "A", json!([])).await;
+  let (b, _) = seed_document(&db, ws, user, None, "B", json!([])).await;
+  let (c, _) = seed_document(&db, ws, user, None, "C", json!([])).await;
+
+  let request: super::ReorderRequest = serde_json::from_value(json!({
+    "parent_view_id": folder,
+    "ordered_view_ids": [c, a, b],
+  }))
+  .unwrap();
+  let Json(response) = reorder_views(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path(ws),
+    Json(request),
+  )
+  .await
+  .expect("reorder should succeed");
+  let response = serde_json::to_value(&response).unwrap();
+  assert_eq!(response["reordered"], json!(3));
+
+  // c first, then a, then b — spaced exactly as the old per-id writes spaced
+  // them, and all three now under the target folder.
+  let rows: Vec<(String, Option<Uuid>)> = sqlx::query_as(
+    "SELECT position, parent_view_id FROM views \
+       WHERE id = ANY($1) AND is_deleted = false ORDER BY position",
+  )
+  .bind(&[c, a, b][..])
+  .fetch_all(&db)
+  .await
+  .unwrap();
+  assert_eq!(
+    rows,
+    vec![
+      ("0000000010".to_string(), Some(folder)),
+      ("0000000020".to_string(), Some(folder)),
+      ("0000000030".to_string(), Some(folder)),
+    ],
+    "caller order IS the sibling order, 10-spaced, under the new parent"
+  );
+}
+
+/// A reorder naming a view that is not live in the workspace is a 404 — the
+/// same error the old per-id membership check gave, now out of ONE set query.
+#[tokio::test]
+async fn reorder_views_rejects_a_view_not_live_in_the_workspace() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let ws = seed_workspace(&db, user).await;
+  let (a, _) = seed_document(&db, ws, user, None, "A", json!([])).await;
+
+  let request: super::ReorderRequest = serde_json::from_value(json!({
+    "ordered_view_ids": [a, Uuid::new_v4()],
+  }))
+  .unwrap();
+  let err = reorder_views(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path(ws),
+    Json(request),
+  )
+  .await
+  .expect_err("a reorder into thin air must be refused");
+  assert!(
+    matches!(err, ApiError::NotFound),
+    "expected 404 for a non-live id, got {err:?}"
+  );
+
+  // And because validation precedes every write, the LIVE id kept its old spot.
+  let (parent, position): (Option<Uuid>, String) = sqlx::query_as(
+    "SELECT parent_view_id, position FROM views WHERE id = $1 AND is_deleted = false",
+  )
+  .bind(a)
+  .fetch_one(&db)
+  .await
+  .unwrap();
+  assert_eq!((parent, position), (None, "0".to_string()));
+}
+
+/// Re-parenting folder F1 under its own descendant folder F2 is a 400 from the
+/// cycle walk seeded with ALL ids at once — the same refusal the per-id walk
+/// gave (and still gives via `ensure_valid_parent_view` elsewhere).
+#[tokio::test]
+async fn reorder_views_rejects_a_descendant_parent() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let ws = seed_workspace(&db, user).await;
+  let f1 = seed_folder(&db, ws, user, None, "F1").await;
+  let f2 = seed_folder(&db, ws, user, Some(f1), "F2").await;
+
+  let request: super::ReorderRequest = serde_json::from_value(json!({
+    "parent_view_id": f2,
+    "ordered_view_ids": [f1],
+  }))
+  .unwrap();
+  let err = reorder_views(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path(ws),
+    Json(request),
+  )
+  .await
+  .expect_err("a folder under its own descendant must be refused");
+  assert!(
+    matches!(err, ApiError::BadRequest(_)),
+    "expected 400 for a descendant parent, got {err:?}"
+  );
+  assert!(
+    !is_deleted(&db, f1).await && !is_deleted(&db, f2).await,
+    "a refused reorder writes nothing"
+  );
+}
+
+/// The batch ceiling the route never had (#48): past MAX_BATCH_VIEWS ids the
+/// request is refused before validation touches the database at all.
+#[tokio::test]
+async fn reorder_views_rejects_a_list_past_the_batch_ceiling() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let ws = seed_workspace(&db, user).await;
+  let ids: Vec<Uuid> = (0..1001).map(|_| Uuid::new_v4()).collect();
+
+  let request: super::ReorderRequest = serde_json::from_value(json!({
+    "ordered_view_ids": ids,
+  }))
+  .unwrap();
+  let err = reorder_views(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path(ws),
+    Json(request),
+  )
+  .await
+  .expect_err("an oversized reorder must be refused");
+  match err {
+    ApiError::BadRequest(message) => assert!(
+      message.contains("at most"),
+      "the refusal should name the ceiling, got: {message}"
+    ),
+    other => panic!("expected 400 for an oversized list, got {other:?}"),
+  }
+}

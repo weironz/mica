@@ -26,6 +26,14 @@ use tokio::sync::Semaphore;
 
 /// Resolve the real client IP behind mica's proxy chain.
 ///
+/// XFF is only CONSULTED when the socket peer is itself a proxy hop
+/// ([`is_proxy_hop`]): `X-Forwarded-For` is a client-controlled header, so a
+/// directly-exposed socket (peer outside any private/loopback range) that
+/// believed it would let anyone spoof arbitrary source IPs and walk straight
+/// past the per-IP limiter — each forged value opens a fresh bucket (#34).
+/// Only a peer sitting in a proxy segment could legitimately have appended
+/// the chain, so only then is the header worth reading.
+///
 /// Prod is a DOUBLE hop (`client → Traefik → nginx → axum`): the `api` service
 /// has no Traefik labels, so `/api` is funnelled through the `web`/nginx
 /// container, and nginx's `proxy_set_header X-Real-IP $remote_addr` overwrites
@@ -39,11 +47,13 @@ use tokio::sync::Semaphore;
 /// when XFF is absent or entirely private (e.g. a same-LAN client — acceptable,
 /// mica's real clients reach it over the internet).
 pub fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
-  if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-    for part in xff.rsplit(',') {
-      if let Ok(ip) = part.trim().parse::<IpAddr>() {
-        if !is_proxy_hop(ip) {
-          return ip;
+  if is_proxy_hop(peer.ip()) {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+      for part in xff.rsplit(',') {
+        if let Ok(ip) = part.trim().parse::<IpAddr>() {
+          if !is_proxy_hop(ip) {
+            return ip;
+          }
         }
       }
     }
@@ -157,7 +167,7 @@ pub struct AuthGuard {
 
 impl AuthGuard {
   pub fn from_env() -> Arc<Self> {
-    // Per-IP: burst then ~`per_min` sustained. Argon2: ~cores concurrent.
+    // Per-IP: burst then ~`per_min` sustained. Argon2: ~cores/2 concurrent.
     let burst = env_parse("AUTH_RATE_BURST").unwrap_or(10);
     let per_min = env_parse::<f64>("AUTH_RATE_PER_MIN").unwrap_or(5.0);
     let permits = env_parse("AUTH_ARGON2_MAX_CONCURRENCY")
@@ -171,9 +181,15 @@ impl AuthGuard {
 }
 
 fn default_argon2_permits() -> usize {
+  // HALF the cores, not all of them (#42): the gate's whole point is that a
+  // login flood cannot take the machine away from everything else, and a
+  // full set of permits would let Argon2 alone saturate every core — WS
+  // traffic and `/ready` included, even with the hashing itself off the
+  // workers on `spawn_blocking`. `from_env`'s `.max(1)` keeps a 1-core
+  // machine at one permit.
   std::thread::available_parallelism()
-    .map(|n| n.get())
-    .unwrap_or(4)
+    .map(|n| n.get() / 2)
+    .unwrap_or(2)
 }
 
 fn env_parse<T: std::str::FromStr>(key: &str) -> Option<T> {
@@ -286,6 +302,26 @@ mod tests {
   fn all_private_or_no_xff_falls_back_to_the_socket_peer() {
     assert_eq!(client_ip(&hm(Some("10.0.0.1, 10.0.0.2")), PEER), PEER.ip());
     assert_eq!(client_ip(&hm(None), PEER), PEER.ip());
+  }
+
+  /// #34: XFF is a client-controlled header. A directly-exposed socket (the
+  /// peer is a PUBLIC address, not a proxy hop) must not read it at all — else
+  /// anyone forges a fresh "client IP" per request and never touches the
+  /// per-IP bucket guarding brute force.
+  #[test]
+  fn xff_is_ignored_when_the_peer_is_not_a_proxy_hop() {
+    let public_peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 9)), 40000);
+    assert_eq!(
+      client_ip(&hm(Some("8.8.8.8")), public_peer),
+      public_peer.ip(),
+      "a non-proxy peer's XFF must never be trusted"
+    );
+    // Even a public entry among proxies does not rescue a header the peer had
+    // no business relaying.
+    assert_eq!(
+      client_ip(&hm(Some("203.0.113.7, 10.0.0.2")), public_peer),
+      public_peer.ip()
+    );
   }
 
   #[test]

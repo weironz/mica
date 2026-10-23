@@ -201,10 +201,10 @@ pub(super) async fn trash_views_batch(
         SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
         UNION ALL
         SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      )
+      ) CYCLE id SET is_cycle USING cycle_path
       UPDATE views
       SET is_deleted = true, updated_at = now()
-      WHERE id IN (SELECT id FROM subtree)
+      WHERE id IN (SELECT id FROM subtree WHERE NOT is_cycle)
         AND workspace_id = $2
         AND is_deleted = false
       RETURNING id
@@ -248,6 +248,14 @@ pub(super) async fn restore_one(db: &PgPool, workspace_id: Uuid, view_id: Uuid) 
 /// The exact mirror of [trash_views_batch] — same CTE, the two `is_deleted`
 /// booleans flipped. Extracted for the same reason, and tested beside it so the
 /// pair cannot drift apart silently.
+///
+/// With ONE caveat on "the whole subtree" (gh#47): a seed's `updated_at` is
+/// carried down the walk and only rows tombstoned AT THAT MOMENT come back.
+/// Trashing stamps every row it takes with the same `now()`, so a child trashed
+/// on its own EARLIER carries a different timestamp — it stays in the bin
+/// instead of being resurrected behind the parent's back. The timestamp pair
+/// is the delete-batch marker; a dedicated column (`views.delete_batch_id` or
+/// so) is the cleaner version and is filed separately.
 pub(super) async fn restore_views_batch(
   db: &PgPool,
   workspace_id: Uuid,
@@ -256,16 +264,19 @@ pub(super) async fn restore_views_batch(
   let mut tx = db.begin().await?;
   let restored = sqlx::query_scalar::<_, Uuid>(
     r#"
-      WITH RECURSIVE subtree AS (
-        SELECT id FROM views WHERE id = ANY($1) AND workspace_id = $2
+      WITH RECURSIVE subtree (id, batch_ts) AS (
+        SELECT id, updated_at FROM views WHERE id = ANY($1) AND workspace_id = $2
         UNION ALL
-        SELECT v.id FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      )
-      UPDATE views
+        SELECT v.id, s.batch_ts FROM views v JOIN subtree s ON v.parent_view_id = s.id
+      ) CYCLE id SET is_cycle USING cycle_path
+      UPDATE views v
       SET is_deleted = false, updated_at = now()
-      WHERE id IN (SELECT id FROM subtree)
-        AND workspace_id = $2
-        AND is_deleted = true
+      WHERE EXISTS (
+          SELECT 1 FROM subtree s
+          WHERE s.id = v.id AND NOT s.is_cycle AND v.updated_at = s.batch_ts
+        )
+        AND v.workspace_id = $2
+        AND v.is_deleted = true
       RETURNING id
     "#,
   )
@@ -347,10 +358,10 @@ pub(super) async fn purge_views_batch(
         UNION ALL
         SELECT v.id, v.object_id, v.object_type
         FROM views v JOIN subtree s ON v.parent_view_id = s.id
-      ),
+      ) CYCLE id SET is_cycle USING cycle_path,
       deleted_views AS (
         DELETE FROM views
-        WHERE id IN (SELECT id FROM subtree) AND workspace_id = $2
+        WHERE id IN (SELECT id FROM subtree WHERE NOT is_cycle) AND workspace_id = $2
         RETURNING id, object_id, object_type
       ),
       purged_docs AS (

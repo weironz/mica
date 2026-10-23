@@ -782,7 +782,7 @@ async fn run_import(
     std::collections::HashMap::new();
   // Every block left pointing at somebody else's server, with enough to fix it.
   let mut image_failures: Vec<mica_app_core::ImageFailure> = Vec::new();
-  let client = reqwest::Client::new();
+  let client = crate::http_client::outbound_client();
 
   // Fetch every external image BEFORE walking the pages, several at a time.
   //
