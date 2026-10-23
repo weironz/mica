@@ -782,7 +782,7 @@ mod tests {
   // ids and strings here are part of that contract.
 
   fn ws(id: u64) -> Uuid {
-    Uuid::parse_str(&format!("{id:032x")).unwrap()
+    Uuid::parse_str(&format!("{id:032x}")).unwrap()
   }
 
   #[test]

@@ -40,20 +40,16 @@ void setRichImagePasteHandler(ImagePasteHandler? handler) {
 /// Extract a pasted image file from `files` (preferred) or `items`.
 web.File? _clipboardImage(web.DataTransfer data) {
   final files = data.files;
-  if (files != null) {
-    for (var i = 0; i < files.length; i++) {
-      final f = files.item(i);
-      if (f != null && f.type.startsWith('image/')) return f;
-    }
+  for (var i = 0; i < files.length; i++) {
+    final f = files.item(i);
+    if (f != null && f.type.startsWith('image/')) return f;
   }
   final items = data.items;
-  if (items != null) {
-    for (var i = 0; i < items.length; i++) {
-      final item = items[i];
-      if (item.kind == 'file' && item.type.startsWith('image/')) {
-        final file = item.getAsFile();
-        if (file != null) return file;
-      }
+  for (var i = 0; i < items.length; i++) {
+    final item = items[i];
+    if (item.kind == 'file' && item.type.startsWith('image/')) {
+      final file = item.getAsFile();
+      if (file != null) return file;
     }
   }
   return null;

@@ -379,6 +379,9 @@ pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::
 mod contract_tests;
 
 #[cfg(test)]
+mod tools_tests;
+
+#[cfg(test)]
 mod tests {
   use super::*;
   use crate::markdown_windows::{

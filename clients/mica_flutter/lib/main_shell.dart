@@ -910,6 +910,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// never committed (2026-10-21 review P1-2). The sidebar path already awaited
   /// this; every other way of changing the active document now does too.
   Future<void> _flushActiveEditor() async {
+    debugProbeShellFlush?.call();
     try {
       await _activeEditorFlush?.call();
     } catch (_) {}
@@ -5332,3 +5333,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 /// ([_WorkspaceShellState._flushForExit]) can drain the last <=400ms of typing
 /// before quitting. Null when no editor is on screen (settings, empty state).
 Future<void> Function()? _activeEditorFlush;
+
+/// Test-only probe, fired at the head of every
+/// [_WorkspaceShellState._flushActiveEditor] call: the flush-before-switch
+/// ordering (2026-10-21 review P1-2) is otherwise invisible to widget tests,
+/// which cannot reach the shell's private state. Tests assign it, then clear
+/// it in tearDown.
+@visibleForTesting
+void Function()? debugProbeShellFlush;

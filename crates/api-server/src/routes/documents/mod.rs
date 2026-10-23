@@ -716,6 +716,9 @@ macro_rules! batch_view_handler {
 mod pg_tests;
 
 #[cfg(test)]
+mod transfer_flow_pg_tests;
+
+#[cfg(test)]
 mod contract_gold_tests;
 
 mod crud;

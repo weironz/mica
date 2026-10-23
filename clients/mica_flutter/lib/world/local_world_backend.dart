@@ -10,7 +10,7 @@ part of '../main.dart';
 /// The shell handle is needed for the cross-cutting concerns (setState,
 /// context, the shared LocalOffline store, the app-exit flush); the world's
 /// own state lives entirely here.
-class _LocalWorldBackend implements WorldBackend {
+class _LocalWorldBackend extends WorldBackend {
   _LocalWorldBackend(this._shell);
 
   final _WorkspaceShellState _shell;

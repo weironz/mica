@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:web/web.dart' as web;
 import '../ui/theme_tokens.dart';

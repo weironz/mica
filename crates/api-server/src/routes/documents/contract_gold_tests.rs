@@ -141,7 +141,12 @@ fn gold_document_update() {
   check(
     "document_update",
     &json!(DocumentUpdateResponse {
-      document: document_record(doc()),
+      // After applying seq 4 the document's own row has advanced to it — the
+      // snapshot, the op-log seq and `current_seq` move together.
+      document: mica_app_core::store::DocumentRecord {
+        current_seq: 4,
+        ..document_record(doc())
+      },
       snapshot: store::AppliedContent {
         version_seq: 4,
         schema_version: 1,

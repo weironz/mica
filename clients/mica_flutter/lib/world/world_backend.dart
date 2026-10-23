@@ -364,7 +364,7 @@ class AiOps {
 /// cloud fields live and whose ops are the pre-existing shell methods. Nothing
 /// moves out of `_WorkspaceShellState` for this side — the point is that the
 /// local and cloud worlds now share one dispatch shape.
-class _CloudWorldBackend implements WorldBackend {
+class _CloudWorldBackend extends WorldBackend {
   _CloudWorldBackend(this._shell);
 
   final _WorkspaceShellState _shell;

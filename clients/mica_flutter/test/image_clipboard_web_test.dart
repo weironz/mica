@@ -1,15 +1,16 @@
 @TestOn('browser')
 library;
 
-import 'dart:html' as html;
+import 'dart:js_interop';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/image_actions_web.dart';
+import 'package:web/web.dart' as web;
 
 void main() {
   test('invalid image fails promptly and removes fallback DOM', () async {
-    final before = html.document
+    final before = web.document
         .querySelectorAll('[contenteditable="true"]')
         .length;
     // Unsupported image MIME makes the modern ClipboardItem path decline;
@@ -20,25 +21,36 @@ void main() {
     ).timeout(const Duration(seconds: 5));
     expect(copied, isFalse);
     expect(
-      html.document.querySelectorAll('[contenteditable="true"]').length,
+      web.document.querySelectorAll('[contenteditable="true"]').length,
       before,
     );
-    expect(html.document.querySelectorAll('img[src^="blob:"]'), isEmpty);
+    expect(web.document.querySelectorAll('img[src^="blob:"]').length, 0);
   });
 
   test('repeated fallback image events settle only once', () async {
-    final observer = html.MutationObserver((mutations, _) {
-      for (final mutation in mutations) {
-        for (final node in mutation.addedNodes) {
-          if (node is! html.Element) continue;
-          final img = node.querySelector('img');
+    void onMutation(
+      JSArray<web.MutationRecord> mutations,
+      web.MutationObserver _,
+    ) {
+      for (final mutation in mutations.toDart) {
+        final added = mutation.addedNodes;
+        for (var i = 0; i < added.length; i++) {
+          final node = added.item(i);
+          if (node == null || !node.isA<web.Element>()) continue;
+          final img = (node as web.Element).querySelector('img');
           if (img == null) continue;
-          img.dispatchEvent(html.Event('error'));
-          img.dispatchEvent(html.Event('error'));
-          img.dispatchEvent(html.Event('load'));
+          img.dispatchEvent(web.Event('error'));
+          img.dispatchEvent(web.Event('error'));
+          img.dispatchEvent(web.Event('load'));
         }
       }
-    })..observe(html.document.body!, childList: true);
+    }
+
+    final observer = web.MutationObserver(onMutation.toJS)
+      ..observe(
+        web.document.body!,
+        web.MutationObserverInit(childList: true),
+      );
     addTearDown(observer.disconnect);
 
     expect(
@@ -48,18 +60,19 @@ void main() {
       ).timeout(const Duration(seconds: 5)),
       isFalse,
     );
-    expect(html.document.querySelectorAll('img[src^="blob:"]'), isEmpty);
+    expect(web.document.querySelectorAll('img[src^="blob:"]').length, 0);
   });
 
   test('fallback times out and cleans up when no image event arrives', () async {
-    final before = html.document
+    final before = web.document
         .querySelectorAll('[contenteditable="true"]')
         .length;
     var suppressed = 0;
-    void suppressImageEvent(html.Event event) {
+    void suppressImageEvent(web.Event event) {
       final target = event.target;
-      if (target is html.ImageElement &&
-          (target.src?.startsWith('blob:') ?? false)) {
+      if (target != null &&
+          target.isA<web.HTMLImageElement>() &&
+          (target as web.HTMLImageElement).src.startsWith('blob:')) {
         suppressed++;
         event.stopImmediatePropagation();
       }
@@ -67,11 +80,12 @@ void main() {
 
     // Capture the browser's decode error before it reaches the image listener,
     // reproducing a browser that never delivers a terminal image event.
-    html.window.addEventListener('error', suppressImageEvent, true);
-    html.window.addEventListener('load', suppressImageEvent, true);
+    final listener = suppressImageEvent.toJS;
+    web.window.addEventListener('error', listener, web.EventListenerOptions(capture: true));
+    web.window.addEventListener('load', listener, web.EventListenerOptions(capture: true));
     addTearDown(() {
-      html.window.removeEventListener('error', suppressImageEvent, true);
-      html.window.removeEventListener('load', suppressImageEvent, true);
+      web.window.removeEventListener('error', listener, web.EventListenerOptions(capture: true));
+      web.window.removeEventListener('load', listener, web.EventListenerOptions(capture: true));
     });
     expect(
       await copyImageToClipboard(
@@ -82,9 +96,9 @@ void main() {
     );
     expect(suppressed, greaterThan(0));
     expect(
-      html.document.querySelectorAll('[contenteditable="true"]').length,
+      web.document.querySelectorAll('[contenteditable="true"]').length,
       before,
     );
-    expect(html.document.querySelectorAll('img[src^="blob:"]'), isEmpty);
+    expect(web.document.querySelectorAll('img[src^="blob:"]').length, 0);
   });
 }

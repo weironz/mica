@@ -1330,7 +1330,7 @@ mod tests {
   // the fields its tools forward. The ids and counts are part of the contract.
 
   fn ws(id: u64) -> Uuid {
-    Uuid::parse_str(&format!("{id:032x")).unwrap()
+    Uuid::parse_str(&format!("{id:032x}")).unwrap()
   }
 
   #[test]

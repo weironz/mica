@@ -10,6 +10,7 @@ import 'cache_stats.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import '../editor/operation_history.dart';
 
 // The interface makes every member an override; 35 `@override` annotations
@@ -73,6 +74,13 @@ class LocalOffline implements LocalOfflineApi {
     }
     _store = store;
   }
+
+  /// Test-only: substitute the store instead of opening the native bridge —
+  /// plain `flutter test` cannot load the FlutterRustBridge runtime, so the
+  /// Dart half of the vault import (filtering, the blob CAS, error merging)
+  /// is locked against a fake.
+  @visibleForTesting
+  void debugSetStoreForTesting(MicaStore store) => _store = store;
 
   /// This device's stable yrs client id, used to pin the CRDT actor for cloud
   /// sync too (so a device's edits share one actor everywhere). Opens the store

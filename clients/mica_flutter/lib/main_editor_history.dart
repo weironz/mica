@@ -4,11 +4,11 @@ extension _ShellEditorHistory on _WorkspaceShellState {
   ApplyHistory? _editorHistoryForDocument() {
     final local = _activeIsLocal;
     final documentId =
-        (local ? _localBootstrap : _selectedBootstrap)?.document.id;
+        (local ? _localBackend.bootstrap : _selectedBootstrap)?.document.id;
     if (documentId == null) return null;
     return (action) async {
       final current =
-          (local ? _localBootstrap : _selectedBootstrap)?.document.id;
+          (local ? _localBackend.bootstrap : _selectedBootstrap)?.document.id;
       if (!mounted || _activeIsLocal != local || current != documentId) {
         throw StateError('Editor document changed');
       }

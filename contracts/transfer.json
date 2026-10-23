@@ -1,0 +1,18 @@
+{
+  "new_root_view_id": "00000000-0000-0000-0000-000000000009",
+  "new_root_view_ids": [
+    "00000000-0000-0000-0000-000000000009",
+    "00000000-0000-0000-0000-00000000000a"
+  ],
+  "documents": 3,
+  "folders": 1,
+  "images": 2,
+  "dangling_links": [
+    {
+      "document": "周会记录",
+      "target_view_id": "00000000-0000-0000-0000-000000000004"
+    }
+  ],
+  "removed_source": true,
+  "dry_run": false
+}
