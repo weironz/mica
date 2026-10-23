@@ -14,6 +14,8 @@ pub use export_tree::{
   ImageAsset, TreeExport, TreeNode, build_incremental_markdown_tree_zip, build_markdown_tree_zip,
   markdown_tree_manifest, safe_segment, unique_asset_name,
 };
-pub use import::{ImportMode, ImportPlan, PagePlan, percent_decode, plan_import, resolve_ref};
+pub use import::{
+  ImportMode, ImportPlan, PagePlan, percent_decode, plan_import, plan_vault_import, resolve_ref,
+};
 pub use normalize::{expand_nested_zips, normalize_entries};
 pub use zip::{ZipEntry, ZipFileEntry, ZipStreamWriter, build_zip, read_zip};

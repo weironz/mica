@@ -546,15 +546,6 @@ async fn send_bootstrap(
     .map_err(|_| ())
 }
 
-/// Handle one client frame.
-///
-/// Deliberately does NOT receive the connection's cached `DocumentPermissions`.
-/// It used to, and both write branches checked `permissions.can_write` — a value
-/// computed when the socket opened, so a member removed or demoted mid-session
-/// kept writing until their token expired. Passing it in again would invite the
-/// same mistake back; every write re-reads the role instead (see
-/// [`current_write_permissions`]).
-#[allow(clippy::too_many_arguments)]
 /// Per-message context shared by every handler arm: who is talking, on which
 /// socket, in which room/document.
 struct ClientCtx<'a> {
@@ -566,6 +557,15 @@ struct ClientCtx<'a> {
   document_id: Uuid,
 }
 
+/// Handle one client frame.
+///
+/// Deliberately does NOT receive the connection's cached `DocumentPermissions`.
+/// It used to, and both write branches checked `permissions.can_write` — a value
+/// computed when the socket opened, so a member removed or demoted mid-session
+/// kept writing until their token expired. Passing it in again would invite the
+/// same mistake back; every write re-reads the role instead (see
+/// [`current_write_permissions`]).
+#[allow(clippy::too_many_arguments)]
 async fn handle_client_message(
   raw: &str,
   state: &AppState,

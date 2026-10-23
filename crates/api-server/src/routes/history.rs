@@ -186,6 +186,10 @@ fn normalize_version_name(name: &str) -> ApiResult<String> {
 }
 
 #[cfg(test)]
+#[path = "history_contract_gold_tests.rs"]
+mod contract_gold_tests;
+
+#[cfg(test)]
 mod tests {
   use super::*;
 

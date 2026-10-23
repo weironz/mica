@@ -664,35 +664,37 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   // Persisted per-workspace: which nodes are EXPANDED. Absent = collapsed (the
   // default). The tree opens collapsed and remembers what the user expanded;
   // navigating to / creating a nested page reveals its ancestors.
-  final Set<String> _expandedViewIds = {};
+  Set<String> get _expandedViewIds => _tree.expandedIds;
   final PageTreeCache _pageTreeCache = PageTreeCache();
 
   /// The sidebar tree's expand/focus/pending-reveal state machine — see
-  /// ui/sidebar_tree_controller.dart. The legacy fields around it
-  /// (_expandedViewIds, _focusedNavId, _rootFocused, _pendingRevealId,
-  /// _revealAttempts) are synced view-model copies for the build helpers;
-  /// every mutation goes through the controller.
+  /// ui/sidebar_tree_controller.dart. The legacy names around it
+  /// (_expandedViewIds, _focusedNavId, _rootFocused, _pendingRevealId) are
+  /// plain passthrough getters, so build helpers read them unchanged and the
+  /// listener only triggers a rebuild; every mutation goes through the
+  /// controller.
   late final SidebarTreeController _tree;
   // The view whose sidebar name is in inline-rename (edit) mode — null = none.
   // Set right after creating a page/folder (so the user types its name
   // immediately, no dialog) or from the row's "重命名" action; the matching row
   // renders a focused TextField instead of the name Text.
   /// Inline-rename (create-then-name) state — see
-  /// ui/inline_rename_controller.dart. [_renamingViewId] is the synced copy.
+  /// ui/inline_rename_controller.dart. [_renamingViewId] is a passthrough
+  /// getter onto it.
   late final InlineRenameController _inlineRename;
-  String? _renamingViewId;
+  String? get _renamingViewId => _inlineRename.renamingId;
   // The sidebar node the user last "located" — a page OR a folder (folders never
   // reach `selectedView`, so this is the only handle on a focused folder). Drives
   // where the top New-page/New-folder buttons create: inside a focused folder, or
   // beside a focused page. Kept in sync with the open doc in didUpdateWidget so a
   // single highlight follows the last interaction. Null = create at the root.
-  String? _focusedNavId;
+  String? get _focusedNavId => _tree.focusedNavId;
   // The user explicitly "located" the root by tapping the tree's blank area:
   // clears the located node (and its row highlight) even while a doc is open,
   // so the top New-page/New-folder buttons create at the workspace root. Any
   // row tap / opened doc turns this back off. Distinct from `_focusedNavId ==
   // null`, which merely falls back to the open doc.
-  bool _rootFocused = false;
+  bool get _rootFocused => _tree.rootFocused;
   // Ctrl/Shift multi-selection. EMPTY is the ordinary state — this is a second,
   // explicit notion of "chosen", deliberately separate from `_focusedNavId`
   // (which is "where new pages get created" and is never empty for long).
@@ -786,7 +788,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// Reuses `_focusedNavId` rather than inventing a second notion of "the
   /// current folder" — two of those would drift, and the tree already has one.
   /// The row a reveal is still trying to reach, or null when none is pending.
-  String? _pendingRevealId;
+  String? get _pendingRevealId => _tree.pendingRevealId;
 
   @override
   void initState() {
@@ -807,7 +809,6 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final sel = widget.selectedBootstrap?.view.id;
     if (sel != null) _tree.revealAncestors(widget.views, sel);
     _tree.addListener(_syncTreeState);
-    _syncTreeStateQuiet();
     // Restore a manually-set sidebar width; otherwise fit to the first tree.
     _navWidthManual = loadPref('navWidthManual') == 'true';
     if (_navWidthManual) {
@@ -926,7 +927,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
       // no-ops when the id is not in `views`.
       _tree.clearExpansion();
       final open = widget.selectedBootstrap?.view.id;
-      if (open != null) _revealAncestors(open);
+      if (open != null) _tree.revealAncestors(widget.views, open);
     }
     // Re-fit the sidebar to content when the tree could have changed shape:
     // switched workspace, added/removed a page, or renamed the open page.
@@ -1016,7 +1017,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // empty tree.
     final viewsChanged = widget.views.length != oldWidget.views.length;
     if ((idChanged || viewsChanged) && bootstrap != null) {
-      _revealAncestors(bootstrap.view.id);
+      _tree.revealAncestors(widget.views, bootstrap.view.id);
     }
   }
 
@@ -1055,31 +1056,14 @@ class _WorkspaceViewState extends State<WorkspaceView> {
 
   void _syncRenameState() {
     if (!mounted) return;
-    setState(() => _renamingViewId = _inlineRename.renamingId);
+    setState(() {});
   }
 
-  /// Copy the tree controller state into this State's view-model fields,
-  /// so every build helper reading them sees the same values it did
-  /// before the controller existed.
+  /// The tree controller changed: rebuild — the field names above are
+  /// passthrough getters, so there is nothing to copy.
   void _syncTreeState() {
     if (!mounted) return;
-    setState(() {
-      _expandedViewIds
-        ..clear()
-        ..addAll(_tree.expandedIds);
-      _focusedNavId = _tree.focusedNavId;
-      _rootFocused = _tree.rootFocused;
-      _pendingRevealId = _tree.pendingRevealId;
-    });
-  }
-
-  /// The initState variant: same copy, no setState (legal only before the
-  /// first build; the listener added after this call does the notifying).
-  void _syncTreeStateQuiet() {
-    _expandedViewIds.addAll(_tree.expandedIds);
-    _focusedNavId = _tree.focusedNavId;
-    _rootFocused = _tree.rootFocused;
-    _pendingRevealId = _tree.pendingRevealId;
+    setState(() {});
   }
 
   @override
@@ -1120,7 +1104,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         behavior: HitTestBehavior.translucent,
         onPointerDown: (_) {
           if (_navHovered) return;
-          _focusRoot();
+          _tree.focusRoot();
           _clearTreeSelection();
         },
         child: LayoutBuilder(
@@ -1358,7 +1342,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
         // location microseconds before the create reads it.
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onTap: _focusRoot,
+          onTap: _tree.focusRoot,
           child: Padding(
             // Tighter than the 16 all round it used to be. The sidebar's scarce
             // axis is VERTICAL — every point spent above the tree is a row of
@@ -2235,11 +2219,9 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // The located row can sit inside a collapsed parent — a folder located
     // earlier stays located after its parent is collapsed. Reveal it so the row
     // being renamed is actually on screen behind the dialog.
-    setState(() => _revealAncestors(view.id));
+    setState(() => _tree.revealAncestors(widget.views, view.id));
     _promptRenameView(view);
   }
-
-  void _cancelRename() => _inlineRename.cancel();
 
   Future<void> _commitRename(DocumentView view, String name) async {
     // Empty or unchanged → nothing to send (the controller's [renamedTo]).
@@ -2259,11 +2241,11 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     // focus and swallowed the typing, but nothing on screen moved, so the page
     // read as "not created" until you scrolled down looking for it.
     //
-    // `_revealInTree` rather than a direct scroll, because the row does not
+    // `revealInTree` rather than a direct scroll, because the row does not
     // exist yet at this moment — the tree only gains it on a later rebuild.
     // That machinery already retries per frame until the row is laid out, which
     // is exactly the shape of this problem.
-    _revealInTree(id);
+    _tree.revealInTree(widget.views, id);
   }
 
   DocumentView? _viewById(String? id) {
@@ -2289,7 +2271,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
     final located = _locatedView();
     final parent = createParentForLocated(widget.views, located);
     if (parent != null) {
-      setState(() => _expandForChildOf(parent.id)); // reveal the new child
+      // Reveal the new child.
+      setState(() => _tree.expandForChildOf(widget.views, parent.id));
     }
     final folderName = context.l10n.folderNewDefault;
     final untitled = context.l10n.untitledPage;
@@ -2330,7 +2313,8 @@ class _WorkspaceViewState extends State<WorkspaceView> {
   /// does not reach in here: the anchor has to be a child of [parent], so the
   /// fallback is the plain append this button always did.
   void _createInFolder(DocumentView parent, {required bool folder}) {
-    setState(() => _expandForChildOf(parent.id)); // reveal the new child
+    // Reveal the new child.
+    setState(() => _tree.expandForChildOf(widget.views, parent.id));
     final located = _locatedView();
     final after =
         located != null &&
@@ -2686,7 +2670,7 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           if (elsewhere && newTab && openInNewTab != null) {
             openInNewTab(viewId, other);
             // Deliberately no reveal: the id is not in the tree we are showing,
-            // and `_revealInTree` would park the request until that workspace's
+            // and `revealInTree` would park the request until that workspace's
             // tree eventually loads — jumping the sidebar at some unrelated
             // later moment.
             return;
@@ -2709,12 +2693,12 @@ class _WorkspaceViewState extends State<WorkspaceView> {
           //
           // Safe for a cross-workspace hit: the request is pending until that
           // workspace's tree loads (see [_flushPendingReveal]).
-          _revealInTree(viewId);
+          _tree.revealInTree(widget.views, viewId);
         },
         onReveal: (viewId, workspaceId) {
           Navigator.of(context).pop();
           // A folder in ANOTHER workspace has to be switched to before it can
-          // be located — `_revealInTree` alone just parks the request against a
+          // be located — `revealInTree` alone just parks the request against a
           // tree that will never contain it, which is a click that does
           // nothing. Reported 2026-08-28, and it became the COMMON case the
           // moment search started spanning every workspace by default: the top
@@ -2723,13 +2707,13 @@ class _WorkspaceViewState extends State<WorkspaceView> {
             workspaceId,
             widget.selectedWorkspace?.id,
           );
-          // Switch FIRST, then park the reveal. `_revealInTree` already knows
+          // Switch FIRST, then park the reveal. `revealInTree` already knows
           // how to wait for a tree that has not arrived ("a search hit from
           // another workspace arrives before that workspace's views do") — what
           // was missing is that nothing ever made that workspace arrive, so the
           // request waited out its ~2s budget against a tree it was never in.
           if (other != null) widget.onSelectWorkspaceById?.call(other);
-          _revealInTree(viewId);
+          _tree.revealInTree(widget.views, viewId);
         },
       ),
     );

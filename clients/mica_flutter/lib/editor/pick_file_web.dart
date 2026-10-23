@@ -1,15 +1,13 @@
 import 'dart:async';
-import 'dart:html' as html;
 import 'dart:typed_data';
+
+import 'package:web/web.dart' as web;
 
 /// Show the browser file picker (Markdown/text) and read the chosen file's text.
 Future<({String name, String text})?> pickTextFile() async {
   final file = await _pick('.md,.markdown,.txt,text/markdown,text/plain');
   if (file == null) return null;
-  final reader = html.FileReader()..readAsText(file);
-  await reader.onLoadEnd.first;
-  final result = reader.result;
-  return (name: file.name, text: result is String ? result : '');
+  return (name: file.name, text: (await file.text().toDart).toDart);
 }
 
 /// Pick a workspace `.zip` (or also Markdown when [zipOnly] is false),
@@ -47,7 +45,11 @@ Future<List<({String path, Uint8List bytes})>> pickImportFolder() async {
   };
   final out = <({String path, Uint8List bytes})>[];
   for (final f in files) {
-    final path = f.relativePath ?? f.name;
+    // `webkitRelativePath` is "" for a plain (non-directory) pick, which is
+    // what the old dart:html `relativePath ?? name` null check guarded.
+    final path = f.webkitRelativePath.isNotEmpty
+        ? f.webkitRelativePath
+        : f.name;
     final parts = path.split('/');
     // Skip hidden files AND anything inside dot-folders (.obsidian, .git,
     // .trash…) — only the picked folder itself (first segment) may be hidden.
@@ -63,42 +65,43 @@ Future<List<({String path, Uint8List bytes})>> pickImportFolder() async {
   return out;
 }
 
-Future<Uint8List> _readBytes(html.File file) async {
-  final reader = html.FileReader()..readAsArrayBuffer(file);
-  await reader.onLoadEnd.first;
-  final result = reader.result;
-  return result is ByteBuffer
-      ? result.asUint8List()
-      : (result is Uint8List ? result : Uint8List(0));
-}
+Future<Uint8List> _readBytes(web.File file) async =>
+    (await file.arrayBuffer().toDart).toDart.asUint8List();
 
-Future<html.File?> _pick(String accept) async {
+Future<web.File?> _pick(String accept) async {
   final files = await _pickFiles(accept);
   return files.isEmpty ? null : files.first;
 }
 
-Future<List<html.File>> _pickFiles(
+Future<List<web.File>> _pickFiles(
   String accept, {
   bool multiple = false,
   bool directory = false,
 }) async {
-  final input = html.FileUploadInputElement()
+  final input = web.document.createElement('input') as web.HTMLInputElement
+    ..type = 'file'
     ..multiple = multiple
     ..style.position = 'fixed'
     ..style.left = '-10000px'
     ..style.top = '0';
   if (accept.isNotEmpty) input.accept = accept;
   if (directory) input.setAttribute('webkitdirectory', '');
-  html.document.body?.append(input);
-  final done = Completer<List<html.File>>();
-  void finish(List<html.File> f) {
+  web.document.body?.append(input);
+  final done = Completer<List<web.File>>();
+  void finish(List<web.File> f) {
     if (!done.isCompleted) done.complete(f);
   }
 
-  input.onChange.listen((_) => finish(input.files ?? const []));
-  input.addEventListener('cancel', (_) => finish(const []));
+  input.onChange.listen((_) => finish(_listed(input.files)));
+  input.addEventListener('cancel', ((web.Event _) => finish(const [])).toJS);
   input.click();
   final files = await done.future;
   input.remove();
   return files;
 }
+
+/// FileList exposes `item(i)`/`length` only; project it into a Dart list.
+List<web.File> _listed(web.FileList? list) => [
+      if (list != null)
+        for (var i = 0; i < list.length; i++) list.item(i)!,
+    ];

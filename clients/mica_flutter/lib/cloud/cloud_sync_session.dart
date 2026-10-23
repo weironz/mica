@@ -33,7 +33,7 @@ import 'cloud_doc_store.dart';
 import '../api/ws_connect.dart';
 import 'sync_doc_replica.dart';
 import 'sync_status.dart';
-import 'sync_replica_io.dart' if (dart.library.html) 'sync_replica_web.dart';
+import 'sync_replica_io.dart' if (dart.library.js_interop) 'sync_replica_web.dart';
 
 export 'cloud_doc_store.dart';
 export 'sync_doc_replica.dart' show DocOp, SyncDocReplica;

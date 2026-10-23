@@ -7,4 +7,4 @@
 // headless pure-Rust `merman` engine via FFI, rendering OFFLINE. Both platforms
 // support mermaid (`mermaidAvailable == true`); only the backend differs.
 export 'mermaid_preview_stub.dart'
-    if (dart.library.html) 'mermaid_preview_web.dart';
+    if (dart.library.js_interop) 'mermaid_preview_web.dart';

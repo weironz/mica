@@ -563,12 +563,18 @@ class LocalOffline implements LocalOfflineApi {
 
   /// Import a pre-walked tree of files as local documents, mirroring the
   /// directory layout as a page tree — folders on the path to a `.md` become
-  /// empty pages; non-`.md` files and anything under a `.`-dir
-  /// (`.obsidian`/`.git`/`.trash`…) are skipped. Each [entries] item is a
+  /// folders; non-`.md` files become blobs and anything under a `.`-dir
+  /// (`.obsidian`/`.git`/`.trash`…) is skipped. Each [entries] item is a
   /// forward-slashed relative path + its bytes (as the folder picker produces).
   /// **Read-only w.r.t. the source folder** — nothing is written back. This is
-  /// the S-tier "open my vault" import; parsing is done by the authoritative Rust
-  /// engine (`MicaDocument.fromMarkdown`, round-trip-stable with export).
+  /// the S-tier "open my vault" import.
+  ///
+  /// The walk itself moved to Rust (issue #84): `MicaStore.importVaultTree`
+  /// plans the tree through `mica_interchange::plan_vault_import` (the same
+  /// plan core the archive importer uses) and lays positions with the shared
+  /// `next_position` — the Dart twin that walked directories and counted
+  /// positions here was a second copy of both. What stays on this side is the
+  /// one thing FFI has no writer for: the on-device blob CAS.
   Future<VaultImportResult> importVaultTree(
     List<({String path, List<int> bytes})> entries,
     String workspaceId, {
@@ -585,18 +591,11 @@ class LocalOffline implements LocalOfflineApi {
         if (!e.path.split('/').any((s) => s.startsWith('.'))) e,
     ];
 
-    // Markdown becomes pages; everything else becomes BLOBS, keyed by content.
-    //
-    // Non-Markdown entries used to be dropped right here, silently. A vault
-    // whose pages said `![](assets/diagram.png)` imported as pages whose every
-    // image was a dead link — no error, and nothing in the result to say a
-    // single file had been discarded. Storing them first gives the page
-    // conversion below a path→blob-id map to rewire references against.
-    final md = [
-      for (final e in visible)
-        if (e.path.toLowerCase().endsWith('.md')) e,
-    ]..sort((a, b) => a.path.compareTo(b.path));
-
+    // Non-Markdown entries become BLOBS, keyed by content — first, so the
+    // page conversion in Rust gets a path→blob-id map to rewire references
+    // against. (They used to be dropped here, silently: a vault whose pages
+    // said `![](assets/diagram.png)` imported as pages whose every image was a
+    // dead link, with nothing in the result saying a file was discarded.)
     final assetIds = <String, String>{};
     var scanned = 0;
     for (final e in visible) {
@@ -613,111 +612,28 @@ class LocalOffline implements LocalOfflineApi {
       if (++scanned % 20 == 0) await Future<void>.delayed(Duration.zero);
     }
 
-    // Lazily create folder-pages (only ancestors of a real `.md`, so asset-only
-    // dirs don't clutter the tree).
-    final folderView = <String, String>{}; // relative dir -> view id
-    // Seed each parent's counter from its EXISTING children's max position, so
-    // an import into a NON-EMPTY folder/root (the common case for the folder ⋯
-    // "import into folder" menu) doesn't reuse positions already taken —
-    // local_view has no (parent, position) unique constraint or tiebreak, so a
-    // collision would leave sibling order undefined. Work in position-integer
-    // space (10-spaced), matching _nextLocalPosition on the host.
-    final lastPosByParent = <String?, int>{};
-    for (final v in store.listViews(origin: 'local')) {
-      if (v.workspaceId != workspaceId) continue;
-      final n = int.tryParse(v.position) ?? 0;
-      if (n > (lastPosByParent[v.parentId] ?? 0)) {
-        lastPosByParent[v.parentId] = n;
-      }
-    }
-    String nextPos(String? parent) {
-      final n = (lastPosByParent[parent] ?? 0) + 10;
-      lastPosByParent[parent] = n;
-      return n.toString().padLeft(10, '0');
-    }
-
-    var folders = 0;
-    String? ensureFolder(String relDir) {
-      // Top-level nodes hang off the import target (a folder) when given, else
-      // the workspace root — the local mirror of the server's `root_parent`.
-      if (relDir.isEmpty) return parentViewId;
-      final existing = folderView[relDir];
-      if (existing != null) return existing;
-      final slash = relDir.lastIndexOf('/');
-      final parentRel = slash < 0 ? '' : relDir.substring(0, slash);
-      final name = slash < 0 ? relDir : relDir.substring(slash + 1);
-      final parentView = ensureFolder(parentRel);
-      final docId = _id('doc');
-      final viewId = _id('view');
-      store.saveDoc(
-        docId: docId,
-        doc: MicaDocument.fromMarkdown(markdown: ''),
-      );
-      saveView((
-        id: viewId,
-        workspaceId: workspaceId,
-        parentId: parentView,
-        objectId: docId,
-        name: name,
-        position: nextPos(parentView),
-        trashed: false,
-        // A vault directory is a pure container — a folder (F2 makes the server
-        // import do the same). The empty doc above is an unused placeholder.
-        objectType: 'folder',
-      ));
-      folders++;
-      folderView[relDir] = viewId;
-      return viewId;
-    }
-
-    var docs = 0;
-    for (final e in md) {
-      try {
-        final path = e.path;
-        final slash = path.lastIndexOf('/');
-        final relDir = slash < 0 ? '' : path.substring(0, slash);
-        var fileName = slash < 0 ? path : path.substring(slash + 1);
-        if (fileName.toLowerCase().endsWith('.md')) {
-          fileName = fileName.substring(0, fileName.length - 3);
-        }
-        final parentView = ensureFolder(relDir);
-        final text = utf8.decode(e.bytes, allowMalformed: true);
-        final docId = _id('doc');
-        final viewId = _id('view');
-        // Resolution happens in Rust, against the same `resolve_ref` the
-        // server import uses — relative paths, `..`, percent-encoding and the
-        // unique-basename fallback all behave identically on both sides
-        // rather than being reimplemented here and drifting.
-        final doc = MicaDocument.fromMarkdownWithAssets(
-          markdown: text,
-          fromPath: path,
-          assetIds: assetIds,
-        );
-        // The file name goes INTO the document, not only into the view row
-        // beside it, so a vault page knows its own name by the same rule as a
-        // renamed one (`docs/features/page-title-plan.md`; the cloud importer does this
-        // through `mica_markdown::set_document_title`). Before the first save,
-        // so it rides in the initial state instead of costing a second write.
-        if (fileName.isNotEmpty) doc.setTitle(title: fileName);
-        store.saveDoc(docId: docId, doc: doc);
-        saveView((
-          id: viewId,
-          workspaceId: workspaceId,
-          parentId: parentView,
-          objectId: docId,
-          name: fileName.isEmpty ? 'Untitled' : fileName,
-          position: nextPos(parentView),
-          trashed: false,
-          objectType: 'document',
-        ));
-        docs++;
-        // Yield periodically so a large vault doesn't freeze the UI isolate.
-        if (docs % 20 == 0) await Future<void>.delayed(Duration.zero);
-      } catch (err) {
-        errors.add('${e.path}: $err');
-      }
-    }
-    return (docs: docs, folders: folders, errors: errors);
+    // Tree planning + positions + per-page conversion, all across the bridge
+    // in one call (not one crossing per node). Only Markdown goes over: the
+    // plan core never needs attachment bytes, so a vault of images crosses
+    // exactly once — into the CAS above — not twice.
+    final outcome = await store.importVaultTree(
+      entries: [
+        for (final e in visible)
+          if (e.path.toLowerCase().endsWith('.md'))
+            VaultTreeEntry(
+              path: e.path,
+              bytes: Uint8List.fromList(e.bytes),
+            ),
+      ],
+      workspaceId: workspaceId,
+      parentViewId: parentViewId,
+      assetIds: assetIds,
+    );
+    return (
+      docs: outcome.docs,
+      folders: outcome.folders,
+      errors: [...errors, ...outcome.errors],
+    );
   }
 
   /// Revert a document to its last on-device checkpoint (§10 recovery). The

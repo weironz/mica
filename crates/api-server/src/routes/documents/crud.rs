@@ -121,6 +121,7 @@ pub async fn import_document_markdown(
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
 
   let name = normalize_view_name(&payload.name)?;
+  reject_mangled_latex(&payload.markdown)?;
 
   if let Some(parent_view_id) = payload.parent_view_id {
     ensure_parent_accepts_children(&state.db, workspace_id, parent_view_id).await?;
@@ -582,6 +583,13 @@ pub async fn update_document_markdown(
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_editor(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
+
+  // Every field that carries authored content: find_replace writes through
+  // `replace`, and a swapped-in formula is mangled by the same under-escaping.
+  reject_mangled_latex(&request.markdown)?;
+  if let Some(replace) = request.replace.as_deref() {
+    reject_mangled_latex(replace)?;
+  }
 
   // Derive the ops from the snapshot INSIDE the write lock (no read-then-apply
   // TOCTOU: an anchor index / delete target can't drift under a concurrent edit).
@@ -1257,6 +1265,33 @@ mod tests {
     assert!(
       err.contains("wipe") || err.contains("content"),
       "empty replace_all must not wipe the doc, got: {err}",
+    );
+  }
+
+  // ── Gold-file contract test (#85) ──────────────────────────────────────────
+  //
+  // `contracts/batch_read.json` is decoded by the cli (raw `["documents"]`
+  // navigation) and the mcp suite (its batch-read result rows). Per item,
+  // exactly one of `markdown` / `error` is present — never both, never neither.
+
+  #[test]
+  fn gold_batch_read_response() {
+    crate::routes::contract_gold::check(
+      "batch_read",
+      &serde_json::json!(BatchReadResponse {
+        documents: vec![
+          BatchReadItem {
+            document_id: Uuid::parse_str("66666666-6666-4666-8666-666666666666").unwrap(),
+            markdown: Some("# First\n\nbody".to_string()),
+            error: None,
+          },
+          BatchReadItem {
+            document_id: Uuid::parse_str("77777777-7777-4777-8777-777777777777").unwrap(),
+            markdown: None,
+            error: Some("not found".to_string()),
+          },
+        ],
+      }),
     );
   }
 }

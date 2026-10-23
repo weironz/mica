@@ -1,10 +1,11 @@
 import 'dart:async';
-import 'dart:html' as html;
 import 'dart:typed_data';
+
+import 'package:web/web.dart' as web;
 
 /// Show the browser file picker (images only) and read the chosen file's bytes.
 Future<({String name, String mime, Uint8List bytes})?> pickImage() async {
-  final input = html.FileUploadInputElement()
+  final input = web.document.createElement('input') as web.HTMLInputElement
     ..accept = 'image/*'
     ..multiple = false
     // Keep it in the DOM (some browsers require it) but off-screen rather than
@@ -12,7 +13,7 @@ Future<({String name, String mime, Uint8List bytes})?> pickImage() async {
     ..style.position = 'fixed'
     ..style.left = '-10000px'
     ..style.top = '0';
-  html.document.body?.append(input);
+  web.document.body?.append(input);
 
   final done = Completer<({String name, String mime, Uint8List bytes})?>();
 
@@ -21,37 +22,27 @@ Future<({String name, String mime, Uint8List bytes})?> pickImage() async {
   }
 
   input.onChange.listen((_) async {
-    final files = input.files;
-    if (files == null || files.isEmpty) {
+    final list = input.files;
+    final file = list == null || list.length == 0 ? null : list.item(0);
+    if (file == null) {
       finish(null);
       return;
     }
-    final file = files.first;
-    final reader = html.FileReader()..readAsArrayBuffer(file);
-    await reader.onLoadEnd.first;
-    // dart2js types readAsArrayBuffer's result inconsistently (often not a
-    // plain ByteBuffer), so accept the common byte representations.
-    final result = reader.result;
-    Uint8List? bytes;
-    if (result is ByteBuffer) {
-      bytes = result.asUint8List();
-    } else if (result is Uint8List) {
-      bytes = result;
-    } else if (result is List<int>) {
-      bytes = Uint8List.fromList(result);
-    }
-    if (bytes == null) {
+    try {
+      // File extends Blob, so the promise-based reads replace the old
+      // FileReader + onLoadEnd dance (and give errors as rejections).
+      final buffer = await file.arrayBuffer().toDart;
+      finish((
+        name: file.name,
+        mime: file.type.isEmpty ? 'application/octet-stream' : file.type,
+        bytes: buffer.toDart.asUint8List(),
+      ));
+    } catch (_) {
       finish(null);
-      return;
     }
-    finish((
-      name: file.name,
-      mime: file.type.isEmpty ? 'application/octet-stream' : file.type,
-      bytes: bytes,
-    ));
   });
   // Newer Chrome fires a 'cancel' event when the dialog is dismissed.
-  input.addEventListener('cancel', (_) => finish(null));
+  input.addEventListener('cancel', ((web.Event _) => finish(null)).toJS);
 
   input.click();
 

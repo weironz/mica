@@ -92,7 +92,7 @@ pub fn stripped_wrapper_name(entries: &[ZipFileEntry]) -> Option<String> {
 
 /// Any dot-segment hides the whole subtree: `.obsidian/`, `.git/`, `.trash/`,
 /// `.DS_Store`, AppleDouble `._*` files…
-fn is_junk(path: &str) -> bool {
+pub(crate) fn is_junk(path: &str) -> bool {
   let mut last = "";
   for seg in path.split('/') {
     if seg == "__MACOSX" || seg.starts_with('.') {

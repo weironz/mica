@@ -8,6 +8,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[cfg(test)]
+mod contract_tests;
+
 pub struct Client {
   base: String,
   token: Option<String>,

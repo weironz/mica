@@ -104,12 +104,24 @@ export 'api/models.dart';
 export 'api/doc_socket_uri.dart';
 
 part 'ui/dialogs.dart';
+// _SettingsDialogState split per tab (issue #81) — extensions in these parts
+// keep the class's logic one file per settings destination.
+part 'ui/dialogs_settings_appearance.dart';
+part 'ui/dialogs_settings_account.dart';
+part 'ui/dialogs_settings_tokens.dart';
+part 'ui/dialogs_settings_data.dart';
+part 'ui/dialogs_settings_ai.dart';
+part 'ui/dialogs_settings_misc.dart';
 part 'ui/widgets.dart';
 part 'main_shell.dart';
 part 'main_editor_history.dart';
 part 'main_workspace_view.dart';
+part 'main_workspace_tree_nav.dart';
+part 'main_workspace_editor_pane.dart';
 part 'main_panels.dart';
 part 'main_tree_helpers.dart';
+part 'world/world_backend.dart';
+part 'world/local_world_backend.dart';
 
 /// Dev convenience: when true, the app signs in automatically on startup so you
 /// don't have to log in on every reload. Turn it off for a real login screen:

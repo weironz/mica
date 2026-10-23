@@ -1,5 +1,5 @@
-import 'dart:html' as html;
+import 'package:web/web.dart' as web;
 
 void openUrl(String url) {
-  html.window.open(url, '_blank', 'noopener,noreferrer');
+  web.window.open(url, '_blank', 'noopener,noreferrer');
 }

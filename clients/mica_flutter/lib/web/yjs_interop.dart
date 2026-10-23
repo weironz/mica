@@ -1,7 +1,7 @@
 // P2-M4 (web→yjs): Dart bindings to the browser yjs engine exposed by
 // `web/yjs_bundle.js` as `globalThis.micaYjs`. Web-only — this file imports
 // `dart:js_interop` and must never be compiled for desktop (it's reached solely
-// through the `dart.library.html` conditional in `yjs_probe.dart`).
+// through the `dart.library.js_interop` conditional in `yjs_probe.dart`).
 import 'dart:js_interop';
 
 /// The flat helper API from `tool/yjs/entry.js`.

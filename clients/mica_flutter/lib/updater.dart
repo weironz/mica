@@ -4,4 +4,4 @@
 /// the web bundle).
 library;
 
-export 'updater_desktop.dart' if (dart.library.html) 'updater_web.dart';
+export 'updater_desktop.dart' if (dart.library.js_interop) 'updater_web.dart';

@@ -810,18 +810,14 @@ impl MicaDoc {
 
   /// Set ONE key on ONE block's `props`, touching nothing else.
   ///
-  /// The narrow counterpart to [`Self::set_blocks`], and it exists for a
-  /// specific reason: `set_blocks` — which is what every REST/MCP write and
-  /// every version restore goes through — replaces each block's map wholesale,
-  /// so every `text` becomes a BRAND-NEW yrs object. Comment anchors are
-  /// `StickyIndex` values into those text objects, so rebuilding the text
-  /// orphans every anchor on the page while the characters stay identical.
-  /// That is acceptable for a restore, which really is rewriting the document;
-  /// it is not acceptable for "the page was renamed".
-  ///
-  /// This one resolves the EXISTING block map and writes a single entry into
-  /// its `props` map. `text` is never read or written, so the sticky indexes
-  /// keep pointing at the same objects. `props` is already a field-level map
+  /// The narrow counterpart to [`Self::set_blocks`], for an edit that is a
+  /// single property — the page rename (`set_document_title`) is the driving
+  /// case. `set_blocks` is written as a diff, so it would converge to the same
+  /// content, but it needs the whole block set flattened back out first: a
+  /// full-document read and a per-block comparison for a one-key change. This
+  /// one resolves the EXISTING block map and writes a single entry into its
+  /// `props` map. `text` is never read or written, so `StickyIndex` comment
+  /// anchors keep pointing at the same objects. `props` is a field-level map
   /// (one yrs entry per top-level data key), so a concurrent edit to a
   /// DIFFERENT key converges rather than clobbering — see [`set_props`].
   ///

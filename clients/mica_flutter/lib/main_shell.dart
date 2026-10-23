@@ -25,7 +25,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// [_servers] and [_cloudOrigin] below are synced view-model copies.
   late final ServerRegistry _registry;
 
-  AuthSession? _session;
+  AuthSession? get _session => _sessionCtrl.session;
 
   /// The auth domain's session half — credential persistence keyed by origin,
   /// renewal/expiry lifecycle, profile refresh, the sign-in core and the
@@ -39,13 +39,14 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// The session/workspace hub — the four fields every domain used to touch
   /// directly, now owned by [SessionController] (god-class third step; see
   /// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md §7). The four legacy
-  /// fields right below are synced view-model copies for the build helpers;
-  /// every mutation goes through a controller transition.
+  /// names below are plain passthrough getters so the build helpers read them
+  /// unchanged; every mutation goes through a controller transition and the
+  /// listener only triggers a rebuild.
   late final SessionController _sessionCtrl;
-  List<Workspace> _workspaces = const [];
+  List<Workspace> get _workspaces => _sessionCtrl.workspaces;
 
-  /// The workspace members map — see views/members_controller.dart. The field
-  /// below is a synced view-model copy for the build helpers.
+  /// The workspace members map — see views/members_controller.dart. The name
+  /// below is a passthrough getter for the build helpers.
   late final MembersController _membersCtrl;
 
   /// Workspace invitations (views/invitations_controller.dart).
@@ -55,14 +56,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     onJoined: (w) =>
         _refreshWorkspaces().then((_) => _selectWorkspaceById(w.id)),
   );
-  Map<String, List<WorkspaceMember>> _membersByWorkspace = const {};
-  Map<String, List<DocumentView>> _viewsByWorkspace = const {};
+  Map<String, List<WorkspaceMember>> get _membersByWorkspace =>
+      _membersCtrl.membersByWorkspace;
+  Map<String, List<DocumentView>> get _viewsByWorkspace =>
+      _sessionCtrl.viewsByWorkspace;
 
   /// The cloud page-tree domain (writes, loads, mirror) — see
   /// views/cloud_views_controller.dart (god-class fifth step). The tree
   /// itself lives in [_sessionCtrl]; this owns the fetch bookkeeping.
   late final CloudViewsController _viewsCtrl;
-  Workspace? _selectedWorkspace;
+  Workspace? get _selectedWorkspace => _sessionCtrl.selectedWorkspace;
 
   /// The open tabs, left to right. Always holds at least one — a tab with a
   /// null [DocTab.view] is the empty state ("no page open"), NOT the absence of
@@ -122,16 +125,16 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// carry this, since it's true for every operation and says nothing about size.
   /// The import domain's logic half (polling, second image pass), extracted
   /// from this State in the god-class pilot — see
-  /// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md. [_importProgress] and
-  /// [_importJobId] below stay as this State's view-model copies, synced from
-  /// the controller in [_syncImportState], so the sidebar row and its cancel
-  /// button read them unchanged.
+  /// docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND3.md. [_importProgress]
+  /// and [_importJobId] below are plain passthrough getters, so the sidebar
+  /// row and its cancel button keep reading them unchanged; the controller's
+  /// listener only triggers a rebuild.
   late final ImportController _import;
-  ({int done, int total})? _importProgress;
+  ({int done, int total})? get _importProgress => _import.progress;
 
   /// The running import's job id, so the progress row can ask it to stop. Null
   /// whenever no import is in flight.
-  String? _importJobId;
+  String? get _importJobId => _import.jobId;
   // True while the cloud nav was rebuilt from the on-device mirror because the
   // server was unreachable (P1c). Roles are forced read-only until the server is
   // reached again; [_recoverOnlineNav] then refetches the authoritative nav.
@@ -187,15 +190,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // --- Local offline (P2-M3) ---
   // A single implicit local workspace + synthetic identity; the page tree and
   // documents live entirely on-device (SQLite via the LocalOffline facade).
+  // The LOCAL WORLD's page tree/selection/bootstrap/epoch and every local
+  // operation live on [_localBackend] (world/local_world_backend.dart); the
+  // store itself stays here because it also backs the cloud mirrors.
   final LocalOffline _local = LocalOffline();
   bool _localReady = false;
-  List<Workspace> _localWorkspaces = const [];
-  Workspace? _localSelectedWorkspace;
-  List<DocumentView> _localViews = const [];
-  DocumentView? _localSelectedView;
-  DocumentBootstrap? _localBootstrap;
-  // Bumped on rollback to force the local editor to remount fresh.
-  int _localEditorEpoch = 0;
+
+  /// The two worlds behind the shell (world/world_backend.dart). [_activeBackend]
+  /// is the one [_unifiedWorkspaceView] wires itself to — the interface is what
+  /// replaced the ~80 `local ? ... : ...` ternaries that wiring used to carry.
+  late final _LocalWorldBackend _localBackend = _LocalWorldBackend(this);
+  late final _CloudWorldBackend _cloudBackend = _CloudWorldBackend(this);
+  WorldBackend get _activeBackend =>
+      _activeIsLocal ? _localBackend : _cloudBackend;
 
   @override
   void initState() {
@@ -243,7 +250,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       _activeOrigin = _cloudOrigin;
     }
     if (_local.available) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _initLocalOffline());
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _localBackend._initLocalOffline(),
+      );
     }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _restoreSession();
@@ -957,9 +966,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// A tab parked with a view and no bootstrap would render as permanently
   /// loading, and clicking it would switch workspace to show nothing.
   ///
-  /// Nothing is revealed in the sidebar. `_revealInTree` on an id that is not in
-  /// the current tree PARKS the request until that workspace's tree loads, so
-  /// revealing here would make the sidebar jump at some unrelated later moment.
+  /// Nothing is revealed in the sidebar. `SidebarTreeController.revealInTree`
+  /// on an id that is not in the current tree PARKS the request until that
+  /// workspace's tree loads, so revealing here would make the sidebar jump at
+  /// some unrelated later moment.
   Future<void> _openElsewhereInBackgroundTab(
     String viewId,
     String workspaceId,
@@ -1267,21 +1277,24 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  /// Copy the session hub's state into this State's view-model fields, so
-  /// every build helper reading them sees the values it always did.
+  /// The session hub changed: rebuild — the field names above are passthrough
+  /// getters, so there is nothing to copy. The one side effect lives on the
+  /// WORKSPACE LIST edge: the invitee inbox rides on every new list (startup,
+  /// sign-in, refresh; sign-out clears it). No push — a list refresh is the
+  /// moment.
   void _syncSessionState() {
     if (!mounted) return;
-    // The invitee inbox rides on every new workspace list (startup, sign-in,
-    // refresh; sign-out clears it). No push — a list refresh is the moment.
-    final newList = !identical(_sessionCtrl.workspaces, _workspaces);
-    if (newList) unawaited(_invites.refreshReceived());
-    setState(() {
-      _session = _sessionCtrl.session;
-      _workspaces = _sessionCtrl.workspaces;
-      _viewsByWorkspace = _sessionCtrl.viewsByWorkspace;
-      _selectedWorkspace = _sessionCtrl.selectedWorkspace;
-    });
+    final workspaces = _sessionCtrl.workspaces;
+    if (!identical(workspaces, _lastWorkspaces)) {
+      _lastWorkspaces = workspaces;
+      unawaited(_invites.refreshReceived());
+    }
+    setState(() {});
   }
+
+  /// The last workspace list the session listener saw, so the invitee-inbox
+  /// refresh above can still tell a NEW list from a same-list notification.
+  List<Workspace> _lastWorkspaces = const [];
 
   /// The auth controller's probe answers land here — the only state it
   /// publishes as a notifier (the session itself arrives through
@@ -1398,7 +1411,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     };
   }
 
-  /// Wire the members controller and keep the legacy field a synced copy.
+  /// Wire the members controller; the legacy field name is a passthrough
+  /// getter, so the listener only triggers a rebuild.
   void _initMembersController() {
     _membersCtrl = MembersController(
       listMembers: _api.listWorkspaceMembers,
@@ -1407,13 +1421,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     )..addListener(_syncMembersState);
   }
 
-  /// The State's view-model copy of the members map — the share sheet and the
-  /// version-author projection keep reading this field unchanged.
+  /// The members map changed: rebuild — the share sheet and the
+  /// version-author projection read it through the getter unchanged.
   void _syncMembersState() {
     if (!mounted) return;
-    setState(() {
-      _membersByWorkspace = _membersCtrl.membersByWorkspace;
-    });
+    setState(() {});
   }
 
   /// Wire the import controller: every remote call is a closure over this
@@ -1488,13 +1500,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     _import.addListener(_syncImportState);
   }
 
-  /// The State's view-model copies of the controller's progress/job id — the
-  /// sidebar row and its cancel button keep reading these fields unchanged.
+  /// Import progress / job id changed: rebuild — the sidebar row and its
+  /// cancel button read them through the getters unchanged.
   void _syncImportState() {
-    setState(() {
-      _importProgress = _import.progress;
-      _importJobId = _import.jobId;
-    });
+    if (!mounted) return;
+    setState(() {});
   }
 
   /// Wire the sync controller (god-class seventh step): the reconcile loop,
@@ -2220,11 +2230,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// throw `exportLocalUnsupported` locally — HTML works offline, so this closes
   /// that gap for local workspaces.
   Future<String> _localExportPageHtml(String title) async {
-    // The LOCAL world tracks its open page in `_localBootstrap`, NOT the
-    // cloud/shared `_selectedBootstrap` (the editor renders `_localBootstrap`
-    // too — see the `local ? _localBootstrap : _selectedBootstrap` build site).
+    // The LOCAL world tracks its open page on the local backend, NOT the
+    // cloud/shared `_selectedBootstrap` (the editor renders the local
+    // bootstrap too — see the `bootstrap` build site in _unifiedWorkspaceView).
     // Reading `_selectedBootstrap` here exported a stale, unrelated doc.
-    final bootstrap = _localBootstrap;
+    final bootstrap = _localBackend.bootstrap;
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
@@ -2249,7 +2259,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   Future<({Uint8List bytes, String name, String mime})> _localExportPage(
     String title,
   ) async {
-    final bootstrap = _localBootstrap;
+    final bootstrap = _localBackend.bootstrap;
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
@@ -2287,11 +2297,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
 
   /// Local mirror of [_pageMarkdownText].
   ///
-  /// Reads `_localBootstrap`, NOT the cloud `_selectedBootstrap` — the same trap
-  /// [_localExportPageHtml] documents, where reading the wrong one silently
-  /// exported an unrelated, stale document.
+  /// Reads the LOCAL world's bootstrap off the local backend, NOT the cloud
+  /// `_selectedBootstrap` — the same trap [_localExportPageHtml] documents,
+  /// where reading the wrong one silently exported an unrelated, stale document.
   Future<String> _localPageMarkdownText() async {
-    final bootstrap = _localBootstrap;
+    final bootstrap = _localBackend.bootstrap;
     if (bootstrap == null) {
       throw ApiException(context.l10n.pageOpenFirst);
     }
@@ -2314,7 +2324,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// Export a LOCAL folder's subtree as a ZIP via the shared Rust builder — the
   /// local mirror of [_exportFolderZip], closing the last local-export gap.
   Future<Uint8List> _localExportFolderZip(DocumentView folder) async {
-    final wsId = _workspaceIdOfView(folder.id);
+    final wsId = _localBackend._workspaceIdOfView(folder.id);
     final bytes = _local.exportFolderZip(wsId, folder.id);
     if (bytes == null || bytes.isEmpty) {
       throw ApiException(context.l10n.exportEmptyContent);
@@ -2346,12 +2356,10 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
   }
 
-  /// Local-world search: straight to the on-device index, scoped to the open
-  /// local workspace — the store also holds the other local workspaces and the
-  /// cloud mirrors. Backlinks and the graph below take the same [_localWsId].
-  String get _localWsId => _localSelectedWorkspace?.id ?? 'local';
-  Future<List<SearchResult>> _searchLocalWorkspace(String query) =>
-      _local.searchLocal(_localWsId, query);
+  // Local-world search lives on the local backend now (same store, same
+  // `_localWsId` — world/local_world_backend.dart); the backlinks/graph
+  // loaders below still run here because they answer for the ACTIVE world,
+  // either of them.
 
   Future<List<SearchResult>> _searchWorkspace(String query) async {
     final session = _session;
@@ -2400,15 +2408,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     await _openViewById(viewId);
   }
 
-  /// Open a local search hit.
-  ///
-  /// Without this, local search finds pages and clicking one does nothing —
-  /// which is a worse state than not searching at all: the list proves the page
-  /// exists and then refuses to go there.
-  Future<void> _openLocalViewById(String viewId) async {
-    final view = _localViews.where((v) => v.id == viewId).firstOrNull;
-    if (view != null) await _localSelectView(view);
-  }
+  // Opening a LOCAL search hit is the local backend's job (it owns the local
+  // page tree selection) — `WorldBackend.searchOps.openResult`.
 
   Future<void> _openViewById(String viewId) async {
     final workspace = _selectedWorkspace;
@@ -2432,7 +2433,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// nothing either way, so the panel just stays hidden.
   /// The page-link graph of the open workspace, from whichever world it is.
   Future<PageGraph> _loadGraph() async {
-    if (_activeIsLocal) return _local.graphLocal(_localWsId);
+    if (_activeIsLocal) return _local.graphLocal(_localBackend._localWsId);
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return PageGraph.empty;
@@ -2440,7 +2441,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Future<List<Backlink>> _loadBacklinks(String viewId) async {
-    if (_activeIsLocal) return _local.backlinksLocal(_localWsId, viewId);
+    if (_activeIsLocal) {
+      return _local.backlinksLocal(_localBackend._localWsId, viewId);
+    }
     final session = _session;
     final workspace = _selectedWorkspace;
     if (session == null || workspace == null) return const [];
@@ -3159,39 +3162,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     });
   }
 
-  /// Open a page the home screen listed. Home carries ids (it spans workspaces),
-  /// so the view object is looked up here; a stale id — the page was deleted
-  /// between render and tap — is simply ignored rather than guessed at.
-  void _openViewFromHome(String viewId, {required bool local}) {
-    if (local) {
-      for (final view in _localViews) {
-        if (view.id != viewId) continue;
-        // A FOLDER is not a document — opening it as one did nothing at all,
-        // which is what the home screen's directory list used to do. Show its
-        // contents.
-        if (view.isFolder) {
-          setState(() => _overviewFolderId = view.id);
-          return;
-        }
-        unawaited(_localSelectView(view));
-        return;
-      }
-      return;
-    }
-    // Which workspace the hit came from is what this used to throw away by
-    // flattening `.values` — and it is exactly what the open needs.
-    final workspaceId = workspaceIdOfView(
-      viewsByWorkspace: _viewsByWorkspace,
-      viewId: viewId,
-    );
-    if (workspaceId == null) return;
-    for (final view
-        in _viewsByWorkspace[workspaceId] ?? const <DocumentView>[]) {
-      if (view.id != viewId) continue;
-      unawaited(_openAcrossWorkspaces(workspaceId, view));
-      return;
-    }
-  }
+  // The flagged `_openViewFromHome(viewId, local:)` is gone — opening a
+  // home-listed page (and the folder-reveal branch) now lives on the two world
+  // backends as `ViewOps.openViewFromHome` (world_backend.dart /
+  // local_world_backend.dart). The LOCAL half dispatches to
+  // `_overviewFolderId` through the shell handle it holds already.
 
   /// Open a page — or reveal a folder — that may live in a DIFFERENT workspace,
   /// switching there first when it does.
@@ -3235,18 +3210,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   String? _overviewFolderId;
   WorkspaceOverviewMode _overviewMode = WorkspaceOverviewMode.cards;
 
-  /// Close the open page so home shows again (the sidebar's Home row). Keeps the
-  /// workspace selection — home is a view of the world, not a way out of it.
-  void _closeOpenPage({required bool local}) {
-    setState(() {
-      if (local) {
-        _localSelectedView = null;
-      } else {
-        _selectedView = null;
-        _selectedBootstrap = null;
-      }
-    });
-  }
+  // Closing the open page (the sidebar's Home row) moved onto the world
+  // backends too — `ViewOps.closeOpenPage`. What stays on the shell is the
+  // `_overviewFolderId` reset the caller still owns.
 
   Future<bool> _renameView(DocumentView view, String name) async {
     final workspaceId =
@@ -3459,463 +3425,19 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     replica.applyLocalOps(operations, trackHistory: trackHistory);
   }
 
-  // ── Local offline (P2-M3) ──────────────────────────────────────────────────
-  // The page tree + documents are on-device. These mirror the cloud callbacks
-  // above but route to the LocalOffline facade (SQLite + yrs) instead of _api.
+  // ── Local offline (P2-M3) ── now lives on the local backend ────────────────
+  // The local world's page tree, selection, bootstrap, editor epoch and every
+  // local operation moved to world/local_world_backend.dart (`_LocalWorldBackend`,
+  // reached from here as `_localBackend` / `_activeBackend`), verbatim. What
+  // stays below is the cross-world migration engine (§6), which reads the local
+  // store too.
 
-  DocumentView _viewFromData(ViewData v) => DocumentView(
-    id: v.id,
-    parentViewId: v.parentId,
-    objectId: v.objectId,
-    objectType: v.objectType,
-    name: v.name,
-    position: v.position,
-  );
+  // (_localSelectView / _showLocalCorruptDialog moved to the local backend.)
 
-  Workspace _workspaceFromData(WorkspaceData w) =>
-      Workspace(id: w.id, name: w.name, ownerId: 'local', role: 'owner');
+  // (_localRollbackDoc moved to the local backend too.)
 
-  /// Reload the workspace list and keep (or re-anchor) the selection. The store
-  /// always has at least one workspace.
-  void _reloadLocalWorkspaces() {
-    _localWorkspaces = [
-      for (final w in _local.listWorkspaces()) _workspaceFromData(w),
-    ];
-    if (_localWorkspaces.isEmpty) {
-      _localSelectedWorkspace = null;
-      return;
-    }
-    // On first load restore the last-selected local workspace (AppFlowy remembers
-    // the active workspace per user); after that keep the current selection.
-    final selId =
-        _localSelectedWorkspace?.id ?? loadPref('lastWorkspaceId:local');
-    _localSelectedWorkspace = _localWorkspaces.firstWhere(
-      (w) => w.id == selId,
-      orElse: () => _localWorkspaces.first,
-    );
-  }
-
-  /// The local page to open for the selected workspace: the one last viewed there
-  /// (AppFlowy remembers it per-workspace), else the first openable page. A saved
-  /// id that no longer resolves (deleted) falls through to the first page.
-  DocumentView? _localViewToOpen() {
-    final wsId = _localSelectedWorkspace?.id;
-    final wantId = wsId == null ? null : loadPref('lastViewId:$wsId');
-    final saved = _localViews
-        .where((v) => v.id == wantId && v.objectType != 'folder')
-        .firstOrNull;
-    return saved ?? firstOpenableView(_localViews);
-  }
-
-  /// The workspace a stored view belongs to (views carry it; DocumentView does
-  /// not), falling back to the selected workspace.
-  String _workspaceIdOfView(String viewId) {
-    for (final v in _local.listViews()) {
-      if (v.id == viewId) return v.workspaceId;
-    }
-    return _localWsId;
-  }
-
-  DocumentBootstrap _localBootstrapFrom(
-    String docId,
-    String rootBlockId,
-    List<Map<String, dynamic>> blocks,
-    DocumentView view,
-  ) {
-    return DocumentBootstrap(
-      document: DocumentRecord(
-        id: docId,
-        rootBlockId: rootBlockId,
-        currentSeq: 0,
-      ),
-      view: view,
-      snapshot: DocumentSnapshot(
-        versionSeq: 1,
-        schemaVersion: 1,
-        payload: {'blocks': blocks},
-      ),
-    );
-  }
-
-  /// Reload the live (non-trashed) page tree of the selected workspace.
-  void _reloadLocalViews() {
-    final wsId = _localSelectedWorkspace?.id;
-    _localViews = [
-      for (final v in _local.listViews())
-        if (!v.trashed && v.workspaceId == wsId) _viewFromData(v),
-    ];
-  }
-
-  /// Next sibling position under [parentViewId] (zero-padded, 10-spaced).
-  /// Open the on-device store, load the page tree, and select (or seed) a page.
-  /// Index documents saved before the search projection existed.
-  ///
-  /// Every save writes the projection from now on, so this only ever runs
-  /// through the backlog once — but that backlog is every page the user already
-  /// had (588 snapshots on this machine), and none of them would be findable by
-  /// body text until something walked them.
-  ///
-  /// **Batched, off the first frame, and never surfaced as an error.** Search
-  /// being briefly incomplete is invisible; a startup that stalls decoding
-  /// hundreds of CRDT documents is not. The yields between batches are the whole
-  /// point — without them this is one long block with extra steps.
-  Future<void> _backfillLocalSearchIndex() async {
-    const batch = 25;
-    try {
-      while (mounted) {
-        final done = await _local.backfillSearchIndex(batch);
-        if (done < batch) return; // caught up
-        await Future<void>.delayed(Duration.zero);
-      }
-    } catch (_) {
-      // An index that did not finish building costs body matches on some pages.
-      // It is not worth a message, and it is certainly not worth failing local
-      // mode over — the notes open either way.
-    }
-  }
-
-  Future<void> _initLocalOffline() async {
-    if (_localReady) return;
-    final l10n = context.l10n;
-    try {
-      await _local.open();
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _message = l10n.snackLocalStoreOpenFailed('$error');
-          // Unblock the shell (P3c gates on _localReady) — the local world
-          // shows empty with the error banner; the cloud world still works.
-          _localReady = true;
-        });
-      }
-      return;
-    }
-    _reloadLocalWorkspaces();
-    _reloadLocalViews();
-    unawaited(_backfillLocalSearchIndex());
-    if (_localViews.isEmpty) {
-      await _localCreateDocument(l10n.pageWelcomeName);
-    } else {
-      // Open the page last viewed in this workspace (else the first openable
-      // one), skipping folders (a folder has no doc to open; _localSelectView
-      // would early-return, leaving the editor blank).
-      final toOpen = _localViewToOpen();
-      if (toOpen != null) await _localSelectView(toOpen);
-    }
-    if (mounted) setState(() => _localReady = true);
-  }
-
-  Future<void> _localCreateWorkspace(String name) async {
-    final title = name.trim().isEmpty
-        ? context.l10n.workspaceDefaultName
-        : name.trim();
-    // Rust mints the id and the position, by the same step-of-ten rule the
-    // view tree uses.
-    final id = _local.createLocalWorkspace(title);
-    if (!mounted) return;
-    setState(() {
-      _reloadLocalWorkspaces();
-      _localSelectedWorkspace = _localWorkspaces.firstWhere(
-        (w) => w.id == id,
-        orElse: () => _localWorkspaces.first,
-      );
-      _localSelectedView = null;
-      _localBootstrap = null;
-      _reloadLocalViews();
-    });
-    // A new workspace starts empty — seed a first page.
-    await _localCreateDocument(context.l10n.pageWelcomeName);
-  }
-
-  Future<void> _localSelectWorkspace(Workspace workspace) async {
-    savePref('lastWorkspaceId:local', workspace.id);
-    setState(() {
-      _localSelectedWorkspace = workspace;
-      _reloadLocalViews();
-      _localSelectedView = null;
-      _localBootstrap = null;
-    });
-    final toOpen = _localViewToOpen();
-    if (toOpen != null) await _localSelectView(toOpen);
-  }
-
-  Future<void> _localRenameWorkspace(Workspace workspace, String name) async {
-    final title = name.trim().isEmpty ? workspace.name : name.trim();
-    // Position and role are preserved by Rust. This used to read the row back
-    // to keep the position, and when that read missed it invented
-    // `0000000010` — a value that can collide with a real neighbour.
-    _local.renameLocalWorkspace(workspace.id, title);
-    if (mounted) {
-      setState(() {
-        _reloadLocalWorkspaces();
-        if (_localSelectedWorkspace?.id == workspace.id) {
-          _localSelectedWorkspace = _localWorkspaces.firstWhere(
-            (w) => w.id == workspace.id,
-            orElse: () => _localWorkspaces.first,
-          );
-        }
-      });
-    }
-  }
-
-  Future<void> _localDeleteWorkspace(Workspace workspace) async {
-    // "Keep at least one workspace" is enforced in Rust, beside the delete
-    // itself — a UI-side check only covers the paths that go through the UI.
-    // What stays here is saying so.
-    if (!_local.deleteLocalWorkspace(workspace.id)) {
-      if (mounted) {
-        setState(() => _message = context.l10n.snackKeepOneLocalWorkspace);
-      }
-      return;
-    }
-    if (!mounted) return;
-    final wasSelected = _localSelectedWorkspace?.id == workspace.id;
-    setState(() {
-      _reloadLocalWorkspaces();
-      if (wasSelected) {
-        _localSelectedView = null;
-        _localBootstrap = null;
-      }
-      _reloadLocalViews();
-    });
-    if (wasSelected) {
-      final firstDoc = firstOpenableView(_localViews);
-      if (firstDoc != null) await _localSelectView(firstDoc);
-    }
-  }
-
-  Future<String?> _localCreateDocument(
-    String name, {
-    String? parentViewId,
-  }) async {
-    final title = name.trim().isEmpty ? context.l10n.untitledPage : name.trim();
-    final created = _local.newDoc();
-    // Rust assigns the id and the position (after the last live sibling) —
-    // the same rule clone and reorder use.
-    final workspaceId = _localSelectedWorkspace?.id ?? 'local';
-    final viewId = _local.createView(
-      workspaceId: workspaceId,
-      parentId: parentViewId,
-      objectId: created.docId,
-      name: title,
-      objectType: 'document',
-    );
-    final data = (
-      id: viewId,
-      workspaceId: workspaceId,
-      parentId: parentViewId,
-      objectId: created.docId,
-      name: title,
-      position: _local.listViews().firstWhere((v) => v.id == viewId).position,
-      trashed: false,
-      objectType: 'document',
-    );
-    final view = _viewFromData(data);
-    if (!mounted) return null;
-    setState(() {
-      _reloadLocalViews();
-      _localSelectedView = view;
-      _localBootstrap = _localBootstrapFrom(
-        created.docId,
-        created.rootBlockId,
-        created.blocks,
-        view,
-      );
-    });
-    return viewId;
-  }
-
-  /// Create a local folder (pure container) — a view with object_type='folder'
-  /// and no document. Not opened in the editor; pages are created under it.
-  Future<String?> _localCreateFolder(
-    String name, {
-    String? parentViewId,
-  }) async {
-    final title = name.trim().isEmpty
-        ? context.l10n.folderNewDefault
-        : name.trim();
-    // A folder has no document; object_id is an unused placeholder.
-    final viewId = _local.createView(
-      workspaceId: _localSelectedWorkspace?.id ?? 'local',
-      parentId: parentViewId,
-      objectId: 'folder_${DateTime.now().microsecondsSinceEpoch}',
-      name: title,
-      objectType: 'folder',
-    );
-    if (!mounted) return null;
-    setState(_reloadLocalViews);
-    return viewId;
-  }
-
-  /// S-tier vault import: land a picked folder's `.md` files into the local
-  /// store as documents, mirroring the directory tree (read-only — the source
-  /// folder is untouched). Wired to the existing "import folder into workspace"
-  /// menu; the picker + walk are shared with the cloud path.
-  Future<void> _localImportVaultTree(
-    Workspace workspace,
-    List<ArchiveFile> entries, {
-    String? sourceName,
-    String? parentViewId,
-    String? container,
-  }) async {
-    final l10n = context.l10n;
-    // Parity with the cloud path: only when [container] is 'wrap' does the
-    // picked folder's name become a container folder here — prefix every entry
-    // path with it. 'spill' (the default) drops the contents straight in,
-    // matching the server's ImportMode::IntoLocation.
-    final trimmed = sourceName?.trim() ?? '';
-    final wrap = container == 'wrap' && trimmed.isNotEmpty;
-    final prefix = wrap ? '$trimmed/' : '';
-    final files = <({String path, List<int> bytes})>[
-      for (final f in entries) (path: '$prefix${f.name}', bytes: f.bytes),
-    ];
-    // [parentViewId] imports UNDER a folder instead of the workspace root.
-    final result = await _local.importVaultTree(
-      files,
-      workspace.id,
-      parentViewId: parentViewId,
-    );
-    if (!mounted) return;
-    setState(_reloadLocalViews);
-    final parts = <String>[
-      if (result.docs > 0) l10n.importNotesCount(result.docs),
-      if (result.folders > 0) l10n.importFoldersCount(result.folders),
-    ];
-    final msg = parts.isEmpty
-        ? (result.errors.isEmpty
-              ? l10n.importNoMarkdown
-              : l10n.importFailed(result.errors.first))
-        : l10n.importDone(parts.join(l10n.importListSeparator)) +
-              (result.errors.isNotEmpty
-                  ? l10n.importSkippedSuffix(result.errors.length)
-                  : '');
-    ScaffoldMessenger.maybeOf(
-      context,
-    )?.showSnackBar(SnackBar(content: Text(msg)));
-  }
-
-  Future<void> _localSelectView(DocumentView view) async {
-    if (view.objectType == 'folder') return; // a folder has no document to open
-    // Per-workspace last view (AppFlowy model), same key scheme as the cloud path.
-    savePref('lastViewId:${_workspaceIdOfView(view.id)}', view.id);
-    final DocData? data;
-    try {
-      data = _local.openDoc(view.objectId);
-    } on LocalDocCorruptException {
-      // The on-device copy is corrupt. openDoc deliberately did NOT clobber it
-      // with a blank page, so the recovery checkpoint / version history are
-      // still intact — select the view and offer to restore instead of dropping
-      // the user into a silent blank editor.
-      if (!mounted) return;
-      setState(() => _localSelectedView = view);
-      await _showLocalCorruptDialog(view);
-      return;
-    }
-    if (data == null || !mounted) return;
-    final loaded = data;
-    setState(() {
-      _localSelectedView = view;
-      _localBootstrap = _localBootstrapFrom(
-        view.objectId,
-        loaded.rootBlockId,
-        loaded.blocks,
-        view,
-      );
-    });
-  }
-
-  /// A local page whose on-device snapshot failed to decode. Offer the two
-  /// non-destructive recovery paths (last checkpoint / version history) rather
-  /// than silently seeding a blank page over it.
-  Future<void> _showLocalCorruptDialog(DocumentView view) async {
-    final l = context.l10n;
-    final action = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l.localCorruptTitle),
-        content: Text(l.localCorruptBody),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(l.closeCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'history'),
-            child: Text(l.localCorruptHistory),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, 'rollback'),
-            child: Text(l.localCorruptRollback),
-          ),
-        ],
-      ),
-    );
-    if (action == 'rollback') {
-      await _localRollbackDoc();
-    } else if (action == 'history') {
-      await _openLocalVersionHistory();
-    }
-  }
-
-  /// Restore the open local document to its last checkpoint, then remount the
-  /// editor on the restored content (the bumped epoch forces a fresh editor so
-  /// in-memory session edits are dropped, not reconciled).
-  Future<void> _localRollbackDoc() async {
-    final view = _localSelectedView;
-    if (view == null) return;
-    _local.rollbackDoc(view.objectId);
-    if (!mounted) return;
-    _localEditorEpoch++;
-    await _localSelectView(view);
-  }
-
-  /// Version history for a LOCAL page — same dialog as the cloud path, but
-  /// backed by the on-device `doc_version` timeline (FFI). Restore reloads the
-  /// editor via the epoch bump, exactly like the checkpoint rollback above.
-  Future<void> _openLocalVersionHistory() async {
-    final view = _localSelectedView;
-    if (view == null) return;
-    final docId = view.objectId;
-    // A local page persists on a debounce; force a save so "current" is captured
-    // before the user browses/creates a version. Awaited now that the flush
-    // drains the editor debounce asynchronously too.
-    await _flushForExit();
-    DocVersion toDocVersion(({String id, String? label, int createdAt}) v) =>
-        DocVersion(
-          id: v.id,
-          label: v.label,
-          createdAt: DateTime.fromMillisecondsSinceEpoch(
-            v.createdAt,
-          ).toUtc().toIso8601String(),
-        );
-    await showDialog<void>(
-      context: context,
-      builder: (context) => _VersionHistoryDialog(
-        onList: () async =>
-            _local.listDocVersions(docId).map(toDocVersion).toList(),
-        onCreate: (name) async {
-          if (_local.createDocVersion(docId, name) == null) {
-            throw Exception(context.l10n.versionEmpty);
-          }
-        },
-        onRestore: (versionId) async {
-          if (!_local.restoreDocVersion(docId, versionId)) {
-            throw Exception('version not found');
-          }
-          if (!mounted) return;
-          _localEditorEpoch++;
-          await _localSelectView(view);
-        },
-        onLoadContent: (versionId) async {
-          final content = _local.docVersionContent(docId, versionId);
-          if (content == null) throw Exception('version not found');
-          return content;
-        },
-        onLoadImageBytes: _localLoadImageBytes,
-        onResolveImageUrls: _localResolveImageUrls,
-      ),
-    );
-  }
+  // (_openLocalVersionHistory moved to the local backend as well — the local
+  // half of `WorldBackend.versionHistory`.)
 
   // ── §6 本地→云迁移 ──────────────────────────────────────────────────────────
   //
@@ -4033,7 +3555,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       ),
     );
     if (delete == true && mounted) {
-      await _localDeleteWorkspace(localWs);
+      await _localBackend._localDeleteWorkspace(localWs);
     }
   }
 
@@ -4072,7 +3594,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       return;
     }
     setState(() {
-      _reloadLocalWorkspaces();
+      _localBackend._reloadLocalWorkspaces();
       _message = l10n.worldDetachedMsg(entry.workspace.name, result.docs);
     });
     // The "move" variant, symmetric to 上云's delete-local (#4): once the copy
@@ -4108,7 +3630,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     }
     if (!mounted) return;
     // Land in the fresh local copy.
-    final target = _localWorkspaces
+    final target = _localBackend._localWorkspaces
         .where((w) => w.id == result.workspaceId)
         .firstOrNull;
     if (target != null) {
@@ -4228,7 +3750,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     } finally {
       // Restore the local editor's active doc (migration's openDoc() calls moved
       // it). The local store was never mutated — this just re-points the backend.
-      final active = _localSelectedView;
+      final active = _localBackend.selectedView;
       if (active != null) _local.openDoc(active.objectId);
     }
     return (cloudWorkspaceId: cloudWs.id, docCount: docCount);
@@ -4408,203 +3930,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     );
   }
 
-  // ── local images (P2-M5): on-device content-addressed store, fully offline ──
-
-  /// Store an inserted/pasted image in the local CAS; the returned `file_id` is
-  /// its sha256, which the image block references.
-  Future<({String fileId, String name})?> _localUploadImage(
-    Uint8List bytes,
-    String fileName,
-    String mimeType,
-  ) async {
-    final id = _local.putBlob(bytes);
-    if (id.isEmpty) return null;
-    return (fileId: id, name: fileName.isEmpty ? 'image' : fileName);
-  }
-
-  /// Re-host an externally-pasted image URL into the local CAS by downloading it.
-  Future<({String fileId, String name})?> _localImportImageUrl(
-    String url,
-  ) async {
-    try {
-      final resp = await sharedHttpClient.get(Uri.parse(url));
-      if (resp.statusCode != 200) return null;
-      final id = _local.putBlob(resp.bodyBytes);
-      if (id.isEmpty) return null;
-      final seg = Uri.parse(url).pathSegments;
-      final name = seg.isNotEmpty && seg.last.isNotEmpty ? seg.last : 'image';
-      return (fileId: id, name: name);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Load an image for the canvas: a `file_id` (sha256) from the local CAS, or an
-  /// external `http(s)` markdown image fetched directly.
-  Future<Uint8List?> _localLoadImageBytes(String key) async {
-    if (key.startsWith('http://') || key.startsWith('https://')) {
-      try {
-        final resp = await sharedHttpClient.get(Uri.parse(key));
-        return resp.statusCode == 200 ? resp.bodyBytes : null;
-      } catch (_) {
-        return null;
-      }
-    }
-    return _local.loadBlob(key);
-  }
-
-  /// Map local file ids to `file://` URIs (for copy/export of local images).
-  Future<Map<String, String>> _localResolveImageUrls(List<String> ids) async {
-    final out = <String, String>{};
-    for (final id in ids) {
-      final uri = _local.blobFileUri(id);
-      if (uri != null) out[id] = uri;
-    }
-    return out;
-  }
-
-  Future<void> _localUpdateRootBlockText(String text) async {
-    final root = _localBootstrap?.document.rootBlockId;
-    if (root == null) return;
-    await _local.applyOps([
-      {'type': 'update_block', 'block_id': root, 'text': text},
-    ]);
-  }
-
-  Future<bool> _localRenameView(DocumentView view, String name) async {
-    final title = name.trim().isEmpty ? 'Untitled' : name.trim();
-    // The name belongs to the DOCUMENT (root block `title`); the view row is the
-    // projection. The cloud does this inside `PATCH /views/{id}` server-side —
-    // offline there is no server, so the rename writes both here.
-    //
-    // Documents only: a folder has no document to carry a title (plan §5.2).
-    if (view.objectType == 'document') {
-      _local.setDocTitle(view.objectId, title);
-    }
-    _local.saveView((
-      id: view.id,
-      workspaceId: _workspaceIdOfView(view.id),
-      parentId: view.parentViewId,
-      objectId: view.objectId,
-      name: title,
-      position: view.position,
-      trashed: false,
-      objectType: view.objectType,
-    ));
-    if (!mounted) return true;
-    setState(() {
-      _reloadLocalViews();
-      if (_localSelectedView?.id == view.id) {
-        final renamed = DocumentView(
-          id: view.id,
-          parentViewId: view.parentViewId,
-          objectId: view.objectId,
-          objectType: view.objectType,
-          name: title,
-          position: view.position,
-        );
-        _localSelectedView = renamed;
-        final boot = _localBootstrap;
-        if (boot != null && boot.view.id == view.id) {
-          _localBootstrap = DocumentBootstrap(
-            document: boot.document,
-            view: renamed,
-            snapshot: boot.snapshot,
-          );
-        }
-      }
-    });
-    return true;
-  }
-
-  /// A view and all its descendants from the on-device set (incl. trashed rows),
-  /// so local delete/restore/purge cascade the whole subtree like the server's
-  /// recursive-CTE handlers. Without this, trashing a folder orphans its
-  /// children: deep descendants vanish from the sidebar (the orphan fallback in
-  /// _visibleDocumentTree only lifts direct children) until the parent returns.
-  Future<void> _localDeleteView(DocumentView view) async {
-    // Soft-delete the page AND its whole subtree (folders carry children).
-    // The cascade lives in Rust; what stays here is the UI consequence.
-    final ids = _local.trashViewSubtree(view.id).toSet();
-    if (!mounted) return;
-    setState(() {
-      _reloadLocalViews();
-      // Close the editor if the open page was anywhere in the trashed subtree.
-      if (_localSelectedView != null && ids.contains(_localSelectedView!.id)) {
-        _localSelectedView = null;
-        _localBootstrap = null;
-      }
-    });
-  }
-
-  /// Trash a selection (local). The Rust store has no batch primitive and needs
-  /// none — this is an in-process call per root, not a round trip per root.
-  Future<void> _localDeleteViews(List<String> viewIds) async {
-    final trashed = <String>{};
-    for (final id in viewIds) {
-      trashed.addAll(_local.trashViewSubtree(id));
-    }
-    if (!mounted) return;
-    setState(() {
-      _reloadLocalViews();
-      if (_localSelectedView != null &&
-          trashed.contains(_localSelectedView!.id)) {
-        _localSelectedView = null;
-        _localBootstrap = null;
-      }
-    });
-  }
-
-  /// Duplicate [view] in place (local). Reuses the store's loadDoc→saveDoc copy
-  /// primitive; blobs stay shared in the on-device CAS.
-  Future<void> _localCloneView(DocumentView view) async {
-    final copyName = context.l10n.cloneCopyName(view.name);
-    final result = _local.cloneView(viewId: view.id, rootName: copyName);
-    if (result == null || !mounted) return;
-    setState(() => _reloadLocalViews());
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(context.l10n.cloneDone(result.newName))),
-    );
-  }
-
-  Future<void> _localReorderViews(
-    String? parentViewId,
-    List<DocumentView> ordered,
-  ) async {
-    // Renumbering and reparenting are one move, and the step-of-ten scheme
-    // lives with the create/clone paths rather than being spelled out again.
-    _local.reorderViews(parentViewId, [for (final v in ordered) v.id]);
-    if (mounted) setState(_reloadLocalViews);
-  }
-
-  Future<List<DocumentView>> _localLoadTrash() async {
-    final wsId = _localSelectedWorkspace?.id;
-    return [
-      for (final v in _local.listViews())
-        if (v.trashed && v.workspaceId == wsId) _viewFromData(v),
-    ];
-  }
-
-  Future<void> _localRestoreView(DocumentView view) async {
-    // Restores the subtree, and lifts the root to the top level when its parent
-    // is still trashed — both in Rust now, matching the server's restore_view
-    // instead of reimplementing it here.
-    _local.restoreViewSubtree(view.id);
-    if (mounted) setState(_reloadLocalViews);
-  }
-
-  Future<void> _localPurgeView(DocumentView view) async {
-    // Permanently remove the page and its subtree from the recycle bin.
-    final ids = _local.purgeViewSubtree(view.id).toSet();
-    if (!mounted) return;
-    setState(() {
-      _reloadLocalViews();
-      if (_localSelectedView != null && ids.contains(_localSelectedView!.id)) {
-        _localSelectedView = null;
-        _localBootstrap = null;
-      }
-    });
-  }
+  // (The local half of the image pipeline — upload / re-host / load / resolve —
+  // moved to the local backend as `ImageOps`; so did the local view/rename ops
+  // below, as `ViewOps`.)
 
   /// Upload image bytes for the editor, returning the new file id + name.
   ///
@@ -5302,7 +4630,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         _local.openCloudDocMirror(view.objectId) ??
         await openWebDocMirror(_cloudOrigin, view.objectId);
     if (data == null) return null;
-    return _localBootstrapFrom(
+    return _localBackend._localBootstrapFrom(
       view.objectId,
       data.rootBlockId,
       data.blocks,
@@ -5336,7 +4664,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       savePref('activeOrigin', entry.origin);
     }
     if (entry.isLocal) {
-      await _localSelectWorkspace(entry.workspace);
+      await _localBackend._localSelectWorkspace(entry.workspace);
     } else {
       await _selectWorkspace(entry.workspace);
     }
@@ -5345,11 +4673,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   // Per-entry workspace actions (P3c): the switcher lists BOTH worlds, so row
   // actions must dispatch on the ROW's origin, not the active one.
   Future<void> _renameEntry(WorkspaceEntry e, String name) => e.isLocal
-      ? _localRenameWorkspace(e.workspace, name)
+      ? _localBackend._localRenameWorkspace(e.workspace, name)
       : _renameWorkspace(e.workspace, name);
 
   Future<void> _deleteEntry(WorkspaceEntry e) => e.isLocal
-      ? _localDeleteWorkspace(e.workspace)
+      ? _localBackend._localDeleteWorkspace(e.workspace)
       : _deleteWorkspace(e.workspace);
 
   Future<Uint8List> _exportEntryZip(WorkspaceEntry e) => e.isLocal
@@ -5364,7 +4692,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     final ids = [for (final e in ordered) e.workspace.id];
     if (ordered.first.isLocal) {
       _local.reorderWorkspaces(ids);
-      if (mounted) setState(_reloadLocalWorkspaces);
+      if (mounted) setState(_localBackend._reloadLocalWorkspaces);
     } else {
       await _run(() async {
         final session = _requireSession();
@@ -5386,10 +4714,12 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }) async {
     // The tree only ever shows the ACTIVE workspace, so the folder lives in it.
     if (_activeIsLocal) {
-      final wsId = _workspaceIdOfView(folder.id);
-      final ws = _localWorkspaces.where((w) => w.id == wsId).firstOrNull;
+      final wsId = _localBackend._workspaceIdOfView(folder.id);
+      final ws = _localBackend._localWorkspaces
+          .where((w) => w.id == wsId)
+          .firstOrNull;
       if (ws == null) return;
-      await _localImportVaultTree(
+      await _localBackend._localImportVaultTree(
         ws,
         entries,
         sourceName: sourceName,
@@ -5415,7 +4745,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     String? sourceName,
     String? container,
   }) => e.isLocal
-      ? _localImportVaultTree(
+      ? _localBackend._localImportVaultTree(
           e.workspace,
           entries,
           sourceName: sourceName,
@@ -5459,7 +4789,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
     return [
       for (final w in _workspaces)
         WorkspaceEntry(origin: cloudOrigin, workspace: w, role: w.role),
-      for (final w in _localWorkspaces)
+      for (final w in _localBackend.workspaces)
         WorkspaceEntry(origin: 'local', workspace: w, role: 'owner'),
     ];
   }
@@ -5467,7 +4797,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   /// The selected workspace as a unified entry (null when nothing is selected).
   WorkspaceEntry? get _selectedEntry {
     if (_activeIsLocal) {
-      final w = _localSelectedWorkspace;
+      final w = _localBackend.selectedWorkspace;
       return w == null
           ? null
           : WorkspaceEntry(origin: 'local', workspace: w, role: 'owner');
@@ -5698,24 +5028,29 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
   }
 
   Widget _unifiedWorkspaceView(AuthSession? session) {
-    final local = _activeIsLocal;
+    // One WorldBackend for the ACTIVE world — local or cloud. Every prop that
+    // used to be an inline `local ? ... : ...` dispatch now reads through it
+    // (world/world_backend.dart; the interface's doc comments kept each
+    // polarity's rationale). What stays here is genuinely cross-world: the
+    // session/account/spinner, prefs, entries (which span both worlds), and
+    // the §6 migrate/detach engine.
+    final b = _activeBackend;
+    final viewOps = b.viewOps;
     return WorkspaceView(
       session: session,
       // Avatar URLs are composed from this (ui/avatar_url.dart); the account
       // tile and the member list both live under this widget.
       apiBase: _api.baseUri,
-      onChangeAvatar: local ? null : _changeAvatar,
-      onRemoveAvatar: local ? null : _removeAvatar,
+      onChangeAvatar: b.changeAvatar,
+      onRemoveAvatar: b.removeAvatar,
       entries: _workspaceEntries,
       activeOrigin: _activeOrigin,
-      // Cloud-only: the badge is meaningless for a local world or with no live
-      // cloud session, so it's simply absent there.
-      syncPhase: (local || _cloudSession == null) ? null : _syncPhase,
-      // Comments are a cloud feature (they live in Postgres beside the document),
-      // so the local world gets none and shows no entry point.
-      commentThreads: local ? const [] : _commentThreads,
-      commentHighlights: local ? const [] : _commentHighlights,
-      onAddComment: (local || session == null) ? null : _addComment,
+      syncPhase: b.syncPhase,
+      commentThreads: b.commentThreads,
+      commentHighlights: b.commentHighlights,
+      // Comments are a cloud feature — the local backend's addComment is null,
+      // and with no session at all even the cloud world hides the entry.
+      onAddComment: session == null ? null : b.addComment,
       onReplyComment: _replyToComment,
       onSetCommentResolved: _setCommentResolved,
       onDeleteCommentThread: _deleteCommentThread,
@@ -5737,15 +5072,8 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
           : _api.baseUri.host,
       onSignIn: session == null ? _promptSignIn : null,
       localAvailable: _local.available,
-      isBusy: local ? false : _isBusy,
-      onRefresh: local
-          ? () => setState(() {
-              _reloadLocalWorkspaces();
-              _reloadLocalViews();
-            })
-          : () {
-              if (!_isBusy) _refreshWorkspaces();
-            },
+      isBusy: b.isBusy,
+      onRefresh: b.onRefresh,
       // Account-level action: dispatches on the SESSION, not the active world —
       // a signed-in user browsing the local world must still be able to sign
       // out (the tile only shows Sign out when session != null; _signOut is
@@ -5753,181 +5081,119 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onSignOut: () {
         if (!_isBusy) _signOut();
       },
-      workspaces: local ? _localWorkspaces : _workspaces,
-      selectedWorkspace: local ? _localSelectedWorkspace : _selectedWorkspace,
-      members: local || _selectedWorkspace == null
-          ? const []
-          : _membersByWorkspace[_selectedWorkspace!.id] ?? const [],
-      views: local
-          ? _localViews
-          : _selectedWorkspace == null
-          ? const []
-          : _viewsByWorkspace[_selectedWorkspace!.id] ?? const [],
-      // The local world's tree is read from disk synchronously — it is never
-      // "on its way". Only a cloud workspace we hold no tree for at all is.
-      treePending:
-          !local &&
-          _selectedWorkspace != null &&
-          !_viewsByWorkspace.containsKey(_selectedWorkspace!.id),
-      selectedView: local ? _localSelectedView : _selectedView,
-      selectedBootstrap: local ? _localBootstrap : _selectedBootstrap,
-      // Cloud only — the local world has no tab model (see _openViewInNewTab).
-      tabs: local ? const [] : _tabs,
-      activeTabIndex: local ? 0 : _activeTabIndex,
-      onSelectTab: local ? null : _selectTab,
-      onCloseTab: local ? null : _closeTab,
-      onOpenInNewTab: local ? null : _openViewInNewTab,
-      onOpenInNewTabById: local ? null : _openViewByIdInNewTab,
-      onNewTabPage: local
-          ? null
-          : () => _createDocumentInNewTab(context.l10n.newPage),
-      // Cloud only: the local world has one implicit workspace, so there is
-      // nothing for a name search to disambiguate.
-      onSelectWorkspaceById: local ? null : _selectWorkspaceById,
-      // Cloud only: the local world is a single implicit workspace, so there is
-      // nothing to widen the scope to.
-      onSearchAllWorkspaces: local ? null : _searchAllWorkspaces,
-      onOpenSearchHit: local
-          ? null
-          : (viewId, workspaceId) =>
-                unawaited(_openSearchHit(viewId, workspaceId)),
+      workspaces: b.workspaces,
+      selectedWorkspace: b.selectedWorkspace,
+      members: b.members,
+      views: b.views,
+      treePending: b.treePending,
+      selectedView: b.selectedView,
+      selectedBootstrap: b.bootstrap,
+      // Cloud only — the local world has no tab model (the backend's tab
+      // callbacks are null there, hiding the strip).
+      tabs: b.tabs,
+      activeTabIndex: b.activeTabIndex,
+      onSelectTab: b.selectTab,
+      onCloseTab: b.closeTab,
+      onOpenInNewTab: b.openViewInNewTab,
+      onOpenInNewTabById: b.openViewInNewTabById,
+      onNewTabPage: b.newTabPage,
+      onSelectWorkspaceById: b.searchOps.selectWorkspaceById,
+      onSearchAllWorkspaces: b.searchOps.searchAll,
+      onOpenSearchHit: b.searchOps.openHit,
       searchRecents: buildWorkspaceRecents(
         context,
-        workspaceId: local
-            ? _localSelectedWorkspace?.id
-            : _selectedWorkspace?.id,
-        workspaceName:
-            (local ? _localSelectedWorkspace : _selectedWorkspace)?.name ?? '',
-        views: local
-            ? _localViews
-            : _selectedWorkspace == null
-            ? const []
-            : _viewsByWorkspace[_selectedWorkspace!.id] ?? const [],
+        workspaceId: b.selectedWorkspace?.id,
+        workspaceName: b.selectedWorkspace?.name ?? '',
+        views: b.views,
       ),
-      presence: local ? const [] : _presence,
+      presence: b.presence,
       message: _message,
       importProgress: _importProgress,
       // Only offer it while an import is actually in flight.
       onCancelImport: _importJobId == null ? null : _cancelImport,
-      onSelectWorkspace: local ? _localSelectWorkspace : _selectWorkspace,
-      onCreateWorkspace: local ? _localCreateWorkspace : _createWorkspace,
-      onRenameWorkspace: local ? _localRenameWorkspace : _renameWorkspace,
-      onDeleteWorkspace: local ? _localDeleteWorkspace : _deleteWorkspace,
-      onCreateDocument: local ? _localCreateDocument : _createDocument,
-      onCreateChildDocument: local
-          ? (parent, name) =>
-                _localCreateDocument(name, parentViewId: parent.id)
-          : _createChildDocument,
-      onCreateFolder: local ? _localCreateFolder : _createFolder,
-      onCreateChildFolder: local
-          ? (parent, name) => _localCreateFolder(name, parentViewId: parent.id)
-          : _createChildFolder,
-      // Null in a local workspace: the archive is built server-side, and the
-      // menu entry hides itself rather than failing after the click.
-      onExportFolderZip: local ? _localExportFolderZip : _exportFolderZip,
-      onReorderViews: local ? _localReorderViews : _reorderViews,
-      onLoadTrash: local ? _localLoadTrash : _loadTrash,
-      onRestoreView: local ? _localRestoreView : _restoreView,
-      onPurgeView: local ? _localPurgeView : _purgeView,
-      // Cloud only: the on-device store has no bulk purge, so the button is
-      // absent rather than broken in 本地模式.
-      onPurgeAllTrash: local ? null : _purgeAllTrash,
-      onSelectView: local ? _localSelectView : _selectView,
-      onRenameView: local ? _localRenameView : _renameView,
-      // Cloud-only: the local store's view record has no icon column, so rather
-      // than accept a change it would silently drop, the local world simply does
-      // not offer the entry (see DocumentListItem.onSetIcon).
-      onSetViewIcon: local ? null : _promptSetViewIcon,
+      onSelectWorkspace: b.workspaceOps.select,
+      onCreateWorkspace: b.workspaceOps.create,
+      onRenameWorkspace: b.workspaceOps.rename,
+      onDeleteWorkspace: b.workspaceOps.delete,
+      onCreateDocument: viewOps.createDocument,
+      onCreateChildDocument: viewOps.createChildDocument,
+      onCreateFolder: viewOps.createFolder,
+      onCreateChildFolder: viewOps.createChildFolder,
+      onExportFolderZip: viewOps.exportFolderZip,
+      onReorderViews: viewOps.reorder,
+      onLoadTrash: viewOps.loadTrash,
+      onRestoreView: viewOps.restore,
+      onPurgeView: viewOps.purge,
+      onPurgeAllTrash: viewOps.purgeAll,
+      onSelectView: viewOps.select,
+      onRenameView: viewOps.rename,
+      onSetViewIcon: viewOps.setIcon,
       // Home spans every workspace of the ACTIVE world (local and cloud stay
       // separate — see the world switcher), so only the shell can build it. The
-      // local world keeps one flat view list rather than a per-workspace map, so
-      // it contributes just its selected workspace.
+      // local world keeps one flat view list rather than a per-workspace map,
+      // so it contributes just its selected workspace (see backends'
+      // viewsByWorkspace).
       homePane: buildHomePane(
         context,
-        viewsByWorkspace: local
-            ? {
-                if (_localSelectedWorkspace != null)
-                  _localSelectedWorkspace!.id: _localViews,
-              }
-            : _viewsByWorkspace,
-        workspaceNames: {
-          for (final w in (local ? _localWorkspaces : _workspaces))
-            w.id: w.name,
-        },
-        onCreatePage: () => unawaited(
-          local
-              ? _localCreateDocument(context.l10n.newPage)
-              : _createDocument(context.l10n.newPage),
-        ),
-        onOpenView: (viewId) => _openViewFromHome(viewId, local: local),
+        viewsByWorkspace: b.viewsByWorkspace,
+        workspaceNames: {for (final w in b.workspaces) w.id: w.name},
+        onCreatePage: () =>
+            unawaited(viewOps.createDocument(context.l10n.newPage)),
+        onOpenView: viewOps.openViewFromHome,
       ),
       onOpenHome: () {
         setState(() => _overviewFolderId = null);
-        _closeOpenPage(local: local);
+        viewOps.closeOpenPage();
       },
       // Only built while a folder is being browsed — otherwise home shows.
       overviewPane: _overviewFolderId == null
           ? null
           : buildOverviewPane(
               context,
-              views: local
-                  ? _localViews
-                  : (_viewsByWorkspace[_selectedWorkspace?.id] ?? const []),
+              views: b.views,
               folderId: _overviewFolderId,
               mode: _overviewMode,
               onModeChanged: (mode) => setState(() => _overviewMode = mode),
-              onOpen: (pageId) => _openViewFromHome(pageId, local: local),
+              onOpen: viewOps.openViewFromHome,
               onEnterFolder: (id) => setState(() => _overviewFolderId = id),
-              onCreatePage: () => unawaited(
-                local
-                    ? _localCreateDocument(context.l10n.newPage)
-                    : _createDocument(context.l10n.newPage),
-              ),
+              onCreatePage: () =>
+                  unawaited(viewOps.createDocument(context.l10n.newPage)),
             ),
-      onDeleteView: local ? _localDeleteView : _deleteView,
-      onDeleteViews: local ? _localDeleteViews : _deleteViews,
-      onCloneView: local ? _localCloneView : _cloneView,
-      onUpdateRootBlockText: local
-          ? _localUpdateRootBlockText
-          : _updateRootBlockText,
-      onAddBlock: local ? (_, _) async {} : _addBlock,
-      onUpdateBlock: local ? (_, _, _) async {} : _updateBlock,
-      onDeleteBlock: local ? (_) async {} : _deleteBlock,
-      onMoveBlock: local ? (_, _) async {} : _moveBlock,
+      onDeleteView: viewOps.delete,
+      onDeleteViews: viewOps.bulkDelete,
+      onCloneView: viewOps.clone,
+      onUpdateRootBlockText: viewOps.updateRootBlockText,
+      onAddBlock: viewOps.addBlock,
+      onUpdateBlock: viewOps.updateBlock,
+      onDeleteBlock: viewOps.deleteBlock,
+      onMoveBlock: viewOps.moveBlock,
       onApplyOperations:
           _applyEditorOperations, // P3d: one entry, self-dispatches
       onApplyHistory: _editorHistoryForDocument(),
       onApplyMaintenanceOperations: (ops) =>
           _applyEditorOperations(ops, trackHistory: false),
       onEditorFault: _onEditorFault,
-      onUploadImage: local ? _localUploadImage : _uploadEditorImage,
-      onImportImageUrl: local ? _localImportImageUrl : _importEditorImageUrl,
-      onLoadImageBytes: local ? _localLoadImageBytes : _loadEditorImageBytes,
-      onResolveImageUrls: local
-          ? _localResolveImageUrls
-          : _resolveEditorImageUrls,
-      onAiStream: local
-          ? (_, {system}) => const Stream<String>.empty()
-          : _aiStream,
-      onAiNewPage: local ? (_) async {} : _aiNewPageFromMarkdown,
-      onAiPreviewEdits: local ? null : _previewAiEdits,
-      onAiCurrentPage: local || _selectedBootstrap == null
-          ? null
-          : _aiCurrentFromMarkdown,
-      onAiNewWorkspace: local ? (_) async {} : _aiNewWorkspaceFromMarkdown,
+      onUploadImage: b.imageOps.upload,
+      onImportImageUrl: b.imageOps.importUrl,
+      onLoadImageBytes: b.imageOps.loadBytes,
+      onResolveImageUrls: b.imageOps.resolveUrls,
+      onAiStream: b.aiOps.stream,
+      onAiNewPage: b.aiOps.newPage,
+      onAiPreviewEdits: b.aiOps.previewEdits,
+      onAiCurrentPage: b.aiOps.currentPage,
+      onAiNewWorkspace: b.aiOps.newWorkspace,
       // Null, not a no-op — absence is what hides the AI tab, the same rule
-      // onLoadTokens/onUpdateProfile below already follow. These two were the
-      // ones that got missed: AI settings live on the server, so in 本地模式 the
-      // tab was a live provider form whose Save went into a function that
-      // returned immediately.
-      onLoadAiSettings: local ? null : _loadAiSettings,
-      onLoadImportHistory: local ? null : _loadImportHistory,
-      onListAiModels: local ? null : _listAiModels,
-      onSaveAiSettings: local ? null : _saveAiSettings,
-      onDeleteAiProvider: local ? null : _deleteAiProvider,
-      onLoadTokens: local ? null : _loadTokens,
-      onCreateToken: local ? null : _createToken,
-      onRevokeToken: local ? null : _revokeToken,
+      // onLoadTokens/onUpdateProfile below already follow: AI settings live on
+      // the server, so the local world's callbacks stay null and the Settings
+      // AI tab renders nothing instead of a form whose Save went nowhere.
+      onLoadAiSettings: b.loadAiSettings,
+      onLoadImportHistory: b.loadImportHistory,
+      onListAiModels: b.listAiModels,
+      onSaveAiSettings: b.saveAiSettings,
+      onDeleteAiProvider: b.deleteAiProvider,
+      onLoadTokens: b.loadTokens,
+      onCreateToken: b.createToken,
+      onRevokeToken: b.revokeToken,
       // Only ever the cloud account: 本地模式 has none, and the Account tab is
       // absent there rather than filled with a fiction. (An earlier attempt put
       // '本地工作区' here — which surfaced as an editable Display name for an
@@ -5935,9 +5201,9 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       userName: _session?.user.displayName ?? '',
       userEmail: _session?.user.email ?? '',
       // Null, not a no-op: absence is what hides the tab. See onLoadTokens.
-      onUpdateProfile: local ? null : _updateProfile,
-      onChangePassword: local ? null : _changePassword,
-      onDeleteAccount: local ? null : _deleteAccount,
+      onUpdateProfile: b.updateProfile,
+      onChangePassword: b.changePassword,
+      onDeleteAccount: b.deleteAccount,
       onSwitchWorld: _promptSignIn,
       onRemoveServer: confirmRemoveServer,
       // Assembled here, not stored: the palette comes from the theme above us
@@ -5960,7 +5226,7 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         setState(() => _showPageTitle = value);
         _savePrefs();
       },
-      showAi: local ? false : _aiEnabled && _aiConfigured,
+      showAi: b.showAi,
       // No 本地模式 ternary: the AI tab is absent there (onLoadAiSettings is
       // null), so nothing reads these.
       aiEnabled: _aiEnabled,
@@ -5975,46 +5241,33 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         });
         _savePrefs();
       },
-      // Desktop local mode now has a real index (`doc_snapshot.content_text`),
-      // so it searches for real. Web local mode still has no on-device store at
-      // all, and there `null` is still the honest answer — «this world cannot
-      // search» is a different statement from «nothing matched», and the dialog
-      // says a different thing for each. A stub returning `const []` used to
-      // collapse the two, telling every local user their page was not there.
-      onSearch: local
-          ? (kIsWeb ? null : _searchLocalWorkspace)
-          : _searchWorkspace,
-      onOpenSearchResult: local ? _openLocalViewById : _openViewById,
+      // The null-both-ways polarity (web local cannot search, desktop local
+      // searches the on-device index, cloud searches the server) lives on
+      // `SearchOps.search` — «cannot search» vs «nothing matched» stays
+      // distinguishable there.
+      onSearch: b.searchOps.search,
+      onOpenSearchResult: b.searchOps.openResult,
       // Both worlds now answer this — `_loadBacklinks` picks the on-device index
       // in 本地模式 and the endpoint in the cloud. It used to be `local ? null`,
       // which hid the panel outright: a locally-linked page looked unlinked.
       onLoadBacklinks: _loadBacklinks,
       onLoadGraph: _loadGraph,
-      // Local workspaces have no server to bundle the zip; SAY so rather than
-      // handing back Uint8List(0), which the caller happily saved as a 0-byte
-      // page.zip and called it a successful export.
-      onExportPageZip: local
-          ? () async => throw ApiException(context.l10n.exportLocalUnsupported)
-          : _exportPageZip,
-      // Page export chooses `.md` (no assets) vs `.zip` (bundled images) by
-      // content — now in BOTH worlds: local goes through the FFI engine +
-      // in-house ZIP writer (see _localExportPage), matching the cloud output.
-      onExportPage: local ? _localExportPage : _exportPage,
-      onCopyPageMarkdown: local ? _localPageMarkdownText : _pageMarkdownText,
-      // HTML export works in BOTH worlds — local goes through the FFI engine
-      // (see _localExportPageHtml), so unlike the ZIP it isn't gated off local.
-      onExportPageHtml: local ? _localExportPageHtml : _exportPageHtml,
+      // Local workspaces have no server to bundle the zip; the local backend's
+      // pageZip SAYS so (throws `exportLocalUnsupported`) rather than handing
+      // back Uint8List(0), which the caller happily saved as a 0-byte page.zip
+      // and called it a successful export.
+      onExportPageZip: b.exportOps.pageZip,
+      onExportPage: b.exportOps.page,
+      onCopyPageMarkdown: b.exportOps.copyMarkdown,
+      onExportPageHtml: b.exportOps.pageHtml,
       // PDF is world-agnostic: both worlds produce HTML, then the same
       // WebView2 headless print turns it into PDF bytes (desktop only; web
       // stub returns null and the menu item is hidden there).
       onExportPagePdf: _local.htmlToPdf,
-      onImportMarkdown: local ? (_, _) async {} : _importMarkdownAsPage,
-      onExportWorkspaceZip: local
-          ? (_) async => Uint8List(0)
-          : _exportWorkspaceZip,
-      onExportAllWorkspaces: local ? null : _exportAllWorkspaces,
-      // Cloud only: 本地模式 has no cross-workspace export to describe.
-      onLoadExportStats: local ? null : _exportAllStats,
+      onImportMarkdown: b.exportOps.importMarkdown,
+      onExportWorkspaceZip: b.exportOps.workspaceZip,
+      onExportAllWorkspaces: b.exportAllWorkspaces,
+      onLoadExportStats: b.exportStats,
       // Desktop only: web has no on-device store to measure.
       onLoadCacheStats: _local.available
           ? () => _local.cacheStats(mirroredOrigins: _servers)
@@ -6022,34 +5275,31 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       onClearMirrorCache: _local.available
           ? () => _local.clearMirrorCache(mirroredOrigins: _servers)
           : null,
-      onImportWorkspaceZip: local ? null : _importWorkspaceZip,
-      onImportWorkspaceTreeInto: local
-          ? _localImportVaultTree
-          : _importTreeIntoWorkspace,
+      onImportWorkspaceZip: b.importWorkspaceZip,
+      onImportWorkspaceTreeInto: b.exportOps.importTree,
       // Null, not a no-op: a local workspace has no members at all. The no-op
       // form still rendered and still accepted an email, because local entries
       // carry role 'owner' so canManage was true — you could invite someone and
       // nothing whatsoever happened.
-      invitations: local ? null : _invites,
-      onLoadWorkspaceUsage: local ? null : _loadWorkspaceUsage,
-      onUpdateMember: local ? null : _updateWorkspaceMember,
-      onRemoveMember: local ? null : _removeWorkspaceMember,
-      onRestoreCheckpoint: local ? _localRollbackDoc : null,
-      // Cloud-only: version history lives server-side (local has no history).
+      invitations: b.invitations,
+      onLoadWorkspaceUsage: b.loadWorkspaceUsage,
+      onUpdateMember: b.updateMember,
+      onRemoveMember: b.removeMember,
+      onRestoreCheckpoint: b.restoreCheckpoint,
       // Both worlds now have real version history — local via the on-device
       // doc_version timeline (FFI), cloud via the yrs endpoints.
-      onVersionHistory: local ? _openLocalVersionHistory : _openVersionHistory,
-      onShare: local ? null : _openShare,
+      onVersionHistory: b.versionHistory,
+      onShare: b.share,
       // Cross-workspace move/copy — cloud-only (the destination is another
       // cloud workspace; local worlds don't participate). Null hides both
       // row-menu entries in 本地模式.
-      onTransfer: local ? null : _openTransfer,
+      onTransfer: b.transfer,
       // P3f: both live on the workspace ROW's menu, dispatching per entry —
       // null on web (no local world / no on-device store).
       onMigrateEntry: _local.available ? _migrateEntry : null,
       onDetachEntry: _local.available ? _detachEntry : null,
-      editorEpoch: local ? _localEditorEpoch : 0,
-      onCursorChanged: local ? null : _onEditorSelection,
+      editorEpoch: b.editorEpoch,
+      onCursorChanged: b.cursorChanged,
     );
   }
 

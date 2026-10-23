@@ -167,6 +167,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<StoreZipEntry> dco_decode_list_store_zip_entry(dynamic raw);
 
   @protected
+  List<VaultTreeEntry> dco_decode_list_vault_tree_entry(dynamic raw);
+
+  @protected
   List<ZipAsset> dco_decode_list_zip_asset(dynamic raw);
 
   @protected
@@ -252,6 +255,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt dco_decode_usize(dynamic raw);
+
+  @protected
+  VaultImportOutcome dco_decode_vault_import_outcome(dynamic raw);
+
+  @protected
+  VaultTreeEntry dco_decode_vault_tree_entry(dynamic raw);
 
   @protected
   ZipAsset dco_decode_zip_asset(dynamic raw);
@@ -424,6 +433,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<VaultTreeEntry> sse_decode_list_vault_tree_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<ZipAsset> sse_decode_list_zip_asset(SseDeserializer deserializer);
 
   @protected
@@ -519,6 +533,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt sse_decode_usize(SseDeserializer deserializer);
+
+  @protected
+  VaultImportOutcome sse_decode_vault_import_outcome(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  VaultTreeEntry sse_decode_vault_tree_entry(SseDeserializer deserializer);
 
   @protected
   ZipAsset sse_decode_zip_asset(SseDeserializer deserializer);
@@ -739,6 +761,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_vault_tree_entry(
+    List<VaultTreeEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_zip_asset(List<ZipAsset> self, SseSerializer serializer);
 
   @protected
@@ -856,6 +884,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_vault_import_outcome(
+    VaultImportOutcome self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_vault_tree_entry(
+    VaultTreeEntry self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_zip_asset(ZipAsset self, SseSerializer serializer);

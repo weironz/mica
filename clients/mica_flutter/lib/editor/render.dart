@@ -1382,8 +1382,10 @@ class RenderDocument extends RenderBox {
       // Phase 2 fast path: an unchanged block reuses its whole cached layout and
       // only repositions. Correct because the controller reassigns (never
       // mutates) text/data, so identity == content, and width/appearance are
-      // globally invalidated above. A code block holding the caret is excluded:
-      // its horizontal auto-scroll depends on the live caret (slow path only).
+      // globally invalidated above. A code block holding the caret reuses too:
+      // excluding it meant every arrow key re-ran detectLanguage + buildCodeSpan
+      // + TextPainter.layout on unchanged source (issue #63). Only the
+      // horizontal auto-scroll below still consumes the live caret.
       final isCaretHere =
           sel != null && sel.isCollapsed && sel.focus.node == nodeIndex;
       final reuse = _layoutCache[node.id];
@@ -1393,10 +1395,32 @@ class RenderDocument extends RenderBox {
           reuse.alert == nodeAlert &&
           reuse.alertHead == isAlertHead &&
           reuse.ordinal == ordinalCtx &&
-          reuse.indentLevel == indentLevelCtx &&
-          !(node.isCode && isCaretHere)) {
+          reuse.indentLevel == indentLevelCtx) {
         final dy = y - reuse.boxTop;
         if (dy != 0) reuse.shiftBy(dy);
+        // Horizontal auto-scroll follows the live caret inside an unchanged
+        // code block — the slow path's rule, resolved against the CACHED
+        // painter so no span is rebuilt (`caretMoved` guards it the same way:
+        // blink and manual scrollbar drags must not yank the scroll back).
+        if (node.isCode && isCaretHere && caretMoved) {
+          final caretX = reuse.painter
+              .getOffsetForCaret(
+                TextPosition(
+                  offset: sel.focus.offset.clamp(0, node.text.length),
+                ),
+                Rect.zero,
+              )
+              .dx;
+          var scroll = _codeScroll[node.id] ?? 0;
+          final visible = reuse.codeVisible;
+          if (caretX - scroll > visible - 12) scroll = caretX - visible + 12;
+          if (caretX - scroll < 0) scroll = caretX;
+          final maxScroll = (reuse.codeWidth - visible).clamp(
+            0.0,
+            double.infinity,
+          );
+          _codeScroll[node.id] = scroll.clamp(0.0, maxScroll);
+        }
         _layouts.add(reuse);
         seenTextIds.add(node.id); // keep its painter live in _painterCache
         y += reuse.boxHeight;

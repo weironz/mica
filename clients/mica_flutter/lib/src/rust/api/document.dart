@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `build_with_assets`, `doc`, `safe_base`, `snapshot`, `unique_asset_name`
+// These functions are ignored because they are not marked as `pub`: `build_with_assets`, `doc`, `safe_base`, `snapshot`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>>
 abstract class MicaDocument implements RustOpaqueInterface {
@@ -87,8 +87,8 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// Build a document by parsing Markdown with the authoritative engine
   /// (CommonMark + GFM). Used by local vault import (S-tier): the file stays the
   /// user's, parsing stays in Rust (and round-trips with `export_markdown`). A
-  /// fresh root id is minted; `mica_markdown::Block` mirrors `mica_core::Block`
-  /// field-for-field, so no schema translation is needed.
+  /// fresh root id is minted; `mica_markdown::Block` IS `mica_core::Block`
+  /// (re-exported), so no schema translation is needed.
   static MicaDocument fromMarkdown({required String markdown}) => RustLib
       .instance
       .api

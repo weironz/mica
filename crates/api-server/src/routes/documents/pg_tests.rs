@@ -1536,7 +1536,8 @@ mod parent_guard_pg {
     assert_eq!(
       order,
       vec![local_name, foreign_name, local_body],
-      "name tier first (local before foreign within it), body hit last even          though it is local and newer: {hits:?}"
+      "name tier first (local before foreign within it), body hit last even \
+       though it is local and newer: {hits:?}"
     );
 
     // Without a preference the two name hits fall back to recency, which is
@@ -1739,17 +1740,19 @@ mod parent_guard_pg {
     // One live blob and one already swept out of use.
     for (key, size, unref) in [("k-live", 1000i64, false), ("k-dead", 9_000_000i64, true)] {
       sqlx::query(
-          "INSERT INTO files(id, workspace_id, uploaded_by, object_key, mime_type,            byte_size, unreferenced_since)            VALUES($1,$2,$3,$4,'image/png',$5, CASE WHEN $6 THEN now() ELSE NULL END)",
-        )
-        .bind(Uuid::new_v4())
-        .bind(ws)
-        .bind(user)
-        .bind(format!("{key}-{}", Uuid::new_v4()))
-        .bind(size)
-        .bind(unref)
-        .execute(&db)
-        .await
-        .unwrap();
+        "INSERT INTO files(id, workspace_id, uploaded_by, object_key, mime_type, \
+           byte_size, unreferenced_since) \
+           VALUES($1,$2,$3,$4,'image/png',$5, CASE WHEN $6 THEN now() ELSE NULL END)",
+      )
+      .bind(Uuid::new_v4())
+      .bind(ws)
+      .bind(user)
+      .bind(format!("{key}-{}", Uuid::new_v4()))
+      .bind(size)
+      .bind(unref)
+      .execute(&db)
+      .await
+      .unwrap();
     }
 
     let row = sqlx::query_as::<_, (i64, i64, i64)>(
@@ -1804,15 +1807,16 @@ mod parent_guard_pg {
       .await
       .unwrap();
     sqlx::query(
-        "INSERT INTO views(id, workspace_id, parent_view_id, object_id, object_type,          name, position, created_by) VALUES($1,$2,NULL,$3,'folder','一个文件夹','a0',$4)",
-      )
-      .bind(Uuid::new_v4())
-      .bind(ws)
-      .bind(Uuid::new_v4())
-      .bind(user)
-      .execute(&db)
-      .await
-      .unwrap();
+      "INSERT INTO views(id, workspace_id, parent_view_id, object_id, object_type, \
+         name, position, created_by) VALUES($1,$2,NULL,$3,'folder','一个文件夹','a0',$4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(ws)
+    .bind(Uuid::new_v4())
+    .bind(user)
+    .execute(&db)
+    .await
+    .unwrap();
 
     let rows = sqlx::query_as::<_, (Uuid, i64)>(
         "SELECT id, page_count FROM (            SELECT w.id AS id, (              SELECT count(*) FROM views v              WHERE v.workspace_id = w.id AND v.is_deleted = false                AND v.object_type::text = 'document'            )::bigint AS page_count            FROM workspaces w WHERE w.id = $1          ) t",

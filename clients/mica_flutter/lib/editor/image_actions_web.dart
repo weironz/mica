@@ -1,24 +1,24 @@
 import 'dart:async';
-
-// dart:js_util resolves only for the web compile target (this file is reached
-// solely via a dart.library.html conditional import); the VM-targeted analyzer
-// can't see it, so silence that single false-positive here.
-// ignore: uri_does_not_exist
-import 'dart:js_util' as js_util;
-import 'dart:html' as html;
+import 'dart:js_interop';
 import 'dart:typed_data';
+
+import 'package:web/web.dart' as web;
 
 /// Trigger a browser download of [bytes] as [filename].
 void downloadImage(Uint8List bytes, String filename, String mime) {
-  final blob = html.Blob(<dynamic>[bytes], mime);
-  final url = html.Url.createObjectUrlFromBlob(blob);
-  final anchor = html.AnchorElement(href: url)
+  final blob = web.Blob(
+    <JSAny>[bytes.toJS].toJS,
+    web.BlobPropertyBag(type: mime),
+  );
+  final url = web.URL.createObjectURL(blob);
+  final anchor = web.document.createElement('a') as web.HTMLAnchorElement
+    ..href = url
     ..download = filename
     ..style.display = 'none';
-  html.document.body?.append(anchor);
+  web.document.body?.append(anchor);
   anchor.click();
   anchor.remove();
-  html.Url.revokeObjectUrl(url);
+  web.URL.revokeObjectURL(url);
 }
 
 /// Print [htmlContent] (a complete, self-contained HTML document) via the
@@ -26,7 +26,7 @@ void downloadImage(Uint8List bytes, String filename, String mime) {
 /// PDF"). Renders into a hidden, same-origin iframe so only the document prints,
 /// not the app shell. Kept alive briefly while the dialog is open, then removed.
 Future<void> printHtml(String htmlContent) async {
-  final iframe = html.IFrameElement()
+  final iframe = web.document.createElement('iframe') as web.HTMLIFrameElement
     ..style.position = 'fixed'
     ..style.right = '0'
     ..style.bottom = '0'
@@ -34,21 +34,16 @@ Future<void> printHtml(String htmlContent) async {
     ..style.height = '0'
     ..style.border = '0'
     ..setAttribute('aria-hidden', 'true');
-  html.document.body?.append(iframe);
+  web.document.body?.append(iframe);
   // `srcdoc` renders the self-contained doc in an isolated, same-origin frame.
-  iframe.srcdoc = htmlContent;
+  iframe.srcdoc = htmlContent.toJS;
   await iframe.onLoad.first;
-  // Reach the frame's window through js_util, NOT the typed `contentWindow`
-  // getter: that returns a dart:html `WindowBase` *wrapper*, and dispatching
-  // through the wrapper fails at runtime with
-  // `NoSuchMethodError: method not found: 'focus'`. Reading the property off
-  // the raw element hands us the underlying JS window, which does have
-  // `focus`/`print`.
-  final win = js_util.getProperty<Object?>(iframe, 'contentWindow');
-  if (win != null) {
-    js_util.callMethod<void>(win, 'focus', <dynamic>[]);
-    js_util.callMethod<void>(win, 'print', <dynamic>[]);
-  }
+  // package:web dispatches straight through to the underlying JS window — the
+  // old dart:html wrapper around `contentWindow` is what used to fail with
+  // `NoSuchMethodError: method not found: 'focus'`.
+  final win = iframe.contentWindow;
+  win?.focus();
+  win?.print();
   Future<void>.delayed(const Duration(minutes: 1), iframe.remove);
 }
 
@@ -63,19 +58,14 @@ Future<bool> copyImageToClipboard(Uint8List bytes, String mime) async {
 /// Modern path — requires a secure context (https/localhost).
 Future<bool> _copyViaClipboardApi(Uint8List bytes, String mime) async {
   try {
-    final clipboard = js_util.getProperty(html.window.navigator, 'clipboard');
-    if (clipboard == null) return false;
-    final ctor = js_util.getProperty(html.window, 'ClipboardItem');
-    if (ctor == null) return false;
-    final blob = html.Blob(<dynamic>[bytes], mime);
-    final data = js_util.newObject();
-    js_util.setProperty(data, mime, blob);
-    final item = js_util.callConstructor(ctor, <dynamic>[data]);
-    await js_util.promiseToFuture<void>(
-      js_util.callMethod(clipboard, 'write', <dynamic>[
-        js_util.jsify(<dynamic>[item]),
-      ]),
+    final clipboard = web.window.navigator.clipboard;
+    final blob = web.Blob(
+      <JSAny>[bytes.toJS].toJS,
+      web.BlobPropertyBag(type: mime),
     );
+    final data = <String, web.Blob>{mime: blob}.jsify() as JSObject;
+    final item = web.ClipboardItem(data);
+    await clipboard.write(<web.ClipboardItem>[item].toJS).toDart;
     return true;
   } catch (_) {
     return false;
@@ -85,14 +75,17 @@ Future<bool> _copyViaClipboardApi(Uint8List bytes, String mime) async {
 /// Legacy path — select an off-screen <img> and execCommand('copy'). Works in
 /// non-secure (http) contexts where the async Clipboard API is unavailable.
 Future<bool> _copyViaExecCommand(Uint8List bytes, String mime) async {
-  final blob = html.Blob(<dynamic>[bytes], mime);
-  final url = html.Url.createObjectUrlFromBlob(blob);
-  final holder = html.DivElement()
+  final blob = web.Blob(
+    <JSAny>[bytes.toJS].toJS,
+    web.BlobPropertyBag(type: mime),
+  );
+  final url = web.URL.createObjectURL(blob);
+  final holder = web.document.createElement('div') as web.HTMLDivElement
     ..contentEditable = 'true'
     ..style.position = 'fixed'
     ..style.left = '-10000px'
     ..style.top = '0';
-  final img = html.ImageElement();
+  final img = web.document.createElement('img') as web.HTMLImageElement;
   final loaded = Completer<bool>();
   void finishLoading(bool success) {
     if (!loaded.isCompleted) loaded.complete(success);
@@ -101,7 +94,7 @@ Future<bool> _copyViaExecCommand(Uint8List bytes, String mime) async {
   final loadSub = img.onLoad.listen((_) => finishLoading(true));
   final errorSub = img.onError.listen((_) => finishLoading(false));
   holder.append(img);
-  html.document.body?.append(holder);
+  web.document.body?.append(holder);
   try {
     img.src = url;
     if (!await loaded.future.timeout(
@@ -110,12 +103,12 @@ Future<bool> _copyViaExecCommand(Uint8List bytes, String mime) async {
     )) {
       return false;
     }
-    final range = html.Range()..selectNode(img);
-    final selection = html.window.getSelection();
+    final range = web.document.createRange()..selectNode(img);
+    final selection = web.window.getSelection();
     selection
       ?..removeAllRanges()
       ..addRange(range);
-    final ok = html.document.execCommand('copy');
+    final ok = web.document.execCommand('copy');
     selection?.removeAllRanges();
     return ok;
   } catch (_) {
@@ -124,6 +117,6 @@ Future<bool> _copyViaExecCommand(Uint8List bytes, String mime) async {
     await loadSub.cancel();
     await errorSub.cancel();
     holder.remove();
-    html.Url.revokeObjectUrl(url);
+    web.URL.revokeObjectURL(url);
   }
 }

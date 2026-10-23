@@ -74,7 +74,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
       behavior: HitTestBehavior.opaque,
       onTap: () {
         _clearTreeSelection();
-        _focusRoot();
+        _tree.focusRoot();
       },
       // Esc ALSO clears the selection — via [_escKeyEvent], a global
       // HardwareKeyboard handler, NOT any binding here. Three focus-based
@@ -179,7 +179,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                       ? null
                       : () => widget.onOpenInNewTab!(item.view),
                   onRenameSubmit: (name) => _commitRename(item.view, name),
-                  onRenameCancel: _cancelRename,
+                  onRenameCancel: _inlineRename.cancel,
                   onDelete: () => widget.onDeleteView(item.view),
                 );
                 if (!canEdit) {
@@ -290,11 +290,6 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
   /// during the very frames this is meant to keep cheap, and the one controlled
   /// comparison anyone cites found skeletons no better liked than a spinner.
   /// The job here is only to not lie about the workspace being empty.
-  /// Tapping the tree's blank area deselects the located node: nothing is
-  /// highlighted and the top New-page/New-folder buttons create at the
-  /// workspace root (the only way to reach the root while a doc stays open).
-  void _focusRoot() => _tree.focusRoot();
-
   /// Wrap a page row so it can be dragged to reorder among its siblings (its
   /// subtree follows, since children render under their parent). Touch moves
   /// scroll the tree; long-press then move reorders. Mouse drags start at once.
@@ -696,7 +691,8 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
               .toList()
             ..sort((a, b) => a.position.compareTo(b.position));
       children.addAll(dragged);
-      setState(() => _expandForChildOf(target.id)); // reveal the drop target
+      // Reveal the drop target.
+      setState(() => _tree.expandForChildOf(widget.views, target.id));
       widget.onReorderViews(target.id, children);
       return;
     }
@@ -800,10 +796,6 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
   /// `setState`, and a cross-workspace hit has to wait for the other
   /// workspace's tree to load at all. [_flushPendingReveal] retries per frame
   /// until the row is on screen.
-  /// Locate [viewId] when its tree has it, and remember it either way —
-  /// the row may belong to a workspace whose views have not arrived yet.
-  void _revealInTree(String viewId) => _tree.revealInTree(widget.views, viewId);
-
   /// Scroll the pending row into view, then stop asking.
   ///
   /// Computed from the row's INDEX, not from its widget. The first version
@@ -834,7 +826,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
     // is exactly the height of the rows just revealed, which is why it looked
     // like "scrolled, but you still have to drag a bit further".
     if (widget.views.any((v) => v.id == id) && !_tree.isExpanded(id)) {
-      _revealFolder(id);
+      _tree.revealFolder(widget.views, id);
       return; // re-entered next frame, against the grown list
     }
     final rows = _visibleDocumentTree();
@@ -864,17 +856,4 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
   /// DocumentListItem's 38px floor. Keep locating distant rows in this same unit.
   double get _treeRowExtent => 46.0;
 
-  /// Locate [viewId] and expand it plus its ancestors; an id not in this
-  /// workspace's tree does nothing. Logic in the tree controller.
-  void _revealFolder(String viewId) => _tree.revealFolder(widget.views, viewId);
-
-  /// Expand every ANCESTOR of [id] so a (possibly nested) node is revealed in
-  /// the sidebar — used on navigate/create so the active/new page is never
-  /// hidden under a collapsed parent (AppFlowy/Notion "reveal current page").
-  /// The node itself is not expanded (that would show ITS children).
-  void _revealAncestors(String id) => _tree.revealAncestors(widget.views, id);
-
-  /// Expand [id] itself (so a freshly-created/dropped child under it is visible)
-  /// plus its ancestor chain.
-  void _expandForChildOf(String id) => _tree.expandForChildOf(widget.views, id);
 }

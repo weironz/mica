@@ -92,24 +92,6 @@ pub struct YrsBase {
   pub base_rid: i64,
 }
 
-/// The document's plain, queryable text: every block's clean `text` in tree
-/// order, joined by newlines (empty-text blocks — page root, images — dropped),
-/// followed by the page's front-matter PROPERTY VALUES (tags included) so a
-/// workspace search finds a page by its properties, not just its body (M2).
-///
-/// This is the ONLY producer of `document_yrs_base.content_text`, and it is a
-/// pure projection of the SAME folded `doc` whose `encode_state()` is written as
-/// `state` in the same statement. So the search index can never diverge from the
-/// base it indexes (red line #1: no second representation, derived + co-written).
-/// Front matter lives on the root block's `data['front_matter']`, which is part
-/// of that same base — appending its parsed values keeps content_text a pure
-/// projection. Newlines between blocks keep a needle from spuriously matching
-/// across a block boundary. Marks/attributes live in `data`, never in `text`, so
-/// the body part carries no formatting — exactly what a substring search wants.
-/// `pub` rather than `pub(crate)` so out-of-band repairs (the `repair_url_labels`
-/// example) derive `content_text` through the SAME function the write paths use.
-/// A second implementation there would be a second source of truth for a column
-/// whose whole contract is "pure derivation of `state`".
 /// The document's own title, if it carries one — the source `views.name` is a
 /// projection of.
 ///
@@ -131,6 +113,24 @@ fn title_from_blocks(blocks: &[mica_core::Block], root_id: &str) -> Option<Strin
   mica_markdown::document_title(&payload).map(str::to_string)
 }
 
+/// The document's plain, queryable text: every block's clean `text` in tree
+/// order, joined by newlines (empty-text blocks — page root, images — dropped),
+/// followed by the page's front-matter PROPERTY VALUES (tags included) so a
+/// workspace search finds a page by its properties, not just its body (M2).
+///
+/// This is the ONLY producer of `document_yrs_base.content_text`, and it is a
+/// pure projection of the SAME folded `doc` whose `encode_state()` is written as
+/// `state` in the same statement. So the search index can never diverge from the
+/// base it indexes (red line #1: no second representation, derived + co-written).
+/// Front matter lives on the root block's `data['front_matter']`, which is part
+/// of that same base — appending its parsed values keeps content_text a pure
+/// projection. Newlines between blocks keep a needle from spuriously matching
+/// across a block boundary. Marks/attributes live in `data`, never in `text`, so
+/// the body part carries no formatting — exactly what a substring search wants.
+/// `pub` rather than `pub(crate)` so out-of-band repairs (the `repair_url_labels`
+/// example) derive `content_text` through the SAME function the write paths use.
+/// A second implementation there would be a second source of truth for a column
+/// whose whole contract is "pure derivation of `state`".
 pub fn content_text_from_doc(doc: &MicaDoc) -> String {
   content_text_from_blocks(&doc.to_blocks(), &doc.root_block_id())
 }
@@ -397,8 +397,10 @@ const BACKFILL_BATCH: i64 = 256;
 /// `content_text` (migration 0012), `link_targets` (0019) and `file_ids` (0030)
 /// — for rows the
 /// migrations could only create empty, because deriving either needs the yrs
-/// decode, which is Rust, not SQL. Run once after `run_migrations`, before the
-/// server accepts traffic.
+/// decode, which is Rust, not SQL. Spawned once at startup, running alongside
+/// live traffic rather than ahead of it — every write is conditional on the
+/// state it was derived from (the `AND state =` guard below), so a document
+/// edited mid-pass is not regressed.
 ///
 /// ONE pass for both: they are projections of the same folded doc, so a row that
 /// needs either is decoded once and both are written together. Splitting this in
@@ -444,9 +446,10 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
     // One transaction per batch, not per row. Measured 2026-08-05 on a
     // restored production snapshot (3784 rows): 43.8 s as autocommit
     // singletons — the decodes are only ~3 s of that, the rest was 3784
-    // separate round-trips each paying a commit. This runs before the server
-    // accepts traffic, so those seconds were startup downtime on the first
-    // boot after a deploy.
+    // separate round-trips each paying a commit. The pass is spawned after
+    // startup now (it used to block boot), but per-row commits would still be
+    // 3784 wasted round-trips of background churn on the first boot after a
+    // deploy.
     let mut tx = db.begin().await?;
     for (document_id, state) in &rows {
       cursor = *document_id;
@@ -628,8 +631,9 @@ pub async fn seed_base_tx(
   })
 }
 
-/// The document's bootstrap base, building it from the op-model snapshot on first
-/// access. Use this for the WS bootstrap of a client opening the document.
+/// The document's bootstrap base — the stored one, or an empty seed when none
+/// exists yet ([`ensure_base_tx`]). Use this for the WS bootstrap of a client
+/// opening the document.
 pub async fn bootstrap_base(db: &PgPool, document_id: Uuid) -> ApiResult<YrsBase> {
   let mut tx = db.begin().await?;
   let base = ensure_base_tx(&mut tx, document_id).await?;
@@ -800,12 +804,12 @@ pub async fn push_update_checked(
 /// the name it already has must not spend a version snapshot or wake every
 /// connected client.
 ///
-/// **Uses [`MicaDoc::set_block_prop`], NOT `set_blocks`**, and that is the whole
-/// point: the wide rewrite would invalidate every comment anchor on the page and
-/// force each one through quote-based re-anchoring — best-effort by design, so
-/// an ambiguous quote is left orphaned. A rename must not roll that dice. The
-/// two acceptance tests are in `comments.rs`; the reasoning is
-/// `docs/features/page-title-plan.md` §5.1.
+/// **Uses [`MicaDoc::set_block_prop`], NOT `set_blocks`**: a rename touches one
+/// `props` key on one block, so the written diff should be exactly that one
+/// entry — reading the whole block set back out to re-diff it would converge
+/// to the same content for a hundred times the work. The two acceptance tests
+/// are in `comments.rs`; the reasoning is `docs/features/page-title-plan.md`
+/// §5.1.
 pub async fn set_document_title(
   db: &PgPool,
   workspace_id: Uuid,
@@ -1072,9 +1076,10 @@ mod tests {
     );
   }
 
-  // The lazy-migration bridge: an op-model snapshot payload must reconstruct
-  // into a yrs doc whose blocks/marks survive an encode→decode round trip (the
-  // exact path `ensure_base_tx` takes when building a base for an existing doc).
+  // A snapshot payload must reconstruct into a yrs doc whose blocks/marks
+  // survive an encode→decode round trip — the exact path `seed_base_tx` takes
+  // when building a document's first base. (It used to pin the op-model
+  // migration bridge; S5 retired that, the payload → yrs path stayed.)
   #[test]
   fn snapshot_payload_bridges_into_yrs_round_trip() {
     let root_id = "r".to_string();

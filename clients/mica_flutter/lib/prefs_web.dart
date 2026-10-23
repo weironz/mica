@@ -15,8 +15,7 @@
 // shape, not a regression: `main.dart` asks `/api/auth/refresh`, which the
 // browser answers with the refresh cookie, and gets a fresh one. The durable
 // credential is never handed to script.
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+import 'package:web/web.dart' as web;
 
 const _prefix = 'mica.';
 
@@ -34,7 +33,7 @@ final Map<String, String> _memory = {};
 
 String? loadPref(String key) => _isSecret(key)
     ? _memory[key]
-    : html.window.localStorage['$_prefix$key'];
+    : web.window.localStorage.getItem('$_prefix$key');
 
 void savePref(String key, String value) {
   if (_isSecret(key)) {
@@ -42,13 +41,13 @@ void savePref(String key, String value) {
     // Clear any copy an older build left behind. Without this the upgrade is
     // cosmetic: the token stops being written, and the one already sitting in
     // localStorage stays there, stealable, forever.
-    html.window.localStorage.remove('$_prefix$key');
+    web.window.localStorage.removeItem('$_prefix$key');
     return;
   }
-  html.window.localStorage['$_prefix$key'] = value;
+  web.window.localStorage.setItem('$_prefix$key', value);
 }
 
 void removePref(String key) {
   _memory.remove(key);
-  html.window.localStorage.remove('$_prefix$key');
+  web.window.localStorage.removeItem('$_prefix$key');
 }

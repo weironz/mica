@@ -646,6 +646,21 @@ fn normalize_view_name(name: &str) -> ApiResult<String> {
   Ok(name)
 }
 
+/// Server-side enforcement of the mangled-LaTeX guard (issue #83): it used to
+/// live only in the MCP proxy layer, so REST and CLI writes walked straight past
+/// it. The rules live in `mica-markdown`; here a collision is a 400 naming the
+/// escape that decoded wrong and how to fix it. Any request field carrying
+/// authored markdown (the body, a find_replace `replace`, …) must pass through
+/// this before it is stored.
+fn reject_mangled_latex(markdown: &str) -> ApiResult<()> {
+  match mica_markdown::mangled_latex_collision(markdown) {
+    Some((escape, example)) => Err(ApiError::BadRequest(mica_markdown::mangled_latex_message(
+      escape, example,
+    ))),
+    None => Ok(()),
+  }
+}
+
 fn normalize_position(position: Option<String>) -> ApiResult<String> {
   let Some(position) = position else {
     return Ok(Uuid::now_v7().to_string());
@@ -699,6 +714,9 @@ macro_rules! batch_view_handler {
 
 #[cfg(test)]
 mod pg_tests;
+
+#[cfg(test)]
+mod contract_gold_tests;
 
 mod crud;
 mod export;

@@ -53,8 +53,9 @@ List<String> ancestorPathSegments({
 }) {
   final byId = {for (final v in views) v.id: v};
   final folders = <String>[];
-  // Same `seen` guard as _revealFolder: the tree forbids cycles, but walking it
-  // should not be the thing that hangs if one ever appears.
+  // Same `seen` guard as SidebarTreeController.revealFolder: the tree forbids
+  // cycles, but walking it should not be the thing that hangs if one ever
+  // appears.
   final seen = <String>{?startedAt};
   var cursor = parentViewId;
   while (cursor != null && seen.add(cursor)) {

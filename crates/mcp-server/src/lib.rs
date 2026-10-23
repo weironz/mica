@@ -376,6 +376,9 @@ pub async fn serve_stdio(base: String, pat: String, read_only: bool) -> anyhow::
 }
 
 #[cfg(test)]
+mod contract_tests;
+
+#[cfg(test)]
 mod tests {
   use super::*;
   use crate::markdown_windows::{
@@ -542,54 +545,20 @@ step
     assert!(out.contains("no heading contains"));
   }
 
-  /// Byte-for-byte what reached the database from a real MCP write of
-  /// `$\eta = 2 \times \frac{N-1}{N}$` with under-escaped backslashes. Spelled
-  /// with \u{..} rather than Rust's own `\t`, because `"\times"` in Rust
-  /// source IS tab+"imes" — the very confusion that caused the bug, and not
-  /// something a test about it should re-enact.
+  /// The collision rules themselves (and their fixtures — the real shipped
+  /// corruption, every collision char, the legitimate content that must pass)
+  /// moved to `mica_markdown::latex_guard` with the guard (issue #83). What
+  /// stays here: the wrapper turns a collision into an error, and stays silent
+  /// on clean input.
   #[test]
-  fn rejects_the_corruption_that_actually_shipped() {
-    let mangled = concat!(
-      "**A**: For $N$ nodes it is $\\eta = 2 ",
-      "\u{0009}imes \u{000C}rac{N-1}{N}$, approaching $2$."
+  fn the_wrapper_maps_a_collision_to_an_error() {
+    assert_eq!(
+      reject_mangled_latex("a \u{000C}rac b")
+        .err()
+        .map(|e| e.message.to_string()),
+      Some(mica_markdown::mangled_latex_message(r"\f", r"\frac"))
     );
-    // Precondition: this really is the shape we saw — \eta intact, the
-    // other two commands eaten down to a control char.
-    assert!(mangled.contains(r"\eta"));
-    assert!(!mangled.contains(r"\times") && !mangled.contains(r"\frac"));
-    assert!(reject_mangled_latex(mangled).is_err());
-  }
-
-  #[test]
-  fn rejects_each_collision_char() {
-    // \f, \v, \b are impossible in real markdown — rejected anywhere.
-    assert!(reject_mangled_latex("a \u{000C}rac b").is_err()); // \frac
-    assert!(reject_mangled_latex("a \u{000B}ec b").is_err()); // \vec
-    assert!(reject_mangled_latex("a \u{0008}eta b").is_err()); // \beta
-    // A tab only condemns itself inside a formula.
-    assert!(reject_mangled_latex("$x \u{0009}imes y$").is_err()); // \times
-  }
-
-  /// The guard must never fire on content someone legitimately wrote, or it
-  /// blocks the very workflow it protects.
-  #[test]
-  fn accepts_legitimate_content() {
-    // Correctly escaped LaTeX — the whole point.
     assert!(reject_mangled_latex(r"$\eta = 2 \times \frac{N-1}{N}$").is_ok());
-    // A tab outside math is ordinary indentation / code.
-    assert!(reject_mangled_latex("- item\n\u{0009}continued\n\n\u{0009}code();").is_ok());
-    assert!(reject_mangled_latex("| a\u{0009}| b |\n|---|---|").is_ok());
-    // Currency is not math (no valid closer), so its tabs stay innocent.
-    assert!(reject_mangled_latex("costs $5\u{0009}and $10").is_ok());
-    // Plain prose, newlines and CR are untouched.
-    assert!(reject_mangled_latex("line one\r\nline two\n").is_ok());
-  }
-
-  /// A `$` inside a code span never opens a run (§6.1), so a tab after it is
-  /// not "inside math" — proves the guard uses the parser's real rules.
-  #[test]
-  fn a_tab_after_a_dollar_in_a_code_span_is_not_math() {
-    assert!(reject_mangled_latex("`$HOME`\tand `$PATH`\tare paths").is_ok());
   }
 }
 

@@ -76,6 +76,22 @@ pub struct CloneViewResult {
     pub docs: u32,
 }
 
+/// One file the folder picker walked for [`MicaStore::import_vault_tree`]: the
+/// forward-slashed path relative to the picked root, plus its bytes.
+pub struct VaultTreeEntry {
+    pub path: String,
+    pub bytes: Vec<u8>,
+}
+
+/// What [`MicaStore::import_vault_tree`] produced: pages/folders created and
+/// one named error per entry that failed — the same record shape the Dart-side
+/// backend hands its callers.
+pub struct VaultImportOutcome {
+    pub docs: u32,
+    pub folders: u32,
+    pub errors: Vec<String>,
+}
+
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
 /// `DocumentView`. `object_id` is the document's `doc_id`.
 pub struct LocalView {
@@ -747,6 +763,124 @@ impl MicaStore {
             new_name: out.new_name,
             docs: out.docs,
         })
+    }
+
+    /// Import a walked vault folder into `workspace_id` — the desktop half of
+    /// "open my vault" (issue #84).
+    ///
+    /// The whole walk used to live in Dart (`local_offline_io.dart`), as a
+    /// second implementation of rules Rust already owns: `interchange`'s
+    /// folder planning and `next_position`'s step-of-ten — two copies kept in
+    /// step by nothing. The tree now comes from
+    /// `mica_interchange::plan_vault_import` (which shares one plan core with
+    /// the archive importer, skipping only the archive-specific wrapper-peel
+    /// and nested-zip expansion, so the two import surfaces cannot drift), and
+    /// every row lands through [`Self::create_view`], whose position comes
+    /// from [`Self::next_position`] — a page written by this import and a page
+    /// created in the sidebar sit by the same rule.
+    ///
+    /// `asset_ids` keys every non-Markdown entry's path to the blob id Dart
+    /// already stored it under: the on-device blob CAS itself stays on the
+    /// Dart side (there is no blob writer over FFI); what moved here is the
+    /// tree, the positions, and the per-page conversion.
+    ///
+    /// `plan.pages` is creation-ordered (a page's parent ALWAYS comes earlier),
+    /// so mirror it into view rows one by one, recording view ids by plan index.
+    pub fn import_vault_tree(
+        &self,
+        entries: Vec<VaultTreeEntry>,
+        workspace_id: String,
+        parent_view_id: Option<String>,
+        asset_ids: std::collections::HashMap<String, String>,
+    ) -> VaultImportOutcome {
+        let plan = mica_interchange::plan_vault_import(
+            entries
+                .into_iter()
+                .map(|e| mica_interchange::ZipFileEntry {
+                    name: e.path,
+                    bytes: e.bytes,
+                })
+                .collect(),
+        );
+        let mut outcome = VaultImportOutcome {
+            docs: 0,
+            folders: 0,
+            errors: Vec::new(),
+        };
+        let mut view_ids: Vec<Option<String>> = Vec::with_capacity(plan.pages.len());
+        for page in &plan.pages {
+            let parent_view = match page.parent {
+                // Top-level nodes hang off the import target, else the workspace
+                // root (None). The server import calls this the `root_parent`.
+                None => parent_view_id.clone(),
+                Some(p) => match view_ids.get(p).copied().flatten() {
+                    Some(id) => Some(id),
+                    // A child of a folder we failed to create must not silently
+                    // land at the root; skip it and say so.
+                    None => {
+                        outcome.errors.push(format!(
+                            "{}: skipped — its parent folder could not be created",
+                            page.title
+                        ));
+                        view_ids.push(None);
+                        continue;
+                    }
+                },
+            };
+
+            let doc_id = format!("doc_{}", uuid::Uuid::new_v4());
+            let object_type;
+            if page.is_folder {
+                // A pure container — even so the view row wants an object id,
+                // and an empty placeholder doc is the shape the old Dart import
+                // (and the server's folder import) produced.
+                object_type = "folder";
+                self.save_doc(
+                    doc_id.clone(),
+                    &MicaDocument::from_markdown(String::new()),
+                );
+            } else {
+                object_type = "document";
+                let doc = MicaDocument::from_markdown_with_assets(
+                    page.markdown.clone(),
+                    page.archive_path.clone().unwrap_or_default(),
+                    asset_ids.clone(),
+                );
+                // The file name goes INTO the document, not only into the view
+                // row beside it (docs/features/page-title-plan.md) — a vault
+                // page knows its own name by the same rule as a renamed one.
+                if !page.title.is_empty() {
+                    doc.set_title(page.title.clone());
+                }
+                self.save_doc(doc_id.clone(), &doc);
+            }
+            let name = if page.title.is_empty() {
+                "Untitled".to_string()
+            } else {
+                page.title.clone()
+            };
+            let view_id = self.create_view(
+                workspace_id.clone(),
+                parent_view,
+                doc_id,
+                name,
+                object_type.to_string(),
+            );
+            if view_id.is_empty() {
+                outcome
+                    .errors
+                    .push(format!("{}: view row refused by the store", page.title));
+                view_ids.push(None);
+                continue;
+            }
+            if page.is_folder {
+                outcome.folders += 1;
+            } else {
+                outcome.docs += 1;
+            }
+            view_ids.push(Some(view_id));
+        }
+        outcome
     }
 
     /// All workspaces for `origin` ("local" or a server URL), ordered by position.
@@ -1553,6 +1687,98 @@ mod clone_view_tests {
         let id = store.create_workspace("C".into());
         let all = store.list_workspaces("local".to_string());
         assert_eq!(all.iter().find(|w| w.id == id).unwrap().position, "0000000030");
+    }
+
+    fn vte(path: &str, bytes: &str) -> VaultTreeEntry {
+        VaultTreeEntry {
+            path: path.to_string(),
+            bytes: bytes.as_bytes().to_vec(),
+        }
+    }
+
+    fn view_by_name<'a>(views: &'a [LocalView], name: &str) -> &'a LocalView {
+        views
+            .iter()
+            .find(|v| v.name == name)
+            .unwrap_or_else(|| panic!("no view named {name}: {:?}", views.iter().map(|v| &v.name).collect::<Vec<_>>()))
+    }
+
+    /// The walk the Dart twin used to do by hand (issue #84): `vault/` and
+    /// `vault/inner/` become folders, the two `.md` files pages inside them,
+    /// the dot-dir's content stays out entirely.
+    #[test]
+    fn vault_import_mirrors_the_directory_tree() {
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("ws1", "WS", "0000000010"));
+        let outcome = store.import_vault_tree(
+            vec![
+                vte("vault/a.md", "# A\n\nbody\n\n![x](assets/p.png)"),
+                vte("vault/assets/p.png", "PNG"),
+                vte("vault/inner/b.md", "B"),
+                vte("vault/.obsidian/x.md", "x"),
+            ],
+            "ws1".into(),
+            None,
+            std::collections::HashMap::from([(
+                "vault/assets/p.png".to_string(),
+                "sha256deadbeef".to_string(),
+            )]),
+        );
+        assert_eq!((outcome.docs, outcome.folders), (2, 2));
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+
+        let views = store.list_views("local".to_string());
+        let vault = view_by_name(&views, "vault");
+        let inner = view_by_name(&views, "inner");
+        let a = view_by_name(&views, "a");
+        let b = view_by_name(&views, "b");
+        assert_eq!(vault.object_type, "folder");
+        assert_eq!(inner.object_type, "folder");
+        assert_eq!(a.object_type, "document");
+        assert_eq!(a.parent_id.as_deref(), Some(vault.id.as_str()));
+        assert_eq!(inner.parent_id.as_deref(), Some(vault.id.as_str()));
+        assert_eq!(b.parent_id.as_deref(), Some(inner.id.as_str()));
+        assert_eq!(vault.parent_id, None);
+        assert!(!views.iter().any(|v| v.name == "x" || v.name == ".obsidian"));
+
+        // The body made it in with its heading intact (foreign content is
+        // never stripped), and the image rewired to the blob Dart stored —
+        // the path form gone, which only happens through resolve_ref hitting
+        // the asset map.
+        let a_doc = store.load_doc(a.object_id.clone()).unwrap().unwrap();
+        let body = a_doc.export_markdown();
+        assert!(body.contains("# A\n\nbody"), "{body}");
+        assert!(!body.contains("assets/p.png"), "{body}");
+    }
+
+    /// Into a NON-EMPTY tree, imported nodes must not reuse positions already
+    /// taken — the old Dart counter seeded from the existing max; that job is
+    /// `next_position`'s now, and this is the test for the handover.
+    #[test]
+    fn vault_import_continues_after_existing_positions() {
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("ws1", "WS", "0000000010"));
+        store.create_view(
+            "ws1".into(),
+            None,
+            "doc_existing".into(),
+            "Existing".into(),
+            "document".into(),
+        );
+        let outcome = store.import_vault_tree(
+            vec![vte("a.md", "A"), vte("b.md", "B")],
+            "ws1".into(),
+            None,
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(outcome.docs, 2);
+        let views = store.list_views("local".to_string());
+        let ex_pos: i64 = view_by_name(&views, "Existing").position.parse().unwrap();
+        let a_pos: i64 = view_by_name(&views, "a").position.parse().unwrap();
+        let b_pos: i64 = view_by_name(&views, "b").position.parse().unwrap();
+        assert_eq!(ex_pos, 10);
+        assert_eq!(a_pos, 20, "the import lands after the existing page");
+        assert_eq!(b_pos, 30, "and its sibling after IT");
     }
 
 }

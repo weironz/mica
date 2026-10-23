@@ -128,7 +128,9 @@ async fn main() -> anyhow::Result<()> {
     if users > 0 && admins == 0 {
       tracing::warn!(
         users,
-        "no account on this instance is an admin, so nobody can change the AI          provider settings. Set MICA_ADMIN_EMAIL to the operator's address and          restart."
+        "no account on this instance is an admin, so nobody can change the AI \
+         provider settings. Set MICA_ADMIN_EMAIL to the operator's address and \
+         restart."
       );
     }
   }
@@ -142,7 +144,8 @@ async fn main() -> anyhow::Result<()> {
     0 => {}
     n => tracing::warn!(
       jobs = n,
-      "marked import job(s) as interrupted — they were running when the server last stopped,        and whatever they had already imported is still in the workspace"
+      "marked import job(s) as interrupted — they were running when the server \
+       last stopped, and whatever they had already imported is still in the workspace"
     ),
   }
 
@@ -222,7 +225,11 @@ async fn main() -> anyhow::Result<()> {
       let app = state.config.app_base_url.trim_end_matches('/');
       if !app.is_empty() && public.trim_end_matches('/').starts_with(app) {
         tracing::warn!(
-          "S3_PUBLIC_BASE_URL ({public}) shares an origin with MICA_APP_BASE_URL            ({app}). Blob reads redirect there, so an uploaded SVG would execute            SAME-ORIGIN with the app and could read its session. Serve blobs from            a separate host (or leave S3_PUBLIC_BASE_URL unset to use presigned            GETs, which already are)."
+          "S3_PUBLIC_BASE_URL ({public}) shares an origin with MICA_APP_BASE_URL \
+           ({app}). Blob reads redirect there, so an uploaded SVG would execute \
+           SAME-ORIGIN with the app and could read its session. Serve blobs from \
+           a separate host (or leave S3_PUBLIC_BASE_URL unset to use presigned \
+           GETs, which already are)."
         );
       }
     }

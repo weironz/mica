@@ -3,4 +3,4 @@
 /// also keeps the desktop-only `window_manager` package out of the web bundle.
 library;
 
-export 'window_setup_desktop.dart' if (dart.library.html) 'window_setup_web.dart';
+export 'window_setup_desktop.dart' if (dart.library.js_interop) 'window_setup_web.dart';

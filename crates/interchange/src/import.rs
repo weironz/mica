@@ -85,7 +85,34 @@ pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) 
   // workspace / import container after it (the peel itself discards the name).
   let wrapper_name = crate::normalize::stripped_wrapper_name(&raw);
   let entries = expand_nested_zips(normalize_entries(raw));
+  plan_core(entries, notion_hint, wrapper_name, mode)
+}
 
+/// Plan a walked DIRECTORY tree (the desktop "open my vault" folder picker,
+/// issue #84), as opposed to an archive. Same plan core as an archive import,
+/// minus the two normalizations only archives need: wrapper peeling (the
+/// folder the user picked IS the container — a single top-level dir inside it
+/// is real content, not packaging) and nested-zip expansion (a `.zip` in a
+/// vault is a vault file — an attachment, not an archive). Junk filtering
+/// stays: hidden/dot segments are hidden on-disk too.
+pub fn plan_vault_import(entries: Vec<ZipFileEntry>) -> ImportPlan {
+  let entries = entries
+    .into_iter()
+    .filter(|e| !crate::normalize::is_junk(&e.name))
+    .collect();
+  plan_core(entries, false, None, ImportMode::AsIs)
+}
+
+/// The shared planner behind [`plan_import`] (archives) and
+/// [`plan_vault_import`] (walked directories). `entries` must already be
+/// normalized for its source (see the callers); `wrapper_name` is the peeled
+/// single top-level dir an archive had, `None` otherwise.
+fn plan_core(
+  entries: Vec<ZipFileEntry>,
+  notion_hint: bool,
+  wrapper_name: Option<String>,
+  mode: ImportMode,
+) -> ImportPlan {
   let manifest = entries
     .iter()
     .find(|e| e.name == "manifest.json")
@@ -1446,5 +1473,62 @@ mod tests {
     let raw = vec![e("manifest.json", &json), e("A.md", "body")];
     let plan = plan_import(raw, false, ImportMode::AsIs);
     assert_eq!(find(&plan, "A").icon, None);
+  }
+
+  // ── plan_vault_import (issue #84): a walked folder is planned by the very
+  // same core as an archive, minus the two normalizations only archives need.
+
+  /// The folder the user PICKED is the container, so a single top-level dir
+  /// inside it is real content — never peeled. (`normalize_entries` strips it
+  /// for a zip; a vault has no zip's packaging layer.)
+  #[test]
+  fn a_vault_keeps_its_single_toplevel_dir() {
+    let raw = vec![
+      e("vault/a.md", "A"),
+      e("vault/inner/b.md", "B"),
+      e("vault/inner/deeper/c.md", "C"),
+    ];
+    let plan = plan_vault_import(raw);
+    assert!(find(&plan, "vault").is_folder);
+    assert_eq!(parent_title(&plan, "a"), Some("vault"));
+    assert!(find(&plan, "inner").is_folder);
+    assert_eq!(parent_title(&plan, "b"), Some("inner"));
+    assert_eq!(parent_title(&plan, "c"), Some("deeper"));
+    assert_eq!(plan.wrapper_name, None);
+  }
+
+  /// A zip IN a vault is a vault file, not an archive: it stays stored bytes,
+  /// never exploded into pages.
+  #[test]
+  fn a_zip_inside_a_vault_is_an_attachment_not_pages() {
+    let raw = vec![e("a.md", "A"), e("backup.zip", "PK")];
+    let plan = plan_vault_import(raw);
+    assert_eq!(plan.pages.len(), 1);
+    assert!(plan.files.contains_key("backup.zip"));
+  }
+
+  /// Hidden segments are hidden on disk too: dot-dirs and Apple junk drop out
+  /// of both the page tree and the attachments.
+  #[test]
+  fn a_vault_drops_hidden_paths() {
+    let raw = vec![
+      e("a.md", "A"),
+      e(".obsidian/config.md", "x"),
+      e(".DS_Store", "x"),
+      e("assets/.hidden.png", "x"),
+    ];
+    let plan = plan_vault_import(raw);
+    assert_eq!(plan.pages.len(), 1);
+    assert_eq!(plan.md_paths, paths(&["a.md"]));
+    assert!(plan.files.is_empty());
+  }
+
+  /// A vault is foreign content: its leading heading is the author's content
+  /// and survives, and the page name still comes from the file name.
+  #[test]
+  fn a_vault_page_keeps_its_leading_heading() {
+    let raw = vec![e("notes/Intro.md", "# Intro\n\nhello")];
+    let plan = plan_vault_import(raw);
+    assert_eq!(find(&plan, "Intro").markdown.trim(), "# Intro\n\nhello");
   }
 }

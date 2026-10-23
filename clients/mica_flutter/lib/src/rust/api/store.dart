@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'document.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clone_view_row`, `dedup_sibling_name`, `next_position`, `next_workspace_position`, `parent_accepts_children`, `set_trashed`, `store`, `subtree_ids`
+// These functions are ignored because they are not marked as `pub`: `next_position`, `next_workspace_position`, `parent_accepts_children`, `store`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>>
@@ -66,14 +66,15 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// Duplicate `view_id` and everything under it, beside the original.
   ///
-  /// The WHOLE operation, not a helper: subtree walk, fresh ids, doc copies,
-  /// sibling-name dedup and positioning all happen here. That is the point —
-  /// moving a leaf helper across the bridge would leave the tree rules
-  /// duplicated and pay a crossing per node; moving the operation deletes the
-  /// Dart copy outright. Mirrors `export_folder_zip` above, the composite
-  /// that was already de-duplicated this way.
+  /// The WHOLE operation lives in mica-core now (issue #67): subtree walk
+  /// (one recursive CTE over live rows only), fresh ids, doc copies,
+  /// sibling-name dedup and positioning all commit in ONE transaction — the
+  /// per-node upserts it replaced could leave a half-copied tree behind
+  /// after a crash.
   ///
-  /// Returns `None` when the view is gone or in the recycle bin.
+  /// Returns `None` when the view is gone or in the recycle bin — or when
+  /// the transaction failed, in which case nothing was written instead of
+  /// half of it.
   CloneViewResult? cloneView({
     required String viewId,
     required String rootName,
@@ -149,6 +150,34 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// its own loading state; the frame does not.
   Future<LocalGraph> graphLocal({required String workspaceId});
 
+  /// Import a walked vault folder into `workspace_id` — the desktop half of
+  /// "open my vault" (issue #84).
+  ///
+  /// The whole walk used to live in Dart (`local_offline_io.dart`), as a
+  /// second implementation of rules Rust already owns: `interchange`'s
+  /// folder planning and `next_position`'s step-of-ten — two copies kept in
+  /// step by nothing. The tree now comes from
+  /// `mica_interchange::plan_vault_import` (which shares one plan core with
+  /// the archive importer, skipping only the archive-specific wrapper-peel
+  /// and nested-zip expansion, so the two import surfaces cannot drift), and
+  /// every row lands through [`Self::create_view`], whose position comes
+  /// from [`Self::next_position`] — a page written by this import and a page
+  /// created in the sidebar sit by the same rule.
+  ///
+  /// `asset_ids` keys every non-Markdown entry's path to the blob id Dart
+  /// already stored it under: the on-device blob CAS itself stays on the
+  /// Dart side (there is no blob writer over FFI); what moved here is the
+  /// tree, the positions, and the per-page conversion.
+  ///
+  /// `plan.pages` is creation-ordered (a page's parent ALWAYS comes earlier),
+  /// so mirror it into view rows one by one, recording view ids by plan index.
+  Future<VaultImportOutcome> importVaultTree({
+    required List<VaultTreeEntry> entries,
+    required String workspaceId,
+    String? parentViewId,
+    required Map<String, String> assetIds,
+  });
+
   /// Ids of all stored documents (sorted).
   List<String> listDocs();
 
@@ -195,7 +224,10 @@ abstract class MicaStore implements RustOpaqueInterface {
   void purgeView({required String origin, required String id});
 
   /// Permanently remove `view_id` and its subtree, documents included.
-  /// Returns the affected ids. There is no undo past this point.
+  /// Returns the affected ids. There is no undo past this point. Runs in
+  /// mica-core (issue #67): the old path committed each document and each
+  /// view row separately, so a crash could orphan view rows pointing at
+  /// deleted documents; everything commits together now.
   List<String> purgeViewSubtree({required String viewId});
 
   /// Rename a workspace, KEEPING its position and role.
@@ -208,11 +240,12 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// Renumber `ordered_ids` as consecutive children of `parent_id`.
   ///
-  /// Positions restart at 10 and step by ten, matching
-  /// [`Self::next_position`] so a later insert still lands after them. Rows
-  /// already in the right place are left alone — an untouched row is one less
-  /// write and one less sync update. Reparenting is part of the same move:
-  /// dragging into another folder changes both.
+  /// The move itself runs in mica-core (issue #67): ONE transaction over
+  /// point UPDATEs instead of a full `list_views` scan plus one whole-row
+  /// upsert per moved row — a crash mid-drag used to leave a half-renumbered
+  /// sibling list. Same observable rules as before: positions restart at 10
+  /// and step by ten, rows already in the right place are left alone, and an
+  /// unknown id is skipped rather than inventing a row.
   void reorderViews({String? parentId, required List<String> orderedIds});
 
   /// Renumber workspaces to match `ordered_ids` (drag-reorder), same
@@ -231,7 +264,8 @@ abstract class MicaStore implements RustOpaqueInterface {
   ///
   /// If the restored ROOT's parent is no longer a live view, the root is
   /// lifted to the top level — restoring into a trashed parent would leave it
-  /// invisible with no way back. Mirrors the server's `restore_view`.
+  /// invisible with no way back. Mirrors the server's `restore_view`. Runs in
+  /// mica-core (issue #67), one transaction, un-trash and lift together.
   List<String> restoreViewSubtree({required String viewId});
 
   /// Restore a doc from its last checkpoint, returning the recovered document
@@ -274,7 +308,10 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// affected ids so the caller can close an editor that was inside it.
   ///
   /// A folder carries its children: trashing one must trash the subtree, or
-  /// the children survive as orphans pointing at a trashed parent.
+  /// the children survive as orphans pointing at a trashed parent. Runs in
+  /// mica-core (issue #67): one recursive CTE for the subtree + ONE
+  /// transaction for the flag flip — the old per-row upserts left a
+  /// half-trashed tree on disk when the app died mid-operation.
   List<String> trashViewSubtree({required String viewId});
 
   /// Drop acked outbox entries (`clock ≤ up_to_clock`, i.e. `pushed_clock`),
@@ -656,4 +693,51 @@ class SyncCursor {
           runtimeType == other.runtimeType &&
           lastSyncedRid == other.lastSyncedRid &&
           pushedClock == other.pushedClock;
+}
+
+/// What [`MicaStore::import_vault_tree`] produced: pages/folders created and
+/// one named error per entry that failed — the same record shape the Dart-side
+/// backend hands its callers.
+class VaultImportOutcome {
+  final int docs;
+  final int folders;
+  final List<String> errors;
+
+  const VaultImportOutcome({
+    required this.docs,
+    required this.folders,
+    required this.errors,
+  });
+
+  @override
+  int get hashCode => docs.hashCode ^ folders.hashCode ^ errors.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VaultImportOutcome &&
+          runtimeType == other.runtimeType &&
+          docs == other.docs &&
+          folders == other.folders &&
+          errors == other.errors;
+}
+
+/// One file the folder picker walked for [`MicaStore::import_vault_tree`]: the
+/// forward-slashed path relative to the picked root, plus its bytes.
+class VaultTreeEntry {
+  final String path;
+  final Uint8List bytes;
+
+  const VaultTreeEntry({required this.path, required this.bytes});
+
+  @override
+  int get hashCode => path.hashCode ^ bytes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VaultTreeEntry &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          bytes == other.bytes;
 }

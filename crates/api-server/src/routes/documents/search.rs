@@ -775,4 +775,44 @@ mod tests {
     assert!(!etag_matches("\"abc124\"", tag));
     assert!(!etag_matches("", tag));
   }
+
+  // ── Gold-file contract tests (#85) ─────────────────────────────────────────
+  //
+  // `contracts/search.json` is decoded by the mcp and Flutter test suites; the
+  // ids and strings here are part of that contract.
+
+  fn ws(id: u64) -> Uuid {
+    Uuid::parse_str(&format!("{id:032x")).unwrap()
+  }
+
+  #[test]
+  fn gold_search_response() {
+    crate::routes::contract_gold::check(
+      "search",
+      &serde_json::json!(SearchResponse {
+        results: vec![
+          SearchResult {
+            view_id: ws(4),
+            object_id: ws(6),
+            workspace_id: ws(2),
+            name: "部署手册".to_string(),
+            snippet: "下周开始 · 做部署手册".to_string(),
+            title_match: true,
+            parent_view_id: Some(ws(3)),
+            is_folder: false,
+          },
+          SearchResult {
+            view_id: ws(3),
+            object_id: ws(3),
+            workspace_id: ws(2),
+            name: "部署资料".to_string(),
+            snippet: String::new(),
+            title_match: true,
+            parent_view_id: None,
+            is_folder: true,
+          },
+        ],
+      }),
+    );
+  }
 }

@@ -3,4 +3,4 @@
 // IndexedDB-backed [WebIdbDocStore] — and returns null on desktop, where the
 // caller already has the FFI store. Facade pattern mirrors cloud_sync.dart.
 export 'doc_store_platform_io.dart'
-    if (dart.library.html) 'doc_store_platform_web.dart';
+    if (dart.library.js_interop) 'doc_store_platform_web.dart';

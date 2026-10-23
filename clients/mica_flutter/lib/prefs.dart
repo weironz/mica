@@ -2,4 +2,4 @@
 /// Web: window.localStorage; other platforms: in-memory no-op stub.
 library;
 
-export 'prefs_stub.dart' if (dart.library.html) 'prefs_web.dart';
+export 'prefs_stub.dart' if (dart.library.js_interop) 'prefs_web.dart';

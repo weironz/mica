@@ -39,9 +39,6 @@ pub fn ws_router() -> Router<AppState> {
     .route("/ws/ai", get(ai_ws::ai_socket))
 }
 
-/// The public share page, mounted OUTSIDE `/api` so it never sees the auth
-/// scope-guard — the token in the path is the only credential. Clean URL
-/// `/s/{token}`; nginx proxies `/s/` to the backend.
 /// The privacy statement and terms of service. Outside `/api` and unauthenticated
 /// — a user has to be able to read what an instance does with their data BEFORE
 /// they have an account, and to open the link someone sent them. Needs an nginx
@@ -50,6 +47,9 @@ pub fn legal_router() -> Router<AppState> {
   legal::router()
 }
 
+/// The public share page, mounted OUTSIDE `/api` so it never sees the auth
+/// scope-guard — the token in the path is the only credential. Clean URL
+/// `/s/{token}`; nginx proxies `/s/` to the backend.
 pub fn share_router() -> Router<AppState> {
   Router::new().route("/s/{token}", get(documents::public_share_page))
 }
@@ -471,6 +471,10 @@ pub fn api_router() -> Router<AppState> {
       get(files::get_file).delete(files::delete_file),
     )
 }
+
+#[cfg(test)]
+#[path = "contract_gold.rs"]
+mod contract_gold;
 
 #[cfg(test)]
 mod router_tests {

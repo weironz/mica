@@ -1311,10 +1311,12 @@ mod entities;
 mod export_md;
 mod html;
 mod inline;
+mod latex_guard;
 mod scan_memo;
 mod span_walk;
 
 pub use inline::math_run_spans;
+pub use latex_guard::{JSON_ESCAPE_COLLISIONS, mangled_latex_collision, mangled_latex_message};
 
 use block::*;
 use export_md::*;

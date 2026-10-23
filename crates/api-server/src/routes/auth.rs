@@ -1457,6 +1457,10 @@ impl From<UserRow> for UserResponse {
 }
 
 #[cfg(test)]
+#[path = "auth_contract_gold_tests.rs"]
+mod contract_gold_tests;
+
+#[cfg(test)]
 mod tests {
   use super::*;
 

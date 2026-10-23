@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:html' as html;
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:web/web.dart' as web;
 import '../ui/theme_tokens.dart';
 import 'mermaid_theme.dart';
 
@@ -17,13 +17,15 @@ Future<void>? _loading;
 Future<void> _ensureLoaded() {
   if (globalContext.hasProperty('mermaid'.toJS).toDart) return Future.value();
   return _loading ??= () async {
-    final script = html.ScriptElement()..src = 'mermaid.min.js';
+    final script =
+        web.document.createElement('script') as web.HTMLScriptElement
+          ..src = 'mermaid.min.js';
     final done = Completer<void>();
     script.onLoad.first.then((_) => done.complete());
     script.onError.first.then(
       (_) => done.completeError(StateError('mermaid.min.js failed to load')),
     );
-    html.document.head!.append(script);
+    web.document.head?.append(script);
     await done.future;
     _applyTheme(MicaTokens.light);
   }();
@@ -88,6 +90,13 @@ Future<String> _renderSvg(String source, MicaTokens tokens) async {
   }
 }
 
+/// package:web keeps toBlob callback-shaped; bridge it back to a Future.
+Future<web.Blob?> _canvasToBlob(web.HTMLCanvasElement canvas) {
+  final done = Completer<web.Blob?>();
+  canvas.toBlob(((web.Blob? blob) => done.complete(blob)).toJS, 'image/png');
+  return done.future;
+}
+
 /// Render mermaid [source] to a rasterized image: mermaid.js → SVG → blob
 /// `<img>` → 2x offscreen canvas → PNG bytes → ui.Image. Any failure (load,
 /// syntax, raster) resolves to null; the preview pipeline records it and the
@@ -102,10 +111,13 @@ Future<ui.Image?> renderMermaid(
 
     // SVG → <img>. A blob URL keeps it same-origin so the canvas isn't
     // tainted (mermaid inlines its styles; nothing external is referenced).
-    final blob = html.Blob([svg], 'image/svg+xml');
-    final url = html.Url.createObjectUrlFromBlob(blob);
+    final blob = web.Blob(
+      <JSAny>[svg.toJS].toJS,
+      web.BlobPropertyBag(type: 'image/svg+xml'),
+    );
+    final url = web.URL.createObjectURL(blob);
     try {
-      final img = html.ImageElement();
+      final img = web.document.createElement('img') as web.HTMLImageElement;
       final loaded = Completer<void>();
       img.onLoad.first.then((_) => loaded.complete());
       img.onError.first.then(
@@ -132,18 +144,18 @@ Future<ui.Image?> renderMermaid(
       if (natH * scale > maxDim) scale = maxDim / natH;
       final w = (natW * scale).round().clamp(1, 4096);
       final h = (natH * scale).round().clamp(1, 4096);
-      final canvas = html.CanvasElement(width: w, height: h);
-      canvas.context2D.drawImageScaled(img, 0, 0, w, h);
-      final png = await canvas.toBlob('image/png');
-      final reader = html.FileReader()..readAsArrayBuffer(png);
-      await reader.onLoad.first;
-      final raw = reader.result;
-      final bytes = raw is Uint8List ? raw : (raw as ByteBuffer).asUint8List();
+      final canvas = web.document.createElement('canvas') as web.HTMLCanvasElement
+        ..width = w
+        ..height = h;
+      canvas.context2D.drawImage(img, 0, 0, w, h);
+      final png = await _canvasToBlob(canvas);
+      if (png == null) return null;
+      final bytes = (await png.arrayBuffer().toDart).toDart.asUint8List();
       final codec = await ui.instantiateImageCodec(bytes);
       final frame = await codec.getNextFrame();
       return frame.image;
     } finally {
-      html.Url.revokeObjectUrl(url);
+      web.URL.revokeObjectURL(url);
     }
   } catch (_) {
     return null;

@@ -1459,7 +1459,8 @@ mod import_job_persistence_tests {
   fn the_progress_throttle_stays_in_a_sane_band() {
     assert!(
       (5..=100).contains(&PERSIST_EVERY),
-      "PERSIST_EVERY = {PERSIST_EVERY}: one write per page is a round-trip storm,        and hundreds of pages between checkpoints makes a stored job a lie"
+      "PERSIST_EVERY = {PERSIST_EVERY}: one write per page is a round-trip storm, \
+       and hundreds of pages between checkpoints makes a stored job a lie"
     );
   }
 }

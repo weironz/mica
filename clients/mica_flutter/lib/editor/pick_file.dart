@@ -3,4 +3,4 @@
 //
 // `pickTextFile()`   → `({String name, String text})`  (Markdown/text)
 // `pickImportFile()` → `({String name, Uint8List bytes})` (Markdown or .zip)
-export 'pick_file_stub.dart' if (dart.library.html) 'pick_file_web.dart';
+export 'pick_file_stub.dart' if (dart.library.js_interop) 'pick_file_web.dart';

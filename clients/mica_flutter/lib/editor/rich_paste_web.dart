@@ -7,11 +7,12 @@
 // (pure Dart via package:html, shared with the desktop clipboard pulls) —
 // there used to be a dart:html mirror of it here, and the two drifted.
 //
-// dart:html is legacy but dependency-free and sufficient for reading the
-// clipboard's HTML flavor.
-// ignore_for_file: deprecated_member_use, avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+// The DOM access goes through package:web + dart:js_interop (the dart:html
+// successor), which is also what the dart2wasm compile target supports.
+import 'dart:js_interop';
 import 'dart:typed_data';
+
+import 'package:web/web.dart' as web;
 
 import 'html_to_markdown.dart';
 
@@ -37,19 +38,19 @@ void setRichImagePasteHandler(ImagePasteHandler? handler) {
 }
 
 /// Extract a pasted image file from `files` (preferred) or `items`.
-html.File? _clipboardImage(html.DataTransfer data) {
+web.File? _clipboardImage(web.DataTransfer data) {
   final files = data.files;
   if (files != null) {
-    for (final f in files) {
-      if (f.type.startsWith('image/')) return f;
+    for (var i = 0; i < files.length; i++) {
+      final f = files.item(i);
+      if (f != null && f.type.startsWith('image/')) return f;
     }
   }
   final items = data.items;
   if (items != null) {
-    final n = items.length ?? 0;
-    for (var i = 0; i < n; i++) {
+    for (var i = 0; i < items.length; i++) {
       final item = items[i];
-      if (item.kind == 'file' && (item.type?.startsWith('image/') ?? false)) {
+      if (item.kind == 'file' && item.type.startsWith('image/')) {
         final file = item.getAsFile();
         if (file != null) return file;
       }
@@ -58,21 +59,12 @@ html.File? _clipboardImage(html.DataTransfer data) {
   return null;
 }
 
-/// dart2js types FileReader's readAsArrayBuffer result inconsistently; accept
-/// the common byte representations.
-Uint8List? _bytesOf(Object? result) {
-  if (result is ByteBuffer) return result.asUint8List();
-  if (result is Uint8List) return result;
-  if (result is List<int>) return Uint8List.fromList(result);
-  return null;
-}
-
 void setRichPasteHandler(RichPasteHandler? handler) {
   _handler = handler;
   if (_installed) return;
   _installed = true;
-  html.document.addEventListener('paste', (event) {
-    final data = (event as html.ClipboardEvent).clipboardData;
+  web.document.addEventListener('paste', ((web.Event event) {
+    final data = (event as web.ClipboardEvent).clipboardData;
     if (data == null) return;
 
     // HTML that carries a real DATA <table> (Excel / Sheets / a web table)
@@ -93,17 +85,19 @@ void setRichPasteHandler(RichPasteHandler? handler) {
       if (image != null) {
         event.preventDefault();
         event.stopPropagation();
-        final reader = html.FileReader()..readAsArrayBuffer(image);
-        reader.onLoadEnd.first.then((_) {
-          final bytes = _bytesOf(reader.result);
-          if (bytes != null) {
+        () async {
+          try {
+            final buffer = await image.arrayBuffer().toDart;
             imageHandler(
-              bytes,
+              buffer.toDart.asUint8List(),
               image.type.isEmpty ? 'image/png' : image.type,
               image.name.isEmpty ? 'pasted-image.png' : image.name,
             );
+          } catch (_) {
+            // A read that rejects drops the paste, same as the old
+            // FileReader path that never reached onLoadEnd.
           }
-        });
+        }();
         return;
       }
     }
@@ -118,5 +112,5 @@ void setRichPasteHandler(RichPasteHandler? handler) {
       event.preventDefault();
       event.stopPropagation();
     }
-  }, true);
+  }).toJS, true.toJS);
 }

@@ -737,6 +737,10 @@ fn can_update_workspace(role: &str) -> bool {
 mod tombstone_tests;
 
 #[cfg(test)]
+#[path = "workspaces_contract_gold_tests.rs"]
+mod contract_gold_tests;
+
+#[cfg(test)]
 mod usage_wire {
   use super::*;
 

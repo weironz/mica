@@ -4,4 +4,4 @@
 // are pinned byte-for-byte by a shared gold fixture — see
 // test/zip_writer_conformance_test.dart.
 export 'archive_file.dart';
-export 'zip_writer_io.dart' if (dart.library.html) 'zip_writer_dart.dart';
+export 'zip_writer_io.dart' if (dart.library.js_interop) 'zip_writer_dart.dart';

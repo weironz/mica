@@ -3,4 +3,4 @@
 //
 // `pickImage()` resolves to a record `({String name, String mime, Uint8List
 // bytes})` for the chosen file, or null if the user cancels.
-export 'pick_image_stub.dart' if (dart.library.html) 'pick_image_web.dart';
+export 'pick_image_stub.dart' if (dart.library.js_interop) 'pick_image_web.dart';

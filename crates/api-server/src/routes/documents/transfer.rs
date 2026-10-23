@@ -216,6 +216,16 @@ pub(super) async fn move_views_tx(
   Ok(())
 }
 
+// ── Cross-workspace transfer (move / copy) ───────────────────────────────────
+// Move or copy a page (its whole subtree) or a folder into ANOTHER workspace on
+// this server. No note app re-parents in place across workspaces: doc identity
+// and blobs are both workspace-namespaced, so an in-place move invites doc-id
+// collisions and lets the source's per-workspace blob GC reclaim images the
+// moved page still needs. So this is copy-into-destination (new view + new
+// document + blobs physically copied into the destination workspace), then a
+// soft-delete of the source for a "move". Ordered blobs-first, so a half-failure
+// leaves harmless orphan bytes in the destination (its GC reclaims them), never a
+// page that lost its images — the thing Notion/AFFiNE get wrong and our Postgres
 // transaction lets us beat. See docs/features/cross-workspace-move.md.
 
 #[derive(Debug, Deserialize)]
@@ -805,7 +815,7 @@ async fn transfer_roots(
 
 // ── Clone (duplicate a view within the same workspace) ───────────────────────
 // A same-workspace cousin of transfer: enumerate the subtree, give every node a
-// fresh id + doc + snapshot, rewrite in-subtree page links to the new ids. Two
+// fresh id + doc + yrs base, rewrite in-subtree page links to the new ids. Two
 // deliberate differences from transfer:
 //   - Blobs are NOT copied. object_key is content-addressed and workspace-scoped
 //     (workspaces/{id}/{sha256}.{ext}); within ONE workspace the copy references
@@ -1015,7 +1025,7 @@ struct SubtreeNode<'a> {
 /// transaction: for a document — a fresh `documents` row, its payload rewritten
 /// for the new home and seeded as the yrs base, plus the view; for a folder —
 /// just the view, `object_id` a fresh unused uuid. Both routes used to carry
-/// this whole branch inline, the "no snapshot" fallback inside it copied twice.
+/// this whole branch inline, the empty-payload fallback inside it copied twice.
 async fn insert_subtree_tx(
   tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
   row: &TransferRow,
@@ -1028,13 +1038,14 @@ async fn insert_subtree_tx(
   if row.object_type == "document" {
     let mut payload = payloads.remove(&row.object_id).unwrap_or_else(|| {
       // Substituting an empty payload is CORRECT for a genuinely-empty doc
-      // (current_payload returns None only when no snapshot row exists). It is
-      // NOT silent anymore: the one way this loses content — a doc with a yrs
-      // base but no snapshot row — would land here, and a move then deletes the
-      // source. Logging makes that edge diagnosable instead of invisible (P0-4).
+      // (current_payload returns None only when the document has no yrs base
+      // row at all). It is NOT silent: a base-less document should not exist
+      // (every write path seeds the base with the `documents` row), so if one
+      // lands here a move would delete the source with the content nowhere
+      // else — logging makes that edge diagnosable instead of invisible (P0-4).
       tracing::warn!(
         object_id = %row.object_id,
-        "transfer/clone: no snapshot for document — substituting empty payload"
+        "transfer/clone: no payload for document — substituting empty payload"
       );
       DocumentSnapshotPayload {
         schema_version: 1,
@@ -1309,6 +1320,50 @@ mod tests {
     assert!(
       pos(child) < pos(grandchild),
       "child must precede its grandchild"
+    );
+  }
+
+  // ── Gold-file contract tests (#85) ─────────────────────────────────────────
+  //
+  // `contracts/transfer.json` / `contracts/clone.json` are decoded by the
+  // Flutter test suite (TransferReport / CloneReport); the mcp suite asserts
+  // the fields its tools forward. The ids and counts are part of the contract.
+
+  fn ws(id: u64) -> Uuid {
+    Uuid::parse_str(&format!("{id:032x")).unwrap()
+  }
+
+  #[test]
+  fn gold_transfer_response() {
+    crate::routes::contract_gold::check(
+      "transfer",
+      &serde_json::json!(TransferResponse {
+        new_root_view_id: Some(ws(9)),
+        new_root_view_ids: vec![ws(9), ws(10)],
+        documents: 3,
+        folders: 1,
+        images: 2,
+        dangling_links: vec![DanglingLink {
+          document: "周会记录".to_string(),
+          target_view_id: ws(4),
+        }],
+        removed_source: true,
+        dry_run: false,
+      }),
+    );
+  }
+
+  #[test]
+  fn gold_clone_response() {
+    crate::routes::contract_gold::check(
+      "clone",
+      &serde_json::json!(CloneResponse {
+        new_root_view_id: Some(ws(11)),
+        new_name: "部署手册 副本".to_string(),
+        documents: 1,
+        folders: 0,
+        dry_run: false,
+      }),
     );
   }
 }

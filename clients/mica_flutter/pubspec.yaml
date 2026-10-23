@@ -16,6 +16,13 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   intl: any
+  # The Dart team's DOM bindings — the dart:html successor the web variants of
+  # the platform facades use (prefs, clipboard, pickers, mermaid, print…).
+  # Same standing as intl: it is the SDK's own web surface, not third-party
+  # glue — and unlike dart:html it compiles under both dart2js and dart2wasm
+  # (issue #89). Was transitive via flutter_rust_bridge; direct now that we
+  # import it ourselves.
+  web: ^1.1.1
   flutter_math_fork: ^0.7.4
   http: ^1.4.0
   web_socket_channel: ^3.0.0
@@ -44,8 +51,8 @@ dependencies:
   # rule says to buy. Same author/publisher as window_manager (leanflutter.dev).
   tray_manager: ^0.5.3
   # Native file dialogs (open/save/directory) for desktop+mobile — used only by
-  # the non-web (_stub) variants of pick_file/pick_image/image_actions. Web keeps
-  # its dart:html implementations. In-house exemption #3 (platform glue).
+  # the non-web (_stub) variants of pick_file/pick_image/image_actions. Web
+  # keeps its package:web implementations. In-house exemption #3 (platform glue).
   file_picker: ^8.0.0
   # Rich clipboard (read/write image) for desktop — used only by the non-web
   # variants for image paste + "copy image". Web keeps its DOM clipboard path.
@@ -58,7 +65,8 @@ dependencies:
   # the tree; Windows-only + guarded + fallback. See rich_paste_stub.dart.
   ffi: ^2.1.0
   # Pure-Dart HTML parser — converts pasted clipboard HTML to Markdown on desktop
-  # (web uses dart:html for the same). Not platform glue; a parsing lib.
+  # (web reads the paste event's HTML flavor via package:web for the same). Not
+  # platform glue; a parsing lib.
   html: ^0.15.0
   # NOTE: the Dart `merman` package was dropped — mermaid now renders through the
   # merman Rust engine compiled into OUR FFI (crates/markdown feature `render`,

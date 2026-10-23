@@ -29,26 +29,6 @@ pub enum StoreError {
   CorruptDoc { doc_id: String },
 }
 
-/// Run yrs decode/integrate work, turning a panic into [`StoreError::CorruptDoc`].
-///
-/// yrs integrates an update by INDEXING into its block store, and on malformed
-/// bytes it panics instead of returning `Err`. Seen in the wild as:
-///
-/// ```text
-/// panicked at yrs-0.27.0/src/block_store.rs:60:46:
-/// index out of bounds: the len is 732 but the index is 715827364
-/// ```
-///
-/// Note `Update::decode_v1` had already SUCCEEDED there — the blow-up is during
-/// integration — so the `?` on these calls never had a chance to contain it.
-///
-/// Containing it matters far beyond one bad load. Callers hold a mutex across
-/// this (the desktop FFI's `Mutex<LocalStore>`), so the panic poisoned the lock
-/// and every later `list_views` failed too: the page tree went blank and STAYED
-/// blank until the app restarted, on every launch, because cloud seeding calls
-/// `load_doc` at startup. A corrupt local blob is recoverable — this store is a
-/// cache and the cloud holds the document — so it must degrade to an error the
-/// caller can re-seed from, not take the process down.
 /// The page-link graph of the local workspace: nodes that participate in at
 /// least one link, the edges between them, and a COUNT of everything else.
 #[derive(Debug, Clone)]
@@ -170,6 +150,26 @@ fn has_column(conn: &Connection, table: &str, col: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// Run yrs decode/integrate work, turning a panic into [`StoreError::CorruptDoc`].
+///
+/// yrs integrates an update by INDEXING into its block store, and on malformed
+/// bytes it panics instead of returning `Err`. Seen in the wild as:
+///
+/// ```text
+/// panicked at yrs-0.27.0/src/block_store.rs:60:46:
+/// index out of bounds: the len is 732 but the index is 715827364
+/// ```
+///
+/// Note `Update::decode_v1` had already SUCCEEDED there — the blow-up is during
+/// integration — so the `?` on these calls never had a chance to contain it.
+///
+/// Containing it matters far beyond one bad load. Callers hold a mutex across
+/// this (the desktop FFI's `Mutex<LocalStore>`), so the panic poisoned the lock
+/// and every later `list_views` failed too: the page tree went blank and STAYED
+/// blank until the app restarted, on every launch, because cloud seeding calls
+/// `load_doc` at startup. A corrupt local blob is recoverable — this store is a
+/// cache and the cloud holds the document — so it must degrade to an error the
+/// caller can re-seed from, not take the process down.
 fn contain_yrs_panic<T>(
   doc_id: &str,
   work: impl FnOnce() -> Result<T, StoreError>,
