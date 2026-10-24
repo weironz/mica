@@ -935,7 +935,11 @@ async fn catch_up_decision_and_pull_share_one_snapshot() {
   let application_name = format!("catch-up-snapshot-{doc}");
   let db2 = sqlx::postgres::PgPoolOptions::new()
     .max_connections(1)
-    .connect_with((*db.connect_options()).clone().application_name(&application_name))
+    .connect_with(
+      (*db.connect_options())
+        .clone()
+        .application_name(&application_name),
+    )
     .await
     .unwrap();
   let catch_up =
