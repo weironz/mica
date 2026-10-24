@@ -99,7 +99,7 @@ class _LocalWorldBackend extends WorldBackend {
 
   @override
   VoidCallback get onRefresh =>
-      () => _shell.refresh(() {
+      () => _shell.setUi(() {
         _reloadLocalWorkspaces();
         _reloadLocalViews();
       });
@@ -315,7 +315,7 @@ class _LocalWorldBackend extends WorldBackend {
       await _local.open();
     } catch (error) {
       if (_shell.mounted) {
-        _shell.refresh(() {
+        _shell.setUi(() {
           _shell._message = l10n.snackLocalStoreOpenFailed('$error');
           // Unblock the shell (P3c gates on _localReady) — the local world
           // shows empty with the error banner; the cloud world still works.
@@ -336,7 +336,7 @@ class _LocalWorldBackend extends WorldBackend {
       final toOpen = _localViewToOpen();
       if (toOpen != null) await _localSelectView(toOpen);
     }
-    if (_shell.mounted) _shell.refresh(() => _shell._localReady = true);
+    if (_shell.mounted) _shell.setUi(() => _shell._localReady = true);
   }
 
   Future<void> _localCreateWorkspace(String name) async {
@@ -347,7 +347,7 @@ class _LocalWorldBackend extends WorldBackend {
     // view tree uses.
     final id = _local.createLocalWorkspace(title);
     if (!_shell.mounted) return;
-    _shell.refresh(() {
+    _shell.setUi(() {
       _reloadLocalWorkspaces();
       _localSelectedWorkspace = _localWorkspaces.firstWhere(
         (w) => w.id == id,
@@ -363,7 +363,7 @@ class _LocalWorldBackend extends WorldBackend {
 
   Future<void> _localSelectWorkspace(Workspace workspace) async {
     savePref('lastWorkspaceId:local', workspace.id);
-    _shell.refresh(() {
+    _shell.setUi(() {
       _localSelectedWorkspace = workspace;
       _reloadLocalViews();
       _localSelectedView = null;
@@ -380,7 +380,7 @@ class _LocalWorldBackend extends WorldBackend {
     // `0000000010` — a value that can collide with a real neighbour.
     _local.renameLocalWorkspace(workspace.id, title);
     if (_shell.mounted) {
-      _shell.refresh(() {
+      _shell.setUi(() {
         _reloadLocalWorkspaces();
         if (_localSelectedWorkspace?.id == workspace.id) {
           _localSelectedWorkspace = _localWorkspaces.firstWhere(
@@ -398,7 +398,7 @@ class _LocalWorldBackend extends WorldBackend {
     // What stays here is saying so.
     if (!_local.deleteLocalWorkspace(workspace.id)) {
       if (_shell.mounted) {
-        _shell.refresh(
+        _shell.setUi(
           () =>
               _shell._message = _shell.context.l10n.snackKeepOneLocalWorkspace,
         );
@@ -407,7 +407,7 @@ class _LocalWorldBackend extends WorldBackend {
     }
     if (!_shell.mounted) return;
     final wasSelected = _localSelectedWorkspace?.id == workspace.id;
-    _shell.refresh(() {
+    _shell.setUi(() {
       _reloadLocalWorkspaces();
       if (wasSelected) {
         _localSelectedView = null;
@@ -451,7 +451,7 @@ class _LocalWorldBackend extends WorldBackend {
     );
     final view = _viewFromData(data);
     if (!_shell.mounted) return null;
-    _shell.refresh(() {
+    _shell.setUi(() {
       _reloadLocalViews();
       _localSelectedView = view;
       _localBootstrap = _localBootstrapFrom(
@@ -546,13 +546,13 @@ class _LocalWorldBackend extends WorldBackend {
       // still intact — select the view and offer to restore instead of dropping
       // the user into a silent blank editor.
       if (!_shell.mounted) return;
-      _shell.refresh(() => _localSelectedView = view);
+      _shell.setUi(() => _localSelectedView = view);
       await _showLocalCorruptDialog(view);
       return;
     }
     if (data == null || !_shell.mounted) return;
     final loaded = data;
-    _shell.refresh(() {
+    _shell.setUi(() {
       _localSelectedView = view;
       _localBootstrap = _localBootstrapFrom(
         view.objectId,
@@ -740,7 +740,7 @@ class _LocalWorldBackend extends WorldBackend {
       objectType: view.objectType,
     ));
     if (!_shell.mounted) return true;
-    _shell.refresh(() {
+    _shell.setUi(() {
       _reloadLocalViews();
       if (_localSelectedView?.id == view.id) {
         final renamed = DocumentView(
@@ -775,7 +775,7 @@ class _LocalWorldBackend extends WorldBackend {
     // The cascade lives in Rust; what stays here is the UI consequence.
     final ids = _local.trashViewSubtree(view.id).toSet();
     if (!_shell.mounted) return;
-    _shell.refresh(() {
+    _shell.setUi(() {
       _reloadLocalViews();
       // Close the editor if the open page was anywhere in the trashed subtree.
       if (_localSelectedView != null && ids.contains(_localSelectedView!.id)) {
@@ -793,7 +793,7 @@ class _LocalWorldBackend extends WorldBackend {
       trashed.addAll(_local.trashViewSubtree(id));
     }
     if (!_shell.mounted) return;
-    _shell.refresh(() {
+    _shell.setUi(() {
       _reloadLocalViews();
       if (_localSelectedView != null &&
           trashed.contains(_localSelectedView!.id)) {
@@ -809,7 +809,7 @@ class _LocalWorldBackend extends WorldBackend {
     final copyName = _shell.context.l10n.cloneCopyName(view.name);
     final result = _local.cloneView(viewId: view.id, rootName: copyName);
     if (result == null || !_shell.mounted) return;
-    _shell.refresh(() => _reloadLocalViews());
+    _shell.setUi(() => _reloadLocalViews());
     ScaffoldMessenger.of(_shell.context).showSnackBar(
       SnackBar(content: Text(_shell.context.l10n.cloneDone(result.newName))),
     );
@@ -845,7 +845,7 @@ class _LocalWorldBackend extends WorldBackend {
     // Permanently remove the page and its subtree from the recycle bin.
     final ids = _local.purgeViewSubtree(view.id).toSet();
     if (!_shell.mounted) return;
-    _shell.refresh(() {
+    _shell.setUi(() {
       _reloadLocalViews();
       if (_localSelectedView != null && ids.contains(_localSelectedView!.id)) {
         _localSelectedView = null;
@@ -884,7 +884,7 @@ class _LocalWorldBackend extends WorldBackend {
       // which is what the home screen's directory list used to do. Show its
       // contents.
       if (view.isFolder) {
-        _shell.refresh(() => _shell._overviewFolderId = view.id);
+        _shell.setUi(() => _shell._overviewFolderId = view.id);
         return;
       }
       unawaited(_localSelectView(view));
@@ -894,7 +894,7 @@ class _LocalWorldBackend extends WorldBackend {
   }
 
   void _closeOpenPage() {
-    _shell.refresh(() {
+    _shell.setUi(() {
       _localSelectedView = null;
     });
   }

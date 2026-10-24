@@ -16,7 +16,7 @@ extension _SettingsAiTab on _SettingsDialogState {
     // calls this unconditionally, so the absence has to be handled here.
     final load = widget.onLoadAiSettings;
     if (load == null) return;
-    refresh(() {
+    setUi(() {
       _loading = true;
       _aiLoadFailed = false;
       _error = null;
@@ -24,13 +24,13 @@ extension _SettingsAiTab on _SettingsDialogState {
     try {
       final settings = await load();
       if (!mounted) return;
-      refresh(() => _loading = false);
+      setUi(() => _loading = false);
       // Same population path a provider switch takes, so a reload and a switch
       // cannot end up showing different things.
       _adoptSettings(settings);
     } catch (error) {
       if (!mounted) return;
-      refresh(() {
+      setUi(() {
         _error = error.toString();
         _aiLoadFailed = true;
         _loading = false;
@@ -45,7 +45,7 @@ extension _SettingsAiTab on _SettingsDialogState {
   Future<void> _fetchModels() async {
     final fetch = widget.onListAiModels;
     if (fetch == null || _fetchingModels) return;
-    refresh(() {
+    setUi(() {
       _fetchingModels = true;
       _modelsError = null;
     });
@@ -65,7 +65,7 @@ extension _SettingsAiTab on _SettingsDialogState {
       // selected when it lands — a switch mid-flight would otherwise hand one
       // vendor's catalogue to another.
       _modelsByProvider[provider] = models;
-      refresh(() {
+      setUi(() {
         _fetchingModels = false;
         if (_fieldsProviderId == provider) {
           _models = models;
@@ -74,7 +74,7 @@ extension _SettingsAiTab on _SettingsDialogState {
       });
     } catch (error) {
       if (!mounted) return;
-      refresh(() {
+      setUi(() {
         _fetchingModels = false;
         // Same filing rule as success: not the vendor now selected.
         if (_fieldsProviderId == provider) {
@@ -138,7 +138,7 @@ extension _SettingsAiTab on _SettingsDialogState {
     // two writes race and the loser can leave the OLD provider active.
     await _aiSaveInFlight;
     if (!mounted) return;
-    refresh(() {
+    setUi(() {
       _addingProvider = false;
       _saving = true;
       _error = null;
@@ -162,7 +162,7 @@ extension _SettingsAiTab on _SettingsDialogState {
       _adoptSettings(result);
     } catch (error) {
       if (!mounted) return;
-      refresh(() {
+      setUi(() {
         _error = error.toString();
         _saving = false;
       });
@@ -180,20 +180,20 @@ extension _SettingsAiTab on _SettingsDialogState {
     final base = _addBaseUrl.text.trim();
     final l10n = context.l10n;
     if (!isValidAiProviderId(id)) {
-      refresh(() => _addError = l10n.aiProviderNameInvalid);
+      setUi(() => _addError = l10n.aiProviderNameInvalid);
       return;
     }
     if (_providers.any((row) => row.id == id)) {
-      refresh(() => _addError = l10n.aiProviderNameTaken(_providerLabel(id)));
+      setUi(() => _addError = l10n.aiProviderNameTaken(_providerLabel(id)));
       return;
     }
     if (base.isEmpty) {
-      refresh(() => _addError = l10n.aiProviderBaseUrlRequired);
+      setUi(() => _addError = l10n.aiProviderBaseUrlRequired);
       return;
     }
     await _aiSaveInFlight;
     if (!mounted) return;
-    refresh(() {
+    setUi(() {
       _saving = true;
       _addError = null;
       _error = null;
@@ -220,7 +220,7 @@ extension _SettingsAiTab on _SettingsDialogState {
       _adoptSettings(result);
     } catch (error) {
       if (!mounted) return;
-      refresh(() {
+      setUi(() {
         _addError = error.toString();
         _saving = false;
       });
@@ -247,7 +247,7 @@ extension _SettingsAiTab on _SettingsDialogState {
     if (!confirmed || !mounted) return;
     await _aiSaveInFlight;
     if (!mounted) return;
-    refresh(() {
+    setUi(() {
       _saving = true;
       _error = null;
       _apiKey.clear();
@@ -259,7 +259,7 @@ extension _SettingsAiTab on _SettingsDialogState {
       _adoptSettings(result);
     } catch (error) {
       if (!mounted) return;
-      refresh(() {
+      setUi(() {
         _error = error.toString();
         _saving = false;
       });
@@ -287,7 +287,7 @@ extension _SettingsAiTab on _SettingsDialogState {
             active: entry['active'] == true,
           ),
     ]..sort((a, b) => a.id.compareTo(b.id));
-    refresh(() {
+    setUi(() {
       _providers = rows;
       _selectedId = providerId;
       _fieldsProviderId = providerId;
@@ -351,7 +351,7 @@ extension _SettingsAiTab on _SettingsDialogState {
     // deleting the last one, when a stale blur can still arrive.
     if (_fieldsProviderId.isEmpty) return;
     final writing = _fieldsProviderId;
-    refresh(() {
+    setUi(() {
       _saving = true;
       _error = null;
     });
@@ -379,11 +379,11 @@ extension _SettingsAiTab on _SettingsDialogState {
       if (_fieldsProviderId == writing) {
         _adoptSettings(result);
       } else {
-        refresh(() => _saving = false);
+        setUi(() => _saving = false);
       }
     } catch (error) {
       if (!mounted) return;
-      refresh(() {
+      setUi(() {
         _saving = false;
         _error = error.toString();
       });
@@ -412,7 +412,7 @@ extension _SettingsAiTab on _SettingsDialogState {
       title: Text(context.l10n.aiEnable),
       subtitle: Text(context.l10n.aiEnableSub),
       onChanged: (value) {
-        refresh(() => _aiEnabled = value);
+        setUi(() => _aiEnabled = value);
         widget.onAiEnabledChanged(value);
       },
     ),
@@ -624,7 +624,7 @@ extension _SettingsAiTab on _SettingsDialogState {
           !_providers.any((row) => row.id == preset.id),
       orElse: () => _AiPreset.custom,
     );
-    refresh(() {
+    setUi(() {
       _addingProvider = true;
       _addError = null;
       _addPreset = first;
@@ -699,7 +699,7 @@ extension _SettingsAiTab on _SettingsDialogState {
               ? null
               : (preset) {
                   if (preset == null) return;
-                  refresh(() {
+                  setUi(() {
                     _addPreset = preset;
                     _addError = null;
                     // The preset FILLS the address; it does not lock it. A
@@ -763,7 +763,7 @@ extension _SettingsAiTab on _SettingsDialogState {
             TextButton(
               onPressed: _saving
                   ? null
-                  : () => refresh(() {
+                  : () => setUi(() {
                       _addingProvider = false;
                       _addError = null;
                     }),
@@ -852,7 +852,7 @@ extension _SettingsAiTab on _SettingsDialogState {
               ? null
               : (value) {
                   if (value == null || value == _protocol) return;
-                  refresh(() => _protocol = value);
+                  setUi(() => _protocol = value);
                   // Commit now. Saving is on BLUR, and a dropdown never blurs a
                   // text field — the same gap that made picking a model chip
                   // change the box and nothing else.
@@ -980,7 +980,7 @@ extension _SettingsAiTab on _SettingsDialogState {
                   onSelected: (_saving || !_canEdit)
                       ? null
                       : (_) {
-                          refresh(() => _model.text = id);
+                          setUi(() => _model.text = id);
                           // Saving is on BLUR, and assigning `controller.text`
                           // never blurs anything — so picking a model used to
                           // change the box and nothing else. The row kept its

@@ -16,21 +16,21 @@ extension _SettingsDataTab on _SettingsDialogState {
       destructive: false,
     );
     if (!ok || !mounted) return;
-    refresh(() => _cacheBusy = true);
+    setUi(() => _cacheBusy = true);
     try {
       final after = await widget.onClearMirrorCache!();
       if (!mounted) return;
       final freed = (before?.mirroredBytes ?? 0) - after.mirroredBytes;
-      refresh(() {
+      setUi(() {
         _cacheStats = after;
         // The freed figure is measured, not assumed: a blob that could not be
         // unlinked is still counted in `after`, so this never overstates.
         _cacheMsg = l10n.cacheCleared(formatBytes(freed));
       });
     } catch (error) {
-      if (mounted) refresh(() => _cacheMsg = error.toString());
+      if (mounted) setUi(() => _cacheMsg = error.toString());
     } finally {
-      if (mounted) refresh(() => _cacheBusy = false);
+      if (mounted) setUi(() => _cacheBusy = false);
     }
   }
 
@@ -41,7 +41,7 @@ extension _SettingsDataTab on _SettingsDialogState {
     _cacheStatsAsked = true;
     load()
         .then((st) {
-          if (mounted) refresh(() => _cacheStats = st);
+          if (mounted) setUi(() => _cacheStats = st);
         })
         .catchError((_) {});
   }
@@ -55,7 +55,7 @@ extension _SettingsDataTab on _SettingsDialogState {
     _exportStatsAsked = true;
     load()
         .then((st) {
-          if (mounted) refresh(() => _exportStats = st);
+          if (mounted) setUi(() => _exportStats = st);
         })
         .catchError((_) {});
   }
@@ -106,7 +106,7 @@ extension _SettingsDataTab on _SettingsDialogState {
     try {
       final entries = await load();
       if (!mounted) return;
-      refresh(() {
+      setUi(() {
         _importHistory = entries;
         _importHistoryLoading = false;
       });
@@ -114,7 +114,7 @@ extension _SettingsDataTab on _SettingsDialogState {
       // A history that cannot be read is not worth an error banner over an
       // import button that still works. It shows as empty.
       if (!mounted) return;
-      refresh(() {
+      setUi(() {
         _importHistory = const [];
         _importHistoryLoading = false;
       });

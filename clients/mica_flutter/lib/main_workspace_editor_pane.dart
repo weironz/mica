@@ -220,7 +220,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                             : context.l10n.pageShowSidePanel,
                         visualDensity: VisualDensity.compact,
                         onPressed: () =>
-                            refresh(() => _toolsExpanded = !_toolsExpanded),
+                            setUi(() => _toolsExpanded = !_toolsExpanded),
                         icon: Transform.flip(
                           flipX: true,
                           child: const Icon(
@@ -240,7 +240,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                             final showing =
                                 _toolsExpanded &&
                                 _toolsTab == _ToolsTab.comments;
-                            refresh(() {
+                            setUi(() {
                               // From anywhere else this means "show me the
                               // comments", not "toggle the sidebar" — so it
                               // opens the sidebar AND selects the tab. Only
@@ -263,7 +263,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                             .trim()
                             .isNotEmpty,
                         onTap: () =>
-                            refresh(() => _showProperties = !_showProperties),
+                            setUi(() => _showProperties = !_showProperties),
                       ),
                       PopupMenuButton<String>(
                         tooltip: context.l10n.pageMenu,
@@ -818,7 +818,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                               // opening because a collaborator commented would be
                               // an interruption, not a convenience.
                               if (mounted) {
-                                refresh(() {
+                                setUi(() {
                                   _toolsExpanded = true;
                                   _toolsTab = _ToolsTab.comments;
                                 });

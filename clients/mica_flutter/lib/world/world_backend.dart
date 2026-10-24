@@ -652,7 +652,7 @@ class _CloudWorldBackend extends WorldBackend {
   }
 
   void _closeOpenPage() {
-    _shell.refresh(() {
+    _shell.setUi(() {
       _shell._selectedView = null;
       _shell._selectedBootstrap = null;
     });

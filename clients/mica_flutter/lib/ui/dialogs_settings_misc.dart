@@ -65,7 +65,7 @@ extension _SettingsMiscTab on _SettingsDialogState {
         subtitle: Text(l.settingsDiagnosticsToggleSub),
         onChanged: (value) {
           setDiagnostics(value);
-          refresh(() => _diagnostics = value);
+          setUi(() => _diagnostics = value);
         },
       ),
       const SizedBox(height: 12),

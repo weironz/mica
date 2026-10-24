@@ -64,7 +64,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
               max: kPageWidthMax,
               divisions: kPageWidthDivisions,
               onChanged: (value) {
-                refresh(() => _pageWidth = value);
+                setUi(() => _pageWidth = value);
                 _applyAppearance();
               },
             ),
@@ -82,7 +82,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
             onPressed: atDefault
                 ? null
                 : () {
-                    refresh(() => _pageWidth = kPageWidthDefault);
+                    setUi(() => _pageWidth = kPageWidthDefault);
                     _applyAppearance();
                   },
             icon: const Icon(Icons.restart_alt, size: 18),
@@ -129,7 +129,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
       label: Text(label),
       selected: _fontFamily == family,
       onSelected: (_) {
-        refresh(() => _fontFamily = family);
+        setUi(() => _fontFamily = family);
         _applyAppearance();
       },
     );
@@ -142,7 +142,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
     return ChoiceChip(
       label: Text(label),
       selected: themeModeController.value == mode,
-      onSelected: (_) => refresh(() {
+      onSelected: (_) => setUi(() {
         savePref('themeMode', themeModePref(mode));
         themeModeController.value = mode;
       }),
@@ -156,7 +156,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
     return ChoiceChip(
       label: Text(label),
       selected: currentLanguageChoice == choice,
-      onSelected: (_) => refresh(() => setLanguage(choice)),
+      onSelected: (_) => setUi(() => setLanguage(choice)),
     );
   }
 
@@ -198,7 +198,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
       divisions: kFontPxMax - kFontPxMin,
       display: '${fontPxFromScale(_fontScale)} px',
       onChanged: (value) {
-        refresh(() => _fontScale = fontScaleFromPx(value.round()));
+        setUi(() => _fontScale = fontScaleFromPx(value.round()));
         _applyAppearance();
       },
     ),
@@ -222,7 +222,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
       title: Text(context.l10n.settingsFormatBar),
       subtitle: Text(context.l10n.settingsFormatBarSub),
       onChanged: (value) {
-        refresh(() => _showFormatBar = value);
+        setUi(() => _showFormatBar = value);
         widget.onShowFormatBarChanged(value);
       },
     ),
@@ -233,7 +233,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
       title: Text(context.l10n.settingsPageTitle),
       subtitle: Text(context.l10n.settingsPageTitleSub),
       onChanged: (value) {
-        refresh(() => _showPageTitle = value);
+        setUi(() => _showPageTitle = value);
         widget.onShowPageTitleChanged(value);
       },
     ),
@@ -257,7 +257,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
       title: Text(context.l10n.settingsReHostImages),
       subtitle: Text(context.l10n.settingsReHostImagesSub),
       onChanged: (value) {
-        refresh(() => _reHostImages = value);
+        setUi(() => _reHostImages = value);
         widget.onReHostImagesChanged(value);
       },
     ),
@@ -278,7 +278,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
         groupValue: _closeBehavior,
         onChanged: (value) {
           if (value == null) return;
-          refresh(() => _closeBehavior = value);
+          setUi(() => _closeBehavior = value);
           saveCloseBehavior(value);
         },
         child: Column(

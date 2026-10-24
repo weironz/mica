@@ -181,10 +181,10 @@ extension _SettingsTokensTab on _SettingsDialogState {
       _tokensLoaded = true;
       onLoad()
           .then((list) {
-            if (mounted) refresh(() => _tokens = list);
+            if (mounted) setUi(() => _tokens = list);
           })
           .catchError((Object e) {
-            if (mounted) refresh(() => _tokensError = e.toString());
+            if (mounted) setUi(() => _tokensError = e.toString());
           });
     }
 
@@ -192,13 +192,13 @@ extension _SettingsTokensTab on _SettingsDialogState {
       try {
         final list = await onLoad();
         if (mounted) {
-          refresh(() {
+          setUi(() {
             _tokens = list;
             _tokensError = null;
           });
         }
       } catch (e) {
-        if (mounted) refresh(() => _tokensError = e.toString());
+        if (mounted) setUi(() => _tokensError = e.toString());
       }
     }
 
@@ -225,9 +225,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
         children: [
           Switch(
             value: _tokenWrite,
-            onChanged: _tokenBusy
-                ? null
-                : (v) => refresh(() => _tokenWrite = v),
+            onChanged: _tokenBusy ? null : (v) => setUi(() => _tokenWrite = v),
           ),
           Text(context.l10n.tokenWriteAccess),
           const Spacer(),
@@ -257,7 +255,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
               ],
               onChanged: _tokenBusy
                   ? null
-                  : (v) => refresh(() => _tokenExpiryDays = v),
+                  : (v) => setUi(() => _tokenExpiryDays = v),
             ),
           ),
         ],
@@ -273,12 +271,10 @@ extension _SettingsTokensTab on _SettingsDialogState {
               : () async {
                   final name = _tokenName.text.trim();
                   if (name.isEmpty) {
-                    refresh(
-                      () => _tokensError = context.l10n.tokenNameRequired,
-                    );
+                    setUi(() => _tokensError = context.l10n.tokenNameRequired);
                     return;
                   }
-                  refresh(() {
+                  setUi(() {
                     _tokenBusy = true;
                     _tokensError = null;
                   });
@@ -291,7 +287,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
                     _tokenName.clear();
 
                     if (mounted) {
-                      refresh(() {
+                      setUi(() {
                         _tokenWrite = false;
                         _tokenBusy = false;
                       });
@@ -300,7 +296,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
                     await refresh();
                   } catch (e) {
                     if (mounted) {
-                      refresh(() {
+                      setUi(() {
                         _tokensError = e.toString();
                         _tokenBusy = false;
                       });
@@ -366,15 +362,14 @@ extension _SettingsTokensTab on _SettingsDialogState {
                         final label =
                             t['name'] as String? ?? context.l10n.tokenUnnamed;
                         if (!await _confirmRevoke(label)) return;
-                        refresh(() => _tokenBusy = true);
+                        setUi(() => _tokenBusy = true);
                         try {
                           await onRevoke(t['id'] as String);
                           await refresh();
                         } catch (e) {
-                          if (mounted)
-                            refresh(() => _tokensError = e.toString());
+                          if (mounted) setUi(() => _tokensError = e.toString());
                         } finally {
-                          if (mounted) refresh(() => _tokenBusy = false);
+                          if (mounted) setUi(() => _tokenBusy = false);
                         }
                       },
               ),
