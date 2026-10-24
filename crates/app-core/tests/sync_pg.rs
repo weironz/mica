@@ -21,7 +21,7 @@ use uuid::Uuid;
 /// too, because there the database is always provisioned: its absence means the
 /// workflow regressed, not that these assertions may quietly stop running.
 /// The shipped stream window + prune cadence. These tests assert sync BEHAVIOUR,
-/// not tuning, so they run on the defaults — which are the values that used to be
+/// not tuning, so they normally run on the defaults — the values that used to be
 /// `sync::STREAM_KEEP_MARGIN` / `STREAM_PRUNE_EVERY` constants here.
 fn tuning() -> sync::SyncTuning {
   sync::SyncTuning::default()
@@ -1109,9 +1109,20 @@ async fn concurrent_pushes_both_reach_the_base() {
     .await
     .unwrap();
 
+  // This scenario proves both stream rows fold into the base. Other tests can
+  // consume thousands of global RIDs while B waits, making default retention
+  // legitimately prune A even though this document has only two updates.
+  // Retain this scenario's stream; pruning/rebootstrap has its own default-
+  // tuning tests above. Still assert BOTH rows below, not just the final base.
+  let retention = sync::SyncTuning {
+    keep_margin: i64::MAX,
+    ..tuning()
+  };
   let db2 = db.clone();
   let loser =
-    tokio::spawn(async move { sync::push_update(&db2, ws, doc, user, &update_b, &tuning()).await });
+    tokio::spawn(
+      async move { sync::push_update(&db2, ws, doc, user, &update_b, &retention).await },
+    );
   // B is now parked on the row lock. 500ms is the same margin the bootstrap
   // test above uses to make "B has blocked" a certainty rather than a hope.
   tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -1164,6 +1175,11 @@ async fn concurrent_pushes_both_reach_the_base() {
       .await
       .unwrap();
   let mut folded = MicaDoc::from_update(&base.state).unwrap();
+  assert_eq!(
+    rows.len(),
+    2,
+    "both concurrent pushes must remain replayable"
+  );
   for row in &rows {
     folded.apply_update(row).unwrap();
   }
