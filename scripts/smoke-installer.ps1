@@ -1,5 +1,6 @@
 # Silent-install the packaged installer and prove the installed app survives
-# 10 s. Lifted from the `windows` job of .github/workflows/release.yml so the
+# its first frame within 30 s, then survives another 10 s. Lifted from the
+# `windows` job of .github/workflows/release.yml so the
 # LOCAL release train runs the same check: the in-app updater ships this exact
 # .exe to every user, and build success only proves it compiled.
 #
@@ -23,14 +24,32 @@ while (-not (Test-Path $exe) -and (Get-Date) -lt $deadline) {
 if (-not (Test-Path $exe)) { throw "installed exe not found after 120s: $exe" }
 Write-Host "Installed OK: $exe"
 
-$app = Start-Process -FilePath $exe -PassThru
+$probe = Join-Path $installDir 'first-frame.marker'
+$previousProbe = $env:MICA_STARTUP_PROBE_FILE
 try {
+  $env:MICA_STARTUP_PROBE_FILE = $probe
+  $app = Start-Process -FilePath $exe -WorkingDirectory $installDir -PassThru
+} finally {
+  $env:MICA_STARTUP_PROBE_FILE = $previousProbe
+}
+try {
+  $firstFrameDeadline = (Get-Date).AddSeconds(30)
+  while (-not (Test-Path -LiteralPath $probe) -and (Get-Date) -lt $firstFrameDeadline) {
+    $app.Refresh()
+    if ($app.HasExited) {
+      throw "Mica exited before its first frame (exit code 0x$('{0:X8}' -f $app.ExitCode))"
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not (Test-Path -LiteralPath $probe)) {
+    throw "Mica did not produce its first Flutter frame within 30s"
+  }
   Start-Sleep -Seconds 10
   $app.Refresh()
   if ($app.HasExited) {
-    throw "Mica exited within 10s (exit code 0x$('{0:X8}' -f $app.ExitCode)) - install/launch smoke FAILED"
+    throw "Mica exited within 10s after its first frame (exit code 0x$('{0:X8}' -f $app.ExitCode)) - install/launch smoke FAILED"
   }
-  Write-Host "Mica still alive 10s after launch (pid $($app.Id)) - smoke OK"
+  Write-Host "Mica rendered its first frame and stayed alive for 10s (pid $($app.Id)) - smoke OK"
 } finally {
   if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
   if ($inst -and -not $inst.HasExited) { Stop-Process -Id $inst.Id -Force -ErrorAction SilentlyContinue }

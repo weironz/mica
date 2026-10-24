@@ -4,6 +4,24 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+namespace {
+// The installer smoke test opts in to a first-frame receipt. A live process
+// alone cannot distinguish a working editor from a stalled/late-crashing boot.
+void WriteFirstFrameReceipt() {
+  wchar_t path[MAX_PATH];
+  const DWORD length = ::GetEnvironmentVariableW(
+      L"MICA_STARTUP_PROBE_FILE", path, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) return;
+  HANDLE receipt = ::CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (receipt == INVALID_HANDLE_VALUE) return;
+  constexpr char marker[] = "first_frame\n";
+  DWORD written = 0;
+  ::WriteFile(receipt, marker, sizeof(marker) - 1, &written, nullptr);
+  ::CloseHandle(receipt);
+}
+}  // namespace
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
@@ -29,6 +47,7 @@ bool FlutterWindow::OnCreate() {
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
+    WriteFirstFrameReceipt();
   });
 
   // Flutter can complete the first frame before the "show window" callback is
