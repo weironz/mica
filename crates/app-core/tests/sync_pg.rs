@@ -851,11 +851,11 @@ async fn concurrent_first_bootstrap_returns_one_universe() {
 /// permanent divergence, triggered by the very pruning that bounds growth.
 ///
 /// The interleaving is CONSTRUCTED with a real barrier: an `ACCESS EXCLUSIVE`
-/// lock on `document_yrs_base` blocks the SECOND read (`base_rid`) while the
-/// first (MIN) is already done, and the prune commits in that window. Blocking
-/// the second read specifically is what makes this discriminating — under the
-/// fix the third read shares the transaction snapshot taken at the second, so it
-/// still sees the rows the prune removed; unfixed, it re-snapshots.
+/// lock on `workspace_updates` blocks the pull after the pruning watermark has
+/// been read. The lock holder then prunes and commits before releasing the pull.
+/// With one snapshot the pull still sees the rows owed at the decision; separate
+/// snapshots silently skip them. Pruning updates the watermark in that same
+/// transaction, so blocking the base table would now block the prune as well.
 ///
 /// The assertion is the invariant a catch-up client relies on: whatever comes
 /// back, it must be usable from `since_rid` — either a contiguous run starting at
@@ -924,10 +924,10 @@ async fn catch_up_decision_and_pull_share_one_snapshot() {
   .await
   .unwrap();
 
-  // Hold the base table so the SECOND read blocks. The MIN read is already
-  // done by then, which is exactly the window the bug lived in.
+  // Hold the stream table so the pull blocks AFTER reading the watermark.
+  // The lock holder can prune its own table while the reader is parked.
   let mut blocker = db.begin().await.unwrap();
-  sqlx::query("LOCK TABLE document_yrs_base IN ACCESS EXCLUSIVE MODE")
+  sqlx::query("LOCK TABLE workspace_updates IN ACCESS EXCLUSIVE MODE")
     .execute(&mut *blocker)
     .await
     .unwrap();
@@ -944,7 +944,8 @@ async fn catch_up_decision_and_pull_share_one_snapshot() {
     let waiting: i64 = sqlx::query_scalar(
       "SELECT count(*) FROM pg_locks l
                JOIN pg_class c ON c.oid = l.relation
-              WHERE NOT l.granted AND c.relname = 'document_yrs_base'",
+              WHERE NOT l.granted AND c.relname = 'workspace_updates'
+                AND l.mode = 'AccessShareLock'",
     )
     .fetch_one(&db)
     .await
@@ -954,20 +955,20 @@ async fn catch_up_decision_and_pull_share_one_snapshot() {
     }
     assert!(
       waited < 200,
-      "catch_up never reached the blocked second read"
+      "catch_up never reached the blocked stream pull"
     );
     waited += 1;
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
   }
 
-  // Commit the prune while the decision is half-made. `since_rid + 1` is gone.
+  // Commit the prune and its watermark while the pull is blocked.
   sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1 AND rid <= $2")
     .bind(doc)
     .bind(needed)
-    .execute(&db)
+    .execute(&mut *blocker)
     .await
     .unwrap();
-  blocker.rollback().await.unwrap();
+  blocker.commit().await.unwrap();
 
   match catch_up.await.unwrap().unwrap() {
     sync::CatchUp::Updates(updates) => {
