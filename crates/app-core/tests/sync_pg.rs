@@ -932,7 +932,12 @@ async fn catch_up_decision_and_pull_share_one_snapshot() {
     .await
     .unwrap();
 
-  let db2 = db.clone();
+  let application_name = format!("catch-up-snapshot-{doc}");
+  let db2 = sqlx::postgres::PgPoolOptions::new()
+    .max_connections(1)
+    .connect_with((*db.connect_options()).clone().application_name(&application_name))
+    .await
+    .unwrap();
   let catch_up =
     tokio::spawn(async move { sync::catch_up_document(&db2, doc, since_rid, 1000).await });
 
@@ -944,9 +949,11 @@ async fn catch_up_decision_and_pull_share_one_snapshot() {
     let waiting: i64 = sqlx::query_scalar(
       "SELECT count(*) FROM pg_locks l
                JOIN pg_class c ON c.oid = l.relation
+               JOIN pg_stat_activity a ON a.pid = l.pid
               WHERE NOT l.granted AND c.relname = 'workspace_updates'
-                AND l.mode = 'AccessShareLock'",
+                AND l.mode = 'AccessShareLock' AND a.application_name = $1",
     )
+    .bind(&application_name)
     .fetch_one(&db)
     .await
     .unwrap();
