@@ -261,7 +261,14 @@ pub(super) async fn move_views_tx(
   // mover that validated against an older snapshot and wrote here could
   // re-parent a folder under a descendant its check never saw.
   for id in view_ids {
-    ensure_view_in_workspace(&mut *tx, workspace_id, *id).await?;
+    ensure_view_in_workspace(&mut *tx, workspace_id, *id)
+      .await
+      .map_err(|error| match error {
+        ApiError::NotFound => ApiError::Conflict(format!(
+          "view {id} is no longer available for this move; refresh and retry"
+        )),
+        other => other,
+      })?;
     if let Some(parent) = parent_view_id {
       ensure_valid_parent_view(&mut tx, workspace_id, *id, parent).await?;
     }

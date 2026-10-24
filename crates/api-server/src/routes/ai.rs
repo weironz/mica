@@ -326,6 +326,7 @@ impl AiSettingsResponse {
     AiSettingsResponse {
       configured,
       can_edit: false,
+      provider: String::new(),
       ..settings_response(None)
     }
   }
