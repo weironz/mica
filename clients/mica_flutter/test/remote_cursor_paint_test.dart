@@ -28,6 +28,8 @@ void main() {
   testWidgets('remote cursor outside the paint viewport is culled', (
     tester,
   ) async {
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
     final nodes = [
       for (var i = 0; i < 80; i++)
         EditorNode(id: 'b$i', kind: 'paragraph', text: 'line $i'),
@@ -36,6 +38,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
+            controller: scroll,
             child: DocumentSurface(
               nodes: nodes,
               selection: null,
@@ -43,12 +46,7 @@ void main() {
               caretBlink: ValueNotifier(false),
               appearance: const EditorAppearance(),
               remoteCursors: const [
-                (
-                  blockId: 'b15',
-                  offset: 0,
-                  color: _remoteColor,
-                  label: 'near',
-                ),
+                (blockId: 'b15', offset: 0, color: _remoteColor, label: 'near'),
                 (
                   blockId: 'b79',
                   offset: 0,
@@ -74,6 +72,11 @@ void main() {
     // The recording canvas does not clip invocations itself: any remote shape
     // here means we wasted paint work on a cursor far below the viewport.
     expect(_remoteShapes(render, const Rect.fromLTWH(0, 0, 800, 100)), 0);
+    // Resource culling intersects the canvas with the actual ancestor viewport.
+    // Move that viewport too: inventing a lower canvas clip while still scrolled
+    // to the top correctly paints no far-away cursor.
+    scroll.jumpTo(scroll.position.maxScrollExtent);
+    await tester.pump();
     expect(
       _remoteShapes(render, Rect.fromLTWH(0, remoteY - 20, 800, 100)),
       2,

@@ -8,6 +8,8 @@ import 'package:mica_flutter/api/client.dart';
 import 'package:mica_flutter/main.dart' as app;
 import 'package:mica_flutter/prefs.dart';
 
+import 'support/online_only_local_offline.dart';
+
 /// Startup-chain smoke test: pumps the FULL MicaApp (WorkspaceShell inside),
 /// which no other unit test does — the gap where the v0.13.53/54 regressions
 /// lived: 1,814 unit tests green, only the browser e2e caught them, feedback
@@ -27,90 +29,138 @@ import 'package:mica_flutter/prefs.dart';
 /// the keys are unique per test run (uuid in origin), so tests are order-
 /// independent and never see each other's state.
 void main() {
+  setUp(useOnlineOnlyLocalOffline);
+  tearDown(resetLocalOfflineFactory);
   tearDown(resetHttpClientForTesting);
 
-  testWidgets('startup with a persisted session restores the cloud world',
-      (tester) async {
-    final origin = 'https://shell-smoke-${DateTime.now().millisecondsSinceEpoch}.test';
+  testWidgets('startup with a persisted session restores the cloud world', (
+    tester,
+  ) async {
+    final origin =
+        'https://shell-smoke-${DateTime.now().millisecondsSinceEpoch}.test';
     // --- seed prefs exactly as a previous session would have left them ---
     savePref('cloudOrigin', origin);
     savePref('activeOrigin', origin);
     savePref('servers', jsonEncode([origin]));
-    savePref('authUser:$origin',
-        jsonEncode({'id': 'u1', 'email': 'smoke@mica.test', 'display_name': 'Smoke User'}));
+    savePref(
+      'authUser:$origin',
+      jsonEncode({
+        'id': 'u1',
+        'email': 'smoke@mica.test',
+        'display_name': 'Smoke User',
+      }),
+    );
     // A non-expired access token: restore must use it, not refresh.
     savePref('authToken:$origin', _nonExpiredToken());
 
     final seen = <String>[];
-    useHttpClientForTesting(MockClient((request) async {
-      final path = request.url.path;
-      seen.add(path);
-      if (path == '/api/workspaces') {
-        return http.Response(
+    useHttpClientForTesting(
+      MockClient((request) async {
+        final path = request.url.path;
+        seen.add(path);
+        if (path == '/api/workspaces') {
+          return http.Response(
             jsonEncode([
-              {'id': 'ws1', 'name': 'Smoke Workspace', 'owner_id': 'u1', 'role': 'owner'}
+              {
+                'id': 'ws1',
+                'name': 'Smoke Workspace',
+                'owner_id': 'u1',
+                'role': 'owner',
+              },
             ]),
-            200);
-      }
-      if (path == '/api/auth/me') {
-        return http.Response(
-            jsonEncode({'id': 'u1', 'email': 'smoke@mica.test', 'display_name': 'Smoke User'}),
-            200);
-      }
-      // Anything else the shell asks during startup gets an empty OK — the
-      // point of this test is the startup chain, not any single endpoint.
-      return http.Response('{}', 200);
-    }));
+            200,
+          );
+        }
+        if (path == '/api/auth/me') {
+          return http.Response(
+            jsonEncode({
+              'id': 'u1',
+              'email': 'smoke@mica.test',
+              'display_name': 'Smoke User',
+            }),
+            200,
+          );
+        }
+        // Anything else the shell asks during startup gets an empty OK — the
+        // point of this test is the startup chain, not any single endpoint.
+        return http.Response('{}', 200);
+      }),
+    );
 
     await tester.pumpWidget(const app.MicaApp());
     // initState + the postFrame restore chain run here. An exception in any
     // of it (the v0.13.53 class) surfaces as a framework error.
     await tester.pumpAndSettle(const Duration(seconds: 2));
 
-    expect(tester.takeException(), isNull,
-        reason: 'the startup chain must not throw (v0.13.53 regression class)');
-    expect(seen, contains('/api/workspaces'),
-        reason: 'a persisted session boots into the cloud world (v0.13.54 class: '
-            'a stale origin meant the request never went out, or went nowhere)');
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'the startup chain must not throw (v0.13.53 regression class)',
+    );
+    expect(
+      seen,
+      contains('/api/workspaces'),
+      reason:
+          'a persisted session boots into the cloud world (v0.13.54 class: '
+          'a stale origin meant the request never went out, or went nowhere)',
+    );
     debugDumpApp();
-  expect(true, isTrue);
+    expect(true, isTrue);
   });
 
-  testWidgets('startup with no session lands on the world picker, not a crash',
-      (tester) async {
-    // Empty-ish prefs: no origin, no credentials.
-    final origin = 'https://shell-cold-${DateTime.now().millisecondsSinceEpoch}.test';
+  testWidgets(
+    'startup with no session lands on the world picker, not a crash',
+    (tester) async {
+      // Empty-ish prefs: no origin, no credentials.
+      final origin =
+          'https://shell-cold-${DateTime.now().millisecondsSinceEpoch}.test';
+      savePref('cloudOrigin', origin);
+      savePref('activeOrigin', origin);
+      removePref('authToken:$origin');
+      removePref('authUser:$origin');
+
+      useHttpClientForTesting(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+
+      await tester.pumpWidget(const app.MicaApp());
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+
+      expect(tester.takeException(), isNull);
+      // No workspace fetch should have been attempted with no credentials.
+    },
+  );
+
+  testWidgets('the shell survives a frame after the controller handoff', (
+    tester,
+  ) async {
+    final origin =
+        'https://shell-frame-${DateTime.now().millisecondsSinceEpoch}.test';
     savePref('cloudOrigin', origin);
     savePref('activeOrigin', origin);
-    removePref('authToken:$origin');
-    removePref('authUser:$origin');
-
-    useHttpClientForTesting(MockClient((request) async => http.Response('{}', 200)));
-
-    await tester.pumpWidget(const app.MicaApp());
-    await tester.pumpAndSettle(const Duration(seconds: 2));
-
-    expect(tester.takeException(), isNull);
-    // No workspace fetch should have been attempted with no credentials.
-  });
-
-  testWidgets('the shell survives a frame after the controller handoff',
-      (tester) async {
-    final origin = 'https://shell-frame-${DateTime.now().millisecondsSinceEpoch}.test';
-    savePref('cloudOrigin', origin);
-    savePref('activeOrigin', origin);
-    savePref('authUser:$origin',
-        jsonEncode({'id': 'u1', 'email': 'smoke@mica.test', 'display_name': 'Smoke User'}));
+    savePref(
+      'authUser:$origin',
+      jsonEncode({
+        'id': 'u1',
+        'email': 'smoke@mica.test',
+        'display_name': 'Smoke User',
+      }),
+    );
     savePref('authToken:$origin', _nonExpiredToken());
 
-    useHttpClientForTesting(MockClient((request) async {
-      if (request.url.path == '/api/workspaces') {
-        return http.Response(jsonEncode([
-          {'id': 'ws1', 'name': 'W', 'owner_id': 'u1', 'role': 'owner'}
-        ]), 200);
-      }
-      return http.Response('{}', 200);
-    }));
+    useHttpClientForTesting(
+      MockClient((request) async {
+        if (request.url.path == '/api/workspaces') {
+          return http.Response(
+            jsonEncode([
+              {'id': 'ws1', 'name': 'W', 'owner_id': 'u1', 'role': 'owner'},
+            ]),
+            200,
+          );
+        }
+        return http.Response('{}', 200);
+      }),
+    );
 
     await tester.pumpWidget(const app.MicaApp());
     await tester.pumpAndSettle(const Duration(seconds: 2));
@@ -125,9 +175,13 @@ void main() {
 /// A JWT with a far-future exp — the shell only reads the exp claim here;
 /// signature is never verified client-side (the server does that).
 String _nonExpiredToken() {
-  final payload = base64UrlEncode(utf8.encode(jsonEncode({
+  final payload = base64UrlEncode(
+    utf8.encode(
+      jsonEncode({
         'sub': 'u1',
         'exp': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
-      })));
+      }),
+    ),
+  );
   return 'eyJhbGciOiJIUzI1NiJ9.$payload.unsigned-smoke';
 }

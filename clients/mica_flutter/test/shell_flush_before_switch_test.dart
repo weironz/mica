@@ -36,6 +36,8 @@ import 'package:mica_flutter/main.dart' as app;
 import 'package:mica_flutter/prefs.dart';
 import 'package:mica_flutter/ui/doc_tab_strip.dart';
 
+import 'support/online_only_local_offline.dart';
+
 /// Bounded settle. With a document open the shell keeps background work alive
 /// (sync session reconnect backoff), so `pumpAndSettle` never settles; a fixed
 /// number of frames is what lets the mocked HTTP futures and the taps play
@@ -63,11 +65,15 @@ DocTabStrip stripOf(WidgetTester tester) =>
 void main() {
   late _FakeMicaServer server;
 
-  setUp(() => server = _FakeMicaServer());
+  setUp(() {
+    useOnlineOnlyLocalOffline();
+    server = _FakeMicaServer();
+  });
 
   tearDown(() {
     app.debugProbeShellFlush = null;
     resetHttpClientForTesting();
+    resetLocalOfflineFactory();
   });
 
   /// Boot the full app against the fake server with a persisted session and
@@ -94,8 +100,16 @@ void main() {
     app.debugProbeShellFlush = server.probeFlush;
     await tester.pumpWidget(const app.MicaApp());
     await settle(tester);
-    expect(tester.takeException(), isNull,
-        reason: 'the scenario cannot mean anything if startup itself threw');
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'the scenario cannot mean anything if startup itself threw',
+    );
+    expect(
+      find.byType(app.ErrorBanner),
+      findsNothing,
+      reason: 'the cloud fixture must boot without a native-store error',
+    );
   }
 
   testWidgets('P1-2: opening a page in a new tab flushes first', (
@@ -137,54 +151,59 @@ void main() {
     expect(s.tabs[1].view?.name, 'Beta');
   });
 
-  testWidgets('P1-2: selecting another tab flushes first, and never refetches',
-      (tester) async {
-    await boot(
-      tester,
-      workspaces: [
-        {'id': 'ws1', 'name': 'One'},
-      ],
-      viewsByWorkspace: {
-        'ws1': [
-          {'id': 'va', 'name': 'Alpha'},
-          {'id': 'vb', 'name': 'Beta'},
+  testWidgets(
+    'P1-2: selecting another tab flushes first, and never refetches',
+    (tester) async {
+      await boot(
+        tester,
+        workspaces: [
+          {'id': 'ws1', 'name': 'One'},
         ],
-      },
-    );
-    await openPage(tester, 'Alpha');
-    final row = tester.getCenter(find.text('Beta').first);
-    await tester.tapAt(row, buttons: kSecondaryMouseButton);
-    await settle(tester);
-    await tester.tap(find.text('在新标签页打开'));
-    await settle(tester);
-    expect(stripOf(tester).activeIndex, 1);
-    server.events.clear();
+        viewsByWorkspace: {
+          'ws1': [
+            {'id': 'va', 'name': 'Alpha'},
+            {'id': 'vb', 'name': 'Beta'},
+          ],
+        },
+      );
+      await openPage(tester, 'Alpha');
+      final row = tester.getCenter(find.text('Beta').first);
+      await tester.tapAt(row, buttons: kSecondaryMouseButton);
+      await settle(tester);
+      await tester.tap(find.text('在新标签页打开'));
+      await settle(tester);
+      expect(stripOf(tester).activeIndex, 1);
+      server.events.clear();
 
-    // Click tab 0 in the strip (scope to the strip — 'Alpha' is also the
-    // sidebar row and the home recents card).
-    await tester.tap(find.descendant(
-      of: find.byType(DocTabStrip),
-      matching: find.text('Alpha'),
-    ));
-    await settle(tester);
-    expect(tester.takeException(), isNull);
+      // Click tab 0 in the strip (scope to the strip — 'Alpha' is also the
+      // sidebar row and the home recents card).
+      await tester.tap(
+        find.descendant(
+          of: find.byType(DocTabStrip),
+          matching: find.text('Alpha'),
+        ),
+      );
+      await settle(tester);
+      expect(tester.takeException(), isNull);
 
-    expect(
-      server.events.where((e) => e == _FakeMicaServer.flushEvent).length,
-      1,
-      reason: 'exactly one shell flush for one tab switch: ${server.events}',
-    );
-    expect(
-      server.events.where((e) => e.contains('documents/doc-va/bootstrap')),
-      isEmpty,
-      reason: 'a tab switch reads the bootstrap already in memory — the '
-          'fix is wrong if it turned into a refetch cycle: ${server.events}',
-    );
-    final s = stripOf(tester);
-    expect(s.activeIndex, 0);
-    expect(s.tabs[0].view?.name, 'Alpha');
-    expect(s.tabs[1].view?.name, 'Beta');
-  });
+      expect(
+        server.events.where((e) => e == _FakeMicaServer.flushEvent).length,
+        1,
+        reason: 'exactly one shell flush for one tab switch: ${server.events}',
+      );
+      expect(
+        server.events.where((e) => e.contains('documents/doc-va/bootstrap')),
+        isEmpty,
+        reason:
+            'a tab switch reads the bootstrap already in memory — the '
+            'fix is wrong if it turned into a refetch cycle: ${server.events}',
+      );
+      final s = stripOf(tester);
+      expect(s.activeIndex, 0);
+      expect(s.tabs[0].view?.name, 'Alpha');
+      expect(s.tabs[1].view?.name, 'Beta');
+    },
+  );
 
   testWidgets('P1-2: the "+" menu\'s New page flushes before creating', (
     tester,
@@ -203,10 +222,12 @@ void main() {
     await openPage(tester, 'Alpha');
     server.events.clear();
 
-    await tester.tap(find.descendant(
-      of: find.byType(DocTabStrip),
-      matching: find.byIcon(Icons.add),
-    ));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DocTabStrip),
+        matching: find.byIcon(Icons.add),
+      ),
+    );
     await settle(tester);
     await tester.tap(find.text('新建页面'));
     await settle(tester);
@@ -260,8 +281,9 @@ void main() {
     );
   });
 
-  testWidgets('U1: a load lands in the tab it started in, not the active one',
-      (tester) async {
+  testWidgets('U1: a load lands in the tab it started in, not the active one', (
+    tester,
+  ) async {
     await boot(
       tester,
       workspaces: [
@@ -283,19 +305,23 @@ void main() {
     await tester.tap(find.text('在新标签页打开'));
     await settle(tester);
     // Back to Alpha's tab, then start Gamma's load — GATED on the server.
-    await tester.tap(find.descendant(
-      of: find.byType(DocTabStrip),
-      matching: find.text('Alpha'),
-    ));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DocTabStrip),
+        matching: find.text('Alpha'),
+      ),
+    );
     await settle(tester);
     final gate = server.gateBootstrap('doc-vg');
     await tester.tap(find.text('Gamma').first);
     await tester.pump();
     // While Gamma is loading, the user switches to Beta's tab.
-    await tester.tap(find.descendant(
-      of: find.byType(DocTabStrip),
-      matching: find.text('Beta'),
-    ));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DocTabStrip),
+        matching: find.text('Beta'),
+      ),
+    );
     await settle(tester);
     expect(stripOf(tester).activeIndex, 1);
 
@@ -307,13 +333,15 @@ void main() {
     expect(
       s.tabs[0].view?.name,
       'Gamma',
-      reason: 'the load was started from this tab — it owns the result (U1): '
+      reason:
+          'the load was started from this tab — it owns the result (U1): '
           '${server.events}',
     );
     expect(
       s.tabs[1].view?.name,
       'Beta',
-      reason: 'the merely-active-at-completion tab must not be overwritten '
+      reason:
+          'the merely-active-at-completion tab must not be overwritten '
           '(U1): ${server.events}',
     );
     expect(s.activeIndex, 1, reason: 'the user never moved');
@@ -351,31 +379,38 @@ void main() {
     expect(
       server.events.where((e) => e.contains('documents/doc-vg/bootstrap')),
       hasLength(2),
-      reason: 'a re-tap during the load re-requests, it does not share the '
+      reason:
+          'a re-tap during the load re-requests, it does not share the '
           'in-flight one: ${server.events}',
     );
-
 
     // The NEWER load completes first; then the stale one comes home.
     second.complete(server.bootstrapResponse('doc-vg', 'vg', 'Gamma'));
     await settle(tester);
-    first.complete(server.bootstrapResponse(
-      'doc-vg',
-      'vg',
-      'Gamma (stale)',
-      objectId: 'doc-vg-stale',
-    ));
+    first.complete(
+      server.bootstrapResponse(
+        'doc-vg',
+        'vg',
+        'Gamma (stale)',
+        objectId: 'doc-vg-stale',
+      ),
+    );
     await settle(tester);
     expect(tester.takeException(), isNull);
 
     final s = stripOf(tester);
-    expect(s.tabs.single.view?.objectId, 'doc-vg',
-        reason: 'the stale response arrived LAST and must be ignored (U1 '
-            'navSeq guard), not land over the newer one: ${server.events}');
+    expect(
+      s.tabs.single.view?.objectId,
+      'doc-vg',
+      reason:
+          'the stale response arrived LAST and must be ignored (U1 '
+          'navSeq guard), not land over the newer one: ${server.events}',
+    );
   });
 
-  testWidgets('U3: a background tab whose bootstrap fails is removed cleanly',
-      (tester) async {
+  testWidgets('U3: a background tab whose bootstrap fails is removed cleanly', (
+    tester,
+  ) async {
     await boot(
       tester,
       workspaces: [
@@ -407,31 +442,44 @@ void main() {
 
     // The "+" menu → search across workspaces → tap the hit: queues a
     // BACKGROUND tab from workspace Two whose bootstrap then 500s.
-    await tester.tap(find.descendant(
-      of: find.byType(DocTabStrip),
-      matching: find.byIcon(Icons.add),
-    ));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DocTabStrip),
+        matching: find.byIcon(Icons.add),
+      ),
+    );
     await settle(tester);
     await tester.tap(find.text('打开已有页面…'));
     await settle(tester);
     // The field inside the DIALOG, not the page-title field of the open doc —
     // otherwise the query lands in the document title and nothing searches.
     await tester.enterText(
-      find.descendant(of: find.byType(Dialog), matching: find.byType(TextField)),
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(TextField),
+      ),
       'Gam',
     );
     await settle(tester);
     await tester.tap(find.text('Gamma').first);
     await settle(tester);
 
-    expect(tester.takeException(), isNull,
-        reason: 'before the fix, the failed background tab left '
-            '_activeTabIndex past the end of _tabs (RangeError) and leaked '
-            'its socket: ${server.events}');
+    expect(
+      tester.takeException(),
+      isNull,
+      reason:
+          'before the fix, the failed background tab left '
+          '_activeTabIndex past the end of _tabs (RangeError) and leaked '
+          'its socket: ${server.events}',
+    );
     final s = stripOf(tester);
-    expect(s.tabs, hasLength(1),
-        reason: 'a tab that can never load is removed, not parked as a '
-            'spinner: ${server.events}');
+    expect(
+      s.tabs,
+      hasLength(1),
+      reason:
+          'a tab that can never load is removed, not parked as a '
+          'spinner: ${server.events}',
+    );
     expect(s.tabs.single.view?.name, 'Alpha');
     expect(s.activeIndex, 0);
   });
@@ -463,9 +511,13 @@ class _FakeMicaServer {
     savePref('activeOrigin', origin);
     savePref('servers', jsonEncode([origin]));
     savePref(
-        'authUser:$origin',
-        jsonEncode(
-            {'id': 'u1', 'email': 'shell@mica.test', 'display_name': 'Shell User'}));
+      'authUser:$origin',
+      jsonEncode({
+        'id': 'u1',
+        'email': 'shell@mica.test',
+        'display_name': 'Shell User',
+      }),
+    );
     savePref('authToken:$origin', _nonExpiredToken());
     // The prefs store is the real file-backed one on desktop, so this key
     // survives across TEST PROCESSES too — a previous run's workspace switch
@@ -492,52 +544,62 @@ class _FakeMicaServer {
     String? objectId,
   }) {
     return http.Response(
-        jsonEncode({
-          'document': {
-            'id': objectId ?? docId,
-            'root_block_id': 'root-$docId',
-            'current_seq': 0,
+      jsonEncode({
+        'document': {
+          'id': objectId ?? docId,
+          'root_block_id': 'root-$docId',
+          'current_seq': 0,
+        },
+        'view': _viewJson({'id': viewId, 'name': pageName}),
+        'snapshot': {
+          'version_seq': 1,
+          'schema_version': 1,
+          'payload': {
+            'blocks': [
+              {
+                'id': 'root-$docId',
+                'type': 'page',
+                'text': '',
+                'data': <String, dynamic>{},
+                'children': <dynamic>[],
+              },
+            ],
           },
-          'view': _viewJson({'id': viewId, 'name': pageName}),
-          'snapshot': {
-            'version_seq': 1,
-            'schema_version': 1,
-            'payload': {
-              'blocks': [
-                {
-                  'id': 'root-$docId',
-                  'type': 'page',
-                  'text': '',
-                  'data': <String, dynamic>{},
-                  'children': <dynamic>[],
-                },
-              ],
-            },
-          },
-        }),
-        200);
+        },
+      }),
+      200,
+    );
   }
 
   /// The P1-2 shape: "flush first" as an event-index comparison.
   void expectFlushBefore(String request, {String? reason}) {
     final flushAt = events.indexOf(flushEvent);
     final requestAt = events.indexOf(request);
-    expect(flushAt, isNonNegative,
-        reason: 'no shell flush recorded at all: $events');
-    expect(requestAt, isNonNegative,
-        reason: 'the expected request never went out: $events');
-    expect(flushAt, lessThan(requestAt),
-        reason: reason ?? 'flush must precede $request: $events');
+    expect(
+      flushAt,
+      isNonNegative,
+      reason: 'no shell flush recorded at all: $events',
+    );
+    expect(
+      requestAt,
+      isNonNegative,
+      reason: 'the expected request never went out: $events',
+    );
+    expect(
+      flushAt,
+      lessThan(requestAt),
+      reason: reason ?? 'flush must precede $request: $events',
+    );
   }
 
   Map<String, dynamic> _viewJson(Map<String, String> v) => {
-        'id': v['id'],
-        'parent_view_id': null,
-        'object_id': 'doc-${v['id']}',
-        'object_type': 'document',
-        'name': v['name'],
-        'position': '0000000010',
-      };
+    'id': v['id'],
+    'parent_view_id': null,
+    'object_id': 'doc-${v['id']}',
+    'object_type': 'document',
+    'name': v['name'],
+    'position': '0000000010',
+  };
 
   Future<http.Response> _handle(http.Request request) async {
     final path = request.url.path;
@@ -547,33 +609,39 @@ class _FakeMicaServer {
     }
     if (path == '/api/workspaces') {
       return http.Response(
-          jsonEncode({
-            'workspaces': [
-              for (final w in _workspaces)
-                {
-                  'id': w['id'],
-                  'name': w['name'],
-                  'owner_id': 'u1',
-                  'role': 'owner',
-                },
-            ],
-          }),
-          200);
+        jsonEncode({
+          'workspaces': [
+            for (final w in _workspaces)
+              {
+                'id': w['id'],
+                'name': w['name'],
+                'owner_id': 'u1',
+                'role': 'owner',
+              },
+          ],
+        }),
+        200,
+      );
     }
     if (path == '/api/auth/me') {
       return http.Response(
-          jsonEncode(
-              {'id': 'u1', 'email': 'shell@mica.test', 'display_name': 'Shell User'}),
-          200);
+        jsonEncode({
+          'id': 'u1',
+          'email': 'shell@mica.test',
+          'display_name': 'Shell User',
+        }),
+        200,
+      );
     }
     for (final w in _workspaces) {
       final wsId = w['id']!;
       if (path == '/api/workspaces/$wsId/views') {
         return http.Response(
-            jsonEncode({
-              'views': [for (final v in _views[wsId] ?? const []) _viewJson(v)],
-            }),
-            200);
+          jsonEncode({
+            'views': [for (final v in _views[wsId] ?? const []) _viewJson(v)],
+          }),
+          200,
+        );
       }
       if (path == '/api/workspaces/$wsId/members') {
         return http.Response(jsonEncode({'members': []}), 200);
@@ -581,25 +649,25 @@ class _FakeMicaServer {
       if (path == '/api/workspaces/$wsId/documents' &&
           request.method == 'POST') {
         // Echo the requested name as the new view/doc (the "+" menu's New page).
-        final name =
-            (jsonDecode(request.body) as Map<String, dynamic>)['name'];
+        final name = (jsonDecode(request.body) as Map<String, dynamic>)['name'];
         return http.Response(
-            jsonEncode({
-              'document': {
-                'id': 'doc-created',
-                'root_block_id': 'root-created',
-                'current_seq': 0,
-              },
-              'view': {
-                'id': 'v-created',
-                'parent_view_id': null,
-                'object_id': 'doc-created',
-                'object_type': 'document',
-                'name': name,
-                'position': '0000000020',
-              },
-            }),
-            200);
+          jsonEncode({
+            'document': {
+              'id': 'doc-created',
+              'root_block_id': 'root-created',
+              'current_seq': 0,
+            },
+            'view': {
+              'id': 'v-created',
+              'parent_view_id': null,
+              'object_id': 'doc-created',
+              'object_type': 'document',
+              'name': name,
+              'position': '0000000020',
+            },
+          }),
+          200,
+        );
       }
       if (path.startsWith('/api/workspaces/$wsId/documents/') &&
           path.endsWith('/bootstrap')) {
@@ -607,15 +675,15 @@ class _FakeMicaServer {
         final docId = path.split('/')[5];
         if (_failingBootstrapDocs.contains(docId)) {
           return http.Response(
-              jsonEncode({'error': 'gone', 'message': 'deleted on the server'}),
-              404);
+            jsonEncode({'error': 'gone', 'message': 'deleted on the server'}),
+            404,
+          );
         }
         final gates = _bootstrapGates[docId];
         if (gates != null && gates.isNotEmpty) {
           return gates.removeAt(0).future;
         }
-        final view = _views[wsId]!
-            .firstWhere((v) => 'doc-${v['id']}' == docId);
+        final view = _views[wsId]!.firstWhere((v) => 'doc-${v['id']}' == docId);
         return bootstrapResponse(docId, view['id']!, view['name']!);
       }
     }
@@ -626,9 +694,13 @@ class _FakeMicaServer {
 /// A JWT with a far-future exp — the shell only reads the exp claim here;
 /// signature is never verified client-side (the server does that).
 String _nonExpiredToken() {
-  final payload = base64UrlEncode(utf8.encode(jsonEncode({
+  final payload = base64UrlEncode(
+    utf8.encode(
+      jsonEncode({
         'sub': 'u1',
         'exp': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 86400,
-      })));
+      }),
+    ),
+  );
   return 'eyJhbGciOiJIUzI1NiJ9.$payload.unsigned-shell';
 }

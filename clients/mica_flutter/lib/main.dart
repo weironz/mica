@@ -37,6 +37,7 @@ import 'views/invitations_controller.dart';
 import 'ui/workspace_invitations.dart';
 import 'swallowed.dart';
 import 'local/local_offline.dart';
+import 'local/local_offline_factory.dart';
 import 'editor/word_count.dart';
 import 'web/yjs_probe.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;

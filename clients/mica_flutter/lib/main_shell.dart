@@ -193,7 +193,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   // The LOCAL WORLD's page tree/selection/bootstrap/epoch and every local
   // operation live on [_localBackend] (world/local_world_backend.dart); the
   // store itself stays here because it also backs the cloud mirrors.
-  final LocalOffline _local = LocalOffline();
+  final LocalOffline _local = createLocalOffline();
   bool _localReady = false;
 
   /// The two worlds behind the shell (world/world_backend.dart). [_activeBackend]
