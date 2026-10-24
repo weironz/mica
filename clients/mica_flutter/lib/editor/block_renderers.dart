@@ -962,6 +962,12 @@ class TableRenderer extends AtomicBlockRenderer {
     _NodeLayout l, {
     required bool border,
   }) {
+    final editing = host._editingCell;
+    if (editing != null &&
+        editing.node < host._layouts.length &&
+        host._layouts[editing.node].nodeId == l.nodeId) {
+      return;
+    }
     final grid = l.tableGridRect;
     if (grid == null) {
       super.paintSelection(host, canvas, offset, l, border: border);
@@ -969,21 +975,12 @@ class TableRenderer extends AtomicBlockRenderer {
     }
     // A selected table hugs the grid exactly — no tint in the top gutter (column
     // handles) or the bottom add-row bar, and no rounded spill past the outer
-    // lines. The highlight lands between the grid's top and bottom lines.
+    // lines. The existing grid is the outline; selection adds only a tint.
     final box = grid.shift(offset);
     canvas.drawRect(
       box,
       Paint()..color = host._appearance.tokens.editor.selection,
     );
-    if (border) {
-      canvas.drawRect(
-        box,
-        Paint()
-          ..color = host._appearance.tokens.editor.caret
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2,
-      );
-    }
   }
 
   @override

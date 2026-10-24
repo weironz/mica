@@ -9,6 +9,7 @@ import 'marks.dart';
 import 'model.dart';
 import 'operation_history.dart';
 import 'selection_reconcile.dart';
+import 'selection_marks.dart';
 import 'table.dart';
 import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
@@ -554,31 +555,29 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Toggle an inline mark over the current ranged (single-node) selection.
+  bool get canFormatSelection =>
+      inlineSelectionRanges(nodes, selection).isNotEmpty;
+  bool selectionHasMark(String type) =>
+      inlineSelectionHasMark(nodes, selection, type);
+
+  /// Toggle one inline mark across the selected text, in one history/commit batch.
   /// For links, pass [href] to add; call without href on a linked range to remove.
   void toggleMark(String type, {String? href}) {
     if (_historyBusy) return;
-    final sel = selection;
-    if (sel == null || sel.isCollapsed || sel.isMultiNode) return;
-    final i = sel.focus.node;
-    final node = nodes[i];
-    if (node.kind == 'code_block' || node.kind == 'table') return;
-    final from = sel.start.offset;
-    final to = sel.end.offset;
-    final marks = marksFromData(node.data);
-    final has = rangeHasMark(marks, from, to, type);
-    final add = !has;
-    if (type == 'link' && add && (href == null || href.isEmpty)) return;
-    final next = applyMark(marks, from, to, type, href: href, add: add);
-    node.data = {...node.data, 'marks': marksToJson(next)};
-    _dirty.remove(node.id);
+    final changes = toggleSelectionMark(nodes, selection, type, href: href);
+    if (changes.isEmpty) return;
+    for (final change in changes) {
+      change.node.data = change.data;
+      _dirty.remove(change.node.id);
+    }
     _sendNow([
-      {
-        'type': 'update_block',
-        'block_id': node.id,
-        'text': node.text,
-        'data': node.data,
-      },
+      for (final change in changes)
+        {
+          'type': 'update_block',
+          'block_id': change.node.id,
+          'text': change.node.text,
+          'data': change.data,
+        },
     ]);
     notifyListeners();
   }

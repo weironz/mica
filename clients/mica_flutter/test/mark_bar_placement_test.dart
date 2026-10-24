@@ -61,14 +61,22 @@ void main() {
     tester,
   ) async {
     await pumpEditor(tester, [
-      EditorNode(id: 'a', kind: 'paragraph', text: 'first line of the document'),
+      EditorNode(
+        id: 'a',
+        kind: 'paragraph',
+        text: 'first line of the document',
+      ),
       EditorNode(id: 'b', kind: 'paragraph', text: 'second line'),
       EditorNode(id: 'c', kind: 'paragraph', text: 'third line'),
     ]);
 
     await selectLineAt(tester, 14);
     final bar = barRect(tester);
-    expect(bar, isNotNull, reason: 'the bar should show for a ranged selection');
+    expect(
+      bar,
+      isNotNull,
+      reason: 'the bar should show for a ranged selection',
+    );
 
     // The first line occupies roughly the top 28px of the canvas.
     final canvas = tester.getRect(find.byType(MicaEditor));
@@ -161,17 +169,22 @@ void main() {
     }
 
     List<EditorNode> lines() => [
-      EditorNode(id: 'a', kind: 'paragraph', text: 'first line of the document'),
+      EditorNode(
+        id: 'a',
+        kind: 'paragraph',
+        text: 'first line of the document',
+      ),
       EditorNode(id: 'b', kind: 'paragraph', text: 'second line'),
       EditorNode(id: 'c', kind: 'paragraph', text: 'third line'),
     ];
 
-    testWidgets('shows for a selection spanning several blocks', (tester) async {
+    testWidgets('shows for a selection spanning several blocks', (
+      tester,
+    ) async {
       await pumpWithAi(tester, lines(), hasAi: true);
       await selectAcrossBlocks(tester);
-      // Bold is hidden for a multi-block selection — that is exactly the group
-      // the AI button must NOT be inside.
-      expect(find.byIcon(Icons.format_bold), findsNothing);
+      // Both inline formatting and AI remain available across text blocks.
+      expect(find.byIcon(Icons.format_bold), findsOneWidget);
       expect(find.byIcon(Icons.auto_awesome), findsOneWidget);
     });
 

@@ -1941,9 +1941,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // than a key-routing one.
     if (accel &&
         (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
-      unawaited(_applyEditorHistory(
-        redo: key == LogicalKeyboardKey.keyY || shift,
-      ));
+      unawaited(
+        _applyEditorHistory(redo: key == LogicalKeyboardKey.keyY || shift),
+      );
       return KeyEventResult.handled;
     }
 
@@ -3001,6 +3001,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                         isDense: true,
                         contentPadding: EdgeInsets.zero,
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                        errorBorder: InputBorder.none,
+                        focusedErrorBorder: InputBorder.none,
+                        filled: false,
                         isCollapsed: true,
                       ),
                     ),
@@ -3119,22 +3125,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   Future<void> _promptLink() async {
-    final sel = _controller.selection;
-    final node = _controller.focusedNode;
-    if (sel == null || sel.isCollapsed || sel.isMultiNode || node == null)
-      return;
-    if (rangeHasMark(
-      marksFromData(node.data),
-      sel.start.offset,
-      sel.end.offset,
-      'link',
-    )) {
+    if (!_controller.canFormatSelection) return;
+    if (_controller.selectionHasMark('link')) {
       _controller.toggleMark('link'); // remove existing link
       return;
     }
     final field = TextEditingController();
-    final url = await showDialog<String>(
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final route = DialogRoute<String>(
       context: context,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
       builder: (context) => AlertDialog(
         title: Text(context.l10n.linkAddTitle),
         content: TextField(
@@ -3158,7 +3158,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         ],
       ),
     );
-    field.dispose();
+    final url = await navigator.push(route);
+    unawaited(route.completed.then((_) => field.dispose()));
+    if (!mounted) return;
     if (url != null && url.trim().isNotEmpty) {
       _controller.toggleMark('link', href: url.trim());
     }
@@ -3179,7 +3181,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         cellSel != null &&
         cellSel.isValid &&
         !cellSel.isCollapsed;
-    // Show on any ranged selection: inline marks for a single text block, plus
+    // Show on any ranged selection: inline marks for text ranges, plus
     // block-type conversion (list/quote/heading/code) for any selection.
     final show =
         widget.canEdit &&
@@ -3253,14 +3255,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       above = rect.topLeft;
     }
 
-    final docSel = _controller.selection;
-    final singleText =
-        inCell ||
-        (docSel != null &&
-            !docSel.isMultiNode &&
-            _controller.focusedNode != null &&
-            _controller.focusedNode!.kind != 'code_block' &&
-            _controller.focusedNode!.kind != 'table');
+    final inlineText = inCell || _controller.canFormatSelection;
     // Block-type conversions (headings/lists/quote/code block) only apply to
     // document blocks, never to inline cell content.
     final showBlocks = !inCell;
@@ -3426,7 +3421,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (singleText) ...[
+                  if (inlineText) ...[
                     markBtn(
                       Icons.format_bold,
                       'bold',
@@ -3446,7 +3441,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                       'code_block',
                       context.l10n.pageFormatCodeBlock,
                     ),
-                  if (singleText) ...[
+                  if (inlineText) ...[
                     markBtn(
                       Icons.code,
                       'code',
@@ -5899,8 +5894,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     previewImages: _previews.images,
                     previewBaselines: _previews.baselines,
                     onRequestPreview: _previews.request,
-                     onResourceDemand: _onResourceDemand,
-                     onPreviewPainted: _previews.touch,
+                    onResourceDemand: _onResourceDemand,
+                    onPreviewPainted: _previews.touch,
                     onRequestImage: _requestImage,
                     onImagePainted: _onImagePainted,
                     remoteCursors: widget.remoteCursors,

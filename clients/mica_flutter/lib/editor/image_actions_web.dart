@@ -44,7 +44,7 @@ Future<void> printHtml(String htmlContent) async {
   final win = iframe.contentWindow;
   win?.focus();
   win?.print();
-  Future<void>.delayed(const Duration(minutes: 1), iframe.remove);
+  Future<void>.delayed(const Duration(minutes: 1), () => iframe.remove());
 }
 
 /// Copy [bytes] to the system clipboard as an image. Tries the modern async
