@@ -125,6 +125,13 @@ Windows 上没有可用的 ansible 时，`deploy-prod.sh` 会**自动在 `alpine
 
 ## 自托管 runner（2026-10-20 起）
 
+桌面 FFI 的 Cargokit 也必须使用仓库的 Rust pin。其默认选择现在通过在 Rust crate
+目录执行 `rustup show active-toolchain` 解析，继承 `rust-toolchain.toml` 和 Rustup
+环境覆盖；仅显式 Cargokit toolchain 选项可覆盖它。以前内部强制 `stable`，会让
+`cargo test` 使用 1.98.0，而安装包偷偷使用本机的 1.99.1。版本号形式的已安装工具链
+及 Windows CRLF 输出也纳入识别。`just release` 执行 Cargokit 命令选择回归检查，
+构建日志中的实际编译器仍须与 pin 一致；不能只看根 workspace 的版本检查。
+
 GitHub 托管 runner 额度用完后，所有 job 改跑在两台自托管 runner 上（`runs-on: [self-hosted, Linux]` /
 `[self-hosted, Windows]`，原 `*-latest` 行注释保留）；没有 macOS runner，release 的 macOS CLI 一项已注释。
 

@@ -139,7 +139,10 @@ class RustBuilder {
   CargoBuildOptions? get _buildOptions =>
       environment.crateOptions.cargo[environment.configuration];
 
-  String get _toolchain => _buildOptions?.toolchain.name ?? 'stable';
+  // Resolve in the crate directory so the repository rust-toolchain.toml and
+  // RUSTUP_TOOLCHAIN apply to Flutter builds as well as direct cargo builds.
+  late final String _toolchain = _buildOptions?.toolchain.name ??
+      Rustup.activeToolchain(environment.manifestDir);
 
   /// Returns the path of directory containing build artifacts.
   Future<String> build() async {

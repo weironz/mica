@@ -134,6 +134,13 @@ echo "==> icons: tray == app"
 (cd clients/mica_flutter/rust && cargo check --quiet)   || fail "clients/mica_flutter/rust does not compile — it is NOT part of the root workspace, so nothing above would have told you. Fix it before tagging; CI would only find this after the push."
 echo "==> desktop FFI crate compiles"
 
+# Flutter's Cargokit used to force floating stable even when direct cargo used
+# rust-toolchain.toml. Check the actual prepare/build command selection too.
+(cd clients/mica_flutter/rust_builder/cargokit/build_tool \
+  && dart pub get \
+  && dart run test/toolchain_check.dart)
+echo "==> Cargokit respects the repository Rust toolchain"
+
 # ── pg_dump must not be older than the server it dumps ───────────────────────
 # `pg_dump` REFUSES a server newer than itself. The backup image pins
 # postgresql-client-N; the stack pins postgres:M. N < M means the off-site
