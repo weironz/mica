@@ -569,6 +569,7 @@ class _FakeMicaServer {
         },
       }),
       200,
+      headers: {'content-type': 'application/json; charset=utf-8'},
     );
   }
 
@@ -642,6 +643,7 @@ class _FakeMicaServer {
             'views': [for (final v in _views[wsId] ?? const []) _viewJson(v)],
           }),
           200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
         );
       }
       if (path == '/api/workspaces/$wsId/members') {
@@ -676,6 +678,7 @@ class _FakeMicaServer {
             },
           }),
           200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
         );
       }
       if (path.startsWith('/api/workspaces/$wsId/documents/') &&
