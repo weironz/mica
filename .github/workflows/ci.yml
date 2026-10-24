@@ -215,7 +215,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-flutter
-      - run: flutter pub get
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter gen-l10n
       # Warnings ARE fatal as of 2026-08-25. This comment used to say a separate
       # cleanup pass would address the pre-existing info/warning lints; what
       # actually happened is that an `invalid_return_type_for_catch_error`

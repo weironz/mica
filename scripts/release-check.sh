@@ -85,6 +85,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 #    Infos stay non-fatal: ~130 of them, long-standing, style-level. Making them
 #    fatal would be a repo-wide sweep nobody asked for.
 (cd clients/mica_flutter \
+  && "${FLUTTER:-flutter}" pub get --enforce-lockfile \
+  && "${FLUTTER:-flutter}" gen-l10n \
   && "${FLUTTER:-flutter}" analyze --no-fatal-infos \
   && "${FLUTTER:-flutter}" test)
 

@@ -52,7 +52,8 @@ if [ "$part" != rust ]; then
   require_flutter_pin "CI tests the pin"
   (
     cd clients/mica_flutter
-    "$FLUTTER" pub get
+    "$FLUTTER" pub get --enforce-lockfile
+    "$FLUTTER" gen-l10n
     note "flutter: analyze (--no-fatal-infos, as CI)"
     "$FLUTTER" analyze --no-fatal-infos
     note "flutter: unit tests"
