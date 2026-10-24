@@ -580,7 +580,7 @@ class WorkspaceView extends StatefulWidget {
   State<WorkspaceView> createState() => _WorkspaceViewState();
 }
 
-class _WorkspaceViewState extends State<WorkspaceView> {
+class _WorkspaceViewState extends MicaState<WorkspaceView> {
   final _rename = TextEditingController();
   final _pageTitle = TextEditingController();
   final FocusNode _editorFocus = FocusNode(debugLabel: 'MicaEditorBody');

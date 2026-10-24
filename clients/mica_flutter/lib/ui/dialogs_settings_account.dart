@@ -9,29 +9,29 @@ extension _SettingsAccountTab on _SettingsDialogState {
   Future<void> _removeAvatar() => _runAvatarAction(widget.onRemoveAvatar!);
 
   Future<void> _runAvatarAction(Future<String?> Function() action) async {
-    setState(() {
+    refresh(() {
       _accountBusy = true;
       _accountMsg = null;
       _accountMessageIsError = false;
     });
     try {
       final url = await action();
-      if (mounted) setState(() => _avatarUrl = url);
+      if (mounted) refresh(() => _avatarUrl = url);
     } catch (error) {
       if (mounted) {
-        setState(() {
+        refresh(() {
           _accountMsg = error.toString();
           _accountMessageIsError = true;
         });
       }
     } finally {
-      if (mounted) setState(() => _accountBusy = false);
+      if (mounted) refresh(() => _accountBusy = false);
     }
   }
 
   Future<void> _saveProfile() async {
     final l10n = context.l10n;
-    setState(() {
+    refresh(() {
       _accountBusy = true;
       _accountMsg = null;
       _accountMessageIsError = false;
@@ -40,29 +40,29 @@ extension _SettingsAccountTab on _SettingsDialogState {
       await widget.onUpdateProfile!(_name.text.trim());
       // Stay open: saving is not leaving. ("like server config" — the thing it
       // copied — no longer closes either; nothing in Settings does.)
-      if (mounted) setState(() => _accountMsg = l10n.accountSaved);
+      if (mounted) refresh(() => _accountMsg = l10n.accountSaved);
     } catch (error) {
       if (mounted) {
-        setState(() {
+        refresh(() {
           _accountMsg = error.toString();
           _accountMessageIsError = true;
         });
       }
     } finally {
-      if (mounted) setState(() => _accountBusy = false);
+      if (mounted) refresh(() => _accountBusy = false);
     }
   }
 
   Future<void> _changeAccountPassword() async {
     final l10n = context.l10n;
     if (_newPass.text.length < 8) {
-      setState(() {
+      refresh(() {
         _accountMsg = l10n.accountPasswordTooShort;
         _accountMessageIsError = true;
       });
       return;
     }
-    setState(() {
+    refresh(() {
       _accountBusy = true;
       _accountMsg = null;
       _accountMessageIsError = false;
@@ -78,16 +78,16 @@ extension _SettingsAccountTab on _SettingsDialogState {
       // user (auth.rs `revoke_user_sessions`) — this device included. Saying
       // "other devices" would be a lie, and the surprise would land later, when
       // this session quietly fails to renew.
-      setState(() => _accountMsg = l10n.accountPasswordChanged);
+      refresh(() => _accountMsg = l10n.accountPasswordChanged);
     } catch (error) {
       if (mounted) {
-        setState(() {
+        refresh(() {
           _accountMsg = error.toString();
           _accountMessageIsError = true;
         });
       }
     } finally {
-      if (mounted) setState(() => _accountBusy = false);
+      if (mounted) refresh(() => _accountBusy = false);
     }
   }
 
@@ -150,7 +150,7 @@ extension _SettingsAccountTab on _SettingsDialogState {
       Future<void>.delayed(const Duration(milliseconds: 300), passCtl.dispose),
     );
     if (password == null) return;
-    setState(() {
+    refresh(() {
       _accountBusy = true;
       _accountMsg = null;
       _accountMessageIsError = false;
@@ -161,7 +161,7 @@ extension _SettingsAccountTab on _SettingsDialogState {
       // callback signs out, which pops Settings with it. Nothing to show here.
     } catch (error) {
       if (mounted) {
-        setState(() {
+        refresh(() {
           _accountMsg = error.toString();
           _accountMessageIsError = true;
           _accountBusy = false;

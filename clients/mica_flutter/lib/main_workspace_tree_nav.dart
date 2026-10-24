@@ -311,7 +311,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
         // No onDragUpdate: it is mounted-guarded, and auto-scrolling this very
         // list unmounts the row being dragged. DragAutoScrollRegion reads the
         // raw pointer stream instead — see its doc comment.
-        onDragStarted: () => setState(() => _draggingTree = true),
+        onDragStarted: () => refresh(() => _draggingTree = true),
         onDragEnd: (_) => _endTreeDrag(),
         onDraggableCanceled: (_, _) => _endTreeDrag(),
         onDragCompleted: _endTreeDrag,
@@ -443,14 +443,14 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
   /// Ends the drag. The auto-scroll stops with it: `DragAutoScrollRegion` is
   /// driven by `_draggingTree`, so clearing the flag is what turns it off.
   void _endTreeDrag() {
-    setState(() => _draggingTree = false);
+    refresh(() => _draggingTree = false);
   }
 
   // ── Ctrl/Shift multi-selection ─────────────────────────────────────────────
 
   /// A Ctrl (toggle) or Shift (extend) click landed on [view].
   void _handleSelectClick(DocumentView view, {required bool extendRange}) {
-    setState(() {
+    refresh(() {
       _selection.click(
         view.id,
         extendRange: extendRange,
@@ -470,13 +470,13 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
   /// A no-op when it is already the state, so it can sit in the hot path of
   /// every row tap without causing a rebuild per click.
   void _anchorTreeSelection(DocumentView view) {
-    if (_selection.anchorOn(view.id)) setState(() {});
+    if (_selection.anchorOn(view.id)) refresh(() {});
   }
 
   /// Drop the selection AND the anchor — for a click that hit no row (the blank
   /// area below the tree), or after a drop relocated the rows.
   void _clearTreeSelection() {
-    if (_selection.clear()) setState(() {});
+    if (_selection.clear()) refresh(() {});
   }
 
   /// The rows a gesture on [id] acts on: the whole selection when [id] is part
@@ -600,10 +600,10 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                   rowDepth: depth,
                   nextRowDepth: nextDepth,
                 );
-                if (level != _dropLevel) setState(() => _dropLevel = level);
+                if (level != _dropLevel) refresh(() => _dropLevel = level);
               },
         onLeave: (_) {
-          if (_dropLevel != null) setState(() => _dropLevel = null);
+          if (_dropLevel != null) refresh(() => _dropLevel = null);
         },
         onAcceptWithDetails: (details) {
           // A level is just a different target for the SAME `after` drop:
@@ -613,7 +613,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
             depth,
             mode == _DropMode.after ? _dropLevel : null,
           );
-          setState(() => _dropLevel = null);
+          refresh(() => _dropLevel = null);
           _handleDrop(details.data, resolved, mode);
           // The rows have landed somewhere new; keeping them highlighted would
           // leave a selection describing where they used to be.
@@ -692,7 +692,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
             ..sort((a, b) => a.position.compareTo(b.position));
       children.addAll(dragged);
       // Reveal the drop target.
-      setState(() => _tree.expandForChildOf(widget.views, target.id));
+      refresh(() => _tree.expandForChildOf(widget.views, target.id));
       widget.onReorderViews(target.id, children);
       return;
     }
@@ -741,7 +741,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
   void _pruneSelectionToVisible() {
     if (_selection.isEmpty) return;
     final visible = {for (final row in _visibleDocumentTree()) row.view.id};
-    if (_selection.retainVisible(visible)) setState(() {});
+    if (_selection.retainVisible(visible)) refresh(() {});
   }
 
   /// `workspace/folder/.../page` for the open page — GitHub's "copy path", for
@@ -855,5 +855,4 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
   /// Both editable drag wrappers and read-only rows add an 8px gap to the
   /// DocumentListItem's 38px floor. Keep locating distant rows in this same unit.
   double get _treeRowExtent => 46.0;
-
 }

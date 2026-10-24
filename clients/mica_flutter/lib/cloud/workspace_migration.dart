@@ -22,6 +22,8 @@
 // A `DocOp` is the editor's coarse block op (see local/doc_ops.dart); here it's
 // just `Map<String, dynamic>`, kept dependency-free on purpose.
 
+export 'view_order.dart';
+
 /// A 64-hex sha256 — a local CAS content id. Cloud file ids are UUIDs.
 final RegExp _sha256Re = RegExp(r'^[0-9a-f]{64}$');
 

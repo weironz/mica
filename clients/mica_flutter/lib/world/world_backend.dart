@@ -128,9 +128,7 @@ abstract class WorldBackend {
   get exportStats => null;
   Future<void> Function(String fileName, Uint8List bytes, {bool notion})?
   get importWorkspaceZip => null;
-  Future<({int used, int quota, int maxUpload})?> Function(
-    Workspace workspace,
-  )?
+  Future<({int used, int quota, int maxUpload})?> Function(Workspace workspace)?
   get loadWorkspaceUsage => null;
   Future<void> Function(WorkspaceMember member, WorkspaceRole role)?
   get updateMember => null;
@@ -654,7 +652,7 @@ class _CloudWorldBackend extends WorldBackend {
   }
 
   void _closeOpenPage() {
-    _shell.setState(() {
+    _shell.refresh(() {
       _shell._selectedView = null;
       _shell._selectedBootstrap = null;
     });

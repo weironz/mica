@@ -1,6 +1,6 @@
 part of 'main.dart';
 
-class _WorkspaceShellState extends State<WorkspaceShell> {
+class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   final ApiClient _api = ApiClient();
 
   /// Which backend we talk to (cloud / self-hosted / local-offline). Loaded

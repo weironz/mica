@@ -1223,7 +1223,7 @@ double fontScaleFromPx(int px) =>
 int fontPxFromScale(double scale) =>
     (scale * kFontBasePx).round().clamp(kFontPxMin, kFontPxMax);
 
-class _SettingsDialogState extends State<_SettingsDialog> {
+class _SettingsDialogState extends MicaState<_SettingsDialog> {
   final _baseUrl = TextEditingController();
 
   final _model = TextEditingController();
