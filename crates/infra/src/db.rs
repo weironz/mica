@@ -2,10 +2,8 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::config::AppConfig;
 
-// `sqlx::migrate!` embeds migrations/*.sql at COMPILE time. Adding a new file
-// (e.g. 0013_password_reset_tokens.sql) does not by itself force a rebuild of
-// this crate, so touch this file whenever a migration is added or the running
-// binary silently keeps the old set (see CLAUDE.md 运维要点).
+// `sqlx::migrate!` embeds SQL at compile time. build.rs watches the directory,
+// including newly added files, so incremental builds refresh this inventory.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 pub async fn connect_pg_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
@@ -95,4 +93,35 @@ fn random_hex_32() -> String {
   let mut bytes = [0u8; 32];
   rand_core::OsRng.fill_bytes(&mut bytes);
   bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod migration_inventory_tests {
+  use super::MIGRATOR;
+  use sha2::{Digest, Sha384};
+
+  #[test]
+  fn embedded_migrations_match_schema_files() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+    let mut expected = Vec::new();
+    for entry in std::fs::read_dir(directory).unwrap() {
+      let file = entry.unwrap().path();
+      if file.extension().and_then(|extension| extension.to_str()) != Some("sql") {
+        continue;
+      }
+      let name = file.file_name().unwrap().to_str().unwrap();
+      let version = name.split_once('_').unwrap().0.parse::<i64>().unwrap();
+      let checksum = Sha384::digest(std::fs::read(file).unwrap()).to_vec();
+      expected.push((version, checksum));
+    }
+    expected.sort_by_key(|(version, _)| *version);
+    let embedded: Vec<_> = MIGRATOR
+      .iter()
+      .map(|migration| (migration.version, migration.checksum.to_vec()))
+      .collect();
+    assert_eq!(
+      embedded, expected,
+      "embedded SQL must not lag the schema directory"
+    );
+  }
 }
