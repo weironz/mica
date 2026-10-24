@@ -183,6 +183,22 @@
       no_log: true
       when: mica_env.MICA_DATABASE_HOST is defined
 
+    - name: Require one running database address for automatic pinning
+      ansible.builtin.assert:
+        that:
+          - pinned_postgres_running
+          - pinned_postgres_addresses | length == 1
+        fail_msg: >-
+          Automatic Mica database pinning requires one running PostgreSQL IPv4
+          address. No deployment files or database settings have been changed.
+      when: (mica_env.MICA_DATABASE_HOST | default('')) == 'auto'
+
+    - name: Resolve the automatic database pin before rendering
+      ansible.builtin.set_fact:
+        mica_env: >-
+          {{ mica_env | combine({'MICA_DATABASE_HOST': pinned_postgres_addresses | first}) }}
+      when: (mica_env.MICA_DATABASE_HOST | default('')) == 'auto'
+
     - name: Refuse a stale database address before changing deployment files
       ansible.builtin.assert:
         that:

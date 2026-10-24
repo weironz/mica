@@ -27,10 +27,11 @@ mica_env:
 
   POSTGRES_USER: "mica"
   POSTGRES_DB: "mica"
-  # Only Mica's own DB address: Docker's embedded resolver intermittently
-  # failed under shared-host pressure. Deploy refuses a stale pin before writes.
-  # Update after a planned PostgreSQL recreation; never change global Docker DNS.
-  MICA_DATABASE_HOST: "172.24.0.2"
+  # Resolve Mica's running PostgreSQL address before each deployment. A Docker
+  # restart can reassign its address without changing the container ID. "auto"
+  # is an Ansible input only; the rendered environment contains a verified IP.
+  # Ambiguous/stopped databases and stale explicit pins still refuse deployment.
+  MICA_DATABASE_HOST: "auto"
 
   S3_BUCKET: "mica"
   S3_REGION: "us-east-1"
