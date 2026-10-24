@@ -13,6 +13,7 @@ import 'details_html.dart';
 import 'highlight.dart';
 import 'marks.dart';
 import 'model.dart';
+import 'layout_caret.dart';
 import 'resource_demand.dart';
 
 export 'resource_demand.dart';
@@ -1287,10 +1288,10 @@ class RenderDocument extends RenderBox {
     // is pruned at the end of the pass.
     final seenTextIds = <String>{};
 
-    final sel = _selection;
+    final caret = layoutCaret(_selection);
     final caretKey =
-        (sel != null && sel.isCollapsed && sel.focus.node < _nodes.length)
-        ? '${_nodes[sel.focus.node].id}:${sel.focus.offset}'
+        (caret.node >= 0 && caret.node < _nodes.length)
+        ? '${_nodes[caret.node].id}:${caret.offset}'
         : '';
     final caretMoved = caretKey != _lastCaretKey;
     _lastCaretKey = caretKey;
@@ -1386,8 +1387,7 @@ class RenderDocument extends RenderBox {
       // excluding it meant every arrow key re-ran detectLanguage + buildCodeSpan
       // + TextPainter.layout on unchanged source (issue #63). Only the
       // horizontal auto-scroll below still consumes the live caret.
-      final isCaretHere =
-          sel != null && sel.isCollapsed && sel.focus.node == nodeIndex;
+      final isCaretHere = caret.node == nodeIndex;
       final reuse = _layoutCache[node.id];
       if (reuse != null &&
           identical(reuse.srcText, node.text) &&
@@ -1406,7 +1406,7 @@ class RenderDocument extends RenderBox {
           final caretX = reuse.painter
               .getOffsetForCaret(
                 TextPosition(
-                  offset: sel.focus.offset.clamp(0, node.text.length),
+                  offset: caret.offset.clamp(0, node.text.length),
                 ),
                 Rect.zero,
               )
@@ -1678,14 +1678,11 @@ class RenderDocument extends RenderBox {
           double.infinity,
         );
         var scroll = _codeScroll[node.id] ?? 0;
-        if (caretMoved &&
-            sel != null &&
-            sel.isCollapsed &&
-            sel.focus.node == _layouts.length) {
+        if (caretMoved && caret.node == _layouts.length) {
           final caretX = painter
               .getOffsetForCaret(
                 TextPosition(
-                  offset: sel.focus.offset.clamp(0, node.text.length),
+                  offset: caret.offset.clamp(0, node.text.length),
                 ),
                 Rect.zero,
               )
