@@ -81,6 +81,7 @@ import 'ui/sign_in_screen.dart';
 import 'ui/sign_in_pane.dart';
 import 'ui/status_kit.dart';
 import 'ui/theme_tokens.dart';
+import 'ui/font_warmup.dart';
 import 'ui/trash_data.dart';
 import 'ui/user_avatar.dart';
 import 'ui/version_data.dart';
@@ -270,7 +271,7 @@ void main() {
       if (kIsWeb) BrowserContextMenu.disableContextMenu();
       // Web: register the yjs CRDT self-test hook (no-op off web). P2-M4 W1.
       registerYjsSelfTest();
-      _warmUpFonts();
+      warmUpFonts();
       runApp(const MicaApp());
     },
     (error, stack) {
@@ -278,36 +279,6 @@ void main() {
       logCrash('Uncaught: $error\n$stack');
     },
   );
-}
-
-/// Flutter Web doesn't bundle CJK fonts — the engine downloads a Noto fallback
-/// on first use, which makes the custom-painted editor briefly show ".notdef"
-/// boxes. Kick that download off at startup (during login/loading) so the font
-/// is cached before any document renders.
-void _warmUpFonts() {
-  const samples = ['中文字体预热示例 ABCabc 0123 ，。！', '繁體字預熱 測試'];
-  for (final text in samples) {
-    final painter = TextPainter(
-      text: TextSpan(text: text, style: const TextStyle(fontSize: 16)),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    painter.dispose();
-  }
-  // Also warm the icon font used by the editor's painted toolbars.
-  for (final icon in [Icons.content_copy, Icons.wrap_text, Icons.add]) {
-    final painter = TextPainter(
-      text: TextSpan(
-        text: String.fromCharCode(icon.codePoint),
-        style: TextStyle(
-          fontFamily: icon.fontFamily,
-          package: icon.fontPackage,
-          fontSize: 16,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    painter.dispose();
-  }
 }
 
 class MicaApp extends StatelessWidget {

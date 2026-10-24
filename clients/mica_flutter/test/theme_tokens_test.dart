@@ -2,7 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/ui/theme_tokens.dart';
+import 'package:mica_flutter/cjk_fonts.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart' show MicaTokens, MicaTheme;
 
 /// Dark mode's failure mode is not "it crashes" — it is "you cannot read it".
 /// So the assertions here are about legibility and about NOT redesigning light
@@ -191,6 +192,20 @@ void main() {
     expect(dark.colorScheme.onSurface, MicaTokens.dark_.text.primary);
     final light = MicaTokens.light.toMaterialTheme();
     expect(light.colorScheme.brightness, Brightness.light);
+  });
+
+  test('button labels keep the bundled CJK fallback', () {
+    // Material replaces these text styles wholesale; a bare TextStyle drops
+    // `fontFamilyFallback`, leaving Chinese labels on the remote fallback.
+    final theme = MicaTokens.light.toMaterialTheme();
+    final filled = theme.filledButtonTheme.style?.textStyle?.resolve(
+      const <WidgetState>{},
+    );
+    final text = theme.textButtonTheme.style?.textStyle?.resolve(
+      const <WidgetState>{},
+    );
+    expect(filled?.fontFamilyFallback, cjkFontFallback);
+    expect(text?.fontFamilyFallback, cjkFontFallback);
   });
 
   /// Every role carries a DIFFERENT colour in the two palettes.

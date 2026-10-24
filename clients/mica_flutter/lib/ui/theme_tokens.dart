@@ -537,7 +537,13 @@ class MicaTokens {
         style: FilledButton.styleFrom(
           shape: controlShape,
           minimumSize: const Size(64, 40),
-          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          // Material replaces its text style; the bundled fallback must ride
+          // along or CJK labels wait for the engine's remote Noto download.
+          textStyle: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            fontFamilyFallback: cjkFontFallback,
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         ),
       ),
@@ -554,7 +560,11 @@ class MicaTokens {
         style: TextButton.styleFrom(
           shape: controlShape,
           minimumSize: const Size(48, 40),
-          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          textStyle: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            fontFamilyFallback: cjkFontFallback,
+          ),
         ),
       ),
       chipTheme: ChipThemeData(
