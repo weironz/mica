@@ -743,6 +743,10 @@ pub(crate) fn parse_link_suffix(
 /// return its exclusive end index. These spans bind tighter than link
 /// brackets, so a bracket-matcher must skip over them as a unit.
 pub(crate) fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
+  inline_span_end_memo(chars, i, None)
+}
+
+fn inline_span_end_memo(chars: &[char], i: usize, memo: Option<&mut ScanMemo>) -> Option<usize> {
   let n = chars.len();
   match chars[i] {
     '`' => {
@@ -784,7 +788,7 @@ pub(crate) fn inline_span_end(chars: &[char], i: usize) -> Option<usize> {
           return Some(j + 1);
         }
       }
-      inline_html_end(chars, i, None)
+      inline_html_end(chars, i, memo)
     }
     _ => None,
   }
@@ -999,6 +1003,10 @@ pub(crate) fn parse_inline_memo(
   let src_chars: Vec<char> = src.chars().collect();
   let mut chars: Vec<char> = Vec::with_capacity(src_chars.len());
   {
+    // Normalization scans the original buffer before the main parser builds
+    // its own memo. Reuse failed HTML terminator scans here too; otherwise
+    // repeated unclosed comments still rescan the whole suffix in this pass.
+    let mut scans = ScanMemo::new();
     let n = src_chars.len();
     let mut i = 0;
     while i < n {
@@ -1012,7 +1020,7 @@ pub(crate) fn parse_inline_memo(
         continue;
       }
       if c == '`' || c == '<' {
-        if let Some(end) = inline_span_end(&src_chars, i) {
+        if let Some(end) = inline_span_end_memo(&src_chars, i, Some(&mut scans)) {
           chars.extend_from_slice(&src_chars[i..end]);
           i = end;
           continue;
