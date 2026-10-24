@@ -482,7 +482,7 @@ class _LocalWorldBackend extends WorldBackend {
       objectType: 'folder',
     );
     if (!_shell.mounted) return null;
-    _shell.refresh(_reloadLocalViews);
+    _shell.setUi(_reloadLocalViews);
     return viewId;
   }
 
@@ -515,7 +515,7 @@ class _LocalWorldBackend extends WorldBackend {
       parentViewId: parentViewId,
     );
     if (!_shell.mounted) return;
-    _shell.refresh(_reloadLocalViews);
+    _shell.setUi(_reloadLocalViews);
     final parts = <String>[
       if (result.docs > 0) l10n.importNotesCount(result.docs),
       if (result.folders > 0) l10n.importFoldersCount(result.folders),
@@ -822,7 +822,7 @@ class _LocalWorldBackend extends WorldBackend {
     // Renumbering and reparenting are one move, and the step-of-ten scheme
     // lives with the create/clone paths rather than being spelled out again.
     _local.reorderViews(parentViewId, [for (final v in ordered) v.id]);
-    if (_shell.mounted) _shell.refresh(_reloadLocalViews);
+    if (_shell.mounted) _shell.setUi(_reloadLocalViews);
   }
 
   Future<List<DocumentView>> _localLoadTrash() async {
@@ -838,7 +838,7 @@ class _LocalWorldBackend extends WorldBackend {
     // is still trashed — both in Rust now, matching the server's restore_view
     // instead of reimplementing it here.
     _local.restoreViewSubtree(view.id);
-    if (_shell.mounted) _shell.refresh(_reloadLocalViews);
+    if (_shell.mounted) _shell.setUi(_reloadLocalViews);
   }
 
   Future<void> _localPurgeView(DocumentView view) async {
