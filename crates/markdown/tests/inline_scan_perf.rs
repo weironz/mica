@@ -31,7 +31,7 @@ fn unclosed_lparen_math_scan_is_not_quadratic() {
   // An unclosed math opener falls back to CommonMark's punctuation escape:
   // `\(` renders as `(`. Check the entire output, not a backslash that the
   // renderer correctly consumes (CommonMark 0.31.2 example 12).
-  assert_eq!(html, format!("<p>{}</p>\n", "(a ".repeat(20_000).trim_end()));
+  assert_eq!(html, format!("<p>{}</p>", "(a ".repeat(20_000).trim_end()));
   assert!(
     ms < 3000,
     "`\\(a `×20000 took {ms}ms — the `\\)` next-table memo is gone"
