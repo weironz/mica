@@ -16,6 +16,7 @@ source scripts/lib-local.sh
 version=${1:-}
 check_version_arg "$version"
 require_tagged_tree "$version"
+bash scripts/check-migration-tracking.sh
 docker info >/dev/null 2>&1 || fail "Docker is not running"
 
 acr=registry.cn-shenzhen.aliyuncs.com/willspace

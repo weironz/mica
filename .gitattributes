@@ -4,6 +4,9 @@
 #   /usr/bin/env: 'bash\r': No such file or directory
 *.sh text eol=lf
 
+# SQLx checksums the exact bytes; Windows and Linux releases must embed the same SQL.
+migrations/*.sql text eol=lf
+
 # The markdown conformance fixtures are compared BYTE FOR BYTE against exporter
 # output, and both exporters always emit LF. Checked out CRLF they fail on
 # Windows only — `export drift in 17-quotes.md` with two strings that look

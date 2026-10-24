@@ -84,6 +84,8 @@ aliyun-ak.txt
 password.txt
 *password*.txt
 *credential*
+# Schema only, not a credential file; required by the PAT rotation guard.
+!migrations/0034_user_credential_epoch.sql
 *.pem
 *.key
 

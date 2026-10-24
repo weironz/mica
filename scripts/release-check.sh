@@ -16,6 +16,9 @@ set -euo pipefail
 
 source "$(dirname "$0")/lib-local.sh"
 
+bash scripts/check-migration-tracking.sh
+bash scripts/test-migration-tracking.sh
+
 # 1. A database must be UP — not "warn and continue" the way `just test` does.
 #    At release time a silent skip IS the failure being prevented. The dev
 #    stack's container, or any reachable $DATABASE_URL (a machine without the

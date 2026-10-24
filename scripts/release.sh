@@ -32,6 +32,8 @@ tag="v$version"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
   || { echo "REFUSED: want X.Y.Z with no leading v (got: $version)" >&2; exit 1; }
 
+bash scripts/check-migration-tracking.sh
+
 # Refuse on a dirty tree BEFORE touching anything: the bump edits four files, and
 # once it has, "what did I have uncommitted?" is no longer answerable.
 git diff --quiet && git diff --cached --quiet \

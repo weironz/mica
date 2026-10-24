@@ -1,0 +1,13 @@
+-- A monotonically-bumped watermark (unix seconds) for "the credentials changed
+-- at this moment" (#29).
+--
+-- The access JWT is stateless: while it lives (~1h) it verifies even after the
+-- password it came from is gone. That window is tolerable for ordinary API
+-- calls, but not for MINTING a personal access token — a PAT can outlive the
+-- JWT by years, so a stolen 1-hour token used to mint one converts a short
+-- compromise into a permanent one. Password change/reset bumps the epoch, and
+-- the mint route refuses any JWT whose `iat` predates it.
+--
+-- 0 = "no rotation has ever happened", so tokens issued before this migration
+-- keep working until the account's first credential change.
+ALTER TABLE users ADD COLUMN credential_epoch bigint NOT NULL DEFAULT 0;
