@@ -242,6 +242,7 @@ void main() {
     final s = stripOf(tester);
     expect(s.tabs, hasLength(2));
     expect(s.activeIndex, 1);
+    expect(s.tabs[1].bootstrap?.document.id, 'doc-created');
   });
 
   testWidgets('P1-2: switching workspaces flushes before its tree loads', (
@@ -649,16 +650,24 @@ class _FakeMicaServer {
       if (path == '/api/workspaces/$wsId/documents' &&
           request.method == 'POST') {
         // Echo the requested name as the new view/doc (the "+" menu's New page).
-        final name = (jsonDecode(request.body) as Map<String, dynamic>)['name'];
+        final name =
+            (jsonDecode(request.body) as Map<String, dynamic>)['name']
+                as String;
+        // A real create commits the view before the shell refreshes the tree
+        // and bootstraps the new document. Keep the scripted server stateful.
+        _views[wsId] = [
+          ...?_views[wsId],
+          {'id': 'created', 'name': name},
+        ];
         return http.Response(
           jsonEncode({
             'document': {
               'id': 'doc-created',
-              'root_block_id': 'root-created',
+              'root_block_id': 'root-doc-created',
               'current_seq': 0,
             },
             'view': {
-              'id': 'v-created',
+              'id': 'created',
               'parent_view_id': null,
               'object_id': 'doc-created',
               'object_type': 'document',
