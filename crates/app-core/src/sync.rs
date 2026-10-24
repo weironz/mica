@@ -910,27 +910,17 @@ pub async fn catch_up_document(
     .execute(&mut *tx)
     .await?;
 
-  let min_rid: Option<i64> =
-    sqlx::query_scalar("SELECT MIN(rid) FROM workspace_updates WHERE document_id = $1")
-      .bind(document_id)
-      .fetch_one(&mut *tx)
-      .await?;
-  let base_rid: i64 =
-    sqlx::query_scalar("SELECT base_rid FROM document_yrs_base WHERE document_id = $1")
+  let pruned_rid: i64 =
+    sqlx::query_scalar("SELECT stream_pruned_rid FROM document_yrs_base WHERE document_id = $1")
       .bind(document_id)
       .fetch_optional(&mut *tx)
       .await?
       .unwrap_or(0);
 
-  // A gap exists when the earliest retained update is beyond `since_rid + 1`
-  // (or the stream is empty) AND the base is ahead of the cursor — i.e. the
-  // missing range was pruned. Fast-forward from the base in that case.
-  let gap = match min_rid {
-    Some(m) => since_rid + 1 < m && since_rid < base_rid,
-    None => since_rid < base_rid,
-  };
-
-  if gap {
+  // RIDs belong to a global sequence. Other documents (and rolled-back
+  // inserts) leave harmless gaps, even before this document's first update.
+  // Only a deletion recorded in this same snapshot proves a missing update.
+  if since_rid < pruned_rid {
     // Read the base in THIS snapshot too. Calling `bootstrap_base` here would
     // open a second connection and see a later state — the same
     // disagreeing-snapshots shape as the bug above.

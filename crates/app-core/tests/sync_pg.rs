@@ -189,6 +189,13 @@ async fn push_pull_bootstrap_round_trip() {
   };
   let (ws, doc, user) = seed_doc(&db).await;
 
+  // Consume a global RID without adding an update to this document. Its first
+  // update must remain incrementally replayable even in an otherwise empty DB.
+  sqlx::query("SELECT nextval(pg_get_serial_sequence('workspace_updates', 'rid'))")
+    .execute(&db)
+    .await
+    .unwrap();
+
   // The seeded base has taken no stream updates yet, so rid 0.
   let base = sync::bootstrap_base(&db, doc).await.unwrap();
   assert_eq!(base.base_rid, 0);
@@ -240,6 +247,21 @@ async fn push_pull_bootstrap_round_trip() {
   };
   assert!(ups.is_empty());
   assert_eq!(sync::bootstrap_base(&db, doc).await.unwrap().base_rid, rid);
+
+  // Once that very update is deleted, a stale cursor really needs the base.
+  sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1")
+    .bind(doc)
+    .execute(&db)
+    .await
+    .unwrap();
+  assert!(matches!(
+    sync::catch_up_document(&db, doc, 0, 100).await.unwrap(),
+    sync::CatchUp::Rebootstrap(_)
+  ));
+  assert!(matches!(
+    sync::catch_up_document(&db, doc, rid, 100).await.unwrap(),
+    sync::CatchUp::Updates(updates) if updates.is_empty()
+  ));
 
   cleanup(&db, ws, user).await;
 }
