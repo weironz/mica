@@ -61,6 +61,13 @@ fn is_parent_guard(error: &sqlx::Error) -> bool {
     .is_some_and(|c| c == PARENT_GUARD_CONSTRAINT)
 }
 
+fn is_database_unavailable(error: &sqlx::Error) -> bool {
+  matches!(
+    error,
+    sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed
+  )
+}
+
 impl ApiError {
   /// The message a CLIENT may see. Database and migration errors carry the
   /// raw sqlx/Postgres text (constraint and column names, sometimes values);
@@ -74,6 +81,10 @@ impl ApiError {
         "the target folder changed while this ran — it was deleted, or is not a folder in \
          this workspace; refresh and try again"
           .to_string()
+      }
+      Self::Database(error) if is_database_unavailable(error) => {
+        tracing::error!(error = %self, "database connection unavailable");
+        "database temporarily unavailable; refresh before retrying".to_string()
       }
       Self::Database(_) | Self::Migration(_) => {
         tracing::error!(error = %self, "database error");
@@ -101,6 +112,9 @@ impl IntoResponse for ApiError {
       Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
       Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable"),
       Self::Database(e) if is_parent_guard(e) => (StatusCode::CONFLICT, "conflict"),
+      Self::Database(e) if is_database_unavailable(e) => {
+        (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable")
+      }
       Self::Database(_) | Self::Migration(_) | Self::Internal(_) => {
         (StatusCode::INTERNAL_SERVER_ERROR, "internal")
       }
@@ -118,6 +132,7 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod public_message_tests {
   use super::ApiError;
+  use axum::{body::to_bytes, http::StatusCode, response::IntoResponse};
 
   /// THE BUG (C3): a database error's text — constraint, column, sometimes the
   /// offending value — went straight into the response body.
@@ -137,5 +152,30 @@ mod public_message_tests {
       authored.public_message(),
       "internal error: AI returned an empty response"
     );
+  }
+
+  #[tokio::test]
+  async fn connection_failures_are_unavailable_without_exposing_details() {
+    for error in [
+      sqlx::Error::Io(std::io::Error::other(
+        "private-db-host: temporary name resolution failure",
+      )),
+      sqlx::Error::PoolTimedOut,
+      sqlx::Error::PoolClosed,
+    ] {
+      let response = ApiError::Database(error).into_response();
+      assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+      let body =
+        String::from_utf8(to_bytes(response.into_body(), 2048).await.unwrap().to_vec()).unwrap();
+      assert!(body.contains("service_unavailable"));
+      assert!(body.contains("refresh before retrying"));
+      assert!(!body.contains("private-db-host"));
+    }
+  }
+
+  #[test]
+  fn query_errors_remain_internal_errors() {
+    let response = ApiError::Database(sqlx::Error::Protocol("bad query".into())).into_response();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
   }
 }

@@ -63,6 +63,29 @@ Back up configuration first and preserve existing secrets and hard limits.
 The [2026-10-23 investigation](../performance/general-latency-2026-10-23.md)
 records the production measurements and limitations.
 
+## 数据库连接与容器 DNS
+
+生产事故证据与处理记录见 [database-dns-2026-10-24.md](database-dns-2026-10-24.md)。
+
+`MICA_DATABASE_HOST` 只用于两份 Compose 中 API 的 `DATABASE_URL` 主机部分，默认仍为
+`postgres`；不改变凭据、端口或数据库。共享宿主机 Docker 内置 DNS 失效时，API 新建
+数据库连接可能出现 `Temporary failure in name resolution`，从而让切换、搜索、跨工作区
+移动后的刷新都报数据库错误。这不等于 SQLite 损坏或移动事务一定失败，先核对页面位置。
+
+2026-10-24 在生产备份后，仅为当时的 Mica API 加了数据库 hosts 映射，无需重启即可
+恢复只读查询；最终部署使用 `ansible/host_vars/mica-prod.yml` 中的数据库私网 IP，避免
+重建后丢失修复。该值必须与 API 可达的 `mica-postgres-1` 地址一致。Ansible 在写文件前
+只读核对实际容器地址，不匹配或数据库未运行就拒绝部署，不会自动重建 PostgreSQL、
+调整全局 Docker DNS，或修改其他项目。计划重建数据服务后应重新核对并更新地址。
+其他自托管环境不需要照抄生产 IP；未配置时继续用 Compose 服务发现。
+
+连接 I/O 故障或连接池不可用返回脱敏的 HTTP 503，真正的 SQL/迁移错误仍是 HTTP 500。
+不自动重试写操作：连接中断后要先刷新核对结果，避免重复移动或重复写入。
+
+`scripts/test-compose-api-env.py` 检查两份 Compose 的默认/指定主机与凭据不变；在
+Ansible 控制端运行 `python ansible/tests/test_database_host_pin.py`，可验证实际部署的
+预检任务接受正确地址，拒绝陈旧地址、停止的数据库和空地址，不连接生产。
+
 ## Single server (IP + port 80)
 
 nginx serves the Flutter bundle and reverse-proxies `/api` + `/ws` to the Rust
@@ -89,7 +112,7 @@ mkdir -p /data/mica && cd /data/mica
 # file with a newer image means a variable the image expects never reaches the
 # process — a setting that silently does nothing. Naming the version once is
 # what keeps them the same generation.
-RELEASE=0.13.64
+RELEASE=0.13.65
 
 # Pinned to a RELEASE TAG, not `main`: `main` can be ahead of the newest release.
 curl -fsSLO "https://raw.githubusercontent.com/weironz/mica/v$RELEASE/deploy/docker-compose.single.yml"

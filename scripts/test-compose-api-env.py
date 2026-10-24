@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import subprocess
+from urllib.parse import urlsplit
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -110,6 +111,22 @@ def main() -> None:
     if api_environment("docker-compose.single.yml", default_env)["MICA_APP_BASE_URL"] != "http://127.0.0.1":
         raise AssertionError("quickstart reset-link default must use its HTTP address")
     check_traefik_working_set(env)
+    for compose in ("docker-compose.yml", "docker-compose.single.yml"):
+        default_database_env = env.copy()
+        default_database_env["MICA_DATABASE_HOST"] = ""
+        default_url = urlsplit(api_environment(compose, default_database_env)["DATABASE_URL"])
+        if default_url.hostname != "postgres":
+            raise AssertionError(f"{compose}: default database alias changed")
+        pinned_url = urlsplit(api_environment(
+            compose, default_database_env | {"MICA_DATABASE_HOST": "192.0.2.123"}
+        )["DATABASE_URL"])
+        if pinned_url.hostname != "192.0.2.123":
+            raise AssertionError(f"{compose}: database host override was ignored")
+        if (pinned_url.username, pinned_url.password, pinned_url.port, pinned_url.path) != (
+            default_url.username, default_url.password, default_url.port, default_url.path
+        ):
+            raise AssertionError(f"{compose}: host override changed credentials or database")
+    print("Database host: default alias and explicit override preserve credentials in both stacks")
     print(f"API allow-lists match ({len(single)} keys); {len(PROBES)} settings pass through both forms")
 
 

@@ -813,7 +813,7 @@ impl MicaStore {
                 // Top-level nodes hang off the import target, else the workspace
                 // root (None). The server import calls this the `root_parent`.
                 None => parent_view_id.clone(),
-                Some(p) => match view_ids.get(p).copied().flatten() {
+                Some(p) => match view_ids.get(p).cloned().flatten() {
                     Some(id) => Some(id),
                     // A child of a folder we failed to create must not silently
                     // land at the root; skip it and say so.

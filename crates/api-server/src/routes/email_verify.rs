@@ -410,9 +410,11 @@ mod resend_timing_pg {
       }
       tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let sent = mailer.sent.lock().unwrap();
-    assert_eq!(sent.len(), 1, "the verification mail must still be sent");
-    assert_eq!(sent[0].to, email);
+    {
+      let sent = mailer.sent.lock().unwrap();
+      assert_eq!(sent.len(), 1, "the verification mail must still be sent");
+      assert_eq!(sent[0].to, email);
+    }
 
     sqlx::query("DELETE FROM users WHERE id=$1")
       .bind(user)

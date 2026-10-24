@@ -35,7 +35,7 @@ pub async fn move_view(
   lock_workspace_tree(&mut tx, workspace_id).await?;
   ensure_view_in_workspace(&mut *tx, workspace_id, view_id).await?;
   if let Some(parent_view_id) = payload.parent_view_id {
-    ensure_valid_parent_view(&mut *tx, workspace_id, view_id, parent_view_id).await?;
+    ensure_valid_parent_view(&mut tx, workspace_id, view_id, parent_view_id).await?;
   }
 
   let position = normalize_position(payload.position)?;
@@ -263,7 +263,7 @@ pub(super) async fn move_views_tx(
   for id in view_ids {
     ensure_view_in_workspace(&mut *tx, workspace_id, *id).await?;
     if let Some(parent) = parent_view_id {
-      ensure_valid_parent_view(&mut *tx, workspace_id, *id, parent).await?;
+      ensure_valid_parent_view(&mut tx, workspace_id, *id, parent).await?;
     }
   }
   for (i, id) in view_ids.iter().enumerate() {
@@ -928,6 +928,9 @@ async fn transfer_roots(
   })
 }
 
+type BlobCopy = (store::FileRecord, String);
+type BlobCopyPlan = (Vec<BlobCopy>, std::collections::HashMap<Uuid, String>);
+
 /// Plan one blob copy per DESTINATION key for a transfer.
 ///
 /// Keys are content-addressed (`workspaces/{ws}/{sha256}.{ext}`), so two source
@@ -945,10 +948,7 @@ fn plan_blob_copies(
   src_workspace_id: Uuid,
   dest_workspace_id: Uuid,
   src_files: Vec<store::FileRecord>,
-) -> ApiResult<(
-  Vec<(store::FileRecord, String)>,
-  std::collections::HashMap<Uuid, String>,
-)> {
+) -> ApiResult<BlobCopyPlan> {
   let mut dest_key_of_src: std::collections::HashMap<Uuid, String> =
     std::collections::HashMap::new();
   let mut copies: Vec<(store::FileRecord, String)> = Vec::new();

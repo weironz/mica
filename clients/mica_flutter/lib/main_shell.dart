@@ -3659,7 +3659,11 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
         .listViews()
         .where((v) => v.workspaceId == localWs.id && !v.trashed)
         .toList();
-    final ordered = _orderViewsParentFirst(views);
+    final ordered = orderViewsParentFirst(
+      views,
+      idOf: (view) => view.id,
+      parentOf: (view) => view.parentId,
+    );
 
     final localToCloudView = <String, String>{};
     var docCount = 0;
@@ -3757,33 +3761,6 @@ class _WorkspaceShellState extends State<WorkspaceShell> {
       if (active != null) _local.openDoc(active.objectId);
     }
     return (cloudWorkspaceId: cloudWs.id, docCount: docCount);
-  }
-
-  /// Order views so every parent precedes its children (roots first), stable.
-  List<ViewData> _orderViewsParentFirst(List<ViewData> views) {
-    final byParent = <String?, List<ViewData>>{};
-    for (final v in views) {
-      (byParent[v.parentId] ??= []).add(v);
-    }
-    final ids = {for (final v in views) v.id};
-    final out = <ViewData>[];
-    void emit(String? parent) {
-      for (final v in byParent[parent] ?? const <ViewData>[]) {
-        out.add(v);
-        emit(v.id);
-      }
-    }
-
-    emit(null);
-    // Defensive: surface any view whose parent isn't in this set (orphan) so it
-    // still migrates rather than being silently dropped.
-    for (final v in views) {
-      if (v.parentId != null && !ids.contains(v.parentId)) {
-        out.add(v);
-        emit(v.id);
-      }
-    }
-    return out;
   }
 
   /// Minimal modal collecting cloud credentials for migration. Returns the auth

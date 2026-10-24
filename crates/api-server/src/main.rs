@@ -438,7 +438,6 @@ mod trace_log_tests {
 
 #[cfg(test)]
 mod not_found_body_tests {
-  use super::*;
   use axum::response::IntoResponse;
   use mica_infra::ApiError;
 

@@ -160,6 +160,40 @@
           in {{ secrets_file }} on the node instead.
       delegate_to: localhost
 
+    # A host-specific address avoids the shared Docker resolver for this API
+    # without changing other projects. It must never silently outlive the DB
+    # container address. Inspect only; no restart/reconfiguration of PostgreSQL.
+    - name: Inspect PostgreSQL when a database address is pinned
+      community.docker.docker_container_info:
+        name: mica-postgres-1
+      register: pinned_postgres_raw
+      check_mode: false
+      no_log: true
+      retries: 3
+      delay: 3
+      until: pinned_postgres_raw is succeeded
+      when: mica_env.MICA_DATABASE_HOST is defined
+
+    - name: Reduce the database inspection to address metadata
+      ansible.builtin.set_fact:
+        pinned_postgres_running: "{{ pinned_postgres_raw.container.State.Running | default(false) }}"
+        pinned_postgres_addresses: >-
+          {{ (pinned_postgres_raw.container.NetworkSettings.Networks | default({}))
+             | dict2items | map(attribute='value.IPAddress') | select | list }}
+      no_log: true
+      when: mica_env.MICA_DATABASE_HOST is defined
+
+    - name: Refuse a stale database address before changing deployment files
+      ansible.builtin.assert:
+        that:
+          - pinned_postgres_running
+          - mica_env.MICA_DATABASE_HOST in pinned_postgres_addresses
+        fail_msg: >-
+          MICA_DATABASE_HOST does not match the running mica-postgres-1.
+          Check its API-reachable private-network IP and update host_vars.
+          No database or global Docker DNS settings have been changed.
+      when: mica_env.MICA_DATABASE_HOST is defined
+
     # Which keys the node has today, by NAME only — the values are never read.
     # Guards the one way this change can quietly break production: a key that
     # exists on the node but is missing from host_vars simply disappears, and

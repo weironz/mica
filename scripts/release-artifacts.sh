@@ -81,8 +81,11 @@ case "$os" in
   windows)
     note "Windows installer"
     (cd clients/mica_flutter && "$FLUTTER" build windows --release)
-    iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
-    [ -x "$iscc" ] || fail "Inno Setup not found at $iscc — choco install innosetup -y"
+    iscc=${ISCC:-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe"}
+    if [ -z "${ISCC:-}" ] && [ ! -x "$iscc" ] && [ -n "${LOCALAPPDATA:-}" ]; then
+      iscc="$(cygpath -u "$LOCALAPPDATA")/Programs/Inno Setup 6/ISCC.exe"
+    fi
+    [ -x "$iscc" ] || fail "Inno Setup 6 compiler not found at $iscc — install it or set ISCC"
     "$iscc" "//DAppVersion=$version" 'clients\mica_flutter\installer\mica.iss'
     setup="clients/mica_flutter/installer/Output/Mica-Setup-$version.exe"
     cp "$setup" "$out/"

@@ -9,6 +9,15 @@
 >
 > 2026-08-03 建档,当时搬进 68 条。
 
+## 2026-10-21 评审收尾
+
+2026-10-24 核对 GitHub：当前 open issue 为 0；#29–#90 均已关闭，保留各批源码修复，原路线图指针归档如下。
+
+> **2026-10-21 第三轮全项目评审的剩余条目在 GitHub issue 里跟踪**:milestone「评审 2026-10-21 修复」
+> (#29–#90,标签：优先级 / 类型 / 模块)。不逐条搬进这里，免得两处各记一份;计划与已完成记录见
+> [`../reviews/code-optimization/OPTIMIZATION_PLAN_ROUND4.md`](../reviews/code-optimization/OPTIMIZATION_PLAN_ROUND4.md)。
+> milestone 关完后把这条指针整条搬去存档。
+
 ## 可靠性与同步
 
 - ✅ **当前页 AI 读取实时正文并按块定向修改**(2026-10-12,v0.13.49,

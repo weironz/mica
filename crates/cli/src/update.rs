@@ -503,9 +503,9 @@ mod tests {
     );
   }
 
-  /// The three checks issue #38 asked for, pinned at the pure-function level:
-  /// semver ordering (not textual), exact version match (not `contains`),
-  /// and whole-name checksum lookup (not substring).
+  // The three checks issue #38 asked for, pinned at the pure-function level:
+  // semver ordering (not textual), exact version match (not `contains`),
+  // and whole-name checksum lookup (not substring).
 
   /// Ordering must be semver, not textual: "0.13.10" sorts after "0.13.9" as
   /// versions, and "0.13.55" after "0.13.5" — the exact pair the old string

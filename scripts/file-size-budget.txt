@@ -11,7 +11,7 @@
 #
 # 格式：<基线行数> <library root 相对路径>（# 开头为注释）。新增条目 = 承认该单元
 # 当前已超软上限 4,000 行，需要一句为什么留着的理由（写在行内注释里）。
-21355 clients/mica_flutter/lib/main.dart               # 外壳一整库（main_shell/workspace_view/dialogs 及 settings×6 part 合计）；#81 接线后 tree_nav/editor_pane/world×2 四个新 part 并入本库口径（此前为未登记的独立文件，全库净行数仍降），views/auth/sync 域已控制器化
+21349 clients/mica_flutter/lib/main.dart               # 外壳一整库（main_shell/workspace_view/dialogs 及 settings×6 part 合计）；#81 接线后 tree_nav/editor_pane/world×2 四个新 part 并入本库口径（此前为未登记的独立文件，全库净行数仍降），views/auth/sync 域已控制器化
 7192 clients/mica_flutter/lib/editor/editor.dart       # 编辑器 State 主体 + hooks/ai/dialogs/resources/history_ui 五个 part 的合计
 5745 clients/mica_flutter/lib/editor/render.dart      # 自绘渲染管线 + block_renderers/inline_atoms/render_resources part 的合计；#63 光标代码块复用快路径 +24（省掉每次方向键的整段高亮/重排）
 4170 clients/mica_flutter/lib/editor/controller.dart  # 编辑器 controller + history/commits part 的合计

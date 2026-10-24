@@ -118,6 +118,7 @@
 | --- | --- |
 | [editor-p2-undo-cache-design.md](reviews/editor-p2-undo-cache-design.md) | #79 本地操作撤销与 #62 预览/图片缓存循环：源码调研、设计与验证 |
 | [editor-formatting-2026-10-24.md](reviews/editor-formatting-2026-10-24.md) | 列表跨块格式与表格多余边框：根因、近期 issue 边界、193 项回归与浏览器验证 |
+| [database-dns-2026-10-24.md](ops/database-dns-2026-10-24.md) | 工作区操作数据库错误：DNS 证据、Mica 专用连接修复与部署预检 |
 | [code-review-2026-10-21.md](reviews/code-review-2026-10-21.md) | 第三轮全项目评审(重构后):P1×8、工具实跑结果、旧条目核对、精简估算 |
 | [code-review-2026-10-19.md](reviews/code-review-2026-10-19.md) | 第二轮全项目评审(与 10-18 互补) |
 | [code-review-2026-10-18.md](reviews/code-review-2026-10-18.md) | 全项目评审,A–D 级问题与逐条修复、决策、验证 |

@@ -22,6 +22,7 @@ import 'cloud/cloud_sync.dart';
 import 'cloud/doc_store_platform.dart';
 import 'cloud/pending_uploads.dart';
 import 'cloud/workspace_migration.dart';
+import 'cloud/view_order.dart';
 import 'diagnostics.dart';
 import 'import/import_controller.dart';
 import 'server_registry.dart';
