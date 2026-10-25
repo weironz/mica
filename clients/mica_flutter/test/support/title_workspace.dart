@@ -6,43 +6,55 @@ import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 
 DocumentBootstrap titleBootstrap(String title, {String id = 'page-a'}) =>
-    DocumentBootstrap.fromJson({
-      'document': {
-        'id': id,
-        'workspace_id': 'workspace',
-        'root_block_id': 'root',
-        'current_seq': 0,
-        'created_by': 'user',
-        'created_at': '2026-09-27T00:00:00Z',
-        'updated_at': '2026-09-27T00:00:00Z',
-      },
-      'view': {
-        'id': id,
-        'parent_view_id': null,
-        'object_id': id,
-        'object_type': 'document',
-        'name': title,
-        'position': '0',
-      },
-      'snapshot': {
-        'version_seq': 0,
-        'schema_version': 1,
-        'payload': {
-          'schema_version': 1,
-          'root_block_id': 'root',
-          'blocks': [
-            {
-              'id': 'root',
-              'type': 'page',
-              'text': '',
-              'data': {'title': title},
-              'children': ['body'],
-            },
-            {'id': 'body', 'type': 'paragraph', 'text': '正文', 'children': []},
-          ],
+    titleBootstrapWithBlocks(
+      title,
+      id: id,
+      blocks: [
+        {'id': 'body', 'type': 'paragraph', 'text': '正文', 'children': []},
+      ],
+    );
+
+DocumentBootstrap titleBootstrapWithBlocks(
+  String title, {
+  String id = 'page-a',
+  required List<Map<String, Object?>> blocks,
+}) => DocumentBootstrap.fromJson({
+  'document': {
+    'id': id,
+    'workspace_id': 'workspace',
+    'root_block_id': 'root',
+    'current_seq': 0,
+    'created_by': 'user',
+    'created_at': '2026-09-27T00:00:00Z',
+    'updated_at': '2026-09-27T00:00:00Z',
+  },
+  'view': {
+    'id': id,
+    'parent_view_id': null,
+    'object_id': id,
+    'object_type': 'document',
+    'name': title,
+    'position': '0',
+  },
+  'snapshot': {
+    'version_seq': 0,
+    'schema_version': 1,
+    'payload': {
+      'schema_version': 1,
+      'root_block_id': 'root',
+      'blocks': [
+        {
+          'id': 'root',
+          'type': 'page',
+          'text': '',
+          'data': {'title': title},
+          'children': ['body'],
         },
-      },
-    });
+        ...blocks,
+      ],
+    },
+  },
+});
 
 // Exercise the real title field and its debounce with an inert host: the
 // workspace has many unrelated callbacks, none of which this test invokes.

@@ -5,6 +5,7 @@
 // the host message surfacing as a banner.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/main.dart';
 import 'package:mica_flutter/ui/page_tree_state.dart';
@@ -21,9 +22,8 @@ DocumentView _page(String id, String name, {String position = '10'}) =>
       position: position,
     );
 
-Finder _rowOf(String viewId) => find.byWidgetPredicate(
-  (w) => w is DocumentListItem && w.view.id == viewId,
-);
+Finder _rowOf(String viewId) =>
+    find.byWidgetPredicate((w) => w is DocumentListItem && w.view.id == viewId);
 
 void main() {
   void wideViewport(WidgetTester tester) {
@@ -36,6 +36,91 @@ void main() {
   final titleField = find.byWidgetPredicate(
     (w) => w is TextField && w.focusNode?.debugLabel == 'PageTitle',
   );
+
+  testWidgets('Enter on an empty new page lands in the only body line', (
+    tester,
+  ) async {
+    wideViewport(tester);
+    final ops = <Map<String, dynamic>>[];
+    await tester.pumpWidget(
+      titleWorkspace(
+        titleBootstrapWithBlocks(
+          '未命名页面',
+          blocks: [
+            {'id': 'body', 'type': 'paragraph', 'text': '', 'children': []},
+          ],
+        ),
+        (_, _) async => true,
+        onApplyOperations: (batch) async => ops.addAll(batch),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(
+      ops.where((op) => op['type'] == 'insert_block'),
+      isEmpty,
+      reason: 'the seeded empty paragraph is already a place to type',
+    );
+    expect(
+      ops.where(
+        (op) =>
+            op['type'] == 'insert_block' && (op['block']['text'] ?? '') == '',
+      ),
+      isEmpty,
+      reason: 'Enter from an empty title must not add a blank first line',
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('Enter in a titled empty page puts the remainder on line one', (
+    tester,
+  ) async {
+    wideViewport(tester);
+    final ops = <Map<String, dynamic>>[];
+    await tester.pumpWidget(
+      titleWorkspace(
+        titleBootstrapWithBlocks(
+          '新页面',
+          blocks: [
+            {'id': 'body', 'type': 'paragraph', 'text': '', 'children': []},
+          ],
+        ),
+        (_, _) async => true,
+        onApplyOperations: (batch) async => ops.addAll(batch),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final controller = tester.widget<TextField>(titleField).controller!;
+    // Pump once after programmatic edits so onChanged's latch is in place.
+    controller.value = const TextEditingValue(
+      text: '标题后半',
+      selection: TextSelection.collapsed(offset: 2),
+    );
+    await tester.pump();
+    tester.widget<TextField>(titleField).onChanged?.call(controller.text);
+    final focus = tester.widget<TextField>(titleField).focusNode!;
+    focus.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    final update = ops.singleWhere((op) => op['type'] == 'update_block');
+    expect(update['block_id'], 'body');
+    expect(update['text'], '后半');
+    expect(
+      ops.where((op) => op['type'] == 'insert_block'),
+      isEmpty,
+      reason: 'the seeded empty paragraph takes the title remainder',
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('renders the workspace tree with the seeded views', (
     tester,
@@ -169,7 +254,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(titleField).controller!.text, '甲');
-    expect(tester.widget<DocumentListItem>(_rowOf('page-a')).isSelected, isTrue);
+    expect(
+      tester.widget<DocumentListItem>(_rowOf('page-a')).isSelected,
+      isTrue,
+    );
     expect(
       tester.widget<DocumentListItem>(_rowOf('page-b')).isSelected,
       isFalse,
@@ -184,7 +272,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(titleField).controller!.text, '乙');
-    expect(tester.widget<DocumentListItem>(_rowOf('page-b')).isSelected, isTrue);
+    expect(
+      tester.widget<DocumentListItem>(_rowOf('page-b')).isSelected,
+      isTrue,
+    );
     expect(
       tester.widget<DocumentListItem>(_rowOf('page-a')).isSelected,
       isFalse,

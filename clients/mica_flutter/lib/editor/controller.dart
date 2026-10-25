@@ -461,12 +461,7 @@ class EditorController extends ChangeNotifier {
     selection = DocSelection.collapsed(DocPosition(i, caret));
     goalX = null;
     _sendNow([
-      {
-        'type': 'update_block',
-        'block_id': node.id,
-        'text': newText,
-        'data': node.data,
-      },
+      {..._textOp(node.id, newText), 'data': node.data},
     ]);
     notifyListeners();
     return true;
@@ -795,12 +790,7 @@ class EditorController extends ChangeNotifier {
       _dirty.remove(node.id);
       _sendNow([
         _insertOp(created, i),
-        {
-          'type': 'update_block',
-          'block_id': node.id,
-          'text': node.text,
-          'data': node.data,
-        },
+        {..._textOp(node.id, node.text), 'data': node.data},
       ]);
       _collapseAfterEdit(DocPosition(i, 0));
       return;
@@ -836,12 +826,7 @@ class EditorController extends ChangeNotifier {
     nodes.insert(i + 1, created);
     _dirty.remove(node.id);
     _sendNow([
-      {
-        'type': 'update_block',
-        'block_id': node.id,
-        'text': before,
-        'data': node.data,
-      },
+      {..._textOp(node.id, before), 'data': node.data},
       _insertOp(created, i + 1),
     ]);
     _collapseAfterEdit(DocPosition(i + 1, 0));
@@ -1007,12 +992,7 @@ class EditorController extends ChangeNotifier {
       ..remove(cur.id)
       ..remove(prev.id);
     _sendNow([
-      {
-        'type': 'update_block',
-        'block_id': prev.id,
-        'text': merged,
-        'data': prev.data,
-      },
+      {..._textOp(prev.id, merged), 'data': prev.data},
       {'type': 'delete_block', 'block_id': cur.id},
     ]);
     _collapseAfterEdit(DocPosition(i - 1, junction));
@@ -1100,12 +1080,7 @@ class EditorController extends ChangeNotifier {
       ..remove(cur.id)
       ..remove(next.id);
     _sendNow([
-      {
-        'type': 'update_block',
-        'block_id': cur.id,
-        'text': merged,
-        'data': cur.data,
-      },
+      {..._textOp(cur.id, merged), 'data': cur.data},
       {'type': 'delete_block', 'block_id': next.id},
     ]);
     _collapseAfterEdit(DocPosition(i, junction));
@@ -1878,12 +1853,7 @@ class EditorController extends ChangeNotifier {
       node.data = {...node.data, 'marks': marksToJson(marks)};
       _dirty.remove(node.id);
       _sendNow([
-        {
-          'type': 'update_block',
-          'block_id': node.id,
-          'text': node.text,
-          'data': node.data,
-        },
+        {..._textOp(node.id, node.text), 'data': node.data},
       ]);
       _collapseAfterEdit(DocPosition(start.node, s));
       return true;
@@ -2716,12 +2686,7 @@ class EditorController extends ChangeNotifier {
       ..data = {...node.data, 'marks': marksToJson(marks)};
     _dirty.remove(node.id);
     _sendNow([
-      {
-        'type': 'update_block',
-        'block_id': node.id,
-        'text': newText,
-        'data': node.data,
-      },
+      {..._textOp(node.id, newText), 'data': node.data},
     ]);
     _collapseAfterEdit(DocPosition(i, markEnd));
     return true;
@@ -2940,6 +2905,15 @@ class EditorController extends ChangeNotifier {
 
   void insertParagraphAtTop(String text) {
     if (_historyBusy) return;
+    final first = nodes.firstOrNull;
+    if (first != null && first.kind == 'paragraph' && first.text.isEmpty) {
+      if (text.isNotEmpty) {
+        first.text = text;
+        _sendNow([_textOp(first.id, text)]);
+      }
+      _collapseAfterEdit(const DocPosition(0, 0));
+      return;
+    }
     final created = EditorNode(id: _genId(), kind: 'paragraph', text: text);
     nodes.insert(0, created);
     _sendNow([_insertOp(created, 0)]);
@@ -3061,9 +3035,7 @@ class EditorController extends ChangeNotifier {
     final to = (sel.end.node == i ? sel.end.offset : len).clamp(0, len);
     node.text = node.text.substring(0, from) + text + node.text.substring(to);
     _dirty.remove(node.id);
-    _sendNow([
-      {'type': 'update_block', 'block_id': node.id, 'text': node.text},
-    ]);
+    _sendNow([_textOp(node.id, node.text)]);
     _collapseAfterEdit(DocPosition(i, from + text.length));
   }
 
@@ -3617,6 +3589,12 @@ class EditorController extends ChangeNotifier {
       'data': node.data,
       'children': <String>[],
     },
+  };
+
+  DocOp _textOp(String id, String text) => {
+    'type': 'update_block',
+    'block_id': id,
+    'text': text,
   };
 
   /// Structural send: flush pending text first so order is correct.
