@@ -23,6 +23,8 @@ import 'package:mica_flutter/ui/doc_tab_strip.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart' as app;
+import 'package:mica_flutter/ui/update_controls.dart';
+import 'package:mica_flutter/updater.dart' show updateSupported;
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 Workspace _ws(String id, String name) =>
@@ -205,6 +207,26 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('desktop update entry shares the recycle-bin account row', (
+    tester,
+  ) async {
+    useZh(tester);
+    await tester.pumpWidget(_Host().build());
+    await tester.pumpAndSettle();
+    final update = find.byType(UpdateButton);
+    if (!updateSupported) {
+      expect(update, findsNothing);
+      return;
+    }
+    expect(update, findsOneWidget);
+    final trash = find.byTooltip('回收站');
+    expect(trash, findsOneWidget);
+    expect(tester.getCenter(update).dy, tester.getCenter(trash).dy);
+    expect(tester.getCenter(update).dx, lessThan(tester.getCenter(trash).dx));
+    expect(tester.getSize(update).height, lessThanOrEqualTo(40));
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('the tab strip routes select/close/+/menu callbacks', (
     tester,

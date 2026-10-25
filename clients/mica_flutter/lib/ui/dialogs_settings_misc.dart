@@ -28,9 +28,11 @@ extension _SettingsMiscTab on _SettingsDialogState {
             label: Text(context.l10n.aboutSourceCode),
           ),
         ),
-        // Self-update lives here on desktop; hidden where it can't apply (web, and
-        // platforms with no packaged installer).
-        if (updateSupported) ...const [SizedBox(height: 8), UpdateChecker()],
+        // Detailed status shares the sidebar updater; absent without an installer.
+        if (updateSupported) ...[
+          const SizedBox(height: 8),
+          UpdateChecker(controller: _desktopUpdates),
+        ],
       ],
     );
   }
