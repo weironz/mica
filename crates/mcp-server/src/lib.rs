@@ -324,14 +324,16 @@ impl ServerHandler for MicaMcp {
          READ efficiently, do not pull whole pages: mica_list_pages returns the WHOLE \
          workspace tree (folders + pages, ids + names) in ONE call. mica_read_document takes \
          offset+limit (a line window) or section (a heading name) to return just a slice. \
-         mica_get_outline returns headings + block ids + the document `seq`, cheaply. To scan \
+         mica_get_outline returns headings + block ids + type/preview labels + the document `seq`, cheaply. To scan \
          MANY docs, mica_read_documents reads them all in one call — mode=\"outline\" for a \
          cheap structure survey, then read in full only the few you need.\n\
          \n\
          EDIT in place, do not rewrite the page. mica_update_document modes: append (after the \
          end — safe default); insert_at (place after `anchor`, which is a block id OR a \
-         heading's text from the outline); find_replace (swap text; set unique=true for a \
-         single precise edit — refused if the text is not unique); delete (REMOVE the block at \
+         heading's text from the outline); find_replace (match visible text or a single block's \
+         Markdown, including inline code, lists and table cells; replace parses inline Markdown, \
+         or set replacement_format=\"plain_text\" for literal text. It cannot cross blocks/cells. \
+         Set unique=true for a single precise edit, checked by the server); delete (REMOVE the block at \
          `anchor` and its subtree); replace_all (only when you \
          truly mean to rewrite the whole page). For MANY edits to one doc, mica_apply_edits \
          runs them all in ONE call (one turn instead of N).\n\

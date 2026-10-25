@@ -3,7 +3,7 @@
 * star bullet
 
 1. one
-1. two [l](https://e.com)
+2. two [l](https://e.com)
 
 - parent
     - child two-space
@@ -13,7 +13,7 @@
 
 1. ordered parent
     1. four-space child
-    1. sibling
+    2. sibling
 2. parent two
 
 - [ ] task parent

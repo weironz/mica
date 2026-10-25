@@ -304,6 +304,7 @@ async fn mangled_latex_is_refused_in_every_write_path_before_any_network() {
       anchor: None,
       find: None,
       replace: None,
+      replacement_format: "markdown".to_string(),
       unique: false,
       expected_seq: None,
     }))
@@ -321,6 +322,7 @@ async fn mangled_latex_is_refused_in_every_write_path_before_any_network() {
       anchor: None,
       find: Some("old".to_string()),
       replace: Some(mangled()),
+      replacement_format: "markdown".to_string(),
       unique: false,
       expected_seq: None,
     }))
@@ -344,6 +346,7 @@ async fn mangled_latex_is_refused_in_every_write_path_before_any_network() {
         anchor: None,
         find: None,
         replace: None,
+        replacement_format: "markdown".to_string(),
         unique: false,
       }],
       expected_seq: None,

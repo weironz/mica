@@ -435,9 +435,19 @@ pub struct DocumentOutlineResponse {
   pub(crate) headings: Vec<OutlineHeading>,
   /// Every top-level block id in document order (finer anchors than headings).
   pub(crate) block_ids: Vec<String>,
+  /// The same top-level anchors with their type and a short visible-text label.
+  pub(crate) blocks: Vec<OutlineBlock>,
   /// The document's current sequence number. Pass it back as `expected_seq` on a
   /// write to make the write conflict-checked (409 if the doc changed meanwhile).
   pub(crate) seq: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutlineBlock {
+  pub(crate) block_id: String,
+  #[serde(rename = "type")]
+  pub(crate) kind: String,
+  pub(crate) preview: String,
 }
 
 /// `GET /api/workspaces/{workspace_id}/documents/{document_id}/outline`
@@ -485,6 +495,15 @@ pub(super) fn outline_from_payload(
   );
   DocumentOutlineResponse {
     headings,
+    blocks: block_ids
+      .iter()
+      .filter_map(|id| by_id.get(id.as_str()))
+      .map(|block| OutlineBlock {
+        block_id: block.id.clone(),
+        kind: block.kind.clone(),
+        preview: mica_markdown::block_text_preview(block, 40),
+      })
+      .collect(),
     block_ids,
     seq,
   }
@@ -559,6 +578,12 @@ pub struct UpdateMarkdownRequest {
   pub find: Option<String>,
   #[serde(default)]
   pub replace: Option<String>,
+  /// Replacement inline syntax; code/math blocks always keep literal text.
+  #[serde(default = "default_replacement_format")]
+  pub replacement_format: String,
+  /// Checked against actual editable text inside the document write lock.
+  #[serde(default)]
+  pub unique: bool,
   /// Optimistic concurrency: the `seq` the caller last saw (from the outline or a
   /// prior write ack). When set and the document has moved on, the write is
   /// refused with 409 instead of clobbering the intervening edit. Absent = the
@@ -566,6 +591,14 @@ pub struct UpdateMarkdownRequest {
   #[serde(default)]
   pub expected_seq: Option<i64>,
 }
+
+fn default_replacement_format() -> String {
+  "markdown".to_string()
+}
+
+#[cfg(test)]
+#[path = "crud_edit_tests.rs"]
+mod edit_tests;
 
 /// `PATCH /api/workspaces/{workspace_id}/documents/{document_id}/markdown`
 ///
@@ -643,45 +676,58 @@ pub(super) fn markdown_update_ops(
     }]);
   }
 
-  // find_replace edits existing block text in place — no markdown parse/graft.
+  // Splice text and marks without regenerating block ids or unrelated content.
   if matches!(request.mode, MarkdownUpdateMode::FindReplace) {
+    use mica_markdown::{block_text_matches, markdown_find_text, replace_block_text};
     let find = request
       .find
       .as_deref()
       .filter(|s| !s.is_empty())
       .ok_or("find_replace requires a non-empty `find`")?;
     let replace = request.replace.as_deref().unwrap_or("");
+    let markdown = match request.replacement_format.as_str() {
+      "markdown" => true,
+      "plain_text" => false,
+      _ => return Err("replacement_format must be markdown or plain_text".into()),
+    };
+    let count = |needle: &str| {
+      current
+        .blocks
+        .iter()
+        .filter(|b| b.id != root_id)
+        .map(|b| block_text_matches(b, needle))
+        .sum::<usize>()
+    };
+    // Prefer literal visible text. Only when absent, decode a single Markdown
+    // block, so agents can copy a sentence/list item from read_document verbatim.
+    let normalized = (count(find) == 0)
+      .then(|| markdown_find_text(find))
+      .flatten();
+    let needle = normalized.as_deref().unwrap_or(find);
+    let matches = count(needle);
+    if matches == 0 {
+      return Err(format!(
+        "no block text contains {find:?}; find must fit within one block or table cell. \
+         Use mica_get_outline blocks (type/preview) to locate the content; \
+         Markdown delimiters are optional, but matches cannot cross blocks or cells"
+      ));
+    }
+    if request.unique && matches != 1 {
+      return Err(format!(
+        "unique find_replace: {find:?} occurs {matches} time(s); need exactly 1"
+      ));
+    }
     let mut ops = Vec::new();
-    let mut skipped_formatted = false;
-    for block in &current.blocks {
-      if block.id == root_id || !block.text.contains(find) {
+    for block in current.blocks.iter().filter(|b| b.id != root_id) {
+      if block_text_matches(block, needle) == 0 {
         continue;
       }
-      // A block's inline marks are UTF-16 offset ranges into its text. A blind
-      // text replace would leave those offsets pointing at the wrong characters
-      // — silently mangling bold/italic/link/math. Never touch a marked block;
-      // steer the caller to replace_all/insert_at for formatted content.
-      let has_marks = block
-        .data
-        .get("marks")
-        .and_then(|m| m.as_array())
-        .is_some_and(|a| !a.is_empty());
-      if has_marks {
-        skipped_formatted = true;
-        continue;
-      }
+      let edited = replace_block_text(block, needle, replace, markdown);
       ops.push(DocumentOperation::UpdateBlock {
         block_id: block.id.clone(),
         kind: None,
-        text: Some(block.text.replace(find, replace)),
-        data: None,
-      });
-    }
-    if ops.is_empty() {
-      return Err(if skipped_formatted {
-        format!("{find:?} appears only in formatted text; use replace_all or insert_at instead")
-      } else {
-        format!("no block text contains {find:?}")
+        text: Some(edited.text),
+        data: Some(edited.data),
       });
     }
     return Ok(ops);
@@ -860,6 +906,8 @@ mod markdown_update_tests {
       anchor: None,
       find: None,
       replace: None,
+      replacement_format: default_replacement_format(),
+      unique: false,
       expected_seq: None,
     }
   }
@@ -1043,6 +1091,8 @@ mod tests {
       anchor: None,
       find: None,
       replace: None,
+      replacement_format: default_replacement_format(),
+      unique: false,
       expected_seq: None,
     }
   }
@@ -1192,6 +1242,8 @@ mod tests {
       anchor: None,
       find: Some("existing".into()),
       replace: Some("updated".into()),
+      replacement_format: default_replacement_format(),
+      unique: false,
       expected_seq: None,
     };
     let ops = markdown_update_ops(&current, &request, Uuid::new_v4()).unwrap();
@@ -1214,10 +1266,9 @@ mod tests {
   }
 
   #[test]
-  fn markdown_update_find_replace_skips_formatted_blocks() {
+  fn markdown_update_find_replace_preserves_formatted_blocks() {
     use mica_app_core::documents::{Block, DocumentSnapshotPayload};
-    // The only matching block carries an inline mark → a text-only replace would
-    // desync its UTF-16 offsets, so find_replace must refuse rather than corrupt.
+    // Removing the prefix must shift the link's UTF-16 range with its text.
     let payload = DocumentSnapshotPayload {
       schema_version: 1,
       root_block_id: "root".into(),
@@ -1244,13 +1295,16 @@ mod tests {
       anchor: None,
       find: Some("see ".into()),
       replace: Some(String::new()),
+      replacement_format: default_replacement_format(),
+      unique: false,
       expected_seq: None,
     };
-    let err = markdown_update_ops(&payload, &request, Uuid::new_v4()).unwrap_err();
-    assert!(
-      err.contains("formatted"),
-      "should refuse formatted blocks, got: {err}"
-    );
+    let ops = markdown_update_ops(&payload, &request, Uuid::new_v4()).unwrap();
+    let updated = mica_app_core::documents::apply_operations(payload, &ops).unwrap();
+    let block = updated.blocks.iter().find(|b| b.id == "p").unwrap();
+    assert_eq!(block.text, "docs now");
+    assert_eq!(block.data["marks"][0]["start"], 0);
+    assert_eq!(block.data["marks"][0]["end"], 4);
   }
 
   #[test]

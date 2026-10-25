@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'details_html.dart';
 import 'ai_edits.dart';
 import 'highlight.dart' show kCodeLanguages, detectLanguage;
+import 'list_serialization.dart';
 import 'marks.dart';
 import 'model.dart';
 import 'operation_history.dart';
@@ -1263,6 +1264,7 @@ class EditorController extends ChangeNotifier {
     DocPosition e, {
     Map<String, String>? imageUrls,
   }) {
+    final listLayout = markdownListLayout(nodes);
     String nodeBody(int i, int from, int to) {
       final node = nodes[i];
       if (node.kind == 'table') {
@@ -1363,9 +1365,9 @@ class EditorController extends ChangeNotifier {
         final q = '> ' * node.quoteDepth.clamp(0, 16);
         return '${inline.split('\n').map((l) => '$q$l').join('\n')}\n$q$rule';
       }
-      final head = _blockPrefix(node);
+      final head = _blockPrefix(node, listLayout[i]);
       if (!inline.contains('\n')) return '$head$inline';
-      final cont = _continuationPrefix(node);
+      final cont = _continuationPrefix(node, listLayout[i]);
       final lines = inline.split('\n');
       // A list item's continuation line lands ON its content column, so a line
       // that merely LOOKS like a block leader starts a real block on re-import:
@@ -1406,7 +1408,7 @@ class EditorController extends ChangeNotifier {
       if (li is! int || body.isEmpty) return body;
       // Clamped like every other depth read (`kMaxNestingDepth`): a `data.li`
       // written by an API client as 1e9 made this a multi-GB string (P1-6).
-      final pad = '    ' * (li.clamp(0, kMaxNestingDepth) + 1);
+      final pad = ' ' * (4 * (li.clamp(0, kMaxNestingDepth) + 1) + listLayout[i].extraIndent);
       return body.split('\n').map((l) => l.isEmpty ? '' : '$pad$l').join('\n');
     }
 
@@ -1478,8 +1480,8 @@ class EditorController extends ChangeNotifier {
   /// A non-quote block that lives INSIDE a blockquote (`data.quote` > 0 on a
   /// heading/list/code) keeps its `> ` markers — dropping them stripped the
   /// quote from every such block on copy.
-  String _blockPrefix(EditorNode node) {
-    final pad = node.isListKind ? '    ' * node.indent : '';
+  String _blockPrefix(EditorNode node, ListSerialization layout) {
+    final pad = node.isListKind ? ' ' * (4 * node.indent + layout.extraIndent) : '';
     final quote = node.kind == 'quote'
         ? ''
         : '> ' * node.quoteDepth.clamp(0, 16);
@@ -1491,12 +1493,9 @@ class EditorController extends ChangeNotifier {
         // lists — serialize it or the lists merge back into one on paste.
         return '$quote$pad${(node.data['marker'] as String?) ?? '-'} ';
       case 'numbered_list':
-        // The real start number: `5. five` must not paste back as `1.`. The
-        // delimiter matters too — `)` and `.` are DIFFERENT list types in
-        // CommonMark, so hardcoding `.` merged `3) …` back into the `.` list
-        // above it.
+        // Keep the run's visible ordinal and recorded delimiter.
         final delim = (node.data['marker'] as String?) ?? '.';
-        return '$quote$pad${node.data['start'] ?? 1}$delim ';
+        return '$quote$pad${layout.number ?? 1}$delim ';
       case 'quote':
         // Nested quotes repeat the marker, matching the Rust exporter.
         return '> ' * node.quoteDepth.clamp(1, 16);
@@ -1516,16 +1515,16 @@ class EditorController extends ChangeNotifier {
   /// A quote repeats its `> `; a list item indents to its own content column
   /// (the width of the marker it just emitted), which is what makes the line a
   /// continuation rather than a new paragraph on re-import.
-  String _continuationPrefix(EditorNode node) {
+  String _continuationPrefix(EditorNode node, ListSerialization layout) {
     final quote =
         '> ' * node.quoteDepth.clamp(node.kind == 'quote' ? 1 : 0, 16);
     if (!node.isListKind) return quote;
     final marker = switch (node.kind) {
       'todo' => 6, // `- [x] `
-      'numbered_list' => '${node.data['start'] ?? 1}. '.length,
+      'numbered_list' => '${layout.number ?? 1}. '.length,
       _ => 2, // `- `
     };
-    return '$quote${'    ' * node.indent}${' ' * marker}';
+    return '$quote${' ' * (4 * node.indent + layout.extraIndent)}${' ' * marker}';
   }
 
   /// The (node, from, to) slices the current ranged selection covers, in order.

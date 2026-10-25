@@ -83,10 +83,39 @@ pub(crate) fn write_ack(value: Value) -> Result<CallToolResult, McpError> {
 /// Ack for a batch that fully landed: how many edits applied, plus the final
 /// `seq` and `last_block_id` (the end anchor to continue from) — the same
 /// thrifty shape as [`write_ack`], never the document.
-pub(crate) fn batch_ack(applied: usize, last: Option<Value>) -> Result<CallToolResult, McpError> {
+/// `edits[i]` mirrors the i-th batch edit: its `mode`, an optional `anchor`
+/// echo, and the block ids the API's `/update/payload/operations` touched (omitted when
+/// the API did not report them — unknown ids are not empty ids).
+pub(crate) fn batch_ack(
+  applied: usize,
+  last: Option<Value>,
+  steps: Vec<Value>,
+) -> Result<CallToolResult, McpError> {
+  tool_result(Ok(batch_summary(applied, last, steps)))
+}
+
+pub(crate) fn batch_failure(
+  applied: usize,
+  last: Option<Value>,
+  steps: Vec<Value>,
+  mode: &str,
+  message: String,
+) -> Result<CallToolResult, McpError> {
+  let mut summary = batch_summary(applied, last, steps);
+  summary["ok"] = json!(false);
+  summary["failed_index"] = json!(applied);
+  summary["failed_mode"] = json!(mode);
+  summary["message"] = json!(message);
+  let mut result = tool_result(Ok(summary))?;
+  result.is_error = Some(true);
+  Ok(result)
+}
+
+fn batch_summary(applied: usize, last: Option<Value>, steps: Vec<Value>) -> Value {
   let mut ack = serde_json::Map::new();
   ack.insert("ok".to_string(), json!(true));
   ack.insert("applied".to_string(), json!(applied));
+  ack.insert("edits".to_string(), Value::Array(steps));
   if let Some(value) = last {
     if let Some(seq) = value.pointer("/update/seq").and_then(Value::as_i64) {
       ack.insert("seq".to_string(), json!(seq));
@@ -95,7 +124,34 @@ pub(crate) fn batch_ack(applied: usize, last: Option<Value>) -> Result<CallToolR
       ack.insert("last_block_id".to_string(), json!(last_block));
     }
   }
-  tool_result(Ok(Value::Object(ack)))
+  Value::Object(ack)
+}
+
+/// The block ids one update op touched, from the result's
+/// `/update/payload/operations[].block_id` (see `store.rs`). An append
+/// produces the ids it created; a delete produces the ids it removed. `None`
+/// when the payload carries no operations, so the caller omits the field
+/// instead of inventing empty ids.
+pub(crate) fn update_block_ids(value: &Value) -> Option<Vec<String>> {
+  let ops = value.pointer("/update/payload/operations")?.as_array()?;
+  let ids: Vec<String> = ops
+    .iter()
+    .filter_map(|op| {
+      if op.get("type").and_then(Value::as_str) == Some("insert_block") {
+        op.pointer("/block/id").and_then(Value::as_str)
+      } else {
+        op.get("block_id").and_then(Value::as_str)
+      }
+    })
+    .map(str::to_string)
+    .collect();
+  let mut unique = Vec::new();
+  for id in ids {
+    if !unique.contains(&id) {
+      unique.push(id);
+    }
+  }
+  Some(unique)
 }
 
 /// The last top-level block id of a write's snapshot — the natural anchor for

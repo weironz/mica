@@ -139,7 +139,7 @@ impl MicaMcp {
 
   #[tool(
     description = "Read MANY documents in ONE call — scan a whole workspace fast instead of \
-                       N reads. mode: \"outline\" (headings + block ids + seq per doc — cheap, \
+                       N reads. mode: \"outline\" (headings + block ids with type/preview + seq per doc — cheap, \
                        survey structure across docs) or \"full\" (each doc's whole Markdown). \
                        Per-doc errors report inline; a bad id doesn't fail the batch.",
     annotations(read_only_hint = true)
@@ -275,7 +275,8 @@ impl MicaMcp {
   }
 
   #[tool(
-    description = "Get a document's outline (headings + block ids in order) plus its \
+    description = "Get a document's outline (headings + block ids in order, plus blocks \
+                       with type and a short visible-text preview) and its \
                        current `seq`. Call this before an anchored write so you can target a \
                        spot instead of rewriting the whole page — and pass the `seq` back as \
                        `expected_seq` to make the write conflict-checked.",

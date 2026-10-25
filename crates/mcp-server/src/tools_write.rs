@@ -86,7 +86,13 @@ impl MicaMcp {
                        delete (remove the block at `anchor` and its subtree). \
                        To REMOVE something, use delete — not replace_all: resending a \
                        whole page to drop one block rewrites every other block too. \
-                       Content is Markdown; the server derives the ops.",
+                       Content is Markdown; the server derives the ops. \
+                       find_replace matches find against one block's visible plain text \
+                       (inline/list/table syntax stripped, e.g. a heading 'Setup', a \
+                       cell's text, a list item's words) or that block's Markdown source; \
+                       replace defaults to inline Markdown — set replacement_format to \
+                       \"plain_text\" to write the block's text literally (code blocks are \
+                       always matched and written literally, no parsing either way).",
     annotations(
       title = "Write document",
       read_only_hint = false,
@@ -103,6 +109,7 @@ impl MicaMcp {
       anchor,
       find,
       replace,
+      replacement_format,
       unique,
       expected_seq,
     }): Parameters<UpdateDocArgs>,
@@ -117,6 +124,7 @@ impl MicaMcp {
         anchor,
         find.as_deref(),
         replace.as_deref(),
+        &replacement_format,
         unique,
         expected_seq,
       )
@@ -128,9 +136,12 @@ impl MicaMcp {
   }
 
   /// The shared markdown-write path behind mica_update_document AND
-  /// mica_apply_edits: latex guard, unique-match pre-check, heading-anchor
-  /// resolution, then the PATCH. Returns the raw API value (for write_ack) or a
-  /// tool error. One seam so a batch applies exactly what a single write does.
+  /// mica_apply_edits: latex guard, heading-anchor resolution, then the PATCH.
+  /// The unique find_replace count lives on the server, INSIDE the doc write
+  /// lock — counting here first raced a concurrent edit between the GET and
+  /// the PATCH (read-then-write TOCTOU). Returns the raw API value (for
+  /// write_ack) or a tool error. One seam so a batch applies exactly what a
+  /// single write does.
   #[allow(clippy::too_many_arguments)]
   pub(crate) async fn write_markdown(
     &self,
@@ -141,6 +152,7 @@ impl MicaMcp {
     anchor: Option<String>,
     find: Option<&str>,
     replace: Option<&str>,
+    replacement_format: &str,
     unique: bool,
     expected_seq: Option<i64>,
   ) -> Result<Value, McpError> {
@@ -151,32 +163,25 @@ impl MicaMcp {
       reject_mangled_latex(text)?;
     }
 
-    // unique find_replace: refuse unless the target occurs EXACTLY ONCE, so a
-    // precise single edit never silently rewrites other matches (the Anthropic
-    // str_replace discipline). Costs one read; opt-in via unique=true.
-    if mode == "find_replace"
-      && unique
-      && let Some(find) = find.filter(|s| !s.is_empty())
-    {
-      let v = self
+    if mode == "find_replace" {
+      if !matches!(replacement_format, "markdown" | "plain_text") {
+        return Err(McpError::invalid_params(
+          "replacement_format must be markdown or plain_text",
+          None,
+        ));
+      }
+      // Older APIs silently ignore unique/replacement_format. Refuse before
+      // writing rather than advertise semantics they cannot honour.
+      // Labeled outlines were added with the new atomic editing semantics.
+      let outline = self
         .get(&format!(
-          "/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"
+          "/api/workspaces/{workspace_id}/documents/{document_id}/outline"
         ))
         .await?;
-      // Must UNWRAP, not stringify. The endpoint answers `{"markdown": "..."}`,
-      // so `to_string()` counted matches against the JSON *encoding* of the
-      // page — every newline a literal `\n`, every quote escaped. A `find`
-      // spanning a line break then occurred 0 times and this guard rejected a
-      // perfectly good edit. Same bug the read path was fixed for; this branch
-      // predates the shared helper and was missed.
-      let full = unwrap_markdown(v);
-      let n = full.matches(find).count();
-      if n != 1 {
+      if !outline.get("blocks").is_some_and(Value::is_array) {
         return Err(McpError::invalid_params(
-          format!(
-            "unique find_replace: {find:?} occurs {n} time(s); need exactly 1 — add \
-             surrounding context to disambiguate, or set unique=false to replace all."
-          ),
+          "find_replace requires an updated Mica API (outline blocks with type/preview). \
+           Upgrade the API before using this CLI's find_replace; nothing was written.",
           None,
         ));
       }
@@ -199,6 +204,8 @@ impl MicaMcp {
         "anchor": anchor,
         "find": find,
         "replace": replace,
+        "unique": unique,
+        "replacement_format": replacement_format,
         // Optimistic concurrency (Tier 1 #4): honoured once the API deploy lands;
         // ignored as an unknown field before that, so this is safe to always send.
         "expected_seq": expected_seq,
@@ -251,6 +258,8 @@ impl MicaMcp {
                        each like mica_update_document (append / insert_at / find_replace / \
                        replace_all / delete); later edits see the effect of earlier ones. \
                        Deleting several blocks is one call: one delete per block id. \
+                       Each edit's result is echoed in `edits[i]` with the block ids \
+                       the API touched (`anchor` echoed when you passed one). \
                        NOT atomic: on \
                        a failure it stops and reports how many landed, so you can resume from \
                        there.",
@@ -278,13 +287,15 @@ impl MicaMcp {
     }
     let total = edits.len();
     let mut last: Option<Value> = None;
+    let mut steps: Vec<Value> = Vec::with_capacity(total);
     for (i, e) in edits.into_iter().enumerate() {
       let EditOp {
         mode,
         markdown,
-        anchor,
+        ref anchor,
         find,
         replace,
+        replacement_format,
         unique,
       } = e;
       // expected_seq guards only the batch START; within the batch the doc's seq
@@ -296,29 +307,51 @@ impl MicaMcp {
           document_id,
           &mode,
           markdown.as_deref(),
-          anchor,
+          anchor.clone(),
           find.as_deref(),
           replace.as_deref(),
+          &replacement_format,
           unique,
           seq,
         )
         .await
       {
-        Ok(value) => last = Some(value),
+        Ok(value) => {
+          // Mirror the step so a partial run still names WHERE each landed:
+          // `block_ids` from the API's update ops when it reports them (omitted
+          // when it does not — unknown ids are not empty ids); `anchor: null`
+          // means the doc-end fallback, never a lost id.
+          let mut step = serde_json::Map::new();
+          step.insert("mode".to_string(), json!(mode));
+          if let Some(a) = anchor {
+            step.insert("anchor".to_string(), json!(a));
+          }
+          if let Some(ids) = update_block_ids(&value) {
+            step.insert("block_ids".to_string(), json!(ids));
+          }
+          steps.push(Value::Object(step));
+          last = Some(value);
+        }
         Err(error) => {
           // Partial application: say how many landed and which op failed, as an
-          // isError result the agent can read and resume from.
-          return Ok(tool_error(McpError::internal_error(
+          // isError result the agent can read and resume from. The steps that
+          // DID land come back in the details so nothing applied is left
+          // unnamed — `isError` stays, the caller treats the batch as a
+          // failure it must reconcile, not as success-with-notes.
+          return batch_failure(
+            i,
+            last,
+            steps,
+            &mode,
             format!(
               "applied {i}/{total} edits; edit #{i} ({mode}) failed: {}",
               error.message
             ),
-            None,
-          )));
+          );
         }
       }
     }
-    batch_ack(total, last)
+    batch_ack(total, last, steps)
   }
 
   // Images were the one thing an agent could neither put in nor get out. The
@@ -455,3 +488,7 @@ impl MicaMcp {
     )]))
   }
 }
+
+#[cfg(test)]
+#[path = "batch_tests.rs"]
+mod batch_tests;

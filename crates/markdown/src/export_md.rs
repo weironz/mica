@@ -62,6 +62,10 @@ pub(crate) fn append_markdown_children(
   };
   let mut prev_was_item = false;
   let mut prev_quote = 0usize;
+  // Each flat nesting level has its own run. Recursive child trees get their
+  // own walker, so numbering never leaks between parents.
+  let mut runs: Vec<Option<(&str, u64, usize)>> = Vec::new();
+  let mut run_quote = 0;
   for child_id in child_ids {
     let child_index = index
       .get(child_id.as_str())
@@ -70,6 +74,46 @@ pub(crate) fn append_markdown_children(
     let child = &snapshot.blocks[child_index];
     let quote = quote_depth_of(child);
     let li_child = li_of(child);
+    if li_child.is_none()
+      && (quote != run_quote || child.data.get("qbreak").is_some() || !is_item(&child.kind))
+    {
+      runs.clear();
+    }
+    if li_child.is_none() {
+      run_quote = quote;
+    }
+    let mut numbered;
+    let rendered = if is_item(&child.kind) && li_child.is_none() {
+      let level = list_indent(child);
+      runs.truncate(level + 1);
+      runs.resize((level + 1).max(runs.len()), None);
+      let tag = list_tag_for(&child.kind).unwrap_or("ul");
+      let starts_run = child.data.get("start").is_some() || child.data.get("marker").is_some();
+      let n = match runs[level] {
+        Some((previous, next, _)) if previous == tag && !starts_run => next,
+        _ => child.data.get("start").and_then(Value::as_u64).unwrap_or(1),
+      };
+      let width = if tag == "ol" {
+        (n.to_string().len() + 2).max(4)
+      } else {
+        4
+      };
+      runs[level] = Some((tag, n.saturating_add(1), width));
+      if tag == "ol" {
+        numbered = child.clone();
+        if !numbered.data.is_object() {
+          numbered.data = json!({});
+        }
+        // CommonMark permits at most nine source digits. A later item's
+        // source number does not affect its rendered ordinal.
+        numbered.data["start"] = json!(if n <= 999_999_999 { n } else { 1 });
+        &numbered
+      } else {
+        child
+      }
+    } else {
+      child
+    };
     // A list runs until a blank line: separate it from whatever follows so
     // the next block can't be read back as a lazy continuation. Container
     // children (`data.li`) stay inside the run.
@@ -96,7 +140,26 @@ pub(crate) fn append_markdown_children(
       lines.push(format!("> [!{}]", a.to_ascii_uppercase()));
     }
     let from = lines.len();
-    append_markdown_block(snapshot, index, child, depth, lines, images)?;
+    append_markdown_block(snapshot, index, rendered, depth, lines, images)?;
+    // Three-digit parent markers need more than the usual four columns.
+    // Include the owning item itself for container children (`data.li`).
+    let ancestors = li_child
+      .map(|level| level + 1)
+      .unwrap_or_else(|| list_indent(child));
+    let extra: usize = runs
+      .iter()
+      .take(ancestors)
+      .flatten()
+      .map(|(_, _, width)| width - 4)
+      .sum();
+    if extra > 0 {
+      let pad = " ".repeat(extra);
+      for line in &mut lines[from..] {
+        if !line.is_empty() {
+          line.insert_str(0, &pad);
+        }
+      }
+    }
     if quote > 0 {
       // Re-prefix every emitted line with the quote markers; blanks become
       // bare `>` so paragraph breaks stay inside the quote.
@@ -256,9 +319,8 @@ pub(crate) fn append_markdown_block_content(
       push_list_item(lines, block, &indent, &format!("{marker} "), rich);
     }
     "numbered_list" | "number_list" => {
-      // Only a run's first item carries `start`; the rest stay `1.` (valid
-      // CommonMark — ordered numbering continues regardless). A recorded
-      // `marker` restores the `)` delimiter that broke the previous run.
+      // The walker supplies the visible number without changing stored data.
+      // A recorded `marker` restores the `)` delimiter that broke the run.
       let n = block.data.get("start").and_then(Value::as_u64).unwrap_or(1);
       let delim = block_data_str(block, "marker").unwrap_or(".");
       push_list_item(lines, block, &indent, &format!("{n}{delim} "), rich);

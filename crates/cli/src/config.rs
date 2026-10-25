@@ -5,7 +5,7 @@
 //! (unix) / `%APPDATA%\mica\config.json` (windows). Written `0600` on unix.
 //!
 //! Both fields are overridable per-invocation without touching the file:
-//! `--server`/`MICA_SERVER` and the `MICA_TOKEN` env var take precedence, so an
+//! `--server`/`MICA_SERVER` and the `MICA_PAT` env var take precedence, so an
 //! agent or CI can stay fully stateless.
 
 use anyhow::{Context, Result};
@@ -21,14 +21,19 @@ pub struct Config {
 }
 
 pub fn config_path() -> Result<PathBuf> {
-  if let Ok(explicit) = std::env::var("MICA_CONFIG") {
+  config_path_from(|name| std::env::var_os(name))
+}
+
+fn config_path_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Result<PathBuf> {
+  let value = |name| get(name).filter(|v| !v.to_string_lossy().trim().is_empty());
+  if let Some(explicit) = value("MICA_CONFIG") {
     return Ok(PathBuf::from(explicit));
   }
-  let base = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+  let base = if let Some(xdg) = value("XDG_CONFIG_HOME") {
     PathBuf::from(xdg)
-  } else if let Ok(home) = std::env::var("HOME") {
+  } else if let Some(home) = value("HOME") {
     PathBuf::from(home).join(".config")
-  } else if let Ok(appdata) = std::env::var("APPDATA") {
+  } else if let Some(appdata) = value("APPDATA") {
     PathBuf::from(appdata)
   } else {
     anyhow::bail!(
@@ -96,6 +101,36 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn config_location_ignores_empty_values_and_keeps_explicit_precedence() {
+    let path = |values: &[(&str, &str)]| {
+      config_path_from(|name| {
+        values
+          .iter()
+          .find(|(key, _)| *key == name)
+          .map(|(_, v)| (*v).into())
+      })
+    };
+    assert_eq!(
+      path(&[("MICA_CONFIG", "chosen.json"), ("HOME", "home")]).unwrap(),
+      PathBuf::from("chosen.json")
+    );
+    assert_eq!(
+      path(&[
+        ("MICA_CONFIG", ""),
+        ("XDG_CONFIG_HOME", " "),
+        ("HOME", "home")
+      ])
+      .unwrap(),
+      PathBuf::from("home").join(".config/mica/config.json")
+    );
+    assert_eq!(
+      path(&[("APPDATA", "roaming")]).unwrap(),
+      PathBuf::from("roaming").join("mica/config.json")
+    );
+    assert!(path(&[]).unwrap_err().to_string().contains("MICA_CONFIG"));
+  }
 
   // The on-disk shape only. `config_path`/`load`/`save` resolve the location
   // from process-global env (MICA_CONFIG / HOME / …) and read/write the real

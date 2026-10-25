@@ -1403,6 +1403,11 @@ mod inline;
 mod latex_guard;
 mod scan_memo;
 mod span_walk;
+mod text_edit;
+
+pub use text_edit::{
+  block_text_matches, block_text_preview, markdown_find_text, replace_block_text,
+};
 
 pub use inline::math_run_spans;
 pub use latex_guard::{JSON_ESCAPE_COLLISIONS, mangled_latex_collision, mangled_latex_message};

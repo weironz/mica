@@ -20,7 +20,7 @@ does **not** do backups — see [External backup](#backup) below.
   block/CRDT ops (`import_markdown` → `apply_document_operations`). The AI never
   constructs raw block ops — this is far more token-efficient and less error-prone
   (the same choice Notion's and Obsidian's MCP servers make).
-- **Get outline, then patch.** `mica_get_outline` returns headings + block ids so
+- **Get outline, then patch.** `mica_get_outline` returns headings + block ids with type/preview labels so
   a write can target a spot (`insert_at`, `find_replace`) instead of rewriting the
   whole page.
 
@@ -46,7 +46,7 @@ Read (safe, `readOnlyHint`):
 - `mica_list_pages(workspace_id)` — the page tree (documents + folders).
 - `mica_search(workspace_id, query)` — pages by title.
 - `mica_read_document(workspace_id, document_id)` — content as Markdown.
-- `mica_get_outline(workspace_id, document_id)` — headings + block ids.
+- `mica_get_outline(workspace_id, document_id)` — headings + block ids + type/preview labels + seq.
 - `mica_export_workspace(workspace_id)` — the whole workspace as Markdown.
 
 Write:
@@ -87,6 +87,18 @@ Write:
 
 Note the two id kinds: reads/writes use a page's **`document_id`** (its
 `object_id`, from `mica_list_pages`); move/trash use its **`view_id`**.
+
+### 局部编辑语义
+
+`find_replace` 搜索块及表格单元格的可见文本,不跨块或跨单元格。带格式的块使用
+UTF-16 范围调整来保留未修改的标记,不通过整页导出再导入重建内容。`find` 原样无
+命中时,允许解析单块 Markdown 后再匹配;`replace` 默认解析内联 Markdown,
+`replacement_format: "plain_text"` 显式选择字面替换。代码块、块级公式保持字面。
+`unique` 在 API 写锁内检查,与实际写入共享同一个匹配面。
+
+批量编辑会逐项回报实际操作的块 ID;部分失败将已完成项、最新序号和失败位置
+一起作为工具错误返回。接入方式、完整参数与旧 API 兼容边界见
+[mcp-connect.md](mcp-connect.md#局部查找替换与块定位)。
 
 ## External backup
 

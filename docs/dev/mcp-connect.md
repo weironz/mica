@@ -141,7 +141,7 @@ Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。已�
 | `mica_list_pages` | 页树(文档+文件夹;拿 object_id / view id) |
 | `mica_search` | 按**标题 + 正文**搜页面,返回命中片段(`title_match` 说明是哪边命中) |
 | `mica_read_document` | 读文档(Markdown) |
-| `mica_get_outline` | 大纲(标题+block id,`insert_at` 的锚点来源) |
+| `mica_get_outline` | 大纲(标题、block id、块类型与短文本预览,`insert_at` 的锚点来源) |
 | `mica_create_document` | 建页面(可带 Markdown 正文) |
 | `mica_update_document` | 写入已有文档:`append`(默认、安全)/ `replace_all` / `insert_at` / `find_replace` |
 | `mica_add_image` | 从 http(s) URL 把图片**存进**工作区,返回 file_id + 可直接粘的 Markdown |
@@ -172,6 +172,46 @@ Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。已�
 
 Markdown 里的 `$…$` 行内公式、`$$…$$` 块级公式、代码块、表格都会被服务端
 解析成对应的块/标记,在客户端里正常排版。
+
+### 局部查找替换与块定位
+
+`find_replace` 在**单个块或单元格**内精确匹配可见文本,支持带格式的段落、
+列表项和表格单元格。行内代码和加粗等标记不会截断匹配。先尝试原样匹配;
+全文没有原样命中时,再把 `find` 作为单块 Markdown 解析,去掉内联分隔符、
+列表或标题前缀后匹配。因此下面两种查找都能定位同一句话:
+
+```json
+{"mode":"find_replace","find":"执行 omp --version,已确认","replace":"执行 `omp --help`,已确认","unique":true}
+{"mode":"find_replace","find":"执行 `omp --version`,已确认","replace":"执行 `omp --help`,已确认","unique":true}
+```
+
+`replace` 默认按**内联 Markdown**解析,反引号会生成代码标记,不会作为字面反引号
+存入正文。需要原样插入时传 `replacement_format: "plain_text"`。代码块与块级公式
+始终保留字面文本。替换会保留块 ID、未修改的单元格、块属性与匹配范围外的格式。
+`unique: true` 在服务端文档写锁内统计实际命中数,不等于 1 就拒绝整次替换。
+
+匹配不能跨两个块或两个单元格;换段、插入表格等结构变化继续用 `insert_at`、
+`delete` 或明确需要的 `replace_all`。没有匹配时,错误会提示这一边界。
+
+`mica_get_outline` 保留 `headings`、`block_ids`、`seq`,并返回同序的
+`blocks: [{"block_id":"…","type":"paragraph","preview":"…"}]`。预览最多 40 个
+Unicode 字符,表格预览也包含单元格文字。按预览核对目标 ID,无需按全文数块。
+这些 ID 是根节点的直接子块,可以作为 `insert_at` / `delete` 的锚点。
+
+`mica_apply_edits` 成功或部分失败都返回 `edits` 列表,逐项列出已经生效的编辑
+及其 `block_ids`,同时保留最新 `seq` 和可用的 `last_block_id`。部分失败仍是
+`isError: true`,附有从 0 开始的 `failed_index`、`failed_mode` 和 `applied`,
+后续编辑不会执行。批次不是事务,重试时不要重复已生效的部分。
+
+API 与 CLI 要分别升级:新版 CLI 会在 `find_replace` 前检查 API 是否返回带类型
+和预览的 outline。旧 API 不支持这批替换语义时会明确拒绝,避免新参数被静默忽略。
+仅更新仓库或 API 不会替换 MCP 客户端实际启动的二进制;更新 CLI 后须重连客户端。
+
+本地回归可运行 `scripts/test-mcp-edits.py --cli <本轮构建的 mica-cli> --api
+<本轮构建的 mica-api-server>`。先把 `DATABASE_URL` 指向本机、数据库名以
+`mica_mcp_` 开头的专用临时 Postgres 数据库。脚本启动隔离 API、过滤 MCP 子进程的
+环境变量并通过真实 stdio 验证读写、编号、并发冲突和批次部分失败;结束后删除测试
+工作区并关闭两个子进程,数据库保留供检查。
 
 ### 图片:`![](https://…)` 只是热链,不是存进来
 
@@ -214,6 +254,12 @@ GC 会把字节回收掉,这边的页面就烂了。
 
 ## 排错
 
+- MCP 客户端过滤 stdio 子进程环境变量时(例如过滤 `APPDATA` / `HOME`),
+  保存的登录配置可能无法被找到,表现为 `no server` 或未登录。在客户端的 `env`
+  配置里显式设置 `MICA_CONFIG` 为 `config.json` 的**绝对路径**。配置位置的顺序为
+  `MICA_CONFIG` → `XDG_CONFIG_HOME/mica/config.json` → `HOME/.config/mica/config.json`
+  → `APPDATA/mica/config.json`;空值按未设置处理。`mica-cli mcp --help` 也有提示。
+  `HOME` 被保留但指向其他目录时,程序不会自动猜出被过滤的 `APPDATA` 配置位置。
 - `not signed in`:整条链都没解析到凭证 —— 传 `--token` / `MICA_PAT`,或先 `auth login`。
   **先确认变量不是空串**:空值按未设置处理,所以 `MICA_PAT=` 和没设是一个效果。
   报错里若点名 `MICA_TOKEN`,说明你设的是已退休的那个名字,改成 `MICA_PAT` 即可。

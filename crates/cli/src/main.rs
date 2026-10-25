@@ -146,6 +146,10 @@ struct RehostImagesArgs {
 }
 
 #[derive(Args)]
+#[command(
+  after_help = "If your MCP client filters child-process environment variables (for example APPDATA or HOME), \
+pass MICA_CONFIG as an absolute path to your saved config.json in the client's env settings."
+)]
 struct McpArgs {
   /// Refuse every write tool at call time; read tools stay available.
   /// Also honored from the environment: MICA_MCP_READ_ONLY=1.

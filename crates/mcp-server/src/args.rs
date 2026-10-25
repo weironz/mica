@@ -78,7 +78,7 @@ pub(crate) struct ReadDocumentsArgs {
   /// mica_list_pages) — one call reads them all instead of N.
   pub(crate) document_ids: Vec<Uuid>,
   /// "full" (default — each doc's whole Markdown) or "outline" (headings + block
-  /// ids + seq, far cheaper). Use "outline" to SCAN structure across many docs
+  /// ids with type/preview + seq, far cheaper). Use "outline" to SCAN structure across many docs
   /// token-cheaply, then read the few you need in full.
   #[serde(default)]
   pub(crate) mode: Option<String>,
@@ -127,11 +127,17 @@ pub(crate) struct UpdateDocArgs {
   /// error lists the candidates.
   #[serde(default)]
   pub(crate) anchor: Option<String>,
-  /// find_replace: the text to find and its replacement.
+  /// find_replace: visible text within one block or table cell. A single
+  /// Markdown block (inline delimiters / list prefix included) is also accepted
+  /// if the literal text does not occur. Cannot span blocks or cells.
   #[serde(default)]
   pub(crate) find: Option<String>,
   #[serde(default)]
   pub(crate) replace: Option<String>,
+  /// find_replace: "markdown" (default: parse replacement inline formatting) or
+  /// "plain_text" (insert literally). Code/math blocks always insert literally.
+  #[serde(default = "default_replacement_format")]
+  pub(crate) replacement_format: String,
   /// find_replace: require EXACTLY ONE occurrence, else refuse and report the
   /// count — a precise single edit instead of a blind replace-all. Default false
   /// (replace every match, the existing behaviour).
@@ -157,11 +163,15 @@ pub(crate) struct EditOp {
   /// insert_at: the block id OR heading text to place after.
   #[serde(default)]
   pub(crate) anchor: Option<String>,
-  /// find_replace: text to find / its replacement.
+  /// find_replace: visible text or single-block Markdown; cannot cross blocks
+  /// or table cells. Replacement inline syntax follows replacement_format.
   #[serde(default)]
   pub(crate) find: Option<String>,
   #[serde(default)]
   pub(crate) replace: Option<String>,
+  /// "markdown" (default) or "plain_text"; code/math blocks stay literal.
+  #[serde(default = "default_replacement_format")]
+  pub(crate) replacement_format: String,
   /// find_replace: require EXACTLY ONE match (a precise single edit).
   #[serde(default)]
   pub(crate) unique: bool,
@@ -180,6 +190,10 @@ pub(crate) struct ApplyEditsArgs {
   /// batch itself advances.
   #[serde(default)]
   pub(crate) expected_seq: Option<i64>,
+}
+
+fn default_replacement_format() -> String {
+  "markdown".to_string()
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
