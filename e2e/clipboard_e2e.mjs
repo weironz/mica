@@ -8,7 +8,10 @@ const gemini = JSON.parse(readFileSync(new URL('../clients/mica_flutter/test/fix
 const mathPlain = gemini.plain.replace(/\$([^$]+)\$/, '$1');
 
 const baseArg = process.argv.indexOf('--base');
-const base = baseArg >= 0 ? process.argv[baseArg + 1] : 'http://127.0.0.1:8091';
+const origin = baseArg >= 0 ? process.argv[baseArg + 1] : 'http://127.0.0.1:8091';
+// Harness pages come from the shared entry (e2e/web_harness_entry.dart); the
+// ?harness= parameter picks the library, so every page open must carry it.
+const base = origin.includes('?') ? origin : `${origin}/?harness=clipboard`;
 const source = 'print(1)\nprint(2)';
 const crossBlock = `${source}\n\nafter`;
 
@@ -74,7 +77,9 @@ async function expectCopy(label, expected, rich = '<pre><code class="language-py
 }
 
 async function openFixture(fixture = '', legacy = false) {
-  await page.goto(`${base}${fixture ? `?fixture=${fixture}` : ''}`, { waitUntil: 'load' });
+  const url = new URL(base);
+  if (fixture) url.searchParams.set('fixture', fixture);
+  await page.goto(url.toString(), { waitUntil: 'load' });
   await page.waitForFunction(() => typeof window.micaClipboardHarnessFocus === 'function', null, {
     timeout: 60_000,
   });

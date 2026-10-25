@@ -27,6 +27,15 @@ on:
   # `just release`) are the default path now; run this from the Actions page
   # when a hosted run is actually wanted.
   workflow_dispatch:
+    inputs:
+      suite:
+        description: 'smoke: 2 offline files + 1 live sync file; full: all 18 files.'
+        type: choice
+        required: true
+        default: full
+        options:
+          - full
+          - smoke
 
 # Pushing several commits in a row (five within an hour on 07-28) left four
 # superseded runs burning runners for a verdict nobody would read. The newest
@@ -42,7 +51,8 @@ concurrency:
 
 jobs:
   integration:
-    name: Flutter integration_test (Windows, offline set)
+    name: >-
+      Flutter integration_test (Windows, offline set${{ inputs.suite == 'smoke' && ', smoke' || '' }})
     # runs-on: windows-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Windows]
     defaults:
@@ -73,8 +83,12 @@ jobs:
 
       - name: Run offline integration tests (serial, kill between)
         shell: pwsh
+        env:
+          SUITE: ${{ inputs.suite }}
         run: |
           $ErrorActionPreference = 'Continue'
+          # Smoke exercises the store/FFI entry and sync convergence.
+          $smoke = @('integration_test/frb_store_test.dart', 'integration_test/cloud_sync_converge_test.dart')
           # CLIENT-ONLY / offline files only. Keep in sync with the exclusion
           # list in this workflow's header when files are added or reclassified.
           $files = @(
@@ -93,6 +107,7 @@ jobs:
             'integration_test/gif_animation_test.dart',
             'integration_test/mermaid_render_test.dart'
           )
+          if ($env:SUITE -eq 'smoke') { $files = $smoke }
           $failed = @()
           foreach ($f in $files) {
             Write-Host "==> flutter test $f -d windows"
@@ -119,7 +134,8 @@ jobs:
   # RustFS is the same pinned rc.3 release used by both deployment Compose
   # forms. Download its official Windows asset and verify its SHA256 before use.
   cloud:
-    name: Flutter integration_test (Windows, live server)
+    name: >-
+      Flutter integration_test (Windows, live server${{ inputs.suite == 'smoke' && ', smoke' || '' }})
     # runs-on: windows-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Windows]
     steps:
@@ -185,8 +201,10 @@ jobs:
       # The `skipping` guard below is the other half: this test degrades to a
       # skip when the server is absent and still exits 0, so a green here would
       # otherwise never prove the server was reachable.
-      - name: Four Windows integration tests against the live stack
+      - name: Windows integration tests against the live stack
         shell: pwsh
+        env:
+          SUITE: ${{ inputs.suite }}
         run: |
           $env:APP_ENV = 'development'
           $env:HTTP_ADDR = '127.0.0.1:8080'
@@ -239,12 +257,15 @@ jobs:
             }
             Write-Host "api healthy on :8080; RustFS ready on :9000"
 
-            $tests = @(
+            $allTests = @(
               'cloud_sync_test.dart',
               'migration_sync_test.dart',
               'offline_image_reconcile_test.dart',
               'page_switch_fidelity_test.dart'
             )
+            # smoke: the first-account bootstrap case is the strongest single
+            # live signal (real API + Postgres + RustFS + WS + CRDT round trip).
+            $tests = if ($env:SUITE -eq 'smoke') { @($allTests[0]) } else { $allTests }
             foreach ($test in $tests) {
               Write-Host "==> $test"
               Push-Location clients/mica_flutter

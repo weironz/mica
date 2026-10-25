@@ -27,6 +27,19 @@ on:
   # `just release`) are the default path now; run this from the Actions page
   # when a hosted run is actually wanted.
   workflow_dispatch:
+    inputs:
+      scope:
+        description: 'full runs every gate; auto selects jobs for the changed paths.'
+        type: choice
+        required: true
+        default: full
+        options:
+          - full
+          - auto
+      base_ref:
+        description: 'Diff base for auto (commit/tag/branch); empty uses HEAD^.'
+        type: string
+        required: false
 
 # Pushing several commits in a row (five within an hour on 07-28) left four
 # superseded runs burning runners for a verdict nobody would read. The newest
@@ -37,6 +50,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Full remains the default gate. Auto is opt-in; unknown paths select every
+  # job, and a caller can cover several commits by supplying base_ref.
+  paths:
+    name: Scope (affected job groups)
+    runs-on: [self-hosted, Linux]
+    outputs:
+      rust: ${{ steps.groups.outputs.rust }}
+      flutter: ${{ steps.groups.outputs.flutter }}
+      web-e2e: ${{ steps.groups.outputs['web-e2e'] }}
+      container: ${{ steps.groups.outputs.container }}
+      mcp: ${{ steps.groups.outputs.mcp }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # An explicit baseline may cover more than the latest commit.
+          fetch-depth: 0
+      - name: Test job selection
+        run: |
+          bash scripts/test-ci-paths.sh
+          bash scripts/test-flutter-sdk-reuse.sh
+      - id: groups
+        env:
+          CI_SCOPE: ${{ inputs.scope }}
+          CI_BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -euo pipefail
+          all=(rust flutter web-e2e container mcp)
+          if [ "$CI_SCOPE" = auto ]; then
+            base="${CI_BASE_REF:-HEAD^}"
+            if [ -z "$CI_BASE_REF" ] && ! git rev-parse --verify 'HEAD^' >/dev/null 2>&1; then
+              bash scripts/ci-paths-for-scope.sh > groups.txt
+            else
+              bash scripts/ci-paths-for-scope.sh "$base" HEAD > groups.txt
+            fi
+          else
+            printf '%s\n' "${all[@]}" > groups.txt
+          fi
+          echo "## Selected CI jobs ($CI_SCOPE)" >> "$GITHUB_STEP_SUMMARY"
+          for group in "${all[@]}"; do
+            found=$(grep -qx "$group" groups.txt && echo true || echo false)
+            echo "$group=$found" >> "$GITHUB_OUTPUT"
+            echo "- $group: $found" >> "$GITHUB_STEP_SUMMARY"
+          done
+
   # 单元行数门禁（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 4/5 项）：
   # 2026-10-16 拆掉了三个巨石文件（main.dart 13,177 / routes/documents.rs 8,196 /
   # markdown lib.rs 6,339 行）。三层防线都在 scripts/check-file-size.sh：
@@ -51,6 +108,7 @@ jobs:
     name: Structure (file-size gate)
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
+    # The gate is cheap and structure drift is cheap to miss; run on every scope.
     steps:
       - uses: actions/checkout@v5
         with:
@@ -66,6 +124,8 @@ jobs:
     name: Rust (build + lint + tests)
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
+    if: needs.paths.outputs.rust == 'true'
+    needs: paths
 
     # sync_pg.rs asserts against real SQL (a conditional UPDATE IS the
     # concurrency guard); a mock would test nothing. Cheap here — one container.
@@ -76,7 +136,7 @@ jobs:
           POSTGRES_USER: mica
           POSTGRES_PASSWORD: mica
           POSTGRES_DB: mica
-        ports: ['5432:5432']
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U mica"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -160,6 +220,8 @@ jobs:
     name: MCP (official inspector against mica-cli mcp)
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
+    if: needs.paths.outputs.mcp == 'true'
+    needs: paths
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-rust
@@ -209,6 +271,8 @@ jobs:
     name: Flutter (analyze + Dart unit tests)
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
+    if: needs.paths.outputs.flutter == 'true'
+    needs: paths
     defaults:
       run:
         working-directory: clients/mica_flutter
@@ -261,6 +325,8 @@ jobs:
     name: Web e2e (browser against a real stack)
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
+    if: needs.paths.outputs['web-e2e'] == 'true'
+    needs: paths
 
     # Same block as the `rust` job above, for the same reason: the assertions are
     # about the real server folding real CRDT updates into real Postgres.
@@ -271,7 +337,7 @@ jobs:
           POSTGRES_USER: mica
           POSTGRES_PASSWORD: mica
           POSTGRES_DB: mica
-        ports: ['5432:5432']
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U mica"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -284,7 +350,7 @@ jobs:
           RUSTFS_ACCESS_KEY: mica
           RUSTFS_SECRET_KEY: mica-default-not-a-secret
           RUSTFS_CORS_ALLOWED_ORIGINS: http://127.0.0.1:8090
-        ports: ['9000:9000']
+        ports: ["9000:9000"]
 
     env:
       DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
@@ -441,57 +507,62 @@ jobs:
       - name: IndexedDB store browser regression
         run: |
           set -euo pipefail
-          export CHROME_EXECUTABLE="$(cd e2e && node -e "const {chromium}=require('@playwright/test'); console.log(chromium.executablePath())")"
+          CHROME_EXECUTABLE="$(cd e2e && node -e "const {chromium}=require('@playwright/test'); console.log(chromium.executablePath())")"
+          export CHROME_EXECUTABLE
           test -x "$CHROME_EXECUTABLE"
           cd clients/mica_flutter
           flutter test --platform chrome test/web_idb_doc_store_test.dart -r expanded
 
       # The production bundle has no stable DOM handles for its self-painted
-      # editor. This separate entrypoint renders that same MicaEditor with fixed
-      # blocks, exposes only focus, then Playwright sends real Ctrl+A/C events
-      # and inspects the browser's ClipboardItem flavors.
-      - name: Browser clipboard regression through the real editor
+      # editor, so the clipboard / settings / sidebar-rename regressions drive
+      # fixed-block harness pages. One build covers all three: the flags below
+      # are the union the three harnesses actually need — MICA_DEV_AUTOLOGIN is
+      # the only define any harness reads, and the API/cloud points come from
+      # ui_experience's mock-API page. See e2e/web_harness_entry.dart.
+      - name: Build the harness bundle (one build, three harness pages)
         run: |
           set -euo pipefail
           cd clients/mica_flutter
           flutter build web --release --no-web-resources-cdn \
-            --target=e2e/clipboard_harness.dart --output="$PWD/build/clipboard_web"
+            --target=e2e/web_harness_entry.dart \
+            --dart-define=MICA_DEV_AUTOLOGIN=false \
+            --dart-define=MICA_API_BASE_URL=http://127.0.0.1:8093 \
+            --dart-define=MICA_CLOUD_URL=http://127.0.0.1:8093 \
+            --output="$PWD/build/web_harness"
+
+      - name: Browser clipboard regression through the real editor
+        run: |
+          set -euo pipefail
+          # The build step wrote clients/mica_flutter/build/web_harness; serve
+          # that directory, not a repo-root lookalike.
+          cd clients/mica_flutter
+          page="http://127.0.0.1:8091/?harness=clipboard"
           python3 -m http.server 8091 --bind 127.0.0.1 \
-            --directory "$PWD/build/clipboard_web" > /tmp/clipboard-http.log 2>&1 &
+            --directory "$PWD/build/web_harness" > /tmp/clipboard-http.log 2>&1 &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT
-          for i in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1:8091/ > /dev/null 2>&1; then break; fi
+          for _ in $(seq 1 20); do
+            if curl -fsS "http://127.0.0.1:8091/?harness=clipboard" > /dev/null 2>&1; then break; fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:8091/ > /dev/null
+          curl -fsS "$page" > /dev/null
           cd ../../e2e
-          node clipboard_e2e.mjs --base http://127.0.0.1:8091
+          node clipboard_e2e.mjs --base "$page"
 
       - name: Writing comfort and responsive settings browser regression
         env:
           MICA_UI_RESULTS_DIR: ${{ runner.temp }}/ui-experience
+          MICA_UI_BASE_URL: http://127.0.0.1:8093
         run: |
           set -euo pipefail
-          cd clients/mica_flutter
-          flutter build web --release --no-web-resources-cdn \
-            --target=e2e/ui_experience_harness.dart --output="$PWD/build/ui_experience" \
-            --dart-define=MICA_DEV_AUTOLOGIN=false \
-            --dart-define=MICA_API_BASE_URL=http://127.0.0.1:8093 \
-            --dart-define=MICA_CLOUD_URL=http://127.0.0.1:8093
-          cd ../..
           node e2e/ui_experience_e2e.mjs
 
       - name: Sidebar double-click rename browser regression
         env:
           MICA_RENAME_RESULTS_DIR: ${{ runner.temp }}/sidebar-rename
+          MICA_RENAME_BASE_URL: http://127.0.0.1:8094
         run: |
           set -euo pipefail
-          cd clients/mica_flutter
-          flutter build web --release --no-web-resources-cdn --no-wasm-dry-run \
-            --target=e2e/sidebar_rename_harness.dart --output="$PWD/build/sidebar_rename" \
-            --dart-define=MICA_DEV_AUTOLOGIN=false
-          cd ../..
           node e2e/sidebar_rename_e2e.mjs
 
       - name: Sidebar rename screenshots and results
@@ -540,6 +611,10 @@ jobs:
     name: Container (api image + stack boots)
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
+    # Container image build is the most expensive job; it only makes sense when
+    # the backend, migrations or its own config changed.
+    if: needs.paths.outputs.container == 'true'
+    needs: paths
     steps:
       - uses: actions/checkout@v5
 
@@ -549,6 +624,9 @@ jobs:
           python3 scripts/test-compose-api-env.py
 
       - uses: docker/setup-buildx-action@v4
+        with:
+          name: mica-buildx
+          keep-state: true
 
       # Same action and cache scope shape as release.yml, so a warm layer cache
       # is shared and a repeat run is cheap. `load` puts the image in the local

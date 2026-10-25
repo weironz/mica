@@ -5,7 +5,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../clients/mica_flutter/build/sidebar_rename/', import.meta.url));
+const root = fileURLToPath(new URL('../clients/mica_flutter/build/web_harness/', import.meta.url));
 const output = process.env.MICA_RENAME_RESULTS_DIR || fileURLToPath(new URL('../clients/mica_flutter/build/sidebar-rename-results/', import.meta.url));
 await mkdir(output, { recursive: true });
 const mime = { '.html': 'text/html', '.js': 'application/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff2': 'font/woff2', '.png': 'image/png' };
@@ -57,7 +57,9 @@ async function pair(name) {
   await page.getByText('重命名', { exact: true }).waitFor();
 }
 try {
-  await page.goto('http://127.0.0.1:8094');
+  // Harness pages come from the shared entry (e2e/web_harness_entry.dart); the
+  // ?harness= parameter picks the library.
+  await page.goto(`${process.env.MICA_RENAME_BASE_URL || 'http://127.0.0.1:8094'}/?harness=sidebar_rename`);
   await page.waitForFunction(() => typeof window.micaRenameState === 'function');
   await page.waitForLoadState('networkidle');
   const placeholder = page.locator('flt-semantics-placeholder');

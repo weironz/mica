@@ -11,7 +11,11 @@ FROM rust:1.98-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release -p mica-cli
+# Keep the same mount keys as Dockerfile.api for persistent Mica builders.
+RUN --mount=type=cache,id=mica-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=mica-cargo-target-1.98,target=/src/target,sharing=locked \
+    cargo build --locked --release -p mica-cli \
+ && cp target/release/mica-cli /usr/local/bin/mica-cli-staged
 
 # ── rustic CLI (external backup engine), checksum-pinned ──────────────────────
 # The musl build is fully static → runs on the bookworm-slim runtime with no
@@ -86,7 +90,7 @@ RUN apt-get update \
  && apt-get update \
  && apt-get install -y --no-install-recommends postgresql-client-18 \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=build /src/target/release/mica-cli /usr/local/bin/mica-cli
+COPY --from=build /usr/local/bin/mica-cli-staged /usr/local/bin/mica-cli
 COPY --from=rustic /usr/local/bin/rustic /usr/local/bin/rustic
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export

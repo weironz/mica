@@ -6,7 +6,9 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../clients/mica_flutter/build/ui_experience/', import.meta.url));
+// Same bundle as the clipboard and sidebar-rename harnesses (web-e2e builds
+// e2e/web_harness_entry.dart once); only the served directory moved.
+const root = fileURLToPath(new URL('../clients/mica_flutter/build/web_harness/', import.meta.url));
 const output = process.env.MICA_UI_RESULTS_DIR || fileURLToPath(new URL('../docs/reviews/code-optimization/assets/', import.meta.url));
 await mkdir(output, { recursive: true });
 const mime = { '.html': 'text/html', '.js': 'application/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.ttf': 'font/ttf', '.otf': 'font/otf', '.woff2': 'font/woff2', '.png': 'image/png' };
@@ -20,7 +22,11 @@ const server = createServer(async (req, res) => {
   } catch { res.writeHead(404).end(); }
 });
 await new Promise(done => server.listen(8093, '127.0.0.1', done));
-const base = 'http://127.0.0.1:8093';
+// Harness pages come from the shared entry (e2e/web_harness_entry.dart); the
+// ?harness= parameter picks the library. The full-app page keeps its own
+// fixture=app parameter alongside it.
+const origin = process.env.MICA_UI_BASE_URL || 'http://127.0.0.1:8093';
+const base = `${origin}/?harness=ui_experience`;
 let browser;
 for (const channel of [undefined, 'chrome', 'msedge']) {
   try { browser = await chromium.launch(channel ? {channel} : {}); break; } catch {}
@@ -146,7 +152,9 @@ try {
     localStorage.setItem('mica.servers', JSON.stringify([base]));
     localStorage.setItem(`mica.authUser:${base}`, JSON.stringify(user));
     localStorage.setItem('mica.uiLanguage', 'zh');
-  }, {base, user});
+  // The app stores this as its server origin: it must stay the bare URL, not
+  // the harness page's ?harness= query.
+  }, {base: origin, user});
   const pendingAi = [];
   let aiMode = 'hold';
   let aiRequests = 0;
@@ -165,7 +173,7 @@ try {
     if (path === '/api/workspaces') return json({workspaces: []});
     return json({registration_open: false, workspaces: [], tokens: [], imports: []});
   });
-  await full.goto(`${base}/?fixture=app`);
+  await full.goto(`${base}&fixture=app`);
   await full.waitForTimeout(1800);
   await semantics(full);
   await full.getByText('UI Test', {exact: false}).first().click({force: true});

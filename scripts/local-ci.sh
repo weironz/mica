@@ -19,6 +19,11 @@ source scripts/lib-local.sh
 part=${1:-all}
 case "$part" in all | rust | flutter) ;; *) fail "unknown part '$part' (all | rust | flutter)" ;; esac
 
+note "CI configuration: job selection regressions"
+bash scripts/test-ci-paths.sh
+note "CI configuration: Flutter SDK reuse regressions"
+bash scripts/test-flutter-sdk-reuse.sh
+
 if [ "$part" != flutter ]; then
   note "structure: per-unit size gate"
   bash scripts/check-file-size.sh

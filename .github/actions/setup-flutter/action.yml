@@ -10,7 +10,16 @@ description: Flutter SDK pinned by .fvmrc (stable channel, cached)
 runs:
   using: composite
   steps:
+    # Self-hosted runners keep the pinned SDK pre-installed under
+    # RUNNER_TOOL_CACHE/flutter/<version>/<channel> (see docs/ops/ci-runners.md).
+    - name: Reuse the pre-installed Flutter (self-hosted)
+      id: preinstalled
+      if: runner.environment == 'self-hosted' && env.MICA_SKIP_FLUTTER_SETUP != 'true'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/reuse.sh"
+
     - uses: subosito/flutter-action@v2
+      if: steps.preinstalled.outputs.ready != 'true'
       with:
         channel: stable
         flutter-version-file: .fvmrc

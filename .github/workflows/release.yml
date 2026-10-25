@@ -606,6 +606,9 @@ jobs:
           cp -r clients/mica_flutter/build/web/. deploy/web/
 
       - uses: docker/setup-buildx-action@v4
+        with:
+          name: mica-buildx
+          keep-state: true
 
       # Gated with the push below: a dry run has nothing to authenticate FOR, and
       # a login that fails for want of a secret would turn the dry run red for a

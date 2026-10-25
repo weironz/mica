@@ -14,13 +14,18 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY migrations ./migrations
-RUN cargo build --release -p mica-api-server
+# CI keeps the Mica builder's state across jobs; cache mounts are not exported
+# by cache-to=gha. Copy the binary out before the target mount is detached.
+RUN --mount=type=cache,id=mica-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=mica-cargo-target-1.98,target=/src/target,sharing=locked \
+    cargo build --locked --release -p mica-api-server \
+ && cp target/release/mica-api-server /usr/local/bin/mica-api-server-staged
 
 FROM debian:bookworm-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=build /src/target/release/mica-api-server /usr/local/bin/mica-api-server
+COPY --from=build /usr/local/bin/mica-api-server-staged /usr/local/bin/mica-api-server
 ENV RUST_LOG=info
 EXPOSE 8080
 # /api/ready (not /api/health): it pings the Postgres pool, so an api that is
