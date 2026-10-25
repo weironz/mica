@@ -185,7 +185,7 @@ just check           # fmt + clippy + analyze
 
 不配 `S3_*` 时文件相关端点返回 `503`,其余功能正常;`ANTHROPIC_API_KEY` 同理。
 
-**动任何结构性的东西之前,先读 [`CLAUDE.md`](CLAUDE.md)**(项目原则、不变量、发版流程)
+**动任何结构性的东西之前,先读 [`AGENTS.md`](AGENTS.md)**(项目原则、不变量、发版流程)
 和 [`docs/dev/lessons.md`](docs/dev/lessons.md)——后者记录了那些不变量被破坏时的实际代价。
 
 三条不看就会被咬的规则:
@@ -213,7 +213,7 @@ just check           # fmt + clippy + analyze
 | [快捷键](docs/features/shortcuts.md) | 权威快捷键清单 |
 | [路线图](docs/plans/roadmap.md) | 接下来做什么 |
 
-设计文档之间有出入时,**以 `CLAUDE.md` 和它指向的文档为准**。
+设计文档之间有出入时,**以 `AGENTS.md` 和它指向的文档为准**。
 
 ## 🤝 参与贡献
 

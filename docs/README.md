@@ -3,7 +3,7 @@
 按用途分文件夹;每个文件夹里按主题列出。**先读哪几份**:
 
 - 想知道还要做什么 → [`plans/roadmap.md`](plans/roadmap.md)(权威待办,只放还要做的)
-- 改代码前 → [`dev/lessons.md`](dev/lessons.md)(踩过的坑)与仓库根 `CLAUDE.md`
+- 改代码前 → [`dev/lessons.md`](dev/lessons.md)(踩过的坑)与仓库根 [`AGENTS.md`](../AGENTS.md)
 - 发版 / 上线 → [`ops/release.md`](ops/release.md)、[`ops/deploy.md`](ops/deploy.md)
 - 代码评审与修复记录 → [`reviews/`](#reviews--代码评审与修复)
 
@@ -22,6 +22,8 @@
 
 新增文档时放进对应文件夹并在这里补一行;文件名带日期的是某一时刻的快照(评审、实测、事件定位),
 不随代码更新,结论以后续文档或代码为准。
+
+项目规则已统一到根 `AGENTS.md`；历史文档中的根 `CLAUDE.md` 及旧条款编号仅作追溯，当前规则以上述入口为准。设计目录内的独立 `CLAUDE.md` 不属于此次合并范围。
 
 ## architecture — 架构与核心机制
 
@@ -92,7 +94,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [lessons.md](dev/lessons.md) | **踩过的坑**(和 `CLAUDE.md` 一起读) |
+| [lessons.md](dev/lessons.md) | **踩过的坑**(和根 `AGENTS.md` 一起读) |
 | [bootstrap.md](dev/bootstrap.md) | 新开发机从零搭建(Windows) |
 | [dev-environment.md](dev/dev-environment.md) | 开发环境与辅助工具 |
 | [api.md](dev/api.md) | HTTP API |

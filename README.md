@@ -223,7 +223,7 @@ just check           # fmt + clippy + analyze
 With `S3_*` unset the file endpoints return `503` and everything else works. Same
 for `ANTHROPIC_API_KEY` and the AI endpoints.
 
-**Before changing anything structural, read [`CLAUDE.md`](CLAUDE.md)** — project
+**Before changing anything structural, read [`AGENTS.md`](AGENTS.md)** — project
 principles, invariants, and the release process — and
 [`docs/dev/lessons.md`](docs/dev/lessons.md), which records what those invariants cost
 when they were broken.
@@ -255,7 +255,7 @@ Three rules that will otherwise bite you:
 | [Shortcuts](docs/features/shortcuts.md) | Authoritative keyboard shortcut list |
 | [Roadmap](docs/plans/roadmap.md) | What's next |
 
-`CLAUDE.md` and the documents it points at are the current word where design
+`AGENTS.md` and the documents it points at are the current word where design
 documents disagree.
 
 ## 🤝 Contributing

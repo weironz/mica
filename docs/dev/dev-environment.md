@@ -20,7 +20,7 @@
 
 这些**不在仓库**里,配在 Claude Code 用户级(`claude mcp add ...` 或用户 settings):
 
-- **codebase-memory-mcp** — 代码知识图谱(见下节;CLAUDE.md 要求探索代码优先用它)
+- **codebase-memory-mcp** — 代码知识图谱(见下节;根 `AGENTS.md` 要求探索代码优先用它)
 - **GitHub MCP** — 仓库/PR/issue 操作
 - **Playwright MCP** — 浏览器自动化(与项目级重复,按需)
 - **Chrome DevTools MCP** — 调试/性能/网络
@@ -30,19 +30,15 @@
 
 ## codebase-memory-mcp(知识图谱)
 
-CLAUDE.md 要求探索代码**优先用图谱**而非 Grep/Read(省 token + 给结构上下文:callers/callees/数据流/测试)。**用户级 MCP**,全局装的 exe(`AppData\Local\Programs\codebase-memory-mcp\`;`claude mcp get codebase-memory-mcp` 看权威配置),不在 `.mcp.json` 里。
+根 `AGENTS.md` 要求探索代码**优先用图谱**而非 Grep/Read(省 token + 给结构上下文:callers/callees/数据流/测试)。**用户级 MCP**,全局装的 exe(`AppData\Local\Programs\codebase-memory-mcp\`;`claude mcp get codebase-memory-mcp` 看权威配置),不在 `.mcp.json` 里。
 
 工具面:`search_graph`(找符号)/ `search_code`(图增强搜)/ `get_code_snippet`(取源码)/ `trace_path`(调用链/数据流)/ `query_graph`(Cypher)/ `get_architecture` / `detect_changes`(审改动)。
 
-**不自动更新** —— 大改后手动重建:`index_repository(repo_path="C:/data/codes/mica-will-laptop", mode="full")`(模式 `full` / `moderate` / `fast`);`index_status` 查新鲜度,`list_projects` 列项目(本项目名 `C-data-codes-mica-will-laptop`,由仓库路径推导)。**查询类工具都要带 `project` 参数**,不带会直接报 `missing required argument: project`。
-
-> 项目名跟着仓库路径走:上一台主力机是 `D:/codes/mica` / `D-codes-mica`,那台机器硬件故障报废后于 2026-07-20 迁到本机,旧名已失效。
->
-> ⚠️ `full` 模式偶发 worker 崩溃(返回 `{"status":"error","outcome":"exit_nonzero"}`,而 `logs/.worker-*.log` 是**空文件**,查不出是哪个文件触发的)。原样重试一次即可,不用降级到 `fast`——实测重试后 `full` 正常跑完(8979 节点 / 37710 边,`fast` 只有 5773 / 27559)。
+**不要假定自动更新**：先用 `list_projects` 找到当前仓库路径对应的 project，再用 `index_status` 检查状态；未索引或结果过期时，以当前环境的仓库绝对路径运行 `index_repository`（模式 `full` / `moderate` / `fast`）。查询类工具须传 `project`，项目名以工具返回为准，不沿用其他机器的路径或历史节点数。
 
 配套用户级 hook(`~/.claude/hooks/`):`cbm-code-discovery-gate`(PreToolUse Grep|Glob 门,督促走图)+ `cbm-session-reminder`(SessionStart 注入探索协议 + 近期上下文)。
 
-> code-review-graph 已于 2026-07-15 全局卸载(省 token),由本 MCP 取代;`.mcp.json` / `.claude` hooks / pipx 本体 / `.code-review-graph` 数据均已移除。
+> `code-review-graph` 与 `codebase-memory-mcp` 是两套图谱，不能混用 API。前者也可由本机 Git hooks 调用 CLI 更新/审查；2026-10-25 实际提交时仍有这条路径，旧的「已全局卸载」记录已失效。迁移或排障时分别检查 MCP、CLI 和 Git hooks 的配置与可用性，hooks 不随仓库自动迁移。
 
 ## Skills
 

@@ -1,53 +1,69 @@
-<!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
+# Mica 项目协作规则
 
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
+## 协作与决策
 
-### When to use graph tools FIRST
+- 对话与项目文档用中文；面向公众的 README 用英文。
+- 按需求实现最小充分解，不为假想需求预先加层、加开关。复杂决策先验证共同前提，再研究同类产品在相同约束下的实现及刻意不用的方案；说明取舍。
+- 计划获准后连续执行到完成，常规决策按推荐项推进；如实报告未验证或做不到的部分。
+- 可用子代理并行处理独立任务；需要边修改边维护清单的批量工作，由单个 agent 顺序完成，避免中断留下悬空引用。
 
-- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
-- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
-- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
-- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview` + `list_communities`
+## 代码探索：图谱优先
 
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
+- 先用 `codebase-memory-mcp` 的 `list_projects` 确认当前仓库对应的 project，再用 `index_status` 检查状态；不要复用其他机器的绝对路径或 project 名。
+- 按当前 MCP 实际提供的能力选工具：找符号用 `search_graph`，读符号用 `get_code_snippet`，追调用链用 `trace_path`，复杂关系用 `query_graph`，架构概览用 `get_architecture`，全文搜索用 `search_code`。
+- 审查改动时优先使用可用的 `detect_changes`，结合调用链与测试关系评估影响；工具名、参数与 schema 以当前会话为准，缺失的能力按下述规则回退。
+- `code-review-graph` 可用时，用 `detect_changes` / `get_review_context` 审查，`get_impact_radius` / `get_affected_flows` 分析影响；其 CLI / Git hooks 与 MCP 接入分别检查，不混用两套图谱的 API。
+- 不假定图谱自动更新；仓库未索引或结果过期时，用当前环境的仓库路径运行 `index_repository`。图谱不可用或覆盖不足，以及查字符串、配置、脚本等非代码内容时，回退到 `rg` / 文件读取。
 
-### Key Tools
+## 架构与数据不变量
 
-| Tool | Use when |
-| ------ | ---------- |
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context` | Need source snippets for review — token-efficient |
-| `get_impact_radius` | Understanding blast radius of a change |
-| `get_affected_flows` | Finding which execution paths are impacted |
-| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes` | Finding functions/classes by name or keyword |
-| `get_architecture_overview` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
+- **Rust-first 数据面**：核心文档模型、CRDT、同步与数据处理放在 Rust；Dart 负责 UI 与编辑器热路径。Markdown 语法以 `crates/markdown` 为权威，Dart 镜像必须同步更新。
+- **渲染扩展走机制**：通过 `AtomicBlockRenderer` 注册表扩展，避免继续向 `render.dart` 堆分支。见 [渲染架构](docs/architecture/render-architecture.md)。
+- **Markdown round-trip 是不变量**：保持 CommonMark / GFM 与现有方言兼容，写侧输出规范化子集；改解析或导出时检查 [规范记分牌](docs/architecture/commonmark-scoreboard.md) 及对应回归测试。
+- **folder 是唯一容器，page 是叶子**：服务端写 `parent_view_id` 必须经过 `documents::ensure_parent_accepts_children`；父节点须为同工作区、未删除的 folder，保留 `views_parent_must_be_folder` DB 触发器兜底。
+- 编辑器使用 marks-over-plain-text；硬换行按现有反斜杠加换行约定存储。块级嵌套保持扁平模型：`data.indent` 为列表层级，`data.quote` / `qbreak` 为引用深度/分组，`data.li` 为 item 容器子块；HTML 导出重建嵌套。代码字体使用 `kMonoFont`。
+- 快捷键变更同步编辑器/应用级处理、设置面板和 [快捷键清单](docs/features/shortcuts.md)；按当前符号定位实现，不照搬旧文件位置。
 
-### Workflow
+## 代码结构与大小门禁
 
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
-4. Use `query_graph` pattern="tests_for" to check coverage.
+- API 路由放入 `crates/api-server/src/routes/<域>/`，共享 helper / DTO 在对应 `mod.rs` 再导出；Markdown 引擎按 block / inline / html / export_md / entities 管线归位，公开 API 留在 `lib.rs`。
+- Flutter 的 `part` 可整理同库代码，但不减少库耦合或库行数；需要真正拆分时建立独立 library。
+- 门禁以 [scripts/check-file-size.sh](scripts/check-file-size.sh) 和 [预算表](scripts/file-size-budget.txt) 为准：Dart 按 library（root + 全部 part），Rust 按文件，包含桌面 FFI crate。
+- 普通单元硬上限 8,000 行、软上限 4,000 行；预算登记的存量单元跳过硬限，但**只许减不许增**，修改前先看预算。
+- 增量检查 `--diff <base>` 还限制：超过 2,000 行的存量单元净增不得超过 300 行；同库各 part 合并计量。
+- 生成代码等豁免须在 `EXEMPT_RE` 或预算表显式登记并说明理由。提交前运行 `just check-structure`；背景见 [拆分计划](docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md)。
 
-<!-- 代码结构约定：防单文件膨胀 -->
-## 代码结构约定（防单文件膨胀）
+## 依赖与平台边界
 
-背景与先例见 [docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md](docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md)。改动代码前先过一遍：
+- 核心数据面优先自研、最小化第三方依赖；平台粘合层和复杂领域渲染可用成熟库。新增依赖须有明确豁免并说明理由，不能因已有依赖而无限扩展。
+- 已批准的依赖及用途：
+  - 传输与解析：`http`、`web_socket_channel`、`xml`、`html`；数学渲染：`flutter_math_fork`、Rust `ratex-*`。
+  - 桌面集成：`window_manager`、`screen_retriever`、`tray_manager`、`file_picker`、`pasteboard`。
+  - 图形与导出：Rust `merman`、`webview2-com`，Dart `flutter_svg`；Web CRDT 对端：JS `yjs`。
+- 平台专用依赖用条件导入 / `cfg` 隔离，禁止进入不支持的平台 bundle；`yjs` 只进入 Web，`webview2-com` 只用于 Windows。
+- 托盘仅 Windows 支持；注册失败时降级 `minimize()`，不可 `hide()` 导致窗口无法找回。Mermaid 配色沿用 host theme profile，保留 SVG CSS 属性展开的兼容处理。
 
-- **新代码的去处，不是「往现有大文件里续写」**：
-  - API 路由进 `crates/api-server/src/routes/<域>/` 子模块（先例：`routes/documents/` 的 search/crud/export/transfer/trash/share/images）；共享 helper 与 DTO 放对应 `mod.rs` 并 `pub use` 再导出。
-  - Flutter 拆大库文件用 `part` / `part of`（先例：`main.dart` 及其 `main_*.dart`，`editor/render.dart`）；私有标识符同库可见，纯移动零风险。**注意（#87）：门禁按库计行数，拆 part 只降单文件数、不降库合计——真正减负要拆成独立 library（新 root 文件）。**
-  - markdown 引擎按管线归位：block / inline / html / export_md / entities；公开 API 留在 `lib.rs`。
-- **门禁三层**（`just check-structure` = CI `structure` job = `scripts/check-file-size.sh`；计量单位见 #87）：
-  1. 绝对限：Dart 按 **library**（root + 全部 `part` 合计）、Rust 按单文件（含 FFI crate `clients/mica_flutter/rust/src`），单元硬上限 8,000 行（失败），软上限 4,000 行（警告）。
-  2. 棘轮：`scripts/file-size-budget.txt` 登记的单元**只许减不许增**——动这几个库（main.dart、editor/editor.dart、editor/render.dart、editor/controller.dart，按 library root 登记）前先看预算，涨一行 CI 就红。
-  3. 增量：超过 2,000 行的存量单元一次改动净增 >300 行会被拦下（按单元聚合：同一库两个 part 各 +200 合计 +400 也算超）。要加大量逻辑时开新文件，不要续写。
-- **豁免是登记制**：生成代码等豁免必须写进脚本 `EXEMPT_RE` 或预算文件并附理由；没有「惯例豁免」。提交前跑 `just check-structure` 自查。
+## 验证、构建与发布
+
+- Bug 修复配回归测试，并通过真实运行路径验证；Web UI 用 Playwright 检查并截图，桌面问题须在桌面验证。提交说明写根因。
+- 工具链以 `.fvmrc` / `rust-toolchain.toml` 为准；升级时同步构建镜像与 CI，验证桌面 Cargokit 实际使用的工具链。不要写死本机安装路径或对正常构建额外限流。
+- Windows 的 `just` recipe 使用 Git Bash；网络受限时按环境配置 Flutter / Pub 镜像。Windows runner C++ 按 warning-as-error 处理，注释保持 ASCII，环境变量读取用 `GetEnvironmentVariableW`。
+- 按改动范围运行测试；共享 Rust crate 变更还需检查 `clients/mica_flutter/rust`，它不属于根 workspace。DB 测试必须连接可用 Postgres；静默跳过不算通过。
+- 改动完成后自动推送 `main`，无需逐步请示；**发版须等用户明确要求**。用户要求发版后，版本 bump → 门禁 → tag / 构建 → 部署 → 验证连续做完。
+- 默认递增补丁号，minor 由用户决定；版本一致性与锁文件由现有脚本校验。发布步骤以 [发布文档](docs/ops/release.md) 为准，命令见 `just --list`，不得绕过发布门禁。
+- 不假定 push 会触发 CI；检查 `.github/workflows/` 的当前触发方式，手动触发后核对运行结果。部署后验证 `/api/health` 版本，并冒烟测试本版实际改动。
+- 发版时同步路线图：未完成项留在 [roadmap.md](docs/plans/roadmap.md)，完成项移入 [roadmap-done.md](docs/plans/roadmap-done.md)；明确不做的条目删除，理由写入提交信息。
+
+## 配置与生产运维
+
+- 改配置时验证未设置、空字符串和非法值；检查 Compose `environment` 显式传递了所需变量。保留敏感默认配置的运行时告警，部署细节见 [部署文档](docs/ops/deploy.md)。
+- 已发布的 SQL 迁移冻结，**包括注释与原始 LF 字节**；变更另加迁移并确保纳入 Git。新增迁移由 `crates/infra/build.rs` 跟踪，无须手动 touch 源码。
+- 带迁移部署必须先有经内容校验的还原点，不能用周期 backup sidecar 代替；备份管线用 `pipefail`，仅 `gzip -t` 不能证明 dump 有效，失败须中止部署。部署配置须来自目标 tag。
+- 普通 Mica 发版不得重建共享 Traefik 或覆盖其独立 slice；基础设施升级与应用发版分开。见 [Traefik 工作集保护](docs/ops/traefik-working-set.md)。
+- API 部署与 `mica-cli` / MCP 客户端升级分别生效；修改 MCP 代理后须更新用户实际调用的二进制并重连验证。
+
+## 文档维护
+
+- 文档入口为 [docs/README.md](docs/README.md)；新增文档按用途归类并补索引，评审与修复记录放 `docs/reviews/`。
+- 修改相关模块前阅读 [开发教训](docs/dev/lessons.md) 的对应部分；历史细节与事故经过保留在专题文档或 Git 中。
+- 本文件只维护长期规则和必要入口；版本/功能完成快照、机器状态、安装路径、临时故障处理和可由脚本直接查询的清单不在此重复维护。
