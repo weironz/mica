@@ -117,30 +117,28 @@ gh auth login                    # 需要 scopes: repo, read:org, workflow, gist
 | 服务 | 层级 | 装法 |
 |---|---|---|
 | playwright | 项目级 `.mcp.json` | 已入库。首次会话要在交互式 `claude` 里**批准一次** |
-| codebase-memory-mcp | 用户级 | 见下,**必装** —— CLAUDE.md 要求探索代码优先走图谱 |
+| code-review-graph | 用户级 | 见下；根 `AGENTS.md` 要求探索代码优先走图谱 |
 | GitHub MCP | 用户级 | 见下,远端 OAuth 方案已坏,必须走本地二进制 |
 | context7 | 插件 | 查库/框架文档;`/plugin` 装 |
 | chrome-devtools | 插件 | 调试/性能/网络;`/plugin` 装 |
 
-### codebase-memory-mcp(必装)
+### code-review-graph（代码图谱）
 
-官方 PowerShell 安装器会自动配好 Claude Code 的 MCP 入口、hooks 和 skill:
-
-```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1
-Unblock-File .\install.ps1
-.\install.ps1                    # 装到 ~/.local/bin + AppData\Local\Programs\,用户级,不需要管理员
-```
-
-装完**首次建图**(不建的话所有图谱查询都是空的):
+安装 CLI 后，将用户级 MCP 启动命令设为 `code-review-graph serve`：
 
 ```powershell
-codebase-memory-mcp cli index_repository --repo-path "C:/data/codes/mica" --mode full
+uv tool install code-review-graph
+code-review-graph serve --help
 ```
 
-项目名由路径推导(如 `C-data-codes-mica`),**之后所有查询工具都要带 `project` 参数**。
-`full` 模式偶发 worker 崩溃且崩溃日志是空文件——原样重试一次即可,别降级到 `fast`
-(`full` 8979 节点 / 37710 边,`fast` 只有 5773 / 27559)。
+在当前仓库根目录首次建图并检查状态：
+
+```powershell
+code-review-graph build
+code-review-graph status
+```
+
+后续用 `code-review-graph update` 增量刷新。跨仓库 MCP 查询传 `repo_root`，不要复用其他图谱的 project 名或参数。MCP 与 hooks 的验证见 [开发环境参考](dev-environment.md#code-review-graph知识图谱)。
 
 ### GitHub MCP(远端 OAuth 已坏,走本地二进制)
 
@@ -255,7 +253,6 @@ just dev-down   # 全停
 | `flutter --version` 首跑(编译 flutter tool)| ~3 分钟 |
 | `cargo fetch` | ~4 分钟 |
 | `cargo build --workspace` | 8 分 25 秒 |
-| codebase-memory-mcp 建图(`full`)| < 1 分钟 |
 
 ## 8. 这轮踩到的坑速查
 
@@ -264,7 +261,5 @@ just dev-down   # 全停
 | 开发者模式开了,建符号链接仍报要管理员 | PS 5.1 的 `New-Item -ItemType SymbolicLink` 不传 `ALLOW_UNPRIVILEGED_CREATE` | 用 `mklink` 验证;是假阴性 |
 | Flutter SDK 下载龟速 | 默认源 `storage.googleapis.com` | 换 `storage.flutter-io.cn`,快 ~50 倍 |
 | GitHub MCP `HTTP 400` | 插件的远端 OAuth 流程没拿到凭证(端点本身正常) | 换本地二进制 + `gh auth token` |
-| 图谱查询报 `missing required argument: project` | 查询工具都要带 `project` | 带上项目名(由仓库路径推导) |
-| 建图 `exit_nonzero`,worker 日志是空文件 | 偶发崩溃,查不出触发文件 | 原样重试一次 |
 | winget 装完 VS Build Tools 但 `flutter doctor` 缺 C++ | 没带 `--override` 指定 workload | 用 §2 的完整命令重装 |
 | git 提交标题开头有不可见字符 | PS 5.1 `Set-Content -Encoding utf8` 写 BOM | 用 `git commit -m @'...'@` here-string,别过文件 |

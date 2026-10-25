@@ -9,11 +9,11 @@
 
 ## 代码探索：图谱优先
 
-- 先用 `codebase-memory-mcp` 的 `list_projects` 确认当前仓库对应的 project，再用 `index_status` 检查状态；不要复用其他机器的绝对路径或 project 名。
-- 按当前 MCP 实际提供的能力选工具：找符号用 `search_graph`，读符号用 `get_code_snippet`，追调用链用 `trace_path`，复杂关系用 `query_graph`，架构概览用 `get_architecture`，全文搜索用 `search_code`。
-- 审查改动时优先使用可用的 `detect_changes`，结合调用链与测试关系评估影响；工具名、参数与 schema 以当前会话为准，缺失的能力按下述规则回退。
-- `code-review-graph` 可用时，用 `detect_changes` / `get_review_context` 审查，`get_impact_radius` / `get_affected_flows` 分析影响；其 CLI / Git hooks 与 MCP 接入分别检查，不混用两套图谱的 API。
-- 不假定图谱自动更新；仓库未索引或结果过期时，用当前环境的仓库路径运行 `index_repository`。图谱不可用或覆盖不足，以及查字符串、配置、脚本等非代码内容时，回退到 `rg` / 文件读取。
+- 统一使用 **code-review-graph**，探索代码前优先查图谱；MCP 工具名、参数以当前会话为准，跨仓库查询传当前仓库的 `repo_root`。
+- 找符号用 `semantic_search_nodes`，查调用/导入/测试关系用 `query_graph`，架构概览用 `get_architecture_overview` / `list_communities`。
+- 审查先用 `detect_changes` + `get_review_context`；影响分析用 `get_impact_radius` / `get_affected_flows`，测试覆盖查 `tests_for`。
+- 本机 Git/编辑 hooks 可增量刷新图谱；查询前检查新鲜度，必要时运行 `code-review-graph update`，未建图时运行 `code-review-graph build`。
+- MCP 未接入时可用 CLI；图谱不可用或覆盖不足，以及查字符串、配置、脚本等非代码内容时，回退到 `rg` / 文件读取。
 
 ## 架构与数据不变量
 

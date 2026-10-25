@@ -20,7 +20,7 @@
 
 这些**不在仓库**里,配在 Claude Code 用户级(`claude mcp add ...` 或用户 settings):
 
-- **codebase-memory-mcp** — 代码知识图谱(见下节;根 `AGENTS.md` 要求探索代码优先用它)
+- **code-review-graph** — 代码知识图谱(见下节；根 `AGENTS.md` 要求探索代码优先用它)
 - **GitHub MCP** — 仓库/PR/issue 操作
 - **Playwright MCP** — 浏览器自动化(与项目级重复,按需)
 - **Chrome DevTools MCP** — 调试/性能/网络
@@ -28,17 +28,15 @@
 
 > 迁移时用 `claude mcp list` 导出现有配置作为权威来源,本表仅作清单提醒。
 
-## codebase-memory-mcp(知识图谱)
+## code-review-graph（知识图谱）
 
-根 `AGENTS.md` 要求探索代码**优先用图谱**而非 Grep/Read(省 token + 给结构上下文:callers/callees/数据流/测试)。**用户级 MCP**,全局装的 exe(`AppData\Local\Programs\codebase-memory-mcp\`;`claude mcp get codebase-memory-mcp` 看权威配置),不在 `.mcp.json` 里。
+根 `AGENTS.md` 要求探索代码**优先用 code-review-graph**。用户级 MCP 配置以 Codex 的 `~/.codex/config.toml`、Claude Code 的 `~/.claude.json` 为准；全局启动命令为 `code-review-graph serve`，不要将其固定到另一台机器或某个项目目录。
 
-工具面:`search_graph`(找符号)/ `search_code`(图增强搜)/ `get_code_snippet`(取源码)/ `trace_path`(调用链/数据流)/ `query_graph`(Cypher)/ `get_architecture` / `detect_changes`(审改动)。
+工具面：`semantic_search_nodes` 找符号，`query_graph` 查调用/导入/测试关系，`get_architecture_overview` / `list_communities` 看结构，`detect_changes` + `get_review_context` 审改动，`get_impact_radius` / `get_affected_flows` 分析影响；具体参数以当前 MCP 暴露的 schema 为准。
 
-**不要假定自动更新**：先用 `list_projects` 找到当前仓库路径对应的 project，再用 `index_status` 检查状态；未索引或结果过期时，以当前环境的仓库绝对路径运行 `index_repository`（模式 `full` / `moderate` / `fast`）。查询类工具须传 `project`，项目名以工具返回为准，不沿用其他机器的路径或历史节点数。
+在仓库根运行 `code-review-graph status` 检查状态；初次用 `build`，后续用 `update` 增量刷新。图谱保存在被 Git 忽略的 `.code-review-graph/`，查询其他仓库时显式传 `repo_root`。
 
-配套用户级 hook(`~/.claude/hooks/`):`cbm-code-discovery-gate`(PreToolUse Grep|Glob 门,督促走图)+ `cbm-session-reminder`(SessionStart 注入探索协议 + 近期上下文)。
-
-> `code-review-graph` 与 `codebase-memory-mcp` 是两套图谱，不能混用 API。前者也可由本机 Git hooks 调用 CLI 更新/审查；2026-10-25 实际提交时仍有这条路径，旧的「已全局卸载」记录已失效。迁移或排障时分别检查 MCP、CLI 和 Git hooks 的配置与可用性，hooks 不随仓库自动迁移。
+Git/编辑 hooks 可以调用 CLI 自动更新，但 hooks 是本机配置，不随仓库迁移。新机器须分别验证 MCP 连接、CLI 和 hooks；MCP 尚未加载时可用 CLI，不能仅凭配置文件声称工具已生效。
 
 ## Skills
 
@@ -133,7 +131,7 @@ just release-check                 # 它会指出还有哪一处没跟上
 ## 重配顺序(换机)
 
 1. 核心工具链:Flutter、Rust、Docker Desktop、平台 SDK + **开发者模式**(见上「Windows 桌面构建前置」)。
-2. 本文的 MCP(项目级 `.mcp.json` = playwright;用户级 codebase-memory-mcp 等)、首次 `index_repository` 建图、skills。
+2. 本文的 MCP（项目级配置见 `.mcp.json`，用户级含 code-review-graph）、首次 `code-review-graph build` 建图、skills。
 3. 起后端:`docker compose up -d --build postgres api`(详见 `docs/plans/desktop-plan.md` M1 状态)。
 
 ## 跑集成测试(尤其是云同步)
