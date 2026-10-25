@@ -12,4 +12,5 @@ for migration in "${migrations[@]}"; do
   fi
 done
 [ "$failed" = 0 ]
+sh scripts/check-migration-bytes.sh
 echo "==> all ${#migrations[@]} SQL migrations are tracked"

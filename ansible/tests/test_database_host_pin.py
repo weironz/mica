@@ -15,6 +15,7 @@ TASK_NAMES = {
     "Require one running database address for automatic pinning",
     "Resolve the automatic database pin before rendering",
     "Refuse a stale database address before changing deployment files",
+    "Require the configured PostgreSQL service alias",
 }
 
 
@@ -34,10 +35,15 @@ def main():
         ("automatic stopped database", "auto", False, "192.0.2.10", False),
         ("automatic empty address", "auto", True, "", False),
         ("automatic ambiguous address", "auto", True, ["192.0.2.10", "192.0.2.20"], False),
+        ("service alias follows reassigned address", "postgres", True, "192.0.2.20", True),
+        ("service alias with stopped database", "postgres", False, "192.0.2.20", False),
+        ("missing service alias", "postgres", True, "192.0.2.20", False, []),
     ]
     with tempfile.TemporaryDirectory(prefix="mica-database-pin-") as directory:
         target = pathlib.Path(directory) / "check.yml"
-        for name, configured, running, actual, accepted in cases:
+        for case in cases:
+            name, configured, running, actual, accepted = case[:5]
+            aliases = case[5] if len(case) > 5 else ["postgres", "mica-postgres-1"]
             addresses = actual if isinstance(actual, list) else [actual]
             expected = addresses[0] if configured == "auto" else configured
             fixture = [{
@@ -49,7 +55,10 @@ def main():
                     "pinned_postgres_raw": {"container": {
                         "State": {"Running": running},
                         "NetworkSettings": {"Networks": {
-                            f"mica_network_{index}": {"IPAddress": address}
+                            f"mica_network_{index}": {
+                                "IPAddress": address,
+                                "Aliases": aliases,
+                            }
                             for index, address in enumerate(addresses)
                         }},
                     }},

@@ -180,6 +180,10 @@
         pinned_postgres_addresses: >-
           {{ (pinned_postgres_raw.container.NetworkSettings.Networks | default({}))
              | dict2items | map(attribute='value.IPAddress') | select | list }}
+        pinned_postgres_aliases: >-
+          {{ (pinned_postgres_raw.container.NetworkSettings.Networks | default({}))
+             | dict2items | map(attribute='value.Aliases', default=[])
+             | flatten | unique | list }}
       no_log: true
       when: mica_env.MICA_DATABASE_HOST is defined
 
@@ -208,7 +212,20 @@
           MICA_DATABASE_HOST does not match the running mica-postgres-1.
           Check its API-reachable private-network IP and update host_vars.
           No database or global Docker DNS settings have been changed.
-      when: mica_env.MICA_DATABASE_HOST is defined
+      when:
+        - mica_env.MICA_DATABASE_HOST is defined
+        - mica_env.MICA_DATABASE_HOST != 'postgres'
+
+    - name: Require the configured PostgreSQL service alias
+      ansible.builtin.assert:
+        that:
+          - pinned_postgres_running
+          - "'postgres' in pinned_postgres_aliases"
+          - pinned_postgres_addresses | length > 0
+        fail_msg: >-
+          The running Mica PostgreSQL container does not advertise the postgres
+          service alias. No deployment files or database settings were changed.
+      when: (mica_env.MICA_DATABASE_HOST | default('')) == 'postgres'
 
     # Which keys the node has today, by NAME only — the values are never read.
     # Guards the one way this change can quietly break production: a key that
@@ -286,6 +303,7 @@
       ansible.builtin.slurp:
         src: "{{ env_file }}"
       register: env_before
+      no_log: true
       check_mode: false
       when: not fresh_node | bool
 
@@ -466,6 +484,7 @@
       vars:
         mica_version: "v{{ version }}"
       register: env_render
+      diff: false
 
     - name: Install the ./dc wrapper
       ansible.builtin.template:
@@ -660,6 +679,14 @@
             dependencies: false
           loop: "{{ sidecars_present | default([]) }}"
       rescue:
+        - name: Preserve failed application diagnostics before rollback
+          block:
+            - name: Capture the failed application's private logs
+              ansible.builtin.include_tasks: tasks/preserve-deploy-failure.yml
+          rescue:
+            - name: Diagnostic storage failure must not prevent recovery
+              ansible.builtin.debug:
+                msg: "Could not retain private diagnostics; continuing application recovery."
         # Restore the BACKUP, rather than patching MICA_VERSION back or
         # re-rendering with the old version. Both of those reconstruct a state
         # that never existed — this release's config wearing the previous
@@ -684,6 +711,7 @@
             # containers come up unauthenticated, which is the quiet kind of
             # broken.
             env_files: ["{{ env_file }}", "{{ secrets_file }}"]
+            services: "{{ app_services + (sidecars_present | default([])) }}"
             state: present
             dependencies: false
           failed_when: false

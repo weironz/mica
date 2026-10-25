@@ -73,11 +73,14 @@ records the production measurements and limitations.
 移动后的刷新都报数据库错误。这不等于 SQLite 损坏或移动事务一定失败，先核对页面位置。
 
 2026-10-24 在生产备份后，仅为当时的 Mica API 加了数据库 hosts 映射，无需重启即可
-恢复只读查询；最终部署使用 `ansible/host_vars/mica-prod.yml` 中的数据库私网 IP，避免
-重建后丢失修复。该值必须与 API 可达的 `mica-postgres-1` 地址一致。Ansible 在写文件前
-只读核对实际容器地址，不匹配或数据库未运行就拒绝部署，不会自动重建 PostgreSQL、
-调整全局 Docker DNS，或修改其他项目。计划重建数据服务后应重新核对并更新地址。
-其他自托管环境不需要照抄生产 IP；未配置时继续用 Compose 服务发现。
+恢复只读查询。生产现在使用 `ansible/host_vars/mica-prod.yml` 中的 `postgres` 服务名，
+由 Docker 服务发现跟随数据库容器地址变化；Ansible 在写文件前核对运行状态和服务别名。
+需要临时绕过 DNS 时，仍可显式配置经过核实的 IP，或使用部署时解析地址的 `auto`。
+显式 IP 与当前容器地址不匹配会拒绝部署。普通部署不重建 PostgreSQL、不调整全局
+Docker DNS，也不修改其他项目。其他自托管环境默认继续使用 Compose 服务发现。
+
+0.13.67 的部署失败已在独立数据库上确认是 SQL 文件 CRLF/LF 校验和差异，服务名和 IP
+两种连接均在迁移校验阶段失败；见 [故障记录](release-0.13.67-failure.md)。
 
 连接 I/O 故障或连接池不可用返回脱敏的 HTTP 503，真正的 SQL/迁移错误仍是 HTTP 500。
 不自动重试写操作：连接中断后要先刷新核对结果，避免重复移动或重复写入。
@@ -112,7 +115,7 @@ mkdir -p /data/mica && cd /data/mica
 # file with a newer image means a variable the image expects never reaches the
 # process — a setting that silently does nothing. Naming the version once is
 # what keeps them the same generation.
-RELEASE=0.13.67
+RELEASE=0.13.68
 
 # Pinned to a RELEASE TAG, not `main`: `main` can be ahead of the newest release.
 curl -fsSLO "https://raw.githubusercontent.com/weironz/mica/v$RELEASE/deploy/docker-compose.single.yml"

@@ -14,6 +14,8 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY migrations ./migrations
+COPY scripts/check-migration-bytes.sh ./scripts/check-migration-bytes.sh
+RUN sh scripts/check-migration-bytes.sh
 # CI keeps the Mica builder's state across jobs; cache mounts are not exported
 # by cache-to=gha. Copy the binary out before the target mount is detached.
 RUN --mount=type=cache,id=mica-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \

@@ -54,6 +54,10 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 | **带迁移的发布,上线前自动落 `pg_dump` 还原点** | `ansible/deploy.yml` | 2026-08-26 |
 | 部署失败自动复原 `MICA_VERSION` | 同上 | 2026-08-25 |
 
+迁移 SQL 还必须在工作区保持原始 LF 字节；Git 的文本归一化会隐藏 CRLF 差异。
+本地 CI、发版门禁和 API 镜像构建都会检查，不能只依赖 `git diff`。
+原因与升级对照见 [0.13.67 故障记录](release-0.13.67-failure.md)。
+
 ### 只有三件事机器做不了
 
 1. **发不发、发哪一位** —— 用户决策。

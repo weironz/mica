@@ -19,6 +19,10 @@ source scripts/lib-local.sh
 part=${1:-all}
 case "$part" in all | rust | flutter) ;; *) fail "unknown part '$part' (all | rust | flutter)" ;; esac
 
+note "SQL migrations: tracking and exact line endings"
+bash scripts/check-migration-tracking.sh
+bash scripts/test-migration-tracking.sh
+
 note "CI configuration: job selection regressions"
 bash scripts/test-ci-paths.sh
 note "CI configuration: Flutter SDK reuse regressions"

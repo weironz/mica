@@ -1,0 +1,33 @@
+- name: Keep failure evidence private to Mica
+  ansible.builtin.file:
+    path: "{{ mica_dir }}/ops"
+    state: directory
+    mode: "0700"
+
+- name: Allocate a failed deployment evidence directory
+  ansible.builtin.tempfile:
+    path: "{{ mica_dir }}/ops"
+    prefix: "deploy-{{ version }}-failed-"
+    state: directory
+  register: deploy_failure_dir
+
+- name: Read failed application logs before containers are replaced
+  ansible.builtin.command:
+    argv: [timeout, "10s", docker, logs, --tail, "200", "mica-{{ item }}-1"]
+  loop: "{{ app_services }}"
+  register: failed_app_logs
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Save failed application logs
+  ansible.builtin.copy:
+    content: "{{ item.stdout | default('') }}\n{{ item.stderr | default('') }}\n"
+    dest: "{{ deploy_failure_dir.path }}/{{ item.item }}.log"
+    mode: "0600"
+  loop: "{{ failed_app_logs.results }}"
+  no_log: true
+
+- name: Report the private diagnostic path
+  ansible.builtin.debug:
+    msg: "Failed application logs retained at {{ deploy_failure_dir.path }}"
