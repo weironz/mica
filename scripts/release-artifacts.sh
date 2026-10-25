@@ -79,6 +79,7 @@ verify_static() {
 
 case "$os" in
   windows)
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-installer-wait.ps1
     note "Windows installer"
     (cd clients/mica_flutter && "$FLUTTER" build windows --release)
     iscc=${ISCC:-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe"}

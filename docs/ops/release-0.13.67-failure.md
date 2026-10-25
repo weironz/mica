@@ -63,3 +63,5 @@ password entry from `.env` did not lose the password from `.env.secrets`.
 
 Published Git and image tags remain immutable. The corrected build is
 released as 0.13.68; 0.13.67 is retained as evidence rather than overwritten.
+Production deployment and upgrade acceptance are recorded in
+[0.13.68 validation](release-0.13.68-validation.md).

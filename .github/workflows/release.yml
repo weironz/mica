@@ -160,6 +160,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Test installer completion gate
+        shell: powershell
+        working-directory: .
+        run: ./scripts/test-installer-wait.ps1
+
       - uses: ./.github/actions/setup-flutter
 
       - name: Resolve version
@@ -236,93 +241,17 @@ jobs:
       # The in-app updater ships this exact .exe to every user, yet nothing so far
       # has run it: build success only proves it compiled and ISCC zipped it.
       # Here we silently install it and launch the installed app — if it can't
-      # even survive 10 s, the job fails and the release never publishes.
+      # produce its first frame and survive another 10 s, the job fails.
       #
       # Placed AFTER the artifact upload (so a failed smoke still leaves the .exe
       # downloadable for post-mortem) and BEFORE "Publish installer to release"
       # (which, being a later step, is skipped once this one fails).
       - name: Smoke-test the installer (install + launch)
         shell: pwsh
+        working-directory: .
         run: |
-          $ErrorActionPreference = 'Stop'
           $ver = '${{ steps.ver.outputs.version }}'
-          $setup = "installer\Output\Mica-Setup-$ver.exe"   # cwd = clients/mica_flutter
-          # Force a known install dir so exe location needs no guessing. /DIR
-          # overrides the .iss DefaultDirName even under PrivilegesRequired=lowest.
-          $installDir = Join-Path $env:RUNNER_TEMP 'mica-smoke'
-
-          Write-Host "Silent-installing $setup -> $installDir"
-          # NO -Wait: `-Wait` on the installer hung 28min on run 29937817979.
-          # The exact cause is unconfirmed — the .iss [Run] has `nowait`, so the
-          # obvious "installer blocks on the app it launched" theory does NOT
-          # hold — but it does not matter here: the real auto-updater runs Setup
-          # DETACHED (ProcessStartMode.detached in updater_desktop.dart), so the
-          # installer's exit timing is irrelevant in production. Poll for the
-          # installed exe instead — Inno writes every file before running [Run],
-          # so the exe existing IS the "install finished" signal, independent of
-          # when (or whether) the installer process returns. Hard timeout guards
-          # a run that is genuinely stuck.
-          # /SKIPRUN suppresses the installer's [Run] auto-launch (mica.iss gates
-          # it on `not CmdLineParamExists('/SKIPRUN')`) so THIS step is the sole
-          # launcher of the app — the single-instance mutex can never be contended
-          # and the old "exited 0" race is structurally impossible. The updater
-          # never passes it, so production's silent relaunch is unchanged.
-          $inst = Start-Process -FilePath $setup `
-            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SKIPRUN',"/DIR=$installDir" `
-            -PassThru
-          $exe = Join-Path $installDir 'mica_flutter.exe'
-          $deadline = (Get-Date).AddSeconds(120)
-          while (-not (Test-Path $exe) -and (Get-Date) -lt $deadline) {
-            if ($inst.HasExited -and $inst.ExitCode -ne 0) {
-              throw "installer exited with code $($inst.ExitCode) before producing $exe"
-            }
-            Start-Sleep -Seconds 2
-          }
-          if (-not (Test-Path $exe)) { throw "installed exe not found after 120s: $exe" }
-          Write-Host "Installed OK: $exe"
-
-          # We are the ONLY launcher (installer ran with /SKIPRUN), so there is no
-          # second instance and the single-instance mutex is never contended — the
-          # flaky "exited within 10s (exit code 0)" race is gone by construction.
-          # A launch that dies is now a REAL signal: a missing/mismatched DLL makes
-          # the Windows loader kill the process immediately (STATUS_DLL_NOT_FOUND =
-          # 0xC0000135), which is exactly the broken-build regression this smoke
-          # test exists to catch. Log the exit code in hex so that is legible
-          # rather than a mysterious 0.
-          $app = Start-Process -FilePath $exe -PassThru
-          try {
-            Write-Host "Launched Mica (pid $($app.Id)); waiting 10s to confirm it stays up..."
-            Start-Sleep -Seconds 10
-            $app.Refresh()
-            if ($app.HasExited) {
-              # STATUS_DLL_NOT_FOUND says A DLL is missing, never which one.
-              # Name it here so the next failure needs no post-mortem: walk every
-              # installed binary's import table (dumpbin ships with the C++ build
-              # tools this job already needs) and print each import that resolves
-              # neither next to the exe nor in System32. api-ms-/ext-ms- are API
-              # sets the loader maps virtually; they are never files.
-              if ($app.ExitCode -eq [int]0xC0000135) {
-                $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-                $vs = & $vswhere -latest -products * -property installationPath
-                $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -Last 1
-                Get-ChildItem $installDir -Recurse -Include *.exe,*.dll | ForEach-Object {
-                  $bin = $_
-                  & $dumpbin.FullName /nologo /dependents $bin.FullName |
-                    ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[\w.-]+\.dll$' } |
-                    Where-Object { $_ -notmatch '^(api|ext)-ms-' } |
-                    Where-Object { -not (Test-Path (Join-Path $installDir $_)) -and -not (Test-Path (Join-Path "$env:SystemRoot\System32" $_)) } |
-                    ForEach-Object { Write-Host "MISSING: $($bin.Name) imports $_" }
-                }
-              }
-              throw "Mica exited within 10s (exit code 0x$('{0:X8}' -f $app.ExitCode)) - install/launch smoke FAILED"
-            }
-            Write-Host "Mica still alive 10s after launch (pid $($app.Id)) - smoke OK"
-          } finally {
-            # Leave no stray process behind: the app, plus the installer if it is
-            # still lingering.
-            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
-            if ($inst -and -not $inst.HasExited) { Stop-Process -Id $inst.Id -Force -ErrorAction SilentlyContinue }
-          }
+          ./scripts/smoke-installer.ps1 -Setup "clients\mica_flutter\installer\Output\Mica-Setup-$ver.exe"
 
       - name: Publish installer to release
         # Tag pushes always publish; manual runs only when publish=true (else
