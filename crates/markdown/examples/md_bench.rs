@@ -12,7 +12,8 @@ use std::hint::black_box;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-const SMALL: &str = "Some **bold** and _italic_ text, a `code` span, and a [link](https://x.y) here. 1234567";
+const SMALL: &str =
+  "Some **bold** and _italic_ text, a `code` span, and a [link](https://x.y) here. 1234567";
 
 fn conformance_corpus() -> String {
   let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance");
