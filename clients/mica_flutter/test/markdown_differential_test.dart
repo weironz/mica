@@ -40,7 +40,13 @@ import 'support/markdown_corpus.dart';
 import 'support/native_build.dart';
 
 typedef _Blocks = List<({String kind, String text, Map<String, dynamic> data})>;
-typedef _Diff = ({String id, String category, String field, String dart, String rust});
+typedef _Diff = ({
+  String id,
+  String category,
+  String field,
+  String dart,
+  String rust,
+});
 
 const String _reportDir = 'build/differential';
 const String _baselinePath = 'test/differential_baseline.json';
@@ -48,6 +54,28 @@ const String _baselinePath = 'test/differential_baseline.json';
 void main() {
   setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
+
+  test('parse divergence is not counted as Rust own roundtrip failure', () {
+    final sample = markdownCorpus(
+      fuzzCount: 0,
+    ).firstWhere((entry) => entry.id == 'spec:6');
+    final diffs = _diffOne(sample.id, sample.markdown);
+    expect(
+      diffs.any((d) => d.category == 'kind'),
+      isTrue,
+      reason: 'this fixture must exercise different parser outputs',
+    );
+    expect(
+      diffs.where((d) => d.category == 'roundtrip'),
+      isEmpty,
+      reason: 'both implementations round-trip their own distinct blocks',
+    );
+  });
+
+  test('difference limit fails instead of reporting a truncated corpus', () {
+    expect(() => _requireCompleteCorpus(50000), returnsNormally);
+    expect(() => _requireCompleteCorpus(50001), throwsStateError);
+  });
 
   test(
     'Dart mirror and Rust engine agree on every corpus input',
@@ -58,11 +86,7 @@ void main() {
 
       for (final entry in corpus) {
         diffs.addAll(_diffOne(entry.id, entry.markdown));
-        if (diffs.length > 50000) {
-          // A runaway divergence would otherwise fill memory and the report;
-          // the ids up to here are enough to show the shape.
-          break;
-        }
+        _requireCompleteCorpus(diffs.length);
       }
 
       final counts = _countByCategory(diffs);
@@ -70,6 +94,15 @@ void main() {
       _checkRatchet(counts, diffs);
     },
   );
+}
+
+void _requireCompleteCorpus(int differenceCount) {
+  if (differenceCount > 50000) {
+    throw StateError(
+      'difference limit exceeded ($differenceCount): '
+      'corpus incomplete; report and baseline were not written',
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -192,10 +225,14 @@ List<_Diff> _diffOne(String id, String markdown) {
       ));
     }
   }
-  if (rustMd != null) {
+  {
     try {
+      // The export comparison above deliberately serializes Dart's blocks on
+      // both sides. Rust's OWN round trip must start from its own parse result;
+      // otherwise a parse disagreement is counted again as a round-trip error.
+      final rustOwnMd = _rustExportMarkdown(rustBlocks);
       final again = _normalizeRustBlocks(
-        MicaDocument.fromMarkdown(markdown: rustMd),
+        MicaDocument.fromMarkdown(markdown: rustOwnMd),
       );
       final rt = _compareBlocks(id, again, rustBlocks);
       out.addAll([
@@ -227,16 +264,13 @@ List<_Diff> _diffOne(String id, String markdown) {
 // ---------------------------------------------------------------------------
 
 _Blocks _normalizeDartBlocks(List<BlockSpec> specs) => [
-      for (final s in specs)
-        (kind: s.kind, text: s.text, data: _sortMarks(s.data)),
-    ];
+  for (final s in specs) (kind: s.kind, text: s.text, data: _sortMarks(s.data)),
+];
 
 _Blocks _normalizeRustBlocks(MicaDocument doc) {
-  final blocks =
-      (jsonDecode(doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
-  final byId = {
-    for (final b in blocks) b['id'] as String: b,
-  };
+  final blocks = (jsonDecode(doc.toBlocksJson()) as List)
+      .cast<Map<String, dynamic>>();
+  final byId = {for (final b in blocks) b['id'] as String: b};
   final root = byId[doc.rootBlockId()];
   if (root == null) return const [];
   final children = (root['children'] as List? ?? const []).cast<String>();
@@ -267,16 +301,22 @@ Map<String, dynamic> _dataMap(Object? raw) {
 Map<String, dynamic> _sortMarks(Map<String, dynamic> data) {
   final marks = data['marks'];
   if (marks is! List) return data;
-  final sorted = [...marks]..sort((a, b) {
+  final sorted = [...marks]
+    ..sort((a, b) {
       final ma = a as Map;
       final mb = b as Map;
       final s = (ma['start'] as num? ?? 0).compareTo(mb['start'] as num? ?? 0);
       if (s != 0) return s;
       final e = (ma['end'] as num? ?? 0).compareTo(mb['end'] as num? ?? 0);
       if (e != 0) return e;
-      return (ma['type'] as String? ?? '').compareTo(mb['type'] as String? ?? '');
+      return (ma['type'] as String? ?? '').compareTo(
+        mb['type'] as String? ?? '',
+      );
     });
-  return {...data, 'marks': [for (final m in sorted) _canonicalValue(m)]};
+  return {
+    ...data,
+    'marks': [for (final m in sorted) _canonicalValue(m)],
+  };
 }
 
 Object? _canonicalValue(Object? v) {
@@ -422,8 +462,10 @@ String _rustExportMarkdown(_Blocks blocks) {
         'children': <String>[],
       },
   ]);
-  return MicaDocument.fromBlocksJson(rootId: 'root', blocksJson: json)
-      .exportMarkdown();
+  return MicaDocument.fromBlocksJson(
+    rootId: 'root',
+    blocksJson: json,
+  ).exportMarkdown();
 }
 
 // ---------------------------------------------------------------------------
@@ -435,9 +477,7 @@ Map<String, int> _countByCategory(List<_Diff> diffs) {
   for (final d in diffs) {
     counts[d.category] = (counts[d.category] ?? 0) + 1;
   }
-  return {
-    for (final k in counts.keys.toList()..sort()) k: counts[k]!,
-  };
+  return {for (final k in counts.keys.toList()..sort()) k: counts[k]!};
 }
 
 String _entryKey(_Diff d) => '${d.id}|${d.category}|${d.field}';
@@ -454,8 +494,9 @@ void _writeReport(int corpusSize, Map<String, int> counts, List<_Diff> diffs) {
         'rust': d.rust,
       },
   ];
-  File('${dir.path}/report.json')
-      .writeAsStringSync(const JsonEncoder.withIndent(' ').convert(report));
+  File(
+    '${dir.path}/report.json',
+  ).writeAsStringSync(const JsonEncoder.withIndent(' ').convert(report));
 
   final byCategory = <String, List<_Diff>>{};
   for (final d in diffs) {
@@ -509,14 +550,14 @@ void _checkRatchet(Map<String, int> counts, List<_Diff> diffs) {
   expect(
     baselineFile.existsSync(),
     isTrue,
-    reason: 'missing $_baselinePath — generate it once with '
+    reason:
+        'missing $_baselinePath — generate it once with '
         'S0_WRITE_BASELINE=1 flutter test test/markdown_differential_test.dart',
   );
   final baseline =
       jsonDecode(baselineFile.readAsStringSync()) as Map<String, dynamic>;
   final baseCounts = (baseline['counts'] as Map).cast<String, int>();
-  final baseEntries =
-      (baseline['entries'] as List).cast<String>().toSet();
+  final baseEntries = (baseline['entries'] as List).cast<String>().toSet();
 
   final added = <String>[
     for (final d in diffs)
@@ -531,7 +572,8 @@ void _checkRatchet(Map<String, int> counts, List<_Diff> diffs) {
   expect(
     added,
     isEmpty,
-    reason: 'NEW differences against the Rust engine. A difference is only '
+    reason:
+        'NEW differences against the Rust engine. A difference is only '
         'acceptable if it is recorded in $_baselinePath with a reason; the '
         'first few: ${added.take(10).join(', ')}',
   );
