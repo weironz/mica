@@ -12,7 +12,7 @@
 //! JSON escapes. Refusing with a precise message lets the caller retry correctly;
 //! storing it loses the formula forever.
 
-use crate::inline::math_run_spans;
+use mica_md::math_run_spans;
 
 /// Control characters a JSON unescape produces from a LaTeX command, paired with
 /// the escape that made them, and an example of the command each one eats.

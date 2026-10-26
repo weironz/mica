@@ -2199,17 +2199,11 @@ dependencies = [
 name = "mica-markdown"
 version = "0.1.0"
 dependencies = [
- "merman",
  "mica-md",
  "proptest",
- "ratex-layout",
- "ratex-parser",
- "ratex-svg",
- "ratex-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "uuid",
 ]
 
 [[package]]
