@@ -261,3 +261,87 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 ## 执行记录
 
 （执行方追加。P0 结果放在最前面。）
+
+### P0 成本归因与候选优化（T2.1，2026-10-27，G2「继续优化」）
+
+**分支与基线**：实验分支 `ss/w/p0-costs`，基于 S1 候选 `12c7ff2`；`spike/**`、`clients/mica_flutter/web/index.html`、`web/mica_md/.gitignore` 从上一轮 P0 提交 `d48ed4f` 回填。本轮不修改 02 契约、不写 `reviews.md`、不合并任何集成分支。S1 核心仅做行为不变的最小优化（见下），单独提交；**这不是 T2.2/T2.3 的正式交付**。
+
+**方法**（数据与脚本在 `spike/md-bench/`，聚合结果 `summary-costs.json`）：
+
+- 真实 Flutter Web release：`flutter build web --release --no-web-resources-cdn -t ../../spike/md-bench/main.dart`。该入口启动真实 `app.main()`，只在页面上暴露 `runMdP0()`；对比用的 Dart 实现是生产 `markdownToBlocks`，与宿主应用同一 dart2js release 编译。
+- 同页同浏览器（HeadlessChrome/156.0.0.0），本地 Node 静态服务器，无 COOP/COEP、`Cache-Control: no-store`，实测 `crossOriginIsolated=false`。
+- 阶段各自独立测量，自适应批量（每批约 15 ms、15 个样本）；每轮内交替顺序；表中数字为 **3 轮 release 独立运行的中位数**，比值用同一轮的 Dart 对照计算。没有用“简单中位数相减”当作精确归因：绝对阶段值分别实测，差值只在表中标注为粗粒度区间。
+- 输入保持上一轮 P0 的 87 / 1 万 / 10 万字符字节不变（`inputs/p0_*.md`，10 万字符精确截断），另加 S0 修正 fixture 同形输入：`s0_87`（S0 `hotPath87`）、`s0_10k` / `s0_100k`（S0 `markdownFixtureSample` 按行边界重复），仅作代表性复核，不替换原输入。
+- 防死码：每个 wasm 阶段都消费结果（digest / 字符串长度 / 解码后的块），Dart 阶段消费块列表。
+- 计时探针底噪：空循环约 `0.00002 ms/次`，`noop()` wasm 调用约 `0.000012 ms/次`（批量摊薄）；87 字符边界 echo 0.76 µs，10 万字符 JSON echo 1.57 µs。所有被测阶段显著高于底噪。
+
+#### 1. 阶段拆解（10 万字符，单位 ms，三轮中位数）
+
+| 阶段 | 未优化核心 + opt-level z | 优化核心 + opt-level z | 优化核心 + opt-level 3 |
+| --- | ---: | ---: | ---: |
+| 2 原生 wasm 解析（parse-only，含 digest 消费） | 37.2 | 20.1 | 10.95 |
+| 3 BlockJson 映射 + Rust serde_json 编码（`parseBody − parseOnly`，粗粒度差值） | ≈6.8 | ≈3.3 | ≈1.75 |
+| 4 字符串跨 wasm/JS/Dart 边界（echo 完整 JSON） | 1.57 | 1.71 | 1.71 |
+| 5 Dart `jsonDecode` | 1.34 | 1.38 | 1.38 |
+| 6 BlockSpec 映射 | 0.66 | 0.69 | 0.69 |
+| 7 完整 `parseBody`（wasm→JSON→Dart 解码→BlockSpec） | 45.8 | 25.8 | 15.1 |
+| 对照：Dart `markdownToBlocks`（同轮） | 25.9 | 30.3 | 29.4 |
+| 完整路径 / Dart | **1.768** | **0.851** | **0.514** |
+
+1 万字符与 87 字符的同一拆解：
+
+| 输入 | parse-only 未优化 → opt-z → opt-3 | parseBody 未优化 → opt-z → opt-3 | full 未优化 → opt-z → opt-3 | Dart（对应轮） | 比值未优化 → opt-z → opt-3 |
+| --- | --- | --- | --- | ---: | --- |
+| 1 万字符 | 2.375 → 2.04 → 1.11 | 2.925 → 2.34 → 1.21 | 3.125 → 2.53 → 1.49 | 2.73 / 3.10 / 3.30 | 1.147 → 0.815 → **0.451** |
+| 87 字符 | 0.0184 → 0.0164 → 0.0091 | 0.0258 → 0.0208 → 0.0117 | 0.0305 → 0.0252 → 0.0155 | 0.0169 / 0.0200 / 0.0211 | 1.803 → 1.263 → **0.736** |
+
+**解释**：差值不可相加，也不能当作纯阶段成本。`parseBody − parseOnly` 同时包含 BlockJson 映射、`normalize_data` 的 marks 排序和 serde 编码，且两者各自有分配/回收；echo 的入参大小与 JSON 输出大小不同；Dart `jsonDecode` 与 `dartMap` 会产生中间对象，触发 GC 的时间点随机，因此单轮 p95 会有 10–15% 抖动。表中用三轮中位数降低这一噪声，未做减法归因以外的修正。
+
+#### 2. UUID vs Sequential（同一输入、同一致性输出）
+
+功能等价：host 测试对 3 个输入逐块比较，UUID 与 Sequential 的 `kind/text/data/children` 长度完全相同，只有 id 不同（`spike/md-wasm-p0/tests/equivalence.rs`）。
+
+| 输入 | Sequential parse-only | UUID parse-only | 增量 |
+| --- | ---: | ---: | ---: |
+| 10 万字符（3057 块） | 21.0 ms | 31.1 ms | **+10.1 ms（+48%）** |
+| 1 万字符（305 块） | 2.04 ms | 2.93 ms | +0.89 ms（+44%） |
+| S0 同形 10 万字符（2783 块） | 51.7 ms | 61.8 ms | +10.1 ms（+20%） |
+| 87 字符（1 块） | 0.018 ms | 0.021 ms | +0.003 ms |
+
+UUID 路径在 wasm 里每块调用一次 `crypto.getRandomValues`，成本随块数线性增长；这与 S1 T1.4 让 `parse_body` 用 `Sequential` 的决定一致。生产 wasm 构建不启用 `uuid` feature。
+
+#### 3. 编译配置对比（全部 stable Rust 1.98.0 + wasm32-unknown-unknown，无 nightly / 无 `-Z build-std`）
+
+| 配置 | wasm gzip | JS 胶水 gzip | 合计 gzip | 初始化中位数（5 个全新上下文） | 87 字符比值 | 1 万 | 10 万 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 未优化核心，opt-level z | 99,620 B | 2,534 B | 102,184 B（99.8 KiB） | 12.7 ms | 1.803 | 1.147 | 1.768 |
+| 优化核心，opt-level z | 99,784 B | 2,534 B | 102,346 B（100.0 KiB） | 12.3 ms | 1.263 | 0.815 | 0.851 |
+| 优化核心，opt-level s | 108,641 B | 2,534 B | 111,224 B（108.6 KiB） | 13.6 ms | **1.073** | 0.581 | 0.573 |
+| 优化核心，opt-level 3 | 120,726 B | 2,534 B | 123,226 B（120.3 KiB） | 12.8 ms | **0.736** | **0.451** | **0.514** |
+| 优化核心，opt-level z + uuid feature | 101,963 B | 2,800 B | 104,811 B（102.4 KiB） | — | 1.303 | 0.839 | 0.776 |
+
+S0 同形输入的完整路径比值（3 轮中位数）：opt-z `s0_87 1.343 / s0_10k 0.847 / s0_100k 0.836`；opt-s `s0_10k 0.577 / s0_100k 0.620`（`s0_87` 未在 s/3 的快测轮次中跑）；opt-3 `s0_10k 0.535 / s0_100k 0.545`。
+
+**门槛判定（硬阈值不放松）**：opt-s 与 opt-3 在全部已测输入上满足体积 ≤200 KB、初始化 ≤60 ms、完整路径 ≤Dart×1.2；opt-z 在 87 字符上不达标（1.263 / s0_87 1.343）。注意 02 §7 另有**软目标 ≤120 KB**：opt-s 为 108.6 KiB（满足），opt-3 为 120.3 KiB（超出约 0.3 KiB）。
+
+#### 4. 输出等价（真实块 + marks，不是长度 checksum）
+
+- 性能采样之外，对每个输入把 Rust `parseBody` JSON 与 Dart `markdownToBlocks` 规范化后**逐块**比较：丢弃 id/children，`data` 与 marks 对象的键排序，marks 按 `(start,end,type)` 排序。结果：优化后的 opt-z / opt-s / opt-3 三轮、全部输入均 `differingBlocks=0`、`blockCountDelta=0`、规范化 FNV 相同。
+- 未优化基线的第 1 轮曾报不等，定位为**检查器自身的对象键顺序问题**（`{"end","start"}` vs `{"start","end"}`），修正后第 2/3 轮全部相等；不是实现差异。
+- 已知但本组输入未触发的语义差异：Dart `markdownToBlocks` 是粘贴启发式（另有 front matter 丢弃、表格/嵌套等刻意差异），Rust 是完整 CommonMark/GFM 解析。上述输入未观察到块级差异；不能据此推断所有方言输入等价，S3 的差分棘轮仍必需。
+- 优化变体相对“原 Rust 同语义”的守护：`spike/golden/golden.json` 保存未优化核心对全部 7 个输入的 §3.3 JSON SHA-256，host 测试要求优化后逐字节相同。
+
+#### 5. 核心最小优化（行为不变，单独提交）
+
+1. `md-core/src/api.rs::parse_body`：原来对每个子块做 `blocks.iter().find`（O(n²)）并 `clone()` 整块；改为一次性 `id→位置` 借用索引 + 按位置 `take()` 移出，零 id 克隆、零深拷贝。
+2. `md-core/src/parse/block.rs::assign_ids`：Sequential 路径的 id 唯一性由构造保证（前缀调整已避开 root id），删除全量 `HashSet<String>` 与逐块入集合/克隆；Uuid 路径保留碰撞兜底。
+3. `md-core/src/wire.rs`：`parse_body_json` 消费 `Vec<Block>` 而不再借用后克隆 `text/data`；`normalize_data` 的 marks 排序改为借用 `type` 的实现，去掉每次比较的 `String` 分配（稳定排序，顺序不变）。
+
+**回执**：`cargo test -p mica-md --release` → **55 passed, 1 ignored**；`cargo test -p mica-markdown --release --no-default-features` → **185 passed**；`cargo test --manifest-path spike/md-wasm-p0/Cargo.toml --release` → 2 passed（golden + marks 排序），加 `--features uuid` → 3 passed（含 UUID/Sequential 仅 id 不同）；`cargo fmt --check -p mica-md` 通过；`just check-structure` 通过。
+
+#### 6. 结论、未验证与交给 G2
+
+- G2 选择“继续优化”后，P0 的三项解析门槛在 opt-s 与 opt-3 上已满足；体积与初始化始终满足。**没有替用户决定最终采用哪个配置**：opt-s 体积更小、满足 120 KB 软目标，但 87 字符余量较薄（三轮 1.14 / 1.02 / 1.03，中位 1.073）；opt-3 余量最大（87 字符 0.736），但 gzip 120.3 KiB 略超软目标。
+- 未验证：Firefox / Safari；桌面 FFI（本轮未改）；S0 官方基线尚未产出（对照为同页同浏览器的 Dart 实测）；机器负载/GC 造成单轮 ±10–15% 波动，数字为三轮中位数而非精确置信区间。
+- 正式 T2.2+ 未启动；契约、wire JSON 形状、marks 排序均未改动。
+

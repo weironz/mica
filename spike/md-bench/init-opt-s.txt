@@ -1,0 +1,25 @@
+### Result
+[{"initMs":24,"error":null,"isolated":false,"available":"function","resources":[{"name":"http://127.0.0.1:8766/mica_md/mica_md.js","duration":7.5,"transferSize":10031},{"name":"http://127.0.0.1:8766/mica_md/mica_md_bg.wasm","duration":17.600000001490116,"transferSize":356641}],"headers":{"cache-control":"no-store","connection":"keep-alive","content-type":"text/html","date":"Mon, 26 Oct 2026 20:19:24 GMT","keep-alive":"timeout=5","transfer-encoding":"chunked"}},{"initMs":13.599999997764826,"error":null,"isolated":false,"available":"function","resources":[{"name":"http://127.0.0.1:8766/mica_md/mica_md.js","duration":7.699999999254942,"transferSize":10031},{"name":"http://127.0.0.1:8766/mica_md/mica_md_bg.wasm","duration":2.5,"transferSize":356641}],"headers":{"cache-control":"no-store","connection":"keep-alive","content-type":"text/html","date":"Mon, 26 Oct 2026 20:19:25 GMT","keep-alive":"timeout=5","transfer-encoding":"chunked"}},{"initMs":18.599999997764826,"error":null,"isolated":false,"available":"function","resources":[{"name":"http://127.0.0.1:8766/mica_md/mica_md.js","duration":7.099999997764826,"transferSize":10031},{"name":"http://127.0.0.1:8766/mica_md/mica_md_bg.wasm","duration":2.2999999970197678,"transferSize":356641}],"headers":{"cache-control":"no-store","connection":"keep-alive","content-type":"text/html","date":"Mon, 26 Oct 2026 20:19:25 GMT","keep-alive":"timeout=5","transfer-encoding":"chunked"}},{"initMs":12.5,"error":null,"isolated":false,"available":"function","resources":[{"name":"http://127.0.0.1:8766/mica_md/mica_md.js","duration":6.899999998509884,"transferSize":10031},{"name":"http://127.0.0.1:8766/mica_md/mica_md_bg.wasm","duration":2.300000000745058,"transferSize":356641}],"headers":{"cache-control":"no-store","connection":"keep-alive","content-type":"text/html","date":"Mon, 26 Oct 2026 20:19:25 GMT","keep-alive":"timeout=5","transfer-encoding":"chunked"}},{"initMs":11.899999998509884,"error":null,"isolated":false,"available":"function","resources":[{"name":"http://127.0.0.1:8766/mica_md/mica_md.js","duration":7.600000001490116,"transferSize":10031},{"name":"http://127.0.0.1:8766/mica_md/mica_md_bg.wasm","duration":2.2999999970197678,"transferSize":356641}],"headers":{"cache-control":"no-store","connection":"keep-alive","content-type":"text/html","date":"Mon, 26 Oct 2026 20:19:25 GMT","keep-alive":"timeout=5","transfer-encoding":"chunked"}}]
+### Ran Playwright code
+```js
+await (async (page) => {
+  const samples = [];
+  // Each fresh context has no HTTP cache/profile; same browser process may still
+  // retain V8 wasm compilation cache. Server sends no-store and uncompressed bytes.
+  for (let i = 0; i < 5; i++) {
+    const context = await page.context().browser().newContext({locale:'en-US'});
+    const p = await context.newPage();
+    const response = await p.goto('http://127.0.0.1:8766/', {waitUntil:'domcontentloaded'});
+    const measurement = await p.evaluate(async () => {
+      await globalThis.micaMdReady;
+      return {initMs: globalThis.micaMdInitMs, error:globalThis.micaMdError ?? null,
+        isolated:crossOriginIsolated, available:typeof globalThis.micaMd?.parseBody,
+        resources:performance.getEntriesByType('resource').filter(x=>x.name.includes('/mica_md/')).map(x=>({name:x.name,duration:x.duration,transferSize:x.transferSize}))};
+    });
+    samples.push({...measurement,headers:await response.allHeaders()});
+    await context.close();
+  }
+  return samples;
+}
+)(page);
+```

@@ -1,0 +1,132 @@
+[
+  {
+    "initMs": 20.600000023841858,
+    "error": null,
+    "isolated": false,
+    "available": "function",
+    "resources": [
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md.js",
+        "duration": 10,
+        "transferSize": 9028
+      },
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md_bg.wasm",
+        "duration": 17.200000047683716,
+        "transferSize": 336009
+      }
+    ],
+    "headers": {
+      "cache-control": "no-store",
+      "connection": "keep-alive",
+      "content-type": "text/html",
+      "date": "Mon, 26 Oct 2026 09:39:05 GMT",
+      "keep-alive": "timeout=5",
+      "transfer-encoding": "chunked"
+    }
+  },
+  {
+    "initMs": 14.700000047683716,
+    "error": null,
+    "isolated": false,
+    "available": "function",
+    "resources": [
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md.js",
+        "duration": 7.799999952316284,
+        "transferSize": 9028
+      },
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md_bg.wasm",
+        "duration": 2.399999976158142,
+        "transferSize": 336009
+      }
+    ],
+    "headers": {
+      "cache-control": "no-store",
+      "connection": "keep-alive",
+      "content-type": "text/html",
+      "date": "Mon, 26 Oct 2026 09:39:05 GMT",
+      "keep-alive": "timeout=5",
+      "transfer-encoding": "chunked"
+    }
+  },
+  {
+    "initMs": 14.399999976158142,
+    "error": null,
+    "isolated": false,
+    "available": "function",
+    "resources": [
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md.js",
+        "duration": 7.399999976158142,
+        "transferSize": 9028
+      },
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md_bg.wasm",
+        "duration": 2.600000023841858,
+        "transferSize": 336009
+      }
+    ],
+    "headers": {
+      "cache-control": "no-store",
+      "connection": "keep-alive",
+      "content-type": "text/html",
+      "date": "Mon, 26 Oct 2026 09:39:05 GMT",
+      "keep-alive": "timeout=5",
+      "transfer-encoding": "chunked"
+    }
+  },
+  {
+    "initMs": 15,
+    "error": null,
+    "isolated": false,
+    "available": "function",
+    "resources": [
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md.js",
+        "duration": 7.699999928474426,
+        "transferSize": 9028
+      },
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md_bg.wasm",
+        "duration": 3,
+        "transferSize": 336009
+      }
+    ],
+    "headers": {
+      "cache-control": "no-store",
+      "connection": "keep-alive",
+      "content-type": "text/html",
+      "date": "Mon, 26 Oct 2026 09:39:05 GMT",
+      "keep-alive": "timeout=5",
+      "transfer-encoding": "chunked"
+    }
+  },
+  {
+    "initMs": 16.299999952316284,
+    "error": null,
+    "isolated": false,
+    "available": "function",
+    "resources": [
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md.js",
+        "duration": 7.600000023841858,
+        "transferSize": 9028
+      },
+      {
+        "name": "http://127.0.0.1:8766/mica_md/mica_md_bg.wasm",
+        "duration": 2.5999999046325684,
+        "transferSize": 336009
+      }
+    ],
+    "headers": {
+      "cache-control": "no-store",
+      "connection": "keep-alive",
+      "content-type": "text/html",
+      "date": "Mon, 26 Oct 2026 09:39:06 GMT",
+      "keep-alive": "timeout=5",
+      "transfer-encoding": "chunked"
+    }
+  }
+]

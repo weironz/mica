@@ -1,0 +1,35 @@
+# P0 cost-attribution spike ONLY — not a workspace member, never merged.
+#
+# Builds the S1 `mica-md` engine to wasm32. Two variants:
+#   cargo build ... --release                    # production: no uuid, no render
+#   cargo build ... --release --features uuid    # UUID-vs-Sequential comparison
+[package]
+name = "mica-md-wasm-p0"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+uuid = ["mica-md/uuid", "dep:uuid"]
+
+[dependencies]
+mica-md = { path = "../../crates/md-core", default-features = false }
+wasm-bindgen = "=0.2.129"
+serde_json = "1"
+# SPIKE ONLY, `uuid` feature only: getrandom needs crypto.getRandomValues on
+# wasm32. The production wasm build never enables this feature.
+uuid = { version = "1.11", features = ["js"], optional = true }
+
+[dev-dependencies]
+sha2 = "0.10"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

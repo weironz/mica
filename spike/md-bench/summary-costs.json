@@ -1,0 +1,1399 @@
+{
+  "environment": {
+    "rust": "1.98.0 stable (rust-toolchain.toml), wasm-bindgen crate + CLI 0.2.129, wasm32-unknown-unknown",
+    "flutter": "3.47.1 / Dart 3.13.1, flutter build web --release --no-web-resources-cdn",
+    "browser": "HeadlessChrome/156.0.0.0, Windows 11 build 26300",
+    "server": "node static host, no COOP/COEP, Cache-Control: no-store; crossOriginIsolated=false",
+    "method": "Each stage measured in isolated adaptive batches (15 samples, calibrated to ~15 ms per batch), alternating order; round value is the median across 3 independent release runs, then the median across rounds. Dart comparator is the production markdownToBlocks in the same page, same release build."
+  },
+  "sizesGzipBytes": {
+    "base-z": 102184,
+    "opt-z": 102346,
+    "opt-s": 111224,
+    "opt-3": 123226,
+    "opt-z-uuid": 104811,
+    "threshold": 204800
+  },
+  "initMs": {
+    "base-z": [
+      13,
+      12,
+      13.100000001490116,
+      12.699999999254942,
+      11.900000002235174
+    ],
+    "opt-z": [
+      11.5,
+      11.600000001490116,
+      12.5,
+      23.199999999254942,
+      12.300000000745058
+    ],
+    "opt-s": [
+      24,
+      13.599999997764826,
+      18.599999997764826,
+      12.5,
+      11.899999998509884
+    ],
+    "opt-3": [
+      15.200000002980232,
+      12.799999997019768,
+      12.800000000745058,
+      12.800000000745058,
+      17.200000002980232
+    ]
+  },
+  "initMsMedian": {
+    "base-z": 12.699999999254942,
+    "opt-z": 12.300000000745058,
+    "opt-s": 13.599999997764826,
+    "opt-3": 12.800000000745058
+  },
+  "variants": {
+    "base-z": {
+      "p0_87": {
+        "characters": 87,
+        "blocks": 1,
+        "jsonBytes": 281,
+        "stages": {
+          "loopOverhead": 0,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.0007568359378637979,
+          "echoJson": 0.0017944335936590505,
+          "parseOnly": 0.018359375000727596,
+          "parseBody": 0.02578124999854481,
+          "dartDecode": 0.0011718749997271516,
+          "dartMap": 0.00046386718759094947,
+          "full": 0.030468750002910383,
+          "dartMarkdown": 0.016894531250727596
+        },
+        "ratioFullVsDart": 1.8034682081870834,
+        "equivalence": [
+          {
+            "equal": false,
+            "rustFnv": 3803061352,
+            "dartFnv": 2782192784,
+            "firstDiff": "{\"at\":106,\"rust\":\"\\\":\\\"Hello world and friends, see code link. Plain text test.\\\",\\\"data\\\":{\\\"marks\\\":[{\\\"end\\\":11,\\\"start\\\":6,\\\"type\\\":\\\"bold\\\"},{\\\"end\\\":23,\\\"start\\\":16,\\\"type\\\":\\\"italic\\\"},{\\\"end\\\":33,\\\"start\\\":29,\\\"type\\\":\\\"code\\\"},{\\\"end\\\":38,\\\"href\\\":\\\"https://example.com\\\",\\\"start\\\":34,\\\"ty\",\"dart\":\"\\\":\\\"Hello world and friends, see code link. Plain text test.\\\",\\\"data\\\":{\\\"marks\\\":[{\\\"start\\\":6,\\\"end\\\":11,\\\"type\\\":\\\"bold\\\"},{\\\"start\\\":16,\\\"end\\\":23,\\\"type\\\":\\\"italic\\\"},{\\\"start\\\":29,\\\"end\\\":33,\\\"type\\\":\\\"code\\\"},{\\\"start\\\":34,\\\"end\\\":38,\\\"type\\\":\\\"link\\\",\\\"href\\\":\\\"https://ex\"}",
+            "rustLength": 281,
+            "dartLength": 281
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        ]
+      },
+      "p0_10k": {
+        "characters": 10000,
+        "blocks": 305,
+        "jsonBytes": 33051,
+        "stages": {
+          "loopOverhead": 0.00001220703143189894,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.0361328125,
+          "echoJson": 0.1609374999825377,
+          "parseOnly": 2.375,
+          "parseBody": 2.9250000002793968,
+          "dartDecode": 0.1328125,
+          "dartMap": 0.06523437499708962,
+          "full": 3.125,
+          "dartMarkdown": 2.7250000000931323
+        },
+        "ratioFullVsDart": 1.1467889907864943,
+        "equivalence": [
+          {
+            "equal": false,
+            "rustFnv": 268055736,
+            "dartFnv": 2924606096,
+            "firstDiff": "{\"at\":174,\"rust\":\" italic, code, and a link in a paragraph of ordinary prose.\\\",\\\"data\\\":{\\\"marks\\\":[{\\\"end\\\":9,\\\"start\\\":5,\\\"type\\\":\\\"bold\\\"},{\\\"end\\\":17,\\\"start\\\":11,\\\"type\\\":\\\"italic\\\"},{\\\"end\\\":23,\\\"start\\\":19,\\\"type\\\":\\\"code\\\"},{\\\"end\\\":35,\\\"href\\\":\\\"https://example.com\\\",\\\"start\\\":31,\\\"typ\",\"dart\":\" italic, code, and a link in a paragraph of ordinary prose.\\\",\\\"data\\\":{\\\"marks\\\":[{\\\"start\\\":5,\\\"end\\\":9,\\\"type\\\":\\\"bold\\\"},{\\\"start\\\":11,\\\"end\\\":17,\\\"type\\\":\\\"italic\\\"},{\\\"start\\\":19,\\\"end\\\":23,\\\"type\\\":\\\"code\\\"},{\\\"start\\\":31,\\\"end\\\":35,\\\"type\\\":\\\"link\\\",\\\"href\\\":\\\"https://exa\"}",
+            "rustLength": 32879,
+            "dartLength": 32879
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          }
+        ]
+      },
+      "p0_100k": {
+        "characters": 100000,
+        "blocks": 3057,
+        "jsonBytes": 330603,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.35625000001164153,
+          "echoJson": 1.5687499998603016,
+          "parseOnly": 37.19999999925494,
+          "parseBody": 44,
+          "dartDecode": 1.3375000001396984,
+          "dartMap": 0.6593750000465661,
+          "full": 45.79999999701977,
+          "dartMarkdown": 25.899999998509884
+        },
+        "ratioFullVsDart": 1.7683397683264401,
+        "equivalence": [
+          {
+            "equal": false,
+            "rustFnv": 3733683272,
+            "dartFnv": 3320977712,
+            "firstDiff": "{\"at\":174,\"rust\":\" italic, code, and a link in a paragraph of ordinary prose.\\\",\\\"data\\\":{\\\"marks\\\":[{\\\"end\\\":9,\\\"start\\\":5,\\\"type\\\":\\\"bold\\\"},{\\\"end\\\":17,\\\"start\\\":11,\\\"type\\\":\\\"italic\\\"},{\\\"end\\\":23,\\\"start\\\":19,\\\"type\\\":\\\"code\\\"},{\\\"end\\\":35,\\\"href\\\":\\\"https://example.com\\\",\\\"start\\\":31,\\\"typ\",\"dart\":\" italic, code, and a link in a paragraph of ordinary prose.\\\",\\\"data\\\":{\\\"marks\\\":[{\\\"start\\\":5,\\\"end\\\":9,\\\"type\\\":\\\"bold\\\"},{\\\"start\\\":11,\\\"end\\\":17,\\\"type\\\":\\\"italic\\\"},{\\\"start\\\":19,\\\"end\\\":23,\\\"type\\\":\\\"code\\\"},{\\\"start\\\":31,\\\"end\\\":35,\\\"type\\\":\\\"link\\\",\\\"href\\\":\\\"https://exa\"}",
+            "rustLength": 328859,
+            "dartLength": 328859
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          }
+        ]
+      },
+      "s0_87": {
+        "characters": 87,
+        "blocks": 1,
+        "jsonBytes": 246,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.0007568359374090505,
+          "echoJson": 0.001660156250181899,
+          "parseOnly": 0.017382812500727596,
+          "parseBody": 0.02255859375145519,
+          "dartDecode": 0.001049804687681899,
+          "dartMap": 0.0004516601566137979,
+          "full": 0.02773437499854481,
+          "dartMarkdown": 0.015527343748544808
+        },
+        "ratioFullVsDart": 1.7861635220862564,
+        "equivalence": [
+          {
+            "equal": false,
+            "rustFnv": 540250464,
+            "dartFnv": 3154252448,
+            "firstDiff": "{\"at\":108,\"rust\":\"\\\"Hot paths: bold and code plus a link in one paragraph now!\\\",\\\"data\\\":{\\\"marks\\\":[{\\\"end\\\":15,\\\"start\\\":11,\\\"type\\\":\\\"bold\\\"},{\\\"end\\\":24,\\\"start\\\":20,\\\"type\\\":\\\"code\\\"},{\\\"end\\\":36,\\\"href\\\":\\\"https://example.com\\\",\\\"start\\\":32,\\\"type\\\":\\\"link\\\"}]}}]\",\"dart\":\"\\\"Hot paths: bold and code plus a link in one paragraph now!\\\",\\\"data\\\":{\\\"marks\\\":[{\\\"start\\\":11,\\\"end\\\":15,\\\"type\\\":\\\"bold\\\"},{\\\"start\\\":20,\\\"end\\\":24,\\\"type\\\":\\\"code\\\"},{\\\"start\\\":32,\\\"end\\\":36,\\\"type\\\":\\\"link\\\",\\\"href\\\":\\\"https://example.com\\\"}]}}]\"}",
+            "rustLength": 246,
+            "dartLength": 246
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        ]
+      },
+      "s0_10k": {
+        "characters": 9997,
+        "blocks": 297,
+        "jsonBytes": 32569,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.043554687494179234,
+          "echoJson": 0.1359375000174623,
+          "parseOnly": 4.525000000372529,
+          "parseBody": 5.0499999998137355,
+          "dartDecode": 0.12968750001164153,
+          "dartMap": 0.062109374994179234,
+          "full": 5.400000000372529,
+          "dartMarkdown": 5.400000000372529
+        },
+        "ratioFullVsDart": 1,
+        "equivalence": [
+          {
+            "equal": false,
+            "rustFnv": 4142897408,
+            "dartFnv": 750462048,
+            "firstDiff": "{\"at\":126,\"rust\":\"\\\"level\\\":1}},{\\\"type\\\":\\\"heading\\\",\\\"text\\\":\\\"Section two\\\",\\\"data\\\":{\\\"level\\\":2,\\\"marks\\\":[{\\\"end\\\":11,\\\"start\\\":8,\\\"type\\\":\\\"italic\\\"}]}},{\\\"type\\\":\\\"heading\\\",\\\"text\\\":\\\"第三层 粗体\\\",\\\"data\\\":{\\\"level\\\":3,\\\"marks\\\":[{\\\"end\\\":6,\\\"start\\\":4,\\\"type\\\":\\\"bold\\\"}]}},{\\\"type\\\":\\\"paragraph\\\",\\\"tex\",\"dart\":\"\\\"level\\\":1}},{\\\"type\\\":\\\"heading\\\",\\\"text\\\":\\\"Section two\\\",\\\"data\\\":{\\\"level\\\":2,\\\"marks\\\":[{\\\"start\\\":8,\\\"end\\\":11,\\\"type\\\":\\\"italic\\\"}]}},{\\\"type\\\":\\\"heading\\\",\\\"text\\\":\\\"第三层 粗体\\\",\\\"data\\\":{\\\"level\\\":3,\\\"marks\\\":[{\\\"start\\\":4,\\\"end\\\":6,\\\"type\\\":\\\"bold\\\"}]}},{\\\"type\\\":\\\"paragraph\\\",\\\"tex\"}",
+            "rustLength": 32555,
+            "dartLength": 32555
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          }
+        ]
+      },
+      "s0_100k": {
+        "characters": 99972,
+        "blocks": 2783,
+        "jsonBytes": 328492,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.40937499998835847,
+          "echoJson": 1.3500000000931323,
+          "parseOnly": 67.19999999925494,
+          "parseBody": 71.69999999925494,
+          "dartDecode": 1.2874999998603016,
+          "dartMap": 0.5906249999534339,
+          "full": 75.19999999925494,
+          "dartMarkdown": 63.80000000074506
+        },
+        "ratioFullVsDart": 1.1786833855544945,
+        "equivalence": [
+          {
+            "equal": false,
+            "rustFnv": 1354498864,
+            "dartFnv": 603943040,
+            "firstDiff": "{\"at\":126,\"rust\":\"\\\"level\\\":1}},{\\\"type\\\":\\\"heading\\\",\\\"text\\\":\\\"Section two\\\",\\\"data\\\":{\\\"level\\\":2,\\\"marks\\\":[{\\\"end\\\":11,\\\"start\\\":8,\\\"type\\\":\\\"italic\\\"}]}},{\\\"type\\\":\\\"heading\\\",\\\"text\\\":\\\"第三层 粗体\\\",\\\"data\\\":{\\\"level\\\":3,\\\"marks\\\":[{\\\"end\\\":6,\\\"start\\\":4,\\\"type\\\":\\\"bold\\\"}]}},{\\\"type\\\":\\\"paragraph\\\",\\\"tex\",\"dart\":\"\\\"level\\\":1}},{\\\"type\\\":\\\"heading\\\",\\\"text\\\":\\\"Section two\\\",\\\"data\\\":{\\\"level\\\":2,\\\"marks\\\":[{\\\"start\\\":8,\\\"end\\\":11,\\\"type\\\":\\\"italic\\\"}]}},{\\\"type\\\":\\\"heading\\\",\\\"text\\\":\\\"第三层 粗体\\\",\\\"data\\\":{\\\"level\\\":3,\\\"marks\\\":[{\\\"start\\\":4,\\\"end\\\":6,\\\"type\\\":\\\"bold\\\"}]}},{\\\"type\\\":\\\"paragraph\\\",\\\"tex\"}",
+            "rustLength": 328332,
+            "dartLength": 328332
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          }
+        ]
+      }
+    },
+    "opt-z": {
+      "p0_87": {
+        "characters": 87,
+        "blocks": 1,
+        "jsonBytes": 281,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.0008178710936590505,
+          "echoJson": 0.001843261718931899,
+          "parseOnly": 0.016406250000727596,
+          "parseBody": 0.020800781250727596,
+          "dartDecode": 0.001208496093568101,
+          "dartMap": 0.00046386718759094947,
+          "full": 0.02529296874854481,
+          "dartMarkdown": 0.02001953125
+        },
+        "ratioFullVsDart": 1.263414634073653,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        ]
+      },
+      "p0_10k": {
+        "characters": 10000,
+        "blocks": 305,
+        "jsonBytes": 33051,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.03652343749854481,
+          "echoJson": 0.16015625,
+          "parseOnly": 1.9375,
+          "parseBody": 2.2875000000931323,
+          "dartDecode": 0.13671875,
+          "dartMap": 0.06562500000291038,
+          "full": 2.5249999999068677,
+          "dartMarkdown": 3.1000000005587935
+        },
+        "ratioFullVsDart": 0.814516128855394,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          }
+        ]
+      },
+      "p0_100k": {
+        "characters": 100000,
+        "blocks": 3057,
+        "jsonBytes": 330603,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.3609374999650754,
+          "echoJson": 1.6062499999534339,
+          "parseOnly": 20.100000001490116,
+          "parseBody": 23.5,
+          "dartDecode": 1.3125,
+          "dartMap": 0.6750000000465661,
+          "full": 25.800000000745058,
+          "dartMarkdown": 30.299999997019768
+        },
+        "ratioFullVsDart": 0.8514851486231908,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          }
+        ]
+      },
+      "s0_87": {
+        "characters": 87,
+        "blocks": 1,
+        "jsonBytes": 246,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.0008056640622271516,
+          "echoJson": 0.0016723632811590505,
+          "parseOnly": 0.015722656247817213,
+          "parseBody": 0.01943359374854481,
+          "dartDecode": 0.0010620117186590505,
+          "dartMap": 0.00046386718759094947,
+          "full": 0.02333984374854481,
+          "dartMarkdown": 0.017382812500727596
+        },
+        "ratioFullVsDart": 1.3426966290735673,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        ]
+      },
+      "s0_10k": {
+        "characters": 9997,
+        "blocks": 297,
+        "jsonBytes": 32569,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.04296875,
+          "echoJson": 0.13671875,
+          "parseOnly": 3.9500000001862645,
+          "parseBody": 4.25,
+          "dartDecode": 0.13125000000582077,
+          "dartMap": 0.06328124999708962,
+          "full": 4.5750000001862645,
+          "dartMarkdown": 5.400000000372529
+        },
+        "ratioFullVsDart": 0.8472222221982685,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          }
+        ]
+      },
+      "s0_100k": {
+        "characters": 99972,
+        "blocks": 2783,
+        "jsonBytes": 328492,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.41249999997671694,
+          "echoJson": 1.3874999999534339,
+          "parseOnly": 48.899999998509884,
+          "parseBody": 52.19999999925494,
+          "dartDecode": 1.28125,
+          "dartMap": 0.5999999999767169,
+          "full": 54.600000001490116,
+          "dartMarkdown": 65.30000000074506
+        },
+        "ratioFullVsDart": 0.8361408882215489,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          }
+        ]
+      }
+    },
+    "opt-s": {
+      "p0_87": {
+        "characters": 87,
+        "blocks": 1,
+        "jsonBytes": 281,
+        "stages": {
+          "parseOnly": 0.011572265624636202,
+          "parseBody": 0.015820312502910383,
+          "full": 0.020214843749272404,
+          "dartMarkdown": 0.018847656250727596
+        },
+        "ratioFullVsDart": 1.0725388600236185,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        ]
+      },
+      "p0_10k": {
+        "characters": 10000,
+        "blocks": 305,
+        "jsonBytes": 33051,
+        "stages": {
+          "parseOnly": 1.375,
+          "parseBody": 1.6062499999534339,
+          "full": 1.875,
+          "dartMarkdown": 3.2250000000931323
+        },
+        "ratioFullVsDart": 0.5813953488204197,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          }
+        ]
+      },
+      "p0_100k": {
+        "characters": 100000,
+        "blocks": 3057,
+        "jsonBytes": 330603,
+        "stages": {
+          "parseOnly": 14.050000000745058,
+          "parseBody": 15.5,
+          "full": 18.5,
+          "dartMarkdown": 32.30000000074506
+        },
+        "ratioFullVsDart": 0.5727554179434448,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          }
+        ]
+      },
+      "s0_10k": {
+        "characters": 9997,
+        "blocks": 297,
+        "jsonBytes": 32569,
+        "stages": {
+          "parseOnly": 2.8249999997206032,
+          "parseBody": 3.0500000002793968,
+          "full": 3.5500000002793968,
+          "dartMarkdown": 6.150000000372529
+        },
+        "ratioFullVsDart": 0.5772357723681886,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          }
+        ]
+      },
+      "s0_100k": {
+        "characters": 99972,
+        "blocks": 2783,
+        "jsonBytes": 328492,
+        "stages": {
+          "parseOnly": 34.900000002235174,
+          "parseBody": 37.80000000074506,
+          "full": 40.80000000074506,
+          "dartMarkdown": 65.80000000074506
+        },
+        "ratioFullVsDart": 0.6200607902778583,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          }
+        ]
+      }
+    },
+    "opt-3": {
+      "p0_87": {
+        "characters": 87,
+        "blocks": 1,
+        "jsonBytes": 281,
+        "stages": {
+          "parseOnly": 0.009130859374636202,
+          "parseBody": 0.01171875,
+          "full": 0.015527343752182787,
+          "dartMarkdown": 0.021093749994179234
+        },
+        "ratioFullVsDart": 0.7361111114177193,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        ]
+      },
+      "p0_10k": {
+        "characters": 10000,
+        "blocks": 305,
+        "jsonBytes": 33051,
+        "stages": {
+          "parseOnly": 1.1124999998137355,
+          "parseBody": 1.2124999999068677,
+          "full": 1.4875000000465661,
+          "dartMarkdown": 3.2999999998137355
+        },
+        "ratioFullVsDart": 0.45075757579712916,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          }
+        ]
+      },
+      "p0_100k": {
+        "characters": 100000,
+        "blocks": 3057,
+        "jsonBytes": 330603,
+        "stages": {
+          "parseOnly": 10.950000001117587,
+          "parseBody": 12.699999999254942,
+          "full": 15.099999997764826,
+          "dartMarkdown": 29.400000002235174
+        },
+        "ratioFullVsDart": 0.5136054420617969,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          }
+        ]
+      },
+      "s0_10k": {
+        "characters": 9997,
+        "blocks": 297,
+        "jsonBytes": 32569,
+        "stages": {
+          "parseOnly": 2.4750000000931323,
+          "parseBody": 2.6124999998137355,
+          "full": 2.8875000001862645,
+          "dartMarkdown": 5.400000000372529
+        },
+        "ratioFullVsDart": 0.5347222222198268,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          }
+        ]
+      },
+      "s0_100k": {
+        "characters": 99972,
+        "blocks": 2783,
+        "jsonBytes": 328492,
+        "stages": {
+          "parseOnly": 30.800000000745058,
+          "parseBody": 32.400000002235174,
+          "full": 35.29999999701977,
+          "dartMarkdown": 64.79999999701977
+        },
+        "ratioFullVsDart": 0.5447530863988157,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          }
+        ]
+      }
+    },
+    "opt-z-uuid": {
+      "p0_87": {
+        "characters": 87,
+        "blocks": 1,
+        "jsonBytes": 281,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.0008056640622271516,
+          "echoJson": 0.0018310546875,
+          "parseOnly": 0.01816406250145519,
+          "uuidParseOnly": 0.02138671874854481,
+          "parseBody": 0.022265625000727596,
+          "dartDecode": 0.0011840820316137979,
+          "dartMap": 0.00045166015615905053,
+          "full": 0.026464843747817213,
+          "dartMarkdown": 0.020312499997089617
+        },
+        "ratioFullVsDart": 1.302884615463833,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        ]
+      },
+      "p0_10k": {
+        "characters": 10000,
+        "blocks": 305,
+        "jsonBytes": 33051,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.036718749994179234,
+          "echoJson": 0.16015625,
+          "parseOnly": 2.0375000000931323,
+          "uuidParseOnly": 2.9249999998137355,
+          "parseBody": 2.3374999999068677,
+          "dartDecode": 0.1328125,
+          "dartMap": 0.06484374999126885,
+          "full": 2.599999999627471,
+          "dartMarkdown": 3.1000000000931323
+        },
+        "ratioFullVsDart": 0.8387096772739872,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          }
+        ]
+      },
+      "p0_100k": {
+        "characters": 100000,
+        "blocks": 3057,
+        "jsonBytes": 330603,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.359375,
+          "echoJson": 1.6000000000931323,
+          "parseOnly": 21,
+          "uuidParseOnly": 31.100000001490116,
+          "parseBody": 23.600000001490116,
+          "dartDecode": 1.3125,
+          "dartMap": 0.6500000000232831,
+          "full": 26.399999998509884,
+          "dartMarkdown": 34
+        },
+        "ratioFullVsDart": 0.7764705881914672,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          }
+        ]
+      },
+      "s0_87": {
+        "characters": 87,
+        "blocks": 1,
+        "jsonBytes": 246,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.00079345703125,
+          "echoJson": 0.00164794921875,
+          "parseOnly": 0.016308593749272404,
+          "uuidParseOnly": 0.02001953125,
+          "parseBody": 0.02109375000145519,
+          "dartDecode": 0.0010620117186590505,
+          "dartMap": 0.00045166015615905053,
+          "full": 0.025390625,
+          "dartMarkdown": 0.018261718749272404
+        },
+        "ratioFullVsDart": 1.3903743316061983,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        ]
+      },
+      "s0_10k": {
+        "characters": 9997,
+        "blocks": 297,
+        "jsonBytes": 32569,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.04355468750145519,
+          "echoJson": 0.13671875,
+          "parseOnly": 4.1499999994412065,
+          "uuidParseOnly": 5.125,
+          "parseBody": 4.5,
+          "dartDecode": 0.13046874999417923,
+          "dartMap": 0.06328124999708962,
+          "full": 4.849999999627471,
+          "dartMarkdown": 5.4500000001862645
+        },
+        "ratioFullVsDart": 0.8899082567819656,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          }
+        ]
+      },
+      "s0_100k": {
+        "characters": 99972,
+        "blocks": 2783,
+        "jsonBytes": 328492,
+        "stages": {
+          "loopOverhead": 0.00002441406240905053,
+          "wasmNoop": 0.00001220703143189894,
+          "echoMd": 0.41562500002328306,
+          "echoJson": 1.4124999998603016,
+          "parseOnly": 51.69999999925494,
+          "uuidParseOnly": 61.80000000074506,
+          "parseBody": 55.30000000074506,
+          "dartDecode": 1.2999999998137355,
+          "dartMap": 0.59375,
+          "full": 58.600000001490116,
+          "dartMarkdown": 66.29999999701977
+        },
+        "ratioFullVsDart": 0.8838612368646188,
+        "equivalence": [
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          },
+          {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          }
+        ]
+      }
+    }
+  }
+}

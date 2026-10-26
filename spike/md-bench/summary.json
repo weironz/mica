@@ -1,0 +1,50 @@
+{
+  "environment": "Windows 11 Pro build 26300; HeadlessChrome/156.0.0.0 per run JSON browser field",
+  "dart": "3.13.1 via Flutter 3.47.1, dart2js --release --no-web-resources-cdn, temporary entry spike/md-bench/main.dart calling real app.main()",
+  "rust": "1.98.0 stable from rust-toolchain.toml; wasm-bindgen crate and CLI 0.2.129; target wasm32-unknown-unknown; opt-level=z, codegen-units=1, lto=true; no nightly, no -Z build-std",
+  "uuidJsSpikeOnly": "spike/md-wasm-p0/Cargo.toml enables uuid js feature solely so existing commands compile on wasm32 before S1 T1.4 replaces Uuid::new_v4() with Sequential ids. The official md-wasm crate must not keep this feature.",
+  "childrenIndexingSpikeOnly": "spike/md-wasm-p0/src/lib.rs pre-indexes document block ids once before mapping root.children, avoiding a wrapper-induced quadratic lookup; S4 wire path should retain an equivalent indexed lookup before locking thresholds.",
+  "sizeBytes": {
+    "wasmRaw": 335709,
+    "jsGlueRaw": 8728,
+    "wasmGzipLevel9": 92997,
+    "jsGlueGzipLevel9": 2415,
+    "combinedGzipLevel9": 95498,
+    "thresholdGzipBytes": 204800
+  },
+  "initializationMs": [20.600000023841858, 14.700000047683716, 14.399999976158142, 15, 16.299999952316284],
+  "initializationMedianMs": 15,
+  "initializationThresholdMs": 60,
+  "isolation": {
+    "crossOriginIsolated": false,
+    "serverHadCoopCoep": false,
+    "singleThreadedWasm": true
+  },
+  "performance": {
+    "method": "full binding call parseBody(markdown) -> Rust JSON -> Dart jsonDecode -> mapped BlockSpec records, measured by adaptive batches inside one browser; alternating sample order; 15 batch samples; medians below",
+    "baselineNote": "S0 baseline was not produced at measurement time; comparator is the existing Dart markdownToBlocks measured in the same page and browser in this unpublished P0 run",
+    "runs": [
+      {
+        "s87": {"characters":87,"wasmJsonDecodeMedianMs":0.03671875037252903,"dartMedianMs":0.01738281245343387,"ratio":2.112359577651398,"blocks":1,"jsonBytes":281},
+        "s10k": {"characters":10000,"wasmJsonDecodeMedianMs":4.125,"dartMedianMs":3.0125000029802322,"ratio":1.369294604454501,"blocks":305,"jsonBytes":33051},
+        "s100k": {"characters":100000,"wasmJsonDecodeMedianMs":38.5,"dartMedianMs":24.5,"ratio":1.5714285714285714,"blocks":3057,"jsonBytes":330603}
+      },
+      {
+        "s87": {"characters":87,"wasmJsonDecodeMedianMs":0.029882812406867743,"dartMedianMs":0.01708984375,"ratio":1.748571423121861},
+        "s10k": {"characters":10000,"wasmJsonDecodeMedianMs":3.7999999970197678,"dartMedianMs":2.8125,"ratio":1.351111110051473},
+        "s100k": {"characters":100000,"wasmJsonDecodeMedianMs":36.89999997615814,"dartMedianMs":25.600000023841858,"ratio":1.4414062477262632}
+      },
+      {
+        "s87": {"characters":87,"wasmJsonDecodeMedianMs":0.03203124995343387,"dartMedianMs":0.016992187476716936,"ratio":1.885057471106871},
+        "s10k": {"characters":10000,"wasmJsonDecodeMedianMs":3.925000011920929,"dartMedianMs":2.625,"ratio":1.4952380997794015},
+        "s100k": {"characters":100000,"wasmJsonDecodeMedianMs":38.89999997615814,"dartMedianMs":25.600000023841858,"ratio":1.5195312476535037}
+      }
+    ],
+    "thresholdRatio": 1.2
+  },
+  "artifacts": {
+    "releaseScreenshot": "spike/md-bench/p0-release.png",
+    "runs": ["spike/md-bench/run1.json", "spike/md-bench/run2.json", "spike/md-bench/run3.json"],
+    "initialization": "spike/md-bench/init.json"
+  }
+}

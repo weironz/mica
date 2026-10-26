@@ -1,0 +1,9 @@
+{
+  "p0_100k": {"sha256": "e7e67b08bbeca99667274657e677055991c6656bebb8d88f61e70330f8d74834", "blocks": 3057, "marks": 2185, "json_bytes": 330603},
+  "p0_10k": {"sha256": "ddb21896a6c6f7b5ada9933c3851e1ec2f37c9723b1e39ead04f08713990d4e2", "blocks": 305, "marks": 220, "json_bytes": 33051},
+  "p0_87": {"sha256": "cb2d9f27e8e133a4a9a847e0e01a7cc8cecc807e109e9afe5f04d0eb7b0fc3cc", "blocks": 1, "marks": 4, "json_bytes": 281},
+  "s0_100k": {"sha256": "ea30ecc2428a4c1161e34da88c757b58ee4d29ab5fefdb99f761667f63140400", "blocks": 2783, "marks": 2334, "json_bytes": 328859},
+  "s0_10k": {"sha256": "efbf869c392b7a03f854540051186ba30d360276d53ce045e20618cff563a2c4", "blocks": 297, "marks": 208, "json_bytes": 32614},
+  "s0_87": {"sha256": "64ba24a0d6a960ff59e67917b91655223ffcb4ea5b2e35e08828edafe17133dd", "blocks": 1, "marks": 3, "json_bytes": 246},
+  "s0_sample": {"sha256": "33390b5ca46aa4077d19bf530b1e9b1ba385fe3a4fb3e5fbf70b68ef36fa9e75", "blocks": 176, "marks": 151, "json_bytes": 20955}
+}

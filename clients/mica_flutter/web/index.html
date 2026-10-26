@@ -84,6 +84,24 @@
     <!-- P2-M4 web→yjs: the browser-side CRDT engine (yjs), wire-compatible with
          the Rust yrs core/server. Loaded before Flutter so js_interop can use it. -->
     <script src="yjs_bundle.js"></script>
+    <!-- S2 P0 spike (temporary): the Markdown engine compiled to wasm32.
+         Starts compiling before Flutter boots; Dart awaits `micaMdReady`.
+         `micaMdInitMs` is measured from the script tag to the resolved init —
+         Playwright reads it as the instantiation cost. -->
+    <script src="mica_md/mica_md.js"></script>
+    <script>
+      (function () {
+        var started = performance.now();
+        globalThis.micaMdReady = wasm_bindgen({ module_or_path: 'mica_md/mica_md_bg.wasm' })
+          .then(function () {
+            globalThis.micaMd = wasm_bindgen;
+            globalThis.micaMdInitMs = performance.now() - started;
+          })
+          .catch(function (e) {
+            globalThis.micaMdError = String(e);
+          });
+      })();
+    </script>
   </head>
   <body>
     <script src="flutter_bootstrap.js" async></script>

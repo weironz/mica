@@ -1,0 +1,397 @@
+# Title One
+
+## Section *two*
+
+### 第三层 **粗体**
+plain text here
+
+**bold** then *italic* then `code` then ~~strike~~
+
+a [link](https://example.com/x) inside
+
+**bold with *inner italic* kept**
+- first item
+- second **bold** item
+* star bullet
+
+1. one
+2. two [l](https://e.com)
+
+- parent
+  - child two-space
+    - grandchild
+  - child again
+- back to top
+
+1. ordered parent
+    1. four-space child
+    2. sibling
+2. parent two
+
+- [ ] task parent
+  - [x] nested *done* task
+- [ ] open task
+- [x] done *task*
+> quoted line with `code`
+> second line
+```rust
+fn main() {
+    println!("**not bold**");
+}
+```
+
+```
+no language
+```
+above
+
+---
+
+below
+![风景 照片](https://example.com/p.png)
+
+![](assets/local.png)
+| Name | Value |
+| --- | --- |
+| alpha | 1 |
+| beta | 2 |
+# Doc
+
+intro paragraph
+
+- item **a**
+- item b
+
+> note
+
+```js
+x = 1
+```
+
+![pic](img.png)
+
+done
+\*not bold\* and snake\_case stays plain
+
+a literal backslash \\ and \[not a link\](x)
+
+\- not a list item
+
+1\. not a numbered item
+
+visit <https://example.com/a?b=1> now
+
+mail <user@example.com> please
+
+**bold with <https://e.co> inside**
+
+`code keeps *stars* and \n raw`
+Setext Title
+============
+
+Second Level
+------------
+
+    indented code
+      keeps deeper indent
+
+	tab indented
+
+- - -
+
+*  *  *
+
+after the breaks
+inline [basic](https://e.com) and [titled](https://e.com "the title")
+
+angle dest [spaced](</url with space>) works
+
+balanced [parens](https://e.com/a(b)c) too
+
+full [text][ref] and collapsed [ref][] and shortcut [ref]
+
+nested **bold [link inside](https://e.com) bold**
+
+[ref]: https://example.com/ref "Ref Title"
+plain *italic* and **bold** basics
+
+intraword st*ar*s work but sn_ake_s do not
+
+*(*parens rule*)* and a * loose star
+
+***both at once*** and **nested *inner* tail**
+
+foo*bar* edge and _underscore_ word
+
+rule of three: ***strong* in em*
+- alpha
+lazy line joins
+- beta
+  indented continuation
+
+- gamma is loose
++ plus starts a new list
+
+1. one
+1. two
+
+3) new delim restarts
+
+7. start at seven
+- parent item
+  - child item
+ - sibling not child
+
+para first
+para second
+===
+
+- item with two paragraphs
+
+  second paragraph here
+![banner](assets/banner.png)
+
+![photo](train.jpg "a title")
+
+inline ![icon](https://x.io/i.png) inside text
+
+![alt *with emphasis*][art]
+
+ref shortcut ![art] and full ![other][art]
+
+!\[escaped] and \![link form][art]
+
+[art]: /gallery/art.png "gallery"
+> simple quote
+> joined marked
+
+> # heading inside
+> body text
+continued lazy
+
+> > nested two deep
+>> still nested
+
+>
+
+> - item in quote
+> more of the item
+
+> ```js
+> let x = 1
+> ```
+
+>     raw indented code
+
+> alpha group
+
+> beta group after blank
+
+<section>
+html block after a quote group
+</section>
+## closing hashes ##
+
+`simple code` and ``double `tick`` span
+
+` `` ` then `` foo ` bar ``
+
+hard break here  
+after two spaces
+
+backslash break\
+joins here
+
+~~~js
+tilde fenced
+~~~
+
+para with
+    indented lazy line
+copy &copy; and star &#42;foo&#42; and hex &#x27;quote&#x27;
+
+unknown &MadeUpEntity; stays literal
+
+[multi]:
+/multi-url
+'multi
+line title'
+
+see [multi] resolves
+
+  ```python startline=3
+  fenced with indent
+  keep
+  ```
+
+ref with entity dest: [ent]
+
+[ent]: /f&ouml;&ouml; "t&iuml;tle"
+- plain item
+- ```py
+  fenced inside item
+  ```
+- item then code
+
+      indented code child
+- * * *
+- item with quote
+  > quoted in item
+  > still quoted
+
+1. fence first
+
+   ```
+   code
+   ```
+
+   paragraph after child
+
+- item owning a div
+
+  <div>
+  at the content column, so it stays INSIDE the item
+  </div>
+
+<table>
+  <tr><td>cell</td></tr>
+</table>
+
+para with <b class="x">inline tag</b> and <br/> mid-text
+
+<!-- a comment
+spanning lines -->
+
+<div align="center">
+badge wall
+</div>
+
+standalone <custom-tag attr=plain> alone
+
+literal < stays text and <no closer stays too
+visit www.example.com or https://mica.dev/page?a=(1) now
+mail dev@mica.dev please
+
+~one tilde~ and ~~two tildes~~ strike
+
+| name | qty | price |
+| :--- | :---: | ---: |
+| tea | 2 | 1.50 |
+
+- [x] parent task
+  - [ ] two-space subtask
+inline math $E = mc^2$ in text
+
+dollar prices $5 and $10 stay literal
+
+latex form \(a^2 + b^2\) normalizes
+
+$$
+\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}
+$$
+
+$$x^2 - 1$$
+
+```math
+\sum_{i=1}^n i
+```
+> [!NOTE]
+> Useful information that users should know.
+
+> [!TIP]
+> Helpful advice with **bold**, _italic_ and `code`.
+
+> [!IMPORTANT]
+> Key information users need, with a [link](/docs).
+
+> [!WARNING]
+> Urgent info that needs immediate attention.
+
+> [!CAUTION]
+> Advises about risks or negative outcomes.
+
+> [!NOTE]
+> A callout with a nested list:
+> - first point
+> - second point
+
+> [!NOTE]
+> A callout, then a normal quote below.
+
+> Just a plain blockquote, not a callout.
+
+> [!note]
+> Lowercase type is still a callout.
+[foo [bar](/uri)](/baz)~~~a~~[a](/u "C:\name")[ß]
+
+[ss]: /urltext with `a` and ``b`` spansa `code  
+span` b
+
+x  
+y
+
+t <span  
+class="k">u
+[`a`](/x)
+
+[`a]b`](/x)
+
+[foo`](/uri)`
+
+[a<https://e.com/x>b](/y)
+strip ` 	 ` and ` a ` but keep `  ` and ` `
+- one
+- two
+
+</details>
+
+1. alpha
+2. beta
+
+<div align="center">
+after an ordered list
+</div>
+
+- foo
+- bar
+
+<!-- -->
+
+- baz
+- bim
+
+<details>
+<summary>toggle</summary>
+
+- inner
+
+</details>
+
+- tight item
+<div>no blank line between</div>
+- a
+ - b
+  - c
+   - d
+    - e
+
+1. w
+ 1. x
+  1. y
+   1. z
+    1. zz
+Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.
+
+[![[![[![[![[![[![[![[![[![[![[![[![[![[![[![[![[![[![[![[![a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)
+
+Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.
+
+x ![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)
+
+Links 40 deep: the innermost link wins, as CommonMark says anyway.
+
+[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)
+
+Within the budget nothing changes:
+
+[![[![[![[![[![[![[![[![[![[![[![[![[![[![[![a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)

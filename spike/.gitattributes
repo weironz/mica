@@ -1,0 +1,3 @@
+# Benchmark inputs are hashed byte-for-byte by the Rust golden test; CRLF
+# conversion on checkout would silently change every hash.
+inputs/** -text
