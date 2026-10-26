@@ -1,7 +1,7 @@
 # 单一实现专项：Markdown 引擎只留一份（S0–S5）
 
 > 状态：**方案已定，待开发**（2026-10-26 立项）。执行方：另一个 AI agent（可多个并行）。
-> 审核方：本仓库的维护 agent，在全部阶段完成后按 [05-review-checklist.md](05-review-checklist.md) 逐条审核。
+> 审核方：本仓库的维护 agent，在审核停点 G1–G3 抽查、全部完成后（G4）按 [05-review-checklist.md](05-review-checklist.md) 逐条审核。
 > 本目录是这个专项的**唯一权威文档**；其他文档里与之冲突的描述，以本目录为准。
 
 ## 一句话
@@ -33,6 +33,7 @@ Markdown 的解析、序列化、HTML 渲染**只在 Rust 里写一份**（`crat
    - [stages/S4-table-cells.md](stages/S4-table-cells.md) —— 表格单元格改用「文本 + 标记」内存模型，删除 Dart 行内解析
    - [stages/S5-sdk-release.md](stages/S5-sdk-release.md) —— SDK 化交付（文档、示例、npm 包、发布流水线）
 6. [05-review-checklist.md](05-review-checklist.md) —— 审核方的验收清单（执行方自检也用它）。
+7. [reviews.md](reviews.md) —— 各停点的审核结论（审核方写，执行方读）。
 
 ## 阶段总表
 
@@ -86,3 +87,6 @@ CRDT（Web 换 yrs wasm）、原生无损导出格式 `.mica.zip`（N1–N4）�
 4. 每个阶段结束交付一份**阶段报告**，追加到该阶段文档末尾的「执行记录」一节：做了什么、偏离方案的地方及原因、
    门禁回执、对拍报告、性能数字、删除/新增行数。审核方以这份记录为入口。
 5. 不确定的产品行为（例如某个粘贴结果该不该变）不要猜：列进「待用户决定」表，先按 Rust 行为实现。
+6. **在集成分支 `single-source` 上开发**，任务分支合回它，不直接合进 main（[04 §4.1](04-parallel-plan.md)）。
+7. **到审核停点必须停**：G1（S1 完成）、G2（wasm 判定）、G3（S3 删 Dart 代码之前）、G4（最终），另有不停工的并回检查 M2（S2 完成）。
+   到点后在进度表标「⏸ 待审核」并停下该工作包，由用户转告审核方；审核结论写在 [reviews.md](reviews.md)（[04 §4.2](04-parallel-plan.md)）。

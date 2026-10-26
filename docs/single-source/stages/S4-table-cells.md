@@ -172,7 +172,7 @@ Windows 桌面 + Web：打开含旧格式表格的现有文档（从生产导出
 
 替换掉原来「Markdown 语法以 `crates/markdown` 为权威，Dart 镜像必须同步更新」那半句。
 
-## 验收
+## 验收（S4、S5 都完成后进入停点 G4 最终审核）
 
 - [ ] T4.7 的 grep 无结果；`marks.dart` ≤ 400 行；`lib/editor/markdown.dart` 不存在（S3 已删）。
 - [ ] T4.8 三项兼容测试通过。

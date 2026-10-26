@@ -33,7 +33,8 @@
 | 工具链 | stable Rust（`rust-toolchain.toml` 钉的版本）+ `wasm32-unknown-unknown` target，**无 nightly、无 `-Z build-std`** |
 | COOP/COEP | 不需要（单线程 wasm-bindgen） |
 
-4. 结果写进本文「执行记录 → P0」。**任何一项不达标**：停止 S2 的 Web 部分，报审核方；退出方案见本文末「退出方案」。
+4. 结果写进本文「执行记录 → P0」，然后**停点 G2**：进度表标「⏸ 待审核」，WP-W 停下等审核（[04 §4.2](../04-parallel-plan.md)）。
+   **任何一项不达标**：审核方把「走退出方案 / 继续优化」的选择交给用户；退出方案见本文末「退出方案」。
 
 ### T2.2 依赖登记与工具链
 
@@ -236,7 +237,7 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 - 在 Windows 上：`flutter test integration_test/markdown_codec_test.dart -d windows` 通过；安装包冒烟（`just` 的 Windows 构建）后，
   应用启动日志里有 `markdown codec ready in N ms`。截图或日志片段贴进执行记录。
 
-## 验收
+## 验收（= 并回检查 M2 的材料；M2 不停工，但 S2 并回 main 要等它通过）
 
 - [ ] P0 全部阈值达标（或已按退出方案处理并经审核方同意）。
 - [ ] `cargo test -p mica-md --test wire_gold`、`cargo test -p mica-md-wasm` 通过。

@@ -274,8 +274,9 @@ proptest! {
 - `(cd clients/mica_flutter/rust && cargo check)`：FFI crate 编译通过且**零改动**。
 - `bash scripts/check-file-size.sh`：搬家后单文件行数不变；`lib.rs` 拆分后各文件 ≤ 软上限。
 - `cargo run -p mica-markdown --release --example md_bench` 与 S0 基线对比，差异在 ±5% 以内（重构不应改变性能）。
-- 契约冻结：在 `02-architecture.md` 顶部把「S1 结束时冻结」改为「**已冻结（日期、提交号）**」，并在执行记录写明
-  最终公开 API 与 02 §2 的差异（应为零；有差异须经审核方同意）。
+- **停点 G1**（[04 §4.2](../04-parallel-plan.md)）：执行记录写好后，进度表标「⏸ 待审核」，WP-R 停下，等用户转告审核方。
+  审核方通过后，由审核方在 `02-architecture.md` 顶部把「S1 结束时冻结」改为「**已冻结（日期、提交号）**」；执行记录里要写明
+  最终公开 API 与 02 §2 的差异（应为零；有差异须经审核方同意）。G1 通过后 S0 + S1 并回 main。
 
 ## 验收
 
