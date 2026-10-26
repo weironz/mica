@@ -117,14 +117,7 @@ pub async fn presign(
   let storage = storage(&state)?;
 
   validate_mime(&payload.mime_type)?;
-  ensure_storable(
-    &state,
-    workspace_id,
-    payload.byte_size,
-    storage.max_upload_bytes,
-    None,
-  )
-  .await?;
+  validate_byte_size(payload.byte_size, storage.max_upload_bytes)?;
 
   let object_key = build_object_key(workspace_id, &payload.content_hash, &payload.file_name)?;
   let checksum_sha256 = sha256_checksum_base64(&payload.content_hash)?;
@@ -132,6 +125,7 @@ pub async fn presign(
   // Serialize with orphan GC and completion for this exact key. A URL is only
   // returned after its expiry is recorded, so GC cannot forget a live URL.
   let mut tx = state.db.begin().await?;
+  store::lock_file_quota_owner(&mut tx, workspace_id).await?;
   store::lock_file_object_key(&mut tx, &object_key).await?;
   if let Some(existing) = store::fetch_file_by_key_tx(&mut tx, workspace_id, &object_key).await? {
     store::reclaim_file_tx(&mut tx, existing.id).await?;
@@ -143,6 +137,14 @@ pub async fn presign(
       download_url,
     )));
   }
+  ensure_quota_room_tx(
+    &state,
+    &mut tx,
+    workspace_id,
+    payload.byte_size,
+    Some(&object_key),
+  )
+  .await?;
 
   let content_type = mica_infra::stored_content_type(&payload.mime_type);
   let upload = storage.presign_put_if_absent(
@@ -212,16 +214,7 @@ pub async fn complete(
   let storage = storage(&state)?;
 
   validate_mime(&payload.mime_type)?;
-  // Checked again here, not just at presign: presign is advisory (a client can
-  // skip it, or reuse one URL) and this is the call that creates the row.
-  ensure_storable(
-    &state,
-    workspace_id,
-    payload.byte_size,
-    storage.max_upload_bytes,
-    Some(&payload.object_key),
-  )
-  .await?;
+  validate_byte_size(payload.byte_size, storage.max_upload_bytes)?;
   ensure_key_in_workspace(workspace_id, &payload.object_key)?;
   let expected_checksum = checksum_for_object_key(workspace_id, &payload.object_key)?;
 
@@ -234,6 +227,7 @@ pub async fn complete(
   // waits a day past it). A sweep already mid-delete holds the lock, so this
   // waits for it and the HEAD then reports what it left.
   let mut tx = state.db.begin().await?;
+  store::lock_file_quota_owner(&mut tx, workspace_id).await?;
   store::lock_file_object_key(&mut tx, &payload.object_key).await?;
   let pending =
     store::pending_file_upload_exists_tx(&mut tx, workspace_id, &payload.object_key).await?;
@@ -241,13 +235,23 @@ pub async fn complete(
   match &existing {
     Some(file) => store::reclaim_file_tx(&mut tx, file.id).await?,
     None if pending => {
+      ensure_quota_room_tx(
+        &state,
+        &mut tx,
+        workspace_id,
+        payload.byte_size,
+        Some(&payload.object_key),
+      )
+      .await?;
       store::record_pending_file_upload_tx(
         &mut tx,
         workspace_id,
         &payload.object_key,
         storage.presign_ttl_seconds,
       )
-      .await?
+      .await?;
+      store::reserve_pending_upload_bytes_tx(&mut tx, &payload.object_key, payload.byte_size)
+        .await?;
     }
     None => return Err(ApiError::BadRequest("upload was not presigned".into())),
   }
@@ -611,14 +615,7 @@ pub(crate) async fn fetch_and_store_image_url(
   }
   let bytes = body;
   let byte_size = bytes.len() as i64;
-  ensure_storable(
-    state,
-    workspace_id,
-    byte_size,
-    storage.max_upload_bytes,
-    None,
-  )
-  .await?;
+  validate_byte_size(byte_size, storage.max_upload_bytes)?;
 
   // Determine MIME + extension (header first, else the URL's extension).
   let ext = mime_to_ext(&header_mime)
@@ -650,13 +647,10 @@ pub(crate) async fn fetch_and_store_image_url(
   // Commit the ledger (and clear any GC mark) before PUT: if the process dies
   // after writing bytes, GC must still find the orphan, and neither sweep may
   // delete the key while the PUT runs outside any transaction (D5).
-  store::record_pending_file_upload(
-    &state.db,
-    workspace_id,
-    &object_key,
-    storage.presign_ttl_seconds,
-  )
-  .await?;
+  if let Some(existing) = reserve_server_upload(state, workspace_id, &object_key, byte_size).await?
+  {
+    return Ok(existing);
+  }
 
   // Upload via a self-issued presigned PUT (storage signs; we do the PUT).
   let upload = storage.presign_put_server(&object_key);
@@ -787,14 +781,7 @@ pub(crate) async fn store_bytes(
 ) -> ApiResult<store::FileRecord> {
   let storage = storage(state)?;
   let byte_size = bytes.len() as i64;
-  ensure_storable(
-    state,
-    workspace_id,
-    byte_size,
-    storage.max_upload_bytes,
-    None,
-  )
-  .await?;
+  validate_byte_size(byte_size, storage.max_upload_bytes)?;
 
   // The name is the first guess at the type; the BYTES are the authority when it
   // gives nothing usable (an extension-less name used to land as
@@ -819,13 +806,10 @@ pub(crate) async fn store_bytes(
     None => format!("workspaces/{workspace_id}/{hash}"),
   };
 
-  store::record_pending_file_upload(
-    &state.db,
-    workspace_id,
-    &object_key,
-    storage.presign_ttl_seconds,
-  )
-  .await?;
+  if let Some(existing) = reserve_server_upload(state, workspace_id, &object_key, byte_size).await?
+  {
+    return Ok(existing);
+  }
   let upload = storage.presign_put_server(&object_key);
   let put = client
     .put(&upload.url)
@@ -865,37 +849,69 @@ fn validate_mime(mime_type: &str) -> ApiResult<()> {
   Ok(())
 }
 
-/// May this workspace store `byte_size` more bytes?
-///
-/// Two limits answering different questions: `max_upload_bytes` caps ONE file (a
-/// 4 GB upload is a mistake whoever sends it), the quota caps the workspace total
-/// (a thousand legal 50 MB files is not a mistake — it is a full disk). Neither
-/// implies the other, which is why the per-file check alone left the node with no
-/// bound at all.
-///
-/// Every path that stores bytes goes through here — presign, complete, import-url
-/// and the workspace-import re-host. One function rather than a check pasted at
-/// four sites: the fourth is precisely the one that gets forgotten.
-///
-/// Refuses with a machine-readable `workspace_quota_exceeded` so the client can
-/// say something specific ("this workspace is full") rather than relay a sentence.
-/// `quota <= 0` means unlimited and skips the query — an operator who turned the
-/// limit off should not pay for it on every upload.
-async fn ensure_storable(
+/// Commit quota reservation before a server PUT, or return the deduplicated row.
+async fn reserve_server_upload(
   state: &AppState,
   workspace_id: Uuid,
+  object_key: &str,
   byte_size: i64,
-  max_upload_bytes: i64,
-  // `complete` passes its own key: that upload's reservation is the very
-  // bytes being checked, and must not be counted twice.
-  exclude_key: Option<&str>,
-) -> ApiResult<()> {
-  validate_byte_size(byte_size, max_upload_bytes)?;
-  ensure_quota_room(state, workspace_id, byte_size, exclude_key).await
+) -> ApiResult<Option<store::FileRecord>> {
+  let mut tx = state.db.begin().await?;
+  store::lock_file_quota_owner(&mut tx, workspace_id).await?;
+  store::lock_file_object_key(&mut tx, object_key).await?;
+  let existing = store::fetch_file_by_key_tx(&mut tx, workspace_id, object_key).await?;
+  if let Some(file) = &existing {
+    store::reclaim_file_tx(&mut tx, file.id).await?;
+  } else {
+    ensure_quota_room_tx(state, &mut tx, workspace_id, byte_size, Some(object_key)).await?;
+    store::record_pending_file_upload_tx(
+      &mut tx,
+      workspace_id,
+      object_key,
+      storage(state)?.presign_ttl_seconds,
+    )
+    .await?;
+    store::reserve_pending_upload_bytes_tx(&mut tx, object_key, byte_size).await?;
+  }
+  tx.commit().await?;
+  Ok(existing)
 }
 
-/// The quota half of [ensure_storable], for callers adding bytes that are not
-/// one upload (a cross-workspace move copies many files at once).
+async fn ensure_quota_room_tx(
+  state: &AppState,
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  workspace_id: Uuid,
+  byte_size: i64,
+  exclude_key: Option<&str>,
+) -> ApiResult<()> {
+  let quota = state.config.workspace_quota_bytes;
+  if quota > 0 {
+    let used = store::workspace_bytes_used_excluding(&mut **tx, workspace_id, exclude_key).await?;
+    if used.saturating_add(byte_size) > quota {
+      return Err(ApiError::BadRequestCode(
+        "workspace_quota_exceeded",
+        format!(
+          "workspace storage is full: {used} of {quota} bytes used, this upload needs {byte_size} more"
+        ),
+      ));
+    }
+  }
+  let quota = state.config.owner_quota_bytes;
+  if quota > 0 {
+    let used = store::owner_bytes_used_excluding(&mut **tx, workspace_id, exclude_key).await?;
+    if used.saturating_add(byte_size) > quota {
+      return Err(ApiError::BadRequestCode(
+        "owner_quota_exceeded",
+        format!(
+          "the workspace owner's storage is full: {used} of {quota} bytes used, this upload needs {byte_size} more"
+        ),
+      ));
+    }
+  }
+  Ok(())
+}
+
+/// Check additional quota for a cross-workspace move that copies many files.
 pub(crate) async fn ensure_quota_room(
   state: &AppState,
   workspace_id: Uuid,
@@ -1842,10 +1858,8 @@ mod tests {
 
 /// The quota's accounting, against a real database.
 ///
-/// `ensure_storable` needs an `AppState` (config + pool + storage), so what gets
-/// pinned here is the part that can be wrong in a way nobody notices: what
-/// `workspace_bytes_used` COUNTS. The refusal itself is a `>` on two integers; the
-/// interesting question is whether those integers describe the disk.
+/// Route admission and object-store behavior are also covered by
+/// scripts/test-files-quota.ps1 against an isolated HTTP API and PostgreSQL.
 #[cfg(test)]
 mod quota_pg {
   use mica_app_core::store;
@@ -2133,8 +2147,7 @@ mod quota_pg {
       "the quota is per workspace, not per instance"
     );
 
-    // The arithmetic `ensure_storable` performs, stated once so the intent is
-    // pinned even though building its `AppState` is out of reach here.
+    // Additional bytes are compared against the configured quota after usage.
     let used = store::workspace_bytes_used(&db, ws).await.unwrap();
     assert!(
       used + 1000 > 4000,

@@ -115,10 +115,17 @@ pub async fn apply_document_operations(
   document_id: Uuid,
   actor_id: Uuid,
   operations: &[DocumentOperation],
+  tuning: &crate::sync::SyncTuning,
 ) -> ApiResult<AppliedUpdate> {
-  apply_derived_operations(db, workspace_id, document_id, actor_id, None, |_| {
-    Ok(operations.to_vec())
-  })
+  apply_derived_operations(
+    db,
+    workspace_id,
+    document_id,
+    actor_id,
+    None,
+    tuning,
+    |_| Ok(operations.to_vec()),
+  )
   .await
 }
 
@@ -134,6 +141,7 @@ pub async fn apply_derived_operations<F>(
   document_id: Uuid,
   actor_id: Uuid,
   expected_seq: Option<i64>,
+  tuning: &crate::sync::SyncTuning,
   derive: F,
 ) -> ApiResult<AppliedUpdate>
 where
@@ -280,6 +288,13 @@ where
   .fetch_one(&mut *tx)
   .await?;
 
+  // Retention rides EVERY write path through the same helper (issue #139): the
+  // stream this write just appended to and this document's expired auto
+  // versions are pruned on this document's own write cadence, exactly as the
+  // WebSocket push path does. Inside the write transaction, so a failed prune
+  // rolls the write back rather than leaving half-persisted state.
+  crate::sync::prune_stream_and_versions_tx(&mut tx, document_id, yrs_rid, tuning).await?;
+
   tx.commit().await?;
 
   Ok(AppliedUpdate {
@@ -363,15 +378,38 @@ pub async fn current_payload(
   db: &PgPool,
   document_id: Uuid,
 ) -> ApiResult<Option<DocumentSnapshotPayload>> {
-  let row: Option<(Vec<u8>, String)> = sqlx::query_as(
-    "SELECT b.state, coalesce(d.root_block_id, '') FROM document_yrs_base b
-     LEFT JOIN documents d ON d.id = b.document_id WHERE b.document_id = $1",
+  current_payload_with_seq(db, document_id)
+    .await
+    .map(|pair| pair.map(|(payload, _)| payload))
+}
+
+/// The document's CURRENT block payload TOGETHER WITH the `current_seq` that
+/// describes exactly that content, read in ONE statement — the pair
+/// `document_outline` hands to a caller so it can pin an anchored write with
+/// `expected_seq` (#138). Reading the payload and the seq as two separate
+/// statements lets a concurrent committed edit land between them: the caller
+/// then pairs the OLD outline with the NEW seq, and the later CAS accepts a
+/// write (e.g. delete-by-anchor) against content the caller never saw. With
+/// the pair taken from one snapshot, any concurrent edit advanced the seq past
+/// the one returned and the CAS refuses with 409.
+///
+/// Same `None` contract as [`current_payload`]: base-less documents have no
+/// content (and no snapshot to pin), so there is no pair to report.
+pub async fn current_payload_with_seq(
+  db: &PgPool,
+  document_id: Uuid,
+) -> ApiResult<Option<(DocumentSnapshotPayload, i64)>> {
+  let row: Option<(Vec<u8>, String, i64)> = sqlx::query_as(
+    "SELECT b.state, coalesce(d.root_block_id, ''), d.current_seq FROM document_yrs_base b
+     JOIN documents d ON d.id = b.document_id WHERE b.document_id = $1",
   )
   .bind(document_id)
   .fetch_optional(db)
   .await?;
   row
-    .map(|(state, root)| payload_from_state(document_id, &state, root))
+    .map(|(state, root, seq)| {
+      payload_from_state(document_id, &state, root).map(|payload| (payload, seq))
+    })
     .transpose()
 }
 
@@ -665,8 +703,8 @@ pub async fn workspace_bytes_used(db: &PgPool, workspace_id: Uuid) -> ApiResult<
 /// [workspace_bytes_used] without the pending reservation of `exclude_key` —
 /// for `complete`, whose own upload is that reservation and must not be
 /// counted twice against itself.
-pub async fn workspace_bytes_used_excluding(
-  db: &PgPool,
+pub async fn workspace_bytes_used_excluding<'e>(
+  db: impl sqlx::Executor<'e, Database = Postgres>,
   workspace_id: Uuid,
   exclude_key: Option<&str>,
 ) -> ApiResult<i64> {
@@ -693,9 +731,9 @@ pub async fn workspace_bytes_used_excluding(
 
 /// Bytes stored across every workspace owned by `workspace_id`'s owner — the
 /// per-owner quota (B7). Same counting rules as [workspace_bytes_used_excluding],
-/// summed over the owner's workspaces.
-pub async fn owner_bytes_used_excluding(
-  db: &PgPool,
+/// Pending uploads retain their owner independently of workspace existence.
+pub async fn owner_bytes_used_excluding<'e>(
+  db: impl sqlx::Executor<'e, Database = Postgres>,
   workspace_id: Uuid,
   exclude_key: Option<&str>,
 ) -> ApiResult<i64> {
@@ -707,7 +745,7 @@ pub async fn owner_bytes_used_excluding(
      SELECT (
        (SELECT coalesce(sum(byte_size), 0) FROM files WHERE workspace_id IN (SELECT id FROM owned))
        + (SELECT coalesce(sum(p.byte_size), 0) FROM pending_file_uploads p
-          WHERE p.workspace_id IN (SELECT id FROM owned)
+          WHERE p.owner_id = (SELECT owner_id FROM workspaces WHERE id = $1)
             AND p.object_key IS DISTINCT FROM $2
             AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key))
      )::bigint",
@@ -758,6 +796,24 @@ pub async fn lock_file_object_key(
   Ok(())
 }
 
+/// Serialize quota admission across all workspaces belonging to one owner.
+/// Acquire before the object-key lock; no network I/O belongs in this transaction.
+pub async fn lock_file_quota_owner(
+  tx: &mut Transaction<'_, Postgres>,
+  workspace_id: Uuid,
+) -> ApiResult<()> {
+  let owner: Uuid = sqlx::query_scalar("SELECT owner_id FROM workspaces WHERE id = $1")
+    .bind(workspace_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+  sqlx::query("SELECT pg_advisory_xact_lock(1296646978, hashtext($1))")
+    .bind(owner.to_string())
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
+}
+
 /// Remember the latest URL expiry for this key. Presign callers must hold
 /// [lock_file_object_key] in the same transaction as their decision. Workspace
 /// deletion holds the workspace row lock instead, then stages every `files`
@@ -787,9 +843,8 @@ pub async fn record_pending_file_upload_tx(
   Ok(())
 }
 
-/// Record the size a browser upload URL allows, for the quota
-/// ([workspace_bytes_used]). Kept apart from [record_pending_file_upload_tx] so
-/// its many server-side callers — which meter themselves — are unaffected.
+/// Reserve bytes for browser or server uploads while quota admission's owner
+/// lock is held. Retain the largest issued reservation for an identical key.
 pub async fn reserve_pending_upload_bytes_tx(
   tx: &mut Transaction<'_, Postgres>,
   object_key: &str,
@@ -883,9 +938,9 @@ pub async fn pending_file_upload_exists_tx(
   .map_err(ApiError::from)
 }
 
-/// Insert a file while the caller's key lock is held across its storage HEAD
-/// or PUT and this row write. `complete` needs that larger critical section:
-/// locking only the INSERT leaves a gap in which GC can delete the object.
+/// Insert a file while the caller's key lock protects this row write.
+/// Upload admission commits a pending reservation before storage HEAD or PUT,
+/// keeping network I/O outside the registration transaction.
 pub async fn insert_file_tx(
   tx: &mut Transaction<'_, Postgres>,
   workspace_id: Uuid,
@@ -996,21 +1051,32 @@ pub async fn fetch_files(
   .map_err(ApiError::from)
 }
 
-/// Delete file metadata. Returns whether a row was removed. Object deletion in
-/// the store is left to a separate lifecycle process for the MVP.
+/// Remove metadata while retaining the object for the normal orphan sweep.
+/// The key lock serializes this handoff with presign, completion and GC.
 pub async fn delete_file(db: &PgPool, workspace_id: Uuid, file_id: Uuid) -> ApiResult<bool> {
-  let result = sqlx::query(
-    r#"
-      DELETE FROM files
-      WHERE id = $1 AND workspace_id = $2
-    "#,
+  let Some(file) = fetch_file(db, workspace_id, file_id).await? else {
+    return Ok(false);
+  };
+  let mut tx = db.begin().await?;
+  lock_file_object_key(&mut tx, &file.object_key).await?;
+  let deleted: Option<(String, i64)> = sqlx::query_as(
+    "DELETE FROM files WHERE id = $1 AND workspace_id = $2 RETURNING object_key, byte_size",
   )
   .bind(file_id)
   .bind(workspace_id)
-  .execute(db)
+  .fetch_optional(&mut *tx)
   .await?;
-
-  Ok(result.rows_affected() > 0)
+  let Some((key, byte_size)) = deleted else {
+    return Ok(false);
+  };
+  record_pending_file_upload_tx(&mut tx, workspace_id, &key, 0).await?;
+  reserve_pending_upload_bytes_tx(&mut tx, &key, byte_size).await?;
+  sqlx::query("UPDATE pending_file_uploads SET created_at = now() WHERE object_key = $1")
+    .bind(&key)
+    .execute(&mut *tx)
+    .await?;
+  tx.commit().await?;
+  Ok(true)
 }
 
 fn map_insert_file_error(error: sqlx::Error) -> ApiError {

@@ -225,6 +225,7 @@ pub async fn list(
   let doc = store::load_doc(&state.db, document_id).await?;
 
   let mut newly_orphaned = Vec::new();
+  let mut revived = Vec::new();
   let mut reanchored: Vec<(Uuid, store::Anchor)> = Vec::new();
   // `&mut None`: the quote index is built on the first thread that needs
   // re-anchoring, so a listing where every anchor resolves pays nothing.
@@ -250,6 +251,15 @@ pub async fn list(
     if resolved.status == store::STATUS_ORPHANED && row.status != store::STATUS_ORPHANED {
       newly_orphaned.push(row.id);
     }
+    if resolved.fresh_anchor.is_none()
+      && resolved.status == store::STATUS_OPEN
+      && row.status == store::STATUS_ORPHANED
+    {
+      // The anchored text came back (an undo): the stored `orphaned` is a stale
+      // cache of the document as it was, so persist the derivation the response
+      // already reports. Fresh-anchor revivals are handled by `reanchor` below.
+      revived.push(row.id);
+    }
     if let Some(anchor) = resolved.fresh_anchor {
       reanchored.push((row.id, anchor));
     }
@@ -270,6 +280,7 @@ pub async fn list(
   // writes fail, so a read never fails because of them (the next listing derives
   // the same answers from the document again).
   let _ = store::mark_orphaned(&state.db, &newly_orphaned).await;
+  let _ = store::mark_open(&state.db, &revived).await;
   for (thread_id, anchor) in &reanchored {
     let _ = store::reanchor(&state.db, *thread_id, anchor).await;
   }

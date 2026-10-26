@@ -769,30 +769,86 @@ pub async fn push_update_checked(
     .execute(&mut *tx)
     .await?;
 
-  // Periodically prune updates already folded into the base (keep a margin for
-  // fast incremental catch-up). Bounds unbounded stream growth on big/old docs.
-  if rid % tuning.prune_every == 0 {
-    sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1 AND rid <= $2")
-      .bind(document_id)
-      .bind(rid - tuning.keep_margin)
-      .execute(&mut *tx)
-      .await?;
-    // Same cadence, retention pass: drop expired auto versions. Named
-    // versions (expires_at IS NULL) are kept forever.
-    sqlx::query(
-      "DELETE FROM document_yrs_versions
-             WHERE document_id = $1 AND expires_at IS NOT NULL AND expires_at < now()",
-    )
-    .bind(document_id)
-    .execute(&mut *tx)
-    .await?;
-  }
-
+  prune_stream_and_versions_tx(&mut tx, document_id, rid, tuning).await?;
   tx.commit().await?;
   Ok(Pushed {
     rid,
     missing_sv: missing.then_some(flat.state_vector),
   })
+}
+
+/// THE retention pass of every write path (WebSocket [`push_update_checked`] and
+/// the REST/MCP `store::apply_derived_operations`): bound this document's stream
+/// and drop its expired auto versions, in the SAME write transaction — before
+/// this only ran on the WS path, so a document maintained purely over REST/MCP
+/// grew `workspace_updates` without bound (#139).
+///
+/// Two different rules, deliberately not the same gate:
+///
+/// - STREAM pruning is PER DOCUMENT and cadenced: it fires once this document's
+///   stream has grown `prune_every` rows past the keep margin. It used to be
+///   the table-WIDE rid modulo (`rid % prune_every == 0`) while the deletion
+///   was filtered to the pushing document — a document whose pushes happened
+///   to draw non-cadence rids was never pruned no matter how much it was
+///   written (cross-document starvation, #139). Counting this document's own
+///   rows makes every document's cadence exact and independent of what other
+///   documents are doing.
+/// - VERSION expiry runs on EVERY write: most documents sit below the stream
+///   cadence their whole life, and `list_yrs_versions` does not filter by
+///   TTL — gating it on stream growth would keep expired rows in the history
+///   panel forever.
+///
+/// The deletion keeps the global keep-margin semantics: rows older than the
+/// last `keep_margin` global rids are folded into the base and removed.
+/// Migration 0035's statement-level trigger records the highest deleted rid in
+/// `document_yrs_base.stream_pruned_rid` — the catch-up watermark — for ANY
+/// delete on this table, so this pass cannot reset or skip it.
+pub(crate) async fn prune_stream_and_versions_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  document_id: Uuid,
+  rid: i64,
+  tuning: &SyncTuning,
+) -> ApiResult<()> {
+  // Version expiry is NOT gated on stream growth: most documents sit below
+  // the prune cadence their whole life, and `list_yrs_versions` does not
+  // filter by TTL — an expired row would otherwise stay in the history panel
+  // forever. The DELETE is document-scoped and a no-op when nothing has
+  // expired, so it runs on every write. Named versions (expires_at IS NULL)
+  // are kept forever.
+  sqlx::query(
+    "DELETE FROM document_yrs_versions
+         WHERE document_id = $1 AND expires_at IS NOT NULL AND expires_at < now()",
+  )
+  .bind(document_id)
+  .execute(&mut **tx)
+  .await?;
+
+  let overgrown = sqlx::query_scalar::<_, bool>(
+    "SELECT EXISTS(
+       SELECT 1 FROM workspace_updates
+       WHERE document_id = $1
+       ORDER BY rid DESC OFFSET $2 LIMIT 1)",
+  )
+  .bind(document_id)
+  // Saturating: tests disable retention with keep_margin: i64::MAX, where a
+  // plain add would overflow in debug builds.
+  .bind(
+    tuning
+      .keep_margin
+      .saturating_add(tuning.prune_every)
+      .saturating_sub(1),
+  )
+  .fetch_one(&mut **tx)
+  .await?;
+  if !overgrown {
+    return Ok(());
+  }
+  sqlx::query("DELETE FROM workspace_updates WHERE document_id = $1 AND rid <= $2")
+    .bind(document_id)
+    .bind(rid - tuning.keep_margin)
+    .execute(&mut **tx)
+    .await?;
+  Ok(())
 }
 
 /// Write a page's title INTO its document (the root block's `title` prop) and

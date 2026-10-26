@@ -730,10 +730,16 @@ async fn run_import(
   // Unzip + plan are CPU-bound — keep them off the async workers.
   let notion = params.notion;
   let mode = import_mode(&params);
-  let plan: ImportPlan =
-    tokio::task::spawn_blocking(move || plan_import(read_zip(&body), notion, mode))
-      .await
-      .map_err(|e| ApiError::Internal(e.to_string()))?;
+  let plan: ImportPlan = tokio::task::spawn_blocking(
+    move || -> Result<ImportPlan, mica_interchange::zip::ZipReadError> {
+      plan_import(read_zip(&body)?, notion, mode)
+    },
+  )
+  .await
+  .map_err(|e| ApiError::Internal(e.to_string()))?
+  .map_err(|e| {
+    ApiError::BadRequestCode("import_corrupt_archive", format!("corrupt archive: {e}"))
+  })?;
   if plan.pages.is_empty() {
     // Coded, not merely messaged: this is the one import rejection the user can
     // actually act on (re-export from Notion as "Markdown & CSV" rather than
@@ -895,27 +901,27 @@ async fn run_import(
           }
         }
       }
-      // Relative .md links become internal page links.
-      if let Some(marks) = block.data.get_mut("marks").and_then(|m| m.as_array_mut()) {
-        for mark in marks {
-          let Some(obj) = mark.as_object_mut() else {
-            continue;
-          };
-          let Some(target) = obj
-            .get("href")
-            .and_then(|v| v.as_str())
-            .and_then(|href| resolve_ref(from, href, &plan.md_paths))
-            .and_then(|path| plan.page_by_path.get(&path))
-          else {
-            continue;
-          };
-          obj.insert(
-            "href".into(),
-            json!(format!("mica://page/{}", view_ids[*target])),
-          );
-        }
-      }
     }
+
+    // Relative .md links become internal page links — across EVERY inline mark
+    // (paragraphs AND table cells), via interchange's single traversal entry.
+    mica_interchange::for_each_inline_mark_mut(&mut payload, |mark| {
+      let Some(obj) = mark.as_object_mut() else {
+        return;
+      };
+      let Some(target) = obj
+        .get("href")
+        .and_then(|v| v.as_str())
+        .and_then(|href| resolve_ref(from, href, &plan.md_paths))
+        .and_then(|path| plan.page_by_path.get(&path))
+      else {
+        return;
+      };
+      obj.insert(
+        "href".into(),
+        json!(format!("mica://page/{}", view_ids[*target])),
+      );
+    });
 
     let document_id = insert_page(
       &state.db,
@@ -1583,7 +1589,7 @@ mod import_pg {
         bytes: z.data,
       })
       .collect();
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
 
     // The executor's loop, minus the asset/link rewiring this test is not about.
     let view_ids: Vec<Uuid> = plan.pages.iter().map(|_| Uuid::new_v4()).collect();

@@ -162,7 +162,7 @@ Trashing is a soft delete and reversible; purging is neither.
 | --- | --- | --- |
 | GET | `/workspaces/{ws}/documents/{doc}/bootstrap` | CRDT snapshot the editor opens with |
 | POST | `/workspaces/{ws}/documents/{doc}/updates` | Apply CRDT updates |
-| GET | `/workspaces/{ws}/documents/{doc}/outline` | Headings + block ids + `seq`, cheap |
+| GET | `/workspaces/{ws}/documents/{doc}/outline` | Headings + block ids + `seq` (same-snapshot pair; a write pinned to that `seq` 409s on concurrent edits), cheap |
 | POST | `/workspaces/{ws}/documents/import/markdown` | Create a page from Markdown |
 | POST | `/workspaces/{ws}/documents/{doc}/rehost-image` | Store an image's bytes and repoint a block |
 | GET | `/workspaces/{ws}/documents/{doc}/history` | Edit history |
@@ -288,6 +288,18 @@ symptoms, and not one that has been observed in practice.
 
 Object keys are content-addressed, so storing identical bytes twice returns the
 same file — and costs quota once.
+
+Upload admission reserves bytes in a short database transaction serialized across
+all workspaces of the owner. A registered object is resolved before quota admission,
+so an exact presign retry does not charge it again. Object-store requests run after
+the reservation commits, without holding that transaction open.
+
+Pending uploads retain their owner attribution when a workspace is deleted, and
+still count against an enabled owner quota until the orphan collector removes
+them. Deleting an individual file removes its metadata immediately and stages its
+key and byte size in the pending ledger in the same transaction. The collector
+reclaims those bytes after the normal 30-day grace; a live upload URL's expiry is
+preserved when staging the deletion.
 
 ## Auth
 

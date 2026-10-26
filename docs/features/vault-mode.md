@@ -5,7 +5,7 @@
 
 ## 现状(非 vault)
 
-离线模式的真相源是**一个 SQLite 库**(`crates/mica-core/src/store.rs` `LocalStore`,`%APPDATA%/mica/local/store.db`):每篇文档存成 `doc_snapshot(doc_id, state BLOB)`,`state` = yrs CRDT 二进制(block model),**不是 `.md`**。Markdown 只是导入/导出格式。这是 Notion/AppFlowy 型的 DB-first 架构,不是 Obsidian 型的 files-first。
+离线模式的真相源是**一个 SQLite 库**(`crates/mica-core/src/store.rs` `LocalStore`,`%APPDATA%/mica/local/store.db`):每篇文档存成 `doc_snapshot(origin, doc_id, state BLOB)`,`state` = yrs CRDT 二进制(block model),**不是 `.md`**。Markdown 只是导入/导出格式。这是 Notion/AppFlowy 型的 DB-first 架构,不是 Obsidian 型的 files-first。(v7 起文档级表全部 `(origin, doc_id)` 复合键,见 `docs/architecture/phase2-offline-crdt.md` §4 的现状注记。)
 
 ## 核心结论
 

@@ -139,14 +139,19 @@ pub struct SyncTuning {
   /// Most updates one catch-up pull may return (`MICA_CATCH_UP_LIMIT`). A client
   /// further behind than this pulls again from its advanced cursor.
   pub catch_up_limit: i64,
-  /// How many already-folded updates stay on the stream so a briefly offline
-  /// client can catch up incrementally (`MICA_STREAM_KEEP_MARGIN`). Below this
-  /// margin a client re-bootstraps from the base instead — correct either way,
-  /// just more bytes.
+  /// How many GLOBAL rid intervals of already-folded updates stay on the stream
+  /// so a briefly offline client can catch up incrementally
+  /// (`MICA_STREAM_KEEP_MARGIN`). The prune deletes this document's rows at or
+  /// below `current_rid - keep_margin`, so the kept window is a span of global
+  /// rids — not "this document's last N updates". A client whose cursor falls
+  /// below it re-bootstraps from the base instead — correct either way, just
+  /// more bytes.
   pub keep_margin: i64,
-  /// Prune roughly once every this-many rid draws (`MICA_STREAM_PRUNE_EVERY`),
-  /// which keeps the DELETE off the hot path. Counts TABLE-wide draws, not one
-  /// document's pushes — see the prune site in `app_core::sync::push_update`.
+  /// Run the prune once a document's OWN stream has grown this many rows past
+  /// the keep margin (`MICA_STREAM_PRUNE_EVERY`), which keeps the DELETE off
+  /// the hot path. Counts that document's retained rows, so the cadence is per
+  /// document and unaffected by other documents' rid draws — see the shared
+  /// prune site in `app_core::sync::prune_stream_and_versions_tx`.
   pub prune_every: i64,
 }
 
@@ -709,8 +714,9 @@ mod sync_tuning_parse {
   }
 
   /// The one that matters: `0` has no spelling here. `prune_every = 0` would
-  /// evaluate `rid % 0` and panic on every push; `keep_margin = 0` would delete
-  /// the update just inserted. A typo must not reach either.
+  /// make the per-document row-count threshold meaningless (and used to
+  /// evaluate `rid % 0`); `keep_margin = 0` would delete the update just
+  /// inserted. A typo must not reach either.
   #[test]
   fn zero_negatives_and_garbage_keep_the_default() {
     for bad in ["0", "-1", "-64", "abc", "1_000", "1.5", "64x", ""] {

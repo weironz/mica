@@ -331,39 +331,25 @@ async fn stream_prunes_and_stale_cursor_rebootstraps() {
   let base = sync::bootstrap_base(&db, doc).await.unwrap();
   let mut editing = MicaDoc::from_update(&base.state).unwrap();
 
-  // "Push N times" cannot guarantee a prune: the cadence check is
-  // `rid % prune_every == 0` on the pushing row's rid, and rid comes
-  // from the TABLE-wide sequence — a concurrently running test that draws
-  // the cadence rid prunes ITS document, not ours (2026-07-21 CI: 90 rows
-  // for 90 pushes, zero prunes). So push until one of OUR pushes draws a
-  // cadence rid far enough past our first rid that the keep-margin cutoff
-  // reaches our earliest row — from there the prune is deterministic.
-  let mut first_rid = 0i64;
-  let last_rid: i64;
+  // The prune cadence is per document (#139): the pass fires once THIS
+  // document's stream has grown prune_every rows past the keep margin, so
+  // pushing exactly keep_margin + prune_every times makes the last push fire
+  // the pass deterministically — no dependence on which global rid it draws
+  // from the table-wide sequence.
   let mut pushes = 0i64;
-  loop {
+  let mut last_rid = 0i64;
+  for _ in 0..(tuning().keep_margin + tuning().prune_every) {
     let sv = editing.state_vector();
     editing.text_insert("a", 5, "x");
     let update = editing.encode_diff(&sv).unwrap();
-    let rid = sync::push_update(&db, ws, doc, user, &update, &tuning())
+    last_rid = sync::push_update(&db, ws, doc, user, &update, &tuning())
       .await
       .unwrap();
     pushes += 1;
-    if first_rid == 0 {
-      first_rid = rid;
-    }
-    if rid % tuning().prune_every == 0 && rid - first_rid > tuning().keep_margin {
-      last_rid = rid;
-      break;
-    }
-    assert!(
-      pushes < 500,
-      "no cadence rid drawn in {pushes} pushes — contention beyond plausible"
-    );
   }
 
-  // That last push pruned this doc's rows at rid <= last_rid - margin, and
-  // first_rid sits below that cutoff by construction — so rows went away.
+  // The last push pruned this doc's rows at rid <= last_rid - keep_margin;
+  // rows retained sit in the keep window, so strictly fewer than the pushes.
   let count: i64 =
     sqlx::query_scalar("SELECT count(*) FROM workspace_updates WHERE document_id = $1")
       .bind(doc)
@@ -476,18 +462,17 @@ async fn version_retention_prunes_expired_autos_keeps_named() {
   .await
   .unwrap();
 
-  // Push until a retention pass runs (it piggybacks the rid % 32 prune).
+  // Push enough that the retention pass fires by the end: the per-document
+  // cadence (#139) runs it once this document's stream reaches
+  // keep_margin + prune_every rows.
   let mut editing = MicaDoc::from_update(&base.state).unwrap();
-  loop {
+  for _ in 0..(tuning().keep_margin + tuning().prune_every) {
     let sv = editing.state_vector();
     editing.text_insert("a", 5, "y");
     let update = editing.encode_diff(&sv).unwrap();
-    let rid = sync::push_update(&db, ws, doc, user, &update, &tuning())
+    sync::push_update(&db, ws, doc, user, &update, &tuning())
       .await
       .unwrap();
-    if rid % 32 == 0 {
-      break;
-    }
   }
 
   let expired: i64 = sqlx::query_scalar(
@@ -657,6 +642,7 @@ async fn op_write_lands_in_the_yrs_base_a_reader_actually_sees() {
       parent_id: "r".to_string(),
       index: None,
     }],
+    &tuning(),
   )
   .await
   .unwrap();
@@ -749,6 +735,7 @@ async fn op_write_captures_an_auto_version_on_cadence() {
         parent_id: "r".to_string(),
         index: None,
       }],
+      &tuning(),
     )
     .await
     .unwrap();
@@ -1276,6 +1263,7 @@ async fn op_write_and_push_interleave_without_losing_either() {
         parent_id: "r".to_string(),
         index: None,
       }],
+      &tuning(),
     )
     .await
   });
@@ -1382,6 +1370,7 @@ async fn writes_maintain_link_targets_in_both_directions() {
     &link_op(serde_json::json!({
         "marks": [{"type": "link", "href": format!("mica://page/{target}"), "start": 0, "end": 3}]
     })),
+    &tuning(),
   )
   .await
   .unwrap();
@@ -1400,6 +1389,7 @@ async fn writes_maintain_link_targets_in_both_directions() {
     doc,
     user,
     &link_op(serde_json::json!({"marks": []})),
+    &tuning(),
   )
   .await
   .unwrap();
@@ -1493,7 +1483,7 @@ async fn an_op_write_to_the_root_title_moves_the_view_name() {
     text: None,
     data: Some(json!({ "title": "REST 改的标题" })),
   }];
-  store::apply_document_operations(&db, ws, doc, user, &ops)
+  store::apply_document_operations(&db, ws, doc, user, &ops, &tuning())
     .await
     .unwrap();
 
@@ -1670,7 +1660,7 @@ async fn op_write_maintains_content_text() {
     text: Some("中文全文检索".to_string()),
     data: None,
   }];
-  store::apply_document_operations(&db, ws, doc, user, &ops)
+  store::apply_document_operations(&db, ws, doc, user, &ops, &tuning())
     .await
     .unwrap();
 
@@ -1944,6 +1934,7 @@ async fn a_write_round_trips_through_the_base_alone() {
       parent_id: "r".to_string(),
       index: Some(0),
     }],
+    &tuning(),
   )
   .await
   .expect("the write must be accepted");
@@ -2099,7 +2090,9 @@ async fn a_websocket_edit_invalidates_a_stale_expected_seq() {
   assert!(seq(db.clone()).await > seen, "a WS edit advances the token");
 
   // The agent's write pinned to what it read is refused, not applied.
-  let stale = store::apply_derived_operations(&db, ws, doc, user, Some(seen), |_| Ok(vec![])).await;
+  let stale =
+    store::apply_derived_operations(&db, ws, doc, user, Some(seen), &tuning(), |_| Ok(vec![]))
+      .await;
   assert!(
     matches!(stale, Err(mica_infra::ApiError::Conflict(_))),
     "a stale expected_seq must be a 409, got {stale:?}"

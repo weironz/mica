@@ -130,12 +130,16 @@ impl BodyIndex {
   pub async fn refresh(&self, db: &PgPool) -> ApiResult<()> {
     self
       .refresh_with(|since| async move {
-        // The next cursor comes from the DATABASE clock — comparing a client
-        // clock against `updated_at` would smuggle clock skew into visibility.
+        // The next cursor must come from the SAME statement as the rows: a
+        // clock read AFTER the SELECT sits past every row committed while it
+        // ran (a slow read over a cold cache or a starved pool), and those rows
+        // are then missed for good — an idle refresh does not move the cursor.
+        // `now()` is the transaction's start, i.e. at or before the snapshot
+        // the SELECT reads from, so the cursor can only trail the snapshot.
         let snapshot: (Vec<(Uuid, String)>, DateTime<Utc>) = match since {
           Some(seen) => {
-            let rows = sqlx::query_as(
-              "SELECT document_id, content_text FROM document_yrs_base
+            let rows: Vec<(Uuid, String, DateTime<Utc>)> = sqlx::query_as(
+              "SELECT document_id, content_text, now() FROM document_yrs_base
              WHERE updated_at > $1",
             )
             .bind(seen)
@@ -145,8 +149,11 @@ impl BodyIndex {
               // An idle refresh costs one filtered scan; leave the lap open.
               return Ok(None);
             }
-            let now: (DateTime<Utc>,) = sqlx::query_as("SELECT now()").fetch_one(db).await?;
-            (rows, now.0)
+            let db_now = rows[0].2;
+            (
+              rows.into_iter().map(|(id, text, _)| (id, text)).collect(),
+              db_now,
+            )
           }
           None => {
             let now: (DateTime<Utc>,) = sqlx::query_as("SELECT now()").fetch_one(db).await?;

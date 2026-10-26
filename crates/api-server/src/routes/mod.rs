@@ -477,6 +477,9 @@ pub fn api_router() -> Router<AppState> {
 mod contract_gold;
 
 #[cfg(test)]
+mod comments_pg_tests;
+
+#[cfg(test)]
 mod router_tests {
   use super::*;
 
@@ -725,11 +728,11 @@ mod route_layer_tests {
   }
 
   /// Only the hashing routes carry the Argon2 gate: with every permit held,
-  /// login sheds 429 while refresh / forgot / resend sail through (their cost
-  /// is a DB row or an email, so holding a scarce permit for them would only
-  /// starve real logins).
+  /// login / register / reset shed 429 while refresh / forgot / resend sail
+  /// through (their cost is a DB row or an email, so holding a scarce permit
+  /// for them would only starve real logins).
   #[tokio::test]
-  async fn only_login_and_register_hold_an_argon2_permit() {
+  async fn only_login_register_and_reset_hold_an_argon2_permit() {
     let state = test_state();
     let guard = rate_limit::test_guard(1);
     let _held = guard.argon2_hog();
@@ -741,6 +744,7 @@ mod route_layer_tests {
     for (path, xff) in [
       ("/api/auth/login", "198.51.100.30"),
       ("/api/auth/register", "198.51.100.35"),
+      ("/reset-password", "198.51.100.34"),
     ] {
       assert_eq!(
         send(&app, Method::POST, path, xff).await,
@@ -752,7 +756,6 @@ mod route_layer_tests {
       ("/api/auth/refresh", "198.51.100.31"),
       ("/api/auth/password/forgot", "198.51.100.32"),
       ("/api/auth/resend-verification", "198.51.100.33"),
-      ("/reset-password", "198.51.100.34"),
     ] {
       let status = send(&app, Method::POST, path, xff).await;
       assert_ne!(

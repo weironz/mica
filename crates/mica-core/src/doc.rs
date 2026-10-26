@@ -835,6 +835,22 @@ impl MicaDoc {
     };
     let props: MapRef = match bm.get(&txn, "props") {
       Some(Out::YMap(m)) => m,
+      // Pre-M4.7 shape: the whole props object is ONE JSON string. Read-side
+      // compatibility (`read_props`) is a promise that this row is still a
+      // real page, so the first narrow write must MIGRATE its fields into the
+      // map instead of replacing the blob with an empty one — a page rename
+      // through here used to drop the front matter and every other root prop
+      // (issue #103).
+      Some(Out::Any(Any::String(s))) => {
+        let legacy: Value = serde_json::from_str(&s).unwrap_or(Value::Null);
+        let migrated: MapRef = bm.insert(&mut txn, "props", MapPrelim::default());
+        if let Value::Object(obj) = legacy {
+          for (k, v) in obj {
+            migrated.insert(&mut txn, k, json_to_any(&v));
+          }
+        }
+        migrated
+      }
       _ => bm.insert(&mut txn, "props", MapPrelim::default()),
     };
     if value.is_null() {
@@ -1121,4 +1137,65 @@ fn sv_has_unseen_compares_insertions_per_client() {
     !MicaDoc::sv_has_unseen(b"\xff\xff", &before),
     "garbage never asks"
   );
+}
+
+/// Issue #103: `set_block_prop` is the NARROW write the page rename goes
+/// through (and the cloud rename shares that path). On a pre-M4.7 document
+/// whose `props` is still one JSON string it must migrate the legacy fields
+/// into the map before writing the target key — it used to insert an empty
+/// map, so renaming a legacy page silently dropped its front matter and every
+/// other root property.
+#[cfg(test)]
+#[test]
+fn narrow_prop_write_migrates_legacy_json_props() {
+  let legacy = serde_json::json!({
+    "front_matter": "tags: [keep]",
+    "custom": "keep",
+    "title": "Old",
+  });
+  let doc = MicaDoc::from_blocks("r", &[Block::new("r", "page")]);
+  {
+    let blocks_map = doc.doc.get_or_insert_map(BLOCKS);
+    let mut txn = doc.doc.transact_mut();
+    let bm = get_block_map(&txn, &blocks_map, "r").expect("root block");
+    // The pre-M4.7 shape: props as a single JSON string.
+    bm.insert(&mut txn, "props", legacy.to_string());
+  }
+  let bytes = doc.encode_state();
+
+  let mut loaded = MicaDoc::from_update(&bytes).expect("legacy doc decodes");
+  assert_eq!(
+    loaded.to_blocks()[0].data["front_matter"],
+    serde_json::json!("tags: [keep]"),
+    "the legacy form is readable before the write"
+  );
+  assert!(loaded.set_block_prop("r", "title", &serde_json::json!("New")));
+
+  let data = loaded.to_blocks()[0].data.clone();
+  assert_eq!(
+    data["title"],
+    serde_json::json!("New"),
+    "target key updated"
+  );
+  assert_eq!(
+    data["front_matter"],
+    serde_json::json!("tags: [keep]"),
+    "front matter survives the narrow write"
+  );
+  assert_eq!(
+    data["custom"],
+    serde_json::json!("keep"),
+    "other props survive"
+  );
+
+  // And it stays true for every other replica / later load.
+  let reloaded = MicaDoc::from_update(&loaded.encode_state()).expect("reloads");
+  let data = reloaded.to_blocks()[0].data.clone();
+  assert_eq!(data["title"], serde_json::json!("New"));
+  assert_eq!(
+    data["front_matter"],
+    serde_json::json!("tags: [keep]"),
+    "and survive encode/reload"
+  );
+  assert_eq!(data["custom"], serde_json::json!("keep"));
 }

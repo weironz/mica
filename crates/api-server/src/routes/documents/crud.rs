@@ -329,6 +329,7 @@ pub async fn apply_document_update(
     document_id,
     user_id,
     &payload.operations,
+    &state.config.sync_tuning,
   )
   .await?;
 
@@ -464,15 +465,13 @@ pub async fn document_outline(
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
   ensure_document_in_workspace(&state.db, workspace_id, document_id).await?;
 
-  let payload = store::current_payload(&state.db, document_id)
+  // ONE statement, one snapshot: the seq must describe the exact content read
+  // here. A second statement could straddle a committed edit and return "old
+  // blocks + new seq" (#138) — a caller that pins the write with that seq would
+  // then pass the expected_seq CAS and delete content it never saw.
+  let (payload, seq) = store::current_payload_with_seq(&state.db, document_id)
     .await?
     .ok_or(ApiError::NotFound)?;
-  // The current seq lets a caller pin the version it read here and pass it back
-  // as `expected_seq` for a conflict-checked write (optimistic concurrency).
-  let seq: i64 = sqlx::query_scalar("SELECT current_seq FROM documents WHERE id = $1")
-    .bind(document_id)
-    .fetch_one(&state.db)
-    .await?;
   Ok(Json(outline_from_payload(&payload, seq)))
 }
 
@@ -632,6 +631,7 @@ pub async fn update_document_markdown(
     document_id,
     user_id,
     request.expected_seq,
+    &state.config.sync_tuning,
     |payload| markdown_update_ops(payload, &request, workspace_id),
   )
   .await?;

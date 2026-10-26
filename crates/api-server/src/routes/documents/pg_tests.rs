@@ -148,7 +148,10 @@ mod parent_guard_pg {
 
     // A fresh doc is at seq 0. Pinning a seq the doc never had is a 409, raised
     // by the guard before the derive closure is ever called.
-    let stale = store::apply_derived_operations(&db, ws, doc, user, Some(1), |_| Ok(Vec::new()))
+    let stale =
+      store::apply_derived_operations(&db, ws, doc, user, Some(1), &Default::default(), |_| {
+        Ok(Vec::new())
+      })
       .await
       .expect_err("a stale expected_seq must be refused");
     assert!(
@@ -158,7 +161,10 @@ mod parent_guard_pg {
 
     // The current seq (0) passes the guard: it then fails on empty ops
     // (BadRequest), which proves the concurrency check did NOT stop it.
-    let passed = store::apply_derived_operations(&db, ws, doc, user, Some(0), |_| Ok(Vec::new()))
+    let passed =
+      store::apply_derived_operations(&db, ws, doc, user, Some(0), &Default::default(), |_| {
+        Ok(Vec::new())
+      })
       .await
       .expect_err("empty ops still error after the guard passes");
     assert!(
@@ -670,6 +676,7 @@ mod parent_guard_pg {
     let streamed = stream_tree_bytes(&state, ws, None).await;
     assert_eq!(streamed, gathered_tree_bytes(&state, ws, None).await);
     let names: Vec<String> = mica_interchange::read_zip(&streamed)
+      .expect("streamed export is a valid zip")
       .into_iter()
       .map(|e| e.name)
       .collect();

@@ -150,6 +150,21 @@ fn has_column(conn: &Connection, table: &str, col: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// Does the database contain `table` at all? Read-only (`sqlite_master`), so it
+/// is safe to ask BEFORE any DDL — which is exactly where [`LocalStore::open`]'s
+/// too-new gate asks it. `false` on a SQLite error, same tolerance as
+/// [`has_column`].
+fn has_table(conn: &Connection, table: &str) -> bool {
+  conn
+    .query_row(
+      "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+      params![table],
+      |r| r.get::<_, i64>(0),
+    )
+    .map(|c| c > 0)
+    .unwrap_or(false)
+}
+
 /// Run yrs decode/integrate work, turning a panic into [`StoreError::CorruptDoc`].
 ///
 /// yrs integrates an update by INDEXING into its block store, and on malformed
@@ -250,7 +265,8 @@ fn verify_blob_crc(doc_id: &str, bytes: &[u8], stored_crc: Option<i64>) -> Resul
 
 /// On-disk schema version (§10 — explicit version + downgrade guard). Bump when
 /// the table layout changes and add the migration in [`LocalStore::open`].
-const SCHEMA_VERSION: i64 = 6;
+/// v7 = origin in every document-level primary key (issue #102).
+const SCHEMA_VERSION: i64 = 7;
 
 /// Auto version cadence — collapse a burst of saves to one version per 10 min
 /// (AFFiNE's min-interval). Retention — auto versions live 30 days; named ones
@@ -337,117 +353,148 @@ impl LocalStore {
   /// Open (creating if needed) the store at `path` and ensure the schema.
   pub fn open(path: &str) -> Result<Self, StoreError> {
     let conn = Connection::open(path)?;
-    conn.execute_batch(
-      "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             CREATE TABLE IF NOT EXISTS doc_snapshot(
-                 doc_id       TEXT PRIMARY KEY,
-                 state        BLOB NOT NULL,
-                 updated_at   INTEGER NOT NULL,
-                 state_crc    INTEGER,
-                 -- Plain text of `state`, for workspace search. A pure projection:
-                 -- `state` is the authority, this is derived from it and never read
-                 -- back into a document. NULL = not derived yet (a row written by an
-                 -- older build, or a doc whose decode failed) — searchable-or-not,
-                 -- never wrong.
-                 --
-                 -- Purely additive → no SCHEMA_VERSION bump, same as `doc_version`:
-                 -- an older app ignores the column, and a newer app treats the NULLs
-                 -- an older app leaves behind as not-yet-indexed. That matters more
-                 -- than it sounds: bumping the version turns first launch after an
-                 -- auto-update into a migration of the user's only copy of their
-                 -- notes, and this feature is not worth that risk.
-                 content_text TEXT
-             );
-             CREATE TABLE IF NOT EXISTS local_meta(
-                 key   TEXT PRIMARY KEY,
-                 value TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS local_view(
-                 origin       TEXT NOT NULL DEFAULT 'local',
-                 id           TEXT NOT NULL,
-                 workspace_id TEXT NOT NULL DEFAULT 'local',
-                 parent_id    TEXT,
-                 object_id    TEXT NOT NULL,
-                 name         TEXT NOT NULL,
-                 position     TEXT NOT NULL,
-                 trashed      INTEGER NOT NULL DEFAULT 0,
-                 object_type  TEXT NOT NULL DEFAULT 'document',
-                 PRIMARY KEY(origin, id)
-             );
-             CREATE TABLE IF NOT EXISTS local_workspace(
-                 origin   TEXT NOT NULL DEFAULT 'local',
-                 id       TEXT NOT NULL,
-                 name     TEXT NOT NULL,
-                 position TEXT NOT NULL,
-                 role     TEXT NOT NULL DEFAULT 'viewer',
-                 PRIMARY KEY(origin, id)
-             );
-             CREATE TABLE IF NOT EXISTS doc_update(
-                 doc_id      TEXT NOT NULL,
-                 clock       INTEGER NOT NULL,
-                 payload     BLOB NOT NULL,
-                 payload_crc INTEGER,
-                 PRIMARY KEY(doc_id, clock)
-             );
-             CREATE TABLE IF NOT EXISTS doc_remote_update(
-                 doc_id      TEXT NOT NULL,
-                 rid         INTEGER NOT NULL,
-                 payload     BLOB NOT NULL,
-                 payload_crc INTEGER,
-                 PRIMARY KEY(doc_id, rid)
-             );
-             CREATE TABLE IF NOT EXISTS sync_cursor(
-                 doc_id          TEXT PRIMARY KEY,
-                 last_synced_rid INTEGER NOT NULL DEFAULT 0,
-                 pushed_clock    INTEGER NOT NULL DEFAULT 0
-             );
-             CREATE TABLE IF NOT EXISTS doc_snapshot_backup(
-                 doc_id     TEXT PRIMARY KEY,
-                 state      BLOB NOT NULL,
-                 updated_at INTEGER NOT NULL,
-                 state_crc  INTEGER
-             );
-             -- Local page version history (docs/features/version-history-plan.md §6). One
-             -- row = one full yrs state. `label` NULL = an auto snapshot (captured
-             -- on a cadence by save_doc, pruned after retention); set = a named
-             -- checkpoint, kept forever. Purely additive → no SCHEMA_VERSION bump
-             -- (an older app just ignores this table).
-             CREATE TABLE IF NOT EXISTS doc_version(
-                 id         TEXT PRIMARY KEY,
-                 doc_id     TEXT NOT NULL,
-                 label      TEXT,
-                 created_at INTEGER NOT NULL,
-                 state      BLOB NOT NULL,
-                 state_crc  INTEGER
-             );
-             CREATE INDEX IF NOT EXISTS doc_version_doc_created_idx
-                 ON doc_version(doc_id, created_at DESC);",
-    )?;
-    // Schema version gate (§10) — checked BEFORE any migration below, so a
-    // store written by a newer app is refused while still untouched. The
-    // migrations are probe-driven (column/PK shape, not version), and the v4
-    // rebuild is destructive (DROP + recreate from a hard-coded column list):
-    // run against a future schema it would silently strip columns the newer
-    // app added, and only THEN would a trailing gate reject — too late. The
-    // stamp still happens at the end, after every migration succeeded.
-    // (Everything above this point is CREATE IF NOT EXISTS / PRAGMA — no-ops
-    // on an existing store.)
-    let stored: i64 = conn
-      .query_row(
-        "SELECT value FROM local_meta WHERE key='schema_version'",
-        [],
-        |r| r.get::<_, String>(0),
-      )
-      .optional()?
-      .and_then(|s| s.parse().ok())
-      .unwrap_or(0);
+    // Schema version gate (§10) — FIRST, before any DDL or PRAGMA touches the
+    // file. It used to run after the CREATE/PRAGMA batch, which was already too
+    // late: `PRAGMA journal_mode=WAL` rewrites the database header and journal
+    // mode, and the CREATE batch adds tables a newer app may not expect — so a
+    // user who downgrades would have their NEWER store mutated before being
+    // told the version is unsupported. Nothing above this point may write.
+    //
+    // A store with no `local_meta` at all (a fresh file, or one older than that
+    // table) has no version to guard; the probe is read-only either way.
+    let stored: i64 = if has_table(&conn, "local_meta") {
+      conn
+        .query_row(
+          "SELECT value FROM local_meta WHERE key='schema_version'",
+          [],
+          |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+    } else {
+      0
+    };
     if stored > SCHEMA_VERSION {
       return Err(StoreError::SchemaTooNew {
         found: stored,
         supported: SCHEMA_VERSION,
       });
     }
+    conn.execute_batch(
+      "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+            -- Document-level rows are keyed by (origin, doc_id) — issue #102. The
+            -- page tree is already origin-scoped (local_view/local_workspace), but a
+            -- backup restore, a server migration or a cloned environment keeps
+            -- document UUIDs: two origins can then legitimately hold the SAME doc id.
+            -- Keyed by a bare doc_id they would share one body, one sync cursor and
+            -- one offline outbox, and clearing one origin's mirror would delete the
+            -- other origin's text. `origin` carries the same value as the owning
+            -- view's ('local' for on-device pages, a server URL for cloud mirrors).
+            CREATE TABLE IF NOT EXISTS doc_snapshot(
+                origin       TEXT NOT NULL,
+                doc_id       TEXT NOT NULL,
+                state        BLOB NOT NULL,
+                updated_at   INTEGER NOT NULL,
+                state_crc    INTEGER,
+                -- Plain text of `state` PLUS its update log, for workspace search.
+                -- A pure projection: `state` is the authority, this is derived from
+                -- it and never read back into a document. NULL = not derived yet (a
+                -- row written by an older build, a doc whose decode failed) —
+                -- searchable-or-not, never wrong.
+                content_text TEXT,
+                -- The pages this document links TO, as a JSON array (backlinks /
+                -- graph). Same projection contract as `content_text`.
+                link_targets TEXT,
+                -- 1 = the projections above are behind the update log: an
+                -- incremental append landed since they were derived. Readers that
+                -- need the index rebuild it instead of answering from stale text
+                -- (issue #104); every projection write clears it. Deliberately NOT
+                -- folded into `content_text IS NULL`: not-indexed-yet is the
+                -- backfill's queue, indexed-then-edited is a read's job, and one
+                -- flag for both would make a broken legacy row re-decode on every
+                -- search.
+                projection_stale INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(origin, doc_id)
+            );
+            CREATE TABLE IF NOT EXISTS local_meta(
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS local_view(
+                origin       TEXT NOT NULL DEFAULT 'local',
+                id           TEXT NOT NULL,
+                workspace_id TEXT NOT NULL DEFAULT 'local',
+                parent_id    TEXT,
+                object_id    TEXT NOT NULL,
+                name         TEXT NOT NULL,
+                position     TEXT NOT NULL,
+                trashed      INTEGER NOT NULL DEFAULT 0,
+                object_type  TEXT NOT NULL DEFAULT 'document',
+                PRIMARY KEY(origin, id)
+            );
+            CREATE TABLE IF NOT EXISTS local_workspace(
+                origin   TEXT NOT NULL DEFAULT 'local',
+                id       TEXT NOT NULL,
+                name     TEXT NOT NULL,
+                position TEXT NOT NULL,
+                role     TEXT NOT NULL DEFAULT 'viewer',
+                PRIMARY KEY(origin, id)
+            );
+            CREATE TABLE IF NOT EXISTS doc_update(
+                origin      TEXT NOT NULL,
+                doc_id      TEXT NOT NULL,
+                clock       INTEGER NOT NULL,
+                payload     BLOB NOT NULL,
+                payload_crc INTEGER,
+                PRIMARY KEY(origin, doc_id, clock)
+            );
+            CREATE TABLE IF NOT EXISTS doc_remote_update(
+                origin      TEXT NOT NULL,
+                doc_id      TEXT NOT NULL,
+                rid         INTEGER NOT NULL,
+                payload     BLOB NOT NULL,
+                payload_crc INTEGER,
+                PRIMARY KEY(origin, doc_id, rid)
+            );
+            CREATE TABLE IF NOT EXISTS sync_cursor(
+                origin          TEXT NOT NULL,
+                doc_id          TEXT NOT NULL,
+                last_synced_rid INTEGER NOT NULL DEFAULT 0,
+                pushed_clock    INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(origin, doc_id)
+            );
+            CREATE TABLE IF NOT EXISTS doc_snapshot_backup(
+                origin     TEXT NOT NULL,
+                doc_id     TEXT NOT NULL,
+                state      BLOB NOT NULL,
+                updated_at INTEGER NOT NULL,
+                state_crc  INTEGER,
+                PRIMARY KEY(origin, doc_id)
+            );
+            -- Local page version history (docs/features/version-history-plan.md §6). One
+            -- row = one full yrs state. `label` NULL = an auto snapshot (captured
+            -- on a cadence by save_doc, pruned after retention); set = a named
+            -- checkpoint, kept forever. Keyed by (origin, id): version ids are this
+            -- device's own, but the ROW belongs to one origin's document.
+            CREATE TABLE IF NOT EXISTS doc_version(
+                origin     TEXT NOT NULL,
+                id         TEXT NOT NULL,
+                doc_id     TEXT NOT NULL,
+                label      TEXT,
+                created_at INTEGER NOT NULL,
+                state      BLOB NOT NULL,
+                state_crc  INTEGER,
+                PRIMARY KEY(origin, id)
+            );",
+    )?;
+    // (The too-new gate already ran, before the first write of any kind; the
+    // migrations below are probe-driven — column/PK shape, not version — and
+    // the v4/v7 rebuilds are destructive, which is exactly why the gate could
+    // not stay here: run against a future schema they would silently strip
+    // columns the newer app added. The stamp happens at the end, after every
+    // migration succeeded.)
 
     // Migrate pre-multi-workspace stores: add the workspace_id column and a
     // default workspace that existing views attach to.
@@ -606,6 +653,210 @@ impl LocalStore {
       }
     }
 
+    // v7 (issue #102): promote `origin` into the primary key of every
+    // document-level table. The page tree has been origin-scoped since v2/v4
+    // (`local_view.origin`), but documents, their logs, sync cursors and
+    // version history were keyed by a bare `doc_id`. Two origins that hold the
+    // SAME document UUID — a restored backup, a migrated or cloned server —
+    // then shared one body, one cursor and one outbox, and deleting one
+    // origin's mirror deleted the other's text. A bare-id primary key is the
+    // bug: no amount of call-site discipline fixes it, so the key has to
+    // change.
+    //
+    // Probe: no released store has an `origin` column on these tables, and any
+    // store that does has been rebuilt around the composite key (the rebuild is
+    // one transaction, so the column and the key always arrive together). One
+    // `has_column` per table therefore detects exactly the legacy shape — a PK
+    // count would not: `doc_update`'s legacy key was already two columns.
+    // Each rebuild runs in ONE transaction, so a crash leaves the old table whole.
+    //
+    // Which origin does an existing row get? The origin of the view that
+    // references its document, which is the only thing that can answer: a
+    // pre-v7 store had a single document row per id, so it belonged to
+    // whichever page tree pointed at it. A doc referenced from several origins
+    // (possible: 'local' plus a cloud mirror sharing a UUID) is COPIED to each
+    // — the old store cannot say which copy was "the" one, and duplicating is
+    // the only lossless answer. A doc NO view references (an orphan left by a
+    // crashed purge, or one seeded before its view) stays under 'local', the
+    // origin every pre-multi-origin store was.
+    if !has_column(&conn, "doc_snapshot", "origin") {
+      conn.execute_batch(
+        "BEGIN;
+         CREATE TABLE doc_snapshot_v7(
+             origin      TEXT NOT NULL,
+             doc_id      TEXT NOT NULL,
+             state       BLOB NOT NULL,
+             updated_at  INTEGER NOT NULL,
+             state_crc   INTEGER,
+            content_text TEXT,
+            link_targets TEXT,
+            projection_stale INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(origin, doc_id));
+        -- `projection_stale` is DERIVED, not reset to 0: a pre-v7 row may have
+        -- an un-folded log (the projections describe the base as of the last
+        -- fold). Hard-writing 0 would tell every reader the index is current,
+        -- so the appended edits would stay invisible forever (the very bug
+        -- #104 fixed). The log tables are still in their legacy shape here,
+        -- keyed by bare doc_id — which is exactly what we correlate on.
+        INSERT INTO doc_snapshot_v7(origin,doc_id,state,updated_at,state_crc,content_text,link_targets,projection_stale)
+            SELECT v.origin,d.doc_id,d.state,d.updated_at,d.state_crc,d.content_text,d.link_targets,
+                   CASE WHEN EXISTS (SELECT 1 FROM doc_update u WHERE u.doc_id=d.doc_id)
+                          OR EXISTS (SELECT 1 FROM doc_remote_update r WHERE r.doc_id=d.doc_id)
+                        THEN 1 ELSE 0 END
+            FROM doc_snapshot d
+            JOIN (SELECT DISTINCT origin FROM local_view) v
+            WHERE EXISTS (SELECT 1 FROM local_view lv
+                           WHERE lv.object_id=d.doc_id AND lv.origin=v.origin);
+        INSERT INTO doc_snapshot_v7(origin,doc_id,state,updated_at,state_crc,content_text,link_targets,projection_stale)
+            SELECT 'local',d.doc_id,d.state,d.updated_at,d.state_crc,d.content_text,d.link_targets,
+                   CASE WHEN EXISTS (SELECT 1 FROM doc_update u WHERE u.doc_id=d.doc_id)
+                          OR EXISTS (SELECT 1 FROM doc_remote_update r WHERE r.doc_id=d.doc_id)
+                        THEN 1 ELSE 0 END
+            FROM doc_snapshot d
+            WHERE NOT EXISTS (SELECT 1 FROM local_view lv WHERE lv.object_id=d.doc_id);
+         DROP TABLE doc_snapshot;
+         ALTER TABLE doc_snapshot_v7 RENAME TO doc_snapshot;
+         COMMIT;",
+      )?;
+    }
+    if !has_column(&conn, "doc_update", "origin") {
+      conn.execute_batch(
+        "BEGIN;
+         CREATE TABLE doc_update_v7(
+             origin      TEXT NOT NULL,
+             doc_id      TEXT NOT NULL,
+             clock       INTEGER NOT NULL,
+             payload     BLOB NOT NULL,
+             payload_crc INTEGER,
+             PRIMARY KEY(origin, doc_id, clock));
+         INSERT INTO doc_update_v7(origin,doc_id,clock,payload,payload_crc)
+             SELECT v.origin,d.doc_id,d.clock,d.payload,d.payload_crc
+             FROM doc_update d
+             JOIN (SELECT DISTINCT origin FROM local_view) v
+             WHERE EXISTS (SELECT 1 FROM local_view lv
+                            WHERE lv.object_id=d.doc_id AND lv.origin=v.origin);
+         INSERT INTO doc_update_v7(origin,doc_id,clock,payload,payload_crc)
+             SELECT 'local',d.doc_id,d.clock,d.payload,d.payload_crc
+             FROM doc_update d
+             WHERE NOT EXISTS (SELECT 1 FROM local_view lv WHERE lv.object_id=d.doc_id);
+         DROP TABLE doc_update;
+         ALTER TABLE doc_update_v7 RENAME TO doc_update;
+         COMMIT;",
+      )?;
+    }
+    if !has_column(&conn, "doc_remote_update", "origin") {
+      conn.execute_batch(
+        "BEGIN;
+         CREATE TABLE doc_remote_update_v7(
+             origin      TEXT NOT NULL,
+             doc_id      TEXT NOT NULL,
+             rid         INTEGER NOT NULL,
+             payload     BLOB NOT NULL,
+             payload_crc INTEGER,
+             PRIMARY KEY(origin, doc_id, rid));
+         INSERT INTO doc_remote_update_v7(origin,doc_id,rid,payload,payload_crc)
+             SELECT v.origin,d.doc_id,d.rid,d.payload,d.payload_crc
+             FROM doc_remote_update d
+             JOIN (SELECT DISTINCT origin FROM local_view) v
+             WHERE EXISTS (SELECT 1 FROM local_view lv
+                            WHERE lv.object_id=d.doc_id AND lv.origin=v.origin);
+         INSERT INTO doc_remote_update_v7(origin,doc_id,rid,payload,payload_crc)
+             SELECT 'local',d.doc_id,d.rid,d.payload,d.payload_crc
+             FROM doc_remote_update d
+             WHERE NOT EXISTS (SELECT 1 FROM local_view lv WHERE lv.object_id=d.doc_id);
+         DROP TABLE doc_remote_update;
+         ALTER TABLE doc_remote_update_v7 RENAME TO doc_remote_update;
+         COMMIT;",
+      )?;
+    }
+    if !has_column(&conn, "sync_cursor", "origin") {
+      conn.execute_batch(
+        "BEGIN;
+         CREATE TABLE sync_cursor_v7(
+             origin          TEXT NOT NULL,
+             doc_id          TEXT NOT NULL,
+             last_synced_rid INTEGER NOT NULL DEFAULT 0,
+             pushed_clock    INTEGER NOT NULL DEFAULT 0,
+             PRIMARY KEY(origin, doc_id));
+         INSERT INTO sync_cursor_v7(origin,doc_id,last_synced_rid,pushed_clock)
+             SELECT v.origin,d.doc_id,d.last_synced_rid,d.pushed_clock
+             FROM sync_cursor d
+             JOIN (SELECT DISTINCT origin FROM local_view) v
+             WHERE EXISTS (SELECT 1 FROM local_view lv
+                            WHERE lv.object_id=d.doc_id AND lv.origin=v.origin);
+         INSERT INTO sync_cursor_v7(origin,doc_id,last_synced_rid,pushed_clock)
+             SELECT 'local',d.doc_id,d.last_synced_rid,d.pushed_clock
+             FROM sync_cursor d
+             WHERE NOT EXISTS (SELECT 1 FROM local_view lv WHERE lv.object_id=d.doc_id);
+         DROP TABLE sync_cursor;
+         ALTER TABLE sync_cursor_v7 RENAME TO sync_cursor;
+         COMMIT;",
+      )?;
+    }
+    if !has_column(&conn, "doc_snapshot_backup", "origin") {
+      conn.execute_batch(
+        "BEGIN;
+         CREATE TABLE doc_snapshot_backup_v7(
+             origin     TEXT NOT NULL,
+             doc_id     TEXT NOT NULL,
+             state      BLOB NOT NULL,
+             updated_at INTEGER NOT NULL,
+             state_crc  INTEGER,
+             PRIMARY KEY(origin, doc_id));
+         INSERT INTO doc_snapshot_backup_v7(origin,doc_id,state,updated_at,state_crc)
+             SELECT v.origin,d.doc_id,d.state,d.updated_at,d.state_crc
+             FROM doc_snapshot_backup d
+             JOIN (SELECT DISTINCT origin FROM local_view) v
+             WHERE EXISTS (SELECT 1 FROM local_view lv
+                            WHERE lv.object_id=d.doc_id AND lv.origin=v.origin);
+         INSERT INTO doc_snapshot_backup_v7(origin,doc_id,state,updated_at,state_crc)
+             SELECT 'local',d.doc_id,d.state,d.updated_at,d.state_crc
+             FROM doc_snapshot_backup d
+             WHERE NOT EXISTS (SELECT 1 FROM local_view lv WHERE lv.object_id=d.doc_id);
+         DROP TABLE doc_snapshot_backup;
+         ALTER TABLE doc_snapshot_backup_v7 RENAME TO doc_snapshot_backup;
+         COMMIT;",
+      )?;
+    }
+    if !has_column(&conn, "doc_version", "origin") {
+      conn.execute_batch(
+        "BEGIN;
+         CREATE TABLE doc_version_v7(
+             origin     TEXT NOT NULL,
+             id         TEXT NOT NULL,
+             doc_id     TEXT NOT NULL,
+             label      TEXT,
+             created_at INTEGER NOT NULL,
+             state      BLOB NOT NULL,
+             state_crc  INTEGER,
+             PRIMARY KEY(origin, id));
+         INSERT INTO doc_version_v7(origin,id,doc_id,label,created_at,state,state_crc)
+             SELECT v.origin,d.id,d.doc_id,d.label,d.created_at,d.state,d.state_crc
+             FROM doc_version d
+             JOIN (SELECT DISTINCT origin FROM local_view) v
+             WHERE EXISTS (SELECT 1 FROM local_view lv
+                            WHERE lv.object_id=d.doc_id AND lv.origin=v.origin);
+         INSERT INTO doc_version_v7(origin,id,doc_id,label,created_at,state,state_crc)
+             SELECT 'local',d.id,d.doc_id,d.label,d.created_at,d.state,d.state_crc
+             FROM doc_version d
+             WHERE NOT EXISTS (SELECT 1 FROM local_view lv WHERE lv.object_id=d.doc_id);
+         DROP TABLE doc_version;
+         ALTER TABLE doc_version_v7 RENAME TO doc_version;
+         CREATE INDEX doc_version_doc_created_idx
+             ON doc_version(origin, doc_id, created_at DESC);
+         COMMIT;",
+      )?;
+    }
+    // The version-timeline index now leads with `origin` (v7), so it can only
+    // be created once every table above has been rebuilt — on a pre-v7 store
+    // the column it indexes does not exist when the base DDL runs. Idempotent:
+    // the rebuild path above already created it.
+    conn.execute(
+      "CREATE INDEX IF NOT EXISTS doc_version_doc_created_idx
+             ON doc_version(origin, doc_id, created_at DESC)",
+      [],
+    )?;
+
     // Every migration succeeded — stamp the version this app writes. (The
     // too-new gate ran up top, before anything could mutate the store.)
     conn.execute(
@@ -690,12 +941,19 @@ impl LocalStore {
   /// propagated.
   fn upsert_snapshot(
     &self,
+    origin: &str,
     doc_id: &str,
     state: &[u8],
     crc: Option<i64>,
   ) -> Result<(), StoreError> {
     // ONE decode behind both projections — see [derive_projections].
-    self.upsert_snapshot_with(doc_id, state, crc, derive_projections(doc_id, state))
+    self.upsert_snapshot_with(
+      origin,
+      doc_id,
+      state,
+      crc,
+      derive_projections(doc_id, state),
+    )
   }
 
   /// [`Self::upsert_snapshot`] with the projections computed by the caller —
@@ -703,6 +961,7 @@ impl LocalStore {
   /// and would otherwise pay a second full decode of the same state.
   fn upsert_snapshot_with(
     &self,
+    origin: &str,
     doc_id: &str,
     state: &[u8],
     crc: Option<i64>,
@@ -710,13 +969,13 @@ impl LocalStore {
   ) -> Result<(), StoreError> {
     let (content_text, link_targets) = projections;
     self.conn.execute(
-      "INSERT INTO doc_snapshot(doc_id,state,updated_at,state_crc,content_text,link_targets)
-             VALUES(?1,?2,?3,?4,?5,?6)
-             ON CONFLICT(doc_id) DO UPDATE SET
+      "INSERT INTO doc_snapshot(origin,doc_id,state,updated_at,state_crc,content_text,link_targets,projection_stale)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,0)
+             ON CONFLICT(origin,doc_id) DO UPDATE SET
                  state=excluded.state, updated_at=excluded.updated_at,
                  state_crc=excluded.state_crc, content_text=excluded.content_text,
-                 link_targets=excluded.link_targets",
-      params![doc_id, state, now_millis(), crc, content_text, link_targets],
+                 link_targets=excluded.link_targets, projection_stale=0",
+      params![origin, doc_id, state, now_millis(), crc, content_text, link_targets],
     )?;
     Ok(())
   }
@@ -756,12 +1015,17 @@ impl LocalStore {
       .replace('%', "\\%")
       .replace('_', "\\_");
     let pattern = format!("%{escaped}%");
+    // An incremental edit leaves the index one fold behind (issue #104) — so
+    // rebuild the workspace's stale rows BEFORE answering from them. One
+    // decode per edited page per read, not per keystroke.
+    self.refresh_workspace_projections("local", workspace_id)?;
 
     let mut stmt = self.conn.prepare(
       "SELECT v.id, v.object_id, v.name, v.parent_id, v.object_type,
                     COALESCE(s.content_text, '')
              FROM local_view v
-             LEFT JOIN doc_snapshot s ON s.doc_id = v.object_id
+             LEFT JOIN doc_snapshot s
+                    ON s.doc_id = v.object_id AND s.origin = v.origin
              WHERE v.trashed = 0
                AND v.origin = 'local' AND v.workspace_id = ?3
                AND (v.name LIKE ?1 ESCAPE '\\' OR s.content_text LIKE ?1 ESCAPE '\\')
@@ -819,10 +1083,15 @@ impl LocalStore {
     workspace_id: &str,
     view_id: &str,
   ) -> Result<Vec<LocalBacklink>, StoreError> {
+    // Same staleness contract as `search_local` (issue #104): a backlink the
+    // log introduced must show up even if no search ran first — the panel is
+    // opened on its own, and a reader must never depend on another reader
+    // having refreshed the rows.
+    self.refresh_workspace_projections("local", workspace_id)?;
     let mut stmt = self.conn.prepare(
       "SELECT v.id, v.object_id, v.name
              FROM local_view v
-             JOIN doc_snapshot s ON s.doc_id = v.object_id
+             JOIN doc_snapshot s ON s.doc_id = v.object_id AND s.origin = v.origin
              WHERE v.trashed = 0
                AND v.origin = 'local' AND v.workspace_id = ?2
                AND v.object_type = 'document'
@@ -856,13 +1125,15 @@ impl LocalStore {
   /// trashed or foreign page is a dangling reference, and drawing it would
   /// invent a node that is not in the workspace.
   pub fn graph_local(&self, workspace_id: &str) -> Result<LocalGraph, StoreError> {
+    // Same staleness contract as `search_local` (issue #104).
+    self.refresh_workspace_projections("local", workspace_id)?;
     // Both ends scoped: the target join is by bare id, and ids are only
     // unique per origin — a cloud mirror page with the same id would
     // otherwise add a second copy of every edge into it.
     let mut stmt = self.conn.prepare(
       "SELECT src.id, tgt.id
              FROM local_view src
-             JOIN doc_snapshot s ON s.doc_id = src.object_id
+             JOIN doc_snapshot s ON s.doc_id = src.object_id AND s.origin = src.origin
              JOIN json_each(s.link_targets) j
              JOIN local_view tgt ON tgt.id = j.value AND tgt.trashed = 0
                  AND tgt.origin = 'local' AND tgt.workspace_id = ?1
@@ -916,7 +1187,8 @@ impl LocalStore {
     })
   }
 
-  /// Fill in `content_text` for documents stored before the column existed.
+  /// Fill in `content_text`/`link_targets` for documents stored before those
+  /// columns existed.
   ///
   /// Returns how many rows it filled. Bounded per call and driven by the
   /// caller: a store with thousands of documents must not turn the first launch
@@ -924,33 +1196,105 @@ impl LocalStore {
   /// far smaller problem than an app that appears hung.
   pub fn backfill_content_text(&self, limit: usize) -> Result<usize, StoreError> {
     let mut stmt = self.conn.prepare(
-      "SELECT doc_id, state FROM doc_snapshot
+      "SELECT origin, doc_id FROM doc_snapshot
              WHERE content_text IS NULL OR link_targets IS NULL LIMIT ?1",
     )?;
-    let pending: Vec<(String, Vec<u8>)> = stmt
+    let pending: Vec<(String, String)> = stmt
       .query_map(params![limit as i64], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
       })?
       .collect::<Result<_, _>>()?;
 
     let mut filled = 0usize;
-    for (doc_id, state) in pending {
-      // An undecodable row writes an empty string (and `[]` for the links)
-      // rather than staying NULL: NULL means "not tried yet", and leaving
-      // it would make every backfill pass pick the same broken row forever.
-      let (text, links) = derive_projections(&doc_id, &state);
-      let text = text.unwrap_or_default();
-      let links = links.unwrap_or_else(|| "[]".to_string());
-      self.conn.execute(
-        "UPDATE doc_snapshot SET content_text=?2, link_targets=?3 WHERE doc_id=?1",
-        params![doc_id, text, links],
-      )?;
+    for (origin, doc_id) in pending {
+      self.reindex_doc(&origin, &doc_id)?;
       filled += 1;
     }
     Ok(filled)
   }
 
-  pub fn save_doc(&self, doc_id: &str, doc: &MicaDoc) -> Result<(), StoreError> {
+  /// Rebuild one document's search/link projections from its CURRENT state —
+  /// the base snapshot plus both update logs — and store them.
+  ///
+  /// This is the read-side half of issue #104. `append_update` records an edit
+  /// without touching the base (that is what makes typing cheap), so the
+  /// projection columns describe the page as of the last fold. A reader that
+  /// answers from those columns must therefore refresh what it is about to
+  /// read. Refreshing here rather than on every append keeps the cost off the
+  /// keystroke path: N edits between two searches cost ONE decode.
+  ///
+  /// Never fails a read for a bad row: an undecodable document is written as
+  /// empty projections (`""`, `"[]"`), the same "not searchable, never wrong"
+  /// contract [`Self::backfill_content_text`] documents — and the same reason,
+  /// so a broken row is not re-decoded on every query.
+  fn reindex_doc(&self, origin: &str, doc_id: &str) -> Result<(), StoreError> {
+    let state: Option<Vec<u8>> = self
+      .conn
+      .query_row(
+        "SELECT state FROM doc_snapshot WHERE origin=?1 AND doc_id=?2",
+        params![origin, doc_id],
+        |r| r.get(0),
+      )
+      .optional()?;
+    let Some(state) = state else {
+      return Ok(());
+    };
+    // Base + logs when they decode; otherwise fall back to the base alone — a
+    // rotted log row must not cost the page the body it still has.
+    let mut projections = derive_projections(doc_id, &state);
+    let folded = contain_yrs_panic(doc_id, || {
+      let mut doc = MicaDoc::from_update(&state)?;
+      for (_rid, update) in self.doc_remote_updates(origin, doc_id)? {
+        doc.apply_update(&update)?;
+      }
+      for (_clock, update) in self.doc_updates(origin, doc_id)? {
+        doc.apply_update(&update)?;
+      }
+      Ok(derive_projections_from_doc(&doc))
+    });
+    if let Ok(folded) = folded {
+      projections = folded;
+    }
+    let text = projections.0.unwrap_or_default();
+    let links = projections.1.unwrap_or_else(|| "[]".to_string());
+    self.conn.execute(
+      "UPDATE doc_snapshot SET content_text=?3, link_targets=?4, projection_stale=0
+             WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id, text, links],
+    )?;
+    Ok(())
+  }
+
+  /// Bring every STALE projection in one workspace up to date, before a reader
+  /// queries it. Scoped to the workspace being read, so the cost is bounded by
+  /// what that view can show rather than by the whole store — and rows marked
+  /// NULL by an older build are deliberately NOT picked up here (that is the
+  /// backfill's queue; a read must not turn a broken legacy row into a decode
+  /// on every query).
+  fn refresh_workspace_projections(
+    &self,
+    origin: &str,
+    workspace_id: &str,
+  ) -> Result<(), StoreError> {
+    let mut stmt = self.conn.prepare(
+      "SELECT DISTINCT s.origin, s.doc_id
+             FROM local_view v
+             JOIN doc_snapshot s ON s.doc_id = v.object_id AND s.origin = v.origin
+             WHERE v.origin = ?1 AND v.workspace_id = ?2 AND s.projection_stale <> 0",
+    )?;
+    let stale: Vec<(String, String)> = stmt
+      .query_map(params![origin, workspace_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+      })?
+      .collect::<Result<_, _>>()?;
+    drop(stmt);
+    for (row_origin, doc_id) in stale {
+      self.reindex_doc(&row_origin, &doc_id)?;
+    }
+    Ok(())
+  }
+
+  pub fn save_doc(&self, origin: &str, doc_id: &str, doc: &MicaDoc) -> Result<(), StoreError> {
     let state = doc.encode_state();
     // Fresh checksum over the freshly-encoded bytes. `state_crc=excluded.state_crc`
     // in the SET clause is load-bearing: without it the FIRST save records a crc
@@ -960,25 +1304,32 @@ impl LocalStore {
     // Projections from the doc in hand, not a second decode of the state
     // just encoded from it — this runs on every debounced save.
     let projections = derive_projections_from_doc(doc);
-    self.upsert_snapshot_with(doc_id, state.as_ref(), Some(crc), projections)?;
+    self.upsert_snapshot_with(origin, doc_id, state.as_ref(), Some(crc), projections)?;
     // Version history: archive this folded state as an AUTO snapshot, but only
     // if none was captured in the last VERSION_AUTO_INTERVAL — so a burst of
     // debounced saves converges to one version per window (AFFiNE min-interval).
-    self.capture_auto_version(doc_id, &state, crc)?;
+    self.capture_auto_version(origin, doc_id, &state, crc)?;
     Ok(())
   }
 
   /// Capture `state` (with its already-computed checksum) as an auto version if
   /// the cadence allows, then prune auto versions past retention. Named versions
   /// (label set) are never touched.
-  fn capture_auto_version(&self, doc_id: &str, state: &[u8], crc: i64) -> Result<(), StoreError> {
+  fn capture_auto_version(
+    &self,
+    origin: &str,
+    doc_id: &str,
+    state: &[u8],
+    crc: i64,
+  ) -> Result<(), StoreError> {
     let now = now_millis();
     let last: Option<i64> = self
       .conn
       .query_row(
         "SELECT created_at FROM doc_version
-                 WHERE doc_id=?1 AND label IS NULL ORDER BY created_at DESC LIMIT 1",
-        params![doc_id],
+                 WHERE origin=?1 AND doc_id=?2 AND label IS NULL
+                 ORDER BY created_at DESC LIMIT 1",
+        params![origin, doc_id],
         |r| r.get(0),
       )
       .optional()?;
@@ -986,13 +1337,13 @@ impl LocalStore {
       return Ok(());
     }
     self.conn.execute(
-            "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,NULL,?3,?4,?5)",
-            params![uuid::Uuid::new_v4().to_string(), doc_id, now, state, crc],
+            "INSERT INTO doc_version(origin,id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,?3,NULL,?4,?5,?6)",
+            params![origin, uuid::Uuid::new_v4().to_string(), doc_id, now, state, crc],
         )?;
     self.conn.execute(
       "DELETE FROM doc_version
-             WHERE doc_id=?1 AND label IS NULL AND created_at < ?2",
-      params![doc_id, now - VERSION_AUTO_RETENTION_MS],
+             WHERE origin=?1 AND doc_id=?2 AND label IS NULL AND created_at < ?3",
+      params![origin, doc_id, now - VERSION_AUTO_RETENTION_MS],
     )?;
     Ok(())
   }
@@ -1001,6 +1352,7 @@ impl LocalStore {
   /// auto-pruned). Returns None if the document has no saved snapshot yet.
   pub fn create_local_version(
     &self,
+    origin: &str,
     doc_id: &str,
     label: &str,
   ) -> Result<Option<LocalVersion>, StoreError> {
@@ -1010,8 +1362,8 @@ impl LocalStore {
     let row: Option<(Vec<u8>, Option<i64>)> = self
       .conn
       .query_row(
-        "SELECT state, state_crc FROM doc_snapshot WHERE doc_id=?1",
-        params![doc_id],
+        "SELECT state, state_crc FROM doc_snapshot WHERE origin=?1 AND doc_id=?2",
+        params![origin, doc_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
       )
       .optional()?;
@@ -1021,8 +1373,8 @@ impl LocalStore {
     let now = now_millis();
     let id = uuid::Uuid::new_v4().to_string();
     self.conn.execute(
-            "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![id, doc_id, label, now, bytes, crc],
+            "INSERT INTO doc_version(origin,id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![origin, id, doc_id, label, now, bytes, crc],
         )?;
     Ok(Some(LocalVersion {
       id,
@@ -1032,13 +1384,17 @@ impl LocalStore {
   }
 
   /// The document's version timeline, newest first (metadata only, no blobs).
-  pub fn list_local_versions(&self, doc_id: &str) -> Result<Vec<LocalVersion>, StoreError> {
+  pub fn list_local_versions(
+    &self,
+    origin: &str,
+    doc_id: &str,
+  ) -> Result<Vec<LocalVersion>, StoreError> {
     let mut stmt = self.conn.prepare(
       "SELECT id, label, created_at FROM doc_version
-             WHERE doc_id=?1 ORDER BY created_at DESC",
+             WHERE origin=?1 AND doc_id=?2 ORDER BY created_at DESC",
     )?;
     let rows = stmt
-      .query_map(params![doc_id], |r| {
+      .query_map(params![origin, doc_id], |r| {
         Ok(LocalVersion {
           id: r.get(0)?,
           label: r.get(1)?,
@@ -1053,14 +1409,15 @@ impl LocalStore {
   /// into a throwaway MicaDoc, never the live one). None if not found.
   pub fn local_version_state(
     &self,
+    origin: &str,
     doc_id: &str,
     version_id: &str,
   ) -> Result<Option<Vec<u8>>, StoreError> {
     let row: Option<(Vec<u8>, Option<i64>)> = self
       .conn
       .query_row(
-        "SELECT state, state_crc FROM doc_version WHERE id=?1 AND doc_id=?2",
-        params![version_id, doc_id],
+        "SELECT state, state_crc FROM doc_version WHERE origin=?1 AND id=?2 AND doc_id=?3",
+        params![origin, version_id, doc_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
       )
       .optional()?;
@@ -1080,6 +1437,7 @@ impl LocalStore {
   /// undoable. Returns the restored doc, or None if the version isn't found.
   pub fn restore_local_version(
     &self,
+    origin: &str,
     doc_id: &str,
     version_id: &str,
     client_id: u64,
@@ -1087,8 +1445,8 @@ impl LocalStore {
     let target: Option<(Vec<u8>, Option<i64>)> = self
       .conn
       .query_row(
-        "SELECT state, state_crc FROM doc_version WHERE id=?1 AND doc_id=?2",
-        params![version_id, doc_id],
+        "SELECT state, state_crc FROM doc_version WHERE origin=?1 AND id=?2 AND doc_id=?3",
+        params![origin, version_id, doc_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
       )
       .optional()?;
@@ -1113,7 +1471,7 @@ impl LocalStore {
     // Preserve the current state so the restore can be undone — the FULL
     // current state, base + logs. The base row alone misses every edit still
     // in the log, and those are exactly what the restore is about to drop.
-    let archive: Option<(Vec<u8>, Option<i64>)> = match self.load_doc(doc_id, client_id) {
+    let archive: Option<(Vec<u8>, Option<i64>)> = match self.load_doc(origin, doc_id, client_id) {
       Ok(Some(cur)) => {
         let state = cur.encode_state();
         let crc = blob_crc(&state);
@@ -1126,8 +1484,8 @@ impl LocalStore {
       Err(StoreError::CorruptDoc { .. } | StoreError::Doc(_)) => self
         .conn
         .query_row(
-          "SELECT state, state_crc FROM doc_snapshot WHERE doc_id=?1",
-          params![doc_id],
+          "SELECT state, state_crc FROM doc_snapshot WHERE origin=?1 AND doc_id=?2",
+          params![origin, doc_id],
           |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?,
@@ -1139,12 +1497,27 @@ impl LocalStore {
     let tx = self.conn.unchecked_transaction()?;
     if let Some((cur, cur_crc)) = archive {
       tx.execute(
-                "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,NULL,?3,?4,?5)",
-                params![uuid::Uuid::new_v4().to_string(), doc_id, now_millis(), cur, cur_crc],
+                "INSERT INTO doc_version(origin,id,doc_id,label,created_at,state,state_crc) VALUES(?1,?2,?3,NULL,?4,?5,?6)",
+                params![origin, uuid::Uuid::new_v4().to_string(), doc_id, now_millis(), cur, cur_crc],
             )?;
     }
-    self.upsert_snapshot(doc_id, bytes.as_ref(), crc)?;
-    tx.execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+    self.upsert_snapshot(origin, doc_id, bytes.as_ref(), crc)?;
+    tx.execute(
+      "DELETE FROM doc_update WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
+    )?;
+    // The restore drops the LOCAL log but deliberately keeps the remote one
+    // (the server already owns those updates), while the projections above came
+    // from the version blob alone — so `load_doc`, which replays the remote
+    // rows, would show more than the index. Flag it and let the next reader
+    // rebuild (issue #104 follow-up). No remote rows → the flag stays 0.
+    tx.execute(
+      "UPDATE doc_snapshot SET projection_stale=1
+             WHERE origin=?1 AND doc_id=?2
+               AND EXISTS (SELECT 1 FROM doc_remote_update
+                            WHERE origin=?1 AND doc_id=?2)",
+      params![origin, doc_id],
+    )?;
     tx.commit()?;
     Ok(Some(doc))
   }
@@ -1152,12 +1525,17 @@ impl LocalStore {
   /// Load a document by id, decoding it with `client_id` (the device's actor)
   /// and replaying any incremental updates on top of the base snapshot (P2-M4).
   /// Returns `None` if there's no such document.
-  pub fn load_doc(&self, doc_id: &str, client_id: u64) -> Result<Option<MicaDoc>, StoreError> {
+  pub fn load_doc(
+    &self,
+    origin: &str,
+    doc_id: &str,
+    client_id: u64,
+  ) -> Result<Option<MicaDoc>, StoreError> {
     let row: Option<(Vec<u8>, Option<i64>)> = self
       .conn
       .query_row(
-        "SELECT state, state_crc FROM doc_snapshot WHERE doc_id=?1",
-        params![doc_id],
+        "SELECT state, state_crc FROM doc_snapshot WHERE origin=?1 AND doc_id=?2",
+        params![origin, doc_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
       )
       .optional()?;
@@ -1172,8 +1550,8 @@ impl LocalStore {
     // errors, which are not corruption and must keep their own message. The
     // helpers verify each row's checksum, so a rotted log row surfaces as
     // CorruptDoc here (via `?`) and never reaches apply_update.
-    let remote = self.doc_remote_updates(doc_id)?;
-    let local = self.doc_updates(doc_id)?;
+    let remote = self.doc_remote_updates(origin, doc_id)?;
+    let local = self.doc_updates(origin, doc_id)?;
 
     // Everything that hands bytes to yrs lives inside the guard. Any of the
     // three can panic on a corrupt blob — the base snapshot or either log.
@@ -1198,10 +1576,15 @@ impl LocalStore {
   /// Append an incremental update to a document's log, returning its `clock`
   /// (a per-doc monotonic local sequence). The base snapshot is left untouched;
   /// [`Self::squash`] folds the log back into the base later.
-  pub fn append_update(&self, doc_id: &str, update: &[u8]) -> Result<i64, StoreError> {
+  pub fn append_update(
+    &self,
+    origin: &str,
+    doc_id: &str,
+    update: &[u8],
+  ) -> Result<i64, StoreError> {
     let max_log: i64 = self.conn.query_row(
-      "SELECT COALESCE(MAX(clock),0) FROM doc_update WHERE doc_id=?1",
-      params![doc_id],
+      "SELECT COALESCE(MAX(clock),0) FROM doc_update WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
       |r| r.get(0),
     )?;
     // The clock must be strictly monotonic for the doc's whole lifetime —
@@ -1212,10 +1595,24 @@ impl LocalStore {
     // So the high-water is `max(MAX(clock), pushed_clock)`: `pushed_clock`
     // covers every already-acked-and-trimmed clock (all ≤ it), the remaining
     // rows cover the un-pushed tail.
-    let next = max_log.max(self.sync_cursor(doc_id)?.pushed_clock) + 1;
+    let next = max_log.max(self.sync_cursor(origin, doc_id)?.pushed_clock) + 1;
+    // The index now describes the pre-edit page: `content_text`/`link_targets`
+    // are derived from the BASE, and this row holds only the log entry until
+    // something folds it (issue #104). Flagging is one UPDATE on a cache row —
+    // the alternative, deriving the projections here, would put a CRDT decode
+    // on every keystroke. Readers rebuild what they are about to read; see
+    // `refresh_workspace_projections`.
+    //
+    // Flag BEFORE the insert: a crash between the two then costs an unneeded
+    // rebuild, while the other order would leave a log entry whose text the
+    // index never learns about.
     self.conn.execute(
-      "INSERT INTO doc_update(doc_id,clock,payload,payload_crc) VALUES(?1,?2,?3,?4)",
-      params![doc_id, next, update, blob_crc(update)],
+      "UPDATE doc_snapshot SET projection_stale=1 WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
+    )?;
+    self.conn.execute(
+      "INSERT INTO doc_update(origin,doc_id,clock,payload,payload_crc) VALUES(?1,?2,?3,?4,?5)",
+      params![origin, doc_id, next, update, blob_crc(update)],
     )?;
     Ok(next)
   }
@@ -1228,11 +1625,12 @@ impl LocalStore {
   /// a remote row there would corrupt `pushed_clock` semantics).
   pub fn append_remote_update(
     &self,
+    origin: &str,
     doc_id: &str,
     rid: i64,
     update: &[u8],
   ) -> Result<(), StoreError> {
-    self.append_remote_updates(doc_id, &[(rid, update.to_vec())])
+    self.append_remote_updates(origin, doc_id, &[(rid, update.to_vec())])
   }
 
   /// Batch variant of [`Self::append_remote_update`]: all rows + the cursor
@@ -1241,6 +1639,7 @@ impl LocalStore {
   /// P4-1 review flagged).
   pub fn append_remote_updates(
     &self,
+    origin: &str,
     doc_id: &str,
     items: &[(i64, Vec<u8>)],
   ) -> Result<(), StoreError> {
@@ -1248,19 +1647,27 @@ impl LocalStore {
       return Ok(());
     }
     let tx = self.conn.unchecked_transaction()?;
+    // A remote update is content too: the projections describe the base, and
+    // this row only becomes visible when something folds or re-derives it. The
+    // same flag `append_update` sets, in the same transaction as the rows, so a
+    // reader can never see the log without seeing the staleness (issue #104).
+    tx.execute(
+      "UPDATE doc_snapshot SET projection_stale=1 WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
+    )?;
     let mut max_rid = i64::MIN;
     for (rid, update) in items {
       tx.execute(
-                "INSERT OR IGNORE INTO doc_remote_update(doc_id,rid,payload,payload_crc) VALUES(?1,?2,?3,?4)",
-                params![doc_id, rid, update, blob_crc(update)],
+                "INSERT OR IGNORE INTO doc_remote_update(origin,doc_id,rid,payload,payload_crc) VALUES(?1,?2,?3,?4,?5)",
+                params![origin, doc_id, rid, update, blob_crc(update)],
             )?;
       max_rid = max_rid.max(*rid);
     }
     tx.execute(
-      "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,0)
-             ON CONFLICT(doc_id) DO UPDATE SET
+      "INSERT INTO sync_cursor(origin,doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,?3,0)
+             ON CONFLICT(origin,doc_id) DO UPDATE SET
                  last_synced_rid=MAX(last_synced_rid, excluded.last_synced_rid)",
-      params![doc_id, max_rid],
+      params![origin, doc_id, max_rid],
     )?;
     tx.commit()?;
     Ok(())
@@ -1269,12 +1676,17 @@ impl LocalStore {
   /// A document's persisted remote-stream tail, ordered by `rid`. Each row's
   /// checksum is verified before it is returned, so a rotted remote update
   /// surfaces as `CorruptDoc` instead of being replayed into yrs.
-  pub fn doc_remote_updates(&self, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
+  pub fn doc_remote_updates(
+    &self,
+    origin: &str,
+    doc_id: &str,
+  ) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
     let mut stmt = self.conn.prepare(
-      "SELECT rid,payload,payload_crc FROM doc_remote_update WHERE doc_id=?1 ORDER BY rid",
+      "SELECT rid,payload,payload_crc FROM doc_remote_update
+             WHERE origin=?1 AND doc_id=?2 ORDER BY rid",
     )?;
     let rows = stmt
-      .query_map(params![doc_id], |r| {
+      .query_map(params![origin, doc_id], |r| {
         Ok((
           r.get::<_, i64>(0)?,
           r.get::<_, Vec<u8>>(1)?,
@@ -1292,15 +1704,15 @@ impl LocalStore {
 
   /// (local outbox rows, remote log rows) — the compaction trigger reads this
   /// to keep both logs bounded without timers.
-  pub fn log_sizes(&self, doc_id: &str) -> Result<(i64, i64), StoreError> {
+  pub fn log_sizes(&self, origin: &str, doc_id: &str) -> Result<(i64, i64), StoreError> {
     let local: i64 = self.conn.query_row(
-      "SELECT COUNT(*) FROM doc_update WHERE doc_id=?1",
-      params![doc_id],
+      "SELECT COUNT(*) FROM doc_update WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
       |r| r.get(0),
     )?;
     let remote: i64 = self.conn.query_row(
-      "SELECT COUNT(*) FROM doc_remote_update WHERE doc_id=?1",
-      params![doc_id],
+      "SELECT COUNT(*) FROM doc_remote_update WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
       |r| r.get(0),
     )?;
     Ok((local, remote))
@@ -1309,8 +1721,8 @@ impl LocalStore {
   /// All of a document's incremental updates, ordered by `clock`. Each row's
   /// checksum is verified before it is returned (same rationale as
   /// [`Self::doc_remote_updates`]).
-  pub fn doc_updates(&self, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
-    self.updates_after(doc_id, i64::MIN)
+  pub fn doc_updates(&self, origin: &str, doc_id: &str) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
+    self.updates_after(origin, doc_id, i64::MIN)
   }
 
   /// Updates with `clock > after` — the queue still to push to the cloud.
@@ -1320,12 +1732,18 @@ impl LocalStore {
   /// the outbox: a rotted row pushed upstream would be integrated by the
   /// server and every peer, the one place a local bit-flip becomes
   /// everyone's problem.
-  pub fn updates_after(&self, doc_id: &str, after: i64) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
+  pub fn updates_after(
+    &self,
+    origin: &str,
+    doc_id: &str,
+    after: i64,
+  ) -> Result<Vec<(i64, Vec<u8>)>, StoreError> {
     let mut stmt = self.conn.prepare(
-            "SELECT clock,payload,payload_crc FROM doc_update WHERE doc_id=?1 AND clock>?2 ORDER BY clock",
-        )?;
+      "SELECT clock,payload,payload_crc FROM doc_update
+             WHERE origin=?1 AND doc_id=?2 AND clock>?3 ORDER BY clock",
+    )?;
     let rows = stmt
-      .query_map(params![doc_id, after], |r| {
+      .query_map(params![origin, doc_id, after], |r| {
         Ok((
           r.get::<_, i64>(0)?,
           r.get::<_, Vec<u8>>(1)?,
@@ -1347,13 +1765,18 @@ impl LocalStore {
   /// updates, so `load_doc` is unchanged; and `append_update` stays monotonic
   /// across the trim (its high-water includes `pushed_clock`), so no future
   /// clock is ever reused below the trimmed range.
-  pub fn trim_updates_through(&self, doc_id: &str, up_to_clock: i64) -> Result<(), StoreError> {
+  pub fn trim_updates_through(
+    &self,
+    origin: &str,
+    doc_id: &str,
+    up_to_clock: i64,
+  ) -> Result<(), StoreError> {
     // Clamp to pushed_clock so an over-eager caller can never delete un-pushed
     // outbox entries (safe-by-construction, not by caller discipline).
-    let up_to = up_to_clock.min(self.sync_cursor(doc_id)?.pushed_clock);
+    let up_to = up_to_clock.min(self.sync_cursor(origin, doc_id)?.pushed_clock);
     self.conn.execute(
-      "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
-      params![doc_id, up_to],
+      "DELETE FROM doc_update WHERE origin=?1 AND doc_id=?2 AND clock<=?3",
+      params![origin, doc_id, up_to],
     )?;
     Ok(())
   }
@@ -1371,8 +1794,8 @@ impl LocalStore {
   /// idempotent. For a pure-local doc (`pushed_clock = 0`, and the log is
   /// unused — local edits write full snapshots via [`Self::save_doc`]) this
   /// deletes nothing and is a harmless re-baseline.
-  pub fn squash(&self, doc_id: &str, client_id: u64) -> Result<(), StoreError> {
-    let doc = match self.load_doc(doc_id, client_id)? {
+  pub fn squash(&self, origin: &str, doc_id: &str, client_id: u64) -> Result<(), StoreError> {
+    let doc = match self.load_doc(origin, doc_id, client_id)? {
       Some(d) => d,
       None => return Ok(()),
     };
@@ -1381,21 +1804,21 @@ impl LocalStore {
     let projections = derive_projections_from_doc(&doc);
     let state = doc.encode_state();
     let crc = blob_crc(&state);
-    let pushed = self.sync_cursor(doc_id)?.pushed_clock;
+    let pushed = self.sync_cursor(origin, doc_id)?.pushed_clock;
     // One transaction: fold + trim + clear commit together (crash mid-way
     // was already safe via replay idempotency, but structural atomicity is
     // cheaper to reason about than a CRDT argument).
     let tx = self.conn.unchecked_transaction()?;
-    self.upsert_snapshot_with(doc_id, state.as_ref(), Some(crc), projections)?;
+    self.upsert_snapshot_with(origin, doc_id, state.as_ref(), Some(crc), projections)?;
     tx.execute(
-      "DELETE FROM doc_update WHERE doc_id=?1 AND clock<=?2",
-      params![doc_id, pushed],
+      "DELETE FROM doc_update WHERE origin=?1 AND doc_id=?2 AND clock<=?3",
+      params![origin, doc_id, pushed],
     )?;
     // The remote log is fully folded into the new base (it has no
     // un-pushed semantics — the server already owns these updates).
     tx.execute(
-      "DELETE FROM doc_remote_update WHERE doc_id=?1",
-      params![doc_id],
+      "DELETE FROM doc_remote_update WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
     )?;
     tx.commit()?;
     Ok(())
@@ -1423,20 +1846,25 @@ impl LocalStore {
   /// Captures an auto version like [`Self::save_doc`] does. Local version
   /// history rode on the debounced full save; without this line it would stop
   /// the moment the caller stopped calling `save_doc`, and nothing would say so.
-  pub fn compact_local(&self, doc_id: &str, client_id: u64) -> Result<bool, StoreError> {
-    let cursor = self.sync_cursor(doc_id)?;
+  pub fn compact_local(
+    &self,
+    origin: &str,
+    doc_id: &str,
+    client_id: u64,
+  ) -> Result<bool, StoreError> {
+    let cursor = self.sync_cursor(origin, doc_id)?;
     if cursor.pushed_clock != 0 || cursor.last_synced_rid != 0 {
       return Ok(false);
     }
     let remote_rows: i64 = self.conn.query_row(
-      "SELECT COUNT(*) FROM doc_remote_update WHERE doc_id=?1",
-      params![doc_id],
+      "SELECT COUNT(*) FROM doc_remote_update WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
       |r| r.get(0),
     )?;
     if remote_rows != 0 {
       return Ok(false);
     }
-    let doc = match self.load_doc(doc_id, client_id)? {
+    let doc = match self.load_doc(origin, doc_id, client_id)? {
       Some(d) => d,
       None => return Ok(false),
     };
@@ -1449,21 +1877,25 @@ impl LocalStore {
     // idempotent so a crash between them would be survivable anyway, but a
     // reader shouldn't have to reconstruct that argument to trust the file.
     let tx = self.conn.unchecked_transaction()?;
-    self.upsert_snapshot_with(doc_id, state.as_ref(), Some(crc), projections)?;
-    tx.execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+    self.upsert_snapshot_with(origin, doc_id, state.as_ref(), Some(crc), projections)?;
+    tx.execute(
+      "DELETE FROM doc_update WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
+    )?;
     tx.commit()?;
-    self.capture_auto_version(doc_id, &state, crc)?;
+    self.capture_auto_version(origin, doc_id, &state, crc)?;
     Ok(true)
   }
 
   /// A document's cloud sync high-water marks (zeroed if never synced).
-  pub fn sync_cursor(&self, doc_id: &str) -> Result<SyncCursor, StoreError> {
+  pub fn sync_cursor(&self, origin: &str, doc_id: &str) -> Result<SyncCursor, StoreError> {
     Ok(
       self
         .conn
         .query_row(
-          "SELECT last_synced_rid,pushed_clock FROM sync_cursor WHERE doc_id=?1",
-          params![doc_id],
+          "SELECT last_synced_rid,pushed_clock FROM sync_cursor
+             WHERE origin=?1 AND doc_id=?2",
+          params![origin, doc_id],
           |r| {
             Ok(SyncCursor {
               last_synced_rid: r.get(0)?,
@@ -1477,37 +1909,45 @@ impl LocalStore {
   }
 
   /// Persist a document's sync high-water marks.
-  pub fn set_sync_cursor(&self, doc_id: &str, cursor: SyncCursor) -> Result<(), StoreError> {
+  pub fn set_sync_cursor(
+    &self,
+    origin: &str,
+    doc_id: &str,
+    cursor: SyncCursor,
+  ) -> Result<(), StoreError> {
     self.conn.execute(
-      "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,?3)
-             ON CONFLICT(doc_id) DO UPDATE SET
+      "INSERT INTO sync_cursor(origin,doc_id,last_synced_rid,pushed_clock) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(origin,doc_id) DO UPDATE SET
                  last_synced_rid=excluded.last_synced_rid, pushed_clock=excluded.pushed_clock",
-      params![doc_id, cursor.last_synced_rid, cursor.pushed_clock],
+      params![origin, doc_id, cursor.last_synced_rid, cursor.pushed_clock],
     )?;
     Ok(())
   }
 
-  /// All stored document ids (sorted).
-  pub fn list_docs(&self) -> Result<Vec<String>, StoreError> {
+  /// All stored document ids of one `origin` (sorted).
+  pub fn list_docs(&self, origin: &str) -> Result<Vec<String>, StoreError> {
     let mut stmt = self
       .conn
-      .prepare("SELECT doc_id FROM doc_snapshot ORDER BY doc_id")?;
+      .prepare("SELECT doc_id FROM doc_snapshot WHERE origin=?1 ORDER BY doc_id")?;
     let ids = stmt
-      .query_map([], |r| r.get::<_, String>(0))?
+      .query_map(params![origin], |r| r.get::<_, String>(0))?
       .collect::<Result<Vec<_>, _>>()?;
     Ok(ids)
   }
 
-  /// Delete a document — every row keyed by its `doc_id`, in one transaction.
+  /// Delete a document of ONE origin — every row keyed by `(origin, doc_id)`,
+  /// in one transaction.
   ///
   /// This is what 「永久删除」 and removing a server's mirror promise, so the
   /// list must cover every table that holds the document's CONTENT — the
   /// version history (`doc_version`, full states) was missing, leaving the
   /// whole text on disk after the page was gone. A test enumerates every
   /// table with a `doc_id` column, so a new one cannot be forgotten silently.
-  pub fn delete_doc(&self, doc_id: &str) -> Result<(), StoreError> {
+  /// Origin-scoped (issue #102): clearing one server's mirror must never
+  /// delete the SAME document id held by another origin.
+  pub fn delete_doc(&self, origin: &str, doc_id: &str) -> Result<(), StoreError> {
     let tx = self.conn.unchecked_transaction()?;
-    self.delete_doc_rows(doc_id)?;
+    self.delete_doc_rows(origin, doc_id)?;
     tx.commit()?;
     Ok(())
   }
@@ -1518,7 +1958,7 @@ impl LocalStore {
   /// the view rows (statements on this connection join the open
   /// `unchecked_transaction`). Same table list as `delete_doc`; the drift
   /// test below enumerates every table with a `doc_id` column.
-  pub(crate) fn delete_doc_rows(&self, doc_id: &str) -> Result<(), StoreError> {
+  pub(crate) fn delete_doc_rows(&self, origin: &str, doc_id: &str) -> Result<(), StoreError> {
     for table in [
       "doc_snapshot",
       "doc_snapshot_backup",
@@ -1528,8 +1968,8 @@ impl LocalStore {
       "doc_version",
     ] {
       self.conn.execute(
-        &format!("DELETE FROM {table} WHERE doc_id=?1"),
-        params![doc_id],
+        &format!("DELETE FROM {table} WHERE origin=?1 AND doc_id=?2"),
+        params![origin, doc_id],
       )?;
     }
     Ok(())
@@ -1540,15 +1980,16 @@ impl LocalStore {
   /// Save the document's current base snapshot as a recovery checkpoint. Call
   /// at safe points (doc close, app pause) so a later corruption can be rolled
   /// back. No-op if the document has no base yet.
-  pub fn checkpoint_doc(&self, doc_id: &str) -> Result<(), StoreError> {
+  pub fn checkpoint_doc(&self, origin: &str, doc_id: &str) -> Result<(), StoreError> {
     // SQL-only copy — the checksum rides along in the same statement, so the
     // backup keeps validating against the base's original bytes.
     self.conn.execute(
-            "INSERT INTO doc_snapshot_backup(doc_id,state,updated_at,state_crc)
-             SELECT doc_id, state, ?2, state_crc FROM doc_snapshot WHERE doc_id=?1
-             ON CONFLICT(doc_id) DO UPDATE SET
+            "INSERT INTO doc_snapshot_backup(origin,doc_id,state,updated_at,state_crc)
+             SELECT origin, doc_id, state, ?3, state_crc FROM doc_snapshot
+             WHERE origin=?1 AND doc_id=?2
+             ON CONFLICT(origin,doc_id) DO UPDATE SET
                  state=excluded.state, updated_at=excluded.updated_at, state_crc=excluded.state_crc",
-            params![doc_id, now_millis()],
+            params![origin, doc_id, now_millis()],
         )?;
     Ok(())
   }
@@ -1556,12 +1997,17 @@ impl LocalStore {
   /// Restore a document from its last [`Self::checkpoint_doc`], making it the
   /// live base and dropping the incremental log. Returns the restored doc, or
   /// `None` if there's no checkpoint.
-  pub fn rollback_doc(&self, doc_id: &str, client_id: u64) -> Result<Option<MicaDoc>, StoreError> {
+  pub fn rollback_doc(
+    &self,
+    origin: &str,
+    doc_id: &str,
+    client_id: u64,
+  ) -> Result<Option<MicaDoc>, StoreError> {
     let row: Option<(Vec<u8>, Option<i64>)> = self
       .conn
       .query_row(
-        "SELECT state, state_crc FROM doc_snapshot_backup WHERE doc_id=?1",
-        params![doc_id],
+        "SELECT state, state_crc FROM doc_snapshot_backup WHERE origin=?1 AND doc_id=?2",
+        params![origin, doc_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
       )
       .optional()?;
@@ -1581,8 +2027,21 @@ impl LocalStore {
       )?)
     })?;
     let tx = self.conn.unchecked_transaction()?;
-    self.upsert_snapshot(doc_id, bytes.as_ref(), crc)?;
-    tx.execute("DELETE FROM doc_update WHERE doc_id=?1", params![doc_id])?;
+    self.upsert_snapshot(origin, doc_id, bytes.as_ref(), crc)?;
+    tx.execute(
+      "DELETE FROM doc_update WHERE origin=?1 AND doc_id=?2",
+      params![origin, doc_id],
+    )?;
+    // Same divergence as `restore_local_version`: the checkpoint drops the
+    // local log, the remote log stays, and the projections came from the
+    // checkpoint blob alone. Flag only when remote rows actually remain.
+    tx.execute(
+      "UPDATE doc_snapshot SET projection_stale=1
+             WHERE origin=?1 AND doc_id=?2
+               AND EXISTS (SELECT 1 FROM doc_remote_update
+                            WHERE origin=?1 AND doc_id=?2)",
+      params![origin, doc_id],
+    )?;
     tx.commit()?;
     Ok(Some(doc))
   }
@@ -1774,7 +2233,7 @@ mod tests {
       conn
         .execute_batch(
           "CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                 INSERT INTO local_meta VALUES('schema_version','7');
+                INSERT INTO local_meta VALUES('schema_version','8');
                  CREATE TABLE local_view(
                      origin TEXT NOT NULL, device TEXT NOT NULL, id TEXT NOT NULL,
                      workspace_id TEXT NOT NULL DEFAULT 'local', parent_id TEXT,
@@ -1795,7 +2254,7 @@ mod tests {
     }
     assert!(matches!(
       LocalStore::open(p),
-      Err(StoreError::SchemaTooNew { found: 7, .. })
+      Err(StoreError::SchemaTooNew { found: 8, .. })
     ));
     // Structure untouched: the v6-only column and 3-column PK are intact, and
     // no rebuild artifacts (backup / _v4 temp tables) were created.
@@ -1881,24 +2340,32 @@ mod tests {
     let (root, blocks) = sample();
     store
       .save_doc(
+        "local",
         "d",
         &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)),
       )
       .unwrap();
-    store.checkpoint_doc("d").unwrap();
+    store.checkpoint_doc("local", "d").unwrap();
 
     // Overwrite the live base with an edit.
-    let mut working = store.load_doc("d", cid).unwrap().unwrap();
+    let mut working = store.load_doc("local", "d", cid).unwrap().unwrap();
     working.text_insert("a", 5, " EDIT");
-    store.save_doc("d", &working).unwrap();
+    store.save_doc("local", "d", &working).unwrap();
     let has_edit = |d: &MicaDoc| d.to_blocks().iter().any(|b| b.text.contains("EDIT"));
-    assert!(has_edit(&store.load_doc("d", cid).unwrap().unwrap()));
+    assert!(has_edit(
+      &store.load_doc("local", "d", cid).unwrap().unwrap()
+    ));
 
     // Rollback restores the checkpoint (edit gone) and clears the update log.
-    let restored = store.rollback_doc("d", cid).unwrap().unwrap();
+    let restored = store.rollback_doc("local", "d", cid).unwrap().unwrap();
     assert!(!has_edit(&restored));
-    assert!(!has_edit(&store.load_doc("d", cid).unwrap().unwrap()));
-    assert!(store.rollback_doc("missing", cid).unwrap().is_none());
+    assert!(!has_edit(
+      &store.load_doc("local", "d", cid).unwrap().unwrap()
+    ));
+    assert!(store
+      .rollback_doc("local", "missing", cid)
+      .unwrap()
+      .is_none());
   }
 
   #[test]
@@ -1911,39 +2378,44 @@ mod tests {
     let mut d = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
     for i in 0..4 {
       d.text_insert("a", 5, &format!("{i}"));
-      store.save_doc("d", &d).unwrap();
+      store.save_doc("local", "d", &d).unwrap();
     }
-    let autos = store.list_local_versions("d").unwrap();
+    let autos = store.list_local_versions("local", "d").unwrap();
     assert_eq!(autos.len(), 1, "burst converges to one auto version");
     assert!(autos[0].label.is_none());
 
     // Pin a NAMED checkpoint at the current state.
     let named = store
-      .create_local_version("d", "milestone")
+      .create_local_version("local", "d", "milestone")
       .unwrap()
       .unwrap();
     assert_eq!(named.label.as_deref(), Some("milestone"));
-    assert_eq!(store.list_local_versions("d").unwrap().len(), 2);
+    assert_eq!(store.list_local_versions("local", "d").unwrap().len(), 2);
 
     // Edit past the checkpoint, then restore to it.
-    let mut working = store.load_doc("d", cid).unwrap().unwrap();
+    let mut working = store.load_doc("local", "d", cid).unwrap().unwrap();
     working.text_insert("a", 5, "LATER");
-    store.save_doc("d", &working).unwrap();
+    store.save_doc("local", "d", &working).unwrap();
     let restored = store
-      .restore_local_version("d", &named.id, cid)
+      .restore_local_version("local", "d", &named.id, cid)
       .unwrap()
       .unwrap();
     let has_later = |x: &MicaDoc| x.to_blocks().iter().any(|b| b.text.contains("LATER"));
     assert!(!has_later(&restored), "restore dropped the later edit");
-    assert!(!has_later(&store.load_doc("d", cid).unwrap().unwrap()));
+    assert!(!has_later(
+      &store.load_doc("local", "d", cid).unwrap().unwrap()
+    ));
 
     // A missing version id is a clean None, not an error.
     assert!(store
-      .restore_local_version("d", "nope", cid)
+      .restore_local_version("local", "d", "nope", cid)
       .unwrap()
       .is_none());
     // No snapshot yet → naming returns None rather than an empty version.
-    assert!(store.create_local_version("ghost", "x").unwrap().is_none());
+    assert!(store
+      .create_local_version("local", "ghost", "x")
+      .unwrap()
+      .is_none());
   }
 
   #[test]
@@ -1954,11 +2426,11 @@ mod tests {
     store
       .conn
       .execute(
-        "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES('bad',?1,0)",
+        "INSERT INTO doc_snapshot(origin,doc_id,state,updated_at) VALUES('local','bad',?1,0)",
         params![vec![9u8, 9, 9, 9]],
       )
       .unwrap();
-    assert!(store.load_doc("bad", cid).is_err());
+    assert!(store.load_doc("local", "bad", cid).is_err());
   }
 
   #[test]
@@ -1967,9 +2439,12 @@ mod tests {
     let id = store.identity().unwrap();
     let (root, blocks) = sample();
     let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(id.client_id));
-    store.save_doc("doc1", &doc).unwrap();
+    store.save_doc("local", "doc1", &doc).unwrap();
 
-    let loaded = store.load_doc("doc1", id.client_id).unwrap().unwrap();
+    let loaded = store
+      .load_doc("local", "doc1", id.client_id)
+      .unwrap()
+      .unwrap();
     assert_eq!(loaded.to_blocks(), doc.to_blocks());
     assert_eq!(loaded.client_id(), id.client_id);
   }
@@ -1980,12 +2455,12 @@ mod tests {
     let cid = store.identity().unwrap().client_id;
     let (root, blocks) = sample();
     let mut doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
 
     doc.text_insert("a", 5, " world");
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
 
-    let loaded = store.load_doc("d", cid).unwrap().unwrap();
+    let loaded = store.load_doc("local", "d", cid).unwrap().unwrap();
     let a = loaded
       .to_blocks()
       .into_iter()
@@ -2000,12 +2475,12 @@ mod tests {
     let cid = store.identity().unwrap().client_id;
     let (root, blocks) = sample();
     let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
-    store.save_doc("a", &doc).unwrap();
-    store.save_doc("b", &doc).unwrap();
-    assert_eq!(store.list_docs().unwrap(), vec!["a", "b"]);
-    store.delete_doc("a").unwrap();
-    assert_eq!(store.list_docs().unwrap(), vec!["b"]);
-    assert!(store.load_doc("a", cid).unwrap().is_none());
+    store.save_doc("local", "a", &doc).unwrap();
+    store.save_doc("local", "b", &doc).unwrap();
+    assert_eq!(store.list_docs("local").unwrap(), vec!["a", "b"]);
+    store.delete_doc("local", "a").unwrap();
+    assert_eq!(store.list_docs("local").unwrap(), vec!["b"]);
+    assert!(store.load_doc("local", "a", cid).unwrap().is_none());
   }
 
   fn view(id: &str, parent: Option<&str>, name: &str, pos: &str) -> LocalView {
@@ -2127,22 +2602,22 @@ mod tests {
     let cid = store.identity().unwrap().client_id;
     let (root, blocks) = sample();
     let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
 
     // Make two edits as incremental updates (capture each as a diff).
-    let mut working = store.load_doc("d", cid).unwrap().unwrap();
+    let mut working = store.load_doc("local", "d", cid).unwrap().unwrap();
     let sv0 = working.state_vector();
     working.text_insert("a", 5, " world");
     let u1 = working.encode_diff(&sv0).unwrap();
-    store.append_update("d", &u1).unwrap();
+    store.append_update("local", "d", &u1).unwrap();
     let sv1 = working.state_vector();
     working.insert_block("r", 1, &Block::new("b", "paragraph").with_text("two"));
     let u2 = working.encode_diff(&sv1).unwrap();
-    let clock2 = store.append_update("d", &u2).unwrap();
+    let clock2 = store.append_update("local", "d", &u2).unwrap();
     assert_eq!(clock2, 2);
 
     // Loading replays base + updates.
-    let loaded = store.load_doc("d", cid).unwrap().unwrap();
+    let loaded = store.load_doc("local", "d", cid).unwrap().unwrap();
     let a = loaded
       .to_blocks()
       .into_iter()
@@ -2158,12 +2633,13 @@ mod tests {
         .children,
       vec!["a", "b"]
     );
-    assert_eq!(store.doc_updates("d").unwrap().len(), 2);
+    assert_eq!(store.doc_updates("local", "d").unwrap().len(), 2);
 
     // Squash re-baselines: it folds the log into the base and drops the acked
     // prefix. With both edits acked, it clears the log; state is preserved.
     store
       .set_sync_cursor(
+        "local",
         "d",
         SyncCursor {
           last_synced_rid: 0,
@@ -2171,9 +2647,9 @@ mod tests {
         },
       )
       .unwrap();
-    store.squash("d", cid).unwrap();
-    assert_eq!(store.doc_updates("d").unwrap().len(), 0);
-    let after = store.load_doc("d", cid).unwrap().unwrap();
+    store.squash("local", "d", cid).unwrap();
+    assert_eq!(store.doc_updates("local", "d").unwrap().len(), 0);
+    let after = store.load_doc("local", "d", cid).unwrap().unwrap();
     assert_eq!(after.to_blocks(), loaded.to_blocks());
   }
 
@@ -2188,26 +2664,28 @@ mod tests {
     let (root, blocks) = sample();
     store
       .save_doc(
+        "local",
         "d",
         &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)),
       )
       .unwrap();
 
-    let mut working = store.load_doc("d", cid).unwrap().unwrap();
+    let mut working = store.load_doc("local", "d", cid).unwrap().unwrap();
     let sv0 = working.state_vector();
     working.text_insert("a", 5, " one");
     store
-      .append_update("d", &working.encode_diff(&sv0).unwrap())
+      .append_update("local", "d", &working.encode_diff(&sv0).unwrap())
       .unwrap(); // clock 1
     let sv1 = working.state_vector();
     working.text_insert("a", 9, " two");
     store
-      .append_update("d", &working.encode_diff(&sv1).unwrap())
+      .append_update("local", "d", &working.encode_diff(&sv1).unwrap())
       .unwrap(); // clock 2
 
     // Clock 1 acked; clock 2 still un-pushed (the offline-edit norm).
     store
       .set_sync_cursor(
+        "local",
         "d",
         SyncCursor {
           last_synced_rid: 5,
@@ -2215,12 +2693,12 @@ mod tests {
         },
       )
       .unwrap();
-    store.squash("d", cid).unwrap();
+    store.squash("local", "d", cid).unwrap();
 
     // The un-pushed tail (clock 2) survives so it can still be pushed; the
     // base folds both edits, so content is intact either way.
     let clocks = |s: &LocalStore| {
-      s.doc_updates("d")
+      s.doc_updates("local", "d")
         .unwrap()
         .into_iter()
         .map(|(c, _)| c)
@@ -2233,7 +2711,7 @@ mod tests {
     );
     assert_eq!(
       store
-        .load_doc("d", cid)
+        .load_doc("local", "d", cid)
         .unwrap()
         .unwrap()
         .to_blocks()
@@ -2249,14 +2727,14 @@ mod tests {
     working.text_insert("a", 13, "!");
     assert_eq!(
       store
-        .append_update("d", &working.encode_diff(&sv2).unwrap())
+        .append_update("local", "d", &working.encode_diff(&sv2).unwrap())
         .unwrap(),
       3,
       "no reset after squash",
     );
     assert_eq!(
       store
-        .updates_after("d", 1)
+        .updates_after("local", "d", 1)
         .unwrap()
         .into_iter()
         .map(|(c, _)| c)
@@ -2279,33 +2757,38 @@ mod tests {
     let (root, blocks) = sample();
     store
       .save_doc(
+        "local",
         "d",
         &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)),
       )
       .unwrap();
-    let mut working = store.load_doc("d", cid).unwrap().unwrap();
+    let mut working = store.load_doc("local", "d", cid).unwrap().unwrap();
     for i in 0..3 {
       let sv = working.state_vector();
       working.text_insert("a", 5, &format!(" {i}"));
       store
-        .append_update("d", &working.encode_diff(&sv).unwrap())
+        .append_update("local", "d", &working.encode_diff(&sv).unwrap())
         .unwrap();
     }
-    assert_eq!(store.doc_updates("d").unwrap().len(), 3);
+    assert_eq!(store.doc_updates("local", "d").unwrap().len(), 3);
 
-    store.squash("d", cid).unwrap();
-    store.trim_updates_through("d", 999).unwrap();
+    store.squash("local", "d", cid).unwrap();
+    store.trim_updates_through("local", "d", 999).unwrap();
     assert_eq!(
-      store.doc_updates("d").unwrap().len(),
+      store.doc_updates("local", "d").unwrap().len(),
       3,
       "both cloud-shaped trims are no-ops when pushed_clock is 0",
     );
 
-    assert!(store.compact_local("d", cid).unwrap());
-    assert_eq!(store.doc_updates("d").unwrap().len(), 0, "log cleared");
+    assert!(store.compact_local("local", "d", cid).unwrap());
+    assert_eq!(
+      store.doc_updates("local", "d").unwrap().len(),
+      0,
+      "log cleared"
+    );
     assert_eq!(
       store
-        .load_doc("d", cid)
+        .load_doc("local", "d", cid)
         .unwrap()
         .unwrap()
         .to_blocks()
@@ -2330,18 +2813,20 @@ mod tests {
     // ① a doc with an un-pushed outbox and a live sync cursor
     store
       .save_doc(
+        "local",
         "cloud",
         &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)),
       )
       .unwrap();
-    let mut working = store.load_doc("cloud", cid).unwrap().unwrap();
+    let mut working = store.load_doc("local", "cloud", cid).unwrap().unwrap();
     let sv = working.state_vector();
     working.text_insert("a", 5, " edit");
     store
-      .append_update("cloud", &working.encode_diff(&sv).unwrap())
+      .append_update("local", "cloud", &working.encode_diff(&sv).unwrap())
       .unwrap();
     store
       .set_sync_cursor(
+        "local",
         "cloud",
         SyncCursor {
           last_synced_rid: 7,
@@ -2350,11 +2835,11 @@ mod tests {
       )
       .unwrap();
     assert!(
-      !store.compact_local("cloud", cid).unwrap(),
+      !store.compact_local("local", "cloud", cid).unwrap(),
       "synced cursor → refuse"
     );
     assert_eq!(
-      store.doc_updates("cloud").unwrap().len(),
+      store.doc_updates("local", "cloud").unwrap().len(),
       1,
       "outbox untouched"
     );
@@ -2362,28 +2847,31 @@ mod tests {
     // ② a doc that has received remote updates (cursor still zero)
     store
       .save_doc(
+        "local",
         "remote",
         &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)),
       )
       .unwrap();
-    let mut w2 = store.load_doc("remote", cid).unwrap().unwrap();
+    let mut w2 = store.load_doc("local", "remote", cid).unwrap().unwrap();
     let sv2 = w2.state_vector();
     w2.text_insert("a", 5, " r");
     let diff = w2.encode_diff(&sv2).unwrap();
-    store.append_remote_update("remote", 1, &diff).unwrap();
-    store.append_update("remote", &diff).unwrap();
+    store
+      .append_remote_update("local", "remote", 1, &diff)
+      .unwrap();
+    store.append_update("local", "remote", &diff).unwrap();
     assert!(
-      !store.compact_local("remote", cid).unwrap(),
+      !store.compact_local("local", "remote", cid).unwrap(),
       "remote log → refuse"
     );
     assert_eq!(
-      store.doc_updates("remote").unwrap().len(),
+      store.doc_updates("local", "remote").unwrap().len(),
       1,
       "outbox untouched"
     );
 
     // ③ a doc that does not exist at all
-    assert!(!store.compact_local("nope", cid).unwrap());
+    assert!(!store.compact_local("local", "nope", cid).unwrap());
   }
 
   /// Local version history rode on the debounced full `save_doc`. Once the
@@ -2397,24 +2885,25 @@ mod tests {
     let (root, blocks) = sample();
     store
       .save_doc(
+        "local",
         "d",
         &MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid)),
       )
       .unwrap();
-    let before = store.list_local_versions("d").unwrap().len();
+    let before = store.list_local_versions("local", "d").unwrap().len();
 
-    let mut working = store.load_doc("d", cid).unwrap().unwrap();
+    let mut working = store.load_doc("local", "d", cid).unwrap().unwrap();
     let sv = working.state_vector();
     working.text_insert("a", 5, " more");
     store
-      .append_update("d", &working.encode_diff(&sv).unwrap())
+      .append_update("local", "d", &working.encode_diff(&sv).unwrap())
       .unwrap();
-    assert!(store.compact_local("d", cid).unwrap());
+    assert!(store.compact_local("local", "d", cid).unwrap());
 
     // The cadence is min-interval, so this is "history did not go dead",
     // not "one version per compaction".
     assert!(
-      store.list_local_versions("d").unwrap().len() >= before,
+      store.list_local_versions("local", "d").unwrap().len() >= before,
       "compaction must go through the same version capture save_doc uses",
     );
   }
@@ -2428,7 +2917,7 @@ mod tests {
     let cid = store.identity().unwrap().client_id;
     let (root, blocks) = sample();
     let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
 
     // A "remote" edit: a diff minted by another actor.
     let mut remote = MicaDoc::from_update_with_client_id(&doc.encode_state(), Some(999)).unwrap();
@@ -2436,24 +2925,30 @@ mod tests {
     remote.text_insert("a", 5, " remote");
     let r_diff = remote.encode_diff(&sv).unwrap();
 
-    store.append_remote_update("d", 7, &r_diff).unwrap();
+    store
+      .append_remote_update("local", "d", 7, &r_diff)
+      .unwrap();
     // Idempotent per rid (a re-pull replays the same row).
-    store.append_remote_update("d", 7, &r_diff).unwrap();
-    assert_eq!(store.doc_remote_updates("d").unwrap().len(), 1);
+    store
+      .append_remote_update("local", "d", 7, &r_diff)
+      .unwrap();
+    assert_eq!(store.doc_remote_updates("local", "d").unwrap().len(), 1);
     assert_eq!(
-      store.sync_cursor("d").unwrap().last_synced_rid,
+      store.sync_cursor("local", "d").unwrap().last_synced_rid,
       7,
       "cursor moved with the append",
     );
     // A lower rid never regresses the cursor.
-    store.append_remote_update("d", 3, &r_diff).unwrap();
-    assert_eq!(store.sync_cursor("d").unwrap().last_synced_rid, 7);
+    store
+      .append_remote_update("local", "d", 3, &r_diff)
+      .unwrap();
+    assert_eq!(store.sync_cursor("local", "d").unwrap().last_synced_rid, 7);
 
     // The outbox stays pure-local: remote rows never enter doc_update.
-    assert!(store.doc_updates("d").unwrap().is_empty());
+    assert!(store.doc_updates("local", "d").unwrap().is_empty());
 
     // A local edit alongside; load replays base + remote + local.
-    let mut working = store.load_doc("d", cid).unwrap().unwrap();
+    let mut working = store.load_doc("local", "d", cid).unwrap().unwrap();
     assert!(
       working
         .to_blocks()
@@ -2464,9 +2959,9 @@ mod tests {
     let sv2 = working.state_vector();
     working.text_insert("a", 0, "local ");
     store
-      .append_update("d", &working.encode_diff(&sv2).unwrap())
+      .append_update("local", "d", &working.encode_diff(&sv2).unwrap())
       .unwrap();
-    let loaded = store.load_doc("d", cid).unwrap().unwrap();
+    let loaded = store.load_doc("local", "d", cid).unwrap().unwrap();
     let a = loaded
       .to_blocks()
       .into_iter()
@@ -2476,19 +2971,19 @@ mod tests {
 
     // Squash folds both logs into the base; remote log cleared, un-pushed
     // local tail kept (pushed_clock=0 so nothing trims from the outbox).
-    store.squash("d", cid).unwrap();
+    store.squash("local", "d", cid).unwrap();
     assert!(
-      store.doc_remote_updates("d").unwrap().is_empty(),
+      store.doc_remote_updates("local", "d").unwrap().is_empty(),
       "remote log cleared"
     );
     assert_eq!(
-      store.doc_updates("d").unwrap().len(),
+      store.doc_updates("local", "d").unwrap().len(),
       1,
       "un-pushed outbox kept"
     );
     assert_eq!(
       store
-        .load_doc("d", cid)
+        .load_doc("local", "d", cid)
         .unwrap()
         .unwrap()
         .to_blocks()
@@ -2499,7 +2994,7 @@ mod tests {
       "local Hello remote",
       "content intact after squash",
     );
-    let (local, remote_rows) = store.log_sizes("d").unwrap();
+    let (local, remote_rows) = store.log_sizes("local", "d").unwrap();
     assert_eq!((local, remote_rows), (1, 0));
   }
 
@@ -2509,7 +3004,7 @@ mod tests {
     let cid = store.identity().unwrap().client_id;
     let (root, blocks) = sample();
     let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
     let mut remote = MicaDoc::from_update_with_client_id(&doc.encode_state(), Some(42)).unwrap();
     let mut items = Vec::new();
     for i in 0..5 {
@@ -2518,24 +3013,28 @@ mod tests {
       items.push((10 + i as i64, remote.encode_diff(&sv).unwrap()));
     }
     // One transaction: all rows land, cursor at the max rid.
-    store.append_remote_updates("d", &items).unwrap();
-    assert_eq!(store.doc_remote_updates("d").unwrap().len(), 5);
-    assert_eq!(store.sync_cursor("d").unwrap().last_synced_rid, 14);
+    store.append_remote_updates("local", "d", &items).unwrap();
+    assert_eq!(store.doc_remote_updates("local", "d").unwrap().len(), 5);
+    assert_eq!(store.sync_cursor("local", "d").unwrap().last_synced_rid, 14);
     // Batch is idempotent per rid too.
-    store.append_remote_updates("d", &items).unwrap();
-    assert_eq!(store.doc_remote_updates("d").unwrap().len(), 5);
+    store.append_remote_updates("local", "d", &items).unwrap();
+    assert_eq!(store.doc_remote_updates("local", "d").unwrap().len(), 5);
     // delete_doc removes the remote log with everything else.
-    store.delete_doc("d").unwrap();
-    assert!(store.doc_remote_updates("d").unwrap().is_empty());
-    assert!(store.load_doc("d", cid).unwrap().is_none());
+    store.delete_doc("local", "d").unwrap();
+    assert!(store.doc_remote_updates("local", "d").unwrap().is_empty());
+    assert!(store.load_doc("local", "d", cid).unwrap().is_none());
   }
 
   #[test]
   fn sync_cursor_round_trip() {
     let store = LocalStore::open_in_memory().unwrap();
-    assert_eq!(store.sync_cursor("d").unwrap(), SyncCursor::default());
+    assert_eq!(
+      store.sync_cursor("local", "d").unwrap(),
+      SyncCursor::default()
+    );
     store
       .set_sync_cursor(
+        "local",
         "d",
         SyncCursor {
           last_synced_rid: 42,
@@ -2543,24 +3042,24 @@ mod tests {
         },
       )
       .unwrap();
-    let c = store.sync_cursor("d").unwrap();
+    let c = store.sync_cursor("local", "d").unwrap();
     assert_eq!(c.last_synced_rid, 42);
     assert_eq!(c.pushed_clock, 7);
     // updates_after honours the pushed cursor.
     let cid = store.identity().unwrap().client_id;
     let doc = MicaDoc::from_blocks_with_client_id("r", &[Block::new("r", "page")], Some(cid));
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
     // append_update is monotonic PAST pushed_clock — a fresh clock always
     // lands in the outbox (updates_after(pushed_clock)), never ≤ it.
-    let c1 = store.append_update("d", &[1, 2, 3]).unwrap();
-    let c2 = store.append_update("d", &[4, 5, 6]).unwrap();
+    let c1 = store.append_update("local", "d", &[1, 2, 3]).unwrap();
+    let c2 = store.append_update("local", "d", &[4, 5, 6]).unwrap();
     assert_eq!((c1, c2), (8, 9), "clock resumes past pushed_clock=7");
     assert_eq!(
-      store.updates_after("d", 7).unwrap().len(),
+      store.updates_after("local", "d", 7).unwrap().len(),
       2,
       "both are the outbox"
     );
-    assert_eq!(store.updates_after("d", 8).unwrap().len(), 1);
+    assert_eq!(store.updates_after("local", "d", 8).unwrap().len(), 1);
   }
 
   #[test]
@@ -2571,14 +3070,15 @@ mod tests {
     let store = LocalStore::open_in_memory().unwrap();
     let cid = store.identity().unwrap().client_id;
     let doc = MicaDoc::from_blocks_with_client_id("r", &[Block::new("r", "page")], Some(cid));
-    store.save_doc("d", &doc).unwrap();
-    assert_eq!(store.append_update("d", &[1]).unwrap(), 1);
-    assert_eq!(store.append_update("d", &[2]).unwrap(), 2);
-    assert_eq!(store.append_update("d", &[3]).unwrap(), 3);
+    store.save_doc("local", "d", &doc).unwrap();
+    assert_eq!(store.append_update("local", "d", &[1]).unwrap(), 1);
+    assert_eq!(store.append_update("local", "d", &[2]).unwrap(), 2);
+    assert_eq!(store.append_update("local", "d", &[3]).unwrap(), 3);
 
     // Ack through clock 2, then trim the acked prefix.
     store
       .set_sync_cursor(
+        "local",
         "d",
         SyncCursor {
           last_synced_rid: 5,
@@ -2586,9 +3086,9 @@ mod tests {
         },
       )
       .unwrap();
-    store.trim_updates_through("d", 2).unwrap();
+    store.trim_updates_through("local", "d", 2).unwrap();
     let clocks = |s: &LocalStore| {
-      s.doc_updates("d")
+      s.doc_updates("local", "d")
         .unwrap()
         .into_iter()
         .map(|(c, _)| c)
@@ -2598,13 +3098,13 @@ mod tests {
 
     // A new edit continues past the trimmed range, not back at 1.
     assert_eq!(
-      store.append_update("d", &[4]).unwrap(),
+      store.append_update("local", "d", &[4]).unwrap(),
       4,
       "monotonic past trim"
     );
     assert_eq!(
       store
-        .updates_after("d", 2)
+        .updates_after("local", "d", 2)
         .unwrap()
         .into_iter()
         .map(|(c, _)| c)
@@ -2616,6 +3116,7 @@ mod tests {
     // Full trim (everything acked) then append still doesn't reset to 1.
     store
       .set_sync_cursor(
+        "local",
         "d",
         SyncCursor {
           last_synced_rid: 6,
@@ -2623,10 +3124,10 @@ mod tests {
         },
       )
       .unwrap();
-    store.trim_updates_through("d", 4).unwrap();
+    store.trim_updates_through("local", "d", 4).unwrap();
     assert!(clocks(&store).is_empty(), "empty after full trim");
     assert_eq!(
-      store.append_update("d", &[5]).unwrap(),
+      store.append_update("local", "d", &[5]).unwrap(),
       5,
       "no reset after full trim"
     );
@@ -3037,7 +3538,7 @@ mod tests {
         crate::Block::new("a", "paragraph").with_text("hello world".to_string()),
       ],
     );
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
     let good: Vec<u8> = store
       .conn
       .query_row("SELECT state FROM doc_snapshot WHERE doc_id='d'", [], |r| {
@@ -3068,7 +3569,7 @@ mod tests {
     // decode yrs update". The guard mechanism itself is pinned deterministically
     // by `contain_yrs_panic_converts_a_panic_into_corrupt_doc` below.
     assert!(
-      store.load_doc("d", 1).is_err(),
+      store.load_doc("local", "d", 1).is_err(),
       "a corrupt snapshot must come back as an error, never unwind"
     );
   }
@@ -3102,7 +3603,7 @@ mod tests {
         crate::Block::new("a", "paragraph").with_text("hello world".to_string()),
       ],
     );
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
     let good: Vec<u8> = store
       .conn
       .query_row("SELECT state FROM doc_snapshot WHERE doc_id='d'", [], |r| {
@@ -3125,7 +3626,7 @@ mod tests {
       )
       .unwrap();
     assert!(matches!(
-      store.load_doc("d", 1),
+      store.load_doc("local", "d", 1),
       Err(StoreError::Doc(DocError::Decode(_)))
     ));
   }
@@ -3148,7 +3649,7 @@ mod tests {
     let store = LocalStore::open_in_memory().unwrap();
     let (root, blocks) = sample();
     let doc = MicaDoc::from_blocks(&root, &blocks);
-    store.save_doc("d", &doc).unwrap();
+    store.save_doc("local", "d", &doc).unwrap();
     let state: Vec<u8> = store
       .conn
       .query_row("SELECT state FROM doc_snapshot WHERE doc_id='d'", [], |r| {
@@ -3179,7 +3680,7 @@ mod tests {
     blocks.push(Block::new("b", "paragraph").with_text("more"));
     blocks[0] = Block::new("r", "page").with_children(vec!["a".into(), "b".into()]);
     store
-      .save_doc("d", &MicaDoc::from_blocks(&root, &blocks))
+      .save_doc("local", "d", &MicaDoc::from_blocks(&root, &blocks))
       .unwrap();
     let (state2, crc2): (Vec<u8>, Option<i64>) = store
       .conn
@@ -3195,7 +3696,7 @@ mod tests {
       "second save re-stamps the crc"
     );
     assert!(
-      store.load_doc("d", 1).unwrap().is_some(),
+      store.load_doc("local", "d", 1).unwrap().is_some(),
       "still loads after re-save"
     );
   }
@@ -3216,7 +3717,10 @@ mod tests {
       )
       .unwrap();
     assert!(
-      matches!(store.load_doc("d", 1), Err(StoreError::CorruptDoc { .. })),
+      matches!(
+        store.load_doc("local", "d", 1),
+        Err(StoreError::CorruptDoc { .. })
+      ),
       "a stale checksum over valid bytes must be caught by the crc alone"
     );
   }
@@ -3236,7 +3740,7 @@ mod tests {
       )
       .unwrap();
     assert!(matches!(
-      store.load_doc("d", 1),
+      store.load_doc("local", "d", 1),
       Err(StoreError::CorruptDoc { .. })
     ));
   }
@@ -3246,7 +3750,10 @@ mod tests {
   fn restore_and_rollback_verify_crc() {
     // restore_local_version: corrupt a version's crc → CorruptDoc, no panic.
     let (store, _s) = stored_doc();
-    let v = store.create_local_version("d", "v1").unwrap().unwrap();
+    let v = store
+      .create_local_version("local", "d", "v1")
+      .unwrap()
+      .unwrap();
     store
       .conn
       .execute(
@@ -3255,13 +3762,13 @@ mod tests {
       )
       .unwrap();
     assert!(matches!(
-      store.restore_local_version("d", &v.id, 1),
+      store.restore_local_version("local", "d", &v.id, 1),
       Err(StoreError::CorruptDoc { .. })
     ));
 
     // rollback_doc: checkpoint, corrupt the backup's crc → CorruptDoc.
     let (store2, _s2) = stored_doc();
-    store2.checkpoint_doc("d").unwrap();
+    store2.checkpoint_doc("local", "d").unwrap();
     store2
       .conn
       .execute(
@@ -3270,7 +3777,7 @@ mod tests {
       )
       .unwrap();
     assert!(matches!(
-      store2.rollback_doc("d", 1),
+      store2.rollback_doc("local", "d", 1),
       Err(StoreError::CorruptDoc { .. })
     ));
   }
@@ -3280,7 +3787,7 @@ mod tests {
   #[test]
   fn corrupt_update_log_crc_is_caught() {
     let (store, _s) = stored_doc();
-    store.append_update("d", b"\x00\x01\x02").unwrap();
+    store.append_update("local", "d", b"\x00\x01\x02").unwrap();
     store
       .conn
       .execute(
@@ -3289,7 +3796,7 @@ mod tests {
       )
       .unwrap();
     assert!(matches!(
-      store.load_doc("d", 1),
+      store.load_doc("local", "d", 1),
       Err(StoreError::CorruptDoc { .. })
     ));
   }
@@ -3299,9 +3806,15 @@ mod tests {
   #[test]
   fn local_version_state_verifies_crc() {
     let (store, _s) = stored_doc();
-    let v = store.create_local_version("d", "v1").unwrap().unwrap();
+    let v = store
+      .create_local_version("local", "d", "v1")
+      .unwrap()
+      .unwrap();
     assert!(
-      store.local_version_state("d", &v.id).unwrap().is_some(),
+      store
+        .local_version_state("local", "d", &v.id)
+        .unwrap()
+        .is_some(),
       "healthy preview loads"
     );
     store
@@ -3312,7 +3825,7 @@ mod tests {
       )
       .unwrap();
     assert!(matches!(
-      store.local_version_state("d", &v.id),
+      store.local_version_state("local", "d", &v.id),
       Err(StoreError::CorruptDoc { .. })
     ));
   }
@@ -3332,7 +3845,7 @@ mod tests {
       )
       .unwrap();
     assert!(
-      store.load_doc("d", 1).unwrap().is_some(),
+      store.load_doc("local", "d", 1).unwrap().is_some(),
       "NULL crc = no checksum recorded → must load, not error"
     );
   }
@@ -3392,7 +3905,7 @@ mod tests {
       "legacy row's crc stays NULL (not fabricated)"
     );
     assert!(
-      store.load_doc("d", 1).unwrap().is_some(),
+      store.load_doc("local", "d", 1).unwrap().is_some(),
       "legacy row still loads"
     );
     let v: String = store
@@ -3467,7 +3980,7 @@ mod tests {
         ("v3", "d3", "丙", vec![]),
         ("v4", "d4", "丁", vec![]),
       ] {
-        store.save_doc(d, &linking_doc(&targets)).unwrap();
+        store.save_doc("local", d, &linking_doc(&targets)).unwrap();
         store.save_view(&view(v, d, name)).unwrap();
       }
       store
@@ -3504,7 +4017,7 @@ mod tests {
       let store = seeded();
       assert_eq!(store.backlinks_local("local", "v3").unwrap().len(), 2);
 
-      store.save_doc("d1", &linking_doc(&[])).unwrap();
+      store.save_doc("local", "d1", &linking_doc(&[])).unwrap();
       let names: Vec<String> = store
         .backlinks_local("local", "v3")
         .unwrap()
@@ -3555,7 +4068,9 @@ mod tests {
     #[test]
     fn a_self_link_is_not_a_backlink() {
       let store = LocalStore::open_in_memory().unwrap();
-      store.save_doc("d1", &linking_doc(&["v1"])).unwrap();
+      store
+        .save_doc("local", "d1", &linking_doc(&["v1"]))
+        .unwrap();
       store.save_view(&view("v1", "d1", "自引")).unwrap();
       assert!(store.backlinks_local("local", "v1").unwrap().is_empty());
     }
@@ -3621,7 +4136,7 @@ mod tests {
       ] {
         let mut d = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
         d.text_insert("root", 0, body);
-        store.save_doc(doc, &d).unwrap();
+        store.save_doc("local", doc, &d).unwrap();
         store
           .save_view(&LocalView {
             id: view.into(),
@@ -3694,7 +4209,7 @@ mod tests {
       let store = LocalStore::open_in_memory().unwrap();
       let mut d = MicaDoc::from_blocks("root", &[Block::new("root", "page")]);
       d.text_insert("root", 0, &format!("{}needle here", "ẞ".repeat(50)));
-      store.save_doc("dx", &d).unwrap();
+      store.save_doc("local", "dx", &d).unwrap();
       store
         .save_view(&LocalView {
           id: "vx".into(),
@@ -3817,7 +4332,7 @@ mod tests {
       name: &str,
       doc: &MicaDoc,
     ) {
-      store.save_doc(doc_id, doc).unwrap();
+      store.save_doc(at.0, doc_id, doc).unwrap();
       store
         .save_view(&LocalView {
           id: id.into(),
@@ -3932,15 +4447,20 @@ mod tests {
     fn delete_doc_leaves_nothing_keyed_by_the_doc() {
       let store = LocalStore::open_in_memory().unwrap();
       let doc = page("secret body", &[]);
-      store.save_doc("d", &doc).unwrap(); // also captures an auto version
-      store.create_local_version("d", "named").unwrap().unwrap();
-      store.checkpoint_doc("d").unwrap();
-      store.append_update("d", &doc.encode_state()).unwrap();
+      store.save_doc("local", "d", &doc).unwrap(); // also captures an auto version
       store
-        .append_remote_update("d", 1, &doc.encode_state())
+        .create_local_version("local", "d", "named")
+        .unwrap()
+        .unwrap();
+      store.checkpoint_doc("local", "d").unwrap();
+      store
+        .append_update("local", "d", &doc.encode_state())
+        .unwrap();
+      store
+        .append_remote_update("local", "d", 1, &doc.encode_state())
         .unwrap();
 
-      store.delete_doc("d").unwrap();
+      store.delete_doc("local", "d").unwrap();
 
       let tables: Vec<String> = store
         .conn
@@ -3966,7 +4486,7 @@ mod tests {
           .unwrap();
         assert_eq!(n, 0, "{t} still holds the deleted document");
       }
-      assert!(store.list_local_versions("d").unwrap().is_empty());
+      assert!(store.list_local_versions("local", "d").unwrap().is_empty());
     }
 
     /// P2-11: the outbox reader handed rotted rows to the network unchecked,
@@ -3974,8 +4494,8 @@ mod tests {
     #[test]
     fn updates_after_refuses_a_rotted_row() {
       let store = LocalStore::open_in_memory().unwrap();
-      store.save_doc("d", &page("x", &[])).unwrap();
-      store.append_update("d", b"\x00\x01\x02").unwrap();
+      store.save_doc("local", "d", &page("x", &[])).unwrap();
+      store.append_update("local", "d", b"\x00\x01\x02").unwrap();
       store
         .conn
         .execute(
@@ -3984,7 +4504,7 @@ mod tests {
         )
         .unwrap();
       assert!(matches!(
-        store.updates_after("d", 0),
+        store.updates_after("local", "d", 0),
         Err(StoreError::CorruptDoc { .. })
       ));
     }
@@ -4006,7 +4526,7 @@ mod tests {
       let sv = doc.state_vector();
       doc.text_insert("a", 4, " logged");
       store
-        .append_update("d", &doc.encode_diff(&sv).unwrap())
+        .append_update("local", "d", &doc.encode_diff(&sv).unwrap())
         .unwrap();
     }
 
@@ -4044,20 +4564,22 @@ mod tests {
       let store = LocalStore::open_in_memory().unwrap();
       let cid = store.identity().unwrap().client_id;
       let mut doc = base_doc(cid);
-      store.save_doc("d", &doc).unwrap();
+      store.save_doc("local", "d", &doc).unwrap();
       log_edit(&store, &mut doc);
       store
         .conn
         .execute(
-          "INSERT INTO doc_version(id,doc_id,label,created_at,state,state_crc)
-                     VALUES('bad','d','bad',0,?1,?2)",
+          "INSERT INTO doc_version(origin,id,doc_id,label,created_at,state,state_crc)
+                    VALUES('local','bad','d','bad',0,?1,?2)",
           params![GARBAGE.to_vec(), blob_crc(&GARBAGE)],
         )
         .unwrap();
       let base_before = raw_base(&store);
       let versions_before = count(&store, "SELECT COUNT(*) FROM doc_version");
 
-      assert!(store.restore_local_version("d", "bad", cid).is_err());
+      assert!(store
+        .restore_local_version("local", "d", "bad", cid)
+        .is_err());
 
       assert_eq!(
         raw_base(&store),
@@ -4074,7 +4596,7 @@ mod tests {
         versions_before
       );
       assert_eq!(
-        text_of(&store.load_doc("d", cid).unwrap().unwrap()),
+        text_of(&store.load_doc("local", "d", cid).unwrap().unwrap()),
         "base logged"
       );
     }
@@ -4084,18 +4606,18 @@ mod tests {
       let store = LocalStore::open_in_memory().unwrap();
       let cid = store.identity().unwrap().client_id;
       let mut doc = base_doc(cid);
-      store.save_doc("d", &doc).unwrap();
+      store.save_doc("local", "d", &doc).unwrap();
       log_edit(&store, &mut doc);
       store
         .conn
         .execute(
-          "INSERT INTO doc_snapshot_backup(doc_id,state,updated_at,state_crc) VALUES('d',?1,0,?2)",
+          "INSERT INTO doc_snapshot_backup(origin,doc_id,state,updated_at,state_crc) VALUES('local','d',?1,0,?2)",
           params![GARBAGE.to_vec(), blob_crc(&GARBAGE)],
         )
         .unwrap();
       let base_before = raw_base(&store);
 
-      assert!(store.rollback_doc("d", cid).is_err());
+      assert!(store.rollback_doc("local", "d", cid).is_err());
 
       assert_eq!(
         raw_base(&store),
@@ -4108,7 +4630,7 @@ mod tests {
         "the log was dropped"
       );
       assert_eq!(
-        text_of(&store.load_doc("d", cid).unwrap().unwrap()),
+        text_of(&store.load_doc("local", "d", cid).unwrap().unwrap()),
         "base logged"
       );
     }
@@ -4123,11 +4645,14 @@ mod tests {
       let store = LocalStore::open_in_memory().unwrap();
       let cid = store.identity().unwrap().client_id;
       let mut doc = base_doc(cid);
-      store.save_doc("d", &doc).unwrap();
-      let v = store.create_local_version("d", "v").unwrap().unwrap();
-      store.checkpoint_doc("d").unwrap();
+      store.save_doc("local", "d", &doc).unwrap();
+      let v = store
+        .create_local_version("local", "d", "v")
+        .unwrap()
+        .unwrap();
+      store.checkpoint_doc("local", "d").unwrap();
       log_edit(&store, &mut doc);
-      store.save_doc("d", &doc).unwrap(); // base now differs from v / the checkpoint
+      store.save_doc("local", "d", &doc).unwrap(); // base now differs from v / the checkpoint
       store
         .conn
         .execute_batch(
@@ -4138,7 +4663,9 @@ mod tests {
       let base_before = raw_base(&store);
       let versions_before = count(&store, "SELECT COUNT(*) FROM doc_version");
 
-      assert!(store.restore_local_version("d", &v.id, cid).is_err());
+      assert!(store
+        .restore_local_version("local", "d", &v.id, cid)
+        .is_err());
       assert_eq!(
         raw_base(&store),
         base_before,
@@ -4150,7 +4677,7 @@ mod tests {
         "restore: the archive row outlived the failed restore"
       );
 
-      assert!(store.rollback_doc("d", cid).is_err());
+      assert!(store.rollback_doc("local", "d", cid).is_err());
       assert_eq!(
         raw_base(&store),
         base_before,
@@ -4166,21 +4693,24 @@ mod tests {
       let store = LocalStore::open_in_memory().unwrap();
       let cid = store.identity().unwrap().client_id;
       let mut doc = base_doc(cid);
-      store.save_doc("d", &doc).unwrap();
-      let v = store.create_local_version("d", "v").unwrap().unwrap();
+      store.save_doc("local", "d", &doc).unwrap();
+      let v = store
+        .create_local_version("local", "d", "v")
+        .unwrap()
+        .unwrap();
       log_edit(&store, &mut doc);
 
       let restored = store
-        .restore_local_version("d", &v.id, cid)
+        .restore_local_version("local", "d", &v.id, cid)
         .unwrap()
         .unwrap();
       assert_eq!(text_of(&restored), "base");
 
       let archived: Vec<String> = store
-        .list_local_versions("d")
+        .list_local_versions("local", "d")
         .unwrap()
         .into_iter()
-        .filter_map(|ver| store.local_version_state("d", &ver.id).unwrap())
+        .filter_map(|ver| store.local_version_state("local", "d", &ver.id).unwrap())
         .map(|bytes| text_of(&MicaDoc::from_update(&bytes).unwrap()))
         .collect();
       assert!(
@@ -4190,14 +4720,13 @@ mod tests {
     }
   }
 
-  /// Guards against an accidental SCHEMA_VERSION bump and confirms a fresh
-  /// store carries all five crc columns.
+  /// Pins the on-disk version and confirms a fresh store carries all five crc
+  /// columns. The version is bumped for a LAYOUT change (v7: `origin` in every
+  /// document-level key, issue #102); the crc columns themselves are additive
+  /// and cost no bump — the comment on `SCHEMA_VERSION` is the rule.
   #[test]
-  fn schema_unchanged_and_crc_columns_present() {
-    assert_eq!(
-      SCHEMA_VERSION, 6,
-      "adding crc columns must NOT bump the version"
-    );
+  fn schema_version_pinned_and_crc_columns_present() {
+    assert_eq!(SCHEMA_VERSION, 7, "v7 = origin in every doc-level key");
     let store = LocalStore::open_in_memory().unwrap();
     for (table, col) in [
       ("doc_snapshot", "state_crc"),
@@ -4258,5 +4787,822 @@ mod tests {
     assert_ne!(first.client_id, 0);
 
     let _ = std::fs::remove_file(&p);
+  }
+
+  fn body_doc(cid: u64, text: &str) -> MicaDoc {
+    let (root, _) = sample();
+    let blocks = vec![
+      Block::new("r", "page").with_children(vec!["a".into()]),
+      Block::new("a", "paragraph").with_text(text),
+    ];
+    MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid))
+  }
+
+  fn origin_view(origin: &str, id: &str, doc: &str, name: &str) -> LocalView {
+    LocalView {
+      id: id.into(),
+      workspace_id: "workspace-same".into(),
+      parent_id: None,
+      object_id: doc.into(),
+      name: name.into(),
+      position: "0000000010".into(),
+      trashed: false,
+      origin: origin.into(),
+      object_type: "document".into(),
+    }
+  }
+
+  /// Issue #102: two origins that ended up holding the same document UUID (a
+  /// restored backup, a migrated or cloned server) must not share one
+  /// document. Covered through the public store API on all four paths the
+  /// issue names — read, write, delete, sync cursor — plus the outbox and the
+  /// local version history, which ride the same rows.
+  #[test]
+  fn origins_do_not_share_document_state() {
+    let store = LocalStore::open_in_memory().unwrap();
+    let cid = store.identity().unwrap().client_id;
+    let a = "https://server-a.example.invalid";
+    let b = "https://server-b.example.invalid";
+    let doc_id = "doc-same";
+    store
+      .save_view(&origin_view(a, "v-a", doc_id, "A title"))
+      .unwrap();
+    store
+      .save_view(&origin_view(b, "v-b", doc_id, "B title"))
+      .unwrap();
+
+    // A: body, sync cursor, outbox edit, named version.
+    let mut a_doc = body_doc(cid, "A private body");
+    store.save_doc(a, doc_id, &a_doc).unwrap();
+    store
+      .set_sync_cursor(
+        a,
+        doc_id,
+        SyncCursor {
+          last_synced_rid: 120,
+          pushed_clock: 8,
+        },
+      )
+      .unwrap();
+    let sv = a_doc.state_vector();
+    a_doc.text_insert("a", "A private body".len() as u32, " edit");
+    store
+      .append_update(a, doc_id, &a_doc.encode_diff(&sv).unwrap())
+      .unwrap();
+    store
+      .create_local_version(a, doc_id, "A checkpoint")
+      .unwrap()
+      .unwrap();
+
+    // Nothing of A is visible through B.
+    assert!(
+      store.load_doc(b, doc_id, cid).unwrap().is_none(),
+      "B must not read A's body"
+    );
+    assert_eq!(
+      store.sync_cursor(b, doc_id).unwrap(),
+      SyncCursor::default(),
+      "B must not inherit A's sync cursor"
+    );
+    assert!(
+      store.doc_updates(b, doc_id).unwrap().is_empty(),
+      "B must not inherit A's offline outbox"
+    );
+    assert!(
+      store.list_local_versions(b, doc_id).unwrap().is_empty(),
+      "B must not inherit A's version history"
+    );
+
+    // B saves its own divergent body; A is untouched.
+    store
+      .save_doc(b, doc_id, &body_doc(cid, "B private body"))
+      .unwrap();
+    let paragraph = |origin: &str| {
+      store
+        .load_doc(origin, doc_id, cid)
+        .unwrap()
+        .unwrap()
+        .to_blocks()
+        .into_iter()
+        .find(|x| x.id == "a")
+        .unwrap()
+        .text
+    };
+    assert_eq!(paragraph(a), "A private body edit", "A keeps its own text");
+    assert_eq!(paragraph(b), "B private body", "B keeps its own text");
+    assert_eq!(store.sync_cursor(a, doc_id).unwrap().last_synced_rid, 120);
+    assert_eq!(store.sync_cursor(b, doc_id).unwrap(), SyncCursor::default());
+    assert_eq!(store.doc_updates(a, doc_id).unwrap().len(), 1);
+    assert!(store.doc_updates(b, doc_id).unwrap().is_empty());
+    assert!(
+      store
+        .list_local_versions(a, doc_id)
+        .unwrap()
+        .iter()
+        .any(|v| v.label.as_deref() == Some("A checkpoint")),
+      "A's named version stays in A"
+    );
+    assert!(
+      store
+        .list_local_versions(b, doc_id)
+        .unwrap()
+        .iter()
+        .all(|v| v.label.is_none()),
+      "B has only the auto version its own save captured"
+    );
+    assert_eq!(
+      store.list_docs(a).unwrap(),
+      vec![doc_id.to_string()],
+      "both origins list the id in their own namespace"
+    );
+    assert_eq!(store.list_docs(b).unwrap(), vec![doc_id.to_string()]);
+
+    // Clearing A's mirror (the forgetOrigin path: views then documents) must
+    // leave B whole.
+    store.delete_doc(a, doc_id).unwrap();
+    assert!(store.load_doc(a, doc_id, cid).unwrap().is_none());
+    assert_eq!(store.sync_cursor(a, doc_id).unwrap(), SyncCursor::default());
+    assert_eq!(
+      paragraph(b),
+      "B private body",
+      "purging origin A must not delete B's document"
+    );
+    assert!(
+      !store.list_local_versions(b, doc_id).unwrap().is_empty(),
+      "nor B's history"
+    );
+    assert!(store.list_docs(a).unwrap().is_empty());
+    assert_eq!(store.list_docs(b).unwrap(), vec![doc_id.to_string()]);
+  }
+
+  /// Issue #102, upgrade path: a pre-v7 store (bare-`doc_id` keys) opens with
+  /// every row readable, filed under the origin of the view that referenced
+  /// it — and an orphan document, which no view mentions, stays under
+  /// `'local'`, the only origin such a store could have had.
+  #[test]
+  fn legacy_documents_upgrade_to_their_views_origin() {
+    let path = temp_path();
+    let p = path.to_str().unwrap();
+    let cloud = "https://mica.example";
+    let cid = 7u64;
+    let state = body_doc(cid, "legacy body").encode_state();
+    let update = body_doc(cid, "x").encode_state();
+    {
+      let conn = Connection::open(p).unwrap();
+      conn
+        .execute_batch(
+          "CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         INSERT INTO local_meta VALUES('schema_version','6');
+         CREATE TABLE doc_snapshot(
+             doc_id TEXT PRIMARY KEY, state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE doc_update(
+             doc_id TEXT NOT NULL, clock INTEGER NOT NULL, payload BLOB NOT NULL,
+             PRIMARY KEY(doc_id, clock));
+         CREATE TABLE doc_remote_update(
+             doc_id TEXT NOT NULL, rid INTEGER NOT NULL, payload BLOB NOT NULL,
+             PRIMARY KEY(doc_id, rid));
+         CREATE TABLE doc_snapshot_backup(
+             doc_id TEXT PRIMARY KEY, state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE sync_cursor(
+             doc_id TEXT PRIMARY KEY,
+             last_synced_rid INTEGER NOT NULL DEFAULT 0,
+             pushed_clock INTEGER NOT NULL DEFAULT 0);
+         CREATE TABLE doc_version(
+             id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, label TEXT,
+             created_at INTEGER NOT NULL, state BLOB NOT NULL);
+         CREATE TABLE local_view(
+             origin TEXT NOT NULL DEFAULT 'local', id TEXT NOT NULL,
+             workspace_id TEXT NOT NULL DEFAULT 'local', parent_id TEXT,
+             object_id TEXT NOT NULL, name TEXT NOT NULL, position TEXT NOT NULL,
+             trashed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(origin, id));
+         CREATE TABLE local_workspace(
+             origin TEXT NOT NULL DEFAULT 'local', id TEXT NOT NULL,
+             name TEXT NOT NULL, position TEXT NOT NULL,
+             role TEXT NOT NULL DEFAULT 'viewer', PRIMARY KEY(origin, id));",
+        )
+        .unwrap();
+      for doc_id in ["d-local", "d-cloud", "d-orphan"] {
+        conn
+          .execute(
+            "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,0)",
+            params![doc_id, &state],
+          )
+          .unwrap();
+      }
+      conn
+        .execute(
+          "INSERT INTO local_view(id,object_id,name,position) VALUES('v1','d-local','Local page','0000000010')",
+          [],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO local_view(origin,id,object_id,name,position) VALUES(?1,'v2','d-cloud','Cloud page','0000000010')",
+          params![cloud],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_update(doc_id,clock,payload) VALUES('d-cloud',1,?1)",
+          params![&update],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES('d-cloud',42,1)",
+          [],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_version(id,doc_id,label,created_at,state) VALUES('ver','d-cloud','named',0,?1)",
+          params![&state],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_remote_update(doc_id,rid,payload) VALUES('d-cloud',9,?1)",
+          params![&update],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_snapshot_backup(doc_id,state,updated_at) VALUES('d-cloud',?1,0)",
+          params![&state],
+        )
+        .unwrap();
+    }
+
+    let store = LocalStore::open(p).unwrap();
+    let text = |origin: &str, doc_id: &str| {
+      store
+        .load_doc(origin, doc_id, cid)
+        .unwrap()
+        .expect("the legacy document is still readable")
+        .to_blocks()
+        .into_iter()
+        .find(|b| b.id == "a")
+        .unwrap()
+        .text
+    };
+    assert_eq!(text("local", "d-local"), "legacy body");
+    assert_eq!(
+      text(cloud, "d-cloud"),
+      "legacy body",
+      "filed under the origin of the view that referenced it"
+    );
+    assert_eq!(
+      text("local", "d-orphan"),
+      "legacy body",
+      "an orphan document stays under 'local'"
+    );
+    // Logs, cursor and history moved with their document.
+    assert_eq!(store.doc_updates(cloud, "d-cloud").unwrap().len(), 1);
+    assert_eq!(
+      store.sync_cursor(cloud, "d-cloud").unwrap(),
+      SyncCursor {
+        last_synced_rid: 42,
+        pushed_clock: 1,
+      }
+    );
+    assert_eq!(
+      store
+        .list_local_versions(cloud, "d-cloud")
+        .unwrap()
+        .iter()
+        .map(|v| v.label.clone())
+        .collect::<Vec<_>>(),
+      vec![Some("named".to_string())]
+    );
+    assert!(store.doc_updates("local", "d-cloud").unwrap().is_empty());
+    assert_eq!(
+      store.sync_cursor("local", "d-cloud").unwrap(),
+      SyncCursor::default()
+    );
+    assert!(store
+      .list_local_versions("local", "d-cloud")
+      .unwrap()
+      .is_empty());
+    // The two logs that do not have a reader yet must be carried over with
+    // their payloads intact — a rebuild that loses them would silently break
+    // the next sync (issue #102 review).
+    assert_eq!(store.doc_remote_updates(cloud, "d-cloud").unwrap().len(), 1);
+    assert_eq!(
+      store.doc_remote_updates(cloud, "d-cloud").unwrap()[0].1,
+      update,
+      "remote payload byte-identical after the rebuild"
+    );
+    assert!(store
+      .doc_remote_updates("local", "d-cloud")
+      .unwrap()
+      .is_empty());
+    assert!(
+      store.rollback_doc(cloud, "d-cloud", cid).unwrap().is_some(),
+      "the checkpoint row moved with its document"
+    );
+    assert!(store
+      .rollback_doc("local", "d-cloud", cid)
+      .unwrap()
+      .is_none());
+    // Reopen is a no-op: the composite-key probe skips every rebuild.
+    drop(store);
+    let again = LocalStore::open(p).unwrap();
+    assert_eq!(
+      again.list_docs(cloud).unwrap(),
+      vec!["d-cloud".to_string()],
+      "the migrated row is stable across reopen"
+    );
+    drop(again);
+    std::fs::remove_file(p).ok();
+  }
+
+  /// Issue #102, upgrade path with a document UUID shared by MORE THAN ONE
+  /// origin (a restored backup or a cloned server keeps ids). The pre-v7 store
+  /// has one row per id and cannot say which copy was "the" one, so the
+  /// migration must COPY it — body, backup, outbox, remote log, cursor and
+  /// version history — to EVERY origin whose page tree references it. Losing
+  /// one copy, or assigning the single copy to only one origin, would silently
+  /// drop another account's offline edits.
+  #[test]
+  fn legacy_same_uuid_across_origins_is_copied_to_each() {
+    let path = temp_path();
+    let p = path.to_str().unwrap();
+    let cloud_a = "https://server-a.example";
+    let cloud_b = "https://server-b.example";
+    let shared = "doc-shared-uuid";
+    let cid = 9u64;
+    let state = body_doc(cid, "shared legacy body").encode_state();
+    let update = body_doc(cid, "pending edit").encode_state();
+    {
+      let conn = Connection::open(p).unwrap();
+      conn
+        .execute_batch(
+          "CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         INSERT INTO local_meta VALUES('schema_version','6');
+         CREATE TABLE doc_snapshot(
+             doc_id TEXT PRIMARY KEY, state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE doc_update(
+             doc_id TEXT NOT NULL, clock INTEGER NOT NULL, payload BLOB NOT NULL,
+             PRIMARY KEY(doc_id, clock));
+         CREATE TABLE doc_remote_update(
+             doc_id TEXT NOT NULL, rid INTEGER NOT NULL, payload BLOB NOT NULL,
+             PRIMARY KEY(doc_id, rid));
+         CREATE TABLE doc_snapshot_backup(
+             doc_id TEXT PRIMARY KEY, state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+         CREATE TABLE sync_cursor(
+             doc_id TEXT PRIMARY KEY,
+             last_synced_rid INTEGER NOT NULL DEFAULT 0,
+             pushed_clock INTEGER NOT NULL DEFAULT 0);
+         CREATE TABLE doc_version(
+             id TEXT PRIMARY KEY, doc_id TEXT NOT NULL, label TEXT,
+             created_at INTEGER NOT NULL, state BLOB NOT NULL);
+         CREATE TABLE local_view(
+             origin TEXT NOT NULL DEFAULT 'local', id TEXT NOT NULL,
+             workspace_id TEXT NOT NULL DEFAULT 'local', parent_id TEXT,
+             object_id TEXT NOT NULL, name TEXT NOT NULL, position TEXT NOT NULL,
+             trashed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(origin, id));
+         CREATE TABLE local_workspace(
+             origin TEXT NOT NULL DEFAULT 'local', id TEXT NOT NULL,
+             name TEXT NOT NULL, position TEXT NOT NULL,
+             role TEXT NOT NULL DEFAULT 'viewer', PRIMARY KEY(origin, id));",
+        )
+        .unwrap();
+      // One legacy document row, referenced by a page in EACH origin.
+      conn
+        .execute(
+          "INSERT INTO doc_snapshot(doc_id,state,updated_at) VALUES(?1,?2,0)",
+          params![shared, &state],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_snapshot_backup(doc_id,state,updated_at) VALUES(?1,?2,0)",
+          params![shared, &state],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_update(doc_id,clock,payload) VALUES(?1,1,?2)",
+          params![shared, &update],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_remote_update(doc_id,rid,payload) VALUES(?1,77,?2)",
+          params![shared, &update],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO sync_cursor(doc_id,last_synced_rid,pushed_clock) VALUES(?1,77,1)",
+          params![shared],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_version(id,doc_id,label,created_at,state) VALUES('v-shared',?1,'named',0,?2)",
+          params![shared, &state],
+        )
+        .unwrap();
+      for (origin, id) in [("local", "v-local"), (cloud_a, "v-a"), (cloud_b, "v-b")] {
+        conn
+          .execute(
+            "INSERT INTO local_view(origin,id,object_id,name,position) VALUES(?1,?2,?3,'Shared','0000000010')",
+            params![origin, id, shared],
+          )
+          .unwrap();
+      }
+    }
+
+    let store = LocalStore::open(p).unwrap();
+    let body = |origin: &str| {
+      store
+        .load_doc(origin, shared, cid)
+        .unwrap()
+        .expect("every origin keeps the shared document")
+        .to_blocks()
+        .into_iter()
+        .find(|b| b.id == "a")
+        .unwrap()
+        .text
+    };
+    for origin in ["local", cloud_a, cloud_b] {
+      assert_eq!(
+        body(origin),
+        "shared legacy body",
+        "body copied to {origin}"
+      );
+      assert_eq!(
+        store.doc_updates(origin, shared).unwrap().len(),
+        1,
+        "outbox copied to {origin}"
+      );
+      assert_eq!(
+        store.doc_remote_updates(origin, shared).unwrap().len(),
+        1,
+        "remote log copied to {origin}"
+      );
+      assert_eq!(
+        store.sync_cursor(origin, shared).unwrap(),
+        SyncCursor {
+          last_synced_rid: 77,
+          pushed_clock: 1,
+        },
+        "cursor copied to {origin}"
+      );
+      assert_eq!(
+        store
+          .list_local_versions(origin, shared)
+          .unwrap()
+          .iter()
+          .map(|v| v.label.clone())
+          .collect::<Vec<_>>(),
+        vec![Some("named".to_string())],
+        "version history copied to {origin}"
+      );
+      assert!(
+        store.rollback_doc(origin, shared, cid).unwrap().is_some(),
+        "recovery checkpoint copied to {origin}"
+      );
+    }
+    // Deleting one origin's mirror must leave the other copies untouched.
+    store.delete_doc(cloud_a, shared).unwrap();
+    assert!(store.load_doc(cloud_a, shared, cid).unwrap().is_none());
+    assert_eq!(body("local"), "shared legacy body");
+    assert_eq!(body(cloud_b), "shared legacy body");
+    drop(store);
+    std::fs::remove_file(p).ok();
+  }
+
+  /// Issue #104: an edit that only reached the incremental log changes
+  /// `load_doc` at once, but the search/link projections kept describing the
+  /// pre-edit page — so searching straight after typing found nothing until a
+  /// save or a compaction happened to rewrite them. Both readers must answer
+  /// from the CURRENT document, and compaction must not change the answer.
+  #[test]
+  fn an_appended_edit_is_visible_to_search_and_links_straight_away() {
+    let store = LocalStore::open_in_memory().unwrap();
+    let cid = store.identity().unwrap().client_id;
+    for (doc_id, text) in [("doc-same", "baseline"), ("doc-target", "target page")] {
+      store
+        .save_doc("local", doc_id, &body_doc(cid, text))
+        .unwrap();
+    }
+    for (view_id, doc_id, name) in [
+      ("v1", "doc-same", "Search page"),
+      ("v2", "doc-target", "Target page"),
+    ] {
+      store
+        .save_view(&origin_view("local", view_id, doc_id, name))
+        .unwrap();
+    }
+    let ws = "workspace-same";
+    assert!(store
+      .search_local(ws, "UNIQUE_TOKEN", 10)
+      .unwrap()
+      .is_empty());
+
+    // The edit goes through the LOG only — the shape every local page has
+    // between two compactions. It adds both the token and a link to v2.
+    let mut working = store.load_doc("local", "doc-same", cid).unwrap().unwrap();
+    let sv = working.state_vector();
+    working.set_block_text(
+      "a",
+      "baseline UNIQUE_TOKEN",
+      &[crate::marks::Mark {
+        start: 9,
+        end: 21,
+        ty: "link".to_string(),
+        href: Some("mica://page/v2".to_string()),
+        title: None,
+      }],
+    );
+    store
+      .append_update("local", "doc-same", &working.encode_diff(&sv).unwrap())
+      .unwrap();
+
+    let hits = store.search_local(ws, "UNIQUE_TOKEN", 10).unwrap();
+    assert_eq!(
+      hits.len(),
+      1,
+      "the appended edit must be searchable at once"
+    );
+    assert_eq!(hits[0].view_id, "v1");
+    assert!(
+      store
+        .backlinks_local(ws, "v2")
+        .unwrap()
+        .iter()
+        .any(|b| b.view_id == "v1"),
+      "the link added by the appended edit must reach the backlink index"
+    );
+    assert!(
+      store
+        .graph_local(ws)
+        .unwrap()
+        .edges
+        .iter()
+        .any(|e| e.source == "v1" && e.target == "v2"),
+      "and the graph"
+    );
+
+    // Compaction is not a second source of truth: same answers afterwards.
+    assert!(store.compact_local("local", "doc-same", cid).unwrap());
+    assert_eq!(store.search_local(ws, "UNIQUE_TOKEN", 10).unwrap().len(), 1);
+    assert!(store
+      .backlinks_local(ws, "v2")
+      .unwrap()
+      .iter()
+      .any(|b| b.view_id == "v1"));
+    assert!(store
+      .graph_local(ws)
+      .unwrap()
+      .edges
+      .iter()
+      .any(|e| e.source == "v1" && e.target == "v2"));
+  }
+
+  /// Review finding (#102/#104): the v7 rebuild must DERIVE `projection_stale`
+  /// from the legacy logs, not hard-write 0. A pre-v7 base whose log was never
+  /// folded describes yesterday's text; claiming it is current would leave the
+  /// appended edits invisible forever — exactly the bug #104 fixed.
+  #[test]
+  fn legacy_log_edits_are_searchable_right_after_the_upgrade() {
+    let path = temp_path();
+    let p = path.to_str().unwrap();
+    let cid = 11u64;
+    let base = body_doc(cid, "baseline");
+    let mut edited = MicaDoc::from_update_with_client_id(&base.encode_state(), Some(cid)).unwrap();
+    let sv = base.state_vector();
+    edited.text_insert("a", 8, " UNIQUE_TOKEN");
+    let diff = edited.encode_diff(&sv).unwrap();
+    {
+      let conn = Connection::open(p).unwrap();
+      conn
+        .execute_batch(
+          "CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+           INSERT INTO local_meta VALUES('schema_version','6');
+           CREATE TABLE doc_snapshot(
+               doc_id TEXT PRIMARY KEY, state BLOB NOT NULL,
+               updated_at INTEGER NOT NULL, content_text TEXT);
+           CREATE TABLE doc_update(
+               doc_id TEXT NOT NULL, clock INTEGER NOT NULL, payload BLOB NOT NULL,
+               PRIMARY KEY(doc_id, clock));
+           CREATE TABLE doc_remote_update(
+               doc_id TEXT NOT NULL, rid INTEGER NOT NULL, payload BLOB NOT NULL,
+               PRIMARY KEY(doc_id, rid));
+           CREATE TABLE doc_snapshot_backup(
+               doc_id TEXT PRIMARY KEY, state BLOB NOT NULL, updated_at INTEGER NOT NULL);
+           CREATE TABLE local_view(
+               origin TEXT NOT NULL DEFAULT 'local', id TEXT NOT NULL,
+               workspace_id TEXT NOT NULL DEFAULT 'local', parent_id TEXT,
+               object_id TEXT NOT NULL, name TEXT NOT NULL, position TEXT NOT NULL,
+               trashed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(origin, id));
+           CREATE TABLE local_workspace(
+               origin TEXT NOT NULL DEFAULT 'local', id TEXT NOT NULL,
+               name TEXT NOT NULL, position TEXT NOT NULL,
+               role TEXT NOT NULL DEFAULT 'viewer', PRIMARY KEY(origin, id));",
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_snapshot(doc_id,state,updated_at,content_text)
+           VALUES('doc-log',?1,0,'baseline')",
+          params![base.encode_state()],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO doc_update(doc_id,clock,payload) VALUES('doc-log',1,?1)",
+          params![diff],
+        )
+        .unwrap();
+      conn
+        .execute(
+          "INSERT INTO local_view(id,workspace_id,object_id,name,position)
+           VALUES('v1','workspace-same','doc-log','Log page','0000000010')",
+          [],
+        )
+        .unwrap();
+    }
+    let store = LocalStore::open(p).unwrap();
+    assert_eq!(
+      store
+        .search_local("workspace-same", "UNIQUE_TOKEN", 10)
+        .unwrap()
+        .len(),
+      1,
+      "an un-folded legacy log must be visible after the upgrade, not next save"
+    );
+    std::fs::remove_file(p).ok();
+  }
+
+  /// Review finding (#104): the backlink panel is opened on its own. It must
+  /// refresh stale projections too, not rely on a search having run first.
+  #[test]
+  fn a_logged_link_reaches_the_backlink_panel_without_a_search_first() {
+    let store = LocalStore::open_in_memory().unwrap();
+    let cid = store.identity().unwrap().client_id;
+    for (doc_id, text) in [("doc-same", "baseline"), ("doc-target", "target")] {
+      store
+        .save_doc("local", doc_id, &body_doc(cid, text))
+        .unwrap();
+    }
+    store
+      .save_view(&origin_view("local", "v1", "doc-same", "Source"))
+      .unwrap();
+    store
+      .save_view(&origin_view("local", "v2", "doc-target", "Target"))
+      .unwrap();
+    let mut working = store.load_doc("local", "doc-same", cid).unwrap().unwrap();
+    let sv = working.state_vector();
+    working.set_block_text(
+      "a",
+      "baseline see",
+      &[crate::marks::Mark {
+        start: 9,
+        end: 12,
+        ty: "link".to_string(),
+        href: Some("mica://page/v2".to_string()),
+        title: None,
+      }],
+    );
+    store
+      .append_update("local", "doc-same", &working.encode_diff(&sv).unwrap())
+      .unwrap();
+
+    // Deliberately NO search_local call before this one.
+    assert!(
+      store
+        .backlinks_local("workspace-same", "v2")
+        .unwrap()
+        .iter()
+        .any(|b| b.view_id == "v1"),
+      "the panel must see a link that only exists in the log"
+    );
+  }
+
+  /// Review finding (#104): a REMOTE append changes the document just as much
+  /// as a local one, and its consumer is the local world — it must mark the
+  /// projections stale too.
+  #[test]
+  fn a_remote_append_is_searchable_without_a_fold() {
+    let store = LocalStore::open_in_memory().unwrap();
+    let cid = store.identity().unwrap().client_id;
+    let (root, blocks) = sample();
+    let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
+    store.save_doc("local", "d", &doc).unwrap();
+    store
+      .save_view(&origin_view("local", "v1", "d", "Remote page"))
+      .unwrap();
+    let mut remote = MicaDoc::from_update_with_client_id(&doc.encode_state(), Some(999)).unwrap();
+    let sv = remote.state_vector();
+    remote.text_insert("a", 5, " UNIQUE_TOKEN");
+    store
+      .append_remote_updates("local", "d", &[(1, remote.encode_diff(&sv).unwrap())])
+      .unwrap();
+    assert_eq!(
+      store
+        .search_local("workspace-same", "UNIQUE_TOKEN", 10)
+        .unwrap()
+        .len(),
+      1,
+      "a remote update must be searchable before anything folds it"
+    );
+  }
+
+  /// Review finding (#104): restore/rollback keep the REMOTE log (the server
+  /// owns those updates) but write projections from the restored blob alone.
+  /// `load_doc` replays the remote rows, so the index must not disagree.
+  #[test]
+  fn a_restore_keeps_the_index_in_step_with_the_remaining_remote_log() {
+    let store = LocalStore::open_in_memory().unwrap();
+    let cid = store.identity().unwrap().client_id;
+    let (root, blocks) = sample();
+    let doc = MicaDoc::from_blocks_with_client_id(&root, &blocks, Some(cid));
+    store.save_doc("local", "d", &doc).unwrap();
+    store
+      .save_view(&origin_view("local", "v1", "d", "Restored page"))
+      .unwrap();
+    let v = store
+      .create_local_version("local", "d", "pin")
+      .unwrap()
+      .unwrap();
+    let mut remote = MicaDoc::from_update_with_client_id(&doc.encode_state(), Some(999)).unwrap();
+    let sv = remote.state_vector();
+    remote.text_insert("a", 5, " UNIQUE_TOKEN");
+    store
+      .append_remote_update("local", "d", 1, &remote.encode_diff(&sv).unwrap())
+      .unwrap();
+
+    store
+      .restore_local_version("local", "d", &v.id, cid)
+      .unwrap()
+      .expect("the version exists");
+    // The restore RETURNS the version's own state; `load_doc` is the reader
+    // that replays the remote log which survived it — and the index must agree
+    // with that reader, not with the blob the restore happened to write.
+    let loaded = store.load_doc("local", "d", cid).unwrap().unwrap();
+    assert!(
+      loaded
+        .to_blocks()
+        .iter()
+        .any(|b| b.text.contains("UNIQUE_TOKEN")),
+      "load replays the remote log that survived the restore"
+    );
+    assert_eq!(
+      store
+        .search_local("workspace-same", "UNIQUE_TOKEN", 10)
+        .unwrap()
+        .len(),
+      1,
+      "and the index agrees with what load returns"
+    );
+  }
+
+  /// Review finding (#102): the downgrade gate must run BEFORE any DDL or
+  /// PRAGMA. `PRAGMA journal_mode=WAL` alone rewrites the file, so refusing a
+  /// newer store afterwards still mutated it. Assert the schema AND the journal
+  /// mode are byte-for-byte what the newer app left behind.
+  #[test]
+  fn a_newer_store_is_refused_before_any_ddl_or_journal_change() {
+    let path = temp_path();
+    let p = path.to_str().unwrap();
+    {
+      let conn = Connection::open(p).unwrap();
+      conn
+        .execute_batch(
+          "CREATE TABLE local_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+           INSERT INTO local_meta VALUES('schema_version','8');
+           CREATE TABLE future_only(id TEXT PRIMARY KEY, payload BLOB);",
+        )
+        .unwrap();
+    }
+    let observe = || {
+      let conn = Connection::open(p).unwrap();
+      let journal: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+      let names: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+      (journal, names)
+    };
+    let before = observe();
+    assert!(matches!(
+      LocalStore::open(p),
+      Err(StoreError::SchemaTooNew { found: 8, .. })
+    ));
+    let after = observe();
+    assert_eq!(after.0, before.0, "journal mode must not be switched");
+    assert_eq!(
+      after.1, before.1,
+      "a refused store must gain no tables or indexes"
+    );
+    std::fs::remove_file(p).ok();
   }
 }

@@ -265,9 +265,62 @@ pub async fn login(
   // wrong password would tell a stranger the address is registered. Reaching this
   // line means the caller already knows the credentials.
   email_verify::ensure_verified(user.email_verified_at)?;
-
-  let response = auth_response(&state, user).await?;
+  let mut tx = state.db.begin().await?;
+  // The refresh family is minted under the user-row lock (#123): a password
+  // reset/change that ran while this login was in flight bumped the hash and
+  // revoked every session, so a login that verified an OLD password longer ago
+  // cannot mint a rotatable family the rotation never saw.
+  let locked = lock_user_row(&mut tx, user.id).await?;
+  // Bind the ALREADY-VERIFIED password to the row state under the lock: if the
+  // stored hash changed between the verify above and this lock, a rotation
+  // committed in between and the old password must not mint a refresh family.
+  // No second Argon2 run — we compare the captured hash instead, so a normal
+  // login still hashes exactly once and the row lock is never held across a
+  // slow verify. Returns here drop `tx`, rolling it back.
+  if locked.password_hash != user.password_hash {
+    return Err(ApiError::Unauthorized);
+  }
+  let response = auth_response_locked(&state, &mut tx, locked, Uuid::new_v4()).await?;
+  tx.commit().await?;
   Ok((auth_cookie_headers(&state, &response), Json(response)))
+}
+
+/// Issuance for a fresh sign-in, run inside the caller's user-row-lock
+/// transaction so the refresh INSERT shares the serialization boundary with
+/// rotation (see [login]).
+async fn auth_response_locked(
+  state: &AppState,
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  user: UserRow,
+  family_id: Uuid,
+) -> ApiResult<AuthResponse> {
+  let now = Utc::now();
+  let expires_at = now + Duration::seconds(state.config.access_token_ttl_seconds);
+  let claims = Claims {
+    sub: user.id.to_string(),
+    exp: expires_at.timestamp() as usize,
+    iat: Some(now.timestamp() as usize),
+  };
+  let access_token = encode(
+    &Header::default(),
+    &claims,
+    &EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+  )
+  .map_err(|error| ApiError::Internal(error.to_string()))?;
+  let refresh_token = mint_refresh_token_in_tx(
+    tx,
+    state.config.refresh_token_ttl_seconds,
+    user.id,
+    family_id,
+  )
+  .await?;
+  Ok(AuthResponse {
+    access_token,
+    token_type: "Bearer",
+    expires_at,
+    refresh_token,
+    user: UserResponse::from(user),
+  })
 }
 
 pub async fn me(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<MeResponse>> {
@@ -416,6 +469,22 @@ pub async fn change_password(
   validate_password(&payload.new_password, &[&user.email, &user.display_name])?;
   let password_hash = hash_password(&payload.new_password).await?;
 
+  // The new hash is computed BEFORE the transaction: Argon2 is the slow step
+  // and must not sit under the user-row lock (the gate already accounts for
+  // it). The UPDATE and the session revocation then share ONE transaction on
+  // the same user-row lock the credential issuers take (#123) — a failure to
+  // revoke rolls the new password and epoch back with it, instead of leaving a
+  // committed password change behind a failed revoke.
+  let mut tx = state.db.begin().await?;
+  let locked = lock_user_row(&mut tx, user_id).await?;
+  // Bind the password we already VERIFIED to the row state under the lock: a
+  // concurrent reset/change that committed between that verify and this lock
+  // bumped the hash, and replaying the old `current_password` must not overwrite
+  // the newer credential. Same contract as [login] — compare the captured hash,
+  // never a second Argon2 run under the lock. Returning drops `tx` (rollback).
+  if locked.password_hash != user.password_hash {
+    return Err(ApiError::Unauthorized);
+  }
   sqlx::query(
     r#"
       UPDATE users
@@ -426,15 +495,15 @@ pub async fn change_password(
   )
   .bind(password_hash)
   .bind(user_id)
-  .execute(&state.db)
+  .execute(&mut *tx)
   .await?;
-
   // Changing a password is what people do when they think someone else is in
   // their account, so every other sign-in has to die with it — otherwise the
   // intruder keeps a 30-day refresh token and the password change achieves
   // nothing. The caller's own session dies too and it simply signs in again;
   // that is cheaper than reasoning about which family is "this" device.
-  revoke_user_sessions(&state.db, user_id).await?;
+  revoke_user_sessions_in_tx(&mut tx, user_id).await?;
+  tx.commit().await?;
 
   Ok(StatusCode::NO_CONTENT)
 }
@@ -598,11 +667,6 @@ pub async fn delete_user_and_owned(
   Ok(keys)
 }
 
-/// A fresh sign-in: its own token family.
-async fn auth_response(state: &AppState, user: UserRow) -> ApiResult<AuthResponse> {
-  auth_response_in_family(state, user, Uuid::new_v4()).await
-}
-
 /// [family_id] threads a rotation back to the sign-in it came from, so reuse
 /// detection can burn the whole chain at once.
 async fn auth_response_in_family(
@@ -624,7 +688,13 @@ async fn auth_response_in_family(
   )
   .map_err(|error| ApiError::Internal(error.to_string()))?;
 
-  let refresh_token = issue_refresh_token(state, user.id, family_id).await?;
+  let refresh_token = mint_refresh_token(
+    &state.db,
+    state.config.refresh_token_ttl_seconds,
+    user.id,
+    family_id,
+  )
+  .await?;
 
   Ok(AuthResponse {
     access_token,
@@ -646,20 +716,6 @@ pub(crate) fn mint_secret(prefix: &str) -> String {
 }
 
 pub const REFRESH_PREFIX: &str = "mica_rt_";
-
-async fn issue_refresh_token(
-  state: &AppState,
-  user_id: Uuid,
-  family_id: Uuid,
-) -> ApiResult<String> {
-  mint_refresh_token(
-    &state.db,
-    state.config.refresh_token_ttl_seconds,
-    user_id,
-    family_id,
-  )
-  .await
-}
 
 /// Mint + store one refresh token, returning the plaintext (the only time it
 /// exists outside the client). Takes the pool rather than [AppState] so the
@@ -701,6 +757,39 @@ pub async fn mint_refresh_token(
     return Err(ApiError::Unauthorized);
   }
 
+  Ok(token)
+}
+
+/// [mint_refresh_token], run inside the caller's transaction — the login path
+/// issues through this so the INSERT shares the user-row-lock boundary with
+/// rotation (#123).
+async fn mint_refresh_token_in_tx(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  ttl_seconds: i64,
+  user_id: Uuid,
+  family_id: Uuid,
+) -> ApiResult<String> {
+  let token = mint_secret(REFRESH_PREFIX);
+  let expires_at = Utc::now() + Duration::seconds(ttl_seconds);
+  let inserted = sqlx::query(
+    r#"
+      INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
+      SELECT $1, $2, $3, $4
+      WHERE NOT EXISTS (
+        SELECT 1 FROM refresh_tokens
+        WHERE family_id = $3 AND revoked_at IS NOT NULL
+      )
+    "#,
+  )
+  .bind(user_id)
+  .bind(sha256_hex(&token))
+  .bind(family_id)
+  .bind(expires_at)
+  .execute(&mut **tx)
+  .await?;
+  if inserted.rows_affected() == 0 {
+    return Err(ApiError::Unauthorized);
+  }
   Ok(token)
 }
 
@@ -830,25 +919,6 @@ pub async fn logout(
   }
 
   Ok((cleared_cookie_headers(), StatusCode::NO_CONTENT))
-}
-
-/// Burn every credential a user has, everywhere: refresh tokens AND personal
-/// access tokens. The access tokens already issued are JWTs and cannot be
-/// recalled — they die on their own within `access_token_ttl_seconds` (1h by
-/// default), which is the price of them being stateless. Nothing can mint a
-/// new one after this.
-///
-/// PATs are included because both callers are password changes, made when
-/// someone thinks an intruder is in the account — and minting a PAT
-/// (`POST /auth/tokens`, never expiring by default) is exactly how an intruder
-/// would stay. Revoking only refresh tokens left that door open while the
-/// reset page told the user every device had been signed out. Same choice as
-/// Google's app passwords, which a password change revokes.
-pub async fn revoke_user_sessions(db: &sqlx::PgPool, user_id: Uuid) -> ApiResult<()> {
-  let mut tx = db.begin().await?;
-  revoke_user_sessions_in_tx(&mut tx, user_id).await?;
-  tx.commit().await?;
-  Ok(())
 }
 
 pub(super) async fn revoke_user_sessions_in_tx(
@@ -1092,37 +1162,55 @@ pub(crate) async fn ensure_user_exists(db: &sqlx::PgPool, user_id: Uuid) -> ApiR
     Err(ApiError::Unauthorized)
   }
 }
+/// `SELECT … FOR UPDATE` the caller's live user row, the shared serialization
+/// boundary every credential mutation runs inside (#123). Rotation (password
+/// change/reset) updates this row; the credential issuers (PAT mint, login
+/// refresh insertion) lock it before inserting. So an issuer that commits while
+/// a rotation is pending either finishes first (and the rotation's revoke, which
+/// runs in the same transaction, catches its row) or starts after and re-reads
+/// the new `credential_epoch` / password hash, refusing the stale credential.
+async fn lock_user_row(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  user_id: Uuid,
+) -> ApiResult<UserRow> {
+  sqlx::query_as::<_, UserRow>(
+    r#"
+      SELECT id, email, display_name, password_hash, created_at, avatar_key, email_verified_at
+      FROM users
+      WHERE id = $1 AND deleted_at IS NULL
+      FOR UPDATE
+    "#,
+  )
+  .bind(user_id)
+  .fetch_optional(&mut **tx)
+  .await?
+  .ok_or(ApiError::Unauthorized)
+}
 
-/// May this caller MINT a personal access token? (#29)
-///
-/// Two checks the JWT itself cannot carry:
-///
-/// * the account must be LIVE — a stateless JWT keeps verifying after the
-///   account behind it was deleted, and minting a durable token for a
-///   tombstone resurrects it;
-/// * the JWT must be no older than the account's `credential_epoch` — bumped
-///   by password change and reset, so a token stolen from BEFORE the rotation
-///   can keep reading for its remaining hour but cannot convert itself into a
-///   PAT that outlives the rotation by years.
-///
-/// A missing `iat` (every token minted before #29 shipped) reads as 0: valid
-/// only against an account that has never rotated, same as before this check
-/// existed. 401, not 403 — the answer to "your credential predates this
-/// account" is to sign in again.
-pub(crate) async fn ensure_pat_mint_allowed(
-  db: &sqlx::PgPool,
+/// The epoch rule every PAT-mint check shares: the JWT must be no older than
+/// the account's `credential_epoch` (a missing `iat` reads as 0, exactly as
+/// untrusted as pre-#29 tokens are).
+fn pat_mint_allowed_for_epoch(iat: Option<u64>, epoch: i64) -> bool {
+  iat.unwrap_or(0) as i64 >= epoch
+}
+
+/// The PAT-mint gate, under the user-row lock: lock the row, read the epoch
+/// that cannot now change, and refuse a JWT older than it. Returns the locked
+/// `user_id` so the caller's INSERT binds the SAME locked identity.
+pub(crate) async fn ensure_pat_mint_allowed_in_tx(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
   user_id: Uuid,
   iat: Option<u64>,
-) -> ApiResult<()> {
+) -> ApiResult<Uuid> {
+  let locked = lock_user_row(tx, user_id).await?;
   let epoch = sqlx::query_scalar::<_, i64>(
     "SELECT credential_epoch FROM users WHERE id = $1 AND deleted_at IS NULL",
   )
   .bind(user_id)
-  .fetch_optional(db)
-  .await?
-  .ok_or(ApiError::Unauthorized)?;
-  if iat.unwrap_or(0) as i64 >= epoch {
-    Ok(())
+  .fetch_one(&mut **tx)
+  .await?;
+  if pat_mint_allowed_for_epoch(iat, epoch) {
+    Ok(locked.id)
   } else {
     Err(ApiError::Unauthorized)
   }
@@ -1554,6 +1642,10 @@ impl From<UserRow> for UserResponse {
 mod contract_gold_tests;
 
 #[cfg(test)]
+#[path = "auth_credential_rotation_tests.rs"]
+mod credential_rotation_tests;
+
+#[cfg(test)]
 mod tests {
   use super::*;
 
@@ -1706,6 +1798,26 @@ mod refresh_pg {
       .await
       .unwrap();
     user
+  }
+
+  /// Run [revoke_user_sessions_in_tx] on its own transaction — the tests
+  /// exercise the revoke semantics the change-password/reset routes drive.
+  async fn revoke_now(db: &PgPool, user: Uuid) {
+    let mut tx = db.begin().await.unwrap();
+    revoke_user_sessions_in_tx(&mut tx, user).await.unwrap();
+    tx.commit().await.unwrap();
+  }
+
+  /// Run [ensure_pat_mint_allowed_in_tx] on its own transaction, so the epoch
+  /// rules below keep testing the same check the mint route performs under the
+  /// user-row lock.
+  async fn mint_allowed(db: &PgPool, user: Uuid, iat: Option<u64>) -> ApiResult<Uuid> {
+    let mut tx = db.begin().await.unwrap();
+    let verdict = ensure_pat_mint_allowed_in_tx(&mut tx, user, iat).await;
+    if verdict.is_ok() {
+      tx.commit().await.unwrap();
+    }
+    verdict
   }
 
   /// Settings storage semantics the client sync leans on: an account with no
@@ -2175,7 +2287,7 @@ mod refresh_pg {
       .await
       .unwrap();
 
-    revoke_user_sessions(&db, user).await.unwrap();
+    revoke_now(&db, user).await;
 
     assert!(rotate_refresh_token(&db, &laptop).await.is_err());
     assert!(
@@ -2202,7 +2314,7 @@ mod refresh_pg {
       .unwrap();
     }
 
-    revoke_user_sessions(&db, user).await.unwrap();
+    revoke_now(&db, user).await;
 
     let count = |u: Uuid| {
       let db = db.clone();
@@ -2266,8 +2378,8 @@ mod refresh_pg {
 
     // A fresh account has epoch 0: every JWT passes, including pre-#29 tokens
     // with no `iat` at all — nothing has rotated yet.
-    assert!(ensure_pat_mint_allowed(&db, user, Some(100)).await.is_ok());
-    assert!(ensure_pat_mint_allowed(&db, user, None).await.is_ok());
+    assert!(mint_allowed(&db, user, Some(100)).await.is_ok());
+    assert!(mint_allowed(&db, user, None).await.is_ok());
 
     sqlx::query("UPDATE users SET credential_epoch = 200 WHERE id = $1")
       .bind(user)
@@ -2276,15 +2388,15 @@ mod refresh_pg {
       .unwrap();
 
     assert!(
-      ensure_pat_mint_allowed(&db, user, Some(199)).await.is_err(),
+      mint_allowed(&db, user, Some(199)).await.is_err(),
       "issued before the rotation"
     );
     assert!(
-      ensure_pat_mint_allowed(&db, user, None).await.is_err(),
+      mint_allowed(&db, user, None).await.is_err(),
       "a token without `iat` predates every rotation"
     );
     assert!(
-      ensure_pat_mint_allowed(&db, user, Some(200)).await.is_ok(),
+      mint_allowed(&db, user, Some(200)).await.is_ok(),
       "issued AT the rotation counts as fresh"
     );
 
@@ -2295,7 +2407,7 @@ mod refresh_pg {
       .await
       .unwrap();
     assert!(matches!(
-      ensure_pat_mint_allowed(&db, user, Some(u64::MAX)).await,
+      mint_allowed(&db, user, Some(u64::MAX)).await,
       Err(ApiError::Unauthorized)
     ));
   }
@@ -2309,7 +2421,7 @@ mod refresh_pg {
       .await
       .unwrap();
 
-    revoke_user_sessions(&db, alice).await.unwrap();
+    revoke_now(&db, alice).await;
 
     assert!(
       rotate_refresh_token(&db, &bob_token).await.is_ok(),

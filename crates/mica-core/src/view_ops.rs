@@ -282,7 +282,7 @@ impl LocalStore {
           // Statements on this connection join the open transaction;
           // the commit below folds every document into the same
           // all-or-nothing delete as the view rows.
-          self.delete_doc_rows(&doc_id)?;
+          self.delete_doc_rows(origin, &doc_id)?;
         }
         purge.execute(params![origin, id])?;
       }
@@ -396,9 +396,22 @@ impl LocalStore {
       let new_id = id_map.get(&v.id).unwrap_or(&fallback);
       let is_root = v.id == view_id;
       let new_doc_id = format!("doc_{}", uuid::Uuid::new_v4());
-      match self.load_doc(&v.object_id, client_id) {
-        Ok(Some(doc)) => {
-          self.save_doc(&new_doc_id, &doc)?;
+      match self.load_doc(&v.origin, &v.object_id, client_id) {
+        Ok(Some(mut doc)) => {
+          if is_root {
+            // gh#101: the client shows — and the exporter names the file
+            // after — the copy's ROOT BLOCK title, not just the view name. A
+            // copy that kept the source's title opened (and exported) under
+            // the old name, and the next body write persisted that stale
+            // title. The narrow primitive, not `set_blocks`: rebuilding the
+            // blocks would give every block a new text object and invalidate
+            // every comment anchor on the page.
+            let root_block = doc.root_block_id();
+            if !root_block.is_empty() {
+              doc.set_block_prop(&root_block, "title", &serde_json::json!(new_name));
+            }
+          }
+          self.save_doc(&v.origin, &new_doc_id, &doc)?;
           docs += 1;
         }
         // A view with no document — or one whose snapshot won't decode —
@@ -408,7 +421,7 @@ impl LocalStore {
           let block_root = format!("block_{}", uuid::Uuid::new_v4());
           let payload = mica_markdown::import_markdown("", &block_root);
           let doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
-          self.save_doc(&new_doc_id, &doc)?;
+          self.save_doc(&v.origin, &new_doc_id, &doc)?;
         }
       }
       self.save_view(&LocalView {
@@ -589,13 +602,13 @@ mod tests {
       let root = format!("block_{id}");
       let payload = mica_markdown::import_markdown("x", &root);
       let doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
-      store.save_doc(&format!("doc_{id}"), &doc).unwrap();
+      store.save_doc("local", &format!("doc_{id}"), &doc).unwrap();
     }
 
     let hit = store.purge_view_subtree("local", "f").unwrap();
     assert_eq!(hit, ["f", "c"]);
     assert_eq!(names(&store), ["O"]);
-    assert!(store.list_docs().unwrap() == ["doc_o"]);
+    assert!(store.list_docs("local").unwrap() == ["doc_o"]);
   }
 
   #[test]
@@ -735,7 +748,7 @@ mod tests {
       let root_block = format!("block_{id}");
       let payload = mica_markdown::import_markdown(&format!("# {id}"), &root_block);
       let doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
-      store.save_doc(&format!("doc_{id}"), &doc).unwrap();
+      store.save_doc("local", &format!("doc_{id}"), &doc).unwrap();
     }
 
     let out = store
@@ -756,10 +769,76 @@ mod tests {
       .find(|v| v.parent_id.as_deref() == Some(out.root_view_id.as_str()))
       .unwrap();
     assert_eq!(copied_kid.name, "Child");
-    let copied = store.load_doc(&copied_kid.object_id, 1).unwrap().unwrap();
+    let copied = store
+      .load_doc("local", &copied_kid.object_id, 1)
+      .unwrap()
+      .unwrap();
     assert!(
       copied.to_blocks().iter().any(|b| b.text.contains("kid")),
       "content copied, not just the row",
+    );
+  }
+
+  /// gh#101: a page's visible name lives on its view AND (once renamed) on the
+  /// copy's root block. Cloning must write the NEW name into the copy's root,
+  /// or the copy opens — and exports — under the source's old title, and the
+  /// next body write carries that old title forward.
+  #[test]
+  fn clone_writes_the_new_name_into_the_copy_root_title() {
+    let (store, _dir) = tmp_store();
+    let payload = mica_markdown::import_markdown("original body", "root");
+    let mut doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
+    assert!(
+      doc.set_block_prop("root", "title", &serde_json::json!("Original")),
+      "precondition: the source page carries a root-block title",
+    );
+    store.save_doc("local", "doc_same", &doc).unwrap();
+    store
+      .save_view(&view("same", None, "Original", "0000000010"))
+      .unwrap();
+
+    let out = store
+      .clone_view("local", "same", "Copy", 2)
+      .unwrap()
+      .expect("a live root clones");
+
+    let all = store.list_views("local").unwrap();
+    let copy = all.iter().find(|v| v.id == out.root_view_id).unwrap();
+    assert_eq!(copy.name, "Copy");
+    let copied = store
+      .load_doc("local", &copy.object_id, 3)
+      .unwrap()
+      .unwrap();
+    let title = copied
+      .to_blocks()
+      .into_iter()
+      .find(|b| b.id == copied.root_block_id())
+      .and_then(|b| {
+        b.data
+          .get("title")
+          .and_then(|t| t.as_str())
+          .map(str::to_string)
+      });
+    assert_eq!(
+      title.as_deref(),
+      Some("Copy"),
+      "the copy's root title must be the NEW visible name",
+    );
+    assert!(
+      copied
+        .to_blocks()
+        .iter()
+        .any(|b| b.text.contains("original body")),
+      "the body is copied unchanged",
+    );
+    let source = store.load_doc("local", "doc_same", 4).unwrap().unwrap();
+    assert!(
+      source.to_blocks().iter().any(|b| b
+        .data
+        .get("title")
+        .and_then(|t| t.as_str())
+        .is_some_and(|t| t == "Original")),
+      "the source keeps its own title",
     );
   }
 
@@ -811,7 +890,10 @@ mod tests {
     let all = store.list_views("local").unwrap();
     let copy = all.iter().find(|v| v.id == out.root_view_id).unwrap();
     assert!(
-      store.load_doc(&copy.object_id, 1).unwrap().is_some(),
+      store
+        .load_doc("local", &copy.object_id, 1)
+        .unwrap()
+        .is_some(),
       "the copy opens to an empty document rather than nothing",
     );
   }

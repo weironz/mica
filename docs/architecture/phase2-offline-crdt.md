@@ -83,6 +83,12 @@ file(file_id TEXT PRIMARY KEY, object_key TEXT, name TEXT, mime TEXT, size INTEG
 - 加载:apply base + 按 clock 顺序 apply updates;遇坏 update 截断自愈。
 - 数据目录**按 `user_id` 分目录**:`{appdata}/mica/{user_id}/`(哪怕当前只一个本地用户)。
 
+> **现状注记(2026-10-26,v7,issue #102/#104)**:上表是当时的建议形状;落库后几度演进,当前关键差异:
+> - **文档级表一律 `(origin, doc_id)` 复合键**(`doc_snapshot`、`doc_update`、`doc_remote_update`、`sync_cursor`、`doc_snapshot_backup`、`doc_version`,`SCHEMA_VERSION` 已到 **7**;`origin` = `'local'` 或服务器 URL)。原因:备份恢复/服务器迁移/克隆环境会保留文档 UUID,两个 origin 可能合法持有同一 `doc_id`,裸键会让它们共享正文、游标与 outbox,清一个 origin 的镜像会删掉另一个的正文。所有 doc 级读写接口均为 origin-first(`save_doc(origin, …)` 等)。
+> - **v6→v7 迁移只决定归属**:按 `local_view.object_id` 把行挂到指向它的 view 的 origin;多个 origin 的 view 共指同一 `doc_id` 时**复制一份**至此隔离,并行不悖。迁移只定归属/复制,**不回溯、不修复升级前已互相串扰的内容**(那是既成事实,无法区分)。
+> - **搜索/双链投影读端可见**:`doc_snapshot.content_text`/`link_targets` 只在 save/折叠时重写;`append_update` 只把行标 `projection_stale=1`,`search_local`/`backlinks_local`/`graph_local` 读前重建该工作区的陈旧行(base+日志一次解码,不写热路径;`projection_stale` 与「旧库未索引 NULL」刻意分开,NULL 仍是 backfill 的队列)。
+
+
 ## 5. 同步协议(bigserial 单调流 + SV 兜底)
 
 走 AppFlowy 路线(你已选),**不学 AFFiNE 的纯 SV 协商**(它主动删了 seq):

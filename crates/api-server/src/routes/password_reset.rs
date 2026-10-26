@@ -223,9 +223,42 @@ async fn consume_and_reset(
     ResetError::Internal
   })?;
 
-  // Atomically mark it used only if it is still unused AND unexpired, returning
-  // the user it belongs to. No row back → the link is not spendable.
+  // Resolve the token's owner FIRST and lock that user row before spending the
+  // token. The same row lock is the serialization boundary shared with PAT mint
+  // and login refresh issuance (#123): a rotation committed while an old
+  // password login was blocked on refresh INSERT waits here, then the revoke
+  // below catches what that login inserted, or the login re-reads the bumped
+  // epoch/hash and is refused. No user row back → the link is not spendable.
   let user_id: Option<Uuid> = sqlx::query_scalar(
+    "SELECT user_id FROM password_reset_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()",
+  )
+  .bind(&token_hash)
+  .fetch_optional(&mut *tx)
+  .await
+  .map_err(|error| {
+    tracing::error!(%error, "password reset: token lookup failed");
+    ResetError::Internal
+  })?;
+  let Some(user_id) = user_id else {
+    return Err(ResetError::Invalid);
+  };
+  let live_user: Option<Uuid> =
+    sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
+      .bind(user_id)
+      .fetch_optional(&mut *tx)
+      .await
+      .map_err(|error| {
+        tracing::error!(%error, "password reset: locking the user row failed");
+        ResetError::Internal
+      })?;
+  if live_user.is_none() {
+    return Err(ResetError::Invalid);
+  }
+
+  // Atomically mark it used only if it is still unused AND unexpired — the
+  // decision IS the UPDATE, so a used/expired link cannot slip through a
+  // check-then-act.
+  let spent: Option<Uuid> = sqlx::query_scalar(
     r#"
       UPDATE password_reset_tokens
       SET used_at = now()
@@ -241,9 +274,9 @@ async fn consume_and_reset(
     ResetError::Internal
   })?;
 
-  let Some(user_id) = user_id else {
+  if spent.is_none() {
     return Err(ResetError::Invalid);
-  };
+  }
 
   let updated = sqlx::query(
     "UPDATE users SET password_hash = $1, updated_at = now(), credential_epoch = extract(epoch from now())::bigint WHERE id = $2 AND deleted_at IS NULL",
@@ -278,15 +311,23 @@ async fn consume_and_reset(
 
 /// The two page routes, mounted OUTSIDE `/api` (like the share page) so the auth
 /// scope-guard never sees them — the token in the form is the only credential.
-/// Per-IP throttled on both methods (the POST is a token-guessing surface and
-/// the POST-only hash happens AFTER a valid token spends, so no Argon2 gate);
-/// the GET riding along is harmless — it renders a static page.
+/// The POST is a token-guessing surface AND runs an Argon2 hash before spending
+/// the token, so it carries BOTH the per-IP throttle and the global Argon2
+/// concurrency gate (#124) — the same gate login/register/change-password/delete
+/// use, held across the whole request so a flood cannot pin every core. The GET
+/// riding along is harmless — it renders a static page — so it keeps only the
+/// per-IP throttle.
 pub fn router() -> axum::Router<AppState> {
-  use axum::routing::get;
-  axum::Router::new().route(
-    "/reset-password",
-    crate::rate_limit::ip_throttled(get(reset_page).post(reset_submit)),
-  )
+  use axum::routing::{get, post};
+  axum::Router::new()
+    .route(
+      "/reset-password",
+      crate::rate_limit::ip_throttled(get(reset_page)),
+    )
+    .route(
+      "/reset-password",
+      crate::rate_limit::argon2_throttled(post(reset_submit)),
+    )
 }
 
 // ---- HTML (server-rendered, no JavaScript) -------------------------------

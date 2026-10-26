@@ -386,6 +386,9 @@ pub(super) struct TransferRow {
   object_id: Uuid,
   object_type: String,
   name: String,
+  /// The view's own icon. Its own column, NOT part of the document payload, so
+  /// a copy that only rewrites payloads drops it (gh#156).
+  icon: Option<String>,
   position: String,
 }
 
@@ -401,15 +404,15 @@ pub(super) async fn live_subtree<'e>(
     sqlx::query_as::<_, TransferRow>(
       r#"
         WITH RECURSIVE subtree AS (
-          SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
+          SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, icon, position
           FROM views
           WHERE id = ANY($1) AND workspace_id = $2 AND is_deleted = false
           UNION ALL
-          SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
+          SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.icon, v.position
           FROM views v JOIN subtree s ON v.parent_view_id = s.id
           WHERE v.is_deleted = false
         ) CYCLE id SET is_cycle USING cycle_path
-        SELECT id, parent_view_id, object_id, object_type, name, position
+        SELECT id, parent_view_id, object_id, object_type, name, icon, position
         FROM subtree
         WHERE NOT is_cycle
       "#,
@@ -481,6 +484,59 @@ pub(super) async fn remove_moved_source(
     .bind(&ids)
     .execute(&mut **tx)
     .await?;
+  Ok(())
+}
+
+/// Refuse a move whose documents changed since their payloads were scanned.
+///
+/// The copy was built from payloads read BEFORE the blob copies, which can take
+/// minutes; [remove_moved_source] re-checks the SHAPE of the subtree, which
+/// cannot see a body write — that locks the `documents` row and leaves the tree
+/// alone. Together the two guards cover what a collaborator can do during the
+/// window: add/remove/move a page, and edit one in place.
+///
+/// `documents.current_seq` is the content version every write path advances
+/// (REST, WS and MCP all go through it), so it is the value a move must pin.
+/// `FOR SHARE` makes the read a barrier too: a writer already holding its
+/// `FOR UPDATE` (see `store::lock_document_tx`) is waited for, and the row this
+/// statement returns is the writer's committed version rather than the one it
+/// is replacing. A writer that arrives later waits for this transaction to
+/// commit and then writes into the source row the move has binned.
+async fn ensure_documents_unchanged_tx(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  captured: &std::collections::HashMap<Uuid, i64>,
+) -> ApiResult<()> {
+  if captured.is_empty() {
+    return Ok(());
+  }
+  // ONE lock order for every transfer, so two of them cannot deadlock.
+  let mut ids: Vec<Uuid> = captured.keys().copied().collect();
+  ids.sort_unstable();
+  let now: std::collections::HashMap<Uuid, i64> = sqlx::query_as::<_, (Uuid, i64)>(
+    "SELECT id, current_seq FROM documents WHERE id = ANY($1) ORDER BY id FOR SHARE",
+  )
+  .bind(&ids)
+  .fetch_all(&mut **tx)
+  .await?
+  .into_iter()
+  .collect();
+  for (id, seq) in captured {
+    match now.get(id) {
+      Some(&current) if current == *seq => {}
+      // A document that vanished is a structural change the view guard catches;
+      // treat it as changed here all the same.
+      other => {
+        return Err(ApiError::Conflict(format!(
+          "a page being moved was edited while its images were copied \
+           (seq {} now, {} when copied); nothing was moved — refresh and try again",
+          other
+            .map(i64::to_string)
+            .unwrap_or_else(|| "gone".to_string()),
+          seq
+        )));
+      }
+    }
+  }
   Ok(())
 }
 
@@ -700,6 +756,23 @@ async fn transfer_roots(
     .filter(|r| r.object_type == "document")
     .map(|r| r.object_id)
     .collect();
+  // The content versions these payloads are (at least) at, read FIRST: a write
+  // landing between the two statements leaves the captured seq BEHIND the
+  // payload, which the commit-time guard refuses — a spurious 409 is
+  // recoverable, committing a stale copy over a user's edit is not.
+  //
+  // Only a MOVE needs it: a copy leaves the source live, so its slightly-older
+  // snapshot is the instant the copy was taken, and nothing is lost (gh#154).
+  let captured_versions: std::collections::HashMap<Uuid, i64> = if request.remove_source {
+    sqlx::query_as::<_, (Uuid, i64)>("SELECT id, current_seq FROM documents WHERE id = ANY($1)")
+      .bind(&document_ids)
+      .fetch_all(&state.db)
+      .await?
+      .into_iter()
+      .collect()
+  } else {
+    std::collections::HashMap::new()
+  };
   let mut payloads = store::current_payloads(&state.db, &document_ids).await?;
   let mut referenced_files: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
   let mut dangling_links: Vec<DanglingLink> = Vec::new();
@@ -887,6 +960,12 @@ async fn transfer_roots(
   let ordered = topo_order_subtree(&subtree);
 
   let mut tx = state.db.begin().await?;
+  // Before anything is written: refuse a move whose documents have been edited
+  // since their payloads were scanned. The view-ID guard in
+  // [remove_moved_source] cannot see that — a body write locks the `documents`
+  // row and leaves the tree untouched, so the move used to commit the pre-write
+  // payload and bin the only copy holding the new text (gh#154).
+  ensure_documents_unchanged_tx(&mut tx, &captured_versions).await?;
   for row in &ordered {
     let new_view_id = view_map[&row.id];
     // Every root lands directly under the chosen destination parent; everything
@@ -906,6 +985,8 @@ async fn transfer_roots(
         dest_parent,
         name: &row.name,
         position: &row.position,
+        icon: row.icon.as_deref(),
+        title: None,
       },
       &mut payloads,
       &file_map,
@@ -1024,15 +1105,15 @@ pub async fn clone_view(
   let subtree = sqlx::query_as::<_, TransferRow>(
     r#"
       WITH RECURSIVE subtree AS (
-        SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, position
+        SELECT id, parent_view_id, object_id, object_type::text AS object_type, name, icon, position
         FROM views
         WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
         UNION ALL
-        SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.position
+        SELECT v.id, v.parent_view_id, v.object_id, v.object_type::text, v.name, v.icon, v.position
         FROM views v JOIN subtree s ON v.parent_view_id = s.id
         WHERE v.is_deleted = false
       ) CYCLE id SET is_cycle USING cycle_path
-      SELECT id, parent_view_id, object_id, object_type, name, position
+      SELECT id, parent_view_id, object_id, object_type, name, icon, position
       FROM subtree
       WHERE NOT is_cycle
     "#,
@@ -1134,6 +1215,8 @@ pub async fn clone_view(
         dest_parent,
         name: node_name,
         position: &node_position,
+        icon: row.icon.as_deref(),
+        title: is_root.then_some(new_name.as_str()),
       },
       &mut payloads,
       &empty_files,
@@ -1174,14 +1257,22 @@ use mica_app_core::sync::page_link_targets;
 
 /// What ONE copied node needs that differs per call site: the destination
 /// parent (transfer anchors every root at the request's parent; clone anchors
-/// only its own root) and the name/position (clone renames and repositions
-/// only its root). Everything else about inserting it is one sequence.
+/// only its own root), the name/position/icon (clone renames and repositions
+/// only its root) and, for a clone root, the document title the new name
+/// implies. Everything else about inserting it is one sequence.
 struct SubtreeNode<'a> {
   workspace_id: Uuid,
   user_id: Uuid,
   dest_parent: Option<Uuid>,
   name: &'a str,
   position: &'a str,
+  icon: Option<&'a str>,
+  /// Write this into the copied document's root block `title` (gh#101). Only a
+  /// clone sets it: only a clone gives the copy a name it did not have, and the
+  /// title is what the client shows and the exporter names the file after.
+  /// A transferred page keeps the title its author wrote, even when it differs
+  /// from the view name — the document wins (see `sync::set_document_title`).
+  title: Option<&'a str>,
 }
 
 /// Insert one copied node into the transfer/clone tree, inside the caller's
@@ -1217,6 +1308,12 @@ async fn insert_subtree_tx(
       }
     });
     rewrite_transferred_payload(&mut payload, file_map, view_map);
+    if let Some(title) = node.title {
+      // Payload level, not `set_block_prop`: the document does not exist yet,
+      // so there is no comment anchor to invalidate — the title rides in the
+      // seed and costs no update.
+      mica_markdown::set_document_title(&mut payload, title);
+    }
     let document = sqlx::query_as::<_, DocumentRecord>(
       r#"
         INSERT INTO documents (workspace_id, root_block_id, created_by)
@@ -1232,8 +1329,8 @@ async fn insert_subtree_tx(
     mica_app_core::sync::seed_base_tx(&mut *tx, document.id, payload).await?;
     sqlx::query(
       r#"
-        INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
-        VALUES ($1, $2, $3, $4, 'document', $5, $6, $7)
+        INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, icon, position, created_by)
+        VALUES ($1, $2, $3, $4, 'document', $5, $6, $7, $8)
       "#,
     )
     .bind(new_view_id)
@@ -1241,6 +1338,7 @@ async fn insert_subtree_tx(
     .bind(node.dest_parent)
     .bind(document.id)
     .bind(node.name)
+    .bind(node.icon)
     .bind(node.position)
     .bind(node.user_id)
     .execute(&mut **tx)
@@ -1249,8 +1347,8 @@ async fn insert_subtree_tx(
     // Folder: a view with no document. object_id is a fresh unused uuid.
     sqlx::query(
       r#"
-        INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, position, created_by)
-        VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7)
+        INSERT INTO views (id, workspace_id, parent_view_id, object_id, object_type, name, icon, position, created_by)
+        VALUES ($1, $2, $3, $4, 'folder', $5, $6, $7, $8)
       "#,
     )
     .bind(new_view_id)
@@ -1258,6 +1356,7 @@ async fn insert_subtree_tx(
     .bind(node.dest_parent)
     .bind(Uuid::new_v4())
     .bind(node.name)
+    .bind(node.icon)
     .bind(node.position)
     .bind(node.user_id)
     .execute(&mut **tx)
@@ -1530,6 +1629,7 @@ mod tests {
       object_id: Uuid::new_v4(),
       object_type: "folder".to_string(),
       name: "n".to_string(),
+      icon: None,
       position: "0".to_string(),
     };
     // Deliberately not parent-first, mimicking the CTE's arbitrary order.

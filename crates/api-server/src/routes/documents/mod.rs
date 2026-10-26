@@ -751,6 +751,12 @@ mod pg_tests;
 mod transfer_flow_pg_tests;
 
 #[cfg(test)]
+mod transfer_guard_pg_tests;
+
+#[cfg(test)]
+mod export_snapshot_pg_tests;
+
+#[cfg(test)]
 mod contract_gold_tests;
 
 mod crud;

@@ -74,8 +74,12 @@ Rust backend  (crates/)
   CRDT)
   state — the op-model tables (`document_snapshots` / `document_updates` /
   `document_versions`) were retired in S0–S5 (migration 0016); the split-brain
-  trap that forced this is documented in the S5 notes. Per-workspace update
-  streams live in `workspace_updates` (rid-ordered, folded).
+  streams live in `workspace_updates` (rid-ordered, folded). Stream retention
+  runs on EVERY write path (WebSocket `push_update_checked` and the REST/MCP
+  op write) via one shared helper: it fires per document once that document's
+  stream grows `prune_every` rows past the keep margin, then deletes rows
+  below the last `keep_margin` **global** rids — the window is measured in
+  global rids, not "this document's last N updates".
 - **The page tree is `views`**: folders are the only containers, pages are
   leaves. The invariant is enforced in the API guard
   (`ensure_parent_accepts_children`) AND a DB trigger
@@ -83,9 +87,11 @@ Rust backend  (crates/)
   must be a folder, in the same workspace, and not in the bin when the child
   is live).
 - **History is yrs-native** (see `routes/history.rs`): auto-snapshots captured
-  on a cadence inside `sync::push_update`; endpoints list / preview / pin a
-  named version / restore. Restore is a NEW forward update broadcast as a yrs
-  `sync.update`, never a rewrite of the log.
+  inside every write (`sync::archive_auto_version_tx`), expired auto rows
+  pruned by the same shared retention pass on both the WebSocket and REST/MCP
+  write paths; endpoints list / preview / pin a named version / restore.
+  Restore is a NEW forward update broadcast as a yrs `sync.update`, never a
+  rewrite of the log.
 - **Search** is an in-process, lockable-memory substring index over document
   bodies (`BodyIndex`) — index proposes candidates, SQL disposes (workspace
   scope, deleted, ordering). Why not Postgres text indexes or Tantivy:

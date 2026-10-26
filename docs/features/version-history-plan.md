@@ -14,10 +14,14 @@ What shipped vs. this doc:
   "apply-as-update can't revert a CRDT" is exactly why); `history.rs` repointed
   entirely to yrs (op-model writers no longer called); client dialog shows
   auto+named interleaved.
-- **Local (Phase 4):** `doc_version` table (additive, no SCHEMA_VERSION bump);
-  auto-capture in `save_doc`; FFI `list/create/restore_local_version`; restore =
+- **Local (Phase 4):** `doc_version` table; auto-capture in `save_doc`; FFI
+  `list/create/restore_local_version`; restore =
   hard reset (single-device, the `rollback_doc` shape) with the pre-restore state
   preserved as an auto version. Wired to the same dialog for local pages.
+  (2026-10 note: since v7 this table is keyed `(origin, id)` — a version row
+  belongs to ONE origin's document, so clearing one server's mirror cannot
+  take another origin's history with it. It shipped as an additive change with
+  no version bump; v7 is the bump, and it is for origin scoping.)
 - ~~**Deferred:** rich read-only preview in the editor~~ **Shipped**
   (verified 2026-07-29): `_VersionHistoryDialog` renders a past version in a
   read-only editor (`canEdit:false` — the real renderer, no separate HTML path)
@@ -58,10 +62,10 @@ Mica stores **only the latest state**, and the one history API that exists is
   writes `document_snapshots` and **never touches `document_yrs_base`**, then
   broadcasts an op-model event yrs clients don't apply. Exposed as-is it would
   **blank the page or silently no-op.** The Flutter client calls none of it.
-- **The yrs stream is pruned.** `workspace_updates` keeps only a rolling
-  ~64-update tail (`sync.rs:26-28` `STREAM_KEEP_MARGIN=64` /
-  `STREAM_PRUNE_EVERY=32`; delete at `sync.rs:203-209`) — it's for catch-up,
-  not history.
+- **The yrs stream is pruned.** `workspace_updates` keeps a rolling window for
+  catch-up (global rid span of `keep_margin` after a per-document prune cadence —
+  `SyncTuning`; the shared prune runs on every write path in
+  `sync::prune_stream_and_versions_tx`) — it's for catch-up, not history.
 - **Local docs have no timeline either.** `crates/mica-core/src/store.rs`:
   `doc_snapshot(doc_id PK)` overwritten by `save_doc`; a **single-slot**
   `doc_snapshot_backup` (`store.rs:145`) via `checkpoint_doc`/`rollback_doc`
@@ -108,10 +112,11 @@ CREATE INDEX ON document_yrs_versions (document_id, created_at DESC);
 
 ### Triggers (auto + manual — the chosen strategy)
 
-- **Auto:** in `sync::push_update`, reuse the existing `rid % K` prune hook
-  (`sync.rs:203`) to also snapshot every **K pushes** AND/OR when
-  `now - last_snapshot > T` (e.g. K=50 pushes or T=10 min, whichever first).
-  Cheap: the folded base state is already in hand.
+- **Auto:** every accepted write archives the folded state as an auto snapshot
+  (deduped by the 10-min min-interval window, so a burst converges to one);
+  the shared retention pass (`sync::prune_stream_and_versions_tx`, run on both
+  the WS and REST/MCP write paths on each document's own prune cadence) also
+  drops expired auto rows. Cheap: the folded base state is already in hand.
 - **Manual:** `POST /versions {label}` snapshots the current base immediately
   with the label set.
 
@@ -161,8 +166,9 @@ CREATE INDEX ON document_yrs_versions (document_id, created_at DESC);
 
 - Thin auto snapshots: keep **all for 1h → hourly for 1d → daily for 1w →
   weekly beyond**. **Named versions are never auto-pruned.**
-- Run the thin pass in `push_update` (alongside the existing prune) or a
-  periodic task.
+- Run the thin pass inside the shared retention pass
+  (`sync::prune_stream_and_versions_tx`) that follows every write on either
+  path.
 
 ## 6. Local / offline docs — Phase 2 (deferred per the chosen scope)
 

@@ -261,6 +261,27 @@ pub async fn mark_orphaned(db: &PgPool, thread_ids: &[Uuid]) -> ApiResult<()> {
   Ok(())
 }
 
+/// Re-open threads whose anchored text came back (issue #107). The mirror of
+/// [`mark_orphaned`]: best-effort bookkeeping done while listing, guarded to
+/// `orphaned` only so a concurrent deliberate `resolved` is never overwritten —
+/// the document got its anchor back, not a reason to re-open a finished
+/// discussion.
+pub async fn mark_open(db: &PgPool, thread_ids: &[Uuid]) -> ApiResult<()> {
+  if thread_ids.is_empty() {
+    return Ok(());
+  }
+  sqlx::query(
+    r#"
+      UPDATE comment_threads SET status = 'open'
+      WHERE id = ANY($1) AND status = 'orphaned'
+    "#,
+  )
+  .bind(thread_ids)
+  .execute(db)
+  .await?;
+  Ok(())
+}
+
 /// Try to bring a dead anchor back to life from the thread's saved `quote`.
 ///
 /// Call ONLY when the stored anchor no longer resolves (or resolves empty). The
@@ -306,6 +327,18 @@ pub struct AnchorState {
   pub status: String,
 }
 
+/// A stored `orphaned` is a cache of "its text was gone". Text under the
+/// anchor again (an undo, a paste-back) contradicts that, so the derived status
+/// is `open`. `resolved` is a deliberate act, not a derivation, and stays —
+/// getting an anchor back is never a reason to re-open a finished discussion.
+fn status_under_live_text(stored: &str) -> String {
+  if stored == STATUS_ORPHANED {
+    STATUS_OPEN.to_string()
+  } else {
+    stored.to_string()
+  }
+}
+
 /// Resolve one thread's anchor, re-anchoring from its quote if it died.
 ///
 /// `index` is the listing's lazily-built quote index: pass `&mut None` and it is
@@ -319,7 +352,7 @@ pub fn anchor_state(doc: &MicaDoc, index: &mut Option<QuoteIndex>, row: &ThreadR
     return AnchorState {
       range: Some(range),
       fresh_anchor: None,
-      status: row.status.clone(),
+      status: status_under_live_text(&row.status),
     };
   }
   let idx = index.get_or_insert_with(|| QuoteIndex::from_blocks(&doc.to_blocks()));
@@ -327,13 +360,7 @@ pub fn anchor_state(doc: &MicaDoc, index: &mut Option<QuoteIndex>, row: &ThreadR
     return AnchorState {
       range: Some(range),
       fresh_anchor: Some(anchor),
-      // It has text under it again. A resolved thread stays resolved — getting
-      // its anchor back is not a reason to re-open a finished discussion.
-      status: if row.status == STATUS_ORPHANED {
-        STATUS_OPEN.to_string()
-      } else {
-        row.status.clone()
-      },
+      status: status_under_live_text(&row.status),
     };
   }
   AnchorState {
@@ -585,6 +612,45 @@ mod tests {
     doc.text_delete("a", 6, 5);
     let state = anchor_state(&doc, &mut None, &row(&anchor, "world", STATUS_RESOLVED));
     assert!(state.range.is_none());
+    assert_eq!(state.status, STATUS_RESOLVED);
+  }
+
+  /// Undo of the deletion that orphaned a thread (issue #107). The server had
+  /// already persisted `orphaned` from an earlier listing; when the editor
+  /// undoes the deletion the sticky anchor resolves to a non-empty range again
+  /// (the audit measured `[6,7)` — yrs undo re-inserts the original items, not
+  /// a plain `text_insert`). `anchor_state` cannot run yrs undo, so the
+  /// restored state is pinned by construction: the contract under test is the
+  /// derivation — a live anchor must never be reported as an orphan, because
+  /// the stored status is only a cache of what the document says now.
+  #[test]
+  fn a_live_anchor_over_orphaned_status_reopens_the_thread() {
+    let doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+    let mut index = None;
+    let state = anchor_state(&doc, &mut index, &row(&anchor, "world", STATUS_ORPHANED));
+    assert!(
+      state.range.is_some_and(|r| !r.is_empty()),
+      "the live sticky anchor resolves again, so there is something to highlight"
+    );
+    assert!(
+      state.fresh_anchor.is_none() && index.is_none(),
+      "this is the live-anchor branch, not a quote rescue — otherwise it proves nothing"
+    );
+    assert_eq!(
+      state.status, STATUS_OPEN,
+      "an orphaned thread with live text under it is open, not orphaned"
+    );
+  }
+
+  /// The other half of the same rule: getting its anchor back never re-opens a
+  /// resolved discussion (`mark_orphaned` makes the same promise).
+  #[test]
+  fn a_live_anchor_over_resolved_status_stays_resolved() {
+    let doc = doc_with("hello world");
+    let anchor = doc.sticky_for_range("a", 6, "a", 11).unwrap();
+    let state = anchor_state(&doc, &mut None, &row(&anchor, "world", STATUS_RESOLVED));
+    assert!(state.range.is_some_and(|r| !r.is_empty()));
     assert_eq!(state.status, STATUS_RESOLVED);
   }
 }

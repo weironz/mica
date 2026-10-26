@@ -197,6 +197,9 @@ Markdown 里的 `$…$` 行内公式、`$$…$$` 块级公式、代码块、表�
 `blocks: [{"block_id":"…","type":"paragraph","preview":"…"}]`。预览最多 40 个
 Unicode 字符,表格预览也包含单元格文字。按预览核对目标 ID,无需按全文数块。
 这些 ID 是根节点的直接子块,可以作为 `insert_at` / `delete` 的锚点。
+`seq` 与所返回的块列表来自**同一条查询(同一快照)**:拿到这份 `seq` 后文档若有
+并发提交(包括对锚点块本身的修改),以其为 `expected_seq` 的写入会得到 409,
+需重新读 outline 再决策;anchor 存在本身不构成并发保护。
 
 `mica_apply_edits` 成功或部分失败都返回 `edits` 列表,逐项列出已经生效的编辑
 及其 `block_ids`,同时保留最新 `seq` 和可用的 `last_block_id`。部分失败仍是

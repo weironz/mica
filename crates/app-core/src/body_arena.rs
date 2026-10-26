@@ -131,14 +131,23 @@ impl Arena {
   /// lock comes last — the peak is one corpus, not two.
   pub(crate) fn insert_all(&mut self, rows: Vec<(Uuid, String)>) {
     let incoming: usize = rows.iter().map(|(_, text)| text.len()).sum();
+    // Retire the bodies this batch replaces BEFORE sizing the grow: they are
+    // dead once their copies land, so the reservation must hold the surviving
+    // live bodies plus the incoming batch — not the soon-dead old corpus
+    // (issue #106). `remove` returns None for a repeated id, so a batch that
+    // somehow named one document twice still retires it once.
+    for (id, _) in &rows {
+      if let Some(old) = self.slots.remove(id) {
+        self.live -= old.len;
+      }
+    }
     if self.buffer.text.len() + incoming > self.buffer.text.capacity() {
-      // Live bytes after this batch, at most: replaced bodies only shrink it.
+      // Live bytes after this batch: the replaced bodies already left it, so
+      // the copy below carries the survivors and drops every dead byte on the
+      // way, exactly like the arena doc promises.
       self.regrow(self.live + incoming);
     }
     for (id, text) in rows {
-      if let Some(old) = self.slots.remove(&id) {
-        self.live -= old.len;
-      }
       let start = self.buffer.text.len();
       self.buffer.text.push_str(&text);
       let has_upper = text.bytes().any(|b| b.is_ascii_uppercase());

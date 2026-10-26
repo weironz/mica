@@ -20,7 +20,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::routes::auth::{
-  PAT_PREFIX, SESSION_COOKIE, Scope, bearer_token, cookie_value, ensure_pat_mint_allowed,
+  PAT_PREFIX, SESSION_COOKIE, Scope, bearer_token, cookie_value, ensure_pat_mint_allowed_in_tx,
   mint_secret, sha256_hex, user_and_iat_from_token, user_id_from_headers,
 };
 
@@ -88,8 +88,6 @@ pub async fn create_token(
     return Err(ApiError::Forbidden);
   }
   let (user_id, iat) = user_and_iat_from_token(&state, &token)?;
-  ensure_pat_mint_allowed(&state.db, user_id, iat).await?;
-
   let name = super::names::normalize_name(&req.name, "name")?;
 
   let scopes: Vec<String> = if req.scopes.is_empty() {
@@ -121,6 +119,13 @@ pub async fn create_token(
   let token = mint_secret(PAT_PREFIX);
   let token_hash = sha256_hex(&token);
 
+  // The epoch check and the INSERT happen under ONE user-row lock (#123): a
+  // password change/reset that commits in between cannot leave a durable PAT
+  // that outlived the rotation. If the rotation won the race, the locked row
+  // already carries the new epoch and this stale JWT is refused; if this mint
+  // won, the rotation waits and its revoke catches the row we insert now.
+  let mut tx = state.db.begin().await?;
+  let locked = ensure_pat_mint_allowed_in_tx(&mut tx, user_id, iat).await?;
   let (id, created_at) = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
     r#"
       INSERT INTO api_tokens (user_id, name, token_hash, scopes, expires_at)
@@ -128,13 +133,14 @@ pub async fn create_token(
       RETURNING id, created_at
     "#,
   )
-  .bind(user_id)
+  .bind(locked)
   .bind(&name)
   .bind(&token_hash)
   .bind(&scopes)
   .bind(expires_at)
-  .fetch_one(&state.db)
+  .fetch_one(&mut *tx)
   .await?;
+  tx.commit().await?;
 
   Ok(Json(CreatedToken {
     id,

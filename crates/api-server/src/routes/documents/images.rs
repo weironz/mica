@@ -62,6 +62,7 @@ pub async fn drop_image(
     document_id,
     user_id,
     None,
+    &state.config.sync_tuning,
     |payload| {
       let block = payload
         .blocks
@@ -143,6 +144,7 @@ pub async fn rehost_image(
     document_id,
     user_id,
     None,
+    &state.config.sync_tuning,
     |payload| {
       // Only touch the named block, and only if it is still an image — never
       // clobber a different block that a concurrent edit may have put here.

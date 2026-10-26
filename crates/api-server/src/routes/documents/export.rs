@@ -748,6 +748,11 @@ where
 /// one map), which needs a first pass of its own; it keeps only names, not
 /// payloads, so each page is decoded twice — CPU traded for bounded memory on
 /// an occasional operation.
+///
+/// The two passes are two separate reads of a database that keeps moving, so
+/// the archive rendered by the second one RECONCILES its assets against
+/// [`TreeAssetInventory`] rather than trusting the first pass alone: an image
+/// a page gained in between still ships its bytes (gh#155).
 pub(super) async fn stream_tree(
   state: &AppState,
   sink: &mut ZipSink,
@@ -755,13 +760,103 @@ pub(super) async fn stream_tree(
   root: Option<Uuid>,
   prefix: &str,
 ) -> ApiResult<()> {
-  use mica_interchange::{ImageAsset, TreeExport};
+  use mica_interchange::TreeExport;
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
   let nodes = export_tree_nodes(&views);
   let root_str = root.map(|r| r.to_string());
   let mut export = TreeExport::new(&nodes, root_str.as_deref());
+  let mut inventory = tree_asset_inventory(state, workspace_id, &views).await?;
+  stream_tree_pages(
+    state,
+    sink,
+    workspace_id,
+    &mut export,
+    &mut inventory,
+    prefix,
+  )
+  .await
+}
 
-  // Pass 1: which documents have a body, and each file's first-seen name.
+/// What pass 1 of [`stream_tree`] collects: which documents have a body, and
+/// the asset inventory both passes work from.
+///
+/// A value rather than locals because pass 2 READS it and may extend it — see
+/// [`Self::reconcile`]. The archive's asset names are global (the first block
+/// naming a file, over every page in document-id order), so pass 2 cannot
+/// derive a name on its own without breaking that order.
+struct TreeAssetInventory {
+  /// `object_id` of every document that had a body when the pass ran.
+  has_payload: std::collections::HashSet<String>,
+  /// `file_id` → the name its first-referencing block gave it.
+  file_name: BTreeMap<String, String>,
+  /// The `files` rows behind those ids.
+  by_id: std::collections::HashMap<String, store::FileRecord>,
+}
+
+impl TreeAssetInventory {
+  /// Adopt every asset [payload] references that pass 1 did not see.
+  ///
+  /// Pass 1 runs before any page is rendered. A page edited in between can
+  /// reference a file no pass-1 payload mentioned (uploaded, then inserted
+  /// into that page), and pass 2 used to `continue` past it: the Markdown kept
+  /// the image link while the archive shipped no bytes for it — a ZIP that
+  /// silently omitted an asset its own pages reference (gh#155). The payload
+  /// being rendered is the authority on what the archive must contain, so its
+  /// missing references are resolved here, name and row alike. A reference
+  /// with no `files` row still stays a link: there are no bytes to ship, which
+  /// is the same thing a row-less reference meant before.
+  async fn reconcile(
+    &mut self,
+    db: &sqlx::PgPool,
+    workspace_id: Uuid,
+    payload: &mica_app_core::documents::DocumentSnapshotPayload,
+  ) -> ApiResult<()> {
+    let mut needed: Vec<String> = Vec::new();
+    for block in &payload.blocks {
+      if block.kind != "image" {
+        continue;
+      }
+      let Some(file_id) = block.data.get("file_id").and_then(|v| v.as_str()) else {
+        continue;
+      };
+      self
+        .file_name
+        .entry(file_id.to_string())
+        .or_insert_with(|| {
+          block
+            .data
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("image")
+            .to_string()
+        });
+      // The name and the row can go missing independently (a file registered
+      // after pass 1 already has a name; a row-less reference never will).
+      if !self.by_id.contains_key(file_id) && !needed.iter().any(|seen| seen == file_id) {
+        needed.push(file_id.to_string());
+      }
+    }
+    let ids: Vec<Uuid> = needed
+      .iter()
+      .filter_map(|id| Uuid::parse_str(id).ok())
+      .collect();
+    if ids.is_empty() {
+      return Ok(());
+    }
+    for record in store::fetch_files(db, workspace_id, &ids).await? {
+      self.by_id.insert(record.id.to_string(), record);
+    }
+    Ok(())
+  }
+}
+
+/// Pass 1 of [`stream_tree`]: which documents have a body, and each file's
+/// first-seen name plus its `files` row.
+async fn tree_asset_inventory(
+  state: &AppState,
+  workspace_id: Uuid,
+  views: &[View],
+) -> ApiResult<TreeAssetInventory> {
   let mut document_ids: Vec<String> = views
     .iter()
     .filter(|v| v.object_type == "document")
@@ -803,17 +898,31 @@ pub(super) async fn stream_tree(
   } else {
     store::fetch_files(&state.db, workspace_id, &ids).await?
   };
-  let by_id: std::collections::HashMap<String, store::FileRecord> =
-    records.into_iter().map(|r| (r.id.to_string(), r)).collect();
+  Ok(TreeAssetInventory {
+    has_payload,
+    file_name,
+    by_id: records.into_iter().map(|r| (r.id.to_string(), r)).collect(),
+  })
+}
+
+/// Pass 2 of [`stream_tree`]: the archive, in order.
+async fn stream_tree_pages(
+  state: &AppState,
+  sink: &mut ZipSink,
+  workspace_id: Uuid,
+  export: &mut mica_interchange::TreeExport<'_>,
+  inventory: &mut TreeAssetInventory,
+  prefix: &str,
+) -> ApiResult<()> {
+  use mica_interchange::{ImageAsset, TreeExport};
   let client = reqwest::Client::builder()
     .connect_timeout(std::time::Duration::from_secs(10))
     .timeout(std::time::Duration::from_secs(120))
     .build()
     .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-  // Pass 2: the archive, in order.
   let mut wrote_any = false;
-  if let Some(manifest) = export.manifest(|object_id| has_payload.contains(object_id)) {
+  if let Some(manifest) = export.manifest(|object_id| inventory.has_payload.contains(object_id)) {
     sink
       .add(&format!("{prefix}{}", manifest.name), manifest.data)
       .await?;
@@ -823,7 +932,7 @@ pub(super) async fn stream_tree(
   // it was simply missing from the gathered map.
   let mut unavailable: std::collections::HashSet<String> = std::collections::HashSet::new();
   for (view_id, object_id) in export.documents() {
-    if !has_payload.contains(object_id) {
+    if !inventory.has_payload.contains(object_id) {
       continue;
     }
     let Ok(uuid) = Uuid::parse_str(object_id) else {
@@ -832,10 +941,18 @@ pub(super) async fn stream_tree(
     let Some(payload) = store::current_payload(&state.db, uuid).await? else {
       continue;
     };
+    // The payload about to be rendered is the authority on its assets; pass 1
+    // only knew what the database said before that.
+    inventory
+      .reconcile(&state.db, workspace_id, &payload)
+      .await?;
     let mut page_images: std::collections::HashMap<String, ImageAsset> =
       std::collections::HashMap::new();
     for file_id in TreeExport::image_file_ids(&payload) {
-      let (Some(record), Some(name)) = (by_id.get(&file_id), file_name.get(&file_id)) else {
+      let (Some(record), Some(name)) = (
+        inventory.by_id.get(&file_id),
+        inventory.file_name.get(&file_id),
+      ) else {
         continue;
       };
       if unavailable.contains(&file_id) {
@@ -889,23 +1006,62 @@ pub(super) async fn stream_tree_bytes(
   workspace_id: Uuid,
   root: Option<Uuid>,
 ) -> Vec<u8> {
+  stream_tree_bytes_between_passes(state, workspace_id, root, || async {}).await
+}
+
+/// Test seam: [stream_tree] cut between its two passes, so a test can move the
+/// database while an export is exactly where gh#155 says the drift happens —
+/// inventory taken, no page rendered yet.
+#[cfg(test)]
+pub(super) async fn stream_tree_bytes_between_passes<F, Fut>(
+  state: &AppState,
+  workspace_id: Uuid,
+  root: Option<Uuid>,
+  between: F,
+) -> Vec<u8>
+where
+  F: FnOnce() -> Fut,
+  Fut: Future<Output = ()>,
+{
+  use mica_interchange::TreeExport;
+  let views = fetch_workspace_views(&state.db, workspace_id)
+    .await
+    .unwrap();
+  let nodes = export_tree_nodes(&views);
+  let root_str = root.map(|r| r.to_string());
+  let mut export = TreeExport::new(&nodes, root_str.as_deref());
+  let mut inventory = tree_asset_inventory(state, workspace_id, &views)
+    .await
+    .unwrap();
+  between().await;
+
   let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(4);
-  let collector = tokio::spawn(async move {
+  let mut sink = ZipSink {
+    writer: ZipStreamWriter::default(),
+    tx,
+  };
+  let build = async {
+    stream_tree_pages(
+      state,
+      &mut sink,
+      workspace_id,
+      &mut export,
+      &mut inventory,
+      "",
+    )
+    .await
+    .unwrap();
+    sink.finish().await.unwrap();
+  };
+  let collect = async {
     let mut out = Vec::new();
     while let Some(chunk) = rx.recv().await {
       out.extend_from_slice(&chunk.unwrap());
     }
     out
-  });
-  let mut sink = ZipSink {
-    writer: ZipStreamWriter::default(),
-    tx,
   };
-  stream_tree(state, &mut sink, workspace_id, root, "")
-    .await
-    .unwrap();
-  sink.finish().await.unwrap();
-  collector.await.unwrap()
+  let ((), bytes) = tokio::join!(build, collect);
+  bytes
 }
 
 /// Test oracle: the archive as it was built before streaming — every payload

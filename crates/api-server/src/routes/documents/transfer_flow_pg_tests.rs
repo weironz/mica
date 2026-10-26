@@ -628,6 +628,256 @@ async fn clone_view_duplicates_a_subtree_in_the_same_workspace() {
   assert_eq!(current_blocks_json(&db, doc).await, before);
 }
 
+// ── clone root title (#101) ──────────────────────────────────────────────────
+
+/// The page title a client shows (and the exporter names its file after) is the
+/// ROOT BLOCK's `title`, which the view's name does not touch. A clone that
+/// renames only the view therefore opens under the source's old title — and
+/// because the copy's payload still says "Original", the next body write
+/// persists that stale title right back.
+#[tokio::test]
+async fn clone_writes_the_new_name_into_the_copy_root_title() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let ws = seed_workspace(&db, user).await;
+
+  let (page, doc) = seed_document(
+    &db,
+    ws,
+    user,
+    None,
+    "Original",
+    json!([
+      {"id": "root", "type": "page", "text": "", "children": ["b1"],
+       "data": {"title": "Original"}},
+      {"id": "b1", "type": "paragraph", "text": "original body", "data": {}},
+    ]),
+  )
+  .await;
+
+  let request: CloneRequest = serde_json::from_value(json!({ "name": "Copy" })).unwrap();
+  let Json(response) = clone_view(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path((ws, page)),
+    Json(request),
+  )
+  .await
+  .expect("clone should succeed");
+  let response = serde_json::to_value(&response).unwrap();
+  let new_root: Uuid = response["new_root_view_id"]
+    .as_str()
+    .unwrap()
+    .parse()
+    .unwrap();
+  let copied_doc: Uuid = sqlx::query_scalar("SELECT object_id FROM views WHERE id = $1")
+    .bind(new_root)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+  let payload = store::current_payload(&db, copied_doc)
+    .await
+    .unwrap()
+    .expect("the copy has a body");
+  assert_eq!(
+    mica_markdown::document_title(&payload),
+    Some("Copy"),
+    "the copy's root title must be the name the user sees on the sidebar"
+  );
+  assert!(
+    payload.blocks.iter().any(|b| b.text == "original body"),
+    "the body is copied unchanged"
+  );
+
+  // A later body write must not resurrect the old title.
+  let _ = super::update_document_markdown(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path((ws, copied_doc)),
+    Json(
+      serde_json::from_value(json!({
+        "mode": "append",
+        "markdown": "written after the clone",
+      }))
+      .unwrap(),
+    ),
+  )
+  .await
+  .expect("a body write on the copy should succeed");
+  let payload = store::current_payload(&db, copied_doc)
+    .await
+    .unwrap()
+    .expect("the copy still has a body");
+  assert_eq!(
+    mica_markdown::document_title(&payload),
+    Some("Copy"),
+    "a body write must not bring the source's title back"
+  );
+
+  let source = store::current_payload(&db, doc).await.unwrap().unwrap();
+  assert_eq!(
+    mica_markdown::document_title(&source),
+    Some("Original"),
+    "the source keeps its own title"
+  );
+}
+
+// ── icons (#156) ─────────────────────────────────────────────────────────────
+
+/// An icon is its own `views` column — it is not in the document payload, so a
+/// copy that rewrites payloads and forgets the column drops every emoji.
+async fn set_icon(db: &PgPool, view: Uuid, icon: &str) {
+  sqlx::query("UPDATE views SET icon = $2 WHERE id = $1")
+    .bind(view)
+    .bind(icon)
+    .execute(db)
+    .await
+    .unwrap();
+}
+
+/// (name, icon) of a workspace's live views, ordered by name.
+async fn live_icons(db: &PgPool, ws: Uuid) -> Vec<(String, Option<String>)> {
+  sqlx::query_as(
+    "SELECT name, icon FROM views WHERE workspace_id = $1 AND is_deleted = false ORDER BY name",
+  )
+  .bind(ws)
+  .fetch_all(db)
+  .await
+  .unwrap()
+}
+
+/// A cross-workspace move carries the icon of every node it copies: the ROOT,
+/// a descendant page and a descendant folder. A node that never had one keeps
+/// none — the fix must not invent an icon where there was none.
+#[tokio::test]
+async fn transfer_preserves_icons_of_root_page_and_folder() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let src = seed_workspace(&db, user).await;
+  let dest = seed_workspace(&db, user).await;
+
+  let folder = seed_folder(&db, src, user, None, "Icons").await;
+  let (page, _doc) = seed_document(
+    &db,
+    src,
+    user,
+    Some(folder),
+    "Emoji page",
+    json!([{"id": "b1", "type": "paragraph", "text": "hello", "data": {}}]),
+  )
+  .await;
+  let sub = seed_folder(&db, src, user, Some(folder), "Emoji folder").await;
+  let (plain, _plain_doc) = seed_document(&db, src, user, Some(folder), "Plain", json!([])).await;
+  set_icon(&db, folder, "📁").await;
+  set_icon(&db, page, "📄").await;
+  set_icon(&db, sub, "🗂").await;
+  let _ = plain;
+
+  let request: TransferRequest = serde_json::from_value(json!({
+    "dest_workspace_id": dest,
+    "remove_source": true,
+  }))
+  .unwrap();
+  let _ = transfer_view(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path((src, folder)),
+    Json(request),
+  )
+  .await
+  .expect("transfer should succeed");
+
+  assert_eq!(
+    live_icons(&db, dest).await,
+    vec![
+      ("Emoji folder".to_string(), Some("🗂".to_string())),
+      ("Emoji page".to_string(), Some("📄".to_string())),
+      ("Icons".to_string(), Some("📁".to_string())),
+      ("Plain".to_string(), None),
+    ],
+    "every copied node keeps its icon, and an icon-less node stays icon-less"
+  );
+}
+
+/// A same-workspace clone carries the icons the same way: renamed root, and
+/// every descendant page/folder.
+#[tokio::test]
+async fn clone_preserves_icons_of_root_page_and_folder() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let ws = seed_workspace(&db, user).await;
+
+  let folder = seed_folder(&db, ws, user, None, "Icons").await;
+  let (page, _doc) = seed_document(
+    &db,
+    ws,
+    user,
+    Some(folder),
+    "Emoji page",
+    json!([{"id": "b1", "type": "paragraph", "text": "hello", "data": {}}]),
+  )
+  .await;
+  let sub = seed_folder(&db, ws, user, Some(folder), "Emoji folder").await;
+  set_icon(&db, folder, "📁").await;
+  set_icon(&db, page, "📄").await;
+  set_icon(&db, sub, "🗂").await;
+
+  let request: CloneRequest = serde_json::from_value(json!({ "name": "Icons copy" })).unwrap();
+  let Json(response) = clone_view(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path((ws, folder)),
+    Json(request),
+  )
+  .await
+  .expect("clone should succeed");
+  let response = serde_json::to_value(&response).unwrap();
+  let new_root: Uuid = response["new_root_view_id"]
+    .as_str()
+    .unwrap()
+    .parse()
+    .unwrap();
+
+  // The source rows are looked up by ID, not by name: the copy's descendants
+  // keep the source's names on purpose.
+  let original: Vec<(String, Option<String>)> = sqlx::query_as(
+    "SELECT name, icon FROM views WHERE id = ANY($1) AND is_deleted = false ORDER BY name",
+  )
+  .bind(&[folder, page, sub][..])
+  .fetch_all(&db)
+  .await
+  .unwrap();
+  assert_eq!(
+    original,
+    vec![
+      ("Emoji folder".to_string(), Some("🗂".to_string())),
+      ("Emoji page".to_string(), Some("📄".to_string())),
+      ("Icons".to_string(), Some("📁".to_string())),
+    ],
+    "the source keeps its own icons"
+  );
+  let copied: Vec<(String, Option<String>)> = sqlx::query_as(
+    "SELECT name, icon FROM views WHERE workspace_id = $1 AND is_deleted = false \
+       AND id = $2 OR (workspace_id = $1 AND is_deleted = false AND parent_view_id = $2) \
+     ORDER BY name",
+  )
+  .bind(ws)
+  .bind(new_root)
+  .fetch_all(&db)
+  .await
+  .unwrap();
+  assert_eq!(
+    copied,
+    vec![
+      ("Emoji folder".to_string(), Some("🗂".to_string())),
+      ("Emoji page".to_string(), Some("📄".to_string())),
+      ("Icons copy".to_string(), Some("📁".to_string())),
+    ],
+    "the copy keeps every icon, including the renamed root's"
+  );
+}
+
 // ── reorder (gh#48) ──────────────────────────────────────────────────────────
 // #48 replaced reorder's per-id validation (three queries each) and per-id
 // writes with set operations, kept inside the gh#46 tree lock. These pin the

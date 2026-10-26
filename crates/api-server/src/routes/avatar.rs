@@ -108,6 +108,20 @@ pub async fn put_avatar(
 
   // Same self-issued presigned PUT the importer uses (files::store_bytes).
   let client = crate::http_client::outbound_client();
+
+  // One account, one avatar mutation at a time (#152). Every step of it is
+  // serialized against the same account's other avatar writes: this
+  // transaction holds the lock across upload and row swap, and
+  // `discard_object` takes it again for the cleanup — with the current
+  // reference re-read under it. The two lock windows are consecutive per
+  // request; the gap between them is harmless because the cleanup trusts the
+  // re-read rather than its own stale snapshot.
+  let mut tx = state.db.begin().await?;
+  lock_avatar(&mut tx, user_id).await?;
+  // #153: a deleted account's JWT still verifies until it expires, so the row
+  // itself is the liveness gate — checked BEFORE the object is written.
+  let previous = live_avatar_key(&mut tx, user_id).await?;
+
   // Server-side upload: this process sends the PUT, so it must be signed for
   // the address THIS process can reach, not the browser's.
   let upload = storage.presign_put_server(&object_key);
@@ -125,8 +139,10 @@ pub async fn put_avatar(
     )));
   }
 
-  let previous = swap_avatar_key(&state, user_id, Some(&object_key)).await?;
-  discard_object(&state, previous.as_deref(), &object_key).await;
+  set_avatar_key(&mut tx, user_id, Some(&object_key)).await?;
+  tx.commit().await?;
+
+  discard_object(&state, user_id, previous.as_deref()).await;
 
   Ok(Json(AvatarResponse {
     avatar_version: Some(avatar_version(&object_key)),
@@ -175,52 +191,115 @@ pub async fn delete_avatar(
   headers: HeaderMap,
 ) -> ApiResult<Json<AvatarResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
-  let previous = swap_avatar_key(&state, user_id, None).await?;
-  discard_object(&state, previous.as_deref(), "").await;
+  let mut tx = state.db.begin().await?;
+  lock_avatar(&mut tx, user_id).await?;
+  let previous = live_avatar_key(&mut tx, user_id).await?;
+  set_avatar_key(&mut tx, user_id, None).await?;
+  tx.commit().await?;
+  discard_object(&state, user_id, previous.as_deref()).await;
   Ok(Json(AvatarResponse {
     avatar_version: None,
   }))
 }
 
-/// Point the user at `key` (or at nothing) and return what they pointed at
-/// before, so the caller can clean up the object it just replaced.
-async fn swap_avatar_key(
-  state: &AppState,
+/// Take the per-account avatar mutex for the rest of [tx]. Transaction-scoped
+/// (`pg_advisory_xact_lock`): a cancelled or failed request releases it with
+/// the rollback, so a hung client cannot wedge one account's avatar forever.
+///
+/// The salted prefix keeps this namespace apart from the workspace-tree lock in
+/// `documents` (which hashes a bare UUID with the same transform): account ids
+/// and workspace ids are both UUIDs, so without the salt unrelated writes would
+/// serialize against each other.
+async fn lock_avatar(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
   user_id: Uuid,
-  key: Option<&str>,
-) -> ApiResult<Option<String>> {
-  // Read-then-write rather than one clever RETURNING: the only writer of a
-  // user's own avatar is that user, and a self-join whose "old" alias silently
-  // depends on snapshot semantics is not worth the round trip it saves.
-  let previous: Option<(Option<String>,)> =
-    sqlx::query_as("SELECT avatar_key FROM users WHERE id = $1")
-      .bind(user_id)
-      .fetch_optional(&state.db)
-      .await?;
-  let previous = previous.ok_or(ApiError::Unauthorized)?.0;
-
-  sqlx::query("UPDATE users SET avatar_key = $1, updated_at = now() WHERE id = $2")
-    .bind(key)
-    .bind(user_id)
-    .execute(&state.db)
+) -> ApiResult<()> {
+  sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+    .bind(format!("avatar:{user_id}"))
+    .execute(&mut **tx)
     .await?;
-
-  Ok(previous)
+  Ok(())
 }
 
-/// Delete the object a user no longer points at.
+/// The live account's current avatar key, or `None` when it has no picture.
+///
+/// #153: `deleted_at IS NULL` makes a tombstone read as "no such account" (401)
+/// rather than as a user whose picture can be replaced by an unexpired JWT.
+async fn live_avatar_key(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  user_id: Uuid,
+) -> ApiResult<Option<String>> {
+  let previous: Option<(Option<String>,)> =
+    sqlx::query_as("SELECT avatar_key FROM users WHERE id = $1 AND deleted_at IS NULL")
+      .bind(user_id)
+      .fetch_optional(&mut **tx)
+      .await?;
+  Ok(previous.ok_or(ApiError::Unauthorized)?.0)
+}
+
+/// Point a live account at `key` (or at nothing). #153: the write itself is
+/// gated on `deleted_at IS NULL`, and a zero-row UPDATE (the account was deleted
+/// after the read) is rejected rather than silently rewriting a tombstone.
+async fn set_avatar_key(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  user_id: Uuid,
+  key: Option<&str>,
+) -> ApiResult<()> {
+  let updated = sqlx::query(
+    "UPDATE users SET avatar_key = $1, updated_at = now() WHERE id = $2 AND deleted_at IS NULL",
+  )
+  .bind(key)
+  .bind(user_id)
+  .execute(&mut **tx)
+  .await?;
+  if updated.rows_affected() == 0 {
+    return Err(ApiError::Unauthorized);
+  }
+  Ok(())
+}
+
+/// Delete the object an account no longer points at.
 ///
 /// Nothing else can reference it — the key is content-addressed under that one
 /// user's prefix — so there is no GC sweep to defer to, and an orphan here would
 /// simply never be collected by anything. Best-effort: the row is already
 /// updated, and failing the request because the cleanup failed would tell the
 /// user their avatar did not change when it did.
-async fn discard_object(state: &AppState, previous: Option<&str>, keeping: &str) {
-  let Some(previous) = previous else { return };
-  if previous.is_empty() || previous == keeping {
+///
+/// #152: the decision is re-checked under the same per-account lock every swap
+/// takes, with the store DELETE issued inside that lock. Two overlapping PUTs
+/// cannot then leave the row pointing at an object a slower cleanup deletes.
+async fn discard_object(state: &AppState, user_id: Uuid, previous: Option<&str>) {
+  let Some(previous) = previous.filter(|key| !key.is_empty()) else {
+    return;
+  };
+  let Ok(storage) = storage(state) else { return };
+  let mut tx = match state.db.begin().await {
+    Ok(tx) => tx,
+    Err(_) => return,
+  };
+  if lock_avatar(&mut tx, user_id).await.is_err() {
     return;
   }
-  let Ok(storage) = storage(state) else { return };
+  // Fail CLOSED on a read error: not being able to see the current reference
+  // is not evidence that `previous` is unused. Only a successful read that
+  // positively points elsewhere may authorize the delete; a missing row
+  // (account gone) still cleans up, since nothing can reference the object.
+  let recheck =
+    sqlx::query_as::<_, (Option<String>,)>("SELECT avatar_key FROM users WHERE id = $1")
+      .bind(user_id)
+      .fetch_optional(&mut *tx)
+      .await;
+  let current = match recheck {
+    Ok(row) => row.map(|(key,)| key),
+    Err(error) => {
+      tracing::warn!(%previous, %error, "avatar: could not re-read the avatar key; keeping the object");
+      return;
+    }
+  };
+  if current.flatten().as_deref() == Some(previous) {
+    return; // a later request re-selected this very object; leave it
+  }
   let url = storage.presign_delete(previous);
   if let Err(error) = crate::http_client::outbound_client()
     .delete(&url)
@@ -229,6 +308,7 @@ async fn discard_object(state: &AppState, previous: Option<&str>, keeping: &str)
   {
     tracing::warn!(%previous, %error, "avatar: could not delete the replaced object");
   }
+  let _ = tx.commit().await;
 }
 
 /// `GET /api/users/{user_id}/avatar`
@@ -242,12 +322,15 @@ pub async fn get_avatar(State(state): State<AppState>, Path(user_id): Path<Uuid>
   let Ok(storage) = storage(&state) else {
     return StatusCode::NOT_FOUND.into_response();
   };
-  let key: Option<(Option<String>,)> = sqlx::query_as("SELECT avatar_key FROM users WHERE id = $1")
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+  // #153: a tombstone reads as "no picture", not as a redirect to whatever an
+  // unexpired-but-dead token may have written into the row.
+  let key: Option<(Option<String>,)> =
+    sqlx::query_as("SELECT avatar_key FROM users WHERE id = $1 AND deleted_at IS NULL")
+      .bind(user_id)
+      .fetch_optional(&state.db)
+      .await
+      .ok()
+      .flatten();
   match key.and_then(|(k,)| k) {
     // 404 rather than a placeholder image: "no picture set" is the client's
     // call to render (it draws the initial), and a served placeholder would
