@@ -850,7 +850,9 @@ fn validate_mime(mime_type: &str) -> ApiResult<()> {
 }
 
 /// Commit quota reservation before a server PUT, or return the deduplicated row.
-async fn reserve_server_upload(
+/// Every server-side write of bytes into a workspace goes through here: the
+/// dedupe, the quota check and the pending marker, under the owner lock.
+pub(crate) async fn reserve_server_upload(
   state: &AppState,
   workspace_id: Uuid,
   object_key: &str,
@@ -887,6 +889,8 @@ async fn ensure_quota_room_tx(
   let quota = state.config.workspace_quota_bytes;
   if quota > 0 {
     let used = store::workspace_bytes_used_excluding(&mut **tx, workspace_id, exclude_key).await?;
+    // `saturating_add`: both sides are i64 from the wire or the database, and an
+    // overflow here would wrap negative and PASS the check.
     if used.saturating_add(byte_size) > quota {
       return Err(ApiError::BadRequestCode(
         "workspace_quota_exceeded",
@@ -911,7 +915,12 @@ async fn ensure_quota_room_tx(
   Ok(())
 }
 
-/// Check additional quota for a cross-workspace move that copies many files.
+/// Fail-fast estimate for a cross-workspace move that copies many files: is
+/// there room for all of them? The SAME rule as every upload
+/// ([`ensure_quota_room_tx`], under the owner lock) — this used to be a second,
+/// unlocked copy of it. It only spares the user a move that would run out of
+/// room halfway; the authority is each blob's own reservation
+/// ([`reserve_server_upload`]), which a concurrent upload cannot slip past.
 pub(crate) async fn ensure_quota_room(
   state: &AppState,
   workspace_id: Uuid,
@@ -921,37 +930,9 @@ pub(crate) async fn ensure_quota_room(
   if byte_size <= 0 {
     return Ok(());
   }
-  let quota = state.config.workspace_quota_bytes;
-  if quota > 0 {
-    let used = store::workspace_bytes_used_excluding(&state.db, workspace_id, exclude_key).await?;
-    // `saturating_add`: both sides are i64 from the wire or the database, and an
-    // overflow here would wrap negative and PASS the check.
-    if used.saturating_add(byte_size) > quota {
-      return Err(ApiError::BadRequestCode(
-        "workspace_quota_exceeded",
-        format!(
-          "workspace storage is full: {used} of {quota} bytes used, \
-           this upload needs {byte_size} more"
-        ),
-      ));
-    }
-  }
-  // B7: the per-workspace ceiling alone is multiplied by however many
-  // workspaces an account creates; this one is not.
-  let owner_quota = state.config.owner_quota_bytes;
-  if owner_quota > 0 {
-    let used = store::owner_bytes_used_excluding(&state.db, workspace_id, exclude_key).await?;
-    if used.saturating_add(byte_size) > owner_quota {
-      return Err(ApiError::BadRequestCode(
-        "owner_quota_exceeded",
-        format!(
-          "the workspace owner's storage is full: {used} of {owner_quota} bytes used \
-           across their workspaces, this upload needs {byte_size} more"
-        ),
-      ));
-    }
-  }
-  Ok(())
+  let mut tx = state.db.begin().await?;
+  store::lock_file_quota_owner(&mut tx, workspace_id).await?;
+  ensure_quota_room_tx(state, &mut tx, workspace_id, byte_size, exclude_key).await
 }
 
 /// The two rejections here are not the same kind of thing.

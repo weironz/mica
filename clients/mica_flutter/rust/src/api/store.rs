@@ -503,51 +503,13 @@ impl MicaStore {
     /// Upsert a view (create / rename / move / trash-toggle).
     #[frb(sync)]
     pub fn save_view(&self, view: LocalView) -> bool {
-        // FOLDERS ARE THE ONLY CONTAINERS — checked here, at the one place every
-        // local view write passes through, so a future write path cannot
-        // quietly opt out of it.
-        //
-        // The server has enforced this for a while (`ensure_parent_accepts_
-        // children`, with a DB trigger behind it); the local store did not. So a
-        // page could sit under a page on device, be edited for weeks, and fail
-        // only at the moment the user pressed "migrate to cloud" — exactly when
-        // they least want to hear it. Found that way: a real vault carried one
-        // such pair from an older import, and the migration refused the whole
-        // workspace over it.
-        //
-        // docs/dev/lessons.md#2 one layer further out: an invariant enforced on
-        // only one side of a boundary is not enforced.
-        // Returns whether it was written, rather than refusing in silence — a
-        // write that quietly does nothing is the failure mode this app has
-        // already shipped twice (a no-op import menu, a no-op export callback).
-        if !self.parent_accepts_children(&view) {
-            return false;
-        }
+        // The page-tree rule (folders are the only containers, no cycles) is
+        // mica-core's `ensure_valid_parent`, run by every store write that sets
+        // a parent. It used to be checked HERE, which `reorder_views` — the
+        // drag path — never passed through. Returns whether the row was
+        // written, rather than refusing in silence: a write that quietly does
+        // nothing is a failure mode this app has already shipped twice.
         self.store().save_view(&view.into()).is_ok()
-    }
-
-    /// True when [view] may live where it says it does: at the top level, or
-    /// under a FOLDER. A parent the local store cannot see (not yet written, or
-    /// another origin's) is accepted — this guards the shape that is visible
-    /// here, and the server checks again on the way up.
-    fn parent_accepts_children(&self, view: &LocalView) -> bool {
-        // Answered by one indexed lookup in mica-core now (issue #67) — it used
-        // to be a full `list_views` scan per write. The origin rule still
-        // stands: the view's OWN origin, not a hardcoded "local". Views are
-        // namespaced by origin (v4 composite PK), so a parent lives in the same
-        // namespace as its child — a cloud mirror's folder is under the server
-        // URL, never under "local". Asking the wrong namespace made this answer
-        // about a DIFFERENT view that happened to share an id, and refuse
-        // writes that were fine: cloning a subtree and detaching a cloud
-        // workspace each came out one view short. It went unnoticed for twenty
-        // consecutive red runs of the integration suite, because `just test`
-        // does not cover it.
-        self.store()
-            .parent_accepts_children(&view.origin, view.parent_id.as_deref())
-            // On a read error accept, as the old unwrap_or_default() list did:
-            // refusing every write over a transient read failure is worse, and
-            // the server re-checks on the way up.
-            .unwrap_or(true)
     }
 
     /// Permanently remove one `origin`'s view row (delete its document via
@@ -1354,10 +1316,11 @@ mod clone_view_tests {
     #[test]
     fn cloning_inside_a_parent_cycle_terminates() {
         let (store, _dir) = tmp_store();
-        // Written past the folders-only check, like the trash test above: such
-        // data exists (older builds, sync peers) whatever new writes refuse.
-        store.store().save_view(&folder("a", Some("b"), "A", "0000000010").into()).unwrap();
+        // Seeded past the parent rule, like the trash test above: such data
+        // exists (older builds, sync peers) whatever new writes refuse.
+        store.store().save_view(&folder("a", None, "A", "0000000010").into()).unwrap();
         store.store().save_view(&folder("b", Some("a"), "B", "0000000020").into()).unwrap();
+        store.store().seed_parent_unchecked("local", "a", "b").unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let out = store.clone_view("a".into(), "A".into()).map(|o| o.docs);
@@ -1485,13 +1448,15 @@ mod clone_view_tests {
         // Corrupt shape: a points at b, b points at a. Real data should never
         // look like this, but a hang here would be unrecoverable for the user.
         //
-        // Written straight to the store, PAST the folders-only check — the
+        // Seeded PAST the parent rule (`seed_parent_unchecked`) — the
         // point is that the walk survives data the checks would now refuse, and
         // such data still exists: written by older builds, or arriving from a
         // sync peer. A guard on new writes does not clean up what is already
         // there.
-        store.store().save_view(&view("a", Some("b"), "A", "0000000010").into()).unwrap();
-        store.store().save_view(&folder("b", Some("a"), "B", "0000000020").into()).unwrap();
+        store.store().save_view(&view("a", None, "A", "0000000010").into()).unwrap();
+        store.store().save_view(&folder("b", None, "B", "0000000020").into()).unwrap();
+        store.store().seed_parent_unchecked("local", "a", "b").unwrap();
+        store.store().seed_parent_unchecked("local", "b", "a").unwrap();
         let hit = store.trash_view_subtree("a".into());
         assert_eq!(hit.len(), 2, "both, once each");
     }

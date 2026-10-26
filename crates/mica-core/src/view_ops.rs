@@ -94,6 +94,73 @@ impl LocalStore {
     Ok(object_type.as_deref().is_none_or(|t| t == "folder"))
   }
 
+  /// The page-tree rule for putting `view_id` under `parent_id`, enforced by
+  /// every local write that sets a parent ([`Self::save_view`],
+  /// [`Self::reorder_views`]): folders are the only containers, and a view
+  /// may not end up inside its own subtree.
+  ///
+  /// It lives HERE, in the data layer, and nowhere else. It used to sit in the
+  /// FFI wrapper's `save_view` — "the one place every local view write passes
+  /// through" — while `reorder_views`, which is how a drag MOVES a row, wrote
+  /// `parent_id` straight past it: a drop onto a page, or a folder into its own
+  /// child, was held back only by what the sidebar happened to offer as a drop
+  /// target (docs/dev/lessons.md#2).
+  ///
+  /// A parent this store cannot see is accepted, as before: rows can arrive
+  /// child-first, and the server re-checks cloud rows on the way up.
+  pub fn ensure_valid_parent(
+    &self,
+    origin: &str,
+    view_id: &str,
+    parent_id: Option<&str>,
+  ) -> Result<(), StoreError> {
+    let Some(parent_id) = parent_id else {
+      return Ok(());
+    };
+    let refuse = |reason| StoreError::InvalidParent {
+      view_id: view_id.to_owned(),
+      parent_id: parent_id.to_owned(),
+      reason,
+    };
+    if !self.parent_accepts_children(origin, Some(parent_id))? {
+      return Err(refuse("only a folder can hold pages"));
+    }
+    // Walk up from the new parent; meeting `view_id` means the move would
+    // close a loop. UNION dedup ends the walk on a cycle already on disk.
+    let loops: bool = self.conn.query_row(
+      "WITH RECURSIVE up(id) AS (
+                 SELECT ?2
+                 UNION
+                 SELECT lv.parent_id FROM local_view lv JOIN up ON lv.id = up.id
+                 WHERE lv.origin=?1 AND lv.parent_id IS NOT NULL
+             )
+             SELECT EXISTS(SELECT 1 FROM up WHERE id=?3)",
+      params![origin, parent_id, view_id],
+      |r| r.get(0),
+    )?;
+    if loops {
+      return Err(refuse("a view cannot move into its own subtree"));
+    }
+    Ok(())
+  }
+
+  /// TEST SEEDING ONLY: set a parent past [`Self::ensure_valid_parent`], to
+  /// reproduce shapes older builds wrote (a page under a page, a cycle) and
+  /// prove the tree walks still survive them. Nothing in the app calls it.
+  #[doc(hidden)]
+  pub fn seed_parent_unchecked(
+    &self,
+    origin: &str,
+    view_id: &str,
+    parent_id: &str,
+  ) -> Result<(), StoreError> {
+    self.conn.execute(
+      "UPDATE local_view SET parent_id=?3 WHERE origin=?1 AND id=?2",
+      params![origin, view_id, parent_id],
+    )?;
+    Ok(())
+  }
+
   /// Where the next child of `parent_id` goes: after the last LIVE sibling,
   /// in steps of ten, zero-padded to ten digits so string ordering is
   /// numeric ordering. The gap of ten is what leaves room to drop something
@@ -186,6 +253,12 @@ impl LocalStore {
   /// transaction (one commit) instead of one full-row upsert per node, so a
   /// crash mid-subtree cannot leave a half-trashed tree (issue #67). Ids
   /// with no row are skipped, like the filter over `list_views` did.
+  ///
+  /// `trashed` is a BATCH number, not a flag: 0 is live, and every trash
+  /// operation stamps the rows it moved with one fresh number, so a restore
+  /// can bring back exactly what was deleted together — the server's
+  /// `updated_at = batch_ts` rule (#47) without a schema change. Only LIVE
+  /// rows take the stamp: a child binned earlier keeps its own batch.
   pub fn set_views_trashed(
     &self,
     origin: &str,
@@ -197,9 +270,22 @@ impl LocalStore {
     }
     let tx = self.conn.unchecked_transaction()?;
     {
-      let mut stmt = tx.prepare("UPDATE local_view SET trashed=?3 WHERE origin=?1 AND id=?2")?;
+      let batch: i64 = if trashed {
+        tx.query_row(
+          "SELECT coalesce(max(trashed), 0) + 1 FROM local_view WHERE origin=?1",
+          params![origin],
+          |r| r.get(0),
+        )?
+      } else {
+        0
+      };
+      let mut stmt = tx.prepare(if trashed {
+        "UPDATE local_view SET trashed=?3 WHERE origin=?1 AND id=?2 AND trashed=0"
+      } else {
+        "UPDATE local_view SET trashed=?3 WHERE origin=?1 AND id=?2"
+      })?;
       for id in ids {
-        stmt.execute(params![origin, id, trashed as i64])?;
+        stmt.execute(params![origin, id, batch])?;
       }
     }
     tx.commit()?;
@@ -218,24 +304,41 @@ impl LocalStore {
     Ok(ids)
   }
 
-  /// Bring `root_id` and the subtree trashed with it back out of the bin, in
-  /// one transaction. If the restored ROOT's parent is no longer a live
-  /// view, the root is lifted to the top level — restoring into a trashed
-  /// parent would leave it invisible with no way back. Mirrors the server's
-  /// `restore_view`.
+  /// Bring `root_id` and the subtree trashed WITH it back out of the bin, in
+  /// one transaction: rows carrying the root's trash batch
+  /// ([`Self::set_views_trashed`]). A descendant deleted separately, earlier,
+  /// stays in the bin — restoring a folder used to resurrect it too, which
+  /// the server stopped doing in #47 while this copy of the rule did not.
+  /// If the restored ROOT's parent is no longer a live view, the root is
+  /// lifted to the top level — restoring into a trashed parent would leave it
+  /// invisible with no way back. Mirrors the server's `restore_views_batch`.
   pub fn restore_view_subtree(
     &self,
     origin: &str,
     root_id: &str,
   ) -> Result<Vec<String>, StoreError> {
-    let ids = self.subtree_ids(origin, root_id, false)?;
     let tx = self.conn.unchecked_transaction()?;
-    {
-      let mut stmt = tx.prepare("UPDATE local_view SET trashed=0 WHERE origin=?1 AND id=?2")?;
-      for id in &ids {
-        stmt.execute(params![origin, id])?;
+    let batch: Option<i64> = tx
+      .query_row(
+        "SELECT trashed FROM local_view WHERE origin=?1 AND id=?2",
+        params![origin, root_id],
+        |r| r.get(0),
+      )
+      .optional()?;
+    let ids: Vec<String> = match batch {
+      Some(batch) if batch != 0 => {
+        let mut ids = Vec::new();
+        let mut stmt =
+          tx.prepare("UPDATE local_view SET trashed=0 WHERE origin=?1 AND id=?2 AND trashed=?3")?;
+        for id in self.subtree_ids(origin, root_id, false)? {
+          if stmt.execute(params![origin, id, batch])? > 0 {
+            ids.push(id);
+          }
+        }
+        ids
       }
-    }
+      _ => Vec::new(),
+    };
     // Lift the root if its parent is gone or still in the bin. The
     // un-trash above already landed in this transaction, so a parent
     // restored by it reads as live here. Whole-origin scope, no workspace
@@ -323,6 +426,11 @@ impl LocalStore {
         };
         if cur_position == position && cur_parent.as_deref() == parent_id {
           continue;
+        }
+        // A reparent: same rule as save_view. An error drops `tx`, so a
+        // refused drop rolls back the whole reorder.
+        if cur_parent.as_deref() != parent_id {
+          self.ensure_valid_parent(origin, id, parent_id)?;
         }
         write.execute(params![origin, id, parent_id, position])?;
       }
@@ -537,12 +645,15 @@ mod tests {
   #[test]
   fn a_parent_cycle_terminates_via_cte_dedup() {
     let (store, _dir) = tmp_store();
+    // A cycle can no longer be WRITTEN (ensure_valid_parent), but a store from
+    // before that check may hold one, so seed it under the API.
     store
-      .save_view(&view("a", Some("b"), "A", "0000000010"))
+      .save_view(&folder("a", None, "A", "0000000010"))
       .unwrap();
     store
       .save_view(&folder("b", Some("a"), "B", "0000000020"))
       .unwrap();
+    store.seed_parent_unchecked("local", "a", "b").unwrap();
     let ids = store.subtree_ids("local", "a", false).unwrap();
     assert_eq!(ids, ["a", "b"], "both, once each");
   }
@@ -952,5 +1063,135 @@ mod tests {
       .unwrap();
     store.purge_view_subtree("local", "f").unwrap();
     assert!(store.list_workspaces("local").unwrap().contains(&ws));
+  }
+
+  /// The page-tree rule is the DATA layer's: a page cannot hold pages, and a
+  /// view cannot move into its own subtree — through save_view AND through
+  /// reorder_views, which is how a drag reparents.
+  #[test]
+  fn parent_rule_holds_for_every_write_that_sets_a_parent() {
+    let (store, _dir) = tmp_store();
+    store
+      .save_view(&folder("f", None, "F", "0000000010"))
+      .unwrap();
+    store
+      .save_view(&folder("g", Some("f"), "G", "0000000010"))
+      .unwrap();
+    store
+      .save_view(&view("p", Some("f"), "P", "0000000020"))
+      .unwrap();
+
+    // save_view: under a page, and into its own subtree.
+    assert!(matches!(
+      store.save_view(&view("x", Some("p"), "X", "0000000010")),
+      Err(StoreError::InvalidParent { .. })
+    ));
+    assert!(matches!(
+      store.save_view(&folder("f", Some("g"), "F", "0000000010")),
+      Err(StoreError::InvalidParent { .. })
+    ));
+    assert!(matches!(
+      store.save_view(&folder("f", Some("f"), "F", "0000000010")),
+      Err(StoreError::InvalidParent { .. })
+    ));
+
+    // reorder_views: the same two drops.
+    assert!(matches!(
+      store.reorder_views("local", Some("p"), &["g".into()]),
+      Err(StoreError::InvalidParent { .. })
+    ));
+    assert!(matches!(
+      store.reorder_views("local", Some("g"), &["f".into()]),
+      Err(StoreError::InvalidParent { .. })
+    ));
+    let parent_of = |id: &str| {
+      store
+        .list_views("local")
+        .unwrap()
+        .into_iter()
+        .find(|v| v.id == id)
+        .unwrap()
+        .parent_id
+    };
+    assert_eq!(
+      parent_of("g").as_deref(),
+      Some("f"),
+      "refused drop left g alone"
+    );
+    assert_eq!(parent_of("f"), None, "refused drop left f alone");
+
+    // Still allowed: a legal move, and a parent not written yet.
+    store.reorder_views("local", None, &["g".into()]).unwrap();
+    assert_eq!(parent_of("g"), None);
+    store
+      .save_view(&view("y", Some("not-yet"), "Y", "0000000010"))
+      .unwrap();
+  }
+
+  /// A refused reparent rolls back the WHOLE reorder: the rows before it in
+  /// the list must not stay half-moved.
+  #[test]
+  fn a_refused_reorder_moves_nothing() {
+    let (store, _dir) = tmp_store();
+    store
+      .save_view(&folder("f", None, "F", "0000000010"))
+      .unwrap();
+    store
+      .save_view(&view("a", None, "A", "0000000020"))
+      .unwrap();
+    store
+      .save_view(&view("b", None, "B", "0000000030"))
+      .unwrap();
+    assert!(store
+      .reorder_views("local", Some("b"), &["a".into(), "f".into()])
+      .is_err());
+    let rows = store.list_views("local").unwrap();
+    assert!(rows.iter().all(|v| v.parent_id.is_none()), "{rows:?}");
+  }
+
+  /// #47, local side: restoring a folder brings back what was deleted WITH
+  /// it, not a child the user had binned separately before.
+  #[test]
+  fn restore_brings_back_only_what_was_deleted_together() {
+    let (store, _dir) = tmp_store();
+    store
+      .save_view(&folder("f", None, "F", "0000000010"))
+      .unwrap();
+    store
+      .save_view(&view("kept", Some("f"), "Kept", "0000000010"))
+      .unwrap();
+    store
+      .save_view(&view("gone", Some("f"), "Gone", "0000000020"))
+      .unwrap();
+
+    store.trash_view_subtree("local", "gone").unwrap();
+    store.trash_view_subtree("local", "f").unwrap();
+    // An upsert of a binned row (rename, mirror refresh) keeps its batch.
+    store
+      .save_view(&LocalView {
+        trashed: true,
+        ..view("gone", Some("f"), "Gone renamed", "0000000020")
+      })
+      .unwrap();
+
+    let back = store.restore_view_subtree("local", "f").unwrap();
+    assert_eq!(back, ["f", "kept"]);
+    let trashed = |id: &str| {
+      store
+        .list_views("local")
+        .unwrap()
+        .into_iter()
+        .find(|v| v.id == id)
+        .unwrap()
+        .trashed
+    };
+    assert!(!trashed("f") && !trashed("kept"));
+    assert!(trashed("gone"), "deleted on its own, it stays in the bin");
+
+    // And it can still come back on its own.
+    assert_eq!(
+      store.restore_view_subtree("local", "gone").unwrap(),
+      ["gone"]
+    );
   }
 }

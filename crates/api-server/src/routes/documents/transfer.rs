@@ -879,6 +879,22 @@ async fn transfer_roots(
   let results = futures_util::stream::iter(copies.into_iter().map(|(src_file, dest_key)| {
     let http = &http;
     async move {
+      // Reserve under the destination's quota lock, exactly as a server-side
+      // upload does: dedupe, quota check and pending marker in one
+      // transaction, committed before the PUT (a crash after writing bytes
+      // leaves a key the orphan sweep finds). It used to be only the pending
+      // marker, so the move's quota was just the unlocked estimate above and a
+      // concurrent upload could push the workspace over.
+      if let Some(existing) = crate::routes::files::reserve_server_upload(
+        state,
+        dest_workspace_id,
+        &dest_key,
+        src_file.byte_size,
+      )
+      .await?
+      {
+        return Ok::<_, ApiError>((dest_key, existing.id));
+      }
       let bytes = http
         .get(storage.presign_get_server(&src_file.object_key))
         .send()
@@ -889,16 +905,6 @@ async fn transfer_roots(
         .bytes()
         .await
         .map_err(|e| ApiError::Internal(format!("blob read failed: {}", e.without_url())))?;
-      // Commit this marker (and clear any GC mark) before PUT: a crash after
-      // writing bytes must leave a discoverable key for the orphan sweep, and
-      // neither sweep may take the key while the PUT runs outside a transaction.
-      store::record_pending_file_upload(
-        &state.db,
-        dest_workspace_id,
-        &dest_key,
-        storage.presign_ttl_seconds,
-      )
-      .await?;
       let upload = storage.presign_put_server(&dest_key);
       let checksum = {
         use base64::Engine as _;

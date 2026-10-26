@@ -20,7 +20,8 @@
 - **Rust-first 数据面**：核心文档模型、CRDT、同步与数据处理放在 Rust；Dart 负责 UI 与编辑器热路径。Markdown 语法以 `crates/markdown` 为权威，Dart 镜像必须同步更新。
 - **渲染扩展走机制**：通过 `AtomicBlockRenderer` 注册表扩展，避免继续向 `render.dart` 堆分支。见 [渲染架构](docs/architecture/render-architecture.md)。
 - **Markdown round-trip 是不变量**：保持 CommonMark / GFM 与现有方言兼容，写侧输出规范化子集；改解析或导出时检查 [规范记分牌](docs/architecture/commonmark-scoreboard.md) 及对应回归测试。
-- **folder 是唯一容器，page 是叶子**：服务端写 `parent_view_id` 必须经过 `documents::ensure_parent_accepts_children`；父节点须为同工作区、未删除的 folder，保留 `views_parent_must_be_folder` DB 触发器兜底。
+- **folder 是唯一容器，page 是叶子**：服务端写 `parent_view_id` 必须经过 `documents::ensure_parent_accepts_children`；父节点须为同工作区、未删除的 folder，保留 `views_parent_must_be_folder` DB 触发器兜底。本地库由 mica-core `ensure_valid_parent` 判定（含防环），不在 FFI 包装层。
+- **业务规则只有一个权威判定点**：唯一替换、上传配额、父节点合法性等，由持有写锁或事务的数据层最终判定；UI 和调用方的预检只改善交互。删除、回收、改密等操作在同一个事务边界内完成全部必要的状态更新，不靠调用方记得补步骤。服务端与本地库各有一份的规则（恢复、页树），改一边必须同步另一边。适用于关系型状态；CRDT 文档正文只能在写入入口的锁里判定。见 [开发教训 §2](docs/dev/lessons.md)。
 - 编辑器使用 marks-over-plain-text；硬换行按现有反斜杠加换行约定存储。块级嵌套保持扁平模型：`data.indent` 为列表层级，`data.quote` / `qbreak` 为引用深度/分组，`data.li` 为 item 容器子块；HTML 导出重建嵌套。代码字体使用 `kMonoFont`。
 - 快捷键变更同步编辑器/应用级处理、设置面板和 [快捷键清单](docs/features/shortcuts.md)；按当前符号定位实现，不照搬旧文件位置。
 

@@ -1027,3 +1027,62 @@ async fn reorder_views_rejects_a_list_past_the_batch_ceiling() {
     other => panic!("expected 400 for an oversized list, got {other:?}"),
   }
 }
+
+/// A blob a transfer copies into the destination is RESERVED against the
+/// destination's quota before any byte moves — through the same
+/// `reserve_server_upload` every server-side upload uses. It used to get only
+/// a pending marker (no bytes), so the move's quota was just an unlocked
+/// up-front estimate and a concurrent upload could push the workspace over.
+///
+/// The storage endpoint is unreachable, so the copy fails at the fetch; what
+/// is left behind shows whether the reservation came first.
+#[tokio::test]
+async fn a_transferred_blob_is_reserved_against_the_destination_quota() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let src = seed_workspace(&db, user).await;
+  let dest = seed_workspace(&db, user).await;
+  let file = store::insert_file(
+    &db,
+    src,
+    user,
+    &format!("workspaces/{src}/blob-quota-test"),
+    "a.png",
+    "image/png",
+    4096,
+  )
+  .await
+  .unwrap();
+  let (page, _) = seed_document(
+    &db,
+    src,
+    user,
+    None,
+    "Page",
+    json!([{"id": "b1", "type": "image", "text": "", "data": {"file_id": file.id.to_string()}}]),
+  )
+  .await;
+  assert_eq!(store::workspace_bytes_used(&db, dest).await.unwrap(), 0);
+
+  let request: TransferRequest = serde_json::from_value(json!({
+    "dest_workspace_id": dest,
+    "remove_source": false,
+  }))
+  .unwrap();
+  let outcome = transfer_view(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path((src, page)),
+    Json(request),
+  )
+  .await;
+  assert!(
+    outcome.is_err(),
+    "the fetch from the unreachable store fails"
+  );
+  assert_eq!(
+    store::workspace_bytes_used(&db, dest).await.unwrap(),
+    4096,
+    "the blob's bytes were reserved in the destination before the copy"
+  );
+}

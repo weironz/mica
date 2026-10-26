@@ -27,6 +27,15 @@ pub enum StoreError {
   /// cloud holds the authoritative copy, so the caller drops it and re-seeds.
   #[error("corrupt local CRDT state for {doc_id} (checksum or yrs integration failed)")]
   CorruptDoc { doc_id: String },
+  /// A view write that would break the page tree: a page as a parent, or a
+  /// parent cycle. The local twin of the server's
+  /// `ensure_parent_accepts_children` (400 there, refused here).
+  #[error("view {view_id} cannot live under {parent_id}: {reason}")]
+  InvalidParent {
+    view_id: String,
+    parent_id: String,
+    reason: &'static str,
+  },
 }
 
 /// The page-link graph of the local workspace: nodes that participate in at
@@ -2075,15 +2084,21 @@ impl LocalStore {
   }
 
   /// Upsert a view — covers create, rename, move (parent/position), and trash
-  /// toggling, all by writing the desired row.
+  /// toggling, all by writing the desired row. Refuses a row the page tree
+  /// cannot hold ([`Self::ensure_valid_parent`]).
   pub fn save_view(&self, v: &LocalView) -> Result<(), StoreError> {
+    self.ensure_valid_parent(&v.origin, &v.id, v.parent_id.as_deref())?;
     self.conn.execute(
             "INSERT INTO local_view(id,workspace_id,parent_id,object_id,name,position,trashed,origin,object_type)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
              ON CONFLICT(origin,id) DO UPDATE SET
                  workspace_id=excluded.workspace_id, parent_id=excluded.parent_id,
                  object_id=excluded.object_id, name=excluded.name,
-                 position=excluded.position, trashed=excluded.trashed,
+                 position=excluded.position,
+                 -- `trashed` is a trash BATCH (view_ops::set_views_trashed):
+                 -- an upsert of a row that stays trashed keeps its batch.
+                 trashed=CASE WHEN excluded.trashed<>0 AND local_view.trashed<>0
+                              THEN local_view.trashed ELSE excluded.trashed END,
                  object_type=excluded.object_type",
             params![
                 v.id,
@@ -2500,8 +2515,12 @@ mod tests {
   #[test]
   fn views_crud_and_tree_fields() {
     let store = LocalStore::open_in_memory().unwrap();
+    // v1 is a folder: only folders hold children (ensure_valid_parent).
     store
-      .save_view(&view("v1", None, "Page 1", "0000000010"))
+      .save_view(&LocalView {
+        object_type: "folder".into(),
+        ..view("v1", None, "Page 1", "0000000010")
+      })
       .unwrap();
     store
       .save_view(&view("v2", None, "Page 2", "0000000020"))
