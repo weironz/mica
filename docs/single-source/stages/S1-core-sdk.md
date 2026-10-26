@@ -406,7 +406,7 @@ proptest! {
 | `cargo build --workspace` | 通过（38m19s，首次全量） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0（5m24s） |
 | `cargo run -q -p mica-infra --example apply_migrations`（`DATABASE_URL=…/mica_wpr`） | `migrations applied` |
-| `cargo test --workspace`（同上 DB，`MICA_REQUIRE_DB=1`，`CARGO_BUILD_JOBS=1`） | **exit 0，无失败**（含 api-server 契约黄金文件、DB 测试、md-core/markdown 全部） |
+| `cargo test --workspace`（同上 DB，`MICA_REQUIRE_DB=1`，`CARGO_BUILD_JOBS=1`） | **exit 0，无失败**（含 api-server 契约黄金文件、DB 测试、md-core/markdown 全部）。该次运行在审查修复提交**之前**的工作树；修复后（`f99add9`）在最终树上重跑了受影响的 `cargo test -p mica-md`、`-p mica-md --no-default-features`、`-p mica-markdown`、`-p mica-core --features store` 与全 workspace clippy（均 exit 0）。最终树的全量 `cargo test --workspace` 复跑因单作业串行编译超过 1 小时被中止，**不声称它已在最终提交上完成**。 |
 | `cargo test -p mica-core --features store` | exit 0：lib 112 passed/1 ignored，其余集成测试全绿 |
 | `cargo test -p mica-md` | exit 0：lib 18、cell_roundtrip 6+1 ignored、ids 5、inline_math 9、schema_sync 1、security_pipeline 6、wire 9、doc 1 |
 | `cargo test -p mica-md --no-default-features` | exit 0：uuid/seq 对比用例按 `cfg` 跳过，其余全绿 |
