@@ -171,8 +171,9 @@ fn fixed_inline_round_trip() {
 /// source, so the reader re-parses it. The `{text, marks: []}` object would be
 /// lossless in Rust's decoder, but the legacy Dart table path
 /// (`TableData._cellText` → `parseInline`) re-parses an empty-marks object's
-/// text too, so it is NOT a proven compatibility escape. Contract decision
-/// deferred to G1 (see the S1 execution record).
+/// text too, so it is NOT a proven compatibility escape. These autolink and
+/// whitespace cases are the approved I3 exceptions in
+/// docs/single-source/02-architecture.md §2.2 (G1 decision, 2026-10-27).
 #[test]
 fn empty_marks_cells_document_the_current_loss() {
   let url = decode_cell(&encode_cell(&inline_from(
@@ -185,23 +186,6 @@ fn empty_marks_cells_document_the_current_loss() {
 
   let trailing = decode_cell(&encode_cell(&inline_from("x ", Vec::new())));
   assert_eq!(trailing.text, "x", "trailing whitespace is canonicalized");
-}
-
-/// What I3 would need if the contract chose the lossless object form for
-/// empty marks. Ignored until G1 decides; kept executable.
-#[test]
-#[ignore = "contract decision pending: empty-marks object vs inline-source string"]
-fn unmarked_cells_are_lossless_for_every_text() {
-  for text in [
-    "https://example.com",
-    "www.example.com",
-    "a@b.co",
-    "x ",
-    "*x*",
-  ] {
-    let cell = inline_from(text, Vec::new());
-    assert_eq!(decode_cell(&encode_cell(&cell)), cell);
-  }
 }
 
 #[test]
