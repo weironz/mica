@@ -207,7 +207,7 @@ impl ZipStreamWriter {
   }
 }
 
-fn crc32(data: &[u8]) -> u32 {
+pub(crate) fn crc32(data: &[u8]) -> u32 {
   let mut crc = 0xffff_ffffu32;
   for &byte in data {
     crc ^= byte as u32;
@@ -253,7 +253,7 @@ mod tests {
       zip.windows(4).any(|w| w == 0x0606_4b50u32.to_le_bytes()),
       "zip64 EOCD present"
     );
-    let back = crate::zip::read_zip(&zip);
+    let back = crate::zip::read_zip(&zip).unwrap();
     let got: Vec<(String, Vec<u8>)> = back.into_iter().map(|e| (e.name, e.bytes)).collect();
     let want: Vec<(String, Vec<u8>)> = entries.into_iter().map(|e| (e.name, e.data)).collect();
     assert_eq!(got, want);

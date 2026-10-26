@@ -460,6 +460,7 @@ pub(crate) fn math_block(
   _body: &str,
   col: usize,
 ) -> Option<()> {
+  let mut next_index = *ctx.index;
   if col < 4
     && let Some((open_rest, closer)) = match content {
       c if c.starts_with("$$") => Some((&c[2..], "$$")),
@@ -478,21 +479,22 @@ pub(crate) fn math_block(
       }
     }
     if !closed && open_rest.is_empty() {
-      (*ctx.index) += 1;
-      while *ctx.index < ctx.lines.len() {
-        let l = ctx.lines[*ctx.index].trim();
+      next_index += 1;
+      while next_index < ctx.lines.len() {
+        let l = ctx.lines[next_index].trim();
         if l == closer {
-          (*ctx.index) += 1;
+          next_index += 1;
           closed = true;
           break;
         }
-        source.push(ctx.lines[*ctx.index].trim_end().to_string());
-        (*ctx.index) += 1;
+        source.push(ctx.lines[next_index].trim_end().to_string());
+        next_index += 1;
       }
     } else if closed {
-      (*ctx.index) += 1;
+      next_index += 1;
     }
     if closed {
+      *ctx.index = next_index;
       push_block(
         ctx.blocks,
         ctx.root_children,
@@ -700,9 +702,10 @@ pub(crate) fn table(
     // while a mark-free cell stays a plain string, so simple tables are
     // byte-identical to before and the grid never bloats. Legacy string
     // cells still round-trip: `decode_table_cell` re-parses them on read.
+    let defs = ctx.defs;
     let cell_rows: Vec<Vec<Value>> = rows
       .iter()
-      .map(|row| row.iter().map(|raw| encode_table_cell(raw)).collect())
+      .map(|row| row.iter().map(|raw| encode_table_cell(raw, defs)).collect())
       .collect();
     let mut data = json!({
       "rows": cell_rows,
@@ -753,15 +756,7 @@ pub(crate) fn indented_code_and_divider(
         (*ctx.index) += 1;
         continue;
       }
-      let c = l.trim_start();
-      let mut lcol = 0usize;
-      for ch in l[..l.len() - c.len()].chars() {
-        lcol = if ch == '\t' {
-          (lcol / 4 + 1) * 4
-        } else {
-          lcol + 1
-        };
-      }
+      let lcol = leading_columns(l);
       if lcol < 4 {
         break;
       }
@@ -881,8 +876,11 @@ pub(crate) fn quote_group(
     // Lazy/marked continuation: a plain paragraph line at the same or a
     // shallower marker depth keeps the open quoted paragraph going.
     let (kind, text, mut data) = classify_markdown_line(qrest_trim);
+    let qfence = (leading_columns(qrest) < 4)
+      .then(|| fence_open(qrest_trim))
+      .flatten();
     if kind == "paragraph"
-      && !qrest_trim.starts_with("```")
+      && qfence.is_none()
       && let Some(open) = ctx.st.open_item.as_mut()
       && open.qdepth >= qdepth
       && !open.had_blank
@@ -905,17 +903,17 @@ pub(crate) fn quote_group(
     ctx.st.quote_boundary = false;
 
     // Fenced code inside the quote: runs while the markers do.
-    if let Some(language) = qrest_trim.strip_prefix("```") {
-      let language = language.trim().to_string();
+    if let Some((fence_char, fence_len, info)) = qfence {
+      let language = unescape_md(info.split_whitespace().next().unwrap_or(""));
       let mut code_lines = Vec::new();
       (*ctx.index) += 1;
       while *ctx.index < ctx.lines.len() {
-        let lcontent = ctx.lines[*ctx.index].trim_end().trim_start();
+        let lcontent = ctx.lines[*ctx.index].trim_start();
         let (d2, r2) = strip_quote_markers(lcontent);
         if d2 < qdepth {
           break; // the quote ended — so does the fence
         }
-        if r2.trim_start().starts_with("```") {
+        if leading_columns(r2) < 4 && fence_close(r2.trim_start(), fence_char, fence_len) {
           (*ctx.index) += 1;
           break;
         }

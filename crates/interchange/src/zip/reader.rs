@@ -6,12 +6,33 @@
 
 use super::inflate::inflate;
 use super::names::decode_name;
+use super::writer::crc32;
 
 #[derive(Debug, Clone)]
 pub struct ZipFileEntry {
   pub name: String,
   pub bytes: Vec<u8>,
 }
+
+/// Why an archive could not be read as a whole. Raised only for damage that
+/// would otherwise turn into silently-wrong content: a decoded entry whose
+/// bytes no longer match its recorded CRC-32. Structurally unreadable entries
+/// (unsupported method, past the memory budget, truncated headers) are still
+/// dropped the way they always were — they are absence, not corruption.
+#[derive(Debug, Clone)]
+pub enum ZipReadError {
+  CrcMismatch { name: String },
+}
+
+impl std::fmt::Display for ZipReadError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      ZipReadError::CrcMismatch { name } => write!(f, "CRC mismatch in archive entry {name:?}"),
+    }
+  }
+}
+
+impl std::error::Error for ZipReadError {}
 
 fn u16le(d: &[u8], i: usize) -> u16 {
   u16::from_le_bytes([d[i], d[i + 1]])
@@ -42,19 +63,19 @@ fn u64le(d: &[u8], i: usize) -> u64 {
 /// the budget are dropped like any other unreadable entry.
 pub const MAX_INFLATED_TOTAL: usize = 1024 * 1024 * 1024;
 
-pub fn read_zip(data: &[u8]) -> Vec<ZipFileEntry> {
+pub fn read_zip(data: &[u8]) -> Result<Vec<ZipFileEntry>, ZipReadError> {
   let mut budget = MAX_INFLATED_TOTAL;
   read_zip_within(data, &mut budget)
 }
 
 /// [read_zip] drawing from a caller-held byte budget, so nested archives share
 /// ONE ceiling instead of each getting a fresh one.
-pub fn read_zip_within(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
+pub fn read_zip_within(data: &[u8], budget: &mut usize) -> Result<Vec<ZipFileEntry>, ZipReadError> {
   // Locate the end-of-central-directory record, scanning back over a
   // possible archive comment (up to 64 KiB).
   const EOCD_LEN: usize = 22;
   if data.len() < EOCD_LEN {
-    return Vec::new();
+    return Ok(Vec::new());
   }
   let stop = data.len().saturating_sub(EOCD_LEN + 0xffff);
   let mut eocd = None;
@@ -95,6 +116,7 @@ pub fn read_zip_within(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
     }
     let flags = u16le(data, off + 8);
     let method = u16le(data, off + 10);
+    let crc = u32le(data, off + 16);
     let mut comp_size = u64::from(u32le(data, off + 20));
     let mut uncomp_size = u64::from(u32le(data, off + 24));
     let name_len = usize::from(u16le(data, off + 28));
@@ -155,32 +177,49 @@ pub fn read_zip_within(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
       continue;
     }
     let uncomp_size = usize::try_from(uncomp_size).unwrap_or(usize::MAX);
-    if let Some(bytes) = decode_entry(&data[start..start + comp_size], method, uncomp_size, budget)
-    {
+    if let Some(bytes) = decode_entry(
+      &data[start..start + comp_size],
+      method,
+      uncomp_size,
+      crc,
+      &name,
+      budget,
+    )? {
       out.push(ZipFileEntry { name, bytes });
     }
   }
-  out
+  Ok(out)
 }
 
 fn decode_entry(
   comp: &[u8],
   method: u16,
   uncomp_size: usize,
+  expected_crc: u32,
+  name: &str,
   budget: &mut usize,
-) -> Option<Vec<u8>> {
+) -> Result<Option<Vec<u8>>, ZipReadError> {
   let bytes = match method {
     0 if comp.len() <= *budget => comp.to_vec(),
-    8 => inflate(comp, uncomp_size, *budget).ok()?,
-    _ => return None, // unsupported compression method, or over budget
+    8 => match inflate(comp, uncomp_size, *budget) {
+      Ok(bytes) => bytes,
+      Err(_) => return Ok(None), // structurally unreadable — dropped, not an error
+    },
+    _ => return Ok(None), // unsupported compression method, or over budget
   };
   *budget -= bytes.len();
-  Some(bytes)
+  if crc32(&bytes) != expected_crc {
+    return Err(ZipReadError::CrcMismatch {
+      name: name.to_string(),
+    });
+  }
+  Ok(Some(bytes))
 }
 
 /// Fallback for archives without a readable central directory: walk local
-/// headers front-to-back (cannot handle data-descriptor entries).
-fn read_local_entries(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
+/// headers front-to-back (cannot handle data-descriptor entries). Uses the
+/// local header's own CRC.
+fn read_local_entries(data: &[u8], budget: &mut usize) -> Result<Vec<ZipFileEntry>, ZipReadError> {
   let mut out = Vec::new();
   let mut i = 0;
   while i + 30 <= data.len() {
@@ -189,6 +228,7 @@ fn read_local_entries(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
     }
     let flags = u16le(data, i + 6);
     let method = u16le(data, i + 8);
+    let crc = u32le(data, i + 14);
     let comp_size = u32le(data, i + 18) as usize;
     let uncomp_size = u32le(data, i + 22) as usize;
     let name_len = usize::from(u16le(data, i + 26));
@@ -208,12 +248,14 @@ fn read_local_entries(data: &[u8], budget: &mut usize) -> Vec<ZipFileEntry> {
         &data[data_start..data_start + comp_size],
         method,
         uncomp_size,
+        crc,
+        &name,
         budget,
-      )
+      )?
     {
       out.push(ZipFileEntry { name, bytes });
     }
     i = data_start + comp_size;
   }
-  out
+  Ok(out)
 }

@@ -12,7 +12,7 @@ pub mod zip;
 
 pub use export_tree::{
   ImageAsset, TreeExport, TreeNode, build_incremental_markdown_tree_zip, build_markdown_tree_zip,
-  markdown_tree_manifest, safe_segment, unique_asset_name,
+  for_each_inline_mark_mut, markdown_tree_manifest, safe_segment, unique_asset_name,
 };
 pub use import::{
   ImportMode, ImportPlan, PagePlan, percent_decode, plan_import, plan_vault_import, resolve_ref,

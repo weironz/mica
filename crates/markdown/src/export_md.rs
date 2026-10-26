@@ -271,6 +271,22 @@ pub(crate) fn push_list_item(
   }
 }
 
+/// Longest run of backticks in the code body + 1 (min 3): the only delimiter
+/// that cannot collide with the content. Mirrored by `_codeFenceFor` in Dart.
+pub(crate) fn code_fence_for(text: &str) -> String {
+  let mut longest = 0usize;
+  let mut cur = 0usize;
+  for c in text.chars() {
+    if c == '`' {
+      cur += 1;
+      longest = longest.max(cur);
+    } else {
+      cur = 0;
+    }
+  }
+  "`".repeat((longest + 1).max(3))
+}
+
 pub(crate) fn append_markdown_block_content(
   block: &Block,
   depth: usize,
@@ -332,6 +348,7 @@ pub(crate) fn append_markdown_block_content(
       lines.extend(rich.split('\n').map(|l| escape_block_leader(l.to_string())));
       lines.push(String::new());
     }
+
     "code_block" | "code" => {
       if block_data_bool(block, "raw") {
         // A raw HTML block writes back verbatim — no fences — so foreign
@@ -340,9 +357,10 @@ pub(crate) fn append_markdown_block_content(
         lines.push(String::new());
       } else {
         let language = block_data_str(block, "language").unwrap_or("");
-        lines.push(format!("```{language}"));
+        let fence = code_fence_for(&block.text);
+        lines.push(format!("{fence}{language}"));
         lines.extend(block.text.lines().map(str::to_string));
-        lines.push("```".to_string());
+        lines.push(fence);
         lines.push(String::new());
       }
     }
@@ -358,13 +376,11 @@ pub(crate) fn append_markdown_block_content(
           .unwrap_or_default()
           .to_string(),
       };
+      let target = escape_destination(&target);
       // Keep an empty alt empty — `![](url)` must round-trip unchanged.
       let text = escape_inline(text);
       match block_data_str(block, "title") {
-        Some(t) => lines.push(format!(
-          "![{text}]({target} \"{}\")",
-          t.replace('"', "\\\"")
-        )),
+        Some(t) => lines.push(format!("![{text}]({target} \"{}\")", escape_title(t))),
         None => lines.push(format!("![{text}]({target})")),
       }
       lines.push(String::new());
@@ -399,7 +415,7 @@ pub(crate) fn append_markdown_block_content(
       lines.push(String::new());
     }
     _ => {
-      if !text.is_empty() {
+      if !rich.is_empty() {
         // Every line, not just the first: after a hard break (`\` + newline)
         // a line reading `- item` started a real list on re-import.
         let rich = escape_block_leaders(rich);
@@ -414,8 +430,8 @@ pub(crate) fn append_markdown_block_content(
 /// stored form: a cell with inline marks becomes `{"text","marks"}` (matching
 /// paragraphs); a mark-free cell stays the plain source string (keeps simple
 /// tables and the conformance golds byte-identical).
-pub(crate) fn encode_table_cell(raw: &str) -> Value {
-  let (text, data) = apply_inline_marks(raw.to_string(), Value::Null, &RefDefs::new());
+pub(crate) fn encode_table_cell(raw: &str, defs: &RefDefs) -> Value {
+  let (text, data) = apply_inline_marks(raw.to_string(), Value::Null, defs);
   match data.get("marks").and_then(Value::as_array) {
     Some(marks) if !marks.is_empty() => json!({ "text": text, "marks": marks }),
     _ => Value::String(raw.to_string()),

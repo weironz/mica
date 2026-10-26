@@ -378,7 +378,7 @@ fn unquote_scalar(s: &str) -> String {
 
 /// Double-quote a string when leaving it bare would change its meaning on
 /// re-parse (empty, whitespace edges, a leading indicator char, an embedded
-/// `: ` / `, ` / `]`, or a value that would infer as bool/number/date/list).
+/// `: ` / `,` / `]`, or a value that would infer as bool/number/date/list).
 /// Conservative: quoting is always safe, so quote whenever in doubt.
 fn quote_if_needed(s: &str) -> String {
   let needs = s.is_empty()
@@ -389,7 +389,7 @@ fn quote_if_needed(s: &str) -> String {
       ',',
     ])
     || s.contains(": ")
-    || s.contains(", ")
+    || s.contains(',')
     || s.contains(['\n', ']'])
     || !matches!(infer_scalar(s), PropertyValue::Text(ref t) if t == s);
   if needs {

@@ -66,7 +66,13 @@ fn cmp_candidates(
       }
       SpanTies::Html => Ordering::Equal,
     })
-    .then_with(|| b.cmp(&a))
+    .then_with(|| {
+      if matches!(ties, SpanTies::Markdown) && ma.start == ma.end && mb.start == mb.end {
+        a.cmp(&b)
+      } else {
+        b.cmp(&a)
+      }
+    })
 }
 
 impl<'m> SpanWalker<'m> {
@@ -102,7 +108,11 @@ impl<'m> SpanWalker<'m> {
     let ties = self.ties;
     let mut best: Option<usize> = None;
     self.active.retain(|&a| {
-      if marks[a].end.min(hi) <= pos {
+      let empty_link = matches!(ties, SpanTies::Markdown)
+        && marks[a].kind == "link"
+        && marks[a].start == pos
+        && marks[a].end == pos;
+      if marks[a].end.min(hi) <= pos && !empty_link {
         return false;
       }
       if best.is_none_or(|b| cmp_candidates(marks, hi, ties, a, b) == Ordering::Less) {
@@ -112,6 +122,9 @@ impl<'m> SpanWalker<'m> {
     });
     if let Some(a) = best {
       let m = self.marks[a];
+      if m.start == m.end {
+        self.active.retain(|&idx| idx != a);
+      }
       return Some(Pick {
         s: pos,
         e: m.end.min(self.hi),
@@ -124,9 +137,16 @@ impl<'m> SpanWalker<'m> {
     while self.next < self.order.len() {
       let a = self.order[self.next];
       let m = self.marks[a];
-      if m.end.min(self.hi) <= m.start {
-        self.next += 1; // zero-width in range: can never qualify
+      let empty_link = matches!(self.ties, SpanTies::Markdown)
+        && m.kind == "link"
+        && m.start == m.end
+        && m.start <= self.hi;
+      if m.end.min(self.hi) <= m.start && !empty_link {
+        self.next += 1;
         continue;
+      }
+      if empty_link {
+        self.next += 1;
       }
       return Some(Pick {
         s: m.start,
@@ -143,7 +163,14 @@ impl<'m> SpanWalker<'m> {
   /// itself excluded. Valid right after the [`SpanWalker::next_pick`] that
   /// returned `pick`.
   pub(crate) fn inner(&self, pick: &Pick) -> Vec<&'m InlineMark> {
-    let overlaps = |m: &InlineMark| m.end.min(pick.e) > m.start.max(pick.s);
+    let overlaps = |m: &InlineMark| {
+      m.end.min(pick.e) > m.start.max(pick.s)
+        || (matches!(self.ties, SpanTies::Markdown)
+          && m.kind == "link"
+          && m.start == m.end
+          && m.start >= pick.s
+          && m.start < pick.e)
+    };
     let mut idxs: Vec<usize> = Vec::new();
     for &a in &self.active {
       if a != pick.idx && overlaps(self.marks[a]) {

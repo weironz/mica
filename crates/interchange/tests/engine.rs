@@ -26,7 +26,7 @@ fn reads_own_store_archives_round_trip() {
     },
   ];
   let zip = build_zip(&entries);
-  let back = read_zip(&zip);
+  let back = read_zip(&zip).unwrap();
   assert_eq!(back.len(), 2);
   assert_eq!(back[0].name, "Guide.md");
   assert_eq!(back[0].bytes, b"# Guide");
@@ -35,7 +35,7 @@ fn reads_own_store_archives_round_trip() {
 
 #[test]
 fn reads_gbk_named_archive() {
-  let entries = read_zip(&fixture("gbk.zip"));
+  let entries = read_zip(&fixture("gbk.zip")).unwrap();
   let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
   assert!(names.contains(&"中文目录/页面.md"));
   assert!(names.contains(&"图片.png"));
@@ -45,21 +45,21 @@ fn reads_gbk_named_archive() {
 
 #[test]
 fn prefers_unicode_path_extra_field() {
-  let entries = read_zip(&fixture("upath.zip"));
+  let entries = read_zip(&fixture("upath.zip")).unwrap();
   assert_eq!(entries[0].name, "测试.md");
   assert_eq!(entries[0].bytes, b"hi");
 }
 
 #[test]
 fn reads_zip64_marked_archive() {
-  let entries = read_zip(&fixture("zip64.zip"));
+  let entries = read_zip(&fixture("zip64.zip")).unwrap();
   assert_eq!(entries[0].name, "Page.md");
   assert_eq!(String::from_utf8_lossy(&entries[0].bytes), "# 你好");
 }
 
 #[test]
 fn reads_data_descriptor_archive() {
-  let entries = read_zip(&fixture("dd.zip"));
+  let entries = read_zip(&fixture("dd.zip")).unwrap();
   assert_eq!(entries[0].name, "stream.md");
   assert_eq!(
     String::from_utf8_lossy(&entries[0].bytes),
@@ -93,10 +93,11 @@ fn normalize_peels_wrappers_and_drops_junk() {
 #[test]
 fn nested_part_zip_expands_through_plan() {
   let plan = plan_import(
-    read_zip(&fixture("nested.zip")),
+    read_zip(&fixture("nested.zip")).unwrap(),
     false,
     mica_interchange::ImportMode::AsIs,
-  );
+  )
+  .unwrap();
   assert!(plan.notion); // names carry 32-hex ids → auto-detected
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
   // `Guide.md` has a `Guide/` of children → folder "Guide" + leaf "Guide" holding
@@ -156,12 +157,132 @@ fn notion_folder_and_page_pair_up_across_differing_ids() {
     ],
     true,
     mica_interchange::ImportMode::AsIs,
-  );
+  )
+  .unwrap();
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
   assert_eq!(titles, ["apple", "apple", "iphone"]);
   assert!(plan.pages[0].is_folder && !plan.pages[1].is_folder);
   assert_eq!(plan.pages[1].parent, Some(0));
   assert_eq!(plan.pages[2].parent, Some(0));
+}
+/// Issue #151: two Notion pages that differ ONLY by their trailing id, each
+/// with its own body AND its own child directory, must stay two distinct
+/// folders rather than merging into one. The single-page/differing-id pairing
+/// (the test above) must keep working alongside this.
+#[test]
+fn notion_duplicate_titles_keep_separate_folder_identities() {
+  let e = |name: &str, body: &str| ZipFileEntry {
+    name: name.into(),
+    bytes: body.as_bytes().to_vec(),
+  };
+  let plan = plan_import(
+    vec![
+      e("Doc-11111111111111111111111111111111.md", "# Doc\n\nfirst"),
+      e("Doc-22222222222222222222222222222222.md", "# Doc\n\nsecond"),
+      e(
+        "Doc-11111111111111111111111111111111/ChildA.md",
+        "# ChildA\n\na",
+      ),
+      e(
+        "Doc-22222222222222222222222222222222/ChildB.md",
+        "# ChildB\n\nb",
+      ),
+    ],
+    true,
+    mica_interchange::ImportMode::AsIs,
+  )
+  .unwrap();
+  let folders: Vec<usize> = plan
+    .pages
+    .iter()
+    .enumerate()
+    .filter(|(_, p)| p.is_folder)
+    .map(|(i, _)| i)
+    .collect();
+  assert_eq!(
+    folders.len(),
+    2,
+    "expected two distinct Doc folders: {:#?}",
+    plan
+      .pages
+      .iter()
+      .map(|p| (&p.title, p.parent))
+      .collect::<Vec<_>>()
+  );
+  assert_eq!(&plan.pages[folders[0]].title, "Doc");
+  assert_eq!(&plan.pages[folders[1]].title, "Doc");
+
+  let leaf = |body: &str| {
+    plan
+      .pages
+      .iter()
+      .position(|p| !p.is_folder && p.markdown.trim() == body)
+      .unwrap_or_else(|| panic!("missing leaf {body:?}"))
+  };
+  let first = leaf("first");
+  let second = leaf("second");
+  assert!(folders.contains(&plan.pages[first].parent.unwrap()));
+  assert!(folders.contains(&plan.pages[second].parent.unwrap()));
+  assert_ne!(
+    plan.pages[first].parent, plan.pages[second].parent,
+    "two same-titled pages must not share one folder"
+  );
+  let child_a = plan.pages.iter().position(|p| p.title == "ChildA").unwrap();
+  let child_b = plan.pages.iter().position(|p| p.title == "ChildB").unwrap();
+  assert_eq!(plan.pages[child_a].parent, plan.pages[first].parent);
+  assert_eq!(plan.pages[child_b].parent, plan.pages[second].parent);
+}
+/// Review follow-up to #151: document STEMS are claimants of a cleaned
+/// directory name too. When only ONE of two same-titled pages owns a child
+/// directory, the other page's body must not be folded into the first page's
+/// folder — the body-less page stays a separate top-level leaf.
+#[test]
+fn notion_same_title_single_children_dir_keeps_pages_apart() {
+  let a_id = "9f009f009f009f009f009f009f009f00";
+  let b_id = "a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2";
+  let e = |name: &str, body: &str| ZipFileEntry {
+    name: name.into(),
+    bytes: body.as_bytes().to_vec(),
+  };
+  let plan = plan_import(
+    vec![
+      e(&format!("Doc {a_id}.md"), "A body"),
+      e(&format!("Doc {a_id}/Sub {a_id}.md"), "sub"),
+      e(&format!("Doc {b_id}.md"), "B body"),
+    ],
+    true,
+    mica_interchange::ImportMode::AsIs,
+  )
+  .unwrap();
+  let folder = plan
+    .pages
+    .iter()
+    .position(|p| p.is_folder)
+    .expect("one folder for the page with children");
+  assert_eq!(plan.pages[folder].title, "Doc");
+  let leaf = |body: &str| {
+    plan
+      .pages
+      .iter()
+      .position(|p| !p.is_folder && p.markdown.trim() == body)
+      .unwrap_or_else(|| {
+        panic!(
+          "missing leaf {body:?}: {:#?}",
+          plan
+            .pages
+            .iter()
+            .map(|p| (&p.title, p.parent, p.markdown.trim()))
+            .collect::<Vec<_>>()
+        )
+      })
+  };
+  let a = leaf("A body");
+  let b = leaf("B body");
+  // A owns the child directory → its body becomes a leaf inside the folder.
+  assert_eq!(plan.pages[a].parent, Some(folder));
+  // B has NO children of its own → it must stay a separate top-level page,
+  // not be absorbed into A's folder.
+  assert_eq!(plan.pages[b].parent, None, "B was merged into A's folder");
 }
 
 #[test]
@@ -274,10 +395,11 @@ fn resolve_ref_rules() {
 #[test]
 fn plan_full_archive_with_manifest_links_and_assets() {
   let plan = plan_import(
-    read_zip(&fixture("plan.zip")),
+    read_zip(&fixture("plan.zip")).unwrap(),
     false,
     mica_interchange::ImportMode::AsIs,
-  );
+  )
+  .unwrap();
   assert!(!plan.notion);
   let titles: Vec<&str> = plan.pages.iter().map(|p| p.title.as_str()).collect();
   // Manifest order, not alphabetical. `Zeta.md` owns `Zeta/` → folder + leaf.
@@ -301,4 +423,351 @@ fn plan_full_archive_with_manifest_links_and_assets() {
   // Link target resolves to the planned page.
   let target = resolve_ref("Zeta/Sub.md", "../Zeta.md", &plan.md_paths).unwrap();
   assert_eq!(plan.page_by_path[&target], 1); // the leaf that carries Zeta's body
+}
+/// Issue #93: dot-prefixed page/folder names were exported as path segments
+/// that the importer's own hidden-file filter then discarded — `.hidden`
+/// pages lost their whole body, `.private/Child` lost the `Child`, and a
+/// folder named `..` produced a parent-traversal zip entry. The export must
+/// now emit only import-safe segments; display names ride on the manifest.
+#[test]
+fn dot_prefixed_pages_survive_round_trip() {
+  use std::collections::HashMap;
+
+  use mica_interchange::{ImportMode, TreeNode, build_markdown_tree_zip};
+
+  let node = |id: &str, name: &str, parent: Option<&str>, folder: bool| TreeNode {
+    id: id.into(),
+    name: name.into(),
+    parent_id: parent.map(str::to_string),
+    position: id.into(),
+    object_id: format!("doc-{id}"),
+    object_type: if folder {
+      "folder".into()
+    } else {
+      "document".into()
+    },
+    icon: None,
+  };
+  let nodes = vec![
+    node("a", "Visible", None, false),
+    // Sibling whose stripped spelling collides with `.hidden`'s: proves the
+    // encoded names dedup instead of overwriting.
+    node("g", "hidden", None, false),
+    node("b", ".hidden", None, false),
+    node("c", ".private", None, true),
+    node("d", "Child", Some("c"), false),
+    node("e", "..", None, true),
+    node("f", "Note", Some("e"), false),
+  ];
+  let payloads: HashMap<_, _> = nodes
+    .iter()
+    .filter(|n| n.object_type == "document")
+    .map(|n| {
+      (
+        n.object_id.clone(),
+        mica_markdown::import_markdown("Important text", &format!("root-{}", n.id)),
+      )
+    })
+    .collect();
+  let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+  for e in &entries {
+    assert!(
+      !e.name.split('/').any(|seg| seg == "." || seg == ".."),
+      "parent-traversal entry: {}",
+      e.name
+    );
+    assert!(
+      !e.name.split('/').any(|seg| seg.starts_with('.')),
+      "hidden (import-junk) entry: {}",
+      e.name
+    );
+  }
+  let plan = plan_import(
+    read_zip(&build_zip(&entries)).unwrap(),
+    false,
+    ImportMode::AsIs,
+  )
+  .unwrap();
+  let page = |title: &str| {
+    plan
+      .pages
+      .iter()
+      .find(|p| p.title == title)
+      .unwrap_or_else(|| {
+        panic!(
+          "missing page {title:?} in {:#?}",
+          plan.pages.iter().map(|p| &p.title).collect::<Vec<_>>()
+        )
+      })
+  };
+  assert_eq!(page("Visible").markdown.trim(), "Important text");
+  assert_eq!(page(".hidden").markdown.trim(), "Important text");
+  assert_eq!(page("hidden").markdown.trim(), "Important text");
+  assert!(page(".private").is_folder);
+  let child = page("Child");
+  assert_eq!(child.markdown.trim(), "Important text");
+  assert_eq!(
+    child.parent,
+    plan.pages.iter().position(|p| p.title == ".private")
+  );
+  assert!(page("..").is_folder);
+  let note = page("Note");
+  assert_eq!(note.markdown.trim(), "Important text");
+  assert_eq!(note.parent, plan.pages.iter().position(|p| p.title == ".."));
+}
+/// Issue #143: two inner archives each carrying the SAME relative paths
+/// (`assets/logo.png`, `A.md`, `B.md`) with DIFFERENT bytes must stay apart —
+/// today `plan_import` flattens them and the later archive silently overwrites
+/// the earlier one's pages and asset. Each inner archive gets its own namespace.
+#[test]
+fn nested_part_archives_keep_same_path_namespaces_apart() {
+  let inner = |logo: &[u8], a: &str, b: &str| {
+    build_zip(&[
+      mica_interchange::ZipEntry {
+        name: "assets/logo.png".into(),
+        data: logo.to_vec(),
+      },
+      mica_interchange::ZipEntry {
+        name: "A.md".into(),
+        data: a.as_bytes().to_vec(),
+      },
+      mica_interchange::ZipEntry {
+        name: "B.md".into(),
+        data: b.as_bytes().to_vec(),
+      },
+    ])
+  };
+  let part1 = inner(b"PART_ONE", "# P1A\n\n[logo](assets/logo.png)", "# P1B");
+  let part2 = inner(b"PART_TWO", "# P2A\n\n[logo](assets/logo.png)", "# P2B");
+  let outer = build_zip(&[
+    mica_interchange::ZipEntry {
+      name: "Part1.zip".into(),
+      data: part1,
+    },
+    mica_interchange::ZipEntry {
+      name: "Part2.zip".into(),
+      data: part2,
+    },
+  ]);
+
+  let plan = plan_import(
+    read_zip(&outer).unwrap(),
+    false,
+    mica_interchange::ImportMode::AsIs,
+  )
+  .unwrap();
+  // Both assets survive, each under its inner archive's namespace.
+  assert_eq!(
+    plan.files.get("Part1/assets/logo.png").map(Vec::as_slice),
+    Some(&b"PART_ONE"[..])
+  );
+  assert_eq!(
+    plan.files.get("Part2/assets/logo.png").map(Vec::as_slice),
+    Some(&b"PART_TWO"[..])
+  );
+  // Both pages survive too (the later archive must not overwrite the earlier).
+  let bodies: Vec<&str> = plan
+    .pages
+    .iter()
+    .filter(|p| !p.is_folder)
+    .map(|p| p.markdown.trim())
+    .collect();
+  assert!(
+    bodies.contains(&"# P1A\n\n[logo](assets/logo.png)"),
+    "Part1 page lost: {bodies:?}"
+  );
+  assert!(
+    bodies.contains(&"# P2A\n\n[logo](assets/logo.png)"),
+    "Part2 page lost: {bodies:?}"
+  );
+}
+/// Issue #144 (export side): internal page links inside TABLE cells must be
+/// relativised to `B.md` exactly like the ones in paragraphs — not left as
+/// `mica://page/…` which is dead in any external Markdown viewer.
+#[test]
+fn table_cell_page_links_relativise_in_zip_export() {
+  use std::collections::HashMap;
+
+  use mica_interchange::{TreeNode, build_markdown_tree_zip};
+
+  let node = |id: &str, name: &str| TreeNode {
+    id: id.into(),
+    name: name.into(),
+    parent_id: None,
+    position: id.into(),
+    object_id: format!("doc-{id}"),
+    object_type: "document".into(),
+    icon: None,
+  };
+  let nodes = vec![node("a", "A"), node("b", "B")];
+  let payloads: HashMap<_, _> = [(
+    "doc-a".to_string(),
+    mica_markdown::import_markdown("# A\n\n|H|\n|---|\n|[B](mica://page/b)|", "root-a"),
+  )]
+  .into();
+  let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+  let md = entries
+    .iter()
+    .find(|e| e.name == "A.md")
+    .expect("A.md present");
+  let body = String::from_utf8_lossy(&md.data);
+  assert!(
+    body.contains("[B](B.md)"),
+    "table-cell link must be relativised, got:\n{body}"
+  );
+}
+
+/// Issue #144 (import side): a reference definition (`[ref]: /target`) must
+/// resolve inside a table cell exactly as it does in a paragraph — the cell
+/// exports the resolved link, not a literal `[ref]`.
+#[test]
+fn table_cell_reference_definitions_resolve_like_paragraphs() {
+  let payload = mica_markdown::import_markdown("[ref]: /target\n\n|H|\n|---|\n| [ref] |", "root");
+  let out = mica_markdown::export_markdown(&payload).expect("exports");
+  assert!(
+    out.contains("| [ref](/target) |"),
+    "cell reference must resolve to a link, got:\n{out}"
+  );
+}
+/// Review finding 2: re-rooting a conflicted inner archive under its own stem
+/// can itself collide with an outer path. The outer `A/note.md` and the inner
+/// archive's `note.md` (re-rooted as `A/note.md`) must NOT overwrite each
+/// other — the re-root prefix must be unique against every group's paths.
+#[test]
+fn conflict_reroot_prefix_avoids_existing_outer_paths() {
+  let ze = |name: &str, data: &[u8]| mica_interchange::ZipEntry {
+    name: name.into(),
+    data: data.to_vec(),
+  };
+  let inner = build_zip(&[ze("index.md", b"# Inner"), ze("note.md", b"# InnerNote")]);
+  let outer = build_zip(&[
+    ze("index.md", b"# Outer"),
+    ze("A/note.md", b"# OuterNote"),
+    ze("A.zip", &inner),
+  ]);
+  let plan = plan_import(
+    read_zip(&outer).unwrap(),
+    false,
+    mica_interchange::ImportMode::AsIs,
+  )
+  .unwrap();
+  let bodies: Vec<&str> = plan.pages.iter().map(|p| p.markdown.trim()).collect();
+  assert!(
+    bodies.contains(&"# Outer"),
+    "outer index.md lost: {bodies:?}"
+  );
+  assert!(
+    bodies.contains(&"# Inner"),
+    "inner index.md lost: {bodies:?}"
+  );
+  assert!(
+    bodies.contains(&"# OuterNote"),
+    "outer A/note.md lost: {bodies:?}"
+  );
+  assert!(
+    bodies.contains(&"# InnerNote"),
+    "inner note.md lost: {bodies:?}"
+  );
+}
+
+/// Review finding 4: a page or folder whose name ENDS in a dot is forbidden
+/// on Windows (and `Docs.` canonicalizes to `Docs`, colliding two siblings on
+/// extraction). The exporter must fold trailing dots just like leading ones.
+#[test]
+fn trailing_dot_names_export_windows_safe_segments() {
+  use std::collections::HashMap;
+
+  use mica_interchange::{ImportMode, TreeNode, build_markdown_tree_zip};
+
+  let node = |id: &str, name: &str, parent: Option<&str>, folder: bool| TreeNode {
+    id: id.into(),
+    name: name.into(),
+    parent_id: parent.map(str::to_string),
+    position: id.into(),
+    object_id: format!("doc-{id}"),
+    object_type: if folder {
+      "folder".into()
+    } else {
+      "document".into()
+    },
+    icon: None,
+  };
+  let nodes = vec![
+    node("a", "Docs", None, true),
+    node("b", "One", Some("a"), false),
+    node("c", "Docs.", None, true),
+    node("d", "Two", Some("c"), false),
+  ];
+  let payloads: HashMap<_, _> = nodes
+    .iter()
+    .filter(|n| n.object_type == "document")
+    .map(|n| {
+      (
+        n.object_id.clone(),
+        mica_markdown::import_markdown("text", &format!("root-{}", n.id)),
+      )
+    })
+    .collect();
+  let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+  let mut segments = std::collections::HashSet::new();
+  for e in &entries {
+    for seg in e.name.split('/') {
+      assert!(
+        !seg.ends_with('.') || seg == "manifest.json",
+        "trailing-dot segment in {}",
+        e.name
+      );
+      segments.insert(seg.to_lowercase());
+    }
+  }
+  let plan = plan_import(
+    read_zip(&build_zip(&entries)).unwrap(),
+    false,
+    ImportMode::AsIs,
+  )
+  .unwrap();
+  let folder_titles: Vec<&str> = plan
+    .pages
+    .iter()
+    .filter(|p| p.is_folder)
+    .map(|p| p.title.as_str())
+    .collect();
+  assert_eq!(folder_titles, ["Docs", "Docs."]);
+  assert!(plan.pages.iter().any(|p| p.title == "One"));
+  assert!(plan.pages.iter().any(|p| p.title == "Two"));
+}
+
+/// Review finding 5: a NESTED inner archive whose entry fails CRC must not be
+/// silently swallowed as a dropped unreadable inner archive — the corruption
+/// is detectable, so import must fail, not complete with only the good pages.
+#[test]
+fn corrupt_nested_archive_is_not_silently_dropped() {
+  let mut inner = build_zip(&[mica_interchange::ZipEntry {
+    name: "B.md".into(),
+    data: b"inner body".to_vec(),
+  }]);
+  let at = inner
+    .windows(10)
+    .position(|w| w == b"inner body")
+    .expect("payload present");
+  inner[at] = b'X'; // single-byte corruption; the recorded CRC stays
+  let outer = build_zip(&[
+    mica_interchange::ZipEntry {
+      name: "A.md".into(),
+      data: b"# A\n\nouter body".to_vec(),
+    },
+    mica_interchange::ZipEntry {
+      name: "B.zip".into(),
+      data: inner,
+    },
+  ]);
+  // Today the corrupt inner archive is swallowed as "unreadable inner zip,
+  // dropped" — the import completes with only A. It must instead ERROR.
+  let err = plan_import(
+    read_zip(&outer).unwrap(),
+    false,
+    mica_interchange::ImportMode::AsIs,
+  )
+  .expect_err("corrupt nested archive must fail the import");
+  assert!(err.to_string().contains("B.md"), "{err}");
 }

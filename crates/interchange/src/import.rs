@@ -79,13 +79,17 @@ pub enum ImportMode {
   IntoContainer(String),
 }
 
-pub fn plan_import(raw: Vec<ZipFileEntry>, notion_hint: bool, mode: ImportMode) -> ImportPlan {
+pub fn plan_import(
+  raw: Vec<ZipFileEntry>,
+  notion_hint: bool,
+  mode: ImportMode,
+) -> Result<ImportPlan, crate::zip::ZipReadError> {
   // `normalize_entries` already peels a single top-level wrapper folder
   // (Anytype-style collapse); capture its name FIRST so we can name a new
   // workspace / import container after it (the peel itself discards the name).
   let wrapper_name = crate::normalize::stripped_wrapper_name(&raw);
-  let entries = expand_nested_zips(normalize_entries(raw));
-  plan_core(entries, notion_hint, wrapper_name, mode)
+  let entries = expand_nested_zips(normalize_entries(raw))?;
+  Ok(plan_core(entries, notion_hint, wrapper_name, mode))
 }
 
 /// Plan a walked DIRECTORY tree (the desktop "open my vault" folder picker,
@@ -219,9 +223,67 @@ fn plan_core(
     }
   }
 
-  // Every normalized directory path that has something under it. A `.md` whose
-  // own path is in here is a page-WITH-subpages, which Mica's model has no room
-  // for (folders are pure containers, pages are leaves) — see the split below.
+  // Directory identity. `clean` strips a Notion id suffix from each segment, so
+  // a folder `Doc <id-a>/` and its page `Doc <id-b>.md` normally share one
+  // cleaned name and must pair into one folder-plus-leaf. But when TWO distinct
+  // pages claim that cleaned name — whether via two child directories (issue
+  // #151) or via one page's own directory plus another page that has none —
+  // pairing them into one folder would merge unrelated subtrees, so each is
+  // keyed by its RAW path instead. A lone differing-id pair still unites.
+  let clean_path =
+    |path: &str| -> String { path.split('/').map(&clean).collect::<Vec<_>>().join("/") };
+  // Raw directories and document stems that collapse to each cleaned name.
+  let mut dir_claims: HashMap<String, Vec<String>> = HashMap::new();
+  let mut doc_claims: HashMap<String, Vec<String>> = HashMap::new();
+  for (path, is_folder) in &ordered {
+    let parts: Vec<&str> = path.split('/').collect();
+    let chain = if *is_folder {
+      parts.len()
+    } else {
+      parts.len().saturating_sub(1)
+    };
+    for k in 1..=chain {
+      let raw = parts[..k].join("/");
+      dir_claims.entry(clean_path(&raw)).or_default().push(raw);
+    }
+    if !*is_folder {
+      let stem = strip_md_ext(path);
+      doc_claims
+        .entry(clean_path(stem))
+        .or_default()
+        .push(stem.to_string());
+    }
+  }
+  for list in dir_claims.values_mut() {
+    list.sort();
+    list.dedup();
+  }
+  for list in doc_claims.values_mut() {
+    list.sort();
+    list.dedup();
+  }
+  // Contested names include the document stems; single-owner names keep only
+  // the directory, which is what lets a lone differing-id pair pair up.
+  let mut raw_by_clean = dir_claims;
+  for (name, docs) in doc_claims {
+    let dirs = raw_by_clean.get(&name).map_or(0, |v| v.len());
+    if dirs > 1 || docs.len() > 1 {
+      raw_by_clean.entry(name).or_default().extend(docs);
+    }
+  }
+  for list in raw_by_clean.values_mut() {
+    list.sort();
+    list.dedup();
+  }
+  let dir_key = |raw: &str| -> String {
+    match raw_by_clean.get(&clean_path(raw)) {
+      Some(rs) if rs.len() > 1 => format!("raw:{raw}"),
+      _ => format!("clean:{}", clean_path(raw)),
+    }
+  };
+  // Every directory (by identity) that has something under it. A `.md` whose
+  // own directory is in here is a page-WITH-subpages, which Mica's model has no
+  // room for (folders are pure containers, pages are leaves) — see the split.
   let mut dirs_with_children: HashSet<String> = HashSet::new();
   for (path, is_folder) in &ordered {
     let parts: Vec<&str> = path.split('/').collect();
@@ -230,20 +292,15 @@ fn plan_core(
     } else {
       parts.len().saturating_sub(1)
     };
-    let mut acc = String::new();
-    for seg in parts.iter().take(chain) {
-      if !acc.is_empty() {
-        acc.push('/');
-      }
-      acc.push_str(&clean(seg));
-      dirs_with_children.insert(acc.clone());
+    for k in 1..=chain {
+      dirs_with_children.insert(dir_key(&parts[..k].join("/")));
     }
   }
 
   let mut pages: Vec<PagePlan> = Vec::new();
   let mut page_by_path: HashMap<String, usize> = HashMap::new();
-  // Keyed by NORMALIZED path so a Notion `Doc <id-a>/` and its `Doc <id-b>.md`
-  // land on the same container even when the two carry different ID suffixes.
+  // Keyed by directory identity (see `dir_key`): the cleaned name in the common
+  // case, the raw path when several raw directories share one cleaned name.
   let mut folder_page: HashMap<String, usize> = HashMap::new();
 
   for (path, is_folder) in &ordered {
@@ -258,23 +315,19 @@ fn plan_core(
 
     let mut parent: Option<usize> = None;
     let mut folder_path = String::new();
-    let mut norm_folder = String::new();
-    for seg_raw in parts.iter().take(chain) {
+    for &seg_raw in parts.iter().take(chain) {
       if !folder_path.is_empty() {
         folder_path.push('/');
       }
       folder_path.push_str(seg_raw);
       let seg = clean(seg_raw);
-      if !norm_folder.is_empty() {
-        norm_folder.push('/');
-      }
-      norm_folder.push_str(&seg);
+      let key = dir_key(&folder_path);
 
       // A directory is ALWAYS a folder page. It used to map onto the `.md` that
       // shares its name (`Doc.md` + `Doc/…` → one document that also had
       // children), which produced trees Mica cannot represent: a page is a leaf.
       // The matching `.md` now becomes a leaf page INSIDE this folder instead.
-      let idx = match folder_page.get(&norm_folder).copied() {
+      let idx = match folder_page.get(&key).copied() {
         Some(idx) => idx,
         None => {
           // Prefer the manifest's real name; fall back to the (cleaned) path
@@ -292,14 +345,12 @@ fn plan_core(
             icon: icons.get(&folder_path).cloned(),
           });
           let idx = pages.len() - 1;
-          folder_page.insert(norm_folder.clone(), idx);
+          folder_page.insert(key, idx);
           idx
         }
       };
       parent = Some(idx);
     }
-
-    // A folder entry is fully realized by the chain walk above (its leaf folder
     // page). A document entry adds its own page under the walked ancestors.
     if *is_folder {
       continue;
@@ -350,14 +401,13 @@ fn plan_core(
     // are leaves — so split it: the folder keeps the name and the children, and
     // the body moves into a same-named leaf page inside it. A parent with no
     // body of its own is just a folder; don't leave an empty page behind.
-    // Matched by `stem`: directory names are path spellings, not display names.
-    let own_norm = if norm_folder.is_empty() {
-      stem.clone()
-    } else {
-      format!("{norm_folder}/{stem}")
-    };
-    if dirs_with_children.contains(&own_norm) {
-      let folder_idx = match folder_page.get(&own_norm).copied() {
+    // Matched by RAW directory identity (see `dir_key` above): the doc's own
+    // directory, spelled as the archive spells it, must be the SAME identity as
+    // the child directory chain — so `Doc <id-a>.md` pairs with `Doc <id-a>/`
+    // even when a same-named sibling page exists.
+    let own_key = dir_key(strip_md_ext(path));
+    if dirs_with_children.contains(&own_key) {
+      let folder_idx = match folder_page.get(&own_key).copied() {
         Some(idx) => idx,
         None => {
           pages.push(PagePlan {
@@ -369,7 +419,7 @@ fn plan_core(
             icon: None,
           });
           let idx = pages.len() - 1;
-          folder_page.insert(own_norm.clone(), idx);
+          folder_page.insert(own_key.clone(), idx);
           idx
         }
       };
@@ -784,7 +834,7 @@ mod tests {
       ),
       e("Chapter/Intro.md", "# Intro\n\nhello"),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     let chapter = find(&plan, "Chapter");
     assert!(chapter.is_folder, "Chapter is a folder");
     assert!(chapter.archive_path.is_none() && chapter.markdown.is_empty());
@@ -813,7 +863,7 @@ mod tests {
       ),
       e("Intro.md", "# 别的标题\n\nhello"),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     assert_eq!(find(&plan, "Intro").markdown.trim(), "# 别的标题\n\nhello");
   }
 
@@ -823,7 +873,7 @@ mod tests {
   #[test]
   fn a_foreign_archive_keeps_its_leading_heading() {
     let raw = vec![e("Intro.md", "# Intro\n\nhello")];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     assert_eq!(find(&plan, "Intro").markdown.trim(), "# Intro\n\nhello");
   }
 
@@ -841,7 +891,7 @@ mod tests {
       e("manifest.json", &foreign),
       e("Intro.md", "# Intro\n\nhello"),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     assert_eq!(find(&plan, "Intro").markdown.trim(), "# Intro\n\nhello");
   }
 
@@ -853,7 +903,7 @@ mod tests {
       "manifest.json",
       &manifest(&[("Empty", "Empty", "folder")]),
     )];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     assert_eq!(plan.pages.len(), 1);
     let empty = find(&plan, "Empty");
     assert!(empty.is_folder && empty.parent.is_none());
@@ -869,7 +919,7 @@ mod tests {
       e("MyProject/a.md", "# a\n\nhi"),
       e("MyProject/sub/b.md", "# b\n\nyo"),
     ];
-    let plan = plan_import(raw, false, ImportMode::NewWorkspace);
+    let plan = plan_import(raw, false, ImportMode::NewWorkspace).unwrap();
     assert_eq!(plan.wrapper_name.as_deref(), Some("MyProject"));
     assert!(
       plan.pages.iter().all(|p| p.title != "MyProject"),
@@ -885,7 +935,7 @@ mod tests {
   #[test]
   fn new_workspace_keeps_multi_top_level() {
     let raw = vec![e("a.md", "# a\n\nhi"), e("F/b.md", "# b\n\nyo")];
-    let plan = plan_import(raw, false, ImportMode::NewWorkspace);
+    let plan = plan_import(raw, false, ImportMode::NewWorkspace).unwrap();
     assert_eq!(plan.wrapper_name, None);
     assert_eq!(parent_title(&plan, "a"), None);
     assert_eq!(parent_title(&plan, "F"), None);
@@ -899,7 +949,8 @@ mod tests {
       vec![e("solo.md", "# solo\n\nhi")],
       false,
       ImportMode::NewWorkspace,
-    );
+    )
+    .unwrap();
     assert_eq!(plan.wrapper_name, None);
     assert_eq!(parent_title(&plan, "solo"), None);
   }
@@ -912,7 +963,8 @@ mod tests {
       vec![e("a.md", "# a"), e("b.md", "# b")],
       false,
       ImportMode::IntoContainer("notes".into()),
-    );
+    )
+    .unwrap();
     let notes = find(&plan, "notes");
     assert!(notes.is_folder && notes.parent.is_none());
     assert_eq!(parent_title(&plan, "a"), Some("notes"));
@@ -927,7 +979,8 @@ mod tests {
       vec![e("MyProject/a.md", "# a"), e("MyProject/sub/b.md", "# b")],
       false,
       ImportMode::IntoContainer("backup".into()),
-    );
+    )
+    .unwrap();
     let tops: Vec<&str> = plan
       .pages
       .iter()
@@ -956,7 +1009,7 @@ mod tests {
       e("MyFolder/SubA/a.md", "# a"),
       e("MyFolder/SubB/b.md", "# b"),
     ];
-    let plan = plan_import(raw, false, ImportMode::Auto("MyFolder.zip".into()));
+    let plan = plan_import(raw, false, ImportMode::Auto("MyFolder.zip".into())).unwrap();
     // Wrapper peeled: no "MyFolder" / no fallback container at the top.
     assert!(
       plan
@@ -977,7 +1030,8 @@ mod tests {
       vec![e("a.md", "# a"), e("b.md", "# b")],
       false,
       ImportMode::Auto("notes".into()),
-    );
+    )
+    .unwrap();
     let notes = find(&plan, "notes");
     assert!(notes.is_folder && notes.parent.is_none());
     assert_eq!(parent_title(&plan, "a"), Some("notes"));
@@ -991,7 +1045,8 @@ mod tests {
       vec![e("solo.md", "# solo")],
       false,
       ImportMode::Auto("z".into()),
-    );
+    )
+    .unwrap();
     assert!(plan.pages.iter().all(|p| p.title != "z"));
     assert_eq!(parent_title(&plan, "solo"), None);
   }
@@ -1006,7 +1061,8 @@ mod tests {
       vec![e("a.md", "# a"), e("b.md", "# b")],
       false,
       ImportMode::IntoLocation,
-    );
+    )
+    .unwrap();
     assert!(
       plan.pages.iter().all(|p| !p.is_folder),
       "no container created"
@@ -1032,7 +1088,7 @@ mod tests {
       e("Doc.md", "# Doc\n\nparent body"),
       e("Doc/Child.md", "# Child\n\nchild body"),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     let folder = plan
       .pages
       .iter()
@@ -1102,7 +1158,7 @@ mod tests {
       ),
       e("季度回顾.md", &exported),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     let page = find(&plan, title);
     assert!(!page.markdown.starts_with('#'), "the title line came off");
 
@@ -1143,7 +1199,7 @@ mod tests {
       ),
       e("周报.md", &exported),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     let page = find(&plan, title);
     assert!(
       page.markdown.trim_start().starts_with("# 另一个标题"),
@@ -1170,7 +1226,7 @@ mod tests {
         "# Child\n\nchild body",
       ),
     ];
-    let plan = plan_import(raw, true, ImportMode::AsIs);
+    let plan = plan_import(raw, true, ImportMode::AsIs).unwrap();
     let docs: Vec<&PagePlan> = plan.pages.iter().filter(|p| p.title == "Doc").collect();
     assert_eq!(
       docs.len(),
@@ -1210,7 +1266,7 @@ mod tests {
       ),
       e("My_Folder/Note.md", "# Note\n\nbody"),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     let folder = find(&plan, "My Folder");
     assert!(
       folder.is_folder,
@@ -1233,7 +1289,7 @@ mod tests {
       e("Section/Note.md", "# Note\n\nbody"),
       e("Appendix/Refs.md", "# Refs\n\nlinks"),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     let section = find(&plan, "Section");
     assert!(section.is_folder, "a bare directory imports as a folder");
     assert!(section.archive_path.is_none() && section.markdown.is_empty());
@@ -1291,7 +1347,7 @@ mod tests {
       "precondition: the exporter wrote a manifest"
     );
 
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     assert_eq!(
       find(&plan, "归档").icon.as_deref(),
       Some("📁"),
@@ -1377,7 +1433,7 @@ mod tests {
       exported["带属性的页.md"]
     );
 
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     let mut names: Vec<&str> = plan
       .pages
       .iter()
@@ -1441,7 +1497,7 @@ mod tests {
       e("a/Other.mD", "y"),
       e("a/Third.MD", "z"),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     for name in ["Note", "Other", "Third"] {
       assert!(!find(&plan, name).is_folder, "{name}");
     }
@@ -1456,7 +1512,7 @@ mod tests {
       e("manifest.json", &manifest(&[("A.md", "A", "document")])),
       e("A.md", "body"),
     ];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     assert_eq!(find(&plan, "A").icon, None);
   }
 
@@ -1471,7 +1527,7 @@ mod tests {
     })
     .to_string();
     let raw = vec![e("manifest.json", &json), e("A.md", "body")];
-    let plan = plan_import(raw, false, ImportMode::AsIs);
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
     assert_eq!(find(&plan, "A").icon, None);
   }
 

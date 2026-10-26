@@ -22,9 +22,9 @@ proptest! {
         // read_zip is deliberately lenient (returns whatever it recovered), so
         // push the result on through the security-relevant normalization and the
         // nested-unzip recursion — each is fed attacker-controlled data.
-        let entries = read_zip(&bytes);
+        let entries = read_zip(&bytes).unwrap_or_default();
         let normalized = normalize_entries(entries);
-        let _ = expand_nested_zips(normalized);
+        let _ = expand_nested_zips(normalized).unwrap_or_default();
     }
 
     /// Bias toward inputs that begin with the ZIP local-file-header magic
@@ -36,8 +36,8 @@ proptest! {
     ) {
         let mut bytes = vec![0x50, 0x4b, 0x03, 0x04];
         bytes.extend_from_slice(&tail);
-        let entries = read_zip(&bytes);
+        let entries = read_zip(&bytes).unwrap_or_default();
         let normalized = normalize_entries(entries);
-        let _ = expand_nested_zips(normalized);
+        let _ = expand_nested_zips(normalized).unwrap_or_default();
     }
 }

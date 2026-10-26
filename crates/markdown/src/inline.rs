@@ -1481,6 +1481,12 @@ pub(crate) fn parse_inline_memo(
         let mut j = i + n;
         let mut close = None;
         while j < chars.len() && !(n == 1 && intraword(i, n)) {
+          if chars[j] == '`'
+            && let Some(after) = scans.code_span_close(&chars, j)
+          {
+            j = after;
+            continue;
+          }
           if chars[j] == '~' && (j == 0 || chars[j - 1] != '\\') {
             let mut m = 0;
             while j + m < chars.len() && chars[j + m] == '~' {
@@ -1921,6 +1927,58 @@ pub(crate) fn marks_from_block(block: &Block) -> Vec<InlineMark> {
   marks
 }
 
+pub(crate) fn escape_title(title: &str) -> String {
+  let mut out = String::with_capacity(title.len());
+  let mut chars = title.chars().peekable();
+  while let Some(c) = chars.next() {
+    if c == '&' {
+      out.push_str("&amp;");
+      continue;
+    }
+    if c == '"' || (c == '\\' && chars.peek().is_none_or(|c| c.is_ascii_punctuation())) {
+      out.push('\\');
+    }
+    out.push(c);
+  }
+  out
+}
+
+pub(crate) fn escape_destination(href: &str) -> String {
+  let angle = href.contains(char::is_whitespace);
+  let mut depth = 0i32;
+  let mut balanced = true;
+  for c in href.chars() {
+    if c == '(' {
+      depth += 1;
+    }
+    if c == ')' {
+      depth -= 1;
+      balanced &= depth >= 0;
+    }
+  }
+  balanced &= depth == 0;
+  let mut escaped = String::with_capacity(href.len());
+  for c in href.chars() {
+    match c {
+      '&' => escaped.push_str("&amp;"),
+      '(' | ')' if !angle && !balanced => {
+        escaped.push('\\');
+        escaped.push(c);
+      }
+      '\\' | '<' | '>' => {
+        escaped.push('\\');
+        escaped.push(c);
+      }
+      _ => escaped.push(c),
+    }
+  }
+  if angle {
+    format!("<{escaped}>")
+  } else {
+    escaped
+  }
+}
+
 /// Render a block's text with its inline marks back to Markdown. Code blocks and
 /// tables carry no inline marks and are emitted verbatim by their own arms.
 /// Escape characters our (and CommonMark's) inline grammar would otherwise
@@ -1932,6 +1990,10 @@ pub(crate) fn escape_inline(text: &str) -> String {
     // A backslash right before a newline IS a hard break — keep it raw.
     if c == '\\' && chars.get(i + 1) == Some(&'\n') {
       out.push(c);
+      continue;
+    }
+    if c == '&' && parse_entity(&chars, i).is_some() {
+      out.push_str("&amp;");
       continue;
     }
     if matches!(c, '\\' | '*' | '_' | '`' | '~' | '[' | ']' | '<' | '$') {
@@ -2027,7 +2089,7 @@ pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineM
   // same selection — clipped start, widest end, nestable on exact-range ties,
   // outer (later-appended) mark last — behind one sort (issue #61).
   let mut walker = SpanWalker::new(marks, hi, SpanTies::Markdown);
-  while pos < hi {
+  while pos <= hi {
     let Some(pick) = walker.next_pick(pos) else {
       out.push_str(&escape_inline(&String::from_utf16_lossy(&units[pos..hi])));
       break;
@@ -2047,8 +2109,12 @@ pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineM
       continue;
     }
     if m.kind == "math" {
-      // LaTeX source is literal — canonical dollar form.
-      out.push_str(&format!("${}$", String::from_utf16_lossy(&units[s..e])));
+      let source = String::from_utf16_lossy(&units[s..e]);
+      if source.contains('$') {
+        out.push_str(&format!("\\({source}\\)"));
+      } else {
+        out.push_str(&format!("${source}$"));
+      }
       pos = e;
       continue;
     }
@@ -2081,7 +2147,7 @@ pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineM
       let fence = "`".repeat(longest + 1);
       let pad = raw.starts_with('`')
         || raw.ends_with('`')
-        || (raw.starts_with(' ') && raw.ends_with(' ') && !raw.trim().is_empty());
+        || (raw.starts_with(' ') && raw.ends_with(' ') && !raw.bytes().all(|b| b == b' '));
       if pad {
         out.push_str(&format!("{fence} {raw} {fence}"));
       } else {
@@ -2110,31 +2176,24 @@ pub(crate) fn render_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineM
         {
           plain.to_string()
         } else if m.title.is_none()
+          && !plain.is_empty()
           && inner.is_empty()
           && (href == plain || href == format!("mailto:{plain}"))
         {
           format!("<{plain}>")
         } else {
-          let dest = if href.contains(char::is_whitespace) {
-            format!("<{href}>")
-          } else {
-            href.to_string()
-          };
+          let dest = escape_destination(href);
           match &m.title {
-            Some(t) => format!("[{body}]({dest} \"{}\")", t.replace('"', "\\\"")),
+            Some(t) => format!("[{body}]({dest} \"{}\")", escape_title(t)),
             None => format!("[{body}]({dest})"),
           }
         }
       }
       "image" => {
         let href = m.href.as_deref().unwrap_or("");
-        let dest = if href.contains(char::is_whitespace) {
-          format!("<{href}>")
-        } else {
-          href.to_string()
-        };
+        let dest = escape_destination(href);
         match &m.title {
-          Some(t) => format!("![{body}]({dest} \"{}\")", t.replace('"', "\\\"")),
+          Some(t) => format!("![{body}]({dest} \"{}\")", escape_title(t)),
           None => format!("![{body}]({dest})"),
         }
       }

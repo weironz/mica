@@ -216,14 +216,7 @@ pub(crate) fn import_markdown_inner(
       });
       continue;
     }
-    let mut col: usize = 0;
-    for c in line[..line.len() - content.len()].chars() {
-      col = if c == '\t' {
-        (col / 4 + 1) * 4
-      } else {
-        col + 1
-      };
-    }
+    let col = leading_columns(line);
 
     // The families in ORDER — this is the precedence order of the old loop
     // body, and order IS semantics here.
@@ -471,8 +464,8 @@ pub(crate) fn is_divider(content: &str) -> bool {
 /// comes back.
 pub(crate) fn indent_width(c: char, col: usize) -> Option<usize> {
   match c {
-    ' ' | '\u{a0}' => Some(col + 1),
     '\t' => Some((col / 4 + 1) * 4),
+    c if c.is_whitespace() => Some(col + 1),
     _ => None,
   }
 }

@@ -181,6 +181,9 @@ fn build_tree_entries(
 pub struct TreeExport<'a> {
   pages: Vec<TreePage<'a>>,
   path_by_view: HashMap<String, String>,
+  // view id → position in `pages`, built once so [`Self::page`] is O(1) rather
+  // than re-scanning the whole tree for every document (issue #95).
+  index_by_view: HashMap<String, usize>,
   stable_assets: bool,
   selected_view: Option<String>,
   asset_by_key: HashMap<String, String>,
@@ -200,9 +203,15 @@ impl<'a> TreeExport<'a> {
     selected_view: Option<&str>,
   ) -> Self {
     let (pages, path_by_view) = tree_paths(nodes, root);
+    let index_by_view = pages
+      .iter()
+      .enumerate()
+      .map(|(i, (node, _, _))| (node.id.clone(), i))
+      .collect();
     Self {
       pages,
       path_by_view,
+      index_by_view,
       stable_assets,
       selected_view: selected_view.map(str::to_string),
       asset_by_key: HashMap::new(),
@@ -314,7 +323,10 @@ impl<'a> TreeExport<'a> {
     images: &HashMap<String, ImageAsset>,
     omit_assets: &HashSet<String>,
   ) -> Vec<ZipEntry> {
-    let Some((node, folder, _)) = self.pages.iter().find(|(n, _, _)| n.id == view_id) else {
+    let Some(&idx) = self.index_by_view.get(view_id) else {
+      return Vec::new();
+    };
+    let Some((node, folder, _)) = self.pages.get(idx) else {
       return Vec::new();
     };
     let (node, depth) = (*node, folder.len());
@@ -492,6 +504,57 @@ fn unique_sibling_base(node: &TreeNode, used: &mut HashSet<String>) -> String {
   base
 }
 
+/// Visit every inline-mark object in a payload in block order, mutably: the
+/// block's own `data.marks` array first, then each table cell's `marks`
+/// (paragraphs, table cells and any future container all store marks in the
+/// same `{ "href": … }` shape). The callback receives each mark in place.
+///
+/// This is the ONE entry point for "rewrite links across every inline mark" so
+/// the export side (relative `.md` links) and the import side (`mica://page/`
+/// links) cannot drift into two hand-written `data.marks` loops — a table cell
+/// is just another container, not a special case to remember at each call site.
+pub fn for_each_inline_mark_mut(
+  payload: &mut DocumentSnapshotPayload,
+  mut f: impl FnMut(&mut serde_json::Value),
+) {
+  for block in &mut payload.blocks {
+    if let Some(marks) = block
+      .data
+      .get_mut("marks")
+      .and_then(serde_json::Value::as_array_mut)
+    {
+      for mark in marks {
+        f(mark);
+      }
+    }
+    let Some(rows) = block
+      .data
+      .get_mut("rows")
+      .and_then(serde_json::Value::as_array_mut)
+    else {
+      continue;
+    };
+    for row in rows {
+      let Some(cells) = row.as_array_mut() else {
+        continue;
+      };
+      for cell in cells {
+        let Some(obj) = cell.as_object_mut() else {
+          continue;
+        };
+        if let Some(marks) = obj
+          .get_mut("marks")
+          .and_then(serde_json::Value::as_array_mut)
+        {
+          for mark in marks {
+            f(mark);
+          }
+        }
+      }
+    }
+  }
+}
+
 /// Rewrite internal page links (`mica://page/<viewId>`) in link marks to
 /// relative paths of the target page's `.md`, so the markdown is standard.
 /// Links to pages outside the archive keep their `mica://` href.
@@ -501,30 +564,21 @@ fn rewrite_page_links(
   path_by_view: &HashMap<String, String>,
 ) {
   const SCHEME: &str = "mica://page/";
-  for block in &mut payload.blocks {
-    let Some(marks) = block
-      .data
-      .get_mut("marks")
-      .and_then(serde_json::Value::as_array_mut)
-    else {
-      continue;
+  for_each_inline_mark_mut(payload, |mark| {
+    let Some(obj) = mark.as_object_mut() else {
+      return;
     };
-    for mark in marks {
-      let Some(obj) = mark.as_object_mut() else {
-        continue;
-      };
-      let Some(target) = obj
-        .get("href")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|href| href.strip_prefix(SCHEME))
-        .and_then(|id| path_by_view.get(id))
-      else {
-        continue;
-      };
-      let rel = format!("{}{target}", "../".repeat(folder_depth));
-      obj.insert("href".into(), serde_json::json!(rel));
-    }
-  }
+    let Some(target) = obj
+      .get("href")
+      .and_then(serde_json::Value::as_str)
+      .and_then(|href| href.strip_prefix(SCHEME))
+      .and_then(|id| path_by_view.get(id))
+    else {
+      return;
+    };
+    let rel = format!("{}{target}", "../".repeat(folder_depth));
+    obj.insert("href".into(), serde_json::json!(rel));
+  });
 }
 
 /// De-dup a `.md` path: append `-2`, `-3`… before the `.md` on collision.
@@ -572,7 +626,13 @@ pub fn unique_asset_name(name: &str, used: &mut HashSet<String>) -> String {
 }
 
 /// Sanitize a page name into a filesystem-safe path segment (alphanumerics,
-/// `-_.` kept; runs of anything else collapse to a single `_`).
+/// `-_.` kept; runs of anything else collapse to a single `_`). A segment that
+/// would start or END with a dot, or be exactly `.`/`..`, is folded to its
+/// non-hidden spelling — the exporter's own importer treats any leading-dot
+/// segment as junk, `.`/`..` would emit a parent-traversal archive entry, and
+/// Windows filenames may not end in a dot (`Docs.` canonicalizes to `Docs`,
+/// colliding two sibling trees on extraction). The display name is carried by
+/// the manifest, so no user-visible name is lost.
 pub fn safe_segment(name: &str) -> String {
   let mut out = String::new();
   let mut prev_us = false;
@@ -585,7 +645,12 @@ pub fn safe_segment(name: &str) -> String {
       prev_us = true;
     }
   }
-  let tidy = out.trim_matches('_').to_string();
+  let tidy = out
+    .trim_matches('_')
+    .trim_start_matches('.')
+    .trim_end_matches('.')
+    .trim_matches('_')
+    .to_string();
   if tidy.is_empty() {
     "untitled".to_string()
   } else {

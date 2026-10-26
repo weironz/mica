@@ -89,7 +89,12 @@ Implemented in `crates/api-server/src/routes/documents/export.rs`
   (0x0800) set so CJK names survive.
 
 Naming collisions among siblings are resolved by `unique_zip_path`
-(`Page.md`, `Page-2.md`). Path segments go through `safe_segment`.
+(`Page.md`, `Page-2.md`). Path segments go through `safe_segment`, which
+also folds away dot-segments: a page or folder named `.hidden`, `.` or `..`
+exports as its non-hidden spelling (`hidden`, `untitled`) — the importer
+treats any dot-segment as junk, so emitting one would lose the page's body
+on the way back in (issue #93). Display names still ride on the manifest
+`title`, so nothing user-visible changes.
 
 ## Import pipeline (server-side)
 
@@ -180,7 +185,13 @@ and plans; the executor (`crates/api-server/src/routes/import.rs`) then:
   pre-filters to md/image/json extensions so huge unrelated files are never
   read from disk.
 - `expand_nested_zips` — unpacks archives nested one level deep (Notion's
-  whole-workspace exports ship `Part-N.zip` inside the outer ZIP).
+  whole-workspace exports ship `Part-N.zip` inside the outer ZIP). When two
+  inner archives (or an inner archive and the outer one) carry the SAME
+  relative path with DIFFERENT bytes, each conflicting inner archive's tree is
+  re-rooted under a `Part-N/` prefix chosen uniquely against all existing path
+  roots (suffixing `-2`, `-3`, etc. when needed), so neither another archive nor
+  the chosen prefix can overwrite existing pages or assets (issue #143).
+  Identical bytes at a shared path may still merge into one stored object.
 
 ### ZIP reader capabilities
 
@@ -193,6 +204,7 @@ tools produce:
 | data descriptors (flag bit 3) | streamed writers leave local sizes zero; central dir has the truth |
 | ZIP64 markers | server-generated archives (Notion) write `0xffffffff` sizes/offsets with the real values in the `0x0001` extra and the zip64 EOCD |
 | entry-name encodings | precedence: UTF-8 flag → Info-ZIP Unicode Path extra (0x7075) → strict UTF-8 → **GBK** (`zip/names.rs`, generated cp936 table) — Windows Explorer on a CJK locale sets no flag. GBK pairs that masquerade as valid UTF-8 are caught by rejecting decodes landing in U+0180–U+03FF when GBK decodes cleanly |
+| CRC-32 verification | STORE and DEFLATE output is checked against the central-directory CRC (or local-header CRC in the fallback). `read_zip`, `expand_nested_zips`, and `plan_import` return `Result<_, ZipReadError>`; a CRC mismatch names the bad entry and propagates from an inner Part archive too. The server import reports `import_corrupt_archive` before creating pages, rather than succeeding with healthy volumes only (issue #94). Unsupported methods and entries over the memory budget retain the existing skip policy |
 
 ## Notion adaptation (`notion.rs`)
 
@@ -212,10 +224,13 @@ What the mode changes:
 - Folder↔page pairing happens on **ID-stripped** paths, so a `Doc <id-a>/`
   and its `Doc <id-b>.md` are recognized as one page-with-subpages and split
   once (step 2). Without this every such folder imported twice — an empty
-  directory page plus a duplicate root page.
+  directory page plus a duplicate root page. Two distinct pages whose titles
+  differ only by their IDs keep separate identities even when only one owns
+  a child directory: document stems as well as directory paths claim the
+  cleaned name (issue #151). Multiple directory or document claimants select
+  raw-path identity; a lone page/directory pair with differing IDs still unites.
 
-Not adapted (by design, for now): database CSVs are ignored; inter-page
-links inside md bodies stay as exported.
+Not adapted (by design, for now): database CSVs are ignored.
 
 ## Page links
 
@@ -230,13 +245,20 @@ At the interchange boundary the scheme disappears entirely:
   (`[Setup](Guide/Setup.md)`, `[Alpha](../Alpha.md)`) via
   `rewrite_page_links` — final zip paths are decided before the content pass
   so forward links resolve. Links to pages outside the archive keep their
-  `mica://` href.
+  `mica://` href. Both sides walk marks through ONE shared entry point,
+  `mica_interchange::for_each_inline_mark_mut` — paragraph `data.marks` and
+  table-cell `data.rows[i][j].marks` alike (issue #144), so a link inside a
+  table cell relativises/restores exactly like one in a paragraph.
 - **Import** pre-generates every page's view id before inserting anything,
   so link rewiring sees the complete path → view map (forward references
   included). A link href that resolves (via `resolve_ref`, so `../` chains
   and percent-encoding work) to an imported `.md` becomes
   `mica://page/<newViewId>`. This also picks up Notion's internal links
   (`Page%20<id>.md`).
+
+Table cells resolve document reference definitions (`[ref]: /target`) through
+the same document-level definitions as paragraphs; `encode_table_cell` receives
+the parser's `ctx.defs`, so `[ref]` in a cell becomes the same link mark.
 
 ## Permanent image links
 
