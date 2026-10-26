@@ -13,7 +13,7 @@
 | S0 初始交付 | `single-source` 的 `c6446d5` | 已集成；其中对拍往返输入与性能采样存在问题，以修正提交为准 |
 | S0 修正与补测 | `refs/heads/worktree-agent-acfa208a26ae27e64` @ `e122680` | 尚未集成；[S0 执行记录](stages/S0-baseline.md) 的新增收尾节在该分支。Flutter VM 回执 2159 passed / 2 skipped，原生指纹与对拍回执 5 passed，Web release 与字体校验通过 |
 | S1 引擎拆分与审查修复 | `refs/heads/worktree-agent-aaa10db22e269aaf4` @ `12c7ff2` | 尚未集成；该分支 [S1 执行记录](stages/S1-core-sdk.md) 包含修复、门禁和七项契约问题。T1.10 未完成，契约未冻结 |
-| T2.1 P0 | 原 spike `d48ed4f`；优化实验 `refs/heads/ss/w/p0-costs` @ `f706c9b`，核心候选 `6594f12` | spike / 核心未集成；opt-3 复测六组输入三轮全满足 1.2×，体积 / 初始化达标；[协调者复核](stages/S2-bindings.md#执行记录) 已入档，JSON 独立阶段计时补测中，G2 待审核 |
+| T2.1 P0 | 原 spike `d48ed4f`；优化实验 `refs/heads/ss/w/p0-costs` @ `68ae07f`，配对复测 `f706c9b`，核心候选 `6594f12` | spike / 核心未集成；opt-3 六组输入三轮全满足 1.2×，体积 / 初始化达标，独立 JSON 阶段计时已补齐（6 项测试回执）；[协调者复核](stages/S2-bindings.md#执行记录) 已入档，G2 待审核 |
 
 S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust 自身往返记录 754 条（旧值 1305 混入解析差异），记录数不是独立 bug 数。Chrome 测试基线实际为 dartdevc，不能与 P0 的 production dart2js 数字直接相除。
 

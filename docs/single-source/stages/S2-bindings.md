@@ -329,5 +329,19 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 
 原始证据在实验分支 `spike/md-bench/summary-final.json`、`sizes-costs.json`、`final-opt3-paired.txt`、`final-opts-short-paired.txt`、`final-ids-paired.txt`、`receipt-final.txt`。体积包含诊断导出，是该 spike 导出集合的实测，不证明正式十个 API 产物体积；正式 S2 需重新验收。
 
-**停点状态：硬性能门槛已有达标证据，G2 待审核；独立 JSON 阶段计时仍缺。G1 未通过，正式 T2.2+ 未启动，不合入 main、不发版。**
+### 独立 JSON 阶段计时复核（2026-10-27）
+
+上述 JSON 归因缺口已补齐：实验分支新增 `spike/md-wasm-p0/src/stage3.rs`，在 Rust 内用 `performance.now()` 分别测 Block → BlockJson 投影/规范化和 `serde_json::to_string`。解析、参考 wire 输出生成、输入 clone 准备及 JS 返回均不计入两段；完整输出在计时后逐字节与真实 wire 比较并计算 checksum。核心代码未再修改。
+
+| 原 P0 输入 | 投影/规范化三轮中位数 ms/次 | JSON 编码三轮中位数 ms/次 |
+| --- | ---: | ---: |
+| 87 字符 | 0.000585938 | 0.000891113 |
+| 10000 字符 | 0.055468750 | 0.089062500 |
+| 100000 字符 | 0.550000000 | 0.875000000 |
+
+每档三轮，每轮预热后测 15 个调用；各调用内部批次分别为 8192 / 128 / 16。计时器 call + loop 摊薄中位数约 0.000203 ms，最小非零 tick 约 0.1 ms；利用批量摊薄量化误差，不扣减底噪，不把各阶段相加。探针复制了私有 wire 投影逻辑，仅用于实验；准备和批量驻留改变缓存/内存状态，结果不是生产单次调用可精确相加的账本。
+
+新增回执 **`6 passed (floor 6)`**，含投影镜像与真实 wire 的七输入字节等价、null 归一与稳定排序检查；shellcheck、结构和 ignored-source 门禁通过。实际 served 的诊断 wasm / JS SHA 与 `summary-stage3.json` 对应，核心 fingerprint 仍为 `6b193da84a7b630a`；新增诊断产物不冒充先前 123073 B 的预算产物。原始证据：实验分支的 `summary-stage3.json`、`stage3-opt3-raw.txt`、`receipt-stage3.txt`。
+
+**停点状态：UUID、解析、JSON、绑定成本的实验归因已交付，硬性能门槛已有达标证据，推荐 opt-3，G2 待正式审核。G1 未通过，正式 T2.2+ 未启动，不合入 main、不发版。**
 
