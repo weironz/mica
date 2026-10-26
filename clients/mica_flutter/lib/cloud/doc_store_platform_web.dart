@@ -17,7 +17,16 @@ openWebDocMirror(
   String docId, {
   String dbName = WebIdbDocStore.defaultDbName,
 }) async {
-  final store = await WebIdbDocStore.open(origin, docId, dbName: dbName);
+  // A prior holder may have JUST released its Web Lock (dispose waits for the
+  // write tail, so the release is asynchronous); a single open could race that
+  // window and read "no mirror" for a doc that is actually mirrored. Retry
+  // briefly, mirroring the `reopen` helper in the store tests.
+  WebIdbDocStore? store;
+  for (var attempt = 0; attempt < 100; attempt++) {
+    store = await WebIdbDocStore.open(origin, docId, dbName: dbName);
+    if (store != null) break;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
   if (store == null) return null;
   // The store holds the doc's single-writer Web Lock for as long as it lives.
   // This helper only READS the mirror, so every exit path (never mirrored,
