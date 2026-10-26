@@ -520,6 +520,9 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
   };
 
   let (mut rehosted, mut dropped, mut failed) = (0usize, 0usize, 0usize);
+  // Kept for the stderr summary: `--json` suppresses per-item progress, and a
+  // failure still has to be diagnosable, not just counted.
+  let mut failures: Vec<String> = Vec::new();
   for ws in workspaces {
     for view in client.list_views(ws)? {
       if view.object_type != "document" || view.is_deleted {
@@ -549,9 +552,11 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
             }
             Err(err) => {
               failed += 1;
+              let detail = format!("[{}] dropping {url}: {err:#}", view.name);
               if !cli.json {
-                eprintln!("  FAILED    [{}] dropping {url}: {err:#}", view.name);
+                eprintln!("  FAILED    {detail}");
               }
+              failures.push(detail);
             }
           }
           continue;
@@ -578,9 +583,11 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
           }
           Err(err) => {
             failed += 1;
+            let detail = format!("[{}] {url}: {err:#}", view.name);
             if !cli.json {
-              eprintln!("  FAILED   [{}] {url}: {err:#}", view.name);
+              eprintln!("  FAILED   {detail}");
             }
+            failures.push(detail);
           }
         }
       }
@@ -593,6 +600,16 @@ fn cmd_rehost_images(cli: &Cli, cfg: &Config, args: &RehostImagesArgs) -> Result
     }))?;
   } else {
     println!("Done: {rehosted} re-hosted, {dropped} dropped, {failed} failed.");
+  }
+  // A partial success is still reported (and all items were attempted above),
+  // but a script cannot tell that from a clean run by the exit code alone.
+  if failed > 0 {
+    if cli.json {
+      for detail in &failures {
+        eprintln!("  FAILED    {detail}");
+      }
+    }
+    bail!("rehost-images finished with {failed} failed image(s) — see stderr for the items");
   }
   Ok(())
 }
@@ -650,20 +667,42 @@ fn cmd_import(cli: &Cli, cfg: &Config, args: &ImportArgs) -> Result<()> {
     // Report per archive and KEEP GOING. One bad archive in a batch of twenty
     // must not throw away the nineteen that worked — and it has to be named,
     // or the run looks like a clean sweep.
+    // The server's totals, not the length of its capped sample lists: showing
+    // 50 when 4000 were dropped (or missing a failed image entirely) is the
+    // "looks clean, then the source is deleted" failure this guards against.
+    let skipped_total = job.skipped_total.max(job.skipped.len());
     if !cli.json {
       match job.status.as_str() {
-        "done" => println!(
-          "    done: {} page(s){}",
-          job.done,
-          if job.skipped.is_empty() {
-            String::new()
-          } else {
-            format!(
-              ", {} archive entry(ies) unreferenced and skipped",
-              job.skipped.len()
-            )
+        "done" => {
+          print!("    done: {} page(s)", job.done);
+          if skipped_total > 0 {
+            print!(", {skipped_total} archive entry(ies) unreferenced and skipped");
+            if skipped_total > job.skipped.len() {
+              print!(" ({} listed)", job.skipped.len());
+            }
           }
-        ),
+          println!();
+          if job.image_failures_total > 0 {
+            println!(
+              "    WARNING: {} external image(s) could not be stored — they still \
+               link outside Mica:",
+              job.image_failures_total
+            );
+            for failure in &job.image_failures {
+              println!(
+                "      [{}] {} (document {}, block {}) — {}",
+                failure.page, failure.url, failure.document_id, failure.block_id, failure.reason
+              );
+            }
+            if job.image_failures_total > job.image_failures.len() {
+              println!(
+                "      ({} of {} listed; retry with `mica-cli rehost-images`)",
+                job.image_failures.len(),
+                job.image_failures_total
+              );
+            }
+          }
+        }
         other => eprintln!(
           "    {other}: {} page(s) landed{}",
           job.done,
@@ -685,6 +724,9 @@ fn cmd_import(cli: &Cli, cfg: &Config, args: &ImportArgs) -> Result<()> {
       "done": job.done,
       "total": job.total,
       "skipped": job.skipped.len(),
+      "skipped_total": skipped_total,
+      "image_failures": job.image_failures,
+      "image_failures_total": job.image_failures_total,
     }));
   }
 

@@ -221,6 +221,32 @@ mica-cli trash empty --ws <WS> --confirm           # PERMANENT
 `page trash` is reversible with `trash restore`; `trash empty` is not reversible
 at all. Both ask for `--confirm`, and only one of them can be taken back.
 
+### `import` — import archives
+
+```bash
+mica-cli import <ARCHIVE>... [--ws <WS>] [--parent <VIEW>] [--name <NAME>] [--notion] [--no-rehost]
+```
+
+Each archive is watched to completion and a bad archive does not stop the rest.
+The summary reports the server's **true totals** (`skipped_total`,
+`image_failures_total`), not the length of the capped sample lists; when the
+sample is shorter it says how many were listed. External images that could not
+be stored are named individually (page / document / block / url / reason) —
+the page still links to the origin, so treat that import as incomplete.
+`--json` keeps the same facts as structured fields: `skipped` (listed count),
+`skipped_total`, `image_failures[]`, `image_failures_total`.
+
+### `rehost-images` — pull external image links into Mica
+
+```bash
+mica-cli rehost-images [--ws <WS>] [--remap <FILE>] [--drop <FILE>]
+```
+
+Every item is attempted even after a failure: partial success is kept and
+summarized on stdout (`rehosted` / `dropped` / `failed`). **If any request
+failed the process exits non-zero**, and per-item failure detail goes to stderr
+(also under `--json`, where the stdout summary stays JSON).
+
 ### `export` — export workspaces to Markdown + images
 
 ```bash

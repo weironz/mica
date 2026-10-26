@@ -120,6 +120,47 @@ pub(crate) fn pick_anchor(
   }
 }
 
+/// Above a fenced code block: the container's content line with up to three
+/// leading spaces and any blockquote markers removed. `None` for an indented
+/// (>=4 spaces) line — that is an indented code block, not a fence.
+fn fence_line(line: &str) -> Option<&str> {
+  let mut rest = line;
+  loop {
+    let indent = rest.len() - rest.trim_start_matches(' ').len();
+    if indent > 3 {
+      return None;
+    }
+    rest = &rest[indent..];
+    match rest.strip_prefix('>') {
+      Some(after) => rest = after.strip_prefix(' ').unwrap_or(after),
+      None => return Some(rest),
+    }
+  }
+}
+
+/// An opening fence: three or more backticks or tildes, after container
+/// prefixes. Everything up to the matching close is code, so no `#` inside it
+/// can start or end a section.
+fn fence_open(line: &str) -> Option<(char, usize)> {
+  let rest = fence_line(line)?;
+  let marker = rest.chars().next()?;
+  if marker != '`' && marker != '~' {
+    return None;
+  }
+  let len = rest.chars().take_while(|c| *c == marker).count();
+  (len >= 3).then_some((marker, len))
+}
+
+/// Only the SAME marker at the SAME length or longer, with nothing but
+/// whitespace after it, closes a fence — a ``` inside ```` is content.
+fn fence_close(line: &str, marker: char, open_len: usize) -> bool {
+  let Some(rest) = fence_line(line) else {
+    return false;
+  };
+  let len = rest.chars().take_while(|c| *c == marker).count();
+  len >= open_len && rest[len..].trim().is_empty()
+}
+
 pub(crate) fn section_markdown(full: &str, needle: &str) -> String {
   let needle_lc = needle.to_lowercase();
   let lines: Vec<&str> = full.lines().collect();
@@ -131,14 +172,34 @@ pub(crate) fn section_markdown(full: &str, needle: &str) -> String {
       None
     }
   };
+  // A heading is only a heading OUTSIDE a fence. Markdown is scanned once,
+  // keeping the fence state, rather than re-parsing the exported text with a
+  // rule that disagrees with the engine (issue #117).
+  let mut headings: Vec<Option<usize>> = Vec::with_capacity(lines.len());
+  let mut fence: Option<(char, usize)> = None;
+  for line in &lines {
+    if let Some((marker, open_len)) = fence {
+      headings.push(None);
+      if fence_close(line, marker, open_len) {
+        fence = None;
+      }
+      continue;
+    }
+    if let Some((marker, open_len)) = fence_open(line) {
+      fence = Some((marker, open_len));
+      headings.push(None);
+      continue;
+    }
+    headings.push(heading_level(line));
+  }
   let mut start = None;
   let mut start_level = 0;
-  for (i, line) in lines.iter().enumerate() {
-    if let Some(level) = heading_level(line)
-      && line.to_lowercase().contains(&needle_lc)
+  for (i, level) in headings.iter().enumerate() {
+    if let Some(level) = level
+      && lines[i].to_lowercase().contains(&needle_lc)
     {
       start = Some(i);
-      start_level = level;
+      start_level = *level;
       break;
     }
   }
@@ -146,8 +207,8 @@ pub(crate) fn section_markdown(full: &str, needle: &str) -> String {
     return format!("[no heading contains {needle:?}; use mica_get_outline to list headings]");
   };
   let mut end = lines.len();
-  for (i, line) in lines.iter().enumerate().skip(start + 1) {
-    if heading_level(line).is_some_and(|lvl| lvl <= start_level) {
+  for (i, level) in headings.iter().enumerate().skip(start + 1) {
+    if level.is_some_and(|lvl| lvl <= start_level) {
       end = i;
       break;
     }

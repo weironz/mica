@@ -23,6 +23,17 @@ does **not** do backups — see [External backup](#backup) below.
 - **Get outline, then patch.** `mica_get_outline` returns headings + block ids with type/preview labels so
   a write can target a spot (`insert_at`, `find_replace`) instead of rewriting the
   whole page.
+- **Warm read cache, coherent by construction.** A full Markdown read is cached
+  per document id. Any potentially-mutating request that was **sent** drops that
+  document's entry whatever its outcome: a write can commit and then lose its
+  response, and serving the pre-write text forever is worse than a refetch.
+  Writes are never auto-retried (a retry could apply twice). A response body
+  that fails to read is a tool error and is never cached; a genuinely empty body
+  is a complete success and may be.
+- **Section windows are fence-aware.** `mica_read_document(section=…)` scans the
+  Markdown with a fence state machine (backtick/tilde, longer fences, blockquote
+  prefixes), so a `#` inside a code block is content — not a section boundary,
+  and not a section that can be selected.
 
 ## Configure
 

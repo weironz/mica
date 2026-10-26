@@ -216,11 +216,12 @@ impl MicaMcp {
         body,
       )
       .await;
-    // The doc just changed — drop its warm copy so the next read is fresh
-    // (keeps the cache coherent with the agent's own edits).
-    if result.is_ok() {
-      self.cache_invalidate(document_id);
-    }
+    // The doc may have changed even when the request reports failure — a write
+    // can commit and then lose its response (connection cut, timeout). Dropping
+    // the warm copy on ANY outcome means the next read re-confirms the server's
+    // state instead of serving pre-write text forever. Same policy as
+    // restore_version. Deliberately no retry: a retried write could apply twice.
+    self.cache_invalidate(document_id);
     result
   }
 

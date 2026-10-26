@@ -155,7 +155,12 @@ impl MicaMcp {
       .await
       .map_err(|e| McpError::internal_error(format!("Mica request failed: {e}"), None))?;
     let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    // A 200 does NOT mean the body arrived: a proxy can cut the response short,
+    // and `unwrap_or_default()` used to turn that into an empty page that the
+    // read tools then cached. Every caller gets the same error semantics.
+    let text = resp.text().await.map_err(|e| {
+      McpError::internal_error(format!("Mica response body could not be read: {e}"), None)
+    })?;
     if !status.is_success() {
       // Cap the forwarded body — never dump a large or server-internal
       // error payload back to the model.
@@ -406,6 +411,9 @@ mod contract_tests;
 mod tools_tests;
 
 #[cfg(test)]
+mod io_failure_tests;
+
+#[cfg(test)]
 mod tests {
   use super::*;
   use crate::markdown_windows::{
@@ -586,6 +594,49 @@ step
       Some(mica_markdown::mangled_latex_message(r"\f", r"\frac"))
     );
     assert!(reject_mangled_latex(r"$\eta = 2 \times \frac{N-1}{N}$").is_ok());
+  }
+
+  /// #117: a `#` inside a fenced code block is CONTENT, not a heading. The
+  /// section reader used to treat it as the next same-level heading, cutting
+  /// Guide off mid-fence and inventing a "Phantom" section.
+  #[test]
+  fn a_fenced_heading_is_content_not_a_section_boundary() {
+    let doc =
+      "# Guide\n\nBefore.\n\n```markdown\n# Phantom\nexample\n```\n\nAfter.\n\n# Next\n\nTail.";
+    assert_eq!(
+      section_markdown(doc, "Guide"),
+      "# Guide\n\nBefore.\n\n```markdown\n# Phantom\nexample\n```\n\nAfter.\n"
+    );
+    assert!(
+      section_markdown(doc, "Phantom").contains("no heading contains"),
+      "a heading inside a fence is not a section"
+    );
+    assert_eq!(section_markdown(doc, "Next"), "# Next\n\nTail.");
+  }
+
+  /// The scanner has to be the Markdown one, not "a line that starts with #":
+  /// tilde fences, longer backtick fences (a ``` inside ```` is content), and
+  /// fences inside a blockquote all hide headings.
+  #[test]
+  fn every_fence_flavour_hides_its_headings() {
+    let doc = "# Top\n\n~~~\n# Tilde\n~~~\n\n````\n```\n# Long\n```\n````\n\n> ```\n> # Quoted\n> ```\n\n## Real\n\nbody";
+    let top = section_markdown(doc, "Top");
+    assert!(
+      top.contains("# Tilde"),
+      "tilde fenced content stays: {top:?}"
+    );
+    assert!(
+      top.contains("# Long"),
+      "longer fence keeps ``` inside: {top:?}"
+    );
+    assert!(top.contains("# Quoted"), "blockquoted fence stays: {top:?}");
+    for phantom in ["Tilde", "Long", "Quoted"] {
+      assert!(
+        section_markdown(doc, phantom).contains("no heading contains"),
+        "{phantom:?} is code, not a heading"
+      );
+    }
+    assert_eq!(section_markdown(doc, "Real"), "## Real\n\nbody");
   }
 }
 

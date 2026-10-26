@@ -143,9 +143,36 @@ pub struct ImportJobView {
   #[serde(default)]
   pub error: Option<String>,
   /// Archive entries no imported page references — dropped, not failed. The
-  /// count is what separates "imported everything" from "imported most of it".
+  /// list is CAPPED by the server; `skipped_total` is the honest count.
   #[serde(default)]
   pub skipped: Vec<String>,
+  /// How many were skipped in total (the list above is a sample).
+  #[serde(default)]
+  pub skipped_total: usize,
+  /// External images the import promised to bring in and did not — each one is
+  /// still a link pointing at somebody else's server.
+  #[serde(default)]
+  pub image_failures: Vec<ImageFailure>,
+  /// How many failed in total (the list above is a sample).
+  #[serde(default)]
+  pub image_failures_total: usize,
+}
+
+/// One external image that stayed a link, as the server reports it (app-core
+/// `ImageFailure`). `document_id` + `block_id` are exactly what a retry through
+/// `rehost-image` needs, which is why they are carried here.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ImageFailure {
+  pub url: String,
+  /// The page it sits on — a list of urls with no page names is not actionable.
+  #[serde(default)]
+  pub page: String,
+  pub document_id: Uuid,
+  pub block_id: String,
+  pub reason: String,
+  /// False when a circuit breaker refused it without even making the request.
+  #[serde(default)]
+  pub attempted: bool,
 }
 
 /// What a batch call actually did. `affected` counts every view touched —

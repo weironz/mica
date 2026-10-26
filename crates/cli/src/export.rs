@@ -530,7 +530,8 @@ pub fn run(client: &Client, args: &ExportArgs) -> Result<Stats> {
         page.view_id
       );
       stats.bytes_downloaded += zip.len() as u64;
-      let entries = mica_interchange::read_zip(&zip);
+      let entries = mica_interchange::read_zip(&zip)
+        .with_context(|| format!("page {} archive is corrupt", page.view_id))?;
       drop(zip);
       let sidecar = format!("{}.mica.json", md.trim_end_matches(".md"));
       let names: BTreeSet<_> = entries
@@ -814,6 +815,7 @@ mod tests {
               if path.contains(&IMAGE.to_string()) {
                 bytes = mica_interchange::build_zip(
                   &mica_interchange::read_zip(&bytes)
+                    .expect("page archive is corrupt")
                     .into_iter()
                     .filter(|e| !e.name.starts_with("assets/"))
                     .map(|e| mica_interchange::ZipEntry {
