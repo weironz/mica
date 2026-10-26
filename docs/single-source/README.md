@@ -1,8 +1,34 @@
 # 单一实现专项：Markdown 引擎只留一份（S0–S5）
 
-> 状态：**方案已定，待开发**（2026-10-26 立项）。执行方：另一个 AI agent（可多个并行）。
+> 状态：**开发中，G1 / G2 待审核（存在阻塞）**（2026-10-27 更新；2026-10-26 立项）。执行方：三个并行工作包，协调者汇总。
 > 审核方：本仓库的维护 agent，在审核停点 G1–G3 抽查、全部完成后（G4）按 [05-review-checklist.md](05-review-checklist.md) 逐条审核。
 > 本目录是这个专项的**唯一权威文档**；其他文档里与之冲突的描述，以本目录为准。
+
+## 当前交付与审核入口（2026-10-27）
+
+以下是执行方的交付状态，不代表 G1 / G2 已通过；审核方结论仍只写入 [reviews.md](reviews.md)。
+
+| 工作包 | 可复核提交 / 分支 | 当前状态 |
+| --- | --- | --- |
+| S0 初始交付 | `single-source` 的 `c6446d5` | 已集成；其中对拍往返输入与性能采样存在问题，以修正提交为准 |
+| S0 修正与补测 | `refs/heads/worktree-agent-acfa208a26ae27e64` @ `e122680` | 尚未集成；[S0 执行记录](stages/S0-baseline.md) 的新增收尾节在该分支。Flutter VM 回执 2159 passed / 2 skipped，原生指纹与对拍回执 5 passed，Web release 与字体校验通过 |
+| S1 引擎拆分与审查修复 | `refs/heads/worktree-agent-aaa10db22e269aaf4` @ `12c7ff2` | 尚未集成；该分支 [S1 执行记录](stages/S1-core-sdk.md) 包含修复、门禁和七项契约问题。T1.10 未完成，契约未冻结 |
+| T2.1 P0 | `refs/heads/worktree-agent-a7950b28e1e2a2c23` @ `d48ed4f`；报告已集成至 `5826a05` | spike 代码未集成；[P0 执行记录](stages/S2-bindings.md#执行记录) 已入档，解析性能未达 1.2× 阈值，G2 待裁决 |
+
+S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust 自身往返记录 754 条（旧值 1305 混入解析差异），记录数不是独立 bug 数。Chrome 测试基线实际为 dartdevc，不能与 P0 的 production dart2js 数字直接相除。
+
+**G1 尚有以下阻塞 / 裁决项：**
+
+- 最终树全量 workspace 测试未完成，`local-ci.sh rust` 未单命令全绿；局部测试与 clippy 通过不能替代最终完整回执。共享开发库未重置，独立测试库已建，曾遭 Docker 掉线与链接失败。
+- FFI 独立 `Cargo.lock` 未更新，`cargo check --locked` 失败。建议允许仅更新必要依赖图，消费方源码仍零改动。
+- 严格 I3 未满足：无 marks 的 URL / 尾随空白编解码会变化，目标测试仍 ignored。建议允许不能无损写成源码字符串时回退现有 `{text, marks: []}` 对象，同时保留旧 Dart 客户端重解析造成的兼容限制，S4 实测。
+- Sequential 与 root ID 碰撞时，候选实现派生有效前缀；这是尚未批准的契约例外，不能宣称完全符合原约定。
+- 两项 Rust 基准超 ±5%：import.10k +6.3%、export_html.100k −6.3%；尚无同机交替 A/B 证据。
+- 其他契约问题：BlockJson 与 Block 的比较口径、根块实际 `paragraph` 与规范 `page`、`$$` 过滤位置、追加公开兼容入口。详见 S1 分支执行记录。
+
+**G2 待用户选择（经审核方复核）：**继续归因和优化 wasm，或按退出方案让 Web 暂留 Dart 镜像。执行方建议先归因和优化：本次 P0 仍经旧 UUID 路径，未验证 S1 顺序 ID 的正式调用路径，不宜直接据此放弃单一实现。该建议不是继续工作的批准。
+
+按 [04 §4.2](04-parallel-plan.md#42-审核停点) 停下相关工作包；不合入 main，不发版。任务分支合入 `single-source` 前仍须满足 [04 §4.3](04-parallel-plan.md#43-每个-pr-的要求) 的门禁要求。
 
 ## 一句话
 
