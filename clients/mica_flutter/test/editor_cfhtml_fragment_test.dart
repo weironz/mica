@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,5 +39,9 @@ void main() {
     expect(nodes.map((n) => n.text).join(), isNot(contains('before')));
     expect(marksFromData(nodes.first.data).any((m) => m.type == 'bold'), isTrue);
     await t.pumpWidget(const SizedBox()); await t.pump();
-  });
+  },
+      // `Pasteboard.html` returns null off Windows (pasteboard 0.5.0
+      // pasteboard_platform_io.dart), so elsewhere this paste can only take
+      // the plain-text path. Runs on Windows in flutter-integration.yml.
+      skip: !Platform.isWindows);
 }
