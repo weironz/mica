@@ -20,6 +20,7 @@ fn sequential() -> BlockIds {
 }
 
 /// Replace each id by `b<n>` in order of first appearance, rewriting children.
+#[cfg_attr(not(feature = "uuid"), allow(dead_code))]
 fn masked(doc: &DocumentSnapshotPayload) -> serde_json::Value {
   let mut map: Vec<(String, String)> = vec![(doc.root_block_id.clone(), doc.root_block_id.clone())];
   for block in &doc.blocks {
@@ -115,4 +116,61 @@ fn uuid_and_sequential_agree_once_ids_are_masked() {
       "id mode changed parse semantics for {name}"
     );
   }
+}
+
+#[test]
+fn a_root_id_in_the_sequential_namespace_never_collides() {
+  let doc = parse(
+    "one\n\ntwo",
+    &ParseOptions {
+      mode: ParseMode::Document,
+      root_id: "b0".to_string(),
+      ids: sequential(),
+    },
+  );
+  assert_eq!(doc.root_block_id, "b0");
+  let ids: std::collections::HashSet<&str> = doc.blocks.iter().map(|b| b.id.as_str()).collect();
+  assert_eq!(
+    ids.len(),
+    doc.blocks.len(),
+    "ids must be unique: {:?}",
+    doc.blocks
+  );
+  // Contract exception: an effective prefix keeps n from 0 and avoids the
+  // caller's root id deterministically.
+  let body_ids: Vec<&str> = doc.blocks.iter().map(|b| b.id.as_str()).collect();
+  assert!(body_ids.contains(&"b_0"), "{body_ids:?}");
+  assert!(body_ids.contains(&"b_1"), "{body_ids:?}");
+  let root = doc.blocks.iter().find(|b| b.id == "b0").unwrap();
+  assert_eq!(root.children.len(), 2);
+  for child in &root.children {
+    assert!(
+      doc.blocks.iter().any(|b| &b.id == child),
+      "child {child} must exist"
+    );
+  }
+  let markdown = mica_md::serialize(&doc, &mica_md::SerializeOptions::default()).unwrap();
+  assert!(
+    markdown.contains("one") && markdown.contains("two"),
+    "{markdown}"
+  );
+}
+
+#[test]
+fn normal_sequential_ids_keep_the_callers_prefix() {
+  let doc = parse(
+    "one\n\ntwo",
+    &ParseOptions {
+      mode: ParseMode::Document,
+      root_id: "root".to_string(),
+      ids: sequential(),
+    },
+  );
+  let body_ids: Vec<&str> = doc
+    .blocks
+    .iter()
+    .filter(|b| b.id != "root")
+    .map(|b| b.id.as_str())
+    .collect();
+  assert_eq!(body_ids, vec!["b0", "b1"]);
 }

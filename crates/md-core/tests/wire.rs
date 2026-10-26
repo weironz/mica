@@ -1,6 +1,6 @@
 //! I8: every wire offset is UTF-16, and each wire function has an error path.
 
-use mica_md::{ParseMode, parse_body, wire};
+use mica_md::{MdError, ParseMode, parse_body, wire};
 
 #[test]
 fn parse_body_json_matches_parse_body() {
@@ -12,11 +12,23 @@ fn parse_body_json_matches_parse_body() {
   for (value, block) in wire_blocks.iter().zip(blocks) {
     assert_eq!(value["type"], block.kind);
     assert_eq!(value["text"], block.text);
-    let data = if block.data.is_null() {
+    let mut data = if block.data.is_null() {
       serde_json::json!({})
     } else {
       block.data
     };
+    if let Some(marks) = data
+      .get_mut("marks")
+      .and_then(serde_json::Value::as_array_mut)
+    {
+      marks.sort_by_key(|m| {
+        (
+          m["start"].as_u64().unwrap_or(0),
+          m["end"].as_u64().unwrap_or(0),
+          m["type"].as_str().unwrap_or("").to_string(),
+        )
+      });
+    }
     assert_eq!(value["data"], data);
   }
 }
@@ -86,7 +98,7 @@ fn offsets_are_utf16_for_non_bmp_text() {
   let spans: Vec<[usize; 2]> = serde_json::from_str(&wire::math_run_spans_json(source)).unwrap();
   assert_eq!(spans, vec![[5, 8]]);
   let inline: serde_json::Value =
-    serde_json::from_str(&wire::parse_inline_math_json(source).unwrap()).unwrap();
+    serde_json::from_str(&wire::parse_inline_math_json(source)).unwrap();
   assert_eq!(inline["text"], "😀𠀀 x");
   assert_eq!(inline["marks"][0]["start"], 5);
   assert_eq!(inline["marks"][0]["end"], 6);
@@ -108,4 +120,61 @@ fn engine_info_reports_the_schema_and_a_fingerprint() {
       .as_str()
       .is_some_and(|f| f.len() == 16)
   );
+}
+
+#[test]
+fn wire_public_signatures_are_frozen() {
+  let _: fn(&str, bool) -> Result<String, MdError> = wire::parse_body_json;
+  let _: fn(&str) -> Result<String, MdError> = wire::parse_inline_batch_json;
+  let _: fn(&str) -> Result<String, MdError> = wire::decode_cells_json;
+  let _: fn(&str) -> Result<String, MdError> = wire::encode_cells_json;
+  let _: fn(&str, &str) -> Result<String, MdError> = wire::serialize_body_json;
+  let _: fn(&str) -> Result<String, MdError> = wire::serialize_inline_json;
+  let _: fn(&str, &str, &str) -> Result<String, MdError> = wire::render_html_body_json;
+  let _: fn(&str) -> String = wire::math_run_spans_json;
+  let _: fn(&str) -> String = wire::parse_inline_math_json;
+  let _: fn() -> String = wire::engine_info_json;
+}
+
+#[test]
+fn block_json_marks_are_sorted_and_extra_data_survives() {
+  // An enclosing emphasis is appended after the inner code mark by the parser,
+  // so the raw order is `code` then `bold`; §3.4 requires sorted output.
+  let json = wire::parse_body_json("**a `b`**", false).unwrap();
+  let blocks: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+  let marks = blocks[0]["data"]["marks"].as_array().unwrap();
+  let keys: Vec<(u64, u64, String)> = marks
+    .iter()
+    .map(|m| {
+      (
+        m["start"].as_u64().unwrap(),
+        m["end"].as_u64().unwrap(),
+        m["type"].as_str().unwrap().to_string(),
+      )
+    })
+    .collect();
+  let mut sorted = keys.clone();
+  sorted.sort();
+  assert_eq!(keys, sorted, "wire output must be sorted");
+  assert!(keys.iter().any(|(_, _, k)| k == "bold"));
+  assert!(keys.iter().any(|(_, _, k)| k == "code"));
+}
+
+#[test]
+fn encode_cells_sorts_marks_and_keeps_extra_fields() {
+  let inlines = serde_json::json!([{
+    "text": "abcdef",
+    "marks": [
+      {"start": 4, "end": 6, "type": "bold"},
+      {"start": 0, "end": 1, "type": "italic"},
+      {"start": 2, "end": 3, "type": "link", "href": "https://x.y", "title": "t"}
+    ]
+  }]);
+  let out = wire::encode_cells_json(&inlines.to_string()).unwrap();
+  let cells: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+  let marks = cells[0]["marks"].as_array().unwrap();
+  let starts: Vec<u64> = marks.iter().map(|m| m["start"].as_u64().unwrap()).collect();
+  assert_eq!(starts, vec![0, 2, 4]);
+  assert_eq!(marks[1]["href"], "https://x.y");
+  assert_eq!(marks[1]["title"], "t");
 }

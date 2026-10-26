@@ -499,3 +499,49 @@ pub(crate) fn export_safe_tree(
   }
   (Cow::Owned(repaired), index)
 }
+
+#[cfg(test)]
+mod tree_shape_tests {
+  use super::{export_html, export_markdown};
+  use crate::DocumentSnapshotPayload;
+
+  fn doc(blocks: serde_json::Value) -> DocumentSnapshotPayload {
+    serde_json::from_value(serde_json::json!({
+      "schema_version": 1, "root_block_id": "root", "blocks": blocks,
+    }))
+    .unwrap()
+  }
+
+  /// THE BUG: `children` comes from a CRDT any member can write; a block that
+  /// lists itself sent the recursive exporters into a stack overflow.
+  #[test]
+  fn a_cycle_in_children_exports_instead_of_overflowing() {
+    let snapshot = doc(serde_json::json!([
+      {"id": "root", "type": "page", "text": "", "data": {}, "children": ["a"]},
+      {"id": "a", "type": "quote", "text": "loop", "data": {}, "children": ["a", "root"]},
+    ]));
+    assert!(export_html(&snapshot).unwrap().contains("loop"));
+    assert!(export_markdown(&snapshot).unwrap().contains("loop"));
+  }
+
+  /// A chain far deeper than any real document keeps all its text.
+  #[test]
+  fn a_very_deep_chain_is_flattened_not_lost() {
+    let n = 5000;
+    let mut blocks = vec![serde_json::json!(
+      {"id": "root", "type": "page", "text": "", "data": {}, "children": ["b0"]}
+    )];
+    for i in 0..n {
+      let children = if i + 1 < n {
+        vec![format!("b{}", i + 1)]
+      } else {
+        vec![]
+      };
+      blocks.push(serde_json::json!(
+        {"id": format!("b{i}"), "type": "quote", "text": format!("t{i}"), "data": {}, "children": children}
+      ));
+    }
+    let md = export_markdown(&doc(serde_json::Value::Array(blocks))).unwrap();
+    assert!(md.contains("t0") && md.contains(&format!("t{}", n - 1)));
+  }
+}

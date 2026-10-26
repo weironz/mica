@@ -53,16 +53,32 @@ fn block_from_json(block: BlockJson, id: String) -> Block {
 }
 
 fn block_to_json(block: &Block) -> BlockJson {
-  let data = if block.data.is_null() {
-    json!({})
-  } else {
-    block.data.clone()
-  };
   BlockJson {
     kind: block.kind.clone(),
     text: block.text.clone(),
-    data,
+    data: normalize_data(block.data.clone()),
   }
+}
+
+/// §3.4: `data` is always an object and its `marks` array is sorted by
+/// `(start, end, type)`. Everything else in `data` is preserved.
+fn normalize_data(mut data: Value) -> Value {
+  if data.is_null() {
+    return json!({});
+  }
+  if let Some(marks) = data.get_mut("marks").and_then(Value::as_array_mut) {
+    marks.sort_by_key(|m| {
+      (
+        m.get("start").and_then(Value::as_u64).unwrap_or(0),
+        m.get("end").and_then(Value::as_u64).unwrap_or(0),
+        m.get("type")
+          .and_then(Value::as_str)
+          .unwrap_or("")
+          .to_string(),
+      )
+    });
+  }
+  data
 }
 
 fn inline_to_json(inline: InlineText) -> InlineJson {
@@ -113,7 +129,10 @@ pub fn encode_cells_json(inlines_json: &str) -> Result<String, MdError> {
   let inlines: Vec<InlineJson> = serde_json::from_str(inlines_json).map_err(invalid)?;
   let out: Vec<Value> = inlines
     .into_iter()
-    .map(|inline| {
+    .map(|mut inline| {
+      inline
+        .marks
+        .sort_by_key(|m| (m.start, m.end, m.kind.clone()));
       encode_cell(&InlineText {
         text: inline.text,
         marks: inline.marks,
@@ -188,8 +207,9 @@ pub fn math_run_spans_json(source: &str) -> String {
 }
 
 /// Parse inline math to `InlineJson`.
-pub fn parse_inline_math_json(source: &str) -> Result<String, MdError> {
-  serde_json::to_string(&inline_to_json(parse_inline_math(source))).map_err(invalid)
+pub fn parse_inline_math_json(source: &str) -> String {
+  serde_json::to_string(&inline_to_json(parse_inline_math(source)))
+    .unwrap_or_else(|_| r#"{"text":"","marks":[]}"#.to_string())
 }
 
 /// Engine build information.

@@ -1014,3 +1014,135 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
   }
   out
 }
+
+#[cfg(test)]
+mod security_tests {
+  use super::{strip_unsafe_attrs, tagfilter};
+
+  // Pins what the GFM tagfilter does — and, crucially, what it does NOT do — for
+  // raw HTML rendered onto a Mica same-origin surface (the public share page).
+  #[test]
+  fn tagfilter_blacklist_neutralizes_script_but_not_event_handlers() {
+    assert!(tagfilter("<script>alert(1)</script>").starts_with("&lt;script"));
+    assert!(tagfilter("<iframe src=x>").starts_with("&lt;iframe"));
+
+    let img = tagfilter("<img src=x onerror=\"steal()\">");
+    assert!(
+      img.contains("onerror"),
+      "tagfilter unexpectedly stripped onerror: {img}"
+    );
+    assert!(
+      img.starts_with("<img"),
+      "img tag should not be escaped: {img}"
+    );
+
+    let svg = tagfilter("<svg onload=\"steal()\">");
+    assert!(
+      svg.contains("onload"),
+      "tagfilter unexpectedly stripped onload: {svg}"
+    );
+    assert!(
+      svg.starts_with("<svg"),
+      "svg tag should not be escaped: {svg}"
+    );
+  }
+
+  #[test]
+  fn tagfilter_keeps_non_ascii_text_intact() {
+    let raw = "<details>\n<summary>点击展开 😀</summary>\n<script>x</script>é</details>";
+    assert_eq!(
+      tagfilter(raw),
+      "<details>\n<summary>点击展开 😀</summary>\n&lt;script>x&lt;/script>é</details>"
+    );
+  }
+
+  #[test]
+  fn strip_unsafe_attrs_removes_event_handlers() {
+    let a = strip_unsafe_attrs("<img src=x onerror=\"steal()\">");
+    assert!(!a.contains("onerror"), "onerror survived: {a}");
+    assert!(a.contains("src=x"), "safe src dropped: {a}");
+    assert!(a.starts_with("<img"), "tag mangled: {a}");
+
+    let b = strip_unsafe_attrs("<svg onload='x'>");
+    assert!(!b.contains("onload"), "onload survived: {b}");
+
+    let c = strip_unsafe_attrs("<body OnLoad=x>");
+    assert!(
+      !c.to_ascii_lowercase().contains("onload"),
+      "OnLoad survived: {c}"
+    );
+    assert_eq!(c, "<body>");
+
+    let d = strip_unsafe_attrs("<img src=x onerror=steal()>");
+    assert!(!d.contains("onerror"), "unquoted onerror survived: {d}");
+  }
+
+  #[test]
+  fn strip_unsafe_attrs_removes_js_and_vbscript_urls() {
+    let a = strip_unsafe_attrs("<a href=\"javascript:alert(1)\">x</a>");
+    assert!(!a.contains("javascript"), "javascript: href survived: {a}");
+
+    let b = strip_unsafe_attrs("<a href=\"  JAVAScript:x\">x</a>");
+    assert!(
+      !b.to_ascii_lowercase().contains("javascript"),
+      "js href survived: {b}"
+    );
+
+    let c = strip_unsafe_attrs("<a href=\"java\tscript:x\">x</a>");
+    assert!(
+      !c.to_ascii_lowercase().contains("script:"),
+      "tab-split js href survived: {c}"
+    );
+
+    let d = strip_unsafe_attrs("<img src=\"vbscript:msgbox(1)\">");
+    assert!(
+      !d.to_ascii_lowercase().contains("vbscript"),
+      "vbscript src survived: {d}"
+    );
+  }
+
+  #[test]
+  fn strip_unsafe_attrs_preserves_safe_content() {
+    let img = strip_unsafe_attrs("<img src=\"x.png\" alt=\"turn on the light\">");
+    assert_eq!(img, "<img src=\"x.png\" alt=\"turn on the light\">");
+
+    assert_eq!(
+      strip_unsafe_attrs("<div class=\"on\">"),
+      "<div class=\"on\">"
+    );
+    assert_eq!(strip_unsafe_attrs("<input disabled>"), "<input disabled>");
+    assert_eq!(strip_unsafe_attrs("a < b and on=off"), "a < b and on=off");
+    assert_eq!(
+      strip_unsafe_attrs("<!-- onerror=x -->"),
+      "<!-- onerror=x -->"
+    );
+    assert_eq!(strip_unsafe_attrs("café <br/> more"), "café <br/> more");
+    assert_eq!(
+      strip_unsafe_attrs("<a href=\"https://x.test/on\">y</a>"),
+      "<a href=\"https://x.test/on\">y</a>"
+    );
+  }
+
+  #[test]
+  fn meta_http_equiv_tags_are_dropped() {
+    let r =
+      strip_unsafe_attrs("<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\">");
+    assert!(r.is_empty(), "refresh meta survived: {r}");
+
+    let m = strip_unsafe_attrs("<META HTTP-EQUIV=Refresh CONTENT=\"0; URL=//evil\">");
+    assert!(m.is_empty(), "mixed-case refresh meta survived: {m}");
+
+    let u = strip_unsafe_attrs("<meta http-equiv>");
+    assert!(u.is_empty(), "valueless http-equiv meta survived: {u}");
+
+    assert_eq!(
+      strip_unsafe_attrs("<meta name=\"description\" content=\"笔记\">"),
+      "<meta name=\"description\" content=\"笔记\">"
+    );
+
+    assert_eq!(
+      strip_unsafe_attrs("前<meta http-equiv=\"refresh\" content=\"0;url=x\">后"),
+      "前后"
+    );
+  }
+}

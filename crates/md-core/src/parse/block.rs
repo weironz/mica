@@ -363,7 +363,7 @@ pub(crate) fn import_markdown_inner(
   if let Some(fm) = front_matter {
     data_insert(&mut root_data, "front_matter", json!(fm));
   }
-  assign_ids(&mut blocks, &mut root_children, ids);
+  assign_ids(&mut blocks, &mut root_children, ids, root_block_id);
   let root = Block {
     id: root_block_id.to_string(),
     kind: "paragraph".to_string(),
@@ -385,14 +385,57 @@ pub(crate) fn import_markdown_inner(
 /// Replace the parser's temporary ids (`\u{1}<index>`) with the caller's ids
 /// and rewrite every `children` reference. Temporary ids are unique and never
 /// appear in real documents, so they cannot collide with user data.
-fn assign_ids(blocks: &mut [Block], root_children: &mut [String], ids: &BlockIds) {
+fn assign_ids(
+  blocks: &mut [Block],
+  root_children: &mut [String],
+  ids: &BlockIds,
+  root_block_id: &str,
+) {
   // Only `push_block` appends to both collections, in lockstep, so position IS
   // the block index. Generate each final id exactly once (`Uuid` is random) and
   // give the block the value while the root's child list gets the one clone the
   // exporter needs.
   debug_assert_eq!(blocks.len(), root_children.len());
+  // A caller-supplied root id may live in the same namespace as generated ids
+  // (`root_id: "b0"` + `Sequential{"b"}`). Skipping it keeps every id unique;
+  // the alternative — renumbering from 0 anyway — produces two blocks with one
+  // id, and the exporter drops the second.
+  let mut used: std::collections::HashSet<String> =
+    std::collections::HashSet::from([root_block_id.to_string()]);
+  // Sequential numbering must stay `${prefix}${n}` from 0 for every normal
+  // input. The only exception is a caller-supplied root id inside that
+  // namespace (`root_id: "b0"`, `prefix: "b"`): no numbering scheme can then
+  // satisfy prefix + n-from-0 + global uniqueness at once. We deterministically
+  // derive an effective prefix (`b`, then `b_`, …) and keep n from 0, so the
+  // common case is byte-identical and the collision case is reproducible.
+  let sequential_prefix = match ids {
+    BlockIds::Sequential { prefix } => {
+      let mut candidate = prefix.clone();
+      while (0..blocks.len()).any(|n| format!("{candidate}{n}") == root_block_id) {
+        candidate.push('_');
+      }
+      Some(candidate)
+    }
+    #[cfg(feature = "uuid")]
+    BlockIds::Uuid => None,
+  };
   for (n, block) in blocks.iter_mut().enumerate() {
-    let final_id = ids.id_for(n);
+    let mut final_id = if let Some(prefix) = &sequential_prefix {
+      format!("{prefix}{n}")
+    } else {
+      ids.id_for(n)
+    };
+    if used.contains(final_id.as_str()) {
+      // Only `Uuid` can land here, and only on an astronomically unlikely
+      // collision; keep the guarantee by falling back to a fresh namespace.
+      let mut next = n + 1;
+      final_id = format!("b{next}");
+      while used.contains(final_id.as_str()) {
+        next += 1;
+        final_id = format!("b{next}");
+      }
+    }
+    used.insert(final_id.clone());
     if let Some(child) = root_children.get_mut(n) {
       *child = final_id.clone();
     }
