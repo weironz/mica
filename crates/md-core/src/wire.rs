@@ -52,11 +52,11 @@ fn block_from_json(block: BlockJson, id: String) -> Block {
   }
 }
 
-fn block_to_json(block: &Block) -> BlockJson {
+fn block_to_json(block: Block) -> BlockJson {
   BlockJson {
-    kind: block.kind.clone(),
-    text: block.text.clone(),
-    data: normalize_data(block.data.clone()),
+    kind: block.kind,
+    text: block.text,
+    data: normalize_data(block.data),
   }
 }
 
@@ -67,15 +67,25 @@ fn normalize_data(mut data: Value) -> Value {
     return json!({});
   }
   if let Some(marks) = data.get_mut("marks").and_then(Value::as_array_mut) {
-    marks.sort_by_key(|m| {
-      (
-        m.get("start").and_then(Value::as_u64).unwrap_or(0),
-        m.get("end").and_then(Value::as_u64).unwrap_or(0),
-        m.get("type")
+    // Sort by the same (start, end, type) key as before, but borrow the type
+    // string instead of allocating one per comparison (`sort_by_key` would run
+    // the closure repeatedly and allocate each time). Stable sort, so ties keep
+    // their input order exactly as the previous implementation did.
+    marks.sort_by(|a, b| {
+      let key = |m: &Value| {
+        (
+          m.get("start").and_then(Value::as_u64).unwrap_or(0),
+          m.get("end").and_then(Value::as_u64).unwrap_or(0),
+        )
+      };
+      let (a_start, a_end) = key(a);
+      let (b_start, b_end) = key(b);
+      a_start.cmp(&b_start).then(a_end.cmp(&b_end)).then_with(|| {
+        a.get("type")
           .and_then(Value::as_str)
           .unwrap_or("")
-          .to_string(),
-      )
+          .cmp(b.get("type").and_then(Value::as_str).unwrap_or(""))
+      })
     });
   }
   data
@@ -97,8 +107,10 @@ pub fn parse_body_json(markdown: &str, fragment: bool) -> Result<String, MdError
   } else {
     ParseMode::Document
   };
+  // Consume the parsed blocks instead of mapping over a borrow: `parse_body`
+  // just produced them, so cloning every text/data value here was pure waste.
   let blocks: Vec<BlockJson> = parse_body(markdown, mode)
-    .iter()
+    .into_iter()
     .map(block_to_json)
     .collect();
   serde_json::to_string(&blocks).map_err(invalid)

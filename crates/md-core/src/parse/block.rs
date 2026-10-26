@@ -396,12 +396,6 @@ fn assign_ids(
   // give the block the value while the root's child list gets the one clone the
   // exporter needs.
   debug_assert_eq!(blocks.len(), root_children.len());
-  // A caller-supplied root id may live in the same namespace as generated ids
-  // (`root_id: "b0"` + `Sequential{"b"}`). Skipping it keeps every id unique;
-  // the alternative — renumbering from 0 anyway — produces two blocks with one
-  // id, and the exporter drops the second.
-  let mut used: std::collections::HashSet<String> =
-    std::collections::HashSet::from([root_block_id.to_string()]);
   // Sequential numbering must stay `${prefix}${n}` from 0 for every normal
   // input. The only exception is a caller-supplied root id inside that
   // namespace (`root_id: "b0"`, `prefix: "b"`): no numbering scheme can then
@@ -419,27 +413,45 @@ fn assign_ids(
     #[cfg(feature = "uuid")]
     BlockIds::Uuid => None,
   };
-  for (n, block) in blocks.iter_mut().enumerate() {
-    let mut final_id = if let Some(prefix) = &sequential_prefix {
-      format!("{prefix}{n}")
-    } else {
-      ids.id_for(n)
-    };
-    if used.contains(final_id.as_str()) {
-      // Only `Uuid` can land here, and only on an astronomically unlikely
-      // collision; keep the guarantee by falling back to a fresh namespace.
-      let mut next = n + 1;
-      final_id = format!("b{next}");
-      while used.contains(final_id.as_str()) {
-        next += 1;
-        final_id = format!("b{next}");
+  if let Some(prefix) = &sequential_prefix {
+    // `{prefix}{n}` is unique by construction, and the loop above removed the
+    // only possible collision (the root id). The old code still inserted every
+    // id into a HashSet and cloned it — O(n) allocations per parse, measured as
+    // avoidable in P0. No uniqueness bookkeeping is needed on this path.
+    for (n, block) in blocks.iter_mut().enumerate() {
+      let final_id = format!("{prefix}{n}");
+      if let Some(child) = root_children.get_mut(n) {
+        *child = final_id.clone();
+      }
+      block.id = final_id;
+    }
+  } else {
+    // `Uuid` only: a v4 id can theoretically collide, so keep the used-set.
+    #[cfg(feature = "uuid")]
+    {
+      let mut used: std::collections::HashSet<String> =
+        std::collections::HashSet::from([root_block_id.to_string()]);
+      for (n, block) in blocks.iter_mut().enumerate() {
+        let mut final_id = ids.id_for(n);
+        if used.contains(final_id.as_str()) {
+          // Astronomically unlikely; keep the guarantee by falling back to a
+          // fresh namespace.
+          let mut next = n + 1;
+          final_id = format!("b{next}");
+          while used.contains(final_id.as_str()) {
+            next += 1;
+            final_id = format!("b{next}");
+          }
+        }
+        used.insert(final_id.clone());
+        if let Some(child) = root_children.get_mut(n) {
+          *child = final_id.clone();
+        }
+        block.id = final_id;
       }
     }
-    used.insert(final_id.clone());
-    if let Some(child) = root_children.get_mut(n) {
-      *child = final_id.clone();
-    }
-    block.id = final_id;
+    #[cfg(not(feature = "uuid"))]
+    let _ = (ids, root_block_id);
   }
   // Defensive generality: the current parser only gives the root children, so
   // the common path skips building a map entirely.

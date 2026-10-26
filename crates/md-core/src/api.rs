@@ -93,14 +93,32 @@ pub fn parse_body(markdown: &str, mode: ParseMode) -> Vec<Block> {
       },
     },
   );
-  let mut out = Vec::new();
-  if let Some(root) = doc.blocks.iter().find(|b| b.id == doc.root_block_id) {
-    for id in &root.children {
-      if let Some(block) = doc.blocks.iter().find(|b| &b.id == id) {
-        let mut block = block.clone();
-        block.children.clear();
-        out.push(block);
-      }
+  // Resolve root children to positions while the blocks are still borrowed,
+  // then move the blocks out by position. The previous loop was O(n²) (`find`
+  // per child) and deep-cloned every block; P0 measured both as real cost at
+  // 3k blocks. No ids are cloned into the map, and the map is dropped before
+  // the move so the borrow checker allows ownership transfer.
+  let index: std::collections::HashMap<&str, usize> = doc
+    .blocks
+    .iter()
+    .enumerate()
+    .map(|(position, block)| (block.id.as_str(), position))
+    .collect();
+  let Some(&root_position) = index.get(doc.root_block_id.as_str()) else {
+    return Vec::new();
+  };
+  let order: Vec<usize> = doc.blocks[root_position]
+    .children
+    .iter()
+    .filter_map(|id| index.get(id.as_str()).copied())
+    .collect();
+  drop(index);
+  let mut slots: Vec<Option<Block>> = doc.blocks.into_iter().map(Some).collect();
+  let mut out = Vec::with_capacity(order.len());
+  for position in order {
+    if let Some(mut block) = slots[position].take() {
+      block.children.clear();
+      out.push(block);
     }
   }
   out
