@@ -7,6 +7,7 @@ import '../cloud/body_ownership.dart';
 import '../local/local_offline_api.dart'
     show WorkspaceData, ViewData;
 import '../perf/switch_trace.dart';
+import '../session/request_owner.dart';
 import '../session/session_controller.dart';
 
 /// The cloud page-tree domain of `_WorkspaceShellState` — the write operations
@@ -125,6 +126,21 @@ class CloudViewsController extends ChangeNotifier {
   /// still allowed to commit into the live session.
   bool _belongsToCurrentSession(String requestOrigin, int generation) =>
       origin() == requestOrigin && _sessionGeneration == generation;
+
+  /// The same binding for a USER action ([renameView], [createDocument], …):
+  /// taken before its first await, checked by [_ensureCurrent] before it
+  /// writes. Those used to commit into whatever session was live when the
+  /// answer landed — a page created as one account inserted into the next
+  /// account's tree. [StaleResult] is dropped by the shell's action runner.
+  ({String origin, int generation}) _claim() =>
+      (origin: origin(), generation: _sessionGeneration);
+
+  void _ensureCurrent(({String origin, int generation}) claim) {
+    if (!isMounted() ||
+        !_belongsToCurrentSession(claim.origin, claim.generation)) {
+      throw const StaleResult();
+    }
+  }
 
   @override
   void dispose() {
@@ -265,7 +281,9 @@ class CloudViewsController extends ChangeNotifier {
     String viewId,
     String name,
   ) async {
+    final claim = _claim();
     final renamed = await _updateView(token, workspaceId, viewId, name);
+    _ensureCurrent(claim);
     session.replaceViews(
       workspaceId,
       (session.viewsByWorkspace[workspaceId] ?? const [])
@@ -284,6 +302,7 @@ class CloudViewsController extends ChangeNotifier {
     DocumentView view,
     String icon,
   ) async {
+    final claim = _claim();
     final updated = await _updateView(
       token,
       workspaceId,
@@ -291,6 +310,7 @@ class CloudViewsController extends ChangeNotifier {
       view.name,
       icon: icon,
     );
+    _ensureCurrent(claim);
     session.replaceViews(
       workspaceId,
       (session.viewsByWorkspace[workspaceId] ?? const [])
@@ -309,6 +329,7 @@ class CloudViewsController extends ChangeNotifier {
     String name, {
     String? parentViewId,
   }) async {
+    final claim = _claim();
     final created = await _createDocument(
       token,
       workspaceId,
@@ -320,6 +341,7 @@ class CloudViewsController extends ChangeNotifier {
       workspaceId,
       created.document.id,
     );
+    _ensureCurrent(claim);
     session.replaceViews(workspaceId, [
       ...session.viewsByWorkspace[workspaceId] ?? const [],
       created.view,
@@ -340,6 +362,7 @@ class CloudViewsController extends ChangeNotifier {
     String name, {
     String? parentViewId,
   }) async {
+    final claim = _claim();
     final view = await _createFolder(
       token,
       workspaceId,
@@ -347,6 +370,7 @@ class CloudViewsController extends ChangeNotifier {
       parentViewId: parentViewId,
     );
     if (!isMounted()) return null;
+    _ensureCurrent(claim);
     session.replaceViews(workspaceId, [
       ...session.viewsByWorkspace[workspaceId] ?? const [],
       view,
@@ -365,7 +389,9 @@ class CloudViewsController extends ChangeNotifier {
     String workspaceId,
     String viewId,
   ) async {
+    final claim = _claim();
     final views = await _deleteView(token, workspaceId, viewId);
+    _ensureCurrent(claim);
     session.replaceViews(workspaceId, views);
   }
 
@@ -429,7 +455,9 @@ class CloudViewsController extends ChangeNotifier {
     String workspaceId,
     String viewId,
   ) async {
+    final claim = _claim();
     final views = await _restoreView(token, workspaceId, viewId);
+    _ensureCurrent(claim);
     session.replaceViews(workspaceId, views);
   }
 
@@ -543,9 +571,12 @@ class CloudViewsController extends ChangeNotifier {
         .firstOrNull;
     if (view == null) {
       try {
+        final claim = _claim();
         final answer = await _listViewsIfChanged(token, workspaceId);
         final views = answer.views;
-        if (views != null && isMounted()) {
+        if (views != null &&
+            _belongsToCurrentSession(claim.origin, claim.generation) &&
+            isMounted()) {
           session.replaceViews(workspaceId, views);
           view = views.where((v) => v.id == viewId).firstOrNull;
         }

@@ -46,6 +46,7 @@
 
 ## 验证、构建与发布
 
+- 跨 await 写共享状态、或持有锁/连接/临时文件的改动，按 [异步评审清单](docs/dev/async-review-checklist.md) 逐条过：结果绑定账号/服务器/会话代际（写入绑定文档版本），提交前检查归属，延迟闭包入队时捕获数据，资源走 finally / RAII。
 - Bug 修复配回归测试，并通过真实运行路径验证；Web UI 用 Playwright 检查并截图，桌面问题须在桌面验证。提交说明写根因。
 - 工具链以 `.fvmrc` / `rust-toolchain.toml` 为准；升级时同步构建镜像与 CI，验证桌面 Cargokit 实际使用的工具链。不要写死本机安装路径或对正常构建额外限流。
 - Windows 的 `just` recipe 使用 Git Bash；网络受限时按环境配置 Flutter / Pub 镜像。Windows runner C++ 按 warning-as-error 处理，注释保持 ASCII，环境变量读取用 `GetEnvironmentVariableW`。

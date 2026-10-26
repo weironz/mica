@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
+import 'package:mica_flutter/session/request_owner.dart';
 import 'package:mica_flutter/session/session_controller.dart';
 import 'package:mica_flutter/views/cloud_views_controller.dart';
 
@@ -458,6 +459,29 @@ void main() {
       expect(selections, isEmpty);
       expect(mirrored, isNull);
       expect(store.viewsByWorkspace, isEmpty);
+      controller.dispose();
+    });
+
+    test('a page created as one account never lands in the next account '
+        'tree: the commit throws StaleResult', () async {
+      final body = Completer<DocumentBootstrap>();
+      final started = Completer<void>();
+      createAnswer['P'] = DocumentCreateResult(
+        document: DocumentRecord(id: 'd1', rootBlockId: 'r', currentSeq: 0),
+        view: view('created'),
+      );
+      final controller = buildController(fetchBootstrap: () {
+        started.complete();
+        return body.future;
+      });
+      final creating = controller.createDocument('t', 'w1', 'P');
+      await started.future;
+      store.signOut();
+      store.signIn(session('new'), [ws('w2')]);
+      body.complete(boot('created'));
+      await expectLater(creating, throwsA(isA<StaleResult>()));
+      expect(store.viewsByWorkspace, isEmpty,
+          reason: 'the old account\'s page must not enter the new tree');
       controller.dispose();
     });
 

@@ -95,6 +95,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [lessons.md](dev/lessons.md) | **踩过的坑**(和根 `AGENTS.md` 一起读) |
+| [async-review-checklist.md](dev/async-review-checklist.md) | 异步结果归属与资源释放的评审清单 |
 | [bootstrap.md](dev/bootstrap.md) | 新开发机从零搭建(Windows) |
 | [dev-environment.md](dev/dev-environment.md) | 开发环境与辅助工具 |
 | [api.md](dev/api.md) | HTTP API |

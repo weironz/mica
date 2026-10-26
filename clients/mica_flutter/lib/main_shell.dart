@@ -837,11 +837,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     };
   }
 
-  Future<void> _run(Future<void> Function() action) async {
-    setState(() {
-      _isBusy = true;
-      _message = null;
-    });
+  /// Server + session generation an action works for: the views controller's identity (#148).
+  Object? get _owner => _session == null ? null : (_registry.cloudOrigin, _sessionCtrl.generation);
+
+  Future<void> _run(Future<void> Function() action) => runOwned(_owner, () async {
+    setState(() { _isBusy = true; _message = null; });
 
     try {
       // Renew ahead of expiry — but do not put that round trip in front of the
@@ -883,21 +883,23 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // secret rotated. The session is unusable — say so instead of parroting
       // the server's bare `unauthorized`, which told the user nothing and left
       // the local mirror rendering a half-dead page that merely looked broken.
+      // Only for the account it was sent as: an old sign-in's 401 must not
+      // end the session that replaced it (same class as #147).
+      if (ownerChanged(_owner) || !mounted) return;
       if (error.isUnauthorized && _session != null) {
         _auth.endExpiredSession();
       } else {
         setState(() => _message = _apiMessage(error));
       }
+    } on StaleResult {
+      // The account or workspace changed under the action: its result is not
+      // this session's to show (docs/dev/async-review-checklist.md).
     } catch (error) {
-      setState(() {
-        _message = error.toString();
-      });
+      if (mounted && !ownerChanged(_owner)) setState(() => _message = error.toString());
     } finally {
-      setState(() {
-        _isBusy = false;
-      });
+      if (mounted) setState(() => _isBusy = false);
     }
-  }
+  });
 
   // --- Tabs ---------------------------------------------------------------
   //
@@ -1669,6 +1671,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         workspace.id,
         created.document.id,
       );
+      ensureOwner(_owner);
       _sessionCtrl.addCreated(workspace, [created.view]);
       setState(() {
         _selectedView = created.view;
@@ -1695,15 +1698,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     return _run(() async {
       final session = _requireSession();
       await _api.deleteWorkspace(session.accessToken, workspace.id);
+      ensureOwner(_owner);
       // Deletion falls the selection to the first remaining workspace;
       // the caller closes the page it held when this was the selected one.
       final wasSelected = _sessionCtrl.remove(workspace);
-      if (wasSelected) {
-        setState(() {
-          _selectedView = null;
-          _selectedBootstrap = null;
-        });
-      }
+      if (wasSelected) setState(() { _selectedView = null; _selectedBootstrap = null; });
       if (wasSelected && _selectedWorkspace != null) {
         await _loadSelectedWorkspaceMembers();
         await _loadSelectedWorkspaceViews();
@@ -1856,10 +1855,8 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         name,
         parentViewId: parentViewId,
       );
-      setState(() {
-        _selectedView = created.view;
-        _selectedBootstrap = created.bootstrap;
-      });
+      ensureOwner(_owner, workspaceId: workspace.id, selectedWorkspaceId: _selectedWorkspace?.id);
+      setState(() { _selectedView = created.view; _selectedBootstrap = created.bootstrap; });
       newId = created.view.id;
     });
     return newId;
@@ -2830,6 +2827,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         title,
         markdown,
       );
+      ensureOwner(_owner, workspaceId: workspace.id, selectedWorkspaceId: _selectedWorkspace?.id);
       setState(() {
         _sessionCtrl.replaceViews(workspace.id, [
           ..._viewsByWorkspace[workspace.id] ?? const [],
@@ -2859,6 +2857,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         title,
         markdown,
       );
+      ensureOwner(_owner, workspaceId: workspace.id, selectedWorkspaceId: _selectedWorkspace?.id);
       setState(() {
         _sessionCtrl.replaceViews(workspace.id, [
           ..._viewsByWorkspace[workspace.id] ?? const [],
@@ -3019,11 +3018,9 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         title,
         markdown,
       );
+      ensureOwner(_owner);
       _sessionCtrl.addCreated(workspace, [bootstrap.view]);
-      setState(() {
-        _selectedView = bootstrap.view;
-        _selectedBootstrap = bootstrap;
-      });
+      setState(() { _selectedView = bootstrap.view; _selectedBootstrap = bootstrap; });
       await _loadSelectedWorkspaceMembers();
     });
   }
@@ -3229,7 +3226,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         view.id,
         name,
       );
-
+      ensureOwner(_owner);
       setState(() {
         if (_selectedView?.id == renamed.id) {
           _selectedView = renamed;
