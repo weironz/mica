@@ -20,6 +20,8 @@ import 'package:mica_flutter/cloud/cloud_sync_session.dart';
 import 'package:mica_flutter/src/rust/api/document.dart';
 import 'package:mica_flutter/src/rust/frb_generated.dart';
 
+import 'support/native_build.dart';
+
 class _LoadedStore implements CloudDocStore {
   _LoadedStore(this._state, this._cursor);
   final Uint8List _state;
@@ -61,7 +63,7 @@ class _CorruptStore extends _LoadedStore {
 }
 
 void main() {
-  setUpAll(() async => RustLib.init());
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test(

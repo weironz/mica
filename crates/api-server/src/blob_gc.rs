@@ -791,8 +791,7 @@ mod tests {
   /// restart the clock.
   #[tokio::test]
   async fn re_registering_a_key_clears_the_gc_mark() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+    let Some(url) = mica_infra::test_database_url() else {
       return;
     };
     let db = PgPool::connect(&url)
@@ -856,8 +855,7 @@ mod tests {
   /// expiry is fresh (the orphan sweep waits a day past it).
   #[tokio::test]
   async fn phase_one_keeps_both_sweeps_off_a_key_before_its_put() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+    let Some(url) = mica_infra::test_database_url() else {
       return;
     };
     let db = PgPool::connect(&url)
@@ -957,8 +955,7 @@ mod tests {
   /// column is NULL (not derived yet) still counts — it falls back to decoding.
   #[tokio::test]
   async fn references_come_from_the_derived_column_with_a_decode_fallback() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+    let Some(url) = mica_infra::test_database_url() else {
       return;
     };
     let db = PgPool::connect(&url)
@@ -1056,8 +1053,7 @@ mod tests {
   /// that checkpoint brought back a broken image.
   #[tokio::test]
   async fn a_named_version_keeps_its_images_referenced() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+    let Some(url) = mica_infra::test_database_url() else {
       return;
     };
     let db = PgPool::connect(&url)

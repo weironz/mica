@@ -5,6 +5,7 @@ pub mod error;
 pub mod mail;
 pub mod storage;
 pub mod telemetry;
+pub mod test_db;
 
 pub use ai::{AiConfig, AiProvider};
 pub use config::{AppConfig, Environment, SyncTuning};
@@ -15,3 +16,4 @@ pub use storage::{
   BucketProbe, CreateOutcome, DEFAULT_S3_SECRET_KEY, PresignedUpload, S3Config, classify_create,
   classify_head, default_s3_secret_in_use, stored_content_type,
 };
+pub use test_db::test_database_url;

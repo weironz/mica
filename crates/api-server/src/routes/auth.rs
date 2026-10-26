@@ -1774,12 +1774,7 @@ mod refresh_pg {
   /// means the workflow regressed, not that these assertions may quietly stop
   /// running. (See app-core/tests/sync_pg.rs, which learned this the hard way.)
   async fn pool() -> Option<PgPool> {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(
-        std::env::var("CI").is_err(),
-        "DATABASE_URL is unset in CI — the postgres service block regressed; \
-         these tests must not silently pass"
-      );
+    let Some(url) = mica_infra::test_database_url() else {
       return None;
     };
     Some(

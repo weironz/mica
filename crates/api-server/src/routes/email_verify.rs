@@ -322,11 +322,7 @@ mod resend_timing_pg {
   use std::sync::{Arc, Mutex};
 
   async fn pool() -> Option<sqlx::PgPool> {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(
-        std::env::var("CI").is_err(),
-        "DATABASE_URL is unset in CI — the postgres service block regressed"
-      );
+    let Some(url) = mica_infra::test_database_url() else {
       return None;
     };
     Some(

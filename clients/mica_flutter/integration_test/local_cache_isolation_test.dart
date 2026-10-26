@@ -15,14 +15,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:mica_flutter/local/cache_stats.dart';
 import 'package:mica_flutter/local/local_offline.dart';
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 import 'package:mica_flutter/src/rust/api/document.dart';
 import 'package:mica_flutter/src/rust/api/store.dart';
 import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   MicaDocument docWith(String text) => MicaDocument.fromBlocksJson(

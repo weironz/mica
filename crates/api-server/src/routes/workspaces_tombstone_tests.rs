@@ -3,11 +3,7 @@ use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
 async fn member_queries_exclude_tombstoned_users() {
-  let Ok(url) = std::env::var("DATABASE_URL") else {
-    assert!(
-      std::env::var("CI").is_err(),
-      "DATABASE_URL must be set in CI"
-    );
+  let Some(url) = mica_infra::test_database_url() else {
     return;
   };
   let db = PgPoolOptions::new()

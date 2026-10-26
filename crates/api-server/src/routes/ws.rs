@@ -1446,12 +1446,7 @@ mod tests {
     /// lie. A set-but-unusable `DATABASE_URL` panics, and in CI a missing one
     /// panics too.
     async fn pool() -> Option<PgPool> {
-      let Ok(url) = std::env::var("DATABASE_URL") else {
-        assert!(
-          std::env::var("CI").is_err(),
-          "DATABASE_URL is unset in CI — the postgres service block regressed; \
-           these tests must not silently pass"
-        );
+      let Some(url) = mica_infra::test_database_url() else {
         return None;
       };
       Some(

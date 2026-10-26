@@ -1,4 +1,4 @@
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 // P2 option C — Phase 1: a cloud doc mirrored to the on-device store reads
 // offline. No server needed — the session seeds its replica from local storage
 // and fires onReady with that content before (and independent of) any socket.
@@ -18,7 +18,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('StoreCloudDocStore mirrors a cloud doc (bytes + cursor) via MicaStore', () {

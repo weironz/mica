@@ -3,11 +3,7 @@ use super::*;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
 async fn fixture() -> Option<(PgPool, Uuid, String)> {
-  let Ok(url) = std::env::var("DATABASE_URL") else {
-    assert!(
-      std::env::var("CI").is_err(),
-      "DATABASE_URL must be set in CI"
-    );
+  let Some(url) = mica_infra::test_database_url() else {
     return None;
   };
   let db = PgPoolOptions::new()

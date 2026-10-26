@@ -214,13 +214,19 @@ jobs:
       # side. No setup-node needed; on a bare self-hosted runner without node
       # the test fails loudly rather than skipping.
       - name: Test (incl. app-core + infra + api-server, Postgres-backed)
-        run: cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra -p mica-api-server -p mica-cli
+        # cargo_receipt: exit 0 is not enough, the passed count must clear a
+        # floor (scripts/lib-receipt.sh).
+        run: |
+          source scripts/lib-local.sh && source scripts/lib-receipt.sh
+          cargo_receipt 500 cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra -p mica-api-server -p mica-cli
 
       # Separate invocation: `store` is a non-default feature, and features do
       # not apply across a multi-package `-p` list. Without this the 24 local
       # SQLite migration tests are not compiled, let alone run.
       - name: Test mica-core's gated SQLite store
-        run: cargo test -p mica-core --features store
+        run: |
+          source scripts/lib-local.sh && source scripts/lib-receipt.sh
+          cargo_receipt 1 cargo test -p mica-core --features store
 
   mcp-conformance:
     # Drive `mica-cli mcp` with the OFFICIAL MCP client and fail on anything
@@ -306,8 +312,15 @@ jobs:
       # Infos stay non-fatal (~130, style-level). scripts/release-check.sh runs
       # this identically — that "identically" is load-bearing, see its comments.
       - run: flutter analyze --no-fatal-infos
+      # The FFI-backed unit tests load rust/target/release and refuse a library
+      # whose source fingerprint does not match this checkout.
+      - uses: ./.github/actions/setup-rust
+      - name: FFI library for the unit tests
+        run: cargo build --release --manifest-path rust/Cargo.toml
       - name: Dart unit tests
-        run: flutter test test
+        run: |
+          source ../../scripts/lib-local.sh && source ../../scripts/lib-receipt.sh
+          flutter_receipt 1000 test
       # dart2js resolves the WEB variant of every conditional import; analyze
       # and `flutter test` resolve the IO one. So an IO/web stub drift (a member
       # added to local_offline_io.dart but not mirrored in local_offline_web.dart)
@@ -467,7 +480,9 @@ jobs:
           S3_ACCESS_KEY_ID: mica
           S3_SECRET_ACCESS_KEY: mica-default-not-a-secret
         run: |
-          cargo test -p mica-api-server --bin mica-api-server \
+          source scripts/lib-local.sh && source scripts/lib-receipt.sh
+          # A name filter: a rename would match nothing and still exit 0.
+          cargo_receipt 1 cargo test -p mica-api-server --bin mica-api-server \
             historical_audit_is_dry_by_default_and_backfill_is_idempotent -- --ignored
 
       - name: Web end-to-end assertions
@@ -495,18 +510,19 @@ jobs:
           path: e2e/upload-length-e2e-failure.png
           if-no-files-found: ignore
 
-      # This file uses real IndexedDB and Web Locks; Dart VM tests cannot run it.
-      # The local Windows Flutter test server currently 404s its own CanvasKit
-      # assets, so exercise it on Linux with the Chromium already installed for
-      # the browser E2E above. A missing browser must fail, never silently skip.
-      - name: IndexedDB store browser regression
+      # Every browser-only suite (real IndexedDB, Web Locks, DOM clipboard …);
+      # the Dart VM run skips them or compiles their stubs. The local Windows
+      # Flutter test server 404s its own CanvasKit assets, so exercise them on
+      # Linux with the Chromium already installed for the browser E2E above.
+      # A missing browser must fail, never silently skip; each suite must
+      # report passed tests (scripts/browser-tests.sh).
+      - name: Browser-only Flutter suites
         run: |
           set -euo pipefail
           CHROME_EXECUTABLE="$(cd e2e && node -e "const {chromium}=require('@playwright/test'); console.log(chromium.executablePath())")"
           export CHROME_EXECUTABLE
           test -x "$CHROME_EXECUTABLE"
-          cd clients/mica_flutter
-          flutter test --platform chrome test/web_idb_doc_store_test.dart -r expanded
+          bash scripts/browser-tests.sh
 
       # The production bundle has no stable DOM handles for its self-painted
       # editor, so the clipboard / settings / sidebar-rename regressions drive

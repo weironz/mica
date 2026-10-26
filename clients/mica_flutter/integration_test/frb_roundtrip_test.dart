@@ -1,4 +1,4 @@
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 // P2-M0 pipeline validation: prove the Flutter ↔ Rust (flutter_rust_bridge v2)
 // round-trip works on the Windows runner — the native rust_lib_mica_flutter
 // dylib (wrapping the shared crates/mica-core) is built by cargokit, bundled,
@@ -14,7 +14,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('native core reports a version', () {

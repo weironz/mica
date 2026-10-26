@@ -1,4 +1,4 @@
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 // P2-M2: on-device persistence works end to end through FFI.
 //
 // Opens a local SQLite store, saves an edited document, then reopens the SAME
@@ -18,7 +18,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('local store persists edits + stable identity across reopen', () {

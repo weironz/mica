@@ -1,4 +1,4 @@
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 // P2c: reconnect reconciliation converges two replicas without loss.
 //
 // Two devices each edit the SAME cloud doc while offline (different blocks), then
@@ -22,7 +22,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('P2c: two replicas edit offline then converge on reconnect; log stays pure-local',

@@ -1,4 +1,4 @@
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 // P1c offline read: the full mirror → "restart" → read cycle through real FFI.
 //
 // Simulates an online cloud session that mirrored a page tree + a document to
@@ -21,7 +21,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('cloud page tree + doc mirror survive a fresh LocalOffline (offline read)',

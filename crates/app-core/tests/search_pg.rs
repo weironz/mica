@@ -48,12 +48,7 @@ async fn wipe(db: &PgPool) {
 const SLOW_READ: Duration = Duration::from_secs(8);
 
 fn database_url() -> Option<String> {
-  let Ok(url) = std::env::var("DATABASE_URL") else {
-    assert!(
-      std::env::var("CI").is_err(),
-      "DATABASE_URL is unset in CI — the postgres service block regressed; \
-             these tests must not silently pass"
-    );
+  let Some(url) = mica_infra::test_database_url() else {
     return None;
   };
   Some(url)

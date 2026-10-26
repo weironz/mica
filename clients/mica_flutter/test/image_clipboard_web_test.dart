@@ -51,7 +51,7 @@ void main() {
         web.document.body!,
         web.MutationObserverInit(childList: true),
       );
-    addTearDown(observer.disconnect);
+    addTearDown(() => observer.disconnect());
 
     expect(
       await copyImageToClipboard(

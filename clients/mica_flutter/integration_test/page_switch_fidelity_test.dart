@@ -1,4 +1,4 @@
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 // A1 (M-R): the page-switch data-loss regression, end-to-end against a live
 // stack. Reproduces the cycle that lost content this week: edit doc A → switch
 // away (drain + dispose, as _closeDocumentSync now does) → edit doc B → reopen
@@ -24,7 +24,7 @@ const _password = 'password123';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   Future<http.Response> post(String path, Map<String, dynamic> body,

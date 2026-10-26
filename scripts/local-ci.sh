@@ -15,9 +15,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
+source scripts/lib-receipt.sh
 
 part=${1:-all}
 case "$part" in all | rust | flutter) ;; *) fail "unknown part '$part' (all | rust | flutter)" ;; esac
+
+note "source files hidden by .gitignore"
+bash scripts/check-ignored-sources.sh
 
 note "SQL migrations: tracking and exact line endings"
 bash scripts/check-migration-tracking.sh
@@ -43,6 +47,10 @@ if [ "$part" != flutter ]; then
   [ -n "$db" ] || fail "no reachable Postgres, so the DB-backed tests would SKIP and still report passed.
   Start one with 'just dev' (or export DATABASE_URL=postgres://… for your own)."
   export DATABASE_URL=$db
+  # Belt to the braces above: every DB-backed test goes through
+  # mica_infra::test_database_url(), which panics instead of skipping when this
+  # is set — so a URL lost between here and the test process is a failure too.
+  export MICA_REQUIRE_DB=1
   note "DB-backed tests: ON ($DATABASE_URL)"
 
   note "rust: build"
@@ -52,9 +60,9 @@ if [ "$part" != flutter ]; then
   note "rust: migrations"
   cargo run -q -p mica-infra --example apply_migrations
   note "rust: tests"
-  cargo test --workspace
+  cargo_receipt 500 cargo test --workspace
   note "rust: mica-core gated SQLite store"
-  cargo test -p mica-core --features store
+  cargo_receipt 1 cargo test -p mica-core --features store
 fi
 
 if [ "$part" != rust ]; then
@@ -65,12 +73,24 @@ if [ "$part" != rust ]; then
     "$FLUTTER" gen-l10n
     note "flutter: analyze (--no-fatal-infos, as CI)"
     "$FLUTTER" analyze --no-fatal-infos
+    # The FFI-backed unit tests load rust/target/release and verify its source
+    # fingerprint (test/support/native_build.dart), so build it from this tree.
+    note "flutter: FFI library for the unit tests"
+    cargo build --release --manifest-path rust/Cargo.toml
     note "flutter: unit tests"
-    "$FLUTTER" test test
+    flutter_receipt 1000 test
     note "flutter: web compiles (dart2js resolves the web stubs)"
     "$FLUTTER" build web --release --no-web-resources-cdn
     bash tool/gfonts/mirror.sh --check
   )
+  # Browser-only suites skip or compile to a stub on the VM run above. The
+  # Windows test server 404s its own CanvasKit, so there they stay manual.
+  if [ "$(host_os)" = windows ]; then
+    browser_note="    - browser-only Flutter suites ......... bash scripts/browser-tests.sh   (Linux/macOS)"
+  else
+    note "flutter: browser-only suites in Chrome"
+    bash scripts/browser-tests.sh
+  fi
 fi
 
 cat <<'EOF'
@@ -81,3 +101,4 @@ cat <<'EOF'
     - container boot of the api image ...... just docker-build <tag> && docker compose -f deploy/docker-compose.single.yml up
     - MCP inspector conformance ............ needs npx @modelcontextprotocol/inspector
 EOF
+[ -z "${browser_note:-}" ] || echo "$browser_note"

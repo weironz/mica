@@ -1,4 +1,4 @@
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 // Regression for M-R (red line #1 / #2). Runs the real FFI CloudSyncSession
 // against a fake in-process WS server, so no backend is needed.
 //
@@ -24,7 +24,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('B1: a bad remote update faults + self-heals instead of silently skipping',

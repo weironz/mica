@@ -49,6 +49,7 @@
 - 工具链以 `.fvmrc` / `rust-toolchain.toml` 为准；升级时同步构建镜像与 CI，验证桌面 Cargokit 实际使用的工具链。不要写死本机安装路径或对正常构建额外限流。
 - Windows 的 `just` recipe 使用 Git Bash；网络受限时按环境配置 Flutter / Pub 镜像。Windows runner C++ 按 warning-as-error 处理，注释保持 ASCII，环境变量读取用 `GetEnvironmentVariableW`。
 - 按改动范围运行测试；共享 Rust crate 变更还需检查 `clients/mica_flutter/rust`，它不属于根 workspace。DB 测试必须连接可用 Postgres；静默跳过不算通过。
+- 门禁要证明测试**真的跑了**：指定测试用 `scripts/lib-receipt.sh` 的回执（通过数低于下限即失败），DB 测试走 `mica_infra::test_database_url()`，浏览器套件走 `scripts/browser-tests.sh`，FFI 测试用 `initCheckedNativeRust` 校验库的源码指纹；被 `.gitignore` 藏起的源码文件由 `scripts/check-ignored-sources.sh` 拒绝。见 [开发教训 §3](docs/dev/lessons.md)。
 - 改动完成后自动推送 `main`，无需逐步请示；**发版须等用户明确要求**。用户要求发版后，版本 bump → 门禁 → tag / 构建 → 部署 → 验证连续做完。
 - 默认递增补丁号，minor 由用户决定；版本一致性与锁文件由现有脚本校验。发布步骤以 [发布文档](docs/ops/release.md) 为准，命令见 `just --list`，不得绕过发布门禁。
 - 不假定 push 会触发 CI；检查 `.github/workflows/` 的当前触发方式，手动触发后核对运行结果。部署后验证 `/api/health` 版本，并冒烟测试本版实际改动。

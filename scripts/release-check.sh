@@ -15,7 +15,9 @@
 set -euo pipefail
 
 source "$(dirname "$0")/lib-local.sh"
+source "$(dirname "$0")/lib-receipt.sh"
 
+bash scripts/check-ignored-sources.sh
 bash scripts/check-migration-tracking.sh
 bash scripts/test-migration-tracking.sh
 
@@ -64,7 +66,10 @@ echo "==> Rust: $have_rust (toolchain + all three images agree)"
 # 3. Run the gates the SAME WAY CI runs them. `cargo check` does not run clippy,
 #    and clippy without `-D warnings` exits 0 while printing the very thing that
 #    fails CI — both have turned a pipeline red here before.
-DATABASE_URL=$db cargo test --workspace
+#    Receipts (scripts/lib-receipt.sh): a passed count, not just exit 0; and
+#    MICA_REQUIRE_DB turns any DB test that would still skip into a panic.
+export DATABASE_URL=$db MICA_REQUIRE_DB=1
+cargo_receipt 500 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 #    The Flutter half is spelled EXACTLY as ci.yml spells it, flags included.
 #    It was `analyze lib` with no flags, which is stricter than CI — and with
@@ -84,11 +89,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 #
 #    Infos stay non-fatal: ~130 of them, long-standing, style-level. Making them
 #    fatal would be a repo-wide sweep nobody asked for.
+#    The FFI-backed unit tests verify rust/target/release against this tree's
+#    sources (test/support/native_build.dart), so build it first.
 (cd clients/mica_flutter \
   && "${FLUTTER:-flutter}" pub get --enforce-lockfile \
   && "${FLUTTER:-flutter}" gen-l10n \
   && "${FLUTTER:-flutter}" analyze --no-fatal-infos \
-  && "${FLUTTER:-flutter}" test)
+  && cargo build --release --manifest-path rust/Cargo.toml \
+  && flutter_receipt 1000 test)
 
 # 4. Cargo.lock must carry the version, or the release commit ships a lock that
 #    disagrees with its own manifest.

@@ -341,6 +341,29 @@ marks 存成文本 format,`marks_from_data` 会丢弃无区间的条目 —— �
 也是「双表示」的余震:两套存储对**同一份残缺输入**的宽容度不同,所以夹具会依赖上
 其中一套的宽容而不自知 —— 迁移存储时这类依赖才会一起浮上来。
 
+### 门禁要出「回执」:退出码 0 只证明没跑坏,不证明跑了
+
+2026-10-26,修完 100 多个 issue 之后的复盘。同一个根因在一轮修复里又冒了四次,
+每次都长得和绿灯一模一样:
+
+| 形态 | 当时的样子 | 现在的回执 |
+| --- | --- | --- |
+| `cargo test <过滤名>` 一个都没匹配上 | 退出 0 | `cargo_receipt N`:累加 `N passed`,低于下限就拒绝 |
+| 浏览器专用套件在 VM 上跑 | 跳过 / 编成空桩,退出 0。五个套件只有一个在任何门禁里跑过,其中一个**连编译都不过**(`observer.disconnect` tear-off) | `scripts/browser-tests.sh`:按标记自动发现,逐个 `--platform chrome` + `flutter_receipt 1` |
+| DB 测试没库 | 38 处手抄的 `let Ok(url) = env::var(..) else { return }`,三种措辞 | 全部走 `mica_infra::test_database_url()`;`CI` 或 `MICA_REQUIRE_DB` 下没库直接 panic |
+| 桌面 FFI 加载旧库 | FRB 加载磁盘上现成的那个 `.dll/.so`,和源码毫无关联 | `rust/build.rs` 把源码指纹烤进库,`test/support/native_build.dart` 从工作区重算,不符拒跑 |
+
+加回执的当天它就抓到了第五种:`.gitignore` 的 `*credential*` 把
+`auth_credential_rotation_tests.rs` 藏了起来 —— 作者机器上 `mod` 能编过,其他任何
+checkout 都编不过。被忽略的文件**不出现在 `git status` 里**,所以既不会被误提交,
+也不会被有意提交。同一条规则此前已经吞过一次迁移(当时只给那一个文件开了白名单)。
+现在 `scripts/check-ignored-sources.sh` 拒绝任何被忽略的源码文件。FFI 指纹也是当天
+就抓到了真东西:我自己刚编的库,用的是随后被我回滚掉的源码。
+
+刻意**没做**的:「每个测试必须有断言」—— 误伤大,而且这五种空转里没有一种是缺断言。
+回执的下限是粗粒度的(workspace 500、Flutter 1000):它挡的是「整组没跑」,不是
+「少跑了一个」;后者靠 `MICA_REQUIRE_DB` 和指纹这类针对具体前提的检查。
+
 ---
 
 ## 4. Flutter:web 通过 ≠ 桌面通过

@@ -791,12 +791,7 @@ mod workspace_decode_pg {
   use super::*;
 
   async fn pool() -> Option<PgPool> {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(
-        std::env::var("CI").is_err(),
-        "DATABASE_URL is unset in CI — the postgres service block regressed; \
-         these tests must not silently pass"
-      );
+    let Some(url) = mica_infra::test_database_url() else {
       return None;
     };
     Some(
@@ -887,8 +882,7 @@ mod reorder_pg {
 
   #[tokio::test]
   async fn one_statement_renumbers_only_the_callers_memberships() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(std::env::var("CI").is_err(), "DATABASE_URL is unset in CI");
+    let Some(url) = mica_infra::test_database_url() else {
       return;
     };
     let db = PgPool::connect(&url)
@@ -969,11 +963,7 @@ mod owner_role_pg {
   use super::*;
 
   async fn pool() -> Option<PgPool> {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(
-        std::env::var("CI").is_err(),
-        "DATABASE_URL is unset in CI — these tests must not silently pass"
-      );
+    let Some(url) = mica_infra::test_database_url() else {
       return None;
     };
     Some(
@@ -1074,11 +1064,7 @@ mod workspace_delete_gc_pg {
   use std::time::Duration;
 
   async fn fixture() -> Option<(PgPool, Uuid, Uuid)> {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-      assert!(
-        std::env::var("CI").is_err(),
-        "DATABASE_URL must be set in CI"
-      );
+    let Some(url) = mica_infra::test_database_url() else {
       return None;
     };
     let db = PgPool::connect(&url)

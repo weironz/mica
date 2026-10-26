@@ -30,6 +30,18 @@ cat > "$stub_bin/flutter" <<'EOF'
 #!/bin/sh
 case "$1" in
   --version) echo 'Flutter 3.35.0 • channel stable • https://github.com/flutter/flutter.git' ;;
+  test)
+    # The gate counts passed tests from the JSON file reporter (lib-receipt.sh).
+    for arg in "$@"; do
+      case "$arg" in
+        json:*)
+          i=0
+          while [ $i -lt 1000 ]; do
+            echo '{"testID":1,"result":"success","skipped":false,"hidden":false,"type":"testDone"}'
+            i=$((i + 1))
+          done > "${arg#json:}" ;;
+      esac
+    done ;;
 esac
 exit 0
 EOF
@@ -49,6 +61,8 @@ if [ "$1" = test ] && [ -n "${FAIL_GATE_MARKER:-}" ] && [ -f "$FAIL_GATE_MARKER"
   echo 'stub cargo test: induced failure (release gate fixture)' >&2
   exit 1
 fi
+# The gate counts passed tests (lib-receipt.sh), so report some.
+[ "$1" = test ] && echo 'test result: ok. 600 passed; 0 failed; 0 ignored'
 if [ "$1" = check ] && [ -f Cargo.toml ] && [ -f Cargo.lock ]; then
   v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
   sed -i "/^name = \"mica-api-server\"$/{n;s/^version = \".*\"/version = \"$v\"/;}" Cargo.lock
@@ -76,6 +90,7 @@ new_fixture() {
     "$repo/clients/mica_flutter/rust" "$repo/clients/mica_flutter/rust_builder/cargokit/build_tool"
   cp "$source_root/scripts/release.sh" "$source_root/scripts/release-bump.sh" \
      "$source_root/scripts/release-check.sh" "$source_root/scripts/lib-local.sh" \
+     "$source_root/scripts/lib-receipt.sh" "$source_root/scripts/check-ignored-sources.sh" \
      "$source_root/scripts/manifest-version.sh" "$source_root/scripts/check-migration-tracking.sh" \
      "$source_root/scripts/check-migration-bytes.sh" "$source_root/scripts/test-migration-tracking.sh" \
      "$repo/scripts/"

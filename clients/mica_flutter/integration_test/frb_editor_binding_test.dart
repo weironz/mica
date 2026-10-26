@@ -1,4 +1,4 @@
-import 'package:mica_flutter/local/native_rust.dart';
+import '../test/support/native_build.dart';
 // P2-M3: the desktop editing loop is closed on-device.
 //
 // Drives the REAL self-drawn editor controller with its op sink wired to
@@ -22,7 +22,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(initNativeRust);
+  setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   // Drain the controller's async op chain so all applyOps() have run.

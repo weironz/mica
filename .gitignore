@@ -84,8 +84,13 @@ aliyun-ak.txt
 password.txt
 *password*.txt
 *credential*
-# Schema only, not a credential file; required by the PAT rotation guard.
-!migrations/0034_user_credential_epoch.sql
+# Source is never a credential file. `*credential*` once swallowed a migration
+# and then a test module (auth_credential_rotation_tests.rs): the author's tree
+# compiled, every other checkout did not. scripts/check-ignored-sources.sh now
+# refuses any ignored source file, so the next such rule fails the gate.
+!*credential*.rs
+!*credential*.dart
+!*credential*.sql
 *.pem
 *.key
 
