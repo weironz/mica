@@ -1,0 +1,31 @@
+# P0 spike ONLY — never merged, never a workspace member.
+#
+# Verifies that the existing `crates/markdown` engine compiles to wasm32 and is
+# fast/small enough for the Web binding (docs/single-source/stages/S2-bindings.md T2.1).
+# `[workspace]` makes this its own root so the repo workspace is untouched.
+[package]
+name = "mica-md-wasm-p0"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Mirrors what T2.6 will ask for (opt-level z, one codegen unit, LTO on) so the
+# size number is comparable to the production bundle.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+
+[dependencies]
+mica-markdown = { path = "../../crates/markdown", default-features = false }
+wasm-bindgen = "=0.2.129"
+# SPIKE ONLY: before S1 T1.4 the parser allocates block ids with Uuid::new_v4(),
+# which needs a random source on wasm32. `js` routes getrandom to
+# crypto.getRandomValues. The real crate drops uuid instead.
+uuid = { version = "1.11", features = ["js"] }
+serde_json = "1"

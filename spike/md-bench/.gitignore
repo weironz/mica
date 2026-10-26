@@ -1,0 +1,5 @@
+# Raw Playwright transcripts are temporary; canonical numbers are in summary.json.
+result-*.txt
+# Screenshots of other runs; the P0 evidence screenshot below IS committed.
+*.png
+!p0-release.png

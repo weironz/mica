@@ -261,3 +261,44 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 ## 执行记录
 
 （执行方追加。P0 结果放在最前面。）
+
+### P0（T2.1，2026-10-26，WP-W）
+
+以下为单次 P0 验证结果记录；本次验证代码只在本分支 `worktree-agent-a7950b28e1e2a2c23`，不进入 main / `single-source`。对照基线说明：S0 基线尚未产出，因此性能比较采用本次同一浏览器、同一页面内实测的现有 Dart `markdownToBlocks`。工具链与运行环境：Rust 1.98.0 stable（`rust-toolchain.toml`）+ `wasm32-unknown-unknown`；wasm-bindgen crate 与 CLI 均为 0.2.129；Flutter 3.47.1 / Dart 3.13.1，真实 `flutter build web --release --no-web-resources-cdn`；本地静态服务器 + Playwright，HeadlessChrome/156.0.0.0（Windows 11 Pro）。
+
+方法：
+1. `spike/md-wasm-p0`（非 workspace 成员）依赖现有 `crates/markdown`，`default-features = false`，导出 `parseBody(md)` → `import_markdown` → 根块 children → `BlockJson` JSON 字符串。构建参数约等于 T2.6 的目标：`opt-level = "z"`、`codegen-units = 1`、`lto = true`。
+2. `wasm-bindgen --target no-modules` 产物拷贝到 `clients/mica_flutter/web/mica_md/`（已加 `.gitignore`），`web/index.html` 如约加入两段脚本，`micaMdReady` resolve 前 record 初始化成本。
+3. `spike/md-bench/main.dart` 仅作为临时 Dart 入口：启动真实 `app.main()`，并在首次完整引擎输出就绪后提供 `runMdP0()`。`runMdP0` 中跑最深等价度的 full-path 对比：wasm 路径为 Markdown → wasm 字符串返回 → `json.decode` → 构建 `BlockSpec`；Dart 路径为 `markdownToBlocks`；同一文档、同一浏览器、同批次交替顺序测 15 个样本。
+4. 服务器返回头：`Cache-Control: no-store`，无 COOP / COEP；跨域隔离结果如实记录。
+
+**初步和最终结论：全部不满足全部阈值。** 其中 87 字符 / 1 万 / 10 万字符的解析性能均超过 1.2 倍门槛，建议 P0 判定为**不达标**并由审核方决定继续优化或进入退出方案。
+
+#### P0 阈值逐项结果
+
+| 指标 | 阈值 | 实测 | 结果 |
+| --- | --- | ---: | --- |
+| wasm + JS 胶水 gzip | ≤ 200 KB | **95,498 B（93.26 KiB，gzip -9；wasm 92,997 B + JS 2,415 B）** | **通过** |
+| 实例化到 `micaMdReady` resolve | ≤ 60 ms | 5 个新上下文：20.60 / **14.70** / 14.40 / 15.00 / 16.30 ms，中位数 **15.00 ms** | **通过** |
+| 87 字符解析（含 JSON 往返 + Dart `jsonDecode`） | ≤ 同浏览器 Dart `markdownToBlocks` × 1.2 | 三轮比值 **2.11× / 1.75× / 1.89×** | **不通过** |
+| 1 万字符解析（同上） | ≤ ×1.2 | 三轮比值 **1.37× / 1.35× / 1.50×** | **不通过** |
+| 10 万字符解析（同上） | ≤ ×1.2 | 三轮比值 **1.57× / 1.44× / 1.52×** | **不通过** |
+| 工具链 | stable Rust + wasm32 target，无 nightly / 无 `-Z build-std` | stable 1.98.0，非 nightly，未用 `-Z build-std` | **通过** |
+| COOP / COEP | 不需要 | 实测服务器仅 `Cache-Control: no-store` + 无 COOP/COEP，`crossOriginIsolated` 为 false，wasm 正常运行 | **通过（不需要）** |
+
+#### 关键测量数据（供复算）
+
+- 体积（gzip -9）：wasm 92,997 B、`mica_md.js` 2,415 B，合计 **95,498 B**（≤ 204,800 B 阈值）。
+- 初始化：5 个全新 context：`20.60 / 14.70 / 14.40 / 15.00 / 16.30 ms`，中位数 **15.00 ms**。
+- 解析耗时（ms，三轮中位数；括号内 = wasm / Dart）：
+  - 87 字符：0.0367 / 0.0174（≈2.11×）、0.0299 / 0.0171（≈1.75×）、0.0320 / 0.0170（≈1.89×）。
+  - 1 万字符：4.13 / 3.01（≈1.37×）、3.80 / 2.81（≈1.35×）、3.93 / 2.63（≈1.50×）。
+  - 10 万字符：38.50 / 24.50（≈1.57×）、36.90 / 25.60（≈1.44×）、38.90 / 25.60（≈1.52×）。
+- 测试环境中 `spike/md-bench/*.json`、`spike/md-bench/result-*.txt` 与 release 截图 `spike/md-bench/p0-release.png` 可作为复核输入；`firstChecksum` 生效，说明两条路径都真的跑了。
+
+#### 结论与停点状态
+
+- **判定：P0 未达标（性能项高于 1.2× 阈值）。** 不要在本阶段自行决定走退出方案；请审核方按方案把「继续优化 / 进入退出方案」的选择交给用户。
+- **停点：G2 待审核。** WP-W 在审核结论前不再推进；如继续优化，建议先确认 JSON / boundary 成本、把 block mapping / JSON 往返与 wasm 解析耗时拆开归因，以及对比 sequential id + 子块索引化后是否回到 1.2× 附近。
+- 若决定退出方案（S2「退出方案」）：Web 端保留 Dart 镜像 + 差分棘轮守护，桌面/服务端按单实现推进。
+
