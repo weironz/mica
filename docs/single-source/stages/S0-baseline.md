@@ -226,3 +226,94 @@ S3 在切换前的提交上重跑即可对比。
 4. 本机 git hook（`code-review-graph update`）单次耗时可达 30 分钟以上，提交时用
    `git -c core.hooksPath=/dev/null` 跳过；只是本地工具钩子，不改变提交内容。
 5. 对拍基线是「当前状态」而非「正确状态」：它允许既有差异存在、禁止新增。S3/S4 每修一类应看到计数下降。
+
+### S0 验证缺口收尾及基准修正（2026-10-26，WP-D）
+
+本轮只修复 S0 测试/工具及追加执行记录，不改产品代码，不 merge/push/发版。上轮生成插件文件已还原。
+运行前检查进程，未发现上轮遗留的 Flutter 测试/构建进程，未清理不明归属进程；用户现有 Mica 窗口保持运行。
+
+#### 修复基准逻辑（本次修正优先于上文旧记录）
+
+- 同批 Dart 块的 Dart/Rust export 比较保留；Rust 自身 roundtrip 另从 **rustBlocks 导出再解析**。
+  旧逻辑把 Dart 解析结果序列化后与 Rust 原解析结果比较，误把解析差异重复计为 Rust 往返错误。
+  新自检使用 `spec:6`，证明两侧块类型不同、各自往返均稳定时，没有 roundtrip 记录。
+- 超过 50,000 条差异立即抛 `StateError`，不再截断后声称处理了全部语料；新增阈值自检。
+- 采样修为**总共 7 次、前 2 次丢弃、剩余 5 次取中位数**，新增计数与中位数自检。
+  上文 VM/Chrome 数字实际来自 2 次预热加 7 次测量，**旧数字作废**，替换为下表本轮重测。
+- 桌面探针启动前如有 Mica 则拒绝，清理仅针对自己直接启动的子进程 WinPID，退出/中断走 trap；
+  删除所有 `taskkill /IM`。模拟测试覆盖已有窗口拒绝、不调用 kill，以及只终止模拟子 PID。
+  对真实用户窗口执行拒绝检查返回 1 后，PID 31048 仍运行；没有关闭真实窗口或重测桌面启动值。
+- Web 探针 server/client/browser/profile 使用 finally 释放；启动限时 15s、HTTP 单次 2s、CDP 连接/命令
+  5s、首帧 120s，处理 spawn error。缺失 Chrome 路径测试：273ms 退出 1，临时 profile 列表不变，
+  Node 已退出（监听端口随 server finally 关闭）。`node --check`、`shellcheck` 均退出 0。
+
+#### 重建后的差分基线
+
+这次重建是**修正测量输入错误**，不是增加可接受漂移额度。5,742 输入完整处理，1,936 输入有差异。
+
+| 类别 | 旧计数（错误基准） | 修正后 |
+| --- | --- | --- |
+| roundtrip 合计 | 1892 | 1341 |
+| roundtrip Dart | 587 | 587 |
+| roundtrip Rust | 1305 | 754 |
+| 记录总数 | 4887 | 4336 |
+
+其他类别完全不变：block-count 191、crdt-normalization 227、data:indent 35、data:label 3、data:language 2、
+data:level 24、data:li 22、data:loose 23、data:marker 5、data:qbreak 1、data:quote 3、data:start 6、
+export 1610、kind 72、marks 256、text 515。旧 Rust 1305 不能作为引擎缺陷数使用；新 754 也只是待分类的
+对拍记录数，不等于独立 bug 数。修正后非写基线模式已通过 subset 棘轮检查。
+
+#### 正确采样的 Dart 基线（单位 ms）
+
+| item | VM | Chrome |
+| --- | --- | --- |
+| parse.87 | 0.057 | 0.100 |
+| parse.10k | 10.253 | 23.100 |
+| parse.100k | 78.331 | 218.700 |
+| inline.cell×500 | 5.470 | 15.400 |
+| serialize.10k | 3.720 | 5.100 |
+| html.10k | 1.267 | 3.000 |
+
+两个平台各 8 个测试通过（包含采样自检）。本轮未重测 WP-R 的 Rust 基线及真实启动耗时。
+注意本机 `flutter test --platform chrome` 的实际编译日志为 dartdevc；上文把该命令直接标为 dart2js
+不准确，不能将本表当作 production dart2js 性能。Web release 另以正常生产编译命令验证。
+
+#### 最新验证退出码与正式回执
+
+日志均保存在本 worktree 的 `clients/mica_flutter/build/s0-verification-rerun/`（不提交）。
+从仓库根 source `scripts/lib-local.sh`、`scripts/lib-receipt.sh` 后，在 `clients/mica_flutter` 运行：
+
+```bash
+# Windows Dart 的 json:<path> 参数需要原生格式路径；不修改 receipt 实现。
+export TMPDIR="$(cygpath -m "$PWD/build/s0-verification-rerun")"
+flutter_receipt 5 --no-pub test/cloud_sync_seed_healthy_test.dart test/markdown_differential_test.dart
+flutter_receipt 1000 --no-pub
+flutter build web --release --no-web-resources-cdn --no-pub
+bash tool/gfonts/mirror.sh --check
+```
+
+| 检查 | 退出码 | 回执/结果 | 日志 |
+| --- | --- | --- | --- |
+| Flutter pin | 0 | 3.47.1 匹配 | flutter-pin.log |
+| 修改的 Dart 测试 analyze | 0 | No issues found | changed-analyze.log |
+| VM / Chrome 基准 | 各 0 | 各 8 passed | bench-vm.log / bench-chrome.log |
+| 原生指纹 + 对拍 | 0 | `receipt: 5 passed (floor 5)` | native-receipt.log |
+| 全量 Flutter VM（默认并发） | 0 | `receipt: 2159 passed (floor 1000)`；2 skipped | vm-receipt.log |
+| Web release 编译 | 0 | Built build/web，69.4s | web-release.log |
+| gfonts | 0 | 263 files match installed engine | gfonts.log |
+| just check-structure | 0 | file-size gate passed，仅既有 WARN | structure.log |
+
+原生测试的 `setUpAll(initCheckedNativeRust)` 实际执行并通过：加载库导出的源码指纹与本 worktree
+重算结果一致，未 mock 或跳过。相关自检、对拍棘轮及全量测试均真实运行。DTD 仅发现其他项目
+`D:/codes/cortex/app`，本轮只有测试/工具变更，未对其应用热重载。
+
+回执排障说明：首次额外 `--file-reporter` 覆盖 wrapper 参数，移除后仍发现 MSYS 临时路径嵌在
+`json:<path>` 中未被 Windows Dart 正确转换。两次测试命令均实际 2159 passed / 2 skipped、退出 0，
+但 wrapper 因读不到报告返回 1。将 TMPDIR 指向原生格式路径后，**原样调用仓库 receipt** 重跑通过，
+没有降低 floor、修改默认并发或改 receipt 实现。失败尝试的命令退出码保留于 exit-codes.tsv；
+最终正式结果在 receipt-exits.tsv（native-receipt=0、vm-receipt=0）。
+
+`local-ci.sh all` 仍不能称全绿：本轮补齐 Flutter VM / Web / gfonts 缺口，没有重跑 Rust/DB 链路。
+更正上轮门禁描述：其输出显示 `Checking ... Finished dev profile` 后进入 migrations，按脚本顺序
+**clippy 已通过**；未执行的是迁移失败之后的 Rust workspace 测试、mica-core store 测试。共享 DB
+的 `VersionMismatch(12)` 仍是完整 all 门禁的已知未解决限制，未改迁移或操作共享库。

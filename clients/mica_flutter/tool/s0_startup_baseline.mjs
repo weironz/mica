@@ -18,7 +18,7 @@
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile, stat, rm, mkdtemp } from 'node:fs/promises';
+import { stat, rm, mkdtemp } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -86,99 +86,143 @@ async function openPort() {
 }
 
 async function getJson(url, method = 'GET') {
-  const response = await fetch(url, { method });
+  const response = await fetch(url, { method, signal: AbortSignal.timeout(2000) });
   if (!response.ok) throw new Error(`${method} ${url}: ${response.status}`);
   return response.json();
 }
 
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
-async function cdp(wsUrl, onEvent) {
+async function cdp(wsUrl) {
   const ws = new WebSocket(wsUrl);
   const pending = new Map();
   let next = 1;
-  await new Promise((ok, fail) => {
-    ws.onopen = ok;
-    ws.onerror = fail;
-  });
+  try {
+    await new Promise((ok, fail) => {
+      const timer = setTimeout(() => fail(new Error('CDP connect timeout')), 5000);
+      ws.onopen = () => { clearTimeout(timer); ok(); };
+      ws.onerror = () => { clearTimeout(timer); fail(new Error('CDP connect failed')); };
+    });
+  } catch (error) {
+    ws.close();
+    throw error;
+  }
+  const rejectPending = () => {
+    for (const item of pending.values()) {
+      clearTimeout(item.timer);
+      item.reject(new Error('CDP connection closed'));
+    }
+    pending.clear();
+  };
+  ws.onclose = rejectPending;
+  ws.onerror = rejectPending;
   ws.onmessage = (event) => {
     const message = JSON.parse(event.data);
-    if (message.id && pending.has(message.id)) {
-      pending.get(message.id)(message);
-      pending.delete(message.id);
-    } else if (onEvent) {
-      onEvent(message);
-    }
+    const item = pending.get(message.id);
+    if (!item) return;
+    clearTimeout(item.timer);
+    pending.delete(message.id);
+    if (message.error) item.reject(new Error(JSON.stringify(message.error)));
+    else item.resolve(message);
   };
   const send = (method, params = {}) =>
-    new Promise((resolve) => {
+    new Promise((resolve, reject) => {
       const id = next++;
-      pending.set(id, resolve);
-      ws.send(JSON.stringify({ id, method, params }));
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`CDP timeout: ${method}`));
+      }, 5000);
+      pending.set(id, { resolve, reject, timer });
+      try {
+        ws.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(error);
+      }
     });
-  return { send, close: () => ws.close() };
+  return { send, close: () => { rejectPending(); ws.close(); } };
 }
 
 const samples = [];
-for (let run = 0; run < runs; run++) {
-  const profile = await mkdtemp(join(tmpdir(), 'mica-startup-'));
-  const port = await openPort();
-  const browser = spawn(
-    chrome,
-    [
-      '--headless',
-      '--disable-gpu',
-      '--no-sandbox',
-      '--no-first-run',
-      '--no-default-browser-check',
-      `--user-data-dir=${profile}`,
-      `--remote-debugging-port=${port}`,
-      'about:blank',
-    ],
-    { stdio: 'ignore' },
-  );
-  try {
-    let version = null;
-    for (let i = 0; i < 100 && version === null; i++) {
-      try {
-        version = await getJson(`http://127.0.0.1:${port}/json/version`);
-      } catch {
-        await sleep(100);
+try {
+  for (let run = 0; run < runs; run++) {
+    const profile = await mkdtemp(join(tmpdir(), 'mica-startup-'));
+    let browser;
+    let client;
+    try {
+      const port = await openPort();
+      browser = spawn(
+        chrome,
+        [
+          '--headless',
+          '--disable-gpu',
+          '--no-sandbox',
+          '--no-first-run',
+          '--no-default-browser-check',
+          `--user-data-dir=${profile}`,
+          `--remote-debugging-port=${port}`,
+          'about:blank',
+        ],
+        { stdio: 'ignore' },
+      );
+      let spawnError;
+      browser.on('error', (error) => { spawnError = error; });
+      let version = null;
+      const launchDeadline = Date.now() + 15000;
+      while (version === null && Date.now() < launchDeadline) {
+        if (spawnError) throw spawnError;
+        if (browser.exitCode !== null) throw new Error(`Chrome exited ${browser.exitCode}`);
+        try {
+          version = await getJson(`http://127.0.0.1:${port}/json/version`);
+        } catch {
+          await sleep(100);
+        }
       }
-    }
-    if (version === null) throw new Error('chrome debug port never came up');
-    const target = await getJson(`http://127.0.0.1:${port}/json/new?about:blank`, 'PUT');
-    const client = await cdp(target.webSocketDebuggerUrl);
-    await client.send('Page.enable');
-    await client.send('Page.addScriptToEvaluateOnNewDocument', {
-      source: `window.__micaFirstFrame = null;
-        window.addEventListener('flutter-first-frame', () => {
-          window.__micaFirstFrame = performance.now();
-        });`,
-    });
-    await client.send('Page.navigate', { url: base });
-    let ms = null;
-    for (let i = 0; i < 1200 && ms === null; i++) {
-      const result = await client.send('Runtime.evaluate', {
-        expression: 'window.__micaFirstFrame',
-        returnByValue: true,
+      if (version === null) throw new Error('chrome debug port never came up');
+      const target = await getJson(`http://127.0.0.1:${port}/json/new?about:blank`, 'PUT');
+      client = await cdp(target.webSocketDebuggerUrl);
+      await client.send('Page.enable');
+      await client.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: `window.__micaFirstFrame = null;
+          window.addEventListener('flutter-first-frame', () => {
+            window.__micaFirstFrame = performance.now();
+          });`,
       });
-      const value = result.result?.result?.value;
-      if (typeof value === 'number') ms = value;
-      else await sleep(100);
+      await client.send('Page.navigate', { url: base });
+      let ms = null;
+      const frameDeadline = Date.now() + 120000;
+      while (ms === null && Date.now() < frameDeadline) {
+        const result = await client.send('Runtime.evaluate', {
+          expression: 'window.__micaFirstFrame',
+          returnByValue: true,
+        });
+        const value = result.result?.result?.value;
+        if (typeof value === 'number') ms = value;
+        else await sleep(100);
+      }
+      if (ms === null) throw new Error('no flutter-first-frame within 120s');
+      samples.push(ms);
+      console.log(JSON.stringify({ platform: 'chrome', item: 'startup.first-frame', run, ms: Math.round(ms * 10) / 10 }));
+    } finally {
+      if (client) {
+        try { await client.send('Browser.close'); } catch { /* bounded fallback below */ }
+        finally { client.close(); }
+      }
+      if (browser?.pid && browser.exitCode === null) {
+        await new Promise((ok) => {
+          const timer = setTimeout(() => { browser.kill('SIGKILL'); ok(); }, 5000);
+          browser.once('exit', () => { clearTimeout(timer); ok(); });
+          browser.kill();
+        });
+      }
+      await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
-    client.close();
-    if (ms === null) throw new Error('no flutter-first-frame within 120s');
-    samples.push(ms);
-    console.log(JSON.stringify({ platform: 'chrome', item: 'startup.first-frame', run, ms: Math.round(ms * 10) / 10 }));
-  } finally {
-    browser.kill();
-    await rm(profile, { recursive: true, force: true }).catch(() => {});
-    await sleep(500);
   }
+} finally {
+  server.closeAllConnections();
+  await new Promise((ok) => server.close(ok));
 }
-
-server.close();
 samples.sort((a, b) => a - b);
 const median = samples[Math.floor(samples.length / 2)];
 console.log(JSON.stringify({ platform: 'chrome', item: 'startup.first-frame', median_ms: Math.round(median * 10) / 10 }));

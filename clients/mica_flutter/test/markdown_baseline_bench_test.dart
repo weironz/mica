@@ -7,8 +7,8 @@
 //
 //   {"platform":"vm","item":"parse.10k","median_ms":1.234}
 //
-// Run both platforms (the numbers are NOT comparable across them — this is
-// dart2js versus the VM, which is exactly why both are recorded):
+// Run both platforms separately. Flutter 3.47.1's Chrome test runner uses
+// dartdevc; this is a browser-test baseline, not production dart2js timing:
 //
 //   flutter test test/markdown_baseline_bench_test.dart
 //   flutter test --platform chrome test/markdown_baseline_bench_test.dart
@@ -45,12 +45,23 @@ void main() {
 
   tearDownAll(controller.dispose);
 
+  test('seven calls discard the first two and retain five samples', () {
+    var calls = 0;
+    final values = [1000.0, 2000.0, 9.0, 1.0, 7.0, 3.0, 5.0];
+    final median = _measure(() => calls++, measure: () => values[calls - 1]);
+    expect(calls, 7);
+    expect(median, 5.0);
+  });
+
   test('hotPath87 input really is 87 code units', () {
     expect(hotPath87.length, 87);
   });
 
   test('parse.87', () => _bench('parse.87', () => markdownToBlocks(hotPath87)));
-  test('parse.10k', () => _bench('parse.10k', () => markdownToBlocks(parse10k)));
+  test(
+    'parse.10k',
+    () => _bench('parse.10k', () => markdownToBlocks(parse10k)),
+  );
   test(
     'parse.100k',
     () => _bench('parse.100k', () => markdownToBlocks(parse100k)),
@@ -67,31 +78,32 @@ void main() {
     'serialize.10k',
     () => _bench('serialize.10k', () => controller.documentMarkdown()),
   );
-  test(
-    'html.10k',
-    () => _bench('html.10k', () => controller.selectionHtml()),
-  );
+  test('html.10k', () => _bench('html.10k', () => controller.selectionHtml()));
 }
 
 void _bench(String item, void Function() run) {
-  for (var i = 0; i < 2; i++) {
-    run(); // warmup, discarded
-  }
+  final median = _measure(run);
+  // ignore: avoid_print
+  print(
+    jsonEncode({
+      'platform': kIsWeb ? 'chrome' : 'vm',
+      'item': item,
+      'median_ms': double.parse(median.toStringAsFixed(3)),
+    }),
+  );
+}
+
+double _measure(void Function() run, {double Function()? measure}) {
   final samples = <double>[];
   for (var i = 0; i < 7; i++) {
     final watch = Stopwatch()..start();
     run();
     watch.stop();
-    samples.add(watch.elapsedMicroseconds / 1000);
+    final ms = measure?.call() ?? watch.elapsedMicroseconds / 1000;
+    if (i >= 2) samples.add(ms); // seven total; discard first two
   }
   samples.sort();
-  final median = samples[samples.length ~/ 2];
-  // ignore: avoid_print
-  print(jsonEncode({
-    'platform': kIsWeb ? 'chrome' : 'vm',
-    'item': item,
-    'median_ms': double.parse(median.toStringAsFixed(3)),
-  }));
+  return samples[samples.length ~/ 2];
 }
 
 String _repeatTo(String sample, int target) {
