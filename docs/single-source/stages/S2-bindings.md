@@ -302,3 +302,32 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 - **停点：G2 待审核。** WP-W 在审核结论前不再推进；如继续优化，建议先确认 JSON / boundary 成本、把 block mapping / JSON 往返与 wasm 解析耗时拆开归因，以及对比 sequential id + 子块索引化后是否回到 1.2× 附近。
 - 若决定退出方案（S2「退出方案」）：Web 端保留 Dart 镜像 + 差分棘轮守护，桌面/服务端按单实现推进。
 
+### G2 继续优化后的协调者复核（2026-10-27）
+
+用户已选择继续优化，预算不变。本节是执行方复核材料，不替代 `reviews.md` 的审核结论。实验位于 `refs/heads/ss/w/p0-costs`，基于 S1 候选 `12c7ff2`；核心优化独立提交 `6594f12`，初始实验提交 `8a2af3f`，后续纠错与原始数据在该实验分支保留。没有合并核心或 spike 至 `single-source`。
+
+**推荐 `opt-level=3`。** 最终 Flutter release、同页 Chrome 对照采用 AB/BA 交替批量采样；每轮先求 full / Dart，再取三轮比值中位数。完整路径包含 Rust wire JSON 编码、跨边界字符串传递、Dart JSON 解码及 BlockSpec 映射，没有绕过 JSON 或缓存解析结果。
+
+| 输入 | 实际字符数 | 三轮同轮比值中位数 | 每轮均 ≤1.2 |
+| --- | ---: | ---: | --- |
+| 原 P0 87 | 87 | 0.787 | 是 |
+| 原 P0 10k | 10000 | 0.645 | 是 |
+| 原 P0 100k | 100000 | 0.616 | 是 |
+| S0 同形短输入 | 87 | 0.771 | 是 |
+| 近似 S0 10k | 9997 | 0.685 | 是 |
+| 近似 S0 100k | 99972 | 0.651 | 是 |
+
+原 P0 三档逐字节保留；S0 两个长输入按行边界截断，与官方 S0 的 substring 输入不同，只作代表性补测，不能称同输入基线。原 P0 100k 最终 full 中位数 12.75 ms、同轮 Dart 三轮中位数 20.70 ms；表中比值仍按逐轮比值汇总，不由这两个数相除得出。
+
+- **体积**：GNU gzip 1.14 `-n -9` 对 wasm / JS 分别压缩，120538 + 2535 = **123073 B**（120.188 KiB）。低于 204800 B 硬预算，比 122880 B 软目标高 **193 B**。旧 Node zlib 的 123226 B 是拼接压缩，分文件实为 123260 B，不混用口径。
+- **初始化**：保留的同一 opt-3 产物五次新上下文中位数 **12.8 ms**，低于 60 ms；最终补测的 served SHA 与体积记录一致，核心 fingerprint 为 `6b193da84a7b630a`。
+- **输出与回执**：优化前后七个 host 输入 wire JSON 黄金 SHA 相同；浏览器六组输入全部块与 marks 比较无差异；最终 `receipt: 4 passed (floor 4)`。结构、ignored-source 检查与 shellcheck 通过。该结果不能外推到全部语料、Fragment、Firefox / Safari 或桌面 FFI。
+- **收益来源**：`parse_body` 的逐子块查找改为一次索引与所有权移动；Sequential 去掉冗余唯一性集合；wire 去掉块深拷贝与排序时字符串分配。独立复核未发现这三个核心 diff 改变样本输出。
+- **UUID 纠错**：旧 +48% 来自 `parse_body` 对 `parse` 的不对称探针，不能当纯 UUID 成本；最终对照统一 `parse`、mode、root 与 digest，仅 BlockIds 不同。测得的是整套 ID 策略差值，仍非单独随机数系统调用耗时。
+- **JSON / 绑定归因限制**：历史 base-z 100k 的 echoJson 为 **1.56875 ms**，不是 µs；Dart decode 1.3375 ms、BlockSpec 映射 0.659375 ms。`parseBody − parseOnly` 包含不同 digest / 返回形态，只有粗估意义。**Rust BlockJson 映射与 JSON 编码尚未做孤立计时**，不能把差值当精确阶段耗时，也不能将各阶段相加。
+- **汇总纠错**：旧 0.736 / 0.451 / 0.514 使用阶段中位数之比，且旧 runner 固定顺序；历史值更正后保留，最终判读以上述 AB/BA 数据为准。
+
+原始证据在实验分支 `spike/md-bench/summary-final.json`、`sizes-costs.json`、`final-opt3-paired.txt`、`final-opts-short-paired.txt`、`final-ids-paired.txt`、`receipt-final.txt`。体积包含诊断导出，是该 spike 导出集合的实测，不证明正式十个 API 产物体积；正式 S2 需重新验收。
+
+**停点状态：硬性能门槛已有达标证据，G2 待审核；独立 JSON 阶段计时仍缺。G1 未通过，正式 T2.2+ 未启动，不合入 main、不发版。**
+
