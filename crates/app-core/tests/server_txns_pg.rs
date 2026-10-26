@@ -28,9 +28,7 @@ use uuid::Uuid;
 /// set-but-unusable DATABASE_URL — or a missing one in CI — is a hard failure,
 /// never a silent pass.
 async fn pool() -> Option<PgPool> {
-  let Some(url) = mica_infra::test_database_url() else {
-    return None;
-  };
+  let url = mica_infra::test_database_url()?;
   Some(
     PgPool::connect(&url)
       .await

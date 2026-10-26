@@ -1446,9 +1446,7 @@ mod tests {
     /// lie. A set-but-unusable `DATABASE_URL` panics, and in CI a missing one
     /// panics too.
     async fn pool() -> Option<PgPool> {
-      let Some(url) = mica_infra::test_database_url() else {
-        return None;
-      };
+      let url = mica_infra::test_database_url()?;
       Some(
         PgPool::connect(&url)
           .await

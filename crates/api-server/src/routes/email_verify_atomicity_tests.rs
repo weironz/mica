@@ -3,9 +3,7 @@ use super::*;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 
 async fn fixture() -> Option<(PgPool, Uuid, String)> {
-  let Some(url) = mica_infra::test_database_url() else {
-    return None;
-  };
+  let url = mica_infra::test_database_url()?;
   let db = PgPoolOptions::new()
     .max_connections(1)
     .connect(&url)

@@ -31,9 +31,7 @@ const JWT_SECRET: &str = "transfer-guard-pg-test-secret";
 const BLOB: &[u8] = b"fake-png-bytes";
 
 async fn pool() -> Option<PgPool> {
-  let Some(url) = mica_infra::test_database_url() else {
-    return None;
-  };
+  let url = mica_infra::test_database_url()?;
   Some(
     PgPool::connect(&url)
       .await

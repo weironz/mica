@@ -322,9 +322,7 @@ mod resend_timing_pg {
   use std::sync::{Arc, Mutex};
 
   async fn pool() -> Option<sqlx::PgPool> {
-    let Some(url) = mica_infra::test_database_url() else {
-      return None;
-    };
+    let url = mica_infra::test_database_url()?;
     Some(
       sqlx::PgPool::connect(&url)
         .await

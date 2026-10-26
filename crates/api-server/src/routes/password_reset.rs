@@ -502,9 +502,7 @@ mod reset_pg {
   use sqlx::PgPool;
 
   async fn pool() -> Option<PgPool> {
-    let Some(url) = mica_infra::test_database_url() else {
-      return None;
-    };
+    let url = mica_infra::test_database_url()?;
     Some(
       PgPool::connect(&url)
         .await

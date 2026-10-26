@@ -48,9 +48,7 @@ async fn wipe(db: &PgPool) {
 const SLOW_READ: Duration = Duration::from_secs(8);
 
 fn database_url() -> Option<String> {
-  let Some(url) = mica_infra::test_database_url() else {
-    return None;
-  };
+  let url = mica_infra::test_database_url()?;
   Some(url)
 }
 

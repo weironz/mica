@@ -1774,9 +1774,7 @@ mod refresh_pg {
   /// means the workflow regressed, not that these assertions may quietly stop
   /// running. (See app-core/tests/sync_pg.rs, which learned this the hard way.)
   async fn pool() -> Option<PgPool> {
-    let Some(url) = mica_infra::test_database_url() else {
-      return None;
-    };
+    let url = mica_infra::test_database_url()?;
     Some(
       PgPool::connect(&url)
         .await

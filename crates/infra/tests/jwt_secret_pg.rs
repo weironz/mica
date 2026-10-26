@@ -11,9 +11,7 @@ use mica_infra::ensure_jwt_secret;
 use sqlx::PgPool;
 
 async fn pool() -> Option<PgPool> {
-  let Some(url) = mica_infra::test_database_url() else {
-    return None;
-  };
+  let url = mica_infra::test_database_url()?;
   let db = PgPool::connect(&url)
     .await
     .expect("DATABASE_URL is set but the connection failed");

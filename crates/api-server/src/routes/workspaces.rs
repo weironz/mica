@@ -791,9 +791,7 @@ mod workspace_decode_pg {
   use super::*;
 
   async fn pool() -> Option<PgPool> {
-    let Some(url) = mica_infra::test_database_url() else {
-      return None;
-    };
+    let url = mica_infra::test_database_url()?;
     Some(
       PgPool::connect(&url)
         .await
@@ -963,9 +961,7 @@ mod owner_role_pg {
   use super::*;
 
   async fn pool() -> Option<PgPool> {
-    let Some(url) = mica_infra::test_database_url() else {
-      return None;
-    };
+    let url = mica_infra::test_database_url()?;
     Some(
       PgPool::connect(&url)
         .await
@@ -1064,9 +1060,7 @@ mod workspace_delete_gc_pg {
   use std::time::Duration;
 
   async fn fixture() -> Option<(PgPool, Uuid, Uuid)> {
-    let Some(url) = mica_infra::test_database_url() else {
-      return None;
-    };
+    let url = mica_infra::test_database_url()?;
     let db = PgPool::connect(&url)
       .await
       .expect("test Postgres must be reachable");
