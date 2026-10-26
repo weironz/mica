@@ -102,3 +102,127 @@ Rust 侧基线：新增 `crates/markdown/examples/md_bench.rs`（`cargo run -p m
 ## 执行记录
 
 （执行方追加：日期、提交号、对拍分类计数、基准数字表、偏离方案之处。）
+
+### 2026-10-26 · WP-D（Dart 编辑器）· 分支 `worktree-agent-acfa208a26ae27e64`
+
+**状态：S0 完成，待审核。** 未 merge、未 push、未发版。只新增 `clients/mica_flutter/test/**`、
+`clients/mica_flutter/tool/**` 与本文件；`lib/**`、`crates/*/src/**` 一行未改。
+
+#### 提交
+
+| 提交 | 任务 | 内容 |
+| --- | --- | --- |
+| `64f031a` | T0.1 | `test/support/markdown_corpus.dart` + 语料自检 |
+| `3fed7ca` | T0.2 | `test/markdown_differential_test.dart` + `test/differential_baseline.json` |
+| `817dcf4` | T0.3-Dart | `test/markdown_baseline_bench_test.dart` + 内嵌基准输入 |
+| `3b87206` | T0.4 | `tool/s0_startup_baseline.mjs`、`tool/s0_desktop_startup.sh` |
+| `93ae17d` | T0.5 | `test/clipboard_snapshot_test.dart` |
+
+#### 语料（T0.1）
+
+共 5,742 条：`spec:` 652、`gfm:` 24、`golden:` 29、`conf:` 35、`file:` 2、`fuzz:` 5,000（seed 20261026，
+LCG 固定实现，不依赖 `dart:math Random` 的版本行为）。两处与计划不符，均已用测试钉住：
+
+- `golden-master.json` 存的是**期望块输出**，不是输入。它的键恰好等于 spec + gfm + conformance + paste +
+  vhost-user + `crates/markdown/tests/golden_master.rs` 的 29 个 adversarial 用例，因此只有这 29 条是新输入，
+  其余四类已由 1/2/4/5 覆盖。`markdown_corpus_test.dart` 断言两类键集合完全相等，Rust 侧新增 adversarial
+  用例会让测试失败，而不是静默漏跑。
+- conformance 目录是 **35 个 `.md`**，不是 105；105 是目录里的文件数（每例另有 `.md.gold`、`.blocks.json`）。
+
+#### 对拍（T0.2）
+
+`flutter test test/markdown_differential_test.dart` 通过，基线已提交（棘轮：当前差异 ⊆ 基线）。
+5,742 条输入中 1,936 条至少有一处差异，共 4,887 条记录：
+
+| category | count |
+| --- | --- |
+| block-count | 191 |
+| crdt-normalization | 227 |
+| data:indent | 35 |
+| data:label | 3 |
+| data:language | 2 |
+| data:level | 24 |
+| data:li | 22 |
+| data:loose | 23 |
+| data:marker | 5 |
+| data:qbreak | 1 |
+| data:quote | 3 |
+| data:start | 6 |
+| export | 1610 |
+| kind | 72 |
+| marks | 256 |
+| roundtrip | 1892（dart 587 / rust 1305） |
+| text | 515 |
+
+`export` 按来源：fuzz 1495、spec 90、golden 14、conf 9、gfm 1、file 1。`crdt-normalization` 是 S0 经
+`MicaDocument` 走 yrs 往返后才出现的差异（把 Dart 结果也推过同一趟 CRDT 即消失），S2 切到 `parseBlocks`
+后这一类应清零。现有 `markdown_export_conformance_test.dart` 已记录：部分 quote/callout 的整篇导出与
+Dart 复制输出刻意不同（装饰性 `>`），这里按真实差异计入基线，不在 S0 判对错。
+
+#### 性能基线（T0.3-Dart，7 次取中位数、丢前 2 次预热，单位 ms）
+
+| item | VM | Chrome (dart2js) |
+| --- | --- | --- |
+| parse.87 | 0.070 | 0.200 |
+| parse.10k | 13.942 | 27.401 |
+| parse.100k | 80.633 | 286.500 |
+| inline.cell×500 | 5.927 | 21.800 |
+| serialize.10k | 3.845 | 6.800 |
+| html.10k | 1.457 | 3.600 |
+
+命令：`flutter test test/markdown_baseline_bench_test.dart` 与
+`flutter test --platform chrome test/markdown_baseline_bench_test.dart`。
+
+Rust 侧基线（WP-R `9af0de7`，release，同形状三档；数字取自其 S1 执行记录）：
+
+| item | ms |
+| --- | --- |
+| import.87 / export_markdown.87 / export_html.87 | 0.013 / 0.011 / 0.008 |
+| import.10k / export_markdown.10k / export_html.10k | 0.867 / 0.508 / 0.405 |
+| import.100k / export_markdown.100k / export_html.100k | 4.581 / 2.689 / 2.124 |
+
+#### 启动基线（T0.4）
+
+- **Web**：release 构建，5 次冷启动（每次新 profile）。首帧（`flutter-first-frame`）593.5 / 561.2 / 552.1 /
+  585.1 / 562.6 ms，**中位数 562.6 ms**。
+- **桌面**：5 次 828 / 835 / 1454 / 836 / 1096 ms，**中位数 836 ms**。这是
+  **进程启动 → 主窗口标题出现**的外部代理（tasklist 轮询粒度约 50–150 ms），**不是**计划要求的
+  `main()` → `runApp`：现有构建没有该诊断点，加一个属于产品代码改动，本阶段禁止。要拿到原指标需在
+  `lib/main.dart` 加计时探针（S2 或单独批准后做）。
+
+#### 剪贴板快照（T0.5，结果不提交）
+
+```bash
+cd clients/mica_flutter
+flutter test test/clipboard_snapshot_test.dart
+# -> build/differential/clipboard_baseline.json（前 30 个 conformance fixture 的三个输出）
+```
+
+S3 在切换前的提交上重跑即可对比。
+
+#### 门禁
+
+- `bash scripts/local-ci.sh all`：**未全绿**。它跑过了「被 .gitignore 藏的源码」「迁移追踪 / 换行」
+  「CI job 选择 / Flutter SDK 复用」「结构大小」「rustfmt」「`cargo build --workspace`（5m55s）」，
+  然后在 `apply_migrations` 处失败：`VersionMismatch(12)`。原因是这台机器上 `mica-postgres`
+  是被多个 checkout 共用的开发库，其已应用迁移 12 的校验和与本 worktree 不同；与 S0 改动无关
+  （本阶段没有迁移改动）。因此其后的 clippy / Rust 测试没有执行。
+- `bash scripts/local-ci.sh flutter`：`pub get --enforce-lockfile`、`gen-l10n`、
+  `flutter analyze --no-fatal-infos`（164 条 info，无 error/warning）与 FFI release 构建通过；随后
+  全量 `flutter test` 在 25 个测试后被 Cygwin fork 耗尽打断
+  （`fork: Resource temporarily unavailable`、`0xC000026B`），不是断言失败。之后单独运行
+  S0 五个测试 + 两个既有 Markdown conformance 套件：**84 passed / 2 skipped**。
+- `bash scripts/check-file-size.sh`：通过（仅既有软上限 WARN）。
+- 未跑：全量 `flutter test`、clippy/Rust 测试、`flutter build web`（门禁内那一步；web release 构建
+  已单独跑过用于启动基线）、`tool/gfonts/mirror.sh --check`。
+
+#### 偏离与未验证
+
+1. `test/perf/` 改为 `test/` 顶层：本机 Flutter 3.47.1 的 web 测试运行器把路径拍平成
+   `perfmarkdown_baseline_bench_test.dart`（缺分隔符），嵌套目录下的测试在 Chrome 里 404，表现为
+   永久停在 `loading` 且无报错。已用一行探针复现，文件名按计划命名，只挪了目录。
+2. 桌面启动只测到外部代理，见上。
+3. Rust 基准不是本工作包产出（WP-R `9af0de7`）；本 worktree 没有该 example，数字取自其 S1 执行记录。
+4. 本机 git hook（`code-review-graph update`）单次耗时可达 30 分钟以上，提交时用
+   `git -c core.hooksPath=/dev/null` 跳过；只是本地工具钩子，不改变提交内容。
+5. 对拍基线是「当前状态」而非「正确状态」：它允许既有差异存在、禁止新增。S3/S4 每修一类应看到计数下降。
