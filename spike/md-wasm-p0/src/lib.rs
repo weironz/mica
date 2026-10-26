@@ -41,19 +41,39 @@ pub fn parse_only_digest(markdown: &str) -> f64 {
     digest(&mica_md::parse_body(markdown, ParseMode::Document))
 }
 
-/// UUID variant: same document parse, ids generated with v4 (feature `uuid`).
+/// Matched ID probes: both use `parse`, the same root/mode, and the same
+/// digest including the root. The ONLY variable is BlockIds. This measures
+/// the ID strategy including uniqueness bookkeeping, not random calls alone.
 #[cfg(feature = "uuid")]
-#[wasm_bindgen(js_name = parseOnlyDigestUuid)]
-pub fn parse_only_digest_uuid(markdown: &str) -> f64 {
+#[wasm_bindgen(js_name = parseIdDigest)]
+pub fn parse_id_digest(markdown: &str, uuid: bool) -> f64 {
     let doc = mica_md::parse(
         markdown,
         &mica_md::ParseOptions {
             mode: ParseMode::Document,
             root_id: "root".to_string(),
-            ids: mica_md::BlockIds::Uuid,
+            ids: if uuid {
+                mica_md::BlockIds::Uuid
+            } else {
+                mica_md::BlockIds::Sequential { prefix: "b".to_string() }
+            },
         },
     );
     digest(&doc.blocks)
+}
+
+#[cfg(all(test, feature = "uuid"))]
+mod tests {
+    #[test]
+    fn matched_id_probes_have_equal_consumed_values() {
+        for input in [
+            include_str!("../../inputs/p0_87.md"),
+            include_str!("../../inputs/p0_10k.md"),
+            include_str!("../../inputs/p0_100k.md"),
+        ] {
+            assert_eq!(super::parse_id_digest(input, false), super::parse_id_digest(input, true));
+        }
+    }
 }
 
 /// Boundary probe: same codec as a real string export (TextEncoder/Decoder,

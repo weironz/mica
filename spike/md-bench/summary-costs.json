@@ -4,16 +4,17 @@
     "flutter": "3.47.1 / Dart 3.13.1, flutter build web --release --no-web-resources-cdn",
     "browser": "HeadlessChrome/156.0.0.0, Windows 11 build 26300",
     "server": "node static host, no COOP/COEP, Cache-Control: no-store; crossOriginIsolated=false",
-    "method": "Each stage measured in isolated adaptive batches (15 samples, calibrated to ~15 ms per batch), alternating order; round value is the median across 3 independent release runs, then the median across rounds. Dart comparator is the production markdownToBlocks in the same page, same release build."
+    "method": "Historical runs measured whole stage windows in fixed order, NOT alternating. Ratio = median of per-run(full median / Dart median); legacyRatioOfStageMedians retained for correction audit. The separate summary-final.json uses corrected AB/BA paired samples. Comparator: production markdownToBlocks in the same page and release build."
   },
   "sizesGzipBytes": {
-    "base-z": 102184,
-    "opt-z": 102346,
-    "opt-s": 111224,
-    "opt-3": 123226,
-    "opt-z-uuid": 104811,
+    "base-z": 101692,
+    "opt-z": 101888,
+    "opt-s": 110880,
+    "opt-3": 123073,
+    "opt-z-uuid": 104172,
     "threshold": 204800
   },
+  "sizeMeasurement": "GNU gzip 1.14, -n -9; sum of independently compressed resources, diagnostic spike upper bound only; see sizes-costs.json hashes and historical Node zlib records",
   "initMs": {
     "base-z": [
       13,
@@ -68,7 +69,13 @@
           "full": 0.030468750002910383,
           "dartMarkdown": 0.016894531250727596
         },
-        "ratioFullVsDart": 1.8034682081870834,
+        "ratioFullVsDart": 1.7572254333641995,
+        "perRunRatios": [
+          1.8352941178223665,
+          1.7572254333641995,
+          1.4464285714582692
+        ],
+        "legacyRatioOfStageMedians": 1.8034682081870834,
         "equivalence": [
           {
             "equal": false,
@@ -116,7 +123,13 @@
           "full": 3.125,
           "dartMarkdown": 2.7250000000931323
         },
-        "ratioFullVsDart": 1.1467889907864943,
+        "ratioFullVsDart": 1.1238532109707644,
+        "perRunRatios": [
+          1.1238532109707644,
+          1.2135922329219226,
+          1.05691056904167
+        ],
+        "legacyRatioOfStageMedians": 1.1467889907864943,
         "equivalence": [
           {
             "equal": false,
@@ -164,7 +177,13 @@
           "full": 45.79999999701977,
           "dartMarkdown": 25.899999998509884
         },
-        "ratioFullVsDart": 1.7683397683264401,
+        "ratioFullVsDart": 1.6293436294086043,
+        "perRunRatios": [
+          1.6293436294086043,
+          1.8467741933727344,
+          1.5503355704060353
+        ],
+        "legacyRatioOfStageMedians": 1.7683397683264401,
         "equivalence": [
           {
             "equal": false,
@@ -212,7 +231,13 @@
           "full": 0.02773437499854481,
           "dartMarkdown": 0.015527343748544808
         },
-        "ratioFullVsDart": 1.7861635220862564,
+        "ratioFullVsDart": 1.7261146496210753,
+        "perRunRatios": [
+          1.7261146496210753,
+          1.7861635220862564,
+          1.5351351350545883
+        ],
+        "legacyRatioOfStageMedians": 1.7861635220862564,
         "equivalence": [
           {
             "equal": false,
@@ -260,7 +285,13 @@
           "full": 5.400000000372529,
           "dartMarkdown": 5.400000000372529
         },
-        "ratioFullVsDart": 1,
+        "ratioFullVsDart": 0.9818181818859144,
+        "perRunRatios": [
+          0.9259259258620492,
+          0.9818181818859144,
+          1.0285714286423864
+        ],
+        "legacyRatioOfStageMedians": 1,
         "equivalence": [
           {
             "equal": false,
@@ -308,7 +339,13 @@
           "full": 75.19999999925494,
           "dartMarkdown": 63.80000000074506
         },
-        "ratioFullVsDart": 1.1786833855544945,
+        "ratioFullVsDart": 1.1633281972532126,
+        "perRunRatios": [
+          1.0675039246592677,
+          1.1633281972532126,
+          1.1786833855544945
+        ],
+        "legacyRatioOfStageMedians": 1.1786833855544945,
         "equivalence": [
           {
             "equal": false,
@@ -359,6 +396,12 @@
           "dartMarkdown": 0.02001953125
         },
         "ratioFullVsDart": 1.263414634073653,
+        "perRunRatios": [
+          1.4971428571002825,
+          1.2056074767542782,
+          1.263414634073653
+        ],
+        "legacyRatioOfStageMedians": 1.263414634073653,
         "equivalence": [
           {
             "equal": true,
@@ -408,7 +451,13 @@
           "full": 2.5249999999068677,
           "dartMarkdown": 3.1000000005587935
         },
-        "ratioFullVsDart": 0.814516128855394,
+        "ratioFullVsDart": 0.7943548385364475,
+        "perRunRatios": [
+          0.814516128855394,
+          0.7884615384615384,
+          0.7943548385364475
+        ],
+        "legacyRatioOfStageMedians": 0.814516128855394,
         "equivalence": [
           {
             "equal": true,
@@ -459,6 +508,12 @@
           "dartMarkdown": 30.299999997019768
         },
         "ratioFullVsDart": 0.8514851486231908,
+        "perRunRatios": [
+          0.943060498170631,
+          0.8514851486231908,
+          0.8316831682717918
+        ],
+        "legacyRatioOfStageMedians": 0.8514851486231908,
         "equivalence": [
           {
             "equal": true,
@@ -508,7 +563,13 @@
           "full": 0.02333984374854481,
           "dartMarkdown": 0.017382812500727596
         },
-        "ratioFullVsDart": 1.3426966290735673,
+        "ratioFullVsDart": 1.3539325842967056,
+        "perRunRatios": [
+          1.5159235666386786,
+          1.3539325842967056,
+          1.3426966290735673
+        ],
+        "legacyRatioOfStageMedians": 1.3426966290735673,
         "equivalence": [
           {
             "equal": true,
@@ -558,7 +619,13 @@
           "full": 4.5750000001862645,
           "dartMarkdown": 5.400000000372529
         },
-        "ratioFullVsDart": 0.8472222221982685,
+        "ratioFullVsDart": 0.8472222220258013,
+        "perRunRatios": [
+          0.8391304348150025,
+          0.8714285714640504,
+          0.8472222220258013
+        ],
+        "legacyRatioOfStageMedians": 0.8472222221982685,
         "equivalence": [
           {
             "equal": true,
@@ -608,7 +675,13 @@
           "full": 54.600000001490116,
           "dartMarkdown": 65.30000000074506
         },
-        "ratioFullVsDart": 0.8361408882215489,
+        "ratioFullVsDart": 0.8290468986310088,
+        "perRunRatios": [
+          0.8290468986310088,
+          0.8517940718158195,
+          0.8269525267899521
+        ],
+        "legacyRatioOfStageMedians": 0.8361408882215489,
         "equivalence": [
           {
             "equal": true,
@@ -654,7 +727,13 @@
           "full": 0.020214843749272404,
           "dartMarkdown": 0.018847656250727596
         },
-        "ratioFullVsDart": 1.0725388600236185,
+        "ratioFullVsDart": 1.0295566503186253,
+        "perRunRatios": [
+          1.1373626373682606,
+          1.015544041488781,
+          1.0295566503186253
+        ],
+        "legacyRatioOfStageMedians": 1.0725388600236185,
         "equivalence": [
           {
             "equal": true,
@@ -699,6 +778,12 @@
           "dartMarkdown": 3.2250000000931323
         },
         "ratioFullVsDart": 0.5813953488204197,
+        "perRunRatios": [
+          0.5507246377594054,
+          0.5938775510508187,
+          0.5813953488204197
+        ],
+        "legacyRatioOfStageMedians": 0.5813953488204197,
         "equivalence": [
           {
             "equal": true,
@@ -742,7 +827,13 @@
           "full": 18.5,
           "dartMarkdown": 32.30000000074506
         },
-        "ratioFullVsDart": 0.5727554179434448,
+        "ratioFullVsDart": 0.5929487179628776,
+        "perRunRatios": [
+          0.6563467491877996,
+          0.5159420290071032,
+          0.5929487179628776
+        ],
+        "legacyRatioOfStageMedians": 0.5727554179434448,
         "equivalence": [
           {
             "equal": true,
@@ -786,7 +877,13 @@
           "full": 3.5500000002793968,
           "dartMarkdown": 6.150000000372529
         },
-        "ratioFullVsDart": 0.5772357723681886,
+        "ratioFullVsDart": 0.5804347825924987,
+        "perRunRatios": [
+          0.525925925967318,
+          0.5804347825924987,
+          0.6056910568890236
+        ],
+        "legacyRatioOfStageMedians": 0.5772357723681886,
         "equivalence": [
           {
             "equal": true,
@@ -830,7 +927,13 @@
           "full": 40.80000000074506,
           "dartMarkdown": 65.80000000074506
         },
-        "ratioFullVsDart": 0.6200607902778583,
+        "ratioFullVsDart": 0.6238532110347809,
+        "perRunRatios": [
+          0.6261398176673818,
+          0.5877061469219312,
+          0.6238532110347809
+        ],
+        "legacyRatioOfStageMedians": 0.6200607902778583,
         "equivalence": [
           {
             "equal": true,
@@ -876,7 +979,13 @@
           "full": 0.015527343752182787,
           "dartMarkdown": 0.021093749994179234
         },
-        "ratioFullVsDart": 0.7361111114177193,
+        "ratioFullVsDart": 0.7824074074569118,
+        "perRunRatios": [
+          0.9352941177785397,
+          0.7824074074569118,
+          0.7361111114177193
+        ],
+        "legacyRatioOfStageMedians": 0.7361111114177193,
         "equivalence": [
           {
             "equal": true,
@@ -920,7 +1029,13 @@
           "full": 1.4875000000465661,
           "dartMarkdown": 3.2999999998137355
         },
-        "ratioFullVsDart": 0.45075757579712916,
+        "ratioFullVsDart": 0.4469696969525928,
+        "perRunRatios": [
+          0.5613207548529164,
+          0.406862745213813,
+          0.4469696969525928
+        ],
+        "legacyRatioOfStageMedians": 0.45075757579712916,
         "equivalence": [
           {
             "equal": true,
@@ -964,7 +1079,13 @@
           "full": 15.099999997764826,
           "dartMarkdown": 29.400000002235174
         },
-        "ratioFullVsDart": 0.5136054420617969,
+        "ratioFullVsDart": 0.5306122449083029,
+        "perRunRatios": [
+          0.5853658536382222,
+          0.5050167223584401,
+          0.5306122449083029
+        ],
+        "legacyRatioOfStageMedians": 0.5136054420617969,
         "equivalence": [
           {
             "equal": true,
@@ -1008,7 +1129,13 @@
           "full": 2.8875000001862645,
           "dartMarkdown": 5.400000000372529
         },
-        "ratioFullVsDart": 0.5347222222198268,
+        "ratioFullVsDart": 0.5347222221335933,
+        "perRunRatios": [
+          0.5347222221335933,
+          0.5393518519316978,
+          0.520270270233988
+        ],
+        "legacyRatioOfStageMedians": 0.5347222222198268,
         "equivalence": [
           {
             "equal": true,
@@ -1053,6 +1180,12 @@
           "dartMarkdown": 64.79999999701977
         },
         "ratioFullVsDart": 0.5447530863988157,
+        "perRunRatios": [
+          0.5447530863988157,
+          0.5150602409641934,
+          0.5481366459552776
+        ],
+        "legacyRatioOfStageMedians": 0.5447530863988157,
         "equivalence": [
           {
             "equal": true,
@@ -1105,7 +1238,13 @@
           "full": 0.026464843747817213,
           "dartMarkdown": 0.020312499997089617
         },
-        "ratioFullVsDart": 1.302884615463833,
+        "ratioFullVsDart": 1.3415637860284186,
+        "perRunRatios": [
+          1.613496932487295,
+          1.302884615463833,
+          1.3415637860284186
+        ],
+        "legacyRatioOfStageMedians": 1.302884615463833,
         "equivalence": [
           {
             "equal": true,
@@ -1156,7 +1295,13 @@
           "full": 2.599999999627471,
           "dartMarkdown": 3.1000000000931323
         },
-        "ratioFullVsDart": 0.8387096772739872,
+        "ratioFullVsDart": 0.8387096774242004,
+        "perRunRatios": [
+          0.9761904761904762,
+          0.7761194029601785,
+          0.8387096774242004
+        ],
+        "legacyRatioOfStageMedians": 0.8387096772739872,
         "equivalence": [
           {
             "equal": true,
@@ -1208,6 +1353,12 @@
           "dartMarkdown": 34
         },
         "ratioFullVsDart": 0.7764705881914672,
+        "perRunRatios": [
+          0.7764705881914672,
+          0.671755725140188,
+          0.8539682540392118
+        ],
+        "legacyRatioOfStageMedians": 0.7764705881914672,
         "equivalence": [
           {
             "equal": true,
@@ -1258,7 +1409,13 @@
           "full": 0.025390625,
           "dartMarkdown": 0.018261718749272404
         },
-        "ratioFullVsDart": 1.3903743316061983,
+        "ratioFullVsDart": 1.4021164022269479,
+        "perRunRatios": [
+          1.5365853658259572,
+          1.4021164022269479,
+          1.3903743316061983
+        ],
+        "legacyRatioOfStageMedians": 1.3903743316061983,
         "equivalence": [
           {
             "equal": true,
@@ -1309,7 +1466,13 @@
           "full": 4.849999999627471,
           "dartMarkdown": 5.4500000001862645
         },
-        "ratioFullVsDart": 0.8899082567819656,
+        "ratioFullVsDart": 0.8715596331466721,
+        "perRunRatios": [
+          0.8715596331466721,
+          0.8401639344775386,
+          0.8899082567819656
+        ],
+        "legacyRatioOfStageMedians": 0.8899082567819656,
         "equivalence": [
           {
             "equal": true,
@@ -1360,7 +1523,13 @@
           "full": 58.600000001490116,
           "dartMarkdown": 66.29999999701977
         },
-        "ratioFullVsDart": 0.8838612368646188,
+        "ratioFullVsDart": 0.8825301205241746,
+        "perRunRatios": [
+          0.9041095890853696,
+          0.8825301205241746,
+          0.868778280604514
+        ],
+        "legacyRatioOfStageMedians": 0.8838612368646188,
         "equivalence": [
           {
             "equal": true,

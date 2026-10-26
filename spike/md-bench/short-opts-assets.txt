@@ -1,0 +1,18 @@
+### Result
+{"engineInfo":{"crate_version":"0.1.0","schema_version":1,"source_fingerprint":"6b193da84a7b630a"},"artifacts":{"mica_md.js":{"rawBytes":9731,"sha256":"5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"},"mica_md_bg.wasm":{"rawBytes":356341,"sha256":"a07c69699e77262fef2ea15765905335f2f047a217742d31c6c3ca918a0cce9f"}}}
+### Ran Playwright code
+```js
+await (// Read-only verification after the 3 short-input rounds; no timing rerun.
+async (page) => {
+  return await page.evaluate(async () => {
+    const artifacts={};
+    for (const file of ['mica_md.js','mica_md_bg.wasm']) {
+      const bytes=await (await fetch('mica_md/'+file,{cache:'no-store'})).arrayBuffer();
+      artifacts[file]={rawBytes:bytes.byteLength,sha256:Array.from(new Uint8Array(
+        await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('')};
+    }
+    return {engineInfo:JSON.parse(globalThis.micaMd.engineInfo()),artifacts};
+  });
+}
+)(page);
+```

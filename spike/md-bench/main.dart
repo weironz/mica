@@ -12,7 +12,7 @@
 //   wasmNoop       wasm call overhead, no arguments
 //   echoMd/Json    full string in→out round trip through wasm (boundary)
 //   parseOnly      engine parse, blocks consumed into a digest, no JSON
-//   uuidParseOnly  same parse with v4 ids (uuid build only)
+//   sequentialParse/uuidParse  matched parse API + same digest; only IDs differ
 //   parseBody      parse + BlockJson mapping + Rust serde_json → JSON string
 //   dartDecode     jsonDecode of pre-generated JSON
 //   dartMap        JSON list → BlockSpec records
@@ -45,7 +45,7 @@ external double _now();
 extension type _MicaMd._(JSObject _) implements JSObject {
   external String parseBody(String markdown, bool fragment);
   external double parseOnlyDigest(String markdown);
-  external double parseOnlyDigestUuid(String markdown);
+  external double parseIdDigest(String markdown, bool uuid);
   external String echo(String payload);
   external void noop();
   external String engineInfo();
@@ -173,7 +173,7 @@ Future<JSString> _run(JSAny? keysArg, JSAny? stagesArg) async {
       : (stagesArg.dartify() as List).cast<String>().toSet();
   bool uuidAvailable = true;
   try {
-    _md.parseOnlyDigestUuid(benchInputs['p0_87']!);
+    _md.parseIdDigest(benchInputs['p0_87']!, true);
   } catch (_) {
     uuidAvailable = false;
   }
@@ -218,18 +218,36 @@ Future<JSString> _run(JSAny? keysArg, JSAny? stagesArg) async {
     add('wasmNoop', () => _md.noop());
     add('echoMd', () => _sink += _md.echo(src).length);
     add('echoJson', () => _sink += _md.echo(json).length);
+    // Paired comparisons use AB/BA sample order, not two consecutive long
+    // measurement windows. Keep sample order alongside sorted statistics.
+    void pair(String a, void Function() fa, String b, void Function() fb) {
+      if (wanted != null && !wanted.contains(a) && !wanted.contains(b)) return;
+      for (var i=0; i<20; i++) { fa(); fb(); }
+      final na=_calibrate(fa), nb=_calibrate(fb);
+      final sa=<double>[], sb=<double>[];
+      for (var i=0; i<15; i++) {
+        if (i.isEven) {
+          sa.add(_batch(fa,na)); sb.add(_batch(fb,nb));
+        } else {
+          sb.add(_batch(fb,nb)); sa.add(_batch(fa,na));
+        }
+      }
+      final rawA=List<double>.of(sa), rawB=List<double>.of(sb);
+      stages[a]={..._stats(()=>0,na,sa),'orderedSamples':rawA};
+      stages[b]={..._stats(()=>0,nb,sb),'orderedSamples':rawB};
+    }
     add('parseOnly', () => _sink += _md.parseOnlyDigest(src).toInt());
     if (uuidAvailable) {
-      add('uuidParseOnly', () => _sink += _md.parseOnlyDigestUuid(src).toInt());
+      pair('sequentialParse', () => _sink += _md.parseIdDigest(src,false).toInt(),
+        'uuidParse', () => _sink += _md.parseIdDigest(src,true).toInt());
     }
     add('parseBody', () => _sink += _md.parseBody(src, false).length);
     add('dartDecode', () => _sink += (jsonDecode(json) as List).length);
     add('dartMap', () => _sink += _mapRows(decoded).length);
-    add('full', () => _sink += _full(src));
-    add('dartMarkdown', () => _sink += _dart(src));
+    pair('full', () => _sink += _full(src), 'dartMarkdown', () => _sink += _dart(src));
 
-    final full = stages['full']!['medianMs'] as double;
-    final dart = stages['dartMarkdown']!['medianMs'] as double;
+    final full = (stages['full']?['medianMs'] as double?) ?? 0;
+    final dart = (stages['dartMarkdown']?['medianMs'] as double?) ?? 1;
     perInput[key] = {
       'characters': src.length,
       'jsonBytes': json.length,

@@ -1,0 +1,707 @@
+{
+  "method": "AB/BA alternating batch samples; each run ratio is full median / Dart median; aggregate ratio is median of those per-run ratios, never ratio of aggregate stage medians.",
+  "opt3": {
+    "p0_87": {
+      "characters": 87,
+      "rounds": [
+        {
+          "round": 1,
+          "fullMs": 0.012011718747089617,
+          "dartMs": 0.013769531251455192,
+          "ratio": 0.8723404252283602,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        },
+        {
+          "round": 2,
+          "fullMs": 0.011914062499272404,
+          "dartMs": 0.01513671875,
+          "ratio": 0.7870967741454801,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        },
+        {
+          "round": 3,
+          "fullMs": 0.011572265624636202,
+          "dartMs": 0.014746093747817213,
+          "ratio": 0.7847682120120242,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        }
+      ],
+      "medianRatio": 0.7870967741454801,
+      "medianFullMs": 0.011914062499272404,
+      "medianDartMs": 0.014746093747817213,
+      "allRoundsPass": true
+    },
+    "p0_10k": {
+      "characters": 10000,
+      "rounds": [
+        {
+          "round": 1,
+          "fullMs": 1.34375,
+          "dartMs": 2.1124999998137355,
+          "ratio": 0.6360946746122991,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          }
+        },
+        {
+          "round": 2,
+          "fullMs": 1.3375000001396984,
+          "dartMs": 2.0749999997206032,
+          "ratio": 0.6445783134071285,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          }
+        },
+        {
+          "round": 3,
+          "fullMs": 1.3187500000931323,
+          "dartMs": 2.0249999999068677,
+          "ratio": 0.6512345679771769,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2086447968,
+            "dartFnv": 2086447968,
+            "firstDiff": null,
+            "rustLength": 39769,
+            "dartLength": 39769
+          }
+        }
+      ],
+      "medianRatio": 0.6445783134071285,
+      "medianFullMs": 1.3375000001396984,
+      "medianDartMs": 2.0749999997206032,
+      "allRoundsPass": true
+    },
+    "p0_100k": {
+      "characters": 100000,
+      "rounds": [
+        {
+          "round": 1,
+          "fullMs": 12.75,
+          "dartMs": 18.200000002980232,
+          "ratio": 0.7005494504347363,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          }
+        },
+        {
+          "round": 2,
+          "fullMs": 12.75,
+          "dartMs": 20.700000002980232,
+          "ratio": 0.6159420288968285,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          }
+        },
+        {
+          "round": 3,
+          "fullMs": 12.5,
+          "dartMs": 24.899999998509884,
+          "ratio": 0.5020080321585563,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 4105222744,
+            "dartFnv": 4105222744,
+            "firstDiff": null,
+            "rustLength": 397857,
+            "dartLength": 397857
+          }
+        }
+      ],
+      "medianRatio": 0.6159420288968285,
+      "medianFullMs": 12.75,
+      "medianDartMs": 20.700000002980232,
+      "allRoundsPass": true
+    },
+    "s0_87": {
+      "characters": 87,
+      "rounds": [
+        {
+          "round": 1,
+          "fullMs": 0.011035156250727596,
+          "dartMs": 0.0126953125,
+          "ratio": 0.8692307692880814,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        },
+        {
+          "round": 2,
+          "fullMs": 0.010888671875363798,
+          "dartMs": 0.01416015625,
+          "ratio": 0.768965517267071,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        },
+        {
+          "round": 3,
+          "fullMs": 0.010839843751455192,
+          "dartMs": 0.014062500002182787,
+          "ratio": 0.7708333333171645,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        }
+      ],
+      "medianRatio": 0.7708333333171645,
+      "medianFullMs": 0.010888671875363798,
+      "medianDartMs": 0.014062500002182787,
+      "allRoundsPass": true
+    },
+    "s0_10k": {
+      "characters": 9997,
+      "rounds": [
+        {
+          "round": 1,
+          "fullMs": 2.8249999997206032,
+          "dartMs": 4.2000000001862645,
+          "ratio": 0.6726190475226947,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          }
+        },
+        {
+          "round": 2,
+          "fullMs": 2.7749999999068677,
+          "dartMs": 4.0499999998137355,
+          "ratio": 0.6851851851937021,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          }
+        },
+        {
+          "round": 3,
+          "fullMs": 2.8125,
+          "dartMs": 4.025000000372529,
+          "ratio": 0.6987577639104826,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 473323728,
+            "dartFnv": 473323728,
+            "firstDiff": null,
+            "rustLength": 39226,
+            "dartLength": 39226
+          }
+        }
+      ],
+      "medianRatio": 0.6851851851937021,
+      "medianFullMs": 2.8125,
+      "medianDartMs": 4.0499999998137355,
+      "allRoundsPass": true
+    },
+    "s0_100k": {
+      "characters": 99972,
+      "rounds": [
+        {
+          "round": 1,
+          "fullMs": 32.80000000074506,
+          "dartMs": 50.899999998509884,
+          "ratio": 0.6444007858881197,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          }
+        },
+        {
+          "round": 2,
+          "fullMs": 32.30000000074506,
+          "dartMs": 49.19999999925494,
+          "ratio": 0.6565040650657356,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          }
+        },
+        {
+          "round": 3,
+          "fullMs": 32.30000000074506,
+          "dartMs": 49.600000001490116,
+          "ratio": 0.6512096774148121,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 2214366144,
+            "dartFnv": 2214366144,
+            "firstDiff": null,
+            "rustLength": 395642,
+            "dartLength": 395642
+          }
+        }
+      ],
+      "medianRatio": 0.6512096774148121,
+      "medianFullMs": 32.30000000074506,
+      "medianDartMs": 49.600000001490116,
+      "allRoundsPass": true
+    }
+  },
+  "optsShort": {
+    "p0_87": {
+      "characters": 87,
+      "rounds": [
+        {
+          "round": 1,
+          "fullMs": 0.01513671875,
+          "dartMs": 0.01318359375,
+          "ratio": 1.1481481481481481,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        },
+        {
+          "round": 2,
+          "fullMs": 0.014843749999272404,
+          "dartMs": 0.012744140625727596,
+          "ratio": 1.1647509577308148,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        },
+        {
+          "round": 3,
+          "fullMs": 0.014746093747817213,
+          "dartMs": 0.012597656250363798,
+          "ratio": 1.1705426354518422,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 3643221447,
+            "dartFnv": 3643221447,
+            "firstDiff": null,
+            "rustLength": 331,
+            "dartLength": 331
+          }
+        }
+      ],
+      "medianRatio": 1.1647509577308148,
+      "medianFullMs": 0.014843749999272404,
+      "medianDartMs": 0.012744140625727596,
+      "allRoundsPass": true
+    },
+    "s0_87": {
+      "characters": 87,
+      "rounds": [
+        {
+          "round": 1,
+          "fullMs": 0.013769531249636202,
+          "dartMs": 0.01220703125,
+          "ratio": 1.1279999999701977,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        },
+        {
+          "round": 2,
+          "fullMs": 0.013818359375363798,
+          "dartMs": 0.01220703125,
+          "ratio": 1.1320000000298023,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        },
+        {
+          "round": 3,
+          "fullMs": 0.013769531249636202,
+          "dartMs": 0.01220703125,
+          "ratio": 1.1279999999701977,
+          "equivalence": {
+            "equal": true,
+            "differingBlocks": 0,
+            "blockCountDelta": 0,
+            "rustFnv": 856505480,
+            "dartFnv": 856505480,
+            "firstDiff": null,
+            "rustLength": 288,
+            "dartLength": 288
+          }
+        }
+      ],
+      "medianRatio": 1.1279999999701977,
+      "medianFullMs": 0.013769531249636202,
+      "medianDartMs": 0.01220703125,
+      "allRoundsPass": true
+    }
+  },
+  "uuid": {
+    "p0_87": {
+      "direction": "Sequential -> UUID; identical parse API, Document mode, root, and digest including root; ID strategy (including uniqueness bookkeeping) only variable",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 0.013964843750727596,
+          "uuidMs": 0.01708984375
+        },
+        {
+          "round": 2,
+          "sequentialMs": 0.013427734375,
+          "uuidMs": 0.016406249997089617
+        },
+        {
+          "round": 3,
+          "sequentialMs": 0.013037109374636202,
+          "uuidMs": 0.015820312499272404
+        }
+      ],
+      "medianSequentialMs": 0.013427734375,
+      "medianUuidMs": 0.016406249997089617
+    },
+    "p0_10k": {
+      "direction": "Sequential -> UUID; identical parse API, Document mode, root, and digest including root; ID strategy (including uniqueness bookkeeping) only variable",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 1.7250000000931323,
+          "uuidMs": 2.4874999998137355
+        },
+        {
+          "round": 2,
+          "sequentialMs": 1.7062500000465661,
+          "uuidMs": 2.4624999999068677
+        },
+        {
+          "round": 3,
+          "sequentialMs": 1.7062500000465661,
+          "uuidMs": 2.4624999999068677
+        }
+      ],
+      "medianSequentialMs": 1.7062500000465661,
+      "medianUuidMs": 2.4624999999068677
+    },
+    "p0_100k": {
+      "direction": "Sequential -> UUID; identical parse API, Document mode, root, and digest including root; ID strategy (including uniqueness bookkeeping) only variable",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 16.300000000745058,
+          "uuidMs": 23.899999998509884
+        },
+        {
+          "round": 2,
+          "sequentialMs": 16.400000002235174,
+          "uuidMs": 23.900000002235174
+        },
+        {
+          "round": 3,
+          "sequentialMs": 16.400000002235174,
+          "uuidMs": 24.099999997764826
+        }
+      ],
+      "medianSequentialMs": 16.400000002235174,
+      "medianUuidMs": 23.900000002235174
+    }
+  },
+  "sizes": {
+    "method": "gzip -n -9 -c on each resource separately; raw file SHA-256 identifies the exact retained artifact",
+    "hardBudgetBytes": 204800,
+    "softTargetBytes": 122880,
+    "variants": {
+      "base-z": {
+        "variant": "base-z",
+        "files": [
+          {
+            "file": "mica_md_bg.wasm",
+            "rawBytes": 373086,
+            "gzipBytes": 99157,
+            "sha256": "cb5556bf5704c546c9639b82837bef8dcd13a973b52b562f667d4ae9c3c1f53f"
+          },
+          {
+            "file": "mica_md.js",
+            "rawBytes": 9731,
+            "gzipBytes": 2535,
+            "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+          }
+        ],
+        "transferGzipBytes": 101692,
+        "historicalConcatGzipBytes": 101624,
+        "historicalNodeZlib": {
+          "version": "1.3.1-470d3a2",
+          "wasmGzipBytes": 99620,
+          "jsGzipBytes": 2534,
+          "transferGzipBytes": 102154,
+          "concatGzipBytes": 102184
+        }
+      },
+      "opt-z": {
+        "variant": "opt-z",
+        "files": [
+          {
+            "file": "mica_md_bg.wasm",
+            "rawBytes": 372834,
+            "gzipBytes": 99353,
+            "sha256": "6325bcb80a13845d42972185cfc327f060936dffefa23094e6615f2243c64fff"
+          },
+          {
+            "file": "mica_md.js",
+            "rawBytes": 9731,
+            "gzipBytes": 2535,
+            "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+          }
+        ],
+        "transferGzipBytes": 101888,
+        "historicalConcatGzipBytes": 101824,
+        "historicalNodeZlib": {
+          "version": "1.3.1-470d3a2",
+          "wasmGzipBytes": 99784,
+          "jsGzipBytes": 2534,
+          "transferGzipBytes": 102318,
+          "concatGzipBytes": 102346
+        }
+      },
+      "opt-s": {
+        "variant": "opt-s",
+        "files": [
+          {
+            "file": "mica_md_bg.wasm",
+            "rawBytes": 356341,
+            "gzipBytes": 108345,
+            "sha256": "a07c69699e77262fef2ea15765905335f2f047a217742d31c6c3ca918a0cce9f"
+          },
+          {
+            "file": "mica_md.js",
+            "rawBytes": 9731,
+            "gzipBytes": 2535,
+            "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+          }
+        ],
+        "transferGzipBytes": 110880,
+        "historicalConcatGzipBytes": 110869,
+        "historicalNodeZlib": {
+          "version": "1.3.1-470d3a2",
+          "wasmGzipBytes": 108641,
+          "jsGzipBytes": 2534,
+          "transferGzipBytes": 111175,
+          "concatGzipBytes": 111224
+        }
+      },
+      "opt-3": {
+        "variant": "opt-3",
+        "files": [
+          {
+            "file": "mica_md_bg.wasm",
+            "rawBytes": 322023,
+            "gzipBytes": 120538,
+            "sha256": "c23e37a4163c815567b0ef2f27af73a8af6b147d871c1982f854e164ac81ddbe"
+          },
+          {
+            "file": "mica_md.js",
+            "rawBytes": 9731,
+            "gzipBytes": 2535,
+            "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+          }
+        ],
+        "transferGzipBytes": 123073,
+        "historicalConcatGzipBytes": 122979,
+        "historicalNodeZlib": {
+          "version": "1.3.1-470d3a2",
+          "wasmGzipBytes": 120726,
+          "jsGzipBytes": 2534,
+          "transferGzipBytes": 123260,
+          "concatGzipBytes": 123226
+        }
+      },
+      "opt-z-uuid": {
+        "variant": "opt-z-uuid",
+        "files": [
+          {
+            "file": "mica_md_bg.wasm",
+            "rawBytes": 386346,
+            "gzipBytes": 101372,
+            "sha256": "cbf11e84f3b73ebf4d26c40268ff0f09734cce0d9cf53e124a500ebbf32c12f5"
+          },
+          {
+            "file": "mica_md.js",
+            "rawBytes": 10971,
+            "gzipBytes": 2800,
+            "sha256": "bb98b8d9862d7faa2ab32ef744cd12511faba4a491069e466b3cea4ff2f79d23"
+          }
+        ],
+        "transferGzipBytes": 104172,
+        "historicalConcatGzipBytes": 104174,
+        "historicalNodeZlib": {
+          "version": "1.3.1-470d3a2",
+          "wasmGzipBytes": 101963,
+          "jsGzipBytes": 2800,
+          "transferGzipBytes": 104763,
+          "concatGzipBytes": 104811
+        }
+      }
+    }
+  },
+  "engineInfo": {
+    "crate_version": "0.1.0",
+    "schema_version": 1,
+    "source_fingerprint": "6b193da84a7b630a"
+  },
+  "servedOpt3Assets": {
+    "mica_md.js": {
+      "rawBytes": 9731,
+      "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+    },
+    "mica_md_bg.wasm": {
+      "rawBytes": 322023,
+      "sha256": "c23e37a4163c815567b0ef2f27af73a8af6b147d871c1982f854e164ac81ddbe"
+    }
+  },
+  "servedOptsAssets": {
+    "mica_md.js": {
+      "rawBytes": 9731,
+      "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+    },
+    "mica_md_bg.wasm": {
+      "rawBytes": 356341,
+      "sha256": "a07c69699e77262fef2ea15765905335f2f047a217742d31c6c3ca918a0cce9f"
+    }
+  },
+  "historicalUuidInvalid": true,
+  "sourceCoreCommit": "6594f12",
+  "baseCoreCommit": "12c7ff2",
+  "officialDelivery": false,
+  "uuidArtifact": {
+    "rawBytes": 386453,
+    "sha256": "c0c70213688c44f54778a36821356ca70c491e46bdbab79b57984b97189ae71f",
+    "engineInfo": {
+      "crate_version": "0.1.0",
+      "schema_version": 1,
+      "source_fingerprint": "6b193da84a7b630a"
+    }
+  },
+  "recommendation": "opt-3; all six inputs pass all three rounds; G2 pending review; G1 unresolved; no T2.2+"
+}

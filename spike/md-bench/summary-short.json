@@ -1,0 +1,405 @@
+{
+  "recommendation": "opt-3; all 6 new short-input measurements pass the unchanged 1.2x budget; G2 pending review, T2.2 not started",
+  "variants": {
+    "opt-s": {
+      "browser": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+      "served": {
+        "engineInfo": {
+          "crate_version": "0.1.0",
+          "schema_version": 1,
+          "source_fingerprint": "6b193da84a7b630a"
+        },
+        "artifacts": {
+          "mica_md.js": {
+            "rawBytes": 9731,
+            "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+          },
+          "mica_md_bg.wasm": {
+            "rawBytes": 356341,
+            "sha256": "a07c69699e77262fef2ea15765905335f2f047a217742d31c6c3ca918a0cce9f"
+          }
+        }
+      },
+      "inputs": {
+        "p0_87": {
+          "characters": 87,
+          "rounds": [
+            {
+              "round": 1,
+              "fullMs": 0.01953125,
+              "dartMs": 0.016210937497817213,
+              "ratio": 1.2048192772706614,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 3643221447,
+                "dartFnv": 3643221447,
+                "firstDiff": null,
+                "rustLength": 331,
+                "dartLength": 331
+              }
+            },
+            {
+              "round": 2,
+              "fullMs": 0.018749999999272404,
+              "dartMs": 0.01669921875145519,
+              "ratio": 1.122807017402446,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 3643221447,
+                "dartFnv": 3643221447,
+                "firstDiff": null,
+                "rustLength": 331,
+                "dartLength": 331
+              }
+            },
+            {
+              "round": 3,
+              "fullMs": 0.018652343747817213,
+              "dartMs": 0.016406250000727596,
+              "ratio": 1.1369047617212955,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 3643221447,
+                "dartFnv": 3643221447,
+                "firstDiff": null,
+                "rustLength": 331,
+                "dartLength": 331
+              }
+            }
+          ],
+          "medianRatio": 1.1369047617212955,
+          "fullMsMedian": 0.018749999999272404,
+          "dartMsMedian": 0.016406250000727596,
+          "allRoundsWithinBudget": false
+        },
+        "s0_87": {
+          "characters": 87,
+          "rounds": [
+            {
+              "round": 1,
+              "fullMs": 0.017578125,
+              "dartMs": 0.01601562499854481,
+              "ratio": 1.0975609757094813,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 856505480,
+                "dartFnv": 856505480,
+                "firstDiff": null,
+                "rustLength": 288,
+                "dartLength": 288
+              }
+            },
+            {
+              "round": 2,
+              "fullMs": 0.017968750002182787,
+              "dartMs": 0.01601562499854481,
+              "ratio": 1.1219512197504276,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 856505480,
+                "dartFnv": 856505480,
+                "firstDiff": null,
+                "rustLength": 288,
+                "dartLength": 288
+              }
+            },
+            {
+              "round": 3,
+              "fullMs": 0.017382812500727596,
+              "dartMs": 0.015625,
+              "ratio": 1.1125000000465661,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 856505480,
+                "dartFnv": 856505480,
+                "firstDiff": null,
+                "rustLength": 288,
+                "dartLength": 288
+              }
+            }
+          ],
+          "medianRatio": 1.1125000000465661,
+          "fullMsMedian": 0.017578125,
+          "dartMsMedian": 0.01601562499854481,
+          "allRoundsWithinBudget": true
+        }
+      }
+    },
+    "opt-3": {
+      "browser": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+      "served": {
+        "engineInfo": {
+          "crate_version": "0.1.0",
+          "schema_version": 1,
+          "source_fingerprint": "6b193da84a7b630a"
+        },
+        "artifacts": {
+          "mica_md.js": {
+            "rawBytes": 9731,
+            "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+          },
+          "mica_md_bg.wasm": {
+            "rawBytes": 322023,
+            "sha256": "c23e37a4163c815567b0ef2f27af73a8af6b147d871c1982f854e164ac81ddbe"
+          }
+        }
+      },
+      "inputs": {
+        "p0_87": {
+          "characters": 87,
+          "rounds": [
+            {
+              "round": 1,
+              "fullMs": 0.015527343748544808,
+              "dartMs": 0.015429687497089617,
+              "ratio": 1.0063291140195556,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 3643221447,
+                "dartFnv": 3643221447,
+                "firstDiff": null,
+                "rustLength": 331,
+                "dartLength": 331
+              }
+            },
+            {
+              "round": 2,
+              "fullMs": 0.0146484375,
+              "dartMs": 0.015234375001455192,
+              "ratio": 0.9615384614466151,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 3643221447,
+                "dartFnv": 3643221447,
+                "firstDiff": null,
+                "rustLength": 331,
+                "dartLength": 331
+              }
+            },
+            {
+              "round": 3,
+              "fullMs": 0.015527343752182787,
+              "dartMs": 0.015625,
+              "ratio": 0.9937500001396984,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 3643221447,
+                "dartFnv": 3643221447,
+                "firstDiff": null,
+                "rustLength": 331,
+                "dartLength": 331
+              }
+            }
+          ],
+          "medianRatio": 0.9937500001396984,
+          "fullMsMedian": 0.015527343748544808,
+          "dartMsMedian": 0.015429687497089617,
+          "allRoundsWithinBudget": true
+        },
+        "s0_87": {
+          "characters": 87,
+          "rounds": [
+            {
+              "round": 1,
+              "fullMs": 0.01416015625,
+              "dartMs": 0.0146484375,
+              "ratio": 0.9666666666666667,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 856505480,
+                "dartFnv": 856505480,
+                "firstDiff": null,
+                "rustLength": 288,
+                "dartLength": 288
+              }
+            },
+            {
+              "round": 2,
+              "fullMs": 0.014306640625363798,
+              "dartMs": 0.014843749999272404,
+              "ratio": 0.963815789545436,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 856505480,
+                "dartFnv": 856505480,
+                "firstDiff": null,
+                "rustLength": 288,
+                "dartLength": 288
+              }
+            },
+            {
+              "round": 3,
+              "fullMs": 0.014208984375727596,
+              "dartMs": 0.014746093751455192,
+              "ratio": 0.9635761588946502,
+              "equivalence": {
+                "equal": true,
+                "differingBlocks": 0,
+                "blockCountDelta": 0,
+                "rustFnv": 856505480,
+                "dartFnv": 856505480,
+                "firstDiff": null,
+                "rustLength": 288,
+                "dartLength": 288
+              }
+            }
+          ],
+          "medianRatio": 0.963815789545436,
+          "fullMsMedian": 0.014208984375727596,
+          "dartMsMedian": 0.014746093751455192,
+          "allRoundsWithinBudget": true
+        }
+      }
+    }
+  },
+  "uuid": {
+    "p0_87": {
+      "direction": "Sequential -> UUID; these probes differ in body extraction/root digest, so the delta is not pure RNG time",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 0.019824218750727596,
+          "uuidMs": 0.02138671874854481
+        },
+        {
+          "round": 2,
+          "sequentialMs": 0.0166015625,
+          "uuidMs": 0.02011718750145519
+        },
+        {
+          "round": 3,
+          "sequentialMs": 0.01816406250145519,
+          "uuidMs": 0.022363281252182787
+        }
+      ]
+    },
+    "p0_10k": {
+      "direction": "Sequential -> UUID; these probes differ in body extraction/root digest, so the delta is not pure RNG time",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 2.0375000000931323,
+          "uuidMs": 2.9249999998137355
+        },
+        {
+          "round": 2,
+          "sequentialMs": 2.0125000001862645,
+          "uuidMs": 2.8875000001862645
+        },
+        {
+          "round": 3,
+          "sequentialMs": 2.1124999998137355,
+          "uuidMs": 3.1000000000931323
+        }
+      ]
+    },
+    "p0_100k": {
+      "direction": "Sequential -> UUID; these probes differ in body extraction/root digest, so the delta is not pure RNG time",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 20.699999999254942,
+          "uuidMs": 30.900000002235174
+        },
+        {
+          "round": 2,
+          "sequentialMs": 21.200000002980232,
+          "uuidMs": 31.100000001490116
+        },
+        {
+          "round": 3,
+          "sequentialMs": 21,
+          "uuidMs": 31.300000000745058
+        }
+      ]
+    },
+    "s0_87": {
+      "direction": "Sequential -> UUID; these probes differ in body extraction/root digest, so the delta is not pure RNG time",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 0.01621093750145519,
+          "uuidMs": 0.02001953125
+        },
+        {
+          "round": 2,
+          "sequentialMs": 0.01650390624854481,
+          "uuidMs": 0.01962890625145519
+        },
+        {
+          "round": 3,
+          "sequentialMs": 0.016308593749272404,
+          "uuidMs": 0.02001953125
+        }
+      ]
+    },
+    "s0_10k": {
+      "direction": "Sequential -> UUID; these probes differ in body extraction/root digest, so the delta is not pure RNG time",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 4.175000000745058,
+          "uuidMs": 5.125
+        },
+        {
+          "round": 2,
+          "sequentialMs": 4.125,
+          "uuidMs": 5.574999999254942
+        },
+        {
+          "round": 3,
+          "sequentialMs": 4.1499999994412065,
+          "uuidMs": 5.0499999998137355
+        }
+      ]
+    },
+    "s0_100k": {
+      "direction": "Sequential -> UUID; these probes differ in body extraction/root digest, so the delta is not pure RNG time",
+      "rounds": [
+        {
+          "round": 1,
+          "sequentialMs": 50.900000002235174,
+          "uuidMs": 58.599999997764826
+        },
+        {
+          "round": 2,
+          "sequentialMs": 55.19999999925494,
+          "uuidMs": 63.30000000074506
+        },
+        {
+          "round": 3,
+          "sequentialMs": 51.69999999925494,
+          "uuidMs": 61.80000000074506
+        }
+      ]
+    }
+  },
+  "notes": {
+    "stage3": "parseBody - parseOnly is only an estimate; parseOnly consumes a digest and returns f64; parseBody maps blocks, encodes JSON and returns a string. No isolated stage3 measurement exists.",
+    "unitCorrection": "base-z p0_100k echoJson = 1.56875 ms, not microseconds; p0_87 echoMd = 0.0007568359379 ms = 0.7568359379 microseconds",
+    "inputs": "s0_87 bytes match S0 hotPath87; s0_10k=9997 chars and s0_100k=99972 chars use line cuts, unlike S0 exact substring; approximate representative fixtures only",
+    "sizeMethod": "gzip -n -9 -c on each resource separately; raw file SHA-256 identifies the exact retained artifact"
+  }
+}

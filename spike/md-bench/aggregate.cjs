@@ -41,7 +41,9 @@ function aggregate(files) {
       blocks: runs[0].inputs[key].blocks,
       jsonBytes: runs[0].inputs[key].jsonBytes,
       stages,
-      ratioFullVsDart: stages.full / dart,
+      ratioFullVsDart: median(runs.map(r => r.inputs[key].ratioFullVsDart)),
+      perRunRatios: runs.map(r => r.inputs[key].ratioFullVsDart),
+      legacyRatioOfStageMedians: stages.full / dart,
       equivalence: runs.map((r) => r.inputs[key].equivalence),
     };
   }
@@ -54,12 +56,12 @@ const result = {
     flutter: '3.47.1 / Dart 3.13.1, flutter build web --release --no-web-resources-cdn',
     browser: 'HeadlessChrome/156.0.0.0, Windows 11 build 26300',
     server: 'node static host, no COOP/COEP, Cache-Control: no-store; crossOriginIsolated=false',
-    method: 'Each stage measured in isolated adaptive batches (15 samples, calibrated to ~15 ms per batch), alternating order; round value is the median across 3 independent release runs, then the median across rounds. Dart comparator is the production markdownToBlocks in the same page, same release build.',
+    method: 'Historical runs measured whole stage windows in fixed order, NOT alternating. Ratio = median of per-run(full median / Dart median); legacyRatioOfStageMedians retained for correction audit. The separate summary-final.json uses corrected AB/BA paired samples. Comparator: production markdownToBlocks in the same page and release build.',
   },
-  sizesGzipBytes: {
-    'base-z': 102184, 'opt-z': 102346, 'opt-s': 111224, 'opt-3': 123226,
-    'opt-z-uuid': 104811, threshold: 204800,
-  },
+  sizesGzipBytes: Object.fromEntries(Object.entries(JSON.parse(
+    fs.readFileSync(path.join(dir,'sizes-costs.json'),'utf8')).variants)
+    .map(([name,r]) => [name,r.transferGzipBytes]).concat([['threshold',204800]])),
+  sizeMeasurement: 'GNU gzip 1.14, -n -9; sum of independently compressed resources, diagnostic spike upper bound only; see sizes-costs.json hashes and historical Node zlib records',
   initMs: {
     'base-z': loadInit('init-base-z.txt'),
     'opt-z': loadInit('init-opt-z.txt'),

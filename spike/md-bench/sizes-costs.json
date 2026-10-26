@@ -1,0 +1,137 @@
+{
+  "method": "gzip -n -9 -c on each resource separately; raw file SHA-256 identifies the exact retained artifact",
+  "hardBudgetBytes": 204800,
+  "softTargetBytes": 122880,
+  "variants": {
+    "base-z": {
+      "variant": "base-z",
+      "files": [
+        {
+          "file": "mica_md_bg.wasm",
+          "rawBytes": 373086,
+          "gzipBytes": 99157,
+          "sha256": "cb5556bf5704c546c9639b82837bef8dcd13a973b52b562f667d4ae9c3c1f53f"
+        },
+        {
+          "file": "mica_md.js",
+          "rawBytes": 9731,
+          "gzipBytes": 2535,
+          "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+        }
+      ],
+      "transferGzipBytes": 101692,
+      "historicalConcatGzipBytes": 101624,
+      "historicalNodeZlib": {
+        "version": "1.3.1-470d3a2",
+        "wasmGzipBytes": 99620,
+        "jsGzipBytes": 2534,
+        "transferGzipBytes": 102154,
+        "concatGzipBytes": 102184
+      }
+    },
+    "opt-z": {
+      "variant": "opt-z",
+      "files": [
+        {
+          "file": "mica_md_bg.wasm",
+          "rawBytes": 372834,
+          "gzipBytes": 99353,
+          "sha256": "6325bcb80a13845d42972185cfc327f060936dffefa23094e6615f2243c64fff"
+        },
+        {
+          "file": "mica_md.js",
+          "rawBytes": 9731,
+          "gzipBytes": 2535,
+          "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+        }
+      ],
+      "transferGzipBytes": 101888,
+      "historicalConcatGzipBytes": 101824,
+      "historicalNodeZlib": {
+        "version": "1.3.1-470d3a2",
+        "wasmGzipBytes": 99784,
+        "jsGzipBytes": 2534,
+        "transferGzipBytes": 102318,
+        "concatGzipBytes": 102346
+      }
+    },
+    "opt-s": {
+      "variant": "opt-s",
+      "files": [
+        {
+          "file": "mica_md_bg.wasm",
+          "rawBytes": 356341,
+          "gzipBytes": 108345,
+          "sha256": "a07c69699e77262fef2ea15765905335f2f047a217742d31c6c3ca918a0cce9f"
+        },
+        {
+          "file": "mica_md.js",
+          "rawBytes": 9731,
+          "gzipBytes": 2535,
+          "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+        }
+      ],
+      "transferGzipBytes": 110880,
+      "historicalConcatGzipBytes": 110869,
+      "historicalNodeZlib": {
+        "version": "1.3.1-470d3a2",
+        "wasmGzipBytes": 108641,
+        "jsGzipBytes": 2534,
+        "transferGzipBytes": 111175,
+        "concatGzipBytes": 111224
+      }
+    },
+    "opt-3": {
+      "variant": "opt-3",
+      "files": [
+        {
+          "file": "mica_md_bg.wasm",
+          "rawBytes": 322023,
+          "gzipBytes": 120538,
+          "sha256": "c23e37a4163c815567b0ef2f27af73a8af6b147d871c1982f854e164ac81ddbe"
+        },
+        {
+          "file": "mica_md.js",
+          "rawBytes": 9731,
+          "gzipBytes": 2535,
+          "sha256": "5e3b027004bb4cd812ab5025871df36b5608ef739e9057dcfec7bb5af7ac54cf"
+        }
+      ],
+      "transferGzipBytes": 123073,
+      "historicalConcatGzipBytes": 122979,
+      "historicalNodeZlib": {
+        "version": "1.3.1-470d3a2",
+        "wasmGzipBytes": 120726,
+        "jsGzipBytes": 2534,
+        "transferGzipBytes": 123260,
+        "concatGzipBytes": 123226
+      }
+    },
+    "opt-z-uuid": {
+      "variant": "opt-z-uuid",
+      "files": [
+        {
+          "file": "mica_md_bg.wasm",
+          "rawBytes": 386346,
+          "gzipBytes": 101372,
+          "sha256": "cbf11e84f3b73ebf4d26c40268ff0f09734cce0d9cf53e124a500ebbf32c12f5"
+        },
+        {
+          "file": "mica_md.js",
+          "rawBytes": 10971,
+          "gzipBytes": 2800,
+          "sha256": "bb98b8d9862d7faa2ab32ef744cd12511faba4a491069e466b3cea4ff2f79d23"
+        }
+      ],
+      "transferGzipBytes": 104172,
+      "historicalConcatGzipBytes": 104174,
+      "historicalNodeZlib": {
+        "version": "1.3.1-470d3a2",
+        "wasmGzipBytes": 101963,
+        "jsGzipBytes": 2800,
+        "transferGzipBytes": 104763,
+        "concatGzipBytes": 104811
+      }
+    }
+  }
+}

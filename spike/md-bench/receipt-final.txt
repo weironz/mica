@@ -1,0 +1,32 @@
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src\lib.rs (spike\md-wasm-p0\target\release\deps\mica_md_wasm_p0-a750f9c41e378c07.exe)
+
+running 1 test
+test tests::matched_id_probes_have_equal_consumed_values ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests\equivalence.rs (spike\md-wasm-p0\target\release\deps\equivalence-4e09e94f7d55dd40.exe)
+
+running 3 tests
+test uuid_and_sequential_differ_only_in_ids ... ok
+test optimized_core_matches_p0_golden ... ok
+test wire_marks_are_sorted ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+   Doc-tests mica_md_wasm_p0
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+==> receipt: 4 passed (floor 4)
+bash scripts/check-file-size.sh
+WARN  clients/mica_flutter/lib/editor/controller.dart（library，3 个文件合计） — 4139 行，超过软上限 4000（排期拆分参考）
+WARN  clients/mica_flutter/lib/editor/editor.dart（library，6 个文件合计） — 7192 行，超过软上限 4000（排期拆分参考）
+WARN  clients/mica_flutter/lib/editor/render.dart（library，4 个文件合计） — 5739 行，超过软上限 4000（排期拆分参考）
+WARN  clients/mica_flutter/lib/main.dart（library，18 个文件合计） — 21088 行，超硬上限 8000（已在预算登记，由棘轮「只许减」约束——涨一行即失败）
+WARN  crates/mica-core/src/store.rs — 5627 行，超过软上限 4000（排期拆分参考）
+file-size gate: passed（含上方 WARN/INFO 清单）
+==> no ignored source files
