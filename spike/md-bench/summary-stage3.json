@@ -1,0 +1,189 @@
+{
+  "method": "Rust internal performance.now intervals; parsing/reference wire/clone prep untimed; projection normalizes owned cloned blocks; serde_json::to_string measured separately; full output consumed and compared outside timers; JS return excluded",
+  "mirror": "spike-only wire projection mirror, production core unchanged; every sample byte-equal to real wire JSON",
+  "compiler": "Rust 1.98.0 stable, wasm32-unknown-unknown, opt-level 3, LTO, one codegen unit; wasm-bindgen 0.2.129",
+  "browser": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+  "crossOriginIsolated": false,
+  "artifacts": {
+    "mica_md.js": {
+      "bytes": 11968,
+      "sha256": "b54acf6b40bc066cbb039f25d692ff25e268c0a9afceeb9d6068ccab1a15ab82"
+    },
+    "mica_md_bg.wasm": {
+      "bytes": 344548,
+      "sha256": "a3d4d17ed520eed285e0a7fcaf680012ce8810f9645b906ecec702b21485472d"
+    }
+  },
+  "timerRounds": [
+    {
+      "callLoopMs": 0.00021199999999254942,
+      "iterations": 100000,
+      "minNonzeroTickMs": 0.09999999776482582,
+      "sink": 411592326.800127,
+      "totalMs": 21.199999999254942
+    },
+    {
+      "callLoopMs": 0.00020300000000745058,
+      "iterations": 100000,
+      "minNonzeroTickMs": 0.09999999776482582,
+      "sink": 699171139.4999684,
+      "totalMs": 20.300000000745058
+    },
+    {
+      "callLoopMs": 0.00020300000000745058,
+      "iterations": 100000,
+      "minNonzeroTickMs": 0.09999999776482582,
+      "sink": 977820073.7999768,
+      "totalMs": 20.300000000745058
+    }
+  ],
+  "inputs": {
+    "p0_87": {
+      "characters": 87,
+      "rounds": [
+        {
+          "round": 1,
+          "iterations": 8192,
+          "projectionMs": 0.0006591796873181011,
+          "encodeMs": 0.0009033203127728484,
+          "wireByteEqual": true,
+          "jsonBytes": 281,
+          "blocks": 1,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        },
+        {
+          "round": 2,
+          "iterations": 8192,
+          "projectionMs": 0.0005859375000909495,
+          "encodeMs": 0.0008911132813409495,
+          "wireByteEqual": true,
+          "jsonBytes": 281,
+          "blocks": 1,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        },
+        {
+          "round": 3,
+          "iterations": 8192,
+          "projectionMs": 0.0005737304686590505,
+          "encodeMs": 0.0008789062499090505,
+          "wireByteEqual": true,
+          "jsonBytes": 281,
+          "blocks": 1,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        }
+      ],
+      "projectionMedianMs": 0.0005859375000909495,
+      "encodeMedianMs": 0.0008911132813409495
+    },
+    "p0_10k": {
+      "characters": 10000,
+      "rounds": [
+        {
+          "round": 1,
+          "iterations": 128,
+          "projectionMs": 0.05078125,
+          "encodeMs": 0.08749999999417923,
+          "wireByteEqual": true,
+          "jsonBytes": 33051,
+          "blocks": 305,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        },
+        {
+          "round": 2,
+          "iterations": 128,
+          "projectionMs": 0.05546875001164153,
+          "encodeMs": 0.0890625000174623,
+          "wireByteEqual": true,
+          "jsonBytes": 33051,
+          "blocks": 305,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        },
+        {
+          "round": 3,
+          "iterations": 128,
+          "projectionMs": 0.057031250005820766,
+          "encodeMs": 0.09062500001164153,
+          "wireByteEqual": true,
+          "jsonBytes": 33051,
+          "blocks": 305,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        }
+      ],
+      "projectionMedianMs": 0.05546875001164153,
+      "encodeMedianMs": 0.0890625000174623
+    },
+    "p0_100k": {
+      "characters": 100000,
+      "rounds": [
+        {
+          "round": 1,
+          "iterations": 16,
+          "projectionMs": 0.5500000000465661,
+          "encodeMs": 0.8687500001396984,
+          "wireByteEqual": true,
+          "jsonBytes": 330603,
+          "blocks": 3057,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        },
+        {
+          "round": 2,
+          "iterations": 16,
+          "projectionMs": 0.5374999998603016,
+          "encodeMs": 0.875,
+          "wireByteEqual": true,
+          "jsonBytes": 330603,
+          "blocks": 3057,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        },
+        {
+          "round": 3,
+          "iterations": 16,
+          "projectionMs": 0.5562499999068677,
+          "encodeMs": 0.8812499998603016,
+          "wireByteEqual": true,
+          "jsonBytes": 330603,
+          "blocks": 3057,
+          "engineInfo": {
+            "crate_version": "0.1.0",
+            "schema_version": 1,
+            "source_fingerprint": "6b193da84a7b630a"
+          }
+        }
+      ],
+      "projectionMedianMs": 0.5500000000465661,
+      "encodeMedianMs": 0.875
+    }
+  }
+}

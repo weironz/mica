@@ -80,5 +80,7 @@ const doc=path.resolve(dir,'../../docs/single-source/stages/S2-bindings.md');
 const text=fs.readFileSync(doc,'utf8');
 const marker='### P0 成本归因与候选优化';
 const start=text.indexOf(marker);assert(start>=0);
-fs.writeFileSync(doc,text.slice(0,start)+lines.join('\n'));
+// Preserve independently appended experiments when regenerating this section.
+const next=text.indexOf('\n### ',start+marker.length);
+fs.writeFileSync(doc,text.slice(0,start)+lines.join('\n')+(next<0?'':text.slice(next)));
 console.log(JSON.stringify({opt3:Object.fromEntries(Object.entries(final.opt3).map(([k,v])=>[k,v.medianRatio])),opts:Object.fromEntries(Object.entries(final.optsShort).map(([k,v])=>[k,v.medianRatio])),gzip:s.transferGzipBytes},null,2));

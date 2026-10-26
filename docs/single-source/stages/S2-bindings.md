@@ -371,3 +371,43 @@ measure_sizes.cjs 对保留的每个实际产物执行 **GNU gzip 1.14 -n -9 -c*
 - 本轮新增/修正仅 spike 与本执行记录，核心6594f12未再改动。final host receipt **4 passed（floor 4）**：7输入原Rust wire JSON SHA-256黄金、marks排序、UUID/Sequential块等价、匹配探针消费值等价。shellcheck、just check-structure、check-ignored-sources通过（receipt-final.txt）。此前核心55 passed/1 ignored、facade185 passed保留，非本轮重复跑大套件。
 - **推荐 opt-3：硬预算全部达标，G2待审核正式判定；G1仍阻塞，T2.2未启动。** 不问用户重复选配置，不合并/推送/发版。Firefox/Safari、桌面FFI及正式十API wasm体积未验证；stage3独立绝对成本仍未验证，粗估仅供理解。
 - 本轮raw数据：final-opt3-paired.txt、final-opts-short-paired.txt、final-ids-paired.txt；summary-final.json与sizes-costs.json为最终汇总。旧数据不删除，不回写观测值。
+
+### P0 Stage 3 孤立计时补充（T2.1，2026-10-27）
+
+此前 Stage 3 的差值估计不足以完成原任务，本节新增独立计时，不覆盖 f706c9b 的原始观测。只改 spike 与执行记录，core6594f12没有新增变化；正式S2仍停，G2待审核。
+
+**实现/方法**：spike/md-wasm-p0/src/stage3.rs 复现私有 wire 投影helper（投影镜像探针，非生产改动），将拥有所有权的Block移成BlockJson，执行相同null→{}与稳定marks排序。每次调用先parse_body一次准备被测blocks；另调真实wire生成参考JSON。两次解析、深clone输入准备、外层预分配均在计时外。内部以导入performance.now量两段：①投影/规范化（含内部Vec分配、id/children销毁），②serde_json::to_string编码（含String分配）；编码返回的完整String保留，计时结束后每字节参与checksum并与真实wire JSON逐字节相等才接受数据。JS只收到小metrics JSON；完整文档字符串跨JS返回不在编码计时中。没有缓存解析结果替代生产路径。
+
+真实Flutter release仍由preview_start静态托管、Playwright Chrome156打开，noCOOP/COEP且crossOriginIsolated=false。本轮只调用JS诊断导出进入Rust，不改Flutter Dart生产路径。opt-level=3/LTO/单codegen unit、stable1.98.0/wasm-bindgen0.2.129；原P0输入87/10000/100000字节保持。每档每轮3个预热调用+15个计时调用，各调用内87字符重复8192次、1万128次、10万16次；三轮原始数据全部保存。
+
+| 输入/实际字符 | 轮次 | 每调用批次数 | 投影/规范化 ms/次 | Rust JSON编码 ms/次 | wire字节等价 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| p0_87/87 | 1 | 8192 | 0.000659180 | 0.000903320 | 通过 |
+| p0_87/87 | 2 | 8192 | 0.000585938 | 0.000891113 | 通过 |
+| p0_87/87 | 3 | 8192 | 0.000573730 | 0.000878906 | 通过 |
+| p0_10k/10000 | 1 | 128 | 0.050781250 | 0.087500000 | 通过 |
+| p0_10k/10000 | 2 | 128 | 0.055468750 | 0.089062500 | 通过 |
+| p0_10k/10000 | 3 | 128 | 0.057031250 | 0.090625000 | 通过 |
+| p0_100k/100000 | 1 | 16 | 0.550000000 | 0.868750000 | 通过 |
+| p0_100k/100000 | 2 | 16 | 0.537500000 | 0.875000000 | 通过 |
+| p0_100k/100000 | 3 | 16 | 0.556250000 | 0.881250000 | 通过 |
+
+| 输入 | 三轮投影中位 ms | 三轮编码中位 ms |
+| --- | ---: | ---: |
+| p0_87 | 0.000585938 | 0.000891113 |
+| p0_10k | 0.055468750 | 0.089062500 |
+| p0_100k | 0.550000000 | 0.875000000 |
+
+**计时器开销原始数据**（不扣减）：每轮在Rust循环调用performance.now 100000次，包含导入调用/循环/累加，总时长与摊薄值如下。
+
+| 轮次 | 总时长 ms | call+loop ms/次 | 最小非零tick ms |
+| --- | ---: | ---: | ---: |
+| 1 | 21.199999999 | 0.000212000 | 0.099999998 |
+| 2 | 20.300000001 | 0.000203000 | 0.099999998 |
+| 3 | 20.300000001 | 0.000203000 | 0.099999998 |
+
+**限制**：这是相同投影的镜像探针，不能代替未来正式wire代码防漂移；host测试7个输入逐字节比真实wire，每次浏览器调用也全量比对。内部批量保留多个投影/JSON输出，内存驻留、allocator/缓存/GC与单次完整调用不同；clone准备不计时但会改变缓存热度。只对稳定batch取中位，不能把这些数与parse/boundary/Dart阶段简单相加。performance.now约0.1ms量化，通过批量摊薄，不把底噪中位数相减作精确校正。所有映射均消费，JSON String为完整字节比较/校验，不是只数长度；计时段不包括JSON输出销毁与JS返回。
+
+**验证/产物关联**：receipt-stage3.txt为**6 passed（floor6）**（先前4项+7输入投影镜像wire字节等价+null/tie排序检查），shellcheck/structure/ignored-source门禁通过。实际served wasm/JS SHA-256与保留stage3-opt3产物核对一致，core fingerprint记录在summary-stage3.json。新增诊断导出产物仅用于stage3，未冒充原123073B预算产物。
+
+数据入口：spike/md-bench/stage3-opt3-raw.txt、summary-stage3.json、receipt-stage3.txt；复现脚本run_stage3.cjs/report_stage3.cjs、探针src/stage3.rs。Stage3归因缺口至此由独立测量补齐；正式S2仍未启动。

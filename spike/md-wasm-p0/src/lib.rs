@@ -5,6 +5,8 @@
 //! No caching, no structured JS objects, no shortcut around the wire format:
 //! `parseBody` is exactly `mica_md::wire::parse_body_json` (§3.3).
 
+mod stage3;
+
 use mica_md::{ParseMode, wire};
 use wasm_bindgen::prelude::*;
 
