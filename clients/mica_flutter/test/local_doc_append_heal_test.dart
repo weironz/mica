@@ -44,24 +44,30 @@ class _FakeStore implements MicaStore {
   final List<MicaDocument> saved = [];
 
   @override
-  MicaDocument? loadDoc({required String docId}) => doc;
+  MicaDocument? loadDoc({required String origin, required String docId}) => doc;
 
   @override
-  int appendUpdate({required String docId, required List<int> update}) =>
-      appendResult;
+  int appendUpdate({
+    required String origin,
+    required String docId,
+    required List<int> update,
+  }) => appendResult;
 
   @override
-  void saveDoc({required String docId, required MicaDocument doc}) =>
-      saved.add(doc);
+  void saveDoc({
+    required String origin,
+    required String docId,
+    required MicaDocument doc,
+  }) => saved.add(doc);
 
   @override
-  bool compactLocal({required String docId}) => true;
+  bool compactLocal({required String origin, required String docId}) => true;
 
   @override
-  void checkpointDoc({required String docId}) {}
+  void checkpointDoc({required String origin, required String docId}) {}
 
   @override
-  (int, int) logSizes({required String docId}) => (0, 0);
+  (int, int) logSizes({required String origin, required String docId}) => (0, 0);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
@@ -73,7 +79,7 @@ void main() {
   test('a failed append writes the live doc as the base instead', () async {
     final doc = _FakeDoc();
     final store = _FakeStore(doc);
-    final backend = LocalDocBackend.open(store, 'd');
+    final backend = LocalDocBackend.open(store, 'local', 'd');
 
     store.appendResult = 0; // the store errored
     await backend.applyOps(const []);
@@ -84,7 +90,7 @@ void main() {
 
   test('a successful append does not pay for a full save', () async {
     final store = _FakeStore(_FakeDoc());
-    final backend = LocalDocBackend.open(store, 'd');
+    final backend = LocalDocBackend.open(store, 'local', 'd');
 
     await backend.applyOps(const []);
 

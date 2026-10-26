@@ -85,7 +85,10 @@ extension type _IdbRequest(JSObject _) implements JSObject {
 
 extension type _IdbDatabase(JSObject _) implements JSObject {
   external JSObject createObjectStore(String name);
-  external _IdbTransaction transaction(JSArray<JSString> storeNames, String mode);
+  external _IdbTransaction transaction(
+    JSArray<JSString> storeNames,
+    String mode,
+  );
   external _DomStringList get objectStoreNames;
   external void close();
 }
@@ -140,7 +143,8 @@ Future<void> _completed(_IdbTransaction t) {
 /// storage layer tests run without the yjs bundle (replay correctness is
 /// covered by the desktop `load_doc` tests + the cross-engine wire-compat
 /// suite; here the subject is IndexedDB durability).
-typedef WebDocReplay = Uint8List Function(Uint8List base, List<Uint8List> updates);
+typedef WebDocReplay =
+    Uint8List Function(Uint8List base, List<Uint8List> updates);
 
 Uint8List _yjsReplay(Uint8List base, List<Uint8List> updates) {
   final doc = MicaYDoc.fromState(base);
@@ -166,6 +170,10 @@ class WebIdbDocStore implements CloudDocStore {
   final Completer<void>? _releaseLock;
 
   static const _dbName = 'mica-localfirst';
+
+  /// The production browser database — public so platform helpers can default
+  /// to it while tests pass a throwaway name (see [open]'s seams).
+  static const defaultDbName = _dbName;
   static const _storeNames = ['base', 'outbox', 'remote', 'cursor'];
 
   static JSArray<JSString> get _jsStoreNames =>
@@ -219,8 +227,7 @@ class WebIdbDocStore implements CloudDocStore {
         release.complete();
         return null;
       }
-      final store =
-          WebIdbDocStore._(db, key, replay ?? _yjsReplay, release);
+      final store = WebIdbDocStore._(db, key, replay ?? _yjsReplay, release);
       await store._hydrate();
       return store;
     } catch (_) {
@@ -353,8 +360,9 @@ class WebIdbDocStore implements CloudDocStore {
 
   /// A stored byte payload comes back from `dartify` as a typed list or a
   /// plain JS number array depending on the engine — normalize to Uint8List.
-  static Uint8List _bytes(List<dynamic> raw) =>
-      raw is Uint8List ? raw : Uint8List.fromList(raw.cast<num>().map((n) => n.toInt()).toList());
+  static Uint8List _bytes(List<dynamic> raw) => raw is Uint8List
+      ? raw
+      : Uint8List.fromList(raw.cast<num>().map((n) => n.toInt()).toList());
 
   // ── write-behind mirror ──────────────────────────────────────────────────
   //
@@ -380,15 +388,19 @@ class WebIdbDocStore implements CloudDocStore {
 
   void _mirror(void Function(_IdbTransaction txn) write) {
     if (_broken) return;
-    _tail = _tail.then((_) async {
-      if (_broken) return; // an earlier queued write failed → freeze consistently
-      final txn = _db.transaction(_jsStoreNames, 'readwrite');
-      final done = _completed(txn);
-      write(txn);
-      await done;
-    }).catchError((_) {
-      _broken = true; // freeze + further appends report failure → session self-heals
-    });
+    _tail = _tail
+        .then((_) async {
+          if (_broken)
+            return; // an earlier queued write failed → freeze consistently
+          final txn = _db.transaction(_jsStoreNames, 'readwrite');
+          final done = _completed(txn);
+          write(txn);
+          await done;
+        })
+        .catchError((_) {
+          _broken =
+              true; // freeze + further appends report failure → session self-heals
+        });
   }
 
   void _put(_IdbTransaction txn, String store, Map<String, Object> record) {
@@ -445,9 +457,16 @@ class WebIdbDocStore implements CloudDocStore {
   void save(Uint8List state, int cursor) {
     _base = state;
     if (cursor > _lastSyncedRid) _lastSyncedRid = cursor;
+    // SNAPSHOT AT ENQUEUE (issue #161): the closure may run turns later, after
+    // a compact has cleared/ahead the in-memory logs. Capturing the records
+    // here keeps each queued transaction a faithful snapshot of the state it
+    // was queued for; reading shared fields inside the closure would let a
+    // later mutation tear what this one commits.
+    final base = {'state': state};
+    final cursorRec = _cursorRecord();
     _mirror((txn) {
-      _put(txn, 'base', {'state': state});
-      _put(txn, 'cursor', _cursorRecord());
+      _put(txn, 'base', base);
+      _put(txn, 'cursor', cursorRec);
     });
   }
 
@@ -460,7 +479,8 @@ class WebIdbDocStore implements CloudDocStore {
     final maxClock = _outbox.isEmpty ? 0 : _outbox.last.clock;
     final clock = (maxClock > _pushedClock ? maxClock : _pushedClock) + 1;
     _outbox.add((clock: clock, bytes: diff));
-    _mirror((txn) => _put(txn, 'outbox', _outboxRecord()));
+    final record = _outboxRecord(); // snapshot at enqueue (#161)
+    _mirror((txn) => _put(txn, 'outbox', record));
     return clock;
   }
 
@@ -478,7 +498,8 @@ class WebIdbDocStore implements CloudDocStore {
   void advance({int? lastSyncedRid, int? pushedClock}) {
     if (lastSyncedRid != null) _lastSyncedRid = lastSyncedRid;
     if (pushedClock != null) _pushedClock = pushedClock;
-    _mirror((txn) => _put(txn, 'cursor', _cursorRecord()));
+    final record = _cursorRecord(); // snapshot at enqueue (#161)
+    _mirror((txn) => _put(txn, 'cursor', record));
   }
 
   @override
@@ -486,7 +507,8 @@ class WebIdbDocStore implements CloudDocStore {
     // Clamp like the desktop primitive: never delete un-pushed entries.
     final upTo = pushedClock < _pushedClock ? pushedClock : _pushedClock;
     _outbox.removeWhere((e) => e.clock <= upTo);
-    _mirror((txn) => _put(txn, 'outbox', _outboxRecord()));
+    final record = _outboxRecord(); // snapshot at enqueue (#161)
+    _mirror((txn) => _put(txn, 'outbox', record));
   }
 
   @override
@@ -497,9 +519,11 @@ class WebIdbDocStore implements CloudDocStore {
       _remote.sort((a, b) => a.rid.compareTo(b.rid));
     }
     if (rid > _lastSyncedRid) _lastSyncedRid = rid;
+    final remoteRec = _remoteRecord(); // snapshot at enqueue (#161)
+    final cursorRec = _cursorRecord();
     _mirror((txn) {
-      _put(txn, 'remote', _remoteRecord());
-      _put(txn, 'cursor', _cursorRecord());
+      _put(txn, 'remote', remoteRec);
+      _put(txn, 'cursor', cursorRec);
     });
     return true;
   }
@@ -514,9 +538,11 @@ class WebIdbDocStore implements CloudDocStore {
       if (i.rid > _lastSyncedRid) _lastSyncedRid = i.rid;
     }
     _remote.sort((a, b) => a.rid.compareTo(b.rid));
+    final remoteRec = _remoteRecord(); // snapshot at enqueue (#161)
+    final cursorRec = _cursorRecord();
     _mirror((txn) {
-      _put(txn, 'remote', _remoteRecord());
-      _put(txn, 'cursor', _cursorRecord());
+      _put(txn, 'remote', remoteRec);
+      _put(txn, 'cursor', cursorRec);
     });
     return true;
   }
@@ -532,11 +558,18 @@ class WebIdbDocStore implements CloudDocStore {
     _base = folded;
     _remote.clear();
     _outbox.removeWhere((e) => e.clock <= _pushedClock);
+    // Snapshot at enqueue (#161): a queued appendRemoteBatch BEFORE this call
+    // keeps its own pre-clear remote rows; only this transaction carries the
+    // cleared log.
+    final base = {'state': folded};
+    final remoteRec = _remoteRecord();
+    final outboxRec = _outboxRecord();
+    final cursorRec = _cursorRecord();
     _mirror((txn) {
-      _put(txn, 'base', {'state': folded});
-      _put(txn, 'remote', _remoteRecord());
-      _put(txn, 'outbox', _outboxRecord());
-      _put(txn, 'cursor', _cursorRecord());
+      _put(txn, 'base', base);
+      _put(txn, 'remote', remoteRec);
+      _put(txn, 'outbox', outboxRec);
+      _put(txn, 'cursor', cursorRec);
     });
   }
 

@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2 §7 upstream differ: the offline-insert image reconcile, end-to-end against a
 // live stack.
 //
@@ -30,7 +31,7 @@ const _password = 'password123';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   Future<String> login() async {

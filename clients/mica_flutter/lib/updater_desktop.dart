@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'l10n/locale_controller.dart';
 import 'updater_common.dart';
@@ -20,6 +21,16 @@ export 'updater_common.dart';
 
 /// Whether this build can update itself in place (only the Windows installer).
 bool get updateSupported => Platform.isWindows;
+
+/// How long the installer download may wait for the server to send response
+/// headers before the attempt is abandoned. A server that accepts the TCP
+/// connection and then says nothing used to hang the download page forever.
+const Duration kUpdateResponseTimeout = Duration(seconds: 20);
+
+/// The longest allowed GAP between body chunks. Deliberately an idle timeout,
+/// not a total deadline: a large installer on a slow-but-progressing link must
+/// finish, while a connection that stalls mid-body must fail promptly.
+const Duration kUpdateBodyIdleTimeout = Duration(seconds: 30);
 
 /// Query GitHub for the latest release; return it only if it is newer than
 /// [currentVersion] and ships a `Mica-Setup-*.exe` asset. Returns null when
@@ -67,53 +78,90 @@ Future<UpdateInfo?> checkForUpdate(String currentVersion) async {
   );
 }
 
-/// Download the installer to a temp file (reporting 0..1 progress), then launch
-/// it silently and quit. The installer closes this app (already exiting),
-/// installs the new version, and relaunches it.
-Future<void> downloadAndApplyUpdate(
+/// Download the installer into a fresh temp dir and verify it, returning the
+/// verified file. The dir is deleted on EVERY failure — network error, timeout,
+/// non-200, write error, integrity mismatch — so a retry loop cannot fill TEMP
+/// with half-installers. Only a caller that successfully hands the file to the
+/// installer (`downloadAndApplyUpdate`) keeps it.
+///
+/// `responseTimeout`/`idleTimeout` are overridable so tests can exercise the
+/// failure modes in milliseconds instead of half a minute.
+Future<File> _downloadInstaller(
   UpdateInfo info, {
   void Function(double progress)? onProgress,
+  Duration responseTimeout = kUpdateResponseTimeout,
+  Duration idleTimeout = kUpdateBodyIdleTimeout,
 }) async {
-  if (!Platform.isWindows) {
-    throw UnsupportedError(l10nNoContext.updaterWindowsOnly);
-  }
-
   final dir = await Directory.systemTemp.createTemp('mica_update_');
   final setup = File('${dir.path}/Mica-Setup-${info.version}.exe');
 
   final client = http.Client();
+  var keep = false;
   try {
-    final resp = await client.send(
-      http.Request('GET', Uri.parse(info.downloadUrl)),
-    );
+    final resp = await client
+        .send(http.Request('GET', Uri.parse(info.downloadUrl)))
+        .timeout(responseTimeout);
     if (resp.statusCode != 200) {
       throw Exception(l10nNoContext.updaterDownloadFailed(resp.statusCode));
     }
     final total = resp.contentLength ?? 0;
     var received = 0;
-    final sink = setup.openWrite();
+    final file = await setup.open(mode: FileMode.write);
     try {
-      await for (final chunk in resp.stream) {
-        sink.add(chunk);
+      // Reset the timeout per chunk so progressing downloads have no total
+      // deadline. Await writes so disk errors propagate through this attempt.
+      await for (final chunk in resp.stream.timeout(idleTimeout)) {
+        await file.writeFrom(chunk);
         received += chunk.length;
         if (total > 0) onProgress?.call(received / total);
       }
     } finally {
-      await sink.close();
+      await file.close();
     }
 
     // Verify BEFORE running it: this launches an installer with the user's
     // privileges, so a truncated or swapped file must be rejected, never run.
     final bytes = await setup.readAsBytes();
     if (!installerMatches(bytes, size: info.size, sha256: info.sha256)) {
-      await _discard(setup);
-      // Typed so the UI can show the "aborted, and here is why that's fine" card
-      // for *this* case only, and keep a plain retry for network failures.
       throw UpdateIntegrityException(l10nNoContext.updaterIntegrityFailed);
     }
+    keep = true;
+    return setup;
   } finally {
     client.close();
+    if (!keep) await _removeDir(dir);
   }
+}
+
+/// Launches the installer (a seam so failure-path cleanup is testable).
+typedef InstallerLauncher =
+    Future<void> Function(String path, List<String> args);
+
+/// Ends the process (a seam so tests do not kill their own runner).
+typedef ProcessQuitter = void Function(int code);
+
+/// Download the installer to a temp file (reporting 0..1 progress), then launch
+/// it silently and quit. The installer closes this app (already exiting),
+/// installs the new version, and relaunches it.
+Future<void> downloadAndApplyUpdate(
+  UpdateInfo info, {
+  void Function(double progress)? onProgress,
+  Duration responseTimeout = kUpdateResponseTimeout,
+  Duration idleTimeout = kUpdateBodyIdleTimeout,
+  @visibleForTesting InstallerLauncher? launcher,
+  @visibleForTesting ProcessQuitter? quit,
+}) async {
+  if (!Platform.isWindows) {
+    throw UnsupportedError(l10nNoContext.updaterWindowsOnly);
+  }
+
+  final setup = await _downloadInstaller(
+    info,
+    onProgress: onProgress,
+    responseTimeout: responseTimeout,
+    idleTimeout: idleTimeout,
+  );
+  final dir = setup.parent;
 
   // Start Setup only AFTER this process is gone.
   //
@@ -140,18 +188,28 @@ Future<void> downloadAndApplyUpdate(
   // spaced path needs no hand-quoting. `/SUPPRESSMSGBOXES` stays gone — a visible
   // prompt beats a silent rollback; the log is there to read when someone
   // reports "it didn't update".
-  final logPath = '${dir.path}\\inno-install.log';
-  // Persist edits BEFORE Setup starts its countdown on our PID.
-  await flushBeforeExit();
-  await Process.start(
-    setup.path,
-    setupArgs(logPath: logPath, waitPid: pid),
-    mode: ProcessStartMode.detached,
-  );
+  try {
+    final logPath = '${dir.path}\\inno-install.log';
+    // Persist edits BEFORE Setup starts its countdown on our PID.
+    await flushBeforeExit();
+    await (launcher ?? _startInstaller)(
+      setup.path,
+      setupArgs(logPath: logPath, waitPid: pid),
+    );
+  } catch (_) {
+    // The installer never started, so this download is useless: do not leave it
+    // where a later attempt (or a virus scanner) has to deal with it.
+    await _removeDir(dir);
+    rethrow;
+  }
 
   // Quit immediately: every millisecond spent here is one Setup may have to
   // spend waiting on our PID.
-  exit(0);
+  (quit ?? exit)(0);
+}
+
+Future<void> _startInstaller(String path, List<String> args) async {
+  await Process.start(path, args, mode: ProcessStartMode.detached);
 }
 
 /// The command line the in-app updater hands the Inno installer. A LIST (argv),
@@ -203,10 +261,10 @@ bool installerMatches(List<int> bytes, {int? size, String? sha256}) {
   return sha256Hex(bytes) == sha256;
 }
 
-/// Best-effort delete of a rejected/failed installer download, so a corrupt file
-/// is never left where a later run might pick it up.
-Future<void> _discard(File f) async {
+/// Best-effort delete of one attempt's temp dir, so neither a rejected
+/// installer nor a partial download is left where a later run might pick it up.
+Future<void> _removeDir(Directory dir) async {
   try {
-    if (await f.exists()) await f.delete();
+    await dir.delete(recursive: true);
   } catch (_) {}
 }

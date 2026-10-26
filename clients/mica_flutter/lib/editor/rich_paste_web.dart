@@ -14,6 +14,7 @@ import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
 
+import 'cf_html.dart';
 import 'html_to_markdown.dart';
 
 typedef RichPasteHandler = bool Function(String markdown, String plain, bool rich);
@@ -69,7 +70,14 @@ void setRichPasteHandler(RichPasteHandler? handler) {
     // <img> inside the table means it's a LAYOUT table wrapping a picture
     // (Word/Outlook) — the bitmap must win or the image is silently lost.
     final htmlFlavor = data.getData('text/html');
-    final lowerHtml = htmlFlavor.toLowerCase();
+    // The same fragment rule as the desktop pull: a Windows CF_HTML payload
+    // must import only StartFragment..EndFragment, or the page context leaks in.
+    // Null means the header could not be sliced — fall back to plain text
+    // instead of the whole markup.
+    final htmlFragment = htmlFlavor.trim().isEmpty
+        ? null
+        : cfHtmlFragment(htmlFlavor);
+    final lowerHtml = (htmlFragment ?? '').toLowerCase();
     final hasTable = RegExp(r'<table[\s>]').hasMatch(lowerHtml) &&
         !RegExp(r'<img[\s>/]').hasMatch(lowerHtml);
 
@@ -101,8 +109,8 @@ void setRichPasteHandler(RichPasteHandler? handler) {
     final handler = _handler;
     if (handler == null) return;
     final plain = data.getData('text/plain');
-    final hasHtml = htmlFlavor.trim().isNotEmpty;
-    final content = hasHtml ? htmlToMarkdown(htmlFlavor) : plain;
+    final hasHtml = htmlFragment != null && htmlFragment.trim().isNotEmpty;
+    final content = hasHtml ? htmlToMarkdown(htmlFragment) : plain;
 
     if (handler(content, plain, hasHtml)) {
       event.preventDefault();

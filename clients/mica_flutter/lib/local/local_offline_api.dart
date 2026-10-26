@@ -62,8 +62,15 @@ typedef CloudPageTreeCache = ({
 typedef DocData = ({String rootBlockId, List<Map<String, dynamic>> blocks});
 
 /// Outcome of a vault import (S-tier read-only scan): documents + folder-pages
-/// created, and any per-file errors (unreadable files, etc.).
-typedef VaultImportResult = ({int docs, int folders, List<String> errors});
+/// created, any per-file errors (unreadable files, etc.), and the id of every
+/// view the import created in plan order. The ids are what lets a single-page
+/// Markdown import open the page it just made.
+typedef VaultImportResult = ({
+  int docs,
+  int folders,
+  List<String> errors,
+  List<String> viewIds,
+});
 
 /// Every public member of the local-offline facade. Abstract members carry no
 /// default parameter values — each variant declares its own (they must agree
@@ -73,12 +80,15 @@ abstract interface class LocalOfflineApi {
   bool get available;
   Future<void> open();
   Future<BigInt?> deviceClientId();
-  CloudDocStore? cloudDocStore(String docId);
+
+  /// The durable per-document mirror for a cloud document, scoped to [origin]
+  /// (see `cloudCacheOrigin`) so two accounts on one server cannot read each
+  /// other's replica, outbox or cursor.
+  CloudDocStore? cloudDocStore(String origin, String docId);
 
   List<WorkspaceData> listWorkspaces({String origin});
   void saveWorkspace(WorkspaceData w, {String origin});
   void reorderWorkspaces(List<String> ids, {String origin});
-  void deleteWorkspace(String id);
   void forgetOrigin(String origin);
   List<ViewData> listViews({String origin});
 
@@ -115,29 +125,51 @@ abstract interface class LocalOfflineApi {
   /// Returns how many it did; fewer than [limit] means the backlog is done.
   Future<int> backfillSearchIndex(int limit);
 
-  /// What the on-device store is holding, split into re-downloadable mirrors and
-  /// local-only originals. See `cache_stats.dart` for why the split matters.
-  ///
-  /// [mirroredOrigins] are the server URLs whose page trees have been mirrored;
-  /// the store keys rows by origin but cannot enumerate them, and the caller
-  /// already holds that list — passing it in beats adding an FFI entry point for
-  /// a read-only number.
-  Future<LocalCacheStats> cacheStats({required List<String> mirroredOrigins});
-
-  /// Delete the re-downloadable half of the on-device store and report what is
-  /// left. Pages and images belonging to local-only workspaces are never touched
-  /// — see `cache_stats.dart` for how the two are told apart.
-  Future<LocalCacheStats> clearMirrorCache({
-    required List<String> mirroredOrigins,
+  /// What the on-device store is holding for [accountId] on [servers], split
+  /// into re-downloadable mirrors and local-only originals. See
+  /// `cache_stats.dart` for why the split matters.
+  Future<LocalCacheStats> cacheStats({
+    required List<String> servers,
+    required String accountId,
   });
+
+  /// Delete the re-downloadable half of this ACCOUNT's cache and report what is
+  /// left. Documents that still hold un-pushed offline edits are KEPT (with
+  /// their page/view rows, so the user can open and keep editing them) and
+  /// reported via [ClearMirrorResult.retainedDocs]. Legacy server-only rows
+  /// (pre-#111, owner unverifiable) are quarantined, never deleted, and listed
+  /// in [ClearMirrorResult.quarantinedOrigins].
+  Future<ClearMirrorResult> clearMirrorCache({
+    required List<String> servers,
+    required String accountId,
+  });
+
+  /// Legacy (pre-#111) caches that exist for [servers] under the old
+  /// server-only key. They are NOT visible to any account — we cannot verify
+  /// which account wrote them — but they are retained on disk and listed here
+  /// (ids and page counts only, never names or bodies) so Settings can offer an
+  /// explicit export instead of leaving the user with silently invisible data.
+  List<({String origin, String workspaceId, int pages})> quarantinedWorkspaces({
+    required List<String> servers,
+  });
+  /// Upsert a view row (create / rename / move / trash-toggle) in [origin].
+  /// Web has no on-device tree; see the web variant for what it does there.
   void saveView(ViewData v, {String origin});
+
+  /// Mirror [views] for the workspaces in [viewWorkspaceIds] (defaulting to the
+  /// workspaces the views themselves mention). Workspaces NOT in that set keep
+  /// their mirrored rows — a refresh of one workspace must not erase another's
+  /// offline navigation (issue #109). An EMPTY incoming workspace needs its id
+  /// in [viewWorkspaceIds] to have its stale rows cleared; it cannot be
+  /// inferred from an empty view list.
   void mirrorCloudPageTree(
-    String serverUrl,
+    String origin,
     List<WorkspaceData> workspaces,
-    List<ViewData> views,
-  );
-  CloudPageTreeCache? cachedCloudPageTree(String serverUrl);
-  DocData? openCloudDocMirror(String docId);
+    List<ViewData> views, {
+    Set<String> viewWorkspaceIds,
+  });
+  CloudPageTreeCache? cachedCloudPageTree(String origin);
+  DocData? openCloudDocMirror(String origin, String docId);
   void purgeView(String viewId, String objectId);
 
   /// Trash / restore / permanently remove a view AND its whole subtree,
@@ -175,7 +207,7 @@ abstract interface class LocalOfflineApi {
   /// only has to decide what to SAY about it.
   bool deleteLocalWorkspace(String id);
   ({String workspaceId, int docs})? detachCloudWorkspace(
-    String serverUrl,
+    String origin,
     String cloudWorkspaceId,
     String name,
   );
@@ -192,6 +224,16 @@ abstract interface class LocalOfflineApi {
     List<({String path, List<int> bytes})> entries,
     String workspaceId, {
     String? parentViewId,
+  });
+
+  /// Import ONE Markdown file as a new page in [workspaceId] — the local
+  /// counterpart of the cloud `importMarkdown` (issue #108). Returns the same
+  /// outcome as [importVaultTree], including the created view id.
+  Future<VaultImportResult> importMarkdownPage(
+    String fileName,
+    String markdown,
+    String workspaceId, {
+    required String fallbackTitle,
   });
   void rollbackDoc(String docId);
   void flush();
@@ -229,7 +271,15 @@ abstract interface class LocalOfflineApi {
   /// Write a page's title into its local document — the offline counterpart of
   /// what the server does inside PATCH /views/{id}. See the io implementation.
   void setDocTitle(String docId, String title);
+  /// Export one folder's subtree as a Markdown ZIP (folder + pages + images).
   Uint8List? exportFolderZip(String workspaceId, String folderId);
+
+  /// Export a WHOLE workspace as a Markdown ZIP — the same Rust tree builder
+  /// folder/page export use. [origin] defaults to `'local'`; a quarantined
+  /// legacy origin can be exported the same way for explicit recovery. Never
+  /// returns an empty archive for a workspace that has pages; the UI treats
+  /// empty as a failure (issue #108).
+  Uint8List? exportWorkspaceZip(String workspaceId, {String origin});
   Future<Uint8List?> htmlToPdf(String html);
 }
 

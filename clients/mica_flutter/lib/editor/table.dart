@@ -124,6 +124,7 @@ class TableData {
       row.insert(i.clamp(0, row.length), '');
     }
     widths.insert(i.clamp(0, widths.length), 1.0);
+    aligns?.insert(i.clamp(0, aligns!.length), '');
   }
 
   void deleteColumn(int at) {
@@ -132,6 +133,7 @@ class TableData {
       if (at < row.length) row.removeAt(at);
     }
     if (at < widths.length) widths.removeAt(at);
+    if (aligns != null && at < aligns!.length) aligns!.removeAt(at);
   }
 
   /// Coerce a stored cell to its inline-Markdown source (the form the renderer

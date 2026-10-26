@@ -916,6 +916,7 @@ class ApiClient {
             return;
         }
       }
+      throw ApiException('AI stream ended before completion');
     } finally {
       await channel.sink.close();
     }
@@ -1268,20 +1269,6 @@ class ApiClient {
       token: token,
     );
     return DocumentBootstrap.fromJson(response);
-  }
-
-  Future<DocumentUpdateResult> applyDocumentUpdate(
-    String token,
-    String workspaceId,
-    String documentId,
-    List<Map<String, dynamic>> operations,
-  ) async {
-    final response = await _post(
-      '/api/workspaces/$workspaceId/documents/$documentId/updates',
-      {'operations': operations},
-      token: token,
-    );
-    return DocumentUpdateResult.fromJson(response);
   }
 
   /// A page as Markdown. [withTitle] welds `# <page name>` onto the front

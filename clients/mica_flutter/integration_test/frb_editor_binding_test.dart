@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2-M3: the desktop editing loop is closed on-device.
 //
 // Drives the REAL self-drawn editor controller with its op sink wired to
@@ -21,7 +22,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   // Drain the controller's async op chain so all applyOps() have run.
@@ -54,7 +55,7 @@ void main() {
 
     // ---- Session 1: edit through the real controller ----
     final store1 = MicaStore.open(path: path)!;
-    final backend1 = LocalDocBackend.open(store1, 'doc1');
+    final backend1 = LocalDocBackend.open(store1, 'local', 'doc1');
     final c = controllerFor(backend1);
     final bodyId = backend1.childBlocks().first['id'] as String;
 
@@ -88,7 +89,7 @@ void main() {
 
     // ---- Session 2: reopen the same db, rebuild from the store ----
     final store2 = MicaStore.open(path: path)!;
-    final backend2 = LocalDocBackend.open(store2, 'doc1');
+    final backend2 = LocalDocBackend.open(store2, 'local', 'doc1');
     final blocks = backend2.childBlocks();
 
     expect(blocks.length, 2, reason: 'two blocks persisted');
@@ -112,7 +113,7 @@ void main() {
     final path = '${dir.path}/edit.db';
 
     final store1 = MicaStore.open(path: path)!;
-    final backend1 = LocalDocBackend.open(store1, 'doc1');
+    final backend1 = LocalDocBackend.open(store1, 'local', 'doc1');
     final c = controllerFor(backend1);
 
     c.setSelection(const DocSelection.collapsed(DocPosition(0, 0)));
@@ -132,7 +133,7 @@ void main() {
     backend1.flush();
 
     final store2 = MicaStore.open(path: path)!;
-    final backend2 = LocalDocBackend.open(store2, 'doc1');
+    final backend2 = LocalDocBackend.open(store2, 'local', 'doc1');
     final blocks = backend2.childBlocks();
     expect(blocks.length, 1, reason: 'merge deleted the second block');
     expect(blocks.first['text'], 'alphabeta');
@@ -152,7 +153,7 @@ void main() {
     final path = '${dir.path}/append.db';
 
     final store1 = MicaStore.open(path: path)!;
-    final backend1 = LocalDocBackend.open(store1, 'doc1');
+    final backend1 = LocalDocBackend.open(store1, 'local', 'doc1');
     final c = controllerFor(backend1);
     c.setSelection(const DocSelection.collapsed(DocPosition(0, 0)));
     c.setFocusedText('durable', 7, 7);
@@ -162,7 +163,7 @@ void main() {
 
     final store2 = MicaStore.open(path: path)!;
     expect(
-      LocalDocBackend.open(store2, 'doc1').childBlocks().first['text'],
+      LocalDocBackend.open(store2, 'local', 'doc1').childBlocks().first['text'],
       'durable',
       reason: 'the append must already be on disk when applyOps returned',
     );
@@ -179,7 +180,7 @@ void main() {
     final path = '${dir.path}/compact.db';
 
     final store = MicaStore.open(path: path)!;
-    final backend = LocalDocBackend.open(store, 'doc1');
+    final backend = LocalDocBackend.open(store, 'local', 'doc1');
     final c = controllerFor(backend);
     // Past the 256-ROW threshold (logSizes counts rows, not bytes) so the
     // every-32-appends check actually fires.
@@ -191,7 +192,7 @@ void main() {
     }
     await drain();
 
-    final (localLog, _) = store.logSizes(docId: 'doc1');
+    final (localLog, _) = store.logSizes(origin: 'local', docId: 'doc1');
     expect(
       localLog,
       lessThan(edits),
@@ -200,13 +201,13 @@ void main() {
 
     backend.flush();
     expect(
-      store.logSizes(docId: 'doc1').$1,
+      store.logSizes(origin: 'local', docId: 'doc1').$1,
       0,
       reason: 'flush leaves a clean base',
     );
     final store2 = MicaStore.open(path: path)!;
     expect(
-      LocalDocBackend.open(store2, 'doc1').childBlocks().first['text'],
+      LocalDocBackend.open(store2, 'local', 'doc1').childBlocks().first['text'],
       'x' * edits,
       reason: 'every edit survives the folding',
     );
@@ -222,7 +223,7 @@ void main() {
     final path = '${dir.path}/rollback.db';
 
     final store1 = MicaStore.open(path: path)!;
-    final backend1 = LocalDocBackend.open(store1, 'doc1');
+    final backend1 = LocalDocBackend.open(store1, 'local', 'doc1');
     final c = controllerFor(backend1);
     c.setSelection(const DocSelection.collapsed(DocPosition(0, 0)));
     c.setFocusedText('session one', 11, 11);
@@ -232,9 +233,9 @@ void main() {
 
     // A new session checkpoints — which is where the fold has to have happened.
     final store2 = MicaStore.open(path: path)!;
-    LocalDocBackend.open(store2, 'doc1');
+    LocalDocBackend.open(store2, 'local', 'doc1');
 
-    final rolled = store2.rollbackDoc(docId: 'doc1');
+    final rolled = store2.rollbackDoc(origin: 'local', docId: 'doc1');
     expect(rolled, isNotNull);
     final blocks = (jsonDecode(rolled!.toBlocksJson()) as List)
         .cast<Map<String, dynamic>>();
@@ -250,13 +251,13 @@ void main() {
   test('a freshly opened local doc seeds one empty paragraph', () {
     final dir = Directory.systemTemp.createTempSync('mica_edit3');
     final store = MicaStore.open(path: '${dir.path}/edit.db')!;
-    final backend = LocalDocBackend.open(store, 'fresh');
+    final backend = LocalDocBackend.open(store, 'local', 'fresh');
     final blocks = backend.childBlocks();
     expect(blocks.length, 1);
     expect(blocks.first['type'], 'paragraph');
     expect(blocks.first['text'], '');
     // Persisted on creation: a second open finds it, not a new seed.
-    final reopened = LocalDocBackend.open(store, 'fresh');
+    final reopened = LocalDocBackend.open(store, 'local', 'fresh');
     expect(reopened.childBlocks().length, 1);
     _bestEffortDelete(dir);
   });

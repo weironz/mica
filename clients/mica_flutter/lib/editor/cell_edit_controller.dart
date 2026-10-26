@@ -1,6 +1,8 @@
 import 'package:flutter/widgets.dart';
 
 import 'marks.dart';
+import 'controller.dart';
+import 'table.dart';
 import '../ui/theme_tokens.dart';
 import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
@@ -112,5 +114,53 @@ class CellEditController extends TextEditingController {
       style ?? const TextStyle(),
       MicaTheme.of(context),
     );
+  }
+}
+
+/// Stable cell address and draft reconciliation, independent of the overlay.
+class CellEditSession {
+  CellEditSession(this.document, this.tableId, this.row, this.col, this.editor)
+      : _opening = editor.serialize();
+  final EditorController document;
+  final String tableId;
+  final int row, col;
+  final CellEditController editor;
+  String _opening;
+  bool rebasing = false;
+
+  int resolve() {
+    final at = document.nodes.indexWhere((n) => n.id == tableId && n.kind == 'table');
+    if (at < 0) return -1;
+    final table = TableData.fromBlock(document.nodes[at].data);
+    return row < 0 || row >= table.rows.length || col < 0 || col >= table.rows[row].length ? -1 : at;
+  }
+
+  void preview() {
+    final at = resolve();
+    if (!rebasing && at >= 0) document.previewTableCell(at, row, col, editor.serialize());
+  }
+
+  void commit() {
+    final at = resolve();
+    if (at >= 0 && editor.serialize() != _opening) document.setTableCell(at, row, col, editor.serialize());
+  }
+
+  bool reconcile() {
+    final at = resolve();
+    if (at < 0) return false;
+    if (editor.serialize() == _opening) {
+      final fresh = CellEditController(TableData.fromBlock(document.nodes[at].data).rows[row][col]);
+      rebasing = true;
+      // Set the value first: the setter shifts stale marks for its own diff,
+      // then the correct remote marks replace them in the same snapshot.
+      editor.value = fresh.value;
+      editor.marks = fresh.marks;
+      _opening = fresh.serialize();
+      rebasing = false;
+      fresh.dispose();
+    } else {
+      preview();
+    }
+    return true;
   }
 }

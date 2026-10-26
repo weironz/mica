@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // The desktop STORE-ZIP path through the REAL FFI: the generated binding must
 // carry a CJK filename and fully binary bytes across intact, and the Rust
 // output must equal the pure-Dart reference writer byte-for-byte (both are
@@ -15,7 +16,7 @@ import 'package:mica_flutter/upload/zip_writer_io.dart' as ffi_path;
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('FFI zip bytes equal the pure-Dart reference', () {

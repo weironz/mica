@@ -189,7 +189,11 @@ DROP TABLE local_view;
 ALTER TABLE local_view_v4 RENAME TO local_view;
 ```
 
-整段包在一个事务里。**降级门必须在任何迁移之前跑**(P3a 复审 Attack-7 抓到:原门在 rebuild 之后,probe-driven 的破坏性重建会先把未来 schema 的表按 v4 列表阉割再被拒——已修:门挪到 CREATE IF NOT EXISTS 批之后、一切 ALTER/rebuild 之前,配伪 v5 库回归测钉死「拒绝时结构未动」)。`doc_snapshot`/`doc_update`/`sync_cursor` **不动**——doc 以云 UUID/本地 id 直接 key,两个空间都是自生成 UUID 且 detach 时 doc 行是**同一份内容**(刻意共享,见 §6.2),不需要 origin 维度。
+整段包在一个事务里。**降级门必须在任何迁移之前跑**(P3a 复审 Attack-7 抓到:原门在 rebuild 之后,probe-driven 的破坏性重建会先把未来 schema 的表按 v4 列表阉割再被拒——已修:门挪到 CREATE IF NOT EXISTS 批之后、一切 ALTER/rebuild 之前,配伪 v5 库回归测钉死「拒绝时结构未动」)。`doc_snapshot`/`doc_update`/`sync_cursor` 等在 P3a 时**不动**;issue #102 之后已升级为 **v7:全部文档级表以 `(origin, doc_id)` 为主键**(备份恢复/克隆服务器会保留同一 UUID,裸 `doc_id` 会让两个 origin 共享正文、outbox、游标和版本)。迁移把每个旧文档复制给所有引用它的 view 的 origin,无 view 的孤儿留在 `'local'`;backup/outbox/remote log/cursor/version 一并复制,`SCHEMA_VERSION` 升到 7,子版本(v8+)在建表前拒绝。
+
+云镜像的 origin **不是**裸服务器 URL:issue #111 起用 `cloudCacheOrigin(server, accountId)` 的规范化 JSON 元组,同一服务器的两个账号互不可见。旧版本留下的 server-only 行不归属任何当前账号(无法验证写入者),按 quarantine 保留在盘上,不自动认领也不删除;Settings 用 page 数展示并提供显式导出恢复(见 `lib/local/cache_stats.dart` / `lib/local/local_offline_io.dart`)。
+
+原生初始化统一走 `lib/local/native_rust.dart` 的 `initNativeRust`：Windows 先载入 executable 同目录随构建产出的 DLL，再使用 FRB 的开发目录 fallback。生成绑定默认 `ioDirectory=rust/target/release/`，从项目目录启动集成测试时会优先命中历史 release DLL，导致旧 Rust wire 与新 Dart wire 混用（`saveDoc` panic / `VaultImportOutcome` 字段解码越界）；因此生产 facade 和所有 native integration suites 共享此入口，不能各自直接 `RustLib.init()` 绕开加载规则。生成代码仍由 `flutter_rust_bridge_codegen 2.12.0 generate` 管理。
 
 ### 3.3 SQL / FFI / facade 波及面
 

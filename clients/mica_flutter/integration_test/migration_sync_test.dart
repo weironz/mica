@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2 §6: the local→cloud migration sync path, end-to-end against a live stack.
 //
 // Exercises the load-bearing, net-new path: replaying a local block tree as ops
@@ -27,7 +28,7 @@ const _password = 'password123';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   Future<String> login() async {

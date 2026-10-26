@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // Regression for M-R (red line #1 / #2). Runs the real FFI CloudSyncSession
 // against a fake in-process WS server, so no backend is needed.
 //
@@ -23,7 +24,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('B1: a bad remote update faults + self-heals instead of silently skipping',
@@ -192,7 +193,7 @@ void main() {
       () async {
     final dir = Directory.systemTemp.createTempSync('mica_p2b');
     final store = MicaStore.open(path: '${dir.path}/s.db')!;
-    final adapter = StoreCloudDocStore(store, 'doc-p2b');
+    final adapter = StoreCloudDocStore(store, 'local', 'doc-p2b');
     final server = await _FakeSyncServer.start(_buildBase());
 
     var ready = false;
@@ -214,23 +215,23 @@ void main() {
     await _until(() => server.pushed.isNotEmpty, reason: 'edit pushed');
     expect(server.pushed.first.id, '1', reason: 'push id is the outbox clock');
     // Durably in the append-log (survives a crash before ack).
-    expect(store.updatesAfter(docId: 'doc-p2b', after: 0).length, 1);
+    expect(store.updatesAfter(origin: 'local', docId: 'doc-p2b', after: 0).length, 1);
 
     // Acked (server acks by id) → pushed_clock advances → outbox drains.
     final drained = await session.drainOutbox(timeout: const Duration(seconds: 5));
     expect(drained, isTrue);
-    expect(store.syncCursor(docId: 'doc-p2b').pushedClock, 1,
+    expect(store.syncCursor(origin: 'local', docId: 'doc-p2b').pushedClock, 1,
         reason: 'ack advanced pushed_clock');
-    expect(store.updatesAfter(docId: 'doc-p2b', after: 1), isEmpty,
+    expect(store.updatesAfter(origin: 'local', docId: 'doc-p2b', after: 1), isEmpty,
         reason: 'nothing left in the outbox');
 
     // P2e: dispose flushes the base write-through, after which the acked entry
     // is compacted out of the log (it lives in the server AND the base now) —
     // the log stays bounded. Content survives in the base.
     session.dispose();
-    expect(store.updatesAfter(docId: 'doc-p2b', after: 0), isEmpty,
+    expect(store.updatesAfter(origin: 'local', docId: 'doc-p2b', after: 0), isEmpty,
         reason: 'acked entries trimmed once folded into the base (P2e)');
-    final reloaded = store.loadDoc(docId: 'doc-p2b')!;
+    final reloaded = store.loadDoc(origin: 'local', docId: 'doc-p2b')!;
     final blocks = (jsonDecode(reloaded.toBlocksJson()) as List)
         .cast<Map<String, dynamic>>();
     expect(blocks.firstWhere((b) => b['id'] == 'a')['text'], 'hi there',
@@ -262,7 +263,7 @@ void main() {
       clientId: store.clientId(),
       onReady: (_, _) => ready1 = true,
       onRemoteBlocks: (_) {},
-      persistence: StoreCloudDocStore(store, 'doc-m'),
+      persistence: StoreCloudDocStore(store, 'local', 'doc-m'),
     );
     s1.connect();
     await _until(() => ready1, reason: 'bootstrap 1');
@@ -273,7 +274,7 @@ void main() {
       ]);
     }
     await _until(
-        () => store.updatesAfter(docId: 'doc-m', after: 0).length == queued,
+        () => store.updatesAfter(origin: 'local', docId: 'doc-m', after: 0).length == queued,
         reason: 'all edits durable in the outbox');
     s1.dispose();
     await server1.stop();
@@ -286,7 +287,7 @@ void main() {
       clientId: store.clientId(),
       onReady: (_, _) => ready2 = true,
       onRemoteBlocks: (_) {},
-      persistence: StoreCloudDocStore(store, 'doc-m'),
+      persistence: StoreCloudDocStore(store, 'local', 'doc-m'),
     );
     s2.connect();
     await _until(() => ready2, reason: 'bootstrap 2');
@@ -300,15 +301,15 @@ void main() {
         reason: '$queued queued edits went out as one push, not $queued');
     expect(server2.pushed.first.id, '$queued',
         reason: "the id is the run's highest clock");
-    expect(store.syncCursor(docId: 'doc-m').pushedClock, queued,
+    expect(store.syncCursor(origin: 'local', docId: 'doc-m').pushedClock, queued,
         reason: 'pushed_clock jumped the whole run');
-    expect(store.updatesAfter(docId: 'doc-m', after: queued), isEmpty,
+    expect(store.updatesAfter(origin: 'local', docId: 'doc-m', after: queued), isEmpty,
         reason: 'outbox drained');
 
     // The merged bytes must still carry every edit — a merge that loses the
     // intermediate content would drain the outbox and silently lose writing.
     s2.dispose();
-    final reloaded = store.loadDoc(docId: 'doc-m')!;
+    final reloaded = store.loadDoc(origin: 'local', docId: 'doc-m')!;
     final blocks = (jsonDecode(reloaded.toBlocksJson()) as List)
         .cast<Map<String, dynamic>>();
     expect(blocks.firstWhere((b) => b['id'] == 'a')['text'],
@@ -329,7 +330,7 @@ void main() {
       clientId: store.clientId(),
       onReady: (_, _) => ready1 = true,
       onRemoteBlocks: (_) {},
-      persistence: StoreCloudDocStore(store, 'doc-d'),
+      persistence: StoreCloudDocStore(store, 'local', 'doc-d'),
     );
     s1.connect();
     await _until(() => ready1, reason: 'bootstrap 1');
@@ -340,7 +341,7 @@ void main() {
       ]);
     }
     await _until(
-        () => store.updatesAfter(docId: 'doc-d', after: 0).length == queued,
+        () => store.updatesAfter(origin: 'local', docId: 'doc-d', after: 0).length == queued,
         reason: 'backlog durable');
     s1.dispose();
     await server1.stop();
@@ -357,7 +358,7 @@ void main() {
       clientId: store.clientId(),
       onReady: (_, _) => ready2 = true,
       onRemoteBlocks: (_) {},
-      persistence: StoreCloudDocStore(store, 'doc-d'),
+      persistence: StoreCloudDocStore(store, 'local', 'doc-d'),
     );
     s2.connect();
     await _until(() => ready2, reason: 'bootstrap 2');
@@ -369,7 +370,7 @@ void main() {
     expect(server2.pushed.any((p) => p.id == '1'), isTrue,
         reason: 'individual clocks are on the wire again, so a server can name '
             'exactly which edit it refuses');
-    expect(store.syncCursor(docId: 'doc-d').pushedClock, queued);
+    expect(store.syncCursor(origin: 'local', docId: 'doc-d').pushedClock, queued);
 
     s2.dispose();
     await server2.stop();
@@ -390,7 +391,7 @@ void main() {
       clientId: store.clientId(),
       onReady: (_, _) => ready1 = true,
       onRemoteBlocks: (_) {},
-      persistence: StoreCloudDocStore(store, 'doc-r'),
+      persistence: StoreCloudDocStore(store, 'local', 'doc-r'),
     );
     s1.connect();
     await _until(() => ready1, reason: 'bootstrap 1');
@@ -398,7 +399,7 @@ void main() {
       {'type': 'update_block', 'block_id': 'a', 'text': 'edited offline'},
     ]);
     await _until(() => server1.pushed.isNotEmpty, reason: 'edit pushed (unacked)');
-    expect(store.updatesAfter(docId: 'doc-r', after: 0).length, 1,
+    expect(store.updatesAfter(origin: 'local', docId: 'doc-r', after: 0).length, 1,
         reason: 'edit durable in the outbox despite no ack');
     s1.dispose();
     await server1.stop();
@@ -412,7 +413,7 @@ void main() {
       clientId: store.clientId(),
       onReady: (_, _) => ready2 = true,
       onRemoteBlocks: (_) {},
-      persistence: StoreCloudDocStore(store, 'doc-r'),
+      persistence: StoreCloudDocStore(store, 'local', 'doc-r'),
     );
     s2.connect();
     await _until(() => ready2, reason: 'bootstrap 2 (seeds from the local mirror)');
@@ -421,7 +422,7 @@ void main() {
 
     final drained = await s2.drainOutbox(timeout: const Duration(seconds: 5));
     expect(drained, isTrue);
-    expect(store.syncCursor(docId: 'doc-r').pushedClock, 1);
+    expect(store.syncCursor(origin: 'local', docId: 'doc-r').pushedClock, 1);
 
     s2.dispose();
     await server2.stop();
@@ -435,7 +436,7 @@ void main() {
     // pushed_clock may only advance through the contiguous acked prefix.
     final dir = Directory.systemTemp.createTempSync('mica_p2b3');
     final store = MicaStore.open(path: '${dir.path}/s.db')!;
-    final adapter = StoreCloudDocStore(store, 'doc-rej');
+    final adapter = StoreCloudDocStore(store, 'local', 'doc-rej');
     final server = await _FakeSyncServer.start(_buildBase());
 
     var ready = false;
@@ -463,7 +464,7 @@ void main() {
     // pushed_clock reaches 2 contiguously and the outbox drains — nothing lost.
     final drained = await session.drainOutbox(timeout: const Duration(seconds: 6));
     expect(drained, isTrue, reason: 'the retried edit eventually acks');
-    expect(store.syncCursor(docId: 'doc-rej').pushedClock, 2,
+    expect(store.syncCursor(origin: 'local', docId: 'doc-rej').pushedClock, 2,
         reason: 'contiguous — reached only after clock 1 is (re)acked');
     // Clock 1 actually reached the server more than once (rejected then retried),
     // proving it was never silently skipped.
@@ -479,7 +480,7 @@ void main() {
       () async {
     final dir = Directory.systemTemp.createTempSync('mica_p41');
     final store = MicaStore.open(path: '${dir.path}/s.db')!;
-    final adapter = StoreCloudDocStore(store, 'doc-p41');
+    final adapter = StoreCloudDocStore(store, 'local', 'doc-p41');
     final base = _buildBase();
     final server = await _FakeSyncServer.start(base);
 
@@ -507,10 +508,10 @@ void main() {
       () => adapter.logSizes().remote == 1,
       reason: 'remote update appended durably on apply',
     );
-    expect(store.syncCursor(docId: 'doc-p41').lastSyncedRid, 9,
+    expect(store.syncCursor(origin: 'local', docId: 'doc-p41').lastSyncedRid, 9,
         reason: 'cursor advanced in the same transaction');
     // A fresh load (as an offline restart would) replays base + remote log.
-    final replayed = store.loadDoc(docId: 'doc-p41')!;
+    final replayed = store.loadDoc(origin: 'local', docId: 'doc-p41')!;
     final blocks = (jsonDecode(replayed.toBlocksJson()) as List)
         .cast<Map<String, dynamic>>();
     expect(blocks.firstWhere((b) => b['id'] == 'a')['text'], 'hi from-peer');
@@ -523,7 +524,7 @@ void main() {
   test('P4-1: compaction keeps the logs bounded with content intact', () {
     final dir = Directory.systemTemp.createTempSync('mica_p41c');
     final store = MicaStore.open(path: '${dir.path}/s.db')!;
-    final adapter = StoreCloudDocStore(store, 'doc-c');
+    final adapter = StoreCloudDocStore(store, 'local', 'doc-c');
     final doc = MicaDocument.fromBlocksJson(
       rootId: 'r',
       blocksJson: jsonEncode([
@@ -542,7 +543,7 @@ void main() {
       adapter.appendRemote(i + 2, peer.encodeDiffSince(stateVector: sv));
     }
     // Plus an un-pushed local edit that must SURVIVE compaction.
-    final mine = store.loadDoc(docId: 'doc-c')!;
+    final mine = store.loadDoc(origin: 'local', docId: 'doc-c')!;
     final sv = mine.stateVector();
     mine.textInsert(id: 'a', at: 0, text: 'mine:');
     adapter.appendOutbox(mine.encodeDiffSince(stateVector: sv));
@@ -552,7 +553,7 @@ void main() {
     expect(adapter.logSizes().remote, 0, reason: 'remote log folded + cleared');
     expect(adapter.logSizes().local, 1,
         reason: 'un-pushed outbox tail survives (P2a guard)');
-    final after = store.loadDoc(docId: 'doc-c')!;
+    final after = store.loadDoc(origin: 'local', docId: 'doc-c')!;
     final text = (jsonDecode(after.toBlocksJson()) as List)
         .cast<Map<String, dynamic>>()
         .firstWhere((b) => b['id'] == 'a')['text'] as String;
@@ -609,7 +610,7 @@ void main() {
     // real contiguous progress), and the stuck edit is surfaced, not lost.
     final dir = Directory.systemTemp.createTempSync('mica_p2b4');
     final store = MicaStore.open(path: '${dir.path}/s.db')!;
-    final adapter = StoreCloudDocStore(store, 'doc-perm');
+    final adapter = StoreCloudDocStore(store, 'local', 'doc-perm');
     final server = await _FakeSyncServer.start(_buildBase());
 
     var ready = false;
@@ -639,8 +640,8 @@ void main() {
         reason: 'permanent rejection surfaced after a bounded number of retries');
     // pushed_clock never passed the stuck clock 1, and clock 1 is still in the
     // outbox (not lost — it survives to retry on a later reconnect).
-    expect(store.syncCursor(docId: 'doc-perm').pushedClock, 0);
-    expect(store.updatesAfter(docId: 'doc-perm', after: 0).map((e) => e.clock),
+    expect(store.syncCursor(origin: 'local', docId: 'doc-perm').pushedClock, 0);
+    expect(store.updatesAfter(origin: 'local', docId: 'doc-perm', after: 0).map((e) => e.clock),
         contains(1));
 
     session.dispose();

@@ -1078,6 +1078,8 @@ class _SettingsDialog extends StatefulWidget {
     this.onLoadExportStats,
     this.onLoadCacheStats,
     this.onClearMirrorCache,
+    this.onLoadQuarantinedCaches,
+    this.onExportQuarantinedCache,
   });
 
   final String userName;
@@ -1187,8 +1189,20 @@ class _SettingsDialog extends StatefulWidget {
   /// What the on-device store holds. Null on web (there is no on-device store).
   final Future<LocalCacheStats> Function()? onLoadCacheStats;
 
-  /// Reclaim the mirrored half. Returns the numbers that hold afterwards.
-  final Future<LocalCacheStats> Function()? onClearMirrorCache;
+  /// Reclaim the mirrored half. Carries what was retained (un-pushed edits) and
+  /// which legacy caches were quarantined, so the result can be reported
+  /// honestly instead of claiming everything went.
+  final Future<ClearMirrorResult> Function()? onClearMirrorCache;
+
+  /// Legacy (pre-#111) caches, listed by id + page count only. Null when there
+  /// is no on-device store.
+  final Future<List<({String origin, String workspaceId, int pages})>> Function()?
+  onLoadQuarantinedCaches;
+
+  /// Export one quarantined legacy workspace as a Markdown ZIP — an explicit
+  /// recovery path, with no automatic attribution to the current account.
+  final Future<Uint8List?> Function(String origin, String workspaceId)?
+  onExportQuarantinedCache;
 
   @override
   State<_SettingsDialog> createState() => _SettingsDialogState();
@@ -1355,6 +1369,11 @@ class _SettingsDialogState extends MicaState<_SettingsDialog> {
   String? _cacheMsg;
 
   bool _cacheStatsAsked = false;
+
+  /// Legacy caches (pre-#111) retained on disk but owned by an unverifiable
+  /// account. Listed by id + page count only; exporting is explicit.
+  List<({String origin, String workspaceId, int pages})> _quarantine = const [];
+  bool _quarantineAsked = false;
 
   bool _tokenWrite = false;
 

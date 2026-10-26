@@ -19,6 +19,12 @@ const _SlashOption _aiSlashOption = _SlashOption(
   _aiSlashKind,
 );
 
+/// One generation's lifecycle. `succeeded` is the ONLY phase whose output may
+/// be inserted into the document; `failed` and `cancelled` are terminal, so a
+/// late `onDone` after an error can never resurrect partial output into an
+/// applicable state.
+enum _AiGenerationPhase { idle, running, succeeded, failed, cancelled }
+
 /// In-editor "Ask AI": streams the response live, then returns the accumulated
 /// Markdown (via Navigator.pop) for the editor to insert as blocks.
 /// System prompt for rewriting a selection.
@@ -99,8 +105,11 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
   final _scroll = ScrollController();
   final StringBuffer _buffer = StringBuffer();
   StreamSubscription<String>? _sub;
-  bool _streaming = false;
-  bool _done = false;
+  /// The current generation's phase; `succeeded` is the only one that enables
+  /// apply. A new `_generate()` retires the previous subscription first, so
+  /// events from a replaced/cancelled stream cannot touch newer state.
+  _AiGenerationPhase _phase = _AiGenerationPhase.idle;
+  int _generation = 0;
   String? _error;
 
   @override
@@ -113,6 +122,8 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
 
   @override
   void dispose() {
+    _generation++;
+    _phase = _AiGenerationPhase.cancelled;
     _sub?.cancel();
     _prompt.dispose();
     _scroll.dispose();
@@ -122,9 +133,13 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
   void _generate() {
     final prompt = _prompt.text.trim();
     if (prompt.isEmpty) return;
+    // A previous generation can still be live when regenerating from a
+    // terminal phase: retire its subscription and advance the generation so
+    // its late callbacks are ignored below.
+    _sub?.cancel();
+    final generation = ++_generation;
     setState(() {
-      _streaming = true;
-      _done = false;
+      _phase = _AiGenerationPhase.running;
       _error = null;
       _buffer.clear();
     });
@@ -138,6 +153,8 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
         .onStream(sent, system: widget.system)
         .listen(
           (delta) {
+            if (!mounted || generation != _generation ||
+                _phase != _AiGenerationPhase.running) return;
             setState(() => _buffer.write(delta));
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (_scroll.hasClients) {
@@ -146,27 +163,27 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
             });
           },
           onError: (Object error) {
-            if (mounted) {
-              setState(() {
-                _streaming = false;
-                _error = error.toString();
-              });
-            }
+            if (generation != _generation || !mounted) return;
+            setState(() {
+              _phase = _AiGenerationPhase.failed;
+              _error = error.toString();
+            });
           },
           onDone: () {
-            if (mounted) {
-              setState(() {
-                _streaming = false;
-                _done = true;
-              });
+            if (generation != _generation || !mounted) return;
+            if (_phase == _AiGenerationPhase.running) {
+              setState(() => _phase = _AiGenerationPhase.succeeded);
             }
           },
+          cancelOnError: true,
         );
   }
 
   @override
   Widget build(BuildContext context) {
     final hasOutput = _buffer.isNotEmpty;
+    final streaming = _phase == _AiGenerationPhase.running;
+    final applicable = _phase == _AiGenerationPhase.succeeded;
     return AlertDialog(
       title: Row(
         children: [
@@ -197,7 +214,7 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
                       // preset is a starting point you can still edit, and a
                       // one-click request that spends tokens on a misread is
                       // worse than one more click.
-                      onPressed: _streaming
+                      onPressed: streaming
                           ? null
                           : () => setState(() => _prompt.text = p.prompt),
                     ),
@@ -210,13 +227,13 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
               autofocus: true,
               minLines: 2,
               maxLines: 4,
-              enabled: !_streaming,
+              enabled: !streaming,
               decoration: InputDecoration(
                 hintText: context.l10n.editorAiPromptHint,
                 border: const OutlineInputBorder(),
               ),
             ),
-            if (hasOutput || _streaming) ...[
+            if (hasOutput || streaming) ...[
               const SizedBox(height: 12),
               Container(
                 height: 200,
@@ -238,7 +255,7 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
                 ),
               ),
               const SizedBox(height: 6),
-              if (_streaming)
+              if (streaming)
                 Row(
                   children: [
                     const SizedBox(
@@ -276,12 +293,17 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: _streaming ? null : () => Navigator.of(context).pop(),
+          onPressed: () {
+            _generation++;
+            _phase = _AiGenerationPhase.cancelled;
+            _sub?.cancel();
+            Navigator.of(context).pop();
+          },
           child: Text(context.l10n.commonCancel),
         ),
-        if (!_done)
+        if (!applicable)
           FilledButton.icon(
-            onPressed: _streaming ? null : _generate,
+            onPressed: streaming ? null : _generate,
             icon: const Icon(Icons.auto_awesome, size: 18),
             label: Text(
               hasOutput ? context.l10n.aiRegenerate : context.l10n.aiGenerate,

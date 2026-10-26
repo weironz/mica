@@ -19,6 +19,12 @@ class SessionController extends ChangeNotifier {
   Workspace? selectedWorkspace;
   Map<String, List<DocumentView>> viewsByWorkspace = const {};
 
+  /// Identity epoch for async requests. Full sign-in/restore and session end
+  /// retire earlier requests even when callers reuse the same session/list
+  /// objects; token rotation and profile refresh preserve this epoch.
+  int get generation => _generation;
+  int _generation = 0;
+
   /// A full sign-in or cold restore: everything lands at once, selection as
   /// the caller computed it (the saved id when it still exists, else the
   /// first workspace).
@@ -28,6 +34,7 @@ class SessionController extends ChangeNotifier {
     Workspace? selected,
     Map<String, List<DocumentView>> views,
   ) {
+    _generation++;
     session = signedIn;
     workspaces = list;
     selectedWorkspace = selected;
@@ -45,6 +52,7 @@ class SessionController extends ChangeNotifier {
   /// A fresh interactive sign-in: no saved selection to honor, so the first
   /// workspace is the landing spot.
   void signIn(AuthSession signedIn, List<Workspace> list) {
+    _generation++;
     session = signedIn;
     workspaces = list;
     selectedWorkspace = list.firstOrNull;
@@ -55,12 +63,14 @@ class SessionController extends ChangeNotifier {
   /// workspace list deliberately survives so the local world and any UI still
   /// holding it can fall back coherently; full clearing is [signOut].
   void expireSession() {
+    _generation++;
     session = null;
     notifyListeners();
   }
 
   /// Signing out: everything cloud-side goes.
   void signOut() {
+    _generation++;
     session = null;
     workspaces = const [];
     selectedWorkspace = null;

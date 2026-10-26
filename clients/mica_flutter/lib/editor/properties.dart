@@ -421,7 +421,7 @@ String _quoteIfNeeded(String s) {
       s.endsWith('\t') ||
       (s.isNotEmpty && _indicators.contains(s[0])) ||
       s.contains(': ') ||
-      s.contains(', ') ||
+      s.contains(',') ||
       s.contains('\n') ||
       s.contains(']') ||
       (s.isNotEmpty && !_staysAsText(s));

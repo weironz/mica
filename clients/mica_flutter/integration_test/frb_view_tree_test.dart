@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // The local page-tree operations, through the REAL FFI.
 //
 // `rust/src/api/store.rs` has thorough unit tests, but those call the Rust
@@ -21,7 +22,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   MicaStore freshStore() {
@@ -97,8 +98,10 @@ void main() {
         name: 'Kid',
         objectType: 'document');
     s.saveDoc(
-        docId: 'd_root', doc: MicaDocument.fromMarkdown(markdown: '# hello'));
-    s.saveDoc(docId: 'd_kid', doc: MicaDocument.fromMarkdown(markdown: '# kid'));
+        origin: 'local',
+        docId: 'd_root',
+        doc: MicaDocument.fromMarkdown(markdown: '# hello'));
+    s.saveDoc(origin: 'local', docId: 'd_kid', doc: MicaDocument.fromMarkdown(markdown: '# kid'));
 
     final out = s.cloneView(viewId: root, rootName: 'Notes')!;
     expect(out.newName, 'Notes 2', reason: 'deduped against the original');
@@ -109,7 +112,7 @@ void main() {
     final copiedKid = all.firstWhere((v) => v.parentId == out.rootViewId);
     expect(copiedKid.id, isNot(kid), reason: 'the copy is a new row');
     expect(
-      s.loadDoc(docId: copiedKid.objectId)!.exportMarkdown(),
+      s.loadDoc(origin: 'local', docId: copiedKid.objectId)!.exportMarkdown(),
       contains('kid'),
       reason: 'content came along, not just the row',
     );
@@ -125,7 +128,7 @@ void main() {
         objectId: 'd_p',
         name: 'P',
         objectType: 'document');
-    s.saveDoc(docId: 'd_p', doc: MicaDocument.fromMarkdown(markdown: 'x'));
+    s.saveDoc(origin: 'local', docId: 'd_p', doc: MicaDocument.fromMarkdown(markdown: 'x'));
 
     final trashed = s.trashViewSubtree(viewId: folder);
     expect(trashed.toSet(), {folder, page},
@@ -144,7 +147,7 @@ void main() {
     final purged = s.purgeViewSubtree(viewId: folder);
     expect(purged.toSet(), {folder, page});
     expect(s.listViews(origin: 'local'), isEmpty);
-    expect(s.loadDoc(docId: 'd_p'), isNull, reason: 'the document went too');
+    expect(s.loadDoc(origin: 'local', docId: 'd_p'), isNull, reason: 'the document went too');
   });
 
   test('workspace create / rename / delete cross the bridge', () {
@@ -165,10 +168,10 @@ void main() {
     // Its pages go with it; the other workspace is untouched.
     final page = s.createView(
         workspaceId: id, objectId: 'd_w', name: 'P', objectType: 'document');
-    s.saveDoc(docId: 'd_w', doc: MicaDocument.fromMarkdown(markdown: 'x'));
+    s.saveDoc(origin: 'local', docId: 'd_w', doc: MicaDocument.fromMarkdown(markdown: 'x'));
     expect(s.deleteWorkspaceCascade(id: id), isTrue);
     expect(s.listViews(origin: 'local').any((v) => v.id == page), isFalse);
-    expect(s.loadDoc(docId: 'd_w'), isNull);
+    expect(s.loadDoc(origin: 'local', docId: 'd_w'), isNull);
 
     // Only one left — refusing to delete it is the point.
     final last = s.listWorkspaces(origin: 'local').single;

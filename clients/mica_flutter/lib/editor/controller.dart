@@ -25,7 +25,7 @@ part 'controller_commits.dart';
 typedef DocOp = Map<String, dynamic>;
 
 /// Sends a batch of block operations to the backend and resolves when the new
-/// snapshot has been applied. Wired to the app's REST `applyDocumentUpdate`.
+/// snapshot has been applied. Wired to the app's CRDT `_applyEditorOperations`.
 typedef ApplyOps = Future<void> Function(List<DocOp> operations);
 
 /// Owns the in-memory document and the single document-wide selection, applies
@@ -376,55 +376,33 @@ class EditorController extends ChangeNotifier {
       return;
     }
 
-    if (old != text) {
-      final marks = marksFromData(node.data);
-      if (marks.isNotEmpty) {
-        var prefix = commonPrefix(old, text);
-        var oldEnd = old.length - commonSuffix(old, text, prefix);
-        // The naive diff is ambiguous when removed text repeats its neighbors
-        // (deleting a linked "AA" before another "A" aligns on the wrong "A").
-        // The edit must cover the previous ranged selection — widen to it so
-        // marks die with their text instead of bleeding onto the neighbors.
-        if (!sel.isCollapsed && sel.start.node == i && sel.end.node == i) {
-          final selS = sel.start.offset.clamp(0, old.length);
-          final selE = sel.end.offset.clamp(0, old.length);
-          if (prefix > selS) prefix = selS;
-          if (oldEnd < selE) oldEnd = selE;
-        }
-        var shifted = shiftMarks(
-          marks,
-          prefix,
-          oldEnd,
-          text.length - old.length,
-          text.length,
-        );
-        // Typing at a formula's LEADING edge must leave the character OUTSIDE
-        // the atom. shiftMarks pins a mark's start and pushes its end, so an
-        // insert at run.start swallows the char into the LaTeX (and strands the
-        // caret inside the run). Pull the run's start up to the caret so it
-        // covers only the original source again — the char lands before it.
-        final caret = selEnd.clamp(0, text.length);
-        final swallowed = mathRunAt(shifted, caret);
-        if (swallowed != null) {
-          shifted = [
-            for (final m in shifted)
-              if (identical(m, swallowed))
-                Mark(caret, m.end, m.type, href: m.href, title: m.title)
-              else
-                m,
-          ];
-        }
-        node.data = {...node.data, 'marks': marksToJson(shifted)};
-      }
+    var prefix = commonPrefix(old, text);
+    var oldEnd = old.length - commonSuffix(old, text, prefix);
+    if (!sel.isCollapsed && sel.start.node == i && sel.end.node == i) {
+      if (prefix > sel.start.offset) prefix = sel.start.offset;
+      if (oldEnd < sel.end.offset) oldEnd = sel.end.offset;
     }
-
-    node.text = text;
+    final insertedEnd = oldEnd + text.length - old.length;
+    spliceRange(
+      DocSelection(anchor: DocPosition(i, prefix), focus: DocPosition(i, oldEnd)),
+      text.substring(prefix, insertedEnd),
+      deferred: true,
+      allowDuringHistory: true,
+    );
+    final shifted = marksFromData(node.data);
+    final caret = selEnd.clamp(0, text.length);
+    final swallowed = mathRunAt(shifted, caret);
+    if (swallowed != null) {
+      node.data = {...node.data, 'marks': marksToJson([
+        for (final m in shifted)
+          if (identical(m, swallowed)) m.withRange(caret, m.end) else m,
+      ])};
+    }
     selection = DocSelection(
       anchor: DocPosition(i, selStart.clamp(0, text.length)),
       focus: DocPosition(i, selEnd.clamp(0, text.length)),
     );
     goalX = null;
-    if (!_historyBusy) _markDirty(node.id);
     notifyListeners();
   }
 
@@ -809,11 +787,24 @@ class EditorController extends ChangeNotifier {
 
     final continues = _continuesOnEnter(node.kind);
     final newData = continues ? _continuationData(node) : <String, dynamic>{};
-    // Marks split with the text (split point approximated by the left half's
-    // length — exact unless the same IME frame also changed the text).
-    final (beforeMarks, afterMarks) = splitMarks(
+    // Marks split with the text AFTER they ride the actual replacement the IME
+    // performed (old text -> before+after). Measuring at `before.length` on the
+    // unremapped marks moved a mark from deleted text onto the wrong half —
+    // "abcdef" with [2,4) selected and bold [4,6) left bold stranded at an
+    // out-of-range [2,4) in the second paragraph (issue #131).
+    final flat = '$before$after';
+    final prefix = commonPrefix(node.text, flat);
+    final oldEnd = node.text.length - commonSuffix(node.text, flat, prefix);
+    final remapped = shiftMarks(
       marksFromData(node.data),
-      before.length.clamp(0, node.text.length),
+      prefix,
+      oldEnd,
+      flat.length - node.text.length,
+      flat.length,
+    );
+    final (beforeMarks, afterMarks) = splitMarks(
+      remapped,
+      before.length.clamp(0, flat.length),
     );
     if (afterMarks.isNotEmpty) newData['marks'] = marksToJson(afterMarks);
     final created = EditorNode(
@@ -1259,6 +1250,19 @@ class EditorController extends ChangeNotifier {
     }
   }
 
+  String _codeFenceFor(String text) {
+    var longest = 0, cur = 0;
+    for (var i = 0; i < text.length; i++) {
+      if (text[i] == '`') {
+        cur++;
+        if (cur > longest) longest = cur;
+      } else {
+        cur = 0;
+      }
+    }
+    return '`' * (longest + 1 < 3 ? 3 : longest + 1);
+  }
+
   String _rangeMarkdown(
     DocPosition s,
     DocPosition e, {
@@ -1275,14 +1279,15 @@ class EditorController extends ChangeNotifier {
         final target =
             (imageUrls?[fileId] ?? node.data['url'] ?? node.data['name'] ?? '')
                 as String;
+        final destination = escapeMarkdownDestination(target);
         // Same title rule as the inline serializer (marks.dart) — an image
         // BLOCK keeps its title in `data`, and dropping it here lost it on
         // every copy of a titled image.
         final title = node.data['title'] as String?;
         final alt = escapeInline(node.text);
         return title == null
-            ? '![$alt]($target)'
-            : '![$alt]($target "${title.replaceAll('"', r'\"')}")';
+            ? '![$alt]($destination)'
+            : '![$alt]($destination "${escapeMarkdownTitle(title)}")';
       }
       if (node.kind == 'divider') return '---';
       // A math block is LaTeX source, not prose: it needs its `$$` fence and
@@ -1306,10 +1311,9 @@ class EditorController extends ChangeNotifier {
         // `data.raw` marks an HTML BLOCK, which the importer stores as a code
         // block only to hold the source. Fencing it turns live HTML into a
         // displayed code listing — the `raw` flag is lost on re-import and the
-        // block renders as code from then on. Emit it verbatim.
         final body = node.data['raw'] == true
             ? sub
-            : '```${_copyLanguage(node)}\n$sub\n```';
+            : '${_codeFenceFor(sub)}${_copyLanguage(node)}\n$sub\n${_codeFenceFor(sub)}';
         // Quote membership must survive too. This branch used to return before
         // any prefix was applied, so a fenced block inside a blockquote came
         // out with no `>` at all and fell straight out of the quote on paste.
@@ -1831,94 +1835,7 @@ class EditorController extends ChangeNotifier {
       }
       return false;
     }
-    final start = sel.start;
-    final end = sel.end;
-
-    if (start.node == end.node) {
-      final node = nodes[start.node];
-      final s = start.offset.clamp(0, node.text.length);
-      final e = end.offset.clamp(0, node.text.length);
-      node.text = node.text.substring(0, s) + node.text.substring(e);
-      // Marks die with their text — without this the ranges stay put and
-      // bleed onto whatever slides left into them (e.g. a deleted link's
-      // format infecting the following words).
-      final marks = shiftMarks(
-        marksFromData(node.data),
-        s,
-        e,
-        s - e,
-        node.text.length,
-      );
-      node.data = {...node.data, 'marks': marksToJson(marks)};
-      _dirty.remove(node.id);
-      _sendNow([
-        {..._textOp(node.id, node.text), 'data': node.data},
-      ]);
-      _collapseAfterEdit(DocPosition(start.node, s));
-      return true;
-    }
-
-    final startNode = nodes[start.node];
-    final endNode = nodes[end.node];
-    // Unit blocks (atomic kinds, rendered diagrams) are consumed whole by a
-    // selection that touches them: their text must never merge into a
-    // neighbor (a diagram's source spilling into a paragraph reads as stray
-    // code), and a unit start block is reborn as the plain paragraph that
-    // carries whatever survives the cut.
-    final startIsUnit = startNode.isUnitBlock;
-    final endIsUnit = endNode.isUnitBlock;
-    final s = startIsUnit ? 0 : start.offset.clamp(0, startNode.text.length);
-    final e = end.offset.clamp(0, endNode.text.length);
-    final prefix = startIsUnit ? '' : startNode.text.substring(0, s);
-    final suffix = endIsUnit ? '' : endNode.text.substring(e);
-    final merged = prefix + suffix;
-    final removed = [
-      for (var i = start.node + 1; i <= end.node; i++) nodes[i].id,
-    ];
-
-    // Start node keeps marks strictly before the cut (clip, don't stretch —
-    // the joined tail must not inherit them); the end node's surviving tail
-    // brings its own marks along, remapped to the junction.
-    final (startMarks, _) = startIsUnit
-        ? (const <Mark>[], const <Mark>[])
-        : splitMarks(marksFromData(startNode.data), s);
-    final tailMarks = <Mark>[];
-    if (!endIsUnit) {
-      for (final m in marksFromData(endNode.data)) {
-        final ms = (m.start - e + s).clamp(s, merged.length);
-        final me = (m.end - e + s).clamp(s, merged.length);
-        if (me > ms) tailMarks.add(Mark(ms, me, m.type, href: m.href));
-      }
-    }
-
-    if (startIsUnit) {
-      startNode
-        ..kind = 'paragraph'
-        ..data = {};
-    }
-    startNode.text = merged;
-    startNode.data = {
-      ...startNode.data,
-      'marks': marksToJson([...startMarks, ...tailMarks]),
-    };
-    nodes.removeRange(start.node + 1, end.node + 1);
-    _dirty.remove(startNode.id);
-    final ops = <DocOp>[
-      {
-        'type': 'update_block',
-        'block_id': startNode.id,
-        if (startIsUnit) 'kind': 'paragraph',
-        'text': merged,
-        'data': startNode.data,
-      },
-    ];
-    for (final id in removed) {
-      _dirty.remove(id);
-      ops.add({'type': 'delete_block', 'block_id': id});
-    }
-    _sendNow(ops);
-    _collapseAfterEdit(DocPosition(start.node, s));
-    return true;
+    return spliceRange(sel, '');
   }
 
   /// Change the focused node's kind (turn-into / slash menu).
@@ -2100,7 +2017,8 @@ class EditorController extends ChangeNotifier {
 
   void _writeTable(int index, TableData table) {
     final node = nodes[index];
-    node.data = table.toBlockData();
+    final next = {...node.data}..remove('aligns')..remove('width');
+    node.data = {...next, ...table.toBlockData()};
     _sendNow([
       {'type': 'update_block', 'block_id': node.id, 'data': node.data},
     ]);
@@ -2203,6 +2121,10 @@ class EditorController extends ChangeNotifier {
       final w = table.widths.removeAt(col);
       table.widths.insert(to, w);
     }
+    if (table.aligns != null && col < table.aligns!.length && to < table.aligns!.length) {
+      final alignment = table.aligns!.removeAt(col);
+      table.aligns!.insert(to, alignment);
+    }
     _writeTable(index, table);
   }
 
@@ -2246,13 +2168,18 @@ class EditorController extends ChangeNotifier {
     if (_historyBusy) return;
     final table = _tableAt(index);
     if (table == null) return;
-    nodes[index].data = TableData(
-      table.rows,
-      header: table.header,
-      align: table.align,
-      tableWidth: fraction.clamp(0.15, 1.0),
-      widths: table.widths,
-    ).toBlockData();
+    nodes[index].data = {
+      ...nodes[index].data,
+      ...TableData(
+        table.rows,
+        header: table.header,
+        align: table.align,
+        tableWidth: fraction.clamp(0.15, 1.0),
+        widths: table.widths,
+        aligns: table.aligns,
+      ).toBlockData(),
+      'width': fraction.clamp(0.15, 1.0),
+    };
     notifyListeners();
   }
 
@@ -2269,6 +2196,7 @@ class EditorController extends ChangeNotifier {
         align: table.align,
         tableWidth: fraction.clamp(0.15, 1.0),
         widths: table.widths,
+        aligns: table.aligns,
       ),
     );
   }
@@ -2788,22 +2716,10 @@ class EditorController extends ChangeNotifier {
     final s = start.clamp(0, node.text.length);
     final e = end.clamp(s, node.text.length);
     final newText = node.text.substring(0, s) + text + node.text.substring(e);
-    final delta = text.length - (e - s);
-    final shifted = <Mark>[];
-    for (final m in marksFromData(node.data)) {
-      var ms = m.start, me = m.end;
-      if (ms >= e) {
-        ms += delta;
-      } else if (ms > s) {
-        ms = s;
-      }
-      if (me > e) {
-        me += delta;
-      } else if (me > s) {
-        me = s;
-      }
-      if (me > ms) shifted.add(Mark(ms, me, m.type, href: m.href));
-    }
+    final shifted = shiftMarks(
+      marksFromData(node.data), s, e,
+      text.length - (e - s), newText.length, pinAtStart: false,
+    );
     final next = applyMark(
       shifted,
       s,
@@ -2827,11 +2743,141 @@ class EditorController extends ChangeNotifier {
     _collapseAfterEdit(DocPosition(i, s + text.length));
   }
 
+  /// Replace [range] with [text] in one splice: surviving marks are remapped,
+  /// [inserts] (offsets in [text]) mark the new run, and a cross-block range
+  /// collapses like a deletion (prefix + text + suffix, inner nodes removed).
+  /// The single entry point for IME typing/composition, plain paste and inline
+  /// spans; returns false for a stale range or an uneditable block.
+  bool spliceRange(
+    DocSelection range,
+    String text, {
+    List<Mark> inserts = const [],
+    bool pinMarksAtStart = true,
+    bool deferred = false,
+    bool allowDuringHistory = false,
+  }) {
+    if (_historyBusy && !allowDuringHistory) return false;
+    final start = range.start;
+    final end = range.end;
+    if (start.node < 0 ||
+        end.node >= nodes.length ||
+        start.node > end.node) {
+      return false;
+    }
+
+    List<Mark> inserted(int at, int limit) {
+      final out = <Mark>[];
+      for (final m in inserts) {
+        final ms = (at + m.start).clamp(0, limit);
+        final me = (at + m.end).clamp(0, limit);
+        if (me > ms) out.add(m.withRange(ms, me));
+      }
+      return out;
+    }
+
+    // Same block: splice in place, shift every surviving mark across it.
+    if (start.node == end.node) {
+      final node = nodes[start.node];
+      if (node.isAtomic || node.kind == 'table') return false;
+      final len = node.text.length;
+      final s = start.offset.clamp(0, len);
+      final e = end.offset.clamp(s, len);
+      final newText = node.text.substring(0, s) + text + node.text.substring(e);
+      final marks = shiftMarks(
+        marksFromData(node.data),
+        s,
+        e,
+        text.length - (e - s),
+        newText.length,
+        pinAtStart: pinMarksAtStart,
+      );
+      marks.addAll(inserted(s, newText.length));
+      node.text = newText;
+      // An empty marks list is noise: it also makes a remote reconcile drop
+      // the key and defeats the inverse's "expected inline" match.
+      if (marks.isNotEmpty || node.data.containsKey('marks')) {
+        node.data = {...node.data, 'marks': marksToJson(marks)};
+      }
+      if (deferred) {
+        if (!_historyBusy) _markDirty(node.id);
+        selection = DocSelection.collapsed(DocPosition(start.node, s + text.length));
+      } else {
+        _dirty.remove(node.id);
+        _sendNow([
+          {'type': 'update_block', 'block_id': node.id, 'text': newText, 'data': node.data},
+        ]);
+        _collapseAfterEdit(DocPosition(start.node, s + text.length));
+      }
+      return true;
+    }
+
+    // Cross-block: delete the range and join, inserting [text] at the junction.
+    final startNode = nodes[start.node];
+    final endNode = nodes[end.node];
+    final startIsUnit = startNode.isUnitBlock;
+    final endIsUnit = endNode.isUnitBlock;
+    final s = startIsUnit ? 0 : start.offset.clamp(0, startNode.text.length);
+    final e = endIsUnit ? 0 : end.offset.clamp(0, endNode.text.length);
+    final prefix = startIsUnit ? '' : startNode.text.substring(0, s);
+    final suffix = endIsUnit ? '' : endNode.text.substring(e);
+    final merged = prefix + text + suffix;
+    final removed = [
+      for (var i = start.node + 1; i <= end.node; i++) nodes[i].id,
+    ];
+
+    // Whatever survives in the start node is strictly before the cut; the end
+    // node's tail travels past the inserted text.
+    final (startMarks, _) = startIsUnit
+        ? (const <Mark>[], const <Mark>[])
+        : splitMarks(marksFromData(startNode.data), s);
+    final mergedMarks = <Mark>[...startMarks];
+    if (!endIsUnit) {
+      final base = s + text.length;
+      for (final m in marksFromData(endNode.data)) {
+        final ms = (m.start - e + base).clamp(base, merged.length);
+        final me = (m.end - e + base).clamp(base, merged.length);
+        if (me > ms) mergedMarks.add(m.withRange(ms, me));
+      }
+    }
+    mergedMarks.addAll(inserted(s, merged.length));
+
+    if (startIsUnit) {
+      startNode
+        ..kind = 'paragraph'
+        ..data = {};
+    }
+    startNode.text = merged;
+    if (mergedMarks.isNotEmpty || startNode.data.containsKey('marks')) {
+      startNode.data = {
+        ...startNode.data,
+        'marks': marksToJson(mergedMarks),
+      };
+    }
+    nodes.removeRange(start.node + 1, end.node + 1);
+    _dirty.remove(startNode.id);
+    final ops = <DocOp>[
+      {
+        'type': 'update_block',
+        'block_id': startNode.id,
+        if (startIsUnit) 'kind': 'paragraph',
+        'text': merged,
+        'data': startNode.data,
+      },
+    ];
+    for (final id in removed) {
+      _dirty.remove(id);
+      ops.add({'type': 'delete_block', 'block_id': id});
+    }
+    _sendNow(ops);
+    _collapseAfterEdit(DocPosition(start.node, s + text.length));
+    return true;
+  }
+
   /// Insert [text] at the caret (replacing any ranged selection), carrying
   /// [spans] — marks whose offsets are relative to [text]. Existing marks shift
   /// across the replacement; the caret lands after the inserted run. Used to
   /// paste inline content (e.g. inline math `$…$`) into the text flow without
-  /// breaking the line.
+  /// breaking the line. [spliceRange] owns the offset math.
   void insertInlineSpan(
     int i,
     int start,
@@ -2847,46 +2893,15 @@ class EditorController extends ChangeNotifier {
     }
     final s = start.clamp(0, node.text.length);
     final e = end.clamp(s, node.text.length);
-    final newText = node.text.substring(0, s) + text + node.text.substring(e);
-    final delta = text.length - (e - s);
-    final next = <Mark>[];
-    // Shift existing marks across the [s, e) → text replacement (same rule as
-    // replaceLink: marks inside the replaced range collapse to its start).
-    for (final m in marksFromData(node.data)) {
-      var ms = m.start, me = m.end;
-      if (ms >= e) {
-        ms += delta;
-      } else if (ms > s) {
-        ms = s;
-      }
-      if (me > e) {
-        me += delta;
-      } else if (me > s) {
-        me = s;
-      }
-      if (me > ms) {
-        next.add(Mark(ms, me, m.type, href: m.href, title: m.title));
-      }
-    }
-    // Add the inserted spans, offset to the insertion point.
-    for (final m in spans) {
-      next.add(
-        Mark(s + m.start, s + m.end, m.type, href: m.href, title: m.title),
-      );
-    }
-    node
-      ..text = newText
-      ..data = {...node.data, 'marks': marksToJson(next)};
-    _dirty.remove(node.id);
-    _sendNow([
-      {
-        'type': 'update_block',
-        'block_id': node.id,
-        'text': newText,
-        'data': node.data,
-      },
-    ]);
-    _collapseAfterEdit(DocPosition(i, s + text.length));
+    spliceRange(
+      DocSelection(
+        anchor: DocPosition(i, s),
+        focus: DocPosition(i, e),
+      ),
+      text,
+      inserts: spans,
+      pinMarksAtStart: false,
+    );
   }
 
   /// Insert a paragraph as the new first block (Enter in the page title
@@ -3029,13 +3044,10 @@ class EditorController extends ChangeNotifier {
       ]);
       return;
     }
-    final len = node.text.length;
-    final from = (sel.start.node == i ? sel.start.offset : 0).clamp(0, len);
-    final to = (sel.end.node == i ? sel.end.offset : len).clamp(0, len);
-    node.text = node.text.substring(0, from) + text + node.text.substring(to);
-    _dirty.remove(node.id);
-    _sendNow([_textOp(node.id, node.text)]);
-    _collapseAfterEdit(DocPosition(i, from + text.length));
+    // The one splice primitive remaps marks and handles a cross-block
+    // selection; the old in-node string edit left marks pointing at the wrong
+    // characters after a paste at the start of a paragraph.
+    spliceRange(sel, text, pinMarksAtStart: false);
   }
 
   /// Replace the focused node with parsed blocks (used for multi-line Markdown
@@ -3351,31 +3363,10 @@ class EditorController extends ChangeNotifier {
     final node = nodes[i];
     final old = node.text;
     if (start < 0 || end > old.length || start > end) return false;
-    final newText = old.substring(0, start) + replacement + old.substring(end);
-    final shifted = shiftMarks(
-      marksFromData(node.data),
-      start,
-      end,
-      replacement.length - (end - start),
-      newText.length,
+    return spliceRange(
+      DocSelection(anchor: DocPosition(i, start), focus: DocPosition(i, end)),
+      replacement,
     );
-    node.text = newText;
-    node.data = {...node.data, 'marks': marksToJson(shifted)};
-    _dirty.remove(node.id);
-    selection = DocSelection.collapsed(
-      DocPosition(i, start + replacement.length),
-    );
-    goalX = null;
-    _sendNow([
-      {
-        'type': 'update_block',
-        'block_id': node.id,
-        'text': newText,
-        'data': node.data,
-      },
-    ]);
-    notifyListeners();
-    return true;
   }
 
   /// Replace every case-insensitive, non-overlapping occurrence of [query] with
@@ -3385,6 +3376,7 @@ class EditorController extends ChangeNotifier {
   /// Returns the number of occurrences replaced. Mirrors [findTextMatches]'
   /// case-insensitive matching so the count agrees with the find bar.
   int replaceAll(String query, String replacement) {
+    if (_historyBusy) return 0;
     if (query.isEmpty) return 0;
     final needle = query.toLowerCase();
     final ops = <DocOp>[];

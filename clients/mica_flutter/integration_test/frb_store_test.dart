@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2-M2: on-device persistence works end to end through FFI.
 //
 // Opens a local SQLite store, saves an edited document, then reopens the SAME
@@ -17,7 +18,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('local store persists edits + stable identity across reopen', () {
@@ -36,15 +37,15 @@ void main() {
       ]),
     );
     doc.textInsert(id: 'a', at: 12, text: '!');
-    s1.saveDoc(docId: 'doc1', doc: doc);
-    expect(s1.listDocs(), ['doc1']);
+    s1.saveDoc(origin: 'local', docId: 'doc1', doc: doc);
+    expect(s1.listDocs(origin: 'local'), ['doc1']);
 
     // Second session: reopen the SAME file in a fresh store, load it back.
     final s2 = MicaStore.open(path: path)!;
     expect(s2.clientId(), clientId, reason: 'client id stable across reopen');
     expect(s2.deviceId(), deviceId, reason: 'device id stable across reopen');
 
-    final loaded = s2.loadDoc(docId: 'doc1');
+    final loaded = s2.loadDoc(origin: 'local', docId: 'doc1');
     expect(loaded, isNotNull, reason: 'the saved doc is found after reopen');
     final blocks =
         (jsonDecode(loaded!.toBlocksJson()) as List).cast<Map<String, dynamic>>();
@@ -58,7 +59,7 @@ void main() {
   test('missing doc loads as null', () {
     final dir = Directory.systemTemp.createTempSync('mica_store2');
     final s = MicaStore.open(path: '${dir.path}/s.db')!;
-    expect(s.loadDoc(docId: 'nope'), isNull);
+    expect(s.loadDoc(origin: 'local', docId: 'nope'), isNull);
     _bestEffortDelete(dir);
   });
 
@@ -76,7 +77,7 @@ void main() {
         {'id': 'a', 'type': 'paragraph', 'text': 'hi'},
       ]),
     );
-    s.saveDoc(docId: 'd', doc: doc);
+    s.saveDoc(origin: 'local', docId: 'd', doc: doc);
     final base = doc.encodeState();
 
     // Two edits, each captured as a yrs diff and appended to the log; the clock
@@ -84,19 +85,19 @@ void main() {
     var sv = doc.stateVector();
     doc.textInsert(id: 'a', at: 2, text: ' there');
     expect(
-        s.appendUpdate(docId: 'd', update: doc.encodeDiffSince(stateVector: sv)),
+        s.appendUpdate(origin: 'local', docId: 'd', update: doc.encodeDiffSince(stateVector: sv)),
         1);
 
     sv = doc.stateVector();
     doc.textInsert(id: 'a', at: 8, text: '!');
     expect(
-        s.appendUpdate(docId: 'd', update: doc.encodeDiffSince(stateVector: sv)),
+        s.appendUpdate(origin: 'local', docId: 'd', update: doc.encodeDiffSince(stateVector: sv)),
         2);
 
     // The full log, then only the tail past clock 1 (the "un-pushed outbox" query).
-    final all = s.updatesAfter(docId: 'd', after: 0);
+    final all = s.updatesAfter(origin: 'local', docId: 'd', after: 0);
     expect(all.map((e) => e.clock).toList(), [1, 2]);
-    expect(s.updatesAfter(docId: 'd', after: 1).map((e) => e.clock).toList(), [2]);
+    expect(s.updatesAfter(origin: 'local', docId: 'd', after: 1).map((e) => e.clock).toList(), [2]);
 
     // base + logged updates reconstruct the edited doc — the durable form works.
     final replay = MicaDocument.fromStateWithClientId(bytes: base, clientId: cid)!;
@@ -115,17 +116,19 @@ void main() {
     final path = '${dir.path}/s.db';
     final s1 = MicaStore.open(path: path)!;
     // Defaults to 0/0 for a doc that has never synced.
-    var c = s1.syncCursor(docId: 'd');
+    var c = s1.syncCursor(origin: 'local', docId: 'd');
     expect(c.lastSyncedRid, 0);
     expect(c.pushedClock, 0);
     s1.setSyncCursor(
-        docId: 'd', cursor: const SyncCursor(lastSyncedRid: 42, pushedClock: 7));
-    c = s1.syncCursor(docId: 'd');
+        origin: 'local',
+        docId: 'd',
+        cursor: const SyncCursor(lastSyncedRid: 42, pushedClock: 7));
+    c = s1.syncCursor(origin: 'local', docId: 'd');
     expect(c.lastSyncedRid, 42);
     expect(c.pushedClock, 7);
     // Persisted (not in-memory): survives reopening the same db file.
     final s2 = MicaStore.open(path: path)!;
-    final c2 = s2.syncCursor(docId: 'd');
+    final c2 = s2.syncCursor(origin: 'local', docId: 'd');
     expect(c2.lastSyncedRid, 42);
     expect(c2.pushedClock, 7);
     _bestEffortDelete(dir);

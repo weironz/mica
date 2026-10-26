@@ -41,7 +41,7 @@ class LocalOffline implements LocalOfflineApi {
   Future<BigInt?> deviceClientId() async => null;
 
   /// Web has no on-device store — cloud docs stay online (P2 Phase 1).
-  CloudDocStore? cloudDocStore(String docId) => null;
+  CloudDocStore? cloudDocStore(String origin, String docId) => null;
 
   void rollbackDoc(String docId) {}
 
@@ -71,11 +71,26 @@ class LocalOffline implements LocalOfflineApi {
   /// compile did, which is exactly what that CI job exists for.
   String? exportDocMarkdownText(String docId, String title) => null;
 
+  /// No on-device view store exists on web — the local world itself is
+  /// desktop-only, and the cloud page tree mirrors through localStorage
+  /// ([mirrorCloudPageTree]) rather than view rows. Renames reach the server
+  /// through the cloud path, never here. Explicit unsupported rather than a
+  /// silent no-op: a rename that "succeeds" without persisting anywhere is
+  /// the bug this interface exists to prevent.
+  void saveView(ViewData v, {String origin = 'local'}) {
+    throw UnsupportedError('local offline is not available on web');
+  }
+
   /// No local store on web — the cloud path writes the title server-side.
   void setDocTitle(String docId, String title) {}
 
   /// Web has no local folders — folder ZIP export is cloud-side there.
   Uint8List? exportFolderZip(String workspaceId, String folderId) => null;
+
+  /// Web has no local workspace store; the cloud-side workspace export is the
+  /// API path, not this one.
+  Uint8List? exportWorkspaceZip(String workspaceId, {String origin = 'local'}) =>
+      null;
 
   /// No native WebView2 on web — PDF export is a desktop capability. (The web
   /// build routes PDF through the browser's own print, not this path.)
@@ -105,7 +120,7 @@ class LocalOffline implements LocalOfflineApi {
   /// (`reorderWorkspaces`), not here.
   void reorderWorkspaces(List<String> ids, {String origin = 'local'}) {}
 
-  void deleteWorkspace(String id) {}
+
 
   /// No-op: web has no local store (the mirror lives in IndexedDB, cleared with
   /// the doc mirrors, not here). Present so the caller needn't branch on
@@ -137,7 +152,8 @@ class LocalOffline implements LocalOfflineApi {
   /// local-only — all zeros rather than a thrown "unsupported".
   @override
   Future<LocalCacheStats> cacheStats({
-    required List<String> mirroredOrigins,
+    required List<String> servers,
+    required String accountId,
   }) async => (
     mirroredPages: 0,
     mirroredBytes: 0,
@@ -145,37 +161,85 @@ class LocalOffline implements LocalOfflineApi {
     localOnlyBytes: 0,
   );
 
-  /// Nothing on-device to clear on web; the numbers were already all zero.
+  /// Drop this account's localStorage page-tree mirror. Cloud DOC replicas live
+  /// in IndexedDB and hold the durable outbox, so they are NOT touchable from
+  /// this nav cache — nothing here is the only copy of an edit.
+  ///
+  /// Legacy (pre-#111) `cloudPageTree:<server>` entries are left untouched and
+  /// reported as quarantined: their account is unverifiable, so they are never
+  /// shown to (or claimed by) the current user.
   @override
-  Future<LocalCacheStats> clearMirrorCache({
-    required List<String> mirroredOrigins,
-  }) => cacheStats(mirroredOrigins: mirroredOrigins);
+  Future<ClearMirrorResult> clearMirrorCache({
+    required List<String> servers,
+    required String accountId,
+  }) async {
+    for (final server in servers) {
+      savePref('cloudPageTree:${cloudCacheOrigin(server, accountId)}', '');
+    }
+    final quarantined = <String>[];
+    for (final server in servers) {
+      final legacy = legacyCloudCacheOrigin(server);
+      final raw = loadPref('cloudPageTree:$legacy');
+      if (raw != null && raw.isNotEmpty) quarantined.add(legacy);
+    }
+    return (
+      stats: await cacheStats(servers: servers, accountId: accountId),
+      retainedDocs: 0,
+      quarantinedOrigins: quarantined,
+    );
+  }
 
-  void saveView(ViewData v, {String origin = 'local'}) {}
+  /// Legacy page-tree mirrors stored under the pre-#111 server-only key.
+  /// Counts/ids only — names come from the cached JSON and are deliberately
+  /// NOT returned, so the current account never sees another account's titles.
+  @override
+  List<({String origin, String workspaceId, int pages})> quarantinedWorkspaces({
+    required List<String> servers,
+  }) {
+    final out = <({String origin, String workspaceId, int pages})>[];
+    for (final server in servers) {
+      final origin = legacyCloudCacheOrigin(server);
+      final cache = _readTree(origin);
+      if (cache == null) continue;
+      for (final w in cache.workspaces) {
+        final pages = cache.views
+            .where((v) => v.workspaceId == w.id && v.objectType != 'folder' && !v.trashed)
+            .length;
+        out.add((origin: origin, workspaceId: w.id, pages: pages));
+      }
+    }
+    return out;
+  }
 
   /// P4-2: mirror the cloud page tree into localStorage — same semantics as the
   /// desktop store's mirror, including this one:
   ///
-  /// Only the workspaces this call CARRIES are replaced. Writing the whole blob
-  /// from memory dropped every workspace not loaded in the current session, so
-  /// the mirror could never be wider than the in-memory cache — the one thing it
-  /// exists to be. Workspaces gone from [workspaces] are dropped either way.
+  /// Only the workspaces whose view list this call CARRIES are replaced.
+  /// Writing the whole blob from memory dropped every workspace not loaded in
+  /// the current session, so the mirror could never be wider than the in-memory
+  /// cache — the one thing it exists to be. Workspaces gone from [workspaces]
+  /// are dropped either way.
+  ///
+  /// [origin] is the account-scoped key (`cloudCacheOrigin`); a bare server URL
+  /// would let another account read this cache (issue #111).
   void mirrorCloudPageTree(
-    String serverUrl,
+    String origin,
     List<WorkspaceData> workspaces,
-    List<ViewData> views,
-  ) {
-    final incoming = {for (final v in views) v.workspaceId};
+    List<ViewData> views, {
+    Set<String> viewWorkspaceIds = const {},
+  }) {
+    final replaced = viewWorkspaceIds.isNotEmpty
+        ? viewWorkspaceIds
+        : {for (final v in views) v.workspaceId};
     final live = {for (final w in workspaces) w.id};
     final kept = <ViewData>[
-      for (final v
-          in cachedCloudPageTree(serverUrl)?.views ?? const <ViewData>[])
-        if (!incoming.contains(v.workspaceId) && live.contains(v.workspaceId))
+      for (final v in _readTree(origin)?.views ?? const <ViewData>[])
+        if (!replaced.contains(v.workspaceId) && live.contains(v.workspaceId))
           v,
     ];
     views = [...kept, ...views];
     savePref(
-      'cloudPageTree:$serverUrl',
+      'cloudPageTree:$origin',
       jsonEncode({
         'workspaces': [
           for (final w in workspaces)
@@ -203,10 +267,13 @@ class LocalOffline implements LocalOfflineApi {
     );
   }
 
-  /// P4-2: the localStorage page-tree mirror for [serverUrl] (null when never
-  /// mirrored / unparsable — the caller then stays on the online-only path).
-  CloudPageTreeCache? cachedCloudPageTree(String serverUrl) {
-    final raw = loadPref('cloudPageTree:$serverUrl');
+  /// P4-2: the localStorage page-tree mirror for [origin] — the account-scoped
+  /// key from `cloudCacheOrigin` (null when never mirrored / unparsable — the
+  /// caller then stays on the online-only path).
+  CloudPageTreeCache? cachedCloudPageTree(String origin) => _readTree(origin);
+
+  CloudPageTreeCache? _readTree(String origin) {
+    final raw = loadPref('cloudPageTree:$origin');
     if (raw == null || raw.isEmpty) return null;
     try {
       final m = jsonDecode(raw) as Map<String, dynamic>;
@@ -240,10 +307,10 @@ class LocalOffline implements LocalOfflineApi {
     }
   }
 
-  DocData? openCloudDocMirror(String docId) => null;
+  DocData? openCloudDocMirror(String origin, String docId) => null;
 
   ({String workspaceId, int docs})? detachCloudWorkspace(
-    String serverUrl,
+    String origin,
     String cloudWorkspaceId,
     String name,
   ) => null;
@@ -305,7 +372,21 @@ class LocalOffline implements LocalOfflineApi {
   }) async => (
     docs: 0,
     folders: 0,
-    errors: const ['local offline is not available on web'],
+    errors: const <String>['local offline is not available on web'],
+    viewIds: const <String>[],
+  );
+
+  @override
+  Future<VaultImportResult> importMarkdownPage(
+    String fileName,
+    String markdown,
+    String workspaceId, {
+    required String fallbackTitle,
+  }) async => (
+    docs: 0,
+    folders: 0,
+    errors: const <String>['local offline is not available on web'],
+    viewIds: const <String>[],
   );
 
   void flush() {}

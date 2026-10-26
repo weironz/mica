@@ -89,6 +89,20 @@ as a clean plain string (unchanged), and store formatting additively in
                        { "start": 0, "end": 5, "type": "link", "href": "https://…" } ] } }
 ```
 
+`EditorController.spliceRange` consumes a document range plus inserted text and
+mark policy. Typing, composition, plain paste and inline math paste share its
+replacement semantics; surviving tail marks start at the merged junction, and
+re-ranged marks retain link titles. Enter recognition uses the actual replaced
+range so replacing an existing soft break still splits the block.
+
+Clipboard cuts retain their initiating range until copying succeeds; a changed
+live selection cannot redirect deletion. CF_HTML imports use UTF-8 byte
+`StartFragment`/`EndFragment` bounds, with unusable bounds falling back to the
+plain flavor. Table cell sessions resolve the table block id after snapshots,
+rebase untouched content, and only persist user changes. Table width/column
+operations retain per-column alignment; pending undo/redo disables replacement.
+
+
 Rationale:
 
 - Matches the established architecture: internal state is a structured block

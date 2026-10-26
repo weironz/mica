@@ -18,6 +18,8 @@ void main() {
 
   /// A server file id: `8-4-4-4-12` hex, the shape a mirrored image keeps.
   const mirrorId = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+  const server = 'http://s';
+  const account = 'user-a';
 
   setUp(() {
     tmp = Directory.systemTemp.createTempSync('mica_clear');
@@ -33,15 +35,18 @@ void main() {
     final localId = local.putBlob(bytes(120, 7));
     local.putBlobAs(mirrorId, bytes(300, 9));
 
-    final before = await local.cacheStats(mirroredOrigins: const ['http://s']);
+    final before = await local.cacheStats(
+      servers: const [server],
+      accountId: account,
+    );
     expect(before.mirroredBytes, 300);
     expect(before.localOnlyBytes, 120);
 
-    final after = await local.clearMirrorCache(
-      mirroredOrigins: const ['http://s'],
+    final cleared = await local.clearMirrorCache(
+      servers: const [server],
+      accountId: account,
     );
-
-    expect(after.mirroredBytes, 0, reason: 'the mirror is re-downloadable');
+    final after = cleared.stats;
     expect(
       after.localOnlyBytes,
       120,
@@ -59,24 +64,27 @@ void main() {
     local.putBlobAs('legacy-image-id', bytes(64, 3));
     local.putBlobAs(mirrorId, bytes(64, 4));
 
-    final after = await local.clearMirrorCache(
-      mirroredOrigins: const ['http://s'],
+    final cleared = await local.clearMirrorCache(
+      servers: const [server],
+      accountId: account,
     );
 
     expect(
       File('${tmp.path}/local/blobs/legacy-image-id').existsSync(),
       isTrue,
     );
-    expect(after.localOnlyBytes, 64);
-    expect(after.mirroredBytes, 0);
+    expect(cleared.stats.localOnlyBytes, 64);
+    expect(cleared.stats.mirroredBytes, 0);
   });
 
   test('clearing an empty store is a no-op, not a failure', () async {
     // Reachable: the button is only drawn when there is something to clear, but
     // a second press after the first one finished must not throw.
-    final after = await local.clearMirrorCache(
-      mirroredOrigins: const ['http://s'],
+    final cleared = await local.clearMirrorCache(
+      servers: const [server],
+      accountId: account,
     );
+    final after = cleared.stats;
     expect(after.mirroredBytes, 0);
     expect(after.localOnlyBytes, 0);
     expect(after.mirroredPages, 0);
@@ -90,13 +98,15 @@ void main() {
     local.putBlobAs(mirrorId, bytes(500, 1));
     local.putBlob(bytes(50, 2));
 
-    final after = await local.clearMirrorCache(
-      mirroredOrigins: const ['http://s'],
+    final cleared = await local.clearMirrorCache(
+      servers: const [server],
+      accountId: account,
     );
     final recounted = await local.cacheStats(
-      mirroredOrigins: const ['http://s'],
+      servers: const [server],
+      accountId: account,
     );
 
-    expect(after, equals(recounted));
+    expect(cleared.stats, equals(recounted));
   });
 }

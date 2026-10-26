@@ -657,6 +657,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     // (or a manual sign-in) during an await used to persist this server's
     // token under the other's key and send it there (2026-10-21 review U2).
     final origin = _cloudOrigin;
+    final startGeneration = _sessionCtrl.generation;
     bool stale() => !mounted || _cloudOrigin != origin || _session != null;
     var token = loadPref('authToken:$_cloudOrigin');
     final userJson = loadPref('authUser:$_cloudOrigin');
@@ -679,9 +680,9 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         _auth.persistSession(recovered);
         token = recovered.accessToken;
       } on ApiException catch (error) {
-        // The cookie is gone or burnt (signed out elsewhere, 30 days idle,
-        // reuse detected). That is a real end of session, not a transient.
-        if (error.isUnauthorized) {
+        // The cookie is gone or burnt — a real end of session, but only for
+        // the sign-in that asked (issue #147: error branches owe `stale()` too).
+        if (error.isUnauthorized && !stale()) {
           _auth.clearPersistedSession();
           _fallBackToLocalWorld();
         }
@@ -729,7 +730,8 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         if (stale()) return;
         _auth.persistSession(session);
       } on ApiException catch (error) {
-        if (error.isUnauthorized) {
+        // Only the sign-in that asked may lose its credentials (issue #147).
+        if (error.isUnauthorized && !stale()) {
           _auth.clearPersistedSession();
           _fallBackToLocalWorld();
         }
@@ -739,6 +741,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         return; // offline: try again next launch, don't destroy credentials
       }
     }
+    var installed = false;
     try {
       // `session.accessToken`, not the `token` we loaded: a refresh above
       // replaced it, and spending the dead one here would 401 and throw the
@@ -760,6 +763,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         ..._warmTreesFromMirror(session),
         ..._viewsByWorkspace,
       });
+      installed = true;
       unawaited(_syncSettingsFromCloud(session));
       unawaited(_refreshAiConfigured());
       // The session we just restored carries the profile as it was at LAST
@@ -774,8 +778,12 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // typing before that silently rode the REST fallback with no mirror.
       _reconcileSync();
     } catch (error) {
-      if (!mounted || _cloudOrigin != origin) {
-        return; // never clear the NEW server's
+      // Sign-in/out during the awaits retired this restore (issue #147): a
+      // generation check, since the restore installs a session mid-flight.
+      final expected = installed ? startGeneration + 1 : startGeneration;
+      if (!mounted || _cloudOrigin != origin ||
+          _sessionCtrl.generation != expected) {
+        return; // never clear the NEW sign-in's credentials
       }
       // Revoked/invalid token → drop it; desktop falls back to the local world.
       // Keyed on the status, not on the message text: sniffing for the word
@@ -1374,7 +1382,10 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       savePref: savePref,
       mirrorPageTree: (origin, workspaces, views) =>
           _local.mirrorCloudPageTree(origin, workspaces, views),
-      origin: () => _api.baseUri.toString(),
+      origin: () => requireCloudCacheOrigin(
+        _api.baseUri.toString(),
+        _session?.user.id,
+      ),
       isMounted: () => mounted,
       openViewId: () => _selectedView?.id,
       crdtSessionDocumentId: () => _cloudSession?.documentId,
@@ -1529,8 +1540,12 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       isMounted: () => mounted,
       isWeb: () => kIsWeb,
       deviceClientId: () => _local.deviceClientId(),
-      cloudDocStore: (docId) => _local.cloudDocStore(docId),
-      openWebDocStore: (docId) => openWebDocStore(_cloudOrigin, docId),
+      cloudDocStore: (docId) => _local.cloudDocStore(
+        requireCloudCacheOrigin(_api.baseUri.toString(), _session?.user.id),
+        docId,
+      ),
+      openWebDocStore: (docId) =>
+          openWebDocStore(requireCloudCacheOrigin(_cloudOrigin, _session?.user.id), docId),
       ensureFreshSession: () => _auth.ensureFreshSession(),
       readPref: loadPref,
       savePref: savePref,
@@ -1540,8 +1555,9 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       onCloudOnline: _onCloudOnline,
       onReadyReconcileUploads: (documentId) =>
           _reconcilePendingUploads(documentId),
-      onSyncPhase: (phase) {
-        if (mounted) setState(() => _syncPhase = phase);
+      // Active doc only; the badge value itself is derived on read (issue #160).
+      onSyncPhase: (_, _) {
+        if (mounted) setState(() {});
       },
       onFaultBanner: () {
         if (!mounted) return;
@@ -1795,7 +1811,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   /// behavior). Members are unknowable offline (empty); the first cached view
   /// opens via its mirrored doc, and the sync session reconciles on reconnect.
   Future<void> _openWorkspaceFromMirror(Workspace workspace) async {
-    final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
+    final userId = _session?.user.id;
+    if (userId == null || userId.isEmpty) return;
+    final cache = _local.cachedCloudPageTree(
+      cloudCacheOrigin(_api.baseUri.toString(), userId),
+    );
     if (cache == null) return; // never mirrored — nothing to show
     final rebuilt = rebuildCloudNavFromCache(cache, _session?.user.id ?? '');
     final views = rebuilt.views[workspace.id] ?? const <DocumentView>[];
@@ -2144,20 +2164,6 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     String response,
     EditorAiSnapshot source,
   ) => _api.previewAiEdits(_requireSession().accessToken, response, source);
-
-  Future<Uint8List> _exportPageZip() async {
-    final session = _requireSession();
-    final workspace = _requireWorkspace();
-    final bootstrap = _selectedBootstrap;
-    if (bootstrap == null) {
-      throw ApiException(context.l10n.pageOpenFirst);
-    }
-    return _api.exportDocumentZip(
-      session.accessToken,
-      workspace.id,
-      bootstrap.document.id,
-    );
-  }
 
   /// Export the open CLOUD page, choosing the shape by content: a page with no
   /// bundled assets exports as a single clean `.md`; one that references local
@@ -2810,19 +2816,8 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     await _api.revokeToken(_requireSession().accessToken, id);
   }
 
-  String _titleFromMarkdown(String markdown, String fallback) {
-    for (final line in markdown.split('\n')) {
-      final trimmed = line.trim();
-      final heading = RegExp(r'^#{1,6}\s+(.*)$').firstMatch(trimmed);
-      if (heading != null && heading.group(1)!.trim().isNotEmpty) {
-        return heading.group(1)!.trim();
-      }
-      if (trimmed.isNotEmpty) {
-        return trimmed.length > 60 ? trimmed.substring(0, 60) : trimmed;
-      }
-    }
-    return fallback;
-  }
+  String _titleFromMarkdown(String markdown, String fallback) =>
+      titleFromMarkdown(markdown, fallback);
 
   Future<void> _aiNewPageFromMarkdown(String markdown) {
     return _run(() async {
@@ -3302,112 +3297,6 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     });
   }
 
-  Future<void> _updateRootBlockText(String text) {
-    final bootstrap = _selectedBootstrap;
-    if (bootstrap == null) {
-      return _run(() async {
-        throw ApiException(context.l10n.pageSelectFirst);
-      });
-    }
-
-    return _applySelectedDocumentOperations([
-      {
-        'type': 'update_block',
-        'block_id': bootstrap.document.rootBlockId,
-        'text': text,
-      },
-    ]);
-  }
-
-  Future<void> _addBlock(DocumentBlockKind kind, String text) {
-    final bootstrap = _selectedBootstrap;
-    if (bootstrap == null) {
-      return _run(() async {
-        throw ApiException(context.l10n.pageSelectFirst);
-      });
-    }
-
-    return _applySelectedDocumentOperations([
-      {
-        'type': 'insert_block',
-        'parent_id': bootstrap.document.rootBlockId,
-        'block': {
-          'id': 'block_${DateTime.now().microsecondsSinceEpoch}',
-          'type': kind.apiValue,
-          'text': text,
-          'children': <String>[],
-        },
-      },
-    ]);
-  }
-
-  Future<void> _updateBlock(
-    DocumentBlock block,
-    DocumentBlockKind kind,
-    String text,
-  ) {
-    return _applySelectedDocumentOperations([
-      {
-        'type': 'update_block',
-        'block_id': block.id,
-        'kind': kind.apiValue,
-        'text': text,
-      },
-    ]);
-  }
-
-  Future<void> _deleteBlock(DocumentBlock block) {
-    return _applySelectedDocumentOperations([
-      {'type': 'delete_block', 'block_id': block.id},
-    ]);
-  }
-
-  Future<void> _moveBlock(DocumentBlock block, int targetIndex) {
-    final bootstrap = _selectedBootstrap;
-    if (bootstrap == null) {
-      return _run(() async {
-        throw ApiException(context.l10n.pageSelectFirst);
-      });
-    }
-
-    return _applySelectedDocumentOperations([
-      {
-        'type': 'move_block',
-        'block_id': block.id,
-        'parent_id': bootstrap.document.rootBlockId,
-        'index': targetIndex,
-      },
-    ]);
-  }
-
-  Future<void> _applySelectedDocumentOperations(
-    List<Map<String, dynamic>> operations,
-  ) {
-    return _run(() async {
-      final session = _requireSession();
-      final workspace = _requireWorkspace();
-      final bootstrap = _selectedBootstrap;
-      if (bootstrap == null) {
-        throw ApiException(context.l10n.pageSelectFirst);
-      }
-
-      final result = await _api.applyDocumentUpdate(
-        session.accessToken,
-        workspace.id,
-        bootstrap.document.id,
-        operations,
-      );
-
-      setState(() {
-        _selectedBootstrap = DocumentBootstrap(
-          document: result.document,
-          view: bootstrap.view,
-          snapshot: result.snapshot,
-        );
-      });
-    });
-  }
-
   /// Editor writes stay on the local-origin CRDT, including cold bootstrap.
   Future<void> _applyEditorOperations(
     List<Map<String, dynamic>> operations, {
@@ -3588,7 +3477,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     );
     if (confirmed != true || !mounted) return;
     final result = _local.detachCloudWorkspace(
-      entry.origin,
+      requireCloudCacheOrigin(entry.origin, _session?.user.id),
       entry.workspace.id,
       entry.workspace.name,
     );
@@ -4457,7 +4346,9 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   /// Empty on web without a mirror, and empty before the first successful sync
   /// — both are the honest "we have nothing yet" that the cold path handles.
   Map<String, List<DocumentView>> _warmTreesFromMirror(AuthSession session) {
-    final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
+    final cache = _local.cachedCloudPageTree(
+      requireCloudCacheOrigin(_api.baseUri.toString(), session.user.id),
+    );
     if (cache == null) return const {};
     return rebuildCloudNavFromCache(cache, session.user.id).views;
   }
@@ -4533,7 +4424,9 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     // the mirror needs no FFI store).
     await _local.deviceClientId();
     if (!mounted) return false;
-    final cache = _local.cachedCloudPageTree(_api.baseUri.toString());
+    final cache = _local.cachedCloudPageTree(
+      requireCloudCacheOrigin(_api.baseUri.toString(), session.user.id),
+    );
     if (cache == null || cache.workspaces.isEmpty) return false;
     final rebuilt = rebuildCloudNavFromCache(cache, session.user.id);
     final workspace = rebuilt.workspaces.first;
@@ -4608,9 +4501,13 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   Future<DocumentBootstrap?> _offlineCloudBootstrap(DocumentView view) async {
     // A folder has no document to open.
     if (view.objectType == 'folder') return null;
+    final origin = requireCloudCacheOrigin(
+      _api.baseUri.toString(),
+      _session?.user.id,
+    );
     final data =
-        _local.openCloudDocMirror(view.objectId) ??
-        await openWebDocMirror(_cloudOrigin, view.objectId);
+        _local.openCloudDocMirror(origin, view.objectId) ??
+        await openWebDocMirror(origin, view.objectId);
     if (data == null) return null;
     return _localBackend._localBootstrapFrom(
       view.objectId,
@@ -4663,7 +4560,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       : _deleteWorkspace(e.workspace);
 
   Future<Uint8List> _exportEntryZip(WorkspaceEntry e) => e.isLocal
-      ? Future.value(Uint8List(0)) // parity with the old local-shell stub
+      ? _localBackend._localExportWorkspaceZip(e.workspace.id)
       : _exportWorkspaceZip(e.workspace.id);
 
   /// Persist a new workspace order for ONE world (the switcher only reorders
@@ -4800,8 +4697,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   /// feature passes the same stub the old shell passed — P3c turns these into
   /// nullable props that hide the UI.
   /// The current cloud doc's sync phase, driving the quiet header badge. Only
-  /// meaningful while a cloud session is live (gated in _unifiedWorkspaceView).
-  SyncPhase _syncPhase = SyncPhase.offline;
+  /// meaningful while a cloud session is live (gated in _unifiedWorkspaceView);
+  /// derived from the ACTIVE document's last phase, re-read on tab switches
+  /// (issue #160).
+  SyncPhase get _syncPhase =>
+      _syncCtrl.phaseOf(_selectedBootstrap?.document.id) ?? SyncPhase.offline;
 
   /// Comment threads on the open cloud document, as the server resolved them
   /// (each carries offsets against the CURRENT text, or a null anchor when
@@ -5144,11 +5044,6 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       onDeleteView: viewOps.delete,
       onDeleteViews: viewOps.bulkDelete,
       onCloneView: viewOps.clone,
-      onUpdateRootBlockText: viewOps.updateRootBlockText,
-      onAddBlock: viewOps.addBlock,
-      onUpdateBlock: viewOps.updateBlock,
-      onDeleteBlock: viewOps.deleteBlock,
-      onMoveBlock: viewOps.moveBlock,
       onApplyOperations:
           _applyEditorOperations, // P3d: one entry, self-dispatches
       onApplyHistory: _editorHistoryForDocument(),
@@ -5234,11 +5129,6 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // which hid the panel outright: a locally-linked page looked unlinked.
       onLoadBacklinks: _loadBacklinks,
       onLoadGraph: _loadGraph,
-      // Local workspaces have no server to bundle the zip; the local backend's
-      // pageZip SAYS so (throws `exportLocalUnsupported`) rather than handing
-      // back Uint8List(0), which the caller happily saved as a 0-byte page.zip
-      // and called it a successful export.
-      onExportPageZip: b.exportOps.pageZip,
       onExportPage: b.exportOps.page,
       onCopyPageMarkdown: b.exportOps.copyMarkdown,
       onExportPageHtml: b.exportOps.pageHtml,
@@ -5251,11 +5141,24 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       onExportAllWorkspaces: b.exportAllWorkspaces,
       onLoadExportStats: b.exportStats,
       // Desktop only: web has no on-device store to measure.
-      onLoadCacheStats: _local.available
-          ? () => _local.cacheStats(mirroredOrigins: _servers)
+      onLoadCacheStats: _local.available && _session != null
+          ? () => _local.cacheStats(
+              servers: _servers,
+              accountId: _session!.user.id,
+            )
           : null,
-      onClearMirrorCache: _local.available
-          ? () => _local.clearMirrorCache(mirroredOrigins: _servers)
+      onClearMirrorCache: _local.available && _session != null
+          ? () => _local.clearMirrorCache(
+              servers: _servers,
+              accountId: _session!.user.id,
+            )
+          : null,
+      onLoadQuarantinedCaches: _local.available
+          ? () async => _local.quarantinedWorkspaces(servers: _servers)
+          : null,
+      onExportQuarantinedCache: _local.available
+          ? (origin, workspaceId) async =>
+              _local.exportWorkspaceZip(workspaceId, origin: origin)
           : null,
       onImportWorkspaceZip: b.importWorkspaceZip,
       onImportWorkspaceTreeInto: b.exportOps.importTree,

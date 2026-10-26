@@ -11,6 +11,7 @@ import 'package:ffi/ffi.dart';
 import 'package:pasteboard/pasteboard.dart';
 
 import '../diagnostics.dart';
+import 'cf_html.dart';
 import 'html_to_markdown.dart';
 
 /// Returns true if the paste was consumed by the handler.
@@ -98,6 +99,10 @@ Future<String?> readClipboardHtmlAsMarkdown() async {
   final h = await Pasteboard.html;
   if (h == null || h.trim().isEmpty) return null;
   final raw = stripCfHtmlHeader(h);
+  // A CF_HTML header that cannot be sliced falls back to the plain flavor (the
+  // caller already has it); importing the whole buffer would paste the page
+  // context the user did not select.
+  if (raw == null) return null;
   final md = htmlToMarkdown(raw);
   // The exact bytes that were pasted, when the user has diagnostics on. Real
   // clipboard markup is nothing like what one guesses: a list that silently
@@ -116,7 +121,7 @@ Future<String?> readClipboardTableAsMarkdown() async {
   final h = await Pasteboard.html;
   if (h == null || h.trim().isEmpty) return null;
   final raw = stripCfHtmlHeader(h);
-  if (!clipboardHtmlIsDataTable(raw)) return null;
+  if (raw == null || !clipboardHtmlIsDataTable(raw)) return null;
   final md = htmlToMarkdown(raw);
   // Must actually convert to a pipe table (not just contain a tag) — otherwise
   // fall through to the image/HTML flavors.
@@ -137,22 +142,9 @@ bool clipboardHtmlIsDataTable(String html) {
 }
 
 /// Windows wraps clipboard HTML in the CF_HTML ("HTML Format") clipboard format,
-/// whose plaintext descriptor header (`Version:`, `StartHTML:`, `EndHTML:`,
-/// `StartFragment:`, `EndFragment:`, optional `SourceURL:`) precedes the real
-/// `[!DOCTYPE html]...[html]...` payload. The `pasteboard` plugin returns the
-/// whole buffer verbatim, so strip the header before parsing — otherwise it
-/// leaks in as a literal first line of the pasted content. A no-op on platforms
-/// that hand back bare HTML (macOS/Linux/mobile), where the guard fails.
-///
-/// We cut at the first `<` (start of markup), NOT the Start/EndFragment numbers:
-/// those are UTF-8 *byte* offsets, not Dart char (UTF-16) indices, so a
-/// substring by them would mis-slice any non-ASCII content before the fragment.
-String stripCfHtmlHeader(String html) {
-  // CF_HTML always opens with the `Version:` descriptor; also require a
-  // `StartHTML:` marker so real content that merely starts with "Version:" is
-  // never mistaken for a header.
-  final head = html.length < 256 ? html : html.substring(0, 256);
-  if (!html.startsWith('Version:') || !head.contains('StartHTML:')) return html;
-  final lt = html.indexOf('<');
-  return lt <= 0 ? html : html.substring(lt);
-}
+/// whose plaintext descriptor header precedes the payload. [cfHtmlFragment]
+/// (shared with the web adapter) strips the header AND cuts at the
+/// StartFragment/EndFragment byte offsets, so only the copied selection is
+/// imported. Returns null when a CF_HTML header's bounds are unusable.
+String? stripCfHtmlHeader(String html) => cfHtmlFragment(html);
+

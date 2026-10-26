@@ -29,7 +29,8 @@ class _FakeStore implements MicaStore {
   String? gotWorkspaceId;
   String? gotParentViewId;
   Map<String, String>? gotAssetIds;
-  var answer = const VaultImportOutcome(docs: 0, folders: 0, errors: []);
+  var answer = const VaultImportOutcome(
+      docs: 0, folders: 0, errors: [], viewIds: []);
 
   @override
   Future<VaultImportOutcome> importVaultTree({
@@ -86,7 +87,8 @@ void main() {
   test('markdown crosses to the store; dot-dirs never leave the client',
       () async {
     store.answer =
-        const VaultImportOutcome(docs: 2, folders: 1, errors: ['store said']);
+        const VaultImportOutcome(
+            docs: 2, folders: 1, errors: ['store said'], viewIds: []);
     final result = await local.importVaultTree([
       file('welcome.md', '# Welcome'.codeUnits),
       file('work/todo.MD', 'uppercase extension counts'.codeUnits),
@@ -121,7 +123,8 @@ void main() {
     Directory('${root.path}/local/blobs/${sha256Hex(doomedBytes)}')
         .createSync(recursive: true);
 
-    store.answer = const VaultImportOutcome(docs: 1, folders: 0, errors: []);
+    store.answer = const VaultImportOutcome(
+        docs: 1, folders: 0, errors: [], viewIds: []);
     final result = await local.importVaultTree([
       file('ok.md', '# ok'.codeUnits),
       file('assets/broken.png', doomedBytes),

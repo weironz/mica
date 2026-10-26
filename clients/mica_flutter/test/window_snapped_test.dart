@@ -29,8 +29,70 @@ void main() {
 
   test('off-Windows it is false, never an exception', () {
     if (Platform.isWindows) return;
-    expect(isWindowSnapped(), isFalse,
-        reason: 'the persister calls this unconditionally on desktop; on '
-            'macOS/Linux it must degrade to "not snapped", not throw');
+    expect(
+      isWindowSnapped(),
+      isFalse,
+      reason:
+          'the persister calls this unconditionally on desktop; on '
+          'macOS/Linux it must degrade to "not snapped", not throw',
+    );
+  });
+
+  group('snap decision uses only this process window', () {
+    int Function(int) enumeration(List<int> windows) => (after) {
+      final index = windows.indexOf(after) + 1;
+      return index < windows.length ? windows[index] : 0;
+    };
+
+    test(
+      'skips a snapped foreign Flutter window before our floating window',
+      () {
+        if (!Platform.isWindows) return;
+        final checked = <int>[];
+        expect(
+          isWindowSnapped(
+            nextOfClass: enumeration([100, 200]),
+            ownerPid: (h) => h == 200 ? pid : pid + 1,
+            arranged: (h) {
+              checked.add(h);
+              return h == 100;
+            },
+          ),
+          isFalse,
+        );
+        expect(checked, [
+          200,
+        ], reason: 'only our HWND may reach IsWindowArranged');
+      },
+    );
+
+    test('our snapped window wins over a floating foreign window', () {
+      if (!Platform.isWindows) return;
+      expect(
+        isWindowSnapped(
+          nextOfClass: enumeration([100, 200]),
+          ownerPid: (h) => h == 200 ? pid : pid + 1,
+          arranged: (h) => h == 200,
+        ),
+        isTrue,
+      );
+    });
+
+    test('only foreign or missing windows safely return false', () {
+      if (!Platform.isWindows) return;
+      for (final windows in [
+        <int>[],
+        [100],
+      ]) {
+        expect(
+          isWindowSnapped(
+            nextOfClass: enumeration(windows),
+            ownerPid: (_) => pid + 1,
+            arranged: (_) => throw StateError('foreign HWND was inspected'),
+          ),
+          isFalse,
+        );
+      }
+    });
   });
 }

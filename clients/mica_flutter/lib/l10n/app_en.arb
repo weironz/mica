@@ -591,6 +591,25 @@
       }
     }
   },
+  "cacheRetainedDocs": "Kept {count} page(s) with unsynced offline edits",
+  "@cacheRetainedDocs": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "cacheQuarantinedTitle": "Legacy cache (retained, not shown here)",
+  "cacheQuarantinedBody": "{count} workspace(s) from an older version are kept on this device. They belong to an account this build cannot verify, so they are not shown to the current account and are never deleted automatically. Export them if you need to recover the notes.",
+  "@cacheQuarantinedBody": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "cacheQuarantinedExport": "Export",
+  "cacheQuarantinedPages": "{pages} pages",
   "cacheTitle": "On this device",
   "cacheMirrored": "Cloud mirror: {pages} pages · {size} of images (re-downloadable)",
   "@cacheMirrored": {

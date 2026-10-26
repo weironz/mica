@@ -1682,6 +1682,7 @@ fn wire__crate__api__store__MicaStore_append_remote_update_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_rid = <i64>::sse_decode(&mut deserializer);
       let api_update = <Vec<u8>>::sse_decode(&mut deserializer);
@@ -1701,6 +1702,7 @@ fn wire__crate__api__store__MicaStore_append_remote_update_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::append_remote_update(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
           api_rid,
           api_update,
@@ -1733,6 +1735,7 @@ fn wire__crate__api__store__MicaStore_append_remote_updates_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_rids = <Vec<i64>>::sse_decode(&mut deserializer);
       let api_updates = <Vec<Vec<u8>>>::sse_decode(&mut deserializer);
@@ -1752,6 +1755,7 @@ fn wire__crate__api__store__MicaStore_append_remote_updates_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::append_remote_updates(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
           api_rids,
           api_updates,
@@ -1784,6 +1788,7 @@ fn wire__crate__api__store__MicaStore_append_update_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_update = <Vec<u8>>::sse_decode(&mut deserializer);
       deserializer.end();
@@ -1802,6 +1807,7 @@ fn wire__crate__api__store__MicaStore_append_update_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::append_update(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
           api_update,
         ))?;
@@ -1934,6 +1940,7 @@ fn wire__crate__api__store__MicaStore_checkpoint_doc_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
@@ -1950,7 +1957,7 @@ fn wire__crate__api__store__MicaStore_checkpoint_doc_impl(
         }
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok({
-          crate::api::store::MicaStore::checkpoint_doc(&*api_that_guard, api_doc_id);
+          crate::api::store::MicaStore::checkpoint_doc(&*api_that_guard, api_origin, api_doc_id);
         })?;
         Ok(output_ok)
       })())
@@ -2073,6 +2080,7 @@ fn wire__crate__api__store__MicaStore_compact_local_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
@@ -2090,6 +2098,7 @@ fn wire__crate__api__store__MicaStore_compact_local_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::compact_local(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
         ))?;
         Ok(output_ok)
@@ -2120,6 +2129,7 @@ fn wire__crate__api__store__MicaStore_create_local_version_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_label = <String>::sse_decode(&mut deserializer);
       deserializer.end();
@@ -2138,6 +2148,7 @@ fn wire__crate__api__store__MicaStore_create_local_version_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::create_local_version(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
           api_label,
         ))?;
@@ -2271,6 +2282,7 @@ fn wire__crate__api__store__MicaStore_delete_doc_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
@@ -2287,7 +2299,7 @@ fn wire__crate__api__store__MicaStore_delete_doc_impl(
         }
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok({
-          crate::api::store::MicaStore::delete_doc(&*api_that_guard, api_doc_id);
+          crate::api::store::MicaStore::delete_doc(&*api_that_guard, api_origin, api_doc_id);
         })?;
         Ok(output_ok)
       })())
@@ -2454,6 +2466,7 @@ fn wire__crate__api__store__MicaStore_export_folder_zip_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_workspace_id = <String>::sse_decode(&mut deserializer);
       let api_folder_id = <Option<String>>::sse_decode(&mut deserializer);
       let api_images = <Vec<crate::api::store::FolderExportImage>>::sse_decode(&mut deserializer);
@@ -2473,6 +2486,7 @@ fn wire__crate__api__store__MicaStore_export_folder_zip_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::export_folder_zip(
           &*api_that_guard,
+          api_origin,
           api_workspace_id,
           api_folder_id,
           api_images,
@@ -2612,6 +2626,7 @@ fn wire__crate__api__store__MicaStore_list_docs_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
         let mut api_that_guard = None;
@@ -2626,8 +2641,10 @@ fn wire__crate__api__store__MicaStore_list_docs_impl(
           }
         }
         let api_that_guard = api_that_guard.unwrap();
-        let output_ok =
-          Result::<_, ()>::Ok(crate::api::store::MicaStore::list_docs(&*api_that_guard))?;
+        let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::list_docs(
+          &*api_that_guard,
+          api_origin,
+        ))?;
         Ok(output_ok)
       })())
     },
@@ -2656,6 +2673,7 @@ fn wire__crate__api__store__MicaStore_list_local_versions_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
@@ -2673,6 +2691,7 @@ fn wire__crate__api__store__MicaStore_list_local_versions_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::list_local_versions(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
         ))?;
         Ok(output_ok)
@@ -2797,6 +2816,7 @@ fn wire__crate__api__store__MicaStore_load_doc_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, String>((move || {
@@ -2812,7 +2832,8 @@ fn wire__crate__api__store__MicaStore_load_doc_impl(
           }
         }
         let api_that_guard = api_that_guard.unwrap();
-        let output_ok = crate::api::store::MicaStore::load_doc(&*api_that_guard, api_doc_id)?;
+        let output_ok =
+          crate::api::store::MicaStore::load_doc(&*api_that_guard, api_origin, api_doc_id)?;
         Ok(output_ok)
       })())
     },
@@ -2841,6 +2862,7 @@ fn wire__crate__api__store__MicaStore_local_version_doc_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_version_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
@@ -2859,6 +2881,7 @@ fn wire__crate__api__store__MicaStore_local_version_doc_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::local_version_doc(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
           api_version_id,
         ))?;
@@ -2890,6 +2913,7 @@ fn wire__crate__api__store__MicaStore_log_sizes_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
@@ -2907,6 +2931,7 @@ fn wire__crate__api__store__MicaStore_log_sizes_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::log_sizes(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
         ))?;
         Ok(output_ok)
@@ -3204,6 +3229,7 @@ fn wire__crate__api__store__MicaStore_restore_local_version_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_version_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
@@ -3222,6 +3248,7 @@ fn wire__crate__api__store__MicaStore_restore_local_version_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::restore_local_version(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
           api_version_id,
         ))?;
@@ -3300,6 +3327,7 @@ fn wire__crate__api__store__MicaStore_rollback_doc_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
@@ -3317,6 +3345,7 @@ fn wire__crate__api__store__MicaStore_rollback_doc_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::rollback_doc(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
         ))?;
         Ok(output_ok)
@@ -3347,6 +3376,7 @@ fn wire__crate__api__store__MicaStore_save_doc_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_doc = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaDocument>,
@@ -3370,7 +3400,12 @@ fn wire__crate__api__store__MicaStore_save_doc_impl(
         let api_that_guard = api_that_guard.unwrap();
         let api_doc_guard = api_doc_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok({
-          crate::api::store::MicaStore::save_doc(&*api_that_guard, api_doc_id, &*api_doc_guard);
+          crate::api::store::MicaStore::save_doc(
+            &*api_that_guard,
+            api_origin,
+            api_doc_id,
+            &*api_doc_guard,
+          );
         })?;
         Ok(output_ok)
       })())
@@ -3547,6 +3582,7 @@ fn wire__crate__api__store__MicaStore_set_sync_cursor_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_cursor = <crate::api::store::SyncCursor>::sse_decode(&mut deserializer);
       deserializer.end();
@@ -3564,7 +3600,12 @@ fn wire__crate__api__store__MicaStore_set_sync_cursor_impl(
         }
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok({
-          crate::api::store::MicaStore::set_sync_cursor(&*api_that_guard, api_doc_id, api_cursor);
+          crate::api::store::MicaStore::set_sync_cursor(
+            &*api_that_guard,
+            api_origin,
+            api_doc_id,
+            api_cursor,
+          );
         })?;
         Ok(output_ok)
       })())
@@ -3594,6 +3635,7 @@ fn wire__crate__api__store__MicaStore_squash_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
@@ -3610,7 +3652,7 @@ fn wire__crate__api__store__MicaStore_squash_impl(
         }
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok({
-          crate::api::store::MicaStore::squash(&*api_that_guard, api_doc_id);
+          crate::api::store::MicaStore::squash(&*api_that_guard, api_origin, api_doc_id);
         })?;
         Ok(output_ok)
       })())
@@ -3640,6 +3682,7 @@ fn wire__crate__api__store__MicaStore_sync_cursor_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
@@ -3657,6 +3700,7 @@ fn wire__crate__api__store__MicaStore_sync_cursor_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::sync_cursor(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
         ))?;
         Ok(output_ok)
@@ -3734,6 +3778,7 @@ fn wire__crate__api__store__MicaStore_trim_updates_through_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_up_to_clock = <i64>::sse_decode(&mut deserializer);
       deserializer.end();
@@ -3753,6 +3798,7 @@ fn wire__crate__api__store__MicaStore_trim_updates_through_impl(
         let output_ok = Result::<_, ()>::Ok({
           crate::api::store::MicaStore::trim_updates_through(
             &*api_that_guard,
+            api_origin,
             api_doc_id,
             api_up_to_clock,
           );
@@ -3785,6 +3831,7 @@ fn wire__crate__api__store__MicaStore_updates_after_impl(
       let api_that = <RustOpaqueMoi<
         flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MicaStore>,
       >>::sse_decode(&mut deserializer);
+      let api_origin = <String>::sse_decode(&mut deserializer);
       let api_doc_id = <String>::sse_decode(&mut deserializer);
       let api_after = <i64>::sse_decode(&mut deserializer);
       deserializer.end();
@@ -3803,6 +3850,7 @@ fn wire__crate__api__store__MicaStore_updates_after_impl(
         let api_that_guard = api_that_guard.unwrap();
         let output_ok = Result::<_, ()>::Ok(crate::api::store::MicaStore::updates_after(
           &*api_that_guard,
+          api_origin,
           api_doc_id,
           api_after,
         ))?;
@@ -4639,10 +4687,12 @@ impl SseDecode for crate::api::store::VaultImportOutcome {
     let mut var_docs = <u32>::sse_decode(deserializer);
     let mut var_folders = <u32>::sse_decode(deserializer);
     let mut var_errors = <Vec<String>>::sse_decode(deserializer);
+    let mut var_viewIds = <Vec<String>>::sse_decode(deserializer);
     return crate::api::store::VaultImportOutcome {
       docs: var_docs,
       folders: var_folders,
       errors: var_errors,
+      view_ids: var_viewIds,
     };
   }
 }
@@ -5182,6 +5232,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::store::VaultImportOutcome {
       self.docs.into_into_dart().into_dart(),
       self.folders.into_into_dart().into_dart(),
       self.errors.into_into_dart().into_dart(),
+      self.view_ids.into_into_dart().into_dart(),
     ]
     .into_dart()
   }
@@ -5755,6 +5806,7 @@ impl SseEncode for crate::api::store::VaultImportOutcome {
     <u32>::sse_encode(self.docs, serializer);
     <u32>::sse_encode(self.folders, serializer);
     <Vec<String>>::sse_encode(self.errors, serializer);
+    <Vec<String>>::sse_encode(self.view_ids, serializer);
   }
 }
 

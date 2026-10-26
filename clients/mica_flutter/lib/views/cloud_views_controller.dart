@@ -105,7 +105,32 @@ class CloudViewsController extends ChangeNotifier {
        _cloneView = cloneView,
        _reorderViews = reorderViews,
        _restoreView = restoreView,
-       _listViewsIfChanged = listViewsIfChanged;
+       _listViewsIfChanged = listViewsIfChanged {
+    _sessionGeneration = session.generation;
+    session.addListener(_onSessionIdentityChanged);
+  }
+
+  late int _sessionGeneration;
+
+  /// Session identity transitions retire every outstanding workspace request.
+  /// Token rotation and tree writes keep the epoch, so normal refreshes and
+  /// per-workspace supersession retain their existing behavior (issue #148).
+  void _onSessionIdentityChanged() {
+    if (_sessionGeneration == session.generation) return;
+    _sessionGeneration = session.generation;
+    _requests.clear();
+  }
+
+  /// Whether a request that started under [requestOrigin] and [generation] is
+  /// still allowed to commit into the live session.
+  bool _belongsToCurrentSession(String requestOrigin, int generation) =>
+      origin() == requestOrigin && _sessionGeneration == generation;
+
+  @override
+  void dispose() {
+    session.removeListener(_onSessionIdentityChanged);
+    super.dispose();
+  }
 
   /// The session/workspace hub — the tree and the selection live here.
   final SessionController session;
@@ -542,6 +567,13 @@ class CloudViewsController extends ChangeNotifier {
     // Claim a sequence number for THIS request. Anything older that lands later
     // is answering a question we have already replaced.
     final seq = _requests.claim(workspaceId);
+    // And bind it to the (origin, session generation) it was started under:
+    // a sign-out or a server switch while the fetch is in flight retires it
+    // (issue #148) — the response belongs to a session this shell no longer
+    // holds, so neither its tree, its ETag, nor its mirror write may land in
+    // the new one.
+    final requestOrigin = origin();
+    final generation = _sessionGeneration;
     final held = session.viewsByWorkspace[workspaceId];
     final answer = await fetchBackgroundTree(
       () => _listViewsIfChanged(
@@ -560,9 +592,13 @@ class CloudViewsController extends ChangeNotifier {
     // would install the older tree AND its older ETag — and a stale ETag is
     // the durable half of the damage, because the next cold start sends it,
     // gets a 304, and keeps a tree the server has moved past.
+    //
+    // The session check retires the whole request across a sign-out/switch
+    // even when no newer request for this workspace exists (issue #148).
+    if (!_belongsToCurrentSession(requestOrigin, generation)) return;
     if (!_requests.isCurrent(workspaceId, seq)) return;
     _commitTree(workspaceId: workspaceId, views: views, etag: answer.etag);
-    mirrorOneWorkspace(workspaceId: workspaceId);
+    mirrorOneWorkspace(workspaceId: workspaceId, requestOrigin: requestOrigin);
   }
 
   /// Load the tree of [workspaceId] and decide what the selection should be.
@@ -572,6 +608,10 @@ class CloudViewsController extends ChangeNotifier {
   /// an unchanged tree, and the auto-open lands on a DOCUMENT (never a folder).
   Future<void> loadWorkspaceViews(String token, String workspaceId) async {
     if (!isMounted()) return;
+    // Same binding as [refreshTree]: a load that outlives its sign-in must
+    // not commit into the next one (issue #148).
+    final requestOrigin = origin();
+    final generation = _sessionGeneration;
     // Which page we are about to open is usually already known — it is the one
     // this workspace was last on, and its tree is in memory. Asking for its
     // content only AFTER the tree comes back spends a second round trip
@@ -591,6 +631,9 @@ class CloudViewsController extends ChangeNotifier {
     // Claim a sequence number for THIS request. Anything older that lands later
     // is answering a question we have already replaced.
     final seq = _requests.claim(workspaceId);
+    // The workspace's tree answer may arrive after a sign-out or a server
+    // switch retired it (issue #148).
+    if (!_belongsToCurrentSession(requestOrigin, generation)) return;
 
     // Ask conditionally, but only while actually holding a tree to fall back
     // on: a 304 answered to a client with nothing would leave the sidebar
@@ -612,7 +655,11 @@ class CloudViewsController extends ChangeNotifier {
     // selection block below guards itself separately (`stillCurrent`), but the
     // TREE and its tag had no such guard: a slower load landing last
     // overwrote the newer one.
-    if (!isMounted() || !_requests.isCurrent(workspaceId, seq)) return;
+    if (!isMounted() ||
+        !_belongsToCurrentSession(requestOrigin, generation) ||
+        !_requests.isCurrent(workspaceId, seq)) {
+      return;
+    }
 
     final views = answer.views ?? held ?? const <DocumentView>[];
     _commitTree(
@@ -664,7 +711,11 @@ class CloudViewsController extends ChangeNotifier {
 
     // The shell can disappear while the body is being fetched too. The hooks
     // only guard UI updates; the mirror write below is a durable side effect.
-    if (!isMounted()) return;
+    // A sign-out/switch mid-bootstrap retires the rest of this load (issue
+    // #148).
+    if (!isMounted() || !_belongsToCurrentSession(requestOrigin, generation)) {
+      return;
+    }
     SwitchTrace.current?.mark('body');
     // Two clicks in quick succession run two of these. The tree is keyed by
     // workspace so a late arrival is harmless there, but the SELECTION is one
@@ -703,7 +754,7 @@ class CloudViewsController extends ChangeNotifier {
     // is most of the cost. Not doing it at all is both faster and more
     // obviously correct.)
     if (answer.views != null) {
-      mirrorOneWorkspace(workspaceId: workspaceId);
+      mirrorOneWorkspace(workspaceId: workspaceId, requestOrigin: requestOrigin);
     }
     SwitchTrace.current?.mark('mirror-write');
   }
@@ -754,8 +805,15 @@ class CloudViewsController extends ChangeNotifier {
   /// every new folder, against a mirror that by then held ~13k views. An
   /// optional parameter whose omission is a performance cliff is a footgun with
   /// a safety catch; required, the compiler asks the question.
-  void mirrorOneWorkspace({required String workspaceId}) {
+  void mirrorOneWorkspace({
+    required String workspaceId,
+    String? requestOrigin,
+  }) {
     final currentOrigin = origin();
+    // The tree this mirror write is about was fetched for a particular
+    // origin; a server switch since then must not let it land under the
+    // current one (issue #148).
+    if (requestOrigin != null && requestOrigin != currentOrigin) return;
     final workspaces = <WorkspaceData>[
       for (final (i, w) in session.workspaces.indexed)
         (

@@ -18,19 +18,60 @@ extension _SettingsDataTab on _SettingsDialogState {
     if (!ok || !mounted) return;
     setUi(() => _cacheBusy = true);
     try {
-      final after = await widget.onClearMirrorCache!();
+      final result = await widget.onClearMirrorCache!();
       if (!mounted) return;
-      final freed = (before?.mirroredBytes ?? 0) - after.mirroredBytes;
+      final freed = (before?.mirroredBytes ?? 0) - result.stats.mirroredBytes;
+      final parts = <String>[l10n.cacheCleared(formatBytes(freed))];
+      if (result.retainedDocs > 0) {
+        parts.add(l10n.cacheRetainedDocs(result.retainedDocs));
+      }
+      if (result.quarantinedOrigins.isNotEmpty) {
+        parts.add(l10n.cacheQuarantinedBody(result.quarantinedOrigins.length));
+      }
       setUi(() {
-        _cacheStats = after;
+        _cacheStats = result.stats;
         // The freed figure is measured, not assumed: a blob that could not be
         // unlinked is still counted in `after`, so this never overstates.
-        _cacheMsg = l10n.cacheCleared(formatBytes(freed));
+        _cacheMsg = parts.join('\n');
       });
+      _loadQuarantine(force: true);
     } catch (error) {
       if (mounted) setUi(() => _cacheMsg = error.toString());
     } finally {
       if (mounted) setUi(() => _cacheBusy = false);
+    }
+  }
+
+  /// Load the quarantined legacy list once (and after a clear).
+  void _loadQuarantine({bool force = false}) {
+    final load = widget.onLoadQuarantinedCaches;
+    if (load == null) return;
+    if (!force && _quarantineAsked) return;
+    _quarantineAsked = true;
+    load()
+        .then((q) {
+          if (mounted) setUi(() => _quarantine = q);
+        })
+        .catchError((_) {});
+  }
+  /// Export one quarantined legacy workspace as a Markdown ZIP. No name is
+  /// displayed or used as the file name — only the page count, so the current
+  /// account never learns another account's titles.
+  Future<void> _exportQuarantine(
+    ({String origin, String workspaceId, int pages}) item,
+  ) async {
+    final export = widget.onExportQuarantinedCache;
+    if (export == null) return;
+    final l10n = context.l10n;
+    try {
+      final bytes = await export(item.origin, item.workspaceId);
+      if (bytes == null || bytes.isEmpty) {
+        throw StateError(l10n.exportEmptyContent);
+      }
+      downloadImage(bytes, 'legacy-cache-${item.workspaceId}.zip', 'application/zip');
+      if (mounted) setUi(() => _cacheMsg = l10n.cacheQuarantinedExport);
+    } catch (error) {
+      if (mounted) setUi(() => _cacheMsg = error.toString());
     }
   }
 
@@ -44,6 +85,7 @@ extension _SettingsDataTab on _SettingsDialogState {
           if (mounted) setUi(() => _cacheStats = st);
         })
         .catchError((_) {});
+    _loadQuarantine();
   }
 
   /// Ask for the export numbers once, the first time this tab is built. Failure
@@ -347,6 +389,39 @@ extension _SettingsDataTab on _SettingsDialogState {
           ),
         ),
       ],
+    ],
+    if (_quarantine.isNotEmpty) ...[
+      const SizedBox(height: 18),
+      MicaEyebrow(context.l10n.cacheQuarantinedTitle),
+      const SizedBox(height: 8),
+      Text(
+        context.l10n.cacheQuarantinedBody(_quarantine.length),
+        style: TextStyle(
+          fontSize: 12.5,
+          height: 1.6,
+          color: MicaTheme.of(context).text.muted,
+        ),
+      ),
+      const SizedBox(height: 6),
+      for (final item in _quarantine)
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                context.l10n.cacheQuarantinedPages(item.pages),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: MicaTheme.of(context).text.muted,
+                ),
+              ),
+            ),
+            if (widget.onExportQuarantinedCache != null)
+              TextButton(
+                onPressed: () => _exportQuarantine(item),
+                child: Text(context.l10n.cacheQuarantinedExport),
+              ),
+          ],
+        ),
     ],
     const SizedBox(height: 14),
     Row(

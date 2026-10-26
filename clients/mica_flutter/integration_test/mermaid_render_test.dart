@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // Real-device render verification for the non-web (merman FFI) mermaid path.
 //
 // Runs on the Windows runner where merman_ffi.dll is bundled, so it exercises
@@ -36,7 +37,7 @@ void main() {
   // been initialized", renderMermaid swallows it (`catch (_) => null`), and the
   // suite reports "rendered blank" — which reads like a broken renderer and is
   // why this file failed all 68 CI runs since it was added.
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('mermaid is available on this (non-web) platform', () {

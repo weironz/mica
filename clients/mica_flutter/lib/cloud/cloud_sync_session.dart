@@ -33,7 +33,8 @@ import 'cloud_doc_store.dart';
 import '../api/ws_connect.dart';
 import 'sync_doc_replica.dart';
 import 'sync_status.dart';
-import 'sync_replica_io.dart' if (dart.library.js_interop) 'sync_replica_web.dart';
+import 'sync_replica_io.dart'
+    if (dart.library.js_interop) 'sync_replica_web.dart';
 
 export 'cloud_doc_store.dart';
 export 'sync_doc_replica.dart' show DocOp, SyncDocReplica;
@@ -597,7 +598,19 @@ class CloudSyncSession {
   void _seedFromLocalOnce() {
     if (_seeded || _doc != null || persistence == null) return;
     _seeded = true;
-    final loaded = persistence!.load();
+    final ({Uint8List state, int cursor})? loaded;
+    try {
+      loaded = persistence!.load();
+    } catch (error) {
+      // The desktop FFI mirrors a present-but-unreadable snapshot as a THROW
+      // (StoreError::CorruptDoc), distinct from absent (null). That IS
+      // recoverable — fall through to cold-bootstrap instead of aborting
+      // connect() (the doc's cloud copy is judged authoritative). Anything
+      // else is a genuine storage failure: propagate, don't launder it.
+      if (!_isCorruptLocalCache(error)) rethrow;
+      swallowed('cloud_seed_corrupt');
+      return;
+    }
     if (loaded == null) return;
     final doc = replicaFromState(loaded.state, clientId);
     if (doc == null) return; // corrupt local copy → cold-bootstrap from server
@@ -608,6 +621,16 @@ class CloudSyncSession {
     if (!_readyCompleter.isCompleted) _readyCompleter.complete();
     onReady(_rootBlockId, childBlocks());
   }
+
+  /// True when a thrown persistence error is the desktop FFI's
+  /// present-but-unreadable marker — `StoreError::CorruptDoc`, whose `#[error]`
+  /// template lives in `crates/mica-core/src/store.rs` ("corrupt local CRDT
+  /// state for <docId> (checksum or yrs integration failed)"). Matching the
+  /// template (not the exception TYPE) because flutter_rust_bridge delivers
+  /// `Result<_, String>` errors as opaque strings — the message is the only
+  /// cross-FFI signal, and it stays stable as long as the Rust variant does.
+  bool _isCorruptLocalCache(Object error) =>
+      error.toString().contains('corrupt local CRDT state');
 
   void _onMessage(dynamic raw) {
     if (raw is! String) return;
@@ -1057,6 +1080,16 @@ class CloudSyncSession {
     if (!_readyCompleter.isCompleted) _readyCompleter.complete();
   }
 
+  /// Flip the "link is live" bit the sync phase derives from, without a
+  /// socket — the harness equivalent of the first valid server frame. Drives
+  /// the badge routing tests; production sets this from [_onMessage].
+  @visibleForTesting
+  void debugMarkOnline() {
+    if (_online) return;
+    _online = true;
+    _updateSyncPhase();
+  }
+
   /// The in-memory outbox as data — what is queued, what went out, what came
   /// back rejected. Read-only; the only way to see the queue react to acks and
   /// rejections without a socket.
@@ -1135,7 +1168,12 @@ class CloudSyncSession {
       // (a permanently-rejected earlier clock — it would just pile up unacked).
       if (_channel != null && _ready && !_pushStalled) {
         _sendPushRaw(clock.toString(), diff);
-        _sentThroughClock = clock;
+        // Advance ONLY the contiguous sent prefix: a capped merge window may
+        // have left earlier outbox entries unsent on this connection, and
+        // recording THIS clock as "sent through" would make the next flush's
+        // floor skip them until reconnect (issue #159). A skipped entry costs
+        // the next flush one idempotent resend here instead.
+        if (clock == _sentThroughClock + 1) _sentThroughClock = clock;
       }
       return;
     }

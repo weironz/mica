@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2-M1: the yrs document model is callable from Dart through frb.
 //
 // Drives MicaDocument (the opaque handle over crates/mica-core) on the Windows
@@ -14,7 +15,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   List<Map<String, dynamic>> blocksOf(MicaDocument d) =>

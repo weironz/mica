@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P1c offline read: the full mirror → "restart" → read cycle through real FFI.
 //
 // Simulates an online cloud session that mirrored a page tree + a document to
@@ -13,19 +14,21 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:mica_flutter/local/cache_stats.dart';
 import 'package:mica_flutter/local/local_offline.dart';
 import 'package:mica_flutter/src/rust/api/document.dart';
 import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('cloud page tree + doc mirror survive a fresh LocalOffline (offline read)',
       () async {
     final dir = Directory.systemTemp.createTempSync('mica_offnav');
     const server = 'https://mica.example.com';
+    final origin = cloudCacheOrigin(server, 'user-a');
 
     // ── "online" session: open the store, mirror the page tree + a doc ────────
     final online = LocalOffline(rootDirOverride: dir.path);
@@ -42,7 +45,7 @@ void main() {
       trashed: false,
       objectType: 'document',
     );
-    online.mirrorCloudPageTree(server, const [ws], const [view]);
+    online.mirrorCloudPageTree(origin, const [ws], const [view]);
 
     // The cloud session's write-through mirrors the doc replica keyed by its UUID.
     final doc = MicaDocument.fromBlocksJson(
@@ -52,7 +55,7 @@ void main() {
         {'id': 'a', 'type': 'paragraph', 'text': 'Offline body'},
       ]),
     );
-    online.cloudDocStore('doc-uuid-1')!.save(doc.encodeState(), 7);
+    online.cloudDocStore(origin, 'doc-uuid-1')!.save(doc.encodeState(), 7);
 
     // ── "restart": a FRESH LocalOffline over the same data dir ────────────────
     final offline = LocalOffline(rootDirOverride: dir.path);
@@ -61,24 +64,31 @@ void main() {
     await offline.deviceClientId();
 
     // Page tree reads back, origin-scoped.
-    final cache = offline.cachedCloudPageTree(server);
+    final cache = offline.cachedCloudPageTree(origin);
     expect(cache, isNotNull, reason: 'mirror survives a fresh instance');
     expect(cache!.workspaces.map((w) => w.id), ['w1']);
     expect(cache.views.single.objectId, 'doc-uuid-1');
     expect(cache.views.single.name, 'Cloud Page');
     // A different origin sees nothing (isolation holds across the restart).
-    expect(offline.cachedCloudPageTree('https://other.example.com'), isNull);
-
-    // The doc mirror opens synchronously with the correct root + blocks — the
-    // data _offlineCloudBootstrap turns into a complete DocumentBootstrap.
-    final opened = offline.openCloudDocMirror('doc-uuid-1');
+    expect(
+      offline.cachedCloudPageTree(
+        cloudCacheOrigin('https://other.example.com', 'user-a'),
+      ),
+      isNull,
+    );
+    // Nor does ANOTHER ACCOUNT on the same server (issue #111).
+    expect(
+      offline.cachedCloudPageTree(cloudCacheOrigin(server, 'user-b')),
+      isNull,
+    );
+    final opened = offline.openCloudDocMirror(origin, 'doc-uuid-1');
     expect(opened, isNotNull, reason: 'a previously-synced doc opens offline');
     expect(opened!.rootBlockId, 'r');
     final body = opened.blocks.firstWhere((b) => b['id'] == 'a');
     expect(body['text'], 'Offline body');
 
     // A never-synced doc has no mirror → null (tree lists it, opening is empty).
-    expect(offline.openCloudDocMirror('never-synced'), isNull);
+    expect(offline.openCloudDocMirror(origin, 'never-synced'), isNull);
 
     _bestEffortDelete(dir);
   });
@@ -86,6 +96,7 @@ void main() {
   test('detachCloudWorkspace forks an independent local copy (P3f)', () async {
     final dir = Directory.systemTemp.createTempSync('mica_detach');
     const server = 'https://mica.example.com';
+    final origin = cloudCacheOrigin(server, 'user-a');
     final local = LocalOffline(rootDirOverride: dir.path);
     await local.open();
 
@@ -114,7 +125,7 @@ void main() {
       trashed: false,
       objectType: 'document',
     );
-    local.mirrorCloudPageTree(server, const [ws], const [parent, child]);
+    local.mirrorCloudPageTree(origin, const [ws], const [parent, child]);
     final doc = MicaDocument.fromBlocksJson(
       rootId: 'r',
       blocksJson: jsonEncode([
@@ -122,9 +133,9 @@ void main() {
         {'id': 'a', 'type': 'paragraph', 'text': 'team notes'},
       ]),
     );
-    local.cloudDocStore('doc-a')!.save(doc.encodeState(), 3);
+    local.cloudDocStore(origin, 'doc-a')!.save(doc.encodeState(), 3);
 
-    final result = local.detachCloudWorkspace(server, 'cw', 'Team');
+    final result = local.detachCloudWorkspace(origin, 'cw', 'Team');
     expect(result, isNotNull);
     expect(result!.docs, 1, reason: 'one mirrored doc had content');
 
@@ -146,12 +157,12 @@ void main() {
     expect(forkParent.objectId, isNot('doc-a'), reason: 'fresh doc id');
 
     // Content copied; the copy is INDEPENDENT of the mirror.
-    final copied = local.openCloudDocMirror(forkParent.objectId);
+    final copied = local.openCloudDocMirror('local', forkParent.objectId);
     expect(copied, isNotNull);
     expect(copied!.blocks.any((b) => b['text'] == 'team notes'), isTrue);
     // The cloud mirror rows are untouched (the cloud original keeps working).
     expect(
-      local.cachedCloudPageTree(server)!.views.map((v) => v.id),
+    local.cachedCloudPageTree(origin)!.views.map((v) => v.id),
       containsAll(['v1', 'v2']),
     );
 

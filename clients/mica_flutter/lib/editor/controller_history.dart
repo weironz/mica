@@ -86,6 +86,7 @@ extension _ControllerHistory on EditorController {
     _finishHistorySelection();
     if (onHistory != null) {
       _historyBusy = true;
+      notifyListeners();
       return _historyFuture = _stepEngineHistory(redo: redo);
     }
     // Preserve the fallback's synchronous restore for embedded editors.

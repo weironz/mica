@@ -90,6 +90,9 @@ pub struct VaultImportOutcome {
     pub docs: u32,
     pub folders: u32,
     pub errors: Vec<String>,
+    /// Every view id created, in plan order (folders included). Lets a caller
+    /// open the page a single-file Markdown import just produced.
+    pub view_ids: Vec<String>,
 }
 
 /// A page-tree node mirrored to Dart (P2-M3) — the local mirror of the client's
@@ -323,41 +326,44 @@ impl MicaStore {
         self.device_id.clone()
     }
 
-    /// Ids of all stored documents (sorted).
+    /// Ids of all stored documents for `origin` (sorted). Origin is the page
+    /// tree's provenance — `"local"`, or the account-scoped server key for a
+    /// cloud mirror (issue #102: document rows are keyed by `(origin, doc_id)`,
+    /// so two origins may legitimately hold the same UUID).
     #[frb(sync)]
-    pub fn list_docs(&self) -> Vec<String> {
-        self.store().list_docs().unwrap_or_default()
+    pub fn list_docs(&self, origin: String) -> Vec<String> {
+        self.store().list_docs(&origin).unwrap_or_default()
     }
 
     #[frb(sync)]
-    pub fn delete_doc(&self, doc_id: String) {
-        let _ = self.store().delete_doc(&doc_id);
+    pub fn delete_doc(&self, origin: String, doc_id: String) {
+        let _ = self.store().delete_doc(&origin, &doc_id);
     }
 
     /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
     /// points (doc open/close) so a later corruption can be rolled back.
     #[frb(sync)]
-    pub fn checkpoint_doc(&self, doc_id: String) {
-        let _ = self.store().checkpoint_doc(&doc_id);
+    pub fn checkpoint_doc(&self, origin: String, doc_id: String) {
+        let _ = self.store().checkpoint_doc(&origin, &doc_id);
     }
 
     /// Restore a doc from its last checkpoint, returning the recovered document
     /// (null if there's no checkpoint).
     #[frb(sync)]
-    pub fn rollback_doc(&self, doc_id: String) -> Option<MicaDocument> {
+    pub fn rollback_doc(&self, origin: String, doc_id: String) -> Option<MicaDocument> {
         let loaded = self.store()
-            .rollback_doc(&doc_id, self.client_id)
+            .rollback_doc(&origin, &doc_id, self.client_id)
             .ok()??;
         Some(MicaDocument {
             inner: Mutex::new(loaded),
         })
     }
 
-    /// Persist a document under `doc_id` (full snapshot).
+    /// Persist a document under `(origin, doc_id)` (full snapshot).
     #[frb(sync)]
-    pub fn save_doc(&self, doc_id: String, doc: &MicaDocument) {
+    pub fn save_doc(&self, origin: String, doc_id: String, doc: &MicaDocument) {
         let doc_guard = doc.doc();
-        let _ = self.store().save_doc(&doc_id, &doc_guard);
+        let _ = self.store().save_doc(&origin, &doc_id, &doc_guard);
     }
 
     // ── local page version history (docs/features/version-history-plan.md §6) ──────────
@@ -365,9 +371,9 @@ impl MicaStore {
     /// The document's version timeline, newest first — auto snapshots (captured
     /// on a cadence by `save_doc`) and named checkpoints interleaved.
     #[frb(sync)]
-    pub fn list_local_versions(&self, doc_id: String) -> Vec<LocalVersion> {
+    pub fn list_local_versions(&self, origin: String, doc_id: String) -> Vec<LocalVersion> {
         self.store()
-            .list_local_versions(&doc_id)
+            .list_local_versions(&origin, &doc_id)
             .unwrap_or_default()
             .into_iter()
             .map(LocalVersion::from)
@@ -377,9 +383,14 @@ impl MicaStore {
     /// Pin the current saved state as a NAMED version (never auto-pruned). Null
     /// if the document has no saved snapshot yet.
     #[frb(sync)]
-    pub fn create_local_version(&self, doc_id: String, label: String) -> Option<LocalVersion> {
+    pub fn create_local_version(
+        &self,
+        origin: String,
+        doc_id: String,
+        label: String,
+    ) -> Option<LocalVersion> {
         self.store()
-            .create_local_version(&doc_id, &label)
+            .create_local_version(&origin, &doc_id, &label)
             .ok()?
             .map(LocalVersion::from)
     }
@@ -388,9 +399,14 @@ impl MicaStore {
     /// the live doc). Null if the version isn't found. The caller renders it with
     /// `to_blocks_json()` / `root_block_id()` in a read-only editor.
     #[frb(sync)]
-    pub fn local_version_doc(&self, doc_id: String, version_id: String) -> Option<MicaDocument> {
+    pub fn local_version_doc(
+        &self,
+        origin: String,
+        doc_id: String,
+        version_id: String,
+    ) -> Option<MicaDocument> {
         let bytes = self.store()
-            .local_version_state(&doc_id, &version_id)
+            .local_version_state(&origin, &doc_id, &version_id)
             .ok()??;
         crate::api::document::MicaDocument::from_state_with_client_id(bytes, self.client_id)
     }
@@ -401,11 +417,12 @@ impl MicaStore {
     #[frb(sync)]
     pub fn restore_local_version(
         &self,
+        origin: String,
         doc_id: String,
         version_id: String,
     ) -> Option<MicaDocument> {
         let loaded = self.store()
-            .restore_local_version(&doc_id, &version_id, self.client_id)
+            .restore_local_version(&origin, &doc_id, &version_id, self.client_id)
             .ok()??;
         Some(MicaDocument {
             inner: Mutex::new(loaded),
@@ -671,7 +688,7 @@ impl MicaStore {
             .iter()
             .filter(|v| v.workspace_id == id)
         {
-            self.delete_doc(v.object_id.clone());
+            self.delete_doc("local".to_string(), v.object_id.clone());
             self.purge_view("local".to_string(), v.id.clone());
         }
         self.delete_workspace("local".to_string(), id);
@@ -806,9 +823,17 @@ impl MicaStore {
             docs: 0,
             folders: 0,
             errors: Vec::new(),
+            view_ids: Vec::new(),
         };
+        // Issue #146: every view id must exist BEFORE any page is converted,
+        // because a link may point FORWARD (A.md links B.md while B is created
+        // later) as well as back. The server importer does the same: ids are
+        // minted for the whole plan, then links are rewritten to them.
+        let planned_view_ids: Vec<String> = (0..plan.pages.len())
+            .map(|_| format!("view_{}", uuid::Uuid::new_v4()))
+            .collect();
         let mut view_ids: Vec<Option<String>> = Vec::with_capacity(plan.pages.len());
-        for page in &plan.pages {
+        for (idx, page) in plan.pages.iter().enumerate() {
             let parent_view = match page.parent {
                 // Top-level nodes hang off the import target, else the workspace
                 // root (None). The server import calls this the `root_parent`.
@@ -836,15 +861,47 @@ impl MicaStore {
                 // (and the server's folder import) produced.
                 object_type = "folder";
                 self.save_doc(
+                    "local".to_string(),
                     doc_id.clone(),
                     &MicaDocument::from_markdown(String::new()),
                 );
             } else {
                 object_type = "document";
-                let doc = MicaDocument::from_markdown_with_assets(
+                let mut doc = MicaDocument::from_markdown_with_assets(
                     page.markdown.clone(),
                     page.archive_path.clone().unwrap_or_default(),
                     asset_ids.clone(),
+                );
+                // Relative `.md` links become internal page links — across EVERY
+                // inline mark (paragraphs AND table cells), through the ONE
+                // traversal entry the server importer uses, so the two import
+                // surfaces cannot drift. The target view id was assigned above,
+                // which is what makes forward references work.
+                let from_path = page.archive_path.clone().unwrap_or_default();
+                let mut payload = doc.snapshot();
+                mica_interchange::for_each_inline_mark_mut(&mut payload, |mark| {
+                    let Some(obj) = mark.as_object_mut() else {
+                        return;
+                    };
+                    let Some(target) = obj
+                        .get("href")
+                        .and_then(|v| v.as_str())
+                        .and_then(|href| {
+                            mica_interchange::resolve_ref(&from_path, href, &plan.md_paths)
+                        })
+                        .and_then(|path| plan.page_by_path.get(&path))
+                        .and_then(|i| planned_view_ids.get(*i))
+                    else {
+                        return;
+                    };
+                    obj.insert(
+                        "href".into(),
+                        serde_json::json!(format!("mica://page/{target}")),
+                    );
+                });
+                doc = MicaDocument::from_blocks_json(
+                    payload.root_block_id.clone(),
+                    serde_json::to_string(&payload.blocks).unwrap_or_default(),
                 );
                 // The file name goes INTO the document, not only into the view
                 // row beside it (docs/features/page-title-plan.md) — a vault
@@ -852,21 +909,26 @@ impl MicaStore {
                 if !page.title.is_empty() {
                     doc.set_title(page.title.clone());
                 }
-                self.save_doc(doc_id.clone(), &doc);
+                self.save_doc("local".to_string(), doc_id.clone(), &doc);
             }
             let name = if page.title.is_empty() {
                 "Untitled".to_string()
             } else {
                 page.title.clone()
             };
-            let view_id = self.create_view(
-                workspace_id.clone(),
-                parent_view,
-                doc_id,
+            let view_id = planned_view_ids[idx].clone();
+            let written = self.save_view(LocalView {
+                id: view_id.clone(),
+                workspace_id: workspace_id.clone(),
+                position: self.next_position(parent_view.as_deref()),
+                parent_id: parent_view,
+                object_id: doc_id,
                 name,
-                object_type.to_string(),
-            );
-            if view_id.is_empty() {
+                trashed: false,
+                origin: "local".to_string(),
+                object_type: object_type.to_string(),
+            });
+            if !written {
                 outcome
                     .errors
                     .push(format!("{}: view row refused by the store", page.title));
@@ -878,6 +940,7 @@ impl MicaStore {
             } else {
                 outcome.docs += 1;
             }
+            outcome.view_ids.push(view_id.clone());
             view_ids.push(Some(view_id));
         }
         outcome
@@ -915,8 +978,8 @@ impl MicaStore {
     /// the corruption and overwrite the recovery checkpoint (see
     /// `LocalDocBackend.open`). Previously `.ok()??` collapsed both to null.
     #[frb(sync)]
-    pub fn load_doc(&self, doc_id: String) -> Result<Option<MicaDocument>, String> {
-        match self.store().load_doc(&doc_id, self.client_id) {
+    pub fn load_doc(&self, origin: String, doc_id: String) -> Result<Option<MicaDocument>, String> {
+        match self.store().load_doc(&origin, &doc_id, self.client_id) {
             Ok(Some(loaded)) => Ok(Some(MicaDocument {
                 inner: Mutex::new(loaded),
             })),
@@ -929,17 +992,18 @@ impl MicaStore {
     /// (`None`) — as a Markdown ZIP, through the SAME shared builder the cloud
     /// uses (`mica_interchange::build_markdown_tree_zip`), so a local export is
     /// the same format as a cloud one and the export→import round-trip holds. The
-    /// store supplies views + document payloads; [`images`] supplies the blob
-    /// bytes per `file_id` (Dart reads the on-device CAS). Closes the last local
-    /// folder-export gap (was cloud-only).
+    /// store supplies views + document payloads for `origin` (normally "local";
+    /// a quarantined legacy cache can be exported the same way); [`images`]
+    /// supplies the blob bytes per `file_id` (Dart reads the on-device CAS).
     #[frb(sync)]
     pub fn export_folder_zip(
         &self,
+        origin: String,
         workspace_id: String,
         folder_id: Option<String>,
         images: Vec<FolderExportImage>,
     ) -> Vec<u8> {
-        let views = self.list_views("local".to_string());
+        let views = self.list_views(origin.clone());
         let nodes: Vec<mica_interchange::TreeNode> = views
             .iter()
             .filter(|v| v.workspace_id == workspace_id && !v.trashed)
@@ -963,7 +1027,7 @@ impl MicaStore {
             }
             // A corrupt snapshot is skipped from the export (it can't be
             // serialized anyway) rather than aborting the whole export.
-            if let Ok(Some(doc)) = self.load_doc(v.object_id.clone()) {
+            if let Ok(Some(doc)) = self.load_doc(origin.clone(), v.object_id.clone()) {
                 payloads.insert(v.object_id.clone(), doc.snapshot());
             }
         }
@@ -999,21 +1063,21 @@ impl MicaStore {
     // restart and can be re-pushed; `sync_cursor` tracks how far this device has
     // pulled from / pushed to the cloud stream.
 
-    /// Append a yrs `update` to `doc_id`'s local log; returns its new monotonic
-    /// `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
+    /// Append a yrs `update` to `(origin, doc_id)`'s local log; returns its new
+    /// monotonic `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
     #[frb(sync)]
-    pub fn append_update(&self, doc_id: String, update: Vec<u8>) -> i64 {
+    pub fn append_update(&self, origin: String, doc_id: String, update: Vec<u8>) -> i64 {
         self.store()
-            .append_update(&doc_id, &update)
+            .append_update(&origin, &doc_id, &update)
             .unwrap_or(0)
     }
 
     /// Log entries with `clock > after`, ordered — the un-pushed outbox when
     /// `after = sync_cursor.pushed_clock`, or catch-up from a known clock.
     #[frb(sync)]
-    pub fn updates_after(&self, doc_id: String, after: i64) -> Vec<DocUpdate> {
+    pub fn updates_after(&self, origin: String, doc_id: String, after: i64) -> Vec<DocUpdate> {
         self.store()
-            .updates_after(&doc_id, after)
+            .updates_after(&origin, &doc_id, after)
             .unwrap_or_default()
             .into_iter()
             .map(|(clock, payload)| DocUpdate { clock, payload })
@@ -1022,15 +1086,21 @@ impl MicaStore {
 
     /// Durably append a REMOTE update and advance `last_synced_rid` in the same
     /// transaction (P4-1) — the persisted cursor can never point past an update
-    /// that isn't on disk. Idempotent per `(doc_id, rid)`. Returns false when
-    /// the write FAILED (busy/full/io) so the caller can self-heal by writing a
-    /// base snapshot from the live in-memory doc — a swallowed failure here plus
+    /// that isn't on disk. Idempotent per `(origin, doc_id, rid)`. Returns false
+    /// when the write FAILED (busy/full/io) so the caller can self-heal by writing
+    /// a base snapshot from the live in-memory doc — a swallowed failure here plus
     /// a later disk-rebuilding compact would silently lose the update (P4-1
     /// review CRITICAL).
     #[frb(sync)]
-    pub fn append_remote_update(&self, doc_id: String, rid: i64, update: Vec<u8>) -> bool {
+    pub fn append_remote_update(
+        &self,
+        origin: String,
+        doc_id: String,
+        rid: i64,
+        update: Vec<u8>,
+    ) -> bool {
         self.store()
-            .append_remote_update(&doc_id, rid, &update)
+            .append_remote_update(&origin, &doc_id, rid, &update)
             .is_ok()
     }
 
@@ -1039,6 +1109,7 @@ impl MicaStore {
     #[frb(sync)]
     pub fn append_remote_updates(
         &self,
+        origin: String,
         doc_id: String,
         rids: Vec<i64>,
         updates: Vec<Vec<u8>>,
@@ -1046,23 +1117,23 @@ impl MicaStore {
         let items: Vec<(i64, Vec<u8>)> =
             rids.into_iter().zip(updates.into_iter()).collect();
         self.store()
-            .append_remote_updates(&doc_id, &items)
+            .append_remote_updates(&origin, &doc_id, &items)
             .is_ok()
     }
 
     /// (local outbox rows, remote log rows) — compaction-trigger bookkeeping.
     #[frb(sync)]
-    pub fn log_sizes(&self, doc_id: String) -> (i64, i64) {
+    pub fn log_sizes(&self, origin: String, doc_id: String) -> (i64, i64) {
         self.store()
-            .log_sizes(&doc_id)
+            .log_sizes(&origin, &doc_id)
             .unwrap_or((0, 0))
     }
 
     /// Fold the update log into the base snapshot and truncate it (compaction),
     /// so the log doesn't grow without bound. Safe no-op if the doc is absent.
     #[frb(sync)]
-    pub fn squash(&self, doc_id: String) {
-        let _ = self.store().squash(&doc_id, self.client_id);
+    pub fn squash(&self, origin: String, doc_id: String) {
+        let _ = self.store().squash(&origin, &doc_id, self.client_id);
     }
 
     /// Fold the log into the base and clear it — for a document with NO cloud
@@ -1072,9 +1143,9 @@ impl MicaStore {
     /// refuses on any doc showing evidence of sync, so the offline backend
     /// cannot accidentally drop an un-pushed outbox.
     #[frb(sync)]
-    pub fn compact_local(&self, doc_id: String) -> bool {
+    pub fn compact_local(&self, origin: String, doc_id: String) -> bool {
         self.store()
-            .compact_local(&doc_id, self.client_id)
+            .compact_local(&origin, &doc_id, self.client_id)
             .unwrap_or(false)
     }
 
@@ -1083,25 +1154,25 @@ impl MicaStore {
     /// snapshot already folds these, so reads are unchanged; the clock stays
     /// monotonic across this so no future clock is reused below the trim.
     #[frb(sync)]
-    pub fn trim_updates_through(&self, doc_id: String, up_to_clock: i64) {
+    pub fn trim_updates_through(&self, origin: String, doc_id: String, up_to_clock: i64) {
         let _ = self.store()
-            .trim_updates_through(&doc_id, up_to_clock);
+            .trim_updates_through(&origin, &doc_id, up_to_clock);
     }
 
     /// This doc's sync progress (0/0 if it has never synced).
     #[frb(sync)]
-    pub fn sync_cursor(&self, doc_id: String) -> SyncCursor {
+    pub fn sync_cursor(&self, origin: String, doc_id: String) -> SyncCursor {
         self.store()
-            .sync_cursor(&doc_id)
+            .sync_cursor(&origin, &doc_id)
             .unwrap_or(CoreSyncCursor { last_synced_rid: 0, pushed_clock: 0 })
             .into()
     }
 
     /// Persist this doc's sync progress.
     #[frb(sync)]
-    pub fn set_sync_cursor(&self, doc_id: String, cursor: SyncCursor) {
+    pub fn set_sync_cursor(&self, origin: String, doc_id: String, cursor: SyncCursor) {
         let _ = self.store()
-            .set_sync_cursor(&doc_id, cursor.into());
+            .set_sync_cursor(&origin, &doc_id, cursor.into());
     }
 }
 
@@ -1220,7 +1291,7 @@ mod clone_view_tests {
         store.save_view(folder("kid", Some("root"), "Child", "0000000020"));
         store.save_view(view("grandkid", Some("kid"), "Grandchild", "0000000030"));
         for id in ["root", "kid", "grandkid"] {
-            store.save_doc(format!("doc_{id}"), &MicaDocument::from_markdown(format!("# {id}")));
+            store.save_doc("local".to_string(), format!("doc_{id}"), &MicaDocument::from_markdown(format!("# {id}")));
         }
 
         let out = store.clone_view("root".into(), "Parent".into()).unwrap();
@@ -1251,7 +1322,7 @@ mod clone_view_tests {
 
         // Content came along, and each copy owns a fresh doc id.
         assert_ne!(copied_kid.object_id, "doc_kid");
-        let doc = store.load_doc(copied_kid.object_id.clone()).expect("load ok").expect("copied doc exists");
+        let doc = store.load_doc("local".to_string(), copied_kid.object_id.clone()).expect("load ok").expect("copied doc exists");
         assert!(doc.export_markdown().contains("kid"), "content copied, not just the row");
     }
 
@@ -1270,7 +1341,7 @@ mod clone_view_tests {
         let all = store.list_views("local".to_string());
         let copy = all.iter().find(|v| v.id == out.root_view_id).unwrap();
         assert!(
-            store.load_doc(copy.object_id.clone()).unwrap().is_some(),
+            store.load_doc("local".to_string(), copy.object_id.clone()).unwrap().is_some(),
             "the copy still opens to an empty document rather than nothing",
         );
     }
@@ -1392,7 +1463,7 @@ mod clone_view_tests {
         store.save_view(folder("kid", Some("folder"), "K", "0000000020"));
         store.save_view(view("outside", None, "O", "0000000030"));
         for id in ["folder", "kid", "outside"] {
-            store.save_doc(format!("doc_{id}"), &MicaDocument::from_markdown("x".into()));
+            store.save_doc("local".to_string(), format!("doc_{id}"), &MicaDocument::from_markdown("x".into()));
         }
 
         let hit = store.purge_view_subtree("folder".into());
@@ -1401,9 +1472,9 @@ mod clone_view_tests {
         let all = store.list_views("local".to_string());
         assert_eq!(all.len(), 1, "only the unrelated view survives");
         assert_eq!(all[0].id, "outside");
-        assert!(store.load_doc("doc_kid".into()).unwrap().is_none(), "its document went too");
+        assert!(store.load_doc("local".to_string(), "doc_kid".into()).unwrap().is_none(), "its document went too");
         assert!(
-            store.load_doc("doc_outside".into()).unwrap().is_some(),
+            store.load_doc("local".to_string(), "doc_outside".into()).unwrap().is_some(),
             "an unrelated document must survive",
         );
     }
@@ -1533,7 +1604,7 @@ mod clone_view_tests {
         // The whole point of sharing next_position: these two must agree.
         let (store, _dir) = tmp_store();
         store.save_view(view("a", None, "A", "0000000010"));
-        store.save_doc("doc_a".into(), &MicaDocument::from_markdown("x".into()));
+        store.save_doc("local".to_string(), "doc_a".into(), &MicaDocument::from_markdown("x".into()));
 
         let cloned = store.clone_view("a".into(), "A".into()).unwrap();
         let all = store.list_views("local".to_string());
@@ -1651,7 +1722,7 @@ mod clone_view_tests {
                 origin: "local".into(),
                 object_type: "document".into(),
             });
-            store.save_doc(format!("doc_{id}"), &MicaDocument::from_markdown("x".into()));
+            store.save_doc("local".to_string(), format!("doc_{id}"), &MicaDocument::from_markdown("x".into()));
         }
 
         assert!(store.delete_workspace_cascade("drop".into()));
@@ -1662,8 +1733,8 @@ mod clone_view_tests {
         let views = store.list_views("local".to_string());
         assert_eq!(views.len(), 1, "its views went with it");
         assert_eq!(views[0].id, "v3");
-        assert!(store.load_doc("doc_v1".into()).unwrap().is_none(), "orphaned docs would be unreachable forever");
-        assert!(store.load_doc("doc_v3".into()).unwrap().is_some(), "the survivor is untouched");
+        assert!(store.load_doc("local".to_string(), "doc_v1".into()).unwrap().is_none(), "orphaned docs would be unreachable forever");
+        assert!(store.load_doc("local".to_string(), "doc_v3".into()).unwrap().is_some(), "the survivor is untouched");
     }
 
     #[test]
@@ -1745,7 +1816,7 @@ mod clone_view_tests {
         // never stripped), and the image rewired to the blob Dart stored —
         // the path form gone, which only happens through resolve_ref hitting
         // the asset map.
-        let a_doc = store.load_doc(a.object_id.clone()).unwrap().unwrap();
+        let a_doc = store.load_doc("local".to_string(), a.object_id.clone()).unwrap().unwrap();
         let body = a_doc.export_markdown();
         assert!(body.contains("# A\n\nbody"), "{body}");
         assert!(!body.contains("assets/p.png"), "{body}");

@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2-M4.5: two cloud sessions editing the SAME document converge through the
 // real server (WS sync protocol + Postgres yrs stream + CRDT merge). This is the
 // end-to-end "双路线打通" proof — desktop ↔ desktop realtime sync.
@@ -24,7 +25,7 @@ const _apiBase = String.fromEnvironment(
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('two cloud sessions converge through the real server', () async {

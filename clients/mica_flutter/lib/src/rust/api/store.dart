@@ -14,12 +14,13 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 abstract class MicaStore implements RustOpaqueInterface {
   /// Durably append a REMOTE update and advance `last_synced_rid` in the same
   /// transaction (P4-1) — the persisted cursor can never point past an update
-  /// that isn't on disk. Idempotent per `(doc_id, rid)`. Returns false when
-  /// the write FAILED (busy/full/io) so the caller can self-heal by writing a
-  /// base snapshot from the live in-memory doc — a swallowed failure here plus
+  /// that isn't on disk. Idempotent per `(origin, doc_id, rid)`. Returns false
+  /// when the write FAILED (busy/full/io) so the caller can self-heal by writing
+  /// a base snapshot from the live in-memory doc — a swallowed failure here plus
   /// a later disk-rebuilding compact would silently lose the update (P4-1
   /// review CRITICAL).
   bool appendRemoteUpdate({
+    required String origin,
     required String docId,
     required PlatformInt64 rid,
     required List<int> update,
@@ -28,14 +29,16 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Batch variant: one transaction (one journal sync) for a whole
   /// `sync.updates` catch-up array. Parallel lists (rids[i] ↔ updates[i]).
   bool appendRemoteUpdates({
+    required String origin,
     required String docId,
     required Int64List rids,
     required List<Uint8List> updates,
   });
 
-  /// Append a yrs `update` to `doc_id`'s local log; returns its new monotonic
-  /// `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
+  /// Append a yrs `update` to `(origin, doc_id)`'s local log; returns its new
+  /// monotonic `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
   PlatformInt64 appendUpdate({
+    required String origin,
     required String docId,
     required List<int> update,
   });
@@ -59,7 +62,7 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
   /// points (doc open/close) so a later corruption can be rolled back.
-  void checkpointDoc({required String docId});
+  void checkpointDoc({required String origin, required String docId});
 
   /// The stable yrs client id new/loaded documents should use.
   BigInt clientId();
@@ -86,11 +89,12 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// stays 0 forever without a server). Returns whether it compacted; it
   /// refuses on any doc showing evidence of sync, so the offline backend
   /// cannot accidentally drop an un-pushed outbox.
-  bool compactLocal({required String docId});
+  bool compactLocal({required String origin, required String docId});
 
   /// Pin the current saved state as a NAMED version (never auto-pruned). Null
   /// if the document has no saved snapshot yet.
   LocalVersion? createLocalVersion({
+    required String origin,
     required String docId,
     required String label,
   });
@@ -112,7 +116,7 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Create a local workspace and return its id.
   String createWorkspace({required String name});
 
-  void deleteDoc({required String docId});
+  void deleteDoc({required String origin, required String docId});
 
   /// Delete one `origin`'s workspace and all its view rows (delete documents
   /// separately). Origin-scoped (v4 composite PK).
@@ -135,10 +139,11 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// (`None`) — as a Markdown ZIP, through the SAME shared builder the cloud
   /// uses (`mica_interchange::build_markdown_tree_zip`), so a local export is
   /// the same format as a cloud one and the export→import round-trip holds. The
-  /// store supplies views + document payloads; [`images`] supplies the blob
-  /// bytes per `file_id` (Dart reads the on-device CAS). Closes the last local
-  /// folder-export gap (was cloud-only).
+  /// store supplies views + document payloads for `origin` (normally "local";
+  /// a quarantined legacy cache can be exported the same way); [`images`]
+  /// supplies the blob bytes per `file_id` (Dart reads the on-device CAS).
   Uint8List exportFolderZip({
+    required String origin,
     required String workspaceId,
     String? folderId,
     required List<FolderExportImage> images,
@@ -178,12 +183,18 @@ abstract class MicaStore implements RustOpaqueInterface {
     required Map<String, String> assetIds,
   });
 
-  /// Ids of all stored documents (sorted).
-  List<String> listDocs();
+  /// Ids of all stored documents for `origin` (sorted). Origin is the page
+  /// tree's provenance — `"local"`, or the account-scoped server key for a
+  /// cloud mirror (issue #102: document rows are keyed by `(origin, doc_id)`,
+  /// so two origins may legitimately hold the same UUID).
+  List<String> listDocs({required String origin});
 
   /// The document's version timeline, newest first — auto snapshots (captured
   /// on a cadence by `save_doc`) and named checkpoints interleaved.
-  List<LocalVersion> listLocalVersions({required String docId});
+  List<LocalVersion> listLocalVersions({
+    required String origin,
+    required String docId,
+  });
 
   /// All views (including trashed) for `origin` ("local" or a server URL),
   /// ordered by position. The client builds the tree from `parent_id` and
@@ -200,18 +211,22 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// corrupt doc as "new" and seed a blank page over it, which would launder
   /// the corruption and overwrite the recovery checkpoint (see
   /// `LocalDocBackend.open`). Previously `.ok()??` collapsed both to null.
-  MicaDocument? loadDoc({required String docId});
+  MicaDocument? loadDoc({required String origin, required String docId});
 
   /// Decode a version into a THROWAWAY document for read-only preview (never
   /// the live doc). Null if the version isn't found. The caller renders it with
   /// `to_blocks_json()` / `root_block_id()` in a read-only editor.
   MicaDocument? localVersionDoc({
+    required String origin,
     required String docId,
     required String versionId,
   });
 
   /// (local outbox rows, remote log rows) — compaction-trigger bookkeeping.
-  (PlatformInt64, PlatformInt64) logSizes({required String docId});
+  (PlatformInt64, PlatformInt64) logSizes({
+    required String origin,
+    required String docId,
+  });
 
   /// Open (creating if needed) the local store at `path`. Returns null on
   /// failure (e.g. an unwritable path).
@@ -256,6 +271,7 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// the version isn't found). The pre-restore state is kept as an auto version
   /// so the restore is itself undoable.
   MicaDocument? restoreLocalVersion({
+    required String origin,
     required String docId,
     required String versionId,
   });
@@ -270,10 +286,14 @@ abstract class MicaStore implements RustOpaqueInterface {
 
   /// Restore a doc from its last checkpoint, returning the recovered document
   /// (null if there's no checkpoint).
-  MicaDocument? rollbackDoc({required String docId});
+  MicaDocument? rollbackDoc({required String origin, required String docId});
 
-  /// Persist a document under `doc_id` (full snapshot).
-  void saveDoc({required String docId, required MicaDocument doc});
+  /// Persist a document under `(origin, doc_id)` (full snapshot).
+  void saveDoc({
+    required String origin,
+    required String docId,
+    required MicaDocument doc,
+  });
 
   /// Upsert a view (create / rename / move / trash-toggle).
   bool saveView({required LocalView view});
@@ -295,14 +315,18 @@ abstract class MicaStore implements RustOpaqueInterface {
   });
 
   /// Persist this doc's sync progress.
-  void setSyncCursor({required String docId, required SyncCursor cursor});
+  void setSyncCursor({
+    required String origin,
+    required String docId,
+    required SyncCursor cursor,
+  });
 
   /// Fold the update log into the base snapshot and truncate it (compaction),
   /// so the log doesn't grow without bound. Safe no-op if the doc is absent.
-  void squash({required String docId});
+  void squash({required String origin, required String docId});
 
   /// This doc's sync progress (0/0 if it has never synced).
-  SyncCursor syncCursor({required String docId});
+  SyncCursor syncCursor({required String origin, required String docId});
 
   /// Move `view_id` and its whole subtree to the recycle bin. Returns the
   /// affected ids so the caller can close an editor that was inside it.
@@ -319,6 +343,7 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// snapshot already folds these, so reads are unchanged; the clock stays
   /// monotonic across this so no future clock is reused below the trim.
   void trimUpdatesThrough({
+    required String origin,
     required String docId,
     required PlatformInt64 upToClock,
   });
@@ -326,6 +351,7 @@ abstract class MicaStore implements RustOpaqueInterface {
   /// Log entries with `clock > after`, ordered — the un-pushed outbox when
   /// `after = sync_cursor.pushed_clock`, or catch-up from a known clock.
   List<DocUpdate> updatesAfter({
+    required String origin,
     required String docId,
     required PlatformInt64 after,
   });
@@ -703,14 +729,20 @@ class VaultImportOutcome {
   final int folders;
   final List<String> errors;
 
+  /// Every view id created, in plan order (folders included). Lets a caller
+  /// open the page a single-file Markdown import just produced.
+  final List<String> viewIds;
+
   const VaultImportOutcome({
     required this.docs,
     required this.folders,
     required this.errors,
+    required this.viewIds,
   });
 
   @override
-  int get hashCode => docs.hashCode ^ folders.hashCode ^ errors.hashCode;
+  int get hashCode =>
+      docs.hashCode ^ folders.hashCode ^ errors.hashCode ^ viewIds.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -719,7 +751,8 @@ class VaultImportOutcome {
           runtimeType == other.runtimeType &&
           docs == other.docs &&
           folders == other.folders &&
-          errors == other.errors;
+          errors == other.errors &&
+          viewIds == other.viewIds;
 }
 
 /// One file the folder picker walked for [`MicaStore::import_vault_tree`]: the

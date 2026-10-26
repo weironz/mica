@@ -263,18 +263,19 @@ int setextLevel(String raw) {
   return (label: label, rest: content.substring(close + 2).trimLeft());
 }
 
+int? _indentWidth(String c, int col) {
+  if (c == '\t') return (col ~/ 4 + 1) * 4;
+  return c.trim().isEmpty ? col + 1 : null;
+}
+
 /// Strip [columns] of leading indentation (tabs = 4-column stops).
 String deindentColumns(String line, int columns) {
   var col = 0;
   for (var i = 0; i < line.length; i++) {
     final c = line[i];
-    if (c == ' ') {
-      col += 1;
-    } else if (c == '\t') {
-      col = (col ~/ 4 + 1) * 4;
-    } else {
-      return line.substring(i);
-    }
+    final next = _indentWidth(c, col);
+    if (next == null) return line.substring(i);
+    col = next;
     if (col >= columns) {
       return ' ' * (col - columns) + line.substring(i + 1);
     }
@@ -461,8 +462,10 @@ List<BlockSpec> markdownToBlocks(String markdown) {
   final listStack = <int>[];
   int leadCol(String raw, String content) {
     var col = 0;
-    for (var k = 0; k < raw.length - content.length; k++) {
-      col = raw.codeUnitAt(k) == 0x09 ? (col ~/ 4 + 1) * 4 : col + 1;
+    for (var k = 0; k < raw.length; k++) {
+      final next = _indentWidth(raw[k], col);
+      if (next == null) break;
+      col = next;
     }
     return col;
   }
@@ -993,8 +996,9 @@ List<BlockSpec> markdownToBlocks(String markdown) {
 
       // Lazy/marked continuation of the open quoted paragraph.
       final qc = classifyLine(qrestTrim);
+      final qfence = leadCol(qrest, qrestTrim) < 4 ? _fenceOpen(qrestTrim) : null;
       if (qc.$1 == 'paragraph' &&
-          !qrestTrim.startsWith('```') &&
+          qfence == null &&
           open != null &&
           open!.qdepth >= qdepth &&
           !open!.hadBlank) {
@@ -1014,15 +1018,15 @@ List<BlockSpec> markdownToBlocks(String markdown) {
       pendingAlert = null;
 
       // Fenced code inside the quote: runs while the markers do.
-      if (qrestTrim.startsWith('```')) {
-        final language = qrestTrim.substring(3).trim();
+      if (qfence != null) {
+        final language = unescapeMd(qfence.info.trim().split(RegExp(r'\s+')).first);
         final buffer = <String>[];
         i++;
         while (i < lines.length) {
-          final lcontent = lines[i].trimRight().trimLeft();
+          final lcontent = lines[i].trimLeft();
           final (d2, r2) = stripQuoteMarkers(lcontent);
           if (d2 < qdepth) break; // the quote ended — so does the fence
-          if (r2.trimLeft().startsWith('```')) {
+          if (leadCol(r2, r2.trimLeft()) < 4 && _fenceClose(r2.trimLeft(), qfence.ch, qfence.len)) {
             i++;
             break;
           }

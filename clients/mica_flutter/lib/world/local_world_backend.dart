@@ -134,11 +134,6 @@ class _LocalWorldBackend extends WorldBackend {
     delete: _localDeleteView,
     bulkDelete: _localDeleteViews,
     clone: _localCloneView,
-    updateRootBlockText: _localUpdateRootBlockText,
-    addBlock: (_, _) async {},
-    updateBlock: (_, _, _) async {},
-    deleteBlock: (_) async {},
-    moveBlock: (_, _) async {},
     openViewFromHome: _openViewFromHome,
     closeOpenPage: _closeOpenPage,
   );
@@ -168,13 +163,11 @@ class _LocalWorldBackend extends WorldBackend {
 
   @override
   late final ExportOps exportOps = ExportOps(
-    pageZip: () async =>
-        throw ApiException(_shell.context.l10n.exportLocalUnsupported),
     page: _shell._localExportPage,
     copyMarkdown: _shell._localPageMarkdownText,
     pageHtml: _shell._localExportPageHtml,
-    importMarkdown: (_, _) async {},
-    workspaceZip: (_) async => Uint8List(0),
+    importMarkdown: _localImportMarkdown,
+    workspaceZip: _localExportWorkspaceZip,
     importTree: _localImportVaultTree,
   );
 
@@ -711,14 +704,6 @@ class _LocalWorldBackend extends WorldBackend {
     return out;
   }
 
-  Future<void> _localUpdateRootBlockText(String text) async {
-    final root = _localBootstrap?.document.rootBlockId;
-    if (root == null) return;
-    await _local.applyOps([
-      {'type': 'update_block', 'block_id': root, 'text': text},
-    ]);
-  }
-
   Future<bool> _localRenameView(DocumentView view, String name) async {
     final title = name.trim().isEmpty ? 'Untitled' : name.trim();
     // The name belongs to the DOCUMENT (root block `title`); the view row is the
@@ -896,6 +881,51 @@ class _LocalWorldBackend extends WorldBackend {
   void _closeOpenPage() {
     _shell.setUi(() {
       _localSelectedView = null;
+      // Home is a STATE, not just a missing selection: the editor pane renders
+      // Home only when bootstrap is null. Clearing the view alone left the old
+      // page's editor mounted, so clicking Home looked like nothing happened
+      // (issue #108).
+      _localBootstrap = null;
     });
+  }
+
+  /// Import a picked Markdown file as a page in the selected local workspace —
+  /// the local counterpart of the cloud `importMarkdown` (issue #108). The
+  /// empty Future it used to be silently did nothing; the conversion lives in
+  /// the local facade so this library only wires the outcome.
+  Future<void> _localImportMarkdown(String fileName, String markdown) async {
+    final l10n = _shell.context.l10n;
+    final workspace = _localSelectedWorkspace;
+    if (workspace == null) return;
+    final result = await _local.importMarkdownPage(
+      fileName,
+      markdown,
+      workspace.id,
+      fallbackTitle: l10n.untitledPage,
+    );
+    if (!_shell.mounted) return;
+    _shell.setUi(_reloadLocalViews);
+    if (result.errors.isNotEmpty) {
+      _shell.setUi(
+        () => _shell._message = l10n.importFailed(result.errors.first),
+      );
+      return;
+    }
+    final id = result.viewIds.firstOrNull;
+    final created = id == null
+        ? null
+        : _localViews.where((v) => v.id == id).firstOrNull;
+    if (created != null) await _localSelectView(created);
+  }
+
+  /// Export the local workspace as a real Markdown ZIP through the shared Rust
+  /// tree builder — the entry that used to return zero bytes and always failed
+  /// (issue #108).
+  Future<Uint8List> _localExportWorkspaceZip(String workspaceId) async {
+    final bytes = _local.exportWorkspaceZip(workspaceId);
+    if (bytes == null || bytes.isEmpty) {
+      throw ApiException(_shell.context.l10n.exportEmptyContent);
+    }
+    return bytes;
   }
 }

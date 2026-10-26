@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2 option C — Phase 1: a cloud doc mirrored to the on-device store reads
 // offline. No server needed — the session seeds its replica from local storage
 // and fires onReady with that content before (and independent of) any socket.
@@ -17,13 +18,13 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('StoreCloudDocStore mirrors a cloud doc (bytes + cursor) via MicaStore', () {
     final dir = Directory.systemTemp.createTempSync('mica_cds');
     final store = MicaStore.open(path: '${dir.path}/s.db')!;
-    final adapter = StoreCloudDocStore(store, 'cloud-uuid-1');
+    final adapter = StoreCloudDocStore(store, 'local', 'cloud-uuid-1');
     expect(adapter.load(), isNull, reason: 'not mirrored yet');
 
     final doc = MicaDocument.fromBlocksJson(
@@ -49,7 +50,7 @@ void main() {
       () {
     final dir = Directory.systemTemp.createTempSync('mica_outbox');
     final store = MicaStore.open(path: '${dir.path}/s.db')!;
-    final ob = StoreCloudDocStore(store, 'doc-ob');
+    final ob = StoreCloudDocStore(store, 'local', 'doc-ob');
     Uint8List b(int n) => Uint8List.fromList([n]);
 
     // Fresh doc: empty outbox, zeroed cursor.
@@ -84,7 +85,7 @@ void main() {
       () {
     final dir = Directory.systemTemp.createTempSync('mica_offr');
     final store = MicaStore.open(path: '${dir.path}/s.db')!;
-    final adapter = StoreCloudDocStore(store, 'doc-x');
+    final adapter = StoreCloudDocStore(store, 'local', 'doc-x');
     // Pre-mirror a doc, as a prior online session would have.
     final doc = MicaDocument.fromBlocksJson(
       rootId: 'r',

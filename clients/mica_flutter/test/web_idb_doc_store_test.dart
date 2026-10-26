@@ -8,9 +8,13 @@
 @TestOn('browser')
 library;
 
+import 'dart:js_interop';
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/cloud/cloud_sync_session.dart';
+import 'cloud_sync_test_replica.dart';
 import 'package:mica_flutter/cloud/web_idb_doc_store.dart';
 
 /// Deterministic fake fold: base ++ updates in replay order — makes ordering
@@ -28,6 +32,41 @@ Uint8List b(List<int> v) => Uint8List.fromList(v);
 
 var _dbSeq = 0;
 
+@JS('eval')
+external JSAny? _evaluate(JSString source);
+
+/// Abort a real browser transaction after its writes are issued. T1 commits;
+/// T2 rolls back atomically through IndexedDB's own abort event.
+void abortSecondWriteTransaction() {
+  _evaluate(
+    '''
+    globalThis.micaOriginalTransaction = IDBDatabase.prototype.transaction;
+    globalThis.micaWriteTransactions = 0;
+    IDBDatabase.prototype.transaction = function(...args) {
+      const tx = globalThis.micaOriginalTransaction.apply(this, args);
+      if (args[1] === 'readwrite' && ++globalThis.micaWriteTransactions === 2) {
+        queueMicrotask(() => tx.abort());
+      }
+      return tx;
+    };
+  '''
+        .toJS,
+  );
+  addTearDown(restoreTransactions);
+}
+
+void restoreTransactions() {
+  _evaluate(
+    '''
+    if (globalThis.micaOriginalTransaction) {
+      IDBDatabase.prototype.transaction = globalThis.micaOriginalTransaction;
+      delete globalThis.micaOriginalTransaction;
+    }
+  '''
+        .toJS,
+  );
+}
+
 Future<WebIdbDocStore> openStore({
   String? db,
   String doc = 'doc-1',
@@ -39,7 +78,11 @@ Future<WebIdbDocStore> openStore({
     replay: replay ?? concatReplay,
     dbName: db ?? 'mica-test-${_dbSeq++}',
   );
-  expect(store, isNotNull, reason: 'IndexedDB must be available in the test browser');
+  expect(
+    store,
+    isNotNull,
+    reason: 'IndexedDB must be available in the test browser',
+  );
   return store!;
 }
 
@@ -76,55 +119,68 @@ void main() {
     s.dispose();
   });
 
-  test('outbox: monotonic clocks, trim clamps to pushedClock, survives reopen',
-      () async {
-    final db = 'mica-test-${_dbSeq++}';
-    final s = await openStore(db: db);
-    expect(s.appendOutbox(b([1])), 1);
-    expect(s.appendOutbox(b([2])), 2);
-    expect(s.appendOutbox(b([3])), 3);
-    s.advance(pushedClock: 2);
-    // Clamp: asking to trim past pushedClock must not delete un-pushed entries.
-    s.trimOutboxThrough(99);
-    expect([for (final e in s.outboxAfter(0)) e.clock], [3]);
-    // The clock stays monotonic past the trim (P2a invariant).
-    expect(s.appendOutbox(b([4])), 4);
+  test(
+    'outbox: monotonic clocks, trim clamps to pushedClock, survives reopen',
+    () async {
+      final db = 'mica-test-${_dbSeq++}';
+      final s = await openStore(db: db);
+      expect(s.appendOutbox(b([1])), 1);
+      expect(s.appendOutbox(b([2])), 2);
+      expect(s.appendOutbox(b([3])), 3);
+      s.advance(pushedClock: 2);
+      // Clamp: asking to trim past pushedClock must not delete un-pushed entries.
+      s.trimOutboxThrough(99);
+      expect([for (final e in s.outboxAfter(0)) e.clock], [3]);
+      // The clock stays monotonic past the trim (P2a invariant).
+      expect(s.appendOutbox(b([4])), 4);
 
-    // Reopen = page reload: everything hydrates back from IndexedDB.
-    final r = await reopen(s, db: db);
-    expect(r.cursor(), (lastSyncedRid: 0, pushedClock: 2));
-    final tail = r.outboxAfter(r.cursor().pushedClock);
-    expect([for (final e in tail) e.clock], [3, 4]);
-    expect([for (final e in tail) e.bytes], [b([3]), b([4])]);
-    // And the next clock continues past the hydrated maximum.
-    expect(r.appendOutbox(b([5])), 5);
-    r.dispose();
-  });
+      // Reopen = page reload: everything hydrates back from IndexedDB.
+      final r = await reopen(s, db: db);
+      expect(r.cursor(), (lastSyncedRid: 0, pushedClock: 2));
+      final tail = r.outboxAfter(r.cursor().pushedClock);
+      expect([for (final e in tail) e.clock], [3, 4]);
+      expect(
+        [for (final e in tail) e.bytes],
+        [
+          b([3]),
+          b([4]),
+        ],
+      );
+      // And the next clock continues past the hydrated maximum.
+      expect(r.appendOutbox(b([5])), 5);
+      r.dispose();
+    },
+  );
 
-  test('remote log: rid-idempotent, advances lastSyncedRid, batch, reopen',
-      () async {
-    final db = 'mica-test-${_dbSeq++}';
-    final s = await openStore(db: db);
-    expect(s.appendRemote(5, b([50])), isTrue);
-    expect(s.appendRemote(5, b([99])), isTrue); // duplicate rid → ignored
-    expect(s.cursor().lastSyncedRid, 5);
-    expect(
-      s.appendRemoteBatch([(rid: 7, update: b([70])), (rid: 6, update: b([60]))]),
-      isTrue,
-    );
-    expect(s.cursor().lastSyncedRid, 7);
-    expect(s.logSizes(), (local: 0, remote: 3));
+  test(
+    'remote log: rid-idempotent, advances lastSyncedRid, batch, reopen',
+    () async {
+      final db = 'mica-test-${_dbSeq++}';
+      final s = await openStore(db: db);
+      expect(s.appendRemote(5, b([50])), isTrue);
+      expect(s.appendRemote(5, b([99])), isTrue); // duplicate rid → ignored
+      expect(s.cursor().lastSyncedRid, 5);
+      expect(
+        s.appendRemoteBatch([
+          (rid: 7, update: b([70])),
+          (rid: 6, update: b([60])),
+        ]),
+        isTrue,
+      );
+      expect(s.cursor().lastSyncedRid, 7);
+      expect(s.logSizes(), (local: 0, remote: 3));
 
-    final r = await reopen(s, db: db);
-    expect(r.cursor().lastSyncedRid, 7);
-    expect(r.logSizes(), (local: 0, remote: 3));
-    // Hydrated sorted by rid; the duplicate-rid payload is the FIRST write.
-    r.save(b([0]), 7); // give it a base so load() replays
-    final state = r.load();
-    expect(state, isNotNull);
-    expect(state!.state, b([0, 50, 60, 70]));
-    r.dispose();
-  });
+      final r = await reopen(s, db: db);
+      expect(r.cursor().lastSyncedRid, 7);
+      expect(r.logSizes(), (local: 0, remote: 3));
+      // Hydrated sorted by rid; the duplicate-rid payload is the FIRST write.
+      r.save(b([0]), 7); // give it a base so load() replays
+      final state = r.load();
+      expect(state, isNotNull);
+      expect(state!.state, b([0, 50, 60, 70]));
+      r.dispose();
+    },
+  );
 
   test('load replays base + remote log + outbox (in that order)', () async {
     final s = await openStore();
@@ -183,82 +239,232 @@ void main() {
 
   // ── P4-2 review hardening ──────────────────────────────────────────────────
 
-  test('corrupt base → load() returns null (never throws), matching desktop',
-      () async {
-    // A base whose replay throws (real yjs Y.applyUpdate on a corrupt base).
-    // Contract parity with the FFI store: load() must return null so the
-    // session cold-bootstraps, not propagate and kill connect()/compact().
-    final db = 'mica-test-${_dbSeq++}';
-    final s = await openStore(db: db, replay: throwingReplay);
-    s.save(b([1, 2, 3]), 4); // a "base" the throwing replay will choke on
-    expect(s.load(), isNull, reason: 'corrupt base swallowed into null');
-    expect(() => s.compact(), returnsNormally,
-        reason: 'compact on a corrupt base is a safe no-op, not a throw');
-    s.dispose();
-  });
+  test(
+    'corrupt base → load() returns null (never throws), matching desktop',
+    () async {
+      // A base whose replay throws (real yjs Y.applyUpdate on a corrupt base).
+      // Contract parity with the FFI store: load() must return null so the
+      // session cold-bootstraps, not propagate and kill connect()/compact().
+      final db = 'mica-test-${_dbSeq++}';
+      final s = await openStore(db: db, replay: throwingReplay);
+      s.save(b([1, 2, 3]), 4); // a "base" the throwing replay will choke on
+      expect(s.load(), isNull, reason: 'corrupt base swallowed into null');
+      expect(
+        () => s.compact(),
+        returnsNormally,
+        reason: 'compact on a corrupt base is a safe no-op, not a throw',
+      );
+      s.dispose();
+    },
+  );
 
-  test('single-writer: a second open of the same (db,doc) returns null (lock held)',
-      () async {
-    final db = 'mica-test-${_dbSeq++}';
-    final a = await openStore(db: db, doc: 'solo');
-    // Second concurrent opener of the SAME doc must not get a writable mirror —
-    // it would blind-overwrite a's rows and drop its un-pushed outbox.
-    final second = await WebIdbDocStore.open(
-      'https://cloud.example',
-      'solo',
-      replay: concatReplay,
-      dbName: db,
-    );
-    expect(second, isNull,
-        reason: 'the Web Lock is held by `a`; the 2nd tab runs online-only');
-    // After a releases (tab closed / session disposed), a fresh open succeeds.
-    final third = await reopen(a, db: db, doc: 'solo');
-    expect(third, isNotNull);
-    third.dispose();
-  });
-
-  test('P1-12: a disposed store hands over only AFTER its queued writes land',
-      () async {
-    // The handover race the single-writer lock exists to prevent. `dispose()`
-    // used to release the Web Lock BEFORE waiting on the write-behind tail, so a
-    // successor could acquire, hydrate the OLD `rows` record, and then rewrite it
-    // from its own short in-memory copy — dropping un-pushed outbox entries the
-    // predecessor was still writing. `reopen()` above cannot catch this: it
-    // flushes first, which is exactly the timing that hides the bug.
-    final db = 'mica-test-${_dbSeq++}';
-    final a = await openStore(db: db, doc: 'handover');
-
-    // Queue a burst without flushing: the writes are FIFO on the tail and the
-    // outbox record is written WHOLE, so a successor that hydrates mid-sequence
-    // sees a short list.
-    const n = 40;
-    for (var i = 0; i < n; i++) {
-      a.appendOutbox(b([i]));
-    }
-
-    // Dispose immediately, no flush. Then race a reopen the way a same-tab
-    // session rebuild does.
-    a.dispose();
-    WebIdbDocStore? b2;
-    for (var attempt = 0; attempt < 100 && b2 == null; attempt++) {
-      b2 = await WebIdbDocStore.open(
+  test(
+    'single-writer: a second open of the same (db,doc) returns null (lock held)',
+    () async {
+      final db = 'mica-test-${_dbSeq++}';
+      final a = await openStore(db: db, doc: 'solo');
+      // Second concurrent opener of the SAME doc must not get a writable mirror —
+      // it would blind-overwrite a's rows and drop its un-pushed outbox.
+      final second = await WebIdbDocStore.open(
         'https://cloud.example',
-        'handover',
+        'solo',
         replay: concatReplay,
         dbName: db,
       );
-      if (b2 == null) await Future<void>.delayed(const Duration(milliseconds: 5));
-    }
-    expect(b2, isNotNull, reason: 'the lock must be released once the tail drains');
+      expect(
+        second,
+        isNull,
+        reason: 'the Web Lock is held by `a`; the 2nd tab runs online-only',
+      );
+      // After a releases (tab closed / session disposed), a fresh open succeeds.
+      final third = await reopen(a, db: db, doc: 'solo');
+      expect(third, isNotNull);
+      third.dispose();
+    },
+  );
 
-    // The successor must see EVERY queued entry — that is the invariant the
-    // prompt release broke. A short list here means the handover happened
-    // mid-sequence.
-    expect(
-      b2!.outboxAfter(0).length,
-      n,
-      reason: 'all $n queued outbox entries survive the handover',
-    );
-    b2.dispose();
+  test(
+    'P1-12: a disposed store hands over only AFTER its queued writes land',
+    () async {
+      // The handover race the single-writer lock exists to prevent. `dispose()`
+      // used to release the Web Lock BEFORE waiting on the write-behind tail, so a
+      // successor could acquire, hydrate the OLD `rows` record, and then rewrite it
+      // from its own short in-memory copy — dropping un-pushed outbox entries the
+      // predecessor was still writing. `reopen()` above cannot catch this: it
+      // flushes first, which is exactly the timing that hides the bug.
+      final db = 'mica-test-${_dbSeq++}';
+      final a = await openStore(db: db, doc: 'handover');
+
+      // Queue a burst without flushing: the writes are FIFO on the tail and the
+      // outbox record is written WHOLE, so a successor that hydrates mid-sequence
+      // sees a short list.
+      const n = 40;
+      for (var i = 0; i < n; i++) {
+        a.appendOutbox(b([i]));
+      }
+
+      // Dispose immediately, no flush. Then race a reopen the way a same-tab
+      // session rebuild does.
+      a.dispose();
+      WebIdbDocStore? b2;
+      for (var attempt = 0; attempt < 100 && b2 == null; attempt++) {
+        b2 = await WebIdbDocStore.open(
+          'https://cloud.example',
+          'handover',
+          replay: concatReplay,
+          dbName: db,
+        );
+        if (b2 == null)
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(
+        b2,
+        isNotNull,
+        reason: 'the lock must be released once the tail drains',
+      );
+
+      // The successor must see EVERY queued entry — that is the invariant the
+      // prompt release broke. A short list here means the handover happened
+      // mid-sequence.
+      expect(
+        b2!.outboxAfter(0).length,
+        n,
+        reason: 'all $n queued outbox entries survive the handover',
+      );
+      b2.dispose();
+    },
+  );
+
+  // ── #161: write closures capture their data at ENQUEUE time ───────────────
+  test(
+    'appendRemoteBatch then compact in one stack: T1 carries R0+U, not []',
+    () async {
+      // Production sequence (cloud_sync_session): `sync.updates` →
+      // appendRemoteBatch(applied) immediately followed by _maybeCompact →
+      // compact(). The two writes queue behind each other. The page can die
+      // before T2 lands; T1 must already carry what it was queued for. The old
+      // code read the SHARED in-memory remote log inside the T1 closure, which
+      // compact() had already cleared — so T1 committed remote=[] (losing the
+      // previously committed R0 too) while still advancing the cursor.
+      final db = 'mica-test-${_dbSeq++}';
+      final s = await openStore(db: db);
+      s.save(b([0]), 0);
+      s.appendRemote(1, b([1]));
+      await s.flush(); // B0 and R0 are already committed.
+
+      abortSecondWriteTransaction();
+      s.appendRemoteBatch([
+        (rid: 2, update: b([2])),
+      ]);
+      s.compact(); // T2 aborts after T1 commits B0 + R0 + U.
+      await s.flush();
+      restoreTransactions();
+      s.dispose();
+
+      final r = await reopen(s, db: db);
+      expect(
+        r.logSizes().remote,
+        2,
+        reason: 'the committed transaction kept R0+U (not the post-compact [])',
+      );
+      expect(
+        r.cursor().lastSyncedRid,
+        2,
+        reason: 'cursor still matches the committed remote log',
+      );
+      expect(
+        r.load()!.state,
+        b([0, 1, 2]),
+        reason: 'base B0 + committed U replay to the pre-compact state',
+      );
+      r.dispose();
+    },
+  );
+
+  test('a queued save() carries ITS cursor, not a later advance\'s', () async {
+    // The cursor-ahead-of-data invariant (P4-1): each queued transaction must
+    // persist the cursor that belongs to the data it commits. Old code read
+    // `_cursorRecord()` inside the closure, so a save() queued before an
+    // advance() committed the ADVANCE's cursor even when the advance's
+    // transaction never landed — a resume point past data that is not on disk.
+    final db = 'mica-test-${_dbSeq++}';
+    final s = await openStore(db: db);
+    s.save(b([0]), 0);
+    await s.flush();
+
+    abortSecondWriteTransaction();
+    s.save(b([1]), 3); // T1 commits — snapshot cursor 3
+    s.advance(lastSyncedRid: 5); // T2 never lands
+    await s.flush();
+    restoreTransactions();
+    s.dispose();
+
+    final r = await reopen(s, db: db);
+    expect(r.cursor(), (
+      lastSyncedRid: 3,
+      pushedClock: 0,
+    ), reason: 'the committed cursor must match the committed data');
+    expect(r.load()!.state, b([1]));
+    r.dispose();
   });
+
+  test(
+    'the 32nd remote batch compacts a log over 256 rows atomically',
+    () async {
+      final db = 'mica-test-${_dbSeq++}';
+      final s = await openStore(db: db);
+      s.save(b([0]), 0);
+      s.appendRemoteBatch([
+        for (var rid = 1; rid <= 256; rid++) (rid: rid, update: b([1])),
+      ]);
+      await s.flush();
+      final session = CloudSyncSession(
+        uri: () async => Uri.parse('ws://unused.invalid'),
+        clientId: BigInt.one,
+        onReady: (_, __) {},
+        onRemoteBlocks: (_) {},
+        persistence: s,
+      )..debugAttachReplica(CloudSyncTestReplica());
+      for (var rid = 257; rid <= 287; rid++) {
+        session.debugHandleFrame(
+          jsonEncode({
+            'type': 'sync.updates',
+            'updates': [
+              {
+                'rid': rid,
+                'update': base64.encode([1]),
+              },
+            ],
+          }),
+        );
+      }
+      await s.flush();
+      abortSecondWriteTransaction();
+      session.debugHandleFrame(
+        jsonEncode({
+          'type': 'sync.updates',
+          'updates': [
+            {
+              'rid': 288,
+              'update': base64.encode([1]),
+            },
+          ],
+        }),
+      );
+      expect(
+        s.logSizes().remote,
+        0,
+        reason: 'the production threshold compacted',
+      );
+      await s.flush();
+      restoreTransactions();
+      s.dispose();
+      final r = await reopen(s, db: db);
+      expect(r.logSizes().remote, 288);
+      expect(r.cursor().lastSyncedRid, 288);
+      expect(r.load()!.state, [0, ...List.filled(288, 1)]);
+      r.dispose();
+      session.dispose();
+    },
+  );
 }

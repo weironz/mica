@@ -31,9 +31,31 @@ bool _isSecret(String key) =>
 /// This page's tokens. Never written to disk, never readable after a reload.
 final Map<String, String> _memory = {};
 
-String? loadPref(String key) => _isSecret(key)
-    ? _memory[key]
-    : web.window.localStorage.getItem('$_prefix$key');
+bool _legacySecretsPurged = false;
+
+// Startup reads preferences before selecting the active server. Sweep once on
+// that first read, including credentials left behind for inactive servers.
+void _purgeLegacySecrets() {
+  if (_legacySecretsPurged) return;
+  final storage = web.window.localStorage;
+  // Walk backwards because removal shifts the remaining localStorage keys.
+  for (var i = storage.length - 1; i >= 0; i--) {
+    final key = storage.key(i);
+    if (key != null &&
+        key.startsWith(_prefix) &&
+        _isSecret(key.substring(_prefix.length))) {
+      storage.removeItem(key);
+    }
+  }
+  _legacySecretsPurged = true;
+}
+
+String? loadPref(String key) {
+  _purgeLegacySecrets();
+  return _isSecret(key)
+      ? _memory[key]
+      : web.window.localStorage.getItem('$_prefix$key');
+}
 
 void savePref(String key, String value) {
   if (_isSecret(key)) {

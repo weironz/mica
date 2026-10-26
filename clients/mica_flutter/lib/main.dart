@@ -87,7 +87,13 @@ import 'ui/user_avatar.dart';
 import 'ui/update_controls.dart';
 import 'ui/version_data.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
-import 'local/cache_stats.dart' show LocalCacheStats;
+import 'local/cache_stats.dart'
+    show
+        ClearMirrorResult,
+        LocalCacheStats,
+        cloudCacheOrigin,
+        requireCloudCacheOrigin,
+        titleFromMarkdown;
 import 'doc_tab.dart';
 import 'prefs.dart';
 import 'theme_controller.dart';

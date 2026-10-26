@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // S-tier vault import (Obsidian-style "open my folder of .md"): a pre-walked
 // tree of files lands in the local store as documents, mirroring the directory
 // layout as a page tree — parsing done by the authoritative Rust engine
@@ -11,13 +12,12 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:mica_flutter/local/local_offline.dart';
-import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
     try {
-      await RustLib.init();
+      await initNativeRust();
     } catch (_) {}
   });
 

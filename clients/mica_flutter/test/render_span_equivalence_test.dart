@@ -4,7 +4,11 @@
 // marks scan (O(M) per span, O(M²) per export). The rewrite streams the
 // start-sorted marks with an active heap + start-group ties instead. This
 // file pins OUTPUT equivalence by fuzzing both against the old algorithm,
-// which is reproduced VERBATIM (as `_oldRenderSpan*`) from the pre-fix code.
+// whose mark-selection scan is reproduced as `_oldRenderSpan*` below.
+// The old selection scan remains the reference. Serialization rules fixed by
+// public round-trip regressions in markdown_engine_regressions_test.dart are
+// shared with production: dollar-bearing math, whitespace code padding and
+// decoded destination/title escaping. The old $$$ form loses a literal dollar.
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -60,9 +64,8 @@ String _oldRenderSpan(String text, int lo, int hi, List<Mark> marks) {
       continue;
     }
     if (pick.type == 'math') {
-      out.write(kDollar);
-      out.write(text.substring(ps, pe));
-      out.write(kDollar);
+      final source = text.substring(ps, pe);
+      out.write(source.contains(kDollar) ? '\\($source\\)' : '$kDollar$source$kDollar');
       pos = pe;
       continue;
     }
@@ -87,7 +90,7 @@ String _oldRenderSpan(String text, int lo, int hi, List<Mark> marks) {
       final pad =
           raw.startsWith('`') ||
           raw.endsWith('`') ||
-          (raw.startsWith(' ') && raw.endsWith(' ') && raw.trim().isNotEmpty);
+          (raw.startsWith(' ') && raw.endsWith(' ') && raw.codeUnits.any((c) => c != 0x20));
       out.write(pad ? '$fence $raw $fence' : '$fence$raw$fence');
       pos = pe;
       continue;
@@ -117,22 +120,22 @@ String _oldRenderSpan(String text, int lo, int hi, List<Mark> marks) {
             (href == plain || href == 'mailto:$plain')) {
           out.write('<$plain>');
         } else {
-          final dest = href.contains(RegExp(r'\s')) ? '<$href>' : href;
+          final dest = escapeMarkdownDestination(href);
           final t = pick.title;
           out.write(
             t == null
                 ? '[$body]($dest)'
-                : '[$body]($dest "${t.replaceAll('"', r'\"')}")',
+                : '[$body]($dest "${escapeMarkdownTitle(t)}")',
           );
         }
       case 'image':
         final href = pick.href ?? '';
-        final dest = href.contains(RegExp(r'\s')) ? '<$href>' : href;
+        final dest = escapeMarkdownDestination(href);
         final t = pick.title;
         out.write(
           t == null
               ? '![$body]($dest)'
-              : '![$body]($dest "${t.replaceAll('"', r'\"')}")',
+              : '![$body]($dest "${escapeMarkdownTitle(t)}")',
         );
       default:
         out.write(body);

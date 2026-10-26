@@ -438,6 +438,29 @@ void main() {
       },
     );
 
+    test('sign-out during bootstrap cannot publish into the new session '
+        '(issue #148)', () async {
+      final body = Completer<DocumentBootstrap>();
+      final started = Completer<void>();
+      viewsAnswer['w1'] = (views: [view('fresh')], etag: 'fresh-etag');
+      final controller = buildController(fetchBootstrap: () {
+        started.complete();
+        return body.future;
+      });
+      final selections = <ViewsSelection>[];
+      listen(controller, selections);
+      final loading = controller.loadWorkspaceViews('t', 'w1');
+      await started.future;
+      store.signOut();
+      store.signIn(session('new'), [ws('w2')]);
+      body.complete(boot('fresh'));
+      await loading;
+      expect(selections, isEmpty);
+      expect(mirrored, isNull);
+      expect(store.viewsByWorkspace, isEmpty);
+      controller.dispose();
+    });
+
     test('auto-open: remembered id wins, folders are never opened', () async {
       viewsAnswer['w1'] = (
         views: [view('folder', objectType: 'folder'), view('doc1')],
@@ -719,6 +742,94 @@ void main() {
       expect(store.viewsByWorkspace['w1']!.single.id, 'current');
       expect(prefs['viewsEtag:w1'], 'current');
     });
+
+    test('a fresh sign-in retires trees even when identity objects are reused '
+        '(issue #148)', () async {
+      final tree = Completer<({List<DocumentView>? views, String? etag})>();
+      final controller = buildController(fetchTree: () => tree.future);
+      final signedIn = store.session!;
+      final workspaces = store.workspaces;
+      final loading = controller.refreshTree('t', 'w1');
+
+      store.signIn(signedIn, workspaces);
+      tree.complete((views: [view('old-session')], etag: 'old-session'));
+      await loading;
+
+      expect(store.viewsByWorkspace, isEmpty);
+      expect(prefs['viewsEtag:w1'], isNull);
+      expect(mirrored, isNull);
+      controller.dispose();
+    });
+
+    test(
+      'a tree response landing after sign-out + re-sign-in must not commit '
+      'into the new session or its mirror (issue #148)',
+      () async {
+        var currentOrigin = 'https://server-a';
+        final tree = Completer<({List<DocumentView>? views, String? etag})>();
+        final controller = CloudViewsController(
+          session: store,
+          createDocument: (t, w, n, {parentViewId}) async =>
+              throw StateError('unused'),
+          bootstrapDocument: (t, w, d) async => boot('v'),
+          createFolder: (t, w, n, {parentViewId}) async =>
+              view('f', objectType: 'folder'),
+          updateView: (t, w, i, n, {icon}) async => view(i, name: n),
+          deleteView: (t, w, i) async => const [],
+          batchTrashViews: ({
+            required token,
+            required workspaceId,
+            required viewIds,
+          }) async => (affected: 0, skipped: const <String>[]),
+          cloneView: ({
+            required token,
+            required workspaceId,
+            required viewId,
+            name,
+            required dryRun,
+          }) async => throw StateError('unused'),
+          reorderViews: (t, w,
+              {required parentViewId, required orderedViewIds}) async {},
+          restoreView: (t, w, i) async => const [],
+          listViewsIfChanged: (t, w, {etag}) => tree.future,
+          readPref: (key) => prefs[key],
+          savePref: (key, value) => prefs[key] = value,
+          mirrorPageTree: (origin, workspaces, views) {
+            mirrored = [
+              for (final v in views)
+                '${v.workspaceId}:${v.id}:${v.position}:trashed=${v.trashed}',
+            ];
+          },
+          origin: () => currentOrigin,
+          isMounted: () => true,
+          openViewId: () => null,
+          crdtSessionDocumentId: () => null,
+        );
+
+        // Sign in to origin A and start a tree refresh for A's workspace 'wa'.
+        store.signIn(session('t'), [ws('wa')]);
+        final loading = controller.refreshTree('t', 'wa');
+
+        // While that fetch is in flight, sign out and sign in to origin B,
+        // whose workspace id is DIFFERENT so the per-workspace request-sequence
+        // guard cannot accidentally mask the leak (issue #148 verification
+        // boundary).
+        await Future<void>.delayed(Duration.zero);
+        store.signOut();
+        store.signIn(session('t'), [ws('wb')]);
+        currentOrigin = 'https://server-b';
+
+        // The stale A response lands only now, after the switch.
+        tree.complete((views: [view('a-page')], etag: 'a-etag'));
+        await loading;
+
+        expect(store.viewsByWorkspace.containsKey('wa'), isFalse,
+            reason: 'a late A response must not leak a workspace into B\'s '
+                'session');
+        expect(mirrored, isNull,
+            reason: 'a late A response must not write into B\'s mirror');
+      },
+    );
 
     test('no etag is sent when nothing is held (a cold workspace)', () async {
       viewsAnswer['w1'] = (views: [view('first')], etag: 'e1');

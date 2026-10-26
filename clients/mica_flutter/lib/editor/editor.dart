@@ -31,6 +31,7 @@ import 'word_count.dart';
 import '../l10n/locale_controller.dart';
 import '../ui/copy_button.dart';
 import '../ui/theme_tokens.dart';
+import 'prose_input.dart';
 
 export 'controller.dart'
     show DocOp, ApplyOps, ApplyHistory, HistoryAction, EditorHistoryState;
@@ -296,9 +297,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   TextInputConnection? _conn;
-  // True while an IME composition (e.g. pinyin) is in progress. Desktop
-  // backspace/delete must defer to the IME then, or the composition desyncs and
-  // raw pinyin leaks into the document (seen with Microsoft Pinyin).
+  // Desktop deletion defers to active composition to preserve the IME buffer.
   bool _imeComposing = false;
   // The composing (marked-text) range within the focused block. It MUST be
   // reflected back to the OS via currentTextEditingValue/_imeValue, or a
@@ -306,6 +305,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   TextRange _composing = TextRange.empty;
   TextEditingValue _lastSentIme = TextEditingValue.empty;
 
+  final _proseInput = ProseInputSession();
   Timer? _blink;
 
   /// Caret blink phase, ridden STRAIGHT into the render object (see
@@ -349,6 +349,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // Commit-and-close hook for the active cell editor; called when a drag
   // begins so the floating field never detaches from its (re-laid-out) cell.
   VoidCallback? _commitCellEditor;
+  VoidCallback? _reconcileCellEditor;
   // The table cell currently being edited (controller + address), so the
   // floating format bar can act on the cell's selection like it does on the body.
   ({CellEditController ctl, int node, int row, int col})? _activeCell;
@@ -641,7 +642,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   /// Replace every match in the document in one undo step, then refresh (0 left).
   void _replaceAll() {
-    if (!widget.canEdit || _findCtrl.text.isEmpty) return;
+    if (!widget.canEdit || _controller.isApplyingHistory || _findCtrl.text.isEmpty) return;
     _controller.replaceAll(_findCtrl.text, _replaceCtrl.text);
     setState(() {
       _findMatches = const [];
@@ -715,7 +716,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     );
     // Row 2 (only when expanded): replace field + replace / replace-all.
     // Editing must be allowed and there must be at least one match.
-    final canReplace = widget.canEdit && total > 0;
+    final canReplace = widget.canEdit && !_controller.isApplyingHistory && total > 0;
     final replaceRow = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -935,6 +936,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // slash menu open if its `/` survived the reconcile. Re-evaluating the
       // slash session is deferred so we don't mutate the overlay during build.
       _controller.reconcile(widget.nodes);
+      final reconcileCell = _reconcileCellEditor;
+      if (reconcileCell != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && identical(_reconcileCellEditor, reconcileCell)) reconcileCell();
+        });
+      }
       _syncImeFromSelection();
       _ensureNotEmptyDeferred();
       if (_slashEntry != null) {
@@ -1226,15 +1233,20 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (parsed.marks.isNotEmpty) {
         final sel = _controller.selection;
         if (sel != null) {
-          final from = sel.start.node == sel.focus.node ? sel.start.offset : 0;
-          final to = sel.end.node == sel.focus.node ? sel.end.offset : from;
-          _controller.insertInlineSpan(
-            sel.focus.node,
-            from,
-            to,
-            parsed.text,
-            parsed.marks,
-          );
+          // A cross-block selection must be deleted by the same document-range
+          // splice the rest of the editor uses — the focus block's offsets say
+          // nothing about the rest of the selection.
+          if (sel.isMultiNode) {
+            _controller.spliceRange(sel, parsed.text, inserts: parsed.marks);
+          } else {
+            _controller.insertInlineSpan(
+              sel.focus.node,
+              sel.start.offset,
+              sel.end.offset,
+              parsed.text,
+              parsed.marks,
+            );
+          }
           _syncImeFromSelection(force: true);
           return true;
         }
@@ -1303,15 +1315,30 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return true;
   }
 
-  /// Cut = copy both flavors, then delete the selection. Its text/plain flavor
-  /// matches [_copySelection].
+  bool _cutPending = false;
+
+  /// Copy and then delete the captured range, only when the clipboard accepted
+  /// it. One outstanding cut avoids duplicate deletion from repeated Ctrl+X.
   bool _cutSelection() {
+    if (_cutPending) return true;
+    final range = _controller.selection;
+    if (range == null) return false;
     final plain = _controller.selectionClipboardText(imageUrls: _imageUrlCache);
     final richHtml = _controller.selectionHtml(imageUrls: _imageUrlCache);
     if (plain.isEmpty && richHtml.isEmpty) return false;
-    copyRichToClipboard(plain: plain, richHtml: richHtml).then((_) {
-      if (!mounted) return;
+    final captured = [for (final n in _controller.nodes) (id: n.id, text: n.text)];
+    _cutPending = true;
+    copyRichToClipboard(plain: plain, richHtml: richHtml).then((success) {
+      _cutPending = false;
+      if (!mounted || !success) return;
+      // Selection changes are harmless; changed content invalidates this copy.
+      final nodes = _controller.nodes;
+      if (nodes.length != captured.length) return;
+      for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].id != captured[i].id || nodes[i].text != captured[i].text) return;
+      }
       _focus.requestFocus();
+      _controller.setSelection(range);
       _controller.deleteSelection();
       _syncImeFromSelection();
     });
@@ -1340,8 +1367,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final lines = text.split('\n');
     if (lines.length == 1) {
-      final sel = _controller.selection;
-      if (sel != null && !sel.isCollapsed) _controller.deleteSelection();
+      // insertTextAtCaret routes through spliceRange, which replaces the
+      // selection itself (across blocks too) in one op batch.
       _controller.insertTextAtCaret(text);
     } else {
       _controller.insertBlocksReplacingSelection([
@@ -1392,8 +1419,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // 3) Plain text: multi-line markdown-parses, single line inserts inline.
     if (plain.isEmpty || !live()) return;
     if (!_handleRichPaste(plain, plain, false, requireFocus: requireFocus)) {
-      final sel = _controller.selection;
-      if (sel != null && !sel.isCollapsed) _controller.deleteSelection();
+      // insertTextAtCaret replaces the selection itself (spliceRange).
       _controller.insertTextAtCaret(plain);
       _syncImeFromSelection(force: true);
     }
@@ -1578,8 +1604,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   void _detachIme() {
     _conn?.close();
     _conn = null;
+    // A capture belongs to this platform session, not a later focus target.
+    _proseInput.reset();
   }
-
   bool _imeGeometryScheduled = false;
 
   /// Like EditableText, report platform geometry after each rendered frame
@@ -1668,29 +1695,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// off screen again.
   static const double _caretRevealMargin = 28;
 
-  /// Scroll whatever is holding this canvas until the caret is on screen.
-  ///
-  /// Measured broken 2026-08-05 (`e2e/web_ime_probe.mjs`): typing past the
-  /// bottom of the viewport left the view pinned at the top of the document, so
-  /// you were typing into a place you could not see.
-  ///
-  /// `showOnScreen` rather than a ScrollController, for the same reason
-  /// [_canvasLink] is a LayerLink: **the editor does not own the scrollable —
-  /// the host does.** `showOnScreen` walks up to whichever viewport actually
-  /// contains the canvas and asks IT to reveal the rect, so this works without
-  /// the editor knowing who owns the controller, how deep it sits, or whether
-  /// there is one at all (the sharing page has its own host).
-  ///
-  /// **Deferred to the next frame on purpose.** `setFocusedText` notifies, which
-  /// schedules a rebuild — the new glyphs are not laid out yet, so a synchronous
-  /// `caretRectFor` returns the caret's position BEFORE this keystroke. That is
-  /// invisible mid-line and exactly wrong at a line wrap, which is the one
-  /// moment the scroll matters.
-  ///
-  /// Called only from the input paths (typing, IME composition, arrows, click,
-  /// structural edits), never from [_onControllerChanged]: that also fires for
-  /// REMOTE edits, and yanking the view to follow someone else's typing is worse
-  /// than not scrolling at all.
+  /// Reveal after layout, through the host's scrollable. Only local input calls
+  /// this: remote snapshots must not move the reader's viewport.
   void _ensureCaretVisible() {
     if (_caretRevealScheduled) return;
     _caretRevealScheduled = true;
@@ -1742,13 +1748,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
 
-    // IME composition in progress (pinyin/kana): mirror the marked text into the
-    // focused block so it shows, and keep our editing value — including the
-    // composing range, via _imeValue/currentTextEditingValue — identical to what
-    // the OS sent. That parity is what stops a composition-style IME (Microsoft
-    // Pinyin) from desyncing and accumulating garbage. Crucially, do NOT run
-    // commit-time logic (newline split, paste detection, Markdown input rules)
-    // on a transient composition — that waits until composing collapses.
+    if (_proseInput.apply(_controller, value)) {
+      _lastSentIme = _imeValue();
+      _closeLinkBar();
+      _ensureCaretVisible();
+      _syncImeFromSelection(force: true);
+      return;
+    }
+
+    // Mirror composition verbatim (including its range); structural input rules
+    // wait for commit so the platform and editor preedit buffers stay equal.
     if (value.composing.isValid && !value.composing.isCollapsed) {
       final cbase = value.selection.baseOffset;
       final cext = value.selection.extentOffset;
@@ -1768,11 +1777,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final shift = HardwareKeyboard.instance.isShiftPressed;
     final text = value.text;
 
-    // Newline accounting is INCREMENTAL against the node's current text:
-    // pasted multi-line quotes legitimately live as one multi-line block, so
-    // absolute counts misread any edit inside them as a paste (re-parsing
-    // the bare lines stripped their quote identity) and the old
-    // first-newline split cut them at the wrong line.
+    // Count newly inserted breaks for multi-line paste, preserving old soft breaks.
     final oldBreaks = '\n'.allMatches(node.text).length;
     final newBreaks = '\n'.allMatches(text).length;
 
@@ -1786,11 +1791,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
 
-    // Exactly one NEW newline is Enter: split at the just-typed newline (the
-    // one at the caret — NOT the first in the text, which in a multi-line
-    // block is some older soft break). Code blocks and Shift+Enter keep the
-    // newline as a soft break inside the node.
-    if (newBreaks == oldBreaks + 1 && !node.isCode && !shift) {
+    // A lone inserted newline is Enter; anything more is a soft-break paste.
+    final inserted = insertedText(node.text, text,
+        selection: _controller.selection, node: _controller.selection?.focus.node);
+    if (inserted == '\n' && !node.isCode && !shift) {
       final caret = value.selection.baseOffset.clamp(0, text.length);
       final idx = (caret > 0 && text[caret - 1] == '\n')
           ? caret - 1
@@ -2691,14 +2695,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _render?.editingCell = null;
   }
 
-  /// Edit a table cell inline: a borderless field placed exactly over the cell
-  /// (so it reads as the cell itself, no nested box). Commits on Enter/tap-out;
-  /// Tab / Shift+Tab move to the next / previous cell.
-  /// The style a table cell's text shows in, header row included.
-  ///
-  /// Must equal what the painter uses, or the text visibly changes the moment you
-  /// click into a cell and the measuring painters put the caret in the wrong
-  /// place — hence the single definition in [RenderDocument.tableCellStyle].
+  /// Match the renderer's cell style so entering edit mode preserves geometry.
   TextStyle _cellStyle(int node, int row) {
     var isHeader = false;
     if (node >= 0 && node < _controller.nodes.length) {
@@ -2723,16 +2720,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // WYSIWYG cell editor: renders inline marks (bold/italic/code) live instead
     // of the raw Markdown source, and serializes back to Markdown on commit.
     final controller = CellEditController(text);
+    final session = CellEditSession(_controller, _controller.nodes[node].id, row, col, controller);
     final focus = FocusNode();
     var committed = false;
     late OverlayEntry entry;
 
-    // Grow/shrink the cell's row live as its text changes — a preview relayout
-    // (no op) so pressing Enter expands the table immediately, not only after
-    // clicking away. Also keeps the floating format bar in step with the cell's
-    // selection. The final value is persisted by [commit].
+    // Preview relayouts without persisting; commit writes only changed content.
     void onCellChanged() {
-      _controller.previewTableCell(node, row, col, controller.serialize());
+      if (session.rebasing || session.resolve() < 0) return;
+      node = session.resolve();
+      session.preview();
       _refreshMarkBar(); // show/route the floating format bar over the cell
       // The preview relayout can MOVE/RESIZE this cell (auto-fit column widths,
       // row growth) — re-anchor the overlay after that layout lands.
@@ -2749,32 +2746,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       controller.removeListener(onCellChanged);
       _render?.editingCell = null;
       _activeCell = null;
-      // A commit can land MID-DRAG (Esc / Tab / arrow-exit / focus loss while
-      // the button is still down); the live drag must not keep driving this
-      // controller — it is disposed a frame from now.
+      // A mid-drag commit must release the soon-to-be-disposed controller.
       if (_cellDrag != null && identical(_cellDrag!.ctl, controller)) {
         _cellDrag = null;
       }
       _hideMarkBar();
-      _controller.setTableCell(node, row, col, controller.serialize());
+      session.commit();
       focus.removeListener(_cellFocusListener!);
-      // Tear the field down FIRST, then dispose its controller/focus after this
-      // frame. Disposing them synchronously here races the removed TextField's
-      // own teardown (which still reads them) → "used after being disposed".
-      //
-      // UNCONDITIONALLY: `entry.mounted` stays false until the overlay
-      // rebuilds a frame after insert, and a commit CAN land inside that
-      // window (open a cell, then pan/click in the same frame — easy on a
-      // heavy page where a frame runs long). The old `if (entry.mounted)`
-      // guard skipped the remove then nulled `_cellEntry` anyway, leaving a
-      // GHOST entry nothing could ever remove; its focus node was disposed a
-      // frame later, and every Overlay rebuild from then on re-built the
-      // ghost's TextField over a dead FocusNode — the debug red screen
-      // reported 2026-08-28 (37 repeats in one session). `remove()` is legal
-      // from the moment `insert()` ran, which is before commit is reachable.
+      // Remove even before first mount; deferring disposal lets TextField tear
+      // down safely. Skipping pre-mount remove leaves an orphaned overlay.
       entry.remove();
       if (identical(_cellEntry, entry)) _cellEntry = null;
       _commitCellEditor = null;
+      _reconcileCellEditor = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         controller.dispose();
         focus.dispose();
@@ -2782,6 +2766,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
 
     _commitCellEditor = commit;
+    _reconcileCellEditor = () {
+      if (!session.reconcile()) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!committed) commit();
+        });
+        return;
+      }
+      node = session.resolve();
+      _render?.editingCell = (node: node, row: row, col: col);
+      _activeCell = (ctl: controller, node: node, row: row, col: col);
+      _cellDrag = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!committed && entry.mounted) entry.markNeedsBuild();
+      });
+    };
 
     void moveTo(int nextRow, int nextCol) {
       commit();
@@ -2794,19 +2793,24 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     };
     focus.addListener(_cellFocusListener!);
 
+    var cellCutPending = false;
     void copyCell({required bool cut}) {
+      if (cut && cellCutPending) return;
       final sel = controller.selection;
       if (!sel.isValid || sel.isCollapsed) return;
+      final snapshot = controller.text;
+      if (cut) cellCutPending = true;
       copyRichToClipboard(
-        plain: sel.textInside(controller.text),
+        plain: sel.textInside(snapshot),
         richHtml: controller.selectionHtml(),
-      );
-      if (cut) {
+      ).then((success) {
+        cellCutPending = false;
+        if (!cut || !success || committed || controller.text != snapshot) return;
         controller.value = TextEditingValue(
-          text: controller.text.replaceRange(sel.start, sel.end, ''),
+          text: snapshot.replaceRange(sel.start, sel.end, ''),
           selection: TextSelection.collapsed(offset: sel.start),
         );
-      }
+      });
     }
 
     KeyEventResult onKey(FocusNode n, KeyEvent e) {
@@ -2824,19 +2828,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           HardwareKeyboard.instance.isControlPressed ||
           HardwareKeyboard.instance.isMetaPressed;
       if (accel) {
-        // Ctrl+Z / Ctrl+Y inside a cell mean the DOCUMENT's history, not this
-        // TextField's.
-        //
-        // Left to itself the field gets `DefaultTextEditingShortcuts`, whose
-        // undo walks the field's own buffer — so Ctrl+Z after Ctrl+B did
-        // nothing visible (the bold came from `toggleMark` rewriting the value
-        // programmatically, which that history does not record), and Ctrl+Z
-        // after typing would step back inside the cell while the document's own
-        // stack drifted out of sync with it.
-        //
-        // Commit first: the cell's edit has to BE a document change before it
-        // can be undone as one. That also makes the granularity match the body
-        // editor, where a typing burst is one step.
+        // Commit the cell before document undo; TextField's private history
+        // cannot represent mark toggles or document-level operations.
         if (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY) {
           final redo =
               key == LogicalKeyboardKey.keyY ||
@@ -2884,12 +2877,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         commit();
         return KeyEventResult.handled;
       }
-      // Up/Down are line-aware in a multi-line cell: they move within the
-      // cell's own VISUAL lines first (soft-wrapped lines count, not just hard
-      // \n); only at the first/last visual line do they jump to the cell
-      // above/below — and past the table's edge they EXIT the table back into
-      // the document. Shift+arrows always stay with the field (selection
-      // extension), and a ranged selection collapses natively first.
+      // Up/Down leave only the edge visual line; Shift/ranged selection stays
+      // native. Crossing the table edge returns to the document caret.
       if (key == LogicalKeyboardKey.arrowDown ||
           key == LogicalKeyboardKey.arrowUp) {
         final up = key == LogicalKeyboardKey.arrowUp;
@@ -2927,19 +2916,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
     entry = OverlayEntry(
       builder: (context) {
-        // Anchor to the cell's CURRENT rect each build — the table relayouts
-        // under the field while typing (live row growth + auto-fit column
-        // widths), and a stale SIZE would clip the editor.
+        // Refresh geometry after live row growth and column auto-fit.
         final rr = _render;
         final liveRect = rr?.tableCellRect(node, row, col) ?? localRect;
-        // The POSITION is not computed here on purpose. It used to be
-        // `localToGlobal(...)`, which is only correct until something moves the
-        // canvas without rebuilding this overlay — and scrolling does exactly
-        // that, leaving the cell's text pinned to the old screen position while
-        // the table slid away beneath it. Following the canvas' leader layer
-        // makes the compositor keep them together, whoever does the scrolling.
-        // `liveRect.topLeft` is canvas-LOCAL, which is the space the follower's
-        // offset is measured in.
+        // Canvas-local offset plus follower tracks host scrolling without an
+        // overlay rebuild; computing global coordinates here would detach it.
         return Positioned(
           left: 0,
           top: 0,
@@ -4128,19 +4109,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       htmlRows.write('</tr>');
       plainRows.add(plainCells.join('\t'));
     }
+    if (cut && _cutPending) return;
+    final tableId = _controller.nodes[area.node].id;
+    final snapshot = table.toBlockData().toString();
+    if (cut) _cutPending = true;
     copyRichToClipboard(
       plain: plainRows.join('\n'),
       richHtml: '<table>$htmlRows</table>',
-    );
-    if (cut) {
-      _controller.clearTableCells(
-        area.node,
-        area.r0,
-        area.c0,
-        area.r1,
-        area.c1,
-      );
-    }
+    ).then((success) {
+      if (!cut) return;
+      _cutPending = false;
+      if (!mounted || !success) return;
+      final index = _controller.nodes.indexWhere((n) => n.id == tableId && n.kind == 'table');
+      if (index < 0 || TableData.fromBlock(_controller.nodes[index].data).toBlockData().toString() != snapshot) return;
+      _controller.clearTableCells(index, area.r0, area.c0, area.r1, area.c1);
+    });
   }
 
   /// Whether the caret at [offset] sits on the first ([last] false) or last

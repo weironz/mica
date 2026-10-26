@@ -16,8 +16,13 @@ class Mark {
   /// Optional link title (`[t](url "title")`) — carried for GFM fidelity.
   final String? title;
 
-  Mark shifted(int delta) =>
-      Mark(start + delta, end + delta, type, href: href, title: title);
+  Mark shifted(int delta) => withRange(start + delta, end + delta);
+
+  /// The single re-range constructor: every mark transformation (shift, split,
+  /// concat, normalize) rebuilds through this, so no structured field — `title`
+  /// today, anything added tomorrow — is dropped by a hand-copied `Mark(…)`.
+  Mark withRange(int start, int end) =>
+      Mark(start, end, type, href: href, title: title);
 
   Map<String, dynamic> toJson() => {
     'start': start,
@@ -216,8 +221,8 @@ List<Mark> applyMark(
       continue;
     }
     // Trim the overlapping part of the same-type mark out of [from, to).
-    if (m.start < from) result.add(Mark(m.start, from, type, href: m.href));
-    if (m.end > to) result.add(Mark(to, m.end, type, href: m.href));
+    if (m.start < from) result.add(m.withRange(m.start, from));
+    if (m.end > to) result.add(m.withRange(to, m.end));
   }
   if (add) result.add(Mark(from, to, type, href: href));
   return _normalize(result);
@@ -225,15 +230,27 @@ List<Mark> applyMark(
 
 /// Shift mark offsets for a text edit that replaced `[editStart, editOldEnd)`
 /// with `delta = newLen - oldLen` net characters.
+///
+/// [pinAtStart] (the typing policy) keeps a mark's start put when text is
+/// inserted exactly at it, so typing at a mark's leading edge extends the mark.
+/// Pasting unmarked text uses `pinAtStart: false`: a mark that starts at the
+/// insertion point must move with its own characters, not swallow the paste.
 List<Mark> shiftMarks(
   List<Mark> marks,
   int editStart,
   int editOldEnd,
   int delta,
-  int newLen,
-) {
+  int newLen, {
+  bool pinAtStart = true,
+}) {
   int move(int x) {
-    if (x <= editStart) return x;
+    if (pinAtStart) {
+      if (x <= editStart) return x;
+    } else {
+      if (x >= editOldEnd) return x + delta;
+      if (x > editStart) return editStart;
+      return x;
+    }
     if (x >= editOldEnd) return x + delta;
     return editStart; // endpoint inside the replaced region collapses
   }
@@ -242,7 +259,7 @@ List<Mark> shiftMarks(
   for (final m in marks) {
     final s = move(m.start).clamp(0, newLen);
     final e = move(m.end).clamp(0, newLen);
-    if (e > s) result.add(Mark(s, e, m.type, href: m.href));
+    if (e > s) result.add(m.withRange(s, e));
   }
   return _normalize(result);
 }
@@ -256,12 +273,12 @@ List<Mark> shiftMarks(
   for (final m in marks) {
     if (m.start < at) {
       final end = m.end < at ? m.end : at;
-      if (end > m.start) before.add(Mark(m.start, end, m.type, href: m.href));
+      if (end > m.start) before.add(m.withRange(m.start, end));
     }
     if (m.end > at) {
       final start = m.start > at ? m.start : at;
       if (m.end > start) {
-        after.add(Mark(start - at, m.end - at, m.type, href: m.href));
+        after.add(m.withRange(start - at, m.end - at));
       }
     }
   }
@@ -286,16 +303,12 @@ List<Mark> _normalize(List<Mark> marks) {
     if (out.isNotEmpty &&
         out.last.type == m.type &&
         out.last.href == m.href &&
+        // A different link title is a DIFFERENT link: fusing them would keep
+        // one title and silently discard the other (issue #150).
+        out.last.title == m.title &&
         out.last.end >= m.start) {
       final prev = out.removeLast();
-      out.add(
-        Mark(
-          prev.start,
-          m.end > prev.end ? m.end : prev.end,
-          m.type,
-          href: m.href,
-        ),
-      );
+      out.add(prev.withRange(prev.start, m.end > prev.end ? m.end : prev.end));
     } else {
       out.add(m);
     }
@@ -1835,6 +1848,13 @@ typedef _LabelCache = Map<String, ({String text, List<Mark> marks})>;
         var j = i + n;
         var close = -1;
         while (j < src.length && !(n == 1 && intraword(i, n))) {
+          if (src[j] == '`') {
+            final after = _codeSpanClose(src, j);
+            if (after > j) {
+              j = after;
+              continue;
+            }
+          }
           if (src[j] == '~' && (j == 0 || src[j - 1] != r'\')) {
             var m = 0;
             while (j + m < src.length && src[j + m] == '~') {
@@ -2147,6 +2167,34 @@ String escapeBlockLeader(String line) {
 String escapeBlockLeaders(String text) =>
     text.split('\n').map(escapeBlockLeader).join('\n');
 
+String escapeMarkdownTitle(String title) {
+  final out = StringBuffer();
+  for (var i = 0; i < title.length; i++) {
+    final c = title[i];
+    if (c == '&') { out.write('&amp;'); continue; }
+    final next = i + 1 < title.length ? title.codeUnitAt(i + 1) : null;
+    final punctuation = next == null || (next >= 0x21 && next <= 0x7e &&
+        !(next >= 0x30 && next <= 0x39) && !(next >= 0x41 && next <= 0x5a) && !(next >= 0x61 && next <= 0x7a));
+    if (c == '"' || (c == '\\' && punctuation)) out.write('\\');
+    out.write(c);
+  }
+  return out.toString();
+}
+
+String escapeMarkdownDestination(String href) {
+  final angle = href.contains(RegExp(r'\s'));
+  var depth = 0;
+  var balanced = true;
+  for (final c in href.codeUnits) {
+    if (c == 0x28) depth++;
+    if (c == 0x29) { depth--; balanced = balanced && depth >= 0; }
+  }
+  balanced = balanced && depth == 0;
+  final escaped = href.replaceAll('&', '&amp;').replaceAllMapped(
+    RegExp(!angle && !balanced ? r'[\\()<>]' : r'[\\<>]'), (m) => '\\${m[0]}');
+  return angle ? '<$escaped>' : escaped;
+}
+
 /// Escape characters the inline grammar would otherwise interpret.
 String escapeInline(String text) {
   final out = StringBuffer();
@@ -2155,6 +2203,10 @@ String escapeInline(String text) {
     // A backslash right before a newline IS a hard break — keep it raw.
     if (c == r'\' && i + 1 < text.length && text[i + 1] == '\n') {
       out.write(c);
+      continue;
+    }
+    if (c == '&' && parseEntity(text, i) != null) {
+      out.write('&amp;');
       continue;
     }
     if (r'\*_`~[]<'.contains(c) || c == kDollar) out.write(r'\');
@@ -2169,7 +2221,12 @@ String escapeInline(String text) {
 /// are escaped; code spans stay raw; a link whose text is its own target
 /// becomes an `<autolink>`. Mirrors the Rust engine's render_span.
 String inlineToMarkdown(String text, List<Mark> marks) {
-  if (marks.isEmpty) return text;
+  if (marks.isEmpty) {
+    return text.replaceAllMapped(
+      RegExp('&'),
+      (m) => parseEntity(text, m.start) == null ? '&' : '&amp;',
+    );
+  }
   final sorted = _sortedForRender(marks);
   return _renderSpan(text, 0, text.length, sorted, sorted.length, {});
 }
@@ -2308,23 +2365,36 @@ class _RenderLevel {
 
   late final _ActiveMarks _active = _ActiveMarks(hi: hi, termRank: termRank);
   var _k = 0; // next not-yet-activated candidate
+  final _emptyLinks = <_RenderMark>[];
+  final _emittedEmpty = <_RenderMark>{};
 
   /// The mark opening the span at [pos], or null when no mark covers
   /// anything in [pos, hi) — its clipped start/end are ps/pe to the caller.
   _RenderMark? nextPick(int pos) {
+    _emptyLinks.removeWhere((m) => m.mark.start != pos);
     while (_k < count && marks[_k].mark.start <= pos) {
       final cand = marks[_k];
+      if (termRank && !skip.contains(cand) && cand.mark.type == 'link' &&
+          cand.mark.start == cand.mark.end && cand.mark.start == pos &&
+          !_emittedEmpty.contains(cand)) {
+        _emptyLinks.add(cand);
+      }
       if (!skip.contains(cand) && cand.mark.end > pos) _active.add(cand);
       _k++;
     }
     final top = _active.topAt(pos);
     if (top != null) return top;
+    if (_emptyLinks.isNotEmpty) {
+      final empty = _emptyLinks.removeAt(0);
+      _emittedEmpty.add(empty);
+      return empty;
+    }
     // Nothing live covers pos: the next span opens at the next mark's own
     // start. Marks SHARING that start all tied in the old scan, so the whole
     // group is ranked by the same rule; groups with no live member are dead.
     while (_k < count) {
       final s = marks[_k].mark.start;
-      if (s >= hi) {
+      if (s > hi || (s == hi && !termRank)) {
         _k = count;
         return null;
       }
@@ -2335,12 +2405,17 @@ class _RenderLevel {
       _RenderMark? best;
       for (var t = _k; t < gEnd; t++) {
         final cand = marks[t];
-        if (skip.contains(cand)) continue;
+        if (skip.contains(cand) || _emittedEmpty.contains(cand)) continue;
         final e = cand.mark.end > hi ? hi : cand.mark.end;
-        if (e <= s) continue;
-        if (best == null || _active._better(cand, best)) best = cand;
+        final empty = termRank && cand.mark.type == 'link' && cand.mark.start == cand.mark.end;
+        if (e <= s && !empty) continue;
+        if (best == null || (empty && best.mark.start == best.mark.end
+            ? cand.index < best.index : _active._better(cand, best))) best = cand;
       }
-      if (best != null) return best;
+      if (best != null) {
+        if (best.mark.start == best.mark.end) _emittedEmpty.add(best);
+        return best;
+      }
       _k = gEnd;
     }
     return null;
@@ -2358,7 +2433,7 @@ String _renderSpan(
   final out = StringBuffer();
   final level = _RenderLevel(marks, count, hi, skip, true);
   var pos = lo;
-  while (pos < hi) {
+  while (pos <= hi) {
     final pickW = level.nextPick(pos);
     if (pickW == null) {
       out.write(escapeInline(text.substring(pos, hi)));
@@ -2379,10 +2454,8 @@ String _renderSpan(
       continue;
     }
     if (pick.type == 'math') {
-      // LaTeX source is literal — canonical dollar form.
-      out.write(kDollar);
-      out.write(text.substring(ps, pe));
-      out.write(kDollar);
+      final source = text.substring(ps, pe);
+      out.write(source.contains(kDollar) ? '\\($source\\)' : '$kDollar$source$kDollar');
       pos = pe;
       continue;
     }
@@ -2412,7 +2485,7 @@ String _renderSpan(
       final pad =
           raw.startsWith('`') ||
           raw.endsWith('`') ||
-          (raw.startsWith(' ') && raw.endsWith(' ') && raw.trim().isNotEmpty);
+          (raw.startsWith(' ') && raw.endsWith(' ') && raw.codeUnits.any((c) => c != 0x20));
       out.write(pad ? '$fence $raw $fence' : '$fence$raw$fence');
       pos = pe;
       continue;
@@ -2430,8 +2503,11 @@ String _renderSpan(
           (t) =>
               !identical(t, pickW) &&
               !skip.contains(t) &&
-              t.mark.end > ps &&
-              t.mark.start < pe,
+              ((t.mark.end > ps && t.mark.start < pe) ||
+                  (t.mark.type == 'link' &&
+                      t.mark.start == t.mark.end &&
+                      t.mark.start >= ps &&
+                      t.mark.start < pe)),
         );
     skip.add(pickW);
     final body = _renderSpan(text, ps, pe, marks, innerCount, skip);
@@ -2453,26 +2529,27 @@ String _renderSpan(
           // A bare `www.` link writes back bare (GFM re-links it on read).
           out.write(plain);
         } else if (pick.title == null &&
+            plain.isNotEmpty &&
             !hasInner &&
             (href == plain || href == 'mailto:$plain')) {
           out.write('<$plain>');
         } else {
-          final dest = href.contains(RegExp(r'\s')) ? '<$href>' : href;
+          final dest = escapeMarkdownDestination(href);
           final t = pick.title;
           out.write(
             t == null
                 ? '[$body]($dest)'
-                : '[$body]($dest "${t.replaceAll('"', r'\"')}")',
+                : '[$body]($dest "${escapeMarkdownTitle(t)}")',
           );
         }
       case 'image':
         final href = pick.href ?? '';
-        final dest = href.contains(RegExp(r'\s')) ? '<$href>' : href;
+        final dest = escapeMarkdownDestination(href);
         final t = pick.title;
         out.write(
           t == null
               ? '![$body]($dest)'
-              : '![$body]($dest "${t.replaceAll('"', r'\"')}")',
+              : '![$body]($dest "${escapeMarkdownTitle(t)}")',
         );
       default:
         out.write(body);

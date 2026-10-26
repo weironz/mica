@@ -189,11 +189,6 @@ class ViewOps {
     required this.delete,
     required this.bulkDelete,
     required this.clone,
-    required this.updateRootBlockText,
-    required this.addBlock,
-    required this.updateBlock,
-    required this.deleteBlock,
-    required this.moveBlock,
     required this.openViewFromHome,
     required this.closeOpenPage,
   });
@@ -227,16 +222,6 @@ class ViewOps {
   final Future<void> Function(DocumentView view) delete;
   final Future<void> Function(List<String> viewIds) bulkDelete;
   final Future<void> Function(DocumentView view) clone;
-  final Future<void> Function(String text) updateRootBlockText;
-  final Future<void> Function(DocumentBlockKind kind, String text) addBlock;
-  final Future<void> Function(
-    DocumentBlock block,
-    DocumentBlockKind kind,
-    String text,
-  )
-  updateBlock;
-  final Future<void> Function(DocumentBlock block) deleteBlock;
-  final Future<void> Function(DocumentBlock block, int targetIndex) moveBlock;
 
   /// Open a page the home screen listed. Home carries ids (it spans
   /// workspaces), so the view object is looked up here; a stale id — the page
@@ -303,7 +288,6 @@ class ImageOps {
 /// Page/folder/workspace export and tree import.
 class ExportOps {
   const ExportOps({
-    required this.pageZip,
     required this.page,
     required this.copyMarkdown,
     required this.pageHtml,
@@ -312,10 +296,6 @@ class ExportOps {
     required this.importTree,
   });
 
-  /// Local workspaces have no server to bundle the zip; the local backend
-  /// SAYS so rather than handing back Uint8List(0), which the caller happily
-  /// saved as a 0-byte page.zip and called it a successful export.
-  final Future<Uint8List> Function() pageZip;
 
   /// Page export chooses `.md` (no assets) vs `.zip` (bundled images) by
   /// content — in BOTH worlds: local goes through the FFI engine + in-house
@@ -465,11 +445,6 @@ class _CloudWorldBackend extends WorldBackend {
     delete: _shell._deleteView,
     bulkDelete: _shell._deleteViews,
     clone: _shell._cloneView,
-    updateRootBlockText: _shell._updateRootBlockText,
-    addBlock: _shell._addBlock,
-    updateBlock: _shell._updateBlock,
-    deleteBlock: _shell._deleteBlock,
-    moveBlock: _shell._moveBlock,
     openViewFromHome: _openViewFromHome,
     closeOpenPage: _closeOpenPage,
   );
@@ -494,7 +469,6 @@ class _CloudWorldBackend extends WorldBackend {
 
   @override
   late final ExportOps exportOps = ExportOps(
-    pageZip: _shell._exportPageZip,
     page: _shell._exportPage,
     copyMarkdown: _shell._pageMarkdownText,
     pageHtml: _shell._exportPageHtml,

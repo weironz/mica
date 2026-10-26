@@ -12,16 +12,31 @@ Future<CloudDocStore?> openWebDocStore(String origin, String docId) =>
 /// web — the async counterpart of the desktop's synchronous FFI mirror read).
 /// Null when never mirrored / IndexedDB unavailable / undecodable.
 Future<({String rootBlockId, List<Map<String, dynamic>> blocks})?>
-    openWebDocMirror(String origin, String docId) async {
-  final store = await WebIdbDocStore.open(origin, docId);
-  final loaded = store?.load();
-  if (loaded == null) return null;
+openWebDocMirror(
+  String origin,
+  String docId, {
+  String dbName = WebIdbDocStore.defaultDbName,
+}) async {
+  final store = await WebIdbDocStore.open(origin, docId, dbName: dbName);
+  if (store == null) return null;
+  // The store holds the doc's single-writer Web Lock for as long as it lives.
+  // This helper only READS the mirror, so every exit path (never mirrored,
+  // empty root, undecodable, success) must hand the lock back — otherwise the
+  // NEXT same-doc open in this very tab is refused and sync degrades to
+  // no-IndexedDB persistence (issue #149). dispose() waits for the write tail
+  // (nothing is queued here) before releasing.
   try {
-    final doc = MicaYDoc.fromState(loaded.state);
-    final root = doc.rootBlockId();
-    if (root.isEmpty) return null;
-    return (rootBlockId: root, blocks: doc.toBlocks());
-  } catch (_) {
-    return null; // corrupt mirror → behave as never-mirrored
+    final loaded = store.load();
+    if (loaded == null) return null;
+    try {
+      final doc = MicaYDoc.fromState(loaded.state);
+      final root = doc.rootBlockId();
+      if (root.isEmpty) return null;
+      return (rootBlockId: root, blocks: doc.toBlocks());
+    } catch (_) {
+      return null; // corrupt mirror → behave as never-mirrored
+    }
+  } finally {
+    store.dispose();
   }
 }

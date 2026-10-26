@@ -257,6 +257,7 @@ abstract class RustLibApi extends BaseApi {
 
   bool crateApiStoreMicaStoreAppendRemoteUpdate({
     required MicaStore that,
+    required String origin,
     required String docId,
     required PlatformInt64 rid,
     required List<int> update,
@@ -264,6 +265,7 @@ abstract class RustLibApi extends BaseApi {
 
   bool crateApiStoreMicaStoreAppendRemoteUpdates({
     required MicaStore that,
+    required String origin,
     required String docId,
     required Int64List rids,
     required List<Uint8List> updates,
@@ -271,6 +273,7 @@ abstract class RustLibApi extends BaseApi {
 
   PlatformInt64 crateApiStoreMicaStoreAppendUpdate({
     required MicaStore that,
+    required String origin,
     required String docId,
     required List<int> update,
   });
@@ -288,6 +291,7 @@ abstract class RustLibApi extends BaseApi {
 
   void crateApiStoreMicaStoreCheckpointDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
@@ -301,11 +305,13 @@ abstract class RustLibApi extends BaseApi {
 
   bool crateApiStoreMicaStoreCompactLocal({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
   LocalVersion? crateApiStoreMicaStoreCreateLocalVersion({
     required MicaStore that,
+    required String origin,
     required String docId,
     required String label,
   });
@@ -326,6 +332,7 @@ abstract class RustLibApi extends BaseApi {
 
   void crateApiStoreMicaStoreDeleteDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
@@ -344,6 +351,7 @@ abstract class RustLibApi extends BaseApi {
 
   Uint8List crateApiStoreMicaStoreExportFolderZip({
     required MicaStore that,
+    required String origin,
     required String workspaceId,
     String? folderId,
     required List<FolderExportImage> images,
@@ -362,10 +370,14 @@ abstract class RustLibApi extends BaseApi {
     required Map<String, String> assetIds,
   });
 
-  List<String> crateApiStoreMicaStoreListDocs({required MicaStore that});
+  List<String> crateApiStoreMicaStoreListDocs({
+    required MicaStore that,
+    required String origin,
+  });
 
   List<LocalVersion> crateApiStoreMicaStoreListLocalVersions({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
@@ -381,17 +393,20 @@ abstract class RustLibApi extends BaseApi {
 
   MicaDocument? crateApiStoreMicaStoreLoadDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
   MicaDocument? crateApiStoreMicaStoreLocalVersionDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
     required String versionId,
   });
 
   (PlatformInt64, PlatformInt64) crateApiStoreMicaStoreLogSizes({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
@@ -427,6 +442,7 @@ abstract class RustLibApi extends BaseApi {
 
   MicaDocument? crateApiStoreMicaStoreRestoreLocalVersion({
     required MicaStore that,
+    required String origin,
     required String docId,
     required String versionId,
   });
@@ -438,11 +454,13 @@ abstract class RustLibApi extends BaseApi {
 
   MicaDocument? crateApiStoreMicaStoreRollbackDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
   void crateApiStoreMicaStoreSaveDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
     required MicaDocument doc,
   });
@@ -466,17 +484,20 @@ abstract class RustLibApi extends BaseApi {
 
   void crateApiStoreMicaStoreSetSyncCursor({
     required MicaStore that,
+    required String origin,
     required String docId,
     required SyncCursor cursor,
   });
 
   void crateApiStoreMicaStoreSquash({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
   SyncCursor crateApiStoreMicaStoreSyncCursor({
     required MicaStore that,
+    required String origin,
     required String docId,
   });
 
@@ -487,12 +508,14 @@ abstract class RustLibApi extends BaseApi {
 
   void crateApiStoreMicaStoreTrimUpdatesThrough({
     required MicaStore that,
+    required String origin,
     required String docId,
     required PlatformInt64 upToClock,
   });
 
   List<DocUpdate> crateApiStoreMicaStoreUpdatesAfter({
     required MicaStore that,
+    required String origin,
     required String docId,
     required PlatformInt64 after,
   });
@@ -1690,6 +1713,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   bool crateApiStoreMicaStoreAppendRemoteUpdate({
     required MicaStore that,
+    required String origin,
     required String docId,
     required PlatformInt64 rid,
     required List<int> update,
@@ -1702,6 +1726,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_i_64(rid, serializer);
           sse_encode_list_prim_u_8_loose(update, serializer);
@@ -1712,7 +1737,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreAppendRemoteUpdateConstMeta,
-        argValues: [that, docId, rid, update],
+        argValues: [that, origin, docId, rid, update],
         apiImpl: this,
       ),
     );
@@ -1721,12 +1746,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreAppendRemoteUpdateConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_append_remote_update",
-        argNames: ["that", "docId", "rid", "update"],
+        argNames: ["that", "origin", "docId", "rid", "update"],
       );
 
   @override
   bool crateApiStoreMicaStoreAppendRemoteUpdates({
     required MicaStore that,
+    required String origin,
     required String docId,
     required Int64List rids,
     required List<Uint8List> updates,
@@ -1739,6 +1765,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_list_prim_i_64_strict(rids, serializer);
           sse_encode_list_list_prim_u_8_strict(updates, serializer);
@@ -1749,7 +1776,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreAppendRemoteUpdatesConstMeta,
-        argValues: [that, docId, rids, updates],
+        argValues: [that, origin, docId, rids, updates],
         apiImpl: this,
       ),
     );
@@ -1758,12 +1785,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreAppendRemoteUpdatesConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_append_remote_updates",
-        argNames: ["that", "docId", "rids", "updates"],
+        argNames: ["that", "origin", "docId", "rids", "updates"],
       );
 
   @override
   PlatformInt64 crateApiStoreMicaStoreAppendUpdate({
     required MicaStore that,
+    required String origin,
     required String docId,
     required List<int> update,
   }) {
@@ -1775,6 +1803,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_list_prim_u_8_loose(update, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 38)!;
@@ -1784,7 +1813,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreAppendUpdateConstMeta,
-        argValues: [that, docId, update],
+        argValues: [that, origin, docId, update],
         apiImpl: this,
       ),
     );
@@ -1793,7 +1822,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreAppendUpdateConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_append_update",
-        argNames: ["that", "docId", "update"],
+        argNames: ["that", "origin", "docId", "update"],
       );
 
   @override
@@ -1877,6 +1906,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   void crateApiStoreMicaStoreCheckpointDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -1887,6 +1917,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 41)!;
         },
@@ -1895,7 +1926,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreCheckpointDocConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -1904,7 +1935,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreCheckpointDocConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_checkpoint_doc",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
@@ -1971,6 +2002,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   bool crateApiStoreMicaStoreCompactLocal({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -1981,6 +2013,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 44)!;
         },
@@ -1989,7 +2022,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreCompactLocalConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -1998,12 +2031,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreCompactLocalConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_compact_local",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
   LocalVersion? crateApiStoreMicaStoreCreateLocalVersion({
     required MicaStore that,
+    required String origin,
     required String docId,
     required String label,
   }) {
@@ -2015,6 +2049,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_String(label, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 45)!;
@@ -2024,7 +2059,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreCreateLocalVersionConstMeta,
-        argValues: [that, docId, label],
+        argValues: [that, origin, docId, label],
         apiImpl: this,
       ),
     );
@@ -2033,7 +2068,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreCreateLocalVersionConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_create_local_version",
-        argNames: ["that", "docId", "label"],
+        argNames: ["that", "origin", "docId", "label"],
       );
 
   @override
@@ -2120,6 +2155,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   void crateApiStoreMicaStoreDeleteDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -2130,6 +2166,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 48)!;
         },
@@ -2138,7 +2175,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreDeleteDocConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -2147,7 +2184,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreDeleteDocConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_delete_doc",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
@@ -2247,6 +2284,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Uint8List crateApiStoreMicaStoreExportFolderZip({
     required MicaStore that,
+    required String origin,
     required String workspaceId,
     String? folderId,
     required List<FolderExportImage> images,
@@ -2259,6 +2297,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(workspaceId, serializer);
           sse_encode_opt_String(folderId, serializer);
           sse_encode_list_folder_export_image(images, serializer);
@@ -2269,7 +2308,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreExportFolderZipConstMeta,
-        argValues: [that, workspaceId, folderId, images],
+        argValues: [that, origin, workspaceId, folderId, images],
         apiImpl: this,
       ),
     );
@@ -2278,7 +2317,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreExportFolderZipConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_export_folder_zip",
-        argNames: ["that", "workspaceId", "folderId", "images"],
+        argNames: ["that", "origin", "workspaceId", "folderId", "images"],
       );
 
   @override
@@ -2370,7 +2409,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  List<String> crateApiStoreMicaStoreListDocs({required MicaStore that}) {
+  List<String> crateApiStoreMicaStoreListDocs({
+    required MicaStore that,
+    required String origin,
+  }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
@@ -2379,6 +2421,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 55)!;
         },
         codec: SseCodec(
@@ -2386,18 +2429,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreListDocsConstMeta,
-        argValues: [that],
+        argValues: [that, origin],
         apiImpl: this,
       ),
     );
   }
 
   TaskConstMeta get kCrateApiStoreMicaStoreListDocsConstMeta =>
-      const TaskConstMeta(debugName: "MicaStore_list_docs", argNames: ["that"]);
+      const TaskConstMeta(
+        debugName: "MicaStore_list_docs",
+        argNames: ["that", "origin"],
+      );
 
   @override
   List<LocalVersion> crateApiStoreMicaStoreListLocalVersions({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -2408,6 +2455,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
         },
@@ -2416,7 +2464,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreListLocalVersionsConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -2425,7 +2473,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreListLocalVersionsConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_list_local_versions",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
@@ -2497,6 +2545,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   MicaDocument? crateApiStoreMicaStoreLoadDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -2507,6 +2556,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 59)!;
         },
@@ -2516,7 +2566,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiStoreMicaStoreLoadDocConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -2525,12 +2575,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreLoadDocConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_load_doc",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
   MicaDocument? crateApiStoreMicaStoreLocalVersionDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
     required String versionId,
   }) {
@@ -2542,6 +2593,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_String(versionId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 60)!;
@@ -2552,7 +2604,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreLocalVersionDocConstMeta,
-        argValues: [that, docId, versionId],
+        argValues: [that, origin, docId, versionId],
         apiImpl: this,
       ),
     );
@@ -2561,12 +2613,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreLocalVersionDocConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_local_version_doc",
-        argNames: ["that", "docId", "versionId"],
+        argNames: ["that", "origin", "docId", "versionId"],
       );
 
   @override
   (PlatformInt64, PlatformInt64) crateApiStoreMicaStoreLogSizes({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -2577,6 +2630,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 61)!;
         },
@@ -2585,7 +2639,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreLogSizesConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -2594,7 +2648,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreLogSizesConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_log_sizes",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
@@ -2795,6 +2849,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   MicaDocument? crateApiStoreMicaStoreRestoreLocalVersion({
     required MicaStore that,
+    required String origin,
     required String docId,
     required String versionId,
   }) {
@@ -2806,6 +2861,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_String(versionId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 68)!;
@@ -2816,7 +2872,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreRestoreLocalVersionConstMeta,
-        argValues: [that, docId, versionId],
+        argValues: [that, origin, docId, versionId],
         apiImpl: this,
       ),
     );
@@ -2825,7 +2881,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreRestoreLocalVersionConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_restore_local_version",
-        argNames: ["that", "docId", "versionId"],
+        argNames: ["that", "origin", "docId", "versionId"],
       );
 
   @override
@@ -2864,6 +2920,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   MicaDocument? crateApiStoreMicaStoreRollbackDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -2874,6 +2931,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 70)!;
         },
@@ -2883,7 +2941,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreRollbackDocConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -2892,12 +2950,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreRollbackDocConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_rollback_doc",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
   void crateApiStoreMicaStoreSaveDoc({
     required MicaStore that,
+    required String origin,
     required String docId,
     required MicaDocument doc,
   }) {
@@ -2909,6 +2968,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument(
             doc,
@@ -2921,7 +2981,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreSaveDocConstMeta,
-        argValues: [that, docId, doc],
+        argValues: [that, origin, docId, doc],
         apiImpl: this,
       ),
     );
@@ -2930,7 +2990,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreSaveDocConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_save_doc",
-        argNames: ["that", "docId", "doc"],
+        argNames: ["that", "origin", "docId", "doc"],
       );
 
   @override
@@ -3044,6 +3104,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   void crateApiStoreMicaStoreSetSyncCursor({
     required MicaStore that,
+    required String origin,
     required String docId,
     required SyncCursor cursor,
   }) {
@@ -3055,6 +3116,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_box_autoadd_sync_cursor(cursor, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 75)!;
@@ -3064,7 +3126,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreSetSyncCursorConstMeta,
-        argValues: [that, docId, cursor],
+        argValues: [that, origin, docId, cursor],
         apiImpl: this,
       ),
     );
@@ -3073,12 +3135,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreSetSyncCursorConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_set_sync_cursor",
-        argNames: ["that", "docId", "cursor"],
+        argNames: ["that", "origin", "docId", "cursor"],
       );
 
   @override
   void crateApiStoreMicaStoreSquash({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -3089,6 +3152,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 76)!;
         },
@@ -3097,7 +3161,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreSquashConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -3106,12 +3170,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreSquashConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_squash",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
   SyncCursor crateApiStoreMicaStoreSyncCursor({
     required MicaStore that,
+    required String origin,
     required String docId,
   }) {
     return handler.executeSync(
@@ -3122,6 +3187,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 77)!;
         },
@@ -3130,7 +3196,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreSyncCursorConstMeta,
-        argValues: [that, docId],
+        argValues: [that, origin, docId],
         apiImpl: this,
       ),
     );
@@ -3139,7 +3205,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreSyncCursorConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_sync_cursor",
-        argNames: ["that", "docId"],
+        argNames: ["that", "origin", "docId"],
       );
 
   @override
@@ -3178,6 +3244,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   void crateApiStoreMicaStoreTrimUpdatesThrough({
     required MicaStore that,
+    required String origin,
     required String docId,
     required PlatformInt64 upToClock,
   }) {
@@ -3189,6 +3256,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_i_64(upToClock, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 79)!;
@@ -3198,7 +3266,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreTrimUpdatesThroughConstMeta,
-        argValues: [that, docId, upToClock],
+        argValues: [that, origin, docId, upToClock],
         apiImpl: this,
       ),
     );
@@ -3207,12 +3275,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreTrimUpdatesThroughConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_trim_updates_through",
-        argNames: ["that", "docId", "upToClock"],
+        argNames: ["that", "origin", "docId", "upToClock"],
       );
 
   @override
   List<DocUpdate> crateApiStoreMicaStoreUpdatesAfter({
     required MicaStore that,
+    required String origin,
     required String docId,
     required PlatformInt64 after,
   }) {
@@ -3224,6 +3293,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
+          sse_encode_String(origin, serializer);
           sse_encode_String(docId, serializer);
           sse_encode_i_64(after, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 80)!;
@@ -3233,7 +3303,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreUpdatesAfterConstMeta,
-        argValues: [that, docId, after],
+        argValues: [that, origin, docId, after],
         apiImpl: this,
       ),
     );
@@ -3242,7 +3312,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreUpdatesAfterConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_updates_after",
-        argNames: ["that", "docId", "after"],
+        argNames: ["that", "origin", "docId", "after"],
       );
 
   @override
@@ -3962,12 +4032,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   VaultImportOutcome dco_decode_vault_import_outcome(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return VaultImportOutcome(
       docs: dco_decode_u_32(arr[0]),
       folders: dco_decode_u_32(arr[1]),
       errors: dco_decode_list_String(arr[2]),
+      viewIds: dco_decode_list_String(arr[3]),
     );
   }
 
@@ -4745,10 +4816,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_docs = sse_decode_u_32(deserializer);
     var var_folders = sse_decode_u_32(deserializer);
     var var_errors = sse_decode_list_String(deserializer);
+    var var_viewIds = sse_decode_list_String(deserializer);
     return VaultImportOutcome(
       docs: var_docs,
       folders: var_folders,
       errors: var_errors,
+      viewIds: var_viewIds,
     );
   }
 
@@ -5481,6 +5554,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_32(self.docs, serializer);
     sse_encode_u_32(self.folders, serializer);
     sse_encode_list_String(self.errors, serializer);
+    sse_encode_list_String(self.viewIds, serializer);
   }
 
   @protected
@@ -5792,17 +5866,19 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
 
   /// Durably append a REMOTE update and advance `last_synced_rid` in the same
   /// transaction (P4-1) — the persisted cursor can never point past an update
-  /// that isn't on disk. Idempotent per `(doc_id, rid)`. Returns false when
-  /// the write FAILED (busy/full/io) so the caller can self-heal by writing a
-  /// base snapshot from the live in-memory doc — a swallowed failure here plus
+  /// that isn't on disk. Idempotent per `(origin, doc_id, rid)`. Returns false
+  /// when the write FAILED (busy/full/io) so the caller can self-heal by writing
+  /// a base snapshot from the live in-memory doc — a swallowed failure here plus
   /// a later disk-rebuilding compact would silently lose the update (P4-1
   /// review CRITICAL).
   bool appendRemoteUpdate({
+    required String origin,
     required String docId,
     required PlatformInt64 rid,
     required List<int> update,
   }) => RustLib.instance.api.crateApiStoreMicaStoreAppendRemoteUpdate(
     that: this,
+    origin: origin,
     docId: docId,
     rid: rid,
     update: update,
@@ -5811,23 +5887,27 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// Batch variant: one transaction (one journal sync) for a whole
   /// `sync.updates` catch-up array. Parallel lists (rids[i] ↔ updates[i]).
   bool appendRemoteUpdates({
+    required String origin,
     required String docId,
     required Int64List rids,
     required List<Uint8List> updates,
   }) => RustLib.instance.api.crateApiStoreMicaStoreAppendRemoteUpdates(
     that: this,
+    origin: origin,
     docId: docId,
     rids: rids,
     updates: updates,
   );
 
-  /// Append a yrs `update` to `doc_id`'s local log; returns its new monotonic
-  /// `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
+  /// Append a yrs `update` to `(origin, doc_id)`'s local log; returns its new
+  /// monotonic `clock` (0 on error). Pair with [`Self::save_doc`] as the base.
   PlatformInt64 appendUpdate({
+    required String origin,
     required String docId,
     required List<int> update,
   }) => RustLib.instance.api.crateApiStoreMicaStoreAppendUpdate(
     that: this,
+    origin: origin,
     docId: docId,
     update: update,
   );
@@ -5856,8 +5936,12 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
 
   /// Save the doc's current base as a recovery checkpoint (§10). Call at safe
   /// points (doc open/close) so a later corruption can be rolled back.
-  void checkpointDoc({required String docId}) => RustLib.instance.api
-      .crateApiStoreMicaStoreCheckpointDoc(that: this, docId: docId);
+  void checkpointDoc({required String origin, required String docId}) =>
+      RustLib.instance.api.crateApiStoreMicaStoreCheckpointDoc(
+        that: this,
+        origin: origin,
+        docId: docId,
+      );
 
   /// The stable yrs client id new/loaded documents should use.
   BigInt clientId() =>
@@ -5889,16 +5973,22 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// stays 0 forever without a server). Returns whether it compacted; it
   /// refuses on any doc showing evidence of sync, so the offline backend
   /// cannot accidentally drop an un-pushed outbox.
-  bool compactLocal({required String docId}) => RustLib.instance.api
-      .crateApiStoreMicaStoreCompactLocal(that: this, docId: docId);
+  bool compactLocal({required String origin, required String docId}) =>
+      RustLib.instance.api.crateApiStoreMicaStoreCompactLocal(
+        that: this,
+        origin: origin,
+        docId: docId,
+      );
 
   /// Pin the current saved state as a NAMED version (never auto-pruned). Null
   /// if the document has no saved snapshot yet.
   LocalVersion? createLocalVersion({
+    required String origin,
     required String docId,
     required String label,
   }) => RustLib.instance.api.crateApiStoreMicaStoreCreateLocalVersion(
     that: this,
+    origin: origin,
     docId: docId,
     label: label,
   );
@@ -5928,8 +6018,12 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   String createWorkspace({required String name}) => RustLib.instance.api
       .crateApiStoreMicaStoreCreateWorkspace(that: this, name: name);
 
-  void deleteDoc({required String docId}) => RustLib.instance.api
-      .crateApiStoreMicaStoreDeleteDoc(that: this, docId: docId);
+  void deleteDoc({required String origin, required String docId}) =>
+      RustLib.instance.api.crateApiStoreMicaStoreDeleteDoc(
+        that: this,
+        origin: origin,
+        docId: docId,
+      );
 
   /// Delete one `origin`'s workspace and all its view rows (delete documents
   /// separately). Origin-scoped (v4 composite PK).
@@ -5959,15 +6053,17 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// (`None`) — as a Markdown ZIP, through the SAME shared builder the cloud
   /// uses (`mica_interchange::build_markdown_tree_zip`), so a local export is
   /// the same format as a cloud one and the export→import round-trip holds. The
-  /// store supplies views + document payloads; [`images`] supplies the blob
-  /// bytes per `file_id` (Dart reads the on-device CAS). Closes the last local
-  /// folder-export gap (was cloud-only).
+  /// store supplies views + document payloads for `origin` (normally "local";
+  /// a quarantined legacy cache can be exported the same way); [`images`]
+  /// supplies the blob bytes per `file_id` (Dart reads the on-device CAS).
   Uint8List exportFolderZip({
+    required String origin,
     required String workspaceId,
     String? folderId,
     required List<FolderExportImage> images,
   }) => RustLib.instance.api.crateApiStoreMicaStoreExportFolderZip(
     that: this,
+    origin: origin,
     workspaceId: workspaceId,
     folderId: folderId,
     images: images,
@@ -6016,16 +6112,23 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
     assetIds: assetIds,
   );
 
-  /// Ids of all stored documents (sorted).
-  List<String> listDocs() =>
-      RustLib.instance.api.crateApiStoreMicaStoreListDocs(that: this);
+  /// Ids of all stored documents for `origin` (sorted). Origin is the page
+  /// tree's provenance — `"local"`, or the account-scoped server key for a
+  /// cloud mirror (issue #102: document rows are keyed by `(origin, doc_id)`,
+  /// so two origins may legitimately hold the same UUID).
+  List<String> listDocs({required String origin}) => RustLib.instance.api
+      .crateApiStoreMicaStoreListDocs(that: this, origin: origin);
 
   /// The document's version timeline, newest first — auto snapshots (captured
   /// on a cadence by `save_doc`) and named checkpoints interleaved.
-  List<LocalVersion> listLocalVersions({required String docId}) => RustLib
-      .instance
-      .api
-      .crateApiStoreMicaStoreListLocalVersions(that: this, docId: docId);
+  List<LocalVersion> listLocalVersions({
+    required String origin,
+    required String docId,
+  }) => RustLib.instance.api.crateApiStoreMicaStoreListLocalVersions(
+    that: this,
+    origin: origin,
+    docId: docId,
+  );
 
   /// All views (including trashed) for `origin` ("local" or a server URL),
   /// ordered by position. The client builds the tree from `parent_id` and
@@ -6046,26 +6149,36 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// corrupt doc as "new" and seed a blank page over it, which would launder
   /// the corruption and overwrite the recovery checkpoint (see
   /// `LocalDocBackend.open`). Previously `.ok()??` collapsed both to null.
-  MicaDocument? loadDoc({required String docId}) => RustLib.instance.api
-      .crateApiStoreMicaStoreLoadDoc(that: this, docId: docId);
+  MicaDocument? loadDoc({required String origin, required String docId}) =>
+      RustLib.instance.api.crateApiStoreMicaStoreLoadDoc(
+        that: this,
+        origin: origin,
+        docId: docId,
+      );
 
   /// Decode a version into a THROWAWAY document for read-only preview (never
   /// the live doc). Null if the version isn't found. The caller renders it with
   /// `to_blocks_json()` / `root_block_id()` in a read-only editor.
   MicaDocument? localVersionDoc({
+    required String origin,
     required String docId,
     required String versionId,
   }) => RustLib.instance.api.crateApiStoreMicaStoreLocalVersionDoc(
     that: this,
+    origin: origin,
     docId: docId,
     versionId: versionId,
   );
 
   /// (local outbox rows, remote log rows) — compaction-trigger bookkeeping.
-  (PlatformInt64, PlatformInt64) logSizes({required String docId}) => RustLib
-      .instance
-      .api
-      .crateApiStoreMicaStoreLogSizes(that: this, docId: docId);
+  (PlatformInt64, PlatformInt64) logSizes({
+    required String origin,
+    required String docId,
+  }) => RustLib.instance.api.crateApiStoreMicaStoreLogSizes(
+    that: this,
+    origin: origin,
+    docId: docId,
+  );
 
   /// Permanently remove one `origin`'s view row (delete its document via
   /// [`Self::delete_doc`]). Origin-scoped — can never reach across the
@@ -6123,10 +6236,12 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// the version isn't found). The pre-restore state is kept as an auto version
   /// so the restore is itself undoable.
   MicaDocument? restoreLocalVersion({
+    required String origin,
     required String docId,
     required String versionId,
   }) => RustLib.instance.api.crateApiStoreMicaStoreRestoreLocalVersion(
     that: this,
+    origin: origin,
     docId: docId,
     versionId: versionId,
   );
@@ -6144,14 +6259,24 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
 
   /// Restore a doc from its last checkpoint, returning the recovered document
   /// (null if there's no checkpoint).
-  MicaDocument? rollbackDoc({required String docId}) => RustLib.instance.api
-      .crateApiStoreMicaStoreRollbackDoc(that: this, docId: docId);
+  MicaDocument? rollbackDoc({required String origin, required String docId}) =>
+      RustLib.instance.api.crateApiStoreMicaStoreRollbackDoc(
+        that: this,
+        origin: origin,
+        docId: docId,
+      );
 
-  /// Persist a document under `doc_id` (full snapshot).
-  void saveDoc({required String docId, required MicaDocument doc}) => RustLib
-      .instance
-      .api
-      .crateApiStoreMicaStoreSaveDoc(that: this, docId: docId, doc: doc);
+  /// Persist a document under `(origin, doc_id)` (full snapshot).
+  void saveDoc({
+    required String origin,
+    required String docId,
+    required MicaDocument doc,
+  }) => RustLib.instance.api.crateApiStoreMicaStoreSaveDoc(
+    that: this,
+    origin: origin,
+    docId: docId,
+    doc: doc,
+  );
 
   /// Upsert a view (create / rename / move / trash-toggle).
   bool saveView({required LocalView view}) => RustLib.instance.api
@@ -6182,21 +6307,31 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   );
 
   /// Persist this doc's sync progress.
-  void setSyncCursor({required String docId, required SyncCursor cursor}) =>
-      RustLib.instance.api.crateApiStoreMicaStoreSetSyncCursor(
-        that: this,
-        docId: docId,
-        cursor: cursor,
-      );
+  void setSyncCursor({
+    required String origin,
+    required String docId,
+    required SyncCursor cursor,
+  }) => RustLib.instance.api.crateApiStoreMicaStoreSetSyncCursor(
+    that: this,
+    origin: origin,
+    docId: docId,
+    cursor: cursor,
+  );
 
   /// Fold the update log into the base snapshot and truncate it (compaction),
   /// so the log doesn't grow without bound. Safe no-op if the doc is absent.
-  void squash({required String docId}) => RustLib.instance.api
-      .crateApiStoreMicaStoreSquash(that: this, docId: docId);
+  void squash({required String origin, required String docId}) => RustLib
+      .instance
+      .api
+      .crateApiStoreMicaStoreSquash(that: this, origin: origin, docId: docId);
 
   /// This doc's sync progress (0/0 if it has never synced).
-  SyncCursor syncCursor({required String docId}) => RustLib.instance.api
-      .crateApiStoreMicaStoreSyncCursor(that: this, docId: docId);
+  SyncCursor syncCursor({required String origin, required String docId}) =>
+      RustLib.instance.api.crateApiStoreMicaStoreSyncCursor(
+        that: this,
+        origin: origin,
+        docId: docId,
+      );
 
   /// Move `view_id` and its whole subtree to the recycle bin. Returns the
   /// affected ids so the caller can close an editor that was inside it.
@@ -6216,10 +6351,12 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// snapshot already folds these, so reads are unchanged; the clock stays
   /// monotonic across this so no future clock is reused below the trim.
   void trimUpdatesThrough({
+    required String origin,
     required String docId,
     required PlatformInt64 upToClock,
   }) => RustLib.instance.api.crateApiStoreMicaStoreTrimUpdatesThrough(
     that: this,
+    origin: origin,
     docId: docId,
     upToClock: upToClock,
   );
@@ -6227,10 +6364,12 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
   /// Log entries with `clock > after`, ordered — the un-pushed outbox when
   /// `after = sync_cursor.pushed_clock`, or catch-up from a known clock.
   List<DocUpdate> updatesAfter({
+    required String origin,
     required String docId,
     required PlatformInt64 after,
   }) => RustLib.instance.api.crateApiStoreMicaStoreUpdatesAfter(
     that: this,
+    origin: origin,
     docId: docId,
     after: after,
   );

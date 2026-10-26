@@ -17,6 +17,7 @@ import 'package:mica_flutter/cloud/cloud_sync_session.dart';
 import 'package:mica_flutter/doc_tab.dart';
 import 'package:mica_flutter/session/session_controller.dart';
 import 'package:mica_flutter/sync/sync_reconcile_controller.dart';
+import 'package:mica_flutter/cloud/sync_status.dart';
 
 // ── Fakes ──────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,20 @@ class _ReadySession extends CloudSyncSession {
 
   @override
   bool get isReady => true;
+}
+
+/// A replica whose editor ops produce a real (non-empty) CRDT diff, so a
+/// session can be driven to `syncing` without a socket: one applyLocalOps
+/// call publishes a pending update that nothing acks.
+class _PhaseReplica extends _SeedReplica {
+  @override
+  Uint8List stateVector() => Uint8List.fromList([0, 0]);
+
+  @override
+  Uint8List encodeDiffSince(Uint8List sv) => Uint8List.fromList([1, 2]);
+
+  @override
+  void applyEditorOp(DocOp op) {}
 }
 
 AuthSession _session() => const AuthSession(
@@ -166,15 +181,15 @@ class _SeedReplica implements SyncDocReplica {
 
 /// Everything the controller needs from the shell, scripted per test.
 class _Harness {
-  _Harness({List<_Tab> tabs = const [], int activeIndex = 0})
+  _Harness({List<_Tab> tabs = const [], int initialActiveIndex = 0})
     : tabs = tabs.isEmpty ? [_Tab()] : List.of(tabs),
-      _activeIndex = activeIndex {
+      activeIndex = initialActiveIndex {
     controller = SyncReconcileController(
       session: sessions,
       tabs: () => this.tabs,
-      activeTab: () => this.tabs[_activeIndex],
+      activeTab: () => this.tabs[activeIndex],
       workspaceForActiveTab: () {
-        final id = this.tabs[_activeIndex].documentId == null
+        final id = this.tabs[activeIndex].documentId == null
             ? null
             : workspaceForDoc;
         if (id == null) return sessions.selectedWorkspace;
@@ -183,7 +198,7 @@ class _Harness {
         }
         return null;
       },
-      activeDocumentId: () => this.tabs[_activeIndex].documentId,
+      activeDocumentId: () => this.tabs[activeIndex].documentId,
       activeBootstrap: () => activeBoot,
       baseUri: () => Uri.parse('https://cloud.example/api'),
       activeIsLocal: () => isLocal,
@@ -206,7 +221,9 @@ class _Harness {
       onReadyReconcileUploads: (documentId) async {
         readyUploadCalls.add(documentId);
       },
-      onSyncPhase: null,
+      onSyncPhase: (documentId, phase) {
+        phaseCalls.add((documentId, phase));
+      },
       onFaultBanner: () => faultBannerCalls++,
       onHideFaultBanner: () => hideFaultBannerCalls++,
       onRefreshBootstrap: (documentId) => refreshBootstrapCalls.add(documentId),
@@ -224,7 +241,9 @@ class _Harness {
 
   final SessionController sessions = SessionController();
   final List<_Tab> tabs;
-  final int _activeIndex;
+  /// Mutable on purpose: a multi-tab scenario switches tabs mid-test (the
+  /// injected [activeTab] / [activeDocumentId] read it fresh).
+  int activeIndex;
   bool mounted = true;
   bool web = false;
   bool isLocal = false;
@@ -248,12 +267,13 @@ class _Harness {
   final applyCloudBlocksCalls = <String>[];
   final refreshBootstrapCalls = <String>[];
   final presenceCalls = <(String, List<PresenceUser>)>[];
+  final phaseCalls = <(String, SyncPhase)>[];
 
   /// Seed a live document on the active tab through one reconcile, using the
   /// controller's own session factories but a dead socket target — enough for
   /// the liveness bookkeeping these tests assert on.
   Future<void> openDocument(String documentId) async {
-    tabs[_activeIndex].documentId = documentId;
+    tabs[activeIndex].documentId = documentId;
     activeBoot = _boot(documentId);
     controller.reconcile();
     await Future<void>.delayed(Duration.zero);
@@ -372,6 +392,117 @@ void main() {
     );
   });
 
+  test('onSyncPhase is routed by document — a background tab cannot overwrite '
+      'the active badge (issue #160)', () async {
+    final h = _Harness(
+      tabs: [
+        _Tab(documentId: 'a'),
+        _Tab(documentId: 'b'),
+      ],
+    );
+    h.sessions.restore(_session(), [_ws()], _ws(), const {});
+    await h.openDocument('a');
+    // Activate the second tab: its document gets its own live session
+    // (two live tabs sit under the sync cap).
+    h.activeIndex = 1;
+    await h.openDocument('b');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    // Switch back: tab A is what the badge describes, while tab B keeps
+    // syncing in the background.
+    h.activeIndex = 0;
+    h.activeBoot = _boot('a');
+    final sessionA = h.tabs[0].cloudSession!;
+    final sessionB = h.tabs[1].cloudSession!;
+    sessionA.debugAttachReplica(_PhaseReplica());
+    sessionB.debugAttachReplica(_PhaseReplica());
+
+    // Both links come up: A (active) reports synced, B (background) must
+    // not reach the badge.
+    sessionA.debugMarkOnline();
+    sessionB.debugMarkOnline();
+    expect(
+      h.phaseCalls.where((c) => c.$1 == 'b'),
+      isEmpty,
+      reason:
+          'a background document\'s phase must not be forwarded to the '
+          'shell\'s single badge slot',
+    );
+    expect(h.phaseCalls, contains(('a', SyncPhase.synced)));
+
+    // The active document gains unacked edits → syncing; the background
+    // document acks everything → synced. The badge must stay A's.
+    sessionA.applyLocalOps(const [{}]);
+    expect(h.phaseCalls, contains(('a', SyncPhase.syncing)));
+    expect(
+      h.phaseCalls.where((c) => c.$1 == 'b'),
+      isEmpty,
+      reason: 'B reaching synced must still not overwrite A\'s syncing',
+    );
+
+    // Switching to B re-derives the badge from B's tracked phase instead
+    // of waiting for B's next event (issue #160 second half).
+    expect(h.controller.phaseOf('b'), SyncPhase.synced);
+    expect(h.controller.phaseOf('a'), SyncPhase.syncing);
+
+    h.controller.closeAllDocumentSync();
+    h.controller.disposeViewsEvents();
+  });
+
+  test(
+    'parking and closing forget a document\'s phase; a drained session cannot '
+    're-add it (issue #160)',
+    () async {
+      final h = _Harness(
+        tabs: [_Tab(documentId: 'a'), _Tab(documentId: 'b')],
+      );
+      h.sessions.restore(_session(), [_ws()], _ws(), const {});
+      await h.openDocument('a');
+      h.activeIndex = 1;
+      await h.openDocument('b');
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      final sessionB = h.tabs[1].cloudSession!;
+      sessionB.debugAttachReplica(_PhaseReplica());
+      sessionB.debugMarkOnline();
+      expect(h.controller.phaseOf('b'), SyncPhase.synced);
+
+      // Parking the tab tears its socket down: its phase is dead state.
+      h.controller.parkTab(h.tabs[1]);
+      expect(
+        h.controller.phaseOf('b'),
+        isNull,
+        reason: 'a parked document no longer has a live phase',
+      );
+
+      // The parked session can still fire inside its drain window.
+      sessionB.applyLocalOps(const [{}]);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        h.controller.phaseOf('b'),
+        isNull,
+        reason: 'a drained session must not re-add its stale phase',
+      );
+      expect(
+        h.phaseCalls.where((c) => c.$1 == 'b' && c.$2 == SyncPhase.syncing),
+        isEmpty,
+      );
+
+      // Closing the active document forgets its phase the same way.
+      h.activeIndex = 0;
+      h.activeBoot = _boot('a');
+      final sessionA = h.tabs[0].cloudSession!;
+      sessionA.debugAttachReplica(_PhaseReplica());
+      sessionA.debugMarkOnline();
+      expect(h.controller.phaseOf('a'), SyncPhase.synced);
+      h.controller.closeActiveDocumentSync();
+      expect(h.controller.phaseOf('a'), isNull);
+
+      h.controller.closeAllDocumentSync();
+      h.controller.disposeViewsEvents();
+    },
+  );
+
   test('reconcile clears the presence row once per document change', () async {
     final h = _Harness(tabs: [_Tab(documentId: 'd1')]);
     h.sessions.restore(_session(), [_ws()], _ws(), const {});
@@ -406,7 +537,7 @@ void main() {
       _Tab(documentId: 'd3', lastActivated: 3),
       _Tab(documentId: 'd4', lastActivated: 7),
     ];
-    final h = _Harness(tabs: tabs, activeIndex: 0);
+    final h = _Harness(tabs: tabs);
     // Live markers — liveness is the marker, not a connected socket.
     for (final t in tabs) {
       t.syncDocumentId = t.documentId;
@@ -445,7 +576,7 @@ void main() {
     'closeAllDocumentSync parks background tabs and closes the active one',
     () async {
       final tabs = [_Tab(documentId: 'd0'), _Tab(documentId: 'd1')];
-      final h = _Harness(tabs: tabs, activeIndex: 0);
+      final h = _Harness(tabs: tabs);
       h.sessions.restore(_session(), [_ws()], _ws(), const {});
       for (final t in tabs) {
         t.syncDocumentId = t.documentId;

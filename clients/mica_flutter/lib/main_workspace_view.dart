@@ -75,11 +75,6 @@ class WorkspaceView extends StatefulWidget {
     required this.onDeleteView,
     required this.onDeleteViews,
     required this.onCloneView,
-    required this.onUpdateRootBlockText,
-    required this.onAddBlock,
-    required this.onUpdateBlock,
-    required this.onDeleteBlock,
-    required this.onMoveBlock,
     required this.onApplyOperations,
     this.onApplyHistory,
     this.onApplyMaintenanceOperations,
@@ -123,7 +118,6 @@ class WorkspaceView extends StatefulWidget {
     required this.onOpenSearchResult,
     this.onLoadBacklinks,
     this.onLoadGraph,
-    required this.onExportPageZip,
     required this.onExportPage,
     required this.onCopyPageMarkdown,
     required this.onExportPageHtml,
@@ -134,6 +128,8 @@ class WorkspaceView extends StatefulWidget {
     this.onLoadExportStats,
     this.onLoadCacheStats,
     this.onClearMirrorCache,
+    this.onLoadQuarantinedCaches,
+    this.onExportQuarantinedCache,
     required this.onImportWorkspaceZip,
     required this.onImportWorkspaceTreeInto,
     this.invitations,
@@ -368,18 +364,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(List<String> viewIds) onDeleteViews;
 
   final Future<void> Function(DocumentView view) onCloneView;
-  final Future<void> Function(String text) onUpdateRootBlockText;
-  final Future<void> Function(DocumentBlockKind kind, String text) onAddBlock;
-  final Future<void> Function(
-    DocumentBlock block,
-    DocumentBlockKind kind,
-    String text,
-  )
-  onUpdateBlock;
-  final Future<void> Function(DocumentBlock block) onDeleteBlock;
-  final Future<void> Function(DocumentBlock block, int targetIndex) onMoveBlock;
   final Future<void> Function(List<Map<String, dynamic>> operations)
-  onApplyOperations;
+      onApplyOperations;
   final ApplyHistory? onApplyHistory;
   final ApplyOps? onApplyMaintenanceOperations;
   final Future<({String fileId, String name})?> Function(
@@ -480,7 +466,6 @@ class WorkspaceView extends StatefulWidget {
   /// The workspace's page-link graph, for the graph view. Null only while there
   /// is no workspace to ask about.
   final Future<PageGraph> Function()? onLoadGraph;
-  final Future<Uint8List> Function() onExportPageZip;
   final Future<({Uint8List bytes, String name, String mime})> Function(
     String title,
   )
@@ -506,9 +491,15 @@ class WorkspaceView extends StatefulWidget {
   /// What the on-device store holds. Null on web.
   final Future<LocalCacheStats> Function()? onLoadCacheStats;
 
-  /// Drop the re-downloadable half of it; reports what is left, so the panel can
-  /// show the result without waiting on a rebuild it never receives.
-  final Future<LocalCacheStats> Function()? onClearMirrorCache;
+  /// Drop the re-downloadable half of it; reports what is left and what was
+  /// retained (un-pushed edits, quarantined legacy caches).
+  final Future<ClearMirrorResult> Function()? onClearMirrorCache;
+
+  final Future<List<({String origin, String workspaceId, int pages})>> Function()?
+  onLoadQuarantinedCaches;
+
+  final Future<Uint8List?> Function(String origin, String workspaceId)?
+  onExportQuarantinedCache;
 
   /// Null where importing an archive is not supported — currently local
   /// (offline) mode, whose importer takes a directory of files and has no zip
@@ -2769,6 +2760,8 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
         onLoadExportStats: widget.onLoadExportStats,
         onLoadCacheStats: widget.onLoadCacheStats,
         onClearMirrorCache: widget.onClearMirrorCache,
+        onLoadQuarantinedCaches: widget.onLoadQuarantinedCaches,
+        onExportQuarantinedCache: widget.onExportQuarantinedCache,
         onExportAllWorkspaces: widget.onExportAllWorkspaces == null
             ? null
             : () async {

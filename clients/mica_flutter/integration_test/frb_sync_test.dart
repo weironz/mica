@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2-M4.5: the yrs sync primitives work through the FFI — two MicaDocuments
 // diverge then converge by exchanging state-vector diffs, and apply rejects
 // garbage. This is the CRDT engine the cloud sync session (push/pull) rides on,
@@ -13,7 +14,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   List<Map<String, dynamic>> blocks(MicaDocument d) =>

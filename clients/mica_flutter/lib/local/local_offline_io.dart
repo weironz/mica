@@ -21,10 +21,10 @@ import '../cloud/store_cloud_doc_store.dart';
 import '../src/rust/api/document.dart';
 import '../src/rust/api/pdf.dart';
 import '../src/rust/api/store.dart';
-import '../src/rust/frb_generated.dart';
 import '../upload/sha256.dart';
 import 'local_doc.dart';
 import 'local_offline_api.dart';
+import 'native_rust.dart';
 import '../api/models.dart';
 
 // The shared plain-data types (ViewData & co.) live in the contract file; keep
@@ -60,7 +60,7 @@ class LocalOffline implements LocalOfflineApi {
     if (_store != null) return;
     if (!_frbReady) {
       try {
-        await RustLib.init();
+        await initNativeRust();
       } catch (_) {
         // Already initialised by a prior open() or another entry point.
       }
@@ -96,15 +96,15 @@ class LocalOffline implements LocalOfflineApi {
     return _store?.clientId();
   }
 
-  /// A [CloudDocStore] over this on-device store for a cloud document (P2 option
-  /// C — Phase 1): the local-first mirror so a cloud doc reads offline across a
-  /// restart. Null if the store isn't open (native bridge unavailable) — the
-  /// cloud session then just runs online, as before. The store is opened for
-  /// online mode as a side effect of [deviceClientId] (called before the session
-  /// is built), so this returns a live store there.
-  CloudDocStore? cloudDocStore(String docId) {
+  /// A [CloudDocStore] over this on-device store for a cloud document in
+  /// [origin] (P2 option C — Phase 1): the local-first mirror so a cloud doc
+  /// reads offline across a restart. [origin] is the ACCOUNT-SCOPED server key
+  /// from `cloudCacheOrigin` — never a bare server URL — so one account's
+  /// replica/outbox/cursor can never be opened as another's (issue #111).
+  /// Null if the store isn't open (native bridge unavailable).
+  CloudDocStore? cloudDocStore(String origin, String docId) {
     final store = _store;
-    return store == null ? null : StoreCloudDocStore(store, docId);
+    return store == null ? null : StoreCloudDocStore(store, origin, docId);
   }
 
   // ── workspaces ─────────────────────────────────────────────────────────────
@@ -156,17 +156,6 @@ class LocalOffline implements LocalOfflineApi {
     }
   }
 
-  /// Delete a local workspace, its view rows, and all its documents. Local-only:
-  /// a cloud mirror is a read cache, never user-deleted through this path.
-  void deleteWorkspace(String id) {
-    final store = _store;
-    if (store == null) return;
-    for (final v in store.listViews(origin: 'local')) {
-      if (v.workspaceId == id) store.deleteDoc(docId: v.objectId);
-    }
-    store.deleteWorkspace(origin: 'local', id: id);
-  }
-
   /// Erase everything mirrored from [origin] — every doc, view and workspace.
   /// Used when a server is removed: its data lives on that server, and what we
   /// keep here is only a mirror of it.
@@ -175,11 +164,14 @@ class LocalOffline implements LocalOfflineApi {
   /// above merely pin it to `'local'`), so one server's removal cannot reach
   /// another's rows, nor the on-device workspaces — which are nobody's mirror
   /// and would be gone for good.
+  ///
+  /// NOT a "clear cache": it drops the durable outbox too. Settings' clear path
+  /// uses [clearMirrorCache], which retains un-pushed documents (issue #110).
   void forgetOrigin(String origin) {
     final store = _store;
     if (store == null || origin == 'local') return;
     for (final v in store.listViews(origin: origin)) {
-      store.deleteDoc(docId: v.objectId);
+      store.deleteDoc(origin: origin, docId: v.objectId);
     }
     for (final w in store.listWorkspaces(origin: origin)) {
       store.deleteWorkspace(origin: origin, id: w.id);
@@ -288,65 +280,74 @@ class LocalOffline implements LocalOfflineApi {
 
   // ── cloud page-tree mirror (P2 option C — offline nav cache) ─────────────────
 
-  /// Replace the mirrored page tree for [serverUrl] with [workspaces]+[views]
-  /// (origin-scoped clean replace, so pages removed on the server disappear).
-  /// The cloud is authoritative; this is refreshed after each successful online
-  /// load so the tree survives going offline (read back via [cachedCloudPageTree]).
+  /// Replace the mirrored page tree for [origin] with [workspaces]+[views] —
+  /// but ONLY the workspaces whose view list this call carries.
+  ///
+  /// [origin] is the account-scoped key from `cloudCacheOrigin`; the cloud is
+  /// authoritative within that scope. Other workspaces keep their mirrored
+  /// rows: a refresh of one workspace used to purge EVERY view of the origin
+  /// and rewrite only the workspaces loaded in the current session, so a
+  /// workspace opened yesterday lost its offline tree today (issue #109).
+  ///
+  /// [viewWorkspaceIds] names the workspaces whose [views] list is COMPLETE
+  /// (including an empty one). When omitted it falls back to the workspaces the
+  /// views mention — which cannot express "this workspace became empty", so
+  /// callers that know the selection pass the set explicitly.
   void mirrorCloudPageTree(
-    String serverUrl,
+    String origin,
     List<WorkspaceData> workspaces,
-    List<ViewData> views,
-  ) {
+    List<ViewData> views, {
+    Set<String> viewWorkspaceIds = const {},
+  }) {
     final store = _store;
     if (store == null) return;
-    // Replace the tree of the workspaces this call actually carries, and leave
-    // every other workspace's rows alone.
-    //
-    // This used to purge EVERY view for the origin and rewrite only the
-    // workspaces loaded in the current session, so a workspace opened yesterday
-    // lost its mirrored tree the moment a different one was opened today. The
-    // mirror was therefore never wider than the in-memory cache — which is the
-    // one thing a mirror exists to be.
-    //
-    // A workspace that has disappeared server-side is still cleaned out: its
-    // rows belong to no workspace in [workspaces] any more.
-    final incoming = {for (final v in views) v.workspaceId};
+    final replaced = viewWorkspaceIds.isNotEmpty
+        ? viewWorkspaceIds
+        : {for (final v in views) v.workspaceId};
     final live = {for (final w in workspaces) w.id};
-    for (final v in store.listViews(origin: serverUrl)) {
-      if (incoming.contains(v.workspaceId) || !live.contains(v.workspaceId)) {
-        store.purgeView(origin: serverUrl, id: v.id);
+    // Stale pages of a replaced workspace disappear, and so do the rows of a
+    // workspace the server no longer lists.
+    for (final v in store.listViews(origin: origin)) {
+      if (replaced.contains(v.workspaceId) || !live.contains(v.workspaceId)) {
+        store.purgeView(origin: origin, id: v.id);
       }
     }
-    for (final w in store.listWorkspaces(origin: serverUrl)) {
-      store.deleteWorkspace(origin: serverUrl, id: w.id);
+    // Metadata is deleted only for workspaces that really vanished. Deleting
+    // every row and re-adding the incoming ones would cascade away the views of
+    // the workspaces this call does NOT carry.
+    for (final w in store.listWorkspaces(origin: origin)) {
+      if (!live.contains(w.id)) {
+        store.deleteWorkspace(origin: origin, id: w.id);
+      }
     }
     for (final w in workspaces) {
-      saveWorkspace(w, origin: serverUrl);
+      saveWorkspace(w, origin: origin);
     }
     for (final v in views) {
-      saveView(v, origin: serverUrl);
+      saveView(v, origin: origin);
     }
   }
 
-  /// The mirrored page tree for [serverUrl], or null if nothing is cached.
-  CloudPageTreeCache? cachedCloudPageTree(String serverUrl) {
+  /// The mirrored page tree for [origin], or null if nothing is cached.
+  CloudPageTreeCache? cachedCloudPageTree(String origin) {
     final store = _store;
     if (store == null) return null;
-    final workspaces = listWorkspaces(origin: serverUrl);
+    final workspaces = listWorkspaces(origin: origin);
     if (workspaces.isEmpty) return null;
-    return (workspaces: workspaces, views: listViews(origin: serverUrl));
+    return (workspaces: workspaces, views: listViews(origin: origin));
   }
 
-  /// Read a cloud document's on-device mirror (written by the cloud session's
-  /// write-through) as (rootBlockId, blocks), for building an offline placeholder
-  /// bootstrap so a cached cloud doc opens with no connectivity (P1c doc-open).
-  /// Null if the doc was never opened online (nothing mirrored) or the store
-  /// isn't open. Read-only: it does NOT become the active local backend — cloud
-  /// docs still sync through [CloudSyncSession], keyed by the same [docId].
-  DocData? openCloudDocMirror(String docId) {
+  /// Read a cloud document's on-device mirror in [origin] (written by the cloud
+  /// session's write-through) as (rootBlockId, blocks), for building an offline
+  /// placeholder bootstrap so a cached cloud doc opens with no connectivity
+  /// (P1c doc-open). Null if the doc was never opened online (nothing mirrored)
+  /// or the store isn't open. Read-only: it does NOT become the active local
+  /// backend — cloud docs still sync through [CloudSyncSession], keyed by the
+  /// same [docId] under the same account-scoped origin.
+  DocData? openCloudDocMirror(String origin, String docId) {
     final store = _store;
     if (store == null) return null;
-    final doc = store.loadDoc(docId: docId);
+    final doc = store.loadDoc(origin: origin, docId: docId);
     if (doc == null) return null;
     final blocks = (jsonDecode(doc.toBlocksJson()) as List)
         .cast<Map<String, dynamic>>();
@@ -369,16 +370,16 @@ class LocalOffline implements LocalOfflineApi {
     final store = _store;
     if (store == null) return;
     if (_active?.docId == docId) _active!.flush(); // don't race pending edits
-    final doc = store.loadDoc(docId: docId);
+    final doc = store.loadDoc(origin: 'local', docId: docId);
     if (doc == null) return;
     if (!doc.setTitle(title: title)) return;
-    store.saveDoc(docId: docId, doc: doc);
+    store.saveDoc(origin: 'local', docId: docId, doc: doc);
   }
 
   /// Permanently remove a local view and its document.
   void purgeView(String viewId, String objectId) {
     _store?.purgeView(origin: 'local', id: viewId);
-    _store?.deleteDoc(docId: objectId);
+    _store?.deleteDoc(origin: 'local', docId: objectId);
   }
 
   @override
@@ -435,17 +436,18 @@ class LocalOffline implements LocalOfflineApi {
   /// INCLUDED in the copy (loadDoc = base + replay(log)) and still push from
   /// the mirror on the next connect — nothing is lost on either side. A doc
   /// never opened online has no mirror: its page is created empty (name kept).
+  /// [origin] is the account-scoped mirror key (`cloudCacheOrigin`).
   /// Returns the new local workspace id + copied doc count, or null if the
   /// store isn't open / nothing to detach.
   ({String workspaceId, int docs})? detachCloudWorkspace(
-    String serverUrl,
+    String origin,
     String cloudWorkspaceId,
     String name,
   ) {
     final store = _store;
     if (store == null) return null;
     final views = [
-      for (final v in store.listViews(origin: serverUrl))
+      for (final v in store.listViews(origin: origin))
         if (v.workspaceId == cloudWorkspaceId) v,
     ];
     final wsId = _id('ws');
@@ -463,14 +465,15 @@ class LocalOffline implements LocalOfflineApi {
     final viewIdMap = {for (final v in views) v.id: _id('view')};
     var docs = 0;
     for (final v in views) {
-      final doc = store.loadDoc(docId: v.objectId);
+      final doc = store.loadDoc(origin: origin, docId: v.objectId);
       final newDocId = _id('doc');
       if (doc != null) {
-        store.saveDoc(docId: newDocId, doc: doc);
+        store.saveDoc(origin: 'local', docId: newDocId, doc: doc);
         docs++;
       } else {
         // Never mirrored — keep the page node with empty content.
         store.saveDoc(
+          origin: 'local',
           docId: newDocId,
           doc: MicaDocument.fromMarkdown(markdown: ''),
         );
@@ -535,7 +538,7 @@ class LocalOffline implements LocalOfflineApi {
     final store = _store!;
     final docId = _id('doc');
     final rootId = _id('root');
-    final backend = LocalDocBackend.open(store, docId, rootId: rootId);
+    final backend = LocalDocBackend.open(store, 'local', docId, rootId: rootId);
     _active = backend;
     return (
       docId: docId,
@@ -550,7 +553,7 @@ class LocalOffline implements LocalOfflineApi {
     final store = _store;
     if (store == null) return null;
     _active?.flush();
-    final backend = LocalDocBackend.open(store, docId);
+    final backend = LocalDocBackend.open(store, 'local', docId);
     _active = backend;
     return (rootBlockId: backend.rootBlockId, blocks: backend.allBlocks());
   }
@@ -590,7 +593,12 @@ class LocalOffline implements LocalOfflineApi {
   }) async {
     final store = _store;
     if (store == null) {
-      return (docs: 0, folders: 0, errors: const ['local store not open']);
+      return (
+        docs: 0,
+        folders: 0,
+        errors: const <String>['local store not open'],
+        viewIds: const <String>[],
+      );
     }
     final errors = <String>[];
 
@@ -641,13 +649,38 @@ class LocalOffline implements LocalOfflineApi {
       docs: outcome.docs,
       folders: outcome.folders,
       errors: [...errors, ...outcome.errors],
+      viewIds: outcome.viewIds,
     );
+  }
+
+  /// Import ONE Markdown file through the same vault-import path the folder
+  /// import uses (Rust planning + parsing + the shared link rewriter), then
+  /// report the created view so the caller can open it (issue #108).
+  @override
+  Future<VaultImportResult> importMarkdownPage(
+    String fileName,
+    String markdown,
+    String workspaceId, {
+    required String fallbackTitle,
+  }) {
+    final base = fileName
+        .replaceAll(RegExp(r'\.(md|markdown|txt)$', caseSensitive: false), '')
+        .trim();
+    final title = titleFromMarkdown(
+      markdown,
+      base.isEmpty ? fallbackTitle : base,
+    );
+    final safe = title.replaceAll(RegExp(r'[/\\:*?"<>|\r\n\t]'), '_').trim();
+    final path = '${safe.isEmpty ? fallbackTitle : safe}.md';
+    return importVaultTree([
+      (path: path, bytes: utf8.encode(markdown)),
+    ], workspaceId);
   }
 
   /// Revert a document to its last on-device checkpoint (§10 recovery). The
   /// active backend is dropped so the next [openDoc] reloads the restored base.
   void rollbackDoc(String docId) {
-    _store?.rollbackDoc(docId: docId);
+    _store?.rollbackDoc(origin: 'local', docId: docId);
     if (_active?.docId == docId) _active = null;
   }
 
@@ -688,21 +721,28 @@ class LocalOffline implements LocalOfflineApi {
   // path keeps its own UUID file ids; local and cloud documents are separate
   // universes today, so the two id schemes never collide.
 
+  /// The on-device origins owned by [accountId] across [servers], in the
+  /// canonical form every cloud-cache row is keyed by.
+  List<String> _scopedOrigins(List<String> servers, String accountId) => [
+    for (final s in servers) cloudCacheOrigin(s, accountId),
+  ];
+
   /// Measure the on-device store, splitting re-downloadable mirrors from
-  /// local-only originals.
+  /// local-only originals, for ONE account.
   ///
-  /// Pages come from the store's own `origin` column ("local" vs a server URL);
-  /// bytes come from walking `blobs/` once and classifying each file by its id
-  /// shape (`cache_stats.dart`). Deliberately no FFI: everything needed is
-  /// already either a Dart-side file or an existing query, and adding a Rust
-  /// entry point would mean regenerating bindings for a read-only number.
+  /// Pages come from the store's own `origin` column (`'local'` vs an
+  /// account-scoped server key); bytes come from walking `blobs/` once and
+  /// classifying each file by its id shape (`cache_stats.dart`). Deliberately
+  /// no FFI: everything needed is already either a Dart-side file or an
+  /// existing query.
   ///
   /// A blob whose file cannot be stat'd is skipped rather than failing the whole
   /// figure — a size that is slightly low beats a settings pane that shows an
   /// error where a number belongs.
   @override
   Future<LocalCacheStats> cacheStats({
-    required List<String> mirroredOrigins,
+    required List<String> servers,
+    required String accountId,
   }) async {
     // Folders are not pages and trashed rows are not either — the same definition
     // the rest of the app counts by. `listViews` includes trashed rows, so that
@@ -711,7 +751,7 @@ class LocalOffline implements LocalOfflineApi {
 
     final localOnlyPages = listViews(origin: 'local').where(isPage).length;
     var mirroredPages = 0;
-    for (final origin in mirroredOrigins) {
+    for (final origin in _scopedOrigins(servers, accountId)) {
       mirroredPages += listViews(origin: origin).where(isPage).length;
     }
 
@@ -744,35 +784,175 @@ class LocalOffline implements LocalOfflineApi {
     );
   }
 
-  /// Drop every mirrored page and image, keep everything local-only, and return
-  /// the numbers that hold afterwards.
-  ///
-  /// Two independent guards, because getting this wrong deletes originals:
-  /// `forgetOrigin` refuses `'local'` outright, and a blob is only unlinked when
-  /// `isCloudMirrorBlobId` positively recognises a server file id — an id of any
-  /// unexpected shape is kept, since a needless re-download is not in the same
-  /// class of mistake as a lost original.
-  Future<LocalCacheStats> clearMirrorCache({
-    required List<String> mirroredOrigins,
-  }) async {
-    for (final origin in mirroredOrigins) {
-      forgetOrigin(origin);
+  /// Every image `file_id` a document references. Used to keep blobs of
+  /// documents the cache clear must NOT touch (pending edits, quarantine).
+  Set<String> _imageIdsIn(MicaDocument? doc) {
+    if (doc == null) return const {};
+    final out = <String>{};
+    for (final block in (jsonDecode(doc.toBlocksJson()) as List)) {
+      if (block is! Map) continue;
+      if (block['type'] != 'image') continue;
+      final data = block['data'];
+      final fileId = data is Map ? data['file_id'] as String? : null;
+      if (fileId != null && fileId.isNotEmpty) out.add(fileId);
     }
-    final dir = Directory(_blobsDir());
-    if (dir.existsSync()) {
-      for (final entity in dir.listSync(followLinks: false)) {
-        if (entity is! File) continue;
-        if (!isCloudMirrorBlobId(entity.uri.pathSegments.last)) continue;
-        try {
-          entity.deleteSync();
-        } catch (_) {
-          // A file we cannot unlink stays counted by the stats below, so the
-          // number the user sees afterwards stays true rather than optimistic.
-        }
+    return out;
+  }
+
+  /// Legacy (pre-#111) server-only cache rows for [servers]. Visible to NO
+  /// account: we cannot verify which account wrote them, so they are kept as a
+  /// quarantine and only listed (ids + page counts, never names) for an
+  /// explicit, user-initiated export.
+  @override
+  List<({String origin, String workspaceId, int pages})> quarantinedWorkspaces({
+    required List<String> servers,
+  }) {
+    final store = _store;
+    if (store == null) return const [];
+    final out = <({String origin, String workspaceId, int pages})>[];
+    for (final server in servers) {
+      final origin = legacyCloudCacheOrigin(server);
+      if (origin == 'local') continue;
+      final views = store.listViews(origin: origin);
+      final workspaces = store.listWorkspaces(origin: origin);
+      if (workspaces.isEmpty &&
+          views.isEmpty &&
+          store.listDocs(origin: origin).isEmpty) {
+        continue;
+      }
+      final ids = workspaces.isNotEmpty
+          ? {for (final w in workspaces) w.id}
+          : {for (final v in views) v.workspaceId};
+      for (final id in ids) {
+        final pages = views
+            .where((v) => v.workspaceId == id && v.objectType != 'folder' && !v.trashed)
+            .length;
+        out.add((origin: origin, workspaceId: id, pages: pages));
       }
     }
+    return out;
+  }
+
+  /// Drop this ACCOUNT's re-downloadable mirror and report what happened.
+  ///
+  /// Issue #110: a document with un-pushed outbox rows is NOT a cache — that
+  /// outbox is the only copy of the work. Such documents keep their snapshot,
+  /// outbox, cursor, version history, AND their page/view rows (and the folder
+  /// chain above them), so the user can still find, open and keep editing the
+  /// page. Everything else in the scoped mirror is removed.
+  ///
+  /// Legacy server-only rows are never touched: they are quarantined (owner
+  /// unverifiable) and reported in [ClearMirrorResult.quarantinedOrigins].
+  @override
+  Future<ClearMirrorResult> clearMirrorCache({
+    required List<String> servers,
+    required String accountId,
+  }) async {
+    final store = _store;
+    if (store == null) {
+      // No FFI store (e.g. a test harness or a failed open): there is no
+      // document state to protect, but the blob half still works and is what
+      // the cache-reclaim contract promises to remove.
+      _deleteMirrorBlobs(const {});
+      return (
+        stats: await cacheStats(servers: servers, accountId: accountId),
+        retainedDocs: 0,
+        quarantinedOrigins: const <String>[],
+      );
+    }
+    var retainedDocs = 0;
+    final protectedBlobs = <String>{};
+
+    for (final origin in _scopedOrigins(servers, accountId)) {
+      final pending = <String>{};
+      for (final docId in store.listDocs(origin: origin)) {
+        final cursor = store.syncCursor(origin: origin, docId: docId);
+        final outbox = store.updatesAfter(
+          origin: origin,
+          docId: docId,
+          after: cursor.pushedClock,
+        );
+        if (outbox.isEmpty) continue;
+        pending.add(docId);
+        retainedDocs++;
+        protectedBlobs.addAll(
+          _imageIdsIn(store.loadDoc(origin: origin, docId: docId)),
+        );
+      }
+
+      final views = store.listViews(origin: origin);
+      final byId = {for (final v in views) v.id: v};
+      // Keep each pending page and every folder above it, so the page stays
+      // navigable. A folder is only metadata; keeping it costs nothing.
+      final keep = <String>{};
+      for (final v in views) {
+        if (!pending.contains(v.objectId)) continue;
+        String? id = v.id;
+        while (id != null && keep.add(id)) {
+          id = byId[id]?.parentId;
+        }
+      }
+      for (final v in views) {
+        if (keep.contains(v.id)) continue;
+        store.purgeView(origin: origin, id: v.id);
+      }
+      for (final docId in store.listDocs(origin: origin)) {
+        if (pending.contains(docId)) continue;
+        store.deleteDoc(origin: origin, docId: docId);
+      }
+      final keptWorkspaces = {
+        for (final v in views)
+          if (keep.contains(v.id)) v.workspaceId,
+      };
+      for (final w in store.listWorkspaces(origin: origin)) {
+        if (keptWorkspaces.contains(w.id)) continue;
+        store.deleteWorkspace(origin: origin, id: w.id);
+      }
+    }
+
+    // Quarantine: prove it exists and protect every blob its documents use.
+    final quarantinedOrigins = <String>[];
+    for (final server in servers) {
+      final origin = legacyCloudCacheOrigin(server);
+      if (origin == 'local') continue;
+      final hasRows =
+          store.listWorkspaces(origin: origin).isNotEmpty ||
+          store.listViews(origin: origin).isNotEmpty ||
+          store.listDocs(origin: origin).isNotEmpty;
+      if (!hasRows) continue;
+      quarantinedOrigins.add(origin);
+      for (final docId in store.listDocs(origin: origin)) {
+        protectedBlobs.addAll(
+          _imageIdsIn(store.loadDoc(origin: origin, docId: docId)),
+        );
+      }
+    }
+
+    _deleteMirrorBlobs(protectedBlobs);
     flush();
-    return cacheStats(mirroredOrigins: mirroredOrigins);
+    return (
+      stats: await cacheStats(servers: servers, accountId: accountId),
+      retainedDocs: retainedDocs,
+      quarantinedOrigins: quarantinedOrigins,
+    );
+  }
+
+  /// Unlink mirrored blobs, keeping every id in [protected] and anything whose
+  /// id shape is not positively a server file id (the safe direction).
+  void _deleteMirrorBlobs(Set<String> protected) {
+    final dir = Directory(_blobsDir());
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync(followLinks: false)) {
+      if (entity is! File) continue;
+      final id = entity.uri.pathSegments.last;
+      if (!isCloudMirrorBlobId(id) || protected.contains(id)) continue;
+      try {
+        entity.deleteSync();
+      } catch (_) {
+        // A file we cannot unlink stays counted by the stats, so the number the
+        // user sees afterwards stays true rather than optimistic.
+      }
+    }
   }
 
   String _blobsDir() => '${_localDir()}/blobs';
@@ -832,7 +1012,7 @@ class LocalOffline implements LocalOfflineApi {
     final store = _store;
     if (store == null) return const [];
     return store
-        .listLocalVersions(docId: docId)
+        .listLocalVersions(origin: 'local', docId: docId)
         .map((v) => (id: v.id, label: v.label, createdAt: v.createdAt))
         .toList();
   }
@@ -845,7 +1025,7 @@ class LocalOffline implements LocalOfflineApi {
   ) {
     final store = _store;
     if (store == null) return null;
-    final v = store.createLocalVersion(docId: docId, label: label);
+    final v = store.createLocalVersion(origin: 'local', docId: docId, label: label);
     return v == null
         ? null
         : (id: v.id, label: v.label, createdAt: v.createdAt);
@@ -860,7 +1040,11 @@ class LocalOffline implements LocalOfflineApi {
   ) {
     final store = _store;
     if (store == null) return null;
-    final doc = store.localVersionDoc(docId: docId, versionId: versionId);
+    final doc = store.localVersionDoc(
+      origin: 'local',
+      docId: docId,
+      versionId: versionId,
+    );
     if (doc == null) return null;
     final blocks = (jsonDecode(doc.toBlocksJson()) as List)
         .map((b) => Map<String, dynamic>.from(b as Map))
@@ -873,7 +1057,11 @@ class LocalOffline implements LocalOfflineApi {
   bool restoreDocVersion(String docId, String versionId) {
     final store = _store;
     if (store == null) return false;
-    return store.restoreLocalVersion(docId: docId, versionId: versionId) !=
+    return store.restoreLocalVersion(
+          origin: 'local',
+          docId: docId,
+          versionId: versionId,
+        ) !=
         null;
   }
 
@@ -890,7 +1078,7 @@ class LocalOffline implements LocalOfflineApi {
     // disk first — otherwise `loadDoc` returns a stale snapshot and the export
     // is a different (older) document than what's on screen.
     if (_active?.docId == docId) _active!.flush();
-    final doc = store.loadDoc(docId: docId);
+    final doc = store.loadDoc(origin: 'local', docId: docId);
     if (doc == null) return null;
     final blocks = (jsonDecode(doc.toBlocksJson()) as List)
         .cast<Map<String, dynamic>>();
@@ -924,7 +1112,7 @@ class LocalOffline implements LocalOfflineApi {
     final store = _store;
     if (store == null) return null;
     if (_active?.docId == docId) _active!.flush(); // flush pending edits first
-    final doc = store.loadDoc(docId: docId);
+    final doc = store.loadDoc(origin: 'local', docId: docId);
     if (doc == null) return null;
     final blocks = (jsonDecode(doc.toBlocksJson()) as List)
         .cast<Map<String, dynamic>>();
@@ -975,31 +1163,52 @@ class LocalOffline implements LocalOfflineApi {
     final store = _store;
     if (store == null) return null;
     if (_active?.docId == docId) _active!.flush(); // flush pending edits first
-    final doc = store.loadDoc(docId: docId);
+    final doc = store.loadDoc(origin: 'local', docId: docId);
     if (doc == null) return null;
     return doc.exportMarkdownTitled(title: title);
   }
 
-  /// Export a LOCAL folder's subtree as a Markdown ZIP, through the SAME shared
-  /// Rust builder + ZIP writer the cloud uses (so it's the same format and
+  /// Export one folder's subtree as a Markdown ZIP through the SAME shared Rust
+  /// builder + ZIP writer the cloud uses (so it's the same format and
   /// round-trips). The store reads views + document payloads itself; here we
-  /// gather the on-device image blob bytes for the subtree's pages and hand
-  /// them in. Returns null if the store isn't open.
-  Uint8List? exportFolderZip(String workspaceId, String folderId) {
+  /// gather the on-device image blob bytes for the subtree's pages.
+  @override
+  Uint8List? exportFolderZip(String workspaceId, String folderId) =>
+      _exportTreeZip('local', workspaceId, folderId);
+
+  /// Export a WHOLE local (or explicitly chosen origin) workspace as a Markdown
+  /// ZIP. [origin] is `'local'` for a local workspace; a quarantined legacy
+  /// cache can be exported by passing its legacy origin for recovery.
+  @override
+  Uint8List? exportWorkspaceZip(String workspaceId, {String origin = 'local'}) =>
+      _exportTreeZip(origin, workspaceId, null);
+
+  Uint8List? _exportTreeZip(
+    String origin,
+    String workspaceId,
+    String? folderId,
+  ) {
     final store = _store;
     if (store == null) return null;
     final views = store
-        .listViews(origin: 'local')
+        .listViews(origin: origin)
         .where((v) => v.workspaceId == workspaceId && !v.trashed)
         .toList();
-    // Document object_ids in the folder's subtree (pre-order walk).
+    // Document object_ids in the requested subtree — the whole workspace when
+    // [folderId] is null, otherwise the folder and everything under it.
     final docObjectIds = <String>[];
-    final queue = <String>[folderId];
-    while (queue.isNotEmpty) {
-      final parent = queue.removeLast();
-      for (final v in views.where((v) => v.parentId == parent)) {
+    if (folderId == null) {
+      for (final v in views) {
         if (v.objectType == 'document') docObjectIds.add(v.objectId);
-        queue.add(v.id);
+      }
+    } else {
+      final queue = <String>[folderId];
+      while (queue.isNotEmpty) {
+        final parent = queue.removeLast();
+        for (final v in views.where((v) => v.parentId == parent)) {
+          if (v.objectType == 'document') docObjectIds.add(v.objectId);
+          queue.add(v.id);
+        }
       }
     }
     // Gather each referenced image's bytes once (dedup by file_id — the local
@@ -1007,8 +1216,10 @@ class LocalOffline implements LocalOfflineApi {
     final images = <FolderExportImage>[];
     final seen = <String>{};
     for (final objId in docObjectIds) {
-      if (_active?.docId == objId) _active!.flush(); // freshest content
-      final doc = store.loadDoc(docId: objId);
+      if (origin == 'local' && _active?.docId == objId) {
+        _active!.flush(); // freshest content
+      }
+      final doc = store.loadDoc(origin: origin, docId: objId);
       if (doc == null) continue;
       final blocks = (jsonDecode(doc.toBlocksJson()) as List)
           .cast<Map<String, dynamic>>();
@@ -1030,6 +1241,7 @@ class LocalOffline implements LocalOfflineApi {
       }
     }
     return store.exportFolderZip(
+      origin: origin,
       workspaceId: workspaceId,
       folderId: folderId,
       images: images,

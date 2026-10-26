@@ -139,8 +139,12 @@ class SyncReconcileController extends ChangeNotifier {
   /// this one is per-document and fires on ready, not on server contact.
   final Future<void> Function(String documentId) onReadyReconcileUploads;
 
-  /// The sync phase badge on the open document.
-  final void Function(SyncPhase phase)? onSyncPhase;
+  /// The sync phase badge for the ACTIVE tab's document. Routed per document
+  /// (issue #160): with several live tabs, one session reporting `synced`
+  /// must not overwrite what the badge says about another. Only the active
+  /// document's transitions reach this hook; every document's last phase is
+  /// kept in [phaseOf] so a tab switch can re-derive the badge immediately.
+  final void Function(String documentId, SyncPhase phase)? onSyncPhase;
 
   /// The "cloud sync paused" banner pair — needs a context, so the State's.
   final void Function()? onFaultBanner;
@@ -160,6 +164,17 @@ class SyncReconcileController extends ChangeNotifier {
 
   /// The presence row clear (setState).
   final void Function() onPresenceCleared;
+
+  /// The last sync phase each document's live session reported. Written for
+  /// EVERY session (background or not) so a tab switch has an answer at once;
+  /// only the active document's is forwarded through [onSyncPhase].
+  final Map<String, SyncPhase> _phaseByDocument = {};
+
+  /// The last phase [documentId]'s session reported, or null when this device
+  /// holds no phase for it. A tab switch re-derives the badge from this
+  /// instead of waiting for that document's next real transition (issue #160).
+  SyncPhase? phaseOf(String? documentId) =>
+      documentId == null ? null : _phaseByDocument[documentId];
 
   // ── Owned state ───────────────────────────────────────────────────────────
 
@@ -361,7 +376,8 @@ class SyncReconcileController extends ChangeNotifier {
         savePref(unackedKey, ''); // the log owns the outbox now
       }
     }
-    final yrs = CloudSyncSession(
+    late final CloudSyncSession yrs;
+    yrs = CloudSyncSession(
       // Rebuilt per connection attempt, and renewed first. This session lives as
       // long as the document stays open — hours — while the access token lapses
       // in one. Renewal is otherwise only driven by `_run()` (a user action), so
@@ -404,7 +420,18 @@ class SyncReconcileController extends ChangeNotifier {
       // fallback (refetch workspaces/roles) AND drain every other cloud doc's
       // un-pushed offline outbox, not just this active one.
       onServerConnected: onCloudOnline,
-      onSyncPhase: onSyncPhase,
+      // Same routing rule as presence above: the badge describes the tab the
+      // reader is LOOKING AT. Every session still records its own phase, so
+      // switching tabs re-derives that tab's badge immediately (issue #160).
+      // A parked or disposed session can still fire inside its drain window —
+      // its phase is dead state, so neither the map nor the badge may take it.
+      onSyncPhase: (phase) {
+        if (!tabs().any((t) => identical(t.cloudSession, yrs))) return;
+        _phaseByDocument[documentId] = phase;
+        if (isMounted() && activeDocumentId() == documentId) {
+          onSyncPhase?.call(documentId, phase);
+        }
+      },
       // Desktop's durable outbox is the append-log (persistence); web / no
       // store keeps the in-memory queue + prefs crash-recovery (C1).
       restoreUnacked: persistence == null ? loadUnacked(unackedKey) : null,
@@ -440,10 +467,21 @@ class SyncReconcileController extends ChangeNotifier {
   /// them loses content. This is the same call [closeActiveDocumentSync] makes,
   /// for the same reason.
   void parkTab(TabSockets tab) {
+    final documentId = tab.syncDocumentId;
     tab.syncDocumentId = null;
     final cloud = tab.cloudSession;
     tab.cloudSession = null;
+    _forgetPhase(documentId);
     if (cloud != null) unawaited(cloud.drainAndDispose());
+  }
+
+  /// Drop a document's tracked phase when no live tab still holds it — a
+  /// reopened tab must start fresh instead of showing a parked session's
+  /// stale badge (issue #160 rework).
+  void _forgetPhase(String? documentId) {
+    if (documentId == null) return;
+    if (tabs().any((t) => t.syncDocumentId == documentId)) return;
+    _phaseByDocument.remove(documentId);
   }
 
   /// Park live tabs past [kMaxLiveSyncTabs]; see [tabsToPark] for the choice.
@@ -479,9 +517,11 @@ class SyncReconcileController extends ChangeNotifier {
     // Any in-flight _setupCloudYrs continuation is now stale and must not
     // attach its session (the A→B→A double-session bug).
     _syncGeneration++;
+    final documentId = active.syncDocumentId;
     active.syncDocumentId = null;
     final cloud = active.cloudSession;
     active.cloudSession = null;
+    _forgetPhase(documentId);
     // C2: let the outgoing session flush + drain its outbox before closing, so a
     // doc switch / workspace change / sign-out doesn't hard-drop unacked edits.
     // Fire-and-forget — the page-switch path (_selectView) still awaits an

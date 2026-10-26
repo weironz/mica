@@ -1,3 +1,4 @@
+import 'package:mica_flutter/local/native_rust.dart';
 // P2c: reconnect reconciliation converges two replicas without loss.
 //
 // Two devices each edit the SAME cloud doc while offline (different blocks), then
@@ -21,7 +22,7 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() async => RustLib.init());
+  setUpAll(initNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
   test('P2c: two replicas edit offline then converge on reconnect; log stays pure-local',
@@ -51,8 +52,8 @@ void main() {
 
     // Both devices start from the same base, already synced to rid 1 (as after a
     // prior online session).
-    StoreCloudDocStore(storeA, 'doc').save(base, 1);
-    StoreCloudDocStore(storeB, 'doc').save(base, 1);
+    StoreCloudDocStore(storeA, 'local', 'doc').save(base, 1);
+    StoreCloudDocStore(storeB, 'local', 'doc').save(base, 1);
 
     // ── Offline phase: each device edits a DIFFERENT block, no network ──────────
     Future<void> editOffline(
@@ -62,7 +63,7 @@ void main() {
         clientId: cid,
         onReady: (_, _) {},
         onRemoteBlocks: (_) {},
-        persistence: StoreCloudDocStore(store, 'doc'),
+        persistence: StoreCloudDocStore(store, 'local', 'doc'),
       );
       s.connect();
       await _until(() => s.isReady, reason: 'offline seed from local base');
@@ -75,8 +76,8 @@ void main() {
     await editOffline(
         storeB, cidB, {'type': 'update_block', 'block_id': 'b', 'text': 'yo B'});
     // Each device's outbox holds exactly its own one offline edit.
-    expect(storeA.updatesAfter(docId: 'doc', after: 0).length, 1);
-    expect(storeB.updatesAfter(docId: 'doc', after: 0).length, 1);
+    expect(storeA.updatesAfter(origin: 'local', docId: 'doc', after: 0).length, 1);
+    expect(storeB.updatesAfter(origin: 'local', docId: 'doc', after: 0).length, 1);
 
     // ── Reconnect phase: a server that folds pushes and relays to the other ─────
     final server =
@@ -90,14 +91,14 @@ void main() {
       clientId: cidA,
       onReady: (_, b) => capA(b),
       onRemoteBlocks: capA,
-      persistence: StoreCloudDocStore(storeA, 'doc'),
+      persistence: StoreCloudDocStore(storeA, 'local', 'doc'),
     );
     final sessionB = CloudSyncSession(
       uri: () async => server.uri,
       clientId: cidB,
       onReady: (_, b) => capB(b),
       onRemoteBlocks: capB,
-      persistence: StoreCloudDocStore(storeB, 'doc'),
+      persistence: StoreCloudDocStore(storeB, 'local', 'doc'),
     );
 
     // A reconnects first and folds its edit into the server; then B reconnects,
@@ -127,12 +128,12 @@ void main() {
     // compacts acked entries out of the log after the debounced write-through.)
     expect(await sessionA.drainOutbox(timeout: const Duration(seconds: 6)), isTrue);
     expect(await sessionB.drainOutbox(timeout: const Duration(seconds: 6)), isTrue);
-    expect(storeA.syncCursor(docId: 'doc').pushedClock, 1,
+    expect(storeA.syncCursor(origin: 'local', docId: 'doc').pushedClock, 1,
         reason: "A pushed exactly its own edit — remote update never entered A's outbox");
-    expect(storeB.syncCursor(docId: 'doc').pushedClock, 1,
+    expect(storeB.syncCursor(origin: 'local', docId: 'doc').pushedClock, 1,
         reason: "B pushed exactly its own edit — remote update never entered B's outbox");
-    expect(storeA.updatesAfter(docId: 'doc', after: 1), isEmpty);
-    expect(storeB.updatesAfter(docId: 'doc', after: 1), isEmpty);
+    expect(storeA.updatesAfter(origin: 'local', docId: 'doc', after: 1), isEmpty);
+    expect(storeB.updatesAfter(origin: 'local', docId: 'doc', after: 1), isEmpty);
 
     sessionA.dispose();
     sessionB.dispose();

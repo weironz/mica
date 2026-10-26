@@ -28,11 +28,22 @@ import 'local_offline_api.dart';
 export 'doc_ops.dart' show DocOp;
 
 class LocalDocBackend {
-  LocalDocBackend._(this._store, this._doc, this.docId, this.rootBlockId) {
+  LocalDocBackend._(
+    this._store,
+    this.origin,
+    this._doc,
+    this.docId,
+    this.rootBlockId,
+  ) {
     _mirror.seedFrom(_doc);
   }
 
   final MicaStore _store;
+
+  /// The document-level namespace this page lives in — `'local'` for an
+  /// on-device page. Required, never defaulted: document rows are keyed by
+  /// `(origin, doc_id)` (issue #102).
+  final String origin;
   final MicaDocument _doc;
 
   /// Store key for this document.
@@ -54,18 +65,19 @@ class LocalDocBackend {
   static const _compactCheckEvery = 32;
   static const _compactThreshold = 256;
 
-  /// Open the local document `docId` from `store`, seeding an empty one-paragraph
-  /// page if it doesn't exist yet. `rootId`/`seedBlocks` only matter on first
-  /// creation; an existing doc keeps its own root.
+  /// Open the local document `(origin, docId)` from `store`, seeding an empty
+  /// one-paragraph page if it doesn't exist yet. `rootId`/`seedBlocks` only
+  /// matter on first creation; an existing doc keeps its own root.
   static LocalDocBackend open(
     MicaStore store,
+    String origin,
     String docId, {
     String rootId = 'root',
     List<Map<String, dynamic>>? seedBlocks,
   }) {
     final MicaDocument? existing;
     try {
-      existing = store.loadDoc(docId: docId);
+      existing = store.loadDoc(origin: origin, docId: docId);
     } catch (_) {
       // The snapshot is PRESENT but corrupt/unreadable (the FFI throws now,
       // distinct from a plain absence). Do NOT fall through to the seed path:
@@ -80,20 +92,26 @@ class LocalDocBackend {
       // base AND drops the log — so without this the recovery point would sit
       // before the previous session's edits and a rollback would take them with
       // it. It also means every session starts with an empty log.
-      store.compactLocal(docId: docId);
+      store.compactLocal(origin: origin, docId: docId);
       // Snapshot the last-good base before this session mutates it (§10 recovery
       // point — rollback restores it if an edit/merge later corrupts the doc).
-      store.checkpointDoc(docId: docId);
-      return LocalDocBackend._(store, existing, docId, existing.rootBlockId());
+      store.checkpointDoc(origin: origin, docId: docId);
+      return LocalDocBackend._(
+        store,
+        origin,
+        existing,
+        docId,
+        existing.rootBlockId(),
+      );
     }
     final blocks = seedBlocks ?? emptyPage(rootId);
     final doc = MicaDocument.fromBlocksJson(
       rootId: rootId,
       blocksJson: jsonEncode(blocks),
     );
-    store.saveDoc(docId: docId, doc: doc);
-    store.checkpointDoc(docId: docId);
-    return LocalDocBackend._(store, doc, docId, rootId);
+    store.saveDoc(origin: origin, docId: docId, doc: doc);
+    store.checkpointDoc(origin: origin, docId: docId);
+    return LocalDocBackend._(store, origin, doc, docId, rootId);
   }
 
   /// A fresh page: a root with a single empty paragraph.
@@ -176,7 +194,7 @@ class LocalDocBackend {
   }
 
   void _persistLocalUpdate(Uint8List diff) {
-    if (_store.appendUpdate(docId: docId, update: diff) == 0) {
+    if (_store.appendUpdate(origin: origin, docId: docId, update: diff) == 0) {
       _healFailedAppend();
     } else {
       _maybeCompact();
@@ -224,7 +242,7 @@ class LocalDocBackend {
   void _healFailedAppend() {
     final n = swallowed('local_append_failed');
     debugPrint('mica: local append failed for $docId (#$n); saved full doc');
-    _store.saveDoc(docId: docId, doc: _doc);
+    _store.saveDoc(origin: origin, docId: docId, doc: _doc);
   }
 
   /// Bound the log without a timer: every [_compactCheckEvery] appends, check
@@ -237,8 +255,10 @@ class LocalDocBackend {
   void _maybeCompact() {
     if (++_appendsSinceCheck < _compactCheckEvery) return;
     _appendsSinceCheck = 0;
-    final (local, remote) = _store.logSizes(docId: docId);
-    if (local + remote > _compactThreshold) _store.compactLocal(docId: docId);
+    final (local, remote) = _store.logSizes(origin: origin, docId: docId);
+    if (local + remote > _compactThreshold) {
+      _store.compactLocal(origin: origin, docId: docId);
+    }
   }
 
   /// Fold the log into the base now. Safe to call any time (app pause, doc
@@ -250,7 +270,7 @@ class LocalDocBackend {
   void flush() {
     _localUpdates.flush();
     _appendsSinceCheck = 0;
-    _store.compactLocal(docId: docId);
+    _store.compactLocal(origin: origin, docId: docId);
   }
 
   /// Current document as the full blocks list (tree order) — for export/debug.
