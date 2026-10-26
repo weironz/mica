@@ -231,7 +231,8 @@ pub mod data_keys { /* 02 §6.1 表里出现的全部键 + ALL */ }
 测试 `md-core/tests/wire.rs`：
 - 每个函数至少一个正常用例 + 一个错误输入用例；
 - 不变量 I8：含 `😀`、`𠀀` 的输入，标记偏移和 `math_run_spans_json` 的偏移等于 UTF-16 下标（测试里手算期望值）；
-- `parse_body_json(md)` 与 `parse_body(md)` 经 serde 后逐字节相同（保证 S2 两个绑定只是转发）。
+- `parse_body_json(md)` 等于把 `parse_body(md)` 逐块做 §3.2 投影（去掉 id / children、`data` 缺失或 null 归一为 `{}`、
+  marks 按 `(start, end, type)` 排序）后的 JSON（保证 S2 两个绑定只是转发）。原写「经 serde 后逐字节相同」按字面不成立，G1 裁决 #1 改为此口径。
 
 ### T1.8 不变量测试
 

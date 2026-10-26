@@ -113,6 +113,8 @@ pub enum BlockIds {
   /// `block_<uuid-v4-simple>`，现有行为。需要 feature `uuid`（默认开）。
   #[cfg(feature = "uuid")] Uuid,
   /// `<prefix><n>`，n 从 0 递增。确定性，wasm 与测试用；不需要随机数。
+  /// 例外（G1 裁决 #5）：调用方的 `root_id` 恰好落在 `<prefix><n>` 命名空间（如 `"b0"` + `"b"`）时，
+  /// 前缀确定性地改为 `<prefix>_`，n 仍从 0 起，保证 id 唯一。正常输入不受影响。
   Sequential { prefix: String },
 }
 
@@ -176,6 +178,8 @@ pub fn render_html_body(blocks: &[Block], options: &HtmlOptions) -> String;
 pub fn math_run_spans(source: &str) -> Vec<(usize, usize)>;
 /// 只识别行内数学（`$…$`、`\(…\)`），去掉定界符、其余字符原样保留，公式区间变成 `math` 标记（UTF-16）。
 /// 粘贴单行文本时用（取代 Dart `parseInlineMath`），基于 `math_run_spans`，S1 新增。
+/// 以 `$$` 开头的区间不算行内数学（与 Dart `MathRunSpans` 一致），这条过滤只在本函数里做，
+/// `math_run_spans` 本身不改（G1 裁决 #3：`latex_guard` 依赖它的现有边界）。
 pub fn parse_inline_math(source: &str) -> InlineText;
 
 pub mod properties;   // 现有 front matter 属性 API，原样迁入
@@ -204,7 +208,7 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 | --- | --- | --- |
 | I1 | `serialize(parse(md))` 与现有 `export_markdown(import_markdown(md))` 逐字节相同（全部 fixtures + golden-master） | `crates/markdown/tests/*` 原样通过 |
 | I2 | 往返：`parse(serialize(doc))` 的块 kind/text/data 与 `doc` 相同（现有 `fixtures_round_trip`） | 现有测试 |
-| I3 | `decode_cell(encode_cell(x)) == x` 对任意 `x`（含字面 `*`、`|`、`\`、换行、空串、非 BMP 字符） | `md-core/tests/cell_roundtrip.rs`（proptest，仓库已有该 dev 依赖） |
+| I3 | `decode_cell(encode_cell(x)) == x` 对任意 `x`（含字面 `*`、`|`、`\`、换行、空串、非 BMP 字符），**除外**：无标记文本里的裸 URL / 邮箱（读回时按 GFM 自动链接加上 `link`）与首尾空白（读回时去掉）。这两类是存储格式的现有行为（§6.4），S1 不改（G1 裁决 #4） | `md-core/tests/cell_roundtrip.rs`（proptest，仓库已有该 dev 依赖）；除外项由显式测试钉住现状 |
 | I4 | `parse_inline(serialize_inline(t, m)) == (t, m)`（规范化后） | 同上 |
 | I5 | `BlockIds::Sequential` 下 `parse` 结果确定（同输入同输出），且与 Uuid 模式除 id 外完全相同 | `md-core/tests/ids.rs` |
 | I6 | `schema.rs` 的常量覆盖 fixtures 中出现的全部 kind / data key / mark type | `md-core/tests/schema_sync.rs` |
@@ -423,9 +427,13 @@ void debugSetMarkdownCodec(MarkdownCodec? codec) => _codec = codec;
 
 ### 6.1 块类型（`type`）
 
+**根块的 type 不可靠**（G1 裁决 #2）：编辑器和服务端新建的页面根块是 `page`，但解析器（`parse` / 现有 `import_markdown`）
+产出的根块一直是 `paragraph`，导入过的页面在库里就是这样存的。消费方只能用 `root_block_id` 识别根块，不能看 type。
+统一根块 type 会改动已存数据的读法，不在本专项范围。
+
 | type | 含义 | text | data 键（解析器产出 / 导出器读取） |
 | --- | --- | --- | --- |
-| `page` | 根块 | 通常为空（旧文档可能有正文） | `front_matter`（原文 YAML）、`title`（Mica 适配层） |
+| `page` | 根块（编辑器 / 服务端新建的页面） | 通常为空（旧文档可能有正文） | `front_matter`（原文 YAML）、`title`（Mica 适配层） |
 | `paragraph` | 段落 | 行内文本 | `marks`、`li`、`quote`、`qbreak` |
 | `heading` | 标题 | 行内文本 | `level`（1–6）、`marks`、`quote`、`qbreak` |
 | `bulleted_list` | 无序列表项 | 行内文本 | `indent`、`loose`、`marker`、`marks`、`quote`、`qbreak` |
@@ -467,6 +475,8 @@ void debugSetMarkdownCodec(MarkdownCodec? codec) => _codec = codec;
 | `null` / 缺失 / 其他 | 空单元格 | 空 |
 
 `encode_cell(x)`：`x.marks` 非空 → 对象；为空 → `serialize_inline(x.text, [])`（转义后的源码字符串，保证 I3）。
+**已知不无损的两类**（I3 的除外项）：无标记的裸 URL / 邮箱读回会多一个 `link` 标记，首尾空白读回会被去掉。
+两者都是现有存储行为，旧客户端也这样读；是否改（例如对这类单元格改存 `{text, marks: []}` 对象）在 S4 决定，见 S4 T4.8。
 **注意**：无格式但含字面 `*` 的文本必须转义后再存成字符串，否则读者会把它解析成格式。
 
 ## 7. 性能预算（S0 测基线，S2/S3/S4 验收）
