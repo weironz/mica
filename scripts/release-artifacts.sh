@@ -30,6 +30,10 @@ done
 require_tagged_tree "$version"
 out=$(dist_dir "$version")
 mkdir -p "$out"
+# A failed run must not leave a stale manifest behind to claim coverage this
+# attempt never produced (the updater trusts the file's existence, not when it
+# was written). Cleared BEFORE anything builds, then rewritten at the end.
+rm -f "$out"/sha256-*.txt
 os=$(host_os)
 note "host: $os  ->  $out/"
 
@@ -119,6 +123,22 @@ case "$os" in
   *) fail "unsupported host $(uname -s)" ;;
 esac
 
-(cd "$out" && sha256sum -- * 2>/dev/null | grep -v ' sha256-' > "sha256-$os.txt" || true)
+# One manifest PER PLATFORM this run produced, not one for the host: the branch
+# above can build another platform's asset (Windows/macOS -> Linux CLI in
+# Docker), and the updater on that platform asks for its own sha256-<os>.txt by
+# name. The stale manifests were already cleared before the build, so only what
+# this run really produced is written now.
+for manifest in sha256-windows.txt sha256-linux.txt sha256-macos.txt; do
+  : > "$out/$manifest"
+  for f in "$out"/*; do
+    name=${f##*/}
+    case "$name" in sha256-*.txt) continue ;; esac
+    manifest_of_asset=$(manifest_for_asset "$name") \
+      || fail "$name has no platform manifest — teach manifest_for_asset (scripts/lib-local.sh) about it, or the updater on that platform can never verify it"
+    [ "$manifest_of_asset" = "$manifest" ] || continue
+    (cd "$out" && sha256sum "$name") >> "$out/$manifest"
+  done
+  [ -s "$out/$manifest" ] || rm -f "$out/$manifest"
+done
 note "built:"
 ls -l "$out"

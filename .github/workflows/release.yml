@@ -81,60 +81,36 @@ jobs:
   draft:
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
+    # The ONE place the version is resolved, and the only place it is validated
+    # against this tree. `windows`, `cli` and `images` declare `needs: draft` and
+    # read these outputs, so a refusal here skips every build and push — and no
+    # leg can tag an artifact with a version another leg never saw (#119). This
+    # job is not gated on the publish condition; only the step that creates the
+    # draft is, so dry runs still resolve and validate.
     outputs:
       version: ${{ steps.ver.outputs.version }}
       tag: ${{ steps.ver.outputs.tag }}
     steps:
+      # The tag is not evidence of anything: `git tag v0.13.29 && git push`
+      # without `just release` (which is what bumps) builds an installer FILE
+      # named 0.13.29 around a binary whose kAppVersion is still 0.13.28, and
+      # the in-app updater compares exactly that number. Resolution AND that
+      # check live in scripts/release-version.sh — one resolver, one validation,
+      # exercised by scripts/test-release-version.sh on both trigger paths.
+      - uses: actions/checkout@v5
+
       - name: Resolve version
         id: ver
         shell: bash
-        run: |
-          # "An explicit version was given" — true for workflow_dispatch AND
-          # workflow_call, empty for a tag push, which reads it off the tag name.
-          # Keyed on the INPUT rather than on `event_name` so a third caller
-          # cannot silently fall through to `GITHUB_REF_NAME` and build a
-          # release named after a branch.
-          if [ -n "${{ inputs.version }}" ]; then
-            v="${{ inputs.version }}"
-          else
-            v="${GITHUB_REF_NAME#v}"
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "tag=v$v" >> "$GITHUB_OUTPUT"
-
-      # The tag is not evidence of anything. Every job below reads the version
-      # from the tag NAME alone, so `git tag v0.13.29 && git push` — without
-      # `just release`, which is what bumps — builds an installer FILE named
-      # 0.13.29 around a binary whose kAppVersion is still 0.13.28. The in-app
-      # updater compares exactly that number, so the update either never offers
-      # itself or offers itself forever.
-      #
-      # Asymmetry worth naming: `verify-prod` already catches the server half at
-      # deploy time (it asserts /api/health reports the version being deployed).
-      # The desktop half had no such check anywhere — and desktop is the half
-      # that auto-updates.
-      #
-      # Asserted on the dispatch path too, not only on tag pushes. A manual run
-      # builds from the default branch, so a version input that disagrees with
-      # that tree mislabels the artifact in exactly the same way — including on
-      # a publish=false dry run, whose entire output is that artifact.
-      - uses: actions/checkout@v5
-
-      - name: The version must match the tree it is built from
-        shell: bash
-        # Through env, not ${{ }} inside the script body: the value comes from a
-        # tag name or a dispatch input, and interpolating either straight into
+        # Through env, not interpolated into the script body: the value comes
+        # from a tag name or a dispatch input, and pasting either straight into
         # shell is a script-injection seam for no benefit.
         env:
-          WANT: ${{ steps.ver.outputs.version }}
+          RELEASE_VERSION_INPUT: ${{ inputs.version }}
         run: |
-          got=$(bash scripts/manifest-version.sh)
-          [ "$got" = "$WANT" ] || {
-            echo "::error::asked for $WANT, but this tree says $got." \
-                 "Was it tagged by hand instead of with 'just release $WANT'?"
-            exit 1
-          }
-          echo "==> $WANT matches pubspec / kAppVersion / Cargo.toml"
+          v=$(bash scripts/release-version.sh "$RELEASE_VERSION_INPUT")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
 
       - name: Create the draft release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
@@ -166,23 +142,6 @@ jobs:
         run: ./scripts/test-installer-wait.ps1
 
       - uses: ./.github/actions/setup-flutter
-
-      - name: Resolve version
-        id: ver
-        shell: bash
-        run: |
-          # "An explicit version was given" — true for workflow_dispatch AND
-          # workflow_call, empty for a tag push, which reads it off the tag name.
-          # Keyed on the INPUT rather than on `event_name` so a third caller
-          # cannot silently fall through to `GITHUB_REF_NAME` and build a
-          # release named after a branch.
-          if [ -n "${{ inputs.version }}" ]; then
-            v="${{ inputs.version }}"
-          else
-            v="${GITHUB_REF_NAME#v}"
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "tag=v$v" >> "$GITHUB_OUTPUT"
 
       - run: flutter config --enable-windows-desktop
 
@@ -228,13 +187,13 @@ jobs:
         shell: pwsh
         run: >
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          /DAppVersion=${{ steps.ver.outputs.version }} installer\mica.iss
+          /DAppVersion=${{ needs.draft.outputs.version }} installer\mica.iss
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v5
         with:
-          name: Mica-Setup-${{ steps.ver.outputs.version }}
-          path: clients/mica_flutter/installer/Output/Mica-Setup-${{ steps.ver.outputs.version }}.exe
+          name: Mica-Setup-${{ needs.draft.outputs.version }}
+          path: clients/mica_flutter/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
           if-no-files-found: error
 
       # Smoke-test the ACTUAL packaged installer before it can reach a release.
@@ -250,7 +209,7 @@ jobs:
         shell: pwsh
         working-directory: .
         run: |
-          $ver = '${{ steps.ver.outputs.version }}'
+          $ver = '${{ needs.draft.outputs.version }}'
           ./scripts/smoke-installer.ps1 -Setup "clients\mica_flutter\installer\Output\Mica-Setup-$ver.exe"
 
       - name: Publish installer to release
@@ -259,7 +218,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
+          tag_name: ${{ needs.draft.outputs.tag }}
           # Stays a draft until the `publish` job flips it — otherwise this
           # upload would publish a release that has no cli binaries yet, which is
           # the exact window the old `needs: windows` ordering existed to close.
@@ -271,7 +230,7 @@ jobs:
           prerelease: false
           make_latest: true
           fail_on_unmatched_files: true
-          files: clients/mica_flutter/installer/Output/Mica-Setup-${{ steps.ver.outputs.version }}.exe
+          files: clients/mica_flutter/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
 
   cli:
     # Build + publish the mica-cli binary for each desktop OS.
@@ -319,23 +278,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-
-      - name: Resolve version
-        id: ver
-        shell: bash
-        run: |
-          # "An explicit version was given" — true for workflow_dispatch AND
-          # workflow_call, empty for a tag push, which reads it off the tag name.
-          # Keyed on the INPUT rather than on `event_name` so a third caller
-          # cannot silently fall through to `GITHUB_REF_NAME` and build a
-          # release named after a branch.
-          if [ -n "${{ inputs.version }}" ]; then
-            v="${{ inputs.version }}"
-          else
-            v="${GITHUB_REF_NAME#v}"
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "tag=v$v" >> "$GITHUB_OUTPUT"
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -391,7 +333,7 @@ jobs:
         id: stage
         shell: bash
         run: |
-          asset="mica-cli-${{ steps.ver.outputs.version }}-${{ matrix.suffix }}"
+          asset="mica-cli-${{ needs.draft.outputs.version }}-${{ matrix.suffix }}"
           # A cross-target build lands under target/<triple>/release, not
           # target/release. Copying the wrong one would silently ship the
           # glibc binary again under a name that promises otherwise.
@@ -454,7 +396,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
+          tag_name: ${{ needs.draft.outputs.tag }}
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
@@ -474,7 +416,11 @@ jobs:
     # IMMUTABLE version tag (never `latest`): a tag that never existed before
     # cannot be served stale.
     #
-    # Runs independently of the release jobs (attaches nothing to the release).
+    # Attaches nothing to the release, but it is NOT independent of `draft`: the
+    # version it tags images with is the one `draft` validated against this tree.
+    # Without the dependency a refused version (tag says 0.13.69, tree says
+    # 0.13.68) still pushed 0.13.69 images under publish=true (#119).
+    needs: draft
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
     strategy:
@@ -497,22 +443,6 @@ jobs:
         run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v5
-
-      - name: Resolve version
-        id: ver
-        shell: bash
-        run: |
-          # "An explicit version was given" — true for workflow_dispatch AND
-          # workflow_call, empty for a tag push, which reads it off the tag name.
-          # Keyed on the INPUT rather than on `event_name` so a third caller
-          # cannot silently fall through to `GITHUB_REF_NAME` and build a
-          # release named after a branch.
-          if [ -n "${{ inputs.version }}" ]; then
-            v="${{ inputs.version }}"
-          else
-            v="${GITHUB_REF_NAME#v}"
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
 
       # Only the web image needs a Flutter bundle baked in.
       - uses: ./.github/actions/setup-flutter
@@ -575,8 +505,8 @@ jobs:
           provenance: false
           sbom: false
           tags: |
-            registry.cn-shenzhen.aliyuncs.com/willspace/mica-${{ matrix.img }}:v${{ steps.ver.outputs.version }}
-            willdockerhub/mica-${{ matrix.img }}:v${{ steps.ver.outputs.version }}
+            registry.cn-shenzhen.aliyuncs.com/willspace/mica-${{ matrix.img }}:v${{ needs.draft.outputs.version }}
+            willdockerhub/mica-${{ matrix.img }}:v${{ needs.draft.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.img }}
           cache-to: type=gha,mode=max,scope=${{ matrix.img }}
 

@@ -70,6 +70,19 @@ jobs:
         run: |
           bash scripts/test-ci-paths.sh
           bash scripts/test-flutter-sdk-reuse.sh
+
+      # Release and CI scripts, exercised against disposable fixtures and a
+      # stubbed toolchain/Docker/gh. They are real behavioural tests, not reads
+      # of this file's text: a cross-built asset without its checksum manifest
+      # (#113), a release that cannot pass its own docs gate (#125), the version
+      # resolver every release job shares (#119), and the per-run Compose/nginx
+      # stacks this workflow starts and must tear down (#126).
+      - name: Test release scripts and CI stack scripts
+        run: |
+          bash scripts/test-release-artifacts.sh
+          bash scripts/test-release-orchestration.sh
+          bash scripts/test-release-version.sh
+          bash scripts/test-ci-stacks.sh
       - id: groups
         env:
           CI_SCOPE: ${{ inputs.scope }}
@@ -395,29 +408,11 @@ jobs:
       # nginx, not a plain static server: two of the assertions are ABOUT nginx —
       # that /verify-email, /reset-password and /s/ beat the SPA fallback, and that
       # the fixed-name entry files are not cacheable. A different server would test
-      # a routing table nobody deploys. The dev config points at
-      # host.docker.internal, which resolves on the runner via --add-host.
+      # a routing table nobody deploys. The steps live in scripts/ci-web-e2e.sh so
+      # the serve/stop pair is exercised by test-ci-stacks.sh, not only by reading
+      # this file.
       - name: Serve the bundle through the real nginx config
-        run: |
-          set -euo pipefail
-          # BEFORE nginx starts: flutter creates build/web mode 750 and the
-          # container runs a different uid, so it would 403 on everything.
-          chmod -R a+rX clients/mica_flutter/build/web
-          # `/etc/nginx/nginx.conf`, NOT conf.d/default.conf — this file is a whole
-          # nginx config (`worker_processes`, `events`, `http { … }`), not a snippet,
-          # and dropping it into conf.d makes nginx refuse to start with
-          # `"worker_processes" directive is not allowed here`. Same path
-          # docker-compose.yml:111 uses; the mount has to match the file's shape.
-          docker run -d --name mica-web-e2e \
-            --add-host host.docker.internal:host-gateway \
-            -p 8090:80 \
-            -v "$PWD/deploy/nginx.dev.conf:/etc/nginx/nginx.conf:ro" \
-            -v "$PWD/clients/mica_flutter/build/web:/usr/share/nginx/html:ro" \
-            nginx:alpine
-          # Fail here if the config is bad, rather than 60s later as "nginx cannot
-          # reach the api" — a wrong diagnosis costs more than the wait.
-          sleep 3
-          docker exec mica-web-e2e nginx -t
+        run: bash scripts/ci-web-e2e.sh serve
 
       # Deliberately NO `set -e` in this step, and the polling is written out longhand.
       # The first version used `set -euo pipefail` with `curl … && break` inside the
@@ -596,6 +591,19 @@ jobs:
         if: failure()
         run: tail -100 /tmp/api.log
 
+      # The container started above has a FIXED NAME and a FIXED port, and
+      # nothing else reaps it: on a self-hosted runner the next run died with
+      #   docker: Error response from daemon: Conflict. The container name
+      #   "/mica-web-e2e" is already in use
+      # (`--rm` is not an option: the job runs `docker exec … nginx -t` and
+      # serves the whole browser suite out of this container, so it must live
+      # past its start step.) Always, and after the failure log above, so the
+      # evidence is captured before the container is removed. The
+      # GitHub-managed `services:` above are the runner's to clean up, not ours.
+      - name: Remove the nginx container
+        if: always()
+        run: bash scripts/ci-web-e2e.sh stop
+
   # The api as a CONTAINER — the one shape nothing else here exercises.
   #
   # `rust` builds the binary on the runner. `web-e2e` proves nginx routes to an
@@ -647,21 +655,13 @@ jobs:
       - name: Stub the web bundle
         run: mkdir -p deploy/web && echo 'ci stub' > deploy/web/index.html
 
-      # The quickstart stack pulls published images; the from-source overlay swaps the
-      # api for the one just built. --env-file carries committed throwaway values.
-      # --wait blocks until every service with a healthcheck reports healthy, so
-      # a stack that never comes up fails HERE, with compose naming the service,
-      # instead of as an opaque timeout in the curl below. deploy/Dockerfile.api
-      # carries the api's healthcheck, so this covers it.
-      #
-      # --renew-anon-volumes --force-recreate: start from a clean state instead
-      # of inheriting whatever a previous run left behind.
+      # The quickstart stack pulls published images; the from-source overlay swaps
+      # the api for the one just built. The boot/logs/down trio lives in
+      # scripts/ci-container-stack.sh so it is exercised by test-ci-stacks.sh and
+      # all three commands always target ONE per-run compose project (never the
+      # checkout directory's `mica` — that name belongs to a developer's stack).
       - name: Boot the stack
-        run: |
-          docker compose --project-directory . --env-file e2e/.env.ci \
-            -f deploy/docker-compose.single.yml \
-            -f e2e/docker-compose.from-source.yml \
-            up -d --renew-anon-volumes --force-recreate --wait --wait-timeout 300
+        run: bash scripts/ci-container-stack.sh up
 
       # /api/ready, not /api/health: ready touches the database, so this asserts
       # the api reached postgres rather than merely that its process is alive.
@@ -689,7 +689,14 @@ jobs:
 
       - name: Container logs (on failure)
         if: failure()
-        run: |
-          docker compose --project-directory . --env-file e2e/.env.ci \
-            -f deploy/docker-compose.single.yml \
-            -f e2e/docker-compose.from-source.yml logs --tail 120
+        run: bash scripts/ci-container-stack.sh logs
+
+      # `up -d` leaves the whole stack behind — ports 80/9000/9001, the project
+      # network, the postgres/rustfs named volumes — and nothing else tears it
+      # down. Scoped to the same per-run project the boot step used, so a later
+      # run fails on "port is already allocated" instead of inheriting data, and
+      # a developer's stack on the same daemon is never in range. Always, and
+      # after the logs above.
+      - name: Tear the stack down
+        if: always()
+        run: bash scripts/ci-container-stack.sh down

@@ -93,3 +93,20 @@ require_gh() {
 }
 
 dist_dir() { echo "dist/v$1"; }
+
+# Which checksum manifest an asset is verified against. The in-app updater
+# fetches sha256-<os>.txt on its own platform and refuses a binary that file
+# does not cover (crates/cli/src/update.rs), so the NAME is a compatibility
+# contract: one manifest per platform, listing only that platform's files.
+#
+# A host can build another platform's asset (a Windows box cross-builds the
+# Linux CLI in Docker), and that is exactly how the Linux half of a release
+# went unverifiable: the only manifest written was the HOST's (#113).
+manifest_for_asset() {
+  case "${1:-}" in
+    *-linux-*) echo sha256-linux.txt ;;
+    *-macos-*) echo sha256-macos.txt ;;
+    *-windows-* | Mica-Setup-*) echo sha256-windows.txt ;;
+    *) return 1 ;;
+  esac
+}

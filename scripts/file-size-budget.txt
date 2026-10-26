@@ -14,4 +14,4 @@
 21091 clients/mica_flutter/lib/main.dart               # 外壳一整库（main_shell/workspace_view/dialogs 及 settings×6 part 合计）；#81 接线后 tree_nav/editor_pane/world×2 四个新 part 并入本库口径（此前为未登记的独立文件，全库净行数仍降），字体预热库已拆出，views/auth/sync 域已控制器化；自更新 UI 与状态拆为独立库
 7192 clients/mica_flutter/lib/editor/editor.dart       # 编辑器 State 主体 + hooks/ai/dialogs/resources/history_ui 五个 part 的合计
 5739 clients/mica_flutter/lib/editor/render.dart      # 自绘渲染管线与三个 part 合计；布局循环前解析光标标量，保留 #63 的代码块复用快路径
-4146 clients/mica_flutter/lib/editor/controller.dart  # 编辑器 controller + history/commits part 的合计
+4139 clients/mica_flutter/lib/editor/controller.dart  # 编辑器 controller + history/commits part 的合计

@@ -51,6 +51,7 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 | DB 集成测试**真的跑了**(本地 Postgres 没起就拒绝发版) | 同上 | 2026-08-25 |
 | `cargo test` / `clippy -D warnings` / `flutter analyze` + `test` | 同上 | 2026-08-25 |
 | **tag 必须与它所在那棵树的版本号一致** | `.github/workflows/release.yml` | 2026-08-26 |
+| **所有构建/推送 job 只消费 `draft` 校验过的版本（`needs: draft`，版本只解析一次）** | `.github/workflows/release.yml` | 2026-10-25 |
 | **带迁移的发布,上线前自动落 `pg_dump` 还原点** | `ansible/deploy.yml` | 2026-08-26 |
 | 部署失败自动复原 `MICA_VERSION` | 同上 | 2026-08-25 |
 
@@ -121,7 +122,7 @@ just release-images X.Y.Z      # 三个镜像 → 阿里云 ACR + Docker Hub（�
 - 产物只能从**正好是该 tag 的干净提交**构建，且三处版本号一致（`require_tagged_tree`）——对应 CI 的「version must match the tree」。
 - `release-upload` 只往 **draft** 上挂；已发布的 release 拒绝覆盖（`FORCE=1` 才行）。
 - `release-publish` 缺安装包 / Windows CLI / Linux CLI 任一就拒绝；公开后断言 `/releases/latest` 指向它——应用内更新读的就是这个。
-- 每台机器上传一份 `sha256-<os>.txt` 校验和。
+- 校验和按**平台**一份，不是按机器一份：`release-artifacts` 为该次运行产出的每个平台各写 `sha256-<os>.txt`（只列本平台文件，且构建**开始前**清掉旧 manifest，失败不残留过期校验文件），所以 Windows 机在 Docker 里交叉构建的 Linux CLI 也有 `sha256-linux.txt`。`release-publish` 对每个必需产物（外加已挂上的 macOS CLI）逐一核对：manifest 存在、manifest 列出该产物、且哈希等于 GitHub 记录的该 asset digest（无 digest 时下载产物实算）。缺 manifest 或对不上就拒绝——否则那个平台的应用内更新拿到的是无法校验的二进制（#113）。
 
 **部署**同样不依赖 Actions：`just deploy-prod X.Y.Z --check --diff`（彩排）→ `just deploy-prod X.Y.Z`。
 Windows 上没有可用的 ansible 时，`deploy-prod.sh` 会**自动在 `alpine/ansible` 容器里重跑自己**
@@ -287,6 +288,14 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
 > 写着「先跑 release-check」,那个顺序根本过不了。
 >
 > 它**不推送**。推送是对外不可逆的一步,留成显式的 `git push origin main vX.Y.Z`。
+>
+> bump 覆盖的不只是代码版本：`README.md` 与 `docs/ops/deploy.md` 里 quickstart 的
+> `RELEASE=` pin 也由它同步，和代码版本进同一个 commit。门禁要求这两处已经是新版本，
+> 所以「干净树一条命令发 N+1」以前必然会撞上自己刚制造的不一致（#125）。
+>
+> 门禁失败时**不做自动回滚**：脚本列出被改动的那 6 个文件，并给出「修好后按清单收尾」
+> 与「`git checkout --` 丢弃 bump 后重跑」两条命令。门禁要跑十几分钟，期间工作区可能
+> 已经有别人的改动，自动还原会连它一起吃掉。
 >
 > 下面第 1–3 步保留是为了说清它在做什么、以及为什么必须这么做,不是让你手动照做。
 

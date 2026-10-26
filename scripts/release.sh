@@ -34,7 +34,16 @@ tag="v$version"
 
 bash scripts/check-migration-tracking.sh
 
-# Refuse on a dirty tree BEFORE touching anything: the bump edits four files, and
+# What the bump edits, BY NAME. Declared before the gate because two later steps
+# need the same list: the commit, and the failure report when the gate refuses —
+# "which of my files did this script touch?" has to stay answerable afterwards.
+#
+# The two quickstart docs are on it because release-bump moves their `RELEASE=`
+# pin: the gate requires those docs to name the version being released, so a bump
+# that skipped them could never pass its own gate (#125).
+bump_files=(Cargo.toml Cargo.lock clients/mica_flutter/pubspec.yaml clients/mica_flutter/lib/main.dart README.md docs/ops/deploy.md)
+
+# Refuse on a dirty tree BEFORE touching anything: the bump edits six files, and
 # once it has, "what did I have uncommitted?" is no longer answerable.
 git diff --quiet && git diff --cached --quiet \
   || { echo "REFUSED: working tree is dirty — commit or stash first" >&2; exit 1; }
@@ -48,7 +57,30 @@ echo "==> 1/4  bump"
 bash scripts/release-bump.sh "$version"
 
 echo "==> 2/4  gate (this is the part that used to be skippable)"
-bash scripts/release-check.sh
+# Diagnosis, NOT rollback. A refusal here usually means something real is wrong
+# in the tree — and the owner may have edits in it by now — so the bump stays
+# exactly where it is, named, with both ways forward printed. Reverting
+# automatically could destroy work that arrived while the gate ran.
+if ! bash scripts/release-check.sh; then
+  {
+    echo
+    echo "REFUSED: the gate failed. Nothing was committed or tagged."
+    echo
+    echo "  The bump to $version is still in the working tree, uncommitted:"
+    printf '    %s\n' "${bump_files[@]}"
+    echo
+    echo "  Fix what the gate reported, then finish by hand:"
+    echo "      bash scripts/release-check.sh"
+    echo "      git add -- ${bump_files[*]}"
+    echo "      git commit -m \"chore(release): $version\" -- ${bump_files[*]}"
+    echo "      git tag $tag"
+    echo
+    echo "  Or discard the bump and start over (nothing else is touched):"
+    echo "      git checkout -- ${bump_files[*]}"
+    echo "      just release $version"
+  } >&2
+  exit 1
+fi
 
 echo "==> 3/4  commit"
 # The bump's files BY NAME, not `git add -A`. The tree was clean at the start,
@@ -57,7 +89,6 @@ echo "==> 3/4  commit"
 # the owner's decision was written during the 0.13.59 gate, `-A` swept it into
 # "chore(release): 0.13.59", and it reached main unreviewed. Anything else that
 # changed meanwhile now stays in the working tree, visible, for its own commit.
-bump_files=(Cargo.toml Cargo.lock clients/mica_flutter/pubspec.yaml clients/mica_flutter/lib/main.dart)
 git add -- "${bump_files[@]}"
 git commit -q -m "chore(release): $version" -- "${bump_files[@]}"
 if ! { git diff --quiet && git diff --cached --quiet; }; then
