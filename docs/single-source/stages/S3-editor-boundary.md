@@ -1,0 +1,227 @@
+# S3 编辑器边界改走引擎，删除 Dart 块级解析与序列化（5–7 天）
+
+## 目标
+
+编辑器所有「Markdown 进来 / 出去」的地方都改调 `markdownCodec`：
+
+| 方向 | 场景 | 现在（Dart） | 改为 |
+| --- | --- | --- | --- |
+| 进 | 粘贴 Markdown / HTML（经 `htmlToMarkdown`）、AI 插入、AI「当前页」 | `markdownToBlocks` | `markdownCodec.parseBlocks` |
+| 进 | 单行粘贴里的行内公式 | `parseInlineMath` | `markdownCodec.parseInlineMath` |
+| 出 | 复制的 Markdown（`selectionText`）、AI 输入、`documentMarkdown` | `_rangeMarkdown` | 切片 → `markdownCodec.serializeBlocks` |
+| 出 | 复制的 text/html（`selectionHtml`、单元格选区、表格复制） | `selectionHtml` / `inlineToHtml` | 切片 → `markdownCodec.renderClipboardHtml` |
+| 辅助 | `htmlToMarkdown` 里的数学区间 | `mathRunSpans`（Dart） | `markdownCodec.mathRunSpans` |
+
+然后删除不再有调用者的 Dart 镜像（03 §2 标为 **S3-删** 的全部内容）。行内解析器 `parseInline` 和 `inlineToMarkdown` 在本阶段**仍被表格路径使用**，S4 删。
+
+## 前置
+
+- S2 全部验收通过（门面在两个平台可用、契约测试通过）。
+- 在**切换前**的提交上生成 S0 T0.5 的剪贴板快照与差分报告（作为对比基准）。
+
+## 任务
+
+### T3.1 准备：搬走保留的 Dart 粘贴启发式
+
+- 新建 `lib/editor/paste_repair.dart`，把 `retagMislabeledFences`、`unwrapNestedFences` 从 `markdown.dart` **原样剪切**过来
+  （连同它们只给自己用的私有辅助函数）。文件头注释：
+
+  ```dart
+  /// Paste-only repairs for Markdown that LLM chat UIs emit (a second equal-length
+  /// fence around a code block; Python labelled ```bash). They run on the pasted
+  /// TEXT before it reaches the engine and are deliberately not part of the
+  /// grammar: file import, MCP writes and the server parse strictly. Kept in Dart
+  /// because `retagMislabeledFences` leans on `highlight.dart`'s language
+  /// detection. docs/single-source/02-architecture.md §2.1, decision D7.
+  ```
+
+- `editor.dart`、`controller.dart`、`highlight.dart` 改 import。`ai_edits.dart`、`editor.dart` 的 `BlockSpec` 改从
+  `../markdown/markdown_codec.dart` 导入。
+- 提交：`refactor(editor): T3.1 move paste repairs out of the markdown mirror`。全部测试照常通过（纯搬家）。
+
+### T3.2 解析入口切换（7 处）
+
+| 文件 | 位置（约） | 改法 |
+| --- | --- | --- |
+| `editor.dart` | 1268（单行富文本内联合并） | `final specs = markdownCodec.parseBlocks(markdown);` |
+| `editor.dart` | 1297（多行 / 富文本粘贴） | `_controller.insertBlocksReplacingSelection(markdownCodec.parseBlocks(markdown));` |
+| `editor.dart` | 1787、5664、5756 | 同上 |
+| `editor_ai.dart` | 383 | 同上 |
+| `main_shell.dart` | 2987（`_aiCurrentFromMarkdown`） | 同上（`main.dart` 库行数净变化 ≤ 0） |
+
+- 模式：一律 `ParseMode.Document`（`fragment: false`）——粘贴一个带 front matter 的 `.md` 时丢掉元数据，与现在 Dart 的行为一致
+  （`test/front_matter_test.dart`「Metadata is dropped on paste」）。
+- 降级：粘贴路径（`_handleRichPaste`）用 `try { … } on MarkdownCodecException { return false; }` 包住，返回 `false` 让调用方
+  落到现有的纯文本分支（02 §5.2）。AI 路径捕获后显示现有的错误提示。**不要**在每个调用点各写一份 catch：
+  在 `editor.dart` 加一个私有辅助 `List<BlockSpec>? _parseOrNull(String md)`，失败时记一次日志并返回 `null`。
+- `\r\n` 归一化（`editor.dart` 约 1144 行）保持在调用引擎之前。
+
+### T3.3 行内公式与数学区间
+
+- `editor.dart` 约 1232：`final parsed = markdownCodec.parseInlineMath(plain);`（返回 `InlineText`，字段名与原 record 相同）。
+- `html_to_markdown.dart` 约 56：`final spans = markdownCodec.mathRunSpans(s);`，删掉 `import 'marks.dart' show mathRunSpans;`。
+- 验证：S1 T1.5 已把 `paste_formula_test.dart` 里直接测 `parseInlineMath` 的用例移植成 Rust 测试；本任务把 Dart 侧这些用例改为调门面
+  （B 类测试），全部通过。
+
+### T3.4 Rust：实现剪贴板 HTML 方言（`HtmlProfile::Clipboard`）
+
+在 `crates/md-core/src/html/clipboard.rs` 实现，`render_html_body` 在 `profile == Clipboard` 时调用它。
+**规格 = 现在的 Dart 实现**：逐行阅读并 1:1 移植
+
+- `clients/mica_flutter/lib/editor/controller.dart` 的 `selectionHtml`（约 1633–1798）与 `_tableHtml`（约 1799–1822）；
+- `clients/mica_flutter/lib/editor/marks.dart` 的 `inlineToHtml`、`_renderSpanHtml`、`escapeHtml`、`escapeHtmlAttr`（约 2563–2682）。
+
+已知必须保留的约定（不完整，以 Dart 源码为准）：
+
+| 块 / 标记 | 输出 |
+| --- | --- |
+| `math_block` | `<p><span data-mica-math="1">$$…$$</span></p>`（LaTeX 原文 HTML 转义） |
+| 行内 `math` 标记 | 照 `_renderSpanHtml` 的 `data-mica-math` 写法 |
+| `footnote_def` | `<p data-mica-fndef="label">…行内…</p>` |
+| 脚注引用 | `data-mica-footnote` 属性 |
+| 代码块 | `<pre><code class="language-x">…</code></pre>`；语言取 `data.language`（Dart 预处理已填好，见 02 §2.1） |
+| mermaid | **保持代码块**（`language-mermaid`），绝不输出 SVG |
+| 列表 | 连续、同引用深度、完整选中的列表项按 `data.indent` 输出**嵌套** `<ul>/<ol>`；`todo` 的复选框写法照 Dart |
+| 引用 | 按 `data.quote` 深度开合嵌套 `<blockquote>`（Dart 的 `setQuote`） |
+| 表格 | `<table>`，单元格内容走行内 HTML |
+| 图片 | `<img src alt>`，src 取 `image_srcs[file_id]`，否则 `data.url` |
+
+部分选中的块（例如只选了段落中间几个字）：切片在 Dart 侧完成（T3.5），Rust 只看到切好的块，所以 Rust 侧**不需要**选区逻辑；
+但 Dart `selectionHtml` 里「`full` 选中才保留引用深度」之类的判断依赖选区，移植时改为：Dart 构造 BlockSpec 时，对不完整选中的块
+**去掉** `quote` / `qbreak`（与 Dart 现有 `setQuote(full ? depth : 0)` 等价），并在注释里写明对应关系。
+
+测试：
+1. `crates/md-core/tests/clipboard_html.rs`：每条约定至少一例，期望字符串取自当前 Dart 输出。
+2. **移植验收（Dart，切换前跑）**：`test/clipboard_html_port_test.dart`——对 30 个 fixture 文档全选，断言
+   `markdownCodec.renderClipboardHtml(切片块)` 与 `controller.selectionHtml()`（旧 Dart 实现）**逐字节相同**。
+   这个测试只在 T3.5 删除 Dart 实现之前存在；不同之处要么修 Rust，要么在执行记录里逐条说明为什么接受差异，然后才能进入 T3.5。
+
+### T3.5 复制 / 导出改走引擎
+
+在 `controller.dart` 新增：
+
+```dart
+/// The selection as engine blocks: each slice of [_selectionSlices] becomes a
+/// [BlockSpec] carrying only the selected text, with marks clipped to it.
+/// Partially selected blocks lose their quote grouping (the old HTML writer's
+/// `setQuote(full ? depth : 0)`). Code blocks get the language the copy should
+/// carry ([_copyLanguage] — auto-detected, Dart-only, 02 §2.1).
+List<BlockSpec> selectionBlocks() {
+  final out = <BlockSpec>[];
+  for (final sl in _selectionSlices()) {
+    final node = nodes[sl.node];
+    final full = sl.from == 0 && sl.to == node.text.length;
+    final data = Map<String, dynamic>.from(node.data);
+    if (!full) {
+      data.remove('quote');
+      data.remove('qbreak');
+    }
+    if (node.kind == 'code_block') {
+      final lang = _copyLanguage(node);
+      lang.isEmpty ? data.remove('language') : data['language'] = lang;
+    }
+    final marks = clipMarks(marksFromData(node.data), sl.from, sl.to);
+    marks.isEmpty ? data.remove('marks') : data['marks'] = marksToJson(marks);
+    out.add((kind: node.kind, text: node.text.substring(sl.from, sl.to), data: data));
+  }
+  return out;
+}
+```
+
+- `clipMarks(marks, from, to)`：放进 `marks.dart` 的**模型部分**（留下的那部分）。逻辑从 `CellEditController.selectionHtml`
+  （`cell_edit_controller.dart` 约 46–70 的裁剪循环）提取，两处共用。原子块（表格、图片、分隔线）的切片 `from/to` 为整块，`clipMarks` 原样返回。
+- `selectionText({imageUrls})`：保留「光标在原子块上则选中整块」的现有逻辑，然后
+  `return markdownCodec.serializeBlocks(selectionBlocks(), assets: imageUrls ?? const {});`
+- `documentMarkdown({imageUrls})`：对全部节点构造 BlockSpec（不切片，语言同样预处理）→ `serializeBlocks`。
+- `selectionHtml({imageUrls})`：`return markdownCodec.renderClipboardHtml(selectionBlocks(), imageSrcs: imageUrls ?? const {});`
+- `CellEditController.selectionHtml()`：`renderClipboardHtml([(kind: 'paragraph', text: 选中文本, data: {'marks': …})])`。
+- `editor.dart` 约 4105 的表格复制 HTML：`renderClipboardHtml([(kind: 'table', text: '', data: node.data)])`。
+- 降级：`selectionHtml` / `selectionText` 捕获 `MarkdownCodecException` 返回 `''`（`_copySelection` 已经处理「HTML 为空只写纯文本」）。
+- `selectionClipboardText`（text/plain）**不变**，其中表格单元格的 `parseInline(cell).text` 暂时保留（S4 改）。
+
+### T3.6 删除
+
+以下全部删除（先 `grep -rn` 确认零调用者，结果贴执行记录）：
+
+- `lib/editor/markdown.dart`（整个文件）
+- `lib/editor/list_serialization.dart`（整个文件）
+- `table.dart`：`looksLikeGfmTable`、`_startsBlock`、`_splitRow`、`tableToMarkdown`
+- `controller.dart`：`_rangeMarkdown`、`_blockPrefix`、`_continuationPrefix`、`_codeFenceFor`、`_tableHtml`，以及 `selectionHtml` 的旧函数体
+- `marks.dart`：`escapeBlockLeader`、`escapeBlockLeaders`、`escapeMarkdownTitle`、`escapeMarkdownDestination`、`escapeInline`、
+  `escapeHtml`、`escapeHtmlAttr`、`inlineToHtml`、`_renderSpanHtml`、`parseInlineMath`、`mathRunSpans`（若仍有使用者，留到 S4 并记录）
+- `markdown.dart` 删除后，`isThematicBreak` 等随文件消失
+
+删除后：`flutter analyze` 零 error/warning；`bash scripts/check-file-size.sh` 通过（各库只减）。
+
+差分工具（S0 T0.2）同步收缩：块解析、Markdown 序列化、剪贴板 HTML 三类比较的 Dart 一侧已不存在 → 从
+`markdown_differential_test.dart` 删掉这三类，`differential_baseline.json` 只保留行内类别（`parseInline` / `inlineToMarkdown`，S4 删除）。
+删除前最后一次的完整报告贴进执行记录。
+
+### T3.7 行为差异分诊
+
+材料：S2 版差分报告（`build/differential/`）+ 切换前后的剪贴板快照对比（T0.5 的命令在切换后再跑一次，diff 两份 JSON）。
+
+每一条差异归入一类，写进执行记录的分诊表（id、类别、输入摘要、旧输出、新输出、结论）：
+
+| 结论 | 含义 | 处理 |
+| --- | --- | --- |
+| R：Rust 正确 | 旧 Dart 行为是 bug 或偏离规范 | 接受；若影响用户可见行为（粘贴结果变了），列入「用户可见变化」小节 |
+| H：Dart 启发式 | 旧行为是刻意的粘贴/复制体验（D7） | 在调用引擎前后用 Dart 预/后处理保留（像 `paste_repair.dart`）；写明理由 |
+| B：Rust bug | 新行为错 | 在 `md-core` 修，配回归测试（先证明会失败），提交 `fix(md-core): …`；修完重跑差分 |
+| U：待用户决定 | 产品取舍拿不准 | 先按 Rust 行为，列入「待用户决定」表 |
+
+**完成标准**：块级、行内、序列化、剪贴板四类差异全部有结论；B 类全部修复；差分棘轮基线更新为分诊后的结果。
+
+### T3.8 Mica 内复制粘贴往返测试（剪贴板方言的守护）
+
+`test/clipboard_mica_roundtrip_test.dart`（B 类，走门面）：对每个 conformance fixture：
+
+```dart
+final blocks = markdownCodec.parseBlocks(md);
+final html = markdownCodec.renderClipboardHtml(blocks);
+final back = markdownCodec.parseBlocks(htmlToMarkdown(html));
+expect(normalize(back), normalize(blocks));   // 规范化：marks 排序、data 中仅比较 schema 键
+```
+
+已知不能往返的（例如 HTML 不表达的 `loose`），在测试里列为显式例外并写注释；例外清单同时贴执行记录。
+这个测试是 Rust 写端 ⇄ Dart 读端（`htmlToMarkdown`）这条跨语言契约的唯一守护，**必须进门禁**。
+
+### T3.9 测试迁移
+
+按 03 §3 标为 S3 的文件处理：A 类迁到 Rust 后删除（执行记录写对应的 Rust 测试名）；B 类加 `setUpAll(useNativeMarkdownCodec)` 后保留；
+C 类（`markdown_conformance_test`、`markdown_export_conformance_test`）删除——它们被 S2 的门面契约测试取代。
+
+### T3.10 真实路径验证（AGENTS.md：桌面问题桌面验证，Web 用 Playwright 截图）
+
+| 平台 | 场景 | 证据 |
+| --- | --- | --- |
+| Windows 桌面 | 从浏览器复制富文本粘贴；从 ChatGPT 复制带双围栏代码块粘贴；粘贴带 front matter 的 `.md` 内容；Mica 内复制含公式/脚注/嵌套列表/表格的段落再粘贴；复制到 Typora / Word | 截图 + 前后对比说明 |
+| Web（Chrome，生产构建） | 同上的 Mica 内往返；从外部页面粘贴 | Playwright 截图（可复用 `e2e/` 的 harness 页面） |
+| 两端 | AI「读取当前页」→ 发送的 Markdown 与改前一致（或差异已在 T3.7 分诊） | 日志片段 |
+
+### T3.11 门禁
+
+`bash scripts/local-ci.sh all` 全绿；浏览器套件（含契约测试）通过；Windows 集成测试 `markdown_codec_test.dart` 通过；回执贴执行记录。
+
+## 验收
+
+- [ ] `grep -rn "markdownToBlocks\|_rangeMarkdown\|listSerialization\|markdownListLayout\|tableToMarkdown" clients/mica_flutter/lib` 无结果。
+- [ ] `lib/editor/markdown.dart`、`lib/editor/list_serialization.dart` 已删除。
+- [ ] `clipboard_html_port_test` 曾在切换前通过（执行记录有回执），之后随旧实现一起删除。
+- [ ] `clipboard_mica_roundtrip_test` 通过并在门禁中。
+- [ ] T3.7 分诊表完整，B 类全部修复，「用户可见变化」与「待用户决定」两节已写。
+- [ ] 桌面与 Web 的人工验证证据齐全。
+- [ ] `main.dart` 及其他登记库的行数只减不增。
+
+## 风险
+
+| 风险 | 应对 |
+| --- | --- |
+| 剪贴板方言移植不全，Mica 内复制粘贴丢格式 | T3.4 的逐字节移植验收 + T3.8 往返测试 |
+| 粘贴结果的细微变化（列表松紧、空行）被用户感知 | T3.7 分诊，「用户可见变化」写进发版说明 |
+| 某个 Dart 预处理被遗漏（像代码语言识别） | 移植验收逐字节比较会暴露；新增的预处理统一放 `paste_repair.dart` 或 `selectionBlocks()`，不散落 |
+| 门面不可用时粘贴整体失效 | T3.2 的降级 + 测试：`debugSetMarkdownCodec(const UnavailableMarkdownCodec())` 下粘贴退回纯文本 |
+
+## 执行记录
+
+（执行方追加：分诊表、用户可见变化、待用户决定、删除行数统计、证据。）

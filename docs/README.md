@@ -6,6 +6,7 @@
 - 改代码前 → [`dev/lessons.md`](dev/lessons.md)(踩过的坑)与仓库根 [`AGENTS.md`](../AGENTS.md)
 - 发版 / 上线 → [`ops/release.md`](ops/release.md)、[`ops/deploy.md`](ops/deploy.md)
 - 代码评审与修复记录 → [`reviews/`](#reviews--代码评审与修复)
+- 进行中的专项 → [`single-source/`](single-source/README.md)(Markdown 引擎只留 Rust 一份实现,S0–S5)
 
 | 文件夹 | 放什么 |
 | --- | --- |
@@ -16,6 +17,7 @@
 | [`dev/`](#dev--开发工具与接入) | 开发环境、CLI / HTTP API / MCP、踩坑记录 |
 | [`performance/`](#performance--性能分析) | 性能分析与优化记录 |
 | [`reviews/`](#reviews--代码评审与修复) | 全项目代码评审、修复计划与验证 |
+| [`single-source/`](#single-source--单一实现专项) | 专项:Markdown 引擎单一实现(背景、契约、分阶段代码级方案、并行计划、审核清单) |
 | `design/` | 设计稿 01–19(`.dc.html`),采纳记录见 [`features/design-adoption.md`](features/design-adoption.md) |
 | `brand/` | 品牌标志 |
 | `assets/` | 文档里引用的截图与基准数据 |
@@ -35,7 +37,6 @@
 | [render-architecture.md](architecture/render-architecture.md) | 块渲染架构(`AtomicBlockRenderer` 注册表,渲染红线) |
 | [sync-and-api.md](architecture/sync-and-api.md) | 同步、历史与 API 草案 |
 | [search.md](architecture/search.md) | 全文搜索:进程内正文索引、可锁定内存、开关与观测点、各版本根因 |
-| [markdown-boundary-comparison.md](architecture/markdown-boundary-comparison.md) | Markdown 引擎放在哪 —— AppFlowy / AFFiNE 源码级对照 |
 | [commonmark-scoreboard.md](architecture/commonmark-scoreboard.md) | CommonMark 0.31.2 / GFM 记分牌 |
 | [local-first-plan.md](architecture/local-first-plan.md) | Local-first 统一改造(option C) |
 | [phase2-offline-crdt.md](architecture/phase2-offline-crdt.md) | Phase 2:离线优先 + CRDT 实施方案 |
@@ -70,7 +71,6 @@
 | [notion-gap-analysis.md](plans/notion-gap-analysis.md) | Notion 对标分析 |
 | [desktop-plan.md](plans/desktop-plan.md) | 桌面端技术方案与开发计划 |
 | [mvp-plan.md](plans/mvp-plan.md) | MVP 开发计划 |
-| [rust-migration-assessment-2026-07-21.md](plans/rust-migration-assessment-2026-07-21.md) | Rust 化评估:哪些 Dart 模块值得换 |
 | [window-manager-migration.md](plans/window-manager-migration.md) | window_manager 迁移评估(结论:不迁) |
 
 ## ops — 部署、发版与运维
@@ -134,3 +134,17 @@
 | [code-optimization/UI_EDITING_EXPERIENCE_PLAN.md](reviews/code-optimization/UI_EDITING_EXPERIENCE_PLAN.md) | UI 与编辑舒适感方案 |
 | [code-optimization/UI_EDITING_EXPERIENCE_VALIDATION.md](reviews/code-optimization/UI_EDITING_EXPERIENCE_VALIDATION.md) | UI 与编辑舒适感:实施与验证 |
 | [code-optimization/SIDEBAR_QUICK_RENAME.md](reviews/code-optimization/SIDEBAR_QUICK_RENAME.md) | 目录树双击快速重命名 |
+
+## single-source — 单一实现专项
+
+| 文档 | 内容 |
+| --- | --- |
+| [README.md](single-source/README.md) | 专项总览:目标、阶段总表、已拍板的决定、执行规则 |
+| [01-background.md](single-source/01-background.md) | 双实现是什么、为什么分叉、同类产品、理想架构、其他双份与导出格式讨论 |
+| [02-architecture.md](single-source/02-architecture.md) | **契约**:Rust 公共 API、跨语言线格式、Dart 门面、块/标记 Schema、性能预算 |
+| [03-inventory.md](single-source/03-inventory.md) | 现状清单:每个 Dart 镜像函数的去向、调用点、测试处理、构建接入点 |
+| [04-parallel-plan.md](single-source/04-parallel-plan.md) | 工作包、依赖图、冲突热点、分支合并协议、日程、进度表 |
+| [05-review-checklist.md](single-source/05-review-checklist.md) | 审核清单 |
+| [stages/](single-source/stages/) | S0 基线 · S1 引擎拆分 · S2 绑定 · S3 编辑器边界 · S4 表格单元格 · S5 SDK 交付 |
+| [history/markdown-boundary-comparison.md](single-source/history/markdown-boundary-comparison.md) | 2026-08-07 AppFlowy / AFFiNE 源码级对照(原 `architecture/`) |
+| [history/rust-migration-assessment-2026-07-21.md](single-source/history/rust-migration-assessment-2026-07-21.md) | 2026-07-21 Rust 化评估与两个 wasm spike(原 `plans/`) |

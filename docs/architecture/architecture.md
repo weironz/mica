@@ -125,7 +125,13 @@ clipboard) with a deliberate mirror of the inline-marks grammar
 (`lib/editor/marks.dart`), pinned to the Rust engine by shared conformance
 fixtures. Round-trip stability (export → re-import loses nothing) is the
 invariant. Where the boundary sits and why:
-[`markdown-boundary-comparison.md`](markdown-boundary-comparison.md).
+[`markdown-boundary-comparison.md`](../single-source/history/markdown-boundary-comparison.md).
+
+**Being replaced (2026-10-26):** the [single-source project](../single-source/README.md)
+removes the Dart mirror — one Rust engine (`crates/md-core`) on every platform
+(FFI on desktop, wasm on web), with the editor calling it only at its
+boundaries (paste, copy, import, export, AI). Until its S4 lands, the paragraph
+above still describes the code; the project docs win where they disagree.
 
 ## Auth
 
@@ -170,7 +176,7 @@ loop. Details: [`../ops/release.md`](../ops/release.md),
 | Block rendering registry (the red line) | [`render-architecture.md`](render-architecture.md) |
 | Sync / history design notes | [`sync-and-api.md`](sync-and-api.md) (endpoints: `../dev/api.md`) |
 | Full-text search | [`search.md`](search.md) |
-| Markdown engine boundary | [`markdown-boundary-comparison.md`](markdown-boundary-comparison.md) |
+| Markdown engine boundary | [`single-source/`](../single-source/README.md) (single-implementation project; history in `single-source/history/`) |
 | CommonMark scoreboard | [`commonmark-scoreboard.md`](commonmark-scoreboard.md) |
 | Local-first unification plan | [`local-first-plan.md`](local-first-plan.md) |
 | Version history (yrs-native) | [`../features/version-history-plan.md`](../features/version-history-plan.md) |
