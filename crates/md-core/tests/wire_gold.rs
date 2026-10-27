@@ -85,13 +85,9 @@ fn inline_values() -> Vec<Value> {
   ]
 }
 
-/// serde_json's `preserve_order` is enabled transitively by the `render`
-/// feature: with default features `json!` serializes in alphabetical order but
-/// keeps insertion order when that feature is on. This test sorts ONLY the
-/// fixture container and args objects — each case's `output` field is kept as
-/// the EXACT wire return string and compared byte-for-byte, so a real engine
-/// difference (including a key-order difference EMBEDDED in an output string,
-/// or render-vs-default HTML) still fails, in whichever build it occurs.
+/// Sort only fixture container objects. In verification mode, stored args are
+/// replayed verbatim rather than regenerated using feature-dependent json!
+/// insertion order. Output strings are never parsed or normalized.
 fn canonical(value: &Value) -> Value {
   match value {
     Value::Object(map) => {
@@ -137,13 +133,39 @@ fn verify(function: &str, cases: Vec<Value>) {
   } else {
     let expected = std::fs::read_to_string(&path)
       .unwrap_or_else(|error| panic!("read {}: {error}; generate with GEN_GOLD=1", path.display()));
-    // Ignore checkout CRLF in the container file only; escaped newlines within
-    // each output string are still compared exactly, including order and bytes.
-    assert_eq!(
-      text,
-      expected.replace("\r\n", "\n"),
-      "wire gold drift: {function}"
-    );
+    let expected: Value = serde_json::from_str(&expected).unwrap();
+    assert_eq!(expected["function"], function);
+    let stored = expected["cases"].as_array().unwrap();
+    assert_eq!(stored.len(), value["cases"].as_array().unwrap().len());
+    for (case, current) in stored.iter().zip(value["cases"].as_array().unwrap()) {
+      assert_eq!(case["id"], current["id"], "fixture inventory drift");
+      let args = &case["args"];
+      let s = |key: &str| args[key].as_str().unwrap();
+      let output = match function {
+        "parse_body_json" => {
+          wire::parse_body_json(s("markdown"), args["fragment"].as_bool().unwrap()).unwrap()
+        }
+        "serialize_body_json" => {
+          wire::serialize_body_json(s("blocks_json"), s("assets_json")).unwrap()
+        }
+        "render_html_body_json" => {
+          wire::render_html_body_json(s("blocks_json"), s("image_srcs_json"), s("profile")).unwrap()
+        }
+        "parse_inline_batch_json" => wire::parse_inline_batch_json(s("sources_json")).unwrap(),
+        "serialize_inline_json" => wire::serialize_inline_json(s("inline_json")).unwrap(),
+        "decode_cells_json" => wire::decode_cells_json(s("cells_json")).unwrap(),
+        "encode_cells_json" => wire::encode_cells_json(s("inlines_json")).unwrap(),
+        "math_run_spans_json" => wire::math_run_spans_json(s("source")),
+        "parse_inline_math_json" => wire::parse_inline_math_json(s("source")),
+        _ => unreachable!(),
+      };
+      assert_eq!(
+        output.as_bytes(),
+        case["output"].as_str().unwrap().as_bytes(),
+        "wire byte drift {function}: {}",
+        case["id"]
+      );
+    }
   }
 }
 
