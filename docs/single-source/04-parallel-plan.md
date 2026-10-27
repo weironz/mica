@@ -146,7 +146,7 @@ single-source ───●────●────●────●───
 | **G1** | 契约冻结审核 → S0+S1 并回 main | ✅ 通过（2026-10-27）：契约已冻结，S0+S1 已并回 main | [reviews.md](reviews.md) G1 四项修订已交付 | 审核方 |
 | S2 | T2.1 P0 | ✅ 成本归因及 opt-3 硬门槛复测已交付 | 核心 `6594f12` 已经 `20ecde0` 单独进入 S1；实验 `ss/w/p0-costs` 与 spike 未集成 | W |
 | **G2** | wasm 判定 | ✅ 通过（附条件：opt-3、M2 用正式产物重测，见 [reviews.md](reviews.md)） | [决定与验证范围](README.md#当前交付与审核入口2026-10-27)、[复测记录](stages/S2-bindings.md#执行记录) | W / 审核方 |
-| S2 | T2.2–T2.14 | ☐ | | W / D |
+| S2 | T2.2–T2.14 | ✅ M2 复核通过并并回 main（`2b0dedee`） | [reviews.md](reviews.md) M2 记录 | W / D |
 | **M2** | 并回检查 → S2 并回 main | ✅ 通过（2026-10-27）：S2 已并回 main（[reviews.md](reviews.md)） | | 审核方 |
 | S3 | T3.1–T3.5、T3.7、T3.8 | ⏸ 待审核（G3）：编辑器已切到引擎，Dart 旧实现未删（T3.6 在 G3 后） | `e7b4a533`、`71b27bc2`、`7ef6bbba`、`3b6c477f`；[执行记录](stages/S3-editor-boundary.md#执行记录) | D（T3.4、B 类：R） |
 | **G3** | 删除之前审核（用户可见变化交用户） | ⏸ 待审核：分诊表与「待用户决定」见 S3 执行记录 | | 审核方 + 用户 |
