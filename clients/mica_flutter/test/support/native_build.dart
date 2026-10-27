@@ -14,15 +14,21 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:mica_flutter/local/native_rust.dart';
+import 'package:mica_flutter/src/rust/frb_generated.dart';
 
-Future<void> initCheckedNativeRust() async {
-  await initNativeRust();
+Future<void> initCheckedNativeRust({Directory? fingerprintRoot}) async {
+  // Startup probes validate the already-loaded real library after app.main.
+  // Never reinitialize FRB, but always perform the fingerprint check below.
+  if (!RustLib.instance.initialized) await initNativeRust();
   final library =
       bundledNativeLibrary()?.absolute.path ??
       // FRB's generated fallback (`ioDirectory` in frb_generated.dart).
       File('rust/target/release/$nativeLibraryFileName').absolute.path;
   final reported = _readFingerprint(library);
-  final expected = sourceFingerprint(_repoRoot(), reported.roots);
+  final expected = sourceFingerprint(
+    fingerprintRoot ?? _repoRoot(),
+    reported.roots,
+  );
   if (reported.hash != expected) {
     throw StateError(
       'stale native library: $library was built from different sources '
