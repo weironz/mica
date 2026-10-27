@@ -142,6 +142,7 @@ void main() {
       'quote:2:{"quote":null,"li":0}',
       'quote:3:{"quote":2,"li":0}',
       'ordinary {"quote":2,"li":0}',
+      'quote:2:{invalid}',
     ]) {
       expect(
         _sameDifferenceValue(baseline, (
@@ -656,7 +657,8 @@ bool _sameDifferenceValue(Map<String, dynamic> expected, _Diff actual) {
   // key order differences there; text/Markdown/HTML remain byte-exact.
   String comparable(String value) {
     final description =
-        actual.category == 'block-count' ||
+        (actual.category == 'block-count' &&
+            RegExp(r'^block@\d+$').hasMatch(actual.field)) ||
         (actual.category == 'roundtrip' &&
             RegExp(r'^(dart:|rust:)?block@\d+$').hasMatch(actual.field));
     if (!description || value.isEmpty) return value;
@@ -664,9 +666,13 @@ bool _sameDifferenceValue(Map<String, dynamic> expected, _Diff actual) {
       r'^([A-Za-z_][A-Za-z0-9_]*:\d+:)(\{[\s\S]*\})$',
     ).firstMatch(value);
     if (match == null) return value;
-    final object = jsonDecode(match[2]!);
-    if (object is! Map) return value;
-    return '${match[1]}${_canon(object)}';
+    try {
+      final object = jsonDecode(match[2]!);
+      if (object is! Map) return value;
+      return '${match[1]}${_canon(object)}';
+    } on FormatException {
+      return value;
+    }
   }
 
   return comparable(expected['dart'] as String) == comparable(actual.dart) &&
