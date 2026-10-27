@@ -2487,6 +2487,7 @@ dependencies = [
  "mica-core",
  "mica-interchange",
  "mica-markdown",
+ "mica-md",
  "serde_json",
  "uuid",
  "webview2-com",

@@ -7,6 +7,7 @@
 // ignore_for_file: argument_type_not_assignable
 
 import 'api/document.dart';
+import 'api/markdown.dart';
 import 'api/pdf.dart';
 import 'api/render.dart';
 import 'api/simple.dart';

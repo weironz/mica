@@ -1,0 +1,621 @@
+{
+  "cases": [
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Title One\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Section two\",\"data\":{\"level\":2,\"marks\":[{\"end\":11,\"start\":8,\"type\":\"italic\"}]}},{\"type\":\"heading\",\"text\":\"第三层 粗体\",\"data\":{\"level\":3,\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"}]}}]"
+      },
+      "id": "01-headings.md/document",
+      "output": "# Title One\n\n## Section *two*\n\n### 第三层 **粗体**"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Title One\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Section two\",\"data\":{\"level\":2,\"marks\":[{\"end\":11,\"start\":8,\"type\":\"italic\"}]}},{\"type\":\"heading\",\"text\":\"第三层 粗体\",\"data\":{\"level\":3,\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"}]}}]"
+      },
+      "id": "01-headings.md/fragment",
+      "output": "# Title One\n\n## Section *two*\n\n### 第三层 **粗体**"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain text here\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"bold then italic then code then strike\",\"data\":{\"marks\":[{\"end\":4,\"start\":0,\"type\":\"bold\"},{\"end\":16,\"start\":10,\"type\":\"italic\"},{\"end\":26,\"start\":22,\"type\":\"code\"},{\"end\":38,\"start\":32,\"type\":\"strike\"}]}},{\"type\":\"paragraph\",\"text\":\"a link inside\",\"data\":{\"marks\":[{\"end\":6,\"href\":\"https://example.com/x\",\"start\":2,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with inner italic kept\",\"data\":{\"marks\":[{\"end\":27,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"start\":10,\"type\":\"italic\"}]}}]"
+      },
+      "id": "02-inline.md/document",
+      "output": "plain text here\n\n**bold** then *italic* then `code` then ~~strike~~\n\na [link](https://example.com/x) inside\n\n**bold with *inner italic* kept**"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain text here\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"bold then italic then code then strike\",\"data\":{\"marks\":[{\"end\":4,\"start\":0,\"type\":\"bold\"},{\"end\":16,\"start\":10,\"type\":\"italic\"},{\"end\":26,\"start\":22,\"type\":\"code\"},{\"end\":38,\"start\":32,\"type\":\"strike\"}]}},{\"type\":\"paragraph\",\"text\":\"a link inside\",\"data\":{\"marks\":[{\"end\":6,\"href\":\"https://example.com/x\",\"start\":2,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with inner italic kept\",\"data\":{\"marks\":[{\"end\":27,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"start\":10,\"type\":\"italic\"}]}}]"
+      },
+      "id": "02-inline.md/fragment",
+      "output": "plain text here\n\n**bold** then *italic* then `code` then ~~strike~~\n\na [link](https://example.com/x) inside\n\n**bold with *inner italic* kept**"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"first item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"second bold item\",\"data\":{\"marks\":[{\"end\":11,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"star bullet\",\"data\":{\"marker\":\"*\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two l\",\"data\":{\"marks\":[{\"end\":5,\"href\":\"https://e.com\",\"start\":4,\"type\":\"link\"}]}},{\"type\":\"bulleted_list\",\"text\":\"parent\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"child two-space\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"grandchild\",\"data\":{\"indent\":2}},{\"type\":\"bulleted_list\",\"text\":\"child again\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"back to top\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"ordered parent\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"four-space child\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"sibling\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"parent two\",\"data\":{\"start\":2}},{\"type\":\"todo\",\"text\":\"task parent\",\"data\":{\"checked\":false,\"loose\":true}},{\"type\":\"todo\",\"text\":\"nested done task\",\"data\":{\"checked\":true,\"indent\":1,\"marks\":[{\"end\":11,\"start\":7,\"type\":\"italic\"}]}}]"
+      },
+      "id": "03-lists.md/document",
+      "output": "- first item\n- second **bold** item\n* star bullet\n\n1. one\n2. two [l](https://e.com)\n\n- parent\n    - child two-space\n        - grandchild\n    - child again\n- back to top\n\n1. ordered parent\n    1. four-space child\n    2. sibling\n2. parent two\n\n- [ ] task parent\n    - [x] nested *done* task"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"first item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"second bold item\",\"data\":{\"marks\":[{\"end\":11,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"star bullet\",\"data\":{\"marker\":\"*\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two l\",\"data\":{\"marks\":[{\"end\":5,\"href\":\"https://e.com\",\"start\":4,\"type\":\"link\"}]}},{\"type\":\"bulleted_list\",\"text\":\"parent\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"child two-space\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"grandchild\",\"data\":{\"indent\":2}},{\"type\":\"bulleted_list\",\"text\":\"child again\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"back to top\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"ordered parent\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"four-space child\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"sibling\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"parent two\",\"data\":{\"start\":2}},{\"type\":\"todo\",\"text\":\"task parent\",\"data\":{\"checked\":false,\"loose\":true}},{\"type\":\"todo\",\"text\":\"nested done task\",\"data\":{\"checked\":true,\"indent\":1,\"marks\":[{\"end\":11,\"start\":7,\"type\":\"italic\"}]}}]"
+      },
+      "id": "03-lists.md/fragment",
+      "output": "- first item\n- second **bold** item\n* star bullet\n\n1. one\n2. two [l](https://e.com)\n\n- parent\n    - child two-space\n        - grandchild\n    - child again\n- back to top\n\n1. ordered parent\n    1. four-space child\n    2. sibling\n2. parent two\n\n- [ ] task parent\n    - [x] nested *done* task"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"todo\",\"text\":\"open task\",\"data\":{\"checked\":false}},{\"type\":\"todo\",\"text\":\"done task\",\"data\":{\"checked\":true,\"marks\":[{\"end\":9,\"start\":5,\"type\":\"italic\"}]}}]"
+      },
+      "id": "04-todo.md/document",
+      "output": "- [ ] open task\n- [x] done *task*"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"todo\",\"text\":\"open task\",\"data\":{\"checked\":false}},{\"type\":\"todo\",\"text\":\"done task\",\"data\":{\"checked\":true,\"marks\":[{\"end\":9,\"start\":5,\"type\":\"italic\"}]}}]"
+      },
+      "id": "04-todo.md/fragment",
+      "output": "- [ ] open task\n- [x] done *task*"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"quoted line with code\\nsecond line\",\"data\":{\"marks\":[{\"end\":21,\"start\":17,\"type\":\"code\"}]}}]"
+      },
+      "id": "05-quote.md/document",
+      "output": "> quoted line with `code`\n> second line\n>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"quoted line with code\\nsecond line\",\"data\":{\"marks\":[{\"end\":21,\"start\":17,\"type\":\"code\"}]}}]"
+      },
+      "id": "05-quote.md/fragment",
+      "output": "> quoted line with `code`\n> second line\n>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"fn main() {\\n    println!(\\\"**not bold**\\\");\\n}\",\"data\":{\"language\":\"rust\"}},{\"type\":\"code_block\",\"text\":\"no language\",\"data\":{}}]"
+      },
+      "id": "06-code.md/document",
+      "output": "```rust\nfn main() {\n    println!(\"**not bold**\");\n}\n```\n\n```\nno language\n```"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"fn main() {\\n    println!(\\\"**not bold**\\\");\\n}\",\"data\":{\"language\":\"rust\"}},{\"type\":\"code_block\",\"text\":\"no language\",\"data\":{}}]"
+      },
+      "id": "06-code.md/fragment",
+      "output": "```rust\nfn main() {\n    println!(\"**not bold**\");\n}\n```\n\n```\nno language\n```"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"above\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"below\",\"data\":{}}]"
+      },
+      "id": "07-divider.md/document",
+      "output": "above\n\n---\n\nbelow"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"above\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"below\",\"data\":{}}]"
+      },
+      "id": "07-divider.md/fragment",
+      "output": "above\n\n---\n\nbelow"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"风景 照片\",\"data\":{\"url\":\"https://example.com/p.png\"}},{\"type\":\"image\",\"text\":\"\",\"data\":{\"url\":\"assets/local.png\"}}]"
+      },
+      "id": "08-image.md/document",
+      "output": "![风景 照片](https://example.com/p.png)\n\n![](assets/local.png)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"风景 照片\",\"data\":{\"url\":\"https://example.com/p.png\"}},{\"type\":\"image\",\"text\":\"\",\"data\":{\"url\":\"assets/local.png\"}}]"
+      },
+      "id": "08-image.md/fragment",
+      "output": "![风景 照片](https://example.com/p.png)\n\n![](assets/local.png)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"header\":true,\"rows\":[[\"Name\",\"Value\"],[\"alpha\",\"1\"],[\"beta\",\"2\"]],\"widths\":[1.0,1.0]}}]"
+      },
+      "id": "09-table.md/document",
+      "output": "| Name | Value |\n| --- | --- |\n| alpha | 1 |\n| beta | 2 |"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"header\":true,\"rows\":[[\"Name\",\"Value\"],[\"alpha\",\"1\"],[\"beta\",\"2\"]],\"widths\":[1.0,1.0]}}]"
+      },
+      "id": "09-table.md/fragment",
+      "output": "| Name | Value |\n| --- | --- |\n| alpha | 1 |\n| beta | 2 |"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Doc\",\"data\":{\"level\":1}},{\"type\":\"paragraph\",\"text\":\"intro paragraph\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"item a\",\"data\":{\"marks\":[{\"end\":6,\"start\":5,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"item b\",\"data\":{}},{\"type\":\"quote\",\"text\":\"note\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"x = 1\",\"data\":{\"language\":\"js\"}},{\"type\":\"image\",\"text\":\"pic\",\"data\":{\"url\":\"img.png\"}},{\"type\":\"paragraph\",\"text\":\"done\",\"data\":{}}]"
+      },
+      "id": "10-mixed.md/document",
+      "output": "# Doc\n\nintro paragraph\n\n- item **a**\n- item b\n\n> note\n>\n\n```js\nx = 1\n```\n\n![pic](img.png)\n\ndone"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Doc\",\"data\":{\"level\":1}},{\"type\":\"paragraph\",\"text\":\"intro paragraph\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"item a\",\"data\":{\"marks\":[{\"end\":6,\"start\":5,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"item b\",\"data\":{}},{\"type\":\"quote\",\"text\":\"note\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"x = 1\",\"data\":{\"language\":\"js\"}},{\"type\":\"image\",\"text\":\"pic\",\"data\":{\"url\":\"img.png\"}},{\"type\":\"paragraph\",\"text\":\"done\",\"data\":{}}]"
+      },
+      "id": "10-mixed.md/fragment",
+      "output": "# Doc\n\nintro paragraph\n\n- item **a**\n- item b\n\n> note\n>\n\n```js\nx = 1\n```\n\n![pic](img.png)\n\ndone"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"*not bold* and snake_case stays plain\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"a literal backslash \\\\ and [not a link](x)\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"- not a list item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"1. not a numbered item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"visit https://example.com/a?b=1 now\",\"data\":{\"marks\":[{\"end\":31,\"href\":\"https://example.com/a?b=1\",\"start\":6,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"mail user@example.com please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"mailto:user@example.com\",\"start\":5,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with https://e.co inside\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"href\":\"https://e.co\",\"start\":10,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"code keeps *stars* and \\\\n raw\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"code\"}]}}]"
+      },
+      "id": "11-escapes-autolinks.md/document",
+      "output": "\\*not bold\\* and snake\\_case stays plain\n\na literal backslash \\\\ and \\[not a link\\](x)\n\n\\- not a list item\n\n1\\. not a numbered item\n\nvisit <https://example.com/a?b=1> now\n\nmail <user@example.com> please\n\n**bold with <https://e.co> inside**\n\n`code keeps *stars* and \\n raw`"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"*not bold* and snake_case stays plain\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"a literal backslash \\\\ and [not a link](x)\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"- not a list item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"1. not a numbered item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"visit https://example.com/a?b=1 now\",\"data\":{\"marks\":[{\"end\":31,\"href\":\"https://example.com/a?b=1\",\"start\":6,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"mail user@example.com please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"mailto:user@example.com\",\"start\":5,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with https://e.co inside\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"href\":\"https://e.co\",\"start\":10,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"code keeps *stars* and \\\\n raw\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"code\"}]}}]"
+      },
+      "id": "11-escapes-autolinks.md/fragment",
+      "output": "\\*not bold\\* and snake\\_case stays plain\n\na literal backslash \\\\ and \\[not a link\\](x)\n\n\\- not a list item\n\n1\\. not a numbered item\n\nvisit <https://example.com/a?b=1> now\n\nmail <user@example.com> please\n\n**bold with <https://e.co> inside**\n\n`code keeps *stars* and \\n raw`"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Setext Title\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Second Level\",\"data\":{\"level\":2}},{\"type\":\"code_block\",\"text\":\"indented code\\n  keeps deeper indent\\n\\ntab indented\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"after the breaks\",\"data\":{}}]"
+      },
+      "id": "12-setext-indented-thematic.md/document",
+      "output": "# Setext Title\n\n## Second Level\n\n```\nindented code\n  keeps deeper indent\n\ntab indented\n```\n\n---\n\n---\n\nafter the breaks"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Setext Title\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Second Level\",\"data\":{\"level\":2}},{\"type\":\"code_block\",\"text\":\"indented code\\n  keeps deeper indent\\n\\ntab indented\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"after the breaks\",\"data\":{}}]"
+      },
+      "id": "12-setext-indented-thematic.md/fragment",
+      "output": "# Setext Title\n\n## Second Level\n\n```\nindented code\n  keeps deeper indent\n\ntab indented\n```\n\n---\n\n---\n\nafter the breaks"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline basic and titled\",\"data\":{\"marks\":[{\"end\":12,\"href\":\"https://e.com\",\"start\":7,\"type\":\"link\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":17,\"title\":\"the title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"angle dest spaced works\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"/url with space\",\"start\":11,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"balanced parens too\",\"data\":{\"marks\":[{\"end\":15,\"href\":\"https://e.com/a(b)c\",\"start\":9,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"full text and collapsed ref and shortcut ref\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"https://example.com/ref\",\"start\":5,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":27,\"href\":\"https://example.com/ref\",\"start\":24,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":44,\"href\":\"https://example.com/ref\",\"start\":41,\"title\":\"Ref Title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"nested bold link inside bold\",\"data\":{\"marks\":[{\"end\":28,\"start\":7,\"type\":\"bold\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":12,\"type\":\"link\"}]}}]"
+      },
+      "id": "13-links.md/document",
+      "output": "inline [basic](https://e.com) and [titled](https://e.com \"the title\")\n\nangle dest [spaced](</url with space>) works\n\nbalanced [parens](https://e.com/a(b)c) too\n\nfull [text](https://example.com/ref \"Ref Title\") and collapsed [ref](https://example.com/ref \"Ref Title\") and shortcut [ref](https://example.com/ref \"Ref Title\")\n\nnested **bold [link inside](https://e.com) bold**"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline basic and titled\",\"data\":{\"marks\":[{\"end\":12,\"href\":\"https://e.com\",\"start\":7,\"type\":\"link\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":17,\"title\":\"the title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"angle dest spaced works\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"/url with space\",\"start\":11,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"balanced parens too\",\"data\":{\"marks\":[{\"end\":15,\"href\":\"https://e.com/a(b)c\",\"start\":9,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"full text and collapsed ref and shortcut ref\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"https://example.com/ref\",\"start\":5,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":27,\"href\":\"https://example.com/ref\",\"start\":24,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":44,\"href\":\"https://example.com/ref\",\"start\":41,\"title\":\"Ref Title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"nested bold link inside bold\",\"data\":{\"marks\":[{\"end\":28,\"start\":7,\"type\":\"bold\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":12,\"type\":\"link\"}]}}]"
+      },
+      "id": "13-links.md/fragment",
+      "output": "inline [basic](https://e.com) and [titled](https://e.com \"the title\")\n\nangle dest [spaced](</url with space>) works\n\nbalanced [parens](https://e.com/a(b)c) too\n\nfull [text](https://example.com/ref \"Ref Title\") and collapsed [ref](https://example.com/ref \"Ref Title\") and shortcut [ref](https://example.com/ref \"Ref Title\")\n\nnested **bold [link inside](https://e.com) bold**"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain italic and bold basics\",\"data\":{\"marks\":[{\"end\":12,\"start\":6,\"type\":\"italic\"},{\"end\":21,\"start\":17,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"intraword stars work but sn_ake_s do not\",\"data\":{\"marks\":[{\"end\":14,\"start\":12,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"(parens rule) and a * loose star\",\"data\":{\"marks\":[{\"end\":13,\"start\":0,\"type\":\"italic\"},{\"end\":12,\"start\":1,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"both at once and nested inner tail\",\"data\":{\"marks\":[{\"end\":12,\"start\":0,\"type\":\"bold\"},{\"end\":12,\"start\":0,\"type\":\"italic\"},{\"end\":34,\"start\":17,\"type\":\"bold\"},{\"end\":29,\"start\":24,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"foobar edge and underscore word\",\"data\":{\"marks\":[{\"end\":6,\"start\":3,\"type\":\"italic\"},{\"end\":26,\"start\":16,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"rule of three: *strong in em\",\"data\":{\"marks\":[{\"end\":22,\"start\":16,\"type\":\"italic\"},{\"end\":28,\"start\":16,\"type\":\"italic\"}]}}]"
+      },
+      "id": "14-emphasis.md/document",
+      "output": "plain *italic* and **bold** basics\n\nintraword st*ar*s work but sn\\_ake\\_s do not\n\n*(*parens rule*)* and a \\* loose star\n\n***both at once*** and **nested *inner* tail**\n\nfoo*bar* edge and *underscore* word\n\nrule of three: \\***strong* in em*"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain italic and bold basics\",\"data\":{\"marks\":[{\"end\":12,\"start\":6,\"type\":\"italic\"},{\"end\":21,\"start\":17,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"intraword stars work but sn_ake_s do not\",\"data\":{\"marks\":[{\"end\":14,\"start\":12,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"(parens rule) and a * loose star\",\"data\":{\"marks\":[{\"end\":13,\"start\":0,\"type\":\"italic\"},{\"end\":12,\"start\":1,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"both at once and nested inner tail\",\"data\":{\"marks\":[{\"end\":12,\"start\":0,\"type\":\"bold\"},{\"end\":12,\"start\":0,\"type\":\"italic\"},{\"end\":34,\"start\":17,\"type\":\"bold\"},{\"end\":29,\"start\":24,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"foobar edge and underscore word\",\"data\":{\"marks\":[{\"end\":6,\"start\":3,\"type\":\"italic\"},{\"end\":26,\"start\":16,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"rule of three: *strong in em\",\"data\":{\"marks\":[{\"end\":22,\"start\":16,\"type\":\"italic\"},{\"end\":28,\"start\":16,\"type\":\"italic\"}]}}]"
+      },
+      "id": "14-emphasis.md/fragment",
+      "output": "plain *italic* and **bold** basics\n\nintraword st*ar*s work but sn\\_ake\\_s do not\n\n*(*parens rule*)* and a \\* loose star\n\n***both at once*** and **nested *inner* tail**\n\nfoo*bar* edge and *underscore* word\n\nrule of three: \\***strong* in em*"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"alpha\\nlazy line joins\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"beta\\nindented continuation\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"gamma is loose\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"plus starts a new list\",\"data\":{\"marker\":\"+\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"new delim restarts\",\"data\":{\"loose\":true,\"marker\":\")\",\"start\":3}},{\"type\":\"numbered_list\",\"text\":\"start at seven\",\"data\":{\"loose\":true,\"marker\":\".\",\"start\":7}},{\"type\":\"bulleted_list\",\"text\":\"parent item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"child item\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"sibling not child\",\"data\":{}},{\"type\":\"heading\",\"text\":\"para first\\npara second\",\"data\":{\"level\":1}},{\"type\":\"bulleted_list\",\"text\":\"item with two paragraphs\\n\\nsecond paragraph here\",\"data\":{\"loose\":true}}]"
+      },
+      "id": "15-list-items.md/document",
+      "output": "- alpha\n  lazy line joins\n- beta\n  indented continuation\n\n- gamma is loose\n+ plus starts a new list\n\n1. one\n2. two\n\n3) new delim restarts\n\n7. start at seven\n- parent item\n    - child item\n- sibling not child\n\npara first\npara second\n===\n\n\n- item with two paragraphs\n  \n  second paragraph here"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"alpha\\nlazy line joins\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"beta\\nindented continuation\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"gamma is loose\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"plus starts a new list\",\"data\":{\"marker\":\"+\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"new delim restarts\",\"data\":{\"loose\":true,\"marker\":\")\",\"start\":3}},{\"type\":\"numbered_list\",\"text\":\"start at seven\",\"data\":{\"loose\":true,\"marker\":\".\",\"start\":7}},{\"type\":\"bulleted_list\",\"text\":\"parent item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"child item\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"sibling not child\",\"data\":{}},{\"type\":\"heading\",\"text\":\"para first\\npara second\",\"data\":{\"level\":1}},{\"type\":\"bulleted_list\",\"text\":\"item with two paragraphs\\n\\nsecond paragraph here\",\"data\":{\"loose\":true}}]"
+      },
+      "id": "15-list-items.md/fragment",
+      "output": "- alpha\n  lazy line joins\n- beta\n  indented continuation\n\n- gamma is loose\n+ plus starts a new list\n\n1. one\n2. two\n\n3) new delim restarts\n\n7. start at seven\n- parent item\n    - child item\n- sibling not child\n\npara first\npara second\n===\n\n\n- item with two paragraphs\n  \n  second paragraph here"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"banner\",\"data\":{\"url\":\"assets/banner.png\"}},{\"type\":\"image\",\"text\":\"photo\",\"data\":{\"title\":\"a title\",\"url\":\"train.jpg\"}},{\"type\":\"paragraph\",\"text\":\"inline icon inside text\",\"data\":{\"marks\":[{\"end\":11,\"href\":\"https://x.io/i.png\",\"start\":7,\"type\":\"image\"}]}},{\"type\":\"image\",\"text\":\"alt with emphasis\",\"data\":{\"title\":\"gallery\",\"url\":\"/gallery/art.png\"}},{\"type\":\"paragraph\",\"text\":\"ref shortcut art and full other\",\"data\":{\"marks\":[{\"end\":16,\"href\":\"/gallery/art.png\",\"start\":13,\"title\":\"gallery\",\"type\":\"image\"},{\"end\":31,\"href\":\"/gallery/art.png\",\"start\":26,\"title\":\"gallery\",\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"![escaped] and !link form\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/gallery/art.png\",\"start\":16,\"title\":\"gallery\",\"type\":\"link\"}]}}]"
+      },
+      "id": "16-images.md/document",
+      "output": "![banner](assets/banner.png)\n\n![photo](train.jpg \"a title\")\n\ninline ![icon](https://x.io/i.png) inside text\n\n![alt with emphasis](/gallery/art.png \"gallery\")\n\nref shortcut ![art](/gallery/art.png \"gallery\") and full ![other](/gallery/art.png \"gallery\")\n\n!\\[escaped\\] and \\![link form](/gallery/art.png \"gallery\")"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"banner\",\"data\":{\"url\":\"assets/banner.png\"}},{\"type\":\"image\",\"text\":\"photo\",\"data\":{\"title\":\"a title\",\"url\":\"train.jpg\"}},{\"type\":\"paragraph\",\"text\":\"inline icon inside text\",\"data\":{\"marks\":[{\"end\":11,\"href\":\"https://x.io/i.png\",\"start\":7,\"type\":\"image\"}]}},{\"type\":\"image\",\"text\":\"alt with emphasis\",\"data\":{\"title\":\"gallery\",\"url\":\"/gallery/art.png\"}},{\"type\":\"paragraph\",\"text\":\"ref shortcut art and full other\",\"data\":{\"marks\":[{\"end\":16,\"href\":\"/gallery/art.png\",\"start\":13,\"title\":\"gallery\",\"type\":\"image\"},{\"end\":31,\"href\":\"/gallery/art.png\",\"start\":26,\"title\":\"gallery\",\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"![escaped] and !link form\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/gallery/art.png\",\"start\":16,\"title\":\"gallery\",\"type\":\"link\"}]}}]"
+      },
+      "id": "16-images.md/fragment",
+      "output": "![banner](assets/banner.png)\n\n![photo](train.jpg \"a title\")\n\ninline ![icon](https://x.io/i.png) inside text\n\n![alt with emphasis](/gallery/art.png \"gallery\")\n\nref shortcut ![art](/gallery/art.png \"gallery\") and full ![other](/gallery/art.png \"gallery\")\n\n!\\[escaped\\] and \\![link form](/gallery/art.png \"gallery\")"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"simple quote\\njoined marked\",\"data\":{}},{\"type\":\"heading\",\"text\":\"heading inside\",\"data\":{\"level\":1,\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"body text\\ncontinued lazy\",\"data\":{}},{\"type\":\"quote\",\"text\":\"nested two deep\\nstill nested\",\"data\":{\"qbreak\":true,\"quote\":2}},{\"type\":\"quote\",\"text\":\"\",\"data\":{\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"item in quote\\nmore of the item\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"let x = 1\",\"data\":{\"language\":\"js\",\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"raw indented code\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"alpha group\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"beta group after blank\",\"data\":{\"qbreak\":true}},{\"type\":\"code_block\",\"text\":\"<section>\\nhtml block after a quote group\\n</section>\",\"data\":{\"language\":\"html\",\"raw\":true}}]"
+      },
+      "id": "17-quotes.md/document",
+      "output": "> simple quote\n> joined marked\n>\n\n> # heading inside\n>\n> body text\n> continued lazy\n>\n\n> > nested two deep\n> > still nested\n> >\n\n>\n>\n\n> - item in quote\n>   more of the item\n\n\n> ```js\n> let x = 1\n> ```\n>\n\n> ```\n> raw indented code\n> ```\n>\n\n> alpha group\n>\n\n> beta group after blank\n>\n\n<section>\nhtml block after a quote group\n</section>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"simple quote\\njoined marked\",\"data\":{}},{\"type\":\"heading\",\"text\":\"heading inside\",\"data\":{\"level\":1,\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"body text\\ncontinued lazy\",\"data\":{}},{\"type\":\"quote\",\"text\":\"nested two deep\\nstill nested\",\"data\":{\"qbreak\":true,\"quote\":2}},{\"type\":\"quote\",\"text\":\"\",\"data\":{\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"item in quote\\nmore of the item\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"let x = 1\",\"data\":{\"language\":\"js\",\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"raw indented code\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"alpha group\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"beta group after blank\",\"data\":{\"qbreak\":true}},{\"type\":\"code_block\",\"text\":\"<section>\\nhtml block after a quote group\\n</section>\",\"data\":{\"language\":\"html\",\"raw\":true}}]"
+      },
+      "id": "17-quotes.md/fragment",
+      "output": "> simple quote\n> joined marked\n>\n\n> # heading inside\n>\n> body text\n> continued lazy\n>\n\n> > nested two deep\n> > still nested\n> >\n\n>\n>\n\n> - item in quote\n>   more of the item\n\n\n> ```js\n> let x = 1\n> ```\n>\n\n> ```\n> raw indented code\n> ```\n>\n\n> alpha group\n>\n\n> beta group after blank\n>\n\n<section>\nhtml block after a quote group\n</section>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"closing hashes\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"simple code and double `tick span\",\"data\":{\"marks\":[{\"end\":11,\"start\":0,\"type\":\"code\"},{\"end\":28,\"start\":16,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"`` then foo ` bar\",\"data\":{\"marks\":[{\"end\":2,\"start\":0,\"type\":\"code\"},{\"end\":17,\"start\":8,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"hard break here\\\\\\nafter two spaces\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"backslash break\\\\\\njoins here\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"tilde fenced\",\"data\":{\"language\":\"js\"}},{\"type\":\"paragraph\",\"text\":\"para with\\nindented lazy line\",\"data\":{}}]"
+      },
+      "id": "18-spans-breaks.md/document",
+      "output": "## closing hashes\n\n`simple code` and ``double `tick`` span\n\n``` `` ``` then ``foo ` bar``\n\nhard break here\\\nafter two spaces\n\nbackslash break\\\njoins here\n\n```js\ntilde fenced\n```\n\npara with\nindented lazy line"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"closing hashes\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"simple code and double `tick span\",\"data\":{\"marks\":[{\"end\":11,\"start\":0,\"type\":\"code\"},{\"end\":28,\"start\":16,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"`` then foo ` bar\",\"data\":{\"marks\":[{\"end\":2,\"start\":0,\"type\":\"code\"},{\"end\":17,\"start\":8,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"hard break here\\\\\\nafter two spaces\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"backslash break\\\\\\njoins here\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"tilde fenced\",\"data\":{\"language\":\"js\"}},{\"type\":\"paragraph\",\"text\":\"para with\\nindented lazy line\",\"data\":{}}]"
+      },
+      "id": "18-spans-breaks.md/fragment",
+      "output": "## closing hashes\n\n`simple code` and ``double `tick`` span\n\n``` `` ``` then ``foo ` bar``\n\nhard break here\\\nafter two spaces\n\nbackslash break\\\njoins here\n\n```js\ntilde fenced\n```\n\npara with\nindented lazy line"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"copy © and star *foo* and hex 'quote'\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"unknown &MadeUpEntity; stays literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"see multi resolves\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"/multi-url\",\"start\":4,\"title\":\"multi\\nline title\",\"type\":\"link\"}]}},{\"type\":\"code_block\",\"text\":\"fenced with indent\\nkeep\",\"data\":{\"language\":\"python\"}},{\"type\":\"paragraph\",\"text\":\"ref with entity dest: ent\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/föö\",\"start\":22,\"title\":\"tïtle\",\"type\":\"link\"}]}}]"
+      },
+      "id": "19-entities-defs.md/document",
+      "output": "copy © and star \\*foo\\* and hex 'quote'\n\nunknown &MadeUpEntity; stays literal\n\nsee [multi](/multi-url \"multi\nline title\") resolves\n\n```python\nfenced with indent\nkeep\n```\n\nref with entity dest: [ent](/föö \"tïtle\")"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"copy © and star *foo* and hex 'quote'\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"unknown &MadeUpEntity; stays literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"see multi resolves\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"/multi-url\",\"start\":4,\"title\":\"multi\\nline title\",\"type\":\"link\"}]}},{\"type\":\"code_block\",\"text\":\"fenced with indent\\nkeep\",\"data\":{\"language\":\"python\"}},{\"type\":\"paragraph\",\"text\":\"ref with entity dest: ent\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/föö\",\"start\":22,\"title\":\"tïtle\",\"type\":\"link\"}]}}]"
+      },
+      "id": "19-entities-defs.md/fragment",
+      "output": "copy © and star \\*foo\\* and hex 'quote'\n\nunknown &MadeUpEntity; stays literal\n\nsee [multi](/multi-url \"multi\nline title\") resolves\n\n```python\nfenced with indent\nkeep\n```\n\nref with entity dest: [ent](/föö \"tïtle\")"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"plain item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"fenced inside item\",\"data\":{\"language\":\"py\",\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item then code\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"indented code child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item with quote\",\"data\":{}},{\"type\":\"quote\",\"text\":\"quoted in item\\nstill quoted\",\"data\":{\"li\":0}},{\"type\":\"numbered_list\",\"text\":\"fence first\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"code\",\"data\":{\"li\":0}},{\"type\":\"paragraph\",\"text\":\"paragraph after child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item owning a div\\n\\n<div>\\nat the content column, so it stays INSIDE the item\\n</div>\",\"data\":{\"loose\":true,\"marks\":[{\"end\":24,\"start\":19,\"type\":\"html\"},{\"end\":82,\"start\":76,\"type\":\"html\"}]}}]"
+      },
+      "id": "20-item-containers.md/document",
+      "output": "- plain item\n- \n    ```py\n    fenced inside item\n    ```\n\n- item then code\n    ```\n    indented code child\n    ```\n- \n    ---\n- item with quote\n    > quoted in item\n    > still quoted\n    >\n\n1. fence first\n    ```\n    code\n    ```\n\n    paragraph after child\n\n- item owning a div\n  \n  <div>\n  at the content column, so it stays INSIDE the item\n  </div>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"plain item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"fenced inside item\",\"data\":{\"language\":\"py\",\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item then code\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"indented code child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item with quote\",\"data\":{}},{\"type\":\"quote\",\"text\":\"quoted in item\\nstill quoted\",\"data\":{\"li\":0}},{\"type\":\"numbered_list\",\"text\":\"fence first\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"code\",\"data\":{\"li\":0}},{\"type\":\"paragraph\",\"text\":\"paragraph after child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item owning a div\\n\\n<div>\\nat the content column, so it stays INSIDE the item\\n</div>\",\"data\":{\"loose\":true,\"marks\":[{\"end\":24,\"start\":19,\"type\":\"html\"},{\"end\":82,\"start\":76,\"type\":\"html\"}]}}]"
+      },
+      "id": "20-item-containers.md/fragment",
+      "output": "- plain item\n- \n    ```py\n    fenced inside item\n    ```\n\n- item then code\n    ```\n    indented code child\n    ```\n- \n    ---\n- item with quote\n    > quoted in item\n    > still quoted\n    >\n\n1. fence first\n    ```\n    code\n    ```\n\n    paragraph after child\n\n- item owning a div\n  \n  <div>\n  at the content column, so it stays INSIDE the item\n  </div>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"<table>\\n  <tr><td>cell</td></tr>\\n</table>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"para with <b class=\\\"x\\\">inline tag</b> and <br/> mid-text\",\"data\":{\"marks\":[{\"end\":23,\"start\":10,\"type\":\"html\"},{\"end\":37,\"start\":33,\"type\":\"html\"},{\"end\":47,\"start\":42,\"type\":\"html\"}]}},{\"type\":\"code_block\",\"text\":\"<!-- a comment\\nspanning lines -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nbadge wall\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"standalone <custom-tag attr=plain> alone\",\"data\":{\"marks\":[{\"end\":34,\"start\":11,\"type\":\"html\"}]}},{\"type\":\"paragraph\",\"text\":\"literal < stays text and <no closer stays too\",\"data\":{}}]"
+      },
+      "id": "21-html.md/document",
+      "output": "<table>\n  <tr><td>cell</td></tr>\n</table>\n\npara with <b class=\"x\">inline tag</b> and <br/> mid-text\n\n<!-- a comment\nspanning lines -->\n\n<div align=\"center\">\nbadge wall\n</div>\n\nstandalone <custom-tag attr=plain> alone\n\nliteral \\< stays text and \\<no closer stays too"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"<table>\\n  <tr><td>cell</td></tr>\\n</table>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"para with <b class=\\\"x\\\">inline tag</b> and <br/> mid-text\",\"data\":{\"marks\":[{\"end\":23,\"start\":10,\"type\":\"html\"},{\"end\":37,\"start\":33,\"type\":\"html\"},{\"end\":47,\"start\":42,\"type\":\"html\"}]}},{\"type\":\"code_block\",\"text\":\"<!-- a comment\\nspanning lines -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nbadge wall\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"standalone <custom-tag attr=plain> alone\",\"data\":{\"marks\":[{\"end\":34,\"start\":11,\"type\":\"html\"}]}},{\"type\":\"paragraph\",\"text\":\"literal < stays text and <no closer stays too\",\"data\":{}}]"
+      },
+      "id": "21-html.md/fragment",
+      "output": "<table>\n  <tr><td>cell</td></tr>\n</table>\n\npara with <b class=\"x\">inline tag</b> and <br/> mid-text\n\n<!-- a comment\nspanning lines -->\n\n<div align=\"center\">\nbadge wall\n</div>\n\nstandalone <custom-tag attr=plain> alone\n\nliteral \\< stays text and \\<no closer stays too"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"visit www.example.com or https://mica.dev/page?a=(1) now\\nmail dev@mica.dev please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"http://www.example.com\",\"start\":6,\"type\":\"link\"},{\"end\":52,\"href\":\"https://mica.dev/page?a=(1)\",\"start\":25,\"type\":\"link\"},{\"end\":74,\"href\":\"mailto:dev@mica.dev\",\"start\":62,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"one tilde and two tildes strike\",\"data\":{\"marks\":[{\"end\":9,\"start\":0,\"type\":\"strike\"},{\"end\":24,\"start\":14,\"type\":\"strike\"}]}},{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"aligns\":[\"left\",\"center\",\"right\"],\"header\":true,\"rows\":[[\"name\",\"qty\",\"price\"],[\"tea\",\"2\",\"1.50\"]],\"widths\":[1.0,1.0,1.0]}},{\"type\":\"todo\",\"text\":\"parent task\",\"data\":{\"checked\":true}},{\"type\":\"todo\",\"text\":\"two-space subtask\",\"data\":{\"checked\":false,\"indent\":1}}]"
+      },
+      "id": "22-gfm.md/document",
+      "output": "visit www.example.com or <https://mica.dev/page?a=(1)> now\nmail <dev@mica.dev> please\n\n~~one tilde~~ and ~~two tildes~~ strike\n\n| name | qty | price |\n| :--- | :---: | ---: |\n| tea | 2 | 1.50 |\n\n- [x] parent task\n    - [ ] two-space subtask"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"visit www.example.com or https://mica.dev/page?a=(1) now\\nmail dev@mica.dev please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"http://www.example.com\",\"start\":6,\"type\":\"link\"},{\"end\":52,\"href\":\"https://mica.dev/page?a=(1)\",\"start\":25,\"type\":\"link\"},{\"end\":74,\"href\":\"mailto:dev@mica.dev\",\"start\":62,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"one tilde and two tildes strike\",\"data\":{\"marks\":[{\"end\":9,\"start\":0,\"type\":\"strike\"},{\"end\":24,\"start\":14,\"type\":\"strike\"}]}},{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"aligns\":[\"left\",\"center\",\"right\"],\"header\":true,\"rows\":[[\"name\",\"qty\",\"price\"],[\"tea\",\"2\",\"1.50\"]],\"widths\":[1.0,1.0,1.0]}},{\"type\":\"todo\",\"text\":\"parent task\",\"data\":{\"checked\":true}},{\"type\":\"todo\",\"text\":\"two-space subtask\",\"data\":{\"checked\":false,\"indent\":1}}]"
+      },
+      "id": "22-gfm.md/fragment",
+      "output": "visit www.example.com or <https://mica.dev/page?a=(1)> now\nmail <dev@mica.dev> please\n\n~~one tilde~~ and ~~two tildes~~ strike\n\n| name | qty | price |\n| :--- | :---: | ---: |\n| tea | 2 | 1.50 |\n\n- [x] parent task\n    - [ ] two-space subtask"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline math E = mc^2 in text\",\"data\":{\"marks\":[{\"end\":20,\"start\":12,\"type\":\"math\"}]}},{\"type\":\"paragraph\",\"text\":\"dollar prices $5 and $10 stay literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"latex form a^2 + b^2 normalizes\",\"data\":{\"marks\":[{\"end\":20,\"start\":11,\"type\":\"math\"}]}},{\"type\":\"math_block\",\"text\":\"\\\\int_0^\\\\infty e^{-x^2} dx = \\\\frac{\\\\sqrt{\\\\pi}}{2}\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"x^2 - 1\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"\\\\sum_{i=1}^n i\",\"data\":{}}]"
+      },
+      "id": "23-math.md/document",
+      "output": "inline math $E = mc^2$ in text\n\ndollar prices \\$5 and \\$10 stay literal\n\nlatex form $a^2 + b^2$ normalizes\n\n$$\n\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}\n$$\n\n$$\nx^2 - 1\n$$\n\n$$\n\\sum_{i=1}^n i\n$$"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline math E = mc^2 in text\",\"data\":{\"marks\":[{\"end\":20,\"start\":12,\"type\":\"math\"}]}},{\"type\":\"paragraph\",\"text\":\"dollar prices $5 and $10 stay literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"latex form a^2 + b^2 normalizes\",\"data\":{\"marks\":[{\"end\":20,\"start\":11,\"type\":\"math\"}]}},{\"type\":\"math_block\",\"text\":\"\\\\int_0^\\\\infty e^{-x^2} dx = \\\\frac{\\\\sqrt{\\\\pi}}{2}\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"x^2 - 1\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"\\\\sum_{i=1}^n i\",\"data\":{}}]"
+      },
+      "id": "23-math.md/fragment",
+      "output": "inline math $E = mc^2$ in text\n\ndollar prices \\$5 and \\$10 stay literal\n\nlatex form $a^2 + b^2$ normalizes\n\n$$\n\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}\n$$\n\n$$\nx^2 - 1\n$$\n\n$$\n\\sum_{i=1}^n i\n$$"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"Useful information that users should know.\",\"data\":{\"alert\":\"note\"}},{\"type\":\"quote\",\"text\":\"Helpful advice with bold, italic and code.\",\"data\":{\"alert\":\"tip\",\"marks\":[{\"end\":24,\"start\":20,\"type\":\"bold\"},{\"end\":32,\"start\":26,\"type\":\"italic\"},{\"end\":41,\"start\":37,\"type\":\"code\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Key information users need, with a link.\",\"data\":{\"alert\":\"important\",\"marks\":[{\"end\":39,\"href\":\"/docs\",\"start\":35,\"type\":\"link\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Urgent info that needs immediate attention.\",\"data\":{\"alert\":\"warning\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Advises about risks or negative outcomes.\",\"data\":{\"alert\":\"caution\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"A callout with a nested list:\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"first point\",\"data\":{\"quote\":1}},{\"type\":\"bulleted_list\",\"text\":\"second point\",\"data\":{\"quote\":1}},{\"type\":\"quote\",\"text\":\"A callout, then a normal quote below.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Just a plain blockquote, not a callout.\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Lowercase type is still a callout.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}}]"
+      },
+      "id": "24-callouts.md/document",
+      "output": "> [!NOTE]\n> Useful information that users should know.\n>\n\n> [!TIP]\n> Helpful advice with **bold**, *italic* and `code`.\n>\n\n> [!IMPORTANT]\n> Key information users need, with a [link](/docs).\n>\n\n> [!WARNING]\n> Urgent info that needs immediate attention.\n>\n\n> [!CAUTION]\n> Advises about risks or negative outcomes.\n>\n\n> [!NOTE]\n> A callout with a nested list:\n>\n> - first point\n> - second point\n\n\n> [!NOTE]\n> A callout, then a normal quote below.\n>\n\n> Just a plain blockquote, not a callout.\n>\n\n> [!NOTE]\n> Lowercase type is still a callout.\n>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"Useful information that users should know.\",\"data\":{\"alert\":\"note\"}},{\"type\":\"quote\",\"text\":\"Helpful advice with bold, italic and code.\",\"data\":{\"alert\":\"tip\",\"marks\":[{\"end\":24,\"start\":20,\"type\":\"bold\"},{\"end\":32,\"start\":26,\"type\":\"italic\"},{\"end\":41,\"start\":37,\"type\":\"code\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Key information users need, with a link.\",\"data\":{\"alert\":\"important\",\"marks\":[{\"end\":39,\"href\":\"/docs\",\"start\":35,\"type\":\"link\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Urgent info that needs immediate attention.\",\"data\":{\"alert\":\"warning\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Advises about risks or negative outcomes.\",\"data\":{\"alert\":\"caution\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"A callout with a nested list:\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"first point\",\"data\":{\"quote\":1}},{\"type\":\"bulleted_list\",\"text\":\"second point\",\"data\":{\"quote\":1}},{\"type\":\"quote\",\"text\":\"A callout, then a normal quote below.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Just a plain blockquote, not a callout.\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Lowercase type is still a callout.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}}]"
+      },
+      "id": "24-callouts.md/fragment",
+      "output": "> [!NOTE]\n> Useful information that users should know.\n>\n\n> [!TIP]\n> Helpful advice with **bold**, *italic* and `code`.\n>\n\n> [!IMPORTANT]\n> Key information users need, with a [link](/docs).\n>\n\n> [!WARNING]\n> Urgent info that needs immediate attention.\n>\n\n> [!CAUTION]\n> Advises about risks or negative outcomes.\n>\n\n> [!NOTE]\n> A callout with a nested list:\n>\n> - first point\n> - second point\n\n\n> [!NOTE]\n> A callout, then a normal quote below.\n>\n\n> Just a plain blockquote, not a callout.\n>\n\n> [!NOTE]\n> Lowercase type is still a callout.\n>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"[foo bar](/baz)\",\"data\":{\"marks\":[{\"end\":8,\"href\":\"/uri\",\"start\":5,\"type\":\"link\"}]}}]"
+      },
+      "id": "30-nested-link.md/document",
+      "output": "\\[foo [bar](/uri)\\](/baz)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"[foo bar](/baz)\",\"data\":{\"marks\":[{\"end\":8,\"href\":\"/uri\",\"start\":5,\"type\":\"link\"}]}}]"
+      },
+      "id": "30-nested-link.md/fragment",
+      "output": "\\[foo [bar](/uri)\\](/baz)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"\",\"data\":{\"language\":\"a~~\"}}]"
+      },
+      "id": "33-tilde-fallback.md/document",
+      "output": "```a~~\n```"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"\",\"data\":{\"language\":\"a~~\"}}]"
+      },
+      "id": "33-tilde-fallback.md/fragment",
+      "output": "```a~~\n```"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/u\",\"start\":0,\"title\":\"C:\\\\name\",\"type\":\"link\"}]}}]"
+      },
+      "id": "34-link-title-escape.md/document",
+      "output": "[a](/u \"C:\\name\")"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/u\",\"start\":0,\"title\":\"C:\\\\name\",\"type\":\"link\"}]}}]"
+      },
+      "id": "34-link-title-escape.md/fragment",
+      "output": "[a](/u \"C:\\name\")"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"ß\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/url\",\"start\":0,\"type\":\"link\"}]}}]"
+      },
+      "id": "35-ref-case-fold.md/document",
+      "output": "[ß](/url)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"ß\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/url\",\"start\":0,\"type\":\"link\"}]}}]"
+      },
+      "id": "35-ref-case-fold.md/fragment",
+      "output": "[ß](/url)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"text with a and b spans\",\"data\":{\"marks\":[{\"end\":11,\"start\":10,\"type\":\"code\"},{\"end\":17,\"start\":16,\"type\":\"code\"}]}}]"
+      },
+      "id": "37-code-spans.md/document",
+      "output": "text with `a` and `b` spans"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"text with a and b spans\",\"data\":{\"marks\":[{\"end\":11,\"start\":10,\"type\":\"code\"},{\"end\":17,\"start\":16,\"type\":\"code\"}]}}]"
+      },
+      "id": "37-code-spans.md/fragment",
+      "output": "text with `a` and `b` spans"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a code   span b\",\"data\":{\"marks\":[{\"end\":13,\"start\":2,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"x\\\\\\ny\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"t <span  \\nclass=\\\"k\\\">u\",\"data\":{\"marks\":[{\"end\":20,\"start\":2,\"type\":\"html\"}]}}]"
+      },
+      "id": "38-hardbreak-spans.md/document",
+      "output": "a `code   span` b\n\nx\\\ny\n\nt <span  \nclass=\"k\">u"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a code   span b\",\"data\":{\"marks\":[{\"end\":13,\"start\":2,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"x\\\\\\ny\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"t <span  \\nclass=\\\"k\\\">u\",\"data\":{\"marks\":[{\"end\":20,\"start\":2,\"type\":\"html\"}]}}]"
+      },
+      "id": "38-hardbreak-spans.md/fragment",
+      "output": "a `code   span` b\n\nx\\\ny\n\nt <span  \nclass=\"k\">u"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"code\"},{\"end\":1,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"a]b\",\"data\":{\"marks\":[{\"end\":3,\"start\":0,\"type\":\"code\"},{\"end\":3,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"[foo](/uri)\",\"data\":{\"marks\":[{\"end\":11,\"start\":4,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"[ahttps://e.com/xb](/y)\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"https://e.com/x\",\"start\":2,\"type\":\"link\"}]}}]"
+      },
+      "id": "39-bracket-spans.md/document",
+      "output": "[`a`](/x)\n\n[`a]b`](/x)\n\n\\[foo`](/uri)`\n\n\\[a<https://e.com/x>b\\](/y)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"code\"},{\"end\":1,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"a]b\",\"data\":{\"marks\":[{\"end\":3,\"start\":0,\"type\":\"code\"},{\"end\":3,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"[foo](/uri)\",\"data\":{\"marks\":[{\"end\":11,\"start\":4,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"[ahttps://e.com/xb](/y)\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"https://e.com/x\",\"start\":2,\"type\":\"link\"}]}}]"
+      },
+      "id": "39-bracket-spans.md/fragment",
+      "output": "[`a`](/x)\n\n[`a]b`](/x)\n\n\\[foo`](/uri)`\n\n\\[a<https://e.com/x>b\\](/y)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"strip \\t and a but keep    and  \",\"data\":{\"marks\":[{\"end\":7,\"start\":6,\"type\":\"code\"},{\"end\":13,\"start\":12,\"type\":\"code\"},{\"end\":25,\"start\":23,\"type\":\"code\"},{\"end\":31,\"start\":30,\"type\":\"code\"}]}}]"
+      },
+      "id": "40-code-span-strip.md/document",
+      "output": "strip `\t` and `a` but keep `  ` and ` `"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"strip \\t and a but keep    and  \",\"data\":{\"marks\":[{\"end\":7,\"start\":6,\"type\":\"code\"},{\"end\":13,\"start\":12,\"type\":\"code\"},{\"end\":25,\"start\":23,\"type\":\"code\"},{\"end\":31,\"start\":30,\"type\":\"code\"}]}}]"
+      },
+      "id": "40-code-span-strip.md/fragment",
+      "output": "strip `\t` and `a` but keep `  ` and ` `"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"one\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"numbered_list\",\"text\":\"alpha\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"beta\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nafter an ordered list\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"foo\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bar\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<!-- -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"baz\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bim\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<details>\\n<summary>toggle</summary>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"inner\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"tight item\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div>no blank line between</div>\",\"data\":{\"language\":\"html\",\"raw\":true}}]"
+      },
+      "id": "41-html-after-list.md/document",
+      "output": "- one\n- two\n\n</details>\n\n1. alpha\n2. beta\n\n<div align=\"center\">\nafter an ordered list\n</div>\n\n- foo\n- bar\n\n<!-- -->\n\n- baz\n- bim\n\n<details>\n<summary>toggle</summary>\n\n- inner\n\n</details>\n\n- tight item\n\n<div>no blank line between</div>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"one\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"numbered_list\",\"text\":\"alpha\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"beta\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nafter an ordered list\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"foo\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bar\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<!-- -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"baz\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bim\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<details>\\n<summary>toggle</summary>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"inner\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"tight item\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div>no blank line between</div>\",\"data\":{\"language\":\"html\",\"raw\":true}}]"
+      },
+      "id": "41-html-after-list.md/fragment",
+      "output": "- one\n- two\n\n</details>\n\n1. alpha\n2. beta\n\n<div align=\"center\">\nafter an ordered list\n</div>\n\n- foo\n- bar\n\n<!-- -->\n\n- baz\n- bim\n\n<details>\n<summary>toggle</summary>\n\n- inner\n\n</details>\n\n- tight item\n\n<div>no blank line between</div>"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"a\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"b\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"c\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"d\\n- e\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"w\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"x\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"y\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"z\\n1. zz\",\"data\":{}}]"
+      },
+      "id": "42-lazy-item-continuation.md/document",
+      "output": "- a\n- b\n- c\n- d\n  \\- e\n\n1. w\n2. x\n3. y\n4. z\n   1\\. zz"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"a\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"b\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"c\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"d\\n- e\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"w\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"x\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"y\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"z\\n1. zz\",\"data\":{}}]"
+      },
+      "id": "42-lazy-item-continuation.md/fragment",
+      "output": "- a\n- b\n- c\n- d\n  \\- e\n\n1. w\n2. x\n3. y\n4. z\n   1\\. zz"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[![[![[![[![[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":84,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":80,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":76,\"href\":\"u\",\"start\":15,\"type\":\"image\"},{\"end\":72,\"href\":\"u\",\"start\":16,\"type\":\"image\"},{\"end\":68,\"href\":\"u\",\"start\":17,\"type\":\"image\"},{\"end\":64,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":60,\"href\":\"u\",\"start\":19,\"type\":\"image\"},{\"end\":56,\"href\":\"u\",\"start\":20,\"type\":\"image\"},{\"end\":52,\"href\":\"u\",\"start\":21,\"type\":\"image\"},{\"end\":48,\"href\":\"u\",\"start\":22,\"type\":\"image\"},{\"end\":44,\"href\":\"u\",\"start\":23,\"type\":\"image\"},{\"end\":40,\"href\":\"u\",\"start\":24,\"type\":\"image\"},{\"end\":36,\"href\":\"u\",\"start\":25,\"type\":\"image\"},{\"end\":32,\"href\":\"u\",\"start\":26,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"x ![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"Links 40 deep: the innermost link wins, as CommonMark says anyway.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":40,\"href\":\"u\",\"start\":39,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Within the budget nothing changes:\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":67,\"href\":\"u\",\"start\":1,\"type\":\"image\"},{\"end\":63,\"href\":\"u\",\"start\":2,\"type\":\"image\"},{\"end\":59,\"href\":\"u\",\"start\":3,\"type\":\"image\"},{\"end\":55,\"href\":\"u\",\"start\":4,\"type\":\"image\"},{\"end\":51,\"href\":\"u\",\"start\":5,\"type\":\"image\"},{\"end\":47,\"href\":\"u\",\"start\":6,\"type\":\"image\"},{\"end\":43,\"href\":\"u\",\"start\":7,\"type\":\"image\"},{\"end\":39,\"href\":\"u\",\"start\":8,\"type\":\"image\"},{\"end\":35,\"href\":\"u\",\"start\":9,\"type\":\"image\"},{\"end\":31,\"href\":\"u\",\"start\":10,\"type\":\"image\"},{\"end\":27,\"href\":\"u\",\"start\":11,\"type\":\"image\"},{\"end\":23,\"href\":\"u\",\"start\":12,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"link\"}]}}]"
+      },
+      "id": "43-inline-nesting-budget.md/document",
+      "output": "Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.\n\n\\[!\\[\\[!\\[\\[!\\[\\[!\\[\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[[![![a](u)](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\n\nImages 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.\n\nx !\\[!\\[!\\[!\\[!\\[!\\[!\\[!\\[![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\n\nLinks 40 deep: the innermost link wins, as CommonMark says anyway.\n\n\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[[a](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\n\nWithin the budget nothing changes:\n\n\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[[![![a](u)](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[![[![[![[![[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":84,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":80,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":76,\"href\":\"u\",\"start\":15,\"type\":\"image\"},{\"end\":72,\"href\":\"u\",\"start\":16,\"type\":\"image\"},{\"end\":68,\"href\":\"u\",\"start\":17,\"type\":\"image\"},{\"end\":64,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":60,\"href\":\"u\",\"start\":19,\"type\":\"image\"},{\"end\":56,\"href\":\"u\",\"start\":20,\"type\":\"image\"},{\"end\":52,\"href\":\"u\",\"start\":21,\"type\":\"image\"},{\"end\":48,\"href\":\"u\",\"start\":22,\"type\":\"image\"},{\"end\":44,\"href\":\"u\",\"start\":23,\"type\":\"image\"},{\"end\":40,\"href\":\"u\",\"start\":24,\"type\":\"image\"},{\"end\":36,\"href\":\"u\",\"start\":25,\"type\":\"image\"},{\"end\":32,\"href\":\"u\",\"start\":26,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"x ![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"Links 40 deep: the innermost link wins, as CommonMark says anyway.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":40,\"href\":\"u\",\"start\":39,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Within the budget nothing changes:\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":67,\"href\":\"u\",\"start\":1,\"type\":\"image\"},{\"end\":63,\"href\":\"u\",\"start\":2,\"type\":\"image\"},{\"end\":59,\"href\":\"u\",\"start\":3,\"type\":\"image\"},{\"end\":55,\"href\":\"u\",\"start\":4,\"type\":\"image\"},{\"end\":51,\"href\":\"u\",\"start\":5,\"type\":\"image\"},{\"end\":47,\"href\":\"u\",\"start\":6,\"type\":\"image\"},{\"end\":43,\"href\":\"u\",\"start\":7,\"type\":\"image\"},{\"end\":39,\"href\":\"u\",\"start\":8,\"type\":\"image\"},{\"end\":35,\"href\":\"u\",\"start\":9,\"type\":\"image\"},{\"end\":31,\"href\":\"u\",\"start\":10,\"type\":\"image\"},{\"end\":27,\"href\":\"u\",\"start\":11,\"type\":\"image\"},{\"end\":23,\"href\":\"u\",\"start\":12,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"link\"}]}}]"
+      },
+      "id": "43-inline-nesting-budget.md/fragment",
+      "output": "Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.\n\n\\[!\\[\\[!\\[\\[!\\[\\[!\\[\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[[![![a](u)](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\n\nImages 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.\n\nx !\\[!\\[!\\[!\\[!\\[!\\[!\\[!\\[![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\n\nLinks 40 deep: the innermost link wins, as CommonMark says anyway.\n\n\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[\\[[a](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\\](u)\n\nWithin the budget nothing changes:\n\n\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[![\\[[![![a](u)](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)](u)\\](u)"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[]"
+      },
+      "id": "empty/document",
+      "output": ""
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[]"
+      },
+      "id": "empty/fragment",
+      "output": ""
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"中文😀𠀀 粗体\",\"data\":{\"marks\":[{\"end\":9,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"x\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"math\"}]}}]"
+      },
+      "id": "unicode/document",
+      "output": "中文😀𠀀 **粗体**\n\n$x$"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"中文😀𠀀 粗体\",\"data\":{\"marks\":[{\"end\":9,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"x\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"math\"}]}}]"
+      },
+      "id": "unicode/fragment",
+      "output": "中文😀𠀀 **粗体**\n\n$x$"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"body\",\"data\":{}}]"
+      },
+      "id": "front-matter/document",
+      "output": "body"
+    },
+    {
+      "args": {
+        "assets_json": "{}",
+        "blocks_json": "[{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"heading\",\"text\":\"tags: [a]\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"body\",\"data\":{}}]"
+      },
+      "id": "front-matter/fragment",
+      "output": "---\n\n## tags: \\[a\\]\n\nbody"
+    },
+    {
+      "args": {
+        "assets_json": "{\"asset\":\"assets/photo.png\"}",
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"alt\",\"data\":{\"file_id\":\"asset\",\"url\":\"old.png\"}}]"
+      },
+      "id": "asset-rewrite",
+      "output": "![alt](assets/photo.png)"
+    }
+  ],
+  "function": "serialize_body_json"
+}

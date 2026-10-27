@@ -7,6 +7,7 @@ members = [
   "crates/interchange",
   "crates/markdown",
   "crates/md-core",
+  "crates/md-wasm",
   "crates/mcp-server",
   "crates/mica-core",
 ]
@@ -50,3 +51,9 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.11", features = ["serde", "v4", "v7"] }
+
+# G2: optimize the shipped binding for throughput. LTO is enabled only by
+# scripts/build-md-wasm.sh, so server release builds retain their own settings.
+[profile.release.package.mica-md-wasm]
+opt-level = 3
+codegen-units = 1

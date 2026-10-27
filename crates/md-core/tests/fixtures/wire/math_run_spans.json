@@ -1,0 +1,96 @@
+{
+  "cases": [
+    {
+      "args": {
+        "source": ""
+      },
+      "id": "math-0",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "plain 中文 😀 𠀀"
+      },
+      "id": "math-1",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "**bold** and *italic* and ~~strike~~ and `code`"
+      },
+      "id": "math-2",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "**a `b`**"
+      },
+      "id": "math-3",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "[link](https://example.com \"title\") and [](/empty)"
+      },
+      "id": "math-4",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "![alt](image.png \"title\")"
+      },
+      "id": "math-5",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "literal \\*star\\* &amp; &#128512;"
+      },
+      "id": "math-6",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "line  \nbreak"
+      },
+      "id": "math-7",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "https://example.com www.example.com a@b.co"
+      },
+      "id": "math-8",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "source": "中文😀 $x^2$ and \\(a+b\\) 𠀀"
+      },
+      "id": "math-9",
+      "output": "[[5,10],[15,22]]"
+    },
+    {
+      "args": {
+        "source": "price $5 and $10; $$display$$"
+      },
+      "id": "math-10",
+      "output": "[[6,20]]"
+    },
+    {
+      "args": {
+        "source": "`$HOME` and $x$"
+      },
+      "id": "math-11",
+      "output": "[[12,15]]"
+    },
+    {
+      "args": {
+        "source": "text[^1] <em>html</em>"
+      },
+      "id": "math-12",
+      "output": "[]"
+    }
+  ],
+  "function": "math_run_spans_json"
+}

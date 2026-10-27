@@ -1,0 +1,17 @@
+[package]
+name = "mica-md-wasm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Single-threaded Web binding: no UUID entropy or platform render dependencies.
+mica-md = { path = "../md-core", default-features = false }
+# Approved binding-only dependency; CLI must use the identical schema version.
+wasm-bindgen = "=0.2.129"
+# Preserve core engine metadata while stamping this binding's source set.
+serde_json.workspace = true

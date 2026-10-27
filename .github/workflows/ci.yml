@@ -315,6 +315,13 @@ jobs:
       # The FFI-backed unit tests load rust/target/release and refuse a library
       # whose source fingerprint does not match this checkout.
       - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: md-wasm-flutter
+      - name: Install pinned wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Build Markdown Web engine before freshness tests
+        run: bash ../../scripts/build-md-wasm.sh
       - name: FFI library for the unit tests
         run: cargo build --release --manifest-path rust/Cargo.toml
       - name: Dart unit tests
@@ -412,6 +419,10 @@ jobs:
       - uses: ./.github/actions/setup-flutter
       # Same flags as the release build. A bundle built differently from the one we
       # ship would make the CDN and caching assertions meaningless.
+      - name: Install pinned wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Build Markdown Web engine
+        run: bash scripts/build-md-wasm.sh
       - name: Build the web bundle
         working-directory: clients/mica_flutter
         run: |
@@ -533,6 +544,7 @@ jobs:
       - name: Build the harness bundle (one build, three harness pages)
         run: |
           set -euo pipefail
+          bash scripts/build-md-wasm.sh
           cd clients/mica_flutter
           flutter build web --release --no-web-resources-cdn \
             --target=e2e/web_harness_entry.dart \
