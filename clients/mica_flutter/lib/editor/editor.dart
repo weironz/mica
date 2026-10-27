@@ -12,6 +12,7 @@ import 'controller.dart';
 import 'ai_edits.dart';
 import 'highlight.dart';
 import 'markdown.dart';
+import '../markdown/markdown_codec.dart' show markdownCodec, MarkdownCodecException, BlockSpec;
 import 'marks.dart';
 import 'paste_repair.dart';
 import 'clipboard_copy.dart';
@@ -37,7 +38,7 @@ import 'prose_input.dart';
 export 'controller.dart'
     show DocOp, ApplyOps, ApplyHistory, HistoryAction, EditorHistoryState;
 export 'ai_edits.dart';
-export 'markdown.dart' show markdownToBlocks, BlockSpec;
+export '../markdown/markdown_codec.dart' show BlockSpec;
 export 'model.dart' show EditorNode;
 export 'render.dart' show EditorAppearance, EditorTheme, CommentHighlight;
 
@@ -1131,6 +1132,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// Native paste interceptor (web): rich HTML or multi-line text is converted to
   /// Markdown and inserted as structured blocks; a single line of plain text
   /// falls through to the normal inline paste. Returns true when consumed.
+  /// Parse pasted/AI Markdown through the engine; null (logged once) lets the
+  /// caller fall back to plain text instead of throwing mid-paste (02 §5.2).
+  List<BlockSpec>? _parseOrNull(String markdown) {
+    try {
+      return markdownCodec.parseBlocks(markdown);
+    } on MarkdownCodecException catch (error) {
+      debugPrint('markdown parse failed: $error');
+      return null;
+    }
+  }
+
   bool _handleRichPaste(
     String markdown,
     String plain,
@@ -1230,7 +1242,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         !node.isCode &&
         node.kind != 'table' &&
         !plain.contains('\n')) {
-      final parsed = parseInlineMath(plain);
+      final parsed = markdownCodec.parseInlineMath(plain);
       if (parsed.marks.isNotEmpty) {
         final sel = _controller.selection;
         if (sel != null) {
@@ -1266,8 +1278,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         !node.isAtomic &&
         !node.isCode &&
         node.kind != 'table') {
-      final specs = markdownToBlocks(markdown);
-      if (specs.length == 1) {
+      final specs = _parseOrNull(markdown);
+      if (specs != null && specs.length == 1) {
         final sel = _controller.selection;
         if (sel != null && !sel.isMultiNode) {
           final from = sel.start.node == sel.focus.node ? sel.start.offset : 0;
@@ -1295,7 +1307,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     if (rich || markdown.contains('\n')) {
       // Paste replaces the current selection (Ctrl+A → paste swaps the doc).
-      _controller.insertBlocksReplacingSelection(markdownToBlocks(markdown));
+      final parsed = _parseOrNull(markdown);
+      if (parsed == null) return false; // engine down → plain text branch
+      _controller.insertBlocksReplacingSelection(parsed);
       _rehostExternalImages();
       _syncImeFromSelection(force: true);
       return true;
@@ -1785,7 +1799,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // A chunk bringing 2+ NEW newlines at once is a paste: parse it as
     // Markdown into structured blocks instead of one literal block.
     if (!node.isCode && !shift && newBreaks >= oldBreaks + 2) {
-      _controller.replaceFocusedWithBlocks(markdownToBlocks(text));
+      _controller.replaceFocusedWithBlocks(_parseOrNull(text) ?? const []);
       _rehostExternalImages();
       _lastSentIme = _imeValue();
       _syncImeFromSelection(force: true);
@@ -5662,7 +5676,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       builder: (context) => _InlineAiDialog(onStream: stream),
     );
     if (result == null || result.markdown.trim().isEmpty) return;
-    _controller.insertBlocksAfterFocus(markdownToBlocks(result.markdown));
+    _controller.insertBlocksAfterFocus(_parseOrNull(result.markdown) ?? const []);
     _rehostExternalImages();
     _syncImeFromSelection(force: true);
   }
@@ -5754,7 +5768,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.collapseTo(
       DocPosition(nodeIndex, _controller.nodes[nodeIndex].text.length),
     );
-    _controller.insertBlocksAfterFocus(markdownToBlocks(result.markdown));
+    _controller.insertBlocksAfterFocus(_parseOrNull(result.markdown) ?? const []);
     _rehostExternalImages();
     _syncImeFromSelection(force: true);
   }

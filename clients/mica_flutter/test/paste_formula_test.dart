@@ -3,12 +3,16 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+
+import 'support/markdown_codec.dart';
 
 /// Math paste routing: a pasted line that is entirely one *display* formula
 /// ($$…$$, \[…\]) becomes a standalone math block; *inline* forms ($…$,
 /// \(…\)) are woven into the text flow as inline-math marks instead of
 /// jumping onto their own line.
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('pastedFormulaSource: display delimiters → math block source', () {
     const cases = {
       r'$$E = mc^2$$': r'E = mc^2',
