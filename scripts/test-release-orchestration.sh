@@ -79,6 +79,7 @@ exit 0
 EOF
 
 printf '#!/bin/sh\nexit 0\n' > "$stub_bin/dart"
+printf '#!/bin/sh\necho "wasm-bindgen 0.2.129"\n' > "$stub_bin/wasm-bindgen"
 chmod +x "$stub_bin"/*
 
 # ── fixture repository ───────────────────────────────────────────────────────
@@ -93,6 +94,7 @@ new_fixture() {
      "$source_root/scripts/lib-receipt.sh" "$source_root/scripts/check-ignored-sources.sh" \
      "$source_root/scripts/manifest-version.sh" "$source_root/scripts/check-migration-tracking.sh" \
      "$source_root/scripts/check-migration-bytes.sh" "$source_root/scripts/test-migration-tracking.sh" \
+     "$source_root/scripts/check-md-wasm-toolchain.sh" \
      "$repo/scripts/"
 
   printf '[package]\nname = "mica-cli"\nversion = "%s"\n' "$old" > "$repo/Cargo.toml"
@@ -104,6 +106,10 @@ version = "$old"
 [[package]]
 name = "mica-cli"
 version = "$old"
+
+[[package]]
+name = "wasm-bindgen"
+version = "0.2.129"
 LOCK
   printf 'channel = "1.90.0"\n' > "$repo/rust-toolchain.toml"
   printf '{ "flutter": "3.35.0" }\n' > "$repo/.fvmrc"

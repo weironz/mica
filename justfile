@@ -75,6 +75,7 @@ seed-dev:
 # build-web defeats it — keep the two lines identical.
 [doc("Rebuild the dev web bundle served by compose nginx")]
 dev-web:
+    bash scripts/build-md-wasm.sh
     cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
     chmod -R a+rX clients/mica_flutter/build/web
 
@@ -213,6 +214,7 @@ build-installer version:
 # flag on every `flutter build web` (dev-web, here, ci.yml, release.yml).
 [doc("3/4  Flutter web bundle -> deploy/web (staged for the web image)")]
 build-web:
+    bash scripts/build-md-wasm.sh
     cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
     rm -rf deploy/web && mkdir -p deploy/web
     cp -r clients/mica_flutter/build/web/. deploy/web/

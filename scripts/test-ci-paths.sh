@@ -22,6 +22,8 @@ check lockfile $'flutter\nweb-e2e' clients/mica_flutter/pubspec.lock
 check sdk $'flutter\nweb-e2e' .fvmrc
 check backend $'rust\nweb-e2e\ncontainer\nmcp' crates/api-server/src/main.rs
 check mixed "$all" crates/mica-core/src/lib.rs clients/mica_flutter/lib/main.dart
+check md-core "$all" crates/md-core/src/x.rs
+check md-wasm "$all" crates/md-wasm/src/lib.rs
 check ffi "$all" clients/mica_flutter/rust/src/lib.rs
 check workflow "$all" .github/workflows/ci.yml
 check unknown "$all" new-module/build.config

@@ -22,6 +22,7 @@ docker info >/dev/null 2>&1 || fail "Docker is not running"
 acr=registry.cn-shenzhen.aliyuncs.com/willspace
 hub=willdockerhub
 
+bash scripts/build-md-wasm.sh
 note "web bundle (flutter build web)"
 (cd clients/mica_flutter && "$FLUTTER" pub get >/dev/null && "$FLUTTER" build web --release --no-web-resources-cdn)
 bash clients/mica_flutter/tool/gfonts/mirror.sh --check
