@@ -5,12 +5,12 @@
 /// `data.marks` via [parseInline]; code blocks and tables keep raw text.
 library;
 
+import '../markdown/markdown_codec.dart' show BlockSpec;
 import 'highlight.dart';
 import 'marks.dart';
 import 'table.dart';
 
-/// A block to create: its kind, plain text, and data map (heading level, etc.).
-typedef BlockSpec = ({String kind, String text, Map<String, dynamic> data});
+export '../markdown/markdown_codec.dart' show BlockSpec;
 
 /// Ordered-list marker: 1–9 digits + `.` or `)` + space (or end-of-line for
 /// an empty item) — mirrors the Rust engine's numbered_list_marker.

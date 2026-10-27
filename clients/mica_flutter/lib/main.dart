@@ -40,6 +40,7 @@ import 'local/local_offline.dart';
 import 'local/local_offline_factory.dart';
 import 'editor/word_count.dart';
 import 'web/yjs_probe.dart';
+import 'markdown/markdown_codec.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;
 import 'editor/model.dart' show headingButtonTarget, kMonoFont;
 import 'editor/version_diff.dart';
@@ -266,8 +267,7 @@ void main() {
         logCrash('PlatformError: $error\n$stack');
         return false;
       };
-      // Desktop: restore window size/position + enforce a min size before the first
-      // frame (no-op on web/mobile). Awaited so the window is ready before runApp.
+      // Restore desktop window geometry before the first frame (no-op on web/mobile).
       await initDesktopWindow();
       // Seed the UI language and the palette from the persisted choices (prefs are
       // file/localStorage backed and loaded synchronously) before the first frame
@@ -275,11 +275,11 @@ void main() {
       // see loadPersistedThemeMode for what that looked like when it didn't.
       loadPersistedLocale();
       loadPersistedThemeMode();
-      // Suppress the browser's native right-click menu so the editor can show its
-      // own (e.g. image actions) on web.
+      // Suppress the browser menu so the editor can show its own image actions.
       if (kIsWeb) BrowserContextMenu.disableContextMenu();
       // Web: register the yjs CRDT self-test hook (no-op off web). P2-M4 W1.
       registerYjsSelfTest();
+      await initMarkdownCodec();
       warmUpFonts();
       runApp(const MicaApp());
     },

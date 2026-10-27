@@ -465,3 +465,64 @@ WP-W 通过允许的非 Git 命令再次核对真实依赖图：`cargo tree --ma
 
 当前剩余阻塞不变：render HTML 因 `cfg` 不在 wire_gold render 测试里执行，默认 9 绿不能称真实 FFI 全九项绿；固定默认 args 的 HTML 实际内容差异、parse_body/encode_cells 对象键序差异继续待审核裁决。未改测试去掩盖这些失败。WP-D 门面与 Windows 实际集成/首帧/安装包验证仍不在本工作包完成证明中。
 
+### 2026-10-27 WP-D：Dart 门面与真实 FFI 接线
+
+基线 `8d78ba6c`，分支 `worktree-agent-a64add55c7b76fbd3`。本记录是执行证据，不是 M2 通过结论。未修改冻结接口、未删除 Dart 镜像、未推送或发版。
+
+- **T2.5**：`Mark` 原样迁移、旧 `marks.dart` re-export；`BlockSpec` 迁到冻结门面，旧解析器 re-export。接口、异常、访问器、初始化兜底、不可用实现、wire 映射和 wasm 实现已落地。依赖实际 `bc72bc12` 生成物实现十个同步 FFI 调用；仅检查真实初始化状态来容忍已初始化，其他初始化失败继续抛给门面兜底。提交 `50bf6030`、`69f92edd`、`0281dc34`。旧镜像的格式化噪音已撤回。
+- **T2.8**：`main()` 在 `runApp` 前 await 初始化。`main.dart` +4/-4，净 **0 行**，同库 18 文件仍为 **21088 行**；合并两处原注释抵消 import 与 await。提交 `e3b227ad`。
+- **T2.9 Dart 侧**：真 FFI 的 `useNativeMarkdownCodec()` 先执行 `initCheckedNativeRust()`，再安装 io codec；共用断言、VM/Web/Windows 入口、文件系统 gold 查找和浏览器 fetch/wasm loader 已落地，缺文件失败。提交 `a0f2c0c3`、`45ba2e17`。黄金文件原始 output 保留，块和 marks 值按结构比较、Markdown/HTML 按字符串比较；不排序 marks、不清理 data 字段。Dart 门面没有 export HTML API，因此 export 用例不计为 Dart 通过/跳过，由 wire/绑定层另测；跨端字节与 render 一致性尚未确立。
+- **降级测试**：所有不可用方法均抛 `MarkdownCodecException`，未初始化访问器报 `StateError`；另加浏览器缺 wasm 的真实初始化失败后仍可绘制首帧的测试（尚未执行）。提交 `66f28d78` 的 T2.12 标签沿用了初始委派编号，**不表示下述真正 T2.12 已完成**。
+- **阶段文档 T2.12（差分工具切门面）未完成**：保留原 S0 Rust `MicaDocument` 路径及基线，未再生成 differential baseline；该改造不能用降级测试替代。**T2.10 Web freshness 不属本轮已完成项**，本分支没有新增 freshness 测试或 wasm 指纹门禁。
+- **Windows 入口**：提交 `44a4716d`，同一 gold body 供 `integration_test/markdown_codec_test.dart` 使用；另一个启动入口复用真实 `app.main()`。初始委派称 T2.13 desktop，阶段文档中 Windows 验证实际为 **T2.14**；阶段 T2.13 性能预算本轮未验收。
+
+接入依赖（只 cherry-pick，不手改生成物）：`6633f7e7` = WP-W `bc72bc12`、`74550843` = WP-R gold `7a9ee622`、`a89113cf` = `881502aa`。保留现有 render 特性，未绕过它来使黄金测试变绿。
+
+#### 命令与验证结果
+
+以下路径相对 `clients/mica_flutter`，JSON reporter 均在忽略的 `build/` 中。`scripts/lib-receipt.sh` 的 source 入口仍被 worktree 隔离检查拒绝（无法判定 source 的 Git 作用域），故不冒称正式 receipt wrapper 已执行；通过数来自 Flutter JSON runner 中 hidden=false/skipped=false 的 testDone。
+
+| 项 | 实际命令 / 证据 | 结果 |
+| --- | --- | --- |
+| 新鲜原生库 | 根目录 `cargo build --release --manifest-path clients/mica_flutter/rust/Cargo.toml --locked` | exit 0；契约和差分测试均先验源码指纹，ROOTS 含 md-core |
+| 真实 VM gold | `flutter test --file-reporter json:build/wp-d-contract-receipt.json test/markdown_codec_contract_test.dart` | **8 passed / 1 failed / 0 skipped**，exit 1（添加身份断言前的九组回执） |
+| 新增身份覆盖 | `flutter test --plain-name 'MarkdownCodec engine identity and single-inline wrapper' --file-reporter json:build/wp-d-identity-receipt.json test/markdown_codec_contract_test.dart` | **1 passed / 0 failed / 0 skipped**，exit 0；真实 engineInfo 与单条 wrapper |
+| 功能回归 | `flutter test --file-reporter json:build/wp-d-regression-receipt.json test/markdown_codec_unavailable_test.dart test/markdown_wire_test.dart test/markdown_gold_parser_test.dart test/markdown_differential_test.dart test/mark_title_test.dart` | **12 passed / 0 failed / 0 skipped**，exit 0；其中 S0 差分 3 项，原基线不退化 |
+| 全量静态分析 | `flutter analyze --no-fatal-infos` | exit 0，164 条存量 info；不宣称无提示。新增门面/测试目标范围单独 analyze 无问题，exit 0 |
+| 结构 | 根目录 `just check-structure`、`bash scripts/check-file-size.sh --diff 8d78ba6c` | 均 exit 0，main 净 0 |
+| Windows 契约 | `flutter test --file-reporter json:build/wp-d-windows-receipt.json integration_test/markdown_codec_test.dart -d windows` | Debug 构建 **646.6 s** 成功；随后连接失败，**0 tests executed**，加载错误 exit 1 |
+
+唯一真实 gold 失败是 `render_html_body/23-math.md/document/clipboard`：默认 gold 期望 `<span class="math">E = mc^2</span>` 等源码 HTML；原生 render 返回 `<svg ...>`，首处差异 offset 17。其余八组 parse/body/inline、cells、serialize、math spans 均通过。没有修改期望、跳过此失败或把结构比较当成 wire 逐字节证明；冻结 Clipboard 要求与现有 render 的矛盾交由协调/审核裁决。
+
+Windows 可执行文件为 `build/windows/x64/runner/Debug/mica_flutter.exe`。runner 报 `Error waiting for a debug connection: The log reader stopped unexpectedly, or never started.`，测试未进入 setUpAll。单实例 `Local\\MicaSingleInstance` 只是源码支持的未证实假设；读取现有进程的 PowerShell 命令亦被隔离拒绝，未换工具或终止用户进程。**app.main 启动探针、真实桌面不可用首帧、Windows release 五次初始化 p50 ≤30 ms、安装包冒烟、截图、性能预算、Web 运行与交付均未验证**。646.6 s 是构建时间，绝不当初始化时间。
+
+本轮运行日志在会话 task 文件 `broc7v0s4.output`（gold）、`bkhn0iapj.output`（identity）、`bdndpjhr7.output`（regression）、`bny84ry46.output`（Windows）、`be0k86s3w.output`（analysis）、`by3patbeh.output`（structure）；完整目录 `C:/Users/willz/AppData/Local/Temp/claude/D--codes-mica/6ae5127a-2bb8-4319-979e-679ac1bd3fd3/tasks/`。六个 linux/windows 插件生成文件仅换行元数据噪音，未加入任何任务提交。
+
+### 2026-10-27 WP-D：补齐真正的 T2.10 与 T2.12
+
+本节更新上一节中 T2.10/T2.12 的未完成状态；不改变先前 HTML、Windows 或性能阻塞结论。
+
+**T2.10（`d89db2a3`）**：新增 VM `test/web_engine_fresh_test.dart`。从正式 `crates/md-wasm/build.rs` 的 ROOTS 声明动态读取源码集，用既有 `sourceFingerprint` 计算原字节 FNV；每根先确认存在，缺失失败。无 stamp 明确 skip（不当门禁通过），有 stamp 必须一致。回归测试复制本工作树的真实源码集到临时目录，验证错误 stamp、源码变动、缺失源码会失败，恢复原字节通过，不修改产品源码凑结果。
+
+为具备真实源码依赖，仅接入 WP-W `f97268be`（本分支 `39e90cad`），并接入协调者定向 LF 修复 `ea603749`（本分支 `b6c8d516`）。初次复制 W 正式产物（wasm SHA `9df6253d1181d7029a4544b25600945278d9cf4750a1db18ca46da40e54f9779`，JS SHA `90ee81fdb2466b0e2a497216203aa27907cc42777997f27b55b6141634d9a532`）后，测试真实拒绝 stamp `7f78019aa20d7d15`：本地算出 `c734b1a5bc380b7f`（2 passed / 1 failed / 0 skipped）。五 ROOTS 共 23 文件逐 SHA 对比，仅 `crates/md-wasm/{Cargo.toml,build.rs,src/lib.rs}` 有差，分别本地 17/49/64 个 CRLF，W 为 LF；去 CR 后字节完全相同，其余 20 文件 SHA 一致。这是检出换行影响严格原字节指纹，不是引擎语义 bug。
+
+随后按正式 `CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort cargo build -p mica-md-wasm --target wasm32-unknown-unknown --release --locked` 重建本树，执行同号 `wasm-bindgen 0.2.129 --target no-modules --no-typescript --remove-name-section --remove-producers-section` 重建 glue，并由 `cargo run --locked -q -p mica-md-wasm --example print_fingerprint` 生成同构建 stamp，取得 CRLF 本树 **3/0/0** 真通过（`bqd0htn7b.output`）。这不是 W 性能证据的替代。最后接入三条 LF 属性，从索引定向物化这三条干净路径（无全仓 renormalize、无算法规范化）；再次使用完整 W 三产物，本地真实源码重算得到 `7f78019aa20d7d15`，**3 passed / 0 failed / 0 skipped**（`b4768abbt.output`；`build/wp-d-t210-lf-receipt.json`）。没有只改 stamp。新增 `.gitattributes` 是协调者提交，D 未改共享源码内容；三个源文件仅 stat 噪音不加入 D 提交。正式 bundle 当前未在本分支接入 ignore 规则，产物显示 untracked，明确不 add。
+
+**T2.12（`24de5e39`）**：Rust 侧全改为真 `markdownCodec.parseBlocks` / `serializeBlocks`，删除差分工具的 `MicaDocument` 通道及 CRDT 归类；新增行内 parse/serialize 比较。只在独立 `markdown_differential_transition_audit.dart` 中保留旧 CRDT 路径，以证明旧新基线迁移来源；它读固定审计 fixture，不是正式对拍通道。原基线归档 `test/fixtures/differential/s0_baseline.json`，逐 id/category/field 旧新值及原因在 `t212_transition.json`，真实 raw/CRDT 前后结构在 `t212_crdt_audit.json`，数据仅来自固定仓库公共语料与 seed fuzz，无账号或用户文档。
+
+完整 **5742 个输入**：旧 4336 条 → 新 **5305 条**。`crdt-normalization` **227 → 0**；旧维度的总记录 4336 → 3749，新增行内测量 1556 单列，不当作新增引擎回归。
+
+| 转移类别 | 条数 | 依据 |
+| --- | ---: | --- |
+| 新测量 inline:export | 1520 | 新维度，含转义策略差异；最小例 `spec:11` 字面星号 `*` 与 `\\*` |
+| 新测量 inline:text / inline:marks | 各 18 | `spec:493` 的反斜杠链接边界 + 17 个固定 fuzz 定界符边界；完整键和值入档 |
+| 原维度新增 export | 2 | `spec:484`、`spec:487` 空链接：raw wire 保留零宽链接，旧 CRDT 导出空；实际两路径审计证明，不是绑定丢字段 |
+| 原维度新增 Rust roundtrip | 72 | 原始重叠/分段 marks 被旧 CRDT 规范化后掩盖；41 个相关输入 raw vs legacy CRDT 结构入档，新增项逐组审计通过 |
+| 消失的旧记录 | 661 | crdt-normalization 227、export 180、marks 6、roundtrip 248；逐项旧值及消失原因入档 |
+| 同 key 内容变化：仅对象键序 | 18 | block-count 17 + roundtrip 1，结构完全等价 |
+| 同 key 内容变化：实际 CRDT 值变化 | 93 | export 58、marks 15、roundtrip 20；export 逐项重走旧 fromBlocksJson 对上旧报告、raw 对上新报告；其余输入 raw→CRDT 与旧 fromMarkdown 结构相等，审计真通过 |
+
+迁移算式：`4336 + 1556 + 74 - 661 = 5305`。没有因为数量变化修改引擎/语法/HTML。新的 `s2-codec-full-values-v1` ratchet 同时保存键与**未截断完整值**，比较只按冻结允许的对象键序/marks 排序；自检证明相同 id/category/field 下第 300 字以后变化仍失败，避免旧 key-only 门禁漏掉 111 项值变化的问题。先跑旧基线得 **2 passed / 1 failed** 并保留新增证据，完成审计后获协调同意生成新协议基线；随后**非更新模式**跑完整语料及审计 **5 passed / 0 failed / 0 skipped**，exit 0（`bxl3nz1og.output`；`build/wp-d-t212-final-receipt.json`）。生成模式回执另存 `wp-d-t212-generate-receipt.json`，不拿它替代非更新证明。
+
+最终定向 analyze 三个改动测试文件无问题，exit 0；`just check-structure` 和 `bash scripts/check-file-size.sh --diff 8d78ba6c` 均 exit 0（`blygrx4yj.output`），main 仍净 0。正式 source receipt wrapper 仍未执行，回执为普通 Flutter JSON reporter。Windows 不重复构建；HTML 与 wire 字节冻结问题仍待审核，**不声称 S2/M2 通过**。
+

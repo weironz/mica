@@ -1,0 +1,2344 @@
+[
+ {
+  "id": "spec:461",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "foo",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 3,
+       "type": "italic"
+      },
+      {
+       "start": 0,
+       "end": 3,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "foo",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 3,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "spec:463",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "foo",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 3,
+       "type": "italic"
+      },
+      {
+       "start": 0,
+       "end": 3,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "foo",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 3,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "spec:484",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 0,
+       "type": "link",
+       "href": "./target.md"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "",
+    "data": null
+   }
+  ]
+ },
+ {
+  "id": "spec:487",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 0,
+       "type": "link",
+       "href": ""
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "",
+    "data": null
+   }
+  ]
+ },
+ {
+  "id": "fuzz:94",
+  "raw": [
+   {
+    "type": "divider",
+    "text": "",
+    "data": {}
+   },
+   {
+    "type": "paragraph",
+    "text": "[2) \\\nhttp://x.y[]> *![## __)",
+    "data": {}
+   },
+   {
+    "type": "paragraph",
+    "text": "\\\nhttp://x.y    2) >*$$__ $<( |---|---|__\t1. _{http://x.y\\",
+    "data": {
+     "marks": [
+      {
+       "start": 2,
+       "end": 12,
+       "type": "link",
+       "href": "http://x.y"
+      },
+      {
+       "start": 21,
+       "end": 25,
+       "type": "italic"
+      },
+      {
+       "start": 21,
+       "end": 29,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "divider",
+    "text": "",
+    "data": null
+   },
+   {
+    "type": "paragraph",
+    "text": "[2) \\\nhttp://x.y[]> *![## __)",
+    "data": null
+   },
+   {
+    "type": "paragraph",
+    "text": "\\\nhttp://x.y    2) >*$$__ $<( |---|---|__\t1. _{http://x.y\\",
+    "data": {
+     "marks": [
+      {
+       "start": 2,
+       "end": 12,
+       "type": "link",
+       "href": "http://x.y"
+      },
+      {
+       "start": 21,
+       "end": 29,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:95",
+  "raw": [
+   {
+    "type": "bulleted_list",
+    "text": "*$<[x]: /u ![\n[x]: /u𠀀    2) __)1: > )| a | b |&\\\nhttp://x.y",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 10,
+       "type": "italic"
+      },
+      {
+       "start": 1,
+       "end": 33,
+       "type": "italic"
+      },
+      {
+       "start": 33,
+       "end": 34,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 51,
+       "end": 61,
+       "type": "link",
+       "href": "http://x.y"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "bulleted_list",
+    "text": "*$<[x]: /u ![\n[x]: /u𠀀    2) __)1: > )| a | b |&\\\nhttp://x.y",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 33,
+       "type": "italic"
+      },
+      {
+       "start": 33,
+       "end": 34,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 51,
+       "end": 61,
+       "type": "link",
+       "href": "http://x.y"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:179",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "~~~| a | b |$$> * 1中文---*| a | b |## (\t## 😀| a | b |<",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 54,
+       "type": "bold"
+      },
+      {
+       "start": 18,
+       "end": 19,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 25,
+       "end": 44,
+       "type": "bold"
+      }
+     ]
+    }
+   },
+   {
+    "type": "divider",
+    "text": "",
+    "data": {}
+   },
+   {
+    "type": "numbered_list",
+    "text": "中文[x]: /u***\\",
+    "data": {}
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "~~~| a | b |$$> * 1中文---*| a | b |## (\t## 😀| a | b |<",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 54,
+       "type": "bold"
+      },
+      {
+       "start": 18,
+       "end": 19,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   },
+   {
+    "type": "divider",
+    "text": "",
+    "data": null
+   },
+   {
+    "type": "numbered_list",
+    "text": "中文[x]: /u***\\",
+    "data": null
+   }
+  ]
+ },
+ {
+  "id": "fuzz:281",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "__***",
+    "data": {}
+   },
+   {
+    "type": "numbered_list",
+    "text": "()é\n---)",
+    "data": {
+     "start": 2
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "---**[中文```𠀀$$(*    中文- http://x.y| a | b |>*\\",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 44,
+       "type": "italic"
+      },
+      {
+       "start": 5,
+       "end": 13,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "__***",
+    "data": null
+   },
+   {
+    "type": "numbered_list",
+    "text": "()é\n---)",
+    "data": {
+     "start": 2
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "---**[中文```𠀀$$(*    中文- http://x.y| a | b |>*\\",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 44,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:335",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "*<\\\n![|---|---|😀[^1]: > **$_\\\n**    &* [\\\n(𠀀| a | b |$$[x]: /u)",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 38,
+       "type": "bold"
+      },
+      {
+       "start": 1,
+       "end": 17,
+       "type": "bold"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "*<\\\n![|---|---|😀[^1]: > **$_\\\n**    &* [\\\n(𠀀| a | b |$$[x]: /u)",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 38,
+       "type": "bold"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:442",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "---\t[]__**$$( | a | b ||---|---|``` # |---|---|---𠀀| a | b |][x]: /u\n*_😀)1. 1: ---\t~2) (**| a | b ||---|---|(~~1.",
+    "data": {
+     "marks": [
+      {
+       "start": 10,
+       "end": 13,
+       "type": "italic"
+      },
+      {
+       "start": 10,
+       "end": 35,
+       "type": "italic"
+      },
+      {
+       "start": 78,
+       "end": 79,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "---\t[]__**$$( | a | b ||---|---|``` # |---|---|---𠀀| a | b |][x]: /u\n*_😀)1. 1: ---\t~2) (**| a | b ||---|---|(~~1.",
+    "data": {
+     "marks": [
+      {
+       "start": 10,
+       "end": 35,
+       "type": "italic"
+      },
+      {
+       "start": 78,
+       "end": 79,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:537",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "\\\n**~1: [x]: /u~~~]{~~~[&>\n][x]: /u# _> ****",
+    "data": {
+     "marks": [
+      {
+       "start": 4,
+       "end": 35,
+       "type": "italic"
+      },
+      {
+       "start": 5,
+       "end": 6,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 27,
+       "end": 35,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "\\\n**~1: [x]: /u~~~]{~~~[&>\n][x]: /u# _> ****",
+    "data": {
+     "marks": [
+      {
+       "start": 4,
+       "end": 35,
+       "type": "italic"
+      },
+      {
+       "start": 5,
+       "end": 6,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:603",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "(>> ![ab c*![",
+    "data": {}
+   },
+   {
+    "type": "bulleted_list",
+    "text": "~<``` ~`---**# a>~~1. a> ***    1: - **",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 5,
+       "type": "italic"
+      },
+      {
+       "start": 0,
+       "end": 11,
+       "type": "italic"
+      },
+      {
+       "start": 32,
+       "end": 33,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "(>> ![ab c*![",
+    "data": null
+   },
+   {
+    "type": "bulleted_list",
+    "text": "~<``` ~`---**# a>~~1. a> ***    1: - **",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 11,
+       "type": "italic"
+      },
+      {
+       "start": 32,
+       "end": 33,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:868",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "()[\\\n---1中文(*    __>> 2) >𠀀\\\nb c~~~    ## (\n1---1.",
+    "data": {
+     "marks": [
+      {
+       "start": 8,
+       "end": 9,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 8,
+       "end": 49,
+       "type": "strike"
+      },
+      {
+       "start": 19,
+       "end": 46,
+       "type": "italic"
+      },
+      {
+       "start": 22,
+       "end": 28,
+       "type": "strike"
+      },
+      {
+       "start": 45,
+       "end": 46,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "()[\\\n---1中文(*    __>> 2) >𠀀\\\nb c~~~    ## (\n1---1.",
+    "data": {
+     "marks": [
+      {
+       "start": 8,
+       "end": 9,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 8,
+       "end": 49,
+       "type": "strike"
+      },
+      {
+       "start": 19,
+       "end": 46,
+       "type": "italic"
+      },
+      {
+       "start": 45,
+       "end": 46,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1136",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "($]---)1. a- **ab c\n\\\n__\t1. $$\\\n1<>~~[a(𠀀é",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 32,
+       "type": "strike"
+      },
+      {
+       "start": 15,
+       "end": 20,
+       "type": "strike"
+      },
+      {
+       "start": 32,
+       "end": 33,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "($]---)1. a- **ab c\n\\\n__\t1. $$\\\n1<>~~[a(𠀀é",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 32,
+       "type": "strike"
+      },
+      {
+       "start": 32,
+       "end": 33,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1252",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "---~~~## {~~$`(~~~[&>**# 1: \\\n1. ## [x]: /u\n![$$(𠀀*&{*",
+    "data": {
+     "marks": [
+      {
+       "start": 6,
+       "end": 21,
+       "type": "italic"
+      },
+      {
+       "start": 21,
+       "end": 54,
+       "type": "italic"
+      },
+      {
+       "start": 22,
+       "end": 51,
+       "type": "italic"
+      },
+      {
+       "start": 25,
+       "end": 26,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "_{)    |---|---|\\\n~~*",
+    "data": {}
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "---~~~## {~~$`(~~~[&>**# 1: \\\n1. ## [x]: /u\n![$$(𠀀*&{*",
+    "data": {
+     "marks": [
+      {
+       "start": 6,
+       "end": 54,
+       "type": "italic"
+      },
+      {
+       "start": 25,
+       "end": 26,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "_{)    |---|---|\\\n~~*",
+    "data": null
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1378",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "\\\nhttp://x.y\\\n__>> &amp;(*1$$> # <> http://x.y中文__𠀀",
+    "data": {
+     "marks": [
+      {
+       "start": 26,
+       "end": 27,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 26,
+       "end": 30,
+       "type": "italic"
+      },
+      {
+       "start": 26,
+       "end": 46,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "\\\nhttp://x.y\\\n__>> &amp;(*1$$> # <> http://x.y中文__𠀀",
+    "data": {
+     "marks": [
+      {
+       "start": 26,
+       "end": 27,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 26,
+       "end": 46,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1464",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "b c",
+    "data": {}
+   },
+   {
+    "type": "paragraph",
+    "text": "(𠀀1]__\t\\a()!1中文b c~~#",
+    "data": {
+     "marks": [
+      {
+       "start": 3,
+       "end": 4,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 13,
+       "end": 13,
+       "type": "link",
+       "href": ""
+      },
+      {
+       "start": 13,
+       "end": 14,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "b c",
+    "data": null
+   },
+   {
+    "type": "paragraph",
+    "text": "(𠀀1]__\t\\a()!1中文b c~~#",
+    "data": {
+     "marks": [
+      {
+       "start": 3,
+       "end": 4,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 13,
+       "end": 14,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1499",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "\\",
+    "data": {}
+   },
+   {
+    "type": "bulleted_list",
+    "text": "$\\\n)---\\)$b c ![```****",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 16,
+       "type": "italic"
+      },
+      {
+       "start": 4,
+       "end": 10,
+       "type": "code"
+      },
+      {
+       "start": 4,
+       "end": 13,
+       "type": "italic"
+      }
+     ]
+    }
+   },
+   {
+    "type": "code_block",
+    "text": "\n\\<\\\n\t*",
+    "data": {
+     "language": "***[^1]2)"
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "\\",
+    "data": null
+   },
+   {
+    "type": "bulleted_list",
+    "text": "$\\\n)---\\)$b c ![```****",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 16,
+       "type": "italic"
+      },
+      {
+       "start": 4,
+       "end": 10,
+       "type": "code"
+      }
+     ]
+    }
+   },
+   {
+    "type": "code_block",
+    "text": "\n\\<\\\n\t*",
+    "data": {
+     "language": "***[^1]2)"
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1504",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "b c~~~\\\n()    <[x]: /u~~~| a | b |2) >*]b c\t2) >*# 中文(*é1: {\t~",
+    "data": {
+     "marks": [
+      {
+       "start": 6,
+       "end": 48,
+       "type": "italic"
+      },
+      {
+       "start": 44,
+       "end": 48,
+       "type": "italic"
+      },
+      {
+       "start": 56,
+       "end": 57,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "b c~~~\\\n()    <[x]: /u~~~| a | b |2) >*]b c\t2) >*# 中文(*é1: {\t~",
+    "data": {
+     "marks": [
+      {
+       "start": 6,
+       "end": 48,
+       "type": "italic"
+      },
+      {
+       "start": 56,
+       "end": 57,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1759",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "😀<>𠀀# 中文>>> $## __http://x.y](***## 😀***~]```![中文__* \\",
+    "data": {
+     "marks": [
+      {
+       "start": 2,
+       "end": 32,
+       "type": "italic"
+      },
+      {
+       "start": 2,
+       "end": 48,
+       "type": "strike"
+      },
+      {
+       "start": 32,
+       "end": 42,
+       "type": "italic"
+      },
+      {
+       "start": 34,
+       "end": 40,
+       "type": "bold"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "😀<>𠀀# 中文>>> $## __http://x.y](***## 😀***~]```![中文__* \\",
+    "data": {
+     "marks": [
+      {
+       "start": 2,
+       "end": 42,
+       "type": "italic"
+      },
+      {
+       "start": 2,
+       "end": 48,
+       "type": "strike"
+      },
+      {
+       "start": 34,
+       "end": 40,
+       "type": "bold"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1783",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "_)![b c**1## - \t`\\\n)*中文\t    $${* <\\\n*`\\\n***[",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 23,
+       "type": "italic"
+      },
+      {
+       "start": 4,
+       "end": 23,
+       "type": "italic"
+      },
+      {
+       "start": 9,
+       "end": 10,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 33,
+       "end": 37,
+       "type": "strike"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "_)![b c**1## - \t`\\\n)*中文\t    $${* <\\\n*`\\\n***[",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 23,
+       "type": "italic"
+      },
+      {
+       "start": 9,
+       "end": 10,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 33,
+       "end": 37,
+       "type": "strike"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:1975",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "{~~*]```\t1$$\\\n***$2) \\\n*1: (     &[x]: /u*    `😀http://x.yé&()é中文😀*1. 中文( \\",
+    "data": {
+     "marks": [
+      {
+       "start": 9,
+       "end": 10,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 24,
+       "end": 25,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 24,
+       "end": 28,
+       "type": "italic"
+      },
+      {
+       "start": 24,
+       "end": 75,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "{~~*]```\t1$$\\\n***$2) \\\n*1: (     &[x]: /u*    `😀http://x.yé&()é中文😀*1. 中文( \\",
+    "data": {
+     "marks": [
+      {
+       "start": 9,
+       "end": 10,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 24,
+       "end": 25,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 24,
+       "end": 75,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:2034",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "b c* é&__~~*",
+    "data": {}
+   },
+   {
+    "type": "quote",
+    "text": "***éa```http://x.y\\中文😀𠀀",
+    "data": {}
+   },
+   {
+    "type": "paragraph",
+    "text": "|---|---|---*1. <😀)\\2) [x]: /u*`(\n1中文> #",
+    "data": {
+     "marks": [
+      {
+       "start": 13,
+       "end": 32,
+       "type": "italic"
+      },
+      {
+       "start": 13,
+       "end": 39,
+       "type": "italic"
+      },
+      {
+       "start": 35,
+       "end": 36,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "b c* é&__~~*",
+    "data": null
+   },
+   {
+    "type": "quote",
+    "text": "***éa```http://x.y\\中文😀𠀀",
+    "data": null
+   },
+   {
+    "type": "paragraph",
+    "text": "|---|---|---*1. <😀)\\2) [x]: /u*`(\n1中文> #",
+    "data": {
+     "marks": [
+      {
+       "start": 13,
+       "end": 39,
+       "type": "italic"
+      },
+      {
+       "start": 35,
+       "end": 36,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:2465",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "[x]: /uhttp://x.y*`> ~~",
+    "data": {}
+   },
+   {
+    "type": "numbered_list",
+    "text": ">http://x.y[^1]: >~~1. $```*é\n__)中文b c ![",
+    "data": {
+     "start": 2,
+     "marks": [
+      {
+       "start": 11,
+       "end": 24,
+       "type": "math"
+      },
+      {
+       "start": 28,
+       "end": 33,
+       "type": "italic"
+      },
+      {
+       "start": 28,
+       "end": 38,
+       "type": "italic"
+      }
+     ]
+    }
+   },
+   {
+    "type": "quote",
+    "text": "**| a | b |",
+    "data": {}
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "[x]: /uhttp://x.y*`> ~~",
+    "data": null
+   },
+   {
+    "type": "numbered_list",
+    "text": ">http://x.y[^1]: >~~1. $```*é\n__)中文b c ![",
+    "data": {
+     "start": 2,
+     "marks": [
+      {
+       "start": 11,
+       "end": 24,
+       "type": "math"
+      },
+      {
+       "start": 28,
+       "end": 38,
+       "type": "italic"
+      }
+     ]
+    }
+   },
+   {
+    "type": "quote",
+    "text": "**| a | b |",
+    "data": null
+   }
+  ]
+ },
+ {
+  "id": "fuzz:2989",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "__*[>http://x.y| a | b |1: b c**\\\n__)![---*# a>$2) b c~2) ```*| a | b |2) {***| a | b |]b chttp://x.y| a | b |",
+    "data": {
+     "marks": [
+      {
+       "start": 4,
+       "end": 39,
+       "type": "italic"
+      },
+      {
+       "start": 24,
+       "end": 25,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 47,
+       "end": 54,
+       "type": "bold"
+      },
+      {
+       "start": 47,
+       "end": 61,
+       "type": "italic"
+      },
+      {
+       "start": 61,
+       "end": 75,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "__*[>http://x.y| a | b |1: b c**\\\n__)![---*# a>$2) b c~2) ```*| a | b |2) {***| a | b |]b chttp://x.y| a | b |",
+    "data": {
+     "marks": [
+      {
+       "start": 4,
+       "end": 39,
+       "type": "italic"
+      },
+      {
+       "start": 24,
+       "end": 25,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 47,
+       "end": 54,
+       "type": "bold"
+      },
+      {
+       "start": 47,
+       "end": 75,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:3123",
+  "raw": [
+   {
+    "type": "quote",
+    "text": "# 1: (*1. ]>| a | b |&__*1$$__***\\\n(𠀀[",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 12,
+       "type": "bold"
+      },
+      {
+       "start": 0,
+       "end": 24,
+       "type": "italic"
+      },
+      {
+       "start": 2,
+       "end": 3,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 24,
+       "end": 30,
+       "type": "italic"
+      },
+      {
+       "start": 25,
+       "end": 26,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "quote",
+    "text": "# 1: (*1. ]>| a | b |&__*1$$__***\\\n(𠀀[",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 12,
+       "type": "bold"
+      },
+      {
+       "start": 0,
+       "end": 30,
+       "type": "italic"
+      },
+      {
+       "start": 2,
+       "end": 3,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 25,
+       "end": 26,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:3198",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "__*# |---|---|> 𠀀$## >http://x.y| a | b |\\\n---     中文>http://x.y<😀*$",
+    "data": {
+     "marks": [
+      {
+       "start": 3,
+       "end": 47,
+       "type": "italic"
+      },
+      {
+       "start": 3,
+       "end": 65,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "__*# |---|---|> 𠀀$## >http://x.y| a | b |\\\n---     中文>http://x.y<😀*$",
+    "data": {
+     "marks": [
+      {
+       "start": 3,
+       "end": 65,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:3525",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "b c)$$$(𠀀    ]{~~~# <---*\\2) 😀)# ## > *`😀\té|---|---|😀http://x.y[1: - 𠀀## ( | a | b |",
+    "data": {
+     "marks": [
+      {
+       "start": 41,
+       "end": 75,
+       "type": "italic"
+      },
+      {
+       "start": 41,
+       "end": 79,
+       "type": "italic"
+      },
+      {
+       "start": 68,
+       "end": 69,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "b c)$$$(𠀀    ]{~~~# <---*\\2) 😀)# ## > *`😀\té|---|---|😀http://x.y[1: - 𠀀## ( | a | b |",
+    "data": {
+     "marks": [
+      {
+       "start": 41,
+       "end": 79,
+       "type": "italic"
+      },
+      {
+       "start": 68,
+       "end": 69,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:3555",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "{*#\\\nb c\n![|---|---|>)    中文~~\\##  1## (𠀀[<> ~](",
+    "data": {
+     "marks": [
+      {
+       "start": 2,
+       "end": 34,
+       "type": "italic"
+      },
+      {
+       "start": 2,
+       "end": 45,
+       "type": "italic"
+      },
+      {
+       "start": 28,
+       "end": 34,
+       "type": "code"
+      },
+      {
+       "start": 35,
+       "end": 36,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "{*#\\\nb c\n![|---|---|>)    中文~~\\##  1## (𠀀[<> ~](",
+    "data": {
+     "marks": [
+      {
+       "start": 2,
+       "end": 45,
+       "type": "italic"
+      },
+      {
+       "start": 28,
+       "end": 34,
+       "type": "code"
+      },
+      {
+       "start": 35,
+       "end": 36,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:3598",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "***[中文$&b cé\\\n(*1.\\\n[x]: /u~~~$$[x]: /u)~](~~~",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 6,
+       "type": "bold"
+      },
+      {
+       "start": 6,
+       "end": 11,
+       "type": "bold"
+      },
+      {
+       "start": 6,
+       "end": 11,
+       "type": "italic"
+      }
+     ]
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "$$- 𠀀| a | b |",
+    "data": {}
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "***[中文$&b cé\\\n(*1.\\\n[x]: /u~~~$$[x]: /u)~](~~~",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 11,
+       "type": "bold"
+      },
+      {
+       "start": 6,
+       "end": 11,
+       "type": "italic"
+      }
+     ]
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "$$- 𠀀| a | b |",
+    "data": null
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4191",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "---http://x.y1$$---𠀀]- ~~~é][x]: /u𠀀1. &(1&b c~~~é_b c| a | b |`b c)",
+    "data": {
+     "marks": [
+      {
+       "start": 13,
+       "end": 14,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 21,
+       "end": 70,
+       "type": "strike"
+      },
+      {
+       "start": 43,
+       "end": 44,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 43,
+       "end": 56,
+       "type": "strike"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "---http://x.y1$$---𠀀]- ~~~é][x]: /u𠀀1. &(1&b c~~~é_b c| a | b |`b c)",
+    "data": {
+     "marks": [
+      {
+       "start": 13,
+       "end": 14,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 21,
+       "end": 70,
+       "type": "strike"
+      },
+      {
+       "start": 43,
+       "end": 44,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4272",
+  "raw": [
+   {
+    "type": "bulleted_list",
+    "text": "    中文😀𠀀$\n(~<b chttp://x.y*<- >> $_*1. |---|---|~~*## b c[2) > 𠀀*<__**[",
+    "data": {
+     "quote": 1,
+     "marks": [
+      {
+       "start": 13,
+       "end": 59,
+       "type": "bold"
+      },
+      {
+       "start": 37,
+       "end": 50,
+       "type": "bold"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "bulleted_list",
+    "text": "    中文😀𠀀$\n(~<b chttp://x.y*<- >> $_*1. |---|---|~~*## b c[2) > 𠀀*<__**[",
+    "data": {
+     "quote": 1,
+     "marks": [
+      {
+       "start": 13,
+       "end": 59,
+       "type": "bold"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4382",
+  "raw": [
+   {
+    "type": "quote",
+    "text": "[<\\\nhttp://x.y    ___*~`- * &*     |---|---|",
+    "data": {
+     "marks": [
+      {
+       "start": 4,
+       "end": 14,
+       "type": "link",
+       "href": "http://x.y"
+      },
+      {
+       "start": 22,
+       "end": 44,
+       "type": "italic"
+      },
+      {
+       "start": 28,
+       "end": 44,
+       "type": "italic"
+      },
+      {
+       "start": 29,
+       "end": 44,
+       "type": "code"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "quote",
+    "text": "[<\\\nhttp://x.y    ___*~`- * &*     |---|---|",
+    "data": {
+     "marks": [
+      {
+       "start": 4,
+       "end": 14,
+       "type": "link",
+       "href": "http://x.y"
+      },
+      {
+       "start": 22,
+       "end": 44,
+       "type": "italic"
+      },
+      {
+       "start": 29,
+       "end": 44,
+       "type": "code"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4419",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "b c~~~![$$> >> | a | b |中文- *1`{\ta😀][x]: /u)[<\\",
+    "data": {
+     "marks": [
+      {
+       "start": 29,
+       "end": 30,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 29,
+       "end": 36,
+       "type": "italic"
+      },
+      {
+       "start": 33,
+       "end": 36,
+       "type": "italic"
+      }
+     ]
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "[`b c**![",
+    "data": {}
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "b c~~~![$$> >> | a | b |中文- *1`{\ta😀][x]: /u)[<\\",
+    "data": {
+     "marks": [
+      {
+       "start": 29,
+       "end": 30,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 29,
+       "end": 36,
+       "type": "italic"
+      }
+     ]
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "[`b c**![",
+    "data": null
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4432",
+  "raw": [
+   {
+    "type": "bulleted_list",
+    "text": "1|---|---|{~~~\\中文> |---|---|```\n\\中文>*é2) 😀\\\n😀*$中文>**![",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 1,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 0,
+       "end": 18,
+       "type": "italic"
+      },
+      {
+       "start": 0,
+       "end": 52,
+       "type": "italic"
+      },
+      {
+       "start": 19,
+       "end": 43,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "bulleted_list",
+    "text": "1|---|---|{~~~\\中文> |---|---|```\n\\中文>*é2) 😀\\\n😀*$中文>**![",
+    "data": {
+     "marks": [
+      {
+       "start": 0,
+       "end": 1,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 0,
+       "end": 52,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4519",
+  "raw": [
+   {
+    "type": "quote",
+    "text": "*中文😀 #\n(~~~~\\\nb c | a | b |$$b c𠀀~2) {\t    ](𠀀![&{)é",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 5,
+       "type": "italic"
+      },
+      {
+       "start": 1,
+       "end": 18,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "quote",
+    "text": "*中文😀 #\n(~~~~\\\nb c | a | b |$$b c𠀀~2) {\t    ](𠀀![&{)é",
+    "data": {
+     "marks": [
+      {
+       "start": 1,
+       "end": 18,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4586",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "😀𠀀~## --->> # ___>> é&> ~~~1`[x]: /u* 1<> *# |---|---|{ é## ```",
+    "data": {
+     "marks": [
+      {
+       "start": 29,
+       "end": 30,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 40,
+       "end": 41,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 45,
+       "end": 57,
+       "type": "italic"
+      },
+      {
+       "start": 45,
+       "end": 65,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "😀𠀀~## --->> # ___>> é&> ~~~1`[x]: /u* 1<> *# |---|---|{ é## ```",
+    "data": {
+     "marks": [
+      {
+       "start": 29,
+       "end": 30,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 40,
+       "end": 41,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 45,
+       "end": 65,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4617",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "[x]: /u>> &>>> $\\(\\*a__~~~\\\n😀\n<>*[2) {\t[## __~~~[中文> 𠀀1. 2) > 1.",
+    "data": {
+     "marks": [
+      {
+       "start": 10,
+       "end": 33,
+       "type": "italic"
+      },
+      {
+       "start": 15,
+       "end": 26,
+       "type": "italic"
+      },
+      {
+       "start": 16,
+       "end": 20,
+       "type": "math"
+      },
+      {
+       "start": 33,
+       "end": 63,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "[x]: /u>> &>>> $\\(\\*a__~~~\\\n😀\n<>*[2) {\t[## __~~~[中文> 𠀀1. 2) > 1.",
+    "data": {
+     "marks": [
+      {
+       "start": 10,
+       "end": 63,
+       "type": "italic"
+      },
+      {
+       "start": 16,
+       "end": 20,
+       "type": "math"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4725",
+  "raw": [
+   {
+    "type": "quote",
+    "text": "*a> *$2) 😀>> ---\\)| a | b |中文(**1. >",
+    "data": {
+     "quote": 3,
+     "marks": [
+      {
+       "start": 5,
+       "end": 37,
+       "type": "italic"
+      },
+      {
+       "start": 14,
+       "end": 36,
+       "type": "code"
+      },
+      {
+       "start": 14,
+       "end": 37,
+       "type": "italic"
+      }
+     ]
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "`[x]: /u~~1$$()1",
+    "data": {
+     "marks": [
+      {
+       "start": 10,
+       "end": 11,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 15,
+       "end": 16,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "quote",
+    "text": "*a> *$2) 😀>> ---\\)| a | b |中文(**1. >",
+    "data": {
+     "quote": 3,
+     "marks": [
+      {
+       "start": 5,
+       "end": 37,
+       "type": "italic"
+      },
+      {
+       "start": 14,
+       "end": 36,
+       "type": "code"
+      }
+     ]
+    }
+   },
+   {
+    "type": "paragraph",
+    "text": "`[x]: /u~~1$$()1",
+    "data": {
+     "marks": [
+      {
+       "start": 10,
+       "end": 11,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 15,
+       "end": 16,
+       "type": "footnote",
+       "href": "1"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4918",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "😀é|---|---|😀𠀀# ]>>> é$- \t[^1]$b c* 1: {~~~~\\\n~~| a | b |中文[",
+    "data": {
+     "marks": [
+      {
+       "start": 2,
+       "end": 61,
+       "type": "bold"
+      },
+      {
+       "start": 25,
+       "end": 32,
+       "type": "math"
+      },
+      {
+       "start": 38,
+       "end": 39,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 38,
+       "end": 61,
+       "type": "italic"
+      },
+      {
+       "start": 48,
+       "end": 61,
+       "type": "bold"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "😀é|---|---|😀𠀀# ]>>> é$- \t[^1]$b c* 1: {~~~~\\\n~~| a | b |中文[",
+    "data": {
+     "marks": [
+      {
+       "start": 2,
+       "end": 61,
+       "type": "bold"
+      },
+      {
+       "start": 25,
+       "end": 32,
+       "type": "math"
+      },
+      {
+       "start": 38,
+       "end": 39,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 38,
+       "end": 61,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "id": "fuzz:4994",
+  "raw": [
+   {
+    "type": "paragraph",
+    "text": "{* # _😀)![中文\\\n*",
+    "data": {}
+   },
+   {
+    "type": "numbered_list",
+    "text": "~~é`{# $$b c*_)    <```* 1: [x]: /u*# 2) > *",
+    "data": {
+     "start": 2,
+     "marks": [
+      {
+       "start": 0,
+       "end": 13,
+       "type": "bold"
+      },
+      {
+       "start": 5,
+       "end": 12,
+       "type": "bold"
+      },
+      {
+       "start": 25,
+       "end": 26,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 25,
+       "end": 42,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ],
+  "crdt": [
+   {
+    "type": "paragraph",
+    "text": "{* # _😀)![中文\\\n*",
+    "data": null
+   },
+   {
+    "type": "numbered_list",
+    "text": "~~é`{# $$b c*_)    <```* 1: [x]: /u*# 2) > *",
+    "data": {
+     "start": 2,
+     "marks": [
+      {
+       "start": 0,
+       "end": 13,
+       "type": "bold"
+      },
+      {
+       "start": 25,
+       "end": 26,
+       "type": "footnote",
+       "href": "1"
+      },
+      {
+       "start": 25,
+       "end": 42,
+       "type": "italic"
+      }
+     ]
+    }
+   }
+  ]
+ }
+]
