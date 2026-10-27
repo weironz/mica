@@ -15,7 +15,7 @@ function normalize(value) {
 }
 const digest = s => crypto.createHash('sha256').update(s).digest('hex');
 const output = cases.map(item => {
-  const host = cp.execFileSync(path.join(root, 'target/debug/examples/wire_stdin.exe'), [], {input:item.source, encoding:'utf8', maxBuffer:16*1024*1024});
+  const host = cp.execFileSync(path.join(root, 'target/debug/examples/wire_stdin' + (process.platform === 'win32' ? '.exe' : '')), [], {input:item.source, encoding:'utf8', maxBuffer:16*1024*1024});
   const wire = JSON.parse(item.wire);
   const diffs = [];
   for (let i=0;i<Math.max(wire.length,item.dart.length);i++) {

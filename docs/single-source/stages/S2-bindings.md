@@ -473,3 +473,9 @@ WP-W 通过允许的非 Git 命令再次核对真实依赖图：`cargo tree --ma
 
 复审同时明确旧 `scripts/md-wasm-bench.dart::_full` 自行调用 wasm 并映射 BlockSpec，历史数据只证明 wire 完整路径预算，**不能称已测真实 WP-D MarkdownCodec 门面**。后续基准改用真实 `initMarkdownCodec` 与 `markdownCodec.parseBlocks`；R 新核心交付后才进行一轮新产物 M2 测量，旧数据保留不冒充。Windows CI 仍等实际测试文件与真实运行结果，不提前登记不存在入口。
 
+构建链修复已提交 `f5ab614e`，加强“先 verify 才 build”行为断言为 `dc81fa1b`。修复后实际 build 脚本先得 **9 passed / receipt 9 (floor 9)** 再构建 wasm，当前旧核心仍为 199681 B；随后正式 WASM 396-case 重放、structure/ignored-source 均 exit0。该次是构建链验证，没有重复旧核心浏览器性能矩阵。
+
+WP-W 仅为编译基准接入 D 的最小官方门面依赖：`50bf6030`→`176a679b`、`69f92edd`→`9d7ba128`、`0281dc34`→`8a6cd7e1`，及 LF 属性 `b6c8d516`→`acf3ed3f`。没有 merge/pull 共享主分支，也未修改 D 的 lib 实现。基准 `_full` 现在只执行 `markdownCodec.parseBlocks`，初始化执行 `initMarkdownCodec` 并读取 engineInfo，若降级不可用则立即失败；保留直接 `micaMd.parseBody` 仅供不计时字节诊断。生产 classic-script loader 初始化 lexical `wasm_bindgen` 并公开 micaMd/micaMdReady，Dart 不直接 `@JS('wasm_bindgen')`。输出记录实际门面路径和 facade_engine，旧测量记录未改写。host diff runner 同时去掉写死 `.exe` 的 Windows 假设。
+
+脚本格式与 Node 语法检查通过；根 scripts 下直接 `dart analyze` 无法解析客户端 package 配置（Flutter/Mica package URI 均不存在），该次 exit3 已如实报告，不当作编译通过。正式 Flutter target 编译与 M2 新产物测量安排在 R 核心修复最终交付后一次执行；当前不占用 D 独占的 Windows runner/VM 工具。
+
