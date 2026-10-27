@@ -596,7 +596,12 @@ void _gather(dom.Node node, StringBuffer sb) {
 /// Append one inline node's Markdown (text or an inline element) to [sb].
 void _gatherOne(dom.Node child, StringBuffer sb) {
   if (child is dom.Text) {
-    sb.write(_escapeMdInline(child.text));
+    final text = _escapeMdInline(child.text);
+    // A literal `!` right before an `<a>` would read back as an IMAGE
+    // (`!` + `[x](u)`); `\!` is the same character to the parser.
+    sb.write(
+      text.endsWith('!') ? '${text.substring(0, text.length - 1)}\\!' : text,
+    );
     return;
   }
   if (child is! dom.Element) return;

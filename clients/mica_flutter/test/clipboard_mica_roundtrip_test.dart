@@ -26,65 +26,86 @@ import 'package:mica_flutter/markdown/markdown_codec.dart';
 
 import 'support/markdown_codec.dart';
 
-/// Fixtures the Clipboard dialect cannot round-trip, with the reason.
-///
-/// Empty is the goal; each entry is a user-visible loss on copy → paste
-/// inside Mica and must state what is lost and why it is accepted (S3 triage).
-const _knownLossy = <String, String>{
-  // A link's TITLE does not survive the HTML flavor: the dialect writes
-  // <a href> without a title attribute (the old Dart writer did not either),
-  // so a titled link comes back as a plain link. Same loss as before S3.
-  '13-links.md': 'link titles are not carried by the clipboard HTML flavor',
-  '19-entities-defs.md': 'link titles are not carried by the clipboard HTML flavor',
-  // An image's TITLE (alt text survives, title does not): <img src alt> has
-  // no title attribute. Same loss as the old Dart writer.
-  '16-images.md': 'image titles are not carried by the clipboard HTML flavor',
-  // A soft break inside a quote/list item text flattens to a space through
-  // the HTML path — htmlToMarkdown joins <p> lines with a space. The old Dart
-  // clipboard HTML had the same behavior (its writer emitted the same
-  // single <p>), so this is not a regression; re-pasting keeps one block,
-  // only the intra-block newline is lost.
-  '05-quote.md': 'soft break inside a quote flattens to a space',
-  '15-list-items.md': 'soft break inside a list item flattens to a space',
-  '17-quotes.md': 'soft break inside a quote flattens to a space',
-  // A hard break (`\` + newline) survives as an HTML <br> whose reader side
-  // renders back as two spaces — the stored form differs (backslash vs
-  // spaces), a pre-existing difference of the HTML read path, unchanged by S3.
+/// What the Clipboard HTML flavor is known to lose, per fixture. Only the
+/// listed aspect is erased before comparing, so everything else in that
+/// fixture is still guarded (skipping the whole file hid two reader bugs).
+/// Every loss predates S3: the Rust writer is byte-identical to the old Dart
+/// one on the 30 port samples, and the reader is unchanged.
+enum _Loss {
+  /// `<a href>` / `<img src alt>` carry no title attribute.
+  title,
+
+  /// Lines of one `<p>` join with a space on read (quote / list item / lazy
+  /// continuation soft breaks, and an item's blank-line paragraph break).
+  /// Each newline run becomes one space; mark offsets are remapped.
+  softBreak,
+
+  /// `*` vs `-` bullet flavor is not expressed in HTML.
+  marker,
+
+  /// HTML lists have no per-item looseness; they re-import tight.
+  loose,
+
+  /// Adjacent ordered lists are written as ONE `<ol>`, so a list that
+  /// restarts (`3)` after `1.`) or starts at 7 is renumbered on read.
+  listStart,
+
+  /// GFM callout type (`> [!NOTE]`) rides in no attribute.
+  alert,
+
+  /// Raw inline HTML is written as escaped text, so it comes back without
+  /// its `html` mark (the text itself survives).
+  rawHtml,
+
+  /// Adjacent quote groups (`data.qbreak`) merge: consecutive
+  /// `<blockquote>`s carry no group boundary the reader keeps.
+  quoteGroups,
+
+  /// A bare `>` line (empty quote paragraph) yields no block on read.
+  emptyQuote,
+
+  /// Italic inside a quote is dropped ON PURPOSE by the reader (c1185887):
+  /// Word / WeChat style whole quotes italic, which is decoration, not
+  /// emphasis. A paste heuristic, not a dialect gap.
+  quoteItalic,
+}
+
+const _losses = <String, Set<_Loss>>{
+  '03-lists.md': {_Loss.marker},
+  '05-quote.md': {_Loss.softBreak},
+  '13-links.md': {_Loss.title},
+  '15-list-items.md': {
+    _Loss.softBreak,
+    _Loss.loose,
+    _Loss.marker,
+    _Loss.listStart,
+  },
+  '16-images.md': {_Loss.title},
+  '17-quotes.md': {_Loss.softBreak, _Loss.quoteGroups, _Loss.emptyQuote},
+  '19-entities-defs.md': {_Loss.title},
+  '21-html.md': {_Loss.rawHtml},
+  '22-gfm.md': {_Loss.softBreak},
+  '24-callouts.md': {_Loss.alert, _Loss.quoteItalic},
+  '34-link-title-escape.md': {_Loss.title},
+  '42-lazy-item-continuation.md': {_Loss.softBreak},
+};
+
+/// Fixtures whose loss changes text LENGTH (so every later mark offset moves)
+/// or block structure, which no per-aspect erasure can line up. Keep this
+/// list short; a new entry needs the same kind of reason.
+const _notComparable = <String, String>{
+  // `\` + newline comes back as two spaces + newline (one char longer).
   '18-spans-breaks.md': 'hard-break marker flavor differs over HTML',
-  // `data.marker` (`*` vs `-`) is transport detail the HTML flavor does not
-  // express: every bullet comes back as a `-` item. Content-equal.
-  '03-lists.md': 'the `*` bullet marker flavor does not survive HTML',
-  // A lazy continuation of a paragraph holding autolinks: the HTML flavor
-  // writes it as one <p>, whose lines join with spaces on read (soft-break
-  // flattening, same as the quote cases).
-  '22-gfm.md': 'soft break in an autolink paragraph flattens to a space',
-  // `loose` (a blank line between item paragraphs) does not survive: the
-  // HTML list flavor has no per-item looseness, so it re-imports tight.
-  // Content-equal; the loose flag is a rendering hint.
-  '20-item-containers.md': 'list looseness does not survive the HTML flavor',
-  // A raw HTML <b class="x"> inside a paragraph is escaped as literal text on
-  // write and comes back without marks — inline raw HTML is not a mark in
-  // this dialect (same before S3).
-  '21-html.md': 'raw inline HTML does not come back as marks',
-  // GFM callouts (`> [!NOTE]`) become plain blockquotes over HTML — the
-  // alert type rides in no attribute. Same loss as the old Dart writer.
-  '24-callouts.md': 'callout alert type does not survive the HTML flavor',
-  // Link titles (same class as 13-links).
-  '34-link-title-escape.md': 'link titles are not carried by the clipboard HTML flavor',
-  // A code span's leading/trailing whitespace is trimmed by the HTML reader's
-  // text extraction (`a code   span b` → `a code span b`); tab-collapse in
-  // code spans likewise. The written HTML is correct; the reader normalizes.
+  // Raw HTML inside an item: the reader collapses its whitespace runs.
+  '20-item-containers.md': 'whitespace runs around raw HTML collapse on read',
+  // The reader trims / collapses code-span edge whitespace (shorter text).
   '38-hardbreak-spans.md': 'code-span edge whitespace is normalized by the reader',
   '40-code-span-strip.md': 'code-span edge whitespace is normalized by the reader',
-  // An EMPTY code block with a `a~~` language: the HTML flavor writes an
-  // empty <pre><code class="language-a~~"> whose reader yields no block.
+  // An empty `<pre><code>` yields no block at all on read.
   '33-tilde-fallback.md': 'an empty code block does not survive the HTML flavor',
-  // A lazy continuation inside a list item (soft break, list case).
-  '42-lazy-item-continuation.md': 'soft break inside a list item flattens to a space',
-  // Beyond the 32-level inline nesting budget the HTML reader re-nests
-  // differently than the Markdown parser did — the deep-bracket soup loses
-  // a level over HTML. Nothing real nests that deep.
-  '43-inline-nesting-budget.md': 'inline nesting beyond the 32-level budget re-nests differently',
+  // Past the 32-level inline nesting budget the HTML reader re-nests.
+  '43-inline-nesting-budget.md':
+      'inline nesting beyond the 32-level budget re-nests differently',
 };
 
 /// `data` keys that describe the block itself (compared).
@@ -128,18 +149,19 @@ void main() {
   for (final md in mdFiles) {
     final name = md.uri.pathSegments.last;
     test('clipboard round-trip: $name', () {
-      final reason = _knownLossy[name];
+      final reason = _notComparable[name];
       if (reason != null) {
         markTestSkipped('$name: $reason');
         return;
       }
+      final losses = _losses[name] ?? const <_Loss>{};
       final source = md.readAsStringSync();
       final blocks = markdownCodec.parseBlocks(source);
       final html = markdownCodec.renderClipboardHtml(blocks);
       final back = markdownCodec.parseBlocks(htmlToMarkdown(html));
       expect(
-        _normalize(back),
-        _normalize(blocks),
+        _normalize(back, losses),
+        _normalize(blocks, losses),
         reason: 'copy → paste inside Mica changed the content in $name',
       );
     });
@@ -148,32 +170,91 @@ void main() {
 
 /// Content-only view of a block list: kind, text, schema data keys, and marks
 /// as a sorted set.
-List<Map<String, dynamic>> _normalize(List<BlockSpec> blocks) {
+List<Map<String, dynamic>> _normalize(
+  List<BlockSpec> blocks,
+  Set<_Loss> losses,
+) {
   return [
     for (final b in blocks)
-      {
-        'kind': b.kind,
-        'text': b.text,
-        'data': _schemaData(b.data),
-      },
+      if (!(losses.contains(_Loss.emptyQuote) &&
+          b.kind == 'quote' &&
+          b.text.isEmpty))
+        _block(b, losses),
   ];
 }
 
-Map<String, dynamic> _schemaData(Map<String, dynamic> data) {
+Map<String, dynamic> _block(BlockSpec b, Set<_Loss> losses) {
+  var text = b.text;
+  var data = b.data;
+  if (losses.contains(_Loss.softBreak) && text.contains('\n')) {
+    // at[i] = where old offset i lands once each newline run is one space.
+    final at = <int>[];
+    final out = StringBuffer();
+    for (var i = 0; i < text.length; i++) {
+      at.add(out.length);
+      if (text[i] != '\n') {
+        out.write(text[i]);
+      } else if (i == 0 || text[i - 1] != '\n') {
+        out.write(' ');
+      }
+    }
+    at.add(out.length);
+    text = out.toString();
+    final marks = data['marks'];
+    if (marks is List) {
+      data = {
+        ...data,
+        'marks': [
+          for (final m in marks)
+            if (m is Map)
+              {...m, 'start': at[m['start'] as int], 'end': at[m['end'] as int]},
+        ],
+      };
+    }
+  }
+  return {
+    'kind': b.kind,
+    'text': text,
+    'data': _schemaData(
+      data,
+      losses,
+      quoted: b.kind == 'quote' || b.data['quote'] != null,
+    ),
+  };
+}
+
+Map<String, dynamic> _schemaData(
+  Map<String, dynamic> data,
+  Set<_Loss> losses, {
+  required bool quoted,
+}) {
   final out = <String, dynamic>{};
+  final erased = {
+    if (losses.contains(_Loss.title)) 'title',
+    if (losses.contains(_Loss.marker)) 'marker',
+    if (losses.contains(_Loss.loose)) 'loose',
+    if (losses.contains(_Loss.listStart)) 'start',
+    if (losses.contains(_Loss.alert)) 'alert',
+    if (losses.contains(_Loss.quoteGroups)) 'qbreak',
+  };
   for (final key in _schemaKeys) {
-    if (!data.containsKey(key)) continue;
+    if (!data.containsKey(key) || erased.contains(key)) continue;
     final value = data[key];
     if (key == 'marks' && value is List) {
       final marks = [
         for (final m in value)
-          if (m is Map)
+          if (m is Map &&
+              !(losses.contains(_Loss.rawHtml) && m['type'] == 'html') &&
+              !(quoted &&
+                  losses.contains(_Loss.quoteItalic) &&
+                  m['type'] == 'italic'))
             {
               'start': m['start'],
               'end': m['end'],
               'type': m['type'],
               if (m['href'] != null) 'href': m['href'],
-              if (m['title'] != null) 'title': m['title'],
+              if (m['title'] != null && !losses.contains(_Loss.title))
+                'title': m['title'],
             },
       ]..sort((a, b) => '${a['start']}|${a['end']}|${a['type']}'
           .compareTo('${b['start']}|${b['end']}|${b['type']}'));

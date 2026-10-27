@@ -1160,14 +1160,13 @@ class EditorController extends ChangeNotifier {
 
   /// The live body, including edits not yet flushed to the backend. Uses the
   /// same Markdown serializer as selection copy without moving the caret.
+  ///
+  /// Throws [MarkdownCodecException] when the engine is unavailable: callers
+  /// (AI current page / AI edits) must not mistake that for an empty page.
   String documentMarkdown({Map<String, String>? imageUrls}) {
     if (nodes.isEmpty) return '';
-    try {
-      return markdownCodec.serializeBlocks(documentBlocks(),
-          assets: imageUrls ?? const {});
-    } on MarkdownCodecException {
-      return '';
-    }
+    return markdownCodec.serializeBlocks(documentBlocks(),
+        assets: imageUrls ?? const {});
   }
 
   /// The selection as engine blocks: each slice of [_selectionSlices] becomes a

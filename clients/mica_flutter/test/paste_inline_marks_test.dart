@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'support/markdown_codec.dart';
 
 // Regression: pasting rich text used to drop bold / inline-code / italic /
@@ -156,5 +157,18 @@ void main() {
       expect(md, contains('- [parent](https://x.dev)'));
       expect(md, contains('  - child'));
     });
+  });
+
+  // Found by the Mica clipboard round-trip once it stopped skipping whole
+  // fixtures: `\![x][ref]` copies as `!<a>x</a>`, and the reader wrote
+  // `![x](u)` — an image where the source had a `!` and a link.
+  test('a literal ! right before a link stays text, not an image', () {
+    final md = htmlToMarkdown('<p>see !<a href="/u">link form</a></p>');
+    expect(md, r'see \![link form](/u)');
+    final blocks = markdownCodec.parseBlocks(md);
+    expect(blocks.single.text, 'see !link form');
+    expect(blocks.single.data['marks'], [
+      {'start': 5, 'end': 14, 'type': 'link', 'href': '/u'},
+    ]);
   });
 }

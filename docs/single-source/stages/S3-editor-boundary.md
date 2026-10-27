@@ -251,10 +251,10 @@ C 类（`markdown_conformance_test`、`markdown_export_conformance_test`）删�
 | T3.1–T3.5 | ✅ 编辑器全部 Markdown 进出走 `markdownCodec`；`lib/` 中 `markdownToBlocks` 调用点 7→0 |
 | T3.4 剪贴板移植验收 | ✅ `clipboard_html_port_test` 30 fixture 逐字节（切换前最后验证于 `9657631d` 链上） |
 | T3.7 分诊 | ✅ 全部差异归类：B 类 1（已修）、R 类 6、H 类 3、U 类 1；见下表 |
-| T3.8 往返测试 | ✅ 18 fixture 断言 + 18 显式例外（每项注明丢了什么） |
-| 全量测试 | ✅ `flutter test` 2232 passed / 21 skipped / 0 failed |
-| `local-ci.sh all` | ✅ 于 `dd183384`（rust 1141+213、flutter 2232、wasm 构建、structure、analyze 全绿） |
-| 删除行数 | **-7,460 / +772**（`3b6c477f`；含旧 HTML 写出器与 `_rangeMarkdown` 主体） |
+| T3.8 往返测试 | ✅ 35 个 fixture 中 29 个逐项比较（其中 12 个只抹掉已知损失项）、6 个确实无法比较（审核方 G3 改写，见文末）；原为 18 个整文件跳过 |
+| 全量测试 | ✅ `flutter test` 2232 passed / 21 skipped / 0 failed（Windows）；审核方 Linux 复跑 `98c71d14`：2210 passed / 29 skipped / 0 failed，浏览器套件 9 组通过 |
+| `local-ci.sh all` | ✖ **原回执不成立**：`dd183384` 上 `cargo fmt --check` 失败（`crates/md-core/tests/wire.rs`，自 `7ef6bbba` 起），`flutter analyze` 有 5 个 warning（3 个旧函数无引用、2 个多余 import）。审核方已修格式与 import；3 个旧函数随 T3.6 删除 |
+| 增删行数（`origin/main..98c71d14`） | 产品代码 `lib/` +397 / −369；测试 +314 / −15；差分基线 JSON +300 / −7,240；Rust +118 / −125。原写「−7,460」几乎全是基线重置，旧 Dart 实现尚未删除（T3.6） |
 
 ### 提交与门禁回执
 
@@ -306,3 +306,19 @@ C 类（`markdown_conformance_test`、`markdown_export_conformance_test`）删�
 ### G3 停点声明
 
 编辑器已切到引擎，Dart 旧实现（`markdown.dart` 1491 行、`list_serialization.dart`、`controller._rangeMarkdown` 主体、`selectionHtml` 旧函数体）**未删**，T3.6 在 G3 通过后执行。⏸ 停在这里等审核方与用户。
+
+### G3 必须修改：审核方完成（2026-10-28）
+
+按用户要求，G3 的三条必须修改由审核方直接做完，执行方不用再做。提交见 `single-source` 上的「G3 fixes」提交。
+
+| # | 改动 | 回归测试（均先证明撤掉修复会失败） |
+| --- | --- | --- |
+| 1 | `EditorController.documentMarkdown()` 引擎不可用时不再返回 `''`，改为抛出 `MarkdownCodecException`；`_openAiDialog` 经门面新增的 `withEngineOrNull` 读取正文，拿不到时不提供「当前页面」目标（也关掉 AI 编辑预览）。`main.dart` 库净 0 行 | `ai_current_page_context_test`：`documentMarkdown never stands in an empty body…`、`without the engine the AI dialog offers no current-page target` |
+| 2 | `clipboard_mica_roundtrip_test` 改为按损失项定点抹平：`title`、`softBreak`（换行折空格并重算标记偏移）、`marker`、`loose`、`listStart`、`alert`、`rawHtml`、`quoteGroups`、`emptyQuote`、`quoteItalic`。整文件例外从 18 个降到 6 个（18、20、33、38、40、43，各写明为何无法对齐） | 本测试 29 个 fixture 逐项比较全绿 |
+| 2′ | 改写后立刻抓到读回端 `htmlToMarkdown` 的真 bug：字面 `!` 紧挨链接（`\![x][ref]` → `!<a>x</a>`）读回成 `![x](u)`，链接变图片。修复：文本节点末尾的 `!` 写成 `\!` | `paste_inline_marks_test`：`a literal ! right before a link stays text, not an image`；往返 `16-images.md` |
+| 3 | 本表的增删行数与门禁回执改正 | — |
+
+改写时新列出的四类既有损失（S3 之前就有，读回端或写出端行为未变）：相邻有序列表合并成一个 `<ol>` 导致起始编号丢失（`listStart`）、相邻引用组合并（`quoteGroups`）、单独一行 `>` 的空引用块丢失（`emptyQuote`）、引用内斜体被读回端**刻意**去掉（`quoteItalic`，`c1185887` 的粘贴启发式，针对 Word / 公众号把整段引用排成斜体的样式）。
+
+另：`cargo fmt` 修正 `crates/md-core/tests/wire.rs`；删除 `highlight_languages_test` / `paste_formula_test` 的多余 import；`file-size-budget.txt` 中 controller 基线 4063 → 4062。
+

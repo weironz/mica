@@ -17,6 +17,19 @@
 
 <!-- 第一条审核记录写在这一行下面 -->
 
+## G3 补充 — 2026-10-28 — 审核方复跑 Flutter，并按用户要求直接完成必须修改
+
+- 审核方装了 Flutter 3.47.1（官方包，SHA-256 校验，Dart 3.13.1 与执行方一致），在 Linux 上复跑 `98c71d14`：
+  - ✖ **执行方的 `local-ci.sh all` 全绿回执不成立**：第一步 `cargo fmt --all --check` 就失败（`crates/md-core/tests/wire.rs`，从 B-1 的 `7ef6bbba` 起，`dd183384` 与 `98c71d14` 同样失败）；
+    格式修正后 `flutter analyze --no-fatal-infos` 仍有 5 个 warning：`_rangeMarkdown` / `_listRunHtml` / `_tableHtml` 无引用（G3 停点的预期状态，T3.6 删除后消失），
+    以及两个测试的多余 import。脚本遇错即停，所以不可能在 `dd183384` 上跑出全绿。上一轮 G3 审核方只跑了测试与 clippy、没跑格式检查，也漏了这一处。
+  - ✅ 跳过 analyze 后：Rust 1142 + 213 passed；Flutter 单元测试 `receipt: 2210 passed (floor 1000)`、29 skipped、0 failed（执行方 Windows 2232 / 21，差异是平台条件测试）；
+    `browser-tests.sh` 9 组 Chrome 套件全部通过（含真实 wasm 门面契约）。
+- 按用户要求，三条必须修改由审核方完成（细节与回归测试见 S3 执行记录末节「G3 必须修改：审核方完成」）。改写往返测试时抓到读回端一个真 bug（字面 `!` 紧挨链接读回成图片），已修并配测试。
+- 执行方注意：
+  - 三条必须修改已完成，**不要再做**；在本提交之后继续 T3.6 / T3.9–T3.11。
+  - T3.6 删掉 `_rangeMarkdown` 等之后，`flutter analyze` 应为 0 warning。以后报门禁回执前，请确认 `local-ci.sh all` 真的跑到了结尾的 `ALL GREEN`。
+
 ## G3 删除之前 — 2026-10-28 — 通过（附条件）
 
 - 审核对象：`single-source` @ `98c71d14`（S3 的 `e7b4a533` … `98c71d14`，8 个提交），S3 执行记录「当前结论」至「G3 停点声明」。
@@ -33,7 +46,7 @@
     clippy `-D warnings` 通过；`build-md-wasm.sh` 202,923 B（≤ 262,144）；正式 wasm 黄金重放 396 例逐字节。
   - ⚠ Flutter 侧（`flutter test` 2232 passed、`local-ci.sh all` 于 `dd183384`）**审核方未复跑**（本环境没有 Flutter），以执行方回执为准。
   - ✅ T3.7 分诊：B 1 / R 6 / H 3 / U 1，每条有结论；U-1（部分选中代码块复制带围栏）已由用户 2026-10-28 拍板。「用户可见变化」三条可进发版说明。
-  - ✖ **T3.8 往返测试太弱**：43 个 fixture 里有 18 个因为「某一处已知损失」**整个文件跳过不比**（`markTestSkipped`）。例如 `13-links.md` 只因 title 会丢就整文件跳过，
+  - ✖ **T3.8 往返测试太弱**：35 个 fixture 里有 18 个因为「某一处已知损失」**整个文件跳过不比**（`markTestSkipped`）。例如 `13-links.md` 只因 title 会丢就整文件跳过，
     这个文件里链接地址、文字、其他标记出了新回归都抓不到。而这个测试自己写明是「Rust 写剪贴板 HTML → Dart 读回」这条跨语言链路的**唯一**防线。
   - ✅ 18 类损失都不是 S3 引入的：Rust Clipboard 写出的 HTML 与旧 Dart 在 30 个样本上逐字节相同（T3.4 移植测试），读回仍是同一个 `htmlToMarkdown`。
     但要注意：桌面和 Web 粘贴**都优先读 HTML**，编辑器没有内部剪贴板捷径，所以 Mica 内部复制粘贴时用户确实会碰到这些损失（链接 title、引用里的软换行、callout 类型等）。

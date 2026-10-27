@@ -2964,6 +2964,9 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
 
   void _openAiDialog() {
     final documentId = widget.selectedBootstrap?.document.id;
+    // No engine → no current-page target (an empty body would read as empty).
+    final body = withEngineOrNull(() => _commandHook.documentMarkdown() ?? '');
+    final onCurrentPage = body == null ? null : widget.onAiCurrentPage;
     showDialog<void>(
       context: context,
       builder: (context) => _AiDialog(
@@ -2971,15 +2974,12 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
         hasWorkspace: widget.selectedWorkspace != null,
         onStream: widget.onAiStream,
         onNewPage: widget.onAiNewPage,
-        onCurrentPage: widget.onAiCurrentPage,
-        currentPage: widget.onAiCurrentPage == null
+        onCurrentPage: onCurrentPage,
+        currentPage: onCurrentPage == null
             ? null
-            : (
-                title: _pageTitle.text,
-                markdown: _commandHook.documentMarkdown() ?? '',
-              ),
+            : (title: _pageTitle.text, markdown: body!),
         onNewWorkspace: widget.onAiNewWorkspace,
-        onPreviewEdits: widget.onAiPreviewEdits,
+        onPreviewEdits: body == null ? null : widget.onAiPreviewEdits,
         readPageForEdits: widget.onAiPreviewEdits == null
             ? null
             : () {

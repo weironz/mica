@@ -154,7 +154,11 @@ fn block_json_marks_keep_parser_order_and_extra_data_survives() {
   let blocks: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
   let marks = blocks[0]["data"]["marks"].as_array().unwrap();
   let types: Vec<&str> = marks.iter().map(|m| m["type"].as_str().unwrap()).collect();
-  assert_eq!(types, vec!["code", "bold"], "parser emission order is semantic");
+  assert_eq!(
+    types,
+    vec!["code", "bold"],
+    "parser emission order is semantic"
+  );
 }
 
 #[test]
