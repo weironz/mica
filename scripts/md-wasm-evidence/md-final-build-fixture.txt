@@ -1,0 +1,7 @@
+PASS: CLI mismatch refused
+PASS: gold verification failure refused
+PASS: fewer than nine tests refused
+PASS: generation mode refused
+PASS: empty gold corpus refused
+PASS: default gold verified, locked build flags, fingerprint and gold copied
+PASS: Chrome app recipe includes the wasm prerequisite

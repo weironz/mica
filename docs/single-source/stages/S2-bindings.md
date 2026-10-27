@@ -479,3 +479,35 @@ WP-W 仅为编译基准接入 D 的最小官方门面依赖：`50bf6030`→`176a
 
 脚本格式与 Node 语法检查通过；根 scripts 下直接 `dart analyze` 无法解析客户端 package 配置（Flutter/Mica package URI 均不存在），该次 exit3 已如实报告，不当作编译通过。正式 Flutter target 编译与 M2 新产物测量安排在 R 核心修复最终交付后一次执行；当前不占用 D 独占的 Windows runner/VM 工具。
 
+#### Clipboard 与 wire 最终核心接入（2026-10-27）
+
+WP-R `7b7d49d5`（输出 Value 递归稳定键序）接入为 `57bb4942`，`ce6cef12`（提前 T3.4 Clipboard 独立于 render）接入为 `62f4d05e`；未在 WP-W 手改核心。官方公共门面基准脚本已提交 `44cb7c0a`。R 后续 `e5ae374d` 只改 native probe/example 与记录，不在 wasm 指纹输入中，不为此额外重建。
+
+最终正式构建实际 exit0：先执行无默认特性 checked-in gold **9 passed / receipt 9 (floor 9)**，再按 opt3 / LTO / 全依赖 codegen-units=1 / stable / --locked 构建。分文件 gzip -n -9 得 **201363 B wasm + 2744 B JS = 204107 B**，低于 204800 B 硬门槛，余量 **693 B**；没有删除 API、添加诊断导出或放宽门槛。WASM SHA-256 **`df8e8e5af058c503dfe118ec2cde67c1f9c7c15ea51782d2928671a269153aff`**，JS SHA 不变 `90ee81fdb2466b0e2a497216203aa27907cc42777997f27b55b6141634d9a532`，源码指纹 **`562668d7bee36096`**。仅保留十个业务导出和工具支撑；产物与 test/support 的九份 gold 复制 diff exit0。
+
+`node scripts/test-md-wasm-gold.cjs` 对最终 WASM 当前黄金 **9 文件 / 396 cases** 字节全同，含更新后的 Clipboard；engineInfo 当前源集指纹单独验证、六类 Error 与后续恢复通过。HTML 文件当前 Export/Clipboard 各 77 cases；Node 只证明实现匹配当前 gold，不独立证明黄金历史未改。Export 原样的历史结论来自 WP-R 交付验证，WP-W 的额外 Node child_process/git before-after helper被隔离检查拒绝，未执行且未换入口绕过。
+
+最终核心下 `cargo test --locked -p mica-md-wasm` forward **10 passed / 0 failed / 0 ignored**；`cargo clippy --locked -p mica-md-wasm --all-targets -- -D warnings`、根 fmt、shellcheck、构建行为 fixture 七项、ci-paths、structure、ignored-source 均 exit0。日志位于 `scripts/md-wasm-evidence/md-final-*.txt`。
+
+#### T2.13 最终真实公共门面测量（Clipboard / wire 修复后）
+
+**正式 Flutter target 编译实际 exit0**：`flutter build web --release --no-web-resources-cdn --target=../../scripts/md-wasm-bench.dart --output=build/md_wasm_bench`，日志 `scripts/md-wasm-evidence/md-final-facade-web-build.txt`。正式业务路径为 **`MarkdownCodec.parseBlocks -> _WasmMarkdownCodec -> markdown_wire.decodeBlocks`**，初始化经过公共 `initMarkdownCodec()`；raw 同时记录真实 facade_engine，指纹为 **`562668d7bee36096`**。旧手工 `_full` wire 测量不作为此次门面验收数据。
+
+同一产物清单：WASM SHA **`df8e8e5af058c503dfe118ec2cde67c1f9c7c15ea51782d2928671a269153aff`**，JS SHA **`90ee81fdb2466b0e2a497216203aa27907cc42777997f27b55b6141634d9a532`**，Dart release `main.dart.js` SHA **`f986f14193ec2dac11098e670040ddea22c64199e79e9ad2645970638dca1399`**。服务目录文件已与正式产物哈希核对；WASM 532652 B/JS 15310 B 为未压缩大小，预算仍取分别 gzip 后 **204107 B**，余 **693 B**，不能混用。
+
+原有 exact S0 三档不变；Chrome 156、Windows 11、真实 release dart2js；同页现有 markdownToBlocks 对照，完整公共门面同步调用、JSON 往返与解码全部计时。每档三轮，每轮预热后 15 批 AB/BA（批次 1024 / 8 / 1）；先算每轮两路径中位数之比，再取三轮比值中位数。
+
+| exact S0 输入 | 三轮实际门面 / Dart | 比值中位数 | 实际门面每轮 p50 ms |
+| --- | --- | ---: | --- |
+| 87 UTF-16 | 1.088050 / 1.051948 / 1.073333 | **1.073333** | 0.016895 / 0.015820 / 0.015723 |
+| 10000 UTF-16 | 0.523207 / 0.505176 / 0.533186 | **0.523207** | 3.1000 / 3.0500 / 3.0125 |
+| 100000 UTF-16 | 0.572347 / 0.560062 / 0.569355 | **0.569355** | 35.600 / 35.900 / 35.300 |
+
+三档**每轮均 ≤1.2**；短档最慢 **1.088050**，没有使用旧手工 wire 较快数字替代真实门面。raw 的原始未按 mark 顺序规范化 `equivalent` 值仍保留，长档顺序差异解释沿用上文契约 §3.4；此次未再扩输入矩阵。
+
+五个全新 browser context 的初始化 **13.5 / 26.5 / 12.9 / 14.0 / 14.5 ms**，p50 **14.0 ms**、最大 **26.5 ms**，均低于 60ms。计时边界为生产 `micaMdReady` Promise **赋值到完成**：在页面脚本执行前定义 setter，附 `.then` 在完成时记录 `performance.now()`，**包含 wasm fetch、编译/实例化及 Promise 完成**，不包含更早的 JS 胶水下载；另记录 instantiateStreaming 起点用于区分（4.8/17.9/4.4/4.5/5.0 ms）。这是同一浏览器进程内五个新 context，可复用进程编译缓存，不代表冷机器/公网网络。未使用 waitFor 轮询时间作为 resolve 时间。服务器 no-store，不提供 COOP/COEP，crossOriginIsolated=false。
+
+六类畸形 JSON/非法 profile 直接调用正式 JS API 均抛 Error，随后同实例 parseBody 正常；该错误测试为 WASM 绑定边界，不宣称测试了所有 Dart 门面异常包装（由 WP-D 负责）。初始化、比值原始 15×3 样本、浏览器 UA/visibility、错误恢复、官方门面 path/facade_engine、三个文件 SHA、build 参数全部关联在 **`scripts/md-wasm-evidence/md-m2-official-facade-final.json`**。截图 `target/md-m2-official-facade-final.png`。未新增重测矩阵；测量结束已停止自有静态 server 并关闭 Playwright 页面，未触碰 D 的 Windows 进程。
+
+本次 WP-W 证据支持正式十 API 产物 **体积、WASM 初始化、Chrome 实际公共门面三档解析预算达标**，最终 M2 结论留给主会话审核读取证据后判定。**Export render 例外仍单列**：无 render WASM 的 Export 黄金通过，仅证明当前 WASM 匹配当前黄金，不证明富渲染 FFI Export 与 WASM 逐字节一致，不宣称跨端 all-ten-byte 全绿。新版 wire_gold 已恢复 render 下 Clipboard 黄金，只有 Export 固定输入例外（不再整项 HTML cfg 排除）。桌面三平台契约/Windows runner、首帧推迟、桌面预算和安装包由 WP-D/集成方提供实际回执；WP-W 没有重复 Windows 重型构建。T2.14 名单待 D 实际通过后由主会话在已有测试文件的集成树登记。
+

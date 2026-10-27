@@ -1,0 +1,7 @@
+bash scripts/check-file-size.sh
+WARN  clients/mica_flutter/lib/editor/controller.dart（library，3 个文件合计） — 4139 行，超过软上限 4000（排期拆分参考）
+WARN  clients/mica_flutter/lib/editor/editor.dart（library，6 个文件合计） — 7192 行，超过软上限 4000（排期拆分参考）
+WARN  clients/mica_flutter/lib/editor/render.dart（library，4 个文件合计） — 5739 行，超过软上限 4000（排期拆分参考）
+WARN  clients/mica_flutter/lib/main.dart（library，18 个文件合计） — 21088 行，超硬上限 8000（已在预算登记，由棘轮「只许减」约束——涨一行即失败）
+WARN  crates/mica-core/src/store.rs — 5627 行，超过软上限 4000（排期拆分参考）
+file-size gate: passed（含上方 WARN/INFO 清单）

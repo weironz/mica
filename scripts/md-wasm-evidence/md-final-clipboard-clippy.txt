@@ -1,0 +1,4 @@
+    Blocking waiting for file lock on build directory
+   Compiling mica-md v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\md-core)
+   Compiling mica-md-wasm v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\md-wasm)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 39.38s
