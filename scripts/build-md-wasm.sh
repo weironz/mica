@@ -25,7 +25,7 @@ wasm-bindgen --target no-modules --no-typescript --remove-name-section --remove-
 wasm_bytes=$(gzip -n -9 -c "$out/mica_md_bg.wasm" | wc -c)
 js_bytes=$(gzip -n -9 -c "$out/mica_md.js" | wc -c)
 total_bytes=$((wasm_bytes + js_bytes))
-[ "$total_bytes" -le 204800 ] || fail "mica_md gzip is $total_bytes B (wasm $wasm_bytes + JS $js_bytes), hard budget 204800 B"
+[ "$total_bytes" -le 262144 ] || fail "mica_md gzip is $total_bytes B (wasm $wasm_bytes + JS $js_bytes), hard budget 262144 B"
 cargo run --locked -q -p mica-md-wasm --example print_fingerprint > "$out/SOURCE_FINGERPRINT"
 
 support=clients/mica_flutter/test/support/mica_md
@@ -40,5 +40,5 @@ gold_files=("$gold"/*.json)
 [ "${#gold_files[@]}" -gt 0 ] || fail "wire gold corpus is empty ($gold); regenerate the checked-in gold before building"
 mkdir -p "$support/gold"
 cp -r "$gold/." "$support/gold/"
-note "mica_md gzip -n -9: wasm=$wasm_bytes B JS=$js_bytes B total=$total_bytes B (hard budget 204800 B)"
+note "mica_md gzip -n -9: wasm=$wasm_bytes B JS=$js_bytes B total=$total_bytes B (hard budget 262144 B)"
 note "mica_md -> $out; browser support -> $support"

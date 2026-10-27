@@ -262,6 +262,11 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 
 （执行方追加。P0 结果放在最前面。）
 
+> **证据归档说明（M2 复核后）**：本记录原先引用的原始证据目录 `scripts/md-wasm-evidence/` 已按审核要求从工作树删除。
+> 文中以 `9e604c43:scripts/md-wasm-evidence/<文件>` 形式标注的路径，可在该提交中取回：
+> `git show 9e604c43:scripts/md-wasm-evidence/<文件>`（或 `git checkout 9e604c43 -- scripts/md-wasm-evidence/`）。
+> 其余结果均可在集成分支 `single-source` 的对应提交与门禁日志中复现。
+
 ### P0（T2.1，2026-10-26，WP-W）
 
 以下为单次 P0 验证结果记录；本次验证代码只在本分支 `worktree-agent-a7950b28e1e2a2c23`，不进入 main / `single-source`。对照基线说明：S0 基线尚未产出，因此性能比较采用本次同一浏览器、同一页面内实测的现有 Dart `markdownToBlocks`。工具链与运行环境：Rust 1.98.0 stable（`rust-toolchain.toml`）+ `wasm32-unknown-unknown`；wasm-bindgen crate 与 CLI 均为 0.2.129；Flutter 3.47.1 / Dart 3.13.1，真实 `flutter build web --release --no-web-resources-cdn`；本地静态服务器 + Playwright，HeadlessChrome/156.0.0.0（Windows 11 Pro）。
@@ -373,7 +378,7 @@ wasm-bindgen --target no-modules --no-typescript --remove-name-section --remove-
 
 这些环境变量只作用该条脚本命令，未改变全仓库 profile、工具持久配置或其他构建。root package opt-3 未降低。`rustc --print cfg --target wasm32-unknown-unknown` 实际输出 `panic="abort"`，显式设置与该目标默认一致。strip 是 wasm-bindgen 内置参数，无新增 wasm-opt/其他依赖。
 
-最终 GNU gzip `-n -9 -c` **分别**压缩后相加：wasm **196936 B** + JS **2744 B** = **199680 B（195 KiB）**；低于 204800 B 硬门槛，高于 122880 B 软目标。减小来自删除元数据与统一依赖 codegen，未删除 API、未换压缩口径。原首次失败日志在任务输出 `bk1q1kr2f.output`；正式成功及严格 gold 缺失失败日志保存在 `scripts/md-wasm-evidence/`。首次未 strip 原产物已被后续构建替换，因此不能声称保留其二进制哈希；strip 中间文件还在 `target/md-size-check/`，SHA `e792a6e7ade84d76a433f5ec816dd9b19115dd4c042287e6f98eb559fa227e91`。
+最终 GNU gzip `-n -9 -c` **分别**压缩后相加：wasm **196936 B** + JS **2744 B** = **199680 B（195 KiB）**；低于 204800 B 硬门槛，高于 122880 B 软目标。减小来自删除元数据与统一依赖 codegen，未删除 API、未换压缩口径。原首次失败日志在任务输出 `bk1q1kr2f.output`；正式成功及严格 gold 缺失失败日志保存在 `9e604c43:scripts/md-wasm-evidence/`。首次未 strip 原产物已被后续构建替换，因此不能声称保留其二进制哈希；strip 中间文件还在 `target/md-size-check/`，SHA `e792a6e7ade84d76a433f5ec816dd9b19115dd4c042287e6f98eb559fa227e91`。
 
 测量时的正式文件 SHA-256：
 
@@ -401,7 +406,7 @@ Windows 11、Rust 1.98.0 stable、Flutter 3.47.1/Dart 3.13.1、Chrome 156；`flu
 
 语义证据：原始 10k/100k `equivalent=false` 保留。精确导出发现分别只有 2/30 个块 marks 顺序不同，首例块 169/175：同 UTF-16 范围 image/link 的产生顺序与 wire 规范顺序不同。**非语法漂移，是 §3.4 契约规定的标记排序规范化，Dart mirror 顺序未排序**。按 (start,end,type) 排序后全部块 differingBlocks=0，kind/text/data 值不变。S0 比较器原本就在 `markdown_differential_test.dart:301–318` 这样排序，故不是新增字段分歧。三档同输入通过真实 host 无 render wire_stdin 与浏览器 wire **逐字节相同**（SHA 保留）。10k 尾为 `sta`，100k 尾为 `~~~a~`，没有额外尾截断差异，不删除这两档。原始输入、完整首例与重复块差异、每条 SHA 位于 evidence 的 inputs/diff-summary；完整输入+两侧输出另在 `target/md-m2-diff-inputs.json`。
 
-原始数据及复核入口：`scripts/md-wasm-evidence/{md-m2-browser-final.json,md-m2-browser-raw.json,md-m2-diff-summary.json,inputs.json,html-feature-summary.json,md-runtime-errors.json}`；测量代码 `scripts/md-wasm-bench.dart`，host 复核 `crates/md-wasm/examples/wire_stdin.rs` + `scripts/md-wasm-diff.cjs`。运行时临时数据在 `target/`，截图 `target/md-m2-browser.png`。测量仅覆盖 parse Document 与 Chrome，不外推 Fragment、Firefox/Safari、序列化/HTML 或桌面性能；Firefox 补测未做。
+原始数据及复核入口：`9e604c43:scripts/md-wasm-evidence/{md-m2-browser-final.json,md-m2-browser-raw.json,md-m2-diff-summary.json,inputs.json,html-feature-summary.json,md-runtime-errors.json}`；测量代码 `scripts/md-wasm-bench.dart`，host 复核 `crates/md-wasm/examples/wire_stdin.rs` + `scripts/md-wasm-diff.cjs`。运行时临时数据在 `target/`，截图 `target/md-m2-browser.png`。测量仅覆盖 parse Document 与 Chrome，不外推 Fragment、Firefox/Safari、序列化/HTML 或桌面性能；Firefox 补测未做。
 
 #### 回执、阻塞与裁决请求
 
@@ -432,7 +437,7 @@ WP-W 通过允许的非 Git 命令再次核对真实依赖图：`cargo tree --ma
 
 #### 接入最终核心修复与黄金语料后的重验（2026-10-27）
 
-本节取代上文“未接入/未重跑”的当前状态，但保留历史失败。新的直接 Cargo 命令及原始日志均在 `scripts/md-wasm-evidence/md-post-*.txt`：
+本节取代上文“未接入/未重跑”的当前状态，但保留历史失败。新的直接 Cargo 命令及原始日志均在 `9e604c43:scripts/md-wasm-evidence/md-post-*.txt`：
 
 | 命令 | 实际结果 |
 | --- | --- |
@@ -459,7 +464,7 @@ WP-W 通过允许的非 Git 命令再次核对真实依赖图：`cargo tree --ma
 | 10000 | 0.491837 / 0.517094 / 0.512035 | **0.512035** |
 | 100000 | 0.558029 / 0.552092 / 0.549126 | **0.552092** |
 
-每轮均 ≤1.2。五个新 browser context 初始化（Promise 赋值到 fulfillment，同方法）为 **35.1 / 13.7 / 11.4 / 13.3 / 12.3 ms**，p50 **13.3 ms**；crossOriginIsolated=false。六类非法 JSON/profile 在新产物浏览器均抛 Error，随后同实例 parseBody 正常。新清单、全部原始样本、初始化与异常记录在 **`scripts/md-wasm-evidence/md-m2-post-integration.json`**；旧 browser-final/raw 文件未覆盖。临时截图 `target/md-m2-post-integration.png`；静态服务器测完已停止。
+每轮均 ≤1.2。五个新 browser context 初始化（Promise 赋值到 fulfillment，同方法）为 **35.1 / 13.7 / 11.4 / 13.3 / 12.3 ms**，p50 **13.3 ms**；crossOriginIsolated=false。六类非法 JSON/profile 在新产物浏览器均抛 Error，随后同实例 parseBody 正常。新清单、全部原始样本、初始化与异常记录在 **`9e604c43:scripts/md-wasm-evidence/md-m2-post-integration.json`**；旧 browser-final/raw 文件未覆盖。临时截图 `target/md-m2-post-integration.png`；静态服务器测完已停止。
 
 新增 `node scripts/test-md-wasm-gold.cjs` 直接加载正式 wasm，对 checked-in 默认黄金的返回字符串逐字节重放：parse_body **76**、parse_inline_batch **15**、decode_cells **28**、encode_cells **11**、serialize_body **77**、serialize_inline **9**、render_html_body **154**、math_run_spans **13**、parse_inline_math **13**，合计 **9 文件 / 396 cases** 全部通过。engineInfo 单独断言 schema_version 与该 WASM SOURCE_FINGERPRINT 一致（不与核心不同源集指纹强行相等）；六类错误+随后恢复也通过。该 Node 专项验证**不能替代 Dart VM/web/Windows 契约，也不能证明实际 FFI render 字节相同**。
 
@@ -630,9 +635,11 @@ D 此前的 release wire+FFI 范围绝对数 0.015718 ms/次来自独立 probe/�
 
 **失败项归因（与 WP-R 同输入 wire 数据对照）**
 
-- serialize 1.534×：Rust `wire::serialize_body_json` 本体 **0.63×**（远快于 Dart 序列化）；门面总耗时 2.238 ms 中，Dart `encodeBlocks` 实测 **0.42 ms**（10k/298 块），其余约 1.2 ms 在 FFI/FRB 字符串边界。瓶颈是边界传输，不是序列化引擎。
-- html 3.712×：Rust Clipboard render 本体 **1.542 ms**，绝对值低于门面总耗时 2.656 ms；Dart 基线仅 0.715 ms 使 1.2× 门槛低至 0.86 ms——单次 wire render 本身就已越过门槛。门面额外约 1.1 ms 同样在边界（`encodeBlocks` 0.42 ms + FRB 传参与大字符串）。
-- 两项目标均是 Dart 门面实现层，不在 Rust 简洁性；缩小边界成本需要批量/二进制传输，会改变冻结的 wire 契约形状，**超出 S2 范围，作为待审核裁决项提交**，执行方未擅自改契约或放宽预算。数值来自同轮 AOT（Windows release，`flutter build windows --release -t integration_test/markdown_codec_release_probe.dart` + CPU 同进程 Dart 对照），未与 VM JIT 或 Chrome 数混算。
+> **更正（M2 复核后）**：此前记录的“两项目标均在 FFI 边界、Rust 本体远快于 Dart”说法不成立，原因是把 **native release** 的 wire 数字与 **VM（JIT）** 的 Dart 基线相比。以同轮 AOT 的 Dart 基线重算如下。
+
+- serialize 1.534×：Rust `wire::serialize_body_json` 同输入 **1.449 ms**，同轮 AOT Dart 序列化 **1.459 ms**，即 **≈1.0× 持平**（不是 0.63×；0.63× 是与 VM 的 2.30 ms 相比得出的，两套口径不可混用）。门面总耗时 2.238 ms = wire 1.449 + Dart `encodeBlocks` 0.42 + FFI/FRB 边界约 0.37 ms。**超标主因是边界成本叠加在“与 Dart 持平”的引擎之上**，不是引擎回退。
+- html 3.712×：Rust Clipboard wire render 同输入 **1.542 ms**，同轮 AOT Dart `selectionHtml` **0.715 ms**，**2.16×**；即使只算 render 本体（278 块约 0.99 ms）也约 1.38×。门面总 2.656 ms = wire 1.542 + `encodeBlocks` 0.42 + 边界约 0.69 ms。**这一项的主因是 Rust Clipboard 渲染本体比 Dart 镜像慢，边界是次要增量**，不能归为纯边界问题。
+- 因此两项的性质不同：serialize 是边界成本（Rust 本体已与 Dart 持平），html 是渲染本体 + 边界共同导致。缩小边界需要批量/二进制传输，会改变冻结的 wire 契约形状；缩小渲染本体需要继续优化 Rust Clipboard 路径。两项都作为**待审核裁决项**提交，执行方未擅自改契约或放宽预算。数值来自同轮 AOT（Windows release，`flutter build windows --release -t integration_test/markdown_codec_release_probe.dart` + 同进程 Dart 对照），未与 VM JIT 或 Chrome 数混算。
 
 **证据**：`clients/mica_flutter/build/wp-d-release-summary.json`（五冷、bench、Unavailable、指纹）、每次运行的 `build/wp-d-release-*/run-N/driver.json`（含 console 与清理状态）、`build/wp-d-vm-codec-bench.json`（JIT 诊断）、`build/wp-d-dart-boundary-split.json`（Dart 边界分解）。探针驱动只操作复制 bundle、自有 PID 与自建隔离 APPDATA，并在 finally 中有界终止/清理；未触碰用户安装或用户数据。
 
