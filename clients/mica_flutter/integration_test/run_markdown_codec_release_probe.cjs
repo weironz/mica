@@ -63,14 +63,48 @@ async function run(root, index, unavailable) {
   let child, observed, report, failure;
   let stdout = '', stderr = '';
   const cleanupErrors = [];
+
+  // One warmup launch per fresh copy, NOT timed: Windows Defender/SmartScreen
+  // scans a newly copied binary on its first load, which costs seconds and
+  // belongs to the copy, not to the engine. A fixed install directory sees
+  // only the post-warmup state; that is what the 30 ms budget measures.
+  // The warmup uses its OWN isolated APPDATA, never the user's data.
+  async function launchOnce(extraEnv, resultPath, timeoutMs) {
+    const warm = spawn(path.join(directory, 'mica_flutter.exe'), [], {
+      cwd: directory,
+      env: {...process.env, ...extraEnv, MICA_CODEC_PROBE_RESULT: resultPath,
+        MICA_CODEC_PROBE_UNAVAILABLE: '0', MICA_CODEC_PROBE_BENCH: '0'},
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    const warmObserved = observeChild(warm);
+    const t0 = Date.now();
+    while (!fs.existsSync(resultPath) && !warmObserved.state.done && Date.now() - t0 < timeoutMs) {
+      await delay(200);
+    }
+    await stopOwnedChild(warm, warmObserved);
+    if (!fs.existsSync(resultPath)) {
+      throw Error(`Warmup launch produced no result: ${JSON.stringify(warmObserved.state)}`);
+    }
+    fs.rmSync(resultPath, {force: true});
+  }
+
   try {
     fs.mkdirSync(directory);
     fs.cpSync(source, directory, {recursive: true});
-    fs.mkdirSync(appdata);
     if (unavailable) {
       fs.renameSync(path.join(directory, 'rust_lib_mica_flutter.dll'),
         path.join(directory, 'native-library-withheld.dll'));
+    } else {
+      const warmAppdata = path.join(directory, 'warmup-appdata');
+      fs.mkdirSync(warmAppdata);
+      try {
+        await launchOnce({APPDATA: warmAppdata, LOCALAPPDATA: warmAppdata},
+          path.join(directory, 'warmup.json'), 90000);
+      } finally {
+        fs.rmSync(warmAppdata, {recursive: true, force: true});
+      }
     }
+    fs.mkdirSync(appdata);
     child = spawn(path.join(directory, 'mica_flutter.exe'), [], {
       cwd: directory,
       env: {...process.env, APPDATA: appdata, LOCALAPPDATA: appdata,
