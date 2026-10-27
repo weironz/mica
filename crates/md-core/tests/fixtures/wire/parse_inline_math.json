@@ -1,0 +1,96 @@
+{
+  "cases": [
+    {
+      "args": {
+        "source": ""
+      },
+      "id": "math-0",
+      "output": "{\"text\":\"\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "plain 中文 😀 𠀀"
+      },
+      "id": "math-1",
+      "output": "{\"text\":\"plain 中文 😀 𠀀\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "**bold** and *italic* and ~~strike~~ and `code`"
+      },
+      "id": "math-2",
+      "output": "{\"text\":\"**bold** and *italic* and ~~strike~~ and `code`\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "**a `b`**"
+      },
+      "id": "math-3",
+      "output": "{\"text\":\"**a `b`**\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "[link](https://example.com \"title\") and [](/empty)"
+      },
+      "id": "math-4",
+      "output": "{\"text\":\"[link](https://example.com \\\"title\\\") and [](/empty)\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "![alt](image.png \"title\")"
+      },
+      "id": "math-5",
+      "output": "{\"text\":\"![alt](image.png \\\"title\\\")\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "literal \\*star\\* &amp; &#128512;"
+      },
+      "id": "math-6",
+      "output": "{\"text\":\"literal \\\\*star\\\\* &amp; &#128512;\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "line  \nbreak"
+      },
+      "id": "math-7",
+      "output": "{\"text\":\"line  \\nbreak\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "https://example.com www.example.com a@b.co"
+      },
+      "id": "math-8",
+      "output": "{\"text\":\"https://example.com www.example.com a@b.co\",\"marks\":[]}"
+    },
+    {
+      "args": {
+        "source": "中文😀 $x^2$ and \\(a+b\\) 𠀀"
+      },
+      "id": "math-9",
+      "output": "{\"text\":\"中文😀 x^2 and a+b 𠀀\",\"marks\":[{\"start\":5,\"end\":8,\"type\":\"math\"},{\"start\":13,\"end\":16,\"type\":\"math\"}]}"
+    },
+    {
+      "args": {
+        "source": "price $5 and $10; $$display$$"
+      },
+      "id": "math-10",
+      "output": "{\"text\":\"price 5 and $10; $display$$\",\"marks\":[{\"start\":6,\"end\":18,\"type\":\"math\"}]}"
+    },
+    {
+      "args": {
+        "source": "`$HOME` and $x$"
+      },
+      "id": "math-11",
+      "output": "{\"text\":\"`$HOME` and x\",\"marks\":[{\"start\":12,\"end\":13,\"type\":\"math\"}]}"
+    },
+    {
+      "args": {
+        "source": "text[^1] <em>html</em>"
+      },
+      "id": "math-12",
+      "output": "{\"text\":\"text[^1] <em>html</em>\",\"marks\":[]}"
+    }
+  ],
+  "function": "parse_inline_math_json"
+}

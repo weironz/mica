@@ -1,0 +1,201 @@
+{
+  "cases": [
+    {
+      "args": {
+        "cells_json": "[\"\"]"
+      },
+      "id": "cell-0",
+      "output": "[{\"text\":\"\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"plain 中文 😀 𠀀\"]"
+      },
+      "id": "cell-1",
+      "output": "[{\"text\":\"plain 中文 😀 𠀀\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"**bold** and *italic* and ~~strike~~ and `code`\"]"
+      },
+      "id": "cell-2",
+      "output": "[{\"text\":\"bold and italic and strike and code\",\"marks\":[{\"start\":0,\"end\":4,\"type\":\"bold\"},{\"start\":9,\"end\":15,\"type\":\"italic\"},{\"start\":20,\"end\":26,\"type\":\"strike\"},{\"start\":31,\"end\":35,\"type\":\"code\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"**a `b`**\"]"
+      },
+      "id": "cell-3",
+      "output": "[{\"text\":\"a b\",\"marks\":[{\"start\":0,\"end\":3,\"type\":\"bold\"},{\"start\":2,\"end\":3,\"type\":\"code\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"[link](https://example.com \\\"title\\\") and [](/empty)\"]"
+      },
+      "id": "cell-4",
+      "output": "[{\"text\":\"link and \",\"marks\":[{\"start\":0,\"end\":4,\"type\":\"link\",\"href\":\"https://example.com\",\"title\":\"title\"},{\"start\":9,\"end\":9,\"type\":\"link\",\"href\":\"/empty\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"![alt](image.png \\\"title\\\")\"]"
+      },
+      "id": "cell-5",
+      "output": "[{\"text\":\"alt\",\"marks\":[{\"start\":0,\"end\":3,\"type\":\"image\",\"href\":\"image.png\",\"title\":\"title\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"literal \\\\*star\\\\* &amp; &#128512;\"]"
+      },
+      "id": "cell-6",
+      "output": "[{\"text\":\"literal *star* & 😀\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"line  \\nbreak\"]"
+      },
+      "id": "cell-7",
+      "output": "[{\"text\":\"line\\\\\\nbreak\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"https://example.com www.example.com a@b.co\"]"
+      },
+      "id": "cell-8",
+      "output": "[{\"text\":\"https://example.com www.example.com a@b.co\",\"marks\":[{\"start\":0,\"end\":19,\"type\":\"link\",\"href\":\"https://example.com\"},{\"start\":20,\"end\":35,\"type\":\"link\",\"href\":\"http://www.example.com\"},{\"start\":36,\"end\":42,\"type\":\"link\",\"href\":\"mailto:a@b.co\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"中文😀 $x^2$ and \\\\(a+b\\\\) 𠀀\"]"
+      },
+      "id": "cell-9",
+      "output": "[{\"text\":\"中文😀 x^2 and a+b 𠀀\",\"marks\":[{\"start\":5,\"end\":8,\"type\":\"math\"},{\"start\":13,\"end\":16,\"type\":\"math\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"price $5 and $10; $$display$$\"]"
+      },
+      "id": "cell-10",
+      "output": "[{\"text\":\"price 5 and $10; $display$$\",\"marks\":[{\"start\":6,\"end\":18,\"type\":\"math\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"`$HOME` and $x$\"]"
+      },
+      "id": "cell-11",
+      "output": "[{\"text\":\"$HOME and x\",\"marks\":[{\"start\":0,\"end\":5,\"type\":\"code\"},{\"start\":10,\"end\":11,\"type\":\"math\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"text[^1] <em>html</em>\"]"
+      },
+      "id": "cell-12",
+      "output": "[{\"text\":\"text1 <em>html</em>\",\"marks\":[{\"start\":4,\"end\":5,\"type\":\"footnote\",\"href\":\"1\"},{\"start\":6,\"end\":10,\"type\":\"html\"},{\"start\":14,\"end\":19,\"type\":\"html\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[],\"text\":\"\"}]"
+      },
+      "id": "cell-13",
+      "output": "[{\"text\":\"\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[],\"text\":\"literal *x* | \\\\ [x] $\"}]"
+      },
+      "id": "cell-14",
+      "output": "[{\"text\":\"literal *x* | \\\\ [x] $\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[],\"text\":\"https://example.com\"}]"
+      },
+      "id": "cell-15",
+      "output": "[{\"text\":\"https://example.com\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[],\"text\":\"x \"}]"
+      },
+      "id": "cell-16",
+      "output": "[{\"text\":\"x \",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[],\"text\":\"a\\nb\"}]"
+      },
+      "id": "cell-17",
+      "output": "[{\"text\":\"a\\nb\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[{\"end\":8,\"start\":4,\"type\":\"bold\"}],\"text\":\"😀𠀀bold\"}]"
+      },
+      "id": "cell-18",
+      "output": "[{\"text\":\"😀𠀀bold\",\"marks\":[{\"start\":4,\"end\":8,\"type\":\"bold\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"},{\"end\":1,\"start\":0,\"type\":\"italic\"},{\"end\":3,\"href\":\"https://x.y\",\"start\":2,\"title\":\"t\",\"type\":\"link\"}],\"text\":\"abcdef\"}]"
+      },
+      "id": "cell-19",
+      "output": "[{\"text\":\"abcdef\",\"marks\":[{\"start\":0,\"end\":1,\"type\":\"italic\"},{\"start\":2,\"end\":3,\"type\":\"link\",\"href\":\"https://x.y\",\"title\":\"t\"},{\"start\":4,\"end\":6,\"type\":\"bold\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[{\"end\":6,\"href\":\"https://x.y\",\"start\":0,\"type\":\"link\"},{\"end\":6,\"start\":0,\"type\":\"code\"}],\"text\":\"linked code\"}]"
+      },
+      "id": "cell-20",
+      "output": "[{\"text\":\"linked code\",\"marks\":[{\"start\":0,\"end\":6,\"type\":\"code\"},{\"start\":0,\"end\":6,\"type\":\"link\",\"href\":\"https://x.y\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"strike\"},{\"end\":3,\"start\":2,\"type\":\"math\"}],\"text\":\"a b c\"}]"
+      },
+      "id": "cell-21",
+      "output": "[{\"text\":\"a b c\",\"marks\":[{\"start\":0,\"end\":1,\"type\":\"strike\"},{\"start\":2,\"end\":3,\"type\":\"math\"}]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[null]"
+      },
+      "id": "cell-22",
+      "output": "[{\"text\":\"\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[17]"
+      },
+      "id": "cell-23",
+      "output": "[{\"text\":\"\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{}]"
+      },
+      "id": "cell-24",
+      "output": "[{\"text\":\"\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[{\"marks\":[],\"text\":\"legacy\"}]"
+      },
+      "id": "cell-25",
+      "output": "[{\"text\":\"legacy\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "cells_json": "[]"
+      },
+      "id": "empty-batch",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "cells_json": "[\"\",\"plain 中文 😀 𠀀\",\"**bold** and *italic* and ~~strike~~ and `code`\",\"**a `b`**\",\"[link](https://example.com \\\"title\\\") and [](/empty)\",\"![alt](image.png \\\"title\\\")\",\"literal \\\\*star\\\\* &amp; &#128512;\",\"line  \\nbreak\",\"https://example.com www.example.com a@b.co\",\"中文😀 $x^2$ and \\\\(a+b\\\\) 𠀀\",\"price $5 and $10; $$display$$\",\"`$HOME` and $x$\",\"text[^1] <em>html</em>\",{\"marks\":[],\"text\":\"\"},{\"marks\":[],\"text\":\"literal *x* | \\\\ [x] $\"},{\"marks\":[],\"text\":\"https://example.com\"},{\"marks\":[],\"text\":\"x \"},{\"marks\":[],\"text\":\"a\\nb\"},{\"marks\":[{\"end\":8,\"start\":4,\"type\":\"bold\"}],\"text\":\"😀𠀀bold\"},{\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"},{\"end\":1,\"start\":0,\"type\":\"italic\"},{\"end\":3,\"href\":\"https://x.y\",\"start\":2,\"title\":\"t\",\"type\":\"link\"}],\"text\":\"abcdef\"},{\"marks\":[{\"end\":6,\"href\":\"https://x.y\",\"start\":0,\"type\":\"link\"},{\"end\":6,\"start\":0,\"type\":\"code\"}],\"text\":\"linked code\"},{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"strike\"},{\"end\":3,\"start\":2,\"type\":\"math\"}],\"text\":\"a b c\"},null,17,{},{\"marks\":[],\"text\":\"legacy\"}]"
+      },
+      "id": "all",
+      "output": "[{\"text\":\"\",\"marks\":[]},{\"text\":\"plain 中文 😀 𠀀\",\"marks\":[]},{\"text\":\"bold and italic and strike and code\",\"marks\":[{\"start\":0,\"end\":4,\"type\":\"bold\"},{\"start\":9,\"end\":15,\"type\":\"italic\"},{\"start\":20,\"end\":26,\"type\":\"strike\"},{\"start\":31,\"end\":35,\"type\":\"code\"}]},{\"text\":\"a b\",\"marks\":[{\"start\":0,\"end\":3,\"type\":\"bold\"},{\"start\":2,\"end\":3,\"type\":\"code\"}]},{\"text\":\"link and \",\"marks\":[{\"start\":0,\"end\":4,\"type\":\"link\",\"href\":\"https://example.com\",\"title\":\"title\"},{\"start\":9,\"end\":9,\"type\":\"link\",\"href\":\"/empty\"}]},{\"text\":\"alt\",\"marks\":[{\"start\":0,\"end\":3,\"type\":\"image\",\"href\":\"image.png\",\"title\":\"title\"}]},{\"text\":\"literal *star* & 😀\",\"marks\":[]},{\"text\":\"line\\\\\\nbreak\",\"marks\":[]},{\"text\":\"https://example.com www.example.com a@b.co\",\"marks\":[{\"start\":0,\"end\":19,\"type\":\"link\",\"href\":\"https://example.com\"},{\"start\":20,\"end\":35,\"type\":\"link\",\"href\":\"http://www.example.com\"},{\"start\":36,\"end\":42,\"type\":\"link\",\"href\":\"mailto:a@b.co\"}]},{\"text\":\"中文😀 x^2 and a+b 𠀀\",\"marks\":[{\"start\":5,\"end\":8,\"type\":\"math\"},{\"start\":13,\"end\":16,\"type\":\"math\"}]},{\"text\":\"price 5 and $10; $display$$\",\"marks\":[{\"start\":6,\"end\":18,\"type\":\"math\"}]},{\"text\":\"$HOME and x\",\"marks\":[{\"start\":0,\"end\":5,\"type\":\"code\"},{\"start\":10,\"end\":11,\"type\":\"math\"}]},{\"text\":\"text1 <em>html</em>\",\"marks\":[{\"start\":4,\"end\":5,\"type\":\"footnote\",\"href\":\"1\"},{\"start\":6,\"end\":10,\"type\":\"html\"},{\"start\":14,\"end\":19,\"type\":\"html\"}]},{\"text\":\"\",\"marks\":[]},{\"text\":\"literal *x* | \\\\ [x] $\",\"marks\":[]},{\"text\":\"https://example.com\",\"marks\":[]},{\"text\":\"x \",\"marks\":[]},{\"text\":\"a\\nb\",\"marks\":[]},{\"text\":\"😀𠀀bold\",\"marks\":[{\"start\":4,\"end\":8,\"type\":\"bold\"}]},{\"text\":\"abcdef\",\"marks\":[{\"start\":0,\"end\":1,\"type\":\"italic\"},{\"start\":2,\"end\":3,\"type\":\"link\",\"href\":\"https://x.y\",\"title\":\"t\"},{\"start\":4,\"end\":6,\"type\":\"bold\"}]},{\"text\":\"linked code\",\"marks\":[{\"start\":0,\"end\":6,\"type\":\"code\"},{\"start\":0,\"end\":6,\"type\":\"link\",\"href\":\"https://x.y\"}]},{\"text\":\"a b c\",\"marks\":[{\"start\":0,\"end\":1,\"type\":\"strike\"},{\"start\":2,\"end\":3,\"type\":\"math\"}]},{\"text\":\"\",\"marks\":[]},{\"text\":\"\",\"marks\":[]},{\"text\":\"\",\"marks\":[]},{\"text\":\"legacy\",\"marks\":[]}]"
+    }
+  ],
+  "function": "decode_cells_json"
+}
