@@ -17,6 +17,24 @@
 
 <!-- 第一条审核记录写在这一行下面 -->
 
+## M2 复核 — 2026-10-27 — 通过
+
+- 审核对象：`single-source` @ `e7b5cb10`。自 `9e604c43` 起 `crates/`、`clients/`、`Cargo.toml`、`Cargo.lock` 无改动，所以首轮 M2 的全量 Rust 门禁结果（1141 + 213 passed）仍然适用于本树。
+- 核对结果（只核对首轮 M2 的 4 条必须修改）：
+  1. ✅ `build-md-wasm.sh` 门槛 262144 B；`test-md-wasm-build.sh` 新增「205 KB 接受 / 300 KB 拒绝」两个边界用例。审核方在 Linux 上重建：
+     `bash scripts/build-md-wasm.sh` exit 0，wasm 202,516 + JS 2,744 = **205,260 B**，wasm SHA `d7c21dd0…` 与首轮在 `9e604c43` 上的构建逐字节相同；
+     执行方 Docker 构建记为 205,269 B（差 9 B，不影响门槛）。`test-md-wasm-build.sh`、`test-ci-paths.sh`、`check-file-size.sh`、`check-ignored-sources.sh` 全部 exit 0；
+     正式产物黄金重放 396 例逐字节通过。
+  2. ✅ Web 复制：真实门面 `serializeBlocks` + `renderClipboardHtml`，production dart2js、Chrome，1 万字符 / 298 块，三轮中位 4.6 / 4.3 / 4.1 ms，**≤ 16 ms**。
+     审核方没有 Flutter 环境，此项以执行方回执为准；测量代码 `_measureCopy` 已提交，可在同一构建上重放。
+  3. ✅ 归因已改正，并且执行方自查出另一处口径错误：serialize 的「Rust 0.63×」是拿 native 数字比 VM 下的 Dart，同轮 AOT 实为约 1.0× 持平。HTML 一项写明主因是新增的安全过滤。
+  4. ✅ `b0064835` 删除 `scripts/md-wasm-evidence/`，S2 执行记录改为引用 `9e604c43:scripts/md-wasm-evidence/…`。
+- 审核方顺手做的清理（本提交）：删除 `scripts/m2-linux-build.sh` / `m2-linux-run.sh`——与 `build-md-wasm.sh` 功能重复、写死容器路径 `/src` `/out`，仓库里没有调用方。
+- 建议（不阻塞）：
+  - 本轮 Web 复制与 Linux 构建的原始 JSON 只留在执行方本机工作树，没有进任何分支，别人无法取回。以后原始证据请提交到工作包分支并在记录里写提交号。
+  - S2 执行记录「更正」一节末尾仍写着两项「作为待审核裁决项提交」，已被首轮 M2 裁决取代；节首「当前结论」表是对的，可不改。
+- 结论：**M2 通过，S2 用 merge 提交并回 main。** 下一个停点是 G3（S3 的 T3.7 分诊、T3.8 往返测试完成后，T3.6 删除 Dart 代码之前）。
+
 ## M2 并回检查 — 2026-10-27 — 要求修改（4 条，修完只做快速复核）
 
 - 审核对象：`single-source` @ `9e604c43`（S2 三个工作包 merge `2e5eb2e8` / `a5a5f1e2` / `7923e72a` 及其后的核心提交），S2 执行记录 P0 之后各节，README 验收快照。

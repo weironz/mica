@@ -713,6 +713,7 @@ WP-R `7b7d49d5`（输出 Value 递归稳定键序）接入为 `57bb4942`，`ce6c
 **复算**：主会话对上述产物独立执行 `sha256sum` 与 `gzip -n -9`，wasm/JS 两个 SHA 与体积全部一致，非仅采信执行方口述。
 
 **复现脚本**：本次容器内实际使用的 `scripts/m2-linux-run.sh`（安装 pin 住的 CLI 后调用构建）与 `scripts/m2-linux-build.sh`（`--locked` 十 API 构建 + wasm-bindgen + 指纹 + 体积）随本记录一并提交，审核方在 Linux 上可直接用同一组命令重建并与上表比对。
+> **审核方注（M2 复核）**：这两个脚本与 `scripts/build-md-wasm.sh` 功能重复、写死容器路径，合并前已删除（可在 `e7b5cb10` 取回）；Linux 复现直接跑 `bash scripts/build-md-wasm.sh`。
 
 #### ② Chrome 生产构建 Web 复制预算
 
