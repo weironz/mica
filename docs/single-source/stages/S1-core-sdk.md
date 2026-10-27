@@ -482,4 +482,37 @@ merman/ratex/uuid 且没有 `mica-md`。消费方 `Cargo.toml`/源码零改动�
 - 契约问题 1–7 待审核方裁决。
 - 本执行者停在 **G1（⏸ 待审核）**，未 merge / 未 push / 未发版。
 
+### 2026-10-27 · G1复核4项前三条
+
+本节追加于正式裁决 `origin/single-source@1704e18` 之后；上文保留为历史记录，不再代表裁决后的待办。
+按 `reviews.md` 的 G1「必须修改」完成前三条；第四条（S0/S1 合入 `single-source` 后的集成门禁）由协调者执行。
+本分支未合入整个集成分支，未修改 `reviews.md`、02 契约或 04 进度表，未合入 spike。
+
+| 必须修改 | 本分支提交 | 核对结果 |
+| --- | --- | --- |
+| 1. 引入 `6594f12` 优化 | `20ecde0`（cherry-pick） | 仅 `crates/md-core/src/api.rs`、`src/parse/block.rs`、`src/wire.rs`；3 files changed，86 insertions / 44 deletions；无 spike 文件 |
+| 3. 按裁决删除 ignored I3 目标测试 | `88a46af` | 删除 `unmarked_cells_are_lossless_for_every_text`；保留 `empty_marks_cells_document_the_current_loss`，注释指向 02 §2.2 I3 已裁决的除外项；没有改变存储行为 |
+| 2. 更新 FFI 独立锁文件 | `349f19a` | `git show --stat 349f19a`：仅 `clients/mica_flutter/rust/Cargo.lock`，1 file changed，10 insertions；所有 registry package 的 version/source/checksum/dependencies 均保持一致 |
+
+锁文件由 `cargo check --offline` 自动生成，随后运行 `cargo check --locked`。使用 yq 将更新前后 TOML 转 JSON，jq 选取全部含 `source` 的 package 对象并排序，再以 `cmp` 比较；结果为 `Registry package entries identical (name/version/source/checksum/dependencies).`，不是仅比较版本号。
+
+审核方已在 Linux 对 `12c7ff2` 获得完整 Rust 门禁回执（1106 passed，floor 500；store 213 passed，floor 1），并同机交替 A/B 确认 `6594f12` 后 import.10k 为 +4.4%。本轮不重复全 workspace/数据库/性能排查；只运行要求的三组测试和 FFI check，使用默认 Cargo 并发，未额外限流。
+
+本轮三组测试按顺序执行，命令链开启 `pipefail`，后台任务 `bz7832fi9` 最终 exit 0。随后逐日志按 `test result: ok. N passed` 求和并校验下限，生成 `receipts.txt`；未重新编译或重跑测试。
+
+| 命令 | 实际回执 | 日志 |
+| --- | --- | --- |
+| `cargo test -p mica-md` | exit 0；`receipt: 55 passed (floor 55)`，0 failed / 0 ignored | `mica-md.log` |
+| `cargo test -p mica-md --no-default-features` | exit 0；`receipt: 54 passed (floor 54)`，0 failed / 0 ignored | `mica-md-no-default.log` |
+| `cargo test -p mica-markdown` | exit 0；`receipt: 185 passed (floor 185)`，0 failed / 0 ignored | `mica-markdown.log` |
+| `(cd clients/mica_flutter/rust && cargo check --offline)` | exit 0；仅新增路径包 `mica-md v0.1.0`；`Finished dev … in 5m 21s` | `ffi-generate-lock.log` |
+| `(cd clients/mica_flutter/rust && cargo check --locked)` | exit 0；`Finished dev … in 0.34s` | `ffi-locked.log` |
+| registry 条目全对象比较（yq / jq / cmp） | 相同，无 registry 升级或其他条目变化 | `lock-registry-check.log`、`registry-before.json`、`registry-after.json` |
+| `cargo fmt --all --check` | exit 0 | 本轮终端输出 |
+
+以上日志保存在本机 `C:/Users/willz/AppData/Local/Temp/mica-wpr-g1-review-20261027/`（未提交临时日志）。
+本轮执行记录是验证之后的文档追加，不改变已验证的代码/锁文件。
+
+前三条已完成；第四条合并及集成头 `local-ci.sh rust` 的回执由协调者追加。本分支仍处于 **G1 复核待审核**，不宣称 G1 已通过或契约已冻结。
+
 
