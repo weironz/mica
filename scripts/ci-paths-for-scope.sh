@@ -17,6 +17,9 @@ classify() {
     case "$path" in
       docs/*|README*|CHANGELOG*|LICENSE*|AGENTS.md|CLAUDE.md)
         ;;
+      crates/md-core/*|crates/md-wasm/*)
+        rust=true flutter=true web=true container=true mcp=true
+        ;;
       crates/*|migrations/*)
         rust=true web=true container=true mcp=true
         ;;

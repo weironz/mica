@@ -345,6 +345,126 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 
 **停点状态：UUID、解析、JSON、绑定成本的实验归因已交付，硬性能门槛已有达标证据，推荐 opt-3，G2 待正式审核。G1 未通过，正式 T2.2+ 未启动，不合入 main、不发版。**
 
+### WP-W 正式绑定与构建（2026-10-27；基于 `8d78ba6c`）
+
+本节是 WP-W 执行记录，历史 P0 不作 M2 正式产物证据。分支 `worktree-agent-aa074de1015a08b4c`；未 merge、未 push、未发布。Dart 门面/VM、浏览器与 Windows 契约入口归 WP-D，核心黄金文件归 WP-R。生成物就绪不等于 WP-D 已接入。
+
+#### 交付范围与提交
+
+- T2.2 `b730945f`：wasm-bindgen 精确 `=0.2.129`；crates.io 版本 API 实查发布日期 `2026-09-25T07:13:40Z`，截至执行日已满两周，且是最新稳定 0.2.x。CLI 同号；依赖理由为 Web 字符串同步绑定，仅 `crates/md-wasm` 直接新增。登记 AGENTS 一行、stable wasm target、release-check 的版本拒绝门禁。
+- T2.4 `bc72bc12`：十个 `#[frb(sync)]` 转发、FFI 独立 lock、md-core 指纹 ROOTS。真实运行 FRB **2.12.0** 生成器；为避免无关格式化/依赖升级，使用 `generate --rust-root rust --rust-input crate::api --dart-output lib/src/rust --no-deps-check --no-rust-format --no-auto-upgrade-dependency --stop-on-error`，随后只 rustfmt 生成 Rust 文件。已核对并还原 pub get 的平台插件换行及旧 API 的格式噪音。Dart 生成差异严格为新 `api/markdown.dart` 与三个 `frb_generated*.dart`；Rust 改动为本任务 wrapper/module/build/manifest/lock 和 `frb_generated.rs`。提交统计 10 files、766 insertions、44 deletions；其中 build.rs 仅内容增加两个 ROOTS，另外是工具缩进。
+- T2.3 `f97268be`：正式 `crates/md-wasm` 十函数、build.rs、print_fingerprint；workspace member 与 root package profile **opt-level=3/codegen-units=1**。根 lock 的 wasm-bindgen 同族 js-sys/web-sys/wasm-bindgen-futures 和 syn 更新是精确 pin 的解析结果，未更新其他无关包。
+- T2.6 `ba92c38a`，后续 `fa08c4ef`：locked 正式构建、分文件 gzip 字节硬门禁、SOURCE_FINGERPRINT 与测试支撑复制；黄金语料缺失或无 JSON 文件时硬失败。当前缺 corpus 的失败是前置依赖未交付，绝不能标成契约通过。
+- T2.7 `efc70ba9`：no-modules 在 Flutter 前启动；`wasm_bindgen({module_or_path: ...})`，Context7 官方 no-modules 文档及 0.2.129 生成代码均已核对。Promise 同时捕获脚本缺失导致的同步错误。产物忽略和 ignored-source 显式允许名单已接入。
+- T2.9 `90b5f79a`：宿主实际调用十个导出，正文双模式、HTML 双 profile、UTF-16 与 conformance fixtures；新增可复现 HTML 特性探针。用户任务中的“契约测试 T2.11”按本文实际编号 T2.9 记录。
+- T2.11 `be466f0b`：just dev-web/build-web、local-ci（包括 Windows）、browser-tests、release-images、CI 三处 Web 构建/浏览器套件、release Web image 全部先构建 wasm。CI 安装同号 CLI；md-core/md-wasm 单独改动能选中 rust/flutter/web-e2e。发布编排 fixture 同步新工具门禁并真实回归通过。
+- T2.10：桌面 ROOTS 已随 T2.4 完成；Web freshness 的 Dart 测试归 WP-D，本包提供相同 FNV 输入算法与明文指纹。T2.14 的 Windows CI 固定名单尚未改动：实际 integration_test 文件在本分支不存在，待 WP-D 交付可运行文件后再接入，安装包冒烟也待集成验证。
+
+#### 正式体积与构建口径
+
+正式导出只有 §3.3 十个业务函数（另有 wasm-bindgen 自身 initSync/内存分配等支撑），没有实验诊断导出。`cargo tree -p mica-md-wasm --target wasm32-unknown-unknown -e features --locked` 已确认没有 uuid、render、merman、ratex。宿主示例不进入 cdylib 导出。
+
+首次正式 opt-3/LTO 构建：wasm **221744 B** + JS **2744 B** = **224488 B**，脚本真实拒绝。使用 wasm-bindgen 内置 `--remove-name-section --remove-producers-section` 后，同产物为 208974 + 2744 = **211718 B**，仍拒绝。最终为本次 wasm 构建的所有依赖统一单 codegen unit：
+
+```
+CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort cargo build -p mica-md-wasm --target wasm32-unknown-unknown --release --locked
+wasm-bindgen --target no-modules --no-typescript --remove-name-section --remove-producers-section ...
+```
+
+这些环境变量只作用该条脚本命令，未改变全仓库 profile、工具持久配置或其他构建。root package opt-3 未降低。`rustc --print cfg --target wasm32-unknown-unknown` 实际输出 `panic="abort"`，显式设置与该目标默认一致。strip 是 wasm-bindgen 内置参数，无新增 wasm-opt/其他依赖。
+
+最终 GNU gzip `-n -9 -c` **分别**压缩后相加：wasm **196936 B** + JS **2744 B** = **199680 B（195 KiB）**；低于 204800 B 硬门槛，高于 122880 B 软目标。减小来自删除元数据与统一依赖 codegen，未删除 API、未换压缩口径。原首次失败日志在任务输出 `bk1q1kr2f.output`；正式成功及严格 gold 缺失失败日志保存在 `scripts/md-wasm-evidence/`。首次未 strip 原产物已被后续构建替换，因此不能声称保留其二进制哈希；strip 中间文件还在 `target/md-size-check/`，SHA `e792a6e7ade84d76a433f5ec816dd9b19115dd4c042287e6f98eb559fa227e91`。
+
+测量时的正式文件 SHA-256：
+
+- wasm `29156406756c08566da085b6a9864b87b34ce8444467bef6ea16a8d594ccf878`
+- JS `90ee81fdb2466b0e2a497216203aa27907cc42777997f27b55b6141634d9a532`
+- Web engine fingerprint `c9c66838431d7082`
+
+Web engineInfo 保持核心 crate_version/schema_version，仅 source_fingerprint 为 md-core+md-wasm（含 wasm build.rs）的实际源集指纹。核心/桌面指纹源集不同是构建信息的预期差异；协调者已确认不改变冻结字段形状/含义。两个 build 目标和 test/support 的文件一致；后续源码变更必须重新构建，不可沿用这些数字。
+
+#### M2 Web 真实 release 测量
+
+Windows 11、Rust 1.98.0 stable、Flutter 3.47.1/Dart 3.13.1、Chrome 156；`flutter build web --release --no-web-resources-cdn --target=../../scripts/md-wasm-bench.dart --output=build/md_wasm_bench`。`scripts/md-wasm-static.cjs` 返回 no-store、application/wasm，没有 COOP/COEP，实测 crossOriginIsolated=false。Playwright 真实浏览器调用编译后的 Dart `runMdM2`；未用 JS 解析替代 Dart 解码。完整路径包含 Rust wire JSON 编码、边界字符串、Dart jsonDecode 和 BlockSpec 映射；同页对照现有 markdownToBlocks。三轮，每轮预热、15 批 AB/BA 交替；批次 1024/8/1。每轮取各路径批次中位数之比，再汇总三轮比值中位数，原始每批样本全部保留。
+
+| 精确输入 | 三轮 full/Dart | 三轮比值中位数 | 预算 |
+| --- | --- | ---: | --- |
+| S0 hotPath87（87 UTF-16） | 0.75618 / 0.76527 / 0.78827 | **0.76527** | 每轮 ≤1.2，通过 |
+| S0 fixture substring 10000 | 0.52117 / 0.53505 / 0.53645 | **0.53505** | 每轮 ≤1.2，通过 |
+| S0 fixture substring 100000 | 0.57071 / 0.56747 / 0.56649 | **0.56747** | 每轮 ≤1.2，通过 |
+
+这是同页 production dart2js 对照，不与 S0 dartdevc 的绝对值直接相除。最终逐轮 full 中位数为短档 0.014844/0.014648/0.014550 ms，10k 2.925125/2.862500/2.849875 ms，100k 33.101/32.800/32.800 ms。先前同产物预热不同的首轮测量仍完整保留于 browser-raw，不用挑选其中更好数覆盖 final。Dart 页面 SHA 和正式 wasm/JS SHA 见 browser-final 的 manifest；最终 full 测量与 diff 导出为同一个 release 页面清单。
+
+五个新 browser context，micaMdReady 赋值到 Promise 完成（包含 fetch/instantiate）为 **20.6 / 12.7 / 12.2 / 12.0 / 25.6 ms**，p50 **12.7 ms**，全部 ≤60ms。测量用初始化前 setter 记录 Promise fulfillment；另记录 instantiateStreaming 调用起点，不把轮询观察延迟算入。浏览器复用进程/编译缓存、新上下文，不代表冷机器或真实网络。初始化用同份 wasm/JS、Dart 测量入口尚未加 diff 函数，差异仅页面 JS。首帧推迟与完整应用启动、桌面 p50 未在此独立页面证明。
+
+浏览器分别对 parseInlineBatch/decodeCells/encodeCells/serializeBody/serializeInline 的畸形 JSON 和 renderHtmlBody 的非法 profile 真实调用，全部抛 `Error: invalid input: ...`；随后同实例 parseBody('# hello') 正常。Node 也补测通过，但浏览器证据单独保留，不以 Node 代表浏览器。没有将 panic/错误吞成成功。
+
+语义证据：原始 10k/100k `equivalent=false` 保留。精确导出发现分别只有 2/30 个块 marks 顺序不同，首例块 169/175：同 UTF-16 范围 image/link 的产生顺序与 wire 规范顺序不同。**非语法漂移，是 §3.4 契约规定的标记排序规范化，Dart mirror 顺序未排序**。按 (start,end,type) 排序后全部块 differingBlocks=0，kind/text/data 值不变。S0 比较器原本就在 `markdown_differential_test.dart:301–318` 这样排序，故不是新增字段分歧。三档同输入通过真实 host 无 render wire_stdin 与浏览器 wire **逐字节相同**（SHA 保留）。10k 尾为 `sta`，100k 尾为 `~~~a~`，没有额外尾截断差异，不删除这两档。原始输入、完整首例与重复块差异、每条 SHA 位于 evidence 的 inputs/diff-summary；完整输入+两侧输出另在 `target/md-m2-diff-inputs.json`。
+
+原始数据及复核入口：`scripts/md-wasm-evidence/{md-m2-browser-final.json,md-m2-browser-raw.json,md-m2-diff-summary.json,inputs.json,html-feature-summary.json,md-runtime-errors.json}`；测量代码 `scripts/md-wasm-bench.dart`，host 复核 `crates/md-wasm/examples/wire_stdin.rs` + `scripts/md-wasm-diff.cjs`。运行时临时数据在 `target/`，截图 `target/md-m2-browser.png`。测量仅覆盖 parse Document 与 Chrome，不外推 Fragment、Firefox/Safari、序列化/HTML 或桌面性能；Firefox 补测未做。
+
+#### 回执、阻塞与裁决请求
+
+- 宿主 `cargo test --locked -p mica-md-wasm`：**10 passed**，零跳过；forward 覆盖十个实际导出。原始回执 evidence/md-forward-final.txt。shell source 回执包装曾被 worktree 安全 hook 拒绝，未绕过；直接 cargo 原始通过数已留存。
+- `cargo clippy --locked -p mica-md-wasm --all-targets -- -D warnings`：**未通过**，核心既存 no-default-features 路径 `ids.rs:20 id_for` dead_code。已报告 WP-R，等待其 cfg 修复提交，不加 allow 掩盖。
+- 桌面 `cargo build --release --locked --manifest-path clients/mica_flutter/rust/Cargo.toml`：exit0；`cloud_sync_seed_healthy_test.dart`：**2 passed**，零跳过，JSON `target/t24-flutter-receipt.json`。
+- 根 `cargo fmt --check`、新 crate 格式、结构/ignored-source/ci-paths、gfonts mirror、release orchestration fixture：通过。新构建脚本 shellcheck -x 通过；批量检查另有既存 ci-paths 间接变量 SC2034/source 搜索路径告警，未谎称全仓 shellcheck 绿。
+- 独立 FFI crate 全库 `cargo fmt --check` 是**既存基线失败**（旧 API 四空格与根 rustfmt 两空格配置），不是本任务引入；新文件和生成物已格式化，没有提交全库噪音。
+- 严格 gold 缺失门禁实跑 exit1，明确 `REFUSED: wire gold corpus missing ... M2 contracts are pending, not passed`。待 WP-R 黄金文件和 clippy 提交导入后重跑。
+- VM/浏览器/Windows 门面契约、Windows 安装包冒烟、桌面初始化、完整应用首帧仍待 WP-D 及集成验证。未声称完整 M2 或 S2 已通过。
+- T2.13 材料整理后，普通 `git diff --check` 被 RTK/worktree 安全 hook 明确拒绝；按协调者最新约束停止后续 Git 操作，没有换入口绕过、没有请求主会话代跑。因此本节、测量脚本/evidence 与 wire_stdin 示例目前留在工作区，**尚未提交**。已提交的最后一项为 `fa08c4ef`；已提交与未提交材料须分别审核。
+
+**冻结契约冲突申请（未自行改 core）**：真实 FFI cargo tree 显示 `mica-markdown/render` 统一打开 `mica-md/render`；wasm 刻意关闭。当前 api.rs 的 HtmlProfile::Clipboard 仍与 Export 共用忽略 profile 的 export_html。`html_feature_probe` 同输入 `$x$` 在 off/on 的 export 与 clipboard 均为 **34 vs 2128 B**（span vs SVG）；Mermaid `graph TD; A-->B` 为 **68 vs 9342 B**（code vs SVG）。两端 HTML 不逐字节相同；gold 不能跳过这些输入以伪造一致。原始完整输出 `target/html-feature-{off,on}.txt`，summary 记录 SHA。可复现命令为 `cargo run --locked -q -p mica-md-wasm --example html_feature_probe` 与再加 `--features mica-md/render`。
+
+请求审核方裁决：提前落地 S3 的 Clipboard 独立语义并明确 Export 平台差异，或调整 wire HTML 的独立于 render-feature 的实现规则。直接关闭 FFI render 会破坏已有本地导出；给 wasm 打开 render 会违反目前依赖/体积约束，均不建议。本包未更改冻结公共 API/wire/Dart 接口，未为避开差异跳过 HTML 测试。
+
+#### 后续协调补充：对象键顺序（未提交、未重跑门禁）
+
+协调者最终核实 WP-R 提交 `881502aa`（ids cfg）及 `7a9ee622`（wire_gold 与九个 fixture，替代初版 `992ab8a`）。截至本次证据快照，本工作区未接入这些提交，严格 Clippy 与包含黄金文件的正式构建均未重跑，不标通过。固定默认参数重放的协调结果为 parse_body 58/76 与 encode_cells 5/11 仅对象键顺序差异，HTML 8/154 有实际内容差异，其余七个函数固定输入逐字节相同；render 整文件 3 passed / 5 failed 含输入生成差异，不能直接解读为五个函数发生输出漂移。
+
+WP-W 通过允许的非 Git 命令再次核对真实依赖图：`cargo tree --manifest-path clients/mica_flutter/rust/Cargo.toml --locked -e features -i serde_json` 显示目标运行时的 `serde_json/preserve_order` 由 dugong、dugong-graphlib、merman-core、merman-render 开启，并统一进入 FFI 使用的 serde_json；对应 `cargo tree --manifest-path Cargo.toml --locked -p mica-md-wasm --target wasm32-unknown-unknown -e features -i serde_json` 只有 default/std，没有 preserve_order。这是除 HTML 输出之外的独立字节一致性风险：Value::Object 的序列化键顺序受构建特性影响。
+
+此前三档“host 与 WASM 逐字节一致”的证据限定为**无 render 的 host 与正式 WASM**，不能外推为真实桌面 FFI 与 WASM 逐字节一致。语义 canonical 比较通过也不能替代字节目标；跨特性的 byte 失败与 canonical 结果由 WP-R 分别保留，WP-W 尚未补跑真实 FFI 对照。本记录不以排序测试掩盖失败，也不擅改冻结契约。
+
+#### 工具恢复后的证据归档（2026-10-27）
+
+用户暂停 RTK hook 改写、会话重新读取配置后，按协调者要求仅用普通 `git status --short` 重验成功，随后 `git diff --check` 也通过。未修改任何持久 hook/权限配置。此前“未提交”条目保留为中断经过；T2.13 脚本、完整输入/两侧输出原始数据与本记录已归档为 **`452b8c4a`**，随后将 WP-R `881502aa` / `7a9ee622` 分别 cherry-pick 为 **`c02bd94f` / `2c2fd65e`**。未合并集成分支、未 push。
+
+#### 接入最终核心修复与黄金语料后的重验（2026-10-27）
+
+本节取代上文“未接入/未重跑”的当前状态，但保留历史失败。新的直接 Cargo 命令及原始日志均在 `scripts/md-wasm-evidence/md-post-*.txt`：
+
+| 命令 | 实际结果 |
+| --- | --- |
+| `cargo test --locked -p mica-md-wasm` | exit0；forward **10 passed / 0 failed / 0 ignored**，lib/doc 空套件另显示 0，不混算 |
+| `cargo test --locked -p mica-md --test wire_gold` | exit0；**9 passed / 0 failed / 0 ignored** |
+| `cargo test --locked -p mica-md --no-default-features --test wire_gold` | exit0；**9 passed / 0 failed / 0 ignored** |
+| `cargo clippy --locked -p mica-md --no-default-features --all-targets -- -D warnings` | exit0 |
+| `cargo clippy --locked -p mica-md-wasm --all-targets -- -D warnings` | exit0 |
+| `cargo fmt --check` | exit0 |
+| `cargo build --release --locked --manifest-path clients/mica_flutter/rust/Cargo.toml` | exit0（共享核心改动后重建） |
+| `bash scripts/build-md-wasm.sh` | exit0；严格黄金存在性/非空检查通过，九个 JSON 已复制 |
+| `diff -r crates/md-core/tests/fixtures/wire clients/mica_flutter/test/support/mica_md/gold` | exit0；复制逐字节相同 |
+| `just check-structure`、ignored-source、ci-paths、diff-check | exit0 |
+
+`source lib-receipt + 分组 + tee` 的组合命令仍被独立 worktree 安全检查拒绝（与 RTK 不同），没有执行该 wrapper；按检查器明确建议运行直接 Cargo 命令并保留完整 `test result` 行。因此上述通过数是直接命令的实际计数，**不是未执行 wrapper 的回执**。没有为隐藏 source 编写 shell 包装，也未改变权限。
+
+正式严格构建新产物：**196937 B wasm + 2744 B JS = 199681 B gzip -n -9**（硬门槛 204800 B，通过）。WASM SHA-256 **`9df6253d1181d7029a4544b25600945278d9cf4750a1db18ca46da40e54f9779`**，JS SHA 仍为 `90ee81fdb2466b0e2a497216203aa27907cc42777997f27b55b6141634d9a532`，引擎指纹 **`7f78019aa20d7d15`**。原产物 199680 B 与旧指纹数据留存；没有凭修复意图宣称字节不变。指纹输入仅 md-core/md-wasm 清单和源码，不含 scripts 的原始证据。
+
+因 WASM hash 改变，换入已有 release 页面并独立重测，Dart `main.dart.js` SHA 保持 `5f9c0ff68854e1d2e29745c37fed05f030aef2246b8d2588e5f5a63467bd03aa`。仍为真实 Chrome 156、同页 production dart2js、原三档输入、每轮预热+15批 AB/BA、三轮，无额外矩阵：
+
+| 输入 | 新产物三轮 full/Dart | 比值中位数 |
+| --- | --- | ---: |
+| 87 | 0.968293 / 0.979730 / 1.000000 | **0.979730** |
+| 10000 | 0.491837 / 0.517094 / 0.512035 | **0.512035** |
+| 100000 | 0.558029 / 0.552092 / 0.549126 | **0.552092** |
+
+每轮均 ≤1.2。五个新 browser context 初始化（Promise 赋值到 fulfillment，同方法）为 **35.1 / 13.7 / 11.4 / 13.3 / 12.3 ms**，p50 **13.3 ms**；crossOriginIsolated=false。六类非法 JSON/profile 在新产物浏览器均抛 Error，随后同实例 parseBody 正常。新清单、全部原始样本、初始化与异常记录在 **`scripts/md-wasm-evidence/md-m2-post-integration.json`**；旧 browser-final/raw 文件未覆盖。临时截图 `target/md-m2-post-integration.png`；静态服务器测完已停止。
+
+新增 `node scripts/test-md-wasm-gold.cjs` 直接加载正式 wasm，对 checked-in 默认黄金的返回字符串逐字节重放：parse_body **76**、parse_inline_batch **15**、decode_cells **28**、encode_cells **11**、serialize_body **77**、serialize_inline **9**、render_html_body **154**、math_run_spans **13**、parse_inline_math **13**，合计 **9 文件 / 396 cases** 全部通过。engineInfo 单独断言 schema_version 与该 WASM SOURCE_FINGERPRINT 一致（不与核心不同源集指纹强行相等）；六类错误+随后恢复也通过。该 Node 专项验证**不能替代 Dart VM/web/Windows 契约，也不能证明实际 FFI render 字节相同**。
+
+当前剩余阻塞不变：render HTML 因 `cfg` 不在 wire_gold render 测试里执行，默认 9 绿不能称真实 FFI 全九项绿；固定默认 args 的 HTML 实际内容差异、parse_body/encode_cells 对象键序差异继续待审核裁决。未改测试去掩盖这些失败。WP-D 门面与 Windows 实际集成/首帧/安装包验证仍不在本工作包完成证明中。
+
 ### 2026-10-27 WP-D：Dart 门面与真实 FFI 接线
 
 基线 `8d78ba6c`，分支 `worktree-agent-a64add55c7b76fbd3`。本记录是执行证据，不是 M2 通过结论。未修改冻结接口、未删除 Dart 镜像、未推送或发版。

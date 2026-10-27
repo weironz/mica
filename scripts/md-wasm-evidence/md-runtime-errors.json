@@ -1,0 +1,61 @@
+{
+  "exports": [
+    "initSync",
+    "decodeCells",
+    "encodeCells",
+    "engineInfo",
+    "mathRunSpans",
+    "parseBody",
+    "parseInlineBatch",
+    "parseInlineMath",
+    "renderHtmlBody",
+    "serializeBody",
+    "serializeInline"
+  ],
+  "errors": [
+    [
+      "parseInlineBatch",
+      "Error",
+      "Error: invalid input: invalid type: map, expected a sequence at line 1 column 0"
+    ],
+    [
+      "decodeCells",
+      "Error",
+      "Error: invalid input: invalid type: map, expected a sequence at line 1 column 0"
+    ],
+    [
+      "encodeCells",
+      "Error",
+      "Error: invalid input: invalid type: map, expected a sequence at line 1 column 0"
+    ],
+    [
+      "serializeBody",
+      "Error",
+      "Error: invalid input: invalid type: map, expected a sequence at line 1 column 0"
+    ],
+    [
+      "serializeInline",
+      "Error",
+      "Error: invalid input: EOF while parsing an object at line 1 column 1"
+    ],
+    [
+      "renderHtmlBody",
+      "Error",
+      "Error: invalid input: unknown HTML profile: invalid"
+    ]
+  ],
+  "afterError": [
+    {
+      "type": "heading",
+      "text": "hello",
+      "data": {
+        "level": 1
+      }
+    }
+  ],
+  "info": {
+    "crate_version": "0.1.0",
+    "schema_version": 1,
+    "source_fingerprint": "c9c66838431d7082"
+  }
+}

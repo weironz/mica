@@ -1,0 +1,2 @@
+   Compiling mica-md-wasm v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\md-wasm)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.07s

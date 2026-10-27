@@ -62,6 +62,7 @@ for f in deploy/Dockerfile.api deploy/Dockerfile.cli docker-compose.yml; do
     "$f does not build on rust:${want_rust%.*}-slim-bookworm, but rust-toolchain.toml pins $want_rust. Bump them together."
 done
 echo "==> Rust: $have_rust (toolchain + all three images agree)"
+bash scripts/check-md-wasm-toolchain.sh
 
 # 3. Run the gates the SAME WAY CI runs them. `cargo check` does not run clippy,
 #    and clippy without `-D warnings` exits 0 while printing the very thing that

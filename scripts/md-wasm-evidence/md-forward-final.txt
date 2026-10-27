@@ -1,0 +1,29 @@
+warning: method `id_for` is never used
+  --> crates\md-core\src\ids.rs:20:17
+   |
+18 | impl BlockIds {
+   | ------------- method in this implementation
+19 |   /// A deterministic id for the block at position `n`.
+20 |   pub(crate) fn id_for(&self, n: usize) -> String {
+   |                 ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mica-md` (lib) generated 1 warning
+   Compiling mica-md-wasm v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\md-wasm)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 49s
+     Running tests\forward.rs (target\debug\deps\forward-7c41ef206f7d9e4f.exe)
+
+running 10 tests
+test engine_info_preserves_metadata_and_stamps_binding_sources ... ok
+test encode_cells_forwards ... ok
+test math_run_spans_forwards_utf16 ... ok
+test decode_cells_forwards ... ok
+test parse_inline_math_forwards ... ok
+test parse_inline_batch_forwards ... ok
+test serialize_inline_forwards ... ok
+test serialize_body_forwards ... ok
+test render_html_body_forwards_both_profiles ... ok
+test parse_body_forwards_both_modes_and_conformance_fixtures ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
