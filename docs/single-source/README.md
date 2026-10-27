@@ -26,8 +26,8 @@ S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust �
 **S2 当前验收快照（执行方核对过的数据，M2 判定仍归审核方）：**
 
 - Web 正式十 API 产物：gzip **204,107 B**（≤204,800）、初始化 p50 **14.0 ms**（≤60）、真实 `MarkdownCodec` 三档比值中位 **1.073 / 0.523 / 0.569**，每轮 ≤1.2；SHA 与 gold 重放证据见 [S2 执行记录](stages/S2-bindings.md#执行记录)。
-- 桌面 release（预热口径，模拟固定安装目录）：init p50 **5 ms**、缺 DLL 降级路径真实通过、AOT parse 87/10k/100k **0.867 / 0.592 / 0.591**。
-- 桌面仍超预算：AOT `serialize.10k` **1.473×**、`html.10k` **3.369×**。Rust wire 侧已压到 serialize 0.63×、clipboard render 1.542 ms；剩余差距在 FFI 边界与本轮未重测的最终核心上，需新产物复测后才有最终结论。
+- 桌面 release（最新核心 `492a9a42` 链，指纹 `ac687532799855bc`，预热口径）：init p50 **2 ms**、缺 DLL 降级路径真实通过、AOT parse 87/10k/100k **0.873 / 0.640 / 0.616**、边界调用 0.0124 ms、VM 契约 42/0/0。
+- 桌面仍超预算 2 项：AOT `serialize.10k` **1.534×**、`html.10k` **3.712×**。归因已完成：Rust wire 本体 serialize **0.63×**、clipboard render **1.542 ms**（绝对值低于 Dart 旧实现的多数场景），超预算全部来自 FFI 边界（Dart 编码 ~0.42 ms + FRB 大字符串跨界 ~1.1-1.2 ms）。缩小边界需变更冻结 wire 形状（批量/二进制），交审核方裁决。
 - 待审核契约项：Export HTML 保留 rich feature 语义，与「十函数跨端逐字节」的冻结描述冲突；候选方案是跨端字节矩阵仅约束 Clipboard。
 
 按 [04 §4.2](04-parallel-plan.md#42-审核停点) 等待 M2；不合入 main，不发版。
