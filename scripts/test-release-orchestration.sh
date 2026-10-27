@@ -31,6 +31,7 @@ cat > "$stub_bin/flutter" <<'EOF'
 case "$1" in
   --version) echo 'Flutter 3.35.0 • channel stable • https://github.com/flutter/flutter.git' ;;
   test)
+    [ -f ../../target/wasm-ready ] || { echo 'wasm was not built before Flutter tests' >&2; exit 1; }
     # The gate counts passed tests from the JSON file reporter (lib-receipt.sh).
     for arg in "$@"; do
       case "$arg" in
@@ -96,6 +97,9 @@ new_fixture() {
      "$source_root/scripts/check-migration-bytes.sh" "$source_root/scripts/test-migration-tracking.sh" \
      "$source_root/scripts/check-md-wasm-toolchain.sh" \
      "$repo/scripts/"
+  # The real wasm pipeline has its own behavioural fixture. This suite covers
+  # release sequencing, so assert its invocation without compiling toolchains.
+  printf '#!/usr/bin/env bash\nmkdir -p target\nprintf "wasm built\\n" > target/wasm-ready\n' > "$repo/scripts/build-md-wasm.sh"
 
   printf '[package]\nname = "mica-cli"\nversion = "%s"\n' "$old" > "$repo/Cargo.toml"
   cat > "$repo/Cargo.lock" <<LOCK

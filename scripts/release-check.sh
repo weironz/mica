@@ -92,6 +92,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 #    fatal would be a repo-wide sweep nobody asked for.
 #    The FFI-backed unit tests verify rust/target/release against this tree's
 #    sources (test/support/native_build.dart), so build it first.
+# Web freshness tests must compare a current bundle rather than skip for absence.
+bash scripts/build-md-wasm.sh
 (cd clients/mica_flutter \
   && "${FLUTTER:-flutter}" pub get --enforce-lockfile \
   && "${FLUTTER:-flutter}" gen-l10n \
