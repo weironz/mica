@@ -50,9 +50,10 @@ Future<void> initMarkdownCodec() async {
     logCrash('markdown codec unavailable: $error\n$stack');
     _codec = const UnavailableMarkdownCodec();
   }
-  debugPrint(
-    'markdown codec ready in ${DateTime.now().difference(started).inMilliseconds} ms',
-  );
+  // The elapsed window covers only this await: probes budget the codec, not
+  // the surrounding startup chain that merely contains it.
+  final elapsed = DateTime.now().difference(started).inMilliseconds;
+  debugPrint('markdown codec ready in $elapsed ms');
 }
 
 @visibleForTesting
