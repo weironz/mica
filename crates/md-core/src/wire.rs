@@ -88,6 +88,11 @@ fn normalize_data(mut data: Value) -> Value {
       })
     });
   }
+  // Only Value objects are canonicalized. Structs (BlockJson/InlineJson/Mark)
+  // keep their declaration order, and arrays keep their semantic order. This
+  // is a no-op for the default BTree-backed serde_json::Map, but also sorts
+  // nested objects when another dependency enables preserve_order.
+  data.sort_all_objects();
   data
 }
 
@@ -145,10 +150,12 @@ pub fn encode_cells_json(inlines_json: &str) -> Result<String, MdError> {
       inline
         .marks
         .sort_by_key(|m| (m.start, m.end, m.kind.clone()));
-      encode_cell(&InlineText {
+      let mut cell = encode_cell(&InlineText {
         text: inline.text,
         marks: inline.marks,
-      })
+      });
+      cell.sort_all_objects();
+      cell
     })
     .collect();
   serde_json::to_string(&out).map_err(invalid)
@@ -226,10 +233,41 @@ pub fn parse_inline_math_json(source: &str) -> String {
 
 /// Engine build information.
 pub fn engine_info_json() -> String {
-  json!({
+  let mut info = json!({
     "crate_version": env!("CARGO_PKG_VERSION"),
     "schema_version": SCHEMA_VERSION,
     "source_fingerprint": env!("MICA_MD_SOURCE_HASH"),
-  })
-  .to_string()
+  });
+  info.sort_all_objects();
+  info.to_string()
+}
+
+#[cfg(test)]
+mod object_order_tests {
+  use super::normalize_data;
+  use serde_json::json;
+
+  #[test]
+  fn recursive_key_order_keeps_unknown_fields_nulls_and_array_order() {
+    let value = json!({
+      "unknown": {"z": null, "a": [{"z": 2, "a": 1}, null, 4]},
+      "marks": [
+        {"start": 2, "end": 3, "type": "bold", "extra": {"z": 2, "a": 1}},
+        {"start": 0, "end": 1, "type": "italic"}
+      ]
+    });
+    let result = normalize_data(value);
+    assert_eq!(
+      result.to_string(),
+      concat!(
+        "{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"italic\"},",
+        "{\"end\":3,\"extra\":{\"a\":1,\"z\":2},\"start\":2,\"type\":\"bold\"}],",
+        "\"unknown\":{\"a\":[{\"a\":1,\"z\":2},null,4],\"z\":null}}"
+      )
+    );
+    // Only top-level missing block data has the established null -> {} rule;
+    // an unknown non-object value is not coerced or silently repaired.
+    assert_eq!(normalize_data(json!([null, 3, 1])), json!([null, 3, 1]));
+    assert_eq!(normalize_data(json!(false)), json!(false));
+  }
 }
