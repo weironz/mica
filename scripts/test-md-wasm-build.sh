@@ -18,8 +18,10 @@ case "$1" in
   test)
     [ "${GEN_GOLD:-0}" != 1 ] || exit 91
     [ "${GOLD_FAIL:-0}" != 1 ] || exit 92
-    printf 'test result: ok. %s passed; 0 failed; 0 ignored\n' "${GOLD_PASSED:-9}" ;;
+    printf 'test result: ok. %s passed; 0 failed; 0 ignored\n' "${GOLD_PASSED:-9}"
+    : > gold-verified ;;
   build)
+    [ -f gold-verified ]
     [ "$CARGO_PROFILE_RELEASE_LTO" = true ]
     [ "$CARGO_PROFILE_RELEASE_CODEGEN_UNITS" = 1 ]
     [ "$CARGO_PROFILE_RELEASE_PANIC" = abort ]
