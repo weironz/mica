@@ -7,34 +7,6 @@ use std::time::{Duration, Instant};
 
 use mica_md::{ParseMode, SerializeOptions, parse_body, serialize_body, wire};
 
-fn fixture10k() -> String {
-  let dir =
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../markdown/tests/fixtures/conformance");
-  let mut files: Vec<_> = std::fs::read_dir(&dir)
-    .expect("fixtures")
-    .filter_map(|e| e.ok())
-    .map(|e| e.path())
-    .filter(|p| p.extension().is_some_and(|x| x == "md"))
-    .collect();
-  files.sort();
-  let mut unit = String::new();
-  for path in files {
-    unit.push_str(&std::fs::read_to_string(&path).unwrap());
-    if !unit.ends_with('\n') {
-      unit.push('\n');
-    }
-    unit.push('\n');
-  }
-  let mut out = String::with_capacity(10_000 + unit.len());
-  while out.len() < 10_000 {
-    out.push_str(&unit);
-  }
-  if let Some(cut) = out[..10_000].rfind('\n') {
-    out.truncate(cut + 1);
-  }
-  out
-}
-
 fn median<T>(mut run: impl FnMut() -> T) -> f64 {
   let mut batch = |n: usize| {
     let start = Instant::now();
@@ -57,9 +29,44 @@ fn median<T>(mut run: impl FnMut() -> T) -> f64 {
   samples[3]
 }
 
+fn bench_sample() -> String {
+  // The Dart benchmark's exact input: markdownFixtureSample repeated and
+  // truncated at exactly 10000 UTF-16 code units. The sample text is extracted
+  // verbatim from the Dart source file at a pinned path, so the corpus matches
+  // D's bytes rather than approximating them from the fixture directory.
+  let dart_source = std::fs::read_to_string(
+    "D:/codes/mica/.claude/worktrees/agent-a64add55c7b76fbd3/clients/mica_flutter/test/support/markdown_bench_inputs.dart",
+  )
+  .expect("read Dart bench inputs");
+  let start = dart_source
+    .find("markdownFixtureSample = r'''")
+    .map(|i| i + "markdownFixtureSample = r'''".len())
+    .expect("sample start marker");
+  let end = dart_source[start..]
+    .find("'''")
+    .map(|i| start + i)
+    .expect("sample end marker");
+  let sample = &dart_source[start..end];
+  let mut out = String::with_capacity(10_000 + sample.len());
+  while out.encode_utf16().count() < 10_000 {
+    out.push_str(sample);
+  }
+  // Dart substring truncates by UTF-16 code units.
+  let mut units = 0usize;
+  for (idx, ch) in out.char_indices() {
+    if units + ch.len_utf16() > 10_000 {
+      out.truncate(idx);
+      break;
+    }
+    units += ch.len_utf16();
+  }
+  out
+}
+
 fn main() {
-  let md = fixture10k();
+  let md = bench_sample();
   println!("input_bytes={}", md.len());
+  println!("input_chars={}", md.chars().count());
   println!(
     "parse_body {:.6} ms",
     median(|| parse_body(black_box(&md), ParseMode::Document).len())
