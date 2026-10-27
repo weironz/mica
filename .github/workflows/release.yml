@@ -448,6 +448,19 @@ jobs:
       - uses: ./.github/actions/setup-flutter
         if: ${{ matrix.flutter }}
 
+      - uses: ./.github/actions/setup-rust
+        if: ${{ matrix.flutter }}
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ matrix.flutter }}
+        with:
+          key: md-wasm-release
+      - name: Install pinned wasm-bindgen CLI
+        if: ${{ matrix.flutter }}
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Build Markdown Web engine
+        if: ${{ matrix.flutter }}
+        run: bash scripts/build-md-wasm.sh
+
       - name: Build + stage the web bundle
         if: ${{ matrix.flutter }}
         run: |

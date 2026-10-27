@@ -1,0 +1,68 @@
+{
+  "cases": [
+    {
+      "args": {
+        "inline_json": "{\"marks\":[],\"text\":\"\"}"
+      },
+      "id": "inline-0",
+      "output": ""
+    },
+    {
+      "args": {
+        "inline_json": "{\"marks\":[],\"text\":\"literal *x* | \\\\ [x] $\"}"
+      },
+      "id": "inline-1",
+      "output": "literal \\*x\\* | \\\\ \\[x\\] \\$"
+    },
+    {
+      "args": {
+        "inline_json": "{\"marks\":[],\"text\":\"https://example.com\"}"
+      },
+      "id": "inline-2",
+      "output": "https://example.com"
+    },
+    {
+      "args": {
+        "inline_json": "{\"marks\":[],\"text\":\"x \"}"
+      },
+      "id": "inline-3",
+      "output": "x "
+    },
+    {
+      "args": {
+        "inline_json": "{\"marks\":[],\"text\":\"a\\nb\"}"
+      },
+      "id": "inline-4",
+      "output": "a\nb"
+    },
+    {
+      "args": {
+        "inline_json": "{\"marks\":[{\"end\":8,\"start\":4,\"type\":\"bold\"}],\"text\":\"😀𠀀bold\"}"
+      },
+      "id": "inline-5",
+      "output": "😀𠀀**bold**"
+    },
+    {
+      "args": {
+        "inline_json": "{\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"},{\"end\":1,\"start\":0,\"type\":\"italic\"},{\"end\":3,\"href\":\"https://x.y\",\"start\":2,\"title\":\"t\",\"type\":\"link\"}],\"text\":\"abcdef\"}"
+      },
+      "id": "inline-6",
+      "output": "*a*b[c](https://x.y \"t\")d**ef**"
+    },
+    {
+      "args": {
+        "inline_json": "{\"marks\":[{\"end\":6,\"href\":\"https://x.y\",\"start\":0,\"type\":\"link\"},{\"end\":6,\"start\":0,\"type\":\"code\"}],\"text\":\"linked code\"}"
+      },
+      "id": "inline-7",
+      "output": "[`linked`](https://x.y) code"
+    },
+    {
+      "args": {
+        "inline_json": "{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"strike\"},{\"end\":3,\"start\":2,\"type\":\"math\"}],\"text\":\"a b c\"}"
+      },
+      "id": "inline-8",
+      "output": "~~a~~ $b$ c"
+    }
+  ],
+  "function": "serialize_inline_json"
+}

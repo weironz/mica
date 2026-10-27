@@ -1,4 +1,5 @@
 pub mod document;
+pub mod markdown;
 pub mod pdf;
 pub mod render;
 pub mod simple;

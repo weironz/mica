@@ -62,6 +62,7 @@ for f in deploy/Dockerfile.api deploy/Dockerfile.cli docker-compose.yml; do
     "$f does not build on rust:${want_rust%.*}-slim-bookworm, but rust-toolchain.toml pins $want_rust. Bump them together."
 done
 echo "==> Rust: $have_rust (toolchain + all three images agree)"
+bash scripts/check-md-wasm-toolchain.sh
 
 # 3. Run the gates the SAME WAY CI runs them. `cargo check` does not run clippy,
 #    and clippy without `-D warnings` exits 0 while printing the very thing that
@@ -91,6 +92,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 #    fatal would be a repo-wide sweep nobody asked for.
 #    The FFI-backed unit tests verify rust/target/release against this tree's
 #    sources (test/support/native_build.dart), so build it first.
+# Web freshness tests must compare a current bundle rather than skip for absence.
+bash scripts/build-md-wasm.sh
 (cd clients/mica_flutter \
   && "${FLUTTER:-flutter}" pub get --enforce-lockfile \
   && "${FLUTTER:-flutter}" gen-l10n \

@@ -4,6 +4,7 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api/document.dart';
+import 'api/markdown.dart';
 import 'api/pdf.dart';
 import 'api/render.dart';
 import 'api/simple.dart';
@@ -71,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1846052296;
+  int get rustContentHash => -791362755;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -527,6 +528,36 @@ abstract class RustLibApi extends BaseApi {
   Future<Uint8List?> crateApiPdfExportPdf({required String html});
 
   Future<void> crateApiSimpleInitApp();
+
+  String crateApiMarkdownMdDecodeCells({required String cellsJson});
+
+  String crateApiMarkdownMdEncodeCells({required String inlinesJson});
+
+  String crateApiMarkdownMdEngineInfo();
+
+  String crateApiMarkdownMdMathRunSpans({required String source});
+
+  String crateApiMarkdownMdParseBody({
+    required String markdown,
+    required bool fragment,
+  });
+
+  String crateApiMarkdownMdParseInlineBatch({required String sourcesJson});
+
+  String crateApiMarkdownMdParseInlineMath({required String source});
+
+  String crateApiMarkdownMdRenderHtmlBody({
+    required String blocksJson,
+    required String imageSrcsJson,
+    required String profile,
+  });
+
+  String crateApiMarkdownMdSerializeBody({
+    required String blocksJson,
+    required String assetsJson,
+  });
+
+  String crateApiMarkdownMdSerializeInline({required String inlineJson});
 
   Future<String?> crateApiRenderRenderMermaidSvg({
     required String source,
@@ -3416,6 +3447,273 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  String crateApiMarkdownMdDecodeCells({required String cellsJson}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(cellsJson, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMarkdownMdDecodeCellsConstMeta,
+        argValues: [cellsJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdDecodeCellsConstMeta =>
+      const TaskConstMeta(
+        debugName: "md_decode_cells",
+        argNames: ["cellsJson"],
+      );
+
+  @override
+  String crateApiMarkdownMdEncodeCells({required String inlinesJson}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(inlinesJson, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 86)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMarkdownMdEncodeCellsConstMeta,
+        argValues: [inlinesJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdEncodeCellsConstMeta =>
+      const TaskConstMeta(
+        debugName: "md_encode_cells",
+        argNames: ["inlinesJson"],
+      );
+
+  @override
+  String crateApiMarkdownMdEngineInfo() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 87)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMarkdownMdEngineInfoConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdEngineInfoConstMeta =>
+      const TaskConstMeta(debugName: "md_engine_info", argNames: []);
+
+  @override
+  String crateApiMarkdownMdMathRunSpans({required String source}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(source, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 88)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMarkdownMdMathRunSpansConstMeta,
+        argValues: [source],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdMathRunSpansConstMeta =>
+      const TaskConstMeta(debugName: "md_math_run_spans", argNames: ["source"]);
+
+  @override
+  String crateApiMarkdownMdParseBody({
+    required String markdown,
+    required bool fragment,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(markdown, serializer);
+          sse_encode_bool(fragment, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 89)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMarkdownMdParseBodyConstMeta,
+        argValues: [markdown, fragment],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdParseBodyConstMeta =>
+      const TaskConstMeta(
+        debugName: "md_parse_body",
+        argNames: ["markdown", "fragment"],
+      );
+
+  @override
+  String crateApiMarkdownMdParseInlineBatch({required String sourcesJson}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(sourcesJson, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 90)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMarkdownMdParseInlineBatchConstMeta,
+        argValues: [sourcesJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdParseInlineBatchConstMeta =>
+      const TaskConstMeta(
+        debugName: "md_parse_inline_batch",
+        argNames: ["sourcesJson"],
+      );
+
+  @override
+  String crateApiMarkdownMdParseInlineMath({required String source}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(source, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 91)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMarkdownMdParseInlineMathConstMeta,
+        argValues: [source],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdParseInlineMathConstMeta =>
+      const TaskConstMeta(
+        debugName: "md_parse_inline_math",
+        argNames: ["source"],
+      );
+
+  @override
+  String crateApiMarkdownMdRenderHtmlBody({
+    required String blocksJson,
+    required String imageSrcsJson,
+    required String profile,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(blocksJson, serializer);
+          sse_encode_String(imageSrcsJson, serializer);
+          sse_encode_String(profile, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 92)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMarkdownMdRenderHtmlBodyConstMeta,
+        argValues: [blocksJson, imageSrcsJson, profile],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdRenderHtmlBodyConstMeta =>
+      const TaskConstMeta(
+        debugName: "md_render_html_body",
+        argNames: ["blocksJson", "imageSrcsJson", "profile"],
+      );
+
+  @override
+  String crateApiMarkdownMdSerializeBody({
+    required String blocksJson,
+    required String assetsJson,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(blocksJson, serializer);
+          sse_encode_String(assetsJson, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 93)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMarkdownMdSerializeBodyConstMeta,
+        argValues: [blocksJson, assetsJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdSerializeBodyConstMeta =>
+      const TaskConstMeta(
+        debugName: "md_serialize_body",
+        argNames: ["blocksJson", "assetsJson"],
+      );
+
+  @override
+  String crateApiMarkdownMdSerializeInline({required String inlineJson}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(inlineJson, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 94)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMarkdownMdSerializeInlineConstMeta,
+        argValues: [inlineJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMarkdownMdSerializeInlineConstMeta =>
+      const TaskConstMeta(
+        debugName: "md_serialize_inline",
+        argNames: ["inlineJson"],
+      );
+
+  @override
   Future<String?> crateApiRenderRenderMermaidSvg({
     required String source,
     MermaidTheme? theme,
@@ -3429,7 +3727,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 85,
+            funcId: 95,
             port: port_,
           );
         },

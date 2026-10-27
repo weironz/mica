@@ -41,6 +41,7 @@
   - 传输与解析：`http`、`web_socket_channel`、`xml`、`html`；数学渲染：`flutter_math_fork`、Rust `ratex-*`。
   - 桌面集成：`window_manager`、`screen_retriever`、`tray_manager`、`file_picker`、`pasteboard`。
   - 图形与导出：Rust `merman`、`webview2-com`，Dart `flutter_svg`；Web CRDT 对端：JS `yjs`。
+  - Web Markdown 引擎绑定：Rust `wasm-bindgen`（仅 `crates/md-wasm`）+ 构建工具 `wasm-bindgen-cli`（同号钉死，`scripts/build-md-wasm.sh` 校验）。
 - 平台专用依赖用条件导入 / `cfg` 隔离，禁止进入不支持的平台 bundle；`yjs` 只进入 Web，`webview2-com` 只用于 Windows。
 - 托盘仅 Windows 支持；注册失败时降级 `minimize()`，不可 `hide()` 导致窗口无法找回。Mermaid 配色沿用 host theme profile，保留 SVG CSS 属性展开的兼容处理。
 

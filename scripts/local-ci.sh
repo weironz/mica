@@ -67,6 +67,7 @@ fi
 
 if [ "$part" != rust ]; then
   require_flutter_pin "CI tests the pin"
+  bash scripts/build-md-wasm.sh
   (
     cd clients/mica_flutter
     "$FLUTTER" pub get --enforce-lockfile

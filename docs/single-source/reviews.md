@@ -17,6 +17,68 @@
 
 <!-- 第一条审核记录写在这一行下面 -->
 
+## M2 复核 — 2026-10-27 — 通过
+
+- 审核对象：`single-source` @ `e7b5cb10`。自 `9e604c43` 起 `crates/`、`clients/`、`Cargo.toml`、`Cargo.lock` 无改动，所以首轮 M2 的全量 Rust 门禁结果（1141 + 213 passed）仍然适用于本树。
+- 核对结果（只核对首轮 M2 的 4 条必须修改）：
+  1. ✅ `build-md-wasm.sh` 门槛 262144 B；`test-md-wasm-build.sh` 新增「205 KB 接受 / 300 KB 拒绝」两个边界用例。审核方在 Linux 上重建：
+     `bash scripts/build-md-wasm.sh` exit 0，wasm 202,516 + JS 2,744 = **205,260 B**，wasm SHA `d7c21dd0…` 与首轮在 `9e604c43` 上的构建逐字节相同；
+     执行方 Docker 构建记为 205,269 B（差 9 B，不影响门槛）。`test-md-wasm-build.sh`、`test-ci-paths.sh`、`check-file-size.sh`、`check-ignored-sources.sh` 全部 exit 0；
+     正式产物黄金重放 396 例逐字节通过。
+  2. ✅ Web 复制：真实门面 `serializeBlocks` + `renderClipboardHtml`，production dart2js、Chrome，1 万字符 / 298 块，三轮中位 4.6 / 4.3 / 4.1 ms，**≤ 16 ms**。
+     审核方没有 Flutter 环境，此项以执行方回执为准；测量代码 `_measureCopy` 已提交，可在同一构建上重放。
+  3. ✅ 归因已改正，并且执行方自查出另一处口径错误：serialize 的「Rust 0.63×」是拿 native 数字比 VM 下的 Dart，同轮 AOT 实为约 1.0× 持平。HTML 一项写明主因是新增的安全过滤。
+  4. ✅ `b0064835` 删除 `scripts/md-wasm-evidence/`，S2 执行记录改为引用 `9e604c43:scripts/md-wasm-evidence/…`。
+- 审核方顺手做的清理（本提交）：删除 `scripts/m2-linux-build.sh` / `m2-linux-run.sh`——与 `build-md-wasm.sh` 功能重复、写死容器路径 `/src` `/out`，仓库里没有调用方。
+- 建议（不阻塞）：
+  - 本轮 Web 复制与 Linux 构建的原始 JSON 只留在执行方本机工作树，没有进任何分支，别人无法取回。以后原始证据请提交到工作包分支并在记录里写提交号。
+  - S2 执行记录「更正」一节末尾仍写着两项「作为待审核裁决项提交」，已被首轮 M2 裁决取代；节首「当前结论」表是对的，可不改。
+- 结论：**M2 通过，S2 用 merge 提交并回 main。** 下一个停点是 G3（S3 的 T3.7 分诊、T3.8 往返测试完成后，T3.6 删除 Dart 代码之前）。
+
+## M2 并回检查 — 2026-10-27 — 要求修改（4 条，修完只做快速复核）
+
+- 审核对象：`single-source` @ `9e604c43`（S2 三个工作包 merge `2e5eb2e8` / `a5a5f1e2` / `7923e72a` 及其后的核心提交），S2 执行记录 P0 之后各节，README 验收快照。
+- 核对结果：
+  - ✅ Rust 门禁：Linux、新建空库 `mica_m2`、`MICA_REQUIRE_DB=1`，`bash scripts/local-ci.sh rust` exit 0，`receipt: 1141 passed (floor 500)`、store `213 passed (floor 1)`；
+    另跑 `cargo test --locked -p mica-md --features render` exit 0。
+  - ✅ 绑定只是转发：`clients/mica_flutter/rust/src/api/markdown.rs` 与 `crates/md-wasm/src/lib.rs` 都是十个一行转发，没有逻辑。
+  - ✅ 消费方零改动：`crates/{app-core,api-server,interchange,mcp-server,mica-core,cli,infra}` 无 diff。`main.dart` 新增 `initMarkdownCodec` 一行，同 PR 压缩注释抵消，净 0。
+  - ✅ 依赖：AGENTS.md 已登记 `wasm-bindgen`（仅 `crates/md-wasm`）与同号 CLI；`Swatinem/rust-cache` 是既有 action。
+  - ✅ 构建链：`just dev-web` / `build-web` / `app chrome`、`ci.yml` 三处 Web 构建、`release.yml` 都先跑 `build-md-wasm.sh`；`index.html` 加载器在脚本缺失或实例化失败时落到 `micaMdError`，Flutter 可降级。
+  - ✅ 正式 wasm 黄金重放（审核方 Linux 构建的产物）：`node scripts/test-md-wasm-gold.cjs` 9 个函数 396 例逐字节通过，engineInfo 指纹与 6 类错误后恢复通过。
+  - ✅ 融合安全层 `492a9a42`：读了 `sanitize_html` 全文，各分支与「先 tagfilter 再 strip」的组合一一对应；分层实现保留为 `#[cfg(test)]` 参照，
+    等价测试覆盖手选分支 + 2000 个生成用例。
+  - ✅ 差分棘轮重建（T2.12）：通道从 `MicaDocument` 换成真实门面，旧维度 4336 → 3749，新增行内维度 1556 条单列，74 条是旧 CRDT 规范化掩盖的差异；逐条有审计记录，接受。
+  - ✅ T3.4 Clipboard 提前到 S2：执行记录写明经用户授权；30 个旧 Dart 全选样本逐字节对上，危险 URL 过滤是刻意的安全差异。
+  - ✖ **wasm 体积在 Linux 上超限**：审核方用 `scripts/build-md-wasm.sh` 在 Linux 构建，`9e604c43` 得 **205,260 B**（wasm 202,516 + JS 2,744），
+    脚本拒绝；融合安全层之前的 `492a9a42^` 也是 205,241 B，与融合安全层无关。执行方在 Windows 上记的 204,107 B 没写测的是哪个提交与 SHA。
+    CI 与发布镜像都在 Linux 上构建，按现状会直接失败。→ **用户决定上限改为 256 KiB**（02 §7 已改）。
+  - ✖ 桌面复制两项超比值预算（serialize.10k 1.534×、html.10k 3.712×）→ **用户决定改为绝对预算**：复制 10k 选区（Markdown + HTML 合计）桌面、Web 各自 ≤ 16 ms（02 §7 已改）。
+    桌面按执行方同轮 AOT 数据 2.238 + 2.656 ≈ **4.9 ms，达标**。**Web 的序列化与 HTML 没测过**（Web 只测了解析），缺这项证据。
+  - ✖ 归因表述不准确：README 和执行记录说超预算「全部来自 FFI 边界」。HTML 一项不是——执行方自己的数据里 Rust Clipboard 渲染本体 1.542 ms 已高于 Dart 旧实现 0.715 ms，
+    主要多在 Dart 旧实现从不做的安全过滤（标签过滤、危险属性 / URL 剥离）。审核方 Linux 探针：同量级 1 万字符 Clipboard wire 渲染 0.387 ms，其中 JSON 解码约 0.1 ms，引擎本身没有异常。
+  - ✖ `scripts/md-wasm-evidence/` 有 22 个原始测量文件（约 5 万行，单个 JSON 3.7 万行），是证据不是源码，不应随 S2 进入 main 的树；仓库里没有任何脚本引用它。
+  - ⚠ **审核方未复跑**（本环境没有 Flutter）：VM / Web / Windows 门面契约（42 + 11 + 11）、桌面 AOT 与 init 数字、浏览器解析比值，以执行方回执为准。
+- 契约问题裁决：
+  1. **Export HTML 跨端字节不同 → 接受执行方的候选方案**：跨端逐字节只约束 `clipboard` profile，`export` 随 `render` 特性变化（02 §1 / §3.1 已改）。
+     理由：Dart 门面不暴露 Export，页面 HTML 导出在桌面走 `MicaDocument.exportHtml`、Web 走服务端，都不经过 wire，用户看不到这个差异。
+     不给 wasm 开 `render`（体积），也不关桌面 `render`（会破坏现有本地导出）。
+  2. **缩小 FFI 边界 → 现在不做**：按新的绝对预算桌面已达标，没有需要它的地方。若以后要做（例如把载体从 `String` 换成 UTF-8 字节），
+     只要 §3 的 JSON 内容与 §5 门面不变，按「契约变更」单列在 PR 里报审核方即可，不需要改 wire 形状。
+- 必须修改：
+  1. `scripts/build-md-wasm.sh` 硬门槛改为 **262144 B**，`scripts/test-md-wasm-build.sh` 的边界用例同步；在 S2 执行记录写明：Linux 上正式产物的体积、对应提交号与 wasm SHA-256（以 Linux 为准，Windows 数字只作参考）。
+  2. 补测 **Web 复制**：真实 `MarkdownCodec`、production dart2js、Chrome，S0 同一个 1 万字符选区，`serializeBlocks` + `renderClipboardHtml` 合计中位数 ≤ 16 ms；
+     三轮，原始样本入档（证据放工作包分支，见第 4 条）。
+  3. 改正 README 与 S2 执行记录里「超预算全部来自 FFI 边界」的说法：HTML 一项的主因是新增的安全过滤，并注明预算已按用户决定改为绝对值。
+  4. 从 `single-source` 删除 `scripts/md-wasm-evidence/`（单独一个提交）；S2 执行记录里改为引用 `9e604c43` 这个提交的路径
+     （`git show 9e604c43:scripts/md-wasm-evidence/<文件>` 仍可取回）。之后新的原始证据只留在工作包分支，执行记录写提交号。
+- 建议（不阻塞）：
+  - 同一提交 Linux 与 Windows 产物差约 1.1 KB，原因未查清（`--remap-path-prefix` 映射掉依赖路径只省 24 B，不是主因）。不影响新门槛，可以不追。
+  - 执行记录已经很长（S2 一节 600+ 行），后续阶段请在节首给一张「当前结论」表，把历史纠错放到后面。
+- 交给用户的决定：已决定两项（wasm 上限 256 KiB；复制改为 ≤ 16 ms 绝对预算），已写进 02 §7 与 05 D3 / D4。
+- 结论：上面 4 条做完、在 04 §6 标「⏸ 待审核（M2 复核）」后，审核方核对这 4 条并在 Linux 上重新构建一次 wasm，通过即把 S2 并回 main。
+  **M2 不停工**：S3 可以在 `single-source` 上继续推进到 G3。
+
 ## G1 复核 — 2026-10-27 — 通过
 
 - 审核对象：`single-source` @ `f21daf18`（S0 修正 merge `5d8feb7`、S1 merge `f2bcb70` 之后只有文档提交）。

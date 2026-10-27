@@ -1,0 +1,1391 @@
+{
+  "cases": [
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Title One\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Section two\",\"data\":{\"level\":2,\"marks\":[{\"end\":11,\"start\":8,\"type\":\"italic\"}]}},{\"type\":\"heading\",\"text\":\"第三层 粗体\",\"data\":{\"level\":3,\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "01-headings.md/document/export",
+      "output": "<h1>Title One</h1>\n<h2>Section <em>two</em></h2>\n<h3>第三层 <strong>粗体</strong></h3>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Title One\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Section two\",\"data\":{\"level\":2,\"marks\":[{\"end\":11,\"start\":8,\"type\":\"italic\"}]}},{\"type\":\"heading\",\"text\":\"第三层 粗体\",\"data\":{\"level\":3,\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "01-headings.md/document/clipboard",
+      "output": "<h1>Title One</h1><h2>Section <em>two</em></h2><h3>第三层 <strong>粗体</strong></h3>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Title One\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Section two\",\"data\":{\"level\":2,\"marks\":[{\"end\":11,\"start\":8,\"type\":\"italic\"}]}},{\"type\":\"heading\",\"text\":\"第三层 粗体\",\"data\":{\"level\":3,\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "01-headings.md/fragment/export",
+      "output": "<h1>Title One</h1>\n<h2>Section <em>two</em></h2>\n<h3>第三层 <strong>粗体</strong></h3>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Title One\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Section two\",\"data\":{\"level\":2,\"marks\":[{\"end\":11,\"start\":8,\"type\":\"italic\"}]}},{\"type\":\"heading\",\"text\":\"第三层 粗体\",\"data\":{\"level\":3,\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "01-headings.md/fragment/clipboard",
+      "output": "<h1>Title One</h1><h2>Section <em>two</em></h2><h3>第三层 <strong>粗体</strong></h3>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain text here\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"bold then italic then code then strike\",\"data\":{\"marks\":[{\"end\":4,\"start\":0,\"type\":\"bold\"},{\"end\":16,\"start\":10,\"type\":\"italic\"},{\"end\":26,\"start\":22,\"type\":\"code\"},{\"end\":38,\"start\":32,\"type\":\"strike\"}]}},{\"type\":\"paragraph\",\"text\":\"a link inside\",\"data\":{\"marks\":[{\"end\":6,\"href\":\"https://example.com/x\",\"start\":2,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with inner italic kept\",\"data\":{\"marks\":[{\"end\":27,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"start\":10,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "02-inline.md/document/export",
+      "output": "<p>plain text here</p>\n<p><strong>bold</strong> then <em>italic</em> then <code>code</code> then <del>strike</del></p>\n<p>a <a href=\"https://example.com/x\">link</a> inside</p>\n<p><strong>bold with <em>inner italic</em> kept</strong></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain text here\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"bold then italic then code then strike\",\"data\":{\"marks\":[{\"end\":4,\"start\":0,\"type\":\"bold\"},{\"end\":16,\"start\":10,\"type\":\"italic\"},{\"end\":26,\"start\":22,\"type\":\"code\"},{\"end\":38,\"start\":32,\"type\":\"strike\"}]}},{\"type\":\"paragraph\",\"text\":\"a link inside\",\"data\":{\"marks\":[{\"end\":6,\"href\":\"https://example.com/x\",\"start\":2,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with inner italic kept\",\"data\":{\"marks\":[{\"end\":27,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"start\":10,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "02-inline.md/document/clipboard",
+      "output": "<p>plain text here</p><p><strong>bold</strong> then <em>italic</em> then <code>code</code> then <s>strike</s></p><p>a <a href=\"https://example.com/x\">link</a> inside</p><p><strong>bold with <em>inner italic</em> kept</strong></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain text here\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"bold then italic then code then strike\",\"data\":{\"marks\":[{\"end\":4,\"start\":0,\"type\":\"bold\"},{\"end\":16,\"start\":10,\"type\":\"italic\"},{\"end\":26,\"start\":22,\"type\":\"code\"},{\"end\":38,\"start\":32,\"type\":\"strike\"}]}},{\"type\":\"paragraph\",\"text\":\"a link inside\",\"data\":{\"marks\":[{\"end\":6,\"href\":\"https://example.com/x\",\"start\":2,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with inner italic kept\",\"data\":{\"marks\":[{\"end\":27,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"start\":10,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "02-inline.md/fragment/export",
+      "output": "<p>plain text here</p>\n<p><strong>bold</strong> then <em>italic</em> then <code>code</code> then <del>strike</del></p>\n<p>a <a href=\"https://example.com/x\">link</a> inside</p>\n<p><strong>bold with <em>inner italic</em> kept</strong></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain text here\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"bold then italic then code then strike\",\"data\":{\"marks\":[{\"end\":4,\"start\":0,\"type\":\"bold\"},{\"end\":16,\"start\":10,\"type\":\"italic\"},{\"end\":26,\"start\":22,\"type\":\"code\"},{\"end\":38,\"start\":32,\"type\":\"strike\"}]}},{\"type\":\"paragraph\",\"text\":\"a link inside\",\"data\":{\"marks\":[{\"end\":6,\"href\":\"https://example.com/x\",\"start\":2,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with inner italic kept\",\"data\":{\"marks\":[{\"end\":27,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"start\":10,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "02-inline.md/fragment/clipboard",
+      "output": "<p>plain text here</p><p><strong>bold</strong> then <em>italic</em> then <code>code</code> then <s>strike</s></p><p>a <a href=\"https://example.com/x\">link</a> inside</p><p><strong>bold with <em>inner italic</em> kept</strong></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"first item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"second bold item\",\"data\":{\"marks\":[{\"end\":11,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"star bullet\",\"data\":{\"marker\":\"*\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two l\",\"data\":{\"marks\":[{\"end\":5,\"href\":\"https://e.com\",\"start\":4,\"type\":\"link\"}]}},{\"type\":\"bulleted_list\",\"text\":\"parent\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"child two-space\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"grandchild\",\"data\":{\"indent\":2}},{\"type\":\"bulleted_list\",\"text\":\"child again\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"back to top\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"ordered parent\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"four-space child\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"sibling\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"parent two\",\"data\":{\"start\":2}},{\"type\":\"todo\",\"text\":\"task parent\",\"data\":{\"checked\":false,\"loose\":true}},{\"type\":\"todo\",\"text\":\"nested done task\",\"data\":{\"checked\":true,\"indent\":1,\"marks\":[{\"end\":11,\"start\":7,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "03-lists.md/document/export",
+      "output": "<ul>\n<li>first item</li>\n<li>second <strong>bold</strong> item</li>\n</ul>\n<ul>\n<li>star bullet</li>\n</ul>\n<ol>\n<li>\n<p>one</p>\n</li>\n<li>\n<p>two <a href=\"https://e.com\">l</a></p>\n</li>\n</ol>\n<ul>\n<li>\n<p>parent</p>\n<ul>\n<li>child two-space\n<ul>\n<li>grandchild</li>\n</ul>\n</li>\n<li>child again</li>\n</ul>\n</li>\n<li>\n<p>back to top</p>\n</li>\n</ul>\n<ol>\n<li>\n<p>ordered parent</p>\n<ol>\n<li>four-space child</li>\n<li>sibling</li>\n</ol>\n</li>\n</ol>\n<ol start=\"2\">\n<li>parent two</li>\n</ol>\n<ul>\n<li>\n<p><input disabled=\"\" type=\"checkbox\"> task parent</p>\n<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> nested <em>done</em> task</li>\n</ul>\n</li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"first item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"second bold item\",\"data\":{\"marks\":[{\"end\":11,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"star bullet\",\"data\":{\"marker\":\"*\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two l\",\"data\":{\"marks\":[{\"end\":5,\"href\":\"https://e.com\",\"start\":4,\"type\":\"link\"}]}},{\"type\":\"bulleted_list\",\"text\":\"parent\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"child two-space\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"grandchild\",\"data\":{\"indent\":2}},{\"type\":\"bulleted_list\",\"text\":\"child again\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"back to top\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"ordered parent\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"four-space child\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"sibling\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"parent two\",\"data\":{\"start\":2}},{\"type\":\"todo\",\"text\":\"task parent\",\"data\":{\"checked\":false,\"loose\":true}},{\"type\":\"todo\",\"text\":\"nested done task\",\"data\":{\"checked\":true,\"indent\":1,\"marks\":[{\"end\":11,\"start\":7,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "03-lists.md/document/clipboard",
+      "output": "<ul><li>first item</li><li>second <strong>bold</strong> item</li><li>star bullet</li></ul><ol><li>one</li><li>two <a href=\"https://e.com\">l</a></li></ol><ul><li>parent<ul><li>child two-space<ul><li>grandchild</li></ul></li><li>child again</li></ul></li><li>back to top</li></ul><ol><li>ordered parent<ol><li>four-space child</li><li>sibling</li></ol></li><li>parent two</li></ol><ul><li><input type=\"checkbox\" disabled> task parent<ul><li><input type=\"checkbox\" checked disabled> nested <em>done</em> task</li></ul></li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"first item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"second bold item\",\"data\":{\"marks\":[{\"end\":11,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"star bullet\",\"data\":{\"marker\":\"*\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two l\",\"data\":{\"marks\":[{\"end\":5,\"href\":\"https://e.com\",\"start\":4,\"type\":\"link\"}]}},{\"type\":\"bulleted_list\",\"text\":\"parent\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"child two-space\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"grandchild\",\"data\":{\"indent\":2}},{\"type\":\"bulleted_list\",\"text\":\"child again\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"back to top\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"ordered parent\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"four-space child\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"sibling\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"parent two\",\"data\":{\"start\":2}},{\"type\":\"todo\",\"text\":\"task parent\",\"data\":{\"checked\":false,\"loose\":true}},{\"type\":\"todo\",\"text\":\"nested done task\",\"data\":{\"checked\":true,\"indent\":1,\"marks\":[{\"end\":11,\"start\":7,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "03-lists.md/fragment/export",
+      "output": "<ul>\n<li>first item</li>\n<li>second <strong>bold</strong> item</li>\n</ul>\n<ul>\n<li>star bullet</li>\n</ul>\n<ol>\n<li>\n<p>one</p>\n</li>\n<li>\n<p>two <a href=\"https://e.com\">l</a></p>\n</li>\n</ol>\n<ul>\n<li>\n<p>parent</p>\n<ul>\n<li>child two-space\n<ul>\n<li>grandchild</li>\n</ul>\n</li>\n<li>child again</li>\n</ul>\n</li>\n<li>\n<p>back to top</p>\n</li>\n</ul>\n<ol>\n<li>\n<p>ordered parent</p>\n<ol>\n<li>four-space child</li>\n<li>sibling</li>\n</ol>\n</li>\n</ol>\n<ol start=\"2\">\n<li>parent two</li>\n</ol>\n<ul>\n<li>\n<p><input disabled=\"\" type=\"checkbox\"> task parent</p>\n<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> nested <em>done</em> task</li>\n</ul>\n</li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"first item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"second bold item\",\"data\":{\"marks\":[{\"end\":11,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"star bullet\",\"data\":{\"marker\":\"*\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two l\",\"data\":{\"marks\":[{\"end\":5,\"href\":\"https://e.com\",\"start\":4,\"type\":\"link\"}]}},{\"type\":\"bulleted_list\",\"text\":\"parent\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"child two-space\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"grandchild\",\"data\":{\"indent\":2}},{\"type\":\"bulleted_list\",\"text\":\"child again\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"back to top\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"ordered parent\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"four-space child\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"sibling\",\"data\":{\"indent\":1}},{\"type\":\"numbered_list\",\"text\":\"parent two\",\"data\":{\"start\":2}},{\"type\":\"todo\",\"text\":\"task parent\",\"data\":{\"checked\":false,\"loose\":true}},{\"type\":\"todo\",\"text\":\"nested done task\",\"data\":{\"checked\":true,\"indent\":1,\"marks\":[{\"end\":11,\"start\":7,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "03-lists.md/fragment/clipboard",
+      "output": "<ul><li>first item</li><li>second <strong>bold</strong> item</li><li>star bullet</li></ul><ol><li>one</li><li>two <a href=\"https://e.com\">l</a></li></ol><ul><li>parent<ul><li>child two-space<ul><li>grandchild</li></ul></li><li>child again</li></ul></li><li>back to top</li></ul><ol><li>ordered parent<ol><li>four-space child</li><li>sibling</li></ol></li><li>parent two</li></ol><ul><li><input type=\"checkbox\" disabled> task parent<ul><li><input type=\"checkbox\" checked disabled> nested <em>done</em> task</li></ul></li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"todo\",\"text\":\"open task\",\"data\":{\"checked\":false}},{\"type\":\"todo\",\"text\":\"done task\",\"data\":{\"checked\":true,\"marks\":[{\"end\":9,\"start\":5,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "04-todo.md/document/export",
+      "output": "<ul>\n<li><input disabled=\"\" type=\"checkbox\"> open task</li>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> done <em>task</em></li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"todo\",\"text\":\"open task\",\"data\":{\"checked\":false}},{\"type\":\"todo\",\"text\":\"done task\",\"data\":{\"checked\":true,\"marks\":[{\"end\":9,\"start\":5,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "04-todo.md/document/clipboard",
+      "output": "<ul><li><input type=\"checkbox\" disabled> open task</li><li><input type=\"checkbox\" checked disabled> done <em>task</em></li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"todo\",\"text\":\"open task\",\"data\":{\"checked\":false}},{\"type\":\"todo\",\"text\":\"done task\",\"data\":{\"checked\":true,\"marks\":[{\"end\":9,\"start\":5,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "04-todo.md/fragment/export",
+      "output": "<ul>\n<li><input disabled=\"\" type=\"checkbox\"> open task</li>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> done <em>task</em></li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"todo\",\"text\":\"open task\",\"data\":{\"checked\":false}},{\"type\":\"todo\",\"text\":\"done task\",\"data\":{\"checked\":true,\"marks\":[{\"end\":9,\"start\":5,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "04-todo.md/fragment/clipboard",
+      "output": "<ul><li><input type=\"checkbox\" disabled> open task</li><li><input type=\"checkbox\" checked disabled> done <em>task</em></li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"quoted line with code\\nsecond line\",\"data\":{\"marks\":[{\"end\":21,\"start\":17,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "05-quote.md/document/export",
+      "output": "<blockquote>\n<p>quoted line with <code>code</code>\nsecond line</p>\n</blockquote>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"quoted line with code\\nsecond line\",\"data\":{\"marks\":[{\"end\":21,\"start\":17,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "05-quote.md/document/clipboard",
+      "output": "<blockquote><p>quoted line with <code>code</code>\nsecond line</p></blockquote>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"quoted line with code\\nsecond line\",\"data\":{\"marks\":[{\"end\":21,\"start\":17,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "05-quote.md/fragment/export",
+      "output": "<blockquote>\n<p>quoted line with <code>code</code>\nsecond line</p>\n</blockquote>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"quoted line with code\\nsecond line\",\"data\":{\"marks\":[{\"end\":21,\"start\":17,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "05-quote.md/fragment/clipboard",
+      "output": "<blockquote><p>quoted line with <code>code</code>\nsecond line</p></blockquote>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"fn main() {\\n    println!(\\\"**not bold**\\\");\\n}\",\"data\":{\"language\":\"rust\"}},{\"type\":\"code_block\",\"text\":\"no language\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "06-code.md/document/export",
+      "output": "<pre><code class=\"language-rust\">fn main() {\n    println!(&quot;**not bold**&quot;);\n}\n</code></pre>\n<pre><code>no language\n</code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"fn main() {\\n    println!(\\\"**not bold**\\\");\\n}\",\"data\":{\"language\":\"rust\"}},{\"type\":\"code_block\",\"text\":\"no language\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "06-code.md/document/clipboard",
+      "output": "<pre><code class=\"language-rust\">fn main() {\n    println!(\"**not bold**\");\n}</code></pre><pre><code>no language</code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"fn main() {\\n    println!(\\\"**not bold**\\\");\\n}\",\"data\":{\"language\":\"rust\"}},{\"type\":\"code_block\",\"text\":\"no language\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "06-code.md/fragment/export",
+      "output": "<pre><code class=\"language-rust\">fn main() {\n    println!(&quot;**not bold**&quot;);\n}\n</code></pre>\n<pre><code>no language\n</code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"fn main() {\\n    println!(\\\"**not bold**\\\");\\n}\",\"data\":{\"language\":\"rust\"}},{\"type\":\"code_block\",\"text\":\"no language\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "06-code.md/fragment/clipboard",
+      "output": "<pre><code class=\"language-rust\">fn main() {\n    println!(\"**not bold**\");\n}</code></pre><pre><code>no language</code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"above\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"below\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "07-divider.md/document/export",
+      "output": "<p>above</p>\n<hr />\n<p>below</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"above\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"below\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "07-divider.md/document/clipboard",
+      "output": "<p>above</p><hr><p>below</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"above\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"below\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "07-divider.md/fragment/export",
+      "output": "<p>above</p>\n<hr />\n<p>below</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"above\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"below\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "07-divider.md/fragment/clipboard",
+      "output": "<p>above</p><hr><p>below</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"风景 照片\",\"data\":{\"url\":\"https://example.com/p.png\"}},{\"type\":\"image\",\"text\":\"\",\"data\":{\"url\":\"assets/local.png\"}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "08-image.md/document/export",
+      "output": "<p><img src=\"https://example.com/p.png\" alt=\"风景 照片\" /></p>\n<p><img src=\"assets/local.png\" alt=\"\" /></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"风景 照片\",\"data\":{\"url\":\"https://example.com/p.png\"}},{\"type\":\"image\",\"text\":\"\",\"data\":{\"url\":\"assets/local.png\"}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "08-image.md/document/clipboard",
+      "output": "<p><img src=\"https://example.com/p.png\" alt=\"风景 照片\"></p><p><img src=\"assets/local.png\" alt=\"\"></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"风景 照片\",\"data\":{\"url\":\"https://example.com/p.png\"}},{\"type\":\"image\",\"text\":\"\",\"data\":{\"url\":\"assets/local.png\"}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "08-image.md/fragment/export",
+      "output": "<p><img src=\"https://example.com/p.png\" alt=\"风景 照片\" /></p>\n<p><img src=\"assets/local.png\" alt=\"\" /></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"风景 照片\",\"data\":{\"url\":\"https://example.com/p.png\"}},{\"type\":\"image\",\"text\":\"\",\"data\":{\"url\":\"assets/local.png\"}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "08-image.md/fragment/clipboard",
+      "output": "<p><img src=\"https://example.com/p.png\" alt=\"风景 照片\"></p><p><img src=\"assets/local.png\" alt=\"\"></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"header\":true,\"rows\":[[\"Name\",\"Value\"],[\"alpha\",\"1\"],[\"beta\",\"2\"]],\"widths\":[1.0,1.0]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "09-table.md/document/export",
+      "output": "<table>\n<thead>\n<tr>\n<th>Name</th>\n<th>Value</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>alpha</td>\n<td>1</td>\n</tr>\n<tr>\n<td>beta</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"header\":true,\"rows\":[[\"Name\",\"Value\"],[\"alpha\",\"1\"],[\"beta\",\"2\"]],\"widths\":[1.0,1.0]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "09-table.md/document/clipboard",
+      "output": "<table><tr><th>Name</th><th>Value</th></tr><tr><td>alpha</td><td>1</td></tr><tr><td>beta</td><td>2</td></tr></table>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"header\":true,\"rows\":[[\"Name\",\"Value\"],[\"alpha\",\"1\"],[\"beta\",\"2\"]],\"widths\":[1.0,1.0]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "09-table.md/fragment/export",
+      "output": "<table>\n<thead>\n<tr>\n<th>Name</th>\n<th>Value</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>alpha</td>\n<td>1</td>\n</tr>\n<tr>\n<td>beta</td>\n<td>2</td>\n</tr>\n</tbody>\n</table>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"header\":true,\"rows\":[[\"Name\",\"Value\"],[\"alpha\",\"1\"],[\"beta\",\"2\"]],\"widths\":[1.0,1.0]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "09-table.md/fragment/clipboard",
+      "output": "<table><tr><th>Name</th><th>Value</th></tr><tr><td>alpha</td><td>1</td></tr><tr><td>beta</td><td>2</td></tr></table>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Doc\",\"data\":{\"level\":1}},{\"type\":\"paragraph\",\"text\":\"intro paragraph\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"item a\",\"data\":{\"marks\":[{\"end\":6,\"start\":5,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"item b\",\"data\":{}},{\"type\":\"quote\",\"text\":\"note\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"x = 1\",\"data\":{\"language\":\"js\"}},{\"type\":\"image\",\"text\":\"pic\",\"data\":{\"url\":\"img.png\"}},{\"type\":\"paragraph\",\"text\":\"done\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "10-mixed.md/document/export",
+      "output": "<h1>Doc</h1>\n<p>intro paragraph</p>\n<ul>\n<li>item <strong>a</strong></li>\n<li>item b</li>\n</ul>\n<blockquote>\n<p>note</p>\n</blockquote>\n<pre><code class=\"language-js\">x = 1\n</code></pre>\n<p><img src=\"img.png\" alt=\"pic\" /></p>\n<p>done</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Doc\",\"data\":{\"level\":1}},{\"type\":\"paragraph\",\"text\":\"intro paragraph\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"item a\",\"data\":{\"marks\":[{\"end\":6,\"start\":5,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"item b\",\"data\":{}},{\"type\":\"quote\",\"text\":\"note\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"x = 1\",\"data\":{\"language\":\"js\"}},{\"type\":\"image\",\"text\":\"pic\",\"data\":{\"url\":\"img.png\"}},{\"type\":\"paragraph\",\"text\":\"done\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "10-mixed.md/document/clipboard",
+      "output": "<h1>Doc</h1><p>intro paragraph</p><ul><li>item <strong>a</strong></li><li>item b</li></ul><blockquote><p>note</p></blockquote><pre><code class=\"language-js\">x = 1</code></pre><p><img src=\"img.png\" alt=\"pic\"></p><p>done</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Doc\",\"data\":{\"level\":1}},{\"type\":\"paragraph\",\"text\":\"intro paragraph\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"item a\",\"data\":{\"marks\":[{\"end\":6,\"start\":5,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"item b\",\"data\":{}},{\"type\":\"quote\",\"text\":\"note\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"x = 1\",\"data\":{\"language\":\"js\"}},{\"type\":\"image\",\"text\":\"pic\",\"data\":{\"url\":\"img.png\"}},{\"type\":\"paragraph\",\"text\":\"done\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "10-mixed.md/fragment/export",
+      "output": "<h1>Doc</h1>\n<p>intro paragraph</p>\n<ul>\n<li>item <strong>a</strong></li>\n<li>item b</li>\n</ul>\n<blockquote>\n<p>note</p>\n</blockquote>\n<pre><code class=\"language-js\">x = 1\n</code></pre>\n<p><img src=\"img.png\" alt=\"pic\" /></p>\n<p>done</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Doc\",\"data\":{\"level\":1}},{\"type\":\"paragraph\",\"text\":\"intro paragraph\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"item a\",\"data\":{\"marks\":[{\"end\":6,\"start\":5,\"type\":\"bold\"}]}},{\"type\":\"bulleted_list\",\"text\":\"item b\",\"data\":{}},{\"type\":\"quote\",\"text\":\"note\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"x = 1\",\"data\":{\"language\":\"js\"}},{\"type\":\"image\",\"text\":\"pic\",\"data\":{\"url\":\"img.png\"}},{\"type\":\"paragraph\",\"text\":\"done\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "10-mixed.md/fragment/clipboard",
+      "output": "<h1>Doc</h1><p>intro paragraph</p><ul><li>item <strong>a</strong></li><li>item b</li></ul><blockquote><p>note</p></blockquote><pre><code class=\"language-js\">x = 1</code></pre><p><img src=\"img.png\" alt=\"pic\"></p><p>done</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"*not bold* and snake_case stays plain\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"a literal backslash \\\\ and [not a link](x)\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"- not a list item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"1. not a numbered item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"visit https://example.com/a?b=1 now\",\"data\":{\"marks\":[{\"end\":31,\"href\":\"https://example.com/a?b=1\",\"start\":6,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"mail user@example.com please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"mailto:user@example.com\",\"start\":5,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with https://e.co inside\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"href\":\"https://e.co\",\"start\":10,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"code keeps *stars* and \\\\n raw\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "11-escapes-autolinks.md/document/export",
+      "output": "<p>*not bold* and snake_case stays plain</p>\n<p>a literal backslash \\ and [not a link](x)</p>\n<p>- not a list item</p>\n<p>1. not a numbered item</p>\n<p>visit <a href=\"https://example.com/a?b=1\">https://example.com/a?b=1</a> now</p>\n<p>mail <a href=\"mailto:user@example.com\">user@example.com</a> please</p>\n<p><strong>bold with <a href=\"https://e.co\">https://e.co</a> inside</strong></p>\n<p><code>code keeps *stars* and \\n raw</code></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"*not bold* and snake_case stays plain\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"a literal backslash \\\\ and [not a link](x)\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"- not a list item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"1. not a numbered item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"visit https://example.com/a?b=1 now\",\"data\":{\"marks\":[{\"end\":31,\"href\":\"https://example.com/a?b=1\",\"start\":6,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"mail user@example.com please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"mailto:user@example.com\",\"start\":5,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with https://e.co inside\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"href\":\"https://e.co\",\"start\":10,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"code keeps *stars* and \\\\n raw\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "11-escapes-autolinks.md/document/clipboard",
+      "output": "<p>*not bold* and snake_case stays plain</p><p>a literal backslash \\ and [not a link](x)</p><p>- not a list item</p><p>1. not a numbered item</p><p>visit <a href=\"https://example.com/a?b=1\">https://example.com/a?b=1</a> now</p><p>mail <a href=\"mailto:user@example.com\">user@example.com</a> please</p><p><strong>bold with <a href=\"https://e.co\">https://e.co</a> inside</strong></p><p><code>code keeps *stars* and \\n raw</code></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"*not bold* and snake_case stays plain\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"a literal backslash \\\\ and [not a link](x)\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"- not a list item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"1. not a numbered item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"visit https://example.com/a?b=1 now\",\"data\":{\"marks\":[{\"end\":31,\"href\":\"https://example.com/a?b=1\",\"start\":6,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"mail user@example.com please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"mailto:user@example.com\",\"start\":5,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with https://e.co inside\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"href\":\"https://e.co\",\"start\":10,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"code keeps *stars* and \\\\n raw\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "11-escapes-autolinks.md/fragment/export",
+      "output": "<p>*not bold* and snake_case stays plain</p>\n<p>a literal backslash \\ and [not a link](x)</p>\n<p>- not a list item</p>\n<p>1. not a numbered item</p>\n<p>visit <a href=\"https://example.com/a?b=1\">https://example.com/a?b=1</a> now</p>\n<p>mail <a href=\"mailto:user@example.com\">user@example.com</a> please</p>\n<p><strong>bold with <a href=\"https://e.co\">https://e.co</a> inside</strong></p>\n<p><code>code keeps *stars* and \\n raw</code></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"*not bold* and snake_case stays plain\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"a literal backslash \\\\ and [not a link](x)\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"- not a list item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"1. not a numbered item\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"visit https://example.com/a?b=1 now\",\"data\":{\"marks\":[{\"end\":31,\"href\":\"https://example.com/a?b=1\",\"start\":6,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"mail user@example.com please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"mailto:user@example.com\",\"start\":5,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"bold with https://e.co inside\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"bold\"},{\"end\":22,\"href\":\"https://e.co\",\"start\":10,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"code keeps *stars* and \\\\n raw\",\"data\":{\"marks\":[{\"end\":29,\"start\":0,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "11-escapes-autolinks.md/fragment/clipboard",
+      "output": "<p>*not bold* and snake_case stays plain</p><p>a literal backslash \\ and [not a link](x)</p><p>- not a list item</p><p>1. not a numbered item</p><p>visit <a href=\"https://example.com/a?b=1\">https://example.com/a?b=1</a> now</p><p>mail <a href=\"mailto:user@example.com\">user@example.com</a> please</p><p><strong>bold with <a href=\"https://e.co\">https://e.co</a> inside</strong></p><p><code>code keeps *stars* and \\n raw</code></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Setext Title\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Second Level\",\"data\":{\"level\":2}},{\"type\":\"code_block\",\"text\":\"indented code\\n  keeps deeper indent\\n\\ntab indented\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"after the breaks\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "12-setext-indented-thematic.md/document/export",
+      "output": "<h1>Setext Title</h1>\n<h2>Second Level</h2>\n<pre><code>indented code\n  keeps deeper indent\n\ntab indented\n</code></pre>\n<hr />\n<hr />\n<p>after the breaks</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Setext Title\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Second Level\",\"data\":{\"level\":2}},{\"type\":\"code_block\",\"text\":\"indented code\\n  keeps deeper indent\\n\\ntab indented\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"after the breaks\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "12-setext-indented-thematic.md/document/clipboard",
+      "output": "<h1>Setext Title</h1><h2>Second Level</h2><pre><code>indented code\n  keeps deeper indent\n\ntab indented</code></pre><hr><hr><p>after the breaks</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Setext Title\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Second Level\",\"data\":{\"level\":2}},{\"type\":\"code_block\",\"text\":\"indented code\\n  keeps deeper indent\\n\\ntab indented\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"after the breaks\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "12-setext-indented-thematic.md/fragment/export",
+      "output": "<h1>Setext Title</h1>\n<h2>Second Level</h2>\n<pre><code>indented code\n  keeps deeper indent\n\ntab indented\n</code></pre>\n<hr />\n<hr />\n<p>after the breaks</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"Setext Title\",\"data\":{\"level\":1}},{\"type\":\"heading\",\"text\":\"Second Level\",\"data\":{\"level\":2}},{\"type\":\"code_block\",\"text\":\"indented code\\n  keeps deeper indent\\n\\ntab indented\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"after the breaks\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "12-setext-indented-thematic.md/fragment/clipboard",
+      "output": "<h1>Setext Title</h1><h2>Second Level</h2><pre><code>indented code\n  keeps deeper indent\n\ntab indented</code></pre><hr><hr><p>after the breaks</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline basic and titled\",\"data\":{\"marks\":[{\"end\":12,\"href\":\"https://e.com\",\"start\":7,\"type\":\"link\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":17,\"title\":\"the title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"angle dest spaced works\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"/url with space\",\"start\":11,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"balanced parens too\",\"data\":{\"marks\":[{\"end\":15,\"href\":\"https://e.com/a(b)c\",\"start\":9,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"full text and collapsed ref and shortcut ref\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"https://example.com/ref\",\"start\":5,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":27,\"href\":\"https://example.com/ref\",\"start\":24,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":44,\"href\":\"https://example.com/ref\",\"start\":41,\"title\":\"Ref Title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"nested bold link inside bold\",\"data\":{\"marks\":[{\"end\":28,\"start\":7,\"type\":\"bold\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":12,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "13-links.md/document/export",
+      "output": "<p>inline <a href=\"https://e.com\">basic</a> and <a href=\"https://e.com\" title=\"the title\">titled</a></p>\n<p>angle dest <a href=\"/url%20with%20space\">spaced</a> works</p>\n<p>balanced <a href=\"https://e.com/a(b)c\">parens</a> too</p>\n<p>full <a href=\"https://example.com/ref\" title=\"Ref Title\">text</a> and collapsed <a href=\"https://example.com/ref\" title=\"Ref Title\">ref</a> and shortcut <a href=\"https://example.com/ref\" title=\"Ref Title\">ref</a></p>\n<p>nested <strong>bold <a href=\"https://e.com\">link inside</a> bold</strong></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline basic and titled\",\"data\":{\"marks\":[{\"end\":12,\"href\":\"https://e.com\",\"start\":7,\"type\":\"link\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":17,\"title\":\"the title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"angle dest spaced works\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"/url with space\",\"start\":11,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"balanced parens too\",\"data\":{\"marks\":[{\"end\":15,\"href\":\"https://e.com/a(b)c\",\"start\":9,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"full text and collapsed ref and shortcut ref\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"https://example.com/ref\",\"start\":5,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":27,\"href\":\"https://example.com/ref\",\"start\":24,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":44,\"href\":\"https://example.com/ref\",\"start\":41,\"title\":\"Ref Title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"nested bold link inside bold\",\"data\":{\"marks\":[{\"end\":28,\"start\":7,\"type\":\"bold\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":12,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "13-links.md/document/clipboard",
+      "output": "<p>inline <a href=\"https://e.com\">basic</a> and <a href=\"https://e.com\">titled</a></p><p>angle dest <a href=\"/url with space\">spaced</a> works</p><p>balanced <a href=\"https://e.com/a(b)c\">parens</a> too</p><p>full <a href=\"https://example.com/ref\">text</a> and collapsed <a href=\"https://example.com/ref\">ref</a> and shortcut <a href=\"https://example.com/ref\">ref</a></p><p>nested <strong>bold <a href=\"https://e.com\">link inside</a> bold</strong></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline basic and titled\",\"data\":{\"marks\":[{\"end\":12,\"href\":\"https://e.com\",\"start\":7,\"type\":\"link\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":17,\"title\":\"the title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"angle dest spaced works\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"/url with space\",\"start\":11,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"balanced parens too\",\"data\":{\"marks\":[{\"end\":15,\"href\":\"https://e.com/a(b)c\",\"start\":9,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"full text and collapsed ref and shortcut ref\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"https://example.com/ref\",\"start\":5,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":27,\"href\":\"https://example.com/ref\",\"start\":24,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":44,\"href\":\"https://example.com/ref\",\"start\":41,\"title\":\"Ref Title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"nested bold link inside bold\",\"data\":{\"marks\":[{\"end\":28,\"start\":7,\"type\":\"bold\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":12,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "13-links.md/fragment/export",
+      "output": "<p>inline <a href=\"https://e.com\">basic</a> and <a href=\"https://e.com\" title=\"the title\">titled</a></p>\n<p>angle dest <a href=\"/url%20with%20space\">spaced</a> works</p>\n<p>balanced <a href=\"https://e.com/a(b)c\">parens</a> too</p>\n<p>full <a href=\"https://example.com/ref\" title=\"Ref Title\">text</a> and collapsed <a href=\"https://example.com/ref\" title=\"Ref Title\">ref</a> and shortcut <a href=\"https://example.com/ref\" title=\"Ref Title\">ref</a></p>\n<p>nested <strong>bold <a href=\"https://e.com\">link inside</a> bold</strong></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline basic and titled\",\"data\":{\"marks\":[{\"end\":12,\"href\":\"https://e.com\",\"start\":7,\"type\":\"link\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":17,\"title\":\"the title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"angle dest spaced works\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"/url with space\",\"start\":11,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"balanced parens too\",\"data\":{\"marks\":[{\"end\":15,\"href\":\"https://e.com/a(b)c\",\"start\":9,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"full text and collapsed ref and shortcut ref\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"https://example.com/ref\",\"start\":5,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":27,\"href\":\"https://example.com/ref\",\"start\":24,\"title\":\"Ref Title\",\"type\":\"link\"},{\"end\":44,\"href\":\"https://example.com/ref\",\"start\":41,\"title\":\"Ref Title\",\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"nested bold link inside bold\",\"data\":{\"marks\":[{\"end\":28,\"start\":7,\"type\":\"bold\"},{\"end\":23,\"href\":\"https://e.com\",\"start\":12,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "13-links.md/fragment/clipboard",
+      "output": "<p>inline <a href=\"https://e.com\">basic</a> and <a href=\"https://e.com\">titled</a></p><p>angle dest <a href=\"/url with space\">spaced</a> works</p><p>balanced <a href=\"https://e.com/a(b)c\">parens</a> too</p><p>full <a href=\"https://example.com/ref\">text</a> and collapsed <a href=\"https://example.com/ref\">ref</a> and shortcut <a href=\"https://example.com/ref\">ref</a></p><p>nested <strong>bold <a href=\"https://e.com\">link inside</a> bold</strong></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain italic and bold basics\",\"data\":{\"marks\":[{\"end\":12,\"start\":6,\"type\":\"italic\"},{\"end\":21,\"start\":17,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"intraword stars work but sn_ake_s do not\",\"data\":{\"marks\":[{\"end\":14,\"start\":12,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"(parens rule) and a * loose star\",\"data\":{\"marks\":[{\"end\":13,\"start\":0,\"type\":\"italic\"},{\"end\":12,\"start\":1,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"both at once and nested inner tail\",\"data\":{\"marks\":[{\"end\":12,\"start\":0,\"type\":\"bold\"},{\"end\":12,\"start\":0,\"type\":\"italic\"},{\"end\":34,\"start\":17,\"type\":\"bold\"},{\"end\":29,\"start\":24,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"foobar edge and underscore word\",\"data\":{\"marks\":[{\"end\":6,\"start\":3,\"type\":\"italic\"},{\"end\":26,\"start\":16,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"rule of three: *strong in em\",\"data\":{\"marks\":[{\"end\":22,\"start\":16,\"type\":\"italic\"},{\"end\":28,\"start\":16,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "14-emphasis.md/document/export",
+      "output": "<p>plain <em>italic</em> and <strong>bold</strong> basics</p>\n<p>intraword st<em>ar</em>s work but sn_ake_s do not</p>\n<p><em>(<em>parens rule</em>)</em> and a * loose star</p>\n<p><em><strong>both at once</strong></em> and <strong>nested <em>inner</em> tail</strong></p>\n<p>foo<em>bar</em> edge and <em>underscore</em> word</p>\n<p>rule of three: *<em><em>strong</em> in em</em></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain italic and bold basics\",\"data\":{\"marks\":[{\"end\":12,\"start\":6,\"type\":\"italic\"},{\"end\":21,\"start\":17,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"intraword stars work but sn_ake_s do not\",\"data\":{\"marks\":[{\"end\":14,\"start\":12,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"(parens rule) and a * loose star\",\"data\":{\"marks\":[{\"end\":13,\"start\":0,\"type\":\"italic\"},{\"end\":12,\"start\":1,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"both at once and nested inner tail\",\"data\":{\"marks\":[{\"end\":12,\"start\":0,\"type\":\"bold\"},{\"end\":12,\"start\":0,\"type\":\"italic\"},{\"end\":34,\"start\":17,\"type\":\"bold\"},{\"end\":29,\"start\":24,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"foobar edge and underscore word\",\"data\":{\"marks\":[{\"end\":6,\"start\":3,\"type\":\"italic\"},{\"end\":26,\"start\":16,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"rule of three: *strong in em\",\"data\":{\"marks\":[{\"end\":22,\"start\":16,\"type\":\"italic\"},{\"end\":28,\"start\":16,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "14-emphasis.md/document/clipboard",
+      "output": "<p>plain <em>italic</em> and <strong>bold</strong> basics</p><p>intraword st<em>ar</em>s work but sn_ake_s do not</p><p><em>(<em>parens rule</em>)</em> and a * loose star</p><p><em><strong>both at once</strong></em> and <strong>nested <em>inner</em> tail</strong></p><p>foo<em>bar</em> edge and <em>underscore</em> word</p><p>rule of three: *<em><em>strong</em> in em</em></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain italic and bold basics\",\"data\":{\"marks\":[{\"end\":12,\"start\":6,\"type\":\"italic\"},{\"end\":21,\"start\":17,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"intraword stars work but sn_ake_s do not\",\"data\":{\"marks\":[{\"end\":14,\"start\":12,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"(parens rule) and a * loose star\",\"data\":{\"marks\":[{\"end\":13,\"start\":0,\"type\":\"italic\"},{\"end\":12,\"start\":1,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"both at once and nested inner tail\",\"data\":{\"marks\":[{\"end\":12,\"start\":0,\"type\":\"bold\"},{\"end\":12,\"start\":0,\"type\":\"italic\"},{\"end\":34,\"start\":17,\"type\":\"bold\"},{\"end\":29,\"start\":24,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"foobar edge and underscore word\",\"data\":{\"marks\":[{\"end\":6,\"start\":3,\"type\":\"italic\"},{\"end\":26,\"start\":16,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"rule of three: *strong in em\",\"data\":{\"marks\":[{\"end\":22,\"start\":16,\"type\":\"italic\"},{\"end\":28,\"start\":16,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "14-emphasis.md/fragment/export",
+      "output": "<p>plain <em>italic</em> and <strong>bold</strong> basics</p>\n<p>intraword st<em>ar</em>s work but sn_ake_s do not</p>\n<p><em>(<em>parens rule</em>)</em> and a * loose star</p>\n<p><em><strong>both at once</strong></em> and <strong>nested <em>inner</em> tail</strong></p>\n<p>foo<em>bar</em> edge and <em>underscore</em> word</p>\n<p>rule of three: *<em><em>strong</em> in em</em></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"plain italic and bold basics\",\"data\":{\"marks\":[{\"end\":12,\"start\":6,\"type\":\"italic\"},{\"end\":21,\"start\":17,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"intraword stars work but sn_ake_s do not\",\"data\":{\"marks\":[{\"end\":14,\"start\":12,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"(parens rule) and a * loose star\",\"data\":{\"marks\":[{\"end\":13,\"start\":0,\"type\":\"italic\"},{\"end\":12,\"start\":1,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"both at once and nested inner tail\",\"data\":{\"marks\":[{\"end\":12,\"start\":0,\"type\":\"bold\"},{\"end\":12,\"start\":0,\"type\":\"italic\"},{\"end\":34,\"start\":17,\"type\":\"bold\"},{\"end\":29,\"start\":24,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"foobar edge and underscore word\",\"data\":{\"marks\":[{\"end\":6,\"start\":3,\"type\":\"italic\"},{\"end\":26,\"start\":16,\"type\":\"italic\"}]}},{\"type\":\"paragraph\",\"text\":\"rule of three: *strong in em\",\"data\":{\"marks\":[{\"end\":22,\"start\":16,\"type\":\"italic\"},{\"end\":28,\"start\":16,\"type\":\"italic\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "14-emphasis.md/fragment/clipboard",
+      "output": "<p>plain <em>italic</em> and <strong>bold</strong> basics</p><p>intraword st<em>ar</em>s work but sn_ake_s do not</p><p><em>(<em>parens rule</em>)</em> and a * loose star</p><p><em><strong>both at once</strong></em> and <strong>nested <em>inner</em> tail</strong></p><p>foo<em>bar</em> edge and <em>underscore</em> word</p><p>rule of three: *<em><em>strong</em> in em</em></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"alpha\\nlazy line joins\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"beta\\nindented continuation\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"gamma is loose\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"plus starts a new list\",\"data\":{\"marker\":\"+\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"new delim restarts\",\"data\":{\"loose\":true,\"marker\":\")\",\"start\":3}},{\"type\":\"numbered_list\",\"text\":\"start at seven\",\"data\":{\"loose\":true,\"marker\":\".\",\"start\":7}},{\"type\":\"bulleted_list\",\"text\":\"parent item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"child item\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"sibling not child\",\"data\":{}},{\"type\":\"heading\",\"text\":\"para first\\npara second\",\"data\":{\"level\":1}},{\"type\":\"bulleted_list\",\"text\":\"item with two paragraphs\\n\\nsecond paragraph here\",\"data\":{\"loose\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "15-list-items.md/document/export",
+      "output": "<ul>\n<li>\n<p>alpha\nlazy line joins</p>\n</li>\n<li>\n<p>beta\nindented continuation</p>\n</li>\n<li>\n<p>gamma is loose</p>\n</li>\n</ul>\n<ul>\n<li>plus starts a new list</li>\n</ul>\n<ol>\n<li>\n<p>one</p>\n</li>\n<li>\n<p>two</p>\n</li>\n</ol>\n<ol start=\"3\">\n<li>\n<p>new delim restarts</p>\n</li>\n</ol>\n<ol start=\"7\">\n<li>\n<p>start at seven</p>\n</li>\n</ol>\n<ul>\n<li>parent item\n<ul>\n<li>child item</li>\n</ul>\n</li>\n<li>sibling not child</li>\n</ul>\n<h1>para first\npara second</h1>\n<ul>\n<li>\n<p>item with two paragraphs</p>\n<p>second paragraph here</p>\n</li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"alpha\\nlazy line joins\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"beta\\nindented continuation\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"gamma is loose\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"plus starts a new list\",\"data\":{\"marker\":\"+\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"new delim restarts\",\"data\":{\"loose\":true,\"marker\":\")\",\"start\":3}},{\"type\":\"numbered_list\",\"text\":\"start at seven\",\"data\":{\"loose\":true,\"marker\":\".\",\"start\":7}},{\"type\":\"bulleted_list\",\"text\":\"parent item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"child item\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"sibling not child\",\"data\":{}},{\"type\":\"heading\",\"text\":\"para first\\npara second\",\"data\":{\"level\":1}},{\"type\":\"bulleted_list\",\"text\":\"item with two paragraphs\\n\\nsecond paragraph here\",\"data\":{\"loose\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "15-list-items.md/document/clipboard",
+      "output": "<ul><li>alpha\nlazy line joins</li><li>beta\nindented continuation</li><li>gamma is loose</li><li>plus starts a new list</li></ul><ol><li>one</li><li>two</li><li>new delim restarts</li><li>start at seven</li></ol><ul><li>parent item<ul><li>child item</li></ul></li><li>sibling not child</li></ul><h1>para first\npara second</h1><ul><li>item with two paragraphs\n\nsecond paragraph here</li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"alpha\\nlazy line joins\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"beta\\nindented continuation\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"gamma is loose\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"plus starts a new list\",\"data\":{\"marker\":\"+\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"new delim restarts\",\"data\":{\"loose\":true,\"marker\":\")\",\"start\":3}},{\"type\":\"numbered_list\",\"text\":\"start at seven\",\"data\":{\"loose\":true,\"marker\":\".\",\"start\":7}},{\"type\":\"bulleted_list\",\"text\":\"parent item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"child item\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"sibling not child\",\"data\":{}},{\"type\":\"heading\",\"text\":\"para first\\npara second\",\"data\":{\"level\":1}},{\"type\":\"bulleted_list\",\"text\":\"item with two paragraphs\\n\\nsecond paragraph here\",\"data\":{\"loose\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "15-list-items.md/fragment/export",
+      "output": "<ul>\n<li>\n<p>alpha\nlazy line joins</p>\n</li>\n<li>\n<p>beta\nindented continuation</p>\n</li>\n<li>\n<p>gamma is loose</p>\n</li>\n</ul>\n<ul>\n<li>plus starts a new list</li>\n</ul>\n<ol>\n<li>\n<p>one</p>\n</li>\n<li>\n<p>two</p>\n</li>\n</ol>\n<ol start=\"3\">\n<li>\n<p>new delim restarts</p>\n</li>\n</ol>\n<ol start=\"7\">\n<li>\n<p>start at seven</p>\n</li>\n</ol>\n<ul>\n<li>parent item\n<ul>\n<li>child item</li>\n</ul>\n</li>\n<li>sibling not child</li>\n</ul>\n<h1>para first\npara second</h1>\n<ul>\n<li>\n<p>item with two paragraphs</p>\n<p>second paragraph here</p>\n</li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"alpha\\nlazy line joins\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"beta\\nindented continuation\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"gamma is loose\",\"data\":{\"loose\":true}},{\"type\":\"bulleted_list\",\"text\":\"plus starts a new list\",\"data\":{\"marker\":\"+\"}},{\"type\":\"numbered_list\",\"text\":\"one\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"new delim restarts\",\"data\":{\"loose\":true,\"marker\":\")\",\"start\":3}},{\"type\":\"numbered_list\",\"text\":\"start at seven\",\"data\":{\"loose\":true,\"marker\":\".\",\"start\":7}},{\"type\":\"bulleted_list\",\"text\":\"parent item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"child item\",\"data\":{\"indent\":1}},{\"type\":\"bulleted_list\",\"text\":\"sibling not child\",\"data\":{}},{\"type\":\"heading\",\"text\":\"para first\\npara second\",\"data\":{\"level\":1}},{\"type\":\"bulleted_list\",\"text\":\"item with two paragraphs\\n\\nsecond paragraph here\",\"data\":{\"loose\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "15-list-items.md/fragment/clipboard",
+      "output": "<ul><li>alpha\nlazy line joins</li><li>beta\nindented continuation</li><li>gamma is loose</li><li>plus starts a new list</li></ul><ol><li>one</li><li>two</li><li>new delim restarts</li><li>start at seven</li></ol><ul><li>parent item<ul><li>child item</li></ul></li><li>sibling not child</li></ul><h1>para first\npara second</h1><ul><li>item with two paragraphs\n\nsecond paragraph here</li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"banner\",\"data\":{\"url\":\"assets/banner.png\"}},{\"type\":\"image\",\"text\":\"photo\",\"data\":{\"title\":\"a title\",\"url\":\"train.jpg\"}},{\"type\":\"paragraph\",\"text\":\"inline icon inside text\",\"data\":{\"marks\":[{\"end\":11,\"href\":\"https://x.io/i.png\",\"start\":7,\"type\":\"image\"}]}},{\"type\":\"image\",\"text\":\"alt with emphasis\",\"data\":{\"title\":\"gallery\",\"url\":\"/gallery/art.png\"}},{\"type\":\"paragraph\",\"text\":\"ref shortcut art and full other\",\"data\":{\"marks\":[{\"end\":16,\"href\":\"/gallery/art.png\",\"start\":13,\"title\":\"gallery\",\"type\":\"image\"},{\"end\":31,\"href\":\"/gallery/art.png\",\"start\":26,\"title\":\"gallery\",\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"![escaped] and !link form\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/gallery/art.png\",\"start\":16,\"title\":\"gallery\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "16-images.md/document/export",
+      "output": "<p><img src=\"assets/banner.png\" alt=\"banner\" /></p>\n<p><img src=\"train.jpg\" alt=\"photo\" title=\"a title\" /></p>\n<p>inline <img src=\"https://x.io/i.png\" alt=\"icon\" /> inside text</p>\n<p><img src=\"/gallery/art.png\" alt=\"alt with emphasis\" title=\"gallery\" /></p>\n<p>ref shortcut <img src=\"/gallery/art.png\" alt=\"art\" title=\"gallery\" /> and full <img src=\"/gallery/art.png\" alt=\"other\" title=\"gallery\" /></p>\n<p>![escaped] and !<a href=\"/gallery/art.png\" title=\"gallery\">link form</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"banner\",\"data\":{\"url\":\"assets/banner.png\"}},{\"type\":\"image\",\"text\":\"photo\",\"data\":{\"title\":\"a title\",\"url\":\"train.jpg\"}},{\"type\":\"paragraph\",\"text\":\"inline icon inside text\",\"data\":{\"marks\":[{\"end\":11,\"href\":\"https://x.io/i.png\",\"start\":7,\"type\":\"image\"}]}},{\"type\":\"image\",\"text\":\"alt with emphasis\",\"data\":{\"title\":\"gallery\",\"url\":\"/gallery/art.png\"}},{\"type\":\"paragraph\",\"text\":\"ref shortcut art and full other\",\"data\":{\"marks\":[{\"end\":16,\"href\":\"/gallery/art.png\",\"start\":13,\"title\":\"gallery\",\"type\":\"image\"},{\"end\":31,\"href\":\"/gallery/art.png\",\"start\":26,\"title\":\"gallery\",\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"![escaped] and !link form\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/gallery/art.png\",\"start\":16,\"title\":\"gallery\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "16-images.md/document/clipboard",
+      "output": "<p><img src=\"assets/banner.png\" alt=\"banner\"></p><p><img src=\"train.jpg\" alt=\"photo\"></p><p>inline <img src=\"https://x.io/i.png\" alt=\"icon\"> inside text</p><p><img src=\"/gallery/art.png\" alt=\"alt with emphasis\"></p><p>ref shortcut <img src=\"/gallery/art.png\" alt=\"art\"> and full <img src=\"/gallery/art.png\" alt=\"other\"></p><p>![escaped] and !<a href=\"/gallery/art.png\">link form</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"banner\",\"data\":{\"url\":\"assets/banner.png\"}},{\"type\":\"image\",\"text\":\"photo\",\"data\":{\"title\":\"a title\",\"url\":\"train.jpg\"}},{\"type\":\"paragraph\",\"text\":\"inline icon inside text\",\"data\":{\"marks\":[{\"end\":11,\"href\":\"https://x.io/i.png\",\"start\":7,\"type\":\"image\"}]}},{\"type\":\"image\",\"text\":\"alt with emphasis\",\"data\":{\"title\":\"gallery\",\"url\":\"/gallery/art.png\"}},{\"type\":\"paragraph\",\"text\":\"ref shortcut art and full other\",\"data\":{\"marks\":[{\"end\":16,\"href\":\"/gallery/art.png\",\"start\":13,\"title\":\"gallery\",\"type\":\"image\"},{\"end\":31,\"href\":\"/gallery/art.png\",\"start\":26,\"title\":\"gallery\",\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"![escaped] and !link form\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/gallery/art.png\",\"start\":16,\"title\":\"gallery\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "16-images.md/fragment/export",
+      "output": "<p><img src=\"assets/banner.png\" alt=\"banner\" /></p>\n<p><img src=\"train.jpg\" alt=\"photo\" title=\"a title\" /></p>\n<p>inline <img src=\"https://x.io/i.png\" alt=\"icon\" /> inside text</p>\n<p><img src=\"/gallery/art.png\" alt=\"alt with emphasis\" title=\"gallery\" /></p>\n<p>ref shortcut <img src=\"/gallery/art.png\" alt=\"art\" title=\"gallery\" /> and full <img src=\"/gallery/art.png\" alt=\"other\" title=\"gallery\" /></p>\n<p>![escaped] and !<a href=\"/gallery/art.png\" title=\"gallery\">link form</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"banner\",\"data\":{\"url\":\"assets/banner.png\"}},{\"type\":\"image\",\"text\":\"photo\",\"data\":{\"title\":\"a title\",\"url\":\"train.jpg\"}},{\"type\":\"paragraph\",\"text\":\"inline icon inside text\",\"data\":{\"marks\":[{\"end\":11,\"href\":\"https://x.io/i.png\",\"start\":7,\"type\":\"image\"}]}},{\"type\":\"image\",\"text\":\"alt with emphasis\",\"data\":{\"title\":\"gallery\",\"url\":\"/gallery/art.png\"}},{\"type\":\"paragraph\",\"text\":\"ref shortcut art and full other\",\"data\":{\"marks\":[{\"end\":16,\"href\":\"/gallery/art.png\",\"start\":13,\"title\":\"gallery\",\"type\":\"image\"},{\"end\":31,\"href\":\"/gallery/art.png\",\"start\":26,\"title\":\"gallery\",\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"![escaped] and !link form\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/gallery/art.png\",\"start\":16,\"title\":\"gallery\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "16-images.md/fragment/clipboard",
+      "output": "<p><img src=\"assets/banner.png\" alt=\"banner\"></p><p><img src=\"train.jpg\" alt=\"photo\"></p><p>inline <img src=\"https://x.io/i.png\" alt=\"icon\"> inside text</p><p><img src=\"/gallery/art.png\" alt=\"alt with emphasis\"></p><p>ref shortcut <img src=\"/gallery/art.png\" alt=\"art\"> and full <img src=\"/gallery/art.png\" alt=\"other\"></p><p>![escaped] and !<a href=\"/gallery/art.png\">link form</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"simple quote\\njoined marked\",\"data\":{}},{\"type\":\"heading\",\"text\":\"heading inside\",\"data\":{\"level\":1,\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"body text\\ncontinued lazy\",\"data\":{}},{\"type\":\"quote\",\"text\":\"nested two deep\\nstill nested\",\"data\":{\"qbreak\":true,\"quote\":2}},{\"type\":\"quote\",\"text\":\"\",\"data\":{\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"item in quote\\nmore of the item\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"let x = 1\",\"data\":{\"language\":\"js\",\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"raw indented code\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"alpha group\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"beta group after blank\",\"data\":{\"qbreak\":true}},{\"type\":\"code_block\",\"text\":\"<section>\\nhtml block after a quote group\\n</section>\",\"data\":{\"language\":\"html\",\"raw\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "17-quotes.md/document/export",
+      "output": "<blockquote>\n<p>simple quote\njoined marked</p>\n</blockquote>\n<blockquote>\n<h1>heading inside</h1>\n<p>body text\ncontinued lazy</p>\n</blockquote>\n<blockquote>\n<blockquote>\n<p>nested two deep\nstill nested</p>\n</blockquote>\n</blockquote>\n<blockquote>\n</blockquote>\n<blockquote>\n<ul>\n<li>item in quote\nmore of the item</li>\n</ul>\n</blockquote>\n<blockquote>\n<pre><code class=\"language-js\">let x = 1\n</code></pre>\n</blockquote>\n<blockquote>\n<pre><code>raw indented code\n</code></pre>\n</blockquote>\n<blockquote>\n<p>alpha group</p>\n</blockquote>\n<blockquote>\n<p>beta group after blank</p>\n</blockquote>\n<section>\nhtml block after a quote group\n</section>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"simple quote\\njoined marked\",\"data\":{}},{\"type\":\"heading\",\"text\":\"heading inside\",\"data\":{\"level\":1,\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"body text\\ncontinued lazy\",\"data\":{}},{\"type\":\"quote\",\"text\":\"nested two deep\\nstill nested\",\"data\":{\"qbreak\":true,\"quote\":2}},{\"type\":\"quote\",\"text\":\"\",\"data\":{\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"item in quote\\nmore of the item\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"let x = 1\",\"data\":{\"language\":\"js\",\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"raw indented code\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"alpha group\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"beta group after blank\",\"data\":{\"qbreak\":true}},{\"type\":\"code_block\",\"text\":\"<section>\\nhtml block after a quote group\\n</section>\",\"data\":{\"language\":\"html\",\"raw\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "17-quotes.md/document/clipboard",
+      "output": "<blockquote><p>simple quote\njoined marked</p><h1>heading inside</h1><p>body text\ncontinued lazy</p></blockquote><blockquote><blockquote><p>nested two deep\nstill nested</p></blockquote></blockquote><blockquote><p></p><ul><li>item in quote\nmore of the item</li></ul><pre><code class=\"language-js\">let x = 1</code></pre><pre><code>raw indented code</code></pre></blockquote><blockquote><p>alpha group</p></blockquote><blockquote><p>beta group after blank</p></blockquote><pre><code class=\"language-html\">&lt;section&gt;\nhtml block after a quote group\n&lt;/section&gt;</code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"simple quote\\njoined marked\",\"data\":{}},{\"type\":\"heading\",\"text\":\"heading inside\",\"data\":{\"level\":1,\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"body text\\ncontinued lazy\",\"data\":{}},{\"type\":\"quote\",\"text\":\"nested two deep\\nstill nested\",\"data\":{\"qbreak\":true,\"quote\":2}},{\"type\":\"quote\",\"text\":\"\",\"data\":{\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"item in quote\\nmore of the item\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"let x = 1\",\"data\":{\"language\":\"js\",\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"raw indented code\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"alpha group\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"beta group after blank\",\"data\":{\"qbreak\":true}},{\"type\":\"code_block\",\"text\":\"<section>\\nhtml block after a quote group\\n</section>\",\"data\":{\"language\":\"html\",\"raw\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "17-quotes.md/fragment/export",
+      "output": "<blockquote>\n<p>simple quote\njoined marked</p>\n</blockquote>\n<blockquote>\n<h1>heading inside</h1>\n<p>body text\ncontinued lazy</p>\n</blockquote>\n<blockquote>\n<blockquote>\n<p>nested two deep\nstill nested</p>\n</blockquote>\n</blockquote>\n<blockquote>\n</blockquote>\n<blockquote>\n<ul>\n<li>item in quote\nmore of the item</li>\n</ul>\n</blockquote>\n<blockquote>\n<pre><code class=\"language-js\">let x = 1\n</code></pre>\n</blockquote>\n<blockquote>\n<pre><code>raw indented code\n</code></pre>\n</blockquote>\n<blockquote>\n<p>alpha group</p>\n</blockquote>\n<blockquote>\n<p>beta group after blank</p>\n</blockquote>\n<section>\nhtml block after a quote group\n</section>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"simple quote\\njoined marked\",\"data\":{}},{\"type\":\"heading\",\"text\":\"heading inside\",\"data\":{\"level\":1,\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"body text\\ncontinued lazy\",\"data\":{}},{\"type\":\"quote\",\"text\":\"nested two deep\\nstill nested\",\"data\":{\"qbreak\":true,\"quote\":2}},{\"type\":\"quote\",\"text\":\"\",\"data\":{\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"item in quote\\nmore of the item\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"let x = 1\",\"data\":{\"language\":\"js\",\"qbreak\":true,\"quote\":1}},{\"type\":\"code_block\",\"text\":\"raw indented code\",\"data\":{\"qbreak\":true,\"quote\":1}},{\"type\":\"quote\",\"text\":\"alpha group\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"beta group after blank\",\"data\":{\"qbreak\":true}},{\"type\":\"code_block\",\"text\":\"<section>\\nhtml block after a quote group\\n</section>\",\"data\":{\"language\":\"html\",\"raw\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "17-quotes.md/fragment/clipboard",
+      "output": "<blockquote><p>simple quote\njoined marked</p><h1>heading inside</h1><p>body text\ncontinued lazy</p></blockquote><blockquote><blockquote><p>nested two deep\nstill nested</p></blockquote></blockquote><blockquote><p></p><ul><li>item in quote\nmore of the item</li></ul><pre><code class=\"language-js\">let x = 1</code></pre><pre><code>raw indented code</code></pre></blockquote><blockquote><p>alpha group</p></blockquote><blockquote><p>beta group after blank</p></blockquote><pre><code class=\"language-html\">&lt;section&gt;\nhtml block after a quote group\n&lt;/section&gt;</code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"closing hashes\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"simple code and double `tick span\",\"data\":{\"marks\":[{\"end\":11,\"start\":0,\"type\":\"code\"},{\"end\":28,\"start\":16,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"`` then foo ` bar\",\"data\":{\"marks\":[{\"end\":2,\"start\":0,\"type\":\"code\"},{\"end\":17,\"start\":8,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"hard break here\\\\\\nafter two spaces\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"backslash break\\\\\\njoins here\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"tilde fenced\",\"data\":{\"language\":\"js\"}},{\"type\":\"paragraph\",\"text\":\"para with\\nindented lazy line\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "18-spans-breaks.md/document/export",
+      "output": "<h2>closing hashes</h2>\n<p><code>simple code</code> and <code>double `tick</code> span</p>\n<p><code>``</code> then <code>foo ` bar</code></p>\n<p>hard break here<br />\nafter two spaces</p>\n<p>backslash break<br />\njoins here</p>\n<pre><code class=\"language-js\">tilde fenced\n</code></pre>\n<p>para with\nindented lazy line</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"closing hashes\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"simple code and double `tick span\",\"data\":{\"marks\":[{\"end\":11,\"start\":0,\"type\":\"code\"},{\"end\":28,\"start\":16,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"`` then foo ` bar\",\"data\":{\"marks\":[{\"end\":2,\"start\":0,\"type\":\"code\"},{\"end\":17,\"start\":8,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"hard break here\\\\\\nafter two spaces\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"backslash break\\\\\\njoins here\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"tilde fenced\",\"data\":{\"language\":\"js\"}},{\"type\":\"paragraph\",\"text\":\"para with\\nindented lazy line\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "18-spans-breaks.md/document/clipboard",
+      "output": "<h2>closing hashes</h2><p><code>simple code</code> and <code>double `tick</code> span</p><p><code>``</code> then <code>foo ` bar</code></p><p>hard break here\\\nafter two spaces</p><p>backslash break\\\njoins here</p><pre><code class=\"language-js\">tilde fenced</code></pre><p>para with\nindented lazy line</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"closing hashes\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"simple code and double `tick span\",\"data\":{\"marks\":[{\"end\":11,\"start\":0,\"type\":\"code\"},{\"end\":28,\"start\":16,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"`` then foo ` bar\",\"data\":{\"marks\":[{\"end\":2,\"start\":0,\"type\":\"code\"},{\"end\":17,\"start\":8,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"hard break here\\\\\\nafter two spaces\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"backslash break\\\\\\njoins here\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"tilde fenced\",\"data\":{\"language\":\"js\"}},{\"type\":\"paragraph\",\"text\":\"para with\\nindented lazy line\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "18-spans-breaks.md/fragment/export",
+      "output": "<h2>closing hashes</h2>\n<p><code>simple code</code> and <code>double `tick</code> span</p>\n<p><code>``</code> then <code>foo ` bar</code></p>\n<p>hard break here<br />\nafter two spaces</p>\n<p>backslash break<br />\njoins here</p>\n<pre><code class=\"language-js\">tilde fenced\n</code></pre>\n<p>para with\nindented lazy line</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"heading\",\"text\":\"closing hashes\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"simple code and double `tick span\",\"data\":{\"marks\":[{\"end\":11,\"start\":0,\"type\":\"code\"},{\"end\":28,\"start\":16,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"`` then foo ` bar\",\"data\":{\"marks\":[{\"end\":2,\"start\":0,\"type\":\"code\"},{\"end\":17,\"start\":8,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"hard break here\\\\\\nafter two spaces\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"backslash break\\\\\\njoins here\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"tilde fenced\",\"data\":{\"language\":\"js\"}},{\"type\":\"paragraph\",\"text\":\"para with\\nindented lazy line\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "18-spans-breaks.md/fragment/clipboard",
+      "output": "<h2>closing hashes</h2><p><code>simple code</code> and <code>double `tick</code> span</p><p><code>``</code> then <code>foo ` bar</code></p><p>hard break here\\\nafter two spaces</p><p>backslash break\\\njoins here</p><pre><code class=\"language-js\">tilde fenced</code></pre><p>para with\nindented lazy line</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"copy © and star *foo* and hex 'quote'\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"unknown &MadeUpEntity; stays literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"see multi resolves\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"/multi-url\",\"start\":4,\"title\":\"multi\\nline title\",\"type\":\"link\"}]}},{\"type\":\"code_block\",\"text\":\"fenced with indent\\nkeep\",\"data\":{\"language\":\"python\"}},{\"type\":\"paragraph\",\"text\":\"ref with entity dest: ent\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/föö\",\"start\":22,\"title\":\"tïtle\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "19-entities-defs.md/document/export",
+      "output": "<p>copy © and star *foo* and hex 'quote'</p>\n<p>unknown &amp;MadeUpEntity; stays literal</p>\n<p>see <a href=\"/multi-url\" title=\"multi\nline title\">multi</a> resolves</p>\n<pre><code class=\"language-python\">fenced with indent\nkeep\n</code></pre>\n<p>ref with entity dest: <a href=\"/f%C3%B6%C3%B6\" title=\"tïtle\">ent</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"copy © and star *foo* and hex 'quote'\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"unknown &MadeUpEntity; stays literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"see multi resolves\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"/multi-url\",\"start\":4,\"title\":\"multi\\nline title\",\"type\":\"link\"}]}},{\"type\":\"code_block\",\"text\":\"fenced with indent\\nkeep\",\"data\":{\"language\":\"python\"}},{\"type\":\"paragraph\",\"text\":\"ref with entity dest: ent\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/föö\",\"start\":22,\"title\":\"tïtle\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "19-entities-defs.md/document/clipboard",
+      "output": "<p>copy © and star *foo* and hex 'quote'</p><p>unknown &amp;MadeUpEntity; stays literal</p><p>see <a href=\"/multi-url\">multi</a> resolves</p><pre><code class=\"language-python\">fenced with indent\nkeep</code></pre><p>ref with entity dest: <a href=\"/föö\">ent</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"copy © and star *foo* and hex 'quote'\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"unknown &MadeUpEntity; stays literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"see multi resolves\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"/multi-url\",\"start\":4,\"title\":\"multi\\nline title\",\"type\":\"link\"}]}},{\"type\":\"code_block\",\"text\":\"fenced with indent\\nkeep\",\"data\":{\"language\":\"python\"}},{\"type\":\"paragraph\",\"text\":\"ref with entity dest: ent\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/föö\",\"start\":22,\"title\":\"tïtle\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "19-entities-defs.md/fragment/export",
+      "output": "<p>copy © and star *foo* and hex 'quote'</p>\n<p>unknown &amp;MadeUpEntity; stays literal</p>\n<p>see <a href=\"/multi-url\" title=\"multi\nline title\">multi</a> resolves</p>\n<pre><code class=\"language-python\">fenced with indent\nkeep\n</code></pre>\n<p>ref with entity dest: <a href=\"/f%C3%B6%C3%B6\" title=\"tïtle\">ent</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"copy © and star *foo* and hex 'quote'\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"unknown &MadeUpEntity; stays literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"see multi resolves\",\"data\":{\"marks\":[{\"end\":9,\"href\":\"/multi-url\",\"start\":4,\"title\":\"multi\\nline title\",\"type\":\"link\"}]}},{\"type\":\"code_block\",\"text\":\"fenced with indent\\nkeep\",\"data\":{\"language\":\"python\"}},{\"type\":\"paragraph\",\"text\":\"ref with entity dest: ent\",\"data\":{\"marks\":[{\"end\":25,\"href\":\"/föö\",\"start\":22,\"title\":\"tïtle\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "19-entities-defs.md/fragment/clipboard",
+      "output": "<p>copy © and star *foo* and hex 'quote'</p><p>unknown &amp;MadeUpEntity; stays literal</p><p>see <a href=\"/multi-url\">multi</a> resolves</p><pre><code class=\"language-python\">fenced with indent\nkeep</code></pre><p>ref with entity dest: <a href=\"/föö\">ent</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"plain item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"fenced inside item\",\"data\":{\"language\":\"py\",\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item then code\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"indented code child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item with quote\",\"data\":{}},{\"type\":\"quote\",\"text\":\"quoted in item\\nstill quoted\",\"data\":{\"li\":0}},{\"type\":\"numbered_list\",\"text\":\"fence first\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"code\",\"data\":{\"li\":0}},{\"type\":\"paragraph\",\"text\":\"paragraph after child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item owning a div\\n\\n<div>\\nat the content column, so it stays INSIDE the item\\n</div>\",\"data\":{\"loose\":true,\"marks\":[{\"end\":24,\"start\":19,\"type\":\"html\"},{\"end\":82,\"start\":76,\"type\":\"html\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "20-item-containers.md/document/export",
+      "output": "<ul>\n<li>\n<p>plain item</p>\n</li>\n<li>\n<pre><code class=\"language-py\">fenced inside item\n</code></pre>\n</li>\n<li>\n<p>item then code</p>\n<pre><code>indented code child\n</code></pre>\n</li>\n<li>\n<hr />\n</li>\n<li>\n<p>item with quote</p>\n<blockquote>\n<p>quoted in item\nstill quoted</p>\n</blockquote>\n</li>\n</ul>\n<ol>\n<li>\n<p>fence first</p>\n<pre><code>code\n</code></pre>\n<p>paragraph after child</p>\n</li>\n</ol>\n<ul>\n<li>\n<p>item owning a div</p>\n<p><div>\nat the content column, so it stays INSIDE the item\n</div></p>\n</li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"plain item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"fenced inside item\",\"data\":{\"language\":\"py\",\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item then code\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"indented code child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item with quote\",\"data\":{}},{\"type\":\"quote\",\"text\":\"quoted in item\\nstill quoted\",\"data\":{\"li\":0}},{\"type\":\"numbered_list\",\"text\":\"fence first\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"code\",\"data\":{\"li\":0}},{\"type\":\"paragraph\",\"text\":\"paragraph after child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item owning a div\\n\\n<div>\\nat the content column, so it stays INSIDE the item\\n</div>\",\"data\":{\"loose\":true,\"marks\":[{\"end\":24,\"start\":19,\"type\":\"html\"},{\"end\":82,\"start\":76,\"type\":\"html\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "20-item-containers.md/document/clipboard",
+      "output": "<ul><li>plain item</li><li></li></ul><pre><code class=\"language-py\">fenced inside item</code></pre><ul><li>item then code</li></ul><pre><code>indented code child</code></pre><ul><li></li></ul><hr><ul><li>item with quote</li></ul><blockquote><p>quoted in item\nstill quoted</p></blockquote><ol><li>fence first</li></ol><pre><code>code</code></pre><p>paragraph after child</p><ul><li>item owning a div\n\n&lt;div&gt;\nat the content column, so it stays INSIDE the item\n&lt;/div&gt;</li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"plain item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"fenced inside item\",\"data\":{\"language\":\"py\",\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item then code\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"indented code child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item with quote\",\"data\":{}},{\"type\":\"quote\",\"text\":\"quoted in item\\nstill quoted\",\"data\":{\"li\":0}},{\"type\":\"numbered_list\",\"text\":\"fence first\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"code\",\"data\":{\"li\":0}},{\"type\":\"paragraph\",\"text\":\"paragraph after child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item owning a div\\n\\n<div>\\nat the content column, so it stays INSIDE the item\\n</div>\",\"data\":{\"loose\":true,\"marks\":[{\"end\":24,\"start\":19,\"type\":\"html\"},{\"end\":82,\"start\":76,\"type\":\"html\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "20-item-containers.md/fragment/export",
+      "output": "<ul>\n<li>\n<p>plain item</p>\n</li>\n<li>\n<pre><code class=\"language-py\">fenced inside item\n</code></pre>\n</li>\n<li>\n<p>item then code</p>\n<pre><code>indented code child\n</code></pre>\n</li>\n<li>\n<hr />\n</li>\n<li>\n<p>item with quote</p>\n<blockquote>\n<p>quoted in item\nstill quoted</p>\n</blockquote>\n</li>\n</ul>\n<ol>\n<li>\n<p>fence first</p>\n<pre><code>code\n</code></pre>\n<p>paragraph after child</p>\n</li>\n</ol>\n<ul>\n<li>\n<p>item owning a div</p>\n<p><div>\nat the content column, so it stays INSIDE the item\n</div></p>\n</li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"plain item\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"fenced inside item\",\"data\":{\"language\":\"py\",\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item then code\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"indented code child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"\",\"data\":{}},{\"type\":\"divider\",\"text\":\"\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item with quote\",\"data\":{}},{\"type\":\"quote\",\"text\":\"quoted in item\\nstill quoted\",\"data\":{\"li\":0}},{\"type\":\"numbered_list\",\"text\":\"fence first\",\"data\":{\"loose\":true}},{\"type\":\"code_block\",\"text\":\"code\",\"data\":{\"li\":0}},{\"type\":\"paragraph\",\"text\":\"paragraph after child\",\"data\":{\"li\":0}},{\"type\":\"bulleted_list\",\"text\":\"item owning a div\\n\\n<div>\\nat the content column, so it stays INSIDE the item\\n</div>\",\"data\":{\"loose\":true,\"marks\":[{\"end\":24,\"start\":19,\"type\":\"html\"},{\"end\":82,\"start\":76,\"type\":\"html\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "20-item-containers.md/fragment/clipboard",
+      "output": "<ul><li>plain item</li><li></li></ul><pre><code class=\"language-py\">fenced inside item</code></pre><ul><li>item then code</li></ul><pre><code>indented code child</code></pre><ul><li></li></ul><hr><ul><li>item with quote</li></ul><blockquote><p>quoted in item\nstill quoted</p></blockquote><ol><li>fence first</li></ol><pre><code>code</code></pre><p>paragraph after child</p><ul><li>item owning a div\n\n&lt;div&gt;\nat the content column, so it stays INSIDE the item\n&lt;/div&gt;</li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"<table>\\n  <tr><td>cell</td></tr>\\n</table>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"para with <b class=\\\"x\\\">inline tag</b> and <br/> mid-text\",\"data\":{\"marks\":[{\"end\":23,\"start\":10,\"type\":\"html\"},{\"end\":37,\"start\":33,\"type\":\"html\"},{\"end\":47,\"start\":42,\"type\":\"html\"}]}},{\"type\":\"code_block\",\"text\":\"<!-- a comment\\nspanning lines -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nbadge wall\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"standalone <custom-tag attr=plain> alone\",\"data\":{\"marks\":[{\"end\":34,\"start\":11,\"type\":\"html\"}]}},{\"type\":\"paragraph\",\"text\":\"literal < stays text and <no closer stays too\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "21-html.md/document/export",
+      "output": "<table>\n  <tr><td>cell</td></tr>\n</table>\n<p>para with <b class=\"x\">inline tag</b> and <br/> mid-text</p>\n<!-- a comment\nspanning lines -->\n<div align=\"center\">\nbadge wall\n</div>\n<p>standalone <custom-tag attr=plain> alone</p>\n<p>literal &lt; stays text and &lt;no closer stays too</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"<table>\\n  <tr><td>cell</td></tr>\\n</table>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"para with <b class=\\\"x\\\">inline tag</b> and <br/> mid-text\",\"data\":{\"marks\":[{\"end\":23,\"start\":10,\"type\":\"html\"},{\"end\":37,\"start\":33,\"type\":\"html\"},{\"end\":47,\"start\":42,\"type\":\"html\"}]}},{\"type\":\"code_block\",\"text\":\"<!-- a comment\\nspanning lines -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nbadge wall\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"standalone <custom-tag attr=plain> alone\",\"data\":{\"marks\":[{\"end\":34,\"start\":11,\"type\":\"html\"}]}},{\"type\":\"paragraph\",\"text\":\"literal < stays text and <no closer stays too\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "21-html.md/document/clipboard",
+      "output": "<pre><code class=\"language-html\">&lt;table&gt;\n  &lt;tr&gt;&lt;td&gt;cell&lt;/td&gt;&lt;/tr&gt;\n&lt;/table&gt;</code></pre><p>para with &lt;b class=\"x\"&gt;inline tag&lt;/b&gt; and &lt;br/&gt; mid-text</p><pre><code class=\"language-html\">&lt;!-- a comment\nspanning lines --&gt;</code></pre><pre><code class=\"language-html\">&lt;div align=\"center\"&gt;\nbadge wall\n&lt;/div&gt;</code></pre><p>standalone &lt;custom-tag attr=plain&gt; alone</p><p>literal &lt; stays text and &lt;no closer stays too</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"<table>\\n  <tr><td>cell</td></tr>\\n</table>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"para with <b class=\\\"x\\\">inline tag</b> and <br/> mid-text\",\"data\":{\"marks\":[{\"end\":23,\"start\":10,\"type\":\"html\"},{\"end\":37,\"start\":33,\"type\":\"html\"},{\"end\":47,\"start\":42,\"type\":\"html\"}]}},{\"type\":\"code_block\",\"text\":\"<!-- a comment\\nspanning lines -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nbadge wall\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"standalone <custom-tag attr=plain> alone\",\"data\":{\"marks\":[{\"end\":34,\"start\":11,\"type\":\"html\"}]}},{\"type\":\"paragraph\",\"text\":\"literal < stays text and <no closer stays too\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "21-html.md/fragment/export",
+      "output": "<table>\n  <tr><td>cell</td></tr>\n</table>\n<p>para with <b class=\"x\">inline tag</b> and <br/> mid-text</p>\n<!-- a comment\nspanning lines -->\n<div align=\"center\">\nbadge wall\n</div>\n<p>standalone <custom-tag attr=plain> alone</p>\n<p>literal &lt; stays text and &lt;no closer stays too</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"<table>\\n  <tr><td>cell</td></tr>\\n</table>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"para with <b class=\\\"x\\\">inline tag</b> and <br/> mid-text\",\"data\":{\"marks\":[{\"end\":23,\"start\":10,\"type\":\"html\"},{\"end\":37,\"start\":33,\"type\":\"html\"},{\"end\":47,\"start\":42,\"type\":\"html\"}]}},{\"type\":\"code_block\",\"text\":\"<!-- a comment\\nspanning lines -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nbadge wall\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"paragraph\",\"text\":\"standalone <custom-tag attr=plain> alone\",\"data\":{\"marks\":[{\"end\":34,\"start\":11,\"type\":\"html\"}]}},{\"type\":\"paragraph\",\"text\":\"literal < stays text and <no closer stays too\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "21-html.md/fragment/clipboard",
+      "output": "<pre><code class=\"language-html\">&lt;table&gt;\n  &lt;tr&gt;&lt;td&gt;cell&lt;/td&gt;&lt;/tr&gt;\n&lt;/table&gt;</code></pre><p>para with &lt;b class=\"x\"&gt;inline tag&lt;/b&gt; and &lt;br/&gt; mid-text</p><pre><code class=\"language-html\">&lt;!-- a comment\nspanning lines --&gt;</code></pre><pre><code class=\"language-html\">&lt;div align=\"center\"&gt;\nbadge wall\n&lt;/div&gt;</code></pre><p>standalone &lt;custom-tag attr=plain&gt; alone</p><p>literal &lt; stays text and &lt;no closer stays too</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"visit www.example.com or https://mica.dev/page?a=(1) now\\nmail dev@mica.dev please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"http://www.example.com\",\"start\":6,\"type\":\"link\"},{\"end\":52,\"href\":\"https://mica.dev/page?a=(1)\",\"start\":25,\"type\":\"link\"},{\"end\":74,\"href\":\"mailto:dev@mica.dev\",\"start\":62,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"one tilde and two tildes strike\",\"data\":{\"marks\":[{\"end\":9,\"start\":0,\"type\":\"strike\"},{\"end\":24,\"start\":14,\"type\":\"strike\"}]}},{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"aligns\":[\"left\",\"center\",\"right\"],\"header\":true,\"rows\":[[\"name\",\"qty\",\"price\"],[\"tea\",\"2\",\"1.50\"]],\"widths\":[1.0,1.0,1.0]}},{\"type\":\"todo\",\"text\":\"parent task\",\"data\":{\"checked\":true}},{\"type\":\"todo\",\"text\":\"two-space subtask\",\"data\":{\"checked\":false,\"indent\":1}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "22-gfm.md/document/export",
+      "output": "<p>visit <a href=\"http://www.example.com\">www.example.com</a> or <a href=\"https://mica.dev/page?a=(1)\">https://mica.dev/page?a=(1)</a> now\nmail <a href=\"mailto:dev@mica.dev\">dev@mica.dev</a> please</p>\n<p><del>one tilde</del> and <del>two tildes</del> strike</p>\n<table>\n<thead>\n<tr>\n<th align=\"left\">name</th>\n<th align=\"center\">qty</th>\n<th align=\"right\">price</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td align=\"left\">tea</td>\n<td align=\"center\">2</td>\n<td align=\"right\">1.50</td>\n</tr>\n</tbody>\n</table>\n<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> parent task\n<ul>\n<li><input disabled=\"\" type=\"checkbox\"> two-space subtask</li>\n</ul>\n</li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"visit www.example.com or https://mica.dev/page?a=(1) now\\nmail dev@mica.dev please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"http://www.example.com\",\"start\":6,\"type\":\"link\"},{\"end\":52,\"href\":\"https://mica.dev/page?a=(1)\",\"start\":25,\"type\":\"link\"},{\"end\":74,\"href\":\"mailto:dev@mica.dev\",\"start\":62,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"one tilde and two tildes strike\",\"data\":{\"marks\":[{\"end\":9,\"start\":0,\"type\":\"strike\"},{\"end\":24,\"start\":14,\"type\":\"strike\"}]}},{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"aligns\":[\"left\",\"center\",\"right\"],\"header\":true,\"rows\":[[\"name\",\"qty\",\"price\"],[\"tea\",\"2\",\"1.50\"]],\"widths\":[1.0,1.0,1.0]}},{\"type\":\"todo\",\"text\":\"parent task\",\"data\":{\"checked\":true}},{\"type\":\"todo\",\"text\":\"two-space subtask\",\"data\":{\"checked\":false,\"indent\":1}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "22-gfm.md/document/clipboard",
+      "output": "<p>visit <a href=\"http://www.example.com\">www.example.com</a> or <a href=\"https://mica.dev/page?a=(1)\">https://mica.dev/page?a=(1)</a> now\nmail <a href=\"mailto:dev@mica.dev\">dev@mica.dev</a> please</p><p><s>one tilde</s> and <s>two tildes</s> strike</p><table><tr><th>name</th><th>qty</th><th>price</th></tr><tr><td>tea</td><td>2</td><td>1.50</td></tr></table><ul><li><input type=\"checkbox\" checked disabled> parent task<ul><li><input type=\"checkbox\" disabled> two-space subtask</li></ul></li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"visit www.example.com or https://mica.dev/page?a=(1) now\\nmail dev@mica.dev please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"http://www.example.com\",\"start\":6,\"type\":\"link\"},{\"end\":52,\"href\":\"https://mica.dev/page?a=(1)\",\"start\":25,\"type\":\"link\"},{\"end\":74,\"href\":\"mailto:dev@mica.dev\",\"start\":62,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"one tilde and two tildes strike\",\"data\":{\"marks\":[{\"end\":9,\"start\":0,\"type\":\"strike\"},{\"end\":24,\"start\":14,\"type\":\"strike\"}]}},{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"aligns\":[\"left\",\"center\",\"right\"],\"header\":true,\"rows\":[[\"name\",\"qty\",\"price\"],[\"tea\",\"2\",\"1.50\"]],\"widths\":[1.0,1.0,1.0]}},{\"type\":\"todo\",\"text\":\"parent task\",\"data\":{\"checked\":true}},{\"type\":\"todo\",\"text\":\"two-space subtask\",\"data\":{\"checked\":false,\"indent\":1}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "22-gfm.md/fragment/export",
+      "output": "<p>visit <a href=\"http://www.example.com\">www.example.com</a> or <a href=\"https://mica.dev/page?a=(1)\">https://mica.dev/page?a=(1)</a> now\nmail <a href=\"mailto:dev@mica.dev\">dev@mica.dev</a> please</p>\n<p><del>one tilde</del> and <del>two tildes</del> strike</p>\n<table>\n<thead>\n<tr>\n<th align=\"left\">name</th>\n<th align=\"center\">qty</th>\n<th align=\"right\">price</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td align=\"left\">tea</td>\n<td align=\"center\">2</td>\n<td align=\"right\">1.50</td>\n</tr>\n</tbody>\n</table>\n<ul>\n<li><input checked=\"\" disabled=\"\" type=\"checkbox\"> parent task\n<ul>\n<li><input disabled=\"\" type=\"checkbox\"> two-space subtask</li>\n</ul>\n</li>\n</ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"visit www.example.com or https://mica.dev/page?a=(1) now\\nmail dev@mica.dev please\",\"data\":{\"marks\":[{\"end\":21,\"href\":\"http://www.example.com\",\"start\":6,\"type\":\"link\"},{\"end\":52,\"href\":\"https://mica.dev/page?a=(1)\",\"start\":25,\"type\":\"link\"},{\"end\":74,\"href\":\"mailto:dev@mica.dev\",\"start\":62,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"one tilde and two tildes strike\",\"data\":{\"marks\":[{\"end\":9,\"start\":0,\"type\":\"strike\"},{\"end\":24,\"start\":14,\"type\":\"strike\"}]}},{\"type\":\"table\",\"text\":\"\",\"data\":{\"align\":\"left\",\"aligns\":[\"left\",\"center\",\"right\"],\"header\":true,\"rows\":[[\"name\",\"qty\",\"price\"],[\"tea\",\"2\",\"1.50\"]],\"widths\":[1.0,1.0,1.0]}},{\"type\":\"todo\",\"text\":\"parent task\",\"data\":{\"checked\":true}},{\"type\":\"todo\",\"text\":\"two-space subtask\",\"data\":{\"checked\":false,\"indent\":1}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "22-gfm.md/fragment/clipboard",
+      "output": "<p>visit <a href=\"http://www.example.com\">www.example.com</a> or <a href=\"https://mica.dev/page?a=(1)\">https://mica.dev/page?a=(1)</a> now\nmail <a href=\"mailto:dev@mica.dev\">dev@mica.dev</a> please</p><p><s>one tilde</s> and <s>two tildes</s> strike</p><table><tr><th>name</th><th>qty</th><th>price</th></tr><tr><td>tea</td><td>2</td><td>1.50</td></tr></table><ul><li><input type=\"checkbox\" checked disabled> parent task<ul><li><input type=\"checkbox\" disabled> two-space subtask</li></ul></li></ul>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline math E = mc^2 in text\",\"data\":{\"marks\":[{\"end\":20,\"start\":12,\"type\":\"math\"}]}},{\"type\":\"paragraph\",\"text\":\"dollar prices $5 and $10 stay literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"latex form a^2 + b^2 normalizes\",\"data\":{\"marks\":[{\"end\":20,\"start\":11,\"type\":\"math\"}]}},{\"type\":\"math_block\",\"text\":\"\\\\int_0^\\\\infty e^{-x^2} dx = \\\\frac{\\\\sqrt{\\\\pi}}{2}\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"x^2 - 1\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"\\\\sum_{i=1}^n i\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "23-math.md/document/export",
+      "output": "<p>inline math <span class=\"math\">E = mc^2</span> in text</p>\n<p>dollar prices $5 and $10 stay literal</p>\n<p>latex form <span class=\"math\">a^2 + b^2</span> normalizes</p>\n<div class=\"math\">\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}</div>\n<div class=\"math\">x^2 - 1</div>\n<div class=\"math\">\\sum_{i=1}^n i</div>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline math E = mc^2 in text\",\"data\":{\"marks\":[{\"end\":20,\"start\":12,\"type\":\"math\"}]}},{\"type\":\"paragraph\",\"text\":\"dollar prices $5 and $10 stay literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"latex form a^2 + b^2 normalizes\",\"data\":{\"marks\":[{\"end\":20,\"start\":11,\"type\":\"math\"}]}},{\"type\":\"math_block\",\"text\":\"\\\\int_0^\\\\infty e^{-x^2} dx = \\\\frac{\\\\sqrt{\\\\pi}}{2}\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"x^2 - 1\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"\\\\sum_{i=1}^n i\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "23-math.md/document/clipboard",
+      "output": "<p>inline math <span data-mica-math=\"1\">$E = mc^2$</span> in text</p><p>dollar prices $5 and $10 stay literal</p><p>latex form <span data-mica-math=\"1\">$a^2 + b^2$</span> normalizes</p><p><span data-mica-math=\"1\">$$\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$$</span></p><p><span data-mica-math=\"1\">$$x^2 - 1$$</span></p><p><span data-mica-math=\"1\">$$\\sum_{i=1}^n i$$</span></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline math E = mc^2 in text\",\"data\":{\"marks\":[{\"end\":20,\"start\":12,\"type\":\"math\"}]}},{\"type\":\"paragraph\",\"text\":\"dollar prices $5 and $10 stay literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"latex form a^2 + b^2 normalizes\",\"data\":{\"marks\":[{\"end\":20,\"start\":11,\"type\":\"math\"}]}},{\"type\":\"math_block\",\"text\":\"\\\\int_0^\\\\infty e^{-x^2} dx = \\\\frac{\\\\sqrt{\\\\pi}}{2}\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"x^2 - 1\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"\\\\sum_{i=1}^n i\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "23-math.md/fragment/export",
+      "output": "<p>inline math <span class=\"math\">E = mc^2</span> in text</p>\n<p>dollar prices $5 and $10 stay literal</p>\n<p>latex form <span class=\"math\">a^2 + b^2</span> normalizes</p>\n<div class=\"math\">\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}</div>\n<div class=\"math\">x^2 - 1</div>\n<div class=\"math\">\\sum_{i=1}^n i</div>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"inline math E = mc^2 in text\",\"data\":{\"marks\":[{\"end\":20,\"start\":12,\"type\":\"math\"}]}},{\"type\":\"paragraph\",\"text\":\"dollar prices $5 and $10 stay literal\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"latex form a^2 + b^2 normalizes\",\"data\":{\"marks\":[{\"end\":20,\"start\":11,\"type\":\"math\"}]}},{\"type\":\"math_block\",\"text\":\"\\\\int_0^\\\\infty e^{-x^2} dx = \\\\frac{\\\\sqrt{\\\\pi}}{2}\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"x^2 - 1\",\"data\":{}},{\"type\":\"math_block\",\"text\":\"\\\\sum_{i=1}^n i\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "23-math.md/fragment/clipboard",
+      "output": "<p>inline math <span data-mica-math=\"1\">$E = mc^2$</span> in text</p><p>dollar prices $5 and $10 stay literal</p><p>latex form <span data-mica-math=\"1\">$a^2 + b^2$</span> normalizes</p><p><span data-mica-math=\"1\">$$\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$$</span></p><p><span data-mica-math=\"1\">$$x^2 - 1$$</span></p><p><span data-mica-math=\"1\">$$\\sum_{i=1}^n i$$</span></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"Useful information that users should know.\",\"data\":{\"alert\":\"note\"}},{\"type\":\"quote\",\"text\":\"Helpful advice with bold, italic and code.\",\"data\":{\"alert\":\"tip\",\"marks\":[{\"end\":24,\"start\":20,\"type\":\"bold\"},{\"end\":32,\"start\":26,\"type\":\"italic\"},{\"end\":41,\"start\":37,\"type\":\"code\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Key information users need, with a link.\",\"data\":{\"alert\":\"important\",\"marks\":[{\"end\":39,\"href\":\"/docs\",\"start\":35,\"type\":\"link\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Urgent info that needs immediate attention.\",\"data\":{\"alert\":\"warning\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Advises about risks or negative outcomes.\",\"data\":{\"alert\":\"caution\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"A callout with a nested list:\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"first point\",\"data\":{\"quote\":1}},{\"type\":\"bulleted_list\",\"text\":\"second point\",\"data\":{\"quote\":1}},{\"type\":\"quote\",\"text\":\"A callout, then a normal quote below.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Just a plain blockquote, not a callout.\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Lowercase type is still a callout.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "24-callouts.md/document/export",
+      "output": "<blockquote class=\"markdown-alert markdown-alert-note\">\n<p class=\"markdown-alert-title\">Note</p>\n<p>Useful information that users should know.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-tip\">\n<p class=\"markdown-alert-title\">Tip</p>\n<p>Helpful advice with <strong>bold</strong>, <em>italic</em> and <code>code</code>.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-important\">\n<p class=\"markdown-alert-title\">Important</p>\n<p>Key information users need, with a <a href=\"/docs\">link</a>.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-warning\">\n<p class=\"markdown-alert-title\">Warning</p>\n<p>Urgent info that needs immediate attention.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-caution\">\n<p class=\"markdown-alert-title\">Caution</p>\n<p>Advises about risks or negative outcomes.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-note\">\n<p class=\"markdown-alert-title\">Note</p>\n<p>A callout with a nested list:</p>\n<ul>\n<li>first point</li>\n<li>second point</li>\n</ul>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-note\">\n<p class=\"markdown-alert-title\">Note</p>\n<p>A callout, then a normal quote below.</p>\n</blockquote>\n<blockquote>\n<p>Just a plain blockquote, not a callout.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-note\">\n<p class=\"markdown-alert-title\">Note</p>\n<p>Lowercase type is still a callout.</p>\n</blockquote>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"Useful information that users should know.\",\"data\":{\"alert\":\"note\"}},{\"type\":\"quote\",\"text\":\"Helpful advice with bold, italic and code.\",\"data\":{\"alert\":\"tip\",\"marks\":[{\"end\":24,\"start\":20,\"type\":\"bold\"},{\"end\":32,\"start\":26,\"type\":\"italic\"},{\"end\":41,\"start\":37,\"type\":\"code\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Key information users need, with a link.\",\"data\":{\"alert\":\"important\",\"marks\":[{\"end\":39,\"href\":\"/docs\",\"start\":35,\"type\":\"link\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Urgent info that needs immediate attention.\",\"data\":{\"alert\":\"warning\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Advises about risks or negative outcomes.\",\"data\":{\"alert\":\"caution\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"A callout with a nested list:\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"first point\",\"data\":{\"quote\":1}},{\"type\":\"bulleted_list\",\"text\":\"second point\",\"data\":{\"quote\":1}},{\"type\":\"quote\",\"text\":\"A callout, then a normal quote below.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Just a plain blockquote, not a callout.\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Lowercase type is still a callout.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "24-callouts.md/document/clipboard",
+      "output": "<blockquote><p>Useful information that users should know.</p></blockquote><blockquote><p>Helpful advice with <strong>bold</strong>, <em>italic</em> and <code>code</code>.</p></blockquote><blockquote><p>Key information users need, with a <a href=\"/docs\">link</a>.</p></blockquote><blockquote><p>Urgent info that needs immediate attention.</p></blockquote><blockquote><p>Advises about risks or negative outcomes.</p></blockquote><blockquote><p>A callout with a nested list:</p><ul><li>first point</li><li>second point</li></ul></blockquote><blockquote><p>A callout, then a normal quote below.</p></blockquote><blockquote><p>Just a plain blockquote, not a callout.</p></blockquote><blockquote><p>Lowercase type is still a callout.</p></blockquote>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"Useful information that users should know.\",\"data\":{\"alert\":\"note\"}},{\"type\":\"quote\",\"text\":\"Helpful advice with bold, italic and code.\",\"data\":{\"alert\":\"tip\",\"marks\":[{\"end\":24,\"start\":20,\"type\":\"bold\"},{\"end\":32,\"start\":26,\"type\":\"italic\"},{\"end\":41,\"start\":37,\"type\":\"code\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Key information users need, with a link.\",\"data\":{\"alert\":\"important\",\"marks\":[{\"end\":39,\"href\":\"/docs\",\"start\":35,\"type\":\"link\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Urgent info that needs immediate attention.\",\"data\":{\"alert\":\"warning\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Advises about risks or negative outcomes.\",\"data\":{\"alert\":\"caution\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"A callout with a nested list:\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"first point\",\"data\":{\"quote\":1}},{\"type\":\"bulleted_list\",\"text\":\"second point\",\"data\":{\"quote\":1}},{\"type\":\"quote\",\"text\":\"A callout, then a normal quote below.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Just a plain blockquote, not a callout.\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Lowercase type is still a callout.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "24-callouts.md/fragment/export",
+      "output": "<blockquote class=\"markdown-alert markdown-alert-note\">\n<p class=\"markdown-alert-title\">Note</p>\n<p>Useful information that users should know.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-tip\">\n<p class=\"markdown-alert-title\">Tip</p>\n<p>Helpful advice with <strong>bold</strong>, <em>italic</em> and <code>code</code>.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-important\">\n<p class=\"markdown-alert-title\">Important</p>\n<p>Key information users need, with a <a href=\"/docs\">link</a>.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-warning\">\n<p class=\"markdown-alert-title\">Warning</p>\n<p>Urgent info that needs immediate attention.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-caution\">\n<p class=\"markdown-alert-title\">Caution</p>\n<p>Advises about risks or negative outcomes.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-note\">\n<p class=\"markdown-alert-title\">Note</p>\n<p>A callout with a nested list:</p>\n<ul>\n<li>first point</li>\n<li>second point</li>\n</ul>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-note\">\n<p class=\"markdown-alert-title\">Note</p>\n<p>A callout, then a normal quote below.</p>\n</blockquote>\n<blockquote>\n<p>Just a plain blockquote, not a callout.</p>\n</blockquote>\n<blockquote class=\"markdown-alert markdown-alert-note\">\n<p class=\"markdown-alert-title\">Note</p>\n<p>Lowercase type is still a callout.</p>\n</blockquote>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"quote\",\"text\":\"Useful information that users should know.\",\"data\":{\"alert\":\"note\"}},{\"type\":\"quote\",\"text\":\"Helpful advice with bold, italic and code.\",\"data\":{\"alert\":\"tip\",\"marks\":[{\"end\":24,\"start\":20,\"type\":\"bold\"},{\"end\":32,\"start\":26,\"type\":\"italic\"},{\"end\":41,\"start\":37,\"type\":\"code\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Key information users need, with a link.\",\"data\":{\"alert\":\"important\",\"marks\":[{\"end\":39,\"href\":\"/docs\",\"start\":35,\"type\":\"link\"}],\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Urgent info that needs immediate attention.\",\"data\":{\"alert\":\"warning\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Advises about risks or negative outcomes.\",\"data\":{\"alert\":\"caution\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"A callout with a nested list:\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"bulleted_list\",\"text\":\"first point\",\"data\":{\"quote\":1}},{\"type\":\"bulleted_list\",\"text\":\"second point\",\"data\":{\"quote\":1}},{\"type\":\"quote\",\"text\":\"A callout, then a normal quote below.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Just a plain blockquote, not a callout.\",\"data\":{\"qbreak\":true}},{\"type\":\"quote\",\"text\":\"Lowercase type is still a callout.\",\"data\":{\"alert\":\"note\",\"qbreak\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "24-callouts.md/fragment/clipboard",
+      "output": "<blockquote><p>Useful information that users should know.</p></blockquote><blockquote><p>Helpful advice with <strong>bold</strong>, <em>italic</em> and <code>code</code>.</p></blockquote><blockquote><p>Key information users need, with a <a href=\"/docs\">link</a>.</p></blockquote><blockquote><p>Urgent info that needs immediate attention.</p></blockquote><blockquote><p>Advises about risks or negative outcomes.</p></blockquote><blockquote><p>A callout with a nested list:</p><ul><li>first point</li><li>second point</li></ul></blockquote><blockquote><p>A callout, then a normal quote below.</p></blockquote><blockquote><p>Just a plain blockquote, not a callout.</p></blockquote><blockquote><p>Lowercase type is still a callout.</p></blockquote>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"[foo bar](/baz)\",\"data\":{\"marks\":[{\"end\":8,\"href\":\"/uri\",\"start\":5,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "30-nested-link.md/document/export",
+      "output": "<p>[foo <a href=\"/uri\">bar</a>](/baz)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"[foo bar](/baz)\",\"data\":{\"marks\":[{\"end\":8,\"href\":\"/uri\",\"start\":5,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "30-nested-link.md/document/clipboard",
+      "output": "<p>[foo <a href=\"/uri\">bar</a>](/baz)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"[foo bar](/baz)\",\"data\":{\"marks\":[{\"end\":8,\"href\":\"/uri\",\"start\":5,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "30-nested-link.md/fragment/export",
+      "output": "<p>[foo <a href=\"/uri\">bar</a>](/baz)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"[foo bar](/baz)\",\"data\":{\"marks\":[{\"end\":8,\"href\":\"/uri\",\"start\":5,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "30-nested-link.md/fragment/clipboard",
+      "output": "<p>[foo <a href=\"/uri\">bar</a>](/baz)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"\",\"data\":{\"language\":\"a~~\"}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "33-tilde-fallback.md/document/export",
+      "output": "<pre><code class=\"language-a~~\"></code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"\",\"data\":{\"language\":\"a~~\"}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "33-tilde-fallback.md/document/clipboard",
+      "output": ""
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"\",\"data\":{\"language\":\"a~~\"}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "33-tilde-fallback.md/fragment/export",
+      "output": "<pre><code class=\"language-a~~\"></code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"code_block\",\"text\":\"\",\"data\":{\"language\":\"a~~\"}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "33-tilde-fallback.md/fragment/clipboard",
+      "output": ""
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/u\",\"start\":0,\"title\":\"C:\\\\name\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "34-link-title-escape.md/document/export",
+      "output": "<p><a href=\"/u\" title=\"C:\\name\">a</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/u\",\"start\":0,\"title\":\"C:\\\\name\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "34-link-title-escape.md/document/clipboard",
+      "output": "<p><a href=\"/u\">a</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/u\",\"start\":0,\"title\":\"C:\\\\name\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "34-link-title-escape.md/fragment/export",
+      "output": "<p><a href=\"/u\" title=\"C:\\name\">a</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/u\",\"start\":0,\"title\":\"C:\\\\name\",\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "34-link-title-escape.md/fragment/clipboard",
+      "output": "<p><a href=\"/u\">a</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"ß\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/url\",\"start\":0,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "35-ref-case-fold.md/document/export",
+      "output": "<p><a href=\"/url\">ß</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"ß\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/url\",\"start\":0,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "35-ref-case-fold.md/document/clipboard",
+      "output": "<p><a href=\"/url\">ß</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"ß\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/url\",\"start\":0,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "35-ref-case-fold.md/fragment/export",
+      "output": "<p><a href=\"/url\">ß</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"ß\",\"data\":{\"marks\":[{\"end\":1,\"href\":\"/url\",\"start\":0,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "35-ref-case-fold.md/fragment/clipboard",
+      "output": "<p><a href=\"/url\">ß</a></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"text with a and b spans\",\"data\":{\"marks\":[{\"end\":11,\"start\":10,\"type\":\"code\"},{\"end\":17,\"start\":16,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "37-code-spans.md/document/export",
+      "output": "<p>text with <code>a</code> and <code>b</code> spans</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"text with a and b spans\",\"data\":{\"marks\":[{\"end\":11,\"start\":10,\"type\":\"code\"},{\"end\":17,\"start\":16,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "37-code-spans.md/document/clipboard",
+      "output": "<p>text with <code>a</code> and <code>b</code> spans</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"text with a and b spans\",\"data\":{\"marks\":[{\"end\":11,\"start\":10,\"type\":\"code\"},{\"end\":17,\"start\":16,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "37-code-spans.md/fragment/export",
+      "output": "<p>text with <code>a</code> and <code>b</code> spans</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"text with a and b spans\",\"data\":{\"marks\":[{\"end\":11,\"start\":10,\"type\":\"code\"},{\"end\":17,\"start\":16,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "37-code-spans.md/fragment/clipboard",
+      "output": "<p>text with <code>a</code> and <code>b</code> spans</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a code   span b\",\"data\":{\"marks\":[{\"end\":13,\"start\":2,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"x\\\\\\ny\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"t <span  \\nclass=\\\"k\\\">u\",\"data\":{\"marks\":[{\"end\":20,\"start\":2,\"type\":\"html\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "38-hardbreak-spans.md/document/export",
+      "output": "<p>a <code>code   span</code> b</p>\n<p>x<br />\ny</p>\n<p>t <span  \nclass=\"k\">u</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a code   span b\",\"data\":{\"marks\":[{\"end\":13,\"start\":2,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"x\\\\\\ny\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"t <span  \\nclass=\\\"k\\\">u\",\"data\":{\"marks\":[{\"end\":20,\"start\":2,\"type\":\"html\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "38-hardbreak-spans.md/document/clipboard",
+      "output": "<p>a <code>code   span</code> b</p><p>x\\\ny</p><p>t &lt;span  \nclass=\"k\"&gt;u</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a code   span b\",\"data\":{\"marks\":[{\"end\":13,\"start\":2,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"x\\\\\\ny\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"t <span  \\nclass=\\\"k\\\">u\",\"data\":{\"marks\":[{\"end\":20,\"start\":2,\"type\":\"html\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "38-hardbreak-spans.md/fragment/export",
+      "output": "<p>a <code>code   span</code> b</p>\n<p>x<br />\ny</p>\n<p>t <span  \nclass=\"k\">u</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a code   span b\",\"data\":{\"marks\":[{\"end\":13,\"start\":2,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"x\\\\\\ny\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"t <span  \\nclass=\\\"k\\\">u\",\"data\":{\"marks\":[{\"end\":20,\"start\":2,\"type\":\"html\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "38-hardbreak-spans.md/fragment/clipboard",
+      "output": "<p>a <code>code   span</code> b</p><p>x\\\ny</p><p>t &lt;span  \nclass=\"k\"&gt;u</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"code\"},{\"end\":1,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"a]b\",\"data\":{\"marks\":[{\"end\":3,\"start\":0,\"type\":\"code\"},{\"end\":3,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"[foo](/uri)\",\"data\":{\"marks\":[{\"end\":11,\"start\":4,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"[ahttps://e.com/xb](/y)\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"https://e.com/x\",\"start\":2,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "39-bracket-spans.md/document/export",
+      "output": "<p><a href=\"/x\"><code>a</code></a></p>\n<p><a href=\"/x\"><code>a]b</code></a></p>\n<p>[foo<code>](/uri)</code></p>\n<p>[a<a href=\"https://e.com/x\">https://e.com/x</a>b](/y)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"code\"},{\"end\":1,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"a]b\",\"data\":{\"marks\":[{\"end\":3,\"start\":0,\"type\":\"code\"},{\"end\":3,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"[foo](/uri)\",\"data\":{\"marks\":[{\"end\":11,\"start\":4,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"[ahttps://e.com/xb](/y)\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"https://e.com/x\",\"start\":2,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "39-bracket-spans.md/document/clipboard",
+      "output": "<p><a href=\"/x\"><code>a</code></a></p><p><a href=\"/x\"><code>a]b</code></a></p><p>[foo<code>](/uri)</code></p><p>[a<a href=\"https://e.com/x\">https://e.com/x</a>b](/y)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"code\"},{\"end\":1,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"a]b\",\"data\":{\"marks\":[{\"end\":3,\"start\":0,\"type\":\"code\"},{\"end\":3,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"[foo](/uri)\",\"data\":{\"marks\":[{\"end\":11,\"start\":4,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"[ahttps://e.com/xb](/y)\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"https://e.com/x\",\"start\":2,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "39-bracket-spans.md/fragment/export",
+      "output": "<p><a href=\"/x\"><code>a</code></a></p>\n<p><a href=\"/x\"><code>a]b</code></a></p>\n<p>[foo<code>](/uri)</code></p>\n<p>[a<a href=\"https://e.com/x\">https://e.com/x</a>b](/y)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"a\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"code\"},{\"end\":1,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"a]b\",\"data\":{\"marks\":[{\"end\":3,\"start\":0,\"type\":\"code\"},{\"end\":3,\"href\":\"/x\",\"start\":0,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"[foo](/uri)\",\"data\":{\"marks\":[{\"end\":11,\"start\":4,\"type\":\"code\"}]}},{\"type\":\"paragraph\",\"text\":\"[ahttps://e.com/xb](/y)\",\"data\":{\"marks\":[{\"end\":17,\"href\":\"https://e.com/x\",\"start\":2,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "39-bracket-spans.md/fragment/clipboard",
+      "output": "<p><a href=\"/x\"><code>a</code></a></p><p><a href=\"/x\"><code>a]b</code></a></p><p>[foo<code>](/uri)</code></p><p>[a<a href=\"https://e.com/x\">https://e.com/x</a>b](/y)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"strip \\t and a but keep    and  \",\"data\":{\"marks\":[{\"end\":7,\"start\":6,\"type\":\"code\"},{\"end\":13,\"start\":12,\"type\":\"code\"},{\"end\":25,\"start\":23,\"type\":\"code\"},{\"end\":31,\"start\":30,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "40-code-span-strip.md/document/export",
+      "output": "<p>strip <code>\t</code> and <code>a</code> but keep <code>  </code> and <code> </code></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"strip \\t and a but keep    and  \",\"data\":{\"marks\":[{\"end\":7,\"start\":6,\"type\":\"code\"},{\"end\":13,\"start\":12,\"type\":\"code\"},{\"end\":25,\"start\":23,\"type\":\"code\"},{\"end\":31,\"start\":30,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "40-code-span-strip.md/document/clipboard",
+      "output": "<p>strip <code>\t</code> and <code>a</code> but keep <code>  </code> and <code> </code></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"strip \\t and a but keep    and  \",\"data\":{\"marks\":[{\"end\":7,\"start\":6,\"type\":\"code\"},{\"end\":13,\"start\":12,\"type\":\"code\"},{\"end\":25,\"start\":23,\"type\":\"code\"},{\"end\":31,\"start\":30,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "40-code-span-strip.md/fragment/export",
+      "output": "<p>strip <code>\t</code> and <code>a</code> but keep <code>  </code> and <code> </code></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"strip \\t and a but keep    and  \",\"data\":{\"marks\":[{\"end\":7,\"start\":6,\"type\":\"code\"},{\"end\":13,\"start\":12,\"type\":\"code\"},{\"end\":25,\"start\":23,\"type\":\"code\"},{\"end\":31,\"start\":30,\"type\":\"code\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "40-code-span-strip.md/fragment/clipboard",
+      "output": "<p>strip <code>\t</code> and <code>a</code> but keep <code>  </code> and <code> </code></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"one\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"numbered_list\",\"text\":\"alpha\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"beta\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nafter an ordered list\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"foo\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bar\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<!-- -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"baz\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bim\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<details>\\n<summary>toggle</summary>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"inner\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"tight item\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div>no blank line between</div>\",\"data\":{\"language\":\"html\",\"raw\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "41-html-after-list.md/document/export",
+      "output": "<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n</details>\n<ol>\n<li>alpha</li>\n<li>beta</li>\n</ol>\n<div align=\"center\">\nafter an ordered list\n</div>\n<ul>\n<li>foo</li>\n<li>bar</li>\n</ul>\n<!-- -->\n<ul>\n<li>baz</li>\n<li>bim</li>\n</ul>\n<details>\n<summary>toggle</summary>\n<ul>\n<li>inner</li>\n</ul>\n</details>\n<ul>\n<li>tight item</li>\n</ul>\n<div>no blank line between</div>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"one\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"numbered_list\",\"text\":\"alpha\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"beta\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nafter an ordered list\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"foo\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bar\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<!-- -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"baz\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bim\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<details>\\n<summary>toggle</summary>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"inner\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"tight item\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div>no blank line between</div>\",\"data\":{\"language\":\"html\",\"raw\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "41-html-after-list.md/document/clipboard",
+      "output": "<ul><li>one</li><li>two</li></ul><pre><code class=\"language-html\">&lt;/details&gt;</code></pre><ol><li>alpha</li><li>beta</li></ol><pre><code class=\"language-html\">&lt;div align=\"center\"&gt;\nafter an ordered list\n&lt;/div&gt;</code></pre><ul><li>foo</li><li>bar</li></ul><pre><code class=\"language-html\">&lt;!-- --&gt;</code></pre><ul><li>baz</li><li>bim</li></ul><pre><code class=\"language-html\">&lt;details&gt;\n&lt;summary&gt;toggle&lt;/summary&gt;</code></pre><ul><li>inner</li></ul><pre><code class=\"language-html\">&lt;/details&gt;</code></pre><ul><li>tight item</li></ul><pre><code class=\"language-html\">&lt;div&gt;no blank line between&lt;/div&gt;</code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"one\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"numbered_list\",\"text\":\"alpha\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"beta\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nafter an ordered list\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"foo\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bar\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<!-- -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"baz\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bim\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<details>\\n<summary>toggle</summary>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"inner\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"tight item\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div>no blank line between</div>\",\"data\":{\"language\":\"html\",\"raw\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "41-html-after-list.md/fragment/export",
+      "output": "<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n</details>\n<ol>\n<li>alpha</li>\n<li>beta</li>\n</ol>\n<div align=\"center\">\nafter an ordered list\n</div>\n<ul>\n<li>foo</li>\n<li>bar</li>\n</ul>\n<!-- -->\n<ul>\n<li>baz</li>\n<li>bim</li>\n</ul>\n<details>\n<summary>toggle</summary>\n<ul>\n<li>inner</li>\n</ul>\n</details>\n<ul>\n<li>tight item</li>\n</ul>\n<div>no blank line between</div>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"one\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"two\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"numbered_list\",\"text\":\"alpha\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"beta\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div align=\\\"center\\\">\\nafter an ordered list\\n</div>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"foo\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bar\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<!-- -->\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"baz\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"bim\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<details>\\n<summary>toggle</summary>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"inner\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"</details>\",\"data\":{\"language\":\"html\",\"raw\":true}},{\"type\":\"bulleted_list\",\"text\":\"tight item\",\"data\":{}},{\"type\":\"code_block\",\"text\":\"<div>no blank line between</div>\",\"data\":{\"language\":\"html\",\"raw\":true}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "41-html-after-list.md/fragment/clipboard",
+      "output": "<ul><li>one</li><li>two</li></ul><pre><code class=\"language-html\">&lt;/details&gt;</code></pre><ol><li>alpha</li><li>beta</li></ol><pre><code class=\"language-html\">&lt;div align=\"center\"&gt;\nafter an ordered list\n&lt;/div&gt;</code></pre><ul><li>foo</li><li>bar</li></ul><pre><code class=\"language-html\">&lt;!-- --&gt;</code></pre><ul><li>baz</li><li>bim</li></ul><pre><code class=\"language-html\">&lt;details&gt;\n&lt;summary&gt;toggle&lt;/summary&gt;</code></pre><ul><li>inner</li></ul><pre><code class=\"language-html\">&lt;/details&gt;</code></pre><ul><li>tight item</li></ul><pre><code class=\"language-html\">&lt;div&gt;no blank line between&lt;/div&gt;</code></pre>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"a\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"b\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"c\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"d\\n- e\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"w\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"x\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"y\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"z\\n1. zz\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "42-lazy-item-continuation.md/document/export",
+      "output": "<ul>\n<li>a</li>\n<li>b</li>\n<li>c</li>\n<li>d\n- e</li>\n</ul>\n<ol>\n<li>\n<p>w</p>\n</li>\n<li>\n<p>x</p>\n</li>\n<li>\n<p>y</p>\n</li>\n<li>\n<p>z\n1. zz</p>\n</li>\n</ol>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"a\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"b\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"c\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"d\\n- e\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"w\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"x\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"y\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"z\\n1. zz\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "42-lazy-item-continuation.md/document/clipboard",
+      "output": "<ul><li>a</li><li>b</li><li>c</li><li>d\n- e</li></ul><ol><li>w</li><li>x</li><li>y</li><li>z\n1. zz</li></ol>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"a\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"b\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"c\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"d\\n- e\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"w\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"x\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"y\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"z\\n1. zz\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "42-lazy-item-continuation.md/fragment/export",
+      "output": "<ul>\n<li>a</li>\n<li>b</li>\n<li>c</li>\n<li>d\n- e</li>\n</ul>\n<ol>\n<li>\n<p>w</p>\n</li>\n<li>\n<p>x</p>\n</li>\n<li>\n<p>y</p>\n</li>\n<li>\n<p>z\n1. zz</p>\n</li>\n</ol>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"bulleted_list\",\"text\":\"a\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"b\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"c\",\"data\":{}},{\"type\":\"bulleted_list\",\"text\":\"d\\n- e\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"w\",\"data\":{\"loose\":true}},{\"type\":\"numbered_list\",\"text\":\"x\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"y\",\"data\":{}},{\"type\":\"numbered_list\",\"text\":\"z\\n1. zz\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "42-lazy-item-continuation.md/fragment/clipboard",
+      "output": "<ul><li>a</li><li>b</li><li>c</li><li>d\n- e</li></ul><ol><li>w</li><li>x</li><li>y</li><li>z\n1. zz</li></ol>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[![[![[![[![[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":84,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":80,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":76,\"href\":\"u\",\"start\":15,\"type\":\"image\"},{\"end\":72,\"href\":\"u\",\"start\":16,\"type\":\"image\"},{\"end\":68,\"href\":\"u\",\"start\":17,\"type\":\"image\"},{\"end\":64,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":60,\"href\":\"u\",\"start\":19,\"type\":\"image\"},{\"end\":56,\"href\":\"u\",\"start\":20,\"type\":\"image\"},{\"end\":52,\"href\":\"u\",\"start\":21,\"type\":\"image\"},{\"end\":48,\"href\":\"u\",\"start\":22,\"type\":\"image\"},{\"end\":44,\"href\":\"u\",\"start\":23,\"type\":\"image\"},{\"end\":40,\"href\":\"u\",\"start\":24,\"type\":\"image\"},{\"end\":36,\"href\":\"u\",\"start\":25,\"type\":\"image\"},{\"end\":32,\"href\":\"u\",\"start\":26,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"x ![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"Links 40 deep: the innermost link wins, as CommonMark says anyway.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":40,\"href\":\"u\",\"start\":39,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Within the budget nothing changes:\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":67,\"href\":\"u\",\"start\":1,\"type\":\"image\"},{\"end\":63,\"href\":\"u\",\"start\":2,\"type\":\"image\"},{\"end\":59,\"href\":\"u\",\"start\":3,\"type\":\"image\"},{\"end\":55,\"href\":\"u\",\"start\":4,\"type\":\"image\"},{\"end\":51,\"href\":\"u\",\"start\":5,\"type\":\"image\"},{\"end\":47,\"href\":\"u\",\"start\":6,\"type\":\"image\"},{\"end\":43,\"href\":\"u\",\"start\":7,\"type\":\"image\"},{\"end\":39,\"href\":\"u\",\"start\":8,\"type\":\"image\"},{\"end\":35,\"href\":\"u\",\"start\":9,\"type\":\"image\"},{\"end\":31,\"href\":\"u\",\"start\":10,\"type\":\"image\"},{\"end\":27,\"href\":\"u\",\"start\":11,\"type\":\"image\"},{\"end\":23,\"href\":\"u\",\"start\":12,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "43-inline-nesting-budget.md/document/export",
+      "output": "<p>Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.</p>\n<p>[![[![[![[![[<img src=\"u\" alt=\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\" />](u)](u)](u)](u)](u)](u)](u)](u)](u)</p>\n<p>Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.</p>\n<p>x ![![![![![![![![<img src=\"u\" alt=\"a\" />](u)](u)](u)](u)](u)](u)](u)](u)</p>\n<p>Links 40 deep: the innermost link wins, as CommonMark says anyway.</p>\n<p>[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[<a href=\"u\">a</a>](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)</p>\n<p>Within the budget nothing changes:</p>\n<p>[<img src=\"u\" alt=\"[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\" />](u)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[![[![[![[![[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":84,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":80,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":76,\"href\":\"u\",\"start\":15,\"type\":\"image\"},{\"end\":72,\"href\":\"u\",\"start\":16,\"type\":\"image\"},{\"end\":68,\"href\":\"u\",\"start\":17,\"type\":\"image\"},{\"end\":64,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":60,\"href\":\"u\",\"start\":19,\"type\":\"image\"},{\"end\":56,\"href\":\"u\",\"start\":20,\"type\":\"image\"},{\"end\":52,\"href\":\"u\",\"start\":21,\"type\":\"image\"},{\"end\":48,\"href\":\"u\",\"start\":22,\"type\":\"image\"},{\"end\":44,\"href\":\"u\",\"start\":23,\"type\":\"image\"},{\"end\":40,\"href\":\"u\",\"start\":24,\"type\":\"image\"},{\"end\":36,\"href\":\"u\",\"start\":25,\"type\":\"image\"},{\"end\":32,\"href\":\"u\",\"start\":26,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"x ![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"Links 40 deep: the innermost link wins, as CommonMark says anyway.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":40,\"href\":\"u\",\"start\":39,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Within the budget nothing changes:\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":67,\"href\":\"u\",\"start\":1,\"type\":\"image\"},{\"end\":63,\"href\":\"u\",\"start\":2,\"type\":\"image\"},{\"end\":59,\"href\":\"u\",\"start\":3,\"type\":\"image\"},{\"end\":55,\"href\":\"u\",\"start\":4,\"type\":\"image\"},{\"end\":51,\"href\":\"u\",\"start\":5,\"type\":\"image\"},{\"end\":47,\"href\":\"u\",\"start\":6,\"type\":\"image\"},{\"end\":43,\"href\":\"u\",\"start\":7,\"type\":\"image\"},{\"end\":39,\"href\":\"u\",\"start\":8,\"type\":\"image\"},{\"end\":35,\"href\":\"u\",\"start\":9,\"type\":\"image\"},{\"end\":31,\"href\":\"u\",\"start\":10,\"type\":\"image\"},{\"end\":27,\"href\":\"u\",\"start\":11,\"type\":\"image\"},{\"end\":23,\"href\":\"u\",\"start\":12,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "43-inline-nesting-budget.md/document/clipboard",
+      "output": "<p>Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.</p><p>[![[![[![[![[<img src=\"u\" alt=\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\">](u)](u)](u)](u)](u)](u)](u)](u)](u)</p><p>Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.</p><p>x ![![![![![![![![<img src=\"u\" alt=\"a\">](u)](u)](u)](u)](u)](u)](u)](u)</p><p>Links 40 deep: the innermost link wins, as CommonMark says anyway.</p><p>[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[<a href=\"u\">a</a>](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)</p><p>Within the budget nothing changes:</p><p>[<img src=\"u\" alt=\"[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\">](u)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[![[![[![[![[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":84,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":80,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":76,\"href\":\"u\",\"start\":15,\"type\":\"image\"},{\"end\":72,\"href\":\"u\",\"start\":16,\"type\":\"image\"},{\"end\":68,\"href\":\"u\",\"start\":17,\"type\":\"image\"},{\"end\":64,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":60,\"href\":\"u\",\"start\":19,\"type\":\"image\"},{\"end\":56,\"href\":\"u\",\"start\":20,\"type\":\"image\"},{\"end\":52,\"href\":\"u\",\"start\":21,\"type\":\"image\"},{\"end\":48,\"href\":\"u\",\"start\":22,\"type\":\"image\"},{\"end\":44,\"href\":\"u\",\"start\":23,\"type\":\"image\"},{\"end\":40,\"href\":\"u\",\"start\":24,\"type\":\"image\"},{\"end\":36,\"href\":\"u\",\"start\":25,\"type\":\"image\"},{\"end\":32,\"href\":\"u\",\"start\":26,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"x ![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"Links 40 deep: the innermost link wins, as CommonMark says anyway.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":40,\"href\":\"u\",\"start\":39,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Within the budget nothing changes:\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":67,\"href\":\"u\",\"start\":1,\"type\":\"image\"},{\"end\":63,\"href\":\"u\",\"start\":2,\"type\":\"image\"},{\"end\":59,\"href\":\"u\",\"start\":3,\"type\":\"image\"},{\"end\":55,\"href\":\"u\",\"start\":4,\"type\":\"image\"},{\"end\":51,\"href\":\"u\",\"start\":5,\"type\":\"image\"},{\"end\":47,\"href\":\"u\",\"start\":6,\"type\":\"image\"},{\"end\":43,\"href\":\"u\",\"start\":7,\"type\":\"image\"},{\"end\":39,\"href\":\"u\",\"start\":8,\"type\":\"image\"},{\"end\":35,\"href\":\"u\",\"start\":9,\"type\":\"image\"},{\"end\":31,\"href\":\"u\",\"start\":10,\"type\":\"image\"},{\"end\":27,\"href\":\"u\",\"start\":11,\"type\":\"image\"},{\"end\":23,\"href\":\"u\",\"start\":12,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "43-inline-nesting-budget.md/fragment/export",
+      "output": "<p>Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.</p>\n<p>[![[![[![[![[<img src=\"u\" alt=\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\" />](u)](u)](u)](u)](u)](u)](u)](u)](u)</p>\n<p>Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.</p>\n<p>x ![![![![![![![![<img src=\"u\" alt=\"a\" />](u)](u)](u)](u)](u)](u)](u)](u)</p>\n<p>Links 40 deep: the innermost link wins, as CommonMark says anyway.</p>\n<p>[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[<a href=\"u\">a</a>](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)</p>\n<p>Within the budget nothing changes:</p>\n<p>[<img src=\"u\" alt=\"[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\" />](u)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[![[![[![[![[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":84,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":80,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":76,\"href\":\"u\",\"start\":15,\"type\":\"image\"},{\"end\":72,\"href\":\"u\",\"start\":16,\"type\":\"image\"},{\"end\":68,\"href\":\"u\",\"start\":17,\"type\":\"image\"},{\"end\":64,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":60,\"href\":\"u\",\"start\":19,\"type\":\"image\"},{\"end\":56,\"href\":\"u\",\"start\":20,\"type\":\"image\"},{\"end\":52,\"href\":\"u\",\"start\":21,\"type\":\"image\"},{\"end\":48,\"href\":\"u\",\"start\":22,\"type\":\"image\"},{\"end\":44,\"href\":\"u\",\"start\":23,\"type\":\"image\"},{\"end\":40,\"href\":\"u\",\"start\":24,\"type\":\"image\"},{\"end\":36,\"href\":\"u\",\"start\":25,\"type\":\"image\"},{\"end\":32,\"href\":\"u\",\"start\":26,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"image\"},{\"end\":28,\"href\":\"u\",\"start\":27,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"x ![![![![![![![![a](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":18,\"type\":\"image\"}]}},{\"type\":\"paragraph\",\"text\":\"Links 40 deep: the innermost link wins, as CommonMark says anyway.\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":40,\"href\":\"u\",\"start\":39,\"type\":\"link\"}]}},{\"type\":\"paragraph\",\"text\":\"Within the budget nothing changes:\",\"data\":{}},{\"type\":\"paragraph\",\"text\":\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\",\"data\":{\"marks\":[{\"end\":67,\"href\":\"u\",\"start\":1,\"type\":\"image\"},{\"end\":63,\"href\":\"u\",\"start\":2,\"type\":\"image\"},{\"end\":59,\"href\":\"u\",\"start\":3,\"type\":\"image\"},{\"end\":55,\"href\":\"u\",\"start\":4,\"type\":\"image\"},{\"end\":51,\"href\":\"u\",\"start\":5,\"type\":\"image\"},{\"end\":47,\"href\":\"u\",\"start\":6,\"type\":\"image\"},{\"end\":43,\"href\":\"u\",\"start\":7,\"type\":\"image\"},{\"end\":39,\"href\":\"u\",\"start\":8,\"type\":\"image\"},{\"end\":35,\"href\":\"u\",\"start\":9,\"type\":\"image\"},{\"end\":31,\"href\":\"u\",\"start\":10,\"type\":\"image\"},{\"end\":27,\"href\":\"u\",\"start\":11,\"type\":\"image\"},{\"end\":23,\"href\":\"u\",\"start\":12,\"type\":\"image\"},{\"end\":19,\"href\":\"u\",\"start\":13,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"image\"},{\"end\":15,\"href\":\"u\",\"start\":14,\"type\":\"link\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "43-inline-nesting-budget.md/fragment/clipboard",
+      "output": "<p>Links and images ALTERNATING 40 deep: only the innermost 32 levels parse.</p><p>[![[![[![[![[<img src=\"u\" alt=\"[[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\">](u)](u)](u)](u)](u)](u)](u)](u)](u)</p><p>Images 40 deep (mid-paragraph, so not an image block): the outer 8 openers stay literal text.</p><p>x ![![![![![![![![<img src=\"u\" alt=\"a\">](u)](u)](u)](u)](u)](u)](u)](u)</p><p>Links 40 deep: the innermost link wins, as CommonMark says anyway.</p><p>[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[<a href=\"u\">a</a>](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)</p><p>Within the budget nothing changes:</p><p>[<img src=\"u\" alt=\"[[[[[[[[[[[[[a](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)](u)\">](u)</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "empty/document/export",
+      "output": ""
+    },
+    {
+      "args": {
+        "blocks_json": "[]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "empty/document/clipboard",
+      "output": ""
+    },
+    {
+      "args": {
+        "blocks_json": "[]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "empty/fragment/export",
+      "output": ""
+    },
+    {
+      "args": {
+        "blocks_json": "[]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "empty/fragment/clipboard",
+      "output": ""
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"中文😀𠀀 粗体\",\"data\":{\"marks\":[{\"end\":9,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"x\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"math\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "unicode/document/export",
+      "output": "<p>中文😀𠀀 <strong>粗体</strong></p>\n<p><span class=\"math\">x</span></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"中文😀𠀀 粗体\",\"data\":{\"marks\":[{\"end\":9,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"x\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"math\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "unicode/document/clipboard",
+      "output": "<p>中文😀𠀀 <strong>粗体</strong></p><p><span data-mica-math=\"1\">$x$</span></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"中文😀𠀀 粗体\",\"data\":{\"marks\":[{\"end\":9,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"x\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"math\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "unicode/fragment/export",
+      "output": "<p>中文😀𠀀 <strong>粗体</strong></p>\n<p><span class=\"math\">x</span></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"中文😀𠀀 粗体\",\"data\":{\"marks\":[{\"end\":9,\"start\":7,\"type\":\"bold\"}]}},{\"type\":\"paragraph\",\"text\":\"x\",\"data\":{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"math\"}]}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "unicode/fragment/clipboard",
+      "output": "<p>中文😀𠀀 <strong>粗体</strong></p><p><span data-mica-math=\"1\">$x$</span></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"body\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "front-matter/document/export",
+      "output": "<p>body</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"paragraph\",\"text\":\"body\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "front-matter/document/clipboard",
+      "output": "<p>body</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"heading\",\"text\":\"tags: [a]\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"body\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "export"
+      },
+      "id": "front-matter/fragment/export",
+      "output": "<hr />\n<h2>tags: [a]</h2>\n<p>body</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"divider\",\"text\":\"\",\"data\":{}},{\"type\":\"heading\",\"text\":\"tags: [a]\",\"data\":{\"level\":2}},{\"type\":\"paragraph\",\"text\":\"body\",\"data\":{}}]",
+        "image_srcs_json": "{}",
+        "profile": "clipboard"
+      },
+      "id": "front-matter/fragment/clipboard",
+      "output": "<hr><h2>tags: [a]</h2><p>body</p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"alt\",\"data\":{\"file_id\":\"asset\",\"url\":\"old.png\"}},{\"type\":\"paragraph\",\"text\":\"\",\"data\":null}]",
+        "image_srcs_json": "{\"asset\":\"https://example.com/photo.png\"}",
+        "profile": "export"
+      },
+      "id": "image-src/export",
+      "output": "<p><img src=\"https://example.com/photo.png\" alt=\"alt\" /></p>"
+    },
+    {
+      "args": {
+        "blocks_json": "[{\"type\":\"image\",\"text\":\"alt\",\"data\":{\"file_id\":\"asset\",\"url\":\"old.png\"}},{\"type\":\"paragraph\",\"text\":\"\",\"data\":null}]",
+        "image_srcs_json": "{\"asset\":\"https://example.com/photo.png\"}",
+        "profile": "clipboard"
+      },
+      "id": "image-src/clipboard",
+      "output": "<p><img src=\"https://example.com/photo.png\" alt=\"alt\"></p><p></p>"
+    }
+  ],
+  "function": "render_html_body_json"
+}

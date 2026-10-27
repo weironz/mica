@@ -1,0 +1,110 @@
+{
+  "cases": [
+    {
+      "args": {
+        "sources_json": "[\"\"]"
+      },
+      "id": "inline-0",
+      "output": "[{\"text\":\"\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"plain 中文 😀 𠀀\"]"
+      },
+      "id": "inline-1",
+      "output": "[{\"text\":\"plain 中文 😀 𠀀\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"**bold** and *italic* and ~~strike~~ and `code`\"]"
+      },
+      "id": "inline-2",
+      "output": "[{\"text\":\"bold and italic and strike and code\",\"marks\":[{\"start\":0,\"end\":4,\"type\":\"bold\"},{\"start\":9,\"end\":15,\"type\":\"italic\"},{\"start\":20,\"end\":26,\"type\":\"strike\"},{\"start\":31,\"end\":35,\"type\":\"code\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"**a `b`**\"]"
+      },
+      "id": "inline-3",
+      "output": "[{\"text\":\"a b\",\"marks\":[{\"start\":0,\"end\":3,\"type\":\"bold\"},{\"start\":2,\"end\":3,\"type\":\"code\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"[link](https://example.com \\\"title\\\") and [](/empty)\"]"
+      },
+      "id": "inline-4",
+      "output": "[{\"text\":\"link and \",\"marks\":[{\"start\":0,\"end\":4,\"type\":\"link\",\"href\":\"https://example.com\",\"title\":\"title\"},{\"start\":9,\"end\":9,\"type\":\"link\",\"href\":\"/empty\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"![alt](image.png \\\"title\\\")\"]"
+      },
+      "id": "inline-5",
+      "output": "[{\"text\":\"alt\",\"marks\":[{\"start\":0,\"end\":3,\"type\":\"image\",\"href\":\"image.png\",\"title\":\"title\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"literal \\\\*star\\\\* &amp; &#128512;\"]"
+      },
+      "id": "inline-6",
+      "output": "[{\"text\":\"literal *star* & 😀\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"line  \\nbreak\"]"
+      },
+      "id": "inline-7",
+      "output": "[{\"text\":\"line\\\\\\nbreak\",\"marks\":[]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"https://example.com www.example.com a@b.co\"]"
+      },
+      "id": "inline-8",
+      "output": "[{\"text\":\"https://example.com www.example.com a@b.co\",\"marks\":[{\"start\":0,\"end\":19,\"type\":\"link\",\"href\":\"https://example.com\"},{\"start\":20,\"end\":35,\"type\":\"link\",\"href\":\"http://www.example.com\"},{\"start\":36,\"end\":42,\"type\":\"link\",\"href\":\"mailto:a@b.co\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"中文😀 $x^2$ and \\\\(a+b\\\\) 𠀀\"]"
+      },
+      "id": "inline-9",
+      "output": "[{\"text\":\"中文😀 x^2 and a+b 𠀀\",\"marks\":[{\"start\":5,\"end\":8,\"type\":\"math\"},{\"start\":13,\"end\":16,\"type\":\"math\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"price $5 and $10; $$display$$\"]"
+      },
+      "id": "inline-10",
+      "output": "[{\"text\":\"price 5 and $10; $display$$\",\"marks\":[{\"start\":6,\"end\":18,\"type\":\"math\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"`$HOME` and $x$\"]"
+      },
+      "id": "inline-11",
+      "output": "[{\"text\":\"$HOME and x\",\"marks\":[{\"start\":0,\"end\":5,\"type\":\"code\"},{\"start\":10,\"end\":11,\"type\":\"math\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"text[^1] <em>html</em>\"]"
+      },
+      "id": "inline-12",
+      "output": "[{\"text\":\"text1 <em>html</em>\",\"marks\":[{\"start\":4,\"end\":5,\"type\":\"footnote\",\"href\":\"1\"},{\"start\":6,\"end\":10,\"type\":\"html\"},{\"start\":14,\"end\":19,\"type\":\"html\"}]}]"
+    },
+    {
+      "args": {
+        "sources_json": "[]"
+      },
+      "id": "empty-batch",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "sources_json": "[\"\",\"plain 中文 😀 𠀀\",\"**bold** and *italic* and ~~strike~~ and `code`\",\"**a `b`**\",\"[link](https://example.com \\\"title\\\") and [](/empty)\",\"![alt](image.png \\\"title\\\")\",\"literal \\\\*star\\\\* &amp; &#128512;\",\"line  \\nbreak\",\"https://example.com www.example.com a@b.co\",\"中文😀 $x^2$ and \\\\(a+b\\\\) 𠀀\",\"price $5 and $10; $$display$$\",\"`$HOME` and $x$\",\"text[^1] <em>html</em>\"]"
+      },
+      "id": "all",
+      "output": "[{\"text\":\"\",\"marks\":[]},{\"text\":\"plain 中文 😀 𠀀\",\"marks\":[]},{\"text\":\"bold and italic and strike and code\",\"marks\":[{\"start\":0,\"end\":4,\"type\":\"bold\"},{\"start\":9,\"end\":15,\"type\":\"italic\"},{\"start\":20,\"end\":26,\"type\":\"strike\"},{\"start\":31,\"end\":35,\"type\":\"code\"}]},{\"text\":\"a b\",\"marks\":[{\"start\":0,\"end\":3,\"type\":\"bold\"},{\"start\":2,\"end\":3,\"type\":\"code\"}]},{\"text\":\"link and \",\"marks\":[{\"start\":0,\"end\":4,\"type\":\"link\",\"href\":\"https://example.com\",\"title\":\"title\"},{\"start\":9,\"end\":9,\"type\":\"link\",\"href\":\"/empty\"}]},{\"text\":\"alt\",\"marks\":[{\"start\":0,\"end\":3,\"type\":\"image\",\"href\":\"image.png\",\"title\":\"title\"}]},{\"text\":\"literal *star* & 😀\",\"marks\":[]},{\"text\":\"line\\\\\\nbreak\",\"marks\":[]},{\"text\":\"https://example.com www.example.com a@b.co\",\"marks\":[{\"start\":0,\"end\":19,\"type\":\"link\",\"href\":\"https://example.com\"},{\"start\":20,\"end\":35,\"type\":\"link\",\"href\":\"http://www.example.com\"},{\"start\":36,\"end\":42,\"type\":\"link\",\"href\":\"mailto:a@b.co\"}]},{\"text\":\"中文😀 x^2 and a+b 𠀀\",\"marks\":[{\"start\":5,\"end\":8,\"type\":\"math\"},{\"start\":13,\"end\":16,\"type\":\"math\"}]},{\"text\":\"price 5 and $10; $display$$\",\"marks\":[{\"start\":6,\"end\":18,\"type\":\"math\"}]},{\"text\":\"$HOME and x\",\"marks\":[{\"start\":0,\"end\":5,\"type\":\"code\"},{\"start\":10,\"end\":11,\"type\":\"math\"}]},{\"text\":\"text1 <em>html</em>\",\"marks\":[{\"start\":4,\"end\":5,\"type\":\"footnote\",\"href\":\"1\"},{\"start\":6,\"end\":10,\"type\":\"html\"},{\"start\":14,\"end\":19,\"type\":\"html\"}]}]"
+    }
+  ],
+  "function": "parse_inline_batch_json"
+}

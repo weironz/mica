@@ -1,0 +1,82 @@
+{
+  "cases": [
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[],\"text\":\"\"}]"
+      },
+      "id": "inline-0",
+      "output": "[\"\"]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[],\"text\":\"literal *x* | \\\\ [x] $\"}]"
+      },
+      "id": "inline-1",
+      "output": "[\"literal \\\\*x\\\\* | \\\\\\\\ \\\\[x\\\\] \\\\$\"]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[],\"text\":\"https://example.com\"}]"
+      },
+      "id": "inline-2",
+      "output": "[\"https://example.com\"]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[],\"text\":\"x \"}]"
+      },
+      "id": "inline-3",
+      "output": "[\"x \"]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[],\"text\":\"a\\nb\"}]"
+      },
+      "id": "inline-4",
+      "output": "[\"a\\nb\"]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[{\"end\":8,\"start\":4,\"type\":\"bold\"}],\"text\":\"😀𠀀bold\"}]"
+      },
+      "id": "inline-5",
+      "output": "[{\"marks\":[{\"end\":8,\"start\":4,\"type\":\"bold\"}],\"text\":\"😀𠀀bold\"}]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"},{\"end\":1,\"start\":0,\"type\":\"italic\"},{\"end\":3,\"href\":\"https://x.y\",\"start\":2,\"title\":\"t\",\"type\":\"link\"}],\"text\":\"abcdef\"}]"
+      },
+      "id": "inline-6",
+      "output": "[{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"italic\"},{\"end\":3,\"href\":\"https://x.y\",\"start\":2,\"title\":\"t\",\"type\":\"link\"},{\"end\":6,\"start\":4,\"type\":\"bold\"}],\"text\":\"abcdef\"}]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[{\"end\":6,\"href\":\"https://x.y\",\"start\":0,\"type\":\"link\"},{\"end\":6,\"start\":0,\"type\":\"code\"}],\"text\":\"linked code\"}]"
+      },
+      "id": "inline-7",
+      "output": "[{\"marks\":[{\"end\":6,\"start\":0,\"type\":\"code\"},{\"end\":6,\"href\":\"https://x.y\",\"start\":0,\"type\":\"link\"}],\"text\":\"linked code\"}]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"strike\"},{\"end\":3,\"start\":2,\"type\":\"math\"}],\"text\":\"a b c\"}]"
+      },
+      "id": "inline-8",
+      "output": "[{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"strike\"},{\"end\":3,\"start\":2,\"type\":\"math\"}],\"text\":\"a b c\"}]"
+    },
+    {
+      "args": {
+        "inlines_json": "[]"
+      },
+      "id": "empty-batch",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "inlines_json": "[{\"marks\":[],\"text\":\"\"},{\"marks\":[],\"text\":\"literal *x* | \\\\ [x] $\"},{\"marks\":[],\"text\":\"https://example.com\"},{\"marks\":[],\"text\":\"x \"},{\"marks\":[],\"text\":\"a\\nb\"},{\"marks\":[{\"end\":8,\"start\":4,\"type\":\"bold\"}],\"text\":\"😀𠀀bold\"},{\"marks\":[{\"end\":6,\"start\":4,\"type\":\"bold\"},{\"end\":1,\"start\":0,\"type\":\"italic\"},{\"end\":3,\"href\":\"https://x.y\",\"start\":2,\"title\":\"t\",\"type\":\"link\"}],\"text\":\"abcdef\"},{\"marks\":[{\"end\":6,\"href\":\"https://x.y\",\"start\":0,\"type\":\"link\"},{\"end\":6,\"start\":0,\"type\":\"code\"}],\"text\":\"linked code\"},{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"strike\"},{\"end\":3,\"start\":2,\"type\":\"math\"}],\"text\":\"a b c\"}]"
+      },
+      "id": "all",
+      "output": "[\"\",\"literal \\\\*x\\\\* | \\\\\\\\ \\\\[x\\\\] \\\\$\",\"https://example.com\",\"x \",\"a\\nb\",{\"marks\":[{\"end\":8,\"start\":4,\"type\":\"bold\"}],\"text\":\"😀𠀀bold\"},{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"italic\"},{\"end\":3,\"href\":\"https://x.y\",\"start\":2,\"title\":\"t\",\"type\":\"link\"},{\"end\":6,\"start\":4,\"type\":\"bold\"}],\"text\":\"abcdef\"},{\"marks\":[{\"end\":6,\"start\":0,\"type\":\"code\"},{\"end\":6,\"href\":\"https://x.y\",\"start\":0,\"type\":\"link\"}],\"text\":\"linked code\"},{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"strike\"},{\"end\":3,\"start\":2,\"type\":\"math\"}],\"text\":\"a b c\"}]"
+    }
+  ],
+  "function": "encode_cells_json"
+}

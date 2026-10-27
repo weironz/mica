@@ -205,14 +205,14 @@ pub fn serialize_inline(text: &str, marks: &[Mark]) -> String {
   })
 }
 
-/// HTML dialect. In S1 `Clipboard` renders identically to `Export`; the
-/// clipboard dialect is implemented by S3 T3.4.
+/// HTML dialect. Clipboard preserves source math/Mermaid and Mica paste
+/// attributes; Export keeps the existing feature-dependent rich rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HtmlProfile {
   /// Export / share-page HTML.
   #[default]
   Export,
-  /// Clipboard text/html (S3 implementation; same as `Export` for now).
+  /// Clipboard text/html, independent of the rich `render` feature.
   Clipboard,
 }
 
@@ -229,7 +229,10 @@ pub struct HtmlOptions {
 pub fn render_html(doc: &Document, options: &HtmlOptions) -> Result<String, MdError> {
   let mut doc = doc.clone();
   set_image_srcs(&mut doc, &options.image_srcs);
-  export_html(&doc)
+  match options.profile {
+    HtmlProfile::Export => export_html(&doc),
+    HtmlProfile::Clipboard => crate::html::clipboard::render(&doc),
+  }
 }
 
 /// Render a block fragment to HTML.
