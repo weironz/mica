@@ -1,19 +1,20 @@
 # 单一实现专项：Markdown 引擎只留一份（S0–S5）
 
-> 状态：**G1 通过、契约已冻结，S0+S1 已并回 main；G2 附条件通过**（2026-10-27 更新；2026-10-26 立项）。下一步：S2 T2.2 起。执行方：三个并行工作包，协调者汇总。
+> 状态：**G1 通过、契约已冻结，S0+S1 已并回 main；S2 集成验证中，M2 未通过**（2026-10-27 更新；2026-10-26 立项）。G2 附条件通过。执行方：三个并行工作包，协调者汇总。
 > 审核方：本仓库的维护 agent，在审核停点 G1–G3 抽查、全部完成后（G4）按 [05-review-checklist.md](05-review-checklist.md) 逐条审核。
 > 本目录是这个专项的**唯一权威文档**；其他文档里与之冲突的描述，以本目录为准。
 
 ## 当前交付与审核入口（2026-10-27）
 
-> **审核与执行状态（2026-10-27）**：审核方在 [reviews.md](reviews.md) 中裁决七项契约问题，并要求 G1 完成四项修改后快速复核。四项现已交付；合并头 `f2bcb70` 的 Rust 门禁通过（workspace 1103 passed、store 213 passed），详见 [S1 执行记录](stages/S1-core-sdk.md#2026-10-27--g1-第四项集成头-rust-门禁)。**G1 仍待审核方复核，契约尚未冻结。**
+> **审核与执行状态（2026-10-27）**：审核方已在 [reviews.md](reviews.md) 记录 G1 复核通过，并冻结 02 §2 / §3 / §5；S0+S1 已在 `8d78ba6c` 并回 main。S2 当前只在 `single-source` 集成与验证，不代表 M2 通过。
 > G2 已由审核方 **附条件通过**：正式构建用 opt-3，M2 用正式产物重测。审核方结论只写入 [reviews.md](reviews.md)。
 
 | 工作包 | 可复核提交 / 分支 | 当前状态 |
 | --- | --- | --- |
 | S0 初始交付 | `single-source` 的 `c6446d5` | 已集成；其中对拍往返输入与性能采样存在问题，以修正提交为准 |
 | S0 修正与补测 | `e122680`，merge `5d8feb7` | 已集成；[S0 执行记录](stages/S0-baseline.md) 含 Flutter VM 2159 passed / 2 skipped、原生指纹与对拍 5 passed、Web release 与字体校验结果 |
-| S1 引擎拆分与审查修复 | `8b5f824`，merge `f2bcb70` | 已集成；[S1 执行记录](stages/S1-core-sdk.md) 含四项修订和合并头门禁。契约尚未冻结，待 G1 复核 |
+| S1 引擎拆分与审查修复 | `8b5f824`，merge `f2bcb70` | G1 已复核通过、契约冻结，S0+S1 已并回 main；[S1 执行记录](stages/S1-core-sdk.md) 保留四项修订与门禁 |
+| S2 绑定、门面与跨端修复 | 工作包 merge `2e5eb2e8` / `a5a5f1e2`，后续探针 merge `7923e72a`；wire `942565a3`、Clipboard `ff8fcf19` | 已进入集成分支；正在重建新指纹产物并验证平台契约和预算。Clipboard 提前按 T3.4 移植；Export 保留既有 feature 行为的契约矛盾单独交审，M2 未通过 |
 | T2.1 P0 | 原 spike `d48ed4f`；优化实验 `refs/heads/ss/w/p0-costs` @ `68ae07f`；核心 `6594f12` 以 `20ecde0` 进入 S1 | G2 已附条件通过；spike 不进集成分支，正式构建 opt-3 且 M2 须重新测量。详见 [审核记录](reviews.md) |
 
 S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust 自身往返记录 754 条（旧值 1305 混入解析差异），记录数不是独立 bug 数。Chrome 测试基线实际为 dartdevc，不能与 P0 的 production dart2js 数字直接相除。
