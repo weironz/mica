@@ -100,3 +100,7 @@ e2e/node_modules/
 e2e/package-lock.json
 # Probe screenshots are evidence for one investigation, not artefacts to keep.
 e2e/*.png
+
+# Generated Markdown Web engine and browser-test copy (including wire gold).
+/clients/mica_flutter/web/mica_md/
+/clients/mica_flutter/test/support/mica_md/
