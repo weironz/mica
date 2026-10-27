@@ -6,6 +6,10 @@
 
 ## 当前交付与审核入口（2026-10-27）
 
+> **M2 审核结论（2026-10-27，详见 [reviews.md](reviews.md)）**：**要求修改，4 条**。两项预算由用户改定（wasm 上限 256 KiB；复制 10k 改为 ≤ 16 ms 绝对预算），
+> Export HTML 只要求 Clipboard 跨端逐字节，FFI 边界现在不改。要做的是：改构建脚本门槛并记 Linux 体积、补测 Web 复制、改正「全部来自 FFI 边界」的归因、
+> 把 `scripts/md-wasm-evidence/` 移出集成分支。M2 不停工，S3 可继续。下文是审核前执行方的快照。
+
 > **审核与执行状态（2026-10-27）**：审核方已在 [reviews.md](reviews.md) 记录 G1 复核通过，并冻结 02 §2 / §3 / §5；S0+S1 已在 `8d78ba6c` 并回 main。S2 当前只在 `single-source` 集成与验证，不代表 M2 通过。
 > G2 已由审核方 **附条件通过**：正式构建用 opt-3，M2 用正式产物重测。审核方结论只写入 [reviews.md](reviews.md)。
 
