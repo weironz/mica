@@ -5,12 +5,11 @@ import 'dart:convert';
 import 'dart:js_interop';
 
 import 'package:flutter/material.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/editor/markdown.dart' show markdownToBlocks;
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 
 import '../clients/mica_flutter/test/support/markdown_bench_inputs.dart';
 
-@JS('micaMdReady')
-external JSPromise<JSAny?> get _ready;
 @JS('micaMd')
 external _Engine get _engine;
 @JS('runMdM2')
@@ -25,17 +24,9 @@ extension type _Engine(JSObject _) implements JSObject {
 
 int _sink = 0;
 
-List<BlockSpec> _full(String source) {
-  final values = jsonDecode(_engine.parseBody(source, false)) as List;
-  return [
-    for (final value in values)
-      (
-        kind: value['type'] as String,
-        text: value['text'] as String,
-        data: Map<String, dynamic>.from(value['data'] as Map),
-      ),
-  ];
-}
+// Measure the actual public facade, including its error boundary and shared
+// markdown_wire decoder. The direct wire call below is only a byte diagnostic.
+List<BlockSpec> _full(String source) => markdownCodec.parseBlocks(source);
 
 String _repeat(String sample, int length) {
   final buffer = StringBuffer();
@@ -131,7 +122,13 @@ JSString _measure() {
   }
   return jsonEncode({
     'engine': jsonDecode(_engine.engineInfo()),
-    'method': 'production dart2js; full wire JSON + JS string + Dart jsonDecode + BlockSpec; AB/BA 15 pairs x3 rounds',
+    'facade_engine': {
+      'crate_version': markdownCodec.engineInfo.crateVersion,
+      'schema_version': markdownCodec.engineInfo.schemaVersion,
+      'source_fingerprint': markdownCodec.engineInfo.sourceFingerprint,
+    },
+    'path': 'MarkdownCodec.parseBlocks -> _WasmMarkdownCodec -> markdown_wire.decodeBlocks',
+    'method': 'production dart2js; real public facade including wire JSON + JS string + Dart jsonDecode + BlockSpec; AB/BA 15 pairs x3 rounds',
     'sink': _sink,
     'cases': results,
   }).toJS;
@@ -160,7 +157,13 @@ JSString _differences() => jsonEncode([
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await _ready.toDart;
+  await initMarkdownCodec();
+  // Fail the benchmark if startup installed the unavailable codec: measurements
+  // must never silently use a stub or a local replacement for the facade.
+  final info = markdownCodec.engineInfo;
+  if (info.sourceFingerprint.isEmpty) {
+    throw StateError('MarkdownCodec did not report an engine fingerprint');
+  }
   _run = _measure.toJS;
   _diff = _differences.toJS;
   runApp(
