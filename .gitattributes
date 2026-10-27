@@ -17,3 +17,8 @@ crates/markdown/tests/fixtures/** text eol=lf
 
 # API contract goldens are also compared byte for byte against LF output.
 contracts/*.json text eol=lf
+
+# WASM source fingerprints hash raw bytes, so checkouts must agree across OSes.
+crates/md-wasm/Cargo.toml text eol=lf
+crates/md-wasm/build.rs text eol=lf
+crates/md-wasm/src/** text eol=lf
