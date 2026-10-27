@@ -17,6 +17,22 @@
 
 <!-- 第一条审核记录写在这一行下面 -->
 
+## G1 复核 — 2026-10-27 — 通过
+
+- 审核对象：`single-source` @ `f21daf18`（S0 修正 merge `5d8feb7`、S1 merge `f2bcb70` 之后只有文档提交）。
+- 核对结果（只核对上一条 G1 记录的 4 条必须修改）：
+  1. ✅ `20ecde0` 与 `6594f12` 逐行相同（`diff` 两者的 `crates/` 改动为空），只动 `crates/md-core` 三个文件；`git ls-tree single-source spike` 为空。
+  2. ✅ `349f19a` 只改 `clients/mica_flutter/rust/Cargo.lock`，+10 行，与审核方上次在 Linux 上重新解析的结果一致；
+     审核方在 `f21daf18` 上 `(cd clients/mica_flutter/rust && cargo check --locked)` exit 0。
+  3. ✅ `88a46af` 删除了 ignored 的 `unmarked_cells_are_lossless_for_every_text`，`empty_marks_cells_document_the_current_loss` 的注释指向 02 §2.2 I3 除外项。
+  4. ✅ 两个 merge 提交（先 S0 后 S1）；审核方在 `f21daf18` 上用 Linux、新建空库 `mica_g1r`、`MICA_REQUIRE_DB=1` 跑 `bash scripts/local-ci.sh rust`：
+     exit 0，`receipt: 1106 passed (floor 500)`，`mica-core --features store` `receipt: 213 passed (floor 1)`；跑完工作区无改动（lock 未被重写）。
+     执行方 Windows 回执是 1103 passed：差的 3 个是 `crates/cli` 里 `#[cfg(unix)]` 的测试（backup / config / export 各一），不是测试丢失。
+  - 建议项 `contracts/*.json text eol=lf` 已随 `f576559` 提交。
+- 必须修改：无。
+- 结论：**G1 通过，02 §2 / §3 / §5 自本次起冻结**，之后改动须在 PR 里单列「契约变更」并经审核方同意。S0 + S1 用 merge 提交并回 main。
+  WP-W 可以开始 T2.2；WP-D 可以开始 T2.5。
+
 ## G1 契约冻结 — 2026-10-27 — 要求修改（机械项，修完只做快速复核）
 
 - 审核对象：S1 `worktree-agent-aaa10db22e269aaf4` @ `12c7ff2`；S0 初始 `c6446d5`（已在 single-source）+ 修正 `worktree-agent-acfa208a26ae27e64` @ `e122680`；
