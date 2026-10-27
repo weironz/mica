@@ -13,6 +13,7 @@ import 'ai_edits.dart';
 import 'highlight.dart';
 import 'markdown.dart';
 import 'marks.dart';
+import 'paste_repair.dart';
 import 'clipboard_copy.dart';
 import 'file_names.dart';
 import 'image_actions.dart';

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/editor/paste_repair.dart';
 import 'package:mica_flutter/editor/marks.dart';
 
 // Two ChatGPT-paste fixes:

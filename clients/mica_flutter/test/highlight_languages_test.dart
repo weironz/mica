@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/highlight.dart';
 import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/editor/paste_repair.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';
 
 // Three separate failures met here, all of them "the code block looks dead":
