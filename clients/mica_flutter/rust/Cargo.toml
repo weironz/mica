@@ -20,6 +20,8 @@ mica-core = { path = "../../../crates/mica-core", features = ["store"] }
 # (the Dart `merman` package is dropped — this crate is the only mermaid engine
 # on desktop now).
 mica-markdown = { path = "../../../crates/markdown", features = ["render"] }
+# Desktop codec forwards directly to the same wire API as the Web binding.
+mica-md = { path = "../../../crates/md-core" }
 # Blocks cross the FFI boundary as JSON strings (Dart already speaks that shape).
 serde_json = "1"
 # Same in-house store-ZIP writer the server uses (only serde_json underneath), so
