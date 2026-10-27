@@ -1,10 +1,10 @@
 use std::ops::ControlFlow;
 
 use serde_json::{Value, json};
-use uuid::Uuid;
 
 use crate::block_handlers::*;
 use crate::html::*;
+use crate::ids::BlockIds;
 use crate::inline::*;
 use crate::scan_memo::ScanMemo;
 use crate::{Block, DocumentSnapshotPayload};
@@ -154,6 +154,7 @@ pub(crate) fn import_markdown_inner(
   markdown: &str,
   root_block_id: &str,
   parse_front_matter: bool,
+  ids: &BlockIds,
 ) -> DocumentSnapshotPayload {
   // YAML front matter: a leading `---` fence with a later `---`/`...` close.
   // We don't parse the YAML — just lift the raw inner text off the block
@@ -362,6 +363,7 @@ pub(crate) fn import_markdown_inner(
   if let Some(fm) = front_matter {
     data_insert(&mut root_data, "front_matter", json!(fm));
   }
+  assign_ids(&mut blocks, &mut root_children, ids, root_block_id);
   let root = Block {
     id: root_block_id.to_string(),
     kind: "paragraph".to_string(),
@@ -377,6 +379,95 @@ pub(crate) fn import_markdown_inner(
     schema_version: 1,
     root_block_id: root_block_id.to_string(),
     blocks: all_blocks,
+  }
+}
+
+/// Replace the parser's temporary ids (`\u{1}<index>`) with the caller's ids
+/// and rewrite every `children` reference. Temporary ids are unique and never
+/// appear in real documents, so they cannot collide with user data.
+fn assign_ids(
+  blocks: &mut [Block],
+  root_children: &mut [String],
+  ids: &BlockIds,
+  root_block_id: &str,
+) {
+  // Only `push_block` appends to both collections, in lockstep, so position IS
+  // the block index. Generate each final id exactly once (`Uuid` is random) and
+  // give the block the value while the root's child list gets the one clone the
+  // exporter needs.
+  debug_assert_eq!(blocks.len(), root_children.len());
+  // Sequential numbering must stay `${prefix}${n}` from 0 for every normal
+  // input. The only exception is a caller-supplied root id inside that
+  // namespace (`root_id: "b0"`, `prefix: "b"`): no numbering scheme can then
+  // satisfy prefix + n-from-0 + global uniqueness at once. We deterministically
+  // derive an effective prefix (`b`, then `b_`, …) and keep n from 0, so the
+  // common case is byte-identical and the collision case is reproducible.
+  let sequential_prefix = match ids {
+    BlockIds::Sequential { prefix } => {
+      let mut candidate = prefix.clone();
+      while (0..blocks.len()).any(|n| format!("{candidate}{n}") == root_block_id) {
+        candidate.push('_');
+      }
+      Some(candidate)
+    }
+    #[cfg(feature = "uuid")]
+    BlockIds::Uuid => None,
+  };
+  if let Some(prefix) = &sequential_prefix {
+    // `{prefix}{n}` is unique by construction, and the loop above removed the
+    // only possible collision (the root id). The old code still inserted every
+    // id into a HashSet and cloned it — O(n) allocations per parse, measured as
+    // avoidable in P0. No uniqueness bookkeeping is needed on this path.
+    for (n, block) in blocks.iter_mut().enumerate() {
+      let final_id = format!("{prefix}{n}");
+      if let Some(child) = root_children.get_mut(n) {
+        *child = final_id.clone();
+      }
+      block.id = final_id;
+    }
+  } else {
+    // `Uuid` only: a v4 id can theoretically collide, so keep the used-set.
+    #[cfg(feature = "uuid")]
+    {
+      let mut used: std::collections::HashSet<String> =
+        std::collections::HashSet::from([root_block_id.to_string()]);
+      for (n, block) in blocks.iter_mut().enumerate() {
+        let mut final_id = ids.id_for(n);
+        if used.contains(final_id.as_str()) {
+          // Astronomically unlikely; keep the guarantee by falling back to a
+          // fresh namespace.
+          let mut next = n + 1;
+          final_id = format!("b{next}");
+          while used.contains(final_id.as_str()) {
+            next += 1;
+            final_id = format!("b{next}");
+          }
+        }
+        used.insert(final_id.clone());
+        if let Some(child) = root_children.get_mut(n) {
+          *child = final_id.clone();
+        }
+        block.id = final_id;
+      }
+    }
+    #[cfg(not(feature = "uuid"))]
+    let _ = (ids, root_block_id);
+  }
+  // Defensive generality: the current parser only gives the root children, so
+  // the common path skips building a map entirely.
+  if blocks.iter().any(|b| !b.children.is_empty()) {
+    let finals: Vec<String> = blocks.iter().map(|b| b.id.clone()).collect();
+    let final_for = |temp: &str| -> Option<&String> {
+      let n: usize = temp.strip_prefix('\u{1}')?.parse().ok()?;
+      finals.get(n)
+    };
+    for block in blocks.iter_mut() {
+      for child in &mut block.children {
+        if let Some(mapped) = final_for(child) {
+          *child = mapped.clone();
+        }
+      }
+    }
   }
 }
 
@@ -651,7 +742,9 @@ pub(crate) fn push_block(
   text: String,
   data: Value,
 ) {
-  let id = format!("block_{}", Uuid::new_v4().simple());
+  // A temporary, deterministic id; `assign_ids` replaces it at the end of the
+  // parse. `\u{1}` cannot appear in a real block id.
+  let id = format!("\u{1}{}", blocks.len());
   root_children.push(id.clone());
   blocks.push(Block {
     id,

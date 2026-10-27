@@ -14,3 +14,6 @@ migrations/*.sql text eol=lf
 # cost two subagents a false "pre-existing failure" report (see 83b5eae), and it
 # comes back every time a rebase re-checks-out a gold file.
 crates/markdown/tests/fixtures/** text eol=lf
+
+# API contract goldens are also compared byte for byte against LF output.
+contracts/*.json text eol=lf

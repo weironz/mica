@@ -18,6 +18,7 @@ npm 包能打出来、发布流程是一条命令。**真正的 `cargo publish` 
 | Q3 | 是否同时发 Dart / Flutter 包 | **不发**（见 T5.11） |
 | Q4 | 许可证 | 沿用 workspace 的 `MIT OR Apache-2.0` |
 | Q5 | 源码托管：留在本 monorepo 的子目录发布，还是拆独立仓库 | 留在 monorepo（`cargo publish -p` 支持），`repository` 字段指向子目录 |
+| Q6 | S1 为兼容 Mica 现有调用方追加的入口（`import_markdown`、`import_markdown_fragment`、`export_markdown`、`export_markdown_with_assets`、`export_html`、`set_image_srcs`、`split_front_matter`，G1 裁决 #7）在发布的 SDK 里怎么放 | 移进 `mica_md::compat` 模块并在文档里标「Mica 兼容入口」，门面改从那里 re-export；`public_api.rs` 钉死移动后的路径 |
 
 ## 任务
 

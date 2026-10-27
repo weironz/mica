@@ -261,3 +261,87 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 ## 执行记录
 
 （执行方追加。P0 结果放在最前面。）
+
+### P0（T2.1，2026-10-26，WP-W）
+
+以下为单次 P0 验证结果记录；本次验证代码只在本分支 `worktree-agent-a7950b28e1e2a2c23`，不进入 main / `single-source`。对照基线说明：S0 基线尚未产出，因此性能比较采用本次同一浏览器、同一页面内实测的现有 Dart `markdownToBlocks`。工具链与运行环境：Rust 1.98.0 stable（`rust-toolchain.toml`）+ `wasm32-unknown-unknown`；wasm-bindgen crate 与 CLI 均为 0.2.129；Flutter 3.47.1 / Dart 3.13.1，真实 `flutter build web --release --no-web-resources-cdn`；本地静态服务器 + Playwright，HeadlessChrome/156.0.0.0（Windows 11 Pro）。
+
+方法：
+1. `spike/md-wasm-p0`（非 workspace 成员）依赖现有 `crates/markdown`，`default-features = false`，导出 `parseBody(md)` → `import_markdown` → 根块 children → `BlockJson` JSON 字符串。构建参数约等于 T2.6 的目标：`opt-level = "z"`、`codegen-units = 1`、`lto = true`。
+2. `wasm-bindgen --target no-modules` 产物拷贝到 `clients/mica_flutter/web/mica_md/`（已加 `.gitignore`），`web/index.html` 如约加入两段脚本，`micaMdReady` resolve 前 record 初始化成本。
+3. `spike/md-bench/main.dart` 仅作为临时 Dart 入口：启动真实 `app.main()`，并在首次完整引擎输出就绪后提供 `runMdP0()`。`runMdP0` 中跑最深等价度的 full-path 对比：wasm 路径为 Markdown → wasm 字符串返回 → `json.decode` → 构建 `BlockSpec`；Dart 路径为 `markdownToBlocks`；同一文档、同一浏览器、同批次交替顺序测 15 个样本。
+4. 服务器返回头：`Cache-Control: no-store`，无 COOP / COEP；跨域隔离结果如实记录。
+
+**初步和最终结论：体积 / 初始化 / 工具链 / COOP-COEP 达标，解析性能三项（87 字符 / 1 万 / 10 万字符）均超过 1.2 倍门槛。** 建议 P0 判定为**不达标**（性能项），并由审核方决定继续优化或进入退出方案。
+
+#### P0 阈值逐项结果
+
+| 指标 | 阈值 | 实测 | 结果 |
+| --- | --- | ---: | --- |
+| wasm + JS 胶水 gzip | ≤ 200 KB | **95,412 B（93.18 KiB，分别 gzip -9 后相加：wasm 92,997 B + JS 2,415 B）**；拼接后 gzip 为 95,498 B | **通过** |
+| 实例化到 `micaMdReady` resolve | ≤ 60 ms | 5 个新上下文：20.60 / **14.70** / 14.40 / 15.00 / 16.30 ms，中位数 **15.00 ms** | **通过** |
+| 87 字符解析（含 JSON 往返 + Dart `jsonDecode`） | ≤ 同浏览器 Dart `markdownToBlocks` × 1.2 | 三轮比值 **2.11× / 1.75× / 1.89×** | **不通过** |
+| 1 万字符解析（同上） | ≤ ×1.2 | 三轮比值 **1.37× / 1.35× / 1.50×** | **不通过** |
+| 10 万字符解析（同上） | ≤ ×1.2 | 三轮比值 **1.57× / 1.44× / 1.52×** | **不通过** |
+| 工具链 | stable Rust + wasm32 target，无 nightly / 无 `-Z build-std` | stable 1.98.0，非 nightly，未用 `-Z build-std` | **通过** |
+| COOP / COEP | 不需要 | 实测服务器仅 `Cache-Control: no-store` + 无 COOP/COEP，`crossOriginIsolated` 为 false，wasm 正常运行 | **通过（不需要）** |
+
+#### 关键测量数据（供复算）
+
+- 体积（gzip -9）：wasm 92,997 B、`mica_md.js` 2,415 B，分别压缩后合计 **95,412 B**；两个原文件拼接后一次 gzip 为 **95,498 B**。两种口径都低于 204,800 B 阈值；实际分文件传输采用前者。
+- 初始化：5 个全新 context：`20.60 / 14.70 / 14.40 / 15.00 / 16.30 ms`，中位数 **15.00 ms**。
+- 解析耗时（ms，三轮中位数；括号内 = wasm / Dart）：
+  - 87 字符：0.0367 / 0.0174（≈2.11×）、0.0299 / 0.0171（≈1.75×）、0.0320 / 0.0170（≈1.89×）。
+  - 1 万字符：4.13 / 3.01（≈1.37×）、3.80 / 2.81（≈1.35×）、3.93 / 2.63（≈1.50×）。
+  - 10 万字符：38.50 / 24.50（≈1.57×）、36.90 / 25.60（≈1.44×）、38.90 / 25.60（≈1.52×）。
+- 测试环境中 `spike/md-bench/*.json`、`spike/md-bench/result-*.txt` 与 release 截图 `spike/md-bench/p0-release.png` 可作为复核输入；`firstChecksum` 生效，说明两条路径都真的跑了。
+
+#### 结论与停点状态
+
+- **判定：P0 未达标（性能项高于 1.2× 阈值）。** 不要在本阶段自行决定走退出方案；请审核方按方案把「继续优化 / 进入退出方案」的选择交给用户。
+- **停点：G2 待审核。** WP-W 在审核结论前不再推进；如继续优化，建议先确认 JSON / boundary 成本、把 block mapping / JSON 往返与 wasm 解析耗时拆开归因，以及对比 sequential id + 子块索引化后是否回到 1.2× 附近。
+- 若决定退出方案（S2「退出方案」）：Web 端保留 Dart 镜像 + 差分棘轮守护，桌面/服务端按单实现推进。
+
+### G2 继续优化后的协调者复核（2026-10-27）
+
+用户已选择继续优化，预算不变。本节是执行方复核材料，不替代 `reviews.md` 的审核结论。实验位于 `refs/heads/ss/w/p0-costs`，基于 S1 候选 `12c7ff2`；核心优化独立提交 `6594f12`，初始实验提交 `8a2af3f`，后续纠错与原始数据在该实验分支保留。没有合并核心或 spike 至 `single-source`。
+
+**推荐 `opt-level=3`。** 最终 Flutter release、同页 Chrome 对照采用 AB/BA 交替批量采样；每轮先求 full / Dart，再取三轮比值中位数。完整路径包含 Rust wire JSON 编码、跨边界字符串传递、Dart JSON 解码及 BlockSpec 映射，没有绕过 JSON 或缓存解析结果。
+
+| 输入 | 实际字符数 | 三轮同轮比值中位数 | 每轮均 ≤1.2 |
+| --- | ---: | ---: | --- |
+| 原 P0 87 | 87 | 0.787 | 是 |
+| 原 P0 10k | 10000 | 0.645 | 是 |
+| 原 P0 100k | 100000 | 0.616 | 是 |
+| S0 同形短输入 | 87 | 0.771 | 是 |
+| 近似 S0 10k | 9997 | 0.685 | 是 |
+| 近似 S0 100k | 99972 | 0.651 | 是 |
+
+原 P0 三档逐字节保留；S0 两个长输入按行边界截断，与官方 S0 的 substring 输入不同，只作代表性补测，不能称同输入基线。原 P0 100k 最终 full 中位数 12.75 ms、同轮 Dart 三轮中位数 20.70 ms；表中比值仍按逐轮比值汇总，不由这两个数相除得出。
+
+- **体积**：GNU gzip 1.14 `-n -9` 对 wasm / JS 分别压缩，120538 + 2535 = **123073 B**（120.188 KiB）。低于 204800 B 硬预算，比 122880 B 软目标高 **193 B**。旧 Node zlib 的 123226 B 是拼接压缩，分文件实为 123260 B，不混用口径。
+- **初始化**：保留的同一 opt-3 产物五次新上下文中位数 **12.8 ms**，低于 60 ms；最终补测的 served SHA 与体积记录一致，核心 fingerprint 为 `6b193da84a7b630a`。
+- **输出与回执**：优化前后七个 host 输入 wire JSON 黄金 SHA 相同；浏览器六组输入全部块与 marks 比较无差异；最终 `receipt: 4 passed (floor 4)`。结构、ignored-source 检查与 shellcheck 通过。该结果不能外推到全部语料、Fragment、Firefox / Safari 或桌面 FFI。
+- **收益来源**：`parse_body` 的逐子块查找改为一次索引与所有权移动；Sequential 去掉冗余唯一性集合；wire 去掉块深拷贝与排序时字符串分配。独立复核未发现这三个核心 diff 改变样本输出。
+- **UUID 纠错**：旧 +48% 来自 `parse_body` 对 `parse` 的不对称探针，不能当纯 UUID 成本；最终对照统一 `parse`、mode、root 与 digest，仅 BlockIds 不同。测得的是整套 ID 策略差值，仍非单独随机数系统调用耗时。
+- **JSON / 绑定归因限制**：历史 base-z 100k 的 echoJson 为 **1.56875 ms**，不是 µs；Dart decode 1.3375 ms、BlockSpec 映射 0.659375 ms。`parseBody − parseOnly` 包含不同 digest / 返回形态，只有粗估意义。**Rust BlockJson 映射与 JSON 编码尚未做孤立计时**，不能把差值当精确阶段耗时，也不能将各阶段相加。
+- **汇总纠错**：旧 0.736 / 0.451 / 0.514 使用阶段中位数之比，且旧 runner 固定顺序；历史值更正后保留，最终判读以上述 AB/BA 数据为准。
+
+原始证据在实验分支 `spike/md-bench/summary-final.json`、`sizes-costs.json`、`final-opt3-paired.txt`、`final-opts-short-paired.txt`、`final-ids-paired.txt`、`receipt-final.txt`。体积包含诊断导出，是该 spike 导出集合的实测，不证明正式十个 API 产物体积；正式 S2 需重新验收。
+
+### 独立 JSON 阶段计时复核（2026-10-27）
+
+上述 JSON 归因缺口已补齐：实验分支新增 `spike/md-wasm-p0/src/stage3.rs`，在 Rust 内用 `performance.now()` 分别测 Block → BlockJson 投影/规范化和 `serde_json::to_string`。解析、参考 wire 输出生成、输入 clone 准备及 JS 返回均不计入两段；完整输出在计时后逐字节与真实 wire 比较并计算 checksum。核心代码未再修改。
+
+| 原 P0 输入 | 投影/规范化三轮中位数 ms/次 | JSON 编码三轮中位数 ms/次 |
+| --- | ---: | ---: |
+| 87 字符 | 0.000585938 | 0.000891113 |
+| 10000 字符 | 0.055468750 | 0.089062500 |
+| 100000 字符 | 0.550000000 | 0.875000000 |
+
+每档三轮，每轮预热后测 15 个调用；各调用内部批次分别为 8192 / 128 / 16。计时器 call + loop 摊薄中位数约 0.000203 ms，最小非零 tick 约 0.1 ms；利用批量摊薄量化误差，不扣减底噪，不把各阶段相加。探针复制了私有 wire 投影逻辑，仅用于实验；准备和批量驻留改变缓存/内存状态，结果不是生产单次调用可精确相加的账本。
+
+新增回执 **`6 passed (floor 6)`**，含投影镜像与真实 wire 的七输入字节等价、null 归一与稳定排序检查；shellcheck、结构和 ignored-source 门禁通过。实际 served 的诊断 wasm / JS SHA 与 `summary-stage3.json` 对应，核心 fingerprint 仍为 `6b193da84a7b630a`；新增诊断产物不冒充先前 123073 B 的预算产物。原始证据：实验分支的 `summary-stage3.json`、`stage3-opt3-raw.txt`、`receipt-stage3.txt`。
+
+**停点状态：UUID、解析、JSON、绑定成本的实验归因已交付，硬性能门槛已有达标证据，推荐 opt-3，G2 待正式审核。G1 未通过，正式 T2.2+ 未启动，不合入 main、不发版。**
+
