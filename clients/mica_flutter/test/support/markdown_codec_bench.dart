@@ -32,6 +32,7 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
   }
 
   final rows = <Map<String, Object>>[];
+  var checksum = 0;
   // Equal untimed warmup before paired measurements so VM tiering does not
   // compare one cold implementation against the other's optimized loop.
   for (var i = 0; i < 3000; i++) {
@@ -83,10 +84,14 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
     pair(
       'parse.$label',
       () {
-        mirror.markdownToBlocks(text);
+        final result = mirror.markdownToBlocks(text);
+        checksum ^=
+            result.length + (result.isEmpty ? 0 : result.first.text.length);
       },
       () {
-        codec.parseBlocks(text);
+        final result = codec.parseBlocks(text);
+        checksum ^=
+            result.length + (result.isEmpty ? 0 : result.first.text.length);
       },
       batch,
     );
@@ -113,20 +118,20 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
     pair(
       'serialize.10k',
       () {
-        controller.documentMarkdown();
+        checksum ^= controller.documentMarkdown().length;
       },
       () {
-        codec.serializeBlocks(blocks);
+        checksum ^= codec.serializeBlocks(blocks).length;
       },
       8,
     );
     pair(
       'html.10k',
       () {
-        controller.selectionHtml();
+        checksum ^= controller.selectionHtml().length;
       },
       () {
-        codec.renderClipboardHtml(blocks);
+        checksum ^= codec.renderClipboardHtml(blocks).length;
       },
       8,
     );
@@ -134,7 +139,7 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
     controller.dispose();
   }
   final inlineMs = median(() {
-    codec.parseInline(hotPath87);
+    checksum ^= codec.parseInline(hotPath87).text.length;
   }, 256);
   rows.add({
     'item': 'boundary.inline87',
@@ -142,5 +147,7 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
     'budget_ms': 0.1,
     'passes': inlineMs <= 0.1,
   });
+  // ignore: avoid_print
+  print(jsonEncode({'consumed_checksum': checksum}));
   return rows;
 }
