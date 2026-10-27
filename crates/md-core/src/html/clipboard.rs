@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use super::html::{safe_url, strip_unsafe_attrs, tagfilter};
+use super::html::{safe_url, sanitize_html};
 use crate::inline::marks_from_block;
 use crate::model::{Block, DocumentSnapshotPayload, MdError};
 use crate::serialize::span_walk::{SpanTies, SpanWalker};
@@ -213,7 +213,7 @@ pub(crate) fn render(doc: &DocumentSnapshotPayload) -> Result<String, MdError> {
   set_quote(&mut out, &mut quote, 0);
   // Same safety pipeline as Export. Source HTML marks were already escaped;
   // these layers also protect attribute contexts without changing safe HTML.
-  Ok(strip_unsafe_attrs(&tagfilter(&out)))
+  Ok(sanitize_html(&out))
 }
 
 fn list(items: &[&Block], i: &mut usize, level: usize, out: &mut String) {
