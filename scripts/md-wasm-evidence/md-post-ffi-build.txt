@@ -1,6 +1,0 @@
-   Compiling mica-md v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\md-core)
-   Compiling rust_lib_mica_flutter v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\clients\mica_flutter\rust)
-   Compiling mica-markdown v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\markdown)
-   Compiling mica-interchange v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\interchange)
-   Compiling mica-core v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\mica-core)
-    Finished `release` profile [optimized] target(s) in 21.63s

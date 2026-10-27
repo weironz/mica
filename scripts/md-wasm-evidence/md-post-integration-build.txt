@@ -1,6 +1,0 @@
-==> wasm-bindgen 0.2.129 (matches Cargo.lock)
-   Compiling mica-md v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\md-core)
-   Compiling mica-md-wasm v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\md-wasm)
-    Finished `release` profile [optimized] target(s) in 28.55s
-==> mica_md gzip -n -9: wasm=196937 B JS=2744 B total=199681 B (hard budget 204800 B)
-==> mica_md -> clients/mica_flutter/web/mica_md; browser support -> clients/mica_flutter/test/support/mica_md
