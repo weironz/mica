@@ -17,6 +17,42 @@
 
 <!-- 第一条审核记录写在这一行下面 -->
 
+## G3 删除之前 — 2026-10-28 — 通过（附条件）
+
+- 审核对象：`single-source` @ `98c71d14`（S3 的 `e7b4a533` … `98c71d14`，8 个提交），S3 执行记录「当前结论」至「G3 停点声明」。
+- 核对结果：
+  - ✅ **停点前提成立**：旧实现都还在——`controller.dart` 的 `_rangeMarkdown`（1345 行）、`selectionHtml` 旧体与 `_listRunHtml`、`marks.dart` 的 `inlineToHtml`、
+    `list_serialization.dart`（48 行）。`markdown.dart` 少的 146 行是 T3.1 搬进 `paste_repair.dart` 的粘贴启发式。
+    执行记录「删除 −7,460」的大头是差分基线 JSON 重置（`differential_baseline.json` −7,540），不是删产品代码，表述要改（见必须修改 3）。
+  - ✅ 引擎调用点全部在边界上：复制（`selectionText` / `selectionHtml` / 单元格复制）、粘贴（`_parseOrNull`、`parseInlineMath`、HTML 粘贴里的 `mathRunSpans`）、
+    AI（`editor_ai`、`main_shell` 导入）、整页 Markdown。渲染与输入热路径没有调用引擎。
+  - ✅ 粘贴降级：`_parseOrNull` 捕获 `MarkdownCodecException` 后退回纯文本；复制失败时返回空串，`_copySelection` 退回只放纯文本。
+  - ✖ **AI 读取当前页的降级不对**：`documentMarkdown()` 在引擎不可用时**静默返回空串**，`_openAiDialog` 的 `currentPage` 与 `readPageForEdits` 都拿它当页面正文。
+    S3 之前这是纯 Dart、不会失败；现在 Web 上 wasm 没加载成功时，AI 会把有内容的页面当空页来回答、甚至据此生成编辑。这不在 02 §5.2 允许的降级里。
+  - ✅ 引擎侧（审核方 Linux）：`cargo test --locked` `-p mica-md` 82 / `--features render` 81 / `--no-default-features` 81 / `-p mica-md-wasm` 10 / `-p mica-markdown` 185，全部 0 failed 0 ignored；
+    clippy `-D warnings` 通过；`build-md-wasm.sh` 202,923 B（≤ 262,144）；正式 wasm 黄金重放 396 例逐字节。
+  - ⚠ Flutter 侧（`flutter test` 2232 passed、`local-ci.sh all` 于 `dd183384`）**审核方未复跑**（本环境没有 Flutter），以执行方回执为准。
+  - ✅ T3.7 分诊：B 1 / R 6 / H 3 / U 1，每条有结论；U-1（部分选中代码块复制带围栏）已由用户 2026-10-28 拍板。「用户可见变化」三条可进发版说明。
+  - ✖ **T3.8 往返测试太弱**：43 个 fixture 里有 18 个因为「某一处已知损失」**整个文件跳过不比**（`markTestSkipped`）。例如 `13-links.md` 只因 title 会丢就整文件跳过，
+    这个文件里链接地址、文字、其他标记出了新回归都抓不到。而这个测试自己写明是「Rust 写剪贴板 HTML → Dart 读回」这条跨语言链路的**唯一**防线。
+  - ✅ 18 类损失都不是 S3 引入的：Rust Clipboard 写出的 HTML 与旧 Dart 在 30 个样本上逐字节相同（T3.4 移植测试），读回仍是同一个 `htmlToMarkdown`。
+    但要注意：桌面和 Web 粘贴**都优先读 HTML**，编辑器没有内部剪贴板捷径，所以 Mica 内部复制粘贴时用户确实会碰到这些损失（链接 title、引用里的软换行、callout 类型等）。
+- 契约问题裁决：
+  - **B-1 `7ef6bbba` 改了冻结契约**（02 §3.2 原文「marks 若存在则按 §3.4 排序」规定的是输出顺序，不只是比较）。修复本身正确、影响面小：
+    同区间两个标记时编辑器 `_normalize` 的顺序与原排序一致，只有三个及以上同区间且类型重复时有差别。**事后批准**，02 §3.2 / §3.4 已改为「线格式保留解析器产出顺序，比较时排序」。
+    提醒：以后动冻结契约，先在 PR 里单列「契约变更」等审核方回复，不要先改后报。
+- 必须修改（S3 内完成，G4 核对；**不阻塞 T3.6**——两条都不需要旧 Dart 实现做对照）：
+  1. 引擎不可用时，`documentMarkdown()` 不能返回空串冒充空页：改为返回 `null`（或抛出），AI「读取当前页」与 `readPageForEdits` 遇到时明确报错、不发请求。
+     配回归测试：`UnavailableMarkdownCodec` 下打开 AI 当前页 / AI 编辑，断言不会把空串当正文发出（先证明现状会失败）。
+  2. `clipboard_mica_roundtrip_test` 改为**按损失项定点抹平再比**，不整文件跳过：只抹掉已知会丢的那一项（链接 / 图片 `title`、块内软换行折成空格、`marker`、`loose`、`alert`、
+     代码 span 首尾空白），其余内容照比。只有确实无法定点抹平的（`33-tilde-fallback` 空代码块、`43-inline-nesting-budget`）可以保留整文件例外并写明理由。改完后例外清单应只剩这两个左右。
+  3. 改正 S3 执行记录「删除行数」：分开写产品代码与基线 / fixture 的增删行数。
+- 建议（不阻塞）：
+  - Mica 自己复制出的 HTML 带 `data-mica-*` 标记，而同时放进剪贴板的 `text/plain` 是完整 Markdown。粘贴时若识别出是 Mica 自己的 HTML 就改读 Markdown，
+    18 类损失在 Mica 内部复制粘贴时全部消失。这是产品行为变化，S3 之后由用户决定要不要做。
+- 交给用户的决定：U-1 已决定；上面的「Mica 内部粘贴优先读 Markdown」是可选的后续改进。
+- 结论：**G3 通过**，WP-D 可以执行 T3.6 删除 Dart 实现，继续 T3.9–T3.11；必须修改 1–3 在 S3 内完成，G4 核对。
+
 ## M2 复核 — 2026-10-27 — 通过
 
 - 审核对象：`single-source` @ `e7b5cb10`。自 `9e604c43` 起 `crates/`、`clients/`、`Cargo.toml`、`Cargo.lock` 无改动，所以首轮 M2 的全量 Rust 门禁结果（1141 + 213 passed）仍然适用于本树。

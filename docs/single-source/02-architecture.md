@@ -234,7 +234,7 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 ```jsonc
 // BlockJson —— 与 Rust Block 的 serde 形状相同，但不带 id / children（门面层不关心）
 { "type": "paragraph", "text": "hello", "data": { "marks": [ { "start": 0, "end": 5, "type": "bold" } ] } }
-// data 永远是对象，空时 {}；marks 若存在则按 §3.4 排序
+// data 永远是对象，空时 {}；marks 保持解析器产出顺序（§3.4），对象键按字典序
 
 // InlineJson
 { "text": "hello", "marks": [ { "start": 0, "end": 5, "type": "link", "href": "https://x", "title": "t" } ] }
@@ -263,7 +263,11 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 
 ### 3.4 规范化规则
 
-- `marks` 排序键：`(start, end, type)` 升序。（Dart 与 Rust 现在输出顺序不同，黄金文件测试里已经在排序后比较。）
+- `marks` **数组顺序有语义，线格式不重排**（G3 裁决 B-1，2026-10-28，原为「按 `(start, end, type)` 排序输出」）：
+  同一区间有多个标记时，序列化器按数组下标决定谁在外层（解析器把外层标记排在后面）。重排会改变嵌套，
+  例如 fixture 43 的「图片-链接-图片」重新导出后变成链接包图片。编辑器 `_normalize` 在改动标记时按 `(type, start)` 排序，
+  对两个同区间标记的结果与原排序一致，只有三个及以上同区间、且类型重复时才有差别。
+- **比较**标记时（黄金文件、差分、`marksEqual`、往返测试）一律先按 `(start, end, type)` 排序再比，不比顺序。
 - `data` 中的键顺序无意义；比较时按值比较。
 - 文本换行统一 `\n`（Dart 粘贴前已把 `\r\n` 归一，见 `editor.dart` 粘贴路径）。
 
