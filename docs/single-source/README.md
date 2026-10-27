@@ -14,7 +14,7 @@
 | S0 初始交付 | `single-source` 的 `c6446d5` | 已集成；其中对拍往返输入与性能采样存在问题，以修正提交为准 |
 | S0 修正与补测 | `e122680`，merge `5d8feb7` | 已集成；[S0 执行记录](stages/S0-baseline.md) 含 Flutter VM 2159 passed / 2 skipped、原生指纹与对拍 5 passed、Web release 与字体校验结果 |
 | S1 引擎拆分与审查修复 | `8b5f824`，merge `f2bcb70` | G1 已复核通过、契约冻结，S0+S1 已并回 main；[S1 执行记录](stages/S1-core-sdk.md) 保留四项修订与门禁 |
-| S2 绑定、门面与跨端修复 | 工作包 merge `2e5eb2e8` / `a5a5f1e2`，后续探针 merge `7923e72a`；wire `942565a3`、Clipboard `ff8fcf19` | 已进入集成分支；正在重建新指纹产物并验证平台契约和预算。Clipboard 提前按 T3.4 移植；Export 保留既有 feature 行为的契约矛盾单独交审，M2 未通过 |
+| S2 绑定、门面与跨端修复 | 工作包 merge `2e5eb2e8` / `a5a5f1e2` / `7923e72a`；wire `942565a3`、Clipboard `ff8fcf19`、性能 `4f3cc4a3`、安全层融合 `492a9a42` | 已进入集成分支。Web 正式产物与真实门面已达标；桌面 AOT 仍有 serialize／html 两项超预算，正在归因收尾。Clipboard 提前按 T3.4 移植；Export 保留既有 feature 行为的契约矛盾单独交审。**M2 未通过** |
 | T2.1 P0 | 原 spike `d48ed4f`；优化实验 `refs/heads/ss/w/p0-costs` @ `68ae07f`；核心 `6594f12` 以 `20ecde0` 进入 S1 | G2 已附条件通过；spike 不进集成分支，正式构建 opt-3 且 M2 须重新测量。详见 [审核记录](reviews.md) |
 
 S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust 自身往返记录 754 条（旧值 1305 混入解析差异），记录数不是独立 bug 数。Chrome 测试基线实际为 dartdevc，不能与 P0 的 production dart2js 数字直接相除。
@@ -23,7 +23,14 @@ S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust �
 
 **G2：**用户选择继续优化后，审核方已附条件通过 wasm 路线。正式产物须使用 opt-3，保持 200 KB gzip、60 ms 初始化和三档 ≤ Dart ×1.2 预算，M2 用正式十 API 产物重新验证；P0 诊断产物数据不能代替 M2 证据。实验归因和原始数据入口见 [S2 执行记录](stages/S2-bindings.md#执行记录)。
 
-按 [04 §4.2](04-parallel-plan.md#42-审核停点) 等待 G1 复核；不合入 main，不发版。
+**S2 当前验收快照（执行方核对过的数据，M2 判定仍归审核方）：**
+
+- Web 正式十 API 产物：gzip **204,107 B**（≤204,800）、初始化 p50 **14.0 ms**（≤60）、真实 `MarkdownCodec` 三档比值中位 **1.073 / 0.523 / 0.569**，每轮 ≤1.2；SHA 与 gold 重放证据见 [S2 执行记录](stages/S2-bindings.md#执行记录)。
+- 桌面 release（预热口径，模拟固定安装目录）：init p50 **5 ms**、缺 DLL 降级路径真实通过、AOT parse 87/10k/100k **0.867 / 0.592 / 0.591**。
+- 桌面仍超预算：AOT `serialize.10k` **1.473×**、`html.10k` **3.369×**。Rust wire 侧已压到 serialize 0.63×、clipboard render 1.542 ms；剩余差距在 FFI 边界与本轮未重测的最终核心上，需新产物复测后才有最终结论。
+- 待审核契约项：Export HTML 保留 rich feature 语义，与「十函数跨端逐字节」的冻结描述冲突；候选方案是跨端字节矩阵仅约束 Clipboard。
+
+按 [04 §4.2](04-parallel-plan.md#42-审核停点) 等待 M2；不合入 main，不发版。
 
 ## 一句话
 
