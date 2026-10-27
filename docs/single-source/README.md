@@ -25,16 +25,18 @@ S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust �
 
 **G1 复核入口：**审核方已裁决原七项契约问题；其中 I3 保留现有 URL / 邮箱自动链接与首尾空白例外，S4 再由用户决定是否改变存储行为。四项修订的提交与回执详见 [S1 执行记录](stages/S1-core-sdk.md#2026-10-27--g1-第四项集成头-rust-门禁)，交审核方快速复核；执行方不自行冻结契约。
 
-**G2：**用户选择继续优化后，审核方已附条件通过 wasm 路线。正式产物须使用 opt-3，保持 200 KB gzip、60 ms 初始化和三档 ≤ Dart ×1.2 预算，M2 用正式十 API 产物重新验证；P0 诊断产物数据不能代替 M2 证据。实验归因和原始数据入口见 [S2 执行记录](stages/S2-bindings.md#执行记录)。
+**G2：**用户选择继续优化后，审核方已附条件通过 wasm 路线。正式产物须使用 opt-3，保持 200 KB gzip（M2 已由用户改为 256 KiB，见上）、60 ms 初始化和三档 ≤ Dart ×1.2 解析预算，M2 用正式十 API 产物重新验证；P0 诊断产物数据不能代替 M2 证据。实验归因和原始数据入口见 [S2 执行记录](stages/S2-bindings.md#执行记录)。
 
-**S2 当前验收快照（执行方核对过的数据，M2 判定仍归审核方）：**
+**S2 当前验收快照（执行方核对过的数据；M2 裁决见 [reviews.md](reviews.md)，本节记录 4 条修改的完成情况）：**
 
-- Web 正式十 API 产物：gzip **204,107 B**（≤204,800）、初始化 p50 **14.0 ms**（≤60）、真实 `MarkdownCodec` 三档比值中位 **1.073 / 0.523 / 0.569**，每轮 ≤1.2；SHA 与 gold 重放证据见 [S2 执行记录](stages/S2-bindings.md#执行记录)。
-- Linux 复核实测（`9e604c43` 树，Docker Debian 12 正式构建）：gzip **205,269 B**（wasm 202,525 + JS 2,744，≤262,144 新门槛），wasm SHA `d1bdfd3d…`，JS 与 Windows 产物逐字节相同。
-- Chrome 生产构建 Web 复制 10k：真实门面 `serializeBlocks + renderClipboardHtml` 中位 **4.4 ms ≤ 16 ms**。
+- **预算已按 M2 用户决定更新**：wasm 体积上限 **256 KiB（262,144 B）**；复制 10k 选区改为**绝对 ≤ 16 ms**（桌面、Web 各自），不再用比值；Export HTML 不要求跨端逐字节，逐字节只约束 Clipboard（[02 §7](02-architecture.md)、[05 D3/D4](05-review-checklist.md)）。
+- Linux 正式构建（`9e604c43` 树，Debian 12 容器）：**205,269 B**（wasm 202,525 + JS 2,744）≤ 262,144，wasm SHA `d1bdfd3d…`；审核方独立构建同树得 **205,260 B**（差 9 B，gzip 版本差异）。Windows 204,107 B 只作参考，以 Linux 为准。
+- Web 正式十 API 产物：初始化 p50 **14.0 ms**（≤60）、真实 `MarkdownCodec` 三档解析比值中位 **1.073 / 0.523 / 0.569**，每轮 ≤1.2。
+- Web 复制 10k（production dart2js / Chrome，三轮独立测量）：`serializeBlocks + renderClipboardHtml` 合计中位 **4.6 / 4.3 / 4.1 ms**，汇总 **4.3 ms ≤ 16 ms**。
 - 桌面 release（最新核心 `492a9a42` 链，指纹 `ac687532799855bc`，预热口径）：init p50 **2 ms**、缺 DLL 降级路径真实通过、AOT parse 87/10k/100k **0.873 / 0.640 / 0.616**、边界调用 0.0124 ms、VM 契约 42/0/0。
-- 桌面仍超预算 2 项，性质不同（已按 M2 复核更正归因）：AOT `serialize.10k` **1.534×** —— Rust wire 本体与同轮 AOT Dart 基本持平（1.449 vs 1.459 ms），超标来自 `encodeBlocks` 0.42 ms + FFI/FRB 边界约 0.37 ms；AOT `html.10k` **3.712×** —— Rust Clipboard render 本体已是 Dart 的 **2.16×**（1.542 vs 0.715 ms），渲染本体是主因、边界是次要增量。缩小边界需变更冻结 wire 形状（批量/二进制），缩小渲染本体需继续优化 Rust 路径；两者均交审核方裁决。
-- 待审核契约项：Export HTML 保留 rich feature 语义，与「十函数跨端逐字节」的冻结描述冲突；候选方案是跨端字节矩阵仅约束 Clipboard。
+- 桌面复制 10k 按新绝对值口径：**2.238 + 2.656 ≈ 4.9 ms ≤ 16 ms，达标**；原 serialize 1.534×、html 3.712× 两项比值门槛随 M2 决定取消。
+- 归因更正：html 一项的主因是 **Clipboard 新增的安全过滤**（tagfilter / 危险属性与 URL 剥离，Dart 旧实现从不做），不是「全部来自 FFI 边界」；审核方 Linux 探针同量级 wire 渲染 0.387 ms（其中 JSON 解码约 0.1 ms）。
+- 4 条修改（门槛与 Linux 数字、Web 复制补测、归因更正、删证据目录）已完成，等审核方快速复核。
 
 按 [04 §4.2](04-parallel-plan.md#42-审核停点) 等待 M2；不合入 main，不发版。
 

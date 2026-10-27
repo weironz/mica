@@ -267,6 +267,19 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 > `git show 9e604c43:scripts/md-wasm-evidence/<文件>`（或 `git checkout 9e604c43 -- scripts/md-wasm-evidence/`）。
 > 其余结果均可在集成分支 `single-source` 的对应提交与门禁日志中复现。
 
+### 当前结论（2026-10-27，M2 复核后）
+
+| 项 | 结论 | 依据 |
+| --- | --- | --- |
+| 契约 | 冻结；跨端逐字节只约束 Clipboard，Export HTML 随 `render` 特性变化——M2 裁决接受 | [02 §3.1](../02-architecture.md)、[reviews.md](../reviews.md) |
+| 预算 | wasm ≤ 262,144 B（以 Linux 构建为准）；复制 10k ≤ 16 ms 绝对值；解析 ≤ Dart ×1.2 | [02 §7](../02-architecture.md)、[05 D3/D4](../05-review-checklist.md) |
+| wasm 体积 | Linux 205,269 B（审核方同树独立构建 205,260 B） | 本文「M2 复核实测」 |
+| Web 解析 / 复制 | 三档比值 1.073 / 0.523 / 0.569；复制三轮中位 4.6 / 4.3 / 4.1 ms | 本文 T2.13、M2 复核实测 |
+| 桌面 | init 2 ms、解析 0.873 / 0.640 / 0.616、复制约 4.9 ms、边界 0.0124 ms、VM 契约 42/0/0 | 本文「最终桌面验收」 |
+| 状态 | 审核要求的 4 条修改已完成，等快速复核 | [04 §6](../04-parallel-plan.md) |
+
+下文按时间保留历史记录；出现矛盾时以本表、[reviews.md](../reviews.md) 与 02 为准。
+
 ### P0（T2.1，2026-10-26，WP-W）
 
 以下为单次 P0 验证结果记录；本次验证代码只在本分支 `worktree-agent-a7950b28e1e2a2c23`，不进入 main / `single-source`。对照基线说明：S0 基线尚未产出，因此性能比较采用本次同一浏览器、同一页面内实测的现有 Dart `markdownToBlocks`。工具链与运行环境：Rust 1.98.0 stable（`rust-toolchain.toml`）+ `wasm32-unknown-unknown`；wasm-bindgen crate 与 CLI 均为 0.2.129；Flutter 3.47.1 / Dart 3.13.1，真实 `flutter build web --release --no-web-resources-cdn`；本地静态服务器 + Playwright，HeadlessChrome/156.0.0.0（Windows 11 Pro）。
@@ -638,7 +651,7 @@ D 此前的 release wire+FFI 范围绝对数 0.015718 ms/次来自独立 probe/�
 > **更正（M2 复核后）**：此前记录的“两项目标均在 FFI 边界、Rust 本体远快于 Dart”说法不成立，原因是把 **native release** 的 wire 数字与 **VM（JIT）** 的 Dart 基线相比。以同轮 AOT 的 Dart 基线重算如下。
 
 - serialize 1.534×：Rust `wire::serialize_body_json` 同输入 **1.449 ms**，同轮 AOT Dart 序列化 **1.459 ms**，即 **≈1.0× 持平**（不是 0.63×；0.63× 是与 VM 的 2.30 ms 相比得出的，两套口径不可混用）。门面总耗时 2.238 ms = wire 1.449 + Dart `encodeBlocks` 0.42 + FFI/FRB 边界约 0.37 ms。**超标主因是边界成本叠加在“与 Dart 持平”的引擎之上**，不是引擎回退。
-- html 3.712×：Rust Clipboard wire render 同输入 **1.542 ms**，同轮 AOT Dart `selectionHtml` **0.715 ms**，**2.16×**；即使只算 render 本体（278 块约 0.99 ms）也约 1.38×。门面总 2.656 ms = wire 1.542 + `encodeBlocks` 0.42 + 边界约 0.69 ms。**这一项的主因是 Rust Clipboard 渲染本体比 Dart 镜像慢，边界是次要增量**，不能归为纯边界问题。
+- html 3.712×：Rust Clipboard wire render 同输入 **1.542 ms**，同轮 AOT Dart `selectionHtml` **0.715 ms**，**2.16×**；即使只算 render 本体（278 块约 0.99 ms）也约 1.38×。门面总 2.656 ms = wire 1.542 + `encodeBlocks` 0.42 + 边界约 0.69 ms。**这一项的主因是 Rust Clipboard 渲染新增了 Dart 旧实现从不做的安全过滤**（`sanitize_html`：tagfilter、危险属性与 URL 剥离），边界是次要增量，不能归为纯边界问题。审核方在 Linux 上的同量级探针（1 万字符 Clipboard wire）只有 **0.387 ms**，其中 JSON 解码约 0.1 ms —— 说明引擎本体没有异常，1.542 ms 与 0.387 ms 的差别来自两处探针口径不同（平台、输入、是否含解码），未逐一对齐；两种口径都指向「渲染本体 + 新增安全过滤」，不是边界。
 - 因此两项的性质不同：serialize 是边界成本（Rust 本体已与 Dart 持平），html 是渲染本体 + 边界共同导致。缩小边界需要批量/二进制传输，会改变冻结的 wire 契约形状；缩小渲染本体需要继续优化 Rust Clipboard 路径。两项都作为**待审核裁决项**提交，执行方未擅自改契约或放宽预算。数值来自同轮 AOT（Windows release，`flutter build windows --release -t integration_test/markdown_codec_release_probe.dart` + 同进程 Dart 对照），未与 VM JIT 或 Chrome 数混算。
 
 **证据**：`clients/mica_flutter/build/wp-d-release-summary.json`（五冷、bench、Unavailable、指纹）、每次运行的 `build/wp-d-release-*/run-N/driver.json`（含 console 与清理状态）、`build/wp-d-vm-codec-bench.json`（JIT 诊断）、`build/wp-d-dart-boundary-split.json`（Dart 边界分解）。探针驱动只操作复制 bundle、自有 PID 与自建隔离 APPDATA，并在 finally 中有界终止/清理；未触碰用户安装或用户数据。
@@ -707,11 +720,11 @@ WP-R `7b7d49d5`（输出 Value 递归稳定键序）接入为 `57bb4942`，`ce6c
 | --- | --- |
 | 产物 | 同一 production `dart2js` 页面：wasm `df8e8e5a…`（= Windows 正式产物）、glue `90ee81fd…`、`main.dart.js` `1869955a…` |
 | 路径 | 真实公共门面一次复制：`MarkdownCodec.serializeBlocks` + `renderClipboardHtml` |
-| 输入 | 10,000 UTF-16 / 298 块；预热 3 轮后计时 15 轮 |
-| 结果 | **中位 4.4 ms ≤ 16 ms**（样本 4.0–8.899 ms）；产物 10,480 B Markdown + 15,331 B 剪贴板 HTML |
+| 输入 | 10,000 UTF-16 / 298 块；每轮预热 3 次后计时 15 次，**共三轮独立测量**（每轮新浏览器 context 重新加载同一产物） |
+| 结果 | 三轮中位 **4.6 / 4.3 / 4.1 ms**，汇总中位 **4.3 ms ≤ 16 ms**（样本范围 3.7–5.9 ms）；产物 10,480 B Markdown + 15,331 B 剪贴板 HTML |
 | 口径 | Chrome 156 / Windows 11 / 生产 dart2js；不是桌面或原生的数字 |
 
 测量脚本为 `scripts/md-wasm-bench.dart` 的 `copy.10k` 场景（随本记录提交，函数 `_measureCopy`），因此在同一正式构建上可重放。测量结束已停止自有静态服务并关闭浏览器页面，未触碰用户进程。
 
-**证据存放说明**：本轮两份原始 JSON（`md-m2-linux-build.json`、`md-m2-copy-web.json`）与两份 Linux 产物留在 WP-W 工作树 `scripts/md-wasm-evidence/`，**不随本记录再提交**——与 `b0064835` 删除证据目录的审核要求一致。数字可由同一提交、同一参数重建复算：体积与 SHA 用上文命令直接比对，JS glue 的逐字节相同可先于完整重建核对。
+**证据存放说明**：本轮原始 JSON（`md-m2-linux-build.json`、`md-m2-copy-web.json`、三轮版 `md-m2-copy-web-3rounds.json`）与两份 Linux 产物留在 WP-W 工作树 `scripts/md-wasm-evidence/`，**不随本记录再提交**——与 `b0064835` 删除证据目录的审核要求一致。数字可由同一提交、同一参数重建复算：体积与 SHA 用上文命令直接比对，JS glue 的逐字节相同可先于完整重建核对。
 
