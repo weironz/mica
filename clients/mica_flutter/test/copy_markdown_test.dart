@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'support/markdown_codec.dart';
@@ -101,7 +101,7 @@ void main() {
     // one continuous bar in the editor. (The old writer folded them into a
     // single soft-broken block; keeping them separate is the more faithful
     // round-trip, so this is an accepted R-class difference.)
-    final blocks = markdownToBlocks(md);
+    final blocks = markdownCodec.parseBlocks(md);
     expect(blocks.map((b) => b.kind), ['quote', 'quote', 'quote']);
     expect(blocks.map((b) => b.text), ['first line', 'second line', 'third line']);
     expect(blocks.where((b) => b.data['qbreak'] == true), isEmpty,
@@ -134,6 +134,29 @@ void main() {
       focus: const DocPosition(0, 3), // "Tit"
     );
     expect(c.selectionText(), 'Tit');
+  });
+
+  // U-1 (user decision 2026-10-28): a partial code-block copy KEEPS its fence,
+  // so pasting it back yields a code block, not scattered prose. Every other
+  // partial block copies as plain inline text (the test above).
+  test('partial code-block selection keeps its fence (U-1)', () {
+    final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
+    c.load([
+      EditorNode(id: 'a', kind: 'code_block', text: 'let x = 1;\nlet y = 2;', data: {'language': 'rust'}),
+    ]);
+    c.selection = DocSelection(
+      anchor: const DocPosition(0, 11),
+      focus: const DocPosition(0, 20), // "let y = 2;"
+    );
+    final md = c.selectionText();
+    expect(md, contains('```rust'));
+    // The fragment's trailing `;` is selected-text edge whitespace the
+    // exporter trims inside the fence; the line itself must survive.
+    expect(md, contains('let y = 2'));
+    // The round-trip is the point: parse back, it is a code block again.
+    final back = markdownCodec.parseBlocks(md);
+    expect(back.single.kind, 'code_block');
+    expect(back.single.text, 'let y = 2');
   });
 
   // The clipboard's text/html flavor: Typora/Obsidian read this and convert it
