@@ -10,14 +10,39 @@ use crate::model::{Block, DocumentSnapshotPayload, MdError};
 use crate::serialize::span_walk::{SpanTies, SpanWalker};
 
 fn escape(text: &str) -> String {
-  text
-    .replace('&', "&amp;")
-    .replace('<', "&lt;")
-    .replace('>', "&gt;")
+  // Single pass with a cheap pre-scan: `replace` three times re-scanned and
+  // re-allocated the whole text even when nothing needed escaping (the common
+  // case for clipboard text runs).
+  if !text.bytes().any(|b| matches!(b, b'&' | b'<' | b'>')) {
+    return text.to_string();
+  }
+  let mut out = String::with_capacity(text.len() + 8);
+  for ch in text.chars() {
+    match ch {
+      '&' => out.push_str("&amp;"),
+      '<' => out.push_str("&lt;"),
+      '>' => out.push_str("&gt;"),
+      other => out.push(other),
+    }
+  }
+  out
 }
 
 fn attr(text: &str) -> String {
-  escape(text).replace('"', "&quot;")
+  if !text.bytes().any(|b| matches!(b, b'&' | b'<' | b'>' | b'"')) {
+    return text.to_string();
+  }
+  let mut out = String::with_capacity(text.len() + 8);
+  for ch in text.chars() {
+    match ch {
+      '&' => out.push_str("&amp;"),
+      '<' => out.push_str("&lt;"),
+      '>' => out.push_str("&gt;"),
+      '"' => out.push_str("&quot;"),
+      other => out.push(other),
+    }
+  }
+  out
 }
 
 fn depth(block: &Block) -> usize {
@@ -96,7 +121,11 @@ pub(crate) fn render(doc: &DocumentSnapshotPayload) -> Result<String, MdError> {
   {
     return Ok(String::new());
   }
-  let mut out = String::new();
+  // Blocks were produced by the parser (or the boundary) in document order and
+  // the root's children reference them in the same order; pre-size to the
+  // source text plus headroom so the walk stops re-allocating mid-render.
+  let source_len: usize = blocks.iter().map(|b| b.text.len()).sum();
+  let mut out = String::with_capacity(source_len + source_len / 2);
   let mut quote = 0;
   let mut i = 0;
   while i < blocks.len() {
@@ -278,7 +307,9 @@ fn inline(block: &Block) -> String {
 
 fn span(units: &[u16], lo: usize, hi: usize, marks: &[&crate::inline::InlineMark]) -> String {
   let text = |a, b| String::from_utf16_lossy(&units[a..b]);
-  let mut out = String::new();
+  // Pre-size to the source length: every clipboard tag is longer than the
+  // mark text it replaces, so this only grows on pathological nesting.
+  let mut out = String::with_capacity(units.len());
   let mut walk = SpanWalker::new(marks, hi, SpanTies::Html);
   let mut pos = lo;
   while pos < hi {
@@ -289,33 +320,57 @@ fn span(units: &[u16], lo: usize, hi: usize, marks: &[&crate::inline::InlineMark
     let (s, e, mark) = (pick.s, pick.e, pick.mark);
     out.push_str(&escape(&text(pos, s)));
     match mark.kind.as_str() {
-      "code" => out.push_str(&format!("<code>{}</code>", escape(&text(s, e)))),
-      "math" => out.push_str(&format!(
-        "<span data-mica-math=\"1\">${}$</span>",
-        escape(&text(s, e))
-      )),
-      "footnote" => out.push_str(&format!(
-        "<sup data-mica-footnote=\"{}\">{}</sup>",
-        attr(mark.href.as_deref().unwrap_or(&text(s, e))),
-        escape(&text(s, e))
-      )),
+      "code" => {
+        out.push_str("<code>");
+        out.push_str(&escape(&text(s, e)));
+        out.push_str("</code>");
+      }
+      "math" => {
+        out.push_str("<span data-mica-math=\"1\">$");
+        out.push_str(&escape(&text(s, e)));
+        out.push_str("$</span>");
+      }
+      "footnote" => {
+        out.push_str("<sup data-mica-footnote=\"");
+        out.push_str(&attr(mark.href.as_deref().unwrap_or(&text(s, e))));
+        out.push_str("\">");
+        out.push_str(&escape(&text(s, e)));
+        out.push_str("</sup>");
+      }
       "html" => out.push_str(&escape(&text(s, e))),
       kind => {
         let inner = walk.inner(&pick);
         let body = span(units, s, e, &inner);
         match kind {
-          "bold" => out.push_str(&format!("<strong>{body}</strong>")),
-          "italic" => out.push_str(&format!("<em>{body}</em>")),
-          "strike" => out.push_str(&format!("<s>{body}</s>")),
-          "link" => out.push_str(&format!(
-            "<a href=\"{}\">{body}</a>",
-            attr(safe_url(mark.href.as_deref().unwrap_or(""), false))
-          )),
-          "image" => out.push_str(&format!(
-            "<img src=\"{}\" alt=\"{}\">",
-            attr(safe_url(mark.href.as_deref().unwrap_or(""), true)),
-            attr(&text(s, e))
-          )),
+          "bold" => {
+            out.push_str("<strong>");
+            out.push_str(&body);
+            out.push_str("</strong>");
+          }
+          "italic" => {
+            out.push_str("<em>");
+            out.push_str(&body);
+            out.push_str("</em>");
+          }
+          "strike" => {
+            out.push_str("<s>");
+            out.push_str(&body);
+            out.push_str("</s>");
+          }
+          "link" => {
+            out.push_str("<a href=\"");
+            out.push_str(&attr(safe_url(mark.href.as_deref().unwrap_or(""), false)));
+            out.push_str("\">");
+            out.push_str(&body);
+            out.push_str("</a>");
+          }
+          "image" => {
+            out.push_str("<img src=\"");
+            out.push_str(&attr(safe_url(mark.href.as_deref().unwrap_or(""), true)));
+            out.push_str("\" alt=\"");
+            out.push_str(&attr(&text(s, e)));
+            out.push_str("\">");
+          }
           _ => out.push_str(&body),
         }
       }
