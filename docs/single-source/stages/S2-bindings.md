@@ -609,3 +609,31 @@ release 五次冷进程和实际缺 DLL 后应用首帧的独立 probe 已准备
 D 此前的 release wire+FFI 范围绝对数 0.015718 ms/次来自独立 probe/旧时点，只作上下文并列，不能与本表相减，也不是 fresh 联合预算验收。此处没有据此添加缓存、改预算或扩大优化；D/W 需在集成新源码后重建正式产物复测。
 日志 `C:/Users/willz/AppData/Local/Temp/wpr-boundary87-release.log`。结构门禁 `bash scripts/check-file-size.sh` exit 0、`file-size gate: passed`（只有存量 WARN，无新增超限单元）。
 本轮余下未验证项：正式 FFI/wasm 的 fresh 全路径预算、联合集成门禁及 Export 契约申请由协调者继续；不把本地纯 Rust 探针报为全平台通过。
+
+### 2026-10-27 WP-D：最终桌面验收（集成头 + R 安全层）
+
+执行于含 WP-R `492a9a42`（`sanitize_html` 融合扫描）、`4261970d`（stage87 精确输入）、`8a7856b8` 的集成树，D 分支 HEAD `3ca14d10`。native DLL 与 release bundle 均由该树重建；探针引擎指纹 **`ac687532799855bc`**，VM 契约同轮重建后 **42 passed / 0 failed / 0 skipped**（10 组 wire gold、30 份旧 Dart Clipboard 逐字节 port、指纹幂等回归、wrapper）。
+
+口径说明：init 计时为**预热后**口径——每个新复制目录先做一次不计时的预热启动（Windows Defender/智能扫描对新复制二进制的首次加载耗时数秒，属复制成本，不属于引擎），随后同目录正式计时；等价于固定安装目录的第二次启动状态。预热使用各自独立的隔离 APPDATA，不共享用户数据。未预热的原始五冷（3490/13991/9048/8598/7381 ms）保留在 `wp-d-release-summary.json` 的历史运行中作为方法学诊断。
+
+| 验收项 | 结果 | 预算/判定 |
+| --- | --- | --- |
+| init p50（预热口径，n=5） | **2 ms**（6/6/2/2/2；startup_chain 125–136 ms 另列诊断） | ≤30 ms ✅ |
+| Unavailable（复制 bundle 移除 DLL，无 fallback） | 真实 `UnavailableMarkdownCodec`、crash.log 记录初始化错误、首帧仍渲染，init 6 ms | ✅ |
+| AOT parse.87 | **0.873×**（codec 0.01728 ms / Dart 0.01973 ms） | ≤1.2 ✅ |
+| AOT parse.10k | **0.640×**（3.67 / 5.78 ms） | ✅ |
+| AOT parse.100k | **0.616×**（44.07 / 73.45 ms） | ✅ |
+| AOT serialize.10k | **1.534×**（2.238 / 1.459 ms） | ❌ |
+| AOT html.10k（clipboard） | **3.712×**（2.656 / 0.715 ms） | ❌ |
+| 边界 inline87 | 0.0124 ms | ≤0.1 ms ✅ |
+| VM 契约（同轮） | 42 / 0 / 0 | ✅ |
+
+**失败项归因（与 WP-R 同输入 wire 数据对照）**
+
+- serialize 1.534×：Rust `wire::serialize_body_json` 本体 **0.63×**（远快于 Dart 序列化）；门面总耗时 2.238 ms 中，Dart `encodeBlocks` 实测 **0.42 ms**（10k/298 块），其余约 1.2 ms 在 FFI/FRB 字符串边界。瓶颈是边界传输，不是序列化引擎。
+- html 3.712×：Rust Clipboard render 本体 **1.542 ms**，绝对值低于门面总耗时 2.656 ms；Dart 基线仅 0.715 ms 使 1.2× 门槛低至 0.86 ms——单次 wire render 本身就已越过门槛。门面额外约 1.1 ms 同样在边界（`encodeBlocks` 0.42 ms + FRB 传参与大字符串）。
+- 两项目标均是 Dart 门面实现层，不在 Rust 简洁性；缩小边界成本需要批量/二进制传输，会改变冻结的 wire 契约形状，**超出 S2 范围，作为待审核裁决项提交**，执行方未擅自改契约或放宽预算。数值来自同轮 AOT（Windows release，`flutter build windows --release -t integration_test/markdown_codec_release_probe.dart` + CPU 同进程 Dart 对照），未与 VM JIT 或 Chrome 数混算。
+
+**证据**：`clients/mica_flutter/build/wp-d-release-summary.json`（五冷、bench、Unavailable、指纹）、每次运行的 `build/wp-d-release-*/run-N/driver.json`（含 console 与清理状态）、`build/wp-d-vm-codec-bench.json`（JIT 诊断）、`build/wp-d-dart-boundary-split.json`（Dart 边界分解）。探针驱动只操作复制 bundle、自有 PID 与自建隔离 APPDATA，并在 finally 中有界终止/清理；未触碰用户安装或用户数据。
+
+**M2 桌面侧材料**：通过 7 项（init、Unavailable、parse×3、边界、VM 契约），失败 2 项（serialize、html，均含完整归因与 Rust 侧已达证据），连同 Export profile 跨 feature 字节一致性问题一并交审核方裁决。
