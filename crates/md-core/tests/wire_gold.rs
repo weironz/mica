@@ -6,9 +6,11 @@
 //! Each file has `function` and `cases`; each case has `id`, named `args` and
 //! the exact returned `output` string (JSON outputs are deliberately not parsed
 //! or reordered). Binding tests can replay args without knowing Rust's model.
-//! Gold semantics are the bindings' default/no-render behavior. Rich HTML
-//! rendering is outside this contract: with `render`, the other eight vectors
-//! still run, but the HTML comparison/generation is explicitly not compiled.
+//! Gold is generated without rich rendering. Verification replays the stored
+//! args byte-for-byte in both builds, including Clipboard HTML. Export HTML
+//! keeps its established feature-dependent rendering and is verified against
+//! this default gold only without `render`; it remains an explicit contract
+//! exception rather than being normalized away.
 
 use std::path::{Path, PathBuf};
 
@@ -124,6 +126,9 @@ fn verify(function: &str, cases: Vec<Value>) {
   let name = function.strip_suffix("_json").unwrap_or(function);
   let path = gold_dir().join(format!("{name}.json"));
   if std::env::var("GEN_GOLD").as_deref() == Ok("1") {
+    if cfg!(feature = "render") {
+      panic!("generate shared gold without --features render");
+    }
     std::fs::create_dir_all(gold_dir()).expect("create wire fixture directory");
     std::fs::write(&path, text).expect("write wire gold");
     println!(
@@ -139,6 +144,19 @@ fn verify(function: &str, cases: Vec<Value>) {
     assert_eq!(stored.len(), value["cases"].as_array().unwrap().len());
     for (case, current) in stored.iter().zip(value["cases"].as_array().unwrap()) {
       assert_eq!(case["id"], current["id"], "fixture inventory drift");
+      for key in ["markdown", "fragment", "source", "profile"] {
+        assert_eq!(
+          case["args"][key], current["args"][key],
+          "fixture input drift: {} {key}",
+          case["id"]
+        );
+      }
+      #[cfg(feature = "render")]
+      if function == "render_html_body_json" && case["args"]["profile"] == "export" {
+        // §2 Export intentionally uses rich math/Mermaid in this feature.
+        // Do not compare it to a no-render gold or claim cross-feature parity.
+        continue;
+      }
       let args = &case["args"];
       let s = |key: &str| args[key].as_str().unwrap();
       let output = match function {
@@ -207,7 +225,6 @@ fn serialize_body_json() {
   verify("serialize_body_json", cases);
 }
 
-#[cfg(not(feature = "render"))]
 #[test]
 fn render_html_body_json() {
   let mut cases = Vec::new();
