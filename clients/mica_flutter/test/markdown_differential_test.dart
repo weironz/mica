@@ -105,6 +105,70 @@ void main() {
     );
   });
 
+  test('description ratchet ignores only JSON object key order', () {
+    final baseline = <String, dynamic>{
+      'dart': '',
+      'rust': 'quote:2:{"li":0,"quote":2}',
+    };
+    final actual = (
+      id: 'x',
+      category: 'block-count',
+      field: 'block@1',
+      dart: '',
+      rust: 'quote:2:{"quote":2,"li":0}',
+    );
+    expect(_sameDifferenceValue(baseline, actual), isTrue);
+    expect(
+      _sameDifferenceValue(baseline, (
+        id: actual.id,
+        category: actual.category,
+        field: actual.field,
+        dart: '',
+        rust: 'quote:2:{"quote":3,"li":0}',
+      )),
+      isFalse,
+    );
+    expect(
+      _sameDifferenceValue(baseline, (
+        id: actual.id,
+        category: 'text',
+        field: 'block@1.text',
+        dart: '',
+        rust: actual.rust,
+      )),
+      isFalse,
+    );
+    for (final changed in [
+      'quote:2:{"quote":null,"li":0}',
+      'quote:3:{"quote":2,"li":0}',
+      'ordinary {"quote":2,"li":0}',
+    ]) {
+      expect(
+        _sameDifferenceValue(baseline, (
+          id: actual.id,
+          category: actual.category,
+          field: actual.field,
+          dart: '',
+          rust: changed,
+        )),
+        isFalse,
+      );
+    }
+    expect(
+      _sameDifferenceValue(
+        {'dart': '', 'rust': 'table:0:{"rows":[1,2]}'},
+        (
+          id: 'x',
+          category: 'block-count',
+          field: 'block@1',
+          dart: '',
+          rust: 'table:0:{"rows":[2,1]}',
+        ),
+      ),
+      isFalse,
+    );
+  });
+
   test('difference limit fails instead of reporting a truncated corpus', () {
     expect(() => _requireCompleteCorpus(50000), returnsNormally);
     expect(() => _requireCompleteCorpus(50001), throwsStateError);
@@ -420,7 +484,7 @@ List<_Diff> _compareBlocks(String id, _Blocks dart, _Blocks rust) {
 }
 
 String _describe(({String kind, String text, Map<String, dynamic> data}) b) =>
-    '${b.kind}:${b.text.length}:${jsonEncode(b.data)}';
+    '${b.kind}:${b.text.length}:${_canon(b.data)}';
 
 // ---------------------------------------------------------------------------
 // Serialization through each implementation
@@ -587,5 +651,24 @@ void _checkRatchet(Map<String, int> counts, List<_Diff> diffs) {
 // mutation beyond character 300 while retaining the same id/category/field.
 String _short(String s) => s;
 
-bool _sameDifferenceValue(Map<String, dynamic> expected, _Diff actual) =>
-    expected['dart'] == actual.dart && expected['rust'] == actual.rust;
+bool _sameDifferenceValue(Map<String, dynamic> expected, _Diff actual) {
+  // Only block descriptions embed JSON inside a string. §3.4 allows object
+  // key order differences there; text/Markdown/HTML remain byte-exact.
+  String comparable(String value) {
+    final description =
+        actual.category == 'block-count' ||
+        (actual.category == 'roundtrip' &&
+            RegExp(r'^(dart:|rust:)?block@\d+$').hasMatch(actual.field));
+    if (!description || value.isEmpty) return value;
+    final match = RegExp(
+      r'^([A-Za-z_][A-Za-z0-9_]*:\d+:)(\{[\s\S]*\})$',
+    ).firstMatch(value);
+    if (match == null) return value;
+    final object = jsonDecode(match[2]!);
+    if (object is! Map) return value;
+    return '${match[1]}${_canon(object)}';
+  }
+
+  return comparable(expected['dart'] as String) == comparable(actual.dart) &&
+      comparable(expected['rust'] as String) == comparable(actual.rust);
+}
