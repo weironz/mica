@@ -514,6 +514,14 @@ merman/ratex/uuid 且没有 `mica-md`。消费方 `Cargo.toml`/源码零改动�
 以上日志保存在本机 `C:/Users/willz/AppData/Local/Temp/mica-wpr-g1-review-20261027/`（未提交临时日志）。
 本轮执行记录是验证之后的文档追加，不改变已验证的代码/锁文件。
 
-前三条已完成；第四条合并及集成头 `local-ci.sh rust` 的回执由协调者追加。本分支仍处于 **G1 复核待审核**，不宣称 G1 已通过或契约已冻结。
+前三条已完成；第四条合并及集成头 `local-ci.sh rust` 的回执见下节。契约尚未冻结。
+
+### 2026-10-27 · G1 第四项：集成头 Rust 门禁
+
+- 按审核要求使用 merge commit 依次合入 S0 修正 `e122680`（merge `5d8feb7`）和 S1 `8b5f824`（merge `f2bcb70`）。进度表冲突按实际状态解决；`reviews.md` 与 02 的审核裁决未改，`git ls-files spike` 无输出。
+- Windows 本机在干净的集成头 **`f2bcb70bcd6aca35fb0016bbf7a38f1b91659db3`** 执行原样 `bash scripts/local-ci.sh rust`，退出码 **0**。独立空库 `mica_g1_integrated_20261027` 在 `mica-test-pg` 的 55432 端口；`MICA_REQUIRE_DB=1`。由于 Windows 没有 PostgreSQL CLI，临时 PATH 适配器调用该容器中的真实 `psql`，经 host.docker.internal:55432 验证选定 URL；先验证目标库可连接及不存在的库失败，没有触碰共享开发库。
+- ignored-source、迁移追踪与 LF、CI 配置、结构、`cargo fmt --all --check`、`cargo build --workspace`、workspace clippy `-D warnings` 和 migrations 全部通过。测试回执：**`receipt: 1103 passed (floor 500)`**；`mica-core --features store` **`receipt: 213 passed (floor 1)`**。完整日志在本机 `target/g1-review-tools/local-ci-rust.log`（不提交）；该回执属于上述合并头，后续只有文档记录变化。
+- 按审核方建议新增 `.gitattributes` 中 `contracts/*.json text eol=lf`（`f576559`），避免 Windows 黄金文件 CRLF 引起的误报。
+- 门禁不覆盖 web e2e、Windows FFI 集成测试、容器启动、MCP inspector；它们不能由本次 Rust 回执代替。四项修改已完成，**G1 进入待审核（复核），未冻结契约、未合并 main**。
 
 

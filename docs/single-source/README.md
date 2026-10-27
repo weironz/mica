@@ -1,38 +1,28 @@
 # 单一实现专项：Markdown 引擎只留一份（S0–S5）
 
-> 状态：**开发中，G1 / G2 待审核（存在阻塞）**（2026-10-27 更新；2026-10-26 立项）。执行方：三个并行工作包，协调者汇总。
+> 状态：**G1 四项修订完成、待复核；G2 附条件通过**（2026-10-27 更新；2026-10-26 立项）。执行方：三个并行工作包，协调者汇总。
 > 审核方：本仓库的维护 agent，在审核停点 G1–G3 抽查、全部完成后（G4）按 [05-review-checklist.md](05-review-checklist.md) 逐条审核。
 > 本目录是这个专项的**唯一权威文档**；其他文档里与之冲突的描述，以本目录为准。
 
 ## 当前交付与审核入口（2026-10-27）
 
-> **审核结论（2026-10-27，详见 [reviews.md](reviews.md)）**：G1 **要求修改**——全量 Rust 门禁已由审核方在 Linux 上补跑通过，
-> 七项契约问题已裁决并写进 02 / S1 / S4 / S5；WP-R 还要做 4 条机械项（并入 `6594f12`、提交 FFI lock、删掉已失效的 ignored 测试、合进 single-source 后跑门禁），
-> 之后快速复核即冻结。G2 **通过（附条件）**：wasm 方案成立，正式构建用 opt-3，M2 用正式产物重测。下文是审核前执行方的交付状态。
-
-以下是执行方的交付状态，不代表 G1 / G2 已通过；审核方结论仍只写入 [reviews.md](reviews.md)。
+> **审核与执行状态（2026-10-27）**：审核方在 [reviews.md](reviews.md) 中裁决七项契约问题，并要求 G1 完成四项修改后快速复核。四项现已交付；合并头 `f2bcb70` 的 Rust 门禁通过（workspace 1103 passed、store 213 passed），详见 [S1 执行记录](stages/S1-core-sdk.md#2026-10-27--g1-第四项集成头-rust-门禁)。**G1 仍待审核方复核，契约尚未冻结。**
+> G2 已由审核方 **附条件通过**：正式构建用 opt-3，M2 用正式产物重测。审核方结论只写入 [reviews.md](reviews.md)。
 
 | 工作包 | 可复核提交 / 分支 | 当前状态 |
 | --- | --- | --- |
 | S0 初始交付 | `single-source` 的 `c6446d5` | 已集成；其中对拍往返输入与性能采样存在问题，以修正提交为准 |
-| S0 修正与补测 | `refs/heads/worktree-agent-acfa208a26ae27e64` @ `e122680` | 尚未集成；[S0 执行记录](https://github.com/weironz/mica/blob/worktree-agent-acfa208a26ae27e64/docs/single-source/stages/S0-baseline.md) 的新增收尾节在该分支。Flutter VM 回执 2159 passed / 2 skipped，原生指纹与对拍回执 5 passed，Web release 与字体校验通过 |
-| S1 引擎拆分与审查修复 | `refs/heads/worktree-agent-aaa10db22e269aaf4` @ `12c7ff2` | 尚未集成；该分支 [S1 执行记录](https://github.com/weironz/mica/blob/worktree-agent-aaa10db22e269aaf4/docs/single-source/stages/S1-core-sdk.md) 包含修复、门禁和七项契约问题。T1.10 未完成，契约未冻结 |
-| T2.1 P0 | 原 spike `d48ed4f`；优化实验 `refs/heads/ss/w/p0-costs` @ `68ae07f`，配对复测 `f706c9b`，核心候选 `6594f12` | spike / 核心未集成；opt-3 六组输入三轮全满足 1.2×，体积 / 初始化达标，独立 JSON 阶段计时已补齐（6 项测试回执）；[协调者复核](stages/S2-bindings.md#执行记录) 已入档，G2 待审核 |
+| S0 修正与补测 | `e122680`，merge `5d8feb7` | 已集成；[S0 执行记录](stages/S0-baseline.md) 含 Flutter VM 2159 passed / 2 skipped、原生指纹与对拍 5 passed、Web release 与字体校验结果 |
+| S1 引擎拆分与审查修复 | `8b5f824`，merge `f2bcb70` | 已集成；[S1 执行记录](stages/S1-core-sdk.md) 含四项修订和合并头门禁。契约尚未冻结，待 G1 复核 |
+| T2.1 P0 | 原 spike `d48ed4f`；优化实验 `refs/heads/ss/w/p0-costs` @ `68ae07f`；核心 `6594f12` 以 `20ecde0` 进入 S1 | G2 已附条件通过；spike 不进集成分支，正式构建 opt-3 且 M2 须重新测量。详见 [审核记录](reviews.md) |
 
 S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust 自身往返记录 754 条（旧值 1305 混入解析差异），记录数不是独立 bug 数。Chrome 测试基线实际为 dartdevc，不能与 P0 的 production dart2js 数字直接相除。
 
-**G1 尚有以下阻塞 / 裁决项：**
+**G1 复核入口：**审核方已裁决原七项契约问题；其中 I3 保留现有 URL / 邮箱自动链接与首尾空白例外，S4 再由用户决定是否改变存储行为。四项修订的提交与回执详见 [S1 执行记录](stages/S1-core-sdk.md#2026-10-27--g1-第四项集成头-rust-门禁)，交审核方快速复核；执行方不自行冻结契约。
 
-- 最终树全量 workspace 测试未完成，`local-ci.sh rust` 未单命令全绿；局部测试与 clippy 通过不能替代最终完整回执。共享开发库未重置，独立测试库已建，曾遭 Docker 掉线与链接失败。
-- FFI 独立 `Cargo.lock` 未更新，`cargo check --locked` 失败。建议允许仅更新必要依赖图，消费方源码仍零改动。
-- 严格 I3 未满足：无 marks 的 URL / 尾随空白编解码会变化，目标测试仍 ignored。建议允许不能无损写成源码字符串时回退现有 `{text, marks: []}` 对象，同时保留旧 Dart 客户端重解析造成的兼容限制，S4 实测。
-- Sequential 与 root ID 碰撞时，候选实现派生有效前缀；这是尚未批准的契约例外，不能宣称完全符合原约定。
-- 两项 Rust 基准超 ±5%：import.10k +6.3%、export_html.100k −6.3%；尚无同机交替 A/B 证据。
-- 其他契约问题：BlockJson 与 Block 的比较口径、根块实际 `paragraph` 与规范 `page`、`$$` 过滤位置、追加公开兼容入口。详见 S1 分支执行记录。
+**G2：**用户选择继续优化后，审核方已附条件通过 wasm 路线。正式产物须使用 opt-3，保持 200 KB gzip、60 ms 初始化和三档 ≤ Dart ×1.2 预算，M2 用正式十 API 产物重新验证；P0 诊断产物数据不能代替 M2 证据。实验归因和原始数据入口见 [S2 执行记录](stages/S2-bindings.md#执行记录)。
 
-**G2 用户决定（2026-10-27）：继续优化 wasm，先拆分 UUID、解析、JSON 与绑定开销，保持原性能预算。** WP-W 继续 T2.1 的实验与复测：在同一浏览器的 release 构建中对照 Dart，分别测量 UUID / Sequential 解析、BlockJson 映射与 JSON 编码、跨语言字符串传递、Dart JSON 解码及 BlockSpec 映射，最后复测完整路径。87 / 10k / 100k 输入仍须全部满足 Dart ×1.2，体积 ≤200 KB gzip、初始化 ≤60 ms；不以 Dart 缓存解析器或放宽预算达标。原 P0 失败数据保留，新增实验结果另行入档。
-
-本次决定仅恢复 G2 的 P0 归因与优化，不代表 G1 通过或契约冻结。WP-R 仍按 [04 §4.2](04-parallel-plan.md#42-审核停点) 停在 G1；不合入 main，不发版。任务分支合入 `single-source` 前仍须满足 [04 §4.3](04-parallel-plan.md#43-每个-pr-的要求) 的门禁要求。
+按 [04 §4.2](04-parallel-plan.md#42-审核停点) 等待 G1 复核；不合入 main，不发版。
 
 ## 一句话
 
