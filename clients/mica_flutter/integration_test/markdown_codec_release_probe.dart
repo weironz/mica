@@ -41,7 +41,11 @@ void main() {
           report['engine'] = markdownCodec.engineInfo.toString();
           report['inline'] = markdownCodec.parseInline('**release**').text;
           if (Platform.environment['MICA_CODEC_PROBE_BENCH'] == '1') {
-            report['bench'] = measureMarkdownCodec(markdownCodec);
+            final bench = measureMarkdownCodec(markdownCodec);
+            report['bench'] = bench;
+            report['bench_passes'] = bench.every(
+              (row) => row['passes'] == true,
+            );
           }
         }
         if (expectedUnavailable) {
@@ -58,15 +62,27 @@ void main() {
             report['unavailable'] == expectedUnavailable &&
             (expectedUnavailable
                 ? report['native_failure_logged'] == true
-                : report['inline'] == 'release');
+                : report['inline'] == 'release') &&
+            report['bench_passes'] != false;
       } catch (error, stack) {
         report['success'] = false;
         report['error'] = '$error';
         report['stack'] = '$stack';
       }
-      File(
-        output,
-      ).writeAsStringSync(const JsonEncoder.withIndent(' ').convert(report));
+      try {
+        final target = File(output);
+        final temporary = File('$output.tmp');
+        temporary.writeAsStringSync(
+          const JsonEncoder.withIndent(' ').convert(report),
+        );
+        temporary.renameSync(target.path);
+      } catch (error, stack) {
+        // The driver must see a failed write, not wait forever for success.
+        stderr.writeln(
+          jsonEncode({'probe_result_write_error': '$error', 'stack': '$stack'}),
+        );
+        exitCode = 1;
+      }
     });
   };
   app.main();
