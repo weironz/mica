@@ -4,8 +4,10 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('image alt export', () {
     const cases = [
       // Issue #58's original short examples, with explicit image syntax.

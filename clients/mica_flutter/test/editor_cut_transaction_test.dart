@@ -9,6 +9,7 @@ import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/editor/table.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
+import 'support/markdown_codec.dart';
 
 Future<void> key(WidgetTester t, LogicalKeyboardKey k,
     {bool ctrl = false, bool shift = false}) async {
@@ -45,6 +46,7 @@ Future<void> pumpEditor(WidgetTester t, List<DocOp> ops,
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   testWidgets('cut deletes only its successful clipboard snapshot, body and cell', (t) async {
     final sandbox = Directory.systemTemp.createTempSync('mica-cut-');
     final signal = '${sandbox.path}/clipboard';

@@ -3,6 +3,7 @@ import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/table.dart';
+import 'support/markdown_codec.dart';
 
 /// Regression: Ctrl+A → copy → paste a page containing a table turned every
 /// bold/inline-code cell into visible markdown source (`**你好**`). Cause:
@@ -14,6 +15,7 @@ import 'package:mica_flutter/editor/table.dart';
 /// conversion `_copyTableArea` and the cell-edit Ctrl+C already use. This pins
 /// that conversion end-to-end for the content that broke.
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('cell markdown -> copy html -> paste keeps MARKS, not literal source', () {
     for (final cellMd in [
       r'**bold** and `code`',

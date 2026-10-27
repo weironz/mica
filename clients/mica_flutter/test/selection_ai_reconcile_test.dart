@@ -3,8 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   for (final replace in [false, true]) {
     for (final prefix in ['', 'remote ']) {
       testWidgets(

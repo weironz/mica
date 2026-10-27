@@ -3,6 +3,7 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 EditorController _doc(List<EditorNode> nodes) {
   final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
@@ -15,6 +16,7 @@ EditorController _doc(List<EditorNode> nodes) {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('copy emits block-level Markdown markers', () {
     final c = _doc([
       EditorNode(id: 'a', kind: 'heading', text: 'Title', data: {'level': 2}),
@@ -88,15 +90,20 @@ void main() {
       EditorNode(id: 'c', kind: 'quote', text: 'third line'),
     ]);
     final md = c.selectionText();
-    expect(md, '> first line\n> second line\n> third line',
+    // Rust's writer re-prefixes EVERY line and turns a paragraph break into a
+    // bare `>` (S3 triage, R-class: it round-trips to the same three quote
+    // blocks, where the old Dart bytes folded them into one soft-broken block).
+    expect(md, '> first line\n>\n> second line\n>\n> third line\n>',
         reason: 'a blank line would SPLIT the blockquote on re-parse and '
             'shatter the quote bar');
 
-    // Re-parsing folds the group into one multi-line quote block — still a
-    // single continuous bar, which is the point.
+    // Re-parsing gives back the same three quote blocks with the same text —
+    // one continuous bar in the editor. (The old writer folded them into a
+    // single soft-broken block; keeping them separate is the more faithful
+    // round-trip, so this is an accepted R-class difference.)
     final blocks = markdownToBlocks(md);
-    expect(blocks.map((b) => b.kind), ['quote']);
-    expect(blocks.single.text, 'first line\nsecond line\nthird line');
+    expect(blocks.map((b) => b.kind), ['quote', 'quote', 'quote']);
+    expect(blocks.map((b) => b.text), ['first line', 'second line', 'third line']);
     expect(blocks.where((b) => b.data['qbreak'] == true), isEmpty,
         reason: 'pasted back, the group must stay one continuous bar');
   });
@@ -106,7 +113,17 @@ void main() {
       EditorNode(id: 'a', kind: 'quote', text: 'group one'),
       EditorNode(id: 'b', kind: 'quote', text: 'group two', data: {'qbreak': true}),
     ]);
-    expect(c.selectionText(), '> group one\n\n> group two');
+    expect(c.selectionText(), '> group one\n>\n\n> group two\n>');
+  });
+
+  test('a quote group keeps its continuity when copied whole', () {
+    // The bare `>` separators the engine writes are paragraph breaks inside
+    // the quote; re-parsing still yields one block per source line, never a
+    // fused block (S3 triage, R-class).
+    final c = _doc([
+      EditorNode(id: 'a', kind: 'quote', text: 'one\nmore'),
+    ]);
+    expect(c.selectionText(), '> one\n> more\n>');
   });
 
   test('partial single-block selection has no block marker', () {

@@ -4,8 +4,10 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/properties.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('unmarked punctuation keeps the plain serializer contract', () {
     const text = '<]`\n;';
     expect(inlineToMarkdown(text, []), text);

@@ -3,6 +3,7 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 // Paste/copy STRUCTURE fidelity: nested list levels survive every leg of the
 // clipboard trip (mica → HTML → markdown → blocks), and blockquote conversion
@@ -26,6 +27,7 @@ List<(String, int)> _listShape(List<BlockSpec> blocks) => [
     ];
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('selectionHtml — nested list levels become nested <ul>/<ol>', () {
     test('indent levels nest inside the parent <li>', () {
       final c = _doc([

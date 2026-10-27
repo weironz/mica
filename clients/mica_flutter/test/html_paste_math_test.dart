@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/markdown.dart';
+import 'support/markdown_codec.dart';
 
 // The bug this pins: content copied from an LLM chat page (Gemini/ChatGPT)
 // arrives as text/html, and htmlToMarkdown backslash-escaped EVERY `$` (and
@@ -26,6 +27,7 @@ List<Map<String, dynamic>> mathMarks(String markdown) {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('actual rendered Gemini arrow restores TeX and surrounding bold', () {
     final fixture =
         jsonDecode(

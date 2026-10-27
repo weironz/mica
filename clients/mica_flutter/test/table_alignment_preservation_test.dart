@@ -2,8 +2,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/table.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('table geometry and column operations preserve alignment metadata', () {
     final table = parseGfmTable(['| A | B |', '| :---: | ---: |', '| a | b |'], 0).table;
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});

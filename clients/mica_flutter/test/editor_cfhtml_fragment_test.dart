@@ -8,8 +8,10 @@ import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   testWidgets('CF_HTML paste imports tagged multibyte fragment without context', (t) async {
     const pre = '<html><body>前文 before <!--StartFragment-->';
     const fragment = '<p><strong>選択 &amp; text</strong></p>\n<p>next</p>';

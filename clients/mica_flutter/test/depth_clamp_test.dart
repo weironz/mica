@@ -4,6 +4,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 EditorController _doc(List<EditorNode> nodes) {
   final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
@@ -21,6 +22,7 @@ int _leading(String md, String needle) {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('the cap is the one Rust uses', () {
     expect(kMaxNestingDepth, 8);
   });

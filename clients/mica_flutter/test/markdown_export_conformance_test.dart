@@ -2,8 +2,10 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+
+import 'support/markdown_codec.dart';
 
 /// The EXPORT direction, pinned across the two engines.
 ///
@@ -83,6 +85,7 @@ const _cosmeticDivergence = {
 const _knownBroken = <String>{};
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   final dir = Directory('../../crates/markdown/tests/fixtures/conformance');
 
   test('fixture directory is reachable', () {
@@ -108,10 +111,10 @@ void main() {
       expect(goldFile.existsSync(), isTrue,
           reason: 'missing export gold for $name — GEN_GOLD=1 on the Rust side');
 
-      // Import with the Dart mirror, then serialize back with the Dart
-      // serializer. Import parity is already asserted next door, so a failure
-      // here isolates to the export half.
-      final specs = markdownToBlocks(md.readAsStringSync());
+      // Import through the engine facade, then serialize back through the
+      // editor's real copy path. Import parity is already asserted next door,
+      // so a failure here isolates to the export half.
+      final specs = markdownCodec.parseBlocks(md.readAsStringSync());
       final got = _exportViaController(specs);
       if (got == null) {
         markTestSkipped('single empty block — not expressible as a selection');
@@ -121,7 +124,7 @@ void main() {
       // THE invariant, asserted for every fixture: what you copy is what you
       // get back. Byte-parity with Rust is a proxy for this; this is the thing
       // itself, and it is what a user loses when it breaks.
-      expect(_canon(_shape(markdownToBlocks(got))), _canon(_shape(specs)),
+      expect(_canon(_shape(markdownCodec.parseBlocks(got))), _canon(_shape(specs)),
           reason: 'copy → paste CHANGED the content in $name');
 
       if (_cosmeticDivergence.contains(name)) return;

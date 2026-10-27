@@ -17,8 +17,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/markdown.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('items wrapped in <div> inside <ol> still become a list', () {
     const html = '''
 <p>您可以按照以下排查步骤逐步解决该问题：</p>

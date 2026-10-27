@@ -4,6 +4,7 @@ import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 // Regression net for the 25 confirmed findings of the paste/copy adversarial
 // audit: escaping fidelity, todo/math/footnote/code-language round trips,
@@ -24,6 +25,7 @@ List<BlockSpec> _roundTrip(EditorController c) =>
     markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('escaping — page text must not re-parse as structure', () {
     test('literal block-leader characters stay literal', () {
       for (final (html, want) in [

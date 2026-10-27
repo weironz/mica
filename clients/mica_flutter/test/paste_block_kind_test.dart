@@ -3,6 +3,9 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+
+import 'support/markdown_codec.dart';
 
 /// Regression: copying an H2 and pasting it into a sentence left a SECOND H2
 /// block under that sentence — the paste overruled a block kind the user had
@@ -11,6 +14,7 @@ import 'package:mica_flutter/editor/model.dart';
 /// line as inline text UNLESS that line ends up empty, in which case it has no
 /// kind worth defending and adopts the pasted one.
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   // Guards the branch's own precondition: the copy → clipboard → paste round
   // trip has to yield a SINGLE LINE, or `_handleRichPaste` never reaches the
   // inline test and this whole fix is dead code.
@@ -37,7 +41,7 @@ void main() {
             htmlToMarkdown(withOne(node).selectionHtml(imageUrls: const {}));
         expect(md.contains('\n'), isFalse,
             reason: 'must stay on one line: "$md"');
-        expect(markdownToBlocks(md).single.kind, kind);
+        expect(markdownCodec.parseBlocks(md).single.kind, kind);
       });
     });
   });

@@ -126,6 +126,26 @@ bool rangeHasMark(List<Mark> marks, int from, int to, String type) {
   return marks.any((m) => m.type == type && m.start <= from && m.end >= to);
 }
 
+/// Clip [marks] to the absolute range `[from, to)` and rebase to 0 — the model
+/// half of what the old HTML writer did inline. Both the block selection
+/// (`selectionBlocks`) and the table-cell editor clip through here, so a mark
+/// partially inside the selection survives on its overlap (a link cut in half
+/// keeps its href), and a zero-width link that lands ON the boundary survives
+/// (`marksFromData` deliberately keeps those). Atomic blocks call it with the
+/// whole-block range, which returns the marks unchanged.
+List<Mark> clipMarks(List<Mark> marks, int from, int to) {
+  final clipped = <Mark>[];
+  for (final mark in marks) {
+    final start = mark.start.clamp(from, to);
+    final end = mark.end.clamp(from, to);
+    final empty = end == start;
+    if (end > start || (empty && mark.type == 'link' && mark.start >= from && mark.end <= to)) {
+      clipped.add(Mark(start - from, end - from, mark.type, href: mark.href, title: mark.title));
+    }
+  }
+  return clipped;
+}
+
 /// The math run a caret at [caret] sits inside, or null — the core of the
 /// "a formula is one atom" rule: selections snap OUT of a run (see
 /// [snapOutOfMathRun]) and arrow keys step over the whole run (editor.dart's

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 EditorController _doc(List<EditorNode> nodes, {int focus = 0}) {
   final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
@@ -23,6 +24,7 @@ EditorNode _li(String id, String text, {int indent = 0, String kind = 'bulleted_
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('Tab indents one level under the previous item, clamped', () {
     final c = _doc([_li('a', 'parent'), _li('b', 'child')], focus: 1);
     expect(c.indentSelection(1), isTrue);

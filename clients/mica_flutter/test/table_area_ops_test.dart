@@ -5,6 +5,7 @@ import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/rich_paste_stub.dart'
     show clipboardHtmlIsDataTable;
 import 'package:mica_flutter/editor/table.dart';
+import 'support/markdown_codec.dart';
 
 EditorController _doc(List<EditorNode> nodes) {
   final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
@@ -24,6 +25,7 @@ EditorNode _table3x3() => EditorNode(
     );
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('clearTableCells — Delete/cut on an area selection', () {
     test('blanks exactly the inclusive rectangle', () {
       final c = _doc([_table3x3()]);

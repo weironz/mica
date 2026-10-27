@@ -6,9 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/ui/page_title_field.dart';
 
+import 'support/markdown_codec.dart';
 import 'support/title_workspace.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   testWidgets('current-page AI sees live edits and title before insertion', (
     tester,
   ) async {

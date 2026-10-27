@@ -6,8 +6,10 @@ import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   late EditorController c;
   setUp(() {
     c = EditorController(rootBlockId: 'root', onOps: (_) async {});

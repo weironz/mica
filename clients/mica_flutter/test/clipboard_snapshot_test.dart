@@ -27,9 +27,11 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
 
+import 'support/markdown_codec.dart';
 import 'support/markdown_corpus.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('capture clipboard output for 30 fixtures', () {
     final dir = Directory('$markdownFixtureRoot/conformance');
     final files = dir

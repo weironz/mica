@@ -4110,19 +4110,41 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (_controller.nodes[area.node].kind != 'table') return;
     final table = TableData.fromBlock(_controller.nodes[area.node].data);
     final plainRows = <String>[];
-    final htmlRows = StringBuffer();
     for (var r = area.r0; r <= area.r1 && r < table.rows.length; r++) {
       if (r < 0) continue;
       final plainCells = <String>[];
-      htmlRows.write('<tr>');
       for (var c = area.c0; c <= area.c1 && c < table.rows[r].length; c++) {
         if (c < 0) continue;
         final parsed = parseInline(table.rows[r][c]);
         plainCells.add(parsed.text.replaceAll('\t', ' ').replaceAll('\n', ' '));
-        htmlRows.write('<td>${inlineToHtml(parsed.text, parsed.marks)}</td>');
       }
-      htmlRows.write('</tr>');
       plainRows.add(plainCells.join('\t'));
+    }
+    // Rich flavor: the same selection as a sub-table through the engine's
+    // Clipboard dialect — one call renders cells AND builds the <table>.
+    String richHtml = '';
+    try {
+      richHtml = markdownCodec.renderClipboardHtml([
+        (
+          kind: 'table',
+          text: '',
+          data: {
+            'rows': [
+              for (var r = area.r0; r <= area.r1 && r < table.rows.length; r++)
+                if (r >= 0)
+                  [
+                    for (var c = area.c0;
+                        c <= area.c1 && c < table.rows[r].length;
+                        c++)
+                      if (c >= 0)
+                        _cellClipboardMarkdown(table.rows[r][c]),
+                  ],
+            ],
+          },
+        ),
+      ]);
+    } on MarkdownCodecException {
+      richHtml = ''; // plain TSV still lands below
     }
     if (cut && _cutPending) return;
     final tableId = _controller.nodes[area.node].id;
@@ -4130,7 +4152,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (cut) _cutPending = true;
     copyRichToClipboard(
       plain: plainRows.join('\n'),
-      richHtml: '<table>$htmlRows</table>',
+      richHtml: richHtml,
     ).then((success) {
       if (!cut) return;
       _cutPending = false;
@@ -4139,6 +4161,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (index < 0 || TableData.fromBlock(_controller.nodes[index].data).toBlockData().toString() != snapshot) return;
       _controller.clearTableCells(index, area.r0, area.c0, area.r1, area.c1);
     });
+  }
+
+  /// A clipboard table cell in its stored form: inline Markdown parsed to
+  /// `{text, marks}` when it carries formatting, plain string otherwise —
+  /// the same encoding `TableData._encodeCell` stores, so the engine's
+  /// Clipboard dialect sees exactly what a copied whole table would.
+  static Object _cellClipboardMarkdown(String source) {
+    final parsed = parseInline(source);
+    if (parsed.marks.isEmpty) return source;
+    return {'text': parsed.text, 'marks': marksToJson(parsed.marks)};
   }
 
   /// Whether the caret at [offset] sits on the first ([last] false) or last

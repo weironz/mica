@@ -5,6 +5,7 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
+import 'support/markdown_codec.dart';
 
 // A divider is a line with no text: RenderDocument.positionAt refuses to park
 // the caret on any atomic node, so a click on the line landed in the paragraph
@@ -14,6 +15,7 @@ import 'package:mica_flutter/l10n/app_localizations.dart';
 // turned the picture into a blank line, file_id and all.
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('backspace / delete on a whole-block caret stop', () {
     late List<Map<String, dynamic>> ops;
     late EditorController c;

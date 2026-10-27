@@ -4,6 +4,7 @@ import 'package:mica_flutter/editor/cell_edit_controller.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 // Regression for issue #150: every Mark reconstruction (shift/split/normalize)
 // rebuilt the mark from (start, end, type, href) and DROPPED the link title, so
@@ -22,6 +23,7 @@ EditorNode _linkParagraph(String text, List<Mark> marks) => EditorNode(
 );
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('typing after a titled link keeps the title', () {
     final c = _doc([
       _linkParagraph('pre x', [

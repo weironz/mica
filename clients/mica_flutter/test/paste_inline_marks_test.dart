@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
+import 'support/markdown_codec.dart';
 
 // Regression: pasting rich text used to drop bold / inline-code / italic /
 // strike — htmlToMarkdown flattened every inline element except <a>/<img> to
@@ -7,6 +8,7 @@ import 'package:mica_flutter/editor/html_to_markdown.dart';
 // that inline formatting now round-trips to Markdown markers, from both
 // semantic tags AND styled spans (how Google Docs / Word encode it).
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('htmlToMarkdown — inline emphasis (semantic tags)', () {
     test('<strong> and <b> → **bold**', () {
       expect(htmlToMarkdown('<p>a <strong>b</strong> c</p>'), 'a **b** c');

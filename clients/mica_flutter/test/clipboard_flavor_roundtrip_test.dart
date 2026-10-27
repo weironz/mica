@@ -4,6 +4,7 @@ import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 /// Clipboard text/plain is literal content. The semantic HTML flavor must
 /// carry structure through a rich paste, including shell comments in code.
@@ -18,6 +19,7 @@ EditorController _selectAll(List<EditorNode> nodes) {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('a copied code block survives the rich HTML flavor', () {
     const code = '# 1. 查看当前用户与节点\n'
         'docker exec headscale users list\n\n'

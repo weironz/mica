@@ -12,6 +12,8 @@ import 'operation_history.dart';
 import 'selection_reconcile.dart';
 import 'selection_marks.dart';
 import 'table.dart';
+import '../markdown/markdown_codec.dart'
+    show markdownCodec, MarkdownCodecException, BlockSpec;
 import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
 export 'operation_history.dart'
@@ -1148,33 +1150,110 @@ class EditorController extends ChangeNotifier {
   /// Serialize selected Markdown for export and AI input (tables become GFM).
   /// [imageUrls] maps file IDs to fresh download URLs.
   String selectionText({Map<String, String>? imageUrls}) {
-    final sel = selection;
-    if (sel == null) return '';
-    // Match the clipboard slices: a caret on an atomic block selects that block.
-    final DocPosition s;
-    final DocPosition e;
-    if (sel.isCollapsed) {
-      final i = sel.focus.node;
-      if (i < 0 || i >= nodes.length || !nodes[i].isAtomic) return '';
-      s = DocPosition(i, 0);
-      e = DocPosition(i, nodes[i].text.length);
-    } else {
-      s = sel.start;
-      e = sel.end;
+    try {
+      return markdownCodec.serializeBlocks(selectionBlocks(),
+          assets: imageUrls ?? const {});
+    } on MarkdownCodecException {
+      return ''; // caller already handles empty → plain-text-only clipboard
     }
-
-    return _rangeMarkdown(s, e, imageUrls: imageUrls);
   }
 
   /// The live body, including edits not yet flushed to the backend. Uses the
   /// same Markdown serializer as selection copy without moving the caret.
   String documentMarkdown({Map<String, String>? imageUrls}) {
     if (nodes.isEmpty) return '';
-    return _rangeMarkdown(
-      const DocPosition(0, 0),
-      DocPosition(nodes.length - 1, nodes.last.text.length),
-      imageUrls: imageUrls,
-    );
+    try {
+      return markdownCodec.serializeBlocks(documentBlocks(),
+          assets: imageUrls ?? const {});
+    } on MarkdownCodecException {
+      return '';
+    }
+  }
+
+  /// The selection as engine blocks: each slice of [_selectionSlices] becomes a
+  /// [BlockSpec] carrying only the selected text, with marks clipped to it.
+  /// Partially selected blocks lose their quote grouping (the old HTML writer's
+  /// `setQuote(full ? depth : 0)`). Code blocks get the language the copy should
+  /// carry ([_copyLanguage] — auto-detected, Dart-only, 02 §2.1).
+  List<BlockSpec> selectionBlocks() {
+    final out = <BlockSpec>[];
+    for (final sl in _selectionSlices()) {
+      final node = nodes[sl.node];
+      // An atomic block is copied whole even when the slice's offsets are
+      // empty (a caret parked on it selects it, per _selectionSlices): the
+      // old writer did this and the engine has no partial image/divider.
+      final from = node.isAtomic ? 0 : sl.from;
+      final to = node.isAtomic ? node.text.length : sl.to;
+      final full = from == 0 && to == node.text.length;
+      var kind = node.kind;
+      var data = Map<String, dynamic>.from(node.data);
+      if (!full) {
+        // A partial first/last block is copied as PLAIN inline text, without
+        // its block marker — the old writer's rule, kept because copying a few
+        // words out of a heading and pasting them into a paragraph should not
+        // produce a heading. Code keeps its kind (the engine fences the
+        // fragment; recorded as a visible change in the S3 triage).
+        if (kind != 'code_block') kind = 'paragraph';
+        data = {};
+      }
+      if (node.kind == 'code_block') {
+        final lang = _copyLanguage(node);
+        lang.isEmpty ? data.remove('language') : data['language'] = lang;
+      }
+      if (node.kind == 'numbered_list') {
+        // The engine numbers a run from its first item (data.start); a copy
+        // that begins mid-list must carry the VISIBLE ordinal, or items 2–3
+        // come back as 1–2.
+        final ordinal = _visibleOrdinal(sl.node);
+        if (ordinal != null) data['start'] = ordinal;
+      }
+      final marks = clipMarks(marksFromData(node.data), from, to);
+      marks.isEmpty ? data.remove('marks') : data['marks'] = marksToJson(marks);
+      out.add((kind: kind, text: node.text.substring(from, to), data: data));
+    }
+    return out;
+  }
+
+  /// The number a numbered item SHOWS, walking the run from its head: an item
+  /// with an explicit `start`/`marker` sets the base, and each following
+  /// sibling at the same indent/quote/container is one past the previous.
+  /// Null when the item is not a numbered list item.
+  int? _visibleOrdinal(int index) {
+    final node = nodes[index];
+    if (node.kind != 'numbered_list') return null;
+    bool sameRun(EditorNode at) =>
+        at.kind == 'numbered_list' &&
+        at.indent == node.indent &&
+        at.quoteDepth == node.quoteDepth &&
+        at.data['li'] == node.data['li'];
+    bool restarts(EditorNode at) =>
+        at.data.containsKey('start') || at.data.containsKey('marker');
+    // Head of the run: the first item back that either opens a run itself
+    // (`start`/`marker`) or is not preceded by a sibling of the same run.
+    var head = index;
+    while (head > 0 && sameRun(nodes[head - 1]) && !restarts(nodes[head])) {
+      head--;
+    }
+    final start = nodes[head].data['start'];
+    final base = start is int && start >= 0 ? start : 1;
+    final ordinal = base + (index - head);
+    // Same clamp the old list layout applied before writing the number.
+    return ordinal <= 999999999 ? ordinal : 1;
+  }
+
+  /// The whole document as engine blocks (no slicing — every node is full).
+  List<BlockSpec> documentBlocks() {
+    return [
+      for (final node in nodes)
+        () {
+          final data = Map<String, dynamic>.from(node.data);
+          if (node.kind == 'code_block') {
+            final lang = _copyLanguage(node);
+            lang.isEmpty ? data.remove('language') : data['language'] = lang;
+          }
+          return (kind: node.kind, text: node.text, data: data);
+        }(),
+    ];
   }
 
   EditorAiSnapshot captureAiSnapshot() => EditorAiSnapshot(rootBlockId, nodes);
@@ -1625,175 +1704,20 @@ class EditorController extends ChangeNotifier {
     return emit(0);
   }
 
-  /// The selection as HTML — the clipboard's rich flavor, built straight from the
-  /// block model (headings, lists, quotes, code, tables + inline marks) so
-  /// Markdown editors that read `text/html` keep the formatting. Consecutive list
-  /// items / quotes group into one `<ul>`/`<ol>`/`<blockquote>`; nested list
-  /// levels (`data.indent`) become nested `<ul>`/`<ol>`.
+  /// The selection as HTML — the clipboard's rich flavor, rendered by the Rust
+  /// engine's Clipboard dialect (02 §2.1). Consecutive list items / quotes
+  /// group into one <ul>/<ol>/<blockquote>; nested levels (`data.indent`)
+  /// become nested lists; quotes nest by `data.quote` depth. Slicing and mark
+  /// clipping happen in [selectionBlocks] before the engine sees the blocks.
   String selectionHtml({Map<String, String>? imageUrls}) {
     final slices = _selectionSlices();
     if (slices.isEmpty) return '';
-    final buf = StringBuffer();
-    // Open <blockquote> nesting: adjusted per block to its quoteDepth, so
-    // depth-2 quotes emit nested blockquotes and heading/list/code blocks
-    // living INSIDE a quote (data.quote > 0) keep their wrapper instead of
-    // being dumped outside it.
-    var quoteDepth = 0;
-    void setQuote(int depth) {
-      while (quoteDepth > depth) {
-        buf.write('</blockquote>');
-        quoteDepth--;
-      }
-      while (quoteDepth < depth) {
-        buf.write('<blockquote>');
-        quoteDepth++;
-      }
+    try {
+      return markdownCodec.renderClipboardHtml(selectionBlocks(),
+          imageSrcs: imageUrls ?? const {});
+    } on MarkdownCodecException {
+      return ''; // _copySelection treats empty HTML as text-only copy
     }
-
-    String inlineHtmlOf(EditorNode node, int a, int b) {
-      final clipped = <Mark>[];
-      for (final m in marksFromData(node.data)) {
-        final s = m.start.clamp(a, b);
-        final e = m.end.clamp(a, b);
-        if (e > s) {
-          clipped.add(Mark(s - a, e - a, m.type, href: m.href, title: m.title));
-        }
-      }
-      return inlineToHtml(node.text.substring(a, b), clipped);
-    }
-
-    bool fullListItem(({int node, int from, int to}) sl) {
-      final node = nodes[sl.node];
-      final len = node.text.length;
-      if (!(sl.from.clamp(0, len) == 0 && sl.to.clamp(0, len) == len)) {
-        return false;
-      }
-      return node.kind == 'bulleted_list' ||
-          node.kind == 'numbered_list' ||
-          node.kind == 'todo';
-    }
-
-    var si = 0;
-    while (si < slices.length) {
-      final sl = slices[si];
-      final node = nodes[sl.node];
-      final len = node.text.length;
-      final a = sl.from.clamp(0, len);
-      final b = sl.to.clamp(0, len);
-      final full = a == 0 && b == len;
-
-      if (node.kind == 'image') {
-        setQuote(0);
-        final fileId = node.data['file_id'] as String?;
-        final src =
-            (imageUrls?[fileId] ?? node.data['url'] ?? node.data['name'] ?? '')
-                as String;
-        buf.write(
-          '<p><img src="${escapeHtmlAttr(src)}" '
-          'alt="${escapeHtmlAttr(node.text)}"></p>',
-        );
-        si++;
-        continue;
-      }
-      if (node.kind == 'divider') {
-        setQuote(0);
-        buf.write('<hr>');
-        si++;
-        continue;
-      }
-      if (node.kind == 'table') {
-        setQuote(0);
-        buf.write(_tableHtml(TableData.fromBlock(node.data)));
-        si++;
-        continue;
-      }
-      if (node.kind == 'code_block') {
-        setQuote(full ? node.quoteDepth : 0);
-        final lang = _copyLanguage(node);
-        final cls = lang.isEmpty
-            ? ''
-            : ' class="language-${escapeHtmlAttr(lang)}"';
-        buf.write(
-          '<pre><code$cls>${escapeHtml(node.text.substring(a, b))}'
-          '</code></pre>',
-        );
-        si++;
-        continue;
-      }
-      if (node.kind == 'math_block') {
-        // `$$…$$` inside a data-mica-math wrapper: external editors see the
-        // TeX; our converter passes it through verbatim so it re-parses as a
-        // math block instead of a paragraph of raw LaTeX.
-        setQuote(0);
-        buf.write(
-          '<p><span data-mica-math="1">\$\$'
-          '${escapeHtml(node.text)}\$\$</span></p>',
-        );
-        si++;
-        continue;
-      }
-      if (node.kind == 'footnote_def') {
-        // The GFM definition leader travels in an attribute; the converter
-        // reconstructs `[^label]: …` (escaping would kill a literal leader).
-        setQuote(0);
-        final label = (node.data['label'] ?? '') as String;
-        buf.write(
-          '<p data-mica-fndef="${escapeHtmlAttr(label)}">'
-          '${inlineHtmlOf(node, a, b)}</p>',
-        );
-        si++;
-        continue;
-      }
-
-      if (fullListItem(sl)) {
-        // Collect the unbroken run of fully-selected list items AT THE SAME
-        // quote depth, then emit it as PROPERLY NESTED <ul>/<ol> from each
-        // item's `data.indent` — the old flat single-<ul> writer erased
-        // nesting, so pasting a multi-level list (even mica → mica, where the
-        // HTML flavor wins) lost its levels.
-        setQuote(node.quoteDepth);
-        final run = <EditorNode>[];
-        while (si < slices.length &&
-            fullListItem(slices[si]) &&
-            nodes[slices[si].node].quoteDepth == node.quoteDepth) {
-          run.add(nodes[slices[si].node]);
-          si++;
-        }
-        buf.write(
-          _listRunHtml(run, (n) {
-            final box = n.kind == 'todo'
-                ? '<input type="checkbox"${n.todoChecked ? ' checked' : ''}'
-                      ' disabled> '
-                : '';
-            return '$box${inlineHtmlOf(n, 0, n.text.length)}';
-          }),
-        );
-        continue;
-      }
-
-      if (full && node.kind == 'quote') {
-        // qbreak marks the start of a NEW quote group: close the open one so
-        // two separate bars don't fuse into a single blockquote on paste.
-        if (node.data['qbreak'] == true) setQuote(0);
-        setQuote(node.quoteDepth.clamp(1, 16));
-        buf.write('<p>${inlineHtmlOf(node, a, b)}</p>');
-        si++;
-        continue;
-      }
-
-      if (full && node.kind == 'heading') {
-        setQuote(node.quoteDepth);
-        final lvl = node.headingLevel.clamp(1, 6);
-        buf.write('<h$lvl>${inlineHtmlOf(node, a, b)}</h$lvl>');
-        si++;
-        continue;
-      }
-      setQuote(full ? node.quoteDepth : 0);
-      buf.write('<p>${inlineHtmlOf(node, a, b)}</p>');
-      si++;
-    }
-    setQuote(0);
-    return buf.toString();
   }
 
   String _tableHtml(TableData table) {

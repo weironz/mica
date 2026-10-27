@@ -2,8 +2,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('markdownToBlocks parses ![alt](url) into an image block', () {
     final blocks = markdownToBlocks('![a cat](https://x.io/cat.png)');
     expect(blocks.length, 1);

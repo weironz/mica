@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'marks.dart';
 import 'controller.dart';
 import 'table.dart';
+import '../markdown/markdown_codec.dart' show markdownCodec, MarkdownCodecException;
 import '../ui/theme_tokens.dart';
 import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
@@ -40,27 +41,32 @@ class CellEditController extends TextEditingController {
 
   /// HTML for the selected clean text, clipping the existing marks rather than
   /// re-parsing text as Markdown (which loses code and treats literal syntax
-  /// as formatting).
+  /// as formatting). One paragraph block through the engine's Clipboard
+  /// dialect — the cell editor is inline-only, so a paragraph is the whole
+  /// grammar it needs.
   String selectionHtml() {
     final sel = selection;
     if (!sel.isValid || sel.isCollapsed) return '';
-    final clipped = <Mark>[];
-    for (final mark in marks) {
-      final start = mark.start.clamp(sel.start, sel.end);
-      final end = mark.end.clamp(sel.start, sel.end);
-      if (end > start) {
-        clipped.add(
-          Mark(
-            start - sel.start,
-            end - sel.start,
-            mark.type,
-            href: mark.href,
-            title: mark.title,
-          ),
-        );
-      }
+    try {
+      final html = markdownCodec.renderClipboardHtml([
+        (
+          kind: 'paragraph',
+          text: sel.textInside(text),
+          data: {
+            if (marks.isNotEmpty)
+              'marks': marksToJson(clipMarks(marks, sel.start, sel.end)),
+          },
+        ),
+      ]);
+      // The cell editor's flavor is a BARE inline fragment — it lands inside a
+      // table cell, where a <p> wrapper would be invalid nesting. The engine's
+      // Clipboard dialect speaks blocks, so unwrap the one paragraph it wrote.
+      return html.startsWith('<p>') && html.endsWith('</p>')
+          ? html.substring(3, html.length - 4)
+          : html;
+    } on MarkdownCodecException {
+      return '';
     }
-    return inlineToHtml(sel.textInside(text), clipped);
   }
 
   @override

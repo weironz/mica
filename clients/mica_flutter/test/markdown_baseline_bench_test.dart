@@ -35,8 +35,10 @@ import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
 
 import 'support/markdown_bench_inputs.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   final parse10k = _repeatTo(markdownFixtureSample, 10000);
   final parse100k = _repeatTo(markdownFixtureSample, 100000);
   final inlineSources = _inlineSources(500);
