@@ -175,6 +175,19 @@ const wireGoldFunctions = [
 void runCodecContract(Future<MarkdownCodec> Function() make) {
   late MarkdownCodec codec;
   setUpAll(() async => codec = await make());
+  test('MarkdownCodec engine identity and single-inline wrapper', () {
+    final info = codec.engineInfo;
+    expect(info.schemaVersion, 1);
+    expect(info.crateVersion, isNotEmpty);
+    expect(info.sourceFingerprint, matches(RegExp(r'^[0-9a-f]{16}$')));
+    final batch = codec.parseInlineBatch(['😀 **single**']).single;
+    final single = codec.parseInline('😀 **single**');
+    expect(single.text, batch.text);
+    expect(
+      single.marks.map((mark) => mark.toJson()).toList(),
+      batch.marks.map((mark) => mark.toJson()).toList(),
+    );
+  });
   for (final name in wireGoldFunctions) {
     test('MarkdownCodec wire gold: $name', () async {
       final gold = parseWireGold(await readMarkdownGold(name));
