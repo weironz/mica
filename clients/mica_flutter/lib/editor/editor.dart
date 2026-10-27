@@ -15,6 +15,7 @@ import 'markdown.dart';
 import '../markdown/markdown_codec.dart' show markdownCodec, MarkdownCodecException, BlockSpec;
 import 'marks.dart';
 import 'paste_repair.dart';
+import 'table_copy.dart';
 import 'clipboard_copy.dart';
 import 'file_names.dart';
 import 'image_actions.dart';
@@ -4128,19 +4129,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         (
           kind: 'table',
           text: '',
-          data: {
-            'rows': [
-              for (var r = area.r0; r <= area.r1 && r < table.rows.length; r++)
-                if (r >= 0)
-                  [
-                    for (var c = area.c0;
-                        c <= area.c1 && c < table.rows[r].length;
-                        c++)
-                      if (c >= 0)
-                        _cellClipboardMarkdown(table.rows[r][c]),
-                  ],
-            ],
-          },
+          data: tableAreaData(
+            table,
+            r0: area.r0,
+            c0: area.c0,
+            r1: area.r1,
+            c1: area.c1,
+          ),
         ),
       ]);
     } on MarkdownCodecException {
@@ -4161,16 +4156,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       if (index < 0 || TableData.fromBlock(_controller.nodes[index].data).toBlockData().toString() != snapshot) return;
       _controller.clearTableCells(index, area.r0, area.c0, area.r1, area.c1);
     });
-  }
-
-  /// A clipboard table cell in its stored form: inline Markdown parsed to
-  /// `{text, marks}` when it carries formatting, plain string otherwise —
-  /// the same encoding `TableData._encodeCell` stores, so the engine's
-  /// Clipboard dialect sees exactly what a copied whole table would.
-  static Object _cellClipboardMarkdown(String source) {
-    final parsed = parseInline(source);
-    if (parsed.marks.isEmpty) return source;
-    return {'text': parsed.text, 'marks': marksToJson(parsed.marks)};
   }
 
   /// Whether the caret at [offset] sits on the first ([last] false) or last
