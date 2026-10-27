@@ -17,7 +17,7 @@ crates/
       ids.rs          BlockIds（Uuid | Sequential）
       api.rs          parse / parse_body / parse_inline / serialize / serialize_body / serialize_inline /
                       render_html / render_html_body / decode_cell / encode_cell
-      wire.rs         跨语言 JSON 线格式（§3），FFI 与 wasm 共用，保证两端逐字节一致
+      wire.rs         跨语言 JSON 线格式（§3），FFI 与 wasm 共用，保证两端逐字节一致（HTML Export 例外，见 §3.1）
       parse/          block.rs  block_handlers.rs  inline.rs  scan_memo.rs  entities.rs   （自 crates/markdown 迁入）
       serialize/      export_md.rs  span_walk.rs                                          （迁入）
       html/           html.rs                                                              （迁入）
@@ -222,6 +222,10 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 - 所有绑定函数**同步**、`String` 进 `String` 出（JSON）。Dart 早已以 JSON 与 Rust 交换块（`from_blocks_json` 等）。
 - 线格式逻辑**只在 `wire.rs` 写一次**，FFI（`rust/src/api/markdown.rs`）与 wasm（`crates/md-wasm/src/lib.rs`）都是一行转发。
   这保证桌面与 Web 对同一输入的输出**逐字节相同**（S2 契约测试验证）。
+  **唯一例外**（M2 裁决，2026-10-27）：`render_html_body_json` 的 `export` profile 随 `render` 特性变化——桌面 FFI 开着 `render`，
+  公式 / Mermaid 输出 SVG；wasm 不开，输出源码 span / code。跨端逐字节只约束 `clipboard` profile。
+  Dart 门面因此**不暴露** Export HTML（`MarkdownCodec` 只有 `renderClipboardHtml`）；页面 HTML 导出在桌面走 `MicaDocument.exportHtml`、
+  在 Web 走服务端，都不经过 wire。以后谁要在 Dart 侧加 Export 入口，先提契约变更。
 - 错误：`Result<String, MdError>`。frb 把 `Err` 映射为 Dart 异常；wasm-bindgen 把 `Err` 映射为 JS 异常（`JsError`）。
   Dart 门面统一包成 `MarkdownCodecException`。
 
@@ -485,9 +489,9 @@ void debugSetMarkdownCodec(MarkdownCodec? codec) => _codec = codec;
 | --- | --- | --- |
 | 桌面 `initMarkdownCodec()` | ≤ 30 ms（p50，Windows 发布版） | 启动日志计时 |
 | Web wasm 实例化 + `micaMdReady` | ≤ 60 ms；首帧推迟 ≤ 60 ms | Playwright `performance.now()` |
-| wasm 体积 | ≤ 200 KB gzip（目标 ≤ 120 KB） | 构建脚本强制 |
+| wasm 体积 | ≤ 256 KiB（262,144 B）gzip，wasm 与 JS 分别 `gzip -n -9` 后相加；目标 ≤ 120 KB（M2 用户决定，原 200 KB） | 构建脚本强制；以 Linux（CI 平台）构建为准 |
 | 粘贴 10k 字符 Markdown（解析） | ≤ S0 Dart 基线 × 1.2（桌面、Web 各自对比） | `test/perf/markdown_codec_bench_test.dart` + 浏览器版 |
-| 复制 10k 字符选区（序列化 Markdown + HTML） | ≤ S0 基线 × 1.2 | 同上 |
+| 复制 10k 字符选区（序列化 Markdown + HTML，两者合计） | 桌面、Web 各自 ≤ 16 ms（一帧）；与 Dart 的比值只记录、不作门槛（M2 用户决定，原 ≤ S0 基线 × 1.2） | 同上 |
 | 500 单元格表格首次解码（旧字符串格式） | 桌面 ≤ 16 ms、Web ≤ 30 ms（批量接口）；之后每帧 0 次引擎调用 | S4 基准测试 |
 | 单次边界调用开销（87 字符行内） | 桌面 ≤ 0.1 ms、Web ≤ 0.2 ms | 同上 |
 
