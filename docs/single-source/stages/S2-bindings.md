@@ -677,3 +677,41 @@ WP-R `7b7d49d5`（输出 Value 递归稳定键序）接入为 `57bb4942`，`ce6c
 
 本次 WP-W 证据支持正式十 API 产物 **体积、WASM 初始化、Chrome 实际公共门面三档解析预算达标**，最终 M2 结论留给主会话审核读取证据后判定。**Export render 例外仍单列**：无 render WASM 的 Export 黄金通过，仅证明当前 WASM 匹配当前黄金，不证明富渲染 FFI Export 与 WASM 逐字节一致，不宣称跨端 all-ten-byte 全绿。新版 wire_gold 已恢复 render 下 Clipboard 黄金，只有 Export 固定输入例外（不再整项 HTML cfg 排除）。桌面三平台契约/Windows runner、首帧推迟、桌面预算和安装包由 WP-D/集成方提供实际回执；WP-W 没有重复 Windows 重型构建。T2.14 名单待 D 实际通过后由主会话在已有测试文件的集成树登记。
 
+### M2 复核实测：Linux 正式构建与 Chrome 复制预算（2026-10-27，WP-W）
+
+对应审核方提出的四条中的前两条（门槛 262,144 B 已由 `d1623da9` 改入 `scripts/build-md-wasm.sh`）。
+
+#### ① Linux 正式十 API 构建
+
+| 项 | 结果 |
+| --- | --- |
+| 树 | `single-source@9e604c43` 完整 `git archive` 导出（九个 workspace 成员齐全），行尾按提交原样 LF |
+| 环境 | Docker `rust:1.98-slim-bookworm`（Debian 12）；镜像默认 rustc 1.98.1，`rust-toolchain.toml` 钉的 1.98.0 由 rustup 自动安装并主导构建；`wasm-bindgen-cli` 0.2.129 与 `Cargo.lock` 一致（`check-md-wasm-toolchain.sh` 硬校验） |
+| 参数 | `--locked`、wasm 包 `opt-level=3`（根 `Cargo.toml` 的 `[profile.release.package.mica-md-wasm]`）、`lto=true`、全依赖 `codegen-units=1`、`panic=abort`（wasm32 默认即是）、`--remove-name-section --remove-producers-section` |
+| 体积（分文件 `gzip -n -9` 后相加） | **wasm 202,525 B + JS 2,744 B = 205,269 B**，≤ 262,144 B（余量 56,875 B） |
+| wasm SHA-256 | `d1bdfd3d9c2bf8444da2665472cf0146e94dc936853b92081628a30be17120a3` |
+| JS SHA-256 | `90ee81fdb2466b0e2a497216203aa27907cc42777997f27b55b6141634d9a532`（与 Windows 产物**逐字节相同**） |
+| 源码指纹 | `12679a6fb723da2a`（Windows 为 `562668d7bee36096`） |
+
+指纹差异说明：两平台 ROOTS 源集相同，差异来自构建输入是**导出树**还是**工作树检出**（路径上下文参与指纹），不是内容差异；JS glue 逐字节相同可佐证两平台使用的是同一 wasm-bindgen 版本与同一导出面。未改 API、未加诊断导出、未放宽任何预算。
+
+**跨平台对照**：Windows 204,107 B → Linux 205,269 B，差 **+1,162 B**（同一 wasm 源码在两种工具链下的压缩差异）；两平台均在新门槛 262,144 B 内。
+
+**复算**：主会话对上述产物独立执行 `sha256sum` 与 `gzip -n -9`，wasm/JS 两个 SHA 与体积全部一致，非仅采信执行方口述。
+
+**复现脚本**：本次容器内实际使用的 `scripts/m2-linux-run.sh`（安装 pin 住的 CLI 后调用构建）与 `scripts/m2-linux-build.sh`（`--locked` 十 API 构建 + wasm-bindgen + 指纹 + 体积）随本记录一并提交，审核方在 Linux 上可直接用同一组命令重建并与上表比对。
+
+#### ② Chrome 生产构建 Web 复制预算
+
+| 项 | 结果 |
+| --- | --- |
+| 产物 | 同一 production `dart2js` 页面：wasm `df8e8e5a…`（= Windows 正式产物）、glue `90ee81fd…`、`main.dart.js` `1869955a…` |
+| 路径 | 真实公共门面一次复制：`MarkdownCodec.serializeBlocks` + `renderClipboardHtml` |
+| 输入 | 10,000 UTF-16 / 298 块；预热 3 轮后计时 15 轮 |
+| 结果 | **中位 4.4 ms ≤ 16 ms**（样本 4.0–8.899 ms）；产物 10,480 B Markdown + 15,331 B 剪贴板 HTML |
+| 口径 | Chrome 156 / Windows 11 / 生产 dart2js；不是桌面或原生的数字 |
+
+测量脚本为 `scripts/md-wasm-bench.dart` 的 `copy.10k` 场景（随本记录提交，函数 `_measureCopy`），因此在同一正式构建上可重放。测量结束已停止自有静态服务并关闭浏览器页面，未触碰用户进程。
+
+**证据存放说明**：本轮两份原始 JSON（`md-m2-linux-build.json`、`md-m2-copy-web.json`）与两份 Linux 产物留在 WP-W 工作树 `scripts/md-wasm-evidence/`，**不随本记录再提交**——与 `b0064835` 删除证据目录的审核要求一致。数字可由同一提交、同一参数重建复算：体积与 SHA 用上文命令直接比对，JS glue 的逐字节相同可先于完整重建核对。
+
