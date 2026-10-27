@@ -43,18 +43,24 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum PropertyValue {
+  /// Free-form text.
   Text(String),
+  /// Numeric value.
   Number(f64),
+  /// Boolean checkbox.
   Checkbox(bool),
   /// A `YYYY-MM-DD` date (shape-validated on parse; stored/rendered as-is).
   Date(String),
+  /// Flow or block list of strings (`tags` is just a list).
   List(Vec<String>),
 }
 
 /// One top-level front-matter key and its typed value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Property {
+  /// The top-level key.
   pub key: String,
+  /// Its typed value.
   pub value: PropertyValue,
 }
 

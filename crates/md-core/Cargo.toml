@@ -1,0 +1,27 @@
+[package]
+name = "mica-md"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Markdown block-document engine: CommonMark 0.31.2 + GFM + dialect, round-trip stable."
+publish = false
+
+[features]
+default = ["uuid"]
+uuid = ["dep:uuid"]
+render = ["dep:merman", "dep:ratex-parser", "dep:ratex-layout", "dep:ratex-svg", "dep:ratex-types"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid = { workspace = true, optional = true }
+merman = { version = "0.7", features = ["render"], optional = true }
+ratex-parser = { version = "0.1", optional = true }
+ratex-layout = { version = "0.1", optional = true }
+ratex-types = { version = "0.1", optional = true }
+ratex-svg = { version = "0.1", features = ["embed-fonts"], optional = true }
+
+[dev-dependencies]
+proptest = "1"

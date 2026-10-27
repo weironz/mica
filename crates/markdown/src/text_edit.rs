@@ -2,9 +2,33 @@
 
 use serde_json::{Value, json};
 
-use crate::export_md::decode_table_cell;
-use crate::inline::{RefDefs, apply_inline_marks};
 use crate::{Block, import_markdown_fragment};
+use mica_md::{InlineText, decode_cell};
+
+/// Parse inline Markdown into `(clean_text, data-with-marks)`.
+fn apply_inline_marks(text: String, data: Value) -> (String, Value) {
+  let parsed = mica_md::parse_inline(&text);
+  if parsed.marks.is_empty() {
+    return (parsed.text, data);
+  }
+  let mut obj = match data {
+    Value::Object(map) => map,
+    _ => serde_json::Map::new(),
+  };
+  obj.insert(
+    "marks".into(),
+    serde_json::to_value(&parsed.marks).unwrap_or_else(|_| Value::Array(Vec::new())),
+  );
+  (parsed.text, Value::Object(obj))
+}
+
+fn cell_data(inline: &InlineText) -> Value {
+  if inline.marks.is_empty() {
+    Value::Null
+  } else {
+    json!({ "marks": inline.marks })
+  }
+}
 
 /// Accept a single block's Markdown as a find string as well as visible text.
 /// This removes inline delimiters and list/heading markers, never joins blocks.
@@ -42,7 +66,7 @@ pub fn block_text_matches(block: &Block, find: &str) -> usize {
     .flatten()
     .filter_map(Value::as_array)
     .flatten()
-    .map(|cell| decode_table_cell(cell).0.matches(find).count())
+    .map(|cell| decode_cell(cell).text.matches(find).count())
     .sum()
 }
 
@@ -61,7 +85,7 @@ pub fn block_text_preview(block: &Block, limit: usize) -> String {
         if *length >= limit {
           return None;
         }
-        let text = decode_table_cell(cell).0;
+        let text = decode_cell(cell).text;
         *length += text.chars().count() + 1;
         Some(text)
       })
@@ -91,7 +115,9 @@ pub fn replace_block_text(block: &Block, find: &str, replacement: &str, markdown
       for row in rows {
         if let Some(cells) = row.as_array_mut() {
           for cell in cells {
-            let (text, data) = decode_table_cell(cell);
+            let inline = decode_cell(cell);
+            let text = inline.text.clone();
+            let data = cell_data(&inline);
             if !text.contains(find) {
               continue;
             }
@@ -126,7 +152,7 @@ fn replace_inline(
   markdown: bool,
 ) -> (String, Value) {
   let (insert, insert_data) = if markdown {
-    apply_inline_marks(replacement.to_string(), Value::Null, &RefDefs::new())
+    apply_inline_marks(replacement.to_string(), Value::Null)
   } else {
     (replacement.to_string(), Value::Null)
   };
