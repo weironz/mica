@@ -261,3 +261,60 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 ## 执行记录
 
 （执行方追加。P0 结果放在最前面。）
+
+### WP-R · 2026-10-27 · S2 wire 字节一致性与提前实现 T3.4 Clipboard
+
+- 基线分支：`worktree-agent-aaa10db22e269aaf4@7a9ee622`；本轮仅改 `crates/md-core/**` 与本执行记录，未改冻结 02 / reviews / API / 消费方。
+- `7b7d49d5`：生产 wire 的 Value 对象递归键序规范化。根因是 render 依赖链启用 `serde_json/preserve_order`，导致 `parse_body_json` 与 `encode_cells_json` 的 Value-backed 输出键序不同。
+  `Value::sort_all_objects` 只作用于 block data / encoded cells / engineInfo Value，结构体字段保留声明顺序，数组保留原顺序（marks 原有规范排序除外），未知字段和嵌套 null 不被改写。
+  `engineInfo` 不伪造相同指纹；不同源码集合的元数据仍单列。
+- 测试红：render 下 `wire_order` 两例均 FAILED；绿：默认/render 对同一固定 gold args 重放 **242 条 JSON/Markdown 原始 output 字符串逐字节一致**（76+77+15+9+28+11+13+13，**不包含 HTML**）。
+  测试改为读已提交 gold 的 args，不再把各 feature 临时生成的 JSON 输入键序差异误算成被测函数输出漂移。没有在测试中解析/重排 output 字符串。
+- `ce6cef12` Clipboard：原 S3 T3.4 经用户授权提前到 S2，实现放独立 `src/html/clipboard.rs`。完整移植旧 Dart `selectionHtml` / `_listRunHtml` / `inlineToHtml` 的块/mark 分支，复用 SpanWalker、safe_url、tagfilter、strip_unsafe_attrs，不调用数学/Mermaid rich renderer。
+  保留数学源码及 data-mica 属性、脚注标记、Mermaid 代码、列表嵌套/序号/checkbox、引用分组、表格行内 HTML、图片 src 映射；HTML clipboard 原来不输出 link title，继续如此。
+- 移植期望来自 WP-D `38c43744` 的真实旧 Dart 输出（`tests/fixtures/clipboard_html_port.json` 原样复制）；不是用 Rust 自生成期望。
+  接线前 5 组测试全部红；接线后 default/render 各 7 组通过，其中一组逐例比较 **30 个完整全选样本原始 HTML 字节**。
+  `33-tilde-fallback.md` 唯一初次差异是单个空 code 节点：旧 Dart 的全选是折叠 caret，没有 textual slice，因此输出空；代码与专项注释只匹配该选择边界，多块中的空 code 仍保留 `<pre>`。
+- 安全差异（刻意保留）：旧 Dart 原样输出危险 href/src；新 Clipboard 与 Export 一样过滤 `javascript:` / tab-split scheme / `vbscript:` / 非 image data URL。专项测试按安全空 URL 断言，未为追求旧字节相同放松 URL 防线。30 例安全输入无此差异。
+- 同范围 marks：重用 HTML walker 的“后出现者为外层”规则；Dart 30 例（含 `***both at once***`）及 bold/italic/strike、linked code 专项逐字节通过。wire marks 数组排序语义未改。
+
+#### 默认 gold 变更与 Export 契约申请
+
+默认 gold 重新生成一次，仅 `render_html_body.json` 中 Clipboard 的 **66/77** 个 output 变化；其余 8 个 JSON 文件不变。
+逐例比较原 `7a9ee622` 的 154 个 HTML gold：args/id 全部不变，**Export 的 77/77 个 output 字节原样保留**。
+默认与 render 下 Clipboard 都必须真执行 byte 断言，不再 cfg 排除；Export rich-feature 的差异则明确单列，不能报“全十函数跨端逐字节一致”。
+
+冻结契约冲突：02 §2 明确 Export 继承 rich renderer（数学/Mermaid 随 feature 改变），§3.1 同时要求两个 binding 所有输出逐字节相同；桌面开启 render、wasm 不开启，两条无法同时成立。
+候选最小裁决：跨端十函数一致性对 `render_html_body_json` 仅要求 **Clipboard**，Export 保留既有 feature-dependent 定义并按各自语义验收。没有自行改契约或关闭 desktop render / 给 wasm 加 render。
+`wire_gold` 在 render 构建下继续验证 Clipboard 原字节，Export/no-render gold 比较显式排除并注释此冲突；这不代表 Export parity 通过。
+
+日志（本机临时文件，未提交）：`C:/Users/willz/AppData/Local/Temp/wpr-wire-order-red.log`、`wpr-wire-json-green-{default,render}.log`、`wpr-clipboard-red.log`、`wpr-clipboard-green{,-render}.log`。
+
+阶段验证（测试编写期间的快照，不冒称同一最终树）：`cargo test -p mica-md` 77 passed（Clipboard 7 组）；`--features render` 77 passed（Clipboard 8 组，Export/no-render replay 少 1 组）；`--no-default-features` 78 passed（Clipboard 9 组，Uuid 比较少 1 组），均无 failed/ignored。
+最终 Clipboard 专项 `cargo test -p mica-md --test clipboard_html` 默认/render **各 9 passed、0 failed、0 ignored**，包含显式 Export 特性差异断言（默认 span、render SVG）与空 code 选择边界。
+`cargo clippy -p mica-md --all-targets --features render -- -D warnings`（1.04s）及 `--no-default-features`（15.68s）均 exit 0。
+日志：`wpr-clipboard-final-{default,render}.log`、`wpr-clipboard-final-clippy-{render,no-default}.log`。
+既有门面 `cargo test -p mica-markdown`：**185 passed、0 failed、0 ignored**（38 个 target 结果汇总，含原 CommonMark/GFM/golden/conformance 测试，源码未改），日志 `wpr-clipboard-facade-tests.log`。
+
+#### 87 字符 native release 窄探针（证据，不插入优化）
+
+新增 `crates/md-core/examples/boundary87.rs`，输入精确使用 S0 `hotPath87`：
+``Hot paths: **bold** and `code` plus a [link](https://example.com) in one paragraph now!``（ASCII/UTF-16 都是 87）。
+分开测 `parse`（顺序 id / root）、`parse_body`、`wire::parse_body_json`，每次 `black_box` 消费实际返回值、包含其销毁成本，不缓存。
+自适应增大 batch 到每批至少 50 ms、2 批预热、7 批取中位数；每项独立执行，不用相减解释跨层开销。
+命令 `cargo run -p mica-md --release --features render --example boundary87`；rustc 1.98.0 / cargo 1.98.0 / x86_64-pc-windows-msvc。
+根 workspace 与 FFI 独立 workspace 均没有 `[profile.release]` 或附加 cargo config，本进程无 RUSTFLAGS / CARGO_PROFILE_RELEASE_* 覆盖，
+因此使用相同 Cargo 默认 release：opt-level=3、lto=false、codegen-units=16、debug=false、incremental=false、panic=unwind。
+只与 D 的 release wire+FFI 绝对数并列，不能直接从两个独立 probe 相减归因为解析/桥接。
+源码改动会触发 fresh 产物要求，example 不在核心源码指纹 ROOTS，不改变稳定 `ce6cef12` 的源码哈希。
+实测源版本 `ce6cef12556f28d67828142ca96e89bf67012841`（生产源码），feature=`uuid`（默认）+`render`。Cargo 本次实际重编译 `mica-md` 并运行 `target/release/examples/boundary87.exe`（release 构建 9m46s，exit 0）；非旧 DLL 或 debug 产物。
+
+| 独立测项 | batch | 7 批中位绝对 ms/次 |
+| --- | ---: | ---: |
+| parse-only（顺序 id） | 8192 | 0.009060510 |
+| parse_body | 8192 | 0.009426453 |
+| wire::parse_body_json | 8192 | 0.010568604 |
+
+D 此前的 release wire+FFI 范围绝对数 0.015718 ms/次来自独立 probe/旧时点，只作上下文并列，不能与本表相减，也不是 fresh 联合预算验收。此处没有据此添加缓存、改预算或扩大优化；D/W 需在集成新源码后重建正式产物复测。
+日志 `C:/Users/willz/AppData/Local/Temp/wpr-boundary87-release.log`。结构门禁 `bash scripts/check-file-size.sh` exit 0、`file-size gate: passed`（只有存量 WARN，无新增超限单元）。
+本轮余下未验证项：正式 FFI/wasm 的 fresh 全路径预算、联合集成门禁及 Export 契约申请由协调者继续；不把本地纯 Rust 探针报为全平台通过。
