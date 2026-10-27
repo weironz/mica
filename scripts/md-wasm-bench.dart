@@ -134,6 +134,48 @@ JSString _measure() {
   }).toJS;
 }
 
+@JS('runMdM2Copy')
+external set _runCopy(JSFunction value);
+
+// M2 copy budget: one 10k selection, serializeBlocks + renderClipboardHtml
+// through the real public facade, after warmup, median of the timed rounds.
+JSString _measureCopy() {
+  final source = _repeat(markdownFixtureSample, 10000);
+  final blocks = markdownCodec.parseBlocks(source);
+  String once() {
+    final markdown = markdownCodec.serializeBlocks(blocks);
+    final html = markdownCodec.renderClipboardHtml(blocks);
+    _sink = (_sink + markdown.length + html.length) & 0x3fffffff;
+    return markdown;
+  }
+
+  for (var i = 0; i < 3; i++) {
+    once();
+  }
+  final samples = <double>[];
+  for (var round = 0; round < 15; round++) {
+    final watch = Stopwatch()..start();
+    once();
+    watch.stop();
+    samples.add(watch.elapsedMicroseconds / 1000);
+  }
+  final markdown = markdownCodec.serializeBlocks(blocks);
+  final html = markdownCodec.renderClipboardHtml(blocks);
+  return jsonEncode({
+    'name': 'copy.10k',
+    'utf16_length': source.length,
+    'block_count': blocks.length,
+    'path': 'MarkdownCodec.serializeBlocks + renderClipboardHtml (one copy)',
+    'samples_ms': samples,
+    'median_ms': _median(samples),
+    'markdown_bytes': markdown.length,
+    'html_bytes': html.length,
+    'budget_ms': 16,
+    'within_budget': _median(samples) <= 16,
+    'sink': _sink,
+  }).toJS;
+}
+
 JSString _differences() => jsonEncode([
   for (final length in [87, 10000, 100000])
     {
@@ -165,6 +207,7 @@ Future<void> main() async {
     throw StateError('MarkdownCodec did not report an engine fingerprint');
   }
   _run = _measure.toJS;
+  _runCopy = _measureCopy.toJS;
   _diff = _differences.toJS;
   runApp(
     const MaterialApp(
