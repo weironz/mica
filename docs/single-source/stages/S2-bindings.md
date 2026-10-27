@@ -540,3 +540,15 @@ WP-W 仅为编译基准接入 D 的最小官方门面依赖：`50bf6030`→`176a
 
 脚本格式与 Node 语法检查通过；根 scripts 下直接 `dart analyze` 无法解析客户端 package 配置（Flutter/Mica package URI 均不存在），该次 exit3 已如实报告，不当作编译通过。正式 Flutter target 编译与 M2 新产物测量安排在 R 核心修复最终交付后一次执行；当前不占用 D 独占的 Windows runner/VM 工具。
 
+### 2026-10-27 WP-D：恢复桌面/Web 真实运行验证（旧 core）
+
+用户授权继续排除验收阻塞。本节结果绑定尚未修复 Clipboard 的旧核心，不代替最终集成头复测。
+
+- Windows 初始加载失败未证实由单实例造成：只读 runner 见 guard 在 console 初始化前可直接退出；但自有 Debug executable 在隔离 APPDATA 启动后存活超过 10 秒，没有提前 exit，随后仅停止该自有子进程。未读取被拒的进程表、未关闭用户未知实例，也未修改 runner/CMake。
+- 最小真实启动路径成功：在 `clients/mica_flutter` 下创建自己的 `build/wp-d-isolated-appdata`，执行 `APPDATA='<worktree>/clients/mica_flutter/build/wp-d-isolated-appdata' LOCALAPPDATA='<同目录>' flutter test --no-pub -v --file-reporter json:build/wp-d-startup-receipt.json integration_test/markdown_codec_startup_test.dart -d windows`。实际环境路径用 Windows 反斜杠传递；启动前 `initCheckedNativeRust()` 校验实际 DLL，调用真实 `app.main()`，有界 pump 等待 `MicaApp` 首帧，并断言 engineInfo 与真实 parseInline。结果 **1 passed / 0 failed / 0 skipped，exit 0**，日志 `b48rhhqv1.output` 有 VM Service 连接和 `markdown codec ready in 0 ms`。该 0 ms 是已初始化 DLL 的 Debug 热路径，**不是 release 初始化预算证据**。隔离目录仅在本工作树 `build/`，可在无自有运行进程后删除该精确目录；不触碰用户原 APPDATA。
+- Chrome 真实 wasm 门面首次执行暴露测试 loader 的 bug：正式 wasm-bindgen no-modules glue 顶层是 `let wasm_bindgen`，Dart `@JS('wasm_bindgen')` 读取 globalThis 属性，报 `NoSuchMethodError: tried to call a non-function ... dart.global.wasm_bindgen`（`br4sb7mha.output`）。修复 `aec1b1ff` 仅改测试 loader，用 classic script 如生产 index 初始化，promise 真实 await 并通过 globalThis.micaMd 调用门面。后续真实 wasm 九组 gold + engineInfo/wrapper + 缺引擎首次绘制，共 **11 passed / 0 failed / 0 skipped**，exit 0（`byjxl1h5r.output`、`build/wp-d-web-contract-receipt.json`）。不改 glue/core，不以 DOM eval 实现产品逻辑。
+- `19cd0ed4` 新增同模式性能与分段诊断，输入复用 S0 的精确 code-unit substring、controller 选区。旧 core 初次 VM 三轮中位比：parse87 **1.396（失败）**，parse10k 0.651、parse100k 0.515、serialize10k 1.152 通过；html10k **4.811（失败，旧 render 公式 SVG 路径）**。原 JSON `build/wp-d-vm-codec-bench.json`，测试明确失败而非放宽预算。后续已补等量未计时 VM 预热，最终验收应待新核心同输入复测；不混用 Debug VM / Windows AOT / Chrome 的比值。
+- 87 字符独立诊断：Rust parse+wire JSON+FFI **0.015718 ms**，Dart JSON decode **0.002301 ms**，block map **0.000514 ms**，decode+map **0.002533 ms**，完整门面 **0.019711 ms**。它们独立采样、不可直接相加减当精确成本；原生 parse-only 归因由 WP-R 探针处理。证据 `bvq0ad4s5.output` / `build/wp-d-boundary-bench.json`，诊断测试 **1 passed**。数据不掩盖 1.2× 预算失败。
+
+release 五次冷进程和实际缺 DLL 后应用首帧的独立 probe 已准备，等待 WP-R 修复后的稳定 core 再构建/测量；不提前声称 release 初始化/性能通过。
+
