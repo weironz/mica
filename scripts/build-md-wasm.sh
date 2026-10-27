@@ -28,11 +28,11 @@ mkdir -p "$support"
 cp -r "$out/." "$support/"
 # M2 requires the checked-in Rust wire gold corpus, never a test-local mirror.
 gold=crates/md-core/tests/fixtures/wire
-if [ -d "$gold" ]; then
-  mkdir -p "$support/gold"
-  cp -r "$gold/." "$support/gold/"
-else
-  note "wire gold corpus not available yet ($gold); M2 contract tests remain pending"
-fi
+[ -d "$gold" ] || fail "wire gold corpus missing ($gold); M2 contracts are pending, not passed"
+shopt -s nullglob
+gold_files=("$gold"/*.json)
+[ "${#gold_files[@]}" -gt 0 ] || fail "wire gold corpus is empty ($gold); regenerate the checked-in gold before building"
+mkdir -p "$support/gold"
+cp -r "$gold/." "$support/gold/"
 note "mica_md gzip -n -9: wasm=$wasm_bytes B JS=$js_bytes B total=$total_bytes B (hard budget 204800 B)"
 note "mica_md -> $out; browser support -> $support"
