@@ -75,22 +75,19 @@ fn main() {
   println!("blocks={}", blocks.len());
   println!(
     "serialize_body {:.6} ms",
-    median(|| {
-      serialize_body(black_box(&blocks), &SerializeOptions::default()).len()
-    })
+    median(|| { serialize_body(black_box(&blocks), &SerializeOptions::default()).len() })
   );
   println!(
     "wire_parse_body_json {:.6} ms",
     median(|| wire::parse_body_json(black_box(&md), false).unwrap().len())
   );
   let blocks_json = wire::parse_body_json(&md, false).unwrap();
-  println!(
-    "blocks_json_bytes={}",
-    blocks_json.len()
-  );
+  println!("blocks_json_bytes={}", blocks_json.len());
   println!(
     "wire_serialize_body_json {:.6} ms",
-    median(|| wire::serialize_body_json(black_box(&blocks_json), "{}").unwrap().len())
+    median(|| wire::serialize_body_json(black_box(&blocks_json), "{}")
+      .unwrap()
+      .len())
   );
   println!(
     "wire_render_html_body_json_clipboard {:.6} ms",

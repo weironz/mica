@@ -401,9 +401,7 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
     if m.kind == "html" {
       // Raw inline HTML passes through unescaped (GFM tagfilter applied, then
       // an event-handler / `javascript:`-URL scrub for no-CSP consumers).
-      out.push_str(&strip_unsafe_attrs(&tagfilter(&String::from_utf16_lossy(
-        &units[s..e],
-      ))));
+      out.push_str(&sanitize_html(&String::from_utf16_lossy(&units[s..e])));
       pos = e;
       continue;
     }
@@ -527,7 +525,7 @@ pub(crate) fn append_html_block(
           // share response's strict CSP is what neutralizes it.
           out.push_str(&block.text);
         } else {
-          out.push_str(&strip_unsafe_attrs(&tagfilter(&block.text)));
+          out.push_str(&sanitize_html(&block.text));
         }
         out.push('\n');
         return Ok(());
@@ -667,6 +665,7 @@ pub(crate) fn list_tag_for(kind: &str) -> Option<&'static str> {
 
 /// GFM tagfilter: escape the opening `<` of the nine disallowed raw-HTML
 /// tags so they render inert while everything else passes through.
+#[cfg(test)]
 pub(crate) fn tagfilter(s: &str) -> String {
   const BAD: &[&str] = &[
     "title",
@@ -745,22 +744,300 @@ pub(crate) fn is_unsafe_attr(name: &str, value: &str) -> bool {
   {
     return true;
   }
-  let lname = name.to_ascii_lowercase();
-  if URL_ATTRS.contains(&lname.as_str()) {
+  // No allocation: attribute name comparison is on the per-attribute hot path.
+  if URL_ATTRS.iter().any(|attr| name.eq_ignore_ascii_case(attr)) {
     // Probe = value with all ASCII whitespace/control bytes removed, lowercased.
     // A real URL never collapses to a `javascript:`/`vbscript:` prefix, so this
     // has no realistic false positive while closing the tab/newline bypass.
-    let probe: String = value
-      .bytes()
-      .filter(|b| *b > 0x20 && *b != 0x7f)
-      .map(|b| b.to_ascii_lowercase() as char)
-      .take(11) // len("javascript:")
-      .collect();
-    if probe.starts_with("javascript:") || probe.starts_with("vbscript:") {
+    // Fixed 11-byte buffer (len("javascript:")) — no heap allocation.
+    let mut probe = [0u8; 11];
+    let mut len = 0;
+    for byte in value.bytes() {
+      if len == probe.len() {
+        break;
+      }
+      if byte > 0x20 && byte != 0x7f {
+        probe[len] = byte.to_ascii_lowercase();
+        len += 1;
+      }
+    }
+    let probe = &probe[..len];
+    // Byte-prefix compare: the probe may end mid-UTF-8 code point, which is
+    // irrelevant because both dangerous schemes are pure ASCII.
+    if probe.starts_with(b"javascript:") || probe.starts_with(b"vbscript:") {
       return true;
     }
   }
   false
+}
+
+/// The two safety passes in one scan: [`tagfilter`] then [`strip_unsafe_attrs`],
+/// with a single output allocation. Byte-identical to composing the two
+/// functions — every branch copies exactly what the corresponding layer would.
+///
+/// Because tagfilter runs FIRST in the composition, it also escapes `<` of the
+/// nine names inside regions strip later copies verbatim (comments, attribute
+/// text), so those regions are emitted through tagfilter here too.
+///
+/// This is the hot-path form used by whole-document renderers; the standalone
+/// functions remain for per-block calls and tests.
+pub(crate) fn sanitize_html(s: &str) -> String {
+  const BAD: &[&str] = &[
+    "title",
+    "textarea",
+    "style",
+    "xmp",
+    "iframe",
+    "noembed",
+    "noframes",
+    "script",
+    "plaintext",
+  ];
+  let b = s.as_bytes();
+  let mut out = String::with_capacity(s.len() + s.len() / 8);
+  // tagfilter's per-'<' decision, reusable from every branch: true when the
+  // '<' at `i` introduces one of the nine names at a tag boundary.
+  let bad_at = |i: usize| -> bool {
+    if b.get(i) != Some(&b'<') {
+      return false;
+    }
+    let mut j = i + 1;
+    if b.get(j) == Some(&b'/') {
+      j += 1;
+    }
+    let name_start = j;
+    while b.get(j).is_some_and(|c| c.is_ascii_alphabetic()) {
+      j += 1;
+    }
+    let boundary = matches!(b.get(j), None | Some(b' ' | b'\t' | b'\n' | b'>' | b'/'));
+    // No allocation: this runs once per '<' and once per attribute text, so a
+    // lowercase String per call dominated the scan.
+    boundary
+      && BAD
+        .iter()
+        .any(|bad| s[name_start..j].eq_ignore_ascii_case(bad))
+  };
+  // Copy `s[start..end]` through tagfilter (only BAD '<'s change), and also
+  // count how many bytes the copy expands by so callers stay O(n).
+  let tf_push = |out: &mut String, start: usize, end: usize| {
+    let mut copied = start;
+    let mut i = start;
+    while i < end {
+      if bad_at(i) {
+        out.push_str(&s[copied..i]);
+        out.push_str("&lt;");
+        i += 1;
+        copied = i;
+        continue;
+      }
+      i += 1;
+    }
+    out.push_str(&s[copied..end]);
+  };
+  let mut i = 0;
+  while i < b.len() {
+    // Text run: copy verbatim up to the next '<' (keeps multibyte UTF-8 intact).
+    if b[i] != b'<' {
+      let start = i;
+      while i < b.len() && b[i] != b'<' {
+        i += 1;
+      }
+      out.push_str(&s[start..i]);
+      continue;
+    }
+    // `<!-- … -->` comment: copied verbatim by strip, but tagfilter (running
+    // first in the layered composition) still escapes BAD names inside it.
+    if s[i + 1..].starts_with("!--") {
+      let rest = &s[i + 4..];
+      let end = if rest.starts_with('>') {
+        i + 5
+      } else if rest.starts_with("->") {
+        i + 6
+      } else {
+        let close = [
+          rest.find("-->").map(|k| k + 3),
+          rest.find("--!>").map(|k| k + 4),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        close.map_or(b.len(), |k| i + 4 + k)
+      };
+      tf_push(&mut out, i, end);
+      i = end;
+      continue;
+    }
+    // `<! … >` declaration (e.g. DOCTYPE): same rule as comments.
+    if b.get(i + 1) == Some(&b'!') {
+      let mut k = i + 2;
+      while k < b.len() && b[k] != b'>' {
+        k += 1;
+      }
+      let end = (k + 1).min(b.len());
+      tf_push(&mut out, i, end);
+      i = end;
+      continue;
+    }
+    // `<? … ?>` processing instruction: same rule as comments.
+    if b.get(i + 1) == Some(&b'?') {
+      let mut k = i + 2;
+      while k + 1 < b.len() && !(b[k] == b'?' && b[k + 1] == b'>') {
+        k += 1;
+      }
+      let end = if k + 1 < b.len() { k + 2 } else { b.len() };
+      tf_push(&mut out, i, end);
+      i = end;
+      continue;
+    }
+    // A tag: `<` optional `/` then a name starting with an ASCII letter.
+    let mut j = i + 1;
+    let closing = b.get(j) == Some(&b'/');
+    if closing {
+      j += 1;
+    }
+    if !b.get(j).is_some_and(u8::is_ascii_alphabetic) {
+      // Not a real tag start — emit the bare '<' as literal text. tagfilter's
+      // name scan is ASCII-alphabetic only, so no BAD name can start here.
+      out.push('<');
+      i += 1;
+      continue;
+    }
+    // tagfilter decision first: if this tag's name is one of the nine, the
+    // opening `<` is escaped and the tag body is copied from the source through
+    // tagfilter too (a nested `<script` inside the tag body is also escaped by
+    // the layered composition, because tagfilter scanned it as plain text).
+    if bad_at(i) {
+      out.push_str("&lt;");
+      let mut k = i + 1;
+      while k < b.len() && b[k] != b'>' {
+        k += 1;
+      }
+      let end = (k + 1).min(b.len());
+      tf_push(&mut out, i + 1, end);
+      i = end;
+      continue;
+    }
+    // strip_unsafe_attrs' tag assembly: parse name and attributes, dropping
+    // unsafe ones and meta-refresh tags.
+    let mut tag = String::new();
+    tag.push('<');
+    if closing {
+      tag.push('/');
+    }
+    let name_start = j;
+    while b
+      .get(j)
+      .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'-')
+    {
+      j += 1;
+    }
+    let tag_name = &s[name_start..j];
+    tag.push_str(tag_name);
+    let is_meta = !closing && tag_name.eq_ignore_ascii_case("meta");
+    let mut meta_has_http_equiv = false;
+    loop {
+      let ws_start = j;
+      while b.get(j).is_some_and(u8::is_ascii_whitespace) {
+        j += 1;
+      }
+      let ws = &s[ws_start..j];
+      match b.get(j) {
+        None => {
+          tag.push_str(ws);
+          break;
+        }
+        Some(&b'>') => {
+          tag.push_str(ws);
+          tag.push('>');
+          j += 1;
+          break;
+        }
+        Some(&b'/') if b.get(j + 1) == Some(&b'>') => {
+          tag.push_str(ws);
+          tag.push_str("/>");
+          j += 2;
+          break;
+        }
+        _ => {}
+      }
+      let attr_start = j;
+      while b
+        .get(j)
+        .is_some_and(|c| !c.is_ascii_whitespace() && !matches!(c, b'=' | b'>' | b'/'))
+      {
+        j += 1;
+      }
+      if j == attr_start {
+        tag.push_str(ws);
+        tag.push(b[j] as char);
+        j += 1;
+        continue;
+      }
+      let name = &s[attr_start..j];
+      let mut value = "";
+      let mut k = j;
+      while b.get(k).is_some_and(u8::is_ascii_whitespace) {
+        k += 1;
+      }
+      if b.get(k) == Some(&b'=') {
+        k += 1;
+        while b.get(k).is_some_and(u8::is_ascii_whitespace) {
+          k += 1;
+        }
+        match b.get(k) {
+          Some(&b'"') => {
+            let vs = k + 1;
+            k += 1;
+            while b.get(k).is_some_and(|c| *c != b'"') {
+              k += 1;
+            }
+            value = &s[vs..k.min(b.len())];
+            if b.get(k) == Some(&b'"') {
+              k += 1;
+            }
+          }
+          Some(&b'\'') => {
+            let vs = k + 1;
+            k += 1;
+            while b.get(k).is_some_and(|c| *c != b'\'') {
+              k += 1;
+            }
+            value = &s[vs..k.min(b.len())];
+            if b.get(k) == Some(&b'\'') {
+              k += 1;
+            }
+          }
+          _ => {
+            let vs = k;
+            while b
+              .get(k)
+              .is_some_and(|c| !c.is_ascii_whitespace() && *c != b'>')
+            {
+              k += 1;
+            }
+            value = &s[vs..k];
+          }
+        }
+        j = k;
+      }
+      if is_meta && name.eq_ignore_ascii_case("http-equiv") {
+        meta_has_http_equiv = true;
+      }
+      if is_unsafe_attr(name, value) {
+        // Drop: skip the leading whitespace AND the attribute entirely.
+      } else {
+        tag.push_str(ws);
+        // Attribute text may itself contain `<script`-like sequences; the
+        // layered composition escaped those before strip ever saw them.
+        tf_push(&mut tag, attr_start, j);
+      }
+    }
+    if !(is_meta && meta_has_http_equiv) {
+      out.push_str(&tag);
+    }
+    i = j;
+  }
+  out
 }
 
 /// Defense-in-depth over raw HTML: strip event-handler (`on*`) attributes and
@@ -807,6 +1084,7 @@ pub(crate) fn safe_url(url: &str, for_image: bool) -> &str {
   if dangerous { "" } else { url }
 }
 
+#[cfg(test)]
 pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
   let b = s.as_bytes();
   let mut out = String::with_capacity(s.len());
@@ -1017,8 +1295,7 @@ pub(crate) fn strip_unsafe_attrs(s: &str) -> String {
 
 #[cfg(test)]
 mod security_tests {
-  use super::{strip_unsafe_attrs, tagfilter};
-
+  use super::{sanitize_html, strip_unsafe_attrs, tagfilter};
   // Pins what the GFM tagfilter does — and, crucially, what it does NOT do — for
   // raw HTML rendered onto a Mica same-origin surface (the public share page).
   #[test]
@@ -1144,5 +1421,104 @@ mod security_tests {
       strip_unsafe_attrs("前<meta http-equiv=\"refresh\" content=\"0;url=x\">后"),
       "前后"
     );
+  }
+
+  /// The fused whole-document pass must equal the layered composition exactly,
+  /// on inputs that exercise every branch: text runs, comments, declarations,
+  /// processing instructions, filtered tags, unsafe attributes, meta refresh.
+  #[test]
+  fn fused_safety_is_byte_identical_to_layered_composition() {
+    let cases = [
+      "",
+      "plain text no markup",
+      "中文 😀 𠀀 café",
+      "<b>bold</b> &amp; <a href=\"https://x.test/on\">link</a> <input disabled> <br/>",
+      "<script>alert(1)</script>",
+      "<div>\n<img src=x onerror=\"steal()\">\n</div>\n<script>alert(1)</script>",
+      "前<meta http-equiv=\"refresh\" content=\"0;url=x\">后<!-- --!><img src=y onload=alert(1)> -->",
+      "<!-- a comment\nspanning lines --> <?pi content?> <!DOCTYPE html> after",
+      "<a href=\"javascript:alert(1)\">x</a><a href=\"  JAVAScript:x\">y</a><a href=\"java\tscript:z\">w</a>",
+      "<img src=\"vbscript:msgbox(1)\"><img src=\"data:image/png;base64,AAAA\"><img src=\"data:text/html,x\">",
+      "a < b and on=off <!-- onerror=x --> café <br/> more",
+      "<SVG ONLOAD='x'><BODY OnLoad=x><img src=x onerror=steal()>",
+      "<meta http-equiv><META HTTP-EQUIV=Refresh CONTENT=\"0; URL=//evil\"><meta name=\"description\" content=\"笔记\">",
+      "unclosed <script at eof",
+      "<title>t</title><textarea>x</textarea><style>s</style><xmp>x</xmp><iframe>f</iframe><noembed>n</noembed><noframes>n</noframes><plaintext>p</plaintext>",
+      "<scriptX not a script tag></scriptx><scripted>ok</scripted>",
+    ];
+    for case in cases {
+      assert_eq!(
+        sanitize_html(case),
+        strip_unsafe_attrs(&tagfilter(case)),
+        "fused != layered on {case:?}"
+      );
+    }
+  }
+
+  /// Property: the fused pass equals the layered composition on structured
+  /// noise around tags, so the equivalence is not limited to hand-picked cases.
+  #[test]
+  fn fused_safety_equivalence_on_generated_noise() {
+    let pieces = [
+      "<",
+      ">",
+      "/>",
+      "a",
+      "b",
+      " ",
+      "\n",
+      "\t",
+      "=",
+      "\"",
+      "'",
+      "<b>",
+      "</b>",
+      "<script>",
+      "on",
+      "error",
+      "=",
+      "x",
+      "javascript:",
+      "vbscript:",
+      "data:",
+      "image/",
+      "中文",
+      "😀",
+      "𠀀",
+      "<!--",
+      "-->",
+      "--!>",
+      "<?",
+      "?>",
+      "<!",
+      "meta",
+      "http-equiv",
+      "refresh",
+      "<img",
+      "src",
+      "<title",
+      "<textarea",
+      "url(",
+      ")",
+      "&amp;",
+      "&lt;",
+    ];
+    // Deterministic LCG: reproducible without a dev-dependency here.
+    let mut state = 0x853c49e6748fea9bu64 % 100000;
+    let mut next = || {
+      state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+      ((state >> 33) as usize) % pieces.len()
+    };
+    for _ in 0..2000 {
+      let len = 1 + next() % 24;
+      let input: String = (0..len).map(|_| pieces[next()]).collect();
+      assert_eq!(
+        sanitize_html(&input),
+        strip_unsafe_attrs(&tagfilter(&input)),
+        "fused != layered on {input:?}"
+      );
+    }
   }
 }
