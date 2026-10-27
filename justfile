@@ -105,6 +105,7 @@ dev-web:
 # the window may just send Mica to the tray rather than exit it.
 [doc("Launch the app to eyeball a change (target: windows | chrome)")]
 app target="windows":
+    @if [ "{{target}}" = "chrome" ] || [ "{{target}}" = "web-server" ]; then bash scripts/build-md-wasm.sh; fi
     @if [ "{{target}}" = "windows" ] && command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command 'foreach ($p in (Get-Process mica_flutter -ErrorAction SilentlyContinue)) { Write-Host "==> closing the running Mica (PID $($p.Id)) $($p.Path)"; $null = $p.CloseMainWindow(); if (-not $p.WaitForExit(5000)) { Write-Host "    it did not exit (it may have gone to the tray) - forcing"; Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(3000) } }; exit 0'; fi
     cd clients/mica_flutter && {{flutter}} run -d {{target}} --dart-define=MICA_DEV_AUTOLOGIN=false
 

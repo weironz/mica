@@ -465,3 +465,11 @@ WP-W 通过允许的非 Git 命令再次核对真实依赖图：`cargo tree --ma
 
 当前剩余阻塞不变：render HTML 因 `cfg` 不在 wire_gold render 测试里执行，默认 9 绿不能称真实 FFI 全九项绿；固定默认 args 的 HTML 实际内容差异、parse_body/encode_cells 对象键序差异继续待审核裁决。未改测试去掩盖这些失败。WP-D 门面与 Windows 实际集成/首帧/安装包验证仍不在本工作包完成证明中。
 
+#### T2.11 构建链复审修复（2026-10-27）
+
+恢复工作后复审发现三处实际缺口：`just app chrome` 没有构建 wasm；`release-check.sh` 虽校验 CLI 版本，但 Flutter freshness 测试前可能没有产物而跳过；`build-md-wasm.sh` 仅要求黄金目录非空，没有证明九个文件的内容仍与核心相符。现补齐 Chrome/web-server 启动前置、release-check 的 wasm 构建前置；正式构建先以 `cargo_receipt 9 cargo test --locked -p mica-md --no-default-features --test wire_gold` **验证** checked-in 默认黄金，再构建/复制，拒绝 `GEN_GOLD=1`，不在生产构建生成黄金文件。
+
+新增轻量 `scripts/test-md-wasm-build.sh` 以临时隔离工具链 fixture 执行真实 build 脚本，不构建 Rust/Flutter、不改用户配置。实际通过：CLI 错号、gold 测试失败、通过数低于 9、生成模式、空语料均拒绝；成功路径验证 locked 构建参数、指纹与 gold 复制；真实 `just --dry-run app chrome` 包含 wasm 前置。CI paths 作业接入此轻量回归。release orchestration fixture 的 Flutter test stub 额外要求 wasm-ready 标记已存在，顺序回归实际 exit0；ci-paths 现有真实回归也 exit0。无临时个人绝对路径写入脚本。
+
+复审同时明确旧 `scripts/md-wasm-bench.dart::_full` 自行调用 wasm 并映射 BlockSpec，历史数据只证明 wire 完整路径预算，**不能称已测真实 WP-D MarkdownCodec 门面**。后续基准改用真实 `initMarkdownCodec` 与 `markdownCodec.parseBlocks`；R 新核心交付后才进行一轮新产物 M2 测量，旧数据保留不冒充。Windows CI 仍等实际测试文件与真实运行结果，不提前登记不存在入口。
+

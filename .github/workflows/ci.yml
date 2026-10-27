@@ -70,6 +70,7 @@ jobs:
         run: |
           bash scripts/test-ci-paths.sh
           bash scripts/test-flutter-sdk-reuse.sh
+          bash scripts/test-md-wasm-build.sh
 
       # Release and CI scripts, exercised against disposable fixtures and a
       # stubbed toolchain/Docker/gh. They are real behavioural tests, not reads

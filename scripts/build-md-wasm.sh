@@ -3,7 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
+source scripts/lib-receipt.sh
 bash scripts/check-md-wasm-toolchain.sh
+
+# Verify all nine checked-in vectors before building/copying. Never generate
+# here: a stale or partially deleted corpus must fail even on a clean machine.
+[ "${GEN_GOLD:-0}" != 1 ] || fail "GEN_GOLD=1 is not allowed in a production build; verify the checked-in wire gold"
+cargo_receipt 9 cargo test --locked -p mica-md --no-default-features --test wire_gold
 
 CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_PANIC=abort cargo build -p mica-md-wasm --target wasm32-unknown-unknown --release --locked
 # Respect Cargo's target directory override (CI and local builds may use one).
