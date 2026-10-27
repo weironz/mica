@@ -345,3 +345,36 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 
 **停点状态：UUID、解析、JSON、绑定成本的实验归因已交付，硬性能门槛已有达标证据，推荐 opt-3，G2 待正式审核。G1 未通过，正式 T2.2+ 未启动，不合入 main、不发版。**
 
+### 2026-10-27 WP-D：Dart 门面与真实 FFI 接线
+
+基线 `8d78ba6c`，分支 `worktree-agent-a64add55c7b76fbd3`。本记录是执行证据，不是 M2 通过结论。未修改冻结接口、未删除 Dart 镜像、未推送或发版。
+
+- **T2.5**：`Mark` 原样迁移、旧 `marks.dart` re-export；`BlockSpec` 迁到冻结门面，旧解析器 re-export。接口、异常、访问器、初始化兜底、不可用实现、wire 映射和 wasm 实现已落地。依赖实际 `bc72bc12` 生成物实现十个同步 FFI 调用；仅检查真实初始化状态来容忍已初始化，其他初始化失败继续抛给门面兜底。提交 `50bf6030`、`69f92edd`、`0281dc34`。旧镜像的格式化噪音已撤回。
+- **T2.8**：`main()` 在 `runApp` 前 await 初始化。`main.dart` +4/-4，净 **0 行**，同库 18 文件仍为 **21088 行**；合并两处原注释抵消 import 与 await。提交 `e3b227ad`。
+- **T2.9 Dart 侧**：真 FFI 的 `useNativeMarkdownCodec()` 先执行 `initCheckedNativeRust()`，再安装 io codec；共用断言、VM/Web/Windows 入口、文件系统 gold 查找和浏览器 fetch/wasm loader 已落地，缺文件失败。提交 `a0f2c0c3`、`45ba2e17`。黄金文件原始 output 保留，块和 marks 值按结构比较、Markdown/HTML 按字符串比较；不排序 marks、不清理 data 字段。Dart 门面没有 export HTML API，因此 export 用例不计为 Dart 通过/跳过，由 wire/绑定层另测；跨端字节与 render 一致性尚未确立。
+- **降级测试**：所有不可用方法均抛 `MarkdownCodecException`，未初始化访问器报 `StateError`；另加浏览器缺 wasm 的真实初始化失败后仍可绘制首帧的测试（尚未执行）。提交 `66f28d78` 的 T2.12 标签沿用了初始委派编号，**不表示下述真正 T2.12 已完成**。
+- **阶段文档 T2.12（差分工具切门面）未完成**：保留原 S0 Rust `MicaDocument` 路径及基线，未再生成 differential baseline；该改造不能用降级测试替代。**T2.10 Web freshness 不属本轮已完成项**，本分支没有新增 freshness 测试或 wasm 指纹门禁。
+- **Windows 入口**：提交 `44a4716d`，同一 gold body 供 `integration_test/markdown_codec_test.dart` 使用；另一个启动入口复用真实 `app.main()`。初始委派称 T2.13 desktop，阶段文档中 Windows 验证实际为 **T2.14**；阶段 T2.13 性能预算本轮未验收。
+
+接入依赖（只 cherry-pick，不手改生成物）：`6633f7e7` = WP-W `bc72bc12`、`74550843` = WP-R gold `7a9ee622`、`a89113cf` = `881502aa`。保留现有 render 特性，未绕过它来使黄金测试变绿。
+
+#### 命令与验证结果
+
+以下路径相对 `clients/mica_flutter`，JSON reporter 均在忽略的 `build/` 中。`scripts/lib-receipt.sh` 的 source 入口仍被 worktree 隔离检查拒绝（无法判定 source 的 Git 作用域），故不冒称正式 receipt wrapper 已执行；通过数来自 Flutter JSON runner 中 hidden=false/skipped=false 的 testDone。
+
+| 项 | 实际命令 / 证据 | 结果 |
+| --- | --- | --- |
+| 新鲜原生库 | 根目录 `cargo build --release --manifest-path clients/mica_flutter/rust/Cargo.toml --locked` | exit 0；契约和差分测试均先验源码指纹，ROOTS 含 md-core |
+| 真实 VM gold | `flutter test --file-reporter json:build/wp-d-contract-receipt.json test/markdown_codec_contract_test.dart` | **8 passed / 1 failed / 0 skipped**，exit 1（添加身份断言前的九组回执） |
+| 新增身份覆盖 | `flutter test --plain-name 'MarkdownCodec engine identity and single-inline wrapper' --file-reporter json:build/wp-d-identity-receipt.json test/markdown_codec_contract_test.dart` | **1 passed / 0 failed / 0 skipped**，exit 0；真实 engineInfo 与单条 wrapper |
+| 功能回归 | `flutter test --file-reporter json:build/wp-d-regression-receipt.json test/markdown_codec_unavailable_test.dart test/markdown_wire_test.dart test/markdown_gold_parser_test.dart test/markdown_differential_test.dart test/mark_title_test.dart` | **12 passed / 0 failed / 0 skipped**，exit 0；其中 S0 差分 3 项，原基线不退化 |
+| 全量静态分析 | `flutter analyze --no-fatal-infos` | exit 0，164 条存量 info；不宣称无提示。新增门面/测试目标范围单独 analyze 无问题，exit 0 |
+| 结构 | 根目录 `just check-structure`、`bash scripts/check-file-size.sh --diff 8d78ba6c` | 均 exit 0，main 净 0 |
+| Windows 契约 | `flutter test --file-reporter json:build/wp-d-windows-receipt.json integration_test/markdown_codec_test.dart -d windows` | Debug 构建 **646.6 s** 成功；随后连接失败，**0 tests executed**，加载错误 exit 1 |
+
+唯一真实 gold 失败是 `render_html_body/23-math.md/document/clipboard`：默认 gold 期望 `<span class="math">E = mc^2</span>` 等源码 HTML；原生 render 返回 `<svg ...>`，首处差异 offset 17。其余八组 parse/body/inline、cells、serialize、math spans 均通过。没有修改期望、跳过此失败或把结构比较当成 wire 逐字节证明；冻结 Clipboard 要求与现有 render 的矛盾交由协调/审核裁决。
+
+Windows 可执行文件为 `build/windows/x64/runner/Debug/mica_flutter.exe`。runner 报 `Error waiting for a debug connection: The log reader stopped unexpectedly, or never started.`，测试未进入 setUpAll。单实例 `Local\\MicaSingleInstance` 只是源码支持的未证实假设；读取现有进程的 PowerShell 命令亦被隔离拒绝，未换工具或终止用户进程。**app.main 启动探针、真实桌面不可用首帧、Windows release 五次初始化 p50 ≤30 ms、安装包冒烟、截图、性能预算、Web 运行与交付均未验证**。646.6 s 是构建时间，绝不当初始化时间。
+
+本轮运行日志在会话 task 文件 `broc7v0s4.output`（gold）、`bkhn0iapj.output`（identity）、`bdndpjhr7.output`（regression）、`bny84ry46.output`（Windows）、`be0k86s3w.output`（analysis）、`by3patbeh.output`（structure）；完整目录 `C:/Users/willz/AppData/Local/Temp/claude/D--codes-mica/6ae5127a-2bb8-4319-979e-679ac1bd3fd3/tasks/`。六个 linux/windows 插件生成文件仅换行元数据噪音，未加入任何任务提交。
+
