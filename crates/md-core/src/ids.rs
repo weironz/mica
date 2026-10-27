@@ -17,10 +17,15 @@ pub enum BlockIds {
 
 impl BlockIds {
   /// A deterministic id for the block at position `n`.
+  ///
+  /// Only the `Uuid` variant calls this (the sequential path in `assign_ids`
+  /// formats ids inline), so the whole function belongs to the feature.
+  #[cfg(feature = "uuid")]
   pub(crate) fn id_for(&self, n: usize) -> String {
     match self {
-      #[cfg(feature = "uuid")]
       BlockIds::Uuid => format!("block_{}", uuid::Uuid::new_v4().simple()),
+      // Unreachable in practice (see the doc above), kept for exhaustive match.
+      #[allow(unreachable_patterns)]
       BlockIds::Sequential { prefix } => format!("{prefix}{n}"),
     }
   }
