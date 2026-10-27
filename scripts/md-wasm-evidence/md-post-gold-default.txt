@@ -1,0 +1,38 @@
+   Compiling getrandom v0.3.4
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling quick-error v1.2.3
+   Compiling mica-md v0.1.0 (D:\codes\mica\.claude\worktrees\agent-aa074de1015a08b4c\crates\md-core)
+   Compiling wait-timeout v0.2.1
+   Compiling fnv v1.0.7
+   Compiling bit-vec v0.8.0
+   Compiling unarray v0.1.4
+   Compiling windows-sys v0.61.2
+   Compiling num-traits v0.2.19
+   Compiling ppv-lite86 v0.2.21
+   Compiling uuid v1.23.2
+   Compiling serde v1.0.228
+   Compiling thiserror v2.0.18
+   Compiling bit-set v0.8.0
+   Compiling rand_core v0.9.5
+   Compiling tempfile v3.27.0
+   Compiling rand_chacha v0.9.0
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling rusty-fork v0.3.1
+   Compiling proptest v1.11.0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.10s
+     Running tests\wire_gold.rs (target\debug\deps\wire_gold-1f5836ad3618e374.exe)
+
+running 9 tests
+test parse_inline_math_json ... ok
+test math_run_spans_json ... ok
+test serialize_inline_json ... ok
+test encode_cells_json ... ok
+test parse_inline_batch_json ... ok
+test decode_cells_json ... ok
+test parse_body_json ... ok
+test serialize_body_json ... ok
+test render_html_body_json ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s

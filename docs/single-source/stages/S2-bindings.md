@@ -428,5 +428,40 @@ WP-W 通过允许的非 Git 命令再次核对真实依赖图：`cargo tree --ma
 
 #### 工具恢复后的证据归档（2026-10-27）
 
-用户暂停 RTK hook 改写、会话重新读取配置后，按协调者要求仅用普通 `git status --short` 重验成功，随后 `git diff --check` 也通过。未修改任何持久 hook/权限配置。此前“未提交”条目保留为中断经过；现先将 T2.13 脚本、原始证据与本记录归档为独立任务提交，之后再接入 WP-R 的两个最终提交并单独记录新回执。此时的体积/性能与源码指纹属于上文旧快照，不能冒充接入修复后的产物重测。
+用户暂停 RTK hook 改写、会话重新读取配置后，按协调者要求仅用普通 `git status --short` 重验成功，随后 `git diff --check` 也通过。未修改任何持久 hook/权限配置。此前“未提交”条目保留为中断经过；T2.13 脚本、完整输入/两侧输出原始数据与本记录已归档为 **`452b8c4a`**，随后将 WP-R `881502aa` / `7a9ee622` 分别 cherry-pick 为 **`c02bd94f` / `2c2fd65e`**。未合并集成分支、未 push。
+
+#### 接入最终核心修复与黄金语料后的重验（2026-10-27）
+
+本节取代上文“未接入/未重跑”的当前状态，但保留历史失败。新的直接 Cargo 命令及原始日志均在 `scripts/md-wasm-evidence/md-post-*.txt`：
+
+| 命令 | 实际结果 |
+| --- | --- |
+| `cargo test --locked -p mica-md-wasm` | exit0；forward **10 passed / 0 failed / 0 ignored**，lib/doc 空套件另显示 0，不混算 |
+| `cargo test --locked -p mica-md --test wire_gold` | exit0；**9 passed / 0 failed / 0 ignored** |
+| `cargo test --locked -p mica-md --no-default-features --test wire_gold` | exit0；**9 passed / 0 failed / 0 ignored** |
+| `cargo clippy --locked -p mica-md --no-default-features --all-targets -- -D warnings` | exit0 |
+| `cargo clippy --locked -p mica-md-wasm --all-targets -- -D warnings` | exit0 |
+| `cargo fmt --check` | exit0 |
+| `cargo build --release --locked --manifest-path clients/mica_flutter/rust/Cargo.toml` | exit0（共享核心改动后重建） |
+| `bash scripts/build-md-wasm.sh` | exit0；严格黄金存在性/非空检查通过，九个 JSON 已复制 |
+| `diff -r crates/md-core/tests/fixtures/wire clients/mica_flutter/test/support/mica_md/gold` | exit0；复制逐字节相同 |
+| `just check-structure`、ignored-source、ci-paths、diff-check | exit0 |
+
+`source lib-receipt + 分组 + tee` 的组合命令仍被独立 worktree 安全检查拒绝（与 RTK 不同），没有执行该 wrapper；按检查器明确建议运行直接 Cargo 命令并保留完整 `test result` 行。因此上述通过数是直接命令的实际计数，**不是未执行 wrapper 的回执**。没有为隐藏 source 编写 shell 包装，也未改变权限。
+
+正式严格构建新产物：**196937 B wasm + 2744 B JS = 199681 B gzip -n -9**（硬门槛 204800 B，通过）。WASM SHA-256 **`9df6253d1181d7029a4544b25600945278d9cf4750a1db18ca46da40e54f9779`**，JS SHA 仍为 `90ee81fdb2466b0e2a497216203aa27907cc42777997f27b55b6141634d9a532`，引擎指纹 **`7f78019aa20d7d15`**。原产物 199680 B 与旧指纹数据留存；没有凭修复意图宣称字节不变。指纹输入仅 md-core/md-wasm 清单和源码，不含 scripts 的原始证据。
+
+因 WASM hash 改变，换入已有 release 页面并独立重测，Dart `main.dart.js` SHA 保持 `5f9c0ff68854e1d2e29745c37fed05f030aef2246b8d2588e5f5a63467bd03aa`。仍为真实 Chrome 156、同页 production dart2js、原三档输入、每轮预热+15批 AB/BA、三轮，无额外矩阵：
+
+| 输入 | 新产物三轮 full/Dart | 比值中位数 |
+| --- | --- | ---: |
+| 87 | 0.968293 / 0.979730 / 1.000000 | **0.979730** |
+| 10000 | 0.491837 / 0.517094 / 0.512035 | **0.512035** |
+| 100000 | 0.558029 / 0.552092 / 0.549126 | **0.552092** |
+
+每轮均 ≤1.2。五个新 browser context 初始化（Promise 赋值到 fulfillment，同方法）为 **35.1 / 13.7 / 11.4 / 13.3 / 12.3 ms**，p50 **13.3 ms**；crossOriginIsolated=false。六类非法 JSON/profile 在新产物浏览器均抛 Error，随后同实例 parseBody 正常。新清单、全部原始样本、初始化与异常记录在 **`scripts/md-wasm-evidence/md-m2-post-integration.json`**；旧 browser-final/raw 文件未覆盖。临时截图 `target/md-m2-post-integration.png`；静态服务器测完已停止。
+
+新增 `node scripts/test-md-wasm-gold.cjs` 直接加载正式 wasm，对 checked-in 默认黄金的返回字符串逐字节重放：parse_body **76**、parse_inline_batch **15**、decode_cells **28**、encode_cells **11**、serialize_body **77**、serialize_inline **9**、render_html_body **154**、math_run_spans **13**、parse_inline_math **13**，合计 **9 文件 / 396 cases** 全部通过。engineInfo 单独断言 schema_version 与该 WASM SOURCE_FINGERPRINT 一致（不与核心不同源集指纹强行相等）；六类错误+随后恢复也通过。该 Node 专项验证**不能替代 Dart VM/web/Windows 契约，也不能证明实际 FFI render 字节相同**。
+
+当前剩余阻塞不变：render HTML 因 `cfg` 不在 wire_gold render 测试里执行，默认 9 绿不能称真实 FFI 全九项绿；固定默认 args 的 HTML 实际内容差异、parse_body/encode_cells 对象键序差异继续待审核裁决。未改测试去掩盖这些失败。WP-D 门面与 Windows 实际集成/首帧/安装包验证仍不在本工作包完成证明中。
 
