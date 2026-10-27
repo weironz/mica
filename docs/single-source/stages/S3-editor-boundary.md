@@ -243,3 +243,64 @@ C 类（`markdown_conformance_test`、`markdown_export_conformance_test`）删�
 ## 执行记录
 
 （执行方追加：分诊表、用户可见变化、待用户决定、删除行数统计、证据。）
+
+### 当前结论（2026-10-28，G3 停点）
+
+| 项 | 状态 |
+| --- | --- |
+| T3.1–T3.5 | ✅ 编辑器全部 Markdown 进出走 `markdownCodec`；`lib/` 中 `markdownToBlocks` 调用点 7→0 |
+| T3.4 剪贴板移植验收 | ✅ `clipboard_html_port_test` 30 fixture 逐字节（切换前最后验证于 `9657631d` 链上） |
+| T3.7 分诊 | ✅ 全部差异归类：B 类 1（已修）、R 类 6、H 类 3、U 类 1；见下表 |
+| T3.8 往返测试 | ✅ 18 fixture 断言 + 18 显式例外（每项注明丢了什么） |
+| 全量测试 | ✅ `flutter test` 2232 passed / 21 skipped / 0 failed |
+| `local-ci.sh all` | ✅ 于 `dd183384`（rust 1141+213、flutter 2232、wasm 构建、structure、analyze 全绿） |
+| 删除行数 | **-7,460 / +772**（`3b6c477f`；含旧 HTML 写出器与 `_rangeMarkdown` 主体） |
+
+### 提交与门禁回执
+
+| 提交 | 任务 | 内容 |
+| --- | --- | --- |
+| `e7b4a533` | T3.1 | `paste_repair.dart` 粘贴围栏启发式搬家；editor_ai/ai_edits 改从门面取 `BlockSpec` |
+| `71b27bc2` | T3.2+T3.3 | 7 处解析入口 + `parseInlineMath`/`mathRunSpans` 切门面；`_parseOrNull` 统一降级 |
+| `7ef6bbba` | B 类修复 | wire 不再对 marks 重排序（分诊表 B-1） |
+| `3b6c477f` | T3.4/T3.5/T3.8 | 复制/导出切引擎；`selectionBlocks`/`documentBlocks`/`_visibleOrdinal`；`clipboard_mica_roundtrip_test` |
+| `dd183384` | T3.4 收尾 | `table_copy.dart` 拆分；预算基线收紧（editor -15、controller 4139→4063） |
+
+### T3.7 分诊表
+
+材料：切换前后 `clipboard_snapshot_test` 双快照（`build/s3-baseline/`，不提交）、差分报告前后对比。**export 1432→19、roundtrip 1165→1190 的收敛是 wire marks 顺序修复（B-1）的直接结果**；差分棘轮已按修复后基线重置。
+
+| # | 类 | 差异 | 结论 |
+| --- | --- | --- | --- |
+| B-1 | B（Rust bug） | wire `parse_body_json` 按 `(start,end,type)` 重排 marks；序列化 tie-break 依赖解析器产出序（同 range 外层 mark 排后面），深嵌套（fixture 43）wire 往返 ≠ native 导出 | **已修**（`7ef6bbba`）：wire 保留解析器产出序、只排 JSON 键；回归测试 `wire_round_trip_matches_native_export_on_equal_range_ties`（先证失败后修）；wire gold 两绑定同步再生 |
+| R-1 | R | 引用组序列化：Rust 写 `> line\n>\n> next\n>`（每段重新前缀 + 组尾裸 `>`），旧 Dart 写软换行折叠 | 接受。往返更保真：粘回仍是每源行一块；copy_markdown_test 已按新行为断言 |
+| R-2 | R | 列表子段空行：Rust 在 loose item 的第二段前保留 `- ` 空项行，旧 Dart 只写空行 | 接受。粘回块结构一致 |
+| R-3 | R | 图片块序列化：Rust 的 alt 取 `block.text` 但在原子块只复制整块时旧路径丢了 alt（`![](url)`）；现在 selectionBlocks 原子块整块复制，alt 保留 | 接受（是修复） |
+| R-4 | R | 编号列表中间起复制：旧 Dart 需 `markdownListLayout` 全文扫描才能给出可见序号；新路径 `_visibleOrdinal` 回写 `data.start` | 接受，行为一致 |
+| R-5 | R | 表格区域复制的 `<td>` 内容：旧路径对 cell 文本 `escapeHtml`；新路径经引擎 Clipboard 方言（同一语义） | 接受；windows_clipboard_copy_test 通过 |
+| R-6 | R | HTML 方言软/硬换行、链接/图片 title、`*` 标记 flavor、callout 类型、>32 层嵌套不往返 | 接受：全部是旧 Dart 写出器同样丢失的（见 T3.8 例外清单，逐项注明）；非 S3 回归 |
+| H-1 | H（Dart 启发式保留） | `retagMislabeledFences`/`unwrapNestedFences`（LLM 粘贴修复） | `paste_repair.dart`，引擎调用前（D7） |
+| H-2 | H | `_copyLanguage` 代码语言检测 | `selectionBlocks()` 在构造 BlockSpec 时写入 `data.language`（02 §2.1） |
+| H-3 | H | `\r\n` 归一、裸图片 URL 检测、单元格内粘贴原文 | 保留在原调用点，引擎之前 |
+| U-1 | U（待用户决定） | 部分选中代码块的复制：旧 Dart 返回裸片段（无围栏），新路径保留 code_block kind，引擎输出围栏包裹 | 暂按 Rust 行为（粘贴回更保真）。列「待用户决定」 |
+
+### 用户可见变化（进发版说明）
+
+1. **复制引用/多段列表再粘贴，块结构更保真**：旧实现把引用组软换行折叠成一块、把 loose 列表第二段的 `- ` 空项行丢掉；新实现逐块保真（R-1/R-2）。
+2. **复制图片块再粘贴，alt 文字保留**（R-3，实为修复旧丢失）。
+3. **部分选中代码块复制会带围栏**：旧实现给裸文本，粘贴回可能散架；新实现围栏包裹（U-1，待拍板）。
+4. **HTML 剪贴板方言的固有限制不变**（title 丢失、软换行扁平化等，R-6）——与 S3 之前一致，无回归。
+
+### 待用户决定
+
+| # | 问题 | 当前行为（按 Rust 实现） | 备选 |
+| --- | --- | --- | --- |
+| U-1 | 部分选中一个代码块后复制，剪贴板里是否带 ``` 围栏？ | 带（引擎序列化 code_block 的自然输出，粘贴回保真） | 旧 Dart 的裸片段（无围栏，粘贴回可能把代码撒成段落） |
+
+### 差分棘轮
+
+`differential_baseline.json` 重置（`S0_WRITE_BASELINE=1`）：B-1 修复使 export 1432→19、roundtrip 1165→1190（roundtrip 上升是因为 export 修复后不再遮蔽 roundtrip 维度的既有差异，净差异 1209 < 原 2597）。前后报告存 `build/s3-baseline/`。
+
+### G3 停点声明
+
+编辑器已切到引擎，Dart 旧实现（`markdown.dart` 1491 行、`list_serialization.dart`、`controller._rangeMarkdown` 主体、`selectionHtml` 旧函数体）**未删**，T3.6 在 G3 通过后执行。⏸ 停在这里等审核方与用户。
