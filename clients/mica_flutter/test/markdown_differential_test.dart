@@ -6,19 +6,18 @@
 // is the safety net for that deletion: every difference it finds is a behaviour
 // change a user would see.
 //
-// S0 reaches Rust through the EXISTING desktop FFI (`MicaDocument`), because the
-// S2 `MarkdownCodec` facade does not exist yet. That route goes through yrs, so
-// marks come back sorted/merged by the CRDT. When the only difference is that
-// normalization, the verdict is `crdt-normalization`, not a grammar drift —
-// proven by pushing the Dart blocks through the same CRDT and re-comparing.
+// S2 T2.12 reaches Rust through the real MarkdownCodec facade. The raw engine
+// no longer passes through yrs, so CRDT normalization is not a category here.
+// Block parsing/serialization and inline parsing/serialization are compared.
 //
 // Outputs (not committed — `build/` is ignored):
 //   build/differential/report.json   every difference, one record per field
 //   build/differential/summary.md    counts per category + first 10 examples
 //
-// The ratchet (`test/differential_baseline.json`, committed) records what was
-// different on the day S0 landed. The assertion is subset-only: a difference may
-// disappear, a NEW one fails the test. Regenerate deliberately, with a reason:
+// The S2 ratchet records full values for the raw codec protocol. Original S0
+// keys/counts remain in fixtures/differential/s0_baseline.json; the transition
+// audit explains every added/removed/changed field. A difference may disappear,
+// but new keys OR changed values fail. Regenerate deliberately, with a reason:
 //
 //   S0_WRITE_BASELINE=1 flutter test test/markdown_differential_test.dart
 //
@@ -33,11 +32,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
-import 'package:mica_flutter/src/rust/api/document.dart';
+import 'package:mica_flutter/editor/marks.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/src/rust/frb_generated.dart';
 
 import 'support/markdown_corpus.dart';
-import 'support/native_build.dart';
+import 'support/markdown_codec.dart';
 
 typedef _Blocks = List<({String kind, String text, Map<String, dynamic> data})>;
 typedef _Diff = ({
@@ -52,7 +52,7 @@ const String _reportDir = 'build/differential';
 const String _baselinePath = 'test/differential_baseline.json';
 
 void main() {
-  setUpAll(initCheckedNativeRust);
+  setUpAll(useNativeMarkdownCodec);
   tearDownAll(() async => RustLib.dispose());
 
   test('parse divergence is not counted as Rust own roundtrip failure', () {
@@ -69,6 +69,39 @@ void main() {
       diffs.where((d) => d.category == 'roundtrip'),
       isEmpty,
       reason: 'both implementations round-trip their own distinct blocks',
+    );
+  });
+
+  test('ratchet detects same-key value changes beyond character 300', () {
+    final long = 'x' * 400;
+    final baseline = <String, dynamic>{'dart': long, 'rust': 'old'};
+    final original = (
+      id: 'same',
+      category: 'text',
+      field: 'same',
+      dart: long,
+      rust: 'old',
+    );
+    expect(_sameDifferenceValue(baseline, original), isTrue);
+    expect(
+      _sameDifferenceValue(baseline, (
+        id: original.id,
+        category: original.category,
+        field: original.field,
+        dart: '${long}changed',
+        rust: original.rust,
+      )),
+      isFalse,
+    );
+    expect(
+      _sameDifferenceValue(baseline, (
+        id: original.id,
+        category: original.category,
+        field: original.field,
+        dart: original.dart,
+        rust: 'new',
+      )),
+      isFalse,
     );
   });
 
@@ -90,6 +123,7 @@ void main() {
       }
 
       final counts = _countByCategory(diffs);
+      expect(counts['crdt-normalization'] ?? 0, 0);
       _writeReport(corpus.length, counts, diffs);
       _checkRatchet(counts, diffs);
     },
@@ -122,10 +156,8 @@ List<_Diff> _diffOne(String id, String markdown) {
   } catch (error) {
     dartError = error;
   }
-  MicaDocument? rustDoc;
   try {
-    rustDoc = MicaDocument.fromMarkdown(markdown: markdown);
-    rustBlocks = _normalizeRustBlocks(rustDoc);
+    rustBlocks = _normalizeDartBlocks(markdownCodec.parseBlocks(markdown));
   } catch (error) {
     rustError = error;
   }
@@ -141,30 +173,12 @@ List<_Diff> _diffOne(String id, String markdown) {
     ];
   }
 
-  var blockDiffs = _compareBlocks(id, dartBlocks!, rustBlocks!);
-  // A difference that disappears after the Dart result makes the same CRDT
-  // round trip is normalization, not grammar.
-  if (blockDiffs.isNotEmpty) {
-    final viaCrdt = _roundTripThroughCrdt(dartBlocks);
-    if (viaCrdt != null && _compareBlocks(id, viaCrdt, rustBlocks).isEmpty) {
-      blockDiffs = [
-        for (final d in blockDiffs)
-          (
-            id: d.id,
-            category: 'crdt-normalization',
-            field: d.field,
-            dart: d.dart,
-            rust: d.rust,
-          ),
-      ];
-    }
-  }
-  out.addAll(blockDiffs);
+  out.addAll(_compareBlocks(id, dartBlocks!, rustBlocks!));
+  out.addAll(_diffInline(id, markdown));
 
   // --- serialization -----------------------------------------------------
-  // Both serializers get the SAME blocks: the Dart parse result. Rust is fed
-  // through `fromBlocksJson` (no Markdown re-parse), the Dart controller is
-  // loaded with the same specs.
+  // Both serializers get the SAME Dart parse result: the Rust facade receives
+  // BlockSpec directly, and the Dart controller is loaded with those specs.
   String? dartMd;
   String? rustMd;
   try {
@@ -231,9 +245,7 @@ List<_Diff> _diffOne(String id, String markdown) {
       // both sides. Rust's OWN round trip must start from its own parse result;
       // otherwise a parse disagreement is counted again as a round-trip error.
       final rustOwnMd = _rustExportMarkdown(rustBlocks);
-      final again = _normalizeRustBlocks(
-        MicaDocument.fromMarkdown(markdown: rustOwnMd),
-      );
+      final again = _normalizeDartBlocks(markdownCodec.parseBlocks(rustOwnMd));
       final rt = _compareBlocks(id, again, rustBlocks);
       out.addAll([
         for (final d in rt)
@@ -259,6 +271,56 @@ List<_Diff> _diffOne(String id, String markdown) {
   return out;
 }
 
+List<_Diff> _diffInline(String id, String source) {
+  try {
+    final dart = parseInline(source);
+    final rust = markdownCodec.parseInline(source);
+    final out = <_Diff>[];
+    if (dart.text != rust.text) {
+      out.add((
+        id: id,
+        category: 'inline:text',
+        field: 'inline.text',
+        dart: _short(dart.text),
+        rust: _short(rust.text),
+      ));
+    }
+    final dartMarks = _sortMarks({'marks': marksToJson(dart.marks)})['marks'];
+    final rustMarks = _sortMarks({'marks': marksToJson(rust.marks)})['marks'];
+    if (_canon(dartMarks) != _canon(rustMarks)) {
+      out.add((
+        id: id,
+        category: 'inline:marks',
+        field: 'inline.marks',
+        dart: _short(_canon(dartMarks)),
+        rust: _short(_canon(rustMarks)),
+      ));
+    }
+    final dartMd = inlineToMarkdown(dart.text, dart.marks);
+    final rustMd = markdownCodec.serializeInline(dart.text, dart.marks);
+    if (dartMd != rustMd) {
+      out.add((
+        id: id,
+        category: 'inline:export',
+        field: 'inline.markdown',
+        dart: _short(dartMd),
+        rust: _short(rustMd),
+      ));
+    }
+    return out;
+  } catch (error) {
+    return [
+      (
+        id: id,
+        category: 'crash',
+        field: 'inline',
+        dart: '',
+        rust: _short('$error'),
+      ),
+    ];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Normalization (02-architecture §3.4)
 // ---------------------------------------------------------------------------
@@ -266,36 +328,6 @@ List<_Diff> _diffOne(String id, String markdown) {
 _Blocks _normalizeDartBlocks(List<BlockSpec> specs) => [
   for (final s in specs) (kind: s.kind, text: s.text, data: _sortMarks(s.data)),
 ];
-
-_Blocks _normalizeRustBlocks(MicaDocument doc) {
-  final blocks = (jsonDecode(doc.toBlocksJson()) as List)
-      .cast<Map<String, dynamic>>();
-  final byId = {for (final b in blocks) b['id'] as String: b};
-  final root = byId[doc.rootBlockId()];
-  if (root == null) return const [];
-  final children = (root['children'] as List? ?? const []).cast<String>();
-  final out = <({String kind, String text, Map<String, dynamic> data})>[];
-  for (final childId in children) {
-    final block = byId[childId];
-    if (block == null) continue;
-    out.add((
-      kind: (block['type'] as String?) ?? '',
-      text: (block['text'] as String?) ?? '',
-      data: _sortMarks(_dataMap(block['data'])),
-    ));
-  }
-  return out;
-}
-
-Map<String, dynamic> _dataMap(Object? raw) {
-  if (raw is Map) {
-    return {
-      for (final entry in raw.entries)
-        entry.key as String: _canonicalValue(entry.value),
-    };
-  }
-  return <String, dynamic>{};
-}
 
 /// Marks compare by `(start, end, type)`; other data keys by value.
 Map<String, dynamic> _sortMarks(Map<String, dynamic> data) {
@@ -330,37 +362,6 @@ Object? _canonicalValue(Object? v) {
 }
 
 String _canon(Object? v) => jsonEncode(_canonicalValue(v));
-
-/// Push Dart blocks through the same yrs document the Rust side uses, then
-/// read them back. If this matches the Rust parse, the difference was CRDT
-/// normalization (mark merge/order, id minting), not grammar.
-_Blocks? _roundTripThroughCrdt(_Blocks blocks) {
-  try {
-    final ids = [for (var i = 0; i < blocks.length; i++) 'd$i'];
-    final json = jsonEncode([
-      {
-        'id': 'root',
-        'type': 'page',
-        'text': '',
-        'data': <String, dynamic>{},
-        'children': ids,
-      },
-      for (var i = 0; i < blocks.length; i++)
-        {
-          'id': ids[i],
-          'type': blocks[i].kind,
-          'text': blocks[i].text,
-          'data': blocks[i].data,
-          'children': <String>[],
-        },
-    ]);
-    return _normalizeRustBlocks(
-      MicaDocument.fromBlocksJson(rootId: 'root', blocksJson: json),
-    );
-  } catch (_) {
-    return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Comparison
@@ -443,30 +444,8 @@ String _dartDocumentMarkdown(_Blocks blocks) {
   }
 }
 
-String _rustExportMarkdown(_Blocks blocks) {
-  final ids = [for (var i = 0; i < blocks.length; i++) 'd$i'];
-  final json = jsonEncode([
-    {
-      'id': 'root',
-      'type': 'page',
-      'text': '',
-      'data': <String, dynamic>{},
-      'children': ids,
-    },
-    for (var i = 0; i < blocks.length; i++)
-      {
-        'id': ids[i],
-        'type': blocks[i].kind,
-        'text': blocks[i].text,
-        'data': blocks[i].data,
-        'children': <String>[],
-      },
-  ]);
-  return MicaDocument.fromBlocksJson(
-    rootId: 'root',
-    blocksJson: json,
-  ).exportMarkdown();
-}
+String _rustExportMarkdown(_Blocks blocks) =>
+    markdownCodec.serializeBlocks(blocks);
 
 // ---------------------------------------------------------------------------
 // Report + ratchet
@@ -538,8 +517,12 @@ void _checkRatchet(Map<String, int> counts, List<_Diff> diffs) {
   if (writeMode) {
     baselineFile.writeAsStringSync(
       const JsonEncoder.withIndent(' ').convert({
+        'protocol': 's2-codec-full-values-v1',
         'counts': counts,
         'entries': (diffs.map(_entryKey).toSet().toList()..sort()),
+        'values': {
+          for (final d in diffs) _entryKey(d): {'dart': d.dart, 'rust': d.rust},
+        },
       }),
     );
     // ignore: avoid_print
@@ -558,6 +541,22 @@ void _checkRatchet(Map<String, int> counts, List<_Diff> diffs) {
       jsonDecode(baselineFile.readAsStringSync()) as Map<String, dynamic>;
   final baseCounts = (baseline['counts'] as Map).cast<String, int>();
   final baseEntries = (baseline['entries'] as List).cast<String>().toSet();
+  expect(baseline['protocol'], 's2-codec-full-values-v1');
+  final values = baseline['values'] as Map<String, dynamic>;
+  final changed = [
+    for (final d in diffs)
+      if (values.containsKey(_entryKey(d)) &&
+          !_sameDifferenceValue(
+            values[_entryKey(d)] as Map<String, dynamic>,
+            d,
+          ))
+        _entryKey(d),
+  ];
+  expect(
+    changed,
+    isEmpty,
+    reason: 'Existing difference values changed: ${changed.take(10)}',
+  );
 
   final added = <String>[
     for (final d in diffs)
@@ -584,5 +583,9 @@ void _checkRatchet(Map<String, int> counts, List<_Diff> diffs) {
   );
 }
 
-String _short(String s, [int max = 300]) =>
-    s.length <= max ? s : '${s.substring(0, max)}…(${s.length} chars)';
+// Keep complete values in the report and ratchet. Truncation would miss a
+// mutation beyond character 300 while retaining the same id/category/field.
+String _short(String s) => s;
+
+bool _sameDifferenceValue(Map<String, dynamic> expected, _Diff actual) =>
+    expected['dart'] == actual.dart && expected['rust'] == actual.rust;
