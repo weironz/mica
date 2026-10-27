@@ -15,6 +15,7 @@ void main() {
   if (output == null || output.isEmpty) {
     throw StateError('Probe output path is required');
   }
+  final appMainStarted = Stopwatch()..start();
   final expectedUnavailable =
       Platform.environment['MICA_CODEC_PROBE_UNAVAILABLE'] == '1';
   final priorPrint = debugPrint;
@@ -27,10 +28,14 @@ void main() {
     if (match == null || recorded) return;
     recorded = true;
     final initializationMs = int.parse(match[1]!);
+    final startupChainMs = appMainStarted.elapsedMilliseconds;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final report = <String, Object?>{
         'mode': 'Windows release',
+        // Budget scope: the isolated initMarkdownCodec await only.
         'init_ms': initializationMs,
+        // Diagnostic scope: whole app.main prefix including window/prefs.
+        'startup_chain_ms': startupChainMs,
         'unavailable': markdownCodec is UnavailableMarkdownCodec,
         'first_frame': true,
       };
