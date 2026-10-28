@@ -30,11 +30,21 @@ cargo_receipt() {
 # Counts tests that finished successfully, excluding skipped ones and the
 # hidden "loading <file>" pseudo-tests every suite reports.
 flutter_receipt() {
-  local min=$1 report rc passed
+  local min=$1 report report_arg rc passed
   shift
   report=$(mktemp)
+  # Flutter here is a NATIVE Windows process: it reads `/tmp/x` as `C:\tmp\x`,
+  # while mktemp wrote to MSYS /tmp (%TEMP%). The report then lands somewhere
+  # else and this function sees an EMPTY file — "0 passed" refuses a run whose
+  # tests all passed (seen 2026-10-28). Hand the reporter a path the child
+  # process resolves to the same file. No-op on Linux/macOS.
+  if command -v cygpath >/dev/null 2>&1; then
+    report_arg=$(cygpath -w "$report")
+  else
+    report_arg=$report
+  fi
   set +e
-  "$FLUTTER" test --file-reporter "json:$report" "$@"
+  "$FLUTTER" test --file-reporter "json:$report_arg" "$@"
   rc=$?
   set -e
   passed=$(grep '"type":"testDone"' "$report" | grep '"hidden":false' | grep '"skipped":false' \

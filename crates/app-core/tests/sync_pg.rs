@@ -10,6 +10,17 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// `sync::backfill_derived_columns` walks the WHOLE database, so a test that
+/// CALLS it and a test that asserts a row is still un-backfilled must not
+/// overlap. Cargo runs the tests inside one binary on parallel threads, and the
+/// second test's backfill filled the first one's fixture row before its
+/// NULL-sentinel assertion — `backfill_fills_valid_and_skips_corrupt` flaked
+/// with `Some([])` instead of `None` in the 2026-10-28 S3 gate. Serialize just
+/// the two tests that touch the global pass. (Cargo runs different test
+/// BINARIES sequentially, so api-server's backfill test cannot overlap this
+/// file; if that ever changes, this needs a DB-level guard instead.)
+static BACKFILL_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Skipping without a database is a local convenience; skipping WITH one is a
 /// lie. This used to be `PgPool::connect(&url).await.ok()?`, which turned a
 /// failed connection into a skip: you could export DATABASE_URL, watch
@@ -1676,6 +1687,7 @@ async fn backfill_fills_valid_and_skips_corrupt() {
     eprintln!("skipping backfill_fills_valid_and_skips_corrupt: no DATABASE_URL");
     return;
   };
+  let _backfill = BACKFILL_GUARD.lock().await;
   let (ws, doc, user) = seed_doc_bare(&db).await;
 
   // A valid base inserted WITHOUT content_text (the pre-0012 shape → '').
@@ -1761,6 +1773,7 @@ async fn backfill_fills_valid_and_skips_corrupt() {
 #[tokio::test]
 async fn a_body_backfilled_after_warm_up_reaches_the_search_index() {
   let Some(db) = pool().await else { return };
+  let _backfill = BACKFILL_GUARD.lock().await;
   let (ws, doc, user) = seed_doc_bare(&db).await;
   let needle = format!("回填竞态{}", Uuid::new_v4().simple());
 
