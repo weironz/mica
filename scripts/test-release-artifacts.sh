@@ -27,6 +27,17 @@ cat > "$stub_bin/uname" <<'EOF'
 echo 'MINGW64_NT-10.0-26100'
 EOF
 
+# Some coreutils ports (the Windows build this train runs on) append GNU's
+# binary-mode marker to the filename: `<hex> *<name>`. Both release-publish and
+# the in-app updater match the name exactly, so the manifests must come out
+# canonical whatever flavour wrote them — 0.13.69 was refused at publish time
+# for inheriting the `*`. Hash with the real tool, mark the way that port does.
+real_sha256sum=$(command -v sha256sum)
+cat > "$stub_bin/sha256sum" <<EOF
+#!/bin/sh
+"$real_sha256sum" "\$@" | awk '{ printf "%s *%s\\n", \$1, \$2 }'
+EOF
+
 cat > "$stub_bin/powershell" <<'EOF'
 #!/bin/sh
 exit 0
@@ -134,6 +145,17 @@ expected_linux="mica-cli-$version-linux-x64"
   cat "$out/sha256-linux.txt" >&2
   exit 1
 }
+# The stub `sha256sum` writes `<hex> *<name>`. A manifest that keeps that
+# marker is unverifiable end to end, so assert the canonical shape directly
+# rather than trusting manifest_names' stripping.
+for m in "$out"/sha256-*.txt; do
+  grep -q '\*' "$m" && {
+    echo "FAIL: $m carries coreutils' binary-mode marker; publish and the updater" \
+      'match the asset name exactly' >&2
+    cat "$m" >&2
+    exit 1
+  }
+done
 # Recompute one hash the way the updater does, rather than trusting the file the
 # script just wrote about itself.
 [ "$(cut -d' ' -f1 "$out/sha256-linux.txt")" = "$(sha256sum "$out/mica-cli-$version-linux-x64" | cut -d' ' -f1)" ] || {

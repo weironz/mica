@@ -136,7 +136,13 @@ for manifest in sha256-windows.txt sha256-linux.txt sha256-macos.txt; do
     manifest_of_asset=$(manifest_for_asset "$name") \
       || fail "$name has no platform manifest — teach manifest_for_asset (scripts/lib-local.sh) about it, or the updater on that platform can never verify it"
     [ "$manifest_of_asset" = "$manifest" ] || continue
-    (cd "$out" && sha256sum "$name") >> "$out/$manifest"
+    # `sha256sum` is not one program: GNU coreutils writes two spaces, and the
+    # Windows coreutils port writes GNU's binary-mode marker `*name`. Both the
+    # updater (crates/cli/src/update.rs) and release-publish match the filename
+    # exactly, so a `*` here makes the asset unverifiable — publish refused
+    # 0.13.69's manifests for exactly that. Emit the canonical `<hex>  <name>`.
+    hash=$(cd "$out" && sha256sum "$name" | cut -d' ' -f1)
+    printf '%s  %s\n' "$hash" "$name" >> "$out/$manifest"
   done
   [ -s "$out/$manifest" ] || rm -f "$out/$manifest"
 done
