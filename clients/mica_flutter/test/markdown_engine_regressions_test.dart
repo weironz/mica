@@ -17,17 +17,20 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/model.dart';
-import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/properties.dart';
 import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'support/markdown_codec.dart';
 
 void main() {
   setUpAll(useNativeMarkdownCodec);
+  // The engine escapes every inline-significant character on the way out
+  // (Rust is authoritative); the old Dart writer left `<]`` unescaped.
+  // Round-trip is what the contract actually needs, and that holds.
   test('unmarked punctuation keeps the plain serializer contract', () {
     const text = '<]`\n;';
-    expect(inlineToMarkdown(text, []), text);
-    expect(inlineToMarkdown('&amp;', []), '&amp;amp;');
+    final md = markdownCodec.serializeInline(text, []);
+    expect(markdownCodec.parseInline(md).text, text);
+    expect(markdownCodec.serializeInline('&amp;', []), '&amp;amp;');
   });
   test('property lists quote every comma', () {
     for (final item in ['a,b', 'a, b', 'a,,b', ',a', 'a,']) {

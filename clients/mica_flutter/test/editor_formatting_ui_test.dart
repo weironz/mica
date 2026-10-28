@@ -198,7 +198,7 @@ void main() {
           .widget<DocumentSurface>(find.byType(DocumentSurface))
           .nodes
           .single;
-      expect(TableData.fromBlock(saved.data).rows[1][0], 'edited');
+      expect(TableData.fromBlock(saved.data).rows[1][0].text, 'edited');
     });
 
     testWidgets(
