@@ -95,8 +95,22 @@ Uint8List? _windowsClipboardPng() {
 
 /// Read the clipboard's HTML flavor and convert it to Markdown (so structured
 /// content from a browser/Word survives), or null if there is no usable HTML.
+///
+/// The plugin read itself can THROW: any app can put an "HTML Format" payload on
+/// the clipboard whose bytes are not the UTF-8 the platform-channel codec
+/// expects, and `StandardMessageCodec` then dies decoding the reply — observed
+/// on Windows with leftover foreign HTML, where the whole paste aborted at the
+/// first flavor check (S3 T3.10 desktop run, 2026-10-28). A clipboard we cannot
+/// read is simply "no HTML flavor": the caller falls back to the plain text it
+/// already has.
 Future<String?> readClipboardHtmlAsMarkdown() async {
-  final h = await Pasteboard.html;
+  String? h;
+  try {
+    h = await Pasteboard.html;
+  } catch (error) {
+    logCrash('clipboard html read failed: $error');
+    return null;
+  }
   if (h == null || h.trim().isEmpty) return null;
   final raw = stripCfHtmlHeader(h);
   // A CF_HTML header that cannot be sliced falls back to the plain flavor (the
@@ -118,7 +132,15 @@ Future<String?> readClipboardHtmlAsMarkdown() async {
 /// of the copied cells on the clipboard, so the caller checks this BEFORE the
 /// image flavor (image-first pasted spreadsheets as pictures).
 Future<String?> readClipboardTableAsMarkdown() async {
-  final h = await Pasteboard.html;
+  String? h;
+  try {
+    h = await Pasteboard.html;
+  } catch (error) {
+    // Same guard as readClipboardHtmlAsMarkdown: an unreadable HTML flavor is
+    // "not a table", not a dead paste.
+    logCrash('clipboard table read failed: $error');
+    return null;
+  }
   if (h == null || h.trim().isEmpty) return null;
   final raw = stripCfHtmlHeader(h);
   if (raw == null || !clipboardHtmlIsDataTable(raw)) return null;

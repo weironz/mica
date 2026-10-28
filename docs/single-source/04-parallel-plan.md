@@ -150,7 +150,7 @@ single-source ───●────●────●────●───
 | **M2** | 并回检查 → S2 并回 main | ✅ 通过（2026-10-27）：S2 已并回 main（[reviews.md](reviews.md)） | | 审核方 |
 | S3 | T3.1–T3.5、T3.7、T3.8 | ⏸ 待审核（G3）：编辑器已切到引擎，Dart 旧实现未删（T3.6 在 G3 后） | `e7b4a533`、`71b27bc2`、`7ef6bbba`、`3b6c477f`；[执行记录](stages/S3-editor-boundary.md#执行记录) | D（T3.4、B 类：R） |
 | **G3** | 删除之前审核（用户可见变化交用户） | ✅ 通过（附条件，2026-10-28）：可执行 T3.6；3 条必须修改在 S3 内完成（[reviews.md](reviews.md)） | | 审核方 + 用户 |
-| S3 | T3.6、T3.9–T3.11 | ✅ T3.6/T3.9 完成（Dart 镜像删除，`flutter analyze` 0 error/0 warning，2,076 passed）；T3.10 Web 通过、桌面待用户关闭 Mica 后跑集成测试；T3.11 门禁 `ALL GREEN` | 提交见 S3 执行记录；[T3.6/T3.9](stages/S3-editor-boundary.md#t36-删除2026-10-28)、[T3.10](stages/S3-editor-boundary.md#t310-真实路径验证2026-10-28)、[T3.11](stages/S3-editor-boundary.md#t311-门禁2026-10-28) | D |
+| S3 | T3.6、T3.9–T3.11 | ✅ T3.6/T3.9 完成（Dart 镜像删除，`flutter analyze` 0 error/0 warning，2,076 passed）；T3.10 Web 与 Windows 桌面真路径均通过（桌面集成 1/0，wire 契约 10/0）；T3.11 门禁 `ALL GREEN` | 提交见 S3 执行记录；[T3.6/T3.9](stages/S3-editor-boundary.md#t36-删除2026-10-28)、[T3.10](stages/S3-editor-boundary.md#t310-真实路径验证2026-10-28)、[T3.11](stages/S3-editor-boundary.md#t311-门禁2026-10-28) | D |
 | S4 | T4.1–T4.12 | ☐ | | D（T4.1–T4.3 可在 G3 前） |
 | S5 | T5.1–T5.12（发布除外） | ☐ | | R / W |
 | **G4** | 最终审核 → `single-source` 并回 main | ☐ | | 审核方 |

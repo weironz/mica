@@ -3,7 +3,13 @@
 // (initCheckedNativeRust verifies this checkout's library), real editor widget
 // driven by key events.
 //
-// Scenarios (S3-editor-boundary.md T3.10):
+// Scenarios (S3-editor-boundary.md T3.10), run in ONE testWidgets on purpose:
+// the desktop IntegrationTestWidgetsFlutterBinding asserts between tests that
+// no async work is pending, and the paste handler is fire-and-forget after the
+// key event, so a second testWidgets in the same file failed with
+// `'!inTest': is not true` (2026-10-28). Each scenario therefore disposes the
+// previous editor, drives its own paste, and waits for the ops it expects.
+//
 //   1. ChatGPT-style paste: a double-fenced mermaid block becomes a real code
 //      block and the rest stays prose (paste_repair heuristic, D7).
 //   2. Pasting a `.md` front matter document strips the metadata.
@@ -14,7 +20,8 @@
 //      AND text/html flavors are both checked.
 //   5. AI 「读取当前页」 reads the same Markdown through the engine.
 //
-// Screenshots of the app window are captured into build/t3.10/ (gitignored).
+// Screenshots of the app window are captured into `build/t3.10/NAME.png`
+// (evidence, gitignored).
 import 'dart:convert';
 import 'dart:io';
 
@@ -74,11 +81,15 @@ $bmp.Save("PATH", [System.Drawing.Imaging.ImageFormat]::Png)
   ]);
 }
 
+/// Dispose whatever editor is mounted, then pump a fresh one and focus it.
 Future<void> _pumpEditor(
   WidgetTester t,
   List<EditorNode> nodes,
-  List<DocOp> ops,
+  _Doc doc,
 ) async {
+  await t.pumpWidget(const SizedBox.shrink());
+  await t.pump();
+  doc.reset(nodes);
   await t.pumpWidget(
     MaterialApp(
       localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -89,7 +100,7 @@ Future<void> _pumpEditor(
           nodes: nodes,
           version: 0,
           canEdit: true,
-          onApplyOperations: (batch) async => ops.addAll(batch),
+          onApplyOperations: (batch) async => doc.apply(batch),
         ),
       ),
     ),
@@ -107,30 +118,73 @@ Future<void> _pumpEditor(
   await _key(t, LogicalKeyboardKey.home, ctrl: true);
 }
 
-/// Ctrl+V reads the clipboard asynchronously on the platform thread; pump until
-/// the paste has produced ops (or a bounded timeout says it never did).
-Future<void> _pasteAndWait(WidgetTester t) async {
+/// Ctrl+V reads the clipboard asynchronously on the platform thread; pump
+/// until [done] holds (or a bounded deadline says it never did), then drain
+/// the handler's trailing awaits so the next scenario starts idle.
+Future<void> _pasteAndWait(WidgetTester t, bool Function() done) async {
   await _key(t, LogicalKeyboardKey.keyV, ctrl: true);
-  for (var i = 0; i < 40; i++) {
+  final deadline = DateTime.now().add(const Duration(seconds: 20));
+  while (!done() && DateTime.now().isBefore(deadline)) {
+    await t.pump(const Duration(milliseconds: 100));
+  }
+  for (var i = 0; i < 10; i++) {
     await t.pump(const Duration(milliseconds: 50));
   }
+  expect(done(), isTrue, reason: 'paste produced no ops before the deadline');
 }
 
-/// Ctrl+A / Ctrl+C — copy writes the real clipboard.
-Future<void> _copyAll(WidgetTester t, List<DocOp> ops) async {
-  await _key(t, LogicalKeyboardKey.keyA, ctrl: true);
-  await _key(t, LogicalKeyboardKey.keyC, ctrl: true);
-  for (var i = 0; i < 10; i++) {
-    await t.pump(const Duration(milliseconds: 30));
+/// The document as the backend would see it, folded from the ops the editor
+/// emitted. Paste REUSES an empty focused paragraph (the first pasted block
+/// arrives as `update_block`, not `insert_block`), so assertions must look at
+/// the folded document, not only at inserted blocks.
+class _Doc {
+  final List<String> _order = [];
+  final Map<String, ({String type, String text, Map<String, dynamic> data})>
+      _byId = {};
+
+  void reset(List<EditorNode> nodes) {
+    _order
+      ..clear()
+      ..addAll([for (final n in nodes) n.id]);
+    _byId.clear();
+    for (final n in nodes) {
+      _byId[n.id] = (type: n.kind, text: n.text, data: n.data);
+    }
   }
-  ops.clear();
-}
 
-List<Map<String, dynamic>> _inserted(List<DocOp> ops) => [
-      for (final op in ops)
-        if (op['type'] == 'insert_block')
-          (op['block'] as Map).cast<String, dynamic>(),
-    ];
+  void apply(List<DocOp> ops) {
+    for (final op in ops) {
+      switch (op['type']) {
+        case 'insert_block':
+          final b = (op['block'] as Map).cast<String, dynamic>();
+          final id = b['id'] as String;
+          _order.add(id);
+          _byId[id] = (
+            type: b['type'] as String,
+            text: b['text'] as String? ?? '',
+            data: (b['data'] as Map?)?.cast<String, dynamic>() ??
+                <String, dynamic>{},
+          );
+        case 'update_block':
+          final id = op['block_id'] as String;
+          final prev = _byId[id];
+          if (prev == null) continue;
+          _byId[id] = (
+            type: (op['kind'] as String?) ?? prev.type,
+            text: (op['text'] as String?) ?? prev.text,
+            data: (op['data'] as Map?)?.cast<String, dynamic>() ?? prev.data,
+          );
+        case 'delete_block':
+          final id = op['block_id'] as String;
+          _order.remove(id);
+          _byId.remove(id);
+      }
+    }
+  }
+
+  List<({String type, String text, Map<String, dynamic> data})> get blocks =>
+      [for (final id in _order) if (_byId[id] != null) _byId[id]!];
+}
 
 /// A CF_HTML document, the clipboard format Windows browsers write. Offsets are
 /// computed against the fixed-width header; the fragments tag marks the
@@ -152,28 +206,77 @@ String _cfHtml(String fragment) {
   return header(endHtml, startFrag, endFrag) + prefix + fragment + suffix;
 }
 
-/// Put HTML + plain text on the OS clipboard exactly as an external app does,
-/// through a real STA clipboard write (the Flutter Clipboard API has no HTML
-/// flavor).
+/// Put HTML + plain text on the OS clipboard exactly as an external app does.
+///
+/// Win32 directly, not System.Windows.Forms.DataObject: `SetData('HTML
+/// Format', string)` stores UTF-16 (the pasteboard plugin reads UTF-8 and
+/// throws), and passing a byte[] makes .NET ALSO advertise the text format as
+/// the literal string "System.Byte[]" — which the paste then reads as the
+/// clipboard's plain text (both observed 2026-10-28). CF_HTML is UTF-8 bytes
+/// plus a terminating NUL, CF_UNICODETEXT is UTF-16LE; that is what browsers
+/// put there.
 Future<void> _setHtmlClipboard(String html, String plain) async {
   final b64Html = base64Encode(utf8.encode(html));
   final b64Plain = base64Encode(utf8.encode(plain));
-  final script = '''
-Add-Type -AssemblyName System.Windows.Forms
-\$html = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64Html'))
-\$plain = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64Plain'))
-\$d = New-Object System.Windows.Forms.DataObject
-\$d.SetData('HTML Format', \$html)
-\$d.SetData([System.Windows.Forms.DataFormats]::UnicodeText, \$plain)
-[System.Windows.Forms.Clipboard]::SetDataObject(\$d, \$true)
-''';
-  final result = await Process.run(
-    'powershell.exe',
-    ['-NoProfile', '-STA', '-Command', script],
-  );
+  final dir = Directory('build/t3.10')..createSync(recursive: true);
+  final script = File('${dir.path}/set-html-clipboard.ps1')
+    ..writeAsStringSync(r'''
+param([string]$b64Html, [string]$b64Plain)
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class ClipWriter {
+  [DllImport("user32.dll", SetLastError=true)] public static extern bool OpenClipboard(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool EmptyClipboard();
+  [DllImport("user32.dll")] public static extern IntPtr SetClipboardData(uint fmt, IntPtr h);
+  [DllImport("user32.dll")] public static extern bool CloseClipboard();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern uint RegisterClipboardFormat(string name);
+  [DllImport("kernel32.dll")] public static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+  [DllImport("kernel32.dll")] public static extern IntPtr GlobalLock(IntPtr h);
+  [DllImport("kernel32.dll")] public static extern bool GlobalUnlock(IntPtr h);
+  static void Put(uint fmt, byte[] bytes) {
+    IntPtr h = GlobalAlloc(0x42, (UIntPtr)(bytes.Length + 1));
+    IntPtr p = GlobalLock(h);
+    Marshal.Copy(bytes, 0, p, bytes.Length);
+    GlobalUnlock(h);
+    SetClipboardData(fmt, h);
+  }
+  public static void Set(string html, string text) {
+    OpenClipboard(IntPtr.Zero);
+    EmptyClipboard();
+    Put(RegisterClipboardFormat("HTML Format"), System.Text.Encoding.UTF8.GetBytes(html));
+    Put(13, System.Text.Encoding.Unicode.GetBytes(text + "\0"));
+    CloseClipboard();
+  }
+}
+"@
+[ClipWriter]::Set([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64Html)), [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64Plain)))
+''');
+  final result = await Process.run('powershell.exe', [
+    '-NoProfile',
+    '-STA',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    script.path,
+    b64Html,
+    b64Plain,
+  ]);
   if (result.exitCode != 0) {
     fail('could not set the HTML clipboard: ${result.stderr}');
   }
+}
+
+/// Empty the OS clipboard so a leftover foreign flavor (the user's own copy, or
+/// an earlier scenario's HTML) cannot steer the paste under test.
+Future<void> _clearClipboard() async {
+  await Process.run('powershell.exe', [
+    '-NoProfile',
+    '-STA',
+    '-Command',
+    'Add-Type -AssemblyName System.Windows.Forms; '
+        '[System.Windows.Forms.Clipboard]::Clear()',
+  ]);
 }
 
 void main() {
@@ -182,9 +285,11 @@ void main() {
     await useNativeMarkdownCodec();
   });
 
-  testWidgets('ChatGPT double-fence paste becomes a real mermaid block',
-      (t) async {
-    const src = '建议:\n\n'
+  testWidgets('desktop clipboard real paths (S3 T3.10)', (t) async {
+    await _clearClipboard();
+    // ---------------------------------------------------------------- 1 ----
+    // ChatGPT double fence: inner mermaid becomes a real block, prose around.
+    const fenceSrc = '建议:\n\n'
         '```\n'
         '```mermaid\n'
         'flowchart LR\n'
@@ -193,80 +298,77 @@ void main() {
         '```\n\n'
         '你们这张拓扑图里\n\n'
         '- 第一条';
-    await Clipboard.setData(const ClipboardData(text: src));
-    final ops = <DocOp>[];
-    await _pumpEditor(t, [EditorNode(id: 'a', kind: 'paragraph', text: '')], ops);
-    await _pasteAndWait(t);
+    await Clipboard.setData(const ClipboardData(text: fenceSrc));
+    final doc = _Doc();
+    await _pumpEditor(t, [EditorNode(id: 'a', kind: 'paragraph', text: '')], doc);
+    await _pasteAndWait(t, () => doc.blocks.isNotEmpty);
     await _shot('01-double-fence-paste');
+    {
+      final blocks = doc.blocks;
+      final kinds = blocks.map((b) => b.type).toList();
+      expect(kinds, contains('code_block'));
+      final mermaid = blocks.where((b) => b.type == 'code_block').single;
+      expect(mermaid.data['language'], 'mermaid');
+      expect(kinds, contains('paragraph'));
+      expect(kinds, contains('bulleted_list'));
+    }
 
-    final blocks = _inserted(ops);
-    final kinds = blocks.map((b) => b['type']).toList();
-    expect(kinds, contains('code_block'));
-    final mermaid =
-        blocks.where((b) => b['type'] == 'code_block').single;
-    expect((mermaid['data'] as Map)['language'], 'mermaid');
-    expect(kinds, contains('paragraph'));
-    expect(kinds, contains('bulleted_list'));
-  });
-
-  testWidgets('front matter in a pasted .md is stripped', (t) async {
-    const src = '---\n'
+    // ---------------------------------------------------------------- 2 ----
+    // Front matter in a pasted .md is stripped, never a visible block.
+    const fmSrc = '---\n'
         'title: Hello\n'
         'tags: [a, b]\n'
         '---\n\n'
         '# Heading\n\n'
         'Body.';
-    await Clipboard.setData(const ClipboardData(text: src));
-    final ops = <DocOp>[];
-    await _pumpEditor(t, [EditorNode(id: 'a', kind: 'paragraph', text: '')], ops);
-    await _pasteAndWait(t);
+    await Clipboard.setData(const ClipboardData(text: fmSrc));
+    await _pumpEditor(t, [EditorNode(id: 'a', kind: 'paragraph', text: '')], doc);
+    await _pasteAndWait(t, () => doc.blocks.isNotEmpty);
     await _shot('02-front-matter-paste');
+    {
+      final blocks = doc.blocks;
+      final text = blocks.map((b) => b.text).join('\n');
+      expect(text, contains('Heading'));
+      expect(text, contains('Body.'));
+      expect(text, isNot(contains('title:')));
+      expect(text, isNot(contains('tags:')));
+      expect(blocks.map((b) => b.type), contains('heading'));
+    }
 
-    final blocks = _inserted(ops);
-    final text = blocks.map((b) => '${b['text']}').join('\n');
-    expect(text, contains('Heading'));
-    expect(text, contains('Body.'));
-    expect(text, isNot(contains('title:')));
-    expect(text, isNot(contains('tags:')));
-    expect(blocks.map((b) => b['type']), contains('heading'));
-  });
-
-  testWidgets('rich HTML copied from an external app keeps its marks',
-      (t) async {
-    // The shape a browser puts on the clipboard for <strong>/<code> prose.
+    // ---------------------------------------------------------------- 3 ----
+    // Rich HTML copied from an external app keeps real marks, not source.
     const fragment =
         '<p>复制自浏览器的<strong>粗体</strong>与<code>inline_code</code>。</p>';
     await _setHtmlClipboard(_cfHtml(fragment), '复制自浏览器的粗体与inline_code。');
-    final ops = <DocOp>[];
-    await _pumpEditor(t, [EditorNode(id: 'a', kind: 'paragraph', text: '')], ops);
-    await _pasteAndWait(t);
+    await _pumpEditor(t, [EditorNode(id: 'a', kind: 'paragraph', text: '')], doc);
+    await _pasteAndWait(t, () => doc.blocks.isNotEmpty);
     await _shot('03-rich-html-paste');
-
-    final blocks = _inserted(ops);
-    final types = <String>[];
-    var text = '';
-    for (final b in blocks) {
-      text += '${b['text']}';
-      final marks = (b['data'] as Map)['marks'];
-      if (marks is List) {
-        for (final m in marks) {
-          types.add('${(m as Map)['type']}');
+    {
+      final blocks = doc.blocks;
+      final types = <String>[];
+      var text = '';
+      for (final b in blocks) {
+        text += b.text;
+        final marks = b.data['marks'];
+        if (marks is List) {
+          for (final m in marks) {
+            types.add('${(m as Map)['type']}');
+          }
         }
       }
+      expect(text, contains('粗体'));
+      expect(types, contains('bold'), reason: 'rich HTML must paste real marks');
+      expect(types, contains('code'));
+      expect(text, isNot(contains('**')), reason: 'no literal markdown source');
     }
-    expect(text, contains('粗体'));
-    expect(types, contains('bold'), reason: 'rich HTML must paste real marks');
-    expect(types, contains('code'));
-    expect(text, isNot(contains('**')), reason: 'no literal markdown source');
-  });
 
-  testWidgets('Mica copy → paste round-trips formula, footnote, list, table',
-      (t) async {
+    // ---------------------------------------------------------------- 4 ----
+    // Mica copy → paste round-trips formula, footnote, nested list, table.
     final table = TableData([
       ['H1', 'H2'],
       [r'**cell**', 'x'],
     ]);
-    final doc = [
+    final docNodes = [
       EditorNode(
         id: 'p',
         kind: 'paragraph',
@@ -284,58 +386,62 @@ void main() {
       EditorNode(id: 't', kind: 'table', text: '', data: table.toBlockData()),
       EditorNode(id: 'f', kind: 'footnote_def', text: 'note body', data: {'label': 'n'}),
     ];
-    final ops = <DocOp>[];
-    await _pumpEditor(t, doc, ops);
-    await _copyAll(t, ops);
+    await _pumpEditor(t, docNodes, doc);
+    await _key(t, LogicalKeyboardKey.keyA, ctrl: true);
+    await _key(t, LogicalKeyboardKey.keyC, ctrl: true);
+    for (var i = 0; i < 10; i++) {
+      await t.pump(const Duration(milliseconds: 30));
+    }
     await _shot('04-copy-source');
-
     // text/plain is the LITERAL flavor (marks and block markers stripped) —
     // a plain-text destination must not see `**` or list markers. The
     // structure travels in the HTML flavor checked next.
     final plain = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
-    expect(plain, contains('E=mc^2'), reason: plain);
-    expect(plain, contains('one'), reason: plain);
-    expect(plain, contains('nested'), reason: plain);
-    expect(plain, contains('first'), reason: plain);
-    expect(plain, contains('H1\tH2'), reason: 'table cells go out as TSV: $plain');
-    expect(plain, contains('cell'), reason: plain);
-    expect(plain, contains('note body'), reason: plain);
-    expect(plain, isNot(contains('**')), reason: plain);
-
     // The rich flavor Typora/Obsidian read: real html marks, a real table.
     final html = await Pasteboard.html;
-    expect(html, isNotNull);
-    expect(html, contains('<table>'));
-    expect(html, contains('<strong>cell</strong>'), reason: html);
-    expect(html, contains('data-mica-math'), reason: html);
+    {
+      expect(plain, contains('E=mc^2'), reason: plain);
+      expect(plain, contains('one'), reason: plain);
+      expect(plain, contains('nested'), reason: plain);
+      expect(plain, contains('first'), reason: plain);
+      expect(plain, contains('H1\tH2'),
+          reason: 'table cells go out as TSV: $plain');
+      expect(plain, contains('cell'), reason: plain);
+      expect(plain, contains('note body'), reason: plain);
+      expect(plain, isNot(contains('**')), reason: plain);
+      expect(html, isNotNull);
+      expect(html, contains('<table>'));
+      expect(html, contains('<strong>cell</strong>'), reason: html);
+      expect(html, contains('data-mica-math'), reason: html);
+    }
 
     // Paste back into a FRESH editor: structure must survive.
-    final pasted = <DocOp>[];
-    await _pumpEditor(t, [EditorNode(id: 'z', kind: 'paragraph', text: '')], pasted);
-    await _pasteAndWait(t);
+    await _pumpEditor(t, [EditorNode(id: 'z', kind: 'paragraph', text: '')], doc);
+    await _pasteAndWait(t, () => doc.blocks.any((b) => b.type == 'table'));
     await _shot('05-paste-roundtrip');
-    final blocks = _inserted(pasted);
-    final kinds = blocks.map((b) => b['type']).toList();
-    expect(kinds, contains('table'));
-    final back = blocks.firstWhere((b) => b['type'] == 'table');
-    final rows = (back['data'] as Map)['rows'] as List;
-    expect(rows.length, 2);
-    expect(rows.first, ['H1', 'H2']);
-    expect(kinds, contains('footnote_def'));
-    expect(kinds, contains('bulleted_list'));
-    expect(kinds, contains('numbered_list'));
-    final mathText = blocks.firstWhere(
-      (b) => (b['data'] as Map)['marks'] is List &&
-          ((b['data'] as Map)['marks'] as List)
-              .any((m) => (m as Map)['type'] == 'math'),
-    );
-    expect(mathText['text'], contains('E=mc^2'));
-  });
+    {
+      final blocks = doc.blocks;
+      final kinds = blocks.map((b) => b.type).toList();
+      expect(kinds, contains('table'));
+      final back = blocks.firstWhere((b) => b.type == 'table');
+      final rows = back.data['rows'] as List;
+      expect(rows.length, 2);
+      expect(rows.first, ['H1', 'H2']);
+      expect(kinds, contains('footnote_def'));
+      expect(kinds, contains('bulleted_list'));
+      expect(kinds, contains('numbered_list'));
+      final mathText = blocks.firstWhere(
+        (b) =>
+            b.data['marks'] is List &&
+            (b.data['marks'] as List)
+                .any((m) => (m as Map)['type'] == 'math'),
+      );
+      expect(mathText.text, contains('E=mc^2'));
+    }
 
-  testWidgets('AI current page reads the same Markdown through the engine',
-      (t) async {
+    // ---------------------------------------------------------------- 5 ----
+    // AI current page: the same Markdown the AI dialog sends.
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
-    addTearDown(c.dispose);
     c.load([
       EditorNode(id: 'h', kind: 'heading', text: 'Title', data: {'level': 1}),
       EditorNode(id: 'p', kind: 'paragraph', text: 'hi there', data: {
@@ -348,11 +454,15 @@ void main() {
       ]).toBlockData()),
     ]);
     final md = c.documentMarkdown();
+    c.dispose();
     // ignore: avoid_print
     print('AI current-page markdown:\n$md');
     expect(md, contains('# Title'));
     expect(md, contains('**hi** there'));
     expect(md, contains('- item'));
     expect(md, contains('| A | B |'));
+
+    await t.pumpWidget(const SizedBox.shrink());
+    await t.pump();
   });
 }

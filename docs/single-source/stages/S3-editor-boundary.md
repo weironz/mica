@@ -377,10 +377,13 @@ C 类（`markdown_conformance_test`、`markdown_export_conformance_test`）删�
 - 重建 harness bundle（`flutter build web --release --no-web-resources-cdn --target=e2e/web_harness_entry.dart …`；`build-md-wasm.sh` 产出的 `mica_md/mica_md_bg.wasm` 已在 bundle 内），静态服务后运行 `node e2e/clipboard_e2e.mjs`：**全部通过**——5 个外部粘贴用例（Gemini 富文本/纯 TeX/列表/paren TeX，公式保留 `data-mica-math` 源）、代码块与跨块复制、行内代码双击/整行/跨块/剪切、单元格复制，`ClipboardItem` 与 `execCommand` 两条写剪贴板路径。
 - 截图（不入库，`e2e/*.png` 已 gitignore）：`e2e/clipboard-*.png` 本轮 10 张。
 
-**Windows 桌面** ⏸ 被单实例锁挡住
+**Windows 桌面** ✅（2026-10-28，用户关闭正在运行的 Mica 后补跑）
 
-- 新增 `integration_test/clipboard_roundtrip_test.dart`：真应用进程 + 真 FFI（`initCheckedNativeRust` 校验源码指纹）+ 真系统剪贴板（不 mock platform channel）+ 真编辑器控件与按键。五个场景：ChatGPT 双围栏粘贴、front matter 剥离、外部 CF_HTML 富文本粘贴（PowerShell STA 写 `HTML Format`，与浏览器写出的格式一致）、Mica 内 Ctrl+A/C/V 往返（公式/脚注/嵌套列表/表格；纯文本与 HTML 两种风味都断言）、AI 读取当前页。（窗口截图由测试内 PowerShell 取前台窗口，写到 `build/t3.10/`。）
-- 阻塞原因：用户自己的 Mica 正在运行（PID 23080，2026-10-27 20:10 启动），Windows runner 的 `Local\MicaSingleInstance` 互斥锁让测试实例启动即退出（`Error waiting for a debug connection`）。**未擅自结束用户进程**；关闭 Mica 后重跑 `flutter test integration_test/clipboard_roundtrip_test.dart -d windows` 即可（T3.11 的 `markdown_codec_test.dart` 同理）。
+- `integration_test/clipboard_roundtrip_test.dart`：真应用进程 + 真 FFI（`initCheckedNativeRust` 校验源码指纹）+ 真系统剪贴板（不 mock platform channel）+ 真编辑器控件与按键。一个 `testWidgets` 内串行五个场景：ChatGPT 双围栏粘贴、front matter 剥离、外部 CF_HTML 富文本粘贴、Mica 内 Ctrl+A/C/V 往返（公式/脚注/嵌套列表/表格；text/plain 与 text/html 两种风味都断言）、AI 读取当前页。**1 passed / 0 failed**，窗口截图 `build/t3.10/01…05.png`（AI 读取当前页输出的 Markdown 打印在测试日志里，与改前一致：`# Title` / `**hi** there` / `- item` / `| A | B |`）。
+- 单文件多个 `testWidgets` 在桌面 integration binding 下不可行：粘贴 handler 是 fire-and-forget，前一个测试遗留的异步会让下一个测试报 `'!inTest': is not true`。改为单测试串行、每场景先卸载旧编辑器，并按条件等待（不再固定 pump 2 秒）；断言看「合成后的文档」而不是只收集 `insert_block`——空段落会被粘贴**复用**为首块（走 `update_block`）。
+- 外部 CF_HTML 的写入口径：必须按 UTF-8 字节 + 结尾 NUL（浏览器格式）写入。PowerShell 的 `DataObject` 存 string 会写成 UTF-16（插件按 UTF-8 读即抛），存 byte[] 又会让 .NET 把 text 风味映射成字面量 "System.Byte[]"；脚本改走 Win32 `OpenClipboard`/`SetClipboardData`。
+- **顺带修一个生产脆弱点**（`rich_paste_stub.dart`）：系统剪贴板里存在无法按 UTF-8 解码的异种 HTML 时，`Pasteboard.html` 的解码异常会从 `_pasteFromClipboard` 的第一个风味检查冒出来，整次粘贴直接失效。现在两个 HTML 读取点都捕获异常、记日志并按「没有 HTML 风味」回退纯文本。单元测试 mock 不到编解码层，只有真剪贴板路径会暴露。
+
 ### T3.11 门禁（2026-10-28）
 
 `bash scripts/local-ci.sh all` **跑到结尾的 `ALL GREEN`**（不是中途退出的假绿）：
@@ -394,6 +397,8 @@ C 类（`markdown_conformance_test`、`markdown_export_conformance_test`）删�
 | `flutter analyze --no-fatal-infos` | 0 error / 0 warning |
 | `flutter test` | `receipt: 2076 passed (floor 1000)` |
 | `flutter build web --release` + gfonts | 通过 |
+| Windows 集成：`markdown_codec_test.dart` | **10 passed / 0 failed**（wire 黄金逐字：parse_body / parse_inline_batch / decode_cells / encode_cells / serialize_body / serialize_inline / render_html_body / math_run_spans / parse_inline_math） |
+| Windows 集成：`clipboard_roundtrip_test.dart` | **1 passed / 0 failed**（T3.10 的五个真路径场景） |
 | 收尾 | `ALL GREEN for what this ran.` `EXIT=0` |
 
 Windows 下 `local-ci.sh` 按设计跳过浏览器套件（脚本末行提示改为手工 `browser-tests.sh`）；浏览器侧本轮以 T3.10 的生产构建 e2e 为准。
