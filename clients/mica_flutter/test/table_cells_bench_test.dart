@@ -12,7 +12,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/table.dart';
 import 'package:mica_flutter/markdown/mark.dart';
 import 'package:mica_flutter/markdown/markdown_codec.dart';
-import 'package:mica_flutter/markdown/markdown_wire.dart' as wire;
 import 'support/markdown_codec.dart';
 
 /// Wraps the real IO codec, forwarding everything and counting

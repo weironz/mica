@@ -95,11 +95,13 @@ async function openFixture(fixture = '', legacy = false) {
   await page.screenshot({ path: `clipboard-fixture-${fixture || 'code'}.png`, fullPage: true });
 }
 
-async function pasteDestinations(expected) {
+async function pasteDestinations(expected, codeText = 'command') {
   const target = await context.newPage();
   try {
     // A separate page has no Mica paste capture handler. Both targets consume
-    // the same real system clipboard through native browser Ctrl+V.
+    // the same real system clipboard through native browser Ctrl+V. The copy
+    // that precedes this is async on the OS side — give it a beat to land.
+    await page.waitForTimeout(300);
     await target.setContent('<textarea id="plain"></textarea><div id="rich" contenteditable="true"></div>');
     await target.locator('#plain').focus();
     await target.keyboard.press('Control+V');
@@ -108,7 +110,7 @@ async function pasteDestinations(expected) {
     await target.locator('#rich').focus();
     await target.keyboard.press('Control+V');
     const code = await target.locator('#rich code').textContent();
-    if (code !== 'command') throw new Error(`rich paste lost code: ${code}`);
+    if (code !== codeText) throw new Error(`rich paste lost code: ${code}`);
   } finally {
     await target.close();
     await page.bringToFront();
@@ -181,6 +183,36 @@ try {
     await page.keyboard.press('Control+A');
     await expectCopy(`${mode}: cell copy clips stored code marks`, 'command then `literal`', '<code>command</code>');
     await pasteDestinations('command then `literal`');
+
+    // S4 T4.11: the text+marks cell model end-to-end on the real editing
+    // path — type, select, toggle bold (the floating bar's keyboard route),
+    // commit (Escape), copy the COMMITTED table, then undo and redo.
+    await page.mouse.click(85, 30);
+    await page.waitForTimeout(500);
+    await page.keyboard.press('End');
+    await page.keyboard.type(' edited');
+    await page.keyboard.press('Control+A');
+    // Ctrl+B toggles bold over the selection inside the cell editor.
+    await page.keyboard.press('Control+B');
+    await page.keyboard.press('Escape'); // commit
+    await page.waitForTimeout(300);
+    await page.keyboard.press('Control+A');
+    const committed = await expectCopy(`${mode}: committed bold cell copies real marks`, 'command then `literal` edited\tbold\nrow\tend', '<strong>');
+    if (!committed.html.includes('<strong><code>command</code> then `literal` edited</strong>')) {
+      throw new Error(`${mode}: committed cell lost its marks: ${committed.html}`);
+    }
+    await pasteDestinations('command then `literal` edited\tbold\nrow\tend', 'command');
+    // Undo the commit, redo it — the history must carry the whole cell write.
+    await page.keyboard.press('Control+Z');
+    await page.waitForTimeout(200);
+    const undone = await expectCopy(`${mode}: undo restores the cell`, 'command then `literal`\tbold\nrow\tend', '<code>command</code>');
+    if (undone.html.includes('<strong>command')) throw new Error(`${mode}: undo left the bold: ${undone.html}`);
+    await page.keyboard.press('Control+Y');
+    await page.waitForTimeout(200);
+    const redone = await expectCopy(`${mode}: redo reapplies the cell write`, 'command then `literal` edited\tbold\nrow\tend', '<strong>');
+    if (!redone.html.includes('<strong><code>command</code> then `literal` edited</strong>')) {
+      throw new Error(`${mode}: redo lost the bold cell: ${redone.html}`);
+    }
     await page.screenshot({ path: `clipboard-${mode}-cell.png`, fullPage: true });
   }
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);

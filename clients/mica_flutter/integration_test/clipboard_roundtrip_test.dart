@@ -364,9 +364,12 @@ void main() {
 
     // ---------------------------------------------------------------- 4 ----
     // Mica copy → paste round-trips formula, footnote, nested list, table.
+    // The body cell is BOLD the new-model way: a mark over clean text (the
+    // old test passed raw `**cell**` source, which the model now treats as
+    // literal text — a cell the engine would decode as bold, not as `**`).
     final table = TableData([
       [TableCell('H1'), TableCell('H2')],
-      [TableCell(r'**cell**'), TableCell('x')],
+      [TableCell('cell', [Mark(0, 4, 'bold')]), TableCell('x')],
     ]);
     final docNodes = [
       EditorNode(
