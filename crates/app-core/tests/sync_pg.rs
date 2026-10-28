@@ -10,6 +10,14 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// `backfill_derived_columns` sweeps the WHOLE database, and these tests share
+/// one. Two sweeps at once means one test fills the other's freshly inserted
+/// empty row before its own assertion: on 2026-10-28 this file failed ~half the
+/// runs (`starts empty`, then `at least the valid row was indexed`) while every
+/// test passed on its own. One process is what `cargo test` parallelises within,
+/// so a process-wide lock is the right scope.
+static BACKFILL_SWEEP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Skipping without a database is a local convenience; skipping WITH one is a
 /// lie. This used to be `PgPool::connect(&url).await.ok()?`, which turned a
 /// failed connection into a skip: you could export DATABASE_URL, watch
@@ -1676,6 +1684,7 @@ async fn backfill_fills_valid_and_skips_corrupt() {
     eprintln!("skipping backfill_fills_valid_and_skips_corrupt: no DATABASE_URL");
     return;
   };
+  let _sweep = BACKFILL_SWEEP.lock().await;
   let (ws, doc, user) = seed_doc_bare(&db).await;
 
   // A valid base inserted WITHOUT content_text (the pre-0012 shape → '').
@@ -1761,6 +1770,7 @@ async fn backfill_fills_valid_and_skips_corrupt() {
 #[tokio::test]
 async fn a_body_backfilled_after_warm_up_reaches_the_search_index() {
   let Some(db) = pool().await else { return };
+  let _sweep = BACKFILL_SWEEP.lock().await;
   let (ws, doc, user) = seed_doc_bare(&db).await;
   let needle = format!("回填竞态{}", Uuid::new_v4().simple());
 
