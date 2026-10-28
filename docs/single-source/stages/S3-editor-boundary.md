@@ -322,3 +322,86 @@ C 类（`markdown_conformance_test`、`markdown_export_conformance_test`）删�
 
 另：`cargo fmt` 修正 `crates/md-core/tests/wire.rs`；删除 `highlight_languages_test` / `paste_formula_test` 的多余 import；`file-size-budget.txt` 中 controller 基线 4063 → 4062。
 
+### T3.6 删除（2026-10-28）
+
+删除前 `grep -rn "markdownToBlocks\|_rangeMarkdown\|listSerialization\|markdownListLayout\|tableToMarkdown" clients/mica_flutter/lib` 零结果（exit 1）；删后同一命令仍零结果。
+
+| 对象 | 处理 |
+| --- | --- |
+| `lib/editor/markdown.dart` | 整个文件删除（T3.1 搬走后 1,345 行） |
+| `lib/editor/list_serialization.dart` | 整个文件删除（48 行） |
+| `controller.dart` | 删 `_rangeMarkdown`（216 行）、`_blockPrefix`、`_continuationPrefix`、`_codeFenceFor`、`_listRunHtml`、`_tableHtml`；`selectionHtml` 新体与 `_selectionSlices` 保留；库 4,062 → 3,707 行（低于软上限，预算条目删除） |
+| `marks.dart` | 删 `escapeBlockLeader`/`escapeBlockLeaders`、`escapeHtml`/`escapeHtmlAttr`、`inlineToHtml`/`_renderSpanHtml`、`parseInlineMath`、`mathRunSpans`（各 0 调用者） |
+| `table.dart` | 删 `looksLikeGfmTable`、`tableToMarkdown`；**保留** `parseGfmTable`/`_splitRow`/`_startsBlock`（`table_alignment_preservation_test` 仍用，S4 处理）；`isThematicBreak` 随 `markdown.dart` 消失，复制为私有 `_isThematicBreak`（`_startsBlock` 唯一使用者） |
+| `editor.dart` | 删 `import 'markdown.dart';`（`BlockSpec` 走门面 import） |
+
+**记录在案、留到 S4**：`marks.dart` 的 `inlineToMarkdown`/`_renderSpan`/`_sortedForRender`/`_RenderMark`/`_rendersTerminal`/`_startBoundBelow` 及其依赖 `escapeInline`/`escapeMarkdownTitle`/`escapeMarkdownDestination` 仍在——`table.dart` 的 `_cellText` 与 `cell_edit_controller.serialize()` 还用它（03 §2 行 80 的 S4 约定）。`parseInline` 同理（S4 删表格最后调用点）。
+
+差分工具同步收缩（`markdown_differential_test.dart`）：块解析、Markdown 序列化、往返、剪贴板四类比较与 Dart 一侧一起删除，只留行内三类（`inline:text` / `inline:marks` / `inline:export`）。棘轮协议名改为 `s3-inline-only-v1`，基线用 `S0_WRITE_BASELINE=1` 重生成：`inline:export` 1,520 / `inline:marks` 18 / `inline:text` 18（旧基线的 export 1,432 与 roundtrip 1,190 属于已删除的维度）。
+
+基准工具（`support/markdown_codec_bench.dart`）：原为「codec ≤ 1.2× Dart 镜像」的**比值**预算；镜像删除后比值没有分母，改为 codec 绝对上限（parse.87 0.1 ms / parse.10k 15 ms / parse.100k 150 ms / serialize.10k 10 ms / html.10k 10 ms / inline.87 0.1 ms，约为切换前 VM 实测值的 2.5–3 倍）。release probe 的 `bench_passes` 相应改为「无行显式失败」。
+
+### T3.9 测试迁移（2026-10-28）
+
+| 文件 | 类 | 处理 | 依据 / Rust 对应 |
+| --- | --- | --- | --- |
+| `markdown_conformance_test`、`markdown_export_conformance_test` | C | 删除 | 对拍对象是 Dart 镜像；门面契约测试已覆盖（`markdown_codec_contract_test` / `_web_test`，wire gold 由引擎生成） |
+| `clipboard_html_port_test` + `fixtures/clipboard_html_port.json` | 验收 | 删除 | T3.4 逐字节移植验收已完成并记档（30 fixture，切换前最后验证 `9657631d`） |
+| `clipboard_snapshot_test` | 一次性快照 | 删除 | T3.7 材料已产出（`build/s3-baseline/`，不入库） |
+| `markdown_differential_transition_audit` | 一次性审计 | 删除 | T2.12 迁移审计已在 M2 复核；证据 JSON 保留在 `test/fixtures/differential/` |
+| `markdown_baseline_bench_test`、`markdown_codec_dart_boundary_bench_test` | 基准 | 删除 | 测的是 Dart 镜像；镜像已删 |
+| `link_parity_test` | A | 删除 | 3 条中 2 条已被 Rust 覆盖（`inline_invertibility.rs::empty_links_keep_their_position_and_destination`、`image_alt_export.rs::inline_image_alt_marks_and_real_outer_links_survive`）；引用式嵌套链接**迁移新增** `gfm_extensions.rs::a_link_inside_a_reference_label_refuses_the_outer_reference`（先跑通气） |
+| `image_alt_export_test` | A | 删除 | `image_alt_export.rs` 三个测试逐一对应（同一表） |
+| `footnotes_test` | A | 删除 | `footnotes.rs`（引用剥离、定义、跨行续行、未定义降级） |
+| `front_matter_test` | A | 删除 | `front_matter.rs`（剥离、dot 闭合、空、setext、未闭合） |
+| `numbered_continuation_test` | A | 删除 | 迁移新增 `ordered_export.rs::interrupted_ordered_runs_carry_their_resume_number`（三种打断形状断言 `data.start == 2`） |
+| `markdown_image_test` | A+B | 拆分：4 条解析用例删（`image_alt_export.rs` / `inline_invertibility.rs` / conformance `16-images`），2 条编辑器行为留 | 保留部分只依赖 controller |
+| `cjk_emphasis_and_fence_test` | A+B | 拆分：CJK 强调 6 条删（`cjk_emphasis.rs`），`unwrapNestedFences` 6 条留（D7 粘贴启发式） | 保留部分改走门面 |
+| `markdown_engine_regressions_test` | A+B | 拆分：7 条删（`unicode_indent.rs`、`unclosed_math.rs`、`code_whitespace.rs`、`inline_invertibility.rs`、`fence_round_trip.rs::quoted_fences_share_top_level_delimiter_rules`），2 条留（`inlineToMarkdown` 契约、复制围栏冲突） | 文件头写明逐条映射 |
+| `render_span_equivalence_test` | C | 删 HTML 对拍半（新侧 `inlineToHtml` 已删），保留 `inlineToMarkdown` 对拍（S4 删） | 旧 HTML 渲染器副本一并删除 |
+| `escapes_autolinks_test` | A | 删 `escapeBlockLeader` 两条（函数已删；`escape_round_trip.rs` 覆盖），行内部分留到 S4 | — |
+| `table_inline_code_test` | A+模型 | 保留并改走门面：`tableToMarkdown` 换成 `markdownCodec.serializeBlocks`，`TableData` 模型断言不变 | `table_inline_code.rs` 覆盖 Rust 侧 |
+| `cell_copy_marks_test` | B | 改写：cell html 由 `renderClipboardHtml`（引擎 Clipboard 方言）产出，断言不变 | 原用 `inlineToHtml` 旧写出器 |
+| `paste_formula_test` | B | `parseInlineMath` → `markdownCodec.parseInlineMath` | 编辑器早已走门面 |
+| `inline_scan_perf_test` | A（性能） | `mathRunSpans` → 门面；HTML 渲染性能用例改 `renderClipboardHtml` | `inline_scan_perf.rs` |
+| `ai_block_edits`、`divider`、`url_shaped_link_label`、`list_indent`、`paste_audit`、`paste_structure`、`paste_wrapped_list`、`html_paste_math`、`clipboard_flavor_roundtrip`、`clipboard_plain_text`、`list_serialization`、`tilde_range`、`linked_code_span` | B（+S4 待删） | 解析统一换 `markdownCodec.parseBlocks`；缺的补 `setUpAll(useNativeMarkdownCodec)` | 断言不变（Rust 行为为准） |
+
+净变化（T3.6+T3.9+T3.10 合计，工作树）：**+873 / −17,731 行**（其中 `markdown.dart` 1,345、`list_serialization.dart` 48、12 个删除的测试文件、`clipboard_html_port.json` 1,779、差分基线 19,612→7,791 行；新增含桌面集成测试 1 个与 Rust 迁移用例 2 条）。
+
+验证：`flutter analyze --no-fatal-infos` **0 error / 0 warning**；`flutter test` **2,075 passed / 7 skipped / 0 failed**；`bash scripts/check-file-size.sh` 通过（controller 预算条目删除，editor 7,232 → 7,231）。
+### T3.10 真实路径验证（2026-10-28）
+
+**Web（Chrome，生产构建）** ✅
+
+- 发现并修复一个真实缺口：`e2e/web_harness_entry.dart` 从未初始化门面（`initMarkdownCodec()` 只在 `lib/main.dart` 里调用）。S2 换成 wasm 门面之后，harness 的第一次复制就抛 `initMarkdownCodec() was not awaited before first use`，于是剪贴板只写纯文本、rich 断言必然超时——即这个 e2e 在 S2 之后不可能跑通（本环境没有它在此期间的执行记录）。修复：入口 `await initMarkdownCodec()` 后再分发三个 harness。
+- 重建 harness bundle（`flutter build web --release --no-web-resources-cdn --target=e2e/web_harness_entry.dart …`；`build-md-wasm.sh` 产出的 `mica_md/mica_md_bg.wasm` 已在 bundle 内），静态服务后运行 `node e2e/clipboard_e2e.mjs`：**全部通过**——5 个外部粘贴用例（Gemini 富文本/纯 TeX/列表/paren TeX，公式保留 `data-mica-math` 源）、代码块与跨块复制、行内代码双击/整行/跨块/剪切、单元格复制，`ClipboardItem` 与 `execCommand` 两条写剪贴板路径。
+- 截图（不入库，`e2e/*.png` 已 gitignore）：`e2e/clipboard-*.png` 本轮 10 张。
+
+**Windows 桌面** ⏸ 被单实例锁挡住
+
+- 新增 `integration_test/clipboard_roundtrip_test.dart`：真应用进程 + 真 FFI（`initCheckedNativeRust` 校验源码指纹）+ 真系统剪贴板（不 mock platform channel）+ 真编辑器控件与按键。五个场景：ChatGPT 双围栏粘贴、front matter 剥离、外部 CF_HTML 富文本粘贴（PowerShell STA 写 `HTML Format`，与浏览器写出的格式一致）、Mica 内 Ctrl+A/C/V 往返（公式/脚注/嵌套列表/表格；纯文本与 HTML 两种风味都断言）、AI 读取当前页。（窗口截图由测试内 PowerShell 取前台窗口，写到 `build/t3.10/`。）
+- 阻塞原因：用户自己的 Mica 正在运行（PID 23080，2026-10-27 20:10 启动），Windows runner 的 `Local\MicaSingleInstance` 互斥锁让测试实例启动即退出（`Error waiting for a debug connection`）。**未擅自结束用户进程**；关闭 Mica 后重跑 `flutter test integration_test/clipboard_roundtrip_test.dart -d windows` 即可（T3.11 的 `markdown_codec_test.dart` 同理）。
+### T3.11 门禁（2026-10-28）
+
+`bash scripts/local-ci.sh all` **跑到结尾的 `ALL GREEN`**（不是中途退出的假绿）：
+
+| 段 | 回执 |
+| --- | --- |
+| `cargo test --workspace` | `receipt: 1141 passed (floor 500)` |
+| `-p mica-core --features store` | `receipt: 213 passed (floor 1)` |
+| `crates/md-core` wire 黄金 | `receipt: 9 passed (floor 9)` |
+| wasm 产物 | `mica_md gzip: wasm=200,264 B JS=2,744 B total=203,008 B`（硬预算 262,144 B） |
+| `flutter analyze --no-fatal-infos` | 0 error / 0 warning |
+| `flutter test` | `receipt: 2076 passed (floor 1000)` |
+| `flutter build web --release` + gfonts | 通过 |
+| 收尾 | `ALL GREEN for what this ran.` `EXIT=0` |
+
+Windows 下 `local-ci.sh` 按设计跳过浏览器套件（脚本末行提示改为手工 `browser-tests.sh`）；浏览器侧本轮以 T3.10 的生产构建 e2e 为准。
+
+**门禁本身修掉的三处问题**（都不是 S3 代码，但都会让「回执」说谎）：
+
+1. `scripts/lib-receipt.sh` 的 `flutter_receipt` 在 Windows 上永远数到 0：`mktemp` 给的是 MSYS `/tmp/…`（=%TEMP%），而 Flutter 是原生进程，把 `json:/tmp/…` 解析成 `C:\tmp\…`——报告写去了另一个目录，回执文件恒空，于是「0 passed」拒绝一次全部通过的运行。修复：传给报告器前用 `cygpath -w` 转成 Windows 路径（Linux/macOS 不变）。
+2. `crates/app-core/tests/sync_pg.rs` 的 `backfill_fills_valid_and_skips_corrupt` 是并行抖动：`backfill_derived_columns` 扫全库，同文件里另一个测试的回填会在它断言「NULL 哨兵」之前把行填掉（实测 `Some([])` vs `None`）。修复：一个文件级 `tokio::sync::Mutex` 串行化两个调用全库回填的测试；单独跑与整套连跑两次均绿。
+3. 本段新增 Rust 用例的 `filter(...).next_back()` 被 clippy `-D warnings` 拒绝（`filter_next`），改 `rfind`；`cargo fmt` 修正格式。
+
+另：门禁第一次跑时 `inline_scan_perf` 的 7 个秒级测试在整机高负载（同时有 dart2js 编译 + 用户进程）下超过 3 s 阈值而红；单独重跑 1.83 s 全过，属环境抖动，非回归（记录在此，避免下次误判）。
