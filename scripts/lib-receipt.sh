@@ -30,11 +30,17 @@ cargo_receipt() {
 # Counts tests that finished successfully, excluding skipped ones and the
 # hidden "loading <file>" pseudo-tests every suite reports.
 flutter_receipt() {
-  local min=$1 report rc passed
+  local min=$1 report reporter rc passed
   shift
   report=$(mktemp)
+  # Windows Dart resolves `json:<path>` itself, and a Git Bash `/tmp/...` is not
+  # a path it can open there: the reporter writes nothing and every test then
+  # counts as zero — the "skipped looks green" failure this file exists to
+  # stop, inverted. cygpath is absent on Linux/macOS, where the path is fine.
+  reporter=$report
+  command -v cygpath >/dev/null 2>&1 && reporter=$(cygpath -m "$report")
   set +e
-  "$FLUTTER" test --file-reporter "json:$report" "$@"
+  "$FLUTTER" test --file-reporter "json:$reporter" "$@"
   rc=$?
   set -e
   passed=$(grep '"type":"testDone"' "$report" | grep '"hidden":false' | grep '"skipped":false' \
