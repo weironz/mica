@@ -78,6 +78,17 @@ S3 协议版本闸门 → S4 停写 → S5 删表)做完,`document_snapshots` /
 仍然成立的一条:**恢复历史版本绝不能"把旧状态当 update 应用"**——CRDT 是并集,
 不回退。必须用 `set_blocks` 在当前 doc 上重建目标内容。
 
+### 双表示的终点:Markdown 镜像删除(2026-10,[单一实现专项](../single-source/README.md))
+
+§1 的形态在这里重演过一遍,只是载体不同:`crates/markdown`(权威)与
+`lib/editor/marks.dart` 的 Dart 行内解析镜像。同样的病——两份各自自洽,不自洽的
+只有它们之间(`ß`→`ss` 折叠、`　` 空白、`[`a]b`](/x)` 丢链接,全靠差分对拍
+才抓得到)。S0–S4 五步走完,镜像删除:引擎搬进 `crates/md-core`,Dart 侧只剩
+`MarkdownCodec` 门面(桌面 FFI / Web wasm),表格单元格也改成「文本+标记」内存模型,
+编辑器里不再有任何 Markdown 语法实现。可迁移的经验与 §1 相同:**结构事实胜过守则**
+——「Dart 镜像必须同步更新」这条守则活了很久才被 `AGENTS.md` 的「禁止在 Dart 里新增
+Markdown 语法逻辑」替代,而真正杜绝回潮的是镜像代码本身不存在了。
+
 ---
 
 ## 2. 不变量只写在客户端 = 没写

@@ -46,6 +46,7 @@ baseline for P4 — see docs/architecture/editor-engine.md Milestone 8.
   `**…。**x` 无法再解析)。采用 markdown-cjk-friendly 的权威修正:把 flanking
   的"标点"拆成非 CJK 标点(严格照旧)与 CJK 标点/字符(像空格一样放宽)。
   ASCII 输入字节不变 → 记分牌稳 641。实现在 Rust `flanking`/`is_cjk`
-  (crates/markdown)与 Dart `_flanking`/`_isCjk`(marks.dart),两端同步;
-  回归 `crates/markdown/tests/cjk_emphasis.rs` + `cjk_emphasis_and_fence_test.dart`。
+  (crates/md-core;原 crates/markdown 处的 Dart 镜像 `_flanking`/`_isCjk`
+  已随单一实现专项删除,2026-10);回归
+  `crates/markdown/tests/cjk_emphasis.rs` + `cjk_emphasis_and_fence_test.dart`。
 - 脚注、YAML front matter、Pandoc `$…$`/`$$…$$` 数学约定(见 CLAUDE.md #4)。

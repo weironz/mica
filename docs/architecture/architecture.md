@@ -113,25 +113,22 @@ deliberately the two engines real users run.
 
 ## Markdown
 
-One Rust engine: `crates/markdown` (CommonMark 0.31.2 641/641 + GFM 24/24 +
+One Rust engine: `crates/md-core` (CommonMark 0.31.2 641/641 + GFM 24/24 +
 dialect extensions: footnotes, front matter, Pandoc math; scoreboard in
 [`commonmark-scoreboard.md`](commonmark-scoreboard.md)). It powers the server
 (HTML render, export) and, via the FFI crate's `render` feature (merman +
-ratex), the desktop editor's live mermaid/math preview — one engine
-everywhere except web, which uses its JS counterparts.
+ratex), the desktop editor's live mermaid/math preview — and since the
+[single-source project](../single-source/README.md) (S0–S4, 2026-10) removed
+the Dart mirror, it is the ONLY implementation: desktop calls it over FFI,
+web over wasm, both behind `lib/markdown/markdown_codec.dart`.
 
-The editor's **latency-critical hot paths stay in Dart** (input rules, paste,
-clipboard) with a deliberate mirror of the inline-marks grammar
-(`lib/editor/marks.dart`), pinned to the Rust engine by shared conformance
-fixtures. Round-trip stability (export → re-import loses nothing) is the
-invariant. Where the boundary sits and why:
+The editor's **latency-critical hot paths stay in Dart** (input rules, paste
+heuristics, clipboard assembly) but contain no Markdown grammar — the editor
+holds text + marks and asks the engine to parse/serialize at its boundaries
+(paste, copy, import, export, AI; table cells decode/encode through the same
+facade, cached by content). Round-trip stability (export → re-import loses
+nothing) is the invariant. Where the boundary sits and why:
 [`markdown-boundary-comparison.md`](../single-source/history/markdown-boundary-comparison.md).
-
-**Being replaced (2026-10-26):** the [single-source project](../single-source/README.md)
-removes the Dart mirror — one Rust engine (`crates/md-core`) on every platform
-(FFI on desktop, wasm on web), with the editor calling it only at its
-boundaries (paste, copy, import, export, AI). Until its S4 lands, the paragraph
-above still describes the code; the project docs win where they disagree.
 
 ## Auth
 
