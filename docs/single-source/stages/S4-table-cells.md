@@ -281,4 +281,19 @@ Windows 桌面 + Web：打开含旧格式表格的现有文档（从生产导出
 
 ### 门禁（`bash scripts/local-ci.sh all`，2026-10-28）
 
-见下方回执。
+`bash scripts/local-ci.sh all` **跑到结尾的 `ALL GREEN`**（`EXIT=0`，不经过管道）：
+
+| 段 | 回执 |
+| --- | --- |
+| `cargo test --workspace` | `receipt: 1141 passed (floor 500)` |
+| `-p mica-core --features store` | `receipt: 213 passed (floor 1)` |
+| `crates/md-core` wire 黄金 | `receipt: 9 passed (floor 9)` |
+| wasm 产物 | `mica_md gzip: wasm=200,264 B JS=2,744 B total=203,008 B`（硬预算 262,144 B） |
+| `flutter analyze --no-fatal-infos` | 0 error / 0 warning（238 条全部为 info 级 lint） |
+| `flutter test` | `receipt: 2051 passed (floor 1000)` |
+| `flutter build web --release`（dart2js 编译检查） | 通过（`√ Built build\web`） |
+| 收尾 | `ALL GREEN for what this ran.` `EXIT=0` |
+
+Windows 下 `local-ci.sh` 按设计跳过浏览器套件与桌面集成（脚本尾列出各自命令）；本轮这两项以 T4.11 的真路径验证覆盖：
+**Web** 生产构建 e2e（`clipboard_e2e.mjs` 全部通过，含新增单元格编辑序列）；
+**Windows 桌面** `integration_test/markdown_codec_test.dart` **10 passed / 0 failed**、`integration_test/clipboard_roundtrip_test.dart` **1 passed / 0 failed**。
