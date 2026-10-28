@@ -11,9 +11,9 @@ EditorController _doc() {
       kind: 'table',
       text: '',
       data: TableData([
-        ['A', 'B', 'C'],
-        ['a1', 'b1', 'c1'],
-        ['a2', 'b2', 'c2'],
+        [TableCell('A'), TableCell('B'), TableCell('C')],
+        [TableCell('a1'), TableCell('b1'), TableCell('c1')],
+        [TableCell('a2'), TableCell('b2'), TableCell('c2')],
       ], header: true, widths: [1.0, 2.0, 3.0]).toBlockData(),
     ),
   ]);
@@ -25,8 +25,8 @@ void main() {
     final c = _doc();
     c.moveTableColumn(0, 2, -1);
     final t = TableData.fromBlock(c.nodes.single.data);
-    expect(t.rows[0], ['A', 'C', 'B']);
-    expect(t.rows[1], ['a1', 'c1', 'b1']);
+    expect(t.rows[0].map((c) => c.text), ['A', 'C', 'B']);
+    expect(t.rows[1].map((c) => c.text), ['a1', 'c1', 'b1']);
     expect(t.widths, [1.0, 3.0, 2.0]);
   });
 
@@ -35,7 +35,7 @@ void main() {
     c.moveTableColumn(0, 0, -1); // no-op
     c.moveTableColumn(0, 2, 1); // no-op
     final t = TableData.fromBlock(c.nodes.single.data);
-    expect(t.rows[0], ['A', 'B', 'C']);
+    expect(t.rows[0].map((c) => c.text), ['A', 'B', 'C']);
   });
 
   test('setTableWidth persists and round-trips; default omits the key', () {
@@ -47,7 +47,7 @@ void main() {
     expect(c.nodes.single.data['width'], 0.6);
     final t = TableData.fromBlock(c.nodes.single.data);
     expect(t.tableWidth, 0.6);
-    expect(t.rows[0], ['A', 'B', 'C']); // grid untouched
+    expect(t.rows[0].map((c) => c.text), ['A', 'B', 'C']); // grid untouched
     // Clamped at the extremes.
     c.setTableWidth(0, 5.0);
     expect(TableData.fromBlock(c.nodes.single.data).tableWidth, 1.0);
@@ -57,13 +57,13 @@ void main() {
     final c = _doc();
     c.moveTableRow(0, 2, -1);
     var t = TableData.fromBlock(c.nodes.single.data);
-    expect(t.rows[1], ['a2', 'b2', 'c2']);
-    expect(t.rows[2], ['a1', 'b1', 'c1']);
+    expect(t.rows[1].map((c) => c.text), ['a2', 'b2', 'c2']);
+    expect(t.rows[2].map((c) => c.text), ['a1', 'b1', 'c1']);
     // Header row can't move; body row can't move above the header.
     c.moveTableRow(0, 0, 1);
     c.moveTableRow(0, 1, -1);
     t = TableData.fromBlock(c.nodes.single.data);
-    expect(t.rows[0], ['A', 'B', 'C']);
-    expect(t.rows[1], ['a2', 'b2', 'c2']);
+    expect(t.rows[0].map((c) => c.text), ['A', 'B', 'C']);
+    expect(t.rows[1].map((c) => c.text), ['a2', 'b2', 'c2']);
   });
 }

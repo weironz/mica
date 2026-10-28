@@ -307,6 +307,51 @@ List<Mark> _normalize(List<Mark> marks) {
   return out;
 }
 
+/// Value equality for two mark lists, ignoring input order: the canonical
+/// order is `(start, end, type, href, title)`.
+///
+/// [Mark] deliberately has no `operator ==` — parts of the editor rely on
+/// reference identity for the marks they build, so changing its semantics was
+/// never evaluated. Comparing the structured fields here is enough for the
+/// model that needs it (table cells).
+bool marksEqual(List<Mark> a, List<Mark> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  if (a.isEmpty) return true;
+  final x = [...a]..sort(_compareMarks);
+  final y = [...b]..sort(_compareMarks);
+  for (var i = 0; i < x.length; i++) {
+    final m = x[i], n = y[i];
+    if (m.start != n.start ||
+        m.end != n.end ||
+        m.type != n.type ||
+        m.href != n.href ||
+        m.title != n.title) {
+      return false;
+    }
+  }
+  return true;
+}
+
+int _compareMarks(Mark a, Mark b) {
+  var c = a.start.compareTo(b.start);
+  if (c != 0) return c;
+  c = a.end.compareTo(b.end);
+  if (c != 0) return c;
+  c = a.type.compareTo(b.type);
+  if (c != 0) return c;
+  c = _compareNullable(a.href, b.href);
+  if (c != 0) return c;
+  return _compareNullable(a.title, b.title);
+}
+
+int _compareNullable(String? a, String? b) {
+  if (a == b) return 0;
+  if (a == null) return -1;
+  if (b == null) return 1;
+  return a.compareTo(b);
+}
+
 const String _asciiPunct = r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''';
 
 /// Single-line link reference definition ` [label]: dest "title"`.

@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
@@ -2729,12 +2729,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final localRect = r.tableCellRect(node, row, col);
     if (localRect == null) return;
     final table = TableData.fromBlock(_controller.nodes[node].data);
-    final text = (row < table.rows.length && col < table.rows[row].length)
+    final cell = (row < table.rows.length && col < table.rows[row].length)
         ? table.rows[row][col]
-        : '';
-    // WYSIWYG cell editor: renders inline marks (bold/italic/code) live instead
-    // of the raw Markdown source, and serializes back to Markdown on commit.
-    final controller = CellEditController(text);
+        : TableCell.empty;
+    // WYSIWYG cell editor: edits the cell's text + marks directly (bold shows
+    // bold while typing); the model goes back to storage through the engine.
+    final controller = CellEditController(cell);
     final session = CellEditSession(_controller, _controller.nodes[node].id, row, col, controller);
     final focus = FocusNode();
     var committed = false;
@@ -4115,8 +4115,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       final plainCells = <String>[];
       for (var c = area.c0; c <= area.c1 && c < table.rows[r].length; c++) {
         if (c < 0) continue;
-        final parsed = parseInline(table.rows[r][c]);
-        plainCells.add(parsed.text.replaceAll('\t', ' ').replaceAll('\n', ' '));
+        final cell = table.rows[r][c];
+        plainCells.add(cell.text.replaceAll('\t', ' ').replaceAll('\n', ' '));
       }
       plainRows.add(plainCells.join('\t'));
     }

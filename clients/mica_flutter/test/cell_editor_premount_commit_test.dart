@@ -13,7 +13,7 @@
 // rebuilt the ghost's TextField over the dead node — red screen forever until
 // restart. Release builds skip the assert, so the same ghost just sat there
 // invisibly eating a cell's edits.
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/render.dart';
@@ -25,8 +25,8 @@ EditorNode _table() => EditorNode(
   kind: 'table',
   text: '',
   data: TableData([
-    ['h1', 'h2'],
-    ['a1', 'a2'],
+    [TableCell('h1'), TableCell('h2')],
+    [TableCell('a1'), TableCell('a2')],
   ]).toBlockData(),
 );
 

@@ -1,14 +1,58 @@
-/// Table model + GFM (pipe-table) parsing/serialization for the editor.
+/// Table model for the editor.
 ///
 /// A table is a single block of kind `table`; its grid lives in the block's
 /// `data` as `{ "rows": [[cell, …], …], "header": true }`. The main caret treats
 /// the block as atomic — cells are edited through an overlay field (see
 /// editor.dart) rather than the flat text-caret model, which keeps tables from
 /// requiring a cell-addressing rewrite of the selection engine.
+///
+/// In memory a cell is [TableCell] — plain text plus inline marks, the same
+/// model a paragraph uses. The STORED form is still the engine's (a source
+/// string or `{text, marks}`, docs/single-source/02-architecture.md §6.4):
+/// decoding and encoding go through `markdownCodec`, so nothing in the editor
+/// parses or writes Markdown syntax.
 library;
 
-import 'marks.dart'
-    show inlineToMarkdown, marksFromData, marksToJson, parseInline;
+import 'dart:collection';
+
+import 'package:flutter/foundation.dart' show immutable;
+
+import '../markdown/markdown_codec.dart'
+    show InlineText, MarkdownCodecException, markdownCodec;
+import 'marks.dart' show Mark, marksEqual, marksFromData, marksToJson;
+
+/// One table cell: plain text plus inline marks over it — the same model a
+/// paragraph uses. The STORED form is still the engine's (a source string or
+/// `{text, marks}`, docs/single-source/02-architecture.md §6.4); decoding and
+/// encoding go through [markdownCodec] in [TableData.fromBlock] /
+/// [TableData.toBlockData], so nothing in the editor parses Markdown.
+@immutable
+class TableCell {
+  const TableCell(this.text, [this.marks = const []]);
+
+  static const empty = TableCell('');
+
+  final String text;
+  final List<Mark> marks;
+
+  bool get isEmpty => text.isEmpty;
+
+  TableCell copyWith({String? text, List<Mark>? marks}) =>
+      TableCell(text ?? this.text, marks ?? this.marks);
+
+  @override
+  bool operator ==(Object other) =>
+      other is TableCell && other.text == text && marksEqual(other.marks, marks);
+
+  @override
+  int get hashCode => Object.hash(
+    text,
+    Object.hashAll(marks.map((m) => (m.start, m.end, m.type, m.href, m.title))),
+  );
+
+  @override
+  String toString() => 'TableCell(${text.length} chars, ${marks.length} marks)';
+}
 
 class TableData {
   TableData(
@@ -21,7 +65,7 @@ class TableData {
   }) : widths = _normalizeWidths(widths, rows.isEmpty ? 0 : rows.first.length);
 
   /// Rows of cells; every row has the same length (`columns`).
-  final List<List<String>> rows;
+  final List<List<TableCell>> rows;
   final bool header;
 
   /// Cell text alignment for the whole table: `left` | `center` | `right`.
@@ -48,15 +92,34 @@ class TableData {
   int get columns => rows.isEmpty ? 0 : rows.first.length;
   int get rowCount => rows.length;
 
+  /// Bound of the content-keyed decode cache. Layout calls [TableData.fromBlock]
+  /// on every relayout, so decoded cells are cached; 4096 entries covers a
+  /// large table plus the cells of the pages around it.
+  static const int _cacheLimit = 4096;
+
+  /// Source string → decoded cell. Insertion order doubles as LRU order.
+  static final LinkedHashMap<String, TableCell> _sourceCache =
+      LinkedHashMap<String, TableCell>();
+
+  /// [TableCell] → its stored form (a source string or a `{text, marks}`
+  /// object). Value equality on [TableCell] makes this a content cache too.
+  static final LinkedHashMap<TableCell, Object> _storedCache =
+      LinkedHashMap<TableCell, Object>();
+
   factory TableData.fromBlock(Map<String, dynamic> data) {
     final raw = data['rows'];
-    final rows = <List<String>>[];
+    final shapes = <List<Object?>>[];
     if (raw is List) {
       for (final row in raw) {
-        if (row is List) {
-          rows.add([for (final cell in row) _cellText(cell)]);
-        }
+        if (row is List) shapes.add(row);
       }
+    }
+    final decoded = _decodeCells([for (final row in shapes) ...row]);
+    var at = 0;
+    final rows = <List<TableCell>>[];
+    for (final row in shapes) {
+      rows.add(decoded.sublist(at, at + row.length));
+      at += row.length;
     }
     if (rows.isEmpty) {
       return TableData.empty();
@@ -64,7 +127,7 @@ class TableData {
     final width = rows.fold<int>(0, (m, r) => r.length > m ? r.length : m);
     for (final row in rows) {
       while (row.length < width) {
-        row.add('');
+        row.add(TableCell.empty);
       }
     }
     List<double>? widths;
@@ -90,26 +153,33 @@ class TableData {
   }
 
   factory TableData.empty() => TableData([
-    ['Column 1', 'Column 2', 'Column 3'],
-    ['', '', ''],
+    [TableCell('Column 1'), TableCell('Column 2'), TableCell('Column 3')],
+    [TableCell.empty, TableCell.empty, TableCell.empty],
   ]);
 
-  Map<String, dynamic> toBlockData() => {
-    'rows': [
-      for (final row in rows) [for (final cell in row) _encodeCell(cell)],
-    ],
-    'header': header,
-    'align': align,
-    'widths': widths,
-    if (aligns != null && aligns!.any((a) => a.isNotEmpty)) 'aligns': aligns,
-    // Default-width tables omit the key (keeps parser conformance with the
-    // Rust engine, which doesn't model table width).
-    if (tableWidth != 1.0) 'width': tableWidth,
-  };
+  Map<String, dynamic> toBlockData() {
+    final encoded = _encodeCells([for (final row in rows) ...row]);
+    var at = 0;
+    final outRows = <List<Object>>[];
+    for (final row in rows) {
+      outRows.add(encoded.sublist(at, at + row.length));
+      at += row.length;
+    }
+    return {
+      'rows': outRows,
+      'header': header,
+      'align': align,
+      'widths': widths,
+      if (aligns != null && aligns!.any((a) => a.isNotEmpty)) 'aligns': aligns,
+      // Default-width tables omit the key (keeps parser conformance with the
+      // Rust engine, which doesn't model table width).
+      if (tableWidth != 1.0) 'width': tableWidth,
+    };
+  }
 
   void insertRow(int at) {
     final i = at.clamp(0, rows.length);
-    rows.insert(i, List<String>.filled(columns, ''));
+    rows.insert(i, List<TableCell>.filled(columns, TableCell.empty));
   }
 
   void deleteRow(int at) {
@@ -120,7 +190,7 @@ class TableData {
   void insertColumn(int at) {
     final i = at.clamp(0, columns);
     for (final row in rows) {
-      row.insert(i.clamp(0, row.length), '');
+      row.insert(i.clamp(0, row.length), TableCell.empty);
     }
     widths.insert(i.clamp(0, widths.length), 1.0);
     aligns?.insert(i.clamp(0, aligns!.length), '');
@@ -135,38 +205,170 @@ class TableData {
     if (aligns != null && at < aligns!.length) aligns!.removeAt(at);
   }
 
-  /// Coerce a stored cell to its inline-Markdown source (the form the renderer
-  /// and cell editor speak). A cell is one of:
-  ///  - `null`/absent → empty string, NOT the stringified placeholder a blind
-  ///    interpolation produces (`'$cell'` turns Dart `null` into "null", and on
-  ///    dart2js a JS `undefined` array hole into "undefined", which then renders
-  ///    and round-trips as that literal word);
-  ///  - a `String` → legacy / mark-free raw source, passes through;
-  ///  - a unified `{text, marks}` object (matching paragraphs; emitted by Rust
-  ///    `crates/markdown` for marked cells) → rendered back to source via
-  ///    [inlineToMarkdown], so every downstream path keeps working unchanged;
-  ///  - any other JSON scalar → its textual form.
-  static String _cellText(Object? cell) {
-    if (cell == null) return '';
-    if (cell is String) return cell;
-    if (cell is Map) {
-      final text = cell['text'];
-      if (text is String) {
-        final marks = marksFromData(Map<String, dynamic>.from(cell));
-        return marks.isEmpty ? text : inlineToMarkdown(text, marks);
+  /// Stored cells → [TableCell]. `{text, marks}` objects decode locally (they
+  /// already ARE text + marks); only source STRINGS need the engine, and those
+  /// are cached by content — layout calls [fromBlock] on every relayout.
+  static List<TableCell> _decodeCells(List<Object?> cells) {
+    final out = List<TableCell?>.filled(cells.length, null);
+    final stringAt = <int>[];
+    final strings = <String>[];
+    for (var i = 0; i < cells.length; i++) {
+      final cell = cells[i];
+      if (cell == null) {
+        out[i] = TableCell.empty;
+      } else if (cell is String) {
+        stringAt.add(i);
+        strings.add(cell);
+      } else if (cell is Map) {
+        final text = cell['text'];
+        out[i] = text is String
+            ? TableCell(text, marksFromData(Map<String, dynamic>.from(cell)))
+            : TableCell.empty;
+      } else {
+        out[i] = TableCell('$cell');
       }
     }
-    return '$cell';
+    if (stringAt.isNotEmpty) {
+      final decoded = _decodeSources(strings);
+      for (var k = 0; k < stringAt.length; k++) {
+        out[stringAt[k]] = decoded[k];
+      }
+    }
+    return out.cast<TableCell>();
   }
 
-  /// Encode a cell's inline-Markdown [source] into the unified stored form: a
-  /// cell with inline marks becomes a `{text, marks}` object (the same shape
-  /// paragraphs use and Rust `crates/markdown` emits); a mark-free cell stays a
-  /// plain string. Keeps the two engines byte-identical on the wire.
-  static Object _encodeCell(String source) {
-    final parsed = parseInline(source);
-    if (parsed.marks.isEmpty) return source;
-    return {'text': parsed.text, 'marks': marksToJson(parsed.marks)};
+  /// Decode source strings, deduplicated, one engine call for the cache misses.
+  static List<TableCell> _decodeSources(List<String> sources) {
+    final out = List<TableCell?>.filled(sources.length, null);
+    final unique = <String>[];
+    final positions = <String, List<int>>{};
+    for (var i = 0; i < sources.length; i++) {
+      final source = sources[i];
+      final hit = _sourceCache.remove(source);
+      if (hit != null) {
+        _sourceCache[source] = hit; // LRU bump
+        out[i] = hit;
+        continue;
+      }
+      final at = positions[source];
+      if (at == null) {
+        positions[source] = [i];
+        unique.add(source);
+      } else {
+        at.add(i);
+      }
+    }
+    if (unique.isEmpty) return out.cast<TableCell>();
+    final fresh = _decodeViaEngine(unique);
+    if (fresh == null) {
+      // Engine unavailable (02 §5.2): show the source as literal text. Not
+      // cached, so a later call with a working engine still decodes it.
+      for (var k = 0; k < unique.length; k++) {
+        final cell = TableCell(unique[k]);
+        for (final i in positions[unique[k]]!) {
+          out[i] = cell;
+        }
+      }
+      return out.cast<TableCell>();
+    }
+    for (var k = 0; k < unique.length; k++) {
+      final cell = TableCell(fresh[k].text, fresh[k].marks);
+      _remember(_sourceCache, unique[k], cell);
+      for (final i in positions[unique[k]]!) {
+        out[i] = cell;
+      }
+    }
+    return out.cast<TableCell>();
+  }
+
+  /// [TableCell] → stored form. Cached by content; only new cells reach the
+  /// engine, so a width drag over a 500-cell table makes zero engine calls.
+  static List<Object> _encodeCells(List<TableCell> cells) {
+    final out = List<Object?>.filled(cells.length, null);
+    final missed = <int>[];
+    for (var i = 0; i < cells.length; i++) {
+      final hit = _storedCache.remove(cells[i]);
+      if (hit != null) {
+        _storedCache[cells[i]] = hit; // LRU bump
+        out[i] = hit;
+      } else {
+        missed.add(i);
+      }
+    }
+    if (missed.isEmpty) return out.cast<Object>();
+    final pending = <InlineText>[
+      for (final i in missed) (text: cells[i].text, marks: cells[i].marks),
+    ];
+    List<Object>? encoded;
+    try {
+      encoded = markdownCodec.encodeCells(pending);
+    } on MarkdownCodecException {
+      encoded = null;
+    } on StateError {
+      encoded = null; // codec never initialized: same degradation
+    }
+    if (encoded == null) {
+      // Object form is always correct, just less compact — and readers take it
+      // as-is, so nothing is lost.
+      for (var k = 0; k < missed.length; k++) {
+        final cell = cells[missed[k]];
+        final stored = _storedObject(cell);
+        out[missed[k]] = stored;
+        _remember(_storedCache, cell, stored);
+      }
+      return out.cast<Object>();
+    }
+    // I3 exception (G1 #4, decided in S4 T4.8 option b): a mark-free cell is
+    // stored as Markdown source, which a reader parses back. Store that source
+    // only when re-reading it reproduces the cell EXACTLY; otherwise (a bare
+    // URL / e-mail gains a `link` mark, leading/trailing spaces are trimmed,
+    // …) store the object form, so editing and re-opening agree.
+    final stringAt = <int>[];
+    final strings = <String>[];
+    for (var k = 0; k < missed.length; k++) {
+      final value = encoded[k];
+      if (value is String) {
+        stringAt.add(missed[k]);
+        strings.add(value);
+      } else {
+        out[missed[k]] = value;
+      }
+    }
+    if (strings.isNotEmpty) {
+      final decoded = _decodeSources(strings);
+      for (var k = 0; k < strings.length; k++) {
+        final i = stringAt[k];
+        final cell = cells[i];
+        out[i] = decoded[k] == cell ? strings[k] : _storedObject(cell);
+      }
+    }
+    for (var k = 0; k < missed.length; k++) {
+      _remember(_storedCache, cells[missed[k]], out[missed[k]]!);
+    }
+    return out.cast<Object>();
+  }
+
+  static Map<String, dynamic> _storedObject(TableCell cell) => {
+    'text': cell.text,
+    'marks': marksToJson(cell.marks),
+  };
+
+  static List<InlineText>? _decodeViaEngine(List<String> sources) {
+    try {
+      return markdownCodec.decodeCells(sources);
+    } on MarkdownCodecException {
+      return null;
+    } on StateError {
+      return null;
+    }
+  }
+
+  static void _remember<K, V>(LinkedHashMap<K, V> cache, K key, V value) {
+    cache.remove(key);
+    cache[key] = value;
+    while (cache.length > _cacheLimit) {
+      cache.remove(cache.keys.first);
+    }
   }
 
   static List<double> _normalizeWidths(List<double>? widths, int columns) {
@@ -176,105 +378,4 @@ class TableData {
     }
     return [for (final w in widths) w <= 0 ? 1.0 : w];
   }
-}
-
-/// Parse a GFM table beginning at [index]; returns the table and the index just
-/// past it.
-({TableData table, int next}) parseGfmTable(List<String> lines, int index) {
-  final header = _splitRow(lines[index]);
-  // Column alignment from the separator's colons.
-  final rawAligns = [
-    for (final c in _splitRow(lines[index + 1]))
-      switch ((c.trim().startsWith(':'), c.trim().endsWith(':'))) {
-        (true, true) => 'center',
-        (false, true) => 'right',
-        (true, false) => 'left',
-        _ => '',
-      },
-  ];
-  var i = index + 2; // skip header + separator
-  final body = <List<String>>[];
-  while (i < lines.length) {
-    final row = lines[i].trim();
-    if (row.isEmpty) break;
-    // A pipe-less line still belongs to the table unless it starts another
-    // block (GFM: the table breaks at a blank line or a new block).
-    if (!row.contains('|') && _startsBlock(row)) break;
-    body.add(_splitRow(row));
-    i++;
-  }
-  // The header defines the column count (GFM): longer rows truncate,
-  // shorter ones pad.
-  final width = header.isEmpty ? 1 : header.length;
-  List<String> fit(List<String> r) => [
-        for (var k = 0; k < width; k++) k < r.length ? r[k] : '',
-      ];
-  final rows = <List<String>>[fit(header), for (final r in body) fit(r)];
-  return (
-    table: TableData(
-      rows,
-      header: true,
-      aligns: rawAligns.any((a) => a.isNotEmpty) ? fit(rawAligns) : null,
-    ),
-    next: i
-  );
-}
-
-bool _startsBlock(String content) {
-  if (content.startsWith('#') ||
-      content.startsWith('>') ||
-      content.startsWith('```') ||
-      content.startsWith('~~~') ||
-      content.startsWith('- ') ||
-      content.startsWith('* ') ||
-      content.startsWith('+ ')) {
-    return true;
-  }
-  return _isThematicBreak(content);
-}
-
-/// Spec thematic break: 3+ of the same -/*/_ with optional spaces between.
-/// Moved here from the deleted Dart parser (T3.6); `_startsBlock` is its only
-/// remaining user.
-bool _isThematicBreak(String line) {
-  var marker = '';
-  var count = 0;
-  for (var i = 0; i < line.length; i++) {
-    final c = line[i];
-    if (c == ' ' || c == '\t') continue;
-    if (c == '-' || c == '*' || c == '_') {
-      if (marker.isEmpty) {
-        marker = c;
-      } else if (c != marker) {
-        return false;
-      }
-      count++;
-    } else {
-      return false;
-    }
-  }
-  return count >= 3;
-}
-
-List<String> _splitRow(String line) {
-  var s = line.trim();
-  if (s.startsWith('|')) s = s.substring(1);
-  if (s.endsWith('|')) s = s.substring(0, s.length - 1);
-  // Split on unescaped pipes.
-  final cells = <String>[];
-  final buffer = StringBuffer();
-  for (var i = 0; i < s.length; i++) {
-    final ch = s[i];
-    if (ch == r'\' && i + 1 < s.length && s[i + 1] == '|') {
-      buffer.write('|');
-      i++;
-    } else if (ch == '|') {
-      cells.add(buffer.toString().trim());
-      buffer.clear();
-    } else {
-      buffer.write(ch);
-    }
-  }
-  cells.add(buffer.toString().trim());
-  return cells;
 }

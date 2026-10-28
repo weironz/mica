@@ -4,20 +4,11 @@
 // stays at the call site — it is a flat string join with no engine involved.
 library;
 
-import 'marks.dart';
 import 'table.dart';
 
-/// A clipboard table cell in its stored form: inline Markdown parsed to
-/// `{text, marks}` when it carries formatting, plain string otherwise —
-/// the same encoding `TableData._encodeCell` stores, so the engine's
-/// Clipboard dialect sees exactly what a copied whole table would.
-Object cellClipboardMarkdown(String source) {
-  final parsed = parseInline(source);
-  if (parsed.marks.isEmpty) return source;
-  return {'text': parsed.text, 'marks': marksToJson(parsed.marks)};
-}
-
-/// The selected rectangle of [table] as one `table` block's data map.
+/// The selected rectangle of [table] as one `table` block's data map. Cells are
+/// encoded by the same [TableData.toBlockData] a whole-table copy uses, so the
+/// engine's Clipboard dialect sees exactly what it would there.
 Map<String, dynamic> tableAreaData(
   TableData table, {
   required int r0,
@@ -25,14 +16,13 @@ Map<String, dynamic> tableAreaData(
   required int r1,
   required int c1,
 }) {
-  return {
-    'rows': [
-      for (var r = r0; r <= r1 && r < table.rows.length; r++)
-        if (r >= 0)
-          [
-            for (var c = c0; c <= c1 && c < table.rows[r].length; c++)
-              if (c >= 0) cellClipboardMarkdown(table.rows[r][c]),
-          ],
-    ],
-  };
+  final rows = <List<TableCell>>[
+    for (var r = r0; r <= r1 && r < table.rows.length; r++)
+      if (r >= 0)
+        [
+          for (var c = c0; c <= c1 && c < table.rows[r].length; c++)
+            if (c >= 0) table.rows[r][c],
+        ],
+  ];
+  return {'rows': TableData(rows).toBlockData()['rows']};
 }

@@ -25,7 +25,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -34,7 +34,7 @@ import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/render.dart';
-import 'package:mica_flutter/editor/table.dart';
+import 'package:mica_flutter/editor/table.dart' show TableCell, TableData;
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:pasteboard/pasteboard.dart';
 import '../test/support/markdown_codec.dart';
@@ -365,8 +365,8 @@ void main() {
     // ---------------------------------------------------------------- 4 ----
     // Mica copy → paste round-trips formula, footnote, nested list, table.
     final table = TableData([
-      ['H1', 'H2'],
-      [r'**cell**', 'x'],
+      [TableCell('H1'), TableCell('H2')],
+      [TableCell(r'**cell**'), TableCell('x')],
     ]);
     final docNodes = [
       EditorNode(
@@ -449,8 +449,8 @@ void main() {
       }),
       EditorNode(id: 'l', kind: 'bulleted_list', text: 'item'),
       EditorNode(id: 't', kind: 'table', text: '', data: TableData([
-        ['A', 'B'],
-        ['1', '2'],
+        [TableCell('A'), TableCell('B')],
+        [TableCell('1'), TableCell('2')],
       ]).toBlockData()),
     ]);
     final md = c.documentMarkdown();

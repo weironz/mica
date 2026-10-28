@@ -1,4 +1,6 @@
-import 'package:flutter/widgets.dart';
+// `hide TableCell`: Flutter's own TableCell widget would otherwise collide with
+// the editor's cell model (table.dart). Mica never uses Flutter's Table widget.
+import 'package:flutter/widgets.dart' hide TableCell;
 
 import 'marks.dart';
 import 'controller.dart';
@@ -8,25 +10,23 @@ import '../ui/theme_tokens.dart';
 import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
 /// A [TextEditingController] for a table cell that renders inline MARKS live
-/// (WYSIWYG) instead of the raw Markdown source. Its [text] is the clean cell
-/// text; [marks] holds the bold / italic / code / strike / link ranges; and
-/// [buildTextSpan] paints them — so **bold** shows as bold WHILE you edit and the
-/// `**` / `` ` `` delimiters never appear (unlike the old Typora-style source
-/// field). Built from a cell's stored raw Markdown; [serialize] turns
-/// (text, marks) back into Markdown for storage, so the cell schema and the GFM
-/// round-trip are unchanged — only the editing surface becomes WYSIWYG.
+/// (WYSIWYG) instead of Markdown source. Its [text] is the clean cell text;
+/// [marks] holds the bold / italic / code / strike / link ranges; and
+/// [buildTextSpan] paints them — so **bold** shows as bold WHILE you edit and
+/// the `**` / `` ` `` delimiters never appear (unlike a source field). Built
+/// from the cell's [TableCell] — the same text + marks model a paragraph uses —
+/// so no Markdown is parsed here; [cell] hands the model back for storage.
 ///
 /// Text edits are diffed (common prefix/suffix) so the mark ranges shift with
 /// the text, reusing the same [shiftMarks] the main editor uses.
 class CellEditController extends TextEditingController {
-  CellEditController(String rawMarkdown) {
-    final parsed = parseInline(rawMarkdown);
-    marks = parsed.marks;
-    // Seed the clean text. `_seeding` suppresses the edit-diff below: the marks
-    // from parseInline already match this text, they must not be re-shifted.
+  CellEditController(TableCell cell) {
+    marks = cell.marks;
+    // Seed the clean text. `_seeding` suppresses the edit-diff below: the
+    // marks already match this text, they must not be re-shifted.
     value = TextEditingValue(
-      text: parsed.text,
-      selection: TextSelection.collapsed(offset: parsed.text.length),
+      text: cell.text,
+      selection: TextSelection.collapsed(offset: cell.text.length),
     );
     _seeding = false;
   }
@@ -36,8 +36,8 @@ class CellEditController extends TextEditingController {
 
   bool _seeding = true;
 
-  /// The cell content as raw Markdown, for storage.
-  String serialize() => inlineToMarkdown(text, marks);
+  /// The cell content as the editor model, for storage and comparisons.
+  TableCell get cell => TableCell(text, List.unmodifiable(marks));
 
   /// HTML for the selected clean text, clipping the existing marks rather than
   /// re-parsing text as Markdown (which loses code and treats literal syntax
@@ -126,12 +126,12 @@ class CellEditController extends TextEditingController {
 /// Stable cell address and draft reconciliation, independent of the overlay.
 class CellEditSession {
   CellEditSession(this.document, this.tableId, this.row, this.col, this.editor)
-      : _opening = editor.serialize();
+      : _opening = editor.cell;
   final EditorController document;
   final String tableId;
   final int row, col;
   final CellEditController editor;
-  String _opening;
+  TableCell _opening;
   bool rebasing = false;
 
   int resolve() {
@@ -143,25 +143,25 @@ class CellEditSession {
 
   void preview() {
     final at = resolve();
-    if (!rebasing && at >= 0) document.previewTableCell(at, row, col, editor.serialize());
+    if (!rebasing && at >= 0) document.previewTableCell(at, row, col, editor.cell);
   }
 
   void commit() {
     final at = resolve();
-    if (at >= 0 && editor.serialize() != _opening) document.setTableCell(at, row, col, editor.serialize());
+    if (at >= 0 && editor.cell != _opening) document.setTableCell(at, row, col, editor.cell);
   }
 
   bool reconcile() {
     final at = resolve();
     if (at < 0) return false;
-    if (editor.serialize() == _opening) {
+    if (editor.cell == _opening) {
       final fresh = CellEditController(TableData.fromBlock(document.nodes[at].data).rows[row][col]);
       rebasing = true;
       // Set the value first: the setter shifts stale marks for its own diff,
       // then the correct remote marks replace them in the same snapshot.
       editor.value = fresh.value;
       editor.marks = fresh.marks;
-      _opening = fresh.serialize();
+      _opening = fresh.cell;
       rebasing = false;
       fresh.dispose();
     } else {

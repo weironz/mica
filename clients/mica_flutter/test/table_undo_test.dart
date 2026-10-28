@@ -23,8 +23,8 @@ EditorController _doc() {
       kind: 'table',
       text: '',
       data: TableData([
-        ['A', 'B'],
-        ['a1', 'b1'],
+        [TableCell('A'), TableCell('B')],
+        [TableCell('a1'), TableCell('b1')],
       ], header: true, widths: [1.0, 1.0]).toBlockData(),
     ),
   ]);
@@ -56,12 +56,12 @@ void main() {
 
   test('undo restores a cell edit', () {
     final c = _doc();
-    c.setTableCell(0, 1, 0, 'changed');
-    expect(TableData.fromBlock(c.nodes.single.data).rows[1][0], 'changed');
+    c.setTableCell(0, 1, 0, TableCell('changed'));
+    expect(TableData.fromBlock(c.nodes.single.data).rows[1][0].text, 'changed');
 
     c.undo();
     expect(
-      TableData.fromBlock(c.nodes.single.data).rows[1][0],
+      TableData.fromBlock(c.nodes.single.data).rows[1][0].text,
       'a1',
       reason: 'undo must put the cell text back',
     );

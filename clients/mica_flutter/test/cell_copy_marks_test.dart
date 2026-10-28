@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/table.dart';
 import 'package:mica_flutter/markdown/markdown_codec.dart';
@@ -13,8 +12,7 @@ import 'support/markdown_codec.dart';
 /// cell renders as literal `**你好**`. The fix renders each cell through the
 /// engine's Clipboard dialect (`renderClipboardHtml`), the same conversion the
 /// cell-edit Ctrl+C uses. This pins that conversion end-to-end for the content
-/// that broke. (It used the old Dart `inlineToHtml` writer until S3 T3.6; the
-/// assertion is unchanged, only the writer is the engine now.)
+/// that broke.
 void main() {
   setUpAll(useNativeMarkdownCodec);
   test('cell markdown -> copy html -> paste keeps MARKS, not literal source', () {
@@ -24,13 +22,15 @@ void main() {
       r'**真·GPU 掉卡**',
       r'`GPUMissing` 带外',
     ]) {
-      // What the table copy writes into the clipboard html (the <td>).
-      final table = TableData(
-        [
+      // What the table copy writes into the clipboard html (the <td>). The
+      // table comes from a stored document whose cells are legacy source
+      // strings — the shape the regression shipped against.
+      final table = TableData.fromBlock({
+        'rows': [
           ['A', 'B'],
           [cellMd, 'x'],
         ],
-      );
+      });
       final html = markdownCodec.renderClipboardHtml([
         (kind: 'table', text: '', data: table.toBlockData()),
       ]);
@@ -56,12 +56,11 @@ void main() {
       expect(tableBlock.kind, 'table');
       // Decoded through TableData, the same path the editor uses, rather than
       // casting the raw block data: a cell WITH marks is `{text, marks}` (the
-      // shape paragraphs use and Rust `crates/markdown` emits), and only a
-      // mark-free cell stays a plain string.
-      final cellText = TableData.fromBlock(tableBlock.data).rows[1].first;
-      final marks = parseInline(cellText).marks;
-      expect(marks, isNotEmpty,
-          reason: 'pasted cell <<$cellText>> must parse back to a mark');
+      // shape paragraphs use and the engine emits), and only a mark-free cell
+      // stays a plain string.
+      final cell = TableData.fromBlock(tableBlock.data).rows[1].first;
+      expect(cell.marks, isNotEmpty,
+          reason: 'pasted cell <<${cell.text}>> must carry a mark');
     }
   });
 }

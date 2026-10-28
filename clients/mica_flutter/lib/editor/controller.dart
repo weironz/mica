@@ -1094,9 +1094,8 @@ class EditorController extends ChangeNotifier {
               .map(
                 (row) => row
                     .map(
-                      (cell) => parseInline(
-                        cell,
-                      ).text.replaceAll('\t', ' ').replaceAll('\n', ' '),
+                      (cell) =>
+                          cell.text.replaceAll('\t', ' ').replaceAll('\n', ' '),
                     )
                     .join('\t'),
               )
@@ -1548,7 +1547,7 @@ class EditorController extends ChangeNotifier {
   // Tables
   // ---------------------------------------------------------------------------
 
-  void setTableCell(int index, int row, int col, String text) {
+  void setTableCell(int index, int row, int col, TableCell cell) {
     if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
@@ -1556,7 +1555,7 @@ class EditorController extends ChangeNotifier {
     final table = TableData.fromBlock(node.data);
     if (row < 0 || row >= table.rows.length) return;
     if (col < 0 || col >= table.rows[row].length) return;
-    table.rows[row][col] = text;
+    table.rows[row][col] = cell;
     node.data = table.toBlockData();
     _sendNow([
       {'type': 'update_block', 'block_id': node.id, 'data': node.data},
@@ -1564,12 +1563,12 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Update a cell's text LOCALLY — relayout only, NO op sent. Used while a cell
-  /// is being edited so its row grows/shrinks live as you type (each newline
+  /// Update a cell LOCALLY — relayout only, NO op sent. Used while a cell is
+  /// being edited so its row grows/shrinks live as you type (each newline
   /// re-measures the cell and re-lays out the table). The value is persisted by
-  /// [setTableCell] on commit. A no-op when the text is unchanged, so a mere
+  /// [setTableCell] on commit. A no-op when the content is unchanged, so a mere
   /// selection change doesn't trigger a relayout.
-  void previewTableCell(int index, int row, int col, String text) {
+  void previewTableCell(int index, int row, int col, TableCell cell) {
     if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
@@ -1577,8 +1576,8 @@ class EditorController extends ChangeNotifier {
     final table = TableData.fromBlock(node.data);
     if (row < 0 || row >= table.rows.length) return;
     if (col < 0 || col >= table.rows[row].length) return;
-    if (table.rows[row][col] == text) return;
-    table.rows[row][col] = text;
+    if (table.rows[row][col] == cell) return;
+    table.rows[row][col] = cell;
     node.data = table.toBlockData();
     notifyListeners(); // relayout only; not persisted until commit
   }
@@ -1616,8 +1615,8 @@ class EditorController extends ChangeNotifier {
         c <= c1 && c < table.rows[r].length;
         c++
       ) {
-        if (table.rows[r][c].isNotEmpty) {
-          table.rows[r][c] = '';
+        if (!table.rows[r][c].isEmpty) {
+          table.rows[r][c] = TableCell.empty;
           changed = true;
         }
       }

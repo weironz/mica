@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
@@ -30,7 +30,7 @@ Future<void> pumpEditor(WidgetTester t, List<DocOp> ops,
       rootBlockId: 'root',
       nodes: [table
         ? EditorNode(id: 't', kind: 'table', text: '',
-            data: TableData([['h'], ['abcdef']]).toBlockData())
+            data: TableData([[TableCell('h')], [TableCell('abcdef')]]).toBlockData())
         : EditorNode(id: 'a', kind: 'paragraph', text: 'abcdef')],
       version: 0, canEdit: true,
       onApplyOperations: (batch) async => ops.addAll(batch),

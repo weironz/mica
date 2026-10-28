@@ -1,6 +1,6 @@
 import 'dart:ui' as ui;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -168,8 +168,8 @@ void main() {
           kind: 'table',
           text: '',
           data: TableData([
-            ['header', 'other'],
-            ['value', 'body'],
+            [TableCell('header'), TableCell('other')],
+            [TableCell('value'), TableCell('body')],
           ]).toBlockData(),
         ),
       ], tokens: tokens);
@@ -210,8 +210,8 @@ void main() {
             kind: 'table',
             text: '',
             data: TableData([
-              ['header'],
-              ['body'],
+              [TableCell('header')],
+              [TableCell('body')],
             ]).toBlockData(),
           ),
         ], tokens: tokens);
