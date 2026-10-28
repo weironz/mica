@@ -237,7 +237,12 @@ class TableData {
     return out.cast<TableCell>();
   }
 
-  /// Decode source strings, deduplicated, one engine call for the cache misses.
+  /// Decode source strings, deduplicated, one engine call per cache misses.
+  /// The batch is capped so one call's wire JSON stays small: decoding 500
+  /// cells in one batch spent ~10 ms in the Dart-side jsonDecode of the
+  /// single result array (many small decodes are cheaper than one big one).
+  static const int _batchSize = 64;
+
   static List<TableCell> _decodeSources(List<String> sources) {
     final out = List<TableCell?>.filled(sources.length, null);
     final unique = <String>[];
@@ -258,24 +263,27 @@ class TableData {
         at.add(i);
       }
     }
-    if (unique.isEmpty) return out.cast<TableCell>();
-    final fresh = _decodeViaEngine(unique);
-    if (fresh == null) {
-      // Engine unavailable (02 §5.2): show the source as literal text. Not
-      // cached, so a later call with a working engine still decodes it.
-      for (var k = 0; k < unique.length; k++) {
-        final cell = TableCell(unique[k]);
-        for (final i in positions[unique[k]]!) {
+    for (var start = 0; start < unique.length; start += _batchSize) {
+      final end = (start + _batchSize).clamp(0, unique.length);
+      final batch = unique.sublist(start, end);
+      final fresh = _decodeViaEngine(batch);
+      if (fresh == null) {
+        // Engine unavailable (02 §5.2): show the source as literal text.
+        // Not cached, so a later call with a working engine still decodes it.
+        for (var k = 0; k < batch.length; k++) {
+          final cell = TableCell(batch[k]);
+          for (final i in positions[batch[k]]!) {
+            out[i] = cell;
+          }
+        }
+        continue;
+      }
+      for (var k = 0; k < batch.length; k++) {
+        final cell = TableCell(fresh[k].text, fresh[k].marks);
+        _remember(_sourceCache, batch[k], cell);
+        for (final i in positions[batch[k]]!) {
           out[i] = cell;
         }
-      }
-      return out.cast<TableCell>();
-    }
-    for (var k = 0; k < unique.length; k++) {
-      final cell = TableCell(fresh[k].text, fresh[k].marks);
-      _remember(_sourceCache, unique[k], cell);
-      for (final i in positions[unique[k]]!) {
-        out[i] = cell;
       }
     }
     return out.cast<TableCell>();
