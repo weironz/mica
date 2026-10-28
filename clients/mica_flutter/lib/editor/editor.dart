@@ -11,7 +11,6 @@ import 'package:flutter/services.dart';
 import 'controller.dart';
 import 'ai_edits.dart';
 import 'highlight.dart';
-import 'markdown.dart';
 import '../markdown/markdown_codec.dart' show markdownCodec, MarkdownCodecException, BlockSpec;
 import 'marks.dart';
 import 'paste_repair.dart';

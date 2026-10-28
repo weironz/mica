@@ -1,7 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 EditorController _fresh(List<EditorNode> nodes) {
   final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
@@ -12,7 +13,9 @@ EditorController _fresh(List<EditorNode> nodes) {
 EditorNode _p(String id, String text) =>
     EditorNode(id: id, kind: 'paragraph', text: text);
 
+
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('typing ``` or ~~~ converts to a code block', () {
     for (final fence in ['```', '~~~']) {
       final c = _fresh([_p('a', '')]);
@@ -84,8 +87,8 @@ void main() {
     expect(c.nodes.every((n) => n.kind != 'divider'), isTrue);
   });
 
-  test('markdownToBlocks emits a divider block', () {
-    final blocks = markdownToBlocks('a\n\n---\n\nb');
+  test('the codec emits a divider block', () {
+    final blocks = markdownCodec.parseBlocks('a\n\n---\n\nb');
     expect(blocks.map((b) => b.kind).toList(),
         ['paragraph', 'divider', 'paragraph']);
   });

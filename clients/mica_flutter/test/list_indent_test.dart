@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'support/markdown_codec.dart';
 
@@ -80,8 +80,8 @@ void main() {
     expect(c.nodes[2].data['checked'], false);
   });
 
-  test('markdownToBlocks parses nesting; copy prefix round-trips it', () {
-    final specs = markdownToBlocks('- a\n  - b\n    1. c\n- d');
+  test('the codec parses nesting; copy prefix round-trips it', () {
+    final specs = markdownCodec.parseBlocks('- a\n  - b\n    1. c\n- d');
     expect([for (final s in specs) s.data['indent'] ?? 0], [0, 1, 2, 0]);
     final c = _doc([
       for (final s in specs)
@@ -100,7 +100,7 @@ void main() {
     final copied = c.selectionText();
     expect(copied, '- a\n    - b\n        1. c\n- d');
     expect(
-      [for (final s in markdownToBlocks(copied)) s.data['indent'] ?? 0],
+      [for (final s in markdownCodec.parseBlocks(copied)) s.data['indent'] ?? 0],
       [0, 1, 2, 0],
       reason: 'copy → paste must preserve the nesting it started with',
     );

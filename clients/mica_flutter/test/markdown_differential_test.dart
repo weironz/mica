@@ -1,27 +1,24 @@
-// S0 differential harness: the same Markdown input through BOTH implementations.
-//
-// The Dart mirror (`lib/editor/markdown.dart`) and the Rust engine must agree on
-// how an input becomes blocks and how those blocks serialize back. Today they
-// are two implementations of one grammar; S3/S4 delete the Dart one. This test
-// is the safety net for that deletion: every difference it finds is a behaviour
-// change a user would see.
+// S0 differential harness, shrunk at S3 T3.6: the Dart block parser and both
+// of its serializers are gone, so the block / Markdown / clipboard-HTML
+// comparisons cannot exist any more. What remains is the INLINE layer, which
+// still has a Dart implementation (`parseInline` / `inlineToMarkdown` in
+// marks.dart) until S4 deletes the last table-cell users. When that lands,
+// this file and its baseline go too.
 //
 // S2 T2.12 reaches Rust through the real MarkdownCodec facade. The raw engine
 // no longer passes through yrs, so CRDT normalization is not a category here.
-// Block parsing/serialization and inline parsing/serialization are compared.
 //
 // Outputs (not committed — `build/` is ignored):
 //   build/differential/report.json   every difference, one record per field
 //   build/differential/summary.md    counts per category + first 10 examples
 //
-// The S2 ratchet records full values for the raw codec protocol. Original S0
-// keys/counts remain in fixtures/differential/s0_baseline.json; the transition
-// audit explains every added/removed/changed field. A difference may disappear,
-// but new keys OR changed values fail. Regenerate deliberately, with a reason:
+// The ratchet records full values for the raw codec protocol. A difference may
+// disappear, but new keys OR changed values fail. Regenerate deliberately,
+// with a reason:
 //
 //   S0_WRITE_BASELINE=1 flutter test test/markdown_differential_test.dart
 //
-// @TestOn('vm') — native FFI, no web equivalent until S2.
+// @TestOn('vm') — native FFI, no web equivalent.
 @TestOn('vm')
 library;
 
@@ -29,9 +26,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
-import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/src/rust/frb_generated.dart';
@@ -39,7 +33,6 @@ import 'package:mica_flutter/src/rust/frb_generated.dart';
 import 'support/markdown_corpus.dart';
 import 'support/markdown_codec.dart';
 
-typedef _Blocks = List<({String kind, String text, Map<String, dynamic> data})>;
 typedef _Diff = ({
   String id,
   String category,
@@ -51,26 +44,14 @@ typedef _Diff = ({
 const String _reportDir = 'build/differential';
 const String _baselinePath = 'test/differential_baseline.json';
 
+/// The ratchet protocol tag. Bumped at S3 T3.6 when the baseline shrank to the
+/// inline layer: an old baseline (block/serialize categories included) must be
+/// refused instead of silently compared against a different corpus surface.
+const String _protocol = 's3-inline-only-v1';
+
 void main() {
   setUpAll(useNativeMarkdownCodec);
   tearDownAll(() async => RustLib.dispose());
-
-  test('parse divergence is not counted as Rust own roundtrip failure', () {
-    final sample = markdownCorpus(
-      fuzzCount: 0,
-    ).firstWhere((entry) => entry.id == 'spec:6');
-    final diffs = _diffOne(sample.id, sample.markdown);
-    expect(
-      diffs.any((d) => d.category == 'kind'),
-      isTrue,
-      reason: 'this fixture must exercise different parser outputs',
-    );
-    expect(
-      diffs.where((d) => d.category == 'roundtrip'),
-      isEmpty,
-      reason: 'both implementations round-trip their own distinct blocks',
-    );
-  });
 
   test('ratchet detects same-key value changes beyond character 300', () {
     final long = 'x' * 400;
@@ -124,7 +105,7 @@ void main() {
         category: actual.category,
         field: actual.field,
         dart: '',
-        rust: 'quote:2:{"quote":3,"li":0}',
+        rust: 'quote:3:{"quote":2,"li":0}',
       )),
       isFalse,
     );
@@ -176,19 +157,18 @@ void main() {
   });
 
   test(
-    'Dart mirror and Rust engine agree on every corpus input',
+    'Dart inline layer and Rust engine agree on every corpus input',
     timeout: const Timeout(Duration(minutes: 20)),
     () {
       final corpus = markdownCorpus();
       final diffs = <_Diff>[];
 
       for (final entry in corpus) {
-        diffs.addAll(_diffOne(entry.id, entry.markdown));
+        diffs.addAll(_diffInline(entry.id, entry.markdown));
         _requireCompleteCorpus(diffs.length);
       }
 
       final counts = _countByCategory(diffs);
-      expect(counts['crdt-normalization'] ?? 0, 0);
       _writeReport(corpus.length, counts, diffs);
       _checkRatchet(counts, diffs);
     },
@@ -207,134 +187,6 @@ void _requireCompleteCorpus(int differenceCount) {
 // ---------------------------------------------------------------------------
 // One input
 // ---------------------------------------------------------------------------
-
-List<_Diff> _diffOne(String id, String markdown) {
-  final out = <_Diff>[];
-
-  // --- parse -------------------------------------------------------------
-  _Blocks? dartBlocks;
-  _Blocks? rustBlocks;
-  Object? dartError;
-  Object? rustError;
-  try {
-    dartBlocks = _normalizeDartBlocks(markdownToBlocks(markdown));
-  } catch (error) {
-    dartError = error;
-  }
-  try {
-    rustBlocks = _normalizeDartBlocks(markdownCodec.parseBlocks(markdown));
-  } catch (error) {
-    rustError = error;
-  }
-  if (dartError != null || rustError != null) {
-    return [
-      (
-        id: id,
-        category: 'crash',
-        field: dartError != null ? 'dart' : 'rust',
-        dart: _short(dartError?.toString() ?? ''),
-        rust: _short(rustError?.toString() ?? ''),
-      ),
-    ];
-  }
-
-  out.addAll(_compareBlocks(id, dartBlocks!, rustBlocks!));
-  out.addAll(_diffInline(id, markdown));
-
-  // --- serialization -----------------------------------------------------
-  // Both serializers get the SAME Dart parse result: the Rust facade receives
-  // BlockSpec directly, and the Dart controller is loaded with those specs.
-  String? dartMd;
-  String? rustMd;
-  try {
-    dartMd = _dartDocumentMarkdown(dartBlocks);
-  } catch (error) {
-    out.add((
-      id: id,
-      category: 'crash',
-      field: 'dart-serialize',
-      dart: _short(error.toString()),
-      rust: '',
-    ));
-  }
-  try {
-    rustMd = _rustExportMarkdown(dartBlocks);
-  } catch (error) {
-    out.add((
-      id: id,
-      category: 'crash',
-      field: 'rust-serialize',
-      dart: '',
-      rust: _short(error.toString()),
-    ));
-  }
-  if (dartMd != null && rustMd != null && dartMd != rustMd) {
-    out.add((
-      id: id,
-      category: 'export',
-      field: 'markdown',
-      dart: _short(dartMd),
-      rust: _short(rustMd),
-    ));
-  }
-
-  // --- round trip --------------------------------------------------------
-  // Each side's own output must re-parse to its own blocks.
-  if (dartMd != null) {
-    try {
-      final again = _normalizeDartBlocks(markdownToBlocks(dartMd));
-      final rt = _compareBlocks(id, again, dartBlocks);
-      out.addAll([
-        for (final d in rt)
-          (
-            id: d.id,
-            category: 'roundtrip',
-            field: 'dart:${d.field}',
-            dart: d.dart,
-            rust: d.rust,
-          ),
-      ]);
-    } catch (error) {
-      out.add((
-        id: id,
-        category: 'roundtrip',
-        field: 'dart:crash',
-        dart: _short(error.toString()),
-        rust: '',
-      ));
-    }
-  }
-  {
-    try {
-      // The export comparison above deliberately serializes Dart's blocks on
-      // both sides. Rust's OWN round trip must start from its own parse result;
-      // otherwise a parse disagreement is counted again as a round-trip error.
-      final rustOwnMd = _rustExportMarkdown(rustBlocks);
-      final again = _normalizeDartBlocks(markdownCodec.parseBlocks(rustOwnMd));
-      final rt = _compareBlocks(id, again, rustBlocks);
-      out.addAll([
-        for (final d in rt)
-          (
-            id: d.id,
-            category: 'roundtrip',
-            field: 'rust:${d.field}',
-            dart: d.dart,
-            rust: d.rust,
-          ),
-      ]);
-    } catch (error) {
-      out.add((
-        id: id,
-        category: 'roundtrip',
-        field: 'rust:crash',
-        dart: '',
-        rust: _short(error.toString()),
-      ));
-    }
-  }
-
-  return out;
-}
 
 List<_Diff> _diffInline(String id, String source) {
   try {
@@ -390,10 +242,6 @@ List<_Diff> _diffInline(String id, String source) {
 // Normalization (02-architecture §3.4)
 // ---------------------------------------------------------------------------
 
-_Blocks _normalizeDartBlocks(List<BlockSpec> specs) => [
-  for (final s in specs) (kind: s.kind, text: s.text, data: _sortMarks(s.data)),
-];
-
 /// Marks compare by `(start, end, type)`; other data keys by value.
 Map<String, dynamic> _sortMarks(Map<String, dynamic> data) {
   final marks = data['marks'];
@@ -427,90 +275,6 @@ Object? _canonicalValue(Object? v) {
 }
 
 String _canon(Object? v) => jsonEncode(_canonicalValue(v));
-
-// ---------------------------------------------------------------------------
-// Comparison
-// ---------------------------------------------------------------------------
-
-List<_Diff> _compareBlocks(String id, _Blocks dart, _Blocks rust) {
-  final out = <_Diff>[];
-  final count = dart.length > rust.length ? dart.length : rust.length;
-  for (var i = 0; i < count; i++) {
-    if (i >= dart.length || i >= rust.length) {
-      out.add((
-        id: id,
-        category: 'block-count',
-        field: 'block@$i',
-        dart: _short(i < dart.length ? _describe(dart[i]) : ''),
-        rust: _short(i < rust.length ? _describe(rust[i]) : ''),
-      ));
-      continue;
-    }
-    final d = dart[i];
-    final r = rust[i];
-    if (d.kind != r.kind) {
-      out.add((
-        id: id,
-        category: 'kind',
-        field: 'block@$i.kind',
-        dart: d.kind,
-        rust: r.kind,
-      ));
-    }
-    if (d.text != r.text) {
-      out.add((
-        id: id,
-        category: 'text',
-        field: 'block@$i.text',
-        dart: _short(d.text),
-        rust: _short(r.text),
-      ));
-    }
-    final dKeys = d.data.keys.toSet();
-    final rKeys = r.data.keys.toSet();
-    for (final key in {...dKeys, ...rKeys}) {
-      final dv = d.data[key];
-      final rv = r.data[key];
-      if (_canon(dv) == _canon(rv)) continue;
-      out.add((
-        id: id,
-        category: key == 'marks' ? 'marks' : 'data:$key',
-        field: 'block@$i.data.$key',
-        dart: _short(_canon(dv)),
-        rust: _short(_canon(rv)),
-      ));
-    }
-  }
-  return out;
-}
-
-String _describe(({String kind, String text, Map<String, dynamic> data}) b) =>
-    '${b.kind}:${b.text.length}:${_canon(b.data)}';
-
-// ---------------------------------------------------------------------------
-// Serialization through each implementation
-// ---------------------------------------------------------------------------
-
-String _dartDocumentMarkdown(_Blocks blocks) {
-  final controller = EditorController(rootBlockId: 'root', onOps: (_) async {});
-  try {
-    controller.load([
-      for (var i = 0; i < blocks.length; i++)
-        EditorNode(
-          id: 'd$i',
-          kind: blocks[i].kind,
-          text: blocks[i].text,
-          data: Map<String, dynamic>.from(blocks[i].data),
-        ),
-    ]);
-    return controller.documentMarkdown();
-  } finally {
-    controller.dispose();
-  }
-}
-
-String _rustExportMarkdown(_Blocks blocks) =>
-    markdownCodec.serializeBlocks(blocks);
 
 // ---------------------------------------------------------------------------
 // Report + ratchet
@@ -549,7 +313,7 @@ void _writeReport(int corpusSize, Map<String, int> counts, List<_Diff> diffs) {
   final summary = StringBuffer()
     ..writeln('# Differential report')
     ..writeln()
-    ..writeln('Corpus: $corpusSize inputs.')
+    ..writeln('Corpus: $corpusSize inputs. Inline layer only (S3 T3.6).')
     ..writeln()
     ..writeln('| category | count |')
     ..writeln('| --- | --- |');
@@ -582,7 +346,7 @@ void _checkRatchet(Map<String, int> counts, List<_Diff> diffs) {
   if (writeMode) {
     baselineFile.writeAsStringSync(
       const JsonEncoder.withIndent(' ').convert({
-        'protocol': 's2-codec-full-values-v1',
+        'protocol': _protocol,
         'counts': counts,
         'entries': (diffs.map(_entryKey).toSet().toList()..sort()),
         'values': {
@@ -606,7 +370,7 @@ void _checkRatchet(Map<String, int> counts, List<_Diff> diffs) {
       jsonDecode(baselineFile.readAsStringSync()) as Map<String, dynamic>;
   final baseCounts = (baseline['counts'] as Map).cast<String, int>();
   final baseEntries = (baseline['entries'] as List).cast<String>().toSet();
-  expect(baseline['protocol'], 's2-codec-full-values-v1');
+  expect(baseline['protocol'], _protocol);
   final values = baseline['values'] as Map<String, dynamic>;
   final changed = [
     for (final d in diffs)

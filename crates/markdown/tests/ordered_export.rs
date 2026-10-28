@@ -49,6 +49,31 @@ fn later_source_numbers_do_not_restart_a_commonmark_list() {
   assert_eq!(out, "1. one\n2. two\n3. three");
 }
 
+/// Migrated from the Dart mirror's `numbered_continuation_test.dart` (S3 T3.9):
+/// an ordered run interrupted by nested bullets, a same-level bullet, or a
+/// fenced code block RESUMES at its source number — the resumed item carries
+/// `data.start` so export and the editor's copy path keep the visible number.
+#[test]
+fn interrupted_ordered_runs_carry_their_resume_number() {
+  for src in [
+    "1. 请审阅三种安装启动模式：\n   - [SNSD](https://a)\n   - [SNMD](https://b)\n   - MNMD（当前文档）\n2. 预安装检查清单\n",
+    "1. one\n- bullet\n2. two\n",
+    "1. one\n\n```\nx\n```\n\n2. two\n",
+  ] {
+    let snapshot = import_markdown(src, "root");
+    let last = snapshot
+      .blocks
+      .iter()
+      .rfind(|b| b.kind == "numbered_list")
+      .unwrap_or_else(|| panic!("no numbered item in: {src}"));
+    assert_eq!(
+      last.data.get("start").and_then(|v| v.as_i64()),
+      Some(2),
+      "the broken run resumes at 2: {src}"
+    );
+  }
+}
+
 #[test]
 fn numbered_export_preserves_html_for_container_children_and_wide_markers() {
   for src in [

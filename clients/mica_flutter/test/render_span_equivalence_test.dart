@@ -1,22 +1,25 @@
 // Differential equivalence test for the issue-#61 render rewrite.
 //
-// inlineToMarkdown / inlineToHtml used to pick each span by a min-over-all-
-// marks scan (O(M) per span, O(M²) per export). The rewrite streams the
-// start-sorted marks with an active heap + start-group ties instead. This
-// file pins OUTPUT equivalence by fuzzing both against the old algorithm,
-// whose mark-selection scan is reproduced as `_oldRenderSpan*` below.
-// The old selection scan remains the reference. Serialization rules fixed by
-// public round-trip regressions in markdown_engine_regressions_test.dart are
-// shared with production: dollar-bearing math, whitespace code padding and
-// decoded destination/title escaping. The old $$$ form loses a literal dollar.
+// inlineToMarkdown used to pick each span by a min-over-all-marks scan (O(M)
+// per span, O(M²) per export). The rewrite streams the start-sorted marks with
+// an active heap + start-group ties instead. This file pins OUTPUT equivalence
+// by fuzzing the live serializer against the old algorithm, whose mark-
+// selection scan is reproduced as `oldInlineToMarkdown` below. The old
+// selection scan remains the reference. Serialization rules fixed by public
+// round-trip regressions in markdown_engine_regressions_test.dart are shared
+// with production: dollar-bearing math, whitespace code padding and decoded
+// destination/title escaping. The old $$$ form loses a literal dollar.
+//
+// The HTML half of this comparison died with the Dart HTML writer in S3 T3.6:
+// the clipboard's text/html flavor is produced by the Rust engine now.
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
 
 // ---------------------------------------------------------------------------
-// OLD implementation (verbatim from the pre-#61 _renderSpan/_renderSpanHtml),
-// renamed so it can sit next to the new one.
+// OLD implementation (verbatim from the pre-#61 _renderSpan), renamed so it
+// can sit next to the new one.
 // ---------------------------------------------------------------------------
 
 bool _oldRendersTerminal(String kind) =>
@@ -145,88 +148,6 @@ String _oldRenderSpan(String text, int lo, int hi, List<Mark> marks) {
   return out.toString();
 }
 
-String oldInlineToHtml(String text, List<Mark> marks) =>
-    _oldRenderSpanHtml(text, 0, text.length, marks);
-
-String _oldRenderSpanHtml(String text, int lo, int hi, List<Mark> marks) {
-  final out = StringBuffer();
-  var pos = lo;
-  while (pos < hi) {
-    Mark? pick;
-    var ps = 0, pe = 0;
-    for (final m in marks) {
-      final s = m.start < pos ? pos : m.start;
-      final e = m.end > hi ? hi : m.end;
-      if (e <= s) continue;
-      if (pick == null || s < ps || (s == ps && e >= pe)) {
-        pick = m;
-        ps = s;
-        pe = e;
-      }
-    }
-    if (pick == null) {
-      out.write(escapeHtml(text.substring(pos, hi)));
-      break;
-    }
-    out.write(escapeHtml(text.substring(pos, ps)));
-    if (pick.type == 'code') {
-      out.write('<code>${escapeHtml(text.substring(ps, pe))}</code>');
-      pos = pe;
-      continue;
-    }
-    if (pick.type == 'math') {
-      out.write(
-        '<span data-mica-math="1">\$'
-        '${escapeHtml(text.substring(ps, pe))}\$</span>',
-      );
-      pos = pe;
-      continue;
-    }
-    if (pick.type == 'footnote') {
-      final label = pick.href ?? text.substring(ps, pe);
-      out.write(
-        '<sup data-mica-footnote="${escapeHtmlAttr(label)}">'
-        '${escapeHtml(text.substring(ps, pe))}</sup>',
-      );
-      pos = pe;
-      continue;
-    }
-    if (pick.type == 'html') {
-      out.write(escapeHtml(text.substring(ps, pe)));
-      pos = pe;
-      continue;
-    }
-    final inner = [
-      for (final m in marks)
-        if (!identical(m, pick) && m.end > ps && m.start < pe) m,
-    ];
-    final body = _oldRenderSpanHtml(text, ps, pe, inner);
-    switch (pick.type) {
-      case 'bold':
-        out.write('<strong>$body</strong>');
-      case 'italic':
-        out.write('<em>$body</em>');
-      case 'strike':
-        out.write('<s>$body</s>');
-      case 'link':
-        out.write('<a href="${escapeHtmlAttr(pick.href ?? '')}">$body</a>');
-      case 'image':
-        out.write(
-          '<img src="${escapeHtmlAttr(pick.href ?? '')}" '
-          'alt="${escapeHtmlAttr(text.substring(ps, pe))}">',
-        );
-      default:
-        out.write(body);
-    }
-    pos = pe;
-  }
-  return out.toString();
-}
-
-// ---------------------------------------------------------------------------
-// Fuzz
-// ---------------------------------------------------------------------------
-
 void main() {
   const alphabet = [
     'a',
@@ -330,16 +251,4 @@ void main() {
     }
   });
 
-  test('inlineToHtml matches the pre-rewrite scan (fuzz)', () {
-    final rng = Random(3761);
-    for (var i = 0; i < 4000; i++) {
-      final text = randomText(rng);
-      final marks = randomMarks(rng, text.length);
-      expect(
-        inlineToHtml(text, marks),
-        oldInlineToHtml(text, marks),
-        reason: 'html case $i text=$text marks=$marks',
-      );
-    }
-  });
 }

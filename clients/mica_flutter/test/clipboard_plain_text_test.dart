@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/cell_edit_controller.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'support/markdown_codec.dart';
@@ -41,7 +41,7 @@ void main() {
       );
       final text = c.nodes.first.text.substring(range.$1, end);
       expect(c.selectionClipboardText(), text);
-      final pasted = markdownToBlocks(htmlToMarkdown(c.selectionHtml())).single;
+      final pasted = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml())).single;
       expect(pasted.text, text);
       expect(
         marksFromData(pasted.data).where((m) => m.type == 'code'),
@@ -65,7 +65,7 @@ void main() {
       c.selectionClipboardText(),
       'run a`b then `literal`\n\n# comment\n``` literal',
     );
-    final blocks = markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
+    final blocks = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml()));
     expect(blocks.map((b) => b.kind), ['paragraph', 'code_block']);
     expect(blocks.last.text, c.nodes.last.text);
     expect(marksFromData(blocks.first.data).single.type, 'code');

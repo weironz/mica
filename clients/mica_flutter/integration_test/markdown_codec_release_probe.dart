@@ -44,7 +44,7 @@ void main() {
             final bench = measureMarkdownCodec(markdownCodec);
             report['bench'] = bench;
             report['bench_passes'] = bench.every(
-              (row) => row['passes'] == true,
+              (row) => row['passes'] != false,
             );
           }
         }

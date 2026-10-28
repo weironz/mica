@@ -1,19 +1,20 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
-import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/table.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'support/markdown_codec.dart';
 
 /// Regression: Ctrl+A → copy → paste a page containing a table turned every
 /// bold/inline-code cell into visible markdown source (`**你好**`). Cause:
-/// `_tableHtml` (used by `selectionHtml`, the text/html copy flavor) emitted the
-/// cell's raw markdown via `escapeHtml` — `<td>**你好**</td>` — instead of real
-/// html marks, so the paste side's `htmlToMarkdown` backslash-escaped the `**`
-/// (`\*\*你好\*\*`), which a table cell renders as literal `**你好**`. The fix
-/// renders each cell through `inlineToHtml(parseInline(cell))`, the same
-/// conversion `_copyTableArea` and the cell-edit Ctrl+C already use. This pins
-/// that conversion end-to-end for the content that broke.
+/// the clipboard's text/html flavor emitted the cell's raw markdown —
+/// `<td>**你好**</td>` — instead of real html marks, so the paste side's
+/// `htmlToMarkdown` backslash-escaped the `**` (`\*\*你好\*\*`), which a table
+/// cell renders as literal `**你好**`. The fix renders each cell through the
+/// engine's Clipboard dialect (`renderClipboardHtml`), the same conversion the
+/// cell-edit Ctrl+C uses. This pins that conversion end-to-end for the content
+/// that broke. (It used the old Dart `inlineToHtml` writer until S3 T3.6; the
+/// assertion is unchanged, only the writer is the engine now.)
 void main() {
   setUpAll(useNativeMarkdownCodec);
   test('cell markdown -> copy html -> paste keeps MARKS, not literal source', () {
@@ -23,12 +24,24 @@ void main() {
       r'**真·GPU 掉卡**',
       r'`GPUMissing` 带外',
     ]) {
-      // What the fixed table/cell copy writes into the <td> (and clipboard html).
-      final parsed = parseInline(cellMd);
-      final cellHtml = inlineToHtml(parsed.text, parsed.marks);
+      // What the table copy writes into the clipboard html (the <td>).
+      final table = TableData(
+        [
+          ['A', 'B'],
+          [cellMd, 'x'],
+        ],
+      );
+      final html = markdownCodec.renderClipboardHtml([
+        (kind: 'table', text: '', data: table.toBlockData()),
+      ]);
+      // The cell must carry REAL html marks, never the raw markdown source.
+      expect(html.contains('**'), isFalse,
+          reason: 'raw markdown source in clipboard html for <<$cellMd>>: $html');
+      expect(html.contains('&lt;strong'), isFalse,
+          reason: 'escaped tags instead of marks for <<$cellMd>>: $html');
 
       // What the paste side turns that html back into.
-      final md = htmlToMarkdown('<table><tr><td>$cellHtml</td></tr></table>');
+      final md = htmlToMarkdown(html);
 
       // The bug: a backslash-escaped `\*` / `` \` `` in the round-tripped
       // markdown — which renders as literal source, not a mark.
@@ -38,20 +51,14 @@ void main() {
           reason: 'code must not come back backslash-escaped for <<$cellMd>>: $md');
 
       // And the pasted cell text carries real marks, not literal `**`/`` ` ``.
-      final blocks = markdownToBlocks(md);
-      final table = blocks.single;
-      expect(table.kind, 'table');
+      final blocks = markdownCodec.parseBlocks(md);
+      final tableBlock = blocks.single;
+      expect(tableBlock.kind, 'table');
       // Decoded through TableData, the same path the editor uses, rather than
-      // casting the raw block data. That cast was `as String` and had been
-      // failing since cells gained the unified stored form: a cell WITH marks
-      // is now `{text, marks}` (the shape paragraphs use and Rust
-      // `crates/markdown` emits), and only a mark-free cell stays a plain
-      // string.
-      //
-      // So the crash was good news in disguise — getting a Map here is exactly
-      // the marks surviving. The assertion below is unchanged; only the way the
-      // text is obtained is.
-      final cellText = TableData.fromBlock(table.data).rows.first.first;
+      // casting the raw block data: a cell WITH marks is `{text, marks}` (the
+      // shape paragraphs use and Rust `crates/markdown` emits), and only a
+      // mark-free cell stays a plain string.
+      final cellText = TableData.fromBlock(tableBlock.data).rows[1].first;
       final marks = parseInline(cellText).marks;
       expect(marks, isNotEmpty,
           reason: 'pasted cell <<$cellText>> must parse back to a mark');

@@ -7,7 +7,6 @@
 /// requiring a cell-addressing rewrite of the selection engine.
 library;
 
-import 'markdown.dart' show isThematicBreak;
 import 'marks.dart'
     show inlineToMarkdown, marksFromData, marksToJson, parseInline;
 
@@ -179,21 +178,6 @@ class TableData {
   }
 }
 
-/// True if [lines] starting at [index] look like a GFM table (a `|`-row followed
-/// by a `| --- |` separator row).
-bool looksLikeGfmTable(List<String> lines, int index) {
-  if (index + 1 >= lines.length) return false;
-  final first = lines[index].trim();
-  final sep = lines[index + 1].trim();
-  if (!first.contains('|')) return false;
-  // Separator: cells of only -, :, spaces.
-  final sepCells = _splitRow(sep);
-  if (sepCells.isEmpty) return false;
-  // The separator's cell count must MATCH the header row (GFM rule).
-  if (sepCells.length != _splitRow(first).length) return false;
-  return sepCells.every((c) => RegExp(r'^:?-{1,}:?$').hasMatch(c.trim()));
-}
-
 /// Parse a GFM table beginning at [index]; returns the table and the index just
 /// past it.
 ({TableData table, int next}) parseGfmTable(List<String> lines, int index) {
@@ -246,34 +230,30 @@ bool _startsBlock(String content) {
       content.startsWith('+ ')) {
     return true;
   }
-  return isThematicBreak(content);
+  return _isThematicBreak(content);
 }
 
-/// Serialize a table to GFM pipe-table Markdown.
-String tableToMarkdown(TableData table) {
-  if (table.rows.isEmpty) return '';
-  // A soft line break inside a cell can't be a real newline (a pipe row is
-  // single-line) → `<br>`, the GFM convention; literal `|` → `\|`.
-  String row(List<String> cells) =>
-      '| ${cells.map((c) => c.replaceAll('|', r'\|').replaceAll('\n', '<br>').trim()).join(' | ')} |';
-  final out = StringBuffer();
-  out.writeln(row(table.rows.first));
-  final sep = [
-    for (var c = 0; c < table.columns; c++)
-      switch (table.aligns != null && c < table.aligns!.length
-          ? table.aligns![c]
-          : '') {
-        'center' => ':---:',
-        'right' => '---:',
-        'left' => ':---',
-        _ => '---',
-      },
-  ];
-  out.writeln('| ${sep.join(' | ')} |');
-  for (final r in table.rows.skip(1)) {
-    out.writeln(row(r));
+/// Spec thematic break: 3+ of the same -/*/_ with optional spaces between.
+/// Moved here from the deleted Dart parser (T3.6); `_startsBlock` is its only
+/// remaining user.
+bool _isThematicBreak(String line) {
+  var marker = '';
+  var count = 0;
+  for (var i = 0; i < line.length; i++) {
+    final c = line[i];
+    if (c == ' ' || c == '\t') continue;
+    if (c == '-' || c == '*' || c == '_') {
+      if (marker.isEmpty) {
+        marker = c;
+      } else if (c != marker) {
+        return false;
+      }
+      count++;
+    } else {
+      return false;
+    }
   }
-  return out.toString().trimRight();
+  return count >= 3;
 }
 
 List<String> _splitRow(String line) {

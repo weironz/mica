@@ -16,11 +16,12 @@
 // and Dart is the mirror; a case added there belongs here too, or the two
 // engines start disagreeing about what one document means.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+import 'support/markdown_codec.dart';
 
 /// The single block a one-paragraph source parses to: its text and its marks.
 ({String text, String marks}) one(String md) {
-  final specs = markdownToBlocks(md);
+  final specs = markdownCodec.parseBlocks(md);
   expect(specs.length, 1, reason: 'one block for: $md');
   final spec = specs.single;
   return (
@@ -30,6 +31,7 @@ import 'package:mica_flutter/editor/markdown.dart';
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('a single tilde between word characters is a range', () {
     final r = one('中文 1个汉字 ≈ 1~2个 Token，英文 1个单词 ≈ 1~2个 Token');
     expect(r.text, contains('1~2个 Token，'), reason: 'tildes survive');

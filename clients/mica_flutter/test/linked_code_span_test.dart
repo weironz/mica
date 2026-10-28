@@ -16,17 +16,19 @@
 // Both engines had the same bug; `crates/markdown/tests/linked_code_span.rs`
 // is the Rust half of this pair and asserts the identical strings.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/marks.dart';
+import 'support/markdown_codec.dart';
 
 /// import → export, at the inline layer where the bug lived.
 String roundTrip(String src) {
-  final blocks = markdownToBlocks(src);
+  final blocks = markdownCodec.parseBlocks(src);
   expect(blocks.length, 1, reason: 'these cases are all one paragraph');
   return inlineToMarkdown(blocks.first.text, marksFromData(blocks.first.data));
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('a link wrapping a whole code span keeps its url', () {
     expect(roundTrip('[`a`](/x)'), '[`a`](/x)');
     expect(

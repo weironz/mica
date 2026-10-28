@@ -1,13 +1,18 @@
 import 'dart:convert';
 
-import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart' as mirror;
-import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'markdown_bench_inputs.dart';
 
-/// Same code-unit slices and controller setup as the S0 benchmark. Run both
-/// sides inside the same process/compiler mode; never divide VM by AOT times.
+/// Exact-input codec benchmark, codec-only since S3 T3.6.
+///
+/// Until T3.6 every row was a RATIO against the Dart mirror (codec ≤ 1.2×
+/// mirror), which was the P0/M2 budget shape. The mirror is deleted, so the
+/// ratio has no denominator; the rows are now absolute ceilings with generous
+/// headroom over the measured VM-JIT numbers (parse.87 0.024 ms, parse.10k
+/// 4.7 ms, parse.100k 52 ms, serialize.10k 2.7 ms, html.10k 3.1 ms — see
+/// build/wp-d-vm-codec-bench.json before this change). They catch a gross
+/// regression, not a few percent: pinpointing ratios again would need a second
+/// implementation, which is exactly what S3 removed.
 List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
   String repeatTo(int length) {
     final text = StringBuffer();
@@ -33,120 +38,52 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
 
   final rows = <Map<String, Object>>[];
   var checksum = 0;
-  // Equal untimed warmup before paired measurements so VM tiering does not
-  // compare one cold implementation against the other's optimized loop.
-  for (var i = 0; i < 3000; i++) {
-    mirror.markdownToBlocks(hotPath87);
-    codec.parseBlocks(hotPath87);
-  }
-  void pair(
-    String item,
-    void Function() dart,
-    void Function() rust,
-    int batch,
-  ) {
-    // Alternate order across rounds to reduce first-run bias.
-    final ratios = <double>[];
-    final dartTimes = <double>[], codecTimes = <double>[];
-    for (var round = 0; round < 3; round++) {
-      late double d, c;
-      if (round.isEven) {
-        d = median(dart, batch);
-        c = median(rust, batch);
-      } else {
-        c = median(rust, batch);
-        d = median(dart, batch);
-      }
-      dartTimes.add(d);
-      codecTimes.add(c);
-      ratios.add(c / d);
-    }
-    final ratioOrder = [...ratios]..sort();
-    final row = <String, Object>{
+  void row(String item, double codecMs, double budgetMs) {
+    final pass = codecMs <= budgetMs;
+    rows.add({
       'item': item,
-      'dart_ms': dartTimes,
-      'codec_ms': codecTimes,
-      'ratios': ratios,
-      'ratio_median': ratioOrder[1],
-      'budget_ratio': 1.2,
-      'passes': ratios.every((r) => r <= 1.2),
-    };
-    rows.add(row);
+      'codec_ms': codecMs,
+      'budget_ms': budgetMs,
+      'passes': pass,
+    });
     // ignore: avoid_print
-    print(jsonEncode(row));
+    print(jsonEncode(rows.last));
   }
 
-  for (final (label, text, batch) in [
-    ('87', hotPath87, 256),
-    ('10k', repeatTo(10000), 8),
-    ('100k', repeatTo(100000), 2),
+  for (final (label, text, batch, budget) in [
+    ('87', hotPath87, 256, 0.1),
+    ('10k', repeatTo(10000), 8, 15.0),
+    ('100k', repeatTo(100000), 2, 150.0),
   ]) {
-    pair(
-      'parse.$label',
-      () {
-        final result = mirror.markdownToBlocks(text);
-        checksum ^=
-            result.length + (result.isEmpty ? 0 : result.first.text.length);
-      },
-      () {
-        final result = codec.parseBlocks(text);
-        checksum ^=
-            result.length + (result.isEmpty ? 0 : result.first.text.length);
-      },
-      batch,
-    );
+    final ms = median(() {
+      final result = codec.parseBlocks(text);
+      checksum ^=
+          result.length + (result.isEmpty ? 0 : result.first.text.length);
+    }, batch);
+    row('parse.$label', ms, budget);
   }
-  final blocks = mirror.markdownToBlocks(repeatTo(10000));
-  final controller = EditorController(rootBlockId: 'root', onOps: (_) async {});
-  try {
-    controller.load([
-      for (var i = 0; i < blocks.length; i++)
-        EditorNode(
-          id: 'b$i',
-          kind: blocks[i].kind,
-          text: blocks[i].text,
-          data: Map<String, dynamic>.from(blocks[i].data),
-        ),
-    ]);
-    if (controller.nodes.isNotEmpty) {
-      final last = controller.nodes.length - 1;
-      controller.selection = DocSelection(
-        anchor: const DocPosition(0, 0),
-        focus: DocPosition(last, controller.nodes[last].text.length),
-      );
-    }
-    pair(
-      'serialize.10k',
-      () {
-        checksum ^= controller.documentMarkdown().length;
-      },
-      () {
-        checksum ^= codec.serializeBlocks(blocks).length;
-      },
-      8,
-    );
-    pair(
-      'html.10k',
-      () {
-        checksum ^= controller.selectionHtml().length;
-      },
-      () {
-        checksum ^= codec.renderClipboardHtml(blocks).length;
-      },
-      8,
-    );
-  } finally {
-    controller.dispose();
-  }
-  final inlineMs = median(() {
-    checksum ^= codec.parseInline(hotPath87).text.length;
-  }, 256);
-  rows.add({
-    'item': 'boundary.inline87',
-    'codec_ms': inlineMs,
-    'budget_ms': 0.1,
-    'passes': inlineMs <= 0.1,
-  });
+  final blocks = codec.parseBlocks(repeatTo(10000));
+  row(
+    'serialize.10k',
+    median(() {
+      checksum ^= codec.serializeBlocks(blocks).length;
+    }, 8),
+    10.0,
+  );
+  row(
+    'html.10k',
+    median(() {
+      checksum ^= codec.renderClipboardHtml(blocks).length;
+    }, 8),
+    10.0,
+  );
+  row(
+    'boundary.inline87',
+    median(() {
+      checksum ^= codec.parseInline(hotPath87).text.length;
+    }, 256),
+    0.1,
+  );
   // ignore: avoid_print
   print(jsonEncode({'consumed_checksum': checksum}));
   return rows;

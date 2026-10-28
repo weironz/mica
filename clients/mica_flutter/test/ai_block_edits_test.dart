@@ -4,8 +4,9 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/ai_edits.dart';
 import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 EditorNode _node(
   String id,
@@ -39,7 +40,9 @@ List<Map<String, dynamic>> _state(EditorController controller) => [
 
 Future<void> _drain() => Future<void>.delayed(Duration.zero);
 
+
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   late EditorController controller;
   late List<List<Map<String, dynamic>>> writes;
 

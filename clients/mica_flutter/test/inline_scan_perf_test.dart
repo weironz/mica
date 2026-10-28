@@ -19,6 +19,9 @@
 // they catch a quadratic return without flaking on a loaded CI box.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/marks.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+
+import 'support/markdown_codec.dart';
 
 int parseMs(String src) {
   final sw = Stopwatch()..start();
@@ -29,6 +32,7 @@ int parseMs(String src) {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('unclosed \\( openers are linear', () {
     final ms = parseMs(r'\(' * 20000);
     expect(
@@ -100,7 +104,7 @@ void main() {
     // an unclosed `\(` used to cost a full tail scan at every opener.
     final src = r'\(' * 20000;
     final sw = Stopwatch()..start();
-    final spans = mathRunSpans(src);
+    final spans = markdownCodec.mathRunSpans(src);
     final ms = (sw..stop()).elapsedMilliseconds;
     expect(spans, isEmpty, reason: 'sanity: nothing ever closes');
     expect(
@@ -152,15 +156,21 @@ void main() {
     );
   });
 
-  test('InlineToHtml with many marks is not quadratic', () {
+  test('clipboard HTML with many marks is not quadratic', () {
     final text = 'ab' * 8000;
     final marks = [
       for (var k = 0; k < 8000; k++) Mark(2 * k, 2 * k + 2, 'italic'),
     ];
+    final block = (
+      kind: 'paragraph',
+      text: text,
+      data: <String, dynamic>{'marks': marksToJson(marks)},
+    );
     final sw = Stopwatch()..start();
-    final rendered = inlineToHtml(text, marks);
+    final rendered = markdownCodec.renderClipboardHtml([block]);
     final ms = (sw..stop()).elapsedMilliseconds;
-    expect(rendered, '<em>ab</em>' * 8000, reason: 'HTML output is unchanged');
+    expect(rendered, '<p>${'<em>ab</em>' * 8000}</p>',
+        reason: 'HTML output is unchanged');
     expect(
       ms < 3000,
       isTrue,

@@ -44,25 +44,8 @@ void main() {
     expect(inlineToMarkdown(q.text, q.marks), r'**a \* b**');
   });
 
-  test('block leaders escape so paragraphs stay paragraphs', () {
-    expect(escapeBlockLeader('- not a list'), r'\- not a list');
-    expect(escapeBlockLeader('1. not numbered'), r'1\. not numbered');
-    expect(escapeBlockLeader('# not heading'), r'\# not heading');
-    expect(escapeBlockLeader('---'), r'\---');
-    expect(escapeBlockLeader('plain'), 'plain');
-  });
-
-  // P1-1: setext underlines + spaced dividers used to slip through the Dart
-  // mirror and, on re-import, promoted the PREVIOUS paragraph to a heading.
-  // These must match crates/markdown/src/lib.rs escape_block_leader.
-  test('setext underlines and spaced dividers escape too', () {
-    expect(escapeBlockLeader('==='), r'\===');
-    expect(escapeBlockLeader('=='), r'\==');
-    expect(escapeBlockLeader('--'), r'\--'); // setext H2 underline
-    expect(escapeBlockLeader('-- -'), r'\-- -'); // thematic break (spaces stripped)
-    expect(escapeBlockLeader('####### x'), r'\####### x'); // any # count, like Rust
-    // Non-underline lines with `=` stay untouched.
-    expect(escapeBlockLeader('a = b'), 'a = b');
-    expect(escapeBlockLeader('=x='), '=x=');
-  });
+  // The two `escapeBlockLeader` tests that used to close this file went with
+  // the Dart block writer in S3 T3.6. Rust equivalent:
+  // crates/markdown/tests/escape_round_trip.rs (block leaders escape so a
+  // paragraph line `===`/`--`/`# x` cannot become a block on re-import).
 }

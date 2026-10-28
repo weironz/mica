@@ -1,13 +1,13 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'support/markdown_codec.dart';
 
 void main() {
   setUpAll(useNativeMarkdownCodec);
   String copy(String source, {int first = 0}) {
-    final blocks = markdownToBlocks(source);
+    final blocks = markdownCodec.parseBlocks(source);
     final nodes = [
       for (var i = 0; i < blocks.length; i++)
         EditorNode(
@@ -54,7 +54,7 @@ void main() {
         '999999999. first\n1. second',
       ]) {
         final copied = copy(source);
-        Object shape(String markdown) => markdownToBlocks(
+        Object shape(String markdown) => markdownCodec.parseBlocks(
           markdown,
         ).map((b) => {'kind': b.kind, 'text': b.text, 'data': b.data}).toList();
         expect(shape(copied), shape(source), reason: copied);

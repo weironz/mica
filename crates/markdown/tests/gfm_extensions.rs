@@ -182,3 +182,32 @@ fn a_single_tilde_between_word_characters_is_a_range() {
     "double tilde still strikes: {marks}"
   );
 }
+
+/// Migrated from the Dart mirror's `link_parity_test.dart` (S3 T3.9): the
+/// nested-link guard is about explicit constructs, and it applies to the
+/// REFERENCE form too. A label holding a real link refuses the outer
+/// reference; the inner link stays, and the dangling `[ref]` resolves as a
+/// shortcut reference on its own.
+#[test]
+fn a_link_inside_a_reference_label_refuses_the_outer_reference() {
+  let snap = import_markdown("[foo [bar](/u)][ref]\n\n[ref]: /r", "root");
+  let b = snap
+    .blocks
+    .iter()
+    .find(|b| b.id != "root")
+    .expect("one paragraph")
+    .clone();
+  assert_eq!(
+    b.text, "[foo bar]ref",
+    "outer reference refused, inner kept"
+  );
+  let marks = b.data.get("marks").cloned().unwrap_or_default().to_string();
+  assert!(
+    marks.contains("\"start\":5") && marks.contains("\"end\":8") && marks.contains("/u"),
+    "the inner link survives: {marks}"
+  );
+  assert!(
+    marks.contains("\"start\":9") && marks.contains("\"end\":12") && marks.contains("/r"),
+    "the shortcut reference resolves on its own: {marks}"
+  );
+}

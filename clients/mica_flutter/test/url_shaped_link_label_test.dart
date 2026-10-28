@@ -23,18 +23,21 @@
 // Rust is the authority and Dart is the mirror; a case added there belongs here
 // too, or the two engines start disagreeing about what one document means.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+import 'support/markdown_codec.dart';
 
 /// The single block a one-paragraph source parses to: its text and its marks.
 ({String text, List<Map<String, dynamic>> marks}) one(String md) {
-  final specs = markdownToBlocks(md);
+  final specs = markdownCodec.parseBlocks(md);
   expect(specs.length, 1, reason: 'one block for: $md');
   final spec = specs.single;
   final marks = (spec.data['marks'] as List?) ?? const [];
   return (text: spec.text, marks: marks.cast<Map<String, dynamic>>());
 }
 
+
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('a URL-shaped label is still a link', () {
     final r = one('[https://github.com/a/b](https://github.com/a/b)');
     expect(
