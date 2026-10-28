@@ -39,12 +39,15 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
     mirror.markdownToBlocks(hotPath87);
     codec.parseBlocks(hotPath87);
   }
-  void pair(
+  Map<String, Object> pair(
     String item,
     void Function() dart,
     void Function() rust,
-    int batch,
-  ) {
+    int batch, {
+    double? budgetRatio,
+    double? budgetMs,
+  }) {
+    assert(budgetRatio == null || budgetMs == null);
     // Alternate order across rounds to reduce first-run bias.
     final ratios = <double>[];
     final dartTimes = <double>[], codecTimes = <double>[];
@@ -68,16 +71,43 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
       'codec_ms': codecTimes,
       'ratios': ratios,
       'ratio_median': ratioOrder[1],
-      'budget_ratio': 1.2,
-      'passes': ratios.every((r) => r <= 1.2),
     };
+    if (budgetRatio != null) {
+      row['budget_ratio'] = budgetRatio;
+      row['passes'] = ratios.every((r) => r <= budgetRatio);
+    } else if (budgetMs != null) {
+      row['budget_ms'] = budgetMs;
+      row['passes'] = codecTimes.every((t) => t <= budgetMs);
+    } else {
+      // 02 §7 gates a clipboard copy by its COMBINED absolute time (copy.10k
+      // below); one half's Dart ratio is recorded, not judged.
+      row['passes'] = true;
+    }
     rows.add(row);
     // ignore: avoid_print
     print(jsonEncode(row));
+    return row;
   }
 
+  // 02 §7: pasting 10k/100k is judged against Dart ×1.2; an 87-char parse is a
+  // single boundary crossing, budgeted absolutely — at ~0.016 ms the Dart side
+  // is mostly timer floor, so the ratio measures the FFI toll, not the engine.
+  pair(
+    'parse.87',
+    () {
+      final result = mirror.markdownToBlocks(hotPath87);
+      checksum ^=
+          result.length + (result.isEmpty ? 0 : result.first.text.length);
+    },
+    () {
+      final result = codec.parseBlocks(hotPath87);
+      checksum ^=
+          result.length + (result.isEmpty ? 0 : result.first.text.length);
+    },
+    256,
+    budgetMs: 0.1,
+  );
   for (final (label, text, batch) in [
-    ('87', hotPath87, 256),
     ('10k', repeatTo(10000), 8),
     ('100k', repeatTo(100000), 2),
   ]) {
@@ -94,6 +124,7 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
             result.length + (result.isEmpty ? 0 : result.first.text.length);
       },
       batch,
+      budgetRatio: 1.2,
     );
   }
   final blocks = mirror.markdownToBlocks(repeatTo(10000));
@@ -115,7 +146,7 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
         focus: DocPosition(last, controller.nodes[last].text.length),
       );
     }
-    pair(
+    final serialize = pair(
       'serialize.10k',
       () {
         checksum ^= controller.documentMarkdown().length;
@@ -125,7 +156,7 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
       },
       8,
     );
-    pair(
+    final html = pair(
       'html.10k',
       () {
         checksum ^= controller.selectionHtml().length;
@@ -135,6 +166,22 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
       },
       8,
     );
+    // 02 §7: copying a 10k selection is one frame for BOTH halves together,
+    // desktop and web; the ratio to Dart is recorded, never a gate.
+    final copyTimes = [
+      for (var round = 0; round < 3; round++)
+        (serialize['codec_ms']! as List<double>)[round] +
+            (html['codec_ms']! as List<double>)[round],
+    ];
+    final copy = <String, Object>{
+      'item': 'copy.10k',
+      'codec_ms': copyTimes,
+      'budget_ms': 16,
+      'passes': copyTimes.every((t) => t <= 16),
+    };
+    rows.add(copy);
+    // ignore: avoid_print
+    print(jsonEncode(copy));
   } finally {
     controller.dispose();
   }
