@@ -262,9 +262,13 @@ write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:
           "mica-cli-$version-linux-x64:$h_lin"
 expect_publish_refusal 'sha256-windows.txt'
 
-# Complete and correct: publish.
-write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
-          "mica-cli-$version-linux-x64:$h_lin" "sha256-windows.txt:" "sha256-linux.txt:"
+# Complete and correct: publish. gh reports digests with the algorithm prefix
+# (`sha256:<hex>`); comparing that verbatim against a bare-hex manifest refused
+# a release whose two sides were identical (v0.13.69).
+write_tsv "Mica-Setup-$version.exe:sha256:$h_setup" \
+          "mica-cli-$version-windows-x64.exe:sha256:$h_win" \
+          "mica-cli-$version-linux-x64:sha256:$h_lin" \
+          "sha256-windows.txt:" "sha256-linux.txt:"
 publish
 [ -s "$fixture_root/gh.log" ] || { echo 'FAIL: publish did not edit a complete release' >&2; exit 1; }
 
