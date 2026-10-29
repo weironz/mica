@@ -326,32 +326,11 @@ class TableData {
       }
       return out.cast<Object>();
     }
-    // I3 exception (G1 #4, decided in S4 T4.8 option b): a mark-free cell is
-    // stored as Markdown source, which a reader parses back. Store that source
-    // only when re-reading it reproduces the cell EXACTLY; otherwise (a bare
-    // URL / e-mail gains a `link` mark, leading/trailing spaces are trimmed,
-    // …) store the object form, so editing and re-opening agree.
-    final stringAt = <int>[];
-    final strings = <String>[];
+    // The engine picks the stored form (compact source only when it reads back
+    // exactly, else `{text, marks: []}` — I3, S4 option b), so it is used as is.
     for (var k = 0; k < missed.length; k++) {
-      final value = encoded[k];
-      if (value is String) {
-        stringAt.add(missed[k]);
-        strings.add(value);
-      } else {
-        out[missed[k]] = value;
-      }
-    }
-    if (strings.isNotEmpty) {
-      final decoded = _decodeSources(strings);
-      for (var k = 0; k < strings.length; k++) {
-        final i = stringAt[k];
-        final cell = cells[i];
-        out[i] = decoded[k] == cell ? strings[k] : _storedObject(cell);
-      }
-    }
-    for (var k = 0; k < missed.length; k++) {
-      _remember(_storedCache, cells[missed[k]], out[missed[k]]!);
+      out[missed[k]] = encoded[k];
+      _remember(_storedCache, cells[missed[k]], encoded[k]);
     }
     return out.cast<Object>();
   }

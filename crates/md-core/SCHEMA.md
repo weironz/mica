@@ -102,9 +102,12 @@ store their own keys alongside these (Mica's editor stores table geometry).
 | shape | meaning | reading |
 | --- | --- | --- |
 | JSON string | unmarked cell, or legacy documents: **inline Markdown source** | `decode_cell` parses it |
-| `{"text": …, "marks": […]}` | marked cell | taken directly |
+| `{"text": …, "marks": […]}` | marked cell, or an unmarked cell whose source would not read back exactly (`marks: []`) | taken directly |
 | `null` / absent / other | empty cell | empty |
 
-`encode_cell` writes the object form when the cell has marks, and an
-escaped-source string when it doesn't — so a literal `*` in an unmarked cell
-round-trips without becoming emphasis.
+`encode_cell` writes the object form when the cell has marks. An unmarked cell
+is written as escaped source — so a literal `*` round-trips without becoming
+emphasis — but only when re-reading that source gives the same cell; a bare
+URL (which would gain a link mark) or trailing whitespace (which would be
+trimmed) is written as `{"text": …, "marks": []}` instead. So
+`decode_cell(encode_cell(x)) == x` for every `x`.

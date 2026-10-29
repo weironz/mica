@@ -142,7 +142,14 @@ pub fn decode_cell(cell: &Value) -> InlineText {
 /// Markdown source string when not.
 pub fn encode_cell(cell: &InlineText) -> Value {
   if cell.marks.is_empty() {
-    return Value::String(serialize_inline(&cell.text, &[]));
+    // Mark-free cells are stored as inline SOURCE, which readers re-parse.
+    // Keep that compact form only when the re-read is exact: a bare URL would
+    // gain a link mark and edge whitespace would be trimmed, so those take the
+    // object form (I3; S4 decision, option b — here so every writer agrees).
+    let source = Value::String(serialize_inline(&cell.text, &[]));
+    if decode_cell(&source) == *cell {
+      return source;
+    }
   }
   json!({ "text": cell.text, "marks": cell.marks })
 }

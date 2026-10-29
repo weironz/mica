@@ -34,7 +34,8 @@ Initial SDK readiness cut (single-source project S5). Not published yet;
 - `render_html` / `render_html_body` — `HtmlProfile::Export` (sanitized share
   HTML) and `HtmlProfile::Clipboard` (paste flavor, source math/Mermaid kept
   as data attributes).
-- `decode_cell` / `encode_cell` — table cell storage shapes.
+- `decode_cell` / `encode_cell` — table cell storage shapes; lossless for every
+  cell (`decode_cell(encode_cell(x)) == x`, see `SCHEMA.md`).
 - `wire` — the JSON in/out surface shared by the FFI and wasm bindings.
 - `compat` — the Mica adapter's whole-document entries (`import_markdown`,
   `export_markdown`, `export_html`, `set_image_srcs`, `split_front_matter`).
