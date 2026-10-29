@@ -145,10 +145,10 @@ single-source ───●────●────●────●───
 | S1 | T1.1–T1.10 | ✅ 四项修订完成，集成头 Rust 门禁通过 | merge `f2bcb70`；核心优化 `20ecde0`、I3 测试 `88a46af`、FFI lock `349f19a`；[回执](stages/S1-core-sdk.md#2026-10-27--g1-第四项集成头-rust-门禁) | R / 协调者 |
 | **G1** | 契约冻结审核 → S0+S1 并回 main | ✅ 通过（2026-10-27）：契约已冻结，S0+S1 已并回 main | [reviews.md](reviews.md) G1 四项修订已交付 | 审核方 |
 | S2 | T2.1 P0 | ✅ 成本归因及 opt-3 硬门槛复测已交付 | 核心 `6594f12` 已经 `20ecde0` 单独进入 S1；实验 `ss/w/p0-costs` 与 spike 未集成 | W |
-| **G2** | wasm 判定 | ✅ 通过（附条件：opt-3、M2 用正式产物重测，见 [reviews.md](reviews.md)） | [决定与验证范围](README.md#当前交付与审核入口2026-10-27)、[复测记录](stages/S2-bindings.md#执行记录) | W / 审核方 |
+| **G2** | wasm 判定 | ✅ 通过（附条件：opt-3、M2 用正式产物重测，见 [reviews.md](reviews.md)） | [决定与验证范围](reviews.md)、[复测记录](stages/S2-bindings.md#执行记录) | W / 审核方 |
 | S2 | T2.2–T2.14 | ✅ M2 复核通过并并回 main（`2b0dedee`） | [reviews.md](reviews.md) M2 记录 | W / D |
 | **M2** | 并回检查 → S2 并回 main | ✅ 通过（2026-10-27）：S2 已并回 main（[reviews.md](reviews.md)） | | 审核方 |
-| S3 | T3.1–T3.5、T3.7、T3.8 | ⏸ 待审核（G3）：编辑器已切到引擎，Dart 旧实现未删（T3.6 在 G3 后） | `e7b4a533`、`71b27bc2`、`7ef6bbba`、`3b6c477f`；[执行记录](stages/S3-editor-boundary.md#执行记录) | D（T3.4、B 类：R） |
+| S3 | T3.1–T3.5、T3.7、T3.8 | ✅ 完成：编辑器已切到引擎，G3 附条件通过（3 条必须修改由审核方完成，`9add59c9`） | `e7b4a533`、`71b27bc2`、`7ef6bbba`、`3b6c477f`；[执行记录](stages/S3-editor-boundary.md#执行记录) | D（T3.4、B 类：R） |
 | **G3** | 删除之前审核（用户可见变化交用户） | ✅ 通过（附条件，2026-10-28）：可执行 T3.6；3 条必须修改在 S3 内完成（[reviews.md](reviews.md)） | | 审核方 + 用户 |
 | S3 | T3.6、T3.9–T3.11 | ✅ T3.6/T3.9 完成（Dart 镜像删除，`flutter analyze` 0 error/0 warning，2,076 passed）；T3.10 Web 与 Windows 桌面真路径均通过（桌面集成 1/0，wire 契约 10/0）；T3.11 门禁 `ALL GREEN` | 提交见 S3 执行记录；[T3.6/T3.9](stages/S3-editor-boundary.md#t36-删除2026-10-28)、[T3.10](stages/S3-editor-boundary.md#t310-真实路径验证2026-10-28)、[T3.11](stages/S3-editor-boundary.md#t311-门禁2026-10-28) | D |
 | S4 | T4.1–T4.12 | ✅ 全部完成（表格单元格 `TableCell(text, marks)` 模型；`marks.dart` 2,455→373 行，行内解析器/序列化器删除；差分工具与基线删除；兼容性 9 用例、性能基准达标；门禁 `ALL GREEN`；Web + Windows 真路径验证通过） | `ss/d/t4-table-cells`：`7759ba60`（T4.1–T4.5）、`ce4ad1c9`（T4.7–T4.9）、`1b1bdcea`（T4.8/T4.10）、`6a65343e`（T4.11）；[执行记录](stages/S4-table-cells.md#执行记录) | D |

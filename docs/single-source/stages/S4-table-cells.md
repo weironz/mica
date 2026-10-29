@@ -188,6 +188,9 @@ Windows 桌面 + Web：打开含旧格式表格的现有文档（从生产导出
 
 ## 执行记录
 
+> **最终状态**：S4 完成，G4 通过（2026-10-29），并回 main（`6cc2e526`）。单元格存储规则在 G4 时移进引擎 `encode_cell`，见 reviews.md。
+> 下文按时间保留执行过程，其中的「⏸ 待审核」「未 merge」等都是当时的状态；结论以 [reviews.md](../reviews.md) 为准。
+
 执行方：Agent D（WP-D）。分支 `ss/d/t4-table-cells`（自 `single-source` @ `d5c5282a`）。
 提交全部 `--no-verify`（code-review-graph 钩子在本机持续 `database is locked`，S3 已有先例）。
 

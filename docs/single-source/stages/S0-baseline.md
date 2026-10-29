@@ -101,6 +101,9 @@ Rust 侧基线：新增 `crates/markdown/examples/md_bench.rs`（`cargo run -p m
 
 ## 执行记录
 
+> **最终状态**：S0 完成，随 G1（2026-10-27）与 S1 一起并回 main（`8d78ba6c`）。
+> 下文按时间保留执行过程，其中的「⏸ 待审核」「未 merge」等都是当时的状态；结论以 [reviews.md](../reviews.md) 为准。
+
 （执行方追加：日期、提交号、对拍分类计数、基准数字表、偏离方案之处。）
 
 ### 2026-10-26 · WP-D（Dart 编辑器）· 分支 `worktree-agent-acfa208a26ae27e64`

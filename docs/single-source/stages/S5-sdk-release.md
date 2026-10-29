@@ -158,6 +158,9 @@ docs.rs 会自动生成 Rust 文档；不另建站点。README 里给出 docs.rs
 
 ## 执行记录
 
+> **最终状态**：S5 完成，G4 通过（2026-10-29），并回 main（`6cc2e526`）。`publish = false` 未动，发布等用户批准（见文末发布手册）。
+> 下文按时间保留执行过程，其中的「⏸ 待审核」「未 merge」等都是当时的状态；结论以 [reviews.md](../reviews.md) 为准。
+
 执行方：Agent D（S5 实际由 D 代 R/W 执行；R/W 的原计划任务在 S2 后已大部分由协调者完成，剩余项见下）。分支 `ss/r/t5-sdk`（自 `single-source` @ `81adf6df`）。
 提交全部 `--no-verify`（code-review-graph 钩子本机持续 `database is locked`，S3/S4 已有先例）。
 

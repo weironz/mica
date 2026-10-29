@@ -4,43 +4,23 @@
 > 审核方：本仓库的维护 agent，在审核停点 G1–G3 抽查、全部完成后（G4）按 [05-review-checklist.md](05-review-checklist.md) 逐条审核。
 > 本目录是这个专项的**唯一权威文档**；其他文档里与之冲突的描述，以本目录为准。
 
-## 当前交付与审核入口（2026-10-27）
+## 最终结果（2026-10-29）
 
-> **M2 复核通过（2026-10-27）**：4 条修改已核对，S2 已并回 main，详见 [reviews.md](reviews.md)。以下为首轮审核结论，留作记录。
->
-> **M2 首轮审核结论**：**要求修改，4 条**。两项预算由用户改定（wasm 上限 256 KiB；复制 10k 改为 ≤ 16 ms 绝对预算），
-> Export HTML 只要求 Clipboard 跨端逐字节，FFI 边界现在不改。要做的是：改构建脚本门槛并记 Linux 体积、补测 Web 复制、改正「全部来自 FFI 边界」的归因、
-> 把 `scripts/md-wasm-evidence/` 移出集成分支。M2 不停工，S3 可继续。下文是审核前执行方的快照。
+| 阶段 | 停点 | 并回 main | 要点 |
+| --- | --- | --- | --- |
+| S0 基线与安全网 | 随 G1 | `8d78ba6c` | 差分对拍、性能与启动基线、剪贴板快照 |
+| S1 引擎拆成 SDK 核心 | G1 ✅（2026-10-27，契约冻结） | `8d78ba6c` | `crates/md-core`（`mica-md`）+ `mica-markdown` 门面，消费方零改动 |
+| S2 绑定与门面 | G2 ✅ / M2 ✅（2026-10-27） | `2b0dedee` | 桌面 FFI、Web wasm（opt-3）、Dart `MarkdownCodec`；wasm 上限 256 KiB、复制 ≤ 16 ms 由用户定 |
+| S3 编辑器边界 | G3 ✅（2026-10-28） | `6cc2e526` | 粘贴 / 复制 / 导出 / AI 走引擎，Dart Markdown 镜像删除 |
+| S4 表格单元格 | G4 ✅（2026-10-29） | `6cc2e526` | 单元格内存模型改为「文本 + 标记」，Dart 行内解析删除；`encode_cell` 对任意单元格无损 |
+| S5 SDK 交付 | G4 ✅（2026-10-29） | `6cc2e526` | 文档、Schema、示例、API / 健壮性测试、npm 包、许可证审计、`just sdk-check`；`publish = false` |
 
-> **审核与执行状态（2026-10-27）**：审核方已在 [reviews.md](reviews.md) 记录 G1 复核通过，并冻结 02 §2 / §3 / §5；S0+S1 已在 `8d78ba6c` 并回 main。S2 当前只在 `single-source` 集成与验证，不代表 M2 通过。
-> G2 已由审核方 **附条件通过**：正式构建用 opt-3，M2 用正式产物重测。审核方结论只写入 [reviews.md](reviews.md)。
-
-| 工作包 | 可复核提交 / 分支 | 当前状态 |
-| --- | --- | --- |
-| S0 初始交付 | `single-source` 的 `c6446d5` | 已集成；其中对拍往返输入与性能采样存在问题，以修正提交为准 |
-| S0 修正与补测 | `e122680`，merge `5d8feb7` | 已集成；[S0 执行记录](stages/S0-baseline.md) 含 Flutter VM 2159 passed / 2 skipped、原生指纹与对拍 5 passed、Web release 与字体校验结果 |
-| S1 引擎拆分与审查修复 | `8b5f824`，merge `f2bcb70` | G1 已复核通过、契约冻结，S0+S1 已并回 main；[S1 执行记录](stages/S1-core-sdk.md) 保留四项修订与门禁 |
-| S2 绑定、门面与跨端修复 | 工作包 merge `2e5eb2e8` / `a5a5f1e2` / `7923e72a`；wire `942565a3`、Clipboard `ff8fcf19`、性能 `4f3cc4a3`、安全层融合 `492a9a42` | 已进入集成分支。Web 正式产物与真实门面已达标；桌面 AOT 仍有 serialize／html 两项超预算，正在归因收尾。Clipboard 提前按 T3.4 移植；Export 保留既有 feature 行为的契约矛盾单独交审。**M2 未通过** |
-| T2.1 P0 | 原 spike `d48ed4f`；优化实验 `refs/heads/ss/w/p0-costs` @ `68ae07f`；核心 `6594f12` 以 `20ecde0` 进入 S1 | G2 已附条件通过；spike 不进集成分支，正式构建 opt-3 且 M2 须重新测量。详见 [审核记录](reviews.md) |
-
-S0 修正后的差异记录为 4336 条（旧值 4887 作废）；其中 Rust 自身往返记录 754 条（旧值 1305 混入解析差异），记录数不是独立 bug 数。Chrome 测试基线实际为 dartdevc，不能与 P0 的 production dart2js 数字直接相除。
-
-**G1 复核入口：**审核方已裁决原七项契约问题；其中 I3 保留现有 URL / 邮箱自动链接与首尾空白例外，S4 再由用户决定是否改变存储行为。四项修订的提交与回执详见 [S1 执行记录](stages/S1-core-sdk.md#2026-10-27--g1-第四项集成头-rust-门禁)，交审核方快速复核；执行方不自行冻结契约。
-
-**G2：**用户选择继续优化后，审核方已附条件通过 wasm 路线。正式产物须使用 opt-3，保持 200 KB gzip（M2 已由用户改为 256 KiB，见上）、60 ms 初始化和三档 ≤ Dart ×1.2 解析预算，M2 用正式十 API 产物重新验证；P0 诊断产物数据不能代替 M2 证据。实验归因和原始数据入口见 [S2 执行记录](stages/S2-bindings.md#执行记录)。
-
-**S2 当前验收快照（执行方核对过的数据；M2 裁决见 [reviews.md](reviews.md)，本节记录 4 条修改的完成情况）：**
-
-- **预算已按 M2 用户决定更新**：wasm 体积上限 **256 KiB（262,144 B）**；复制 10k 选区改为**绝对 ≤ 16 ms**（桌面、Web 各自），不再用比值；Export HTML 不要求跨端逐字节，逐字节只约束 Clipboard（[02 §7](02-architecture.md)、[05 D3/D4](05-review-checklist.md)）。
-- Linux 正式构建（`9e604c43` 树，Debian 12 容器）：**205,269 B**（wasm 202,525 + JS 2,744）≤ 262,144，wasm SHA `d1bdfd3d…`；审核方独立构建同树得 **205,260 B**（差 9 B，gzip 版本差异）。Windows 204,107 B 只作参考，以 Linux 为准。
-- Web 正式十 API 产物：初始化 p50 **14.0 ms**（≤60）、真实 `MarkdownCodec` 三档解析比值中位 **1.073 / 0.523 / 0.569**，每轮 ≤1.2。
-- Web 复制 10k（production dart2js / Chrome，三轮独立测量）：`serializeBlocks + renderClipboardHtml` 合计中位 **4.6 / 4.3 / 4.1 ms**，汇总 **4.3 ms ≤ 16 ms**。
-- 桌面 release（最新核心 `492a9a42` 链，指纹 `ac687532799855bc`，预热口径）：init p50 **2 ms**、缺 DLL 降级路径真实通过、AOT parse 87/10k/100k **0.873 / 0.640 / 0.616**、边界调用 0.0124 ms、VM 契约 42/0/0。
-- 桌面复制 10k 按新绝对值口径：**2.238 + 2.656 ≈ 4.9 ms ≤ 16 ms，达标**；原 serialize 1.534×、html 3.712× 两项比值门槛随 M2 决定取消。
-- 归因更正：html 一项的主因是 **Clipboard 新增的安全过滤**（tagfilter / 危险属性与 URL 剥离，Dart 旧实现从不做），不是「全部来自 FFI 边界」；审核方 Linux 探针同量级 wire 渲染 0.387 ms（其中 JSON 解码约 0.1 ms）。
-- 4 条修改（门槛与 Linux 数字、Web 复制补测、归因更正、删证据目录）已完成，等审核方快速复核。
-
-按 [04 §4.2](04-parallel-plan.md#42-审核停点) 等待 M2；不合入 main，不发版。
+- 最终树门禁（审核方 Linux）：`local-ci.sh all` ALL GREEN——Rust 1160 + 213 passed、Flutter 2030 passed、wasm 203,003 B、Chrome 浏览器套件全绿。
+- `clients/mica_flutter/lib` 中不再有任何 Markdown 语法实现；`AGENTS.md` 的规则已改为「Markdown 只有一份实现」。
+- **未做 / 待用户决定**：App 发版、crate / npm 首次发布（手册见 [S5](stages/S5-sdk-release.md) 文末，用户本人执行）；
+  对外发布前给 SDK 的 HTML 导出加「严格」档（建议）；Mica 内部粘贴优先读 Markdown（可选改进，见 G3 记录）。
+- 审核方没有 Windows，Windows 集成测试与「旧版客户端读新表格」以执行方回执为准。
+- 每个停点的核对过程、裁决与审核方修复都在 [reviews.md](reviews.md)；各阶段执行过程在 `stages/` 的执行记录里。
 
 ## 一句话
 

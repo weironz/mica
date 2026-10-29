@@ -260,6 +260,9 @@ S0 T0.2 的 Rust 侧从 `MicaDocument` 路径改为 `markdownCodec.parseBlocks` 
 
 ## 执行记录
 
+> **最终状态**：S2 完成，G2 附条件通过、M2 复核通过（2026-10-27），并回 main（`2b0dedee`）。
+> 下文按时间保留执行过程，其中的「⏸ 待审核」「未 merge」等都是当时的状态；结论以 [reviews.md](../reviews.md) 为准。
+
 （执行方追加。P0 结果放在最前面。）
 
 > **证据归档说明（M2 复核后）**：本记录原先引用的原始证据目录 `scripts/md-wasm-evidence/` 已按审核要求从工作树删除。
