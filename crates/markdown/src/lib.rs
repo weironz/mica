@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+pub use mica_md::compat::{
+  import_markdown, import_markdown_fragment, set_image_srcs, split_front_matter,
+};
 pub use mica_md::properties;
 pub use mica_md::render::{MermaidHostTheme, render_mermaid_svg, render_mermaid_svg_with_id};
-pub use mica_md::{
-  Block, DocumentSnapshotPayload, import_markdown, import_markdown_fragment, math_run_spans,
-  set_image_srcs,
-};
+pub use mica_md::{Block, DocumentSnapshotPayload, math_run_spans};
 
 mod latex_guard;
 mod text_edit;
@@ -99,12 +99,12 @@ pub fn export_markdown_with_assets(
   snapshot: &DocumentSnapshotPayload,
   images: &BTreeMap<String, String>,
 ) -> DocumentOperationResult<String> {
-  mica_md::export_markdown_with_assets(snapshot, images).map_err(DocumentOperationError::from)
+  mica_md::compat::export_markdown_with_assets(snapshot, images).map_err(DocumentOperationError::from)
 }
 
 /// Render a document to its HTML body fragment.
 pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
-  mica_md::export_html(snapshot).map_err(DocumentOperationError::from)
+  mica_md::compat::export_html(snapshot).map_err(DocumentOperationError::from)
 }
 
 /// The document's own title, if it carries one.
@@ -146,7 +146,7 @@ pub fn with_page_title(markdown: &str, title: &str) -> String {
     return markdown.to_string();
   }
   let heading = format!("# {title}");
-  let (front, body) = mica_md::split_front_matter(markdown);
+  let (front, body) = crate::split_front_matter(markdown);
   if leading_heading(body).is_some_and(|line| is_page_title_line(line, title)) {
     return markdown.to_string();
   }
@@ -168,7 +168,7 @@ pub fn strip_page_title(markdown: &str, title: &str) -> String {
   if title.is_empty() {
     return markdown.to_string();
   }
-  let (_, body) = mica_md::split_front_matter(markdown);
+  let (_, body) = crate::split_front_matter(markdown);
   let front = &markdown[..markdown.len() - body.len()];
   let mut offset = 0;
   for line in body.split_inclusive('\n') {

@@ -12,9 +12,10 @@
 //! assert_eq!(md, "# Title\n\nSome **bold** text.");
 //! ```
 
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 
 mod api;
+pub mod compat;
 mod html;
 mod ids;
 mod model;
@@ -28,10 +29,8 @@ pub mod wire;
 
 pub use api::{
   HtmlOptions, HtmlProfile, ParseMode, ParseOptions, SerializeOptions, decode_cell, encode_cell,
-  export_html, export_markdown, export_markdown_with_assets, import_markdown,
-  import_markdown_fragment, math_run_spans, parse, parse_body, parse_inline, parse_inline_math,
-  render_html, render_html_body, serialize, serialize_body, serialize_inline, set_image_srcs,
-  split_front_matter,
+  math_run_spans, parse, parse_body, parse_inline, parse_inline_math, render_html, render_html_body,
+  serialize, serialize_body, serialize_inline,
 };
 pub use ids::BlockIds;
 pub use model::{

@@ -104,3 +104,7 @@ e2e/*.png
 # Generated Markdown Web engine and browser-test copy (including wire gold).
 /clients/mica_flutter/web/mica_md/
 /clients/mica_flutter/test/support/mica_md/
+
+# The npm package's wasm builds (scripts/build-md-npm.sh); same policy as the
+# Flutter web mica_md bundle — generated, never committed.
+/packages/mica-md-js/dist/

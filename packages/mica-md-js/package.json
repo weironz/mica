@@ -1,0 +1,44 @@
+{
+  "name": "mica-md",
+  "version": "0.1.0",
+  "description": "Markdown ⇄ block-document engine in WebAssembly: CommonMark 0.31.2 + GFM + footnotes, front matter and Pandoc math, round-trip stable.",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/weironz/mica.git",
+    "directory": "packages/mica-md-js"
+  },
+  "keywords": [
+    "markdown",
+    "commonmark",
+    "gfm",
+    "wasm",
+    "editor",
+    "blocks"
+  ],
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "dist/web/*",
+    "dist/node/*"
+  ],
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "browser": "./index.js",
+      "node": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

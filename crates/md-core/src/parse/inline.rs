@@ -37,7 +37,7 @@ pub(crate) fn code_span_close(chars: &[char], start: usize) -> Option<usize> {
   None
 }
 
-/// Delimiter-inclusive char spans of every inline math run in [src] — both the
+/// Delimiter-inclusive char spans of every inline math run in `src` — both the
 /// `$ … $` and `\( … \)` forms — judged by exactly the rules the parser uses.
 ///
 /// Public so callers outside the parser can ask "is this offset inside a

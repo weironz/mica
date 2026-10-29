@@ -4,8 +4,30 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Markdown block-document engine: CommonMark 0.31.2 + GFM + dialect, round-trip stable."
-publish = false
+description = "Markdown ⇄ block-document engine: CommonMark 0.31.2 (641/641) + GFM (24/24) + footnotes, front matter and Pandoc math, with a round-trip guarantee."
+readme = "README.md"
+repository = "https://github.com/weironz/mica"
+documentation = "https://docs.rs/mica-md"
+keywords = ["markdown", "commonmark", "gfm", "editor", "blocks"]
+categories = ["parser-implementations", "text-processing"]
+# The four README examples ship; the stage/benchmark probes stay in the repo
+# (they are diagnostics, not documentation).
+include = [
+  "src/**/*",
+  "build.rs",
+  "README.md",
+  "SCHEMA.md",
+  "CHANGELOG.md",
+  "THIRD_PARTY.md",
+  "examples/parse_and_serialize.rs",
+  "examples/render_html.rs",
+  "examples/table_cells.rs",
+  "examples/inline.rs",
+]
+publish = false          # flips only at release time (S5 T5.12, user-approved)
+
+[package.metadata.docs.rs]
+features = ["render"]
 
 [features]
 default = ["uuid"]
