@@ -637,6 +637,13 @@
 
 ## 开发者体验 / CI / Markdown
 
+- ✅ **Markdown 引擎单一实现专项(S0–S5)**(2026-10-26 立项,2026-10-29 G4 通过,v0.14.0)—— Dart 里约 4,000 行
+  Markdown 镜像删除,解析 / 序列化 / HTML 只留 Rust 一份(`crates/md-core`,包名 `mica-md`):服务端 / CLI / MCP 原生调用,
+  桌面经 FFI、Web 经 wasm,编辑器只在粘贴、复制、导出、AI 这些边界调用;表格单元格内存模型改为「文本 + 标记」,
+  `encode_cell` 对任意单元格无损。五个审核停点(G1 契约冻结、G2 wasm 判定、M2、G3 删除之前、G4)的裁决与审核方修复见
+  [`single-source/reviews.md`](../single-source/reviews.md);方案、契约与执行记录见 [`single-source/`](../single-source/README.md)。
+  并回 main:`8d78ba6c`(S0+S1)、`2b0dedee`(S2)、`6cc2e526`(S3–S5)。SDK 对外发布另列在 `roadmap.md`。
+
 - 🟡 **批量端点的端到端行为测试。** 0.13.19 的保证是"SQL 对真库有效 + 类型正确 + 路由表
   无冲突",**不是**"320 个 id 进去真的删对了"。~~需要建工作区/页面的完整 fixture。~~
   **2026-08-26:fixture 不用再建了** —— `batch-purge` 落地时用 `seed_workspace` +
