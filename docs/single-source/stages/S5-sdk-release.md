@@ -216,6 +216,16 @@ docs.rs 会自动生成 Rust 文档；不另建站点。README 里给出 docs.rs
 
 `just sdk-check` 单独跑过 **ALL GREEN**（含 cargo doc `-D warnings --all-features` 零警告）。
 
+### G4 审核指针（写给审核者）
+
+1. **`publish = false` 未动**：发布动作不在本专项内，手册见文末；crates.io / npm 的 token 由用户本人使用，不进仓库与 CI。
+2. **README 的净化边界按引擎真实语义写**（见「关键取舍」#2）：type-1 raw HTML 块原样输出是 CommonMark 往返保真的刻意行为，share 页的 CSP 才是防线——请勿按「HTML 导出应当剥掉 script」的直觉提缺陷；剥除面（`on*` 属性、URL、tagfilter）有测试钉住。
+3. **`cargo publish --dry-run` 不在 sdk-check 里**是显式取舍（见「关键取舍」#1），`cargo package --list` 白名单覆盖同一面。
+4. 三个守门测试（`public_api` / `schema_doc_sync` / `never_panic`）各自**证明过能失败**：改 kind 名即红、注入 panic 即红、改签名即编译失败。
+5. npm 包双 dist（web no-modules 给 Flutter Web / nodejs 给 Node），同一 `crates/md-wasm` 源；`dist/node/package.json` 的 `{"type":"commonjs"}` 标记解决 nodejs 胶水 CJS 与包 ESM 的冲突。
+6. compat 入口迁移零下游破坏：workspace 与 FFI `cargo check` 绿、`facade_surface` 测试绿；`crates/markdown` 门面 re-export 已改走 `mica_md::compat`。
+7. Windows 执行环境小坑（不阻塞审核）：`node --test <目录>` 在 Windows 静默失败须指向具体文件；sdk-check 包清单检查需 `tr '\\' '/'` 归一反斜杠；新文件过 `cargo fmt` 后建议再跑一遍 clippy（fmt 合并链会冒 useless_conversion）。
+
 ## 发布手册（T5.12；用户批准后执行，不自动）
 
 > 状态：**未获批，`publish = false` 保持不变**。以下是获批后的一串步骤，一次做完。
