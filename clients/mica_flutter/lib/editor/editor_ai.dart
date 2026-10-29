@@ -380,16 +380,8 @@ extension _SelectionAiActions on _MicaEditorState {
 
     final sel = _controller.selection;
     if (sel == null || sel.isCollapsed) return;
-    final List<BlockSpec> specs;
-    try {
-      specs = markdownCodec.parseBlocks(result.markdown);
-    } on MarkdownCodecException catch (error) {
-      // AI output failing to parse surfaces the same way a failed insert does:
-      // nothing lands, the user sees the existing error snackbar below.
-      debugPrint('AI markdown parse failed: $error');
-      return;
-    }
-    if (specs.isEmpty) return;
+    final specs = _parseOrNull(result.markdown);
+    if (specs == null || specs.isEmpty) return;
     if (result.replace) {
       _controller.insertBlocksReplacingSelection(specs);
     } else {

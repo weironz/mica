@@ -11,7 +11,7 @@ import 'package:flutter/services.dart';
 import 'controller.dart';
 import 'ai_edits.dart';
 import 'highlight.dart';
-import '../markdown/markdown_codec.dart' show markdownCodec, MarkdownCodecException, BlockSpec;
+import '../markdown/markdown_codec.dart' show markdownCodec, withEngineOrNull, BlockSpec;
 import 'marks.dart';
 import 'paste_repair.dart';
 import 'table_copy.dart';
@@ -1129,20 +1129,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (mounted) setState(() {});
   }
 
+  /// Engine parse of pasted / AI Markdown; null (logged) when the engine is
+  /// down, so the caller falls back to plain text instead of throwing (02 §5.2).
+  List<BlockSpec>? _parseOrNull(String md) => withEngineOrNull(() => markdownCodec.parseBlocks(md));
+
   /// Native paste interceptor (web): rich HTML or multi-line text is converted to
   /// Markdown and inserted as structured blocks; a single line of plain text
   /// falls through to the normal inline paste. Returns true when consumed.
-  /// Parse pasted/AI Markdown through the engine; null (logged once) lets the
-  /// caller fall back to plain text instead of throwing mid-paste (02 §5.2).
-  List<BlockSpec>? _parseOrNull(String markdown) {
-    try {
-      return markdownCodec.parseBlocks(markdown);
-    } on MarkdownCodecException catch (error) {
-      debugPrint('markdown parse failed: $error');
-      return null;
-    }
-  }
-
   bool _handleRichPaste(
     String markdown,
     String plain,
@@ -4109,44 +4102,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // fabricate the empty-table placeholder and overwrite the clipboard with it.
     if (_controller.nodes[area.node].kind != 'table') return;
     final table = TableData.fromBlock(_controller.nodes[area.node].data);
-    final plainRows = <String>[];
-    for (var r = area.r0; r <= area.r1 && r < table.rows.length; r++) {
-      if (r < 0) continue;
-      final plainCells = <String>[];
-      for (var c = area.c0; c <= area.c1 && c < table.rows[r].length; c++) {
-        if (c < 0) continue;
-        final cell = table.rows[r][c];
-        plainCells.add(cell.text.replaceAll('\t', ' ').replaceAll('\n', ' '));
-      }
-      plainRows.add(plainCells.join('\t'));
-    }
-    // Rich flavor: the same selection as a sub-table through the engine's
-    // Clipboard dialect — one call renders cells AND builds the <table>.
-    String richHtml = '';
-    try {
-      richHtml = markdownCodec.renderClipboardHtml([
-        (
-          kind: 'table',
-          text: '',
-          data: tableAreaData(
-            table,
-            r0: area.r0,
-            c0: area.c0,
-            r1: area.r1,
-            c1: area.c1,
-          ),
-        ),
-      ]);
-    } on MarkdownCodecException {
-      richHtml = ''; // plain TSV still lands below
-    }
+    final copied = tableAreaClipboard(table, r0: area.r0, c0: area.c0, r1: area.r1, c1: area.c1);
     if (cut && _cutPending) return;
     final tableId = _controller.nodes[area.node].id;
     final snapshot = table.toBlockData().toString();
     if (cut) _cutPending = true;
     copyRichToClipboard(
-      plain: plainRows.join('\n'),
-      richHtml: richHtml,
+      plain: copied.plain,
+      richHtml: copied.html,
     ).then((success) {
       if (!cut) return;
       _cutPending = false;
