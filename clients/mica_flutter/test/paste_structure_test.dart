@@ -1,8 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 // Paste/copy STRUCTURE fidelity: nested list levels survive every leg of the
 // clipboard trip (mica → HTML → markdown → blocks), and blockquote conversion
@@ -26,6 +27,7 @@ List<(String, int)> _listShape(List<BlockSpec> blocks) => [
     ];
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('selectionHtml — nested list levels become nested <ul>/<ol>', () {
     test('indent levels nest inside the parent <li>', () {
       final c = _doc([
@@ -69,7 +71,7 @@ void main() {
         EditorNode(id: 'c', kind: 'bulleted_list', text: 'c', data: {'indent': 2}),
         EditorNode(id: 'd', kind: 'bulleted_list', text: 'd'),
       ]);
-      final blocks = markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml()));
       expect(_listShape(blocks), [('a', 0), ('b', 1), ('c', 2), ('d', 0)]);
     });
 
@@ -79,14 +81,14 @@ void main() {
         EditorNode(id: 'b', kind: 'numbered_list', text: 'b', data: {'indent': 1}),
         EditorNode(id: 'c', kind: 'numbered_list', text: 'c', data: {'indent': 1}),
       ]);
-      final blocks = markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml()));
       expect(_listShape(blocks), [('a', 0), ('b', 1), ('c', 1)]);
     });
   });
 
   group('htmlToMarkdown — external nested-list shapes', () {
     test('standard <ul><li><ul> nesting keeps levels', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<ul><li>a<ul><li>b<ul><li>c</li></ul></li></ul></li><li>d</li></ul>',
       ));
       expect(_listShape(blocks), [('a', 0), ('b', 1), ('c', 2), ('d', 0)]);
@@ -94,7 +96,7 @@ void main() {
 
     test('nested <ol>: child indent reaches the 3-wide `1. ` content column',
         () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<ol><li>a<ol><li>b</li></ol></li></ol>',
       ));
       expect(_listShape(blocks), [('a', 0), ('b', 1)],
@@ -104,7 +106,7 @@ void main() {
 
     test('"sibling" nesting (<ul> directly inside <ul> — Word/old editors) '
         'still nests instead of vanishing', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<ul><li>a</li><ul><li>b</li></ul><li>c</li></ul>',
       ));
       expect(_listShape(blocks), [('a', 0), ('b', 1), ('c', 0)]);
@@ -119,7 +121,7 @@ void main() {
 <p class=MsoListParagraph style='text-indent:-18.0pt;mso-list:l1 level1 lfo2'>
 <span style='mso-list:Ignore'>1.<span>&nbsp;</span></span>uno</p>
 <p>plain tail</p>''';
-      final blocks = markdownToBlocks(htmlToMarkdown(word));
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(word));
       expect(_listShape(blocks), [('alpha', 0), ('beta', 1), ('uno', 0)]);
       expect(blocks.where((b) => b.kind == 'numbered_list').single.text, 'uno');
       expect(blocks.last.kind, 'paragraph',
@@ -137,7 +139,7 @@ void main() {
         '<blockquote><p>first</p><p>second</p></blockquote>',
       );
       expect(md, '> first\n>\n> second');
-      final blocks = markdownToBlocks(md);
+      final blocks = markdownCodec.parseBlocks(md);
       expect(blocks.map((b) => b.kind), everyElement('quote'));
     });
 
@@ -185,12 +187,12 @@ void main() {
 
   group('plain-markdown text paste (no HTML flavor)', () {
     test('2-space nested bullets parse with levels', () {
-      final blocks = markdownToBlocks('- a\n  - b\n    - c');
+      final blocks = markdownCodec.parseBlocks('- a\n  - b\n    - c');
       expect(_listShape(blocks), [('a', 0), ('b', 1), ('c', 2)]);
     });
 
     test('tab-indented nested bullets parse with levels', () {
-      final blocks = markdownToBlocks('- a\n\t- b');
+      final blocks = markdownCodec.parseBlocks('- a\n\t- b');
       expect(_listShape(blocks), [('a', 0), ('b', 1)]);
     });
   });

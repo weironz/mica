@@ -1,7 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 EditorController _doc(List<EditorNode> nodes, {int focus = 0}) {
   final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
@@ -23,6 +24,7 @@ EditorNode _li(String id, String text, {int indent = 0, String kind = 'bulleted_
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('Tab indents one level under the previous item, clamped', () {
     final c = _doc([_li('a', 'parent'), _li('b', 'child')], focus: 1);
     expect(c.indentSelection(1), isTrue);
@@ -78,8 +80,8 @@ void main() {
     expect(c.nodes[2].data['checked'], false);
   });
 
-  test('markdownToBlocks parses nesting; copy prefix round-trips it', () {
-    final specs = markdownToBlocks('- a\n  - b\n    1. c\n- d');
+  test('the codec parses nesting; copy prefix round-trips it', () {
+    final specs = markdownCodec.parseBlocks('- a\n  - b\n    1. c\n- d');
     expect([for (final s in specs) s.data['indent'] ?? 0], [0, 1, 2, 0]);
     final c = _doc([
       for (final s in specs)
@@ -98,7 +100,7 @@ void main() {
     final copied = c.selectionText();
     expect(copied, '- a\n    - b\n        1. c\n- d');
     expect(
-      [for (final s in markdownToBlocks(copied)) s.data['indent'] ?? 0],
+      [for (final s in markdownCodec.parseBlocks(copied)) s.data['indent'] ?? 0],
       [0, 1, 2, 0],
       reason: 'copy → paste must preserve the nesting it started with',
     );

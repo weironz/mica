@@ -5,6 +5,7 @@ import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/rich_paste_stub.dart'
     show clipboardHtmlIsDataTable;
 import 'package:mica_flutter/editor/table.dart';
+import 'support/markdown_codec.dart';
 
 EditorController _doc(List<EditorNode> nodes) {
   final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
@@ -17,21 +18,22 @@ EditorNode _table3x3() => EditorNode(
       kind: 'table',
       text: '',
       data: TableData([
-        ['h1', 'h2', 'h3'],
-        ['a1', 'a2', 'a3'],
-        ['b1', 'b2', 'b3'],
+        [TableCell('h1'), TableCell('h2'), TableCell('h3')],
+        [TableCell('a1'), TableCell('a2'), TableCell('a3')],
+        [TableCell('b1'), TableCell('b2'), TableCell('b3')],
       ]).toBlockData(),
     );
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('clearTableCells — Delete/cut on an area selection', () {
     test('blanks exactly the inclusive rectangle', () {
       final c = _doc([_table3x3()]);
       c.clearTableCells(0, 1, 1, 2, 2); // rows 1–2 × cols 1–2
       final t = TableData.fromBlock(c.nodes[0].data);
-      expect(t.rows[0], ['h1', 'h2', 'h3']); // header untouched
-      expect(t.rows[1], ['a1', '', '']);
-      expect(t.rows[2], ['b1', '', '']);
+      expect(t.rows[0].map((c) => c.text), ['h1', 'h2', 'h3']); // header untouched
+      expect(t.rows[1].map((c) => c.text), ['a1', '', '']);
+      expect(t.rows[2].map((c) => c.text), ['b1', '', '']);
     });
 
     test('out-of-range bounds clamp instead of throwing', () {
@@ -50,8 +52,8 @@ void main() {
 
   test('resetTableColumnWidths returns every weight to 1.0 (auto-fit mode)', () {
     final table = TableData([
-      ['a', 'b'],
-      ['c', 'd'],
+      [TableCell('a'), TableCell('b')],
+      [TableCell('c'), TableCell('d')],
     ], widths: [3.0, 1.0]);
     final c = _doc([
       EditorNode(id: 't', kind: 'table', text: '', data: table.toBlockData()),

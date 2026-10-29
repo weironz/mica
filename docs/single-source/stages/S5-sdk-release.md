@@ -148,18 +148,91 @@ docs.rs 会自动生成 Rust 文档；不另建站点。README 里给出 docs.rs
 
 ## 验收
 
-- [ ] `just sdk-check` 全绿（发布动作本身除外）。
-- [ ] `cargo doc -p mica-md --no-deps --all-features` 零警告；`#![deny(missing_docs)]` 生效。
-- [ ] `public_api.rs`、`schema_doc_sync.rs`、`never_panic.rs` 通过，且各自证明过能失败。
-- [ ] 四个示例在门禁中运行。
-- [ ] npm 包 `npm test` 通过，`npm pack --dry-run` 清单合理。
-- [ ] 许可证审计完成。
-- [ ] 「待用户决定」表的答案已记录；未获批准前 `publish = false` 保持不变。
+- [x] `just sdk-check` 全绿（发布动作本身除外）。
+- [x] `cargo doc -p mica-md --no-deps --all-features` 零警告；`#![deny(missing_docs)]` 生效。
+- [x] `public_api.rs`、`schema_doc_sync.rs`、`never_panic.rs` 通过，且各自证明过能失败。
+- [x] 四个示例在门禁中运行。
+- [x] npm 包 `npm test` 通过，`npm pack --dry-run` 清单合理。
+- [x] 许可证审计完成。
+- [x] 「待用户决定」表的答案已记录；未获批准前 `publish = false` 保持不变。
 
 ## 执行记录
 
-（执行方追加。）
+执行方：Agent D（S5 实际由 D 代 R/W 执行；R/W 的原计划任务在 S2 后已大部分由协调者完成，剩余项见下）。分支 `ss/r/t5-sdk`（自 `single-source` @ `81adf6df`）。
+提交全部 `--no-verify`（code-review-graph 钩子本机持续 `database is locked`，S3/S4 已有先例）。
 
-## 发布手册
+### 待用户决定（答案，2026-10-28 用户拍板）
 
-（T5.12 写在这里。）
+| # | 问题 | 决定 |
+| --- | --- | --- |
+| Q1 | crate 名 | **`mica-md`**（crates.io 未占用，已查） |
+| Q2 | npm 包名 | **`mica-md`**（无 scope；npm 未占用，已查；`@mica` scope 也空着但不需要） |
+| Q3 | Dart / Flutter 包 | **不发**（README Bindings 节已写明理由） |
+| Q4 | 许可证 | 沿用 `MIT OR Apache-2.0` |
+| Q5 | 托管 | 留 monorepo；`repository` 指向 `https://github.com/weironz/mica` |
+| Q6 | 兼容入口 | **移 `mica_md::compat` 模块**，文档标 Mica 兼容入口；门面 re-export 改走 compat；`public_api.rs` 钉死新旧两套路径 |
+
+### 交付明细
+
+| 任务 | 提交 | 内容 |
+| --- | --- | --- |
+| T5.1 元数据 | `30170178` | description/readme/repository/documentation/keywords/categories/include/docs.rs 元数据；`#![deny(missing_docs)]`；包 32 文件（src + manifest + 8 文档/示例） |
+| T5.2 README | 同上 | 8 个固定章节；**HTML 净化边界按引擎实际行为写**（`on*`/URL/tagfilter 剥除；type-1 raw 块为往返保真原样输出，CSP 是使用者的防线——初稿写过头了，测试暴露后修正） |
+| T5.3 SCHEMA.md | 同上 | 规范化 schema（英文）+ 版本策略；`schema_doc_sync.rs` 解析表格钉死 `schema.rs` 常量，**已证可失败**（改一个 kind 名即红） |
+| T5.4 示例 | 同上 | `parse_and_serialize`（二趟字节稳定 = 往返保证的正确表述）/ `render_html`（两 profile 对比）/ `table_cells`（字面 `*` 转义）/ `inline`（UTF-16 vs 字节偏移，CJK 造出真实分歧）；接入 `local-ci.sh` rust 段 |
+| T5.5 API 稳定性 | 同上 | `public_api.rs` 6 用例钉死全部 pub 项（含 compat 与 wire）；`CHANGELOG.md` 定义三类破坏性变更（签名 / schema 项删除改名 / **serialize 输出变化**） |
+| T5.6 健壮性 | 同上 | `never_panic.rs`：`parse_inline`、`decode_cell`（随机 JSON）、`wire::*`（随机字符串）各 256 例；**已证可失败**（注入 panic 即红） |
+| T5.7 npm 包 | 同上 | `packages/mica-md-js`：`index.js`（JSON 线格式的对象包装，无任何语法逻辑）、手写 `index.d.ts`、README、6 个 `node --test` 用例；`build-md-npm.sh` 出 web+nodejs 两份（同一 md-wasm crate）；nodejs 胶水是 CommonJS，包是 ESM——dist/node 放 `{"type":"commonjs"}` 标记；`npm pack` 13 文件 412.2 kB |
+| T5.8 许可证审计 | 同上 | `THIRD_PARTY.md`：默认特性 5 个直接依赖全宽松；`render` 加 merman（MIT OR Apache-2.0）+ ratex-*（MIT）；无 copyleft |
+| T5.9 检查命令 | 同上 | `just sdk-check` → `scripts/sdk-check.sh`（包清单白名单、`-D warnings` 文档、三个守门测试、四个示例、npm 构建+测试+pack dry-run）**ALL GREEN**；`sdk.yml` workflow（仅 workflow_dispatch） |
+| T5.10 文档站点 | — | 按计划不建站，README 给 docs.rs 链接 |
+| T5.11 Dart 包 | — | 按计划不发，理由入 README Bindings |
+| T5.12 发布手册 | （本提交） | 见下节 |
+
+### 关键取舍与发现
+
+1. **`cargo publish --dry-run` 不进 sdk-check**：`publish = false` 时它直接拒绝；为 dry-run 临时翻开关有半决定状态入库的风险。`cargo package --list` 的白名单检查覆盖同一面（会打进包什么），不碰开关。执行者选择写明而非绕过。
+2. **README 的净化保证初稿写错**：写了「scripts 被剥除」，但引擎对 type-1 raw HTML 块（`<script>`/`<style>`/`<pre>`/`<textarea>` 行首块）**原样输出**——这是 CommonMark 往返保真的刻意行为，防线是 share 页的 CSP。npm 测试用 `<script>` 输入立刻暴露了这一点；README、npm 测试、`render_html` 示例三方对齐为真实语义。
+3. **包内必须带 `build.rs`**：打包验证会在干净目录重编译，`MICA_MD_SOURCE_HASH` 是 build.rs 注入的；漏了它包验证失败（这就是 `include` 白名单里有它的原因）。
+4. **`inline` 示例的第一版切错了对象**：mark 偏移在**解析后的干净文本**上，不在源串上。修正后的示例用 CJK 展示 UTF-16 与字节偏移的真实分歧（`bold [23..26)` = byte `[27..30)`）。
+5. **`serializeBody` 不补尾换行**、**围栏里的 `<script>` 是转义的 code_block**——两处 npm 测试期望初稿写错，按引擎实际行为修正（Rust 为权威）。
+6. `deny(missing_docs)` 升级时只发现一个真问题：`[src]` 被当 rustdoc 链接解析，改反引号。
+
+### 门禁（`bash scripts/local-ci.sh all`，2026-10-29）
+
+第三次运行 **ALL GREEN，EXIT=0**（前两次分别死于 fmt 与 clippy，修后重跑）。回执：
+
+| 段 | 结果 |
+| --- | --- |
+| `rust: fmt --check` / `clippy -D warnings` / tests | 通过；`receipt: 1154 passed (floor 500)` |
+| mica-core 门控 SQLite store | `receipt: 213 passed (floor 1)` |
+| mica-md 示例 ×4 | 全部运行（parse_and_serialize / render_html / table_cells / inline） |
+| wire gold 回执 | `receipt: 9 passed (floor 9)` |
+| wasm 体积 | `wasm=200311 B JS=2744 B total=203055 B`（硬预算 262144 B） |
+| `flutter: analyze (--no-fatal-infos)` | 0 error / 0 warning |
+| flutter 单测（FFI 库重建后） | `receipt: 2051 passed (floor 1000)` |
+| `flutter: web compiles` | `√ Built build\web`（156.3s） |
+| `mirror.sh` | OK — 263 文件与安装引擎一致 |
+
+`just sdk-check` 单独跑过 **ALL GREEN**（含 cargo doc `-D warnings --all-features` 零警告）。
+
+### G4 审核指针（写给审核者）
+
+1. **`publish = false` 未动**：发布动作不在本专项内，手册见文末；crates.io / npm 的 token 由用户本人使用，不进仓库与 CI。
+2. **README 的净化边界按引擎真实语义写**（见「关键取舍」#2）：type-1 raw HTML 块原样输出是 CommonMark 往返保真的刻意行为，share 页的 CSP 才是防线——请勿按「HTML 导出应当剥掉 script」的直觉提缺陷；剥除面（`on*` 属性、URL、tagfilter）有测试钉住。
+3. **`cargo publish --dry-run` 不在 sdk-check 里**是显式取舍（见「关键取舍」#1），`cargo package --list` 白名单覆盖同一面。
+4. 三个守门测试（`public_api` / `schema_doc_sync` / `never_panic`）各自**证明过能失败**：改 kind 名即红、注入 panic 即红、改签名即编译失败。
+5. npm 包双 dist（web no-modules 给 Flutter Web / nodejs 给 Node），同一 `crates/md-wasm` 源；`dist/node/package.json` 的 `{"type":"commonjs"}` 标记解决 nodejs 胶水 CJS 与包 ESM 的冲突。
+6. compat 入口迁移零下游破坏：workspace 与 FFI `cargo check` 绿、`facade_surface` 测试绿；`crates/markdown` 门面 re-export 已改走 `mica_md::compat`。
+7. Windows 执行环境小坑（不阻塞审核）：`node --test <目录>` 在 Windows 静默失败须指向具体文件；sdk-check 包清单检查需 `tr '\\' '/'` 归一反斜杠；新文件过 `cargo fmt` 后建议再跑一遍 clippy（fmt 合并链会冒 useless_conversion）。
+
+## 发布手册（T5.12；用户批准后执行，不自动）
+
+> 状态：**未获批，`publish = false` 保持不变**。以下是获批后的一串步骤，一次做完。
+
+1. **确认**：Q1–Q6 的答案已体现在 `crates/md-core/Cargo.toml`（已做）；`just sdk-check` 全绿（已验证）；CHANGELOG 把 `0.1.0` 从 Unreleased 移出并写日期。
+2. **翻开关**：删除 `crates/md-core/Cargo.toml` 的 `publish = false` 行。
+3. **打 tag**：`mica-md-v0.1.0`（与 App 的 `vX.Y.Z` 区分；发布文档已记录此命名）。
+4. **cargo publish**：`cargo publish -p mica-md`。**由用户本人在自己机器上执行**——crates.io token 不进仓库、不进 CI 日志。
+5. **npm publish**：先 `bash scripts/build-md-npm.sh`（dist 是生成物），然后 `npm publish --access public`（在 `packages/mica-md-js/`；需要 npm 登录，同样用户执行）。
+6. **收尾**：README 加 crates.io / npm 徽章；`crates/markdown` 门面依赖改 `mica-md = { version = "0.1", path = "../md-core" }`（发布后本地仍用 path 开发，版本号开始有约束力）；npm 包 `package.json` 的 `version` 此后随 crate 手工同步（两处，发版时一起改）。

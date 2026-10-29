@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/main.dart';
 import 'package:mica_flutter/ui/page_tree_state.dart';
 
+import 'support/markdown_codec.dart';
 import 'support/title_workspace.dart';
 
 DocumentView _page(String id, String name, {String position = '10'}) =>
@@ -26,6 +27,7 @@ Finder _rowOf(String viewId) =>
     find.byWidgetPredicate((w) => w is DocumentListItem && w.view.id == viewId);
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   void wideViewport(WidgetTester tester) {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(1440, 900);

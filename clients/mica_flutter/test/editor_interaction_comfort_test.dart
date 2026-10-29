@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
@@ -191,8 +191,8 @@ void main() {
         kind: 'table',
         text: '',
         data: TableData([
-          ['h1', 'h2'],
-          ['v1', 'v2'],
+          [TableCell('h1'), TableCell('h2')],
+          [TableCell('v1'), TableCell('v2')],
         ]).toBlockData(),
       ),
     ]);

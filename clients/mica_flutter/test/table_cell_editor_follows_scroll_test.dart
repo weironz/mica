@@ -17,7 +17,7 @@
 // The assertion is deliberately RELATIVE — the editor's offset from the canvas
 // origin — because that is the actual invariant ("it stays in its cell"), and
 // it holds whatever the scroll offset happens to be.
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/render.dart';
@@ -29,8 +29,8 @@ EditorNode _table() => EditorNode(
   kind: 'table',
   text: '',
   data: TableData([
-    ['h1', 'h2'],
-    ['a1', 'a2'],
+    [TableCell('h1'), TableCell('h2')],
+    [TableCell('a1'), TableCell('a2')],
   ]).toBlockData(),
 );
 

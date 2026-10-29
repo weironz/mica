@@ -13,7 +13,7 @@ library;
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 
-import 'marks.dart' show mathRunSpans;
+import '../markdown/markdown_codec.dart' show markdownCodec;
 
 String htmlToMarkdown(String source) {
   final doc = html_parser.parse(source);
@@ -53,7 +53,7 @@ bool _inQuote = false;
 /// downstream parser does, so exactly what would parse is what survives; a
 /// lone `$` with no valid closer (prices, "$5 and $10") still escapes.
 String _escapeMdInline(String s) {
-  final spans = mathRunSpans(s);
+  final spans = markdownCodec.mathRunSpans(s);
   if (spans.isEmpty) return _escapeAllMdInline(s);
   final out = StringBuffer();
   var cursor = 0;
@@ -596,7 +596,12 @@ void _gather(dom.Node node, StringBuffer sb) {
 /// Append one inline node's Markdown (text or an inline element) to [sb].
 void _gatherOne(dom.Node child, StringBuffer sb) {
   if (child is dom.Text) {
-    sb.write(_escapeMdInline(child.text));
+    final text = _escapeMdInline(child.text);
+    // A literal `!` right before an `<a>` would read back as an IMAGE
+    // (`!` + `[x](u)`); `\!` is the same character to the parser.
+    sb.write(
+      text.endsWith('!') ? '${text.substring(0, text.length - 1)}\\!' : text,
+    );
     return;
   }
   if (child is! dom.Element) return;

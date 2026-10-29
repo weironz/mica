@@ -1,0 +1,27 @@
+name: SDK
+
+# mica-md release readiness (single-source project S5): the same checks as
+# `just sdk-check`, on demand. Manual only — the repo-wide rule since the
+# Actions quota incident (see ci.yml's note): local gates are the default.
+on:
+  workflow_dispatch:
+
+jobs:
+  sdk:
+    name: mica-md SDK check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sdk-check
+      # The npm half of sdk-check needs wasm-bindgen (same pinned version as
+      # every other wasm build in this repo) and Node ≥ 20.
+      - name: Install pinned wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: SDK check (package list, docs, gates, examples, npm)
+        run: bash scripts/sdk-check.sh

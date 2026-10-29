@@ -14,7 +14,7 @@
 // editor) — and that is worth knowing too, so they stay either way.
 
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/table.dart';
@@ -28,9 +28,9 @@ EditorNode _table() => EditorNode(
   kind: 'table',
   text: '',
   data: TableData([
-    ['h1', 'h2'],
-    ['a1', 'a2'],
-    ['b1', 'b2'],
+    [TableCell('h1'), TableCell('h2')],
+    [TableCell('a1'), TableCell('a2')],
+    [TableCell('b1'), TableCell('b2')],
   ]).toBlockData(),
 );
 

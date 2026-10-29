@@ -1,7 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show listEquals, mapEquals;
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/rendering.dart';
 
 import '../cjk_fonts.dart';
@@ -1901,18 +1901,16 @@ class RenderDocument extends RenderBox {
     );
   }
 
-  /// A table cell's display span. Cells store raw inline-Markdown source
-  /// (`` `code` ``, `**bold**`, …); painting shows the rendered form while the
-  /// overlay editor keeps showing the source (Typora-style). Parse failures
-  /// can't happen — unmatched markers simply stay literal text.
+  /// A table cell's display span. A cell is text plus marks — the same model a
+  /// paragraph uses — so painting it is painting a paragraph; no Markdown is
+  /// parsed here.
   static TextSpan cellDisplaySpan(
-    String raw,
+    TableCell cell,
     TextStyle base,
     MicaTokens tokens,
   ) {
-    if (raw.isEmpty) return TextSpan(text: ' ', style: base);
-    final parsed = parseInline(raw);
-    return buildMarkedSpan(parsed.text, parsed.marks, base, tokens);
+    if (cell.isEmpty) return TextSpan(text: ' ', style: base);
+    return buildMarkedSpan(cell.text, cell.marks, base, tokens);
   }
 
   // ---------------------------------------------------------------------------

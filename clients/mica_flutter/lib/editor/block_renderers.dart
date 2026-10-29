@@ -697,7 +697,7 @@ class TableRenderer extends AtomicBlockRenderer {
         for (var c = 0; c < cols; c++)
           TextPainter(
             text: RenderDocument.cellDisplaySpan(
-              c < table.rows[r].length ? table.rows[r][c] : '',
+              c < table.rows[r].length ? table.rows[r][c] : TableCell.empty,
               RenderDocument.tableCellStyle(
                 host._appearance,
                 isHeader: isHeader,

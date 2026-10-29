@@ -4,15 +4,17 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import 'controller.dart';
 import 'ai_edits.dart';
 import 'highlight.dart';
-import 'markdown.dart';
+import '../markdown/markdown_codec.dart' show markdownCodec, withEngineOrNull, BlockSpec;
 import 'marks.dart';
+import 'paste_repair.dart';
+import 'table_copy.dart';
 import 'clipboard_copy.dart';
 import 'file_names.dart';
 import 'image_actions.dart';
@@ -36,7 +38,7 @@ import 'prose_input.dart';
 export 'controller.dart'
     show DocOp, ApplyOps, ApplyHistory, HistoryAction, EditorHistoryState;
 export 'ai_edits.dart';
-export 'markdown.dart' show markdownToBlocks, BlockSpec;
+export '../markdown/markdown_codec.dart' show BlockSpec;
 export 'model.dart' show EditorNode;
 export 'render.dart' show EditorAppearance, EditorTheme, CommentHighlight;
 
@@ -1127,6 +1129,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (mounted) setState(() {});
   }
 
+  /// Engine parse of pasted / AI Markdown; null (logged) when the engine is
+  /// down, so the caller falls back to plain text instead of throwing (02 §5.2).
+  List<BlockSpec>? _parseOrNull(String md) => withEngineOrNull(() => markdownCodec.parseBlocks(md));
+
   /// Native paste interceptor (web): rich HTML or multi-line text is converted to
   /// Markdown and inserted as structured blocks; a single line of plain text
   /// falls through to the normal inline paste. Returns true when consumed.
@@ -1229,7 +1235,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         !node.isCode &&
         node.kind != 'table' &&
         !plain.contains('\n')) {
-      final parsed = parseInlineMath(plain);
+      final parsed = markdownCodec.parseInlineMath(plain);
       if (parsed.marks.isNotEmpty) {
         final sel = _controller.selection;
         if (sel != null) {
@@ -1265,8 +1271,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         !node.isAtomic &&
         !node.isCode &&
         node.kind != 'table') {
-      final specs = markdownToBlocks(markdown);
-      if (specs.length == 1) {
+      final specs = _parseOrNull(markdown);
+      if (specs != null && specs.length == 1) {
         final sel = _controller.selection;
         if (sel != null && !sel.isMultiNode) {
           final from = sel.start.node == sel.focus.node ? sel.start.offset : 0;
@@ -1294,7 +1300,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     if (rich || markdown.contains('\n')) {
       // Paste replaces the current selection (Ctrl+A → paste swaps the doc).
-      _controller.insertBlocksReplacingSelection(markdownToBlocks(markdown));
+      final parsed = _parseOrNull(markdown);
+      if (parsed == null) return false; // engine down → plain text branch
+      _controller.insertBlocksReplacingSelection(parsed);
       _rehostExternalImages();
       _syncImeFromSelection(force: true);
       return true;
@@ -1784,7 +1792,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // A chunk bringing 2+ NEW newlines at once is a paste: parse it as
     // Markdown into structured blocks instead of one literal block.
     if (!node.isCode && !shift && newBreaks >= oldBreaks + 2) {
-      _controller.replaceFocusedWithBlocks(markdownToBlocks(text));
+      _controller.replaceFocusedWithBlocks(_parseOrNull(text) ?? const []);
       _rehostExternalImages();
       _lastSentIme = _imeValue();
       _syncImeFromSelection(force: true);
@@ -2714,12 +2722,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final localRect = r.tableCellRect(node, row, col);
     if (localRect == null) return;
     final table = TableData.fromBlock(_controller.nodes[node].data);
-    final text = (row < table.rows.length && col < table.rows[row].length)
+    final cell = (row < table.rows.length && col < table.rows[row].length)
         ? table.rows[row][col]
-        : '';
-    // WYSIWYG cell editor: renders inline marks (bold/italic/code) live instead
-    // of the raw Markdown source, and serializes back to Markdown on commit.
-    final controller = CellEditController(text);
+        : TableCell.empty;
+    // WYSIWYG cell editor: edits the cell's text + marks directly (bold shows
+    // bold while typing); the model goes back to storage through the engine.
+    final controller = CellEditController(cell);
     final session = CellEditSession(_controller, _controller.nodes[node].id, row, col, controller);
     final focus = FocusNode();
     var committed = false;
@@ -4094,28 +4102,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // fabricate the empty-table placeholder and overwrite the clipboard with it.
     if (_controller.nodes[area.node].kind != 'table') return;
     final table = TableData.fromBlock(_controller.nodes[area.node].data);
-    final plainRows = <String>[];
-    final htmlRows = StringBuffer();
-    for (var r = area.r0; r <= area.r1 && r < table.rows.length; r++) {
-      if (r < 0) continue;
-      final plainCells = <String>[];
-      htmlRows.write('<tr>');
-      for (var c = area.c0; c <= area.c1 && c < table.rows[r].length; c++) {
-        if (c < 0) continue;
-        final parsed = parseInline(table.rows[r][c]);
-        plainCells.add(parsed.text.replaceAll('\t', ' ').replaceAll('\n', ' '));
-        htmlRows.write('<td>${inlineToHtml(parsed.text, parsed.marks)}</td>');
-      }
-      htmlRows.write('</tr>');
-      plainRows.add(plainCells.join('\t'));
-    }
+    final copied = tableAreaClipboard(table, r0: area.r0, c0: area.c0, r1: area.r1, c1: area.c1);
     if (cut && _cutPending) return;
     final tableId = _controller.nodes[area.node].id;
     final snapshot = table.toBlockData().toString();
     if (cut) _cutPending = true;
     copyRichToClipboard(
-      plain: plainRows.join('\n'),
-      richHtml: '<table>$htmlRows</table>',
+      plain: copied.plain,
+      richHtml: copied.html,
     ).then((success) {
       if (!cut) return;
       _cutPending = false;
@@ -5661,7 +5655,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       builder: (context) => _InlineAiDialog(onStream: stream),
     );
     if (result == null || result.markdown.trim().isEmpty) return;
-    _controller.insertBlocksAfterFocus(markdownToBlocks(result.markdown));
+    _controller.insertBlocksAfterFocus(_parseOrNull(result.markdown) ?? const []);
     _rehostExternalImages();
     _syncImeFromSelection(force: true);
   }
@@ -5753,7 +5747,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.collapseTo(
       DocPosition(nodeIndex, _controller.nodes[nodeIndex].text.length),
     );
-    _controller.insertBlocksAfterFocus(markdownToBlocks(result.markdown));
+    _controller.insertBlocksAfterFocus(_parseOrNull(result.markdown) ?? const []);
     _rehostExternalImages();
     _syncImeFromSelection(force: true);
   }

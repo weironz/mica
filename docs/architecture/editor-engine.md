@@ -619,15 +619,21 @@ The recurring problem the engine must get right for every node type:
      that was true when written and stopped being true without anything
      announcing it.)
      The decisive argument is not that the in-house parser scores well.
-     It is that comrak solves only HALF the problem: Mica runs TWO
-     parsers — Rust `crates/markdown` (authority) and Dart
+     It is that comrak solves only HALF the problem: at the time Mica ran
+     TWO parsers — Rust `crates/markdown` (authority) and Dart
      `editor/marks.dart` (the editor hot path's mirror) — and CLAUDE.md
-     requires their grammar to stay in step. comrak is a Rust crate; the
+     required their grammar to stay in step. comrak is a Rust crate; the
      Dart side cannot use it. Adopting it would turn "one hand-written
      rule set, changed in two places against one table of cases" into
      "comrak vs hand-written", which is the shape that diverges SILENTLY,
      and a divergence here means one document means two things depending
-     on which client opened it.
+     on which client opened it. (The mirror itself is gone now — the
+     [single-source project](../single-source/README.md) deleted it in
+     S3/S4 2026-10; the engine is the one parser, reached through
+     `MarkdownCodec` — which makes the "one implementation" half of the
+     argument structural instead of a rule to obey. The comrak decision
+     stands: it would still bundle far more dialect surface than Mica's
+     round-trip contract can keep honest.)
      0.13.13 is the worked example: `1~2` was made to stop being
      strikethrough — a DELIBERATE divergence from GitHub, confirmed
      against GitHub's own render API. In-house that is a few lines plus a

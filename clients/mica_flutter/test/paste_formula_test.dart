@@ -3,12 +3,16 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+
+import 'support/markdown_codec.dart';
 
 /// Math paste routing: a pasted line that is entirely one *display* formula
 /// ($$…$$, \[…\]) becomes a standalone math block; *inline* forms ($…$,
 /// \(…\)) are woven into the text flow as inline-math marks instead of
 /// jumping onto their own line.
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('pastedFormulaSource: display delimiters → math block source', () {
     const cases = {
       r'$$E = mc^2$$': r'E = mc^2',
@@ -40,7 +44,7 @@ void main() {
 
   group('parseInlineMath: weaves \$…\$ / \\(…\\) into math marks', () {
     test(r'a lone $E = mc^2$ becomes one marked run', () {
-      final r = parseInlineMath(r'$E = mc^2$');
+      final r = markdownCodec.parseInlineMath(r'$E = mc^2$');
       expect(r.text, r'E = mc^2');
       expect(r.marks, hasLength(1));
       expect(r.marks.single.type, 'math');
@@ -49,20 +53,20 @@ void main() {
     });
 
     test(r'mid-prose: see $x^2$ here', () {
-      final r = parseInlineMath(r'see $x^2$ here');
+      final r = markdownCodec.parseInlineMath(r'see $x^2$ here');
       expect(r.text, 'see x^2 here');
       expect(r.marks, hasLength(1));
       expect(r.text.substring(r.marks.single.start, r.marks.single.end), 'x^2');
     });
 
     test(r'\(…\) paren form', () {
-      final r = parseInlineMath(r'\(a+b\) and \(c\)');
+      final r = markdownCodec.parseInlineMath(r'\(a+b\) and \(c\)');
       expect(r.text, 'a+b and c');
       expect(r.marks, hasLength(2));
     });
 
     test(r'two dollar formulas on one line', () {
-      final r = parseInlineMath(r'$a$ and $b$');
+      final r = markdownCodec.parseInlineMath(r'$a$ and $b$');
       expect(r.text, 'a and b');
       expect(r.marks, hasLength(2));
     });
@@ -70,19 +74,19 @@ void main() {
     test(r'bare dollars (prices) are NOT math', () {
       // Pandoc rules: opener must not be followed by whitespace, closer must
       // not be preceded by whitespace — "$5 and $10" has no valid closer.
-      final r = parseInlineMath(r'price is $5 and $10');
+      final r = markdownCodec.parseInlineMath(r'price is $5 and $10');
       expect(r.marks, isEmpty);
       expect(r.text, r'price is $5 and $10');
     });
 
     test(r'a $$ display marker is left alone', () {
-      final r = parseInlineMath(r'$$E=mc^2$$');
+      final r = markdownCodec.parseInlineMath(r'$$E=mc^2$$');
       expect(r.marks, isEmpty);
       expect(r.text, r'$$E=mc^2$$');
     });
 
     test('plain text passes through verbatim', () {
-      final r = parseInlineMath('no formulas at all');
+      final r = markdownCodec.parseInlineMath('no formulas at all');
       expect(r.marks, isEmpty);
       expect(r.text, 'no formulas at all');
     });
@@ -98,7 +102,7 @@ void main() {
     test('weaves into the middle of a line, caret after the run', () {
       final c = fresh('before  after');
       c.selection = DocSelection.collapsed(const DocPosition(0, 7));
-      final parsed = parseInlineMath(r'$E=mc^2$');
+      final parsed = markdownCodec.parseInlineMath(r'$E=mc^2$');
       c.insertInlineSpan(0, 7, 7, parsed.text, parsed.marks);
 
       expect(c.nodes[0].text, 'before E=mc^2 after');

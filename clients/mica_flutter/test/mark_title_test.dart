@@ -1,9 +1,12 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide TableCell;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/cell_edit_controller.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/editor/table.dart' show TableCell;
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+import 'support/markdown_codec.dart';
 
 // Regression for issue #150: every Mark reconstruction (shift/split/normalize)
 // rebuilt the mark from (start, end, type, href) and DROPPED the link title, so
@@ -22,6 +25,7 @@ EditorNode _linkParagraph(String text, List<Mark> marks) => EditorNode(
 );
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('typing after a titled link keeps the title', () {
     final c = _doc([
       _linkParagraph('pre x', [
@@ -77,12 +81,14 @@ void main() {
     expect(c.documentMarkdown(), contains('"two"'));
   });
 
-  test('editing a table cell keeps a link title through serialize', () {
-    final ctrl = CellEditController('[x](/u "tip")');
+  test('editing a table cell keeps a link title through the cell model', () {
+    // The same cell a stored `[x](/u "tip")` source decodes to, via the engine.
+    final decoded = markdownCodec.decodeCells(['[x](/u "tip")']).single;
+    final ctrl = CellEditController(TableCell(decoded.text, decoded.marks));
     ctrl.value = const TextEditingValue(
       text: 'x!',
       selection: TextSelection.collapsed(offset: 2),
     );
-    expect(ctrl.serialize(), contains('"tip"'));
+    expect(ctrl.cell.marks.single.title, 'tip');
   });
 }

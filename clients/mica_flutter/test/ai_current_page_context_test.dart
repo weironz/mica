@@ -3,12 +3,18 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/editor/ai_edits.dart';
+import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
+import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/ui/page_title_field.dart';
 
+import 'support/markdown_codec.dart';
 import 'support/title_workspace.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   testWidgets('current-page AI sees live edits and title before insertion', (
     tester,
   ) async {
@@ -114,4 +120,57 @@ void main() {
       await tester.pumpAndSettle();
     });
   }
+
+  // Before S3 the page body was pure Dart and could not fail; through the
+  // engine it can (Web without its wasm). An empty string would make the AI
+  // answer about — and propose edits to — a page it believes is empty.
+  test(
+    'documentMarkdown never stands in an empty body for a missing engine',
+    () {
+      final controller = EditorController(
+        rootBlockId: 'root',
+        onOps: (_) async {},
+      )..load([EditorNode(id: 'p', kind: 'paragraph', text: '正文')]);
+      addTearDown(controller.dispose);
+      debugSetMarkdownCodec(const UnavailableMarkdownCodec());
+      addTearDown(useNativeMarkdownCodec);
+      expect(
+        controller.documentMarkdown,
+        throwsA(isA<MarkdownCodecException>()),
+      );
+    },
+  );
+
+  testWidgets(
+    'without the engine the AI dialog offers no current-page target',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final sent = <String>[];
+      await tester.pumpWidget(
+        titleWorkspace(
+          titleBootstrap('Infisical 介绍'),
+          (_, _) async => true,
+          onAiStream: (prompt, {system}) {
+            sent.add(prompt);
+            return Stream.value('x');
+          },
+          onAiCurrentPage: (_) async {},
+          onAiPreviewEdits: (_, _) async => throw const AiEditConflict(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      debugSetMarkdownCodec(const UnavailableMarkdownCodec());
+      addTearDown(useNativeMarkdownCodec);
+      await tester.tap(find.text('问 AI'));
+      await tester.pumpAndSettle();
+      expect(find.text('当前页面'), findsNothing);
+      expect(find.text('新建页面'), findsOneWidget, reason: 'other targets stay');
+      expect(sent, isEmpty);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+    },
+  );
 }

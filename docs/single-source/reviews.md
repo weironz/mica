@@ -17,6 +17,118 @@
 
 <!-- 第一条审核记录写在这一行下面 -->
 
+## G4 最终审核 — 2026-10-29 — 通过（审核方修复 6 处后）
+
+- 审核对象：`single-source` @ `f161e1e0`（S3 收尾 4 个提交 + S4 7 个 + S5 2 个 + 文档），按 05 清单 A–F 逐条核对；
+  审核方修复在 `e183c27b` / `473e21a7` / `ccef0112`，main 同步 merge `fed43b31`。
+- **门禁（审核方 Linux，Flutter 3.47.1 + Chromium）**：
+  - `f161e1e0` 原样：`bash scripts/local-ci.sh all` 跑到 `ALL GREEN`、exit 0——Rust 1157 + 213 passed、wire 黄金 9、
+    `flutter analyze` 0 warning、Flutter 2027 passed、Web 构建、Chrome 浏览器套件 9 组全部通过。
+  - 合并 main 与审核方修复后的最终树（`fed43b31` + 本记录）：`local-ci.sh all` 再跑到 `ALL GREEN`、exit 0——Rust `1160 passed` + store `213`、wire 黄金 9、wasm 203,003 B、
+    analyze 0 warning、Flutter `2030 passed`（多出的 3 个是新增的降级测试）、Web 构建、Chrome 浏览器套件 9 组全部通过。
+  - `just sdk-check` ALL GREEN（含新增的 `--no-default-features` 一步、npm 6 个 Node 测试、`npm pack --dry-run`）。
+
+### 逐条结果
+
+| 节 | 结果 |
+| --- | --- |
+| A1 | ✅ `lib/` 只剩门面接口 `MarkdownCodec.parseInline` 的声明与两平台转发，无 Dart 语法实现 |
+| A2 / A3 | ✅ `markdown.dart`、`list_serialization.dart` 已删；`marks.dart` 373 行，只剩标记模型操作 |
+| A4 / A7 | ✅ 门面外无引擎直调；wasm / npm 产物未入库 |
+| A5 | ✅ `mica-md` 依赖：serde、serde_json、thiserror（默认特性另加 uuid） |
+| A6 | ✅ 消费方 crate 只有 `app-core/tests/sync_pg.rs`（与 main 同一修复，合并时取 main） |
+| A8 | ✖→✅ **预算被调高**：`dd183384` 把编辑器库预算 7192 → 7232（提交说明却写「收紧」）。审核方压回 7186（见修复 2） |
+| A9 / A10 | ✅ `wasm-bindgen` 已登记；AGENTS.md「Markdown 只有一份实现」为 S4 T4.12 原文 |
+| B1 / B2 / B4 / B5 / B7 | ✅ 见上方门禁；CommonMark 641/641、GFM 24/24 在 `mica-markdown` 测试中 |
+| B3 | ⚠ Windows 集成测试（`markdown_codec_test` 10 passed、`clipboard_roundtrip_test` 1 passed）以执行方回执为准，审核方无 Windows |
+| B6 | ✅ 各阶段新测试都有「如何证明会失败」记录；审核方新增的测试同样先证红 |
+| B8 | ✅ `table_cell_storage_compat_test` 9 例通过（修复 1 后仍通过，表格 / 单元格相关 65 个测试全绿） |
+| B9 | ✖→✅ 抽查 S4 T4.9 映射：7 个 Rust 对应文件与 3 个点名测试都在；但 `inline_scan_perf_test` 9 例只迁了 7 例，`math_run_spans` 遇大量未闭合 `\(` 与「嵌套标记导出」两例没有 Rust 对应——审核方补到 `crates/md-core/tests/inline_perf.rs` |
+| C1 / C2 | ✅ 分诊与「待用户决定」（U-1、S4 选项 b、S5 Q1–Q6）都由用户拍板，有记录 |
+| C3 | ✖→✅ **三种降级行为没有测试**（只测了「降级门面会抛异常」）。审核方补 `markdown_codec_degradation_test.dart`：粘贴退回纯文本、复制只放纯文本、旧字符串单元格原文显示；三处降级逻辑各自弄坏时测试都变红 |
+| C4 | ⚠ 截图在执行方本机（不入库）；Web e2e 与桌面集成测试的回执在 S3 / S4 执行记录。审核方复现：Chrome 浏览器套件全绿、引擎不可用时的粘贴 / 复制 / 表格三场景（C3 测试） |
+| C5 | ✅ AI「读取当前页」与服务端解析都走同一引擎；G3 时已修「引擎不可用时当成空页」 |
+| D1 / D2 | ✅ 桌面 init 2 ms、Web 初始化 p50 14 ms（M2 记录） |
+| D3 | ✅ wasm 202,923–203,055 B ≤ 262,144 B（审核方 Linux 复建 203,003 B） |
+| D4 | ✅ 粘贴三档 ≤ Dart × 1.2（M2）；复制 10k 合计桌面约 4.9 ms、Web 4.3 ms ≤ 16 ms。合并时补上基准里缺的 `copy.10k` 合计判定行 |
+| D5 | ✅ 桌面 500 单元格首次解码 0.8–1.0 ms（执行方）；**Web 原未测**，审核方 Chrome 实测 5 轮中位 7.3 ms、最大 13.1 ms ≤ 30 ms；重排 0 次引擎调用 |
+| E1–E4 | ✅ 执行记录完整；03 §5 所列文档都已更新；`README` / `SCHEMA.md` / `CHANGELOG.md` 存在且由 `schema_doc_sync` 钉住；E3（移入 roadmap-done）按 AGENTS 在发版时做 |
+| F1 | 见 B9 |
+| F2 / F3 | ⚠ 需要 Windows 和旧版安装包，审核方做不了：真实复杂文档「复制 → 粘贴 → 再复制到 Typora」、旧版本客户端读新表格。存储形态与旧读法的兼容由 T4.8 测试按引擎解码证明 |
+| F4 | ✅ `md-wasm/src/lib.rs` 与 FFI `api/markdown.rs` 都是十个一行转发 |
+
+### 审核方直接完成的修复
+
+1. **单元格存储规则只有一处**（`e183c27b`）：S4 选项 b（读回不一致就存 `{text, marks: []}`）原来写在 Dart `TableData._encodeCells` 里，
+   Rust `encode_cell` 不知道这条规则，SDK 用户和其他写入方仍会得到有损的字符串。规则移进 `encode_cell`，**I3 恢复为严格无损**；
+   Dart 删掉读回比较；proptest 增加无标记单元格一条（先红：最小反例 `" "`）；wire 黄金只在两类有损用例上变化；02 §2.2 / §6.4、`SCHEMA.md`、`CHANGELOG` 同步。
+2. **编辑器库行数还回去**（`473e21a7`）：见 A8。三段手写 try/catch 改用 `withEngineOrNull`，表格区域复制的纯文本 + HTML 拼装移进独立库 `table_copy.dart`；
+   顺手把被插到 `_handleRichPaste` 文档注释中间的 `_parseOrNull` 注释归位。
+3. **补测试**（`ccef0112`）：C3 三种降级、B9 两个性能用例；`public_api.rs` 无条件引用 `BlockIds::Uuid`，
+   导致 `cargo test -p mica-md --no-default-features`（wasm 用的特性组合）从 S5 起编译不过——加 `cfg(feature = "uuid")`，并让 `sdk-check.sh` 跑这一组合。
+4. **合并 main**（`fed43b31`）：三处冲突都是两边各自做了同一个修复，取法见合并提交说明；基准补上 02 §7 的 `copy.10k ≤ 16 ms` 合计判定。
+
+### 建议（不阻塞）
+
+- SDK 的 Export HTML 对行首 `<script>` 等原样 HTML 块原样输出（为了 Markdown 往返保真），Mica 靠分享页 CSP 防住；SDK 用户没有这层 CSP。
+  **对外发布前**建议加一个「严格」档 HTML 输出（或默认剥除），README 已如实写明现状。
+- `packages/mica-md-js/package.json` 没有 `"private": true`，发布前的误操作只靠 npm 登录拦着；发布手册已写明由用户本人执行。
+- 执行方三次报告的门禁回执都有不实之处（G3 的 fmt、S3 的编辑器预算「收紧」、S5 的 no-default 编译），都被独立复跑抓到——以后任何阶段报全绿前，请把预算表 diff 和 `--no-default-features` 也看一眼。
+
+### 结论
+
+**G4 通过。** `single-source` 用 merge 提交并回 main。不发版：`publish = false` 保持，crate / npm 发布与 App 发版都等用户明确要求；
+发版时按 AGENTS 把路线图条目移入 `roadmap-done.md`。
+
+## G3 补充 — 2026-10-28 — 审核方复跑 Flutter，并按用户要求直接完成必须修改
+
+- 审核方装了 Flutter 3.47.1（官方包，SHA-256 校验，Dart 3.13.1 与执行方一致），在 Linux 上复跑 `98c71d14`：
+  - ✖ **执行方的 `local-ci.sh all` 全绿回执不成立**：第一步 `cargo fmt --all --check` 就失败（`crates/md-core/tests/wire.rs`，从 B-1 的 `7ef6bbba` 起，`dd183384` 与 `98c71d14` 同样失败）；
+    格式修正后 `flutter analyze --no-fatal-infos` 仍有 5 个 warning：`_rangeMarkdown` / `_listRunHtml` / `_tableHtml` 无引用（G3 停点的预期状态，T3.6 删除后消失），
+    以及两个测试的多余 import。脚本遇错即停，所以不可能在 `dd183384` 上跑出全绿。上一轮 G3 审核方只跑了测试与 clippy、没跑格式检查，也漏了这一处。
+  - ✅ 跳过 analyze 后：Rust 1142 + 213 passed；Flutter 单元测试 `receipt: 2210 passed (floor 1000)`、29 skipped、0 failed（执行方 Windows 2232 / 21，差异是平台条件测试）；
+    `browser-tests.sh` 9 组 Chrome 套件全部通过（含真实 wasm 门面契约）。
+- 按用户要求，三条必须修改由审核方完成（细节与回归测试见 S3 执行记录末节「G3 必须修改：审核方完成」）。改写往返测试时抓到读回端一个真 bug（字面 `!` 紧挨链接读回成图片），已修并配测试。
+- 执行方注意：
+  - 三条必须修改已完成，**不要再做**；在本提交之后继续 T3.6 / T3.9–T3.11。
+  - T3.6 删掉 `_rangeMarkdown` 等之后，`flutter analyze` 应为 0 warning。以后报门禁回执前，请确认 `local-ci.sh all` 真的跑到了结尾的 `ALL GREEN`。
+
+## G3 删除之前 — 2026-10-28 — 通过（附条件）
+
+- 审核对象：`single-source` @ `98c71d14`（S3 的 `e7b4a533` … `98c71d14`，8 个提交），S3 执行记录「当前结论」至「G3 停点声明」。
+- 核对结果：
+  - ✅ **停点前提成立**：旧实现都还在——`controller.dart` 的 `_rangeMarkdown`（1345 行）、`selectionHtml` 旧体与 `_listRunHtml`、`marks.dart` 的 `inlineToHtml`、
+    `list_serialization.dart`（48 行）。`markdown.dart` 少的 146 行是 T3.1 搬进 `paste_repair.dart` 的粘贴启发式。
+    执行记录「删除 −7,460」的大头是差分基线 JSON 重置（`differential_baseline.json` −7,540），不是删产品代码，表述要改（见必须修改 3）。
+  - ✅ 引擎调用点全部在边界上：复制（`selectionText` / `selectionHtml` / 单元格复制）、粘贴（`_parseOrNull`、`parseInlineMath`、HTML 粘贴里的 `mathRunSpans`）、
+    AI（`editor_ai`、`main_shell` 导入）、整页 Markdown。渲染与输入热路径没有调用引擎。
+  - ✅ 粘贴降级：`_parseOrNull` 捕获 `MarkdownCodecException` 后退回纯文本；复制失败时返回空串，`_copySelection` 退回只放纯文本。
+  - ✖ **AI 读取当前页的降级不对**：`documentMarkdown()` 在引擎不可用时**静默返回空串**，`_openAiDialog` 的 `currentPage` 与 `readPageForEdits` 都拿它当页面正文。
+    S3 之前这是纯 Dart、不会失败；现在 Web 上 wasm 没加载成功时，AI 会把有内容的页面当空页来回答、甚至据此生成编辑。这不在 02 §5.2 允许的降级里。
+  - ✅ 引擎侧（审核方 Linux）：`cargo test --locked` `-p mica-md` 82 / `--features render` 81 / `--no-default-features` 81 / `-p mica-md-wasm` 10 / `-p mica-markdown` 185，全部 0 failed 0 ignored；
+    clippy `-D warnings` 通过；`build-md-wasm.sh` 202,923 B（≤ 262,144）；正式 wasm 黄金重放 396 例逐字节。
+  - ⚠ Flutter 侧（`flutter test` 2232 passed、`local-ci.sh all` 于 `dd183384`）**审核方未复跑**（本环境没有 Flutter），以执行方回执为准。
+  - ✅ T3.7 分诊：B 1 / R 6 / H 3 / U 1，每条有结论；U-1（部分选中代码块复制带围栏）已由用户 2026-10-28 拍板。「用户可见变化」三条可进发版说明。
+  - ✖ **T3.8 往返测试太弱**：35 个 fixture 里有 18 个因为「某一处已知损失」**整个文件跳过不比**（`markTestSkipped`）。例如 `13-links.md` 只因 title 会丢就整文件跳过，
+    这个文件里链接地址、文字、其他标记出了新回归都抓不到。而这个测试自己写明是「Rust 写剪贴板 HTML → Dart 读回」这条跨语言链路的**唯一**防线。
+  - ✅ 18 类损失都不是 S3 引入的：Rust Clipboard 写出的 HTML 与旧 Dart 在 30 个样本上逐字节相同（T3.4 移植测试），读回仍是同一个 `htmlToMarkdown`。
+    但要注意：桌面和 Web 粘贴**都优先读 HTML**，编辑器没有内部剪贴板捷径，所以 Mica 内部复制粘贴时用户确实会碰到这些损失（链接 title、引用里的软换行、callout 类型等）。
+- 契约问题裁决：
+  - **B-1 `7ef6bbba` 改了冻结契约**（02 §3.2 原文「marks 若存在则按 §3.4 排序」规定的是输出顺序，不只是比较）。修复本身正确、影响面小：
+    同区间两个标记时编辑器 `_normalize` 的顺序与原排序一致，只有三个及以上同区间且类型重复时有差别。**事后批准**，02 §3.2 / §3.4 已改为「线格式保留解析器产出顺序，比较时排序」。
+    提醒：以后动冻结契约，先在 PR 里单列「契约变更」等审核方回复，不要先改后报。
+- 必须修改（S3 内完成，G4 核对；**不阻塞 T3.6**——两条都不需要旧 Dart 实现做对照）：
+  1. 引擎不可用时，`documentMarkdown()` 不能返回空串冒充空页：改为返回 `null`（或抛出），AI「读取当前页」与 `readPageForEdits` 遇到时明确报错、不发请求。
+     配回归测试：`UnavailableMarkdownCodec` 下打开 AI 当前页 / AI 编辑，断言不会把空串当正文发出（先证明现状会失败）。
+  2. `clipboard_mica_roundtrip_test` 改为**按损失项定点抹平再比**，不整文件跳过：只抹掉已知会丢的那一项（链接 / 图片 `title`、块内软换行折成空格、`marker`、`loose`、`alert`、
+     代码 span 首尾空白），其余内容照比。只有确实无法定点抹平的（`33-tilde-fallback` 空代码块、`43-inline-nesting-budget`）可以保留整文件例外并写明理由。改完后例外清单应只剩这两个左右。
+  3. 改正 S3 执行记录「删除行数」：分开写产品代码与基线 / fixture 的增删行数。
+- 建议（不阻塞）：
+  - Mica 自己复制出的 HTML 带 `data-mica-*` 标记，而同时放进剪贴板的 `text/plain` 是完整 Markdown。粘贴时若识别出是 Mica 自己的 HTML 就改读 Markdown，
+    18 类损失在 Mica 内部复制粘贴时全部消失。这是产品行为变化，S3 之后由用户决定要不要做。
+- 交给用户的决定：U-1 已决定；上面的「Mica 内部粘贴优先读 Markdown」是可选的后续改进。
+- 结论：**G3 通过**，WP-D 可以执行 T3.6 删除 Dart 实现，继续 T3.9–T3.11；必须修改 1–3 在 S3 内完成，G4 核对。
+
 ## M2 复核 — 2026-10-27 — 通过
 
 - 审核对象：`single-source` @ `e7b5cb10`。自 `9e604c43` 起 `crates/`、`clients/`、`Cargo.toml`、`Cargo.lock` 无改动，所以首轮 M2 的全量 Rust 门禁结果（1141 + 213 passed）仍然适用于本树。

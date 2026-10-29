@@ -5,13 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'details_html.dart';
 import 'ai_edits.dart';
 import 'highlight.dart' show kCodeLanguages, detectLanguage;
-import 'list_serialization.dart';
 import 'marks.dart';
 import 'model.dart';
 import 'operation_history.dart';
 import 'selection_reconcile.dart';
 import 'selection_marks.dart';
 import 'table.dart';
+import '../markdown/markdown_codec.dart'
+    show markdownCodec, MarkdownCodecException, BlockSpec;
 import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
 export 'operation_history.dart'
@@ -1093,9 +1094,8 @@ class EditorController extends ChangeNotifier {
               .map(
                 (row) => row
                     .map(
-                      (cell) => parseInline(
-                        cell,
-                      ).text.replaceAll('\t', ' ').replaceAll('\n', ' '),
+                      (cell) =>
+                          cell.text.replaceAll('\t', ' ').replaceAll('\n', ' '),
                     )
                     .join('\t'),
               )
@@ -1148,33 +1148,109 @@ class EditorController extends ChangeNotifier {
   /// Serialize selected Markdown for export and AI input (tables become GFM).
   /// [imageUrls] maps file IDs to fresh download URLs.
   String selectionText({Map<String, String>? imageUrls}) {
-    final sel = selection;
-    if (sel == null) return '';
-    // Match the clipboard slices: a caret on an atomic block selects that block.
-    final DocPosition s;
-    final DocPosition e;
-    if (sel.isCollapsed) {
-      final i = sel.focus.node;
-      if (i < 0 || i >= nodes.length || !nodes[i].isAtomic) return '';
-      s = DocPosition(i, 0);
-      e = DocPosition(i, nodes[i].text.length);
-    } else {
-      s = sel.start;
-      e = sel.end;
+    try {
+      return markdownCodec.serializeBlocks(selectionBlocks(),
+          assets: imageUrls ?? const {});
+    } on MarkdownCodecException {
+      return ''; // caller already handles empty → plain-text-only clipboard
     }
-
-    return _rangeMarkdown(s, e, imageUrls: imageUrls);
   }
 
   /// The live body, including edits not yet flushed to the backend. Uses the
   /// same Markdown serializer as selection copy without moving the caret.
+  ///
+  /// Throws [MarkdownCodecException] when the engine is unavailable: callers
+  /// (AI current page / AI edits) must not mistake that for an empty page.
   String documentMarkdown({Map<String, String>? imageUrls}) {
     if (nodes.isEmpty) return '';
-    return _rangeMarkdown(
-      const DocPosition(0, 0),
-      DocPosition(nodes.length - 1, nodes.last.text.length),
-      imageUrls: imageUrls,
-    );
+    return markdownCodec.serializeBlocks(documentBlocks(),
+        assets: imageUrls ?? const {});
+  }
+
+  /// The selection as engine blocks: each slice of [_selectionSlices] becomes a
+  /// [BlockSpec] carrying only the selected text, with marks clipped to it.
+  /// Partially selected blocks lose their quote grouping (the old HTML writer's
+  /// `setQuote(full ? depth : 0)`). Code blocks get the language the copy should
+  /// carry ([_copyLanguage] — auto-detected, Dart-only, 02 §2.1).
+  List<BlockSpec> selectionBlocks() {
+    final out = <BlockSpec>[];
+    for (final sl in _selectionSlices()) {
+      final node = nodes[sl.node];
+      // An atomic block is copied whole even when the slice's offsets are
+      // empty (a caret parked on it selects it, per _selectionSlices): the
+      // old writer did this and the engine has no partial image/divider.
+      final from = node.isAtomic ? 0 : sl.from;
+      final to = node.isAtomic ? node.text.length : sl.to;
+      final full = from == 0 && to == node.text.length;
+      var kind = node.kind;
+      var data = Map<String, dynamic>.from(node.data);
+      if (!full) {
+        // A partial first/last block is copied as PLAIN inline text, without
+        // its block marker — the old writer's rule, kept because copying a few
+        // words out of a heading and pasting them into a paragraph should not
+        // produce a heading. Code keeps its kind (the engine fences the
+        // fragment; recorded as a visible change in the S3 triage).
+        if (kind != 'code_block') kind = 'paragraph';
+        data = {};
+      }
+      if (node.kind == 'code_block') {
+        final lang = _copyLanguage(node);
+        lang.isEmpty ? data.remove('language') : data['language'] = lang;
+      }
+      if (node.kind == 'numbered_list') {
+        // The engine numbers a run from its first item (data.start); a copy
+        // that begins mid-list must carry the VISIBLE ordinal, or items 2–3
+        // come back as 1–2.
+        final ordinal = _visibleOrdinal(sl.node);
+        if (ordinal != null) data['start'] = ordinal;
+      }
+      final marks = clipMarks(marksFromData(node.data), from, to);
+      marks.isEmpty ? data.remove('marks') : data['marks'] = marksToJson(marks);
+      out.add((kind: kind, text: node.text.substring(from, to), data: data));
+    }
+    return out;
+  }
+
+  /// The number a numbered item SHOWS, walking the run from its head: an item
+  /// with an explicit `start`/`marker` sets the base, and each following
+  /// sibling at the same indent/quote/container is one past the previous.
+  /// Null when the item is not a numbered list item.
+  int? _visibleOrdinal(int index) {
+    final node = nodes[index];
+    if (node.kind != 'numbered_list') return null;
+    bool sameRun(EditorNode at) =>
+        at.kind == 'numbered_list' &&
+        at.indent == node.indent &&
+        at.quoteDepth == node.quoteDepth &&
+        at.data['li'] == node.data['li'];
+    bool restarts(EditorNode at) =>
+        at.data.containsKey('start') || at.data.containsKey('marker');
+    // Head of the run: the first item back that either opens a run itself
+    // (`start`/`marker`) or is not preceded by a sibling of the same run.
+    var head = index;
+    while (head > 0 && sameRun(nodes[head - 1]) && !restarts(nodes[head])) {
+      head--;
+    }
+    final start = nodes[head].data['start'];
+    final base = start is int && start >= 0 ? start : 1;
+    final ordinal = base + (index - head);
+    // Same clamp the old list layout applied before writing the number.
+    return ordinal <= 999999999 ? ordinal : 1;
+  }
+
+  /// The whole document as engine blocks (no slicing — every node is full).
+  List<BlockSpec> documentBlocks() {
+    return [
+      for (final node in nodes)
+        () {
+          final data = Map<String, dynamic>.from(node.data);
+          if (node.kind == 'code_block') {
+            final lang = _copyLanguage(node);
+            lang.isEmpty ? data.remove('language') : data['language'] = lang;
+          }
+          return (kind: node.kind, text: node.text, data: data);
+        }(),
+    ];
   }
 
   EditorAiSnapshot captureAiSnapshot() => EditorAiSnapshot(rootBlockId, nodes);
@@ -1250,287 +1326,6 @@ class EditorController extends ChangeNotifier {
     }
   }
 
-  String _codeFenceFor(String text) {
-    var longest = 0, cur = 0;
-    for (var i = 0; i < text.length; i++) {
-      if (text[i] == '`') {
-        cur++;
-        if (cur > longest) longest = cur;
-      } else {
-        cur = 0;
-      }
-    }
-    return '`' * (longest + 1 < 3 ? 3 : longest + 1);
-  }
-
-  String _rangeMarkdown(
-    DocPosition s,
-    DocPosition e, {
-    Map<String, String>? imageUrls,
-  }) {
-    final listLayout = markdownListLayout(nodes);
-    String nodeBody(int i, int from, int to) {
-      final node = nodes[i];
-      if (node.kind == 'table') {
-        return tableToMarkdown(TableData.fromBlock(node.data));
-      }
-      if (node.kind == 'image') {
-        final fileId = node.data['file_id'] as String?;
-        final target =
-            (imageUrls?[fileId] ?? node.data['url'] ?? node.data['name'] ?? '')
-                as String;
-        final destination = escapeMarkdownDestination(target);
-        // Same title rule as the inline serializer (marks.dart) — an image
-        // BLOCK keeps its title in `data`, and dropping it here lost it on
-        // every copy of a titled image.
-        final title = node.data['title'] as String?;
-        final alt = escapeInline(node.text);
-        return title == null
-            ? '![$alt]($destination)'
-            : '![$alt]($destination "${escapeMarkdownTitle(title)}")';
-      }
-      if (node.kind == 'divider') return '---';
-      // A math block is LaTeX source, not prose: it needs its `$$` fence and
-      // must not be escaped. Falling through to the paragraph path ran it
-      // through `escapeInline`, so copying a formula produced
-      // `\\int\_0^\\infty …` — broken on paste, and unreadable everywhere else.
-      if (node.kind == 'math_block') {
-        final body = node.text.substring(
-          from.clamp(0, node.text.length),
-          to.clamp(0, node.text.length),
-        );
-        return from == 0 && to == node.text.length ? '\$\$\n$body\n\$\$' : body;
-      }
-      final len = node.text.length;
-      final a = from.clamp(0, len);
-      final b = to.clamp(0, len);
-      final full = a == 0 && b == len; // whole block selected
-      final sub = node.text.substring(a, b);
-      if (node.kind == 'code_block') {
-        if (!full) return sub;
-        // `data.raw` marks an HTML BLOCK, which the importer stores as a code
-        // block only to hold the source. Fencing it turns live HTML into a
-        // displayed code listing — the `raw` flag is lost on re-import and the
-        final body = node.data['raw'] == true
-            ? sub
-            : '${_codeFenceFor(sub)}${_copyLanguage(node)}\n$sub\n${_codeFenceFor(sub)}';
-        // Quote membership must survive too. This branch used to return before
-        // any prefix was applied, so a fenced block inside a blockquote came
-        // out with no `>` at all and fell straight out of the quote on paste.
-        final depth = node.quoteDepth.clamp(0, 16);
-        if (depth == 0) return body;
-        final marker = ('> ' * depth).trimRight();
-        return body
-            .split('\n')
-            .map((l) => l.isEmpty ? marker : '$marker $l')
-            .join('\n');
-      }
-      final marks = <Mark>[];
-      for (final m in marksFromData(node.data)) {
-        final s = m.start.clamp(a, b);
-        final e = m.end.clamp(a, b);
-        // `title` rides along or the link/image loses it: `[t](/u "the title")`
-        // came out as `[t](/u)`, silently dropping data the model carries.
-        if (e > s) {
-          marks.add(Mark(s - a, e - a, m.type, href: m.href, title: m.title));
-        }
-      }
-      // Unmarked text still needs escaping. Returning `sub` raw meant a literal
-      // `*not bold*` or `[not a link](x)` in the source came back as emphasis
-      // and as a real link when the copy was pasted — the round-trip invariant
-      // broken by the one path that skipped the serializer entirely.
-      var inline = marks.isEmpty
-          ? escapeInline(sub)
-          : inlineToMarkdown(sub, marks);
-      if (full && (node.kind == 'paragraph' || node.kind == 'quote')) {
-        // A copied paragraph that looks like a list/heading/divider must
-        // not change kind when pasted back as markdown — on EVERY line: after
-        // a hard break, `- item` on line two started a real list.
-        inline = escapeBlockLeaders(inline);
-      }
-      // Prepend the block-level Markdown marker only for a fully-selected block
-      // (a partial first/last line is copied as plain inline text).
-      if (!full) return inline;
-      // EVERY line needs its prefix, not just the first. A block's text can
-      // hold newlines (a quote with two lines, a list item with a lazy
-      // continuation), and prefixing only line 1 meant the rest escaped the
-      // block on paste: a quote's second line lost its `>` and became a
-      // separate paragraph. Mirrors the Rust exporter, which re-prefixes every
-      // emitted line and turns blank ones into a bare marker.
-      // A heading whose text spans lines has no ATX form — `#` ends at the
-      // newline, so `# para first\npara second` pasted back as a heading plus
-      // a stray paragraph, losing the second line from the heading entirely.
-      // Setext (`===` / `---`) is the shape that holds it, and it is what the
-      // Rust exporter emits.
-      if (node.kind == 'heading' &&
-          inline.contains('\n') &&
-          node.headingLevel <= 2) {
-        final rule = (node.headingLevel == 1 ? '=' : '-') * 3;
-        final q = '> ' * node.quoteDepth.clamp(0, 16);
-        return '${inline.split('\n').map((l) => '$q$l').join('\n')}\n$q$rule';
-      }
-      final head = _blockPrefix(node, listLayout[i]);
-      if (!inline.contains('\n')) return '$head$inline';
-      final cont = _continuationPrefix(node, listLayout[i]);
-      final lines = inline.split('\n');
-      // A list item's continuation line lands ON its content column, so a line
-      // that merely LOOKS like a block leader starts a real block on re-import:
-      // `d\n- e` (CommonMark ex. 312) came back as `- d` + a nested `- e`, one
-      // block turning into two on copy-paste. Mirrors Rust `push_list_item`,
-      // which escapes exactly here. Paragraph and quote lines were already
-      // escaped line by line above.
-      final escapeCont = node.isListKind;
-      return [
-        '$head${lines.first}',
-        for (final l in lines.skip(1))
-          l.isEmpty
-              ? cont.trimRight()
-              : '$cont${escapeCont ? escapeBlockLeader(l) : l}',
-      ].join('\n');
-    }
-
-    // `data.li` marks a block as a CHILD of a list item — a fence, quote,
-    // divider or second paragraph living inside it. What makes it a child on
-    // re-import is the indent to the item's content column; without it the
-    // block came back as a top-level sibling and the item lost its contents.
-    // A wrapper because the kind branches above each return early, so there is
-    // no single exit to hang it off.
-    String nodeText(int i, int from, int to) {
-      var body = nodeBody(i, from, to);
-      final node = nodes[i];
-      // A callout group head carries `data.alert`: prepend the GFM marker line
-      // `> [!TYPE]` (only when the whole head block is in the copy range) so the
-      // blockquote re-imports as an alert. Mirrors the Rust exporter.
-      final alert = node.data['alert'];
-      if (alert is String &&
-          from <= 0 &&
-          to >= node.text.length &&
-          body.isNotEmpty) {
-        body = '> [!${alert.toUpperCase()}]\n$body';
-      }
-      final li = node.data['li'];
-      if (li is! int || body.isEmpty) return body;
-      // Clamped like every other depth read (`kMaxNestingDepth`): a `data.li`
-      // written by an API client as 1e9 made this a multi-GB string (P1-6).
-      final pad = ' ' * (4 * (li.clamp(0, kMaxNestingDepth) + 1) + listLayout[i].extraIndent);
-      return body.split('\n').map((l) => l.isEmpty ? '' : '$pad$l').join('\n');
-    }
-
-    if (s.node == e.node) {
-      return nodeText(s.node, s.offset, e.offset);
-    }
-    // Blank line between blocks so headings/lists parse as Markdown — but
-    // consecutive quote blocks of one group join with a SINGLE newline: a
-    // blank line is the Markdown boundary between blockquotes, so the
-    // round-trip would mark every line `qbreak` and the quote bar shatters.
-    final buf = StringBuffer(
-      nodeText(s.node, s.offset, nodes[s.node].text.length),
-    );
-    for (var i = s.node + 1; i <= e.node; i++) {
-      // Membership in a quote group is `quoteDepth`, not `kind == 'quote'`: a
-      // heading, list or fence nested in a blockquote carries `data.quote` and
-      // keeps its own kind. Testing the kind missed those, so a blank line
-      // went in between them — and a blank line ENDS a blockquote, so the
-      // group split (`qbreak`) and the quote bar broke on paste.
-      final sameQuoteGroup =
-          nodes[i].quoteDepth > 0 &&
-          nodes[i - 1].quoteDepth > 0 &&
-          nodes[i].data['qbreak'] != true;
-      // Consecutive list items are TIGHT: a blank line between them is what
-      // makes a list loose in CommonMark, which wraps every item in <p> and
-      // renders differently. Copying a tight list used to paste back a loose
-      // one. Mirrors `append_markdown_children`, which pushes a blank only
-      // when a list run ENDS (before a non-item), never between items.
-      // ...but only within ONE run. Switching kind (bullets → numbers → todo)
-      // starts a NEW list, and without the blank the two merge back into one
-      // on paste. Same rule as the Rust exporter.
-      // A list RUN includes its items AND their container children
-      // (`data.li` — a fence, quote or divider nested in an item). Everything
-      // inside one run joins tightly; a blank line anywhere inside it is what
-      // marks the list loose on re-import, which wraps every item in `<p>`.
-      //
-      // Two things still force the blank, and each encodes something:
-      //   * `loose: true` on the item IS a recorded blank line — dropping it
-      //     changes how the list renders;
-      //   * a child PARAGRAPH, where the blank is what made it a child
-      //     paragraph rather than a lazy continuation of the item's text.
-      //
-      // A KIND change (bullets → numbers → todo) deliberately does NOT force
-      // one. Changing the list type already starts a new list in CommonMark,
-      // so the blank is redundant — and it is not free: it sets `pendingLoose`
-      // in the importer, which the next item consumes, so the item came back
-      // marked loose when it never was. Verified by removing the rule: every
-      // fixture still round-trips, including the ones with adjacent lists of
-      // different kinds, whose blank comes from `loose` instead.
-      bool inRun(EditorNode n) => n.isListKind || n.data['li'] is int;
-      final childParagraph =
-          nodes[i].data['li'] is int && nodes[i].kind == 'paragraph';
-      final sameListRun =
-          inRun(nodes[i]) &&
-          inRun(nodes[i - 1]) &&
-          !childParagraph &&
-          nodes[i].data['loose'] != true;
-      buf.write(sameQuoteGroup || sameListRun ? '\n' : '\n\n');
-      buf.write(
-        i == e.node
-            ? nodeText(e.node, 0, e.offset)
-            : nodeText(i, 0, nodes[i].text.length),
-      );
-    }
-    return buf.toString();
-  }
-
-  /// The leading Markdown marker for a block kind (heading/list/quote/todo).
-  /// A non-quote block that lives INSIDE a blockquote (`data.quote` > 0 on a
-  /// heading/list/code) keeps its `> ` markers — dropping them stripped the
-  /// quote from every such block on copy.
-  String _blockPrefix(EditorNode node, ListSerialization layout) {
-    final pad = node.isListKind ? ' ' * (4 * node.indent + layout.extraIndent) : '';
-    final quote = node.kind == 'quote'
-        ? ''
-        : '> ' * node.quoteDepth.clamp(0, 16);
-    switch (node.kind) {
-      case 'heading':
-        return '$quote${'#' * node.headingLevel} ';
-      case 'bulleted_list':
-        // `data.marker` records a marker change that separates two adjacent
-        // lists — serialize it or the lists merge back into one on paste.
-        return '$quote$pad${(node.data['marker'] as String?) ?? '-'} ';
-      case 'numbered_list':
-        // Keep the run's visible ordinal and recorded delimiter.
-        final delim = (node.data['marker'] as String?) ?? '.';
-        return '$quote$pad${layout.number ?? 1}$delim ';
-      case 'quote':
-        // Nested quotes repeat the marker, matching the Rust exporter.
-        return '> ' * node.quoteDepth.clamp(1, 16);
-      case 'todo':
-        return node.todoChecked ? '$quote$pad- [x] ' : '$quote$pad- [ ] ';
-      case 'footnote_def':
-        // GFM definition leader; continuation lines indent 4 columns, but the
-        // copy path is line-oriented so the prefix covers the first line.
-        return '$quote[^${node.data['label'] ?? ''}]: ';
-      default:
-        return quote;
-    }
-  }
-
-  /// What lines 2..n of a multi-line block carry so they stay inside it.
-  ///
-  /// A quote repeats its `> `; a list item indents to its own content column
-  /// (the width of the marker it just emitted), which is what makes the line a
-  /// continuation rather than a new paragraph on re-import.
-  String _continuationPrefix(EditorNode node, ListSerialization layout) {
-    final quote =
-        '> ' * node.quoteDepth.clamp(node.kind == 'quote' ? 1 : 0, 16);
-    if (!node.isListKind) return quote;
-    final marker = switch (node.kind) {
-      'todo' => 6, // `- [x] `
-      'numbered_list' => '${layout.number ?? 1}. '.length,
-      _ => 2, // `- `
-    };
-    return '$quote${' ' * (4 * node.indent + layout.extraIndent)}${' ' * marker}';
-  }
-
   /// The (node, from, to) slices the current ranged selection covers, in order.
   /// Empty when there is no ranged selection. Backs both clipboard flavors
   /// ([selectionText] keeps its own walk for the quote-group/list-run newline,
@@ -1572,248 +1367,20 @@ class EditorController extends ChangeNotifier {
     return out;
   }
 
-  /// A run of consecutive list items → nested `<ul>`/`<ol>` HTML. An item
-  /// whose `data.indent` is deeper than the current level opens a sublist
-  /// INSIDE the previous `<li>` (`</li>` is written lazily so the nested list
-  /// sits within it — valid HTML, what Typora/Word expect); a shallower item
-  /// pops back out. A kind change at the same level (`ul` ↔ `ol`) closes the
-  /// current list and opens the other.
-  static String _listRunHtml(
-    List<EditorNode> items,
-    String Function(EditorNode) content,
-  ) {
-    var i = 0;
-    String emit(int level) {
-      final sb = StringBuffer();
-      String? tag;
-      var liOpen = false;
-      while (i < items.length) {
-        final it = items[i];
-        final lv = it.indent < 0 ? 0 : it.indent;
-        if (lv < level) break;
-        if (lv > level) {
-          // Deeper item: nest inside the open <li>; a run that STARTS deep
-          // (selection began on a nested item) just emits the sublist bare.
-          sb.write(emit(level + 1));
-          continue;
-        }
-        final want = it.kind == 'numbered_list' ? 'ol' : 'ul';
-        if (tag != want) {
-          if (liOpen) {
-            sb.write('</li>');
-            liOpen = false;
-          }
-          if (tag != null) sb.write('</$tag>');
-          // `<ol start="5">`: the run's real first number must survive the
-          // trip — pasting `5. five` back as `1.` changes visible content.
-          final start = want == 'ol' ? it.data['start'] : null;
-          sb.write(
-            start is int && start != 1 ? '<ol start="$start">' : '<$want>',
-          );
-          tag = want;
-        }
-        if (liOpen) sb.write('</li>');
-        sb.write('<li>${content(it)}');
-        liOpen = true;
-        i++;
-      }
-      if (liOpen) sb.write('</li>');
-      if (tag != null) sb.write('</$tag>');
-      return sb.toString();
-    }
-
-    return emit(0);
-  }
-
-  /// The selection as HTML — the clipboard's rich flavor, built straight from the
-  /// block model (headings, lists, quotes, code, tables + inline marks) so
-  /// Markdown editors that read `text/html` keep the formatting. Consecutive list
-  /// items / quotes group into one `<ul>`/`<ol>`/`<blockquote>`; nested list
-  /// levels (`data.indent`) become nested `<ul>`/`<ol>`.
+  /// The selection as HTML — the clipboard's rich flavor, rendered by the Rust
+  /// engine's Clipboard dialect (02 §2.1). Consecutive list items / quotes
+  /// group into one <ul>/<ol>/<blockquote>; nested levels (`data.indent`)
+  /// become nested lists; quotes nest by `data.quote` depth. Slicing and mark
+  /// clipping happen in [selectionBlocks] before the engine sees the blocks.
   String selectionHtml({Map<String, String>? imageUrls}) {
     final slices = _selectionSlices();
     if (slices.isEmpty) return '';
-    final buf = StringBuffer();
-    // Open <blockquote> nesting: adjusted per block to its quoteDepth, so
-    // depth-2 quotes emit nested blockquotes and heading/list/code blocks
-    // living INSIDE a quote (data.quote > 0) keep their wrapper instead of
-    // being dumped outside it.
-    var quoteDepth = 0;
-    void setQuote(int depth) {
-      while (quoteDepth > depth) {
-        buf.write('</blockquote>');
-        quoteDepth--;
-      }
-      while (quoteDepth < depth) {
-        buf.write('<blockquote>');
-        quoteDepth++;
-      }
+    try {
+      return markdownCodec.renderClipboardHtml(selectionBlocks(),
+          imageSrcs: imageUrls ?? const {});
+    } on MarkdownCodecException {
+      return ''; // _copySelection treats empty HTML as text-only copy
     }
-
-    String inlineHtmlOf(EditorNode node, int a, int b) {
-      final clipped = <Mark>[];
-      for (final m in marksFromData(node.data)) {
-        final s = m.start.clamp(a, b);
-        final e = m.end.clamp(a, b);
-        if (e > s) {
-          clipped.add(Mark(s - a, e - a, m.type, href: m.href, title: m.title));
-        }
-      }
-      return inlineToHtml(node.text.substring(a, b), clipped);
-    }
-
-    bool fullListItem(({int node, int from, int to}) sl) {
-      final node = nodes[sl.node];
-      final len = node.text.length;
-      if (!(sl.from.clamp(0, len) == 0 && sl.to.clamp(0, len) == len)) {
-        return false;
-      }
-      return node.kind == 'bulleted_list' ||
-          node.kind == 'numbered_list' ||
-          node.kind == 'todo';
-    }
-
-    var si = 0;
-    while (si < slices.length) {
-      final sl = slices[si];
-      final node = nodes[sl.node];
-      final len = node.text.length;
-      final a = sl.from.clamp(0, len);
-      final b = sl.to.clamp(0, len);
-      final full = a == 0 && b == len;
-
-      if (node.kind == 'image') {
-        setQuote(0);
-        final fileId = node.data['file_id'] as String?;
-        final src =
-            (imageUrls?[fileId] ?? node.data['url'] ?? node.data['name'] ?? '')
-                as String;
-        buf.write(
-          '<p><img src="${escapeHtmlAttr(src)}" '
-          'alt="${escapeHtmlAttr(node.text)}"></p>',
-        );
-        si++;
-        continue;
-      }
-      if (node.kind == 'divider') {
-        setQuote(0);
-        buf.write('<hr>');
-        si++;
-        continue;
-      }
-      if (node.kind == 'table') {
-        setQuote(0);
-        buf.write(_tableHtml(TableData.fromBlock(node.data)));
-        si++;
-        continue;
-      }
-      if (node.kind == 'code_block') {
-        setQuote(full ? node.quoteDepth : 0);
-        final lang = _copyLanguage(node);
-        final cls = lang.isEmpty
-            ? ''
-            : ' class="language-${escapeHtmlAttr(lang)}"';
-        buf.write(
-          '<pre><code$cls>${escapeHtml(node.text.substring(a, b))}'
-          '</code></pre>',
-        );
-        si++;
-        continue;
-      }
-      if (node.kind == 'math_block') {
-        // `$$…$$` inside a data-mica-math wrapper: external editors see the
-        // TeX; our converter passes it through verbatim so it re-parses as a
-        // math block instead of a paragraph of raw LaTeX.
-        setQuote(0);
-        buf.write(
-          '<p><span data-mica-math="1">\$\$'
-          '${escapeHtml(node.text)}\$\$</span></p>',
-        );
-        si++;
-        continue;
-      }
-      if (node.kind == 'footnote_def') {
-        // The GFM definition leader travels in an attribute; the converter
-        // reconstructs `[^label]: …` (escaping would kill a literal leader).
-        setQuote(0);
-        final label = (node.data['label'] ?? '') as String;
-        buf.write(
-          '<p data-mica-fndef="${escapeHtmlAttr(label)}">'
-          '${inlineHtmlOf(node, a, b)}</p>',
-        );
-        si++;
-        continue;
-      }
-
-      if (fullListItem(sl)) {
-        // Collect the unbroken run of fully-selected list items AT THE SAME
-        // quote depth, then emit it as PROPERLY NESTED <ul>/<ol> from each
-        // item's `data.indent` — the old flat single-<ul> writer erased
-        // nesting, so pasting a multi-level list (even mica → mica, where the
-        // HTML flavor wins) lost its levels.
-        setQuote(node.quoteDepth);
-        final run = <EditorNode>[];
-        while (si < slices.length &&
-            fullListItem(slices[si]) &&
-            nodes[slices[si].node].quoteDepth == node.quoteDepth) {
-          run.add(nodes[slices[si].node]);
-          si++;
-        }
-        buf.write(
-          _listRunHtml(run, (n) {
-            final box = n.kind == 'todo'
-                ? '<input type="checkbox"${n.todoChecked ? ' checked' : ''}'
-                      ' disabled> '
-                : '';
-            return '$box${inlineHtmlOf(n, 0, n.text.length)}';
-          }),
-        );
-        continue;
-      }
-
-      if (full && node.kind == 'quote') {
-        // qbreak marks the start of a NEW quote group: close the open one so
-        // two separate bars don't fuse into a single blockquote on paste.
-        if (node.data['qbreak'] == true) setQuote(0);
-        setQuote(node.quoteDepth.clamp(1, 16));
-        buf.write('<p>${inlineHtmlOf(node, a, b)}</p>');
-        si++;
-        continue;
-      }
-
-      if (full && node.kind == 'heading') {
-        setQuote(node.quoteDepth);
-        final lvl = node.headingLevel.clamp(1, 6);
-        buf.write('<h$lvl>${inlineHtmlOf(node, a, b)}</h$lvl>');
-        si++;
-        continue;
-      }
-      setQuote(full ? node.quoteDepth : 0);
-      buf.write('<p>${inlineHtmlOf(node, a, b)}</p>');
-      si++;
-    }
-    setQuote(0);
-    return buf.toString();
-  }
-
-  String _tableHtml(TableData table) {
-    final buf = StringBuffer('<table>');
-    for (var r = 0; r < table.rows.length; r++) {
-      buf.write('<tr>');
-      final tag = r == 0 ? 'th' : 'td';
-      for (final cell in table.rows[r]) {
-        // A cell stores its INLINE MARKDOWN (`**你好**`). Render it to real html
-        // marks (`<strong>你好</strong>`) — NOT escapeHtml, which would emit the
-        // literal `**` text and make the paste side backslash-escape it, so a
-        // Ctrl+A→copy→paste of a table turned every bold/code cell into visible
-        // markdown source. Same conversion _copyTableArea already uses.
-        final parsed = parseInline(cell);
-        buf.write('<$tag>${inlineToHtml(parsed.text, parsed.marks)}</$tag>');
-      }
-      buf.write('</tr>');
-    }
-    buf.write('</table>');
-    return buf.toString();
   }
 
   /// Delete the current ranged selection, which may span multiple nodes. The
@@ -1980,7 +1547,7 @@ class EditorController extends ChangeNotifier {
   // Tables
   // ---------------------------------------------------------------------------
 
-  void setTableCell(int index, int row, int col, String text) {
+  void setTableCell(int index, int row, int col, TableCell cell) {
     if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
@@ -1988,7 +1555,7 @@ class EditorController extends ChangeNotifier {
     final table = TableData.fromBlock(node.data);
     if (row < 0 || row >= table.rows.length) return;
     if (col < 0 || col >= table.rows[row].length) return;
-    table.rows[row][col] = text;
+    table.rows[row][col] = cell;
     node.data = table.toBlockData();
     _sendNow([
       {'type': 'update_block', 'block_id': node.id, 'data': node.data},
@@ -1996,12 +1563,12 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Update a cell's text LOCALLY — relayout only, NO op sent. Used while a cell
-  /// is being edited so its row grows/shrinks live as you type (each newline
+  /// Update a cell LOCALLY — relayout only, NO op sent. Used while a cell is
+  /// being edited so its row grows/shrinks live as you type (each newline
   /// re-measures the cell and re-lays out the table). The value is persisted by
-  /// [setTableCell] on commit. A no-op when the text is unchanged, so a mere
+  /// [setTableCell] on commit. A no-op when the content is unchanged, so a mere
   /// selection change doesn't trigger a relayout.
-  void previewTableCell(int index, int row, int col, String text) {
+  void previewTableCell(int index, int row, int col, TableCell cell) {
     if (_historyBusy) return;
     if (index < 0 || index >= nodes.length) return;
     final node = nodes[index];
@@ -2009,8 +1576,8 @@ class EditorController extends ChangeNotifier {
     final table = TableData.fromBlock(node.data);
     if (row < 0 || row >= table.rows.length) return;
     if (col < 0 || col >= table.rows[row].length) return;
-    if (table.rows[row][col] == text) return;
-    table.rows[row][col] = text;
+    if (table.rows[row][col] == cell) return;
+    table.rows[row][col] = cell;
     node.data = table.toBlockData();
     notifyListeners(); // relayout only; not persisted until commit
   }
@@ -2048,8 +1615,8 @@ class EditorController extends ChangeNotifier {
         c <= c1 && c < table.rows[r].length;
         c++
       ) {
-        if (table.rows[r][c].isNotEmpty) {
-          table.rows[r][c] = '';
+        if (!table.rows[r][c].isEmpty) {
+          table.rows[r][c] = TableCell.empty;
           changed = true;
         }
       }

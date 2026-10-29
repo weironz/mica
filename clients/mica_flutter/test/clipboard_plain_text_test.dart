@@ -1,13 +1,16 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide TableCell;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/cell_edit_controller.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/editor/table.dart' show TableCell;
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   late EditorController c;
   setUp(() {
     c = EditorController(rootBlockId: 'root', onOps: (_) async {});
@@ -39,7 +42,7 @@ void main() {
       );
       final text = c.nodes.first.text.substring(range.$1, end);
       expect(c.selectionClipboardText(), text);
-      final pasted = markdownToBlocks(htmlToMarkdown(c.selectionHtml())).single;
+      final pasted = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml())).single;
       expect(pasted.text, text);
       expect(
         marksFromData(pasted.data).where((m) => m.type == 'code'),
@@ -63,7 +66,7 @@ void main() {
       c.selectionClipboardText(),
       'run a`b then `literal`\n\n# comment\n``` literal',
     );
-    final blocks = markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
+    final blocks = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml()));
     expect(blocks.map((b) => b.kind), ['paragraph', 'code_block']);
     expect(blocks.last.text, c.nodes.last.text);
     expect(marksFromData(blocks.first.data).single.type, 'code');
@@ -135,7 +138,12 @@ void main() {
   test(
     'cell selection clips actual code marks and preserves literal syntax',
     () {
-      final cell = CellEditController(r'run `a` then \`literal\`');
+      // The same source a stored legacy cell carries, decoded through the
+      // engine — the path a real edit session opens a cell through.
+      final decoded = markdownCodec.decodeCells([r'run `a` then \`literal\`']).single;
+      final cell = CellEditController(
+        TableCell(decoded.text, decoded.marks),
+      );
       addTearDown(cell.dispose);
       cell.selection = TextSelection(
         baseOffset: 0,
@@ -144,7 +152,7 @@ void main() {
       expect(cell.selection.textInside(cell.text), 'run a then `literal`');
       final html = cell.selectionHtml();
       expect(html, 'run <code>a</code> then `literal`');
-      final parsed = parseInline(htmlToMarkdown(html));
+      final parsed = markdownCodec.parseInline(htmlToMarkdown(html));
       expect(parsed.text, cell.text);
       expect(parsed.marks.single.type, 'code');
       cell.selection = const TextSelection(baseOffset: 4, extentOffset: 5);

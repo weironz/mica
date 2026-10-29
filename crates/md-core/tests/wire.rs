@@ -17,19 +17,27 @@ fn parse_body_json_matches_parse_body() {
     } else {
       block.data
     };
-    if let Some(marks) = data
-      .get_mut("marks")
-      .and_then(serde_json::Value::as_array_mut)
-    {
-      marks.sort_by_key(|m| {
-        (
-          m["start"].as_u64().unwrap_or(0),
-          m["end"].as_u64().unwrap_or(0),
-          m["type"].as_str().unwrap_or("").to_string(),
-        )
-      });
-    }
-    assert_eq!(value["data"], data);
+    // §3.4 comparisons normalize mark order: the wire keeps the parser's
+    // emission order (it is semantic input to the serializer's tie-break),
+    // so both sides sort before comparing here.
+    let sort_marks = |data: &mut serde_json::Value| {
+      if let Some(marks) = data
+        .get_mut("marks")
+        .and_then(serde_json::Value::as_array_mut)
+      {
+        marks.sort_by_key(|m| {
+          (
+            m["start"].as_u64().unwrap_or(0),
+            m["end"].as_u64().unwrap_or(0),
+            m["type"].as_str().unwrap_or("").to_string(),
+          )
+        });
+      }
+    };
+    let mut wire_data = value["data"].clone();
+    sort_marks(&mut data);
+    sort_marks(&mut wire_data);
+    assert_eq!(wire_data, data);
   }
 }
 
@@ -137,31 +145,24 @@ fn wire_public_signatures_are_frozen() {
 }
 
 #[test]
-fn block_json_marks_are_sorted_and_extra_data_survives() {
+fn block_json_marks_keep_parser_order_and_extra_data_survives() {
   // An enclosing emphasis is appended after the inner code mark by the parser,
-  // so the raw order is `code` then `bold`; §3.4 requires sorted output.
+  // so the raw order is `code` then `bold`. The wire PRESERVES that order:
+  // the serializer's tie-break reads it (an equal-range mark emitted later is
+  // the outer one). Re-sorting here corrupted deep-nesting round-trips.
   let json = wire::parse_body_json("**a `b`**", false).unwrap();
   let blocks: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
   let marks = blocks[0]["data"]["marks"].as_array().unwrap();
-  let keys: Vec<(u64, u64, String)> = marks
-    .iter()
-    .map(|m| {
-      (
-        m["start"].as_u64().unwrap(),
-        m["end"].as_u64().unwrap(),
-        m["type"].as_str().unwrap().to_string(),
-      )
-    })
-    .collect();
-  let mut sorted = keys.clone();
-  sorted.sort();
-  assert_eq!(keys, sorted, "wire output must be sorted");
-  assert!(keys.iter().any(|(_, _, k)| k == "bold"));
-  assert!(keys.iter().any(|(_, _, k)| k == "code"));
+  let types: Vec<&str> = marks.iter().map(|m| m["type"].as_str().unwrap()).collect();
+  assert_eq!(
+    types,
+    vec!["code", "bold"],
+    "parser emission order is semantic"
+  );
 }
 
 #[test]
-fn encode_cells_sorts_marks_and_keeps_extra_fields() {
+fn encode_cells_keeps_mark_order_and_extra_fields() {
   let inlines = serde_json::json!([{
     "text": "abcdef",
     "marks": [
@@ -174,7 +175,27 @@ fn encode_cells_sorts_marks_and_keeps_extra_fields() {
   let cells: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
   let marks = cells[0]["marks"].as_array().unwrap();
   let starts: Vec<u64> = marks.iter().map(|m| m["start"].as_u64().unwrap()).collect();
-  assert_eq!(starts, vec![0, 2, 4]);
-  assert_eq!(marks[1]["href"], "https://x.y");
-  assert_eq!(marks[1]["title"], "t");
+  assert_eq!(starts, vec![4, 0, 2], "cell encoding preserves input order");
+  assert_eq!(marks[2]["href"], "https://x.y");
+  assert_eq!(marks[2]["title"], "t");
+}
+
+#[test]
+fn wire_round_trip_matches_native_export_on_equal_range_ties() {
+  // Deep nesting (only the innermost 32 levels parse) produces marks that
+  // share an exact range with different types (image/link/image). The
+  // serializer's tie-break relies on the parser's emission order, so the
+  // wire round-trip must not reorder marks before serializing: sorting by
+  // (start, end, type) put the link second among equal-range marks and the
+  // re-export wrapped the image in a link instead of the other way round.
+  let root = env!("CARGO_MANIFEST_DIR");
+  let md = std::fs::read_to_string(format!(
+    "{root}/../markdown/tests/fixtures/conformance/43-inline-nesting-budget.md"
+  ))
+  .expect("fixture 43 must be reachable from md-core tests");
+  let parsed = wire::parse_body_json(&md, false).unwrap();
+  let back = wire::serialize_body_json(&parsed, "{}").unwrap();
+  let native =
+    mica_md::compat::export_markdown(&mica_md::compat::import_markdown(&md, "root")).unwrap();
+  assert_eq!(back, native);
 }

@@ -9,9 +9,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/clipboard_copy_stub.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
-import 'package:mica_flutter/editor/marks.dart';
+import 'package:mica_flutter/editor/marks.dart' show marksFromData;
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
+import 'support/markdown_codec.dart';
 
 // Read OS-owned buffers independently of the production writer. No platform
 // clipboard mock: this verifies both native formats and CF_HTML byte offsets.
@@ -88,6 +90,7 @@ Future<String> readHtml() async {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
     'native Windows clipboard carries literal text and rich code semantics',
@@ -120,7 +123,7 @@ void main() {
       expect(String.fromCharCodes(units), plain);
       final fragment = await readHtml();
       expect(fragment, html);
-      final parsed = parseInline(htmlToMarkdown(fragment));
+      final parsed = markdownCodec.parseInline(htmlToMarkdown(fragment));
       expect(parsed.text, plain);
       expect(parsed.marks.single.type, 'code');
     },

@@ -16,9 +16,11 @@
 // list; after, 12 blocks with the nesting intact.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('items wrapped in <div> inside <ol> still become a list', () {
     const html = '''
 <p>您可以按照以下排查步骤逐步解决该问题：</p>
@@ -34,7 +36,7 @@ void main() {
 </ol>
 <p>如果报错仍然无法消除…</p>''';
 
-    final blocks = markdownToBlocks(htmlToMarkdown(html));
+    final blocks = markdownCodec.parseBlocks(htmlToMarkdown(html));
     final kinds = [for (final b in blocks) b.kind];
 
     expect(kinds.where((k) => k == 'numbered_list').length, 3,
@@ -55,7 +57,7 @@ void main() {
 
   test('a plain, spec-correct list is unchanged', () {
     const html = '<ul><li>one</li><li>two<ul><li>deep</li></ul></li></ul>';
-    final blocks = markdownToBlocks(htmlToMarkdown(html));
+    final blocks = markdownCodec.parseBlocks(htmlToMarkdown(html));
     expect(blocks.length, 3);
     expect(blocks.map((b) => b.data['indent'] ?? 0).toList(), [0, 0, 1]);
   });

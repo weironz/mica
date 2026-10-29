@@ -5,9 +5,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
 
+import 'support/markdown_codec.dart';
 import 'support/title_workspace.dart';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   Future<void> open(WidgetTester tester) async {
     await tester.tap(find.text('问 AI'));
     await tester.pumpAndSettle();

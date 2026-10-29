@@ -2983,7 +2983,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       if (bootstrap == null) {
         throw ApiException(context.l10n.pageOpenFirst);
       }
-      final specs = markdownToBlocks(markdown);
+      final specs = markdownCodec.parseBlocks(markdown);
       final root = bootstrap.document.rootBlockId;
       var index = bootstrap.childBlocks.length;
       final stamp = DateTime.now().microsecondsSinceEpoch;

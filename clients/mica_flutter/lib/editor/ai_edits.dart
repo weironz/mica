@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'markdown.dart' show BlockSpec;
+import '../markdown/markdown_codec.dart' show BlockSpec;
 import 'model.dart';
 
 /// A frozen view of the editor body used to preview a proposed AI edit.

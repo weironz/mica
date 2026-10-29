@@ -2,7 +2,7 @@
 //! public API (the original `#[cfg(test)]` blocks tested private helpers; this
 //! keeps the same behaviors covered without widening the engine's API).
 
-use mica_md::{export_html, import_markdown};
+use mica_md::compat::{export_html, export_markdown, import_markdown};
 
 fn html(md: &str) -> String {
   export_html(&import_markdown(md, "root")).expect("export_html")
@@ -72,5 +72,5 @@ fn cycles_and_deep_chains_do_not_overflow() {
   }))
   .unwrap();
   assert!(export_html(&doc).unwrap().contains("loop"));
-  assert!(mica_md::export_markdown(&doc).unwrap().contains("loop"));
+  assert!(export_markdown(&doc).unwrap().contains("loop"));
 }

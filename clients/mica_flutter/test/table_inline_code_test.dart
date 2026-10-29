@@ -1,42 +1,45 @@
+// Table cells are text + marks in memory; the stored form (source string or
+// `{text, marks}` object) is produced by the engine. The Rust half of the
+// code-span cases is crates/markdown/tests/table_inline_code.rs; this file
+// pins the editor-side model (TableData) feeding the engine.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/editor/markdown.dart';
-import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/table.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+import 'support/markdown_codec.dart';
+
+String _serialize(TableData table) => markdownCodec.serializeBlocks([
+      (kind: 'table', text: '', data: table.toBlockData()),
+    ]);
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('a cell with inline code survives import → model → markdown round-trip',
       () {
     const md = '| A | B |\n| --- | --- |\n| `code` | text |';
-    final blocks = markdownToBlocks(md);
+    final blocks = markdownCodec.parseBlocks(md);
     final spec = blocks.singleWhere((b) => b.kind == 'table');
     final table = TableData.fromBlock(spec.data);
 
-    // The cell keeps its raw inline-code source verbatim (cells store Markdown
-    // source; the backticks are NOT a stray "undefined"/"null" placeholder).
-    expect(table.rows[1][0], '`code`');
+    // The cell's clean text and its code mark (the decoded form — no stray
+    // "undefined"/"null" placeholder can appear here).
+    final cell = table.rows[1][0];
+    expect(cell.text, 'code');
+    expect(cell.marks.single.type, 'code');
 
     // Re-serializing the table preserves the code span.
-    expect(tableToMarkdown(table), md);
-
-    // And the cell's Markdown parses to a code mark over "code".
-    final parsed = parseInline(table.rows[1][0]);
-    expect(parsed.text, 'code');
-    expect(parsed.marks.single.type, 'code');
+    expect(_serialize(table), md);
   });
 
   test('other inline marks in a cell round-trip too (bold/italic/strike/link)',
       () {
-    const md =
-        '| A | B |\n| --- | --- |\n| **b** *i* | ~~s~~ [t](u) |';
+    const md = '| A | B |\n| --- | --- |\n| **b** *i* | ~~s~~ [t](u) |';
     final table = TableData.fromBlock(
-      markdownToBlocks(md).singleWhere((b) => b.kind == 'table').data,
+      markdownCodec.parseBlocks(md).singleWhere((b) => b.kind == 'table').data,
     );
-    expect(table.rows[1][0], '**b** *i*');
-    expect(table.rows[1][1], '~~s~~ [t](u)');
-    expect(tableToMarkdown(table), md);
-
-    final c1 = parseInline(table.rows[1][1]);
-    expect(c1.marks.map((m) => m.type).toSet(), {'strike', 'link'});
+    expect(table.rows[1][0].text, 'b i');
+    expect(table.rows[1][0].marks.map((m) => m.type).toSet(), {'bold', 'italic'});
+    expect(table.rows[1][1].marks.map((m) => m.type).toSet(), {'strike', 'link'});
+    expect(_serialize(table), md);
   });
 
   test('a missing cell coerces to empty — never the literal "null"/"undefined"',
@@ -51,8 +54,8 @@ void main() {
       ],
       'header': true,
     });
-    expect(table.rows[1][1], '');
-    expect(table.rows[1][0], '`code`');
-    expect(tableToMarkdown(table), '| A | B |\n| --- | --- |\n| `code` |  |');
+    expect(table.rows[1][1], TableCell.empty);
+    expect(table.rows[1][0].text, 'code');
+    expect(_serialize(table), '| A | B |\n| --- | --- |\n| `code` |  |');
   });
 }

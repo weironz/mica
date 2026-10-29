@@ -1,9 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 // Regression net for the 25 confirmed findings of the paste/copy adversarial
 // audit: escaping fidelity, todo/math/footnote/code-language round trips,
@@ -21,9 +22,10 @@ EditorController _doc(List<EditorNode> nodes) {
 }
 
 List<BlockSpec> _roundTrip(EditorController c) =>
-    markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
+    markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml()));
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   group('escaping — page text must not re-parse as structure', () {
     test('literal block-leader characters stay literal', () {
       for (final (html, want) in [
@@ -33,7 +35,7 @@ void main() {
         ('<p>1. First point</p>', '1. First point'),
         ('<p>- dash start</p>', '- dash start'),
       ]) {
-        final blocks = markdownToBlocks(htmlToMarkdown(html));
+        final blocks = markdownCodec.parseBlocks(htmlToMarkdown(html));
         expect(blocks, hasLength(1), reason: html);
         expect(blocks.single.kind, 'paragraph', reason: html);
         expect(blocks.single.text, want, reason: html);
@@ -41,7 +43,7 @@ void main() {
     });
 
     test('literal inline metacharacters stay literal', () {
-      final blocks = markdownToBlocks(
+      final blocks = markdownCodec.parseBlocks(
         htmlToMarkdown('<p>match 5*3 and 4*2 or `--flag` and \$5</p>'),
       );
       expect(blocks.single.text, 'match 5*3 and 4*2 or `--flag` and \$5');
@@ -50,7 +52,7 @@ void main() {
     });
 
     test('literal <table> text does not become a raw-HTML code block', () {
-      final blocks = markdownToBlocks(
+      final blocks = markdownCodec.parseBlocks(
         htmlToMarkdown('<p>&lt;table&gt; needs &lt;tr&gt; rows</p>'),
       );
       expect(blocks.single.kind, 'paragraph');
@@ -58,7 +60,7 @@ void main() {
     });
 
     test('newlines inside a heading collapse instead of splitting it', () {
-      final blocks = markdownToBlocks(
+      final blocks = markdownCodec.parseBlocks(
         htmlToMarkdown('<h2>Getting\n    Started</h2>'),
       );
       expect(blocks, hasLength(1));
@@ -188,7 +190,7 @@ void main() {
 
   group('external HTML shapes', () {
     test('GitHub task-list checkboxes become todos', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<ul class="contains-task-list">'
         '<li class="task-list-item"><input type="checkbox" checked disabled> ship v2</li>'
         '<li class="task-list-item"><input type="checkbox" disabled> write docs</li>'
@@ -201,7 +203,7 @@ void main() {
     });
 
     test('<pre> inside a list item becomes a code child, not glued lines', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<ul><li>Run: <pre>npm install\nnpm start</pre></li></ul>',
       ));
       expect(blocks[0].kind, 'bulleted_list');
@@ -213,7 +215,7 @@ void main() {
     });
 
     test('language class on <pre>/<code> lands in the fence info', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<pre><code class="language-rust">fn main() {}</code></pre>',
       ));
       expect(blocks.single.kind, 'code_block');
@@ -230,7 +232,7 @@ void main() {
     });
 
     test('<dl> terms and definitions get their own blocks', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<dl><dt>HTTP</dt><dd>a protocol</dd><dt>FTP</dt><dd>a file protocol</dd></dl>',
       ));
       expect(blocks, hasLength(4));
@@ -245,7 +247,7 @@ void main() {
         "<span style='mso-list:Ignore'>$marker<span>&nbsp;</span></span>$text</p>";
 
     test('two consecutive nested items do NOT become a code block', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         msoP(1, '1.', 'parent') + msoP(2, 'a.', 'kid one') + msoP(2, 'b.', 'kid two'),
       ));
       expect(blocks.where((b) => b.kind == 'code_block'), isEmpty);
@@ -260,7 +262,7 @@ void main() {
 
     test('a level2-only fragment starts at column 0 (no code, no false nest)',
         () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<p>Intro paragraph.</p>${msoP(2, '·', 'child one')}${msoP(2, '·', 'child two')}',
       ));
       expect(blocks.where((b) => b.kind == 'code_block'), isEmpty);
@@ -274,7 +276,7 @@ void main() {
     });
 
     test('a paragraph after the run is not absorbed into the last item', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         msoP(1, '·', 'alpha') + '<p>plain tail</p>',
       ));
       expect(blocks.last.kind, 'paragraph');
@@ -284,7 +286,7 @@ void main() {
 
   group('quote-context lists (emitter cap keeps them out of code)', () {
     test('a 3-deep list inside a blockquote never becomes a code block', () {
-      final blocks = markdownToBlocks(htmlToMarkdown(
+      final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
         '<blockquote><ul><li>a<ul><li>b<ul><li>c</li></ul></li></ul></li></ul></blockquote>',
       ));
       expect(blocks.where((b) => b.kind == 'code_block'), isEmpty);

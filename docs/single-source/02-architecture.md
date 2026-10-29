@@ -208,7 +208,7 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 | --- | --- | --- |
 | I1 | `serialize(parse(md))` 与现有 `export_markdown(import_markdown(md))` 逐字节相同（全部 fixtures + golden-master） | `crates/markdown/tests/*` 原样通过 |
 | I2 | 往返：`parse(serialize(doc))` 的块 kind/text/data 与 `doc` 相同（现有 `fixtures_round_trip`） | 现有测试 |
-| I3 | `decode_cell(encode_cell(x)) == x` 对任意 `x`（含字面 `*`、`|`、`\`、换行、空串、非 BMP 字符），**除外**：无标记文本里的裸 URL / 邮箱（读回时按 GFM 自动链接加上 `link`）与首尾空白（读回时去掉）。这两类是存储格式的现有行为（§6.4），S1 不改（G1 裁决 #4） | `md-core/tests/cell_roundtrip.rs`（proptest，仓库已有该 dev 依赖）；除外项由显式测试钉住现状 |
+| I3 | `decode_cell(encode_cell(x)) == x` 对任意 `x`（含字面 `*`、`|`、`\`、换行、空串、非 BMP 字符、裸 URL / 邮箱、首尾空白）。G1 时曾把后两类列为除外；S4 用户选了「存对象形态」，G4 把这条规则放进 `encode_cell` 后恢复为严格（见 §6.4） | `md-core/tests/cell_roundtrip.rs`（proptest：有标记、无标记两条） |
 | I4 | `parse_inline(serialize_inline(t, m)) == (t, m)`（规范化后） | 同上 |
 | I5 | `BlockIds::Sequential` 下 `parse` 结果确定（同输入同输出），且与 Uuid 模式除 id 外完全相同 | `md-core/tests/ids.rs` |
 | I6 | `schema.rs` 的常量覆盖 fixtures 中出现的全部 kind / data key / mark type | `md-core/tests/schema_sync.rs` |
@@ -234,7 +234,7 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 ```jsonc
 // BlockJson —— 与 Rust Block 的 serde 形状相同，但不带 id / children（门面层不关心）
 { "type": "paragraph", "text": "hello", "data": { "marks": [ { "start": 0, "end": 5, "type": "bold" } ] } }
-// data 永远是对象，空时 {}；marks 若存在则按 §3.4 排序
+// data 永远是对象，空时 {}；marks 保持解析器产出顺序（§3.4），对象键按字典序
 
 // InlineJson
 { "text": "hello", "marks": [ { "start": 0, "end": 5, "type": "link", "href": "https://x", "title": "t" } ] }
@@ -263,7 +263,11 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 
 ### 3.4 规范化规则
 
-- `marks` 排序键：`(start, end, type)` 升序。（Dart 与 Rust 现在输出顺序不同，黄金文件测试里已经在排序后比较。）
+- `marks` **数组顺序有语义，线格式不重排**（G3 裁决 B-1，2026-10-28，原为「按 `(start, end, type)` 排序输出」）：
+  同一区间有多个标记时，序列化器按数组下标决定谁在外层（解析器把外层标记排在后面）。重排会改变嵌套，
+  例如 fixture 43 的「图片-链接-图片」重新导出后变成链接包图片。编辑器 `_normalize` 在改动标记时按 `(type, start)` 排序，
+  对两个同区间标记的结果与原排序一致，只有三个及以上同区间、且类型重复时才有差别。
+- **比较**标记时（黄金文件、差分、`marksEqual`、往返测试）一律先按 `(start, end, type)` 排序再比，不比顺序。
 - `data` 中的键顺序无意义；比较时按值比较。
 - 文本换行统一 `\n`（Dart 粘贴前已把 `\r\n` 归一，见 `editor.dart` 粘贴路径）。
 
@@ -470,17 +474,18 @@ void debugSetMarkdownCodec(MarkdownCodec? codec) => _codec = codec;
 
 ### 6.4 表格单元格存储形态
 
-`data.rows: [[cell, …], …]`，每个 `cell` 是以下之一（**现状，S4 不改**）：
+`data.rows: [[cell, …], …]`，每个 `cell` 是以下之一（三种形态自始就有，读法不变）：
 
 | 形态 | 含义 | 读 |
 | --- | --- | --- |
 | JSON 字符串 | 无格式单元格，或旧文档：**内容是行内 Markdown 源码** | `decode_cell` 解析它（`**x**` 会变成加粗） |
-| `{"text": …, "marks": [...]}` | 带格式单元格（Rust `encode_table_cell`、Dart `_encodeCell` 都这样写） | 直接取 |
+| `{"text": …, "marks": [...]}` | 带格式单元格，或读回会变形的无格式单元格（`marks: []`） | 直接取 |
 | `null` / 缺失 / 其他 | 空单元格 | 空 |
 
-`encode_cell(x)`：`x.marks` 非空 → 对象；为空 → `serialize_inline(x.text, [])`（转义后的源码字符串，保证 I3）。
-**已知不无损的两类**（I3 的除外项）：无标记的裸 URL / 邮箱读回会多一个 `link` 标记，首尾空白读回会被去掉。
-两者都是现有存储行为，旧客户端也这样读；是否改（例如对这类单元格改存 `{text, marks: []}` 对象）在 S4 决定，见 S4 T4.8。
+`encode_cell(x)`：`x.marks` 非空 → 对象；为空 → 先写 `serialize_inline(x.text, [])`（转义后的源码字符串），
+**只有读回与 `x` 完全相同才存这个字符串**，否则存 `{text, marks: []}` 对象（裸 URL / 邮箱读回会多 `link`、尾随空白会被去掉，这两类走对象）。
+这是 S4 用户的决定（选项 b，2026-10-28），G4 把它从 Dart 门面挪进 `encode_cell`，**规则只在引擎里一处**，所有写入方结果一致。
+旧客户端读 `{text, marks: []}` 时把 text 当源码重新解析，看到的仍是链接，与改前相同。
 **注意**：无格式但含字面 `*` 的文本必须转义后再存成字符串，否则读者会把它解析成格式。
 
 ## 7. 性能预算（S0 测基线，S2/S3/S4 验收）

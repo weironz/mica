@@ -3,7 +3,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
+import 'support/markdown_codec.dart';
 
 // The bug this pins: content copied from an LLM chat page (Gemini/ChatGPT)
 // arrives as text/html, and htmlToMarkdown backslash-escaped EVERY `$` (and
@@ -15,7 +16,7 @@ import 'package:mica_flutter/editor/markdown.dart';
 // escaping verbatim; everything else keeps its protection.
 
 List<Map<String, dynamic>> mathMarks(String markdown) {
-  final blocks = markdownToBlocks(markdown);
+  final blocks = markdownCodec.parseBlocks(markdown);
   return [
     for (final b in blocks)
       if (b.data['marks'] is List)
@@ -26,6 +27,7 @@ List<Map<String, dynamic>> mathMarks(String markdown) {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('actual rendered Gemini arrow restores TeX and surrounding bold', () {
     final fixture =
         jsonDecode(
@@ -46,7 +48,7 @@ void main() {
         reason: 'rendered children must not duplicate the semantic source',
       );
       if (!html.startsWith('<table>')) {
-        final blocks = markdownToBlocks(md);
+        final blocks = markdownCodec.parseBlocks(md);
         expect(mathMarks(md), hasLength(1));
         expect(blocks.first.text, contains(r'\rightarrow'));
       }
@@ -81,7 +83,7 @@ void main() {
         r'→</span></code> <span data-math="x">ordinary</span></p>';
     final md = htmlToMarkdown(html);
     expect(mathMarks(md), isEmpty);
-    expect(markdownToBlocks(md).single.text, '→ ordinary');
+    expect(markdownCodec.parseBlocks(md).single.text, '→ ordinary');
   });
 
   test('a formula in pasted HTML survives into a math mark', () {
@@ -99,7 +101,7 @@ void main() {
     final marks = mathMarks(md);
     expect(marks, hasLength(3));
     // And the LaTeX itself must be intact (no doubled backslashes).
-    final blocks = markdownToBlocks(md);
+    final blocks = markdownCodec.parseBlocks(md);
     final text = blocks.first.text;
     final m = marks.first;
     expect(
@@ -128,7 +130,7 @@ void main() {
     final md = htmlToMarkdown(html);
     expect(md, contains(r'\$5'), reason: 'no valid closer → escaped');
     expect(mathMarks(md), isEmpty);
-    final text = markdownToBlocks(md).first.text;
+    final text = markdownCodec.parseBlocks(md).first.text;
     expect(text, contains('\$5 and \$10'), reason: 'dollars survive as text');
   });
 
@@ -148,7 +150,7 @@ void main() {
   test('a dollar formula inside <code> stays code, not math', () {
     const html = '<p>写成 <code>\$\\eta = 2\$</code> 才对。</p>';
     final md = htmlToMarkdown(html);
-    final blocks = markdownToBlocks(md);
+    final blocks = markdownCodec.parseBlocks(md);
     final marks = (blocks.first.data['marks'] as List?) ?? const [];
     expect(
       marks.whereType<Map>().where((m) => m['type'] == 'math'),

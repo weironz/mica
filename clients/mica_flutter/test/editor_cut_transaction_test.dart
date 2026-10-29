@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/editor.dart';
@@ -9,6 +9,7 @@ import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/editor/table.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
+import 'support/markdown_codec.dart';
 
 Future<void> key(WidgetTester t, LogicalKeyboardKey k,
     {bool ctrl = false, bool shift = false}) async {
@@ -29,7 +30,7 @@ Future<void> pumpEditor(WidgetTester t, List<DocOp> ops,
       rootBlockId: 'root',
       nodes: [table
         ? EditorNode(id: 't', kind: 'table', text: '',
-            data: TableData([['h'], ['abcdef']]).toBlockData())
+            data: TableData([[TableCell('h')], [TableCell('abcdef')]]).toBlockData())
         : EditorNode(id: 'a', kind: 'paragraph', text: 'abcdef')],
       version: 0, canEdit: true,
       onApplyOperations: (batch) async => ops.addAll(batch),
@@ -45,6 +46,7 @@ Future<void> pumpEditor(WidgetTester t, List<DocOp> ops,
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   testWidgets('cut deletes only its successful clipboard snapshot, body and cell', (t) async {
     final sandbox = Directory.systemTemp.createTempSync('mica-cut-');
     final signal = '${sandbox.path}/clipboard';

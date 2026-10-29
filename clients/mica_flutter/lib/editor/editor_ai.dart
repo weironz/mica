@@ -380,8 +380,8 @@ extension _SelectionAiActions on _MicaEditorState {
 
     final sel = _controller.selection;
     if (sel == null || sel.isCollapsed) return;
-    final specs = markdownToBlocks(result.markdown);
-    if (specs.isEmpty) return;
+    final specs = _parseOrNull(result.markdown);
+    if (specs == null || specs.isEmpty) return;
     if (result.replace) {
       _controller.insertBlocksReplacingSelection(specs);
     } else {

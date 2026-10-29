@@ -59,6 +59,17 @@ Future<void> initMarkdownCodec() async {
 @visibleForTesting
 void debugSetMarkdownCodec(MarkdownCodec? codec) => _codec = codec;
 
+/// [read]'s result, or null when the engine is unavailable — for callers that
+/// must tell "no engine" apart from an empty result (never substitute '').
+T? withEngineOrNull<T>(T Function() read) {
+  try {
+    return read();
+  } on MarkdownCodecException catch (error) {
+    debugPrint('markdown engine unavailable: $error');
+    return null;
+  }
+}
+
 class UnavailableMarkdownCodec implements MarkdownCodec {
   const UnavailableMarkdownCodec();
   Never _unavailable() =>

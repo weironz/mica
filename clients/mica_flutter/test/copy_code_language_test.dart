@@ -1,3 +1,4 @@
+import 'support/markdown_codec.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/model.dart';
@@ -15,6 +16,7 @@ const yaml = 'services:\n  api:\n    image: mica\n    ports:\n      - "80:80"\n'
 const python = 'def f(x):\n    return x + 1\n';
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   EditorController withCode(Map<String, dynamic> data, String text) {
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
     c.load([

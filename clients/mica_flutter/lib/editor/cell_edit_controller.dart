@@ -1,31 +1,32 @@
-import 'package:flutter/widgets.dart';
+// `hide TableCell`: Flutter's own TableCell widget would otherwise collide with
+// the editor's cell model (table.dart). Mica never uses Flutter's Table widget.
+import 'package:flutter/widgets.dart' hide TableCell;
 
 import 'marks.dart';
 import 'controller.dart';
 import 'table.dart';
+import '../markdown/markdown_codec.dart' show markdownCodec, MarkdownCodecException;
 import '../ui/theme_tokens.dart';
 import '../web/text_diff.dart' show commonPrefix, commonSuffix;
 
 /// A [TextEditingController] for a table cell that renders inline MARKS live
-/// (WYSIWYG) instead of the raw Markdown source. Its [text] is the clean cell
-/// text; [marks] holds the bold / italic / code / strike / link ranges; and
-/// [buildTextSpan] paints them — so **bold** shows as bold WHILE you edit and the
-/// `**` / `` ` `` delimiters never appear (unlike the old Typora-style source
-/// field). Built from a cell's stored raw Markdown; [serialize] turns
-/// (text, marks) back into Markdown for storage, so the cell schema and the GFM
-/// round-trip are unchanged — only the editing surface becomes WYSIWYG.
+/// (WYSIWYG) instead of Markdown source. Its [text] is the clean cell text;
+/// [marks] holds the bold / italic / code / strike / link ranges; and
+/// [buildTextSpan] paints them — so **bold** shows as bold WHILE you edit and
+/// the `**` / `` ` `` delimiters never appear (unlike a source field). Built
+/// from the cell's [TableCell] — the same text + marks model a paragraph uses —
+/// so no Markdown is parsed here; [cell] hands the model back for storage.
 ///
 /// Text edits are diffed (common prefix/suffix) so the mark ranges shift with
 /// the text, reusing the same [shiftMarks] the main editor uses.
 class CellEditController extends TextEditingController {
-  CellEditController(String rawMarkdown) {
-    final parsed = parseInline(rawMarkdown);
-    marks = parsed.marks;
-    // Seed the clean text. `_seeding` suppresses the edit-diff below: the marks
-    // from parseInline already match this text, they must not be re-shifted.
+  CellEditController(TableCell cell) {
+    marks = cell.marks;
+    // Seed the clean text. `_seeding` suppresses the edit-diff below: the
+    // marks already match this text, they must not be re-shifted.
     value = TextEditingValue(
-      text: parsed.text,
-      selection: TextSelection.collapsed(offset: parsed.text.length),
+      text: cell.text,
+      selection: TextSelection.collapsed(offset: cell.text.length),
     );
     _seeding = false;
   }
@@ -35,32 +36,37 @@ class CellEditController extends TextEditingController {
 
   bool _seeding = true;
 
-  /// The cell content as raw Markdown, for storage.
-  String serialize() => inlineToMarkdown(text, marks);
+  /// The cell content as the editor model, for storage and comparisons.
+  TableCell get cell => TableCell(text, List.unmodifiable(marks));
 
   /// HTML for the selected clean text, clipping the existing marks rather than
   /// re-parsing text as Markdown (which loses code and treats literal syntax
-  /// as formatting).
+  /// as formatting). One paragraph block through the engine's Clipboard
+  /// dialect — the cell editor is inline-only, so a paragraph is the whole
+  /// grammar it needs.
   String selectionHtml() {
     final sel = selection;
     if (!sel.isValid || sel.isCollapsed) return '';
-    final clipped = <Mark>[];
-    for (final mark in marks) {
-      final start = mark.start.clamp(sel.start, sel.end);
-      final end = mark.end.clamp(sel.start, sel.end);
-      if (end > start) {
-        clipped.add(
-          Mark(
-            start - sel.start,
-            end - sel.start,
-            mark.type,
-            href: mark.href,
-            title: mark.title,
-          ),
-        );
-      }
+    try {
+      final html = markdownCodec.renderClipboardHtml([
+        (
+          kind: 'paragraph',
+          text: sel.textInside(text),
+          data: {
+            if (marks.isNotEmpty)
+              'marks': marksToJson(clipMarks(marks, sel.start, sel.end)),
+          },
+        ),
+      ]);
+      // The cell editor's flavor is a BARE inline fragment — it lands inside a
+      // table cell, where a <p> wrapper would be invalid nesting. The engine's
+      // Clipboard dialect speaks blocks, so unwrap the one paragraph it wrote.
+      return html.startsWith('<p>') && html.endsWith('</p>')
+          ? html.substring(3, html.length - 4)
+          : html;
+    } on MarkdownCodecException {
+      return '';
     }
-    return inlineToHtml(sel.textInside(text), clipped);
   }
 
   @override
@@ -120,12 +126,12 @@ class CellEditController extends TextEditingController {
 /// Stable cell address and draft reconciliation, independent of the overlay.
 class CellEditSession {
   CellEditSession(this.document, this.tableId, this.row, this.col, this.editor)
-      : _opening = editor.serialize();
+      : _opening = editor.cell;
   final EditorController document;
   final String tableId;
   final int row, col;
   final CellEditController editor;
-  String _opening;
+  TableCell _opening;
   bool rebasing = false;
 
   int resolve() {
@@ -137,25 +143,25 @@ class CellEditSession {
 
   void preview() {
     final at = resolve();
-    if (!rebasing && at >= 0) document.previewTableCell(at, row, col, editor.serialize());
+    if (!rebasing && at >= 0) document.previewTableCell(at, row, col, editor.cell);
   }
 
   void commit() {
     final at = resolve();
-    if (at >= 0 && editor.serialize() != _opening) document.setTableCell(at, row, col, editor.serialize());
+    if (at >= 0 && editor.cell != _opening) document.setTableCell(at, row, col, editor.cell);
   }
 
   bool reconcile() {
     final at = resolve();
     if (at < 0) return false;
-    if (editor.serialize() == _opening) {
+    if (editor.cell == _opening) {
       final fresh = CellEditController(TableData.fromBlock(document.nodes[at].data).rows[row][col]);
       rebasing = true;
       // Set the value first: the setter shifts stale marks for its own diff,
       // then the correct remote marks replace them in the same snapshot.
       editor.value = fresh.value;
       editor.marks = fresh.marks;
-      _opening = fresh.serialize();
+      _opening = fresh.cell;
       rebasing = false;
       fresh.dispose();
     } else {

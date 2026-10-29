@@ -1,10 +1,8 @@
 //! I3/I4: table-cell encode/decode and inline serialize/parse invariants.
 //!
-//! I3 is checked over values the storage format can represent exactly. A
-//! mark-free cell is stored as inline SOURCE and re-parsed on read, so the
-//! inline parser's whitespace canonicalization and autolink detection are part
-//! of the format; the lossy cases are pinned explicitly at the bottom instead
-//! of being silently skipped.
+//! I3 holds for EVERY cell: a mark-free cell is stored as inline source only
+//! when re-reading that source reproduces it, otherwise as `{text, marks: []}`
+//! (a bare URL would gain a link mark, edge whitespace would be trimmed).
 
 use mica_md::{Block, InlineText, Mark, decode_cell, encode_cell, parse_inline, serialize_inline};
 use proptest::prelude::*;
@@ -94,6 +92,19 @@ proptest! {
     prop_assert_eq!(decode_cell(&encode_cell(&cell)), cell);
   }
 
+  /// I3: a MARK-FREE cell survives too, whatever its text — including bare
+  /// URLs / e-mails and edge whitespace, which inline source cannot carry.
+  #[test]
+  fn unmarked_cell_encode_decode_is_identity(
+    text in prop_oneof![
+      "[a-z .:/@ *_`~|\\\\\\[\\]()$\\n中😀]{0,24}",
+      "(https?://|www\\.)[a-z]{1,6}\\.[a-z]{2,3}",
+    ],
+  ) {
+    let cell = inline_from(&text, Vec::new());
+    prop_assert_eq!(decode_cell(&encode_cell(&cell)), cell);
+  }
+
   /// I4: non-overlapping marks round-trip through inline Markdown.
   ///
   /// Excluded (existing inline-format limitations, not this refactor's choice):
@@ -167,25 +178,26 @@ fn fixed_inline_round_trip() {
   assert_eq!(parsed.marks, marks);
 }
 
-/// Pins the CURRENT loss for a mark-free cell — the storage format is inline
-/// source, so the reader re-parses it. The `{text, marks: []}` object would be
-/// lossless in Rust's decoder, but the legacy Dart table path
-/// (`TableData._cellText` → `parseInline`) re-parses an empty-marks object's
-/// text too, so it is NOT a proven compatibility escape. These autolink and
-/// whitespace cases are the approved I3 exceptions in
-/// docs/single-source/02-architecture.md §2.2 (G1 decision, 2026-10-27).
+/// The storage choice for mark-free cells (S4 decision, option b): compact
+/// source when it reads back exactly, the object form when it would not. The
+/// rule lives HERE, not in a binding, so every writer stores the same thing.
 #[test]
-fn empty_marks_cells_document_the_current_loss() {
-  let url = decode_cell(&encode_cell(&inline_from(
-    "https://example.com",
-    Vec::new(),
-  )));
-  assert_eq!(url.text, "https://example.com");
-  assert_eq!(url.marks.len(), 1, "autolink detection adds a link mark");
-  assert_eq!(url.marks[0].kind, "link");
-
-  let trailing = decode_cell(&encode_cell(&inline_from("x ", Vec::new())));
-  assert_eq!(trailing.text, "x", "trailing whitespace is canonicalized");
+fn unmarked_cells_pick_the_form_that_reads_back_exactly() {
+  let plain = encode_cell(&inline_from("a *b* c", Vec::new()));
+  assert_eq!(
+    plain,
+    serde_json::json!("a \\*b\\* c"),
+    "escaped source stays compact"
+  );
+  for lossy in ["https://example.com", "mail@example.com", "x "] {
+    let stored = encode_cell(&inline_from(lossy, Vec::new()));
+    assert_eq!(
+      stored,
+      serde_json::json!({ "text": lossy, "marks": [] }),
+      "{lossy:?}"
+    );
+    assert_eq!(decode_cell(&stored), inline_from(lossy, Vec::new()));
+  }
 }
 
 #[test]

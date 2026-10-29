@@ -190,6 +190,14 @@ check-structure:
 coverage package="":
     cargo llvm-cov {{ if package == "" { "--workspace" } else { "-p " + package } }} --summary-only
 
+# mica-md SDK readiness (single-source S5): packaging list, denied-warnings
+# docs, the pinned API/schema/robustness gates, the four shipped examples, and
+# the npm package's build + tests + pack dry-run. The publish actions
+# themselves are NOT here — they need user approval (S5 T5.12).
+[doc("SDK readiness: package list, docs, examples, npm pack (no publish)")]
+sdk-check:
+    bash scripts/sdk-check.sh
+
 # ------------------------------------------------------- local artifacts
 # The four things a release ships. 1+2 are also built by GitHub Actions on a
 # `v*` tag (docs/ops/release.md); these recipes are for building them by hand.

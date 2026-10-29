@@ -1,23 +1,18 @@
+// Editor-side image behavior. The PARSER assertions that used to live here
+// (`![alt](url)` → image block, image vs link, inline images inside a
+// paragraph) went with the Dart mirror in S3 T3.9; their Rust equivalents:
+//   * crates/markdown/tests/image_alt_export.rs — standalone images flatten
+//     alt links, image blocks escape literal alt and keep the title;
+//   * crates/markdown/tests/inline_invertibility.rs
+//     `image_blocks_preserve_destinations_and_titles`;
+//   * crates/markdown/tests/fixtures/conformance/16-images.md (+ .blocks.json).
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
-import 'package:mica_flutter/editor/markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 void main() {
-  test('markdownToBlocks parses ![alt](url) into an image block', () {
-    final blocks = markdownToBlocks('![a cat](https://x.io/cat.png)');
-    expect(blocks.length, 1);
-    expect(blocks.first.kind, 'image');
-    expect(blocks.first.text, 'a cat');
-    expect(blocks.first.data['url'], 'https://x.io/cat.png');
-  });
-
-  test('image among other blocks', () {
-    final blocks = markdownToBlocks('# Title\n\n![](https://x.io/a.jpg)\n\nbody');
-    expect(blocks.map((b) => b.kind).toList(),
-        ['heading', 'image', 'paragraph']);
-  });
-
+  setUpAll(useNativeMarkdownCodec);
   test('copying an image node yields markdown', () {
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
     c.load([
@@ -34,33 +29,6 @@ void main() {
       focus: const DocPosition(1, 0),
     );
     expect(c.selectionText(), contains('![cat](https://x.io/cat.png)'));
-  });
-
-  test('image vs link are distinguished by the ! prefix', () {
-    // A standalone link line stays a paragraph (with a link mark), not an image.
-    final link = markdownToBlocks('[docs](https://x.io)');
-    expect(link.single.kind, 'paragraph');
-    expect(link.single.text, 'docs');
-    expect((link.single.data['marks'] as List).single['type'], 'link');
-
-    // The same target with a ! is an image block.
-    final img = markdownToBlocks('![docs](https://x.io)');
-    expect(img.single.kind, 'image');
-    expect(img.single.data['url'], 'https://x.io');
-  });
-
-  test('inline image is not mistaken for a link', () {
-    // A paragraph mixing a link and an inline image: the link becomes a link
-    // mark and the image an image mark over its alt — never a broken link.
-    final blocks = markdownToBlocks('see [d](https://a) and ![i](https://b) end');
-    final p = blocks.single;
-    expect(p.kind, 'paragraph');
-    expect(p.text, 'see d and i end');
-    final marks = (p.data['marks'] as List?) ?? [];
-    expect(marks.where((m) => m['type'] == 'link').length, 1);
-    final image = marks.singleWhere((m) => m['type'] == 'image');
-    expect(image['href'], 'https://b');
-    expect(p.text.substring(image['start'] as int, image['end'] as int), 'i');
   });
 
   test('setImageSource swaps an external url for our file_id', () {

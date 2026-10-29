@@ -63,6 +63,12 @@ if [ "$part" != flutter ]; then
   cargo_receipt 500 cargo test --workspace
   note "rust: mica-core gated SQLite store"
   cargo_receipt 1 cargo test -p mica-core --features store
+  # The four README examples must RUN (S5 T5.4): a broken example is a broken
+  # doc. They print; the gate only checks the exit code.
+  note "rust: mica-md shipped examples"
+  for e in parse_and_serialize render_html table_cells inline; do
+    cargo run -q -p mica-md --example "$e" >/dev/null
+  done
 fi
 
 if [ "$part" != rust ]; then

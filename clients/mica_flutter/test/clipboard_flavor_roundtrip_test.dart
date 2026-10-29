@@ -1,9 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
-import 'package:mica_flutter/editor/markdown.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'support/markdown_codec.dart';
 
 /// Clipboard text/plain is literal content. The semantic HTML flavor must
 /// carry structure through a rich paste, including shell comments in code.
@@ -18,6 +19,7 @@ EditorController _selectAll(List<EditorNode> nodes) {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('a copied code block survives the rich HTML flavor', () {
     const code = '# 1. 查看当前用户与节点\n'
         'docker exec headscale users list\n\n'
@@ -34,7 +36,7 @@ void main() {
       EditorNode(id: 'c', kind: 'code_block', text: code, data: {'language': 'bash'}),
     ]);
 
-    final blocks = markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
+    final blocks = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml()));
     expect(blocks.map((b) => b.kind), ['heading', 'paragraph', 'code_block']);
     // The heading keeps its level — the stripped flavor dropped `##` entirely,
     // so every real heading came back as a paragraph.
@@ -54,7 +56,7 @@ void main() {
       EditorNode(id: 'b', kind: 'bulleted_list', text: '项目二'),
       EditorNode(id: 'c', kind: 'todo', text: '做这个', data: {'checked': true}),
     ]);
-    final blocks = markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
+    final blocks = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml()));
     expect(
       blocks.map((b) => b.kind),
       ['bulleted_list', 'bulleted_list', 'todo'],
@@ -72,7 +74,7 @@ void main() {
         data: {'marks': marksToJson([Mark(3, 5, 'bold')])},
       ),
     ]);
-    final blocks = markdownToBlocks(htmlToMarkdown(c.selectionHtml()));
+    final blocks = markdownCodec.parseBlocks(htmlToMarkdown(c.selectionHtml()));
     expect(blocks.single.kind, 'paragraph');
     expect(blocks.single.text, '正文 粗体 收尾');
     expect(blocks.single.data['marks'], isNotEmpty);

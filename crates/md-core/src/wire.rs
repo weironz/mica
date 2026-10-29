@@ -60,33 +60,15 @@ fn block_to_json(block: Block) -> BlockJson {
   }
 }
 
-/// §3.4: `data` is always an object and its `marks` array is sorted by
-/// `(start, end, type)`. Everything else in `data` is preserved.
+/// §3.4: `data` is always an object; object KEYS are canonicalized, but the
+/// `marks` array keeps the parser's emission order — it is semantic input to
+/// the serializer's tie-break (an equal-range mark emitted later is the outer
+/// one; see `serialize::span_walk`). Sorting marks by `(start, end, type)` here
+/// re-ordered equal-range ties and corrupted deep-nesting round-trips
+/// (fixture 43). Comparisons normalize with their own sort; the wire never did.
 fn normalize_data(mut data: Value) -> Value {
   if data.is_null() {
     return json!({});
-  }
-  if let Some(marks) = data.get_mut("marks").and_then(Value::as_array_mut) {
-    // Sort by the same (start, end, type) key as before, but borrow the type
-    // string instead of allocating one per comparison (`sort_by_key` would run
-    // the closure repeatedly and allocate each time). Stable sort, so ties keep
-    // their input order exactly as the previous implementation did.
-    marks.sort_by(|a, b| {
-      let key = |m: &Value| {
-        (
-          m.get("start").and_then(Value::as_u64).unwrap_or(0),
-          m.get("end").and_then(Value::as_u64).unwrap_or(0),
-        )
-      };
-      let (a_start, a_end) = key(a);
-      let (b_start, b_end) = key(b);
-      a_start.cmp(&b_start).then(a_end.cmp(&b_end)).then_with(|| {
-        a.get("type")
-          .and_then(Value::as_str)
-          .unwrap_or("")
-          .cmp(b.get("type").and_then(Value::as_str).unwrap_or(""))
-      })
-    });
   }
   // Only Value objects are canonicalized. Structs (BlockJson/InlineJson/Mark)
   // keep their declaration order, and arrays keep their semantic order. This
@@ -97,11 +79,9 @@ fn normalize_data(mut data: Value) -> Value {
 }
 
 fn inline_to_json(inline: InlineText) -> InlineJson {
-  let mut marks = inline.marks;
-  marks.sort_by_key(|m| (m.start, m.end, m.kind.clone()));
   InlineJson {
     text: inline.text,
-    marks,
+    marks: inline.marks,
   }
 }
 
@@ -146,10 +126,7 @@ pub fn encode_cells_json(inlines_json: &str) -> Result<String, MdError> {
   let inlines: Vec<InlineJson> = serde_json::from_str(inlines_json).map_err(invalid)?;
   let out: Vec<Value> = inlines
     .into_iter()
-    .map(|mut inline| {
-      inline
-        .marks
-        .sort_by_key(|m| (m.start, m.end, m.kind.clone()));
+    .map(|inline| {
       let mut cell = encode_cell(&InlineText {
         text: inline.text,
         marks: inline.marks,
@@ -260,8 +237,8 @@ mod object_order_tests {
     assert_eq!(
       result.to_string(),
       concat!(
-        "{\"marks\":[{\"end\":1,\"start\":0,\"type\":\"italic\"},",
-        "{\"end\":3,\"extra\":{\"a\":1,\"z\":2},\"start\":2,\"type\":\"bold\"}],",
+        "{\"marks\":[{\"end\":3,\"extra\":{\"a\":1,\"z\":2},\"start\":2,\"type\":\"bold\"},",
+        "{\"end\":1,\"start\":0,\"type\":\"italic\"}],",
         "\"unknown\":{\"a\":[{\"a\":1,\"z\":2},null,4],\"z\":null}}"
       )
     );
