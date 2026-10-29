@@ -99,7 +99,8 @@ pub fn export_markdown_with_assets(
   snapshot: &DocumentSnapshotPayload,
   images: &BTreeMap<String, String>,
 ) -> DocumentOperationResult<String> {
-  mica_md::compat::export_markdown_with_assets(snapshot, images).map_err(DocumentOperationError::from)
+  mica_md::compat::export_markdown_with_assets(snapshot, images)
+    .map_err(DocumentOperationError::from)
 }
 
 /// Render a document to its HTML body fragment.

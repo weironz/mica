@@ -18,14 +18,21 @@ fn main() {
   let blocks = parse_body(markdown, ParseMode::Document);
   println!("parsed {} blocks:", blocks.len());
   for block in &blocks {
-    println!("  {:<14} {:?}", block.kind, block.text.chars().take(30).collect::<String>());
+    println!(
+      "  {:<14} {:?}",
+      block.kind,
+      block.text.chars().take(30).collect::<String>()
+    );
   }
 
   let round = serialize_body(&blocks, &SerializeOptions::default());
   // The writer emits a normalized subset (this input's differences: nested
   // list indents, the quote's trailing bare `>`). Round-trip STABILITY is the
   // guarantee: a second pass is byte-identical to the first.
-  let again = serialize_body(&parse_body(&round, ParseMode::Document), &SerializeOptions::default());
+  let again = serialize_body(
+    &parse_body(&round, ParseMode::Document),
+    &SerializeOptions::default(),
+  );
   println!("\nfirst pass identical to input: {}", round == markdown);
   println!("second pass identical to first: {}", round == again);
   println!("--- markdown out ---\n{round}");

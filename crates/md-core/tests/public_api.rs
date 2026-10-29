@@ -25,18 +25,14 @@ fn engine_primitives_keep_their_signatures() {
   let _: fn(&mica_md::InlineText) -> serde_json::Value = mica_md::encode_cell;
 
   // Serialization.
-  let _: fn(
-    &mica_md::Document,
-    &mica_md::SerializeOptions,
-  ) -> Result<String, mica_md::MdError> = mica_md::serialize;
+  let _: fn(&mica_md::Document, &mica_md::SerializeOptions) -> Result<String, mica_md::MdError> =
+    mica_md::serialize;
   let _: fn(&[mica_md::Block], &mica_md::SerializeOptions) -> String = mica_md::serialize_body;
   let _: fn(&str, &[mica_md::Mark]) -> String = mica_md::serialize_inline;
 
   // HTML.
-  let _: fn(
-    &mica_md::Document,
-    &mica_md::HtmlOptions,
-  ) -> Result<String, mica_md::MdError> = mica_md::render_html;
+  let _: fn(&mica_md::Document, &mica_md::HtmlOptions) -> Result<String, mica_md::MdError> =
+    mica_md::render_html;
   let _: fn(&[mica_md::Block], &mica_md::HtmlOptions) -> String = mica_md::render_html_body;
 }
 

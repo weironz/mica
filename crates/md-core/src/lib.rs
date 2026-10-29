@@ -29,8 +29,8 @@ pub mod wire;
 
 pub use api::{
   HtmlOptions, HtmlProfile, ParseMode, ParseOptions, SerializeOptions, decode_cell, encode_cell,
-  math_run_spans, parse, parse_body, parse_inline, parse_inline_math, render_html, render_html_body,
-  serialize, serialize_body, serialize_inline,
+  math_run_spans, parse, parse_body, parse_inline, parse_inline_math, render_html,
+  render_html_body, serialize, serialize_body, serialize_inline,
 };
 pub use ids::BlockIds;
 pub use model::{

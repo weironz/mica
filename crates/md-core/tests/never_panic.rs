@@ -28,8 +28,7 @@ fn inlineish() -> impl Strategy<Value = String> {
     Just("]"),
     Just("("),
     Just(")"),
-    Just("![")
-      .boxed(),
+    Just("![").boxed(),
     Just("<"),
     Just(">"),
     Just("<https://a.b>"),
@@ -72,7 +71,8 @@ fn cell_value() -> impl Strategy<Value = serde_json::Value> {
     any::<i64>().prop_map(|n| serde_json::Value::Number(n.into())),
     any::<f64>()
       .prop_filter("finite", |f| f.is_finite())
-      .prop_map(|f| serde_json::Number::from_f64(f).map_or(serde_json::Value::Null, serde_json::Value::Number)),
+      .prop_map(|f| serde_json::Number::from_f64(f)
+        .map_or(serde_json::Value::Null, serde_json::Value::Number)),
     // Text, including markdown-significant shapes.
     inlineish().prop_map(serde_json::Value::String),
   ];

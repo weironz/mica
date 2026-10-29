@@ -23,7 +23,9 @@ fn table_first_cells(markdown: &str, heading: &str) -> Vec<String> {
     })
     .flat_map(|c| {
       // `widths` / `width` share a cell.
-      c.split(" / ").map(|s| s.trim_matches('`').to_string()).map(String::from).collect::<Vec<_>>()
+      c.split(" / ")
+        .map(|s| s.trim_matches('`').to_string())
+        .collect::<Vec<_>>()
     })
     .filter(|c| !c.is_empty())
     .collect()

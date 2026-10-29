@@ -233,9 +233,9 @@
 
 ## 开发者体验 / CI / Markdown
 
-- 🆕 **Markdown 引擎单一实现专项(S0–S5)**(2026-10-26 立项)—— Dart 里约 4,000 行 Markdown 镜像删除,解析/序列化/HTML
-  只留 Rust 一份(`crates/md-core`),桌面经 FFI、Web 经 wasm,编辑器只在边界调用;引擎按 SDK 形状交付(对外发布另行批准)。
-  方案、契约与分阶段代码级计划见 [`single-source/`](../single-source/README.md)。(L) `[需后端]`
+- 🟢 **Markdown 引擎单一实现专项(S0–S5)开发完成,待 G4 审核**(2026-10-26 立项,2026-10-29 S0–S5 全部完成)—— Dart 里约 4,000 行 Markdown 镜像删除,解析/序列化/HTML
+  只留 Rust 一份(`crates/md-core`),桌面经 FFI、Web 经 wasm,编辑器只在边界调用;引擎按 SDK 形状交付(`just sdk-check` ALL GREEN,对外发布待用户批准,手册见 [S5 发布手册](../single-source/stages/S5-sdk-release.md))。
+  方案、契约与分阶段代码级计划见 [`single-source/`](../single-source/README.md);G4 通过后本条移入 roadmap-done。(L) `[需后端]`
   后续候选(已讨论未排期,见专项 01 §9):接口数据结构单一来源、业务规则纯函数模块、CRDT Web 统一、原生无损导出格式 `.mica.zip`。
 - 🟡 **yrs 不可信更新:两类进程终止问题已修复,剩余普通 panic 仍需兜底**(2026-10-08)—— markdown、ZIP、yrs 三个解析面均有测试;前两个是正常运行的 property 回归门。
   **已接入官方 `yrs 0.28.0`**,服务端与桌面 FFI 的两个锁文件同步升级,没有 fork 或 `[patch.crates-io]` 特殊配置。[#639](https://github.com/y-crdt/y-crdt/pull/639) 的 fallible allocation 已随 0.27.4 发布;[#644](https://github.com/y-crdt/y-crdt/pull/644) 的 checked UTF-8 随 0.28.0 发布。`proptest_yrs.rs` 的 **21 字节异常分配**、**非法 UTF-8** 已转为默认运行的 decode/apply 回归测试,本地无 CRC 的旧快照另有 UTF-8 回归。

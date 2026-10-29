@@ -195,6 +195,7 @@ fn wire_round_trip_matches_native_export_on_equal_range_ties() {
   .expect("fixture 43 must be reachable from md-core tests");
   let parsed = wire::parse_body_json(&md, false).unwrap();
   let back = wire::serialize_body_json(&parsed, "{}").unwrap();
-  let native = mica_md::compat::export_markdown(&mica_md::compat::import_markdown(&md, "root")).unwrap();
+  let native =
+    mica_md::compat::export_markdown(&mica_md::compat::import_markdown(&md, "root")).unwrap();
   assert_eq!(back, native);
 }

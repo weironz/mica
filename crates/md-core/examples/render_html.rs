@@ -24,5 +24,8 @@ fn main() {
   println!("--- Export profile ---\n{export}\n");
   println!("--- Clipboard profile ---\n{clipboard}\n");
   println!("script survived export: {}", export.contains("<script"));
-  println!("math source kept in clipboard: {}", clipboard.contains("data-mica-math"));
+  println!(
+    "math source kept in clipboard: {}",
+    clipboard.contains("data-mica-math")
+  );
 }

@@ -396,8 +396,8 @@ pub(crate) fn export_safe_tree(
 
 #[cfg(test)]
 mod tree_shape_tests {
-  use crate::compat::{export_html, export_markdown};
   use crate::DocumentSnapshotPayload;
+  use crate::compat::{export_html, export_markdown};
 
   fn doc(blocks: serde_json::Value) -> DocumentSnapshotPayload {
     serde_json::from_value(serde_json::json!({
