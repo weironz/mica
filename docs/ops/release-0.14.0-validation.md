@@ -1,6 +1,6 @@
 # 0.14.0 deployment and acceptance
 
-Date: 2026-10-30. Release tag `v0.14.0` points to `590df2c8`. This is the
+Date: 2026-10-29 (release published 09:17 UTC). Release tag `v0.14.0` points to `590df2c8`. This is the
 first release shipping the single-source Markdown engine (S0–S5): the Dart
 mirror is gone; parsing, serialization and HTML exist only in Rust
 `crates/md-core` (crate `mica-md`), reached by desktop FFI and web wasm
@@ -87,3 +87,30 @@ Follow-up commit `ab578a90`.
 machine by running the 0.14.0 installer manually (user-driven). The installed
 binary reports ProductVersion 0.14.0 and launches. The in-app update prompt
 path (check → download → run → restart) was not exercised in this round.
+
+## Independent production check (reviewer, 2026-10-29)
+
+Read-only, from a Linux container:
+
+- `scripts/verify-prod.sh 0.14.0` exit 0: `/api/ready` and `/api/health` report
+  0.14.0, index 200 with the Flutter entry page, bundle `538ed18c2bd4…`.
+- Engine files: `mica_md/mica_md.js` 15,310 B (gzip 2,744 B, same as the build)
+  and `mica_md_bg.wasm` 526,906 B, `application/wasm`, `\0asm` magic; served
+  gzip-encoded, 229,871 B on the wire.
+- Headless Chromium on the production page: both engine files 200,
+  `micaMdReady` resolves with no `micaMdError`, no page errors; calling the
+  engine directly parses a heading / bold / link / list / table sample into 5
+  blocks, renders Clipboard HTML, serializes back byte-identically, and
+  `encodeCells` stores a bare URL as `{text, marks: []}` (the G4 cell rule).
+  The app renders the login page with footer v0.14.0 (about 14 s from this
+  container, network-bound).
+- `/releases/latest` is v0.14.0 (not draft / prerelease); the installer
+  downloads and its SHA-256 equals the `sha256-windows.txt` entry.
+- **Found:** the engine files (and `yjs_bundle.js`) were served without
+  `Cache-Control`, unlike the other fixed-name entry files, so a later
+  deploy could pair a new `main.dart.js` with a cached old engine; a missing
+  engine file also returned 200 `index.html`. Fixed in the nginx config on
+  main (takes effect with the next web image).
+- Not covered: editor interactions on production (no production account),
+  and the desktop in-app update flow (check → download → run → restart).
+
