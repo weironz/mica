@@ -46,7 +46,11 @@ dl=$(mktemp -d)
 trap 'rm -rf -- "$dl"' EXIT
 
 digest_of() { # $1 = asset name -> sha256 hex GitHub recorded, or empty
-  awk -F'\t' -v n="$1" '$1 == n { print $2 }' <<<"$assets_tsv"
+  # gh reports digests as `sha256:<hex>` (it changed from bare hex); the
+  # manifests carry the bare hex. Comparing the prefixed string reported a
+  # stale manifest when both sides were byte-identical (v0.13.69).
+  awk -F'\t' -v n="$1" '$1 == n { print $2 }' <<<"$assets_tsv" \
+    | sed 's/^sha256://'
 }
 
 verify_asset() { # $1 = asset name

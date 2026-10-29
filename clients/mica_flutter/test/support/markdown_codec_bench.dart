@@ -77,6 +77,16 @@ List<Map<String, Object>> measureMarkdownCodec(MarkdownCodec codec) {
     }, 8),
     10.0,
   );
+  // 02 §7 gates a copy by its COMBINED time: Markdown + Clipboard HTML of the
+  // same 10k selection, ≤ 16 ms (one frame). The two rows above are its parts.
+  row(
+    'copy.10k',
+    median(() {
+      checksum ^= codec.serializeBlocks(blocks).length;
+      checksum ^= codec.renderClipboardHtml(blocks).length;
+    }, 8),
+    16.0,
+  );
   row(
     'boundary.inline87',
     median(() {
