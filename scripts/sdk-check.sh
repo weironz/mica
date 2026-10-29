@@ -50,6 +50,10 @@ note "cargo doc: clean (-D warnings, --all-features)"
 #    the point: each must PASS for the SDK to be releasable).
 cargo test -q -p mica-md --test public_api --test schema_doc_sync --test never_panic
 note "public_api / schema_doc_sync / never_panic: passed"
+# The wasm binding builds with no default features; the whole suite must
+# compile and pass there too (public_api once named a uuid-only variant).
+cargo test -q -p mica-md --no-default-features
+note "mica-md --no-default-features: passed"
 
 # 4. Every shipped example runs.
 for e in parse_and_serialize render_html table_cells inline; do

@@ -137,7 +137,8 @@ fn model_types_keep_their_shapes() {
   };
   let _ = mica_md::render_mermaid_svg("graph TD; A--\u{2192}B;", Some(&theme));
 
-  // ID strategies.
+  // ID strategies (`Uuid` exists only with the default `uuid` feature).
+  #[cfg(feature = "uuid")]
   let _ = mica_md::BlockIds::Uuid;
   let _ = mica_md::BlockIds::Sequential {
     prefix: "b".to_string(),
