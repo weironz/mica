@@ -212,13 +212,22 @@ check(
 
 // ── 5. The entry files are not cacheable ──────────────────────────────────────
 // v0.5.2 "looked not deployed" because a fixed-name entry file came from cache.
-// These four names never change, so they must never be reused; everything else is
-// content-hashed and may be.
+// These names never change, so they must never be reused; everything else is
+// content-hashed and may be. The Markdown engine and the yjs bundle are loaded by
+// index.html before Flutter and were missing from production's list in 0.14.0.
 const cache = await page.evaluate(async (files) => {
   const out = {};
   for (const f of files) out[f] = (await fetch(f)).headers.get('cache-control');
   return out;
-}, ['/', '/main.dart.js', '/flutter_bootstrap.js', '/flutter_service_worker.js']);
+}, [
+  '/',
+  '/main.dart.js',
+  '/flutter_bootstrap.js',
+  '/flutter_service_worker.js',
+  '/mica_md/mica_md.js',
+  '/mica_md/mica_md_bg.wasm',
+  '/yjs_bundle.js',
+]);
 for (const [f, value] of Object.entries(cache)) {
   // The dev nginx says `no-store`, production says `no-cache`. Either is a refusal
   // to reuse a stale copy; what must never appear is a max-age letting one linger.
