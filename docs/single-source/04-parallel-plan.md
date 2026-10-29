@@ -153,7 +153,7 @@ single-source ───●────●────●────●───
 | S3 | T3.6、T3.9–T3.11 | ✅ T3.6/T3.9 完成（Dart 镜像删除，`flutter analyze` 0 error/0 warning，2,076 passed）；T3.10 Web 与 Windows 桌面真路径均通过（桌面集成 1/0，wire 契约 10/0）；T3.11 门禁 `ALL GREEN` | 提交见 S3 执行记录；[T3.6/T3.9](stages/S3-editor-boundary.md#t36-删除2026-10-28)、[T3.10](stages/S3-editor-boundary.md#t310-真实路径验证2026-10-28)、[T3.11](stages/S3-editor-boundary.md#t311-门禁2026-10-28) | D |
 | S4 | T4.1–T4.12 | ✅ 全部完成（表格单元格 `TableCell(text, marks)` 模型；`marks.dart` 2,455→373 行，行内解析器/序列化器删除；差分工具与基线删除；兼容性 9 用例、性能基准达标；门禁 `ALL GREEN`；Web + Windows 真路径验证通过） | `ss/d/t4-table-cells`：`7759ba60`（T4.1–T4.5）、`ce4ad1c9`（T4.7–T4.9）、`1b1bdcea`（T4.8/T4.10）、`6a65343e`（T4.11）；[执行记录](stages/S4-table-cells.md#执行记录) | D |
 | S5 | T5.1–T5.12（发布除外） | ✅ 全部完成（mica-md 随时可发布：compat 模块、README/SCHEMA/CHANGELOG/THIRD_PARTY、4 示例、public_api/schema_doc_sync/never_panic 三守门测试均证可失败、npm 包 13 文件 412 kB、`just sdk-check` ALL GREEN；Q1–Q6 用户拍板） | `ss/r/t5-sdk`：`30170178`（T5.1–T5.9）+ 文档提交；[执行记录](stages/S5-sdk-release.md#执行记录)、[发布手册](stages/S5-sdk-release.md#发布手册t512用户批准后执行不自动) | D（代 R/W） |
-| **G4** | 最终审核 → `single-source` 并回 main | ☐ | | 审核方 |
+| **G4** | 最终审核 → `single-source` 并回 main | ✅ 通过（2026-10-29），已并回 main（[reviews.md](reviews.md)） | | 审核方 |
 
 ## 7. 交给审核方的东西
 

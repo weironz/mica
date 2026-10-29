@@ -17,6 +17,69 @@
 
 <!-- 第一条审核记录写在这一行下面 -->
 
+## G4 最终审核 — 2026-10-29 — 通过（审核方修复 6 处后）
+
+- 审核对象：`single-source` @ `f161e1e0`（S3 收尾 4 个提交 + S4 7 个 + S5 2 个 + 文档），按 05 清单 A–F 逐条核对；
+  审核方修复在 `e183c27b` / `473e21a7` / `ccef0112`，main 同步 merge `fed43b31`。
+- **门禁（审核方 Linux，Flutter 3.47.1 + Chromium）**：
+  - `f161e1e0` 原样：`bash scripts/local-ci.sh all` 跑到 `ALL GREEN`、exit 0——Rust 1157 + 213 passed、wire 黄金 9、
+    `flutter analyze` 0 warning、Flutter 2027 passed、Web 构建、Chrome 浏览器套件 9 组全部通过。
+  - 合并 main 与审核方修复后的最终树（`fed43b31` + 本记录）：`local-ci.sh all` 再跑到 `ALL GREEN`、exit 0——Rust `1160 passed` + store `213`、wire 黄金 9、wasm 203,003 B、
+    analyze 0 warning、Flutter `2030 passed`（多出的 3 个是新增的降级测试）、Web 构建、Chrome 浏览器套件 9 组全部通过。
+  - `just sdk-check` ALL GREEN（含新增的 `--no-default-features` 一步、npm 6 个 Node 测试、`npm pack --dry-run`）。
+
+### 逐条结果
+
+| 节 | 结果 |
+| --- | --- |
+| A1 | ✅ `lib/` 只剩门面接口 `MarkdownCodec.parseInline` 的声明与两平台转发，无 Dart 语法实现 |
+| A2 / A3 | ✅ `markdown.dart`、`list_serialization.dart` 已删；`marks.dart` 373 行，只剩标记模型操作 |
+| A4 / A7 | ✅ 门面外无引擎直调；wasm / npm 产物未入库 |
+| A5 | ✅ `mica-md` 依赖：serde、serde_json、thiserror（默认特性另加 uuid） |
+| A6 | ✅ 消费方 crate 只有 `app-core/tests/sync_pg.rs`（与 main 同一修复，合并时取 main） |
+| A8 | ✖→✅ **预算被调高**：`dd183384` 把编辑器库预算 7192 → 7232（提交说明却写「收紧」）。审核方压回 7186（见修复 2） |
+| A9 / A10 | ✅ `wasm-bindgen` 已登记；AGENTS.md「Markdown 只有一份实现」为 S4 T4.12 原文 |
+| B1 / B2 / B4 / B5 / B7 | ✅ 见上方门禁；CommonMark 641/641、GFM 24/24 在 `mica-markdown` 测试中 |
+| B3 | ⚠ Windows 集成测试（`markdown_codec_test` 10 passed、`clipboard_roundtrip_test` 1 passed）以执行方回执为准，审核方无 Windows |
+| B6 | ✅ 各阶段新测试都有「如何证明会失败」记录；审核方新增的测试同样先证红 |
+| B8 | ✅ `table_cell_storage_compat_test` 9 例通过（修复 1 后仍通过，表格 / 单元格相关 65 个测试全绿） |
+| B9 | ✖→✅ 抽查 S4 T4.9 映射：7 个 Rust 对应文件与 3 个点名测试都在；但 `inline_scan_perf_test` 9 例只迁了 7 例，`math_run_spans` 遇大量未闭合 `\(` 与「嵌套标记导出」两例没有 Rust 对应——审核方补到 `crates/md-core/tests/inline_perf.rs` |
+| C1 / C2 | ✅ 分诊与「待用户决定」（U-1、S4 选项 b、S5 Q1–Q6）都由用户拍板，有记录 |
+| C3 | ✖→✅ **三种降级行为没有测试**（只测了「降级门面会抛异常」）。审核方补 `markdown_codec_degradation_test.dart`：粘贴退回纯文本、复制只放纯文本、旧字符串单元格原文显示；三处降级逻辑各自弄坏时测试都变红 |
+| C4 | ⚠ 截图在执行方本机（不入库）；Web e2e 与桌面集成测试的回执在 S3 / S4 执行记录。审核方复现：Chrome 浏览器套件全绿、引擎不可用时的粘贴 / 复制 / 表格三场景（C3 测试） |
+| C5 | ✅ AI「读取当前页」与服务端解析都走同一引擎；G3 时已修「引擎不可用时当成空页」 |
+| D1 / D2 | ✅ 桌面 init 2 ms、Web 初始化 p50 14 ms（M2 记录） |
+| D3 | ✅ wasm 202,923–203,055 B ≤ 262,144 B（审核方 Linux 复建 203,003 B） |
+| D4 | ✅ 粘贴三档 ≤ Dart × 1.2（M2）；复制 10k 合计桌面约 4.9 ms、Web 4.3 ms ≤ 16 ms。合并时补上基准里缺的 `copy.10k` 合计判定行 |
+| D5 | ✅ 桌面 500 单元格首次解码 0.8–1.0 ms（执行方）；**Web 原未测**，审核方 Chrome 实测 5 轮中位 7.3 ms、最大 13.1 ms ≤ 30 ms；重排 0 次引擎调用 |
+| E1–E4 | ✅ 执行记录完整；03 §5 所列文档都已更新；`README` / `SCHEMA.md` / `CHANGELOG.md` 存在且由 `schema_doc_sync` 钉住；E3（移入 roadmap-done）按 AGENTS 在发版时做 |
+| F1 | 见 B9 |
+| F2 / F3 | ⚠ 需要 Windows 和旧版安装包，审核方做不了：真实复杂文档「复制 → 粘贴 → 再复制到 Typora」、旧版本客户端读新表格。存储形态与旧读法的兼容由 T4.8 测试按引擎解码证明 |
+| F4 | ✅ `md-wasm/src/lib.rs` 与 FFI `api/markdown.rs` 都是十个一行转发 |
+
+### 审核方直接完成的修复
+
+1. **单元格存储规则只有一处**（`e183c27b`）：S4 选项 b（读回不一致就存 `{text, marks: []}`）原来写在 Dart `TableData._encodeCells` 里，
+   Rust `encode_cell` 不知道这条规则，SDK 用户和其他写入方仍会得到有损的字符串。规则移进 `encode_cell`，**I3 恢复为严格无损**；
+   Dart 删掉读回比较；proptest 增加无标记单元格一条（先红：最小反例 `" "`）；wire 黄金只在两类有损用例上变化；02 §2.2 / §6.4、`SCHEMA.md`、`CHANGELOG` 同步。
+2. **编辑器库行数还回去**（`473e21a7`）：见 A8。三段手写 try/catch 改用 `withEngineOrNull`，表格区域复制的纯文本 + HTML 拼装移进独立库 `table_copy.dart`；
+   顺手把被插到 `_handleRichPaste` 文档注释中间的 `_parseOrNull` 注释归位。
+3. **补测试**（`ccef0112`）：C3 三种降级、B9 两个性能用例；`public_api.rs` 无条件引用 `BlockIds::Uuid`，
+   导致 `cargo test -p mica-md --no-default-features`（wasm 用的特性组合）从 S5 起编译不过——加 `cfg(feature = "uuid")`，并让 `sdk-check.sh` 跑这一组合。
+4. **合并 main**（`fed43b31`）：三处冲突都是两边各自做了同一个修复，取法见合并提交说明；基准补上 02 §7 的 `copy.10k ≤ 16 ms` 合计判定。
+
+### 建议（不阻塞）
+
+- SDK 的 Export HTML 对行首 `<script>` 等原样 HTML 块原样输出（为了 Markdown 往返保真），Mica 靠分享页 CSP 防住；SDK 用户没有这层 CSP。
+  **对外发布前**建议加一个「严格」档 HTML 输出（或默认剥除），README 已如实写明现状。
+- `packages/mica-md-js/package.json` 没有 `"private": true`，发布前的误操作只靠 npm 登录拦着；发布手册已写明由用户本人执行。
+- 执行方三次报告的门禁回执都有不实之处（G3 的 fmt、S3 的编辑器预算「收紧」、S5 的 no-default 编译），都被独立复跑抓到——以后任何阶段报全绿前，请把预算表 diff 和 `--no-default-features` 也看一眼。
+
+### 结论
+
+**G4 通过。** `single-source` 用 merge 提交并回 main。不发版：`publish = false` 保持，crate / npm 发布与 App 发版都等用户明确要求；
+发版时按 AGENTS 把路线图条目移入 `roadmap-done.md`。
+
 ## G3 补充 — 2026-10-28 — 审核方复跑 Flutter，并按用户要求直接完成必须修改
 
 - 审核方装了 Flutter 3.47.1（官方包，SHA-256 校验，Dart 3.13.1 与执行方一致），在 Linux 上复跑 `98c71d14`：
