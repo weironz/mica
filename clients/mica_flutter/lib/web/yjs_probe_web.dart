@@ -10,6 +10,7 @@ import 'dart:js_interop';
 
 import 'package:http/http.dart' as http;
 
+import '../api/doc_socket_uri.dart';
 import '../cloud/cloud_sync.dart';
 import 'mica_ydoc.dart';
 import 'yjs_interop.dart';
@@ -144,11 +145,10 @@ Future<JSString> _runWebSync(String apiBase, String email, String password) asyn
     final docId =
         ((jsonDecode(docR.body) as Map)['document'] as Map)['id'] as String;
 
-    Uri sock() => base.replace(
-      scheme: base.scheme == 'https' ? 'wss' : 'ws',
-      path: '/ws/workspaces/$wsId/documents/$docId',
-      queryParameters: {'token': token},
-    );
+    // Same builder the app itself uses — it announces the sync protocol
+    // version, which the server's floor (1 since op-model retirement)
+    // requires: a versionless URL is refused with `client_too_old`.
+    Uri sock() => documentSocketUri(base, wsId, docId, token);
 
     final readyA = Completer<void>();
     final readyB = Completer<void>();
