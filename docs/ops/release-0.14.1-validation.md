@@ -67,3 +67,21 @@ Desktop (Windows, previously on 0.14.0):
 - After update: installed `mica_flutter.exe` reports ProductVersion 0.14.1
   and the new process runs. This closes the gap left in the 0.14.0 round
   (that upgrade was a manually launched installer).
+
+## Independent production check (reviewer)
+
+Run from a separate Linux environment after the deploy, without credentials:
+
+- `scripts/verify-prod.sh 0.14.1` → exit 0; `/api/health` reports 0.14.1.
+- Both fixes are in the tag (`66f9f796`, `ab578a90` are ancestors of `e0a2ec39`).
+- Latest release is v0.14.1 with 5 assets; `Mica-Setup-0.14.1.exe`
+  (41,450,120 B) matches `sha256-windows.txt`.
+- `/mica_md/mica_md.js`, `/mica_md/mica_md_bg.wasm`, `/yjs_bundle.js` →
+  `Cache-Control: no-cache`; wasm is `application/wasm`; `/mica_md/missing.wasm`
+  → 404; a repeat request with `If-None-Match` → 304 with an empty body, so
+  `no-cache` costs a revalidation, not a re-download.
+- Headless Chromium: login page renders with footer v0.14.1, both engine files
+  load with `no-cache`, `micaMdReady` resolves without `micaMdError`,
+  `engineInfo` reports schema 1, and a parse → serialize round trip of a
+  heading, inline marks, a link and a table matches the canonical output.
+  No console errors, no failed requests.
