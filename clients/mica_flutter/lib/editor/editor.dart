@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/semantics.dart' show SemanticsBinding;
 import 'package:flutter/services.dart';
 
 import 'controller.dart';
@@ -259,7 +260,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           local.dx.clamp(0.0, maxX),
           clampTop ? math.max(0.0, local.dy) : local.dy,
         ),
-        child: child,
+        // Except with semantics on (a screen reader, or the web's
+        // accessibility mode): an opening tooltip announces itself, and on the
+        // web that announcement takes DOM focus from the editor's text input,
+        // so the editor blurs and closes the bar under the pointer. There the
+        // bars stay as they were before: no tooltips.
+        child: TooltipVisibility(
+          visible: !SemanticsBinding.instance.semanticsEnabled,
+          child: child,
+        ),
       ),
     );
   }
