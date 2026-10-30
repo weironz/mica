@@ -27,6 +27,7 @@ import 'open_url.dart';
 import 'pick_image.dart';
 import 'render.dart';
 import 'rich_paste.dart';
+import 'canvas_follower.dart';
 import 'cell_edit_controller.dart';
 import 'table.dart';
 import 'word_count.dart';
@@ -216,20 +217,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       widget.focusNode ?? FocusNode(debugLabel: 'MicaEditor');
   final GlobalKey _surfaceKey = GlobalKey();
 
-  /// Anchors canvas-owned overlays (cell editor, format bar, link bar).
-  ///
-  /// The overlay used to be placed at a `localToGlobal` position recomputed on
-  /// every build — which is fine while TYPING (the table relayouts and the
-  /// overlay rebuilds with it) and wrong the moment anyone SCROLLS: scrolling
-  /// changes where the canvas sits on screen without rebuilding the overlay, so
-  /// the cell's text stayed pinned to the old screen position while the table
-  /// slid away under it. On screen that reads as the content escaping its cell
-  /// (and the cell looks empty, because the renderer skips painting the cell
-  /// being edited). A LayerLink is the fix rather than a scroll listener
-  /// because the editor does not own the scrollable — the host does — so there
-  /// is no ScrollController here to listen to, and a follower layer tracks the
-  /// target through ANY transform without needing to know who moved it.
-  final LayerLink _canvasLink = LayerLink();
+  // Canvas-owned overlays (cell editor, format bar, link bar) follow the
+  // canvas through host scrolls with CanvasFollower: the editor does not own
+  // the scrollable, so there is no ScrollController here to listen to, and a
+  // position recomputed per build stays pinned to the screen while the table
+  // slides away under it.
 
   /// Place an overlay that belongs to a spot INSIDE the canvas.
   ///
@@ -258,42 +250,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     return Positioned(
       left: 0,
       top: 0,
-      child: CompositedTransformFollower(
-        link: _canvasLink,
-        showWhenUnlinked: false,
+      // CanvasFollower, not CompositedTransformFollower: a follower layer
+      // has no paint transform during layout, and the tooltips in these bars
+      // ask for one then (see editor/canvas_follower.dart).
+      child: CanvasFollower(
+        target: () => _render,
         offset: Offset(
           local.dx.clamp(0.0, maxX),
           clampTop ? math.max(0.0, local.dy) : local.dy,
         ),
-        // NO TOOLTIPS BELOW THIS POINT — they crash here, and it is structural.
-        //
-        // Reported 2026-08-12: drag-selecting text spammed red boxes. The stack
-        // (from the real app; a widget test does not reproduce it) named an
-        // `IconButton` in the format bar, and the cause underneath it:
-        //
-        //   The paint transform cannot be reliably computed because of
-        //   RenderFollowerLayer(s) … RenderFollowerLayer establishes its paint
-        //   transform only after the layout phase.
-        //
-        // A `Tooltip` on this Flutter is an `OverlayPortal` whose
-        // `_OverlayChildLayoutBuilder` asks its ANCHOR for a paint transform
-        // DURING layout. Every bar routed through here is anchored by the
-        // `CompositedTransformFollower` above — which has no transform yet at
-        // that moment. So any tooltip in this subtree asserts, once per frame,
-        // for as long as the bar is up.
-        //
-        // `TooltipVisibility(visible: false)` is not a cosmetic suppression: it
-        // makes `Tooltip.build` skip constructing `RawTooltip` entirely (see
-        // material/tooltip.dart, `if (_visible)`), so the OverlayPortal never
-        // enters the tree and there is nothing left to assert.
-        //
-        // THE COST IS REAL: the format bar, link bar, slash menu and cell editor
-        // lose their hover tooltips. The framework's own advice is to replace
-        // the follower with `OverlayPortal.overlayChildLayoutBuilder`, which
-        // would keep both — but that rewrites how these bars follow the canvas
-        // (777c07c / 9c367b2 exist to make them follow it), so it is its own
-        // change. Recorded in docs/plans/roadmap.md.
-        child: TooltipVisibility(visible: false, child: child),
+        child: child,
       ),
     );
   }
@@ -2934,9 +2900,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         return Positioned(
           left: 0,
           top: 0,
-          child: CompositedTransformFollower(
-            link: _canvasLink,
-            showWhenUnlinked: false,
+          child: CanvasFollower(
+            target: () => _render,
             offset: liveRect.topLeft,
             child: SizedBox(
               width: liveRect.width,
@@ -5858,28 +5823,25 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             child: Stack(
               clipBehavior: Clip.hardEdge,
               children: [
-                CompositedTransformTarget(
-                  link: _canvasLink,
-                  child: DocumentSurface(
-                    key: _surfaceKey,
-                    nodes: _controller.nodes,
-                    contentRevision: _controller.contentRevision,
-                    selection: _controller.selection,
-                    showCaret: _focus.hasFocus && widget.canEdit,
-                    caretBlink: _caretBlink,
-                    appearance: widget.appearance,
-                    images: _imageCache,
-                    imageErrors: _imageErrors,
-                    previewImages: _previews.images,
-                    previewBaselines: _previews.baselines,
-                    onRequestPreview: _previews.request,
-                    onResourceDemand: _onResourceDemand,
-                    onPreviewPainted: _previews.touch,
-                    onRequestImage: _requestImage,
-                    onImagePainted: _onImagePainted,
-                    remoteCursors: widget.remoteCursors,
-                    commentHighlights: widget.commentHighlights,
-                  ),
+                DocumentSurface(
+                  key: _surfaceKey,
+                  nodes: _controller.nodes,
+                  contentRevision: _controller.contentRevision,
+                  selection: _controller.selection,
+                  showCaret: _focus.hasFocus && widget.canEdit,
+                  caretBlink: _caretBlink,
+                  appearance: widget.appearance,
+                  images: _imageCache,
+                  imageErrors: _imageErrors,
+                  previewImages: _previews.images,
+                  previewBaselines: _previews.baselines,
+                  onRequestPreview: _previews.request,
+                  onResourceDemand: _onResourceDemand,
+                  onPreviewPainted: _previews.touch,
+                  onRequestImage: _requestImage,
+                  onImagePainted: _onImagePainted,
+                  remoteCursors: widget.remoteCursors,
+                  commentHighlights: widget.commentHighlights,
                 ),
                 // Far off-screen: painted (capturable) but never visible.
                 Positioned(

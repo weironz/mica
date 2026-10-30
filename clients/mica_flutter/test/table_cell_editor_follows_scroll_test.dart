@@ -19,6 +19,7 @@
 // it holds whatever the scroll offset happens to be.
 import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/editor/canvas_follower.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/editor/table.dart';
@@ -165,13 +166,13 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    // Measure a DESCENDANT of the follower, never the follower itself:
-    // `RenderFollowerLayer.applyPaintTransform` applies the link transform to
-    // its CHILD, so the follower's own `getTopLeft` reports the plain layout
-    // position and would look pinned even when the child follows correctly.
+    // Measure a DESCENDANT of the follower, never the follower itself: the
+    // follower applies its shift to its CHILD, so its own `getTopLeft`
+    // reports the plain layout position and would look pinned even when the
+    // child follows correctly.
     final bar = find
         .descendant(
-          of: find.byType(CompositedTransformFollower),
+          of: find.byType(CanvasFollower),
           matching: find.byType(Material),
         )
         .first;
