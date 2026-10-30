@@ -7,10 +7,14 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
   /// body returns early for every empty state — no workspace, no page open. A
   /// strip nested below those returns would vanish the moment one of its tabs
   /// held nothing, which is exactly when the user needs it to switch away.
-  Widget _editorPane(BuildContext context) {
+  ///
+  /// [narrow]: the narrow shell shows the tabs as a top-bar switcher instead
+  /// (ui/narrow_tab_switcher.dart), so no strip here.
+  Widget _editorPane(BuildContext context, {bool narrow = false}) {
     final onSelectTab = widget.onSelectTab;
     final onCloseTab = widget.onCloseTab;
     final body = _editorPaneBody(context);
+    if (narrow) return body;
     // Only the local world skips the strip now — it has no tab model at all.
     // The "fewer than two tabs" case used to skip it too; the strip is resident
     // since 2026-08-12 (user's call), because hiding it also hid the `+`, and

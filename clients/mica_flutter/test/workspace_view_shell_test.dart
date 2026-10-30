@@ -20,6 +20,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
 import 'package:mica_flutter/doc_tab.dart';
 import 'package:mica_flutter/ui/doc_tab_strip.dart';
+import 'package:mica_flutter/ui/narrow_tab_switcher.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart' as app;
@@ -184,6 +185,23 @@ class _SizeBox extends StatelessWidget {
   );
 }
 
+/// Put keyboard focus on something under the shell's CallbackShortcuts. In
+/// the app that is the editor; this harness has no document open, so any
+/// focusable button in the shell stands in.
+void _focusInsideShell(WidgetTester tester) {
+  final icon = find.descendant(
+    of: find.byType(IconButton).first,
+    matching: find.byType(Icon),
+  );
+  Focus.of(tester.element(icon)).requestFocus();
+}
+
+void _viewSize(WidgetTester tester, Size size) {
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+}
+
 void main() {
   // Chinese locale: the popup menus size to their content and the wider
   // test-font metrics push the EN labels a few pixels past the route's cap.
@@ -254,6 +272,112 @@ void main() {
     await tester.tap(find.text('新建页面'));
     await tester.pump();
     expect(host.calls, contains('newTabPage'));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+W drive the tabs', (
+    tester,
+  ) async {
+    useZh(tester);
+    _viewSize(tester, const Size(1280, 800));
+    final host = _Host();
+    final tabs = [
+      DocTab(view: _view('va', 'Alpha')),
+      DocTab(view: _view('vb', 'Beta')),
+      DocTab(view: _view('vc', 'Gamma')),
+    ];
+    await tester.pumpWidget(
+      host.build(tabs: tabs, activeTabIndex: 1, selectedView: null),
+    );
+    await tester.pump();
+    _focusInsideShell(tester);
+    await tester.pump();
+
+    Future<void> chord(LogicalKeyboardKey key, {bool shift = false}) async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      if (shift) await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(key);
+      if (shift) await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+    }
+
+    await chord(LogicalKeyboardKey.tab);
+    expect(host.calls.last, 'selectTab:2');
+    await chord(LogicalKeyboardKey.tab, shift: true);
+    expect(host.calls.last, 'selectTab:0');
+    await chord(LogicalKeyboardKey.keyW);
+    expect(host.calls.last, 'closeTab:1');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Ctrl+W does nothing on the only tab', (tester) async {
+    useZh(tester);
+    _viewSize(tester, const Size(1280, 800));
+    final host = _Host();
+    await tester.pumpWidget(
+      host.build(tabs: [DocTab(view: _view('va', 'Alpha'))], selectedView: null),
+    );
+    await tester.pump();
+    _focusInsideShell(tester);
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyW);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(host.calls.where((c) => c.startsWith('closeTab')), isEmpty);
+  });
+
+  testWidgets('the narrow shell swaps the strip for a tab switcher', (
+    tester,
+  ) async {
+    useZh(tester);
+    _viewSize(tester, const Size(390, 844));
+    final host = _Host();
+    final tabs = [
+      DocTab(view: _view('va', 'Alpha')),
+      DocTab(view: _view('vb', 'Beta')),
+    ];
+    await tester.pumpWidget(
+      host.build(
+        tabs: tabs,
+        activeTabIndex: 1,
+        selectedView: null,
+        size: const Size(390, 844),
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(DocTabStrip), findsNothing);
+    final switcher = find.byType(NarrowTabSwitcher);
+    expect(switcher, findsOneWidget);
+    expect(
+      find.descendant(of: switcher, matching: find.text('2')),
+      findsOneWidget,
+    );
+
+    // Open it: both tabs listed; picking one selects it.
+    await tester.tap(switcher);
+    await tester.pumpAndSettle();
+    expect(find.text('Alpha'), findsWidgets);
+    await tester.tap(find.text('Alpha').last);
+    await tester.pumpAndSettle();
+    expect(host.calls.last, 'selectTab:0');
+
+    // A row's X closes that tab.
+    await tester.tap(switcher);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.close).first);
+    await tester.pumpAndSettle();
+    expect(host.calls.last, 'closeTab:0');
+
+    // The trailing item opens the same new-tab menu as the strip's `+`.
+    await tester.tap(switcher);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('新建标签页'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('新建页面'));
+    await tester.pumpAndSettle();
+    expect(host.calls.last, 'newTabPage');
     expect(tester.takeException(), isNull);
   });
 

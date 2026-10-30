@@ -85,6 +85,26 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
 
   DocTab get _activeTab => _tabs[_activeTabIndex];
 
+  final _openTabsSaver = OpenTabsSaver();
+
+  /// Bring back last run's strip once the startup page is open
+  /// (doc_tab_persistence.dart). Other tabs return as labels and load on
+  /// first activation ([_selectTab]).
+  void _restoreOpenTabs() {
+    final restored = restoreOpenTabs(
+      loadPref(kOpenTabsPref),
+      _activeTab,
+      (ws, id) => _viewsByWorkspace[ws]?.where((v) => v.id == id).firstOrNull,
+    );
+    if (restored != null && mounted) {
+      setState(() => _tabs
+        ..clear()
+        ..addAll(restored.tabs));
+      _activeTabIndex = restored.active;
+    }
+    _openTabsSaver.prime(_tabs, _activeTabIndex);
+  }
+
   // `_selectedView` / `_selectedBootstrap` used to be plain fields. They are
   // proxies onto the active tab now so the call sites did not have to move in
   // the same commit that introduced the tab model — the two are independent
@@ -772,6 +792,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       unawaited(_auth.refreshProfile());
       await _loadSelectedWorkspaceMembers();
       await _loadSelectedWorkspaceViews();
+      if (mounted) _restoreOpenTabs();
       // The startup restore isn't a _run() action, so nothing else wires the
       // doc it just auto-opened: without this, the WS sync session (presence +
       // yrs CRDT + local-first mirror) only starts on the user's FIRST click —
@@ -1086,6 +1107,33 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     // own is recognised as connected and reconnects nothing, while one that was
     // parked under the cap reconnects here.
     _reconcileSync();
+    // The exception: a tab restored from last run is a label until first shown.
+    if (target.bootstrap == null && target.view != null) {
+      await _loadRestoredTab(target);
+    }
+  }
+
+  /// Fetch a restored tab's document, against the tab's OWN workspace (the
+  /// shell's switch to it is still in flight). A page that no longer loads
+  /// closes its tab, as a background tab does.
+  Future<void> _loadRestoredTab(DocTab tab) async {
+    final session = _session, view = tab.view, ws = tab.workspaceId;
+    if (session == null || view == null || ws == null) return;
+    final seq = ++tab.navSeq;
+    try {
+      final boot = await _api.bootstrapDocument(
+        session.accessToken,
+        ws,
+        view.objectId,
+      );
+      if (!mounted || !_tabs.contains(tab) || tab.navSeq != seq) return;
+      setState(() => tab.bootstrap = boot);
+      _reconcileSync();
+    } on ApiException catch (error) {
+      if (!mounted || !_tabs.contains(tab) || tab.navSeq != seq) return;
+      setState(() => _message = error.message);
+      await _closeTab(_tabs.indexOf(tab));
+    }
   }
 
   /// Close the tab at [index].
@@ -1630,6 +1678,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
           unawaited(_refreshAiConfigured());
           await _loadSelectedWorkspaceMembers();
           await _loadSelectedWorkspaceViews();
+          _restoreOpenTabs();
         case AuthRefused(:final refusal):
           switch (refusal) {
             case AuthRefusal.badCredentials:
@@ -3112,6 +3161,10 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         )) {
           tab.bootstrap = bootstrap;
         }
+        // The stamp `_selectedBootstrap`'s setter would have written: this
+        // writes `tab` directly (it may no longer be active), so stamp here,
+        // with the workspace the load was FOR.
+        if (tab.bootstrap != null) tab.workspaceId = workspace.id;
       });
       // Reaching the server means we're back online — restore the real nav if we
       // had fallen back to the offline mirror.
@@ -5204,6 +5257,15 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     // shows; 本地模式 sits in its world picker, so this is not a dead end.
     if (_local.available && _activeOrigin != kLocalOrigin && session == null) {
       return _signInGate(context);
+    }
+    // Cloud only: the local world has no tabs, and saving its single strip
+    // would erase the cloud one.
+    if (session != null && _activeOrigin != kLocalOrigin) {
+      _openTabsSaver.maybeSave(
+        _tabs,
+        _activeTabIndex,
+        (v) => savePref(kOpenTabsPref, v),
+      );
     }
     return Scaffold(body: SafeArea(child: _unifiedWorkspaceView(session)));
   }

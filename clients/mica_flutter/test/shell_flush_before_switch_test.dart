@@ -151,6 +151,69 @@ void main() {
     expect(s.tabs[1].view?.name, 'Beta');
   });
 
+  testWidgets('open tabs come back after a restart, loading lazily', (
+    tester,
+  ) async {
+    await boot(
+      tester,
+      workspaces: [
+        {'id': 'ws1', 'name': 'One'},
+      ],
+      viewsByWorkspace: {
+        'ws1': [
+          {'id': 'va', 'name': 'Alpha'},
+          {'id': 'vb', 'name': 'Beta'},
+        ],
+      },
+    );
+    await openPage(tester, 'Alpha');
+    final row = tester.getCenter(find.text('Beta').first);
+    await tester.tapAt(row, buttons: kSecondaryMouseButton);
+    await settle(tester);
+    await tester.tap(find.text('在新标签页打开'));
+    await settle(tester);
+    expect(stripOf(tester).tabs, hasLength(2));
+    expect(loadPref('openTabs'), contains('"v":"va"'));
+
+    // Restart: same server, same prefs, a fresh app.
+    await tester.pumpWidget(const SizedBox());
+    await settle(tester);
+    server.events.clear();
+    await tester.pumpWidget(const app.MicaApp());
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+
+    var s = stripOf(tester);
+    expect(s.tabs.map((t) => t.view?.name), ['Alpha', 'Beta']);
+    expect(s.activeIndex, 1, reason: 'the last viewed page is active again');
+    expect(
+      server.events.where((e) => e.contains('documents/doc-va/bootstrap')),
+      isEmpty,
+      reason: 'a restored background tab is a label until shown: '
+          '${server.events}',
+    );
+
+    // First activation fetches it, once.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DocTabStrip),
+        matching: find.text('Alpha'),
+      ),
+    );
+    await settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(
+      server.events
+          .where((e) => e.contains('documents/doc-va/bootstrap'))
+          .length,
+      1,
+      reason: '${server.events}',
+    );
+    s = stripOf(tester);
+    expect(s.activeIndex, 0);
+    expect(s.tabs[0].bootstrap, isNotNull);
+  });
+
   testWidgets(
     'P1-2: selecting another tab flushes first, and never refetches',
     (tester) async {
@@ -525,6 +588,8 @@ class _FakeMicaServer {
     // would steer this boot onto the other workspace. Clear it: every test
     // here boot scripts its world and expects to land on the first one.
     removePref('lastWorkspaceId');
+    // Same reason: a saved tab strip from an earlier test would come back.
+    removePref('openTabs');
     useHttpClientForTesting(MockClient(_handle));
   }
 

@@ -1166,7 +1166,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _narrowTopBar(context),
-              Expanded(child: _editorPane(context)),
+              Expanded(child: _editorPane(context, narrow: true)),
             ],
           ),
         ),
@@ -1221,6 +1221,19 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                 ),
               ),
             ),
+            if (widget.onSelectTab != null &&
+                widget.onCloseTab != null &&
+                widget.tabs.isNotEmpty)
+              NarrowTabSwitcher(
+                tabs: widget.tabs,
+                activeIndex: widget.activeTabIndex,
+                onSelect: widget.onSelectTab!,
+                onClose: widget.onCloseTab!,
+                untitledLabel: context.l10n.untitledPage,
+                tooltip: context.l10n.tabSwitcherTooltip,
+                onNewTab: widget.onNewTabPage == null ? null : _showNewTabMenu,
+                newTabLabel: context.l10n.tabNewTooltip,
+              ),
             const SizedBox(width: 8),
           ],
         ),
@@ -1276,7 +1289,22 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
       // double-click unbound, matching Explorer/Finder/VS Code muscle memory
       // where a double-click on a tree row means *open*.
       const SingleActivator(LogicalKeyboardKey.f2): _renameLocated,
+      ..._tabShortcuts(),
     };
+  }
+
+  /// Ctrl/Cmd+T, Ctrl/Cmd+W, Ctrl+(Shift+)Tab — see ui/tab_shortcuts.dart.
+  /// None in the local world, which has no tabs.
+  Map<ShortcutActivator, VoidCallback> _tabShortcuts() {
+    final select = widget.onSelectTab, close = widget.onCloseTab;
+    final count = widget.tabs.length, active = widget.activeTabIndex;
+    if (select == null || close == null || count == 0) return const {};
+    return tabShortcutBindings(
+      newTab: () => _openSearch(inNewTab: true),
+      close: count > 1 ? () => close(active) : null,
+      next: () => select(nextTabIndex(active, count)),
+      previous: () => select(nextTabIndex(active, count, backwards: true)),
+    );
   }
 
   /// Ctrl/Cmd+F: open the editor's in-page find bar (no-op when no document is

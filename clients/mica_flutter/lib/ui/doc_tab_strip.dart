@@ -144,10 +144,14 @@ class DocTabStrip extends StatelessWidget {
     return Tooltip(message: workspaceName, child: tab);
   }
 
-  String _labelFor(DocTab tab) {
-    final name = tab.view?.name.trim() ?? '';
-    return name.isEmpty ? untitledLabel : name;
-  }
+  String _labelFor(DocTab tab) => docTabLabel(tab, untitledLabel);
+}
+
+/// A tab's label: its page name, or [untitledLabel] when it has none. Shared
+/// with the narrow shell's tab switcher so both name a tab the same way.
+String docTabLabel(DocTab tab, String untitledLabel) {
+  final name = tab.view?.name.trim() ?? '';
+  return name.isEmpty ? untitledLabel : name;
 }
 
 class _NewTabButton extends StatelessWidget {

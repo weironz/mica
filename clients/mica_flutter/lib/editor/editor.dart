@@ -2155,8 +2155,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
     // Tab / Shift+Tab: indent or outdent list items; inside a code block a
     // Tab inserts two spaces. Always handled — the browser must never steal
-    // focus from the editor on Tab.
-    if (key == LogicalKeyboardKey.tab) {
+    // focus from the editor on Tab. Ctrl/Cmd+Tab is not ours: it switches tabs
+    // (app shortcut), so it must bubble past.
+    if (key == LogicalKeyboardKey.tab && !accel) {
       final n = _controller.focusedNode;
       if (n != null && n.isCode && sel.isCollapsed && !shift) {
         // At the very start of a free-standing code block, Tab attaches it
@@ -2867,7 +2868,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         }
       }
 
-      if (key == LogicalKeyboardKey.tab) {
+      // Ctrl/Cmd+Tab switches page tabs, not cells.
+      if (key == LogicalKeyboardKey.tab && !accel) {
         final shift = HardwareKeyboard.instance.isShiftPressed;
         var nr = row;
         var nc = col + (shift ? -1 : 1);
