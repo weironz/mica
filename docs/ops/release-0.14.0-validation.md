@@ -88,6 +88,21 @@ machine by running the 0.14.0 installer manually (user-driven). The installed
 binary reports ProductVersion 0.14.0 and launches. The in-app update prompt
 path (check → download → run → restart) was not exercised in this round.
 
+
+Post-upgrade checks on a real pre-upgrade document (created under the old
+format, containing a table):
+
+- The page renders correctly under 0.14.0: heading, paragraphs, code blocks
+  and the table (bold header row, monospace first column, grid lines) are
+  all intact — the new cell model reads the old storage form.
+- Editing works: caret placement, typing, backspace, selection (drag across
+  blocks including the whole table) and the floating format toolbar.
+- Copy (real Ctrl+C on a cross-block selection including the table) produces
+  both clipboard flavors: plain text with tab-separated table rows, and HTML
+  with <h2>/<p>/<table> with <th>/<td> and inline <code> — driven through
+  the Rust engine, same as the web smoke.
+
+
 ## Independent production check (reviewer, 2026-10-29)
 
 Read-only, from a Linux container:
@@ -113,4 +128,5 @@ Read-only, from a Linux container:
   main (takes effect with the next web image).
 - Not covered: editor interactions on production (no production account),
   and the desktop in-app update flow (check → download → run → restart).
+
 
