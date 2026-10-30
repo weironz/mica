@@ -414,6 +414,121 @@
 
 ## 编辑器与功能广度
 
+- ✅ **完成(2026-10-30)**:`dbd1a254`。剩余三项做完:快捷键 `Ctrl+T`(新标签页打开页面选择器)/ `Ctrl+W` / `Ctrl+(Shift+)Tab`,四处同步,编辑器与单元格的 Tab 不再吞带 Ctrl/⌘ 的 Tab;窄壳(<768)用顶栏的标签数按钮代替 34px 标签栏;标签持久化(用户 2026-10-30 拍板按 AFFiNE):只存元信息,重启后后台标签是标签名,首次激活才 bootstrap。顺带修了从侧栏打开页面时 `DocTab.workspaceId` 没打标的问题。拖拽排序/固定/撤销关闭仍不做。Web 构建上 Playwright 实测:开两个标签、刷新后两个都回来且当前页不变;390px 宽时顶栏切换器列出标签、可切换/关闭/新建。**快捷键只能在桌面端生效,本轮没有在桌面真机按过**(有组件测试)。
+  以下为原条目原文:
+
+- 🆕 **多标签页(new tab):同时开多个页面、来回切换**(2026-08-08 用户提)——
+  AppFlowy 与 Notion 都有:点页面可「在新标签页打开」,顶部一排标签,面包屑跟着当前标签走。
+  **参照系明确,按 CLAUDE.md #6 先扒 AppFlowy 的实现再动手**(它是 Flutter 同构,约束最接近)。
+  重点看它**刻意没做什么**,以及标签状态存在哪一层。
+  **这不是 UI 贴一排按钮,三个已识别的结构问题**:
+  ① **导航模型是单数的** —— `_selectedView` / `_selectedBootstrap` 全局各一份,标签要求每个
+  标签各自持有一份(含滚动位置、编辑器状态、未提交的改名等)。
+  ② **CRDT 会话的生命周期** —— 现在一次只为「当前文档」开一条 WS(`_reconcileSync` 会 dispose
+  上一条)。N 个标签是要 N 条连接,还是只有前台标签连、后台标签退成只读快照?**这是最贵的一个
+  决定**,直接关系内存与服务端连接数,别在写 UI 的过程中顺手选掉。
+  ③ **格式工具栏会被挤**(用户当场就点出来了)—— 标签行与工具栏抢同一条横向空间。多半要给
+  工具栏单开一行,那又要重新算编辑器的可用高度。
+  **另需想清**:标签要不要持久化(重启后恢复)?窄壳(`kNarrowShellWidth` 以下)怎么退化?
+  与刚做完的「定位/新建落点」规则如何共存(在新标签打开是否改变定位)?(L)
+
+  **2026-08-08 已扒 AppFlowy(commit `5cf3a36`),两个问题有答案了**:
+
+  - **结构(答①)**:`workspace/application/tabs/tabs_bloc.dart` 里 `TabsBloc` 持
+    `List<PageManager>` + `currentPageManager`;`PageManager`(在
+    `presentation/home/home_stack.dart`)**每标签一个**,内部装一个 `plugin`。UI 是
+    `home/tabs/tabs_manager.dart`(栏) + `flowy_tab.dart`(单个),关闭走
+    `TabsEvent.closeTab(pageManager.plugin.id)`。顺带:它**支持固定标签**
+    (`indexOfFirstUnpinnedTab` 的插入逻辑)。
+    **关键差异**:它的 per-tab 状态不是「一个 view id」,而是一整个可实例化的
+    `PageManager`。Mica 的 `_selectedView`/`_selectedBootstrap` 是**全局单数字段** ——
+    所以加标签对 AppFlowy 是自然的,对 Mica 不是,**真正的工作量在把这两个字段收成一个
+    可实例化对象**,不在标签栏本身。
+
+  - **生命周期(答②的一半)**:`PageManager.setPlugin` 里
+    `if (newPlugin.id != plugin.id && disposeExisting) _plugin.dispose();` ——
+    dispose **只发生在「这个标签换了内容」**。切换标签不走这条路,只改
+    `currentPageManager`,其余 `PageManager` 与其 plugin **原地留着**。
+    即 **N 个标签 = N 个活着的实例,后台不降级不断开**。
+
+  **⚠️ 但这一条不能照抄。** AppFlowy 敢这么做是因为同步走本地 Rust 后端,多开一个文档
+  几乎没有远端成本;**Mica 的云工作区每个文档是一条真 WebSocket**,照搬就是「开 8 个标签
+  = 8 条常驻连接 + 8 份 CRDT 内存」。这是 Mica 特有的约束,AppFlowy 没有 ——
+  **CLAUDE.md #6 说的「相同约束下」在这里不成立,所以它的答案只能参考不能采纳。**
+
+  **2026-08-12 又扒了 AFFiNE(commit `26c515e`),它的答案跟 AppFlowy 完全不同**:
+
+  - **标签不在 app 里,在 Electron 主进程里** ——
+    `apps/electron/src/main/windows-manager/tab-views.ts` 的 `WebContentViewsManager`,
+    **每个标签一个 `WebContentsView`**(独立渲染进程,各自 `loadURL` 到
+    `/workspace/<id>/<docId>`)。一个标签 = 一整个 app 实例。
+  - **web 版压根没有标签**:`desktop/components/app-container/index.tsx` 里
+    `LayoutComponent = BUILD_CONFIG.isElectron ? DesktopLayout : BrowserLayout`,
+    浏览器版直接用浏览器自己的标签页。
+  - **标签持久化(答上一轮"仍未扒"之一):有。** `tabViewsMetaSchema`(zod,
+    `main/shared-state-schema.ts`)写进 `globalStateStorage`,重启恢复。
+  - **恢复是懒加载的**:启动只 `showTab(activeWorkbenchId)`,其余标签**只有 meta 没有 view**
+    (`tabsStatus$` 里 `loaded: views.has(w.id)`),点到才 `loadTab`。但一旦加载**就不再卸载**
+    —— 只有 `setBackgroundThrottling(true)`(Chromium 后台节流,停 timer/rAF,**不断连接**)。
+  - **关标签(答另一半)**:不允许关最后一个;延迟 500ms 再 dispose「避免闪烁」;dispose 是逐级
+    升压的 `close(waitForBeforeUnload:true)` → 等 1s → `forcefullyCrashRenderer()` →
+    `close(false)`;有 `closedWorkbenches` 栈支持**撤销关闭标签**;固定标签不会被隐式关掉。
+  - **一个标签里还能再分屏**:`WorkbenchMeta.views: WorkbenchViewMeta[]`,`separateView`
+    把分屏里的一个 view 拆成新标签。
+
+  **⚠️ 最重要的一条 —— 上一轮那张表的共同前提是错的。**
+  AFFiNE 的同步**不是每文档一条连接**:`common/nbstore/src/impls/cloud/socket.ts` 里 socket 是
+  **按 endpoint 缓存的进程内单例 + 引用计数**(`SOCKET_MANAGER_CACHE` / `refCount`),
+  `space:join` 只带 `spaceType`/`spaceId`,**`docId` 是消息里的一个字段**
+  (`space:push-doc-update` / `space:broadcast-doc-update`)。一个渲染进程里开多少文档
+  **都只有一条连接**。
+  Mica 是 `/ws/workspaces/{workspace_id}/documents/{document_id}`(`routes/mod.rs:28`),
+  `document_id` 在 upgrade 时绑死、一路传进 `run_connection`(`ws.rs:70`)——
+  **「N 个标签 = N 条 WS」是 Mica 自己的连接粒度造成的,不是多标签的固有代价。两个参照系都没有
+  这个约束。** 这正是 CLAUDE.md #6 点名的那类错误:给「几选一」之前先问这些选项的**共同前提**
+  验证过没有。所以表加第四行:
+
+  **✅ 2026-08-12 用户拍板:第三种(全连但设上限 ≤3,超出按 LRU 降级)。** 已实现
+  (`kMaxLiveSyncTabs` / `tabsToPark`,`lib/doc_tab.dart`)。第四种仍是长期正解,见表末行。
+
+  | 方案 | 代价 |
+  | --- | --- |
+  | 全连(照抄 AppFlowy) | 简单、切换零延迟;连接数与内存随标签线性增长 |
+  | 只前台连、后台留快照 | 连接恒为 1;切回要重连 + 重新 bootstrap,有可感知延迟且后台内容是旧的 |
+  | 全连但设上限(如 ≤3,超出按 LRU 降级) | 兼顾,但多一套 LRU 要维护 |
+  | **改连接粒度:一条工作区连接多路复用文档**(AFFiNE 的做法) | 连接恒为 1、无降级、无 LRU、切换零延迟 —— **长期正解**;但要动协议两端(路由、`run_connection` 里的文档态、服务端广播分组)并升 `WS_PROTOCOL_VERSION`(该机制已就位:`check_protocol` / `ws_min_protocol`)。**明显比标签栏本身贵** |
+
+  倾向:**先按第三种做标签,第四种日后单独改** —— 粒度换掉时标签这层不用重写,所以不必为了标签
+  先做完协议改造。但如果打算做第四种,**别把 LRU 做复杂**,它是过渡件。
+
+  **已落地(2026-08-12,commit `9d97ce7` / `20b458f` + 本轮)**:`DocTab` 模型、标签栏、
+  右键「在新标签页打开」、切换/关闭、≤3 全连 + LRU 降级。
+
+  **本条剩下的**:
+  - 键盘快捷键(Ctrl+T / Ctrl+W / Ctrl+Tab)—— 加了要**四处同步**(见本文件"快捷键"约定)。
+  - 窄壳(`kNarrowShellWidth` 以下)标签栏怎么退化,尚未处理。
+  - **标签是否持久化仍未拍板**。AFFiNE 有(zod schema 进 globalStateStorage,且恢复是懒加载);
+    AppFlowy 未确认。
+  - 标签拖拽排序、固定标签、撤销关闭 —— 两家都有,我们**都没做,也没需求**,先不做。
+
+  ✅ **已真机验过(2026-08-12,v0.13.18 发版前)**:常驻标签栏、右键「在新标签页打开」、
+  `+` 菜单(新建 / 挑一个已有页面)、切换、关闭。原先这里写着「未在真机实测」——
+  那种否定式条目只会静默变假,所以发版时当场核掉。
+
+  **答③(格式工具栏被挤)—— 两家做法相反,但都不是「给工具栏单开一行」**:
+  - AFFiNE:标签行是**整宽一行,压在侧边栏上面**(JSX 结构
+    `desktopAppViewContainer` → `desktopTabsHeader` + `desktopAppViewMain`(sidebar + main))。
+    而且这行**不是纯增量** —— 侧边栏开关与前进后退按钮搬进了标签行的 `left` 槽
+    (`<AppTabsHeader left={<SidebarSwitch/><NavigationButtons/>}/>`),把自己占的高度赚回来一部分。
+  - AppFlowy:`TabsManager` 在 `HomeStack` **内容列内部**(侧边栏右边,带 `menuSpacing` 左内边距),
+    侧边栏保持满高。
+  - 另:AppFlowy 切标签时**主动 unfocus 编辑器以收起浮动选择工具栏**
+    (`home_stack.dart` 的 `onIndexChanged` 注释原话)—— 这条与横向空间无关,对我们直接适用。
+
+  **所以③的前提也要修正**:标签行是**纵向**多占一行,**不与格式工具栏抢横向空间**,
+  用户当时担心的「估计要新开一行放格式工具栏」按两家的做法并不需要;真正要重算的是编辑器可用**高度**。
+
+
 - 🟡 **web/桌面端批量移动(多选)。** 服务端 `batch-move` 已在 0.13.19 落地,CLI 和 MCP 都能
   用了,**客户端一行没接**。真正的工作量不是调接口,是多选交互:选中集合与"当前打开页"
   两个概念要共存、进入多选的手势在 web 和桌面不一样(同一套代码两端跑)、现有 `Draggable`
@@ -523,6 +638,35 @@
   **残留 ①(Authenticode 签名)** 见 `roadmap.md` §平台覆盖「Windows 未签名」那条 —— 已拍板不做。
 
 ## 客户端质量与兜底 🆕
+
+- ✅ **完成(2026-10-30)**:`f277d1a5` + `08fbe885`。没有按官方建议整体改写为 `OverlayPortal.overlayChildLayoutBuilder`(那要把四个浮层从 OverlayEntry 生命周期改成 OverlayPortal 控制器),而是取同一原理:新 `CanvasFollower`(`editor/canvas_follower.dart`)在**绘制期**读取画布位置并按帧重绘,浮层与 Overlay 之间不再有 follower 层,`TooltipVisibility(visible: false)` 移除。`canvas_overlay_tooltip_test.dart` 去掉抑制在旧实现上复现原断言、在新实现上显示提示且点击命中;跟随滚动的两条旧测试照常通过。Web 构建上用 Playwright 实测:悬停「加粗」显示提示、格式条不动。
+  **一个例外**:开启语义树(屏幕阅读器 / Web 无障碍模式)时,提示弹出的播报会抢走编辑器隐藏输入框的 DOM 焦点,
+  编辑器失焦、格式条被关掉;所以语义树开启时这几个浮层仍保持 `TooltipVisibility(false)`,即改动前的行为。
+  **未在 Windows 桌面真机拖选验证**。
+  以下为原条目原文:
+
+- 🆕 **跟随画布的浮层里没有 tooltip 了**(2026-08-12,`_followCanvas`)——
+  格式条 / 链接条 / 斜杠菜单 / 单元格编辑器都由 `CompositedTransformFollower` 定位,
+  而本版 Flutter 的 `Tooltip` 是 `OverlayPortal`,它的 `_OverlayChildLayoutBuilder`
+  **在布局期**就向锚点要 paint transform —— `RenderFollowerLayer` 那时还没有,于是每帧一次
+  断言(用户拖选时刷红框,真机栈点名 `editor.dart` 的 `IconButton`)。
+  现在整棵子树 `TooltipVisibility(visible: false)`,**代价是这些浮层的悬停提示全没了**。
+  Flutter 官方给的正解是把 follower 换成 `OverlayPortal.overlayChildLayoutBuilder`,
+  两者都能保住 —— 但那要重写这些条如何跟随画布(`777c07c` / `9c367b2` 正是为了让它们跟随),
+  所以单独算一件事。**未拍板**。(M)
+
+  **2026-08-27:Flutter 3.47 把这条从「官方有个说法」变成了官方推荐** ——
+  [#188894](https://github.com/flutter/flutter/pull/188894)「Recommend
+  `OverlayPortal.overlayChildLayoutBuilder` over Target-Follower」。路径确定了,
+  代价没变(重写四个浮层的跟随方式),所以**仍然未拍板**,只是不再需要赌它是不是正解。
+
+  ⚠️ **同版另一条 tooltip 修复不解锁这件事,别混**:
+  [#188476](https://github.com/flutter/flutter/pull/188476)
+  「keep tooltip position rect alive - fix use after free」修的是**引擎里** Windows
+  tooltip 定位矩形的 UAF;我们绕的是**框架层**布局期断言(follower 那时还没有 paint
+  transform)。两个不同的 bug,升到 3.47 之后 `TooltipVisibility(visible: false)`
+  仍然是必需的。
+
 
 - ✅ **触摸滑动不再被工作区和目录的排序拖拽抢占**(2026-09-28,v0.13.46,
   `9ae5e30`)—— 两个列表按实际指针类型处理:手指直接滑动滚动,长按后拖动排序;
@@ -820,6 +964,24 @@
   但「新机器起栈」现在只要填 `SERVER_IP` + `MICA_VERSION`。
 
 ## 导入 / 批量整理 🆕
+
+- ✅ **完成(2026-10-30)**:`a436b060`。`mica_interchange::normalize_archive` 抽成服务端 `plan_import` 的前半段,新 FFI `unpack_import_zip` 走同一读取与规范化(去外层包装、展开嵌套 zip),再进现有的本地文件夹导入;没有页面的归档在创建工作区之前就拒绝。Web 无 FFI,入口仍隐藏。真实 FFI 库测试 `local_zip_import_test.dart`。**未在 Windows 桌面上点过一次界面入口**(本轮只有 Linux 容器)。
+  以下为原条目原文:
+
+- 🟡 **本地模式的 zip 导入入口。** 0.13.21 把它从「空实现、点了没反应」改成了**隐藏**,
+  因为客户端没有 zip 读侧(只有 `buildStoreZip` 打包侧,解包在服务端 Rust 里)。要放出来
+  得新增一个解包 FFI;资产那半已经就绪(`from_markdown_with_assets` + 本地 CAS),
+  剩下的只是「把 zip 解成 `List<ArchiveFile>`」这一步。
+
+- ✅ **完成(2026-10-30)**:`8c48d09e`。用户 2026-10-30 拍板三处都接:`mica_list_comments` / `mica_delete_comment`、`mica_list_members` / `mica_remove_member`、`mica_delete_file`,删除都要 `confirm: true`,权限判定仍在服务端。本地服务端端到端验过(删别人评论、owner 不可移除 403、移除后访问 404、删文件后读取 404)。
+  以下为原条目原文:
+
+- 🆕 **MCP 的删除面还剩三处没接**(2026-08-26 盘点,服务端路由都已存在)——
+  ① 评论:`DELETE .../comments/{id}` 有,MCP 连读都没有;② 移除成员:`remove_member` 有;
+  ③ 删文件:`DELETE .../files/{id}` 有,不过**影响最小** —— `blob_gc` 是周期 mark-and-sweep,
+  把图片从页面里编辑掉之后没人引用的 blob 会被回收,所以缺的是「立即删」不是「删不掉」。
+  ①②其实不是"删除能力强弱",是 **MCP 要不要覆盖协作面**这个更大的问题,值得单独拍板。(S)
+
 
 - 🟡 **`_selectedMarkdown` 恒为 null。** 0.13.21 删掉了唯一给它赋值的孤儿方法,状态本身
   和依赖它的显示还留着 —— 拆要动外壳 widget,单独做。
