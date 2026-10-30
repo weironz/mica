@@ -141,6 +141,12 @@ pub fn set_document_title(snapshot: &mut DocumentSnapshotPayload, title: &str) -
 }
 
 /// Put `# {title}` into an exported page's TEXT, after any front matter.
+///
+/// Not when the body already OPENS with a heading of that exact text, at any
+/// level: the author wrote the title themselves (`## 页名` was common before
+/// the title moved into the document), and a second one above it is pure
+/// duplication. Nothing is removed — the title is simply not added — so the
+/// author's heading survives export and re-import unchanged.
 pub fn with_page_title(markdown: &str, title: &str) -> String {
   let title = title.trim();
   if title.is_empty() {
@@ -148,7 +154,7 @@ pub fn with_page_title(markdown: &str, title: &str) -> String {
   }
   let heading = format!("# {title}");
   let (front, body) = crate::split_front_matter(markdown);
-  if leading_heading(body).is_some_and(|line| is_page_title_line(line, title)) {
+  if leading_heading(body).and_then(heading_text) == Some(title) {
     return markdown.to_string();
   }
   let body = body.trim_start_matches('\n');
@@ -189,6 +195,21 @@ pub fn strip_page_title(markdown: &str, title: &str) -> String {
 /// Whether `line` is the heading [`with_page_title`] writes for `title`.
 fn is_page_title_line(line: &str, title: &str) -> bool {
   line.trim().strip_prefix("# ").map(str::trim) == Some(title)
+}
+
+/// The text of an ATX heading line (`#`–`######`, then a space or nothing),
+/// trimmed; `None` for anything else (`#tag`, `####### x`).
+fn heading_text(line: &str) -> Option<&str> {
+  let line = line.trim();
+  let level = line.bytes().take_while(|&b| b == b'#').count();
+  if !(1..=6).contains(&level) {
+    return None;
+  }
+  let rest = &line[level..];
+  if !rest.is_empty() && !rest.starts_with([' ', '\t']) {
+    return None;
+  }
+  Some(rest.trim())
 }
 
 /// The first non-blank line, if it is an ATX heading; otherwise `None`.
@@ -426,13 +447,33 @@ mod page_title_tests {
     );
   }
 
+  // Until 2026-10-30 this was the opposite: `## 我的页` got `# 我的页` above
+  // it, so pages whose authors had typed the title exported it twice. Not
+  // adding the title removes nothing, so the author's heading is kept.
   #[test]
-  fn a_same_named_heading_at_another_level_is_not_treated_as_the_title() {
-    let md = "## 我的页\n\n正文。\n";
-    assert_eq!(
-      with_page_title(md, "我的页"),
-      "# 我的页\n\n## 我的页\n\n正文。\n"
-    );
+  fn a_same_named_heading_at_another_level_stands_in_for_the_title() {
+    for md in [
+      "## 我的页\n\n正文。\n",
+      "### 我的页\n\n正文。\n",
+      "\n## 我的页  \n正文。\n",
+    ] {
+      assert_eq!(with_page_title(md, "我的页"), md);
+    }
+  }
+
+  #[test]
+  fn only_an_exact_heading_counts_as_the_title() {
+    for md in [
+      "## 我的页 v2\n",
+      "####### 我的页\n",
+      "#我的页\n",
+      "我的页\n",
+    ] {
+      assert!(
+        with_page_title(md, "我的页").starts_with("# 我的页\n\n"),
+        "{md:?}"
+      );
+    }
   }
 
   #[test]

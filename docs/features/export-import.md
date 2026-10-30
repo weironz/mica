@@ -76,6 +76,10 @@ Implemented in `crates/api-server/src/routes/documents/export.rs`
   one and from the view name otherwise; see `docs/features/page-title-plan.md`.
   Import takes the same line back off when the manifest says
   `generator: "mica"`, which is what keeps export→import stable.
+  When the body already opens with a heading of exactly the title, at any
+  level (`## <title>` typed by the author), no `# <title>` is added — the
+  author's heading stands in for it and survives the round trip (2026-10-30;
+  before that such pages exported the title twice).
 
   > ⚠️ This line was **false** from some unrecorded date until 2026-08-27: the
   > export wrote the body verbatim and the name lived only in the file name +

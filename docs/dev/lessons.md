@@ -499,8 +499,9 @@ locale 探测、`runZonedGuarded` 之前**。于是 `main()` 走不到 `register
   导入把它**剥回**属性。「不是正文里的一行」这条继续成立:root 块不是正文块。〕
   剥离只对**自家归档**(manifest `generator: mica`)和 **Notion**(它把标题同时塞进
   文件名和正文首个 H1)生效,且**只在精确匹配时** —— 一个恰好在开头的标题是作者的内容。
-  两侧(`with_page_title` / `strip_page_title`,都在 `mica_markdown`,相邻、共用同一个
-  标题行判定和 front matter 拆分)**必须一起改**;剥离要**跳过 front matter** 去找,因为写侧
+  两侧(`with_page_title` / `strip_page_title`,都在 `mica_markdown`,相邻、共用 front matter
+  拆分)**必须一起改**。2026-10-30 起两侧判定有意不对称:写侧见到首行是**任意级别**的同名标题就不再加
+  `# {name}`(只是不加,不删任何东西),剥离仍只认精确的 `# {name}`,所以作者手写的 `## 页名` 原样往返;剥离要**跳过 front matter** 去找,因为写侧
   把标题放在它后面。`interchange` 里 `a_mica_export_survives_import_and_re_export_byte_for_byte`
   与 `names_the_file_name_cannot_carry_survive_export_then_import` 同时走过两边。
 - **一条规则被推翻时,要搜的是它的每一处表述,不是改掉最先看到的那处。** 这一条自己就是

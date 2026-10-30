@@ -907,6 +907,25 @@ mod tests {
     assert_eq!(find(&plan, "Intro").markdown.trim(), "# 别的标题\n\nhello");
   }
 
+  // Our export no longer adds `# Intro` above a page that already opens with
+  // its own `## Intro` (with_page_title, 2026-10-30). Re-importing that file
+  // must keep the author's heading: only the exact `# Intro` line is ours.
+  #[test]
+  fn an_authors_same_named_subheading_survives_the_round_trip() {
+    let body = "## Intro\n\nhello";
+    let exported = mica_markdown::with_page_title(body, "Intro");
+    assert_eq!(exported, body, "nothing added above the author's heading");
+    let raw = vec![
+      e(
+        "manifest.json",
+        &manifest(&[("Intro.md", "Intro", "document")]),
+      ),
+      e("Intro.md", &exported),
+    ];
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
+    assert_eq!(find(&plan, "Intro").markdown.trim(), body);
+  }
+
   // Same text, same name — but nobody said this archive is ours. A hand-built
   // or third-party zip's first heading is content, and stripping it would be
   // data loss with no error.
