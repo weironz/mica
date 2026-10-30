@@ -12,6 +12,14 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Uint8List buildStoreZip({required List<StoreZipEntry> entries}) =>
     RustLib.instance.api.crateApiZipBuildStoreZip(entries: entries);
 
+/// Read a workspace ZIP for the local (offline) import. The server import
+/// reads archives with the same two calls (`read_zip` then the archive
+/// normalization inside `plan_import`), so a ZIP imports into the same tree
+/// in both worlds. Errors are the reader's message (corrupt, encrypted,
+/// over the inflate budget).
+Future<UnpackedZip> unpackImportZip({required List<int> bytes}) =>
+    RustLib.instance.api.crateApiZipUnpackImportZip(bytes: bytes);
+
 /// One file headed into the archive (folder/multi-file import packing).
 class StoreZipEntry {
   final String name;
@@ -29,4 +37,35 @@ class StoreZipEntry {
           runtimeType == other.runtimeType &&
           name == other.name &&
           bytes == other.bytes;
+}
+
+/// A workspace archive unpacked for the LOCAL import: the entries after the
+/// same normalizations the server applies (junk filtering, single-wrapper
+/// peel, nested-zip expansion), plus the peeled wrapper's name.
+class UnpackedZip {
+  final String? wrapperName;
+
+  /// Entries that become pages (the plan core's Markdown rule). Zero means
+  /// the archive holds nothing to import.
+  final int markdownCount;
+  final List<StoreZipEntry> entries;
+
+  const UnpackedZip({
+    this.wrapperName,
+    required this.markdownCount,
+    required this.entries,
+  });
+
+  @override
+  int get hashCode =>
+      wrapperName.hashCode ^ markdownCount.hashCode ^ entries.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UnpackedZip &&
+          runtimeType == other.runtimeType &&
+          wrapperName == other.wrapperName &&
+          markdownCount == other.markdownCount &&
+          entries == other.entries;
 }

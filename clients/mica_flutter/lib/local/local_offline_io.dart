@@ -21,6 +21,7 @@ import '../cloud/store_cloud_doc_store.dart';
 import '../src/rust/api/document.dart';
 import '../src/rust/api/pdf.dart';
 import '../src/rust/api/store.dart';
+import '../src/rust/api/zip.dart' as zip_ffi;
 import '../upload/sha256.dart';
 import 'local_doc.dart';
 import 'local_offline_api.dart';
@@ -650,6 +651,27 @@ class LocalOffline implements LocalOfflineApi {
       folders: outcome.folders,
       errors: [...errors, ...outcome.errors],
       viewIds: outcome.viewIds,
+    );
+  }
+
+  bool get canUnpackZip => true;
+
+  Future<
+    ({
+      String? wrapperName,
+      int markdownCount,
+      List<({String path, List<int> bytes})> entries,
+    })
+  >
+  unpackImportZip(Uint8List bytes) async {
+    final out = await zip_ffi.unpackImportZip(bytes: bytes);
+    return (
+      wrapperName: out.wrapperName,
+      markdownCount: out.markdownCount,
+      entries: [
+        for (final e in out.entries)
+          (path: e.name, bytes: e.bytes as List<int>),
+      ],
     );
   }
 

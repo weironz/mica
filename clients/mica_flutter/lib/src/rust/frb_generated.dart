@@ -72,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -791362755;
+  int get rustContentHash => -1531844169;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -563,6 +563,8 @@ abstract class RustLibApi extends BaseApi {
     required String source,
     MermaidTheme? theme,
   });
+
+  Future<UnpackedZip> crateApiZipUnpackImportZip({required List<int> bytes});
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_MicaDocument;
@@ -3748,6 +3750,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         argNames: ["source", "theme"],
       );
 
+  @override
+  Future<UnpackedZip> crateApiZipUnpackImportZip({required List<int> bytes}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(bytes, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 96,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unpacked_zip,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiZipUnpackImportZipConstMeta,
+        argValues: [bytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiZipUnpackImportZipConstMeta =>
+      const TaskConstMeta(debugName: "unpack_import_zip", argNames: ["bytes"]);
+
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_MicaDocument => wire
       .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaDocument;
@@ -4318,6 +4348,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void dco_decode_unit(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return;
+  }
+
+  @protected
+  UnpackedZip dco_decode_unpacked_zip(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return UnpackedZip(
+      wrapperName: dco_decode_opt_String(arr[0]),
+      markdownCount: dco_decode_u_32(arr[1]),
+      entries: dco_decode_list_store_zip_entry(arr[2]),
+    );
   }
 
   @protected
@@ -5101,6 +5144,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  UnpackedZip sse_decode_unpacked_zip(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_wrapperName = sse_decode_opt_String(deserializer);
+    var var_markdownCount = sse_decode_u_32(deserializer);
+    var var_entries = sse_decode_list_store_zip_entry(deserializer);
+    return UnpackedZip(
+      wrapperName: var_wrapperName,
+      markdownCount: var_markdownCount,
+      entries: var_entries,
+    );
+  }
+
+  @protected
   BigInt sse_decode_usize(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getBigUint64();
@@ -5835,6 +5891,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_unit(void self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
+  }
+
+  @protected
+  void sse_encode_unpacked_zip(UnpackedZip self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_opt_String(self.wrapperName, serializer);
+    sse_encode_u_32(self.markdownCount, serializer);
+    sse_encode_list_store_zip_entry(self.entries, serializer);
   }
 
   @protected

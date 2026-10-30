@@ -84,12 +84,52 @@ pub fn plan_import(
   notion_hint: bool,
   mode: ImportMode,
 ) -> Result<ImportPlan, crate::zip::ZipReadError> {
+  let archive = normalize_archive(raw)?;
+  Ok(plan_core(
+    archive.entries,
+    notion_hint,
+    archive.wrapper_name,
+    mode,
+  ))
+}
+
+/// An archive's entries after the archive-only normalizations, ready for the
+/// plan core.
+#[derive(Debug)]
+pub struct NormalizedArchive {
+  pub entries: Vec<ZipFileEntry>,
+  /// The single top-level wrapper directory that was peeled away, if any.
+  pub wrapper_name: Option<String>,
+}
+
+impl NormalizedArchive {
+  /// How many entries would become pages. Zero means the import would create
+  /// nothing — a caller can refuse before making an empty workspace.
+  pub fn markdown_count(&self) -> usize {
+    self
+      .entries
+      .iter()
+      .filter(|e| is_markdown_path(&e.name))
+      .count()
+  }
+}
+
+/// The archive half of [`plan_import`]: junk filtering, the single-wrapper
+/// peel and nested-zip expansion. Split out so the desktop's LOCAL zip import
+/// (which plans through [`plan_vault_import`] on the device) reads an archive
+/// exactly the way the server does, instead of growing a second copy.
+pub fn normalize_archive(
+  raw: Vec<ZipFileEntry>,
+) -> Result<NormalizedArchive, crate::zip::ZipReadError> {
   // `normalize_entries` already peels a single top-level wrapper folder
   // (Anytype-style collapse); capture its name FIRST so we can name a new
   // workspace / import container after it (the peel itself discards the name).
   let wrapper_name = crate::normalize::stripped_wrapper_name(&raw);
   let entries = expand_nested_zips(normalize_entries(raw))?;
-  Ok(plan_core(entries, notion_hint, wrapper_name, mode))
+  Ok(NormalizedArchive {
+    entries,
+    wrapper_name,
+  })
 }
 
 /// Plan a walked DIRECTORY tree (the desktop "open my vault" folder picker,

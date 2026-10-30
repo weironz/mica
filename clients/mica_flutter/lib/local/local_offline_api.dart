@@ -226,6 +226,26 @@ abstract interface class LocalOfflineApi {
     String? parentViewId,
   });
 
+  /// Whether [unpackImportZip] works here. False on web: there is no FFI, so
+  /// no archive reader, and the local "import workspace ZIP" entry stays
+  /// hidden there.
+  bool get canUnpackZip;
+
+  /// Unpack a workspace ZIP for the local import, through the same Rust
+  /// reader and archive normalization the server import uses (junk filtered,
+  /// a single wrapper folder peeled, nested ZIPs expanded). The entries are
+  /// shaped for [importVaultTree]; `markdownCount` says how many become pages
+  /// (the plan core's rule, so Dart does not guess at file extensions).
+  /// Throws the reader's message on an archive it cannot read.
+  Future<
+    ({
+      String? wrapperName,
+      int markdownCount,
+      List<({String path, List<int> bytes})> entries,
+    })
+  >
+  unpackImportZip(Uint8List bytes);
+
   /// Import ONE Markdown file as a new page in [workspaceId] — the local
   /// counterpart of the cloud `importMarkdown` (issue #108). Returns the same
   /// outcome as [importVaultTree], including the created view id.

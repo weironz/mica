@@ -58,6 +58,7 @@ import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
 import 'ui/copy_button.dart';
 import 'ui/doc_tab_strip.dart';
+import 'import/local_zip_import.dart';
 import 'ui/destructive_confirm.dart';
 import 'ui/dialog_controllers.dart';
 import 'ui/emoji_picker.dart';

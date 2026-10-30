@@ -377,6 +377,20 @@ class LocalOffline implements LocalOfflineApi {
   );
 
   @override
+  bool get canUnpackZip => false;
+
+  @override
+  Future<
+    ({
+      String? wrapperName,
+      int markdownCount,
+      List<({String path, List<int> bytes})> entries,
+    })
+  >
+  unpackImportZip(Uint8List bytes) =>
+      throw UnsupportedError('local offline is not available on web');
+
+  @override
   Future<VaultImportResult> importMarkdownPage(
     String fileName,
     String markdown,

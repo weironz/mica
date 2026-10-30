@@ -188,6 +188,12 @@ class _LocalWorldBackend extends WorldBackend {
   @override
   Future<void> Function()? get restoreCheckpoint => _localRollbackDoc;
 
+  /// Hidden (null) where the device cannot read archives — web has no FFI.
+  @override
+  Future<void> Function(String fileName, Uint8List bytes, {bool notion})?
+  get importWorkspaceZip =>
+      _local.canUnpackZip ? _localImportWorkspaceZip : null;
+
   // ── Local world implementation (moved off _WorkspaceShellState) ─────────
 
   DocumentView _viewFromData(ViewData v) => DocumentView(
@@ -340,19 +346,21 @@ class _LocalWorldBackend extends WorldBackend {
     // view tree uses.
     final id = _local.createLocalWorkspace(title);
     if (!_shell.mounted) return;
-    _shell.setUi(() {
-      _reloadLocalWorkspaces();
-      _localSelectedWorkspace = _localWorkspaces.firstWhere(
-        (w) => w.id == id,
-        orElse: () => _localWorkspaces.first,
-      );
-      _localSelectedView = null;
-      _localBootstrap = null;
-      _reloadLocalViews();
-    });
+    _selectNewLocalWorkspace(id);
     // A new workspace starts empty — seed a first page.
     await _localCreateDocument(_shell.context.l10n.pageWelcomeName);
   }
+
+  void _selectNewLocalWorkspace(String id) => _shell.setUi(() {
+    _reloadLocalWorkspaces();
+    _localSelectedWorkspace = _localWorkspaces.firstWhere(
+      (w) => w.id == id,
+      orElse: () => _localWorkspaces.first,
+    );
+    _localSelectedView = null;
+    _localBootstrap = null;
+    _reloadLocalViews();
+  });
 
   Future<void> _localSelectWorkspace(Workspace workspace) async {
     savePref('lastWorkspaceId:local', workspace.id);
@@ -477,6 +485,30 @@ class _LocalWorldBackend extends WorldBackend {
     if (!_shell.mounted) return null;
     _shell.setUi(_reloadLocalViews);
     return viewId;
+  }
+
+  /// Rebuild a workspace ZIP as a NEW local workspace, the local counterpart
+  /// of the cloud `_importWorkspaceZip`. [notion] is unused: the plan core
+  /// detects a Notion export from its file names.
+  Future<void> _localImportWorkspaceZip(
+    String fileName,
+    Uint8List bytes, {
+    bool notion = false,
+  }) async {
+    final prepared = await prepareLocalZipImport(
+      _local,
+      fileName,
+      bytes,
+      l10n: _shell.context.l10n,
+      messenger: ScaffoldMessenger.maybeOf(_shell.context),
+    );
+    if (prepared == null || !_shell.mounted) return;
+    _selectNewLocalWorkspace(_local.createLocalWorkspace(prepared.name));
+    final workspace = _localSelectedWorkspace;
+    if (workspace == null) return;
+    await _localImportVaultTree(workspace, prepared.entries);
+    final toOpen = _localViewToOpen();
+    if (toOpen != null && _shell.mounted) await _localSelectView(toOpen);
   }
 
   /// S-tier vault import: land a picked folder's `.md` files into the local
