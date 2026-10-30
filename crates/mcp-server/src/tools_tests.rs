@@ -5,8 +5,8 @@
 //! pins the wire shape (count, schemas, capabilities) and a couple of
 //! behaviours; wire_tests drives real tools/call traffic against a fake API and
 //! so only ever exercises paths that pass validation. Nothing asserted WHICH
-//! 34 tools are listed — an unmerged router that swaps one tool for another
-//! keeps the count at 34 and every existing test green — and nothing exercised
+//! 39 tools are listed — an unmerged router that swaps one tool for another
+//! keeps the count at 39 and every existing test green — and nothing exercised
 //! the validation that runs BEFORE any HTTP call. This file does both, against
 //! a base URL that refuses every connection (`example.invalid`): a refusal with
 //! the guard's own message proves the check ran locally, and "Mica request
@@ -32,15 +32,15 @@ fn text(result: &rmcp::model::CallToolResult) -> String {
 
 // ── Tool inventory ──────────────────────────────────────────────────────────
 
-/// The count is already pinned at 34 (handshake_tests), but a COUNT cannot see
+/// The count is already pinned at 39 (handshake_tests), but a COUNT cannot see
 /// a tool silently swapped out of a router merge: `full_tool_router` merges five
 /// separately `#[tool_router]`-built pieces, and dropping a tool from one while
-/// adding one to another still totals 34. The lib.rs merge comment says the
+/// adding one to another still totals 39. The lib.rs merge comment says the
 /// failure mode is "caught by the CI MCP-conformance job, not by compilation" —
 /// this is the unit-level pin of the exact set, so the failure shows up in
 /// `cargo test`, not only in the conformance job.
 #[test]
-fn the_manifest_is_exactly_these_34_tools() {
+fn the_manifest_is_exactly_these_39_tools() {
   let mut expected: Vec<&str> = [
     // read_router
     "mica_list_workspaces",
@@ -81,6 +81,12 @@ fn the_manifest_is_exactly_these_34_tools() {
     "mica_share",
     "mica_unshare",
     "mica_export_workspace",
+    // collab_router
+    "mica_list_comments",
+    "mica_delete_comment",
+    "mica_list_members",
+    "mica_remove_member",
+    "mica_delete_file",
   ]
   .to_vec();
   expected.sort_unstable();
@@ -132,6 +138,8 @@ fn read_only_hints_flag_exactly_the_read_tools() {
     "mica_list_trash",
     "mica_list_versions",
     "mica_export_workspace",
+    "mica_list_comments",
+    "mica_list_members",
   ]
   .to_vec();
   expected.sort_unstable();
@@ -170,6 +178,10 @@ fn destructive_hints_flag_exactly_the_content_discarding_tools() {
     "mica_purge_views",
     // The one call with no bin behind it at all.
     "mica_delete_workspace",
+    // The collaboration surface: none of these has a bin either.
+    "mica_delete_comment",
+    "mica_remove_member",
+    "mica_delete_file",
   ]
   .to_vec();
   expected.sort_unstable();

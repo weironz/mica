@@ -88,6 +88,7 @@ impl MicaMcp {
     router.merge(Self::organize_router());
     router.merge(Self::trash_router());
     router.merge(Self::admin_router());
+    router.merge(Self::collab_router());
     router
   }
 
@@ -278,6 +279,7 @@ mod args;
 mod markdown_windows;
 mod results;
 mod tools_admin;
+mod tools_collab;
 mod tools_organize;
 mod tools_read;
 mod tools_trash;
@@ -370,6 +372,14 @@ impl ServerHandler for MicaMcp {
          recycle bin, and nothing survives it. It needs confirm=true AND expect_name matching the \
          workspace's exact current name — a guard that exists because the wrong id here cannot be \
          undone. If what you actually want is to empty a workspace, that is mica_trash_views.\n\
+         \n\
+         COLLABORATION: mica_list_comments shows a page's comment threads, mica_delete_comment \
+         removes one (thread id from that list); mica_list_members shows who is in a workspace, \
+         mica_remove_member revokes one person's access. mica_delete_file removes an uploaded \
+         file at once (its id is in an image href `/files/{file_id}/blob/…`) — every page still \
+         linking it breaks, and unreferenced files are reclaimed automatically anyway, so edit \
+         the link out instead unless the bytes themselves must go now. All three removals are \
+         permanent and need confirm=true.\n\
          \n\
          Write acks return `seq` and `last_block_id` (the new end anchor) — chain further edits \
          from those instead of re-reading. For safe concurrent editing, pass the outline/ack \
@@ -950,7 +960,7 @@ mod handshake_tests {
     let tools = router.list_all();
     assert_eq!(
       tools.len(),
-      34,
+      39,
       "every tool must be listed — if you added one, bump this AND add it to the \
        get_info instructions, or it ships discoverable-but-unused"
     );
@@ -1236,6 +1246,52 @@ mod wire_tests {
     assert_eq!(seen.lock().unwrap().len(), 1, "the harness sees requests");
   }
 
+  /// The collaboration tools proxy routes the server already had; what can go
+  /// wrong is the METHOD or the PATH (a GET where a DELETE belongs, a
+  /// workspace-level path for a per-document thread). Pin both on the wire.
+  #[tokio::test]
+  async fn collaboration_tools_hit_the_server_routes() {
+    let (base, seen) = fake_api().await;
+    let mut mcp = Session::start(MicaMcp::new(base, "pat".into(), false)).await;
+    let cases = [
+      (
+        "mica_list_comments",
+        json!({ "workspace_id": WS, "document_id": DOC }),
+        format!("GET /api/workspaces/{WS}/documents/{DOC}/comments"),
+      ),
+      (
+        "mica_delete_comment",
+        json!({ "workspace_id": WS, "document_id": DOC, "thread_id": VIEW, "confirm": true }),
+        format!("DELETE /api/workspaces/{WS}/documents/{DOC}/comments/{VIEW}"),
+      ),
+      (
+        "mica_list_members",
+        json!({ "workspace_id": WS }),
+        format!("GET /api/workspaces/{WS}/members"),
+      ),
+      (
+        "mica_remove_member",
+        json!({ "workspace_id": WS, "user_id": VIEW, "confirm": true }),
+        format!("DELETE /api/workspaces/{WS}/members/{VIEW}"),
+      ),
+      (
+        "mica_delete_file",
+        json!({ "workspace_id": WS, "file_id": VIEW, "confirm": true }),
+        format!("DELETE /api/workspaces/{WS}/files/{VIEW}"),
+      ),
+    ];
+    for (tool, args, expected) in cases {
+      seen.lock().unwrap().clear();
+      let reply = mcp.call(tool, args).await;
+      assert_eq!(
+        reply.pointer("/result/isError"),
+        Some(&json!(false)),
+        "{tool}: {reply}"
+      );
+      assert_eq!(*seen.lock().unwrap(), vec![expected], "{tool}");
+    }
+  }
+
   /// A missing confirmation is actionable tool feedback, with no API side effects.
   #[tokio::test]
   async fn confirmation_refusals_are_tool_errors_without_any_request() {
@@ -1276,6 +1332,24 @@ mod wire_tests {
         json!({ "workspace_id": WS, "view_id": VIEW }),
         "refusing to purge without confirm=true — this cannot be undone",
         false,
+      ),
+      (
+        "mica_delete_comment",
+        json!({ "workspace_id": WS, "document_id": DOC, "thread_id": VIEW }),
+        "refusing to delete a comment thread without confirm=true — this cannot be undone",
+        true,
+      ),
+      (
+        "mica_remove_member",
+        json!({ "workspace_id": WS, "user_id": VIEW }),
+        "refusing to remove a member without confirm=true — this cannot be undone",
+        true,
+      ),
+      (
+        "mica_delete_file",
+        json!({ "workspace_id": WS, "file_id": VIEW }),
+        "refusing to delete a file without confirm=true — this cannot be undone",
+        true,
       ),
       (
         "mica_purge_views",

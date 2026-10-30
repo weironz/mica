@@ -397,3 +397,35 @@ pub(crate) struct TrashArgs {
 }
 
 // ── Tools ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct CommentThreadArgs {
+  pub(crate) workspace_id: Uuid,
+  /// The page's document id (its `object_id`).
+  pub(crate) document_id: Uuid,
+  /// The thread id from `mica_list_comments`.
+  pub(crate) thread_id: Uuid,
+  /// Must be true to proceed — the thread cannot be recovered.
+  #[serde(default)]
+  pub(crate) confirm: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct MemberArgs {
+  pub(crate) workspace_id: Uuid,
+  /// The member's user id from `mica_list_members`.
+  pub(crate) user_id: Uuid,
+  /// Must be true to proceed.
+  #[serde(default)]
+  pub(crate) confirm: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct DeleteFileArgs {
+  pub(crate) workspace_id: Uuid,
+  /// The file's id — the uuid in an href's `/files/{file_id}/blob/…`.
+  pub(crate) file_id: Uuid,
+  /// Must be true to proceed — the file cannot be recovered.
+  #[serde(default)]
+  pub(crate) confirm: bool,
+}
