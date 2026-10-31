@@ -53,6 +53,9 @@ Local dev stack (rebuilt by the ship; the dev API container was restarted via
 
 ## Desktop
 
-In-app update 0.14.1 → 0.14.2 is user-driven this round (the machine was in
-active use, so GUI automation could not take the foreground without
-interrupting it). Outcome is recorded below once confirmed.
+In-app update 0.14.1 → 0.14.2 exercised end to end (user-driven; the machine
+was in active use, so GUI automation could not take the foreground without
+interrupting it). The sidebar "新版本" badge appeared after the release went
+public; one click on 更新并重启 downloaded, closed the app, ran the installer
+and relaunched. After the update the installed `mica_flutter.exe` reports
+ProductVersion 0.14.2 and the new process runs.
