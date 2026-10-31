@@ -26,6 +26,7 @@ extension type _MicaMd._(JSObject _) implements JSObject {
   );
   external String mathRunSpans(String source);
   external String parseInlineMath(String source);
+  external String properties(String requestJson);
   external String engineInfo();
 }
 
@@ -102,6 +103,9 @@ class _WasmMarkdownCodec implements MarkdownCodec {
       jsonDecode(md.parseInlineMath(source)) as Map<String, dynamic>,
     ),
   );
+  @override
+  Object? properties(Map<String, Object?> request) =>
+      _call(() => jsonDecode(md.properties(jsonEncode(request))));
   @override
   ({String crateVersion, int schemaVersion, String sourceFingerprint})
   get engineInfo => _call(() {

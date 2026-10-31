@@ -48,4 +48,7 @@ String mdMathRunSpans({required String source}) =>
 String mdParseInlineMath({required String source}) =>
     RustLib.instance.api.crateApiMarkdownMdParseInlineMath(source: source);
 
+String mdProperties({required String requestJson}) =>
+    RustLib.instance.api.crateApiMarkdownMdProperties(requestJson: requestJson);
+
 String mdEngineInfo() => RustLib.instance.api.crateApiMarkdownMdEngineInfo();

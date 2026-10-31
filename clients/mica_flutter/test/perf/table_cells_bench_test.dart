@@ -57,6 +57,9 @@ class _CountingCodec implements MarkdownCodec {
   @override
   InlineText parseInlineMath(String source) => _inner.parseInlineMath(source);
   @override
+  Object? properties(Map<String, Object?> request) =>
+      _inner.properties(request);
+  @override
   ({String crateVersion, int schemaVersion, String sourceFingerprint})
   get engineInfo => _inner.engineInfo;
 }

@@ -20,7 +20,10 @@ counted as part of the public API.
 
 ### Added
 
-- Nothing yet.
+- `properties::infer_value` — the typed value a raw one-line input infers to.
+- `wire::properties_json` — front-matter properties over the wire (`op`:
+  `parse` / `upsert` / `remove` / `infer`); the wasm binding exposes it as
+  `properties`. Additive: `schema_version` stays 1.
 
 ## [0.1.0] — unreleased
 

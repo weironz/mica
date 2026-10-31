@@ -11,6 +11,7 @@ import {
   engineInfo,
   parseBody,
   parseInline,
+  properties,
   renderHtml,
   serializeBody,
 } from '../index.js';
@@ -70,4 +71,21 @@ test('engineInfo identifies the build', () => {
   assert.equal(info.schema_version, 1);
   assert.ok(info.crate_version);
   assert.ok(info.source_fingerprint);
+});
+
+test('properties parse and edit front matter without touching other lines', () => {
+  const fm = '# keep\ntitle: Old\ntags: [a, b]';
+  assert.deepEqual(properties({ op: 'parse', front_matter: fm }), [
+    { key: 'title', value: { type: 'text', value: 'Old' } },
+    { key: 'tags', value: { type: 'list', value: ['a', 'b'] } },
+  ]);
+  const edited = properties({
+    op: 'upsert',
+    front_matter: fm,
+    key: 'tags',
+    value: { type: 'list', value: ['a', 'b', 'c'] },
+  });
+  assert.equal(edited, '# keep\ntitle: Old\ntags: [a, b, c]');
+  assert.equal(properties({ op: 'remove', front_matter: edited, key: 'title' }), '# keep\ntags: [a, b, c]');
+  assert.deepEqual(properties({ op: 'infer', raw: '2026-07-22' }), { type: 'date', value: '2026-07-22' });
 });

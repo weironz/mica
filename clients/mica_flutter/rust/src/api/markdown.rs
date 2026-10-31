@@ -52,6 +52,11 @@ pub fn md_parse_inline_math(source: String) -> String {
 }
 
 #[frb(sync)]
+pub fn md_properties(request_json: String) -> Result<String, String> {
+  mica_md::wire::properties_json(&request_json).map_err(|e| e.to_string())
+}
+
+#[frb(sync)]
 pub fn md_engine_info() -> String {
   mica_md::wire::engine_info_json()
 }

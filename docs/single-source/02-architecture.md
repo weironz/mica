@@ -257,6 +257,7 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 | `render_html_body_json(blocks_json: &str, image_srcs_json: &str, profile: &str) -> Result<String>` | `[BlockJson]`、`{file_id: src}`、`"export"` / `"clipboard"` | HTML | `render_html_body` |
 | `math_run_spans_json(source: &str) -> String` | 文本 | `[[s,e], …]`，**UTF-16 偏移**（由 char 下标换算） | `math_run_spans` |
 | `parse_inline_math_json(source: &str) -> String` | 文本 | `InlineJson` | `parse_inline_math` |
+| `properties_json(request_json: &str) -> Result<String>` | `{"op":"parse","front_matter"}` / `{"op":"upsert","front_matter","key","value"}` / `{"op":"remove","front_matter","key"}` / `{"op":"infer","raw"}` | `[Property]` / 新 front matter(JSON 字符串)/ 同左 / `PropertyValue` | `properties::{parse_properties, upsert_property, remove_property, infer_value}`(**2026-10-31 追加**,只增不改,`schema_version` 不变) |
 | `engine_info_json() -> String` | — | `{"crate_version","schema_version","source_fingerprint"}` | 构建信息 |
 
 `parse_body_json` 输出的块 id 不出现在 JSON 里（Dart 插入时自行分配），所以内部用 `BlockIds::Sequential`，**不需要随机数**。
@@ -396,6 +397,7 @@ abstract interface class MarkdownCodec {
   String renderClipboardHtml(List<BlockSpec> blocks, {Map<String, String> imageSrcs = const {}});
   List<({int start, int end})> mathRunSpans(String source);   // UTF-16
   InlineText parseInlineMath(String source);
+  Object? properties(Map<String, Object?> request);   // 2026-10-31 追加:front matter 属性,见 §3.3
   ({String crateVersion, int schemaVersion, String sourceFingerprint}) get engineInfo;
 }
 

@@ -56,6 +56,26 @@ export function decodeCells(cells: StoredCell[]): InlineText[];
 export function encodeCells(cells: InlineText[]): StoredCell[];
 export function mathRunSpans(source: string): Array<[number, number]>;
 export function parseInlineMath(source: string): InlineText;
+
+export type PropertyValue =
+  | { type: "text"; value: string }
+  | { type: "number"; value: number }
+  | { type: "checkbox"; value: boolean }
+  | { type: "date"; value: string }
+  | { type: "list"; value: string[] };
+export interface Property {
+  key: string;
+  value: PropertyValue;
+}
+export function properties(request: { op: "parse"; front_matter: string }): Property[];
+export function properties(request: {
+  op: "upsert";
+  front_matter: string;
+  key: string;
+  value: PropertyValue;
+}): string;
+export function properties(request: { op: "remove"; front_matter: string; key: string }): string;
+export function properties(request: { op: "infer"; raw: string }): PropertyValue;
 export function engineInfo(): {
   crate_version: string;
   schema_version: number;

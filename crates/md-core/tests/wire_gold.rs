@@ -144,7 +144,7 @@ fn verify(function: &str, cases: Vec<Value>) {
     assert_eq!(stored.len(), value["cases"].as_array().unwrap().len());
     for (case, current) in stored.iter().zip(value["cases"].as_array().unwrap()) {
       assert_eq!(case["id"], current["id"], "fixture inventory drift");
-      for key in ["markdown", "fragment", "source", "profile"] {
+      for key in ["markdown", "fragment", "source", "profile", "request_json"] {
         assert_eq!(
           case["args"][key], current["args"][key],
           "fixture input drift: {} {key}",
@@ -175,6 +175,7 @@ fn verify(function: &str, cases: Vec<Value>) {
         "encode_cells_json" => wire::encode_cells_json(s("inlines_json")).unwrap(),
         "math_run_spans_json" => wire::math_run_spans_json(s("source")),
         "parse_inline_math_json" => wire::parse_inline_math_json(s("source")),
+        "properties_json" => wire::properties_json(s("request_json")).unwrap(),
         _ => unreachable!(),
       };
       assert_eq!(
@@ -386,4 +387,131 @@ fn parse_inline_math_json() {
       })
       .collect(),
   );
+}
+
+/// Front-matter properties (02 §3.3). The inputs are the ones the retired Dart
+/// mirror's tests pinned (`properties_test.dart`), so behaviour both sides
+/// agreed on stays pinned at the contract.
+#[test]
+fn properties_json() {
+  let front_matters = [
+    (
+      "typed-subset",
+      "title: My Page\ntags: [work, urgent]\ncount: 3\nratio: 1.5\ndone: true\ndue: 2026-07-22\nauthors:\n  - Alice\n  - Bob",
+    ),
+    (
+      "skips-unknown",
+      "# a comment\ntitle: Hi\n\nnested:\n  child: 1\nafter: ok",
+    ),
+    ("ambiguous-007", "a: 007"),
+    ("ambiguous-1.0", "a: 1.0"),
+    ("quoted-number", "a: \"3\""),
+    ("tags", "tags: [rust, crdt]"),
+    ("empty", ""),
+    ("unicode", "标题: 中文😀\n标签: [甲, 乙]"),
+  ];
+  let mut cases = Vec::new();
+  let mut push = |id: String, request: Value| {
+    let request_json = request.to_string();
+    let output = wire::properties_json(&request_json).unwrap();
+    cases.push(case(id, json!({ "request_json": request_json }), output));
+  };
+  for (id, fm) in front_matters {
+    push(
+      format!("parse/{id}"),
+      json!({"op": "parse", "front_matter": fm}),
+    );
+  }
+  let edits = [
+    (
+      "keeps-others",
+      "# keep me\ntitle: Old  # trailing comment kept\ntags: [a, b]\nnote: 'single quoted'",
+      "tags",
+      json!({"type": "list", "value": ["a", "b", "c"]}),
+    ),
+    (
+      "block-list",
+      "authors:\n  - Alice\ntitle: X",
+      "authors",
+      json!({"type": "list", "value": ["Alice", "Bob"]}),
+    ),
+    (
+      "append-checkbox",
+      "title: X",
+      "done",
+      json!({"type": "checkbox", "value": true}),
+    ),
+    (
+      "append-to-empty",
+      "",
+      "title",
+      json!({"type": "text", "value": "First"}),
+    ),
+    (
+      "append-number",
+      "a: 1\n",
+      "b",
+      json!({"type": "number", "value": 2.0}),
+    ),
+    (
+      "needs-quoting",
+      "",
+      "s",
+      json!({"type": "text", "value": "needs: quoting"}),
+    ),
+    (
+      "text-true",
+      "",
+      "s",
+      json!({"type": "text", "value": "true"}),
+    ),
+    (
+      "negative",
+      "",
+      "n",
+      json!({"type": "number", "value": -2.5}),
+    ),
+    (
+      "date",
+      "",
+      "d",
+      json!({"type": "date", "value": "2026-01-09"}),
+    ),
+    (
+      "list-quoting",
+      "",
+      "l",
+      json!({"type": "list", "value": ["x", "y, z", "true"]}),
+    ),
+    ("empty-list", "", "l", json!({"type": "list", "value": []})),
+  ];
+  for (id, fm, key, value) in edits {
+    push(
+      format!("upsert/{id}"),
+      json!({"op": "upsert", "front_matter": fm, "key": key, "value": value}),
+    );
+  }
+  for (id, key) in [("block", "authors"), ("missing", "missing")] {
+    push(
+      format!("remove/{id}"),
+      json!({"op": "remove", "front_matter": "title: X\nauthors:\n  - Alice\n  - Bob\ndone: true", "key": key}),
+    );
+  }
+  for raw in [
+    "",
+    "  ",
+    "hello",
+    "42",
+    "007",
+    "1.5",
+    "true",
+    "False",
+    "2026-07-22",
+    "2026-13-01",
+    "[a, b]",
+    "\"quoted\"",
+  ] {
+    push(format!("infer/{raw:?}"), json!({"op": "infer", "raw": raw}));
+  }
+  verify("properties_json", cases);
 }

@@ -1,8 +1,8 @@
 # 页面属性 / 标签(page properties / tags)
 
-> 状态:M1 进行中(2026-07-22)。这份文档记**决策与边界**,尤其一个动了红线的取舍;实现细节看代码(`crates/md-core/src/properties.rs` 权威 + Dart 镜像 `lib/editor/properties.dart`)。
+> 状态:M1 进行中(2026-07-22)。这份文档记**决策与边界**,尤其一个动了红线的取舍;实现细节看代码:规则只在 `crates/md-core/src/properties.rs` 一处。
 >
-> **2026-10-31 注**:Markdown 单一实现专项([`single-source/`](../single-source/README.md))删掉了正文语法的 Dart 镜像,**但没有覆盖页面属性**:`properties.dart`(约 440 行)仍是 Rust `properties.rs` 的手写镜像,两端仍须同步修改。它已登记在专项 01 §9「其他双份」,收法是让属性面板也走 `MarkdownCodec`。
+> **2026-10-31**:原来的 Dart 镜像(`lib/editor/properties.dart` 里约 300 行解析/写回逻辑)已收进门面:线格式加了 `properties_json`(`op` = parse / upsert / remove / infer),桌面经 FFI、Web 经 wasm 调用;`properties.dart` 只剩 UI 用的类型和薄封装。原 Dart 测试的输入全部钉进了 `crates/md-core/tests/fixtures/wire/properties.json`。
 
 ## 一句话
 
@@ -38,7 +38,7 @@ lessons.md 的 round-trip 是红线。front matter 存为不透明字符串时�
 - Rust 权威 `crates/md-core/src/properties.rs`(原在 `crates/markdown`,2026-10 随引擎迁入 md-core):解析扁平子集 + 类型推断 + 外科 upsert/remove。
 - 类型小封闭集(抄 Obsidian):`Text / Number / Checkbox / Date(YYYY-MM-DD) / List`,从 YAML 标量**推断**,无 per-key schema。
 - `tags` = 一个 `List` 值的属性,不是独立类型;其列表项(M2)喂**现有** ref/backlink 索引。
-- Dart 镜像 + 页头属性面板 UI(看/改/增/删),tags 渲染成 chips。
+- 页头属性面板 UI(看/改/增/删),tags 渲染成 chips;解析与写回经 `MarkdownCodec` 调 Rust(2026-10-31 前是 Dart 镜像)。
 
 **支持的扁平子集**(即 Obsidian Properties 那档):顶层 `key: 标量`、flow list `key: [a, b]`、block list(`key:` 后跟缩进 `- item`)。**更复杂的**(嵌套 map、多行 block scalar、锚点)**原样保留、不作为可编辑属性露出**——它还是它原来的不透明字节。
 
@@ -51,5 +51,5 @@ lessons.md 的 round-trip 是红线。front matter 存为不透明字符串时�
 ## 相关红线/原则
 
 - CLAUDE.md #1 双表示红线:属性是 front matter 的派生视图,不是第二份权威;查询索引是可丢弃投影。
-- CLAUDE.md #2 Rust-first:`properties.rs` 是权威,Dart `properties.dart` 镜像,两端必须同步。(当年和它同一纪律的 `marks.dart` 语法镜像已在 2026-10 删除,属性这一份还在,见文首注。)
+- CLAUDE.md #2 Rust-first:`properties.rs` 是唯一实现,Dart 只经 `MarkdownCodec` 调用(2026-10-31 起;此前 `properties.dart` 是需要两端同步的镜像)。
 - CLAUDE.md #4 方言/round-trip:本次把 round-trip 不变量在 front matter 上从字节保真降为规范化子集稳定(见上)。

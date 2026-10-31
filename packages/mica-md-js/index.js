@@ -153,6 +153,19 @@ export function parseInlineMath(source) {
 }
 
 /**
+ * Front-matter properties. `request` is one of
+ * `{op: "parse", front_matter}` → `Property[]`,
+ * `{op: "upsert", front_matter, key, value}` / `{op: "remove", front_matter, key}`
+ * → the new front matter (string), `{op: "infer", raw}` → `PropertyValue`.
+ * Front matter is the raw inner text, without the `---` fences.
+ * @param {object} request
+ * @returns {unknown}
+ */
+export function properties(request) {
+  return JSON.parse(engine().properties(JSON.stringify(request)));
+}
+
+/**
  * Engine identity: crate version, schema version, source fingerprint.
  * @returns {{crate_version: string, schema_version: number, source_fingerprint: string}}
  */

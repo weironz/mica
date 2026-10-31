@@ -155,6 +155,13 @@ void checkWireGoldCase(
       );
     case 'parse_inline_math':
       _expectInline(codec.parseInlineMath(arg('source')), jsonDecode(output));
+    case 'properties':
+      expect(
+        codec.properties(
+          Map<String, Object?>.from(jsonDecode(arg('request_json')) as Map),
+        ),
+        jsonDecode(output),
+      );
     default:
       fail('Unknown wire function: $function');
   }
@@ -170,6 +177,7 @@ const wireGoldFunctions = [
   'render_html_body',
   'math_run_spans',
   'parse_inline_math',
+  'properties',
 ];
 
 void runCodecContract(Future<MarkdownCodec> Function() make) {

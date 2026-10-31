@@ -191,6 +191,17 @@ pub fn remove_property(front_matter: &str, key: &str) -> String {
 /// The `[start, end)` line range a top-level `key` owns: its `key:` line plus any
 /// immediately-following indented continuation lines (block-list items). `None`
 /// if the key is absent.
+/// Infer a typed value from a user's raw single-line input (what a property
+/// editor commits): empty → empty text, otherwise the same bool / number /
+/// date / list / text inference [`parse_properties`] applies to a scalar.
+pub fn infer_value(raw: &str) -> PropertyValue {
+  let t = raw.trim();
+  if t.is_empty() {
+    return PropertyValue::Text(String::new());
+  }
+  infer_scalar(t)
+}
+
 fn key_span(lines: &[&str], key: &str) -> Option<(usize, usize)> {
   for (idx, raw) in lines.iter().enumerate() {
     if raw.starts_with(' ') || raw.starts_with('\t') {

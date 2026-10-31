@@ -50,6 +50,7 @@ Node needs no init: the nodejs build loads on first call.
 | `renderHtml(blocks, { imageSrcs, profile })` | HTML (`export` \| `clipboard`) |
 | `decodeCells(cells)` / `encodeCells(cells)` | table-cell storage shapes |
 | `mathRunSpans(source)` / `parseInlineMath(source)` | math spans / inline math |
+| `properties({ op, ... })` | front-matter properties: `parse` / `upsert` / `remove` / `infer` |
 | `engineInfo()` | crate + schema version, source fingerprint |
 
 The document model (block kinds, data keys, mark types) is specified in

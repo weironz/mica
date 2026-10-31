@@ -1,0 +1,236 @@
+{
+  "cases": [
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"title: My Page\\ntags: [work, urgent]\\ncount: 3\\nratio: 1.5\\ndone: true\\ndue: 2026-07-22\\nauthors:\\n  - Alice\\n  - Bob\",\"op\":\"parse\"}"
+      },
+      "id": "parse/typed-subset",
+      "output": "[{\"key\":\"title\",\"value\":{\"type\":\"text\",\"value\":\"My Page\"}},{\"key\":\"tags\",\"value\":{\"type\":\"list\",\"value\":[\"work\",\"urgent\"]}},{\"key\":\"count\",\"value\":{\"type\":\"number\",\"value\":3.0}},{\"key\":\"ratio\",\"value\":{\"type\":\"number\",\"value\":1.5}},{\"key\":\"done\",\"value\":{\"type\":\"checkbox\",\"value\":true}},{\"key\":\"due\",\"value\":{\"type\":\"date\",\"value\":\"2026-07-22\"}},{\"key\":\"authors\",\"value\":{\"type\":\"list\",\"value\":[\"Alice\",\"Bob\"]}}]"
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"# a comment\\ntitle: Hi\\n\\nnested:\\n  child: 1\\nafter: ok\",\"op\":\"parse\"}"
+      },
+      "id": "parse/skips-unknown",
+      "output": "[{\"key\":\"title\",\"value\":{\"type\":\"text\",\"value\":\"Hi\"}},{\"key\":\"after\",\"value\":{\"type\":\"text\",\"value\":\"ok\"}}]"
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"a: 007\",\"op\":\"parse\"}"
+      },
+      "id": "parse/ambiguous-007",
+      "output": "[{\"key\":\"a\",\"value\":{\"type\":\"text\",\"value\":\"007\"}}]"
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"a: 1.0\",\"op\":\"parse\"}"
+      },
+      "id": "parse/ambiguous-1.0",
+      "output": "[{\"key\":\"a\",\"value\":{\"type\":\"text\",\"value\":\"1.0\"}}]"
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"a: \\\"3\\\"\",\"op\":\"parse\"}"
+      },
+      "id": "parse/quoted-number",
+      "output": "[{\"key\":\"a\",\"value\":{\"type\":\"text\",\"value\":\"3\"}}]"
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"tags: [rust, crdt]\",\"op\":\"parse\"}"
+      },
+      "id": "parse/tags",
+      "output": "[{\"key\":\"tags\",\"value\":{\"type\":\"list\",\"value\":[\"rust\",\"crdt\"]}}]"
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"\",\"op\":\"parse\"}"
+      },
+      "id": "parse/empty",
+      "output": "[]"
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"标题: 中文😀\\n标签: [甲, 乙]\",\"op\":\"parse\"}"
+      },
+      "id": "parse/unicode",
+      "output": "[{\"key\":\"标题\",\"value\":{\"type\":\"text\",\"value\":\"中文😀\"}},{\"key\":\"标签\",\"value\":{\"type\":\"list\",\"value\":[\"甲\",\"乙\"]}}]"
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"# keep me\\ntitle: Old  # trailing comment kept\\ntags: [a, b]\\nnote: 'single quoted'\",\"key\":\"tags\",\"op\":\"upsert\",\"value\":{\"type\":\"list\",\"value\":[\"a\",\"b\",\"c\"]}}"
+      },
+      "id": "upsert/keeps-others",
+      "output": "\"# keep me\\ntitle: Old  # trailing comment kept\\ntags: [a, b, c]\\nnote: 'single quoted'\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"authors:\\n  - Alice\\ntitle: X\",\"key\":\"authors\",\"op\":\"upsert\",\"value\":{\"type\":\"list\",\"value\":[\"Alice\",\"Bob\"]}}"
+      },
+      "id": "upsert/block-list",
+      "output": "\"authors:\\n  - Alice\\n  - Bob\\ntitle: X\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"title: X\",\"key\":\"done\",\"op\":\"upsert\",\"value\":{\"type\":\"checkbox\",\"value\":true}}"
+      },
+      "id": "upsert/append-checkbox",
+      "output": "\"title: X\\ndone: true\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"\",\"key\":\"title\",\"op\":\"upsert\",\"value\":{\"type\":\"text\",\"value\":\"First\"}}"
+      },
+      "id": "upsert/append-to-empty",
+      "output": "\"title: First\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"a: 1\\n\",\"key\":\"b\",\"op\":\"upsert\",\"value\":{\"type\":\"number\",\"value\":2.0}}"
+      },
+      "id": "upsert/append-number",
+      "output": "\"a: 1\\nb: 2\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"\",\"key\":\"s\",\"op\":\"upsert\",\"value\":{\"type\":\"text\",\"value\":\"needs: quoting\"}}"
+      },
+      "id": "upsert/needs-quoting",
+      "output": "\"s: \\\"needs: quoting\\\"\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"\",\"key\":\"s\",\"op\":\"upsert\",\"value\":{\"type\":\"text\",\"value\":\"true\"}}"
+      },
+      "id": "upsert/text-true",
+      "output": "\"s: \\\"true\\\"\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"\",\"key\":\"n\",\"op\":\"upsert\",\"value\":{\"type\":\"number\",\"value\":-2.5}}"
+      },
+      "id": "upsert/negative",
+      "output": "\"n: -2.5\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"\",\"key\":\"d\",\"op\":\"upsert\",\"value\":{\"type\":\"date\",\"value\":\"2026-01-09\"}}"
+      },
+      "id": "upsert/date",
+      "output": "\"d: 2026-01-09\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"\",\"key\":\"l\",\"op\":\"upsert\",\"value\":{\"type\":\"list\",\"value\":[\"x\",\"y, z\",\"true\"]}}"
+      },
+      "id": "upsert/list-quoting",
+      "output": "\"l: [x, \\\"y, z\\\", \\\"true\\\"]\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"\",\"key\":\"l\",\"op\":\"upsert\",\"value\":{\"type\":\"list\",\"value\":[]}}"
+      },
+      "id": "upsert/empty-list",
+      "output": "\"l: []\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"title: X\\nauthors:\\n  - Alice\\n  - Bob\\ndone: true\",\"key\":\"authors\",\"op\":\"remove\"}"
+      },
+      "id": "remove/block",
+      "output": "\"title: X\\ndone: true\""
+    },
+    {
+      "args": {
+        "request_json": "{\"front_matter\":\"title: X\\nauthors:\\n  - Alice\\n  - Bob\\ndone: true\",\"key\":\"missing\",\"op\":\"remove\"}"
+      },
+      "id": "remove/missing",
+      "output": "\"title: X\\nauthors:\\n  - Alice\\n  - Bob\\ndone: true\""
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"\"}"
+      },
+      "id": "infer/\"\"",
+      "output": "{\"type\":\"text\",\"value\":\"\"}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"  \"}"
+      },
+      "id": "infer/\"  \"",
+      "output": "{\"type\":\"text\",\"value\":\"\"}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"hello\"}"
+      },
+      "id": "infer/\"hello\"",
+      "output": "{\"type\":\"text\",\"value\":\"hello\"}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"42\"}"
+      },
+      "id": "infer/\"42\"",
+      "output": "{\"type\":\"number\",\"value\":42.0}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"007\"}"
+      },
+      "id": "infer/\"007\"",
+      "output": "{\"type\":\"text\",\"value\":\"007\"}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"1.5\"}"
+      },
+      "id": "infer/\"1.5\"",
+      "output": "{\"type\":\"number\",\"value\":1.5}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"true\"}"
+      },
+      "id": "infer/\"true\"",
+      "output": "{\"type\":\"checkbox\",\"value\":true}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"False\"}"
+      },
+      "id": "infer/\"False\"",
+      "output": "{\"type\":\"checkbox\",\"value\":false}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"2026-07-22\"}"
+      },
+      "id": "infer/\"2026-07-22\"",
+      "output": "{\"type\":\"date\",\"value\":\"2026-07-22\"}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"2026-13-01\"}"
+      },
+      "id": "infer/\"2026-13-01\"",
+      "output": "{\"type\":\"text\",\"value\":\"2026-13-01\"}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"[a, b]\"}"
+      },
+      "id": "infer/\"[a, b]\"",
+      "output": "{\"type\":\"list\",\"value\":[\"a\",\"b\"]}"
+    },
+    {
+      "args": {
+        "request_json": "{\"op\":\"infer\",\"raw\":\"\\\"quoted\\\"\"}"
+      },
+      "id": "infer/\"\\\"quoted\\\"\"",
+      "output": "{\"type\":\"text\",\"value\":\"quoted\"}"
+    }
+  ],
+  "function": "properties_json"
+}

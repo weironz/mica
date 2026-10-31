@@ -208,6 +208,49 @@ pub fn parse_inline_math_json(source: &str) -> String {
     .unwrap_or_else(|_| r#"{"text":"","marks":[]}"#.to_string())
 }
 
+/// One front-matter property operation (02 §3.3). A single entry point instead
+/// of four keeps the binding surface to one function per platform.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+enum PropertiesRequest {
+  /// `[Property]` of the editable flat subset, in source order.
+  Parse { front_matter: String },
+  /// The front matter with `key` set to `value` (other lines byte-exact).
+  Upsert {
+    front_matter: String,
+    key: String,
+    value: crate::properties::PropertyValue,
+  },
+  /// The front matter with `key` removed (other lines byte-exact).
+  Remove { front_matter: String, key: String },
+  /// The typed value a raw one-line input infers to.
+  Infer { raw: String },
+}
+
+/// Front-matter properties: parse / upsert / remove / infer, selected by the
+/// request's `op`. Front matter is the RAW INNER text (no `---` fences), as
+/// stored on the root block's `data.front_matter`. Upsert and remove answer
+/// the new front matter as a JSON string.
+pub fn properties_json(request_json: &str) -> Result<String, MdError> {
+  use crate::properties::{infer_value, parse_properties, remove_property, upsert_property};
+  let request: PropertiesRequest = serde_json::from_str(request_json).map_err(invalid)?;
+  let out = match request {
+    PropertiesRequest::Parse { front_matter } => {
+      serde_json::to_string(&parse_properties(&front_matter))
+    }
+    PropertiesRequest::Upsert {
+      front_matter,
+      key,
+      value,
+    } => serde_json::to_string(&upsert_property(&front_matter, &key, &value)),
+    PropertiesRequest::Remove { front_matter, key } => {
+      serde_json::to_string(&remove_property(&front_matter, &key))
+    }
+    PropertiesRequest::Infer { raw } => serde_json::to_string(&infer_value(&raw)),
+  };
+  out.map_err(invalid)
+}
+
 /// Engine build information.
 pub fn engine_info_json() -> String {
   let mut info = json!({

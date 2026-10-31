@@ -33,6 +33,11 @@ abstract interface class MarkdownCodec {
   });
   List<({int start, int end})> mathRunSpans(String source);
   InlineText parseInlineMath(String source);
+
+  /// Front-matter properties (02 §3.3): `request` carries `op` — `parse`,
+  /// `upsert`, `remove` or `infer` — and its arguments; the decoded wire
+  /// answer comes back. Typed wrappers live in `editor/properties.dart`.
+  Object? properties(Map<String, Object?> request);
   ({String crateVersion, int schemaVersion, String sourceFingerprint})
   get engineInfo;
 }
@@ -101,6 +106,8 @@ class UnavailableMarkdownCodec implements MarkdownCodec {
   List<({int start, int end})> mathRunSpans(String source) => _unavailable();
   @override
   InlineText parseInlineMath(String source) => _unavailable();
+  @override
+  Object? properties(Map<String, Object?> request) => _unavailable();
   @override
   ({String crateVersion, int schemaVersion, String sourceFingerprint})
   get engineInfo => _unavailable();

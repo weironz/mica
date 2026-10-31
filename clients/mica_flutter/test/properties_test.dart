@@ -3,14 +3,21 @@
 // ignore_for_file: prefer_const_constructors
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/properties.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 
-// Mirror of the Rust authority's unit tests (crates/markdown/src/properties.rs).
-// Both suites assert the SAME behaviour — that is the whole point of the mirror.
+import 'support/markdown_codec.dart';
+
+// The typed wrappers over the Rust engine (`crates/md-core/src/properties.rs`,
+// reached through MarkdownCodec). These are the assertions the retired Dart
+// mirror carried; they now run against the real FFI engine, so a behaviour the
+// UI relied on cannot change without one of them failing. The same inputs are
+// pinned at the wire level in crates/md-core/tests/fixtures/wire/properties.json.
 
 PropertyValue text(String s) => PropText(s);
 PropertyValue list(List<String> items) => PropList(items);
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   test('parses the flat typed subset', () {
     const fm = 'title: My Page\n'
         'tags: [work, urgent]\n'
@@ -121,5 +128,33 @@ void main() {
     ]) {
       expect(PropertyValue.fromJson(v.toJson()), v);
     }
+  });
+
+  group('without an engine', () {
+    setUp(() => debugSetMarkdownCodec(const UnavailableMarkdownCodec()));
+    tearDown(() async => useNativeMarkdownCodec());
+
+    test('parse shows nothing instead of failing to draw', () {
+      expect(parseProperties('title: X'), isEmpty);
+    });
+
+    test('an edit fails loudly instead of answering the old text', () {
+      expect(
+        () => upsertProperty('title: X', 'title', text('Y')),
+        throwsA(isA<MarkdownCodecException>()),
+      );
+      expect(
+        () => removeProperty('title: X', 'title'),
+        throwsA(isA<MarkdownCodecException>()),
+      );
+    });
+  });
+
+  test('infer matches the engine for what the editor commits', () {
+    expect(inferValue(''), text(''));
+    expect(inferValue('  42 '), const PropNumber(42.0));
+    expect(inferValue('007'), text('007'));
+    expect(inferValue('2026-07-22'), const PropDate('2026-07-22'));
+    expect(inferValue('[a, b]'), list(['a', 'b']));
   });
 }
