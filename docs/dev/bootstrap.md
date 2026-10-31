@@ -56,6 +56,17 @@ winget install --id OpenJS.NodeJS        --exact --silent --accept-package-agree
 winget install --id Rustlang.Rustup      --exact --silent --accept-package-agreements --accept-source-agreements
 winget install --id Casey.Just           --exact --silent --accept-package-agreements --accept-source-agreements
 winget install --id Docker.DockerDesktop --exact --silent --accept-package-agreements --accept-source-agreements
+winget install --id jqlang.jq            --exact --silent --accept-package-agreements --accept-source-agreements
+```
+
+**Web 版的 Markdown 引擎(wasm)工具链**——`just app chrome` / `just dev-web` / `just build-web`
+都会先跑 `scripts/build-md-wasm.sh`,它要三样:`wasm32-unknown-unknown` target(`rust-toolchain.toml`
+已声明,rustup 首次在仓库里调 cargo 时自动装)、`jq`(上面那行)、以及**与 `Cargo.lock` 同版本**的
+`wasm-bindgen-cli`:
+
+```powershell
+# 版本号以 Cargo.lock 里 wasm-bindgen 为准;不一致时 scripts/check-md-wasm-toolchain.sh 会报错并给出这条命令
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
 ```
 
 **VS Build Tools**(`flutter build windows` 和 Rust 的 MSVC 链接器都要它;**不需要 VS Community**):
@@ -73,15 +84,15 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --silent `
 
 ```powershell
 # 1.8GB。走 storage.flutter-io.cn 实测 122 秒;走 googleapis 是几小时的量级
-$url = "https://storage.flutter-io.cn/flutter_infra_release/releases/stable/windows/flutter_windows_3.44.6-stable.zip"
+# 版本以仓库根 .fvmrc 为准(写本文时 3.47.1)
+$url = "https://storage.flutter-io.cn/flutter_infra_release/releases/stable/windows/flutter_windows_3.47.1-stable.zip"
 Start-BitsTransfer -Source $url -Destination "$env:TEMP\flutter.zip"
 Expand-Archive "$env:TEMP\flutter.zip" -DestinationPath "C:\"        # zip 内含顶层 flutter/ 目录 → C:\flutter
 [Environment]::SetEnvironmentVariable("PATH", [Environment]::GetEnvironmentVariable("PATH","User") + ";C:\flutter\bin", "User")
 ```
 
-装到 **`C:\flutter`**(全项目约定路径)。最新 stable 版本号从
-`https://storage.flutter-io.cn/flutter_infra_release/releases/releases_windows.json` 的
-`current_release.stable` 查。项目要求 Dart `>=3.8.0 <4.0.0`。
+装到 **`C:\flutter`**(全项目约定路径)。版本**必须**与仓库根 `.fvmrc` 一致(本地、CI、构建镜像同号,
+见 [dev-environment.md](dev-environment.md)),不要装「最新 stable」。项目要求 Dart `>=3.8.0 <4.0.0`。
 
 ## 3. 国内网络镜像(在装 Flutter 之前设)
 
@@ -177,9 +188,9 @@ if not defined GITHUB_PERSONAL_ACCESS_TOKEN (
 四条全过才算搭好。任何一条不过,**别往下做业务开发**,先回头补:
 
 ```powershell
-cargo build --workspace     # 全 8 个 crate。这条同时验证 MSVC 链接器接上了(实测 8m25s)
+cargo build --workspace     # 根 workspace 全部 crate。这条同时验证 MSVC 链接器接上了(实测 8m25s,当时 8 个 crate)
 flutter doctor -v           # Flutter / Windows Version / VS Build Tools / 设备 应全绿
-just --list                 # 验证 just 能读到 justfile(18 条 recipe)
+just --list                 # 验证 just 能读到 justfile
 cargo test                  # 可选但推荐
 ```
 
@@ -224,7 +235,7 @@ just dev-down   # 全停
 
 | 场景 | 命令 | 说明 |
 |---|---|---|
-| 改 UI(占绝大多数时间)| `just app chrome` | 热重载,零构建步骤,自动连 :8080 |
+| 改 UI(占绝大多数时间)| `just app chrome` | 热重载,自动连 :8080;启动前先构建一次 wasm 引擎(几十秒) |
 | 桌面端 | `just app` | 热重载 |
 | 验证生产形态 | `just dev-web` 后刷新 `:8090` | 经 nginx,**必须手工重新构建** |
 

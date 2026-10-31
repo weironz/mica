@@ -48,7 +48,7 @@ renderer registry red line.
 
 ```text
 Flutter client  (clients/mica_flutter)
-  web:     yjs (JS) + IndexedDB, no FFI
+  web:     yjs (JS) + IndexedDB, no FFI; Markdown engine as wasm (crates/md-wasm)
   windows: flutter_rust_bridge FFI -> rust_lib_mica_flutter -> mica-core (SQLite store)
         |
         | REST (JWT) + WebSocket document rooms
@@ -57,7 +57,10 @@ Rust backend  (crates/)
   api-server   Axum HTTP + WS entrypoint, routes per domain
   app-core     document/sync domain + AppState (BodyIndex search, sync, store)
   mica-core    storage/transport-agnostic data plane (block DTO, marks, yrs, SQLite)
-  markdown     the CommonMark+GFM engine (block model, MD/HTML, render)
+  md-core      the CommonMark+GFM engine, crate `mica-md` (parse, serialize,
+               HTML) — the only Markdown implementation, SDK-shaped
+  md-wasm      wasm-bindgen binding of md-core for the web client
+  markdown     facade over md-core (+ render: mermaid/math) for server crates
   interchange  archive-level import/export (serde_json only)
   infra        config, db pool, errors, mailer
   mcp-server   MCP tool surface for AI clients (REST + PAT, no direct DB)
@@ -118,7 +121,7 @@ dialect extensions: footnotes, front matter, Pandoc math; scoreboard in
 [`commonmark-scoreboard.md`](commonmark-scoreboard.md)). It powers the server
 (HTML render, export) and, via the FFI crate's `render` feature (merman +
 ratex), the desktop editor's live mermaid/math preview — and since the
-[single-source project](../single-source/README.md) (S0–S4, 2026-10) removed
+[single-source project](../single-source/README.md) (S0–S5, 2026-10) removed
 the Dart mirror, it is the ONLY implementation: desktop calls it over FFI,
 web over wasm, both behind `lib/markdown/markdown_codec.dart`.
 

@@ -18,7 +18,7 @@
 ## 架构与数据不变量
 
 - **Rust-first 数据面**：核心文档模型、CRDT、同步与数据处理放在 Rust；Dart 负责 UI 与编辑器热路径。
-- **Markdown 只有一份实现**：解析、序列化、HTML 都在 Rust `crates/md-core`；服务端 / CLI / MCP 原生调用，桌面经 FFI、Web 经 wasm。Dart 只通过 `lib/markdown/markdown_codec.dart` 的 `MarkdownCodec` 调用，**禁止在 Dart 里新增 Markdown 语法逻辑**（粘贴启发式放 `lib/editor/paste_repair.dart`，并写明为什么不是语法）。见 [单一实现专项](docs/single-source/README.md)。
+- **Markdown 只有一份实现**：解析、序列化、HTML 都在 Rust `crates/md-core`；服务端 / CLI / MCP 原生调用，桌面经 FFI、Web 经 wasm。Dart 只通过 `lib/markdown/markdown_codec.dart` 的 `MarkdownCodec` 调用，**禁止在 Dart 里新增 Markdown 语法逻辑**（粘贴启发式放 `lib/editor/paste_repair.dart`，并写明为什么不是语法）。页面属性的 `lib/editor/properties.dart` 是登记在案的存量镜像（见专项 01 §9），改属性规则仍须两端同步，直到它被收进门面。见 [单一实现专项](docs/single-source/README.md)。
 - **渲染扩展走机制**：通过 `AtomicBlockRenderer` 注册表扩展，避免继续向 `render.dart` 堆分支。见 [渲染架构](docs/architecture/render-architecture.md)。
 - **Markdown round-trip 是不变量**：保持 CommonMark / GFM 与现有方言兼容，写侧输出规范化子集；改解析或导出时检查 [规范记分牌](docs/architecture/commonmark-scoreboard.md) 及对应回归测试。
 - **folder 是唯一容器，page 是叶子**：服务端写 `parent_view_id` 必须经过 `documents::ensure_parent_accepts_children`；父节点须为同工作区、未删除的 folder，保留 `views_parent_must_be_folder` DB 触发器兜底。本地库由 mica-core `ensure_valid_parent` 判定（含防环），不在 FFI 包装层。
@@ -28,7 +28,7 @@
 
 ## 代码结构与大小门禁
 
-- API 路由放入 `crates/api-server/src/routes/<域>/`，共享 helper / DTO 在对应 `mod.rs` 再导出；Markdown 引擎按 block / inline / html / export_md / entities 管线归位，公开 API 留在 `lib.rs`。
+- API 路由放入 `crates/api-server/src/routes/<域>/`，共享 helper / DTO 在对应 `mod.rs` 再导出；Markdown 引擎（`crates/md-core`）按 `parse/`（block / inline / entities）、`serialize/`（export_md）、`html/` 管线归位，公开 API 在 `api.rs` 并由 `lib.rs` 再导出；`crates/markdown` 只做门面，不放语法逻辑。
 - Flutter 的 `part` 可整理同库代码，但不减少库耦合或库行数；需要真正拆分时建立独立 library。
 - 门禁以 [scripts/check-file-size.sh](scripts/check-file-size.sh) 和 [预算表](scripts/file-size-budget.txt) 为准：Dart 按 library（root + 全部 part），Rust 按文件，包含桌面 FFI crate。
 - 普通单元硬上限 8,000 行、软上限 4,000 行；预算登记的存量单元跳过硬限，但**只许减不许增**，修改前先看预算。

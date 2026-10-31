@@ -61,7 +61,7 @@
 - **delta ↔ marks 双向映射层(关键工作量)**:yrs Y.Text 的 delta(insert/retain/delete + attributes)↔ Mica 的 marks-over-plaintext 模型。
   - 硬换行 `\`+换行 约定:**块内是普通字符,跨块换行才是结构操作**,两套必须分清。
   - inline 对象/mention = delta 里带 attributes 的 embed(零宽占位符,两端长度一致防 offset 错位)。
-  - Markdown 语义仍以 Rust `crates/markdown` 为权威;round-trip 是不变量,延伸到 delta↔marks。
+  - Markdown 语义仍以 Rust 引擎为权威(当时在 `crates/markdown`,2026-10 起是唯一实现 `crates/md-core`);round-trip 是不变量,延伸到 delta↔marks。
 
 ## 4. 本地持久化(SQLite via sqlx)
 

@@ -51,24 +51,23 @@ Full setup, client config, tool list and troubleshooting: **[mcp-connect.md](mcp
 
 ## Tools
 
-Read (safe, `readOnlyHint`):
+39 tools (2026-10-31; pinned by `the_manifest_is_exactly_these_39_tools` in
+`src/tools_tests.rs` — that test, not this list, is the authority). The server's
+`get_info` instructions teach the workflow; each tool's description is what a
+model actually reads.
 
-- `mica_list_workspaces` — workspaces (id, name, role).
-- `mica_list_pages(workspace_id)` — the page tree (documents + folders).
-- `mica_search(workspace_id, query)` — pages by title.
-- `mica_read_document(workspace_id, document_id)` — content as Markdown.
-- `mica_get_outline(workspace_id, document_id)` — headings + block ids + type/preview labels + seq.
-- `mica_export_workspace(workspace_id)` — the whole workspace as Markdown.
+| Group (module) | Tools |
+| --- | --- |
+| Read (`tools_read.rs`, all `readOnlyHint`) | `mica_list_workspaces`, `mica_list_pages`, `mica_search` (titles, folders **and body text**), `mica_read_document` (line window or section), `mica_read_documents` (many at once, `mode="outline"` for a cheap survey), `mica_get_outline` |
+| Write (`tools_write.rs`) | `mica_create_document`, `mica_create_workspace`, `mica_update_document` (`append` / `insert_at` / `find_replace` / `delete` / `replace_all`), `mica_apply_edits` (many edits, one call), `mica_add_image`, `mica_read_image` |
+| Organize (`tools_organize.rs`) | `mica_move_document`, `mica_transfer_view`, `mica_clone_document`, `mica_reorder`, `mica_rename`, `mica_create_folder`, `mica_list_trash`, `mica_restore_view`, `mica_list_versions`, `mica_create_version`, `mica_restore_version` |
+| Bin and bulk (`tools_trash.rs`) | `mica_trash_view`, `mica_trash_views`, `mica_restore_views`, `mica_move_views`, `mica_empty_trash`, `mica_purge_view`, `mica_purge_views` |
+| Admin (`tools_admin.rs`) | `mica_delete_workspace`, `mica_share`, `mica_unshare`, `mica_export_workspace` |
+| Collaboration (`tools_collab.rs`) | `mica_list_comments`, `mica_delete_comment`, `mica_list_members`, `mica_remove_member`, `mica_delete_file` |
 
-Write:
-
-- `mica_create_document(workspace_id, name, markdown?, parent_view_id?)`.
-- `mica_update_document(workspace_id, document_id, mode, …)` — `mode` is `append`
-  (safe default), `replace_all`, `insert_at` (needs `anchor`), or `find_replace`
-  (needs `find`/`replace`). `destructiveHint`.
-- `mica_move_document(workspace_id, view_id, parent_view_id?)`.
-- `mica_trash_view(workspace_id, view_id, confirm)` — soft delete (recycle bin);
-  requires `confirm: true`. `destructiveHint`.
+Every tool that can discard content carries `destructiveHint` (pinned by
+`destructive_hints_flag_exactly_the_content_discarding_tools`), and every
+permanent removal requires `confirm: true`.
 
 ### 删除这条链(每一档都要 `confirm: true`)
 

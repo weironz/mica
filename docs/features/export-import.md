@@ -65,7 +65,8 @@ Implemented in `crates/api-server/src/routes/documents/export.rs`
   sanitized by `safe_file_name` (unicode letters/digits and `-_.` kept,
   other runs collapsed to `_`) and uniqued with `-2`, `-3` suffixes.
 - **Page content** is `# <title>\n\n<body>`; the body comes from
-  `export_markdown_with_assets` (`crates/markdown/src/lib.rs`), which
+  `export_markdown_with_assets` (`crates/md-core/src/compat.rs`, re-exported by
+  `crates/markdown`), which
   prefers the bundled asset path for an image, then its name, then its URL.
   Images that were never re-hosted (external links) stay standard
   `![alt](https://…)` markdown.

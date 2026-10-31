@@ -155,15 +155,20 @@ crates/
   api-server     Axum HTTP + WebSocket;迁移;唯一和 Postgres/S3 打交道的地方
   app-core       文档操作、同步、snapshot↔yrs 桥接
   mica-core      CRDT 文档(yrs)—— from_blocks / to_blocks
-  markdown       Markdown 引擎:块模型、解析、渲染(权威;Dart 侧是镜像)
+  md-core        Markdown 引擎(crate 名 `mica-md`):解析、序列化、HTML —— 唯一一份实现,按 SDK 形态交付
+  md-wasm        md-core 的 wasm-bindgen 绑定,供 Web 客户端使用
+  markdown       md-core 之上的薄门面,服务端各 crate 通过它调用
   interchange    压缩包级别的导入导出规划 —— 纯逻辑,无 I/O
   mcp-server     架在 REST API 上的 MCP 工具面
   cli            mica-cli
   infra          共享基础设施
 clients/mica_flutter/
   lib/editor     自绘编辑器(render.dart 是那块画布)
+  lib/markdown   MarkdownCodec —— 编辑器调用引擎的唯一入口(桌面走 FFI,Web 走 wasm)
   lib/local      本地 vault 存储(经 flutter_rust_bridge 调 Rust)
   rust           客户端侧 Rust 核心(FFI)
+packages/
+  mica-md-js     wasm 引擎的 npm 包装(SDK,尚未发布)
 docs/            设计文档
 migrations/      Postgres schema,API 启动时自动应用
 ```
@@ -190,8 +195,10 @@ just check           # fmt + clippy + analyze
 
 三条不看就会被咬的规则:
 
-1. **Markdown 语法是故意两端各写一份的**(Rust 引擎 + Dart 镜像,因为输入规则不可能
-   每敲一个键走一次网络)。两边由共享一致性 fixture 钉住——改一边,两套测试都要跑。
+1. **Markdown 只有一份实现**,在 Rust(`crates/md-core`)。服务端、CLI、MCP 原生调用,
+   桌面客户端经 FFI,Web 客户端经 wasm。Dart 只通过 `MarkdownCodec` 调用,不要在 Dart 里写
+   Markdown 语法。构建 Web 需要与 `Cargo.lock` 同版本的 `wasm-bindgen-cli`
+   (`scripts/check-md-wasm-toolchain.sh` 会给出版本号)。
 2. **每个 bug 修复都配回归测试**,提交信息写根因,不写流水账。
 3. **新渲染能力先抽机制**,不许往 `render.dart` 堆 `if` 分支。
    见[渲染架构](docs/architecture/render-architecture.md)。
@@ -206,6 +213,7 @@ just check           # fmt + clippy + analyze
 | [同步与 API](docs/architecture/sync-and-api.md) | REST 接口面和 WebSocket 消息封套 |
 | [导出/导入](docs/features/export-import.md) | 归档格式、Notion 适配、round-trip 规则 |
 | [CommonMark 记分牌](docs/architecture/commonmark-scoreboard.md) | 规范一致性,逐版本跟踪 |
+| [Markdown 单一实现](docs/single-source/README.md) | Dart 镜像如何退役;引擎的 SDK 契约 |
 | [本地优先](docs/architecture/local-first-plan.md) · [Vault 模式](docs/features/vault-mode.md) | 本地世界 |
 | [MCP 服务](docs/dev/mcp-server.md) · [接入客户端](docs/dev/mcp-connect.md) | AI 工具访问 |
 | [新机搭建](docs/dev/bootstrap.md) | 一台干净的 Windows 机器,从零到能开发 |

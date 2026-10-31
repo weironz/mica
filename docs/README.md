@@ -6,7 +6,7 @@
 - 改代码前 → [`dev/lessons.md`](dev/lessons.md)(踩过的坑)与仓库根 [`AGENTS.md`](../AGENTS.md)
 - 发版 / 上线 → [`ops/release.md`](ops/release.md)、[`ops/deploy.md`](ops/deploy.md)
 - 代码评审与修复记录 → [`reviews/`](#reviews--代码评审与修复)
-- 进行中的专项 → [`single-source/`](single-source/README.md)(Markdown 引擎只留 Rust 一份实现,S0–S5)
+- Markdown 引擎的结构与 SDK 契约 → [`single-source/`](single-source/README.md)(单一实现专项,S0–S5 已完成并随 v0.14.0 上线)
 
 | 文件夹 | 放什么 |
 | --- | --- |
@@ -142,7 +142,7 @@
 | [README.md](single-source/README.md) | 专项总览:目标、阶段总表、已拍板的决定、执行规则 |
 | [01-background.md](single-source/01-background.md) | 双实现是什么、为什么分叉、同类产品、理想架构、其他双份与导出格式讨论 |
 | [02-architecture.md](single-source/02-architecture.md) | **契约**:Rust 公共 API、跨语言线格式、Dart 门面、块/标记 Schema、性能预算 |
-| [03-inventory.md](single-source/03-inventory.md) | 现状清单:每个 Dart 镜像函数的去向、调用点、测试处理、构建接入点 |
+| [03-inventory.md](single-source/03-inventory.md) | 立项时的清单(历史):每个 Dart 镜像函数的去向、调用点、测试处理、构建接入点 |
 | [04-parallel-plan.md](single-source/04-parallel-plan.md) | 工作包、依赖图、冲突热点、分支合并协议、日程、进度表 |
 | [05-review-checklist.md](single-source/05-review-checklist.md) | 审核清单 |
 | [stages/](single-source/stages/) | S0 基线 · S1 引擎拆分 · S2 绑定 · S3 编辑器边界 · S4 表格单元格 · S5 SDK 交付 |

@@ -190,16 +190,22 @@ crates/
                  talks to Postgres and S3
   app-core       document operations, sync, snapshot/yrs bridging
   mica-core      the CRDT document (yrs) — from_blocks / to_blocks
-  markdown       the Markdown engine: block model, parser, renderer
-                 (authoritative; the Dart side mirrors it)
+  md-core        the Markdown engine (crate `mica-md`): parser, serializer,
+                 HTML — the ONLY implementation, shaped as an SDK
+  md-wasm        wasm-bindgen binding of md-core for the web client
+  markdown       thin facade over md-core used by the server-side crates
   interchange    archive-level import/export planning — pure, no I/O
   mcp-server     MCP tool surface over the REST API
   cli            mica-cli
   infra          shared plumbing
 clients/mica_flutter/
   lib/editor     the hand-written editor (render.dart is the canvas)
+  lib/markdown   MarkdownCodec — the editor's only door to the engine
+                 (FFI on desktop, wasm on the web)
   lib/local      the local-vault store (Rust via flutter_rust_bridge)
   rust           the client-side Rust core (FFI)
+packages/
+  mica-md-js     npm wrapper around the wasm engine (SDK, not yet published)
 docs/            design documents
 migrations/      Postgres schema, applied automatically at API startup
 ```
@@ -230,9 +236,11 @@ when they were broken.
 
 Three rules that will otherwise bite you:
 
-1. **The Markdown grammar is duplicated on purpose** (Rust engine + Dart mirror,
-   because input rules can't take a network round trip per keystroke). Shared
-   conformance fixtures pin the two together — change one, run both suites.
+1. **Markdown has exactly one implementation**, in Rust (`crates/md-core`). The
+   server, CLI and MCP call it natively, the desktop client over FFI, the web
+   client as wasm. Dart reaches it only through `MarkdownCodec`; do not add
+   Markdown grammar to Dart. Web builds need `wasm-bindgen-cli` at the version
+   `Cargo.lock` pins (`scripts/check-md-wasm-toolchain.sh` says which).
 2. **Every bug fix ships with a regression test**, and the commit message states
    the root cause rather than a changelog.
 3. **New render capabilities get a mechanism**, not an `if` branch in
@@ -248,6 +256,7 @@ Three rules that will otherwise bite you:
 | [Sync and API](docs/architecture/sync-and-api.md) | REST surface and the WebSocket envelope |
 | [Export / Import](docs/features/export-import.md) | Archive format, Notion adaptation, round-trip rules |
 | [CommonMark scoreboard](docs/architecture/commonmark-scoreboard.md) | Spec conformance, tracked per release |
+| [Single Markdown implementation](docs/single-source/README.md) | How the Dart mirror was retired; the engine's SDK contract |
 | [Local-first](docs/architecture/local-first-plan.md) · [Vault mode](docs/features/vault-mode.md) | The local world |
 | [MCP server](docs/dev/mcp-server.md) · [Connecting a client](docs/dev/mcp-connect.md) | AI tool access |
 | [Machine setup](docs/dev/bootstrap.md) | Clean Windows box to a working dev environment |

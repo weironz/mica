@@ -102,6 +102,7 @@ for /f "delims=" %%i in ('gh auth token') do set "GITHUB_PERSONAL_ACCESS_TOKEN=%
 | `.fvmrc` | Flutter(Dart 随它一起) | 六个 `subosito/flutter-action` step 的 `flutter-version-file` |
 | `rust-toolchain.toml` | Rust | rustup(仓库内每次 `cargo`/`rustc` 自动生效) |
 | `deploy/Dockerfile.api`·`.cli`·`docker-compose.yml` 的 `rust:<版本>-slim-bookworm` | **出厂镜像**的 Rust | 三处必须与上一行同号 |
+| `Cargo.lock` 里的 `wasm-bindgen` | 本机 `wasm-bindgen-cli`(Web 的 Markdown 引擎) | `scripts/check-md-wasm-toolchain.sh`,不同号直接失败并给出安装命令 |
 
 **`just release` 会拒绝**本机 Flutter ≠ `.fvmrc`、本机 rustc ≠ `rust-toolchain.toml`、
 或三个镜像与钉子不同号。所以这不是「记得对齐」,是过不去。
@@ -130,7 +131,7 @@ just release-check                 # 它会指出还有哪一处没跟上
 
 ## 重配顺序(换机)
 
-1. 核心工具链:Flutter、Rust、Docker Desktop、平台 SDK + **开发者模式**(见上「Windows 桌面构建前置」)。
+1. 核心工具链:Flutter、Rust、Docker Desktop、平台 SDK + **开发者模式**(见上「Windows 桌面构建前置」);Web 构建另需 `jq` 与同号 `wasm-bindgen-cli`(见 [bootstrap.md](bootstrap.md) §2)。
 2. 本文的 MCP（项目级配置见 `.mcp.json`，用户级含 code-review-graph）、首次 `code-review-graph build` 建图、skills。
 3. 起后端:`docker compose up -d --build postgres api`(详见 `docs/plans/desktop-plan.md` M1 状态)。
 

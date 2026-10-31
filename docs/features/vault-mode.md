@@ -13,7 +13,7 @@
 
 → **不追求「文件真相源 + 实时协同」同时成立。** vault 模式刻意把实时 CRDT 协同留给云端/DB 模式当差异化;分三档增量做,越往后越重、越战略。
 
-Mica 的独门优势正好压中最贵的那块:`crates/markdown` 已是 **CommonMark 100% + GFM、round-trip 定点引擎**(`export(import(x))` 不变量)。SiYuan 为此自研了 Lute;Mica 白捡。
+Mica 的独门优势正好压中最贵的那块:Markdown 引擎(现 `crates/md-core`)已是 **CommonMark 100% + GFM、round-trip 定点引擎**(`export(import(x))` 不变量)。SiYuan 为此自研了 Lute;Mica 白捡。
 
 ## 分档
 

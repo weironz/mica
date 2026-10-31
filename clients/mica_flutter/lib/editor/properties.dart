@@ -1,6 +1,8 @@
 /// Structured page properties over the document root's raw front-matter string.
 ///
-/// **Dart mirror of the Rust authority** `crates/markdown/src/properties.rs`.
+/// **Dart mirror of the Rust authority** `crates/md-core/src/properties.rs`.
+/// (The single-source project removed the body-grammar mirror but not this
+/// one; retiring it is listed in docs/single-source/01-background.md §9.)
 /// The Rust side is authoritative (CLAUDE.md #2); this must stay byte-for-byte
 /// behaviourally identical — parse/upsert/remove here and there have to agree,
 /// or a property edited on desktop vs re-read on web would diverge. When you

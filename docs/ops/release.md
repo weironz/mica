@@ -303,9 +303,11 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
    - `clients/mica_flutter/pubspec.yaml` 的 `version:`
    - `clients/mica_flutter/lib/main.dart` 的 `kAppVersion`
    - 根 `Cargo.toml` `[workspace.package]` 的 `version`(**api-server 与 mica-cli 都 `version.workspace=true` 继承它**——改这一处两个二进制的 `/api/health` / `--version` 一起对;顺带 `cargo check` 更新 `Cargo.lock`)
-2. **判断服务端要不要跟着发**:改动是否触及 `crates/markdown` 等服务端依赖?
-   链路 `api-server → mica-app-core → mica-markdown`。用 `cargo tree -p <crate> | grep <dep>`
-   实证,别猜。(例:v0.5.0 的 CJK 强调改了 markdown → api 必须重建。)
+2. **判断服务端要不要跟着发**:改动是否触及 `crates/md-core`(引擎)、`crates/markdown`(门面)
+   等服务端依赖?链路 `api-server → mica-app-core → mica-markdown → mica-md`。用
+   `cargo tree -p <crate> | grep <dep>` 实证,别猜。(例:v0.5.0 的 CJK 强调改了 markdown → api 必须重建。)
+   **2026-10 起 md-core 是三端共用的唯一引擎**:改它同时影响服务端、桌面(FFI)和 Web(wasm,
+   `scripts/build-md-wasm.sh` 构建并卡 256 KiB gzip 预算),三端都要跟着发。
 3. 测试全绿,**且是真的跑过**。DB 集成测试在 `DATABASE_URL` 没设时**静默跳过**,而
    跳过的测试报告为「通过」—— 整套 0.00s「全过」,那是真空通过不是验证
    (见 `docs/dev/lessons.md`)。

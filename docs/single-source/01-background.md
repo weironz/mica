@@ -131,6 +131,7 @@ Mica 的约束（C1：服务端必须解析）决定了编解码器必须是 Rus
 | 接口数据结构 | **三份**：服务端 `routes/workspaces.rs` 等、CLI `cli/src/client.rs`（又定义一遍 `User`/`Workspace`/`View`）、Dart `api/models.dart`；黄金契约测试 `contracts/*.json` 守着 | ① Rust 公共 crate `mica-api-types`（服务端 + CLI/MCP 共用）② 从 Rust 类型生成 Dart 模型（自写生成脚本，不引入依赖） | 低 | 最先做 |
 | 服务端 / 本地库业务规则 | 页树、回收站各一份（Postgres SQL / SQLite）；第 2 条刚加规则「改一边必须同步另一边」 | 判定逻辑抽成不碰数据库的纯 Rust 模块，存储各自只负责读写 | 中低 | 穿插做 |
 | CRDT 引擎 | yrs（服务端、桌面）vs yjs（Web）；Web 侧 `mica_ydoc.dart` 532 行 + `marks_diff.dart` + `text_diff.dart`（mica-core 镜像）+ yjs 胶水 ≈ 1,000 行 | Web 也用 mica-core 的 wasm，通过与桌面同一套 Dart 接口调用；删 yjs 依赖 | **高**（AppFlowy 全后端 wasm 化后撤回；我们只搬文档核心，范围窄，无先例也未被证伪） | 本专项的 wasm 链稳定后单独立项、先验证 |
+| 页面属性(front matter) | Rust `md-core/src/properties.rs` 权威 + Dart `lib/editor/properties.dart`(约 440 行)手写镜像;本专项只删了正文语法的镜像,这一份没动(2026-10-31 文档复核时补登) | 门面加 `parseProperties` / `upsertProperty` / `removeProperty`,属性面板改走 `MarkdownCodec`,删 Dart 镜像 | 低(纯函数、调用点集中在属性面板) | 本专项的直接延续,最便宜 |
 | 同步状态机 | 已合并为一份 `cloud_sync_session.dart`（7 月评估的丁-1，已完成） | — | — | 无需再做 |
 
 **不该收的**：存储层（Postgres / SQLite / IndexedDB，平台决定，共享的是接口约定 `CloudDocStore`）；

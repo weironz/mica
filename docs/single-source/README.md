@@ -1,6 +1,6 @@
 # 单一实现专项：Markdown 引擎只留一份（S0–S5）
 
-> 状态：**全部完成，G4 通过，S0–S5 已并回 main**（2026-10-29；2026-10-26 立项）。未发版：crate / npm 发布与 App 发版都等用户批准（见 [S5 发布手册](stages/S5-sdk-release.md)）。
+> 状态：**全部完成，G4 通过，S0–S5 已并回 main**（2026-10-29；2026-10-26 立项）。已随 App **v0.14.0**（2026-10-29）上线，0.14.1 / 0.14.2 跟进；crate / npm 首次发布仍等用户批准（见 [S5 发布手册](stages/S5-sdk-release.md)）。
 > 审核方：本仓库的维护 agent，在审核停点 G1–G3 抽查、全部完成后（G4）按 [05-review-checklist.md](05-review-checklist.md) 逐条审核。
 > 本目录是这个专项的**唯一权威文档**；其他文档里与之冲突的描述，以本目录为准。
 
@@ -16,8 +16,8 @@
 | S5 SDK 交付 | G4 ✅（2026-10-29） | `6cc2e526` | 文档、Schema、示例、API / 健壮性测试、npm 包、许可证审计、`just sdk-check`；`publish = false` |
 
 - 最终树门禁（审核方 Linux）：`local-ci.sh all` ALL GREEN——Rust 1160 + 213 passed、Flutter 2030 passed、wasm 203,003 B、Chrome 浏览器套件全绿。
-- `clients/mica_flutter/lib` 中不再有任何 Markdown 语法实现；`AGENTS.md` 的规则已改为「Markdown 只有一份实现」。
-- **未做 / 待用户决定**：App 发版、crate / npm 首次发布（手册见 [S5](stages/S5-sdk-release.md) 文末，用户本人执行）；
+- `clients/mica_flutter/lib` 中不再有任何**正文** Markdown 语法实现；页面属性（front matter）的 Dart 镜像 `lib/editor/properties.dart` 不在本专项范围，仍在（2026-10-31 复核补记，见 [01 §9](01-background.md#9-仓库里其他双份与后续专项不在本专项范围)）；`AGENTS.md` 的规则已改为「Markdown 只有一份实现」。
+- **未做 / 待用户决定**：crate / npm 首次发布（手册见 [S5](stages/S5-sdk-release.md) 文末，用户本人执行）；
   对外发布前给 SDK 的 HTML 导出加「严格」档（建议）；Mica 内部粘贴优先读 Markdown（可选改进，见 G3 记录）。
 - 审核方没有 Windows，Windows 集成测试与「旧版客户端读新表格」以执行方回执为准。
 - 每个停点的核对过程、裁决与审核方修复都在 [reviews.md](reviews.md)；各阶段执行过程在 `stages/` 的执行记录里。
@@ -31,9 +31,9 @@ Markdown 的解析、序列化、HTML 渲染**只在 Rust 里写一份**（`crat
 
 ## 为什么做
 
-- 现在同一套 Markdown 规则写了两遍：Rust（权威）+ Dart（镜像，约 4,000 行）。2026-09 以来改 Dart 镜像的
+- 立项时（2026-10-26）同一套 Markdown 规则写了两遍：Rust（权威）+ Dart（镜像，约 4,000 行）。2026-09 以来改 Dart 镜像的
   提交 9 个，其中 8 个同一提交也改了 Rust —— **每个解析 bug 修两遍**（#96、#98 是最近的例子）。
-- 现有防线（共享黄金文件对拍）只能抓「两边不一样」，抓不到「两边错得一样」，也省不掉「修两遍」。
+- 当时的防线（共享黄金文件对拍）只能抓「两边不一样」，抓不到「两边错得一样」，也省不掉「修两遍」。
 - 详细推导、同类产品调研、数据见 [01-background.md](01-background.md)。
 
 ## 阅读顺序（给执行 agent）
@@ -41,7 +41,7 @@ Markdown 的解析、序列化、HTML 渲染**只在 Rust 里写一份**（`crat
 1. [01-background.md](01-background.md) —— 为什么、和别人怎么做、为什么选这条路（**先读，避免重新论证**）。
 2. [02-architecture.md](02-architecture.md) —— 目标架构与**契约**：Rust 公共 API 签名、跨语言 JSON 线格式、
    Dart 门面接口、块/标记 Schema、性能预算。**契约冻结后改动须经审核方同意。**
-3. [03-inventory.md](03-inventory.md) —— 现状清单：Dart 镜像逐函数的去向、调用点、35 个测试文件的处理方式。
+3. [03-inventory.md](03-inventory.md) —— 立项时的清单（历史记录）：Dart 镜像逐函数的去向、调用点、35 个测试文件的处理方式。
 4. [04-parallel-plan.md](04-parallel-plan.md) —— 工作包划分、依赖图、谁改哪些文件、合并规则、日程。
 5. 各阶段详细方案（代码级）：
    - [stages/S0-baseline.md](stages/S0-baseline.md) —— 基线与安全网（差分对拍、性能基线）

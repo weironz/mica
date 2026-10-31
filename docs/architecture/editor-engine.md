@@ -390,9 +390,12 @@ The recurring problem the engine must get right for every node type:
    Ctrl/Cmd+B/I/E and Ctrl/Cmd+K (link) and a floating selection toolbar;
    Cmd/Ctrl+click opens a link. Inline input rules (`**b**`, `*i*`/`_i_`,
    `` `code` ``, `~~s~~`, `[t](url)`) convert and strip markers as you type
-   (`controller._applyInlineRule`), preserving nested marks. Paste/AI/import run
-   `parseInline`; copy/export round-trip via `inlineToMarkdown` (client) and the
-   Rust mirror in `crates/app-core/src/documents.rs`.
+   (`controller._applyInlineRule`), preserving nested marks. Paste/AI/import
+   parse and copy/export serialize through `MarkdownCodec`
+   (`lib/markdown/markdown_codec.dart`) — the Rust engine in `crates/md-core`,
+   over FFI on desktop and wasm on the web. (Until 2026-10 these ran on a Dart
+   mirror, `parseInline` / `inlineToMarkdown` in `editor/marks.dart`; the
+   single-source project deleted it.)
 4. **Undo/redo — DONE.** Snapshot history in `EditorController`: every committed
    change (the single `_send` choke point) pushes the prior document onto the
    undo stack and clears redo; `undo`/`redo` restore a snapshot and emit the
@@ -426,7 +429,7 @@ The recurring problem the engine must get right for every node type:
    `controller.moveBlock` → one `move_block` op (server-validated), caret
    follows the block, undo restores the order via the snapshot diff.
    *Still open:* virtualization, accessibility, RTL, touch.
-8. **Markdown spec compliance** (engine roadmap; see `crates/markdown` and
+8. **Markdown spec compliance** (engine roadmap; see `crates/md-core` and
    docs/features/export-import.md). North star: **read the full CommonMark + GFM
    spec, write a canonical subset** — full spec compliance is a *parsing*
    goal; the exporter intentionally emits only our normalized form, and
