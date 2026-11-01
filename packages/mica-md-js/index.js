@@ -16,7 +16,7 @@ import { createRequire } from 'node:module';
  * @typedef {{start: number, end: number, type: string, href?: string, title?: string}} Mark
  * @typedef {{text: string, marks: Mark[]}} InlineText
  * @typedef {{type: string, text: string, data: object}} Block
- * @typedef {'export'|'clipboard'} HtmlProfile
+ * @typedef {'export'|'strict'|'clipboard'} HtmlProfile
  */
 
 const require = createRequire(import.meta.url);
@@ -105,7 +105,10 @@ export function serializeInline(inline) {
  * @param {Block[]} blocks
  * @param {{imageSrcs?: Record<string, string>, profile?: HtmlProfile}} [options]
  *   `profile: 'clipboard'` keeps source math/Mermaid as data attributes;
- *   the default `'export'` is sanitized share HTML.
+ *   the default `'export'` is sanitized share HTML but passes raw
+ *   `<script>`-type blocks through verbatim (safe only under a CSP);
+ *   `'strict'` escapes every raw HTML block and inline tag — use it for
+ *   documents you do not trust.
  * @returns {string}
  */
 export function renderHtml(blocks, options = {}) {

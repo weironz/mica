@@ -47,7 +47,7 @@ Node needs no init: the nodejs build loads on first call.
 | `serializeBody(blocks, { assets })` | Markdown |
 | `parseInline(source)` / `parseInlineBatch(sources)` | `{ text, marks }` |
 | `serializeInline({ text, marks })` | inline Markdown |
-| `renderHtml(blocks, { imageSrcs, profile })` | HTML (`export` \| `clipboard`) |
+| `renderHtml(blocks, { imageSrcs, profile })` | HTML (`export` \| `strict` \| `clipboard`; use `strict` for untrusted input without a CSP) |
 | `decodeCells(cells)` / `encodeCells(cells)` | table-cell storage shapes |
 | `mathRunSpans(source)` / `parseInlineMath(source)` | math spans / inline math |
 | `properties({ op, ... })` | front-matter properties: `parse` / `upsert` / `remove` / `infer` |

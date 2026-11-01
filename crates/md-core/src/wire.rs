@@ -169,6 +169,7 @@ pub fn render_html_body_json(
   let profile = match profile {
     "export" => HtmlProfile::Export,
     "clipboard" => HtmlProfile::Clipboard,
+    "strict" => HtmlProfile::Strict,
     other => return Err(invalid(format!("unknown HTML profile: {other}"))),
   };
   let blocks: Vec<Block> = blocks

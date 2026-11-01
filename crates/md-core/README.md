@@ -73,7 +73,7 @@ browser editors and this engine agree without conversion. Rust callers slicing
   bug fix, in which case the CHANGELOG names the input and both outputs.
 - **Never panics on input**: the parsers are property-tested against
   arbitrary input (`never_panic.rs`); panics are bugs.
-- **HTML sanitization, and its honest limits**: both profiles strip `on*`
+- **HTML sanitization, and its honest limits**: `Export` and `Clipboard` strip `on*`
   event-handler attributes and `<meta http-equiv=refresh>`, run URLs through a
   `safe_url` check (no `javascript:`), and apply the GFM `tagfilter` to raw
   HTML. But a raw **type-1** block (`<script>`, `<style>`, `<pre>`,
@@ -82,7 +82,10 @@ browser editors and this engine agree without conversion. Rust callers slicing
   **embedder's** job (Mica ships one; `SAFE_HTML_CSP` lives in the
   `mica-markdown` adapter, not this crate). `HtmlProfile::Clipboard`
   additionally keeps source math and Mermaid as data attributes instead of
-  rendering them.
+  rendering them. **Rendering untrusted documents without a CSP? Use
+  `HtmlProfile::Strict`** (`"strict"` on the wire): it is `Export` with every
+  raw HTML block shown as escaped source in `<pre><code>` and inline HTML as
+  escaped text, so no markup from the document reaches the page.
 - **Unknown keys are ignored**: embedders may add their own `data` keys; this
   engine round-trips them untouched.
 

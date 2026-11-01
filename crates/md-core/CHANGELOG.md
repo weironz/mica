@@ -21,6 +21,12 @@ counted as part of the public API.
 ### Added
 
 - `properties::infer_value` — the typed value a raw one-line input infers to.
+- `html_to_markdown` / `HtmlNode` and `wire::html_to_markdown_json` — pasted
+  clipboard HTML (as a pre-tokenized element tree) to Markdown, moved here
+  from the Mica client so the only Markdown writer is this crate.
+- `HtmlProfile::Strict` (`"strict"` on the wire, `renderHtml({profile:
+  'strict'})` in npm) — Export HTML with all raw HTML escaped, for embedders
+  without a Content-Security-Policy.
 - `wire::properties_json` — front-matter properties over the wire (`op`:
   `parse` / `upsert` / `remove` / `infer`); the wasm binding exposes it as
   `properties`. Additive: `schema_version` stays 1.

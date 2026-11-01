@@ -400,8 +400,14 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
     }
     if m.kind == "html" {
       // Raw inline HTML passes through unescaped (GFM tagfilter applied, then
-      // an event-handler / `javascript:`-URL scrub for no-CSP consumers).
-      out.push_str(&sanitize_html(&String::from_utf16_lossy(&units[s..e])));
+      // an event-handler / `javascript:`-URL scrub for no-CSP consumers) —
+      // except under the Strict profile, where it is shown as text.
+      let raw = String::from_utf16_lossy(&units[s..e]);
+      out.push_str(&if strict() {
+        escape_html(&raw)
+      } else {
+        sanitize_html(&raw)
+      });
       pos = e;
       continue;
     }
@@ -479,6 +485,34 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
   out
 }
 
+thread_local! {
+  static STRICT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the current render is [`HtmlProfile::Strict`](crate::HtmlProfile).
+/// A scoped flag rather than a parameter: the two places that care sit at the
+/// bottom of a deep recursion (blocks, lists, quotes, table cells) that every
+/// other profile shares unchanged.
+fn strict() -> bool {
+  STRICT.with(std::cell::Cell::get)
+}
+
+/// Holds the Strict flag for one render; restores the previous value on drop,
+/// so a panic or an early return cannot leave a later render strict.
+pub(crate) struct StrictScope(bool);
+
+impl StrictScope {
+  pub(crate) fn enter() -> Self {
+    Self(STRICT.with(|s| s.replace(true)))
+  }
+}
+
+impl Drop for StrictScope {
+  fn drop(&mut self) {
+    STRICT.with(|s| s.set(self.0));
+  }
+}
+
 pub(crate) fn append_html_block(
   snapshot: &DocumentSnapshotPayload,
   index: &HashMap<&str, usize>,
@@ -512,6 +546,16 @@ pub(crate) fn append_html_block(
       append_html_children(snapshot, index, &block.id, out)?;
     }
     "code_block" | "code" => {
+      if block_data_bool(block, "raw") && strict() {
+        // Strict profile: the source is shown, never interpreted.
+        let body = if block.text.is_empty() {
+          String::new()
+        } else {
+          format!("{}\n", escape_html(&block.text))
+        };
+        out.push_str(&format!("<pre><code>{body}</code></pre>\n"));
+        return Ok(());
+      }
       if block_data_bool(block, "raw") {
         // A raw HTML block passes through. Type-1 blocks (script/style/pre/
         // textarea) are literal and bypass the tagfilter; every other kind

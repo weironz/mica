@@ -31,8 +31,12 @@ export interface Block {
   data: Record<string, unknown>;
 }
 
-/** HTML dialect: `export` is sanitized share HTML; `clipboard` keeps source math. */
-export type HtmlProfile = 'export' | 'clipboard';
+/**
+ * HTML dialect: `export` is sanitized share HTML (raw `<script>`-type blocks
+ * pass through verbatim — safe only under a CSP); `strict` escapes all raw
+ * HTML, use it for untrusted documents; `clipboard` keeps source math.
+ */
+export type HtmlProfile = 'export' | 'strict' | 'clipboard';
 
 /** Stored table-cell shapes: inline source, text+marks, or empty. */
 export type StoredCell = string | InlineText | null;

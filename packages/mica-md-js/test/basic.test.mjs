@@ -89,3 +89,11 @@ test('properties parse and edit front matter without touching other lines', () =
   assert.equal(properties({ op: 'remove', front_matter: edited, key: 'title' }), '# keep\ntags: [a, b, c]');
   assert.deepEqual(properties({ op: 'infer', raw: '2026-07-22' }), { type: 'date', value: '2026-07-22' });
 });
+
+test("renderHtml strict profile escapes raw HTML that export passes through", () => {
+  const blocks = parseBody('<script>alert(1)</script>\n\nhi <b>x</b>');
+  assert.ok(renderHtml(blocks).includes('<script>'));
+  const out = renderHtml(blocks, { profile: 'strict' });
+  assert.ok(!out.includes('<script') && !out.includes('<b>'), out);
+  assert.ok(out.includes('&lt;script&gt;') && out.includes('&lt;b&gt;'), out);
+});

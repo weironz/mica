@@ -74,3 +74,56 @@ fn cycles_and_deep_chains_do_not_overflow() {
   assert!(export_html(&doc).unwrap().contains("loop"));
   assert!(export_markdown(&doc).unwrap().contains("loop"));
 }
+
+// ── Strict profile: no markup from the document reaches the output ────────
+
+fn strict(md: &str) -> String {
+  use mica_md::{HtmlOptions, HtmlProfile, ParseMode, parse_body, render_html_body};
+  render_html_body(
+    &parse_body(md, ParseMode::Document),
+    &HtmlOptions {
+      profile: HtmlProfile::Strict,
+      ..Default::default()
+    },
+  )
+}
+
+#[test]
+fn strict_shows_a_script_block_as_source() {
+  let md = "<script>alert(1)</script>\n";
+  assert!(
+    html(md).contains("<script>"),
+    "export keeps type-1 verbatim"
+  );
+  let out = strict(md);
+  assert!(!out.contains("<script"), "{out}");
+  assert!(
+    out.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+    "{out}"
+  );
+  assert!(out.starts_with("<pre><code>"), "{out}");
+}
+
+#[test]
+fn strict_escapes_inline_html_including_inside_table_cells() {
+  let out = strict("a <b onclick=x>bold</b> c\n\n| h |\n| - |\n| <i>cell</i> |\n");
+  assert!(!out.contains("<b") && !out.contains("<i>"), "{out}");
+  assert!(out.contains("&lt;b onclick=x&gt;"), "{out}");
+  assert!(out.contains("&lt;i&gt;cell&lt;/i&gt;"), "{out}");
+}
+
+#[test]
+fn strict_matches_export_when_the_document_has_no_html() {
+  let md = "# T\n\n**b** [l](https://x.y) `c`\n\n- a\n- b\n\n> q\n";
+  let export = html(md);
+  assert_eq!(strict(md), export);
+  // And it does not leak into a later Export render (the flag is scoped).
+  assert!(html("<b>x</b>\n").contains("<b>"));
+}
+
+#[test]
+fn strict_is_on_the_wire() {
+  let blocks = mica_md::wire::parse_body_json("<b>x</b>\n", false).unwrap();
+  let out = mica_md::wire::render_html_body_json(&blocks, "{}", "strict").unwrap();
+  assert!(!out.contains("<b>") && out.contains("&lt;b&gt;"), "{out}");
+}

@@ -197,6 +197,13 @@ pub enum HtmlProfile {
   Export,
   /// Clipboard text/html, independent of the rich `render` feature.
   Clipboard,
+  /// Export HTML for consumers that cannot trust the document: raw HTML
+  /// blocks render as escaped source in `<pre><code>` and inline HTML as
+  /// escaped text, so no markup from the document reaches the output.
+  /// [`Export`](Self::Export) passes type-1 blocks (`<script>`, `<style>` …)
+  /// through verbatim for round-trip fidelity and relies on the host's CSP —
+  /// Mica's share page has one, an SDK user's page may not.
+  Strict,
 }
 
 /// Options for HTML rendering.
@@ -215,6 +222,10 @@ pub fn render_html(doc: &Document, options: &HtmlOptions) -> Result<String, MdEr
   match options.profile {
     HtmlProfile::Export => crate::compat::export_html(&doc),
     HtmlProfile::Clipboard => crate::html::clipboard::render(&doc),
+    HtmlProfile::Strict => {
+      let _strict = crate::html::html::StrictScope::enter();
+      crate::compat::export_html(&doc)
+    }
   }
 }
 
