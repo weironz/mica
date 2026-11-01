@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+mica-api-types = { path = "../api-types", features = ["sqlx"] }
 anyhow.workspace = true
 argon2.workspace = true
 async-trait.workspace = true

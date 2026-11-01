@@ -1,12 +1,13 @@
 //! Shared machinery for the DTO gold-file contract tests (#85).
 //!
-//! The server, the CLI, the MCP server and the Flutter client each decode the
-//! same REST payloads with their own hand-written types — no shared crate
-//! exists, deliberately (the web client needs a Dart implementation, so a Rust
-//! crate could only ever cover three of the four). The drift guard is this
-//! directory's gold files: the server types SERIALISE into them, and every
-//! client's tests DESERIALISE out of them, so a renamed field breaks all four
-//! test suites at once instead of breaking one client in production.
+//! The server and the CLI share one definition of the common payloads
+//! (`mica-api-types`, 2026-11-01); the MCP server reads them as JSON values and
+//! the Flutter client has its own Dart models (they carry client-only
+//! behaviour, so generating them from Rust would lose it). The drift guard
+//! for those two is this directory's gold files: the server types SERIALISE
+//! into them, and every client's tests DESERIALISE out of them, so a renamed
+//! field breaks every suite at once instead of breaking one client in
+//! production.
 //!
 //! Regenerating after an intentional shape change:
 //!

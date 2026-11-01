@@ -22,6 +22,9 @@ use uuid::Uuid;
 use super::*;
 use crate::routes::auth::user_id_from_headers;
 use axum::body::Bytes;
+pub use mica_api_types::{
+  ExportFileRevision, ExportManifest as ExportManifestResponse, ExportPageRevision,
+};
 use mica_interchange::{
   ZipEntry, ZipStreamWriter, build_zip, percent_decode, safe_segment, unique_asset_name,
 };
@@ -220,29 +223,6 @@ pub async fn export_workspace_zip(
 /// v1 is the page-at-a-time protocol (including stable, file-id asset names).
 /// Bump when Markdown/sidecar generation changes, so cached output is rebuilt.
 const INCREMENTAL_EXPORT_VERSION: u32 = 1;
-
-#[derive(Debug, Serialize)]
-pub struct ExportPageRevision {
-  pub(crate) view_id: Uuid,
-  pub(crate) document_id: Uuid,
-  pub(crate) revision: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ExportFileRevision {
-  pub(crate) file_id: Uuid,
-  pub(crate) revision: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ExportManifestResponse {
-  pub(crate) version: u32,
-  pub(crate) tree_revision: String,
-  pub(crate) structure_revision: String,
-  pub(crate) manifest: serde_json::Value,
-  pub(crate) pages: Vec<ExportPageRevision>,
-  pub(crate) files: Vec<ExportFileRevision>,
-}
 
 /// Inventory without CRDT decoding, Markdown generation or blob downloads.
 /// Hashing the authoritative bytes also detects deletion-only yrs edits (whose

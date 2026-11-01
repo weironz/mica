@@ -19,6 +19,7 @@ use mica_infra::{ApiError, ApiResult, Environment};
 
 use super::email_verify;
 use crate::password_strength;
+pub use mica_api_types::{AuthResponse, MeResponse, User as UserResponse};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
@@ -46,18 +47,6 @@ pub struct LoginRequest {
   password: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct AuthResponse {
-  access_token: String,
-  token_type: &'static str,
-  expires_at: DateTime<Utc>,
-  /// Spend this on `/auth/refresh` for a fresh access token. Single-use: the
-  /// refresh hands back a new one. Returned in plaintext exactly once — only
-  /// its hash is kept.
-  refresh_token: String,
-  user: UserResponse,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct RefreshRequest {
   /// Optional because web no longer has it: the refresh token lives in an
@@ -77,23 +66,6 @@ struct RefreshTokenRow {
   family_id: Uuid,
   expires_at: DateTime<Utc>,
   revoked_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MeResponse {
-  user: UserResponse,
-}
-
-#[derive(Debug, Serialize)]
-pub struct UserResponse {
-  id: Uuid,
-  email: String,
-  display_name: String,
-  created_at: DateTime<Utc>,
-  /// Changes when the picture does; None means no picture. The client builds the
-  /// URL from the user id — sending a URL from here as well would be two
-  /// representations of one address, and only one of them could be right.
-  avatar_version: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -316,7 +288,7 @@ async fn auth_response_locked(
   .await?;
   Ok(AuthResponse {
     access_token,
-    token_type: "Bearer",
+    token_type: "Bearer".to_string(),
     expires_at,
     refresh_token,
     user: UserResponse::from(user),
@@ -698,7 +670,7 @@ async fn auth_response_in_family(
 
   Ok(AuthResponse {
     access_token,
-    token_type: "Bearer",
+    token_type: "Bearer".to_string(),
     expires_at,
     refresh_token,
     user: UserResponse::from(user),

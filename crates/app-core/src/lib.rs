@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mica_infra::{AiConfig, AppConfig, Environment, Mailer, S3Config};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::PgPool;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -118,30 +118,9 @@ pub struct ImportJob {
   pub cancel_requested: bool,
 }
 
-/// One image the import was asked to bring in and left as a link.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ImageFailure {
-  /// The link the block still points at. Also the thing to fetch on a retry.
-  pub url: String,
-  /// The page it sits on — a list of urls with no page names is a list nobody
-  /// can act on.
-  pub page: String,
-  /// Where to patch it. `POST /workspaces/{ws}/documents/{document_id}
-  /// /rehost-image?block_id=…` takes this pair, which is why they are stored
-  /// rather than re-derived by walking every document later.
-  pub document_id: Uuid,
-  pub block_id: String,
-  /// Why it did not land, in the words the fetch itself used.
-  pub reason: String,
-  /// False when the circuit breaker refused it WITHOUT a request, because its
-  /// host had already timed out repeatedly.
-  ///
-  /// Called out separately because it is the most invisible kind: nothing
-  /// failed, it simply never happened, and a per-request error log has no line
-  /// to write. Before this, those were a single aggregate `refused` count in a
-  /// server log the user never sees.
-  pub attempted: bool,
-}
+/// One image the import was asked to bring in and left as a link. Defined in
+/// `mica-api-types`, since the import-progress endpoint sends it to the CLI.
+pub use mica_api_types::ImageFailure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

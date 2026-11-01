@@ -19,6 +19,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
+mica-api-types = { path = "../api-types" }
 mica-interchange = { path = "../interchange" }
 mica-mcp-server = { path = "../mcp-server" }
 reqwest = { workspace = true, features = ["blocking", "json"] }

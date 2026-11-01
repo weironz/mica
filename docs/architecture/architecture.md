@@ -55,6 +55,8 @@ Flutter client  (clients/mica_flutter)
         v
 Rust backend  (crates/)
   api-server   Axum HTTP + WS entrypoint, routes per domain
+  api-types    REST payload types (crate `mica-api-types`), one definition for
+               api-server and cli; Dart decodes the same contracts/*.json gold
   app-core     document/sync domain + AppState (BodyIndex search, sync, store)
   mica-core    storage/transport-agnostic data plane (block DTO, marks, yrs, SQLite)
   md-core      the CommonMark+GFM engine, crate `mica-md` (parse, serialize,

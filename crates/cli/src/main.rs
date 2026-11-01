@@ -1073,12 +1073,18 @@ fn cmd_token_list(cli: &Cli, cfg: &Config) -> Result<()> {
         t.id,
         t.name,
         t.scopes.join(","),
-        t.last_used_at.as_deref().unwrap_or("never"),
-        t.expires_at.as_deref().unwrap_or("never"),
+        t.last_used_at.map_or_else(|| "never".into(), wire_time),
+        t.expires_at.map_or_else(|| "never".into(), wire_time),
       );
     }
   }
   Ok(())
+}
+
+/// A timestamp as the server wrote it on the wire (RFC 3339, UTC, `Z`), which
+/// is what this listing printed when it held the raw strings.
+fn wire_time(t: chrono::DateTime<chrono::Utc>) -> String {
+  t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
 }
 
 fn cmd_token_revoke(cli: &Cli, cfg: &Config, id: Uuid) -> Result<()> {
@@ -1707,8 +1713,9 @@ mod tests {
       name: name.to_string(),
       owner_id: Uuid::nil(),
       role: "owner".to_string(),
-      created_at: String::new(),
-      updated_at: String::new(),
+      created_at: Default::default(),
+      updated_at: Default::default(),
+      page_count: 0,
     }
   }
 

@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/api-server",
+  "crates/api-types",
   "crates/app-core",
   "crates/cli",
   "crates/infra",

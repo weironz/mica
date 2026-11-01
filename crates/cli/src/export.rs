@@ -705,8 +705,9 @@ mod tests {
       name: name.into(),
       owner_id: Uuid::nil(),
       role: "owner".into(),
-      created_at: String::new(),
-      updated_at: String::new(),
+      created_at: Default::default(),
+      updated_at: Default::default(),
+      page_count: 0,
     }
   }
 
@@ -1173,7 +1174,7 @@ mod tests {
       let mut state = server.remote.lock().unwrap();
       let current = state.inventories.get_mut(&WS).unwrap();
       current.structure_revision = "upload-changed-file-list".into();
-      current.files.push(crate::client::ExportFileRevision {
+      current.files.push(mica_api_types::ExportFileRevision {
         file_id: Uuid::from_u128(99),
         revision: "unrelated-upload".into(),
       });

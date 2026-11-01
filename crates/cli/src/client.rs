@@ -7,6 +7,11 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+// The REST payloads, shared with the server (one definition, not a copy).
+pub use mica_api_types::{
+  AuthResponse, BatchOutcome, CreatedToken, ExportManifest, ImageFailure, MeResponse, TokenInfo,
+  TokenListResponse, User, View, ViewListResponse, Workspace, WorkspaceListResponse,
+};
 
 #[cfg(test)]
 mod contract_tests;
@@ -46,87 +51,6 @@ pub struct Client {
   upload: reqwest::blocking::Client,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct User {
-  pub id: Uuid,
-  pub email: String,
-  pub display_name: String,
-  pub created_at: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AuthResponse {
-  pub access_token: String,
-  #[allow(dead_code)]
-  pub token_type: String,
-  pub expires_at: String,
-  pub user: User,
-}
-
-#[derive(Debug, Deserialize)]
-struct MeResponse {
-  user: User,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Workspace {
-  pub id: Uuid,
-  pub name: String,
-  pub owner_id: Uuid,
-  pub role: String,
-  pub created_at: String,
-  pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct ExportManifest {
-  pub version: u32,
-  pub structure_revision: String,
-  pub tree_revision: String,
-  pub manifest: serde_json::Value,
-  pub pages: Vec<ExportPageRevision>,
-  pub files: Vec<ExportFileRevision>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct ExportFileRevision {
-  pub file_id: Uuid,
-  pub revision: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-pub struct ExportPageRevision {
-  pub view_id: Uuid,
-  pub document_id: Uuid,
-  pub revision: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct WorkspaceListResponse {
-  workspaces: Vec<Workspace>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct View {
-  /// The VIEW id — what move / trash / restore address. Distinct from
-  /// [View::object_id], the document a view points at, which is what the read
-  /// and write endpoints take. Confusing the two is the easiest mistake here,
-  /// so `page list` prints both.
-  pub id: Uuid,
-  pub object_id: Uuid,
-  pub object_type: String,
-  pub name: String,
-  #[serde(default)]
-  pub is_deleted: bool,
-  #[serde(default)]
-  pub parent_view_id: Option<Uuid>,
-  /// Size of the stored CRDT state, present only when the listing asked for
-  /// stats. Small means nearly empty; large does NOT mean long (deleted text
-  /// leaves weight behind), so never read it as a word count.
-  #[serde(default)]
-  pub state_bytes: Option<i64>,
-}
-
 #[derive(Debug, Deserialize)]
 struct ImportStart {
   job_id: Uuid,
@@ -158,34 +82,6 @@ pub struct ImportJobView {
   pub image_failures_total: usize,
 }
 
-/// One external image that stayed a link, as the server reports it (app-core
-/// `ImageFailure`). `document_id` + `block_id` are exactly what a retry through
-/// `rehost-image` needs, which is why they are carried here.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ImageFailure {
-  pub url: String,
-  /// The page it sits on — a list of urls with no page names is not actionable.
-  #[serde(default)]
-  pub page: String,
-  pub document_id: Uuid,
-  pub block_id: String,
-  pub reason: String,
-  /// False when a circuit breaker refused it without even making the request.
-  #[serde(default)]
-  pub attempted: bool,
-}
-
-/// What a batch call actually did. `affected` counts every view touched —
-/// including descendants that came along with a folder — so it is normally
-/// larger than the number of ids sent. `skipped` names the requested ids that
-/// were not touched: already in that state, or gone.
-#[derive(Debug, Deserialize, Serialize)]
-pub struct BatchOutcome {
-  pub affected: usize,
-  #[serde(default)]
-  pub skipped: Vec<Uuid>,
-}
-
 /// Filters for [Client::list_views_filtered]; all optional.
 #[derive(Debug, Default)]
 pub struct ViewFilter {
@@ -194,35 +90,6 @@ pub struct ViewFilter {
   pub limit: Option<i64>,
   pub offset: Option<i64>,
   pub with_stats: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct ViewListResponse {
-  views: Vec<View>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CreatedToken {
-  pub id: Uuid,
-  pub name: String,
-  pub scopes: Vec<String>,
-  pub token: String,
-  pub expires_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct TokenInfo {
-  pub id: Uuid,
-  pub name: String,
-  pub scopes: Vec<String>,
-  pub created_at: String,
-  pub last_used_at: Option<String>,
-  pub expires_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenListResponse {
-  tokens: Vec<TokenInfo>,
 }
 
 impl Client {

@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+mica-api-types = { path = "../api-types" }
 mica-markdown = { path = "../markdown" }
 mica-infra = { path = "../infra" }
 # yrs data plane (no `store` feature → no rusqlite on the server). Used server-side

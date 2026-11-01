@@ -153,6 +153,7 @@ docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 ```
 crates/
   api-server     Axum HTTP + WebSocket;迁移;唯一和 Postgres/S3 打交道的地方
+  api-types      REST 载荷类型,api-server 与 cli 共用一份定义
   app-core       文档操作、同步、snapshot↔yrs 桥接
   mica-core      CRDT 文档(yrs)—— from_blocks / to_blocks
   md-core        Markdown 引擎(crate 名 `mica-md`):解析、序列化、HTML —— 唯一一份实现,按 SDK 形态交付

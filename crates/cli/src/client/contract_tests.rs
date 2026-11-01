@@ -79,8 +79,16 @@ fn workspace_list_decodes_every_field() {
     Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap()
   );
   assert_eq!(ws.role, "owner");
-  assert_eq!(ws.created_at, "2026-10-24T01:00:00Z");
-  assert_eq!(ws.updated_at, "2026-10-24T02:00:00Z");
+  assert_eq!(
+    ws.created_at
+      .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+    "2026-10-24T01:00:00Z"
+  );
+  assert_eq!(
+    ws.updated_at
+      .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+    "2026-10-24T02:00:00Z"
+  );
 }
 
 #[test]
@@ -92,7 +100,12 @@ fn user_decodes_every_field() {
   );
   assert_eq!(user.email, "owner@mica.test");
   assert_eq!(user.display_name, "Gold Owner");
-  assert_eq!(user.created_at, "2026-10-24T01:00:00Z");
+  assert_eq!(
+    user
+      .created_at
+      .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+    "2026-10-24T01:00:00Z"
+  );
 }
 
 #[test]

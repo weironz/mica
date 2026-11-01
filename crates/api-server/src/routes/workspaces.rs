@@ -11,6 +11,7 @@ use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
 use crate::routes::auth::user_id_from_headers;
+pub use mica_api_types::{Workspace, WorkspaceListResponse};
 
 #[derive(Debug, Deserialize)]
 pub struct CreateWorkspaceRequest {
@@ -39,11 +40,6 @@ pub struct WorkspaceResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct WorkspaceListResponse {
-  workspaces: Vec<Workspace>,
-}
-
-#[derive(Debug, Serialize)]
 pub struct WorkspaceMemberListResponse {
   members: Vec<WorkspaceMember>,
 }
@@ -51,38 +47,6 @@ pub struct WorkspaceMemberListResponse {
 #[derive(Debug, Serialize)]
 pub struct WorkspaceMemberResponse {
   member: WorkspaceMember,
-}
-
-#[derive(Debug, Serialize, FromRow)]
-pub struct Workspace {
-  id: Uuid,
-  name: String,
-  owner_id: Uuid,
-  role: String,
-  created_at: DateTime<Utc>,
-  updated_at: DateTime<Utc>,
-
-  /// Live pages in this workspace — folders excluded, recycle bin excluded.
-  ///
-  /// Same definition the client's `countPages` uses, deliberately: the sidebar
-  /// switcher already shows a count for the OPEN workspace derived from its
-  /// loaded view tree, and a list endpoint answering with a different number for
-  /// the same workspace would be worse than answering with none. Folders are not
-  /// pages (a tree of 12 rows where 4 are folders must not claim 12 pages — the
-  /// user can count them), and trashed rows are not either.
-  ///
-  /// Only populated by [`list`]; the single-workspace handlers leave it 0 because
-  /// nothing reads it there.
-  ///
-  /// `sqlx(default)` is what actually makes that true. `serde(default)` alone
-  /// governs DESERIALIZING json, which nothing here does — the derived `FromRow`
-  /// still demanded the column, so every query that omits it (create / get /
-  /// update, via `fetch_workspace_for_user{,_in_tx}`) failed to decode and the
-  /// handler answered 500 "no column found for name: page_count". Creating a
-  /// workspace has been broken since the initial commit.
-  #[serde(default)]
-  #[sqlx(default)]
-  page_count: i64,
 }
 
 #[derive(Debug, Serialize, FromRow)]

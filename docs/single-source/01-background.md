@@ -128,7 +128,7 @@ Mica 的约束（C1：服务端必须解析）决定了编解码器必须是 Rus
 
 | 双份 | 现状 | 收成单份的做法 | 风险 | 建议 |
 | --- | --- | --- | --- | --- |
-| 接口数据结构 | **三份**：服务端 `routes/workspaces.rs` 等、CLI `cli/src/client.rs`（又定义一遍 `User`/`Workspace`/`View`）、Dart `api/models.dart`；黄金契约测试 `contracts/*.json` 守着 | ① Rust 公共 crate `mica-api-types`（服务端 + CLI/MCP 共用）② 从 Rust 类型生成 Dart 模型（自写生成脚本，不引入依赖） | 低 | 最先做 |
+| ~~接口数据结构~~ | **Rust 侧已收(2026-11-01)**:`crates/api-types`(`mica-api-types`)定义 User / Auth / Workspace / View / Token / BatchOutcome / ExportManifest / ImageFailure,服务端(`sqlx` feature 派生 `FromRow`)与 CLI 共用;MCP 本就按 JSON 值读。`ImportJob` 留在服务端:它是带持久化的服务端状态,CLI 刻意把 status 当字符串读,旧 CLI 才能容忍新状态。**Dart 不生成**:`api/models.dart` 带客户端语义(icon 去空白、时间转本地、缺省值、`withAvatarVersion` 等),生成器要么丢掉这些、要么自己长成一套方言;Dart 继续由 `contracts/*.json` 黄金契约守 | — | — | Rust 侧已完成;Dart 维持契约守护 |
 | 服务端 / 本地库业务规则 | 页树、回收站各一份（Postgres SQL / SQLite）；第 2 条刚加规则「改一边必须同步另一边」 | 判定逻辑抽成不碰数据库的纯 Rust 模块，存储各自只负责读写 | 中低 | 穿插做 |
 | CRDT 引擎 | yrs（服务端、桌面）vs yjs（Web）；Web 侧 `mica_ydoc.dart` 532 行 + `marks_diff.dart` + `text_diff.dart`（mica-core 镜像）+ yjs 胶水 ≈ 1,000 行 | Web 也用 mica-core 的 wasm，通过与桌面同一套 Dart 接口调用；删 yjs 依赖 | **高**（AppFlowy 全后端 wasm 化后撤回；我们只搬文档核心，范围窄，无先例也未被证伪） | 本专项的 wasm 链稳定后单独立项、先验证 |
 | ~~页面属性(front matter)~~ | **已收(2026-10-31)**:线格式加 `properties_json`,门面加 `properties`,`lib/editor/properties.dart` 只剩类型与薄封装,解析/写回只在 `md-core/src/properties.rs` | — | — | 已完成 |

@@ -1,11 +1,11 @@
-use chrono::{DateTime, Utc};
+pub use mica_api_types::{BatchOutcome as BatchViewsResponse, View, ViewListResponse};
 use mica_app_core::{
   documents::DocumentOperation,
   store::{self, DocumentRecord},
 };
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -73,20 +73,6 @@ pub struct BatchMoveRequest {
   parent_view_id: Option<Uuid>,
 }
 
-/// What a batch operation actually did.
-///
-/// [affected] counts every row the statement touched — for trash and restore
-/// that INCLUDES descendants pulled along with a folder, so it is normally
-/// larger than `view_ids.len()`. [skipped] lists requested ids the statement
-/// did not reach: already in that state, or gone. Echoing the requested count
-/// back as the result would be the lie `reorder_views` was fixed for (P1-3) —
-/// a partial batch reads as a full one and the caller stops looking.
-#[derive(Debug, Serialize)]
-pub struct BatchViewsResponse {
-  affected: usize,
-  skipped: Vec<Uuid>,
-}
-
 /// Ceiling on one batch. Guards the recursive CTE and the request body against a
 /// runaway caller; well above the few hundred a real reorganisation needs.
 const MAX_BATCH_VIEWS: usize = 1000;
@@ -101,11 +87,6 @@ pub struct ImportMarkdownRequest {
   name: String,
   parent_view_id: Option<Uuid>,
   markdown: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ViewListResponse {
-  views: Vec<View>,
 }
 
 /// What emptying the recycle bin actually removed.
@@ -253,34 +234,6 @@ pub(crate) async fn insert_page(
 
   tx.commit().await?;
   Ok((document, view))
-}
-
-#[derive(Debug, Serialize, FromRow)]
-pub struct View {
-  id: Uuid,
-  workspace_id: Uuid,
-  parent_view_id: Option<Uuid>,
-  object_id: Uuid,
-  object_type: String,
-  name: String,
-  icon: Option<String>,
-  position: String,
-  is_deleted: bool,
-  created_by: Uuid,
-  created_at: DateTime<Utc>,
-  updated_at: DateTime<Utc>,
-  /// Size in bytes of this page's stored CRDT state, present only when the
-  /// listing was asked for `with_stats`. Absent everywhere else, so every other
-  /// response keeps its exact shape.
-  ///
-  /// Read it in ONE direction only: **small means nearly empty**, which is what
-  /// makes "find the pages that are just a title" a listing instead of a read
-  /// of every page. Large does NOT mean lots of text — a CRDT keeps tombstones,
-  /// so a page whose content was deleted stays big. Anyone using this as a word
-  /// count will be wrong.
-  #[sqlx(default)]
-  #[serde(skip_serializing_if = "Option::is_none")]
-  state_bytes: Option<i64>,
 }
 
 /// Filters for [list_views]. All optional, and with none of them the response

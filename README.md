@@ -188,6 +188,7 @@ Full notes: [Deployment](docs/ops/deploy.md) · [Backup](docs/ops/backup.md) · 
 crates/
   api-server     Axum HTTP + WebSocket; migrations; the only thing that
                  talks to Postgres and S3
+  api-types      the REST payload types, shared by api-server and cli
   app-core       document operations, sync, snapshot/yrs bridging
   mica-core      the CRDT document (yrs) — from_blocks / to_blocks
   md-core        the Markdown engine (crate `mica-md`): parser, serializer,

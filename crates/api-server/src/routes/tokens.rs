@@ -13,10 +13,10 @@ use axum::{
   http::{HeaderMap, StatusCode},
 };
 use chrono::{DateTime, Duration, Utc};
+pub use mica_api_types::{CreatedToken, TokenInfo, TokenListResponse};
 use mica_app_core::AppState;
 use mica_infra::{ApiError, ApiResult};
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::routes::auth::{
@@ -35,32 +35,6 @@ pub struct CreateTokenRequest {
   scopes: Vec<String>,
   /// Days until expiry; omit for a token that never expires.
   expires_in_days: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreatedToken {
-  id: Uuid,
-  name: String,
-  scopes: Vec<String>,
-  /// The secret — shown ONCE, never retrievable again.
-  token: String,
-  created_at: DateTime<Utc>,
-  expires_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize, FromRow)]
-pub struct TokenInfo {
-  id: Uuid,
-  name: String,
-  scopes: Vec<String>,
-  created_at: DateTime<Utc>,
-  last_used_at: Option<DateTime<Utc>>,
-  expires_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TokenListResponse {
-  tokens: Vec<TokenInfo>,
 }
 
 /// `POST /api/auth/tokens` — mint a new token (returns the secret once).
