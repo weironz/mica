@@ -71,6 +71,7 @@ jobs:
           bash scripts/test-ci-paths.sh
           bash scripts/test-flutter-sdk-reuse.sh
           bash scripts/test-md-wasm-build.sh
+          bash scripts/test-web-entry-cache-check.sh
 
       # Release and CI scripts, exercised against disposable fixtures and a
       # stubbed toolchain/Docker/gh. They are real behavioural tests, not reads
@@ -346,7 +347,9 @@ jobs:
       # Same flags as the release build (justfile build-web / release.yml) so
       # this checks the artifact we actually ship.
       - name: Web compiles (dart2js resolves the web stubs)
-        run: flutter build web --release --no-web-resources-cdn
+        run: |
+          rm -rf build/web/{*,.[!.]*,..?*}
+          flutter build web --release --no-web-resources-cdn
       # CI tracks `channel: stable`, so its engine can be newer than the one the
       # committed web/gfonts mirror was generated from. The engine's fallback
       # shard URLs are version-pinned (notosanssc/v37/…) — if a Flutter bump
@@ -437,6 +440,7 @@ jobs:
       - name: Build the web bundle
         working-directory: clients/mica_flutter
         run: |
+          rm -rf build/web/{*,.[!.]*,..?*}
           flutter pub get
           flutter build web --release --no-web-resources-cdn
 
@@ -493,6 +497,9 @@ jobs:
           if [ -z "$routed" ]; then
             echo "nginx cannot reach the api"; docker logs mica-web-e2e; exit 1
           fi
+
+      - name: Web entry cache and retired-file contract
+        run: bash scripts/web-entry-cache-check.sh http://127.0.0.1:8090
 
       - name: Historical object audit against PostgreSQL and RustFS
         env:

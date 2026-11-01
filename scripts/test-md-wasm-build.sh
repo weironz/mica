@@ -83,6 +83,7 @@ cmp "$fixture/crates/md-core/tests/fixtures/wire/vector.json" \
   "$fixture/clients/mica_flutter/test/support/mica_md/gold/vector.json"
 grep -q '^test --locked -p mica-md --no-default-features --test wire_gold$' "$fixture/invocations"
 grep -q '^build -p mica-md-wasm --target wasm32-unknown-unknown --release --locked$' "$fixture/invocations"
+grep -q '^run --locked -q -p mica-md-wasm --example print_md_fingerprint$' "$fixture/invocations"
 grep -q -- '--remove-name-section --remove-producers-section' "$fixture/invocations"
 printf 'PASS: default gold verified, locked build flags, fingerprint and gold copied\n'
 # Verify the actual recipe expands to a wasm build before the Chrome launch.

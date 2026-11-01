@@ -9,6 +9,11 @@ description = "The document core (mica-core MicaDoc, yrs) for the web client, as
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Keep the output distinct from mica-md-wasm's fingerprint example.
+[[example]]
+name = "print_doc_fingerprint"
+path = "examples/print_fingerprint.rs"
+
 [dependencies]
 # The same document core desktop drives over FFI and the server runs natively.
 # No `store` feature: the browser persists in IndexedDB, not SQLite.

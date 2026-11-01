@@ -28,7 +28,7 @@ bash scripts/test-migration-tracking.sh
 db=$(resolve_database_url)
 [ -n "$db" ] \
   || fail "no reachable Postgres, so the DB-backed tests would SKIP and still report passed. Run 'just dev' first (or export DATABASE_URL)."
-echo "==> DB-backed tests: ON ($db)"
+echo "==> DB-backed tests: ON (reachable test database)"
 
 # 2. The three version numbers must already agree. The reading lives in
 #    scripts/manifest-version.sh because release.yml needs the same answer to
@@ -94,6 +94,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 #    sources (test/support/native_build.dart), so build it first.
 # Web freshness tests must compare a current bundle rather than skip for absence.
 bash scripts/build-md-wasm.sh
+bash scripts/build-doc-wasm.sh
 (cd clients/mica_flutter \
   && "${FLUTTER:-flutter}" pub get --enforce-lockfile \
   && "${FLUTTER:-flutter}" gen-l10n \

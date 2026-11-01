@@ -78,6 +78,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [release.md](ops/release.md) | **发版与构建**(含 Actions 不可用时的本地发布链) |
+| [release-0.14.3-validation.md](ops/release-0.14.3-validation.md) | 0.14.3 发行物、生产与隔离栈验收;入口 404 缺口及修复边界 |
 | [traefik-working-set.md](ops/traefik-working-set.md) | 共享入口最终配置、缺页 I/O 根因、部署保留方式与空闲 TLS / 目录验收 |
 | [deploy.md](ops/deploy.md) | 部署、凭据、管理员、删账号 |
 | [backup.md](ops/backup.md) | 备份与恢复 |

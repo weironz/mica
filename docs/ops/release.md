@@ -49,7 +49,9 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 | 三处版本号一致 + `Cargo.lock` 跟上 | `scripts/release-check.sh` | 2026-08-25 |
 | **本机 Flutter == `.fvmrc`;本机 Rust == `rust-toolchain.toml`;三个镜像同号** | 同上 | 2026-08-27 |
 | DB 集成测试**真的跑了**(本地 Postgres 没起就拒绝发版) | 同上 | 2026-08-25 |
-| `cargo test` / `clippy -D warnings` / `flutter analyze` + `test` | 同上 | 2026-08-25 |
+| `cargo test` / `clippy -D warnings` / `flutter analyze` + `test`;单元测试前构建 `mica_md` 与 `mica_doc` 并验证源码指纹 | 同上 | 2026-08-25;双引擎 2026-11-01 |
+| 浏览器专用套件必须在 Chrome 真跑;结构门禁 | `bash scripts/browser-tests.sh` / `just check-structure` | 发布验收必跑 |
+| 固定入口缓存头、wasm MIME、缺失引擎及退役 yjs 地址 404 | `scripts/web-entry-cache-check.sh <origin>`;CI web-e2e job | 2026-11-01 |
 | **tag 必须与它所在那棵树的版本号一致** | `.github/workflows/release.yml` | 2026-08-26 |
 | **所有构建/推送 job 只消费 `draft` 校验过的版本（`needs: draft`，版本只解析一次）** | `.github/workflows/release.yml` | 2026-10-25 |
 | **带迁移的发布,上线前自动落 `pg_dump` 还原点** | `ansible/deploy.yml` | 2026-08-26 |
@@ -318,7 +320,10 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
 
    (单独跑:`just release-check`。它按 CI 的方式跑同样的门 —— `cargo test --workspace`
    带 `DATABASE_URL`、`clippy -D warnings`、`flutter analyze` + `flutter test`,
-   外加 `Cargo.lock` 不能是脏的。)
+   外加 `Cargo.lock` 的版本一致性。)发布验收还须运行 `just check-structure` 和
+   `bash scripts/browser-tests.sh`(自动发现 browser suite,逐套检查回执,包括 `web_doc_replica_test`);
+   不能用 VM suite 的跳过代替 Chrome 实跑。`mica-core --features store` 与桌面 FFI crate 的测试
+   分别运行,因为根 workspace 不会覆盖它们。只在脚本确实到达末尾成功标记后记录门禁通过。
 4. **桌面端带本地库迁移时**,先跑一次真库升级冒烟:
    `MICA_REAL_STORE=<一份真 store.db 的拷贝> cargo test -p mica-core --features store -- --ignored upgrade_real_store_smoke`。
    它默认 `#[ignore]`、要手动设环境变量,所以不写进这里就等于不存在 —— 而桌面
@@ -396,7 +401,11 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
    > 是怎么消失的」。两条路完全等价,选哪条只取决于 GitHub 在不在。
 
 10. `just verify-prod X.Y.Z` **验证 `/api/health` 真的报这个版本**(workflow 里已内置
-   这一步)。
+   这一步)。随后运行 `bash scripts/web-entry-cache-check.sh <部署 origin>`:两套引擎 JS / wasm 返回 200、
+   `no-cache`(开发服 `no-store` 也接受)、wasm 为 `application/wasm`;缺失引擎文件与 `/yjs_bundle.js` 必须 404。
+   任一失败就把该项记为未通过,不得用 SPA 的 200 当作资源存在。修复已公开镜像时发新补丁版,不覆盖旧 tag / 镜像。
+   镜像构建前两套 wasm 都要重建并运行 `web_engine_fresh_test.dart`;Flutter 构建前清空输出目录内容(保留 bind mount 的目录本身),
+   `Dockerfile.web` 拒绝残留的 `yjs_bundle.js`。
 11. **冒烟测这一版真正改了什么。** `verify-prod` 只断言版本号,证明不了功能。挑一个
    改动前后行为可区分的操作实测 —— 例如 v0.12.7 修的是「文档读取 400」,判据就是
    同一个 `mica_read_document` 调用:部署前报 `bad request: block not found:`,

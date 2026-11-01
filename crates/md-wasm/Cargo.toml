@@ -8,6 +8,11 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Cargo examples share target/debug/examples across the workspace.
+[[example]]
+name = "print_md_fingerprint"
+path = "examples/print_fingerprint.rs"
+
 [dependencies]
 # Single-threaded Web binding: no UUID entropy or platform render dependencies.
 mica-md = { path = "../md-core", default-features = false }

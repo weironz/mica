@@ -467,8 +467,10 @@ jobs:
       - name: Build + stage the web bundle
         if: ${{ matrix.flutter }}
         run: |
+          rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
           cd clients/mica_flutter
           flutter pub get
+          flutter test test/web_engine_fresh_test.dart
           # --no-web-resources-cdn: serve CanvasKit same-origin instead of from
           # www.gstatic.com (CORP-header dependency + unreliable from CN).
           flutter build web --release --no-web-resources-cdn

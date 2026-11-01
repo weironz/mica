@@ -55,7 +55,7 @@ if [ "$part" != flutter ]; then
   # mica_infra::test_database_url(), which panics instead of skipping when this
   # is set — so a URL lost between here and the test process is a failure too.
   export MICA_REQUIRE_DB=1
-  note "DB-backed tests: ON ($DATABASE_URL)"
+  note "DB-backed tests: ON (reachable test database)"
 
   note "rust: build"
   cargo build --workspace
@@ -79,6 +79,7 @@ if [ "$part" != rust ]; then
   require_flutter_pin "CI tests the pin"
   bash scripts/build-md-wasm.sh
   bash scripts/build-doc-wasm.sh
+  rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
   (
     cd clients/mica_flutter
     "$FLUTTER" pub get --enforce-lockfile

@@ -23,8 +23,11 @@ acr=registry.cn-shenzhen.aliyuncs.com/willspace
 hub=willdockerhub
 
 bash scripts/build-md-wasm.sh
+bash scripts/build-doc-wasm.sh
 note "web bundle (flutter build web)"
-(cd clients/mica_flutter && "$FLUTTER" pub get >/dev/null && "$FLUTTER" build web --release --no-web-resources-cdn)
+# Flutter does not remove retired inputs from an incremental output directory.
+rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
+(cd clients/mica_flutter && "$FLUTTER" pub get >/dev/null && "$FLUTTER" test test/web_engine_fresh_test.dart && "$FLUTTER" build web --release --no-web-resources-cdn)
 bash clients/mica_flutter/tool/gfonts/mirror.sh --check
 rm -rf deploy/web && mkdir -p deploy/web
 cp -r clients/mica_flutter/build/web/. deploy/web/

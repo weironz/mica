@@ -31,7 +31,7 @@ wasm_bytes=$(gzip -n -9 -c "$out/mica_doc_bg.wasm" | wc -c)
 js_bytes=$(gzip -n -9 -c "$out/mica_doc.js" | wc -c)
 total_bytes=$((wasm_bytes + js_bytes))
 [ "$total_bytes" -le 262144 ] || fail "mica_doc gzip is $total_bytes B (wasm $wasm_bytes + JS $js_bytes), hard budget 262144 B"
-cargo run --locked -q -p mica-doc-wasm --example print_fingerprint > "$out/SOURCE_FINGERPRINT"
+cargo run --locked -q -p mica-doc-wasm --example print_doc_fingerprint > "$out/SOURCE_FINGERPRINT"
 
 support=clients/mica_flutter/test/support/mica_doc
 rm -rf "$support"

@@ -781,6 +781,8 @@
 
 ## 开发者体验 / CI / Markdown
 
+- ✅ **单一实现专项后续(0.14.3,2026-11-01)**—— 页面属性的 YAML 镜像、HTML 粘贴到 Markdown、导入标题识别均收进 Rust 引擎;接口数据结构共用 `mica-api-types`,页树纯规则共用 `tree_rules`,关系型状态由两端回放 `contracts/tree-rules.json`。Web CRDT 改用 `mica-core` 的 `mica_doc` wasm,两端 Dart 共用 `SyncDocReplica` / `BlockOpMirror`,yjs bundle 已退役。原生无损导出 N1「导入时读 `.mica.json`」已完成;N2–N4 仍在路线图。SDK crate / npm 未发布。发版验收及限制见 [`release-0.14.3-validation.md`](../ops/release-0.14.3-validation.md)。
+
 - ✅ **Markdown 引擎单一实现专项(S0–S5)**(2026-10-26 立项,2026-10-29 G4 通过,v0.14.0)—— Dart 里约 4,000 行
   Markdown 镜像删除,解析 / 序列化 / HTML 只留 Rust 一份(`crates/md-core`,包名 `mica-md`):服务端 / CLI / MCP 原生调用,
   桌面经 FFI、Web 经 wasm,编辑器只在粘贴、复制、导出、AI 这些边界调用;表格单元格内存模型改为「文本 + 标记」,

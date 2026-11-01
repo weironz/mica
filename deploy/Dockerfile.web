@@ -10,7 +10,10 @@ FROM nginx:alpine
 # need the x bit, and an x bit on a static file is inert.
 COPY --chmod=0644 deploy/nginx.conf /etc/nginx/nginx.conf
 COPY --chmod=0755 deploy/web /usr/share/nginx/html
-# Fail the BUILD, not the deploy, if the worker user still cannot read the page.
-RUN su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets' \
-  || { echo "nginx cannot read the web bundle — check the modes above" >&2; exit 1; }
+# Refuse an incomplete bundle or retired yjs output before it reaches a deploy.
+RUN test ! -e /usr/share/nginx/html/yjs_bundle.js \
+  && test -s /usr/share/nginx/html/mica_doc/mica_doc_bg.wasm \
+  && test -s /usr/share/nginx/html/mica_md/mica_md_bg.wasm \
+  && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets' \
+  || { echo "web bundle is incomplete, contains retired yjs output, or is unreadable by nginx" >&2; exit 1; }
 EXPOSE 80

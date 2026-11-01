@@ -77,6 +77,7 @@ seed-dev:
 dev-web:
     bash scripts/build-md-wasm.sh
     bash scripts/build-doc-wasm.sh
+    rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
     cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
     chmod -R a+rX clients/mica_flutter/build/web
 
@@ -226,6 +227,7 @@ build-installer version:
 build-web:
     bash scripts/build-md-wasm.sh
     bash scripts/build-doc-wasm.sh
+    rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
     cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
     rm -rf deploy/web && mkdir -p deploy/web
     cp -r clients/mica_flutter/build/web/. deploy/web/
