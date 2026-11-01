@@ -443,7 +443,10 @@ pub async fn current_payload_versioned(
   document_id: Uuid,
 ) -> ApiResult<Option<(DocumentSnapshotPayload, String)>> {
   let row: Option<(Vec<u8>, String, String)> = sqlx::query_as(
-    "SELECT b.state, md5(b.state) || ':' || md5(d.root_block_id), d.root_block_id
+    "SELECT b.state,
+            md5(b.state) || ':' || md5(d.root_block_id)
+              || coalesce(mica_comments_revision(b.document_id), ''),
+            d.root_block_id
      FROM document_yrs_base b JOIN documents d ON d.id = b.document_id
      WHERE b.document_id = $1",
   )

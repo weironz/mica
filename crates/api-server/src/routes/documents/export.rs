@@ -260,6 +260,7 @@ pub(super) async fn build_export_manifest(
   let revisions: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
     "SELECT v.id, v.object_id,
             coalesce(md5(y.state), 'missing') || ':' || md5(coalesce(d.root_block_id, ''))
+              || coalesce(mica_comments_revision(v.object_id), '')
      FROM views v
      LEFT JOIN documents d ON d.id = v.object_id
      LEFT JOIN document_yrs_base y ON y.document_id = v.object_id
@@ -417,12 +418,21 @@ pub async fn export_page_zip(
   let payloads = std::collections::HashMap::from([(view.object_id.to_string(), payload)]);
   let images =
     fetch_export_images(&state, workspace_id, &payloads, Some(&files), &skip_assets).await?;
-  let entries = mica_interchange::build_incremental_markdown_tree_zip(
+  // Comment threads ride the page's sidecar (manifest v3); the revision above
+  // already covers them (`mica_comments_revision`).
+  let comments: std::collections::HashMap<String, serde_json::Value> =
+    mica_app_core::comments::export_threads(&state.db, view.object_id)
+      .await?
+      .map(|t| (view.object_id.to_string(), t))
+      .into_iter()
+      .collect();
+  let entries = mica_interchange::build_incremental_markdown_tree_zip_with_comments(
     &nodes,
     &payloads,
     &images,
     &view_id.to_string(),
     &skip_assets,
+    &comments,
   );
   let mut response = zip_response(build_zip(&entries), "page.zip");
   response.headers_mut().insert(
@@ -958,11 +968,13 @@ async fn stream_tree_pages(
         },
       );
     }
-    for entry in export.page(
+    let comments = mica_app_core::comments::export_threads(&state.db, uuid).await?;
+    for entry in export.page_with_comments(
       view_id,
       &payload,
       &page_images,
       &std::collections::HashSet::new(),
+      comments.as_ref(),
     ) {
       sink
         .add(&format!("{prefix}{}", entry.name), entry.data)

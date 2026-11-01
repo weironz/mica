@@ -412,6 +412,181 @@ pub async fn delete_thread(db: &PgPool, thread_id: Uuid) -> ApiResult<()> {
 /// "orphan". Those three answers are what the client renders, so they are pinned
 /// here without a database — the Postgres tests (`tests/comments_pg.rs`) cover
 /// the storage half.
+/// A document's comment threads as the export carries them in its
+/// `.mica.json` (manifest v3; format documented on
+/// `mica_interchange::TreeExport::page_with_comments`). None when the document
+/// has no threads — the common case costs one indexed query and no CRDT decode.
+///
+/// Each anchor is resolved against the CURRENT document through
+/// [`anchor_state`], the same decision the comment list makes, so an export
+/// shows what a reader would see: a live range, or `null` for an orphan.
+/// Authors are exported as display names only (never ids or emails): the
+/// archive leaves the instance, and an id means nothing on another one.
+pub async fn export_threads(
+  db: &PgPool,
+  document_id: Uuid,
+) -> ApiResult<Option<serde_json::Value>> {
+  let rows = list_threads(db, document_id).await?;
+  if rows.is_empty() {
+    return Ok(None);
+  }
+  let ids: Vec<Uuid> = rows.iter().map(|t| t.id).collect();
+  let replies = list_comments(db, &ids).await?;
+  let authors: Vec<Uuid> = replies.iter().map(|c| c.author_id).collect();
+  let names: std::collections::HashMap<Uuid, String> =
+    sqlx::query_as::<_, (Uuid, String)>("SELECT id, display_name FROM users WHERE id = ANY($1)")
+      .bind(&authors)
+      .fetch_all(db)
+      .await?
+      .into_iter()
+      .collect();
+  let doc = load_doc(db, document_id).await?;
+  let mut quotes: Option<QuoteIndex> = None;
+  let mut threads = Vec::with_capacity(rows.len());
+  for row in &rows {
+    let state = anchor_state(&doc, &mut quotes, row);
+    let comments: Vec<serde_json::Value> = replies
+      .iter()
+      .filter(|c| c.thread_id == row.id)
+      .map(|c| {
+        let mut v = serde_json::json!({
+          "author": names.get(&c.author_id).cloned().unwrap_or_default(),
+          "body": c.body,
+          "created_at": c.created_at.to_rfc3339(),
+        });
+        if let Some(edited) = c.edited_at {
+          v["edited_at"] = edited.to_rfc3339().into();
+        }
+        v
+      })
+      .collect();
+    let mut thread = serde_json::json!({
+      "status": state.status,
+      "quote": row.quote,
+      "created_at": row.created_at.to_rfc3339(),
+      "anchor": state.range.map(|r| serde_json::json!({
+        "start_block": r.start_block, "start_offset": r.start_offset,
+        "end_block": r.end_block, "end_offset": r.end_offset,
+      })),
+      "comments": comments,
+    });
+    if let Some(resolved) = row.resolved_at {
+      thread["resolved_at"] = resolved.to_rfc3339().into();
+    }
+    threads.push(thread);
+  }
+  Ok(Some(serde_json::Value::Array(threads)))
+}
+
+/// Recreate exported threads (see [`export_threads`]) on a freshly imported
+/// document, all in one transaction. Returns how many threads were written.
+///
+/// The importing user becomes the author of record (the original accounts do
+/// not exist here); each comment whose original author is someone else opens
+/// with an attribution line, so the discussion still says who said what. The
+/// original times and statuses are kept. An anchor is re-taken on the new
+/// document; one that no longer anchors (or an exported orphan) becomes an
+/// orphaned thread on the first block with text, shown against its quote as
+/// orphans always are. A thread with no comments, or a document with no text
+/// at all to hang an orphan on, is skipped rather than invented.
+pub async fn import_threads(
+  db: &PgPool,
+  document_id: Uuid,
+  importer_id: Uuid,
+  importer_name: &str,
+  threads: &serde_json::Value,
+) -> ApiResult<usize> {
+  let Some(list) = threads.as_array().filter(|a| !a.is_empty()) else {
+    return Ok(0);
+  };
+  let doc = load_doc(db, document_id).await?;
+  let fallback = doc
+    .to_blocks()
+    .into_iter()
+    .find(|b| !b.text.is_empty())
+    .and_then(|b| doc.sticky_for_range(&b.id, 0, &b.id, 0));
+  let time = |v: &serde_json::Value| {
+    v.as_str()
+      .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+      .map(|t| t.with_timezone(&Utc))
+  };
+  let mut tx = db.begin().await?;
+  let mut written = 0;
+  for t in list {
+    let Some(comments) = t["comments"].as_array().filter(|c| !c.is_empty()) else {
+      continue;
+    };
+    let anchored = t["anchor"].as_object().and_then(|a| {
+      doc.sticky_for_range(
+        a.get("start_block")?.as_str()?,
+        a.get("start_offset")?.as_u64()? as u32,
+        a.get("end_block")?.as_str()?,
+        a.get("end_offset")?.as_u64()? as u32,
+      )
+    });
+    let (anchor, status) = match (anchored, t["status"].as_str()) {
+      (Some(a), Some(STATUS_RESOLVED)) => (a, STATUS_RESOLVED),
+      (Some(a), _) => (a, STATUS_OPEN),
+      (None, _) => match &fallback {
+        Some(f) => (f.clone(), STATUS_ORPHANED),
+        None => continue,
+      },
+    };
+    let created_at = time(&t["created_at"]).unwrap_or_else(Utc::now);
+    let resolved_at =
+      (status == STATUS_RESOLVED).then(|| time(&t["resolved_at"]).unwrap_or(created_at));
+    let thread_id = Uuid::new_v4();
+    sqlx::query(
+      r#"
+        INSERT INTO comment_threads (id, document_id, anchor_start_block, anchor_start_sticky,
+          anchor_end_block, anchor_end_sticky, quote, status, created_by, created_at,
+          resolved_by, resolved_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      "#,
+    )
+    .bind(thread_id)
+    .bind(document_id)
+    .bind(&anchor.start_block)
+    .bind(&anchor.start_sticky)
+    .bind(&anchor.end_block)
+    .bind(&anchor.end_sticky)
+    .bind(t["quote"].as_str().unwrap_or_default())
+    .bind(status)
+    .bind(importer_id)
+    .bind(created_at)
+    .bind(resolved_at.map(|_| importer_id))
+    .bind(resolved_at)
+    .execute(&mut *tx)
+    .await?;
+    for c in comments {
+      let author = c["author"].as_str().unwrap_or_default().trim();
+      let body = c["body"].as_str().unwrap_or_default();
+      let body = if author.is_empty() || author == importer_name {
+        body.to_string()
+      } else {
+        format!("*{author}:*\n\n{body}")
+      };
+      sqlx::query(
+        r#"
+          INSERT INTO comments (id, thread_id, author_id, body, created_at, edited_at)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+      )
+      .bind(Uuid::new_v4())
+      .bind(thread_id)
+      .bind(importer_id)
+      .bind(body)
+      .bind(time(&c["created_at"]).unwrap_or(created_at))
+      .bind(time(&c["edited_at"]))
+      .execute(&mut *tx)
+      .await?;
+    }
+    written += 1;
+  }
+  tx.commit().await?;
+  Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

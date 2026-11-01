@@ -627,6 +627,98 @@ mod parent_guard_pg {
     );
   }
 
+  /// N2: a page's comment threads go out in its `.mica.json` and come back
+  /// onto a document with the same blocks — anchored on the same text, the
+  /// status kept, a reply by someone else attributed in its body.
+  #[tokio::test]
+  async fn comment_threads_round_trip_through_the_export() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let blocks = serde_json::json!([
+      {"id":"p1","type":"paragraph","text":"the discussed sentence","data":{}}
+    ]);
+    let (_, doc) = seed_document(&db, ws, user, "Talk", blocks.clone()).await;
+    let reviewer = Uuid::new_v4();
+    sqlx::query(
+      "INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'Reviewer','x')",
+    )
+    .bind(reviewer)
+    .bind(format!("{reviewer}@n2.test"))
+    .execute(&db)
+    .await
+    .unwrap();
+    let live = mica_app_core::comments::load_doc(&db, doc).await.unwrap();
+    let anchor = live.sticky_for_range("p1", 4, "p1", 13).unwrap();
+    let (thread, _) = mica_app_core::comments::create_thread(
+      &db,
+      doc,
+      user,
+      &anchor,
+      "discussed",
+      "is this right?",
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO comments(id,thread_id,author_id,body) VALUES($1,$2,$3,'yes')")
+      .bind(Uuid::new_v4())
+      .bind(thread.id)
+      .bind(reviewer)
+      .execute(&db)
+      .await
+      .unwrap();
+    sqlx::query("UPDATE comment_threads SET status='resolved', resolved_at=now() WHERE id=$1")
+      .bind(thread.id)
+      .execute(&db)
+      .await
+      .unwrap();
+
+    // Out: the streamed archive carries them in the sidecar, never the .md.
+    let mut config = mica_infra::AppConfig::from_env().unwrap();
+    config.jwt_secret = "n2-export-test-secret".into();
+    config.environment = mica_infra::Environment::Test;
+    let mut state = AppState::new(
+      config,
+      db.clone(),
+      std::sync::Arc::new(mica_infra::LogMailer),
+    );
+    state.storage = None;
+    let zip = mica_interchange::read_zip(&stream_tree_bytes(&state, ws, None).await).unwrap();
+    let file = |name: &str| {
+      String::from_utf8(zip.iter().find(|e| e.name == name).unwrap().bytes.clone()).unwrap()
+    };
+    assert!(!file("Talk.md").contains("is this right?"));
+    let sidecar: serde_json::Value = serde_json::from_str(&file("Talk.mica.json")).unwrap();
+    let exported = sidecar["comments"].clone();
+    assert_eq!(exported[0]["status"], "resolved");
+    assert_eq!(exported[0]["anchor"]["start_offset"], 4);
+    assert_eq!(exported[0]["comments"][1]["author"], "Reviewer");
+
+    // In: onto a document with the same blocks, as the native import makes.
+    let (_, copy) = seed_document(&db, ws, user, "Talk copy", blocks).await;
+    let n = mica_app_core::comments::import_threads(&db, copy, user, "T", &exported)
+      .await
+      .unwrap();
+    assert_eq!(n, 1);
+    let rows = mica_app_core::comments::list_threads(&db, copy)
+      .await
+      .unwrap();
+    assert_eq!(rows[0].status, "resolved");
+    let range = mica_app_core::comments::load_doc(&db, copy)
+      .await
+      .unwrap()
+      .resolve_range(&rows[0].anchor())
+      .unwrap();
+    assert_eq!((range.start_offset, range.end_offset), (4, 13));
+    let replies = mica_app_core::comments::list_comments(&db, &[rows[0].id])
+      .await
+      .unwrap();
+    assert_eq!(
+      replies[0].body, "is this right?",
+      "the importer's own comment: no attribution"
+    );
+    assert_eq!(replies[1].body, "*Reviewer:*\n\nyes");
+  }
+
   /// D3: the tree exports stream now — one page and one image at a time
   /// instead of every payload and image of the subtree held at once. The
   /// archive must be the very bytes the gathered build produced, for the

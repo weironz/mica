@@ -59,7 +59,16 @@ pub fn build_markdown_tree_zip(
   payloads: &HashMap<String, DocumentSnapshotPayload>,
   images: &HashMap<String, ImageAsset>,
 ) -> Vec<ZipEntry> {
-  build_tree_entries(nodes, root, payloads, images, false, None, &HashSet::new())
+  build_tree_entries(
+    nodes,
+    root,
+    payloads,
+    images,
+    false,
+    None,
+    &HashSet::new(),
+    &HashMap::new(),
+  )
 }
 
 /// Page-at-a-time exports need asset names independent of which other pages
@@ -71,6 +80,26 @@ pub fn build_incremental_markdown_tree_zip(
   view_id: &str,
   omit_assets: &HashSet<String>,
 ) -> Vec<ZipEntry> {
+  build_incremental_markdown_tree_zip_with_comments(
+    nodes,
+    payloads,
+    images,
+    view_id,
+    omit_assets,
+    &HashMap::new(),
+  )
+}
+
+/// [build_incremental_markdown_tree_zip] with each page's comment threads
+/// (`comments`: object id → threads, see [`TreeExport::page_with_comments`]).
+pub fn build_incremental_markdown_tree_zip_with_comments(
+  nodes: &[TreeNode],
+  payloads: &HashMap<String, DocumentSnapshotPayload>,
+  images: &HashMap<String, ImageAsset>,
+  view_id: &str,
+  omit_assets: &HashSet<String>,
+  comments: &HashMap<String, serde_json::Value>,
+) -> Vec<ZipEntry> {
   build_tree_entries(
     nodes,
     None,
@@ -79,6 +108,7 @@ pub fn build_incremental_markdown_tree_zip(
     true,
     Some(view_id),
     omit_assets,
+    comments,
   )
 }
 
@@ -102,8 +132,18 @@ pub fn markdown_tree_manifest(nodes: &[TreeNode]) -> serde_json::Value {
       }
     })
     .collect();
-  serde_json::json!({"version": 2, "generator": "mica", "pages": pages})
+  serde_json::json!({"version": MANIFEST_VERSION, "generator": "mica", "pages": pages})
 }
+
+/// The tree manifest's format version. Readers accept every earlier one:
+/// archives already downloaded are never re-issued.
+/// - v1: the tree by path.
+/// - v2 (2026-08-30): `id` / `parent_id` / `position` / `icon` per entry and a
+///   `<page>.mica.json` beside each `.md`.
+/// - v3 (2026-11-01): a sidecar may carry the page's comment threads
+///   (`comments`, see [`TreeExport::page_with_comments`]); page properties
+///   already travel in the root block's `data.front_matter`.
+pub const MANIFEST_VERSION: u32 = 3;
 
 type TreePage<'a> = (&'a TreeNode, Vec<String>, String);
 
@@ -143,6 +183,9 @@ fn tree_paths<'a>(
   (pages, path_by_view)
 }
 
+// Private plumbing behind the two public builders; a struct would only rename
+// the same eight values.
+#[allow(clippy::too_many_arguments)]
 fn build_tree_entries(
   nodes: &[TreeNode],
   root: Option<&str>,
@@ -151,6 +194,7 @@ fn build_tree_entries(
   stable_assets: bool,
   selected_view: Option<&str>,
   omit_assets: &HashSet<String>,
+  comments: &HashMap<String, serde_json::Value>,
 ) -> Vec<ZipEntry> {
   let mut export = TreeExport::with_options(nodes, root, stable_assets, selected_view);
   let mut entries: Vec<ZipEntry> = Vec::new();
@@ -159,7 +203,13 @@ fn build_tree_entries(
   }
   for (view_id, object_id) in export.documents() {
     if let Some(payload) = payloads.get(object_id) {
-      entries.extend(export.page(view_id, payload, images, omit_assets));
+      entries.extend(export.page_with_comments(
+        view_id,
+        payload,
+        images,
+        omit_assets,
+        comments.get(object_id),
+      ));
     }
   }
   if entries.is_empty() {
@@ -267,7 +317,7 @@ impl<'a> TreeExport<'a> {
       // identity — links between pages, and any external reference to a page,
       // could not survive a round trip. Readers must keep accepting v1: archives
       // already downloaded do not get re-issued.
-      "version": 2,
+      "version": MANIFEST_VERSION,
       "generator": "mica",
       "pages": manifest_pages,
     });
@@ -322,6 +372,25 @@ impl<'a> TreeExport<'a> {
     original: &DocumentSnapshotPayload,
     images: &HashMap<String, ImageAsset>,
     omit_assets: &HashSet<String>,
+  ) -> Vec<ZipEntry> {
+    self.page_with_comments(view_id, original, images, omit_assets, None)
+  }
+
+  /// [`Self::page`] plus the page's comment threads in its `.mica.json`
+  /// (manifest v3). `comments` is a JSON array of threads, each
+  /// `{status, quote, created_at, resolved_at?, anchor: {start_block,
+  /// start_offset, end_block, end_offset} | null, comments: [{author, body,
+  /// created_at, edited_at?}]}`; authors are display names, never account ids
+  /// or emails. The key is written only for a non-empty array, so a page
+  /// without comments exports byte-for-byte as before. Comments never enter
+  /// the `.md`: a comment leaking into Markdown would break the round trip.
+  pub fn page_with_comments(
+    &mut self,
+    view_id: &str,
+    original: &DocumentSnapshotPayload,
+    images: &HashMap<String, ImageAsset>,
+    omit_assets: &HashSet<String>,
+    comments: Option<&serde_json::Value>,
   ) -> Vec<ZipEntry> {
     let Some(&idx) = self.index_by_view.get(view_id) else {
       return Vec::new();
@@ -404,16 +473,19 @@ impl<'a> TreeExport<'a> {
     // importer uses these blocks only while the `.md` still matches: a user who
     // exported to a folder and then edited the Markdown must get their edits,
     // not a stale sidecar (see `import::native_sidecar`).
+    let mut sidecar = serde_json::json!({
+      "schema_version": original.schema_version,
+      "root_block_id": original.root_block_id,
+      "blocks": original.blocks,
+      "assets": img_map,
+      "md_fingerprint": md_fingerprint(&md),
+    });
+    if let Some(threads) = comments.filter(|c| c.as_array().is_some_and(|a| !a.is_empty())) {
+      sidecar["comments"] = threads.clone();
+    }
     entries.push(ZipEntry {
       name: format!("{}.mica.json", path.trim_end_matches(".md")),
-      data: serde_json::to_vec_pretty(&serde_json::json!({
-        "schema_version": original.schema_version,
-        "root_block_id": original.root_block_id,
-        "blocks": original.blocks,
-        "assets": img_map,
-        "md_fingerprint": md_fingerprint(&md),
-      }))
-      .unwrap_or_default(),
+      data: serde_json::to_vec_pretty(&sidecar).unwrap_or_default(),
     });
     entries.push(ZipEntry {
       name: path,
@@ -1053,7 +1125,7 @@ mod tests {
         .data,
     )
     .unwrap();
-    assert_eq!(m["version"], 2);
+    assert_eq!(m["version"], MANIFEST_VERSION, "v3 keeps every v2 field");
     let pages = m["pages"].as_array().unwrap();
     let beta = pages.iter().find(|p| p["title"] == "Beta").unwrap();
     assert_eq!(beta["id"], "b");
@@ -1206,6 +1278,82 @@ mod tests {
       "a stale sidecar must not override the edit"
     );
     assert!(alpha.markdown.contains("edited text"), "{}", alpha.markdown);
+  }
+
+  /// N2: comment threads ride the page's sidecar to the import plan, and page
+  /// properties (the root block's front matter) come back with the native
+  /// blocks. Neither touches the Markdown.
+  #[test]
+  fn comments_and_properties_survive_the_native_round_trip() {
+    let nodes = vec![doc("a", None, "0000000010", "Alpha")];
+    let mut p = payload("discussed text");
+    if let Some(root) = p.blocks.iter_mut().find(|b| b.id == "block_root") {
+      root.data["front_matter"] = serde_json::json!({"status": "draft", "tags": ["x"]});
+    }
+    let threads = serde_json::json!([{
+      "status": "open", "quote": "discussed", "created_at": "2026-11-01T00:00:00Z",
+      "anchor": {"start_block": "block_root", "start_offset": 0, "end_block": "block_root", "end_offset": 9},
+      "comments": [{"author": "Ann", "body": "why?", "created_at": "2026-11-01T00:00:00Z"}]
+    }]);
+    let mut export = TreeExport::new(&nodes, None);
+    let mut entries: Vec<ZipEntry> = export.manifest(|_| true).into_iter().collect();
+    entries.extend(export.page_with_comments(
+      "a",
+      &p,
+      &HashMap::new(),
+      &HashSet::new(),
+      Some(&threads),
+    ));
+    assert!(
+      !body(&entries, "Alpha.md").contains("why?"),
+      "comments never enter the Markdown"
+    );
+    let manifest: serde_json::Value =
+      serde_json::from_str(&body(&entries, "manifest.json")).unwrap();
+    assert_eq!(manifest["version"], MANIFEST_VERSION);
+
+    let raw = entries
+      .into_iter()
+      .map(|e| crate::ZipFileEntry {
+        name: e.name,
+        bytes: e.data,
+      })
+      .collect();
+    let plan = crate::plan_import(raw, false, crate::ImportMode::AsIs).unwrap();
+    let alpha = plan.pages.iter().find(|p| p.title == "Alpha").unwrap();
+    assert_eq!(alpha.comments.as_ref(), Some(&threads));
+    let native = alpha.native.as_ref().unwrap();
+    let root = native
+      .blocks
+      .iter()
+      .find(|b| b.id == native.root_block_id)
+      .unwrap();
+    assert_eq!(root.data["front_matter"]["status"], "draft");
+  }
+
+  #[test]
+  fn a_page_without_comments_writes_no_comments_key() {
+    let nodes = vec![doc("a", None, "0000000010", "Alpha")];
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_a".to_string(), payload("plain"));
+    let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+    let sidecar: serde_json::Value =
+      serde_json::from_str(&body(&entries, "Alpha.mica.json")).unwrap();
+    assert!(sidecar.get("comments").is_none());
+    let empty = serde_json::json!([]);
+    let mut export = TreeExport::new(&nodes, None);
+    let page = export.page_with_comments(
+      "a",
+      &payload("plain"),
+      &HashMap::new(),
+      &HashSet::new(),
+      Some(&empty),
+    );
+    let sidecar: serde_json::Value = serde_json::from_str(&body(&page, "Alpha.mica.json")).unwrap();
+    assert!(
+      sidecar.get("comments").is_none(),
+      "an empty list is not written either"
+    );
   }
 
   /// A foreign archive's `.mica.json` is not trusted: without our manifest's
@@ -1467,13 +1615,16 @@ mod tests {
   /// Re-pinned 2026-11-01 for ONE intended change: every `.mica.json` gained
   /// `md_fingerprint` (the `.md` bytes and the entry order are untouched — the
   /// empty archive, which has no sidecar, kept its value).
+  /// Re-pinned again the same day for manifest v3 (`"version": 3`, nothing
+  /// else changes in an archive without comments; the empty archive kept its
+  /// value once more).
   #[test]
   fn the_split_walk_builds_byte_identical_archives() {
     let (nodes, payloads, images) = pin_fixture();
     let zip = |entries: Vec<ZipEntry>| fnv(&crate::zip::build_zip(&canonical(entries)));
     assert_eq!(
       zip(build_markdown_tree_zip(&nodes, None, &payloads, &images)),
-      0x0549_91a9_a2a3_83ac
+      0xfbdd_f5fa_f490_8ee3
     );
     assert_eq!(
       zip(build_markdown_tree_zip(
@@ -1482,14 +1633,14 @@ mod tests {
         &payloads,
         &images
       )),
-      0xf6a6_de00_fdd7_3206
+      0xa53e_b944_1fb6_a583
     );
     let omit = HashSet::from(["file-2".to_string()]);
     assert_eq!(
       zip(build_incremental_markdown_tree_zip(
         &nodes, &payloads, &images, "b", &omit
       )),
-      0x554b_46e3_fa6b_eba8
+      0x13aa_ac55_04c9_0d57
     );
     assert_eq!(
       zip(build_markdown_tree_zip(

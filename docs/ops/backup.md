@@ -223,9 +223,9 @@ Every workspace/folder export zip now carries both:
 ```
 <page>.md          human-readable Markdown, images as relative links
 <page>.mica.json   {schema_version, root_block_id, blocks[], assets{file_id → path},
-                    md_fingerprint}
+                    md_fingerprint, comments?}
 assets/            the image bytes, de-duplicated
-manifest.json      {version: 2, generator: "mica",
+manifest.json      {version: 3, generator: "mica",
                     pages: [{path, title, type, id, parent_id?, position, icon?}]}
 ```
 
@@ -248,6 +248,17 @@ That happens only while the `.md` is byte-for-byte what was exported
 (`md_fingerprint`): edit a page's Markdown in an exported folder and that edit
 wins. Archives exported before 2026-11-01 carry no fingerprint and import
 through the Markdown as before.
+
+Manifest v3 (2026-11-01) adds a page's comment threads to its `.mica.json`
+(`comments`: status, quote, times, the anchor as block id + offsets, and each
+comment's author display name, body and times; never account ids or emails).
+Page properties already travel in the root block's `front_matter`. Importing
+recreates the threads on the new page, anchored on the same text; the
+importing user is the author of record, and a comment by anyone else opens
+with an attribution line. Comments are server-side only (the local store has
+none), and they never enter the `.md`. A page's export revision covers its
+comments (`mica_comments_revision`, migration 0037), so the CLI mirror
+re-fetches a page whose discussion changed.
 
 There is no importer for the JSON half yet — it is written so the data is not
 lost, not because something reads it back. See `docs/plans/roadmap.md`.

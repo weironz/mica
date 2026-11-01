@@ -11,7 +11,8 @@ pub mod order;
 pub mod zip;
 
 pub use export_tree::{
-  ImageAsset, TreeExport, TreeNode, build_incremental_markdown_tree_zip, build_markdown_tree_zip,
+  ImageAsset, MANIFEST_VERSION, TreeExport, TreeNode, build_incremental_markdown_tree_zip,
+  build_incremental_markdown_tree_zip_with_comments, build_markdown_tree_zip,
   for_each_inline_mark_mut, markdown_tree_manifest, md_fingerprint, safe_segment,
   unique_asset_name,
 };

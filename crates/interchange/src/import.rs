@@ -39,6 +39,11 @@ pub struct PagePlan {
   /// [`native_payload`], which rewires its links to the new view ids. Only for
   /// our own archives: a foreign `.mica.json` is not trusted to mean this.
   pub native: Option<DocumentSnapshotPayload>,
+  /// The page's comment threads from its sidecar (manifest v3), exactly as
+  /// exported (see `TreeExport::page_with_comments`). Present only alongside
+  /// [`Self::native`]: the anchors name block ids, which only the native
+  /// blocks keep. The server recreates them; the local store has no comments.
+  pub comments: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -409,6 +414,7 @@ fn plan_core(
             is_folder: true,
             icon: icons.get(&folder_path).cloned(),
             native: None,
+            comments: None,
           });
           let idx = pages.len() - 1;
           folder_page.insert(key, idx);
@@ -484,6 +490,7 @@ fn plan_core(
             is_folder: true,
             icon: None,
             native: None,
+            comments: None,
           });
           let idx = pages.len() - 1;
           folder_page.insert(own_key.clone(), idx);
@@ -498,6 +505,11 @@ fn plan_core(
       parent = Some(folder_idx);
     }
 
+    let native = if mica_export {
+      native_sidecar(&block_jsons, path, markdown)
+    } else {
+      None
+    };
     pages.push(PagePlan {
       archive_path: Some(path.clone()),
       title,
@@ -505,11 +517,8 @@ fn plan_core(
       markdown: body,
       is_folder: false,
       icon: icons.get(path).cloned(),
-      native: if mica_export {
-        native_sidecar(&block_jsons, path, markdown)
-      } else {
-        None
-      },
+      native: native.as_ref().map(|(p, _)| p.clone()),
+      comments: native.and_then(|(_, c)| c),
     });
     page_by_path.insert(path.clone(), pages.len() - 1);
   }
@@ -585,6 +594,7 @@ fn wrap_in_container(plan: &mut ImportPlan, name: String) {
     is_folder: true,
     icon: None,
     native: None,
+    comments: None,
   });
   for p in plan.pages.drain(..) {
     let parent = Some(p.parent.map(|i| i + 1).unwrap_or(0));
@@ -617,7 +627,7 @@ fn native_sidecar(
   block_jsons: &HashMap<String, Vec<u8>>,
   md_path: &str,
   md: &str,
-) -> Option<DocumentSnapshotPayload> {
+) -> Option<(DocumentSnapshotPayload, Option<serde_json::Value>)> {
   let bytes = block_jsons.get(&format!("{}.mica.json", strip_md_ext(md_path)))?;
   let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
   if value.get("md_fingerprint").and_then(|v| v.as_str())
@@ -629,6 +639,10 @@ fn native_sidecar(
     .get("assets")
     .and_then(|a| serde_json::from_value(a.clone()).ok())
     .unwrap_or_default();
+  let comments = value
+    .get("comments")
+    .filter(|c| c.as_array().is_some_and(|a| !a.is_empty()))
+    .cloned();
   let mut payload: DocumentSnapshotPayload = serde_json::from_value(value).ok()?;
   if payload.blocks.is_empty() {
     return None;
@@ -652,7 +666,7 @@ fn native_sidecar(
     data.remove("name");
     data.insert("url".into(), serde_json::Value::String(path));
   }
-  Some(payload)
+  Some((payload, comments))
 }
 
 /// Page `idx`'s native blocks (see [`PagePlan::native`]) with every

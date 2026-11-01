@@ -789,6 +789,14 @@ async fn run_import(
   // Every block left pointing at somebody else's server, with enough to fix it.
   let mut image_failures: Vec<mica_app_core::ImageFailure> = Vec::new();
   let client = crate::http_client::outbound_client();
+  // The importer's display name: comment threads restored from our own
+  // archives (manifest v3) are authored by the importing user, and a comment
+  // by anyone else keeps an attribution line instead.
+  let importer_name: String = sqlx::query_scalar("SELECT display_name FROM users WHERE id = $1")
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or_default();
 
   // Fetch every external image BEFORE walking the pages, several at a time.
   //
@@ -950,6 +958,23 @@ async fn run_import(
       &payload,
     )
     .await?;
+
+    // Comment threads from a native page (N2). Their anchors name block ids,
+    // which only the native path keeps, so the planner hands them over only
+    // with native blocks. A failure here costs the comments, not the page.
+    if let Some(threads) = &page.comments {
+      if let Err(error) = mica_app_core::comments::import_threads(
+        &state.db,
+        document_id,
+        user_id,
+        &importer_name,
+        threads,
+      )
+      .await
+      {
+        tracing::warn!(%document_id, ?error, "import: comment threads not restored");
+      }
+    }
 
     for (url, block_id, reason, attempted) in page_failures {
       image_failures.push(mica_app_core::ImageFailure {
