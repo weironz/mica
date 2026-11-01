@@ -21,6 +21,7 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use crate::doc::MicaDoc;
 use crate::store::{LocalStore, LocalView, StoreError};
+use crate::tree_rules::{judge_parent, MissingParent, ParentLookup, ParentRefusal};
 
 /// What [`LocalStore::clone_view`] produced: where the copy landed, the name it
 /// settled on after sibling dedup, and how many documents were actually copied
@@ -33,22 +34,8 @@ pub struct CloneViewOutcome {
   pub docs: u32,
 }
 
-/// `base` if free among `siblings`, else `base 2`, `base 3`, … — the number is
-/// locale-neutral, the caller supplies the localized base.
-///
-/// Same rule as the server's `dedup_sibling_name` (api-server documents.rs) so
-/// a page cloned offline and one cloned in the cloud settle on the same name.
-/// Kept a free function: pure, and that is what makes it testable without a
-/// store.
-pub fn dedup_sibling_name(base: &str, siblings: &[String]) -> String {
-  if !siblings.iter().any(|s| s == base) {
-    return base.to_string();
-  }
-  (2..)
-    .map(|n| format!("{base} {n}"))
-    .find(|c| !siblings.iter().any(|s| s == c))
-    .expect("an unused suffix always exists")
-}
+/// Sibling-name dedup, shared with the server's clone (`tree_rules`).
+pub use crate::tree_rules::dedup_sibling_name;
 
 /// The full column list in the same order [`LocalStore::list_views`] reads
 /// them, shared by the row queries below.
@@ -83,6 +70,14 @@ impl LocalStore {
     let Some(parent_id) = parent_id else {
       return Ok(true);
     };
+    let lookup = self.parent_lookup(origin, parent_id)?;
+    Ok(judge_parent(false, lookup, MissingParent::Accept).is_ok())
+  }
+
+  /// What a would-be parent is, by ONE indexed lookup. A trashed folder still
+  /// reads as a folder here, as it always has locally; the server, which
+  /// filters `is_deleted`, refuses it as missing.
+  fn parent_lookup(&self, origin: &str, parent_id: &str) -> Result<ParentLookup, StoreError> {
     let object_type: Option<String> = self
       .conn
       .query_row(
@@ -91,7 +86,11 @@ impl LocalStore {
         |r| r.get(0),
       )
       .optional()?;
-    Ok(object_type.as_deref().is_none_or(|t| t == "folder"))
+    Ok(match object_type.as_deref() {
+      None => ParentLookup::Missing,
+      Some("folder") => ParentLookup::Folder,
+      Some(_) => ParentLookup::NotFolder,
+    })
   }
 
   /// The page-tree rule for putting `view_id` under `parent_id`, enforced by
@@ -117,14 +116,15 @@ impl LocalStore {
     let Some(parent_id) = parent_id else {
       return Ok(());
     };
-    let refuse = |reason| StoreError::InvalidParent {
+    let refuse = |why: ParentRefusal| StoreError::InvalidParent {
       view_id: view_id.to_owned(),
       parent_id: parent_id.to_owned(),
-      reason,
+      reason: why.reason(),
     };
-    if !self.parent_accepts_children(origin, Some(parent_id))? {
-      return Err(refuse("only a folder can hold pages"));
-    }
+    // The decision is shared with the server (`tree_rules`); only the facts
+    // are read here.
+    let lookup = self.parent_lookup(origin, parent_id)?;
+    judge_parent(view_id == parent_id, lookup, MissingParent::Accept).map_err(refuse)?;
     // Walk up from the new parent; meeting `view_id` means the move would
     // close a loop. UNION dedup ends the walk on a cycle already on disk.
     let loops: bool = self.conn.query_row(
@@ -139,7 +139,7 @@ impl LocalStore {
       |r| r.get(0),
     )?;
     if loops {
-      return Err(refuse("a view cannot move into its own subtree"));
+      return Err(refuse(ParentRefusal::IntoOwnSubtree));
     }
     Ok(())
   }
@@ -1034,17 +1034,6 @@ mod tests {
     );
     assert!(copies.iter().all(|v| !v.trashed));
     let _ = out;
-  }
-
-  #[test]
-  fn dedup_fills_gaps_like_the_server() {
-    assert_eq!(dedup_sibling_name("日志方案 副本", &[]), "日志方案 副本");
-    let sibs = vec!["Notes".to_string()];
-    assert_eq!(dedup_sibling_name("Notes", &sibs), "Notes 2");
-    let sibs = vec!["Notes".into(), "Notes 2".into(), "Notes 3".into()];
-    assert_eq!(dedup_sibling_name("Notes", &sibs), "Notes 4");
-    let sibs = vec!["Notes".into(), "Notes 3".into()];
-    assert_eq!(dedup_sibling_name("Notes", &sibs), "Notes 2");
   }
 
   #[test]

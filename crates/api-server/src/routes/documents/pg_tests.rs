@@ -2412,7 +2412,8 @@ mod parent_guard_pg {
       .unwrap_err();
 
     assert!(
-      matches!(err, ApiError::BadRequest(ref msg) if msg.contains("descendant")),
+      matches!(err, ApiError::BadRequest(ref msg)
+        if msg.contains(mica_core::tree_rules::ParentRefusal::IntoOwnSubtree.reason())),
       "{err:?}"
     );
     let parent: Option<Uuid> = sqlx::query_scalar("SELECT parent_view_id FROM views WHERE id = $1")

@@ -3,6 +3,7 @@ use mica_app_core::{
   documents::DocumentOperation,
   store::{self, DocumentRecord},
 };
+use mica_core::tree_rules::{MissingParent, ParentLookup, ParentRefusal, judge_parent};
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -524,26 +525,51 @@ pub(crate) async fn ensure_parent_accepts_children(
   workspace_id: Uuid,
   parent_view_id: Uuid,
 ) -> ApiResult<()> {
-  let object_type = sqlx::query_scalar::<_, String>(
-    r#"
-      SELECT object_type::text
-      FROM views
-      WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
-    "#,
-  )
-  .bind(parent_view_id)
-  .bind(workspace_id)
-  .fetch_optional(db)
-  .await?
-  .ok_or(ApiError::NotFound)?;
+  check_parent(db, workspace_id, parent_view_id, false).await
+}
 
-  if object_type != "folder" {
-    return Err(ApiError::BadRequest(
-      "parent_view_id must be a folder — pages cannot contain pages".to_string(),
-    ));
+/// [ensure_parent_accepts_children] plus the self-parent check, in the order
+/// `tree_rules::judge_parent` applies them. The decision is shared with the
+/// local store; only the lookup is Postgres. An unknown or trashed parent is
+/// a 404 here (the server is the authority on its tree), which is the one
+/// place the local store's policy differs.
+pub(crate) async fn check_parent(
+  db: impl sqlx::PgExecutor<'_>,
+  workspace_id: Uuid,
+  parent_view_id: Uuid,
+  is_self: bool,
+) -> ApiResult<()> {
+  let lookup = if is_self {
+    // Refused before any read; the lookup result would not matter.
+    ParentLookup::Missing
+  } else {
+    let object_type = sqlx::query_scalar::<_, String>(
+      r#"
+        SELECT object_type::text
+        FROM views
+        WHERE id = $1 AND workspace_id = $2 AND is_deleted = false
+      "#,
+    )
+    .bind(parent_view_id)
+    .bind(workspace_id)
+    .fetch_optional(db)
+    .await?;
+    match object_type.as_deref() {
+      None => ParentLookup::Missing,
+      Some("folder") => ParentLookup::Folder,
+      Some(_) => ParentLookup::NotFolder,
+    }
+  };
+  judge_parent(is_self, lookup, MissingParent::Refuse).map_err(parent_refused)
+}
+
+/// A shared [ParentRefusal] as this API's error: an unknown parent is 404,
+/// every other refusal a 400 naming the field.
+pub(crate) fn parent_refused(why: ParentRefusal) -> ApiError {
+  match why {
+    ParentRefusal::NotFound => ApiError::NotFound,
+    other => ApiError::BadRequest(format!("parent_view_id: {}", other.reason())),
   }
-
-  Ok(())
 }
 
 /// Serialize tree-reparenting within a workspace for the rest of the
@@ -575,13 +601,13 @@ async fn ensure_valid_parent_view(
   view_id: Uuid,
   parent_view_id: Uuid,
 ) -> ApiResult<()> {
-  if parent_view_id == view_id {
-    return Err(ApiError::BadRequest(
-      "parent_view_id cannot be the same view".to_string(),
-    ));
-  }
-
-  ensure_parent_accepts_children(&mut *db, workspace_id, parent_view_id).await?;
+  check_parent(
+    &mut *db,
+    workspace_id,
+    parent_view_id,
+    parent_view_id == view_id,
+  )
+  .await?;
 
   // `CYCLE`: without it this walk has no way home if a cycle ever lands in
   // the table (one pre-cycle-guard row pair, one stray trigger, one dbadmin
@@ -614,9 +640,7 @@ async fn ensure_valid_parent_view(
   .await?;
 
   if would_cycle {
-    return Err(ApiError::BadRequest(
-      "parent_view_id cannot be a descendant view".to_string(),
-    ));
+    return Err(parent_refused(ParentRefusal::IntoOwnSubtree));
   }
 
   Ok(())
@@ -699,6 +723,8 @@ macro_rules! batch_view_handler {
 
 #[cfg(test)]
 mod pg_tests;
+#[cfg(test)]
+mod tree_rules_pg_tests;
 
 #[cfg(test)]
 mod transfer_flow_pg_tests;

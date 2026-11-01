@@ -1,0 +1,79 @@
+{
+  "_comment": "Page-tree rules the server (Postgres) and the local store (SQLite) both implement in SQL. Each scenario is replayed against BOTH: crates/api-server/src/routes/documents/tree_rules_pg_tests.rs and crates/mica-core/tests/tree_rules.rs. A rule changed on one side only fails the other side's replay. tree: views created in order (kind folder|page, parent by name). ops: trash / restore name a view; move puts `id` under `parent` (null = top level) and may expect `refused` (a tree_rules::ParentRefusal code). expect: the final state; `live` maps every live view to its parent, `trashed` lists the rest.",
+  "scenarios": [
+    {
+      "name": "trashing a folder takes its subtree with it",
+      "tree": [
+        { "id": "F", "kind": "folder", "parent": null },
+        { "id": "G", "kind": "folder", "parent": "F" },
+        { "id": "A", "kind": "page", "parent": "G" }
+      ],
+      "ops": [{ "op": "trash", "id": "G" }],
+      "expect": { "live": { "F": null }, "trashed": ["A", "G"] }
+    },
+    {
+      "name": "restoring a folder brings back only what was trashed with it",
+      "tree": [
+        { "id": "F", "kind": "folder", "parent": null },
+        { "id": "A", "kind": "page", "parent": "F" },
+        { "id": "B", "kind": "page", "parent": "F" }
+      ],
+      "ops": [
+        { "op": "trash", "id": "B" },
+        { "op": "trash", "id": "F" },
+        { "op": "restore", "id": "F" }
+      ],
+      "expect": { "live": { "F": null, "A": "F" }, "trashed": ["B"] }
+    },
+    {
+      "name": "restoring a page whose folder is still in the bin lifts it to the top",
+      "tree": [
+        { "id": "F", "kind": "folder", "parent": null },
+        { "id": "A", "kind": "page", "parent": "F" }
+      ],
+      "ops": [
+        { "op": "trash", "id": "A" },
+        { "op": "trash", "id": "F" },
+        { "op": "restore", "id": "A" }
+      ],
+      "expect": { "live": { "A": null }, "trashed": ["F"] }
+    },
+    {
+      "name": "a page cannot hold pages",
+      "tree": [
+        { "id": "P", "kind": "page", "parent": null },
+        { "id": "A", "kind": "page", "parent": null }
+      ],
+      "ops": [{ "op": "move", "id": "A", "parent": "P", "refused": "not_a_folder" }],
+      "expect": { "live": { "P": null, "A": null }, "trashed": [] }
+    },
+    {
+      "name": "a folder cannot move into its own subtree",
+      "tree": [
+        { "id": "F", "kind": "folder", "parent": null },
+        { "id": "G", "kind": "folder", "parent": "F" }
+      ],
+      "ops": [{ "op": "move", "id": "F", "parent": "G", "refused": "into_own_subtree" }],
+      "expect": { "live": { "F": null, "G": "F" }, "trashed": [] }
+    },
+    {
+      "name": "a view cannot be its own parent",
+      "tree": [{ "id": "F", "kind": "folder", "parent": null }],
+      "ops": [{ "op": "move", "id": "F", "parent": "F", "refused": "self_parent" }],
+      "expect": { "live": { "F": null }, "trashed": [] }
+    },
+    {
+      "name": "moving into a folder and back out to the top",
+      "tree": [
+        { "id": "F", "kind": "folder", "parent": null },
+        { "id": "A", "kind": "page", "parent": null },
+        { "id": "B", "kind": "page", "parent": "F" }
+      ],
+      "ops": [
+        { "op": "move", "id": "A", "parent": "F" },
+        { "op": "move", "id": "B", "parent": null }
+      ],
+      "expect": { "live": { "F": null, "A": "F", "B": null }, "trashed": [] }
+    }
+  ]
+}

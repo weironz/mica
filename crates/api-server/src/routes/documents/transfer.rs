@@ -9,6 +9,9 @@ use mica_app_core::{
   documents::DocumentSnapshotPayload,
   store::{self, DocumentRecord},
 };
+// Sibling-name dedup is the same function the local store's clone uses, so a
+// page cloned offline and one cloned here settle on the same name.
+use mica_core::tree_rules::{ParentRefusal, dedup_sibling_name};
 use mica_infra::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
@@ -117,12 +120,8 @@ pub async fn reorder_views(
   }
 
   if let Some(parent) = payload.parent_view_id {
-    if payload.ordered_view_ids.contains(&parent) {
-      return Err(ApiError::BadRequest(
-        "parent_view_id cannot be the same view".to_string(),
-      ));
-    }
-    ensure_parent_accepts_children(&mut *tx, workspace_id, parent).await?;
+    let is_self = payload.ordered_view_ids.contains(&parent);
+    check_parent(&mut *tx, workspace_id, parent, is_self).await?;
 
     let would_cycle = sqlx::query_scalar::<_, bool>(
       r#"
@@ -150,9 +149,7 @@ pub async fn reorder_views(
     .await?;
 
     if would_cycle {
-      return Err(ApiError::BadRequest(
-        "parent_view_id cannot be a descendant view".to_string(),
-      ));
+      return Err(parent_refused(ParentRefusal::IntoOwnSubtree));
     }
   }
 
@@ -1241,19 +1238,6 @@ pub async fn clone_view(
   }))
 }
 
-/// Pick a sibling-unique name: `base` if free, else `base 2`, `base 3`, … The
-/// number is locale-neutral, so the caller supplies the localized base ("X 副本"
-/// / "X copy") and we only break ties.
-fn dedup_sibling_name(base: &str, siblings: &[String]) -> String {
-  if !siblings.iter().any(|s| s == base) {
-    return base.to_string();
-  }
-  (2..)
-    .map(|n| format!("{base} {n}"))
-    .find(|c| !siblings.iter().any(|s| s == c))
-    .expect("an unused suffix always exists")
-}
-
 /// The `mica://page/<viewId>` targets referenced by a block's link marks.
 ///
 /// Re-exported from app-core, which owns it because the write paths there derive
@@ -1522,30 +1506,6 @@ mod tests {
       marks[1]["href"],
       serde_json::json!(format!("mica://page/{outside}")),
       "a link to a page left behind is preserved (dangles, warned)",
-    );
-  }
-
-  #[test]
-  fn dedup_sibling_name_only_numbers_on_collision() {
-    // Free name → used as-is.
-    assert_eq!(dedup_sibling_name("日志方案 副本", &[]), "日志方案 副本");
-    // Collision → first free numbered suffix (locale-neutral number).
-    assert_eq!(
-      dedup_sibling_name("日志方案 副本", &["日志方案 副本".into()]),
-      "日志方案 副本 2"
-    );
-    // Skips taken numbers, does not reuse them.
-    assert_eq!(
-      dedup_sibling_name(
-        "X 副本",
-        &["X 副本".into(), "X 副本 2".into(), "X 副本 4".into()]
-      ),
-      "X 副本 3"
-    );
-    // Unrelated siblings never force a suffix.
-    assert_eq!(
-      dedup_sibling_name("X 副本", &["Y".into(), "Z".into()]),
-      "X 副本"
     );
   }
 

@@ -17,6 +17,8 @@ pub mod search_text;
 #[cfg(feature = "store")]
 pub mod store;
 pub mod text_diff;
+/// Page-tree decisions shared by the server and the local store (pure).
+pub mod tree_rules;
 /// Transactional page-tree (view) subtree operations over the local store —
 /// one recursive CTE + one transaction per operation (issue #67).
 #[cfg(feature = "store")]
