@@ -42,7 +42,7 @@ void main() {
         },
         clientId: BigInt.one,
         onReady: (_, _) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
       );
       session.connect();
       // 连不上 → onDone → 退避重连 → 再次 connect()。轮询到第二次尝试发生为止,
@@ -73,7 +73,7 @@ void main() {
         uri: () async => throw StateError('signed out'),
         clientId: BigInt.one,
         onReady: (_, _) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
       );
       session.connect();
       await Future<void>.delayed(const Duration(milliseconds: 300));

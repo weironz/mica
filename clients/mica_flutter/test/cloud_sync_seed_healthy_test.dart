@@ -97,7 +97,7 @@ void main() {
           readyRoot = root;
           readyBlocks = blocks;
         },
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
         persistence: _LoadedStore(state, 3),
         documentId: 'doc-1',
       );
@@ -182,7 +182,7 @@ void main() {
         clientId: BigInt.from(9),
         persistence: _CorruptStore(),
         onReady: (_, __) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
       );
       addTearDown(session.dispose);
       session.connect();

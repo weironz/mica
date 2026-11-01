@@ -123,7 +123,7 @@ class SyncReconcileController extends ChangeNotifier {
   final Future<void> Function(String workspaceId) refreshTree;
 
   /// Rebuild the selected bootstrap from the replica's blocks (onReady /
-  /// onRemoteBlocks) — stays in the State: a setState over the ACTIVE tab's
+  /// onRemoteChange) — stays in the State: a setState over the ACTIVE tab's
   /// editor body.
   final void Function(String documentId) applyCloudBlocks;
 
@@ -415,7 +415,7 @@ class SyncReconcileController extends ChangeNotifier {
         // resolved once it is bootstrapped.
         unawaited(loadComments(documentId));
       },
-      onRemoteBlocks: (_) => applyCloudBlocks(documentId),
+      onRemoteChange: () => applyCloudBlocks(documentId),
       onFault: (reason, count) => onCloudSyncFault(documentId, reason, count),
       // Reaching the server means we're back online — leave the P1c offline-nav
       // fallback (refetch workspaces/roles) AND drain every other cloud doc's
@@ -758,7 +758,7 @@ class SyncReconcileController extends ChangeNotifier {
       },
       clientId: clientId,
       onReady: (_, _) {},
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: store,
     );
     try {

@@ -3665,7 +3665,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
           ),
           clientId: clientId,
           onReady: (_, _) {},
-          onRemoteBlocks: (_) {},
+          onRemoteChange: () {},
         );
         try {
           yrs.connect();

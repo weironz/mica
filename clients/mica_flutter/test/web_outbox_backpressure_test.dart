@@ -98,7 +98,7 @@ void main() {
         uri: () async => Uri.parse('ws://127.0.0.1:$port/ws/doc'),
         clientId: BigInt.one,
         onReady: (_, _) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
         restoreUnacked: [
           for (var i = 0; i < n; i++) Uint8List.fromList([i]),
         ],

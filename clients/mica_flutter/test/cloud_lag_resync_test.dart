@@ -18,7 +18,7 @@ CloudSyncSession _session() => CloudSyncSession(
       uri: () async => Uri.parse('ws://example.invalid/doc'),
       clientId: BigInt.from(1),
       onReady: (_, _) {},
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
     );
 
 void main() {

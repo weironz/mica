@@ -35,6 +35,9 @@ extension type _DocClass._(JSObject _) implements JSObject {
 extension type _JsDoc._(JSObject _) implements JSObject {
   external String rootBlockId();
   external String toBlocksJson();
+  external void trackChanges();
+  external String? takeChangedBlockIds();
+  external String blocksJson(String idsJson);
   external JSUint8Array encodeState();
   external JSUint8Array stateVector();
   external JSUint8Array encodeDiffSince(JSUint8Array stateVector);
@@ -84,9 +87,8 @@ Future<void> initDocEngine() async {
 }
 
 /// Why the engine is unavailable, or null when it loaded.
-String? get docEngineError => _micaDoc == null
-    ? (_loadError ?? 'initDocEngine() was not awaited')
-    : null;
+String? get docEngineError =>
+    _micaDoc == null ? (_loadError ?? 'initDocEngine() was not awaited') : null;
 
 /// The engine's build info (`source_fingerprint`), for freshness checks.
 Map<String, dynamic>? docEngineInfo() {
@@ -121,7 +123,10 @@ class MicaDocWasm implements BlockOpTarget {
 
   /// A document holding exactly the given blocks; null when the engine is not
   /// loaded or the JSON is not a block list.
-  static MicaDocWasm? fromBlocks(String rootId, List<Map<String, dynamic>> blocks) {
+  static MicaDocWasm? fromBlocks(
+    String rootId,
+    List<Map<String, dynamic>> blocks,
+  ) {
     final ns = _micaDoc;
     if (ns == null) return null;
     final doc = ns.docClass.fromBlocksJson(rootId, jsonEncode(blocks));
@@ -138,6 +143,17 @@ class MicaDocWasm implements BlockOpTarget {
   String toBlocksJson() => _doc.toBlocksJson();
   List<Map<String, dynamic>> toBlocks() =>
       (jsonDecode(_doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
+
+  /// See mica-core `track_changes` / `take_changed_block_ids`.
+  void trackChanges() => _doc.trackChanges();
+  List<String>? takeChangedBlockIds() {
+    final json = _doc.takeChangedBlockIds();
+    return json == null ? null : (jsonDecode(json) as List).cast<String>();
+  }
+
+  List<Map<String, dynamic>> blocksById(List<String> ids) =>
+      (jsonDecode(_doc.blocksJson(jsonEncode(ids))) as List)
+          .cast<Map<String, dynamic>>();
   Uint8List encodeState() => _doc.encodeState().toDart;
   Uint8List stateVector() => _doc.stateVector().toDart;
   Uint8List encodeDiffSince(Uint8List sv) =>

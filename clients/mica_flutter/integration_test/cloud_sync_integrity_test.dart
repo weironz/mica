@@ -37,7 +37,7 @@ void main() {
       uri: () async => server.uri,
       clientId: BigInt.from(7),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       onFault: (reason, _) => faults.add(reason),
     );
     session.connect();
@@ -68,7 +68,7 @@ void main() {
       uri: () async => server.uri,
       clientId: BigInt.from(9),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       restoreUnacked: [diff],
       onPersistUnacked: persisted.add,
     );
@@ -106,7 +106,7 @@ void main() {
       uri: () async => server.uri,
       clientId: BigInt.from(11),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       onPersistUnacked: persisted.add,
     );
     session.connect();
@@ -138,11 +138,13 @@ void main() {
 
     var applied = false;
     var ready = false;
-    final session = CloudSyncSession(
+    late final CloudSyncSession session;
+    session = CloudSyncSession(
       uri: () async => server.uri,
       clientId: BigInt.from(13),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (blocks) {
+      onRemoteChange: () {
+        final blocks = session.childBlocks();
         final a = blocks.firstWhere((b) => b['id'] == 'a',
             orElse: () => const <String, dynamic>{});
         if (a['text'] == 'hi!!') applied = true;
@@ -169,7 +171,7 @@ void main() {
       uri: () async => server.uri,
       clientId: BigInt.from(21),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
     );
     session.connect();
 
@@ -201,7 +203,7 @@ void main() {
       uri: () async => server.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: adapter, // desktop → append-log outbox, not the prefs queue
     );
     session.connect();
@@ -262,7 +264,7 @@ void main() {
       uri: () async => server1.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready1 = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: StoreCloudDocStore(store, 'local', 'doc-m'),
     );
     s1.connect();
@@ -286,7 +288,7 @@ void main() {
       uri: () async => server2.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready2 = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: StoreCloudDocStore(store, 'local', 'doc-m'),
     );
     s2.connect();
@@ -329,7 +331,7 @@ void main() {
       uri: () async => server1.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready1 = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: StoreCloudDocStore(store, 'local', 'doc-d'),
     );
     s1.connect();
@@ -357,7 +359,7 @@ void main() {
       uri: () async => server2.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready2 = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: StoreCloudDocStore(store, 'local', 'doc-d'),
     );
     s2.connect();
@@ -390,7 +392,7 @@ void main() {
       uri: () async => server1.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready1 = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: StoreCloudDocStore(store, 'local', 'doc-r'),
     );
     s1.connect();
@@ -412,7 +414,7 @@ void main() {
       uri: () async => server2.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready2 = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: StoreCloudDocStore(store, 'local', 'doc-r'),
     );
     s2.connect();
@@ -444,7 +446,7 @@ void main() {
       uri: () async => server.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: adapter,
     );
     session.connect();
@@ -489,7 +491,7 @@ void main() {
       uri: () async => server.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: adapter,
     );
     session.connect();
@@ -569,11 +571,13 @@ void main() {
 
     String textOfA = '';
     var ready = false;
-    final session = CloudSyncSession(
+    late final CloudSyncSession session;
+    session = CloudSyncSession(
       uri: () async => server.uri,
       clientId: BigInt.from(31),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (blocks) {
+      onRemoteChange: () {
+        final blocks = session.childBlocks();
         textOfA = blocks.firstWhere((b) => b['id'] == 'a',
             orElse: () => const {'text': ''})['text'] as String;
       },
@@ -619,7 +623,7 @@ void main() {
       uri: () async => server.uri,
       clientId: store.clientId(),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       onFault: (reason, _) => faults.add(reason),
       persistence: adapter,
     );
@@ -685,11 +689,13 @@ void main() {
 
     String? markerSeen;
     var ready = false;
-    final session = CloudSyncSession(
+    late final CloudSyncSession session;
+    session = CloudSyncSession(
       uri: () async => server.uri,
       clientId: BigInt.from(103),
       onReady: (_, _) => ready = true,
-      onRemoteBlocks: (blocks) {
+      onRemoteChange: () {
+        final blocks = session.childBlocks();
         final a = blocks.firstWhere((b) => b['id'] == 'a',
             orElse: () => const <String, dynamic>{});
         final data = a['data'];

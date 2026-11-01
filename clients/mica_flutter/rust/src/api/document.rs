@@ -175,6 +175,26 @@ impl MicaDocument {
             .unwrap_or_else(|_| "[]".into())
     }
 
+    /// Start recording which blocks change (mica-core `track_changes`), so a
+    /// replica re-reading after each remote update reads only those blocks.
+    #[frb(sync)]
+    pub fn track_changes(&self) {
+        self.doc().track_changes();
+    }
+
+    /// Blocks whose content changed since the last call; `None` = read the
+    /// whole document (shape changed, too many, or tracking just started).
+    #[frb(sync)]
+    pub fn take_changed_block_ids(&self) -> Option<Vec<String>> {
+        self.doc().take_changed_block_ids()
+    }
+
+    /// The named blocks as a JSON array (missing ids left out).
+    #[frb(sync)]
+    pub fn blocks_json(&self, ids: Vec<String>) -> String {
+        serde_json::to_string(&self.doc().blocks_by_id(&ids)).unwrap_or_else(|_| "[]".into())
+    }
+
     /// Export this page as a self-contained HTML document, through the same Rust
     /// engine the server uses — so a LOCAL page's export matches a cloud page's
     /// byte-for-byte. `image_srcs` maps image `file_id`s to `data:` URIs the Dart

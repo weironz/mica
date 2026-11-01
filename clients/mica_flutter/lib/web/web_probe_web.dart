@@ -89,13 +89,13 @@ Future<JSString> _runWebSync(String apiBase, String email, String password) asyn
       uri: () async => sock(),
       clientId: BigInt.zero,
       onReady: (_, _) => readyA.isCompleted ? null : readyA.complete(),
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
     );
     final b = CloudSyncSession(
       uri: () async => sock(),
       clientId: BigInt.zero,
       onReady: (_, _) => readyB.isCompleted ? null : readyB.complete(),
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
     );
     a.connect();
     b.connect();

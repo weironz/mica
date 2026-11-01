@@ -39,6 +39,17 @@ abstract interface class SyncDocReplica {
   /// The full document as a flat block list (tree order).
   List<Map<String, dynamic>> toBlocks();
 
+  /// Blocks whose CONTENT changed since the last call (any source: remote,
+  /// local, undo), or null = re-read everything with [toBlocks] (the tree's
+  /// shape changed, too many changed, or nothing has been read yet). Decided
+  /// in Rust (mica-core `take_changed_block_ids`), so a reader never re-derives
+  /// tree order. The session keeps its block list current with this instead
+  /// of a full read per remote update.
+  List<String>? takeChangedBlockIds();
+
+  /// The named blocks; ids no longer in the document are left out.
+  List<Map<String, dynamic>> blocksById(List<String> ids);
+
   /// Replay one coarse editor op onto the replica.
   void applyEditorOp(DocOp op);
 

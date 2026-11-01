@@ -33,6 +33,7 @@ use yrs::{
 use crate::block::Block;
 use crate::marks::{self, Mark};
 
+mod changes;
 mod history;
 use history::EditorHistory;
 
@@ -52,6 +53,8 @@ pub enum DocError {
 pub struct MicaDoc {
   doc: Doc,
   history: Option<EditorHistory>,
+  /// Opt-in change log for replicas that re-read after updates (`changes.rs`).
+  changes: Option<Arc<std::sync::Mutex<changes::ChangeLog>>>,
 }
 
 impl MicaDoc {
@@ -99,7 +102,11 @@ impl MicaDoc {
         write_block(&mut txn, &blocks_map, b);
       }
     }
-    MicaDoc { doc, history: None }
+    MicaDoc {
+      doc,
+      history: None,
+      changes: None,
+    }
   }
 
   /// The root block id (empty string if unset).
@@ -276,7 +283,11 @@ impl MicaDoc {
         .apply_update(update)
         .map_err(|e| DocError::Apply(e.to_string()))?;
     }
-    Ok(MicaDoc { doc, history: None })
+    Ok(MicaDoc {
+      doc,
+      history: None,
+      changes: None,
+    })
   }
 }
 

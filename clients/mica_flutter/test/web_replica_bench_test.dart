@@ -8,6 +8,8 @@
 //   open 115.9 -> 29.4 · full read 24.4 -> 12.4 · keystroke (op + diff)
 //   0.20 -> 0.20 · remote update (merge + full read) 21.2 -> 11.4 ·
 //   undo of a batch 23.3 -> 10.5
+// Same day, the session switched to patching its block list from the change
+// log: remote update (merge + changed blocks) 0.10 vs (merge + full read) 9.0.
 @TestOn('browser')
 library;
 
@@ -116,6 +118,29 @@ void main() {
       remote.add(_ms(s));
     }
     out['remote update (merge + read)'] = _median(remote).toStringAsFixed(1);
+
+    // The same update as the session reads it since 2026-11-01: merge, then
+    // only the blocks the change log names (a full read only on a shape change).
+    a.takeChangedBlockIds();
+    final patched = <double>[];
+    var fullReads = 0;
+    for (var i = 0; i < 30; i++) {
+      final sv = b.stateVector();
+      b.applyEditorOp({'type': 'update_block', 'block_id': 'b5', 'text': 'patched $i'});
+      final diff = b.encodeDiffSince(sv);
+      final s = Stopwatch()..start();
+      a.applyUpdate(diff);
+      final ids = a.takeChangedBlockIds();
+      if (ids == null) {
+        fullReads++;
+        a.toBlocks();
+      } else {
+        a.blocksById(ids);
+      }
+      patched.add(_ms(s));
+    }
+    out['remote update (merge + changed blocks)'] =
+        '${_median(patched).toStringAsFixed(2)} (full reads: $fullReads)';
 
     // Undo of a 10-keystroke batch (adapter reseeds its marks cache).
     final undo = <double>[];

@@ -10,6 +10,13 @@
 > 收到一次远端更新（合并 + 整篇读出）21.2 → 11.4 ms，撤销一批 23.3 → 10.5 ms。启动时两个引擎并行到位（本机均约 30 ms），
 > 首屏不被拖慢；慢网下多出的约 251 KB 与 Markdown 引擎争带宽。待观察：远端更新后整篇读出随文档线性增长（2000 块约 10 ms），
 > wasm 内存只增不减。下文为迁移前的验证记录。
+>
+> **远端更新整篇读出（同日已处理）**：实际比上面更糟——会话每收到一次远端更新先读一遍 `childBlocks()` 交给回调，
+> 而所有回调都丢弃参数、`_applyCloudBlocks` 再整篇读一遍（后台标签页也白读一遍）。现在回调 `onRemoteChange` 不带块；
+> mica-core 加按需开启的变更记录（`doc/changes.rs`，yrs deep observer）：只改了块内容时报告块 id，树形状变化（增删移块、
+> `children`、root）或超过 1,024 块时报告「整篇重读」，Dart 会话据此原地补丁缓存列表，不在 Dart 推导树序。
+> 同一基准：远端更新（合并 + 读出）9.0 → **0.10 ms**（30 次均未触发整篇读）；mica_doc gzip 251,111 → 255,676 B。
+> 回归：mica-core `changes` 4 项（远端/本地/撤销/形状/溢出）、真实 FFI 的 `cloud_sync_block_cache_test`（每步补丁结果 = 整篇读出）。
 
 > 只做验证，不做迁移。背景见 [单一实现专项 01 §9](../single-source/01-background.md#9-仓库里其他双份与后续专项不在本专项范围)：
 > 服务端与桌面用 yrs（`mica-core` 的 `MicaDoc`），Web 用 yjs（`web/yjs_bundle.js`）加约 1,000 行 Dart 镜像

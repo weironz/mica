@@ -419,7 +419,7 @@ void main_() {
         uri: () async => Uri.parse('ws://unused.invalid'),
         clientId: BigInt.one,
         onReady: (_, __) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
         persistence: s,
       )..debugAttachReplica(CloudSyncTestReplica());
       for (var rid = 257; rid <= 287; rid++) {

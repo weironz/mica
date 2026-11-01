@@ -29,6 +29,7 @@ SyncDocReplica? replicaFromState(Uint8List state, BigInt clientId) {
 class _YrsReplica implements SyncDocReplica {
   _YrsReplica(this._doc) {
     _mirror.seedFrom(_doc);
+    _doc.trackChanges();
   }
 
   final MicaDocument _doc;
@@ -53,6 +54,14 @@ class _YrsReplica implements SyncDocReplica {
   @override
   List<Map<String, dynamic>> toBlocks() =>
       (jsonDecode(_doc.toBlocksJson()) as List).cast<Map<String, dynamic>>();
+
+  @override
+  List<String>? takeChangedBlockIds() => _doc.takeChangedBlockIds();
+
+  @override
+  List<Map<String, dynamic>> blocksById(List<String> ids) =>
+      (jsonDecode(_doc.blocksJson(ids: ids)) as List)
+          .cast<Map<String, dynamic>>();
 
   @override
   void applyEditorOp(DocOp op) => _mirror.apply(_doc, op);

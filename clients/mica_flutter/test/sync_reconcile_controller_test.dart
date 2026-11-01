@@ -43,7 +43,7 @@ CloudSyncSession _cloudSession(String documentId) => CloudSyncSession(
   uri: () async => Uri.parse('wss://unused.example/doc'),
   clientId: BigInt.one,
   onReady: (_, _) {},
-  onRemoteBlocks: (_) {},
+  onRemoteChange: () {},
 );
 
 /// A cloud session that reports READY — only the `isReady` guard under test
@@ -54,7 +54,7 @@ class _ReadySession extends CloudSyncSession {
         uri: () async => Uri.parse('wss://unused.example/doc'),
         clientId: BigInt.one,
         onReady: (_, _) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
       );
 
   @override

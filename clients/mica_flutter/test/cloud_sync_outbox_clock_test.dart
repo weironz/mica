@@ -33,6 +33,15 @@ class _Replica implements SyncDocReplica {
   @override
   Uint8List mergeUpdates(List<Uint8List> updates) => Uint8List.fromList([2]);
   @override
+  List<String>? takeChangedBlockIds() => null;
+
+  @override
+  List<Map<String, dynamic>> blocksById(List<String> ids) => [
+    for (final b in toBlocks())
+      if (ids.contains(b['id'])) b,
+  ];
+
+  @override
   List<Map<String, dynamic>> toBlocks() => [
     {
       'id': 'root',
@@ -204,7 +213,7 @@ void main() {
         uri: () async => server.uri,
         clientId: BigInt.from(1),
         onReady: (_, __) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
         persistence: store,
         documentId: 'doc-1',
       );
@@ -253,7 +262,7 @@ void main() {
       uri: () async => server.uri,
       clientId: BigInt.from(1),
       onReady: (_, __) {},
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: store,
       documentId: 'doc-1',
     );
@@ -289,7 +298,7 @@ void main() {
       uri: () async => server.uri,
       clientId: BigInt.from(1),
       onReady: (_, __) {},
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: store,
       documentId: 'doc-1',
     );

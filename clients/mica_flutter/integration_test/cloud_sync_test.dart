@@ -122,13 +122,13 @@ void main() {
       uri: () async => sockUri(),
       clientId: BigInt.from(111),
       onReady: (_, _) => readyA.isCompleted ? null : readyA.complete(),
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
     );
     final b = CloudSyncSession(
       uri: () async => sockUri(),
       clientId: BigInt.from(222),
       onReady: (_, _) => readyB.isCompleted ? null : readyB.complete(),
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
     );
     a.connect();
     b.connect();

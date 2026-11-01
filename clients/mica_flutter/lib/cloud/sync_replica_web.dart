@@ -22,6 +22,7 @@ SyncDocReplica? replicaFromState(Uint8List state, BigInt clientId) {
 class _WasmReplica implements SyncDocReplica {
   _WasmReplica(this._doc) {
     _mirror.seedFrom(_doc);
+    _doc.trackChanges();
   }
 
   final MicaDocWasm _doc;
@@ -44,6 +45,13 @@ class _WasmReplica implements SyncDocReplica {
 
   @override
   List<Map<String, dynamic>> toBlocks() => _doc.toBlocks();
+
+  @override
+  List<String>? takeChangedBlockIds() => _doc.takeChangedBlockIds();
+
+  @override
+  List<Map<String, dynamic>> blocksById(List<String> ids) =>
+      _doc.blocksById(ids);
 
   @override
   void applyEditorOp(DocOp op) => _mirror.apply(_doc, op);

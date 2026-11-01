@@ -18,6 +18,9 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// captured; all editor operations until end_history_batch share one step.
   void beginHistoryBatch();
 
+  /// The named blocks as a JSON array (missing ids left out).
+  String blocksJson({required List<String> ids});
+
   bool canRedo();
 
   bool canUndo();
@@ -190,6 +193,10 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// [`Self::encode_diff_since`] after to get just that batch's update to push.
   Uint8List stateVector();
 
+  /// Blocks whose content changed since the last call; `None` = read the
+  /// whole document (shape changed, too many, or tracking just started).
+  List<String>? takeChangedBlockIds();
+
   void textDelete({required String id, required int at, required int len});
 
   void textFormat({
@@ -205,6 +212,10 @@ abstract class MicaDocument implements RustOpaqueInterface {
 
   /// The document as a JSON array of blocks (tree order).
   String toBlocksJson();
+
+  /// Start recording which blocks change (mica-core `track_changes`), so a
+  /// replica re-reading after each remote update reads only those blocks.
+  void trackChanges();
 
   /// Undo one closed editor batch and preserve remote changes.
   bool undo();

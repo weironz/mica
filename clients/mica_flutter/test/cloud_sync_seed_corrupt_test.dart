@@ -76,7 +76,7 @@ CloudSyncSession _session(CloudDocStore store, void Function() onUri) {
     },
     clientId: BigInt.from(7),
     onReady: (_, __) {},
-    onRemoteBlocks: (_) {},
+    onRemoteChange: () {},
     persistence: store,
     documentId: 'doc-1',
   );

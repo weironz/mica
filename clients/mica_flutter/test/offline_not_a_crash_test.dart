@@ -38,7 +38,7 @@ void main() {
         uri: () async => Uri.parse('ws://127.0.0.1:$port/ws/doc'),
         clientId: BigInt.one,
         onReady: (_, _) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
         onSyncPhase: phases.add,
       );
       session.connect();
@@ -74,7 +74,7 @@ void main() {
         uri: () async => Uri.parse('ws://127.0.0.1:$port/ws/doc'),
         clientId: BigInt.one,
         onReady: (_, _) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
       );
       session.connect();
       await Future<void>.delayed(const Duration(milliseconds: 200));

@@ -107,7 +107,7 @@ void main() {
         seededRoot = root;
         seeded = blocks;
       },
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
       persistence: adapter,
     );
     session.connect();

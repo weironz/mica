@@ -5,7 +5,7 @@
 // over FFI on desktop and as wasm on the web, chosen by the conditional import
 // below), speaks the WS sync protocol added in M4.4 (sync.bootstrap/pull/push +
 // sync.update), pushes local editor ops as CRDT diffs, and merges remote
-// updates — firing [onRemoteBlocks] so the editor can reconcile. CRDT merge
+// updates — firing [onRemoteChange] so the editor can reconcile. CRDT merge
 // makes concurrent edits converge with no central locking.
 //
 // Local-first (P2 Phase 1 desktop / P4-2 web): when [persistence] is set (the
@@ -150,7 +150,7 @@ class CloudSyncSession {
     required this.uri,
     required this.clientId,
     required this.onReady,
-    required this.onRemoteBlocks,
+    required this.onRemoteChange,
     this.onFault,
     this.onServerConnected,
     this.onSyncPhase,
@@ -187,8 +187,11 @@ class CloudSyncSession {
   final void Function(String rootBlockId, List<Map<String, dynamic>> blocks)
   onReady;
 
-  /// Fired after remote updates are merged, with the refreshed editor nodes.
-  final void Function(List<Map<String, dynamic>> blocks) onRemoteBlocks;
+  /// Fired after remote updates are merged. Carries no blocks: every consumer
+  /// reads what it needs ([allBlocks]) — and a background tab reads nothing.
+  /// Until 2026-11-01 this handed over [childBlocks], a full document read
+  /// per remote update that every consumer threw away before reading again.
+  final void Function() onRemoteChange;
 
   /// Fired on an integrity fault the replica must not silently absorb — a remote
   /// update that won't apply, or a corrupt base (red line #1: never diverge
@@ -431,15 +434,47 @@ class CloudSyncSession {
     return _outboxEmpty;
   }
 
+  /// The last full read of [_doc] (and which replica it was), patched in
+  /// place from [SyncDocReplica.takeChangedBlockIds]: a remote keystroke
+  /// re-reads one block, not the document (a full read of 2,000 blocks is
+  /// ~10 ms on the web). Rust decides what changed; any change to the tree's
+  /// shape comes back as null and costs one full read, as before.
+  List<Map<String, dynamic>>? _blocks;
+  Map<String, int> _blockIndex = const {};
+  SyncDocReplica? _blocksOf;
+
   /// The full document as a flat block list (tree order) — for callers that
-  /// rebuild a snapshot/bootstrap from the live replica.
-  List<Map<String, dynamic>> allBlocks() => _doc?.toBlocks() ?? const [];
+  /// rebuild a snapshot/bootstrap from the live replica. A fresh list on every
+  /// change, so a caller holding the previous one keeps what it read; the
+  /// block maps are shared (consumers copy them: `EditorController.load`).
+  List<Map<String, dynamic>> allBlocks() {
+    final doc = _doc;
+    if (doc == null) return const [];
+    final changed = doc.takeChangedBlockIds();
+    final cached = _blocks;
+    if (cached != null && identical(_blocksOf, doc) && changed != null) {
+      if (changed.isEmpty) return cached;
+      final fresh = doc.blocksById(changed);
+      if (fresh.length == changed.length &&
+          fresh.every((b) => _blockIndex.containsKey(b['id']))) {
+        final next = List.of(cached);
+        for (final b in fresh) {
+          next[_blockIndex[b['id']]!] = b;
+        }
+        return _blocks = next;
+      }
+    }
+    final all = doc.toBlocks();
+    _blocksOf = doc;
+    _blockIndex = {for (final (i, b) in all.indexed) b['id'] as String: i};
+    return _blocks = all;
+  }
 
   /// Current editor nodes (root block's children, in order).
   List<Map<String, dynamic>> childBlocks() {
     final doc = _doc;
     if (doc == null) return const [];
-    final byId = {for (final b in doc.toBlocks()) b['id'] as String: b};
+    final byId = {for (final b in allBlocks()) b['id'] as String: b};
     final root = byId[_rootBlockId];
     if (root == null) return const [];
     final children = (root['children'] as List?)?.cast<String>() ?? const [];
@@ -720,7 +755,7 @@ class CloudSyncSession {
             return;
           }
           if (baseRid > _cursor) _cursor = baseRid;
-          if (!_disposed) onRemoteBlocks(childBlocks());
+          if (!_disposed) onRemoteChange();
         }
         // A good base means recovery worked — reset the consecutive-fault count
         // so the circuit-breaker (B3) measures a genuine stuck streak, not
@@ -763,7 +798,7 @@ class CloudSyncSession {
           }
           _maybeCompact();
         }
-        if (changed && !_disposed) onRemoteBlocks(childBlocks());
+        if (changed && !_disposed) onRemoteChange();
         // B2 (verified catch-up): the server caps each pull, so a non-empty batch
         // may be truncated. If we made forward progress, keep pulling until the
         // stream after our cursor is empty — no silently-dropped tail. Gated on
@@ -777,7 +812,7 @@ class CloudSyncSession {
           _send({'type': 'sync.pull', 'payload': _pullPayload()});
         }
       case 'sync.update':
-        if (_applyRemote(m) && !_disposed) onRemoteBlocks(childBlocks());
+        if (_applyRemote(m) && !_disposed) onRemoteChange();
       case 'sync.ack':
         final ackId = m['ack_id'];
         // B11: the push was stored but depends on history the server lacks

@@ -62,7 +62,7 @@ void main() {
         uri: () async => Uri.parse('ws://127.0.0.1:1/nope'), // dead — seed comes from local
         clientId: cid,
         onReady: (_, _) {},
-        onRemoteBlocks: (_) {},
+        onRemoteChange: () {},
         persistence: StoreCloudDocStore(store, 'local', 'doc'),
       );
       s.connect();
@@ -86,18 +86,19 @@ void main() {
     List<Map<String, dynamic>>? blocksA, blocksB;
     void capA(List<Map<String, dynamic>> b) => blocksA = b;
     void capB(List<Map<String, dynamic>> b) => blocksB = b;
-    final sessionA = CloudSyncSession(
+    late final CloudSyncSession sessionA, sessionB;
+    sessionA = CloudSyncSession(
       uri: () async => server.uri,
       clientId: cidA,
       onReady: (_, b) => capA(b),
-      onRemoteBlocks: capA,
+      onRemoteChange: () => capA(sessionA.childBlocks()),
       persistence: StoreCloudDocStore(storeA, 'local', 'doc'),
     );
-    final sessionB = CloudSyncSession(
+    sessionB = CloudSyncSession(
       uri: () async => server.uri,
       clientId: cidB,
       onReady: (_, b) => capB(b),
-      onRemoteBlocks: capB,
+      onRemoteChange: () => capB(sessionB.childBlocks()),
       persistence: StoreCloudDocStore(storeB, 'local', 'doc'),
     );
 

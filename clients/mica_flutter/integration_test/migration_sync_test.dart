@@ -78,7 +78,7 @@ void main() {
       uri: () async => wsUri(token, ws, doc),
       clientId: clientId,
       onReady: (_, _) {},
-      onRemoteBlocks: (_) {},
+      onRemoteChange: () {},
     );
     s.connect();
     await s.ready.timeout(const Duration(seconds: 20));

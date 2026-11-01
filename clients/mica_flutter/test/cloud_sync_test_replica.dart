@@ -17,6 +17,15 @@ class CloudSyncTestReplica implements SyncDocReplica {
   @override
   Uint8List mergeUpdates(List<Uint8List> updates) => Uint8List.fromList([2]);
   @override
+  List<String>? takeChangedBlockIds() => null;
+
+  @override
+  List<Map<String, dynamic>> blocksById(List<String> ids) => [
+    for (final b in toBlocks())
+      if (ids.contains(b['id'])) b,
+  ];
+
+  @override
   List<Map<String, dynamic>> toBlocks() => [
     {
       'id': 'root',

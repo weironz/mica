@@ -53,6 +53,30 @@ impl MicaDocument {
     serde_json::to_string(&self.inner.to_blocks()).unwrap_or_else(|_| "[]".into())
   }
 
+  /// Start recording which blocks change (mica-core `track_changes`).
+  #[wasm_bindgen(js_name = trackChanges)]
+  pub fn track_changes(&mut self) {
+    self.inner.track_changes();
+  }
+
+  /// JSON array of the blocks whose content changed since the last call;
+  /// `undefined` = read the whole document (`take_changed_block_ids`).
+  #[wasm_bindgen(js_name = takeChangedBlockIds)]
+  pub fn take_changed_block_ids(&mut self) -> Option<String> {
+    self
+      .inner
+      .take_changed_block_ids()
+      .map(|ids| serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()))
+  }
+
+  /// The named blocks (JSON array of ids in, block list out); missing ids are
+  /// left out.
+  #[wasm_bindgen(js_name = blocksJson)]
+  pub fn blocks_json(&self, ids_json: &str) -> String {
+    let ids: Vec<String> = serde_json::from_str(ids_json).unwrap_or_default();
+    serde_json::to_string(&self.inner.blocks_by_id(&ids)).unwrap_or_else(|_| "[]".into())
+  }
+
   #[wasm_bindgen(js_name = encodeState)]
   pub fn encode_state(&self) -> Vec<u8> {
     self.inner.encode_state()
