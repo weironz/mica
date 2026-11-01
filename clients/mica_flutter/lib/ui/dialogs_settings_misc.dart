@@ -1,4 +1,4 @@
-part of '../main.dart';
+part of 'settings_dialog.dart';
 
 // The two leaf sections that fit nowhere else — diagnostics, keyboard
 // shortcuts — plus the About popup.
@@ -9,7 +9,7 @@ extension _SettingsMiscTab on _SettingsDialogState {
     showAboutDialog(
       context: context,
       applicationName: 'Mica',
-      applicationVersion: 'v$kAppVersion',
+      applicationVersion: 'v${widget.updates.currentVersion}',
       applicationIcon: const MicaLogo(size: 40),
       applicationLegalese: context.l10n.aboutLegalese,
       children: [
@@ -31,7 +31,7 @@ extension _SettingsMiscTab on _SettingsDialogState {
         // Detailed status shares the sidebar updater; absent without an installer.
         if (updateSupported) ...[
           const SizedBox(height: 8),
-          UpdateChecker(controller: _desktopUpdates),
+          UpdateChecker(controller: widget.updates),
         ],
       ],
     );

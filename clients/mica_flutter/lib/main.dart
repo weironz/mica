@@ -23,6 +23,7 @@ import 'cloud/doc_store_platform.dart';
 import 'cloud/pending_uploads.dart';
 import 'cloud/workspace_migration.dart';
 import 'ui/export_format.dart';
+import 'ui/settings_dialog.dart';
 import 'ui/mica_state.dart';
 import 'diagnostics.dart';
 import 'import/import_controller.dart';
@@ -36,7 +37,6 @@ import 'views/cloud_views_controller.dart';
 import 'views/members_controller.dart';
 import 'views/invitations_controller.dart';
 import 'ui/workspace_invitations.dart';
-import 'swallowed.dart';
 import 'local/local_offline.dart';
 import 'local/local_offline_factory.dart';
 import 'editor/word_count.dart';
@@ -47,10 +47,8 @@ import 'editor/model.dart' show headingButtonTarget, kMonoFont;
 import 'editor/version_diff.dart';
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
-import 'editor/open_url.dart';
 import 'editor/pick_file.dart';
 import 'editor/property_panel.dart';
-import 'widgets/mica_logo.dart';
 import 'editor/pick_image.dart';
 import 'ui/auth_form.dart';
 import 'ui/autoscroll.dart';
@@ -76,12 +74,9 @@ import 'ui/overview_pane.dart';
 import 'ui/page_tree_state.dart';
 import 'ui/page_tree_cache.dart';
 import 'ui/tree_selection.dart';
-import 'ui/panel_kit.dart';
 import 'ui/rename.dart';
 import 'ui/search_data.dart';
 import 'ui/settings_sync.dart';
-import 'ui/settings_shell.dart';
-import 'ui/appearance_preview.dart';
 import 'ui/page_title_field.dart';
 import 'ui/sign_in_hero.dart';
 import 'ui/sign_in_screen.dart';
@@ -124,12 +119,6 @@ export 'api/doc_socket_uri.dart';
 part 'ui/dialogs.dart';
 // _SettingsDialogState split per tab (issue #81) — extensions in these parts
 // keep the class's logic one file per settings destination.
-part 'ui/dialogs_settings_appearance.dart';
-part 'ui/dialogs_settings_account.dart';
-part 'ui/dialogs_settings_tokens.dart';
-part 'ui/dialogs_settings_data.dart';
-part 'ui/dialogs_settings_ai.dart';
-part 'ui/dialogs_settings_misc.dart';
 part 'ui/widgets.dart';
 part 'main_shell.dart';
 part 'main_editor_history.dart';
@@ -177,16 +166,6 @@ const String kDefaultCloudUrl = String.fromEnvironment('MICA_CLOUD_URL');
 const String kAppVersion = '0.14.3';
 
 final _desktopUpdates = DesktopUpdateController(currentVersion: kAppVersion);
-
-/// Editor page (content column) width, as 11 discrete steps like AppFlowy —
-/// `680 · 800 · … · 1880` (min + max + 10 divisions, step 120). The DEFAULT and
-/// the Settings "reset" both go to [kPageWidthDefault] = 800px, the readable
-/// column width the note-app field converges on (Obsidian 700, Notion ~708,
-/// AFFiNE ~720-800) — NOT AppFlowy's reset-to-full-width. See research 2026-07.
-const double kPageWidthMin = 680;
-const double kPageWidthMax = 1880;
-const double kPageWidthDefault = 800;
-const int kPageWidthDivisions = 10;
 
 /// One-time migration (P3c-2) of the legacy world-switch prefs
 /// (`serverMode`/`serverUrl`, the pre-P3 ServerMode model) into the dissolved

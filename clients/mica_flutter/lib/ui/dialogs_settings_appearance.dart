@@ -1,4 +1,4 @@
-part of '../main.dart';
+part of 'settings_dialog.dart';
 
 // Appearance tab: theme/font/page-width picks and the preference-row
 // scaffolding the other preference screens borrow (_preferenceRow/-Group).

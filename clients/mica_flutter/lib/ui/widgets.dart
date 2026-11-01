@@ -1605,51 +1605,6 @@ class _MenuRow extends StatelessWidget {
   }
 }
 
-/// The app's empty state. A thin adapter over [MicaEmptyState] so all ~11 call
-/// sites moved to the design-19 standard at once, without touching each one.
-///
-/// What changed by delegating: the old body used #64748B (a slate the design
-/// system bans), a 40px bare icon and a `titleLarge` heading — visually a
-/// different family from the spec's 46px tile + 14/600 title + 12.5 body. And it
-/// had no way to offer an ACTION, which is half the rule: an empty state must say
-/// what happened AND give one next step. Callers that have a next step can now
-/// pass one; the rest render exactly as before, just on-spec.
-class EmptyState extends StatelessWidget {
-  const EmptyState({
-    required this.icon,
-    required this.title,
-    required this.detail,
-    this.actionLabel,
-    this.onAction,
-    super.key,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-
-  /// Both or neither — enforced by [MicaEmptyState]: a label with no callback is
-  /// a dead button, a callback with no label is invisible.
-  final String? actionLabel;
-  final VoidCallback? onAction;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 360),
-        child: MicaEmptyState(
-          icon: icon,
-          title: title,
-          body: detail,
-          actionLabel: actionLabel,
-          onAction: onAction,
-        ),
-      ),
-    );
-  }
-}
-
 class DetailRow extends StatelessWidget {
   const DetailRow({required this.label, required this.value, super.key});
 
@@ -1668,39 +1623,6 @@ class DetailRow extends StatelessWidget {
           ),
           Expanded(child: SelectableText(value)),
         ],
-      ),
-    );
-  }
-}
-
-class ErrorBanner extends StatelessWidget {
-  const ErrorBanner(this.message, {super.key});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: MicaTheme.of(context).status.dangerWash,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: MicaTheme.of(context).status.danger.withValues(alpha: 0.5),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              Icons.error_outline,
-              color: MicaTheme.of(context).status.danger,
-            ),
-            const SizedBox(width: 10),
-            Expanded(child: SelectableText(message)),
-          ],
-        ),
       ),
     );
   }

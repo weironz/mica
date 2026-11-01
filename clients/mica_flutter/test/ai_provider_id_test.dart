@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/main.dart';
+import 'package:mica_flutter/ui/settings_dialog.dart';
 
 /// A custom AI provider is named by the operator, and that name becomes two
 /// things at once: the primary key the config is stored under, and a path

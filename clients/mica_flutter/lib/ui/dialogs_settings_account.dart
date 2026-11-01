@@ -1,4 +1,4 @@
-part of '../main.dart';
+part of 'settings_dialog.dart';
 
 // Account tab: avatar, profile, password, delete — cloud only.
 extension _SettingsAccountTab on _SettingsDialogState {

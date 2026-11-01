@@ -1,4 +1,4 @@
-part of '../main.dart';
+part of 'settings_dialog.dart';
 
 // API-token tab: create/reveal/revoke. Cloud only.
 extension _SettingsTokensTab on _SettingsDialogState {

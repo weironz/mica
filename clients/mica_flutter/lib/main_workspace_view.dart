@@ -2730,7 +2730,8 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
       // Named so _setActiveConnection can close it if a switch ever reaches
       // this app from somewhere that is not the tile behind this barrier.
       routeSettings: const RouteSettings(name: 'settings'),
-      builder: (context) => _SettingsDialog(
+      builder: (context) => SettingsDialog(
+        updates: _desktopUpdates,
         onLoadAiSettings: widget.onLoadAiSettings,
         onLoadImportHistory: widget.onLoadImportHistory,
         onListAiModels: widget.onListAiModels,

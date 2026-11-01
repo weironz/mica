@@ -35,6 +35,7 @@ import 'package:mica_flutter/api/client.dart';
 import 'package:mica_flutter/main.dart' as app;
 import 'package:mica_flutter/prefs.dart';
 import 'package:mica_flutter/ui/doc_tab_strip.dart';
+import 'package:mica_flutter/ui/status_kit.dart' show ErrorBanner;
 
 import 'support/online_only_local_offline.dart';
 
@@ -106,7 +107,7 @@ void main() {
       reason: 'the scenario cannot mean anything if startup itself threw',
     );
     expect(
-      find.byType(app.ErrorBanner),
+      find.byType(ErrorBanner),
       findsNothing,
       reason: 'the cloud fixture must boot without a native-store error',
     );

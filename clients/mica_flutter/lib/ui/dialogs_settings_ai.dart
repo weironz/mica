@@ -1,4 +1,4 @@
-part of '../main.dart';
+part of 'settings_dialog.dart';
 
 // AI tab: provider list/detail/add forms, model fetch and commit-on-blur
 // saves. Everything here sits behind a non-null onLoadAiSettings.

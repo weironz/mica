@@ -3,7 +3,7 @@
 // percent slider, so the conversion is the part that can silently be wrong —
 // an asymmetric pair would make the slider land on one px and store another.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/main.dart';
+import 'package:mica_flutter/ui/settings_dialog.dart';
 
 void main() {
   test('every detent round-trips px → scale → px exactly', () {

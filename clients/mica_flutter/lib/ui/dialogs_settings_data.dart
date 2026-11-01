@@ -1,4 +1,4 @@
-part of '../main.dart';
+part of 'settings_dialog.dart';
 
 // Data tab: export stats, mirror cache, import history.
 extension _SettingsDataTab on _SettingsDialogState {

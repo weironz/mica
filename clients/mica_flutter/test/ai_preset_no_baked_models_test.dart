@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/main.dart';
+import 'package:mica_flutter/ui/settings_dialog.dart';
 
 /// No provider preset may seed a model NAME.
 ///
