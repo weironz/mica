@@ -157,22 +157,3 @@ String normalizeServerUrl(String serverUrl) {
   }
   return '$scheme://$host${defaultPort ? '' : ':${uri.port}'}$path';
 }
-
-/// The title a Markdown import should use: the first heading, else the first
-/// non-empty line (trimmed to a sane length), else [fallback].
-///
-/// Shared by the cloud import path and the local one so a file imported into
-/// either world gets the same name (issue #108).
-String titleFromMarkdown(String markdown, String fallback) {
-  for (final line in markdown.split('\n')) {
-    final trimmed = line.trim();
-    final heading = RegExp(r'^#{1,6}\s+(.*)$').firstMatch(trimmed);
-    if (heading != null && heading.group(1)!.trim().isNotEmpty) {
-      return heading.group(1)!.trim();
-    }
-    if (trimmed.isNotEmpty) {
-      return trimmed.length > 60 ? trimmed.substring(0, 60) : trimmed;
-    }
-  }
-  return fallback;
-}

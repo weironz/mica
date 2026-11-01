@@ -1831,6 +1831,8 @@ final Map<String, _Lang> _langs = {
     lineComments: const [],
     blockComments: false,
     strings: const [],
+    // md-syntax-ok-begin: colours Markdown shown as a code-block language;
+    // spans get a colour, never a block or mark.
     rules: [
       _Rule(r'#{1,6}[^\n]*', _Role.keyword, leadOnly: true), // # Heading
       _Rule(r'>[^\n]*', _Role.comment, leadOnly: true), // > quote
@@ -1841,6 +1843,7 @@ final Map<String, _Lang> _langs = {
       _Rule(r'!?\[[^\]\n]*\]\([^)\n]*\)', _Role.function), // [text](url)
       _Rule(r'[-*+](?=\s)', _Role.number, leadOnly: true), // list bullet
     ],
+    // md-syntax-ok-end
   ),
   'graphql': _Lang(
     keywords: const {

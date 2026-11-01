@@ -7,6 +7,7 @@
 // FFI. The web build gets `local_offline_web.dart` instead, where everything is
 // unavailable.
 import 'cache_stats.dart';
+import '../import/import_title.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';

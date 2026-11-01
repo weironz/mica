@@ -98,8 +98,8 @@ import 'local/cache_stats.dart'
         ClearMirrorResult,
         LocalCacheStats,
         cloudCacheOrigin,
-        requireCloudCacheOrigin,
-        titleFromMarkdown;
+        requireCloudCacheOrigin;
+import 'import/import_title.dart' show titleFromMarkdown;
 import 'doc_tab.dart';
 import 'prefs.dart';
 import 'theme_controller.dart';

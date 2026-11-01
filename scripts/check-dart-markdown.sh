@@ -10,36 +10,39 @@
 # writers that had different names (the page-properties mirror and the HTML
 # paste converter). This looks at what code DOES, by the syntax it handles.
 #
-# Exempt, with the reason:
-#   lib/src/rust/            generated FFI bindings
-#   lib/markdown/            the codec facade itself
-#   lib/editor/highlight.dart    code-block syntax colouring (Markdown is one of
-#                                the highlighted languages; colours, not structure)
-#   lib/editor/paste_repair.dart paste heuristics, documented as not grammar
-# Anything else that must touch Markdown syntax (keystroke input rules that
-# cannot wait for a round trip) carries `md-syntax-ok: <reason>` on the same
-# line or the line above. Review each new marker like a dependency.
+# Exempt directories, with the reason:
+#   lib/src/rust/   generated FFI bindings
+#   lib/markdown/   the codec facade itself
+#   lib/l10n/       generated from .arb (AI prompt templates fence the code they
+#                   send); generated files cannot carry markers
+# No file is exempt as a whole. Code that must touch Markdown syntax (keystroke
+# input rules that cannot wait for a round trip, the code highlighter's rules
+# for Markdown as a language) carries `md-syntax-ok: <reason>` on the same line
+# or the line above, or sits between `md-syntax-ok-begin: <reason>` and
+# `md-syntax-ok-end`. Review each new marker like a dependency.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 lib=${MICA_DART_LIB:-clients/mica_flutter/lib}  # override: scripts/test-check-dart-markdown.sh
 # One ERE per line, literal (single-quoted heredoc: no shell escaping). Each
 # matches the syntax inside a Dart string or regex literal, not code in general.
+# The last line catches the regex-escaped forms (`r'\*\*'`, `#{1,6}`) and
+# fences anywhere: a Dart Markdown reader is usually a RegExp, not a string.
 patterns=$(cat <<'ERE'
 '\*\*'|"\*\*"
 '~~'|"~~"
-'```|"```
 '!\[|"!\[|'\]\(|"\]\(|\\\]\\\(
 '#{1,6} '|'> '|'- \[[ x]\]
 '\[\^\$|"\[\^\$
 '\\\\\$\{
 '\$\{?[A-Za-z_]+\}?: |'  - 
+\\\*\\\*|#\{1,6\}|```|~~~
 ERE
 )
 joined=$(printf '%s' "$patterns" | paste -sd'|')
 
 hits=$(grep -rnE "$joined" "$lib" --include='*.dart' \
-  | grep -vE "^$lib/(src/rust/|markdown/|editor/highlight\.dart:|editor/paste_repair\.dart:)" \
+  | grep -vE "^$lib/(src/rust/|markdown/|l10n/)" \
   || true)
 
 violations=""
@@ -54,6 +57,11 @@ while IFS= read -r hit; do
     continue
   fi
   if grep -q 'md-syntax-ok:' <(sed -n "$((line > 1 ? line - 1 : 1)),${line}p" "$file"); then
+    continue
+  fi
+  # Inside a begin/end region: the last region marker above the hit is a begin.
+  last=$(sed -n "1,${line}p" "$file" | grep -oE 'md-syntax-ok-(begin|end)' | tail -n1 || true)
+  if [ "$last" = md-syntax-ok-begin ]; then
     continue
   fi
   violations+="$hit"$'\n'

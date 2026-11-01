@@ -54,6 +54,25 @@ DART
 run || { cat "$fixture/out" >&2; echo "FAIL: guard refused a marked input rule" >&2; exit 1; }
 echo "PASS: a line marked md-syntax-ok is accepted"
 
+cat > "$fixture/editor/writer.dart" <<'DART'
+final heading = RegExp(r'^#{1,6}\s+(.*)$');
+final bold = RegExp(r'\*\*(.+?)\*\*');
+DART
+expect_fail "a RegExp Markdown reader (raw-string form)"
+
+cat > "$fixture/editor/writer.dart" <<'DART'
+// md-syntax-ok-begin: colours, not structure
+final rules = [r'#{1,6}[^\n]*', r'(?:```|~~~)'];
+// md-syntax-ok-end
+DART
+run || { cat "$fixture/out" >&2; echo "FAIL: guard refused a marked region" >&2; exit 1; }
+echo "PASS: a md-syntax-ok-begin/end region is accepted"
+
+cat >> "$fixture/editor/writer.dart" <<'DART'
+final after = RegExp(r'\*\*x\*\*');
+DART
+expect_fail "syntax after a closed region"
+
 rm "$fixture/editor/writer.dart"
 printf "String wrap(String s) => '**' + s;\n" > "$fixture/markdown/codec.dart"
 run || { cat "$fixture/out" >&2; echo "FAIL: guard refused the exempt codec dir" >&2; exit 1; }

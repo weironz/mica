@@ -97,6 +97,11 @@ YAML 镜像(`properties.dart`,2026-10-31 复核才发现)和粘贴用的 HTML→
 什么**而不是叫什么:`scripts/check-dart-markdown.sh` 按语法特征(强调/围栏/链接标记、块级
 前缀、Markdown 转义、front matter 行)扫 `lib/`,自测脚本用这两个真实漏网者的片段证明它会
 失败;确有必要的键盘输入规则逐行标 `md-syntax-ok: 理由`。
+第一版守卫自己也犯了同一个错:它只认字符串里的 `'**'`,没认 raw 字符串正则里的 `\*\*` /
+`#{1,6}`,又把 `highlight.dart` 整个文件放行 —— 于是 `cache_stats.dart` 里按 `^#{1,6}\s+` 取
+导入标题的 Dart 正则(front matter 会被当成标题)照样过关。现在正则形态也拦,不再整文件豁免,
+高亮器里 Markdown 语言的着色规则用 `md-syntax-ok-begin/end` 圈出;导入标题改为取引擎解析后的
+第一个有文字的块(`lib/import/import_title.dart`)。**守卫要用真实漏网者的形态做自测,包括正则写法。**
 
 ---
 
