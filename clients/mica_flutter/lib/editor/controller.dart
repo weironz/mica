@@ -143,6 +143,7 @@ class EditorController extends ChangeNotifier {
 
   /// Replace the whole document (initial load). Does not emit ops.
   void load(List<EditorNode> next) {
+    _pendingSeed = null;
     nodes
       ..clear()
       ..addAll(next.map((n) => n.copy()));
@@ -179,6 +180,22 @@ class EditorController extends ChangeNotifier {
     final previousSelection = ReconcileSelection(nodes, selection);
     final byId = {for (final n in nodes) n.id: n};
     final next = <EditorNode>[];
+    // The paragraph [ensureNotEmpty] seeded into an empty document is local
+    // intent whose insert may still be waiting for the sync session. A
+    // snapshot that is EMPTY only means the insert hasn't landed yet: keep the
+    // seed rather than drop it, or the empty-document check seeds a second
+    // one and both inserts land (a new page opened with an empty first line
+    // and the caret on line two). Once the server has it, it is ordinary.
+    final seed = _pendingSeed;
+    if (seed != null) {
+      if (server.any((n) => n.id == seed.id)) {
+        _pendingSeed = null;
+      } else if (server.isEmpty && byId[seed.id] != null) {
+        server = [byId[seed.id]!.copy()];
+      } else {
+        _pendingSeed = null;
+      }
+    }
     for (final src in server) {
       final cur = byId[src.id];
       if (cur == null) {
@@ -2509,6 +2526,7 @@ class EditorController extends ChangeNotifier {
   EditorNode ensureNotEmpty() {
     if (nodes.isNotEmpty) return nodes.first;
     final node = EditorNode(id: _genId(), kind: 'paragraph', text: '');
+    _pendingSeed = node;
     nodes.add(node);
     _sendNow([_insertOp(node, 0)]);
     _collapseAfterEdit(const DocPosition(0, 0));
@@ -3361,6 +3379,10 @@ class EditorController extends ChangeNotifier {
 
   String _genId() =>
       'block_${DateTime.now().microsecondsSinceEpoch}_${_idCounter++}';
+
+  /// The paragraph [ensureNotEmpty] created, until a snapshot confirms it
+  /// (see [reconcile]).
+  EditorNode? _pendingSeed;
 
   bool _disposed = false;
 
