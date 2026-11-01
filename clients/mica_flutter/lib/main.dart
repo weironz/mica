@@ -58,6 +58,7 @@ import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
 import 'ui/copy_button.dart';
 import 'ui/doc_tab_strip.dart';
+import 'ui/export_shape.dart';
 import 'doc_tab_persistence.dart';
 import 'ui/tab_shortcuts.dart';
 import 'ui/narrow_tab_switcher.dart';

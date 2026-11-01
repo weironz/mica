@@ -2225,13 +2225,8 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       throw ApiException(context.l10n.pageOpenFirst);
     }
     final base = title.trim().isEmpty ? 'page' : title.trim();
-    final markdown = await _api.exportMarkdown(
-      session.accessToken,
-      workspace.id,
-      bootstrap.document.id,
-      withTitle: true,
-    );
-    if (_markdownReferencesLocalAssets(markdown)) {
+    final blocks = bootstrap.snapshot.payload['blocks'];
+    if (pageNeedsAssetBundle(blocks is List ? blocks : const [])) {
       final bytes = await _api.exportDocumentZip(
         session.accessToken,
         workspace.id,
@@ -2239,6 +2234,12 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       );
       return (bytes: bytes, name: '$base.zip', mime: 'application/zip');
     }
+    final markdown = await _api.exportMarkdown(
+      session.accessToken,
+      workspace.id,
+      bootstrap.document.id,
+      withTitle: true,
+    );
     return (
       bytes: Uint8List.fromList(utf8.encode(markdown)),
       name: '$base.md',
@@ -2246,20 +2247,6 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     );
   }
 
-  /// True if the markdown has any image whose target is a LOCAL asset (not an
-  /// external `http(s)`/`data:` URL) — those need the `.zip` to travel with
-  /// their files.
-  bool _markdownReferencesLocalAssets(String markdown) {
-    for (final m in RegExp(r'!\[[^\]]*\]\(\s*([^)\s]+)').allMatches(markdown)) {
-      final url = m.group(1) ?? '';
-      if (!url.startsWith('http://') &&
-          !url.startsWith('https://') &&
-          !url.startsWith('data:')) {
-        return true;
-      }
-    }
-    return false;
-  }
 
   /// Export the open CLOUD page as a self-contained HTML file. `title` (the live
   /// title-bar text) is ignored here — the server names the `<h1>`/`<title>`
