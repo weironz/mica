@@ -66,6 +66,8 @@ fn wire_json_endpoints_keep_their_signatures() {
   let _: fn(&str) -> String = wire::math_run_spans_json;
   let _: fn(&str) -> String = wire::parse_inline_math_json;
   let _: fn(&str) -> Result<String, mica_md::MdError> = wire::properties_json;
+  let _: fn(&str) -> Result<String, mica_md::MdError> = wire::html_to_markdown_json;
+  let _: fn(&mica_md::HtmlNode) -> String = mica_md::html_to_markdown;
   let _: fn() -> String = wire::engine_info_json;
   // render_html_body_json carries its profile argument positionally.
   let _: fn(&str, &str, &str) -> Result<String, mica_md::MdError> = wire::render_html_body_json;

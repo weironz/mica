@@ -18,7 +18,7 @@ case "$1" in
   test)
     [ "${GEN_GOLD:-0}" != 1 ] || exit 91
     [ "${GOLD_FAIL:-0}" != 1 ] || exit 92
-    printf 'test result: ok. %s passed; 0 failed; 0 ignored\n' "${GOLD_PASSED:-10}"
+    printf 'test result: ok. %s passed; 0 failed; 0 ignored\n' "${GOLD_PASSED:-11}"
     : > gold-verified ;;
   build)
     [ -f gold-verified ]
@@ -63,7 +63,7 @@ refuses() {
 }
 refuses 'CLI mismatch' CLI_VERSION=0.2.128
 refuses 'gold verification failure' GOLD_FAIL=1
-refuses 'fewer than ten tests' GOLD_PASSED=9
+refuses 'fewer than eleven tests' GOLD_PASSED=10
 refuses 'generation mode' GEN_GOLD=1
 # Size gate (M2 decision): the 262144 B budget must accept a Linux-scale bundle
 # (~205 KB, which the old 200 KB gate refused) and still refuse anything above it.

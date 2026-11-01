@@ -155,6 +155,13 @@ void checkWireGoldCase(
       );
     case 'parse_inline_math':
       _expectInline(codec.parseInlineMath(arg('source')), jsonDecode(output));
+    case 'html_to_markdown':
+      expect(
+        codec.htmlToMarkdown(
+          Map<String, Object?>.from(jsonDecode(arg('dom_json')) as Map),
+        ),
+        output,
+      );
     case 'properties':
       expect(
         codec.properties(
@@ -178,6 +185,7 @@ const wireGoldFunctions = [
   'math_run_spans',
   'parse_inline_math',
   'properties',
+  'html_to_markdown',
 ];
 
 void runCodecContract(Future<MarkdownCodec> Function() make) {

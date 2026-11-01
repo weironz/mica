@@ -32,6 +32,7 @@ pub use api::{
   math_run_spans, parse, parse_body, parse_inline, parse_inline_math, render_html,
   render_html_body, serialize, serialize_body, serialize_inline,
 };
+pub use html::paste::{HtmlNode, html_to_markdown};
 pub use ids::BlockIds;
 pub use model::{
   Block, Document, DocumentSnapshotPayload, InlineText, Mark, MdError, SCHEMA_VERSION,

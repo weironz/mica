@@ -55,6 +55,11 @@ pub fn properties(request_json: &str) -> Result<String, JsError> {
   mica_md::wire::properties_json(request_json).map_err(js_error)
 }
 
+#[wasm_bindgen(js_name = htmlToMarkdown)]
+pub fn html_to_markdown(dom_json: &str) -> Result<String, JsError> {
+  mica_md::wire::html_to_markdown_json(dom_json).map_err(js_error)
+}
+
 #[wasm_bindgen(js_name = engineInfo)]
 pub fn engine_info() -> String {
   // The wire shape is shared; each running artifact identifies its own sources.

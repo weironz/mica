@@ -60,6 +60,9 @@ class _CountingCodec implements MarkdownCodec {
   Object? properties(Map<String, Object?> request) =>
       _inner.properties(request);
   @override
+  String htmlToMarkdown(Map<String, Object?> body) =>
+      _inner.htmlToMarkdown(body);
+  @override
   ({String crateVersion, int schemaVersion, String sourceFingerprint})
   get engineInfo => _inner.engineInfo;
 }

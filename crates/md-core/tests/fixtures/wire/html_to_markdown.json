@@ -1,0 +1,75 @@
+{
+  "cases": [
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[],\"e\":\"body\"}"
+      },
+      "id": "empty",
+      "output": ""
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"t\":\"Title\"}],\"e\":\"h2\"},{\"a\":{},\"c\":[{\"t\":\"a \"},{\"a\":{},\"c\":[{\"t\":\"bold\"}],\"e\":\"b\"},{\"t\":\" \"},{\"a\":{},\"c\":[{\"t\":\"it\"}],\"e\":\"i\"},{\"t\":\" \"},{\"a\":{},\"c\":[{\"t\":\"x`y\"}],\"e\":\"code\"}],\"e\":\"p\"}],\"e\":\"body\"}"
+      },
+      "id": "<h2>Title</h2><p>a <b>bold</b> <i>it</i> <code>x`y</code></p>",
+      "output": "## Title\n\na **bold** *it* ``x`y``"
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"t\":\"1. not a list *nor* emphasis $5 and $x$\"}],\"e\":\"p\"}],\"e\":\"body\"}"
+      },
+      "id": "<p>1. not a list *nor* emphasis $5 and $x$</p>",
+      "output": "1\\. not a list \\*nor\\* emphasis $5 and $x$"
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{\"start\":\"3\"},\"c\":[{\"a\":{},\"c\":[{\"t\":\"a\"},{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"t\":\"b\"}],\"e\":\"li\"}],\"e\":\"ul\"}],\"e\":\"li\"},{\"a\":{},\"c\":[{\"a\":{\"checked\":\"\",\"type\":\"checkbox\"},\"c\":[],\"e\":\"input\"},{\"t\":\"done\"}],\"e\":\"li\"}],\"e\":\"ol\"}],\"e\":\"body\"}"
+      },
+      "id": "<ol start=3><li>a<ul><li>b</li></ul></li><li><input type=checkbox checked>done</li></ol>",
+      "output": "3. a\n   - b\n- [x] done"
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"a\":{\"style\":\"font-style:italic\"},\"c\":[{\"t\":\"quoted\"}],\"e\":\"p\"}],\"e\":\"blockquote\"}],\"e\":\"body\"}"
+      },
+      "id": "<blockquote><p style='font-style:italic'>quoted</p></blockquote>",
+      "output": "> quoted"
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"a\":{\"class\":\"language-rust\"},\"c\":[{\"t\":\"fn x() {}\\n\"}],\"e\":\"code\"}],\"e\":\"pre\"}],\"e\":\"body\"}"
+      },
+      "id": "<pre><code class=language-rust>fn x() {}\n</code></pre>",
+      "output": "```rust\nfn x() {}\n```"
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"t\":\"a|b\"}],\"e\":\"th\"},{\"a\":{},\"c\":[{\"t\":\"c\"}],\"e\":\"th\"}],\"e\":\"tr\"},{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"t\":\"1\"}],\"e\":\"td\"},{\"a\":{},\"c\":[{\"t\":\"2\"}],\"e\":\"td\"}],\"e\":\"tr\"}],\"e\":\"tbody\"}],\"e\":\"table\"}],\"e\":\"body\"}"
+      },
+      "id": "<table><tr><th>a|b</th><th>c</th></tr><tr><td>1</td><td>2</td></tr></table>",
+      "output": "| a\\|b | c |\n| --- | --- |\n| 1 | 2 |"
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{},\"c\":[{\"a\":{\"href\":\"https://x.y/a (b)\"},\"c\":[{\"t\":\"link\"}],\"e\":\"a\"},{\"t\":\" \"},{\"a\":{\"href\":\"javascript:x\"},\"c\":[{\"t\":\"bad\"}],\"e\":\"a\"},{\"t\":\" \"},{\"a\":{\"alt\":\"*\",\"src\":\"p.png\"},\"c\":[],\"e\":\"img\"}],\"e\":\"p\"}],\"e\":\"body\"}"
+      },
+      "id": "<p><a href='https://x.y/a (b)'>link</a> <a href='javascript:x'>bad</a> <img src='p.png' alt='*'></p>",
+      "output": "[link](<https://x.y/a (b)>) bad ![\\*](p.png)"
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{\"style\":\"mso-list:l0 level1 lfo1\"},\"c\":[{\"a\":{\"style\":\"mso-list:Ignore\"},\"c\":[{\"t\":\"1.\"}],\"e\":\"span\"},{\"t\":\"one\"}],\"e\":\"p\"},{\"a\":{\"style\":\"mso-list:l0 level2 lfo1\"},\"c\":[{\"a\":{\"style\":\"mso-list:Ignore\"},\"c\":[{\"t\":\"·\"}],\"e\":\"span\"},{\"t\":\"two\"}],\"e\":\"p\"}],\"e\":\"body\"}"
+      },
+      "id": "<p class=MsoListParagraph style='mso-list:l0 level1 lfo1'><span style='mso-list:Ignore'>1.</span>one</p>+level2",
+      "output": "1. one\n   - two"
+    },
+    {
+      "args": {
+        "dom_json": "{\"a\":{},\"c\":[{\"a\":{\"class\":\"katex\"},\"c\":[{\"a\":{\"encoding\":\"application/x-tex\"},\"c\":[{\"t\":\"a^2\"}],\"e\":\"annotation\"},{\"t\":\"a2\"}],\"e\":\"span\"},{\"t\":\" & 中文😀\"}],\"e\":\"body\"}"
+      },
+      "id": "<span class=katex><annotation encoding=application/x-tex>a^2</annotation>a2</span> & 中文😀",
+      "output": "\\(a^2\\) & 中文😀"
+    }
+  ],
+  "function": "html_to_markdown_json"
+}

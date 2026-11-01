@@ -38,6 +38,11 @@ abstract interface class MarkdownCodec {
   /// `upsert`, `remove` or `infer` — and its arguments; the decoded wire
   /// answer comes back. Typed wrappers live in `editor/properties.dart`.
   Object? properties(Map<String, Object?> request);
+
+  /// Pasted clipboard HTML, already tokenized into a plain tree (see
+  /// `editor/html_to_markdown.dart`), as Markdown for [parseBlocks] with
+  /// `fragment: true`.
+  String htmlToMarkdown(Map<String, Object?> body);
   ({String crateVersion, int schemaVersion, String sourceFingerprint})
   get engineInfo;
 }
@@ -108,6 +113,8 @@ class UnavailableMarkdownCodec implements MarkdownCodec {
   InlineText parseInlineMath(String source) => _unavailable();
   @override
   Object? properties(Map<String, Object?> request) => _unavailable();
+  @override
+  String htmlToMarkdown(Map<String, Object?> body) => _unavailable();
   @override
   ({String crateVersion, int schemaVersion, String sourceFingerprint})
   get engineInfo => _unavailable();

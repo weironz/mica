@@ -1,6 +1,7 @@
 //! HTML rendering pipeline.
 
 pub(crate) mod clipboard;
+pub mod paste;
 
 // The file name is the S1 layout contract (html/html.rs), so the module name
 // intentionally matches its container.

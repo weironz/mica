@@ -95,6 +95,9 @@ class _FfiMarkdownCodec implements MarkdownCodec {
     () => jsonDecode(ffi.mdProperties(requestJson: jsonEncode(request))),
   );
   @override
+  String htmlToMarkdown(Map<String, Object?> body) =>
+      _call(() => ffi.mdHtmlToMarkdown(domJson: jsonEncode(body)));
+  @override
   ({String crateVersion, int schemaVersion, String sourceFingerprint})
   get engineInfo => _call(() {
     final info = jsonDecode(ffi.mdEngineInfo()) as Map<String, dynamic>;

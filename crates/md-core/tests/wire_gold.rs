@@ -144,7 +144,14 @@ fn verify(function: &str, cases: Vec<Value>) {
     assert_eq!(stored.len(), value["cases"].as_array().unwrap().len());
     for (case, current) in stored.iter().zip(value["cases"].as_array().unwrap()) {
       assert_eq!(case["id"], current["id"], "fixture inventory drift");
-      for key in ["markdown", "fragment", "source", "profile", "request_json"] {
+      for key in [
+        "markdown",
+        "fragment",
+        "source",
+        "profile",
+        "request_json",
+        "dom_json",
+      ] {
         assert_eq!(
           case["args"][key], current["args"][key],
           "fixture input drift: {} {key}",
@@ -176,6 +183,7 @@ fn verify(function: &str, cases: Vec<Value>) {
         "math_run_spans_json" => wire::math_run_spans_json(s("source")),
         "parse_inline_math_json" => wire::parse_inline_math_json(s("source")),
         "properties_json" => wire::properties_json(s("request_json")).unwrap(),
+        "html_to_markdown_json" => wire::html_to_markdown_json(s("dom_json")).unwrap(),
         _ => unreachable!(),
       };
       assert_eq!(
@@ -412,7 +420,9 @@ fn properties_json() {
   ];
   let mut cases = Vec::new();
   let mut push = |id: String, request: Value| {
-    let request_json = request.to_string();
+    // canonical(): key order must not depend on serde_json's preserve_order
+    // feature (the `render` build enables it through a dependency).
+    let request_json = canonical(&request).to_string();
     let output = wire::properties_json(&request_json).unwrap();
     cases.push(case(id, json!({ "request_json": request_json }), output));
   };
@@ -514,4 +524,188 @@ fn properties_json() {
     push(format!("infer/{raw:?}"), json!({"op": "infer", "raw": raw}));
   }
   verify("properties_json", cases);
+}
+
+/// Pasted HTML → Markdown (02 §3.3). Inputs are client-tokenized trees; the
+/// HTML each stands for is in the id. The client's paste tests exercise the
+/// converter much more widely — these pin the binding contract.
+#[test]
+fn html_to_markdown_json() {
+  fn t(s: &str) -> Value {
+    json!({ "t": s })
+  }
+  fn e(tag: &str, attrs: Value, children: Vec<Value>) -> Value {
+    json!({ "e": tag, "a": attrs, "c": children })
+  }
+  let body = |children: Vec<Value>| e("body", json!({}), children);
+  let cases = vec![
+    ("empty", body(vec![])),
+    (
+      "<h2>Title</h2><p>a <b>bold</b> <i>it</i> <code>x`y</code></p>",
+      body(vec![
+        e("h2", json!({}), vec![t("Title")]),
+        e(
+          "p",
+          json!({}),
+          vec![
+            t("a "),
+            e("b", json!({}), vec![t("bold")]),
+            t(" "),
+            e("i", json!({}), vec![t("it")]),
+            t(" "),
+            e("code", json!({}), vec![t("x`y")]),
+          ],
+        ),
+      ]),
+    ),
+    (
+      "<p>1. not a list *nor* emphasis $5 and $x$</p>",
+      body(vec![e(
+        "p",
+        json!({}),
+        vec![t("1. not a list *nor* emphasis $5 and $x$")],
+      )]),
+    ),
+    (
+      "<ol start=3><li>a<ul><li>b</li></ul></li><li><input type=checkbox checked>done</li></ol>",
+      body(vec![e(
+        "ol",
+        json!({"start": "3"}),
+        vec![
+          e(
+            "li",
+            json!({}),
+            vec![
+              t("a"),
+              e("ul", json!({}), vec![e("li", json!({}), vec![t("b")])]),
+            ],
+          ),
+          e(
+            "li",
+            json!({}),
+            vec![
+              e("input", json!({"type": "checkbox", "checked": ""}), vec![]),
+              t("done"),
+            ],
+          ),
+        ],
+      )]),
+    ),
+    (
+      "<blockquote><p style='font-style:italic'>quoted</p></blockquote>",
+      body(vec![e(
+        "blockquote",
+        json!({}),
+        vec![e(
+          "p",
+          json!({"style": "font-style:italic"}),
+          vec![t("quoted")],
+        )],
+      )]),
+    ),
+    (
+      "<pre><code class=language-rust>fn x() {}\n</code></pre>",
+      body(vec![e(
+        "pre",
+        json!({}),
+        vec![e(
+          "code",
+          json!({"class": "language-rust"}),
+          vec![t("fn x() {}\n")],
+        )],
+      )]),
+    ),
+    (
+      "<table><tr><th>a|b</th><th>c</th></tr><tr><td>1</td><td>2</td></tr></table>",
+      body(vec![e(
+        "table",
+        json!({}),
+        vec![e(
+          "tbody",
+          json!({}),
+          vec![
+            e(
+              "tr",
+              json!({}),
+              vec![
+                e("th", json!({}), vec![t("a|b")]),
+                e("th", json!({}), vec![t("c")]),
+              ],
+            ),
+            e(
+              "tr",
+              json!({}),
+              vec![
+                e("td", json!({}), vec![t("1")]),
+                e("td", json!({}), vec![t("2")]),
+              ],
+            ),
+          ],
+        )],
+      )]),
+    ),
+    (
+      "<p><a href='https://x.y/a (b)'>link</a> <a href='javascript:x'>bad</a> <img src='p.png' alt='*'></p>",
+      body(vec![e(
+        "p",
+        json!({}),
+        vec![
+          e("a", json!({"href": "https://x.y/a (b)"}), vec![t("link")]),
+          t(" "),
+          e("a", json!({"href": "javascript:x"}), vec![t("bad")]),
+          t(" "),
+          e("img", json!({"src": "p.png", "alt": "*"}), vec![]),
+        ],
+      )]),
+    ),
+    (
+      "<p class=MsoListParagraph style='mso-list:l0 level1 lfo1'><span style='mso-list:Ignore'>1.</span>one</p>+level2",
+      body(vec![
+        e(
+          "p",
+          json!({"style": "mso-list:l0 level1 lfo1"}),
+          vec![
+            e("span", json!({"style": "mso-list:Ignore"}), vec![t("1.")]),
+            t("one"),
+          ],
+        ),
+        e(
+          "p",
+          json!({"style": "mso-list:l0 level2 lfo1"}),
+          vec![
+            e("span", json!({"style": "mso-list:Ignore"}), vec![t("·")]),
+            t("two"),
+          ],
+        ),
+      ]),
+    ),
+    (
+      "<span class=katex><annotation encoding=application/x-tex>a^2</annotation>a2</span> & 中文😀",
+      body(vec![
+        e(
+          "span",
+          json!({"class": "katex"}),
+          vec![
+            e(
+              "annotation",
+              json!({"encoding": "application/x-tex"}),
+              vec![t("a^2")],
+            ),
+            t("a2"),
+          ],
+        ),
+        t(" & 中文😀"),
+      ]),
+    ),
+  ];
+  let mut out = Vec::new();
+  for (id, tree) in cases {
+    let dom_json = canonical(&tree).to_string();
+    out.push(case(
+      id,
+      json!({ "dom_json": dom_json }),
+      wire::html_to_markdown_json(&dom_json).unwrap(),
+    ));
+  }
+  verify("html_to_markdown_json", out);
 }

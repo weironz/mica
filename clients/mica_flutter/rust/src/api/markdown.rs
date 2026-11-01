@@ -57,6 +57,11 @@ pub fn md_properties(request_json: String) -> Result<String, String> {
 }
 
 #[frb(sync)]
+pub fn md_html_to_markdown(dom_json: String) -> Result<String, String> {
+  mica_md::wire::html_to_markdown_json(&dom_json).map_err(|e| e.to_string())
+}
+
+#[frb(sync)]
 pub fn md_engine_info() -> String {
   mica_md::wire::engine_info_json()
 }

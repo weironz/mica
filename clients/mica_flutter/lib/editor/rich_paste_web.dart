@@ -109,8 +109,14 @@ void setRichPasteHandler(RichPasteHandler? handler) {
     final handler = _handler;
     if (handler == null) return;
     final plain = data.getData('text/plain');
-    final hasHtml = htmlFragment != null && htmlFragment.trim().isNotEmpty;
-    final content = hasHtml ? htmlToMarkdown(htmlFragment) : plain;
+    // An HTML flavor that converts to nothing (or an unavailable engine) is
+    // treated as absent: the plain flavor is pasted instead of nothing.
+    final converted =
+        htmlFragment != null && htmlFragment.trim().isNotEmpty
+        ? htmlToMarkdown(htmlFragment)
+        : '';
+    final hasHtml = converted.isNotEmpty;
+    final content = hasHtml ? converted : plain;
 
     if (handler(content, plain, hasHtml)) {
       event.preventDefault();

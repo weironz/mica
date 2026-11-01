@@ -18,6 +18,7 @@ const bindings = {
   math_run_spans_json: ['mathRunSpans', ['source']],
   parse_inline_math_json: ['parseInlineMath', ['source']],
   properties_json: ['properties', ['request_json']],
+  html_to_markdown_json: ['htmlToMarkdown', ['dom_json']],
 };
 async function main() {
   vm.runInThisContext(fs.readFileSync(path.join(bundle, 'mica_md.js'), 'utf8'));
@@ -35,7 +36,7 @@ async function main() {
     functions++;
     console.log(`${wire}: ${gold.cases.length} byte-exact cases passed`);
   }
-  assert.equal(functions, 10);
+  assert.equal(functions, 11);
   const info = JSON.parse(wasm_bindgen.engineInfo());
   assert.equal(info.source_fingerprint, fs.readFileSync(path.join(bundle, 'SOURCE_FINGERPRINT'), 'utf8').trim());
   assert.equal(info.schema_version, 1);
@@ -44,10 +45,11 @@ async function main() {
     ['serializeBody', ['{', '{}']], ['serializeInline', ['{']],
     ['renderHtmlBody', ['[]', '{}', 'invalid']],
     ['properties', ['{"op":"nope"}']],
+    ['htmlToMarkdown', ['{']],
   ]) {
     assert.throws(() => wasm_bindgen[name](...args), error => error instanceof Error && String(error).includes('invalid input'), name);
   }
   assert.equal(JSON.parse(wasm_bindgen.parseBody('# hello', false))[0].text, 'hello');
-  console.log(`receipt: ${functions} golden functions, ${cases} cases, engineInfo fingerprint, 7 errors and recovery passed`);
+  console.log(`receipt: ${functions} golden functions, ${cases} cases, engineInfo fingerprint, 8 errors and recovery passed`);
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

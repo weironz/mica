@@ -252,6 +252,14 @@ pub fn properties_json(request_json: &str) -> Result<String, MdError> {
   out.map_err(invalid)
 }
 
+/// Pasted clipboard HTML → Markdown (02 §3.3). The input is the client's
+/// parsed `<body>` as an [`HtmlNode`](crate::HtmlNode) tree; the output is
+/// Markdown for `parse_body_json(…, fragment = true)`.
+pub fn html_to_markdown_json(dom_json: &str) -> Result<String, MdError> {
+  let value: Value = serde_json::from_str(dom_json).map_err(invalid)?;
+  Ok(crate::html_to_markdown(&crate::HtmlNode::from_json(&value)))
+}
+
 /// Engine build information.
 pub fn engine_info_json() -> String {
   let mut info = json!({
