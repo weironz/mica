@@ -42,6 +42,7 @@
 | [phase2-offline-crdt.md](architecture/phase2-offline-crdt.md) | Phase 2:离线优先 + CRDT 实施方案 |
 | [local-first-p2-design.md](architecture/local-first-p2-design.md) | P2:云文档离线编辑 |
 | [local-first-p3-design.md](architecture/local-first-p3-design.md) | P3:溶解双模式(本地 / 已连云共存) |
+| [ui-gpui-evaluation.md](architecture/ui-gpui-evaluation.md) | 转型方向(候选):UI 层迁到 GPUI(gpui-kit)、成为纯 Rust 项目——收益、风险、进入条件 |
 
 ## features — 功能设计
 
