@@ -8,7 +8,7 @@
 // screen. It shipped, and the user reported "看着没效果".
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/main.dart' show treeRevealOffset;
+import 'package:mica_flutter/main_tree_helpers.dart' show treeRevealOffset;
 
 void main() {
   group('treeRevealOffset', () {

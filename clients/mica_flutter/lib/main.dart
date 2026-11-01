@@ -101,6 +101,7 @@ import 'local/cache_stats.dart'
         requireCloudCacheOrigin;
 import 'import/import_title.dart' show titleFromMarkdown;
 import 'doc_tab.dart';
+import 'main_tree_helpers.dart';
 import 'prefs.dart';
 import 'theme_controller.dart';
 import 'server_list.dart';
@@ -135,7 +136,6 @@ part 'main_workspace_view.dart';
 part 'main_workspace_tree_nav.dart';
 part 'main_workspace_editor_pane.dart';
 part 'main_panels.dart';
-part 'main_tree_helpers.dart';
 part 'world/world_backend.dart';
 part 'world/local_world_backend.dart';
 

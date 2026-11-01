@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
 import 'package:mica_flutter/main.dart';
+import 'package:mica_flutter/main_tree_helpers.dart';
 
 /// Dropping on the sidebar tree's root zone.
 ///

@@ -12,7 +12,7 @@
 // Hence a pure function, with the local-mode rows spelled out.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/main.dart' show WorldCardMode, worldCardMode;
+import 'package:mica_flutter/main_tree_helpers.dart' show WorldCardMode, worldCardMode;
 
 const _cloud = 'https://mica.example.com';
 const _other = 'https://other.example.com';

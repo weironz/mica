@@ -1,4 +1,12 @@
-part of 'main.dart';
+/// Pure page-tree helpers for the shell (paths, drop targets, reveal
+/// offsets). Its own library, not a `part` of main.dart: it touches none of
+/// the shell's private state, so it needs none of its coupling.
+library;
+
+import 'dart:math' as math;
+
+import 'api/client.dart' show apiOrigin;
+import 'api/models.dart';
 
 /// The page's path, workspace first, one name per segment.
 ///

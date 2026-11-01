@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart';
+import 'package:mica_flutter/main_tree_helpers.dart';
 import 'package:mica_flutter/ui/copy_button.dart';
 
 DocumentView _view({

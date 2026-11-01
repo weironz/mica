@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/main.dart';
+import 'package:mica_flutter/main_tree_helpers.dart';
 
 /// Cutting one of our own images and pasting it back used to look like an
 /// external link — copy can only put a url on the clipboard — so the re-host
