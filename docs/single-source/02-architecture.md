@@ -254,9 +254,10 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 | `encode_cells_json(inlines_json: &str) -> Result<String>` | `[InlineJson]` | `[CellJson]` | `encode_cell` ×N（批量：一次表格写入只跨一次边界） |
 | `serialize_body_json(blocks_json: &str, assets_json: &str) -> Result<String>` | `[BlockJson]`、`{file_id: path}` | Markdown | `serialize_body` |
 | `serialize_inline_json(inline_json: &str) -> Result<String>` | `InlineJson` | Markdown | `serialize_inline` |
-| `render_html_body_json(blocks_json: &str, image_srcs_json: &str, profile: &str) -> Result<String>` | `[BlockJson]`、`{file_id: src}`、`"export"` / `"clipboard"` | HTML | `render_html_body` |
+| `render_html_body_json(blocks_json: &str, image_srcs_json: &str, profile: &str) -> Result<String>` | `[BlockJson]`、`{file_id: src}`、`"export"` / `"clipboard"` / `"strict"`(2026-11-01 追加:原样 HTML 一律转义) | HTML | `render_html_body` |
 | `math_run_spans_json(source: &str) -> String` | 文本 | `[[s,e], …]`，**UTF-16 偏移**（由 char 下标换算） | `math_run_spans` |
 | `parse_inline_math_json(source: &str) -> String` | 文本 | `InlineJson` | `parse_inline_math` |
+| `html_to_markdown_json(dom_json: &str) -> Result<String>` | 客户端分词后的 `<body>` 树:`{"t":文本}` / `{"e":标签,"a":{属性},"c":[子节点]}` / `{"m":…}` | Markdown(供 `parse_body_json(…, fragment=true)`) | `html_to_markdown`(**2026-11-01 追加**:粘贴转换从 Dart 迁入) |
 | `properties_json(request_json: &str) -> Result<String>` | `{"op":"parse","front_matter"}` / `{"op":"upsert","front_matter","key","value"}` / `{"op":"remove","front_matter","key"}` / `{"op":"infer","raw"}` | `[Property]` / 新 front matter(JSON 字符串)/ 同左 / `PropertyValue` | `properties::{parse_properties, upsert_property, remove_property, infer_value}`(**2026-10-31 追加**,只增不改,`schema_version` 不变) |
 | `engine_info_json() -> String` | — | `{"crate_version","schema_version","source_fingerprint"}` | 构建信息 |
 
@@ -398,6 +399,7 @@ abstract interface class MarkdownCodec {
   List<({int start, int end})> mathRunSpans(String source);   // UTF-16
   InlineText parseInlineMath(String source);
   Object? properties(Map<String, Object?> request);   // 2026-10-31 追加:front matter 属性,见 §3.3
+  String htmlToMarkdown(Map<String, Object?> body);    // 2026-11-01 追加:粘贴 HTML 转换,见 §3.3
   ({String crateVersion, int schemaVersion, String sourceFingerprint}) get engineInfo;
 }
 

@@ -8,7 +8,7 @@
 
 | # | 检查 | 命令 / 方法 | 期望 |
 | --- | --- | --- | --- |
-| A1 | Dart 里没有 Markdown 语法实现 | `grep -rnE "parseInline\(|inlineToMarkdown\(|markdownToBlocks\(|escapeInline\(|escapeBlockLeader|_rangeMarkdown|markdownListLayout|tableToMarkdown" clients/mica_flutter/lib` | 无结果 |
+| A1 | Dart 里没有 Markdown 语法实现 | `bash scripts/test-check-dart-markdown.sh && bash scripts/check-dart-markdown.sh`(2026-11-01 起;原先按已删函数名 grep,漏掉了名字不在单子上的两个写入方,见 lessons) | 自测全 PASS,扫描无违规 |
 | A2 | 镜像文件已删除 | `ls clients/mica_flutter/lib/editor/{markdown,list_serialization}.dart` | 不存在 |
 | A3 | `marks.dart` 只剩模型 | `wc -l clients/mica_flutter/lib/editor/marks.dart` + 人工读一遍 | ≤ 400 行，无解析/序列化函数 |
 | A4 | Dart 只经门面调用引擎 | `grep -rn "mdParse\|mdSerialize\|mdRender\|micaMd" clients/mica_flutter/lib \| grep -v "lib/markdown/"` | 无结果 |

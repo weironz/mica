@@ -129,7 +129,8 @@ The editor's **latency-critical hot paths stay in Dart** (input rules, paste
 heuristics, clipboard assembly) but contain no Markdown grammar — the editor
 holds text + marks and asks the engine to parse/serialize at its boundaries
 (paste, copy, import, export, AI; table cells decode/encode through the same
-facade, cached by content). Round-trip stability (export → re-import loses
+facade, cached by content; pasted HTML is tokenized in Dart and converted by
+the engine). `scripts/check-dart-markdown.sh` keeps it that way in CI. Round-trip stability (export → re-import loses
 nothing) is the invariant. Where the boundary sits and why:
 [`markdown-boundary-comparison.md`](../single-source/history/markdown-boundary-comparison.md).
 

@@ -16,9 +16,15 @@
 | S5 SDK 交付 | G4 ✅（2026-10-29） | `6cc2e526` | 文档、Schema、示例、API / 健壮性测试、npm 包、许可证审计、`just sdk-check`；`publish = false` |
 
 - 最终树门禁（审核方 Linux）：`local-ci.sh all` ALL GREEN——Rust 1160 + 213 passed、Flutter 2030 passed、wasm 203,003 B、Chrome 浏览器套件全绿。
-- `clients/mica_flutter/lib` 中不再有任何 Markdown 语法实现；页面属性（front matter）的 Dart 镜像起初不在本专项范围，2026-10-31 补收进门面（`properties_json`，见 [01 §9](01-background.md#9-仓库里其他双份与后续专项不在本专项范围)）；`AGENTS.md` 的规则已改为「Markdown 只有一份实现」。
+- `clients/mica_flutter/lib` 中不再有任何 Markdown 语法实现；`AGENTS.md` 的规则已改为「Markdown 只有一份实现」。
+- **收尾补漏（G4 之后发现，2026-10-31 / 11-01）**：G4 的检查按已删函数名 grep，漏了两个名字不在单子上的写入方——
+  页面属性的 Dart 镜像（收进门面：`properties_json`，见 [01 §9](01-background.md#9-仓库里其他双份与后续专项不在本专项范围)）
+  和粘贴用的 HTML→Markdown 转换（`html_to_markdown.dart` 786 行，原定性为「Rust 无对应物」而保留；现由 Dart 只做
+  HTML 分词，转换在 `md-core/src/html/paste.rs`，`html_to_markdown_json`）。同时加了按语法特征扫描的 CI 守卫
+  `scripts/check-dart-markdown.sh`（含自测），取代按函数名的检查；SDK 加了 `HtmlProfile::Strict`。
+  wasm 体积因此到 249,589 B（预算 262,144 B）。
 - **未做 / 待用户决定**：crate / npm 首次发布（手册见 [S5](stages/S5-sdk-release.md) 文末，用户本人执行）；
-  对外发布前给 SDK 的 HTML 导出加「严格」档（建议）；Mica 内部粘贴优先读 Markdown（可选改进，见 G3 记录）。
+  Mica 内部粘贴优先读 Markdown（可选改进，见 G3 记录）。
 - 审核方没有 Windows，Windows 集成测试与「旧版客户端读新表格」以执行方回执为准。
 - 每个停点的核对过程、裁决与审核方修复都在 [reviews.md](reviews.md)；各阶段执行过程在 `stages/` 的执行记录里。
 
