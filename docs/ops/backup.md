@@ -222,7 +222,8 @@ Every workspace/folder export zip now carries both:
 
 ```
 <page>.md          human-readable Markdown, images as relative links
-<page>.mica.json   {schema_version, root_block_id, blocks[], assets{file_id → path}}
+<page>.mica.json   {schema_version, root_block_id, blocks[], assets{file_id → path},
+                    md_fingerprint}
 assets/            the image bytes, de-duplicated
 manifest.json      {version: 2, generator: "mica",
                     pages: [{path, title, type, id, parent_id?, position, icon?}]}
@@ -238,6 +239,15 @@ relative `.md` path in the Markdown (so a human or an editor can follow it) and
 stays `mica://page/<viewId>` in the JSON (so an importer can remap it through the
 manifest's ids). Rewriting the JSON too would throw away the identity the JSON
 exists to carry.
+
+Importing one of our own archives (2026-11-01) builds each page from its
+`.mica.json` instead of re-parsing the Markdown, so block ids and settings that
+Markdown cannot carry (image width, …) come back as exported; images are
+re-uploaded from `assets/` and internal links are pointed at the new pages.
+That happens only while the `.md` is byte-for-byte what was exported
+(`md_fingerprint`): edit a page's Markdown in an exported folder and that edit
+wins. Archives exported before 2026-11-01 carry no fingerprint and import
+through the Markdown as before.
 
 There is no importer for the JSON half yet — it is written so the data is not
 lost, not because something reads it back. See `docs/plans/roadmap.md`.

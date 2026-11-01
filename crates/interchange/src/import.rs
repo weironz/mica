@@ -9,6 +9,7 @@ use crate::normalize::{expand_nested_zips, normalize_entries};
 use crate::notion::{looks_like_notion_export, strip_notion_id};
 use crate::order::order_page_paths;
 use crate::zip::ZipFileEntry;
+use mica_markdown::DocumentSnapshotPayload;
 
 /// One page to create, in creation order (parents always come earlier).
 #[derive(Debug)]
@@ -30,6 +31,14 @@ pub struct PagePlan {
   /// foreign archives, and for synthetic folders we invent (a Mica export
   /// states its folders explicitly, so those never need one).
   pub icon: Option<String>,
+  /// The page's own blocks, from the `<page>.mica.json` a Mica export writes
+  /// beside each `.md` (manifest v2). When present the executors use these
+  /// instead of parsing [`Self::markdown`], so the page comes back exactly as
+  /// it was exported instead of through a Markdown round trip
+  /// (docs/single-source/01-background.md §9.1, step N1). Use it through
+  /// [`native_payload`], which rewires its links to the new view ids. Only for
+  /// our own archives: a foreign `.mica.json` is not trusted to mean this.
+  pub native: Option<DocumentSnapshotPayload>,
 }
 
 #[derive(Debug)]
@@ -46,6 +55,10 @@ pub struct ImportPlan {
   /// The single top-level wrapper directory that was collapsed away (if any).
   /// The caller uses it to name a new workspace after the folder/zip.
   pub wrapper_name: Option<String>,
+  /// Page index by the view id the manifest (v2) recorded at export time, so
+  /// a native page's `mica://page/<old id>` links can be pointed at the page
+  /// that replaces it. Empty for v1 and foreign archives.
+  pub page_by_source_id: HashMap<String, usize>,
 }
 
 /// How the archive's top level maps onto the destination — the "container vs
@@ -164,10 +177,13 @@ fn plan_core(
 
   let mut files: HashMap<String, Vec<u8>> = HashMap::new();
   let mut mds: HashMap<String, String> = HashMap::new();
+  let mut block_jsons: HashMap<String, Vec<u8>> = HashMap::new();
   for e in entries {
     if is_markdown_path(&e.name) {
       mds.insert(e.name, String::from_utf8_lossy(&e.bytes).into_owned());
-    } else if e.name != "manifest.json" && !is_block_json(&e.name) {
+    } else if is_block_json(&e.name) {
+      block_jsons.insert(e.name, e.bytes);
+    } else if e.name != "manifest.json" {
       // Everything left over is an attachment — which is why the structural
       // files have to be excluded BY NAME here. `<page>.mica.json` (manifest v2)
       // would otherwise be uploaded as an image beside the page it describes.
@@ -246,6 +262,15 @@ fn plan_core(
     .iter()
     .filter_map(|e| e.icon.clone().map(|i| (e.path.clone(), i)))
     .collect();
+  // The export-time view id of every manifest entry (v2), keyed like `icons`.
+  let source_ids: Vec<(String, bool, String)> = if mica_export {
+    entries
+      .iter()
+      .filter_map(|e| e.id.clone().map(|id| (e.path.clone(), e.is_folder, id)))
+      .collect()
+  } else {
+    Vec::new()
+  };
   let mut ordered: Vec<(String, bool)> = Vec::new();
   let mut queued: HashSet<String> = HashSet::new();
   for e in entries {
@@ -383,6 +408,7 @@ fn plan_core(
             markdown: String::new(),
             is_folder: true,
             icon: icons.get(&folder_path).cloned(),
+            native: None,
           });
           let idx = pages.len() - 1;
           folder_page.insert(key, idx);
@@ -457,6 +483,7 @@ fn plan_core(
             markdown: String::new(),
             is_folder: true,
             icon: None,
+            native: None,
           });
           let idx = pages.len() - 1;
           folder_page.insert(own_key.clone(), idx);
@@ -478,8 +505,25 @@ fn plan_core(
       markdown: body,
       is_folder: false,
       icon: icons.get(path).cloned(),
+      native: if mica_export {
+        native_sidecar(&block_jsons, path, markdown)
+      } else {
+        None
+      },
     });
     page_by_path.insert(path.clone(), pages.len() - 1);
+  }
+
+  let mut page_by_source_id: HashMap<String, usize> = HashMap::new();
+  for (path, is_folder, id) in source_ids {
+    let idx = if is_folder {
+      folder_page.get(&dir_key(&path)).copied()
+    } else {
+      page_by_path.get(&path).copied()
+    };
+    if let Some(idx) = idx {
+      page_by_source_id.insert(id, idx);
+    }
   }
 
   let mut plan = ImportPlan {
@@ -489,6 +533,7 @@ fn plan_core(
     page_by_path,
     notion,
     wrapper_name: None,
+    page_by_source_id,
   };
   match mode {
     // Mirror the archive as-is (the peel above still ran, but no container).
@@ -539,6 +584,7 @@ fn wrap_in_container(plan: &mut ImportPlan, name: String) {
     markdown: String::new(),
     is_folder: true,
     icon: None,
+    native: None,
   });
   for p in plan.pages.drain(..) {
     let parent = Some(p.parent.map(|i| i + 1).unwrap_or(0));
@@ -548,6 +594,115 @@ fn wrap_in_container(plan: &mut ImportPlan, name: String) {
   for idx in plan.page_by_path.values_mut() {
     *idx += 1;
   }
+  for idx in plan.page_by_source_id.values_mut() {
+    *idx += 1;
+  }
+}
+
+/// The blocks in `<page>.mica.json` beside `md_path`, if the file is there and
+/// reads as a snapshot.
+///
+/// Image blocks come back as archive references: `{file_id, name}` becomes
+/// `{url: <the path the sidecar's `assets` names>}`, which is exactly what a
+/// Markdown-sourced image block looks like. The executors' existing "image
+/// inside the archive → upload it" step then handles both kinds, and the
+/// export-time file id (meaningless on another server) never survives.
+///
+/// Used only while the `.md` beside it is byte-for-byte what was exported (its
+/// `md_fingerprint`). An archive exported to a folder can be edited by hand
+/// before it comes back; the edited Markdown then wins, through the ordinary
+/// Markdown path. A sidecar without a fingerprint (exports before 2026-11-01)
+/// is not trusted either, so those archives import exactly as they always did.
+fn native_sidecar(
+  block_jsons: &HashMap<String, Vec<u8>>,
+  md_path: &str,
+  md: &str,
+) -> Option<DocumentSnapshotPayload> {
+  let bytes = block_jsons.get(&format!("{}.mica.json", strip_md_ext(md_path)))?;
+  let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+  if value.get("md_fingerprint").and_then(|v| v.as_str())
+    != Some(crate::md_fingerprint(md.as_bytes()).as_str())
+  {
+    return None;
+  }
+  let assets: HashMap<String, String> = value
+    .get("assets")
+    .and_then(|a| serde_json::from_value(a.clone()).ok())
+    .unwrap_or_default();
+  let mut payload: DocumentSnapshotPayload = serde_json::from_value(value).ok()?;
+  if payload.blocks.is_empty() {
+    return None;
+  }
+  for block in &mut payload.blocks {
+    if block.kind != "image" {
+      continue;
+    }
+    let Some(data) = block.data.as_object_mut() else {
+      continue;
+    };
+    let Some(path) = data
+      .get("file_id")
+      .and_then(|v| v.as_str())
+      .and_then(|id| assets.get(id))
+      .cloned()
+    else {
+      continue;
+    };
+    data.remove("file_id");
+    data.remove("name");
+    data.insert("url".into(), serde_json::Value::String(path));
+  }
+  Some(payload)
+}
+
+/// Page `idx`'s native blocks (see [`PagePlan::native`]) with every
+/// `mica://page/<export-time id>` link pointed at the page that replaces it:
+/// `view_id_of(i)` names the new view id of plan page `i`. A link to a page
+/// that is not in this archive is left as it was (it dangles, exactly as the
+/// same link would after a Markdown import). None for a page with no native
+/// blocks — the caller parses its Markdown as before.
+///
+/// Shared by the server and the local executor so the two cannot drift.
+pub fn native_payload(
+  plan: &ImportPlan,
+  idx: usize,
+  view_id_of: &dyn Fn(usize) -> String,
+) -> Option<DocumentSnapshotPayload> {
+  let mut payload = plan.pages.get(idx)?.native.clone()?;
+  crate::for_each_inline_mark_mut(&mut payload, |mark| {
+    let Some(obj) = mark.as_object_mut() else {
+      return;
+    };
+    let Some(target) = obj
+      .get("href")
+      .and_then(|v| v.as_str())
+      .and_then(|href| href.strip_prefix("mica://page/"))
+      .and_then(|old| plan.page_by_source_id.get(old))
+    else {
+      return;
+    };
+    obj.insert(
+      "href".into(),
+      serde_json::Value::String(format!("mica://page/{}", view_id_of(*target))),
+    );
+  });
+  Some(payload)
+}
+
+/// Point an image block's `data` at an uploaded file: the archive `url` gives
+/// way to `file_id` + `name`, and every other key (width, title, …) stays.
+/// Both executors call this, for Markdown-sourced and native images alike.
+pub fn attach_uploaded_image(data: &mut serde_json::Value, file_id: &str, name: &str) {
+  if !data.is_object() {
+    *data = serde_json::json!({});
+  }
+  let obj = data.as_object_mut().expect("just made an object");
+  obj.remove("url");
+  obj.insert(
+    "file_id".into(),
+    serde_json::Value::String(file_id.to_string()),
+  );
+  obj.insert("name".into(), serde_json::Value::String(name.to_string()));
 }
 
 /// One `pages[]` row of the export manifest.
@@ -560,6 +715,8 @@ struct ManifestEntry {
   /// v2 only. v1 archives have no icon anywhere, so None is the honest answer
   /// rather than a default.
   icon: Option<String>,
+  /// v2 only: the view id at export time.
+  id: Option<String>,
 }
 
 /// Parse the export `manifest.json` in listed (pre-order) order. Entries
@@ -597,11 +754,17 @@ fn manifest_entries(manifest_json: Option<&str>) -> Vec<ManifestEntry> {
         .and_then(|t| t.as_str())
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.to_string());
+      let id = p
+        .get("id")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string());
       Some(ManifestEntry {
         path,
         is_folder,
         title,
         icon,
+        id,
       })
     })
     .collect()

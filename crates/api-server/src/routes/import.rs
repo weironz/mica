@@ -841,8 +841,21 @@ async fn run_import(
       persist_progress(state, job_id, idx + 1).await;
       continue;
     }
-    let root_block_id = format!("block_{}", Uuid::new_v4().simple());
-    let mut payload = page_seed(&page.markdown, &page.title, &root_block_id);
+    // A page from our own export comes back from its `.mica.json` blocks, not
+    // through a Markdown round trip (N1); everything else is parsed as before.
+    // Either way the image and link passes below finish the job.
+    let (root_block_id, mut payload) =
+      match mica_interchange::native_payload(&plan, idx, &|i| view_ids[i].to_string()) {
+        Some(mut native) => {
+          mica_markdown::set_document_title(&mut native, &page.title);
+          (native.root_block_id.clone(), native)
+        }
+        None => {
+          let root_block_id = format!("block_{}", Uuid::new_v4().simple());
+          let payload = page_seed(&page.markdown, &page.title, &root_block_id);
+          (root_block_id, payload)
+        }
+      };
     let from = page.archive_path.as_deref().unwrap_or("");
     // Failures for THIS page, held until insert_page hands back the document id
     // they have to be addressed to. (url, block_id, reason, attempted)
@@ -870,7 +883,7 @@ async fn run_import(
             &mut uploaded,
           )
           .await?;
-          block.data = json!({"file_id": entry.0, "name": entry.1});
+          mica_interchange::attach_uploaded_image(&mut block.data, &entry.0, &entry.1);
         } else if params.rehost_external
           && (url.starts_with("http://") || url.starts_with("https://"))
         {
@@ -888,7 +901,9 @@ async fn run_import(
           )
           .await
           {
-            Some(entry) => block.data = json!({"file_id": entry.0, "name": entry.1}),
+            Some(entry) => {
+              mica_interchange::attach_uploaded_image(&mut block.data, &entry.0, &entry.1)
+            }
             // Left as a link, and now said out loud. `document_id` is stamped
             // after insert_page below — the page does not exist yet.
             None => {

@@ -142,40 +142,10 @@ impl MicaDocument {
         asset_ids: &std::collections::HashMap<String, String>,
     ) -> MicaDocument {
         let root_id = format!("block_{}", uuid::Uuid::new_v4());
-        let payload = mica_markdown::import_markdown(markdown, &root_id);
-        let paths: std::collections::HashSet<String> = asset_ids.keys().cloned().collect();
-
-        let blocks: Vec<Block> = payload
-            .blocks
-            .into_iter()
-            .map(|mut b| {
-                // Nested rather than a let-chain: this crate is not on the 2024
-                // edition, where those became legal.
-                if b.kind == "image" {
-                    if let Some(url) = b.data.get("url").and_then(|v| v.as_str()) {
-                        if let Some(hit) =
-                            mica_interchange::resolve_ref(from_path, url, &paths)
-                        {
-                            if let Some(file_id) = asset_ids.get(&hit) {
-                                // The shape the cloud import produces and the
-                                // local blob store expects: id + a readable
-                                // name, and no url.
-                                let name =
-                                    hit.rsplit('/').next().unwrap_or(&hit).to_string();
-                                b.data = serde_json::json!({
-                                    "file_id": file_id,
-                                    "name": name,
-                                });
-                            }
-                        }
-                    }
-                }
-                b
-            })
-            .collect();
-
+        let mut payload = mica_markdown::import_markdown(markdown, &root_id);
+        rewire_archive_images(&mut payload.blocks, from_path, asset_ids);
         MicaDocument {
-            inner: Mutex::new(MicaDoc::from_blocks(&payload.root_block_id, &blocks)),
+            inner: Mutex::new(MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks)),
         }
     }
 
@@ -817,5 +787,34 @@ mod tests {
         let doc = MicaDocument::from_markdown(String::new());
         assert!(!doc.root_block_id().is_empty());
         assert!(!doc.encode_state().is_empty());
+    }
+}
+
+/// Image blocks whose `url` resolves to a file inside the imported archive or
+/// vault get that file's local blob id (`asset_ids`: archive path -> blob id),
+/// in the `{file_id, name}` shape the cloud import produces and the local blob
+/// store expects; their other keys (width, title) stay. Shared by the Markdown
+/// import above and the native (`.mica.json`) path in `store.rs`, whose images
+/// the planner hands over as archive `url`s too.
+pub(crate) fn rewire_archive_images(
+    blocks: &mut [Block],
+    from_path: &str,
+    asset_ids: &std::collections::HashMap<String, String>,
+) {
+    let paths: std::collections::HashSet<String> = asset_ids.keys().cloned().collect();
+    for b in blocks.iter_mut() {
+        if b.kind != "image" {
+            continue;
+        }
+        let Some(url) = b.data.get("url").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(hit) = mica_interchange::resolve_ref(from_path, url, &paths) else {
+            continue;
+        };
+        if let Some(file_id) = asset_ids.get(&hit) {
+            let name = hit.rsplit('/').next().unwrap_or(&hit).to_string();
+            mica_interchange::attach_uploaded_image(&mut b.data, file_id, &name);
+        }
     }
 }

@@ -827,6 +827,27 @@ impl MicaStore {
                     doc_id.clone(),
                     &MicaDocument::from_markdown(String::new()),
                 );
+            } else if let Some(mut native) =
+                mica_interchange::native_payload(&plan, idx, &|i| planned_view_ids[i].clone())
+            {
+                // A page from our own export: its `.mica.json` blocks, not a
+                // Markdown round trip (N1). Links already point at the new view
+                // ids; images come as archive urls and get their blob ids here,
+                // by the same rewiring the Markdown path uses.
+                object_type = "document";
+                crate::api::document::rewire_archive_images(
+                    &mut native.blocks,
+                    page.archive_path.as_deref().unwrap_or_default(),
+                    &asset_ids,
+                );
+                let doc = MicaDocument::from_blocks_json(
+                    native.root_block_id.clone(),
+                    serde_json::to_string(&native.blocks).unwrap_or_default(),
+                );
+                if !page.title.is_empty() {
+                    doc.set_title(page.title.clone());
+                }
+                self.save_doc("local".to_string(), doc_id.clone(), &doc);
             } else {
                 object_type = "document";
                 let mut doc = MicaDocument::from_markdown_with_assets(
@@ -1785,6 +1806,68 @@ mod clone_view_tests {
         let body = a_doc.export_markdown();
         assert!(body.contains("# A\n\nbody"), "{body}");
         assert!(!body.contains("assets/p.png"), "{body}");
+    }
+
+    /// N1 on the local side: an archive Mica exported comes back from its
+    /// `.mica.json` blocks — block ids and image width survive, the image gets
+    /// the blob id Dart stored for its archive path, and the internal link is
+    /// pointed at the new view of the page it named at export time.
+    #[test]
+    fn vault_import_uses_native_blocks_from_our_own_export() {
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("ws1", "WS", "0000000010"));
+        let manifest = serde_json::json!({
+            "version": 2, "generator": "mica",
+            "pages": [
+                { "path": "A.md", "title": "A", "type": "document", "id": "old-a" },
+                { "path": "B.md", "title": "B", "type": "document", "id": "old-b" }
+            ]
+        });
+        let a_md = "# A\n\nsee [B](B.md)\n\n![](assets/p.png)";
+        let sidecar = serde_json::json!({
+            "schema_version": 1, "root_block_id": "r",
+            "md_fingerprint": mica_interchange::md_fingerprint(a_md.as_bytes()),
+            "blocks": [
+                { "id": "r", "type": "page", "text": "", "data": {}, "children": ["p1", "i1"] },
+                { "id": "p1", "type": "paragraph", "text": "see B",
+                  "data": { "marks": [{ "type": "link", "href": "mica://page/old-b", "start": 4, "end": 5 }] },
+                  "children": [] },
+                { "id": "i1", "type": "image", "text": "",
+                  "data": { "file_id": "export-time-id", "name": "p.png", "width": 320 }, "children": [] }
+            ],
+            "assets": { "export-time-id": "assets/p.png" }
+        });
+        let outcome = store.import_vault_tree(
+            vec![
+                vte("manifest.json", &manifest.to_string()),
+                vte("A.md", a_md),
+                vte("A.mica.json", &sidecar.to_string()),
+                vte("B.md", "# B\n\nbeta"),
+                vte("assets/p.png", "PNG"),
+            ],
+            "ws1".into(),
+            None,
+            std::collections::HashMap::from([(
+                "assets/p.png".to_string(),
+                "sha256blob".to_string(),
+            )]),
+        );
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        let views = store.list_views("local".to_string());
+        let a = view_by_name(&views, "A");
+        let b = view_by_name(&views, "B");
+        let payload = store
+            .load_doc("local".to_string(), a.object_id.clone())
+            .unwrap()
+            .unwrap()
+            .snapshot();
+        let ids: Vec<&str> = payload.blocks.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["r", "p1", "i1"], "native block ids survive");
+        let img = payload.blocks.iter().find(|b| b.kind == "image").unwrap();
+        assert_eq!(img.data["file_id"], "sha256blob", "{}", img.data);
+        assert_eq!(img.data["width"], 320);
+        let para = payload.blocks.iter().find(|b| b.id == "p1").unwrap();
+        assert_eq!(para.data["marks"][0]["href"], format!("mica://page/{}", b.id));
     }
 
     /// Into a NON-EMPTY tree, imported nodes must not reuse positions already

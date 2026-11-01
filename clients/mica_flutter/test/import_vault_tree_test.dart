@@ -7,8 +7,9 @@
 // local_doc_append_heal_test.dart), with the blob CAS writing a real temp dir:
 //
 //   - dot-directories are dropped before anything is stored,
-//   - non-Markdown entries become content-addressed blobs and the
-//     path → blob-id map crosses to the store for reference rewiring,
+//   - attachments become content-addressed blobs and the path → blob-id map
+//     crosses to the store for reference rewiring; the planner's own files
+//     (`.md`, `manifest.json`, `.mica.json`) cross as entries instead,
 //   - a blob that fails to store is NAMED in the result, not swallowed,
 //   - the store's outcome (docs/folders/errors) is merged with the local
 //     blob errors.
@@ -113,6 +114,26 @@ void main() {
     expect(store.gotAssetIds!.keys, ['assets/pic.png']);
     expect(blobCount(), 1);
     expect(local.hasBlob(store.gotAssetIds!['assets/pic.png']!), isTrue);
+  });
+
+  test("our own export's manifest and sidecars go to the planner, not the CAS",
+      () async {
+    store.answer = const VaultImportOutcome(
+        docs: 1, folders: 0, errors: [], viewIds: []);
+    await local.importVaultTree([
+      file('manifest.json', '{"generator":"mica"}'.codeUnits),
+      file('A.md', '# A'.codeUnits),
+      file('A.mica.json', '{}'.codeUnits),
+      file('assets/p.png', const [1]),
+    ], 'local');
+
+    // The planner reads manifest titles/ids and the native blocks; stored as
+    // blobs they would never reach it (and the local import of an export
+    // would silently fall back to re-parsing Markdown).
+    expect(store.gotEntries!.map((e) => e.path).toList(),
+        ['manifest.json', 'A.md', 'A.mica.json']);
+    expect(store.gotAssetIds!.keys, ['assets/p.png']);
+    expect(blobCount(), 1);
   });
 
   test('an asset that fails to store is named, and the import continues',

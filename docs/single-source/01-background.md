@@ -140,15 +140,17 @@ Mica 的约束（C1：服务端必须解析）决定了编解码器必须是 Rus
 ### 9.1 导出 / 备份格式（讨论结论，未排期）
 
 现状更像 Notion：对用户可见的只有通用格式（Markdown ZIP）。导出包从 2026-08-30 起已经同时写
-`<页面>.mica.json`（原生块数据 + id + 树 + 图标，manifest v2），但**没有导入器读它**，
-导入走通用 Markdown 解析 → 页面 id、评论、编辑历史、分享链接丢失；备份只能整库恢复，不能单工作区原样恢复
+`<页面>.mica.json`（原生块数据 + id + 树 + 图标，manifest v2）。**N1 已做（2026-11-01）**：导入我们自己的导出包时，
+`.md` 未被改动（sidecar 里的 `md_fingerprint` 对得上）的页面直接用 `.mica.json` 的块建文档——块 id、图片宽度等不经 Markdown 的属性保住，
+图片按 `assets` 映射重新上传，`mica://page/<旧 id>` 按 manifest 的 id 改指新页；`.md` 被手改过、或 11-01 之前的导出包（无指纹），照旧走 Markdown。
+服务端与本地导入共用 `mica_interchange::native_payload`。此前导入只走通用 Markdown 解析 → 页面 id、评论、编辑历史、分享链接丢失（页面 id、评论、历史、分享链接 N1 仍不带）；备份只能整库恢复，不能单工作区原样恢复
 （见 `docs/ops/backup.md`「What this restores, and what it does not」）。
 
 同类：思源（磁盘上 `.sy` 即 JSON，另有 `.sy.zip` / Data 导出）、AppFlowy（工作区 ZIP，官方称可原样恢复）都有「原生无损格式 + 通用格式」两层；
 Notion 只有通用格式。
 
 建议方向：原生包 `.mica.zip`（块 JSON 而非 CRDT 二进制；不导出分享令牌、成员、账号）+ 通用 Markdown/HTML/PDF + 实例灾备。
-步骤 N1 给 `.mica.json` 补导入器（3–5 天，性价比最高）→ N2 加评论与页面属性（v3）→ N3 界面区分「备份」与「导出 Markdown」，
+步骤 ~~N1 给 `.mica.json` 补导入器~~（已做）→ N2 加评论与页面属性（v3）→ N3 界面区分「备份」与「导出 Markdown」，
 本地↔云端迁移走同一格式 → N4 单工作区恢复。用户 2026-10-26 决定「之后再做」。
 
 与本专项的关系：原生包导入**不经过 Markdown 解析**，Markdown 只处理外来数据 —— 与 D1 同一原则。

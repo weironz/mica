@@ -372,26 +372,6 @@ impl<'a> TreeExport<'a> {
       return entries;
     };
 
-    // The structural half, beside the Markdown: the block model verbatim.
-    //
-    // Serialized from `original`, NOT from the rewritten `payload`: the markdown
-    // needs internal links turned into relative `.md` paths, and this file needs
-    // the opposite — `mica://page/<viewId>` kept intact, because identity is the
-    // whole reason it exists. An importer remaps those through the manifest's
-    // ids; a relative path would have thrown that away.
-    //
-    // `assets` maps the blocks' `file_id`s to the archive paths of the bytes, so
-    // a consumer can resolve images without re-deriving the naming rules.
-    entries.push(ZipEntry {
-      name: format!("{}.mica.json", path.trim_end_matches(".md")),
-      data: serde_json::to_vec_pretty(&serde_json::json!({
-        "schema_version": original.schema_version,
-        "root_block_id": original.root_block_id,
-        "blocks": original.blocks,
-        "assets": img_map,
-      }))
-      .unwrap_or_default(),
-    });
     // The title leads the text, after any front matter.
     //
     // This REVERSES a deliberate earlier decision — "the body verbatim; the page
@@ -408,9 +388,36 @@ impl<'a> TreeExport<'a> {
     // is what keeps export→import stable (CLAUDE.md #4). The two must move
     // together; changing one alone silently doubles the title per round trip.
     let title = document_title(&payload).unwrap_or(node.name.as_str());
+    let md = with_page_title(&body, title).into_bytes();
+    // The structural half, beside the Markdown: the block model verbatim.
+    //
+    // Serialized from `original`, NOT from the rewritten `payload`: the markdown
+    // needs internal links turned into relative `.md` paths, and this file needs
+    // the opposite — `mica://page/<viewId>` kept intact, because identity is the
+    // whole reason it exists. An importer remaps those through the manifest's
+    // ids; a relative path would have thrown that away.
+    //
+    // `assets` maps the blocks' `file_id`s to the archive paths of the bytes, so
+    // a consumer can resolve images without re-deriving the naming rules.
+    //
+    // `md_fingerprint` is of the exact `.md` bytes written next to it. An
+    // importer uses these blocks only while the `.md` still matches: a user who
+    // exported to a folder and then edited the Markdown must get their edits,
+    // not a stale sidecar (see `import::native_sidecar`).
+    entries.push(ZipEntry {
+      name: format!("{}.mica.json", path.trim_end_matches(".md")),
+      data: serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": original.schema_version,
+        "root_block_id": original.root_block_id,
+        "blocks": original.blocks,
+        "assets": img_map,
+        "md_fingerprint": md_fingerprint(&md),
+      }))
+      .unwrap_or_default(),
+    });
     entries.push(ZipEntry {
       name: path,
-      data: with_page_title(&body, title).into_bytes(),
+      data: md,
     });
     entries
   }
@@ -502,6 +509,19 @@ fn unique_sibling_base(node: &TreeNode, used: &mut HashSet<String>) -> String {
     used.insert(name);
   }
   base
+}
+
+/// A fingerprint of a page's exported `.md` bytes, stored in its `.mica.json`
+/// so an importer can tell whether the Markdown was edited after export.
+/// FNV-1a 64: this guards against accidental divergence, not an adversary
+/// (anyone who can edit the archive can edit the sidecar too).
+pub fn md_fingerprint(bytes: &[u8]) -> String {
+  let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+  for b in bytes {
+    h ^= u64::from(*b);
+    h = h.wrapping_mul(0x0000_0100_0000_01b3);
+  }
+  format!("fnv1a64:{h:016x}")
 }
 
 /// Visit every inline-mark object in a payload in block order, mutably: the
@@ -1083,6 +1103,133 @@ mod tests {
   /// needs the `mica://page/<id>` an importer can remap. Rewriting the JSON too
   /// would throw away the identity the JSON exists to carry — and the bug would
   /// be invisible until somebody re-imported and found the links broken.
+  /// N1: an export imported again comes back from its `.mica.json`, not from
+  /// the Markdown — block ids and image settings survive, the image is handed
+  /// to the executors as an archive reference (its old file id means nothing
+  /// on another server), and an internal link is pointed at the new view id.
+  #[test]
+  fn an_exported_page_imports_from_its_native_blocks() {
+    let nodes = vec![
+      folder("f", None, "0000000010", "Folder"),
+      doc("a", Some("f"), "0000000010", "Alpha"),
+      doc("b", None, "0000000020", "Beta"),
+    ];
+    let mut p = payload_with_image("see beta", "file-1");
+    if let Some(img) = p.blocks.iter_mut().find(|b| b.kind == "image") {
+      img.data["width"] = serde_json::json!(320);
+    }
+    if let Some(para) = p.blocks.iter_mut().find(|b| b.text == "see beta") {
+      para.data = serde_json::json!({
+        "marks": [{ "type": "link", "href": "mica://page/b", "start": 4, "end": 8 }]
+      });
+    }
+    let original_ids: Vec<String> = p.blocks.iter().map(|b| b.id.clone()).collect();
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_a".to_string(), p);
+    payloads.insert("obj_b".to_string(), payload("beta"));
+    let images = HashMap::from([(
+      "file-1".to_string(),
+      ImageAsset {
+        name: "shot.png".into(),
+        bytes: vec![7],
+        dedup_key: "k".into(),
+      },
+    )]);
+    let entries = build_markdown_tree_zip(&nodes, None, &payloads, &images);
+
+    let raw = entries
+      .into_iter()
+      .map(|e| crate::ZipFileEntry {
+        name: e.name,
+        bytes: e.data,
+      })
+      .collect();
+    let plan = crate::plan_import(raw, false, crate::ImportMode::AsIs).unwrap();
+    let alpha = plan.pages.iter().position(|p| p.title == "Alpha").unwrap();
+    let beta = plan.pages.iter().position(|p| p.title == "Beta").unwrap();
+    assert!(
+      plan.pages[alpha].native.is_some(),
+      "our own export carries native blocks"
+    );
+
+    let got = crate::native_payload(&plan, alpha, &|i| format!("new-{i}")).unwrap();
+    let ids: Vec<String> = got.blocks.iter().map(|b| b.id.clone()).collect();
+    assert_eq!(
+      ids, original_ids,
+      "block ids survive; a Markdown import would mint new ones"
+    );
+    let img = got.blocks.iter().find(|b| b.kind == "image").unwrap();
+    assert_eq!(img.data["url"], "../assets/shot.png", "{}", img.data);
+    assert_eq!(img.data["width"], 320, "image settings survive");
+    assert!(
+      img.data.get("file_id").is_none(),
+      "the export-time file id is not carried"
+    );
+    let href = got
+      .blocks
+      .iter()
+      .find_map(|b| b.data["marks"][0]["href"].as_str())
+      .unwrap();
+    assert_eq!(href, format!("mica://page/new-{beta}"));
+  }
+
+  /// An export can be edited by hand before it comes back (a folder mirror, a
+  /// vault). Once the `.md` no longer matches the fingerprint in its sidecar,
+  /// the edited Markdown wins and the stale blocks are ignored.
+  #[test]
+  fn an_edited_markdown_file_wins_over_its_sidecar() {
+    let nodes = vec![doc("a", None, "0000000010", "Alpha")];
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_a".to_string(), payload("original text"));
+    let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+    let raw: Vec<crate::ZipFileEntry> = entries
+      .into_iter()
+      .map(|e| {
+        let bytes = if e.name == "Alpha.md" {
+          String::from_utf8(e.data)
+            .unwrap()
+            .replace("original", "edited")
+            .into_bytes()
+        } else {
+          e.data
+        };
+        crate::ZipFileEntry {
+          name: e.name,
+          bytes,
+        }
+      })
+      .collect();
+    let plan = crate::plan_import(raw, false, crate::ImportMode::AsIs).unwrap();
+    let alpha = plan.pages.iter().find(|p| p.title == "Alpha").unwrap();
+    assert!(
+      alpha.native.is_none(),
+      "a stale sidecar must not override the edit"
+    );
+    assert!(alpha.markdown.contains("edited text"), "{}", alpha.markdown);
+  }
+
+  /// A foreign archive's `.mica.json` is not trusted: without our manifest's
+  /// `generator`, pages are parsed from Markdown as before.
+  #[test]
+  fn a_foreign_sidecar_is_ignored() {
+    let sidecar = serde_json::json!({
+      "schema_version": 1, "root_block_id": "r",
+      "blocks": [{ "id": "r", "type": "page", "text": "", "data": {}, "children": [] }]
+    });
+    let raw = vec![
+      crate::ZipFileEntry {
+        name: "A.md".into(),
+        bytes: b"hello".to_vec(),
+      },
+      crate::ZipFileEntry {
+        name: "A.mica.json".into(),
+        bytes: sidecar.to_string().into_bytes(),
+      },
+    ];
+    let plan = crate::plan_import(raw, false, crate::ImportMode::AsIs).unwrap();
+    assert!(plan.pages.iter().all(|p| p.native.is_none()));
+  }
+
   #[test]
   fn block_json_keeps_internal_links_while_markdown_relativises_them() {
     let nodes = vec![
@@ -1317,13 +1464,16 @@ mod tests {
   /// D3: splitting the walk into [`TreeExport`] must not move a byte of the
   /// archive. Fingerprints taken from the pre-split builder: whole tree,
   /// subtree, single-page incremental with an omitted asset, empty.
+  /// Re-pinned 2026-11-01 for ONE intended change: every `.mica.json` gained
+  /// `md_fingerprint` (the `.md` bytes and the entry order are untouched — the
+  /// empty archive, which has no sidecar, kept its value).
   #[test]
   fn the_split_walk_builds_byte_identical_archives() {
     let (nodes, payloads, images) = pin_fixture();
     let zip = |entries: Vec<ZipEntry>| fnv(&crate::zip::build_zip(&canonical(entries)));
     assert_eq!(
       zip(build_markdown_tree_zip(&nodes, None, &payloads, &images)),
-      0x9c57_833d_166c_3bce
+      0x0549_91a9_a2a3_83ac
     );
     assert_eq!(
       zip(build_markdown_tree_zip(
@@ -1332,14 +1482,14 @@ mod tests {
         &payloads,
         &images
       )),
-      0x5bb1_35ba_6c73_c72c
+      0xf6a6_de00_fdd7_3206
     );
     let omit = HashSet::from(["file-2".to_string()]);
     assert_eq!(
       zip(build_incremental_markdown_tree_zip(
         &nodes, &payloads, &images, "b", &omit
       )),
-      0xbb33_9b6b_bdbf_6867
+      0x554b_46e3_fa6b_eba8
     );
     assert_eq!(
       zip(build_markdown_tree_zip(

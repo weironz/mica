@@ -576,7 +576,8 @@ class LocalOffline implements LocalOfflineApi {
 
   /// Import a pre-walked tree of files as local documents, mirroring the
   /// directory layout as a page tree — folders on the path to a `.md` become
-  /// folders; non-`.md` files become blobs and anything under a `.`-dir
+  /// folders; files that are not the planner's (see [_isPlanFile]) become
+  /// blobs, and anything under a `.`-dir
   /// (`.obsidian`/`.git`/`.trash`…) is skipped. Each [entries] item is a
   /// forward-slashed relative path + its bytes (as the folder picker produces).
   /// **Read-only w.r.t. the source folder** — nothing is written back. This is
@@ -617,7 +618,7 @@ class LocalOffline implements LocalOfflineApi {
     final assetIds = <String, String>{};
     var scanned = 0;
     for (final e in visible) {
-      if (e.path.toLowerCase().endsWith('.md')) continue;
+      if (_isPlanFile(e.path)) continue;
       try {
         assetIds[e.path] = putBlob(Uint8List.fromList(e.bytes));
       } catch (err) {
@@ -637,7 +638,7 @@ class LocalOffline implements LocalOfflineApi {
     final outcome = await store.importVaultTree(
       entries: [
         for (final e in visible)
-          if (e.path.toLowerCase().endsWith('.md'))
+          if (_isPlanFile(e.path))
             VaultTreeEntry(
               path: e.path,
               bytes: Uint8List.fromList(e.bytes),
@@ -1278,4 +1279,17 @@ class LocalOffline implements LocalOfflineApi {
   /// on the native boundary the web build already stubs out. Returns null on
   /// non-Windows platforms / if the runtime is unavailable / print failed.
   Future<Uint8List?> htmlToPdf(String html) => exportPdf(html: html);
+}
+
+/// What the Rust import planner reads, as opposed to attachments: the pages'
+/// Markdown, and — for an archive Mica exported — its `manifest.json` (real
+/// titles, icons, ids) and each page's `.mica.json` (its native blocks). Those
+/// two used to be stored as blobs like an image, so a local import of our own
+/// export never saw them. The planner itself decides whether to trust them
+/// (`generator: mica`, matching `md_fingerprint`); this only routes the bytes.
+bool _isPlanFile(String path) {
+  final lower = path.toLowerCase();
+  return lower.endsWith('.md') ||
+      lower.endsWith('.mica.json') ||
+      lower == 'manifest.json';
 }
