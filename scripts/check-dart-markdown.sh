@@ -28,6 +28,8 @@ lib=${MICA_DART_LIB:-clients/mica_flutter/lib}  # override: scripts/test-check-d
 # matches the syntax inside a Dart string or regex literal, not code in general.
 # The last line catches the regex-escaped forms (`r'\*\*'`, `#{1,6}`) and
 # fences anywhere: a Dart Markdown reader is usually a RegExp, not a string.
+# `| ---` is a table delimiter row (a reader of the engine's output is still a
+# reader).
 patterns=$(cat <<'ERE'
 '\*\*'|"\*\*"
 '~~'|"~~"
@@ -37,6 +39,7 @@ patterns=$(cat <<'ERE'
 '\\\\\$\{
 '\$\{?[A-Za-z_]+\}?: |'  - 
 \\\*\\\*|#\{1,6\}|```|~~~
+['"]\| ?---
 ERE
 )
 joined=$(printf '%s' "$patterns" | paste -sd'|')

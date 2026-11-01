@@ -3,7 +3,7 @@ import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/editor/rich_paste_stub.dart'
-    show clipboardHtmlIsDataTable;
+    show clipboardHtmlIsDataTable, markdownHasTable;
 import 'package:mica_flutter/editor/table.dart';
 import 'support/markdown_codec.dart';
 
@@ -131,6 +131,17 @@ void main() {
 
     test('plain paragraphs do not qualify', () {
       expect(clipboardHtmlIsDataTable('<p>hello</p>'), isFalse);
+    });
+    test('the converted Markdown must hold a table block, asked of the engine', () {
+      expect(
+        markdownHasTable(
+          htmlToMarkdown('<table><tr><th>A</th></tr><tr><td>1</td></tr></table>'),
+        ),
+        isTrue,
+      );
+      // Pipes and dashes in prose are escaped text, not a delimiter row.
+      expect(markdownHasTable(htmlToMarkdown('<p>a | --- | b</p>')), isFalse);
+      expect(markdownHasTable(''), isFalse);
     });
   });
 }

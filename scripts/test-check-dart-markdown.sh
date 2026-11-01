@@ -61,6 +61,11 @@ DART
 expect_fail "a RegExp Markdown reader (raw-string form)"
 
 cat > "$fixture/editor/writer.dart" <<'DART'
+bool isTable(String md) => md.contains('| --- ');
+DART
+expect_fail "a table delimiter-row reader"
+
+cat > "$fixture/editor/writer.dart" <<'DART'
 // md-syntax-ok-begin: colours, not structure
 final rules = [r'#{1,6}[^\n]*', r'(?:```|~~~)'];
 // md-syntax-ok-end

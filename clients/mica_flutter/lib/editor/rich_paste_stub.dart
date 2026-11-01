@@ -12,6 +12,7 @@ import 'package:pasteboard/pasteboard.dart';
 
 import '../diagnostics.dart';
 import 'cf_html.dart';
+import '../markdown/markdown_codec.dart' show markdownCodec, withEngineOrNull;
 import 'html_to_markdown.dart';
 
 /// Returns true if the paste was consumed by the handler.
@@ -145,10 +146,19 @@ Future<String?> readClipboardTableAsMarkdown() async {
   final raw = stripCfHtmlHeader(h);
   if (raw == null || !clipboardHtmlIsDataTable(raw)) return null;
   final md = htmlToMarkdown(raw);
-  // Must actually convert to a pipe table (not just contain a tag) — otherwise
-  // fall through to the image/HTML flavors.
-  if (!md.contains('| --- ')) return null;
-  return md.trim().isEmpty ? null : md;
+  // Must actually convert to a table (not just contain a tag) — otherwise
+  // fall through to the image/HTML flavors. Asked of the engine's blocks, not
+  // by looking for a delimiter row in the text.
+  return markdownHasTable(md) ? md : null;
+}
+
+/// Whether [md] parses (as a paste fragment) to at least one table block.
+bool markdownHasTable(String md) {
+  if (md.trim().isEmpty) return false;
+  final blocks = withEngineOrNull(
+    () => markdownCodec.parseBlocks(md, fragment: true),
+  );
+  return blocks != null && blocks.any((b) => b.kind == 'table');
 }
 
 /// Whether clipboard [html] carries a real DATA table worth converting:
