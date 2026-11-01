@@ -81,9 +81,6 @@
         }
       })();
     </script>
-    <!-- P2-M4 web→yjs: the browser-side CRDT engine (yjs), wire-compatible with
-         the Rust yrs core/server. Loaded before Flutter so js_interop can use it. -->
-    <script src="yjs_bundle.js"></script>
     <!-- Start the Markdown engine before Flutter; startup awaits micaMdReady.
          Catch synchronous loader failures as well so Flutter can degrade. -->
     <script src="mica_md/mica_md.js"></script>
@@ -92,6 +89,17 @@
         .then(() => wasm_bindgen({ module_or_path: 'mica_md/mica_md_bg.wasm' }))
         .then(() => { globalThis.micaMd = wasm_bindgen; })
         .catch((error) => { globalThis.micaMdError = String(error); });
+    </script>
+    <!-- The document engine: the same Rust CRDT core (yrs) desktop runs over
+         FFI and the server natively, as wasm. Fetched in parallel with the
+         Markdown engine; startup awaits micaDocReady before the first sync
+         session. Its own global name, since mica_md's glue owns wasm_bindgen. -->
+    <script src="mica_doc/mica_doc.js"></script>
+    <script>
+      globalThis.micaDocReady = Promise.resolve()
+        .then(() => mica_doc_bindgen({ module_or_path: 'mica_doc/mica_doc_bg.wasm' }))
+        .then(() => { globalThis.micaDoc = mica_doc_bindgen; })
+        .catch((error) => { globalThis.micaDocError = String(error); });
     </script>
   </head>
   <body>

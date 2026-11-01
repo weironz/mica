@@ -76,6 +76,7 @@ seed-dev:
 [doc("Rebuild the dev web bundle served by compose nginx")]
 dev-web:
     bash scripts/build-md-wasm.sh
+    bash scripts/build-doc-wasm.sh
     cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
     chmod -R a+rX clients/mica_flutter/build/web
 
@@ -105,7 +106,7 @@ dev-web:
 # the window may just send Mica to the tray rather than exit it.
 [doc("Launch the app to eyeball a change (target: windows | chrome)")]
 app target="windows":
-    @if [ "{{target}}" = "chrome" ] || [ "{{target}}" = "web-server" ]; then bash scripts/build-md-wasm.sh; fi
+    @if [ "{{target}}" = "chrome" ] || [ "{{target}}" = "web-server" ]; then bash scripts/build-md-wasm.sh && bash scripts/build-doc-wasm.sh; fi
     @if [ "{{target}}" = "windows" ] && command -v powershell >/dev/null 2>&1; then powershell -NoProfile -Command 'foreach ($p in (Get-Process mica_flutter -ErrorAction SilentlyContinue)) { Write-Host "==> closing the running Mica (PID $($p.Id)) $($p.Path)"; $null = $p.CloseMainWindow(); if (-not $p.WaitForExit(5000)) { Write-Host "    it did not exit (it may have gone to the tray) - forcing"; Stop-Process -Id $p.Id -Force; $null = $p.WaitForExit(3000) } }; exit 0'; fi
     cd clients/mica_flutter && {{flutter}} run -d {{target}} --dart-define=MICA_DEV_AUTOLOGIN=false
 
@@ -224,6 +225,7 @@ build-installer version:
 [doc("3/4  Flutter web bundle -> deploy/web (staged for the web image)")]
 build-web:
     bash scripts/build-md-wasm.sh
+    bash scripts/build-doc-wasm.sh
     cd clients/mica_flutter && {{flutter}} build web --release --no-web-resources-cdn
     rm -rf deploy/web && mkdir -p deploy/web
     cp -r clients/mica_flutter/build/web/. deploy/web/
@@ -313,7 +315,7 @@ restore-points:
 
 # The web half had zero end-to-end coverage: all 14 integration tests import native
 # FFI and structurally cannot be pointed at a browser. This asserts what only a
-# browser against a real stack can — same-origin engine load, yjs↔yrs convergence
+# browser against a real stack can — same-origin engine load, web↔server CRDT convergence
 # over a real WebSocket, server-rendered routes beating the SPA fallback, and
 # entry-file caching.
 #

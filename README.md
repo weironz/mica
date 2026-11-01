@@ -45,10 +45,10 @@ third-party editor. Caret and selection behave identically on every platform,
 IME composition (Chinese, Japanese, Korean) works natively, and long documents
 stay responsive because painting is clipped to the viewport.
 
-**One CRDT engine everywhere.** Sync runs on `yrs`, the Rust port of Yjs. The Web
-client uses Yjs itself, and the two are byte-compatible at the update,
-state-vector and lib0 encoding layers — so every platform speaks one authoritative
-format rather than a translation of one.
+**One CRDT engine everywhere.** Sync runs on `yrs`, the Rust port of Yjs, and it is
+the same Rust document core on every platform: natively on the server, over FFI on
+the desktop, and compiled to WebAssembly in the browser. Every edit rule has exactly
+one implementation, and every platform speaks one authoritative format.
 
 **A Rust data plane.** Everything that parses files, walks archives, hashes bytes
 or talks to storage runs in Rust. Dart owns painting, caret and selection,

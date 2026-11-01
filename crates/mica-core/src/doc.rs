@@ -923,6 +923,33 @@ impl MicaDoc {
     }
   }
 
+  /// The editor's `update_block` op: any of kind, text and data, applied the
+  /// way the editor means them. Text and its marks are set together (marks
+  /// come from `data.marks`); a data-only update reconciles the marks to what
+  /// `data` now says, clearing them when it has none (a turn-into resets
+  /// data). Shared by the desktop FFI and the web wasm binding, so the two
+  /// interpret the op identically.
+  pub fn update_block_fields(
+    &mut self,
+    id: &str,
+    kind: Option<&str>,
+    text: Option<&str>,
+    data: Option<&Value>,
+  ) {
+    if let Some(k) = kind {
+      self.update_block_kind(id, k);
+    }
+    if let Some(t) = text {
+      let block_marks = data.map(marks::marks_from_data).unwrap_or_default();
+      self.set_block_text(id, t, &block_marks);
+    } else if let Some(d) = data {
+      self.set_block_marks(id, &marks::marks_from_data(d));
+    }
+    if let Some(d) = data {
+      self.set_block_data(id, d);
+    }
+  }
+
   /// Insert `s` into a block's text at UTF-16 offset `at` (character-level CRDT).
   pub fn text_insert(&mut self, id: &str, at: u32, s: &str) {
     let blocks_map = self.doc.get_or_insert_map(BLOCKS);

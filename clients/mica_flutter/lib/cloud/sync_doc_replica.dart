@@ -3,8 +3,8 @@
 // The WS sync-protocol state machine (cloud_sync_session.dart) is pure Dart and
 // engine-agnostic; it touches the CRDT replica only through this contract. The
 // desktop adapter (sync_replica_io.dart) wraps the Rust yrs FFI [MicaDocument];
-// the web adapter (sync_replica_web.dart) wraps the JS yjs [MicaYDoc] — the two
-// engines are wire-compatible, so both speak the same update/state-vector
+// the web adapter (sync_replica_web.dart) wraps the same Rust core as wasm
+// ([MicaDocWasm]) — one engine, so both speak the same update/state-vector
 // bytes. Which adapter backs a session is decided by conditional import;
 // changing an engine on a platform means swapping its adapter, and nothing in
 // the session or the store moves.
@@ -59,7 +59,7 @@ abstract interface class SyncDocReplica {
   /// merged, and the merged bytes are ~73% smaller because the intermediate
   /// states of a repeatedly-edited block fold away.
   ///
-  /// Both engines implement this by applying the updates to a scratch replica
+  /// Both adapters implement this by applying the updates to a scratch replica
   /// that starts EMPTY and encoding its state. Empty is load-bearing: a scratch
   /// seeded from anything that already carries content (a root block, a `meta`
   /// entry) would fold that content into the merged update as a concurrent

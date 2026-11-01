@@ -13,6 +13,7 @@ cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
 source scripts/lib-receipt.sh
 bash scripts/build-md-wasm.sh
+bash scripts/build-doc-wasm.sh
 
 cd clients/mica_flutter
 mapfile -t suites < <(grep -l -E "^@TestOn\('browser'\)|if \(dart\.library\.js_interop\) '[a-z_]+_test_web\.dart'" test/*_test.dart | sort)

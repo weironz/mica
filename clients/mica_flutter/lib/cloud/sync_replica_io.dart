@@ -10,7 +10,7 @@ import 'dart:typed_data';
 
 // The typedef `DocOp` exists on both sides of this import (same underlying
 // type); the seam's copy is canonical here.
-import '../local/doc_ops.dart' hide DocOp;
+import '../local/doc_ops.dart' show DocOpMirror;
 import '../src/rust/api/document.dart';
 import 'sync_doc_replica.dart';
 

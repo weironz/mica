@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 
 use flutter_rust_bridge::frb;
-use mica_core::{marks_from_data, Block, Mark, MicaDoc};
+use mica_core::{Block, Mark, MicaDoc};
 
 #[frb(opaque)]
 pub struct MicaDocument {
@@ -450,24 +450,12 @@ impl MicaDocument {
         text: Option<String>,
         data_json: Option<String>,
     ) {
-        let mut doc = self.doc();
-        if let Some(k) = kind {
-            doc.update_block_kind(&id, &k);
-        }
+        // One definition of what the op means: mica-core, shared with the
+        // web wasm binding.
         let data: Option<serde_json::Value> =
             data_json.as_deref().and_then(|s| serde_json::from_str(s).ok());
-        if let Some(t) = text {
-            // Text changed: set text + its marks together.
-            let marks = data.as_ref().map(marks_from_data).unwrap_or_default();
-            doc.set_block_text(&id, &t, &marks);
-        } else if let Some(d) = &data {
-            // Data-only update (e.g. a turn-into resetting data): reconcile the
-            // marks to whatever `data` now says — clearing them if it has none.
-            doc.set_block_marks(&id, &marks_from_data(d));
-        }
-        if let Some(d) = &data {
-            doc.set_block_data(&id, d);
-        }
+        self.doc()
+            .update_block_fields(&id, kind.as_deref(), text.as_deref(), data.as_ref());
     }
 
     #[frb(sync)]

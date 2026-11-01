@@ -159,6 +159,7 @@ docker compose up -d postgres rustfs api    # 账号 demo@mica.dev / password123
 ⚠️ **两个测试文件不要一起跑**:会撞 debug-connection race。分开跑,或者中间
 `kill mica_flutter` 再 sleep 一下。
 
-⚠️ **两个引擎变体必须同步改**:`cloud_sync_io.dart`(桌面走 FFI)和
-`cloud_sync_web.dart`(web 走 yjs)是同一套协议的两个实现——"一个权威引擎全平台跑"
-靠的是这两份保持一致,只改一边等于埋雷。
+桌面与 Web 跑同一份 Rust 文档核心:`cloud/sync_replica_io.dart`(FFI)和
+`cloud/sync_replica_web.dart`(wasm,`crates/doc-wasm`)只是同一组方法的两种传输,
+op 回放共用 `cloud/block_op_mirror.dart`。改编辑规则只改 mica-core,两端同时生效;
+改了 mica-core 要重建 Web 引擎(`bash scripts/build-doc-wasm.sh`),否则引擎指纹测试会报旧。

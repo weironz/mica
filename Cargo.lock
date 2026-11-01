@@ -2180,6 +2180,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-doc-wasm"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "mica-core",
+ "serde_json",
+ "uuid",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "mica-infra"
 version = "0.1.0"
 dependencies = [

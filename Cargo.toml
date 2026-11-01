@@ -4,6 +4,7 @@ members = [
   "crates/api-types",
   "crates/app-core",
   "crates/cli",
+  "crates/doc-wasm",
   "crates/infra",
   "crates/interchange",
   "crates/markdown",

@@ -1,0 +1,29 @@
+[package]
+name = "mica-doc-wasm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "The document core (mica-core MicaDoc, yrs) for the web client, as wasm"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The same document core desktop drives over FFI and the server runs natively.
+# No `store` feature: the browser persists in IndexedDB, not SQLite.
+mica-core = { path = "../mica-core" }
+# Approved binding-only dependency; pinned to the same version as md-wasm so one
+# wasm-bindgen-cli serves both (scripts/check-md-wasm-toolchain.sh).
+wasm-bindgen = "=0.2.129"
+serde_json.workspace = true
+
+# yrs mints random client ids (fastrand -> getrandom 0.3) and the Markdown
+# facade mica-core links mints uuids. On wasm32-unknown-unknown both need the
+# browser's crypto.getRandomValues, selected by these features plus
+# `--cfg getrandom_backend="wasm_js"` (scripts/build-doc-wasm.sh). Not new code
+# in the tree: both crates are already dependencies; this only picks their
+# browser backend.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+uuid = { workspace = true, features = ["js"] }

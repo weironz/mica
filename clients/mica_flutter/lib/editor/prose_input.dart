@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 import 'controller.dart';
 import 'model.dart';
-import '../web/text_diff.dart' show commonPrefix, commonSuffix;
+import 'text_common.dart' show commonPrefix, commonSuffix;
 
 /// Tracks the document range hidden by the platform's focus-block buffer.
 /// Document mutations remain in EditorController.spliceRange.

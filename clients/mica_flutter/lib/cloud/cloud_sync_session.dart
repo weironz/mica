@@ -1,8 +1,8 @@
 // P2-M4.5 / 丁-1: THE live cloud editing session for one document — one shared
 // protocol state machine for every platform.
 //
-// It owns a [SyncDocReplica] (the device's CRDT replica — Rust yrs over FFI on
-// desktop, JS yjs on web; wire-compatible, chosen by the conditional import
+// It owns a [SyncDocReplica] (the device's CRDT replica — the Rust yrs core,
+// over FFI on desktop and as wasm on the web, chosen by the conditional import
 // below), speaks the WS sync protocol added in M4.4 (sync.bootstrap/pull/push +
 // sync.update), pushes local editor ops as CRDT diffs, and merges remote
 // updates — firing [onRemoteBlocks] so the editor can reconcile. CRDT merge
@@ -179,8 +179,8 @@ class CloudSyncSession {
 
   /// This device's stable CRDT actor id. Desktop pins the replica to it (from
   /// the local store identity) so all of a device's edits share one actor
-  /// across sessions; the web adapter ignores it — yjs assigns a per-session
-  /// actor, which is CRDT-correct (convergence holds).
+  /// across sessions; the web adapter ignores it — each web replica takes a
+  /// random actor, which is CRDT-correct (convergence holds).
   final BigInt clientId;
 
   /// Fired once after bootstrap with the root block id + the editor's nodes.

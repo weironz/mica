@@ -214,12 +214,9 @@ jobs:
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
           done
 
-      # mica-core's web_interop.rs is the yjs↔yrs cross-engine gate (CLAUDE.md
-      # dependency exemption for yjs — its load-bearing premise): it shells out to `node`
-      # (preinstalled on GitHub-hosted runners) to run the COMMITTED web bundle
-      # (clients/mica_flutter/web/yjs_bundle.js) headlessly against the yrs
-      # side. No setup-node needed; on a bare self-hosted runner without node
-      # the test fails loudly rather than skipping.
+      # mica-core's legacy_yjs_state.rs pins a state the retired yjs web client
+      # wrote, so documents already in browsers' IndexedDB keep decoding now that
+      # the web runs the Rust core as wasm (no node needed any more).
       - name: Test (incl. app-core + infra + api-server, Postgres-backed)
         # cargo_receipt: exit 0 is not enough, the passed count must clear a
         # floor (scripts/lib-receipt.sh).
@@ -332,6 +329,8 @@ jobs:
         run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
       - name: Build Markdown Web engine before freshness tests
         run: bash ../../scripts/build-md-wasm.sh
+      - name: Build Web document engine before freshness tests
+        run: bash ../../scripts/build-doc-wasm.sh
       - name: FFI library for the unit tests
         run: cargo build --release --manifest-path rust/Cargo.toml
       - name: Dart unit tests
@@ -359,7 +358,7 @@ jobs:
   # thoroughness: every one of the 14 integration tests in flutter-integration.yml
   # imports `frb_generated.dart` or `LocalOffline`, neither of which exists on web,
   # so none can be pointed at a browser. Meanwhile the web build is a categorically
-  # different binary — yjs in JS instead of Rust yrs, IndexedDB instead of SQLite,
+  # different binary — the Rust core as wasm instead of FFI, IndexedDB instead of SQLite,
   # release-only so every `assert` is compiled out.
   #
   # Its own job, not a step in `flutter`: this one needs a database and a running
@@ -433,6 +432,8 @@ jobs:
         run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
       - name: Build Markdown Web engine
         run: bash scripts/build-md-wasm.sh
+      - name: Build Web document engine
+        run: bash scripts/build-doc-wasm.sh
       - name: Build the web bundle
         working-directory: clients/mica_flutter
         run: |
@@ -555,6 +556,7 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/build-md-wasm.sh
+          bash scripts/build-doc-wasm.sh
           cd clients/mica_flutter
           flutter build web --release --no-web-resources-cdn \
             --target=e2e/web_harness_entry.dart \

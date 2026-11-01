@@ -1,4 +1,9 @@
-# Web 端 CRDT 换成 mica-core wasm：可行性验证（2026-11-01）
+# Web 端 CRDT 换成 mica-core wasm：可行性验证与迁移（2026-11-01）
+
+> **已迁移（同日，用户决定）**：`crates/doc-wasm` + `scripts/build-doc-wasm.sh`（gzip 251,111 B，硬预算 262,144 B），
+> Web 适配器 `cloud/sync_replica_web.dart` 与桌面同形，op 回放统一为 `cloud/block_op_mirror.dart`；yjs 及其 Dart 镜像全部删除。
+> 验证：浏览器套件 8 个全过（新增 `web_doc_replica_test` 6 项）；本地真实路径上登录→打字→撤销/重做→服务端导出一致，
+> 两个浏览器上下文实时互见编辑，`micaWebSyncTest` 两会话经真实服务端收敛。下文为迁移前的验证记录。
 
 > 只做验证，不做迁移。背景见 [单一实现专项 01 §9](../single-source/01-background.md#9-仓库里其他双份与后续专项不在本专项范围)：
 > 服务端与桌面用 yrs（`mica-core` 的 `MicaDoc`），Web 用 yjs（`web/yjs_bundle.js`）加约 1,000 行 Dart 镜像

@@ -13,7 +13,7 @@ import 'selection_marks.dart';
 import 'table.dart';
 import '../markdown/markdown_codec.dart'
     show markdownCodec, MarkdownCodecException, BlockSpec;
-import '../web/text_diff.dart' show commonPrefix, commonSuffix;
+import 'text_common.dart' show commonPrefix, commonSuffix;
 
 export 'operation_history.dart'
     show ApplyHistory, EditorHistoryState, HistoryAction;

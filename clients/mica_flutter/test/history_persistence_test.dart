@@ -6,7 +6,7 @@ import 'package:mica_flutter/editor/operation_history.dart';
 import 'package:mica_flutter/sync/pending_doc_update.dart';
 
 /// The session and outbox buffer are real. Engine semantics are independently
-/// exercised with yrs/yjs; this deterministic replica injects append failures
+/// exercised with yrs; this deterministic replica injects append failures
 /// exactly after the engine has advanced its history.
 class _Replica implements SyncDocReplica {
   String text = 'ab';

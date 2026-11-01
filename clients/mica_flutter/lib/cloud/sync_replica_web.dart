@@ -1,29 +1,31 @@
-// Web replica adapter: the JS yjs [MicaYDoc] behind the [SyncDocReplica] seam.
-// yjs and yrs are wire-compatible (verified W1/W2), so a web replica and a
-// desktop replica editing the same document converge with no translation.
+// Web replica adapter: the Rust document core as wasm ([MicaDocWasm]) behind
+// the [SyncDocReplica] seam — the same engine, op replay and edit rules as the
+// desktop adapter (sync_replica_io.dart), over wasm instead of FFI.
 //
-// [clientId] is accepted for signature parity and ignored: yjs assigns a
-// per-session actor id, and a fresh actor per page load is CRDT-correct
-// (convergence holds), so the web store doesn't pin one.
+// [clientId] is accepted for signature parity and ignored: the web has no
+// device identity (callers pass 0), and pinning every browser to one yrs actor
+// would corrupt the CRDT. Each replica takes a random actor, which is
+// CRDT-correct (convergence holds) and what the yjs engine did before.
 import 'dart:typed_data';
 
-import '../web/mica_ydoc.dart';
+import '../web/mica_doc_wasm.dart';
+import 'block_op_mirror.dart';
 import 'sync_doc_replica.dart';
 
-/// Decode [state] into a yjs-backed replica. Null when the bytes don't apply
-/// ([MicaYDoc.fromState] throws on corrupt input) — same contract as desktop.
+/// Decode [state] into a replica. Null when the bytes don't decode or the
+/// engine did not load — same contract as desktop.
 SyncDocReplica? replicaFromState(Uint8List state, BigInt clientId) {
-  try {
-    return _YjsReplica(MicaYDoc.fromState(state));
-  } catch (_) {
-    return null;
-  }
+  final doc = MicaDocWasm.fromState(state);
+  return doc == null ? null : _WasmReplica(doc);
 }
 
-class _YjsReplica implements SyncDocReplica {
-  _YjsReplica(this._doc);
+class _WasmReplica implements SyncDocReplica {
+  _WasmReplica(this._doc) {
+    _mirror.seedFrom(_doc);
+  }
 
-  final MicaYDoc _doc;
+  final MicaDocWasm _doc;
+  final BlockOpMirror _mirror = BlockOpMirror();
 
   @override
   String rootBlockId() => _doc.rootBlockId();
@@ -44,18 +46,32 @@ class _YjsReplica implements SyncDocReplica {
   List<Map<String, dynamic>> toBlocks() => _doc.toBlocks();
 
   @override
-  void applyEditorOp(DocOp op) => _doc.applyOp(op);
+  void applyEditorOp(DocOp op) => _mirror.apply(_doc, op);
 
   @override
   void beginHistoryBatch() => _doc.beginHistoryBatch();
   @override
   void endHistoryBatch() => _doc.endHistoryBatch();
   @override
-  void resetHistory() => _doc.resetHistory();
+  void resetHistory() {
+    _doc.resetHistory();
+    _mirror.seedFrom(_doc);
+  }
+
   @override
-  bool undo() => _doc.undo();
+  bool undo() {
+    final changed = _doc.undo();
+    _mirror.seedFrom(_doc);
+    return changed;
+  }
+
   @override
-  bool redo() => _doc.redo();
+  bool redo() {
+    final changed = _doc.redo();
+    _mirror.seedFrom(_doc);
+    return changed;
+  }
+
   @override
   bool canUndo() => _doc.canUndo();
   @override
@@ -65,13 +81,17 @@ class _YjsReplica implements SyncDocReplica {
 
   @override
   Uint8List mergeUpdates(List<Uint8List> updates) {
-    // A fresh Y.Doc is genuinely empty — nothing to strip, unlike a doc built
-    // from blocks, whose `meta.root` write would ride along in the merged bytes
-    // and land on the receiver as a concurrent write.
-    final scratch = MicaYDoc.empty();
-    for (final u in updates) {
-      scratch.applyUpdate(u);
+    // `[0, 0]` is the lib0 v1 empty update: a genuinely empty scratch. A doc
+    // built from blocks would write `meta.root`, which the merge would carry
+    // into the receiver as a concurrent write (see sync_replica_io.dart).
+    final scratch = MicaDocWasm.fromState(Uint8List.fromList(const [0, 0]))!;
+    try {
+      for (final u in updates) {
+        scratch.applyUpdate(u);
+      }
+      return scratch.encodeState();
+    } finally {
+      scratch.free();
     }
-    return scratch.encodeState();
   }
 }

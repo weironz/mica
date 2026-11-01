@@ -88,7 +88,7 @@ class HistorySelection {
 }
 
 /// Inverse journal for standalone editors with a custom block-op sink. Mica's
-/// real local/cloud hosts use yrs/yjs history, which retains character identity
+/// real local/cloud hosts use the yrs history (FFI on desktop, wasm on web), which retains character identity
 /// through remote edits. This fallback checks the expected value of each field
 /// before reverting it, so a custom sink never overwrites a foreign value.
 class OperationInverse {

@@ -7,7 +7,7 @@ import 'controller.dart';
 import 'table.dart';
 import '../markdown/markdown_codec.dart' show markdownCodec, MarkdownCodecException;
 import '../ui/theme_tokens.dart';
-import '../web/text_diff.dart' show commonPrefix, commonSuffix;
+import 'text_common.dart' show commonPrefix, commonSuffix;
 
 /// A [TextEditingController] for a table cell that renders inline MARKS live
 /// (WYSIWYG) instead of Markdown source. Its [text] is the clean cell text;

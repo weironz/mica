@@ -39,7 +39,7 @@ import 'swallowed.dart';
 import 'local/local_offline.dart';
 import 'local/local_offline_factory.dart';
 import 'editor/word_count.dart';
-import 'web/yjs_probe.dart';
+import 'web/web_probe.dart';
 import 'markdown/markdown_codec.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;
 import 'editor/model.dart' show headingButtonTarget, kMonoFont;
@@ -282,9 +282,9 @@ void main() {
       loadPersistedThemeMode();
       // Suppress the browser menu so the editor can show its own image actions.
       if (kIsWeb) BrowserContextMenu.disableContextMenu();
-      // Web: register the yjs CRDT self-test hook (no-op off web). P2-M4 W1.
-      registerYjsSelfTest();
-      await initMarkdownCodec();
+      registerWebProbes(); // browser harness hooks; no-op off web
+      // index.html started both engines; sync builds replicas synchronously.
+      await Future.wait([initMarkdownCodec(), initDocEngine()]);
       warmUpFonts();
       runApp(const MicaApp());
     },

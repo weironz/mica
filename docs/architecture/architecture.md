@@ -48,7 +48,8 @@ renderer registry red line.
 
 ```text
 Flutter client  (clients/mica_flutter)
-  web:     yjs (JS) + IndexedDB, no FFI; Markdown engine as wasm (crates/md-wasm)
+  web:     document core as wasm (crates/doc-wasm) + IndexedDB, no FFI;
+           Markdown engine as wasm (crates/md-wasm)
   windows: flutter_rust_bridge FFI -> rust_lib_mica_flutter -> mica-core (SQLite store)
         |
         | REST (JWT) + WebSocket document rooms
@@ -110,11 +111,13 @@ applies, appends, and broadcasts. The reconnect protocol is rid-based:
 `sync.bootstrap → sync.base`, `sync.pull{since_rid} → sync.updates{head}`,
 `sync.push → sync.ack{rid}`. Presence/awareness rides the same socket.
 
-The web client runs the **JS yjs engine** against the server's **Rust yrs**;
-byte-compatibility of the update encoding is pinned by the cross-engine
-conformance gate `mica-core/tests/web_interop.rs` (runs the committed web
-bundle headlessly against the Rust side). The two ends of that gate are
-deliberately the two engines real users run.
+Every client runs the server's own document core: the desktop over FFI, the
+web as wasm (`crates/doc-wasm`, `scripts/build-doc-wasm.sh`, loaded by
+`web/index.html` beside the Markdown engine). Both sit behind one Dart seam
+(`cloud/sync_doc_replica.dart`) and one op replay (`cloud/block_op_mirror.dart`).
+Until 2026-11-01 the web ran JS yjs with a Dart re-implementation of the edit
+ops; documents it wrote stay readable (same update format), pinned by
+`mica-core/tests/legacy_yjs_state.rs`.
 
 ## Markdown
 

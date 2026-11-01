@@ -17,7 +17,7 @@
 
 ## 架构与数据不变量
 
-- **Rust-first 数据面**：核心文档模型、CRDT、同步与数据处理放在 Rust；Dart 负责 UI 与编辑器热路径。
+- **Rust-first 数据面**：核心文档模型、CRDT、同步与数据处理放在 Rust；Dart 负责 UI 与编辑器热路径。CRDT 文档核心只有一份（mica-core `MicaDoc`）：服务端原生、桌面经 FFI、Web 经 wasm（`crates/doc-wasm`），两端 Dart 共用 `SyncDocReplica` 与 `BlockOpMirror`，**禁止在 Dart 里重写编辑/合并规则**。
 - **Markdown 只有一份实现**：解析、序列化、HTML 都在 Rust `crates/md-core`；服务端 / CLI / MCP 原生调用，桌面经 FFI、Web 经 wasm。Dart 只通过 `lib/markdown/markdown_codec.dart` 的 `MarkdownCodec` 调用，**禁止在 Dart 里新增 Markdown 语法逻辑**（粘贴启发式放 `lib/editor/paste_repair.dart`，并写明为什么不是语法）。`scripts/check-dart-markdown.sh` 按语法特征拦截，必须留在 Dart 的键盘输入规则逐行标 `md-syntax-ok: 理由`（成段的用 `md-syntax-ok-begin/end` 圈出，不整文件豁免）。见 [单一实现专项](docs/single-source/README.md)。
 - **渲染扩展走机制**：通过 `AtomicBlockRenderer` 注册表扩展，避免继续向 `render.dart` 堆分支。见 [渲染架构](docs/architecture/render-architecture.md)。
 - **Markdown round-trip 是不变量**：保持 CommonMark / GFM 与现有方言兼容，写侧输出规范化子集；改解析或导出时检查 [规范记分牌](docs/architecture/commonmark-scoreboard.md) 及对应回归测试。
@@ -41,9 +41,9 @@
 - 已批准的依赖及用途：
   - 传输与解析：`http`、`web_socket_channel`、`xml`、`html`；数学渲染：`flutter_math_fork`、Rust `ratex-*`。
   - 桌面集成：`window_manager`、`screen_retriever`、`tray_manager`、`file_picker`、`pasteboard`。
-  - 图形与导出：Rust `merman`、`webview2-com`，Dart `flutter_svg`；Web CRDT 对端：JS `yjs`。
-  - Web Markdown 引擎绑定：Rust `wasm-bindgen`（仅 `crates/md-wasm`）+ 构建工具 `wasm-bindgen-cli`（同号钉死，`scripts/build-md-wasm.sh` 校验）。
-- 平台专用依赖用条件导入 / `cfg` 隔离，禁止进入不支持的平台 bundle；`yjs` 只进入 Web，`webview2-com` 只用于 Windows。
+  - 图形与导出：Rust `merman`、`webview2-com`，Dart `flutter_svg`。
+  - Web 引擎绑定：Rust `wasm-bindgen`（仅 `crates/md-wasm` Markdown 引擎、`crates/doc-wasm` 文档/CRDT 核心）+ 构建工具 `wasm-bindgen-cli`（同号钉死，`scripts/check-md-wasm-toolchain.sh` 校验）；`doc-wasm` 只为 wasm 目标打开已有依赖 `getrandom`（`wasm_js`）/ `uuid`（`js`）的浏览器后端。
+- 平台专用依赖用条件导入 / `cfg` 隔离，禁止进入不支持的平台 bundle；`webview2-com` 只用于 Windows。
 - 托盘仅 Windows 支持；注册失败时降级 `minimize()`，不可 `hide()` 导致窗口无法找回。Mermaid 配色沿用 host theme profile，保留 SVG CSS 属性展开的兼容处理。
 
 ## 验证、构建与发布

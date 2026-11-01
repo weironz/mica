@@ -1,9 +1,13 @@
-// P2-M4 (web→yjs) verification hooks (web build only). Exposed on `window` so a
-// browser harness (playwright) can drive them:
-//   micaYjsSelfTest(b64)      W1: Dart-in-browser reads a real yrs base
-//   micaYjsW2Test(b64)        W2: write side — apply ops+marks, return new state
-//   micaYjsWebSyncTest(apiUrl, email, password) W4: two web sessions converge
-//     via the real server
+// Browser harness hooks (web build only), exposed on `window` for playwright
+// (`e2e/web_e2e.mjs`):
+//   micaDocEngineInfo()                        the loaded document engine's
+//     build info (JSON), or `{"error": …}` — proves the wasm core is live
+//   micaWebSyncTest(apiUrl, email, password)   two web sessions editing one
+//     document converge through the real server (Promise of JSON)
+//
+// The W1/W2 hooks that checked the old yjs engine against yrs went with yjs
+// (2026-11-01): the web now runs the same Rust core as the server, and the
+// stored-data side of that question is `crates/mica-core/tests/legacy_yjs_state.rs`.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js_interop';
@@ -12,97 +16,26 @@ import 'package:http/http.dart' as http;
 
 import '../api/doc_socket_uri.dart';
 import '../cloud/cloud_sync.dart';
-import 'mica_ydoc.dart';
-import 'yjs_interop.dart';
+import 'mica_doc_wasm.dart';
 
-@JS('micaYjsSelfTest')
-external set _selfTest(JSFunction f);
+export 'mica_doc_wasm.dart' show initDocEngine;
 
-@JS('micaYjsW2Test')
-external set _w2Test(JSFunction f);
+@JS('micaDocEngineInfo')
+external set _engineInfo(JSFunction f);
 
-@JS('micaYjsWebSyncTest')
+@JS('micaWebSyncTest')
 external set _webSyncTest(JSFunction f);
 
-void registerYjsSelfTest() {
-  if (!yjsAvailable) return;
-
-  // W1: Dart-in-browser reads a real yrs-produced base.
-  _selfTest = ((JSString b64) {
-    try {
-      final doc = MicaYDoc.fromState(base64.decode(b64.toDart));
-      return jsonEncode({
-        'ok': true,
-        'root': doc.rootBlockId(),
-        'blocks': doc.toBlocks(),
-      }).toJS;
-    } catch (e) {
-      return jsonEncode({'ok': false, 'error': '$e'}).toJS;
-    }
+void registerWebProbes() {
+  _engineInfo = (() {
+    final error = docEngineError;
+    return jsonEncode(error != null ? {'error': error} : docEngineInfo()).toJS;
   }).toJS;
 
-  // W2: write side — apply editor ops (incl. marks) onto a base, return the
-  // re-encoded yjs state so the Rust side can confirm it reads web-written marks.
-  _w2Test = ((JSString b64) {
-    try {
-      final doc = MicaYDoc.fromState(base64.decode(b64.toDart));
-      final root = doc.rootBlockId();
-      final blocks = doc.toBlocks();
-      final target = blocks.firstWhere(
-        (b) => (b['text'] as String).length >= 5,
-        orElse: () =>
-            blocks.firstWhere((b) => b['id'] != root, orElse: () => blocks.first),
-      );
-      doc.applyOp({
-        'type': 'update_block',
-        'block_id': target['id'],
-        'text': target['text'],
-        'data': {
-          ...(target['data'] as Map).cast<String, dynamic>(),
-          'marks': [
-            {'start': 0, 'end': 5, 'type': 'bold'},
-          ],
-        },
-      });
-      doc.applyOp({
-        'type': 'insert_block',
-        'parent_id': root,
-        'index': 0,
-        'block': {
-          'id': 'w2new',
-          'type': 'paragraph',
-          'text': 'hello link',
-          'data': {
-            'role': 'note',
-            'level': 2,
-            'marks': [
-              {'start': 0, 'end': 5, 'type': 'link', 'href': 'http://x', 'title': 'T'},
-            ],
-          },
-          'children': <String>[],
-        },
-      });
-      return jsonEncode({
-        'ok': true,
-        'state': base64.encode(doc.encodeState()),
-        'blocks': doc.toBlocks(),
-      }).toJS;
-    } catch (e) {
-      return jsonEncode({'ok': false, 'error': '$e'}).toJS;
-    }
-  }).toJS;
-
-  // W4: two web sessions editing the same cloud doc converge through the real
-  // server (mirrors the desktop cloud_sync_test, in-browser). Returns a Promise.
-  //
-  // Credentials come from the CALLER rather than being registered here. It used
-  // to POST /api/auth/register and read `access_token` out of the reply, which
-  // stopped working twice over: registration is closed by default now, and even
-  // when open it answers 204 with no body because the address has to be confirmed
-  // first. A browser harness has no inbox. The server's own
-  // `MICA_SEED_TEST_USER` exists for exactly this — it upserts a known,
-  // already-verified account at startup — so the harness passes that pair in and
-  // this signs in with it. Nothing is hardcoded: no credential ships in the
+  // Credentials come from the CALLER rather than being registered here:
+  // registration is closed by default, and a fresh account must confirm its
+  // address first. The server's `MICA_SEED_TEST_USER` upserts a known,
+  // verified account for exactly this harness. No credential ships in the
   // bundle.
   _webSyncTest = ((JSString apiBase, JSString email, JSString password) {
     return _runWebSync(apiBase.toDart, email.toDart, password.toDart).toJS;

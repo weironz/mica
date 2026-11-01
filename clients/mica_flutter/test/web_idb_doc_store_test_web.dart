@@ -1,6 +1,6 @@
 // P4-2: the web IndexedDB doc store, exercised against a REAL browser
 // IndexedDB (`flutter test -d chrome`).
-// seam (byte-concat) so the yjs bundle isn't needed — replay correctness is
+// seam (byte-concat) so the wasm engine isn't needed — replay correctness is
 // covered by the desktop load_doc tests + the cross-engine wire-compat suite;
 // the subject here is durability across a reopen (= page reload), hydration,
 // the P2a/P2b clock invariants the sync session depends on, and the P4-2 review
@@ -19,7 +19,7 @@ import 'package:mica_flutter/cloud/web_idb_doc_store.dart';
 Uint8List concatReplay(Uint8List base, List<Uint8List> updates) =>
     Uint8List.fromList([...base, for (final u in updates) ...u]);
 
-/// A replay that THROWS — models a corrupt base the real yjs engine can't
+/// A replay that THROWS — models a corrupt base the real engine can't
 /// decode (Y.applyUpdate raises, unlike a bad incremental update which it
 /// skips). The store must swallow this into a null load, not propagate.
 Uint8List throwingReplay(Uint8List base, List<Uint8List> updates) =>
@@ -203,7 +203,7 @@ void main_() {
     s.compact();
     expect(s.logSizes(), (local: 1, remote: 0));
     // Folded base = old base + remote + WHOLE outbox (mirrors desktop squash —
-    // safe because real yjs updates are idempotent; the concat fake makes the
+    // safe because real CRDT updates are idempotent; the concat fake makes the
     // deliberate double-fold of the kept tail visible).
     final loaded = s.load();
     expect(loaded!.state, b([0, 1, 10, 20, 20]));
@@ -239,7 +239,7 @@ void main_() {
   test(
     'corrupt base → load() returns null (never throws), matching desktop',
     () async {
-      // A base whose replay throws (real yjs Y.applyUpdate on a corrupt base).
+      // A base whose replay throws (the real engine replay on a corrupt base).
       // Contract parity with the FFI store: load() must return null so the
       // session cold-bootstraps, not propagate and kill connect()/compact().
       final db = 'mica-test-${_dbSeq++}';

@@ -4,14 +4,15 @@
 // FFI. Every one imports `frb_generated.dart` or `LocalOffline`, neither of which
 // exists on web — so none can be pointed at Chrome, and the web half of the
 // product had zero end-to-end coverage. That is not a thoroughness gap: the web
-// build is a categorically different binary running a DIFFERENT CRDT
-// implementation (yjs in JS, not Rust yrs), a different storage backend
-// (IndexedDB, not SQLite) and a different renderer path.
+// build is a categorically different binary: the Rust CRDT core compiled to
+// wasm instead of linked over FFI, a different storage backend (IndexedDB, not
+// SQLite) and a different renderer path.
 //
 // It deliberately does NOT drive the UI. Flutter web paints to a canvas and this
 // app wires almost no `Semantics`, so there is essentially no DOM to select —
 // clicking through it would be building on sand. Instead it drives the
-// `window.micaYjs*` hooks the app already registers (`lib/web/yjs_probe_web.dart`,
+// `window.micaDocEngineInfo` / `micaWebSyncTest` hooks the app registers
+// (`lib/web/web_probe_web.dart`,
 // registered unconditionally so they exist in the release bundle), plus the HTTP
 // layer, which is where the bugs that have actually shipped twice live.
 //
@@ -113,7 +114,7 @@ page.on('pageerror', (e) => pageErrors.push(String(e)));
 
 await page.goto(BASE, { waitUntil: 'load' });
 try {
-  await page.waitForFunction(() => typeof window.micaYjsWebSyncTest === 'function', null, {
+  await page.waitForFunction(() => typeof window.micaWebSyncTest === 'function', null, {
     timeout: 60_000,
   });
 } catch (timeout) {
@@ -124,9 +125,8 @@ try {
   console.error(`  title      : ${await page.title().catch(() => '(unavailable)')}`);
   const present = await page
     .evaluate(() => ({
-      selfTest: typeof window.micaYjsSelfTest,
-      w2: typeof window.micaYjsW2Test,
-      webSync: typeof window.micaYjsWebSyncTest,
+      engineInfo: typeof window.micaDocEngineInfo,
+      webSync: typeof window.micaWebSyncTest,
       flutterReady: typeof window._flutter,
       bodyChildren: document.body ? document.body.children.length : -1,
     }))
@@ -171,12 +171,19 @@ check(
   ownLoadErrors.slice(0, 3).join(' | '),
 );
 
-// ── 3. yjs (browser) ↔ yrs (server) actually converge ─────────────────────────
-// The heart of it: two live sessions over a real WebSocket, folded by the real
-// server into real Postgres. `mica-core`'s web_interop test shells out to node
-// headlessly — it has never run in a browser, or against the live server.
+// ── 3. The browser's CRDT replica is live and converges with the server ───────
+// The web runs the server's own Rust document core as wasm (mica_doc). First:
+// the engine actually loaded (a broken wasm fetch would otherwise only show up
+// as documents that never sync). Then the heart of it: two live sessions over a
+// real WebSocket, folded by the real server into real Postgres.
+const engine = JSON.parse(await page.evaluate(() => window.micaDocEngineInfo()));
+check(
+  'the document engine (wasm) loaded',
+  typeof engine.source_fingerprint === 'string' && !engine.error,
+  JSON.stringify(engine),
+);
 const sync = JSON.parse(
-  await page.evaluate(([b, e, p]) => window.micaYjsWebSyncTest(b, e, p), [BASE, EMAIL, PASSWORD]),
+  await page.evaluate(([b, e, p]) => window.micaWebSyncTest(b, e, p), [BASE, EMAIL, PASSWORD]),
 );
 check('two web sessions converge through the real server', sync.ok === true, JSON.stringify(sync));
 check(
@@ -213,8 +220,9 @@ check(
 // ── 5. The entry files are not cacheable ──────────────────────────────────────
 // v0.5.2 "looked not deployed" because a fixed-name entry file came from cache.
 // These names never change, so they must never be reused; everything else is
-// content-hashed and may be. The Markdown engine and the yjs bundle are loaded by
-// index.html before Flutter and were missing from production's list in 0.14.0.
+// content-hashed and may be. The Markdown and document engines are loaded by
+// index.html before Flutter (the Markdown one was missing from production's
+// list in 0.14.0).
 const cache = await page.evaluate(async (files) => {
   const out = {};
   for (const f of files) out[f] = (await fetch(f)).headers.get('cache-control');
@@ -226,7 +234,8 @@ const cache = await page.evaluate(async (files) => {
   '/flutter_service_worker.js',
   '/mica_md/mica_md.js',
   '/mica_md/mica_md_bg.wasm',
-  '/yjs_bundle.js',
+  '/mica_doc/mica_doc.js',
+  '/mica_doc/mica_doc_bg.wasm',
 ]);
 for (const [f, value] of Object.entries(cache)) {
   // The dev nginx says `no-store`, production says `no-cache`. Either is a refusal
@@ -251,7 +260,7 @@ for (const [f, value] of Object.entries(cache)) {
   await oddPage.goto(BASE, { waitUntil: 'load' });
   let booted = true;
   try {
-    await oddPage.waitForFunction(() => typeof window.micaYjsSelfTest === 'function', null, {
+    await oddPage.waitForFunction(() => typeof window.micaWebSyncTest === 'function', null, {
       timeout: 30_000,
     });
   } catch {

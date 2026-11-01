@@ -15,12 +15,12 @@
 // Web-only, picked via the conditional import in `doc_store_platform.dart`.
 // IndexedDB is a browser built-in; the bindings below are hand-rolled over
 // `dart:js_interop` (in-house first — `dart:indexed_db` was removed from the
-// SDK and `package:web` isn't a dependency), same style as yjs_interop.dart.
+// SDK and `package:web` isn't a dependency), same style as web/mica_doc_wasm.dart.
 import 'dart:async';
 import 'dart:js_interop';
 import 'dart:typed_data';
 
-import '../web/mica_ydoc.dart';
+import '../web/mica_doc_wasm.dart';
 import 'cloud_doc_store.dart';
 
 // ── minimal IndexedDB bindings ───────────────────────────────────────────────
@@ -140,18 +140,28 @@ Future<void> _completed(_IdbTransaction t) {
 // ── the store ────────────────────────────────────────────────────────────────
 
 /// Fold `base + updates` (in order) into final state bytes. Injectable so the
-/// storage layer tests run without the yjs bundle (replay correctness is
-/// covered by the desktop `load_doc` tests + the cross-engine wire-compat
-/// suite; here the subject is IndexedDB durability).
+/// storage layer tests run without the wasm engine (replay correctness is the
+/// engine's own, covered by the mica-core tests; here the subject is IndexedDB
+/// durability).
 typedef WebDocReplay =
     Uint8List Function(Uint8List base, List<Uint8List> updates);
 
-Uint8List _yjsReplay(Uint8List base, List<Uint8List> updates) {
-  final doc = MicaYDoc.fromState(base);
-  for (final u in updates) {
-    doc.applyUpdate(u);
+/// Replay through the document engine. A base that does not decode throws, as
+/// the old yjs replay did: [load] reports a corrupt mirror rather than inventing
+/// an empty one.
+Uint8List _engineReplay(Uint8List base, List<Uint8List> updates) {
+  final doc = MicaDocWasm.fromState(base);
+  if (doc == null) {
+    throw StateError(docEngineError ?? 'stored document state does not decode');
   }
-  return doc.encodeState();
+  try {
+    for (final u in updates) {
+      doc.applyUpdate(u);
+    }
+    return doc.encodeState();
+  } finally {
+    doc.free();
+  }
 }
 
 class WebIdbDocStore implements CloudDocStore {
@@ -227,7 +237,7 @@ class WebIdbDocStore implements CloudDocStore {
         release.complete();
         return null;
       }
-      final store = WebIdbDocStore._(db, key, replay ?? _yjsReplay, release);
+      final store = WebIdbDocStore._(db, key, replay ?? _engineReplay, release);
       await store._hydrate();
       return store;
     } catch (_) {
@@ -427,8 +437,8 @@ class WebIdbDocStore implements CloudDocStore {
   };
 
   /// Replay base + remote log + local log into final state bytes — the web
-  /// mirror of the desktop's `load_doc` (yjs updates commute + are idempotent).
-  /// A corrupt base makes the yjs replay THROW; swallow it into null so a bad
+  /// mirror of the desktop's `load_doc` (CRDT updates commute + are idempotent).
+  /// A corrupt base makes the engine replay THROW; swallow it into null so a bad
   /// mirror reads as "never mirrored" (the desktop contract — its FFI load
   /// returns null) instead of crashing the session's connect()/compact().
   Uint8List? _replayedState() {

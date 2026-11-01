@@ -6,37 +6,15 @@
 // persistence (issue #149). Browser test: real IndexedDB + real Web Locks.
 import 'dart:typed_data';
 
-import 'dart:js_interop';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/cloud/doc_store_platform_web.dart';
 import 'package:mica_flutter/cloud/web_idb_doc_store.dart';
-import 'package:mica_flutter/web/yjs_interop.dart';
+import 'package:mica_flutter/web/mica_doc_wasm.dart';
+
+import 'support/doc_engine_web.dart';
 
 var _dbSeq = 0;
 var _docSeq = 0;
-
-/// Inject the yjs bundle so the two "valid mirror" cases can build a real
-/// yjs document. `flutter test` serves the `test/` directory but does not
-/// load `web/yjs_bundle.js` on its own — the standalone `.html` harness did.
-@JS('eval')
-external JSAny? _eval(JSString code);
-
-Future<void> _ensureYjs() async {
-  if (yjsAvailable) return;
-  _eval(
-    '''
-    var s = document.createElement('script');
-    s.src = 'support/yjs_bundle.js';
-    document.body.appendChild(s);
-  '''
-        .toJS,
-  );
-  for (var i = 0; i < 100 && !yjsAvailable; i++) {
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-  }
-  if (!yjsAvailable) fail('yjs bundle did not load in the flutter test browser');
-}
 
 /// The lock release is async (dispose waits for the write-behind tail), so
 /// poll like `reopen` does in the store test.
@@ -56,7 +34,7 @@ Future<WebIdbDocStore> openWhenFree(String db, String doc) async {
 }
 
 void main_() {
-  setUpAll(_ensureYjs);
+  setUpAll(loadBrowserDocEngine);
   test(
     'two mirror reads of a NEVER-mirrored doc leave the lock acquirable',
     () async {
@@ -114,15 +92,12 @@ void main_() {
     () async {
       final db = 'mica-mirror-test-${_dbSeq++}';
       final id = 'doc-${_docSeq++}';
-      final doc = micaYjs.newDoc();
-      micaYjs.mapSet(micaYjs.getMap(doc, 'meta'), 'root', 'r'.toJS);
-      final block = micaYjs.newMap();
-      micaYjs.mapSet(block, 'ty', 'page'.toJS);
-      micaYjs.mapSet(block, 'text', micaYjs.newText('Mirror text'));
-      micaYjs.mapSet(block, 'children', micaYjs.newArray());
-      micaYjs.mapSet(micaYjs.getMap(doc, 'blocks'), 'r', block);
+      final doc = MicaDocWasm.fromBlocks('r', [
+        {'id': 'r', 'type': 'page', 'text': 'Mirror text', 'data': <String, dynamic>{}, 'children': <String>[]},
+      ])!;
       final seed = await openWhenFree(db, id);
-      seed.save(micaYjs.encodeState(doc).toDart, 0);
+      seed.save(doc.encodeState(), 0);
+      doc.free();
       await seed.flush();
       seed.dispose();
       final mirror = await openWebDocMirror(
@@ -146,7 +121,8 @@ void main_() {
     final db = 'mica-mirror-test-${_dbSeq++}';
     final id = 'doc-${_docSeq++}';
     final seed = await openWhenFree(db, id);
-    seed.save(micaYjs.encodeState(micaYjs.newDoc()).toDart, 0);
+    // The lib0 v1 empty update: a document with no root at all.
+    seed.save(Uint8List.fromList(const [0, 0]), 0);
     await seed.flush();
     seed.dispose();
     expect(await openWebDocMirror('https://cloud.example', id, dbName: db), isNull);

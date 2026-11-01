@@ -12,8 +12,8 @@ source scripts/lib-local.sh
 
 # Generated on every machine by `flutter gen-l10n`; ignored on purpose. The
 # npm package's wasm dist is built output (scripts/build-md-npm.sh), like the
-# Flutter web mica_md bundle.
-allowed='^clients/mica_flutter/lib/l10n/app_localizations(_[a-z]+)?\.dart$|^clients/mica_flutter/(web/mica_md|test/support/mica_md)/|^packages/mica-md-js/dist/'
+# Flutter web mica_md and mica_doc bundles.
+allowed='^clients/mica_flutter/lib/l10n/app_localizations(_[a-z]+)?\.dart$|^clients/mica_flutter/(web/mica_md|test/support/mica_md|web/mica_doc|test/support/mica_doc)/|^packages/mica-md-js/dist/'
 
 hidden=$(git ls-files --others --ignored --exclude-standard -- \
   crates clients/mica_flutter/lib clients/mica_flutter/test clients/mica_flutter/web \

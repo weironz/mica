@@ -91,7 +91,8 @@ Markdown 的解析、序列化、HTML 渲染**只在 Rust 里写一份**（`crat
 ## 不在本专项范围（已讨论、未排期）
 
 见 [01-background.md §9](01-background.md)：接口数据结构单一来源、服务端/本地库业务规则纯函数模块、
-CRDT（Web 换 yrs wasm）、原生无损导出格式 `.mica.zip`（N1–N4）。本专项建好的 wasm 通道是 CRDT 统一的前提。
+CRDT（Web 换 yrs wasm）均已于 2026-11-01 收完（本专项建好的 wasm 通道正是 CRDT 统一的前提）；原生无损导出格式
+`.mica.zip` 的 N1 已做，N2–N4 待排。
 
 ## 本目录收录的历史文档
 

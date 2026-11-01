@@ -6,9 +6,15 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'support/native_build.dart';
 
-List<String> _fingerprintRoots(Directory repo) {
+/// The two Web engines: (binding crate, bundle dir, build script).
+const _engines = [
+  ('md-wasm', 'mica_md', 'build-md-wasm.sh'),
+  ('doc-wasm', 'mica_doc', 'build-doc-wasm.sh'),
+];
+
+List<String> _fingerprintRoots(Directory repo, [String crate = 'md-wasm']) {
   final script = File(
-    '${repo.path}/crates/md-wasm/build.rs',
+    '${repo.path}/crates/$crate/build.rs',
   ).readAsStringSync();
   final section = RegExp(
     r'const ROOTS:\s*&\[&str\]\s*=\s*&\[([\s\S]*?)\];',
@@ -33,8 +39,13 @@ Directory _repoRoot() {
   return dir;
 }
 
-void _verifyFingerprint(Directory repo, File stamp) {
-  final roots = _fingerprintRoots(repo);
+void _verifyFingerprint(
+  Directory repo,
+  File stamp, [
+  String crate = 'md-wasm',
+  String script = 'build-md-wasm.sh',
+]) {
+  final roots = _fingerprintRoots(repo, crate);
   for (final root in roots) {
     if (!FileSystemEntity.isFileSync('${repo.path}/$root') &&
         !FileSystemEntity.isDirectorySync('${repo.path}/$root')) {
@@ -45,8 +56,8 @@ void _verifyFingerprint(Directory repo, File stamp) {
   final expected = sourceFingerprint(repo, roots);
   if (reported != expected) {
     throw StateError(
-      'stale Web Markdown engine: stamp $reported, checkout $expected; '
-      'rebuild with bash scripts/build-md-wasm.sh',
+      'stale Web engine ($crate): stamp $reported, checkout $expected; '
+      'rebuild with bash scripts/$script',
     );
   }
 }
@@ -72,17 +83,30 @@ void main() {
     expect(roots, contains('crates/md-wasm/build.rs'));
   });
 
-  test('built Web Markdown engine matches this checkout', () {
-    final stamp = File(
-      '${repo.path}/clients/mica_flutter/web/mica_md/SOURCE_FINGERPRINT',
-    );
-    if (!stamp.existsSync()) {
-      markTestSkipped(
-        'No production wasm artifact; run bash scripts/build-md-wasm.sh. Freshness gate NOT exercised.',
+  for (final (crate, bundle, script) in _engines) {
+    test('built Web engine $bundle matches this checkout', () {
+      final stamp = File(
+        '${repo.path}/clients/mica_flutter/web/$bundle/SOURCE_FINGERPRINT',
       );
-      return;
+      if (!stamp.existsSync()) {
+        markTestSkipped(
+          'No production wasm artifact; run bash scripts/$script. Freshness gate NOT exercised.',
+        );
+        return;
+      }
+      _verifyFingerprint(repo, stamp, crate, script);
+    });
+  }
+
+  test('the document engine fingerprints the core it compiles in', () {
+    final docRoots = _fingerprintRoots(repo, 'doc-wasm');
+    for (final root in [
+      'crates/mica-core/src',
+      'crates/md-core/src',
+      'crates/doc-wasm/build.rs',
+    ]) {
+      expect(docRoots, contains(root));
     }
-    _verifyFingerprint(repo, stamp);
   });
 
   test('wrong stamp and mutated real source fail; restored source passes', () {

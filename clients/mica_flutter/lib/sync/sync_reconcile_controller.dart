@@ -311,8 +311,8 @@ class SyncReconcileController extends ChangeNotifier {
     // longer fit under the cap.
     enforceSyncCap();
 
-    // Open a yrs CRDT session for this doc (desktop = Rust FFI replica, web = JS
-    // yjs replica — both wire-compatible). It also carries presence and the
+    // Open a yrs CRDT session for this doc (the Rust core — over FFI on desktop,
+    // as wasm on the web). It also carries presence and the
     // op-path accepted-seq notice. P3d: reconcile itself only runs
     // off cloud state (session + workspace + bootstrap — all cloud-world
     // fields), so the old mode guard is redundant; a local-world selection
@@ -329,7 +329,8 @@ class SyncReconcileController extends ChangeNotifier {
     int generation,
   ) async {
     // Desktop pins the CRDT actor to the device's stable client id; web has no
-    // on-device store, so it uses a per-session yjs actor (placeholder id here).
+    // device identity, so each web replica takes a random actor (the web adapter
+    // ignores this placeholder id).
     var clientId = _clientId;
     if (clientId == null) {
       clientId = await deviceClientId() ?? (isWeb() ? BigInt.zero : null);
