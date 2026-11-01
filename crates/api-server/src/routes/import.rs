@@ -767,8 +767,9 @@ async fn run_import(
   // given folder, or the workspace root when none.
   let root_parent = params.parent_view_id;
   // Pre-generate every page's view id so links can target pages that come
-  // later in the plan (forward references included).
-  let view_ids: Vec<Uuid> = plan.pages.iter().map(|_| Uuid::new_v4()).collect();
+  // later in the plan (forward references included). A backup's own ids are
+  // kept where free (N4).
+  let view_ids = restored_view_ids(&state.db, &plan).await?;
   let file_paths: std::collections::HashSet<String> = plan.files.keys().cloned().collect();
   let mut uploaded: std::collections::HashMap<String, (String, String)> =
     std::collections::HashMap::new();
@@ -1026,6 +1027,46 @@ async fn run_import(
     .await;
   }
   Ok(())
+}
+
+/// One view id per planned page. Restoring one of our own backups keeps each
+/// page's original id when no view holds it (the source workspace was deleted,
+/// or this is another instance), so `mica://page/<id>` links from other pages
+/// and workspaces, bookmarks and open tabs find the page again (N4). An id
+/// that is taken — the original still beside the restore, the same backup
+/// imported twice — or is not a UUID (a local-mode backup) gets a fresh one,
+/// as every import did before. Shares are keyed by document, which is always
+/// new, so a restore never revives an old public link.
+///
+/// The check is a hint, not the authority: the `views` primary key is. Two
+/// restores of one backup racing past this check make the second fail on
+/// insert rather than share a page.
+async fn restored_view_ids(db: &sqlx::PgPool, plan: &ImportPlan) -> ApiResult<Vec<Uuid>> {
+  let wanted: Vec<Option<Uuid>> = mica_interchange::source_view_ids(plan)
+    .into_iter()
+    .map(|id| id.and_then(|id| Uuid::parse_str(&id).ok()))
+    .collect();
+  let candidates: Vec<Uuid> = wanted.iter().flatten().copied().collect();
+  let taken: std::collections::HashSet<Uuid> = if candidates.is_empty() {
+    Default::default()
+  } else {
+    sqlx::query_scalar("SELECT id FROM views WHERE id = ANY($1)")
+      .bind(&candidates)
+      .fetch_all(db)
+      .await?
+      .into_iter()
+      .collect()
+  };
+  let mut used = std::collections::HashSet::new();
+  Ok(
+    wanted
+      .into_iter()
+      .map(|id| match id {
+        Some(id) if !taken.contains(&id) && used.insert(id) => id,
+        _ => Uuid::new_v4(),
+      })
+      .collect(),
+  )
 }
 
 /// Destination decides the "container vs flatten" shape (see import-convention
@@ -1710,6 +1751,45 @@ mod import_pg {
   /// deleted parent, CASCADE-deleted with the bin, their `documents` rows left
   /// behind. Now the write itself is refused, as a conflict, and the page's
   /// transaction takes its `documents` row down with it.
+  /// N4: a restored page keeps the view id it was exported with when that id
+  /// is free, and gets a fresh one when it is still taken or not a UUID.
+  #[tokio::test]
+  async fn a_restore_keeps_free_view_ids_and_renews_taken_ones() {
+    let Some(db) = pool().await else { return };
+    let (ws, user) = seed_workspace(&db).await;
+    let free = Uuid::new_v4();
+    let taken = Uuid::new_v4();
+    insert_folder(&db, ws, user, taken, None, "原件", None)
+      .await
+      .unwrap();
+    let (free_s, taken_s) = (free.to_string(), taken.to_string());
+    let nodes = vec![
+      node(&free_s, None, "0000000010", "空闲", "document", None),
+      node(&taken_s, None, "0000000020", "占用", "document", None),
+      node("view_local", None, "0000000030", "本地", "document", None),
+    ];
+    let mut payloads = HashMap::new();
+    for n in &nodes {
+      payloads.insert(
+        n.object_id.clone(),
+        mica_markdown::import_markdown("正文。", "root"),
+      );
+    }
+    let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
+      .into_iter()
+      .map(|z| ZipFileEntry {
+        name: z.name,
+        bytes: z.data,
+      })
+      .collect();
+    let plan = plan_import(raw, false, ImportMode::AsIs).unwrap();
+    let ids = restored_view_ids(&db, &plan).await.unwrap();
+    let id_of = |title: &str| ids[plan.pages.iter().position(|p| p.title == title).unwrap()];
+    assert_eq!(id_of("空闲"), free);
+    assert_ne!(id_of("占用"), taken);
+    assert_ne!(id_of("本地").to_string(), "view_local");
+  }
+
   #[tokio::test]
   async fn a_target_folder_trashed_mid_import_stops_the_writes() {
     use axum::response::IntoResponse;

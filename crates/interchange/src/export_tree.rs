@@ -1382,6 +1382,52 @@ mod tests {
     assert_eq!(root.data["front_matter"]["status"], "draft");
   }
 
+  /// N4: a backup tells the importer which view id each page had, folders
+  /// included, and a wrapper the import adds has none.
+  #[test]
+  fn a_backup_names_each_pages_original_view_id() {
+    let nodes = vec![
+      folder("f", None, "0000000010", "Folder"),
+      doc("a", Some("f"), "0000000010", "Alpha"),
+      doc("b", None, "0000000020", "Beta"),
+    ];
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_a".to_string(), payload("a"));
+    payloads.insert("obj_b".to_string(), payload("b"));
+    let raw = || -> Vec<crate::ZipFileEntry> {
+      build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
+        .into_iter()
+        .map(|e| crate::ZipFileEntry {
+          name: e.name,
+          bytes: e.data,
+        })
+        .collect()
+    };
+    let by_title = |plan: &crate::ImportPlan| -> HashMap<String, Option<String>> {
+      plan
+        .pages
+        .iter()
+        .map(|p| p.title.clone())
+        .zip(crate::source_view_ids(plan))
+        .collect()
+    };
+    let plan = crate::plan_import(raw(), false, crate::ImportMode::AsIs).unwrap();
+    let ids = by_title(&plan);
+    assert_eq!(ids["Folder"].as_deref(), Some("f"));
+    assert_eq!(ids["Alpha"].as_deref(), Some("a"));
+    assert_eq!(ids["Beta"].as_deref(), Some("b"));
+
+    let wrapped = crate::plan_import(
+      raw(),
+      false,
+      crate::ImportMode::IntoContainer("Restored".into()),
+    )
+    .unwrap();
+    let ids = by_title(&wrapped);
+    assert_eq!(ids["Restored"], None);
+    assert_eq!(ids["Alpha"].as_deref(), Some("a"));
+  }
+
   #[test]
   fn a_page_without_comments_writes_no_comments_key() {
     let nodes = vec![doc("a", None, "0000000010", "Alpha")];

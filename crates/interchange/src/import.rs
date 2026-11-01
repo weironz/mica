@@ -703,6 +703,24 @@ pub fn native_payload(
   Some(payload)
 }
 
+/// The view id each page had where it was exported, by plan index (N4): the
+/// manifest's ids (v2+) of our own archives. None for v1 and foreign archives
+/// and for nodes the manifest does not name (a synthetic wrapper folder).
+///
+/// A restore keeps such an id when nothing on the destination holds it any
+/// more, so links, bookmarks and open tabs that name the page still find it.
+/// The id is only a hint from the archive: each executor checks it against its
+/// own store and mints a fresh one when it is taken or malformed.
+pub fn source_view_ids(plan: &ImportPlan) -> Vec<Option<String>> {
+  let mut ids = vec![None; plan.pages.len()];
+  for (id, &idx) in &plan.page_by_source_id {
+    if let Some(slot) = ids.get_mut(idx) {
+      *slot = Some(id.clone());
+    }
+  }
+  ids
+}
+
 /// Point an image block's `data` at an uploaded file: the archive `url` gives
 /// way to `file_id` + `name`, and every other key (width, title, …) stays.
 /// Both executors call this, for Markdown-sourced and native images alike.

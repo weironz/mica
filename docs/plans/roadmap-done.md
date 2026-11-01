@@ -781,7 +781,8 @@
 
 ## 开发者体验 / CI / Markdown
 
-- ✅ **单一实现专项后续(0.14.3,2026-11-01)**—— 页面属性的 YAML 镜像、HTML 粘贴到 Markdown、导入标题识别均收进 Rust 引擎;接口数据结构共用 `mica-api-types`,页树纯规则共用 `tree_rules`,关系型状态由两端回放 `contracts/tree-rules.json`。Web CRDT 改用 `mica-core` 的 `mica_doc` wasm,两端 Dart 共用 `SyncDocReplica` / `BlockOpMirror`,yjs bundle 已退役。原生无损导出 N1「导入时读 `.mica.json`」已完成;N2–N4 仍在路线图。SDK crate / npm 未发布。发版验收及限制见 [`release-0.14.3-validation.md`](../ops/release-0.14.3-validation.md)。
+- ✅ **单一实现专项后续(0.14.3,2026-11-01)**—— 页面属性的 YAML 镜像、HTML 粘贴到 Markdown、导入标题识别均收进 Rust 引擎;接口数据结构共用 `mica-api-types`,页树纯规则共用 `tree_rules`,关系型状态由两端回放 `contracts/tree-rules.json`。Web CRDT 改用 `mica-core` 的 `mica_doc` wasm,两端 Dart 共用 `SyncDocReplica` / `BlockOpMirror`,yjs bundle 已退役。原生无损导出 N1「导入时读 `.mica.json`」已完成。SDK crate / npm 未发布。发版验收及限制见 [`release-0.14.3-validation.md`](../ops/release-0.14.3-validation.md)。
+- ✅ **原生无损导出 N2–N4(2026-11-01,未发版)**—— N2:sidecar 带评论线程(manifest v3,锚点为块 id + 偏移),导入时重建,页面导出修订号含评论(迁移 0037);N3:工作区 / 文件夹「导出」分「备份」(`<名>.mica.zip`,含 sidecar)与「导出为 Markdown」(`<名>.zip`,无 sidecar),服务端 `?format=backup|markdown` 缺省备份;N4:导入备份时空闲的原视图 id 原样沿用,外部链接与书签继续有效。见 [`backup.md`](../ops/backup.md) 与单一实现专项 01 §9.1。
 
 - ✅ **Markdown 引擎单一实现专项(S0–S5)**(2026-10-26 立项,2026-10-29 G4 通过,v0.14.0)—— Dart 里约 4,000 行
   Markdown 镜像删除,解析 / 序列化 / HTML 只留 Rust 一份(`crates/md-core`,包名 `mica-md`):服务端 / CLI / MCP 原生调用,

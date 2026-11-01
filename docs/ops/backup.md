@@ -290,10 +290,19 @@ go into the same workspace with `workspace_id`. An earlier version of this
 document said "re-import each workspace's tree", which reads as though you could
 point the importer at the restored directory. You cannot.
 
-⚠️ **What re-importing does NOT bring back**, because it is the generic Markdown
-importer and not a Mica-specific round trip: page ids, CRDT edit history,
-comments, share links, users and memberships. Those live only in the database.
-Re-imported pages are NEW pages that happen to have the same text.
+⚠️ **What re-importing brings back, and what it does not.** From a backup
+(`.mica.json` sidecars present, `.md` untouched) each page comes back from its
+native blocks: block ids, image settings, comment threads (manifest v3) and —
+since N4, 2026-11-01 — **its original view id**, whenever no view on this
+instance still holds it (the workspace was deleted, or this is a fresh
+instance), so `mica://page/<id>` links from other workspaces, bookmarks and open
+tabs find the page again. An id still in use (the original beside the restore,
+the same backup imported twice) gets a fresh one and the import's own links
+are pointed at it. Never restored: CRDT edit history, share links (they belong
+to the document, which is always new), users and memberships, comment authors
+as accounts (the importer is the author of record, with an attribution line).
+Those live only in the database. A Markdown export, or a page whose `.md` was
+edited, imports through the Markdown path: new pages with the same text.
 
 **Its status, stated exactly** (decided 2026-08-30): the importer itself is a
 used, working feature — the operator has imported archives by hand. What has

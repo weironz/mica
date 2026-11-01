@@ -85,7 +85,6 @@
 - 🆕 **`mica-md` SDK 对外发布(crate / npm)待用户批准**(2026-10-29)—— 引擎已按 SDK 形状交付、`publish = false`;
   发布步骤见 [S5 发布手册](../single-source/stages/S5-sdk-release.md),crates.io / npm 由用户本人执行。HTML 导出的「严格」档
   已于 2026-11-01 加上(`HtmlProfile::Strict`,原样 HTML 一律转义),发布不再有前置条件。
-- 原生无损导出格式 `.mica.zip` 的 **N2–N4**(已讨论未排期,见单一实现专项 01 §9);N1「导入时读 `.mica.json`」及已完成的单一实现后续已移入 [`roadmap-done.md`](roadmap-done.md#开发者体验--ci--markdown)。
 - 发布产物 canary(2026-11-01 验收发现):在独立目录安装当前 release,校验 `/api/health` 版本及固定入口文件契约,覆盖真实交付物和旧安装升级。现有源码测试、安装启动冒烟与 `web-entry-cache-check.sh` 各验一段,尚未串成下载发行物后的完整 canary。
 - 🟡 **yrs 不可信更新:两类进程终止问题已修复,剩余普通 panic 仍需兜底**(2026-10-08)—— markdown、ZIP、yrs 三个解析面均有测试;前两个是正常运行的 property 回归门。
   **已接入官方 `yrs 0.28.0`**,服务端与桌面 FFI 的两个锁文件同步升级,没有 fork 或 `[patch.crates-io]` 特殊配置。[#639](https://github.com/y-crdt/y-crdt/pull/639) 的 fallible allocation 已随 0.27.4 发布;[#644](https://github.com/y-crdt/y-crdt/pull/644) 的 checked UTF-8 随 0.28.0 发布。`proptest_yrs.rs` 的 **21 字节异常分配**、**非法 UTF-8** 已转为默认运行的 decode/apply 回归测试,本地无 CRC 的旧快照另有 UTF-8 回归。

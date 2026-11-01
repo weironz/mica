@@ -18,7 +18,7 @@ pub use export_tree::{
 };
 pub use import::{
   ImportMode, ImportPlan, NormalizedArchive, PagePlan, attach_uploaded_image, native_payload,
-  normalize_archive, percent_decode, plan_import, plan_vault_import, resolve_ref,
+  normalize_archive, percent_decode, plan_import, plan_vault_import, resolve_ref, source_view_ids,
 };
 pub use normalize::{expand_nested_zips, normalize_entries};
 pub use zip::{ZipEntry, ZipFileEntry, ZipStreamWriter, build_zip, read_zip};

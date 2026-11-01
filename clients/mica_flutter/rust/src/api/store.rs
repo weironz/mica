@@ -791,8 +791,30 @@ impl MicaStore {
         // because a link may point FORWARD (A.md links B.md while B is created
         // later) as well as back. The server importer does the same: ids are
         // minted for the whole plan, then links are rewritten to them.
-        let planned_view_ids: Vec<String> = (0..plan.pages.len())
-            .map(|_| format!("view_{}", uuid::Uuid::new_v4()))
+        //
+        // A backup's own ids are kept where no local view holds them (N4), so
+        // links into a restored workspace keep working. Checked against EVERY
+        // local row, trashed included: `save_view` is an upsert and would
+        // otherwise overwrite the page that still has the id.
+        // Unreadable store = every id counts as held: fresh ids, never an upsert.
+        let held: Option<std::collections::HashSet<String>> = self
+            .store()
+            .list_views("local")
+            .ok()
+            .map(|views| views.into_iter().map(|v| v.id).collect());
+        let mut used = std::collections::HashSet::new();
+        let planned_view_ids: Vec<String> = mica_interchange::source_view_ids(&plan)
+            .into_iter()
+            .map(|id| match id {
+                Some(id)
+                    if is_local_view_id(&id)
+                        && held.as_ref().is_some_and(|h| !h.contains(&id))
+                        && used.insert(id.clone()) =>
+                {
+                    id
+                }
+                _ => format!("view_{}", uuid::Uuid::new_v4()),
+            })
             .collect();
         let mut view_ids: Vec<Option<String>> = Vec::with_capacity(plan.pages.len());
         for (idx, page) in plan.pages.iter().enumerate() {
@@ -1169,6 +1191,13 @@ impl MicaStore {
         let _ = self.store()
             .set_sync_cursor(&origin, &doc_id, cursor.into());
     }
+}
+
+/// The shape local view ids are minted in (`view_<uuid>`). A backup from the
+/// server (bare UUIDs) or a foreign manifest cannot donate its ids here.
+fn is_local_view_id(id: &str) -> bool {
+    id.strip_prefix("view_")
+        .is_some_and(|u| uuid::Uuid::parse_str(u).is_ok())
 }
 
 #[cfg(test)]
@@ -1880,6 +1909,54 @@ mod clone_view_tests {
         assert_eq!(img.data["width"], 320);
         let para = payload.blocks.iter().find(|b| b.id == "p1").unwrap();
         assert_eq!(para.data["marks"][0]["href"], format!("mica://page/{}", b.id));
+    }
+
+    /// N4: a restore keeps a backup's view ids while they are free; importing
+    /// the same backup again mints fresh ones instead of overwriting the pages
+    /// that hold them (`save_view` is an upsert).
+    #[test]
+    fn vault_import_restores_free_view_ids_and_never_overwrites() {
+        let (store, _dir) = tmp_store();
+        store.save_workspace(ws("ws1", "WS", "0000000010"));
+        let a_id = format!("view_{}", uuid::Uuid::new_v4());
+        let manifest = serde_json::json!({
+            "version": 2, "generator": "mica",
+            "pages": [
+                { "path": "A.md", "title": "A", "type": "document", "id": a_id },
+                { "path": "B.md", "title": "B", "type": "document", "id": "not-a-local-id" }
+            ]
+        });
+        let entries = || {
+            vec![
+                vte("manifest.json", &manifest.to_string()),
+                vte("A.md", "# A\n\nalpha"),
+                vte("B.md", "# B\n\nbeta"),
+            ]
+        };
+        let first = store.import_vault_tree(
+            entries(),
+            "ws1".into(),
+            None,
+            std::collections::HashMap::new(),
+        );
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        let views = store.list_views("local".to_string());
+        let a_object = view_by_name(&views, "A").object_id.clone();
+        assert_eq!(view_by_name(&views, "A").id, a_id, "a free id comes back");
+        assert_ne!(view_by_name(&views, "B").id, "not-a-local-id");
+
+        let again = store.import_vault_tree(
+            entries(),
+            "ws1".into(),
+            None,
+            std::collections::HashMap::new(),
+        );
+        assert!(again.errors.is_empty(), "{:?}", again.errors);
+        assert!(!again.view_ids.contains(&a_id));
+        let views = store.list_views("local".to_string());
+        assert_eq!(views.len(), 4);
+        let still = views.iter().find(|v| v.id == a_id).unwrap();
+        assert_eq!(still.object_id, a_object, "the first restore is untouched");
     }
 
     /// Into a NON-EMPTY tree, imported nodes must not reuse positions already
