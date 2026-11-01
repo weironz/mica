@@ -3,7 +3,13 @@
 > **已迁移（同日，用户决定）**：`crates/doc-wasm` + `scripts/build-doc-wasm.sh`（gzip 251,111 B，硬预算 262,144 B），
 > Web 适配器 `cloud/sync_replica_web.dart` 与桌面同形，op 回放统一为 `cloud/block_op_mirror.dart`；yjs 及其 Dart 镜像全部删除。
 > 验证：浏览器套件 8 个全过（新增 `web_doc_replica_test` 6 项）；本地真实路径上登录→打字→撤销/重做→服务端导出一致，
-> 两个浏览器上下文实时互见编辑，`micaWebSyncTest` 两会话经真实服务端收敛。下文为迁移前的验证记录。
+> 两个浏览器上下文实时互见编辑，`micaWebSyncTest` 两会话经真实服务端收敛。
+>
+> **性能（迁移后复测，同一份 2000 块文档、同一浏览器，`test/web_replica_bench_test.dart`；旧数据取迁移前提交 ff1c3c14 跑同一基准）**：
+> 打开 115.9 → 29.4 ms，整篇读出 24.4 → 12.4 ms，每次按键（回放 + 生成增量）0.20 → 0.20 ms，
+> 收到一次远端更新（合并 + 整篇读出）21.2 → 11.4 ms，撤销一批 23.3 → 10.5 ms。启动时两个引擎并行到位（本机均约 30 ms），
+> 首屏不被拖慢；慢网下多出的约 251 KB 与 Markdown 引擎争带宽。待观察：远端更新后整篇读出随文档线性增长（2000 块约 10 ms），
+> wasm 内存只增不减。下文为迁移前的验证记录。
 
 > 只做验证，不做迁移。背景见 [单一实现专项 01 §9](../single-source/01-background.md#9-仓库里其他双份与后续专项不在本专项范围)：
 > 服务端与桌面用 yrs（`mica-core` 的 `MicaDoc`），Web 用 yjs（`web/yjs_bundle.js`）加约 1,000 行 Dart 镜像
