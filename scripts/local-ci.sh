@@ -27,6 +27,10 @@ note "SQL migrations: tracking and exact line endings"
 bash scripts/check-migration-tracking.sh
 bash scripts/test-migration-tracking.sh
 
+note "single Markdown implementation: no Markdown syntax in Dart"
+bash scripts/test-check-dart-markdown.sh
+bash scripts/check-dart-markdown.sh
+
 note "CI configuration: job selection regressions"
 bash scripts/test-ci-paths.sh
 note "CI configuration: Flutter SDK reuse regressions"

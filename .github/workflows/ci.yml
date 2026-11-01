@@ -133,6 +133,12 @@ jobs:
         env:
           STRUCTURE_PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/check-structure-ci.sh
+      # Markdown has one implementation (crates/md-core); Dart must not grow a
+      # second one. The self-test proves the gate fails on real offenders.
+      - name: No Markdown syntax in Dart (single implementation)
+        run: |
+          bash scripts/test-check-dart-markdown.sh
+          bash scripts/check-dart-markdown.sh
 
   rust:
     name: Rust (build + lint + tests)
@@ -219,7 +225,10 @@ jobs:
         # floor (scripts/lib-receipt.sh).
         run: |
           source scripts/lib-local.sh && source scripts/lib-receipt.sh
-          cargo_receipt 500 cargo test -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra -p mica-api-server -p mica-cli
+          # mica-md is the Markdown engine itself: its wire gold, security,
+          # proptest and public-API suites were missing from this list until
+          # 2026-11-01 and ran only in local-ci's --workspace.
+          cargo_receipt 500 cargo test -p mica-md -p mica-markdown -p mica-core -p mica-interchange -p mica-mcp-server -p mica-app-core -p mica-infra -p mica-api-server -p mica-cli
 
       # Separate invocation: `store` is a non-default feature, and features do
       # not apply across a multi-package `-p` list. Without this the 24 local

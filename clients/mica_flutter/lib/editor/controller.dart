@@ -2011,6 +2011,7 @@ class EditorController extends ChangeNotifier {
               text.startsWith('+ '))) {
         return convert('bulleted_list', {}, 2);
       }
+      // md-syntax-ok: keystroke input rule (block shortcut), see AGENTS.md
       if (caret == 2 && text.startsWith('> ')) {
         return convert('quote', {}, 2);
       }
@@ -2018,6 +2019,7 @@ class EditorController extends ChangeNotifier {
       if (numbered != null && caret == numbered.end) {
         return convert('numbered_list', {}, numbered.end);
       }
+      // md-syntax-ok: keystroke input rule (block shortcut)
       if (caret == 3 && (text == '```' || text == '~~~')) {
         return convert('code_block', {}, 3);
       }
@@ -2093,6 +2095,7 @@ class EditorController extends ChangeNotifier {
     // Link: [label](url) — closing `)` just typed.
     if (text.endsWith(')')) {
       final m = RegExp(
+        // md-syntax-ok: keystroke input rule (inline link shortcut)
         r'\[([^\]]+)\]\(([^)\s]+)\)$',
       ).firstMatch(text.substring(0, caret));
       if (m != null) {
@@ -2106,6 +2109,7 @@ class EditorController extends ChangeNotifier {
 
     // Two-char wrappers: **bold**, ~~strike~~.
     if (type == null && caret >= 4) {
+      // md-syntax-ok: keystroke input rule (inline emphasis shortcut)
       for (final mk in const [('**', 'bold'), ('~~', 'strike')]) {
         if (text.substring(caret - 2, caret) != mk.$1) continue;
         final open = text.lastIndexOf(mk.$1, caret - 3);
