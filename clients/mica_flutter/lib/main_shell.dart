@@ -2357,27 +2357,31 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     return markdown;
   }
 
-  Future<Uint8List> _exportFolderZip(DocumentView folder) async {
-    final session = _requireSession();
-    final workspace = _requireWorkspace();
-    return _api.exportFolderZip(session.accessToken, workspace.id, folder.id);
-  }
+  Future<Uint8List> _exportFolderZip(DocumentView folder, ArchiveFormat f) =>
+      _api.exportFolderZip(
+        _requireSession().accessToken,
+        _requireWorkspace().id,
+        folder.id,
+        format: f,
+      );
 
   /// Export a LOCAL folder's subtree as a ZIP via the shared Rust builder — the
   /// local mirror of [_exportFolderZip], closing the last local-export gap.
-  Future<Uint8List> _localExportFolderZip(DocumentView folder) async {
+  Future<Uint8List> _localExportFolderZip(DocumentView folder, ArchiveFormat f) async {
     final wsId = _localBackend._workspaceIdOfView(folder.id);
-    final bytes = _local.exportFolderZip(wsId, folder.id);
+    final bytes = _local.exportFolderZip(
+      wsId,
+      folder.id,
+      markdownOnly: f == ArchiveFormat.markdown,
+    );
     if (bytes == null || bytes.isEmpty) {
       throw ApiException(context.l10n.exportEmptyContent);
     }
     return bytes;
   }
 
-  Future<Uint8List> _exportWorkspaceZip(String workspaceId) async {
-    final session = _requireSession();
-    return _api.exportWorkspaceZip(session.accessToken, workspaceId);
-  }
+  Future<Uint8List> _exportWorkspaceZip(String id, ArchiveFormat f) =>
+      _api.exportWorkspaceZip(_requireSession().accessToken, id, format: f);
 
   /// Settings → "Export all workspaces": one zip with every workspace this
   /// account belongs to, each under its own `<name>/` subdir (switcher order)
@@ -4596,9 +4600,10 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       ? _localBackend._localDeleteWorkspace(e.workspace)
       : _deleteWorkspace(e.workspace);
 
-  Future<Uint8List> _exportEntryZip(WorkspaceEntry e) => e.isLocal
-      ? _localBackend._localExportWorkspaceZip(e.workspace.id)
-      : _exportWorkspaceZip(e.workspace.id);
+  Future<Uint8List> _exportEntryZip(WorkspaceEntry e, ArchiveFormat f) =>
+      e.isLocal
+      ? _localBackend._localExportWorkspaceZip(e.workspace.id, f)
+      : _exportWorkspaceZip(e.workspace.id, f);
 
   /// Persist a new workspace order for ONE world (the switcher only reorders
   /// within the connected world; cloud and local are separate position
@@ -5174,7 +5179,6 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // stub returns null and the menu item is hidden there).
       onExportPagePdf: _local.htmlToPdf,
       onImportMarkdown: b.exportOps.importMarkdown,
-      onExportWorkspaceZip: b.exportOps.workspaceZip,
       onExportAllWorkspaces: b.exportAllWorkspaces,
       onLoadExportStats: b.exportStats,
       // Desktop only: web has no on-device store to measure.

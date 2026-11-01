@@ -260,8 +260,14 @@ none), and they never enter the `.md`. A page's export revision covers its
 comments (`mica_comments_revision`, migration 0037), so the CLI mirror
 re-fetches a page whose discussion changed.
 
-There is no importer for the JSON half yet — it is written so the data is not
-lost, not because something reads it back. See `docs/plans/roadmap.md`.
+The app offers the two halves as two choices (N3, 2026-11-01): **Backup**
+downloads `<name>.mica.zip` with the `.mica.json` sidecars and is what restores
+a workspace losslessly; **Export as Markdown** downloads `<name>.zip` with the
+same `.md` files, assets and manifest but no sidecars, for other tools. The
+server's tree exports take `?format=backup|markdown`; no parameter means
+`backup`, so the CLI mirror and older clients are unchanged, and any other
+value is a 400. Either archive imports back; the Markdown one goes through the
+Markdown path, so block ids and comments are not carried.
 
 ### What this restores, and what it does not
 

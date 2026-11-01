@@ -199,6 +199,28 @@ async fn collect_assets(
   Ok(map)
 }
 
+/// `?format=` on the tree exports (N3). Absent or `backup` is the Mica backup:
+/// Markdown plus each page's `.mica.json` (native blocks, comments), which
+/// imports back losslessly. `markdown` is the same `.md` files, assets and
+/// manifest without the sidecars, for other tools. The default stays
+/// `backup` so existing clients (CLI, older apps) keep getting what they did.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ArchiveFormatParams {
+  format: Option<String>,
+}
+
+impl ArchiveFormatParams {
+  fn markdown_only(&self) -> ApiResult<bool> {
+    match self.format.as_deref() {
+      None | Some("backup") => Ok(false),
+      Some("markdown") => Ok(true),
+      Some(other) => Err(ApiError::BadRequest(format!(
+        "unknown export format '{other}' (backup | markdown)"
+      ))),
+    }
+  }
+}
+
 /// `GET /api/workspaces/{workspace_id}/export.zip`
 ///
 /// The whole workspace as a Markdown ZIP, organised by the page tree: each page
@@ -209,13 +231,15 @@ pub async fn export_workspace_zip(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path(workspace_id): Path<Uuid>,
+  Query(format): Query<ArchiveFormatParams>,
 ) -> ApiResult<Response> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  let markdown_only = format.markdown_only()?;
   let permit = tree_export_permit()?;
   Ok(streamed_zip("workspace.zip", move |mut sink| async move {
     let _permit = permit;
-    stream_tree(&state, &mut sink, workspace_id, None, "").await?;
+    stream_tree(&state, &mut sink, workspace_id, None, "", markdown_only).await?;
     Ok(sink)
   }))
 }
@@ -555,7 +579,7 @@ pub async fn export_all_workspaces_zip(
           dir = format!("{base} ({n})");
           n += 1;
         }
-        stream_tree(&state, &mut sink, *ws_id, None, &format!("{dir}/")).await?;
+        stream_tree(&state, &mut sink, *ws_id, None, &format!("{dir}/"), false).await?;
         manifest_ws.push(serde_json::json!({ "name": ws_name, "dir": dir }));
       }
       let manifest = serde_json::json!({
@@ -586,9 +610,11 @@ pub async fn export_folder_zip(
   State(state): State<AppState>,
   headers: HeaderMap,
   Path((workspace_id, view_id)): Path<(Uuid, Uuid)>,
+  Query(format): Query<ArchiveFormatParams>,
 ) -> ApiResult<Response> {
   let user_id = user_id_from_headers(&state, &headers).await?;
   ensure_workspace_member(&state.db, workspace_id, user_id).await?;
+  let markdown_only = format.markdown_only()?;
 
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
   let folder = views
@@ -604,7 +630,15 @@ pub async fn export_folder_zip(
   let permit = tree_export_permit()?;
   Ok(streamed_zip(&filename, move |mut sink| async move {
     let _permit = permit;
-    stream_tree(&state, &mut sink, workspace_id, Some(view_id), "").await?;
+    stream_tree(
+      &state,
+      &mut sink,
+      workspace_id,
+      Some(view_id),
+      "",
+      markdown_only,
+    )
+    .await?;
     Ok(sink)
   }))
 }
@@ -749,12 +783,16 @@ pub(super) async fn stream_tree(
   workspace_id: Uuid,
   root: Option<Uuid>,
   prefix: &str,
+  markdown_only: bool,
 ) -> ApiResult<()> {
   use mica_interchange::TreeExport;
   let views = fetch_workspace_views(&state.db, workspace_id).await?;
   let nodes = export_tree_nodes(&views);
   let root_str = root.map(|r| r.to_string());
   let mut export = TreeExport::new(&nodes, root_str.as_deref());
+  if markdown_only {
+    export = export.markdown_only();
+  }
   let mut inventory = tree_asset_inventory(state, workspace_id, &views).await?;
   stream_tree_pages(
     state,
@@ -968,7 +1006,11 @@ async fn stream_tree_pages(
         },
       );
     }
-    let comments = mica_app_core::comments::export_threads(&state.db, uuid).await?;
+    let comments = if export.writes_sidecars() {
+      mica_app_core::comments::export_threads(&state.db, uuid).await?
+    } else {
+      None
+    };
     for entry in export.page_with_comments(
       view_id,
       &payload,
@@ -1590,6 +1632,23 @@ pub(super) fn inline_blob_hrefs(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// N3: no `format` (old clients) still gets the lossless backup; only an
+  /// explicit `markdown` drops the sidecars, and a typo is a 400, not a
+  /// silently different archive.
+  #[test]
+  fn archive_format_defaults_to_the_backup() {
+    let f = |v: Option<&str>| ArchiveFormatParams {
+      format: v.map(str::to_string),
+    };
+    assert!(!f(None).markdown_only().unwrap());
+    assert!(!f(Some("backup")).markdown_only().unwrap());
+    assert!(f(Some("markdown")).markdown_only().unwrap());
+    assert!(matches!(
+      f(Some("md")).markdown_only(),
+      Err(ApiError::BadRequest(_))
+    ));
+  }
 
   /// An image block carrying [data] — the only field these tests vary.
   fn image_block(data: serde_json::Value) -> mica_app_core::documents::Block {

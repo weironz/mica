@@ -22,6 +22,7 @@ import 'cloud/cloud_sync.dart';
 import 'cloud/doc_store_platform.dart';
 import 'cloud/pending_uploads.dart';
 import 'cloud/workspace_migration.dart';
+import 'ui/export_format.dart';
 import 'ui/mica_state.dart';
 import 'diagnostics.dart';
 import 'import/import_controller.dart';

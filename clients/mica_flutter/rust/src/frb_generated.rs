@@ -2470,6 +2470,7 @@ fn wire__crate__api__store__MicaStore_export_folder_zip_impl(
       let api_workspace_id = <String>::sse_decode(&mut deserializer);
       let api_folder_id = <Option<String>>::sse_decode(&mut deserializer);
       let api_images = <Vec<crate::api::store::FolderExportImage>>::sse_decode(&mut deserializer);
+      let api_markdown_only = <bool>::sse_decode(&mut deserializer);
       deserializer.end();
       transform_result_sse::<_, ()>((move || {
         let mut api_that_guard = None;
@@ -2490,6 +2491,7 @@ fn wire__crate__api__store__MicaStore_export_folder_zip_impl(
           api_workspace_id,
           api_folder_id,
           api_images,
+          api_markdown_only,
         ))?;
         Ok(output_ok)
       })())

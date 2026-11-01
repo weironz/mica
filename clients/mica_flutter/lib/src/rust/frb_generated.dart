@@ -356,6 +356,7 @@ abstract class RustLibApi extends BaseApi {
     required String workspaceId,
     String? folderId,
     required List<FolderExportImage> images,
+    required bool markdownOnly,
   });
 
   Future<LocalGraph> crateApiStoreMicaStoreGraphLocal({
@@ -2325,6 +2326,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String workspaceId,
     String? folderId,
     required List<FolderExportImage> images,
+    required bool markdownOnly,
   }) {
     return handler.executeSync(
       SyncTask(
@@ -2338,6 +2340,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(workspaceId, serializer);
           sse_encode_opt_String(folderId, serializer);
           sse_encode_list_folder_export_image(images, serializer);
+          sse_encode_bool(markdownOnly, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 52)!;
         },
         codec: SseCodec(
@@ -2345,7 +2348,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta: kCrateApiStoreMicaStoreExportFolderZipConstMeta,
-        argValues: [that, origin, workspaceId, folderId, images],
+        argValues: [that, origin, workspaceId, folderId, images, markdownOnly],
         apiImpl: this,
       ),
     );
@@ -2354,7 +2357,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStoreMicaStoreExportFolderZipConstMeta =>
       const TaskConstMeta(
         debugName: "MicaStore_export_folder_zip",
-        argNames: ["that", "origin", "workspaceId", "folderId", "images"],
+        argNames: [
+          "that",
+          "origin",
+          "workspaceId",
+          "folderId",
+          "images",
+          "markdownOnly",
+        ],
       );
 
   @override
@@ -6479,12 +6489,14 @@ class MicaStoreImpl extends RustOpaque implements MicaStore {
     required String workspaceId,
     String? folderId,
     required List<FolderExportImage> images,
+    required bool markdownOnly,
   }) => RustLib.instance.api.crateApiStoreMicaStoreExportFolderZip(
     that: this,
     origin: origin,
     workspaceId: workspaceId,
     folderId: folderId,
     images: images,
+    markdownOnly: markdownOnly,
   );
 
   /// The page-link graph for the graph view.

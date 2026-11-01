@@ -212,7 +212,7 @@
   "commonBack": "Back",
   "commonSignIn": "Sign in",
   "commonSignOut": "Sign out",
-  "workspaceRowImportFromZip": "From ZIP (Mica export)",
+  "workspaceRowImportFromZip": "From ZIP (Mica backup or Markdown)",
   "workspaceRowImportFromNotion": "From Notion (Markdown & CSV ZIP)",
   "workspaceRowImportWorkspace": "Import workspace",
   "workspaceFilterHint": "Filter {count} workspaces",
@@ -226,7 +226,6 @@
   "workspaceFilterNoMatch": "No workspace matches",
   "workspaceRowSelectWorkspace": "Select workspace",
   "workspaceRowSignInCloud": "Sign in to cloud…",
-  "workspaceRowExportZip": "Export (ZIP)",
   "workspaceRowImportFiles": "Files (.md / .zip)",
   "workspaceRowImportFolder": "Folder",
   "workspaceRowMigrate": "Upload to cloud…",
@@ -244,7 +243,6 @@
   "rowNewChildFolder": "New subfolder",
   "rowExpandChildren": "Expand children",
   "rowCollapseChildren": "Collapse children",
-  "rowExportZipImages": "Export (ZIP, with images)",
   "rowExportHtml": "Export as HTML",
   "rowExportPdf": "Export as PDF",
   "exportPdfUnsupported": "PDF export needs the WebView2 runtime (Windows desktop only for now).",
@@ -634,7 +632,7 @@
       }
     }
   },
-  "dataExportAllButton": "Export all workspaces (ZIP)",
+  "dataExportAllButton": "Back up all workspaces (ZIP)",
   "localCorruptTitle": "Couldn't open this page",
   "localCorruptBody": "This page's local copy appears to be corrupt. You can restore it to the last automatic checkpoint, or open version history to recover earlier content.",
   "localCorruptHistory": "Version history",
@@ -1559,5 +1557,15 @@
   },
   "importImageNeverAttempted": "never tried: the host had already timed out repeatedly",
   "importImagesRetry": "Try again from this device",
-  "importImagesAllRecovered": "All images are saved into Mica now."
+  "importImagesAllRecovered": "All images are saved into Mica now.",
+  "archiveFormatLabel": "{format, select, backup{Back up (Mica format, restores fully)} markdown{Export as Markdown} other{Export}}",
+  "@archiveFormatLabel": {
+    "description": "Export menu item: backup (lossless .mica.zip) or plain Markdown ZIP",
+    "placeholders": {
+      "format": {
+        "type": "String"
+      }
+    }
+  },
+  "rowExportZipImages": "Export (ZIP, with images)"
 }

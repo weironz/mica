@@ -292,14 +292,22 @@ abstract interface class LocalOfflineApi {
   /// what the server does inside PATCH /views/{id}. See the io implementation.
   void setDocTitle(String docId, String title);
   /// Export one folder's subtree as a Markdown ZIP (folder + pages + images).
-  Uint8List? exportFolderZip(String workspaceId, String folderId);
+  Uint8List? exportFolderZip(
+    String workspaceId,
+    String folderId, {
+    bool markdownOnly = false,
+  });
 
   /// Export a WHOLE workspace as a Markdown ZIP — the same Rust tree builder
   /// folder/page export use. [origin] defaults to `'local'`; a quarantined
   /// legacy origin can be exported the same way for explicit recovery. Never
   /// returns an empty archive for a workspace that has pages; the UI treats
   /// empty as a failure (issue #108).
-  Uint8List? exportWorkspaceZip(String workspaceId, {String origin});
+  Uint8List? exportWorkspaceZip(
+    String workspaceId, {
+    String origin,
+    bool markdownOnly = false,
+  });
   Future<Uint8List?> htmlToPdf(String html);
 }
 

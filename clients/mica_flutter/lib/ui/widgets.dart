@@ -58,7 +58,7 @@ class _WorkspaceSelector extends StatefulWidget {
   /// renders a single-line trigger, which is what "no workspace selected" wants.
   final String? activeMeta;
   final void Function(WorkspaceEntry entry) onDelete;
-  final void Function(WorkspaceEntry entry) onExport;
+  final void Function(WorkspaceEntry entry, ArchiveFormat format) onExport;
   final VoidCallback onCreate;
   /// Null hides the entry. Archive import is unsupported in local mode, and a
   /// menu item that does nothing is worse than no menu item.
@@ -615,10 +615,11 @@ class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
                   context.l10n.commonRename,
                   () => widget.onRename(entry),
                 ),
-                _wsAction(
-                  Icons.folder_zip_outlined,
-                  context.l10n.workspaceRowExportZip,
-                  () => widget.onExport(entry),
+                archiveFormatSubmenu(
+                  context,
+                  item: (icon, label, onTap) => _wsAction(icon, label, onTap),
+                  onPick: (f) => widget.onExport(entry, f),
+                  iconColor: MicaTheme.of(context).text.muted,
                 ),
                 // One Import entry; the native picker can't mix files and
                 // folders, so the choice lives in a submenu.
@@ -977,7 +978,7 @@ class DocumentListItem extends StatefulWidget {
 
   /// Export this folder's subtree as a ZIP. Works in BOTH worlds now (local
   /// goes through the shared Rust builder); null only if wiring omits it.
-  final VoidCallback? onExportFolder;
+  final void Function(ArchiveFormat format)? onExportFolder;
 
   /// Import loose files / a picked folder UNDER this folder (md/zip/images →
   /// pages beneath it). Works in both worlds; null hides the entries.
@@ -1254,16 +1255,16 @@ class _DocumentListItemState extends State<DocumentListItem> {
                   : context.l10n.rowCollapseChildren,
             ),
           ),
-        // Folder subtree -> ZIP, same as a page or a workspace. Every level
-        // exports the same way and carries its images; see onExportFolder.
+        // Folder subtree -> backup or Markdown ZIP, like a workspace (N3).
         if (widget._isFolder && widget.onExportFolder != null)
-          PopupMenuItem(
-            value: 'export',
-            child: _MenuRow(
-              icon: Icons.folder_zip_outlined,
-              label: context.l10n.rowExportZipImages,
+          for (final f in ArchiveFormat.values)
+            PopupMenuItem(
+              value: 'export:${f.name}',
+              child: _MenuRow(
+                icon: Icons.folder_zip_outlined,
+                label: context.l10n.archiveFormatLabel(f.name),
+              ),
             ),
-          ),
         // Import md / images / a nested folder UNDER this folder (both worlds).
         if (widget._isFolder && widget.onImportFilesIntoFolder != null)
           PopupMenuItem(
@@ -1328,8 +1329,10 @@ class _DocumentListItemState extends State<DocumentListItem> {
         widget.onClone();
       case 'toggle':
         widget.onToggle();
-      case 'export':
-        widget.onExportFolder?.call();
+      case 'export:backup' || 'export:markdown':
+        widget.onExportFolder?.call(
+          ArchiveFormat.values.byName(selected!.substring(7)),
+        );
       case 'importFiles':
         widget.onImportFilesIntoFolder?.call();
       case 'importFolder':

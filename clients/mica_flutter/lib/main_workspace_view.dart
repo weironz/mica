@@ -123,7 +123,6 @@ class WorkspaceView extends StatefulWidget {
     required this.onExportPageHtml,
     required this.onExportPagePdf,
     required this.onImportMarkdown,
-    required this.onExportWorkspaceZip,
     this.onExportAllWorkspaces,
     this.onLoadExportStats,
     this.onLoadCacheStats,
@@ -207,7 +206,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(WorkspaceEntry entry) onSelectEntry;
   final Future<void> Function(WorkspaceEntry entry, String name) onRenameEntry;
   final Future<void> Function(WorkspaceEntry entry) onDeleteEntry;
-  final Future<Uint8List> Function(WorkspaceEntry entry) onExportEntryZip;
+  final Future<Uint8List> Function(WorkspaceEntry entry, ArchiveFormat format)
+  onExportEntryZip;
   final Future<void> Function(
     WorkspaceEntry entry,
     List<ArchiveFile> entries, {
@@ -328,7 +328,8 @@ class WorkspaceView extends StatefulWidget {
   onCreateChildFolder;
 
   /// Export a folder's subtree as a ZIP. Null (local workspace) hides the entry.
-  final Future<Uint8List> Function(DocumentView folder)? onExportFolderZip;
+  final Future<Uint8List> Function(DocumentView folder, ArchiveFormat format)?
+  onExportFolderZip;
   final Future<void> Function(String? parentViewId, List<DocumentView> ordered)
   onReorderViews;
   final Future<List<DocumentView>> Function() onLoadTrash;
@@ -470,7 +471,6 @@ class WorkspaceView extends StatefulWidget {
     String title,
   )
   onExportPage;
-
   /// The open page as Markdown TEXT, for the clipboard. Distinct from
   /// [onExportPage], which packages images into a ZIP — see `_pageMarkdownText`.
   final Future<String> Function() onCopyPageMarkdown;
@@ -478,7 +478,6 @@ class WorkspaceView extends StatefulWidget {
   final Future<Uint8List?> Function(String html) onExportPagePdf;
   final Future<void> Function(String fileName, String markdown)
   onImportMarkdown;
-  final Future<Uint8List> Function(String workspaceId) onExportWorkspaceZip;
 
   /// Null in 本地模式 — cloud-only "export every workspace this account owns"
   /// (`GET /api/workspaces/export.zip`). Null hides the Settings button.
@@ -2483,43 +2482,23 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
 
   /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
   /// Export one folder's subtree as a ZIP, named after the folder.
-  Future<void> _exportFolderFile(DocumentView view) async {
-    final export = widget.onExportFolderZip;
-    if (export == null) return;
-    final l10n = context.l10n;
-    try {
-      final bytes = await export(view);
-      if (bytes.isEmpty) throw ApiException(l10n.exportEmptyContent);
-      final name = view.name.trim().isEmpty ? 'folder' : view.name.trim();
-      downloadImage(bytes, '$name.zip', 'application/zip');
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
-      }
-    }
-  }
+  Future<void> _exportFolderFile(DocumentView view, ArchiveFormat f) =>
+      saveArchive(
+        context,
+        build: () => widget.onExportFolderZip!(view, f),
+        format: f,
+        name: view.name,
+        fallback: 'folder',
+      );
 
-  Future<void> _exportWorkspaceFile(WorkspaceEntry entry) async {
-    final l10n = context.l10n;
-    try {
-      final bytes = await widget.onExportEntryZip(entry);
-      // Same guard as the page/folder exports: an empty archive is a failure,
-      // not a file worth saving.
-      if (bytes.isEmpty) throw ApiException(l10n.exportEmptyContent);
-      final name = entry.workspace.name.trim().isEmpty
-          ? 'workspace'
-          : entry.workspace.name.trim();
-      downloadImage(bytes, '$name.zip', 'application/zip');
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(l10n.exportFailed('$error'))));
-      }
-    }
-  }
+  Future<void> _exportWorkspaceFile(WorkspaceEntry entry, ArchiveFormat f) =>
+      saveArchive(
+        context,
+        build: () => widget.onExportEntryZip(entry, f),
+        format: f,
+        name: entry.workspace.name,
+        fallback: 'workspace',
+      );
 
   /// Export the open page as a ZIP (markdown + its images under `assets/`).
   /// There is no markdown-only export any more: a lone .md silently dropped

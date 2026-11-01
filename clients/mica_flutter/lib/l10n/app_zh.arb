@@ -132,7 +132,7 @@
   "commonBack": "返回",
   "commonSignIn": "登录",
   "commonSignOut": "退出登录",
-  "workspaceRowImportFromZip": "从 ZIP 导入(Mica 导出)",
+  "workspaceRowImportFromZip": "从 ZIP 导入(Mica 备份或 Markdown)",
   "workspaceRowImportFromNotion": "从 Notion 导入(Markdown 和 CSV ZIP)",
   "workspaceRowImportWorkspace": "导入工作区",
   "workspaceFilterHint": "在 {count} 个工作区里筛选",
@@ -146,7 +146,6 @@
   "workspaceFilterNoMatch": "没有匹配的工作区",
   "workspaceRowSelectWorkspace": "选择工作区",
   "workspaceRowSignInCloud": "登录云端…",
-  "workspaceRowExportZip": "导出(ZIP)",
   "workspaceRowImportFiles": "文件(.md / .zip)",
   "workspaceRowImportFolder": "文件夹",
   "workspaceRowMigrate": "上云…",
@@ -164,7 +163,6 @@
   "rowNewChildFolder": "新建子文件夹",
   "rowExpandChildren": "展开子项",
   "rowCollapseChildren": "收起子项",
-  "rowExportZipImages": "导出(ZIP,含图片)",
   "rowExportHtml": "导出为 HTML",
   "rowExportPdf": "导出为 PDF",
   "exportPdfUnsupported": "PDF 导出需要 WebView2 运行时(目前仅 Windows 桌面支持)",
@@ -382,7 +380,7 @@
   "cacheQuarantinedBody": "本机保留了 {count} 个旧版本工作区缓存。它们属于本版本无法验证的账号，因此不会显示给当前账号，也不会被自动删除。如需找回笔记，请使用导出。",
   "cacheQuarantinedExport": "导出",
   "cacheQuarantinedPages": "{pages} 个页面",
-  "dataExportAllButton": "导出全部工作区(ZIP)",
+  "dataExportAllButton": "备份全部工作区(ZIP)",
   "localCorruptTitle": "打开此页面失败",
   "localCorruptBody": "这个页面的本地副本似乎已损坏。可以恢复到上一个自动检查点,或打开版本历史找回更早的内容。",
   "localCorruptHistory": "版本历史",
@@ -848,5 +846,7 @@
   },
   "importImageNeverAttempted": "从未尝试：该站点此前已多次超时",
   "importImagesRetry": "用本机再试一次",
-  "importImagesAllRecovered": "所有图片都已转存进 Mica。"
+  "importImagesAllRecovered": "所有图片都已转存进 Mica。",
+  "archiveFormatLabel": "{format, select, backup{备份(Mica 格式,可完整还原)} markdown{导出为 Markdown} other{导出}}",
+  "rowExportZipImages": "导出(ZIP,含图片)"
 }

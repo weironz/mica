@@ -985,6 +985,7 @@ impl MicaStore {
         workspace_id: String,
         folder_id: Option<String>,
         images: Vec<FolderExportImage>,
+        markdown_only: bool,
     ) -> Vec<u8> {
         let views = self.list_views(origin.clone());
         let nodes: Vec<mica_interchange::TreeNode> = views
@@ -1029,12 +1030,23 @@ impl MicaStore {
                 )
             })
             .collect();
-        let entries = mica_interchange::build_markdown_tree_zip(
-            &nodes,
-            folder_id.as_deref(),
-            &payloads,
-            &images_map,
-        );
+        // A backup carries each page's `.mica.json`; a Markdown export (N3)
+        // is the same archive without them, for other tools.
+        let entries = if markdown_only {
+            mica_interchange::build_markdown_only_tree_zip(
+                &nodes,
+                folder_id.as_deref(),
+                &payloads,
+                &images_map,
+            )
+        } else {
+            mica_interchange::build_markdown_tree_zip(
+                &nodes,
+                folder_id.as_deref(),
+                &payloads,
+                &images_map,
+            )
+        };
         mica_interchange::build_zip(&entries)
     }
 

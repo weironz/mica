@@ -953,8 +953,11 @@ class _LocalWorldBackend extends WorldBackend {
   /// Export the local workspace as a real Markdown ZIP through the shared Rust
   /// tree builder — the entry that used to return zero bytes and always failed
   /// (issue #108).
-  Future<Uint8List> _localExportWorkspaceZip(String workspaceId) async {
-    final bytes = _local.exportWorkspaceZip(workspaceId);
+  Future<Uint8List> _localExportWorkspaceZip(String id, ArchiveFormat f) async {
+    final bytes = _local.exportWorkspaceZip(
+      id,
+      markdownOnly: f == ArchiveFormat.markdown,
+    );
     if (bytes == null || bytes.isEmpty) {
       throw ApiException(_shell.context.l10n.exportEmptyContent);
     }

@@ -112,6 +112,30 @@ pub fn build_incremental_markdown_tree_zip_with_comments(
   )
 }
 
+/// [build_markdown_tree_zip] without the `.mica.json` sidecars: a Markdown
+/// export for other tools rather than a Mica backup (N3).
+pub fn build_markdown_only_tree_zip(
+  nodes: &[TreeNode],
+  root: Option<&str>,
+  payloads: &HashMap<String, DocumentSnapshotPayload>,
+  images: &HashMap<String, ImageAsset>,
+) -> Vec<ZipEntry> {
+  let mut export = TreeExport::new(nodes, root).markdown_only();
+  let mut entries: Vec<ZipEntry> = Vec::new();
+  if let Some(manifest) = export.manifest(|object_id| payloads.contains_key(object_id)) {
+    entries.push(manifest);
+  }
+  for (view_id, object_id) in export.documents() {
+    if let Some(payload) = payloads.get(object_id) {
+      entries.extend(export.page(view_id, payload, images, &HashSet::new()));
+    }
+  }
+  if entries.is_empty() {
+    entries.push(TreeExport::empty_archive_entry());
+  }
+  entries
+}
+
 /// The complete round-trip manifest without materializing any CRDT payload.
 pub fn markdown_tree_manifest(nodes: &[TreeNode]) -> serde_json::Value {
   let (pages, paths) = tree_paths(nodes, None);
@@ -238,6 +262,10 @@ pub struct TreeExport<'a> {
   selected_view: Option<String>,
   asset_by_key: HashMap<String, String>,
   used_assets: HashSet<String>,
+  /// Write each page's `.mica.json` (the backup). Off for a Markdown export
+  /// (N3): the same `.md` files, assets and manifest, without the native
+  /// blocks and comments only Mica reads.
+  sidecars: bool,
 }
 
 impl<'a> TreeExport<'a> {
@@ -266,7 +294,23 @@ impl<'a> TreeExport<'a> {
       selected_view: selected_view.map(str::to_string),
       asset_by_key: HashMap::new(),
       used_assets: HashSet::new(),
+      sidecars: true,
     }
+  }
+
+  /// A Markdown export rather than a backup: no `.mica.json` beside the pages
+  /// (so no native blocks and no comments). The `.md` bytes, assets and
+  /// manifest are identical either way, so a Markdown export still imports
+  /// back into Mica, just through the Markdown path.
+  pub fn markdown_only(mut self) -> Self {
+    self.sidecars = false;
+    self
+  }
+
+  /// False for a Markdown export ([`Self::markdown_only`]); a caller can skip
+  /// gathering what only the sidecar carries (comments).
+  pub fn writes_sidecars(&self) -> bool {
+    self.sidecars
   }
 
   fn selected(&self, node: &TreeNode) -> bool {
@@ -473,6 +517,13 @@ impl<'a> TreeExport<'a> {
     // importer uses these blocks only while the `.md` still matches: a user who
     // exported to a folder and then edited the Markdown must get their edits,
     // not a stale sidecar (see `import::native_sidecar`).
+    if !self.sidecars {
+      entries.push(ZipEntry {
+        name: path,
+        data: md,
+      });
+      return entries;
+    }
     let mut sidecar = serde_json::json!({
       "schema_version": original.schema_version,
       "root_block_id": original.root_block_id,
@@ -1354,6 +1405,44 @@ mod tests {
       sidecar.get("comments").is_none(),
       "an empty list is not written either"
     );
+  }
+
+  /// N3: the Markdown export is the backup minus the sidecars — same `.md`
+  /// bytes, assets and manifest, no `.mica.json` — and still imports back
+  /// (through the Markdown path, so no native blocks).
+  #[test]
+  fn the_markdown_export_is_the_backup_without_sidecars() {
+    let nodes = vec![
+      folder("f", None, "0000000010", "Folder"),
+      doc("a", Some("f"), "0000000010", "Alpha"),
+    ];
+    let mut payloads = HashMap::new();
+    payloads.insert("obj_a".to_string(), payload("body text"));
+    let backup = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
+    let markdown = build_markdown_only_tree_zip(&nodes, None, &payloads, &HashMap::new());
+    assert!(names(&backup).iter().any(|n| n.ends_with(".mica.json")));
+    assert!(!names(&markdown).iter().any(|n| n.ends_with(".mica.json")));
+    let without_sidecars: Vec<String> = names(&backup)
+      .into_iter()
+      .filter(|n| !n.ends_with(".mica.json"))
+      .collect();
+    assert_eq!(names(&markdown), without_sidecars);
+    assert_eq!(
+      body(&markdown, "Folder/Alpha.md"),
+      body(&backup, "Folder/Alpha.md")
+    );
+
+    let raw = markdown
+      .into_iter()
+      .map(|e| crate::ZipFileEntry {
+        name: e.name,
+        bytes: e.data,
+      })
+      .collect();
+    let plan = crate::plan_import(raw, false, crate::ImportMode::AsIs).unwrap();
+    let alpha = plan.pages.iter().find(|p| p.title == "Alpha").unwrap();
+    assert!(alpha.native.is_none());
+    assert_eq!(alpha.markdown.trim(), "body text");
   }
 
   /// A foreign archive's `.mica.json` is not trusted: without our manifest's

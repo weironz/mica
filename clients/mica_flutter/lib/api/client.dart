@@ -10,6 +10,7 @@ import '../upload/sha256.dart';
 import 'models.dart';
 import '../editor/ai_edits.dart';
 import 'ws_connect.dart';
+import '../ui/export_format.dart' show ArchiveFormat;
 
 /// `scheme://host[:port]` for [base], omitting the port when it IS the
 /// scheme's default. `Uri.port` always answers with a number (443 for https),
@@ -1420,11 +1421,13 @@ class ApiClient {
   Future<Uint8List> exportFolderZip(
     String token,
     String workspaceId,
-    String viewId,
-  ) async {
+    String viewId, {
+    ArchiveFormat format = ArchiveFormat.backup,
+  }) async {
     final response = await sharedHttpClient.get(
       baseUri.replace(
         path: '/api/workspaces/$workspaceId/views/$viewId/export.zip',
+        queryParameters: {'format': format.query},
       ),
       headers: {'authorization': 'Bearer $token'},
     );
@@ -1435,9 +1438,16 @@ class ApiClient {
   }
 
   /// Download a whole workspace as a Markdown ZIP (page-tree folders + assets).
-  Future<Uint8List> exportWorkspaceZip(String token, String workspaceId) async {
+  Future<Uint8List> exportWorkspaceZip(
+    String token,
+    String workspaceId, {
+    ArchiveFormat format = ArchiveFormat.backup,
+  }) async {
     final response = await sharedHttpClient.get(
-      baseUri.replace(path: '/api/workspaces/$workspaceId/export.zip'),
+      baseUri.replace(
+        path: '/api/workspaces/$workspaceId/export.zip',
+        queryParameters: {'format': format.query},
+      ),
       headers: {'authorization': 'Bearer $token'},
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {

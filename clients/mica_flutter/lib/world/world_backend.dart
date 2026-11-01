@@ -202,7 +202,8 @@ class ViewOps {
 
   /// Export a folder's subtree as a ZIP. Null hides the menu entry (see
   /// DocumentListItem) rather than failing after the click.
-  final Future<Uint8List> Function(DocumentView folder)? exportFolderZip;
+  final Future<Uint8List> Function(DocumentView folder, ArchiveFormat format)?
+  exportFolderZip;
   final Future<void> Function(String? parentViewId, List<DocumentView> ordered)
   reorder;
   final Future<List<DocumentView>> Function() loadTrash;
@@ -310,7 +311,8 @@ class ExportOps {
   /// (see `_localExportPageHtml`), so unlike the ZIP it isn't gated off local.
   final Future<String> Function(String title) pageHtml;
   final Future<void> Function(String fileName, String markdown) importMarkdown;
-  final Future<Uint8List> Function(String workspaceId) workspaceZip;
+  final Future<Uint8List> Function(String workspaceId, ArchiveFormat format)
+  workspaceZip;
   final Future<void> Function(Workspace workspace, List<ArchiveFile> entries)
   importTree;
 }

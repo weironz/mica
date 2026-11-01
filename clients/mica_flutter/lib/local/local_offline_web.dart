@@ -85,11 +85,19 @@ class LocalOffline implements LocalOfflineApi {
   void setDocTitle(String docId, String title) {}
 
   /// Web has no local folders — folder ZIP export is cloud-side there.
-  Uint8List? exportFolderZip(String workspaceId, String folderId) => null;
+  Uint8List? exportFolderZip(
+    String workspaceId,
+    String folderId, {
+    bool markdownOnly = false,
+  }) => null;
 
   /// Web has no local workspace store; the cloud-side workspace export is the
   /// API path, not this one.
-  Uint8List? exportWorkspaceZip(String workspaceId, {String origin = 'local'}) =>
+  Uint8List? exportWorkspaceZip(
+    String workspaceId, {
+    String origin = 'local',
+    bool markdownOnly = false,
+  }) =>
       null;
 
   /// No native WebView2 on web — PDF export is a desktop capability. (The web

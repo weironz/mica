@@ -147,6 +147,7 @@ abstract class MicaStore implements RustOpaqueInterface {
     required String workspaceId,
     String? folderId,
     required List<FolderExportImage> images,
+    required bool markdownOnly,
   });
 
   /// The page-link graph for the graph view.

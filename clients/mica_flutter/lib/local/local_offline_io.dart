@@ -1197,20 +1197,27 @@ class LocalOffline implements LocalOfflineApi {
   /// round-trips). The store reads views + document payloads itself; here we
   /// gather the on-device image blob bytes for the subtree's pages.
   @override
-  Uint8List? exportFolderZip(String workspaceId, String folderId) =>
-      _exportTreeZip('local', workspaceId, folderId);
+  Uint8List? exportFolderZip(
+    String workspaceId,
+    String folderId, {
+    bool markdownOnly = false,
+  }) => _exportTreeZip('local', workspaceId, folderId, markdownOnly);
 
   /// Export a WHOLE local (or explicitly chosen origin) workspace as a Markdown
   /// ZIP. [origin] is `'local'` for a local workspace; a quarantined legacy
   /// cache can be exported by passing its legacy origin for recovery.
   @override
-  Uint8List? exportWorkspaceZip(String workspaceId, {String origin = 'local'}) =>
-      _exportTreeZip(origin, workspaceId, null);
+  Uint8List? exportWorkspaceZip(
+    String workspaceId, {
+    String origin = 'local',
+    bool markdownOnly = false,
+  }) => _exportTreeZip(origin, workspaceId, null, markdownOnly);
 
   Uint8List? _exportTreeZip(
     String origin,
     String workspaceId,
     String? folderId,
+    bool markdownOnly,
   ) {
     final store = _store;
     if (store == null) return null;
@@ -1269,6 +1276,7 @@ class LocalOffline implements LocalOfflineApi {
       workspaceId: workspaceId,
       folderId: folderId,
       images: images,
+      markdownOnly: markdownOnly,
     );
   }
 

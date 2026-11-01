@@ -148,7 +148,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                       _createInFolder(item.view, folder: true),
                   onExportFolder: widget.onExportFolderZip == null
                       ? null
-                      : () => _exportFolderFile(item.view),
+                      : (f) => _exportFolderFile(item.view, f),
                   // Import md / images / a nested folder UNDER this folder — both worlds
                   // (server validates parent_view_id; local prefixes the tree).
                   onImportFilesIntoFolder: item.view.objectType == 'folder'

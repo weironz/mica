@@ -70,7 +70,7 @@ class _Host {
         onSelectEntry: (_) async {},
         onRenameEntry: (_, _) async {},
         onDeleteEntry: (_) async {},
-        onExportEntryZip: (_) async => Uint8List(0),
+        onExportEntryZip: (_, _) async => Uint8List(0),
         onImportTreeIntoEntry:
             (_, _, {String? sourceName, String? container}) async {},
         onImportTreeIntoFolder:
@@ -153,7 +153,6 @@ class _Host {
         onExportPageHtml: (_) async => '',
         onExportPagePdf: (_) async => null,
         onImportMarkdown: (_, _) async {},
-        onExportWorkspaceZip: (_) async => Uint8List(0),
         onImportWorkspaceZip: null,
         onImportWorkspaceTreeInto: (_, _) async {},
       ),
