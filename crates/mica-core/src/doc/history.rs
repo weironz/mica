@@ -21,10 +21,20 @@ impl EditorHistory {
     // The editor already submits typing bursts at 400ms. Only explicit batch
     // boundaries group history here: a coarse op can span many transactions
     // and a slow batch must still undo atomically.
+    //
+    // The clock is a constant: with an infinite capture timeout the elapsed
+    // time never decides anything, and yrs has no default clock on
+    // wasm32-unknown-unknown (its `Options: Default` is native-only), which is
+    // what kept this core from building for the browser. It must not be 0:
+    // yrs reads `last_change == 0` as "just stopped capturing, do not merge",
+    // so a zero clock would split every batch.
     let mut manager = UndoManager::with_options(undo::Options {
       capture_timeout_millis: u64::MAX,
       tracked_origins: [EDITOR_ORIGIN.into()].into(),
-      ..Default::default()
+      capture_transaction: None,
+      timestamp: std::sync::Arc::new(|| 1),
+      init_undo_stack: Vec::new(),
+      init_redo_stack: Vec::new(),
     });
     manager.expand_scope(doc, &doc.get_or_insert_map(BLOCKS));
     Self {

@@ -119,6 +119,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [crdt-web-wasm-spike-2026-11-01.md](reviews/crdt-web-wasm-spike-2026-11-01.md) | Web 端 CRDT 换成 mica-core wasm 的可行性验证:可行,净增约 194 KB gzip,待用户决定 |
 | [editor-p2-undo-cache-design.md](reviews/editor-p2-undo-cache-design.md) | #79 本地操作撤销与 #62 预览/图片缓存循环：源码调研、设计与验证 |
 | [editor-formatting-2026-10-24.md](reviews/editor-formatting-2026-10-24.md) | 列表跨块格式与表格多余边框：根因、近期 issue 边界、193 项回归与浏览器验证 |
 | [database-dns-2026-10-24.md](ops/database-dns-2026-10-24.md) | 工作区操作数据库错误：DNS 证据、Mica 专用连接修复与部署预检 |
