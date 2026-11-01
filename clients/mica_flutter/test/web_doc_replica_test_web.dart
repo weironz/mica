@@ -121,4 +121,29 @@ void main_() {
     expect(r.applyUpdate(Uint8List.fromList([9, 9, 9, 9])), isFalse);
     expect(_block(r, 'p')['text'], 'hello', reason: 'the replica is still usable');
   });
+
+  // Wasm memory never shrinks, so what matters is that a closed document's
+  // memory is reused by the next one. Sessions free their replica on dispose
+  // (SyncDocReplica.dispose) instead of waiting for the GC's finalizer.
+  test('opening and disposing replicas stops growing wasm memory', () {
+    final ids = [for (var i = 0; i < 2000; i++) 'b$i'];
+    final seed = MicaDocWasm.fromBlocks('r', [
+      {'id': 'r', 'type': 'page', 'children': ids},
+      for (final id in ids) {'id': id, 'type': 'paragraph', 'text': 'Paragraph $id'},
+    ])!;
+    final state = seed.encodeState();
+    seed.free();
+    double afterRounds(int rounds) {
+      for (var i = 0; i < rounds; i++) {
+        final r = replicaFromState(state, BigInt.zero)!;
+        r.toBlocks();
+        r.dispose();
+      }
+      return MicaDocWasm.memoryBytes();
+    }
+
+    final warm = afterRounds(5);
+    expect(warm, greaterThan(0), reason: 'the probe reads real memory');
+    expect(afterRounds(30), warm, reason: '30 more open/close cycles reuse the same memory');
+  });
 }

@@ -77,4 +77,11 @@ abstract interface class SyncDocReplica {
   /// write, and the receiving side would apply it against its own — a way to
   /// corrupt `meta.root` that no test would obviously catch.
   Uint8List mergeUpdates(List<Uint8List> updates);
+
+  /// Release the engine side now; the replica must not be used afterwards.
+  /// The session calls it from `dispose`. On the web this is what lets the
+  /// next document reuse the memory: wasm linear memory never shrinks, and
+  /// leaving the free to the garbage collector (the `--weak-refs` finalizer)
+  /// let every page switch raise the high-water mark until a GC ran.
+  void dispose();
 }

@@ -174,6 +174,17 @@ impl MicaDocument {
   }
 }
 
+/// Bytes of this module's linear memory. Wasm memory only grows, so this is
+/// the high-water mark; the browser suite opens and frees replicas in a loop
+/// and expects it to stop growing (`web_doc_memory_test`).
+#[wasm_bindgen(js_name = memoryBytes)]
+pub fn memory_bytes() -> f64 {
+  #[cfg(target_arch = "wasm32")]
+  return (core::arch::wasm32::memory_size(0) * 65536) as f64;
+  #[cfg(not(target_arch = "wasm32"))]
+  0.0
+}
+
 /// Build identity, so the client can tell a stale bundle from this checkout.
 #[wasm_bindgen(js_name = engineInfo)]
 pub fn engine_info() -> String {

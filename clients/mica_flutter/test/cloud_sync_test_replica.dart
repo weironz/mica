@@ -17,6 +17,9 @@ class CloudSyncTestReplica implements SyncDocReplica {
   @override
   Uint8List mergeUpdates(List<Uint8List> updates) => Uint8List.fromList([2]);
   @override
+  void dispose() {}
+
+  @override
   List<String>? takeChangedBlockIds() => null;
 
   @override

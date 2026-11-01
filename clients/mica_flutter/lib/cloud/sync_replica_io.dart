@@ -98,6 +98,9 @@ class _YrsReplica implements SyncDocReplica {
   (int, int) historyDepths() => _doc.historyDepths();
 
   @override
+  void dispose() => _doc.dispose();
+
+  @override
   Uint8List mergeUpdates(List<Uint8List> updates) {
     // `[0, 0]` is the lib0 v1 encoding of an empty update — zero clients, empty
     // delete set — and decoding it yields a doc with no blocks that re-encodes

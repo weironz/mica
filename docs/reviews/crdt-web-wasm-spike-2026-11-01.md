@@ -17,6 +17,13 @@
 > `children`、root）或超过 1,024 块时报告「整篇重读」，Dart 会话据此原地补丁缓存列表，不在 Dart 推导树序。
 > 同一基准：远端更新（合并 + 读出）9.0 → **0.10 ms**（30 次均未触发整篇读）；mica_doc gzip 251,111 → 255,676 B。
 > 回归：mica-core `changes` 4 项（远端/本地/撤销/形状/溢出）、真实 FFI 的 `cloud_sync_block_cache_test`（每步补丁结果 = 整篇读出）。
+>
+> **wasm 内存只增不减（同日已处理）**：线性内存按规范只能增长，能做的是让关掉的文档把内存还给分配器、由下一篇复用。
+> 此前会话 `dispose` 不释放副本，只靠 `--weak-refs` 的 GC 终结器，何时回收由浏览器决定。现在 `SyncDocReplica.dispose`
+> 在会话最后一次持久化之后立即释放（Web `free()`、桌面 frb `dispose()`），并把 `_doc` 置空，迟到的读取看到「无文档」而非已释放内存。
+> 基准（2,000 块文档开 10 次）：交给 GC 内存增长 **33.1 MiB**，逐次释放 **0.0 MiB**；浏览器套件新增
+> `opening and disposing replicas stops growing wasm memory`（经 `memoryBytes()` 探针，再开关 30 次内存不变）。
+> 本地双浏览器上下文实测：B 逐键输入实时出现在 A，A 来回切页 8 次无控制台错误。
 
 > 只做验证，不做迁移。背景见 [单一实现专项 01 §9](../single-source/01-background.md#9-仓库里其他双份与后续专项不在本专项范围)：
 > 服务端与桌面用 yrs（`mica-core` 的 `MicaDoc`），Web 用 yjs（`web/yjs_bundle.js`）加约 1,000 行 Dart 镜像

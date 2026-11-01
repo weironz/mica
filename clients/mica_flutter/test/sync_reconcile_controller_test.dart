@@ -176,6 +176,8 @@ class _SeedReplica implements SyncDocReplica {
   @override
   Uint8List encodeState() => Uint8List.fromList([0, 0]);
   @override
+  void dispose() {}
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 

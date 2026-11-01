@@ -1512,6 +1512,14 @@ class CloudSyncSession {
     _persistNow();
     _compactNow(); // hard-close: fold base+logs so the store reopens fastest
     _disposed = true;
+    // Last use of the replica was the persist above: free it now rather than
+    // whenever the GC gets to it (see [SyncDocReplica.dispose]). A late read
+    // on a disposed session sees no document instead of freed memory.
+    final doc = _doc;
+    _doc = null;
+    _blocks = null;
+    _blocksOf = null;
+    doc?.dispose();
     _reconnectTimer?.cancel();
     _heartbeatTimer?.cancel();
     _lagTrailingTimer?.cancel();

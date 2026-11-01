@@ -88,6 +88,9 @@ class _WasmReplica implements SyncDocReplica {
   (int, int) historyDepths() => _doc.historyDepths();
 
   @override
+  void dispose() => _doc.free();
+
+  @override
   Uint8List mergeUpdates(List<Uint8List> updates) {
     // `[0, 0]` is the lib0 v1 empty update: a genuinely empty scratch. A doc
     // built from blocks would write `meta.root`, which the merge would carry

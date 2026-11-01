@@ -31,6 +31,9 @@ class _Replica implements SyncDocReplica {
   @override
   Uint8List mergeUpdates(List<Uint8List> updates) => updates.last;
   @override
+  void dispose() {}
+
+  @override
   List<String>? takeChangedBlockIds() => null;
 
   @override

@@ -156,6 +156,21 @@ void main() {
     }
     out['undo (batch)'] = _median(undo).toStringAsFixed(1);
     out['state bytes'] = '${a.encodeState().length}';
+
+    // What a session that never frees its replica costs: wasm memory after
+    // ten open/read cycles, left to the GC, vs. freed each time.
+    double rounds(bool free) {
+      final before = MicaDocWasm.memoryBytes();
+      for (var i = 0; i < 10; i++) {
+        final r = replicaFromState(base, BigInt.zero)!;
+        r.toBlocks();
+        if (free) r.dispose();
+      }
+      return (MicaDocWasm.memoryBytes() - before) / 1048576;
+    }
+
+    out['memory growth, 10 opens freed (MiB)'] = rounds(true).toStringAsFixed(1);
+    out['memory growth, 10 opens left to GC (MiB)'] = rounds(false).toStringAsFixed(1);
     // ignore: avoid_print
     print('BENCH $label ${jsonEncode(out)}');
   });

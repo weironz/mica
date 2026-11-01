@@ -25,6 +25,7 @@ extension type _MicaDocNs._(JSObject _) implements JSObject {
   @JS('MicaDocument')
   external _DocClass get docClass;
   external String engineInfo();
+  external double memoryBytes();
 }
 
 extension type _DocClass._(JSObject _) implements JSObject {
@@ -121,6 +122,10 @@ class MicaDocWasm implements BlockOpTarget {
     }
   }
 
+  /// Bytes of the engine's wasm memory — its high-water mark, since wasm
+  /// memory never shrinks. 0 when the engine is not loaded.
+  static double memoryBytes() => _micaDoc?.memoryBytes() ?? 0;
+
   /// A document holding exactly the given blocks; null when the engine is not
   /// loaded or the JSON is not a block list.
   static MicaDocWasm? fromBlocks(
@@ -133,9 +138,10 @@ class MicaDocWasm implements BlockOpTarget {
     return doc == null ? null : MicaDocWasm._(doc);
   }
 
-  /// Release the Rust side now (scratch documents). Long-lived replicas are
-  /// released by the GC (the bundle is built with `--weak-refs`). The object
-  /// must not be used afterwards.
+  /// Release the Rust side now. Every owner calls it when done (scratch
+  /// documents, and session replicas via `SyncDocReplica.dispose`); the
+  /// `--weak-refs` finalizer is only the safety net. The object must not be
+  /// used afterwards.
   void free() => _doc.free();
 
   String rootBlockId() => _doc.rootBlockId();
