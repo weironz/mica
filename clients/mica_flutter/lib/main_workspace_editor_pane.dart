@@ -387,9 +387,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
               ),
             ),
           ),
-          // The editor column is capped at widget.pageWidth (a fixed page-width
-          // step) inside _editorScroll, and the window caps it below that on a
-          // narrow pane — so no measured max is needed here.
+          // Width: PageWidthFrame in _editorScroll caps the column (gh#164).
           Expanded(
             child: Stack(
               children: [
@@ -707,14 +705,16 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
       child: LayoutBuilder(
         builder: (context, constraints) => SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(
-            constraints.maxWidth < 600 ? 12 : 28,
+            constraints.maxWidth < 600 ? 12 : 28 - PageWidthFrame.grip,
             8,
-            constraints.maxWidth < 600 ? 12 : 28,
+            constraints.maxWidth < 600 ? 12 : 28 - PageWidthFrame.grip,
             28,
           ),
           child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: widget.pageWidth),
+            child: PageWidthFrame(
+              width: widget.pageWidth,
+              enabled: constraints.maxWidth >= 600,
+              onCommit: (w) => widget.onAppearanceChanged(widget.appearance, w),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [

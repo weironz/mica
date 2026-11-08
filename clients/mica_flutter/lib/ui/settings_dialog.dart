@@ -21,6 +21,8 @@ import '../ui/format_bytes.dart';
 import '../ui/panel_kit.dart';
 import '../ui/settings_shell.dart';
 import '../ui/appearance_preview.dart';
+import '../ui/page_width_frame.dart';
+export '../ui/page_width_frame.dart';
 import '../ui/status_kit.dart';
 import '../ui/theme_tokens.dart';
 import '../ui/user_avatar.dart';
@@ -40,15 +42,6 @@ part 'dialogs_settings_tokens.dart';
 part 'dialogs_settings_data.dart';
 part 'dialogs_settings_misc.dart';
 
-/// Editor page (content column) width, as 11 discrete steps like AppFlowy —
-/// `680 · 800 · … · 1880` (min + max + 10 divisions, step 120). The DEFAULT and
-/// the Settings "reset" both go to [kPageWidthDefault] = 800px, the readable
-/// column width the note-app field converges on (Obsidian 700, Notion ~708,
-/// AFFiNE ~720-800) — NOT AppFlowy's reset-to-full-width. See research 2026-07.
-const double kPageWidthMin = 680;
-const double kPageWidthMax = 1880;
-const double kPageWidthDefault = 800;
-const int kPageWidthDivisions = 10;
 
 /// Preset AI providers. Each maps to a backend provider dialect (openai/anthropic)
 /// plus default base URL + model; "Local / Custom" lets the user point at any
