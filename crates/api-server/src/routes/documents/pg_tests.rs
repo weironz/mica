@@ -1652,6 +1652,46 @@ mod parent_guard_pg {
     );
   }
 
+  /// gh#166: within the name tier the OPEN workspace comes first, ahead of how
+  /// closely a foreign name matches. It used to sit below the exact/prefix
+  /// keys, so a page elsewhere NAMED the query outranked every page here that
+  /// merely contained it in its name. A body mention here still comes after
+  /// every name hit, foreign ones included (the 2026-08-28 rule above).
+  #[tokio::test]
+  async fn the_open_workspace_leads_the_name_tier() {
+    let Some(db) = pool().await else { return };
+    let (here, user_a) = seed_workspace(&db).await;
+    let (elsewhere, user_b) = seed_workspace(&db).await;
+    let (foreign_exact, _) =
+      seed_document(&db, elsewhere, user_b, "部署", serde_json::json!([])).await;
+    let (local_contains, _) =
+      seed_document(&db, here, user_a, "旧版部署记录", serde_json::json!([])).await;
+    sqlx::query("UPDATE views SET updated_at = now() - interval '90 days' WHERE id = $1")
+      .bind(local_contains)
+      .execute(&db)
+      .await
+      .unwrap();
+    let (local_body, doc) = seed_document(&db, here, user_a, "运维", serde_json::json!([])).await;
+    set_content_text(&db, doc, "这里讲部署").await;
+
+    let hits = search_views(
+      &db,
+      &BodyIndex::default(),
+      &[here, elsewhere],
+      "部署",
+      false,
+      Some(here),
+    )
+    .await
+    .unwrap();
+    let order: Vec<Uuid> = hits.iter().map(|h| h.view_id).collect();
+    assert_eq!(
+      order,
+      vec![local_contains, foreign_exact, local_body],
+      "local name hit, then the foreign exact name, then the body mention: {hits:?}"
+    );
+  }
+
   /// The body index is refreshed at query time by `updated_at` cursor, so an
   /// edit that lands AFTER a previous search must be visible to the next one
   /// ON THE SAME INDEX INSTANCE. The other tests build a fresh instance per

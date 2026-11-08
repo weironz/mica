@@ -372,6 +372,13 @@ pub(super) async fn search_views(
   // Searching "部署" used to rank "部署" below "旧版部署记录" whenever the
   // latter was edited more recently — the name tier was a yes/no.
   //
+  // The OPEN workspace (`prefer_workspace`) is the second key (gh#166,
+  // 2026-11-08): name hits here first, then name hits elsewhere, then body
+  // hits here, then body hits elsewhere. Below the exact/prefix keys it let a
+  // page elsewhere NAMED the query outrank every page here that merely had it
+  // in its name. Still under the name tier, so a foreign page named after the
+  // query beats a passing mention here (the 2026-08-28 "claude" case).
+  //
   // Built by `concat!` into TWO `&'static str` constants rather than formatted at
   // runtime: sqlx 0.9 refuses a dynamic SQL string outright ("dynamic SQL strings
   // should be audited for possible injections"), and that refusal is right — the
@@ -390,10 +397,10 @@ pub(super) async fn search_views(
         r#"
         AND (v.name ILIKE $2 ESCAPE '\' OR v.object_id = ANY($3))
       ORDER BY (v.name ILIKE $2 ESCAPE '\') DESC,
+               (v.workspace_id = $4) DESC,
                (v.object_type <> 'document') DESC,
                (v.name ILIKE $5 ESCAPE '\') DESC,
                (v.name ILIKE $6 ESCAPE '\') DESC,
-               (v.workspace_id = $4) DESC,
                v.updated_at DESC
       LIMIT 50
     "#

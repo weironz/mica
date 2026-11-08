@@ -168,8 +168,8 @@ List<String> workspaceTrailFor(
 /// there is nothing left to make the user pay for — and asking someone to tick
 /// a box to see obviously better answers is interaction cost covering for a
 /// design flaw. Relevance is ranked server-side (`prefer_workspace`): a
-/// foreign name match still beats a local body mention, and among equals the
-/// local one leads.
+/// foreign name match still beats a local body mention, and within each tier
+/// (name hits, then body hits) the open workspace leads (gh#166).
 Future<List<T>> searchScopeFor<T>({
   required Future<List<T>> Function() searchHere,
   required Future<List<T>> Function()? searchEverywhere,
