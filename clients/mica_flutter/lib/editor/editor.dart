@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
+import 'ime_geometry.dart';
 import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/semantics.dart' show SemanticsBinding;
@@ -1620,19 +1621,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     final rect = render.caretRectFor(focus);
     if (rect == null) return;
-    conn.setEditableSizeAndTransform(render.size, render.getTransformTo(null));
-    conn.setCaretRect(rect);
-    // This is the platform candidate-menu anchor, distinct from setCaretRect
-    // (used by the macOS accent menu). Keep it beside the live composing caret.
-    conn.setComposingRect(rect);
+    final g = imeGeometry(render.size, render.getTransformTo(null), rect, web: kIsWeb);
+    conn.setEditableSizeAndTransform(g.size, g.transform);
+    conn.setCaretRect(g.caret); // macOS accent menu; composing = candidate menu
+    conn.setComposingRect(g.caret);
   }
 
-  /// Result for keys we want the platform text-input connection to act on
-  /// (typed characters, within-node backspace/delete). On desktop these must
-  /// NOT be marked consumed, or the engine won't route them to the IME
-  /// connection (the character/deletion is silently dropped). On web the hidden
-  /// DOM textarea bypasses this, so skipRemainingHandlers is safe there and also
-  /// stops the key bubbling to app-level shortcuts (Space-scroll, input rules).
+  /// Keys for the platform text input (typed characters, in-node deletes). On
+  /// desktop they must stay unconsumed or the engine drops them before the IME;
+  /// on web the hidden textarea bypasses that, and skipping stops app shortcuts.
   KeyEventResult get _passToTextInput =>
       kIsWeb ? KeyEventResult.skipRemainingHandlers : KeyEventResult.ignored;
 
@@ -5814,6 +5811,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           onKeyEvent: _onKey,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
+            // Anchor at the touch-down point, not 36 px later (gh#171).
+            dragStartBehavior: DragStartBehavior.down,
             supportedDevices: _selectionDragDevices,
             onTapDown: _onTapDown,
             onSecondaryTapDown: _onSecondaryTapDown,
