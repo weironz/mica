@@ -2260,18 +2260,17 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return KeyEventResult.handled;
     }
 
-    // Text-producing keys (including Space) must reach the platform text input
-    // so the character is inserted, but must NOT bubble to the app's default
-    // shortcuts — Space is bound to scroll/activate at the app level and would
-    // otherwise be swallowed (breaking `# `, `- `, `1. `, `> ` input rules).
-    //
+    // Text keys (incl. Space) reach the text input but must NOT bubble to app
+    // shortcuts (Space scrolls; it would break the `# `/`- ` input rules). A
+    // Ctrl/Cmd chord is not text even with a character (web sends "f" for
+    // Ctrl+F, gh#167) and goes on to app shortcuts; AltGr (Ctrl+Alt) still types.
     // Web vs desktop divergence: on web, skipRemainingHandlers stops the app
     // shortcuts while the hidden DOM textarea still feeds the character to the
     // IME connection. On desktop there is no such bypass — skipRemainingHandlers
     // (like handled) marks the key consumed, so the engine never generates the
     // text-input event and the character is dropped. Return ignored on desktop
     // so typing reaches updateEditingValue.
-    if (event.character != null && event.character!.isNotEmpty) {
+    if (event.character?.isNotEmpty == true && !(accel && !hw.isAltPressed)) {
       return _passToTextInput;
     }
     return KeyEventResult.ignored;
