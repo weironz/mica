@@ -775,6 +775,7 @@
   "updaterOpenReleases": "打开发布页",
   "updaterIntegrityFailed": "更新已中止：下载的安装包未通过完整性校验。",
   "updaterDownloadFailed": "下载失败：HTTP {code}",
+  "transferSearchWorkspace": "输入名称筛选",
   "transferMoveTitle": "移动到工作区",
   "transferCopyTitle": "复制到工作区",
   "transferPickWorkspace": "目标工作区",

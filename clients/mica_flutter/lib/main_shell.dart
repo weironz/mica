@@ -4177,7 +4177,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         .toList();
     final result = await showDialog<({TransferReport report, String destName})>(
       context: context,
-      builder: (context) => _TransferDialog(
+      builder: (context) => TransferDialog(
         copy: copy,
         destinations: destinations,
         itemCount: views.length,

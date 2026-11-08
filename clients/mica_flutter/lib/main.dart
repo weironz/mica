@@ -24,6 +24,7 @@ import 'cloud/pending_uploads.dart';
 import 'cloud/workspace_migration.dart';
 import 'ui/export_format.dart';
 import 'ui/settings_dialog.dart';
+import 'ui/transfer_dialog.dart';
 import 'ui/mica_state.dart';
 import 'diagnostics.dart';
 import 'import/import_controller.dart';
