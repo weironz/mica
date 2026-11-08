@@ -122,6 +122,9 @@ services:
     mem_reservation: ${MICA_API_MEMORY_RESERVATION:-192m}
     image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-api:${MICA_VERSION:?set MICA_VERSION in .env — pick one from https://github.com/weironz/mica/releases}
     restart: unless-stopped
+    # An init as PID 1 reaps orphaned children; the server itself does not
+    # (gh#168: healthcheck zombies). See deploy/Dockerfile.api.
+    init: true
     logging: *default-logging
     # mlock for the search index (MICA_SEARCH_INDEX_MLOCK): keeps ~75 MB of
     # bodies out of swap so a search after idle is not a page-in storm — on the

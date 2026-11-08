@@ -44,6 +44,26 @@ def api_environment(compose: str, env: dict[str, str]) -> dict[str, str]:
     return json.loads(result.stdout)["services"]["api"]["environment"]
 
 
+def check_child_reaping(env: dict[str, str]) -> None:
+    """gh#168: the API is PID 1 and does not reap children. Compose must run
+    an init, and the image's healthcheck must be exec form: a shell-form probe
+    orphans curl to PID 1 on every timeout, and each one stays a zombie."""
+    for compose in ("docker-compose.yml", "docker-compose.single.yml"):
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(ROOT / "deploy" / compose), "config", "--format", "json"],
+            cwd=ROOT, env=env, check=True, capture_output=True, text=True,
+        )
+        if json.loads(result.stdout)["services"]["api"].get("init") is not True:
+            raise AssertionError(f"{compose}: api service must set `init: true`")
+    dockerfile = (ROOT / "deploy" / "Dockerfile.api").read_text()
+    probe = dockerfile.split("HEALTHCHECK", 1)[1].split("\n\n", 1)[0]
+    cmd = probe.split(" CMD ", 1)[1].strip()
+    if not cmd.startswith("["):
+        raise AssertionError("Dockerfile.api: HEALTHCHECK must use exec form CMD [...]")
+    if "--max-time" not in cmd:
+        raise AssertionError("Dockerfile.api: the healthcheck curl needs --max-time")
+
+
 def check_traefik_working_set(env: dict[str, str]) -> None:
     probe_env = env | {
         "TRAEFIK_IMAGE_TAG": "traefik:v3.6.10",
@@ -111,6 +131,7 @@ def main() -> None:
     if api_environment("docker-compose.single.yml", default_env)["MICA_APP_BASE_URL"] != "http://127.0.0.1":
         raise AssertionError("quickstart reset-link default must use its HTTP address")
     check_traefik_working_set(env)
+    check_child_reaping(env)
     for compose in ("docker-compose.yml", "docker-compose.single.yml"):
         default_database_env = env.copy()
         default_database_env["MICA_DATABASE_HOST"] = ""
@@ -127,6 +148,7 @@ def main() -> None:
         ):
             raise AssertionError(f"{compose}: host override changed credentials or database")
     print("Database host: default alias and explicit override preserve credentials in both stacks")
+    print("Child reaping: both stacks run an init for the api; healthcheck is exec form")
     print(f"API allow-lists match ({len(single)} keys); {len(PROBES)} settings pass through both forms")
 
 

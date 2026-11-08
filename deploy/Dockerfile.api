@@ -32,6 +32,13 @@ ENV RUST_LOG=info
 EXPOSE 8080
 # /api/ready (not /api/health): it pings the Postgres pool, so an api that is
 # up but cannot reach the DB reports unhealthy instead of masking the outage.
+#
+# Exec form, never `CMD curl ... || exit 1` (gh#168): the shell form runs the
+# probe under `sh -c`, and when a slow check hits --timeout Docker kills only
+# the shell. The orphaned curl is re-parented to PID 1 — this server, which
+# does not reap children — and stays a zombie (469 seen on the prod node).
+# In exec form curl is the process Docker kills, and --max-time ends it before
+# the timeout anyway. Compose also runs an init (`init: true`) as PID 1.
 HEALTHCHECK --interval=10s --timeout=3s --retries=10 \
-  CMD curl -fsS http://127.0.0.1:8080/api/ready || exit 1
+  CMD ["curl", "-fsS", "--max-time", "2", "-o", "/dev/null", "http://127.0.0.1:8080/api/ready"]
 CMD ["mica-api-server"]
