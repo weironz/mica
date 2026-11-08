@@ -655,7 +655,7 @@
   "shortcutsLink": "Link",
   "shortcutsHeadings": "Heading 1–6",
   "shortcutsParagraph": "Turn into text (paragraph)",
-  "shortcutsIndent": "Indent / outdent list item",
+  "shortcutsIndent": "Indent / outdent list item or code",
   "shortcutsGroupEdit": "Editor — edit",
   "shortcutsUndo": "Undo",
   "shortcutsRedo": "Redo",

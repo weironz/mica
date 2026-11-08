@@ -2133,17 +2133,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // focus from the editor on Tab. Ctrl/Cmd+Tab is not ours: it switches tabs
     // (app shortcut), so it must bubble past.
     if (key == LogicalKeyboardKey.tab && !accel) {
+      // Inside a code block Tab / Shift+Tab indent its text (codeTab).
       final n = _controller.focusedNode;
-      if (n != null && n.isCode && sel.isCollapsed && !shift) {
-        // At the very start of a free-standing code block, Tab attaches it
-        // to the list item above; anywhere else it indents the code text.
-        final attach =
-            sel.focus.offset == 0 && _controller.canAttachToItem(n.id);
-        if (!attach) {
-          _controller.insertTextAtCaret('  ');
-          _syncImeFromSelection(force: true);
-          return KeyEventResult.handled;
-        }
+      if (n != null && n.isCode && _controller.codeTab(shift: shift)) {
+        _syncImeFromSelection(force: true);
+        return KeyEventResult.handled;
       }
       if (_controller.indentSelection(shift ? -1 : 1)) {
         _syncImeFromSelection(force: true);

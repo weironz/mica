@@ -3072,6 +3072,115 @@ class EditorController extends ChangeNotifier {
         _owningItemIndentAt(i) != null;
   }
 
+  /// Tab / Shift+Tab inside a code block; false means "not a code-text edit,
+  /// treat it as block indentation". A collapsed Tab types two spaces, except
+  /// at the very start of a free-standing block, where it attaches the block
+  /// to the list item above. Shift+Tab, and Tab over a selection, indent or
+  /// outdent every line the selection touches (gh#169: Shift+Tab used to
+  /// fall through to list outdent, so indented code could never come back).
+  /// Shift+Tab with nothing left to take off detaches an attached block.
+  bool codeTab({required bool shift}) {
+    final sel = selection;
+    if (sel == null) return false;
+    if (sel.isCollapsed && !shift) {
+      if (sel.focus.offset == 0 && canAttachToItem(focusedNode!.id)) {
+        return false;
+      }
+      insertTextAtCaret('  ');
+      return true;
+    }
+    return shiftCodeLines(shift ? -1 : 1);
+  }
+
+  /// Add (+1) or take off (-1) one indent step — two spaces; a leading tab
+  /// also counts as one step — on each line of one code block that the
+  /// selection touches. A selection ending at a line start leaves that line
+  /// alone. Keeps the selection on the same characters. False when the
+  /// selection is not inside one code block or no line changed.
+  bool shiftCodeLines(int delta) {
+    if (_historyBusy) return false;
+    final sel = selection;
+    if (sel == null || sel.start.node != sel.end.node) return false;
+    final i = sel.start.node;
+    if (i >= nodes.length || !nodes[i].isCode) return false;
+    final node = nodes[i];
+    final text = node.text;
+    final s = sel.start.offset.clamp(0, text.length);
+    var e = sel.end.offset.clamp(s, text.length);
+    if (e > s && text[e - 1] == '\n') e--;
+    final starts = [s == 0 ? 0 : text.lastIndexOf('\n', s - 1) + 1];
+    for (
+      var k = text.indexOf('\n', starts.first);
+      k != -1 && k < e;
+      k = text.indexOf('\n', k + 1)
+    ) {
+      starts.add(k + 1);
+    }
+    final edits = <(int, int)>[]; // (line start, +added / -removed)
+    final out = StringBuffer();
+    var cursor = 0;
+    for (final at in starts) {
+      out.write(text.substring(cursor, at));
+      cursor = at;
+      if (delta > 0) {
+        out.write('  ');
+        edits.add((at, 2));
+        continue;
+      }
+      var n = 0;
+      if (at < text.length && text[at] == '\t') {
+        n = 1;
+      } else {
+        while (n < 2 && at + n < text.length && text[at + n] == ' ') {
+          n++;
+        }
+      }
+      cursor += n;
+      if (n > 0) edits.add((at, -n));
+    }
+    if (edits.isEmpty) return false;
+    out.write(text.substring(cursor));
+    int map(int o) {
+      var d = 0;
+      for (final (at, n) in edits) {
+        if (n > 0) {
+          if (o >= at) d += n;
+        } else if (o >= at - n) {
+          d += n;
+        } else if (o > at) {
+          d -= o - at;
+        }
+      }
+      return o + d;
+    }
+
+    final marks = [
+      for (final m in marksFromData(node.data))
+        if (map(m.end) > map(m.start)) m.withRange(map(m.start), map(m.end)),
+    ];
+    node.text = out.toString();
+    if (marks.isNotEmpty || node.data.containsKey('marks')) {
+      node.data = {...node.data, 'marks': marksToJson(marks)};
+    }
+    _dirty.remove(node.id);
+    _sendNow([
+      {
+        'type': 'update_block',
+        'block_id': node.id,
+        'text': node.text,
+        'data': node.data,
+      },
+    ]);
+    goalX = null;
+    selection = DocSelection(
+      anchor: DocPosition(i, map(sel.anchor.offset)),
+      focus: DocPosition(i, map(sel.focus.offset)),
+    );
+    _finishHistorySelection();
+    notifyListeners();
+    return true;
+  }
+
   /// Indent (+1) / outdent (-1) the list/todo items covered by the selection
   /// — Tab / Shift+Tab. Each item clamps to one level deeper than the
   /// nearest list item above it (no orphan levels). Non-list blocks attach

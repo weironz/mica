@@ -403,7 +403,7 @@
   "shortcutsLink": "链接",
   "shortcutsHeadings": "一至六级标题",
   "shortcutsParagraph": "转为正文(段落)",
-  "shortcutsIndent": "增加 / 减少列表缩进",
+  "shortcutsIndent": "增加 / 减少列表或代码缩进",
   "shortcutsGroupEdit": "编辑器 —— 编辑",
   "shortcutsUndo": "撤销",
   "shortcutsRedo": "重做",
