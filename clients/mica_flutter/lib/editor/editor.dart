@@ -656,7 +656,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             controller: _findCtrl,
             focusNode: _findFocus,
             onChanged: (_) => _recomputeFind(reveal: true),
-            onSubmitted: (_) => _findStep(1),
+            onEditingComplete: () => _findStep(1), // keeps focus: gh#167
             textInputAction: TextInputAction.search,
             style: const TextStyle(fontSize: 14),
             decoration: InputDecoration(

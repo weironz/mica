@@ -121,4 +121,20 @@ void main() {
 
     expect(ops, isNotEmpty, reason: 'Backspace still edits the document');
   }, variant: windows);
+
+  // gh#167: Enter moved to the second match once, then nothing — the field's
+  // submit unfocused it (the default for TextInputAction.search), so the next
+  // Enter never reached the find bar.
+  testWidgets('Enter keeps stepping through matches and wraps', (tester) async {
+    final (hook, ops) = await pumpEditor(tester, 'a b a c a');
+    await openFindWith(tester, hook, 'a');
+    expect(find.text('1/3'), findsOneWidget);
+    for (final label in ['2/3', '3/3', '1/3', '2/3']) {
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      expect(find.text(label), findsOneWidget, reason: 'after Enter: $label');
+    }
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(ops, isEmpty, reason: 'stepping must not edit the document');
+  }, variant: windows);
 }
