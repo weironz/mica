@@ -782,7 +782,8 @@
 ## 开发者体验 / CI / Markdown
 
 - ✅ **单一实现专项后续(0.14.3,2026-11-01)**—— 页面属性的 YAML 镜像、HTML 粘贴到 Markdown、导入标题识别均收进 Rust 引擎;接口数据结构共用 `mica-api-types`,页树纯规则共用 `tree_rules`,关系型状态由两端回放 `contracts/tree-rules.json`。Web CRDT 改用 `mica-core` 的 `mica_doc` wasm,两端 Dart 共用 `SyncDocReplica` / `BlockOpMirror`,yjs bundle 已退役。原生无损导出 N1「导入时读 `.mica.json`」已完成。SDK crate / npm 未发布。发版验收及限制见 [`release-0.14.3-validation.md`](../ops/release-0.14.3-validation.md)。
-- ✅ **原生无损导出 N2–N4(2026-11-01,未发版)**—— N2:sidecar 带评论线程(manifest v3,锚点为块 id + 偏移),导入时重建,页面导出修订号含评论(迁移 0037);N3:工作区 / 文件夹「导出」分「备份」(`<名>.mica.zip`,含 sidecar)与「导出为 Markdown」(`<名>.zip`,无 sidecar),服务端 `?format=backup|markdown` 缺省备份;N4:导入备份时空闲的原视图 id 原样沿用,外部链接与书签继续有效。见 [`backup.md`](../ops/backup.md) 与单一实现专项 01 §9.1。
+- ✅ **0.14.4 其余改动(2026-11-09)**—— Web 远端更新只重读变更的块(mica-core 变更记录,2,000 块 9.0 → 0.10 ms);会话释放时立即回收 wasm 副本(10 次打开内存增长 33.1 → 0 MiB);设置对话框、跨工作区移动对话框拆为独立库(main.dart 库 20,785 → 17,009 行)。Issue 修复:#168 健康检查僵尸进程(exec 形式探针 + `init: true`)、#169 代码块 Shift+Tab 反缩进、#167 页内查找连续下一个及 Web 端 Ctrl/Cmd 快捷键被编辑器吞掉、#166 搜索本工作区优先、#165 移动到工作区可筛选、#164 拖拽正文边缘调宽度、#171 手机端拖选光标乱跳(Web 隐藏输入框缩为光标大小,iOS 下不再截走触摸);#170 未复现,保持打开。退役的 yjs 入口返回 404(0.14.3 验收遗留)。新增可选安装包:Linux `.deb` 与 Android APK(arm64 / armv7,调试 key 签名,手动安装),本地 `--deb` / `--apk`、Release 工作流开关,默认关闭,构建经固定版本的 Docker 镜像屏蔽 Windows / Linux 主机差异;Android 未经真机回归。见 [`release.md`](../ops/release.md)「Android / Linux 安装包」。
+- ✅ **原生无损导出 N2–N4(0.14.4,2026-11-01)**—— N2:sidecar 带评论线程(manifest v3,锚点为块 id + 偏移),导入时重建,页面导出修订号含评论(迁移 0037);N3:工作区 / 文件夹「导出」分「备份」(`<名>.mica.zip`,含 sidecar)与「导出为 Markdown」(`<名>.zip`,无 sidecar),服务端 `?format=backup|markdown` 缺省备份;N4:导入备份时空闲的原视图 id 原样沿用,外部链接与书签继续有效。见 [`backup.md`](../ops/backup.md) 与单一实现专项 01 §9.1。
 
 - ✅ **Markdown 引擎单一实现专项(S0–S5)**(2026-10-26 立项,2026-10-29 G4 通过,v0.14.0)—— Dart 里约 4,000 行
   Markdown 镜像删除,解析 / 序列化 / HTML 只留 Rust 一份(`crates/md-core`,包名 `mica-md`):服务端 / CLI / MCP 原生调用,
