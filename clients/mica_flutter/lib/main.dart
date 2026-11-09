@@ -164,7 +164,7 @@ const String kDefaultCloudUrl = String.fromEnvironment('MICA_CLOUD_URL');
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.14.3';
+const String kAppVersion = '0.14.4';
 
 final _desktopUpdates = DesktopUpdateController(currentVersion: kAppVersion);
 
