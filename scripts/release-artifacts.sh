@@ -12,6 +12,12 @@
 #   mica-cli-X.Y.Z-linux-x64  (static)     Linux natively; Windows/macOS through Docker
 #   mica-cli-X.Y.Z-macos-arm64             macOS
 #
+# Opt-in, off unless asked (any host with Docker, or a native toolchain —
+# scripts/build-linux-deb.sh / build-android-apk.sh):
+#
+#   Mica-X.Y.Z-linux-amd64.deb             --deb  or MICA_BUILD_LINUX_DEB=1
+#   Mica-X.Y.Z-android-{arm64,armv7}.apk   --apk  or MICA_BUILD_ANDROID=1
+#
 # So one Windows box with Docker Desktop produces everything except the macOS
 # CLI. Run it on each machine you have, then `just release-upload X.Y.Z` from
 # each; `just release-publish X.Y.Z` flips the release public once the
@@ -23,8 +29,15 @@ source scripts/lib-local.sh
 version=${1:-}
 check_version_arg "$version"
 smoke=1
+deb=${MICA_BUILD_LINUX_DEB:-0}
+apk=${MICA_BUILD_ANDROID:-0}
 for a in "${@:2}"; do
-  case "$a" in --no-smoke) smoke=0 ;; *) fail "unknown flag $a" ;; esac
+  case "$a" in
+    --no-smoke) smoke=0 ;;
+    --deb) deb=1 ;;
+    --apk) apk=1 ;;
+    *) fail "unknown flag $a" ;;
+  esac
 done
 
 require_tagged_tree "$version"
@@ -123,12 +136,18 @@ case "$os" in
   *) fail "unsupported host $(uname -s)" ;;
 esac
 
+# The opt-in client packages build the same way on every host (pinned Docker
+# builder, or natively where the toolchain is present).
+if [ "$deb" = 1 ]; then note "Linux .deb"; bash scripts/build-linux-deb.sh "$version" "$out"; fi
+if [ "$apk" = 1 ]; then note "Android APKs"; bash scripts/build-android-apk.sh "$version" "$out"; fi
+
 # One manifest PER PLATFORM this run produced, not one for the host: the branch
 # above can build another platform's asset (Windows/macOS -> Linux CLI in
 # Docker), and the updater on that platform asks for its own sha256-<os>.txt by
 # name. The stale manifests were already cleared before the build, so only what
 # this run really produced is written now.
-for manifest in sha256-windows.txt sha256-linux.txt sha256-macos.txt; do
+for manifest in sha256-windows.txt sha256-linux.txt sha256-macos.txt \
+                sha256-linux-desktop.txt sha256-android.txt; do
   : > "$out/$manifest"
   for f in "$out"/*; do
     name=${f##*/}

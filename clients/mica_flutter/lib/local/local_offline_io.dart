@@ -726,6 +726,9 @@ class LocalOffline implements LocalOfflineApi {
       dir = '${(appData == null || appData.isEmpty) ? '.' : appData}/mica';
     } else if (Platform.isMacOS) {
       dir = '${env['HOME'] ?? '.'}/Library/Application Support/mica';
+    } else if (Platform.isAndroid) {
+      // The app's private files dir, exported by MainActivity.kt.
+      dir = '${env['MICA_DATA_DIR'] ?? '.'}/mica';
     } else {
       final xdg = env['XDG_DATA_HOME'];
       dir = (xdg != null && xdg.isNotEmpty)

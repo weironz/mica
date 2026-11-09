@@ -130,6 +130,45 @@ just release-images X.Y.Z      # 三个镜像 → 阿里云 ACR + Docker Hub（�
 Windows 上没有可用的 ansible 时，`deploy-prod.sh` 会**自动在 `alpine/ansible` 容器里重跑自己**
 （与 DR 演练验证过的 `ansible-in-docker.sh` 同一手法），需要 Docker Desktop 和 `~/.ssh` 里的部署 key。
 
+## Android / Linux 安装包
+
+可选产物，**默认不构建**，随时打开：
+
+| 产物 | 本地 | GitHub Actions（Release 工作流） |
+| --- | --- | --- |
+| `Mica-X.Y.Z-linux-amd64.deb` | `just release-artifacts X.Y.Z --deb`，或单独 `just build-deb X.Y.Z` | 勾选 `build_linux_deb`，或仓库变量 `MICA_BUILD_LINUX_DEB=true` 常开 |
+| `Mica-X.Y.Z-android-arm64.apk` / `-armv7.apk` | `just release-artifacts X.Y.Z --apk`，或单独 `just build-apk X.Y.Z` | 勾选 `build_android`，或仓库变量 `MICA_BUILD_ANDROID=true` 常开 |
+
+环境变量 `MICA_BUILD_LINUX_DEB=1` / `MICA_BUILD_ANDROID=1` 与 `--deb` / `--apk` 等价。打出的包进 `dist/vX.Y.Z/`，
+随 `just release-upload` 挂到 GitHub Release，各有独立校验清单 `sha256-linux-desktop.txt` / `sha256-android.txt`
+（`sha256-linux.txt` 是 CLI 自更新的契约，不混入）。`release-publish` 不要求它们，但**挂上了就校验**，与 macOS CLI 同一规则。
+
+**屏蔽主机差异**：真正的构建命令只有一份 `scripts/client-package-inner.sh`，两种跑法：
+
+- **Docker（有 Docker 时默认）**：钉死的构建镜像 `deploy/Dockerfile.client-build`（Ubuntu 22.04 + `.fvmrc` 的 Flutter +
+  `rust-toolchain.toml` 的 Rust + GTK / Android SDK 36 + NDK 28.2），Windows（Docker Desktop + Git Bash）与 Linux
+  产物一致，首次使用自动构建并按 pin 的哈希打 tag。源码每次**全新拷进**容器（tracked + 未忽略的 untracked），
+  不碰宿主的 `build/`、`.dart_tool/`；编译缓存、pub / cargo / gradle 缓存和 Android 调试签名 key 存在命名卷里。
+  正式发布的 `.deb` 应走这条：22.04 基线使其可装在 Ubuntu 22.04 / Debian 12 及更新的发行版（glibc ≥ 2.35）。
+- **本地原生**：`MICA_CLIENT_BUILD=native`。`.deb` 需要 Linux + `libgtk-3-dev libayatana-appindicator3-dev dpkg-dev`
+  （产物只兼容与构建机同代或更新的发行版）；APK 在 Windows 或 Linux 上都行，需要 `ANDROID_HOME`（platform 36、
+  NDK 28.2.13676358）和 JDK 17+。
+
+构建镜像的网络问题：基础镜像默认取自 AWS 的官方镜像站（避开 Docker Hub 限流），被限流时设
+`MICA_BUILDER_BASE=mirror.gcr.io/library/ubuntu:22.04`；在做 TLS 解密的公司代理后面，用
+`MICA_BUILDER_CA_CERT=<根证书或证书包>` 让镜像内信任它。
+
+**安装与限制**：
+
+- `.deb`：`sudo apt install ./Mica-X.Y.Z-linux-amd64.deb`，装到 `/opt/mica`，命令 `mica`，带桌面菜单项。无应用内更新
+  （自更新只支持 Windows），升级就装新包。托盘只在 Windows 启用；导出 PDF 依赖 Windows WebView2，Linux 上不可用。
+  偏好里的登录令牌在 Linux 上明文存于 `~/.config/mica/prefs.json`（Windows 走 DPAPI 加密）。
+- APK：按 CPU 分包，现代手机装 `arm64`，老的 32 位手机装 `armv7`（不出 x86_64）。**用构建机的调试 key 签名**，
+  只为手动安装，不上架。Android 只接受同一 key 签名的覆盖安装：同一台机器（Docker 卷 / 本机 `~/.android`）
+  或同一个 runner 出的包可以直接升级；换了构建机出的包要**先卸载**（本地数据随之清除）。数据存在应用私有目录
+  （`MainActivity.kt` 通过 `MICA_DATA_DIR` 交给 Dart），无应用内更新，导出 PDF 不可用。
+- 新平台未经真机回归：Android 包在本环境只做了构建与安装包静态校验（签名、包名、权限、ABI），尚未在真机上跑过。
+
 ## 自托管 runner（2026-10-20 起）
 
 桌面 FFI 的 Cargokit 也必须使用仓库的 Rust pin。其默认选择现在通过在 Rust crate

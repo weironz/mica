@@ -104,6 +104,11 @@ dist_dir() { echo "dist/v$1"; }
 # went unverifiable: the only manifest written was the HOST's (#113).
 manifest_for_asset() {
   case "${1:-}" in
+    # The opt-in client packages get manifests of their own: sha256-linux.txt
+    # is the CLI updater's contract, and the release workflow's deb job must
+    # not write the asset the cli job writes.
+    Mica-*-linux-*.deb) echo sha256-linux-desktop.txt ;;
+    Mica-*-android-*.apk) echo sha256-android.txt ;;
     *-linux-*) echo sha256-linux.txt ;;
     *-macos-*) echo sha256-macos.txt ;;
     *-windows-* | Mica-Setup-*) echo sha256-windows.txt ;;

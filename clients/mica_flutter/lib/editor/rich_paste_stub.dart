@@ -39,7 +39,13 @@ Future<Uint8List?> readClipboardImage() async {
     final png = _windowsClipboardPng();
     if (png != null && png.isNotEmpty) return png;
   }
-  return Pasteboard.image;
+  try {
+    return await Pasteboard.image;
+  } catch (_) {
+    // No pasteboard implementation on this platform (Android): no image, so
+    // the paste falls through to text instead of throwing out of the editor.
+    return null;
+  }
 }
 
 /// Bytes of the Windows clipboard's registered "PNG" format, or null. Any

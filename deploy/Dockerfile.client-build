@@ -1,0 +1,65 @@
+# Pinned builder for the opt-in client packages: the Linux .deb (target
+# `linux`) and the Android APKs (target `android`). Used by
+# scripts/lib-client-build.sh, which builds it on first use and tags it by a
+# hash of this file + .fvmrc + rust-toolchain.toml, so bumping a pin rebuilds.
+#
+# Ubuntu 22.04 on purpose: a .deb built here needs glibc >= 2.35 and uses the
+# pre-"t64" package names newer distros still provide, so it installs on
+# Ubuntu 22.04 / Debian 12 and everything after. Pulled through AWS's public
+# mirror of the official images (no Docker Hub pull limit); same image.
+ARG BASE=public.ecr.aws/docker/library/ubuntu:22.04
+
+FROM ${BASE} AS base
+ARG FLUTTER_VERSION
+ARG RUST_VERSION
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH=/opt/flutter/bin:/root/.cargo/bin:$PATH \
+    FLUTTER_SUPPRESS_ANALYTICS=true
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git unzip xz-utils zip file \
+      clang cmake ninja-build pkg-config build-essential \
+    && rm -rf /var/lib/apt/lists/*
+# Extra CA (MICA_BUILDER_CA_CERT; empty directory otherwise), trusted by curl,
+# rustup/cargo, Dart and — through ca-certificates-java — Gradle.
+COPY extra-ca/ /usr/local/share/ca-certificates/extra/
+RUN update-ca-certificates
+RUN test -n "$FLUTTER_VERSION" && test -n "$RUST_VERSION" \
+    && curl -fsSL "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" \
+       | tar -xJ -C /opt \
+    && git config --global --add safe.directory '*' \
+    && flutter --disable-analytics >/dev/null \
+    && flutter --version
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION" \
+    && rustc --version
+# rust-toolchain.toml also names components/targets the packages never use;
+# pin the toolchain by version so rustup does not fetch them per build.
+ENV RUSTUP_TOOLCHAIN=${RUST_VERSION}
+
+FROM base AS linux
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libgtk-3-dev libayatana-appindicator3-dev liblzma-dev libstdc++-12-dev dpkg-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN flutter config --enable-linux-desktop >/dev/null && flutter precache --linux
+
+FROM base AS android
+ARG ANDROID_PLATFORM=36
+ARG ANDROID_BUILD_TOOLS=36.0.0
+# Must equal the ndkVersion Flutter's Gradle plugin asks for (FlutterExtension).
+ARG ANDROID_NDK=28.2.13676358
+ENV ANDROID_HOME=/opt/android-sdk
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-17-jdk-headless \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
+    && clt=$(curl -fsSL https://dl.google.com/android/repository/repository2-3.xml \
+             | grep -o 'commandlinetools-linux-[0-9]*_latest.zip' | sort -t- -k3 -n | tail -1) \
+    && curl -fsSLo /tmp/clt.zip "https://dl.google.com/android/repository/$clt" \
+    && unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools" \
+    && mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" \
+    && rm /tmp/clt.zip \
+    && yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null \
+    && "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+         "platform-tools" "platforms;android-${ANDROID_PLATFORM}" \
+         "build-tools;${ANDROID_BUILD_TOOLS}" "ndk;${ANDROID_NDK}" >/dev/null
+RUN rustup target add aarch64-linux-android armv7-linux-androideabi \
+    && flutter config --android-sdk "$ANDROID_HOME" >/dev/null \
+    && flutter precache --android

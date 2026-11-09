@@ -43,6 +43,8 @@ String configDir() {
   if (Platform.isMacOS) {
     return '${env['HOME'] ?? '.'}/Library/Application Support/mica';
   }
+  // Android: the app's private files dir, exported by MainActivity.kt.
+  if (Platform.isAndroid) return '${env['MICA_DATA_DIR'] ?? '.'}/mica';
   final xdg = env['XDG_CONFIG_HOME'];
   return (xdg != null && xdg.isNotEmpty)
       ? '$xdg/mica'

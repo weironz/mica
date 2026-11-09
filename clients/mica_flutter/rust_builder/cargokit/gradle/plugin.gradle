@@ -15,6 +15,12 @@ class CargoKitExtension {
 
 abstract class CargoKitBuildTask extends DefaultTask {
 
+    // Gradle 9 removed Project.exec(); the injected service is its
+    // replacement and also works on Gradle 8 (the Android project generated
+    // with Flutter 3.47 runs Gradle 9.3).
+    @javax.inject.Inject
+    abstract org.gradle.process.ExecOperations getExecOperations()
+
     @Input
     String buildMode
 
@@ -60,12 +66,12 @@ abstract class CargoKitBuildTask extends DefaultTask {
         def rootProjectDir = project.rootProject.projectDir
 
         if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
-            project.exec {
+            execOperations.exec {
                 commandLine 'chmod', '+x', path
             }
         }
 
-        project.exec {
+        execOperations.exec {
             executable path
             args "build-gradle"
             environment "CARGOKIT_ROOT_PROJECT_DIR", rootProjectDir

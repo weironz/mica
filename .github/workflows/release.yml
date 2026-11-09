@@ -42,6 +42,17 @@ on:
         description: 'Publish the installer to a GitHub release (off = dry-run: build + package + upload artifact only)'
         type: boolean
         default: false
+      # Opt-in client packages. Off unless ticked here, or switched on for every
+      # run with the repository variable MICA_BUILD_LINUX_DEB / MICA_BUILD_ANDROID
+      # set to 'true' (Settings → Secrets and variables → Actions → Variables).
+      build_linux_deb:
+        description: 'Also build the Linux .deb (Mica-X.Y.Z-linux-amd64.deb)'
+        type: boolean
+        default: false
+      build_android:
+        description: 'Also build the Android APKs (Mica-X.Y.Z-android-arm64/armv7.apk)'
+        type: boolean
+        default: false
   # Callable, so `release-dryrun.yml` can exercise these legs WITHOUT a tag.
   # Every job below exists ONLY in this workflow, so nothing on an ordinary push
   # ever runs them — which is how the pinned toolchain broke the musl leg on
@@ -54,6 +65,12 @@ on:
         type: string
         required: true
       publish:
+        type: boolean
+        default: false
+      build_linux_deb:
+        type: boolean
+        default: false
+      build_android:
         type: boolean
         default: false
 
@@ -541,9 +558,88 @@ jobs:
   # IF THIS JOB FAILS the release stays a draft: assets are safe and nothing is
   # publicly broken, but users see no update until you run
   #   gh release edit vX.Y.Z --draft=false --latest
+  # Opt-in client packages (inputs build_linux_deb / build_android, or the
+  # repository variables MICA_BUILD_LINUX_DEB / MICA_BUILD_ANDROID = 'true').
+  # The same scripts a developer runs locally, forced onto the pinned Docker
+  # builder (deploy/Dockerfile.client-build), so CI and a Windows or Linux desk
+  # produce the same package. Each has its own checksum manifest
+  # (sha256-linux-desktop.txt / sha256-android.txt): sha256-linux.txt belongs
+  # to the cli job and the CLI updater.
+  linux-deb:
+    needs: draft
+    if: ${{ inputs.build_linux_deb || vars.MICA_BUILD_LINUX_DEB == 'true' }}
+    runs-on: [self-hosted, Linux]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the .deb in the pinned builder
+        env:
+          MICA_CLIENT_BUILD: docker
+        run: bash scripts/build-linux-deb.sh "${{ needs.draft.outputs.version }}" out
+      - name: Write the checksum manifest
+        working-directory: out
+        run: sha256sum Mica-*.deb > sha256-linux-desktop.txt && cat sha256-linux-desktop.txt
+      - uses: actions/upload-artifact@v5
+        with:
+          name: mica-linux-deb
+          path: |
+            out/Mica-*.deb
+            out/sha256-linux-desktop.txt
+          if-no-files-found: error
+      - name: Attach to the draft release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.draft.outputs.tag }}
+          draft: true
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            out/Mica-*.deb
+            out/sha256-linux-desktop.txt
+
+  android:
+    needs: draft
+    if: ${{ inputs.build_android || vars.MICA_BUILD_ANDROID == 'true' }}
+    runs-on: [self-hosted, Linux]
+    steps:
+      - uses: actions/checkout@v5
+      # Signed with the builder's debug key (manual install, no store). The
+      # key persists in the runner's mica-client-android-key Docker volume, so
+      # APKs from this runner install over each other; an APK built elsewhere
+      # needs an uninstall first. See docs/ops/release.md.
+      - name: Build the APKs in the pinned builder
+        env:
+          MICA_CLIENT_BUILD: docker
+        run: bash scripts/build-android-apk.sh "${{ needs.draft.outputs.version }}" out
+      - name: Write the checksum manifest
+        working-directory: out
+        run: sha256sum Mica-*.apk > sha256-android.txt && cat sha256-android.txt
+      - uses: actions/upload-artifact@v5
+        with:
+          name: mica-android-apk
+          path: |
+            out/Mica-*.apk
+            out/sha256-android.txt
+          if-no-files-found: error
+      - name: Attach to the draft release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.draft.outputs.tag }}
+          draft: true
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: |
+            out/Mica-*.apk
+            out/sha256-android.txt
+
   publish:
-    needs: [draft, windows, cli]
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish }}
+    # The opt-in package jobs are waited for when they run and do not hold the
+    # release back when they are off: a skipped need is not a failure, so the
+    # condition is "nothing failed or was cancelled", not the default "every
+    # need succeeded" (which a skipped job never satisfies).
+    needs: [draft, windows, cli, linux-deb, android]
+    if: ${{ !failure() && !cancelled() && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
     # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
     runs-on: [self-hosted, Linux]
     steps:

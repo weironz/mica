@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mica
+Comment=Collaborative Markdown workspace
+Exec=mica %U
+Icon=io.github.weironz.Mica
+Terminal=false
+Categories=Office;TextEditor;
+StartupWMClass=mica_flutter

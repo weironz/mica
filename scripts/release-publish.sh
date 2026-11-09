@@ -91,6 +91,11 @@ if grep -qxF "mica-cli-$version-macos-arm64" <<<"$assets"; then
 else
   note "note: no macOS CLI attached (not required; REQUIRE_MACOS=1 to insist)"
 fi
+# Same rule for the opt-in client packages: never required, verified once attached.
+for a in "Mica-$version-linux-amd64.deb" "Mica-$version-android-arm64.apk" \
+         "Mica-$version-android-armv7.apk"; do
+  if grep -qxF "$a" <<<"$assets"; then verify_asset "$a"; fi
+done
 
 note "publishing $tag"
 gh release edit "$tag" --repo "$GH_REPO" --draft=false --latest

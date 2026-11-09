@@ -96,6 +96,17 @@ chmod +x "$stub_bin"/* "$iscc"
 cp "$source_root/scripts/release-artifacts.sh" "$source_root/scripts/lib-local.sh" \
    "$source_root/scripts/manifest-version.sh" "$source_root/scripts/release-publish.sh" \
    "$repo/scripts/"
+# The opt-in client package builders, stubbed: write the files the real ones
+# produce (scripts/client-package-inner.sh), nothing more.
+cat > "$repo/scripts/build-linux-deb.sh" <<'EOF'
+#!/bin/sh
+printf 'deb-fixture\n' > "$2/Mica-$1-linux-amd64.deb"
+EOF
+cat > "$repo/scripts/build-android-apk.sh" <<'EOF'
+#!/bin/sh
+printf 'apk-arm64-fixture\n' > "$2/Mica-$1-android-arm64.apk"
+printf 'apk-armv7-fixture\n' > "$2/Mica-$1-android-armv7.apk"
+EOF
 printf 'channel = "1.90.0"\n' > "$repo/rust-toolchain.toml"
 printf '[package]\nname = "mica-cli"\nversion = "%s"\n' "$version" > "$repo/Cargo.toml"
 printf 'version: %s\n' "$version" > "$repo/clients/mica_flutter/pubspec.yaml"
@@ -184,6 +195,29 @@ fi
   echo 'FAIL: a failed run left a stale sha256-linux.txt behind' >&2
   exit 1
 }
+
+# ── slice 1c: opt-in client packages get manifests of their own ──────────────
+# Off by default: slice 1 built none and wrote neither manifest.
+(
+  cd "$repo"
+  PATH="$stub_bin:$PATH" ISCC="$iscc" bash scripts/release-artifacts.sh "$version" --no-smoke --deb --apk
+) >/dev/null
+[ "$(manifest_names "$out/sha256-linux-desktop.txt")" = "Mica-$version-linux-amd64.deb" ] || {
+  echo 'FAIL: sha256-linux-desktop.txt must list the .deb and nothing else' >&2
+  cat "$out/sha256-linux-desktop.txt" >&2
+  exit 1
+}
+[ "$(manifest_names "$out/sha256-android.txt")" = $'Mica-'"$version"$'-android-arm64.apk\nMica-'"$version"'-android-armv7.apk' ] || {
+  echo 'FAIL: sha256-android.txt must list both APKs and nothing else' >&2
+  cat "$out/sha256-android.txt" >&2
+  exit 1
+}
+[ "$(manifest_names "$out/sha256-linux.txt")" = "mica-cli-$version-linux-x64" ] || {
+  echo "FAIL: the .deb leaked into sha256-linux.txt, the CLI updater's manifest" >&2
+  cat "$out/sha256-linux.txt" >&2
+  exit 1
+}
+rm -f "$out"/Mica-*.deb "$out"/Mica-*.apk "$out/sha256-linux-desktop.txt" "$out/sha256-android.txt"
 
 # ── slice 2: publishing verifies each asset against its manifest AND digest ──
 gh_stub="$stub_bin/gh"
@@ -283,6 +317,12 @@ write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:
           "mica-cli-$version-linux-x64:$h_lin" "mica-cli-$version-macos-arm64:$h_mac" \
           "sha256-windows.txt:" "sha256-linux.txt:"
 expect_publish_refusal 'sha256-macos.txt'
+
+# Likewise an attached .deb: optional, but never published unverifiable.
+write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
+          "mica-cli-$version-linux-x64:$h_lin" "Mica-$version-linux-amd64.deb:$h_mac" \
+          "sha256-windows.txt:" "sha256-linux.txt:"
+expect_publish_refusal 'sha256-linux-desktop.txt'
 
 # No server-side digest: the script must hash the attached asset itself.
 printf 'linux-cli-fixture\n' > "$files_dir/mica-cli-$version-linux-x64"

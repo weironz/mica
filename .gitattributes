@@ -22,3 +22,6 @@ contracts/*.json text eol=lf
 crates/md-wasm/Cargo.toml text eol=lf
 crates/md-wasm/build.rs text eol=lf
 crates/md-wasm/src/** text eol=lf
+
+# Linux desktop entry: packed byte for byte into the .deb.
+*.desktop text eol=lf

@@ -367,6 +367,14 @@ ship version:
 release-artifacts version *flags:
     bash scripts/release-artifacts.sh "{{version}}" {{flags}}
 
+[doc("Linux .deb into dist/vX.Y.Z/ (Docker builder if running, else native; MICA_CLIENT_BUILD=docker|native)")]
+build-deb version:
+    bash scripts/build-linux-deb.sh "{{version}}" "dist/v{{version}}"
+
+[doc("Android APKs (arm64 + armv7) into dist/vX.Y.Z/ (Docker builder if running, else native with ANDROID_HOME)")]
+build-apk version:
+    bash scripts/build-android-apk.sh "{{version}}" "dist/v{{version}}"
+
 [doc("Attach dist/vX.Y.Z/* to the (draft) GitHub release vX.Y.Z, creating it if needed")]
 release-upload version:
     bash scripts/release-upload.sh "{{version}}"
