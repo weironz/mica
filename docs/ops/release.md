@@ -349,6 +349,7 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
    `cargo tree -p <crate> | grep <dep>` 实证,别猜。(例:v0.5.0 的 CJK 强调改了 markdown → api 必须重建。)
    **2026-10 起 md-core 是三端共用的唯一引擎**:改它同时影响服务端、桌面(FFI)和 Web(wasm,
    `scripts/build-md-wasm.sh` 构建并卡 256 KiB gzip 预算),三端都要跟着发。
+   编辑器的公式和 Mermaid 由 `scripts/build-preview-wasm.sh` 另建按需包，不计入启动包预算。
 3. 测试全绿,**且是真的跑过**。DB 集成测试在 `DATABASE_URL` 没设时**静默跳过**,而
    跳过的测试报告为「通过」—— 整套 0.00s「全过」,那是真空通过不是验证
    (见 `docs/dev/lessons.md`)。

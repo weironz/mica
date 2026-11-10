@@ -23,7 +23,6 @@ dependencies:
   # (issue #89). Was transitive via flutter_rust_bridge; direct now that we
   # import it ourselves.
   web: ^1.1.1
-  flutter_math_fork: ^0.7.4
   http: ^1.4.0
   web_socket_channel: ^3.0.0
   # Desktop-only: window min-size + size/position memory (M2). Gated behind a
@@ -68,15 +67,7 @@ dependencies:
   # (web reads the paste event's HTML flavor via package:web for the same). Not
   # platform glue; a parsing lib.
   html: ^0.15.0
-  # NOTE: the Dart `merman` package was dropped — mermaid now renders through the
-  # merman Rust engine compiled into OUR FFI (crates/markdown feature `render`,
-  # reached via api::render.renderMermaidSvg), the SAME engine the HTML/PDF export
-  # uses. One engine on desktop, export == on-screen. Web still uses mermaid.min.js.
-  # SVG rasterizer — turns the FFI's merman SVG into a ui.Image on desktop/mobile.
-  # In-house exemption #6 (standard rendering capability; self-rolling an SVG
-  # renderer is absurd). Used only by the non-web mermaid path. flutter_svg honors
-  # geometry + presentation attributes but NOT CSS <style>, so merman's themed SVG
-  # is first flattened by our own css inliner (mermaid_svg_inline.dart).
+  # Rasterize merman and RaTeX SVG previews. Mermaid CSS is inlined first.
   flutter_svg: ^2.3.0
   # XML tree for that css inliner — merman emits theme as scoped CSS with descendant
   # selectors (`#merman .node rect{fill:..}`); merman documents inline-styling as a

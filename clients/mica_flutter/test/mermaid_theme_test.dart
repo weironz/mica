@@ -6,7 +6,7 @@ import 'package:mica_flutter/ui/theme_tokens.dart';
 /// A diagram is the one thing on the page drawn by somebody else's engine, so it
 /// is also the easiest thing to leave behind on a theme switch — a light diagram
 /// sitting on a dark page like a sticker. What these pin is that the colours
-/// handed to both engines come from the app's own palette and actually differ
+/// handed to merman come from the app's own palette and actually differ
 /// between the two.
 void main() {
   group('cssHex', () {
@@ -53,31 +53,6 @@ void main() {
       expect(dark.surface, isNot(light.surface));
       expect(dark.text, isNot(light.text));
       expect(dark.line, isNot(light.line));
-    });
-  });
-
-  group('the web engine gets the same palette in its own vocabulary', () {
-    test('base theme follows the mode', () {
-      expect(mermaidJsBaseTheme(MicaTokens.light), 'neutral');
-      expect(mermaidJsBaseTheme(MicaTokens.dark_), 'dark');
-    });
-
-    test('every variable is a real colour, and dark differs from light', () {
-      final light = mermaidJsThemeVariables(MicaTokens.light);
-      final dark = mermaidJsThemeVariables(MicaTokens.dark_);
-
-      expect(light.keys.toSet(), dark.keys.toSet());
-      for (final entry in light.entries) {
-        expect(
-          entry.value,
-          matches(RegExp(r'^#[0-9a-f]{6}$')),
-          reason: '${entry.key} must be a CSS colour mermaid.js can parse',
-        );
-      }
-      // Not every single variable has to move, but the page's own background and
-      // ink certainly do — those are what make a diagram look pasted on.
-      expect(dark['background'], isNot(light['background']));
-      expect(dark['textColor'], isNot(light['textColor']));
     });
   });
 }

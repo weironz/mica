@@ -22,7 +22,6 @@ import 'file_names.dart';
 import 'image_actions.dart';
 import 'image_animator.dart';
 import 'image_decode.dart';
-import 'mermaid_preview.dart';
 import 'model.dart';
 import 'preview_raster.dart';
 import 'open_url.dart';
@@ -307,8 +306,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   // highlighted source via the renderer's null-decline.
   late final RasterPreviewPipeline _previews = RasterPreviewPipeline(
     previewers: [
-      const MathPreviewer(),
-      if (mermaidAvailable) const MermaidPreviewer(),
+      const MathPreviewer(display: true),
+      const MathPreviewer(display: false),
+      const MermaidPreviewer(),
     ],
     requestRebuild: (fn) {
       if (mounted) setState(fn);
@@ -6022,12 +6022,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   onImagePainted: _onImagePainted,
                   remoteCursors: widget.remoteCursors,
                   commentHighlights: widget.commentHighlights,
-                ),
-                // Far off-screen: painted (capturable) but never visible.
-                Positioned(
-                  left: -100000,
-                  top: 0,
-                  child: _previews.offstageHost(),
                 ),
                 if (_findOpen)
                   Positioned(top: 6, right: 6, child: _buildFindBar()),

@@ -95,6 +95,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 # Web freshness tests must compare a current bundle rather than skip for absence.
 bash scripts/build-md-wasm.sh
 bash scripts/build-doc-wasm.sh
+bash scripts/build-preview-wasm.sh
 (cd clients/mica_flutter \
   && "${FLUTTER:-flutter}" pub get --enforce-lockfile \
   && "${FLUTTER:-flutter}" gen-l10n \

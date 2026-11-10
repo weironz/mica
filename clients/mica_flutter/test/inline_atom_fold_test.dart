@@ -39,7 +39,7 @@ void main() {
         },
       ),
     ];
-    final cache = <String, Map<String, ui.Image>>{'math': {}};
+    final cache = <String, Map<String, ui.Image>>{'math-inline': {}};
     final blink = ValueNotifier(false);
     addTearDown(blink.dispose);
     Future<ui.Image> image(int width) async {
@@ -77,7 +77,7 @@ void main() {
     final sourceX = endX();
     final first = await image(36);
     final second = await image(72);
-    cache['math']![source] = first;
+    cache['math-inline']![source] = first;
     await build();
     final foldedX = endX();
     expect(
@@ -86,7 +86,7 @@ void main() {
       reason:
           'new raster must replace cached source layout without editing text',
     );
-    cache['math']![source] = second;
+    cache['math-inline']![source] = second;
     await build();
     expect(
       endX(),
@@ -95,7 +95,7 @@ void main() {
     );
     final rasterX = endX();
     final layouts = render.debugLayoutCount;
-    cache['math']!.remove(source);
+    cache['math-inline']!.remove(source);
     await build();
     expect(
       endX(),

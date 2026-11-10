@@ -102,6 +102,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalWorkspace dco_decode_box_autoadd_local_workspace(dynamic raw);
 
   @protected
+  MathPreview dco_decode_box_autoadd_math_preview(dynamic raw);
+
+  @protected
   MermaidTheme dco_decode_box_autoadd_mermaid_theme(dynamic raw);
 
   @protected
@@ -112,6 +115,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DocUpdate dco_decode_doc_update(dynamic raw);
+
+  @protected
+  double dco_decode_f_64(dynamic raw);
 
   @protected
   FolderExportImage dco_decode_folder_export_image(dynamic raw);
@@ -198,6 +204,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalWorkspace dco_decode_local_workspace(dynamic raw);
 
   @protected
+  MathPreview dco_decode_math_preview(dynamic raw);
+
+  @protected
   MermaidTheme dco_decode_mermaid_theme(dynamic raw);
 
   @protected
@@ -220,6 +229,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LocalVersion? dco_decode_opt_box_autoadd_local_version(dynamic raw);
+
+  @protected
+  MathPreview? dco_decode_opt_box_autoadd_math_preview(dynamic raw);
 
   @protected
   MermaidTheme? dco_decode_opt_box_autoadd_mermaid_theme(dynamic raw);
@@ -350,6 +362,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  MathPreview sse_decode_box_autoadd_math_preview(SseDeserializer deserializer);
+
+  @protected
   MermaidTheme sse_decode_box_autoadd_mermaid_theme(
     SseDeserializer deserializer,
   );
@@ -362,6 +377,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DocUpdate sse_decode_doc_update(SseDeserializer deserializer);
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer);
 
   @protected
   FolderExportImage sse_decode_folder_export_image(
@@ -472,6 +490,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   LocalWorkspace sse_decode_local_workspace(SseDeserializer deserializer);
 
   @protected
+  MathPreview sse_decode_math_preview(SseDeserializer deserializer);
+
+  @protected
   MermaidTheme sse_decode_mermaid_theme(SseDeserializer deserializer);
 
   @protected
@@ -496,6 +517,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   LocalVersion? sse_decode_opt_box_autoadd_local_version(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  MathPreview? sse_decode_opt_box_autoadd_math_preview(
     SseDeserializer deserializer,
   );
 
@@ -654,6 +680,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_math_preview(
+    MathPreview self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_mermaid_theme(
     MermaidTheme self,
     SseSerializer serializer,
@@ -673,6 +705,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_doc_update(DocUpdate self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer);
 
   @protected
   void sse_encode_folder_export_image(
@@ -819,6 +854,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_math_preview(MathPreview self, SseSerializer serializer);
+
+  @protected
   void sse_encode_mermaid_theme(MermaidTheme self, SseSerializer serializer);
 
   @protected
@@ -847,6 +885,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_local_version(
     LocalVersion? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_math_preview(
+    MathPreview? self,
     SseSerializer serializer,
   );
 

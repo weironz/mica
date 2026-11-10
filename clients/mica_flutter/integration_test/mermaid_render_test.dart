@@ -40,10 +40,6 @@ void main() {
   setUpAll(initCheckedNativeRust);
   tearDownAll(() async => RustLib.dispose());
 
-  test('mermaid is available on this (non-web) platform', () {
-    expect(mermaidAvailable, isTrue);
-  });
-
   // One representative diagram per major mermaid family, in valid (newline)
   // syntax — each must render to a non-empty, inked raster.
   const cases = <String, String>{

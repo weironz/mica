@@ -132,7 +132,7 @@ try {
       await navigator.clipboard.write([new ClipboardItem(data)]);
     }, {html, plain});
     await page.keyboard.press('Control+V');
-    // Let the production offscreen MathPreviewer rasterize the inline atom.
+    // Let the production RaTeX preview rasterize the inline atom.
     await page.waitForTimeout(1500);
     await page.waitForFunction(() => {
       const state = JSON.parse(window.micaClipboardHarnessMathState());

@@ -79,6 +79,7 @@ if [ "$part" != rust ]; then
   require_flutter_pin "CI tests the pin"
   bash scripts/build-md-wasm.sh
   bash scripts/build-doc-wasm.sh
+  bash scripts/build-preview-wasm.sh
   rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
   (
     cd clients/mica_flutter

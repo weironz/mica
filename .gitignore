@@ -110,3 +110,8 @@ e2e/*.png
 # The npm package's wasm builds (scripts/build-md-npm.sh); same policy as the
 # Flutter web mica_md bundle — generated, never committed.
 /packages/mica-md-js/dist/
+
+# Generated on-demand Rust preview bindings and browser test copies.
+/clients/mica_flutter/web/mica_preview/
+/clients/mica_flutter/test/support/mica_preview/
+/clients/mica_flutter/test/support/mica_preview_worker.js

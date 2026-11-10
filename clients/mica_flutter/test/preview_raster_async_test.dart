@@ -6,14 +6,18 @@ import 'package:mica_flutter/editor/preview_raster.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';
 
 class _DelayedPreviewer extends RasterPreviewer {
-  final jobs = <Completer<ui.Image?>>[];
+  final jobs = <Completer<RasterPreview?>>[];
   final palettes = <MicaTokens>[];
   @override
   String get id => 'mermaid';
   @override
-  Future<ui.Image?> produce(String source, double width, MicaTokens tokens) {
+  Future<RasterPreview?> produce(
+    String source,
+    double width,
+    MicaTokens tokens,
+  ) {
     palettes.add(tokens);
-    final job = Completer<ui.Image?>();
+    final job = Completer<RasterPreview?>();
     jobs.add(job);
     return job.future;
   }
@@ -40,20 +44,21 @@ void main() {
       pipeline.request('mermaid', 'graph TD; A-->B');
       expect(previewer.jobs, hasLength(2));
       if (oldFirst) {
-        previewer.jobs[0].complete(oldImage);
+        previewer.jobs[0].complete((image: oldImage, baseline: 1.0));
         await tester.pump();
         expect(pipeline.imagesOf('mermaid'), isEmpty);
         // An old completion must not clear the new request's pending state.
         pipeline.request('mermaid', 'graph TD; A-->B');
         expect(previewer.jobs, hasLength(2));
       }
-      previewer.jobs[1].complete(newImage);
+      previewer.jobs[1].complete((image: newImage, baseline: 1.0));
       await tester.pump();
       if (!oldFirst) {
-        previewer.jobs[0].complete(oldImage);
+        previewer.jobs[0].complete((image: oldImage, baseline: 1.0));
         await tester.pump();
       }
       expect(pipeline.imagesOf('mermaid').values.single, same(newImage));
+      expect(pipeline.baselinesOf('mermaid').values.single, 1);
       expect(oldImage.debugDisposed, isTrue);
       expect(newImage.debugDisposed, isFalse);
     });
@@ -81,7 +86,7 @@ void main() {
       MicaTokens.light,
     ]);
 
-    previewer.jobs.first.complete(oldestImage);
+    previewer.jobs.first.complete((image: oldestImage, baseline: 1.0));
     previewer.jobs[1].completeError(StateError('stale dark render'));
     await tester.pump();
     expect(oldestImage.debugDisposed, isTrue);
@@ -89,7 +94,7 @@ void main() {
     pipeline.request('mermaid', 'source');
     expect(previewer.jobs, hasLength(3));
 
-    previewer.jobs.last.complete(currentImage);
+    previewer.jobs.last.complete((image: currentImage, baseline: 1.0));
     await tester.pump();
     expect(pipeline.imagesOf('mermaid')['source'], same(currentImage));
     expect(currentImage.debugDisposed, isFalse);
@@ -110,7 +115,7 @@ void main() {
     final lateImage = await image(tester);
     pipeline.request('mermaid', 'source');
     pipeline.dispose();
-    previewer.jobs.single.complete(lateImage);
+    previewer.jobs.single.complete((image: lateImage, baseline: 1.0));
     await tester.pump();
     expect(lateImage.debugDisposed, isTrue);
     expect(rebuilds, 0);
@@ -137,7 +142,7 @@ void main() {
     pipeline.request('mermaid', 'source');
     expect(previewer.jobs, hasLength(2));
     final rendered = await image(tester);
-    previewer.jobs.last.complete(rendered);
+    previewer.jobs.last.complete((image: rendered, baseline: 1.0));
     await tester.pump();
     expect(pipeline.imagesOf('mermaid')['source'], same(rendered));
     pipeline.request('mermaid', 'source');

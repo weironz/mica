@@ -166,10 +166,10 @@ class EditorTheme {
   /// Left rail reserved for the block drag handle (every block shifts right).
   static const double gutter = 24.0;
 
-  /// Pixel ratio formulas are rasterized at (capture and draw agree).
+  /// Formula preview raster pixel ratio.
   static const double mathPixelRatio = 2.0;
 
-  /// Font size formulas are rasterized at ([MathPreviewer]'s Math.tex).
+  /// Font size used when rasterizing formula SVGs.
   /// Inline atoms scale the raster by (text font size / this).
   static const double mathRasterFontSize = 18.0;
 
@@ -3677,12 +3677,11 @@ class DocumentSurface extends LeafRenderObjectWidget {
   /// Anchored comment ranges to wash behind the text (server-resolved offsets).
   final List<CommentHighlight> commentHighlights;
 
-  /// Rasterized formulas keyed by LaTeX source (captured by the editor via
-  /// an offstage flutter_math_fork widget at device pixel ratio).
+  /// Rasterized previews keyed by renderer id and source.
   final Map<String, Map<String, ui.Image>> previewImages;
 
   /// Top-to-baseline distances matching [previewImages] (logical px at the
-  /// offstage widget's size). Inline atoms sit formulas on the text baseline
+  /// raster's logical size). Inline atoms sit formulas on the text baseline
   /// with these; a missing entry degrades to middle alignment.
   final Map<String, Map<String, double>> previewBaselines;
   final void Function(String id, String source, double targetWidth)?

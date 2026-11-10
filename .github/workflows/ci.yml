@@ -330,8 +330,10 @@ jobs:
         run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
       - name: Build Markdown Web engine before freshness tests
         run: bash ../../scripts/build-md-wasm.sh
-      - name: Build Web document engine before freshness tests
-        run: bash ../../scripts/build-doc-wasm.sh
+      - name: Build Web document engine and editor previews
+        run: |
+          bash ../../scripts/build-doc-wasm.sh
+          bash ../../scripts/build-preview-wasm.sh
       - name: FFI library for the unit tests
         run: cargo build --release --manifest-path rust/Cargo.toml
       - name: Dart unit tests
@@ -435,8 +437,10 @@ jobs:
         run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
       - name: Build Markdown Web engine
         run: bash scripts/build-md-wasm.sh
-      - name: Build Web document engine
-        run: bash scripts/build-doc-wasm.sh
+      - name: Build Web document engine and editor previews
+        run: |
+          bash scripts/build-doc-wasm.sh
+          bash scripts/build-preview-wasm.sh
       - name: Build the web bundle
         working-directory: clients/mica_flutter
         run: |
@@ -564,6 +568,7 @@ jobs:
           set -euo pipefail
           bash scripts/build-md-wasm.sh
           bash scripts/build-doc-wasm.sh
+          bash scripts/build-preview-wasm.sh
           cd clients/mica_flutter
           flutter build web --release --no-web-resources-cdn \
             --target=e2e/web_harness_entry.dart \
@@ -572,7 +577,7 @@ jobs:
             --dart-define=MICA_CLOUD_URL=http://127.0.0.1:8093 \
             --output="$PWD/build/web_harness"
 
-      - name: Browser clipboard regression through the real editor
+      - name: Browser rendering and clipboard regressions through the real editor
         run: |
           set -euo pipefail
           # The build step wrote clients/mica_flutter/build/web_harness; serve
@@ -589,6 +594,7 @@ jobs:
           done
           curl -fsS "$page" > /dev/null
           cd ../../e2e
+          node rich_preview_e2e.mjs --base "$page"
           node clipboard_e2e.mjs --base "$page"
 
       - name: Writing comfort and responsive settings browser regression

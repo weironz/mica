@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
   default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -365784795;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -13953110;
 
 // Section: executor
 
@@ -4476,6 +4476,44 @@ fn wire__crate__api__markdown__md_serialize_inline_impl(
     },
   )
 }
+fn wire__crate__api__render__render_math_svg_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "render_math_svg",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_source = <String>::sse_decode(&mut deserializer);
+      let api_display = <bool>::sse_decode(&mut deserializer);
+      let api_color = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Result::<_, ()>::Ok(crate::api::render::render_math_svg(
+            api_source,
+            api_display,
+            api_color,
+          ))?;
+          Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
 fn wire__crate__api__render__render_mermaid_svg_impl(
   port_: flutter_rust_bridge::for_generated::MessagePort,
   ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -4641,6 +4679,13 @@ impl SseDecode for crate::api::store::DocUpdate {
       clock: var_clock,
       payload: var_payload,
     };
+  }
+}
+
+impl SseDecode for f64 {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    deserializer.cursor.read_f64::<NativeEndian>().unwrap()
   }
 }
 
@@ -5015,6 +5060,22 @@ impl SseDecode for crate::api::store::LocalWorkspace {
   }
 }
 
+impl SseDecode for crate::api::render::MathPreview {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    let mut var_svg = <String>::sse_decode(deserializer);
+    let mut var_width = <f64>::sse_decode(deserializer);
+    let mut var_height = <f64>::sse_decode(deserializer);
+    let mut var_baseline = <f64>::sse_decode(deserializer);
+    return crate::api::render::MathPreview {
+      svg: var_svg,
+      width: var_width,
+      height: var_height,
+      baseline: var_baseline,
+    };
+  }
+}
+
 impl SseDecode for crate::api::render::MermaidTheme {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -5096,6 +5157,17 @@ impl SseDecode for Option<crate::api::store::LocalVersion> {
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
     if (<bool>::sse_decode(deserializer)) {
       return Some(<crate::api::store::LocalVersion>::sse_decode(deserializer));
+    } else {
+      return None;
+    }
+  }
+}
+
+impl SseDecode for Option<crate::api::render::MathPreview> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    if (<bool>::sse_decode(deserializer)) {
+      return Some(<crate::api::render::MathPreview>::sse_decode(deserializer));
     } else {
       return None;
     }
@@ -5305,8 +5377,9 @@ fn pde_ffi_dispatcher_primary_impl(
     77 => wire__crate__api__store__MicaStore_search_local_impl(port, ptr, rust_vec_len, data_len),
     86 => wire__crate__api__pdf__export_pdf_impl(port, ptr, rust_vec_len, data_len),
     87 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-    100 => wire__crate__api__render__render_mermaid_svg_impl(port, ptr, rust_vec_len, data_len),
-    101 => wire__crate__api__zip__unpack_import_zip_impl(port, ptr, rust_vec_len, data_len),
+    100 => wire__crate__api__render__render_math_svg_impl(port, ptr, rust_vec_len, data_len),
+    101 => wire__crate__api__render__render_mermaid_svg_impl(port, ptr, rust_vec_len, data_len),
+    102 => wire__crate__api__zip__unpack_import_zip_impl(port, ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
@@ -5729,6 +5802,29 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::store::LocalWorkspace>
   }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::render::MathPreview {
+  fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+    [
+      self.svg.into_into_dart().into_dart(),
+      self.width.into_into_dart().into_dart(),
+      self.height.into_into_dart().into_dart(),
+      self.baseline.into_into_dart().into_dart(),
+    ]
+    .into_dart()
+  }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+  for crate::api::render::MathPreview
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::render::MathPreview>
+  for crate::api::render::MathPreview
+{
+  fn into_into_dart(self) -> crate::api::render::MathPreview {
+    self
+  }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::render::MermaidTheme {
   fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
     [
@@ -5956,6 +6052,13 @@ impl SseEncode for crate::api::store::DocUpdate {
   fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
     <i64>::sse_encode(self.clock, serializer);
     <Vec<u8>>::sse_encode(self.payload, serializer);
+  }
+}
+
+impl SseEncode for f64 {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    serializer.cursor.write_f64::<NativeEndian>(self).unwrap();
   }
 }
 
@@ -6228,6 +6331,16 @@ impl SseEncode for crate::api::store::LocalWorkspace {
   }
 }
 
+impl SseEncode for crate::api::render::MathPreview {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <String>::sse_encode(self.svg, serializer);
+    <f64>::sse_encode(self.width, serializer);
+    <f64>::sse_encode(self.height, serializer);
+    <f64>::sse_encode(self.baseline, serializer);
+  }
+}
+
 impl SseEncode for crate::api::render::MermaidTheme {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6291,6 +6404,16 @@ impl SseEncode for Option<crate::api::store::LocalVersion> {
     <bool>::sse_encode(self.is_some(), serializer);
     if let Some(value) = self {
       <crate::api::store::LocalVersion>::sse_encode(value, serializer);
+    }
+  }
+}
+
+impl SseEncode for Option<crate::api::render::MathPreview> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <bool>::sse_encode(self.is_some(), serializer);
+    if let Some(value) = self {
+      <crate::api::render::MathPreview>::sse_encode(value, serializer);
     }
   }
 }

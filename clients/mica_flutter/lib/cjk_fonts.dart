@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+const bundledCjkFonts = ['NotoSansSC', 'CJKFallback'];
+
 /// The CJK font fallback chain, per platform.
 ///
 /// The base UI/prose font (Roboto, or the user's pick) carries no CJK glyphs, so
@@ -17,10 +19,10 @@ import 'package:flutter/foundation.dart';
 List<String> get cjkFontFallback {
   // Web can only use bundled families: crisp Noto Sans SC, then the broad
   // DroidSansFallback tail for any glyph Noto lacks (JP/KR/rare).
-  if (kIsWeb) return const ['NotoSansSC', 'CJKFallback'];
+  if (kIsWeb) return bundledCjkFonts;
   // Desktop leads with the OS CJK font; the two bundled families are only the
   // last-resort tail (a glyph never goes tofu).
-  const tail = ['NotoSansSC', 'CJKFallback'];
+  const tail = bundledCjkFonts;
   switch (defaultTargetPlatform) {
     case TargetPlatform.windows:
       return const [

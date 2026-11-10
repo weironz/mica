@@ -110,7 +110,7 @@ void main() {
     final image = recording.toImageSync(72, 24);
     recording.dispose();
     final previews = {
-      'math': {source: image},
+      'math-inline': {source: image},
     };
     final r = await pump(tester, nodes, previews: previews);
     double formulaWidth() =>
@@ -166,10 +166,10 @@ void main() {
       ),
     ];
     final previews = {
-      'math': {source: first},
+      'math-inline': {source: first},
     };
     final baselines = {
-      'math': {source: 4.0},
+      'math-inline': {source: 4.0},
     };
     final images = {'photo': photo};
     final r = await pump(
@@ -190,7 +190,7 @@ void main() {
     }
 
     final width = formulaWidth();
-    previews['math']![source] = second;
+    previews['math-inline']![source] = second;
     await pump(
       tester,
       nodes,
@@ -200,7 +200,7 @@ void main() {
     );
     expect(formulaWidth(), closeTo(width * 2, 0.01));
     final top = formulaTop();
-    baselines['math']![source] = 10;
+    baselines['math-inline']![source] = 10;
     await pump(
       tester,
       nodes,

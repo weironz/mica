@@ -225,7 +225,7 @@ check(
 // list in 0.14.0).
 const cache = await page.evaluate(async (files) => {
   const out = {};
-  for (const f of files) out[f] = (await fetch(f)).headers.get('cache-control');
+  for (const f of files) out[f] = (await fetch(f, { method: 'HEAD' })).headers.get('cache-control');
   return out;
 }, [
   '/',
@@ -236,6 +236,11 @@ const cache = await page.evaluate(async (files) => {
   '/mica_md/mica_md_bg.wasm',
   '/mica_doc/mica_doc.js',
   '/mica_doc/mica_doc_bg.wasm',
+  '/mica_preview_worker.js',
+  '/mica_preview/math.js',
+  '/mica_preview/math_bg.wasm',
+  '/mica_preview/mermaid.js',
+  '/mica_preview/mermaid_bg.wasm',
 ]);
 for (const [f, value] of Object.entries(cache)) {
   // The dev nginx says `no-store`, production says `no-cache`. Either is a refusal

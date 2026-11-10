@@ -8,6 +8,12 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["markdown"]
+markdown = []
+preview-math = ["mica-md/render-math"]
+preview-mermaid = ["mica-md/render-mermaid"]
+
 # Cargo examples share target/debug/examples across the workspace.
 [[example]]
 name = "print_md_fingerprint"

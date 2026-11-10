@@ -24,6 +24,7 @@ hub=willdockerhub
 
 bash scripts/build-md-wasm.sh
 bash scripts/build-doc-wasm.sh
+bash scripts/build-preview-wasm.sh
 note "web bundle (flutter build web)"
 # Flutter does not remove retired inputs from an incremental output directory.
 rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}

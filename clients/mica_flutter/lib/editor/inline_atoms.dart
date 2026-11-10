@@ -35,11 +35,8 @@ abstract class InlineAtomRenderer {
   void paint(RenderDocument host, Canvas canvas, Rect rect, String source);
 }
 
-/// Inline math: reuses the block previewer whole — same 'math' id, same
-/// source-keyed raster cache, same offstage flutter_math_fork capture — and
-/// scales the 18pt raster to the surrounding font size. One cache serves the
-/// block renderer, the hover card, and every inline size, which is why the
-/// cache key needs no font size in it.
+/// Inline formulas use RaTeX text style, with an independent cache from
+/// display formulas. The same raster scales to any surrounding font size.
 class MathInlineAtomRenderer extends InlineAtomRenderer {
   const MathInlineAtomRenderer();
 
@@ -48,7 +45,7 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
 
   @override
   PreviewResourceKey? previewKey(String source) =>
-      source.trim().isEmpty ? null : (id: 'math', source: source);
+      source.trim().isEmpty ? null : (id: 'math-inline', source: source);
 
   @override
   ({Size size, double? baseline})? measure(
@@ -58,7 +55,7 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
     double maxWidth,
   ) {
     if (source.trim().isEmpty) return null;
-    final pixels = host._previewSizes[(id: 'math', source: source)];
+    final pixels = host._previewSizes[(id: 'math-inline', source: source)];
     if (pixels == null) return null;
     const dpr = EditorTheme.mathPixelRatio;
     var scale = (fontSize / EditorTheme.mathRasterFontSize) / dpr;
@@ -70,18 +67,18 @@ class MathInlineAtomRenderer extends InlineAtomRenderer {
       w = maxWidth;
     }
     final h = pixels.height * scale;
-    final rawBaseline = host._retainedBaselines[(id: 'math', source: source)];
-    // Baseline is logical at capture size; the image is captured at dpr×, so
-    // the scale from capture-logical to draw-logical is (scale * dpr).
+    final rawBaseline =
+        host._retainedBaselines[(id: 'math-inline', source: source)];
+    // Convert the logical raster baseline to the surrounding text size.
     final baseline = rawBaseline == null ? null : rawBaseline * scale * dpr;
     return (size: Size(w, h), baseline: baseline);
   }
 
   @override
   void paint(RenderDocument host, Canvas canvas, Rect rect, String source) {
-    final img = host._previewImages['math']?[source];
+    final img = host._previewImages['math-inline']?[source];
     if (img == null) return; // evicted between layout and paint: skip a frame
-    host.onPreviewPainted?.call('math', source);
+    host.onPreviewPainted?.call('math-inline', source);
     canvas.drawImageRect(
       img,
       Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),

@@ -105,33 +105,16 @@ abstract class BlockRenderer {
 
 ## Decision 2: one raster-preview pipeline for "source → picture" blocks
 
-Math today: offstage flutter_math widget → RepaintBoundary.toImage → cache by
-source string → repaint. Mermaid/Graphviz want the same lifecycle (pending,
-capture/render, cache, retry-limit, invalidate-on-edit) with a different
-producer. Generalize the lifecycle, not the producer:
+编辑器的 `RasterPreviewer` 异步产出图像和可选基线。`RasterPreviewPipeline` 只为可见内容发请求，
+按渲染器 id 和源码缓存；主题切换、视口变化或编辑器关闭后，过期结果不会写回，迟到的图像会被释放。
+失败时，块渲染器返回空结果，编辑器继续显示可编辑源码。
 
-```dart
-abstract class RasterPreviewer {
-  String get id;                       // 'math' | 'mermaid' | …
-  bool claims(EditorNode node);        // math_block, or code_block lang=mermaid
-  /// Either an offstage widget the pipeline captures…
-  Widget? buildOffstage(String source) => null;
-  /// …or a direct async producer (JS interop, server render).
-  Future<ui.Image?> render(String source, double maxWidth)? get producer => null;
-}
-```
+Mermaid 和公式在网页经 Web Worker 调用 Rust wasm，在桌面和手机经 FFI 调用同一份 Rust。
+两端共用 SVG 光栅化；Mermaid 保留主程序主题角色和 CSS 内联，RaTeX 分别给行内、块级排版。
+HTML/PDF 直接使用同一 Rust 引擎。Markdown 与文档 wasm 负责启动，渲染 wasm 只在预览请求时下载，
+见[实测及预算](../reviews/redundancy-and-home-review-2026-11-10.md#前三项实施记录2026-11-11)。
 
-The pipeline (extracted from editor.dart's math code) owns: the
-`{previewerId, source} → ui.Image` cache, the pending/retry bookkeeping, and
-the offstage host column. **Failure degrades gracefully** to the highlighted
-code block / literal source per the dialect principle — a preview is an
-enhancement, never a gate.
-
-Math becomes the first `RasterPreviewer` (offstage form). Mermaid (P4) becomes
-the second: on web, JS interop → mermaid.js → SVG → image; elsewhere,
-`claims()` returns false and the fenced block renders as plain highlighted
-code. No new block kind: ` ```mermaid ` stays a `code_block` in the document
-model (round-trips through Markdown untouched); only rendering changes.
+Mermaid 仍是 `language: mermaid` 的 `code_block`，公式的块型和标记也未变；只有预览路径变了。
 
 ## Decision 3: animated images are played by hand, off the canvas's own cache
 

@@ -15,7 +15,7 @@ import 'package:mica_flutter/ui/theme_tokens.dart';
 /// the value depends on.
 void main() {
   RasterPreviewPipeline makePipeline() => RasterPreviewPipeline(
-    previewers: const [MathPreviewer()],
+    previewers: const [MathPreviewer(display: true)],
     requestRebuild: (fn) => fn(),
   );
 
@@ -65,20 +65,5 @@ void main() {
 
     expect(pipeline.imagesOf('math'), isNotEmpty);
     expect(pipeline.tokens, same(MicaTokens.light));
-  });
-
-  testWidgets('the offstage formula takes its ink from the palette handed in', (
-    tester,
-  ) async {
-    // The whole point of threading tokens into buildOffstage: the same source
-    // must produce different pixels per palette.
-    const previewer = MathPreviewer();
-    expect(previewer.buildOffstage('x^2', MicaTokens.light), isNotNull);
-    expect(previewer.buildOffstage('x^2', MicaTokens.dark_), isNotNull);
-    expect(
-      MicaTokens.light.text.primary,
-      isNot(MicaTokens.dark_.text.primary),
-      reason: 'if these were equal the invalidation above would prove nothing',
-    );
   });
 }

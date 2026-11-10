@@ -1,15 +1,4 @@
-// The app's palette, in the form the two mermaid engines want.
-//
-// Both backends can be themed by the host — merman through its
-// `HostThemeProfile` (the seam its docs name for exactly this), mermaid.js
-// through `initialize({theme, themeVariables})`. Neither needs the CSS flattener
-// in `mermaid_svg_inline.dart` to learn about colours: that file's job is
-// getting merman's stylesheet into a form flutter_svg can draw AT ALL, which is
-// orthogonal to which colours are in it.
-//
-// The values come from [MicaTokens] rather than being written out again here.
-// A diagram that keeps its own idea of "background" would sit on the page like a
-// sticker the first time either palette is adjusted.
+// Convert the app palette to merman host theme roles.
 
 import 'package:flutter/painting.dart';
 
@@ -44,25 +33,3 @@ MermaidTheme mermaidThemeFor(MicaTokens tokens) => MermaidTheme(
   warning: cssHex(tokens.status.warning),
   success: cssHex(tokens.status.success),
 );
-
-/// mermaid.js's built-in theme to start from (web).
-///
-/// A base theme still matters even though every variable below is supplied: the
-/// built-ins differ in things `themeVariables` does not cover, and starting from
-/// the light one and painting it dark leaves those parts light.
-String mermaidJsBaseTheme(MicaTokens tokens) =>
-    tokens.dark ? 'dark' : 'neutral';
-
-/// `themeVariables` for mermaid.js, the web counterpart of [mermaidThemeFor].
-Map<String, String> mermaidJsThemeVariables(MicaTokens tokens) => {
-  'background': cssHex(tokens.surface.base),
-  'primaryColor': cssHex(tokens.surface.raised),
-  'primaryTextColor': cssHex(tokens.text.primary),
-  'primaryBorderColor': cssHex(tokens.border.normal),
-  'secondaryColor': cssHex(tokens.surface.sunken),
-  'tertiaryColor': cssHex(tokens.surface.sunken),
-  'lineColor': cssHex(tokens.border.strong),
-  'textColor': cssHex(tokens.text.primary),
-  'errorBkgColor': cssHex(tokens.status.dangerWash),
-  'errorTextColor': cssHex(tokens.status.danger),
-};

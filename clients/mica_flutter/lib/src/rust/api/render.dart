@@ -22,6 +22,46 @@ Future<String?> renderMermaidSvg({
   theme: theme,
 );
 
+/// Typeset a formula with the same RaTeX layout as HTML export.
+Future<MathPreview?> renderMathSvg({
+  required String source,
+  required bool display,
+  required String color,
+}) => RustLib.instance.api.crateApiRenderRenderMathSvg(
+  source: source,
+  display: display,
+  color: color,
+);
+
+/// SVG and its metrics in em, as a concrete type for the bridge.
+class MathPreview {
+  final String svg;
+  final double width;
+  final double height;
+  final double baseline;
+
+  const MathPreview({
+    required this.svg,
+    required this.width,
+    required this.height,
+    required this.baseline,
+  });
+
+  @override
+  int get hashCode =>
+      svg.hashCode ^ width.hashCode ^ height.hashCode ^ baseline.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MathPreview &&
+          runtimeType == other.runtimeType &&
+          svg == other.svg &&
+          width == other.width &&
+          height == other.height &&
+          baseline == other.baseline;
+}
+
 /// The host palette handed to merman, mirrored to Dart.
 ///
 /// Declared HERE rather than re-exported from `mica_markdown`: a type from

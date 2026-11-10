@@ -2,12 +2,12 @@
 //!
 //! The module exists unconditionally so `MermaidHostTheme` and the "feature
 //! off returns None" signatures stay stable; only the function bodies switch
-//! on the `render` feature.
+//! on the corresponding render features.
 
 /// The host's palette, handed to merman so a diagram is drawn in the SAME
 /// colours as the page around it. Values are CSS colour strings supplied by the
 /// client (`MicaTokens`), not copied here.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct MermaidHostTheme {
   /// Dark appearance?
   pub dark: bool,
@@ -33,12 +33,26 @@ pub struct MermaidHostTheme {
   pub success: String,
 }
 
-/// LaTeX → a self-contained inline `<svg>` (or `None` when the feature is off
-/// or the source does not parse).
-#[cfg(feature = "render")]
-pub(crate) fn render_math(latex: &str, display: bool) -> Option<String> {
+/// A typeset formula with the original RaTeX view box and dimensions in em.
+#[derive(Debug, serde::Serialize)]
+pub struct MathSvg {
+  /// Standalone SVG, with glyph outlines where available.
+  pub svg: String,
+  /// Width in em.
+  pub width: f64,
+  /// Total height in em.
+  pub height: f64,
+  /// Baseline measured from the top, in em.
+  pub baseline: f64,
+}
+
+/// Typeset LaTeX for both editor previews and HTML export. A missing color
+/// uses black. Embedded LaTeX colors are applied by RaTeX.
+#[cfg(feature = "render-math")]
+pub fn render_math_svg(latex: &str, display: bool, color: Option<&str>) -> Option<MathSvg> {
   use ratex_layout::{LayoutOptions, layout, to_display_list};
   use ratex_svg::{SvgOptions, render_to_svg};
+  use ratex_types::color::Color;
   use ratex_types::math_style::MathStyle;
 
   let nodes = ratex_parser::parse(latex).ok()?;
@@ -48,6 +62,7 @@ pub(crate) fn render_math(latex: &str, display: bool) -> Option<String> {
     } else {
       MathStyle::Text
     },
+    color: color.and_then(Color::from_hex).unwrap_or(Color::BLACK),
     ..Default::default()
   };
   let list = to_display_list(&layout(&nodes, &opts));
@@ -59,26 +74,35 @@ pub(crate) fn render_math(latex: &str, display: bool) -> Option<String> {
       ..Default::default()
     },
   );
-  let height_em = list.height + list.depth;
+  Some(MathSvg {
+    svg,
+    width: list.width,
+    height: list.height + list.depth,
+    baseline: list.height,
+  })
+}
+
+/// Feature-off math renderer.
+#[cfg(not(feature = "render-math"))]
+pub fn render_math_svg(_latex: &str, _display: bool, _color: Option<&str>) -> Option<MathSvg> {
+  None
+}
+
+pub(crate) fn render_math(latex: &str, display: bool) -> Option<String> {
+  let math = render_math_svg(latex, display, None)?;
+  let height_em = math.height;
   let style = if display {
     format!("height:{height_em:.4}em")
   } else {
     format!(
       "height:{height_em:.4}em;vertical-align:-{:.4}em",
-      list.depth
+      math.height - math.baseline
     )
   };
-  Some(restyle_math_svg(&svg, &style, display))
-}
-
-/// Feature-off math renderer.
-#[cfg(not(feature = "render"))]
-pub(crate) fn render_math(_latex: &str, _display: bool) -> Option<String> {
-  None
+  Some(restyle_math_svg(&math.svg, &style, display))
 }
 
 /// Rewrite RaTeX's `<svg>` opening tag: drop fixed `pt` size, add class/style.
-#[cfg(feature = "render")]
 fn restyle_math_svg(svg: &str, style: &str, display: bool) -> String {
   let class = if display { "math-block" } else { "math-inline" };
   let view_box = svg
@@ -98,7 +122,7 @@ fn restyle_math_svg(svg: &str, style: &str, display: bool) -> String {
 }
 
 /// Mermaid diagram → self-contained inline SVG, or `None`.
-#[cfg(feature = "render")]
+#[cfg(feature = "render-mermaid")]
 pub fn render_mermaid_svg_with_id(
   source: &str,
   id: &str,
@@ -144,7 +168,7 @@ pub fn render_mermaid_svg_with_id(
 }
 
 /// Feature-off Mermaid renderer.
-#[cfg(not(feature = "render"))]
+#[cfg(not(feature = "render-mermaid"))]
 pub fn render_mermaid_svg_with_id(
   _source: &str,
   _id: &str,

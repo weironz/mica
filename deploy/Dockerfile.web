@@ -10,10 +10,16 @@ FROM nginx:alpine
 # need the x bit, and an x bit on a static file is inert.
 COPY --chmod=0644 deploy/nginx.conf /etc/nginx/nginx.conf
 COPY --chmod=0755 deploy/web /usr/share/nginx/html
-# Refuse an incomplete bundle or retired yjs output before it reaches a deploy.
+# Refuse incomplete engines or retired assets before they reach a deploy.
 RUN test ! -e /usr/share/nginx/html/yjs_bundle.js \
+  && test ! -e /usr/share/nginx/html/mermaid.min.js \
   && test -s /usr/share/nginx/html/mica_doc/mica_doc_bg.wasm \
   && test -s /usr/share/nginx/html/mica_md/mica_md_bg.wasm \
+  && test -s /usr/share/nginx/html/mica_preview_worker.js \
+  && test -s /usr/share/nginx/html/mica_preview/math.js \
+  && test -s /usr/share/nginx/html/mica_preview/math_bg.wasm \
+  && test -s /usr/share/nginx/html/mica_preview/mermaid.js \
+  && test -s /usr/share/nginx/html/mica_preview/mermaid_bg.wasm \
   && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets' \
-  || { echo "web bundle is incomplete, contains retired yjs output, or is unreadable by nginx" >&2; exit 1; }
+  || { echo "web bundle is incomplete, contains retired assets, or is unreadable by nginx" >&2; exit 1; }
 EXPOSE 80

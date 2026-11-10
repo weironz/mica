@@ -14,19 +14,24 @@ import 'package:mica_flutter/ui/theme_tokens.dart';
 // Real layout/cache owners; only the expensive math producer is replaced.
 // Bounded frames avoid hanging on the feedback loop under test.
 class _CountingMathPreviewer extends RasterPreviewer {
+  _CountingMathPreviewer({this.id = 'math-inline'});
   final calls = <String, int>{};
   int get total => calls.values.fold(0, (sum, count) => sum + count);
   @override
-  String get id => 'math';
+  final String id;
   @override
-  Future<ui.Image?> produce(String source, double width, MicaTokens tokens) {
+  Future<RasterPreview?> produce(
+    String source,
+    double width,
+    MicaTokens tokens,
+  ) {
     calls.update(source, (n) => n + 1, ifAbsent: () => 1);
     final recorder = ui.PictureRecorder();
     Canvas(recorder).drawRect(const Rect.fromLTWH(0, 0, 36, 24), Paint());
     final picture = recorder.endRecording();
     final image = picture.toImageSync(36, 24);
     picture.dispose();
-    return Future<ui.Image?>.value(image);
+    return Future<RasterPreview?>.value((image: image, baseline: null));
   }
 }
 
@@ -62,7 +67,6 @@ class _PreviewHostState extends State<_PreviewHost> {
         onResourceDemand: (demand) => pipeline.setDemand(demand.previews),
         onPreviewPainted: pipeline.touch,
       ),
-      Positioned(left: -100000, top: 0, child: pipeline.offstageHost()),
     ],
   );
   @override
@@ -73,7 +77,11 @@ class _PreviewHostState extends State<_PreviewHost> {
   }
 }
 
-Widget _viewport(Widget child, {double height = 240, ScrollController? controller}) => MaterialApp(
+Widget _viewport(
+  Widget child, {
+  double height = 240,
+  ScrollController? controller,
+}) => MaterialApp(
   localizationsDelegates: AppLocalizations.localizationsDelegates,
   supportedLocales: AppLocalizations.supportedLocales,
   locale: const Locale('zh'),
@@ -149,7 +157,9 @@ Future<_Sample> _mathSample(
   int count, {
   double height = 240,
 }) async {
-  final producer = _CountingMathPreviewer();
+  final producer = _CountingMathPreviewer(
+    id: nodes.first.kind == 'math_block' ? 'math' : 'math-inline',
+  );
   try {
     await tester.pumpWidget(
       _viewport(
@@ -181,7 +191,11 @@ Future<_Sample> _mathSample(
 final _png = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
 );
-Future<(_Sample, bool)> _imageSample(WidgetTester tester, int count, {double height = 240}) async {
+Future<(_Sample, bool)> _imageSample(
+  WidgetTester tester,
+  int count, {
+  double height = 240,
+}) async {
   final calls = <String, int>{};
   int total() => calls.values.fold(0, (sum, n) => sum + n);
   try {
@@ -254,41 +268,52 @@ void _expectIdle(_Sample sample, String label) {
   );
 }
 
-class _SolidOffstagePreviewer extends RasterPreviewer {
-  @override
-  String get id => 'math';
-  @override
-  Widget buildOffstage(String source, MicaTokens tokens) =>
-      const SizedBox(width: 17, height: 11, child: ColoredBox(color: Colors.green));
-}
-
 void _additionalResourceTests() {
-  testWidgets('scrolling back re-requests evicted rasters without relayout', (tester) async {
+  testWidgets('scrolling back re-requests evicted rasters without relayout', (
+    tester,
+  ) async {
     final producer = _CountingMathPreviewer();
     final key = GlobalKey<_PreviewHostState>();
     final scroll = ScrollController();
     try {
-      await tester.pumpWidget(_viewport(
-        _PreviewHost(key: key, nodes: _mathNodes(160), producer: producer),
-        controller: scroll,
-      ));
+      await tester.pumpWidget(
+        _viewport(
+          _PreviewHost(key: key, nodes: _mathNodes(160), producer: producer),
+          controller: scroll,
+        ),
+      );
       await _frames(tester, 12);
-      final render = tester.renderObject<RenderDocument>(find.byType(DocumentSurface));
-      final firstX = render.caretRectFor(DocPosition(0, _formula(0).length))!.left;
+      final render = tester.renderObject<RenderDocument>(
+        find.byType(DocumentSurface),
+      );
+      final firstX = render
+          .caretRectFor(DocPosition(0, _formula(0).length))!
+          .left;
       final firstCalls = producer.calls[_formula(0)]!;
       for (var i = 1; i <= 5; i++) {
         scroll.jumpTo(scroll.position.maxScrollExtent * i / 5);
         await _frames(tester, 12);
       }
-      expect(key.currentState!.pipeline.imagesOf('math').containsKey(_formula(0)), isFalse,
-          reason: 'the probe must actually evict the first raster');
+      expect(
+        key.currentState!.pipeline
+            .imagesOf('math-inline')
+            .containsKey(_formula(0)),
+        isFalse,
+        reason: 'the probe must actually evict the first raster',
+      );
       final layouts = render.debugLayoutCount;
       scroll.jumpTo(0);
       await _frames(tester, 12);
       expect(producer.calls[_formula(0)], greaterThan(firstCalls));
-      expect(render.debugLayoutCount, layouts,
-          reason: 'reloading a known-size texture must only repaint');
-      expect(render.caretRectFor(DocPosition(0, _formula(0).length))!.left, closeTo(firstX, .01));
+      expect(
+        render.debugLayoutCount,
+        layouts,
+        reason: 'reloading a known-size texture must only repaint',
+      );
+      expect(
+        render.caretRectFor(DocPosition(0, _formula(0).length))!.left,
+        closeTo(firstX, .01),
+      );
       final calls = producer.total;
       await _frames(tester, 12);
       expect(producer.total, calls);
@@ -299,14 +324,27 @@ void _additionalResourceTests() {
     }
   });
 
-  testWidgets('a long paragraph requests only nearby formula runs', (tester) async {
-    final sample = await _mathSample(tester, _denseMathNode(600), 600, height: 120);
+  testWidgets('a long paragraph requests only nearby formula runs', (
+    tester,
+  ) async {
+    final sample = await _mathSample(
+      tester,
+      _denseMathNode(600),
+      600,
+      height: 120,
+    );
     expect(sample.unique, greaterThan(0));
     expect(sample.unique, lessThan(600));
-    expect(sample.farCalls, 0, reason: 'node intersection must not enqueue every run');
+    expect(
+      sample.farCalls,
+      0,
+      reason: 'node intersection must not enqueue every run',
+    );
   });
 
-  testWidgets('a viewport containing more than 64 decoded images stays idle', (tester) async {
+  testWidgets('a viewport containing more than 64 decoded images stays idle', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(800, 6000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -317,46 +355,32 @@ void _additionalResourceTests() {
     expect(sample.unique, 80, reason: 'live demand may exceed the cold budget');
   });
 
-  testWidgets('an offstage batch captures each source only once', (tester) async {
-    final previous = ui.Image.onCreate;
-    var captures = 0;
-    ui.Image.onCreate = (image) {
-      previous?.call(image);
-      if (image.width == 34 && image.height == 22) captures++;
-    };
-    final key = GlobalKey<_PreviewHostState>();
-    try {
-      await tester.pumpWidget(_viewport(_PreviewHost(
-        key: key, nodes: _mathNodes(12), producer: _SolidOffstagePreviewer(),
-      )));
-      for (var i = 0; i < 40 && key.currentState!.pipeline.imagesOf('math').length < 12; i++) {
-        await _frames(tester, 1, decode: true);
-      }
-      expect(key.currentState!.pipeline.imagesOf('math'), hasLength(12));
-      expect(captures, 12, reason: 'one request batch must not start parallel capture loops');
-      await _frames(tester, 4, decode: true);
-      expect(captures, 12);
-    } finally {
-      await tester.pumpWidget(const SizedBox());
-      await tester.pump();
-      ui.Image.onCreate = previous;
-    }
-  });
-
-  testWidgets('cold LRU eviction defers disposal and protects current demand', (tester) async {
+  testWidgets('cold LRU eviction defers disposal and protects current demand', (
+    tester,
+  ) async {
     final producer = _CountingMathPreviewer();
-    final pipeline = RasterPreviewPipeline(previewers: [producer], requestRebuild: (fn) => fn());
+    final pipeline = RasterPreviewPipeline(
+      previewers: [producer],
+      requestRebuild: (fn) => fn(),
+    );
     try {
-      pipeline.setDemand({for (var i = 0; i < 50; i++) (id: 'math', source: _formula(i)): 0});
+      pipeline.setDemand({
+        for (var i = 0; i < 50; i++)
+          (id: 'math-inline', source: _formula(i)): 0,
+      });
       await _frames(tester, 4);
-      expect(pipeline.imagesOf('math'), hasLength(50));
-      final oldest = pipeline.imagesOf('math')[_formula(1)]!;
-      pipeline.touch('math', _formula(0));
+      expect(pipeline.imagesOf('math-inline'), hasLength(50));
+      final oldest = pipeline.imagesOf('math-inline')[_formula(1)]!;
+      pipeline.touch('math-inline', _formula(0));
       pipeline.setDemand({});
       await tester.pump();
-      expect(pipeline.imagesOf('math'), hasLength(48));
-      expect(pipeline.imagesOf('math').containsKey(_formula(0)), isTrue);
-      expect(oldest.debugDisposed, isFalse, reason: 'the retired frame is still alive this frame');
+      expect(pipeline.imagesOf('math-inline'), hasLength(48));
+      expect(pipeline.imagesOf('math-inline').containsKey(_formula(0)), isTrue);
+      expect(
+        oldest.debugDisposed,
+        isFalse,
+        reason: 'the retired frame is still alive this frame',
+      );
       await tester.pump();
       expect(oldest.debugDisposed, isTrue);
     } finally {
@@ -365,22 +389,29 @@ void _additionalResourceTests() {
     }
   });
 
-  testWidgets('reintroducing a cached source restores its pruned geometry', (tester) async {
+  testWidgets('reintroducing a cached source restores its pruned geometry', (
+    tester,
+  ) async {
     final producer = _CountingMathPreviewer();
     final key = GlobalKey<_PreviewHostState>();
-    Future<void> build(List<EditorNode> nodes) => tester.pumpWidget(_viewport(
-      _PreviewHost(key: key, nodes: nodes, producer: producer),
-    ));
+    Future<void> build(List<EditorNode> nodes) => tester.pumpWidget(
+      _viewport(_PreviewHost(key: key, nodes: nodes, producer: producer)),
+    );
     try {
       await build(_mathNodes(1));
       await _frames(tester, 12);
-      final render = tester.renderObject<RenderDocument>(find.byType(DocumentSurface));
+      final render = tester.renderObject<RenderDocument>(
+        find.byType(DocumentSurface),
+      );
       final x = render.caretRectFor(DocPosition(0, _formula(0).length))!.left;
       await build([EditorNode(id: 'plain', kind: 'paragraph', text: 'plain')]);
       await _frames(tester, 3);
       await build(_mathNodes(1));
       await _frames(tester, 4);
-      expect(render.caretRectFor(DocPosition(0, _formula(0).length))!.left, closeTo(x, .01));
+      expect(
+        render.caretRectFor(DocPosition(0, _formula(0).length))!.left,
+        closeTo(x, .01),
+      );
       expect(producer.total, 1);
     } finally {
       await tester.pumpWidget(const SizedBox());

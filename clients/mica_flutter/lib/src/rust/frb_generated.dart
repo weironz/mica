@@ -72,7 +72,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -365784795;
+  int get rustContentHash => -13953110;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -574,6 +574,12 @@ abstract class RustLibApi extends BaseApi {
   });
 
   String crateApiMarkdownMdSerializeInline({required String inlineJson});
+
+  Future<MathPreview?> crateApiRenderRenderMathSvg({
+    required String source,
+    required bool display,
+    required String color,
+  });
 
   Future<String?> crateApiRenderRenderMermaidSvg({
     required String source,
@@ -3886,6 +3892,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<MathPreview?> crateApiRenderRenderMathSvg({
+    required String source,
+    required bool display,
+    required String color,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(source, serializer);
+          sse_encode_bool(display, serializer);
+          sse_encode_String(color, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 100,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_opt_box_autoadd_math_preview,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiRenderRenderMathSvgConstMeta,
+        argValues: [source, display, color],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiRenderRenderMathSvgConstMeta =>
+      const TaskConstMeta(
+        debugName: "render_math_svg",
+        argNames: ["source", "display", "color"],
+      );
+
+  @override
   Future<String?> crateApiRenderRenderMermaidSvg({
     required String source,
     MermaidTheme? theme,
@@ -3899,7 +3942,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 100,
+            funcId: 101,
             port: port_,
           );
         },
@@ -3930,7 +3973,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 101,
+            funcId: 102,
             port: port_,
           );
         },
@@ -4087,6 +4130,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MathPreview dco_decode_box_autoadd_math_preview(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_math_preview(raw);
+  }
+
+  @protected
   MermaidTheme dco_decode_box_autoadd_mermaid_theme(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_mermaid_theme(raw);
@@ -4121,6 +4170,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       clock: dco_decode_i_64(arr[0]),
       payload: dco_decode_list_prim_u_8_strict(arr[1]),
     );
+  }
+
+  @protected
+  double dco_decode_f_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as double;
   }
 
   @protected
@@ -4366,6 +4421,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MathPreview dco_decode_math_preview(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return MathPreview(
+      svg: dco_decode_String(arr[0]),
+      width: dco_decode_f_64(arr[1]),
+      height: dco_decode_f_64(arr[2]),
+      baseline: dco_decode_f_64(arr[3]),
+    );
+  }
+
+  @protected
   MermaidTheme dco_decode_mermaid_theme(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -4428,6 +4497,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   LocalVersion? dco_decode_opt_box_autoadd_local_version(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_local_version(raw);
+  }
+
+  @protected
+  MathPreview? dco_decode_opt_box_autoadd_math_preview(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_math_preview(raw);
   }
 
   @protected
@@ -4730,6 +4805,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MathPreview sse_decode_box_autoadd_math_preview(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_math_preview(deserializer));
+  }
+
+  @protected
   MermaidTheme sse_decode_box_autoadd_mermaid_theme(
     SseDeserializer deserializer,
   ) {
@@ -4762,6 +4845,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_clock = sse_decode_i_64(deserializer);
     var var_payload = sse_decode_list_prim_u_8_strict(deserializer);
     return DocUpdate(clock: var_clock, payload: var_payload);
+  }
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getFloat64();
   }
 
   @protected
@@ -5128,6 +5217,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  MathPreview sse_decode_math_preview(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_svg = sse_decode_String(deserializer);
+    var var_width = sse_decode_f_64(deserializer);
+    var var_height = sse_decode_f_64(deserializer);
+    var var_baseline = sse_decode_f_64(deserializer);
+    return MathPreview(
+      svg: var_svg,
+      width: var_width,
+      height: var_height,
+      baseline: var_baseline,
+    );
+  }
+
+  @protected
   MermaidTheme sse_decode_mermaid_theme(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_dark = sse_decode_bool(deserializer);
@@ -5220,6 +5324,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_local_version(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  MathPreview? sse_decode_opt_box_autoadd_math_preview(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_math_preview(deserializer));
     } else {
       return null;
     }
@@ -5553,6 +5670,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_math_preview(
+    MathPreview self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_math_preview(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_mermaid_theme(
     MermaidTheme self,
     SseSerializer serializer,
@@ -5586,6 +5712,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_64(self.clock, serializer);
     sse_encode_list_prim_u_8_strict(self.payload, serializer);
+  }
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putFloat64(self);
   }
 
   @protected
@@ -5902,6 +6034,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_math_preview(MathPreview self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.svg, serializer);
+    sse_encode_f_64(self.width, serializer);
+    sse_encode_f_64(self.height, serializer);
+    sse_encode_f_64(self.baseline, serializer);
+  }
+
+  @protected
   void sse_encode_mermaid_theme(MermaidTheme self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_bool(self.dark, serializer);
@@ -5984,6 +6125,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_local_version(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_math_preview(
+    MathPreview? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_math_preview(self, serializer);
     }
   }
 
@@ -6222,7 +6376,7 @@ class MicaDocumentImpl extends RustOpaque implements MicaDocument {
   );
 
   /// Export this page's body as Markdown through the SAME engine the cloud uses
-  /// (`mica_markdown::export_markdown`), so a local page's `.md` matches a cloud
+  /// (`mica_md::compat::export_markdown`), so a local page's `.md` matches a cloud
   /// page's byte-for-byte. Image blocks keep their stored ref — use
   /// [`MicaDocument::export_markdown_zip`] when bundling image bytes. Closes the
   /// local-page md-export gap (previously only HTML/PDF existed locally).

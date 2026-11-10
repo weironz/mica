@@ -24,7 +24,7 @@ pub struct MermaidTheme {
     pub success: String,
 }
 
-impl From<&MermaidTheme> for mica_markdown::MermaidHostTheme {
+impl From<&MermaidTheme> for mica_md::MermaidHostTheme {
     fn from(t: &MermaidTheme) -> Self {
         Self {
             dark: t.dark,
@@ -49,6 +49,25 @@ impl From<&MermaidTheme> for mica_markdown::MermaidHostTheme {
 /// `theme` absent keeps merman's own default (light) — which is what the export
 /// path wants, because an exported file is not inside anyone's editor.
 pub fn render_mermaid_svg(source: String, theme: Option<MermaidTheme>) -> Option<String> {
-    let host = theme.as_ref().map(mica_markdown::MermaidHostTheme::from);
-    mica_markdown::render_mermaid_svg(&source, host.as_ref())
+    let host = theme.as_ref().map(mica_md::MermaidHostTheme::from);
+    mica_md::render_mermaid_svg(&source, host.as_ref())
+}
+
+/// Typeset a formula with the same RaTeX layout as HTML export.
+pub fn render_math_svg(source: String, display: bool, color: String) -> Option<MathPreview> {
+    let math = mica_md::render::render_math_svg(&source, display, Some(&color))?;
+    Some(MathPreview {
+        svg: math.svg,
+        width: math.width,
+        height: math.height,
+        baseline: math.baseline,
+    })
+}
+
+/// SVG and its metrics in em, as a concrete type for the bridge.
+pub struct MathPreview {
+    pub svg: String,
+    pub width: f64,
+    pub height: f64,
+    pub baseline: f64,
 }

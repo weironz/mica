@@ -39,10 +39,10 @@
 
 - 核心数据面优先自研、最小化第三方依赖；平台粘合层和复杂领域渲染可用成熟库。新增依赖须有明确豁免并说明理由，不能因已有依赖而无限扩展。
 - 已批准的依赖及用途：
-  - 传输与解析：`http`、`web_socket_channel`、`xml`、`html`；数学渲染：`flutter_math_fork`、Rust `ratex-*`。
+  - 传输与解析：`http`、`web_socket_channel`、`xml`、`html`；数学渲染：Rust `ratex-*`。
   - 桌面集成：`window_manager`、`screen_retriever`、`tray_manager`、`file_picker`、`pasteboard`。
   - 图形与导出：Rust `merman`、`webview2-com`，Dart `flutter_svg`。
-  - Web 引擎绑定：Rust `wasm-bindgen`（仅 `crates/md-wasm` Markdown 引擎、`crates/doc-wasm` 文档/CRDT 核心）+ 构建工具 `wasm-bindgen-cli`（同号钉死，`scripts/check-md-wasm-toolchain.sh` 校验）；`doc-wasm` 只为 wasm 目标打开已有依赖 `getrandom`（`wasm_js`）/ `uuid`（`js`）的浏览器后端。
+  - Web 引擎绑定：Rust `wasm-bindgen`（仅 `crates/md-wasm` Markdown 引擎及其按需渲染器、`crates/doc-wasm` 文档/CRDT 核心）+ 构建工具 `wasm-bindgen-cli`（同号钉死，`scripts/check-md-wasm-toolchain.sh` 校验）；`doc-wasm` 只为 wasm 目标打开已有依赖 `getrandom`（`wasm_js`）/ `uuid`（`js`）的浏览器后端。
 - 平台专用依赖用条件导入 / `cfg` 隔离，禁止进入不支持的平台 bundle；`webview2-com` 只用于 Windows。
 - 托盘仅 Windows 支持；注册失败时降级 `minimize()`，不可 `hide()` 导致窗口无法找回。Mermaid 配色沿用 host theme profile，保留 SVG CSS 属性展开的兼容处理。
 

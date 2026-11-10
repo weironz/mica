@@ -16,17 +16,11 @@ class RasterPreviewPipeline {
   bool _disposed = false;
   final Map<String, Map<String, ui.Image>> _cache = {};
   final Map<String, Map<String, double>> _baselines = {};
-  final Map<String, Set<String>> _pending = {};
-  final Map<String, Map<String, GlobalKey>> _keys = {};
-  final Map<String, Map<String, int>> _tries = {};
   final Map<String, Set<String>> _failed = {};
   final Map<PreviewResourceKey, Object> _tickets = {};
   Map<PreviewResourceKey, double>? _demand;
   bool _demandScheduled = false;
   bool _rebuildScheduled = false;
-  bool _captureScheduled = false;
-  bool _capturing = false;
-  bool _captureAgain = false;
   static const _maxPerPreviewer = 48;
 
   MicaTokens get tokens => _tokens;
@@ -41,9 +35,6 @@ class RasterPreviewPipeline {
       map.clear();
     }
     _baselines.clear();
-    _pending.clear();
-    _keys.clear();
-    _tries.clear();
     _tickets.clear();
     _failed.clear();
   }
@@ -60,9 +51,6 @@ class RasterPreviewPipeline {
     for (final key in _tickets.keys.toList()) {
       if (value.containsKey(key)) continue;
       _tickets.remove(key);
-      _pending[key.id]?.remove(key.source);
-      _keys[key.id]?.remove(key.source);
-      _tries[key.id]?.remove(key.source);
     }
     if (_demandScheduled) return;
     _demandScheduled = true;
@@ -125,22 +113,22 @@ class RasterPreviewPipeline {
     PreviewResourceKey key,
     Object ticket,
     int generation,
-    ui.Image? image,
+    RasterPreview? preview,
   ) {
+    final image = preview?.image;
     if (!_current(key, ticket, generation) || !_wanted(key)) {
       image?.dispose();
       return;
     }
     _tickets.remove(key);
-    _pending[key.id]?.remove(key.source);
-    _keys[key.id]?.remove(key.source);
-    _tries[key.id]?.remove(key.source);
     if (image == null) {
       (_failed[key.id] ??= {}).add(key.source);
       _baselines[key.id]?.remove(key.source);
     } else {
       final old = imagesOf(key.id)[key.source];
       imagesOf(key.id)[key.source] = image;
+      final baseline = preview?.baseline;
+      if (baseline != null) baselinesOf(key.id)[key.source] = baseline;
       if (old != null && !identical(old, image)) _disposePostFrame(old);
     }
     _cap(key.id);
@@ -161,127 +149,28 @@ class RasterPreviewPipeline {
     final generation = _generation;
     final ticket = Object();
     _tickets[key] = ticket;
-    (_pending[id] ??= {}).add(source);
     try {
-      final direct = previewer.produce(source, targetWidth, _tokens);
-      if (direct != null) {
-        direct.then(
-          (image) => _finish(key, ticket, generation, image),
-          onError: (Object error, StackTrace stack) =>
-              _finish(key, ticket, generation, null),
-        );
-      } else if (previewer.buildOffstage(source, _tokens) != null) {
-        (_keys[id] ??= {})[source] = GlobalKey();
-        _notify();
-      } else {
-        _tickets.remove(key);
-        _pending[id]?.remove(source);
-      }
+      previewer
+          .produce(source, targetWidth, _tokens)
+          .then(
+            (preview) => _finish(key, ticket, generation, preview),
+            onError: (Object error, StackTrace stack) =>
+                _finish(key, ticket, generation, null),
+          );
     } catch (_) {
       _finish(key, ticket, generation, null);
     }
   }
 
-  // All arrivals in a frame share one host rebuild and one capture callback.
-  // The second callback runs after the rebuilt offstage host has painted.
+  // All arrivals in a frame share one rebuild.
   void _notify() {
     if (_disposed || _rebuildScheduled) return;
     _rebuildScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _rebuildScheduled = false;
-      if (_disposed) return;
-      requestRebuild(() {});
-      if (_keys.values.any((keys) => keys.isNotEmpty) && !_captureScheduled) {
-        _captureScheduled = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _captureScheduled = false;
-          _capture();
-        });
-      }
+      if (!_disposed) requestRebuild(() {});
     });
     WidgetsBinding.instance.scheduleFrame();
-  }
-
-  Widget offstageHost() => Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      for (final previewer in previewers)
-        for (final entry
-            in (_keys[previewer.id] ?? const <String, GlobalKey>{}).entries)
-          _offstageWidget(previewer, entry.key, entry.value),
-    ],
-  );
-
-  Widget _offstageWidget(
-    RasterPreviewer previewer,
-    String source,
-    GlobalKey key,
-  ) => RepaintBoundary(
-    key: key,
-    child: _BaselineTap(
-      onBaseline: (value) {
-        if (value != null &&
-            !_disposed &&
-            identical(_keys[previewer.id]?[source], key)) {
-          baselinesOf(previewer.id)[source] = value;
-        }
-      },
-      child:
-          previewer.buildOffstage(source, _tokens) ?? const SizedBox.shrink(),
-    ),
-  );
-
-  Future<void> _capture() async {
-    if (_disposed) return;
-    if (_capturing) {
-      _captureAgain = true;
-      return;
-    }
-    _capturing = true;
-    final generation = _generation;
-    try {
-      for (final previewer in previewers) {
-        final sources = _keys[previewer.id]?.keys.toList() ?? const <String>[];
-        for (final source in sources) {
-          final key = (id: previewer.id, source: source);
-          final ticket = _tickets[key];
-          if (ticket == null) continue;
-          final boundary = _keys[previewer.id]?[source]?.currentContext
-              ?.findRenderObject();
-          ui.Image? image;
-          var captured = false;
-          try {
-            if (boundary is RenderRepaintBoundary) {
-              image = await boundary.toImage(
-                pixelRatio: EditorTheme.mathPixelRatio,
-              );
-              captured = true;
-            }
-          } catch (_) {
-            /* Not painted yet: retry with a finite budget below. */
-          }
-          if (!_current(key, ticket, generation)) {
-            image?.dispose();
-            continue;
-          }
-          if (captured) {
-            _finish(key, ticket, generation, image);
-          } else {
-            final tries = ((_tries[key.id] ??= {})[source] ?? 0) + 1;
-            _tries[key.id]![source] = tries;
-            if (tries > 20) _finish(key, ticket, generation, null);
-          }
-        }
-      }
-    } finally {
-      _capturing = false;
-      if (!_disposed &&
-          (_captureAgain || _keys.values.any((keys) => keys.isNotEmpty))) {
-        _captureAgain = false;
-        _notify();
-      }
-    }
   }
 
   void dispose() {
@@ -295,9 +184,6 @@ class RasterPreviewPipeline {
     }
     _cache.clear();
     _baselines.clear();
-    _pending.clear();
-    _keys.clear();
-    _tries.clear();
     _tickets.clear();
     _failed.clear();
     _demand = null;

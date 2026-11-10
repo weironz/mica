@@ -274,7 +274,7 @@ void main() {
         find.byType(DocumentSurface),
       );
       if (surface.nodes.single.text.isNotEmpty &&
-          surface.previewImages['math']?[r'\rightarrow'] != null) {
+          surface.previewImages['math-inline']?[r'\rightarrow'] != null) {
         break;
       }
     }
@@ -292,7 +292,7 @@ void main() {
       reason: 'rich HTML must win over single-line plain math fast path',
     );
     expect(
-      surface.previewImages['math']?[r'\rightarrow'],
+      surface.previewImages['math-inline']?[r'\rightarrow'],
       isNotNull,
       reason: 'the real editor must rasterize the arrow, not just store a mark',
     );
