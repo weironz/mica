@@ -6,7 +6,8 @@ use std::collections::{HashMap, HashSet};
 use axum::{Json, extract::State, http::HeaderMap};
 use mica_app_core::AppState;
 use mica_infra::{ApiError, ApiResult};
-use mica_markdown::{Block, DocumentSnapshotPayload, export_markdown, import_markdown_fragment};
+use mica_md::compat::{export_markdown, import_markdown_fragment};
+use mica_md::{Block, DocumentSnapshotPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

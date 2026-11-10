@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use mica_markdown::{export_html, import_markdown};
+use mica_md::compat::{export_html, import_markdown};
 use serde_json::Value;
 
 /// Passing examples must never decrease. Raise this when the engine improves

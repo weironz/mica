@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use mica_markdown::{export_html, import_markdown};
+use mica_md::compat::{export_html, import_markdown};
 use serde_json::Value;
 
 const BASELINE_PASS: usize = 24; // 24/24 — GFM extensions complete, 2026-06-05
@@ -72,7 +72,7 @@ fn gfm_extension_scoreboard() {
 /// now.
 #[test]
 fn a_url_shaped_label_is_still_a_link() {
-  use mica_markdown::import_markdown;
+  use mica_md::compat::import_markdown;
 
   let one = |md: &str| {
     let snap = import_markdown(md, "root");

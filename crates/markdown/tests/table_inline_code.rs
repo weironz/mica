@@ -3,7 +3,8 @@
 //! those marks — and a missing/`null` stored cell must export as empty, never
 //! as the literal word "null".
 
-use mica_markdown::{export_html, export_markdown, import_markdown, payload_from_value};
+use mica_markdown::payload_from_value;
+use mica_md::compat::{export_html, export_markdown, import_markdown};
 use serde_json::json;
 
 #[test]

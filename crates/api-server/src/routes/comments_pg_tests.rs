@@ -103,7 +103,7 @@ async fn seed(db: &PgPool) -> (Uuid, Uuid, Uuid) {
   .execute(db)
   .await
   .unwrap();
-  let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(json!({
+  let payload: mica_md::DocumentSnapshotPayload = serde_json::from_value(json!({
       "schema_version": 1,
       "root_block_id": "r",
       "blocks": [

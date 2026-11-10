@@ -14,8 +14,8 @@
 //! when there is nothing nested to lose.
 
 fn round_trip(src: &str) -> String {
-  let parsed = mica_markdown::import_markdown(src, "root");
-  mica_markdown::export_markdown(&parsed)
+  let parsed = mica_md::compat::import_markdown(src, "root");
+  mica_md::compat::export_markdown(&parsed)
     .unwrap()
     .trim()
     .to_string()

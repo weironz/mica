@@ -58,7 +58,7 @@ async fn seed_doc(db: &PgPool) -> (Uuid, Uuid, Uuid) {
   .unwrap();
   // Straight into the yrs base — since S5 the only place content lives. This
   // used to insert an op-model snapshot and leave the base to the lazy bridge.
-  let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(json!({
+  let payload: mica_md::DocumentSnapshotPayload = serde_json::from_value(json!({
       "schema_version": 1,
       "root_block_id": "r",
       "blocks": [

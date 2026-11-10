@@ -111,7 +111,7 @@ async fn seed_base(db: &PgPool, doc_id: Uuid, blocks: serde_json::Value) {
       }),
     );
   }
-  let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(serde_json::json!({
+  let payload: mica_md::DocumentSnapshotPayload = serde_json::from_value(serde_json::json!({
     "schema_version": 1,
     "root_block_id": "root",
     "blocks": blocks,

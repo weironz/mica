@@ -1,4 +1,4 @@
-use mica_markdown::{export_markdown, import_markdown};
+use mica_md::compat::{export_markdown, import_markdown};
 
 #[test]
 fn unclosed_math_keeps_all_following_text() {

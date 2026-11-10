@@ -995,15 +995,14 @@ mod tests {
       .execute(&db)
       .await
       .unwrap();
-      let payload: mica_markdown::DocumentSnapshotPayload =
-        serde_json::from_value(serde_json::json!({
-            "schema_version": 1, "root_block_id": "r",
-            "blocks": [
-                {"id": "r", "type": "page", "children": ["i"]},
-                {"id": "i", "type": "image", "data": {"file_id": file}}
-            ]
-        }))
-        .unwrap();
+      let payload: mica_md::DocumentSnapshotPayload = serde_json::from_value(serde_json::json!({
+          "schema_version": 1, "root_block_id": "r",
+          "blocks": [
+              {"id": "r", "type": "page", "children": ["i"]},
+              {"id": "i", "type": "image", "data": {"file_id": file}}
+          ]
+      }))
+      .unwrap();
       let mut tx = db.begin().await.unwrap();
       mica_app_core::sync::seed_base_tx(&mut tx, doc, payload)
         .await

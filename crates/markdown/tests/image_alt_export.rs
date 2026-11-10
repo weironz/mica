@@ -1,6 +1,6 @@
 //! Image alt marks stay inside the image; equal-range marks must not become outer links.
 //! Mirrored by clients/mica_flutter/test/image_alt_export_test.dart.
-use mica_markdown::{export_markdown, import_markdown};
+use mica_md::compat::{export_markdown, import_markdown};
 
 #[test]
 fn inline_image_alt_marks_and_real_outer_links_survive() {
@@ -118,7 +118,7 @@ fn image_blocks_escape_literal_alt_and_preserve_title() {
     for (md, expected_url) in [
       (export_markdown(&parsed).unwrap(), "/img"),
       (
-        mica_markdown::export_markdown_with_assets(&parsed, &assets).unwrap(),
+        mica_md::compat::export_markdown_with_assets(&parsed, &assets).unwrap(),
         "assets/image.png",
       ),
     ] {

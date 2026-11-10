@@ -2101,6 +2101,7 @@ dependencies = [
  "mica-infra",
  "mica-interchange",
  "mica-markdown",
+ "mica-md",
  "rand_core 0.6.4",
  "reqwest",
  "serde",
@@ -2137,6 +2138,7 @@ dependencies = [
  "mica-core",
  "mica-infra",
  "mica-markdown",
+ "mica-md",
  "serde",
  "serde_json",
  "sqlx",
@@ -2169,7 +2171,7 @@ name = "mica-core"
 version = "0.1.0"
 dependencies = [
  "base64",
- "mica-markdown",
+ "mica-md",
  "proptest",
  "rusqlite",
  "serde",
@@ -2215,6 +2217,7 @@ name = "mica-interchange"
 version = "0.1.0"
 dependencies = [
  "mica-markdown",
+ "mica-md",
  "proptest",
  "serde_json",
 ]

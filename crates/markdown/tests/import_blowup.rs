@@ -28,7 +28,7 @@ const BLOWUP: &str = include_str!("data/vhost-user-42.md");
 
 #[test]
 fn a_real_page_imports_without_a_runaway_allocation() {
-  let payload = mica_markdown::import_markdown(BLOWUP, "root");
+  let payload = mica_md::compat::import_markdown(BLOWUP, "root");
   // Reaching here at all IS the assertion: the failure mode is an abort, not
   // a wrong answer. The block count only guards the opposite over-correction
   // — a parser that "fixes" this by returning nothing.
@@ -49,9 +49,9 @@ fn a_real_page_imports_without_a_runaway_allocation() {
 #[test]
 fn a_paragraph_indented_with_no_break_spaces_after_a_list() {
   let src = "1. a\n2. b\n\n\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}\u{a0}x\n";
-  let payload = mica_markdown::import_markdown(src, "root");
+  let payload = mica_md::compat::import_markdown(src, "root");
   assert!(!payload.blocks.is_empty());
-  let out = mica_markdown::export_markdown(&payload).expect("export should succeed");
+  let out = mica_md::compat::export_markdown(&payload).expect("export should succeed");
   assert!(!out.is_empty());
 }
 
@@ -59,7 +59,7 @@ fn a_paragraph_indented_with_no_break_spaces_after_a_list() {
 /// import to export does not read as green.
 #[test]
 fn the_same_page_round_trips() {
-  let payload = mica_markdown::import_markdown(BLOWUP, "root");
-  let out = mica_markdown::export_markdown(&payload).expect("export should succeed");
+  let payload = mica_md::compat::import_markdown(BLOWUP, "root");
+  let out = mica_md::compat::export_markdown(&payload).expect("export should succeed");
   assert!(!out.is_empty());
 }

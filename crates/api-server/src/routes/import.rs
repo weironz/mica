@@ -13,9 +13,10 @@ use axum::{
   extract::{Path, Query, State},
   http::HeaderMap,
 };
-use mica_app_core::{AppState, ImportJob, ImportJobStatus, documents::import_markdown};
+use mica_app_core::{AppState, ImportJob, ImportJobStatus};
 use mica_infra::{ApiError, ApiResult};
 use mica_interchange::{ImportMode, ImportPlan, plan_import, read_zip, resolve_ref};
+use mica_md::compat::import_markdown;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
@@ -1391,11 +1392,7 @@ async fn insert_folder(
 ///
 /// Extracted so the rule is testable: `run_import` builds a page's payload here
 /// and nowhere else, and the image rewiring downstream only edits blocks.
-fn page_seed(
-  markdown: &str,
-  title: &str,
-  root_block_id: &str,
-) -> mica_app_core::documents::DocumentSnapshotPayload {
+fn page_seed(markdown: &str, title: &str, root_block_id: &str) -> mica_md::DocumentSnapshotPayload {
   let mut payload = import_markdown(markdown, root_block_id);
   mica_markdown::set_document_title(&mut payload, title);
   payload
@@ -1416,7 +1413,7 @@ async fn insert_page(
   // Kept in the signature even though `payload` carries the same id: callers
   // pre-generate it to seed the page, and the argument documents that pairing.
   _root_block_id: &str,
-  payload: &mica_app_core::documents::DocumentSnapshotPayload,
+  payload: &mica_md::DocumentSnapshotPayload,
   // Returns the DOCUMENT id, not the view id. They are different ids, and the
   // one the `rehost-image` endpoint takes — the one an image failure has to be
   // addressed to — is this one.
@@ -1653,7 +1650,7 @@ mod import_pg {
     for id in ["p1", "p2", "p3"] {
       payloads.insert(
         format!("obj-{id}"),
-        mica_markdown::import_markdown("正文。", "root"),
+        mica_md::compat::import_markdown("正文。", "root"),
       );
     }
     let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
@@ -1772,7 +1769,7 @@ mod import_pg {
     for n in &nodes {
       payloads.insert(
         n.object_id.clone(),
-        mica_markdown::import_markdown("正文。", "root"),
+        mica_md::compat::import_markdown("正文。", "root"),
       );
     }
     let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())

@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::documents::{DocumentOperation, DocumentSnapshotPayload, apply_operations};
+use mica_md::DocumentSnapshotPayload;
+
+use crate::documents::{DocumentOperation, apply_operations};
 
 /// Persistent document row. Shared by the REST and WebSocket write paths so
 /// both go through exactly one storage representation.

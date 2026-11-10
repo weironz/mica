@@ -26,11 +26,9 @@ futures-util.workspace = true
 hmac.workspace = true
 jsonwebtoken.workspace = true
 mica-app-core = { path = "../app-core" }
-# Feature switch only: turns on mica-markdown's `render` so cloud HTML/PDF export
-# renders math (→ MathML) + mermaid (→ SVG) server-side, matching the desktop
-# FFI. The export fns are used via app-core's re-export; this direct dep just
-# flips the feature (cargo unifies it across the api-server build graph). Pulls
-# the merman engine → needs Rust ≥1.95 in the server build image.
+mica-md = { path = "../md-core" }
+# Standalone HTML/PDF uses the facade; its render feature also enables rich
+# rendering for the direct mica-md HTML fragment calls in this build.
 mica-markdown = { path = "../markdown", features = ["render"] }
 mica-infra = { path = "../infra" }
 mica-interchange = { path = "../interchange" }

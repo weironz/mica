@@ -3,14 +3,9 @@ use axum::{
   extract::{Path, State},
   http::HeaderMap,
 };
-use mica_app_core::{
-  AppState,
-  documents::{
-    DocumentOperation, export_markdown_with_assets, import_markdown, import_markdown_fragment,
-  },
-  store,
-};
+use mica_app_core::{AppState, documents::DocumentOperation, store};
 use mica_infra::{ApiError, ApiResult};
+use mica_md::compat::{export_markdown_with_assets, import_markdown, import_markdown_fragment};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -479,10 +474,10 @@ pub async fn document_outline(
 /// top-level block id and (for `heading` blocks) a heading entry. Testable
 /// without a DB.
 pub(super) fn outline_from_payload(
-  payload: &mica_app_core::documents::DocumentSnapshotPayload,
+  payload: &mica_md::DocumentSnapshotPayload,
   seq: i64,
 ) -> DocumentOutlineResponse {
-  let by_id: std::collections::HashMap<&str, &mica_app_core::documents::Block> =
+  let by_id: std::collections::HashMap<&str, &mica_md::Block> =
     payload.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
   let mut headings = Vec::new();
   let mut block_ids = Vec::new();
@@ -510,7 +505,7 @@ pub(super) fn outline_from_payload(
 
 fn outline_walk(
   id: &str,
-  by_id: &std::collections::HashMap<&str, &mica_app_core::documents::Block>,
+  by_id: &std::collections::HashMap<&str, &mica_md::Block>,
   headings: &mut Vec<OutlineHeading>,
   block_ids: &mut Vec<String>,
 ) {
@@ -652,7 +647,7 @@ pub async fn update_document_markdown(
 /// [workspace_id] scopes the blob hrefs this may rewire back into file
 /// references — see [rewire_blob_hrefs].
 pub(super) fn markdown_update_ops(
-  current: &mica_app_core::documents::DocumentSnapshotPayload,
+  current: &mica_md::DocumentSnapshotPayload,
   request: &UpdateMarkdownRequest,
   workspace_id: Uuid,
 ) -> Result<Vec<DocumentOperation>, String> {
@@ -834,7 +829,7 @@ pub(super) fn markdown_update_ops(
     }
   };
 
-  let by_id: std::collections::HashMap<&str, &mica_app_core::documents::Block> =
+  let by_id: std::collections::HashMap<&str, &mica_md::Block> =
     parsed.blocks.iter().map(|b| (b.id.as_str(), b)).collect();
   graft_ops(&tmp_root, root_id, start_index, &by_id, &mut ops);
   Ok(ops)
@@ -848,7 +843,7 @@ fn graft_ops(
   parsed_parent: &str,
   op_parent: &str,
   start_index: Option<usize>,
-  by_id: &std::collections::HashMap<&str, &mica_app_core::documents::Block>,
+  by_id: &std::collections::HashMap<&str, &mica_md::Block>,
   ops: &mut Vec<DocumentOperation>,
 ) {
   let Some(parent) = by_id.get(parsed_parent) else {
@@ -876,19 +871,19 @@ mod markdown_update_tests {
   use super::*;
 
   /// A one-paragraph document to write into.
-  fn current_doc() -> mica_app_core::documents::DocumentSnapshotPayload {
-    mica_app_core::documents::DocumentSnapshotPayload {
+  fn current_doc() -> mica_md::DocumentSnapshotPayload {
+    mica_md::DocumentSnapshotPayload {
       schema_version: 1,
       root_block_id: "root".to_string(),
       blocks: vec![
-        mica_app_core::documents::Block {
+        mica_md::Block {
           id: "root".to_string(),
           kind: "paragraph".to_string(),
           text: String::new(),
           data: serde_json::json!({"front_matter": "title: Kept"}),
           children: vec!["p1".to_string()],
         },
-        mica_app_core::documents::Block {
+        mica_md::Block {
           id: "p1".to_string(),
           kind: "paragraph".to_string(),
           text: "existing".to_string(),
@@ -1010,7 +1005,7 @@ mod tests {
 
   #[test]
   fn outline_lists_headings_and_block_ids_in_document_order() {
-    use mica_app_core::documents::{Block, DocumentSnapshotPayload};
+    use mica_md::{Block, DocumentSnapshotPayload};
     let blk = |id: &str, kind: &str, text: &str, data: serde_json::Value, kids: Vec<&str>| Block {
       id: id.into(),
       kind: kind.into(),
@@ -1059,8 +1054,8 @@ mod tests {
     );
   }
 
-  fn doc_with_children(kids: &[&str]) -> mica_app_core::documents::DocumentSnapshotPayload {
-    use mica_app_core::documents::{Block, DocumentSnapshotPayload};
+  fn doc_with_children(kids: &[&str]) -> mica_md::DocumentSnapshotPayload {
+    use mica_md::{Block, DocumentSnapshotPayload};
     let mut blocks = vec![Block {
       id: "root".into(),
       kind: "page".into(),
@@ -1267,7 +1262,7 @@ mod tests {
 
   #[test]
   fn markdown_update_find_replace_preserves_formatted_blocks() {
-    use mica_app_core::documents::{Block, DocumentSnapshotPayload};
+    use mica_md::{Block, DocumentSnapshotPayload};
     // Removing the prefix must shift the link's UTF-16 range with its text.
     let payload = DocumentSnapshotPayload {
       schema_version: 1,

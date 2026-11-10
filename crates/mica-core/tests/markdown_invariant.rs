@@ -6,7 +6,8 @@
 //! the markdown authority, and is the §10 red-line "round-trip is invariant".
 
 use mica_core::{Block as CoreBlock, MicaDoc};
-use mica_markdown::{export_markdown, import_markdown, Block as MdBlock, DocumentSnapshotPayload};
+use mica_md::compat::{export_markdown, import_markdown};
+use mica_md::{Block as MdBlock, DocumentSnapshotPayload};
 
 fn md_blocks_to_core(blocks: &[MdBlock]) -> Vec<CoreBlock> {
   // markdown::Block and mica_core::Block share an identical serde shape.

@@ -5,7 +5,8 @@
 
 use std::collections::BTreeMap;
 
-use mica_markdown::{export_html_document, import_markdown, set_image_srcs};
+use mica_markdown::export_html_document;
+use mica_md::compat::{import_markdown, set_image_srcs};
 
 #[test]
 fn wraps_fragment_in_standalone_document() {

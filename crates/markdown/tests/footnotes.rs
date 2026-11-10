@@ -6,7 +6,7 @@
 //! export uses the GFM shape: superscript reference links plus a trailing
 //! <section class="footnotes"> with backlinks.
 
-use mica_markdown::{export_html, export_markdown, import_markdown};
+use mica_md::compat::{export_html, export_markdown, import_markdown};
 
 /// import→export, asserting the Markdown comes back unchanged (trailing
 /// whitespace aside).

@@ -8,13 +8,14 @@ use axum::{
 };
 use mica_app_core::{
   AppState,
-  documents::{
-    DocumentSnapshotPayload, document_title, export_html_document, export_markdown_with_assets,
-    set_image_srcs, with_page_title,
-  },
   store::{self},
 };
 use mica_infra::{ApiError, ApiResult};
+use mica_markdown::{document_title, export_html_document, with_page_title};
+use mica_md::{
+  DocumentSnapshotPayload,
+  compat::{export_markdown_with_assets, set_image_srcs},
+};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -133,7 +134,7 @@ pub async fn export_document_zip(
 async fn collect_assets(
   state: &AppState,
   workspace_id: Uuid,
-  blocks: &[mica_app_core::documents::Block],
+  blocks: &[mica_md::Block],
   entries: &mut Vec<ZipEntry>,
 ) -> ApiResult<BTreeMap<String, String>> {
   // file_id -> original name, in document order.
@@ -837,7 +838,7 @@ impl TreeAssetInventory {
     &mut self,
     db: &sqlx::PgPool,
     workspace_id: Uuid,
-    payload: &mica_app_core::documents::DocumentSnapshotPayload,
+    payload: &mica_md::DocumentSnapshotPayload,
   ) -> ApiResult<()> {
     let mut needed: Vec<String> = Vec::new();
     for block in &payload.blocks {
@@ -1256,7 +1257,7 @@ pub(super) fn blob_href(workspace_id: Uuid, file_id: &str, name: &str) -> String
 /// block; spending it on a href costs no query and makes the export fetchable.
 /// The ZIP exports keep their own `assets/` map — bytes travel with those.
 pub(super) fn blob_asset_map(
-  blocks: &[mica_app_core::documents::Block],
+  blocks: &[mica_md::Block],
   workspace_id: Uuid,
 ) -> BTreeMap<String, String> {
   let mut map = BTreeMap::new();
@@ -1314,10 +1315,7 @@ fn parse_blob_href(href: &str, workspace_id: Uuid) -> Option<(String, String)> {
 /// quietly downgrade every uploaded image into an external link pointing at
 /// itself — still rendering, but no longer a reference, so blob GC would stop
 /// counting it and eventually delete the bytes out from under the page.
-pub(super) fn rewire_blob_hrefs(
-  blocks: &mut [mica_app_core::documents::Block],
-  workspace_id: Uuid,
-) {
+pub(super) fn rewire_blob_hrefs(blocks: &mut [mica_md::Block], workspace_id: Uuid) {
   for block in blocks {
     if block.kind != "image" {
       continue;
@@ -1433,7 +1431,7 @@ async fn workspace_markdown(
     // quietly becoming the answer here.
     let title = payload
       .as_ref()
-      .and_then(mica_markdown::document_title)
+      .and_then(document_title)
       .unwrap_or(view.name.as_str());
     out.push_str(&"#".repeat(level));
     out.push(' ');
@@ -1538,7 +1536,7 @@ pub async fn export_document_html(
 async fn collect_asset_data_uris(
   state: &AppState,
   workspace_id: Uuid,
-  blocks: &[mica_app_core::documents::Block],
+  blocks: &[mica_md::Block],
 ) -> ApiResult<BTreeMap<String, String>> {
   let mut wanted: Vec<String> = Vec::new();
   for block in blocks {
@@ -1598,10 +1596,7 @@ async fn collect_asset_data_uris(
 /// capability URL (mounted without the scope guard in
 /// `routes::public_api_router`), so it resolves on an unauthenticated share
 /// page too.
-pub(super) fn inline_blob_hrefs(
-  blocks: &mut [mica_app_core::documents::Block],
-  workspace_id: Uuid,
-) {
+pub(super) fn inline_blob_hrefs(blocks: &mut [mica_md::Block], workspace_id: Uuid) {
   for block in blocks {
     if block.kind != "image" {
       continue;
@@ -1651,8 +1646,8 @@ mod tests {
   }
 
   /// An image block carrying [data] — the only field these tests vary.
-  fn image_block(data: serde_json::Value) -> mica_app_core::documents::Block {
-    mica_app_core::documents::Block {
+  fn image_block(data: serde_json::Value) -> mica_md::Block {
+    mica_md::Block {
       id: "img_1".to_string(),
       kind: "image".to_string(),
       text: String::new(),

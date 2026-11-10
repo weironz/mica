@@ -527,7 +527,7 @@ impl LocalStore {
         // construction the FFI used (`MicaDocument::from_markdown`).
         _ => {
           let block_root = format!("block_{}", uuid::Uuid::new_v4());
-          let payload = mica_markdown::import_markdown("", &block_root);
+          let payload = mica_md::compat::import_markdown("", &block_root);
           let doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
           self.save_doc(&v.origin, &new_doc_id, &doc)?;
         }
@@ -711,7 +711,7 @@ mod tests {
       .unwrap();
     for id in ["f", "c", "o"] {
       let root = format!("block_{id}");
-      let payload = mica_markdown::import_markdown("x", &root);
+      let payload = mica_md::compat::import_markdown("x", &root);
       let doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
       store.save_doc("local", &format!("doc_{id}"), &doc).unwrap();
     }
@@ -857,7 +857,7 @@ mod tests {
       .unwrap();
     for id in ["root", "kid", "grandkid"] {
       let root_block = format!("block_{id}");
-      let payload = mica_markdown::import_markdown(&format!("# {id}"), &root_block);
+      let payload = mica_md::compat::import_markdown(&format!("# {id}"), &root_block);
       let doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
       store.save_doc("local", &format!("doc_{id}"), &doc).unwrap();
     }
@@ -897,7 +897,7 @@ mod tests {
   #[test]
   fn clone_writes_the_new_name_into_the_copy_root_title() {
     let (store, _dir) = tmp_store();
-    let payload = mica_markdown::import_markdown("original body", "root");
+    let payload = mica_md::compat::import_markdown("original body", "root");
     let mut doc = MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks);
     assert!(
       doc.set_block_prop("root", "title", &serde_json::json!("Original")),

@@ -1,4 +1,4 @@
-use mica_markdown::{export_markdown, import_markdown};
+use mica_md::compat::{export_markdown, import_markdown};
 
 #[test]
 fn ordered_list_numbers_continue_in_export() {
@@ -86,8 +86,8 @@ fn numbered_export_preserves_html_for_container_children_and_wide_markers() {
     let md = export_markdown(&original).unwrap();
     let after = import_markdown(&md, "root");
     assert_eq!(
-      mica_markdown::export_html(&after).unwrap(),
-      mica_markdown::export_html(&original).unwrap(),
+      mica_md::compat::export_html(&after).unwrap(),
+      mica_md::compat::export_html(&original).unwrap(),
       "{src}\nexported:\n{md}"
     );
   }

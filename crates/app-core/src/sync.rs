@@ -16,7 +16,7 @@
 
 use mica_core::{Block as CoreBlock, DocError, MicaDoc};
 use mica_infra::{ApiError, ApiResult};
-use mica_markdown::DocumentSnapshotPayload;
+use mica_md::DocumentSnapshotPayload;
 use serde::Serialize;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -105,7 +105,7 @@ fn title_from_blocks(blocks: &[mica_core::Block], root_id: &str) -> Option<Strin
   // it avoided the full flatten — it called `to_blocks()` and flattened
   // anyway. The push path now flattens once and shares the blocks.)
   let root = blocks.iter().find(|b| b.id == root_id)?.clone();
-  let payload = mica_markdown::DocumentSnapshotPayload {
+  let payload = mica_md::DocumentSnapshotPayload {
     schema_version: 1,
     root_block_id: root_id.to_string(),
     blocks: vec![root],
@@ -174,9 +174,9 @@ pub fn content_text_from_blocks(blocks: &[mica_core::Block], root_id: &str) -> S
 /// that carries the tag, not one whose body merely mentions "work". A plain typed
 /// search for `work` still finds it, because `work` is a substring of `#work`.
 fn searchable_metadata(front_matter: &str) -> String {
-  use mica_markdown::properties::PropertyValue;
+  use mica_md::properties::PropertyValue;
   let mut parts: Vec<String> = Vec::new();
-  for prop in mica_markdown::properties::parse_properties(front_matter) {
+  for prop in mica_md::properties::parse_properties(front_matter) {
     match prop.value {
       PropertyValue::List(items) => parts.extend(items.into_iter().map(|it| format!("#{it}"))),
       PropertyValue::Text(s) if !s.is_empty() => parts.push(s),
@@ -555,7 +555,7 @@ pub fn empty_payload(root_block_id: &str) -> DocumentSnapshotPayload {
   DocumentSnapshotPayload {
     schema_version: 1,
     root_block_id: root_block_id.to_string(),
-    blocks: vec![mica_markdown::Block {
+    blocks: vec![mica_md::Block {
       id: root_block_id.to_string(),
       kind: "paragraph".to_string(),
       text: String::new(),
@@ -1133,21 +1133,21 @@ mod tests {
       schema_version: 1,
       root_block_id: root_id.clone(),
       blocks: vec![
-        mica_markdown::Block {
+        mica_md::Block {
           id: "r".into(),
           kind: "page".into(),
           text: String::new(),
           data: json!(null),
           children: vec!["a".into(), "b".into()],
         },
-        mica_markdown::Block {
+        mica_md::Block {
           id: "a".into(),
           kind: "paragraph".into(),
           text: "Hello".into(),
           data: json!({ "marks": [{ "start": 0, "end": 5, "type": "bold" }] }),
           children: vec![],
         },
-        mica_markdown::Block {
+        mica_md::Block {
           id: "b".into(),
           kind: "heading".into(),
           text: "Title".into(),

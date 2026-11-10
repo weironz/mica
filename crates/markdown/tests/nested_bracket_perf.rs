@@ -20,7 +20,7 @@
 
 fn parse_ms(src: &str) -> u128 {
   let started = std::time::Instant::now();
-  let payload = mica_markdown::import_markdown(src, "root");
+  let payload = mica_md::compat::import_markdown(src, "root");
   assert!(!payload.blocks.is_empty(), "sanity: it should still parse");
   started.elapsed().as_millis()
 }
@@ -137,7 +137,7 @@ fn deep_image_nesting_does_not_overflow_the_stack() {
     let src = format!("{}a{}", unit.repeat(5000), "](u)".repeat(5000));
     let payload = std::thread::Builder::new()
       .stack_size(2 * 1024 * 1024)
-      .spawn(move || mica_markdown::import_markdown(&src, "root"))
+      .spawn(move || mica_md::compat::import_markdown(&src, "root"))
       .unwrap()
       .join()
       .expect("must not panic");

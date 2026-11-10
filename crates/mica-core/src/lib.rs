@@ -1,6 +1,6 @@
 //! Mica core — the shared, storage/transport-agnostic data plane (Phase 2).
 //!
-//! - [`block`]: the flat block DTO (re-export of `mica_markdown::Block`, the
+//! - [`block`]: the flat block DTO (re-export of `mica_md::Block`, the
 //!   single definition shared with the markdown/REST model).
 //! - [`marks`]: inline marks ↔ yrs `Text` formatting attributes.
 //! - [`doc`]: the yrs CRDT document model ([`doc::MicaDoc`]) — P2-M1.

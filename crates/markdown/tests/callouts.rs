@@ -4,7 +4,7 @@
 //! The shared-fixture `24-callouts` pins the block shape; this file pins the
 //! edges the fixture corpus can't express (HTML classes, degradation).
 
-use mica_markdown::{export_html, export_markdown, import_markdown};
+use mica_md::compat::{export_html, export_markdown, import_markdown};
 
 fn head_alert(md: &str) -> Option<String> {
   let payload = import_markdown(md, "root");

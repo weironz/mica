@@ -11,7 +11,7 @@
 
 fn import_ms(src: &str) -> u128 {
   let started = std::time::Instant::now();
-  let payload = mica_markdown::import_markdown(src, "root");
+  let payload = mica_md::compat::import_markdown(src, "root");
   assert!(!payload.blocks.is_empty(), "sanity: it should still parse");
   started.elapsed().as_millis()
 }
@@ -105,9 +105,9 @@ fn unclosed_html_comments_are_not_quadratic() {
 /// BOTH the markdown and HTML paths.
 #[test]
 fn mark_sweeps_are_not_quadratic() {
-  let payload = mica_markdown::import_markdown(&"**a** ".repeat(20_000), "root");
+  let payload = mica_md::compat::import_markdown(&"**a** ".repeat(20_000), "root");
   let t = std::time::Instant::now();
-  let md = mica_markdown::export_markdown(&payload).expect("markdown export should succeed");
+  let md = mica_md::compat::export_markdown(&payload).expect("markdown export should succeed");
   let md_ms = t.elapsed().as_millis();
   eprintln!("export_markdown on 20000 bold marks: {md_ms}ms");
   assert!(!md.is_empty(), "sanity: it should still export");
@@ -116,7 +116,7 @@ fn mark_sweeps_are_not_quadratic() {
     "export_markdown on 20000 marks took {md_ms}ms — render_span scans all marks per segment again"
   );
   let t = std::time::Instant::now();
-  let html = mica_markdown::export_html(&payload).expect("html export should succeed");
+  let html = mica_md::compat::export_html(&payload).expect("html export should succeed");
   let html_ms = t.elapsed().as_millis();
   eprintln!("export_html on 20000 bold marks: {html_ms}ms");
   assert!(!html.is_empty(), "sanity: it should still export");

@@ -1,6 +1,6 @@
-use mica_markdown::{export_markdown, import_markdown};
+use mica_md::compat::{export_markdown, import_markdown};
 
-fn assert_code_round_trip(snapshot: mica_markdown::DocumentSnapshotPayload) {
+fn assert_code_round_trip(snapshot: mica_md::DocumentSnapshotPayload) {
   let exported = export_markdown(&snapshot).unwrap();
   let first = import_markdown(&exported, "root");
   let one = first

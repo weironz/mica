@@ -6,11 +6,11 @@ use axum::{
 };
 use mica_app_core::{
   AppState,
-  documents::export_html,
   store::{self},
 };
 use mica_infra::ApiResult;
 use mica_markdown::SAFE_HTML_CSP;
+use mica_md::compat::export_html;
 use serde::Serialize;
 use uuid::Uuid;
 

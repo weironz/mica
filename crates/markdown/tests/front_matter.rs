@@ -4,7 +4,7 @@
 //! ignored on HTML export. Boundary cases pin "read the full spec / write a
 //! normalized subset": only a true opening + closing fence counts.
 
-use mica_markdown::{export_html, export_markdown, import_markdown, import_markdown_fragment};
+use mica_md::compat::{export_html, export_markdown, import_markdown, import_markdown_fragment};
 
 fn root_front_matter(md: &str) -> Option<String> {
   let snap = import_markdown(md, "root");

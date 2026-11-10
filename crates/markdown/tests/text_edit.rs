@@ -1,7 +1,6 @@
-use mica_markdown::{
-  Block, block_text_matches, export_markdown, import_markdown, markdown_find_text,
-  replace_block_text,
-};
+use mica_markdown::{block_text_matches, markdown_find_text, replace_block_text};
+use mica_md::Block;
+use mica_md::compat::{export_markdown, import_markdown};
 use serde_json::json;
 
 fn body(markdown: &str) -> Block {

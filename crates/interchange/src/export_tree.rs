@@ -14,9 +14,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use mica_markdown::{
-  DocumentSnapshotPayload, document_title, export_markdown_with_assets, with_page_title,
-};
+use mica_markdown::{document_title, with_page_title};
+use mica_md::{DocumentSnapshotPayload, compat::export_markdown_with_assets};
 
 use crate::zip::ZipEntry;
 
@@ -823,14 +822,14 @@ mod tests {
     }
   }
   fn payload(text: &str) -> DocumentSnapshotPayload {
-    mica_markdown::import_markdown(text, "block_root")
+    mica_md::compat::import_markdown(text, "block_root")
   }
   /// A payload whose body has one image block referencing [file_id] (import
   /// resolves URLs to `file_id` form; we mint it directly to hit the asset path).
   fn payload_with_image(text: &str, file_id: &str) -> DocumentSnapshotPayload {
-    let mut p = mica_markdown::import_markdown(text, "block_root");
+    let mut p = mica_md::compat::import_markdown(text, "block_root");
     let img_id = format!("block_img_{file_id}");
-    p.blocks.push(mica_markdown::Block {
+    p.blocks.push(mica_md::Block {
       id: img_id.clone(),
       kind: "image".to_string(),
       text: String::new(),

@@ -10,9 +10,8 @@
 //!
 //! 每条都放进 512 KiB 栈的子线程跑:修复前是**整个测试进程** SIGSEGV/abort,
 //! 修复后渲染深度被钉在 8,几 KB 栈就够。
-use mica_markdown::{
-  Block, DocumentSnapshotPayload, export_html, export_markdown, import_markdown,
-};
+use mica_md::compat::{export_html, export_markdown, import_markdown};
+use mica_md::{Block, DocumentSnapshotPayload};
 use serde_json::{Value, json};
 
 const SMALL_STACK: usize = 512 * 1024;

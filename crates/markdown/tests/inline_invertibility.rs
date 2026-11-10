@@ -1,4 +1,4 @@
-use mica_markdown::{export_markdown, import_markdown};
+use mica_md::compat::{export_markdown, import_markdown};
 
 fn shape(markdown: &str) -> Vec<(String, String, serde_json::Value)> {
   let snapshot = import_markdown(markdown, "root");
@@ -65,7 +65,7 @@ fn empty_links_keep_their_position_and_destination() {
 fn html_empty_link_behavior_stays_unchanged() {
   let snapshot = import_markdown("a[](/u)b", "root");
   assert_eq!(
-    mica_markdown::export_html(&snapshot).unwrap().trim(),
+    mica_md::compat::export_html(&snapshot).unwrap().trim(),
     "<p>ab</p>"
   );
 }

@@ -53,7 +53,7 @@ async fn pool() -> Option<PgPool> {
 /// same `seed_base_tx` the create/import/clone handlers use.
 async fn seed_doc(db: &PgPool) -> (Uuid, Uuid, Uuid) {
   let (ws, doc, user) = seed_doc_bare(db).await;
-  let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(json!({
+  let payload: mica_md::DocumentSnapshotPayload = serde_json::from_value(json!({
       "schema_version": 1,
       "root_block_id": "r",
       "blocks": [
@@ -1927,7 +1927,7 @@ async fn a_write_round_trips_through_the_base_alone() {
     doc,
     user,
     &[mica_app_core::documents::DocumentOperation::InsertBlock {
-      block: mica_markdown::Block {
+      block: mica_md::Block {
         id: "b1".to_string(),
         kind: "paragraph".to_string(),
         text: "written after S5".to_string(),

@@ -1,10 +1,11 @@
-//! Rich-export rendering (feature `render`): math → MathML, mermaid → SVG.
+//! Rich-export rendering (feature `render`): math → SVG, mermaid → SVG.
 #![cfg(feature = "render")]
 
-use mica_markdown::{export_html_document, import_markdown};
+use mica_markdown::export_html_document;
+use mica_md::compat::import_markdown;
 
 #[test]
-fn math_becomes_mathml_and_mermaid_becomes_svg() {
+fn math_and_mermaid_become_svg() {
   let md = "Inline $\\eta = \\frac{N-1}{N}$ text.\n\n\
               $$E = mc^2$$\n\n\
               ```mermaid\nflowchart LR\n  A[Start] --> B{Go}\n  B -->|Yes| C[世界]\n```\n";

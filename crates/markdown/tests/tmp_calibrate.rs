@@ -3,10 +3,10 @@
 
 fn ms(src: &str) -> u128 {
   let started = std::time::Instant::now();
-  let payload = mica_markdown::import_markdown_fragment(src, "root");
+  let payload = mica_md::compat::import_markdown_fragment(src, "root");
   let parse = started.elapsed().as_millis();
   let started = std::time::Instant::now();
-  let _ = mica_markdown::export_markdown(&payload).unwrap();
+  let _ = mica_md::compat::export_markdown(&payload).unwrap();
   let export = started.elapsed().as_millis();
   eprintln!(
     "len={:>9} parse={}ms export={}ms blocks={}",

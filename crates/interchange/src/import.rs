@@ -9,7 +9,7 @@ use crate::normalize::{expand_nested_zips, normalize_entries};
 use crate::notion::{looks_like_notion_export, strip_notion_id};
 use crate::order::order_page_paths;
 use crate::zip::ZipFileEntry;
-use mica_markdown::DocumentSnapshotPayload;
+use mica_md::DocumentSnapshotPayload;
 
 /// One page to create, in creation order (parents always come earlier).
 #[derive(Debug)]
@@ -1395,9 +1395,9 @@ mod tests {
     // Exactly what the exporter puts in the archive: the rendered body with the
     // title line welded on top, and the file named after the title (our export
     // writes the name into the file name — that is where import reads it back).
-    let source = mica_markdown::import_markdown("第一段。\n\n## 小节\n\n第二段。", "root");
+    let source = mica_md::compat::import_markdown("第一段。\n\n## 小节\n\n第二段。", "root");
     let exported = mica_markdown::with_page_title(
-      &mica_markdown::export_markdown(&source).expect("export"),
+      &mica_md::compat::export_markdown(&source).expect("export"),
       title,
     );
     assert!(
@@ -1417,7 +1417,7 @@ mod tests {
     assert!(!page.markdown.starts_with('#'), "the title line came off");
 
     // What the importer then builds and stores.
-    let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
+    let mut reimported = mica_md::compat::import_markdown(&page.markdown, "root");
     assert!(mica_markdown::set_document_title(
       &mut reimported,
       &page.title
@@ -1425,7 +1425,7 @@ mod tests {
 
     // And what exporting THAT produces.
     let re_exported = mica_markdown::with_page_title(
-      &mica_markdown::export_markdown(&reimported).expect("re-export"),
+      &mica_md::compat::export_markdown(&reimported).expect("re-export"),
       mica_markdown::document_title(&reimported).expect("title travelled in the document"),
     );
     assert_eq!(
@@ -1440,9 +1440,9 @@ mod tests {
   #[test]
   fn a_body_that_opens_with_its_own_heading_round_trips_too() {
     let title = "周报";
-    let source = mica_markdown::import_markdown("# 另一个标题\n\n正文。", "root");
+    let source = mica_md::compat::import_markdown("# 另一个标题\n\n正文。", "root");
     let exported = mica_markdown::with_page_title(
-      &mica_markdown::export_markdown(&source).expect("export"),
+      &mica_md::compat::export_markdown(&source).expect("export"),
       title,
     );
 
@@ -1460,10 +1460,10 @@ mod tests {
       "content kept"
     );
 
-    let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
+    let mut reimported = mica_md::compat::import_markdown(&page.markdown, "root");
     mica_markdown::set_document_title(&mut reimported, &page.title);
     let re_exported = mica_markdown::with_page_title(
-      &mica_markdown::export_markdown(&reimported).expect("re-export"),
+      &mica_md::compat::export_markdown(&reimported).expect("re-export"),
       mica_markdown::document_title(&reimported).expect("title"),
     );
     assert_eq!(re_exported, exported);
@@ -1586,7 +1586,7 @@ mod tests {
     for id in ["p1", "p2"] {
       payloads.insert(
         format!("obj-{id}"),
-        mica_markdown::import_markdown("正文。", "root"),
+        mica_md::compat::import_markdown("正文。", "root"),
       );
     }
     let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
@@ -1649,12 +1649,12 @@ mod tests {
     for id in ["p1", "p2", "p4", "p5"] {
       payloads.insert(
         format!("obj-{id}"),
-        mica_markdown::import_markdown("正文。", "root"),
+        mica_md::compat::import_markdown("正文。", "root"),
       );
     }
     payloads.insert(
       "obj-p3".to_string(),
-      mica_markdown::import_markdown("---\ntags: [a]\nstatus: draft\n---\n正文。", "root"),
+      mica_md::compat::import_markdown("---\ntags: [a]\nstatus: draft\n---\n正文。", "root"),
     );
     let raw: Vec<ZipFileEntry> = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new())
       .into_iter()
@@ -1714,13 +1714,13 @@ mod tests {
         page.markdown
       );
       // What the importer stores, and what exporting THAT produces.
-      let mut reimported = mica_markdown::import_markdown(&page.markdown, "root");
+      let mut reimported = mica_md::compat::import_markdown(&page.markdown, "root");
       assert!(mica_markdown::set_document_title(
         &mut reimported,
         &page.title
       ));
       let re_exported = mica_markdown::with_page_title(
-        &mica_markdown::export_markdown(&reimported).expect("re-export"),
+        &mica_md::compat::export_markdown(&reimported).expect("re-export"),
         mica_markdown::document_title(&reimported).expect("title"),
       );
       assert_eq!(
@@ -1731,7 +1731,7 @@ mod tests {
 
     // The properties came through as properties, not as text.
     let with_props = find(&plan, "带属性的页");
-    let reimported = mica_markdown::import_markdown(&with_props.markdown, "root");
+    let reimported = mica_md::compat::import_markdown(&with_props.markdown, "root");
     assert_eq!(
       reimported.blocks[0]
         .data

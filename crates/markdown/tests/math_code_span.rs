@@ -1,4 +1,4 @@
-use mica_markdown::import_markdown;
+use mica_md::compat::import_markdown;
 
 /// Regression: a math opener must not scan through a code span. CommonMark
 /// 0.31.2 §6.1 gives code spans higher precedence than every inline construct

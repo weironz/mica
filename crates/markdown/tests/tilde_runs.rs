@@ -7,7 +7,7 @@
 //! CLAUDE.md principle 2 (Rust authoritative, Dart mirror) exists to prevent.
 
 fn html(md: &str) -> String {
-  mica_markdown::export_html(&mica_markdown::import_markdown(md, "root")).unwrap()
+  mica_md::compat::export_html(&mica_md::compat::import_markdown(md, "root")).unwrap()
 }
 
 #[test]

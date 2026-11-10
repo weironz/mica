@@ -17,11 +17,11 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use mica_app_core::{
   AppState,
-  documents::DocumentSnapshotPayload,
   store::{self, YrsVersionMeta},
   sync,
 };
 use mica_infra::{ApiError, ApiResult};
+use mica_md::DocumentSnapshotPayload;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;

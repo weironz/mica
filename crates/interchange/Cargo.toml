@@ -13,6 +13,7 @@ serde_json.workspace = true
 # so both worlds (cloud Postgres / local SQLite) produce byte-identical archives
 # by sharing this one pure builder. markdown does NOT depend on interchange, so
 # no cycle. Default features (no render) keep it lean.
+mica-md = { path = "../md-core" }
 mica-markdown = { path = "../markdown" }
 
 [dev-dependencies]

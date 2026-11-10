@@ -1668,7 +1668,7 @@ dependencies = [
 name = "mica-core"
 version = "0.1.0"
 dependencies = [
- "mica-markdown",
+ "mica-md",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1682,6 +1682,7 @@ name = "mica-interchange"
 version = "0.1.0"
 dependencies = [
  "mica-markdown",
+ "mica-md",
  "serde_json",
 ]
 

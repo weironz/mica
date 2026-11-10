@@ -13,7 +13,7 @@
 //!    of the exported document — folding a section is a view action, and the
 //!    round-trip fixed point is the invariant (CLAUDE.md principle 4).
 
-use mica_markdown::{export_markdown, import_markdown};
+use mica_md::compat::{export_markdown, import_markdown};
 use serde_json::json;
 
 const GITHUB_FORM: &str =

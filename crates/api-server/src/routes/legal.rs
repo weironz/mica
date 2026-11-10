@@ -43,7 +43,7 @@ async fn terms() -> Response {
 /// bundle would break exactly when the app does, which is one of the moments
 /// someone might go looking for it.
 fn page(title: &str, markdown: &str) -> Response {
-  let body = mica_markdown::export_html(&mica_markdown::import_markdown(markdown, "root"))
+  let body = mica_md::compat::export_html(&mica_md::compat::import_markdown(markdown, "root"))
     .unwrap_or_else(|_| "<p>This page could not be rendered.</p>".to_string());
   let html = format!(
     "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\">\
@@ -75,8 +75,8 @@ mod tests {
   #[test]
   fn both_documents_render_to_html() {
     for (name, md) in [("privacy", PRIVACY_MD), ("terms", TERMS_MD)] {
-      let html =
-        mica_markdown::export_html(&mica_markdown::import_markdown(md, "root")).unwrap_or_default();
+      let html = mica_md::compat::export_html(&mica_md::compat::import_markdown(md, "root"))
+        .unwrap_or_default();
       assert!(html.contains("<h1"), "{name} lost its heading: {html:.120}");
       assert!(html.len() > 500, "{name} rendered suspiciously short");
     }

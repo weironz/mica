@@ -7,7 +7,7 @@
 //! Regenerate golds after an intentional grammar change:
 //! `GEN_GOLD=1 cargo test -p mica-markdown --test conformance`
 
-use mica_markdown::import_markdown;
+use mica_md::compat::import_markdown;
 use serde_json::{Value, json};
 
 fn fixture_dir() -> std::path::PathBuf {
@@ -84,7 +84,7 @@ fn fixtures_export_match_gold() {
       continue;
     }
     let markdown = std::fs::read_to_string(&path).unwrap();
-    let exported = mica_markdown::export_markdown(&import_markdown(&markdown, "root")).unwrap();
+    let exported = mica_md::compat::export_markdown(&import_markdown(&markdown, "root")).unwrap();
     let gold_path = path.with_extension("md.gold");
     if generate {
       std::fs::write(&gold_path, &exported).unwrap();
@@ -150,7 +150,7 @@ fn fixtures_round_trip() {
     }
     let markdown = std::fs::read_to_string(&path).unwrap();
     let first = parse_to_gold(&markdown);
-    let exported = mica_markdown::export_markdown(&import_markdown(&markdown, "root")).unwrap();
+    let exported = mica_md::compat::export_markdown(&import_markdown(&markdown, "root")).unwrap();
     let second = parse_to_gold(&exported);
     assert_eq!(first, second, "round-trip drift in {path:?}");
   }

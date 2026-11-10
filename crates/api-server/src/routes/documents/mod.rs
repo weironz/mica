@@ -176,7 +176,7 @@ pub(crate) struct InsertPage<'a> {
   pub icon: Option<&'a str>,
   /// The page's opening content; its `root_block_id` becomes the document's.
   /// A blank page seeds with `mica_app_core::sync::empty_payload`.
-  pub seed: mica_app_core::documents::DocumentSnapshotPayload,
+  pub seed: mica_md::DocumentSnapshotPayload,
 }
 
 /// Insert a whole new page in ONE transaction: the `documents` row, its yrs

@@ -3,7 +3,7 @@
 //! pair so a future change can't silently re-break it. The grouped examples
 //! mirror the sections in docs/architecture/commonmark-scoreboard.md.
 
-use mica_markdown::{export_html, import_markdown};
+use mica_md::compat::{export_html, import_markdown};
 
 /// Assert the engine renders `md` to exactly `expected` (trailing newline of
 /// the export forgiven, matching the official runner's normalization).

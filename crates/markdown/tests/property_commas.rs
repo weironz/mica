@@ -1,4 +1,4 @@
-use mica_markdown::properties::{PropertyValue, parse_properties, upsert_property};
+use mica_md::properties::{PropertyValue, parse_properties, upsert_property};
 
 #[test]
 fn list_items_with_any_comma_remain_single_values() {

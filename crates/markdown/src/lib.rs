@@ -1,8 +1,7 @@
 //! Mica's Markdown adapter over the `mica-md` engine (crates/md-core): page
 //! titles, the standalone HTML export, MCP text editing and the LaTeX guard,
-//! plus a compatibility re-export of every engine item this crate used to
-//! define — so app-core / api-server / interchange / mcp-server / mica-core /
-//! the FFI crate compile unchanged. New code should depend on `mica-md`.
+//! plus the legacy API for consumers that predate `mica-md`. Mica callers
+//! use the engine directly for parsing, serialization, and fragment rendering.
 
 use std::collections::BTreeMap;
 

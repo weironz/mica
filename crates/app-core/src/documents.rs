@@ -1,11 +1,12 @@
 //! Document operations over the block model (insert/update/delete/move).
 //! The Markdown engine itself — the model types, parsing and rendering —
-//! lives in `mica-markdown` and is re-exported here for compatibility.
+//! lives in `mica-md`. The legacy facade is re-exported for existing consumers.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use mica_markdown::*;
+pub use mica_md::{Block, DocumentSnapshotPayload};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -240,6 +241,8 @@ fn insert_child(children: &mut Vec<String>, block_id: String, index: Option<usiz
 #[cfg(test)]
 mod tests {
   use serde_json::json;
+
+  use mica_md::compat::{export_html, export_markdown, import_markdown};
 
   use super::*;
 

@@ -1,9 +1,9 @@
-//! The flat block DTO — a re-export of `mica_markdown::Block`, the single
+//! The flat block DTO — a re-export of `mica_md::Block`, the single
 //! definition, so the yrs document model and the markdown/REST/interchange
 //! model cannot drift apart (they were field-identical mirrors before, with
 //! hand-written conversions at every boundary).
 
-pub use mica_markdown::Block;
+pub use mica_md::Block;
 
 /// The `mica://page/<viewId>` targets referenced by a block's link marks.
 ///

@@ -8,7 +8,7 @@
 //!   (`\` + newline, the editor's storage form) `- item` became a list;
 //! - `1)`, a tab after the marker, and quote text were never escaped.
 
-use mica_markdown::{export_markdown, import_markdown};
+use mica_md::compat::{export_markdown, import_markdown};
 
 /// One block of `kind` holding exactly `text`, exported and re-imported.
 fn round_trip(kind: &str, text: &str) -> Vec<(String, String)> {

@@ -465,7 +465,7 @@ fn dot_prefixed_pages_survive_round_trip() {
     .map(|n| {
       (
         n.object_id.clone(),
-        mica_markdown::import_markdown("Important text", &format!("root-{}", n.id)),
+        mica_md::compat::import_markdown("Important text", &format!("root-{}", n.id)),
       )
     })
     .collect();
@@ -602,7 +602,7 @@ fn table_cell_page_links_relativise_in_zip_export() {
   let nodes = vec![node("a", "A"), node("b", "B")];
   let payloads: HashMap<_, _> = [(
     "doc-a".to_string(),
-    mica_markdown::import_markdown("# A\n\n|H|\n|---|\n|[B](mica://page/b)|", "root-a"),
+    mica_md::compat::import_markdown("# A\n\n|H|\n|---|\n|[B](mica://page/b)|", "root-a"),
   )]
   .into();
   let entries = build_markdown_tree_zip(&nodes, None, &payloads, &HashMap::new());
@@ -622,8 +622,8 @@ fn table_cell_page_links_relativise_in_zip_export() {
 /// exports the resolved link, not a literal `[ref]`.
 #[test]
 fn table_cell_reference_definitions_resolve_like_paragraphs() {
-  let payload = mica_markdown::import_markdown("[ref]: /target\n\n|H|\n|---|\n| [ref] |", "root");
-  let out = mica_markdown::export_markdown(&payload).expect("exports");
+  let payload = mica_md::compat::import_markdown("[ref]: /target\n\n|H|\n|---|\n| [ref] |", "root");
+  let out = mica_md::compat::export_markdown(&payload).expect("exports");
   assert!(
     out.contains("| [ref](/target) |"),
     "cell reference must resolve to a link, got:\n{out}"
@@ -704,7 +704,7 @@ fn trailing_dot_names_export_windows_safe_segments() {
     .map(|n| {
       (
         n.object_id.clone(),
-        mica_markdown::import_markdown("text", &format!("root-{}", n.id)),
+        mica_md::compat::import_markdown("text", &format!("root-{}", n.id)),
       )
     })
     .collect();

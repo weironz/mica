@@ -1,4 +1,4 @@
-use mica_markdown::import_markdown;
+use mica_md::compat::import_markdown;
 use std::{
   process::{Command, Stdio},
   thread,

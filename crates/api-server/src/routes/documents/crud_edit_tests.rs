@@ -1,5 +1,6 @@
 use super::*;
-use mica_app_core::documents::{apply_operations, export_markdown, import_markdown};
+use mica_app_core::documents::apply_operations;
+use mica_md::compat::{export_markdown, import_markdown};
 use serde_json::json;
 
 fn request(find: &str, replace: &str) -> UpdateMarkdownRequest {

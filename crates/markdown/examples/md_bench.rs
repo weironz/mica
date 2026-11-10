@@ -55,9 +55,9 @@ fn median(mut samples: Vec<Duration>) -> Duration {
 fn bench(label: &str, input: &str) {
   // Two discarded warm-up runs, then seven measured runs; median reported.
   for _ in 0..2 {
-    let doc = mica_markdown::import_markdown(black_box(input), "root");
-    black_box(mica_markdown::export_markdown(&doc).expect("export_markdown"));
-    black_box(mica_markdown::export_html(&doc).expect("export_html"));
+    let doc = mica_md::compat::import_markdown(black_box(input), "root");
+    black_box(mica_md::compat::export_markdown(&doc).expect("export_markdown"));
+    black_box(mica_md::compat::export_html(&doc).expect("export_html"));
   }
 
   let mut import = Vec::new();
@@ -65,15 +65,15 @@ fn bench(label: &str, input: &str) {
   let mut export_html = Vec::new();
   for _ in 0..7 {
     let start = Instant::now();
-    let doc = mica_markdown::import_markdown(black_box(input), "root");
+    let doc = mica_md::compat::import_markdown(black_box(input), "root");
     import.push(start.elapsed());
 
     let start = Instant::now();
-    black_box(mica_markdown::export_markdown(&doc).expect("export_markdown"));
+    black_box(mica_md::compat::export_markdown(&doc).expect("export_markdown"));
     export_md.push(start.elapsed());
 
     let start = Instant::now();
-    black_box(mica_markdown::export_html(&doc).expect("export_html"));
+    black_box(mica_md::compat::export_html(&doc).expect("export_html"));
     export_html.push(start.elapsed());
   }
 

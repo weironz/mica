@@ -49,7 +49,7 @@ abstract class MicaDocument implements RustOpaqueInterface {
   });
 
   /// Export this page's body as Markdown through the SAME engine the cloud uses
-  /// (`mica_markdown::export_markdown`), so a local page's `.md` matches a cloud
+  /// (`mica_md::compat::export_markdown`), so a local page's `.md` matches a cloud
   /// page's byte-for-byte. Image blocks keep their stored ref — use
   /// [`MicaDocument::export_markdown_zip`] when bundling image bytes. Closes the
   /// local-page md-export gap (previously only HTML/PDF existed locally).
@@ -90,7 +90,7 @@ abstract class MicaDocument implements RustOpaqueInterface {
   /// Build a document by parsing Markdown with the authoritative engine
   /// (CommonMark + GFM). Used by local vault import (S-tier): the file stays the
   /// user's, parsing stays in Rust (and round-trips with `export_markdown`). A
-  /// fresh root id is minted; `mica_markdown::Block` IS `mica_core::Block`
+  /// fresh root id is minted; `mica_md::Block` IS `mica_core::Block`
   /// (re-exported), so no schema translation is needed.
   static MicaDocument fromMarkdown({required String markdown}) => RustLib
       .instance

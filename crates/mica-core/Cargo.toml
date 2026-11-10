@@ -27,7 +27,7 @@ uuid = { workspace = true, optional = true }
 # The markdown authority — owns the `Block` DTO itself (mica-core re-exports
 # it), so the yrs document model and the markdown/REST model cannot drift.
 # markdown does NOT depend on mica-core, so no cycle.
-mica-markdown = { path = "../markdown" }
+mica-md = { path = "../md-core" }
 
 [dev-dependencies]
 # Decode the base64 yjs state captured from the browser (web→yjs interop test).

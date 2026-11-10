@@ -14,17 +14,17 @@ const PASTE: &str = include_str!("fixtures/paste.md");
 
 #[test]
 fn import_the_pasted_chatgpt_output() {
-  let payload = mica_markdown::import_markdown(PASTE, "root");
+  let payload = mica_md::compat::import_markdown(PASTE, "root");
   eprintln!("blocks = {}", payload.blocks.len());
   assert!(!payload.blocks.is_empty());
 }
 
 #[test]
 fn round_trip_the_pasted_chatgpt_output() {
-  let payload = mica_markdown::import_markdown(PASTE, "root");
-  let out = mica_markdown::export_markdown(&payload).expect("export");
+  let payload = mica_md::compat::import_markdown(PASTE, "root");
+  let out = mica_md::compat::export_markdown(&payload).expect("export");
   // Re-import the export: the round-trip invariant (CLAUDE.md principle #4).
-  let again = mica_markdown::import_markdown(&out, "root");
+  let again = mica_md::compat::import_markdown(&out, "root");
   assert_eq!(
     payload.blocks.len(),
     again.blocks.len(),
@@ -34,7 +34,7 @@ fn round_trip_the_pasted_chatgpt_output() {
 
 #[test]
 fn export_html_of_the_pasted_chatgpt_output() {
-  let payload = mica_markdown::import_markdown(PASTE, "root");
+  let payload = mica_md::compat::import_markdown(PASTE, "root");
   let html = mica_markdown::export_html_document(&payload, "代码审查", 800).expect("html");
   assert!(!html.is_empty());
 }
@@ -43,7 +43,7 @@ fn export_html_of_the_pasted_chatgpt_output() {
 /// byte offsets. Assert every mark stays inside its block.
 #[test]
 fn marks_stay_within_their_block_text() {
-  let payload = mica_markdown::import_markdown(PASTE, "root");
+  let payload = mica_md::compat::import_markdown(PASTE, "root");
   for b in &payload.blocks {
     let len = b.text.encode_utf16().count() as u64;
     let Some(marks) = b.data.get("marks").and_then(|m| m.as_array()) else {

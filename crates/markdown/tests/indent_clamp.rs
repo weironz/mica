@@ -1,7 +1,8 @@
 //! P1-4: a `data.indent` written past the editor's 0..=8 cap (by an MCP/REST
 //! client or an import) must still export at <=8 levels, matching what the Dart
 //! editor renders — same data, same output across both engines.
-use mica_markdown::{Block, DocumentSnapshotPayload, export_markdown};
+use mica_md::compat::export_markdown;
+use mica_md::{Block, DocumentSnapshotPayload};
 use serde_json::json;
 
 fn list_item(id: &str, text: &str, indent: u64) -> Block {

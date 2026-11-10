@@ -5,7 +5,7 @@
 //! amendment relaxes flanking across CJK boundaries; ASCII stays untouched
 //! (the scoreboard is the guard for that). Mirrors the Dart `_flanking`.
 
-use mica_markdown::{export_html, import_markdown};
+use mica_md::compat::{export_html, import_markdown};
 
 fn html_eq(md: &str, expected: &str) {
   let got = export_html(&import_markdown(md, "root")).unwrap_or_default();

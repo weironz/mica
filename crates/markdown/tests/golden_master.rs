@@ -21,7 +21,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use mica_markdown::{DocumentSnapshotPayload, import_markdown, import_markdown_fragment};
+use mica_md::DocumentSnapshotPayload;
+use mica_md::compat::{import_markdown, import_markdown_fragment};
 
 fn fixtures_dir(relative: &str) -> std::path::PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)

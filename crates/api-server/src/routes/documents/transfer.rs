@@ -6,13 +6,13 @@ use axum::{
 use futures_util::StreamExt as _;
 use mica_app_core::{
   AppState,
-  documents::DocumentSnapshotPayload,
   store::{self, DocumentRecord},
 };
 // Sibling-name dedup is the same function the local store's clone uses, so a
 // page cloned offline and one cloned here settle on the same name.
 use mica_core::tree_rules::{ParentRefusal, dedup_sibling_name};
 use mica_infra::{ApiError, ApiResult};
+use mica_md::DocumentSnapshotPayload;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
@@ -1430,8 +1430,8 @@ fn topo_order_subtree(subtree: &[TransferRow]) -> Vec<&TransferRow> {
 
 #[cfg(test)]
 mod tests {
-  fn image_block(data: serde_json::Value) -> mica_app_core::documents::Block {
-    mica_app_core::documents::Block {
+  fn image_block(data: serde_json::Value) -> mica_md::Block {
+    mica_md::Block {
       id: "img_1".to_string(),
       kind: "image".to_string(),
       text: String::new(),
@@ -1442,8 +1442,8 @@ mod tests {
   use super::*;
   use mica_app_core::sync::page_link_targets;
 
-  fn text_block(id: &str, data: serde_json::Value) -> mica_app_core::documents::Block {
-    mica_app_core::documents::Block {
+  fn text_block(id: &str, data: serde_json::Value) -> mica_md::Block {
+    mica_md::Block {
       id: id.to_string(),
       kind: "text".to_string(),
       text: "x".to_string(),

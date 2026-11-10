@@ -11,7 +11,7 @@
 //! `mica-core/tests/proptest_yrs.rs`. Its fixed UTF-8/allocation cases are active
 //! regressions; broader never-panic properties still await upstream fixes.)
 
-use mica_markdown::import_markdown;
+use mica_md::compat::import_markdown;
 use proptest::prelude::*;
 
 const ROOT: &str = "block_root";

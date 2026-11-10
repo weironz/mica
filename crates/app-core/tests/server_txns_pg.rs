@@ -16,10 +16,11 @@
 //!   own stream grew 7 -> 8 -> 9 -> 10 rows and never pruned (rid-modulo
 //!   cadence, per-document starvation).
 
-use mica_app_core::documents::{DocumentOperation, DocumentSnapshotPayload};
+use mica_app_core::documents::DocumentOperation;
 use mica_app_core::store;
 use mica_app_core::sync;
 use mica_core::MicaDoc;
+use mica_md::DocumentSnapshotPayload;
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -74,7 +75,7 @@ async fn seed_doc(db: &PgPool) -> (Uuid, Uuid, Uuid) {
   .execute(db)
   .await
   .unwrap();
-  let payload: mica_markdown::DocumentSnapshotPayload = serde_json::from_value(json!({
+  let payload: mica_md::DocumentSnapshotPayload = serde_json::from_value(json!({
       "schema_version": 1,
       "root_block_id": "r",
       "blocks": [

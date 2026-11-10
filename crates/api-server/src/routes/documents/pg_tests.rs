@@ -352,13 +352,12 @@ mod parent_guard_pg {
         }),
       );
     }
-    let payload: mica_markdown::DocumentSnapshotPayload =
-      serde_json::from_value(serde_json::json!({
-        "schema_version": 1,
-        "root_block_id": "root",
-        "blocks": blocks,
-      }))
-      .unwrap();
+    let payload: mica_md::DocumentSnapshotPayload = serde_json::from_value(serde_json::json!({
+      "schema_version": 1,
+      "root_block_id": "root",
+      "blocks": blocks,
+    }))
+    .unwrap();
     let mut tx = db.begin().await.unwrap();
     mica_app_core::sync::seed_base_tx(&mut tx, doc_id, payload)
       .await

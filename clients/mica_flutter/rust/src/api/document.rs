@@ -76,13 +76,13 @@ impl MicaDocument {
     /// Build a document by parsing Markdown with the authoritative engine
     /// (CommonMark + GFM). Used by local vault import (S-tier): the file stays the
     /// user's, parsing stays in Rust (and round-trips with `export_markdown`). A
-    /// fresh root id is minted; `mica_markdown::Block` IS `mica_core::Block`
+    /// fresh root id is minted; `mica_md::Block` IS `mica_core::Block`
     /// (re-exported), so no schema translation is needed.
     #[frb(sync)]
     pub fn from_markdown(markdown: String) -> MicaDocument {
         let root_id = format!("block_{}", uuid::Uuid::new_v4());
-        let payload = mica_markdown::import_markdown(&markdown, &root_id);
-        // `mica_markdown::Block` IS `mica_core::Block` (re-exported), so no
+        let payload = mica_md::compat::import_markdown(&markdown, &root_id);
+        // `mica_md::Block` IS `mica_core::Block` (re-exported), so no
         // schema translation is needed.
         MicaDocument {
             inner: Mutex::new(MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks)),
@@ -142,7 +142,7 @@ impl MicaDocument {
         asset_ids: &std::collections::HashMap<String, String>,
     ) -> MicaDocument {
         let root_id = format!("block_{}", uuid::Uuid::new_v4());
-        let mut payload = mica_markdown::import_markdown(markdown, &root_id);
+        let mut payload = mica_md::compat::import_markdown(markdown, &root_id);
         rewire_archive_images(&mut payload.blocks, from_path, asset_ids);
         MicaDocument {
             inner: Mutex::new(MicaDoc::from_blocks(&payload.root_block_id, &payload.blocks)),
@@ -218,15 +218,15 @@ impl MicaDocument {
         // catches the Err arm; a panic goes straight past it.
         let mut payload = self.snapshot();
         let srcs: std::collections::BTreeMap<String, String> = image_srcs.into_iter().collect();
-        mica_markdown::set_image_srcs(&mut payload, &srcs);
+        mica_md::compat::set_image_srcs(&mut payload, &srcs);
         mica_markdown::export_html_document(&payload, &title, content_width).unwrap_or_default()
     }
 
     /// The doc as the engine's snapshot payload — shared by the markdown exports
     /// and the local folder-tree export (`api::store`).
-    pub(crate) fn snapshot(&self) -> mica_markdown::DocumentSnapshotPayload {
+    pub(crate) fn snapshot(&self) -> mica_md::DocumentSnapshotPayload {
         let doc = self.doc();
-        mica_markdown::DocumentSnapshotPayload {
+        mica_md::DocumentSnapshotPayload {
             schema_version: 1,
             root_block_id: doc.root_block_id(),
             blocks: doc.to_blocks(),
@@ -234,13 +234,13 @@ impl MicaDocument {
     }
 
     /// Export this page's body as Markdown through the SAME engine the cloud uses
-    /// (`mica_markdown::export_markdown`), so a local page's `.md` matches a cloud
+    /// (`mica_md::compat::export_markdown`), so a local page's `.md` matches a cloud
     /// page's byte-for-byte. Image blocks keep their stored ref — use
     /// [`MicaDocument::export_markdown_zip`] when bundling image bytes. Closes the
     /// local-page md-export gap (previously only HTML/PDF existed locally).
     #[frb(sync)]
     pub fn export_markdown(&self) -> String {
-        mica_markdown::export_markdown(&self.snapshot()).unwrap_or_default()
+        mica_md::compat::export_markdown(&self.snapshot()).unwrap_or_default()
     }
 
     /// Write the page's title into the document's root block.
@@ -300,7 +300,7 @@ impl MicaDocument {
     #[frb(sync)]
     pub fn export_markdown_titled(&self, title: String) -> String {
         let payload = self.snapshot();
-        let body = mica_markdown::export_markdown(&payload).unwrap_or_default();
+        let body = mica_md::compat::export_markdown(&payload).unwrap_or_default();
         let title = mica_markdown::document_title(&payload).unwrap_or(title.as_str());
         mica_markdown::with_page_title(&body, title)
     }
@@ -345,7 +345,7 @@ impl MicaDocument {
             });
             map.insert(file_id, format!("assets/{asset}"));
         }
-        let body = mica_markdown::export_markdown_with_assets(&payload, &map).unwrap_or_default();
+        let body = mica_md::compat::export_markdown_with_assets(&payload, &map).unwrap_or_default();
         // The title leads the text as well as naming the file — the same rule
         // the cloud ZIP follows (`docs/features/page-title-plan.md`). `base` is the raw
         // page name here; only the FILE name gets sanitized, so it doubles as

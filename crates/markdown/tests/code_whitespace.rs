@@ -1,4 +1,4 @@
-use mica_markdown::{export_markdown, import_markdown};
+use mica_md::compat::{export_markdown, import_markdown};
 
 fn shape(markdown: &str) -> Vec<(String, String, serde_json::Value)> {
   let snapshot = import_markdown(markdown, "root");

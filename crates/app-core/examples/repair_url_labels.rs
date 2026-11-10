@@ -103,7 +103,7 @@ fn only_bogus_marks(text: &str, marks: &[Mark], lits: &[Literal]) -> bool {
 /// The fixed parser's verdict on this text: `(text, marks)`, or `None` when it
 /// is not a single block (the caller must not guess at multi-block results).
 fn reparse(text: &str) -> Option<(String, Vec<Mark>)> {
-  let payload = mica_markdown::import_markdown(text, "repair-root");
+  let payload = mica_md::compat::import_markdown(text, "repair-root");
   let root = payload.root_block_id.clone();
   let mut content = payload.blocks.into_iter().filter(|b| b.id != root);
   let block = content.next()?;

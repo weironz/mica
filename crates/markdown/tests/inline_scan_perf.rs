@@ -19,8 +19,8 @@ use std::time::Instant;
 
 fn html_ms(src: &str) -> (String, u128) {
   let started = Instant::now();
-  let snapshot = mica_markdown::import_markdown(src, "root");
-  let html = mica_markdown::export_html(&snapshot).expect("html");
+  let snapshot = mica_md::compat::import_markdown(src, "root");
+  let html = mica_md::compat::export_html(&snapshot).expect("html");
   (html, started.elapsed().as_millis())
 }
 
@@ -104,9 +104,9 @@ fn sibling_marks_render_without_quadratic_span_walk() {
     "{n} sibling <em> marks: HTML took {ms}ms — html_span rescans all marks per span again"
   );
 
-  let snapshot = mica_markdown::import_markdown(&src, "root");
+  let snapshot = mica_md::compat::import_markdown(&src, "root");
   let started = Instant::now();
-  let md = mica_markdown::export_markdown(&snapshot).expect("md");
+  let md = mica_md::compat::export_markdown(&snapshot).expect("md");
   let ms = started.elapsed().as_millis();
   assert_eq!(
     md.matches("*a*").count(),
