@@ -42,8 +42,7 @@
 | [phase2-offline-crdt.md](architecture/phase2-offline-crdt.md) | Phase 2:离线优先 + CRDT 实施方案 |
 | [local-first-p2-design.md](architecture/local-first-p2-design.md) | P2:云文档离线编辑 |
 | [local-first-p3-design.md](architecture/local-first-p3-design.md) | P3:溶解双模式(本地 / 已连云共存) |
-| [ui-gpui-evaluation.md](architecture/ui-gpui-evaluation.md) | 转型方向(候选):UI 层迁到 GPUI(gpui-kit)、成为纯 Rust 项目——收益、风险、进入条件 |
-| [ui-rust-stack-evaluation-2026-11-10.md](architecture/ui-rust-stack-evaluation-2026-11-10.md) | 续篇:把移动端算进来的全平台全栈 Rust 评估——GPUI / gpui-kit / Native Shell 各是什么、切过去引入哪套栈、其他方案对比、四道进入关卡 |
+| [ui-gpui-evaluation.md](architecture/ui-gpui-evaluation.md) | 转型方向(候选,不迁):UI 层迁到 GPUI 生态(gpui-kit / Native Shell)、成为全平台全栈 Rust——调研对象、两条路线、其他方案、进入关卡与 2026-11-10 的部分验证 |
 
 ## features — 功能设计
 

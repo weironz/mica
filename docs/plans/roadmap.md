@@ -60,13 +60,11 @@
 
 ## 平台覆盖
 
-- 🔭 **架构转型方向(候选,未立项):UI 层从 Flutter 迁到 GPUI(gpui-kit),成为纯 Rust 项目**(2026-11-01 调研)——
-  数据面已在 Rust,迁移只涉及 UI;能否完全删掉 Flutter 取决于 GPUI 在浏览器里能否撑起编辑器(尤其中文输入)。
-  当前决策:不迁;重新评估时先做 1–2 周限时验证(Web 中文 IME / Windows IME / 2000 块性能三道关卡)。
-  详见 [调研与决策记录](../architecture/ui-gpui-evaluation.md)。
-  2026-11-10 续篇把移动端(Android APK 已发布)算进来:若迁,栈为 gpui-kit(桌面 + Web)+ Native Shell(手机),
-  但自绘编辑器在手机端尚无落地路径,结论仍是不迁,并新增"移动关卡"。
-  详见 [全平台全栈 Rust 评估](../architecture/ui-rust-stack-evaluation-2026-11-10.md)。
+- 🔭 **架构转型方向(候选,未立项):UI 层从 Flutter 迁到 GPUI 生态(gpui-kit / Native Shell),成为全平台全栈 Rust**
+  ([#172](https://github.com/weironz/mica/issues/172))——数据面已在 Rust,迁移只涉及 UI。当前决策:不迁。
+  2026-11-10 的部分验证里四道关卡(Web 中文输入 / 桌面中文输入 / 性能 / 移动)没有一道完整通过;
+  还缺 Windows 真实输入法、Android 真机、Safari / Firefox 三项。
+  详见 [调研、验证与决策记录](../architecture/ui-gpui-evaluation.md)。
 
 ## 客户端质量与兜底
 
