@@ -312,34 +312,11 @@ mica-cli mcp [--read-only]        # serve over stdio (what the client launches)
 
 #### Registering it with a client
 
-Use the client's own command — there is deliberately no `mica-cli mcp install`
-(see [`mcp-connect.md`](mcp-connect.md) for why it was removed). For Claude Code:
-
-```bash
-mica-cli auth login --server https://your-server.example.com --email you@example.com
-claude mcp add --scope user mica -- /path/to/mica-cli mcp
-```
-
-Passing no `-e` is the cleanest form: the server walks the same credential chain
-as every other subcommand, so **no token lands in the client config or in your
-shell history**. The trade is that it rides your saved login, which can expire —
-re-run `auth login` if the MCP server starts reporting `not signed in`.
-
-To pin a token instead (copying the config to another machine, or not wanting to
-depend on a saved login):
-
-```bash
-claude mcp add --scope user mica \
-  -e MICA_API_BASE_URL=https://your-server.example.com \
-  -e MICA_PAT=mica_pat_… \
-  -- /path/to/mica-cli mcp
-```
-
-> `--scope user` matters on Windows: the default `local` scope keys the entry by
-> the current directory, and the CLI writes that key with forward slashes while
-> the app uses backslashes — so the two never see each other's config. Symptom:
-> `claude mcp list` says `✓ Connected` while the app's session has no `mica_*`
-> tools at all. See [`mcp-connect.md`](mcp-connect.md).
+Use the client's own command or config file; every client needs the same three
+things — the command (`mica-cli mcp`), the server URL and a token. Per-client
+snippets (Claude Code, Claude Desktop, Cursor, VS Code, Codex CLI, custom agents),
+the official server address and troubleshooting are in
+[`mcp-connect.md`](mcp-connect.md).
 
 ## Backup
 

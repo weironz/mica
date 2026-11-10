@@ -1,112 +1,66 @@
-# 把 Mica 接入 Claude Code / Claude Desktop(MCP)
+# 把 Mica 接入 AI Agent(MCP)
 
-`mica-cli mcp` 把 Mica 的 REST API 以 MCP 工具的形式暴露给任何 MCP 客户端:
-列出/搜索/读取页面、新建文档、往已有文档追加或改写内容、移动、软删、导出。
-一个典型用法:**让 Claude Code 把对话内容直接写进 Mica 文档**。
+`mica-cli mcp` 把 Mica 以 [MCP](https://modelcontextprotocol.io) 工具的形式提供给任何支持 MCP 的 AI 客户端:
+搜索和读取页面、新建文档、局部改写、整理页树、版本与回收站。典型用法是**让 Agent 把内容直接写进 Mica 文档**。
 
-它是薄代理 —— 用 PAT 调 REST API,自身不碰数据库或存储;和 `mica-cli` 的
-其他子命令共用一个二进制(CI 每平台只发一个 artifact),也共用同一条凭证
-解析链。实现在 `crates/mcp-server`(库)+ `crates/cli` 的 `mcp` 子命令。
+- **官方服务地址**:`https://mica.cloudcele.com`(需要已有账号;自建服务器换成你自己的地址)。
+- **传输方式**:本机 stdio —— 客户端启动 `mica-cli mcp` 这个子进程。没有远程 HTTP / SSE 端点。
+- **凭证**:个人访问令牌(PAT,`mica_pat_…`)。MCP 进程只是用它调 REST API,自己不碰数据库。
 
-## 一次性准备
+设计取舍见 [mcp-server.md](mcp-server.md);不能运行本地程序的 Agent 请直接用 [HTTP API](api.md)。
 
-先装 `mica-cli`(安装/更新方式以 [`cli.md`](cli.md#install) 为准 —— Windows 一键:
-`irm https://raw.githubusercontent.com/weironz/mica/main/install.ps1 | iex`)。然后:
+## 1. 三步接入
+
+**① 安装 `mica-cli`**(详见 [cli.md](cli.md)):
 
 ```bash
-# 登录并创建一个长期 token(写权限;--expires-days 可选)
-mica-cli auth login --server https://your-server.example.com --email you@example.com
-mica-cli auth token create --name claude-code --scope read --scope write
-# 记下输出里的 "token": "mica_pat_…" —— 只显示这一次
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/weironz/mica/main/install.sh | sh
+# Windows PowerShell
+irm https://raw.githubusercontent.com/weironz/mica/main/install.ps1 | iex
 ```
 
-> 已经有 token 了?跳过这一节,直接看下面的
-> [已经有 token 了怎么连](#已经有-token-了怎么连) —— 不用重新登录。
-
-## 已经有 token 了怎么连
-
-手里已经有 `mica_pat_…`(别的机器建的、同事给的、或上次记下来的),**不需要再登录一次**
-—— `auth login` 的唯一作用就是拿到凭证,凭证已经有了就直接用。缺的只是服务器地址。
-
-**把 `your-server.example.com` 换成你自己的服务器地址** —— 下面每段示例都一样。原样
-粘贴只会配出一个连不上的 MCP。
-
-最干净的写法是**不传任何 `-e`**:mica-cli 自己会走凭证解析链,配置文件里因此不存令牌。
+**② 登录并创建令牌**:
 
 ```bash
-mica-cli auth login --server https://your-server.example.com --email you@example.com
+mica-cli auth login --server https://mica.cloudcele.com --email you@example.com
+mica-cli auth token create --name my-agent --scope read --scope write
+# 输出里的 mica_pat_… 只显示这一次,记下来
+```
+
+只读 Agent 只给 `--scope read`。
+
+**③ 在客户端里登记**。所有客户端要的都是同一件事 —— 一条启动命令加两个环境变量:
+
+| 项 | 值 |
+| --- | --- |
+| 命令 | `mica-cli` 的**绝对路径**(`which mica-cli` / `where mica-cli`) |
+| 参数 | `mcp`(只读接入用 `mcp --read-only`) |
+| `MICA_API_BASE_URL` | `https://mica.cloudcele.com` |
+| `MICA_PAT` | `mica_pat_…` |
+
+在已经 `auth login` 过的机器上,两个环境变量都可以省掉 —— 配置文件里就不存令牌,这是最推荐的写法。
+
+接好后让 Agent 调一次 `mica_list_workspaces`,能列出工作区就是通了。
+
+## 2. 各客户端的写法
+
+配置文件的位置以各客户端自己的文档为准(它们会变);下面只给格式。
+
+**Claude Code**
+
+```bash
 claude mcp add --scope user mica -- /path/to/mica-cli mcp
-```
-
-要把令牌写死进配置(换机复制、或不想依赖本机登录状态)就显式给:
-
-```bash
+# 要把地址和令牌写进配置时:
 claude mcp add --scope user mica \
-  -e MICA_API_BASE_URL=https://your-server.example.com \
-  -e MICA_PAT=mica_pat_… \
+  -e MICA_API_BASE_URL=https://mica.cloudcele.com -e MICA_PAT=mica_pat_… \
   -- /path/to/mica-cli mcp
 ```
 
-⚠️ 这样令牌会进 **shell 历史**和终端回滚缓冲,粘贴时也极易连同令牌一起发进聊天/工单。
-能用上面那种不带 `-e` 的写法就用它。
+`--scope user` 不要省:Windows 上默认的项目级配置会因为路径斜杠方向不一致而加载不到,
+表现为 `claude mcp list` 显示已连接、会话里却没有 `mica_*` 工具。
 
-**优先级**(先到先得):
-
-- **服务器**:`MICA_API_BASE_URL` → `--server` / `MICA_SERVER` → `auth login` 存下的配置
-- **令牌**:`--token` → `MICA_PAT` → `auth login` 存下的配置
-
-所以环境变量总能盖过本机已登录的账号 —— 想让 MCP 用另一个身份连,不必先登出。
-
-这两条链**对所有子命令都一样**。`MICA_API_BASE_URL` 曾经只有 `mcp` 认:照本文档配好
-MCP,再跑 `mica-cli ws list` 就会得到「no server — … set MICA_SERVER」,而那个 URL 明明
-就在环境里(2026-08-28 报告并修复)。这和下面那段 `MICA_TOKEN` 的故事是同一个坑、
-差一个字段 —— 现在两边都各自只有一条链。
-
-令牌变量**只有 `MICA_PAT` 一个**。此前有两个:`mcp` 认 `MICA_PAT`,其余命令只认
-`MICA_TOKEN` —— 照着本文档配好 MCP 的人,一跑 `mica-cli ws list` 就得到「not logged in」,
-提示里还不会告诉他要换个变量名(2026-08-12 统一)。`MICA_TOKEN` 已退休:设了它会得到一条
-**点名替代变量**的报错,而不是静默失效。
-
-**空值等同未设置**:`MICA_PAT=` 会继续往下一个来源找,而不是拿一个空串去换 401;
-首尾空白会被 trim,所以 `MICA_PAT=$(cat token.txt)` 可用。
-
-> **token 只在创建时显示一次**,`auth token list` 只看得到名字和元数据,看不到明文。
-> 弄丢了就 `auth token create` 建个新的(旧的可以撤销)。
->
-> **不慎泄露就立刻轮换**:`auth token list` 找到它 → `auth token revoke <id>` → 建新的
-> 重新配。贴进聊天记录、截图、工单的令牌都算泄露。
-
-已经配过一次、只想换令牌:重跑上面的 `claude mcp add` 即可 —— 同名条目会被覆盖,
-其它 MCP server 不受影响。
-
-## 为什么没有 `mica-cli mcp install`
-
-以前有过,已删除。它能一条命令配好客户端、自动建 PAT、`--all` 一次配完六种客户端 ——
-但代价是**同一件事有了两条路**:自带一套 `--client/--pat/--no-token/--dry-run` 旗标,
-外加一张硬编码的「六个客户端的配置文件在哪」的表(那些路径会漂移),而且人们会习惯性
-用它,而不是 `claude mcp add` —— 后者才是跨工具通用、大家本来就会的命令。
-
-换来的便利并不值这个价:`claude mcp add --scope user` 同样一行搞定,还少一层抽象。
-
-## ⚠️ `--scope user` 不能省 —— 尤其在 Windows 上
-
-省掉它就是默认的 `local`(项目级),而 Windows 上 `claude mcp add` 把 project key
-写成**正斜杠**(`C:/Users/you/proj`),应用自己建的 project key 却是**反斜杠**
-(`C:\Users\you\proj`)。两个 key 对不上,配置就永远加载不到。
-
-实测(2026-07,任意 shell 都复现):CLI 打印 `[project: C:\Users\willz\probe]`,
-写进 `~/.claude.json` 的却是 `'C:/Users/willz/probe'`。同一台机器上两个 key
-并存是常态,`~/.claude.json` 的 `projects` 里能直接看到。
-
-**症状极具迷惑性**:`claude mcp list` 报 `mica: ✓ Connected`(它读的是自己写的
-那个正斜杠 key,当然找得到、也真能把 server 拉起来),但**重启后会话里一个
-mica 工具都没有** —— 两边都没说谎,只是在看不同的配置。别信 `✓ Connected`,
-以「重启后会话里有没有 `mica_*` 工具」为准。
-
-`--scope user` 写的是 `~/.claude.json` **顶层**的 `mcpServers`,不挂 project key,
-从根上绕开这个坑;代价是所有项目都能看到 mica —— 对笔记工具而言通常正是你要的。
-
-## 手写配置文件(客户端没有 `mcp add` 命令时)
+**Claude Desktop / Cursor / Windsurf / Cline / Gemini CLI**(都是 `mcpServers` 这一段 JSON)
 
 ```json
 {
@@ -115,7 +69,7 @@ mica 工具都没有** —— 两边都没说谎,只是在看不同的配置。�
       "command": "/path/to/mica-cli",
       "args": ["mcp"],
       "env": {
-        "MICA_API_BASE_URL": "https://your-server.example.com",
+        "MICA_API_BASE_URL": "https://mica.cloudcele.com",
         "MICA_PAT": "mica_pat_…"
       }
     }
@@ -123,163 +77,101 @@ mica 工具都没有** —— 两边都没说谎,只是在看不同的配置。�
 }
 ```
 
-Claude Desktop 的 `claude_desktop_config.json` 用同一段 `mcpServers`。已登录的机器上
-可以**整个省掉 `env`**(凭证解析链见上),配置文件里就不存令牌。
+**VS Code(GitHub Copilot)**:同样的内容,顶层键是 `servers`,并加 `"type": "stdio"`。
 
-> **PAT 绝不能写进项目里的 `.mcp.json`** —— 那是会被 git 跟踪的文件,仓库一旦公开,
-> 令牌就跟着提交历史永久留下,删掉后续提交也没用。要放进项目级的只能是无凭证的
-> MCP(比如 playwright)。
+**Codex CLI**(`~/.codex/config.toml`)
 
-只读接入(例如给一个只查资料的 agent):`args: ["mcp", "--read-only"]`,
-或 `MICA_MCP_READ_ONLY=1` —— 写工具在调用时拒绝,读工具照常。
-
-## 工具一览
-
-| 工具 | 作用 |
-| --- | --- |
-| `mica_list_workspaces` | 列工作区(id/name/role) |
-| `mica_list_pages` | 页树(文档+文件夹;拿 object_id / view id) |
-| `mica_search` | 按**标题 + 正文**搜页面,返回命中片段(`title_match` 说明是哪边命中) |
-| `mica_read_document` | 读文档(Markdown) |
-| `mica_get_outline` | 大纲(标题、block id、块类型与短文本预览,`insert_at` 的锚点来源) |
-| `mica_create_document` | 建页面(可带 Markdown 正文) |
-| `mica_update_document` | 写入已有文档:`append`(默认、安全)/ `replace_all` / `insert_at` / `find_replace` |
-| `mica_add_image` | 从 http(s) URL 把图片**存进**工作区,返回 file_id + 可直接粘的 Markdown |
-| `mica_read_image` | 按 file_id 取回图片**像素**(MCP ImageContent),让模型真的看见 |
-| `mica_rename` | 重命名页面或文件夹(只改名,不动内容) |
-| `mica_create_folder` | 建文件夹(纯容器),返回 view_id 好往里放东西 |
-| `mica_move_document` | 移动页面(改父) |
-| `mica_reorder` | 一次调用重排某文件夹(或顶层)的所有子项 —— 传有序 view_id 列表;排序/整理用它 |
-| `mica_transfer_view` | 把页面(整子树)或文件夹**移动/复制到本服务器另一个工作区**(`copy=true` 留源;否则移动=软删源)。图片随之复制到目标;新 id,版本历史不跟随,指向源的页链会断 |
-| `mica_clone_document` | 把页面(整子树)或文件夹**就地复制副本**(同一工作区,默认放在原件旁边)。图片共享同一文件(不重传);新 id,版本历史不跟随。省略 name 则默认「{源名} 副本」,同层自动去重 |
-| `mica_share` | 把文档发布成**公开只读链接**,返回可打开的 URL(幂等,再分享返回同一个) |
-| `mica_unshare` | 关闭公开链接(立即 404) |
-| `mica_trash_view` | 软删到回收站(需 `confirm: true`) |
-| `mica_list_trash` | 列回收站(找要恢复的东西) |
-| `mica_restore_view` | 从回收站恢复页面/文件夹(撤销软删) |
-| `mica_list_versions` | 列文档的命名版本(可回滚的检查点),不含原始编辑日志 |
-| `mica_create_version` | 把文档当前状态钉成命名版本(改前打检查点) |
-| `mica_restore_version` | 回滚文档到某版本(仍 append-only,可再撤销) |
-| `mica_export_workspace` | 导出整个工作区为 Markdown |
-
-## 用例:把对话存进 Mica
-
-对 Claude 说"把这段对话记到 mica 里",它会:
-
-1. `mica_list_workspaces` → 选工作区
-2. `mica_create_document(name: "2026-07-16 与 Claude 的对话", markdown: 首轮内容)`
-3. 之后每轮 `mica_update_document(mode: "append", markdown: 新内容)`
-
-Markdown 里的 `$…$` 行内公式、`$$…$$` 块级公式、代码块、表格都会被服务端
-解析成对应的块/标记,在客户端里正常排版。
-
-### 局部查找替换与块定位
-
-`find_replace` 在**单个块或单元格**内精确匹配可见文本,支持带格式的段落、
-列表项和表格单元格。行内代码和加粗等标记不会截断匹配。先尝试原样匹配;
-全文没有原样命中时,再把 `find` 作为单块 Markdown 解析,去掉内联分隔符、
-列表或标题前缀后匹配。因此下面两种查找都能定位同一句话:
-
-```json
-{"mode":"find_replace","find":"执行 omp --version,已确认","replace":"执行 `omp --help`,已确认","unique":true}
-{"mode":"find_replace","find":"执行 `omp --version`,已确认","replace":"执行 `omp --help`,已确认","unique":true}
+```toml
+[mcp_servers.mica]
+command = "/path/to/mica-cli"
+args = ["mcp"]
+env = { MICA_API_BASE_URL = "https://mica.cloudcele.com", MICA_PAT = "mica_pat_…" }
 ```
 
-`replace` 默认按**内联 Markdown**解析,反引号会生成代码标记,不会作为字面反引号
-存入正文。需要原样插入时传 `replacement_format: "plain_text"`。代码块与块级公式
-始终保留字面文本。替换会保留块 ID、未修改的单元格、块属性与匹配范围外的格式。
-`unique: true` 在服务端文档写锁内统计实际命中数,不等于 1 就拒绝整次替换。
+**自己写的 Agent(任意 MCP SDK)**:用 SDK 的 stdio 客户端启动上面那条命令即可。以 Python 为例:
 
-匹配不能跨两个块或两个单元格;换段、插入表格等结构变化继续用 `insert_at`、
-`delete` 或明确需要的 `replace_all`。没有匹配时,错误会提示这一边界。
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
-`mica_get_outline` 保留 `headings`、`block_ids`、`seq`,并返回同序的
-`blocks: [{"block_id":"…","type":"paragraph","preview":"…"}]`。预览最多 40 个
-Unicode 字符,表格预览也包含单元格文字。按预览核对目标 ID,无需按全文数块。
-这些 ID 是根节点的直接子块,可以作为 `insert_at` / `delete` 的锚点。
-`seq` 与所返回的块列表来自**同一条查询(同一快照)**:拿到这份 `seq` 后文档若有
-并发提交(包括对锚点块本身的修改),以其为 `expected_seq` 的写入会得到 409,
-需重新读 outline 再决策;anchor 存在本身不构成并发保护。
+params = StdioServerParameters(
+    command="/path/to/mica-cli", args=["mcp"],
+    env={"MICA_API_BASE_URL": "https://mica.cloudcele.com", "MICA_PAT": "mica_pat_…"},
+)
+async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+    await session.initialize()
+    print(await session.call_tool("mica_list_workspaces", {}))
+```
 
-`mica_apply_edits` 成功或部分失败都返回 `edits` 列表,逐项列出已经生效的编辑
-及其 `block_ids`,同时保留最新 `seq` 和可用的 `last_block_id`。部分失败仍是
-`isError: true`,附有从 0 开始的 `failed_index`、`failed_mode` 和 `applied`,
-后续编辑不会执行。批次不是事务,重试时不要重复已生效的部分。
+> **令牌安全**:不要把 PAT 写进会被 git 跟踪的文件(如项目里的 `.mcp.json`)。写在命令行里的令牌会留在 shell 历史。
+> 泄露了就 `mica-cli auth token list` → `auth token revoke <id>` → 重建。
 
-API 与 CLI 要分别升级:新版 CLI 会在 `find_replace` 前检查 API 是否返回带类型
-和预览的 outline。旧 API 不支持这批替换语义时会明确拒绝,避免新参数被静默忽略。
-仅更新仓库或 API 不会替换 MCP 客户端实际启动的二进制;更新 CLI 后须重连客户端。
+## 3. 给 Agent 的使用要点
 
-本地回归可运行 `scripts/test-mcp-edits.py --cli <本轮构建的 mica-cli> --api
-<本轮构建的 mica-api-server>`。先把 `DATABASE_URL` 指向本机、数据库名以
-`mica_mcp_` 开头的专用临时 Postgres 数据库。脚本启动隔离 API、过滤 MCP 子进程的
-环境变量并通过真实 stdio 验证读写、编号、并发冲突和批次部分失败;结束后删除测试
-工作区并关闭两个子进程,数据库保留供检查。
+连接时服务端会把一份使用说明(`instructions`)发给客户端,每个工具也带自己的描述 —— 那是权威。这里是最要紧的几条:
 
-### 图片:`![](https://…)` 只是热链,不是存进来
+- **内容是 Markdown**。读出来是 Markdown,写进去也是 Markdown;公式(`$…$`、`$$…$$`)、代码块、表格都会被解析成对应的块。
+- **找东西先搜索**:`mica_list_workspaces` → `mica_search`(标题、文件夹名、正文)→ `mica_read_document` / `mica_get_outline`。
+  `mica_list_pages` 返回整棵页树,大工作区里最贵,只在确实需要整体结构时用。
+- **两种 id**:读写文档用 `document_id`;移动、改名、删除用 `view_id`。两者都在搜索和页树结果里。
+- **改已有文档优先局部改**:`mica_update_document` 的 `append`(默认,最安全)、`insert_at`、`find_replace`、`delete`;
+  多处修改用 `mica_apply_edits` 一次提交。`replace_all` 会覆盖整篇,只在确实要重写时用。
+- **防并发覆盖**:`mica_get_outline` 返回 `seq`,写入时带上 `expected_seq`;期间文档被别人改过会得到 409,重新读再决定。
+- **危险操作都要 `confirm: true`**。进回收站可恢复;`purge` 类、清空回收站、删工作区、删评论、删文件不可恢复。
+- **批量编辑不是事务**:`mica_apply_edits` 部分失败时返回已生效的项和 `failed_index`,重试时不要重复已生效的部分。
 
-直接写 `![](https://example.com/x.png)`,Mica **只存这个 URL**,字节从没进来过 ——
-源站挂了图就没了,离线也看不到。要真正存进来用 `mica_add_image`:
+### 两个容易踩的坑
 
-1. `mica_add_image(workspace_id, url: "https://…")`
-   → `{"ok":true,"file_id":"…","markdown":"![name](/api/workspaces/…/files/…/blob/name)"}`
-2. 把返回的 `markdown` 原样写进文档。
+**公式里的反斜杠要在 JSON 里双写。** 工具参数是 JSON,`"$\times$"` 会被解析成制表符加 `imes`,而且不报语法错。
+写成 `"$\\times$"`。写工具会拦下这种输入并报错(什么都不写入),按提示双写后重发即可。
 
-相同字节按 sha256 去重,不会存两份。
+**`![](https://…)` 只是外链,图片没有存进来。** 要存进 Mica:先 `mica_add_image(workspace_id, url)`,
+把返回的 `markdown` 原样写进文档。读图用 `mica_read_image(file_id)`(上限 4 MB)。
 
-**读**:`mica_read_document` 里的图片就是这种 blob 路径
-`![alt](/api/workspaces/{ws}/files/{file_id}/blob/{name})`。把里面的 `file_id` 交给
-`mica_read_image` 就能拿到真实像素(MCP ImageContent);路径本身也能直接在浏览器里
-打开。上限 4MB —— MCP 的图片是一整条 base64,没有流式。
+### `find_replace` 的边界
 
-**往返是闭合的**:导出写出 blob 路径,导入认得自己的路径并还原成 file_id 引用
-(不是外链)。只认**本工作区**的路径 —— 别的工作区的 blob 不归这里引用,否则那边的
-GC 会把字节回收掉,这边的页面就烂了。
+- 在**单个块或单个表格单元格**内匹配可见文本,不跨块、不跨单元格;加粗、行内代码等格式不会截断匹配。
+- `replace` 默认按行内 Markdown 解析;要原样插入传 `replacement_format: "plain_text"`。
+- `unique: true` 要求恰好命中一处,否则整次拒绝。
+- 换段、插表格这类结构变化用 `insert_at` / `delete`。
 
-### ⚠️ 公式里的反斜杠必须在 JSON 里双写
+## 4. 工具一览(39 个)
 
-工具参数走 JSON。JSON 自己就用反斜杠转义,于是 LaTeX 命令和 JSON 转义**撞车**:
+| 类别 | 工具 |
+| --- | --- |
+| 读 | `mica_list_workspaces`、`mica_list_pages`、`mica_search`、`mica_read_document`、`mica_read_documents`、`mica_get_outline` |
+| 写 | `mica_create_document`、`mica_create_workspace`、`mica_update_document`、`mica_apply_edits`、`mica_add_image`、`mica_read_image` |
+| 整理 | `mica_rename`、`mica_create_folder`、`mica_move_document`、`mica_move_views`、`mica_reorder`、`mica_clone_document`、`mica_transfer_view` |
+| 版本 | `mica_list_versions`、`mica_create_version`、`mica_restore_version` |
+| 回收站 | `mica_trash_view`、`mica_trash_views`、`mica_list_trash`、`mica_restore_view`、`mica_restore_views`、`mica_purge_view`、`mica_purge_views`、`mica_empty_trash` |
+| 分享与导出 | `mica_share`、`mica_unshare`、`mica_export_workspace` |
+| 协作与管理 | `mica_list_comments`、`mica_delete_comment`、`mica_list_members`、`mica_remove_member`、`mica_delete_file`、`mica_delete_workspace` |
 
-| JSON 里写 | 实际解析成 | 结果 |
-|---|---|---|
-| `"$\times$"` | TAB + `imes` | ❌ 公式毁了 |
-| `"$\frac{a}{b}$"` | 换页符 + `rac{a}{b}` | ❌ |
-| `"$\\times$"` | `\times` | ✅ |
+每个工具的参数和说明以客户端里看到的 schema 为准;删除相关的边界见 [mcp-server.md](mcp-server.md)。
 
-**这不会报 JSON 语法错** —— `\t`/`\f` 都是合法转义,所以坏数据会被安静地存下来。
-`\eta` 反而能活(`\e` 不是合法转义),于是常见症状是**一条公式里有的命令没了、有的
-还在**,渲染成红色报错。踩雷的命令很多:`\times \theta \tau \frac \forall \beta
-\vec \nu \nabla \rho …`。
+## 5. 凭证怎么解析
 
-写工具(`mica_create_document` / `mica_update_document`)现在会**拦下**这种输入并
-报错说明,不会写进去 —— 收到该错误就把反斜杠双写后重发。`\n`/`\r` 拦不住(和真
-换行无法区分),但它们会直接把公式撑断,肉眼可见。
+先到先得,对 `mica-cli` 的所有子命令都一样:
 
-## 排错
+- **服务器**:`MICA_API_BASE_URL` → `--server` / `MICA_SERVER` → `auth login` 存下的配置
+- **令牌**:`--token` → `MICA_PAT` → `auth login` 存下的配置
 
-- MCP 客户端过滤 stdio 子进程环境变量时(例如过滤 `APPDATA` / `HOME`),
-  保存的登录配置可能无法被找到,表现为 `no server` 或未登录。在客户端的 `env`
-  配置里显式设置 `MICA_CONFIG` 为 `config.json` 的**绝对路径**。配置位置的顺序为
-  `MICA_CONFIG` → `XDG_CONFIG_HOME/mica/config.json` → `HOME/.config/mica/config.json`
-  → `APPDATA/mica/config.json`;空值按未设置处理。`mica-cli mcp --help` 也有提示。
-  `HOME` 被保留但指向其他目录时,程序不会自动猜出被过滤的 `APPDATA` 配置位置。
-- `not signed in`:整条链都没解析到凭证 —— 传 `--token` / `MICA_PAT`,或先 `auth login`。
-  **先确认变量不是空串**:空值按未设置处理,所以 `MICA_PAT=` 和没设是一个效果。
-  报错里若点名 `MICA_TOKEN`,说明你设的是已退休的那个名字,改成 `MICA_PAT` 即可。
-- `Mica API 401`:PAT 被吊销或过期,`mica-cli auth token list` 查,重建一个。
-- 写工具报 read-only:去掉 `--read-only` / `MICA_MCP_READ_ONLY`,且 PAT 要有
-  `write` scope(`token create --scope read --scope write`)。
-- 协议日志:stderr(stdout 是 JSON-RPC 通道,永远干净);`RUST_LOG=debug`
-  提高日志级别。
-- **`claude mcp list` 说 `✓ Connected`,但会话里没有 `mica_*` 工具**:配置写进了
-  应用读不到的 project key(Windows 正/反斜杠不一致,见上面 Claude Code 一节)。
-  用 `--scope user` 重新加一遍:
-  ```bash
-  claude mcp remove mica --scope local
-  claude mcp add mica --scope user -e MICA_API_BASE_URL=… -e MICA_PAT=… -- /path/to/mica-cli mcp
-  ```
-  验证不要看 `mcp list`,直接查 `~/.claude.json` 的**顶层** `mcpServers` 里有没有
-  `mica`,然后重启 Claude Code。
-- `contains a raw control character where a LaTeX command should be`:公式的
-  反斜杠在 JSON 里没双写(`"$\times$"` 被解析成 TAB+`imes`)。什么都没写入,
-  双写成 `"$\\times$"` 重发即可。见上面「公式里的反斜杠必须在 JSON 里双写」。
+空值等同未设置;首尾空白会被去掉。环境变量总能盖过本机已登录的账号。
+
+## 6. 排错
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| `not signed in` / `no server` | 没解析到凭证或地址。设 `MICA_PAT` 和 `MICA_API_BASE_URL`,或先 `auth login`。先确认变量不是空串。报错里点名 `MICA_TOKEN` 说明用了已停用的变量名,改成 `MICA_PAT` |
+| 已登录,但 MCP 里仍然 `no server` | 客户端过滤了子进程的环境变量(如 `HOME`、`APPDATA`),找不到登录配置。在 `env` 里把 `MICA_CONFIG` 设为 `config.json` 的绝对路径,或直接给两个环境变量 |
+| `Mica API 401` | 令牌被吊销或过期。`mica-cli auth token list` 查看,重建一个 |
+| 写工具报 read-only | 去掉 `--read-only` / `MICA_MCP_READ_ONLY`,并确认令牌有 `write` 权限 |
+| Claude Code 显示已连接但没有 `mica_*` 工具 | 没用 `--scope user`。`claude mcp remove mica --scope local` 后按第 2 节重新添加,再重启 |
+| `contains a raw control character where a LaTeX command should be` | 公式的反斜杠没双写,见第 3 节 |
+| `find_replace` 被拒绝并提示 API 版本 | 服务器比 CLI 旧。升级服务器,或换用 `insert_at` / `delete` |
+| 升级了 CLI 但行为没变 | 客户端还在用旧进程,重连或重启客户端 |
+
+协议日志在 stderr(stdout 是 JSON-RPC 通道);`RUST_LOG=debug` 可提高日志级别。
+
+本地回归测试:`scripts/test-mcp-edits.py --cli <mica-cli> --api <mica-api-server>`
+(需要一个库名以 `mica_mcp_` 开头的专用临时 Postgres,通过 `DATABASE_URL` 指定)。

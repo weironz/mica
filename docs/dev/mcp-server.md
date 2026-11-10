@@ -121,7 +121,7 @@ UTF-16 范围调整来保留未修改的标记,不通过整页导出再导入重
 
 批量编辑会逐项回报实际操作的块 ID;部分失败将已完成项、最新序号和失败位置
 一起作为工具错误返回。接入方式、完整参数与旧 API 兼容边界见
-[mcp-connect.md](mcp-connect.md#局部查找替换与块定位)。
+[mcp-connect.md](mcp-connect.md#find_replace-的边界)。
 
 ## External backup
 
