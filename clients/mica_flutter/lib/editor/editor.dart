@@ -33,6 +33,7 @@ import 'canvas_follower.dart';
 import 'cell_edit_controller.dart';
 import 'table.dart';
 import 'language_picker.dart';
+import 'code_title_dialog.dart';
 import 'touch_selection.dart';
 import 'word_count.dart';
 import '../l10n/locale_controller.dart';
@@ -438,6 +439,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   TouchHandleDrag? _handleDrag;
   DocSelection? _longPressWord;
   bool _touchMenuHidden = false; // after copy: keep the handles, drop the menu
+  bool _touchFormat = false; // 格式 tapped: the format bar replaces the menu
 
   RenderDocument? get _render =>
       _surfaceKey.currentContext?.findRenderObject() as RenderDocument?;
@@ -3163,12 +3165,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
     if (_touch && _activeCell == null) {
-      _markBar?.remove();
-      _markBar = null;
-      return _refreshTouchBar();
+      _refreshTouchBar();
+      if (!_touchFormat) {
+        _markBar?.remove();
+        _markBar = null;
+        return;
+      }
+    } else {
+      _touchBar?.remove();
+      _touchBar = null;
     }
-    _touchBar?.remove();
-    _touchBar = null;
     final sel = _controller.selection;
     // A ranged selection inside a table cell shows the bar too (inline marks
     // only), so selecting cell text — not just Ctrl+B — can format it.
@@ -3257,17 +3263,21 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       children: [
         if (a != null) handle(a, true),
         if (b != null) handle(b, false),
-        if (menuAt != null && _handleDrag == null && !_touchMenuHidden)
+        if (menuAt != null &&
+            _handleDrag == null &&
+            !_touchMenuHidden &&
+            !_touchFormat)
           _followCanvas(
             local: menuAt,
             clampTop: false,
-            width: edit ? 280 : 150,
+            width: edit ? 340 : 150,
             child: TouchSelectionMenu(
               items: [
                 if (edit) (l10n.editorCut, _cutSelection),
                 (l10n.commonCopy, _copyFromTouchMenu),
                 if (edit) (l10n.editorPaste, _pasteFromTouchMenu),
                 (l10n.shortcutsSelectAll, _selectAll),
+                if (edit) (l10n.editorFormat, _formatFromTouchMenu),
               ],
             ),
           ),
@@ -3284,6 +3294,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _pasteFromTouchMenu() => _pasteFromClipboard(requireFocus: false);
+
+  /// 格式: the mouse's format bar (marks, block types, AI) over the same
+  /// selection, handles kept. The next touch on the page brings the menu back.
+  void _formatFromTouchMenu() {
+    _touchFormat = true;
+    _refreshMarkBar();
+    _touchBar?.markNeedsBuild();
+  }
 
   void _startHandleDrag(bool isStart, DragStartDetails d) {
     final r = _render, sel = _controller.selection;
@@ -4178,7 +4196,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   /// Prompt for a code block's caption (pre-filled with the current one, if any)
   /// and store it. Empty clears it. The dialog OWNS its controller (see
-  /// [_CodeTitleDialog]) — disposing it right after showDialog returns throws
+  /// [CodeTitleDialog]) — disposing it right after showDialog returns throws
   /// (`_dependents.isEmpty`) when the exit transition rebuilds the field.
   Future<void> _promptCodeTitle(int nodeIndex) async {
     if (nodeIndex < 0 || nodeIndex >= _controller.nodes.length) return;
@@ -4186,7 +4204,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         (_controller.nodes[nodeIndex].data['title'] as String?) ?? '';
     final title = await showDialog<String>(
       context: context,
-      builder: (_) => _CodeTitleDialog(initial: current),
+      builder: (_) => CodeTitleDialog(initial: current),
     );
     if (title != null && mounted) {
       _controller.setCodeTitle(nodeIndex, title);
@@ -5664,7 +5682,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         (_controller.nodes[nodeIndex].data['caption'] as String?) ?? '';
     final caption = await showDialog<String>(
       context: context,
-      builder: (_) => _CodeTitleDialog(initial: current),
+      builder: (_) => CodeTitleDialog(initial: current),
     );
     if (caption != null && mounted) {
       _controller.setImageCaption(nodeIndex, caption);
@@ -5948,6 +5966,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _downStamp = e.timeStamp;
         _downKind = e.kind;
         _touchMenuHidden = false;
+        _touchFormat = false;
       },
       onPointerCancel: (_) {
         _panCancelled = true;

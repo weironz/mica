@@ -668,6 +668,7 @@
   "editorUntitled": "无标题",
   "editorCut": "剪切",
   "editorPaste": "粘贴",
+  "editorFormat": "格式",
   "codeMenuWrap": "自动换行",
   "codeMenuNoWrap": "取消换行",
   "codeMenuLineNumbers": "显示行号",

@@ -1223,6 +1223,10 @@
   "editorUntitled": "Untitled",
   "editorCut": "Cut",
   "editorPaste": "Paste",
+  "editorFormat": "Format",
+  "@editorFormat": {
+    "description": "Touch selection menu: swap the menu for the formatting bar."
+  },
   "codeMenuWrap": "Wrap lines",
   "codeMenuNoWrap": "Stop wrapping",
   "codeMenuLineNumbers": "Show line numbers",

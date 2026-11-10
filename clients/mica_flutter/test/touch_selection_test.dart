@@ -147,7 +147,7 @@ void main() {
     expect(startHandle, findsOneWidget);
     expect(endHandle, findsOneWidget);
     expect(menu, findsOneWidget);
-    for (final label in ['剪切', '复制', '粘贴', '全选']) {
+    for (final label in ['剪切', '复制', '粘贴', '全选', '格式']) {
       expect(
         find.descendant(of: menu, matching: find.text(label)),
         findsOneWidget,
@@ -250,6 +250,31 @@ void main() {
     await tester.pump();
     expect(menu, findsNothing);
     expect(endHandle, findsOneWidget, reason: 'the selection is kept');
+  });
+
+  testWidgets('格式 swaps the menu for the format bar, keeping the handles',
+      (tester) async {
+    await pumpEditor(tester);
+    await tester.longPressAt(target(tester));
+    await tester.pump();
+    expect(formatBar, findsNothing);
+
+    await tester.tap(find.descendant(of: menu, matching: find.text('格式')));
+    await tester.pump();
+    expect(menu, findsNothing, reason: 'the format bar takes its place');
+    expect(formatBar, findsOneWidget);
+    expect(startHandle, findsOneWidget);
+    expect(endHandle, findsOneWidget);
+
+    // The next touch on the page goes back to the plain finger flow.
+    final away =
+        tester.getTopLeft(find.byType(MicaEditor)) + const Offset(300, 20);
+    await tester.tapAt(away);
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.longPressAt(target(tester));
+    await tester.pump();
+    expect(menu, findsOneWidget);
+    expect(formatBar, findsNothing);
   });
 
   testWidgets('a mouse double-click still gets the format bar', (tester) async {
