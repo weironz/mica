@@ -55,9 +55,9 @@ void main() {
       await tester.pump();
       final canvas = tester.getTopLeft(find.byType(DocumentSurface));
       final from = canvas + const Offset(30, 14);
-      await tester.tapAt(from);
+      await tester.tapAt(from, kind: PointerDeviceKind.mouse);
       await tester.pump();
-      final g = await tester.startGesture(from);
+      final g = await tester.startGesture(from, kind: PointerDeviceKind.mouse);
       for (var i = 1; i <= 6; i++) {
         await g.moveTo(from + Offset(25.0 * i, 0));
         await tester.pump();
@@ -120,9 +120,9 @@ void main() {
     await tester.pump();
     final from =
         tester.getTopLeft(find.byType(DocumentSurface)) + const Offset(30, 14);
-    await tester.tapAt(from);
+    await tester.tapAt(from, kind: PointerDeviceKind.mouse);
     await tester.pump();
-    final g = await tester.startGesture(from);
+    final g = await tester.startGesture(from, kind: PointerDeviceKind.mouse);
     for (var i = 1; i <= 6; i++) {
       await g.moveTo(from + Offset(25.0 * i, 0));
       await tester.pump();

@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -46,7 +47,7 @@ void main() {
     );
     await tester.pump();
     await tester.tapAt(
-      tester.getTopLeft(find.byType(MicaEditor)) + const Offset(40, 170),
+      tester.getTopLeft(find.byType(MicaEditor)) + const Offset(40, 170), kind: PointerDeviceKind.mouse,
     );
     await tester.pump();
     focus.requestFocus();
@@ -140,7 +141,7 @@ void main() {
     );
     await tester.pump();
     await tester.tapAt(
-      tester.getTopLeft(find.byType(MicaEditor)) + const Offset(40, 170),
+      tester.getTopLeft(find.byType(MicaEditor)) + const Offset(40, 170), kind: PointerDeviceKind.mouse,
     );
     await tester.pump();
     focus.requestFocus();

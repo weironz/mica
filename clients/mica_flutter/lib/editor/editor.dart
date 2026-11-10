@@ -32,6 +32,8 @@ import 'rich_paste.dart';
 import 'canvas_follower.dart';
 import 'cell_edit_controller.dart';
 import 'table.dart';
+import 'language_picker.dart';
+import 'touch_selection.dart';
 import 'word_count.dart';
 import '../l10n/locale_controller.dart';
 import '../ui/copy_button.dart';
@@ -426,19 +428,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Timer? _codeCopiedReset;
   bool _pointerOverLinkBar = false;
 
-  // Multi-tap tracking for word (double) / block (triple) selection. The
-  // platform GestureDetector only reports double-taps without a position and
-  // has no triple-tap, so we count taps ourselves from _onTapDown: taps within
-  // [_multiTapSlop] pixels and [_multiTapWindow] of the previous one escalate
-  // the count (2 = word, 3 = block); anything else resets to a single tap.
-  static const Duration _multiTapWindow = Duration(milliseconds: 400);
-  static const double _multiTapSlop = 12.0;
-  int _tapCount = 0;
-  Offset? _lastTapLocal;
-  // The pointer-event timestamp of the previous down (binding clock, not wall
-  // clock) so the window is deterministic under the test fake-async clock.
-  Duration? _lastTapStamp;
+  // Multi-tap tracking for word (double) / block (triple) selection.
+  final _taps = MultiTapCounter();
   Duration _downStamp = Duration.zero; // stamp of the in-flight pointer down
+  // Finger selections get handles + a text menu instead of the format bar.
+  PointerDeviceKind _downKind = PointerDeviceKind.mouse;
+  bool get _touch => _downKind == PointerDeviceKind.touch;
+  OverlayEntry? _touchBar;
+  TouchHandleDrag? _handleDrag;
+  DocSelection? _longPressWord;
+  bool _touchMenuHidden = false; // after copy: keep the handles, drop the menu
 
   RenderDocument? get _render =>
       _surfaceKey.currentContext?.findRenderObject() as RenderDocument?;
@@ -950,6 +949,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _cellEntry = null;
     _markBar?.remove();
     _markBar = null;
+    _touchBar?.remove();
+    _touchBar = null;
     for (final anim in _imageAnims.values) {
       anim.dispose();
     }
@@ -2509,8 +2510,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (imageNode != null) {
       _focus.requestFocus();
       _controller.collapseTo(DocPosition(imageNode, 0));
-      if (_bumpTapCount(local) >= 2) {
-        _tapCount = 0; // consumed: a third click shouldn't re-open it
+      if (_taps.bump(local, _downStamp, touch: _touch) >= 2) {
+        _taps.reset(); // consumed: a third click shouldn't re-open it
         _openImageViewer(imageNode);
       }
       _syncImeFromSelection(force: true);
@@ -2623,7 +2624,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
     if (local.dy > r.contentBottom) {
-      _tapCount = 0;
+      _taps.reset();
       _controller.appendOrFocusLast();
       _syncImeFromSelection();
       return;
@@ -2632,11 +2633,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // caret, 3 → select the whole block's text. Atomic blocks were handled
     // above (e.g. a math double-tap opened its editor), so by here we are on a
     // text block and multi-tap means text selection.
-    final count = _bumpTapCount(local);
+    final count = _taps.bump(local, _downStamp, touch: _touch);
     final pos = r.positionAt(local);
     var handled = false;
     if (count == 2) {
-      handled = _controller.selectWordAt(pos);
+      handled = _touch
+          ? _selectTouchWord(r, local)
+          : _controller.selectWordAt(pos);
     } else if (count >= 3) {
       handled = _controller.selectBlockText(pos.node);
     }
@@ -2644,19 +2647,52 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _syncImeFromSelection();
   }
 
-  /// Update and return the running tap count for word/block selection. Taps
-  /// close in time and position escalate the count; otherwise it resets to 1.
-  /// Uses the pointer-down timestamp captured in [_downStamp] (binding clock).
-  int _bumpTapCount(Offset local) {
-    final now = _downStamp;
-    final last = _lastTapStamp;
-    final lastPos = _lastTapLocal;
-    final near = lastPos != null && (lastPos - local).distance <= _multiTapSlop;
-    final soon = last != null && (now - last) <= _multiTapWindow;
-    _tapCount = (near && soon) ? _tapCount + 1 : 1;
-    _lastTapLocal = local;
-    _lastTapStamp = now;
-    return _tapCount;
+  /// A finger's word: one or two CJK characters, or the Latin word, around
+  /// the glyph UNDER [local] (see [touchWordBounds]).
+  bool _selectTouchWord(RenderDocument r, Offset local) {
+    final pos = r.positionAt(local);
+    if (pos.node >= _controller.nodes.length) return false;
+    final node = _controller.nodes[pos.node];
+    if (node.isAtomic || node.text.isEmpty) return false;
+    // positionAt gives the nearest caret boundary; the glyph under the finger
+    // is the one before it when that boundary is right of the finger.
+    final caret = r.caretRectFor(pos);
+    final under = caret != null && caret.left > local.dx && pos.offset > 0;
+    final (s, e) = touchWordBounds(node.text, pos.offset - (under ? 1 : 0));
+    if (s == e) return false;
+    _controller.setSelection(
+      DocSelection(
+        anchor: DocPosition(pos.node, s),
+        focus: DocPosition(pos.node, e),
+      ),
+    );
+    return true;
+  }
+
+  void _onLongPressStart(LongPressStartDetails d) {
+    final r = _render;
+    if (r == null) return;
+    _taps.reset();
+    final local = r.globalToLocal(d.globalPosition);
+    if (r.tableCellAt(local) != null) return;
+    _focus.requestFocus();
+    if (!_selectTouchWord(r, local)) return;
+    _longPressWord = _controller.selection;
+    HapticFeedback.selectionClick();
+    _syncImeFromSelection();
+  }
+
+  /// Long-press then slide: grow the selection from the pressed word.
+  void _onLongPressMove(LongPressMoveUpdateDetails d) {
+    final w = _longPressWord, r = _render;
+    if (w == null || r == null) return;
+    final p = r.positionAt(r.globalToLocal(d.globalPosition));
+    final back = p.compareTo(w.start) < 0;
+    final far = p.compareTo(w.end) > 0 ? p : w.end;
+    _controller.setSelection(
+      DocSelection(anchor: back ? w.end : w.start, focus: back ? p : far),
+    );
+    _syncImeFromSelection();
   }
 
   void _closeCellEditor() {
@@ -3126,6 +3162,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _hideMarkBar();
       return;
     }
+    if (_touch && _activeCell == null) {
+      _markBar?.remove();
+      _markBar = null;
+      return _refreshTouchBar();
+    }
+    _touchBar?.remove();
+    _touchBar = null;
     final sel = _controller.selection;
     // A ranged selection inside a table cell shows the bar too (inline marks
     // only), so selecting cell text — not just Ctrl+B — can format it.
@@ -3160,6 +3203,113 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   void _hideMarkBar() {
     _markBar?.remove();
     _markBar = null;
+    _touchBar?.remove();
+    _touchBar = null;
+    _handleDrag = null;
+  }
+
+  void _refreshTouchBar() {
+    final sel = _controller.selection;
+    if (!_focus.hasFocus || sel == null || sel.isCollapsed) {
+      return _hideMarkBar();
+    }
+    if (_touchBar == null) {
+      _touchBar = OverlayEntry(builder: _buildTouchBar);
+      Overlay.of(context).insert(_touchBar!);
+    } else {
+      _touchBar!.markNeedsBuild();
+    }
+  }
+
+  /// A finger selection's two handles and its text menu (剪切/复制/粘贴/全选).
+  Widget _buildTouchBar(BuildContext context) {
+    final r = _render, sel = _controller.selection;
+    if (r == null || sel == null || sel.isCollapsed) {
+      return const SizedBox.shrink();
+    }
+    final a = r.caretRectFor(sel.start), b = r.caretRectFor(sel.end);
+    final color = MicaTheme.of(context).editor.caret;
+    Widget handle(Rect caret, bool isStart) => _followCanvas(
+      local: touchHandleOrigin(caret, isStart: isStart),
+      width: touchHandleGrab,
+      child: TouchSelectionHandle(
+        isStart: isStart,
+        color: color,
+        onDragStart: (d) => _startHandleDrag(isStart, d),
+        onDragUpdate: _moveHandle,
+        onDragEnd: _endHandleDrag,
+      ),
+    );
+    // Above the start when that is on screen (above the canvas is chrome, as
+    // for the format bar); otherwise under the end handle — after 全选 in a
+    // long page the start is scrolled far out of view.
+    final roomAbove =
+        a != null &&
+        r.localToGlobal(a.topLeft).dy - touchMenuHeight >=
+            MediaQuery.paddingOf(context).top;
+    final menuAt = roomAbove
+        ? Offset(a.left - 24, a.top - touchMenuHeight)
+        : b == null
+        ? null
+        : Offset(b.left - 24, b.bottom + touchHandleKnob + 6);
+    final edit = widget.canEdit, l10n = context.l10n;
+    return Stack(
+      children: [
+        if (a != null) handle(a, true),
+        if (b != null) handle(b, false),
+        if (menuAt != null && _handleDrag == null && !_touchMenuHidden)
+          _followCanvas(
+            local: menuAt,
+            clampTop: false,
+            width: edit ? 280 : 150,
+            child: TouchSelectionMenu(
+              items: [
+                if (edit) (l10n.editorCut, _cutSelection),
+                (l10n.commonCopy, _copyFromTouchMenu),
+                if (edit) (l10n.editorPaste, _pasteFromTouchMenu),
+                (l10n.shortcutsSelectAll, _selectAll),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Copy keeps the selection and its handles (like the platform), but the
+  /// menu has done its job.
+  void _copyFromTouchMenu() {
+    _copySelection();
+    _touchMenuHidden = true;
+    _touchBar?.markNeedsBuild();
+  }
+
+  void _pasteFromTouchMenu() => _pasteFromClipboard(requireFocus: false);
+
+  void _startHandleDrag(bool isStart, DragStartDetails d) {
+    final r = _render, sel = _controller.selection;
+    if (r == null || sel == null) return;
+    final rect = r.caretRectFor(isStart ? sel.start : sel.end);
+    if (rect == null) return;
+    _handleDrag = TouchHandleDrag(
+      fixed: isStart ? sel.end : sel.start,
+      grabOffset: r.globalToLocal(d.globalPosition) - rect.center,
+    );
+    _touchBar?.markNeedsBuild();
+  }
+
+  void _moveHandle(DragUpdateDetails d) {
+    final drag = _handleDrag, r = _render;
+    if (drag == null || r == null) return;
+    final p = r.positionAt(drag.target(r.globalToLocal(d.globalPosition)));
+    if (p == drag.fixed) return; // never collapse under the finger
+    _controller.setSelection(DocSelection(anchor: drag.fixed, focus: p));
+    _syncImeFromSelection();
+  }
+
+  void _endHandleDrag() {
+    _handleDrag = null;
+    _touchMenuHidden = false;
+    _touchBar?.markNeedsBuild();
   }
 
   /// Toggle an inline mark on whatever is focused: the active table cell (its
@@ -3944,7 +4094,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final selected = await showDialog<String>(
       context: context,
       barrierColor: Colors.transparent,
-      builder: (context) => _LanguagePicker(
+      builder: (context) => LanguagePicker(
         anchor: globalPosition,
         current: pinned.isEmpty ? 'auto' : pinned,
       ),
@@ -4208,7 +4358,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (!widget.canEdit) return;
     _pointerDragActive = true;
     _hideMarkBar();
-    _tapCount = 0; // a drag ends any tap sequence (no stray triple-click)
+    _taps.reset(); // a drag ends any tap sequence (no stray triple-click)
     final r = _render;
     if (r == null) return;
     // A drag (column resize, selection…) relayouts under the floating cell
@@ -5794,7 +5944,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       onPointerSignal: _onPointerSignal,
       // Capture the down timestamp (binding clock) for multi-tap counting; the
       // GestureDetector's onTapDown does not expose it.
-      onPointerDown: (e) => _downStamp = e.timeStamp,
+      onPointerDown: (e) {
+        _downStamp = e.timeStamp;
+        _downKind = e.kind;
+        _touchMenuHidden = false;
+      },
       onPointerCancel: (_) {
         _panCancelled = true;
         if (_pointerDragActive) _onPanCancel();
@@ -5810,6 +5964,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           focusNode: _focus,
           onKeyEvent: _onKey,
           child: GestureDetector(
+            // Fingers only: a held mouse button starts a drag-select instead.
+            supportedDevices: touchLongPressDevices,
+            onLongPressStart: _onLongPressStart,
+            onLongPressMoveUpdate: _onLongPressMove,
+            onLongPressEnd: (_) => _longPressWord = null,
+            child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             // Anchor at the touch-down point, not 36 px later (gh#171).
             dragStartBehavior: DragStartBehavior.down,
@@ -5854,6 +6014,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   Positioned(top: 6, right: 6, child: _buildFindBar()),
               ],
             ),
+          ),
           ),
         ),
       ),

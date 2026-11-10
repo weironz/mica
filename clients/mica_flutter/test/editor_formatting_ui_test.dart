@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart' hide TableCell;
@@ -101,7 +102,7 @@ void main() {
           EditorNode(id: 'item$i', kind: 'bulleted_list', text: 'list item $i'),
       ], hook: hook);
       await tester.tapAt(
-        tester.getTopLeft(find.byType(MicaEditor)) + const Offset(55, 15),
+        tester.getTopLeft(find.byType(MicaEditor)) + const Offset(55, 15), kind: PointerDeviceKind.mouse,
       );
       await _selectAll(tester);
       expect(find.byIcon(Icons.format_bold), findsOneWidget);
@@ -133,7 +134,7 @@ void main() {
         EditorNode(id: 'item$i', kind: 'bulleted_list', text: 'item $i'),
     ], hook: hook);
     await tester.tapAt(
-      tester.getTopLeft(find.byType(MicaEditor)) + const Offset(55, 15),
+      tester.getTopLeft(find.byType(MicaEditor)) + const Offset(55, 15), kind: PointerDeviceKind.mouse,
     );
     await _selectAll(tester);
     hook.editLink();
@@ -177,7 +178,7 @@ void main() {
         find.byType(DocumentSurface),
       );
       final cell = render.tableCellRect(0, 1, 0)!;
-      await tester.tapAt(render.localToGlobal(cell.center));
+      await tester.tapAt(render.localToGlobal(cell.center), kind: PointerDeviceKind.mouse);
       await tester.pumpAndSettle();
       expect(find.byType(TextField), findsOneWidget);
       final decoration = tester

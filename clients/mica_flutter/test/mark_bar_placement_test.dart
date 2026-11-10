@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 // The floating format bar must never cover the text it describes.
 //
 // Reported 2026-08-05 with a screenshot: selecting the FIRST line put the bar
@@ -39,7 +40,7 @@ void main() {
   /// then Shift+End.
   Future<void> selectLineAt(WidgetTester tester, double dy) async {
     await tester.tapAt(
-      tester.getTopLeft(find.byType(MicaEditor)) + Offset(40, dy),
+      tester.getTopLeft(find.byType(MicaEditor)) + Offset(40, dy), kind: PointerDeviceKind.mouse,
     );
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.home);
@@ -156,7 +157,7 @@ void main() {
     /// Select from the first line into the third — a MULTI-block range.
     Future<void> selectAcrossBlocks(WidgetTester tester) async {
       await tester.tapAt(
-        tester.getTopLeft(find.byType(MicaEditor)) + const Offset(40, 14),
+        tester.getTopLeft(find.byType(MicaEditor)) + const Offset(40, 14), kind: PointerDeviceKind.mouse,
       );
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.home);
