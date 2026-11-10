@@ -121,6 +121,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [redundancy-and-home-review-2026-11-10.md](reviews/redundancy-and-home-review-2026-11-10.md) | 双实现盘点(Mermaid、公式、兼容层、本地存储、发版两条路、本地模式)与首页精简建议:只是评估,三个问题待用户拍板 |
 | [crdt-web-wasm-spike-2026-11-01.md](reviews/crdt-web-wasm-spike-2026-11-01.md) | Web 端 CRDT 换成 mica-core wasm 的可行性验证:可行,净增约 194 KB gzip,待用户决定 |
 | [editor-p2-undo-cache-design.md](reviews/editor-p2-undo-cache-design.md) | #79 本地操作撤销与 #62 预览/图片缓存循环：源码调研、设计与验证 |
 | [editor-formatting-2026-10-24.md](reviews/editor-formatting-2026-10-24.md) | 列表跨块格式与表格多余边框：根因、近期 issue 边界、193 项回归与浏览器验证 |
