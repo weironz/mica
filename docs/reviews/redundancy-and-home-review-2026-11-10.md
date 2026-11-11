@@ -449,7 +449,7 @@ COOP/COEP 可影响跨域资源与窗口关系，需覆盖独立资源源站、�
 
 Firefox159.0.1/geckodriver0.37.1实际打开当日NativeShell RichEditor，在编辑器加载前报 `error loading dynamically imported module: nsh:rt`，input/textarea/contenteditable为0；同URL当日Chromium152正常。最小诊断证明Firefox先注册import map再加载模块成功，先执行module再注册map失败；官网runtime采用后者，属于这份当日示例的Firefox兼容失败，非仅驱动或全站宕机。未执行的输入/composition/撤销复制/输入框位置不能记通过。证据：[摘要](assets/redundancy-third-2026-11-11/firefox-summary.json)、[最小诊断](assets/redundancy-third-2026-11-11/firefox-importmap.json)、[错误截图](assets/redundancy-third-2026-11-11/firefox-nsh-load-error.png)。
 
-gpui-kit同版Web示例正在从官方v0.9.1固定提交39ab849重建，独立nightly工具链，不改Mica rustc1.98 pin；不因缺旧产物直接宣称不能测。Windows真人IME、Android真机、Safari仍没有本轮通过证据，不用JS合成事件、Android模拟尺寸或WebKit代替。四关维持未完整通过、不迁UI的决策；本地存储两份实现继续暂缓合并。
+gpui-kit官方v0.9.1固定提交39ab849与原锁已实际重建：nightly-2026-10-31，独立bindgen0.2.127，release1m39s，wasm18,077,402 B；Mica rustc1.98和全局bindgen0.2.129保持。Firefox159/driver0.37.1、独立Xvfb/llvmpipe WebGL2基线真实通过英文/全选复制、两次非trusted合成组字提交/连续提交、取消和撤销，每步用GPUI真实Ctrl+A/C回读系统剪贴板验证。中文模型正确但画面仍方框，组字镜像textarea固定(0,0,8,8)不跟画布光标。它是纯textarea，##空格保持普通文本，不冒称富文本Markdown快捷转换。见[协议结果](assets/redundancy-third-2026-11-11/gpui-firefox-results.json)、[中文截图](assets/redundancy-third-2026-11-11/gpui-firefox-chinese.png)、[锚点截图](assets/redundancy-third-2026-11-11/gpui-firefox-preedit.png)。没有真人IME/系统候选窗实测。Windows真人IME、Android真机、Safari仍没有本轮通过证据，不用JS合成事件、Android模拟尺寸或WebKit代替。四关维持未完整通过、不迁UI的决策；本地存储两份实现继续暂缓合并。
 
 
 ### 9.7 需用户操作与外部条件的材料
@@ -514,3 +514,14 @@ Context7 文档工具返回连接错误，已回退官方 [Gradle TaskExecutionG
 本地完整 `just ci` 已通过：Root工作区及真实PG、mica-core store、Flutter分析/单元widget、浏览器专用套件与五个独立浏览器回归（含deferred）均实际执行，2109个前端单元/widget通过。安全审计扫描两个锁并拒绝warnings；无新增跳过或预算放宽。
 
 独立提交：`a44ed9ce`外壳/编辑器与延迟加载，`e6c0b0dd`工程与产物验证，`0f8a7bff`延迟窗口真实浏览器验收，`d398a621`Windows原生透明PNG/编辑器粘贴，`b1789140`显式选择dry-run可选包。下一步为官方完整CI与含Linux deb的dry-run；不在本轮发版或部署。
+
+
+### 9.9 Windows 依赖矩阵的已验证与人工缺口
+
+真实Windows交互session、升级后的独立依赖快照中，`native_image_clipboard_test`和既有clipboard_roundtrip均通过（后者5组场景），包括外部进程注册透明PNG→生产读端严格像素/alpha→实际编辑器粘贴。原剪贴板仅保内存，finally恢复，无内容落盘；未安装Inno或改现装Mica。
+
+兼容保留版窗口API的独立probe取得：native sizing事件触发生产prefs持久化；一轮实际重启恢复同一[100,100,1040,760]；关闭触发durability flush；托盘注册、隐藏和核对owner HWND的原生通知回调恢复。**不把原生通知注入当作物理图标点击**。
+
+未完成：Explorer overflow真实点击定位不可靠；FilePicker13的同PID原生IFileDialog已打开，但受控filename/Open安全定位未能取得唯一目标，尚无真实选中文件后的picker-read回执；后续一次restart-ready也超时。没有放宽断言或修改生产API来方便测试，8.2的完整桌面矩阵保持待验收。
+
+人工步骤：在专用验证profile运行window_plugin_probe，拖动/调整尺寸后正常关闭并重启核对；从实际通知区/overflow点击本测试托盘图标恢复；点击选择文件，仅选专用合成fixture目录中的PNG/文本，确认读取字节及显示名；再跑native_image_clipboard和既有clipboard_roundtrip。避免对用户已装Mica运行Inno测试，安装canary仅在一次性官方runner/VM。

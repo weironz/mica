@@ -1,0 +1,58 @@
+{
+  "method": "W3C real keyboard; composition events untrusted/synthetic. Commit/cancel result re-read through actual GPUI Ctrl+A/C clipboard, not merely manually assigned textarea value.",
+  "englishCopied": {
+    "text": "abc"
+  },
+  "preeditRects": [
+    {
+      "h": 8,
+      "w": 8,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "h": 8,
+      "w": 8,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "h": 8,
+      "w": 8,
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "commit1Copied": {
+    "text": "abc你好"
+  },
+  "commit2Copied": {
+    "text": "abc你好世界"
+  },
+  "cancelCopied": {
+    "text": "abc你好世界"
+  },
+  "undoCopied": {
+    "text": "abc你好"
+  },
+  "finalMirror": {
+    "end": 5,
+    "focused": true,
+    "readonly": false,
+    "rect": {
+      "h": 8,
+      "w": 8,
+      "x": 0,
+      "y": 0
+    },
+    "start": 0,
+    "value": "abc你好"
+  },
+  "passAssertions": {
+    "english": true,
+    "firstCommit": true,
+    "continuousCommit": true,
+    "cancelNoResidue": true,
+    "undo": true
+  }
+}

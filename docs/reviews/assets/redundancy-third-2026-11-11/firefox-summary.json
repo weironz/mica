@@ -3,7 +3,7 @@
   "geckodriverVersion": "0.37.1",
   "platform": "linux",
   "url": "https://nsh.dev/play/index.html?theme=light&idiom=desktop#el-rich-editor",
-  "nativeShellResult": "load failure before editor: error loading dynamically imported module: nsh:rt",
+  "nativeShellResult": "Loading failure reproduced in both Snap headless and official portable Firefox159.0.1; no editor. Chromium152 control loads. Import-map ordering minimal diagnostic is positive before-first-module and negative after-first-module.",
   "editorInputs": 0,
   "chromiumControl": "Same URL renders RichEditor normally in Chromium152/Electron44; availability control only, not another full editing suite",
   "importMapDiagnostic": "In real Firefox same-origin iframe, map-before-first-module imports both colon and bare virtual specifiers; map-after-first-module imports neither. NativeShell runtime has the latter ordering.",
@@ -13,7 +13,14 @@
     "undo/select-all/copy",
     "Firefox hidden input/caret position"
   ],
-  "gpuiKit": "No previous gpui-base WASM artifact or nightly-2026-10-31 locally; v0.9.1 public release has only desktop shell assets. Same-version Firefox example not rebuilt or tested.",
+  "gpuiKit": "Official v0.9.1 commit39ab849a93b5f15507b969164d49891db8d5b470 rebuilt unchanged with isolated nightly-2026-10-31 and wasm-bindgen0.2.127; Firefox159.0.1 portable + geckodriver0.37.1 under Xvfb/llvmpipe WebGL2. Real keyboard English, select-all/copy, synthetic composition continuous commit/cancel/undo passed with actual GPUI clipboard readback. CJK glyphs tofu; hidden textarea fixed (0,0,8,8), not caret-following. No human IME validation.",
   "safari": "No real Safari; no WebKit substitution.",
-  "nativeIme": "No human/OS input method validation; synthetic composition would not count as human IME."
+  "nativeIme": "No human/OS input method validation; synthetic composition would not count as human IME.",
+  "gpuiEvidence": [
+    "gpui-verified-results.json",
+    "gpui-verified-chinese.png",
+    "gpui-verified-preedit.png",
+    "gpui-verified-undo.png"
+  ],
+  "cleanup": "All test browser sessions deleted. Parent41913 left ready. Owned portable41915 geckodriver/Xvfb stopped through its foreground PTY; ownedHTTP32778 and Snap testXvfb99 stopped. Extra Snap41914 driver PID1676193 remains idle/no-session: normal shutdown endpoint unsupported and kill denied by OS; no policy/security changes attempted."
 }
