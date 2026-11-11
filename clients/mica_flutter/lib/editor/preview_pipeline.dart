@@ -18,6 +18,14 @@ class RasterPreviewPipeline {
   final Map<String, Map<String, double>> _baselines = {};
   final Map<String, Set<String>> _failed = {};
   final Map<PreviewResourceKey, Object> _tickets = {};
+  // A renderer that could not run (PreviewUnavailable) is paused per
+  // previewer, and what it was asked for is re-requested when the pause ends.
+  // Failed sources are never retried; unavailable ones always are.
+  final Map<String, Timer> _paused = {};
+  final Map<String, int> _pauseMs = {};
+  final Map<String, Map<String, double>> _deferred = {};
+  static const _firstPauseMs = 1000;
+  static const _maxPauseMs = 30000;
   Map<PreviewResourceKey, double>? _demand;
   bool _demandScheduled = false;
   bool _rebuildScheduled = false;
@@ -129,6 +137,7 @@ class RasterPreviewPipeline {
       imagesOf(key.id)[key.source] = image;
       final baseline = preview?.baseline;
       if (baseline != null) baselinesOf(key.id)[key.source] = baseline;
+      _pauseMs.remove(key.id); // the renderer works again: reset the backoff
       if (old != null && !identical(old, image)) _disposePostFrame(old);
     }
     _cap(key.id);
@@ -146,6 +155,10 @@ class RasterPreviewPipeline {
         _tickets.containsKey(key)) {
       return;
     }
+    if (_paused.containsKey(id)) {
+      (_deferred[id] ??= {})[source] = targetWidth;
+      return;
+    }
     final generation = _generation;
     final ticket = Object();
     _tickets[key] = ticket;
@@ -155,11 +168,42 @@ class RasterPreviewPipeline {
           .then(
             (preview) => _finish(key, ticket, generation, preview),
             onError: (Object error, StackTrace stack) =>
-                _finish(key, ticket, generation, null),
+                error is PreviewUnavailable
+                ? _unavailable(key, ticket, generation, targetWidth)
+                : _finish(key, ticket, generation, null),
           );
+    } on PreviewUnavailable {
+      _unavailable(key, ticket, generation, targetWidth);
     } catch (_) {
       _finish(key, ticket, generation, null);
     }
+  }
+
+  /// The renderer could not run: keep the source unfailed, pause this
+  /// previewer with a doubling delay, then ask again for whatever is still
+  /// wanted. Without the pause a renderer that cannot load would be asked
+  /// again on every frame.
+  void _unavailable(
+    PreviewResourceKey key,
+    Object ticket,
+    int generation,
+    double targetWidth,
+  ) {
+    if (!_current(key, ticket, generation)) return;
+    _tickets.remove(key);
+    final id = key.id;
+    (_deferred[id] ??= {})[key.source] = targetWidth;
+    if (_paused.containsKey(id)) return;
+    final ms = _pauseMs[id] ?? _firstPauseMs;
+    _pauseMs[id] = math.min(ms * 2, _maxPauseMs);
+    _paused[id] = Timer(Duration(milliseconds: ms), () {
+      _paused.remove(id);
+      if (_disposed) return;
+      final again = _deferred.remove(id) ?? const <String, double>{};
+      for (final MapEntry(key: source, value: width) in again.entries) {
+        request(id, source, width);
+      }
+    });
   }
 
   // All arrivals in a frame share one rebuild.
@@ -186,6 +230,11 @@ class RasterPreviewPipeline {
     _baselines.clear();
     _tickets.clear();
     _failed.clear();
+    for (final timer in _paused.values) {
+      timer.cancel();
+    }
+    _paused.clear();
+    _deferred.clear();
     _demand = null;
   }
 }

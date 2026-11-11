@@ -40,8 +40,25 @@ try {
   if (!await page.evaluate(() => window.micaPreviewHarnessHasHanGlyphs())) {
     throw new Error('Mermaid labels with different Han characters did not draw different glyphs');
   }
+
+  // The renderers cannot load at first (offline, a failed download): the
+  // source stays visible, and once they can load the previews appear by
+  // themselves — a failed load must not be remembered as a bad formula.
+  await page.route('**/mica_preview/**', route => route.abort());
+  await open('render');
+  await page.waitForTimeout(2500);
+  const blocked = JSON.parse(await page.evaluate(() => window.micaClipboardHarnessMathState()));
+  if (blocked.previews.math || blocked.previews.mermaid) {
+    throw new Error(`Previews rendered while their renderers were blocked: ${JSON.stringify(blocked.previews)}`);
+  }
+  await page.unroute('**/mica_preview/**');
+  await page.waitForFunction(() => {
+    const state = JSON.parse(window.micaClipboardHarnessMathState());
+    return state.previews.math === 1 && state.previews.mermaid === 1;
+  }, null, { timeout: 15000 });
+
   if (errors.length) throw new Error(`Page errors: ${errors.join(' | ')}`);
-  console.log('Rich previews: lazy wasm, inline and display math, Mermaid and Han glyphs passed');
+  console.log('Rich previews: lazy wasm, inline and display math, Mermaid, Han glyphs and recovery after a failed load passed');
 } finally {
   await browser.close();
 }

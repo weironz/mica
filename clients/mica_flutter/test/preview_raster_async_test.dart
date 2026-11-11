@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/editor/preview_engine.dart';
 import 'package:mica_flutter/editor/preview_raster.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';
 
@@ -168,5 +169,76 @@ void main() {
     await tester.pump();
     pipeline.request('mermaid', 'source');
     expect(previewer.jobs, hasLength(2));
+  });
+
+  testWidgets('an unavailable renderer is retried after a pause, not failed', (
+    tester,
+  ) async {
+    final previewer = _DelayedPreviewer();
+    final pipeline = RasterPreviewPipeline(
+      previewers: [previewer],
+      requestRebuild: (fn) => fn(),
+    );
+    addTearDown(pipeline.dispose);
+    final done = await image(tester);
+
+    pipeline.request('mermaid', 'a');
+    pipeline.request('mermaid', 'b');
+    expect(previewer.jobs, hasLength(2));
+    // The renderer went away with both in flight (another source crashed it,
+    // or its code failed to load): neither source is to blame.
+    previewer.jobs[0].completeError(const PreviewUnavailable());
+    previewer.jobs[1].completeError(const PreviewUnavailable());
+    await tester.pump();
+
+    // Paused: asking again right away does not hammer the renderer.
+    pipeline.request('mermaid', 'a');
+    expect(previewer.jobs, hasLength(2));
+    await tester.pump(const Duration(milliseconds: 999));
+    expect(previewer.jobs, hasLength(2));
+
+    // After the first pause (1 s) both are asked for again.
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(previewer.jobs, hasLength(4));
+    previewer.jobs[2].complete((image: done, baseline: null));
+    previewer.jobs[3].complete(null); // this one genuinely cannot render
+    await tester.pump();
+    expect(pipeline.imagesOf('mermaid')['a'], same(done));
+
+    // A null result is final: no retry, however long we wait.
+    pipeline.request('mermaid', 'b');
+    await tester.pump(const Duration(seconds: 60));
+    expect(previewer.jobs, hasLength(4));
+  });
+
+  testWidgets('the pause doubles while the renderer stays unavailable', (
+    tester,
+  ) async {
+    final previewer = _DelayedPreviewer();
+    final pipeline = RasterPreviewPipeline(
+      previewers: [previewer],
+      requestRebuild: (fn) => fn(),
+    );
+    addTearDown(pipeline.dispose);
+
+    pipeline.request('mermaid', 'a');
+    previewer.jobs.last.completeError(const PreviewUnavailable());
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(previewer.jobs, hasLength(2)); // first retry after 1 s
+
+    previewer.jobs.last.completeError(const PreviewUnavailable());
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1999));
+    expect(previewer.jobs, hasLength(2));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(previewer.jobs, hasLength(3)); // second retry after 2 s
+
+    // Disposing cancels the pending retry instead of leaving a timer behind.
+    previewer.jobs.last.completeError(const PreviewUnavailable());
+    await tester.pump();
+    pipeline.dispose();
+    await tester.pump(const Duration(seconds: 10));
+    expect(previewer.jobs, hasLength(3));
   });
 }

@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web/web.dart' as web;
 
 import '../src/rust/api/render.dart' show MermaidTheme;
-import 'preview_engine.dart' show MathSvg;
+import 'preview_engine.dart' show MathSvg, PreviewUnavailable;
 
 @visibleForTesting
 String previewWorkerUrl = 'mica_preview_worker.js';
@@ -15,12 +15,19 @@ web.Worker? _worker;
 int _nextId = 0;
 final _pending = <int, Completer<String?>>{};
 
-void _retireWorker(web.Worker worker) {
+/// Drop [worker] and answer everything still waiting on it. Only [crashed],
+/// the request that brought the renderer down, gets a final "no preview";
+/// the rest were merely in flight and are told to retry.
+void _retireWorker(web.Worker worker, {int? crashed}) {
   if (!identical(_worker, worker)) return;
   worker.terminate();
   _worker = null;
-  for (final job in _pending.values) {
-    job.complete(null);
+  for (final MapEntry(key: id, value: job) in _pending.entries) {
+    if (id == crashed) {
+      job.complete(null);
+    } else {
+      job.completeError(const PreviewUnavailable());
+    }
   }
   _pending.clear();
 }
@@ -34,7 +41,11 @@ web.Worker _startWorker() {
     if (!identical(_worker, worker)) return;
     final data = (event.data as JSArray<JSAny?>).toDart;
     final id = (data[0] as JSNumber?)?.toDartInt;
-    if (id == null) {
+    final status = data.length > 2 ? (data[2] as JSString?)?.toDart : null;
+    if (id == null || status == 'crashed') {
+      _retireWorker(worker, crashed: id);
+    } else if (status == 'unavailable') {
+      // The worker closed itself: a failed import stays failed in it.
       _retireWorker(worker);
     } else {
       _pending.remove(id)?.complete((data[1] as JSString?)?.toDart);

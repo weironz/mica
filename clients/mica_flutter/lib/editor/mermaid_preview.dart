@@ -18,6 +18,8 @@ Future<ui.Image?> renderMermaid(
     // flutter_svg ignores merman's <style> CSS. Inline it on both platforms.
     final svg = inlineMermaidCss(raw, background: cssHex(tokens.surface.base));
     return await rasterizeSvg(svg, targetWidth * 2);
+  } on PreviewUnavailable {
+    rethrow; // the pipeline retries; never mistake it for a bad diagram
   } catch (_) {
     return null;
   }
