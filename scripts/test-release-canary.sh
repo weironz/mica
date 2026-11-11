@@ -68,7 +68,7 @@ cat > "$fixture/bin/powershell" <<'STUB'
 case "$*" in *'-ExpectedVersion 1.2.3'*) exit 0 ;; *) exit 19 ;; esac
 STUB
 chmod +x "$fixture/bin/"*
-check fail 'Windows installer is not run on a developer host' CANARY_WINDOWS=1
+check fail 'Windows installer is not run on a developer host' CANARY_WINDOWS=1 GITHUB_ACTIONS=false RUNNER_ENVIRONMENT=local
 check pass 'independent Windows installer and CLI producer manifests' CANARY_WINDOWS=1 GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted
 rm "$fixture/assets/sha256-windows-installer.txt"
 check fail 'missing installer manifest is refused despite a valid CLI manifest' CANARY_WINDOWS=1 GITHUB_ACTIONS=true RUNNER_ENVIRONMENT=github-hosted
