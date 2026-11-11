@@ -1,6 +1,6 @@
 # 双实现盘点与首页评估（2026-11-10）
 
-> **状态：第 1–3 项已实施并经审核。第 5 节是 2026-11-11 用户确定的待办清单，交给他人实施，完成后评审。**
+> **状态：第 1–3 项已实施并经审核。第 5 节实施与验证进行中，记录见第 6 节；未通过的验收不打勾。**
 >
 > **原评估依据**：读代码和数行数；实施时再对照运行同一批输入。首页部分用示例数据单独渲染，不是线上截图。
 
@@ -128,16 +128,16 @@
 
 ### 5.1 GitHub Actions 切回官方 runner（第 1 节第 5 项的决定）
 
-- [ ] 所有工作流的 `runs-on` 从 `[self-hosted, Linux]` / `[self-hosted, Windows]` 改回 `ubuntu-latest` / `windows-latest`
+- [x] 所有工作流的 `runs-on` 从 `[self-hosted, Linux]` / `[self-hosted, Windows]` 改回 `ubuntu-latest` / `windows-latest`
   （各处都留着注释掉的原值）。触发方式保持手动（`workflow_dispatch`），不要改回推送即触发，以免自动消耗额度。
 - [ ] **先确认能连到生产节点**：`deploy.yml`、`dr-drill.yml`、`prod-diagnostics.yml` 要 SSH 到生产节点。
   确认 GitHub 官方 runner 能否直接连上（生产 SSH 是否对公网开放）。连不上就保留这三个用本地流程
   （`just deploy-prod` 等），并在文件顶部注释说明原因；不要为此在仓库里放任何凭据或内网地址。
-- [ ] `runner-bootstrap.yml`、`runner-probe.yml` 只为自建 runner 存在：删除，或注明"仅在重新启用自建 runner 时使用"。
-- [ ] 去掉只对自建机器有意义的步骤或绕法（例如复用机器上预装 Flutter 的逻辑、"别碰 ~/.ssh"的隔离），
+- [x] `runner-bootstrap.yml`、`runner-probe.yml` 只为自建 runner 存在：删除，或注明"仅在重新启用自建 runner 时使用"。
+- [x] 去掉只对自建机器有意义的步骤或绕法（例如复用机器上预装 Flutter 的逻辑、"别碰 ~/.ssh"的隔离），
   确认官方 runner 上不需要；需要保留的，确认在官方 runner 上同样成立。
 - [ ] 手动触发一次 `CI`（scope=full），全部通过；再触发一次 `Release dry run`，通过。把两次运行的链接写进本文。
-- [ ] 更新 `AGENTS.md`（现在写的是"自建 runner 已停，本地 CI 是唯一门禁"）和 `docs/ops/ci-runners.md`：
+- [x] 更新 `AGENTS.md`（现在写的是"自建 runner 已停，本地 CI 是唯一门禁"）和 `docs/ops/ci-runners.md`：
   改为"GitHub Actions 用官方 runner、手动触发；额度用完时走本地流程（`just ci`、`just release` 等）"。
   `docs/ops/release.md` 里两条发版路径都要写清楚，并说明何时用哪条。
 
@@ -145,41 +145,43 @@
 
 `.github/workflows/ci.yml` 跑而 `scripts/local-ci.sh` 不跑的：
 
-- [ ] 结构检查：`scripts/test-structure-gate.sh`、`scripts/check-structure-ci.sh`
-- [ ] 脚本自测：`test-md-wasm-build.sh`、`test-web-entry-cache-check.sh`、`test-release-artifacts.sh`、
+- [x] 结构检查：`scripts/test-structure-gate.sh`、`scripts/check-structure-ci.sh`
+- [x] 脚本自测：`test-md-wasm-build.sh`、`test-web-entry-cache-check.sh`、`test-release-artifacts.sh`、
   `test-release-orchestration.sh`、`test-release-version.sh`、`test-ci-stacks.sh`、`test-verify-prod.sh`、
   `test-compose-api-env.py`
-- [ ] 4 个浏览器端到端脚本：`e2e/rich_preview_e2e.mjs`、`e2e/clipboard_e2e.mjs`、`e2e/ui_experience_e2e.mjs`、
+- [x] 4 个浏览器端到端脚本：`e2e/rich_preview_e2e.mjs`、`e2e/clipboard_e2e.mjs`、`e2e/ui_experience_e2e.mjs`、
   `e2e/sidebar_rename_e2e.mjs`。它们不需要后端：照 `ci.yml` 第 560–615 行的做法构建 `e2e/web_harness_entry.dart`、
   起静态文件服务即可。建议做成 `just ci e2e` 这一部分，`just ci`（all）也包含它。
-- [ ] 浏览器来源：仓库锁定的 Playwright 版本要配套下载自己的浏览器；在已有 Chromium、不能下载的机器上要能用
+- [x] 浏览器来源：仓库锁定的 Playwright 版本要配套下载自己的浏览器；在已有 Chromium、不能下载的机器上要能用
   `CHROME_EXECUTABLE` 指定浏览器（现在脚本只回退到系统 Chrome）。
-- [ ] 明确不纳入本地 CI 的（需要真实服务栈或 Docker，如 `web_e2e.mjs`、`upload_length_e2e.mjs`、容器栈）
+- [x] 明确不纳入本地 CI 的（需要真实服务栈或 Docker，如 `web_e2e.mjs`、`upload_length_e2e.mjs`、容器栈）
   继续列在脚本结尾的"未覆盖"清单里。
 - **验收**：`just ci` 全部通过；故意改坏一处（例如让剪贴板复制丢格式）能让 `just ci` 失败。
 
 ### 5.3 字体压缩（第二轮评估第 2 项 a）
 
-- [ ] `deploy/nginx.conf` 与 `deploy/nginx.dev.conf`：给 `.otf`、`.ttf`（以及 `.woff2`）配上正确的 MIME 类型；
+- [x] `deploy/nginx.conf` 与 `deploy/nginx.dev.conf`：给 `.otf`、`.ttf`（以及 `.woff2`）配上正确的 MIME 类型；
   `.otf`、`.ttf` 加入 `gzip_types`（`.woff2` 本身已压缩，不要再压）。
-- [ ] `scripts/web-entry-cache-check.sh` 加一条：字体以正确的 MIME 类型返回，并在其自测脚本里补用例。
+- [x] `scripts/web-entry-cache-check.sh` 加一条：字体以正确的 MIME 类型返回，并在其自测脚本里补用例。
 - **验收**：本地容器或部署后实测，`DroidSansFallback.ttf` 传输约 2.1 MB（原 4.0 MB），
   `NotoSansSC-Regular.otf` 约 7.3 MB（原 8.5 MB）。
 
 ### 5.4 网页版不再内置两个中文字体（第二轮评估第 2 项 b）
 
-- [ ] 网页构建不再打包 `NotoSansSC-Regular.otf`、`DroidSansFallback.ttf`，中文改由引擎从同源镜像
+- [x] 网页构建不再打包 `NotoSansSC-Regular.otf`、`DroidSansFallback.ttf`，中文改由引擎从同源镜像
   `web/gfonts/notosanssc/` 按需加载（镜像已有全部 101 个切片，共 2.6 MB）。桌面和手机不受影响（见 5.5）。
-- [ ] `lib/cjk_fonts.dart` 网页分支、`lib/editor/svg_raster.dart`（Mermaid 中文标签目前指定内置字体名）
+- [x] `lib/cjk_fonts.dart` 网页分支、`lib/editor/svg_raster.dart`（Mermaid 中文标签目前指定内置字体名）
   相应调整，保证 Mermaid 图里的中文仍然不是方框（`rich_preview_e2e.mjs` 已有"不同汉字画出不同字形"的检查）。
-- [ ] 评估并记录首次显示中文时的闪烁（方框 → 正确字形）是否可接受；离线时未加载过的字如何显示。
+- [x] 评估并记录首次显示中文时的闪烁（方框 → 正确字形）是否可接受；离线时未加载过的字如何显示。
 - **验收**：首次打开登录页的下载总量从 24.9 MB 降到约 12 MB 以下（用同样的方法实测：记录首次加载的全部响应大小）；
   `rich_preview_e2e.mjs`、`clipboard_e2e.mjs` 通过；编辑器里中英混排、表格、公式、Mermaid 的截图无方框。
 
 ### 5.5 桌面版和安卓版的内置字体（第二轮评估第 3 项）
 
+**补充验收范围**：用户允许跳过 Android 实机验证；保留 Android 字体。Windows 和 Linux 已完成字体对照及截图，详见 6.2。
+
 - [ ] 实测：安卓、Windows、Linux 安装包里两个中文字体各占多少；去掉后系统字体能否覆盖常用中文、日文、韩文、生僻字。
-- [ ] 能覆盖的平台去掉内置字体（只保留在确实需要兜底的平台）；不能覆盖的保留并在本文写明原因。
+- [x] 能覆盖的平台去掉内置字体（只保留在确实需要兜底的平台）；不能覆盖的保留并在本文写明原因。
 - **验收**：本文记录各平台安装包变化前后的大小，以及真机或模拟器上的截图结论。
 
 ### 5.6 拆分应用外壳（第二轮评估第 4 项）
@@ -192,16 +194,58 @@
 
 ### 5.7 精简路线图（第二轮评估第 5 项）
 
-- [ ] `docs/plans/roadmap.md` 精简到只剩未完成事项及其状态（约 40 行），"接下来最该做的"一节里关于清单本身反复过时的历史
+- [x] `docs/plans/roadmap.md` 精简到只剩未完成事项及其状态（约 40 行），"接下来最该做的"一节里关于清单本身反复过时的历史
   移到 `roadmap-done.md` 或删除；保留文件顶部的维护规矩。
 
 ### 5.8 零碎清理（第二轮评估第 6 项）
 
-- [ ] 删除 `crates/mica-core/Cargo.toml` 里未使用的 `serde` 依赖（`cargo-machete` 报告；只用到 `serde_json`）。
-- [ ] 清理 Flutter 静态检查的提示（约 80 条，其中 27 条 `library_private_types_in_public_api`），只改提示所指的写法，不改行为。
+- [x] 删除 `crates/mica-core/Cargo.toml` 里未使用的 `serde` 依赖（`cargo-machete` 报告；只用到 `serde_json`）。
+- [x] 清理 Flutter 静态检查的提示（约 80 条，其中 27 条 `library_private_types_in_public_api`），只改提示所指的写法，不改行为。
 
 ### 不在本轮
 
 - 网页与桌面两套本地存储：等 GPUI 方向定。
 - 本地模式：保留，不动。
 - 首页：先不动。
+
+
+## 6. 第二轮实施与验收记录（2026-11-11）
+
+尚未发版、未部署。实施提交：字体与渲染 `cd03ebed`；外壳与偏好控制器 `ba27965d`；CI 与项目规则 `36ca950a`；静态清理、serde 与路线图 `dcea64d8`。官方运行链接待推送后补齐。
+
+### 6.1 已实现的范围
+
+- 工作流改为官方 runner，保留手动触发；恢复 macOS CLI 构建。删除自建 runner 的 bootstrap/probe 工作流、预装 Flutter 复用及无人使用的 bootstrap 脚本。临时 SSH 和 Docker 凭据隔离仍适用于官方 runner，保留。
+- 本地 CI 增加结构检查、脚本自测和四个独立浏览器回归；`just ci e2e` 可单独运行。Playwright 使用锁文件，支持显式 `CHROME_EXECUTABLE`。真实服务栈、容器、MCP inspector 和 Windows 集成仍列为独立检查。
+- nginx 两份配置添加字体 MIME、TTF/OTF gzip（level 6），WOFF2 不重复压缩；入口契约检查同时拒绝残留的两个完整中文字体。
+- Web 改用引擎按需字体。补齐引擎可能请求的 JP/KR/TC/HK 镜像，避免去掉完整字体后出现 404。新增大列表自测：原镜像脚本在 `pipefail` 下用 `echo | grep -q`，列表变大后 SIGPIPE 会把有效文件误判为过期；现改为完整读取。
+- SVG 缓存在系统字体到达时作废，并拒绝字体到达前的在途结果。登录分段按钮重建字体固有宽度缓存，回归检查实际 RenderParagraph 的行数和裁切，避免以按钮外框尺寸冒充文字尺寸。
+- 外壳库 **17,009 → 14,606 行**，`main_shell.dart` 为 5,191 行。六类对话框成为独立库；偏好读取、保存、云同步和定时器移入 `ShellPreferencesController`。延迟写入捕获数据和会话归属，过期云回复不能覆盖下一会话。没有将 part 拆分冒充库拆分。
+- 路线图 **181 → 40 行**，保留实际未完成项；历史移入归档。删除 mica-core 未用 serde，更新两个锁文件；静态检查从最初 lib 的 77 条提示降至全项目无提示（最终检查另附）。渲染器原有公开接口使用的布局类型正名为 `NodeLayout`，表格内部字段继续私有。
+
+### 6.2 体积与平台实测
+
+| 项目 | 前 | 后 | 口径与结论 |
+| --- | ---: | ---: | --- |
+| DroidSansFallback.ttf | 4,033,420 B | 2,146,464 B | 本地 nginx 容器实际 gzip 响应体 |
+| NotoSansSC-Regular.otf | 8,482,020 B | 7,341,890 B | 同上；两者 MIME 和 Content-Encoding 正确 |
+| Web 登录页 | 18,370,610 B | 4,713,736 B | 前为线上 0.14.4，后为本地新 nginx；Chrome CDP 冷上下文全部网络响应，含响应头。旧文 24.9 MB 保留为历史评估，不冒充本次相同会话的精确基线 |
+| Windows 安装包 | 26,091,033 B | 18,473,565 B | 同一 Windows 主机、同一工具链和当前源码分别构建；移除字体后减少 7,617,468 B；含登录标签回归修复的少量代码差异 |
+| Linux deb | 24,326,988 B | 23,913,560 B | 前为已发布 0.14.4，后为本次本机构建，构建环境和代码有差异；保留字体，字体资源净减少 0 B，不把整体差值归因于字体 |
+| Android | arm64 53,294,048 B；armv7 45,715,354 B | 未重建 | 用户明确允许跳过设备验证，保留字体，不声称真机通过 |
+
+Web 压缩前响应体约 12.77 MB，实际传输约 4.71 MB，两种口径不能混用。原始逐响应记录见 [JSON](assets/redundancy-2026-11-11/web-startup.json)。当前线上未部署上述修改。
+
+Windows 在用户提供的设备上对照了有/无内置字体，并在最终实际不含两字体的包上再次运行字体探针；常用中、日、韩文及 `𠮷`、`𠀀` 样本、Mermaid 标签正常。所选系统字体也在 [Microsoft Windows 11 字体清单](https://learn.microsoft.com/en-us/typography/fonts/windows_11_font_list) 中。截图：[移除前](assets/redundancy-2026-11-11/windows-before.png)、[最终移除后](assets/redundancy-2026-11-11/windows-after.png)。这不是对任意 Unicode 字符完整覆盖的承诺。
+
+Linux 发行版不能保证装有 CJK 系统字体。仅保留拉丁系统字体时，[去掉内置字体](assets/redundancy-2026-11-11/linux-without-cjk-fonts.png) 会让常用中文、日文缺字，因此保留兜底。[正常系统截图](assets/redundancy-2026-11-11/linux-normal.png) 中常用中、日、韩文正常，但 `𠀀` 仍缺字；内置字体也没有覆盖所有扩展区。像素不同不等于每个字都有字形，不能仅以两个栅格不同宣称完整覆盖。
+
+Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载过的字符离线不能保证显示。当前标签页已加载字形保留，联网后的恢复还受引擎字体重试机制影响；必要时刷新，不承诺离线全字库。[登录截图](assets/redundancy-2026-11-11/web-login.png) 与浏览器回归验证了联网稳定后的显示。
+
+### 6.3 门禁与尚待收尾
+
+- 完整 `just ci` 已通过一次：Rust 工作区回执 **1,191**，带 store 特性的 mica-core 回执 **221**，Flutter 单元/widget 回执 **2,096**，浏览器专用套件及四个 Node 浏览器脚本通过；这些是各次执行数，不宣称互不重叠的唯一测试总数。
+- 故障注入：临时把 ClipboardItem 的 HTML 内容改成纯文本，完整 `just ci` 在 `clipboard_e2e.mjs` 的 Gemini 行内数学格式断言失败，退出 **1**；源码已逐字节恢复。没有放宽预算或新增跳过。
+- Windows 字体探针、安装包构建已通过；另做的完整应用首帧冒烟没有取得首帧回执，正在定位，不能标为启动通过。
+- 官方 runner 对生产 SSH 的真实连通性、`CI(scope=full)` 和 `Release dry-run` 仍待推送后执行，5.1 保持未完成。
+- 5.6 的全部主流程验收仍需结合官方端到端和桌面启动结果，保持未完成。
