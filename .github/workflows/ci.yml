@@ -209,16 +209,11 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Plain SQL, applied in order. sqlx-cli would have to be compiled first
-      # (minutes); psql ships on the runner. The tests do not read the
-      # _sqlx_migrations bookkeeping table, only the schema.
-      - name: Apply migrations
-        run: |
-          set -euo pipefail
-          for f in migrations/*.sql; do
-            echo "==> $f"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
-          done
+      # Use the same sqlx migrator as local CI and the API. Running raw SQL
+      # leaves no migration ledger, so tests that call Migrator::run try to
+      # create existing tables again on a fresh hosted database.
+      - name: Apply migrations with their ledger
+        run: cargo run --locked -q -p mica-infra --example apply_migrations
 
       # mica-core's legacy_yjs_state.rs pins a state the retired yjs web client
       # wrote, so documents already in browsers' IndexedDB keep decoding now that
