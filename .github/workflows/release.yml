@@ -96,8 +96,7 @@ jobs:
   # dry run (workflow_dispatch with publish=false), which must keep building and
   # uploading artifacts as it does today.
   draft:
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     # The ONE place the version is resolved, and the only place it is validated
     # against this tree. `windows`, `cli` and `images` declare `needs: draft` and
     # read these outputs, so a refusal here skips every build and push — and no
@@ -138,8 +137,7 @@ jobs:
 
   windows:
     needs: draft
-    # runs-on: windows-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Windows]
+    runs-on: windows-latest
     # NOTE: sccache was tried here and removed (v0.12.18) — measured 0% hit rate.
     # The GitHub Actions cache is scoped per git-ref and this job only runs on tag
     # pushes, so each release starts from an empty cache and never reuses the
@@ -261,8 +259,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # - os: windows-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-          - os: [self-hosted, Windows]
+          - os: windows-latest
             bin: mica-cli.exe
             suffix: windows-x64.exe
             osname: windows
@@ -280,18 +277,15 @@ jobs:
           # musl is clean here because nothing in the workspace links C: reqwest
           # is `default-features = false` + `rustls-tls`, so there is no OpenSSL
           # to fight. The result runs on any Linux, Alpine included.
-          # - os: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-          - os: [self-hosted, Linux]
+          - os: ubuntu-latest
             bin: mica-cli
             suffix: linux-x64
             target: x86_64-unknown-linux-musl
             osname: linux
-          # macOS：没有 macOS 自托管 runner，这一项会永远排队（2026-10-20 注释）。
-          # publish 不要求 macOS 产物，所以停掉它不影响发布。
-          # - os: macos-latest
-          #   bin: mica-cli
-          #   suffix: macos-arm64
-          #   osname: macos
+          - os: macos-latest
+            bin: mica-cli
+            suffix: macos-arm64
+            osname: macos
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -438,8 +432,7 @@ jobs:
     # Without the dependency a refused version (tag says 0.13.69, tree says
     # 0.13.68) still pushed 0.13.69 images under publish=true (#119).
     needs: draft
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -570,7 +563,7 @@ jobs:
   linux-deb:
     needs: draft
     if: ${{ inputs.build_linux_deb || vars.MICA_BUILD_LINUX_DEB == 'true' }}
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: Build the .deb in the pinned builder
@@ -602,7 +595,7 @@ jobs:
   android:
     needs: draft
     if: ${{ inputs.build_android || vars.MICA_BUILD_ANDROID == 'true' }}
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       # Signed with the builder's debug key (manual install, no store). The
@@ -642,8 +635,7 @@ jobs:
     # need succeeded" (which a skipped job never satisfies).
     needs: [draft, windows, cli, linux-deb, android]
     if: ${{ !failure() && !cancelled() && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     steps:
       - name: Publish the release
         env:

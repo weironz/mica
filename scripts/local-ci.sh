@@ -4,6 +4,7 @@
 #   just ci                # everything below
 #   just ci rust           # only the Rust half
 #   just ci flutter        # only the Flutter half
+#   just ci e2e            # the four standalone editor/UI browser scripts
 #
 # For when GitHub Actions minutes are gone: the same gates, run the same way,
 # REFUSING rather than warning where CI would fail. In particular the
@@ -24,7 +25,7 @@ export CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG:-0}
 export CARGO_PROFILE_TEST_DEBUG=${CARGO_PROFILE_TEST_DEBUG:-0}
 
 part=${1:-all}
-case "$part" in all | rust | flutter) ;; *) fail "unknown part '$part' (all | rust | flutter)" ;; esac
+case "$part" in all | rust | flutter | e2e) ;; *) fail "unknown part '$part' (all | rust | flutter | e2e)" ;; esac
 
 note "source files hidden by .gitignore"
 bash scripts/check-ignored-sources.sh
@@ -39,10 +40,16 @@ bash scripts/check-dart-markdown.sh
 
 note "CI configuration: job selection regressions"
 bash scripts/test-ci-paths.sh
-note "CI configuration: Flutter SDK reuse regressions"
-bash scripts/test-flutter-sdk-reuse.sh
+bash scripts/test-font-mirror.sh
+note "structure and CI/release script regressions"
+bash scripts/test-structure-gate.sh
+bash scripts/check-structure-ci.sh
+for check in md-wasm-build web-entry-cache-check release-artifacts release-orchestration release-version ci-stacks verify-prod; do
+  bash "scripts/test-$check.sh"
+done
+python3 scripts/test-compose-api-env.py
 
-if [ "$part" != flutter ]; then
+if [ "$part" = all ] || [ "$part" = rust ]; then
   note "structure: per-unit size gate"
   bash scripts/check-file-size.sh
 
@@ -81,7 +88,7 @@ if [ "$part" != flutter ]; then
   done
 fi
 
-if [ "$part" != rust ]; then
+if [ "$part" = all ] || [ "$part" = flutter ]; then
   require_flutter_pin "CI tests the pin"
   bash scripts/build-md-wasm.sh
   bash scripts/build-doc-wasm.sh
@@ -113,10 +120,16 @@ if [ "$part" != rust ]; then
   fi
 fi
 
+if [ "$part" = all ] || [ "$part" = e2e ]; then
+  note "browser: real editor rendering, clipboard, settings and sidebar rename"
+  bash scripts/local-e2e.sh
+fi
+
 cat <<'EOF'
 
   ALL GREEN for what this ran. NOT covered here (each has its own command):
     - web e2e against a real stack ........ just dev && just web-e2e
+    - browser upload lengths .............. node e2e/upload_length_e2e.mjs (real API + RustFS)
     - Windows integration tests (FFI) ...... just test-integration   (Windows desktop only)
     - container boot of the api image ...... just docker-build <tag> && docker compose -f deploy/docker-compose.single.yml up
     - MCP inspector conformance ............ needs npx @modelcontextprotocol/inspector

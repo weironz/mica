@@ -10,6 +10,8 @@
 # N+1 could never pass its own gate — the script created the failure it reported,
 # and left six modified files that made the retry refuse as "dirty".
 set -euo pipefail
+# This fixture owns its fake toolchain; do not inherit the caller's real SDK.
+export FLUTTER=flutter
 source_root=$(cd "$(dirname "$0")/.." && pwd)
 temp_parent=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 fixture_root=$(mktemp -d "$temp_parent/mica-release-orchestration.XXXXXX")

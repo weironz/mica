@@ -8,6 +8,8 @@
 # asks for sha256-linux.txt by name (crates/cli/src/update.rs), so that release
 # could never be verified on Linux, and nothing before publishing noticed.
 set -euo pipefail
+# This fixture owns its fake toolchain; do not inherit the caller's real SDK.
+export FLUTTER=flutter
 source_root=$(cd "$(dirname "$0")/.." && pwd)
 temp_parent=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 fixture_root=$(mktemp -d "$temp_parent/mica-release-artifacts.XXXXXX")

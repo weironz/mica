@@ -162,7 +162,7 @@ test-integration:
 # The CI workflow on this machine — for when GitHub Actions cannot run (out of
 # minutes, outage). Same gates, same flags; REFUSES without a database rather
 # than letting the DB-backed tests skip. Prints what it does not cover.
-[doc("Run the CI gates locally: structure, clippy, Rust + DB tests, flutter analyze/test/web (part: all | rust | flutter)")]
+[doc("Run the CI gates locally: structure, clippy, Rust + DB tests, flutter analyze/test/web + browser e2e (part: all | rust | flutter | e2e)")]
 ci part="all":
     bash scripts/local-ci.sh {{part}}
 

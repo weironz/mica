@@ -1,13 +1,9 @@
 # 发版与构建(Release & build)
 
-**一句话**:**CI 构建一切,上线仍然要人按一下 —— 但那个按钮现在在 Actions 页面。**
-
-推一个 `v*` tag,GitHub Actions 产出全部 7 个产物;之后手动触发 `Deploy` workflow,
-生产滚到那个版本。两步,没有第三步。
-
-> **2026-10-20 起所有 workflow 都只能手动触发**(Actions 额度用完,用户定):推 tag / 推 main / 开 PR
-> 都**不再**自动跑任何东西。默认走下面「本地发布」(`just ci` / `just ship`);确实要用托管构建时,
-> 在 Actions 页面手动触发 `Release`(`version=X.Y.Z, publish=true`),它会自己建 tag 和 release。
+GitHub Actions 使用官方 runner，**所有工作流保持手动触发**；推 main、tag 或 PR 不会自动消费额度。
+两条完整发版路径都保留：Actions 可用时手动运行 `CI` 和 `Release`；额度用完或 Actions 故障时使用本地
+`just ci`、`just release`、`just ship`。两边遵守相同门禁、版本一致性和先挂齐附件再公开的规则。
+发版仍须用户明确要求；`Release dry-run` 只构建、不发布、不部署。
 
 ## 你要按的那几下
 
@@ -22,7 +18,7 @@ just release X.Y.Z
 #    Release（gh workflow run Release -f version=X.Y.Z -f publish=true），否则走「本地发布」。
 git push origin main vX.Y.Z
 
-# 3. 等 CI 绿，并确认 4 个 asset 都挂上了（草稿 release 在最后一步才翻成正式版）
+# 3. 手动触发后等 Release 绿，并确认必需 asset 都挂上了（草稿 release 在最后一步才翻成正式版）
 gh run watch --repo weironz/mica
 gh release view vX.Y.Z --repo weironz/mica
 
@@ -69,7 +65,7 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 3. **冒烟测这一版真正改了什么**(步骤 11)。`verify-prod` 只断言版本号 ——
    **版本号证明不了功能**。
 
-> **上面这 5 步不需要本地装任何东西** —— 全部是 `git` 和 `gh`,ansible 跑在 CI 的 runner 上。
+> `just release` 需要本地 Flutter、Rust 和可达的测试 Postgres；托管构建与部署只需 `git` / `gh` 触发，ansible 跑在官方 runner 上。
 >
 > **兜底 `just deploy-prod` 只在 Linux 上跑**:ansible 不支持 Windows 作控制端
 > (`pipx install ansible-core` 装得上,一运行就 `OSError: [WinError 87]`)。Linux / macOS /
@@ -169,7 +165,13 @@ Windows 上没有可用的 ansible 时，`deploy-prod.sh` 会**自动在 `alpine
   （`MainActivity.kt` 通过 `MICA_DATA_DIR` 交给 Dart），无应用内更新，导出 PDF 不可用。
 - 新平台未经真机回归：Android 包在本环境只做了构建与安装包静态校验（签名、包名、权限、ABI），尚未在真机上跑过。
 
-## 自托管 runner（2026-10-20 起）
+## 官方 runner 与工具链
+
+所有 job 使用 GitHub 官方 runner，Flutter 下载按 `.fvmrc` 缓存，Rust 按 `rust-toolchain.toml`。
+生产 SSH 必须能从官方 runner 访问；不允许公网 SSH 的环境走本地部署/容灾命令。
+SSH 材料与 Docker 登录留在 `$RUNNER_TEMP` 并在 job 结束时清理，该隔离在官方 runner 同样适用。
+Android 的临时 runner 不保留 Docker 签名卷；需要跨构建可覆盖安装时继续在同一台本地机器构建。
+更多覆盖范围和运行记录见 [CI 说明](ci-runners.md)。
 
 桌面 FFI 的 Cargokit 也必须使用仓库的 Rust pin。其默认选择现在通过在 Rust crate
 目录执行 `rustup show active-toolchain` 解析，继承 `rust-toolchain.toml` 和 Rustup
@@ -177,21 +179,6 @@ Windows 上没有可用的 ansible 时，`deploy-prod.sh` 会**自动在 `alpine
 `cargo test` 使用 1.98.0，而安装包偷偷使用本机的 1.99.1。版本号形式的已安装工具链
 及 Windows CRLF 输出也纳入识别。`just release` 执行 Cargokit 命令选择回归检查，
 构建日志中的实际编译器仍须与 pin 一致；不能只看根 workspace 的版本检查。
-
-GitHub 托管 runner 额度用完后，所有 job 改跑在两台自托管 runner 上（`runs-on: [self-hosted, Linux]` /
-`[self-hosted, Windows]`，原 `*-latest` 行注释保留）；没有 macOS runner，release 的 macOS CLI 一项已注释。
-
-- **机器要先补到托管镜像的基线，而不是让 workflow 去装**——否则同一份 YAML 在两种 runner 上行为分叉。
-  Windows：`scripts/runner-bootstrap-windows.ps1`（Chocolatey / Git+bash / pwsh / Inno Setup /
-  VS 2022 Build Tools C++ / 开发者模式），管理员 PowerShell 跑一次；没人在机器前时手动触发
-  `Runner bootstrap (Windows)` workflow 代跑（要求 runner 服务以 Local System 或管理员账号运行）。
-  Linux：需要 `musl-tools`、`pipx`。`Runner probe` workflow 报告两台机器的系统与工具现状。
-- **workflow 不得写 runner 用户的家目录**：自托管机器是人的机器。部署密钥 / known_hosts / ssh 配置
-  只进 `$RUNNER_TEMP`（`ssh -F` shim + `ANSIBLE_SSH_COMMON_ARGS`），`DOCKER_CONFIG` 也指到
-  `$RUNNER_TEMP`。〔切换当天第一次彩排就用生产密钥覆盖了 runner 用户的 `~/.ssh/id_ed25519`。〕
-- **runner 服务的 umask 必须是 `0022`**(systemd `UMask=0022`):`0077` 下 checkout 出的文件只有 owner 可读,
-  进了 nginx 镜像就是全站 403(0.13.60)。`Dockerfile.web` 已显式 `--chmod` 并在构建期自检,但别的镜像没有这层保护。
-  详见 `docs/dev/lessons.md` §15。
 
 ## CI 拿的是 root key —— 这是一次有代价的取舍
 

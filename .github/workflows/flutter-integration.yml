@@ -53,8 +53,7 @@ jobs:
   integration:
     name: >-
       Flutter integration_test (Windows, offline set${{ inputs.suite == 'smoke' && ', smoke' || '' }})
-    # runs-on: windows-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Windows]
+    runs-on: windows-latest
     defaults:
       run:
         working-directory: clients/mica_flutter
@@ -137,8 +136,7 @@ jobs:
   cloud:
     name: >-
       Flutter integration_test (Windows, live server${{ inputs.suite == 'smoke' && ', smoke' || '' }})
-    # runs-on: windows-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Windows]
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
 

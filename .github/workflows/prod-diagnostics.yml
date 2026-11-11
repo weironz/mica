@@ -2,7 +2,7 @@ name: Prod diagnostics
 
 # Read-only look at the production node, for when the person diagnosing it
 # cannot SSH there themselves (the cloud session that runs releases has HTTPS
-# egress only). The self-hosted Linux runner SSHes in with the deploy key — the
+# egress only). The GitHub-hosted Linux runner SSHes in with the deploy key — the
 # same path Deploy uses — and runs a FIXED set of read-only commands.
 #
 # Fixed on purpose: no free-form command input. A "run this command" box would
@@ -16,7 +16,7 @@ on:
 
 jobs:
   diagnose:
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # Same isolation as deploy.yml: nothing in the runner user's ~/.ssh.

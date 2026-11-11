@@ -54,7 +54,7 @@ jobs:
   # job, and a caller can cover several commits by supplying base_ref.
   paths:
     name: Scope (affected job groups)
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.groups.outputs.rust }}
       flutter: ${{ steps.groups.outputs.flutter }}
@@ -69,7 +69,7 @@ jobs:
       - name: Test job selection
         run: |
           bash scripts/test-ci-paths.sh
-          bash scripts/test-flutter-sdk-reuse.sh
+          bash scripts/test-font-mirror.sh
           bash scripts/test-md-wasm-build.sh
           bash scripts/test-web-entry-cache-check.sh
 
@@ -121,8 +121,7 @@ jobs:
   # 与 HEAD 比较，否则 main 直推时增量门禁恒为空。
   structure:
     name: Structure (file-size gate)
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     # The gate is cheap and structure drift is cheap to miss; run on every scope.
     steps:
       - uses: actions/checkout@v5
@@ -143,8 +142,7 @@ jobs:
 
   rust:
     name: Rust (build + lint + tests)
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     if: needs.paths.outputs.rust == 'true'
     needs: paths
 
@@ -245,8 +243,7 @@ jobs:
     # client registered ZERO tools while we believed it worked. A conforming
     # client is the only thing that reads what we actually declare.
     name: MCP (official inspector against mica-cli mcp)
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     if: needs.paths.outputs.mcp == 'true'
     needs: paths
     steps:
@@ -296,8 +293,7 @@ jobs:
 
   flutter:
     name: Flutter (analyze + Dart unit tests)
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     if: needs.paths.outputs.flutter == 'true'
     needs: paths
     defaults:
@@ -370,8 +366,7 @@ jobs:
   # api, and a browser harness failing must not be reported as "analyze failed".
   web-e2e:
     name: Web e2e (browser against a real stack)
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     if: needs.paths.outputs['web-e2e'] == 'true'
     needs: paths
 
@@ -670,8 +665,7 @@ jobs:
   # exactly this and was therefore rarely run. A check nobody runs catches nothing.
   container:
     name: Container (api image + stack boots)
-    # runs-on: ubuntu-latest  # GitHub 托管 runner 额度已用完（2026-10-20），改用自托管
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     # Container image build is the most expensive job; it only makes sense when
     # the backend, migrations or its own config changed.
     if: needs.paths.outputs.container == 'true'

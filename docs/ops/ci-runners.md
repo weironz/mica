@@ -1,56 +1,35 @@
-# CI runner notes
+# CI 与 runner
 
-> **2026-11-11：两台自建 runner 都已停用。** CI 运行一直排队后被取消，不再有任何机器执行这些工作流。
-> 推送 `main` 前的门禁改为本地 CI：`just ci`（`scripts/local-ci.sh`）。下面的内容只在重新启用 runner 时有用。
+GitHub Actions 使用官方 runner（`ubuntu-latest`、`windows-latest`、`macos-latest`），
+所有入口保持手动触发。自建 runner 已停用；专用 bootstrap/probe 工作流与 Flutter 预装复用逻辑已删除。
+Flutter SDK 由统一 action 按 `.fvmrc` 下载并缓存。
 
-This repo runs Actions almost exclusively on self-hosted runners
-(2026-10-20: the hosted quota ran out, so push/PR triggers were switched to
-`workflow_dispatch`). Runner inventory:
+## 两条门禁路径
 
-- `home-workstation-linux-mica-01` — label pair `[self-hosted, Linux]`
-- `home-workstation-windows-mica-01` — label pair `[self-hosted, Windows]`
+- Actions 可用时，手动触发 `CI`（`scope=full`）覆盖全部 job；发版构建改动再跑 `Release dry-run`。
+- 额度用完或服务不可用时，使用 `just ci`，发布使用 `just release` / `just ship` 等本地命令。
+- 推送 `main` 前运行本地 CI。不假定 push/tag 会触发 Actions；需要托管结果时明确手动触发并核对结果。
 
-## Pre-installed Flutter on self-hosted runners
+`CI` 的 `scope=auto` 按 `base_ref..HEAD` 选 job（默认 `HEAD^..HEAD`）；未知路径选择全部 job。
+`Flutter Integration Tests` 默认 `suite=full`，`suite=smoke` 跑两个离线文件和 cloud-sync 文件。
 
-The action reuses a matching SDK in `FLUTTER_ROOT`, or checks
-`RUNNER_TOOL_CACHE/flutter/<version>/stable` when `FLUTTER_ROOT` is unset.
-To pre-install the exact version after a `.fvmrc` bump, run as the runner
-service account:
+## 本地覆盖范围
 
-```powershell
-$version = (Get-Content .fvmrc | ConvertFrom-Json).flutter
-$sdkPath = "$env:RUNNER_TOOL_CACHE\flutter\$version\stable"
-git clone --depth 1 --branch $version https://github.com/flutter/flutter.git $sdkPath
-git -C $sdkPath switch -c stable
-& "$sdkPath\bin\flutter.bat" precache --web --windows
-& "$sdkPath\bin\flutter.bat" --version
-```
+`just ci` 包含结构与增长门禁、脚本自测、Rust fmt/build/Clippy、真实 Postgres 测试、
+Flutter 静态分析与全部单元/widget 测试、FFI 源码指纹验证、Web 构建、字体镜像校验、
+浏览器专用 Flutter 套件，以及 rich-preview / clipboard / ui-experience / sidebar-rename 四个浏览器回归。
+可分项运行 `just ci rust`、`just ci flutter`、`just ci e2e`；共有脚本门禁在每一项前执行。
 
-`RUNNER_TOOL_CACHE` points at the runner service account's `_work/_tool`
-directory. Use the runner job's value, rather than the interactive user's
-home directory. The [setup-flutter composite
-action](../../.github/actions/setup-flutter/action.yml) checks that location
-first and skips the SDK download entirely when the version and channel match;
-a stale or missing install falls back to subosito/flutter-action@v2, which
-then downloads the exact pinned version as before. On hosted runners the
-pre-install check is skipped unconditionally.
+浏览器回归使用 `e2e/package-lock.json` 钉死的 Playwright 及配套 Chromium。
+本机不能下载时，设置 `CHROME_EXECUTABLE` 指向已有 Chrome/Chromium；指定路径无效会失败，不会静默换浏览器。
+Linux 需安装 Chromium 的系统依赖（托管 runner 由 Playwright `--with-deps` 安装）。
 
-Set `MICA_SKIP_FLUTTER_SETUP=true` on a job to bypass the shortcut and force a
-full toolchain setup (use it when debugging the toolchain itself).
+以下仍为独立验收：真实 API/RustFS 的 `web_e2e.mjs` 与 `upload_length_e2e.mjs`、
+容器栈启动、MCP inspector、Windows FFI 集成（`just test-integration`）。脚本结束时也会列出边界。
 
-## Local checks
+## 生产网络与凭据
 
-`just ci` runs structure, Rust format/build/Clippy, database tests, Flutter
-analysis, the complete unit/widget suite, the release web build and font checks.
-It also tests the CI job-selection rules. `just ci rust` and `just ci flutter`
-select the corresponding local half without changing any gate thresholds.
-
-Actions remains manual. `CI` defaults to `scope=full`, which runs every job.
-`scope=auto` selects jobs from `base_ref..HEAD` (default `HEAD^..HEAD`);
-unknown paths select every job. Use an explicit `base_ref` to validate several
-commits together. `Flutter Integration Tests` defaults to `suite=full`;
-`suite=smoke` runs two offline files and the live cloud-sync file.
-
-Native Windows/FFI integration remains a separate local command:
-`just test-integration`. A green `just ci` does not include that command, the
-real-stack browser suite, container startup or the MCP inspector.
+部署、容灾和生产诊断均需要 SSH。生产节点有公网 SSH 入口；切换后须用官方 runner 的只读诊断确认实际可达性。
+如目标环境不允许官方 runner 连接，改走本地 `just deploy-prod` / 容灾流程；不要提交凭据或内网地址来绕过。
+SSH 材料和 Docker 登录仍放 `$RUNNER_TEMP` 并清理：官方 runner 上同样能限定凭据生命周期。
+发布两条完整路径见 [发布文档](release.md)。
