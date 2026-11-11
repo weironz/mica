@@ -1,26 +1,24 @@
 /// Desktop/mobile image picker (non-web variant). Web uses pick_image_web.dart.
 library;
 
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 
 Future<({String name, String mime, Uint8List bytes})?> pickImage() async {
-  final res = await FilePicker.platform.pickFiles(
-    withData: true,
-    type: FileType.image,
-  );
-  if (res == null || res.files.isEmpty) return null;
-  final f = res.files.first;
-  Uint8List? bytes = f.bytes;
-  if (bytes == null && f.path != null) {
-    try {
-      bytes = await File(f.path!).readAsBytes();
-    } catch (_) {}
+  final file = await FilePicker.pickFile(type: FileType.image);
+  if (file == null) return null;
+  Uint8List bytes;
+  try {
+    bytes = await file.readAsBytes();
+  } catch (_) {
+    return null;
   }
-  if (bytes == null) return null;
-  return (name: f.name, mime: _mimeFor(f.extension ?? f.name), bytes: bytes);
+  return (
+    name: file.name,
+    mime: _mimeFor(file.extension ?? file.name),
+    bytes: bytes,
+  );
 }
 
 String _mimeFor(String nameOrExt) {

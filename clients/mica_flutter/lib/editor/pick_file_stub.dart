@@ -8,24 +8,20 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 
-Future<Uint8List?> _bytesOf(PlatformFile f) async {
-  if (f.bytes != null) return f.bytes;
-  if (f.path != null) {
-    try {
-      return await File(f.path!).readAsBytes();
-    } catch (_) {}
+Future<Uint8List?> _bytesOf(PlatformFile file) async {
+  try {
+    return await file.readAsBytes();
+  } catch (_) {
+    return null;
   }
-  return null;
 }
 
 Future<({String name, String text})?> pickTextFile() async {
-  final res = await FilePicker.platform.pickFiles(
-    withData: true,
+  final f = await FilePicker.pickFile(
     type: FileType.custom,
     allowedExtensions: const ['md', 'markdown', 'txt'],
   );
-  if (res == null || res.files.isEmpty) return null;
-  final f = res.files.first;
+  if (f == null) return null;
   final bytes = await _bytesOf(f);
   if (bytes == null) return null;
   return (name: f.name, text: utf8.decode(bytes, allowMalformed: true));
@@ -34,26 +30,20 @@ Future<({String name, String text})?> pickTextFile() async {
 Future<({String name, Uint8List bytes})?> pickImportFile({
   bool zipOnly = false,
 }) async {
-  final res = await FilePicker.platform.pickFiles(
-    withData: true,
+  final f = await FilePicker.pickFile(
     type: zipOnly ? FileType.custom : FileType.any,
     allowedExtensions: zipOnly ? const ['zip'] : null,
   );
-  if (res == null || res.files.isEmpty) return null;
-  final f = res.files.first;
+  if (f == null) return null;
   final bytes = await _bytesOf(f);
   if (bytes == null) return null;
   return (name: f.name, bytes: bytes);
 }
 
 Future<List<({String name, Uint8List bytes})>> pickImportFiles() async {
-  final res = await FilePicker.platform.pickFiles(
-    withData: true,
-    allowMultiple: true,
-  );
-  if (res == null) return const [];
+  final files = await FilePicker.pickFiles();
   final out = <({String name, Uint8List bytes})>[];
-  for (final f in res.files) {
+  for (final f in files) {
     final bytes = await _bytesOf(f);
     if (bytes != null) out.add((name: f.name, bytes: bytes));
   }
@@ -61,7 +51,7 @@ Future<List<({String name, Uint8List bytes})>> pickImportFiles() async {
 }
 
 Future<List<({String path, Uint8List bytes})>> pickImportFolder() async {
-  final dir = await FilePicker.platform.getDirectoryPath();
+  final dir = await FilePicker.getDirectoryPath();
   if (dir == null) return const [];
   final root = Directory(dir);
   // Match the web picker's contract: every path includes the selected folder

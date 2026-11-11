@@ -52,11 +52,11 @@ dependencies:
   # Native file dialogs (open/save/directory) for desktop+mobile — used only by
   # the non-web (_stub) variants of pick_file/pick_image/image_actions. Web
   # keeps its package:web implementations. In-house exemption #3 (platform glue).
-  file_picker: ^8.0.0
+  file_picker: ^13.3.3
   # Rich clipboard (read/write image) for desktop — used only by the non-web
   # variants for image paste + "copy image". Web keeps its DOM clipboard path.
   # In-house exemption #4 (platform glue). No Rust build (unlike super_clipboard).
-  pasteboard: ^0.5.0
+  pasteboard: ^0.6.0
   # dart:ffi helper (Utf16 alloc) for reading the Windows clipboard's registered
   # "PNG" format directly (user32/kernel32 via dart:ffi): pasteboard reads only
   # the flattened CF_DIB, which bakes a transparent PNG's alpha to black; the
