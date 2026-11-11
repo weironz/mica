@@ -130,7 +130,7 @@
 
 - [x] 所有工作流的 `runs-on` 从 `[self-hosted, Linux]` / `[self-hosted, Windows]` 改回 `ubuntu-latest` / `windows-latest`
   （各处都留着注释掉的原值）。触发方式保持手动（`workflow_dispatch`），不要改回推送即触发，以免自动消耗额度。
-- [ ] **先确认能连到生产节点**：`deploy.yml`、`dr-drill.yml`、`prod-diagnostics.yml` 要 SSH 到生产节点。
+- [x] **先确认能连到生产节点**：`deploy.yml`、`dr-drill.yml`、`prod-diagnostics.yml` 要 SSH 到生产节点。
   确认 GitHub 官方 runner 能否直接连上（生产 SSH 是否对公网开放）。连不上就保留这三个用本地流程
   （`just deploy-prod` 等），并在文件顶部注释说明原因；不要为此在仓库里放任何凭据或内网地址。
 - [x] `runner-bootstrap.yml`、`runner-probe.yml` 只为自建 runner 存在：删除，或注明"仅在重新启用自建 runner 时使用"。
@@ -211,7 +211,9 @@
 
 ## 6. 第二轮实施与验收记录（2026-11-11）
 
-尚未发版、未部署。实施提交：字体与渲染 `cd03ebed`；外壳与偏好控制器 `ba27965d`；CI 与项目规则 `36ca950a`；静态清理、serde 与路线图 `dcea64d8`。官方运行链接待推送后补齐。
+尚未发版、未部署。实施提交：字体与渲染 `cd03ebed`；外壳与偏好控制器 `ba27965d`；CI 与项目规则 `36ca950a`；静态清理、serde 与路线图 `dcea64d8`。追加 hosted runner 工具前提修复：`eda11774`。
+
+官方运行：[首次 CI（发现缺少 just，已修复）](https://github.com/weironz/mica/actions/runs/42985693589)、[修复后 CI](https://github.com/weironz/mica/actions/runs/42986226742)、[Release dry-run](https://github.com/weironz/mica/actions/runs/42985698738)、[生产只读诊断（已通过）](https://github.com/weironz/mica/actions/runs/42985702830)。CI 和演练仍在运行，不提前标绿。
 
 ### 6.1 已实现的范围
 
@@ -249,6 +251,6 @@ Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载�
 
 - 完整 `just ci` 已通过，故障注入恢复后再次全套通过：Rust 工作区回执 **1,191**，带 store 特性的 mica-core 回执 **221**，Flutter 单元/widget 回执 **2,096**，浏览器专用套件及四个 Node 浏览器脚本通过；这些是各次执行数，不宣称互不重叠的唯一测试总数。
 - 故障注入：临时把 ClipboardItem 的 HTML 内容改成纯文本，完整 `just ci` 在 `clipboard_e2e.mjs` 的 Gemini 行内数学格式断言失败，退出 **1**；源码已逐字节恢复。没有放宽预算或新增跳过。
-- Windows 字体探针、安装包构建已通过；另做的完整应用首帧冒烟没有取得首帧回执，正在定位，不能标为启动通过。
-- 官方 runner 对生产 SSH 的真实连通性、`CI(scope=full)` 和 `Release dry-run` 仍待推送后执行，5.1 保持未完成。
+- Windows 字体探针、安装包构建已通过；另做的完整应用首帧冒烟没有取得原生首帧回执。诊断已显示启动完成窗口、引擎、字体初始化并执行 Dart 首帧，但远程会话创建交换链失败（DXGI `0x887A0022`，EGL Context Lost）；不把 GPU 呈现失败伪装成启动通过。官方 Windows runner 安装启动冒烟仍待结果。
+- 官方 runner 的生产 SSH 已由只读诊断实际确认；`CI(scope=full)` 和 `Release dry-run` 已触发，仍待最终结果，5.1 的运行验收保持未完成。
 - 5.6 的全部主流程验收仍需结合官方端到端和桌面启动结果，保持未完成。
