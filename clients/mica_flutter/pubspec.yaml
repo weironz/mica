@@ -37,6 +37,10 @@ dependencies:
   # "system cannot find the file specified", cascading into every windowManager /
   # WindowListener being "undefined". Pinning to the version actually present
   # fixes it; 0.5.2 has the same API.)
+  # Third-round compatibility hold (2026-11-11): window 0.6 / tray 0.8 /
+  # screen 0.3 switch to nativeapi. A real tray call aborts Dart 3.13.1 AOT
+  # with an illegal native_tray_icon_event_t cid on the pinned Flutter 3.47.1.
+  # Retain this trio until a coordinated SDK update passes the native matrix.
   window_manager: 0.5.2
   # Already a transitive dep of window_manager (same leanflutter.dev family);
   # declared directly only to read display bounds, so a saved window position
