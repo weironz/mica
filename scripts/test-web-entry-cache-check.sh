@@ -19,7 +19,7 @@ done
 path=${url#https://example.test}
 [ "$path" != "${FAIL_NETWORK:-}" ] || exit 7
 status=200
-case "$path" in */missing.wasm|/yjs_bundle.js) status=404 ;; esac
+case "$path" in */missing.wasm|/yjs_bundle.js|/mermaid.min.js) status=404 ;; esac
 [ "$path" != "${BAD_STATUS:-}" ] || status=200
 [ "$path" != "${NOT_FOUND:-}" ] || status=404
 cache=${VALID_CACHE:-no-cache}
@@ -60,3 +60,9 @@ check fail 'retired yjs entry falls through to SPA' BAD_STATUS=/yjs_bundle.js
 check fail 'missing engine falls through to SPA' BAD_STATUS=/mica_md/missing.wasm
 check fail 'network failure' FAIL_NETWORK=/index.html
 printf 'Web entry gate regressions: ALL GREEN\n'
+check fail 'missing formula renderer' NOT_FOUND=/mica_preview/math_bg.wasm
+check fail 'missing preview worker' NOT_FOUND=/mica_preview_worker.js
+check fail 'cached Mermaid renderer' BAD_CACHE=/mica_preview/mermaid_bg.wasm
+check fail 'HTML in place of renderer wasm' BAD_MIME=/mica_preview/math_bg.wasm
+check fail 'missing renderer falls through to SPA' BAD_STATUS=/mica_preview/missing.wasm
+check fail 'retired Mermaid script falls through to SPA' BAD_STATUS=/mermaid.min.js

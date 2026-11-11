@@ -35,5 +35,13 @@ for engine in mica_md mica_doc; do
   check_entry "/$engine/${engine}_bg.wasm" 200 application/wasm
   check_entry "/$engine/missing.wasm" 404
 done
+# The editor's formula and Mermaid renderers load on demand from a worker.
+check_entry /mica_preview_worker.js 200 '(application|text)/(x-)?javascript'
+for kind in math mermaid; do
+  check_entry "/mica_preview/$kind.js" 200 '(application|text)/(x-)?javascript'
+  check_entry "/mica_preview/${kind}_bg.wasm" 200 application/wasm
+done
+check_entry /mica_preview/missing.wasm 404
 check_entry /yjs_bundle.js 404
+check_entry /mermaid.min.js 404
 note "Web entry contract: ALL GREEN"
