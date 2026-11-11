@@ -1,6 +1,6 @@
 # 双实现盘点与首页评估（2026-11-10）
 
-> **状态：第 1–3 项已实施并经审核（见下方实施记录与审核记录）。** 其余条目和首页仍是 11 月 10 日的评估快照。
+> **状态：第 1–3 项已实施并经审核。第 5 节是 2026-11-11 用户确定的待办清单，交给他人实施，完成后评审。**
 >
 > **原评估依据**：读代码和数行数；实施时再对照运行同一批输入。首页部分用示例数据单独渲染，不是线上截图。
 
@@ -93,7 +93,115 @@
 
 **顺带看到的一处**：示例渲染里，目录行右侧的"12 个页面"被折成了两行。用的是我编的示例文字，线上是否也这样没有确认。
 
-## 3. 等用户拍板
+## 3. 第二轮评估（2026-11-11）
 
-1. 首页选 A、B 还是 C？
-2. "本地模式"还保留吗？（决定第 6 项）
+前三项完成后再查一轮：超大单元、重复实现、无用代码与依赖、手写与生成重复、首次加载体积。只读和实测，没有改代码。
+
+| # | 发现 | 依据 |
+| --- | --- | --- |
+| 1 | **本地 CI 只覆盖了原 GitHub CI 的一部分** | GitHub CI 还跑 4 个浏览器端到端脚本、结构检查和约 10 个脚本自测（清单见 5.2），`local-ci.sh` 都不跑；runner 停后它们没有任何地方在跑。剪贴板那个问题就是这样没被发现 |
+| 2 | **网页版首次打开下载 24.9 MB，一半是两个中文字体** | 实测首次加载：`NotoSansSC-Regular.otf` 8.48 MB、`DroidSansFallback.ttf` 4.03 MB，登录页就下载；线上按 `application/octet-stream` 返回、不在压缩列表里，原样传输。对比：主程序 1.86 MB、渲染引擎 2.32 MB（压缩后）。同源镜像 `web/gfonts/notosanssc/` 已有全部思源黑体按字切片（101 个、2.6 MB），用到才加载 |
+| 3 | **桌面版和安卓版也带着这 12.5 MB 字体** | 那里只是最后的兜底，系统有中文字体；安卓安装包 45–53 MB、Windows 安装包 41 MB 都含这两个字体 |
+| 4 | **应用外壳是最大的维护负担** | `main.dart` 库合计 17,009 行，唯一超过 8,000 行硬上限的单元（已登记）；其中 `main_shell.dart` 5,277 行，一个状态类、164 个私有方法、79 处 `setState` |
+| 5 | **路线图文档大部分是元叙述** | `roadmap.md` 181 行，未完成的只有 3–4 条 |
+| 6 | **零碎** | `mica-core` 声明了没用到的 `serde`（`cargo-machete`）；Flutter 静态检查约 80 条提示 |
+
+**查过、没问题的**：前端接口模型是有意手写，服务端与前端都对照 `contracts/` 里的同一组样例测试；
+两份约 1,850 行的导入代码一份规划、一份执行（且后者一半是测试），不算重复；前端没有无用依赖；
+所有脚本都有引用；网页构建里两个 13 MB 字体目录一个内置、一个是按需切片，不是重复（但见第 2 条）。
+
+## 4. 用户决定（2026-11-11）
+
+| 事项 | 决定 |
+| --- | --- |
+| 第二轮评估的 6 项新发现 | **都要做**，见第 5 节清单 |
+| 两条发版路径（第 5 项） | **两条都保留**。GitHub Actions 从自建 runner 切回 GitHub 官方 runner；Actions 额度用完时直接走本地流程 |
+| 网页与桌面两套本地存储（第 4 项） | 等 [GPUI 方向](../architecture/ui-gpui-evaluation.md) 定了再说 |
+| 本地模式（第 6 项） | **保留** |
+| 首页 | **先不动** |
+
+## 5. 待办清单（交给他人实施，完成后回来评审）
+
+> 每一项做完：在本文对应条目打勾，写上提交号和实测数字；推送 `main` 前跑完本地 CI（`just ci`），
+> 改到网页行为的再跑对应的浏览器端到端脚本。不要为过检查而加等待、跳过测试或放宽预算；
+> 编辑器、渲染、主界面三个库的行数棘轮只许减不许增（`scripts/file-size-budget.txt`）。
+
+### 5.1 GitHub Actions 切回官方 runner（第 1 节第 5 项的决定）
+
+- [ ] 所有工作流的 `runs-on` 从 `[self-hosted, Linux]` / `[self-hosted, Windows]` 改回 `ubuntu-latest` / `windows-latest`
+  （各处都留着注释掉的原值）。触发方式保持手动（`workflow_dispatch`），不要改回推送即触发，以免自动消耗额度。
+- [ ] **先确认能连到生产节点**：`deploy.yml`、`dr-drill.yml`、`prod-diagnostics.yml` 要 SSH 到生产节点。
+  确认 GitHub 官方 runner 能否直接连上（生产 SSH 是否对公网开放）。连不上就保留这三个用本地流程
+  （`just deploy-prod` 等），并在文件顶部注释说明原因；不要为此在仓库里放任何凭据或内网地址。
+- [ ] `runner-bootstrap.yml`、`runner-probe.yml` 只为自建 runner 存在：删除，或注明"仅在重新启用自建 runner 时使用"。
+- [ ] 去掉只对自建机器有意义的步骤或绕法（例如复用机器上预装 Flutter 的逻辑、"别碰 ~/.ssh"的隔离），
+  确认官方 runner 上不需要；需要保留的，确认在官方 runner 上同样成立。
+- [ ] 手动触发一次 `CI`（scope=full），全部通过；再触发一次 `Release dry run`，通过。把两次运行的链接写进本文。
+- [ ] 更新 `AGENTS.md`（现在写的是"自建 runner 已停，本地 CI 是唯一门禁"）和 `docs/ops/ci-runners.md`：
+  改为"GitHub Actions 用官方 runner、手动触发；额度用完时走本地流程（`just ci`、`just release` 等）"。
+  `docs/ops/release.md` 里两条发版路径都要写清楚，并说明何时用哪条。
+
+### 5.2 本地 CI 补齐原先只在 GitHub CI 里跑的检查（第二轮评估第 1 项）
+
+`.github/workflows/ci.yml` 跑而 `scripts/local-ci.sh` 不跑的：
+
+- [ ] 结构检查：`scripts/test-structure-gate.sh`、`scripts/check-structure-ci.sh`
+- [ ] 脚本自测：`test-md-wasm-build.sh`、`test-web-entry-cache-check.sh`、`test-release-artifacts.sh`、
+  `test-release-orchestration.sh`、`test-release-version.sh`、`test-ci-stacks.sh`、`test-verify-prod.sh`、
+  `test-compose-api-env.py`
+- [ ] 4 个浏览器端到端脚本：`e2e/rich_preview_e2e.mjs`、`e2e/clipboard_e2e.mjs`、`e2e/ui_experience_e2e.mjs`、
+  `e2e/sidebar_rename_e2e.mjs`。它们不需要后端：照 `ci.yml` 第 560–615 行的做法构建 `e2e/web_harness_entry.dart`、
+  起静态文件服务即可。建议做成 `just ci e2e` 这一部分，`just ci`（all）也包含它。
+- [ ] 浏览器来源：仓库锁定的 Playwright 版本要配套下载自己的浏览器；在已有 Chromium、不能下载的机器上要能用
+  `CHROME_EXECUTABLE` 指定浏览器（现在脚本只回退到系统 Chrome）。
+- [ ] 明确不纳入本地 CI 的（需要真实服务栈或 Docker，如 `web_e2e.mjs`、`upload_length_e2e.mjs`、容器栈）
+  继续列在脚本结尾的"未覆盖"清单里。
+- **验收**：`just ci` 全部通过；故意改坏一处（例如让剪贴板复制丢格式）能让 `just ci` 失败。
+
+### 5.3 字体压缩（第二轮评估第 2 项 a）
+
+- [ ] `deploy/nginx.conf` 与 `deploy/nginx.dev.conf`：给 `.otf`、`.ttf`（以及 `.woff2`）配上正确的 MIME 类型；
+  `.otf`、`.ttf` 加入 `gzip_types`（`.woff2` 本身已压缩，不要再压）。
+- [ ] `scripts/web-entry-cache-check.sh` 加一条：字体以正确的 MIME 类型返回，并在其自测脚本里补用例。
+- **验收**：本地容器或部署后实测，`DroidSansFallback.ttf` 传输约 2.1 MB（原 4.0 MB），
+  `NotoSansSC-Regular.otf` 约 7.3 MB（原 8.5 MB）。
+
+### 5.4 网页版不再内置两个中文字体（第二轮评估第 2 项 b）
+
+- [ ] 网页构建不再打包 `NotoSansSC-Regular.otf`、`DroidSansFallback.ttf`，中文改由引擎从同源镜像
+  `web/gfonts/notosanssc/` 按需加载（镜像已有全部 101 个切片，共 2.6 MB）。桌面和手机不受影响（见 5.5）。
+- [ ] `lib/cjk_fonts.dart` 网页分支、`lib/editor/svg_raster.dart`（Mermaid 中文标签目前指定内置字体名）
+  相应调整，保证 Mermaid 图里的中文仍然不是方框（`rich_preview_e2e.mjs` 已有"不同汉字画出不同字形"的检查）。
+- [ ] 评估并记录首次显示中文时的闪烁（方框 → 正确字形）是否可接受；离线时未加载过的字如何显示。
+- **验收**：首次打开登录页的下载总量从 24.9 MB 降到约 12 MB 以下（用同样的方法实测：记录首次加载的全部响应大小）；
+  `rich_preview_e2e.mjs`、`clipboard_e2e.mjs` 通过；编辑器里中英混排、表格、公式、Mermaid 的截图无方框。
+
+### 5.5 桌面版和安卓版的内置字体（第二轮评估第 3 项）
+
+- [ ] 实测：安卓、Windows、Linux 安装包里两个中文字体各占多少；去掉后系统字体能否覆盖常用中文、日文、韩文、生僻字。
+- [ ] 能覆盖的平台去掉内置字体（只保留在确实需要兜底的平台）；不能覆盖的保留并在本文写明原因。
+- **验收**：本文记录各平台安装包变化前后的大小，以及真机或模拟器上的截图结论。
+
+### 5.6 拆分应用外壳（第二轮评估第 4 项）
+
+- [ ] 从 `lib/main_shell.dart`（5,277 行、一个状态类、164 个私有方法）继续拆出独立控制器，
+  沿用现有 `views/`、`auth/`、`sync/` 控制器的做法；每次一个主题、几百行，单独提交，行为不变。
+- [ ] 每次拆完收紧 `scripts/file-size-budget.txt` 里 `main.dart` 的基线。
+- **验收**：本轮把 `main.dart` 库从 17,009 行降到 15,000 行以下；全部测试通过，主流程（登录、切换工作区、
+  打开页面、本地模式、离线编辑）手动或端到端验证无回归。
+
+### 5.7 精简路线图（第二轮评估第 5 项）
+
+- [ ] `docs/plans/roadmap.md` 精简到只剩未完成事项及其状态（约 40 行），"接下来最该做的"一节里关于清单本身反复过时的历史
+  移到 `roadmap-done.md` 或删除；保留文件顶部的维护规矩。
+
+### 5.8 零碎清理（第二轮评估第 6 项）
+
+- [ ] 删除 `crates/mica-core/Cargo.toml` 里未使用的 `serde` 依赖（`cargo-machete` 报告；只用到 `serde_json`）。
+- [ ] 清理 Flutter 静态检查的提示（约 80 条，其中 27 条 `library_private_types_in_public_api`），只改提示所指的写法，不改行为。
+
+### 不在本轮
+
+- 网页与桌面两套本地存储：等 GPUI 方向定。
+- 本地模式：保留，不动。
+- 首页：先不动。
