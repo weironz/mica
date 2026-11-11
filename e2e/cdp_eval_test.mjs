@@ -3,10 +3,12 @@ import {createServer} from 'node:http';
 import {launchBrowser} from './browser.mjs';
 import {evaluatePage, waitForPage} from './cdp_eval.mjs';
 const server=createServer((req,res)=>{
-  res.setHeader('Content-Security-Policy-Report-Only',"script-src 'self'; object-src 'none'");
+  res.setHeader('Content-Security-Policy-Report-Only',"script-src 'self'; object-src 'none'; report-uri /csp-report");
+  if(req.url==='/csp-report'){req.resume();res.writeHead(204).end();return;}
   if(req.url==='/good.js'||req.url==='/bad.js'){
     res.setHeader('Content-Type','application/javascript');
-    res.end(req.url==='/good.js'?'window.marker=42;':"window.marker=new Function('return 42')();");
+    const monitor="window.violations=[];addEventListener('securitypolicyviolation',e=>violations.push(e.violatedDirective));";
+    res.end(monitor+(req.url==='/good.js'?'window.marker=42;':"window.marker=new Function('return 42')();"));
   }else{res.setHeader('Content-Type','text/html');res.end(`<script src="${req.url==='/bad'?'/bad.js':'/good.js'}"></script>`);}
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -17,9 +19,12 @@ try{
  await page.goto(`http://127.0.0.1:${server.address().port}/`);
  await waitForPage(page,()=>window.marker===42,5000);
  assert.equal(await evaluatePage(page,()=>window.marker),42);
- assert.equal(reports.length,0,'the reader itself must not create CSP reports');
+ assert.equal(reports.length,0,'the reader itself must not create console errors');
+ assert.deepEqual(await evaluatePage(page,()=>window.violations),[],'the reader must not create policy violations');
  await page.goto(`http://127.0.0.1:${server.address().port}/bad`);
- await waitForPage(page,()=>window.marker===42,5000);
- assert(reports.some(t=>/unsafe-eval/.test(t)),'actual page evaluation violations must remain observable');
+ await waitForPage(page,()=>window.marker===42 && window.violations.length > 0,5000);
+ // Chromium versions differ in console severity for Report-Only; the actual
+ // browser violation event is the version-independent negative control.
+ assert((await evaluatePage(page,()=>window.violations)).some(t=>/script-src/.test(t)), 'actual page policy violations must remain observable');
  console.log('CSP probe transport: clean read/poll; actual unsafe page evaluation still reported');
 }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}

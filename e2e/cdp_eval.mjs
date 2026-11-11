@@ -12,6 +12,7 @@ export async function evaluatePage(page, fn, arg) {
   const response = await session.send('Runtime.evaluate', {
     expression: `(${fn.toString()})(...${JSON.stringify(args)})`,
     awaitPromise: true,
+    allowUnsafeEvalBlockedByCSP: false,
     returnByValue: true,
   });
   if (response.exceptionDetails) {
