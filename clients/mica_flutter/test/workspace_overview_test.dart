@@ -210,7 +210,7 @@ void main() {
     final glyph = tester.widget<Icon>(
       glyphIn('page', Icons.description_outlined),
     );
-    expect(glyph.color, const Color(0xFF9AA4AF));
+    expect(glyph.color, const Color(0xFF636C76));
   });
 
   testWidgets('a user emoji wins over the fallback glyph', (tester) async {

@@ -23,18 +23,21 @@ void main() {
     return (hi + 0.05) / (lo + 0.05);
   }
 
-  group('light mode is unchanged — this is a re-labelling, not a redesign', () {
-    test('the ink and the code background are the values that shipped', () {
-      // Picked from the old EditorTheme consts. If someone "improves" a value
-      // here, they are changing the shipped product, and this says so.
-      expect(MicaTokens.light.text.primary, const Color(0xFF24292F));
-      expect(MicaTokens.light.text.muted, const Color(0xFF57606A));
-      expect(MicaTokens.light.text.faint, const Color(0xFF9AA4AF));
-      expect(MicaTokens.light.editor.codeBg, const Color(0xFFF4F4F6));
-      expect(MicaTokens.light.editor.caret, const Color(0xFF2563EB));
-      expect(MicaTokens.light.accent.primary, const Color(0xFF2563EB));
-    });
-  });
+  group(
+    'light mode keeps its shipped values (faint raised to AA in 2026-11)',
+    () {
+      test('the ink and the code background are the values that shipped', () {
+        // Picked from the old EditorTheme consts. If someone "improves" a value
+        // here, they are changing the shipped product, and this says so.
+        expect(MicaTokens.light.text.primary, const Color(0xFF24292F));
+        expect(MicaTokens.light.text.muted, const Color(0xFF57606A));
+        expect(MicaTokens.light.text.faint, const Color(0xFF636C76));
+        expect(MicaTokens.light.editor.codeBg, const Color(0xFFF4F4F6));
+        expect(MicaTokens.light.editor.caret, const Color(0xFF2563EB));
+        expect(MicaTokens.light.accent.primary, const Color(0xFF2563EB));
+      });
+    },
+  );
 
   group('body text stays readable in BOTH modes', () {
     for (final (name, t) in [
@@ -60,6 +63,29 @@ void main() {
           );
         },
       );
+
+      test('$name: faint ink clears AA on every surface it sits on', () {
+        // Faint carries placeholders, timestamps and hints at body size, so it
+        // gets the normal-text bar, not the large-text one — on the page AND
+        // on the raised / sunken / hover fills of panels, rows and menus.
+        for (final (s, bg) in [
+          ('base', t.surface.base),
+          ('raised', t.surface.raised),
+          ('sunken', t.surface.sunken),
+          ('hover', t.surface.hover),
+        ]) {
+          expect(
+            contrast(t.text.faint, bg),
+            greaterThanOrEqualTo(4.5),
+            reason: '$name faint text on $s',
+          );
+        }
+        expect(
+          contrast(t.text.faint, t.surface.base),
+          lessThan(contrast(t.text.muted, t.surface.base)),
+          reason: 'faint stays quieter than muted',
+        );
+      });
 
       test('$name: ink on the accent fill clears AA', () {
         // The primary button's label. Asserted through accent.onPrimary, the ONE

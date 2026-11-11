@@ -17,6 +17,11 @@ set -euo pipefail
 source "$(dirname "$0")/lib-local.sh"
 source "$(dirname "$0")/lib-receipt.sh"
 
+# No debug info in the gate's dev/test builds, as in local-ci.sh: full debug
+# info for the workspace's test binaries is ~10 GB. Export to override.
+export CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG:-0}
+export CARGO_PROFILE_TEST_DEBUG=${CARGO_PROFILE_TEST_DEBUG:-0}
+
 bash scripts/check-ignored-sources.sh
 bash scripts/check-migration-tracking.sh
 bash scripts/test-migration-tracking.sh

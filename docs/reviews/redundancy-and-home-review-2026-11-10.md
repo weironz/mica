@@ -566,3 +566,28 @@ Context7 文档工具返回连接错误，已回退官方 [Gradle TaskExecutionG
    中文环境下 AI 斜杠菜单项会显示英文 "Ask AI"、生产数据库没有慢查询观测。建议列入下一轮。
 7. **外部条件**：安卓真机、Safari、Windows 真实中文输入法、yrs 上游修复（0.28.1 实测仍会 panic）、`mica-md` 发布（材料已备好，需用户本人发布）、issue #170 等报告人。
 8. **尚未发版部署**：新的安全头、字体、延迟加载、导入邮件都要等下一次发版部署后才在线上生效。
+
+## 11. 收尾（2026-11-11）
+
+第 10 节里不需要用户本人操作的项，本节处理完。
+
+| 项 | 处理 |
+| --- | --- |
+| 中文环境 AI 斜杠菜单显示 "Ask AI" | **误报**。`_slashLabel` 自 `a27b40dd`（2026-07）起就把 `__ai__` 映射到 `aiAskTitle`（中文"问 AI"），评估时的静态分析漏看了这个分支。补了回归测试 `test/slash_ai_label_test.dart`：中文界面显示"问 AI"，输入 `/ask` 也能找到 |
+| 浅灰文字对比度 | `text.faint` 浅色 `#9AA4AF`→`#636C76`、深色 `#6E7A88`→`#8B949E`。在 base/raised/sunken/hover 四种底色上都 ≥4.72:1，仍比 muted 浅；`theme_tokens_test.dart` 新增"faint 在所有底色上 ≥4.5"的守护 |
+| CSP 没有上报地址 | 新增公开端点 `POST /api/csp-report`（`routes/csp_report.rs`）：按 IP 限流、请求体上限 16 KiB、兼容 `application/csp-report` 与 Reporting API 两种格式；只写日志（target `mica::csp`），URL 去掉查询串和片段（分享/重置令牌可能在里面），每字段截断 200 字符，单请求最多记 8 条，不入库，总是 204。两份 nginx 的 Report-Only 策略加 `report-uri /api/csp-report`。发版部署后用 `docker logs <api> 2>&1 \| grep mica::csp` 观察 |
+| `release-check.sh` 默认带调试信息 | 与 `local-ci.sh` 一致，默认 `CARGO_PROFILE_DEV_DEBUG=0`、`CARGO_PROFILE_TEST_DEBUG=0` |
+| Android 稳定签名密钥 | 已核对：WILLOPTPC 上 Docker 卷 `mica-client-android-key` 里的 `debug.keystore`（PKCS12，别名 `androiddebugkey`）证书 SHA-256 为 `d161850d…9346f7`，与 0.14.4 两个 APK 的签名证书一致。用它作为稳定密钥，已装 0.14.4 的设备可以直接覆盖升级。已复制到该机 `%USERPROFILE%\.mica-signing\mica-android.keystore`（目录权限只留当前用户），供本地发版使用 |
+
+**Android 签名还需用户本人做的**（密钥材料不进仓库、不进聊天）：
+
+- 本地发版：在 WILLOPTPC 上设 `MICA_ANDROID_KEYSTORE_PATH` 指向上面的文件，`MICA_ANDROID_STORE_TYPE=PKCS12`，
+  别名与两个口令用 Android 调试密钥的标准值。
+- GitHub 发版：在仓库 Settings → Secrets 设 `MICA_ANDROID_KEYSTORE_BASE64`（该文件的 base64）、`MICA_ANDROID_KEY_ALIAS`、
+  `MICA_ANDROID_STORE_PASSWORD`、`MICA_ANDROID_KEY_PASSWORD`，Variables 设 `MICA_ANDROID_STORE_TYPE=PKCS12`。
+- 这把密钥是调试密钥，口令公开，实际安全性只靠文件不外泄。长期应换成正式发布密钥；换的时候已安装用户需要卸载重装，
+  最好在用户量还小时做。
+
+**仍需用户决定或外部条件的**（不变）：导入完成邮件的默认开启/固定中文/取消也发信；编辑器正文的读屏语义（较大的工程，建议单独立项）；
+生产数据库慢查询观测（要改生产库配置，未动）；Windows 托盘与文件选择器的人工步骤；安卓真机、Safari、Windows 真实输入法；
+yrs 上游修复；`mica-md` 发布；issue #170；以及以上所有改动都要等下一次明确发版部署后才在线上生效。

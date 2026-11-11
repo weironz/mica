@@ -355,6 +355,7 @@ gets it after updating.
 | GET | `/s/{token}` | **public** — a shared page, rendered server-side |
 | GET | `/health` | **public** — reports the running version |
 | GET | `/ready` | **public** — readiness |
+| POST | `/api/csp-report` | **public**, per-IP throttled, 16 KiB cap — browsers post Report-Only CSP violations here; logged (target `mica::csp`, query strings stripped), never stored; always 204 |
 | GET | `/metrics` | Prometheus. Not proxied publicly — reachable only inside the compose network |
 
 ## See also

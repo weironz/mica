@@ -311,7 +311,7 @@ class MicaTokens {
       // GitHub's ink: calmer than slate-900, still ~13:1 on white.
       primary: Color(0xFF24292F),
       muted: Color(0xFF57606A),
-      faint: Color(0xFF9AA4AF),
+      faint: Color(0xFF636C76),
     ),
     border: BorderTokens(
       subtle: Color(0xFFF0F1F3),
@@ -385,7 +385,7 @@ class MicaTokens {
     text: TextTokens(
       primary: Color(0xFFE6EDF3),
       muted: Color(0xFF9BA7B4),
-      faint: Color(0xFF6E7A88),
+      faint: Color(0xFF8B949E),
     ),
     border: BorderTokens(
       subtle: Color(0xFF21262D),

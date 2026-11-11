@@ -10,6 +10,7 @@ mod ai_ws;
 pub mod auth;
 mod avatar;
 mod comments;
+mod csp_report;
 mod documents;
 mod email_verify;
 mod files;
@@ -84,6 +85,14 @@ pub fn public_api_router() -> Router<AppState> {
   Router::new()
     .route("/health", get(health::health))
     .route("/ready", get(health::ready))
+    // The browser, not the app, posts these (see csp_report.rs): no session,
+    // a small body cap, and the per-IP throttle against floods.
+    .route(
+      "/csp-report",
+      ip_throttled(post(csp_report::csp_report)).layer(axum::extract::DefaultBodyLimit::max(
+        csp_report::MAX_BODY_BYTES,
+      )),
+    )
     // Sign-up and sign-in hash a password, so they carry the Argon2 gate too.
     .route("/auth/register", argon2_throttled(post(auth::register)))
     .route("/auth/login", argon2_throttled(post(auth::login)))
@@ -606,6 +615,31 @@ mod route_layer_tests {
         "{path} must not need a session"
       );
     }
+  }
+
+  /// Browsers post CSP reports with no session; the body is capped.
+  #[tokio::test]
+  async fn csp_reports_are_public_and_capped() {
+    let app = app();
+    let post = |body: Vec<u8>| {
+      let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/csp-report")
+        .header("x-forwarded-for", "198.51.100.9")
+        .header("content-type", "application/csp-report")
+        .body(Body::from(body))
+        .unwrap();
+      req.extensions_mut().insert(ConnectInfo(PEER));
+      app.clone().oneshot(req)
+    };
+    let ok = post(br#"{"csp-report":{"violated-directive":"img-src"}}"#.to_vec())
+      .await
+      .unwrap();
+    assert_eq!(ok.status(), StatusCode::NO_CONTENT);
+    let big = post(vec![b' '; csp_report::MAX_BODY_BYTES + 1])
+      .await
+      .unwrap();
+    assert_eq!(big.status(), StatusCode::PAYLOAD_TOO_LARGE);
   }
 
   #[tokio::test]
