@@ -159,11 +159,82 @@ Windows 上没有可用的 ansible 时，`deploy-prod.sh` 会**自动在 `alpine
 - `.deb`：`sudo apt install ./Mica-X.Y.Z-linux-amd64.deb`，装到 `/opt/mica`，命令 `mica`，带桌面菜单项。无应用内更新
   （自更新只支持 Windows），升级就装新包。托盘只在 Windows 启用；导出 PDF 依赖 Windows WebView2，Linux 上不可用。
   偏好里的登录令牌在 Linux 上明文存于 `~/.config/mica/prefs.json`（Windows 走 DPAPI 加密）。
-- APK：按 CPU 分包，现代手机装 `arm64`，老的 32 位手机装 `armv7`（不出 x86_64）。**用构建机的调试 key 签名**，
-  只为手动安装，不上架。Android 只接受同一 key 签名的覆盖安装：同一台机器（Docker 卷 / 本机 `~/.android`）
-  或同一个 runner 出的包可以直接升级；换了构建机出的包要**先卸载**（本地数据随之清除）。数据存在应用私有目录
-  （`MainActivity.kt` 通过 `MICA_DATA_DIR` 交给 Dart），无应用内更新，导出 PDF 不可用。
+- APK：按 CPU 分包，现代手机装 `arm64`，老的 32 位手机装 `armv7`（不出 x86_64）。只为手动安装，不上架。
+  签名见下面「APK 签名」。数据存在应用私有目录（`MainActivity.kt` 通过 `MICA_DATA_DIR` 交给 Dart），
+  无应用内更新，导出 PDF 不可用。
 - 新平台未经真机回归：Android 包在本环境只做了构建与安装包静态校验（签名、包名、权限、ABI），尚未在真机上跑过。
+
+### APK 签名
+
+Android 只接受**同一把 key** 签名的覆盖安装。换了 key，已装用户必须先卸载（本地数据随之清除），
+所以每次发版都必须用同一把 key。release APK 构建（本地和 GitHub 两条路径）**没配 key 就直接失败**，
+不会悄悄用构建机自己的调试 key。
+
+**这把 key 是什么**：0.14.4 起使用的签名 key，是 WILLOPTPC 上 Docker 卷 `mica-client-android-key` 里的
+Android 调试 key（PKCS12，证书 SHA-256 `d161850d4659a0fcaa638aa6f1f4f09ee11d4870e65c7daecb6bf1493e9346f7`）。
+它的别名和口令是 Android 调试 key 的公开标准值，**安全性只靠 keystore 文件本身不外泄**。
+文件副本在该机 `%USERPROFILE%\.mica-signing\mica-android.keystore`（目录只授当前用户）。
+
+> **务必另存一份备份**（密码管理器、加密网盘或离线 U 盘）。文件丢了就再也签不出能覆盖升级的包。
+> 配好下面的 GitHub Secrets 也算一份异地备份。keystore 是二进制文件，用文本编辑器打开是乱码，属正常；
+> 不要在编辑器里保存它。
+
+核对一个 keystore 是不是这把 key：
+
+```bash
+keytool -list -v -keystore mica-android.keystore -storetype PKCS12 -storepass android | grep SHA256
+# 输出应为 D1:61:85:0D:…:93:46:F7
+```
+
+#### 本地发版
+
+换任何一台机器都行：把 keystore 文件拷过去（放在只有自己能读的目录），设好下面五个环境变量，
+再照常 `just release-artifacts X.Y.Z --apk` / `just build-apk X.Y.Z`。
+
+```
+MICA_ANDROID_KEYSTORE_PATH="%USERPROFILE%\.mica-signing\mica-android.keystore"
+MICA_ANDROID_STORE_TYPE=PKCS12
+MICA_ANDROID_KEY_ALIAS=androiddebugkey
+MICA_ANDROID_STORE_PASSWORD=android
+MICA_ANDROID_KEY_PASSWORD=android
+```
+
+Windows 上一次性写进用户环境变量（PowerShell，设完**重开终端**生效）：
+
+```powershell
+setx MICA_ANDROID_KEYSTORE_PATH "$env:USERPROFILE\.mica-signing\mica-android.keystore"
+setx MICA_ANDROID_STORE_TYPE PKCS12
+setx MICA_ANDROID_KEY_ALIAS androiddebugkey
+setx MICA_ANDROID_STORE_PASSWORD android
+setx MICA_ANDROID_KEY_PASSWORD android
+```
+
+Linux / macOS 在 shell 里 `export` 同名变量即可，路径换成该机的实际位置。缺任何一个，构建在开始前就报错。
+
+#### GitHub Actions 发版
+
+仓库 → Settings → Secrets and variables → Actions：
+
+| 位置 | 名称 | 值 |
+| --- | --- | --- |
+| Variables | `MICA_ANDROID_STORE_TYPE` | `PKCS12` |
+| Secrets | `MICA_ANDROID_KEYSTORE_BASE64` | keystore 文件的 base64（取法见下） |
+| Secrets | `MICA_ANDROID_KEY_ALIAS` | `androiddebugkey` |
+| Secrets | `MICA_ANDROID_STORE_PASSWORD` | `android` |
+| Secrets | `MICA_ANDROID_KEY_PASSWORD` | `android` |
+
+取 `MICA_ANDROID_KEYSTORE_BASE64`（在存有 keystore 的 Windows 上，PowerShell）：
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\.mica-signing\mica-android.keystore")) | Set-Clipboard
+(Get-Clipboard).Length   # 约 3492，说明已在剪贴板
+```
+
+第一行没有任何输出是正常的：结果直接进了剪贴板，到 GitHub 的 Secret 值里 Ctrl+V 即可。
+Linux / macOS：`base64 -w0 mica-android.keystore`（macOS 用 `base64 -i mica-android.keystore`）。
+base64 文本和 keystore 文件等价，不要存成文件留在磁盘上，也不要贴进聊天或 issue。
+
+配好后手动触发一次 Release dry-run 并勾选 `build_android`，APK 构建通过即配置正确。
 
 ## 官方 runner 与工具链
 
@@ -538,6 +609,7 @@ just docker-push 0.5.1      # 需先 docker login registry.cn-shenzhen.aliyuncs.
 | `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | 推 Docker Hub(Personal access token,Read & Write) |
 | `DEPLOY_SSH_KEY` | 部署用私钥,**2026-08-25 起是有 shell 的 root key**(取舍见上面「CI 拿的是 root key」)。本机对应文件 `~/.ssh/mica-deploy-ci`,节点上是 root 的 `authorized_keys` 里注释为 `github-actions-deploy-mica` 那一行 |
 | `DEPLOY_KNOWN_HOSTS` | 节点主机公钥,**钉死**而不是运行时 `ssh-keyscan`(当场扫等于信任任何应答的人,那不叫验证) |
+| `MICA_ANDROID_KEYSTORE_BASE64` / `MICA_ANDROID_KEY_ALIAS` / `MICA_ANDROID_STORE_PASSWORD` / `MICA_ANDROID_KEY_PASSWORD` | APK 签名(另有变量 `MICA_ANDROID_STORE_TYPE`)。别名和口令是 Android 调试 key 的公开标准值,可以写在文档里;要保密的只有 keystore 文件。见上面「APK 签名」 |
 
 **轮换 / 重建这把 key**(节点侧 + 仓库侧):
 
