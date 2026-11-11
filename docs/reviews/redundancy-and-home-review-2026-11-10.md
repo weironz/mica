@@ -136,7 +136,7 @@
 - [x] `runner-bootstrap.yml`、`runner-probe.yml` 只为自建 runner 存在：删除，或注明"仅在重新启用自建 runner 时使用"。
 - [x] 去掉只对自建机器有意义的步骤或绕法（例如复用机器上预装 Flutter 的逻辑、"别碰 ~/.ssh"的隔离），
   确认官方 runner 上不需要；需要保留的，确认在官方 runner 上同样成立。
-- [ ] 手动触发一次 `CI`（scope=full），全部通过；再触发一次 `Release dry run`，通过。把两次运行的链接写进本文。
+- [x] 手动触发一次 `CI`（scope=full），全部通过；再触发一次 `Release dry run`，通过。把两次运行的链接写进本文。
 - [x] 更新 `AGENTS.md`（现在写的是"自建 runner 已停，本地 CI 是唯一门禁"）和 `docs/ops/ci-runners.md`：
   改为"GitHub Actions 用官方 runner、手动触发；额度用完时走本地流程（`just ci`、`just release` 等）"。
   `docs/ops/release.md` 里两条发版路径都要写清楚，并说明何时用哪条。
@@ -186,9 +186,9 @@
 
 ### 5.6 拆分应用外壳（第二轮评估第 4 项）
 
-- [ ] 从 `lib/main_shell.dart`（5,277 行、一个状态类、164 个私有方法）继续拆出独立控制器，
+- [x] 从 `lib/main_shell.dart`（5,277 行、一个状态类、164 个私有方法）继续拆出独立控制器，
   沿用现有 `views/`、`auth/`、`sync/` 控制器的做法；每次一个主题、几百行，单独提交，行为不变。
-- [ ] 每次拆完收紧 `scripts/file-size-budget.txt` 里 `main.dart` 的基线。
+- [x] 每次拆完收紧 `scripts/file-size-budget.txt` 里 `main.dart` 的基线。
 - **验收**：本轮把 `main.dart` 库从 17,009 行降到 15,000 行以下；全部测试通过，主流程（登录、切换工作区、
   打开页面、本地模式、离线编辑）手动或端到端验证无回归。
 
@@ -213,7 +213,9 @@
 
 尚未发版、未部署。实施提交：字体与渲染 `cd03ebed`；外壳与偏好控制器 `ba27965d`；CI 与项目规则 `36ca950a`；静态清理、serde 与路线图 `dcea64d8`。追加 hosted runner 工具前提修复：`eda11774`。
 
-官方运行：[首次 CI（发现缺少 just，已修复）](https://github.com/weironz/mica/actions/runs/42985693589)、[修复后 CI](https://github.com/weironz/mica/actions/runs/42986226742)、[Release dry-run](https://github.com/weironz/mica/actions/runs/42985698738)、[生产只读诊断（已通过）](https://github.com/weironz/mica/actions/runs/42985702830)。CI 和演练仍在运行，不提前标绿。
+官方最终运行：[CI(scope=full)，全部通过](https://github.com/weironz/mica/actions/runs/42988594674)、[Release dry-run，全部通过](https://github.com/weironz/mica/actions/runs/42985698738)、[生产只读诊断，通过](https://github.com/weironz/mica/actions/runs/42985702830)。发版演练未发布 release、未部署。
+
+恢复托管执行后修复了三个旧 CI 前提：`eda11774` 安装脚本自测实际需要的 just；`6fa636e8` 用标准迁移入口登记账本，避免凭据轮换测试再次建表；`1b01fb3d` 删除对已在 `8291c551` 退役的一次性审计测试的失效调用。没有降低回执下限或跳过现存测试。
 
 ### 6.1 已实现的范围
 
@@ -251,6 +253,6 @@ Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载�
 
 - 完整 `just ci` 已通过，故障注入恢复后再次全套通过：Rust 工作区回执 **1,191**，带 store 特性的 mica-core 回执 **221**，Flutter 单元/widget 回执 **2,096**，浏览器专用套件及四个 Node 浏览器脚本通过；这些是各次执行数，不宣称互不重叠的唯一测试总数。
 - 故障注入：临时把 ClipboardItem 的 HTML 内容改成纯文本，完整 `just ci` 在 `clipboard_e2e.mjs` 的 Gemini 行内数学格式断言失败，退出 **1**；源码已逐字节恢复。没有放宽预算或新增跳过。
-- Windows 字体探针、安装包构建已通过；另做的完整应用首帧冒烟没有取得原生首帧回执。诊断已显示启动完成窗口、引擎、字体初始化并执行 Dart 首帧，但远程会话创建交换链失败（DXGI `0x887A0022`，EGL Context Lost）；不把 GPU 呈现失败伪装成启动通过。官方 Windows runner 安装启动冒烟仍待结果。
-- 官方 runner 的生产 SSH 已由只读诊断实际确认；`CI(scope=full)` 和 `Release dry-run` 已触发，仍待最终结果，5.1 的运行验收保持未完成。
-- 5.6 的全部主流程验收仍需结合官方端到端和桌面启动结果，保持未完成。
+- Windows 字体探针、安装包构建已通过；另做的完整应用首帧冒烟没有取得原生首帧回执。诊断已显示启动完成窗口、引擎、字体初始化并执行 Dart 首帧，但远程会话创建交换链失败（DXGI `0x887A0022`，EGL Context Lost）；不把 GPU 呈现失败伪装成启动通过。官方 Windows runner 的实际安装包安装、首帧回执和首帧后存活 10 秒已通过，见上述 Release dry-run 的 Windows 作业。
+- 官方 runner 的生产 SSH 已由只读诊断实际确认；`CI(scope=full)` 和 `Release dry-run` 全部通过，5.1 完成。
+- 5.6 的验证组合为：真实服务栈 Web E2E、四个浏览器交互回归、真实 FFI 指纹检查的本地/离线模块测试，以及 Windows 实际安装启动冒烟，均通过；不声称逐一人工操作了所有桌面流程。

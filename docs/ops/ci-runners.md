@@ -29,7 +29,7 @@ Linux 需安装 Chromium 的系统依赖（托管 runner 由 Playwright `--with-
 
 ## 生产网络与凭据
 
-部署、容灾和生产诊断均需要 SSH。生产节点有公网 SSH 入口；切换后须用官方 runner 的只读诊断确认实际可达性。
+部署、容灾和生产诊断均需要 SSH。生产节点有公网 SSH 入口；官方 runner 的只读生产诊断已实际通过，运行链接见本轮[验收记录](../reviews/redundancy-and-home-review-2026-11-10.md#6-第二轮实施与验收记录2026-11-11)。
 如目标环境不允许官方 runner 连接，改走本地 `just deploy-prod` / 容灾流程；不要提交凭据或内网地址来绕过。
 SSH 材料和 Docker 登录仍放 `$RUNNER_TEMP` 并清理：官方 runner 上同样能限定凭据生命周期。
 发布两条完整路径见 [发布文档](release.md)。
