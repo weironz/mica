@@ -66,6 +66,13 @@ jobs:
         with:
           # An explicit baseline may cover more than the latest commit.
           fetch-depth: 0
+      - name: Install the recipe runner used by script regression tests
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/just-bin"
+          curl -fsSL https://github.com/casey/just/releases/download/1.45.0/just-1.45.0-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP/just-bin" just
+          echo "$RUNNER_TEMP/just-bin" >> "$GITHUB_PATH"
       - name: Test job selection
         run: |
           bash scripts/test-ci-paths.sh
