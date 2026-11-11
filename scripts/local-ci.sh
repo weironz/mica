@@ -17,6 +17,12 @@ cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
 source scripts/lib-receipt.sh
 
+# No debug info in dev/test builds: a gate needs pass/fail, not a debugger, and
+# the workspace's test binaries with full debug info need ~10 GB — enough to
+# fill a small disk mid-link (2026-11-11). Export either variable to override.
+export CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG:-0}
+export CARGO_PROFILE_TEST_DEBUG=${CARGO_PROFILE_TEST_DEBUG:-0}
+
 part=${1:-all}
 case "$part" in all | rust | flutter) ;; *) fail "unknown part '$part' (all | rust | flutter)" ;; esac
 
