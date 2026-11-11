@@ -1,0 +1,72 @@
+{
+  "light.primary": {
+    "foreground": "24292F",
+    "background": "FFFFFF",
+    "ratio": 14.652,
+    "normalTextAA": true,
+    "largeOrUiAA": true
+  },
+  "light.muted": {
+    "foreground": "57606A",
+    "background": "FFFFFF",
+    "ratio": 6.39,
+    "normalTextAA": true,
+    "largeOrUiAA": true
+  },
+  "light.faint": {
+    "foreground": "9AA4AF",
+    "background": "FFFFFF",
+    "ratio": 2.529,
+    "normalTextAA": false,
+    "largeOrUiAA": false
+  },
+  "dark.primary": {
+    "foreground": "E6EDF3",
+    "background": "0F1419",
+    "ratio": 15.667,
+    "normalTextAA": true,
+    "largeOrUiAA": true
+  },
+  "dark.muted": {
+    "foreground": "9BA7B4",
+    "background": "0F1419",
+    "ratio": 7.564,
+    "normalTextAA": true,
+    "largeOrUiAA": true
+  },
+  "dark.faint": {
+    "foreground": "6E7A88",
+    "background": "0F1419",
+    "ratio": 4.233,
+    "normalTextAA": false,
+    "largeOrUiAA": true
+  },
+  "light.accent": {
+    "foreground": "2563EB",
+    "background": "FFFFFF",
+    "ratio": 5.169,
+    "normalTextAA": true,
+    "largeOrUiAA": true
+  },
+  "dark.accent": {
+    "foreground": "4C8DF6",
+    "background": "0F1419",
+    "ratio": 5.684,
+    "normalTextAA": true,
+    "largeOrUiAA": true
+  },
+  "light.strongBorder": {
+    "foreground": "C9CDD3",
+    "background": "FFFFFF",
+    "ratio": 1.596,
+    "normalTextAA": false,
+    "largeOrUiAA": false
+  },
+  "dark.strongBorder": {
+    "foreground": "444C56",
+    "background": "0F1419",
+    "ratio": 2.128,
+    "normalTextAA": false,
+    "largeOrUiAA": false
+  }
+}

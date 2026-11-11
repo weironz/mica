@@ -1,0 +1,23 @@
+{
+  "version": "159.0.1",
+  "rows": [
+    {
+      "mode": "wasm",
+      "ready": true,
+      "isolated": false,
+      "resources": [
+        "http://127.0.0.1:37895/canvaskit/canvaskit.wasm",
+        "http://127.0.0.1:37895/main.dart.js"
+      ]
+    },
+    {
+      "mode": "wasmIsolated",
+      "ready": true,
+      "isolated": true,
+      "resources": [
+        "http://127.0.0.1:44223/canvaskit/canvaskit.wasm",
+        "http://127.0.0.1:44223/main.dart.js"
+      ]
+    }
+  ]
+}

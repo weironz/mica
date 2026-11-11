@@ -1,6 +1,6 @@
 # 双实现盘点与首页评估（2026-11-10）
 
-> **状态：第 1–3 项已实施并经审核；第二轮清单（第 5 节）已实施（第 6 节）并经审核（第 7 节）。第 8 节是第三轮待办清单，交给他人实施，完成后评审。**
+> **状态：前两轮已实施并审核；第三轮第 8 节实施中，进度和证据见第 9 节。涉及设备、签名/发布和上游修复的部分不提前标为通过。**
 >
 > **原评估依据**：读代码和数行数；实施时再对照运行同一批输入。首页部分用示例数据单独渲染，不是线上截图。
 
@@ -293,24 +293,24 @@ Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载�
 
 ### 8.1 安全
 
-- [ ] **生产安全响应头**（`deploy/nginx.conf`、`deploy/nginx.dev.conf`）：现在首页和 `/api/` 都没有任何安全响应头，
+- [x] **生产安全响应头**（`deploy/nginx.conf`、`deploy/nginx.dev.conf`）：现在首页和 `/api/` 都没有任何安全响应头，
   且响应里带 `Server: nginx/1.31.2`。加上 `Strict-Transport-Security`、`X-Content-Type-Options: nosniff`、
   防嵌入（`X-Frame-Options` 或 CSP `frame-ancestors`）、`Referrer-Policy`，并设 `server_tokens off`。
   注意 nginx 的 `add_header` 写在 location 里会覆盖上层的，要确认每个 location 都带上（用 `always` 让错误页也带）。
   分享页 `/s/` 已有自己的 CSP（`SAFE_HTML_CSP`），不要被覆盖。
-- [ ] **应用的内容安全策略（CSP）**：为 Flutter 网页单独写一份（需要放行 `wasm-unsafe-eval`、同源 worker、
+- [x] **应用的内容安全策略（CSP）**：为 Flutter 网页单独写一份（需要放行 `wasm-unsafe-eval`、同源 worker、
   `blob:`/`data:` 图片、WebSocket 到同源 `/ws/` 等），先用 `Content-Security-Policy-Report-Only` 观察一轮再切正式。
-- [ ] `scripts/web-entry-cache-check.sh` 加检查：上述响应头存在、`Server` 不带版本；自测脚本补用例。
+- [x] `scripts/web-entry-cache-check.sh` 加检查：上述响应头存在、`Server` 不带版本；自测脚本补用例。
 - **验收**：部署后 `curl -I https://mica.cloudcele.com/` 与 `/api/ready` 能看到这些头；四个浏览器端到端脚本和
   真实服务栈 Web E2E 通过；浏览器控制台无 CSP 违规。
-- [ ] **`ctutils` 0.4.2 → ≥ 0.4.4**（RUSTSEC-2026-0385，比较非恒定时间；经 `hmac`/`hkdf` 进入服务端）：
+- [x] **`ctutils` 0.4.2 → ≥ 0.4.4**（RUSTSEC-2026-0385，比较非恒定时间；经 `hmac`/`hkdf` 进入服务端）：
   `cargo update -p ctutils`，根锁文件。
-- [ ] **SQLite 漏洞**（`libsqlite3-sys` 0.35，RUSTSEC-2026-0459）：`crates/mica-core` 的 `rusqlite` 现为 0.37，
+- [x] **SQLite 漏洞**（`libsqlite3-sys` 0.35，RUSTSEC-2026-0459）：`crates/mica-core` 的 `rusqlite` 现为 0.37，
   升到带 `libsqlite3-sys` ≥ 0.39 的版本，根锁文件和 `clients/mica_flutter/rust/Cargo.lock` 都要更新；
   验证本地模式、离线编辑、数据库迁移（`cargo test -p mica-core --features store` 与 FFI 指纹检查）。
-- [ ] **`rmcp` 0.9.1**（RUSTSEC-2026-0462）：公告针对 Streamable HTTP **客户端**，我们只用 stdio 服务端，不受影响。
+- [x] **`rmcp` 0.9.1**（RUSTSEC-2026-0462）：公告针对 Streamable HTTP **客户端**，我们只用 stdio 服务端，不受影响。
   在 `crates/mcp-server/Cargo.toml` 旁注明不受影响的理由；大版本升级（→ 3.x）评估工作量，单独做。
-- [ ] **把 `cargo audit` 纳入本地 CI 和官方 CI**：两个锁文件都扫；已知无修复版本的"无人维护"公告
+- [x] **把 `cargo audit` 纳入本地 CI 和官方 CI**：两个锁文件都扫；已知无修复版本的"无人维护"公告
   （`cgmath`、`paste`、`smallstr`、`ttf-parser`、`unsafe-libyaml`、`adler`、`pin-utils`）用忽略清单逐条写明原因，
   新出现的漏洞要让门禁失败。
 - **验收**：`cargo audit` 对两个锁文件除忽略清单外零告警。
@@ -326,33 +326,33 @@ Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载�
 
 ### 8.3 性能与体积
 
-- [ ] **网页按需加载不常用模块**：用 Dart 延迟导入（`deferred as`）拆出 AI 对话框、版本历史、关系图、导入等不在首屏的模块。
+- [x] **网页按需加载不常用模块**：用 Dart 延迟导入（`deferred as`）拆出 AI 对话框、版本历史、关系图、导入等不在首屏的模块。
   **验收**：首次打开登录页时 `main.dart.js` 体积下降（写明前后字节数），打开这些功能时首次加载正常，浏览器端到端脚本通过。
-- [ ] **评估 Flutter wasm 构建（skwasm）**：需要 COOP/COEP 跨域隔离响应头，并核对 Safari/Firefox 支持与对现有 worker、
+- [x] **评估 Flutter wasm 构建（skwasm）**：需要 COOP/COEP 跨域隔离响应头，并核对 Safari/Firefox 支持与对现有 worker、
   wasm 引擎的影响。只出评估结论和实测数字，不直接切换。
 - [ ] **安卓冷启动实测**（需设备）：启动前加载两个中文字体是否拖慢首帧；有明显影响再改为首帧后加载。
 
 ### 8.4 代码结构
 
-- [ ] 继续拆分外壳：`main_shell.dart`（5,191 行）、`main_workspace_view.dart`（3,019 行），方法同 5.6。
+- [x] 继续拆分外壳：`main_shell.dart`（5,191 行）、`main_workspace_view.dart`（3,019 行），方法同 5.6。
   **验收**：`main.dart` 库从 14,606 降到 12,000 行以下，预算收紧，主流程无回归。
-- [ ] 渲染库 `render.dart`（5,733 行）：按路线图在下次新增块渲染器时抽出渲染器上下文接口并拆库；本轮若没有新增渲染器，
+- [x] 渲染库 `render.dart`（5,733 行）：按路线图在下次新增块渲染器时抽出渲染器上下文接口并拆库；本轮若没有新增渲染器，
   先出接口设计草案写进本文。编辑器库（7,060 行）找一两个自成一体的部分拆出，收紧预算。
 
 ### 8.5 工程与发版
 
-- [ ] `release.yml` 的 macOS CLI 构建改为可选输入（默认关），GitHub 对 macOS 按 10 倍计费。
+- [x] `release.yml` 的 macOS CLI 构建改为可选输入（默认关），GitHub 对 macOS 按 10 倍计费。
 - [ ] 安卓签名二选一（**需用户**拍板）：把签名密钥存为仓库机密，让官方 runner 构建的 APK 能覆盖安装；或在发版文档约定
   APK 只从本地固定机器构建发布。
-- [ ] **发版产物验证（canary）**：在干净目录安装刚发布的版本（Windows 安装包、Linux CLI、.deb），校验能启动、
+- [x] **发版产物验证（canary）**：在干净目录安装刚发布的版本（Windows 安装包、Linux CLI、.deb），校验能启动、
   `/api/health` 与 `--version` 版本一致、固定入口文件契约；串进发版流程（路线图待办）。
 - [ ] yrs 模糊测试：跟进上游 #415，剩余 panic 修复后启用 4 条被跳过的 property 测试（路线图待办，依赖上游）。
-- [ ] 字体切片约 10 MB 进入 git 历史：评估是否改用 Git LFS，写结论；不改也要写明理由。
+- [x] 字体切片约 10 MB 进入 git 历史：评估是否改用 Git LFS，写结论；不改也要写明理由。
 - [ ] 下次发版前重跑一次 `Release dry-run`；发版部署后运行 `web-entry-cache-check.sh`，确认字体与新响应头检查通过。
 
 ### 8.6 功能待办
 
-- [ ] **导入完成发邮件**：大批量导入在后台完成后给用户发邮件（复用 `mail.rs` 的邮件底座），含成功/失败计数与入口链接；
+- [x] **导入完成发邮件**：大批量导入在后台完成后给用户发邮件（复用 `mail.rs` 的邮件底座），含成功/失败计数与入口链接；
   用户可在设置里关闭。验收：真实服务栈下导入完成后收到邮件（测试邮箱或本地邮件捕获）。
 - [ ] **`mica-md` 对外发布**（**需用户**）：按 [S5 发布手册](../single-source/stages/S5-sdk-release.md)准备好版本号、
   变更说明和发布前检查结果，由用户本人执行 crates.io / npm 发布。
@@ -367,11 +367,150 @@ Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载�
 
 ### 8.8 补充评估（只出结论，不直接改）
 
-- [ ] 服务端数据库查询性能：慢查询日志、常用接口的查询计划、索引覆盖；列出值得优化的前几项。
-- [ ] 无障碍：读屏、键盘可达性、对比度，按 Flutter 语义树检查主流程。
-- [ ] 多语言文案完整性：`app_zh.arb` 与 `app_en.arb` 键是否一致、是否有硬编码文案。
-- [ ] 移动端网页整体交互：在手机尺寸下走一遍主流程（登录、侧栏、编辑、选择、表格、设置），列出问题。
+- [x] 服务端数据库查询性能：慢查询日志、常用接口的查询计划、索引覆盖；列出值得优化的前几项。
+- [x] 无障碍：读屏、键盘可达性、对比度，按 Flutter 语义树检查主流程。
+- [x] 多语言文案完整性：`app_zh.arb` 与 `app_en.arb` 键是否一致、是否有硬编码文案。
+- [x] 移动端网页整体交互：在手机尺寸下走一遍主流程（登录、侧栏、编辑、选择、表格、设置），列出问题。
 
 ### 不在本轮
 
 - 本地模式：保留。首页：不动。
+
+
+## 9. 第三轮实施记录（2026-11-11，验收进行中）
+
+本轮按独立文件所有权并行，清单和最终提交统一维护。未发版、未部署，不能把本地 nginx 结果冒称生产已经生效。
+
+### 9.1 安全与依赖
+
+提交：`7332f03b`（web/SVG/XML/crypto），`c7cd8ad7`（文件/剪贴板 provider），`6af7dc59`（FRB 2.13 与 Rust 安全依赖图），`18cdada3`（响应头、CSP、双锁 audit 接线）。
+
+两份 nginx 均添加安全头且覆盖 location/错误响应，`server_tokens off`；应用 CSP **只 Report-Only**，分享页保留上游原 CSP。真实容器合同与 39 项响应头自测通过，登录和实际公式/Mermaid worker 页面应用 CSP 违规为 0。自动化 `waitForFunction` 自身的 eval 注入不算产品违规，未因此开放 unsafe-eval。生产域名的响应头仍待下一次明确授权发版部署后检查。
+
+ctutils 0.4.4，rusqlite 0.41.1 / libsqlite3-sys 0.39.1；两个锁均更新。SQLx 0.9 的可选 SQLite 约束阻碍解析，根 workspace 仅使用官方已合并修复提交 `10462fa4414c6c7f1ed1d39bb31678e3b726878c` 的 sqlx-sqlite 补丁；未启用 SQLx SQLite 运行后端，不另造数据库门面。能修复的其余公告和 yanked 版本也定向更新。无修复/未编译 transport 的例外按公告 ID 逐项说明于 `.cargo/audit.toml`，不是整 crate 忽略。adler、pin-utils 随上游依赖更新移除，不保留无用例外。cargo-audit 0.23.0，两个独立依赖图 `--deny warnings` 零未排除告警；真实 ctutils 旧漏洞锁仍退出 1。store 221 例、重建后的 FFI 指纹与本地操作 30 例通过。
+
+XML 7.1 与 Flutter pin 所锁 meta 冲突，选可解析的 7.0.1。新版 window/tray/screen 改用 nativeapi 后端，真实调用在当前 Dart 3.13.1 AOT 编译器触发 `Class with illegal cid, full-aot` / snapshotter -6；保留 window_manager0.5.2、tray_manager0.5.3、screen_retriever0.2.2，未来 SDK 整体升级后再验证，不以 legacy ignore 掩盖不兼容。其他依赖批次的 Windows 原生 PNG/编辑器粘贴、五组 clipboard round-trip 已通过，窗口/托盘/真实文件对话框矩阵继续补验。
+
+### 9.2 体积、加载与 wasm 评估
+
+生产 AI、版本历史、关系图采用 `deferred as`，数据常量独立避免重新拉入首屏；下载失败留在当前页面，可重新打开重试。旧账号/工作区/文档的迟到下载不打开新页面的对话框，也不向新归属显示旧错误。对应 3 项回归与通知账号归属测试通过。JS 分片使用 no-cache，缺失分片 404。
+
+构建样本：同期依赖下 eager 样本 `main.dart.js` **5,034,888 B**，deferred 样本 **5,012,438 B**；三个分片 15,090 / 6,529 / 11,076 B。合并其他功能后的最终首屏数值会由最终构建核对，不把所有依赖变化都归因延迟导入。专用浏览器验收 **12/12**：首屏无 part；三个真实窗口首开各加载分片、热开不重复请求；冷上下文拦截分片显示失败提示，放行重开恢复。只读状态采集与前台实际控件同时核对，未用模拟函数冒充 UI。见 [验收记录](assets/redundancy-third-2026-11-11/deferred-results.json)。
+
+**wasm 结论：本轮不切换。** 固定 Flutter3.47.1 实际 `--wasm` 构建成功，Chrome 实验：
+
+| 构建 | COOP/COEP | 实际执行资产 | 页面就绪单次观测 | 页面目标传输 |
+| --- | --- | --- | ---: | ---: |
+| dart2js | 无 | main.dart.js + CanvasKit | 633 ms | 4,727,266 B |
+| dart2wasm | 无 | main.dart.wasm + skwasm | 349 ms | 4,367,232 B |
+| dart2wasm | same-origin / require-corp | main.dart.wasm + skwasm | 337 ms | 4,369,782 B |
+
+这是同机独立冷浏览器上下文、禁 HTTP cache 的单次实验，OS/V8 编译缓存未统一清空，非统计性能承诺。无隔离时没有专用 worker；隔离时实际出现 skwasm worker。隔离 harness 中原有数学和 Mermaid 两个真实 Rust wasm worker 也渲染成功、无页面异常。harness 的页面 CDP 字节数不包含所有 worker 传输，不能冒充含图页面总量。证据：[完整实验](assets/redundancy-third-2026-11-11/wasm-results.json)、[worker 对照](assets/redundancy-third-2026-11-11/wasm-workers.json)。
+
+COOP/COEP 可影响跨域资源与窗口关系，需覆盖独立资源源站、认证和嵌入后才有上线结论；当前同源资源验证不等于任意部署都能隔离。官方[Wasm 文档](https://docs.flutter.dev/platform-integration/web/wasm)包含更新 SDK 的检测条件，不直接套用到本项目 pin；Safari 必须实测；本轮真实 Firefox159 在有/无隔离两种场景均能打开页面，但实际请求 main.dart.js + CanvasKit，并未选择 wasm/skwasm，不能把能打开当成该路径已获 Firefox 验证。Android 冷启动无设备，未据猜测调整首帧字体时序。
+
+### 9.3 外壳、编辑器与渲染接口设计
+
+`a44ed9ce`：主库 **14,606 → 11,992 行**，侧栏/页行/面包屑和外壳面板成为独立 library；启动/旧配置迁移、展示错误映射、编辑器投影独立；不是改成更多 part。编辑器 **7,059 → 6,737 行**，流式行内 AI 对话框独立，数据面与编辑合并规则仍由 Rust 持有。预算相应收紧。目标测试 22 例、模块归属/错误重试 7 例、通知路由绑定服务端并使用更新凭据 2 例通过；全套门禁继续运行。
+
+本轮没有新增 AtomicBlockRenderer，不提前改渲染机制。设计草案：当前 `block_renderers.dart` 直接访问 host 的 18 个私有名字（含方法，不能沿用旧“26 个字段”当新实测），主要是选择/编辑/hover、图片与预览、平移缩放和布局。
+
+1. 抽独立 `BlockLayoutContext`（节点、约束、选择、外观）和 `BlockPaintContext`（viewport、只读交互快照、资源借用），不能把 RenderDocument 装进 Context 再公开全部字段。
+2. 资源缓存及 ui.Image 生命周期仍由现有 pipeline 持有。绘制只记录需求，异步结果继续验证 generation/ticket，渲染器不得自行 dispose 借用图片或跨 await 修改 host。
+3. 原子布局结果是渲染器自有的几何对象，向 host 暴露通用 bounds、可见/吸收范围及 hit-test；表格单元格内部几何留在表格模块，不能为了拆库公开 `_TableCell`。
+4. 交互输出既有 TableHit/ImageHit 等意图，由编辑器/控制器处理；不在渲染器里新增 Markdown 或 CRDT 写入规则。正文文本 painter 的复用、视口裁剪、光标/引用背景仍由 host 管。
+5. 下次新增块时逐个迁移 divider→image/math→table，保留注册表及“layout 返回 null 时回退源码”的契约；每步校验尺寸/hit-test、主题/选择/表格编辑、图片释放时序与长文布局复用，再收紧实际库预算。
+
+这是接口设计而非已实现拆库，不宣称当前 render 库已降低到软上限。
+
+### 9.4 工程、通知及发布材料
+
+`492d8abb`：后台导入持久化终态后给原账号发送完成邮件，独立 users 偏好列避免旧客户端外观 blob 覆写而重新开启。设置→数据可关闭；回调绑定打开时的账号/服务器，token 刷新仍使用新凭据。真实 ZIP HTTP 上传→Rust 后台任务→Postgres 终态→DirectMail 签名 HTTP 请求→本地捕获邮件，2项回执；UI 4项通过。网络发送在数据库事务外；单次 best-effort at-most-once，失败记 failed，崩溃可能留 sending，无自动重试；不把日志 Mailer 当真实投递。
+
+`e6c0b0dd`：macOS CLI 变成默认关闭的可选输入；发布后从真实附件下载、校验平台 manifest 与实际版本，Windows 在一次性官方 runner 安装并验证首帧和10秒存活，Linux CLI/可选deb解包验证。installer 独立 `sha256-windows-installer.txt`，两个生产者都生成；CLI updater 的 sha256-windows.txt 不变。部署后 site canary 从目标 tag 取固定入口合同，新 tag 强制执行；旧 tag 仍保留旧 verify 恢复通路，明确新增 canary 未执行，不把成功恢复误报失败。
+
+真实本地主应用/deb版本0.14.4、首帧1001ms、存活10秒；新deb体积24,037,492 B，再次从临时目录解包验证通过。这次下载索引是本地资产 fixture，不是新发布的发行版，不冒称新发布 canary 已运行。正式发布仍须用户明确要求。
+
+工程、签名、SDK发布、yrs和LFS材料补在本节后续；Android实签、真实新发布附件和部署后响应头验收保持待用户/下次发版，不会为了打勾实际发布。
+
+### 9.5 补充只读评估（不直接修改产品）
+
+数据库：生产未启用慢语句日志、pg_stat_statements或IO计时，API最近10000行仅含数字的慢搜索过滤为0条，不能据此证明无慢查询。生产只做元数据和不执行语句的generic EXPLAIN，不读正文/用户字段、不 ANALYZE。页树与增量现有索引覆盖主要过滤/游标。
+
+独立PG18.6复制真实表/索引，合成40万views（20工作区×2万）、20万updates；全量单工作区页树29.326ms/18,948行、LIMIT50为7.468ms；单工作区候选检索7.622ms，20工作区检索123.874ms；回收站4.886ms；100条文档增量0.320ms。缓存/HTTP序列化不是生产状态，不把合成值当生产延迟。只在回滚事务内试建精确匹配排序 partial index，LIMIT50变0.061ms、消除Sort；当前客户端默认全树，不能将该比例当默认页树收益。建议先建立观测，再跟踪跨大工作区标题ILIKE扫描与精确排序；未直接改查询、生产索引或VACUUM。证据：[摘要](assets/redundancy-third-2026-11-11/database-synthetic-summary.json)、[可复验合成脚本](assets/redundancy-third-2026-11-11/database-synthetic-bench.sql)。
+
+无障碍：Chromium真实AX中桌面/390px登录有命名按钮与文本框，8次Tab无表单陷阱；但207块自绘正文无相应标题/列表/代码结构，2×2表格无table/row/cell语义，是明确缺口，不冒称真读屏正常。浅色/深色faint普通字号文本对比度 **2.529:1 / 4.233:1**，低于4.5；边框是否必须3:1与24px触摸目标间距例外要逐控件判断，不以单个尺寸直接断言全站违规。对比度[数据](assets/redundancy-third-2026-11-11/contrast.json)。
+
+中英ARB各769业务key，集合一致；ICU格式分支不是参数缺失。扫描无直接中文Text/tooltip/hint硬编码；找到AI slash项 `Ask AI` 在中文环境可能落入英语默认标签的实际静态链，未直接修。见[文案数据](assets/redundancy-third-2026-11-11/localization.json)。
+
+手机390×844触摸登录实际调用API后进入应用，侧栏打开页面、表格触摸进入TEXTAREA并输入通过；390px桌面引擎硬件键盘的正文输入和键盘选区通过。设置的外观/返回/关闭触摸可达；没有真实手机虚拟键盘、IME、长按把手和系统菜单验证，不把尺寸仿真当真机。正文焦点自动化一度未稳定同步，后用明确输入动作复验，未把测试工具不稳定直接报为产品故障。
+
+### 9.6 GPUI 剩余关卡
+
+Firefox159.0.1/geckodriver0.37.1实际打开当日NativeShell RichEditor，在编辑器加载前报 `error loading dynamically imported module: nsh:rt`，input/textarea/contenteditable为0；同URL当日Chromium152正常。最小诊断证明Firefox先注册import map再加载模块成功，先执行module再注册map失败；官网runtime采用后者，属于这份当日示例的Firefox兼容失败，非仅驱动或全站宕机。未执行的输入/composition/撤销复制/输入框位置不能记通过。证据：[摘要](assets/redundancy-third-2026-11-11/firefox-summary.json)、[最小诊断](assets/redundancy-third-2026-11-11/firefox-importmap.json)、[错误截图](assets/redundancy-third-2026-11-11/firefox-nsh-load-error.png)。
+
+gpui-kit同版Web示例正在从官方v0.9.1固定提交39ab849重建，独立nightly工具链，不改Mica rustc1.98 pin；不因缺旧产物直接宣称不能测。Windows真人IME、Android真机、Safari仍没有本轮通过证据，不用JS合成事件、Android模拟尺寸或WebKit代替。四关维持未完整通过、不迁UI的决策；本地存储两份实现继续暂缓合并。
+
+
+### 9.7 需用户操作与外部条件的材料
+
+#### Android 稳定签名（8.5；准备完毕，密钥操作仍需用户）
+
+来源：JDK 自带 keytool 本地生成自签名 APK 签名证书，不需要向 CA 付费。GitHub Actions 构建仍消耗其既有额度，与签名工具是否收费不是一回事。见 [Android 官方签名说明](https://developer.android.com/studio/publish/app-signing)。
+
+首先尝试找回旧构建者的 key（原固定构建机 `.android/debug.keystore` 或原 `mica-client-android-key` 卷），用户本人只读导出到仓库之外的私密目录。**先验证旧 APK 的签名指纹与该 key 的证书 SHA-256 一致，且 keystore 中确有 PrivateKeyEntry（不仅是公钥证书），再复用**。指纹命令：
+
+```sh
+apksigner verify --print-certs OLD.apk
+keytool -list -v -keystore EXISTING.keystore -alias EXISTING_ALIAS
+```
+
+只有找不到旧 key，用户才新建稳定 key，例如（命令仅准备，agent 没执行，也没生成测试签名 key）：
+
+```sh
+keytool -genkeypair -keystore /PRIVATE/DIR/mica-release.jks -storetype JKS \
+  -alias mica-release -keyalg RSA -keysize 3072 -validity 36500
+```
+
+交互输入身份与密码；不要把密码放命令参数、聊天或仓库。保存离线备份。用户亲自把 key base64 和三项凭据分别配置成 GitHub Actions secrets：`MICA_ANDROID_KEYSTORE_BASE64`、`MICA_ANDROID_KEY_ALIAS`、`MICA_ANDROID_STORE_PASSWORD`、`MICA_ANDROID_KEY_PASSWORD`；可选 repository variable `MICA_ANDROID_STORE_TYPE` 为 JKS/PKCS12，默认 JKS。
+
+实现：Gradle release 只用稳定传入 key；不完整配置、不可读文件、非法 store type 拒绝；task graph 防止 aggregate assemble 绕过 release 检查，debug 保留原 debug key。Docker 只读挂载 key，密码用 env 名传递，不放命令参数、源码或缓存卷。官方 runner 在 RUNNER_TEMP 写临时 key，并始终清理。
+
+**若换新 key，旧安装不能直接覆盖。** 在没有旧私钥建立签名延续的情况下，必须先导出/同步并核对未上传的本地数据，再迁移或卸载旧版；不能承诺透明升级，卸载会清理私有数据。用户尚未创建/提供/上传真实 key，本机无 Java/Android SDK，**未声称新 Gradle 实签和 APK 覆盖升级已验证**。Bash 配置预检的正常/未设置/空/空白/文件不存在/类型非法 fixture 均通过，无密钥生成。
+
+Context7 文档工具返回连接错误，已回退官方 [Gradle TaskExecutionGraph](https://docs.gradle.org/current/javadoc/org/gradle/api/execution/TaskExecutionGraph.html) 与 [AGP 9.1 SigningConfig](https://developer.android.com/reference/tools/gradle-api/9.1/com/android/build/api/dsl/SigningConfig)。
+
+#### yrs 上游核对（8.5）
+
+截至本次核对，[#415](https://github.com/y-crdt/y-crdt/issues/415) 仍 OPEN，最后更新 2026-08-04；[官方 v0.28.1](https://github.com/y-crdt/y-crdt/releases/tag/v0.28.1) 已于 2026-11-04 发布，其比较差异含 V2 解码边界等修复，不能仅凭 issue 未关闭就忽略补丁。
+
+实测：在 `/tmp/mica-yrs-0281-probe` 独立 crate 强制 yrs **0.28.1**，复用当前 mica-core，原样复制四条性质测试，原配置每条 256 cases；生产 Cargo/锁/ignore 未改。敌意输入测试进程仅加 2 GiB/60 秒安全限额，非正常构建限流；**0.26 秒内 0 通过、4 失败**，仍有 `block.rs:93` 断言 panic，并非限额触发。发生反例即收缩退出，不宣称跑满 4×256 全部样本。日志 `/tmp/mica-yrs-0281-fuzz.log`，临时锁确认为 yrs0.28.1。
+
+结论：**还不能启用“永不 panic”四条 property**，生产保留现有 containment 和两类已修 abort 回归。不将局部解码修复说成整个解码器无 panic；继续等待上游并复验。
+
+#### 字体 Git LFS（8.5）
+
+结论：本轮不改 LFS，也不重写历史。当前 `web/gfonts` **21,804,333 B**，原“约10MB”已经过时；`git rev-list --objects HEAD -- ... | git cat-file --batch-check` 核对有 **726 个历史 blob，原始总量21,804,333 B**，目前并无多代字体膨胀。WOFF2 已压缩，普通 build checkout 仍要获取当前所有字体，换 LFS 不会自动减少这些必需载荷。
+
+代价：多一个 LFS 下载前提和带宽/存储配额；GitHub 官方当前 Free/Pro 含 10 GiB，超额预算为0时会阻断传输，不应为构建引入新的付费/阻断路径。正常 CI/源码包/Docker 必须正确 smudge，否则把文本指针当字体打包；现有 mirror 仅测文件非空，单靠它不能识别 LFS 指针。引入前还须增加实际 WOFF2 magic/hash 验证、调整 checkout LFS 和源码包约定。历史迁移还涉及公开提交重写，未获授权。
+
+依据：[GitHub LFS 计量与额度](https://docs.github.com/en/billing/concepts/product-billing/git-lfs)。未来若多次引擎升级造成历史增长、实际 clone 数据证明瓶颈，再单独评估，不能把运行时按需字体下载与 Git 仓库存储混为一谈。
+
+#### mica-md 发布材料（8.6；准备，不发布）
+
+候选源码版本仍为 crate/npm **0.1.0**，由用户确认；`publish=false` 未改，CHANGELOG 未擅自填发布日期，未 bump、tag、cargo/npm publish。crates.io/npm 的匿名公开 `mica-md` 查询本次均 HTTP404，只表示当时未找到，不是已预留包名或已取得发布权。
+
+现有 `scripts/sdk-check.sh` 真跑 **ALL GREEN**：Cargo 包白名单35文件、all-features rustdoc -D warnings、公开API/schema/never_panic、无默认特性全套、4个示例、双WASM/npm测试及 npm pack --dry-run（13文件）。日志 `/tmp/mica-sdk-preflight-round3.log`。候选变更说明：初次公开Rust/JS SDK；CommonMark/GFM与现有方言、块模型/schema、UTF-16 marks；Rust唯一解析/序列化/HTML实现；严格HTML profile及明确的保真profile边界，不宣称保真HTML自动移除所有脚本。
+
+由用户按 S5 手册确认版本、审阅 CHANGELOG、从干净发布提交翻 publish 开关、打 `mica-md-v<SDK版本>` tag；用户在自己的 crates.io/npm 登录环境分别发布。App版本 `vX.Y.Z` 与SDK tag不同，凭据不进仓库/CI。正式发布前重跑 sdk-check，本次 dirty 工作树包清单检查不是正式发布的干净树证明。
+
+#### issue #170（8.6，外部条件未满足）
+
+[Issue #170](https://github.com/weironz/mica/issues/170) 仍 OPEN，最近更新2026-11-08。当前GitHub作者与两条历史评论均为 `weironz`，没有新增可复现操作步骤。历史17类操作Chromium复测未复现，Safari隐藏输入框线索已有#171修复说明；不能代替 Safari/报告人的实际确认。本次没有发评论、重复催促或关闭issue，保留等待补充，不能标成已复现修复。
+
+
+### 9.8 最终集成门禁（持续更新）
+
+本地完整 `just ci` 已通过：Root工作区及真实PG、mica-core store、Flutter分析/单元widget、浏览器专用套件与五个独立浏览器回归（含deferred）均实际执行，2109个前端单元/widget通过。安全审计扫描两个锁并拒绝warnings；无新增跳过或预算放宽。
+
+独立提交：`a44ed9ce`外壳/编辑器与延迟加载，`e6c0b0dd`工程与产物验证，`0f8a7bff`延迟窗口真实浏览器验收，`d398a621`Windows原生透明PNG/编辑器粘贴，`b1789140`显式选择dry-run可选包。下一步为官方完整CI与含Linux deb的dry-run；不在本轮发版或部署。

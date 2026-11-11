@@ -1,0 +1,28 @@
+[
+  {
+    "late": false,
+    "result": [
+      {
+        "name": "nsh:diagnostic",
+        "answer": 42
+      },
+      {
+        "name": "bare-diagnostic",
+        "answer": 42
+      }
+    ]
+  },
+  {
+    "late": true,
+    "result": [
+      {
+        "name": "nsh:diagnostic",
+        "error": "TypeError: error loading dynamically imported module: nsh:diagnostic"
+      },
+      {
+        "name": "bare-diagnostic",
+        "error": "TypeError: The specifier “bare-diagnostic” was a bare specifier, but was not remapped to anything. Relative module specifiers must start with “./”, “../” or “/”."
+      }
+    ]
+  }
+]

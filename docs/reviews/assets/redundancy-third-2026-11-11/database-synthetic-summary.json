@@ -1,0 +1,93 @@
+[
+  {
+    "name": "tree_flat",
+    "ms": 29.326,
+    "rows": 18948.0,
+    "shared_hit": 0,
+    "read": 445,
+    "nodes": [
+      "Sort",
+      "Nested Loop",
+      "Bitmap Heap Scan",
+      "Bitmap Index Scan:views_workspace_id_parent_view_id_position_idx",
+      "Result"
+    ]
+  },
+  {
+    "name": "tree_limit50",
+    "ms": 7.468,
+    "rows": 50.0,
+    "shared_hit": 442,
+    "read": 0,
+    "nodes": [
+      "Limit",
+      "Sort",
+      "Bitmap Heap Scan",
+      "Bitmap Index Scan:views_workspace_id_parent_view_id_position_idx"
+    ]
+  },
+  {
+    "name": "search_one_workspace",
+    "ms": 7.622,
+    "rows": 21.0,
+    "shared_hit": 442,
+    "read": 0,
+    "nodes": [
+      "Limit",
+      "Sort",
+      "Bitmap Heap Scan",
+      "Bitmap Index Scan:views_workspace_id_parent_view_id_position_idx"
+    ]
+  },
+  {
+    "name": "search_all_workspaces",
+    "ms": 123.874,
+    "rows": 50.0,
+    "shared_hit": 1077,
+    "read": 7737,
+    "nodes": [
+      "Limit",
+      "Function Scan",
+      "Sort",
+      "Gather",
+      "Bitmap Heap Scan",
+      "Bitmap Index Scan:views_workspace_id_parent_view_id_position_idx"
+    ]
+  },
+  {
+    "name": "deleted_tree",
+    "ms": 4.886,
+    "rows": 1052.0,
+    "shared_hit": 442,
+    "read": 0,
+    "nodes": [
+      "Sort",
+      "Bitmap Heap Scan",
+      "Bitmap Index Scan:views_workspace_id_parent_view_id_position_idx"
+    ]
+  },
+  {
+    "name": "catch_up",
+    "ms": 0.32,
+    "rows": 100.0,
+    "shared_hit": 106,
+    "read": 0,
+    "nodes": [
+      "Limit",
+      "Sort",
+      "Bitmap Heap Scan",
+      "Bitmap Index Scan:workspace_updates_document_id_rid_idx"
+    ]
+  },
+  {
+    "name": "candidate_tree_limit50",
+    "ms": 0.061,
+    "rows": 50.0,
+    "shared_hit": 50,
+    "read": 3,
+    "nodes": [
+      "Limit",
+      "Index Scan:benchmark_order"
+    ]
+  }
+]

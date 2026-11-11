@@ -1,0 +1,18 @@
+{
+  "linuxApp": {
+    "version": "0.14.4",
+    "firstFrameMs": 1001,
+    "survivedAfterFrameMs": 10000
+  },
+  "linuxDebBytes": 24037492,
+  "fontCurrentBytes": 21804333,
+  "fontHistoricalBlobCount": 726,
+  "fontHistoricalRawBytes": 21804333,
+  "yrsIsolatedVersion": "0.28.1",
+  "yrsPropertiesPassed": 0,
+  "yrsPropertiesFailed": 4,
+  "yrsUnmodifiedCasesPerProperty": 256,
+  "sdkPreflight": "ALL GREEN",
+  "importBackendTestsPassed": 2,
+  "importWidgetTestsPassed": 4
+}

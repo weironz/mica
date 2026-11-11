@@ -1,0 +1,16 @@
+{
+  "zhKeys": 769,
+  "enKeys": 769,
+  "missingInEn": [],
+  "missingInZh": [],
+  "placeholderDifferences": [],
+  "hardcodedCandidates": [
+    {
+      "path": "clients/mica_flutter/lib/editor/editor_ai.dart",
+      "line": 17,
+      "text": "Ask AI",
+      "reason": "_aiSlashOption has kind __ai__; _slashLabel lacks that kind, so falls through to the built-in English label even in zh. Static path verified; current harness has no AI provider so not visually exercised."
+    }
+  ],
+  "manualReview": "archiveFormatLabel is a valid ICU select with only format; the word Export in other{Export} is not a placeholder. Regex candidates were manually reviewed."
+}

@@ -1,0 +1,19 @@
+{
+  "browserVersion": "159.0.1",
+  "geckodriverVersion": "0.37.1",
+  "platform": "linux",
+  "url": "https://nsh.dev/play/index.html?theme=light&idiom=desktop#el-rich-editor",
+  "nativeShellResult": "load failure before editor: error loading dynamically imported module: nsh:rt",
+  "editorInputs": 0,
+  "chromiumControl": "Same URL renders RichEditor normally in Chromium152/Electron44; availability control only, not another full editing suite",
+  "importMapDiagnostic": "In real Firefox same-origin iframe, map-before-first-module imports both colon and bare virtual specifiers; map-after-first-module imports neither. NativeShell runtime has the latter ordering.",
+  "notExecuted": [
+    "English/Markdown typing",
+    "synthetic composition commit/continuous/cancel",
+    "undo/select-all/copy",
+    "Firefox hidden input/caret position"
+  ],
+  "gpuiKit": "No previous gpui-base WASM artifact or nightly-2026-10-31 locally; v0.9.1 public release has only desktop shell assets. Same-version Firefox example not rebuilt or tested.",
+  "safari": "No real Safari; no WebKit substitution.",
+  "nativeIme": "No human/OS input method validation; synthetic composition would not count as human IME."
+}

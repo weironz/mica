@@ -1,0 +1,268 @@
+{
+  "results": [
+    {
+      "label": "initial harness does not request any deferred part",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "label": "ai real dialog appears after its first deferred download",
+      "ok": true,
+      "detail": [
+        "/main.dart.js_2.part.js"
+      ]
+    },
+    {
+      "label": "ai reopening does not request a part again",
+      "ok": true,
+      "detail": 0
+    },
+    {
+      "label": "history real dialog appears after its first deferred download",
+      "ok": true,
+      "detail": [
+        "/main.dart.js_3.part.js"
+      ]
+    },
+    {
+      "label": "history reopening does not request a part again",
+      "ok": true,
+      "detail": 0
+    },
+    {
+      "label": "graph real dialog appears after its first deferred download",
+      "ok": true,
+      "detail": [
+        "/main.dart.js_1.part.js"
+      ]
+    },
+    {
+      "label": "graph reopening does not request a part again",
+      "ok": true,
+      "detail": 0
+    },
+    {
+      "label": "cold error fixture also has no eager part request",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "label": "blocked download shows localized error and keeps the page intact",
+      "ok": true,
+      "detail": 4
+    },
+    {
+      "label": "reopening after the network is restored downloads and shows the dialog",
+      "ok": true,
+      "detail": [
+        "/main.dart.js_2.part.js"
+      ]
+    },
+    {
+      "label": "recovered library also remains loaded on subsequent reopening",
+      "ok": true,
+      "detail": 0
+    },
+    {
+      "label": "no uncaught browser exceptions",
+      "ok": true,
+      "detail": []
+    }
+  ],
+  "traces": [
+    {
+      "kind": "ai",
+      "requested": [
+        "http://127.0.0.1:46757/main.dart.js_2.part.js"
+      ],
+      "semantics": [
+        {
+          "role": null,
+          "label": null,
+          "text": "问 AI取消生成"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "问 AI取消生成"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "问 AI取消生成"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "问 AI取消生成"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "问 AI取消生成"
+        },
+        {
+          "role": "alertdialog",
+          "label": null,
+          "text": "问 AI取消生成"
+        },
+        {
+          "role": null,
+          "label": "提醒",
+          "text": "问 AI取消生成"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "问 AI"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": "checkbox",
+          "label": "新建工作区",
+          "text": ""
+        },
+        {
+          "role": "button",
+          "label": null,
+          "text": "取消"
+        },
+        {
+          "role": "button",
+          "label": null,
+          "text": "生成"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        }
+      ]
+    },
+    {
+      "kind": "history",
+      "requested": [
+        "http://127.0.0.1:46757/main.dart.js_3.part.js"
+      ],
+      "semantics": [
+        {
+          "role": null,
+          "label": null,
+          "text": "保存检查点关闭恢复"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "保存检查点关闭恢复"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "保存检查点关闭恢复"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "保存检查点关闭恢复"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": "保存检查点关闭恢复"
+        },
+        {
+          "role": "dialog",
+          "label": null,
+          "text": "保存检查点关闭恢复"
+        },
+        {
+          "role": "button",
+          "label": null,
+          "text": "保存检查点"
+        },
+        {
+          "role": "button",
+          "label": null,
+          "text": "关闭"
+        },
+        {
+          "role": "button",
+          "label": null,
+          "text": "恢复"
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        }
+      ]
+    },
+    {
+      "kind": "graph",
+      "requested": [
+        "http://127.0.0.1:46757/main.dart.js_1.part.js"
+      ],
+      "semantics": [
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": "dialog",
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": "button",
+          "label": null,
+          "text": ""
+        },
+        {
+          "role": null,
+          "label": null,
+          "text": ""
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "blocked": [
+    "http://127.0.0.1:46757/main.dart.js_2.part.js",
+    "http://127.0.0.1:46757/main.dart.js_2.part.js?dart2jsRetry=1",
+    "http://127.0.0.1:46757/main.dart.js_2.part.js?dart2jsRetry=2",
+    "http://127.0.0.1:46757/main.dart.js_2.part.js?dart2jsRetry=3"
+  ],
+  "recovered": [
+    "http://127.0.0.1:46757/main.dart.js_2.part.js"
+  ]
+}

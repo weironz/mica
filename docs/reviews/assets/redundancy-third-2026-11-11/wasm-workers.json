@@ -1,0 +1,14 @@
+[
+  {
+    "name": "wasm",
+    "isolated": false,
+    "workers": []
+  },
+  {
+    "name": "wasmIsolated",
+    "isolated": true,
+    "workers": [
+      "blob:http://127.0.0.1:44223/c06a87c3-7d0e-48bb-aa4a-f657aa8c1bbe"
+    ]
+  }
+]
