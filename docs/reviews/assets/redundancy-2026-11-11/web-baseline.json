@@ -1,0 +1,218 @@
+{
+  "total": 17591304,
+  "decoded": 24889467,
+  "rows": [
+    {
+      "url": "http://127.0.0.1:32773/",
+      "status": 200,
+      "mime": "text/html",
+      "transfer": 2741
+    },
+    {
+      "url": "http://127.0.0.1:32773/mica_md/mica_md.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 3699
+    },
+    {
+      "url": "http://127.0.0.1:32773/mica_doc/mica_doc.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 5379
+    },
+    {
+      "url": "http://127.0.0.1:32773/flutter_bootstrap.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 6280
+    },
+    {
+      "url": "http://127.0.0.1:32773/mica_md/mica_md_bg.wasm",
+      "status": 200,
+      "mime": "application/wasm",
+      "transfer": 282298
+    },
+    {
+      "url": "http://127.0.0.1:32773/mica_doc/mica_doc_bg.wasm",
+      "status": 200,
+      "mime": "application/wasm",
+      "transfer": 291515
+    },
+    {
+      "url": "http://127.0.0.1:32773/canvaskit/chromium/canvaskit.wasm",
+      "status": 200,
+      "mime": "application/wasm",
+      "transfer": 2324442
+    },
+    {
+      "url": "http://127.0.0.1:32773/favicon.svg",
+      "status": 200,
+      "mime": "image/svg+xml",
+      "transfer": 2498
+    },
+    {
+      "url": "http://127.0.0.1:32773/canvaskit/chromium/canvaskit.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 31423
+    },
+    {
+      "url": "http://127.0.0.1:32773/main.dart.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 1734888
+    },
+    {
+      "url": "http://127.0.0.1:32773/assets/FontManifest.json",
+      "status": 200,
+      "mime": "application/json",
+      "transfer": 427
+    },
+    {
+      "url": "http://127.0.0.1:32773/assets/fonts/MaterialIcons-Regular.otf",
+      "status": 200,
+      "mime": "application/octet-stream",
+      "transfer": 23640
+    },
+    {
+      "url": "http://127.0.0.1:32773/assets/fonts/NotoSansSC-Regular.otf",
+      "status": 200,
+      "mime": "application/octet-stream",
+      "transfer": 8482280
+    },
+    {
+      "url": "http://127.0.0.1:32773/assets/fonts/DroidSansFallback.ttf",
+      "status": 200,
+      "mime": "application/octet-stream",
+      "transfer": 4033680
+    },
+    {
+      "url": "http://127.0.0.1:32773/assets/fonts/RobotoMono-Regular.ttf",
+      "status": 200,
+      "mime": "application/octet-stream",
+      "transfer": 126006
+    },
+    {
+      "url": "http://127.0.0.1:32773/assets/fonts/fallback/Roboto-Regular.ttf",
+      "status": 200,
+      "mime": "application/octet-stream",
+      "transfer": 171934
+    },
+    {
+      "url": "http://127.0.0.1:32773/assets/AssetManifest.bin.json",
+      "status": 200,
+      "mime": "application/json",
+      "transfer": 545
+    },
+    {
+      "url": "http://127.0.0.1:32773/assets/assets/logo_mark.png",
+      "status": 200,
+      "mime": "image/png",
+      "transfer": 67629
+    }
+  ],
+  "resources": [
+    {
+      "name": "http://127.0.0.1:32773/mica_md/mica_md.js",
+      "transferSize": 3699,
+      "encodedBodySize": 3399,
+      "decodedBodySize": 16970
+    },
+    {
+      "name": "http://127.0.0.1:32773/mica_doc/mica_doc.js",
+      "transferSize": 5378,
+      "encodedBodySize": 5078,
+      "decodedBodySize": 19799
+    },
+    {
+      "name": "http://127.0.0.1:32773/flutter_bootstrap.js",
+      "transferSize": 6279,
+      "encodedBodySize": 5979,
+      "decodedBodySize": 13780
+    },
+    {
+      "name": "http://127.0.0.1:32773/mica_md/mica_md_bg.wasm",
+      "transferSize": 282222,
+      "encodedBodySize": 281922,
+      "decodedBodySize": 659208
+    },
+    {
+      "name": "http://127.0.0.1:32773/mica_doc/mica_doc_bg.wasm",
+      "transferSize": 291447,
+      "encodedBodySize": 291147,
+      "decodedBodySize": 739663
+    },
+    {
+      "name": "http://127.0.0.1:32773/canvaskit/chromium/canvaskit.wasm",
+      "transferSize": 2323782,
+      "encodedBodySize": 2323482,
+      "decodedBodySize": 5428553
+    },
+    {
+      "name": "http://127.0.0.1:32773/canvaskit/chromium/canvaskit.js",
+      "transferSize": 31446,
+      "encodedBodySize": 31146,
+      "decodedBodySize": 86226
+    },
+    {
+      "name": "http://127.0.0.1:32773/main.dart.js",
+      "transferSize": 1734397,
+      "encodedBodySize": 1734097,
+      "decodedBodySize": 5018561
+    },
+    {
+      "name": "http://127.0.0.1:32773/favicon.svg",
+      "transferSize": 2555,
+      "encodedBodySize": 2255,
+      "decodedBodySize": 2255
+    },
+    {
+      "name": "http://127.0.0.1:32773/assets/FontManifest.json",
+      "transferSize": 460,
+      "encodedBodySize": 160,
+      "decodedBodySize": 383
+    },
+    {
+      "name": "http://127.0.0.1:32773/assets/fonts/MaterialIcons-Regular.otf",
+      "transferSize": 23684,
+      "encodedBodySize": 23384,
+      "decodedBodySize": 23384
+    },
+    {
+      "name": "http://127.0.0.1:32773/assets/fonts/NotoSansSC-Regular.otf",
+      "transferSize": 8482320,
+      "encodedBodySize": 8482020,
+      "decodedBodySize": 8482020
+    },
+    {
+      "name": "http://127.0.0.1:32773/assets/fonts/DroidSansFallback.ttf",
+      "transferSize": 4033720,
+      "encodedBodySize": 4033420,
+      "decodedBodySize": 4033420
+    },
+    {
+      "name": "http://127.0.0.1:32773/assets/fonts/RobotoMono-Regular.ttf",
+      "transferSize": 126048,
+      "encodedBodySize": 125748,
+      "decodedBodySize": 125748
+    },
+    {
+      "name": "http://127.0.0.1:32773/assets/fonts/fallback/Roboto-Regular.ttf",
+      "transferSize": 171976,
+      "encodedBodySize": 171676,
+      "decodedBodySize": 171676
+    },
+    {
+      "name": "http://127.0.0.1:32773/assets/AssetManifest.bin.json",
+      "transferSize": 577,
+      "encodedBodySize": 277,
+      "decodedBodySize": 434
+    },
+    {
+      "name": "http://127.0.0.1:32773/assets/assets/logo_mark.png",
+      "transferSize": 67687,
+      "encodedBodySize": 67387,
+      "decodedBodySize": 67387
+    }
+  ]
+}

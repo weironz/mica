@@ -1,0 +1,350 @@
+{
+  "total": 4713883,
+  "decoded": 12776275,
+  "rows": [
+    {
+      "url": "http://127.0.0.1:32772/",
+      "status": 200,
+      "mime": "text/html",
+      "transfer": 2657
+    },
+    {
+      "url": "http://127.0.0.1:32772/mica_md/mica_md.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 3155
+    },
+    {
+      "url": "http://127.0.0.1:32772/mica_doc/mica_doc.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 4504
+    },
+    {
+      "url": "http://127.0.0.1:32772/flutter_bootstrap.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 5851
+    },
+    {
+      "url": "http://127.0.0.1:32772/mica_md/mica_md_bg.wasm",
+      "status": 200,
+      "mime": "application/wasm",
+      "transfer": 247603
+    },
+    {
+      "url": "http://127.0.0.1:32772/canvaskit/chromium/canvaskit.wasm",
+      "status": 200,
+      "mime": "application/wasm",
+      "transfer": 2063421
+    },
+    {
+      "url": "http://127.0.0.1:32772/favicon.svg",
+      "status": 200,
+      "mime": "image/svg+xml",
+      "transfer": 2498
+    },
+    {
+      "url": "http://127.0.0.1:32772/mica_doc/mica_doc_bg.wasm",
+      "status": 200,
+      "mime": "application/wasm",
+      "transfer": 253925
+    },
+    {
+      "url": "http://127.0.0.1:32772/canvaskit/chromium/canvaskit.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 27610
+    },
+    {
+      "url": "http://127.0.0.1:32772/main.dart.js",
+      "status": 200,
+      "mime": "application/javascript",
+      "transfer": 1454303
+    },
+    {
+      "url": "http://127.0.0.1:32772/assets/FontManifest.json",
+      "status": 200,
+      "mime": "application/json",
+      "transfer": 412
+    },
+    {
+      "url": "http://127.0.0.1:32772/assets/fonts/MaterialIcons-Regular.otf",
+      "status": 200,
+      "mime": "font/otf",
+      "transfer": 12628
+    },
+    {
+      "url": "http://127.0.0.1:32772/assets/fonts/RobotoMono-Regular.ttf",
+      "status": 200,
+      "mime": "font/ttf",
+      "transfer": 73450
+    },
+    {
+      "url": "http://127.0.0.1:32772/assets/fonts/fallback/Roboto-Regular.ttf",
+      "status": 200,
+      "mime": "font/ttf",
+      "transfer": 90759
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.119.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 41655
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.117.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 28219
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.118.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 25047
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.115.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 30323
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.113.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 31311
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.26.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 27547
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.109.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 32335
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.56.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 28855
+    },
+    {
+      "url": "http://127.0.0.1:32772/assets/AssetManifest.bin.json",
+      "status": 200,
+      "mime": "application/json",
+      "transfer": 467
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.116.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 28483
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.110.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 32999
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.112.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 30763
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.114.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 31047
+    },
+    {
+      "url": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.108.woff2",
+      "status": 200,
+      "mime": "font/woff2",
+      "transfer": 34427
+    },
+    {
+      "url": "http://127.0.0.1:32772/assets/assets/logo_mark.png",
+      "status": 200,
+      "mime": "image/png",
+      "transfer": 67629
+    }
+  ],
+  "resources": [
+    {
+      "name": "http://127.0.0.1:32772/mica_md/mica_md.js",
+      "transferSize": 3132,
+      "encodedBodySize": 2832,
+      "decodedBodySize": 16970
+    },
+    {
+      "name": "http://127.0.0.1:32772/mica_doc/mica_doc.js",
+      "transferSize": 4480,
+      "encodedBodySize": 4180,
+      "decodedBodySize": 19799
+    },
+    {
+      "name": "http://127.0.0.1:32772/flutter_bootstrap.js",
+      "transferSize": 5827,
+      "encodedBodySize": 5527,
+      "decodedBodySize": 13780
+    },
+    {
+      "name": "http://127.0.0.1:32772/mica_md/mica_md_bg.wasm",
+      "transferSize": 247512,
+      "encodedBodySize": 247212,
+      "decodedBodySize": 659208
+    },
+    {
+      "name": "http://127.0.0.1:32772/mica_doc/mica_doc_bg.wasm",
+      "transferSize": 253842,
+      "encodedBodySize": 253542,
+      "decodedBodySize": 739663
+    },
+    {
+      "name": "http://127.0.0.1:32772/canvaskit/chromium/canvaskit.wasm",
+      "transferSize": 2062786,
+      "encodedBodySize": 2062486,
+      "decodedBodySize": 5428553
+    },
+    {
+      "name": "http://127.0.0.1:32772/canvaskit/chromium/canvaskit.js",
+      "transferSize": 27610,
+      "encodedBodySize": 27310,
+      "decodedBodySize": 86226
+    },
+    {
+      "name": "http://127.0.0.1:32772/main.dart.js",
+      "transferSize": 1453829,
+      "encodedBodySize": 1453529,
+      "decodedBodySize": 5021607
+    },
+    {
+      "name": "http://127.0.0.1:32772/favicon.svg",
+      "transferSize": 2555,
+      "encodedBodySize": 2255,
+      "decodedBodySize": 2255
+    },
+    {
+      "name": "http://127.0.0.1:32772/assets/FontManifest.json",
+      "transferSize": 423,
+      "encodedBodySize": 123,
+      "decodedBodySize": 233
+    },
+    {
+      "name": "http://127.0.0.1:32772/assets/fonts/MaterialIcons-Regular.otf",
+      "transferSize": 12618,
+      "encodedBodySize": 12318,
+      "decodedBodySize": 23384
+    },
+    {
+      "name": "http://127.0.0.1:32772/assets/fonts/RobotoMono-Regular.ttf",
+      "transferSize": 73415,
+      "encodedBodySize": 73115,
+      "decodedBodySize": 125748
+    },
+    {
+      "name": "http://127.0.0.1:32772/assets/fonts/fallback/Roboto-Regular.ttf",
+      "transferSize": 90716,
+      "encodedBodySize": 90416,
+      "decodedBodySize": 171676
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.119.woff2",
+      "transferSize": 41688,
+      "encodedBodySize": 41388,
+      "decodedBodySize": 41388
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.117.woff2",
+      "transferSize": 28252,
+      "encodedBodySize": 27952,
+      "decodedBodySize": 27952
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.118.woff2",
+      "transferSize": 25080,
+      "encodedBodySize": 24780,
+      "decodedBodySize": 24780
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.115.woff2",
+      "transferSize": 30356,
+      "encodedBodySize": 30056,
+      "decodedBodySize": 30056
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.113.woff2",
+      "transferSize": 31344,
+      "encodedBodySize": 31044,
+      "decodedBodySize": 31044
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.109.woff2",
+      "transferSize": 32368,
+      "encodedBodySize": 32068,
+      "decodedBodySize": 32068
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.26.woff2",
+      "transferSize": 27580,
+      "encodedBodySize": 27280,
+      "decodedBodySize": 27280
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.56.woff2",
+      "transferSize": 28888,
+      "encodedBodySize": 28588,
+      "decodedBodySize": 28588
+    },
+    {
+      "name": "http://127.0.0.1:32772/assets/AssetManifest.bin.json",
+      "transferSize": 478,
+      "encodedBodySize": 178,
+      "decodedBodySize": 246
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.116.woff2",
+      "transferSize": 28516,
+      "encodedBodySize": 28216,
+      "decodedBodySize": 28216
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.110.woff2",
+      "transferSize": 33032,
+      "encodedBodySize": 32732,
+      "decodedBodySize": 32732
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.114.woff2",
+      "transferSize": 31080,
+      "encodedBodySize": 30780,
+      "decodedBodySize": 30780
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.112.woff2",
+      "transferSize": 30796,
+      "encodedBodySize": 30496,
+      "decodedBodySize": 30496
+    },
+    {
+      "name": "http://127.0.0.1:32772/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.108.woff2",
+      "transferSize": 34460,
+      "encodedBodySize": 34160,
+      "decodedBodySize": 34160
+    },
+    {
+      "name": "http://127.0.0.1:32772/assets/assets/logo_mark.png",
+      "transferSize": 67687,
+      "encodedBodySize": 67387,
+      "decodedBodySize": 67387
+    }
+  ]
+}

@@ -229,12 +229,13 @@
 | --- | ---: | ---: | --- |
 | DroidSansFallback.ttf | 4,033,420 B | 2,146,464 B | 本地 nginx 容器实际 gzip 响应体 |
 | NotoSansSC-Regular.otf | 8,482,020 B | 7,341,890 B | 同上；两者 MIME 和 Content-Encoding 正确 |
-| Web 登录页 | 18,370,610 B | 4,713,736 B | 前为线上 0.14.4，后为本地新 nginx；Chrome CDP 冷上下文全部网络响应，含响应头。旧文 24.9 MB 保留为历史评估，不冒充本次相同会话的精确基线 |
+| Web 登录页实际传输 | 17,591,304 B | 4,713,883 B | 同机同 SDK、相同冷上下文；基线界面来自 32346b2a，两边使用同批 Rust 引擎产物；Chrome CDP 全部网络响应，含响应头 |
+| Web 解压后响应体 | 24,889,467 B | 12,776,275 B | 这才对应原文约 24.9 MB 的口径；仍大于严格的 12 MB，不能以 gzip 传输值冒充同口径达标 |
 | Windows 安装包 | 26,091,033 B | 18,473,565 B | 同一 Windows 主机、同一工具链和当前源码分别构建；移除字体后减少 7,617,468 B；含登录标签回归修复的少量代码差异 |
 | Linux deb | 24,326,988 B | 23,913,560 B | 前为已发布 0.14.4，后为本次本机构建，构建环境和代码有差异；保留字体，字体资源净减少 0 B，不把整体差值归因于字体 |
 | Android | arm64 53,294,048 B；armv7 45,715,354 B | 未重建 | 用户明确允许跳过设备验证，保留字体，不声称真机通过 |
 
-Web 压缩前响应体约 12.77 MB，实际传输约 4.71 MB，两种口径不能混用。原始逐响应记录见 [JSON](assets/redundancy-2026-11-11/web-startup.json)。当前线上未部署上述修改。
+Web 原始逐响应记录：[同机基线](assets/redundancy-2026-11-11/web-baseline.json)、[最终构建](assets/redundancy-2026-11-11/web-after.json)。实际下载已低于 12 MB；若按原文 24.9 MB 的解压体积口径验收，12.78 MB 尚未达到严格的 12 MB。当前线上未部署上述修改。
 
 Windows 在用户提供的设备上对照了有/无内置字体，并在最终实际不含两字体的包上再次运行字体探针；常用中、日、韩文及 `𠮷`、`𠀀` 样本、Mermaid 标签正常。所选系统字体也在 [Microsoft Windows 11 字体清单](https://learn.microsoft.com/en-us/typography/fonts/windows_11_font_list) 中。截图：[移除前](assets/redundancy-2026-11-11/windows-before.png)、[最终移除后](assets/redundancy-2026-11-11/windows-after.png)。这不是对任意 Unicode 字符完整覆盖的承诺。
 
@@ -244,7 +245,9 @@ Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载�
 
 ### 6.3 门禁与尚待收尾
 
-- 完整 `just ci` 已通过一次：Rust 工作区回执 **1,191**，带 store 特性的 mica-core 回执 **221**，Flutter 单元/widget 回执 **2,096**，浏览器专用套件及四个 Node 浏览器脚本通过；这些是各次执行数，不宣称互不重叠的唯一测试总数。
+5.4 的字体删除已完成；严格同口径的解压响应体 12 MB 指标仍未满足，保留这一差异供评审，不以换口径勾销。
+
+- 完整 `just ci` 已通过，故障注入恢复后再次全套通过：Rust 工作区回执 **1,191**，带 store 特性的 mica-core 回执 **221**，Flutter 单元/widget 回执 **2,096**，浏览器专用套件及四个 Node 浏览器脚本通过；这些是各次执行数，不宣称互不重叠的唯一测试总数。
 - 故障注入：临时把 ClipboardItem 的 HTML 内容改成纯文本，完整 `just ci` 在 `clipboard_e2e.mjs` 的 Gemini 行内数学格式断言失败，退出 **1**；源码已逐字节恢复。没有放宽预算或新增跳过。
 - Windows 字体探针、安装包构建已通过；另做的完整应用首帧冒烟没有取得首帧回执，正在定位，不能标为启动通过。
 - 官方 runner 对生产 SSH 的真实连通性、`CI(scope=full)` 和 `Release dry-run` 仍待推送后执行，5.1 保持未完成。
