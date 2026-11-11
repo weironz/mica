@@ -1,18 +1,12 @@
-//! Mica's Markdown adapter over the `mica-md` engine (crates/md-core): page
-//! titles, the standalone HTML export, MCP text editing and the LaTeX guard,
-//! plus the legacy API for consumers that predate `mica-md`. Mica callers
-//! use the engine directly for parsing, serialization, and fragment rendering.
-
-use std::collections::BTreeMap;
+//! Mica's own Markdown logic on top of the `mica-md` engine (crates/md-core):
+//! page titles, the standalone HTML document, MCP text editing and the LaTeX
+//! guard. Parsing, serialization, fragment HTML and the block model come from
+//! `mica-md` directly — this crate deliberately re-exports none of it, so there
+//! is one path to the engine, not two.
 
 use serde_json::Value;
 
-pub use mica_md::compat::{
-  import_markdown, import_markdown_fragment, set_image_srcs, split_front_matter,
-};
-pub use mica_md::properties;
-pub use mica_md::render::{MermaidHostTheme, render_mermaid_svg, render_mermaid_svg_with_id};
-pub use mica_md::{Block, DocumentSnapshotPayload, math_run_spans};
+use mica_md::DocumentSnapshotPayload;
 
 mod latex_guard;
 mod text_edit;
@@ -75,35 +69,8 @@ impl From<mica_md::MdError> for DocumentOperationError {
 /// A document operation result.
 pub type DocumentOperationResult<T> = Result<T, DocumentOperationError>;
 
-/// Deserialize a payload while preserving the original schema-version errors.
-pub fn payload_from_value(value: Value) -> DocumentOperationResult<DocumentSnapshotPayload> {
-  let payload = serde_json::from_value::<DocumentSnapshotPayload>(value)
-    .map_err(|_| DocumentOperationError::UnsupportedSchemaVersion(0))?;
-  if payload.schema_version != 1 {
-    return Err(DocumentOperationError::UnsupportedSchemaVersion(
-      payload.schema_version,
-    ));
-  }
-
-  Ok(payload)
-}
-
-/// Serialize a document to Markdown.
-pub fn export_markdown(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
-  export_markdown_with_assets(snapshot, &BTreeMap::new())
-}
-
-/// Serialize a document to Markdown, rewriting image destinations from `images`.
-pub fn export_markdown_with_assets(
-  snapshot: &DocumentSnapshotPayload,
-  images: &BTreeMap<String, String>,
-) -> DocumentOperationResult<String> {
-  mica_md::compat::export_markdown_with_assets(snapshot, images)
-    .map_err(DocumentOperationError::from)
-}
-
 /// Render a document to its HTML body fragment.
-pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
+fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
   mica_md::compat::export_html(snapshot).map_err(DocumentOperationError::from)
 }
 
@@ -152,7 +119,7 @@ pub fn with_page_title(markdown: &str, title: &str) -> String {
     return markdown.to_string();
   }
   let heading = format!("# {title}");
-  let (front, body) = crate::split_front_matter(markdown);
+  let (front, body) = mica_md::compat::split_front_matter(markdown);
   if leading_heading(body).and_then(heading_text) == Some(title) {
     return markdown.to_string();
   }
@@ -174,7 +141,7 @@ pub fn strip_page_title(markdown: &str, title: &str) -> String {
   if title.is_empty() {
     return markdown.to_string();
   }
-  let (_, body) = crate::split_front_matter(markdown);
+  let (_, body) = mica_md::compat::split_front_matter(markdown);
   let front = &markdown[..markdown.len() - body.len()];
   let mut offset = 0;
   for line in body.split_inclusive('\n') {
@@ -220,32 +187,11 @@ fn leading_heading(markdown: &str) -> Option<&str> {
 }
 
 /// Position of a block id in the flat block table.
-pub fn block_index(snapshot: &DocumentSnapshotPayload, block_id: &str) -> Option<usize> {
+fn block_index(snapshot: &DocumentSnapshotPayload, block_id: &str) -> Option<usize> {
   snapshot
     .blocks
     .iter()
     .position(|block| block.id == block_id)
-}
-
-/// Whether `block_id` is a descendant of `parent_id`.
-pub fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_id: &str) -> bool {
-  let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-  let mut stack = vec![parent_id];
-  while let Some(id) = stack.pop() {
-    if !seen.insert(id) {
-      continue;
-    }
-    let Some(index) = block_index(snapshot, id) else {
-      continue;
-    };
-    for child_id in &snapshot.blocks[index].children {
-      if child_id == block_id {
-        return true;
-      }
-      stack.push(child_id);
-    }
-  }
-  false
 }
 
 /// The one Content Security Policy for every static page Mica renders.
@@ -407,7 +353,7 @@ mod page_title_tests {
   fn a_title_and_front_matter_coexist_on_the_root_block() {
     let d = doc(serde_json::json!({"title": "我的页", "front_matter": "tags: [a]"}));
     assert_eq!(document_title(&d), Some("我的页"));
-    let exported = super::export_markdown(&d).unwrap();
+    let exported = mica_md::compat::export_markdown(&d).unwrap();
     assert!(
       exported.starts_with("---\ntags: [a]\n---"),
       "front matter still leads the export: {exported:?}"
@@ -534,29 +480,14 @@ mod page_title_tests {
 
 #[cfg(test)]
 mod facade_security_tests {
-  use super::{SAFE_HTML_CSP, export_html, export_html_document, import_markdown, is_descendant};
+  use super::{SAFE_HTML_CSP, export_html, export_html_document};
+  use mica_md::compat::import_markdown;
 
   #[test]
   fn the_exported_document_forbids_script() {
     let doc = export_html_document(&import_markdown("hi", "root"), "t", 800).unwrap();
     assert!(doc.contains("Content-Security-Policy") && doc.contains("default-src 'none'"));
     assert!(!doc.contains("script-src"));
-  }
-
-  #[test]
-  fn descendant_walk_terminates_on_cycles() {
-    let snapshot = serde_json::from_value(serde_json::json!({
-      "schema_version": 1, "root_block_id": "root", "blocks": [
-        {"id": "root", "type": "page", "text": "", "data": {}, "children": ["a"]},
-        {"id": "a", "type": "quote", "text": "loop", "data": {}, "children": ["a", "root"]}
-      ]
-    }))
-    .unwrap();
-    assert!(
-      !is_descendant(&snapshot, "zzz", "a"),
-      "terminates on the cycle"
-    );
-    assert!(is_descendant(&snapshot, "a", "root"));
   }
 
   #[test]

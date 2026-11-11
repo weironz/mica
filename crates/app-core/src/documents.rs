@@ -1,12 +1,41 @@
 //! Document operations over the block model (insert/update/delete/move).
 //! The Markdown engine itself — the model types, parsing and rendering —
-//! lives in `mica-md`. The legacy facade is re-exported for existing consumers.
+//! lives in `mica-md`; depend on it directly.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use mica_markdown::*;
+use mica_markdown::{DocumentOperationError, DocumentOperationResult};
 pub use mica_md::{Block, DocumentSnapshotPayload};
+
+/// Position of a block id in the flat block table.
+fn block_index(snapshot: &DocumentSnapshotPayload, block_id: &str) -> Option<usize> {
+  snapshot
+    .blocks
+    .iter()
+    .position(|block| block.id == block_id)
+}
+
+/// Whether `block_id` is a descendant of `parent_id`.
+fn is_descendant(snapshot: &DocumentSnapshotPayload, block_id: &str, parent_id: &str) -> bool {
+  let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+  let mut stack = vec![parent_id];
+  while let Some(id) = stack.pop() {
+    if !seen.insert(id) {
+      continue;
+    }
+    let Some(index) = block_index(snapshot, id) else {
+      continue;
+    };
+    for child_id in &snapshot.blocks[index].children {
+      if child_id == block_id {
+        return true;
+      }
+      stack.push(child_id);
+    }
+  }
+  false
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -726,5 +755,26 @@ mod tests {
 
     let html = export_html(&snapshot).expect("html should export");
     assert_eq!(html, "<p>a &lt; b &amp; c</p>");
+  }
+}
+
+#[cfg(test)]
+mod block_walk_tests {
+  use super::is_descendant;
+
+  #[test]
+  fn descendant_walk_terminates_on_cycles() {
+    let snapshot = serde_json::from_value(serde_json::json!({
+      "schema_version": 1, "root_block_id": "root", "blocks": [
+        {"id": "root", "type": "page", "text": "", "data": {}, "children": ["a"]},
+        {"id": "a", "type": "quote", "text": "loop", "data": {}, "children": ["a", "root"]}
+      ]
+    }))
+    .unwrap();
+    assert!(
+      !is_descendant(&snapshot, "zzz", "a"),
+      "terminates on the cycle"
+    );
+    assert!(is_descendant(&snapshot, "a", "root"));
   }
 }

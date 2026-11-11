@@ -2,7 +2,8 @@
 
 use serde_json::{Value, json};
 
-use crate::{Block, import_markdown_fragment};
+use mica_md::Block;
+use mica_md::compat::import_markdown_fragment;
 use mica_md::{InlineText, decode_cell};
 
 /// Parse inline Markdown into `(clean_text, data-with-marks)`.

@@ -1,10 +1,9 @@
 //! The SDK's public API, pinned: every item `mica_md` exports keeps its exact
 //! signature. Any change fails to COMPILE here, which forces the changer to
-//! also update this file — making the diff reviewable at a glance. Companion of
-//! `mica-markdown`'s `facade_surface.rs` (which pins the adapter's own surface).
+//! also update this file — making the diff reviewable at a glance.
 //!
-//! Note `compat::` items are pinned too: the Mica adapter re-exports them
-//! wholesale, so they are load-bearing even though the SDK docs steer new
+//! Note `compat::` items are pinned too: Mica's server, CLI and FFI call them
+//! directly, so they are load-bearing even though the SDK docs steer new
 //! embedders to the primitives.
 
 use std::collections::BTreeMap;

@@ -3,7 +3,7 @@
 //! those marks — and a missing/`null` stored cell must export as empty, never
 //! as the literal word "null".
 
-use mica_markdown::payload_from_value;
+use mica_md::DocumentSnapshotPayload;
 use mica_md::compat::{export_html, export_markdown, import_markdown};
 use serde_json::json;
 
@@ -29,7 +29,7 @@ fn inline_code_in_a_cell_round_trips() {
 fn a_null_cell_exports_empty_not_the_literal_null() {
   // A stored grid with a `null` cell (a missing value) must not leak the word
   // "null" into the exported Markdown or HTML.
-  let payload = payload_from_value(json!({
+  let payload: DocumentSnapshotPayload = serde_json::from_value(json!({
     "schema_version": 1,
     "root_block_id": "root",
     "blocks": [
