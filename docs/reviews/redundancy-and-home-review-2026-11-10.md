@@ -533,4 +533,4 @@ Context7 文档工具返回连接错误，已回退官方 [Gradle TaskExecutionG
 
 仍不打勾的完整验收项：8.2的真实文件选择后读取、物理overflow托盘点击与重启稳定性人工补验；Android冷启动/GPUI真机、Windows真人IME、Safari；真实签名key配置与新APK覆盖安装；SDK正式发布；yrs四条永不panic性质仍失败；#170复现补充；正式发布后的真实新附件canary及线上响应头观察周期。Firefox已经实际验证并写明负面结果，不等于相关关卡通过。
 
-试验资源：专用浏览器session、Windows任务及测试进程已清理；未修改用户现装Mica或输出原剪贴板内容。额外Snap geckodriver 41914/PID1676193为本轮临时试验资源，已无session但OS拒绝正常signal终止且不支持关闭端点；未绕过系统安全策略，留作本机人工结束。Mica rustc pin仍1.98.0，全局bindgen仍0.2.129；隔离nightly准备时rustup manager自更新到1.29.3，未改项目工具链pin。
+试验资源：专用浏览器session、Windows任务及测试进程已清理；未修改用户现装Mica或输出原剪贴板内容。Snap geckodriver 41913/PID1496139及额外41914/PID1676193为本轮临时试验资源，均已无session但OS拒绝正常signal终止且不支持关闭端点；未绕过系统安全策略，留作本机人工结束。Mica rustc pin仍1.98.0，全局bindgen仍0.2.129；隔离nightly准备时rustup manager自更新到1.29.3，未改项目工具链pin。
