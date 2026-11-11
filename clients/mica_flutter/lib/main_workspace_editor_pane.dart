@@ -87,11 +87,11 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
       items: [
         PopupMenuItem(
           value: 'new',
-          child: _MenuRow(icon: Icons.add, label: context.l10n.tabNewPage),
+          child: MenuRow(icon: Icons.add, label: context.l10n.tabNewPage),
         ),
         PopupMenuItem(
           value: 'open',
-          child: _MenuRow(
+          child: MenuRow(
             icon: Icons.search,
             label: context.l10n.tabOpenExisting,
           ),
@@ -193,7 +193,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                                 // header: it reports on this document, not on the app
                                 // — same reason the breadcrumb itself lives here.
                                 if (widget.syncPhase != null)
-                                  _SyncBadge(widget.syncPhase!),
+                                  SyncBadge(widget.syncPhase!),
                               ],
                             ),
                           ),
@@ -234,16 +234,16 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                         ),
                       ),
                       if (widget.onAddComment != null)
-                        _CommentsButton(
+                        CommentsButton(
                           openCount: widget.commentThreads
                               .where((t) => !t.isResolved)
                               .length,
                           active:
-                              _toolsExpanded && _toolsTab == _ToolsTab.comments,
+                              _toolsExpanded && _toolsTab == ToolsTab.comments,
                           onTap: () {
                             final showing =
                                 _toolsExpanded &&
-                                _toolsTab == _ToolsTab.comments;
+                                _toolsTab == ToolsTab.comments;
                             setUi(() {
                               // From anywhere else this means "show me the
                               // comments", not "toggle the sidebar" — so it
@@ -251,7 +251,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                               // a second press on an already-showing comment
                               // tab closes it.
                               _toolsExpanded = !showing;
-                              _toolsTab = _ToolsTab.comments;
+                              _toolsTab = ToolsTab.comments;
                             });
                             // Closing drops the emphasis: it means "the
                             // thread I am reading", and with the panel gone
@@ -261,7 +261,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                             if (showing) widget.onFocusCommentThread(null);
                           },
                         ),
-                      _PropertiesToggle(
+                      PropertiesToggle(
                         active: _showProperties,
                         hasProperties: bootstrap.rootFrontMatter
                             .trim()
@@ -404,7 +404,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                     valueListenable: _counts,
                     builder: (context, counts, _) => counts.chars == 0
                         ? const SizedBox.shrink()
-                        : _WordCountBadge(counts: counts),
+                        : WordCountBadge(counts: counts),
                   ),
                 ),
               ],
@@ -759,7 +759,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                       child: Row(
                         children: [
                           const Spacer(),
-                          _PresenceBar(presence: widget.presence),
+                          PresenceBar(presence: widget.presence),
                         ],
                       ),
                     ),
@@ -809,7 +809,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                       ),
                       focusNode: _editorFocus,
                       rootBlockId: bootstrap.document.rootBlockId,
-                      nodes: _editorNodes(bootstrap.childBlocks),
+                      nodes: editorNodesFromBlocks(bootstrap.childBlocks),
                       version: bootstrap.snapshot.versionSeq,
                       canEdit: canEdit,
                       onSelectionChanged: widget.onCursorChanged,
@@ -825,11 +825,11 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                               if (mounted) {
                                 setUi(() {
                                   _toolsExpanded = true;
-                                  _toolsTab = _ToolsTab.comments;
+                                  _toolsTab = ToolsTab.comments;
                                 });
                               }
                             },
-                      remoteCursors: _editorCursors(widget.presence),
+                      remoteCursors: editorCursorsFromPresence(widget.presence),
                       onApplyOperations: widget.onApplyOperations,
                       onApplyHistory: widget.onApplyHistory,
                       onOpFault: widget.onEditorFault,
@@ -862,7 +862,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                       widget.selectedView?.objectType == 'document')
                     Padding(
                       padding: const EdgeInsets.only(left: EditorTheme.gutter),
-                      child: _BacklinksPanel(
+                      child: BacklinksPanel(
                         key: ValueKey('backlinks#${widget.selectedView!.id}'),
                         viewId: widget.selectedView!.id,
                         load: widget.onLoadBacklinks!,

@@ -269,7 +269,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
           alignment: Alignment.topLeft,
           child: Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: _DropIndicator(
+            child: DropIndicator(
               inset: dropIndicatorInset(0),
               // This zone accepts everything, so `blocked` cannot arise here —
               // still routed through the same enum rather than a bool, so there
@@ -330,11 +330,11 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                     // mean "become its sibling").
                     Expanded(
                       flex: 3,
-                      child: _dropSlot(view, _DropMode.before, depth),
+                      child: _dropSlot(view, DropMode.before, depth),
                     ),
                     Expanded(
                       flex: 4,
-                      child: _dropSlot(view, _DropMode.into, depth),
+                      child: _dropSlot(view, DropMode.into, depth),
                     ),
                     // `nextDepth` is what bounds how far left this drop may
                     // pop out — see [reparentLevelFor].
@@ -342,7 +342,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                       flex: 3,
                       child: _dropSlot(
                         view,
-                        _DropMode.after,
+                        DropMode.after,
                         depth,
                         nextDepth: nextDepth,
                       ),
@@ -517,14 +517,14 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
       if (transfer != null) ...[
         PopupMenuItem<VoidCallback>(
           value: () => transfer(rows, false),
-          child: _MenuRow(
+          child: MenuRow(
             icon: Icons.drive_file_move_outlined,
             label: l10n.batchTransferMove(rows.length),
           ),
         ),
         PopupMenuItem<VoidCallback>(
           value: () => transfer(rows, true),
-          child: _MenuRow(
+          child: MenuRow(
             icon: Icons.copy_all_outlined,
             label: l10n.batchTransferCopy(rows.length),
           ),
@@ -533,7 +533,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
       ],
       PopupMenuItem<VoidCallback>(
         value: () => _deleteSelection(rows),
-        child: _MenuRow(
+        child: MenuRow(
           icon: Icons.delete_outline,
           label: l10n.batchDelete(rows.length),
           danger: true,
@@ -565,7 +565,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
 
   Widget _dropSlot(
     DocumentView target,
-    _DropMode mode,
+    DropMode mode,
     int depth, {
     int? nextDepth,
   }) {
@@ -584,12 +584,12 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
         // one row, and only needs to be true of one of them to be true.
         onWillAcceptWithDetails: (details) => TreeDropPlanner(
           widget.views,
-        ).canDrop(details.data, target, into: mode == _DropMode.into),
+        ).canDrop(details.data, target, into: mode == DropMode.into),
         // Only `after` re-parents, and only sideways. `details.offset` IS the
         // pointer here because the Draggable uses `pointerDragAnchorStrategy`;
         // with the default strategy it would be the feedback's top-left corner
         // and every level would read one chip-width to the right.
-        onMove: mode != _DropMode.after
+        onMove: mode != DropMode.after
             ? null
             : (details) {
                 final box = slotContext.findRenderObject() as RenderBox?;
@@ -611,7 +611,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
           final resolved = TreeDropPlanner(widget.views).resolveAfterTarget(
             target,
             depth,
-            mode == _DropMode.after ? _dropLevel : null,
+            mode == DropMode.after ? _dropLevel : null,
           );
           setUi(() => _dropLevel = null);
           _handleDrop(details.data, resolved, mode);
@@ -627,7 +627,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
               : rejected.isNotEmpty
               ? DropIndicatorState.blocked
               : DropIndicatorState.idle;
-          if (mode == _DropMode.into) {
+          if (mode == DropMode.into) {
             // Nesting: highlight the whole target row. Warning-coloured when the
             // nest is refused — dropping a folder inside its own subtree is the
             // one people actually try, and it is exactly where silence was worst.
@@ -660,10 +660,10 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
           // When blocked, the mark is drawn at the level you were ASKING for, in
           // the warning colour — the desired instruction, not nothing.
           return Align(
-            alignment: mode == _DropMode.before
+            alignment: mode == DropMode.before
                 ? Alignment.topLeft
                 : Alignment.bottomLeft,
-            child: _DropIndicator(
+            child: DropIndicator(
               inset: dropIndicatorInset(
                 state == DropIndicatorState.idle ? depth : _dropLevel ?? depth,
               ),
@@ -678,11 +678,11 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
   void _handleDrop(
     List<DocumentView> dragged,
     DocumentView target,
-    _DropMode mode,
+    DropMode mode,
   ) {
     if (dragged.isEmpty) return;
     final moving = {for (final d in dragged) d.id};
-    if (mode == _DropMode.into) {
+    if (mode == DropMode.into) {
       final children =
           widget.views
               .where(
@@ -708,7 +708,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
       siblings: [for (final s in siblings) s.id],
       dragged: [for (final d in dragged) d.id],
       targetId: target.id,
-      before: mode == _DropMode.before,
+      before: mode == DropMode.before,
     );
     if (order == null) return;
     final byId = {

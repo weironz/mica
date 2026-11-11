@@ -1,7 +1,22 @@
+import 'package:flutter/gestures.dart';
+import 'dart:async';
+import 'dart:math' as math;
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../l10n/locale_controller.dart';
+import '../ui/export_format.dart';
+import '../ui/autoscroll.dart';
+import '../ui/navigation_draggable.dart';
+import '../ui/copy_button.dart';
+import '../ui/tree_selection.dart';
+import '../ui/rename.dart';
+import '../ui/theme_tokens.dart';
+import '../ui/user_avatar.dart';
+import '../api/models.dart';
+
 // Leaf + panel widgets for the Mica client: workspace selector, list rows,
 // block row, document row, presence bar, update checker, small helpers.
-// `part of main.dart`. Extracted 2026-07 for navigability.
-part of '../main.dart';
+// Independent sidebar and document chrome widgets; data arrives explicitly.
 
 /// Workspace switcher: the workspaces of the ONE world the app is connected
 /// to — a server (with its account, or a sign-in row when signed out) or this
@@ -17,8 +32,9 @@ part of '../main.dart';
 ///
 /// Row actions dispatch on the ROW's entry, and create/import ask where they
 /// should land, so neither depends on this list being filtered.
-class _WorkspaceSelector extends StatefulWidget {
-  const _WorkspaceSelector({
+class WorkspaceSelector extends StatefulWidget {
+  const WorkspaceSelector({
+    super.key,
     required this.entries,
     required this.activeIsLocal,
     required this.selectedRef,
@@ -60,6 +76,7 @@ class _WorkspaceSelector extends StatefulWidget {
   final void Function(WorkspaceEntry entry) onDelete;
   final void Function(WorkspaceEntry entry, ArchiveFormat format) onExport;
   final VoidCallback onCreate;
+
   /// Null hides the entry. Archive import is unsupported in local mode, and a
   /// menu item that does nothing is worse than no menu item.
   final void Function(bool notion)? onImport;
@@ -77,10 +94,10 @@ class _WorkspaceSelector extends StatefulWidget {
   final void Function(List<WorkspaceEntry> ordered) onReorder;
 
   @override
-  State<_WorkspaceSelector> createState() => _WorkspaceSelectorState();
+  State<WorkspaceSelector> createState() => _WorkspaceSelectorState();
 }
 
-class _WorkspaceSelectorState extends State<_WorkspaceSelector> {
+class _WorkspaceSelectorState extends State<WorkspaceSelector> {
   final MenuController _menu = MenuController();
 
   /// True while a workspace row is being dragged — gates the before/after drop
@@ -893,7 +910,7 @@ class MemberListItem extends StatelessWidget {
 
 /// Where a dragged page lands relative to the row it is dropped on: as the
 /// sibling before it, nested as its child, or the sibling after it.
-enum _DropMode { before, into, after }
+enum DropMode { before, into, after }
 
 class DocumentListItem extends StatefulWidget {
   const DocumentListItem({
@@ -1078,7 +1095,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
     super.didUpdateWidget(old);
     if (widget.view.id != old.view.id ||
         (old.isSelected && !widget.isSelected) ||
-        !widget.canEdit || widget.isRenaming) {
+        !widget.canEdit ||
+        widget.isRenaming) {
       _clearClickPair();
     }
     if (widget.isRenaming && !old.isRenaming) {
@@ -1189,7 +1207,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
         if (widget.onOpenInNewTab != null)
           PopupMenuItem(
             value: 'openInNewTab',
-            child: _MenuRow(
+            child: MenuRow(
               icon: Icons.tab_outlined,
               label: context.l10n.rowOpenInNewTab,
             ),
@@ -1199,117 +1217,119 @@ class _DocumentListItemState extends State<DocumentListItem> {
         // showing a rename that is guaranteed to 403 is worse than showing
         // nothing, the same rule the rest of this file follows.
         if (widget.canEdit) ...[
-        // A page is a leaf: only folders can hold children, so the two
-        // "new child" entries appear on folder rows only.
-        if (widget._isFolder) ...[
-          PopupMenuItem(
-            value: 'child',
-            child: _MenuRow(
-              icon: Icons.add,
-              label: context.l10n.rowNewChildPage,
-            ),
-          ),
-          PopupMenuItem(
-            value: 'childFolder',
-            child: _MenuRow(
-              icon: Icons.create_new_folder_outlined,
-              label: context.l10n.rowNewChildFolder,
-            ),
-          ),
-        ],
-        PopupMenuItem(
-          value: 'rename',
-          child: _MenuRow(
-            icon: Icons.edit_outlined,
-            label: context.l10n.commonRename,
-          ),
-        ),
-        // Set/clear the page emoji. Sits next to rename because it is the same
-        // kind of act — naming the thing — and the picker itself carries the
-        // "remove icon" affordance, so no second menu entry is needed.
-        if (widget.onSetIcon != null)
-          PopupMenuItem(
-            value: 'setIcon',
-            child: _MenuRow(
-              icon: Icons.emoji_emotions_outlined,
-              label: context.l10n.rowSetIcon,
-            ),
-          ),
-        // Duplicate in place — works for pages AND folders (a folder copies its
-        // whole subtree), and in cloud AND local workspaces (unlike transfer,
-        // which is cloud-only), so it's always present.
-        PopupMenuItem(
-          value: 'duplicate',
-          child: _MenuRow(
-            icon: Icons.content_copy_outlined,
-            label: context.l10n.rowDuplicate,
-          ),
-        ),
-        if (widget.hasChildren)
-          PopupMenuItem(
-            value: 'toggle',
-            child: _MenuRow(
-              icon: widget.isCollapsed ? Icons.unfold_more : Icons.unfold_less,
-              label: widget.isCollapsed
-                  ? context.l10n.rowExpandChildren
-                  : context.l10n.rowCollapseChildren,
-            ),
-          ),
-        // Folder subtree -> backup or Markdown ZIP, like a workspace (N3).
-        if (widget._isFolder && widget.onExportFolder != null)
-          for (final f in ArchiveFormat.values)
+          // A page is a leaf: only folders can hold children, so the two
+          // "new child" entries appear on folder rows only.
+          if (widget._isFolder) ...[
             PopupMenuItem(
-              value: 'export:${f.name}',
-              child: _MenuRow(
-                icon: Icons.folder_zip_outlined,
-                label: context.l10n.archiveFormatLabel(f.name),
+              value: 'child',
+              child: MenuRow(
+                icon: Icons.add,
+                label: context.l10n.rowNewChildPage,
               ),
             ),
-        // Import md / images / a nested folder UNDER this folder (both worlds).
-        if (widget._isFolder && widget.onImportFilesIntoFolder != null)
+            PopupMenuItem(
+              value: 'childFolder',
+              child: MenuRow(
+                icon: Icons.create_new_folder_outlined,
+                label: context.l10n.rowNewChildFolder,
+              ),
+            ),
+          ],
           PopupMenuItem(
-            value: 'importFiles',
-            child: _MenuRow(
-              icon: Icons.upload_file_outlined,
-              label: context.l10n.workspaceRowImportFiles,
+            value: 'rename',
+            child: MenuRow(
+              icon: Icons.edit_outlined,
+              label: context.l10n.commonRename,
             ),
           ),
-        if (widget._isFolder && widget.onImportFolderIntoFolder != null)
+          // Set/clear the page emoji. Sits next to rename because it is the same
+          // kind of act — naming the thing — and the picker itself carries the
+          // "remove icon" affordance, so no second menu entry is needed.
+          if (widget.onSetIcon != null)
+            PopupMenuItem(
+              value: 'setIcon',
+              child: MenuRow(
+                icon: Icons.emoji_emotions_outlined,
+                label: context.l10n.rowSetIcon,
+              ),
+            ),
+          // Duplicate in place — works for pages AND folders (a folder copies its
+          // whole subtree), and in cloud AND local workspaces (unlike transfer,
+          // which is cloud-only), so it's always present.
           PopupMenuItem(
-            value: 'importFolder',
-            child: _MenuRow(
-              icon: Icons.drive_folder_upload_outlined,
-              label: context.l10n.workspaceRowImportFolder,
+            value: 'duplicate',
+            child: MenuRow(
+              icon: Icons.content_copy_outlined,
+              label: context.l10n.rowDuplicate,
             ),
           ),
-        // Cross-workspace move/copy — cloud-only, so both hide in a local
-        // workspace. Works for pages AND folders (the folder carries its
-        // subtree), matching the server endpoint's semantics.
-        if (widget.onTransferMove != null) ...[
+          if (widget.hasChildren)
+            PopupMenuItem(
+              value: 'toggle',
+              child: MenuRow(
+                icon: widget.isCollapsed
+                    ? Icons.unfold_more
+                    : Icons.unfold_less,
+                label: widget.isCollapsed
+                    ? context.l10n.rowExpandChildren
+                    : context.l10n.rowCollapseChildren,
+              ),
+            ),
+          // Folder subtree -> backup or Markdown ZIP, like a workspace (N3).
+          if (widget._isFolder && widget.onExportFolder != null)
+            for (final f in ArchiveFormat.values)
+              PopupMenuItem(
+                value: 'export:${f.name}',
+                child: MenuRow(
+                  icon: Icons.folder_zip_outlined,
+                  label: context.l10n.archiveFormatLabel(f.name),
+                ),
+              ),
+          // Import md / images / a nested folder UNDER this folder (both worlds).
+          if (widget._isFolder && widget.onImportFilesIntoFolder != null)
+            PopupMenuItem(
+              value: 'importFiles',
+              child: MenuRow(
+                icon: Icons.upload_file_outlined,
+                label: context.l10n.workspaceRowImportFiles,
+              ),
+            ),
+          if (widget._isFolder && widget.onImportFolderIntoFolder != null)
+            PopupMenuItem(
+              value: 'importFolder',
+              child: MenuRow(
+                icon: Icons.drive_folder_upload_outlined,
+                label: context.l10n.workspaceRowImportFolder,
+              ),
+            ),
+          // Cross-workspace move/copy — cloud-only, so both hide in a local
+          // workspace. Works for pages AND folders (the folder carries its
+          // subtree), matching the server endpoint's semantics.
+          if (widget.onTransferMove != null) ...[
+            PopupMenuItem(
+              value: 'transferMove',
+              child: MenuRow(
+                icon: Icons.drive_file_move_outlined,
+                label: context.l10n.transferMoveTitle,
+              ),
+            ),
+            PopupMenuItem(
+              value: 'transferCopy',
+              child: MenuRow(
+                icon: Icons.copy_all_outlined,
+                label: context.l10n.transferCopyTitle,
+              ),
+            ),
+          ],
+          const PopupMenuDivider(),
           PopupMenuItem(
-            value: 'transferMove',
-            child: _MenuRow(
-              icon: Icons.drive_file_move_outlined,
-              label: context.l10n.transferMoveTitle,
+            value: 'delete',
+            child: MenuRow(
+              icon: Icons.delete_outline,
+              label: context.l10n.commonDelete,
+              danger: true,
             ),
           ),
-          PopupMenuItem(
-            value: 'transferCopy',
-            child: _MenuRow(
-              icon: Icons.copy_all_outlined,
-              label: context.l10n.transferCopyTitle,
-            ),
-          ),
-        ],
-        const PopupMenuDivider(),
-        PopupMenuItem(
-          value: 'delete',
-          child: _MenuRow(
-            icon: Icons.delete_outline,
-            label: context.l10n.commonDelete,
-            danger: true,
-          ),
-        ),
         ],
       ],
     );
@@ -1582,8 +1602,9 @@ class _DocumentListItemState extends State<DocumentListItem> {
 }
 
 /// A leading-icon + label row for the page context menu.
-class _MenuRow extends StatelessWidget {
-  const _MenuRow({
+class MenuRow extends StatelessWidget {
+  const MenuRow({
+    super.key,
     required this.icon,
     required this.label,
     this.danger = false,
@@ -1630,8 +1651,8 @@ class DetailRow extends StatelessWidget {
 
 /// Live collaborator indicator shown in the document header. Renders an avatar
 /// per other connected user, or "Only you" when alone.
-class _PresenceBar extends StatelessWidget {
-  const _PresenceBar({required this.presence});
+class PresenceBar extends StatelessWidget {
+  const PresenceBar({super.key, required this.presence});
 
   final List<PresenceUser> presence;
 
@@ -1705,7 +1726,8 @@ class _PresenceBar extends StatelessWidget {
 /// Failure is NOT reported here: it is unexpected, it needs words, and the
 /// caller still shows those. This widget only ever says "yes, done".
 class PageBreadcrumb extends StatefulWidget {
-  const PageBreadcrumb({super.key,
+  const PageBreadcrumb({
+    super.key,
     required this.views,
     required this.current,
     required this.onSelect,
@@ -2038,8 +2060,9 @@ extension _PageBreadcrumbPopover on PageBreadcrumbState {
 /// AFFiNE-style info toggle: shows/hides the page-properties panel. Filled +
 /// accented when the page actually has properties, so a page's metadata is
 /// discoverable even while the panel is collapsed.
-class _PropertiesToggle extends StatelessWidget {
-  const _PropertiesToggle({
+class PropertiesToggle extends StatelessWidget {
+  const PropertiesToggle({
+    super.key,
     required this.active,
     required this.hasProperties,
     required this.onTap,

@@ -72,15 +72,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   /// a tab. Closing the last tab is therefore not a thing that can happen, the
   /// same call AFFiNE makes (`closeTab` returns early when one tab is left).
   ///
-  /// Single-element today: the tab strip is not built yet. This list existing is
-  /// the point — it is what the ~70 `_selectedBootstrap` call sites now read
-  /// through, so adding tabs later touches this file in one place instead of 70.
+  /// Each tab owns its document and sync state; the strip selects one editor.
   final List<DocTab> _tabs = [DocTab()];
 
   /// Index into [_tabs] of the tab the editor is showing.
   ///
-  /// Nothing assigns it yet — there is only one tab — so the analyzer suggests
-  /// `final`. Do not take that suggestion: switching tabs is the next commit.
   int _activeTabIndex = 0;
 
   DocTab get _activeTab => _tabs[_activeTabIndex];
@@ -97,9 +93,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       (ws, id) => _viewsByWorkspace[ws]?.where((v) => v.id == id).firstOrNull,
     );
     if (restored != null && mounted) {
-      setState(() => _tabs
-        ..clear()
-        ..addAll(restored.tabs));
+      setState(
+        () => _tabs
+          ..clear()
+          ..addAll(restored.tabs),
+      );
       _activeTabIndex = restored.active;
     }
     _openTabsSaver.prime(_tabs, _activeTabIndex);
@@ -716,7 +714,8 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // Sign-in/out during the awaits retired this restore (issue #147): a
       // generation check, since the restore installs a session mid-flight.
       final expected = installed ? startGeneration + 1 : startGeneration;
-      if (!mounted || _cloudOrigin != origin ||
+      if (!mounted ||
+          _cloudOrigin != origin ||
           _sessionCtrl.generation != expected) {
         return; // never clear the NEW sign-in's credentials
       }
@@ -748,35 +747,21 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   /// Everything else still falls through to the raw message. A vague 「出错了」
   /// would be worse than an ugly true sentence, and inventing friendly copy for
   /// failures we haven't characterised is how you end up lying.
-  String _apiMessage(ApiException error) {
-    return switch (error.code) {
-      'import_no_markdown' => context.l10n.importNoMarkdownHint,
-      // The two ways an upload gets refused for "size". They are easy to
-      // confuse and the fix differs: one file is too big (compress it) versus
-      // the workspace is full (free space). Worse, the first fires while the
-      // storage bar honestly shows room left, so relaying the server's English
-      // sentence left the refusal looking like the bar was lying.
-      // The cap is named only when it is actually known: `/usage` is fetched
-      // lazily (settings dialog), so someone whose first action is an oversized
-      // paste has never been told the number. Quoting a guess would be worse
-      // than omitting it — the whole point of this copy is to be believable.
-      'file_too_large' =>
-        _maxUploadBytes > 0
-            ? context.l10n.uploadFileTooLargeWithLimit(
-                formatBytesBinary(_maxUploadBytes),
-              )
-            : context.l10n.uploadFileTooLarge,
-      'workspace_quota_exceeded' => context.l10n.uploadWorkspaceFull,
-      'owner_quota_exceeded' => context.l10n.uploadOwnerFull,
-      _ => error.toString(),
-    };
-  }
+  String _apiMessage(ApiException error) =>
+      apiErrorMessage(error, context.l10n, _maxUploadBytes);
 
   /// Server + session generation an action works for: the views controller's identity (#148).
-  Object? get _owner => _session == null ? null : (_registry.cloudOrigin, _sessionCtrl.generation);
+  Object? get _owner => _session == null
+      ? null
+      : (_registry.cloudOrigin, _sessionCtrl.generation);
 
-  Future<void> _run(Future<void> Function() action) => runOwned(_owner, () async {
-    setState(() { _isBusy = true; _message = null; });
+  Future<void> _run(
+    Future<void> Function() action,
+  ) => runOwned(_owner, () async {
+    setState(() {
+      _isBusy = true;
+      _message = null;
+    });
 
     try {
       // Renew ahead of expiry — but do not put that round trip in front of the
@@ -830,7 +815,9 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // The account or workspace changed under the action: its result is not
       // this session's to show (docs/dev/async-review-checklist.md).
     } catch (error) {
-      if (mounted && !ownerChanged(_owner)) setState(() => _message = error.toString());
+      if (mounted && !ownerChanged(_owner)) {
+        setState(() => _message = error.toString());
+      }
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -1346,10 +1333,8 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       savePref: savePref,
       mirrorPageTree: (origin, workspaces, views) =>
           _local.mirrorCloudPageTree(origin, workspaces, views),
-      origin: () => requireCloudCacheOrigin(
-        _api.baseUri.toString(),
-        _session?.user.id,
-      ),
+      origin: () =>
+          requireCloudCacheOrigin(_api.baseUri.toString(), _session?.user.id),
       isMounted: () => mounted,
       openViewId: () => _selectedView?.id,
       crdtSessionDocumentId: () => _cloudSession?.documentId,
@@ -1508,8 +1493,10 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         requireCloudCacheOrigin(_api.baseUri.toString(), _session?.user.id),
         docId,
       ),
-      openWebDocStore: (docId) =>
-          openWebDocStore(requireCloudCacheOrigin(_cloudOrigin, _session?.user.id), docId),
+      openWebDocStore: (docId) => openWebDocStore(
+        requireCloudCacheOrigin(_cloudOrigin, _session?.user.id),
+        docId,
+      ),
       ensureFreshSession: () => _auth.ensureFreshSession(),
       readPref: loadPref,
       savePref: savePref,
@@ -1665,7 +1652,12 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // Deletion falls the selection to the first remaining workspace;
       // the caller closes the page it held when this was the selected one.
       final wasSelected = _sessionCtrl.remove(workspace);
-      if (wasSelected) setState(() { _selectedView = null; _selectedBootstrap = null; });
+      if (wasSelected) {
+        setState(() {
+          _selectedView = null;
+          _selectedBootstrap = null;
+        });
+      }
       if (wasSelected && _selectedWorkspace != null) {
         await _loadSelectedWorkspaceMembers();
         await _loadSelectedWorkspaceViews();
@@ -1818,8 +1810,15 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         name,
         parentViewId: parentViewId,
       );
-      ensureOwner(_owner, workspaceId: workspace.id, selectedWorkspaceId: _selectedWorkspace?.id);
-      setState(() { _selectedView = created.view; _selectedBootstrap = created.bootstrap; });
+      ensureOwner(
+        _owner,
+        workspaceId: workspace.id,
+        selectedWorkspaceId: _selectedWorkspace?.id,
+      );
+      setState(() {
+        _selectedView = created.view;
+        _selectedBootstrap = created.bootstrap;
+      });
       newId = created.view.id;
     });
     return newId;
@@ -2161,7 +2160,6 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     );
   }
 
-
   /// Export the open CLOUD page as a self-contained HTML file. `title` (the live
   /// title-bar text) is ignored here — the server names the `<h1>`/`<title>`
   /// from the stored view name; it matters only for the local path below.
@@ -2281,7 +2279,10 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
 
   /// Export a LOCAL folder's subtree as a ZIP via the shared Rust builder — the
   /// local mirror of [_exportFolderZip], closing the last local-export gap.
-  Future<Uint8List> _localExportFolderZip(DocumentView folder, ArchiveFormat f) async {
+  Future<Uint8List> _localExportFolderZip(
+    DocumentView folder,
+    ArchiveFormat f,
+  ) async {
     final wsId = _localBackend._workspaceIdOfView(folder.id);
     final bytes = _local.exportFolderZip(
       wsId,
@@ -2781,7 +2782,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         title,
         markdown,
       );
-      ensureOwner(_owner, workspaceId: workspace.id, selectedWorkspaceId: _selectedWorkspace?.id);
+      ensureOwner(
+        _owner,
+        workspaceId: workspace.id,
+        selectedWorkspaceId: _selectedWorkspace?.id,
+      );
       setState(() {
         _sessionCtrl.replaceViews(workspace.id, [
           ..._viewsByWorkspace[workspace.id] ?? const [],
@@ -2811,7 +2816,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         title,
         markdown,
       );
-      ensureOwner(_owner, workspaceId: workspace.id, selectedWorkspaceId: _selectedWorkspace?.id);
+      ensureOwner(
+        _owner,
+        workspaceId: workspace.id,
+        selectedWorkspaceId: _selectedWorkspace?.id,
+      );
       setState(() {
         _sessionCtrl.replaceViews(workspace.id, [
           ..._viewsByWorkspace[workspace.id] ?? const [],
@@ -2974,7 +2983,10 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       );
       ensureOwner(_owner);
       _sessionCtrl.addCreated(workspace, [bootstrap.view]);
-      setState(() { _selectedView = bootstrap.view; _selectedBootstrap = bootstrap; });
+      setState(() {
+        _selectedView = bootstrap.view;
+        _selectedBootstrap = bootstrap;
+      });
       await _loadSelectedWorkspaceMembers();
     });
   }
@@ -4000,6 +4012,21 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   /// callback reads the session token FRESH (so a silent refresh mid-dialog is
   /// picked up) and is scoped to this workspace + document.
   Future<void> _openVersionHistory() async {
+    final scope = (
+      _owner,
+      _selectedWorkspace?.id,
+      _selectedBootstrap?.document.id,
+    );
+    if (!await loadUiModule(
+      context,
+      history_ui.loadLibrary,
+      isCurrent: () =>
+          (_owner, _selectedWorkspace?.id, _selectedBootstrap?.document.id) ==
+          scope,
+    )) {
+      return;
+    }
+    if (!mounted) return;
     final bootstrap = _selectedBootstrap;
     final workspace = _selectedWorkspace;
     if (bootstrap == null || workspace == null || _session == null) {
@@ -4009,7 +4036,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     final docId = bootstrap.document.id;
     await showDialog<void>(
       context: context,
-      builder: (context) => VersionHistoryDialog(
+      builder: (context) => history_ui.VersionHistoryDialog(
         onList: () =>
             _api.listVersions(_requireSession().accessToken, wsId, docId),
         onCreate: (name) => _api.createVersion(
@@ -4873,6 +4900,14 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     // session/account/spinner, prefs, entries (which span both worlds), and
     // the §6 migrate/detach engine.
     final b = _activeBackend;
+    final claim = _owner;
+    final notifications = session == null || _activeIsLocal
+        ? null
+        : importNotificationActions(
+            api: _api,
+            accessToken: () => _session!.accessToken,
+            isCurrent: () => mounted && !_activeIsLocal && _owner == claim,
+          );
     final viewOps = b.viewOps;
     return WorkspaceView(
       session: session,
@@ -5021,6 +5056,8 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // AI tab renders nothing instead of a form whose Save went nowhere.
       onLoadAiSettings: b.loadAiSettings,
       onLoadImportHistory: b.loadImportHistory,
+      onLoadImportNotifications: notifications?.load,
+      onSaveImportNotifications: notifications?.save,
       onListAiModels: b.listAiModels,
       onSaveAiSettings: b.saveAiSettings,
       onDeleteAiProvider: b.deleteAiProvider,
@@ -5113,7 +5150,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
           : null,
       onExportQuarantinedCache: _local.available
           ? (origin, workspaceId) async =>
-              _local.exportWorkspaceZip(workspaceId, origin: origin)
+                _local.exportWorkspaceZip(workspaceId, origin: origin)
           : null,
       onImportWorkspaceZip: b.importWorkspaceZip,
       onImportWorkspaceTreeInto: b.exportOps.importTree,

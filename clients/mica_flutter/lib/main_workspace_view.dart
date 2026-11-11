@@ -89,6 +89,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onAiNewWorkspace,
     required this.onLoadAiSettings,
     required this.onLoadImportHistory,
+    this.onLoadImportNotifications,
+    this.onSaveImportNotifications,
     required this.onListAiModels,
     required this.onSaveAiSettings,
     required this.onDeleteAiProvider,
@@ -366,7 +368,7 @@ class WorkspaceView extends StatefulWidget {
 
   final Future<void> Function(DocumentView view) onCloneView;
   final Future<void> Function(List<Map<String, dynamic>> operations)
-      onApplyOperations;
+  onApplyOperations;
   final ApplyHistory? onApplyHistory;
   final ApplyOps? onApplyMaintenanceOperations;
   final Future<({String fileId, String name})?> Function(
@@ -396,6 +398,8 @@ class WorkspaceView extends StatefulWidget {
 
   /// Past imports for the settings screen. Null in 本地模式.
   final Future<List<ImportHistoryEntry>> Function()? onLoadImportHistory;
+  final Future<bool> Function()? onLoadImportNotifications;
+  final Future<void> Function(bool)? onSaveImportNotifications;
 
   /// Fetch the provider's model list. Null in 本地模式, like the settings pair.
   final ListAiModels? onListAiModels;
@@ -471,6 +475,7 @@ class WorkspaceView extends StatefulWidget {
     String title,
   )
   onExportPage;
+
   /// The open page as Markdown TEXT, for the clipboard. Distinct from
   /// [onExportPage], which packages images into a ZIP — see `_pageMarkdownText`.
   final Future<String> Function() onCopyPageMarkdown;
@@ -494,7 +499,8 @@ class WorkspaceView extends StatefulWidget {
   /// retained (un-pushed edits, quarantined legacy caches).
   final Future<ClearMirrorResult> Function()? onClearMirrorCache;
 
-  final Future<List<({String origin, String workspaceId, int pages})>> Function()?
+  final Future<List<({String origin, String workspaceId, int pages})>>
+  Function()?
   onLoadQuarantinedCaches;
 
   final Future<Uint8List?> Function(String origin, String workspaceId)?
@@ -605,7 +611,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   /// So the page trims both when it has a panel to show. Obsidian (48px),
   /// Logseq (44) and Roam (36) all land in the same band there, and the panel
   /// draws a hairline of its own — none of the four anchors a link section with
-  /// whitespace alone. [_BacklinksPanel] adds the remaining 16.
+  /// whitespace alone. [BacklinksPanel] adds the remaining 16.
   EditorAppearance get _editorAppearance => _hasBacklinksBelow
       ? EditorAppearance(
           fontScale: widget.appearance.fontScale,
@@ -635,7 +641,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   /// One sidebar, not two: the outline and the comments used to be separate
   /// surfaces that could both be open, and together they left the text column
   /// about 300px on a normal window.
-  _ToolsTab _toolsTab = _ToolsTab.outline;
+  ToolsTab _toolsTab = ToolsTab.outline;
 
   /// Live words·chars, published by the editor.
   ///
@@ -1384,7 +1390,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                   children: [
                     if (widget.onOpenHome != null)
                       Expanded(
-                        child: _HomeNavRow(
+                        child: HomeNavRow(
                           label: context.l10n.navHome,
                           selected: widget.selectedBootstrap == null,
                           onTap: widget.onOpenHome!,
@@ -1430,7 +1436,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Expanded(
-                      child: _WorkspaceSelector(
+                      child: WorkspaceSelector(
                         entries: widget.entries,
                         activeIsLocal: widget.activeIsLocal,
                         // Counts PAGES, not rows: a switcher that says "12 个页面"
@@ -1712,7 +1718,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
         ? context.l10n.accountLocalInitial
         : (id.name.isNotEmpty ? id.name.substring(0, 1).toUpperCase() : '?');
     // Width comes from the rows (each a SizedBox of _kAccountMenuWidth), not
-    // from a MenuStyle: that is how _WorkspaceSelector — the other menu in this
+    // from a MenuStyle: that is how WorkspaceSelector — the other menu in this
     // same sidebar — does it, and a panel constrained to the same width as its
     // children has nowhere to put its own padding.
     return MenuAnchor(
@@ -1881,7 +1887,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   /// rail behind icon tabs for the same reason.
   Widget _workspaceTools(BuildContext context) {
     final canComment = widget.onAddComment != null;
-    final tab = (!canComment) ? _ToolsTab.outline : _toolsTab;
+    final tab = (!canComment) ? ToolsTab.outline : _toolsTab;
     return ColoredBox(
       color: MicaTheme.of(context).surface.base,
       child: Column(
@@ -1892,31 +1898,31 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
               padding: const EdgeInsets.fromLTRB(12, 10, 8, 4),
               child: Row(
                 children: [
-                  _ToolsTabButton(
+                  ToolsTabButton(
                     icon: Icons.toc,
                     label: context.l10n.pageOutlineTitle,
-                    active: tab == _ToolsTab.outline,
-                    onTap: () => setState(() => _toolsTab = _ToolsTab.outline),
+                    active: tab == ToolsTab.outline,
+                    onTap: () => setState(() => _toolsTab = ToolsTab.outline),
                   ),
                   const SizedBox(width: 4),
-                  _ToolsTabButton(
+                  ToolsTabButton(
                     icon: Icons.chat_bubble_outline,
                     label: context.l10n.commentsTitle,
-                    active: tab == _ToolsTab.comments,
+                    active: tab == ToolsTab.comments,
                     // The unresolved count rides the tab now: with the panel
                     // behind a tab you would otherwise have to open it to learn
                     // there is anything in it.
                     badge: widget.commentThreads
                         .where((t) => !t.isResolved)
                         .length,
-                    onTap: () => setState(() => _toolsTab = _ToolsTab.comments),
+                    onTap: () => setState(() => _toolsTab = ToolsTab.comments),
                   ),
                   const Spacer(),
                 ],
               ),
             ),
           Expanded(
-            child: tab == _ToolsTab.comments
+            child: tab == ToolsTab.comments
                 ? CommentPanel(
                     threads: widget.commentThreads,
                     currentUserId: widget.session?.user.id,
@@ -2218,13 +2224,13 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   //    is empty, so it cannot overflow, and a dialog per create is heavier.
   // `_renamingViewId` therefore only ever drives the create-then-name flow.
 
-  /// Rename [view] through a centered dialog ([_RenameDialog]), pre-filled and
+  /// Rename [view] through a centered dialog ([RenameDialog]), pre-filled and
   /// select-all so the common "replace the whole name" case is still one
   /// keystroke.
   Future<void> _promptRenameView(DocumentView view) async {
     final name = await showDialog<String>(
       context: context,
-      builder: (_) => _RenameDialog(initialName: view.name),
+      builder: (_) => RenameDialog(initialName: view.name),
     );
     if (name == null || !mounted) return; // cancelled / Esc → no change
     await _commitRename(view, name);
@@ -2604,12 +2610,21 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
 
   /// The graph opens as a large dialog rather than a route: it is something you
   /// glance at and dismiss, and a route would lose the page you were reading.
-  void _openGraph() {
+  Future<void> _openGraph() async {
+    final workspaceId = widget.selectedWorkspace?.id;
+    if (!await loadUiModule(
+      context,
+      graph_ui.loadLibrary,
+      isCurrent: () => widget.selectedWorkspace?.id == workspaceId,
+    )) {
+      return;
+    }
+    if (!mounted) return;
     final load = widget.onLoadGraph;
     if (load == null) return;
     showDialog<void>(
       context: context,
-      builder: (context) => GraphDialog(
+      builder: (context) => graph_ui.GraphDialog(
         load: load,
         currentViewId: widget.selectedView?.id,
         onOpen: (viewId) {
@@ -2734,6 +2749,8 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
         updates: _desktopUpdates,
         onLoadAiSettings: widget.onLoadAiSettings,
         onLoadImportHistory: widget.onLoadImportHistory,
+        onLoadImportNotifications: widget.onLoadImportNotifications,
+        onSaveImportNotifications: widget.onSaveImportNotifications,
         onListAiModels: widget.onListAiModels,
         onSaveAiSettings: widget.onSaveAiSettings,
         onDeleteAiProvider: widget.onDeleteAiProvider,
@@ -2970,14 +2987,31 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     );
   }
 
-  void _openAiDialog() {
+  Future<void> _openAiDialog() async {
+    final scope = (
+      widget.selectedWorkspace?.id,
+      widget.selectedBootstrap?.document.id,
+    );
+    if (!await loadUiModule(
+      context,
+      ai_ui.loadLibrary,
+      isCurrent: () =>
+          (
+            widget.selectedWorkspace?.id,
+            widget.selectedBootstrap?.document.id,
+          ) ==
+          scope,
+    )) {
+      return;
+    }
+    if (!mounted) return;
     final documentId = widget.selectedBootstrap?.document.id;
     // No engine → no current-page target (an empty body would read as empty).
     final body = withEngineOrNull(() => _commandHook.documentMarkdown() ?? '');
     final onCurrentPage = body == null ? null : widget.onAiCurrentPage;
     showDialog<void>(
       context: context,
-      builder: (context) => AiDialog(
+      builder: (context) => ai_ui.AiDialog(
         canEdit: matchesEditRole(widget.selectedWorkspace?.role),
         hasWorkspace: widget.selectedWorkspace != null,
         onStream: widget.onAiStream,

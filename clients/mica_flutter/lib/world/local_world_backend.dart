@@ -637,6 +637,14 @@ class _LocalWorldBackend extends WorldBackend {
   /// backed by the on-device `doc_version` timeline (FFI). Restore reloads the
   /// editor via the epoch bump, exactly like the checkpoint rollback above.
   Future<void> _openLocalVersionHistory() async {
+    final id = _localSelectedView?.id;
+    if (!await loadUiModule(
+      _shell.context,
+      history_ui.loadLibrary,
+      isCurrent: () => _shell._activeIsLocal && _localSelectedView?.id == id,
+    )) {
+      return;
+    }
     final view = _localSelectedView;
     if (view == null) return;
     final docId = view.objectId;
@@ -655,7 +663,7 @@ class _LocalWorldBackend extends WorldBackend {
     if (!_shell.mounted) return;
     await showDialog<void>(
       context: _shell.context,
-      builder: (context) => VersionHistoryDialog(
+      builder: (context) => history_ui.VersionHistoryDialog(
         onList: () async =>
             _local.listDocVersions(docId).map(toDocVersion).toList(),
         onCreate: (name) async {

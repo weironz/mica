@@ -1,4 +1,11 @@
-part of 'main.dart';
+import 'dart:async';
+import 'package:flutter/material.dart';
+import '../l10n/locale_controller.dart';
+import '../cloud/cloud_sync.dart';
+import '../editor/word_count.dart';
+import '../ui/theme_tokens.dart';
+import '../main_tree_helpers.dart';
+import '../api/models.dart';
 
 /// The rename dialog, as a widget that OWNS its controller.
 ///
@@ -8,16 +15,16 @@ part of 'main.dart';
 /// rebuilds the field, which re-`addListener`s the controller you just killed
 /// (`ChangeNotifier.debugAssertNotDisposed`, seen as a red screen on cancel).
 /// State.dispose runs after the route is really gone, so it is the safe hook.
-class _RenameDialog extends StatefulWidget {
-  const _RenameDialog({required this.initialName});
+class RenameDialog extends StatefulWidget {
+  const RenameDialog({super.key, required this.initialName});
 
   final String initialName;
 
   @override
-  State<_RenameDialog> createState() => _RenameDialogState();
+  State<RenameDialog> createState() => _RenameDialogState();
 }
 
-class _RenameDialogState extends State<_RenameDialog> {
+class _RenameDialogState extends State<RenameDialog> {
   late final TextEditingController _ctrl =
       TextEditingController(text: widget.initialName)
         ..selection = TextSelection(
@@ -76,8 +83,8 @@ class _RenameDialogState extends State<_RenameDialog> {
 /// shows no panel at all, matching the "empty ⇒ hide" spec. Only when there are
 /// results does the "N backlinks" header + tappable source list appear; a tap
 /// reuses the same view-open path search results use ([onOpen]).
-class _BacklinksPanel extends StatefulWidget {
-  const _BacklinksPanel({
+class BacklinksPanel extends StatefulWidget {
+  const BacklinksPanel({
     required this.viewId,
     required this.load,
     required this.onOpen,
@@ -95,10 +102,10 @@ class _BacklinksPanel extends StatefulWidget {
   final void Function(String viewId, int count) onLoaded;
 
   @override
-  State<_BacklinksPanel> createState() => _BacklinksPanelState();
+  State<BacklinksPanel> createState() => _BacklinksPanelState();
 }
 
-class _BacklinksPanelState extends State<_BacklinksPanel> {
+class _BacklinksPanelState extends State<BacklinksPanel> {
   List<Backlink> _links = const [];
 
   @override
@@ -108,7 +115,7 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
   }
 
   @override
-  void didUpdateWidget(_BacklinksPanel old) {
+  void didUpdateWidget(BacklinksPanel old) {
     super.didUpdateWidget(old);
     // A ValueKey on viewId remounts this widget per page, so this rarely fires;
     // kept as a belt-and-braces refresh if the key strategy ever changes.
@@ -216,8 +223,9 @@ class _BacklinksPanelState extends State<_BacklinksPanel> {
 /// still-open threads when there are any. Quiet when the document has none.
 /// The sidebar's Home row. Its own widget so the pane's build method stays a list
 /// of parts rather than another nested block of decoration.
-class _HomeNavRow extends StatelessWidget {
-  const _HomeNavRow({
+class HomeNavRow extends StatelessWidget {
+  const HomeNavRow({
+    super.key,
     required this.label,
     required this.selected,
     required this.onTap,
@@ -269,8 +277,8 @@ class _HomeNavRow extends StatelessWidget {
 /// bottom-right; it used to be drawn by the editor at the end of the CONTENT,
 /// which on a short page put it in the middle of the screen with nothing around
 /// it. `IgnorePointer` so it never eats a click meant for the page beneath.
-class _WordCountBadge extends StatelessWidget {
-  const _WordCountBadge({required this.counts});
+class WordCountBadge extends StatelessWidget {
+  const WordCountBadge({super.key, required this.counts});
 
   final DocCounts counts;
 
@@ -300,11 +308,12 @@ class _WordCountBadge extends StatelessWidget {
 }
 
 /// The right sidebar's tabs.
-enum _ToolsTab { outline, comments }
+enum ToolsTab { outline, comments }
 
 /// One tab in the right sidebar's header. Icon + label + optional count.
-class _ToolsTabButton extends StatelessWidget {
-  const _ToolsTabButton({
+class ToolsTabButton extends StatelessWidget {
+  const ToolsTabButton({
+    super.key,
     required this.icon,
     required this.label,
     required this.active,
@@ -361,8 +370,9 @@ class _ToolsTabButton extends StatelessWidget {
   }
 }
 
-class _CommentsButton extends StatelessWidget {
-  const _CommentsButton({
+class CommentsButton extends StatelessWidget {
+  const CommentsButton({
+    super.key,
     required this.openCount,
     required this.onTap,
     this.active = false,
@@ -418,8 +428,8 @@ class _CommentsButton extends StatelessWidget {
 /// slow spinner while syncing, a muted cloud-off glyph when offline. It earns
 /// attention only when edits are not yet safely on the server — easy to miss
 /// when healthy, by design.
-class _SyncBadge extends StatelessWidget {
-  const _SyncBadge(this.phase);
+class SyncBadge extends StatelessWidget {
+  const SyncBadge(this.phase, {super.key});
 
   final SyncPhase phase;
 
@@ -464,8 +474,8 @@ class _SyncBadge extends StatelessWidget {
 /// a 2px line starting at the circle's centre so the two read as one mark. The
 /// dot is what you aim with — the line alone says "something lands here", the
 /// dot says WHICH LEVEL it lands at.
-class _DropIndicator extends StatelessWidget {
-  const _DropIndicator({required this.inset, required this.state});
+class DropIndicator extends StatelessWidget {
+  const DropIndicator({super.key, required this.inset, required this.state});
 
   final double inset;
   final DropIndicatorState state;
@@ -510,4 +520,3 @@ class _DropIndicator extends StatelessWidget {
     );
   }
 }
-

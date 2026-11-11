@@ -1,3 +1,5 @@
+import 'inline_ai_dialog.dart';
+export 'inline_ai_dialog.dart' show kAiRewriteSystem;
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -5773,9 +5775,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Future<void> _runInlineAi() async {
     final stream = widget.onAiStream;
     if (stream == null) return;
-    final result = await showDialog<_AiResult>(
+    final result = await showDialog<AiInsertResult>(
       context: context,
-      builder: (context) => _InlineAiDialog(onStream: stream),
+      builder: (context) => InlineAiDialog(onStream: stream),
     );
     if (result == null || result.markdown.trim().isEmpty) return;
     _controller.insertBlocksAfterFocus(_parseOrNull(result.markdown) ?? const []);
@@ -5857,9 +5859,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return;
     }
     final code = _controller.nodes[nodeIndex].text;
-    final result = await showDialog<_AiResult>(
+    final result = await showDialog<AiInsertResult>(
       context: context,
-      builder: (_) => _InlineAiDialog(
+      builder: (_) => InlineAiDialog(
         onStream: stream,
         initialPrompt: buildPrompt(code),
         autoStart: autoStart,
