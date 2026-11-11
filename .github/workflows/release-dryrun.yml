@@ -26,6 +26,19 @@ on:
   # `just release`) are the default path now; run this from the Actions page
   # when a hosted run is actually wanted.
   workflow_dispatch:
+    inputs:
+      build_linux_deb:
+        description: 'Also rehearse the delivered Linux desktop package'
+        type: boolean
+        default: false
+      build_android:
+        description: 'Also rehearse APKs (requires the stable signing secrets)'
+        type: boolean
+        default: false
+      build_macos_cli:
+        description: 'Also rehearse the optional macOS CLI'
+        type: boolean
+        default: false
 
 # A second push while one is running supersedes it: the newest tree is the only
 # answer anybody wants, and each run is ~12 minutes across three OSes.
@@ -69,6 +82,9 @@ jobs:
       # The whole point. With this off, release.yml creates no draft, attaches
       # no asset, publishes no release and pushes no image — it only builds.
       publish: false
+      build_linux_deb: ${{ inputs.build_linux_deb }}
+      build_android: ${{ inputs.build_android }}
+      build_macos_cli: ${{ inputs.build_macos_cli }}
     # A called workflow cannot be granted MORE than the calling job has, and
     # release.yml declares `contents: write` at its top level (it attaches
     # release assets on the real path). Leaving this off failed the whole run at
