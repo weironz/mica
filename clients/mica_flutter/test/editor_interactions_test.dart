@@ -14,9 +14,9 @@ void main() {
       EditorNode(id: 'h', kind: 'heading', text: 'My Title', data: {'level': 2}),
     ]);
     // Type "# " at the start of the H2: text becomes "# My Title".
-    c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 0));
     c.nodes[0].text = '# My Title';
-    c.selection = DocSelection.collapsed(const DocPosition(0, 2));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 2));
     expect(c.applyInputRules(), isTrue);
     expect(c.nodes[0].kind, 'heading');
     expect(c.nodes[0].data['level'], 1, reason: 'H2 re-levels to H1');
@@ -24,7 +24,7 @@ void main() {
 
     // And deeper: "### " on the (now) H1.
     c.nodes[0].text = '### My Title';
-    c.selection = DocSelection.collapsed(const DocPosition(0, 4));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 4));
     expect(c.applyInputRules(), isTrue);
     expect(c.nodes[0].data['level'], 3);
   });
@@ -35,7 +35,7 @@ void main() {
       EditorNode(id: 'p2', kind: 'paragraph', text: ''),
       EditorNode(id: 'h', kind: 'heading', text: 'My Title', data: {'level': 2}),
     ]);
-    c.selection = DocSelection.collapsed(const DocPosition(2, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(2, 0));
 
     // The empty line above is consumed; the heading moves up UNCHANGED.
     expect(c.mergeBackward(), isTrue);
@@ -59,7 +59,7 @@ void main() {
     ]);
 
     // Numbered item: first Backspace strips the number IN PLACE.
-    c.selection = DocSelection.collapsed(const DocPosition(1, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(1, 0));
     expect(c.mergeBackward(), isTrue);
     expect(c.nodes.length, 3, reason: 'no structural change yet');
     expect(c.nodes[1].kind, 'paragraph');
@@ -73,7 +73,7 @@ void main() {
     expect(c.nodes[0].text, 'item one');
 
     // Todo: the checkbox state goes with the marker.
-    c.selection = DocSelection.collapsed(const DocPosition(1, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(1, 0));
     expect(c.mergeBackward(), isTrue);
     expect(c.nodes[1].kind, 'paragraph');
     expect(c.nodes[1].data.containsKey('checked'), isFalse);
@@ -84,7 +84,7 @@ void main() {
       EditorNode(id: 'c', kind: 'code_block', text: 'yaml'),
     ]);
     // The IME inserted "yaml\n"; insertCodeNewline sees caret 5.
-    c.selection = DocSelection.collapsed(const DocPosition(0, 4));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 4));
     c.insertCodeNewline(5);
     expect(c.nodes[0].data['language'], 'yaml');
     expect(c.nodes[0].text, '', reason: 'the tag line is consumed');
@@ -92,7 +92,7 @@ void main() {
 
     // Plain text that is NOT a language stays a soft newline.
     c.nodes[0].text = 'hello';
-    c.selection = DocSelection.collapsed(const DocPosition(0, 5));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 5));
     c.insertCodeNewline(6);
     expect(c.nodes[0].text, 'hello\n');
     expect(c.nodes[0].data['language'], 'yaml', reason: 'unchanged');
@@ -146,7 +146,7 @@ void main() {
       EditorNode(id: 'q', kind: 'quote', text: 'a\nb'),
     ]);
     // First Enter at the end of line "a" (caret offset 1).
-    c.selection = DocSelection.collapsed(const DocPosition(0, 1));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 1));
     c.applyNewlineSplit('a', '\nb');
     expect(c.nodes.map((n) => n.text), ['a', '\nb']);
     expect(c.nodes[1].kind, 'quote');

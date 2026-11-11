@@ -351,8 +351,8 @@ class _CachedText {
   final bool reusable;
 }
 
-class _NodeLayout {
-  _NodeLayout(this.painter);
+class NodeLayout {
+  NodeLayout(this.painter);
 
   final TextPainter painter;
 
@@ -441,7 +441,7 @@ class _NodeLayout {
   double boxLeft = 0; // where the node's box begins (item-child inset)
 
   // Table layout (kind == 'table').
-  List<_TableCell> tableCells = const [];
+  List<_TableCell> _tableCells = const [];
   double tableTop = 0;
   double tableHeight = 0;
   bool tableHeader = false;
@@ -716,16 +716,11 @@ class RenderDocument extends RenderBox {
     return byKind;
   }();
 
-  final List<_NodeLayout> _layouts = [];
+  final List<NodeLayout> _layouts = [];
 
-  /// Retained text-pipeline painters, keyed by node id, reused across layout
-  /// passes when a block's rendered span + width is unchanged (see [_CachedText]).
-  /// This is the layout-side of the paint-side viewport cull: it turns the
-  /// old "dispose + re-shape every block every keystroke" into "re-shape only
-  /// the blocks whose inputs actually changed". Ownership: entries here own
-  /// their painters; a text [_NodeLayout] merely references the same object and
-  /// never disposes it (only atomic renderers' painters are per-pass, see
-  /// [performLayout] / [dispose]).
+  /// Retained painters keyed by node id; re-shape only when span/width changes.
+  /// Entries own their painters; text layouts borrow them. Atomic painters
+  /// remain per-pass (see [performLayout] / [dispose]).
   final Map<String, _CachedText> _painterCache = {};
 
   /// Set when the system/web fonts finish loading: reused painters hold shaped
@@ -736,11 +731,11 @@ class RenderDocument extends RenderBox {
   /// Whole-layout reuse cache (Phase 2), keyed by node id. On a keystroke only
   /// the edited block's text/data instance changes; every other text block is
   /// served from here — skipping marks/span/highlight/rect work entirely, just
-  /// [_NodeLayout.shiftBy] to its new Y. Only text layouts (renderedBy == null)
+  /// [NodeLayout.shiftBy] to its new Y. Only text layouts (renderedBy == null)
   /// live here; their painters are owned by [_painterCache] (this holds the same
   /// object, never a second painter). Invalidated wholesale when width or
   /// appearance changes (neither is in the per-block identity check).
-  final Map<String, _NodeLayout> _layoutCache = {};
+  final Map<String, NodeLayout> _layoutCache = {};
   double _lastLayoutMaxWidth = double.nan;
   EditorAppearance? _lastLayoutAppearance;
 
@@ -1278,7 +1273,7 @@ class RenderDocument extends RenderBox {
     // and are reused (freed on eviction/prune/dispose, not per pass).
     for (final l in _layouts) {
       if (l.renderedBy != null || l.hidden) l.painter.dispose();
-      for (final cell in l.tableCells) {
+      for (final cell in l._tableCells) {
         cell.painter.dispose();
       }
     }
@@ -1304,7 +1299,7 @@ class RenderDocument extends RenderBox {
     // when the quote ends or a `qbreak` starts a non-alert group. Mirrors the
     // quote-bar grouping so the tint/bar span the whole callout.
     String? quoteAlert;
-    // Nodes an earlier renderer absorbed (see [_NodeLayout.absorbs]). Filled as
+    // Nodes an earlier renderer absorbed (see [NodeLayout.absorbs]). Filled as
     // the loop goes; a renderer only ever absorbs nodes ahead of itself.
     final absorbed = <int>{};
     for (var nodeIndex = 0; nodeIndex < _nodes.length; nodeIndex++) {
@@ -1605,7 +1600,7 @@ class RenderDocument extends RenderBox {
         );
       }
 
-      final layout = _NodeLayout(painter)
+      final layout = NodeLayout(painter)
         ..fold = fold
         ..contentLeft = contentLeft
         ..kind = node.kind
@@ -1802,7 +1797,7 @@ class RenderDocument extends RenderBox {
       }
 
       // Record the inputs this layout was shaped from so a later pass can reuse
-      // it wholesale (identity == unchanged; see [_NodeLayout.srcText]).
+      // it wholesale (identity == unchanged; see [NodeLayout.srcText]).
       layout.srcText = node.text;
       layout.srcData = node.data;
       _layoutCache[node.id] = layout;
@@ -1937,13 +1932,13 @@ class RenderDocument extends RenderBox {
   /// block above it (a collapsed `<details>` body). Every paint layer routes
   /// through this one predicate, so a folded-away node cannot leak a quote bar,
   /// a selection wash or a scrollbar into the gap it left behind.
-  bool _nodeVisible(_NodeLayout l) =>
+  bool _nodeVisible(NodeLayout l) =>
       !l.hidden && l.boxTop + l.boxHeight >= _visTop && l.boxTop <= _visBottom;
 
   /// A zero-height stand-in for a node another block absorbed. It keeps
   /// `_layouts` index-aligned with `_nodes` without drawing anything.
-  _NodeLayout _hiddenLayout(EditorNode node, double y) =>
-      _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+  NodeLayout _hiddenLayout(EditorNode node, double y) =>
+      NodeLayout(TextPainter(textDirection: TextDirection.ltr))
         ..kind = node.kind
         ..nodeId = node.id
         ..hidden = true
@@ -2175,7 +2170,7 @@ class RenderDocument extends RenderBox {
   /// A callout's title strip: the type icon + label (e.g. a blue circle-i and
   /// "Note") in the accent color, painted in the header space reserved above
   /// the head block's text. Reuses the quote pipeline's chrome — no new block.
-  void _paintAlertTitle(Canvas canvas, Offset offset, _NodeLayout l) {
+  void _paintAlertTitle(Canvas canvas, Offset offset, NodeLayout l) {
     final type = l.alert!;
     final accent = _alertAccent(type);
     final left = offset.dx + l.contentLeft;
@@ -2214,10 +2209,10 @@ class RenderDocument extends RenderBox {
   }
 
   /// Line numbers in the reserved strip left of the code (contentLeft already
-  /// includes [_NodeLayout.lineNumGutter]). Fixed horizontally — they don't
+  /// includes [NodeLayout.lineNumGutter]). Fixed horizontally — they don't
   /// scroll with the code. Only a logical line's FIRST visual row gets a number;
   /// a soft-wrapped line's continuation rows stay blank (SiYuan-style).
-  void _paintLineNumbers(Canvas canvas, Offset origin, _NodeLayout l) {
+  void _paintLineNumbers(Canvas canvas, Offset origin, NodeLayout l) {
     final metrics = l.painter.computeLineMetrics();
     if (metrics.isEmpty) return;
     final text = l.painter.text?.toPlainText() ?? '';
@@ -2255,7 +2250,7 @@ class RenderDocument extends RenderBox {
   }
 
   /// The fold/expand affordance strip (centered) for a foldable code block.
-  void _paintFoldBar(Canvas canvas, Offset offset, _NodeLayout l) {
+  void _paintFoldBar(Canvas canvas, Offset offset, NodeLayout l) {
     final r = l.collapseButton!.shift(offset);
     // `l10nNoContext`, not a string pushed in through DocumentSurface: a
     // RenderBox has no BuildContext, and threading a strings bundle through
@@ -2286,7 +2281,7 @@ class RenderDocument extends RenderBox {
 
   /// The code block's caption — centered in the strip just BELOW the panel
   /// (AFFiNE-style), muted.
-  void _paintCodeTitle(Canvas canvas, Offset offset, _NodeLayout l) {
+  void _paintCodeTitle(Canvas canvas, Offset offset, NodeLayout l) {
     final r = l.titleRect!.shift(offset);
     final tp = TextPainter(
       text: TextSpan(
@@ -2310,7 +2305,7 @@ class RenderDocument extends RenderBox {
   void _paintCodeToolbar(
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     final label = l.langLabel;
@@ -2380,7 +2375,7 @@ class RenderDocument extends RenderBox {
   void _paintViewTabs(
     Canvas canvas,
     Offset offset,
-    _NodeLayout l, {
+    NodeLayout l, {
     required String active,
   }) {
     void tab(Rect? r0, String text, _CodeIcon icon, bool isActive) {
@@ -2619,7 +2614,7 @@ class RenderDocument extends RenderBox {
     return false;
   }
 
-  ({double left, double width, double maxScroll}) _thumb(_NodeLayout l) {
+  ({double left, double width, double maxScroll}) _thumb(NodeLayout l) {
     final track = l.scrollTrack!;
     final visible = l.codeVisible;
     final maxScroll = (l.codeWidth - visible).clamp(0.0, double.infinity);
@@ -2945,8 +2940,9 @@ class RenderDocument extends RenderBox {
     if (_commentHighlights.isEmpty) return;
     for (final h in _commentHighlights) {
       final startIdx = _layouts.indexWhere((l) => l.nodeId == h.startBlock);
-      if (startIdx < 0)
+      if (startIdx < 0) {
         continue; // the anchored block is gone → nothing to wash
+      }
       // A single-block range is the common case and needs no search. For the rest
       // the range runs from startBlock to endBlock in DOCUMENT order.
       var endIdx = h.endBlock == h.startBlock
@@ -3091,7 +3087,7 @@ class RenderDocument extends RenderBox {
     if (node < 0 || node >= _layouts.length) return null;
     final l = _layouts[node];
     if (l.kind != 'table') return null;
-    for (final cell in l.tableCells) {
+    for (final cell in l._tableCells) {
       if (cell.row == row && cell.col == col) return cell.rect;
     }
     return null;
@@ -3155,10 +3151,10 @@ class RenderDocument extends RenderBox {
   List<double> tableEffectiveWeights(int index) {
     if (index < 0 || index >= _layouts.length) return const [];
     final l = _layouts[index];
-    if (l.kind != 'table' || l.tableCells.isEmpty) return const [];
+    if (l.kind != 'table' || l._tableCells.isEmpty) return const [];
     // Cells are built row-major: the first row's rects span every column.
     final widths = <double>[];
-    for (final cell in l.tableCells) {
+    for (final cell in l._tableCells) {
       if (cell.row != 0) break;
       widths.add(cell.rect.width);
     }
@@ -3375,8 +3371,9 @@ class RenderDocument extends RenderBox {
     if (rect == null) return null;
     final x = goalX ?? rect.left;
     final probe = positionAt(Offset(x, rect.bottom + rect.height * 0.5));
-    if (probe != pos && probe.node == pos.node)
+    if (probe != pos && probe.node == pos.node) {
       return probe; // moved down a line
+    }
     final last = _layouts.length - 1;
     return _stepToNode(pos.node + 1, x, fromBottom: false) ??
         DocPosition(last, _nodes[last].text.length);
@@ -3579,10 +3576,10 @@ class RenderDocument extends RenderBox {
   @override
   void dispose() {
     // Text-pipeline painters are owned by _painterCache; disposing them here too
-    // would double-free (a text _NodeLayout only references the cached painter).
+    // would double-free (a text NodeLayout only references the cached painter).
     for (final l in _layouts) {
       if (l.renderedBy != null || l.hidden) l.painter.dispose();
-      for (final cell in l.tableCells) {
+      for (final cell in l._tableCells) {
         cell.painter.dispose();
       }
     }

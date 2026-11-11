@@ -268,7 +268,7 @@ class EditorController extends ChangeNotifier {
   /// command needs its own atom-awareness.
   DocSelection? _snapSelectionOutOfAtoms(DocSelection? sel) {
     if (sel == null) return null;
-    final marksAt = (int node) => node >= 0 && node < nodes.length
+    List<Mark> marksAt(int node) => node >= 0 && node < nodes.length
         ? marksFromData(nodes[node].data)
         : const <Mark>[];
     if (sel.isCollapsed) {
@@ -1496,7 +1496,7 @@ class EditorController extends ChangeNotifier {
       final node = nodes[i];
       if (node.isAtomic || node.kind == 'code_block') continue;
       final marks = node.data['marks'];
-      final nd = <String, dynamic>{if (marks != null) 'marks': marks, ...?data};
+      final nd = <String, dynamic>{'marks': ?marks, ...?data};
       node
         ..kind = kind
         ..data = nd;
@@ -2752,8 +2752,8 @@ class EditorController extends ChangeNotifier {
     final i = sel.focus.node;
     if (i >= nodes.length) return;
     final data = <String, dynamic>{
-      if (fileId != null) 'file_id': fileId,
-      if (url != null) 'url': url,
+      'file_id': ?fileId,
+      'url': ?url,
       'name': name ?? (url == null ? '' : url.split('/').last),
       'align': ?align,
     };

@@ -18,9 +18,9 @@ EditorNode _table3x3() => EditorNode(
       kind: 'table',
       text: '',
       data: TableData([
-        [TableCell('h1'), TableCell('h2'), TableCell('h3')],
-        [TableCell('a1'), TableCell('a2'), TableCell('a3')],
-        [TableCell('b1'), TableCell('b2'), TableCell('b3')],
+        [const TableCell('h1'), const TableCell('h2'), const TableCell('h3')],
+        [const TableCell('a1'), const TableCell('a2'), const TableCell('a3')],
+        [const TableCell('b1'), const TableCell('b2'), const TableCell('b3')],
       ]).toBlockData(),
     );
 
@@ -52,8 +52,8 @@ void main() {
 
   test('resetTableColumnWidths returns every weight to 1.0 (auto-fit mode)', () {
     final table = TableData([
-      [TableCell('a'), TableCell('b')],
-      [TableCell('c'), TableCell('d')],
+      [const TableCell('a'), const TableCell('b')],
+      [const TableCell('c'), const TableCell('d')],
     ], widths: [3.0, 1.0]);
     final c = _doc([
       EditorNode(id: 't', kind: 'table', text: '', data: table.toBlockData()),

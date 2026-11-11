@@ -14,7 +14,6 @@
 // a correct tree.)
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/api/models.dart' show SearchResult;
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';

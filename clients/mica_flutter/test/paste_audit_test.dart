@@ -277,7 +277,7 @@ void main() {
 
     test('a paragraph after the run is not absorbed into the last item', () {
       final blocks = markdownCodec.parseBlocks(htmlToMarkdown(
-        msoP(1, '·', 'alpha') + '<p>plain tail</p>',
+        '${msoP(1, '·', 'alpha')}<p>plain tail</p>',
       ));
       expect(blocks.last.kind, 'paragraph');
       expect(blocks.last.text, 'plain tail');

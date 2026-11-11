@@ -84,7 +84,7 @@ void main() {
       ..data = {
         'marks': marksToJson([Mark(2, 4, 'italic')]),
       };
-    c.selection = DocSelection.collapsed(const DocPosition(0, 6));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 6));
     c.applyInputRules();
     final marks = marksFromData(c.nodes[0].data);
     expect(c.nodes[0].text, 'hi');

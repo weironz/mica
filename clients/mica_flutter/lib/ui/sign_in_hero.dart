@@ -72,11 +72,11 @@ class SignInHero extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              const Row(
                 children: [
-                  const MicaLogo(size: 34),
-                  const SizedBox(width: 11),
-                  const Text(
+                  MicaLogo(size: 34),
+                  SizedBox(width: 11),
+                  Text(
                     'Mica',
                     style: TextStyle(
                       fontSize: 26,

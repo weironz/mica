@@ -311,8 +311,9 @@ void main_() {
           replay: concatReplay,
           dbName: db,
         );
-        if (b2 == null)
+        if (b2 == null) {
           await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
       }
       expect(
         b2,
@@ -418,7 +419,7 @@ void main_() {
       final session = CloudSyncSession(
         uri: () async => Uri.parse('ws://unused.invalid'),
         clientId: BigInt.one,
-        onReady: (_, __) {},
+        onReady: (_, _) {},
         onRemoteChange: () {},
         persistence: s,
       )..debugAttachReplica(CloudSyncTestReplica());

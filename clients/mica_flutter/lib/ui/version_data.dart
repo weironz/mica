@@ -49,8 +49,9 @@ VersionDay versionDayOf(DateTime when, {DateTime? now}) {
   final d = DateTime(when.year, when.month, when.day);
   final today = DateTime(ref.year, ref.month, ref.day);
   final delta = today.difference(d).inDays;
-  if (delta <= 0)
+  if (delta <= 0) {
     return VersionDay.today; // future clock skew still reads today
+  }
   if (delta == 1) return VersionDay.yesterday;
   return VersionDay.earlier;
 }

@@ -45,8 +45,8 @@ void main() {
     c.load([
       EditorNode(id: 'b0', kind: 'code_block', text: codeText, data: {'language': 'rust'}),
     ]);
-    c.selection = DocSelection(
-      anchor: const DocPosition(0, 0),
+    c.selection = const DocSelection(
+      anchor: DocPosition(0, 0),
       focus: DocPosition(0, codeText.length),
     );
     final md = c.selectionText();

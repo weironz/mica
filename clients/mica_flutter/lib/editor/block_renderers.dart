@@ -24,7 +24,7 @@ abstract class AtomicBlockRenderer {
   /// isn't ready (or failed), and mermaid declines while the caret sits in
   /// the block, so the source stays visible and editable as plain text.
   /// [index] is the node's position — for consulting the selection.
-  _NodeLayout? layout(
+  NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
     int index,
@@ -37,7 +37,7 @@ abstract class AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   );
 
@@ -50,7 +50,7 @@ abstract class AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {}
 
@@ -72,7 +72,7 @@ abstract class AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {}
 
@@ -83,7 +83,7 @@ abstract class AtomicBlockRenderer {
   /// dispatch over this: scan the layouts, ask the renderer that produced
   /// each, cast the answer back to the renderer's own hit type. Default:
   /// nothing is hit.
-  Object? hitTest(RenderDocument host, _NodeLayout l, Offset local) => null;
+  Object? hitTest(RenderDocument host, NodeLayout l, Offset local) => null;
 
   /// Paint the block's whole-block selection highlight — the layer
   /// [RenderDocument] draws on top of a selected atomic node's opaque
@@ -97,7 +97,7 @@ abstract class AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l, {
+    NodeLayout l, {
     required bool border,
   }) {
     paintAtomicBlockSelection(host, canvas, offset, l, border: border);
@@ -112,7 +112,7 @@ void paintAtomicBlockSelection(
   RenderDocument host,
   Canvas canvas,
   Offset offset,
-  _NodeLayout l, {
+  NodeLayout l, {
   required bool border,
 }) {
   // Start at the block's own left edge — drawing from x=0 spilled the
@@ -157,7 +157,7 @@ class MathBlockRenderer extends AtomicBlockRenderer {
       node.text.trim().isEmpty ? null : (id: 'math', source: node.text);
 
   @override
-  _NodeLayout? layout(
+  NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
     int index,
@@ -182,7 +182,7 @@ class MathBlockRenderer extends AtomicBlockRenderer {
       h *= avail / w;
       w = avail;
     }
-    return _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+    return NodeLayout(TextPainter(textDirection: TextDirection.ltr))
       ..kind = 'math_block'
       ..nodeId = node.id
       ..boxLeft = EditorTheme.gutter
@@ -201,7 +201,7 @@ class MathBlockRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     canvas.drawRRect(
@@ -226,7 +226,7 @@ class MathBlockRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     final source = host._nodes[index].text;
@@ -260,7 +260,7 @@ class MathBlockRenderer extends AtomicBlockRenderer {
 final class ImageHit {
   const ImageHit({this.body = false, this.action, this.resize = false});
 
-  /// The point is inside the painted picture rect ([_NodeLayout.imageDst]).
+  /// The point is inside the painted picture rect ([NodeLayout.imageDst]).
   final bool body;
 
   /// Toolbar button action under the point (see `_imageActions`), or null.
@@ -281,7 +281,7 @@ class ImageRenderer extends AtomicBlockRenderer {
       (node.data['file_id'] ?? node.data['url']) as String?;
 
   /// The node's load key: our storage `file_id`, or the external `url`.
-  static String? _key(RenderDocument host, _NodeLayout l) {
+  static String? _key(RenderDocument host, NodeLayout l) {
     final node = host._nodes.firstWhere(
       (n) => n.id == l.nodeId,
       orElse: () => EditorNode(id: '', kind: 'paragraph', text: ''),
@@ -290,7 +290,7 @@ class ImageRenderer extends AtomicBlockRenderer {
   }
 
   @override
-  _NodeLayout? layout(
+  NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
     int index,
@@ -345,7 +345,7 @@ class ImageRenderer extends AtomicBlockRenderer {
     // as a code block's title (reuses titleRect/codeTitle).
     final caption = (node.data['caption'] as String?)?.trim() ?? '';
     final captionH = caption.isEmpty ? 0.0 : RenderDocument._codeTitleH;
-    final layout = _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+    final layout = NodeLayout(TextPainter(textDirection: TextDirection.ltr))
       ..kind = 'image'
       ..nodeId = node.id
       ..contentLeft = left
@@ -369,7 +369,7 @@ class ImageRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     final dst = l.imageDst;
@@ -498,7 +498,7 @@ class ImageRenderer extends AtomicBlockRenderer {
   }
 
   @override
-  ImageHit? hitTest(RenderDocument host, _NodeLayout l, Offset local) {
+  ImageHit? hitTest(RenderDocument host, NodeLayout l, Offset local) {
     String? action;
     for (var k = 0; k < l.imageButtons.length; k++) {
       if (l.imageButtons[k].contains(local)) {
@@ -517,7 +517,7 @@ class ImageRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l, {
+    NodeLayout l, {
     required bool border,
   }) {
     final dst = l.imageDst;
@@ -554,7 +554,7 @@ class ImageRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     if (host._hoverImage != index) return;
@@ -658,7 +658,7 @@ class TableRenderer extends AtomicBlockRenderer {
   String get kind => 'table';
 
   @override
-  _NodeLayout? layout(
+  NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
     int index,
@@ -811,7 +811,7 @@ class TableRenderer extends AtomicBlockRenderer {
     ];
 
     final layout =
-        _NodeLayout(
+        NodeLayout(
             TextPainter(
               text: const TextSpan(text: ''),
               textDirection: TextDirection.ltr,
@@ -828,7 +828,7 @@ class TableRenderer extends AtomicBlockRenderer {
               RenderDocument._tTopGutter +
               gridHeight +
               RenderDocument._tBottomBar
-          ..tableCells = cells
+          .._tableCells = cells
           ..tableTop = gridTop
           ..tableHeight = gridHeight
           ..tableHeader = table.header
@@ -868,13 +868,13 @@ class TableRenderer extends AtomicBlockRenderer {
   }
 
   @override
-  TableHit? hitTest(RenderDocument host, _NodeLayout l, Offset local) {
+  TableHit? hitTest(RenderDocument host, NodeLayout l, Offset local) {
     ({int row, int col, Rect rect})? cell;
     int? rowHandle;
     int? colHandle;
     int? colBorder;
     bool? addColumn;
-    for (final c in l.tableCells) {
+    for (final c in l._tableCells) {
       if (c.rect.contains(local)) {
         cell = (row: c.row, col: c.col, rect: c.rect);
         break;
@@ -929,8 +929,8 @@ class TableRenderer extends AtomicBlockRenderer {
   /// the grid first, so a drag that wanders past the table's edge still
   /// resolves to an edge cell (keeps a cross-cell area drag live outside the
   /// borders).
-  ({int row, int col})? cellNear(_NodeLayout l, Offset local) {
-    if (l.tableCells.isEmpty) return null;
+  ({int row, int col})? cellNear(NodeLayout l, Offset local) {
+    if (l._tableCells.isEmpty) return null;
     final grid = l.tableGridRect;
     final p = grid == null
         ? local
@@ -938,13 +938,13 @@ class TableRenderer extends AtomicBlockRenderer {
             local.dx.clamp(grid.left + 0.5, grid.right - 0.5),
             local.dy.clamp(grid.top + 0.5, grid.bottom - 0.5),
           );
-    for (final cell in l.tableCells) {
+    for (final cell in l._tableCells) {
       if (cell.rect.contains(p)) return (row: cell.row, col: cell.col);
     }
     // On a border line: fall back to the nearest cell center.
     _TableCell? best;
     var bestD = double.infinity;
-    for (final cell in l.tableCells) {
+    for (final cell in l._tableCells) {
       final d = (cell.rect.center - p).distanceSquared;
       if (d < bestD) {
         bestD = d;
@@ -959,7 +959,7 @@ class TableRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l, {
+    NodeLayout l, {
     required bool border,
   }) {
     final editing = host._editingCell;
@@ -988,7 +988,7 @@ class TableRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     final border = Paint()
@@ -997,7 +997,7 @@ class TableRenderer extends AtomicBlockRenderer {
       ..strokeWidth = 1;
     final headerBg = Paint()..color = host._appearance.tokens.surface.sunken;
     final editing = host._editingCell;
-    for (final cell in l.tableCells) {
+    for (final cell in l._tableCells) {
       final r = cell.rect.shift(offset);
       if (cell.header) canvas.drawRect(r, headerBg);
       canvas.drawRect(r, border);
@@ -1016,7 +1016,7 @@ class TableRenderer extends AtomicBlockRenderer {
     final bs = host._tableBlockSel;
     if (bs != null && bs.node == index) {
       Rect? band;
-      for (final cell in l.tableCells) {
+      for (final cell in l._tableCells) {
         if (cell.row >= bs.r0 &&
             cell.row <= bs.r1 &&
             cell.col >= bs.c0 &&
@@ -1133,10 +1133,12 @@ class TableRenderer extends AtomicBlockRenderer {
     // column / last row (or already on the strip itself).
     final cols = l.colHandles.length;
     final rows = l.rowHandles.length;
-    if (th != null && (th.onAddCol || th.col == cols - 1))
+    if (th != null && (th.onAddCol || th.col == cols - 1)) {
       plusBar(l.addColBar, true);
-    if (th != null && (th.onAddRow || th.row == rows - 1))
+    }
+    if (th != null && (th.onAddRow || th.row == rows - 1)) {
       plusBar(l.addRowBar, false);
+    }
 
     void cornerIcon(Rect? rect, IconData icon, Color color) {
       if (rect == null) return;
@@ -1202,7 +1204,7 @@ class MermaidRenderer extends AtomicBlockRenderer {
       (host.size.width - EditorTheme.gutter - 24).clamp(40.0, double.infinity);
 
   @override
-  _NodeLayout? layout(
+  NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
     int index,
@@ -1242,7 +1244,7 @@ class MermaidRenderer extends AtomicBlockRenderer {
     // hit-testing runs text-position math against it (unlike the atomic
     // kinds, whose clicks take the block path). Empty text → offset 0 →
     // the caret lands in the block → next layout declines → source form.
-    return _NodeLayout(
+    return NodeLayout(
         TextPainter(
           text: const TextSpan(text: ''),
           textDirection: TextDirection.ltr,
@@ -1278,7 +1280,7 @@ class MermaidRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     final source = host._nodes[index].text;
@@ -1318,7 +1320,7 @@ class MermaidRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     // The [code|preview] switch only surfaces on hover, so at rest the
@@ -1345,7 +1347,7 @@ class MermaidRenderer extends AtomicBlockRenderer {
 ///   never looked inside it.
 /// - **Blank-line** (what GitHub's docs recommend) is N+2 blocks: this renderer
 ///   claims the opening tags, and ABSORBS the body blocks and the closing
-///   `</details>` block via [_NodeLayout.absorbs] — collapsed hides all of
+///   `</details>` block via [NodeLayout.absorbs] — collapsed hides all of
 ///   them, expanded hides only the closer (the body is ordinary Markdown, laid
 ///   out and edited by the normal pipeline).
 ///
@@ -1379,7 +1381,7 @@ class DetailsRenderer extends AtomicBlockRenderer {
   }
 
   @override
-  _NodeLayout? layout(
+  NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
     int index,
@@ -1471,7 +1473,7 @@ class DetailsRenderer extends AtomicBlockRenderer {
     final firstLineH =
         painter.computeLineMetrics().firstOrNull?.height ?? painter.height;
 
-    return _NodeLayout(painter)
+    return NodeLayout(painter)
       ..kind = 'code_block'
       ..nodeId = node.id
       ..boxLeft = left
@@ -1495,7 +1497,7 @@ class DetailsRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     final tokens = host._appearance.tokens;
@@ -1544,7 +1546,7 @@ class DividerRenderer extends AtomicBlockRenderer {
   bool get selectsWholeBlockOnClick => true;
 
   @override
-  _NodeLayout? layout(
+  NodeLayout? layout(
     RenderDocument host,
     EditorNode node,
     int index,
@@ -1552,7 +1554,7 @@ class DividerRenderer extends AtomicBlockRenderer {
     double maxWidth,
   ) {
     final liInset = node.liLevel != null ? 26.0 + 24.0 * node.liLevel! : 0.0;
-    return _NodeLayout(TextPainter(textDirection: TextDirection.ltr))
+    return NodeLayout(TextPainter(textDirection: TextDirection.ltr))
       ..kind = 'divider'
       ..nodeId = node.id
       ..quoteDepth = node.quoteDepth
@@ -1569,7 +1571,7 @@ class DividerRenderer extends AtomicBlockRenderer {
     RenderDocument host,
     Canvas canvas,
     Offset offset,
-    _NodeLayout l,
+    NodeLayout l,
     int index,
   ) {
     final cy = offset.dy + l.boxTop + l.boxHeight / 2;

@@ -660,7 +660,7 @@ class CloudSyncSession {
   /// True when a thrown persistence error is the desktop FFI's
   /// present-but-unreadable marker — `StoreError::CorruptDoc`, whose `#[error]`
   /// template lives in `crates/mica-core/src/store.rs` ("corrupt local CRDT
-  /// state for <docId> (checksum or yrs integration failed)"). Matching the
+  /// state for &lt;docId&gt; (checksum or yrs integration failed)"). Matching the
   /// template (not the exception TYPE) because flutter_rust_bridge delivers
   /// `Result<_, String>` errors as opaque strings — the message is the only
   /// cross-FFI signal, and it stays stable as long as the Rust variant does.

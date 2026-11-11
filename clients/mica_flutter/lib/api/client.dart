@@ -917,7 +917,7 @@ class ApiClient {
             return;
         }
       }
-      throw ApiException('AI stream ended before completion');
+      throw const ApiException('AI stream ended before completion');
     } finally {
       await channel.sink.close();
     }
@@ -1227,7 +1227,7 @@ class ApiClient {
       if (baseUrl != null && baseUrl.isNotEmpty) 'base_url': baseUrl,
       // Omitted, not empty: the server treats a present-but-empty model as an
       // instruction to CLEAR it, which wiped a provider model on every switch.
-      if (model != null) 'model': model,
+      'model': ?model,
     };
     if (apiKey != null && apiKey.isNotEmpty) {
       body['api_key'] = apiKey;

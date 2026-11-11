@@ -23,8 +23,8 @@ EditorController _doc() {
       kind: 'table',
       text: '',
       data: TableData([
-        [TableCell('A'), TableCell('B')],
-        [TableCell('a1'), TableCell('b1')],
+        [const TableCell('A'), const TableCell('B')],
+        [const TableCell('a1'), const TableCell('b1')],
       ], header: true, widths: [1.0, 1.0]).toBlockData(),
     ),
   ]);
@@ -56,7 +56,7 @@ void main() {
 
   test('undo restores a cell edit', () {
     final c = _doc();
-    c.setTableCell(0, 1, 0, TableCell('changed'));
+    c.setTableCell(0, 1, 0, const TableCell('changed'));
     expect(TableData.fromBlock(c.nodes.single.data).rows[1][0].text, 'changed');
 
     c.undo();

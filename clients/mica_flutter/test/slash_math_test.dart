@@ -197,7 +197,7 @@ void main() {
     ]);
     // Selection stuck inside the atomic block (e.g. a focus/echo race) —
     // the echoed text must be dropped, not written into the formula.
-    c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 0));
     c.setFocusedText('/math', 5, 5);
     expect(c.nodes[0].text, r'E = mc^2');
     expect(c.nodes[0].kind, 'math_block');
@@ -206,7 +206,7 @@ void main() {
   test('applySlashCommand to an atomic kind parks the caret after it', () {
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
     c.load([EditorNode(id: 'a', kind: 'paragraph', text: '/math')]);
-    c.selection = DocSelection.collapsed(const DocPosition(0, 5));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 5));
     c.applySlashCommand(0, 5, 'math_block', {});
     expect(c.nodes[0].kind, 'math_block');
     expect(c.nodes.length, 2, reason: 'a trailing paragraph is created');

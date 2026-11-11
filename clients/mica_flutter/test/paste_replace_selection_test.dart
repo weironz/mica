@@ -34,9 +34,9 @@ void main() {
 
     test('whole single block selected → replaced, not duplicated', () {
       final c = _doc([EditorNode(id: 'a', kind: 'paragraph', text: 'old')]);
-      c.selection = DocSelection(
-        anchor: const DocPosition(0, 0),
-        focus: const DocPosition(0, 3),
+      c.selection = const DocSelection(
+        anchor: DocPosition(0, 0),
+        focus: DocPosition(0, 3),
       );
       c.insertBlocksReplacingSelection([_p('new')]);
       expect(c.nodes.length, 1);
@@ -52,9 +52,9 @@ void main() {
 
     test('partial in-block selection: the selection is deleted', () {
       final c = _doc([EditorNode(id: 'a', kind: 'paragraph', text: 'hello world')]);
-      c.selection = DocSelection(
-        anchor: const DocPosition(0, 6),
-        focus: const DocPosition(0, 11),
+      c.selection = const DocSelection(
+        anchor: DocPosition(0, 6),
+        focus: DocPosition(0, 11),
       );
       c.insertBlocksReplacingSelection([_p('X')]);
       // "world" is gone; the remaining "hello " survives; paste follows.

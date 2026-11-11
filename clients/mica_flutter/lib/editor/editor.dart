@@ -4357,9 +4357,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // hijacking the text selection into a pan and yanking the picture out
     // of its viewport.
     final r = _render;
-    _panDownDiagram = r == null
-        ? null
-        : r.diagramAt(r.globalToLocal(d.globalPosition));
+    _panDownDiagram = r?.diagramAt(r.globalToLocal(d.globalPosition));
   }
 
   void _onPanStart(DragStartDetails d) {
@@ -5752,8 +5750,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     String name,
   ) async {
     final upload = widget.onUploadImage;
-    if (upload == null || !mounted || !_focus.hasFocus || !widget.canEdit)
+    if (upload == null || !mounted || !_focus.hasFocus || !widget.canEdit) {
       return;
+    }
     final result = await upload(bytes, name, mime);
     if (result == null || !mounted) return;
     _primeImage(result.fileId, bytes);

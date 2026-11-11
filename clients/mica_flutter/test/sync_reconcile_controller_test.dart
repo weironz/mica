@@ -17,7 +17,6 @@ import 'package:mica_flutter/cloud/cloud_sync_session.dart';
 import 'package:mica_flutter/doc_tab.dart';
 import 'package:mica_flutter/session/session_controller.dart';
 import 'package:mica_flutter/sync/sync_reconcile_controller.dart';
-import 'package:mica_flutter/cloud/sync_status.dart';
 
 // ── Fakes ──────────────────────────────────────────────────────────────────
 

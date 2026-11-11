@@ -168,7 +168,7 @@ Future<void> main() async {
 
   stdout.writeln('== waiting out the token (${_ttlSeconds}s + margin) ==');
   await closed.future.timeout(
-    Duration(seconds: _ttlSeconds + 25),
+    const Duration(seconds: _ttlSeconds + 25),
     onTimeout: () {
       stdout.writeln('  FAIL  the socket was still open past exp');
       exitCode = 1;

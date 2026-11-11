@@ -498,7 +498,7 @@ class MicaStatusToastHost extends StatelessWidget {
 /// pretends to know; hence the assert instead of a quiet fallback to
 /// indeterminate.
 class MicaProgressRow extends StatelessWidget {
-  MicaProgressRow({
+  const MicaProgressRow({
     required this.label,
     required this.done,
     required this.total,

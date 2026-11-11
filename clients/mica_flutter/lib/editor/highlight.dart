@@ -2163,8 +2163,9 @@ String detectLanguage(String code) {
         : 'javascript';
   }
   if (has(r'\bvoid\s+main\b') || c.contains('Widget build(')) return 'dart';
-  if (c.trimLeft().startsWith('{') || c.trimLeft().startsWith('['))
+  if (c.trimLeft().startsWith('{') || c.trimLeft().startsWith('[')) {
     return 'json';
+  }
   // Shell — Tier B/C: weaker syntax, checked LAST so real Python/Ruby/Perl/JS
   // (which also use `#` comments, `$` sigils, `${…}` template literals, backticks)
   // win first. Keyed on shell SYNTAX, not command vocabulary (Pygments/linguist
@@ -2196,12 +2197,14 @@ String detectLanguage(String code) {
   // `$(cmd)` and backticks: command substitution — but a JS template literal
   // `` `x ${y}` `` also has both a backtick and (bare) `${}`, so bare `${VAR}` is
   // NOT a signal here (only the shell-specific `${VAR:-…}` form, already STRONG).
-  if (has(r'\$\((?!\()') || has(r'`[^`\n$]+`'))
+  if (has(r'\$\((?!\()') || has(r'`[^`\n$]+`')) {
     weakShell++; // $(cmd) / `cmd` (no $ inside → not a template)
+  }
   if (has(r'\s(?:&&|\|\|)\s')) weakShell++;
   if (hasLine(r'^\s*(?:export|source|local|readonly)\s+\w')) weakShell++;
-  if (hasLine(r'^\s*[A-Za-z_]\w*=(?!=)\S'))
+  if (hasLine(r'^\s*[A-Za-z_]\w*=(?!=)\S')) {
     weakShell++; // VAR=value, no spaces (python/ruby space it)
+  }
   if (has(r'\becho\s+')) weakShell++;
   // Gated command list: ONE signal, and only when a shell operator co-occurs —
   // never a bare command word (that's the highlight.js over-claim bug).

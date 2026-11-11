@@ -199,7 +199,7 @@ void main() {
                   controller: controller,
                   itemCount: 100,
                   itemExtent: rowHeight,
-                  itemBuilder: (context, i) => SizedBox(height: rowHeight),
+                  itemBuilder: (context, i) => const SizedBox(height: rowHeight),
                 ),
               ),
             ),

@@ -177,7 +177,7 @@ void main() {
       hub.signIn(s, [ws('a')]);
       final auth = build(
         fetchMe:
-            (token) async => User(
+            (token) async => const User(
               id: 'u1',
               email: 'u1@t.dev',
               displayName: 'New',
@@ -208,7 +208,7 @@ void main() {
       // While the poll was in flight, the user switched accounts.
       hub.adoptSession(session(user: 'u2', name: 'B', refresh: 'other'));
       fetched.complete(
-        User(id: 'u1', email: 'u1@t.dev', displayName: 'A-changed'),
+        const User(id: 'u1', email: 'u1@t.dev', displayName: 'A-changed'),
       );
       await done;
 

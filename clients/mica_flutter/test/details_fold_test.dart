@@ -42,7 +42,7 @@ EditorNode _raw(String id, String text, {bool? collapsed}) => EditorNode(
   data: {
     'language': 'html',
     'raw': true,
-    if (collapsed != null) 'collapsed': collapsed,
+    'collapsed': ?collapsed,
   },
 );
 

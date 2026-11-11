@@ -129,9 +129,9 @@ void main() {
   test('partial single-block selection has no block marker', () {
     final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
     c.load([EditorNode(id: 'a', kind: 'heading', text: 'Title', data: {'level': 1})]);
-    c.selection = DocSelection(
-      anchor: const DocPosition(0, 0),
-      focus: const DocPosition(0, 3), // "Tit"
+    c.selection = const DocSelection(
+      anchor: DocPosition(0, 0),
+      focus: DocPosition(0, 3), // "Tit"
     );
     expect(c.selectionText(), 'Tit');
   });
@@ -144,9 +144,9 @@ void main() {
     c.load([
       EditorNode(id: 'a', kind: 'code_block', text: 'let x = 1;\nlet y = 2;', data: {'language': 'rust'}),
     ]);
-    c.selection = DocSelection(
-      anchor: const DocPosition(0, 11),
-      focus: const DocPosition(0, 20), // "let y = 2;"
+    c.selection = const DocSelection(
+      anchor: DocPosition(0, 11),
+      focus: DocPosition(0, 20), // "let y = 2;"
     );
     final md = c.selectionText();
     expect(md, contains('```rust'));

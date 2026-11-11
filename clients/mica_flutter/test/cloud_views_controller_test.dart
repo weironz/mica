@@ -14,7 +14,7 @@ import 'package:mica_flutter/views/cloud_views_controller.dart';
 void main() {
   AuthSession session(String token) => AuthSession(
         accessToken: token,
-        user: User(id: 'u', email: 'u@t.dev', displayName: 'U'),
+        user: const User(id: 'u', email: 'u@t.dev', displayName: 'U'),
       );
 
   Workspace ws(String id, {String name = 'W', String role = 'owner'}) =>
@@ -40,10 +40,10 @@ void main() {
   DocumentBootstrap boot(String id) => DocumentBootstrap(
         document: DocumentRecord(id: 'doc-$id', rootBlockId: 'r', currentSeq: 0),
         view: view(id),
-        snapshot: DocumentSnapshot(
+        snapshot: const DocumentSnapshot(
           versionSeq: 1,
           schemaVersion: 1,
-          payload: const {},
+          payload: {},
         ),
       );
 
@@ -467,7 +467,7 @@ void main() {
       final body = Completer<DocumentBootstrap>();
       final started = Completer<void>();
       createAnswer['P'] = DocumentCreateResult(
-        document: DocumentRecord(id: 'd1', rootBlockId: 'r', currentSeq: 0),
+        document: const DocumentRecord(id: 'd1', rootBlockId: 'r', currentSeq: 0),
         view: view('created'),
       );
       final controller = buildController(fetchBootstrap: () {

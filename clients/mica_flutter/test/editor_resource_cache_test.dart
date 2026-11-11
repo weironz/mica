@@ -135,10 +135,11 @@ Future<void> _frames(
   bool decode = false,
 }) async {
   for (var i = 0; i < count; i++) {
-    if (decode)
+    if (decode) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 4)),
       );
+    }
     await tester.pump(const Duration(milliseconds: 16));
   }
 }
@@ -463,12 +464,13 @@ void main() {
       final (sample, decoded) = await _imageSample(tester, count);
       expect(decoded, isTrue, reason: 'real PNG decode must complete');
       _expectIdle(sample, 'PNG / $count');
-      if (count > 64)
+      if (count > 64) {
         expect(
           sample.farCalls,
           0,
           reason: 'far images must remain unrequested',
         );
+      }
     });
   }
 }

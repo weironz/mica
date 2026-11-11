@@ -10,7 +10,6 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/cloud/cloud_doc_store.dart';
 import 'package:mica_flutter/cloud/cloud_sync_session.dart';
 
 /// The FFI throw shape the session must recognise as "corrupt" — the exact
@@ -75,7 +74,7 @@ CloudSyncSession _session(CloudDocStore store, void Function() onUri) {
       return Uri.parse('ws://127.0.0.1:1/ws');
     },
     clientId: BigInt.from(7),
-    onReady: (_, __) {},
+    onReady: (_, _) {},
     onRemoteChange: () {},
     persistence: store,
     documentId: 'doc-1',

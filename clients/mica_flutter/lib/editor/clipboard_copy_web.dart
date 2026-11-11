@@ -15,12 +15,13 @@ Future<bool> copyTextToClipboard(String text) async {
     // Fall through to the legacy path below.
   }
   try {
-    final area = web.document.createElement('textarea') as web.HTMLTextAreaElement
-      ..value = text
-      ..setAttribute('readonly', '')
-      ..style.position = 'fixed'
-      ..style.left = '-10000px'
-      ..style.top = '0';
+    final area =
+        web.document.createElement('textarea') as web.HTMLTextAreaElement
+          ..value = text
+          ..setAttribute('readonly', '')
+          ..style.position = 'fixed'
+          ..style.left = '-10000px'
+          ..style.top = '0';
     web.document.body?.append(area);
     area.focus();
     area.select();
@@ -65,8 +66,12 @@ Future<bool> copyRichToClipboard({
   final active = web.document.activeElement;
   // package:web keeps focus() on HTMLElement, not Element, so remember the
   // focusable form separately from the selection state we may restore.
-  final activeHtml = active is web.HTMLElement ? active : null;
-  final input = active is web.HTMLTextAreaElement ? active : null;
+  final activeHtml = active != null && active.isA<web.HTMLElement>()
+      ? active as web.HTMLElement
+      : null;
+  final input = active != null && active.isA<web.HTMLTextAreaElement>()
+      ? active as web.HTMLTextAreaElement
+      : null;
   final start = input?.selectionStart;
   final end = input?.selectionEnd;
   final area = web.document.createElement('textarea') as web.HTMLTextAreaElement

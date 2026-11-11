@@ -400,8 +400,9 @@ class WebIdbDocStore implements CloudDocStore {
     if (_broken) return;
     _tail = _tail
         .then((_) async {
-          if (_broken)
+          if (_broken) {
             return; // an earlier queued write failed → freeze consistently
+          }
           final txn = _db.transaction(_jsStoreNames, 'readwrite');
           final done = _completed(txn);
           write(txn);

@@ -75,7 +75,7 @@ void main() {
     store.setSyncCursor(
       origin: a,
       docId: id,
-      cursor: SyncCursor(lastSyncedRid: 12, pushedClock: 3),
+      cursor: const SyncCursor(lastSyncedRid: 12, pushedClock: 3),
     );
     expect(store.syncCursor(origin: b, docId: id).pushedClock, 0);
 

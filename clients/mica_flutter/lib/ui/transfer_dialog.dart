@@ -123,15 +123,17 @@ class _TransferDialogState extends State<TransferDialog> {
         dryRun: true,
       );
       // Superseded by a newer pick — of EITHER control.
-      if (!mounted || _destId != destId || _parentViewId != parentViewId)
+      if (!mounted || _destId != destId || _parentViewId != parentViewId) {
         return;
+      }
       setState(() {
         _preview = report;
         _loadingPreview = false;
       });
     } catch (error) {
-      if (!mounted || _destId != destId || _parentViewId != parentViewId)
+      if (!mounted || _destId != destId || _parentViewId != parentViewId) {
         return;
+      }
       setState(() {
         _error = context.l10n.transferFailed(error.toString());
         _loadingPreview = false;

@@ -166,7 +166,7 @@ void main() {
       var landed = '';
       c.onLanded = (w) async => landed = w.id;
       var finished = false;
-      c.onFinished = (_, __) => finished = true;
+      c.onFinished = (_, _) => finished = true;
       final loaded = <List<Workspace>>[];
       c.onWorkspacesLoaded = loaded.add;
 
@@ -191,7 +191,7 @@ void main() {
         ],
       );
       var finished = false;
-      h.controller.onFinished = (_, __) => finished = true;
+      h.controller.onFinished = (_, _) => finished = true;
       await h.controller.watch('token', 'job1', null, 'fallback', pollDelay: Duration.zero);
       expect(finished, isFalse);
     });
@@ -208,7 +208,7 @@ void main() {
       var landed = '';
       h.controller.onLanded = (w) async => landed = w.id;
       var finished = false;
-      h.controller.onFinished = (_, __) => finished = true;
+      h.controller.onFinished = (_, _) => finished = true;
       final loaded = <List<Workspace>>[];
       h.controller.onWorkspacesLoaded = loaded.add;
 
@@ -243,7 +243,7 @@ void main() {
     });
 
     test('a transport failure during polling lands in onError, state clears', () async {
-      final h = _script(jobStatusOverride: (id) => throw ApiException('network down'));
+      final h = _script(jobStatusOverride: (id) => throw const ApiException('network down'));
       final errors = <String>[];
       h.controller.onError = errors.add;
       await h.controller.watch(
@@ -261,7 +261,7 @@ void main() {
         workspaces: [_ws('ws1')],
         jobStatusOverride: (id) async {
           calls++;
-          if (calls <= 2) throw ApiException('network down');
+          if (calls <= 2) throw const ApiException('network down');
           return const ImportJobStatus(
             status: 'done', total: 2, done: 2, workspaceId: 'ws1',
           );
@@ -270,7 +270,7 @@ void main() {
       final errors = <String>[];
       h.controller.onError = errors.add;
       var finished = false;
-      h.controller.onFinished = (_, __) => finished = true;
+      h.controller.onFinished = (_, _) => finished = true;
       await h.controller.watch(
         'token', 'job1', null, 'fallback',
         pollDelay: Duration.zero, retryDelay: Duration.zero,
@@ -354,7 +354,7 @@ void main() {
       String? asked;
       final h = _script(cancelJobOverride: (token, id) async {
         asked = id;
-        if (id == 'boom') throw ApiException('nope');
+        if (id == 'boom') throw const ApiException('nope');
       });
       h.controller.attach('job9');
       await h.controller.cancel('token');
@@ -367,7 +367,7 @@ void main() {
 
     test('without a running job there is nothing to ask', () async {
       var asked = false;
-      final h = _script(cancelJobOverride: (_, __) async => asked = true);
+      final h = _script(cancelJobOverride: (_, _) async => asked = true);
       await h.controller.cancel('token');
       expect(asked, isFalse);
     });
@@ -406,7 +406,7 @@ class _Harness {
       listWorkspaces: () async => workspaces,
       rehostImage: (token, ws, doc, {required blockId, required fileName, required bytes}) async {
         rehostCalls.add((blockId: blockId, fileName: fileName));
-        if (rehostThrows) throw ApiException('refused');
+        if (rehostThrows) throw const ApiException('refused');
       },
       cancelJob: cancelJobOverride ?? (token, id) async {},
       fetchImageBytes: (url) async {

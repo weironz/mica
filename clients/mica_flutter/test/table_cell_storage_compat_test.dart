@@ -86,7 +86,7 @@ void main() {
       // What the new editor writes for a bold cell.
       final cell = TableCell('b and i', [Mark(0, 1, 'bold'), Mark(6, 7, 'italic')]);
       final data = TableData([
-        [TableCell('h')],
+        [const TableCell('h')],
         [cell],
       ]).toBlockData();
       final stored = (data['rows'] as List).last.first;
@@ -104,8 +104,8 @@ void main() {
 
     test('an unmarked cell stores source the old reader passes through', () {
       final data = TableData([
-        [TableCell('h')],
-        [TableCell('plain')],
+        [const TableCell('h')],
+        [const TableCell('plain')],
       ]).toBlockData();
       final stored = (data['rows'] as List).last.first;
       // Old reader: `cell is String` → the string itself, parsed by the old
@@ -121,8 +121,8 @@ void main() {
       // object form: new clients show plain text (consistent with editing),
       // old clients parse the stored text and show the same words.
       final data = TableData([
-        [TableCell('h')],
-        [TableCell('see https://example.com now')],
+        [const TableCell('h')],
+        [const TableCell('see https://example.com now')],
       ]).toBlockData();
       final stored = (data['rows'] as List).last.first;
       expect(stored, isA<Map>());
@@ -133,8 +133,8 @@ void main() {
 
     test('a cell with a literal `*` stores escaped source (no accidental bold)', () {
       final data = TableData([
-        [TableCell('h')],
-        [TableCell('2 * 3')],
+        [const TableCell('h')],
+        [const TableCell('2 * 3')],
       ]).toBlockData();
       final stored = (data['rows'] as List).last.first;
       expect(stored, isA<String>());
@@ -165,7 +165,7 @@ void main() {
     test('fromBlock(toBlockData(t)) == t for mark-free cells', () {
       for (final s in samples) {
         final t = TableData([
-          [TableCell('h')],
+          [const TableCell('h')],
           [TableCell(s)],
         ]);
         final back = TableData.fromBlock(t.toBlockData());
@@ -177,7 +177,7 @@ void main() {
     test('fromBlock(toBlockData(t)) == t for marked cells', () {
       final cell = TableCell('bold and code', [Mark(0, 4, 'bold'), Mark(9, 13, 'code')]);
       final t = TableData([
-        [TableCell('h')],
+        [const TableCell('h')],
         [cell],
       ]);
       final back = TableData.fromBlock(t.toBlockData());

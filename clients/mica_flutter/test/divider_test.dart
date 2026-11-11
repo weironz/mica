@@ -19,9 +19,9 @@ void main() {
   test('typing ``` or ~~~ converts to a code block', () {
     for (final fence in ['```', '~~~']) {
       final c = _fresh([_p('a', '')]);
-      c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+      c.selection = const DocSelection.collapsed(DocPosition(0, 0));
       c.nodes[0].text = fence;
-      c.selection = DocSelection.collapsed(const DocPosition(0, 3));
+      c.selection = const DocSelection.collapsed(DocPosition(0, 3));
       expect(c.applyInputRules(), isTrue, reason: fence);
       expect(c.nodes[0].kind, 'code_block', reason: fence);
       expect(c.nodes[0].text, '', reason: fence);
@@ -30,16 +30,16 @@ void main() {
 
   test('typing + space converts to a bulleted list', () {
     final c = _fresh([_p('a', '')]);
-    c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 0));
     c.nodes[0].text = '+ ';
-    c.selection = DocSelection.collapsed(const DocPosition(0, 2));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 2));
     expect(c.applyInputRules(), isTrue);
     expect(c.nodes[0].kind, 'bulleted_list');
   });
 
   test('typing a closed dollar-dollar line converts to a math block', () {
     final c = _fresh([_p('a', '')]);
-    c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 0));
     c.nodes[0].text = r'$$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$$';
     c.selection = DocSelection.collapsed(DocPosition(0, c.nodes[0].text.length));
     expect(c.applyInputRules(), isTrue);
@@ -50,9 +50,9 @@ void main() {
 
   test('typing --- converts to a divider with a trailing paragraph', () {
     final c = _fresh([_p('a', '')]);
-    c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 0));
     c.nodes[0].text = '---';
-    c.selection = DocSelection.collapsed(const DocPosition(0, 3));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 3));
     expect(c.applyInputRules(), isTrue);
 
     expect(c.nodes[0].kind, 'divider');
@@ -64,7 +64,7 @@ void main() {
 
   test('insertDivider after a non-empty paragraph inserts below it', () {
     final c = _fresh([_p('a', 'hello')]);
-    c.selection = DocSelection.collapsed(const DocPosition(0, 5));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 5));
     c.insertDivider();
 
     expect(c.nodes.map((n) => n.kind).toList(),
@@ -80,7 +80,7 @@ void main() {
       EditorNode(id: 'd', kind: 'divider', text: ''),
       _p('b', 'bottom'),
     ]);
-    c.selection = DocSelection.collapsed(const DocPosition(2, 0));
+    c.selection = const DocSelection.collapsed(DocPosition(2, 0));
     expect(c.mergeBackward(), isTrue);
 
     expect(c.nodes.map((n) => n.id).toList(), ['a', 'b']);
@@ -95,7 +95,7 @@ void main() {
 
   test('undo removes an inserted divider', () async {
     final c = _fresh([_p('a', 'hello')]);
-    c.selection = DocSelection.collapsed(const DocPosition(0, 5));
+    c.selection = const DocSelection.collapsed(DocPosition(0, 5));
     c.insertDivider();
     expect(c.nodes.any((n) => n.kind == 'divider'), isTrue);
 

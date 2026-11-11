@@ -368,8 +368,8 @@ void main() {
     // old test passed raw `**cell**` source, which the model now treats as
     // literal text — a cell the engine would decode as bold, not as `**`).
     final table = TableData([
-      [TableCell('H1'), TableCell('H2')],
-      [TableCell('cell', [Mark(0, 4, 'bold')]), TableCell('x')],
+      [const TableCell('H1'), const TableCell('H2')],
+      [TableCell('cell', [Mark(0, 4, 'bold')]), const TableCell('x')],
     ]);
     final docNodes = [
       EditorNode(
@@ -452,8 +452,8 @@ void main() {
       }),
       EditorNode(id: 'l', kind: 'bulleted_list', text: 'item'),
       EditorNode(id: 't', kind: 'table', text: '', data: TableData([
-        [TableCell('A'), TableCell('B')],
-        [TableCell('1'), TableCell('2')],
+        [const TableCell('A'), const TableCell('B')],
+        [const TableCell('1'), const TableCell('2')],
       ]).toBlockData()),
     ]);
     final md = c.documentMarkdown();

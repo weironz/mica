@@ -428,7 +428,7 @@ class _ScalarFieldState extends State<_ScalarField> {
       decoration: InputDecoration(
         isDense: true,
         isCollapsed: true,
-        contentPadding: EdgeInsets.symmetric(vertical: 4),
+        contentPadding: const EdgeInsets.symmetric(vertical: 4),
         border: InputBorder.none,
         hintText: '—',
         hintStyle: TextStyle(
@@ -570,7 +570,7 @@ class _Chip extends StatelessWidget {
             GestureDetector(
               onTap: onDeleted,
               child: Padding(
-                padding: EdgeInsets.only(left: 3),
+                padding: const EdgeInsets.only(left: 3),
                 child: Icon(
                   Icons.close,
                   size: 12,

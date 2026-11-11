@@ -10,7 +10,7 @@ import 'package:mica_flutter/session/session_controller.dart';
 void main() {
   AuthSession session(String token) => AuthSession(
         accessToken: token,
-        user: User(id: 'u', email: 'u@t.dev', displayName: 'U'),
+        user: const User(id: 'u', email: 'u@t.dev', displayName: 'U'),
       );
 
   Workspace ws(String id, {String name = 'W'}) =>

@@ -10,7 +10,7 @@ import 'package:mica_flutter/ui/theme_tokens.dart' show MicaTokens, MicaTheme;
 /// mode by accident, rather than about specific hex values.
 void main() {
   /// WCAG relative luminance.
-  double _lum(Color c) {
+  double lum(Color c) {
     double ch(double v) => v <= 0.03928
         ? v / 12.92
         : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
@@ -18,7 +18,7 @@ void main() {
   }
 
   double contrast(Color fg, Color bg) {
-    final a = _lum(fg), b = _lum(bg);
+    final a = lum(fg), b = lum(bg);
     final hi = math.max(a, b), lo = math.min(a, b);
     return (hi + 0.05) / (lo + 0.05);
   }
@@ -98,7 +98,7 @@ void main() {
       expect(MicaTokens.dark_.surface.base, isNot(const Color(0xFF000000)));
       expect(MicaTokens.dark_.text.primary, isNot(const Color(0xFFFFFFFF)));
       // And the page is genuinely dark, not merely "less white".
-      expect(_lum(MicaTokens.dark_.surface.base), lessThan(0.05));
+      expect(lum(MicaTokens.dark_.surface.base), lessThan(0.05));
     },
   );
 
@@ -107,10 +107,10 @@ void main() {
     // means lighter, not darker — getting this backwards is what makes a dark
     // theme look like flat mud.
     final d = MicaTokens.dark_;
-    expect(_lum(d.surface.raised), greaterThan(_lum(d.surface.base)));
-    expect(_lum(d.surface.overlay), greaterThan(_lum(d.surface.base)));
+    expect(lum(d.surface.raised), greaterThan(lum(d.surface.base)));
+    expect(lum(d.surface.overlay), greaterThan(lum(d.surface.base)));
     final l = MicaTokens.light;
-    expect(_lum(l.surface.raised), lessThan(_lum(l.surface.base)));
+    expect(lum(l.surface.raised), lessThan(lum(l.surface.base)));
   });
 
   test('the washes flip kind: opaque tints on light, translucent on dark', () {
@@ -133,12 +133,12 @@ void main() {
     test('halfway is between, and the discrete bits pick a side', () {
       final mid = MicaTokens.lerp(MicaTokens.light, MicaTokens.dark_, 0.5);
       expect(
-        _lum(mid.surface.base),
-        lessThan(_lum(MicaTokens.light.surface.base)),
+        lum(mid.surface.base),
+        lessThan(lum(MicaTokens.light.surface.base)),
       );
       expect(
-        _lum(mid.surface.base),
-        greaterThan(_lum(MicaTokens.dark_.surface.base)),
+        lum(mid.surface.base),
+        greaterThan(lum(MicaTokens.dark_.surface.base)),
       );
       // Alert accents are keyed, not continuous: a muddy intermediate would help
       // nobody, so it snaps.

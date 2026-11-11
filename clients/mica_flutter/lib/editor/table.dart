@@ -153,7 +153,7 @@ class TableData {
   }
 
   factory TableData.empty() => TableData([
-    [TableCell('Column 1'), TableCell('Column 2'), TableCell('Column 3')],
+    [const TableCell('Column 1'), const TableCell('Column 2'), const TableCell('Column 3')],
     [TableCell.empty, TableCell.empty, TableCell.empty],
   ]);
 

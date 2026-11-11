@@ -11,9 +11,9 @@ EditorController _doc() {
       kind: 'table',
       text: '',
       data: TableData([
-        [TableCell('A'), TableCell('B'), TableCell('C')],
-        [TableCell('a1'), TableCell('b1'), TableCell('c1')],
-        [TableCell('a2'), TableCell('b2'), TableCell('c2')],
+        [const TableCell('A'), const TableCell('B'), const TableCell('C')],
+        [const TableCell('a1'), const TableCell('b1'), const TableCell('c1')],
+        [const TableCell('a2'), const TableCell('b2'), const TableCell('c2')],
       ], header: true, widths: [1.0, 2.0, 3.0]).toBlockData(),
     ),
   ]);

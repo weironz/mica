@@ -3,10 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/editor/ai_edits.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
-import 'package:mica_flutter/editor/model.dart';
 import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/ui/page_title_field.dart';
 

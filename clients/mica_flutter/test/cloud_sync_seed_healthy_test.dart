@@ -15,7 +15,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/cloud/cloud_doc_store.dart';
 import 'package:mica_flutter/cloud/cloud_sync_session.dart';
 import 'package:mica_flutter/src/rust/api/document.dart';
 import 'package:mica_flutter/src/rust/frb_generated.dart';
@@ -181,7 +180,7 @@ void main() {
         },
         clientId: BigInt.from(9),
         persistence: _CorruptStore(),
-        onReady: (_, __) {},
+        onReady: (_, _) {},
         onRemoteChange: () {},
       );
       addTearDown(session.dispose);

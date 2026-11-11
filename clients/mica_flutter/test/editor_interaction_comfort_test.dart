@@ -191,8 +191,8 @@ void main() {
         kind: 'table',
         text: '',
         data: TableData([
-          [TableCell('h1'), TableCell('h2')],
-          [TableCell('v1'), TableCell('v2')],
+          [const TableCell('h1'), const TableCell('h2')],
+          [const TableCell('v1'), const TableCell('v2')],
         ]).toBlockData(),
       ),
     ]);

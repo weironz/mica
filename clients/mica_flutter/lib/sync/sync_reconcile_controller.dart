@@ -215,8 +215,9 @@ class SyncReconcileController extends ChangeNotifier {
   Future<CloudSyncSession> readyForDocument(String documentId) async {
     reconcile();
     final tab = activeTab();
-    if (tab.syncDocumentId != documentId)
+    if (tab.syncDocumentId != documentId) {
       throw StateError('Editor document changed');
+    }
     if (tab.cloudSession == null) {
       await _activeSetup?.timeout(const Duration(seconds: 15));
     }

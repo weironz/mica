@@ -220,7 +220,7 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                     ),
                     contentPadding: const EdgeInsets.only(right: 10, bottom: 9),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(8)),
+                      borderRadius: const BorderRadius.all(Radius.circular(8)),
                       borderSide: BorderSide(color: _border(context)),
                     ),
                     focusedBorder: OutlineInputBorder(
@@ -233,7 +233,7 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                 ),
               ),
               Padding(
-                padding: EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.only(top: 10),
                 child: Divider(
                   height: 1,
                   thickness: 1,
@@ -416,7 +416,7 @@ class _NoResults extends StatelessWidget {
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: MicaTheme.of(context).surface.sunken,
-                borderRadius: BorderRadius.all(Radius.circular(13)),
+                borderRadius: const BorderRadius.all(Radius.circular(13)),
               ),
               child: Icon(
                 Icons.search_off,

@@ -24,9 +24,9 @@ void main() {
         data: {'url': 'https://x.io/cat.png'},
       ),
     ]);
-    c.selection = DocSelection(
-      anchor: const DocPosition(0, 0),
-      focus: const DocPosition(1, 0),
+    c.selection = const DocSelection(
+      anchor: DocPosition(0, 0),
+      focus: DocPosition(1, 0),
     );
     expect(c.selectionText(), contains('![cat](https://x.io/cat.png)'));
   });

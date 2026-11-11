@@ -28,7 +28,7 @@ void main() {
           'access_token': tokenExpiring(
             DateTime.now().toUtc().add(const Duration(hours: 24)),
           ),
-          if (refresh != null) 'refresh_token': refresh,
+          'refresh_token': ?refresh,
           'user': {
             'id': 'u1',
             'email': 'a@b.c',

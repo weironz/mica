@@ -121,7 +121,7 @@ void main() {
     await c.flushPending();
     c.setSelection(const DocSelection.collapsed(DocPosition(0, 5)));
     c.splitAtCaret();
-    c.setSelection(DocSelection.collapsed(DocPosition(1, 0)));
+    c.setSelection(const DocSelection.collapsed(DocPosition(1, 0)));
     c.setFocusedText('beta', 0, 0);
     await c.flushPending();
     expect(c.nodes.length, 2);

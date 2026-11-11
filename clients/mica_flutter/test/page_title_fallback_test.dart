@@ -44,7 +44,7 @@ DocumentBootstrap bootstrapWith({
             'id': 'root',
             'type': 'page',
             'text': '',
-            if (rootData != null) 'data': rootData,
+            'data': ?rootData,
             'children': ['b1'],
           },
           {'id': 'b1', 'type': 'paragraph', 'text': '正文。', 'children': []},

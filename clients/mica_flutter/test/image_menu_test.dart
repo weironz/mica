@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
-import 'package:mica_flutter/editor/model.dart';
 
 // The image right-click menu is the complete surface for an image: the hover
 // toolbar only exists while a mouse is over the picture, so everything it can

@@ -195,7 +195,7 @@ void main() {
         ops: ops,
         import: (_) async => null,
         loadBytes: (_) async => null, // we can't read it either (dead link)
-        upload: (_, __, ___) async {
+        upload: (_, _, _) async {
           uploaded = true;
           return null;
         },

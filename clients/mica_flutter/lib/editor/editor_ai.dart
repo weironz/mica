@@ -25,8 +25,6 @@ const _SlashOption _aiSlashOption = _SlashOption(
 /// applicable state.
 enum _AiGenerationPhase { idle, running, succeeded, failed, cancelled }
 
-/// In-editor "Ask AI": streams the response live, then returns the accumulated
-/// Markdown (via Navigator.pop) for the editor to insert as blocks.
 /// System prompt for rewriting a selection.
 ///
 /// The constraints are load-bearing, not politeness. A model that answers
@@ -154,7 +152,9 @@ class _InlineAiDialogState extends State<_InlineAiDialog> {
         .listen(
           (delta) {
             if (!mounted || generation != _generation ||
-                _phase != _AiGenerationPhase.running) return;
+                _phase != _AiGenerationPhase.running) {
+              return;
+            }
             setState(() => _buffer.write(delta));
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (_scroll.hasClients) {

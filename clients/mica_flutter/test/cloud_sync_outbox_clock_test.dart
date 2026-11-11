@@ -6,15 +6,12 @@
 // Red probe: fake WS server WITHHOLDS the merged run's ack, a live edit is
 // enqueued, then the run is acked — clocks 9 and 10 must still go out and the
 // outbox must drain.
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/cloud/cloud_doc_store.dart';
 import 'package:mica_flutter/cloud/cloud_sync_session.dart';
-import 'package:mica_flutter/cloud/sync_doc_replica.dart';
 
 /// A deterministic replica (same shape as history_persistence_test): it never
 /// touches the real yrs engine, so `mergeUpdates` "succeeds" and the send-side
@@ -215,7 +212,7 @@ void main() {
       final s = CloudSyncSession(
         uri: () async => server.uri,
         clientId: BigInt.from(1),
-        onReady: (_, __) {},
+        onReady: (_, _) {},
         onRemoteChange: () {},
         persistence: store,
         documentId: 'doc-1',
@@ -264,7 +261,7 @@ void main() {
     final s = CloudSyncSession(
       uri: () async => server.uri,
       clientId: BigInt.from(1),
-      onReady: (_, __) {},
+      onReady: (_, _) {},
       onRemoteChange: () {},
       persistence: store,
       documentId: 'doc-1',
@@ -300,7 +297,7 @@ void main() {
     final s = CloudSyncSession(
       uri: () async => server.uri,
       clientId: BigInt.from(1),
-      onReady: (_, __) {},
+      onReady: (_, _) {},
       onRemoteChange: () {},
       persistence: store,
       documentId: 'doc-1',

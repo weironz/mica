@@ -17,7 +17,7 @@ void main() {
     'document_id': 'doc-1',
     'block_id': 'block_7',
     'reason': 'connection timed out',
-    if (attempted != null) 'attempted': attempted,
+    'attempted': ?attempted,
   };
 
   group('ImportImageFailure', () {

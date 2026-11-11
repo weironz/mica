@@ -267,7 +267,7 @@ class _CreateCard extends StatelessWidget {
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: _createTileBg(context),
-                borderRadius: BorderRadius.all(Radius.circular(14)),
+                borderRadius: const BorderRadius.all(Radius.circular(14)),
               ),
               child: const Icon(Icons.add, size: 24, color: Colors.white),
             ),
@@ -303,7 +303,7 @@ class _CreateCard extends StatelessWidget {
                 border: Border.fromBorderSide(
                   BorderSide(color: _containerBorder(context)),
                 ),
-                borderRadius: BorderRadius.all(Radius.circular(8)),
+                borderRadius: const BorderRadius.all(Radius.circular(8)),
               ),
               child: Text(
                 strings.createHint,
@@ -384,7 +384,7 @@ class _WorkspaceChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(
         color: MicaTheme.of(context).surface.sunken,
-        borderRadius: BorderRadius.all(Radius.circular(8)),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
       ),
       child: Text(
         name,
@@ -486,7 +486,7 @@ class _EmptyState extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: MicaTheme.of(context).surface.sunken,
-              borderRadius: BorderRadius.all(Radius.circular(14)),
+              borderRadius: const BorderRadius.all(Radius.circular(14)),
             ),
             child: Icon(
               Icons.article_outlined,

@@ -169,8 +169,8 @@ void main() {
           kind: 'table',
           text: '',
           data: TableData([
-            [TableCell('header'), TableCell('other')],
-            [TableCell('value'), TableCell('body')],
+            [const TableCell('header'), const TableCell('other')],
+            [const TableCell('value'), const TableCell('body')],
           ]).toBlockData(),
         ),
       ], tokens: tokens);
@@ -211,8 +211,8 @@ void main() {
             kind: 'table',
             text: '',
             data: TableData([
-              [TableCell('header')],
-              [TableCell('body')],
+              [const TableCell('header')],
+              [const TableCell('body')],
             ]).toBlockData(),
           ),
         ], tokens: tokens);

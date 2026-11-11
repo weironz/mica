@@ -82,9 +82,9 @@ void main() {
         EditorNode(id: 'b', kind: 'paragraph', text: 'body'),
       ]);
     addTearDown(c.dispose);
-    c.selection = DocSelection(
-      anchor: const DocPosition(0, 0),
-      focus: const DocPosition(1, 4),
+    c.selection = const DocSelection(
+      anchor: DocPosition(0, 0),
+      focus: DocPosition(1, 4),
     );
     withoutEngine();
     expect(c.selectionHtml(), '',

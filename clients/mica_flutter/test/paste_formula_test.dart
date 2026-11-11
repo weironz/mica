@@ -101,7 +101,7 @@ void main() {
 
     test('weaves into the middle of a line, caret after the run', () {
       final c = fresh('before  after');
-      c.selection = DocSelection.collapsed(const DocPosition(0, 7));
+      c.selection = const DocSelection.collapsed(DocPosition(0, 7));
       final parsed = markdownCodec.parseInlineMath(r'$E=mc^2$');
       c.insertInlineSpan(0, 7, 7, parsed.text, parsed.marks);
 
@@ -126,7 +126,7 @@ void main() {
           {'start': 5, 'end': 9, 'type': 'italic'},
         ],
       };
-      c.selection = DocSelection.collapsed(const DocPosition(0, 5));
+      c.selection = const DocSelection.collapsed(DocPosition(0, 5));
       c.insertInlineSpan(0, 5, 5, 'x+y ', [Mark(0, 3, 'math')]);
 
       expect(c.nodes[0].text, 'bold x+y tail');
@@ -152,7 +152,7 @@ void main() {
     test('refuses atomic / code / table blocks', () {
       final c = EditorController(rootBlockId: 'root', onOps: (_) async {});
       c.load([EditorNode(id: 'm', kind: 'math_block', text: 'x')]);
-      c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+      c.selection = const DocSelection.collapsed(DocPosition(0, 0));
       c.insertInlineSpan(0, 0, 0, 'y', [Mark(0, 1, 'math')]);
       expect(c.nodes[0].text, 'x', reason: 'atomic blocks must be untouched');
     });

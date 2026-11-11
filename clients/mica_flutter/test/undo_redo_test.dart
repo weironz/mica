@@ -31,7 +31,7 @@ EditorNode _p(String id, String text) =>
 void main() {
   test('undo/redo a text edit restores text and caret', () async {
     final h = _Harness([_p('a', 'hello')]);
-    h.c.selection = DocSelection.collapsed(const DocPosition(0, 5));
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 5));
 
     h.c.setFocusedText('hello world', 11, 11);
     h.c.flushPending(); // commit the burst (records history)
@@ -56,7 +56,7 @@ void main() {
 
   test('undo a split deletes the created block; redo re-inserts it', () async {
     final h = _Harness([_p('a', 'abcd')]);
-    h.c.selection = DocSelection.collapsed(const DocPosition(0, 2));
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 2));
 
     h.c.splitAtCaret();
     await h.drain();
@@ -93,7 +93,7 @@ void main() {
 
   test('undo a merge re-creates the removed block', () async {
     final h = _Harness([_p('a', 'foo'), _p('b', 'bar')]);
-    h.c.selection = DocSelection.collapsed(const DocPosition(1, 0));
+    h.c.selection = const DocSelection.collapsed(DocPosition(1, 0));
 
     expect(h.c.mergeBackward(), isTrue);
     await h.drain();
@@ -110,9 +110,9 @@ void main() {
 
   test('undo a mark toggle clears the mark', () async {
     final h = _Harness([_p('a', 'hello')]);
-    h.c.selection = DocSelection(
-      anchor: const DocPosition(0, 0),
-      focus: const DocPosition(0, 5),
+    h.c.selection = const DocSelection(
+      anchor: DocPosition(0, 0),
+      focus: DocPosition(0, 5),
     );
 
     h.c.toggleMark('bold');
@@ -130,7 +130,7 @@ void main() {
 
   test('a new edit after undo clears the redo stack', () async {
     final h = _Harness([_p('a', 'x')]);
-    h.c.selection = DocSelection.collapsed(const DocPosition(0, 1));
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 1));
 
     h.c.setFocusedText('xy', 2, 2);
     h.c.flushPending();
@@ -147,7 +147,7 @@ void main() {
 
   test('undo coalesces an uncommitted typing burst', () async {
     final h = _Harness([_p('a', '')]);
-    h.c.selection = DocSelection.collapsed(const DocPosition(0, 0));
+    h.c.selection = const DocSelection.collapsed(DocPosition(0, 0));
 
     // Type several chars without an intervening flush (debounce still pending).
     h.c.setFocusedText('h', 1, 1);
