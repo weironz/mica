@@ -23,6 +23,11 @@ tracing-subscriber.workspace = true
 # The official Rust MCP SDK. `server` = build a server, `transport-io` = stdio,
 # `macros` = the #[tool]/#[tool_router] attributes. Pinned at the crate level
 # (not the workspace) since it's this binary's concern only.
+# RUSTSEC-2026-0189 affects HTTP server Host validation.
+# RUSTSEC-2026-0462 affects built-in Streamable HTTP clients, and
+# RUSTSEC-2026-0461 the Streamable HTTP server schema cache. Neither transport
+# feature is enabled: this is a stdio server only; 0.9 also predates 0461
+# (affected range >=3.0,<3.6). See .cargo/audit.toml.
 rmcp = { version = "0.9", features = ["server", "transport-io", "macros"] }
 # `uuid1`: tool-argument ids are `Uuid` (see args.rs), schema'd as a uuid string.
 schemars = { version = "1", features = ["uuid1"] }

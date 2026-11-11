@@ -1,9 +1,33 @@
-# `cargo audit` exceptions. Each one says why it does not apply HERE.
+# Explicit, advisory-scoped exceptions. Vulnerabilities and newly introduced
+# warning IDs remain failures in scripts/check-rust-audit.sh (--deny warnings).
 [advisories]
 ignore = [
-  # rmcp DNS rebinding — only the Streamable HTTP *server* transport is
-  # affected. mica-mcp-server speaks stdio only (crates/mcp-server/src/lib.rs
-  # `transport::stdio`), and the fix needs rmcp 1.x, a major upgrade.
-  # Revisit if an HTTP transport is ever enabled.
+  # cgmath 0.18 is transitive through merman -> roughr-merman -> svg_path_ops.
+  # No maintained release exists; replacing the renderer's matrix dependency
+  # is upstream work, not an independent Mica matrix implementation.
+  "RUSTSEC-2026-0196",
+  # cgmath::Matrix{2,3,4}::swap_columns(a,a) is unsound, with no patched release.
+  # Mica, svg_path_ops, roughr-merman and merman do not call swap_columns; the
+  # cgmath crate itself only declares/implements it. Re-review on renderer updates.
+  "RUSTSEC-2026-0197",
+  # paste is a transitive compile-time macro dependency of rendering crates.
+  # No maintained release exists; retain until those upstreams replace it.
+  "RUSTSEC-2024-0436",
+  # smallstr is used internally by yrs. No patched/maintained release exists;
+  # replacing it must happen in the single CRDT implementation upstream.
+  "RUSTSEC-2026-0215",
+  # ttf-parser is transitive in the merman/font rendering stack. It has no
+  # maintained release; an engine update must migrate the font parser.
+  "RUSTSEC-2026-0192",
+  # unsafe-libyaml is behind the existing serde_yaml-based Markdown front matter
+  # parser. No maintained release exists; replacement needs round-trip regression
+  # work in the sole Rust Markdown engine, not a Dart/parser mirror.
+  "RUSTSEC-2024-0449",
+  # rmcp 0.9's affected Streamable HTTP client transports are not compiled.
+  # Mica enables only server/transport-io/macros and serves stdio. This is NOT
+  # an exception for HTTP clients; re-review before adding any transport feature.
+  "RUSTSEC-2026-0462",
+  # HTTP server Host validation is absent before rmcp 1.4.0, but no HTTP server
+  # transport is compiled or exposed. RustSec explicitly excludes stdio.
   "RUSTSEC-2026-0189",
 ]

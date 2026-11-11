@@ -75,7 +75,7 @@ dependencies:
   xml: ^7.0.1
   rust_lib_mica_flutter:
     path: rust_builder
-  flutter_rust_bridge: 2.12.0
+  flutter_rust_bridge: 2.13.0
 
 dev_dependencies:
   flutter_test:

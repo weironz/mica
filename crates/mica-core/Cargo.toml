@@ -3,7 +3,7 @@ name = "mica-core"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.85"
+rust-version = "1.89"
 
 # Plain Rust library — the storage/transport-agnostic data plane (Phase 2).
 # Shared by the cloud server and, via a thin flutter_rust_bridge crate
@@ -18,10 +18,9 @@ thiserror = { workspace = true }
 # Local persistence (desktop client only), behind the `store` feature so the
 # server never pulls SQLite. `bundled` compiles SQLite from source — no system
 # dependency. `uuid` mints the persisted device id.
-# Pinned to share `libsqlite3-sys` with the workspace's sqlx-sqlite (<0.38) so
-# the native `sqlite3` link doesn't conflict (the desktop FFI crate is a separate
-# workspace, but `cargo test -p mica-core` resolves the whole workspace).
-rusqlite = { version = "0.37", features = ["bundled"], optional = true }
+# SQLx's optional driver is pinned to the upstream compatibility fix so both
+# workspaces can resolve the patched SQLite bundle. See root Cargo.toml.
+rusqlite = { version = "0.41", features = ["bundled"], optional = true }
 uuid = { workspace = true, optional = true }
 # The markdown authority — owns the `Block` DTO itself (mica-core re-exports
 # it), so the yrs document model and the markdown/REST model cannot drift.

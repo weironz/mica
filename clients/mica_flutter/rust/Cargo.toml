@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-flutter_rust_bridge = "=2.12.0"
+flutter_rust_bridge = "=2.13.0"
 # The shared, FFI-agnostic data plane. All real logic lives there; this crate is
 # only the flutter_rust_bridge surface over it.
 mica-core = { path = "../../../crates/mica-core", features = ["store"] }
