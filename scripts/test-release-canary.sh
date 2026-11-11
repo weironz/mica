@@ -14,7 +14,13 @@ set -euo pipefail
 case "$*" in
   'auth status') exit 0 ;;
   *'--json isDraft'*) echo "${CANARY_DRAFT:-false}" ;;
-  *'--json assets'*) if [ "${CANARY_WINDOWS:-}" = 1 ]; then printf '%s\n' Mica-Setup-1.2.3.exe mica-cli-1.2.3-windows-x64.exe; else echo 'mica-cli-1.2.3-linux-x64'; fi ;;
+  *'--json assets'*)
+    if [ "${CANARY_WINDOWS:-}" = 1 ]; then
+      printf '%s\n' Mica-Setup-1.2.3.exe mica-cli-1.2.3-windows-x64.exe
+    else
+      echo 'mica-cli-1.2.3-linux-x64'
+      if [ "${CANARY_DEB:-}" = 1 ]; then echo 'Mica-1.2.3-linux-amd64.deb'; fi
+    fi ;;
   *'release download'*)
     while [ "$#" -gt 0 ]; do
       if [ "$1" = --dir ]; then out=$2; break; fi
@@ -29,7 +35,11 @@ cat > "$fixture/bin/git" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in rev-parse) exit 0 ;; cat-file) [ "${OLD_CANARY_CONTRACT:-0}" != 1 ] ;; *) exit 3 ;; esac
 STUB
-chmod +x "$fixture/bin/gh" "$fixture/bin/git"
+cat > "$fixture/bin/uname" <<'STUB'
+#!/usr/bin/env bash
+if [ "${CANARY_WINDOWS:-}" = 1 ]; then echo MINGW64_NT; else echo Linux; fi
+STUB
+chmod +x "$fixture/bin/gh" "$fixture/bin/git" "$fixture/bin/uname"
 export CANARY_FIXTURE="$fixture" PATH="$fixture/bin:$PATH"
 check() {
   local expected=$1 label=$2 rc=0
@@ -46,6 +56,30 @@ check pass 'downloaded binary is executed and matches the release version'
 check fail 'wrong delivered binary version' CANARY_VERSION=9.9.9
 check fail 'draft release is refused' CANARY_DRAFT=true
 check fail 'old desktop contract is refused' OLD_CANARY_CONTRACT=1
+
+# Prove the downloaded desktop reaches the first-frame gate with Flutter's
+# actual version format, and that a nearby but wrong version stops before it.
+touch "$fixture/assets/Mica-1.2.3-linux-amd64.deb"
+(cd "$fixture/assets" && sha256sum Mica-1.2.3-linux-amd64.deb > sha256-linux-desktop.txt)
+cat > "$fixture/bin/dpkg-deb" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  -f) echo 1.2.3 ;;
+  -x)
+    mkdir -p "$3/opt/mica"
+    printf '#!/usr/bin/env bash\nprintf "Mica %%s\\n" "$CANARY_DESKTOP_VERSION"\n' > "$3/opt/mica/mica_flutter"
+    chmod +x "$3/opt/mica/mica_flutter" ;;
+  *) exit 3 ;;
+esac
+STUB
+printf '#!/usr/bin/env bash\nexit 42\n' > "$fixture/bin/setsid"
+cp "$fixture/bin/setsid" "$fixture/bin/xvfb-run"
+chmod +x "$fixture/bin/dpkg-deb" "$fixture/bin/setsid" "$fixture/bin/xvfb-run"
+check fail 'desktop with build number reaches the failing startup probe' CANARY_DEB=1 CANARY_DESKTOP_VERSION=1.2.3+10203
+grep -Fq 'exited before first frame' "$fixture/output" || { cat "$fixture/output"; exit 1; }
+check fail 'desktop with the wrong core version is refused' CANARY_DEB=1 CANARY_DESKTOP_VERSION=1.2.30+10230
+grep -Fq 'delivered desktop reports' "$fixture/output" || { cat "$fixture/output"; exit 1; }
+
 printf '%064d  mica-cli-1.2.3-linux-x64\n' 0 > "$fixture/assets/sha256-linux.txt"
 check fail 'corrupt delivered checksum'
 printf '%064d  wrong-asset\n' 0 > "$fixture/assets/sha256-linux.txt"
@@ -55,10 +89,6 @@ check fail 'manifest must cover the actual executable'
 cp "$fixture/assets/mica-cli-1.2.3-linux-x64" "$fixture/assets/mica-cli-1.2.3-windows-x64.exe"
 printf 'installer fixture\n' > "$fixture/assets/Mica-Setup-1.2.3.exe"
 (cd "$fixture/assets" && sha256sum mica-cli-1.2.3-windows-x64.exe > sha256-windows.txt && sha256sum Mica-Setup-1.2.3.exe > sha256-windows-installer.txt)
-cat > "$fixture/bin/uname" <<'STUB'
-#!/usr/bin/env bash
-if [ "${CANARY_WINDOWS:-}" = 1 ]; then echo MINGW64_NT; else /usr/bin/uname "$@"; fi
-STUB
 cat > "$fixture/bin/cygpath" <<'STUB'
 #!/usr/bin/env bash
 echo "$2"

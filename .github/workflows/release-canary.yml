@@ -27,7 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: v${{ inputs.version }}
+          # Run the workflow revision's verifier so a corrected check can be
+          # dispatched for an immutable release. It still downloads only vX.Y.Z.
           fetch-depth: 0
       - name: Linux desktop runtime for optional deb canary
         if: runner.os == 'Linux'

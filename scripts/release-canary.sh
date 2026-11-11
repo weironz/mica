@@ -59,7 +59,11 @@ case "$(host_os)" in
       mkdir -p "$work/install" "$work/profile"
       dpkg-deb -x "$work/$deb" "$work/install"
       app="$work/install/opt/mica/mica_flutter"
-      assert_version "$(XDG_CONFIG_HOME="$work/profile" timeout 15 "$app" --version)"
+      # Flutter includes the numeric build number set by client-package-inner.sh.
+      desktop_version=$(XDG_CONFIG_HOME="$work/profile" timeout 15 "$app" --version)
+      desktop_suffix=${desktop_version#"Mica $version"}
+      [[ "$desktop_version" != "$desktop_suffix" && ( -z "$desktop_suffix" || "$desktop_suffix" =~ ^\+[0-9]+$ ) ]] \
+        || fail "delivered desktop reports '$desktop_version', expected Mica $version with optional build number"
       command -v xvfb-run >/dev/null || fail "Linux desktop canary needs xvfb-run and the .deb runtime libraries"
       receipt="$work/first-frame.marker"
       XDG_CONFIG_HOME="$work/profile" MICA_STARTUP_PROBE_FILE="$receipt" \
