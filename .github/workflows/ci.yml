@@ -502,19 +502,8 @@ jobs:
       - name: Web entry cache and retired-file contract
         run: bash scripts/web-entry-cache-check.sh http://127.0.0.1:8090
 
-      - name: Historical object audit against PostgreSQL and RustFS
-        env:
-          S3_ENDPOINT: http://127.0.0.1:9000
-          S3_INTERNAL_ENDPOINT: http://127.0.0.1:9000
-          S3_BUCKET: mica
-          S3_ACCESS_KEY_ID: mica
-          S3_SECRET_ACCESS_KEY: mica-default-not-a-secret
-        run: |
-          source scripts/lib-local.sh && source scripts/lib-receipt.sh
-          # A name filter: a rename would match nothing and still exit 0.
-          cargo_receipt 1 cargo test -p mica-api-server --bin mica-api-server \
-            historical_audit_is_dry_by_default_and_backfill_is_idempotent -- --ignored
-
+      # The one-off legacy orphan audit and its test were retired in 8291c551.
+      # Do not invoke its removed test name: receipts correctly reject zero tests.
       - name: Web end-to-end assertions
         working-directory: e2e
         run: |
