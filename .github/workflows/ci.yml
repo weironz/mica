@@ -527,6 +527,7 @@ jobs:
           set -euo pipefail
           npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
+          node cdp_eval_test.mjs
           node web_e2e.mjs --base http://127.0.0.1:8090 \
                            --email "$E2E_EMAIL" --password "$E2E_PASSWORD"
 

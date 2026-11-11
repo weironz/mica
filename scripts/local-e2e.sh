@@ -49,6 +49,7 @@ curl -fsS http://127.0.0.1:8091/ > /dev/null
 export MICA_UI_RESULTS_DIR=${MICA_UI_RESULTS_DIR:-"$PWD/clients/mica_flutter/build/ui-experience-results"}
 (
   cd e2e
+  node cdp_eval_test.mjs
   node rich_preview_e2e.mjs --base 'http://127.0.0.1:8091/?harness=clipboard'
   node clipboard_e2e.mjs --base 'http://127.0.0.1:8091/?harness=clipboard'
 )

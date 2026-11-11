@@ -21,7 +21,8 @@
 //
 // Exits non-zero on any failed assertion, and prints what it saw.
 
-import { chromium } from '@playwright/test';
+import { launchBrowser } from './browser.mjs';
+import { evaluatePage, waitForPage } from './cdp_eval.mjs';
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -55,24 +56,7 @@ if (!health || !health.ok) {
 // this fallback the harness is unrunnable on the machine it was written on, which
 // is how a test ends up trusted-but-never-run. CI (ubuntu-latest, outside CN) gets
 // the bundled build and never reaches the fallback.
-async function launch() {
-  try {
-    return await chromium.launch();
-  } catch (bundled) {
-    for (const channel of ['chrome', 'msedge']) {
-      try {
-        const browser = await chromium.launch({ channel });
-        console.log(`note: bundled Chromium unavailable, using system ${channel}`);
-        return browser;
-      } catch {
-        /* try the next one */
-      }
-    }
-    throw bundled;
-  }
-}
-
-const browser = await launch();
+const browser = await launchBrowser();
 // Pin the locale and timezone. An e2e should not inherit whatever the machine
 // happens to report — but this one is also load-bearing: headless Chromium on the
 // CI runner reports locale information that makes the Flutter engine throw
@@ -114,17 +98,14 @@ page.on('pageerror', (e) => pageErrors.push(String(e)));
 
 await page.goto(BASE, { waitUntil: 'load' });
 try {
-  await page.waitForFunction(() => typeof window.micaWebSyncTest === 'function', null, {
-    timeout: 60_000,
-  });
+  await waitForPage(page, () => typeof window.micaWebSyncTest === 'function', 60_000);
 } catch (timeout) {
   // A harness that times out without saying what it saw makes the next attempt a
   // guess. Everything known about the page goes to the log before giving up.
   console.error('the app never registered its probes — what the page reported:');
   console.error(`  url        : ${page.url()}`);
   console.error(`  title      : ${await page.title().catch(() => '(unavailable)')}`);
-  const present = await page
-    .evaluate(() => ({
+  const present = await evaluatePage(page, () => ({
       engineInfo: typeof window.micaDocEngineInfo,
       webSync: typeof window.micaWebSyncTest,
       flutterReady: typeof window._flutter,
@@ -176,14 +157,14 @@ check(
 // the engine actually loaded (a broken wasm fetch would otherwise only show up
 // as documents that never sync). Then the heart of it: two live sessions over a
 // real WebSocket, folded by the real server into real Postgres.
-const engine = JSON.parse(await page.evaluate(() => window.micaDocEngineInfo()));
+const engine = JSON.parse(await evaluatePage(page, () => window.micaDocEngineInfo()));
 check(
   'the document engine (wasm) loaded',
   typeof engine.source_fingerprint === 'string' && !engine.error,
   JSON.stringify(engine),
 );
 const sync = JSON.parse(
-  await page.evaluate(([b, e, p]) => window.micaWebSyncTest(b, e, p), [BASE, EMAIL, PASSWORD]),
+  await evaluatePage(page, ([b, e, p]) => window.micaWebSyncTest(b, e, p), [BASE, EMAIL, PASSWORD]),
 );
 check('two web sessions converge through the real server', sync.ok === true, JSON.stringify(sync));
 check(
@@ -198,7 +179,7 @@ check(
 // never learns their confirmation link or share link did nothing. (This assertion
 // found `/s/` missing from the dev nginx config the first time it ran.)
 const serverRendered = ['/verify-email?token=bogus', '/reset-password?token=bogus', '/s/not-a-real-token'];
-const routed = await page.evaluate(async (paths) => {
+const routed = await evaluatePage(page, async (paths) => {
   const out = {};
   for (const p of paths) {
     const r = await fetch(p);
@@ -223,7 +204,7 @@ check(
 // content-hashed and may be. The Markdown and document engines are loaded by
 // index.html before Flutter (the Markdown one was missing from production's
 // list in 0.14.0).
-const cache = await page.evaluate(async (files) => {
+const cache = await evaluatePage(page, async (files) => {
   const out = {};
   for (const f of files) out[f] = (await fetch(f, { method: 'HEAD' })).headers.get('cache-control');
   return out;
@@ -265,9 +246,7 @@ for (const [f, value] of Object.entries(cache)) {
   await oddPage.goto(BASE, { waitUntil: 'load' });
   let booted = true;
   try {
-    await oddPage.waitForFunction(() => typeof window.micaWebSyncTest === 'function', null, {
-      timeout: 30_000,
-    });
+    await waitForPage(oddPage, () => typeof window.micaWebSyncTest === 'function', 30_000);
   } catch {
     booted = false;
   }
