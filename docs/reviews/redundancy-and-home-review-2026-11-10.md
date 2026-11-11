@@ -1,6 +1,6 @@
 # 双实现盘点与首页评估（2026-11-10）
 
-> **状态：前两轮已实施并审核；第三轮第 8 节实施中，进度和证据见第 9 节。涉及设备、签名/发布和上游修复的部分不提前标为通过。**
+> **状态：前两轮已实施并审核；第三轮代码实现与可自动化验收已完成，见第 9 节；Windows手工矩阵、设备、签名/发布和上游条件未满足的条目保持待验收，不冒充全部完成。**
 >
 > **原评估依据**：读代码和数行数；实施时再对照运行同一批输入。首页部分用示例数据单独渲染，不是线上截图。
 
@@ -377,7 +377,7 @@ Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载�
 - 本地模式：保留。首页：不动。
 
 
-## 9. 第三轮实施记录（2026-11-11，验收进行中）
+## 9. 第三轮实施与验收记录（2026-11-11）
 
 本轮按独立文件所有权并行，清单和最终提交统一维护。未发版、未部署，不能把本地 nginx 结果冒称生产已经生效。
 
@@ -513,7 +513,7 @@ Context7 文档工具返回连接错误，已回退官方 [Gradle TaskExecutionG
 
 本地完整 `just ci` 已通过：Root工作区及真实PG、mica-core store、Flutter分析/单元widget、浏览器专用套件与五个独立浏览器回归（含deferred）均实际执行，2109个前端单元/widget通过。安全审计扫描两个锁并拒绝warnings；无新增跳过或预算放宽。
 
-独立提交：`a44ed9ce`外壳/编辑器与延迟加载，`e6c0b0dd`工程与产物验证，`0f8a7bff`延迟窗口真实浏览器验收，`d398a621`Windows原生透明PNG/编辑器粘贴，`b1789140`显式选择dry-run可选包。下一步为官方完整CI与含Linux deb的dry-run；不在本轮发版或部署。
+独立提交：`a44ed9ce`外壳/编辑器与延迟加载，`e6c0b0dd`工程与产物验证，`0f8a7bff`延迟窗口真实浏览器验收，`d398a621`Windows原生透明PNG/编辑器粘贴，`b1789140`显式选择dry-run可选包。官方最终 [CI(scope=full)](https://github.com/weironz/mica/actions/runs/43020722453) 全部通过，包含双锁 RustSec、真实PG、FFI、浏览器实际服务栈与deferred恢复；[Release dry-run（含Linux deb、macOS默认关闭）](https://github.com/weironz/mica/actions/runs/43017762386) 全部通过。不在本轮发版或部署。
 
 
 ### 9.9 Windows 依赖矩阵的已验证与人工缺口
@@ -525,3 +525,12 @@ Context7 文档工具返回连接错误，已回退官方 [Gradle TaskExecutionG
 未完成：Explorer overflow真实点击定位不可靠；FilePicker13的同PID原生IFileDialog已打开，但受控filename/Open安全定位未能取得唯一目标，尚无真实选中文件后的picker-read回执；后续一次restart-ready也超时。没有放宽断言或修改生产API来方便测试，8.2的完整桌面矩阵保持待验收。
 
 人工步骤：在专用验证profile运行window_plugin_probe，拖动/调整尺寸后正常关闭并重启核对；从实际通知区/overflow点击本测试托盘图标恢复；点击选择文件，仅选专用合成fixture目录中的PNG/文本，确认读取字节及显示名；再跑native_image_clipboard和既有clipboard_roundtrip。避免对用户已装Mica运行Inno测试，安装canary仅在一次性官方runner/VM。
+
+
+### 9.10 最终复核与仍待人工的边界
+
+官方CI恢复过程中修复了自测环境隔离：`43d0521d`让开发者主机场景显式不继承runner环境；`007e6f38`/`442492cf`将真实Web探针改为CDP直接读取与条件轮询，保留原控制台零错误断言。额外真实浏览器负例验证页面自身unsafe-eval依然产生securitypolicyviolation，不为测试放开unsafe-eval或过滤CSP日志。首个误绑定基线894的CI已取消，不拿它当本轮证据；最终通过的CI绑定修复后代码。
+
+仍不打勾的完整验收项：8.2的真实文件选择后读取、物理overflow托盘点击与重启稳定性人工补验；Android冷启动/GPUI真机、Windows真人IME、Safari；真实签名key配置与新APK覆盖安装；SDK正式发布；yrs四条永不panic性质仍失败；#170复现补充；正式发布后的真实新附件canary及线上响应头观察周期。Firefox已经实际验证并写明负面结果，不等于相关关卡通过。
+
+试验资源：专用浏览器session、Windows任务及测试进程已清理；未修改用户现装Mica或输出原剪贴板内容。额外Snap geckodriver 41914/PID1676193为本轮临时试验资源，已无session但OS拒绝正常signal终止且不支持关闭端点；未绕过系统安全策略，留作本机人工结束。Mica rustc pin仍1.98.0，全局bindgen仍0.2.129；隔离nightly准备时rustup manager自更新到1.29.3，未改项目工具链pin。
