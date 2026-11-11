@@ -1,5 +1,8 @@
 # CI runner notes
 
+> **2026-11-11：两台自建 runner 都已停用。** CI 运行一直排队后被取消，不再有任何机器执行这些工作流。
+> 推送 `main` 前的门禁改为本地 CI：`just ci`（`scripts/local-ci.sh`）。下面的内容只在重新启用 runner 时有用。
+
 This repo runs Actions almost exclusively on self-hosted runners
 (2026-10-20: the hosted quota ran out, so push/PR triggers were switched to
 `workflow_dispatch`). Runner inventory:

@@ -56,7 +56,8 @@
 - 门禁要证明测试**真的跑了**：指定测试用 `scripts/lib-receipt.sh` 的回执（通过数低于下限即失败），DB 测试走 `mica_infra::test_database_url()`，浏览器套件走 `scripts/browser-tests.sh`，FFI 测试用 `initCheckedNativeRust` 校验库的源码指纹；被 `.gitignore` 藏起的源码文件由 `scripts/check-ignored-sources.sh` 拒绝。见 [开发教训 §3](docs/dev/lessons.md)。
 - 改动完成后自动推送 `main`，无需逐步请示；**发版须等用户明确要求**。用户要求发版后，版本 bump → 门禁 → tag / 构建 → 部署 → 验证连续做完。
 - 默认递增补丁号，minor 由用户决定；版本一致性与锁文件由现有脚本校验。发布步骤以 [发布文档](docs/ops/release.md) 为准，命令见 `just --list`，不得绕过发布门禁。
-- 不假定 push 会触发 CI；检查 `.github/workflows/` 的当前触发方式，手动触发后核对运行结果。部署后验证 `/api/health` 版本，并冒烟测试本版实际改动。
+- **自建 runner 已停（2026-11-11 起）**：GitHub Actions 的 CI 不会运行（手动触发也只会排队后取消），**本地 CI 是推送 `main` 前的门禁**：`just ci`（即 `scripts/local-ci.sh`，需要可连的 Postgres，见脚本说明；只改一半可用 `just ci rust` / `just ci flutter`）。浏览器端到端脚本（`e2e/`）不在其中，改到对应功能时另外跑。
+- 部署后验证 `/api/health` 版本，并冒烟测试本版实际改动。
 - 发版时同步路线图：未完成项留在 [roadmap.md](docs/plans/roadmap.md)，完成项移入 [roadmap-done.md](docs/plans/roadmap-done.md)；明确不做的条目删除，理由写入提交信息。
 
 ## 配置与生产运维
