@@ -283,3 +283,95 @@ Web 的字体按需加载会在冷缓存、慢网络时短暂缺字；未加载�
 5. **设置推送沿用排队时的令牌**：令牌恰好在那 1 秒内刷新时，这一次推送会失败（记日志，下次修改时会重推），影响可以忽略。
 6. **Linux、安卓、macOS 启动时先加载两个中文字体再显示界面**：原先引擎启动时也要注册这两个字体，预计没有变慢，但未实测；方便时看一下安卓冷启动时间。
 7. **尚未发版部署**：`web-entry-cache-check.sh` 现在会要求字体类型正确、旧的完整字体不存在，对线上 0.14.4 运行会失败，部署新版本后才会通过。
+
+## 8. 第三轮待办清单（2026-11-11 用户确定：全部要做；交给他人实施，完成后评审）
+
+> 规则同第 5 节：每项做完打勾、写提交号和实测数字；推送 `main` 前跑完本地 CI（`just ci`）或手动触发官方 CI；
+> 不加等待、不跳过测试、不放宽预算；三个大库的行数棘轮只许减不许增。
+> 标"需用户"的项要用户本人操作或拍板，实施者准备好材料后交给用户；标"需设备"的项要真机或对应浏览器。
+> 依据：第三轮检查时实测（生产响应头、`cargo audit`、`flutter pub outdated`），以及第 7 节审核中的非阻塞提示。
+
+### 8.1 安全
+
+- [ ] **生产安全响应头**（`deploy/nginx.conf`、`deploy/nginx.dev.conf`）：现在首页和 `/api/` 都没有任何安全响应头，
+  且响应里带 `Server: nginx/1.31.2`。加上 `Strict-Transport-Security`、`X-Content-Type-Options: nosniff`、
+  防嵌入（`X-Frame-Options` 或 CSP `frame-ancestors`）、`Referrer-Policy`，并设 `server_tokens off`。
+  注意 nginx 的 `add_header` 写在 location 里会覆盖上层的，要确认每个 location 都带上（用 `always` 让错误页也带）。
+  分享页 `/s/` 已有自己的 CSP（`SAFE_HTML_CSP`），不要被覆盖。
+- [ ] **应用的内容安全策略（CSP）**：为 Flutter 网页单独写一份（需要放行 `wasm-unsafe-eval`、同源 worker、
+  `blob:`/`data:` 图片、WebSocket 到同源 `/ws/` 等），先用 `Content-Security-Policy-Report-Only` 观察一轮再切正式。
+- [ ] `scripts/web-entry-cache-check.sh` 加检查：上述响应头存在、`Server` 不带版本；自测脚本补用例。
+- **验收**：部署后 `curl -I https://mica.cloudcele.com/` 与 `/api/ready` 能看到这些头；四个浏览器端到端脚本和
+  真实服务栈 Web E2E 通过；浏览器控制台无 CSP 违规。
+- [ ] **`ctutils` 0.4.2 → ≥ 0.4.4**（RUSTSEC-2026-0385，比较非恒定时间；经 `hmac`/`hkdf` 进入服务端）：
+  `cargo update -p ctutils`，根锁文件。
+- [ ] **SQLite 漏洞**（`libsqlite3-sys` 0.35，RUSTSEC-2026-0459）：`crates/mica-core` 的 `rusqlite` 现为 0.37，
+  升到带 `libsqlite3-sys` ≥ 0.39 的版本，根锁文件和 `clients/mica_flutter/rust/Cargo.lock` 都要更新；
+  验证本地模式、离线编辑、数据库迁移（`cargo test -p mica-core --features store` 与 FFI 指纹检查）。
+- [ ] **`rmcp` 0.9.1**（RUSTSEC-2026-0462）：公告针对 Streamable HTTP **客户端**，我们只用 stdio 服务端，不受影响。
+  在 `crates/mcp-server/Cargo.toml` 旁注明不受影响的理由；大版本升级（→ 3.x）评估工作量，单独做。
+- [ ] **把 `cargo audit` 纳入本地 CI 和官方 CI**：两个锁文件都扫；已知无修复版本的"无人维护"公告
+  （`cgmath`、`paste`、`smallstr`、`ttf-parser`、`unsafe-libyaml`、`adler`、`pin-utils`）用忽略清单逐条写明原因，
+  新出现的漏洞要让门禁失败。
+- **验收**：`cargo audit` 对两个锁文件除忽略清单外零告警。
+
+### 8.2 依赖升级
+
+- [ ] Flutter 依赖分批升级：`file_picker` 8→13、`tray_manager` 0.5→0.8、`window_manager` 0.5→0.6、
+  `screen_retriever` 0.2→0.3、`pasteboard` 0.5→0.6、`xml` 6→7、`flutter_svg`/`web`/`crypto` 小版本；
+  `flutter_rust_bridge` 2.12→2.13 与 Rust 端、生成代码一起升。升级前先读 `pubspec.yaml` 里的锁定理由，
+  有理由的保留或在本文说明为何解除。
+- **验收**：每批单独提交；`just ci` 通过；Windows 桌面冒烟（窗口大小记忆、托盘、文件选择、剪贴板粘贴图片）通过；
+  Linux .deb 启动正常。
+
+### 8.3 性能与体积
+
+- [ ] **网页按需加载不常用模块**：用 Dart 延迟导入（`deferred as`）拆出 AI 对话框、版本历史、关系图、导入等不在首屏的模块。
+  **验收**：首次打开登录页时 `main.dart.js` 体积下降（写明前后字节数），打开这些功能时首次加载正常，浏览器端到端脚本通过。
+- [ ] **评估 Flutter wasm 构建（skwasm）**：需要 COOP/COEP 跨域隔离响应头，并核对 Safari/Firefox 支持与对现有 worker、
+  wasm 引擎的影响。只出评估结论和实测数字，不直接切换。
+- [ ] **安卓冷启动实测**（需设备）：启动前加载两个中文字体是否拖慢首帧；有明显影响再改为首帧后加载。
+
+### 8.4 代码结构
+
+- [ ] 继续拆分外壳：`main_shell.dart`（5,191 行）、`main_workspace_view.dart`（3,019 行），方法同 5.6。
+  **验收**：`main.dart` 库从 14,606 降到 12,000 行以下，预算收紧，主流程无回归。
+- [ ] 渲染库 `render.dart`（5,733 行）：按路线图在下次新增块渲染器时抽出渲染器上下文接口并拆库；本轮若没有新增渲染器，
+  先出接口设计草案写进本文。编辑器库（7,060 行）找一两个自成一体的部分拆出，收紧预算。
+
+### 8.5 工程与发版
+
+- [ ] `release.yml` 的 macOS CLI 构建改为可选输入（默认关），GitHub 对 macOS 按 10 倍计费。
+- [ ] 安卓签名二选一（**需用户**拍板）：把签名密钥存为仓库机密，让官方 runner 构建的 APK 能覆盖安装；或在发版文档约定
+  APK 只从本地固定机器构建发布。
+- [ ] **发版产物验证（canary）**：在干净目录安装刚发布的版本（Windows 安装包、Linux CLI、.deb），校验能启动、
+  `/api/health` 与 `--version` 版本一致、固定入口文件契约；串进发版流程（路线图待办）。
+- [ ] yrs 模糊测试：跟进上游 #415，剩余 panic 修复后启用 4 条被跳过的 property 测试（路线图待办，依赖上游）。
+- [ ] 字体切片约 10 MB 进入 git 历史：评估是否改用 Git LFS，写结论；不改也要写明理由。
+- [ ] 下次发版前重跑一次 `Release dry-run`；发版部署后运行 `web-entry-cache-check.sh`，确认字体与新响应头检查通过。
+
+### 8.6 功能待办
+
+- [ ] **导入完成发邮件**：大批量导入在后台完成后给用户发邮件（复用 `mail.rs` 的邮件底座），含成功/失败计数与入口链接；
+  用户可在设置里关闭。验收：真实服务栈下导入完成后收到邮件（测试邮箱或本地邮件捕获）。
+- [ ] **`mica-md` 对外发布**（**需用户**）：按 [S5 发布手册](../single-source/stages/S5-sdk-release.md)准备好版本号、
+  变更说明和发布前检查结果，由用户本人执行 crates.io / npm 发布。
+- [ ] **issue #170**（点击一段时间后光标放不上去）：跟进报告人；拿到复现条件后定位修复，否则按项目惯例关闭并说明。
+
+### 8.7 GPUI 方向的剩余验证（需设备，见 [评估文档](../architecture/ui-gpui-evaluation.md) 第 8 节）
+
+- [ ] Windows 原生窗口下用真实中文输入法试 gpui-kit 与 Native Shell 的 Windows 后端（含是否重复上屏、候选窗位置）。
+- [ ] 安卓真机上跑 Native Shell 的 `RichEditor` 示例：组字、长按选词、把手、系统菜单。
+- [ ] Safari、Firefox 上重复评估文档 8.1 的 Web 测试。
+- **验收**：结果写回评估文档第 8 节；四道关卡状态更新。网页与桌面两套本地存储的去留在此之后再定。
+
+### 8.8 补充评估（只出结论，不直接改）
+
+- [ ] 服务端数据库查询性能：慢查询日志、常用接口的查询计划、索引覆盖；列出值得优化的前几项。
+- [ ] 无障碍：读屏、键盘可达性、对比度，按 Flutter 语义树检查主流程。
+- [ ] 多语言文案完整性：`app_zh.arb` 与 `app_en.arb` 键是否一致、是否有硬编码文案。
+- [ ] 移动端网页整体交互：在手机尺寸下走一遍主流程（登录、侧栏、编辑、选择、表格、设置），列出问题。
+
+### 不在本轮
+
+- 本地模式：保留。首页：不动。
