@@ -8,6 +8,29 @@ site=${site%/}
 headers=$(mktemp)
 trap 'rm -f "$headers"' EXIT
 
+check_security_headers() {
+  local path=$1 server
+  for spec in \
+    'strict-transport-security:max-age=[1-9][0-9]*' \
+    'x-content-type-options:nosniff' \
+    'x-frame-options:DENY' \
+    'referrer-policy:strict-origin-when-cross-origin'; do
+    local name=${spec%%:*} value=${spec#*:}
+    tr -d '\r' < "$headers" | grep -Eiq "^$name:[[:space:]]*$value([;[:space:]]|$)" \
+      || fail "$path is missing security header $name"
+  done
+  server=$(tr -d '\r' < "$headers" | grep -i '^server:' || true)
+  [ -z "$server" ] || printf '%s\n' "$server" | grep -Eiq '^server:[[:space:]]*nginx[[:space:]]*$' \
+    || fail "$path exposes an unexpected Server version"
+  if [ "$path" = /index.html ]; then
+    tr -d '\r' < "$headers" | grep -Eiq '^content-security-policy-report-only:.*wasm-unsafe-eval' \
+      || fail "$path has no report-only application CSP"
+    if tr -d '\r' < "$headers" | grep -Eiq '^content-security-policy:'; then
+      fail "$path unexpectedly enforces CSP before the observation cycle"
+    fi
+  fi
+}
+
 check_entry() {
   local path=$1 expected=$2 mime=${3:-} revalidate=${4:-true} status cache content_type
   status=$(curl -sS --max-time 30 -D "$headers" -o /dev/null -w '%{http_code}' "$site$path")
@@ -25,6 +48,7 @@ check_entry() {
         || fail "$path has an unexpected Content-Type (expected $mime)"
     fi
   fi
+  check_security_headers "$path"
   note "$path: $status"
 }
 
@@ -32,6 +56,9 @@ check_entry /index.html 200 text/html
 for path in /flutter_bootstrap.js /main.dart.js; do
   check_entry "$path" 200 '(application|text)/(x-)?javascript'
 done
+# Deferred UI modules are also fixed-name deployment entrypoints.
+check_entry /main.dart.js_1.part.js 200 '(application|text)/(x-)?javascript'
+check_entry /main.dart.js_missing.part.js 404
 for engine in mica_md mica_doc; do
   check_entry "/$engine/$engine.js" 200 '(application|text)/(x-)?javascript'
   check_entry "/$engine/${engine}_bg.wasm" 200 application/wasm
@@ -53,4 +80,5 @@ check_entry /assets/fonts/RobotoMono-Regular.ttf 200 font/ttf false
 check_entry /gfonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2 200 font/woff2 false
 check_entry /assets/fonts/NotoSansSC-Regular.otf 404
 check_entry /assets/fonts/DroidSansFallback.ttf 404
+check_entry /api/ready 200 application/json false
 note "Web entry contract: ALL GREEN"

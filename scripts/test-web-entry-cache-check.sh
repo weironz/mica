@@ -20,7 +20,7 @@ path=${url#https://example.test}
 [ "$path" != "${FAIL_NETWORK:-}" ] || exit 7
 status=200
 case "$path" in
-  */missing.wasm|/yjs_bundle.js|/mermaid.min.js|/assets/fonts/NotoSansSC-Regular.otf|/assets/fonts/DroidSansFallback.ttf) status=404 ;;
+  */missing.wasm|/main.dart.js_missing.part.js|/yjs_bundle.js|/mermaid.min.js|/assets/fonts/NotoSansSC-Regular.otf|/assets/fonts/DroidSansFallback.ttf) status=404 ;;
 esac
 [ "$path" != "${BAD_STATUS:-}" ] || status=200
 [ "$path" != "${NOT_FOUND:-}" ] || status=404
@@ -33,9 +33,21 @@ case "$path" in
   *.ttf) mime=font/ttf ;;
   *.otf) mime=font/otf ;;
   *.woff2) mime=font/woff2 ;;
+  /api/ready) mime=application/json ;;
 esac
 [ "$path" != "${BAD_MIME:-}" ] || mime=text/html
-printf 'HTTP/1.1 %s\r\nCache-Control: %s\r\nContent-Type: %s\r\n\r\n' "$status" "$cache" "$mime" > "$headers"
+printf 'HTTP/1.1 %s\r\nCache-Control: %s\r\nContent-Type: %s\r\n' "$status" "$cache" "$mime" > "$headers"
+for spec in 'Strict-Transport-Security:max-age=31536000' 'X-Content-Type-Options:nosniff' 'X-Frame-Options:DENY' 'Referrer-Policy:strict-origin-when-cross-origin'; do
+  name=${spec%%:*}; value=${spec#*:}
+  [ "$name" != "${MISSING_HEADER:-}" ] || [ "$path" != "${HEADER_PATH:-/index.html}" ] || continue
+  printf '%s: %s\r\n' "$name" "$value" >> "$headers"
+done
+printf 'Server: %s\r\n' "${SERVER_VALUE:-nginx}" >> "$headers"
+if [ "$path" = /index.html ] && [ -z "${MISSING_CSP:-}" ]; then
+  printf "Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'\r\n" >> "$headers"
+fi
+[ -z "${ENFORCED_CSP:-}" ] || printf "Content-Security-Policy: default-src 'self'\r\n" >> "$headers"
+printf '\r\n' >> "$headers"
 printf '%s' "$status"
 STUB
 chmod +x "$fixture/curl"
@@ -80,3 +92,34 @@ check fail 'wrong fallback shard MIME' BAD_MIME=/gfonts/roboto/v32/KFOmCnqEu92Fr
 check fail 'missing fallback shard' NOT_FOUND=/gfonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2
 check fail 'wrong icon font MIME' BAD_MIME=/assets/fonts/MaterialIcons-Regular.otf
 check fail 'full CJK font is still bundled' BAD_STATUS=/assets/fonts/NotoSansSC-Regular.otf
+for header in Strict-Transport-Security X-Content-Type-Options X-Frame-Options Referrer-Policy; do
+  check fail "missing $header" MISSING_HEADER="$header"
+done
+check fail 'headers lost in API location' MISSING_HEADER=X-Frame-Options HEADER_PATH=/api/ready
+check fail 'headers lost on an error response' MISSING_HEADER=X-Content-Type-Options HEADER_PATH=/mica_md/missing.wasm
+check fail 'nginx version exposed' SERVER_VALUE=nginx/1.31.2
+check fail 'missing report-only CSP' MISSING_CSP=1
+check fail 'CSP enforced before observation' ENFORCED_CSP=1
+
+# The report-only policy must allow the actual fixed bootstrap scripts after
+# future index.html edits; a policy that only looks plausible is insufficient.
+python3 - <<'PY_CSP'
+import base64
+import hashlib
+import pathlib
+import re
+root = pathlib.Path('.')
+html = (root / 'clients/mica_flutter/web/index.html').read_text()
+for attrs, body in re.findall(r'<script([^>]*)>([\s\S]*?)</script>', html):
+    if 'src=' in attrs:
+        continue
+    digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
+    for path in ['deploy/nginx.conf', 'deploy/nginx.dev.conf']:
+        if f"'sha256-{digest}'" not in (root / path).read_text():
+            raise SystemExit(f'{path}: CSP hash missing for actual bootstrap script')
+print('PASS: both observation policies permit the actual inline bootstraps')
+PY_CSP
+check fail 'cached deferred module' BAD_CACHE=/main.dart.js_1.part.js
+check fail 'missing deferred module' NOT_FOUND=/main.dart.js_1.part.js
+check fail 'HTML in place of deferred module' BAD_MIME=/main.dart.js_1.part.js
+check fail 'missing deferred module falls through to SPA' BAD_STATUS=/main.dart.js_missing.part.js

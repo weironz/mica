@@ -50,6 +50,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  audit:
+    name: RustSec (both lockfiles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --locked --version 0.23.0
+      - name: Test the audit gate and audit both graphs
+        run: |
+          bash scripts/test-rust-audit.sh
+          bash scripts/check-rust-audit.sh
+
   # Full remains the default gate. Auto is opt-in; unknown paths select every
   # job, and a caller can cover several commits by supplying base_ref.
   paths:
@@ -92,6 +105,10 @@ jobs:
           bash scripts/test-release-orchestration.sh
           bash scripts/test-release-version.sh
           bash scripts/test-ci-stacks.sh
+          bash scripts/test-android-signing.sh
+          bash scripts/test-release-canary.sh
+          bash scripts/test-release-site-canary.sh
+          python3 scripts/test-release-cli-matrix.py
       - id: groups
         env:
           CI_SCOPE: ${{ inputs.scope }}
@@ -598,6 +615,9 @@ jobs:
         run: |
           set -euo pipefail
           node e2e/sidebar_rename_e2e.mjs
+
+      - name: Deferred UI modules and recovery after a failed chunk download
+        run: node e2e/deferred_modules_e2e.mjs
 
       - name: Sidebar rename screenshots and results
         if: always()

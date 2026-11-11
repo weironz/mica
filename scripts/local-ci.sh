@@ -27,6 +27,11 @@ export CARGO_PROFILE_TEST_DEBUG=${CARGO_PROFILE_TEST_DEBUG:-0}
 part=${1:-all}
 case "$part" in all | rust | flutter | e2e) ;; *) fail "unknown part '$part' (all | rust | flutter | e2e)" ;; esac
 
+note "RustSec audit wrapper regressions"
+bash scripts/test-rust-audit.sh
+note "Rust dependency vulnerabilities and warnings (both lockfiles)"
+bash scripts/check-rust-audit.sh
+
 note "source files hidden by .gitignore"
 bash scripts/check-ignored-sources.sh
 
@@ -44,10 +49,11 @@ bash scripts/test-font-mirror.sh
 note "structure and CI/release script regressions"
 bash scripts/test-structure-gate.sh
 bash scripts/check-structure-ci.sh
-for check in md-wasm-build web-entry-cache-check release-artifacts release-orchestration release-version ci-stacks verify-prod; do
+for check in md-wasm-build web-entry-cache-check release-artifacts release-orchestration release-version ci-stacks verify-prod android-signing release-canary release-site-canary; do
   bash "scripts/test-$check.sh"
 done
 python3 scripts/test-compose-api-env.py
+python3 scripts/test-release-cli-matrix.py
 
 if [ "$part" = all ] || [ "$part" = rust ]; then
   note "structure: per-unit size gate"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The four editor/UI browser regressions; no API or database required.
+# Editor/UI and deferred-module browser regressions; no API or database required.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
@@ -54,3 +54,5 @@ export MICA_UI_RESULTS_DIR=${MICA_UI_RESULTS_DIR:-"$PWD/clients/mica_flutter/bui
 )
 node e2e/ui_experience_e2e.mjs
 node e2e/sidebar_rename_e2e.mjs
+
+node e2e/deferred_modules_e2e.mjs
