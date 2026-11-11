@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:js_interop';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
@@ -16,11 +17,38 @@ import 'package:mica_flutter/ui/theme_tokens.dart';
 external set _focusEditor(JSFunction value);
 @JS('micaExperienceState')
 external set _readState(JSFunction value);
+@JS('micaExperienceLoginLines')
+external set _readLoginLines(JSFunction value);
 
 void main() {
   // The same build also allows testing the full production settings wiring
   // against a Playwright-local mock API, never a production account.
   if (Uri.base.queryParameters['fixture'] == 'app') {
+    _readLoginLines = (() {
+      final labels = <String, List<Map<String, Object>>>{};
+      void visit(Element element) {
+        if (element is RenderObjectElement &&
+            element.renderObject is RenderParagraph) {
+          final render = element.renderObject as RenderParagraph;
+          final text = render.text.toPlainText();
+          if (text == '登录' || text == '注册') {
+            final boxes = render.getBoxesForSelection(
+              TextSelection(baseOffset: 0, extentOffset: text.length),
+            );
+            final tops = boxes.map((box) => (box.top * 100).round()).toSet();
+            (labels[text] ??= []).add({
+              'lines': tops.length,
+              'clipped': boxes.any((box) => box.right > render.size.width + 1),
+            });
+          }
+        }
+        element.visitChildElements(visit);
+      }
+
+      final root = WidgetsBinding.instance.rootElement;
+      if (root != null) visit(root);
+      return jsonEncode(labels).toJS;
+    }).toJS;
     app.main();
     return;
   }

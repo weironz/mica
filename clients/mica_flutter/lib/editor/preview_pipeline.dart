@@ -7,7 +7,9 @@ class RasterPreviewPipeline {
     required this.previewers,
     required this.requestRebuild,
     MicaTokens tokens = MicaTokens.light,
-  }) : _tokens = tokens;
+  }) : _tokens = tokens {
+    PaintingBinding.instance.systemFonts.addListener(_fontsChanged);
+  }
 
   final List<RasterPreviewer> previewers;
   final void Function(VoidCallback fn) requestRebuild;
@@ -35,6 +37,18 @@ class RasterPreviewPipeline {
   set tokens(MicaTokens value) {
     if (_disposed || _tokens == value) return;
     _tokens = value;
+    _invalidate();
+  }
+
+  // An SVG is a cached bitmap, so a text re-layout alone cannot replace tofu
+  // painted before a fallback shard arrived. Reject in-flight old rasters too.
+  void _fontsChanged() {
+    if (_disposed) return;
+    _invalidate();
+    _notify();
+  }
+
+  void _invalidate() {
     _generation++;
     for (final map in _cache.values) {
       for (final image in map.values) {
@@ -220,6 +234,7 @@ class RasterPreviewPipeline {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    PaintingBinding.instance.systemFonts.removeListener(_fontsChanged);
     _generation++;
     for (final map in _cache.values) {
       for (final image in map.values) {

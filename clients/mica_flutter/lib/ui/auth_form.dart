@@ -103,19 +103,30 @@ class AuthFormCard extends StatefulWidget {
 
 class _AuthFormCardState extends State<AuthFormCard> {
   AuthMode _mode = AuthMode.login;
+  int _fontEpoch = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    PaintingBinding.instance.systemFonts.addListener(_fontsChanged);
+  }
+
+  void _fontsChanged() {
+    if (mounted) setState(() => _fontEpoch++);
+  }
 
   /// The mode actually in force. Derived rather than synced, so a server that
   /// turns out to have registration closed cannot strand this form in a
   /// register mode the user can no longer see or leave — which is exactly what
   /// resetting `_mode` from `didUpdateWidget` would have to race against.
-  AuthMode get _effectiveMode =>
-      widget.allowRegister ? _mode : AuthMode.login;
+  AuthMode get _effectiveMode => widget.allowRegister ? _mode : AuthMode.login;
   final _email = TextEditingController();
   final _displayName = TextEditingController();
   final _password = TextEditingController();
 
   @override
   void dispose() {
+    PaintingBinding.instance.systemFonts.removeListener(_fontsChanged);
     _email.dispose();
     _displayName.dispose();
     _password.dispose();
@@ -150,17 +161,20 @@ class _AuthFormCardState extends State<AuthFormCard> {
         // whole control goes rather than shipping a one-segment switch or a
         // disabled half that invites a click and answers with a 403.
         if (widget.allowRegister) ...[
+          // Recreate the segment's intrinsic text painters when fallback
+          // glyphs arrive; a rebuild alone retains their pre-download widths.
           SegmentedButton<AuthMode>(
+            key: ValueKey(_fontEpoch),
             segments: [
               ButtonSegment(
                 value: AuthMode.login,
                 icon: const Icon(Icons.login),
-                label: Text(s.login),
+                label: Text(s.login, softWrap: false),
               ),
               ButtonSegment(
                 value: AuthMode.register,
                 icon: const Icon(Icons.person_add),
-                label: Text(s.register),
+                label: Text(s.register, softWrap: false),
               ),
             ],
             selected: {_effectiveMode},
@@ -349,9 +363,9 @@ class SignedInCard extends StatelessWidget {
         const SizedBox(height: 14),
         Text(
           strings.switchHint,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: theme.text.muted,
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: theme.text.muted),
         ),
       ],
     );

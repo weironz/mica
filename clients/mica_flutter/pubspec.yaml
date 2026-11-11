@@ -86,6 +86,8 @@ dev_dependencies:
   integration_test:
     sdk: flutter
 
+  # Dart team test utility, already used by the session/socket regression tests.
+  fake_async: any
 flutter:
   uses-material-design: true
   # Generate AppLocalizations from lib/l10n/*.arb (config in l10n.yaml).
@@ -98,16 +100,13 @@ flutter:
     # The large-tier logo artwork (>= 32px). Generated from assets/mica-logo.svg
     # by test/icon_export_test.dart — do not hand-edit.
     - assets/logo_mark.png
+    # Native last-resort fonts are loaded by ui/font_warmup.dart. CanvasKit
+    # uses the same-origin Noto shards instead of downloading both full fonts.
+    - path: fonts/NotoSansSC-Regular.otf
+      platforms: [android, ios, linux, macos]
+    - path: fonts/DroidSansFallback.ttf
+      platforms: [android, ios, linux, macos]
   fonts:
-    # Crisp CJK for the web (CanvasKit can't use system fonts by name, unlike
-    # desktop which defers to 微软雅黑/苹方 — see lib/cjk_fonts.dart). Noto Sans
-    # SC Regular, SIL OFL 1.1. DroidSansFallback stays as the broad-coverage tail.
-    - family: NotoSansSC
-      fonts:
-        - asset: fonts/NotoSansSC-Regular.otf
-    - family: CJKFallback
-      fonts:
-        - asset: fonts/DroidSansFallback.ttf
     # Real monospace for code. The generic 'monospace' family does NOT
     # resolve on Flutter web (CanvasKit falls back to Roboto), which made
     # code-block indentation almost invisible.

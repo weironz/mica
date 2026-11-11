@@ -17,24 +17,17 @@
 # e.g. notosanssc/v37/…; a Flutter upgrade can move them — CI runs --check so
 # that drift fails the build instead of 404ing at runtime).
 #
-# Mirrored: EVERY family in the engine's tables (262 files, ~11.2 MB) except
-# the four CJK siblings JP/KR/TC/HK (462 files, ~9.5 MB more): their repertoire
-# is pan-CJK so Noto Sans SC + the bundled DroidSansFallback tail already cover
-# those glyphs, and with a zh locale the engine's greedy picker prefers the SC
-# shards anyway. A request for an excluded family 404s same-origin and the run
-# degrades to the styled chain / tofu — the pre-mirror offline behavior. A
-# failed family is retried on every relayout (the engine never marks it done),
-# so DON'T exclude anything a real document can plausibly need: e.g. plain
-# `notosans` is the greedy winner for stray symbols like ∑ √ and its absence
-# spams 404s on every keystroke (measured). Exclusion list only — new families
-# from an engine bump are mirrored automatically on the next sync.
+# Mirror every family the pinned engine may request, including locale-specific
+# CJK shards. Web no longer bundles DroidSansFallback: excluding JP/KR/TC/HK
+# would leave Japanese/Korean or locale-selected glyphs without a fallback.
+# These files are downloaded by the browser only for glyphs actually used.
 #
 # Usage (from anywhere; paths are script-relative):
 #   tool/gfonts/mirror.sh          # sync: download missing shards, prune stale
 #   tool/gfonts/mirror.sh --check  # verify only (CI); exit 1 when out of sync
 set -euo pipefail
 
-EXCLUDE='notosansjp notosanskr notosanstc notosanshk'
+EXCLUDE=''
 GSTATIC='https://fonts.gstatic.com/s'
 
 APP_ROOT=$(cd "$(dirname "$0")/../.." && pwd)   # clients/mica_flutter
@@ -44,7 +37,7 @@ MIRROR="$APP_ROOT/web/gfonts"
 # build / `flutter precache --web`). We read the same data tables the engine
 # compiles in, so the expected-file list is exact by construction.
 if [ -z "${FLUTTER_ROOT:-}" ]; then
-  flutter_bin=$(command -v flutter) || { echo "mirror.sh: flutter not on PATH and FLUTTER_ROOT unset" >&2; exit 1; }
+  flutter_bin=$(command -v "${FLUTTER:-flutter}") || { echo "mirror.sh: selected FLUTTER not on PATH and FLUTTER_ROOT unset" >&2; exit 1; }
   # bin/flutter -> sdk root (resolve one symlink level for e.g. homebrew shims)
   [ -L "$flutter_bin" ] && flutter_bin=$(readlink -f "$flutter_bin")
   FLUTTER_ROOT=$(cd "$(dirname "$flutter_bin")/.." && pwd)
@@ -69,7 +62,9 @@ missing=$(echo "$expected" | while IFS= read -r p; do [ -s "$MIRROR/$p" ] || ech
 present=$(cd "$MIRROR" 2>/dev/null && find . -name '*.woff2' | sed 's|^\./||' || true)
 stale=$(echo "$present" | while IFS= read -r p; do
   [ -n "$p" ] || continue
-  echo "$expected" | grep -qxF "$p" || echo "$p"
+  # The full CJK table exceeds a pipe buffer. grep -q would close early and
+  # make echo fail with SIGPIPE under pipefail, marking valid shards stale.
+  grep -xF -- "$p" <<< "$expected" > /dev/null || echo "$p"
 done)
 
 if [ "${1:-}" = "--check" ]; then

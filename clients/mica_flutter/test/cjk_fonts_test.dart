@@ -5,15 +5,19 @@ import 'package:mica_flutter/cjk_fonts.dart';
 void main() {
   tearDown(() => debugDefaultTargetPlatformOverride = null);
 
-  test('Windows leads with the crisp system font (微软雅黑), not the bundled one', () {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    final f = cjkFontFallback;
-    expect(f.first, 'Microsoft YaHei UI');
-    // The washed-out bundled DroidSansFallback is no longer the SOLE fallback,
-    // only the last-resort tail.
-    expect(f, isNot(equals(const ['CJKFallback'])));
-    expect(f.last, 'CJKFallback');
-  });
+  test(
+    'Windows leads with the crisp system font (微软雅黑), not the bundled one',
+    () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final f = cjkFontFallback;
+      expect(f.first, 'Microsoft YaHei UI');
+      expect(f, isNot(contains('CJKFallback')));
+      expect(f, isNot(contains('NotoSansSC')));
+      expect(f, contains('Malgun Gothic'));
+      expect(f, contains('MingLiU-ExtB'));
+      expect(usesBundledCjkFonts, isFalse);
+    },
+  );
 
   test('macOS leads with PingFang SC (苹方)', () {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
@@ -27,12 +31,18 @@ void main() {
     expect(cjkFontFallback.last, 'CJKFallback');
   });
 
-  test('every platform keeps the bundled font as a tofu safety net', () {
-    for (final p in TargetPlatform.values) {
+  test('other native platforms keep the bundled font safety net', () {
+    for (final p in TargetPlatform.values.where(
+      (p) => p != TargetPlatform.windows,
+    )) {
       debugDefaultTargetPlatformOverride = p;
       expect(cjkFontFallback.last, 'CJKFallback', reason: '$p keeps the tail');
-      expect(cjkFontFallback.length, greaterThan(1),
-          reason: '$p prepends system CJK fonts');
+      expect(
+        cjkFontFallback.length,
+        greaterThan(1),
+        reason: '$p prepends system CJK fonts',
+      );
+      expect(usesBundledCjkFonts, isTrue);
     }
   });
 }

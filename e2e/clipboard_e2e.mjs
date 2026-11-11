@@ -1,6 +1,6 @@
 // Real Flutter editor keyboard path → browser ClipboardItem, in a tiny fixture.
 // The fixture exposes only focus; these assertions use actual Ctrl+A/C events.
-import { chromium } from '@playwright/test';
+import { launchBrowser } from './browser.mjs';
 import { readFileSync } from 'node:fs';
 
 // Captured from the user's Gemini page; source is an attribute, not text.
@@ -15,22 +15,7 @@ const base = origin.includes('?') ? origin : `${origin}/?harness=clipboard`;
 const source = 'print(1)\nprint(2)';
 const crossBlock = `${source}\n\nafter`;
 
-async function launch() {
-  try {
-    return await chromium.launch();
-  } catch (bundled) {
-    for (const channel of ['chrome', 'msedge']) {
-      try {
-        return await chromium.launch({ channel });
-      } catch {
-        // Try the next installed browser; CI uses the bundled Chromium.
-      }
-    }
-    throw bundled;
-  }
-}
-
-const browser = await launch();
+const browser = await launchBrowser();
 const context = await browser.newContext({
   locale: 'en-US',
   timezoneId: 'UTC',

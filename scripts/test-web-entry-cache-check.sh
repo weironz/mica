@@ -19,13 +19,21 @@ done
 path=${url#https://example.test}
 [ "$path" != "${FAIL_NETWORK:-}" ] || exit 7
 status=200
-case "$path" in */missing.wasm|/yjs_bundle.js|/mermaid.min.js) status=404 ;; esac
+case "$path" in
+  */missing.wasm|/yjs_bundle.js|/mermaid.min.js|/assets/fonts/NotoSansSC-Regular.otf|/assets/fonts/DroidSansFallback.ttf) status=404 ;;
+esac
 [ "$path" != "${BAD_STATUS:-}" ] || status=200
 [ "$path" != "${NOT_FOUND:-}" ] || status=404
 cache=${VALID_CACHE:-no-cache}
 [ "$path" != "${BAD_CACHE:-}" ] || cache=public
 mime=application/javascript
-case "$path" in *.wasm) mime=application/wasm ;; *.html) mime=text/html ;; esac
+case "$path" in
+  *.wasm) mime=application/wasm ;;
+  *.html) mime=text/html ;;
+  *.ttf) mime=font/ttf ;;
+  *.otf) mime=font/otf ;;
+  *.woff2) mime=font/woff2 ;;
+esac
 [ "$path" != "${BAD_MIME:-}" ] || mime=text/html
 printf 'HTTP/1.1 %s\r\nCache-Control: %s\r\nContent-Type: %s\r\n\r\n' "$status" "$cache" "$mime" > "$headers"
 printf '%s' "$status"
@@ -66,3 +74,9 @@ check fail 'cached Mermaid renderer' BAD_CACHE=/mica_preview/mermaid_bg.wasm
 check fail 'HTML in place of renderer wasm' BAD_MIME=/mica_preview/math_bg.wasm
 check fail 'missing renderer falls through to SPA' BAD_STATUS=/mica_preview/missing.wasm
 check fail 'retired Mermaid script falls through to SPA' BAD_STATUS=/mermaid.min.js
+check fail 'wrong code font MIME' BAD_MIME=/assets/fonts/RobotoMono-Regular.ttf
+check fail 'missing code font' NOT_FOUND=/assets/fonts/RobotoMono-Regular.ttf
+check fail 'wrong fallback shard MIME' BAD_MIME=/gfonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2
+check fail 'missing fallback shard' NOT_FOUND=/gfonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2
+check fail 'wrong icon font MIME' BAD_MIME=/assets/fonts/MaterialIcons-Regular.otf
+check fail 'full CJK font is still bundled' BAD_STATUS=/assets/fonts/NotoSansSC-Regular.otf

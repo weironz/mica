@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:xml/xml.dart';
 
@@ -16,10 +17,16 @@ String _withCjkFonts(String svg) {
   final document = XmlDocument.parse(svg);
   for (final text in document.findAllElements('text')) {
     if (!_cjk.hasMatch(text.innerText)) continue;
-    // flutter_svg passes a single family to ParagraphBuilder. CanvasKit can't
-    // resolve system fonts; its async fallback can leave tofu in a cached
-    // image. Use the same bundled faces as the editor for CJK SVG text.
-    final font = _korean.hasMatch(text.innerText)
+    // flutter_svg passes a single family to ParagraphBuilder. CanvasKit uses
+    // its global, on-demand fallback fonts; the preview pipeline invalidates
+    // rasters when those fonts arrive. Native uses the bundled safety net.
+    final font = kIsWeb
+        ? 'Roboto'
+        : defaultTargetPlatform == TargetPlatform.windows
+        ? (_korean.hasMatch(text.innerText)
+              ? 'Malgun Gothic'
+              : 'Microsoft YaHei UI')
+        : _korean.hasMatch(text.innerText)
         ? bundledCjkFonts.last
         : bundledCjkFonts.first;
     for (final span in [text, ...text.findAllElements('tspan')]) {

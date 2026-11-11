@@ -266,7 +266,7 @@ void main() {
       registerWebProbes(); // browser harness hooks; no-op off web
       // index.html started both engines; sync builds replicas synchronously.
       await Future.wait([initMarkdownCodec(), initDocEngine()]);
-      warmUpFonts();
+      await warmUpFonts();
       runApp(const MicaApp());
     },
     (error, stack) {

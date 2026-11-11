@@ -9,14 +9,16 @@ headers=$(mktemp)
 trap 'rm -f "$headers"' EXIT
 
 check_entry() {
-  local path=$1 expected=$2 mime=${3:-} status cache content_type
+  local path=$1 expected=$2 mime=${3:-} revalidate=${4:-true} status cache content_type
   status=$(curl -sS --max-time 30 -D "$headers" -o /dev/null -w '%{http_code}' "$site$path")
   [ "$status" = "$expected" ] || fail "$path returned $status, expected $expected"
   if [ "$expected" = 200 ]; then
     cache=$(tr -d '\r' < "$headers" | grep -i '^cache-control:' || true)
     # no-store is the dev server's stronger no-cache policy.
-    printf '%s\n' "$cache" | grep -Eiq '(^|[[:space:],])(no-cache|no-store)([[:space:],]|$)' \
-      || fail "$path has no revalidation policy"
+    if [ "$revalidate" = true ]; then
+      printf '%s\n' "$cache" | grep -Eiq '(^|[[:space:],])(no-cache|no-store)([[:space:],]|$)' \
+        || fail "$path has no revalidation policy"
+    fi
     if [ -n "$mime" ]; then
       content_type=$(tr -d '\r' < "$headers" | grep -i '^content-type:' || true)
       printf '%s\n' "$content_type" | grep -Eiq "^content-type:[[:space:]]*$mime([;[:space:]]|$)" \
@@ -44,4 +46,11 @@ done
 check_entry /mica_preview/missing.wasm 404
 check_entry /yjs_bundle.js 404
 check_entry /mermaid.min.js 404
+# Full CJK fonts are native-only. The Web still ships the code font and the
+# engine's same-origin compressed shards; neither may fall through to HTML.
+check_entry /assets/fonts/MaterialIcons-Regular.otf 200 font/otf false
+check_entry /assets/fonts/RobotoMono-Regular.ttf 200 font/ttf false
+check_entry /gfonts/roboto/v32/KFOmCnqEu92Fr1Me4GZLCzYlKw.woff2 200 font/woff2 false
+check_entry /assets/fonts/NotoSansSC-Regular.otf 404
+check_entry /assets/fonts/DroidSansFallback.ttf 404
 note "Web entry contract: ALL GREEN"

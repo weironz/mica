@@ -1,5 +1,6 @@
 // Browser mouse and keyboard against the real WorkspaceView and rename dialog.
-import { chromium, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { launchBrowser } from './browser.mjs';
 import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
@@ -19,11 +20,7 @@ const server = createServer(async (req, res) => {
   } catch { res.writeHead(404).end(); }
 });
 await new Promise(done => server.listen(8094, '127.0.0.1', done));
-let browser;
-for (const channel of [undefined, 'chrome', 'msedge']) {
-  try { browser = await chromium.launch(channel ? { channel } : {}); break; } catch {}
-}
-if (!browser) { server.close(); throw new Error('No Chromium available'); }
+const browser = await launchBrowser().catch(error => { server.close(); throw error; });
 const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: 900 } });
 const errors = [];
 page.on('pageerror', error => errors.push(String(error)));

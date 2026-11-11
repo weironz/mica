@@ -1,14 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../cjk_fonts.dart';
 
-/// Loads the CJK fallback before the first document paints on Flutter Web.
+Future<void>? _nativeFonts;
+
+Future<void> _loadNativeFonts() async {
+  for (final (family, path) in const [
+    ('NotoSansSC', 'fonts/NotoSansSC-Regular.otf'),
+    ('CJKFallback', 'fonts/DroidSansFallback.ttf'),
+  ]) {
+    await (FontLoader(family)..addFont(rootBundle.load(path))).load();
+  }
+}
+
+/// Loads retained native fallbacks, and requests the Web's first visible Noto shards.
 ///
-/// The custom editor would otherwise briefly paint `.notdef` while the bundled
-/// font becomes available. The span styles must match the Material theme: a
-/// default-style painter warms the engine's remote family and leaves the first
-/// themed CJK label to reshape when that download finishes.
-void warmUpFonts() {
+/// The span styles match the Material theme. Web loading is asynchronous;
+/// text and cached SVG previews repaint when the engine announces new fonts.
+Future<void> warmUpFonts() async {
+  if (usesBundledCjkFonts) await (_nativeFonts ??= _loadNativeFonts());
   for (final span in cjkFontWarmupSpans()) {
     final painter = TextPainter(text: span, textDirection: TextDirection.ltr)
       ..layout();

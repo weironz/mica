@@ -1,6 +1,7 @@
 // Real browser inputs against production widgets; all content/accounts synthetic.
 // Build clients/mica_flutter/e2e/ui_experience_harness.dart into build/ui_experience.
-import { chromium, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { launchBrowser } from './browser.mjs';
 import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
@@ -27,11 +28,7 @@ await new Promise(done => server.listen(8093, '127.0.0.1', done));
 // fixture=app parameter alongside it.
 const origin = process.env.MICA_UI_BASE_URL || 'http://127.0.0.1:8093';
 const base = `${origin}/?harness=ui_experience`;
-let browser;
-for (const channel of [undefined, 'chrome', 'msedge']) {
-  try { browser = await chromium.launch(channel ? {channel} : {}); break; } catch {}
-}
-if (!browser) { server.close(); throw new Error('No Chromium browser available'); }
+const browser = await launchBrowser().catch(error => { server.close(); throw error; });
 const context = await browser.newContext({ locale: 'zh-CN', timezoneId: 'Asia/Shanghai', viewport: { width: 1280, height: 900 } });
 const page = await context.newPage();
 const errors = [];
@@ -204,6 +201,27 @@ try {
   await full.getByRole('button', {name:'关闭', exact:true}).click({force: true});
   await full.getByRole('button', {name:'返回', exact:true}).waitFor({state: 'hidden'});
   check('production mobile settings closes', await full.getByRole('button', {name:'返回', exact:true}).count() === 0);
+  // Fonts now arrive as on-demand shards. A cold login must retain single-line
+  // Chinese segment labels after the fallback glyph metrics become available.
+  const loginContext = await browser.newContext({locale: 'zh-CN', viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
+  try {
+    const login = await loginContext.newPage();
+    login.on('pageerror', error => errors.push(String(error)));
+    await login.route('**/api/**', route => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({registration_open: true})}));
+    await login.goto(`${base}&fixture=app`);
+    await login.locator('flt-semantics-placeholder').waitFor({state: 'attached'});
+    await semantics(login);
+    await login.getByText('登录', {exact: true}).first().waitFor();
+    await login.waitForLoadState('networkidle');
+    await shot('ui-experience-login-fonts.png', login);
+    const labelLines = JSON.parse(await login.evaluate(() => window.micaExperienceLoginLines()));
+    for (const label of ['登录', '注册']) {
+      const metrics = labelLines[label] || [];
+      check(`cold login keeps ${label} on one line`, metrics.length > 0 && metrics.every(row => row.lines === 1 && !row.clipped), JSON.stringify(metrics));
+    }
+  } finally {
+    await loginContext.close();
+  }
   check('no uncaught browser exceptions', errors.length === 0, errors.join(' | '));
   await writeFile(resolve(output, 'ui-experience-results.json'), JSON.stringify({results, errors}, null, 2));
 } catch (error) {

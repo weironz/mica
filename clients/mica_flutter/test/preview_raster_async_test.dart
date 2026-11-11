@@ -28,6 +28,33 @@ void main() {
   Future<ui.Image> image(WidgetTester tester) async =>
       (await tester.runAsync(() => createTestImage(width: 4, height: 4)))!;
 
+  testWidgets('font arrival replaces cached and in-flight glyph rasters', (
+    tester,
+  ) async {
+    final previewer = _DelayedPreviewer();
+    final pipeline = RasterPreviewPipeline(
+      previewers: [previewer],
+      requestRebuild: (fn) => fn(),
+    );
+    addTearDown(pipeline.dispose);
+    final cached = await image(tester);
+    pipeline.request('mermaid', 'cached');
+    previewer.jobs[0].complete((image: cached, baseline: null));
+    await tester.pump();
+    expect(pipeline.imagesOf('mermaid'), hasLength(1));
+    pipeline.request('mermaid', 'pending');
+    final pending = await image(tester);
+    await tester.binding.handleSystemMessage({'type': 'fontsChange'});
+    expect(pipeline.imagesOf('mermaid'), isEmpty);
+    previewer.jobs[1].complete((image: pending, baseline: null));
+    await tester.pump();
+    expect(pending.debugDisposed, isTrue);
+    pipeline.request('mermaid', 'cached');
+    expect(previewer.jobs, hasLength(3));
+    previewer.jobs[2].complete(null);
+    await tester.pump();
+  });
+
   for (final oldFirst in [true, false]) {
     testWidgets('theme switch rejects stale image, oldFirst=$oldFirst', (
       tester,

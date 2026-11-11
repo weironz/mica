@@ -1,9 +1,9 @@
 // The release-built editor with its real worker and bundled fonts.
-import { chromium } from '@playwright/test';
+import { launchBrowser } from './browser.mjs';
 
 const baseArg = process.argv.indexOf('--base');
 const base = baseArg >= 0 ? process.argv[baseArg + 1] : 'http://127.0.0.1:8091';
-const browser = await chromium.launch().catch(() => chromium.launch({ channel: 'chrome' }));
+const browser = await launchBrowser();
 
 try {
   const context = await browser.newContext({ viewport: { width: 1100, height: 600 }, locale: 'zh-CN' });
