@@ -7,8 +7,9 @@
 # Opt-in release asset (`just release-artifacts X.Y.Z --apk`, or the release
 # workflow's build_android input / MICA_BUILD_ANDROID variable). Native works
 # on Windows or Linux with an Android SDK (ANDROID_HOME, platform 36, NDK
-# 28.2.13676358) and a JDK 17+. Signed with the build machine's debug key:
-# for manual install, not a store (docs/ops/release.md「Android / Linux 安装包」).
+# 28.2.13676358) and a JDK 17+. Release signing uses the user-owned stable keystore:
+# see MICA_ANDROID_* in the release documentation; no private key is created here.
+# For manual install, not a store (docs/ops/release.md「Android / Linux 安装包」).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh

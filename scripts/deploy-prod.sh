@@ -105,3 +105,10 @@ for a in "${@:2}"; do
   fi
 done
 bash scripts/verify-prod.sh "$version"
+# Preserve the existing recovery path for historical releases. A successful old
+# deployment is not a failure merely because that tag predates this new gate.
+if git cat-file -e "$tag:scripts/release-canary.sh" 2>/dev/null; then
+  bash scripts/release-site-canary.sh "$version" "${SITE:-https://mica.cloudcele.com}"
+else
+  echo "==> legacy $tag: legacy verify passed; new release canary is unavailable and was NOT run"
+fi

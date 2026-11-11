@@ -146,7 +146,9 @@ manifest_names() { sed 's/^[0-9a-f]*[[:space:]][[:space:]]//' "$1" | sort; }
   exit 1
 }
 
-expected_windows=$'Mica-Setup-'"$version"$'.exe\nmica-cli-'"$version"'-windows-x64.exe'
+expected_windows="mica-cli-$version-windows-x64.exe"
+[ "$(manifest_names "$out/sha256-windows-installer.txt")" = "Mica-Setup-$version.exe" ] \
+  || { echo 'FAIL: installer must have its own manifest'; exit 1; }
 expected_linux="mica-cli-$version-linux-x64"
 [ "$(manifest_names "$out/sha256-windows.txt")" = "$expected_windows" ] || {
   echo 'FAIL: sha256-windows.txt must list the Windows assets and nothing else' >&2
@@ -259,9 +261,8 @@ h_win=2222222222222222222222222222222222222222222222222222222222222222
 h_lin=3333333333333333333333333333333333333333333333333333333333333333
 h_mac=4444444444444444444444444444444444444444444444444444444444444444
 
-printf '%s  %s\n' "$h_setup" "Mica-Setup-$version.exe" \
-                   "$h_win" "mica-cli-$version-windows-x64.exe" \
-  > "$files_dir/sha256-windows.txt"
+printf '%s  %s\n' "$h_setup" "Mica-Setup-$version.exe" > "$files_dir/sha256-windows-installer.txt"
+printf '%s  %s\n' "$h_win" "mica-cli-$version-windows-x64.exe" > "$files_dir/sha256-windows.txt"
 printf '%s  %s\n' "$h_lin" "mica-cli-$version-linux-x64" > "$files_dir/sha256-linux.txt"
 printf '%s  %s\n' "$h_mac" "mica-cli-$version-macos-arm64" > "$files_dir/sha256-macos.txt"
 
@@ -296,7 +297,13 @@ expect_publish_refusal() { # $1 = needle
 # Assets present, no manifests attached: refuse before any digest comparison.
 write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
           "mica-cli-$version-linux-x64:$h_lin"
-expect_publish_refusal 'sha256-windows.txt'
+expect_publish_refusal 'sha256-windows-installer.txt'
+
+# The old hosted producer had only the CLI manifest, so installer verification
+# must refuse even when both CLI manifests are present.
+write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
+          "mica-cli-$version-linux-x64:$h_lin" "sha256-windows.txt:" "sha256-linux.txt:"
+expect_publish_refusal 'sha256-windows-installer.txt'
 
 # Complete and correct: publish. gh reports digests with the algorithm prefix
 # (`sha256:<hex>`); comparing that verbatim against a bare-hex manifest refused
@@ -304,26 +311,26 @@ expect_publish_refusal 'sha256-windows.txt'
 write_tsv "Mica-Setup-$version.exe:sha256:$h_setup" \
           "mica-cli-$version-windows-x64.exe:sha256:$h_win" \
           "mica-cli-$version-linux-x64:sha256:$h_lin" \
-          "sha256-windows.txt:" "sha256-linux.txt:"
+          "sha256-windows-installer.txt:" "sha256-windows.txt:" "sha256-linux.txt:"
 publish
 [ -s "$fixture_root/gh.log" ] || { echo 'FAIL: publish did not edit a complete release' >&2; exit 1; }
 
 # Manifest attached but its hash disagrees with the asset GitHub holds.
 write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
           "mica-cli-$version-linux-x64:9999999999999999999999999999999999999999999999999999999999999999" \
-          "sha256-windows.txt:" "sha256-linux.txt:"
+          "sha256-windows-installer.txt:" "sha256-windows.txt:" "sha256-linux.txt:"
 expect_publish_refusal 'stale'
 
 # An attached macOS CLI is verifiable too: without its manifest, refuse.
 write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
           "mica-cli-$version-linux-x64:$h_lin" "mica-cli-$version-macos-arm64:$h_mac" \
-          "sha256-windows.txt:" "sha256-linux.txt:"
+          "sha256-windows-installer.txt:" "sha256-windows.txt:" "sha256-linux.txt:"
 expect_publish_refusal 'sha256-macos.txt'
 
 # Likewise an attached .deb: optional, but never published unverifiable.
 write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
           "mica-cli-$version-linux-x64:$h_lin" "Mica-$version-linux-amd64.deb:$h_mac" \
-          "sha256-windows.txt:" "sha256-linux.txt:"
+          "sha256-windows-installer.txt:" "sha256-windows.txt:" "sha256-linux.txt:"
 expect_publish_refusal 'sha256-linux-desktop.txt'
 
 # No server-side digest: the script must hash the attached asset itself.
@@ -331,7 +338,7 @@ printf 'linux-cli-fixture\n' > "$files_dir/mica-cli-$version-linux-x64"
 actual_lin=$(sha256sum "$files_dir/mica-cli-$version-linux-x64" | cut -d' ' -f1)
 printf '%s  %s\n' "$actual_lin" "mica-cli-$version-linux-x64" > "$files_dir/sha256-linux.txt"
 write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
-          "mica-cli-$version-linux-x64:" "sha256-windows.txt:" "sha256-linux.txt:"
+          "mica-cli-$version-linux-x64:" "sha256-windows-installer.txt:" "sha256-windows.txt:" "sha256-linux.txt:"
 publish
 [ -s "$fixture_root/gh.log" ] || { echo 'FAIL: publish did not verify a digest-less asset by hashing it' >&2; exit 1; }
 

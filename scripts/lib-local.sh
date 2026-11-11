@@ -111,7 +111,9 @@ manifest_for_asset() {
     Mica-*-android-*.apk) echo sha256-android.txt ;;
     *-linux-*) echo sha256-linux.txt ;;
     *-macos-*) echo sha256-macos.txt ;;
-    *-windows-* | Mica-Setup-*) echo sha256-windows.txt ;;
+    # Independent producer: the installer job must not overwrite the CLI job's manifest.
+    Mica-Setup-*) echo sha256-windows-installer.txt ;;
+    *-windows-*) echo sha256-windows.txt ;;
     *) return 1 ;;
   esac
 }

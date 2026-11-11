@@ -109,7 +109,7 @@ case "$os" in
     cp "$setup" "$out/"
     if [ "$smoke" = 1 ]; then
       note "installer smoke test (install + launch)"
-      powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 "$(cygpath -w "$out/Mica-Setup-$version.exe")"
+      powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 "$(cygpath -w "$out/Mica-Setup-$version.exe")" -ExpectedVersion "$version"
     fi
     build_cli_native windows-x64.exe mica-cli.exe
     if docker info >/dev/null 2>&1; then
@@ -146,7 +146,7 @@ if [ "$apk" = 1 ]; then note "Android APKs"; bash scripts/build-android-apk.sh "
 # Docker), and the updater on that platform asks for its own sha256-<os>.txt by
 # name. The stale manifests were already cleared before the build, so only what
 # this run really produced is written now.
-for manifest in sha256-windows.txt sha256-linux.txt sha256-macos.txt \
+for manifest in sha256-windows.txt sha256-windows-installer.txt sha256-linux.txt sha256-macos.txt \
                 sha256-linux-desktop.txt sha256-android.txt; do
   : > "$out/$manifest"
   for f in "$out"/*; do

@@ -104,3 +104,10 @@ latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
 [ "$latest" = "$tag" ] \
   || fail "/releases/latest is $latest, expected $tag — the in-app updater will not see this release"
 note "$tag is public and latest"
+
+
+# Publication and deployment are separate. The hosted canary downloads what
+# was actually published; on a developer Windows host do not install over the
+# user's existing registry/profile as a shortcut.
+note "Next acceptance (not yet claimed): gh workflow run release-canary.yml --ref $tag -f version=$version"
+note "With Actions unavailable, run scripts/release-canary.sh $version on Linux and a disposable Windows environment before deployment."

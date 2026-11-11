@@ -45,6 +45,10 @@ on:
       # Opt-in client packages. Off unless ticked here, or switched on for every
       # run with the repository variable MICA_BUILD_LINUX_DEB / MICA_BUILD_ANDROID
       # set to 'true' (Settings → Secrets and variables → Actions → Variables).
+      build_macos_cli:
+        description: 'Also build macOS CLI (optional hosted runner)'
+        type: boolean
+        default: false
       build_linux_deb:
         description: 'Also build the Linux .deb (Mica-X.Y.Z-linux-amd64.deb)'
         type: boolean
@@ -65,6 +69,9 @@ on:
         type: string
         required: true
       publish:
+        type: boolean
+        default: false
+      build_macos_cli:
         type: boolean
         default: false
       build_linux_deb:
@@ -106,6 +113,7 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
       tag: ${{ steps.ver.outputs.tag }}
+      cli-matrix: ${{ steps.cli-matrix.outputs.matrix }}
     steps:
       # The tag is not evidence of anything: `git tag v0.13.29 && git push`
       # without `just release` (which is what bumps) builds an installer FILE
@@ -114,6 +122,14 @@ jobs:
       # check live in scripts/release-version.sh — one resolver, one validation,
       # exercised by scripts/test-release-version.sh on both trigger paths.
       - uses: actions/checkout@v5
+
+      - name: Resolve CLI runners (macOS is opt-in)
+        id: cli-matrix
+        env:
+          BUILD_MACOS_CLI: ${{ inputs.build_macos_cli }}
+        run: |
+          python3 scripts/test-release-cli-matrix.py
+          python3 scripts/release-cli-matrix.py >> "$GITHUB_OUTPUT"
 
       - name: Resolve version
         id: ver
@@ -204,11 +220,18 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           /DAppVersion=${{ needs.draft.outputs.version }} installer\mica.iss
 
+      - name: Write installer checksum (independent of the CLI producer)
+        shell: bash
+        working-directory: clients/mica_flutter/installer/Output
+        run: sha256sum "Mica-Setup-${{ needs.draft.outputs.version }}.exe" > sha256-windows-installer.txt
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v5
         with:
           name: Mica-Setup-${{ needs.draft.outputs.version }}
-          path: clients/mica_flutter/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
+          path: |
+            clients/mica_flutter/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
+            clients/mica_flutter/installer/Output/sha256-windows-installer.txt
           if-no-files-found: error
 
       # Smoke-test the ACTUAL packaged installer before it can reach a release.
@@ -225,7 +248,7 @@ jobs:
         working-directory: .
         run: |
           $ver = '${{ needs.draft.outputs.version }}'
-          ./scripts/smoke-installer.ps1 -Setup "clients\mica_flutter\installer\Output\Mica-Setup-$ver.exe"
+          ./scripts/smoke-installer.ps1 -Setup "clients\mica_flutter\installer\Output\Mica-Setup-$ver.exe" -ExpectedVersion $ver
 
       - name: Publish installer to release
         # Tag pushes always publish; manual runs only when publish=true (else
@@ -245,7 +268,9 @@ jobs:
           prerelease: false
           make_latest: true
           fail_on_unmatched_files: true
-          files: clients/mica_flutter/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
+          files: |
+            clients/mica_flutter/installer/Output/Mica-Setup-${{ needs.draft.outputs.version }}.exe
+            clients/mica_flutter/installer/Output/sha256-windows-installer.txt
 
   cli:
     # Build + publish the mica-cli binary for each desktop OS.
@@ -257,35 +282,7 @@ jobs:
     needs: draft
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            bin: mica-cli.exe
-            suffix: windows-x64.exe
-            osname: windows
-          # STATIC musl, not the runner's glibc.
-          #
-          # `ubuntu-latest` is 24.04, so a default build links GLIBC_2.39 and
-          # then refuses to start on anything older — reported 2026-08-12 from a
-          # node running an older Ubuntu:
-          #   mica-cli: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39'
-          #   not found (required by mica-cli)
-          # Which is the worst possible shape for THIS binary: it is the tool you
-          # reach for ON a server, and servers are exactly the machines not
-          # running the newest distro.
-          #
-          # musl is clean here because nothing in the workspace links C: reqwest
-          # is `default-features = false` + `rustls-tls`, so there is no OpenSSL
-          # to fight. The result runs on any Linux, Alpine included.
-          - os: ubuntu-latest
-            bin: mica-cli
-            suffix: linux-x64
-            target: x86_64-unknown-linux-musl
-            osname: linux
-          - os: macos-latest
-            bin: mica-cli
-            suffix: macos-arm64
-            osname: macos
+      matrix: ${{ fromJSON(needs.draft.outputs['cli-matrix']) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -377,6 +374,14 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Verify the delivered CLI version
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.draft.outputs.version }}
+        run: |
+          got=$(./${{ steps.stage.outputs.asset }} --version)
+          printf '%s\n' "$got" | tr ' ' '\n' | grep -Fx "$EXPECTED_VERSION"
 
       # `mica-cli update` refuses to install a binary it cannot verify against
       # the release's sha256-<os>.txt (issue #38), so every release must carry
@@ -598,13 +603,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # Signed with the builder's debug key (manual install, no store). The
-      # key persists in the runner's mica-client-android-key Docker volume, so
-      # APKs from this runner install over each other; an APK built elsewhere
-      # needs an uninstall first. See docs/ops/release.md.
+      - name: Materialize the stable Android signing key
+        shell: bash
+        env:
+          MICA_ANDROID_KEYSTORE_BASE64: ${{ secrets.MICA_ANDROID_KEYSTORE_BASE64 }}
+          MICA_ANDROID_KEY_ALIAS: ${{ secrets.MICA_ANDROID_KEY_ALIAS }}
+          MICA_ANDROID_STORE_PASSWORD: ${{ secrets.MICA_ANDROID_STORE_PASSWORD }}
+          MICA_ANDROID_KEY_PASSWORD: ${{ secrets.MICA_ANDROID_KEY_PASSWORD }}
+          MICA_ANDROID_STORE_TYPE: ${{ vars.MICA_ANDROID_STORE_TYPE || 'JKS' }}
+        run: |
+          set -euo pipefail
+          for name in MICA_ANDROID_KEYSTORE_BASE64 MICA_ANDROID_KEY_ALIAS MICA_ANDROID_STORE_PASSWORD MICA_ANDROID_KEY_PASSWORD; do
+            [ -n "${!name}" ] || { echo "::error::Missing stable APK signing secret $name"; exit 1; }
+          done
+          mkdir -m 700 -p "$RUNNER_TEMP/android-signing"
+          printf '%s' "$MICA_ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/android-signing/release.keystore"
+          chmod 600 "$RUNNER_TEMP/android-signing/release.keystore"
+          keytool -list -keystore "$RUNNER_TEMP/android-signing/release.keystore" -storetype "$MICA_ANDROID_STORE_TYPE" \
+            -alias "$MICA_ANDROID_KEY_ALIAS" -storepass:env MICA_ANDROID_STORE_PASSWORD > /dev/null
+          echo "MICA_ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/android-signing/release.keystore" >> "$GITHUB_ENV"
       - name: Build the APKs in the pinned builder
         env:
           MICA_CLIENT_BUILD: docker
+          MICA_ANDROID_KEY_ALIAS: ${{ secrets.MICA_ANDROID_KEY_ALIAS }}
+          MICA_ANDROID_STORE_PASSWORD: ${{ secrets.MICA_ANDROID_STORE_PASSWORD }}
+          MICA_ANDROID_KEY_PASSWORD: ${{ secrets.MICA_ANDROID_KEY_PASSWORD }}
+          MICA_ANDROID_STORE_TYPE: ${{ vars.MICA_ANDROID_STORE_TYPE || 'JKS' }}
         run: bash scripts/build-android-apk.sh "${{ needs.draft.outputs.version }}" out
       - name: Write the checksum manifest
         working-directory: out
@@ -627,6 +651,10 @@ jobs:
           files: |
             out/Mica-*.apk
             out/sha256-android.txt
+      - name: Remove Android signing material
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/android-signing"
 
   publish:
     # The opt-in package jobs are waited for when they run and do not hold the
@@ -660,3 +688,13 @@ jobs:
           echo "releases/latest -> $latest"
           [ "$latest" = "${{ needs.draft.outputs.tag }}" ] \
             || { echo "::error::/releases/latest is $latest, expected ${{ needs.draft.outputs.tag }} — the in-app updater will not see this release"; exit 1; }
+
+
+  canary:
+    needs: [draft, publish]
+    if: ${{ needs.publish.result == 'success' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-canary.yml
+    with:
+      version: ${{ needs.draft.outputs.version }}

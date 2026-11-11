@@ -6,7 +6,10 @@
 # Close an existing Mica client first: its single-instance lock blocks the probe.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 <setup.exe>
-param([Parameter(Mandatory = $true)][string]$Setup)
+param(
+  [Parameter(Mandatory = $true)][string]$Setup,
+  [string]$ExpectedVersion = ''
+)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'wait-installer.ps1')
 
@@ -43,6 +46,13 @@ try {
   $exe = Join-Path $installDir 'mica_flutter.exe'
   Wait-MicaInstaller -Installer $inst -Executable $exe
   Write-Host "Installed OK: $exe"
+  if ($ExpectedVersion) {
+    $actualVersion = ((Get-Item -LiteralPath $exe).VersionInfo.ProductVersion -split '\+')[0]
+    if ($actualVersion -ne $ExpectedVersion) {
+      throw "Installed app version '$actualVersion' does not match release '$ExpectedVersion'"
+    }
+    Write-Host "Installed product version: $actualVersion"
+  }
 
   $probe = Join-Path $installDir 'first-frame.marker'
   $previousProbe = $env:MICA_STARTUP_PROBE_FILE

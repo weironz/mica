@@ -1,0 +1,43 @@
+name: Release artifact canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published version without v
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: Published artifacts (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: v${{ inputs.version }}
+          fetch-depth: 0
+      - name: Linux desktop runtime for optional deb canary
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgtk-3-0t64 libayatana-appindicator3-1 libegl1 libgles2
+      - name: Verify downloaded published assets in clean directories
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CANARY_VERSION: ${{ inputs.version }}
+        run: bash scripts/release-canary.sh "$CANARY_VERSION"

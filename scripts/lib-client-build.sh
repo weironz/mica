@@ -75,18 +75,28 @@ client_builder_image() {
 # .dart_tool / build / target — those hold absolute paths that differ between
 # the two — and a file deleted on the host cannot linger in the copy. Build
 # caches persist in a named volume, linked back in at the same paths every run,
-# so the second build is incremental. mica-client-android-key keeps the debug
-# keystore Gradle generates on first use: without it every Docker build signs
-# with a new key, and Android refuses to install an APK over one signed by
-# another (so no APK could ever update the last).
+# so the second build is incremental. The old Android debug-key volume remains
+# available for debug builds and recovering a previous signer. Release keys are
+# passed separately read-only and are never copied into source or cache volumes.
 client_build_docker() {
   local kind=$1 version=$2 out=$3 target=$4 image repo outdir
+  local signing_args=()
+  if [ "$kind" = apk ]; then
+    source scripts/android-signing.sh
+    require_android_signing
+    signing_args=(
+      -v "$(docker_host_path "$MICA_ANDROID_KEYSTORE_PATH"):/signing/release.keystore:ro"
+      -e MICA_ANDROID_KEYSTORE_PATH=/signing/release.keystore
+      -e MICA_ANDROID_KEY_ALIAS -e MICA_ANDROID_STORE_PASSWORD -e MICA_ANDROID_KEY_PASSWORD
+      -e MICA_ANDROID_STORE_TYPE
+    )
+  fi
   # Checked, not trusted: `set -e` does not reach into $(...).
   image=$(client_builder_image "$target") && [ -n "$image" ] || exit 1
   repo=$(docker_host_path .)
   mkdir -p "$out"
   outdir=$(docker_host_path "$out")
-  MSYS_NO_PATHCONV=1 docker run --rm \
+  MSYS_NO_PATHCONV=1 docker run --rm "${signing_args[@]}" \
     -v "$repo:/src:ro" -v "$outdir:/out" \
     -v mica-client-cargo:/root/.cargo/registry \
     -v mica-client-pub:/root/.pub-cache \

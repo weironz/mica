@@ -4,6 +4,33 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Secrets come from the caller/runner environment, never a tracked properties file.
+val signingNames = listOf(
+    "MICA_ANDROID_KEYSTORE_PATH",
+    "MICA_ANDROID_KEY_ALIAS",
+    "MICA_ANDROID_STORE_PASSWORD",
+    "MICA_ANDROID_KEY_PASSWORD",
+)
+val signingValues = signingNames.associateWith { System.getenv(it).orEmpty() }
+val stableSigning = signingValues.values.all { it.isNotBlank() }
+val signingFile = signingValues.getValue("MICA_ANDROID_KEYSTORE_PATH")
+    .takeIf { it.isNotBlank() }?.let { file(it) }
+val signingType = System.getenv("MICA_ANDROID_STORE_TYPE").orEmpty().ifEmpty { "JKS" }.uppercase()
+require(signingType in setOf("JKS", "PKCS12")) { "MICA_ANDROID_STORE_TYPE must be JKS or PKCS12" }
+if (signingValues.values.any { it.isNotBlank() } && !stableSigning) {
+    throw GradleException("Stable signing configuration is incomplete: set all four MICA_ANDROID signing variables")
+}
+if (stableSigning && (signingFile?.isFile != true || signingFile?.canRead() != true)) {
+    throw GradleException("MICA_ANDROID_KEYSTORE_PATH must name a readable keystore file")
+}
+// Never silently sign a release with a machine-specific debug key. Task-graph
+// validation also catches aggregate tasks such as `assemble`, not only assembleRelease.
+gradle.taskGraph.whenReady {
+    if (!stableSigning && allTasks.any { it.name.contains("Release", ignoreCase = true) }) {
+        throw GradleException("Release APK needs a stable signing key; configure MICA_ANDROID_KEYSTORE_PATH, KEY_ALIAS, STORE_PASSWORD and KEY_PASSWORD. Debug builds keep the standard debug key.")
+    }
+}
+
 android {
     namespace = "io.github.weironz.mica_flutter"
     compileSdk = flutter.compileSdkVersion
@@ -28,14 +55,20 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (stableSigning) {
+            create("stableRelease") {
+                storeFile = signingFile
+                storePassword = signingValues.getValue("MICA_ANDROID_STORE_PASSWORD")
+                keyAlias = signingValues.getValue("MICA_ANDROID_KEY_ALIAS")
+                keyPassword = signingValues.getValue("MICA_ANDROID_KEY_PASSWORD")
+                storeType = signingType
+            }
+        }
+    }
     buildTypes {
         release {
-            // Signed with the build machine's debug key on purpose: the APK is
-            // for manual install from GitHub Releases, not a store. Android only
-            // accepts an update signed by the same key, so moving between APKs
-            // built on different machines needs an uninstall first
-            // (docs/ops/release.md「Android / Linux 安装包」).
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (stableSigning) signingConfigs.getByName("stableRelease") else null
         }
     }
 }

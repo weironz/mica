@@ -17,6 +17,11 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  // Match the Windows receipt: observe a rendered Flutter frame, not a PID.
+  const gchar* receipt_path = g_getenv("MICA_STARTUP_PROBE_FILE");
+  if (receipt_path != nullptr && receipt_path[0] != '\0') {
+    g_file_set_contents(receipt_path, "first_frame\n", -1, nullptr);
+  }
 }
 
 // Implements GApplication::activate.
