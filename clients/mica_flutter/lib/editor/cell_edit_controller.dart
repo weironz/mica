@@ -2,6 +2,7 @@
 // the editor's cell model (table.dart). Mica never uses Flutter's Table widget.
 import 'package:flutter/widgets.dart' hide TableCell;
 
+import 'clipboard_copy.dart';
 import 'marks.dart';
 import 'controller.dart';
 import 'table.dart';
@@ -67,6 +68,30 @@ class CellEditController extends TextEditingController {
     } on MarkdownCodecException {
       return '';
     }
+  }
+
+  bool _cutPending = false;
+
+  /// Copy (or cut) the selection: its clean text, plus HTML that keeps the
+  /// marks. A cut deletes only once the clipboard accepted it, and only if the
+  /// editor is [stillOpen] and the text did not change meanwhile.
+  void copySelection({required bool cut, required bool Function() stillOpen}) {
+    if (cut && _cutPending) return;
+    final sel = selection;
+    if (!sel.isValid || sel.isCollapsed) return;
+    final snapshot = text;
+    if (cut) _cutPending = true;
+    copyRichToClipboard(
+      plain: sel.textInside(snapshot),
+      richHtml: selectionHtml(),
+    ).then((success) {
+      _cutPending = false;
+      if (!cut || !success || !stillOpen() || text != snapshot) return;
+      value = TextEditingValue(
+        text: snapshot.replaceRange(sel.start, sel.end, ''),
+        selection: TextSelection.collapsed(offset: sel.start),
+      );
+    });
   }
 
   @override

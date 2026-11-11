@@ -2805,25 +2805,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     };
     focus.addListener(_cellFocusListener!);
 
-    var cellCutPending = false;
-    void copyCell({required bool cut}) {
-      if (cut && cellCutPending) return;
-      final sel = controller.selection;
-      if (!sel.isValid || sel.isCollapsed) return;
-      final snapshot = controller.text;
-      if (cut) cellCutPending = true;
-      copyRichToClipboard(
-        plain: sel.textInside(snapshot),
-        richHtml: controller.selectionHtml(),
-      ).then((success) {
-        cellCutPending = false;
-        if (!cut || !success || committed || controller.text != snapshot) return;
-        controller.value = TextEditingValue(
-          text: snapshot.replaceRange(sel.start, sel.end, ''),
-          selection: TextSelection.collapsed(offset: sel.start),
-        );
-      });
-    }
+    void copyCell({required bool cut}) =>
+        controller.copySelection(cut: cut, stillOpen: () => !committed);
 
     KeyEventResult onKey(FocusNode n, KeyEvent e) {
       if (e is! KeyDownEvent) return KeyEventResult.ignored;
@@ -2850,9 +2833,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           unawaited(_applyEditorHistory(redo: redo));
           return KeyEventResult.handled;
         }
-        // Cell text is already clean; its formatting lives in controller.marks.
-        // Re-parsing the selected text as Markdown loses those marks and turns
-        // literal backticks into syntax.
+        // Select here, not via the browser: web's native select-all round-trips
+        // through the hidden input and can land after a fast Ctrl+B reads it.
+        if (key == LogicalKeyboardKey.keyA) {
+          controller.selection = TextSelection(
+            baseOffset: 0,
+            extentOffset: controller.text.length,
+          );
+          return KeyEventResult.handled;
+        }
+        // Copy the clean text + marks; re-parsing it as Markdown loses marks.
         if ((key == LogicalKeyboardKey.keyC ||
                 key == LogicalKeyboardKey.keyX) &&
             !sel.isCollapsed) {
