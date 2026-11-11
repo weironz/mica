@@ -160,12 +160,12 @@ void _materializeBackground(XmlElement root, [String? override]) {
   String n(double v) => v.toStringAsFixed(3);
   root.children.insert(
     0,
-    XmlElement(XmlName('rect'), [
-      XmlAttribute(XmlName('x'), n(x)),
-      XmlAttribute(XmlName('y'), n(y)),
-      XmlAttribute(XmlName('width'), n(w)),
-      XmlAttribute(XmlName('height'), n(h)),
-      XmlAttribute(XmlName('fill'), color),
+    XmlElement(const XmlName.parts('rect'), [
+      XmlAttribute(const XmlName.parts('x'), n(x)),
+      XmlAttribute(const XmlName.parts('y'), n(y)),
+      XmlAttribute(const XmlName.parts('width'), n(w)),
+      XmlAttribute(const XmlName.parts('height'), n(h)),
+      XmlAttribute(const XmlName.parts('fill'), color),
     ]),
   );
 }
@@ -455,8 +455,8 @@ XmlElement? _buildArrowhead(
   final fill = mStyle['fill'] ?? marker.getAttribute('fill') ?? '#333333';
   final stroke = mStyle['stroke'] ?? marker.getAttribute('stroke') ?? fill;
 
-  return XmlElement(XmlName('g'), [
-    XmlAttribute(XmlName('transform'), transform),
-    XmlAttribute(XmlName('style'), 'fill:$fill;stroke:$stroke'),
+  return XmlElement(const XmlName.parts('g'), [
+    XmlAttribute(const XmlName.parts('transform'), transform),
+    XmlAttribute(const XmlName.parts('style'), 'fill:$fill;stroke:$stroke'),
   ], shapes);
 }

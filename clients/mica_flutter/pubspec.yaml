@@ -22,7 +22,7 @@ dependencies:
   # glue — and unlike dart:html it compiles under both dart2js and dart2wasm
   # (issue #89). Was transitive via flutter_rust_bridge; direct now that we
   # import it ourselves.
-  web: ^1.1.1
+  web: ^1.1.2
   http: ^1.4.0
   web_socket_channel: ^3.0.0
   # Desktop-only: window min-size + size/position memory (M2). Gated behind a
@@ -68,11 +68,11 @@ dependencies:
   # platform glue; a parsing lib.
   html: ^0.15.0
   # Rasterize merman and RaTeX SVG previews. Mermaid CSS is inlined first.
-  flutter_svg: ^2.3.0
+  flutter_svg: ^2.3.3
   # XML tree for that css inliner — merman emits theme as scoped CSS with descendant
   # selectors (`#merman .node rect{fill:..}`); merman documents inline-styling as a
   # host-side boundary (Zed does the same). Pure-Dart parsing lib, not platform glue.
-  xml: ^6.5.0
+  xml: ^7.0.1
   rust_lib_mica_flutter:
     path: rust_builder
   flutter_rust_bridge: 2.12.0
