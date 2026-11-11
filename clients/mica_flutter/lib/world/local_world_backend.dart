@@ -652,9 +652,10 @@ class _LocalWorldBackend extends WorldBackend {
             v.createdAt,
           ).toUtc().toIso8601String(),
         );
+    if (!_shell.mounted) return;
     await showDialog<void>(
       context: _shell.context,
-      builder: (context) => _VersionHistoryDialog(
+      builder: (context) => VersionHistoryDialog(
         onList: () async =>
             _local.listDocVersions(docId).map(toDocVersion).toList(),
         onCreate: (name) async {

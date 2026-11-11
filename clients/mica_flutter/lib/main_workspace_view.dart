@@ -455,7 +455,7 @@ class WorkspaceView extends StatefulWidget {
   onAppearanceChanged;
 
   /// Null when the active world has no workspace search (本地模式). See the
-  /// honest empty state in `_SearchDialog._buildResults`.
+  /// honest empty state in `SearchDialog._buildResults`.
   final Future<List<SearchResult>> Function(String query)? onSearch;
   final Future<void> Function(String viewId) onOpenSearchResult;
 
@@ -2414,7 +2414,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   void _openRecycleBin() {
     showDialog<void>(
       context: context,
-      builder: (context) => _RecycleBinDialog(
+      builder: (context) => RecycleBinDialog(
         onLoad: widget.onLoadTrash,
         onRestore: widget.onRestoreView,
         onPurge: widget.onPurgeView,
@@ -2609,7 +2609,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     if (load == null) return;
     showDialog<void>(
       context: context,
-      builder: (context) => _GraphDialog(
+      builder: (context) => GraphDialog(
         load: load,
         currentViewId: widget.selectedView?.id,
         onOpen: (viewId) {
@@ -2623,7 +2623,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   /// [inNewTab] forces EVERY hit into a fresh tab — the tab strip's `+` is the
   /// only caller that passes it, because "open an existing page" is that menu
   /// item's whole job. From an ordinary search the choice is per-click instead:
-  /// holding Ctrl/Cmd asks for a tab (see `_SearchDialog._accelHeld`), which is
+  /// holding Ctrl/Cmd asks for a tab (see `SearchDialog._accelHeld`), which is
   /// how you follow a hit in ANOTHER workspace without the shell moving there.
   ///
   /// Folder hits reveal in the sidebar either way: there is no document behind
@@ -2635,7 +2635,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     final forceNewTab = inNewTab;
     showDialog<void>(
       context: context,
-      builder: (context) => _SearchDialog(
+      builder: (context) => SearchDialog(
         onSearch: widget.onSearch,
         onSearchAll: widget.onSearchAllWorkspaces,
         views: widget.views,
@@ -2977,7 +2977,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     final onCurrentPage = body == null ? null : widget.onAiCurrentPage;
     showDialog<void>(
       context: context,
-      builder: (context) => _AiDialog(
+      builder: (context) => AiDialog(
         canEdit: matchesEditRole(widget.selectedWorkspace?.role),
         hasWorkspace: widget.selectedWorkspace != null,
         onStream: widget.onAiStream,

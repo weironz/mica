@@ -160,18 +160,33 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   // reached again; [_recoverOnlineNav] then refetches the authoritative nav.
   bool _offlineNav = false;
 
-  // Editor appearance (in-memory; applied live to the editor).
-  EditorAppearance _appearance = const EditorAppearance();
-  double _pageWidth = kPageWidthDefault;
-  // When on, pasted external image URLs are re-hosted into Mica storage.
-  bool _reHostImages = true;
-  // Formatting toolbar above the page (global setting; off by default).
-  bool _showFormatBar = false;
-  // Page title block at the top of the page (on by default).
-  bool _showPageTitle = true;
-  // AI features (off by default). The Ask AI entry points show only when
-  // this is on AND a provider is actually configured on the server.
-  bool _aiEnabled = false;
+  late final _preferences = ShellPreferencesController(
+    readPref: loadPref,
+    writePref: savePref,
+    session: () => _session,
+    owner: () => _owner,
+    isLocal: () => _activeOrigin == kLocalOrigin,
+    isMounted: () => mounted,
+    fetch: _api.getUserSettings,
+    push: _api.putUserSettings,
+    onCloudApplied: () {
+      loadPersistedThemeMode();
+      loadPersistedLocale();
+      setState(() {});
+    },
+  );
+  EditorAppearance get _appearance => _preferences.appearance;
+  set _appearance(EditorAppearance value) => _preferences.appearance = value;
+  double get _pageWidth => _preferences.pageWidth;
+  set _pageWidth(double value) => _preferences.pageWidth = value;
+  bool get _reHostImages => _preferences.reHostImages;
+  set _reHostImages(bool value) => _preferences.reHostImages = value;
+  bool get _showFormatBar => _preferences.showFormatBar;
+  set _showFormatBar(bool value) => _preferences.showFormatBar = value;
+  bool get _showPageTitle => _preferences.showPageTitle;
+  set _showPageTitle(bool value) => _preferences.showPageTitle = value;
+  bool get _aiEnabled => _preferences.aiEnabled;
+  set _aiEnabled(bool value) => _preferences.aiEnabled = value;
   bool _aiConfigured = false;
 
   // The ACTIVE tab's sync session (see `_cloudSession` below); background tabs
@@ -251,7 +266,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     // sync write-through has to hear about those changes HERE, because the
     // controllers are global and know nothing of sessions. The apply pass in
     // _syncSettingsFromCloud sets both controllers too — the
-    // _applyingCloudSettings guard inside _schedulePushSettings is what keeps
+    // controller guard inside _schedulePushSettings is what keeps
     // that from echoing the cloud's own values back up.
     themeModeController.addListener(_schedulePushSettings);
     localeController.addListener(_schedulePushSettings);
@@ -502,112 +517,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     }
   }
 
-  /// The appearance subset of [_loadPrefs] — the state that mirrors the synced
-  /// prefs. Split out so [_syncSettingsFromCloud] can re-derive exactly this
-  /// after writing cloud values into the prefs, without re-running the origin/
-  /// server migration half of [_loadPrefs] mid-session.
-  void _loadAppearancePrefs() {
-    final fontScale = double.tryParse(loadPref('fontScale') ?? '');
-    final fontFamily = loadPref('fontFamily');
-    _appearance = EditorAppearance(
-      // Bounds derived from the settings control's px detents (see kFontBasePx
-      // in dialogs.dart) rather than restated as literals here — restated
-      // bounds are how a widened slider and a load-time clamp drift apart.
-      fontScale: (fontScale ?? 1.0).clamp(
-        fontScaleFromPx(kFontPxMin),
-        fontScaleFromPx(kFontPxMax),
-      ),
-      fontFamily: (fontFamily == null || fontFamily.isEmpty)
-          ? null
-          : fontFamily,
-    );
-    // Clamp a stored value into the discrete-step range; absent → the readable
-    // default. The editor still caps the *render* at the window width, so a wide
-    // saved value on a small window simply fills it.
-    _pageWidth =
-        (double.tryParse(loadPref('pageWidth') ?? '') ?? kPageWidthDefault)
-            .clamp(kPageWidthMin, kPageWidthMax);
-    _reHostImages = loadPref('reHostImages') != 'false';
-    _showFormatBar = loadPref('showFormatBar') == 'true';
-    _showPageTitle = loadPref('showPageTitle') != 'false';
-    _aiEnabled = loadPref('aiEnabled') == 'true';
-  }
-
-  void _savePrefs() {
-    savePref('fontScale', _appearance.fontScale.toString());
-    savePref('fontFamily', _appearance.fontFamily ?? '');
-    savePref('pageWidth', _pageWidth.toString());
-    savePref('reHostImages', _reHostImages.toString());
-    savePref('showFormatBar', _showFormatBar.toString());
-    savePref('showPageTitle', _showPageTitle.toString());
-    savePref('aiEnabled', _aiEnabled.toString());
-    _schedulePushSettings();
-  }
-
-  // ── Settings sync (ui/settings_sync.dart has the policy) ──────────────────
-  // The account's settings follow it across devices; local prefs stay as the
-  // offline cache and the whole story for 本地模式.
-
-  Timer? _settingsPushTimer;
-
-  /// True while cloud values are being written into local state, so the
-  /// controller listeners this apply pass triggers don't push those same
-  /// values straight back up.
-  bool _applyingCloudSettings = false;
-
-  /// Debounced write-through of the synced prefs. Debounced because the font
-  /// and page-width sliders save on every detent; one PUT after the burst.
-  /// Failures are logged and dropped — the local save already happened, and a
-  /// toggle that flips back because the network blinked would be worse than a
-  /// device that catches up on its next change.
-  void _schedulePushSettings() {
-    if (_applyingCloudSettings) return;
-    final session = _session;
-    if (session == null || _activeOrigin == kLocalOrigin) return;
-    _settingsPushTimer?.cancel();
-    _settingsPushTimer = Timer(const Duration(seconds: 1), () async {
-      final s = _session;
-      if (s == null || _activeOrigin == kLocalOrigin) return;
-      try {
-        await _api.putUserSettings(s.accessToken, settingsPayload(loadPref));
-      } catch (e) {
-        debugPrint('settings push failed: $e');
-      }
-    });
-  }
-
-  /// Adopt the account's settings on sign-in/restore. Cloud wins — that is
-  /// what "synced" means from the second device's chair; the device that wrote
-  /// last IS the cloud value. An account with no blob yet gets seeded from
-  /// this device instead, so the first sign-in from the device that holds the
-  /// user's real preferences makes those the account's.
-  Future<void> _syncSettingsFromCloud(AuthSession session) async {
-    try {
-      final cloud = await _api.getUserSettings(session.accessToken);
-      if (!mounted || _session?.accessToken != session.accessToken) return;
-      final apply = cloudSettingsToApply(cloud);
-      if (apply.isEmpty) {
-        _schedulePushSettings();
-        return;
-      }
-      _applyingCloudSettings = true;
-      try {
-        apply.forEach(savePref);
-        // Re-derive everything that mirrors those prefs. The two controllers
-        // notify their own scopes; the shell state needs a rebuild.
-        loadPersistedThemeMode();
-        loadPersistedLocale();
-        setState(_loadAppearancePrefs);
-      } finally {
-        _applyingCloudSettings = false;
-      }
-      // A cloud blob from an older client may lack keys this device has: push
-      // the merged view back so the account converges instead of ping-ponging.
-      _schedulePushSettings();
-    } catch (e) {
-      debugPrint('settings sync skipped: $e');
-    }
-  }
+  void _loadAppearancePrefs() => _preferences.loadAppearance();
+  void _savePrefs() => _preferences.save();
+  void _schedulePushSettings() => _preferences.schedulePush();
+  Future<void> _syncSettingsFromCloud(AuthSession session) =>
+      _preferences.syncFromCloud(session);
 
   /// Sign in with the dev account on startup. Falls back to registering it the
   /// first time, and silently leaves the login screen up if the API is down.
@@ -1324,7 +1238,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     _invites.dispose();
     themeModeController.removeListener(_schedulePushSettings);
     localeController.removeListener(_schedulePushSettings);
-    _settingsPushTimer?.cancel();
+    _preferences.dispose();
     _syncCtrl.closeAllDocumentSync();
     _syncCtrl.dispose();
     super.dispose();
@@ -4095,7 +4009,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     final docId = bootstrap.document.id;
     await showDialog<void>(
       context: context,
-      builder: (context) => _VersionHistoryDialog(
+      builder: (context) => VersionHistoryDialog(
         onList: () =>
             _api.listVersions(_requireSession().accessToken, wsId, docId),
         onCreate: (name) => _api.createVersion(
@@ -4148,7 +4062,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     final origin = _api.baseUri.origin;
     await showDialog<void>(
       context: context,
-      builder: (context) => _ShareDialog(
+      builder: (context) => ShareDialog(
         onLoad: () => _api.getShare(_requireSession().accessToken, wsId, docId),
         onEnable: () =>
             _api.createShare(_requireSession().accessToken, wsId, docId),

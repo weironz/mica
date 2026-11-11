@@ -25,12 +25,19 @@ import 'cloud/workspace_migration.dart';
 import 'ui/export_format.dart';
 import 'ui/settings_dialog.dart';
 import 'ui/transfer_dialog.dart';
+import 'ui/search_dialog.dart';
+import 'ui/graph_dialog.dart';
+import 'ui/ai_dialog.dart';
+import 'ui/recycle_bin_dialog.dart';
+import 'ui/share_dialog.dart';
+import 'ui/version_history_dialog.dart';
 import 'ui/mica_state.dart';
 import 'diagnostics.dart';
 import 'import/import_controller.dart';
 import 'server_registry.dart';
 import 'sync/sync_reconcile_controller.dart';
 import 'session/session_controller.dart';
+import 'session/shell_preferences_controller.dart';
 import 'ui/inline_rename_controller.dart';
 import 'ui/sidebar_tree_controller.dart';
 import 'ui/tree_drop_planner.dart';
@@ -45,7 +52,6 @@ import 'web/web_probe.dart';
 import 'markdown/markdown_codec.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;
 import 'editor/model.dart' show headingButtonTarget, kMonoFont;
-import 'editor/version_diff.dart';
 import 'editor/editor.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
@@ -67,8 +73,7 @@ import 'ui/destructive_confirm.dart';
 import 'ui/dialog_controllers.dart';
 import 'ui/emoji_picker.dart';
 import 'ui/format_bytes.dart';
-import 'ui/home_data.dart' show RelativeTimeStrings, countPages, relativeMeta;
-import 'ui/page_graph_view.dart';
+import 'ui/home_data.dart' show RelativeTimeStrings, countPages;
 import 'ui/home_screen.dart' show HomeDocEntry;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
@@ -77,7 +82,6 @@ import 'ui/page_tree_cache.dart';
 import 'ui/tree_selection.dart';
 import 'ui/rename.dart';
 import 'ui/search_data.dart';
-import 'ui/settings_sync.dart';
 import 'ui/page_title_field.dart';
 import 'ui/sign_in_hero.dart';
 import 'ui/sign_in_screen.dart';
@@ -85,10 +89,8 @@ import 'ui/sign_in_pane.dart';
 import 'ui/status_kit.dart';
 import 'ui/theme_tokens.dart';
 import 'ui/font_warmup.dart';
-import 'ui/trash_data.dart';
 import 'ui/user_avatar.dart';
 import 'ui/update_controls.dart';
-import 'ui/version_data.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'local/cache_stats.dart'
     show
@@ -117,9 +119,10 @@ export 'api/client.dart';
 export 'api/models.dart';
 export 'api/doc_socket_uri.dart';
 
-part 'ui/dialogs.dart';
-// _SettingsDialogState split per tab (issue #81) — extensions in these parts
-// keep the class's logic one file per settings destination.
+export 'ui/search_dialog.dart' show SearchResultTile;
+export 'ui/ai_dialog.dart' show kAiPageEditSystem;
+// State extensions and world backends still share this library. Dialogs and
+// preferences synchronize through independent libraries with explicit inputs.
 part 'ui/widgets.dart';
 part 'main_shell.dart';
 part 'main_editor_history.dart';

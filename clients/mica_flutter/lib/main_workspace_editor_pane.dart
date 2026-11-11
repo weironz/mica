@@ -478,8 +478,9 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
   /// of `MainAxisSize.min` on PageBreadcrumb's Row — a cap is not a demand.
   double _pathBudget(double header, {required bool barOn}) {
     final ceiling = header * 0.7;
-    if (!barOn)
+    if (!barOn) {
       return math.max(0, math.min(ceiling, header - _headerIconsWidth));
+    }
     return math.max(
       math.min(ceiling, header - _formatBarFloor - _headerIconsWidth),
       200.0,

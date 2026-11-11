@@ -1705,7 +1705,7 @@ class _PresenceBar extends StatelessWidget {
 /// Failure is NOT reported here: it is unexpected, it needs words, and the
 /// caller still shows those. This widget only ever says "yes, done".
 class PageBreadcrumb extends StatefulWidget {
-  const PageBreadcrumb({
+  const PageBreadcrumb({super.key,
     required this.views,
     required this.current,
     required this.onSelect,
