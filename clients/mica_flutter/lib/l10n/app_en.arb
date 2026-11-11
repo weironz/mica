@@ -1572,5 +1572,10 @@
       }
     }
   },
-  "rowExportZipImages": "Export (ZIP, with images)"
+  "rowExportZipImages": "Export (ZIP, with images)",
+  "importEmailTitle": "Import completion email",
+  "importEmailHelp": "Email the success and failure counts when a background import finishes.",
+  "importEmailLoadError": "Could not load email notification settings",
+  "importEmailSaveError": "Could not save. The previous setting is unchanged.",
+  "moduleLoadFailed": "Could not load this component. Reconnect and try again."
 }

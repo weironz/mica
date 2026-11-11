@@ -977,6 +977,17 @@ class ApiClient {
     return settings is Map<String, dynamic> ? settings : const {};
   }
 
+  /// Server-owned preference, separate from the replace-whole appearance blob.
+  Future<bool> getImportNotifications(String token) async =>
+      (await _get('/api/auth/me/import-notifications', token))['enabled'] ==
+      true;
+
+  Future<void> putImportNotifications(String token, bool enabled) async {
+    await _put('/api/auth/me/import-notifications', token, {
+      'enabled': enabled,
+    });
+  }
+
   /// Replace the synced settings blob whole (`PUT /auth/me/settings`). The
   /// client owns the vocabulary (see `ui/settings_sync.dart`), the server
   /// stores it opaquely; last write across devices wins.

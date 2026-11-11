@@ -29,6 +29,7 @@ import '../ui/user_avatar.dart';
 import '../ui/update_controls.dart';
 import '../local/cache_stats.dart' show ClearMirrorResult, LocalCacheStats;
 import '../prefs.dart';
+import 'import_email_preference.dart';
 import '../theme_controller.dart';
 import '../updater.dart';
 import '../window_setup.dart';
@@ -162,6 +163,8 @@ class SettingsDialog extends StatefulWidget {
     super.key,
     required this.updates,
     this.onLoadImportHistory,
+    this.onLoadImportNotifications,
+    this.onSaveImportNotifications,
     required this.onLoadAiSettings,
     required this.onListAiModels,
     required this.onSaveAiSettings,
@@ -236,6 +239,8 @@ class SettingsDialog extends StatefulWidget {
   /// deploy interrupted only becomes knowable when the server says so, and the
   /// answer changes while this screen is not looking.
   final Future<List<ImportHistoryEntry>> Function()? onLoadImportHistory;
+  final Future<bool> Function()? onLoadImportNotifications;
+  final Future<void> Function(bool)? onSaveImportNotifications;
 
   final Future<Map<String, dynamic>> Function()? onLoadAiSettings;
 

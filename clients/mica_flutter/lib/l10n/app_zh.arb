@@ -850,5 +850,10 @@
   "importImagesRetry": "用本机再试一次",
   "importImagesAllRecovered": "所有图片都已转存进 Mica。",
   "archiveFormatLabel": "{format, select, backup{备份(Mica 格式,可完整还原)} markdown{导出为 Markdown} other{导出}}",
-  "rowExportZipImages": "导出(ZIP,含图片)"
+  "rowExportZipImages": "导出(ZIP,含图片)",
+  "importEmailTitle": "导入完成邮件",
+  "importEmailHelp": "后台导入结束后，发送包含成功和失败计数的邮件。",
+  "importEmailLoadError": "无法读取邮件通知设置",
+  "importEmailSaveError": "未能保存，原设置保持不变",
+  "moduleLoadFailed": "组件加载失败，请联网后重试。"
 }

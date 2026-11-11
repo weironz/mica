@@ -1,4 +1,4 @@
-//! Outbound email — currently only the password-reset link.
+//! Outbound email — account verification, password reset and import completion.
 //!
 //! A trait object rather than a concrete type so `AppState` (in `app-core`,
 //! which must NOT depend on `api-server`) can hold a mailer whose real
@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 
-/// One outbound message. HTML only: the single email we send (the reset link)
+/// One outbound message. HTML only: our short transactional emails
 /// is short and wants a clickable button, and every mail client renders HTML.
 #[derive(Debug, Clone)]
 pub struct Mail {
@@ -23,6 +23,11 @@ pub struct Mail {
 
 #[async_trait]
 pub trait Mailer: Send + Sync {
+  /// False for a development logger: recording a message is not sending it.
+  fn delivers_email(&self) -> bool {
+    true
+  }
+
   /// Send one message. Callers treat a failure as best-effort (the password-reset
   /// endpoint logs and still returns 204, so a mail outage never reveals whether
   /// an address is registered) — so the error is for the log, not the user.
@@ -36,6 +41,10 @@ pub struct LogMailer;
 
 #[async_trait]
 impl Mailer for LogMailer {
+  fn delivers_email(&self) -> bool {
+    false
+  }
+
   async fn send(&self, mail: &Mail) -> anyhow::Result<()> {
     tracing::info!(
       to = %mail.to,

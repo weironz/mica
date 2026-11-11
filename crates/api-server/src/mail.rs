@@ -63,6 +63,20 @@ pub struct DirectMailMailer {
 }
 
 impl DirectMailMailer {
+  /// Exercise the real signed HTTP transport against an in-process mailbox.
+  #[cfg(test)]
+  pub(crate) fn local_capture(endpoint: String) -> Self {
+    Self {
+      access_key_id: "capture-fixture".into(),
+      access_key_secret: "not-a-real-provider-key".into(),
+      from_address: "mica@capture.test".into(),
+      from_alias: None,
+      endpoint,
+      region_id: "capture".into(),
+      client: reqwest::Client::new(),
+    }
+  }
+
   /// Read config from the environment. `Err(name)` names the first missing
   /// required variable so the caller can log exactly what to set.
   fn from_env() -> Result<Self, &'static str> {

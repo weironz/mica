@@ -275,6 +275,12 @@ extension _SettingsDataTab on _SettingsDialogState {
         subtitle: context.l10n.dataImportZoneHint,
         onTap: import,
       ),
+    if (widget.onLoadImportNotifications != null &&
+        widget.onSaveImportNotifications != null)
+      ImportEmailPreference(
+        load: widget.onLoadImportNotifications!,
+        save: widget.onSaveImportNotifications!,
+      ),
     ..._importHistorySection(context),
     if (widget.onExportAllWorkspaces != null) ...[
       const SizedBox(height: 18),

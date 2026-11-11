@@ -16,6 +16,7 @@ mod files;
 mod health;
 mod history;
 mod import;
+mod import_notifications;
 mod invitations;
 mod legal;
 mod names;
@@ -164,6 +165,10 @@ pub fn api_router() -> Router<AppState> {
     .route(
       "/auth/me/settings",
       get(auth::get_settings).put(auth::put_settings),
+    )
+    .route(
+      "/auth/me/import-notifications",
+      get(import_notifications::get_preferences).put(import_notifications::put_preferences),
     )
     .route(
       "/auth/me/avatar",

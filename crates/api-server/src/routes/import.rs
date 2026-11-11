@@ -585,6 +585,7 @@ pub async fn start_import(
     // lag, but the final state is recorded exactly once, here.
     if let Some(job) = finished {
       mica_app_core::import_store::update(&state.db, job_id, &job).await;
+      super::import_notifications::notify(&state, user_id, job_id).await;
     }
   });
 
