@@ -45,6 +45,31 @@ services:
     # in docs/ops/upgrade-infra.md takes the stack down and NOTHING repairs it
     # automatically. That runbook is the only supported way to move this number.
     image: postgres:18.6-alpine
+    # Slow-query observability (fresh deployments get it on first start; an
+    # existing node only after the database is deliberately restarted — the
+    # deploy playbook never bounces postgres). See docs/ops/deploy.md.
+    #   pg_stat_statements: per-statement totals (migration 0039 creates the view)
+    #   log_min_duration_statement: statements slower than this go to the log
+    #   log_parameter_max_length=0: never log bind values — they carry page
+    #     text, e-mail addresses and tokens
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - pg_stat_statements.max=5000
+      - -c
+      - track_io_timing=on
+      - -c
+      - log_min_duration_statement=${MICA_PG_SLOW_QUERY_MS:-500}
+      - -c
+      - log_parameter_max_length=0
+      - -c
+      - log_lock_waits=on
+      - -c
+      - log_temp_files=10240
     restart: unless-stopped
     logging: *default-logging
     environment:

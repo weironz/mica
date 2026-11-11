@@ -368,6 +368,39 @@ the process.
 The canonical stack also ships an off-site, encrypted, deduplicated backup of
 both content AND a `pg_dump` of Postgres — see [`backup.md`](backup.md).
 
+## 慢查询观测（PostgreSQL）
+
+两份 compose（`deploy/docker-compose.yml`、`docker-compose.single.yml`）给 postgres 加了启动参数，迁移 `0039` 创建统计视图：
+
+| 参数 | 作用 |
+| --- | --- |
+| `shared_preload_libraries=pg_stat_statements`（`track=top`，`max=5000`） | 按语句累计调用次数、总耗时、IO |
+| `track_io_timing=on` | 统计里带读写耗时 |
+| `log_min_duration_statement=500` | 超过 500 ms 的语句写进 postgres 日志；用 `MICA_PG_SLOW_QUERY_MS` 改阈值（canonical 节点写进 host_vars 的 `mica_env`，`.env` 每次部署会重新渲染） |
+| `log_parameter_max_length=0` | **不记绑定参数值**：参数里是页面正文、邮箱、令牌。日志里只有带 `$1` 的语句骨架（已实测） |
+| `log_lock_waits=on`、`log_temp_files=10240` | 锁等待超过 1 s、单个临时文件超过 10 MB 时记一条 |
+
+**生效时机**：全新部署第一次启动即生效。已有节点**不会自动生效** —— 部署 playbook 从不重建 postgres（见 `ansible/deploy.yml`，
+重建等于一次数据库停机）。要在已有节点打开，挑低峰时刻手动做一次（几秒停机，api 会自动重连）：
+
+```bash
+cd /data/mica && ./dc up -d postgres   # mica_dir（见 ansible/inventory.yml）；按新 compose 重建 postgres 容器，数据卷不动
+```
+
+迁移 `0039` 在发版时随 api 自动执行；在 postgres 重启之前视图已存在但读不出（报 must be loaded via shared_preload_libraries），属正常。
+数据库角色不能建扩展或镜像缺 contrib 时，迁移只打一条 NOTICE，不会失败。
+
+**怎么看**：
+
+```bash
+./dc logs --since 24h postgres | grep 'duration:'                 # 慢语句
+./dc exec postgres psql -U mica -d mica -c "
+  SELECT calls, round(total_exec_time) AS total_ms, round(mean_exec_time,1) AS mean_ms,
+         rows, left(query, 120) AS query
+  FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 20;"  # 累计最耗时
+./dc exec postgres psql -U mica -d mica -c "SELECT pg_stat_statements_reset();"  # 调优前清零
+```
+
 ## Deleting a user account
 
 `DELETE /api/auth/me` (password-gated) — `auth::delete_user_and_owned`, one
