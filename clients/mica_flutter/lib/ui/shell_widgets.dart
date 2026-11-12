@@ -1924,7 +1924,11 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
 
     Widget sep() => Padding(
       padding: const EdgeInsets.symmetric(horizontal: 3),
-      child: Icon(Icons.chevron_right, size: 14, color: faint),
+      child: Icon(
+        Icons.chevron_right,
+        size: 14,
+        color: MicaTheme.of(context).text.ghost,
+      ),
     );
 
     return Row(

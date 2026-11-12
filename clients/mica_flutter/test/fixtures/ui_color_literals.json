@@ -1,0 +1,38 @@
+{
+  "lib/api/models.dart": {
+    "FF0891B2": 1,
+    "FF16A34A": 1,
+    "FF2563EB": 1,
+    "FF7C3AED": 1,
+    "FFD97706": 1,
+    "FFDB2777": 1
+  },
+  "lib/editor/block_renderers.dart": {
+    "FFF5F3FF": 1,
+    "FFFCA5A5": 1
+  },
+  "lib/editor/render.dart": {
+    "1A22C55E": 1,
+    "1AEF4444": 1,
+    "1AF59E0B": 1,
+    "FF22C55E": 1,
+    "FFEF4444": 1,
+    "FFF59E0B": 1
+  },
+  "lib/ui/copy_button.dart": {
+    "FF16A34A": 1
+  },
+  "lib/ui/sign_in_hero.dart": {
+    "FF0B1220": 1,
+    "FF1E293B": 1,
+    "FF2563EB": 1,
+    "FF64748B": 1,
+    "FF93C5FD": 1,
+    "FF94A3B8": 1,
+    "FFE2E8F0": 1
+  },
+  "lib/ui/status_kit.dart": {
+    "FF93C5FD": 1,
+    "FFFCA5A5": 1
+  }
+}

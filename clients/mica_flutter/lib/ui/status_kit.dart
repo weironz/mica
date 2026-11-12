@@ -50,7 +50,7 @@ Color _errorIcon(BuildContext context) => MicaTheme.of(context).status.danger;
 /// staying visibly above the page. The pale inks below read on either.
 Color _toastBg(BuildContext context) {
   final tokens = MicaTheme.of(context);
-  return tokens.dark ? tokens.surface.hover : const Color(0xFF0F172A);
+  return tokens.dark ? tokens.surface.hover : MicaTokens.light.text.primary;
 }
 
 const Color _toastAction = Color(0xFF93C5FD);
@@ -245,10 +245,10 @@ class MicaFailureCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         // A wide, far-offset, tightly-spread shadow: the card should look lifted
         // off the page without a visible grey halo around its edge.
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color(0x730F172A),
-            offset: Offset(0, 30),
+            color: MicaTokens.light.text.primary.withValues(alpha: 0.45),
+            offset: const Offset(0, 30),
             blurRadius: 45,
             spreadRadius: -30,
           ),

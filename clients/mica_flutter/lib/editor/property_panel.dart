@@ -432,7 +432,7 @@ class _ScalarFieldState extends State<_ScalarField> {
         border: InputBorder.none,
         hintText: '—',
         hintStyle: TextStyle(
-          color: MicaTheme.of(context).text.faint,
+          color: MicaTheme.of(context).text.ghost,
           fontSize: 13,
         ),
       ),
@@ -513,7 +513,7 @@ class _TagListState extends State<_TagList> {
                   border: InputBorder.none,
                   hintText: context.l10n.propertyTagAdd,
                   hintStyle: TextStyle(
-                    color: MicaTheme.of(context).text.faint,
+                    color: MicaTheme.of(context).text.ghost,
                     fontSize: 12,
                   ),
                 ),
@@ -635,7 +635,7 @@ class _KeyFieldState extends State<_KeyField> {
             border: InputBorder.none,
             hintText: context.l10n.propertyKeyHint,
             hintStyle: TextStyle(
-              color: MicaTheme.of(context).text.faint,
+              color: MicaTheme.of(context).text.ghost,
               fontSize: 13,
             ),
           ),

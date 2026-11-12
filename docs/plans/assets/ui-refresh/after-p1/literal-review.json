@@ -1,0 +1,329 @@
+{
+  "baseCommit": "4df3569b",
+  "beforeConstructors": 46,
+  "afterConstructors": 24,
+  "entries": [
+    {
+      "file": "lib/api/models.dart",
+      "line": 1384,
+      "hex": "FF2563EB",
+      "action": "保留",
+      "reason": "头像识别色板"
+    },
+    {
+      "file": "lib/api/models.dart",
+      "line": 1385,
+      "hex": "FF16A34A",
+      "action": "保留",
+      "reason": "头像识别色板"
+    },
+    {
+      "file": "lib/api/models.dart",
+      "line": 1386,
+      "hex": "FFDB2777",
+      "action": "保留",
+      "reason": "头像识别色板"
+    },
+    {
+      "file": "lib/api/models.dart",
+      "line": 1387,
+      "hex": "FFD97706",
+      "action": "保留",
+      "reason": "头像识别色板"
+    },
+    {
+      "file": "lib/api/models.dart",
+      "line": 1388,
+      "hex": "FF7C3AED",
+      "action": "保留",
+      "reason": "头像识别色板"
+    },
+    {
+      "file": "lib/api/models.dart",
+      "line": 1389,
+      "hex": "FF0891B2",
+      "action": "保留",
+      "reason": "头像识别色板"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 220,
+      "hex": "FFF5F3FF",
+      "action": "保留",
+      "reason": "公式领域高亮"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 475,
+      "hex": "FFFFFFFF",
+      "action": "改为令牌",
+      "reason": "light.accent.onPrimary：保持白字"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 494,
+      "hex": "B3475569",
+      "action": "改为令牌",
+      "reason": "dark.surface.hover × 0.7：外链图片角标底"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 567,
+      "hex": "CC1E293B",
+      "action": "改为令牌",
+      "reason": "dark.surface.base × 0.8：图片缩放手柄"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 573,
+      "hex": "F21E293B",
+      "action": "改为令牌",
+      "reason": "dark.surface.base × 0.95：图片工具条底"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 587,
+      "hex": "FFFCA5A5",
+      "action": "保留",
+      "reason": "危险操作或状态提示颜色"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 588,
+      "hex": "FFE2E8F0",
+      "action": "改为令牌",
+      "reason": "dark.text.primary：图片工具条图标"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 1071,
+      "hex": "FFC2CAD6",
+      "action": "改为令牌",
+      "reason": "border.strong：表格拖动手柄"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 1110,
+      "hex": "14FFFFFF",
+      "action": "改为令牌",
+      "reason": "text.primary × 0.08：滚动/插入条底色"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 1111,
+      "hex": "14000000",
+      "action": "改为令牌",
+      "reason": "text.primary × 0.08：滚动/插入条底色"
+    },
+    {
+      "file": "lib/editor/editor.dart",
+      "line": 5693,
+      "hex": "CC000000",
+      "action": "改为令牌",
+      "reason": "dark.surface.base × 0.8：图片遮罩"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2390,
+      "hex": "FF1E293B",
+      "action": "改为令牌",
+      "reason": "light.text.primary：代码页签深色底"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2401,
+      "hex": "FFF8FAFC",
+      "action": "改为令牌",
+      "reason": "light.accent.onPrimary：深底浅字"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2491,
+      "hex": "FFFFFFFF",
+      "action": "改为令牌",
+      "reason": "light.accent.onPrimary：保持白字"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2512,
+      "hex": "FF0F172A",
+      "action": "改为令牌",
+      "reason": "light.text.primary：深底提示"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2664,
+      "hex": "14FFFFFF",
+      "action": "改为令牌",
+      "reason": "text.primary × 0.08：滚动/插入条底色"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2665,
+      "hex": "14000000",
+      "action": "改为令牌",
+      "reason": "text.primary × 0.08：滚动/插入条底色"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2687,
+      "hex": "1A22C55E",
+      "action": "保留",
+      "reason": "内容版本差异状态高亮"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2687,
+      "hex": "FF22C55E",
+      "action": "保留",
+      "reason": "内容版本差异状态高亮"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2688,
+      "hex": "1AF59E0B",
+      "action": "保留",
+      "reason": "内容版本差异状态高亮"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2688,
+      "hex": "FFF59E0B",
+      "action": "保留",
+      "reason": "内容版本差异状态高亮"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2689,
+      "hex": "1AEF4444",
+      "action": "保留",
+      "reason": "内容版本差异状态高亮"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2689,
+      "hex": "FFEF4444",
+      "action": "保留",
+      "reason": "内容版本差异状态高亮"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 3220,
+      "hex": "FFFFFFFF",
+      "action": "改为令牌",
+      "reason": "light.accent.onPrimary：保持白字"
+    },
+    {
+      "file": "lib/main_workspace_view.dart",
+      "line": 1182,
+      "hex": "66000000",
+      "action": "改为令牌",
+      "reason": "dark.surface.base × 0.4：窄屏侧栏遮罩"
+    },
+    {
+      "file": "lib/ui/copy_button.dart",
+      "line": 20,
+      "hex": "FF16A34A",
+      "action": "保留",
+      "reason": "复制成功状态色"
+    },
+    {
+      "file": "lib/ui/emoji_picker.dart",
+      "line": 159,
+      "hex": "730F172A",
+      "action": "改为令牌",
+      "reason": "light.text.primary × 0.45：阴影只换颜色，几何不变"
+    },
+    {
+      "file": "lib/ui/home_screen.dart",
+      "line": 181,
+      "hex": "FF0F172A",
+      "action": "改为令牌",
+      "reason": "light.text.primary：深底提示"
+    },
+    {
+      "file": "lib/ui/sign_in_hero.dart",
+      "line": 63,
+      "hex": "FF1E293B",
+      "action": "保留",
+      "reason": "登录品牌图形"
+    },
+    {
+      "file": "lib/ui/sign_in_hero.dart",
+      "line": 63,
+      "hex": "FF0B1220",
+      "action": "保留",
+      "reason": "登录品牌图形"
+    },
+    {
+      "file": "lib/ui/sign_in_hero.dart",
+      "line": 105,
+      "hex": "FF94A3B8",
+      "action": "保留",
+      "reason": "登录品牌图形"
+    },
+    {
+      "file": "lib/ui/sign_in_hero.dart",
+      "line": 120,
+      "hex": "FF2563EB",
+      "action": "保留",
+      "reason": "登录品牌图形"
+    },
+    {
+      "file": "lib/ui/sign_in_hero.dart",
+      "line": 127,
+      "hex": "FF93C5FD",
+      "action": "保留",
+      "reason": "登录品牌图形"
+    },
+    {
+      "file": "lib/ui/sign_in_hero.dart",
+      "line": 137,
+      "hex": "FFE2E8F0",
+      "action": "保留",
+      "reason": "登录品牌图形"
+    },
+    {
+      "file": "lib/ui/sign_in_hero.dart",
+      "line": 150,
+      "hex": "FF64748B",
+      "action": "保留",
+      "reason": "登录品牌图形"
+    },
+    {
+      "file": "lib/ui/status_kit.dart",
+      "line": 53,
+      "hex": "FF0F172A",
+      "action": "改为令牌",
+      "reason": "light.text.primary：深底提示"
+    },
+    {
+      "file": "lib/ui/status_kit.dart",
+      "line": 56,
+      "hex": "FF93C5FD",
+      "action": "保留",
+      "reason": "危险操作或状态提示颜色"
+    },
+    {
+      "file": "lib/ui/status_kit.dart",
+      "line": 59,
+      "hex": "FFFCA5A5",
+      "action": "保留",
+      "reason": "危险操作或状态提示颜色"
+    },
+    {
+      "file": "lib/ui/status_kit.dart",
+      "line": 250,
+      "hex": "730F172A",
+      "action": "改为令牌",
+      "reason": "light.text.primary × 0.45：阴影只换颜色，几何不变"
+    },
+    {
+      "file": "lib/ui/workspace_panels.dart",
+      "line": 292,
+      "hex": "14000000",
+      "action": "改为令牌",
+      "reason": "border.subtle：字数提示框边线"
+    }
+  ]
+}

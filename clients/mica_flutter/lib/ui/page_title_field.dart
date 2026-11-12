@@ -79,7 +79,7 @@ class PageTitleField extends StatelessWidget {
         onEditingComplete: readOnly ? null : _enterBody,
         decoration: InputDecoration(
           hintText: hintText,
-          hintStyle: TextStyle(color: appearance.tokens.text.faint),
+          hintStyle: TextStyle(color: appearance.tokens.text.ghost),
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(vertical: 12),
           border: InputBorder.none,

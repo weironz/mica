@@ -154,12 +154,12 @@ class _EmojiPickerState extends State<_EmojiPicker> {
             color: MicaTheme.of(context).surface.overlay,
             border: Border.all(color: _border(context)),
             borderRadius: const BorderRadius.all(Radius.circular(16)),
-            boxShadow: const [
+            boxShadow: [
               BoxShadow(
-                color: Color(0x730F172A),
+                color: MicaTokens.light.text.primary.withValues(alpha: 0.45),
                 blurRadius: 70,
                 spreadRadius: -45,
-                offset: Offset(0, 30),
+                offset: const Offset(0, 30),
               ),
             ],
           ),
@@ -207,7 +207,7 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                     hintText: s.searchHint,
                     hintStyle: TextStyle(
                       fontSize: 13,
-                      color: MicaTheme.of(context).text.faint,
+                      color: MicaTheme.of(context).text.ghost,
                     ),
                     prefixIcon: Icon(
                       Icons.search,

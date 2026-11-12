@@ -23,21 +23,17 @@ void main() {
     return (hi + 0.05) / (lo + 0.05);
   }
 
-  group(
-    'light mode keeps its shipped values (faint raised to AA in 2026-11)',
-    () {
-      test('the ink and the code background are the values that shipped', () {
-        // Picked from the old EditorTheme consts. If someone "improves" a value
-        // here, they are changing the shipped product, and this says so.
-        expect(MicaTokens.light.text.primary, const Color(0xFF24292F));
-        expect(MicaTokens.light.text.muted, const Color(0xFF57606A));
-        expect(MicaTokens.light.text.faint, const Color(0xFF636C76));
-        expect(MicaTokens.light.editor.codeBg, const Color(0xFFF4F4F6));
-        expect(MicaTokens.light.editor.caret, const Color(0xFF2563EB));
-        expect(MicaTokens.light.accent.primary, const Color(0xFF2563EB));
-      });
-    },
-  );
+  group('phase 1 warm gray palette', () {
+    test('the ink and code background match the approved warm gray values', () {
+      // Specified by docs/plans/ui-visual-refresh.md; status/accent stay fixed.
+      expect(MicaTokens.light.text.primary, const Color(0xFF37352F));
+      expect(MicaTokens.light.text.muted, const Color(0xFF5F5E5B));
+      expect(MicaTokens.light.text.faint, const Color(0xFF6C6B66));
+      expect(MicaTokens.light.editor.codeBg, const Color(0xFFF7F6F3));
+      expect(MicaTokens.light.editor.caret, const Color(0xFF2563EB));
+      expect(MicaTokens.light.accent.primary, const Color(0xFF2563EB));
+    });
+  });
 
   group('body text stays readable in BOTH modes', () {
     for (final (name, t) in [
@@ -65,7 +61,7 @@ void main() {
       );
 
       test('$name: faint ink clears AA on every surface it sits on', () {
-        // Faint carries placeholders, timestamps and hints at body size, so it
+        // Faint carries timestamps, counts and key hints at body size, so it
         // gets the normal-text bar, not the large-text one — on the page AND
         // on the raised / sunken / hover fills of panels, rows and menus.
         for (final (s, bg) in [
@@ -115,6 +111,146 @@ void main() {
         });
       });
     }
+  });
+
+  test('phase 1 preserves accent, status, syntax and editor emphasis hues', () {
+    List<int> fixed(MicaTokens t) => [
+      t.accent.primary,
+      t.accent.hover,
+      t.accent.wash,
+      t.status.danger,
+      t.status.dangerWash,
+      t.status.warning,
+      t.status.warningWash,
+      t.status.success,
+      t.status.successWash,
+      t.code.keyword,
+      t.code.string,
+      t.code.number,
+      t.code.comment,
+      t.code.key,
+      t.code.function,
+      t.editor.selection,
+      t.editor.caret,
+      t.editor.dropLine,
+      t.editor.commentHighlight,
+      t.editor.commentHighlightActive,
+      ...t.editor.alertAccents.values,
+    ].map((c) => c.toARGB32()).toList();
+    expect(fixed(MicaTokens.light), [
+      0xFF2563EB,
+      0xFF1D4ED8,
+      0xFFEFF6FF,
+      0xFFDC2626,
+      0xFFFEF2F2,
+      0xFFB45309,
+      0xFFFFFBEB,
+      0xFF16A34A,
+      0xFFF0FDF4,
+      0xFF7C3AED,
+      0xFF0A7D34,
+      0xFFB45309,
+      0xFF6B7280,
+      0xFF0F766E,
+      0xFF2563EB,
+      0x332563EB,
+      0xFF2563EB,
+      0xFF2563EB,
+      0x33F59E0B,
+      0x59F59E0B,
+      0xFF0969DA,
+      0xFF1A7F37,
+      0xFF8250DF,
+      0xFF9A6700,
+      0xFFCF222E,
+    ]);
+    expect(fixed(MicaTokens.dark_), [
+      0xFF4C8DF6,
+      0xFF6BA1F8,
+      0x1F4C8DF6,
+      0xFFF87171,
+      0x1FF87171,
+      0xFFE3B341,
+      0x1FE3B341,
+      0xFF56D364,
+      0x1F56D364,
+      0xFFC4A0FF,
+      0xFF7EE787,
+      0xFFE3B341,
+      0xFF8B949E,
+      0xFF39C5CF,
+      0xFF79C0FF,
+      0x4C4C8DF6,
+      0xFF4C8DF6,
+      0xFF4C8DF6,
+      0x3DE3B341,
+      0x66E3B341,
+      0xFF58A6FF,
+      0xFF3FB950,
+      0xFFA371F7,
+      0xFFD29922,
+      0xFFF85149,
+    ]);
+  });
+
+  group('approved contrast table and ghost separation', () {
+    for (final (name, t, minimums) in [
+      (
+        'light',
+        MicaTokens.light,
+        [
+          [12.26, 11.43, 10.84, 10.65],
+          [6.48, 6.04, 5.73, 5.63],
+          [5.34, 4.98, 4.72, 4.64],
+        ],
+      ),
+      (
+        'dark',
+        MicaTokens.dark_,
+        [
+          [11.86, 10.99, 10.21, 9.42],
+          [7.22, 6.69, 6.22, 5.74],
+          [5.80, 5.37, 4.99, 4.60],
+        ],
+      ),
+    ]) {
+      test('$name: all informational inks meet the rounded spec table', () {
+        final fills = [
+          t.surface.base,
+          t.surface.raised,
+          t.surface.sunken,
+          t.surface.hover,
+        ];
+        final inks = [t.text.primary, t.text.muted, t.text.faint];
+        for (var i = 0; i < inks.length; i++) {
+          for (var j = 0; j < fills.length; j++) {
+            final rounded = double.parse(
+              contrast(inks[i], fills[j]).toStringAsFixed(2),
+            );
+            expect(rounded, greaterThanOrEqualTo(minimums[i][j]));
+          }
+        }
+        expect(
+          contrast(t.text.ghost, t.surface.base),
+          lessThan(contrast(t.text.faint, t.surface.base)),
+        );
+      });
+    }
+    test('ghost values and interpolation stay separate from information', () {
+      expect(MicaTokens.light.text.ghost, const Color(0xFF9B9A97));
+      expect(MicaTokens.dark_.text.ghost, const Color(0xFF6B6B6B));
+      expect(
+        MicaTokens.lerp(MicaTokens.light, MicaTokens.dark_, 0.5).text.ghost,
+        Color.lerp(
+          MicaTokens.light.text.ghost,
+          MicaTokens.dark_.text.ghost,
+          0.5,
+        ),
+      );
+      final t = MicaTokens.light;
+      final bg = Color.alphaBlend(t.editor.inlineCodeBg, t.surface.base);
+      expect(contrast(t.editor.inlineCodeInk, bg), greaterThanOrEqualTo(8.5));
+    });
   });
 
   test(

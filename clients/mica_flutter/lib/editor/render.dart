@@ -2387,7 +2387,7 @@ class RenderDocument extends RenderBox {
           ..color = isActive
               ? (_appearance.tokens.dark
                     ? _appearance.tokens.surface.hover
-                    : const Color(0xFF1E293B))
+                    : MicaTokens.light.text.primary)
               : (_hoverIcon == icon
                     ? _appearance.tokens.border.strong
                     : _appearance.tokens.border.normal),
@@ -2398,7 +2398,7 @@ class RenderDocument extends RenderBox {
           style: TextStyle(
             fontSize: 11,
             color: isActive
-                ? const Color(0xFFF8FAFC)
+                ? MicaTokens.light.accent.onPrimary
                 : _appearance.tokens.text.muted,
           ),
         ),
@@ -2488,7 +2488,7 @@ class RenderDocument extends RenderBox {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
-        style: const TextStyle(fontSize: 11, color: Color(0xFFFFFFFF)),
+        style: TextStyle(fontSize: 11, color: MicaTokens.light.accent.onPrimary),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -2509,7 +2509,7 @@ class RenderDocument extends RenderBox {
       Paint()
         ..color = (_appearance.tokens.dark
             ? _appearance.tokens.surface.hover
-            : const Color(0xFF0F172A)),
+            : MicaTokens.light.text.primary),
     );
     tp.paint(canvas, Offset(bg.left + padH, bg.top + padV));
     tp.dispose();
@@ -2660,9 +2660,7 @@ class RenderDocument extends RenderBox {
       canvas.drawRRect(
         RRect.fromRectAndRadius(r, radius),
         Paint()
-          ..color = (_appearance.tokens.dark
-              ? const Color(0x14FFFFFF)
-              : const Color(0x14000000)),
+          ..color = _appearance.tokens.text.primary.withValues(alpha: 0.08),
       );
       final t = _thumb(l);
       canvas.drawRRect(
@@ -3216,8 +3214,8 @@ class RenderDocument extends RenderBox {
       final tp = TextPainter(
         text: TextSpan(
           text: rc.label,
-          style: const TextStyle(
-            color: Color(0xFFFFFFFF),
+          style: TextStyle(
+            color: MicaTokens.light.accent.onPrimary,
             fontSize: 10,
             height: 1.0,
           ),

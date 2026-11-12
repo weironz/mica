@@ -1,0 +1,48 @@
+{
+  "phase": 1,
+  "baseCommit": "4df3569b",
+  "command": "just ci",
+  "result": "passed",
+  "flutterTestConcurrency": 1,
+  "flutterUnitPassed": 2121,
+  "extraSystemDarkUnitPassed": 2121,
+  "darkModeMethod": "Temporary test bootstrap sets system brightness on existing widget bindings; explicit theme fixtures retain their own palettes. Bootstrap removed before commit.",
+  "receipts": [
+    1197,
+    221,
+    11,
+    2121,
+    11,
+    1,
+    3,
+    12,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    12,
+    1,
+    11
+  ],
+  "browserSuites": 11,
+  "nativeScreenshots": 14,
+  "nativeClientPixels": [
+    1424,
+    961
+  ],
+  "nativeWindowDpi": 96,
+  "nativeRunStatus": "14 captures and fingerprint check completed; two pre-existing ListTile paint diagnostics retained for phase 3; native test exit 1",
+  "pasteTimingsMs": {
+    "default100KB": 15,
+    "default1024KB": 167,
+    "dark100KB": 17,
+    "dark1024KB": 189
+  },
+  "structureLines": {
+    "main": 11992,
+    "editor": 6737,
+    "render": 5728
+  }
+}

@@ -464,6 +464,7 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
           constraints: const BoxConstraints(maxWidth: 720),
           child: MicaEditor(
             key: ValueKey('version-preview-$_selectedId'),
+            appearance: EditorAppearance(tokens: MicaTheme.of(context)),
             rootBlockId: content.rootBlockId,
             nodes: nodes,
             version: 0,

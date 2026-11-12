@@ -61,6 +61,7 @@ class TextTokens {
     required this.primary,
     required this.muted,
     required this.faint,
+    required this.ghost,
   });
 
   /// Body copy and headings.
@@ -69,7 +70,7 @@ class TextTokens {
   /// Secondary lines: meta, descriptions, subtitles.
   final Color muted;
 
-  /// Barely-there: timestamps, placeholders, disabled labels.
+  /// Informational small text: timestamps, counts, paths and key hints.
   ///
   /// There is deliberately no `inverse` here. Ink on a filled accent already has
   /// a name — [AccentTokens.onPrimary] — and having two names for it is what
@@ -78,10 +79,14 @@ class TextTokens {
   /// on that lighter blue misses WCAG AA. One name, one answer.
   final Color faint;
 
+  /// Non-informational hints, disabled controls and decorative separators.
+  final Color ghost;
+
   static TextTokens lerp(TextTokens a, TextTokens b, double t) => TextTokens(
     primary: Color.lerp(a.primary, b.primary, t)!,
     muted: Color.lerp(a.muted, b.muted, t)!,
     faint: Color.lerp(a.faint, b.faint, t)!,
+    ghost: Color.lerp(a.ghost, b.ghost, t)!,
   );
 }
 
@@ -302,21 +307,22 @@ class MicaTokens {
     dark: false,
     surface: SurfaceTokens(
       base: Color(0xFFFFFFFF),
-      raised: Color(0xFFF7F8FA),
-      sunken: Color(0xFFF2F3F5),
+      raised: Color(0xFFF7F7F5),
+      sunken: Color(0xFFF1F1EF),
       overlay: Color(0xFFFFFFFF),
-      hover: Color(0xFFF0F1F3),
+      hover: Color(0xFFEFEFED),
     ),
     text: TextTokens(
-      // GitHub's ink: calmer than slate-900, still ~13:1 on white.
-      primary: Color(0xFF24292F),
-      muted: Color(0xFF57606A),
-      faint: Color(0xFF636C76),
+      // Warm neutral ink; informational faint stays above AA on every fill.
+      primary: Color(0xFF37352F),
+      muted: Color(0xFF5F5E5B),
+      faint: Color(0xFF6C6B66),
+      ghost: Color(0xFF9B9A97),
     ),
     border: BorderTokens(
-      subtle: Color(0xFFF0F1F3),
-      normal: Color(0xFFE3E5E8),
-      strong: Color(0xFFC9CDD3),
+      subtle: Color(0xFFF1F1EF),
+      normal: Color(0xFFE9E9E7),
+      strong: Color(0xFFD3D2CE),
     ),
     accent: AccentTokens(
       primary: Color(0xFF2563EB),
@@ -335,12 +341,12 @@ class MicaTokens {
     editor: EditorTokens(
       selection: Color(0x332563EB),
       caret: Color(0xFF2563EB),
-      codeBg: Color(0xFFF4F4F6),
-      inlineCodeBg: Color(0x1A64748B),
-      inlineCodeInk: Color(0xFF334155),
+      codeBg: Color(0xFFF7F6F3),
+      inlineCodeBg: Color(0x26878378),
+      inlineCodeInk: Color(0xFF44423D),
       commentHighlight: Color(0x33F59E0B),
       commentHighlightActive: Color(0x59F59E0B),
-      quoteBar: Color(0xFFCBD5E1),
+      quoteBar: Color(0xFFD3D2CE),
       dropLine: Color(0xFF2563EB),
       alertAccents: {
         'note': Color(0xFF0969DA),
@@ -366,9 +372,8 @@ class MicaTokens {
   /// The dark answers to the same questions.
   ///
   /// Not an inversion. Pure black backgrounds and pure white ink are the two
-  /// mistakes every first dark theme makes: the page is a dark slate (#0F1419)
-  /// and the ink is off-white (#E6EDF3), which is roughly where GitHub, AFFiNE
-  /// and AppFlowy all land — enough contrast to read, not enough to glare.
+  /// mistakes every first dark theme makes: neutral surfaces and off-white ink
+  /// keep enough contrast to read without glare.
   ///
   /// The washes change KIND, not just value: a light theme's `#EFF6FF` on a dark
   /// page reads as a bright rectangle, so on dark the same role becomes the accent
@@ -376,28 +381,29 @@ class MicaTokens {
   static const MicaTokens dark_ = MicaTokens(
     dark: true,
     surface: SurfaceTokens(
-      base: Color(0xFF0F1419),
-      raised: Color(0xFF161B22),
-      sunken: Color(0xFF1C2128),
-      overlay: Color(0xFF1C2128),
-      hover: Color(0xFF222A33),
+      base: Color(0xFF191919),
+      raised: Color(0xFF202020),
+      sunken: Color(0xFF262626),
+      overlay: Color(0xFF252525),
+      hover: Color(0xFF2C2C2C),
     ),
     text: TextTokens(
-      primary: Color(0xFFE6EDF3),
-      muted: Color(0xFF9BA7B4),
-      faint: Color(0xFF8B949E),
+      primary: Color(0xFFD4D4D4),
+      muted: Color(0xFFA6A6A6),
+      faint: Color(0xFF949494),
+      ghost: Color(0xFF6B6B6B),
     ),
     border: BorderTokens(
-      subtle: Color(0xFF21262D),
-      normal: Color(0xFF2D333B),
-      strong: Color(0xFF444C56),
+      subtle: Color(0xFF2A2A2A),
+      normal: Color(0xFF2F2F2F),
+      strong: Color(0xFF3F3F3F),
     ),
     accent: AccentTokens(
       // A touch lighter than the light-mode blue so it holds up on a dark page.
       primary: Color(0xFF4C8DF6),
       hover: Color(0xFF6BA1F8),
       wash: Color(0x1F4C8DF6),
-      onPrimary: Color(0xFF0F1419),
+      onPrimary: Color(0xFF191919),
     ),
     status: StatusTokens(
       danger: Color(0xFFF87171),
@@ -410,12 +416,12 @@ class MicaTokens {
     editor: EditorTokens(
       selection: Color(0x4C4C8DF6),
       caret: Color(0xFF4C8DF6),
-      codeBg: Color(0xFF161B22),
-      inlineCodeBg: Color(0x338B949E),
-      inlineCodeInk: Color(0xFFC9D1D9),
+      codeBg: Color(0xFF202020),
+      inlineCodeBg: Color(0x33949494),
+      inlineCodeInk: Color(0xFFD4D4D4),
       commentHighlight: Color(0x3DE3B341),
       commentHighlightActive: Color(0x66E3B341),
-      quoteBar: Color(0xFF444C56),
+      quoteBar: Color(0xFF3F3F3F),
       dropLine: Color(0xFF4C8DF6),
       alertAccents: {
         'note': Color(0xFF58A6FF),
@@ -505,6 +511,7 @@ class MicaTokens {
         elevation: 12,
       ),
       canvasColor: surface.base,
+      disabledColor: text.ghost,
       dividerColor: border.normal,
       dividerTheme: DividerThemeData(
         color: border.normal,
@@ -530,12 +537,13 @@ class MicaTokens {
         focusedErrorBorder: fieldBorder.copyWith(
           borderSide: BorderSide(color: status.danger, width: 1.5),
         ),
-        hintStyle: TextStyle(color: text.faint, fontSize: 14),
+        hintStyle: TextStyle(color: text.ghost, fontSize: 14),
         labelStyle: TextStyle(color: text.muted, fontSize: 14),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           shape: controlShape,
+          disabledForegroundColor: text.ghost,
           minimumSize: const Size(64, 40),
           // Material replaces its text style; the bundled fallback must ride
           // along or CJK labels wait for the engine's remote Noto download.
@@ -550,6 +558,7 @@ class MicaTokens {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           shape: controlShape,
+          disabledForegroundColor: text.ghost,
           foregroundColor: text.primary,
           side: BorderSide(color: border.normal),
           minimumSize: const Size(64, 40),
@@ -559,6 +568,7 @@ class MicaTokens {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           shape: controlShape,
+          disabledForegroundColor: text.ghost,
           minimumSize: const Size(48, 40),
           textStyle: TextStyle(
             fontSize: 14,

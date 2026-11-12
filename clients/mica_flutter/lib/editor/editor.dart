@@ -5690,7 +5690,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _viewerKey = key;
     showDialog<void>(
       context: context,
-      barrierColor: const Color(0xCC000000),
+      barrierColor: MicaTokens.dark_.surface.base.withValues(alpha: 0.8),
       builder: (context) => Dialog(
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.all(24),

@@ -178,7 +178,7 @@ Color _hoverBorder(BuildContext context) =>
 /// it lifts to the hover surface — still a dark tile, still visibly a tile.
 Color _createTileBg(BuildContext context) {
   final tokens = MicaTheme.of(context);
-  return tokens.dark ? tokens.surface.hover : const Color(0xFF0F172A);
+  return tokens.dark ? tokens.surface.hover : MicaTokens.light.text.primary;
 }
 
 /// The card's near-white vertical wash. Two surface steps, so it stays a wash

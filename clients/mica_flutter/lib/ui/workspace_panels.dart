@@ -289,7 +289,7 @@ class WordCountBadge extends StatelessWidget {
         decoration: BoxDecoration(
           color: MicaTheme.of(context).surface.raised.withValues(alpha: 0.95),
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0x14000000)),
+          border: Border.all(color: MicaTheme.of(context).border.subtle),
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

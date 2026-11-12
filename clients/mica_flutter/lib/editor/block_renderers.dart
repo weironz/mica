@@ -472,7 +472,7 @@ class ImageRenderer extends AtomicBlockRenderer {
     final label = TextPainter(
       text: TextSpan(
         text: l10nNoContext.imageExternalBadge,
-        style: const TextStyle(fontSize: 10, color: Color(0xFFFFFFFF)),
+        style: TextStyle(fontSize: 10, color: MicaTokens.light.accent.onPrimary),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -491,7 +491,7 @@ class ImageRenderer extends AtomicBlockRenderer {
     }
     canvas.drawRRect(
       RRect.fromRectAndRadius(chip, const Radius.circular(4)),
-      Paint()..color = const Color(0xB3475569),
+      Paint()..color = MicaTokens.dark_.surface.hover.withValues(alpha: 0.7),
     );
     label.paint(canvas, Offset(chip.left + padH, chip.top + padV));
     label.dispose();
@@ -564,13 +564,13 @@ class ImageRenderer extends AtomicBlockRenderer {
       final rr = resize.shift(offset).deflate(2);
       canvas.drawRRect(
         RRect.fromRectAndRadius(rr, const Radius.circular(3)),
-        Paint()..color = const Color(0xCC1E293B),
+        Paint()..color = MicaTokens.dark_.surface.base.withValues(alpha: 0.8),
       );
     }
     if (bar == null) return;
     canvas.drawRRect(
       RRect.fromRectAndRadius(bar.shift(offset), const Radius.circular(7)),
-      Paint()..color = const Color(0xF21E293B),
+      Paint()..color = MicaTokens.dark_.surface.base.withValues(alpha: 0.95),
     );
     const icons = {
       'expand': Icons.open_in_full,
@@ -585,7 +585,7 @@ class ImageRenderer extends AtomicBlockRenderer {
       final rect = l.imageButtons[k].shift(offset);
       final color = action == 'delete'
           ? const Color(0xFFFCA5A5)
-          : const Color(0xFFE2E8F0);
+          : MicaTokens.dark_.text.primary;
       final glyph = TextPainter(
         text: TextSpan(
           text: String.fromCharCode(icons[action]!.codePoint),
@@ -1066,9 +1066,7 @@ class TableRenderer extends AtomicBlockRenderer {
     // Row / column drag grips: a single soft rounded pill centered on the edge
     // line — shown only for the row/column the pointer is over.
     final gripPaint = Paint()
-      ..color = host._appearance.tokens.dark
-          ? host._appearance.tokens.border.strong
-          : const Color(0xFFC2CAD6);
+      ..color = host._appearance.tokens.border.strong;
     if (th?.row != null && th!.row! < l.rowHandles.length) {
       final r = l.rowHandles[th.row!].shift(offset);
       final len = (r.height * 0.5).clamp(12.0, 18.0);
@@ -1106,9 +1104,9 @@ class TableRenderer extends AtomicBlockRenderer {
       canvas.drawRRect(
         RRect.fromRectAndRadius(r.deflate(2), const Radius.circular(4)),
         Paint()
-          ..color = host._appearance.tokens.dark
-              ? const Color(0x14FFFFFF)
-              : const Color(0x14000000),
+          ..color = host._appearance.tokens.text.primary.withValues(
+            alpha: 0.08,
+          ),
       );
       final tp = TextPainter(
         text: TextSpan(

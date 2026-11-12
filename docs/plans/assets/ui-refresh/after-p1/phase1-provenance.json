@@ -1,0 +1,29 @@
+{
+  "screenshotCount": 14,
+  "nativeClientPixels": [
+    1424,
+    961
+  ],
+  "baseCommit": "4df3569b",
+  "engineDpr": 1.0,
+  "nativePaintDiagnosticCount": 2,
+  "otherTestFailures": 0,
+  "phase": 1,
+  "ffiSourceFingerprint": "1d284f77454cd407",
+  "sourceSha256": {
+    "clients/mica_flutter/lib/editor/block_renderers.dart": "60aa9087b7be85c29e3e668fc55751683f2d4b1205b9ecfcfd3629cc0cf634c9",
+    "clients/mica_flutter/lib/main_workspace_view.dart": "596d0403e2feb0c742f789994f5c85437e51bc662220d00227881d850be38ebc",
+    "clients/mica_flutter/lib/editor/property_panel.dart": "857863c8dc5926a1d61ecea89f6d83f796853dca5ead3d9b854f5ba200cdfb97",
+    "clients/mica_flutter/lib/ui/status_kit.dart": "fe8c34a04ffbe9051194ec28207a7aa4b98b45d7996e04e748bd11a766b08d2b",
+    "clients/mica_flutter/lib/ui/home_screen.dart": "c81cc70409262d1841569e0f20158260fa800de099de9d497fb86c6cfe5457d8",
+    "clients/mica_flutter/lib/ui/workspace_panels.dart": "690ee0811540b30538fbf13918031a270f4c61f4c6e9dd5ec88b6653fc5df46c",
+    "clients/mica_flutter/lib/ui/shell_widgets.dart": "e449ea9e7ee241a9023e03ce19d7bfb20119b77a1ad075db4cf1d8175481f9e5",
+    "clients/mica_flutter/lib/editor/render.dart": "ecde997a186c151e3015cc506691a2f45ddff74d79e1e2a87f527b94233144fe",
+    "clients/mica_flutter/lib/ui/emoji_picker.dart": "437fe7f190adb9c16ca2a7e10aef27e6edd04db4ea556cbf99a5d327d6c7402c",
+    "clients/mica_flutter/lib/ui/page_title_field.dart": "f32fba0ef43e329bad46f57ad67ef7cd6dd61174dc47fd9c113f08c0a5b91051",
+    "clients/mica_flutter/lib/ui/theme_tokens.dart": "c0cdec28905b20895688cb04bd3674e23094722c662ad36dc5e93c6b80829df7",
+    "clients/mica_flutter/lib/ui/version_history_dialog.dart": "d8a1a90e24df98dc7b7a9c883ccf8da13f2d63681e6e1e2b5dda46dc01a247de",
+    "clients/mica_flutter/lib/editor/editor.dart": "a05265af33fbe81e997a4bb6167f3826a50db381fbb00d431ccf5c59a87d1d64"
+  },
+  "windowDpi": 96
+}

@@ -1179,7 +1179,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
           Positioned.fill(
             child: GestureDetector(
               onTap: _closeNavDrawer,
-              child: const ColoredBox(color: Color(0x66000000)),
+              child: ColoredBox(color: MicaTokens.dark_.surface.base.withValues(alpha: 0.4)),
             ),
           ),
           Positioned(
@@ -1343,7 +1343,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     final canEdit = matchesEditRole(widget.selectedWorkspace?.role);
 
     return ColoredBox(
-      color: MicaTheme.of(context).surface.base,
+      color: MicaTheme.of(context).surface.raised,
       child: MouseRegion(
         onEnter: (_) => setState(() => _navHovered = true),
         // Merely LEAVING the sidebar does not release the location.
@@ -1664,7 +1664,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   /// removed, which reads as the app re-introducing itself.
   Widget _collapsedNavRail(BuildContext context) {
     return ColoredBox(
-      color: MicaTheme.of(context).surface.base,
+      color: MicaTheme.of(context).surface.raised,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
         child: Column(
