@@ -1,0 +1,13 @@
+{
+  "ffiSourceFingerprint": "1d284f77454cd407\nclients/mica_flutter/rust/Cargo.lock;clients/mica_flutter/rust/Cargo.toml;clients/mica_flutter/rust/build.rs;clients/mica_flutter/rust/src;crates/interchange/Cargo.toml;crates/interchange/src;crates/markdown/Cargo.toml;crates/markdown/src;crates/md-core/Cargo.toml;crates/md-core/src;crates/mica-core/Cargo.toml;crates/mica-core/src",
+  "sourceCommit": "97e73b81",
+  "sourceSha256": {
+    "clients/mica_flutter/lib/editor/render.dart": "4ff6e462d39810484a4946b55e47df854ae305d7f119f424311b458f8d6ba1b4",
+    "clients/mica_flutter/lib/ui/shell_widgets.dart": "03fba794cda2450d111771318dc0c143c14923aa2d82730ee893224875415a76",
+    "clients/mica_flutter/lib/ui/theme_tokens.dart": "8f012d8d7fc08d851847abe9115ad11dbbc65bed1669561fbd434770f58518bc",
+    "clients/mica_flutter/lib/cjk_fonts.dart": "f8316f7c4b14f14558a71c173a5a15ed171bed805e0c9227675f7c4e8cafaf57",
+    "clients/mica_flutter/lib/main.dart": "6db0ef13d9ae71c72f1acbbbd7b952bda4cbf492212586004827555f514ca81d"
+  },
+  "ffiRecomputedRaw": "1d284f77454cd407",
+  "ffiNormalizedLf": "1d284f77454cd407"
+}

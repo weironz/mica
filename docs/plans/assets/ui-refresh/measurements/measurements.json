@@ -1,0 +1,275 @@
+{
+  "os": "windows",
+  "pid": 61956,
+  "dpr": 1.0,
+  "engineDpr": 1.0,
+  "fontCandidates": [
+    "Segoe UI",
+    "Segoe UI Variable Text",
+    "Microsoft YaHei UI",
+    "Roboto"
+  ],
+  "themeResolvedStyle": {
+    "family": "Segoe UI",
+    "size": 14.0,
+    "fallback": [
+      "Microsoft YaHei UI",
+      "Microsoft YaHei",
+      "Microsoft JhengHei UI",
+      "Yu Gothic UI",
+      "Malgun Gothic",
+      "MingLiU-ExtB",
+      "SimSun-ExtB"
+    ]
+  },
+  "nativeWindowDpi": 96,
+  "pixelMatches": {
+    "12.0:Segoe UI": {
+      "canvasEqual": false,
+      "themeEqual": true
+    },
+    "12.0:Microsoft YaHei UI": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "12.0:Roboto": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "12.0:Arial": {
+      "canvasEqual": false,
+      "themeEqual": false
+    },
+    "13.0:Segoe UI": {
+      "canvasEqual": false,
+      "themeEqual": true
+    },
+    "13.0:Microsoft YaHei UI": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "13.0:Roboto": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "13.0:Arial": {
+      "canvasEqual": false,
+      "themeEqual": false
+    },
+    "14.0:Segoe UI": {
+      "canvasEqual": false,
+      "themeEqual": true
+    },
+    "14.0:Microsoft YaHei UI": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "14.0:Roboto": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "14.0:Arial": {
+      "canvasEqual": false,
+      "themeEqual": false
+    },
+    "16.0:Segoe UI": {
+      "canvasEqual": false,
+      "themeEqual": true
+    },
+    "16.0:Microsoft YaHei UI": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "16.0:Roboto": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "16.0:Arial": {
+      "canvasEqual": false,
+      "themeEqual": false
+    },
+    "20.0:Segoe UI": {
+      "canvasEqual": false,
+      "themeEqual": true
+    },
+    "20.0:Microsoft YaHei UI": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "20.0:Roboto": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "20.0:Arial": {
+      "canvasEqual": false,
+      "themeEqual": false
+    },
+    "30.0:Segoe UI": {
+      "canvasEqual": false,
+      "themeEqual": true
+    },
+    "30.0:Microsoft YaHei UI": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "30.0:Roboto": {
+      "canvasEqual": true,
+      "themeEqual": false
+    },
+    "30.0:Arial": {
+      "canvasEqual": false,
+      "themeEqual": false
+    }
+  },
+  "sourceCommit": "97e73b81",
+  "lineMetrics": {
+    "1.65": [
+      {
+        "height": 26.0,
+        "baseline": 20.71187973022461,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 46.71187973022461,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 72.71188354492188,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 98.71188354492188,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 124.71188354492188,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 150.71188354492188,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 176.71188354492188,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 202.71188354492188,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 228.71188354492188,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 254.71188354492188,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 280.7118835449219,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      },
+      {
+        "height": 26.0,
+        "baseline": 306.7118835449219,
+        "ascent": 21.111879348754883,
+        "descent": 5.288119792938232
+      }
+    ],
+    "1.625": [
+      {
+        "height": 26.0,
+        "baseline": 20.792003631591797,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 46.7920036315918,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 72.79199981689453,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 98.79199981689453,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 124.79199981689453,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 150.79200744628906,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 176.79200744628906,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 202.79200744628906,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 228.79200744628906,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 254.79200744628906,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 280.7919921875,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      },
+      {
+        "height": 26.0,
+        "baseline": 306.7919921875,
+        "ascent": 20.792003631591797,
+        "descent": 5.207996845245361
+      }
+    ]
+  }
+}

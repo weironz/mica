@@ -1,0 +1,33 @@
+{
+  "sourceCommit": "97e73b81",
+  "command": "just ci",
+  "result": "passed",
+  "flutter": "3.47.1",
+  "rust": "1.98.0",
+  "postgres": "18.6 (isolated test container)",
+  "flutterTestConcurrency": 1,
+  "testAssertionsChanged": false,
+  "receipts": [
+    1197,
+    221,
+    11,
+    2113,
+    11,
+    1,
+    3,
+    12,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    12,
+    1,
+    11
+  ],
+  "browserSuiteCount": 11,
+  "paste100KBms": 17,
+  "paste1024KBms": 183,
+  "nativeScreenshotTest": "14 screenshots captured; failed on two pre-existing ListTile paint diagnostics; not a passing native integration test"
+}
