@@ -284,13 +284,13 @@ class _SignInPaneState extends State<SignInPane> {
     ) => Expanded(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(9),
+        borderRadius: BorderRadius.circular(6),
         child: Container(
-          height: 38,
+          height: 32,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: selected ? MicaTheme.of(context).surface.base : null,
-            borderRadius: BorderRadius.circular(9),
+            borderRadius: BorderRadius.circular(6),
             border: selected
                 ? Border.all(color: MicaTheme.of(context).border.normal)
                 : null,
@@ -324,7 +324,7 @@ class _SignInPaneState extends State<SignInPane> {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: MicaTheme.of(context).surface.sunken,
-        borderRadius: BorderRadius.circular(11),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Padding(
         padding: const EdgeInsets.all(3),
@@ -382,12 +382,12 @@ class _SignInPaneState extends State<SignInPane> {
       children: [
         InkWell(
           onTap: () => setState(() => _serversOpen = !_serversOpen),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             decoration: BoxDecoration(
               color: MicaTheme.of(context).surface.raised,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(color: MicaTheme.of(context).border.normal),
             ),
             child: Row(
@@ -474,7 +474,7 @@ class _SignInPaneState extends State<SignInPane> {
           DecoratedBox(
             decoration: BoxDecoration(
               color: MicaTheme.of(context).surface.base,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(color: MicaTheme.of(context).border.normal),
             ),
             child: Column(
@@ -603,7 +603,7 @@ class _SignInPaneState extends State<SignInPane> {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: MicaTheme.of(context).surface.raised,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: MicaTheme.of(context).border.normal),
       ),
       child: row,

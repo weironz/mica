@@ -185,7 +185,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                 if (!canEdit) {
                   return Padding(
                     key: ValueKey(item.view.id),
-                    padding: const EdgeInsets.only(bottom: 8),
+                    padding: EdgeInsets.zero,
                     child: row,
                   );
                 }
@@ -301,7 +301,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
     Widget row,
   ) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: EdgeInsets.zero,
       child: NavigationDraggable<List<DocumentView>>(
         // Grabbing a row inside a multi-selection drags the whole selection —
         // the same rule the context menu uses, so what you get is what the
@@ -374,9 +374,8 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
           padding: EdgeInsets.only(left: inset, top: inset),
           child: Opacity(
             opacity: opacity,
-            child: Material(
-              elevation: 6,
-              borderRadius: BorderRadius.circular(6),
+            child: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+              elevation: 0,
               child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -388,8 +387,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: child ?? const SizedBox(height: 20),
-              ),
-            ),
+              ),),
           ),
         );
 
@@ -515,14 +513,14 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
     final transfer = widget.onTransfer;
     return [
       if (transfer != null) ...[
-        PopupMenuItem<VoidCallback>(
+        PopupMenuItem<VoidCallback>(height:30,
           value: () => transfer(rows, false),
           child: MenuRow(
             icon: Icons.drive_file_move_outlined,
             label: l10n.batchTransferMove(rows.length),
           ),
         ),
-        PopupMenuItem<VoidCallback>(
+        PopupMenuItem<VoidCallback>(height:30,
           value: () => transfer(rows, true),
           child: MenuRow(
             icon: Icons.copy_all_outlined,
@@ -531,7 +529,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
         ),
         const PopupMenuDivider(),
       ],
-      PopupMenuItem<VoidCallback>(
+      PopupMenuItem<VoidCallback>(height:30,
         value: () => _deleteSelection(rows),
         child: MenuRow(
           icon: Icons.delete_outline,
@@ -852,7 +850,6 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
     );
   }
 
-  /// Both editable drag wrappers and read-only rows add an 8px gap to the
-  /// DocumentListItem's 38px floor. Keep locating distant rows in this same unit.
-  double get _treeRowExtent => 46.0;
+  /// The row widget owns the exact visible extent used for distant reveals.
+  double get _treeRowExtent => kSidebarRowHeight;
 }

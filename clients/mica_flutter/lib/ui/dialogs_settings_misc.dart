@@ -41,7 +41,7 @@ extension _SettingsMiscTab on _SettingsDialogState {
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
     decoration: BoxDecoration(
       color: MicaTheme.of(context).surface.sunken,
-      borderRadius: BorderRadius.circular(5),
+      borderRadius: BorderRadius.circular(6),
       border: Border.all(color: MicaTheme.of(context).border.strong),
     ),
     child: Text(text, style: MicaTypography.caption),

@@ -73,7 +73,7 @@ class PageTreeSkeleton extends StatelessWidget {
                   height: 10,
                   decoration: BoxDecoration(
                     color: tokens.surface.hover,
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(6),
                   ),
                 ),
               ),

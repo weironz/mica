@@ -1,3 +1,4 @@
+import '../ui/theme_tokens.dart';
 // Finger text selection: what a double-tap / long-press grabs, and the two
 // drag handles + the cut/copy/paste/select-all menu shown over a selection
 // made by touch (instead of the mouse's formatting bar).
@@ -155,11 +156,10 @@ class TouchSelectionMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return ExcludeFocus(
-      child: Material(
+      child: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
         key: const ValueKey('touch-selection-menu'),
-        elevation: 6,
+        elevation: 0,
         color: scheme.inverseSurface,
-        borderRadius: BorderRadius.circular(8),
         child: SizedBox(
           height: touchMenuHeight - 6,
           child: Row(
@@ -178,8 +178,7 @@ class TouchSelectionMenu extends StatelessWidget {
                 ),
             ],
           ),
-        ),
-      ),
+        ),),
     );
   }
 }

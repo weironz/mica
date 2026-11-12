@@ -299,7 +299,7 @@ extension _SettingsAccountTab on _SettingsDialogState {
         ),
     ],
     if (widget.onDeleteAccount != null) ...[
-      const Divider(height: 32),
+      const SizedBox(height: 32),
       Align(
         alignment: Alignment.centerLeft,
         child: OutlinedButton.icon(

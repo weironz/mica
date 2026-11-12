@@ -172,13 +172,13 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
         color: selected
             ? MicaTheme.of(context).accent.wash
             : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
         child: InkWell(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(8),
           onTap: _busy ? null : () => _select(v),
           child: Container(
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: selected
                     ? MicaTheme.of(
@@ -347,17 +347,20 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
     final l10n = context.l10n;
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
-      clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        width: 980,
-        height: 640,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(child: _buildPreview(l10n)),
-            const VerticalDivider(width: 1),
-            SizedBox(width: 300, child: _buildTimeline(l10n)),
-          ],
+      clipBehavior: Clip.none,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: SizedBox(
+          width: 980,
+          height: 640,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _buildPreview(l10n)),
+              const VerticalDivider(width: 1),
+              SizedBox(width: 300, child: _buildTimeline(l10n)),
+            ],
+          ),
         ),
       ),
     );

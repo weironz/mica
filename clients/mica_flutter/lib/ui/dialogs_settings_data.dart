@@ -293,7 +293,7 @@ extension _SettingsDataTab on _SettingsDialogState {
       Container(
         decoration: BoxDecoration(
           border: Border.all(color: MicaTheme.of(context).border.subtle),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
         ),
         padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
         child: Row(

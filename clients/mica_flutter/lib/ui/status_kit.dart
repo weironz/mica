@@ -112,7 +112,7 @@ class MicaEmptyState extends StatelessWidget {
               height: 46,
               decoration: BoxDecoration(
                 color: MicaTheme.of(context).surface.sunken,
-                borderRadius: BorderRadius.circular(13),
+                borderRadius: BorderRadius.circular(8),
               ),
               alignment: Alignment.center,
               child: Icon(
@@ -237,17 +237,7 @@ class MicaFailureCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: MicaTheme.of(context).surface.base,
         border: Border.all(color: _border(context)),
-        borderRadius: BorderRadius.circular(16),
-        // A wide, far-offset, tightly-spread shadow: the card should look lifted
-        // off the page without a visible grey halo around its edge.
-        boxShadow: [
-          BoxShadow(
-            color: MicaTokens.light.text.primary.withValues(alpha: 0.45),
-            offset: const Offset(0, 30),
-            blurRadius: 45,
-            spreadRadius: -30,
-          ),
-        ],
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -261,7 +251,7 @@ class MicaFailureCard extends StatelessWidget {
                 height: 34,
                 decoration: BoxDecoration(
                   color: _tileColor(context),
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 alignment: Alignment.center,
                 child: Icon(_icon, size: 17, color: _iconColor(context)),
@@ -399,7 +389,7 @@ class MicaStatusToast extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
         decoration: BoxDecoration(
           color: _toastBg(context),
-          borderRadius: BorderRadius.circular(11),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -588,14 +578,14 @@ class _PrimaryButton extends StatelessWidget {
     return _Tappable(
       onPressed: onPressed,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           color: MicaTheme.of(context).accent.primary,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
         ),
         child: Text(
           label,
-          style: MicaTypography.small.copyWith(
+          style: MicaTypography.body.copyWith(
             fontWeight: FontWeight.w500,
             color: MicaTheme.of(context).accent.onPrimary,
           ),
@@ -620,14 +610,14 @@ class _OutlinedButton extends StatelessWidget {
     return _Tappable(
       onPressed: onPressed,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
           border: Border.all(color: _border(context)),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
         ),
         child: Text(
           label,
-          style: MicaTypography.small.copyWith(
+          style: MicaTypography.body.copyWith(
             color: MicaTheme.of(context).text.muted,
           ),
         ),
@@ -650,7 +640,7 @@ class _TextAction extends StatelessWidget {
       onPressed: onPressed,
       child: Text(
         label,
-        style: MicaTypography.small.copyWith(color: _toastAction),
+        style: MicaTypography.body.copyWith(color: _toastAction),
       ),
     );
   }
@@ -726,7 +716,7 @@ class ErrorBanner extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: MicaTheme.of(context).status.dangerWash,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(
           color: MicaTheme.of(context).status.danger.withValues(alpha: 0.5),
         ),

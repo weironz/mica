@@ -85,11 +85,11 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
         0,
       ),
       items: [
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'new',
           child: MenuRow(icon: Icons.add, label: context.l10n.tabNewPage),
         ),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'open',
           child: MenuRow(
             icon: Icons.search,
@@ -281,9 +281,9 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           // it is the cheap, frequent one (grab the text, paste
                           // it somewhere), while everything below produces a
                           // file. Grouping it with the exports would bury it.
-                          PopupMenuItem(
+                          PopupMenuItem(height:30,
                             value: 'copy-md',
-                            child: ListTile(
+                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.copy_all_outlined),
@@ -295,18 +295,18 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           // handed back a lone .md whose images pointed at
                           // `![](photo.png)` — a file that was nowhere in the
                           // download. A zip can carry them; a .md cannot.
-                          PopupMenuItem(
+                          PopupMenuItem(height:30,
                             value: 'export-zip',
-                            child: ListTile(
+                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.folder_zip_outlined),
                               title: Text(context.l10n.rowExportZipImages),
                             ),
                           ),
-                          PopupMenuItem(
+                          PopupMenuItem(height:30,
                             value: 'export-html',
-                            child: ListTile(
+                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.html_outlined),
@@ -317,9 +317,9 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           // headless print (native bytes → download); web hands
                           // the same self-contained HTML to the browser's own
                           // print dialog ("Save as PDF"). Available on both.
-                          PopupMenuItem(
+                          PopupMenuItem(height:30,
                             value: 'export-pdf',
-                            child: ListTile(
+                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(
@@ -329,9 +329,9 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                             ),
                           ),
                           const PopupMenuDivider(),
-                          PopupMenuItem(
+                          PopupMenuItem(height:30,
                             value: 'import-md',
-                            child: ListTile(
+                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.upload_file_outlined),
@@ -340,9 +340,9 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           ),
                           if (widget.onShare != null) ...[
                             const PopupMenuDivider(),
-                            PopupMenuItem(
+                            PopupMenuItem(height:30,
                               value: 'share',
-                              child: ListTile(
+                              child: ListTile(minTileHeight:30,minVerticalPadding:0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.public),
@@ -352,9 +352,9 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           ],
                           if (widget.onVersionHistory != null) ...[
                             const PopupMenuDivider(),
-                            PopupMenuItem(
+                            PopupMenuItem(height:30,
                               value: 'version-history',
-                              child: ListTile(
+                              child: ListTile(minTileHeight:30,minVerticalPadding:0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.history),
@@ -364,9 +364,9 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           ],
                           if (widget.onRestoreCheckpoint != null) ...[
                             const PopupMenuDivider(),
-                            PopupMenuItem(
+                            PopupMenuItem(height:30,
                               value: 'restore-checkpoint',
-                              child: ListTile(
+                              child: ListTile(minTileHeight:30,minVerticalPadding:0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.restore_outlined),

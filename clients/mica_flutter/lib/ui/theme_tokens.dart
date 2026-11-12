@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 
 import '../cjk_fonts.dart';
 import 'typography.dart';
+import 'panel_shape.dart';
 
 /// Backgrounds, from furthest back to nearest front.
 class SurfaceTokens {
@@ -458,6 +459,41 @@ class MicaTokens {
     code: CodeTokens.lerp(a.code, b.code, t),
   );
 
+  Color get panelShadowColor =>
+      dark ? const Color(0x66000000) : const Color(0x1A000000);
+  BoxShadow get dialogShadow => BoxShadow(
+    color: panelShadowColor,
+    blurRadius: 24,
+    offset: const Offset(0, 8),
+  );
+  BoxShadow get menuShadow => BoxShadow(
+    color: panelShadowColor,
+    blurRadius: 12,
+    offset: const Offset(0, 4),
+  );
+  MicaPanelShape get dialogShape => MicaPanelShape(
+    side: BorderSide(color: border.normal),
+    borderRadius: BorderRadius.circular(12),
+    shadow: dialogShadow,
+  );
+  MicaPanelShape get menuShape => MicaPanelShape(
+    side: BorderSide(color: border.normal),
+    borderRadius: BorderRadius.circular(8),
+    shadow: menuShadow,
+  );
+  Color get pressedSurface =>
+      Color.alphaBlend(text.primary.withValues(alpha: 0.04), surface.sunken);
+
+  ButtonStyle _neutralButtonStyle(ButtonStyle style) => style.copyWith(
+    overlayColor: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.pressed)
+          ? pressedSurface
+          : states.contains(WidgetState.hovered)
+          ? surface.hover
+          : Colors.transparent,
+    ),
+  );
+
   /// The Material theme that matches, so the widgets we do NOT hand-colour
   /// (dialogs, text fields, buttons) come out right instead of staying light.
   ThemeData toMaterialTheme() {
@@ -487,10 +523,10 @@ class MicaTokens {
           outlineVariant: border.subtle,
         );
     final controlShape = RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(6),
     );
     final fieldBorder = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(6),
       borderSide: BorderSide(color: border.normal),
     );
     final baseTheme = ThemeData(
@@ -500,6 +536,10 @@ class MicaTokens {
     );
     return ThemeData(
       useMaterial3: true,
+      splashFactory: NoSplash.splashFactory,
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      hoverColor: surface.hover,
       fontFamily: uiFontFamily,
       colorScheme: scheme,
       textTheme: MicaTypography.textTheme(
@@ -516,35 +556,45 @@ class MicaTokens {
         ),
         backgroundColor: surface.overlay,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        elevation: 12,
+        shape: dialogShape,
+        elevation: 0,
       ),
       canvasColor: surface.base,
       disabledColor: text.ghost,
-      dividerColor: border.normal,
+      dividerColor: border.subtle,
       dividerTheme: DividerThemeData(
-        color: border.normal,
+        color: border.subtle,
         thickness: 1,
         space: 1,
       ),
       iconTheme: IconThemeData(color: text.muted, size: 20),
       inputDecorationTheme: InputDecorationThemeData(
+        isDense: true,
+        prefixIconConstraints: const BoxConstraints(
+          minWidth: 36,
+          minHeight: 36,
+        ),
+        suffixIconConstraints: const BoxConstraints(
+          minWidth: 36,
+          minHeight: 36,
+        ),
         filled: true,
         fillColor: surface.base,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 12,
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         border: fieldBorder,
         enabledBorder: fieldBorder,
-        focusedBorder: fieldBorder.copyWith(
-          borderSide: BorderSide(color: accent.primary, width: 1.5),
+        focusedBorder: MicaFocusBorder(
+          wash: accent.wash,
+          borderRadius: BorderRadius.circular(6),
+          borderSide: BorderSide(color: accent.primary),
         ),
         errorBorder: fieldBorder.copyWith(
           borderSide: BorderSide(color: status.danger),
         ),
-        focusedErrorBorder: fieldBorder.copyWith(
-          borderSide: BorderSide(color: status.danger, width: 1.5),
+        focusedErrorBorder: MicaFocusBorder(
+          wash: status.dangerWash,
+          borderRadius: BorderRadius.circular(6),
+          borderSide: BorderSide(color: status.danger),
         ),
         hintStyle: MicaTypography.body.copyWith(color: text.ghost),
         labelStyle: MicaTypography.body.copyWith(color: text.muted),
@@ -552,38 +602,53 @@ class MicaTokens {
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           shape: controlShape,
+          elevation: 0,
+          animationDuration: const Duration(milliseconds: 80),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           disabledForegroundColor: text.ghost,
-          minimumSize: const Size(64, 40),
+          minimumSize: const Size(64, 32),
           // Material replaces its text style; the bundled fallback must ride
           // along or CJK labels wait for the engine's remote Noto download.
           textStyle: MicaTypography.body.copyWith(
             fontWeight: FontWeight.w500,
             fontFamilyFallback: cjkFontFallback,
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          shape: controlShape,
-          disabledForegroundColor: text.ghost,
-          foregroundColor: text.primary,
-          side: BorderSide(color: border.normal),
-          minimumSize: const Size(64, 40),
-          textStyle: MicaTypography.body.copyWith(
-            fontWeight: FontWeight.w500,
-            fontFamilyFallback: cjkFontFallback,
+        style: _neutralButtonStyle(
+          OutlinedButton.styleFrom(
+            shape: controlShape,
+            elevation: 0,
+            animationDuration: const Duration(milliseconds: 80),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            disabledForegroundColor: text.ghost,
+            foregroundColor: text.primary,
+            side: BorderSide(color: border.normal),
+            minimumSize: const Size(64, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            textStyle: MicaTypography.body.copyWith(
+              fontWeight: FontWeight.w500,
+              fontFamilyFallback: cjkFontFallback,
+            ),
           ),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          shape: controlShape,
-          disabledForegroundColor: text.ghost,
-          minimumSize: const Size(48, 40),
-          textStyle: MicaTypography.body.copyWith(
-            fontWeight: FontWeight.w500,
-            fontFamilyFallback: cjkFontFallback,
+        style: _neutralButtonStyle(
+          TextButton.styleFrom(
+            shape: controlShape,
+            elevation: 0,
+            animationDuration: const Duration(milliseconds: 80),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            disabledForegroundColor: text.ghost,
+            minimumSize: const Size(48, 32),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            textStyle: MicaTypography.body.copyWith(
+              fontWeight: FontWeight.w500,
+              fontFamilyFallback: cjkFontFallback,
+            ),
           ),
         ),
       ),
@@ -591,11 +656,16 @@ class MicaTokens {
         shape: controlShape,
         side: BorderSide(color: border.normal),
         backgroundColor: surface.base,
-        selectedColor: accent.wash,
+        selectedColor: surface.hover,
         labelStyle: MicaTypography.small.copyWith(color: text.primary),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       ),
       listTileTheme: ListTileThemeData(
+        textColor: text.primary,
+        selectedColor: text.primary,
+        iconColor: text.muted,
+        minTileHeight: 32,
+        minVerticalPadding: 4,
         titleTextStyle: MicaTypography.canvasBody.copyWith(
           fontWeight: FontWeight.w400,
         ),
@@ -610,16 +680,69 @@ class MicaTokens {
         ),
         color: surface.overlay,
         surfaceTintColor: Colors.transparent,
-        shape: controlShape,
-        elevation: 6,
+        shape: menuShape,
+        elevation: 0,
+      ),
+      menuTheme: MenuThemeData(
+        style: MenuStyle(
+          elevation: const WidgetStatePropertyAll(0),
+          backgroundColor: WidgetStatePropertyAll(surface.overlay),
+          surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+          shape: WidgetStatePropertyAll(menuShape),
+        ),
+      ),
+      menuButtonTheme: const MenuButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStatePropertyAll(Size(0, 30)),
+          padding: WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          ),
+          animationDuration: Duration(milliseconds: 80),
+        ),
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          shape: WidgetStatePropertyAll(controlShape),
+          minimumSize: const WidgetStatePropertyAll(Size(0, 32)),
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          ),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: const WidgetStatePropertyAll(Size(30, 30)),
+          padding: const WidgetStatePropertyAll(EdgeInsets.all(4)),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: WidgetStatePropertyAll(controlShape),
+          overlayColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.pressed)
+                ? pressedSurface
+                : states.contains(WidgetState.hovered)
+                ? surface.hover
+                : Colors.transparent,
+          ),
+        ),
+      ),
+      scrollbarTheme: ScrollbarThemeData(
+        thickness: const WidgetStatePropertyAll(6),
+        radius: const Radius.circular(3),
+        thumbColor: WidgetStateProperty.resolveWith(
+          (states) => border.strong.withValues(
+            alpha: states.contains(WidgetState.hovered) ? 1 : 0.4,
+          ),
+        ),
       ),
       tooltipTheme: TooltipThemeData(
         waitDuration: const Duration(milliseconds: 500),
         decoration: BoxDecoration(
-          color: text.primary,
+          color: dark ? surface.hover : text.primary,
           borderRadius: BorderRadius.circular(6),
         ),
-        textStyle: MicaTypography.caption.copyWith(color: surface.base),
+        textStyle: MicaTypography.caption.copyWith(
+          color: MicaTokens.light.accent.onPrimary,
+        ),
       ),
     );
   }

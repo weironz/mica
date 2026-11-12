@@ -11,6 +11,7 @@ void main() {
       'lib/ui/page_title_field.dart': 1, // Title hint.
       'lib/editor/property_panel.dart': 3, // Value, tag and property-key hints.
       'lib/ui/emoji_picker.dart': 1, // Search hint.
+      'lib/ui/segmented_choice.dart': 1, // Disabled option controls.
       'lib/ui/shell_widgets.dart': 1, // Decorative breadcrumb chevron.
     };
     final actual = <String, int>{};

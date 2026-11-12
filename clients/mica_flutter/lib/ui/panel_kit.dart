@@ -80,7 +80,7 @@ class MicaCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: MicaTheme.of(context).surface.base,
         border: Border.all(color: _cardBorder(context)),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(8),
       ),
       padding: padding,
       child: child,
@@ -119,9 +119,9 @@ class MicaPickZone extends StatelessWidget {
       painter: _DashedBorderPainter(_zoneBorder(context)),
       child: Material(
         color: _zoneFill(context),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(8),
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(8),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 22),
@@ -132,7 +132,7 @@ class MicaPickZone extends StatelessWidget {
                   height: 44,
                   decoration: BoxDecoration(
                     color: MicaTheme.of(context).accent.wash,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   alignment: Alignment.center,
                   child: Icon(
@@ -186,7 +186,7 @@ class _DashedBorderPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final path = Path()
       ..addRRect(
-        RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(14)),
+        RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(8)),
       );
     final paint = Paint()
       ..style = PaintingStyle.stroke

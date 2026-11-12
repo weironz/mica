@@ -1,0 +1,39 @@
+{
+  "phase": 3,
+  "command": "just ci",
+  "result": "passed",
+  "defaultUnitPassed": 2131,
+  "systemDarkUnitPassed": 2131,
+  "browserSuites": 11,
+  "receipts": [
+    1197,
+    221,
+    11,
+    2131,
+    11,
+    1,
+    3,
+    12,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    12,
+    1,
+    11
+  ],
+  "nativePassed": true,
+  "nativeScreenshots": 16,
+  "nativeDiagnostics": 0,
+  "treeRowPixels": 30,
+  "libraryLines": {
+    "main": 11981,
+    "editor": 6711,
+    "render": 5660
+  },
+  "dividerConstructorsBefore": 32,
+  "dividerConstructorsAfter": 26,
+  "scopeException": "Homepage custom card shape/hover shadow retained under explicit homepage scope restriction."
+}

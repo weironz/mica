@@ -729,9 +729,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         ),
       ],
     );
-    return Material(
-      elevation: 4,
-      borderRadius: BorderRadius.circular(8),
+    return Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+      elevation: 0,
       color: MicaTheme.of(context).surface.overlay,
       child: CallbackShortcuts(
         bindings: <ShortcutActivator, VoidCallback>{
@@ -778,8 +777,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             ],
           ),
         ),
-      ),
-    );
+      ),);
   }
 
   /// Wire the host formatting toolbar's commands to the controller. Every
@@ -3527,9 +3525,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // onPressed (pointer-up) could apply the mark.
       child: TextFieldTapRegion(
         child: ExcludeFocus(
-          child: Material(
-            elevation: 6,
-            borderRadius: BorderRadius.circular(8),
+          child: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+            elevation: 0,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 2),
               child: Row(
@@ -3623,8 +3620,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   ],
                 ],
               ),
-            ),
-          ),
+            ),),
         ),
       ),
     );
@@ -3729,7 +3725,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       ),
       items: [
         for (final (value, label) in items)
-          PopupMenuItem<String>(value: value, child: Text(label)),
+          PopupMenuItem<String>(height:30,value: value, child: Text(label)),
       ],
     );
   }
@@ -3873,9 +3869,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           _scheduleLinkBarHide();
         },
         child: ExcludeFocus(
-          child: Material(
-            elevation: 6,
-            borderRadius: BorderRadius.circular(8),
+          child: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+            elevation: 0,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               child: Row(
@@ -3911,8 +3906,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   ],
                 ],
               ),
-            ),
-          ),
+            ),),
         ),
       ),
     );
@@ -4131,14 +4125,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         0,
       ),
       items: [
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'wrap',
           child: _codeMenuRow(
             Icons.wrap_text,
             wrapped ? l10n.codeMenuNoWrap : l10n.codeMenuWrap,
           ),
         ),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'lineNumbers',
           child: _codeMenuRow(
             Icons.format_list_numbered,
@@ -4147,14 +4141,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 : l10n.codeMenuLineNumbers,
           ),
         ),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'title',
           child: _codeMenuRow(
             Icons.title,
             hasTitle ? l10n.codeMenuRemoveTitle : l10n.codeMenuAddTitle,
           ),
         ),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'delete',
           child: _codeMenuRow(
             Icons.delete_outline,
@@ -4850,9 +4844,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       left: left,
       top: top,
       child: ExcludeFocus(
-        child: Material(
-          elevation: 8,
-          borderRadius: BorderRadius.circular(8),
+        child: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+          elevation: 0,
           child: Container(
             width: 288,
             constraints: const BoxConstraints(maxHeight: 288),
@@ -4901,8 +4894,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 );
               },
             ),
-          ),
-        ),
+          ),),
       ),
     );
   }
@@ -5354,46 +5346,46 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           ),
         ),
         const PopupMenuDivider(height: 1),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'expand',
           child: Text(context.l10n.imageViewFullscreen),
         ),
-        PopupMenuItem(value: 'edit', child: Text(context.l10n.imageEditMenu)),
+        PopupMenuItem(height:30,value: 'edit', child: Text(context.l10n.imageEditMenu)),
         // Alignment is deliberately NOT here — the hover toolbar over the
         // picture already owns it.
         const PopupMenuDivider(height: 1),
         if (isExternal)
-          PopupMenuItem(value: 'rehost', child: Text(context.l10n.imageRehost)),
+          PopupMenuItem(height:30,value: 'rehost', child: Text(context.l10n.imageRehost)),
         // Both forms have a link worth copying. A stored image's is its Mica
         // blob url: stable, never-expiring, and PUBLIC — the file_id UUID is
         // the capability, which is what lets a copied image still render in
         // Typora/a browser. Copy/export already emit it; there was just no way
         // to get at it deliberately.
         if (_imageLinkOf(data) != null) ...[
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'copyLink',
             child: Text(context.l10n.imageCopyLink),
           ),
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'openLink',
             child: Text(context.l10n.imageOpenInBrowser),
           ),
         ],
-        PopupMenuItem(value: 'copy', child: Text(context.l10n.imageCopy)),
-        PopupMenuItem(value: 'cut', child: Text(context.l10n.imageCut)),
+        PopupMenuItem(height:30,value: 'copy', child: Text(context.l10n.imageCopy)),
+        PopupMenuItem(height:30,value: 'cut', child: Text(context.l10n.imageCut)),
         // Reading a bitmap off the clipboard is a desktop-only pull: on web the
         // clipboard only arrives through the DOM paste event, so the facade
         // returns null and this could never do anything but fail.
         if (!kIsWeb && widget.onUploadImage != null)
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'paste',
             child: Text(context.l10n.imagePasteReplace),
           ),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'download',
           child: Text(context.l10n.imageDownload),
         ),
-        PopupMenuItem(value: 'delete', child: Text(context.l10n.commonDelete)),
+        PopupMenuItem(height:30,value: 'delete', child: Text(context.l10n.commonDelete)),
       ],
     );
     if (choice == null || !mounted) return;
@@ -5798,19 +5790,19 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         0,
       ),
       items: [
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'explain',
           child: _codeMenuRow(Icons.lightbulb_outline, l10n.codeAiExplain),
         ),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'improve',
           child: _codeMenuRow(Icons.auto_fix_high, l10n.codeAiImprove),
         ),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'fix',
           child: _codeMenuRow(Icons.bug_report_outlined, l10n.codeAiFix),
         ),
-        PopupMenuItem(
+        PopupMenuItem(height:30,
           value: 'custom',
           child: _codeMenuRow(Icons.chat_bubble_outline, l10n.codeAiCustom),
         ),
@@ -5881,9 +5873,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // Never let the menu take keyboard focus away from the editor (a blur
       // would dismiss the menu). Taps still work — they are pointer-based.
       child: ExcludeFocus(
-        child: Material(
-          elevation: 8,
-          borderRadius: BorderRadius.circular(8),
+        child: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+          elevation: 0,
           child: Container(
             width: 248,
             constraints: const BoxConstraints(maxHeight: 288),
@@ -5927,8 +5918,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 );
               },
             ),
-          ),
-        ),
+          ),),
       ),
     );
   }

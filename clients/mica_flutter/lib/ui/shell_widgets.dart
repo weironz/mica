@@ -15,6 +15,9 @@ import '../ui/theme_tokens.dart';
 import '../ui/user_avatar.dart';
 import '../api/models.dart';
 
+/// The visible sidebar row and virtualized reveal calculations share one unit.
+const double kSidebarRowHeight = 30;
+
 // Leaf + panel widgets for the Mica client: workspace selector, list rows,
 // block row, document row, presence bar, update checker, small helpers.
 // Independent sidebar and document chrome widgets; data arrives explicitly.
@@ -476,9 +479,8 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
       onDragEnd: (_) => setState(() => _dragging = false),
       onDraggableCanceled: (_, _) => setState(() => _dragging = false),
       onDragCompleted: () => setState(() => _dragging = false),
-      feedback: Material(
-        elevation: 6,
-        borderRadius: BorderRadius.circular(6),
+      feedback: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+        elevation: 0,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           constraints: const BoxConstraints(maxWidth: 260),
@@ -503,8 +505,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
               ),
             ],
           ),
-        ),
-      ),
+        ),),
       childWhenDragging: Opacity(opacity: 0.4, child: row),
       child: Stack(
         children: [
@@ -783,7 +784,7 @@ class WorkspaceListItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: isSelected
-          ? MicaTheme.of(context).accent.wash
+          ? MicaTheme.of(context).surface.hover
           : MicaTheme.of(context).surface.base,
       shape: RoundedRectangleBorder(
         side: BorderSide(
@@ -1203,7 +1204,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
         // First, because it is the only entry that opens something rather than
         // changing it — the same slot browsers and AppFlowy put it in.
         if (widget.onOpenInNewTab != null)
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'openInNewTab',
             child: MenuRow(
               icon: Icons.tab_outlined,
@@ -1218,14 +1219,14 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // A page is a leaf: only folders can hold children, so the two
           // "new child" entries appear on folder rows only.
           if (widget._isFolder) ...[
-            PopupMenuItem(
+            PopupMenuItem(height:30,
               value: 'child',
               child: MenuRow(
                 icon: Icons.add,
                 label: context.l10n.rowNewChildPage,
               ),
             ),
-            PopupMenuItem(
+            PopupMenuItem(height:30,
               value: 'childFolder',
               child: MenuRow(
                 icon: Icons.create_new_folder_outlined,
@@ -1233,7 +1234,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
               ),
             ),
           ],
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'rename',
             child: MenuRow(
               icon: Icons.edit_outlined,
@@ -1244,7 +1245,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // kind of act — naming the thing — and the picker itself carries the
           // "remove icon" affordance, so no second menu entry is needed.
           if (widget.onSetIcon != null)
-            PopupMenuItem(
+            PopupMenuItem(height:30,
               value: 'setIcon',
               child: MenuRow(
                 icon: Icons.emoji_emotions_outlined,
@@ -1254,7 +1255,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // Duplicate in place — works for pages AND folders (a folder copies its
           // whole subtree), and in cloud AND local workspaces (unlike transfer,
           // which is cloud-only), so it's always present.
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'duplicate',
             child: MenuRow(
               icon: Icons.content_copy_outlined,
@@ -1262,7 +1263,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
             ),
           ),
           if (widget.hasChildren)
-            PopupMenuItem(
+            PopupMenuItem(height:30,
               value: 'toggle',
               child: MenuRow(
                 icon: widget.isCollapsed
@@ -1276,7 +1277,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // Folder subtree -> backup or Markdown ZIP, like a workspace (N3).
           if (widget._isFolder && widget.onExportFolder != null)
             for (final f in ArchiveFormat.values)
-              PopupMenuItem(
+              PopupMenuItem(height:30,
                 value: 'export:${f.name}',
                 child: MenuRow(
                   icon: Icons.folder_zip_outlined,
@@ -1285,7 +1286,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
               ),
           // Import md / images / a nested folder UNDER this folder (both worlds).
           if (widget._isFolder && widget.onImportFilesIntoFolder != null)
-            PopupMenuItem(
+            PopupMenuItem(height:30,
               value: 'importFiles',
               child: MenuRow(
                 icon: Icons.upload_file_outlined,
@@ -1293,7 +1294,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
               ),
             ),
           if (widget._isFolder && widget.onImportFolderIntoFolder != null)
-            PopupMenuItem(
+            PopupMenuItem(height:30,
               value: 'importFolder',
               child: MenuRow(
                 icon: Icons.drive_folder_upload_outlined,
@@ -1304,14 +1305,14 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // workspace. Works for pages AND folders (the folder carries its
           // subtree), matching the server endpoint's semantics.
           if (widget.onTransferMove != null) ...[
-            PopupMenuItem(
+            PopupMenuItem(height:30,
               value: 'transferMove',
               child: MenuRow(
                 icon: Icons.drive_file_move_outlined,
                 label: context.l10n.transferMoveTitle,
               ),
             ),
-            PopupMenuItem(
+            PopupMenuItem(height:30,
               value: 'transferCopy',
               child: MenuRow(
                 icon: Icons.copy_all_outlined,
@@ -1320,7 +1321,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
             ),
           ],
           const PopupMenuDivider(),
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'delete',
             child: MenuRow(
               icon: Icons.delete_outline,
@@ -1374,7 +1375,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
       onExit: (_) => setState(() => _hovered = false),
       child: Material(
         color: (w.isSelected || w.isMultiSelected)
-            ? MicaTheme.of(context).accent.wash
+            ? MicaTheme.of(context).surface.hover
             : Colors.transparent,
         // Multi-selected rows carry an outline on top of the wash. The wash
         // alone would make "located" and "selected" identical, and the count in
@@ -1434,7 +1435,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
               ? (d) => _openMenuAtGlobal(d.globalPosition)
               : null,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 38),
+            constraints: const BoxConstraints(minHeight: kSidebarRowHeight),
             child: Padding(
               padding: EdgeInsets.only(left: 2 + (w.depth * 16), right: 4),
               child: Row(
@@ -1444,7 +1445,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                   // pointer enters the sidebar (and only parents have one).
                   SizedBox(
                     width: 18,
-                    height: 30,
+                    height: kSidebarRowHeight,
                     child: w.hasChildren
                         ? Opacity(
                             opacity: (w.revealToggle || _hovered) ? 1.0 : 0.0,
@@ -1523,6 +1524,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                                   fontWeight: w.isSelected
                                       ? FontWeight.w500
                                       : FontWeight.w400,
+                                  color: w.isSelected ? MicaTheme.of(context).text.primary : MicaTheme.of(context).text.muted,
                                 ),
                           ),
                   ),
@@ -1532,7 +1534,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                   if (showActions && !w.isRenaming) ...[
                     SizedBox(
                       width: 28,
-                      height: 30,
+                      height: kSidebarRowHeight,
                       child: Builder(
                         builder: (btnCtx) => IconButton(
                           tooltip: context.l10n.rowMoreActions,
@@ -1549,7 +1551,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                     if (w._isFolder) ...[
                       SizedBox(
                         width: 28,
-                        height: 30,
+                        height: kSidebarRowHeight,
                         child: IconButton(
                           tooltip: context.l10n.rowNewChildPage,
                           onPressed: w.onCreateChild,
@@ -1560,7 +1562,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                       ),
                       SizedBox(
                         width: 28,
-                        height: 30,
+                        height: kSidebarRowHeight,
                         child: IconButton(
                           tooltip: context.l10n.rowNewChildFolder,
                           onPressed: w.onCreateChildFolder,
@@ -1983,7 +1985,7 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
         ),
         menuChildren: [_renamePopover(context)],
         builder: (context, controller, child) => InkWell(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(6),
           onTap: _openRename,
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
@@ -1994,7 +1996,7 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
     }
     return InkWell(
       onTap: () => widget.onSelect(v),
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(6),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
         child: text,

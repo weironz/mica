@@ -1,6 +1,8 @@
 // Settings dialog: AI providers, appearance, account, tokens, data, misc.
 // Its own library since 2026-11-01 (was a part of main.dart).
 library;
+import 'segmented_choice.dart';
+
 
 import 'typography.dart';
 

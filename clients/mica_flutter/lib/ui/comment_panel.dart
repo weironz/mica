@@ -111,7 +111,7 @@ class _CommentPanelState extends State<CommentPanel> {
             // (no `onClose`) has no bounded parent to size against.
             shrinkWrap: true,
             itemCount: threads.length,
-            separatorBuilder: (_, _) => const Divider(height: 20),
+            separatorBuilder: (_, _) => const SizedBox(height: 20),
             itemBuilder: (context, i) => _threadTile(context, threads[i]),
           );
 
@@ -188,7 +188,7 @@ class _CommentPanelState extends State<CommentPanel> {
               color: thread.isOrphaned
                   ? MicaTheme.of(context).surface.sunken
                   : MicaTheme.of(context).editor.commentHighlight,
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
               thread.quote.isEmpty ? '—' : thread.quote,

@@ -122,7 +122,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
   );
 
   Widget _fontChip(String label, String? family) {
-    return ChoiceChip(
+    return MicaSegmentButton(
       label: Text(label),
       selected: _fontFamily == family,
       onSelected: (_) {
@@ -136,7 +136,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
   /// MaterialApp — this open dialog included, so the switch is visible on the
   /// very surface you flipped it from.
   Widget _themeChip(String label, MicaThemeMode mode) {
-    return ChoiceChip(
+    return MicaSegmentButton(
       label: Text(label),
       selected: themeModeController.value == mode,
       onSelected: (_) => setUi(() {
@@ -150,7 +150,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
   /// localeController), which rebuilds MaterialApp — the whole app, including
   /// this open dialog, re-renders in the chosen language immediately.
   Widget _langChip(String label, String choice) {
-    return ChoiceChip(
+    return MicaSegmentButton(
       label: Text(label),
       selected: currentLanguageChoice == choice,
       onSelected: (_) => setUi(() => setLanguage(choice)),
@@ -161,8 +161,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
     _preferenceGroup(context.l10n.settingsInterfaceGroup),
     _preferenceRow(
       context.l10n.languageLabel,
-      Wrap(
-        spacing: 8,
+      MicaSegmentGroup(
         children: [
           _langChip(context.l10n.languageSystem, kLangSystem),
           _langChip(context.l10n.languageChinese, kLangChinese),
@@ -173,8 +172,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
     const SizedBox(height: 8),
     _preferenceRow(
       context.l10n.themeLabel,
-      Wrap(
-        spacing: 8,
+      MicaSegmentGroup(
         children: [
           _themeChip(context.l10n.themeSystem, MicaThemeMode.system),
           _themeChip(context.l10n.themeLight, MicaThemeMode.light),
@@ -202,8 +200,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
     const SizedBox(height: 4),
     _preferenceRow(
       context.l10n.settingsFont,
-      Wrap(
-        spacing: 8,
+      MicaSegmentGroup(
         children: [
           _fontChip(context.l10n.settingsFontSystem, null),
           _fontChip('Serif', 'serif'),

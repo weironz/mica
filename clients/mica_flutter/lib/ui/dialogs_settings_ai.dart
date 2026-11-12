@@ -569,7 +569,7 @@ extension _SettingsAiTab on _SettingsDialogState {
                         ),
                         decoration: BoxDecoration(
                           color: tokens.status.successWash,
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
                           context.l10n.aiInUse,
@@ -971,7 +971,7 @@ extension _SettingsAiTab on _SettingsDialogState {
             runSpacing: 6,
             children: [
               for (final id in _models)
-                ChoiceChip(
+                MicaSegmentButton(
                   label: Text(id, style: MicaTypography.caption),
                   selected: _model.text.trim() == id,
                   onSelected: (_saving || !_canEdit)

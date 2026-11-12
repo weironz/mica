@@ -2316,14 +2316,12 @@ class RenderDocument extends RenderBox {
       if (r0 == null) return;
       final r = r0.shift(offset);
       canvas.drawRRect(
-        RRect.fromRectAndRadius(r, const Radius.circular(5)),
+        RRect.fromRectAndRadius(r, const Radius.circular(6)),
         Paint()
           ..color = isActive
-              ? (_appearance.tokens.dark
-                    ? _appearance.tokens.surface.hover
-                    : MicaTokens.light.text.primary)
+              ? _appearance.tokens.surface.hover
               : (_hoverIcon == icon
-                    ? _appearance.tokens.border.strong
+                    ? _appearance.tokens.surface.hover
                     : _appearance.tokens.border.normal),
       );
       final tp = TextPainter(
@@ -2331,7 +2329,7 @@ class RenderDocument extends RenderBox {
           text: text,
           style: MicaTypography.canvasMicro.copyWith(
             color: isActive
-                ? MicaTokens.light.accent.onPrimary
+                ? _appearance.tokens.text.primary
                 : _appearance.tokens.text.muted,
           ),
         ),
@@ -2379,7 +2377,7 @@ class RenderDocument extends RenderBox {
   }) {
     if (hovered) {
       canvas.drawRRect(
-        RRect.fromRectAndRadius(rect, const Radius.circular(5)),
+        RRect.fromRectAndRadius(rect, const Radius.circular(6)),
         Paint()..color = _appearance.tokens.border.strong,
       );
     }
@@ -2440,7 +2438,7 @@ class RenderDocument extends RenderBox {
       visible: _clipBounds,
     );
     canvas.drawRRect(
-      RRect.fromRectAndRadius(bg, const Radius.circular(4)),
+      RRect.fromRectAndRadius(bg, const Radius.circular(6)),
       Paint()
         ..color = (_appearance.tokens.dark
             ? _appearance.tokens.surface.hover
@@ -2600,10 +2598,10 @@ class RenderDocument extends RenderBox {
       final t = _thumb(l);
       canvas.drawRRect(
         RRect.fromRectAndRadius(
-          Rect.fromLTWH(offset.dx + t.left, r.top, t.width, track.height),
+          Rect.fromLTWH(offset.dx + t.left, r.center.dy - 3, t.width, 6),
           radius,
         ),
-        Paint()..color = _appearance.tokens.text.faint,
+        Paint()..color = _appearance.tokens.border.strong.withValues(alpha: _hoverBlock != null && _hoverBlock! >= 0 && _hoverBlock! < _layouts.length && _layouts[_hoverBlock!].nodeId == l.nodeId ? 1 : 0.4),
       );
     }
   }

@@ -189,7 +189,8 @@ void main() {
     final wrappedRow = find.byWidgetPredicate(
       (w) => w is KeyedSubtree && w.key == const ValueKey('page-0'),
     );
-    expect(tester.getSize(wrappedRow).height, 46);
+    // The sidebar contract is a 30px row with no extra per-row bottom gap.
+    expect(tester.getSize(wrappedRow).height, 30);
     // ignore: avoid_print
     print(
       'large-tree initial_ms=$initialMs delegate=${delegate.runtimeType} '

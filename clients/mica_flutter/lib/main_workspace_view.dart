@@ -1188,7 +1188,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
             bottom: 0,
             width: drawerWidth,
             child: Material(
-              elevation: 8,
+              elevation: 0,
               child: _navigationPane(context, narrow: true),
             ),
           ),
@@ -1574,7 +1574,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                 ),
                 const SizedBox(height: 2),
                 Expanded(child: _pageTree(context, canEdit)),
-                const Divider(height: 16),
+                const SizedBox(height: 16),
                 // AI entry points exist only when the feature is enabled in
                 // Settings AND a provider is configured.
                 if (widget.showAi) ...[
@@ -1626,7 +1626,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
       borderRadius: BorderRadius.circular(8),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: MicaTheme.of(context).surface.sunken,
           borderRadius: BorderRadius.circular(8),

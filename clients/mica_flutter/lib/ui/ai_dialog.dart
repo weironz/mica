@@ -1,3 +1,4 @@
+import 'segmented_choice.dart';
 import 'typography.dart';
 import 'ai_prompts.dart';
 import '../l10n/locale_controller.dart';
@@ -261,7 +262,7 @@ class _AiDialogState extends State<AiDialog> {
               spacing: 8,
               children: [
                 if (widget.canEdit)
-                  ChoiceChip(
+                  MicaSegmentButton(
                     label: Text(context.l10n.aiTargetNewPage),
                     selected: _target == _AiTarget.newPage,
                     onSelected: widget.hasWorkspace && !_busy
@@ -269,14 +270,14 @@ class _AiDialogState extends State<AiDialog> {
                         : null,
                   ),
                 if (widget.canEdit && canWriteCurrent)
-                  ChoiceChip(
+                  MicaSegmentButton(
                     label: Text(context.l10n.aiTargetCurrentPage),
                     selected: _target == _AiTarget.currentPage,
                     onSelected: _busy
                         ? null
                         : (_) => _selectTarget(_AiTarget.currentPage),
                   ),
-                ChoiceChip(
+                MicaSegmentButton(
                   label: Text(context.l10n.aiTargetNewWorkspace),
                   selected: _target == _AiTarget.newWorkspace,
                   onSelected: _busy
@@ -332,7 +333,7 @@ class _AiDialogState extends State<AiDialog> {
                                       edit.after,
                                       style: MicaTypography.small,
                                     ),
-                                    const Divider(height: 24),
+                                    const SizedBox(height: 24),
                                   ],
                                 ],
                               )

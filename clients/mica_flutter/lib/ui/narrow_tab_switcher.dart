@@ -54,7 +54,7 @@ class NarrowTabSwitcher extends StatelessWidget {
         alignment: Alignment.center,
         decoration: BoxDecoration(
           border: Border.all(color: theme.text.muted, width: 1.5),
-          borderRadius: BorderRadius.circular(5),
+          borderRadius: BorderRadius.circular(6),
         ),
         child: Text(
           tabs.length > 99 ? '99+' : '${tabs.length}',
@@ -87,7 +87,7 @@ class NarrowTabSwitcher extends StatelessWidget {
       ),
       items: [
         for (var i = 0; i < tabs.length; i++)
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'select:$i',
             child: _TabRow(
               label: docTabLabel(tabs[i], untitledLabel),
@@ -100,7 +100,7 @@ class NarrowTabSwitcher extends StatelessWidget {
           ),
         if (onNewTab != null) ...[
           const PopupMenuDivider(),
-          PopupMenuItem(
+          PopupMenuItem(height:30,
             value: 'new',
             child: Row(
               children: [

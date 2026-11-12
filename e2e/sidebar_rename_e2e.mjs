@@ -27,24 +27,21 @@ page.on('pageerror', error => errors.push(String(error)));
 const state = () => page.evaluate(() => JSON.parse(window.micaRenameState()));
 const check = (condition, message) => { if (!condition) throw new Error(message); console.log('ok ' + message); };
 let sidebarPoint;
-async function clickPoint(name) {
-  // This fixture retains the same row/order throughout. Hover actions merge
-  // its accessibility label, so retain the initial physical row coordinates.
-  if (sidebarPoint) return sidebarPoint;
-  // The same name appears in the breadcrumb/title after opening the page.
-  // Identify the actual left tree row by its rendered position.
-  // Enabling Flutter semantics schedules its first DOM update for a later
-  // frame. Locator.all() takes an immediate snapshot, so wait for the actual
-  // left tree row and its rendered bounds before sending physical clicks.
+async function renderedTreePoint(name) {
+  let point;
   await expect.poll(async () => {
     for (const candidate of await page.getByText(name, { exact: true }).all()) {
       const box = await candidate.boundingBox();
-      if (box && box.x < 220 && box.y > 200)
-        return sidebarPoint = { x: box.x + Math.min(40, box.width / 2), y: box.y + box.height / 2 };
+      if (box && box.x < 220 && box.y > 150)
+        return point = { x: box.x + Math.min(40, box.width / 2), y: box.y + box.height / 2 };
     }
     return null;
   }, { message: 'Sidebar row missing: ' + name, timeout: 15000 }).not.toBeNull();
-  return sidebarPoint;
+  return point;
+}
+async function clickPoint(name) {
+  // Preserve the target's initial canvas point after hover merges its semantics.
+  return sidebarPoint ||= await renderedTreePoint(name);
 }
 async function pair(name) {
   const p = await clickPoint(name);
@@ -62,6 +59,7 @@ try {
   const placeholder = page.locator('flt-semantics-placeholder');
   if (await placeholder.count()) await placeholder.evaluate(e => e.click());
   const first = await clickPoint('待重命名页面');
+  const other = await renderedTreePoint('当前页面');
   // Semantics is for locating/snapshotting only; send physical mouse events
   // to the canvas rather than synthesizing a semantics tap with no timestamp.
   await page.addStyleTag({content: 'flt-semantics-host, flt-semantics-host * { pointer-events: none !important; }'});
@@ -94,7 +92,9 @@ try {
   // A -> B -> A is not a double click, even if all three clicks are rapid.
   await page.mouse.click(p.x, p.y);
   await page.waitForTimeout(80);
-  await page.mouse.click(p.x, p.y - 46);
+  // Derive the other row center from real rendered bounds, not the retired
+  // 46px extent; the new sidebar row contract is 30px.
+  await page.mouse.click(other.x, other.y);
   await page.waitForTimeout(80);
   await page.mouse.click(p.x, p.y);
   await page.waitForTimeout(350);

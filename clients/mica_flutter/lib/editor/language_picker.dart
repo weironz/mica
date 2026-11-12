@@ -112,9 +112,8 @@ class _LanguagePickerState extends State<LanguagePicker> {
           top: top,
           child: Focus(
             onKeyEvent: _onKey,
-            child: Material(
-              elevation: 8,
-              borderRadius: BorderRadius.circular(8),
+            child: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+              elevation: 0,
               child: Container(
                 width: w,
                 height: h,
@@ -203,8 +202,7 @@ class _LanguagePickerState extends State<LanguagePicker> {
                     ),
                   ],
                 ),
-              ),
-            ),
+              ),),
           ),
         ),
       ],

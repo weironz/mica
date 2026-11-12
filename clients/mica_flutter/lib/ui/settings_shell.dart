@@ -82,9 +82,9 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
             padding: const EdgeInsets.symmetric(vertical: 2),
             child: Material(
               color: !compact && widget.selectedIndex == i
-                  ? tokens.accent.wash
+                  ? tokens.surface.hover
                   : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(6),
               child: ListTile(
                 key: ValueKey('settings-category-$i'),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 10),
@@ -97,6 +97,9 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
                     fontWeight: widget.selectedIndex == i && !compact
                         ? FontWeight.w500
                         : FontWeight.w400,
+                    color: widget.selectedIndex == i && !compact
+                        ? tokens.text.primary
+                        : tokens.text.muted,
                   ),
                 ),
                 subtitle: compact
@@ -112,14 +115,14 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
                     : null,
                 onTap: () => _select(i, compact),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                 ),
               ),
             ),
           ),
         ],
         if (widget.footer != null) ...[
-          const Divider(height: 28),
+          const SizedBox(height: 28),
           widget.footer!,
         ],
       ],
@@ -168,82 +171,84 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
       child: Dialog(
         insetPadding: EdgeInsets.all(compact ? 12 : 32),
         backgroundColor: tokens.surface.overlay,
-        clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: SizedBox(
-          width: 960,
-          height: 720,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-                child: Row(
-                  children: [
-                    if (compact && _showDetail)
+        clipBehavior: Clip.none,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: 960,
+            height: 720,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                  child: Row(
+                    children: [
+                      if (compact && _showDetail)
+                        IconButton(
+                          key: const ValueKey('settings-back'),
+                          tooltip: widget.backLabel,
+                          onPressed: () => setState(() => _showDetail = false),
+                          icon: const Icon(Icons.arrow_back, size: 20),
+                        )
+                      else
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 10),
+                          child: Icon(Icons.settings_outlined, size: 20),
+                        ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          widget.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: MicaTypography.large.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: tokens.text.primary,
+                          ),
+                        ),
+                      ),
+                      if (widget.busy)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8),
+                          child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
                       IconButton(
-                        key: const ValueKey('settings-back'),
-                        tooltip: widget.backLabel,
-                        onPressed: () => setState(() => _showDetail = false),
-                        icon: const Icon(Icons.arrow_back, size: 20),
-                      )
-                    else
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 10),
-                        child: Icon(Icons.settings_outlined, size: 20),
+                        key: const ValueKey('settings-close'),
+                        tooltip: widget.closeLabel,
+                        onPressed: widget.busy ? null : widget.onClose,
+                        icon: const Icon(Icons.close, size: 20),
                       ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        widget.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: MicaTypography.large.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: tokens.text.primary,
-                        ),
-                      ),
-                    ),
-                    if (widget.busy)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 8),
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                    IconButton(
-                      key: const ValueKey('settings-close'),
-                      tooltip: widget.closeLabel,
-                      onPressed: widget.busy ? null : widget.onClose,
-                      icon: const Icon(Icons.close, size: 20),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              Divider(height: 1, color: tokens.border.normal),
-              Expanded(
-                child: compact
-                    ? (_showDetail ? _detail(true) : _navigation(true))
-                    : Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          SizedBox(
-                            width: 200,
-                            child: ColoredBox(
-                              color: tokens.surface.raised,
-                              child: _navigation(false),
+                Divider(height: 1, color: tokens.border.subtle),
+                Expanded(
+                  child: compact
+                      ? (_showDetail ? _detail(true) : _navigation(true))
+                      : Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SizedBox(
+                              width: 200,
+                              child: Material(
+                                color: tokens.surface.raised,
+                                child: _navigation(false),
+                              ),
                             ),
-                          ),
-                          VerticalDivider(
-                            width: 1,
-                            color: tokens.border.normal,
-                          ),
-                          Expanded(child: _detail(false)),
-                        ],
-                      ),
-              ),
-            ],
+                            VerticalDivider(
+                              width: 1,
+                              color: tokens.border.subtle,
+                            ),
+                            Expanded(child: _detail(false)),
+                          ],
+                        ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

@@ -41,7 +41,7 @@ class MicaAppearancePreview extends StatelessWidget {
       decoration: BoxDecoration(
         color: tokens.surface.base,
         border: Border.all(color: tokens.border.normal),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

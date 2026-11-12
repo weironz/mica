@@ -501,8 +501,8 @@ class WorkspaceOverview extends StatelessWidget {
 // meant: the accent at low opacity. Over white that is the old #DBEAFE; over a
 // dark base it tints instead of glowing.
 
-const double _controlRadius = 8;
-const double _cardRadius = 14;
+const double _controlRadius = 6;
+const double _cardRadius = 8;
 
 /// A control nested inside a radius-8 track (toggle segments, list rows). Kept
 /// smaller so the corners stay concentric with the 2px inset.

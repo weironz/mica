@@ -44,7 +44,7 @@ void main() {
   });
 
   group('MicaCard', () {
-    testWidgets('is a white card with a hairline border and 14px radius', (
+    testWidgets('is a white card with a hairline border and 8px radius', (
       tester,
     ) async {
       await pump(tester, const MicaCard(child: Text('body')));
@@ -55,7 +55,7 @@ void main() {
       final decoration = container.decoration as BoxDecoration;
       expect(decoration.color, Colors.white);
       // 14, not the mockups' 12 — the system pins 8/14/16.
-      expect(decoration.borderRadius, BorderRadius.circular(14));
+      expect(decoration.borderRadius, BorderRadius.circular(8));
       expect(decoration.border, isNotNull);
     });
 

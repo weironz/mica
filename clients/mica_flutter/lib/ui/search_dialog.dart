@@ -27,7 +27,7 @@ class _KeyCap extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: MicaTheme.of(context).surface.sunken,
-        borderRadius: BorderRadius.circular(5),
+        borderRadius: BorderRadius.circular(6),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       child: Text(
@@ -314,7 +314,7 @@ class _SearchDialogState extends State<SearchDialog> {
             // Only with results on screen: advertising ↑↓/↵ over an empty list
             // would promise keys that do nothing.
             if (_results.isNotEmpty) ...[
-              const Divider(height: 17),
+              const SizedBox(height: 17),
               Row(
                 children: [
                   const _KeyCap('↑'),

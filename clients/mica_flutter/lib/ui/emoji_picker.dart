@@ -154,15 +154,8 @@ class _EmojiPickerState extends State<_EmojiPicker> {
           decoration: BoxDecoration(
             color: MicaTheme.of(context).surface.overlay,
             border: Border.all(color: _border(context)),
-            borderRadius: const BorderRadius.all(Radius.circular(16)),
-            boxShadow: [
-              BoxShadow(
-                color: MicaTokens.light.text.primary.withValues(alpha: 0.45),
-                blurRadius: 70,
-                spreadRadius: -45,
-                offset: const Offset(0, 30),
-              ),
-            ],
+            borderRadius: const BorderRadius.all(Radius.circular(8)),
+            boxShadow: [MicaTheme.of(context).menuShadow],
           ),
           child: Column(
             children: [
@@ -412,7 +405,7 @@ class _NoResults extends StatelessWidget {
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: MicaTheme.of(context).surface.sunken,
-                borderRadius: const BorderRadius.all(Radius.circular(13)),
+                borderRadius: const BorderRadius.all(Radius.circular(8)),
               ),
               child: Icon(
                 Icons.search_off,

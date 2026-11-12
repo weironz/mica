@@ -22,7 +22,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
                 ).status.success.withValues(alpha: 0.45),
                 width: 1.5,
               ),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(8),
             ),
             padding: const EdgeInsets.all(14),
             child: Column(
@@ -127,7 +127,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
         color: canWrite
             ? MicaTheme.of(context).status.warningWash
             : MicaTheme.of(context).surface.hover,
-        borderRadius: BorderRadius.circular(5),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
         canWrite ? context.l10n.tokenScopeWrite : context.l10n.tokenScopeRead,

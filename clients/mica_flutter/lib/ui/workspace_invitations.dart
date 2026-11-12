@@ -193,7 +193,7 @@ class _PendingInvitationRow extends StatelessWidget {
           DecoratedBox(
             decoration: BoxDecoration(
               color: tokens.status.warningWash,
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(6),
             ),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

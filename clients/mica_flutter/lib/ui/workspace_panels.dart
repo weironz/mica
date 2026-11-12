@@ -387,7 +387,7 @@ class CommentsButton extends StatelessWidget {
       message: context.l10n.commentsTitle,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(6),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           child: Row(
