@@ -70,6 +70,7 @@
 | [roadmap.md](plans/roadmap.md) | **路线图:剩余功能与优化点(权威)** |
 | [roadmap-done.md](plans/roadmap-done.md) | 已完成条目存档(只进不出) |
 | [notion-gap-analysis.md](plans/notion-gap-analysis.md) | Notion 对标分析 |
+| [ui-visual-refresh.md](plans/ui-visual-refresh.md) | 界面与字体观感改造施工说明(Windows 桌面优先,待实施) |
 | [desktop-plan.md](plans/desktop-plan.md) | 桌面端技术方案与开发计划 |
 | [mvp-plan.md](plans/mvp-plan.md) | MVP 开发计划 |
 | [window-manager-migration.md](plans/window-manager-migration.md) | window_manager 迁移评估(结论:不迁) |
