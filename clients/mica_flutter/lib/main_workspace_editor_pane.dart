@@ -505,7 +505,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                 ? BoxDecoration(
                     color: MicaTheme.of(
                       context,
-                    ).accent.primary.withValues(alpha: 0.08),
+                    ).surface.hover,
                     borderRadius: BorderRadius.circular(6),
                   )
                 : null,
@@ -514,7 +514,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
               icon,
               size: 18,
               color: active
-                  ? MicaTheme.of(context).accent.primary
+                  ? MicaTheme.of(context).text.primary
                   : MicaTheme.of(context).text.muted,
             ),
           ),

@@ -272,7 +272,7 @@ class _ReceivedInvitationsCardState extends State<ReceivedInvitationsCard> {
           padding: const EdgeInsets.only(top: 10),
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: tokens.accent.wash,
+              color: tokens.surface.hover,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: tokens.border.subtle),
             ),

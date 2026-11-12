@@ -302,7 +302,7 @@ class _SignInPaneState extends State<SignInPane> {
                 icon,
                 size: 15,
                 color: selected
-                    ? MicaTheme.of(context).accent.primary
+                    ? MicaTheme.of(context).text.primary
                     : MicaTheme.of(context).text.muted,
               ),
               const SizedBox(width: 7),
@@ -527,7 +527,7 @@ class _SignInPaneState extends State<SignInPane> {
                   ? Icon(
                       Icons.check,
                       size: 15,
-                      color: MicaTheme.of(context).accent.primary,
+                      color: MicaTheme.of(context).text.primary,
                     )
                   : null,
             ),
@@ -585,7 +585,7 @@ class _SignInPaneState extends State<SignInPane> {
             Icon(
               Icons.add,
               size: 16,
-              color: MicaTheme.of(context).accent.primary,
+              color: MicaTheme.of(context).text.primary,
             ),
             const SizedBox(width: 9),
             Text(

@@ -32,9 +32,9 @@ Color _border(BuildContext context) => MicaTheme.of(context).border.normal;
 /// edge has no role of its own — it is the accent at low opacity, which is what
 /// the design's #DBEAFE was over white, and which tints rather than glows on a
 /// dark page.
-Color _accentWash(BuildContext context) => MicaTheme.of(context).accent.wash;
+Color _accentWash(BuildContext context) => MicaTheme.of(context).surface.hover;
 Color _accentBorder(BuildContext context) =>
-    MicaTheme.of(context).accent.primary.withValues(alpha: 0.22);
+    MicaTheme.of(context).text.primary.withValues(alpha: 0.22);
 
 /// Failure tile tints, per severity.
 Color _warnTile(BuildContext context) =>
@@ -514,7 +514,7 @@ class MicaProgressRow extends StatelessWidget {
               value: fraction,
               backgroundColor: MicaTheme.of(context).border.subtle,
               valueColor: AlwaysStoppedAnimation(
-                MicaTheme.of(context).accent.primary,
+                MicaTheme.of(context).text.primary,
               ),
             ),
           ),
@@ -555,7 +555,7 @@ class _AccentButton extends StatelessWidget {
           label,
           style: MicaTypography.small.copyWith(
             fontWeight: FontWeight.w500,
-            color: MicaTheme.of(context).accent.primary,
+            color: MicaTheme.of(context).text.primary,
           ),
         ),
       ),

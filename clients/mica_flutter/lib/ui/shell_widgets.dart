@@ -262,7 +262,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                     width: 30,
                     height: 30,
                     decoration: BoxDecoration(
-                      color: MicaTheme.of(context).accent.wash,
+                      color: MicaTheme.of(context).surface.hover,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Icon(
@@ -270,7 +270,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                           ? Icons.computer_outlined
                           : Icons.cloud_outlined,
                       size: 17,
-                      color: MicaTheme.of(context).accent.primary,
+                      color: MicaTheme.of(context).text.primary,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -426,7 +426,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
               Icon(
                 Icons.login,
                 size: 18,
-                color: MicaTheme.of(context).accent.primary,
+                color: MicaTheme.of(context).text.primary,
               ),
               const SizedBox(width: 10),
               Text(
@@ -494,7 +494,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
               Icon(
                 entry.isLocal ? Icons.computer_outlined : Icons.cloud_outlined,
                 size: 18,
-                color: MicaTheme.of(context).accent.primary,
+                color: MicaTheme.of(context).text.primary,
               ),
               const SizedBox(width: 8),
               Flexible(
@@ -541,7 +541,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
           child: Container(
             height: 2,
             color: active
-                ? MicaTheme.of(context).accent.primary
+                ? MicaTheme.of(context).text.primary
                 : Colors.transparent,
           ),
         );
@@ -580,7 +580,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                             : Icons.cloud_outlined,
                         size: 18,
                         color: selected
-                            ? MicaTheme.of(context).accent.primary
+                            ? MicaTheme.of(context).text.primary
                             : MicaTheme.of(context).text.faint,
                       ),
                       const SizedBox(width: 10),
@@ -706,13 +706,13 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
               Icon(
                 Icons.add,
                 size: 18,
-                color: MicaTheme.of(context).accent.primary,
+                color: MicaTheme.of(context).text.primary,
               ),
               const SizedBox(width: 10),
               Text(
                 context.l10n.workspaceRowNewWorkspace,
                 style: TextStyle(
-                  color: MicaTheme.of(context).accent.primary,
+                  color: MicaTheme.of(context).text.primary,
                   fontWeight: FontWeight.w500,
                 ),
               ),
@@ -789,7 +789,7 @@ class WorkspaceListItem extends StatelessWidget {
       shape: RoundedRectangleBorder(
         side: BorderSide(
           color: isSelected
-              ? MicaTheme.of(context).accent.primary
+              ? MicaTheme.of(context).text.primary
               : MicaTheme.of(context).border.normal,
         ),
         borderRadius: BorderRadius.circular(8),
@@ -1383,7 +1383,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
           side: w.isMultiSelected
-              ? BorderSide(color: MicaTheme.of(context).accent.primary)
+              ? BorderSide(color: MicaTheme.of(context).text.primary)
               : BorderSide.none,
         ),
         child: InkWell(
@@ -1489,7 +1489,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                           : Icons.description_outlined,
                       size: 18,
                       color: w.isSelected
-                          ? MicaTheme.of(context).accent.primary
+                          ? MicaTheme.of(context).text.primary
                           : MicaTheme.of(context).text.muted,
                     ),
                   const SizedBox(width: 6),
@@ -2085,7 +2085,7 @@ class PropertiesToggle extends StatelessWidget {
         filled ? Icons.info : Icons.info_outline,
         size: 16,
         color: active
-            ? MicaTheme.of(context).accent.primary
+            ? MicaTheme.of(context).text.primary
             : (hasProperties
                   ? MicaTheme.of(context).text.muted
                   : MicaTheme.of(context).text.faint),

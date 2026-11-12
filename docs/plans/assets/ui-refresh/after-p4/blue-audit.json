@@ -1,0 +1,180 @@
+{
+  "beforeUses": 88,
+  "afterUses": 29,
+  "remaining": [
+    {
+      "file": "lib/main_workspace_tree_nav.dart",
+      "line": 635,
+      "role": "accent.primary",
+      "reason": "拖放指示线"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 138,
+      "role": "editor.caret",
+      "reason": "文档/图片/表格文字选择范围边框与选区"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 541,
+      "role": "editor.caret",
+      "reason": "文档/图片/表格文字选择范围边框与选区"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 1037,
+      "role": "editor.caret",
+      "reason": "文档/图片/表格文字选择范围边框与选区"
+    },
+    {
+      "file": "lib/editor/block_renderers.dart",
+      "line": 1060,
+      "role": "accent.primary",
+      "reason": "文档/图片/表格文字选择范围边框与选区"
+    },
+    {
+      "file": "lib/editor/marks.dart",
+      "line": 93,
+      "role": "accent.primary",
+      "reason": "正文 URL / 页面链接"
+    },
+    {
+      "file": "lib/editor/marks.dart",
+      "line": 110,
+      "role": "accent.primary",
+      "reason": "正文 URL / 页面链接"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2721,
+      "role": "editor.caret",
+      "reason": "复选框、链接下划线或正文光标"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 2806,
+      "role": "accent.primary",
+      "reason": "复选框、链接下划线或正文光标"
+    },
+    {
+      "file": "lib/editor/render.dart",
+      "line": 3121,
+      "role": "editor.caret",
+      "reason": "复选框、链接下划线或正文光标"
+    },
+    {
+      "file": "lib/editor/editor.dart",
+      "line": 2981,
+      "role": "editor.caret",
+      "reason": "正文光标/触控文字选区手柄"
+    },
+    {
+      "file": "lib/editor/editor.dart",
+      "line": 3227,
+      "role": "editor.caret",
+      "reason": "正文光标/触控文字选区手柄"
+    },
+    {
+      "file": "lib/ui/emoji_picker.dart",
+      "line": 193,
+      "role": "accent.primary",
+      "reason": "输入光标"
+    },
+    {
+      "file": "lib/ui/home_screen.dart",
+      "line": 173,
+      "role": "accent.primary",
+      "reason": "用户明确首页不动，保留既有页面自有样式"
+    },
+    {
+      "file": "lib/ui/home_screen.dart",
+      "line": 201,
+      "role": "accent.primary",
+      "reason": "用户明确首页不动，保留既有页面自有样式"
+    },
+    {
+      "file": "lib/ui/sign_in_pane.dart",
+      "line": 595,
+      "role": "accent.primary",
+      "reason": "云端登录/添加服务器的文本链接"
+    },
+    {
+      "file": "lib/ui/status_kit.dart",
+      "line": 583,
+      "role": "accent.primary",
+      "reason": "当前界面唯一主操作按钮"
+    },
+    {
+      "file": "lib/ui/shell_widgets.dart",
+      "line": 435,
+      "role": "accent.primary",
+      "reason": "云端登录/添加服务器的文本链接"
+    },
+    {
+      "file": "lib/ui/workspace_panels.dart",
+      "line": 484,
+      "role": "accent.primary",
+      "reason": "拖放指示线"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 502,
+      "role": "accent.primary",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 507,
+      "role": "accent.primary",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 509,
+      "role": "accent.wash",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 511,
+      "role": "accent.primary",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 513,
+      "role": "secondaryContainer",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 513,
+      "role": "accent.wash",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 587,
+      "role": "accent.wash",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 589,
+      "role": "accent.primary",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 733,
+      "role": "editor.caret",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    },
+    {
+      "file": "lib/ui/theme_tokens.dart",
+      "line": 733,
+      "role": "editor.caret",
+      "reason": "主题主色配置、焦点边框与文字选区"
+    }
+  ]
+}

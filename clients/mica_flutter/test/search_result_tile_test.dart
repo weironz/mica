@@ -74,7 +74,7 @@ void main() {
     );
 
     final tile = tester.widget<ListTile>(find.byType(ListTile));
-    expect(tile.tileColor, MicaTokens.light.accent.wash);
+    expect(tile.tileColor, MicaTokens.light.surface.hover);
   });
 
   testWidgets('an unselected row carries no background at all', (tester) async {

@@ -1,0 +1,19 @@
+{
+  "lib/editor/block_renderers.dart#accent.primary": 1,
+  "lib/editor/block_renderers.dart#editor.caret": 3,
+  "lib/editor/editor.dart#editor.caret": 2,
+  "lib/editor/marks.dart#accent.primary": 2,
+  "lib/editor/render.dart#accent.primary": 1,
+  "lib/editor/render.dart#editor.caret": 2,
+  "lib/main_workspace_tree_nav.dart#accent.primary": 1,
+  "lib/ui/emoji_picker.dart#accent.primary": 1,
+  "lib/ui/home_screen.dart#accent.primary": 2,
+  "lib/ui/shell_widgets.dart#accent.primary": 1,
+  "lib/ui/sign_in_pane.dart#accent.primary": 1,
+  "lib/ui/status_kit.dart#accent.primary": 1,
+  "lib/ui/theme_tokens.dart#accent.primary": 4,
+  "lib/ui/theme_tokens.dart#accent.wash": 3,
+  "lib/ui/theme_tokens.dart#editor.caret": 2,
+  "lib/ui/theme_tokens.dart#secondaryContainer": 1,
+  "lib/ui/workspace_panels.dart#accent.primary": 1
+}

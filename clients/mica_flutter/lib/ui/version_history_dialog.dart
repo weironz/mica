@@ -170,7 +170,7 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
       padding: const EdgeInsets.only(bottom: 6),
       child: Material(
         color: selected
-            ? MicaTheme.of(context).accent.wash
+            ? MicaTheme.of(context).surface.hover
             : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
@@ -183,7 +183,7 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
                 color: selected
                     ? MicaTheme.of(
                         context,
-                      ).accent.primary.withValues(alpha: 0.35)
+                      ).text.primary.withValues(alpha: 0.35)
                     : Colors.transparent,
               ),
             ),
@@ -194,7 +194,7 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
                   v.isAuto ? Icons.schedule : Icons.bookmark,
                   size: 16,
                   color: selected
-                      ? MicaTheme.of(context).accent.primary
+                      ? MicaTheme.of(context).text.primary
                       : MicaTheme.of(context).text.faint,
                 ),
                 const SizedBox(width: 9),
@@ -211,7 +211,7 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
                               ? FontWeight.w400
                               : FontWeight.w500,
                           color: selected
-                              ? MicaTheme.of(context).accent.primary
+                              ? MicaTheme.of(context).text.primary
                               : MicaTheme.of(context).text.primary,
                         ),
                       ),

@@ -587,7 +587,7 @@ class _SearchDialogState extends State<SearchDialog> {
         ),
         for (var i = 0; i < hits.length; i++)
           Material(
-            color: _selected == i ? theme.accent.wash : Colors.transparent,
+            color: _selected == i ? theme.surface.hover : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
             child: InkWell(
               borderRadius: BorderRadius.circular(6),
@@ -762,7 +762,7 @@ class SearchResultTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-      tileColor: selected ? MicaTheme.of(context).accent.wash : null,
+      tileColor: selected ? MicaTheme.of(context).surface.hover : null,
       // The icon is the only thing telling you this row will take you somewhere
       // different — a folder locates, a page opens.
       leading: Icon(

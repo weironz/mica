@@ -92,7 +92,7 @@ class _PageWidthFrameState extends State<PageWidthFrame> {
           child: Container(
             width: 2,
             color: active
-                ? MicaTheme.of(context).accent.primary.withValues(alpha: 0.5)
+                ? MicaTheme.of(context).border.strong
                 : Colors.transparent,
           ),
         ),

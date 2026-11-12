@@ -4863,7 +4863,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     color: active
                         ? MicaTheme.of(
                             context,
-                          ).accent.primary.withValues(alpha: 0.08)
+                          ).surface.hover
                         : null,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
@@ -5892,7 +5892,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                     color: active
                         ? MicaTheme.of(
                             context,
-                          ).accent.primary.withValues(alpha: 0.08)
+                          ).surface.hover
                         : null,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,

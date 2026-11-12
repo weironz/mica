@@ -401,7 +401,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                 ? Icons.folder_outlined
                 : Icons.description_outlined,
             size: 18,
-            color: tokens.accent.primary,
+            color: tokens.text.muted,
           ),
           const SizedBox(width: 8),
           Flexible(

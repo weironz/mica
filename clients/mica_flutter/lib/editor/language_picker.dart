@@ -161,7 +161,7 @@ class _LanguagePickerState extends State<LanguagePicker> {
                                   color: i == active
                                       ? MicaTheme.of(
                                           context,
-                                        ).accent.primary.withValues(alpha: 0.08)
+                                        ).surface.hover
                                       : null,
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 10,
@@ -182,7 +182,7 @@ class _LanguagePickerState extends State<LanguagePicker> {
                                                 size: 14,
                                                 color: MicaTheme.of(
                                                   context,
-                                                ).accent.primary,
+                                                ).text.primary,
                                               )
                                             : null,
                                       ),

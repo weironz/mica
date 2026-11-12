@@ -1,0 +1,36 @@
+{
+  "screenshots": 16,
+  "nativeClientPixels": [
+    1424,
+    961
+  ],
+  "baseCommit": "d728968a",
+  "engineDpr": 1.0,
+  "windowDpi": 96,
+  "phase": 4,
+  "nativeDiagnosticCount": 0,
+  "ffiSourceFingerprint": "1d284f77454cd407",
+  "sourceSha256": {
+    "clients/mica_flutter/lib/ui/workspace_panels.dart": "30912c3b4a684e04585907f48afcea0a5ca8f5215a803ad698ebb3a26f5110d8",
+    "clients/mica_flutter/lib/main_workspace_editor_pane.dart": "9ac28e02485767e07dc8b0e8f947e866376353d9ea9d8d691da0b931fd954de8",
+    "clients/mica_flutter/lib/ui/page_graph_view.dart": "13dbdd90a2e6452fc53644b1ec400d703369362f9d5b8e362d923ae01ca5aa28",
+    "clients/mica_flutter/lib/ui/theme_tokens.dart": "65bc7acbd8e74ab90201638e6b20f89f6f34eba2fccbf8243c13d5bd6ce47c64",
+    "clients/mica_flutter/lib/main_workspace_tree_nav.dart": "bcf7eb6e7a8b8fb1c1db70bab397a13aa24b85e67ef6b930bbed765a72d0d8cb",
+    "clients/mica_flutter/lib/ui/panel_kit.dart": "1d62b4424eee60a735a4deeb36fcbcbcfe0bea5e1ecdec0595bf314d339126f7",
+    "clients/mica_flutter/lib/ui/sign_in_pane.dart": "14831b38c9d7191be4fa18dec45a49f233708cfb996ca554c72bb92715da0331",
+    "clients/mica_flutter/lib/ui/page_width_frame.dart": "f1ae8757478f1e5da3f555d82bb5e7fb26def5b3d704aba465ae7a7e4ff5bb20",
+    "clients/mica_flutter/lib/ui/workspace_invitations.dart": "4b667fef5ae03ededa5a9707b33ad0c74ef901e5ab8eeef29fa4ca99562d857f",
+    "clients/mica_flutter/lib/ui/shell_widgets.dart": "1c101efb160a125e4694c127413ac4d309015457c89cc8051f34310228538bf4",
+    "clients/mica_flutter/lib/ui/dialogs_settings_ai.dart": "3c3353494a54015f69674e70567722a316f4cfdfc5e9cf65a94307e8b1a4307d",
+    "clients/mica_flutter/lib/ui/workspace_overview.dart": "618de16040f39873081bbc7705003bf17574c677307026c1f3245d8425908c35",
+    "clients/mica_flutter/lib/editor/render.dart": "a01ef11dd5014e7fd62c4730f2118edf571a11541e22b544f108dc88e76c5dda",
+    "clients/mica_flutter/lib/ui/emoji_picker.dart": "e00e351a8dea537c97a51102469cfe9bfe8b8ffc91029c1058833e09182f77e3",
+    "clients/mica_flutter/lib/editor/editor.dart": "b8ecb6e6d32e9dc3209196a5131a16e36383d248682aabd89c903a6fe0de167e",
+    "clients/mica_flutter/lib/ui/update_controls.dart": "a34704bca5118cb0d6b4ea9b9759b77dafdb3213af21156b992d2c1413ee9e05",
+    "clients/mica_flutter/lib/ui/status_kit.dart": "90ec8b21f6f3b15be0cf8f98935e66a6c0a1e50016b1955926a02c4c19987cf8",
+    "clients/mica_flutter/lib/editor/language_picker.dart": "ac9e6f58fa481c69f5cbbcacbdaa5ccf4a0eed4e0de29e09ded4d10645a44ba4",
+    "clients/mica_flutter/lib/ui/version_history_dialog.dart": "706920d7224ec1276e68dcf41dc12b74f948b43e6fb8dfeac9fd7591376365b4",
+    "clients/mica_flutter/lib/ui/search_dialog.dart": "9ed091fbdac8aa576e859d9b90fc7538ac3b01c354cb197633d4f853243b5c9c"
+  },
+  "nativePassed": true
+}

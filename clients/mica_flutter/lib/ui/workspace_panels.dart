@@ -242,7 +242,7 @@ class HomeNavRow extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
-          color: selected ? MicaTheme.of(context).accent.wash : null,
+          color: selected ? MicaTheme.of(context).surface.hover : null,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -251,7 +251,7 @@ class HomeNavRow extends StatelessWidget {
               Icons.home_outlined,
               size: 18,
               color: selected
-                  ? MicaTheme.of(context).accent.primary
+                  ? MicaTheme.of(context).text.primary
                   : MicaTheme.of(context).text.muted,
             ),
             const SizedBox(width: 10),
@@ -260,7 +260,7 @@ class HomeNavRow extends StatelessWidget {
               style: MicaTypography.body.copyWith(
                 fontWeight: FontWeight.w500,
                 color: selected
-                    ? MicaTheme.of(context).accent.hover
+                    ? MicaTheme.of(context).text.primary
                     : MicaTheme.of(context).text.primary,
               ),
             ),
@@ -329,14 +329,14 @@ class ToolsTabButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = MicaTheme.of(context);
-    final color = active ? tokens.accent.primary : tokens.text.muted;
+    final color = active ? tokens.text.primary : tokens.text.muted;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
-          color: active ? tokens.accent.wash : null,
+          color: active ? tokens.surface.hover : null,
           borderRadius: BorderRadius.circular(6),
         ),
         child: Row(
@@ -397,7 +397,7 @@ class CommentsButton extends StatelessWidget {
                 Icons.chat_bubble_outline,
                 size: 15,
                 color: active
-                    ? MicaTheme.of(context).accent.primary
+                    ? MicaTheme.of(context).text.primary
                     : MicaTheme.of(context).text.muted,
               ),
               if (openCount > 0) ...[

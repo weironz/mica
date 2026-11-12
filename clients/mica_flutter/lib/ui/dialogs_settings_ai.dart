@@ -517,7 +517,7 @@ extension _SettingsAiTab on _SettingsDialogState {
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
-        color: selected ? tokens.accent.wash : Colors.transparent,
+        color: selected ? tokens.surface.hover : Colors.transparent,
         borderRadius: BorderRadius.circular(6),
         child: InkWell(
           borderRadius: BorderRadius.circular(6),

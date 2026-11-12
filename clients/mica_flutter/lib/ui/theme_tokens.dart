@@ -639,6 +639,7 @@ class MicaTokens {
         style: _neutralButtonStyle(
           TextButton.styleFrom(
             shape: controlShape,
+          foregroundColor: text.primary,
             elevation: 0,
             animationDuration: const Duration(milliseconds: 80),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -725,6 +726,11 @@ class MicaTokens {
           ),
         ),
       ),
+      sliderTheme: SliderThemeData(activeTrackColor:text.muted,inactiveTrackColor:border.normal,thumbColor:text.primary,overlayColor:surface.hover),
+      radioTheme: RadioThemeData(fillColor:WidgetStateProperty.resolveWith((states)=>states.contains(WidgetState.selected)?text.primary:border.strong),overlayColor:WidgetStatePropertyAll(surface.hover)),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color:text.muted,linearTrackColor:surface.sunken),
+      tabBarTheme: TabBarThemeData(labelColor:text.primary,unselectedLabelColor:text.muted,indicator:BoxDecoration(color:surface.hover,borderRadius:BorderRadius.circular(6))),
+      textSelectionTheme: TextSelectionThemeData(cursorColor:editor.caret,selectionColor:editor.selection,selectionHandleColor:editor.caret),
       scrollbarTheme: ScrollbarThemeData(
         thickness: const WidgetStatePropertyAll(6),
         radius: const Radius.circular(3),

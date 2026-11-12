@@ -261,7 +261,7 @@ class _GraphPainter extends CustomPainter {
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
     final litPaint = Paint()
-      ..color = tokens.accent.primary
+      ..color = tokens.text.primary
       ..strokeWidth = 1.6
       ..style = PaintingStyle.stroke;
 
@@ -289,7 +289,7 @@ class _GraphPainter extends CustomPainter {
         radius,
         Paint()
           ..color = isCurrent || isHovered
-              ? tokens.accent.primary
+              ? tokens.text.primary
               : tokens.text.muted,
       );
       if (isCurrent) {
@@ -297,7 +297,7 @@ class _GraphPainter extends CustomPainter {
           at,
           radius + 4,
           Paint()
-            ..color = tokens.accent.primary
+            ..color = tokens.text.primary
             ..strokeWidth = 1.5
             ..style = PaintingStyle.stroke,
         );

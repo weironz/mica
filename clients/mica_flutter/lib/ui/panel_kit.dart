@@ -131,14 +131,14 @@ class MicaPickZone extends StatelessWidget {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: MicaTheme.of(context).accent.wash,
+                    color: MicaTheme.of(context).surface.hover,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   alignment: Alignment.center,
                   child: Icon(
                     icon,
                     size: 20,
-                    color: MicaTheme.of(context).accent.primary,
+                    color: MicaTheme.of(context).text.primary,
                   ),
                 ),
                 const SizedBox(height: 11),

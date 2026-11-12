@@ -201,7 +201,7 @@ class WorkspaceOverview extends StatelessWidget {
           height: 28,
           decoration: BoxDecoration(
             color: selected
-                ? MicaTheme.of(context).accent.wash
+                ? MicaTheme.of(context).surface.hover
                 : (hovered ? MicaTheme.of(context).surface.sunken : null),
             borderRadius: BorderRadius.circular(_nestedRadius),
           ),
@@ -209,7 +209,7 @@ class WorkspaceOverview extends StatelessWidget {
             icon,
             size: 16,
             color: selected
-                ? MicaTheme.of(context).accent.primary
+                ? MicaTheme.of(context).text.primary
                 : MicaTheme.of(context).text.faint,
           ),
         ),
@@ -247,7 +247,7 @@ class WorkspaceOverview extends StatelessWidget {
         decoration: BoxDecoration(
           border: Border.all(
             color: hovered
-                ? MicaTheme.of(context).accent.primary.withValues(alpha: 0.35)
+                ? MicaTheme.of(context).text.primary.withValues(alpha: 0.35)
                 : MicaTheme.of(context).border.subtle,
           ),
           borderRadius: BorderRadius.circular(_cardRadius),
@@ -376,14 +376,14 @@ class WorkspaceOverview extends StatelessWidget {
           width: 24,
           height: 24,
           decoration: BoxDecoration(
-            color: hovered ? MicaTheme.of(context).accent.wash : null,
+            color: hovered ? MicaTheme.of(context).surface.hover : null,
             borderRadius: BorderRadius.circular(_nestedRadius),
           ),
           child: Icon(
             Icons.more_horiz,
             size: 16,
             color: hovered
-                ? MicaTheme.of(context).accent.primary
+                ? MicaTheme.of(context).text.primary
                 : MicaTheme.of(context).text.faint,
           ),
         ),
@@ -461,15 +461,15 @@ class WorkspaceOverview extends StatelessWidget {
                     vertical: 7,
                   ),
                   decoration: BoxDecoration(
-                    color: MicaTheme.of(context).accent.wash,
+                    color: MicaTheme.of(context).surface.hover,
                     border: Border.all(
                       color: hovered
                           ? MicaTheme.of(
                               context,
-                            ).accent.primary.withValues(alpha: 0.35)
+                            ).text.primary.withValues(alpha: 0.35)
                           : MicaTheme.of(
                               context,
-                            ).accent.primary.withValues(alpha: 0.22),
+                            ).text.primary.withValues(alpha: 0.22),
                     ),
                     borderRadius: BorderRadius.circular(_controlRadius),
                   ),
@@ -477,7 +477,7 @@ class WorkspaceOverview extends StatelessWidget {
                     actionLabel,
                     style: MicaTypography.small.copyWith(
                       fontWeight: FontWeight.w500,
-                      color: MicaTheme.of(context).accent.primary,
+                      color: MicaTheme.of(context).text.primary,
                     ),
                   ),
                 ),

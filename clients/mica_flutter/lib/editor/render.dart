@@ -2384,7 +2384,7 @@ class RenderDocument extends RenderBox {
     final glyphColor =
         color ??
         (active
-            ? _appearance.tokens.editor.caret
+            ? _appearance.tokens.text.primary
             : (hovered
                   ? _appearance.tokens.text.primary
                   : _appearance.tokens.text.muted));

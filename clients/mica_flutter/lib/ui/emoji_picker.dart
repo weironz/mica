@@ -217,7 +217,7 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                     focusedBorder: OutlineInputBorder(
                       borderRadius: const BorderRadius.all(Radius.circular(8)),
                       borderSide: BorderSide(
-                        color: MicaTheme.of(context).accent.primary,
+                        color: MicaTheme.of(context).text.primary,
                       ),
                     ),
                   ),
@@ -341,7 +341,7 @@ class _EmojiCellState extends State<_EmojiCell> {
                 : (_hovered ? MicaTheme.of(context).surface.sunken : null),
             borderRadius: const BorderRadius.all(Radius.circular(8)),
             border: widget.selected
-                ? Border.all(color: MicaTheme.of(context).accent.primary)
+                ? Border.all(color: MicaTheme.of(context).text.primary)
                 : null,
           ),
           child: Text(widget.emoji, style: MicaTypography.heading3),

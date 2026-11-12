@@ -168,12 +168,12 @@ class _UpdateButtonState extends State<UpdateButton>
                 )
               : Badge(
                   isLabelVisible: available,
-                  backgroundColor: tokens.accent.primary,
+                  backgroundColor: tokens.text.primary,
                   child: Icon(
                     Icons.system_update_alt,
                     size: 20,
                     color: available
-                        ? tokens.accent.primary
+                        ? tokens.text.primary
                         : tokens.text.muted,
                   ),
                 ),
@@ -252,7 +252,7 @@ class UpdateChecker extends StatelessWidget {
                 Icon(
                   Icons.new_releases_outlined,
                   size: 18,
-                  color: MicaTheme.of(context).accent.primary,
+                  color: MicaTheme.of(context).text.primary,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
