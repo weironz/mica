@@ -17,7 +17,7 @@ void main() {
     final header = RenderDocument.tableCellStyle(plain, isHeader: true);
     final body = RenderDocument.tableCellStyle(plain, isHeader: false);
 
-    expect(header.fontWeight, FontWeight.w600);
+    expect(header.fontWeight, FontWeight.w500);
     expect(body.fontWeight, FontWeight.w400);
   });
 
@@ -31,8 +31,10 @@ void main() {
       isHeader: false,
     );
 
-    expect(normal.fontSize, 15);
-    expect(scaled.fontSize, closeTo(21, 0.001));
+    expect(normal.fontSize, 14);
+    expect(normal.fontSize! * normal.height!, closeTo(22, 1e-9));
+    expect(scaled.fontSize, closeTo(19.6, 0.001));
+    expect(scaled.fontSize! * scaled.height!, closeTo(31, 1e-9));
   });
 
   test('the font family reaches the cell, and a CJK fallback is attached', () {
@@ -55,8 +57,8 @@ void main() {
       isHeader: true,
     );
 
-    expect(style.fontWeight, FontWeight.w600);
-    expect(style.fontSize, closeTo(18, 0.001));
+    expect(style.fontWeight, FontWeight.w500);
+    expect(style.fontSize, closeTo(16.8, 0.001));
   });
 
   test('everything except the weight matches between header and body', () {

@@ -1,6 +1,8 @@
 /// The compact sidebar entry and the detailed About control share one updater.
 library;
 
+import 'typography.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -292,8 +294,7 @@ class UpdateChecker extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               context.l10n.updateWillRestart,
-              style: TextStyle(
-                fontSize: 12,
+              style: MicaTypography.caption.copyWith(
                 color: MicaTheme.of(context).text.muted,
               ),
             ),
@@ -326,7 +327,7 @@ class UpdateChecker extends StatelessWidget {
                 Expanded(
                   child: Text(
                     context.l10n.updateFailed(controller.error.toString()),
-                    style: const TextStyle(fontSize: 13),
+                    style: MicaTypography.small,
                   ),
                 ),
               ],

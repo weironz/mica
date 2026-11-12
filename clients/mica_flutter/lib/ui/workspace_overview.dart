@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'package:flutter/material.dart';
 
 import 'theme_tokens.dart';
@@ -136,9 +137,8 @@ class WorkspaceOverview extends StatelessWidget {
       children: [
         Text(
           strings.sectionLabel,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
+          style: MicaTypography.small.copyWith(
+            fontWeight: FontWeight.w500,
             color: MicaTheme.of(context).text.muted,
           ),
         ),
@@ -264,9 +264,8 @@ class WorkspaceOverview extends StatelessWidget {
                     item.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+                    style: MicaTypography.body.copyWith(
+                      fontWeight: FontWeight.w500,
                       color: MicaTheme.of(context).text.primary,
                     ),
                   ),
@@ -276,8 +275,7 @@ class WorkspaceOverview extends StatelessWidget {
                       item.meta,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
+                      style: MicaTypography.caption.copyWith(
                         color: MicaTheme.of(context).text.faint,
                       ),
                     ),
@@ -290,8 +288,7 @@ class WorkspaceOverview extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 '${item.childCount}',
-                style: TextStyle(
-                  fontSize: 12,
+                style: MicaTypography.caption.copyWith(
                   color: MicaTheme.of(context).text.faint,
                 ),
               ),
@@ -338,10 +335,9 @@ class WorkspaceOverview extends StatelessWidget {
                 item.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
+                style: MicaTypography.small.copyWith(
                   // Folders read as the heading of their run of pages.
-                  fontWeight: item.isFolder ? FontWeight.w600 : FontWeight.w400,
+                  fontWeight: item.isFolder ? FontWeight.w500 : FontWeight.w400,
                   color: MicaTheme.of(context).text.primary,
                 ),
               ),
@@ -355,8 +351,7 @@ class WorkspaceOverview extends StatelessWidget {
             if (trailing.isNotEmpty)
               Text(
                 trailing,
-                style: TextStyle(
-                  fontSize: 12,
+                style: MicaTypography.caption.copyWith(
                   color: MicaTheme.of(context).text.faint,
                 ),
               ),
@@ -440,9 +435,8 @@ class WorkspaceOverview extends StatelessWidget {
             Text(
               strings.emptyTitle,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+              style: MicaTypography.body.copyWith(
+                fontWeight: FontWeight.w500,
                 color: MicaTheme.of(context).text.primary,
               ),
             ),
@@ -450,9 +444,7 @@ class WorkspaceOverview extends StatelessWidget {
             Text(
               strings.emptyBody,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.75,
+              style: MicaTypography.small.copyWith(
                 color: MicaTheme.of(context).text.faint,
               ),
             ),
@@ -483,9 +475,8 @@ class WorkspaceOverview extends StatelessWidget {
                   ),
                   child: Text(
                     actionLabel,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                    style: MicaTypography.small.copyWith(
+                      fontWeight: FontWeight.w500,
                       color: MicaTheme.of(context).accent.primary,
                     ),
                   ),

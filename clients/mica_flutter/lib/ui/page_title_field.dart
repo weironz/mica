@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -67,10 +68,8 @@ class PageTitleField extends StatelessWidget {
         keyboardType: TextInputType.text,
         textInputAction: TextInputAction.next,
         style: appearance.applyTo(
-          TextStyle(
-            fontSize: constraints.maxWidth < 600 ? 30 : 34,
+          MicaTypography.heading1.copyWith(
             fontWeight: FontWeight.w600,
-            height: 1.3,
             color: appearance.tokens.text.primary,
           ),
           isCode: false,

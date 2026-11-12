@@ -88,8 +88,7 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                 widget.external
                     ? context.l10n.imageExternalWarning
                     : context.l10n.imageStoredPublic,
-                style: TextStyle(
-                  fontSize: 12,
+                style: MicaTypography.caption.copyWith(
                   color: MicaTheme.of(context).text.muted,
                 ),
               ),
@@ -108,7 +107,7 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                   // still yields the raw, always-valid url.
                   readableUrl(widget.link),
                   maxLines: 3,
-                  style: const TextStyle(fontFamily: kMonoFont, fontSize: 12),
+                  style: MicaTypography.caption.copyWith(fontFamily: kMonoFont),
                 ),
               ),
               Align(
@@ -129,7 +128,7 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
               const Divider(),
               Text(
                 context.l10n.imageReplaceHeading,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: const TextStyle(fontWeight: FontWeight.w500),
               ),
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -161,8 +160,7 @@ class _ImageEditDialogState extends State<_ImageEditDialog> {
                 widget.reHost
                     ? context.l10n.imageRehostOn
                     : context.l10n.imageRehostOff,
-                style: TextStyle(
-                  fontSize: 11,
+                style: MicaTypography.micro.copyWith(
                   color: MicaTheme.of(context).text.faint,
                 ),
               ),

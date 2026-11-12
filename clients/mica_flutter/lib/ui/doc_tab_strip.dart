@@ -1,3 +1,4 @@
+import 'typography.dart';
 // The row of open-page tabs above the editor.
 //
 // PLACEMENT — inside the editor pane, not spanning the window.
@@ -232,8 +233,7 @@ class _TabState extends State<_Tab> {
                   widget.label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
+                  style: MicaTypography.caption.copyWith(
                     color: widget.active
                         ? theme.text.primary
                         : theme.text.muted,

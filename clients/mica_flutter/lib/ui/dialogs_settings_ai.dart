@@ -480,10 +480,8 @@ extension _SettingsAiTab on _SettingsDialogState {
           padding: const EdgeInsets.only(left: 8, bottom: 6),
           child: Text(
             context.l10n.aiProvidersHeading.toUpperCase(),
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.6,
+            style: MicaTypography.micro.copyWith(
+              fontWeight: FontWeight.w500,
               color: tokens.text.faint,
             ),
           ),
@@ -537,10 +535,9 @@ extension _SettingsAiTab on _SettingsDialogState {
                         _providerLabel(row.id),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
+                        style: MicaTypography.small.copyWith(
                           fontWeight: selected
-                              ? FontWeight.w600
+                              ? FontWeight.w500
                               : FontWeight.w400,
                         ),
                       ),
@@ -576,9 +573,8 @@ extension _SettingsAiTab on _SettingsDialogState {
                         ),
                         child: Text(
                           context.l10n.aiInUse,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
+                          style: MicaTypography.micro.copyWith(
+                            fontWeight: FontWeight.w500,
                             color: tokens.status.success,
                           ),
                         ),
@@ -590,8 +586,7 @@ extension _SettingsAiTab on _SettingsDialogState {
                         _hostOf(row.baseUrl),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
+                        style: MicaTypography.micro.copyWith(
                           color: tokens.text.faint,
                         ),
                       ),
@@ -675,10 +670,11 @@ extension _SettingsAiTab on _SettingsDialogState {
       children: [
         Text(
           context.l10n.aiAddProviderTitle,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          style: MicaTypography.body.copyWith(fontWeight: FontWeight.w500),
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<_AiPreset>(
+          style: Theme.of(context).textTheme.bodyLarge,
           initialValue: _addPreset,
           // The pane is narrow enough that a long label would overflow the
           // button rather than shorten itself.
@@ -790,14 +786,14 @@ extension _SettingsAiTab on _SettingsDialogState {
         // the one the server knows it by.
         Text(
           label,
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+          style: MicaTypography.large.copyWith(fontWeight: FontWeight.w600),
         ),
         if (label != _selectedId)
           Padding(
             padding: const EdgeInsets.only(top: 1),
             child: Text(
               _selectedId,
-              style: TextStyle(fontSize: 11, color: tokens.text.faint),
+              style: MicaTypography.micro.copyWith(color: tokens.text.faint),
             ),
           ),
         const SizedBox(height: 14),
@@ -825,6 +821,7 @@ extension _SettingsAiTab on _SettingsDialogState {
         // either. It used to be derived from the preset table, which left a
         // custom endpoint speaking Anthropic Messages with no way to say so.
         DropdownButtonFormField<String>(
+          style: Theme.of(context).textTheme.bodyLarge,
           initialValue: _protocol,
           isExpanded: true,
           decoration: InputDecoration(
@@ -975,7 +972,7 @@ extension _SettingsAiTab on _SettingsDialogState {
             children: [
               for (final id in _models)
                 ChoiceChip(
-                  label: Text(id, style: const TextStyle(fontSize: 12)),
+                  label: Text(id, style: MicaTypography.caption),
                   selected: _model.text.trim() == id,
                   onSelected: (_saving || !_canEdit)
                       ? null

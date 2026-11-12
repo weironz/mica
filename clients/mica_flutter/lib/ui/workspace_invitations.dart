@@ -10,6 +10,8 @@
 /// scripts/file-size-budget.txt); that file only places these widgets.
 library;
 
+import 'typography.dart';
+
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
@@ -115,6 +117,7 @@ class _MemberInviteSectionState extends State<MemberInviteSection> {
         ),
         const SizedBox(height: 10),
         DropdownButtonFormField<WorkspaceRole>(
+          style: Theme.of(context).textTheme.bodyLarge,
           initialValue: _role,
           decoration: InputDecoration(
             labelText: l10n.widgetRoleLabel,
@@ -196,7 +199,9 @@ class _PendingInvitationRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               child: Text(
                 l10n.workspaceInvitePendingBadge,
-                style: TextStyle(fontSize: 12, color: tokens.status.warning),
+                style: MicaTypography.caption.copyWith(
+                  color: tokens.status.warning,
+                ),
               ),
             ),
           ),
@@ -280,8 +285,7 @@ class _ReceivedInvitationsCardState extends State<ReceivedInvitationsCard> {
                     l10n.invitationsReceivedTitle,
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
-                  for (final invitation in received)
-                    _row(context, invitation),
+                  for (final invitation in received) _row(context, invitation),
                   if (_error case final error?)
                     Padding(
                       padding: const EdgeInsets.only(top: 4, bottom: 4),
@@ -309,7 +313,7 @@ class _ReceivedInvitationsCardState extends State<ReceivedInvitationsCard> {
         children: [
           Text(
             invitation.workspaceName,
-            style: const TextStyle(fontWeight: FontWeight.w600),
+            style: const TextStyle(fontWeight: FontWeight.w500),
             overflow: TextOverflow.ellipsis,
           ),
           Text(
@@ -319,8 +323,7 @@ class _ReceivedInvitationsCardState extends State<ReceivedInvitationsCard> {
                     invitation.invitedByName,
                     invitation.role,
                   ),
-            style: TextStyle(
-              fontSize: 12,
+            style: MicaTypography.caption.copyWith(
               color: MicaTheme.of(context).text.muted,
             ),
           ),

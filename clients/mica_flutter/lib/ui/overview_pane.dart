@@ -1,3 +1,4 @@
+import 'typography.dart';
 // Assembles the workspace/folder overview: breadcrumb + localized copy + derived
 // items + the widget. Standalone library so main.dart keeps only wiring.
 //
@@ -156,9 +157,8 @@ class _Breadcrumb extends StatelessWidget {
   ) {
     final text = Text(
       label,
-      style: TextStyle(
-        fontSize: 13,
-        fontWeight: current ? FontWeight.w600 : FontWeight.w400,
+      style: MicaTypography.small.copyWith(
+        fontWeight: current ? FontWeight.w500 : FontWeight.w400,
         color: current
             ? MicaTheme.of(context).text.primary
             : MicaTheme.of(context).text.muted,

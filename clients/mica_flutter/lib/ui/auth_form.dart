@@ -1,3 +1,4 @@
+import 'typography.dart';
 // The one cloud sign-in form.
 //
 // There were two: `SidePanel._authForm` (web's entry screen) and the AlertDialog
@@ -259,9 +260,7 @@ class _AuthFormCardState extends State<AuthFormCard> {
               Expanded(
                 child: Text(
                   error,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.5,
+                  style: MicaTypography.caption.copyWith(
                     color: MicaTheme.of(context).status.danger,
                   ),
                 ),

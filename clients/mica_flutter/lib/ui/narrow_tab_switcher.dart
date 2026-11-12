@@ -1,3 +1,4 @@
+import 'typography.dart';
 // The tab strip's stand-in on the narrow shell (below kNarrowShellWidth).
 //
 // A row of 180px tabs does not fit a phone-width window, and the narrow shell
@@ -57,9 +58,8 @@ class NarrowTabSwitcher extends StatelessWidget {
         ),
         child: Text(
           tabs.length > 99 ? '99+' : '${tabs.length}',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
+          style: MicaTypography.micro.copyWith(
+            fontWeight: FontWeight.w500,
             color: theme.text.primary,
           ),
         ),
@@ -150,7 +150,7 @@ class _TabRow extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+              fontWeight: active ? FontWeight.w500 : FontWeight.normal,
               color: theme.text.primary,
             ),
           ),

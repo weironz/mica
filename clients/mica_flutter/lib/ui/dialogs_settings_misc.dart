@@ -44,7 +44,7 @@ extension _SettingsMiscTab on _SettingsDialogState {
       borderRadius: BorderRadius.circular(5),
       border: Border.all(color: MicaTheme.of(context).border.strong),
     ),
-    child: Text(text, style: const TextStyle(fontSize: 12)),
+    child: Text(text, style: MicaTypography.caption),
   );
 
   /// Opt-in capture, for handing a reproducible bug over instead of describing
@@ -108,7 +108,7 @@ extension _SettingsMiscTab on _SettingsDialogState {
       child: Text(
         t,
         style: TextStyle(
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
           color: MicaTheme.of(context).text.muted,
         ),
       ),

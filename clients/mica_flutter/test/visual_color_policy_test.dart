@@ -45,7 +45,7 @@ void main() {
       }
       final colors = <String, int>{};
       for (final match in RegExp(
-        r'Color\(0x([0-9A-Fa-f]+)\)',
+        r'Color\(\s*0x([0-9A-Fa-f]+)\s*,?\s*\)',
       ).allMatches(file.readAsStringSync())) {
         final value = match[1]!.toUpperCase();
         colors.update(value, (n) => n + 1, ifAbsent: () => 1);

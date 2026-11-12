@@ -5,6 +5,7 @@ import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter/rendering.dart';
 
 import '../cjk_fonts.dart';
+import '../ui/typography.dart';
 import '../ui/copy_button.dart' show kCopyDoneColor;
 import '../ui/theme_tokens.dart';
 import '../l10n/locale_controller.dart';
@@ -71,8 +72,7 @@ class EditorAppearance {
   /// in the 36–48px band there, so the page trims this when something follows.
   final double bottomPad;
 
-  /// CJK fallback chain: crisp system fonts on desktop (Windows 微软雅黑 etc.),
-  /// the bundled font on web. See [cjkFontFallback].
+  /// CJK coverage follows the selected native scheme; Web uses engine shards.
   static List<String> get cjkFallback => cjkFontFallback;
 
   /// The same appearance with a different palette.
@@ -89,16 +89,12 @@ class EditorAppearance {
     bottomPad: bottomPad,
   );
 
-  TextStyle applyTo(TextStyle base, {required bool isCode}) {
-    final scaled = (base.fontSize ?? 16) * fontScale;
-    return base.copyWith(
-      fontSize: scaled,
-      fontFamily: (fontFamily != null && !isCode)
-          ? fontFamily
-          : base.fontFamily,
-      fontFamilyFallback: cjkFallback,
-    );
-  }
+  TextStyle applyTo(TextStyle base, {required bool isCode}) =>
+      scaleDocumentTextStyle(
+        base,
+        fontScale,
+        family: isCode ? null : fontFamily,
+      );
 
   @override
   bool operator ==(Object other) =>
@@ -189,94 +185,39 @@ class EditorTheme {
   static TextStyle styleFor(EditorNode node, MicaTokens tokens) {
     switch (node.kind) {
       case 'heading':
-        switch (node.headingLevel) {
-          case 1:
-            return TextStyle(
-              color: tokens.text.primary,
-              fontSize: 30,
-              height: 1.3,
-              fontWeight: FontWeight.w600,
-            );
-          case 2:
-            return TextStyle(
-              color: tokens.text.primary,
-              fontSize: 24,
-              height: 1.35,
-              fontWeight: FontWeight.w600,
-            );
-          case 3:
-            return TextStyle(
-              color: tokens.text.primary,
-              fontSize: 20,
-              height: 1.4,
-              fontWeight: FontWeight.w600,
-            );
-          case 4:
-            return TextStyle(
-              color: tokens.text.primary,
-              fontSize: 18,
-              height: 1.45,
-              fontWeight: FontWeight.w600,
-            );
-          case 5:
-            return TextStyle(
-              color: tokens.text.primary,
-              fontSize: 16,
-              height: 1.5,
-              fontWeight: FontWeight.w600,
-            );
-          default: // H6 — smallest; a muted ink keeps it distinct from body.
-            return TextStyle(
-              color: tokens.text.muted,
-              fontSize: 15,
-              height: 1.5,
-              fontWeight: FontWeight.w600,
-            );
-        }
+        final level = node.headingLevel;
+        final index = level >= 1 && level <= 5 ? level - 1 : 5;
+        return MicaTypography.documentHeadings[index].copyWith(
+          color: index == 5 ? tokens.text.muted : tokens.text.primary,
+        );
       case 'quote':
-        // Upright, not italic: the left bar + muted ink already mark a quote
-        // (Notion/GitHub style). Baking italic into the base style meant an
-        // italic *mark* had nothing to toggle — you could never un-italic quoted
-        // text — so emphasis is left entirely to marks (marks-over-plain-text).
-        return TextStyle(color: tokens.text.muted, fontSize: 16, height: 1.6);
+        // Upright: the quote bar and muted ink distinguish this from prose.
+        return MicaTypography.documentParagraph.copyWith(
+          color: tokens.text.muted,
+        );
       case 'footnote_def':
-        // Small muted body, mirroring quote — the `[label]` marker is painted
-        // in the gutter (see _paintNode), so the text itself stays plain.
-        return TextStyle(color: tokens.text.muted, fontSize: 13, height: 1.5);
+        return MicaTypography.documentFootnote.copyWith(
+          color: tokens.text.muted,
+        );
       case 'code_block':
-        return TextStyle(
+        return MicaTypography.documentCode.copyWith(
           color: tokens.text.primary,
-          fontSize: 14,
-          height: 1.5,
           fontFamily: kMonoFont,
         );
       case 'math_block':
-        return TextStyle(
+        return MicaTypography.documentCode.copyWith(
           color: tokens.code.keyword,
-          fontSize: 15,
-          height: 1.6,
           fontFamily: kMonoFont,
           fontStyle: FontStyle.italic,
         );
       case 'todo':
-        if (node.todoChecked) {
-          return TextStyle(
-            color: tokens.text.faint,
-            fontSize: 16,
-            height: 1.65,
-            decoration: TextDecoration.lineThrough,
-          );
-        }
-        return TextStyle(
-          color: tokens.text.primary,
-          fontSize: 16,
-          height: 1.65,
+        return MicaTypography.documentParagraph.copyWith(
+          color: node.todoChecked ? tokens.text.faint : tokens.text.primary,
+          decoration: node.todoChecked ? TextDecoration.lineThrough : null,
         );
       default:
-        return TextStyle(
+        return MicaTypography.documentParagraph.copyWith(
           color: tokens.text.primary,
-          fontSize: 16,
-          height: 1.65,
         );
     }
   }
@@ -1284,8 +1225,7 @@ class RenderDocument extends RenderBox {
     final seenTextIds = <String>{};
 
     final caret = layoutCaret(_selection);
-    final caretKey =
-        (caret.node >= 0 && caret.node < _nodes.length)
+    final caretKey = (caret.node >= 0 && caret.node < _nodes.length)
         ? '${_nodes[caret.node].id}:${caret.offset}'
         : '';
     final caretMoved = caretKey != _lastCaretKey;
@@ -1400,9 +1340,7 @@ class RenderDocument extends RenderBox {
         if (node.isCode && isCaretHere && caretMoved) {
           final caretX = reuse.painter
               .getOffsetForCaret(
-                TextPosition(
-                  offset: caret.offset.clamp(0, node.text.length),
-                ),
+                TextPosition(offset: caret.offset.clamp(0, node.text.length)),
                 Rect.zero,
               )
               .dx;
@@ -1676,9 +1614,7 @@ class RenderDocument extends RenderBox {
         if (caretMoved && caret.node == _layouts.length) {
           final caretX = painter
               .getOffsetForCaret(
-                TextPosition(
-                  offset: caret.offset.clamp(0, node.text.length),
-                ),
+                TextPosition(offset: caret.offset.clamp(0, node.text.length)),
                 Rect.zero,
               )
               .dx;
@@ -1743,8 +1679,7 @@ class RenderDocument extends RenderBox {
         final marker = TextPainter(
           text: TextSpan(
             text: '${layout.langChipText}  ▾',
-            style: TextStyle(
-              fontSize: 11,
+            style: MicaTypography.canvasMicro.copyWith(
               color: _appearance.tokens.text.muted,
             ),
           ),
@@ -1878,7 +1813,7 @@ class RenderDocument extends RenderBox {
   ///   default, so clicking into the first row visibly un-bolded it.
   /// * [EditorAppearance.applyTo] — the user's font scale, font family and the CJK
   ///   fallback chain. Without it, clicking into any cell snapped its text back to
-  ///   15px for anyone who had changed the editor font size, and the two measuring
+  ///   14px for anyone who had changed the editor font size, and the two measuring
   ///   painters mis-measured by the same amount, putting the caret in the wrong
   ///   place.
   static TextStyle tableCellStyle(
@@ -1888,9 +1823,9 @@ class RenderDocument extends RenderBox {
     return appearance.applyTo(
       TextStyle(
         color: appearance.tokens.text.primary,
-        fontSize: 15,
-        height: 1.4,
-        fontWeight: isHeader ? FontWeight.w600 : FontWeight.w400,
+        fontSize: 14,
+        height: 22 / 14,
+        fontWeight: isHeader ? FontWeight.w500 : FontWeight.w400,
       ),
       isCode: false,
     );
@@ -2193,10 +2128,8 @@ class RenderDocument extends RenderBox {
     final labelPainter = TextPainter(
       text: TextSpan(
         text: EditorTheme.alertLabel(type),
-        style: TextStyle(
-          fontSize: 13,
-          height: 1.0,
-          fontWeight: FontWeight.w600,
+        style: MicaTypography.canvasSmall.copyWith(
+          fontWeight: FontWeight.w500,
           color: accent,
         ),
       ),
@@ -2229,9 +2162,7 @@ class RenderDocument extends RenderBox {
       final tp = TextPainter(
         text: TextSpan(
           text: '$lineNo',
-          style: TextStyle(
-            fontSize: 11,
-            height: 1.0,
+          style: MicaTypography.canvasMicro.copyWith(
             color: _appearance.tokens.text.faint,
             fontFamily: kMonoFont,
           ),
@@ -2264,8 +2195,7 @@ class RenderDocument extends RenderBox {
     final tp = TextPainter(
       text: TextSpan(
         text: label,
-        style: TextStyle(
-          fontSize: 12,
+        style: MicaTypography.canvasCaption.copyWith(
           color: _appearance.tokens.text.muted,
           fontWeight: FontWeight.w500,
         ),
@@ -2286,7 +2216,9 @@ class RenderDocument extends RenderBox {
     final tp = TextPainter(
       text: TextSpan(
         text: l.codeTitle,
-        style: TextStyle(fontSize: 12, color: _appearance.tokens.text.muted),
+        style: MicaTypography.canvasCaption.copyWith(
+          color: _appearance.tokens.text.muted,
+        ),
       ),
       textDirection: TextDirection.ltr,
       maxLines: 1,
@@ -2321,7 +2253,9 @@ class RenderDocument extends RenderBox {
       final marker = TextPainter(
         text: TextSpan(
           text: '${l.langChipText}  ▾',
-          style: TextStyle(fontSize: 11, color: _appearance.tokens.text.muted),
+          style: MicaTypography.canvasMicro.copyWith(
+            color: _appearance.tokens.text.muted,
+          ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
@@ -2395,8 +2329,7 @@ class RenderDocument extends RenderBox {
       final tp = TextPainter(
         text: TextSpan(
           text: text,
-          style: TextStyle(
-            fontSize: 11,
+          style: MicaTypography.canvasMicro.copyWith(
             color: isActive
                 ? MicaTokens.light.accent.onPrimary
                 : _appearance.tokens.text.muted,
@@ -2463,7 +2396,7 @@ class RenderDocument extends RenderBox {
         style: TextStyle(
           fontFamily: icon.fontFamily,
           package: icon.fontPackage,
-          fontSize: 15,
+          fontSize: 16,
           color: glyphColor,
         ),
       ),
@@ -2488,7 +2421,9 @@ class RenderDocument extends RenderBox {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
-        style: TextStyle(fontSize: 11, color: MicaTokens.light.accent.onPrimary),
+        style: MicaTypography.canvasCaption.copyWith(
+          color: MicaTokens.light.accent.onPrimary,
+        ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -2770,7 +2705,7 @@ class RenderDocument extends RenderBox {
               color: _appearance.tokens.text.muted,
               fontSize: 12 * _appearance.fontScale,
               height: 1.5,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w500,
             ),
           ),
           textDirection: TextDirection.ltr,
@@ -3214,10 +3149,8 @@ class RenderDocument extends RenderBox {
       final tp = TextPainter(
         text: TextSpan(
           text: rc.label,
-          style: TextStyle(
+          style: MicaTypography.canvasMicro.copyWith(
             color: MicaTokens.light.accent.onPrimary,
-            fontSize: 10,
-            height: 1.0,
           ),
         ),
         textDirection: TextDirection.ltr,

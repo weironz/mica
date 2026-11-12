@@ -1,3 +1,4 @@
+import '../ui/typography.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../l10n/locale_controller.dart';
@@ -237,7 +238,7 @@ class _InlineAiDialogState extends State<InlineAiDialog> {
                   controller: _scroll,
                   child: Text(
                     _buffer.isEmpty ? '…' : _buffer.toString(),
-                    style: const TextStyle(fontSize: 13, height: 1.5),
+                    style: MicaTypography.small,
                   ),
                 ),
               ),
@@ -268,9 +269,8 @@ class _InlineAiDialogState extends State<InlineAiDialog> {
                 ),
                 child: Text(
                   _error!,
-                  style: TextStyle(
+                  style: MicaTypography.small.copyWith(
                     color: MicaTheme.of(context).status.danger,
-                    fontSize: 13,
                   ),
                 ),
               ),

@@ -38,9 +38,8 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
     padding: const EdgeInsets.only(top: 18, bottom: 10),
     child: Text(
       label,
-      style: TextStyle(
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
+      style: MicaTypography.body.copyWith(
+        fontWeight: FontWeight.w500,
         color: MicaTheme.of(context).text.primary,
       ),
     ),
@@ -71,9 +70,8 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
           ),
           Text(
             '${w.round()} px',
-            style: TextStyle(
+            style: MicaTypography.small.copyWith(
               color: MicaTheme.of(context).text.muted,
-              fontSize: 13,
             ),
           ),
           IconButton(
@@ -115,9 +113,8 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
         ),
         Text(
           display,
-          style: TextStyle(
+          style: MicaTypography.small.copyWith(
             color: MicaTheme.of(context).text.muted,
-            fontSize: 13,
           ),
         ),
       ],
@@ -268,7 +265,7 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
       Text(
         context.l10n.closeWindowHeader,
         style: TextStyle(
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
           color: MicaTheme.of(context).text.muted,
         ),
       ),

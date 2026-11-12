@@ -1,3 +1,4 @@
+import 'typography.dart';
 import '../l10n/locale_controller.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -205,11 +206,10 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
                         v.isAuto ? _stamp(v) : _displayName(v),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
+                        style: MicaTypography.body.copyWith(
                           fontWeight: v.isAuto
                               ? FontWeight.w400
-                              : FontWeight.w600,
+                              : FontWeight.w500,
                           color: selected
                               ? MicaTheme.of(context).accent.primary
                               : MicaTheme.of(context).text.primary,
@@ -400,8 +400,7 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
             ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
             child: Text(
               l10n.versionDiffNone,
-              style: TextStyle(
-                fontSize: 12,
+              style: MicaTypography.caption.copyWith(
                 color: MicaTheme.of(context).text.muted,
               ),
             ),
@@ -449,7 +448,7 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
         ),
       ),
       const SizedBox(width: 5),
-      Text(label, style: const TextStyle(fontSize: 12)),
+      Text(label, style: MicaTypography.caption),
     ],
   );
 
@@ -488,7 +487,9 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
             children: [
               Text(
                 l10n.versionHistoryTitle,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: MicaTypography.large.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const Spacer(),
               IconButton(
@@ -530,10 +531,8 @@ class _VersionHistoryDialogState extends State<VersionHistoryDialog> {
                           section.day == VersionDay.today
                               ? context.l10n.versionGroupToday
                               : context.l10n.versionGroupEarlier,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.6,
+                          style: MicaTypography.micro.copyWith(
+                            fontWeight: FontWeight.w500,
                             color: MicaTheme.of(context).text.faint,
                           ),
                         ),

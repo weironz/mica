@@ -2,8 +2,8 @@
 
 | File | Family | Purpose | License |
 | ---- | ------ | ------- | ------- |
-| `NotoSansSC-Regular.otf` | Noto Sans SC | CJK text on **web** (crisp Simplified Chinese; desktop defers to the OS font) | SIL Open Font License 1.1 |
-| `DroidSansFallback.ttf` | CJKFallback | broad pan-CJK last-resort tail | Apache License 2.0 |
+| `NotoSansSC-Regular.otf` | Noto Sans SC | Native CJK fallback; the selected Windows typeface (Web uses on-demand engine shards) | SIL Open Font License 1.1 |
+| `DroidSansFallback.ttf` | CJKFallback | Native pan-CJK tail on Android/iOS/Linux/macOS; Windows uses system fallback for rare glyphs | Apache License 2.0 |
 | `RobotoMono-Regular.ttf` | RobotoMono | code / monospace | Apache License 2.0 |
 
 - **Noto Sans SC** — © The Noto Project Authors, licensed under the SIL Open Font

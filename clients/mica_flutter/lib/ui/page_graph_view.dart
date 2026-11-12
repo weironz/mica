@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -105,7 +106,7 @@ class _PageGraphViewState extends State<PageGraphView> {
             bottom: 12,
             child: Text(
               l10n.graphUnlinked(widget.graph.unlinked),
-              style: TextStyle(fontSize: 12, color: tokens.text.faint),
+              style: MicaTypography.caption.copyWith(color: tokens.text.faint),
             ),
           ),
       ],
@@ -312,13 +313,18 @@ class _GraphPainter extends CustomPainter {
     final painter = TextPainter(
       text: TextSpan(
         text: name,
-        style: TextStyle(fontSize: 12, color: tokens.text.primary),
+        style: MicaTypography.canvasCaption.copyWith(
+          color: tokens.text.primary,
+        ),
       ),
       textDirection: textDirection,
       maxLines: 1,
       ellipsis: '…',
     )..layout(maxWidth: 140);
-    painter.paint(canvas, Offset(at.dx - painter.width / 2, at.dy + radius + 4));
+    painter.paint(
+      canvas,
+      Offset(at.dx - painter.width / 2, at.dy + radius + 4),
+    );
   }
 
   @override
@@ -364,7 +370,7 @@ class _EmptyGraph extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               l10n.graphEmptyHint,
-              style: TextStyle(color: tokens.text.faint, fontSize: 12),
+              style: MicaTypography.caption.copyWith(color: tokens.text.faint),
               textAlign: TextAlign.center,
             ),
           ],

@@ -15,6 +15,8 @@
 /// the single source of wording and keeps this file purely layout.
 library;
 
+import 'typography.dart';
+
 import 'package:flutter/material.dart';
 
 import 'theme_tokens.dart';
@@ -58,11 +60,7 @@ Color _toastIconNeutral(BuildContext context) =>
     MicaTheme.of(context).border.strong;
 const Color _toastIconAlert = Color(0xFFFCA5A5);
 
-/// 12.5 is off the 12/13/14/16/20/26/34 ladder on purpose: it is the design's
-/// measured value for the small centred body, where 13 crowds the 1.75 leading.
-/// Nothing else here leaves the ladder (the design's 13.5 buttons are snapped
-/// to 13).
-const double _bodySize = 12.5;
+/// Descriptive text follows the 12px / 16px caption step.
 
 // ── Empty state ──────────────────────────────────────────────────────────────
 
@@ -127,9 +125,8 @@ class MicaEmptyState extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+              style: MicaTypography.body.copyWith(
+                fontWeight: FontWeight.w500,
                 color: MicaTheme.of(context).text.primary,
               ),
             ),
@@ -137,9 +134,7 @@ class MicaEmptyState extends StatelessWidget {
             Text(
               body,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: _bodySize,
-                height: 1.75,
+              style: MicaTypography.caption.copyWith(
                 color: MicaTheme.of(context).text.faint,
               ),
             ),
@@ -275,9 +270,8 @@ class MicaFailureCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
+                  style: MicaTypography.large.copyWith(
+                    fontWeight: FontWeight.w600,
                     color: MicaTheme.of(context).text.primary,
                   ),
                 ),
@@ -287,9 +281,7 @@ class MicaFailureCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             body,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.75,
+            style: MicaTypography.small.copyWith(
               color: MicaTheme.of(context).text.muted,
             ),
           ),
@@ -421,11 +413,7 @@ class MicaStatusToast extends StatelessWidget {
             Flexible(
               child: Text(
                 message,
-                style: const TextStyle(
-                  fontSize: 13,
-                  height: 1.5,
-                  color: Colors.white,
-                ),
+                style: MicaTypography.small.copyWith(color: Colors.white),
               ),
             ),
             if (actionLabel != null) ...[
@@ -523,8 +511,7 @@ class MicaProgressRow extends StatelessWidget {
       children: [
         Text(
           label,
-          style: TextStyle(
-            fontSize: _bodySize,
+          style: MicaTypography.caption.copyWith(
             color: MicaTheme.of(context).text.muted,
           ),
         ),
@@ -576,9 +563,8 @@ class _AccentButton extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
+          style: MicaTypography.small.copyWith(
+            fontWeight: FontWeight.w500,
             color: MicaTheme.of(context).accent.primary,
           ),
         ),
@@ -609,9 +595,8 @@ class _PrimaryButton extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
+          style: MicaTypography.small.copyWith(
+            fontWeight: FontWeight.w500,
             color: MicaTheme.of(context).accent.onPrimary,
           ),
         ),
@@ -642,8 +627,7 @@ class _OutlinedButton extends StatelessWidget {
         ),
         child: Text(
           label,
-          style: TextStyle(
-            fontSize: 13,
+          style: MicaTypography.small.copyWith(
             color: MicaTheme.of(context).text.muted,
           ),
         ),
@@ -666,7 +650,7 @@ class _TextAction extends StatelessWidget {
       onPressed: onPressed,
       child: Text(
         label,
-        style: const TextStyle(fontSize: 13, color: _toastAction),
+        style: MicaTypography.small.copyWith(color: _toastAction),
       ),
     );
   }

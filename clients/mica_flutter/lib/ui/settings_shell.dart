@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'package:flutter/material.dart';
 
 import 'theme_tokens.dart';
@@ -71,9 +72,8 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
               padding: EdgeInsets.fromLTRB(10, i == 0 ? 0 : 18, 10, 6),
               child: Text(
                 widget.destinations[i].group,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+                style: MicaTypography.caption.copyWith(
+                  fontWeight: FontWeight.w500,
                   color: tokens.text.muted,
                 ),
               ),
@@ -93,18 +93,16 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
                 leading: Icon(widget.destinations[i].icon, size: 18),
                 title: Text(
                   widget.destinations[i].title,
-                  style: TextStyle(
-                    fontSize: 14,
+                  style: MicaTypography.body.copyWith(
                     fontWeight: widget.selectedIndex == i && !compact
-                        ? FontWeight.w600
+                        ? FontWeight.w500
                         : FontWeight.w400,
                   ),
                 ),
                 subtitle: compact
                     ? Text(
                         widget.destinations[i].description,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: MicaTypography.caption.copyWith(
                           color: tokens.text.muted,
                         ),
                       )
@@ -139,21 +137,15 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
         children: [
           Text(
             destination.title,
-            style: TextStyle(
-              fontSize: 24,
+            style: MicaTypography.heading2.copyWith(
               fontWeight: FontWeight.w600,
-              height: 1.3,
               color: tokens.text.primary,
             ),
           ),
           const SizedBox(height: 8),
           Text(
             destination.description,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.5,
-              color: tokens.text.muted,
-            ),
+            style: MicaTypography.small.copyWith(color: tokens.text.muted),
           ),
           const SizedBox(height: 28),
           destination.content,
@@ -205,8 +197,7 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
                         widget.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 17,
+                        style: MicaTypography.large.copyWith(
                           fontWeight: FontWeight.w600,
                           color: tokens.text.primary,
                         ),

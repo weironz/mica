@@ -53,7 +53,7 @@ class UserAvatar extends StatelessWidget {
         fallback,
         style: TextStyle(
           fontSize: radius * 0.875,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
           color: foreground ?? tokens.text.primary,
         ),
       ),

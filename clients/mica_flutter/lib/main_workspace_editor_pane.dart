@@ -952,7 +952,8 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: h.level <= 1 ? 14 : 13,
-                  fontWeight: h.level <= 1 ? FontWeight.w600 : FontWeight.w400,
+                  height: h.level <= 1 ? 20 / 14 : 18 / 13,
+                  fontWeight: h.level <= 1 ? FontWeight.w500 : FontWeight.w400,
                   color: MicaTheme.of(context).text.primary,
                 ),
               ),

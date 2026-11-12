@@ -1,0 +1,10 @@
+﻿{
+    "exeVersion":  "0.14.5",
+    "installerBytes":  18608120,
+    "installerSha256":  "50b002e3c63c9ed06be56e18543213a04a9195cd51a6a00b3c38bb7c7b8e8b2d",
+    "notoAssetBytes":  0,
+    "phase":  "before font D",
+    "rawBundleBytes":  60465299,
+    "bundleFileCount":  19,
+    "flutter":  "3.47.1"
+}

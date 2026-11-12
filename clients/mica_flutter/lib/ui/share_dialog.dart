@@ -1,3 +1,4 @@
+import 'typography.dart';
 import '../l10n/locale_controller.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -144,7 +145,7 @@ class _ShareDialogState extends State<ShareDialog> {
                             child: SelectableText(
                               _url!,
                               maxLines: 1,
-                              style: const TextStyle(fontSize: 13),
+                              style: MicaTypography.small,
                             ),
                           ),
                           InlineCopyButton(

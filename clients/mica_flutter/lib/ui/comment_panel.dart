@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
@@ -94,16 +95,15 @@ class _CommentPanelState extends State<CommentPanel> {
       });
 
     final list = threads.isEmpty
-          ? Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Text(
-                l10n.commentsEmpty,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: MicaTheme.of(context).text.muted,
-                ),
+        ? Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Text(
+              l10n.commentsEmpty,
+              style: MicaTypography.small.copyWith(
+                color: MicaTheme.of(context).text.muted,
               ),
-            )
+            ),
+          )
         : ListView.separated(
             padding: const EdgeInsets.symmetric(vertical: 8),
             // Kept: inside the rail's `Expanded` this still scrolls once the
@@ -141,9 +141,8 @@ class _CommentPanelState extends State<CommentPanel> {
                 Expanded(
                   child: Text(
                     l10n.commentsTitle,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+                    style: MicaTypography.small.copyWith(
+                      fontWeight: FontWeight.w500,
                       color: MicaTheme.of(context).text.primary,
                     ),
                   ),
@@ -195,8 +194,7 @@ class _CommentPanelState extends State<CommentPanel> {
               thread.quote.isEmpty ? '—' : thread.quote,
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
+              style: MicaTypography.caption.copyWith(
                 color: MicaTheme.of(context).text.muted,
                 decoration: thread.isOrphaned
                     ? TextDecoration.lineThrough
@@ -210,8 +208,7 @@ class _CommentPanelState extends State<CommentPanel> {
             padding: const EdgeInsets.only(top: 4),
             child: Text(
               l10n.commentOrphaned,
-              style: TextStyle(
-                fontSize: 11,
+              style: MicaTypography.micro.copyWith(
                 color: MicaTheme.of(context).text.faint,
               ),
             ),
@@ -229,8 +226,7 @@ class _CommentPanelState extends State<CommentPanel> {
                 const SizedBox(width: 4),
                 Text(
                   l10n.commentResolved,
-                  style: TextStyle(
-                    fontSize: 11,
+                  style: MicaTypography.micro.copyWith(
                     color: MicaTheme.of(context).text.faint,
                   ),
                 ),
@@ -241,7 +237,7 @@ class _CommentPanelState extends State<CommentPanel> {
         for (final comment in thread.comments)
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
-            child: Text(comment.body, style: const TextStyle(fontSize: 13)),
+            child: Text(comment.body, style: MicaTypography.small),
           ),
         if (_replyingTo == thread.id)
           Padding(
@@ -251,7 +247,7 @@ class _CommentPanelState extends State<CommentPanel> {
               autofocus: true,
               minLines: 1,
               maxLines: 4,
-              style: const TextStyle(fontSize: 13),
+              style: MicaTypography.small,
               decoration: InputDecoration(
                 isDense: true,
                 hintText: l10n.commentReplyPlaceholder,

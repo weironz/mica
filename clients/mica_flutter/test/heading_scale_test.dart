@@ -14,7 +14,7 @@ void main() {
 
   test('heading font sizes are strictly decreasing across all 6 levels', () {
     final sizes = [for (var l = 1; l <= 6; l++) sizeOf(l)];
-    expect(sizes, [30, 24, 20, 18, 16, 15]);
+    expect(sizes, [30, 24, 20, 18, 16, 14]);
     for (var i = 0; i < sizes.length - 1; i++) {
       expect(
         sizes[i] > sizes[i + 1],

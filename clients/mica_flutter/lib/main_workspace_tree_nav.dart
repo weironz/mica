@@ -432,7 +432,7 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
             padding: const EdgeInsets.only(left: 8),
             child: Text(
               context.l10n.batchDragLabel(rows.length),
-              style: TextStyle(fontSize: 12, color: tokens.text.muted),
+              style: MicaTypography.caption.copyWith(color: tokens.text.muted),
             ),
           ),
         ),

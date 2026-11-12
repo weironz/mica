@@ -1,0 +1,31 @@
+{
+  "phase": 2,
+  "command": "just ci",
+  "result": "passed",
+  "defaultUnitPassed": 2125,
+  "systemDarkUnitPassed": 2125,
+  "browserSuites": 11,
+  "receipts": [
+    1197,
+    221,
+    11,
+    2125,
+    11,
+    1,
+    3,
+    12,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    12,
+    1,
+    11
+  ],
+  "nativeScreenshots": 16,
+  "glyphProbe": "Windows native; visually verified CJK and Extension B in text and production Mermaid rasters",
+  "nativeSnapshotStatus": "Only two pre-existing ListTile diagnostics; not counted as passing native automation",
+  "sourceLintCleanup": "Final braces-only cleanup verified by clean analyzer; captured source hashes retained honestly."
+}

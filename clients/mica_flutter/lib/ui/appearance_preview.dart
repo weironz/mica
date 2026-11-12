@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'package:flutter/material.dart';
 
 import '../editor/model.dart';
@@ -47,7 +48,7 @@ class MicaAppearancePreview extends StatelessWidget {
         children: [
           Text(
             '$label · ${pageWidth.round()} px',
-            style: TextStyle(fontSize: 12, color: tokens.text.muted),
+            style: MicaTypography.caption.copyWith(color: tokens.text.muted),
           ),
           const SizedBox(height: 18),
           LayoutBuilder(

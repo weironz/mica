@@ -40,9 +40,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
                     Expanded(
                       child: Text(
                         context.l10n.tokenCopyNow,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          height: 1.5,
+                        style: MicaTypography.caption.copyWith(
                           color: MicaTheme.of(context).status.success,
                         ),
                       ),
@@ -72,7 +70,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
                   child: SelectableText(
                     token,
                     maxLines: 1,
-                    style: const TextStyle(fontSize: 13, fontFamily: kMonoFont),
+                    style: MicaTypography.small.copyWith(fontFamily: kMonoFont),
                   ),
                 ),
               ],
@@ -133,8 +131,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
       ),
       child: Text(
         canWrite ? context.l10n.tokenScopeWrite : context.l10n.tokenScopeRead,
-        style: TextStyle(
-          fontSize: 11,
+        style: MicaTypography.micro.copyWith(
           fontWeight: FontWeight.w500,
           color: canWrite
               ? MicaTheme.of(context).status.warning
@@ -232,6 +229,7 @@ extension _SettingsTokensTab on _SettingsDialogState {
           SizedBox(
             width: 160,
             child: DropdownButtonFormField<int?>(
+              style: Theme.of(context).textTheme.bodyLarge,
               initialValue: _tokenExpiryDays,
               isDense: true,
               decoration: InputDecoration(

@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'destructive_confirm.dart';
 import '../l10n/locale_controller.dart';
 import 'dart:async';
@@ -90,7 +91,7 @@ class _RecycleBinDialogState extends State<RecycleBinDialog> {
     if (emoji != null && emoji.isNotEmpty) {
       return SizedBox(
         width: 18,
-        child: Center(child: Text(emoji, style: const TextStyle(fontSize: 15))),
+        child: Center(child: Text(emoji, style: const TextStyle(fontSize: 16))),
       );
     }
     return Icon(
@@ -126,7 +127,9 @@ class _RecycleBinDialogState extends State<RecycleBinDialog> {
       parts.join('  ·  '),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: TextStyle(fontSize: 12, color: MicaTheme.of(context).text.faint),
+      style: MicaTypography.caption.copyWith(
+        color: MicaTheme.of(context).text.faint,
+      ),
     );
   }
 

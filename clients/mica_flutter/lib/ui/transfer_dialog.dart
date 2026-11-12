@@ -3,6 +3,8 @@
 // Its own library since 2026-11-08 (was a part of main.dart).
 library;
 
+import 'typography.dart';
+
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
@@ -208,6 +210,7 @@ class _TransferDialogState extends State<TransferDialog> {
                   if (_folders != null && _folders!.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String?>(
+                      style: Theme.of(context).textTheme.bodyLarge,
                       initialValue: _parentViewId,
                       isExpanded: true,
                       decoration: InputDecoration(
@@ -262,7 +265,7 @@ class _TransferDialogState extends State<TransferDialog> {
                               report.folders,
                               report.images,
                             ),
-                      style: const TextStyle(fontSize: 14),
+                      style: MicaTypography.body,
                     ),
                     if (report.danglingLinks.isNotEmpty) ...[
                       const SizedBox(height: 10),
@@ -289,9 +292,8 @@ class _TransferDialogState extends State<TransferDialog> {
                     const SizedBox(height: 12),
                     Text(
                       _error!,
-                      style: TextStyle(
+                      style: MicaTypography.small.copyWith(
                         color: MicaTheme.of(context).status.danger,
-                        fontSize: 13,
                       ),
                     ),
                   ],
@@ -344,7 +346,7 @@ class _TransferNotice extends StatelessWidget {
         Icon(icon, size: 16, color: color),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(text, style: TextStyle(fontSize: 13, color: color)),
+          child: Text(text, style: MicaTypography.small.copyWith(color: color)),
         ),
       ],
     );

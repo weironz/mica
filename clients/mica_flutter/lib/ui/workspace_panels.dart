@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../l10n/locale_controller.dart';
@@ -170,9 +171,8 @@ class _BacklinksPanelState extends State<BacklinksPanel> {
               const SizedBox(width: 6),
               Text(
                 context.l10n.backlinksHeading(_links.length),
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
+                style: MicaTypography.small.copyWith(
+                  fontWeight: FontWeight.w500,
                   color: MicaTheme.of(context).text.muted,
                 ),
               ),
@@ -203,8 +203,7 @@ class _BacklinksPanelState extends State<BacklinksPanel> {
                         link.title.isEmpty ? 'Untitled' : link.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14,
+                        style: MicaTypography.body.copyWith(
                           color: MicaTheme.of(context).text.primary,
                         ),
                       ),
@@ -258,9 +257,8 @@ class HomeNavRow extends StatelessWidget {
             const SizedBox(width: 10),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+              style: MicaTypography.body.copyWith(
+                fontWeight: FontWeight.w500,
                 color: selected
                     ? MicaTheme.of(context).accent.hover
                     : MicaTheme.of(context).text.primary,
@@ -295,9 +293,7 @@ class WordCountBadge extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           child: Text(
             context.l10n.editorWordCount(counts.words, counts.chars),
-            style: TextStyle(
-              fontSize: 12,
-              height: 1.0,
+            style: MicaTypography.caption.copyWith(
               color: MicaTheme.of(context).text.muted,
             ),
           ),
@@ -350,9 +346,8 @@ class ToolsTabButton extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+              style: MicaTypography.caption.copyWith(
+                fontWeight: active ? FontWeight.w500 : FontWeight.w400,
                 color: color,
               ),
             ),
@@ -360,7 +355,7 @@ class ToolsTabButton extends StatelessWidget {
               const SizedBox(width: 5),
               Text(
                 '$badge',
-                style: TextStyle(fontSize: 11, color: tokens.text.faint),
+                style: MicaTypography.micro.copyWith(color: tokens.text.faint),
               ),
             ],
           ],
@@ -409,8 +404,7 @@ class CommentsButton extends StatelessWidget {
                 const SizedBox(width: 3),
                 Text(
                   '$openCount',
-                  style: TextStyle(
-                    fontSize: 11,
+                  style: MicaTypography.micro.copyWith(
                     color: MicaTheme.of(context).text.muted,
                   ),
                 ),

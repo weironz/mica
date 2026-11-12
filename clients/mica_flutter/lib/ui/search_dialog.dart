@@ -1,3 +1,4 @@
+import 'typography.dart';
 import '../l10n/locale_controller.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -31,8 +32,7 @@ class _KeyCap extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       child: Text(
         label,
-        style: TextStyle(
-          fontSize: 11,
+        style: MicaTypography.micro.copyWith(
           fontFamily: kMonoFont,
           color: MicaTheme.of(context).text.faint,
         ),
@@ -323,8 +323,7 @@ class _SearchDialogState extends State<SearchDialog> {
                   const SizedBox(width: 6),
                   Text(
                     context.l10n.searchHintSelect,
-                    style: TextStyle(
-                      fontSize: 12,
+                    style: MicaTypography.caption.copyWith(
                       color: MicaTheme.of(context).text.faint,
                     ),
                   ),
@@ -333,8 +332,7 @@ class _SearchDialogState extends State<SearchDialog> {
                   const SizedBox(width: 6),
                   Text(
                     context.l10n.searchHintOpen,
-                    style: TextStyle(
-                      fontSize: 12,
+                    style: MicaTypography.caption.copyWith(
                       color: MicaTheme.of(context).text.faint,
                     ),
                   ),
@@ -344,8 +342,7 @@ class _SearchDialogState extends State<SearchDialog> {
                   // right glyph for a Windows-first product.
                   Text(
                     context.l10n.searchHintInPage,
-                    style: TextStyle(
-                      fontSize: 12,
+                    style: MicaTypography.caption.copyWith(
                       color: MicaTheme.of(context).text.faint,
                     ),
                   ),
@@ -468,7 +465,7 @@ class _SearchDialogState extends State<SearchDialog> {
           padding: const EdgeInsets.only(left: 4, bottom: 6),
           child: Text(
             context.l10n.searchRecentLabel,
-            style: TextStyle(fontSize: 12, color: theme.text.faint),
+            style: MicaTypography.caption.copyWith(color: theme.text.faint),
           ),
         ),
         Expanded(
@@ -479,7 +476,7 @@ class _SearchDialogState extends State<SearchDialog> {
               return ListTile(
                 dense: true,
                 leading: entry.icon != null && entry.icon!.isNotEmpty
-                    ? Text(entry.icon!, style: const TextStyle(fontSize: 16))
+                    ? Text(entry.icon!, style: MicaTypography.large)
                     : Icon(
                         Icons.description_outlined,
                         size: 18,
@@ -492,7 +489,9 @@ class _SearchDialogState extends State<SearchDialog> {
                 ),
                 trailing: Text(
                   entry.meta,
-                  style: TextStyle(fontSize: 12, color: theme.text.faint),
+                  style: MicaTypography.caption.copyWith(
+                    color: theme.text.faint,
+                  ),
                 ),
                 // Recents are this workspace's, so no workspace to carry.
                 onTap: () => widget.onOpen(entry.id, null),
@@ -583,7 +582,7 @@ class _SearchDialogState extends State<SearchDialog> {
           padding: const EdgeInsets.only(left: 4, bottom: 4),
           child: Text(
             context.l10n.searchWorkspaceLabel,
-            style: TextStyle(fontSize: 12, color: theme.text.faint),
+            style: MicaTypography.caption.copyWith(color: theme.text.faint),
           ),
         ),
         for (var i = 0; i < hits.length; i++)
@@ -612,7 +611,9 @@ class _SearchDialogState extends State<SearchDialog> {
                     ),
                     Text(
                       context.l10n.searchWorkspaceSwitch,
-                      style: TextStyle(fontSize: 12, color: theme.text.faint),
+                      style: MicaTypography.caption.copyWith(
+                        color: theme.text.faint,
+                      ),
                     ),
                   ],
                 ),
@@ -654,10 +655,8 @@ class _SearchDialogState extends State<SearchDialog> {
             padding: const EdgeInsets.only(left: 4, bottom: 6),
             child: Text(
               context.l10n.searchResultCount(_results.length),
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.6,
+              style: MicaTypography.micro.copyWith(
+                fontWeight: FontWeight.w500,
                 color: MicaTheme.of(context).text.faint,
               ),
             ),
@@ -785,8 +784,7 @@ class SearchResultTile extends StatelessWidget {
               path.join(' / '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 11,
+              style: MicaTypography.micro.copyWith(
                 color: MicaTheme.of(context).text.faint,
               ),
             ),
@@ -805,8 +803,7 @@ class SearchResultTile extends StatelessWidget {
   /// leaving this blank would make the row look like a mistake.
   Widget _matchLine(BuildContext context) {
     if (result.snippet.isNotEmpty) return _snippet(context, result.snippet);
-    final style = TextStyle(
-      fontSize: 12,
+    final style = MicaTypography.caption.copyWith(
       color: MicaTheme.of(context).text.faint,
     );
     if (result.isFolder) {

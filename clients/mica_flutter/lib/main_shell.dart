@@ -1911,10 +1911,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                l10n.importSkippedBody,
-                style: const TextStyle(fontSize: 12.5, height: 1.6),
-              ),
+              Text(l10n.importSkippedBody, style: MicaTypography.caption),
               const SizedBox(height: 12),
               Flexible(
                 child: ListView(
@@ -1925,8 +1922,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
                         padding: const EdgeInsets.only(bottom: 4),
                         child: Text(
                           path,
-                          style: const TextStyle(
-                            fontSize: 12,
+                          style: MicaTypography.caption.copyWith(
                             fontFamily: kMonoFont,
                           ),
                         ),
@@ -1941,8 +1937,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
                     l10n.importSkippedTruncated(
                       job.skippedTotal - job.skipped.length,
                     ),
-                    style: TextStyle(
-                      fontSize: 12,
+                    style: MicaTypography.caption.copyWith(
                       color: MicaTheme.of(context).text.faint,
                     ),
                   ),
@@ -2002,7 +1997,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
               children: [
                 Text(
                   l10n.importImagesStillLinkedBody,
-                  style: const TextStyle(fontSize: 12.5, height: 1.6),
+                  style: MicaTypography.caption,
                 ),
                 const SizedBox(height: 12),
                 Flexible(
@@ -2017,8 +2012,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
                             children: [
                               Text(
                                 entry.key,
-                                style: const TextStyle(
-                                  fontSize: 12,
+                                style: MicaTypography.caption.copyWith(
                                   fontFamily: kMonoFont,
                                 ),
                               ),
@@ -2029,9 +2023,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
                                       ? entry.value.first.reason
                                       : l10n.importImageNeverAttempted,
                                 ),
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  height: 1.5,
+                                style: MicaTypography.caption.copyWith(
                                   color: theme.text.faint,
                                 ),
                               ),
@@ -2046,7 +2038,9 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
                     padding: const EdgeInsets.only(top: 8),
                     child: Text(
                       l10n.importSkippedTruncated(hidden),
-                      style: TextStyle(fontSize: 12, color: theme.text.faint),
+                      style: MicaTypography.caption.copyWith(
+                        color: theme.text.faint,
+                      ),
                     ),
                   ),
               ],

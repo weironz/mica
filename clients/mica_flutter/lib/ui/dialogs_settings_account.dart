@@ -109,9 +109,8 @@ extension _SettingsAccountTab on _SettingsDialogState {
             children: [
               Text(
                 l10n.accountDeleteWarning,
-                style: TextStyle(
+                style: MicaTypography.small.copyWith(
                   color: MicaTheme.of(context).text.muted,
-                  fontSize: 13,
                 ),
               ),
               const SizedBox(height: 16),
@@ -291,9 +290,8 @@ extension _SettingsAccountTab on _SettingsDialogState {
             Expanded(
               child: Text(
                 _accountMsg!,
-                style: TextStyle(
+                style: MicaTypography.small.copyWith(
                   color: MicaTheme.of(context).status.success,
-                  fontSize: 13,
                 ),
               ),
             ),

@@ -11,6 +11,8 @@
 /// source of wording.
 library;
 
+import 'typography.dart';
+
 import 'package:flutter/material.dart';
 
 import 'theme_tokens.dart';
@@ -47,10 +49,8 @@ class MicaEyebrow extends StatelessWidget {
         ],
         Text(
           label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.6,
+          style: MicaTypography.caption.copyWith(
+            fontWeight: FontWeight.w500,
             color: MicaTheme.of(context).text.faint,
           ),
         ),
@@ -145,9 +145,8 @@ class MicaPickZone extends StatelessWidget {
                 Text(
                   title,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                  style: MicaTypography.body.copyWith(
+                    fontWeight: FontWeight.w500,
                     color: MicaTheme.of(context).text.primary,
                   ),
                 ),
@@ -156,9 +155,7 @@ class MicaPickZone extends StatelessWidget {
                   Text(
                     s,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.6,
+                    style: MicaTypography.caption.copyWith(
                       color: MicaTheme.of(context).text.faint,
                     ),
                   ),

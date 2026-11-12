@@ -1,3 +1,4 @@
+import '../ui/typography.dart';
 import 'inline_ai_dialog.dart';
 export 'inline_ai_dialog.dart' show kAiRewriteSystem;
 import 'dart:async';
@@ -662,7 +663,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             onChanged: (_) => _recomputeFind(reveal: true),
             onEditingComplete: () => _findStep(1), // keeps focus: gh#167
             textInputAction: TextInputAction.search,
-            style: const TextStyle(fontSize: 14),
+            style: MicaTypography.body,
             decoration: InputDecoration(
               isDense: true,
               border: InputBorder.none,
@@ -676,8 +677,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           child: Text(
             label,
             textAlign: TextAlign.right,
-            style: TextStyle(
-              fontSize: 12,
+            style: MicaTypography.caption.copyWith(
               color: MicaTheme.of(context).text.faint,
             ),
           ),
@@ -708,7 +708,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             controller: _replaceCtrl,
             focusNode: _replaceFocus,
             onSubmitted: (_) => _replaceCurrent(),
-            style: const TextStyle(fontSize: 14),
+            style: MicaTypography.body,
             decoration: InputDecoration(
               isDense: true,
               border: InputBorder.none,
@@ -3431,9 +3431,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             : null,
         icon: Text(
           'T$level',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: level == 1 ? FontWeight.w800 : FontWeight.w600,
+          style: MicaTypography.small.copyWith(
+            fontWeight: FontWeight.w500,
             color: active
                 ? MicaTheme.of(context).text.primary
                 : MicaTheme.of(context).text.muted,
@@ -3849,8 +3848,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               const SizedBox(width: 6),
               Text(
                 done ? context.l10n.commonCopied : label,
-                style: TextStyle(
-                  fontSize: 13,
+                style: MicaTypography.small.copyWith(
                   color: done
                       ? kCopyDoneColor
                       : MicaTheme.of(context).text.primary,
@@ -3971,10 +3969,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(
-          context.l10n.linkEdit,
-          style: const TextStyle(fontSize: 15),
-        ),
+        title: Text(context.l10n.linkEdit, style: MicaTypography.large),
         titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
         contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
         actionsPadding: const EdgeInsets.fromLTRB(16, 4, 12, 8),
@@ -3986,7 +3981,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               TextField(
                 controller: textField,
                 autofocus: true,
-                style: const TextStyle(fontSize: 13),
+                style: MicaTypography.small,
                 decoration: InputDecoration(
                   labelText: context.l10n.linkTextLabel,
                   isDense: true,
@@ -3996,7 +3991,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
               const SizedBox(height: 10),
               TextField(
                 controller: urlField,
-                style: const TextStyle(fontSize: 13),
+                style: MicaTypography.small,
                 decoration: InputDecoration(
                   labelText: context.l10n.linkUrlLabel,
                   hintText: context.l10n.linkUrlHint,
@@ -4210,7 +4205,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       children: [
         Icon(icon, size: 16, color: color),
         const SizedBox(width: 10),
-        Text(label, style: TextStyle(fontSize: 13, color: color)),
+        Text(label, style: MicaTypography.small.copyWith(color: color)),
       ],
     );
   }
@@ -4895,8 +4890,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                                 ? context.l10n.editorUntitled
                                 : p.title,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 14,
+                            style: MicaTypography.body.copyWith(
                               color: MicaTheme.of(context).text.primary,
                             ),
                           ),
@@ -5109,10 +5103,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final source = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(
-          context.l10n.slashMathFormula,
-          style: const TextStyle(fontSize: 16),
-        ),
+        title: Text(context.l10n.slashMathFormula, style: MicaTypography.large),
         content: SizedBox(
           width: 420,
           child: TextField(
@@ -5120,7 +5111,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             autofocus: true,
             maxLines: 4,
             minLines: 1,
-            style: const TextStyle(fontFamily: kMonoFont, fontSize: 14),
+            style: MicaTypography.body.copyWith(fontFamily: kMonoFont),
             decoration: const InputDecoration(
               // A LaTeX example (language-neutral) — deliberately not localized.
               hintText: r'E = mc^2',
@@ -5157,10 +5148,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final edited = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(
-          context.l10n.slashMathFormula,
-          style: const TextStyle(fontSize: 16),
-        ),
+        title: Text(context.l10n.slashMathFormula, style: MicaTypography.large),
         content: SizedBox(
           width: 420,
           child: TextField(
@@ -5168,7 +5156,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
             autofocus: true,
             maxLines: 4,
             minLines: 1,
-            style: const TextStyle(fontFamily: kMonoFont, fontSize: 14),
+            style: MicaTypography.body.copyWith(fontFamily: kMonoFont),
             decoration: const InputDecoration(
               // A LaTeX example (language-neutral) — deliberately not localized.
               hintText: r'\eta = 2 \times \frac{N-1}{N}',
@@ -5360,8 +5348,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                 // by design (the UUID is the capability) so copied images keep
                 // rendering elsewhere. Copying the link IS sharing the image.
                 : context.l10n.imageStoredPublic,
-            style: TextStyle(
-              fontSize: 12,
+            style: MicaTypography.caption.copyWith(
               color: MicaTheme.of(context).text.muted,
             ),
           ),
@@ -5930,8 +5917,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                         const SizedBox(width: 10),
                         Text(
                           _slashLabel(o),
-                          style: TextStyle(
-                            fontSize: 14,
+                          style: MicaTypography.body.copyWith(
                             color: MicaTheme.of(context).text.primary,
                           ),
                         ),

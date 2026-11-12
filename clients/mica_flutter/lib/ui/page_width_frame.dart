@@ -7,6 +7,8 @@
 // slider stays the precise / reset control; this is the direct one.
 library;
 
+import 'typography.dart';
+
 import 'package:flutter/material.dart';
 
 import 'theme_tokens.dart';
@@ -138,7 +140,7 @@ class _PageWidthFrameState extends State<PageWidthFrame> {
                     child: Text(
                       '${live.round()} px',
                       key: const ValueKey('page-width-readout'),
-                      style: const TextStyle(fontSize: 12),
+                      style: MicaTypography.caption,
                     ),
                   ),
                 ),

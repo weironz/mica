@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -172,9 +173,8 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                     Expanded(
                       child: Text(
                         s.title,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
+                        style: MicaTypography.body.copyWith(
+                          fontWeight: FontWeight.w500,
                           color: MicaTheme.of(context).text.primary,
                         ),
                       ),
@@ -194,8 +194,7 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                 child: TextField(
                   controller: _query,
                   autofocus: true,
-                  style: TextStyle(
-                    fontSize: 13,
+                  style: MicaTypography.small.copyWith(
                     color: MicaTheme.of(context).text.primary,
                   ),
                   cursorColor: MicaTheme.of(context).accent.primary,
@@ -205,8 +204,7 @@ class _EmojiPickerState extends State<_EmojiPicker> {
                   decoration: InputDecoration(
                     isDense: true,
                     hintText: s.searchHint,
-                    hintStyle: TextStyle(
-                      fontSize: 13,
+                    hintStyle: MicaTypography.small.copyWith(
                       color: MicaTheme.of(context).text.ghost,
                     ),
                     prefixIcon: Icon(
@@ -286,9 +284,8 @@ class _Section extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 6, top: 2),
           child: Text(
             label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+            style: MicaTypography.caption.copyWith(
+              fontWeight: FontWeight.w500,
               color: MicaTheme.of(context).text.faint,
             ),
           ),
@@ -354,7 +351,7 @@ class _EmojiCellState extends State<_EmojiCell> {
                 ? Border.all(color: MicaTheme.of(context).accent.primary)
                 : null,
           ),
-          child: Text(widget.emoji, style: const TextStyle(fontSize: 20)),
+          child: Text(widget.emoji, style: MicaTypography.heading3),
         ),
       ),
     );
@@ -383,8 +380,7 @@ class _RemoveAction extends StatelessWidget {
           ),
           child: Text(
             label,
-            style: TextStyle(
-              fontSize: 12,
+            style: MicaTypography.caption.copyWith(
               color: MicaTheme.of(context).text.muted,
             ),
           ),
@@ -428,9 +424,8 @@ class _NoResults extends StatelessWidget {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+              style: MicaTypography.body.copyWith(
+                fontWeight: FontWeight.w500,
                 color: MicaTheme.of(context).text.primary,
               ),
             ),
@@ -438,9 +433,7 @@ class _NoResults extends StatelessWidget {
             Text(
               body,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12.5,
-                height: 1.75,
+              style: MicaTypography.caption.copyWith(
                 color: MicaTheme.of(context).text.faint,
               ),
             ),

@@ -1,3 +1,4 @@
+import '../ui/typography.dart';
 import 'package:flutter/material.dart';
 
 import '../l10n/locale_controller.dart';
@@ -155,18 +156,16 @@ class _CollapseHeader extends StatelessWidget {
                   _summary(props),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: MicaTypography.caption.copyWith(
                     color: MicaTheme.of(context).text.faint,
-                    fontSize: 12,
                   ),
                 ),
               )
             else
               Text(
                 '${props.length}',
-                style: TextStyle(
+                style: MicaTypography.caption.copyWith(
                   color: MicaTheme.of(context).text.faint,
-                  fontSize: 12,
                 ),
               ),
           ],
@@ -254,9 +253,8 @@ class _PropertyRowState extends State<_PropertyRow> {
                 width: 84,
                 child: Text(
                   widget.property.key,
-                  style: TextStyle(
+                  style: MicaTypography.small.copyWith(
                     color: MicaTheme.of(context).text.muted,
-                    fontSize: 13,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -424,16 +422,17 @@ class _ScalarFieldState extends State<_ScalarField> {
       controller: _c,
       focusNode: _focus,
       enabled: widget.canEdit,
-      style: TextStyle(color: MicaTheme.of(context).text.primary, fontSize: 13),
+      style: MicaTypography.small.copyWith(
+        color: MicaTheme.of(context).text.primary,
+      ),
       decoration: InputDecoration(
         isDense: true,
         isCollapsed: true,
         contentPadding: const EdgeInsets.symmetric(vertical: 4),
         border: InputBorder.none,
         hintText: '—',
-        hintStyle: TextStyle(
+        hintStyle: MicaTypography.small.copyWith(
           color: MicaTheme.of(context).text.ghost,
-          fontSize: 13,
         ),
       ),
       onSubmitted: (_) => _commit(),
@@ -502,9 +501,8 @@ class _TagListState extends State<_TagList> {
               width: 84,
               child: TextField(
                 controller: _add,
-                style: TextStyle(
+                style: MicaTypography.small.copyWith(
                   color: MicaTheme.of(context).text.primary,
-                  fontSize: 13,
                 ),
                 decoration: InputDecoration(
                   isDense: true,
@@ -512,9 +510,8 @@ class _TagListState extends State<_TagList> {
                   contentPadding: const EdgeInsets.symmetric(vertical: 4),
                   border: InputBorder.none,
                   hintText: context.l10n.propertyTagAdd,
-                  hintStyle: TextStyle(
+                  hintStyle: MicaTypography.caption.copyWith(
                     color: MicaTheme.of(context).text.ghost,
-                    fontSize: 12,
                   ),
                 ),
                 onSubmitted: _submitAdd,
@@ -559,9 +556,8 @@ class _Chip extends StatelessWidget {
               onTap: onTap,
               child: Text(
                 label,
-                style: TextStyle(
+                style: MicaTypography.caption.copyWith(
                   color: MicaTheme.of(context).text.primary,
-                  fontSize: 12,
                 ),
               ),
             ),
@@ -624,9 +620,8 @@ class _KeyFieldState extends State<_KeyField> {
         child: TextField(
           controller: _c,
           focusNode: _focus,
-          style: TextStyle(
+          style: MicaTypography.small.copyWith(
             color: MicaTheme.of(context).text.primary,
-            fontSize: 13,
           ),
           decoration: InputDecoration(
             isDense: true,
@@ -634,9 +629,8 @@ class _KeyFieldState extends State<_KeyField> {
             contentPadding: const EdgeInsets.symmetric(vertical: 5),
             border: InputBorder.none,
             hintText: context.l10n.propertyKeyHint,
-            hintStyle: TextStyle(
+            hintStyle: MicaTypography.small.copyWith(
               color: MicaTheme.of(context).text.ghost,
-              fontSize: 13,
             ),
           ),
           onSubmitted: widget.onSubmit,
@@ -671,9 +665,8 @@ class _AddPropertyButton extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 context.l10n.propertyAdd,
-                style: TextStyle(
+                style: MicaTypography.small.copyWith(
                   color: MicaTheme.of(context).text.faint,
-                  fontSize: 13,
                 ),
               ),
             ],

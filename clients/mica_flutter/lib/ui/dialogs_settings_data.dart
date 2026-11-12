@@ -213,18 +213,21 @@ extension _SettingsDataTab on _SettingsDialogState {
                     job.done,
                     job.total,
                   ),
-                  style: TextStyle(fontSize: 13, color: tokens.text.primary),
+                  style: MicaTypography.small.copyWith(
+                    color: tokens.text.primary,
+                  ),
                 ),
                 if (when != null)
                   Text(
                     _formatStamp(when),
-                    style: TextStyle(fontSize: 11.5, color: tokens.text.muted),
+                    style: MicaTypography.caption.copyWith(
+                      color: tokens.text.muted,
+                    ),
                   ),
                 if (job.status == 'interrupted')
                   Text(
                     context.l10n.importInterruptedHelp,
-                    style: TextStyle(
-                      fontSize: 11.5,
+                    style: MicaTypography.caption.copyWith(
                       color: tokens.status.warning,
                     ),
                   ),
@@ -233,15 +236,16 @@ extension _SettingsDataTab on _SettingsDialogState {
                     job.error!,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11.5,
+                    style: MicaTypography.caption.copyWith(
                       color: tokens.status.danger,
                     ),
                   ),
                 if (job.skippedTotal > 0)
                   Text(
                     context.l10n.importSkippedCount(job.skippedTotal),
-                    style: TextStyle(fontSize: 11.5, color: tokens.text.muted),
+                    style: MicaTypography.caption.copyWith(
+                      color: tokens.text.muted,
+                    ),
                   ),
               ],
             ),
@@ -259,10 +263,8 @@ extension _SettingsDataTab on _SettingsDialogState {
     const SizedBox(height: 12),
     Text(
       context.l10n.dataImportDescription,
-      style: TextStyle(
+      style: MicaTypography.caption.copyWith(
         color: MicaTheme.of(context).text.muted,
-        fontSize: 12.5,
-        height: 1.6,
       ),
     ),
     const SizedBox(height: 14),
@@ -303,7 +305,7 @@ extension _SettingsDataTab on _SettingsDialogState {
                 children: [
                   Text(
                     context.l10n.dataExportAllButton,
-                    style: const TextStyle(fontSize: 14),
+                    style: MicaTypography.body,
                   ),
                   // Shown only once the numbers are in. Images are called images
                   // rather than "download size": the archive is a zip, Markdown
@@ -319,8 +321,7 @@ extension _SettingsDataTab on _SettingsDialogState {
                           st.pages,
                           formatBytes(st.imageBytes),
                         ),
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: MicaTypography.caption.copyWith(
                           color: MicaTheme.of(context).text.faint,
                         ),
                       ),
@@ -354,8 +355,7 @@ extension _SettingsDataTab on _SettingsDialogState {
                   c.mirroredPages,
                   formatBytes(c.mirroredBytes),
                 ),
-                style: TextStyle(
-                  fontSize: 12.5,
+                style: MicaTypography.caption.copyWith(
                   color: MicaTheme.of(context).text.muted,
                 ),
               ),
@@ -379,8 +379,7 @@ extension _SettingsDataTab on _SettingsDialogState {
               c.localOnlyPages,
               formatBytes(c.localOnlyBytes),
             ),
-            style: TextStyle(
-              fontSize: 12.5,
+            style: MicaTypography.caption.copyWith(
               color: MicaTheme.of(context).text.muted,
             ),
           ),
@@ -389,8 +388,7 @@ extension _SettingsDataTab on _SettingsDialogState {
         const SizedBox(height: 8),
         Text(
           msg,
-          style: TextStyle(
-            fontSize: 12.5,
+          style: MicaTypography.caption.copyWith(
             color: MicaTheme.of(context).text.muted,
           ),
         ),
@@ -402,9 +400,7 @@ extension _SettingsDataTab on _SettingsDialogState {
       const SizedBox(height: 8),
       Text(
         context.l10n.cacheQuarantinedBody(_quarantine.length),
-        style: TextStyle(
-          fontSize: 12.5,
-          height: 1.6,
+        style: MicaTypography.caption.copyWith(
           color: MicaTheme.of(context).text.muted,
         ),
       ),
@@ -415,8 +411,7 @@ extension _SettingsDataTab on _SettingsDialogState {
             Expanded(
               child: Text(
                 context.l10n.cacheQuarantinedPages(item.pages),
-                style: TextStyle(
-                  fontSize: 12.5,
+                style: MicaTypography.caption.copyWith(
                   color: MicaTheme.of(context).text.muted,
                 ),
               ),
@@ -442,9 +437,7 @@ extension _SettingsDataTab on _SettingsDialogState {
         Expanded(
           child: Text(
             context.l10n.dataExportTip,
-            style: TextStyle(
-              fontSize: 12.5,
-              height: 1.6,
+            style: MicaTypography.caption.copyWith(
               color: MicaTheme.of(context).text.faint,
             ),
           ),

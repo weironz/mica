@@ -422,7 +422,7 @@ class ImageRenderer extends AtomicBlockRenderer {
         style: TextStyle(
           fontFamily: icon.fontFamily,
           package: icon.fontPackage,
-          fontSize: 28,
+          fontSize: 30,
           color: host._appearance.tokens.text.faint,
         ),
       ),
@@ -440,10 +440,9 @@ class ImageRenderer extends AtomicBlockRenderer {
         : (TextPainter(
             text: TextSpan(
               text: l10nNoContext.imageBrokenCaption(caption),
-              style: TextStyle(
-                fontSize: 11,
-                color: host._appearance.tokens.text.faint,
-              ),
+              style: MicaTypography.canvasMicro.copyWith(
+                  color: host._appearance.tokens.text.faint,
+                ),
             ),
             textDirection: TextDirection.ltr,
             maxLines: 1,
@@ -472,7 +471,9 @@ class ImageRenderer extends AtomicBlockRenderer {
     final label = TextPainter(
       text: TextSpan(
         text: l10nNoContext.imageExternalBadge,
-        style: TextStyle(fontSize: 10, color: MicaTokens.light.accent.onPrimary),
+        style: MicaTypography.canvasMicro.copyWith(
+            color: MicaTokens.light.accent.onPrimary,
+          ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -1437,7 +1438,7 @@ class DetailsRenderer extends AtomicBlockRenderer {
     // Body text, not the code_block's monospace: the point of the fold is
     // that it stops looking like source.
     final base = host._appearance.applyTo(
-      TextStyle(color: tokens.text.primary, fontSize: 16, height: 1.65),
+      MicaTypography.large.copyWith(color: tokens.text.primary),
       isCode: false,
     );
     final rawSummary = shape?.summary ?? openTag!.summary;
@@ -1449,7 +1450,7 @@ class DetailsRenderer extends AtomicBlockRenderer {
         children: [
           TextSpan(
             text: summary,
-            style: base.copyWith(fontWeight: FontWeight.w600),
+            style: base.copyWith(fontWeight: FontWeight.w500),
           ),
           // TIGHT form only. That body is raw HTML, not Markdown (no blank
           // line, so the parser never looked inside), and showing it verbatim

@@ -1,3 +1,6 @@
+import 'typography.dart';
+import 'package:flutter/foundation.dart'
+    show LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -6,12 +9,14 @@ import '../cjk_fonts.dart';
 Future<void>? _nativeFonts;
 
 Future<void> _loadNativeFonts() async {
-  for (final (family, path) in const [
-    ('NotoSansSC', 'fonts/NotoSansSC-Regular.otf'),
-    ('CJKFallback', 'fonts/DroidSansFallback.ttf'),
-  ]) {
+  for (final (family, path) in nativeCjkFontAssets) {
     await (FontLoader(family)..addFont(rootBundle.load(path))).load();
   }
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks([
+      'Noto Sans SC',
+    ], await rootBundle.loadString('fonts/OFL.txt'));
+  });
 }
 
 /// Loads retained native fallbacks, and requests the Web's first visible Noto shards.
@@ -48,7 +53,7 @@ Iterable<TextSpan> cjkFontWarmupSpans() sync* {
   for (final text in const ['中文字体预热示例', '繁體字預熱']) {
     yield TextSpan(
       text: text,
-      style: TextStyle(fontSize: 16, fontFamilyFallback: cjkFontFallback),
+      style: MicaTypography.large.copyWith(fontFamilyFallback: cjkFontFallback),
     );
   }
 }

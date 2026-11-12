@@ -2,17 +2,44 @@ import 'package:flutter/foundation.dart';
 
 const bundledCjkFonts = ['NotoSansSC', 'CJKFallback'];
 
-/// Windows uses its standard CJK fonts; Web downloads engine-selected shards.
-bool get usesBundledCjkFonts =>
-    !kIsWeb && defaultTargetPlatform != TargetPlatform.windows;
+/// Shared default Western family for widgets and the document canvas.
+String get uiFontFamily => kIsWeb
+    ? 'Roboto'
+    : switch (defaultTargetPlatform) {
+        TargetPlatform.windows => 'Segoe UI',
+        TargetPlatform.macOS => '.AppleSystemUIFont',
+        TargetPlatform.iOS => 'CupertinoSystemText',
+        _ => 'Roboto',
+      };
+
+/// Native assets load before the first frame; Web keeps engine-selected shards.
+bool get usesBundledCjkFonts => !kIsWeb;
+
+Iterable<(String, String)> get nativeCjkFontAssets sync* {
+  if (kIsWeb) return;
+  yield ('NotoSansSC', 'fonts/NotoSansSC-Regular.otf');
+  if (defaultTargetPlatform != TargetPlatform.windows) {
+    yield ('CJKFallback', 'fonts/DroidSansFallback.ttf');
+  }
+}
+
+/// SVG paragraphs accept one family; keep that choice beside the UI chain.
+String svgCjkFontFamily({required bool korean}) {
+  if (kIsWeb) return uiFontFamily;
+  if (defaultTargetPlatform == TargetPlatform.windows && korean) {
+    return 'Malgun Gothic';
+  }
+  return korean && defaultTargetPlatform != TargetPlatform.windows
+      ? bundledCjkFonts.last
+      : bundledCjkFonts.first;
+}
 
 /// The CJK font fallback chain, per platform.
 ///
 /// The base UI/prose font (Roboto, or the user's pick) carries no CJK glyphs, so
-/// Chinese/Japanese/Korean text resolves through this fallback list. On desktop
-/// we name the crisp SYSTEM CJK fonts — Windows 微软雅黑 (Microsoft YaHei),
-/// macOS 苹方 (PingFang SC), Linux Noto CJK — the same "defer to the OS font"
-/// approach AppFlowy uses. The old bundled `DroidSansFallback` (family
+/// Chinese/Japanese/Korean text resolves through this fallback list. Windows
+/// follows the selected D scheme: bundled Noto Sans SC, then system coverage
+/// for other scripts and rare glyphs. macOS and Linux retain their system lead. The old bundled `DroidSansFallback` (family
 /// `CJKFallback`) is a single-weight, spindly pre-Noto face; leaving it as the
 /// SOLE fallback is what made Chinese look thin/washed-out ("虚"). It stays only
 /// as a last-resort tail on platforms without guaranteed system CJK fonts.
@@ -28,6 +55,7 @@ List<String> get cjkFontFallback {
   switch (defaultTargetPlatform) {
     case TargetPlatform.windows:
       return const [
+        'NotoSansSC',
         'Microsoft YaHei UI',
         'Microsoft YaHei',
         'Microsoft JhengHei UI', // Traditional

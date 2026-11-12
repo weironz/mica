@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'package:flutter/gestures.dart';
 import 'dart:async';
 import 'dart:math' as math;
@@ -227,7 +228,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                 context.l10n.workspaceRowImportWorkspace,
                 style: TextStyle(
                   color: MicaTheme.of(context).text.muted,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ),
@@ -279,9 +280,8 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                           label,
                           overflow: TextOverflow.ellipsis,
                           maxLines: 1,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
+                          style: MicaTypography.body.copyWith(
+                            fontWeight: FontWeight.w500,
                             color: MicaTheme.of(context).text.primary,
                           ),
                         ),
@@ -290,8 +290,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                             widget.activeMeta!,
                             overflow: TextOverflow.ellipsis,
                             maxLines: 1,
-                            style: TextStyle(
-                              fontSize: 12,
+                            style: MicaTypography.caption.copyWith(
                               color: MicaTheme.of(context).text.faint,
                             ),
                           ),
@@ -369,7 +368,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
         child: TextField(
           controller: _wsFilter,
           autofocus: true,
-          style: const TextStyle(fontSize: 13),
+          style: MicaTypography.small,
           decoration: InputDecoration(
             isDense: true,
             hintText: context.l10n.workspaceFilterHint(total),
@@ -399,8 +398,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
         child: Text(
           context.l10n.workspaceFilterNoMatch,
-          style: TextStyle(
-            fontSize: 12,
+          style: MicaTypography.caption.copyWith(
             color: MicaTheme.of(context).text.faint,
           ),
         ),
@@ -432,7 +430,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                 context.l10n.workspaceRowSignInCloud,
                 style: TextStyle(
                   color: MicaTheme.of(context).accent.primary,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ],
@@ -595,7 +593,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontWeight: selected
-                                    ? FontWeight.w600
+                                    ? FontWeight.w500
                                     : FontWeight.w400,
                                 color: MicaTheme.of(context).text.primary,
                               ),
@@ -611,8 +609,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                                 padding: const EdgeInsets.only(top: 2),
                                 child: Text(
                                   context.l10n.pageCount(workspace.pageCount),
-                                  style: TextStyle(
-                                    fontSize: 12,
+                                  style: MicaTypography.caption.copyWith(
                                     color: MicaTheme.of(context).text.faint,
                                   ),
                                 ),
@@ -715,7 +712,7 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
                 context.l10n.workspaceRowNewWorkspace,
                 style: TextStyle(
                   color: MicaTheme.of(context).accent.primary,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ],
@@ -873,6 +870,7 @@ class MemberListItem extends StatelessWidget {
               SizedBox(
                 width: 150,
                 child: DropdownButtonFormField<WorkspaceRole>(
+                  style: Theme.of(context).textTheme.bodyLarge,
                   initialValue: WorkspaceRole.fromApiValue(member.role),
                   decoration: InputDecoration(
                     labelText: context.l10n.widgetRoleLabel,
@@ -1477,7 +1475,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                       child: Center(
                         child: Text(
                           w.view.icon!,
-                          style: const TextStyle(fontSize: 15, height: 1.1),
+                          style: const TextStyle(fontSize: 16, height: 18 / 16),
                         ),
                       ),
                     )
@@ -1523,7 +1521,7 @@ class _DocumentListItemState extends State<DocumentListItem> {
                             style: Theme.of(context).textTheme.bodyMedium
                                 ?.copyWith(
                                   fontWeight: w.isSelected
-                                      ? FontWeight.w600
+                                      ? FontWeight.w500
                                       : FontWeight.w400,
                                 ),
                           ),
@@ -1689,7 +1687,7 @@ class PresenceBar extends StatelessWidget {
                 backgroundColor: presence[i].color,
                 child: Text(
                   _initial(presence[i].name),
-                  style: const TextStyle(fontSize: 11, color: Colors.white),
+                  style: MicaTypography.micro.copyWith(color: Colors.white),
                 ),
               ),
             ),
@@ -1867,7 +1865,7 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
 
   double _measure(String label) {
     final tp = TextPainter(
-      text: TextSpan(text: label, style: const TextStyle(fontSize: 12)),
+      text: TextSpan(text: label, style: MicaTypography.canvasCaption),
       textDirection: TextDirection.ltr,
       maxLines: 1,
     )..layout();
@@ -1935,7 +1933,7 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (dropped) ...[
-          Text('…', style: TextStyle(color: faint, fontSize: 12)),
+          Text('…', style: MicaTypography.caption.copyWith(color: faint)),
           sep(),
         ],
         for (final i in keep) ...[
@@ -1944,7 +1942,7 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
               ws,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: faint, fontSize: 12),
+              style: MicaTypography.caption.copyWith(color: faint),
             )
           else
             _crumb(full[hasWs ? i - 1 : i], isLast: false),
@@ -1963,11 +1961,10 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
       label,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: TextStyle(
+      style: MicaTypography.caption.copyWith(
         color: isLast
             ? MicaTheme.of(context).text.muted
             : MicaTheme.of(context).text.faint,
-        fontSize: 12,
       ),
     );
     // The tail is not a link — you are already on it — but it IS where the page
@@ -2022,10 +2019,7 @@ extension _PageBreadcrumbPopover on PageBreadcrumbState {
             ),
             alignment: Alignment.center,
             child: (widget.current.icon?.trim().isNotEmpty ?? false)
-                ? Text(
-                    widget.current.icon!.trim(),
-                    style: const TextStyle(fontSize: 14),
-                  )
+                ? Text(widget.current.icon!.trim(), style: MicaTypography.body)
                 : Icon(
                     widget.current.objectType == 'folder'
                         ? Icons.folder_outlined
@@ -2039,7 +2033,7 @@ extension _PageBreadcrumbPopover on PageBreadcrumbState {
             child: TextField(
               controller: _renameField,
               focusNode: _renameFocus,
-              style: const TextStyle(fontSize: 14),
+              style: MicaTypography.body,
               decoration: const InputDecoration(
                 isDense: true,
                 border: OutlineInputBorder(),

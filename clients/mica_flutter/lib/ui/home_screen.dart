@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'package:flutter/material.dart';
 
 import 'theme_tokens.dart';
@@ -278,18 +279,15 @@ class _CreateCard extends StatelessWidget {
                 children: [
                   Text(
                     strings.createTitle,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.3,
+                    style: MicaTypography.heading3.copyWith(
+                      fontWeight: FontWeight.w600,
                       color: MicaTheme.of(context).text.primary,
                     ),
                   ),
                   const SizedBox(height: 3),
                   Text(
                     strings.createSubtitle,
-                    style: TextStyle(
-                      fontSize: 13,
+                    style: MicaTypography.small.copyWith(
                       color: MicaTheme.of(context).text.faint,
                     ),
                   ),
@@ -307,9 +305,8 @@ class _CreateCard extends StatelessWidget {
               ),
               child: Text(
                 strings.createHint,
-                style: TextStyle(
+                style: MicaTypography.caption.copyWith(
                   fontFamily: _monoFont,
-                  fontSize: 12,
                   color: MicaTheme.of(context).text.faint,
                 ),
               ),
@@ -335,9 +332,8 @@ class _SectionHeader extends StatelessWidget {
         const SizedBox(width: 8),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
+          style: MicaTypography.small.copyWith(
+            fontWeight: FontWeight.w500,
             color: MicaTheme.of(context).text.muted,
           ),
         ),
@@ -388,7 +384,9 @@ class _WorkspaceChip extends StatelessWidget {
       ),
       child: Text(
         name,
-        style: TextStyle(fontSize: 12, color: MicaTheme.of(context).text.muted),
+        style: MicaTypography.caption.copyWith(
+          color: MicaTheme.of(context).text.muted,
+        ),
       ),
     );
   }
@@ -434,8 +432,7 @@ class _DirectoryRow extends StatelessWidget {
               child: Text(
                 entry.name,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 14,
+                style: MicaTypography.body.copyWith(
                   fontWeight: FontWeight.w500,
                   color: MicaTheme.of(context).text.primary,
                 ),
@@ -451,9 +448,8 @@ class _DirectoryRow extends StatelessWidget {
               child: Text(
                 entry.meta,
                 textAlign: TextAlign.right,
-                style: TextStyle(
+                style: MicaTypography.caption.copyWith(
                   fontFamily: _monoFont,
-                  fontSize: 12,
                   color: MicaTheme.of(context).text.faint,
                 ),
               ),
@@ -498,9 +494,8 @@ class _EmptyState extends StatelessWidget {
           Text(
             title,
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+            style: MicaTypography.body.copyWith(
+              fontWeight: FontWeight.w500,
               color: MicaTheme.of(context).text.primary,
             ),
           ),
@@ -508,9 +503,7 @@ class _EmptyState extends StatelessWidget {
           Text(
             body,
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              height: 1.75,
+            style: MicaTypography.caption.copyWith(
               color: MicaTheme.of(context).text.faint,
             ),
           ),

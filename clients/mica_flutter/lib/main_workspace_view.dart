@@ -881,7 +881,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
       final tp = TextPainter(
         text: TextSpan(
           text: it.view.name,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          style: MicaTypography.canvasBody.copyWith(fontWeight: FontWeight.w500),
         ),
         textDirection: TextDirection.ltr,
         maxLines: 1,
@@ -1221,7 +1221,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w500,
                   color: MicaTheme.of(context).text.primary,
                 ),
               ),
@@ -1537,9 +1537,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                       padding: const EdgeInsets.only(left: 4),
                       child: Text(
                         context.l10n.sidebarPagesLabel,
-                        style: TextStyle(
-                          fontSize: 12,
-                          letterSpacing: 1.5,
+                        style: MicaTypography.caption.copyWith(
                           fontWeight: FontWeight.w500,
                           color: MicaTheme.of(context).text.faint,
                         ),
@@ -1786,9 +1784,8 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                       id.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
+                      style: MicaTypography.body.copyWith(
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                     if (id.email != null)
@@ -1796,8 +1793,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                         id.email!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
+                        style: MicaTypography.caption.copyWith(
                           color: MicaTheme.of(context).text.muted,
                         ),
                       ),

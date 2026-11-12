@@ -1,3 +1,4 @@
+import 'typography.dart';
 import 'ai_prompts.dart';
 import '../l10n/locale_controller.dart';
 import 'dart:async';
@@ -8,7 +9,6 @@ import 'status_kit.dart';
 import 'theme_tokens.dart';
 
 enum _AiTarget { newPage, currentPage, newWorkspace }
-
 
 /// Global AI dialog: type an instruction and pick where the generated content
 /// goes — a new page, the current page, or a brand-new workspace.
@@ -314,29 +314,23 @@ class _AiDialogState extends State<AiDialog> {
                                     Text(
                                       context.l10n.aiOriginal,
                                       style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
                                     SelectableText(
                                       edit.before,
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        height: 1.5,
-                                      ),
+                                      style: MicaTypography.small,
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
                                       context.l10n.aiModified,
                                       style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
                                     SelectableText(
                                       edit.after,
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        height: 1.5,
-                                      ),
+                                      style: MicaTypography.small,
                                     ),
                                     const Divider(height: 24),
                                   ],
@@ -344,10 +338,7 @@ class _AiDialogState extends State<AiDialog> {
                               )
                             : Text(
                                 _buffer.isEmpty ? '…' : _buffer.toString(),
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  height: 1.5,
-                                ),
+                                style: MicaTypography.small,
                               ),
                       ),
               ),

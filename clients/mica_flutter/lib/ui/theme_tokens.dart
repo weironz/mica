@@ -19,6 +19,7 @@
 import 'package:flutter/material.dart';
 
 import '../cjk_fonts.dart';
+import 'typography.dart';
 
 /// Backgrounds, from furthest back to nearest front.
 class SurfaceTokens {
@@ -494,17 +495,25 @@ class MicaTokens {
     );
     final baseTheme = ThemeData(
       brightness: dark ? Brightness.dark : Brightness.light,
+      fontFamily: uiFontFamily,
       fontFamilyFallback: cjkFontFallback,
     );
     return ThemeData(
       useMaterial3: true,
+      fontFamily: uiFontFamily,
       colorScheme: scheme,
-      textTheme: baseTheme.textTheme.apply(
-        bodyColor: text.primary,
-        displayColor: text.primary,
-      ),
+      textTheme: MicaTypography.textTheme(
+        baseTheme.textTheme,
+      ).apply(bodyColor: text.primary, displayColor: text.primary),
       scaffoldBackgroundColor: surface.base,
       dialogTheme: DialogThemeData(
+        titleTextStyle: MicaTypography.canvasLarge.copyWith(
+          fontWeight: FontWeight.w600,
+          color: text.primary,
+        ),
+        contentTextStyle: MicaTypography.canvasBody.copyWith(
+          color: text.primary,
+        ),
         backgroundColor: surface.overlay,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -537,8 +546,8 @@ class MicaTokens {
         focusedErrorBorder: fieldBorder.copyWith(
           borderSide: BorderSide(color: status.danger, width: 1.5),
         ),
-        hintStyle: TextStyle(color: text.ghost, fontSize: 14),
-        labelStyle: TextStyle(color: text.muted, fontSize: 14),
+        hintStyle: MicaTypography.body.copyWith(color: text.ghost),
+        labelStyle: MicaTypography.body.copyWith(color: text.muted),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
@@ -547,8 +556,7 @@ class MicaTokens {
           minimumSize: const Size(64, 40),
           // Material replaces its text style; the bundled fallback must ride
           // along or CJK labels wait for the engine's remote Noto download.
-          textStyle: TextStyle(
-            fontSize: 14,
+          textStyle: MicaTypography.body.copyWith(
             fontWeight: FontWeight.w500,
             fontFamilyFallback: cjkFontFallback,
           ),
@@ -562,7 +570,10 @@ class MicaTokens {
           foregroundColor: text.primary,
           side: BorderSide(color: border.normal),
           minimumSize: const Size(64, 40),
-          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          textStyle: MicaTypography.body.copyWith(
+            fontWeight: FontWeight.w500,
+            fontFamilyFallback: cjkFontFallback,
+          ),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
@@ -570,8 +581,7 @@ class MicaTokens {
           shape: controlShape,
           disabledForegroundColor: text.ghost,
           minimumSize: const Size(48, 40),
-          textStyle: TextStyle(
-            fontSize: 14,
+          textStyle: MicaTypography.body.copyWith(
             fontWeight: FontWeight.w500,
             fontFamilyFallback: cjkFontFallback,
           ),
@@ -582,10 +592,22 @@ class MicaTokens {
         side: BorderSide(color: border.normal),
         backgroundColor: surface.base,
         selectedColor: accent.wash,
-        labelStyle: TextStyle(color: text.primary, fontSize: 13),
+        labelStyle: MicaTypography.small.copyWith(color: text.primary),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       ),
+      listTileTheme: ListTileThemeData(
+        titleTextStyle: MicaTypography.canvasBody.copyWith(
+          fontWeight: FontWeight.w400,
+        ),
+        subtitleTextStyle: MicaTypography.canvasCaption.copyWith(
+          fontWeight: FontWeight.w400,
+        ),
+      ),
       popupMenuTheme: PopupMenuThemeData(
+        textStyle: MicaTypography.canvasBody.copyWith(
+          fontWeight: FontWeight.w400,
+          color: text.primary,
+        ),
         color: surface.overlay,
         surfaceTintColor: Colors.transparent,
         shape: controlShape,
@@ -597,7 +619,7 @@ class MicaTokens {
           color: text.primary,
           borderRadius: BorderRadius.circular(6),
         ),
-        textStyle: TextStyle(color: surface.base, fontSize: 12),
+        textStyle: MicaTypography.caption.copyWith(color: surface.base),
       ),
     );
   }

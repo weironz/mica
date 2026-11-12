@@ -1,3 +1,4 @@
+import 'typography.dart';
 import '../l10n/locale_controller.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -44,8 +45,7 @@ class _GraphDialogState extends State<GraphDialog> {
                 children: [
                   Text(
                     context.l10n.graphTitle,
-                    style: TextStyle(
-                      fontSize: 16,
+                    style: MicaTypography.large.copyWith(
                       fontWeight: FontWeight.w600,
                       color: tokens.text.primary,
                     ),

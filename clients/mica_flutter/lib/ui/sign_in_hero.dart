@@ -1,3 +1,4 @@
+import 'typography.dart';
 // The brand half of the sign-in screen (design 01): mark, name, one-line pitch,
 // a short capability list, and a build badge.
 //
@@ -80,7 +81,8 @@ class SignInHero extends StatelessWidget {
                     'Mica',
                     style: TextStyle(
                       fontSize: 26,
-                      fontWeight: FontWeight.w700,
+                      height: 34 / 26,
+                      fontWeight: FontWeight.w600,
                       color: Colors.white,
                     ),
                   ),
@@ -89,20 +91,16 @@ class SignInHero extends StatelessWidget {
               const SizedBox(height: 26),
               Text(
                 strings.tagline,
-                style: const TextStyle(
-                  fontSize: 34,
-                  height: 1.3,
-                  fontWeight: FontWeight.w700,
+                style: MicaTypography.loginTitle.copyWith(
+                  fontWeight: FontWeight.w600,
                   color: Colors.white,
                 ),
               ),
               const SizedBox(height: 14),
               Text(
                 strings.pitch,
-                style: const TextStyle(
-                  fontSize: 14,
-                  height: 1.75,
-                  color: Color(0xFF94A3B8),
+                style: MicaTypography.body.copyWith(
+                  color: const Color(0xFF94A3B8),
                 ),
               ),
               const SizedBox(height: 26),
@@ -117,7 +115,9 @@ class SignInHero extends StatelessWidget {
                         height: 22,
                         decoration: BoxDecoration(
                           // Circular, matching the design's chips.
-                          color: const Color(0xFF2563EB).withValues(alpha: 0.22),
+                          color: const Color(
+                            0xFF2563EB,
+                          ).withValues(alpha: 0.22),
                           shape: BoxShape.circle,
                         ),
                         alignment: Alignment.center,
@@ -131,10 +131,8 @@ class SignInHero extends StatelessWidget {
                       Expanded(
                         child: Text(
                           f,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            height: 1.6,
-                            color: Color(0xFFE2E8F0),
+                          style: MicaTypography.small.copyWith(
+                            color: const Color(0xFFE2E8F0),
                           ),
                         ),
                       ),
@@ -144,10 +142,8 @@ class SignInHero extends StatelessWidget {
               const SizedBox(height: 14),
               Text(
                 strings.badge,
-                style: const TextStyle(
-                  fontSize: 11,
-                  letterSpacing: 0.8,
-                  color: Color(0xFF64748B),
+                style: MicaTypography.micro.copyWith(
+                  color: const Color(0xFF64748B),
                 ),
               ),
             ],

@@ -2,6 +2,8 @@
 // Its own library since 2026-11-01 (was a part of main.dart).
 library;
 
+import 'typography.dart';
+
 import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -42,7 +44,6 @@ part 'dialogs_settings_account.dart';
 part 'dialogs_settings_tokens.dart';
 part 'dialogs_settings_data.dart';
 part 'dialogs_settings_misc.dart';
-
 
 /// Preset AI providers. Each maps to a backend provider dialect (openai/anthropic)
 /// plus default base URL + model; "Local / Custom" lets the user point at any
@@ -319,7 +320,8 @@ class SettingsDialog extends StatefulWidget {
 
   /// Legacy (pre-#111) caches, listed by id + page count only. Null when there
   /// is no on-device store.
-  final Future<List<({String origin, String workspaceId, int pages})>> Function()?
+  final Future<List<({String origin, String workspaceId, int pages})>>
+  Function()?
   onLoadQuarantinedCaches;
 
   /// Export one quarantined legacy workspace as a Markdown ZIP — an explicit

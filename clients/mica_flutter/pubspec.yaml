@@ -107,7 +107,9 @@ flutter:
     # Native last-resort fonts are loaded by ui/font_warmup.dart. CanvasKit
     # uses the same-origin Noto shards instead of downloading both full fonts.
     - path: fonts/NotoSansSC-Regular.otf
-      platforms: [android, ios, linux, macos]
+      platforms: [android, ios, linux, macos, windows]
+    - path: fonts/OFL.txt
+      platforms: [android, ios, linux, macos, windows]
     - path: fonts/DroidSansFallback.ttf
       platforms: [android, ios, linux, macos]
   fonts:

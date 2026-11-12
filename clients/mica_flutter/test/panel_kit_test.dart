@@ -14,18 +14,18 @@ void main() {
   );
 
   group('MicaEyebrow', () {
-    testWidgets('renders the label muted and tracked, not as a heading', (
+    testWidgets('uses the caption step without extra tracking', (
       tester,
     ) async {
       await pump(tester, const MicaEyebrow('导入'));
 
       final text = tester.widget<Text>(find.text('导入'));
       expect(text.style?.fontSize, 12);
-      expect(text.style?.fontWeight, FontWeight.w600);
+      expect(text.style?.fontWeight, FontWeight.w500);
       expect(
         text.style?.letterSpacing,
-        0.6,
-        reason: 'the tracking is what makes it read as a label',
+        0,
+        reason: 'Chinese labels use the untracked caption step',
       );
     });
 

@@ -1,3 +1,4 @@
+import 'typography.dart';
 // The right-hand half of the desktop sign-in screen: which world, then how.
 //
 // Replaces `world_picker.dart`, which listed every world inline with a delete
@@ -307,9 +308,8 @@ class _SignInPaneState extends State<SignInPane> {
               const SizedBox(width: 7),
               Text(
                 label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                style: MicaTypography.small.copyWith(
+                  fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
                   color: selected
                       ? MicaTheme.of(context).text.primary
                       : MicaTheme.of(context).text.muted,
@@ -411,9 +411,8 @@ class _SignInPaneState extends State<SignInPane> {
                             const SizedBox(width: 6),
                             Text(
                               status.text,
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                              style: MicaTypography.caption.copyWith(
+                                fontWeight: FontWeight.w500,
                                 // On `_reach`, not on the dot's colour: asking
                                 // "is the dot green?" made the palette the
                                 // carrier of a fact the enum already holds, so
@@ -429,9 +428,8 @@ class _SignInPaneState extends State<SignInPane> {
                         serverLabel(showing),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                        style: MicaTypography.caption.copyWith(
                           fontFamily: kMonoFont,
-                          fontSize: 12.5,
                           color: MicaTheme.of(context).text.primary,
                         ),
                       ),
@@ -486,10 +484,8 @@ class _SignInPaneState extends State<SignInPane> {
                   padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
                   child: Text(
                     widget.strings.serversLabel,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.6,
+                    style: MicaTypography.micro.copyWith(
+                      fontWeight: FontWeight.w500,
                       color: MicaTheme.of(context).text.faint,
                     ),
                   ),
@@ -541,9 +537,8 @@ class _SignInPaneState extends State<SignInPane> {
                 serverLabel(origin),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
+                style: MicaTypography.caption.copyWith(
                   fontFamily: kMonoFont,
-                  fontSize: 12.5,
                   color: MicaTheme.of(context).text.primary,
                 ),
               ),
@@ -556,8 +551,7 @@ class _SignInPaneState extends State<SignInPane> {
               const SizedBox(width: 8),
               Text(
                 widget.strings.signedIn,
-                style: TextStyle(
-                  fontSize: 11,
+                style: MicaTypography.micro.copyWith(
                   color: MicaTheme.of(context).status.success,
                 ),
               ),
@@ -596,9 +590,8 @@ class _SignInPaneState extends State<SignInPane> {
             const SizedBox(width: 9),
             Text(
               widget.strings.addServer,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
+              style: MicaTypography.small.copyWith(
+                fontWeight: FontWeight.w500,
                 color: MicaTheme.of(context).accent.primary,
               ),
             ),
@@ -623,19 +616,15 @@ class _SignInPaneState extends State<SignInPane> {
       children: [
         Text(
           widget.strings.localTitle,
-          style: TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.w700,
-            letterSpacing: -0.5,
+          style: MicaTypography.loginBrand.copyWith(
+            fontWeight: FontWeight.w600,
             color: MicaTheme.of(context).text.primary,
           ),
         ),
         const SizedBox(height: 8),
         Text(
           widget.strings.localBody,
-          style: TextStyle(
-            fontSize: 14,
-            height: 1.6,
+          style: MicaTypography.body.copyWith(
             color: MicaTheme.of(context).text.muted,
           ),
         ),

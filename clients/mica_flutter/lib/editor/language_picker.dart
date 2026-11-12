@@ -1,3 +1,4 @@
+import '../ui/typography.dart';
 // The code block's language picker, split out of the editor library (its
 // size ratchet): a self-contained anchored panel with no editor state.
 import 'package:flutter/material.dart';
@@ -124,7 +125,7 @@ class _LanguagePickerState extends State<LanguagePicker> {
                     TextField(
                       controller: _query,
                       autofocus: true,
-                      style: const TextStyle(fontSize: 13),
+                      style: MicaTypography.small,
                       decoration: InputDecoration(
                         hintText: context.l10n.editorSearchLanguage,
                         prefixIcon: const Icon(Icons.search, size: 16),
@@ -146,8 +147,7 @@ class _LanguagePickerState extends State<LanguagePicker> {
                           ? Center(
                               child: Text(
                                 context.l10n.searchNoMatches,
-                                style: TextStyle(
-                                  fontSize: 13,
+                                style: MicaTypography.small.copyWith(
                                   color: MicaTheme.of(context).text.faint,
                                 ),
                               ),
@@ -189,10 +189,9 @@ class _LanguagePickerState extends State<LanguagePicker> {
                                       ),
                                       Text(
                                         items[i],
-                                        style: TextStyle(
-                                          fontSize: 13,
+                                        style: MicaTypography.small.copyWith(
                                           fontWeight: items[i] == widget.current
-                                              ? FontWeight.w600
+                                              ? FontWeight.w500
                                               : FontWeight.normal,
                                         ),
                                       ),
