@@ -7,8 +7,8 @@
   "receipts": {
     "rust": 1197,
     "sqliteStore": 221,
-    "ffi": 11,
-    "flutter": 2137
+    "flutter": 2137,
+    "markdownWireGold": 11
   },
   "browserSuites": 11,
   "standaloneE2eScripts": 5,
@@ -17,5 +17,6 @@
   "ciLogSha256": "817929eab3897ba3f0066aca3f35a800ab744ccdd988c5f6be43b3fb1d01f14c",
   "newRegressionTests": 4,
   "regressionBeforeFix": "4 failures on full-width backgrounds",
-  "regressionAfterFix": "6 tests passed, including 2 pre-existing action/migration checks"
+  "regressionAfterFix": "6 tests passed, including 2 pre-existing action/migration checks",
+  "ffiCoverage": "Source fingerprint and Windows native flow; the count 11 is Markdown/Wasm wire gold, not standalone FFI tests."
 }
