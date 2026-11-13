@@ -59,14 +59,18 @@ class MicaSegmentGroup extends StatelessWidget {
   const MicaSegmentGroup({required this.children, super.key});
   final List<Widget> children;
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: MicaTheme.of(context).surface.sunken,
-      borderRadius: BorderRadius.circular(6),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.all(2),
-      child: Wrap(spacing: 2, runSpacing: 2, children: children),
+  Widget build(BuildContext context) => Align(
+    alignment: AlignmentDirectional.centerStart,
+    heightFactor: 1,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: MicaTheme.of(context).surface.sunken,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(2),
+        child: Wrap(spacing: 2, runSpacing: 2, children: children),
+      ),
     ),
   );
 }

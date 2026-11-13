@@ -1,0 +1,186 @@
+[
+  {
+    "scene": "zh-light-1440",
+    "dpr": 1.0,
+    "clientWidth": 1424.0,
+    "clientHeight": 961.0,
+    "groups": [
+      {
+        "backgroundWidth": 207.8935546875,
+        "availableWidth": 595.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 192.0,
+        "availableWidth": 595.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 172.298828125,
+        "availableWidth": 595.0,
+        "height": 36.0
+      }
+    ]
+  },
+  {
+    "scene": "zh-light-900",
+    "dpr": 1.0,
+    "clientWidth": 884.0,
+    "clientHeight": 761.0,
+    "groups": [
+      {
+        "backgroundWidth": 207.8935546875,
+        "availableWidth": 455.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 192.0,
+        "availableWidth": 455.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 172.298828125,
+        "availableWidth": 455.0,
+        "height": 36.0
+      }
+    ]
+  },
+  {
+    "scene": "zh-dark-1440",
+    "dpr": 1.0,
+    "clientWidth": 1424.0,
+    "clientHeight": 961.0,
+    "groups": [
+      {
+        "backgroundWidth": 207.8935546875,
+        "availableWidth": 595.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 192.0,
+        "availableWidth": 595.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 172.298828125,
+        "availableWidth": 595.0,
+        "height": 36.0
+      }
+    ]
+  },
+  {
+    "scene": "zh-dark-900",
+    "dpr": 1.0,
+    "clientWidth": 884.0,
+    "clientHeight": 761.0,
+    "groups": [
+      {
+        "backgroundWidth": 207.8935546875,
+        "availableWidth": 455.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 192.0,
+        "availableWidth": 455.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 172.298828125,
+        "availableWidth": 455.0,
+        "height": 36.0
+      }
+    ]
+  },
+  {
+    "scene": "en-light-1440",
+    "dpr": 1.0,
+    "clientWidth": 1424.0,
+    "clientHeight": 961.0,
+    "groups": [
+      {
+        "backgroundWidth": 240.1044921875,
+        "availableWidth": 595.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 184.7744140625,
+        "availableWidth": 595.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 189.552734375,
+        "availableWidth": 595.0,
+        "height": 36.0
+      }
+    ]
+  },
+  {
+    "scene": "en-light-900",
+    "dpr": 1.0,
+    "clientWidth": 884.0,
+    "clientHeight": 761.0,
+    "groups": [
+      {
+        "backgroundWidth": 240.1044921875,
+        "availableWidth": 455.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 184.7744140625,
+        "availableWidth": 455.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 189.552734375,
+        "availableWidth": 455.0,
+        "height": 36.0
+      }
+    ]
+  },
+  {
+    "scene": "en-dark-1440",
+    "dpr": 1.0,
+    "clientWidth": 1424.0,
+    "clientHeight": 961.0,
+    "groups": [
+      {
+        "backgroundWidth": 240.1044921875,
+        "availableWidth": 595.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 184.6376953125,
+        "availableWidth": 595.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 189.552734375,
+        "availableWidth": 595.0,
+        "height": 36.0
+      }
+    ]
+  },
+  {
+    "scene": "en-dark-900",
+    "dpr": 1.0,
+    "clientWidth": 884.0,
+    "clientHeight": 761.0,
+    "groups": [
+      {
+        "backgroundWidth": 240.1044921875,
+        "availableWidth": 455.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 184.6376953125,
+        "availableWidth": 455.0,
+        "height": 36.0
+      },
+      {
+        "backgroundWidth": 189.552734375,
+        "availableWidth": 455.0,
+        "height": 36.0
+      }
+    ]
+  }
+]

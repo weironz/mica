@@ -1,0 +1,662 @@
+[
+    {
+        "pair":  0,
+        "timing":  {
+                       "pid":  39040,
+                       "mainToFirstRasterUs":  657947,
+                       "stagesUs":  {
+                                        "warmUpFonts":  3274
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  39040,
+        "processToFirstFrameMs":  2079.2035,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:31.2783606Z",
+        "processCreatedUtc":  "2026-11-13T05:43:29.1991571Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  0,
+        "timing":  {
+                       "pid":  33732,
+                       "mainToFirstRasterUs":  1275067,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6065,
+                                        "warmUpFonts":  8673
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  33732,
+        "processToFirstFrameMs":  2817.9825,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:34.2561995Z",
+        "processCreatedUtc":  "2026-11-13T05:43:31.4382170Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  1,
+        "timing":  {
+                       "pid":  8280,
+                       "mainToFirstRasterUs":  589801,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6075,
+                                        "warmUpFonts":  8477
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  8280,
+        "processToFirstFrameMs":  2001.1469000000002,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:36.3637792Z",
+        "processCreatedUtc":  "2026-11-13T05:43:34.3626323Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  1,
+        "timing":  {
+                       "pid":  22988,
+                       "mainToFirstRasterUs":  929840,
+                       "stagesUs":  {
+                                        "warmUpFonts":  1970
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  22988,
+        "processToFirstFrameMs":  2337.1729,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:38.8108953Z",
+        "processCreatedUtc":  "2026-11-13T05:43:36.4737224Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  2,
+        "timing":  {
+                       "pid":  22220,
+                       "mainToFirstRasterUs":  523748,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2097
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  22220,
+        "processToFirstFrameMs":  2035.3384,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:40.9590820Z",
+        "processCreatedUtc":  "2026-11-13T05:43:38.9237436Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  2,
+        "timing":  {
+                       "pid":  40356,
+                       "mainToFirstRasterUs":  938112,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6119,
+                                        "warmUpFonts":  8542
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  40356,
+        "processToFirstFrameMs":  2368.7799,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:43.4269665Z",
+        "processCreatedUtc":  "2026-11-13T05:43:41.0581866Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  3,
+        "timing":  {
+                       "pid":  10992,
+                       "mainToFirstRasterUs":  571168,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6000,
+                                        "warmUpFonts":  8288
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  10992,
+        "processToFirstFrameMs":  1991.2922,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:45.5178045Z",
+        "processCreatedUtc":  "2026-11-13T05:43:43.5265123Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  3,
+        "timing":  {
+                       "pid":  39432,
+                       "mainToFirstRasterUs":  1676009,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2011
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  39432,
+        "processToFirstFrameMs":  3092.1319000000003,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:48.7349852Z",
+        "processCreatedUtc":  "2026-11-13T05:43:45.6428533Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  4,
+        "timing":  {
+                       "pid":  15568,
+                       "mainToFirstRasterUs":  509029,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2035
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  15568,
+        "processToFirstFrameMs":  1925.4275,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:50.7920691Z",
+        "processCreatedUtc":  "2026-11-13T05:43:48.8666416Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  4,
+        "timing":  {
+                       "pid":  14164,
+                       "mainToFirstRasterUs":  532663,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6041,
+                                        "warmUpFonts":  8450
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  14164,
+        "processToFirstFrameMs":  1953.7147,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:52.8583653Z",
+        "processCreatedUtc":  "2026-11-13T05:43:50.9046506Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  5,
+        "timing":  {
+                       "pid":  8876,
+                       "mainToFirstRasterUs":  869742,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6276,
+                                        "warmUpFonts":  8578
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  8876,
+        "processToFirstFrameMs":  2286.4611,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:55.2548514Z",
+        "processCreatedUtc":  "2026-11-13T05:43:52.9683903Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  5,
+        "timing":  {
+                       "pid":  32488,
+                       "mainToFirstRasterUs":  595045,
+                       "stagesUs":  {
+                                        "warmUpFonts":  1980
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  32488,
+        "processToFirstFrameMs":  2020.403,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:57.3877809Z",
+        "processCreatedUtc":  "2026-11-13T05:43:55.3673779Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  6,
+        "timing":  {
+                       "pid":  21420,
+                       "mainToFirstRasterUs":  870451,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2029
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  21420,
+        "processToFirstFrameMs":  2392.9891000000002,
+        "firstFrameWrittenUtc":  "2026-11-13T05:43:59.8882339Z",
+        "processCreatedUtc":  "2026-11-13T05:43:57.4952448Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  6,
+        "timing":  {
+                       "pid":  40244,
+                       "mainToFirstRasterUs":  890528,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6110,
+                                        "warmUpFonts":  8329
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  40244,
+        "processToFirstFrameMs":  2425.0022,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:02.4363218Z",
+        "processCreatedUtc":  "2026-11-13T05:44:00.0113196Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  7,
+        "timing":  {
+                       "pid":  38556,
+                       "mainToFirstRasterUs":  936676,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6468,
+                                        "warmUpFonts":  8788
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  38556,
+        "processToFirstFrameMs":  2368.6620000000003,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:04.9335520Z",
+        "processCreatedUtc":  "2026-11-13T05:44:02.5648900Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  7,
+        "timing":  {
+                       "pid":  7504,
+                       "mainToFirstRasterUs":  538742,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2115
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  7504,
+        "processToFirstFrameMs":  1946.3862000000001,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:06.9808776Z",
+        "processCreatedUtc":  "2026-11-13T05:44:05.0344914Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  8,
+        "timing":  {
+                       "pid":  43512,
+                       "mainToFirstRasterUs":  617397,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2168
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  43512,
+        "processToFirstFrameMs":  2034.275,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:09.1189365Z",
+        "processCreatedUtc":  "2026-11-13T05:44:07.0846615Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  8,
+        "timing":  {
+                       "pid":  20044,
+                       "mainToFirstRasterUs":  792764,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6167,
+                                        "warmUpFonts":  8536
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  20044,
+        "processToFirstFrameMs":  2197.9191,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:11.4531626Z",
+        "processCreatedUtc":  "2026-11-13T05:44:09.2552435Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  9,
+        "timing":  {
+                       "pid":  39660,
+                       "mainToFirstRasterUs":  465497,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6124,
+                                        "warmUpFonts":  8392
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  39660,
+        "processToFirstFrameMs":  1876.1559000000002,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:13.4756538Z",
+        "processCreatedUtc":  "2026-11-13T05:44:11.5994979Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  9,
+        "timing":  {
+                       "pid":  18544,
+                       "mainToFirstRasterUs":  805309,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2019
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  18544,
+        "processToFirstFrameMs":  2213.7198000000003,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:15.7921846Z",
+        "processCreatedUtc":  "2026-11-13T05:44:13.5784648Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  10,
+        "timing":  {
+                       "pid":  35564,
+                       "mainToFirstRasterUs":  527123,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2092
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  35564,
+        "processToFirstFrameMs":  1948.2772,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:17.8810554Z",
+        "processCreatedUtc":  "2026-11-13T05:44:15.9327782Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  10,
+        "timing":  {
+                       "pid":  41464,
+                       "mainToFirstRasterUs":  491623,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6218,
+                                        "warmUpFonts":  8505
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  41464,
+        "processToFirstFrameMs":  1893.2748000000001,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:19.8783370Z",
+        "processCreatedUtc":  "2026-11-13T05:44:17.9850622Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  11,
+        "timing":  {
+                       "pid":  9132,
+                       "mainToFirstRasterUs":  821059,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6128,
+                                        "warmUpFonts":  8385
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  9132,
+        "processToFirstFrameMs":  2233.7456,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:22.2243239Z",
+        "processCreatedUtc":  "2026-11-13T05:44:19.9905783Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  11,
+        "timing":  {
+                       "pid":  20880,
+                       "mainToFirstRasterUs":  473361,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2494
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  20880,
+        "processToFirstFrameMs":  1877.0139000000001,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:24.2124655Z",
+        "processCreatedUtc":  "2026-11-13T05:44:22.3354516Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  12,
+        "timing":  {
+                       "pid":  43772,
+                       "mainToFirstRasterUs":  527767,
+                       "stagesUs":  {
+                                        "warmUpFonts":  1995
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  43772,
+        "processToFirstFrameMs":  1930.7572,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:26.2587160Z",
+        "processCreatedUtc":  "2026-11-13T05:44:24.3279588Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  12,
+        "timing":  {
+                       "pid":  34880,
+                       "mainToFirstRasterUs":  844773,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  5981,
+                                        "warmUpFonts":  8210
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  34880,
+        "processToFirstFrameMs":  2243.2921,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:28.6003366Z",
+        "processCreatedUtc":  "2026-11-13T05:44:26.3570445Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  13,
+        "timing":  {
+                       "pid":  43564,
+                       "mainToFirstRasterUs":  533086,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  5859,
+                                        "warmUpFonts":  8106
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  43564,
+        "processToFirstFrameMs":  1925.2702000000002,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:30.6244999Z",
+        "processCreatedUtc":  "2026-11-13T05:44:28.6992297Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  13,
+        "timing":  {
+                       "pid":  17556,
+                       "mainToFirstRasterUs":  793326,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2257
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  17556,
+        "processToFirstFrameMs":  2287.8617,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:33.0182409Z",
+        "processCreatedUtc":  "2026-11-13T05:44:30.7303792Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  14,
+        "timing":  {
+                       "pid":  6072,
+                       "mainToFirstRasterUs":  540271,
+                       "stagesUs":  {
+                                        "warmUpFonts":  1974
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  6072,
+        "processToFirstFrameMs":  1939.3574,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:35.0751768Z",
+        "processCreatedUtc":  "2026-11-13T05:44:33.1358194Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  14,
+        "timing":  {
+                       "pid":  35600,
+                       "mainToFirstRasterUs":  528080,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6068,
+                                        "warmUpFonts":  8349
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  35600,
+        "processToFirstFrameMs":  1919.5877,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:37.1048035Z",
+        "processCreatedUtc":  "2026-11-13T05:44:35.1852158Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  15,
+        "timing":  {
+                       "pid":  13592,
+                       "mainToFirstRasterUs":  855189,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6199,
+                                        "warmUpFonts":  8519
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  13592,
+        "processToFirstFrameMs":  2254.1832,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:39.4695939Z",
+        "processCreatedUtc":  "2026-11-13T05:44:37.2154107Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  15,
+        "timing":  {
+                       "pid":  21472,
+                       "mainToFirstRasterUs":  573649,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2077
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  21472,
+        "processToFirstFrameMs":  1976.6146,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:41.5625047Z",
+        "processCreatedUtc":  "2026-11-13T05:44:39.5858901Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  16,
+        "timing":  {
+                       "pid":  36368,
+                       "mainToFirstRasterUs":  522882,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2206
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  36368,
+        "processToFirstFrameMs":  1951.2824,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:43.6165645Z",
+        "processCreatedUtc":  "2026-11-13T05:44:41.6652821Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  16,
+        "timing":  {
+                       "pid":  38316,
+                       "mainToFirstRasterUs":  539361,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6301,
+                                        "warmUpFonts":  8628
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  38316,
+        "processToFirstFrameMs":  2058.0304,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:46.1209138Z",
+        "processCreatedUtc":  "2026-11-13T05:44:44.0628834Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  17,
+        "timing":  {
+                       "pid":  44000,
+                       "mainToFirstRasterUs":  532954,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6196,
+                                        "warmUpFonts":  8465
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  44000,
+        "processToFirstFrameMs":  1965.3700000000001,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:48.1966413Z",
+        "processCreatedUtc":  "2026-11-13T05:44:46.2312713Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  17,
+        "timing":  {
+                       "pid":  18556,
+                       "mainToFirstRasterUs":  481070,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2085
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  18556,
+        "processToFirstFrameMs":  1901.505,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:50.2556949Z",
+        "processCreatedUtc":  "2026-11-13T05:44:48.3541899Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  18,
+        "timing":  {
+                       "pid":  43680,
+                       "mainToFirstRasterUs":  589755,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2103
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  43680,
+        "processToFirstFrameMs":  2018.2797,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:52.4054694Z",
+        "processCreatedUtc":  "2026-11-13T05:44:50.3871897Z",
+        "variant":  "before"
+    },
+    {
+        "pair":  18,
+        "timing":  {
+                       "pid":  42248,
+                       "mainToFirstRasterUs":  899644,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6352,
+                                        "warmUpFonts":  8683
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  42248,
+        "processToFirstFrameMs":  2324.6119000000003,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:54.8490122Z",
+        "processCreatedUtc":  "2026-11-13T05:44:52.5244003Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  19,
+        "timing":  {
+                       "pid":  15956,
+                       "mainToFirstRasterUs":  556446,
+                       "stagesUs":  {
+                                        "fontAsset:NotoSansSC":  6302,
+                                        "warmUpFonts":  8507
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  15956,
+        "processToFirstFrameMs":  1980.23,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:56.9291458Z",
+        "processCreatedUtc":  "2026-11-13T05:44:54.9489158Z",
+        "variant":  "after"
+    },
+    {
+        "pair":  19,
+        "timing":  {
+                       "pid":  38252,
+                       "mainToFirstRasterUs":  500836,
+                       "stagesUs":  {
+                                        "warmUpFonts":  2124
+                                    },
+                       "dpr":  1.0
+                   },
+        "pid":  38252,
+        "processToFirstFrameMs":  1929.0166000000002,
+        "firstFrameWrittenUtc":  "2026-11-13T05:44:58.9718264Z",
+        "processCreatedUtc":  "2026-11-13T05:44:57.0428098Z",
+        "variant":  "before"
+    }
+]

@@ -1,0 +1,23 @@
+Resolving dependencies...
+Downloading packages...
+  cross_file 0.3.5+5 (0.4.0 available)
+  material_color_utilities 0.13.0 (0.13.1 available)
+  screen_retriever 0.2.2 (0.4.0 available)
+  test_api 0.7.12 (0.7.15 available)
+  tray_manager 0.5.3 (0.9.0 available)
+  vector_graphics 1.2.3 (1.2.7 available)
+  vector_graphics_codec 1.1.13 (1.2.0 available)
+  vector_math 2.4.3 (2.4.4 available)
+  vm_service 15.3.0 (15.4.0 available)
+  window_manager 0.5.2 (0.7.0 available)
+  xml 7.0.1 (7.1.0 available)
+Got dependencies!
+11 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+00:00 +0: loading D:/mica-third-frontend-20261111/clients/mica_flutter/integration_test/ui_refresh_followup_test.dart
+Building Windows application...                                    40.2s
+√ Built build\windows\x64\runner\Debug\mica_flutter.exe
+00:00 +0: Windows settings groups fit their choices at 100 percent
+markdown codec ready in 191 ms
+00:17 +1: (tearDownAll)
+00:17 +1: All tests passed!

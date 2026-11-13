@@ -1,0 +1,13 @@
+{
+    "cacheReset":  false,
+    "build":  "26300",
+    "pairs":  20,
+    "version":  "10.0.26300",
+    "isolatedProfiles":  true,
+    "os":  "Microsoft Windows 11 专业版",
+    "freeMemoryKB":  47464380,
+    "totalMemoryKB":  66788148,
+    "recordedUtc":  "2026-11-13T05:43:29.0394321Z",
+    "logicalProcessors":  32,
+    "cpu":  "Intel(R) Core(TM) i9-14900K"
+}

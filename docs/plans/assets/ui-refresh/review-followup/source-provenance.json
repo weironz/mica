@@ -1,0 +1,46 @@
+{
+  "beforeCommit": "97e73b81",
+  "afterBaseCommit": "9c9aeeef0c4d78ab63e0eaf2035af8001556e607",
+  "afterChangedRuntimeFiles": {
+    "clients/mica_flutter/lib/ui/segmented_choice.dart": "f4d83233b68d2b73046333c5a0c9d1e30c97bac8d6a8cc4beb4edd6d8e0f03c6"
+  },
+  "flutter": "3.47.1",
+  "rust": "1.98.0",
+  "rustSourcesAndWindowsRunnerDiff": "none",
+  "flags": [
+    "--release",
+    "--target=lib/main.dart",
+    "--dart-define=MICA_DEV_AUTOLOGIN=false",
+    "--dart-define=MICA_API_BASE_URL=http://127.0.0.1:9"
+  ],
+  "beforeTimingOverlay": {
+    "lib/main.dart": {
+      "originalSha256": "6db0ef13d9ae71c72f1acbbbd7b952bda4cbf492212586004827555f514ca81d",
+      "instrumentedSha256": "ab11be114ab66fce3682a02c8cd35888da10b213fc64f6664a2e5c831d5b9701"
+    },
+    "lib/ui/font_warmup.dart": {
+      "originalSha256": "a1fb213e48ad0ad2a633d8a33fb30b3291456eea071fff742c6410f07a69c5bd",
+      "instrumentedSha256": "6fa9f63c5acf15ecb324f1a070d931e971601260a9d5a33ffaabc88c2403d4b1"
+    }
+  },
+  "afterTimingOverlay": {
+    "lib/main.dart": {
+      "originalSha256": "b5704df6b49f5cc4afe4256ad5f680421425bbdd0a79746e0eb3a3ce26537ef5",
+      "instrumentedSha256": "8d2f193f2a1988ff2b6ad17d8a5ae406b051056cf0af80ebbf4aead2601b0d6a"
+    },
+    "lib/ui/font_warmup.dart": {
+      "originalSha256": "c35246ff72ece13fa715e60469258557af8eac818b5514262f0149b052446979",
+      "instrumentedSha256": "e13171d02beed032da0cdc7266a248e4c63d9df337696677ce075cf46cacefa7"
+    }
+  },
+  "assetCachePolicy": "Delete Flutter assemble/AOT and output assets before both builds; assert Noto excluded before and included after",
+  "temporaryTimingProbe": "Only instrumented test Release builds; production startup code unchanged",
+  "matchedTrackedRuntimeDartFiles": 255,
+  "nativeWindowDpi": 96,
+  "engineDpr": 1,
+  "nativeFlowExitCode": 0,
+  "nativeScenes": 8,
+  "nativeDiagnostics": 0,
+  "nativeOverflows": 0,
+  "ffiFingerprintCheck": "initCheckedNativeRust passed against this Windows source tree"
+}

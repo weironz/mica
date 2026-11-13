@@ -1,0 +1,1042 @@
+[
+    {
+        "sha256":  "3c668ebbec689800c1be9a0a6140d07e8414972cf7d9022dce69876bcb1827f1",
+        "file":  "lib/cjk_fonts.dart"
+    },
+    {
+        "sha256":  "facf9644fef6e0efe52dac84b0a691be868b395a12699285581c61d87f580145",
+        "file":  "lib/diagnostics.dart"
+    },
+    {
+        "sha256":  "0574506dfb51a54f4515043d9331efbaa0b2e06c9fc7a9aeca24baf5f542c608",
+        "file":  "lib/diagnostics_stub.dart"
+    },
+    {
+        "sha256":  "897c59b725fe89f5ab380192354b81db05bebb2a7c44c86488326cacbe4b58bd",
+        "file":  "lib/diagnostics_web.dart"
+    },
+    {
+        "sha256":  "8a50dcad7aa901d75195d89e52685deb42dbeefa0ffee5039c6e0f4b156feee3",
+        "file":  "lib/doc_tab.dart"
+    },
+    {
+        "sha256":  "4b6b59ae201ae1e2721e67a037982963dafa75b15165c1cdb2fc0835d47a06bc",
+        "file":  "lib/doc_tab_persistence.dart"
+    },
+    {
+        "sha256":  "b5704df6b49f5cc4afe4256ad5f680421425bbdd0a79746e0eb3a3ce26537ef5",
+        "file":  "lib/main.dart"
+    },
+    {
+        "sha256":  "62565831d5214ff12b94175db5b1e7ec367d6b211a094b123a7125ed2a87742d",
+        "file":  "lib/main_editor_history.dart"
+    },
+    {
+        "sha256":  "6ffaa7f34d4b42fed60ef4b88ec427078c20721cff6599e4eb8cd23902763080",
+        "file":  "lib/main_panels.dart"
+    },
+    {
+        "sha256":  "696c1f0c9c179b19bb296dcfe6f28dd8ac1f4cd91def3317787a5aa3c5b21c9c",
+        "file":  "lib/main_shell.dart"
+    },
+    {
+        "sha256":  "01a41bee0a3545d437eb55770e99d388bcb3014df5f23949e4382037468f32b6",
+        "file":  "lib/main_tree_helpers.dart"
+    },
+    {
+        "sha256":  "9ac28e02485767e07dc8b0e8f947e866376353d9ea9d8d691da0b931fd954de8",
+        "file":  "lib/main_workspace_editor_pane.dart"
+    },
+    {
+        "sha256":  "bcf7eb6e7a8b8fb1c1db70bab397a13aa24b85e67ef6b930bbed765a72d0d8cb",
+        "file":  "lib/main_workspace_tree_nav.dart"
+    },
+    {
+        "sha256":  "ebcc7b0ff69d0220bc424ae4119e786e75699d3559274cfe0ea4d9039313ef47",
+        "file":  "lib/main_workspace_view.dart"
+    },
+    {
+        "sha256":  "45fca56b81e68de639f5ff2513526cb6f8957ae3c361936a52757cc6e6798485",
+        "file":  "lib/prefs.dart"
+    },
+    {
+        "sha256":  "0025fa2c144b9e66bff5e667e4799f3747fff8e43f178910c16655732bd054ed",
+        "file":  "lib/prefs_stub.dart"
+    },
+    {
+        "sha256":  "d6e97aef2cc70a460e5eb0695b7da5ac64c34e5dde3f2d4333ebecabee75960b",
+        "file":  "lib/prefs_web.dart"
+    },
+    {
+        "sha256":  "48266414073ef89c469de61ec011271ceb48d51b0814eb0778853d484795eb3d",
+        "file":  "lib/secret_store_stub.dart"
+    },
+    {
+        "sha256":  "48e80d5b1cbaf92a6d68bfb5c8130c87f8d7b7f05699afc293fa9da53b9be659",
+        "file":  "lib/server_list.dart"
+    },
+    {
+        "sha256":  "c9b546bee1b95dbef6a7784303f8ce1af89184cb39ed3c7e9f069f15e89b8987",
+        "file":  "lib/server_registry.dart"
+    },
+    {
+        "sha256":  "b053093de419fc52573dc4edf125465b14c22ceec8e8b50db5672f68988b4243",
+        "file":  "lib/swallowed.dart"
+    },
+    {
+        "sha256":  "40c19eef98c95379d4639b2d3bd17b701b9d11fff8a5e5af4d702e240688b833",
+        "file":  "lib/theme_controller.dart"
+    },
+    {
+        "sha256":  "c5fa6fb23cdb8d76c206428304e2a45297de83a12fa775cab62b370688dd8572",
+        "file":  "lib/updater.dart"
+    },
+    {
+        "sha256":  "f0d8885f639d10adbba5f31cd906a479955efedc2e92faa95882816a43df7f9c",
+        "file":  "lib/updater_common.dart"
+    },
+    {
+        "sha256":  "698951173a11ac5a63bffddd0de3acb7b4e6aeb6d54fec3074b17d21d6ab5761",
+        "file":  "lib/updater_controller.dart"
+    },
+    {
+        "sha256":  "8146d0d83bf7365f5b773129455fa073e020b032fa2994fa760ba05dcc3e1bfb",
+        "file":  "lib/updater_desktop.dart"
+    },
+    {
+        "sha256":  "d1e593bc9e624ee1fa782b38f12872e6cadcbbb3ea53ad26336616ddb4409cfd",
+        "file":  "lib/updater_web.dart"
+    },
+    {
+        "sha256":  "1c19d5ed9da3d98e29375d8080df7260635e2675ac4c1acc2572212b3136b659",
+        "file":  "lib/window_setup.dart"
+    },
+    {
+        "sha256":  "4c8cb88c3f400597881764bf4f07f2d763250b6aef63bfcc333138380f3da1d0",
+        "file":  "lib/window_setup_desktop.dart"
+    },
+    {
+        "sha256":  "d3fb531d86bb12f7b9d7f28df65dbd8962ceea065dd1125ca141b2ac99ea5f59",
+        "file":  "lib/window_setup_web.dart"
+    },
+    {
+        "sha256":  "3a34a3124f124fd28e7cf568fb2915d7253d0916a2eceb4964c24c3054173fdf",
+        "file":  "lib/window_snapped_win.dart"
+    },
+    {
+        "sha256":  "a2c93840e318d8d31061994cf913605a18f9fae0f6fc317ca4e688b23edf8988",
+        "file":  "lib/api/client.dart"
+    },
+    {
+        "sha256":  "d5c6bfc61da40ee42698304738221bf79dc223a8b3d6c03c781df2c0494305a9",
+        "file":  "lib/api/doc_socket_uri.dart"
+    },
+    {
+        "sha256":  "48dffbe5bfe42756419ea21bcc8dbc2cbc9b9106f462ff9f30e0b7462f951e2b",
+        "file":  "lib/api/models.dart"
+    },
+    {
+        "sha256":  "00ff8a90e68d10282c1a61e80ec3be6cdde7774ef7bd03799d74551496526f75",
+        "file":  "lib/api/profile_watch.dart"
+    },
+    {
+        "sha256":  "c92913905eb7ea06b57edf8dcc6a1f9e32b7ad2ad9c4bdba15a2fa2b11aa6cef",
+        "file":  "lib/api/session_refresher.dart"
+    },
+    {
+        "sha256":  "68638a8cdd701263d2e8621c4ec006988728c2f6aacaf467374dfdbf525a6720",
+        "file":  "lib/api/tree_fetch.dart"
+    },
+    {
+        "sha256":  "a7b85ce62ce9a1606e1eb9ce102978b69fa7d24a615c68771b39eff1520bbcc9",
+        "file":  "lib/api/tree_request_seq.dart"
+    },
+    {
+        "sha256":  "ac5cb997a2d0983b6cd76fd2682656c100b1b6beb8a828211c730829edea8b0a",
+        "file":  "lib/api/views_events.dart"
+    },
+    {
+        "sha256":  "75a033c1b08f6a917159bd7b6f13e559e8c87c5f97cd22134f0b19e9eea20931",
+        "file":  "lib/api/ws_connect.dart"
+    },
+    {
+        "sha256":  "894f110d1414f4f2e5a5f12f759ac7964680cfd2d4558ce250b5faa0294c54df",
+        "file":  "lib/api/ws_connect_stub.dart"
+    },
+    {
+        "sha256":  "2ee31b68a5949aa120bc834fb3e12979a9a63a38f212c46bccf84462cfccc56c",
+        "file":  "lib/api/ws_connect_web.dart"
+    },
+    {
+        "sha256":  "a469a32d545338b947dd39e0041982580d9d04a8753be30c42ab9ddf979745f2",
+        "file":  "lib/auth/auth_controller.dart"
+    },
+    {
+        "sha256":  "9c1fc3ea9bda1f8d64a4ebdbc8c32b8c1c14ef8947a4e42cc1340ac3fc4f8f0c",
+        "file":  "lib/cloud/block_op_mirror.dart"
+    },
+    {
+        "sha256":  "9fccf29980a395bce72768edb0738321fcfb72837037bc1101088be74289adea",
+        "file":  "lib/cloud/body_ownership.dart"
+    },
+    {
+        "sha256":  "4c6347b73223dbcd84a9fe42666981437dc6b7b90481db651c4af0761ab3707c",
+        "file":  "lib/cloud/cloud_doc_store.dart"
+    },
+    {
+        "sha256":  "ee1caa9052da30eecd5500ed51bb5a2f07f8e449f0acd62b4086a6b6eb660b84",
+        "file":  "lib/cloud/cloud_sync.dart"
+    },
+    {
+        "sha256":  "bec65d7377d0e52cc86bd1e187094de5e5bb324571f6aa48fde759f6f71aa1fa",
+        "file":  "lib/cloud/cloud_sync_session.dart"
+    },
+    {
+        "sha256":  "b4951bff082db72f22cd1f0d11517fb39fbaa785c26c5841165c696fbdec04cf",
+        "file":  "lib/cloud/doc_store_platform.dart"
+    },
+    {
+        "sha256":  "acd530507a8af09f4d0a55028384ba8ed90ad52bd5b170addccb1384ed09287e",
+        "file":  "lib/cloud/doc_store_platform_io.dart"
+    },
+    {
+        "sha256":  "27dace94911bcf8cf465f885c209445555f7b9ea4dd162b68c1ce70b8a2da79f",
+        "file":  "lib/cloud/doc_store_platform_web.dart"
+    },
+    {
+        "sha256":  "eee415fc9edcf2e4e6b5d0c76e08e40a1f742ebbf9716a65847335fc5d98d660",
+        "file":  "lib/cloud/pending_uploads.dart"
+    },
+    {
+        "sha256":  "cd5e8b31cb03434c96ddcc1cbc86fa2eb81517d29bb1efd9ca70fd5238b2c3c8",
+        "file":  "lib/cloud/store_cloud_doc_store.dart"
+    },
+    {
+        "sha256":  "bebae66385ed1ab124b298f2bb48e15ee3cf0fa076ed68e0601678d8f8619eba",
+        "file":  "lib/cloud/sync_doc_replica.dart"
+    },
+    {
+        "sha256":  "6b32447cb7f775497f0268c16cf1eb34f35bf8feeafe92fc43f4dc54659231e3",
+        "file":  "lib/cloud/sync_replica_io.dart"
+    },
+    {
+        "sha256":  "75f76c6b652d741be5b79082b4ee826c1fb41bf5c240afa71ffae26dc51b8383",
+        "file":  "lib/cloud/sync_replica_web.dart"
+    },
+    {
+        "sha256":  "40ac7139a8445667ab7b5b960283bf02625227ef2b98f76a70091db9326b9cde",
+        "file":  "lib/cloud/sync_status.dart"
+    },
+    {
+        "sha256":  "c95262fcb6b9cca53f6ad404f2a3f65e3438bbb5acfa2ad63ade2dcc7dc51b1b",
+        "file":  "lib/cloud/view_order.dart"
+    },
+    {
+        "sha256":  "f8bba8dda94753c764491dd868f324c2fdf2b60c8b97fded9bfca4e867e1befa",
+        "file":  "lib/cloud/web_idb_doc_store.dart"
+    },
+    {
+        "sha256":  "8c4fb910f39eac3bb277904d07c5977d372f5b858ca5974349f54e7c23d91759",
+        "file":  "lib/cloud/workspace_migration.dart"
+    },
+    {
+        "sha256":  "ba4bd65759a8983f7e518fd25d48a176441338f92cc9d90fac3c261e38e1f246",
+        "file":  "lib/editor/ai_edits.dart"
+    },
+    {
+        "sha256":  "dce3c261a34a3abd2dc8c7cb814a7a2e4b7362b48535a6a170cd5a243587370a",
+        "file":  "lib/editor/block_renderers.dart"
+    },
+    {
+        "sha256":  "b970278a2814b8c8cfce0895094f96de894d7318c2e10dcd92a89d54b76c7ed6",
+        "file":  "lib/editor/canvas_follower.dart"
+    },
+    {
+        "sha256":  "71824be7f3be308ab2db7b7469b0bf1e131e2d93e2a9a20b205bdfdbaaf1726f",
+        "file":  "lib/editor/cell_edit_controller.dart"
+    },
+    {
+        "sha256":  "ec018185b25d1e67a5c3746172d51502df4ed0cf49451ee041a708bde715e47e",
+        "file":  "lib/editor/cf_html.dart"
+    },
+    {
+        "sha256":  "45adbd14286c864514c7634a9a3630dcddc25a9725d8d24587b34893b0a27128",
+        "file":  "lib/editor/chrome_layout.dart"
+    },
+    {
+        "sha256":  "8eb4e04ceec6991ab4239e5ebe1310338a451e5ba2b6927ed73c21d75a4d3017",
+        "file":  "lib/editor/clipboard_copy.dart"
+    },
+    {
+        "sha256":  "9aa32bc348650d1b74c28261c301c059283fd55125cd9eedca9e6ce84ef10f0f",
+        "file":  "lib/editor/clipboard_copy_stub.dart"
+    },
+    {
+        "sha256":  "c805608084e031390ebc3b9709691fb1ebc5fbfa6a3477f47ec03921bb4c9b4e",
+        "file":  "lib/editor/clipboard_copy_web.dart"
+    },
+    {
+        "sha256":  "3d8e008bad47835327a68bcf3498ac4bbfe869f84570c1c0def3dcacb89000be",
+        "file":  "lib/editor/code_title_dialog.dart"
+    },
+    {
+        "sha256":  "fae0c181883a7a5c34307dce9563edeef116637ac343525f3c2eda9469b55ce0",
+        "file":  "lib/editor/controller.dart"
+    },
+    {
+        "sha256":  "2f9dcbb601fb84aeb04a00c9c5b08256ba4f5b83b4b9e79d074fdcd480f5e5c5",
+        "file":  "lib/editor/controller_commits.dart"
+    },
+    {
+        "sha256":  "d58b913de1b1fa5614651b977992dd0f9be4cf009845d115bee228af793a9649",
+        "file":  "lib/editor/controller_history.dart"
+    },
+    {
+        "sha256":  "d1a6da369260dec6c9d466d64223b86dbbc094882d9a09919492c950d115b897",
+        "file":  "lib/editor/details_html.dart"
+    },
+    {
+        "sha256":  "b8ecb6e6d32e9dc3209196a5131a16e36383d248682aabd89c903a6fe0de167e",
+        "file":  "lib/editor/editor.dart"
+    },
+    {
+        "sha256":  "41c81dc9c06c5a2a02b01a9e8872177a2dba7a3707e9a7df0da40f36eb432710",
+        "file":  "lib/editor/editor_ai.dart"
+    },
+    {
+        "sha256":  "796d8faced9932c29e30981f56af41a760c7b57e8661b6fc8cf5d13dcc0c1bde",
+        "file":  "lib/editor/editor_dialogs.dart"
+    },
+    {
+        "sha256":  "0cef688b4a583426305697a5949b91eab3501ad1ece4cdf290c08f05fb6128ad",
+        "file":  "lib/editor/editor_history_ui.dart"
+    },
+    {
+        "sha256":  "ce770719cb6f8953160381a062ad306de5503d50db211696da391c23391ae61a",
+        "file":  "lib/editor/editor_hooks.dart"
+    },
+    {
+        "sha256":  "23fed901be5778055a88d158a7564f25908c8e0320e9a20945f89225d7651821",
+        "file":  "lib/editor/editor_resources.dart"
+    },
+    {
+        "sha256":  "4fd6838f5189e4a3f77b1694ed83fafa41e92eb7782e65e2cc31ae1a256aa69e",
+        "file":  "lib/editor/file_names.dart"
+    },
+    {
+        "sha256":  "089d4afdc6d94e5707ba565d722c2efdc1841096adecfdf65d690573a0b408ba",
+        "file":  "lib/editor/highlight.dart"
+    },
+    {
+        "sha256":  "9058b097aaaa0f959c8b11842887d6732ea274e11be347c62a983f47aeb03ab8",
+        "file":  "lib/editor/html_to_markdown.dart"
+    },
+    {
+        "sha256":  "102fb44f3c317a05d8b1e6715b176057089a50375962ec5b2fa52d5173941f2d",
+        "file":  "lib/editor/image_actions.dart"
+    },
+    {
+        "sha256":  "6cdc1427fad5349387d027437db19467628d6e1797e1d1ecc6ed401bf3f3e3d3",
+        "file":  "lib/editor/image_actions_stub.dart"
+    },
+    {
+        "sha256":  "2ec48fda06668092a648044e3e8198846d24348ad23dc22c4b0a95e9436a1f0d",
+        "file":  "lib/editor/image_actions_web.dart"
+    },
+    {
+        "sha256":  "83be11df1dcccdf0f588de12a1366ff475a97fd97c0b5fb0eebae41bb916e73a",
+        "file":  "lib/editor/image_animator.dart"
+    },
+    {
+        "sha256":  "f4c6663d8b1c720d4b9ee5871a83d6016ccd3c11543c5d61cbf64027beddfabf",
+        "file":  "lib/editor/image_decode.dart"
+    },
+    {
+        "sha256":  "5049b26c8200aca3d33b0876536b3e93a94010a19e1aea2146c097a77e78ea5e",
+        "file":  "lib/editor/ime_geometry.dart"
+    },
+    {
+        "sha256":  "861ca93b59bd8c1ae4c9bbb2103ad847de160717613a17ea5def83f91f1b0c00",
+        "file":  "lib/editor/inline_ai_dialog.dart"
+    },
+    {
+        "sha256":  "ad81e0f038e25209b4285dcf432680367076a8ef7b2a0587ede65523e0051eb0",
+        "file":  "lib/editor/inline_atoms.dart"
+    },
+    {
+        "sha256":  "ac9e6f58fa481c69f5cbbcacbdaa5ccf4a0eed4e0de29e09ded4d10645a44ba4",
+        "file":  "lib/editor/language_picker.dart"
+    },
+    {
+        "sha256":  "63ccc756ae257c137b3c8996aacf2193210ee0b4aaf14e77143ecb2a01cc9fff",
+        "file":  "lib/editor/layout_caret.dart"
+    },
+    {
+        "sha256":  "784e2d29571d3d8ccfc818503d7ce05135c1afc65e8a7fb57517c666eaa181a7",
+        "file":  "lib/editor/marks.dart"
+    },
+    {
+        "sha256":  "10d1ba2c8f6a020fbb56ce4d00e309e12f385b096fa9768d5a6ecdce49e0df06",
+        "file":  "lib/editor/mermaid_preview.dart"
+    },
+    {
+        "sha256":  "e48045af8979b2cac25814fd43a53cbdb2353ff0bf9d2ed1357edf4bb3add2c6",
+        "file":  "lib/editor/mermaid_svg_inline.dart"
+    },
+    {
+        "sha256":  "b45e0963bf3fe7918f82f472ae102e2cc7104f7af8ab4c276283ef5bb325b827",
+        "file":  "lib/editor/mermaid_theme.dart"
+    },
+    {
+        "sha256":  "23f26db46968e9b7800cec6559e392d5b80c15ad6201193e6d3bec525263e313",
+        "file":  "lib/editor/model.dart"
+    },
+    {
+        "sha256":  "f4ee03f207d62d2ab6832e1d459a3a5de9375e9a5b98a2c938a54ea075f68c9b",
+        "file":  "lib/editor/open_url.dart"
+    },
+    {
+        "sha256":  "ec7506222f795c99cff3e4a0b6a868296f6de4d9ed2d47103229bb67fcfe66ef",
+        "file":  "lib/editor/open_url_stub.dart"
+    },
+    {
+        "sha256":  "4a774d048570bb1da1c468569c203f8fbc2f761ab6b9ade29645558675a888e4",
+        "file":  "lib/editor/open_url_web.dart"
+    },
+    {
+        "sha256":  "84e023982647d0d8047dba8a02c8314d5969991636c26acda78db6fe2e0c437f",
+        "file":  "lib/editor/operation_history.dart"
+    },
+    {
+        "sha256":  "88a86fccacf805a3d6b1e7ad39d54f5d9efb5ae03a86f730ca0649fbb9dd5607",
+        "file":  "lib/editor/paste_repair.dart"
+    },
+    {
+        "sha256":  "ffee7b7629760961e5b5312d9422bcb7e56a4542e47d6d4fbf8ade5684035409",
+        "file":  "lib/editor/pick_file.dart"
+    },
+    {
+        "sha256":  "5255fe6a82418f78c3b640b3d8351a0dba59f410cbc02ce8f64e627321acc371",
+        "file":  "lib/editor/pick_file_stub.dart"
+    },
+    {
+        "sha256":  "4e4bb6191bb65c5bd7410b2f145e1c02c704503b5b39a024e62ef4abe5ecb0cc",
+        "file":  "lib/editor/pick_file_web.dart"
+    },
+    {
+        "sha256":  "a982e4acaa253ae2187479742683bb813d7083bf2e8bd3fe82e3c44574ada2c2",
+        "file":  "lib/editor/pick_image.dart"
+    },
+    {
+        "sha256":  "723bc6076e1205f3c75c202c7e14a6518a8d5cf2f4d0cc7b1a7948c2c4d0be52",
+        "file":  "lib/editor/pick_image_stub.dart"
+    },
+    {
+        "sha256":  "f41b26293e79cfa9891f67b5950dea38a59a0f26df63bd4a104bfa89ac286cd4",
+        "file":  "lib/editor/pick_image_web.dart"
+    },
+    {
+        "sha256":  "300975d45b08346337305a7859914c02ca194b411404a3b5ba2b515325e742a4",
+        "file":  "lib/editor/preview_engine.dart"
+    },
+    {
+        "sha256":  "f35925f48995efe7f29700778eb3197e9acbc2f10b5203fe88fad6923c6466d5",
+        "file":  "lib/editor/preview_engine_io.dart"
+    },
+    {
+        "sha256":  "f57f525bc9d211e6d91cbf322833b9e906f13cd0bf7703cff8af230d13c5852f",
+        "file":  "lib/editor/preview_engine_web.dart"
+    },
+    {
+        "sha256":  "eed980b503a1f74abb0a61ca99d2eba448daee79201df65b9352d29ba74476e9",
+        "file":  "lib/editor/preview_pipeline.dart"
+    },
+    {
+        "sha256":  "503c14fb77681d6871487de31eac6464af112ce7d9992302fc13ac8f60260f65",
+        "file":  "lib/editor/preview_raster.dart"
+    },
+    {
+        "sha256":  "e3ad05b79652fff5b26d848b8ddaf0e1662134a8e5e7e13ab5985c884bb5ade3",
+        "file":  "lib/editor/properties.dart"
+    },
+    {
+        "sha256":  "ff3e3c4b0c6cda80927d5f929f7711f77f0eb0a8aaad978f7d782da3fbd7ac8f",
+        "file":  "lib/editor/property_panel.dart"
+    },
+    {
+        "sha256":  "4dc40c9f9d80c8a3334107ebea24722a6a8907dba956c7ba638866a0d043f362",
+        "file":  "lib/editor/prose_input.dart"
+    },
+    {
+        "sha256":  "a01ef11dd5014e7fd62c4730f2118edf571a11541e22b544f108dc88e76c5dda",
+        "file":  "lib/editor/render.dart"
+    },
+    {
+        "sha256":  "8f89a59bdb9ab2a1effd28a355b574ad34004747954414e9cc0e792dd60829b0",
+        "file":  "lib/editor/render_resources.dart"
+    },
+    {
+        "sha256":  "960ea5d8f8289c8ef074c5484619d291bafd17a3a2ab19614f21c86fcde2d8cd",
+        "file":  "lib/editor/resource_demand.dart"
+    },
+    {
+        "sha256":  "2e250b6c79499ad4fd9fe962ca89fdc81fdeb0177c6e9a48c7b9085040b0abdd",
+        "file":  "lib/editor/rich_paste.dart"
+    },
+    {
+        "sha256":  "c8aadf1dd27e6b3ff01c9a7af4a411dc645b4975af0ae7a586064d08c4e1383d",
+        "file":  "lib/editor/rich_paste_stub.dart"
+    },
+    {
+        "sha256":  "f5367bf3c488c369f1176452eb67d8f12ddd281a1d5f721dac525aa70665a3a9",
+        "file":  "lib/editor/rich_paste_web.dart"
+    },
+    {
+        "sha256":  "ffcbc8a9448b6336c4171aa2be8d7627a91e397b4d2a37ca191da1079bd8f5da",
+        "file":  "lib/editor/selection_marks.dart"
+    },
+    {
+        "sha256":  "79c037298f5d3613d266d24ba7288c334cef76c8dc6244222291288a829ec661",
+        "file":  "lib/editor/selection_reconcile.dart"
+    },
+    {
+        "sha256":  "054eede1ac0730819e6866cafd161384d3a91d7083b73ce1ddbfc9493c124a26",
+        "file":  "lib/editor/svg_raster.dart"
+    },
+    {
+        "sha256":  "3b9a985c21ef51ff5be60fc223e4d86e72628b0867e756b9f8b943943247a298",
+        "file":  "lib/editor/table.dart"
+    },
+    {
+        "sha256":  "f4c7146016ae64635a52d74506e24dbd93b22ca42ca3bbaf7df0e8710f7e6841",
+        "file":  "lib/editor/table_copy.dart"
+    },
+    {
+        "sha256":  "e35c6a3683215b790776b9b580523994d4b760e03e8781da0199f9d439d6ccc6",
+        "file":  "lib/editor/text_common.dart"
+    },
+    {
+        "sha256":  "8ab57eac28b5f9e6c6d404b864b7d20e327dcf26582d68d6a937be7898e35e49",
+        "file":  "lib/editor/touch_selection.dart"
+    },
+    {
+        "sha256":  "798fdb2946daf8abe493440d4ca5ff54d9aa7d1f06570c29bd7c15b71d6909bd",
+        "file":  "lib/editor/version_diff.dart"
+    },
+    {
+        "sha256":  "b98ca227a8445f7fbbf02c1a959acfed54feadbede0d7bd0cf657bba7a9865e8",
+        "file":  "lib/editor/word_count.dart"
+    },
+    {
+        "sha256":  "02b20cb5be0bd71752314833a10d6693daea1cc618cfc6b08694629eb7f46dd8",
+        "file":  "lib/import/import_controller.dart"
+    },
+    {
+        "sha256":  "4d782764f4157bcdf1ec554d765f6edcd73013d012cac13936469de50b90d181",
+        "file":  "lib/import/import_title.dart"
+    },
+    {
+        "sha256":  "2e7688a768b73b4ea0040fcb7fd02df50bb2b5e83e0c7a24a669634c96dba275",
+        "file":  "lib/import/local_zip_import.dart"
+    },
+    {
+        "sha256":  "d45913147ee33d6fdc310e18588eaa83e365f340b2d233905717043cc39eb9a1",
+        "file":  "lib/l10n/app_localizations.dart"
+    },
+    {
+        "sha256":  "c71cccad94d1044ff92fb6bbcb617fac94aa896447f93852dd24ece245586605",
+        "file":  "lib/l10n/app_localizations_en.dart"
+    },
+    {
+        "sha256":  "533d56608e48e948c5f147e71a963f920e05e113275b06d641c00178274859d9",
+        "file":  "lib/l10n/app_localizations_zh.dart"
+    },
+    {
+        "sha256":  "19cf730bb1793ae7581003a233065bf6d0dbd17c4a1cd4c69b4018815b713cf8",
+        "file":  "lib/l10n/locale_controller.dart"
+    },
+    {
+        "sha256":  "7334a7c01fe9d8ecccf28fe874293edcf34053ea0e127be4b006b90d4ff74cc9",
+        "file":  "lib/local/cache_stats.dart"
+    },
+    {
+        "sha256":  "d3fd162402cbe929b2ddeeb2befe49f15cfb51325be69b39d27b0a928858e6ed",
+        "file":  "lib/local/doc_ops.dart"
+    },
+    {
+        "sha256":  "4403b2b7fd205c4adb8aa5dea5cb5393ebb7fbd892b4dcd2e67cb4adb0494544",
+        "file":  "lib/local/local_doc.dart"
+    },
+    {
+        "sha256":  "22e6e18c64d5db52ff30569604a0c21768776f0689ee95cd1284dc6dac057edc",
+        "file":  "lib/local/local_offline.dart"
+    },
+    {
+        "sha256":  "6f16266ce21fd73de9efe355d148cc56f31a402f55bf7e17e56aadd303ff4aa7",
+        "file":  "lib/local/local_offline_api.dart"
+    },
+    {
+        "sha256":  "35a6d993a674c2c1244c6d6624854ef0e64b2d430b0cdcec21131311ce70437d",
+        "file":  "lib/local/local_offline_factory.dart"
+    },
+    {
+        "sha256":  "f1a13e31936efed10024752f1f2efaa1ff01bdba81de671592497ff54d79576c",
+        "file":  "lib/local/local_offline_io.dart"
+    },
+    {
+        "sha256":  "3e7ab606793dd326f7d7dc564baf7d656862187f7b72b2adf7f570738c95c8a8",
+        "file":  "lib/local/local_offline_web.dart"
+    },
+    {
+        "sha256":  "b396487f764fb3d577b8a49e81a381089b28c374fdea6c48acdc1090daa6ceeb",
+        "file":  "lib/local/native_rust.dart"
+    },
+    {
+        "sha256":  "b92119bcef73148b3d9ceace3861d64c8f3b83be1255a8103c07a27a99a208ce",
+        "file":  "lib/markdown/mark.dart"
+    },
+    {
+        "sha256":  "8c2d2456ce05ec901f80fa93895e5af45e83f711bd1e705102881df3a8a7667e",
+        "file":  "lib/markdown/markdown_codec.dart"
+    },
+    {
+        "sha256":  "9597f55982143cba7a587c9bcc8de4537cd173d420aa1f7aebadec832ea909f4",
+        "file":  "lib/markdown/markdown_codec_io.dart"
+    },
+    {
+        "sha256":  "2cbd1a4cfd9493dd7afb7baf5effa8b0ea8a9a9aff0a0b74635648c6164195db",
+        "file":  "lib/markdown/markdown_codec_web.dart"
+    },
+    {
+        "sha256":  "f1ea4cbecdc5aabdd8d75df7f1085c33d2bceb19f9c945ba7702f46c8adbc518",
+        "file":  "lib/markdown/markdown_wire.dart"
+    },
+    {
+        "sha256":  "fbec4eb5a9d4e8a40d4fc9c6965f89d2dc1f4811ed1154eb6a224398597e2957",
+        "file":  "lib/perf/switch_trace.dart"
+    },
+    {
+        "sha256":  "c690b46545614302d034661b6936c863bc137094a646f973b1a566c52e1865e3",
+        "file":  "lib/session/bootstrap_config.dart"
+    },
+    {
+        "sha256":  "85b939041b8a8d1e3ca236b854698b2c4291bcbba6df09bcdc9d469c84eb05aa",
+        "file":  "lib/session/import_notification_actions.dart"
+    },
+    {
+        "sha256":  "fd33853dc045415da394682a3d968679ce2e46c2fc88edcf5421cb5a94611af9",
+        "file":  "lib/session/request_owner.dart"
+    },
+    {
+        "sha256":  "eaf0e9161d08b097e78825c73c63d9b9e46ac84f3011f9ebda4f72647a629f85",
+        "file":  "lib/session/session_controller.dart"
+    },
+    {
+        "sha256":  "be1d2bd56c0e5b843d2338e8eb16970e012b78796abc490b3ba8e6f831f1ca99",
+        "file":  "lib/session/shell_preferences_controller.dart"
+    },
+    {
+        "sha256":  "52a38cfe55b61931df8659b75582a6d4b31096755a124f6d466c494029b86fb1",
+        "file":  "lib/src/rust/frb_generated.dart"
+    },
+    {
+        "sha256":  "dce40686d9dabfa998b2eb50387ef2bf3c273ebb6a9979f503ae4978378d803b",
+        "file":  "lib/src/rust/frb_generated.io.dart"
+    },
+    {
+        "sha256":  "fd4cd44614ccc1b6bf4d0196a9d07ad760906ae240679501cbd6aba571097b16",
+        "file":  "lib/src/rust/frb_generated.web.dart"
+    },
+    {
+        "sha256":  "33bd996cb4996047fce82fa938bfc9199e6ddc15e801e436efcb9bec82d6094f",
+        "file":  "lib/src/rust/api/document.dart"
+    },
+    {
+        "sha256":  "94d214a38c29054f3881362b9446cae9b2e77aaf35b9560fd0e2e1771ff7fe6a",
+        "file":  "lib/src/rust/api/markdown.dart"
+    },
+    {
+        "sha256":  "8c224c6e3cd3ab4da0b59121c45dc7f7afc67f6386963be855d108882f5a64b7",
+        "file":  "lib/src/rust/api/pdf.dart"
+    },
+    {
+        "sha256":  "71067c187691dec919311fc6e3c98a3ed808c3208efc1d8b01ab2a30fcd30961",
+        "file":  "lib/src/rust/api/render.dart"
+    },
+    {
+        "sha256":  "125ca71ef533d8174a272ede25fc0b5e2945fb01a31531c9c419aec9935f6883",
+        "file":  "lib/src/rust/api/simple.dart"
+    },
+    {
+        "sha256":  "11c32a2404a6b02a5087cd323a20b5fcf7aeed85e51f776f33046a1187387cec",
+        "file":  "lib/src/rust/api/store.dart"
+    },
+    {
+        "sha256":  "92652e633cb21325be367c56d0633a84414513d2c4a8c65b935981f038e65674",
+        "file":  "lib/src/rust/api/zip.dart"
+    },
+    {
+        "sha256":  "8957c1216da8cd48b837960813016fd0db591b3fc2806e34abe559ee17f9006a",
+        "file":  "lib/src/rust/api/pdf/win.dart"
+    },
+    {
+        "sha256":  "6953d0132b423a8f485aaa000f98b28f305f777cbd62d0a2c98cac8377030e7c",
+        "file":  "lib/sync/pending_doc_update.dart"
+    },
+    {
+        "sha256":  "3f3faed55dea91fab64fe6ff4dc1c1a5b67ff6403f2cec4c11eae542c363b913",
+        "file":  "lib/sync/sync_reconcile_controller.dart"
+    },
+    {
+        "sha256":  "54660144c436446a6480c7605ce436d28a411de770838eee8924755d9fc8782c",
+        "file":  "lib/ui/ai_dialog.dart"
+    },
+    {
+        "sha256":  "ee657993155cf51e0ffd9e39dcad42fda2fe477d377c9178a1102cc308cb94ac",
+        "file":  "lib/ui/ai_prompts.dart"
+    },
+    {
+        "sha256":  "f8bd180640f4c025807e8d3bf444d0769b656538fb4fe2c4368a23d0e56dc6a3",
+        "file":  "lib/ui/api_error_message.dart"
+    },
+    {
+        "sha256":  "3d777d132746ce0ec169fb4a27c00876d66e432db38dc37ecf2650b30aa46541",
+        "file":  "lib/ui/appearance_preview.dart"
+    },
+    {
+        "sha256":  "a204410bc102a1001b02c90d09f5f3b7734957dfdb14109d103b9e8e9d76c14d",
+        "file":  "lib/ui/auth_form.dart"
+    },
+    {
+        "sha256":  "a5c631e812c351c7e2e5082e7680f0535352eb82ee51e1643fde5b73a3d4261c",
+        "file":  "lib/ui/autoscroll.dart"
+    },
+    {
+        "sha256":  "dba031999ce5e77ed3e4f65e95ab0b371ed273208d5a4c0a7c6672aeb6221bd1",
+        "file":  "lib/ui/avatar_url.dart"
+    },
+    {
+        "sha256":  "8009ead272d0c6d5da9b8662f3fb8c61c036f984988f47c37829958306dbbfdc",
+        "file":  "lib/ui/comment_panel.dart"
+    },
+    {
+        "sha256":  "d35b3f614b2afed61863e4163722678b5c3b9f30f2e5d09443664bd1ef9a33bf",
+        "file":  "lib/ui/copy_button.dart"
+    },
+    {
+        "sha256":  "7eea84e6497f93e4758f69bc25c601b48fdb276d3d06053b83cf2e6af6b31ad3",
+        "file":  "lib/ui/deferred_load.dart"
+    },
+    {
+        "sha256":  "1751642d9f066ac6cb1816658e25ae5ae2c3ebc532fa3bb19f97fd14819ebd58",
+        "file":  "lib/ui/destructive_confirm.dart"
+    },
+    {
+        "sha256":  "1edbb9ca0fc4c8721572e66b5b0a744be2ca298eedf850babdfcbfeb72c7714e",
+        "file":  "lib/ui/dialogs_settings_account.dart"
+    },
+    {
+        "sha256":  "3c3353494a54015f69674e70567722a316f4cfdfc5e9cf65a94307e8b1a4307d",
+        "file":  "lib/ui/dialogs_settings_ai.dart"
+    },
+    {
+        "sha256":  "8ba08a92e7ec75f144a343fac10e65a4d7fcc321c9045eefd06b3b723b230880",
+        "file":  "lib/ui/dialogs_settings_appearance.dart"
+    },
+    {
+        "sha256":  "bbbcd6f2a619332b9023e5583ec387effe299b5d6a246c607db59c4de3623f86",
+        "file":  "lib/ui/dialogs_settings_data.dart"
+    },
+    {
+        "sha256":  "cafd18d4ae529e01399b6765a3f22debf0214177bf6d11343962bc892601d797",
+        "file":  "lib/ui/dialogs_settings_misc.dart"
+    },
+    {
+        "sha256":  "f8f4c03b9d52b858c9941c107020287eec8ec5191a65911933ed5b3ff211451b",
+        "file":  "lib/ui/dialogs_settings_tokens.dart"
+    },
+    {
+        "sha256":  "a2f8c1d89c2c20fd2f2fed772a56eb02cb5c67275777a209629e178d9b780b75",
+        "file":  "lib/ui/dialog_controllers.dart"
+    },
+    {
+        "sha256":  "7483b482533232a2afdbf8662f9c167c810be29d90c02f487123728547c09e7d",
+        "file":  "lib/ui/doc_tab_strip.dart"
+    },
+    {
+        "sha256":  "a41f1a7b4d0e6ca36b3e84abd5ae39457e47f7eceefd4df458d0412d6ce92262",
+        "file":  "lib/ui/editor_projection.dart"
+    },
+    {
+        "sha256":  "e00e351a8dea537c97a51102469cfe9bfe8b8ffc91029c1058833e09182f77e3",
+        "file":  "lib/ui/emoji_picker.dart"
+    },
+    {
+        "sha256":  "6dde553da4bbe5005c2aae6c33b37735999cbbe3077b0ea08f66f85397117125",
+        "file":  "lib/ui/export_format.dart"
+    },
+    {
+        "sha256":  "20dd570469920063e1cfa97d07d8d7a2e211e8833cccf1cea315b7e0a43d9bdd",
+        "file":  "lib/ui/export_shape.dart"
+    },
+    {
+        "sha256":  "c35246ff72ece13fa715e60469258557af8eac818b5514262f0149b052446979",
+        "file":  "lib/ui/font_warmup.dart"
+    },
+    {
+        "sha256":  "fb822ecabe97315bc1bb525d857992dccd90e7fb09d39f19d958c6879703f26e",
+        "file":  "lib/ui/format_bytes.dart"
+    },
+    {
+        "sha256":  "4f95c755690210e9725517854d10ffe03aa0351971e5fa675cd6d2bc07c2dbd4",
+        "file":  "lib/ui/graph_dialog.dart"
+    },
+    {
+        "sha256":  "be4d0539ed4483bbe2f4ae86f9a5a55b46d99cb040508d6fb2e1f48482c405de",
+        "file":  "lib/ui/home_data.dart"
+    },
+    {
+        "sha256":  "1ae84a77808433fdaeb94476e5224e03c6f8419f9b34f6345b1bb7a175613a33",
+        "file":  "lib/ui/home_pane.dart"
+    },
+    {
+        "sha256":  "88906bef7a28c881532d852da3b5d9ecfc2e0cc459ff39ac73f2e00903eaa026",
+        "file":  "lib/ui/home_screen.dart"
+    },
+    {
+        "sha256":  "defaa0b68b20a8ff26420cc905fdcd632ade0fdd052aef854e0d1b09faa6fae6",
+        "file":  "lib/ui/import_email_preference.dart"
+    },
+    {
+        "sha256":  "ed2617ddd3ab20b22e0816e2f28ef0d7d97220e549d8c3c1db02504c7b3fa8d0",
+        "file":  "lib/ui/inline_rename_controller.dart"
+    },
+    {
+        "sha256":  "60f7afc90d8ddeaf75bbce0091a54608628783e1cc063eb3285e20feb61f0806",
+        "file":  "lib/ui/mica_state.dart"
+    },
+    {
+        "sha256":  "9edd3564ebfec1dc26ce3f6d80a0d127a17911eab16eb59906f586e905d6d92a",
+        "file":  "lib/ui/narrow_tab_switcher.dart"
+    },
+    {
+        "sha256":  "08cb7bca6bbe4d891cecd730cca127049c2f285b26a37f75ee160a629373276e",
+        "file":  "lib/ui/navigation_draggable.dart"
+    },
+    {
+        "sha256":  "5ed6037b176387e095636d10d6d33ac55bc11530b76e4cede159dbe9e83fa653",
+        "file":  "lib/ui/overview_data.dart"
+    },
+    {
+        "sha256":  "0df0c443c52d25da259acbee7d7a203ca3b7923719d5f1078fe8f5f26a108f04",
+        "file":  "lib/ui/overview_pane.dart"
+    },
+    {
+        "sha256":  "13dbdd90a2e6452fc53644b1ec400d703369362f9d5b8e362d923ae01ca5aa28",
+        "file":  "lib/ui/page_graph_view.dart"
+    },
+    {
+        "sha256":  "3956a998d5a75f32f7e40a61d2cf5e0c0adf9be0e513e7205c2235ffd3d50ca6",
+        "file":  "lib/ui/page_title_field.dart"
+    },
+    {
+        "sha256":  "f276235069d24bc6dcd8e44883959d82c7c5f482b6df99a2d5cb031c5a852411",
+        "file":  "lib/ui/page_tree_cache.dart"
+    },
+    {
+        "sha256":  "82c96ec53c9ab3e6ae867afdcf6c2562e1574dbfb4c2b170b54d034dfde1b7a4",
+        "file":  "lib/ui/page_tree_state.dart"
+    },
+    {
+        "sha256":  "f1ae8757478f1e5da3f555d82bb5e7fb26def5b3d704aba465ae7a7e4ff5bb20",
+        "file":  "lib/ui/page_width_frame.dart"
+    },
+    {
+        "sha256":  "1d62b4424eee60a735a4deeb36fcbcbcfe0bea5e1ecdec0595bf314d339126f7",
+        "file":  "lib/ui/panel_kit.dart"
+    },
+    {
+        "sha256":  "ff2b8ea2a202f95aeacb9a2b89c5e19fa764a6854e03006ff6d640b4b8c29537",
+        "file":  "lib/ui/panel_shape.dart"
+    },
+    {
+        "sha256":  "da8f89b0f1c0cc93abe60133d9fcd673d9fb242d03b50ee753cd84493fb3e6c7",
+        "file":  "lib/ui/recycle_bin_dialog.dart"
+    },
+    {
+        "sha256":  "2674a5d0dc252c459cf8465d93428099257a6bcdd00355a38acaf18d17856994",
+        "file":  "lib/ui/rename.dart"
+    },
+    {
+        "sha256":  "de64b19e273e6829ed2cf03dadd7b23637ba8ff4acec1a11ab86e32c5e8cdebf",
+        "file":  "lib/ui/search_data.dart"
+    },
+    {
+        "sha256":  "9ed091fbdac8aa576e859d9b90fc7538ac3b01c354cb197633d4f853243b5c9c",
+        "file":  "lib/ui/search_dialog.dart"
+    },
+    {
+        "sha256":  "f4d83233b68d2b73046333c5a0c9d1e30c97bac8d6a8cc4beb4edd6d8e0f03c6",
+        "file":  "lib/ui/segmented_choice.dart"
+    },
+    {
+        "sha256":  "e1b948b7f444873ddeb9273f1895bdbb23a80102e0a8ebfeeeaab43796ce28ce",
+        "file":  "lib/ui/settings_dialog.dart"
+    },
+    {
+        "sha256":  "f4e03b1eda3827300eb094b68005113b1e246d6d1e72316dc2274327b02568dd",
+        "file":  "lib/ui/settings_shell.dart"
+    },
+    {
+        "sha256":  "7ac3db8de7562e6c1ed2e154eb37888614f1c43a1cd8f96734c2cb1c0b2a5cb8",
+        "file":  "lib/ui/settings_sync.dart"
+    },
+    {
+        "sha256":  "5570a18a00b20e227690b81cd09c1b1bd55ddbb58c03197a3c6225621fbee5c5",
+        "file":  "lib/ui/share_dialog.dart"
+    },
+    {
+        "sha256":  "1c101efb160a125e4694c127413ac4d309015457c89cc8051f34310228538bf4",
+        "file":  "lib/ui/shell_widgets.dart"
+    },
+    {
+        "sha256":  "1f3de9670eef2d73a008015a452441152c95c8b806d49ab68ea2e134bf2b05ad",
+        "file":  "lib/ui/sidebar_tree_controller.dart"
+    },
+    {
+        "sha256":  "d7a3e1cdfa270a0b2875243c6ce0388c32caee7ad7974b7bbe0a86630c701ba2",
+        "file":  "lib/ui/sign_in_hero.dart"
+    },
+    {
+        "sha256":  "14831b38c9d7191be4fa18dec45a49f233708cfb996ca554c72bb92715da0331",
+        "file":  "lib/ui/sign_in_pane.dart"
+    },
+    {
+        "sha256":  "4bf472440e047c41b6a98515e57cc4d257b6e57c905729a831964a89272ea507",
+        "file":  "lib/ui/sign_in_screen.dart"
+    },
+    {
+        "sha256":  "90ec8b21f6f3b15be0cf8f98935e66a6c0a1e50016b1955926a02c4c19987cf8",
+        "file":  "lib/ui/status_kit.dart"
+    },
+    {
+        "sha256":  "5745a432673e3d78e117ddfdba6fd1b6bd2fd9132846f1472918f71f3ad58ad9",
+        "file":  "lib/ui/tab_shortcuts.dart"
+    },
+    {
+        "sha256":  "65bc7acbd8e74ab90201638e6b20f89f6f34eba2fccbf8243c13d5bd6ce47c64",
+        "file":  "lib/ui/theme_tokens.dart"
+    },
+    {
+        "sha256":  "cd7d510b19594ad87b81762f6fe7d1cda70c69177fab03a70db437b7b216a7f5",
+        "file":  "lib/ui/transfer_dialog.dart"
+    },
+    {
+        "sha256":  "7acb48776a32bf7bc4231ca5f7ea33b7cf34055fcac7d127fc94d4f3aa5e7a33",
+        "file":  "lib/ui/trash_data.dart"
+    },
+    {
+        "sha256":  "aa899d0f9862198e66a30f9427450ea7d10a9d0afb72edc7d428722d2b0683ca",
+        "file":  "lib/ui/tree_drop_planner.dart"
+    },
+    {
+        "sha256":  "f1d9f14d8186ca3995cb84daa126b126b6a04153dca0d7d07b9b38edb29c27e9",
+        "file":  "lib/ui/tree_selection.dart"
+    },
+    {
+        "sha256":  "4cb975e822bb9a3a853305b85b2a5dee4d991b566e1efcf7cfc0ba239af773c4",
+        "file":  "lib/ui/typography.dart"
+    },
+    {
+        "sha256":  "a34704bca5118cb0d6b4ea9b9759b77dafdb3213af21156b992d2c1413ee9e05",
+        "file":  "lib/ui/update_controls.dart"
+    },
+    {
+        "sha256":  "6add7b4f314b9b1b5b3cc9e13555ffaf27927083312cc119223e1a33d4879874",
+        "file":  "lib/ui/user_avatar.dart"
+    },
+    {
+        "sha256":  "7c7d000e9e7ae99495ca59d066ca4e9e100ce3a7e07542c8b54077ef8152c965",
+        "file":  "lib/ui/version_data.dart"
+    },
+    {
+        "sha256":  "706920d7224ec1276e68dcf41dc12b74f948b43e6fb8dfeac9fd7591376365b4",
+        "file":  "lib/ui/version_history_dialog.dart"
+    },
+    {
+        "sha256":  "2f225a5df3ec435689f0d65333ce8b58e73b241c70a42b1aeb2b871e6635a689",
+        "file":  "lib/ui/widgets.dart"
+    },
+    {
+        "sha256":  "4b667fef5ae03ededa5a9707b33ad0c74ef901e5ab8eeef29fa4ca99562d857f",
+        "file":  "lib/ui/workspace_invitations.dart"
+    },
+    {
+        "sha256":  "618de16040f39873081bbc7705003bf17574c677307026c1f3245d8425908c35",
+        "file":  "lib/ui/workspace_overview.dart"
+    },
+    {
+        "sha256":  "30912c3b4a684e04585907f48afcea0a5ca8f5215a803ad698ebb3a26f5110d8",
+        "file":  "lib/ui/workspace_panels.dart"
+    },
+    {
+        "sha256":  "da10ce804e28e423943e987223ab84dc8b7e763f95c86b210b182ec9bdebe4cf",
+        "file":  "lib/upload/archive_file.dart"
+    },
+    {
+        "sha256":  "b0cd38935ea82cfa6928ef178ee5fb0d34ea4dcaf8e2ad3fa87808198f497e55",
+        "file":  "lib/upload/sha256.dart"
+    },
+    {
+        "sha256":  "0bef8f804adb803894785d919969e5414001b04a6e589f86bcfdbf18539d2c4e",
+        "file":  "lib/upload/zip_writer.dart"
+    },
+    {
+        "sha256":  "4ce302fb00b37c35c0944d849f9636ad4b8d36aea1a06dcd0254806eb1f65be5",
+        "file":  "lib/upload/zip_writer_dart.dart"
+    },
+    {
+        "sha256":  "99c4f577b1ad22d786e11a62543c95205906f4ad40a05e3f7ec3e9cdcd58c553",
+        "file":  "lib/upload/zip_writer_io.dart"
+    },
+    {
+        "sha256":  "d8ce8c7d7e56b3608a7c3ed2a2a8ce5f17d809e15ffb734bac72bca049beb32e",
+        "file":  "lib/views/cloud_views_controller.dart"
+    },
+    {
+        "sha256":  "886db0d80c1196b65424cc262834fe14c391233ec717b2abe4ba8c155644fdb0",
+        "file":  "lib/views/invitations_controller.dart"
+    },
+    {
+        "sha256":  "3e9b9a4802d6046cae963b90ce630a36563d38c8d6b636ebd416a842b387c04e",
+        "file":  "lib/views/members_controller.dart"
+    },
+    {
+        "sha256":  "7278e2e3909281548d634ffd8899d81d5f124d27c7df06698cfe3b62b7f1f6b3",
+        "file":  "lib/web/mica_doc_wasm.dart"
+    },
+    {
+        "sha256":  "1ab9f0db02b22f952083461c42aeb31847884f4d326a1b5439d410797244f657",
+        "file":  "lib/web/web_probe.dart"
+    },
+    {
+        "sha256":  "46df11062e7978dec9e333403aa82f9c9007b5435fa84af29a0fa490c9392902",
+        "file":  "lib/web/web_probe_stub.dart"
+    },
+    {
+        "sha256":  "f261a973b90040c69efc7cd2df9d93e92c8ce11819713c5cd00c452a560e9ae4",
+        "file":  "lib/web/web_probe_web.dart"
+    },
+    {
+        "sha256":  "1ce2c1f764046423de3d04dbec1932c65e9ac6a5dfa21adf87c4b1358b4cb003",
+        "file":  "lib/widgets/mica_logo.dart"
+    },
+    {
+        "sha256":  "778159571d3e64456edf79aa49880e9e2cb85af89b2750a71bfee9a22635469d",
+        "file":  "lib/world/local_world_backend.dart"
+    },
+    {
+        "sha256":  "e53a66d5f282bc81152281e82b510062c3fb44a8a73ea57717f0ccd4a2fa3415",
+        "file":  "lib/world/world_backend.dart"
+    }
+]

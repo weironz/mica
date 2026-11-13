@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-13",
+  "command": "just ci",
+  "exitCode": 0,
+  "flutter": "3.47.1",
+  "rust": "1.98.0",
+  "receipts": {
+    "rust": 1197,
+    "sqliteStore": 221,
+    "ffi": 11,
+    "flutter": 2137
+  },
+  "browserSuites": 11,
+  "standaloneE2eScripts": 5,
+  "analyzerIssues": 0,
+  "structure": "passed",
+  "ciLogSha256": "817929eab3897ba3f0066aca3f35a800ab744ccdd988c5f6be43b3fb1d01f14c",
+  "newRegressionTests": 4,
+  "regressionBeforeFix": "4 failures on full-width backgrounds",
+  "regressionAfterFix": "6 tests passed, including 2 pre-existing action/migration checks"
+}

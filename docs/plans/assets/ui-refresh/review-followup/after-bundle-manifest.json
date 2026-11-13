@@ -1,0 +1,107 @@
+[
+    {
+        "sha256":  "2d2e5e0b791c46afaefa1d159c92dda0a120a9d3f4a365d9dd91808fe0d24898",
+        "file":  "bundle\\flutter_windows.dll",
+        "bytes":  21273088
+    },
+    {
+        "sha256":  "10abeba0474d8cf8dd132b575ad34a3e142f0cb48c66351da0c851f7931ad26d",
+        "file":  "bundle\\mica_flutter.exe",
+        "bytes":  93696
+    },
+    {
+        "sha256":  "a0830f8a8136dff56ff60dda1da3574f5961b6c4e23915255d743ba3edbeb863",
+        "file":  "bundle\\pasteboard_plugin.dll",
+        "bytes":  93696
+    },
+    {
+        "sha256":  "1142e1a0cf677f96f95b3b49da39a7bc8e75fdeff2ca7e79a4e12824ad514310",
+        "file":  "bundle\\rust_lib_mica_flutter.dll",
+        "bytes":  25004032
+    },
+    {
+        "sha256":  "c324ea63aa57f1298aa01c0f7055f5b327a7b39a2c95cf0073685f42dea7d99a",
+        "file":  "bundle\\screen_retriever_windows_plugin.dll",
+        "bytes":  119296
+    },
+    {
+        "sha256":  "8938d4763949135d4031fc80e15e67e6ac72c1bd691a646ad5c5bde4b7118c8d",
+        "file":  "bundle\\tray_manager_plugin.dll",
+        "bytes":  107520
+    },
+    {
+        "sha256":  "ac01ee3ada7bda8b1ddc98701fb375294d855cecc5ecd8e02116161080bd7eeb",
+        "file":  "bundle\\window_manager_plugin.dll",
+        "bytes":  130048
+    },
+    {
+        "sha256":  "3b68b8700fba139a61b2be31804f65abbca672045f1ac417b1fbba6fb4901b6f",
+        "file":  "bundle\\data\\app.so",
+        "bytes":  12387208
+    },
+    {
+        "sha256":  "325a86063d26334c2eabe1743cea073b612540fbf3d8fc2ef0b5708e3763a8c7",
+        "file":  "bundle\\data\\icudtl.dat",
+        "bytes":  864880
+    },
+    {
+        "sha256":  "dd7560f2d531da9f57e3435cdda55221f9b8f4b06f689a4d01c8930c7c69e885",
+        "file":  "bundle\\data\\flutter_assets\\AssetManifest.bin",
+        "bytes":  295
+    },
+    {
+        "sha256":  "547e020094c311c91648f9e0bcfc736b9bc91cca1115fc66ee063dde656f0cdc",
+        "file":  "bundle\\data\\flutter_assets\\FontManifest.json",
+        "bytes":  157
+    },
+    {
+        "sha256":  "9548a31e4a048135c1d94f919328bfb62ae2c7bb3cab96557c7941daa97776cb",
+        "file":  "bundle\\data\\flutter_assets\\NativeAssetsManifest.json",
+        "bytes":  45
+    },
+    {
+        "sha256":  "705d6c3db606692c536cef44df4ec786de5521fddd9da28a4a7f8f02ad9f7859",
+        "file":  "bundle\\data\\flutter_assets\\NOTICES.Z",
+        "bytes":  106603
+    },
+    {
+        "sha256":  "e9344f56652eef20ee99255601187cf0f12c211c53c4c02c5da60f19100afbf6",
+        "file":  "bundle\\data\\flutter_assets\\assets\\logo_mark.png",
+        "bytes":  67387
+    },
+    {
+        "sha256":  "fe1efd2f72f6368846e1dc69d394307aaf5f8bd9b7a4badcc7c62b977b4e330c",
+        "file":  "bundle\\data\\flutter_assets\\assets\\tray_icon.ico",
+        "bytes":  34164
+    },
+    {
+        "sha256":  "632d66e26b8af02dc988a81d3b8f941e35f7a29beacf94bf57ae0dfbd1e40cfd",
+        "file":  "bundle\\data\\flutter_assets\\fonts\\MaterialIcons-Regular.otf",
+        "bytes":  18076
+    },
+    {
+        "sha256":  "a2b93e6c2db05d6bbbf6f27d413ec73269735b7b679019c8a5aa9670ff0ffbf2",
+        "file":  "bundle\\data\\flutter_assets\\fonts\\NotoSansSC-Regular.otf",
+        "bytes":  8482020
+    },
+    {
+        "sha256":  "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+        "file":  "bundle\\data\\flutter_assets\\fonts\\OFL.txt",
+        "bytes":  4301
+    },
+    {
+        "sha256":  "af0bff7599c3df3831755c16e39b3c496df74b8c8d8a1161b14dc8461be17cb4",
+        "file":  "bundle\\data\\flutter_assets\\fonts\\RobotoMono-Regular.ttf",
+        "bytes":  125748
+    },
+    {
+        "sha256":  "1fe8436a743884cb65078fe8c7b38e18f5365f2a2961270916f426fd13c604af",
+        "file":  "bundle\\data\\flutter_assets\\shaders\\ink_sparkle.frag",
+        "bytes":  21856
+    },
+    {
+        "sha256":  "bc7599dbbbaab310efe41520574138d21fb18a88c8fe4495ed79315309336f6f",
+        "file":  "bundle\\data\\flutter_assets\\shaders\\stretch_effect.frag",
+        "bytes":  17616
+    }
+]
