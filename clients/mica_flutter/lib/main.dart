@@ -140,7 +140,7 @@ part 'world/local_world_backend.dart';
 
 /// App version, shown in the About dialog. Keep in sync with `pubspec.yaml`
 /// (`version:`) and `crates/api-server/Cargo.toml` on each release.
-const String kAppVersion = '0.14.5';
+const String kAppVersion = '0.14.6';
 
 final _desktopUpdates = DesktopUpdateController(currentVersion: kAppVersion);
 
