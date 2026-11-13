@@ -1,0 +1,46 @@
+{
+  "version": "0.14.6",
+  "releaseUrl": "https://github.com/weironz/mica/releases/tag/v0.14.6",
+  "publishedAt": "2026-11-13T07:10:10Z",
+  "latest": true,
+  "isDraft": false,
+  "checkedAssets": [
+    {
+      "name": "Mica-Setup-0.14.6.exe",
+      "bytes": 24593884,
+      "sha256": "2d34640f84f42a5bce38c41414a0dd9b37021a9a3c9473e14e56316c8a72e3a4",
+      "manifest": "sha256-windows-installer.txt"
+    },
+    {
+      "name": "mica-cli-0.14.6-windows-x64.exe",
+      "bytes": 8793088,
+      "sha256": "a84043d2222d08b2676e202079fd6ab7c727c01d28ce047f63778c8de94425fb",
+      "manifest": "sha256-windows.txt"
+    },
+    {
+      "name": "mica-cli-0.14.6-linux-x64",
+      "bytes": 11248472,
+      "sha256": "669d0c73b2eca26981fff0ecea42159833ffbcbd2107072a6d46c544c811d797",
+      "manifest": "sha256-linux.txt"
+    },
+    {
+      "name": "Mica-0.14.6-linux-amd64.deb",
+      "bytes": 23995408,
+      "sha256": "6ed0c9bf68c9bd0f67bf7de7a606349b1afbea31466432df477854bcfe3de7f9",
+      "manifest": "sha256-linux-desktop.txt"
+    },
+    {
+      "name": "Mica-0.14.6-android-arm64.apk",
+      "bytes": 52441472,
+      "sha256": "765d84d044102bc15baa3f739af7abc49e54b22d7146487729e8261338284648",
+      "manifest": "sha256-android.txt"
+    },
+    {
+      "name": "Mica-0.14.6-android-armv7.apk",
+      "bytes": 44868938,
+      "sha256": "bb24c7e39c8ea02cecc621eedaf1b7671fa2996225a7734e95f4d823effa6647",
+      "manifest": "sha256-android.txt"
+    }
+  ],
+  "ok": true
+}

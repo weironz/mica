@@ -1,0 +1,75 @@
+{
+  "databaseId": 43380577321,
+  "url": "https://github.com/weironz/mica/actions/runs/43380577321",
+  "headSha": "e8700d5d411a4723e66e9b8ba75a0fcc8dbf00f3",
+  "status": "completed",
+  "conclusion": "success",
+  "createdAt": "2026-11-13T06:42:35Z",
+  "updatedAt": "2026-11-13T06:56:05Z",
+  "jobs": [
+    {
+      "name": "Scope (affected job groups)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43380577321/job/131737148930",
+      "startedAt": "2026-11-13T06:42:39Z",
+      "completedAt": "2026-11-13T06:43:13Z"
+    },
+    {
+      "name": "Structure (file-size gate)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43380577321/job/131737149442",
+      "startedAt": "2026-11-13T06:42:39Z",
+      "completedAt": "2026-11-13T06:42:51Z"
+    },
+    {
+      "name": "RustSec (both lockfiles)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43380577321/job/131737149481",
+      "startedAt": "2026-11-13T06:42:39Z",
+      "completedAt": "2026-11-13T06:45:31Z"
+    },
+    {
+      "name": "Web e2e (browser against a real stack)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43380577321/job/131737374114",
+      "startedAt": "2026-11-13T06:43:15Z",
+      "completedAt": "2026-11-13T06:56:05Z"
+    },
+    {
+      "name": "Rust (build + lint + tests)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43380577321/job/131737374118",
+      "startedAt": "2026-11-13T06:43:15Z",
+      "completedAt": "2026-11-13T06:50:34Z"
+    },
+    {
+      "name": "Container (api image + stack boots)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43380577321/job/131737374129",
+      "startedAt": "2026-11-13T06:43:15Z",
+      "completedAt": "2026-11-13T06:49:31Z"
+    },
+    {
+      "name": "Flutter (analyze + Dart unit tests)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43380577321/job/131737374134",
+      "startedAt": "2026-11-13T06:43:15Z",
+      "completedAt": "2026-11-13T06:55:17Z"
+    },
+    {
+      "name": "MCP (official inspector against mica-cli mcp)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43380577321/job/131737374136",
+      "startedAt": "2026-11-13T06:43:15Z",
+      "completedAt": "2026-11-13T06:44:45Z"
+    }
+  ]
+}

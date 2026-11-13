@@ -1,0 +1,145 @@
+{
+  "entries": [
+    {
+      "url": "https://mica.cloudcele.com/",
+      "transferSize": 2647,
+      "encodedBodySize": 2347
+    },
+    {
+      "url": "https://mica.cloudcele.com/mica_md/mica_md.js",
+      "transferSize": 3132,
+      "encodedBodySize": 2832
+    },
+    {
+      "url": "https://mica.cloudcele.com/mica_doc/mica_doc.js",
+      "transferSize": 4480,
+      "encodedBodySize": 4180
+    },
+    {
+      "url": "https://mica.cloudcele.com/flutter_bootstrap.js",
+      "transferSize": 5829,
+      "encodedBodySize": 5529
+    },
+    {
+      "url": "https://mica.cloudcele.com/mica_md/mica_md_bg.wasm",
+      "transferSize": 247505,
+      "encodedBodySize": 247205
+    },
+    {
+      "url": "https://mica.cloudcele.com/mica_doc/mica_doc_bg.wasm",
+      "transferSize": 253839,
+      "encodedBodySize": 253539
+    },
+    {
+      "url": "https://mica.cloudcele.com/canvaskit/chromium/canvaskit.wasm",
+      "transferSize": 2062786,
+      "encodedBodySize": 2062486
+    },
+    {
+      "url": "https://mica.cloudcele.com/canvaskit/chromium/canvaskit.js",
+      "transferSize": 27610,
+      "encodedBodySize": 27310
+    },
+    {
+      "url": "https://mica.cloudcele.com/main.dart.js",
+      "transferSize": 1452440,
+      "encodedBodySize": 1452140
+    },
+    {
+      "url": "https://mica.cloudcele.com/favicon.svg",
+      "transferSize": 2555,
+      "encodedBodySize": 2255
+    },
+    {
+      "url": "https://mica.cloudcele.com/assets/FontManifest.json",
+      "transferSize": 423,
+      "encodedBodySize": 123
+    },
+    {
+      "url": "https://mica.cloudcele.com/assets/fonts/MaterialIcons-Regular.otf",
+      "transferSize": 12618,
+      "encodedBodySize": 12318
+    },
+    {
+      "url": "https://mica.cloudcele.com/assets/fonts/RobotoMono-Regular.ttf",
+      "transferSize": 73415,
+      "encodedBodySize": 73115
+    },
+    {
+      "url": "https://mica.cloudcele.com/assets/fonts/fallback/Roboto-Regular.ttf",
+      "transferSize": 90716,
+      "encodedBodySize": 90416
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.118.woff2",
+      "transferSize": 25080,
+      "encodedBodySize": 24780
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanstc/v36/-nFuOG829Oofr2wohFbTp9ifNAn722rq0MXz76Cy_C8mrWSt1KeqzFVoizG-KdWhyhvKuGOf8EUcrq3YKp7nxxk.118.woff2",
+      "transferSize": 32472,
+      "encodedBodySize": 32172
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.115.woff2",
+      "transferSize": 30356,
+      "encodedBodySize": 30056
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.26.woff2",
+      "transferSize": 27580,
+      "encodedBodySize": 27280
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.113.woff2",
+      "transferSize": 31344,
+      "encodedBodySize": 31044
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.117.woff2",
+      "transferSize": 28252,
+      "encodedBodySize": 27952
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.119.woff2",
+      "transferSize": 41688,
+      "encodedBodySize": 41388
+    },
+    {
+      "url": "https://mica.cloudcele.com/assets/AssetManifest.bin.json",
+      "transferSize": 478,
+      "encodedBodySize": 178
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.116.woff2",
+      "transferSize": 28516,
+      "encodedBodySize": 28216
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.114.woff2",
+      "transferSize": 31080,
+      "encodedBodySize": 30780
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.108.woff2",
+      "transferSize": 34460,
+      "encodedBodySize": 34160
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.110.woff2",
+      "transferSize": 33032,
+      "encodedBodySize": 32732
+    },
+    {
+      "url": "https://mica.cloudcele.com/gfonts/notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.112.woff2",
+      "transferSize": 30796,
+      "encodedBodySize": 30496
+    },
+    {
+      "url": "https://mica.cloudcele.com/assets/assets/logo_mark.png",
+      "transferSize": 67687,
+      "encodedBodySize": 67387
+    }
+  ],
+  "runtimeErrors": []
+}

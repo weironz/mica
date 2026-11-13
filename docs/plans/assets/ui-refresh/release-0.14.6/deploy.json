@@ -1,0 +1,19 @@
+{
+  "databaseId": 43384224936,
+  "url": "https://github.com/weironz/mica/actions/runs/43384224936",
+  "headSha": "e8700d5d411a4723e66e9b8ba75a0fcc8dbf00f3",
+  "status": "completed",
+  "conclusion": "success",
+  "createdAt": "2026-11-13T07:13:44Z",
+  "updatedAt": "2026-11-13T07:19:04Z",
+  "jobs": [
+    {
+      "name": "deploy",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43384224936/job/131748818735",
+      "startedAt": "2026-11-13T07:13:48Z",
+      "completedAt": "2026-11-13T07:19:03Z"
+    }
+  ]
+}

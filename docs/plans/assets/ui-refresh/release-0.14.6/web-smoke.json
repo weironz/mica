@@ -1,0 +1,43 @@
+{
+  "url": "https://mica.cloudcele.com/",
+  "version": "0.14.6",
+  "signedIn": false,
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "runtimeErrors": [],
+  "consoleErrors": 0,
+  "interaction": {
+    "version": "0.14.6",
+    "theme": "dark",
+    "registerTabOpened": true,
+    "loginTabReturned": true,
+    "submittedForms": false,
+    "errors": []
+  },
+  "initialTransferBytesIncludingHeaders": 4682816,
+  "initialEncodedBodyBytes": 4674416,
+  "firstLoadUnder12MB": true,
+  "wasm": [
+    {
+      "url": "https://mica.cloudcele.com/mica_md/mica_md_bg.wasm",
+      "encodedBodySize": 247205
+    },
+    {
+      "url": "https://mica.cloudcele.com/mica_doc/mica_doc_bg.wasm",
+      "encodedBodySize": 253539
+    },
+    {
+      "url": "https://mica.cloudcele.com/canvaskit/chromium/canvaskit.wasm",
+      "encodedBodySize": 2062486
+    }
+  ],
+  "cspReportOnly": true,
+  "accountOrDocumentWrites": false,
+  "scope": "Production signed-out UI only; authenticated settings/editor covered by prior Windows native acceptance and CI, not claimed as a production login test."
+}

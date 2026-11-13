@@ -1,0 +1,107 @@
+{
+  "databaseId": 43382207668,
+  "url": "https://github.com/weironz/mica/actions/runs/43382207668",
+  "headSha": "e8700d5d411a4723e66e9b8ba75a0fcc8dbf00f3",
+  "status": "completed",
+  "conclusion": "success",
+  "createdAt": "2026-11-13T06:56:47Z",
+  "updatedAt": "2026-11-13T07:11:07Z",
+  "jobs": [
+    {
+      "name": "draft",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742357812",
+      "startedAt": "2026-11-13T06:56:51Z",
+      "completedAt": "2026-11-13T06:57:03Z"
+    },
+    {
+      "name": "windows",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742447349",
+      "startedAt": "2026-11-13T06:57:05Z",
+      "completedAt": "2026-11-13T07:09:39Z"
+    },
+    {
+      "name": "linux-deb",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742447351",
+      "startedAt": "2026-11-13T06:57:05Z",
+      "completedAt": "2026-11-13T07:06:06Z"
+    },
+    {
+      "name": "android",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742447380",
+      "startedAt": "2026-11-13T06:57:05Z",
+      "completedAt": "2026-11-13T07:10:05Z"
+    },
+    {
+      "name": "cli (ubuntu-latest, mica-cli, linux-x64, x86_64-unknown-linux-musl, linux)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742447381",
+      "startedAt": "2026-11-13T06:57:05Z",
+      "completedAt": "2026-11-13T06:59:25Z"
+    },
+    {
+      "name": "cli (windows-latest, mica-cli.exe, windows-x64.exe, windows)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742447405",
+      "startedAt": "2026-11-13T06:57:06Z",
+      "completedAt": "2026-11-13T07:01:17Z"
+    },
+    {
+      "name": "images (cli, deploy/Dockerfile.cli)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742447429",
+      "startedAt": "2026-11-13T06:57:05Z",
+      "completedAt": "2026-11-13T06:59:06Z"
+    },
+    {
+      "name": "images (web, deploy/Dockerfile.web, true)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742447442",
+      "startedAt": "2026-11-13T06:57:05Z",
+      "completedAt": "2026-11-13T07:04:33Z"
+    },
+    {
+      "name": "images (api, deploy/Dockerfile.api)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131742447527",
+      "startedAt": "2026-11-13T06:57:05Z",
+      "completedAt": "2026-11-13T06:57:38Z"
+    },
+    {
+      "name": "publish",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131747380017",
+      "startedAt": "2026-11-13T07:10:07Z",
+      "completedAt": "2026-11-13T07:10:12Z"
+    },
+    {
+      "name": "canary / Published artifacts (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131747427805",
+      "startedAt": "2026-11-13T07:10:15Z",
+      "completedAt": "2026-11-13T07:10:44Z"
+    },
+    {
+      "name": "canary / Published artifacts (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/weironz/mica/actions/runs/43382207668/job/131747427897",
+      "startedAt": "2026-11-13T07:10:15Z",
+      "completedAt": "2026-11-13T07:11:06Z"
+    }
+  ]
+}

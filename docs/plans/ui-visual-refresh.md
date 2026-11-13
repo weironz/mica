@@ -1,6 +1,6 @@
 # 界面与字体观感改造（Windows 桌面优先）
 
-状态：**第 0–4 阶段已完成并通过独立评审**（2026-11-13），待用户在自己的 Windows 上确认观感；字体采用方案 D，第 5 阶段默认不做。原生既有 Material 诊断已在第 3 阶段修复，最终原生流程通过（第 11 节）。第 12 节是评审记录，第 13 节的设置页宽度修复、Windows 原生补验与启动测量均已完成；未发版。
+状态：**第 0–4 阶段已完成、审核，并经用户授权发布为 0.14.6、部署到生产**（2026-11-13）；字体采用方案 D，第 5 阶段仍未做。原生既有 Material 诊断已在第 3 阶段修复（第 11 节）。第 12 节是独立评审，第 13 节是设置页宽度修复与启动测量，第 14 节记录正式发布、部署及线上验收。
 
 > **读这份文档的规则**
 > - 标「已核实」的是读代码或计算得到的事实；标「待测」的是推断，**必须先按第 3 节测量再动手**，不许把推断当事实写进提交说明。
@@ -443,7 +443,7 @@ Material 图标偏粗偏圆，约 340 处。方向：换成 1.5px 线宽的线�
 
 - 判断：本机字体预热增加约 **6.40ms**，没有证据支持为此推迟字体加载并引入首帧字体跳变。全启动中位数增加约 **130.53ms**，P95 增加约 **32.01ms**；相邻配对差值范围为 **−1,100.84～+738.78ms**，存在较大运行波动，**不能把总差值全部归因于字体，也不宣称启动完全无退化**。本轮不改启动流程。
 - 口径：每轮使用独立 APPDATA / LOCALAPPDATA / 临时目录，不安装覆盖用户版本，不访问真实账号数据。系统磁盘缓存没有清除，首轮也不等于重启机器后的磁盘冷启动；本机结果不能代表低配设备。
-- [40 次原始记录](assets/ui-refresh/review-followup/startup-runs.json)、[汇总](assets/ui-refresh/review-followup/startup-summary.json)及 [环境](assets/ui-refresh/review-followup/startup-environment.json)已归档；计时入口、提取脚本和临时原生验收入口也保存在同目录，仅用于复核。本地 CI 及原生实测均完成；未发版、未部署。
+- [40 次原始记录](assets/ui-refresh/review-followup/startup-runs.json)、[汇总](assets/ui-refresh/review-followup/startup-summary.json)及 [环境](assets/ui-refresh/review-followup/startup-environment.json)已归档；计时入口、提取脚本和临时原生验收入口也保存在同目录，仅用于复核。本节为发版前的验证记录，后续正式发布见第 14 节。
 
 - 回执名称更正（0.14.6 发版前复核）：此前记录的“FFI 11 项”实际来自 `wire_gold.rs` 的 Markdown/Wasm 协议金样，不是独立 FFI 单元测试数量；原生 FFI 路径仍已通过源码指纹与 Windows 流程验证。本次发版前另行执行桌面 FFI crate 测试，**47 项通过**，另 1 项按既有标记忽略。没有把忽略项计为通过。
 
@@ -451,4 +451,30 @@ Material 图标偏粗偏圆，约 340 处。方向：换成 1.5px 线宽的线�
 
 - 字体：保留 D 的常规体。真实 600 字重的收益与安装包增量均未测，不将评审中“每档约 +6 MB”当成实测结论。
 - 页面标题与首个 H1 的间距：保留既有取值，后续若调整需按首块类型与内容验证，不全局缩小正文标题段前距。
-- 第 5 阶段图标仍未做；未发版、未部署。
+- 第 5 阶段图标仍未做；本节实施时未发版、未部署，后续发布见第 14 节。
+
+## 14. 0.14.6 正式发布与部署（2026-11-13）
+
+用户另行授权通过 GitHub Actions 发布并部署。版本提交及不可变 tag 均为 `e8700d5d` / `v0.14.6`；原施工阶段“不发版”的范围限制不阻止这次明确授权。未增加 SQL 迁移。
+
+| 环节 | 结果 | 可复核记录 |
+| --- | --- | --- |
+| 本地版本门禁 | 通过；Rust 1,197、Flutter 2,137、Markdown/Wasm 金样 11，分析器、Cargokit 和迁移冻结检查通过 | `release-check passed for 0.14.6` |
+| 本地补充检查 | `just ci e2e`、11 组 Chrome、SQLite store 221、独立桌面 FFI **47**、正式 Web 编译与 725 项字体镜像检查通过；FFI 既有 1 项忽略未计入通过数 | 发版前运行回执 |
+| 官方完整 CI | 8 个 job 全部通过；`main` 与 tag 为同一提交 | [CI #43380577321](https://github.com/weironz/mica/actions/runs/43380577321) |
+| 正式 Release | 12 个 job 全部通过，含三镜像和下载后的 Windows / Linux 安装启动 canary | [Release #43382207668](https://github.com/weironz/mica/actions/runs/43382207668) |
+| 生产部署 | 彩排、实际部署、版本和入口检查全部通过；完成于 **07:19 UTC** | [Deploy #43384224936](https://github.com/weironz/mica/actions/runs/43384224936) |
+
+[0.14.6 正式版](https://github.com/weironz/mica/releases/tag/v0.14.6) 已公开并设为 `latest`：Windows 安装包、Windows / Linux CLI、Linux `.deb`、Android arm64 / armv7 APK，共 **6 个二进制附件与 5 份校验清单**。每个二进制的清单值均已与 GitHub 的 SHA-256 digest 独立比对通过。Windows 安装包 **24,593,884 B**；macOS CLI 沿用可选默认，本次未构建。Android 使用已有稳定签名配置，**未做真机回归**。
+
+线上额外验收：
+
+- `/api/health` 为 `ok`、`/api/ready` 为 `ready`，两者版本均为 **0.14.6**；生产仍保持关闭注册。
+- 目标 tag 的 `release-site-canary.sh` 通过：固定入口、Wasm MIME / 缓存约定和退役路径均符合契约；Web 的中文整字体地址仍为 404，未重新内置。
+- 独立 Chrome 会话中的未登录页，浅深色各一张 **1440×1000** 原图，均显示 `v0.14.6`；注册页打开、等待语义树更新后返回登录页通过，未提交表单、未借用真实账户或写入生产笔记。文档引擎、CRDT 引擎及 CanvasKit 三份 Wasm 正常加载，异常监听和控制台错误均为 0。
+- 首次浅色页的 Performance `transferSize`（导航及资源，含 HTTP 头）合计 **4,682,816 B，约 4.68 MB**，低于用户确定的 12 MB 真实传输口径；压缩响应体合计 **4,674,416 B**。此样本为独立浏览器首次加载，不等同于磁盘冷启动。
+- CSP 保持 **Report-Only**；线上验收没有切换到正式拦截策略。未登录线上会话未覆盖账户内设置/编辑器；这些路径以此前 Windows 原生验收及官方 CI 为依据，不冒充线上登录测试。
+
+两次准备问题及处理：首次本地门禁使用尚未完整迁移的临时测试库，失败后重建隔离库并应用内置迁移，再完整重跑通过；首次 [以 tag 触发的 CI](https://github.com/weironz/mica/actions/runs/43379970537) 中，自测夹具继承 `GITHUB_REF_NAME=v0.14.6`，导致“空参数”用例误报。该问题已本地复现；改用仓库常规 `main` 入口、核对同一提交后完整 CI 通过，未放宽测试断言、未移动 tag。
+
+工作流结果、附件校验、线上原图、网络明细及入口回执归档于 [release-0.14.6](assets/ui-refresh/release-0.14.6/)，其中 [线上摘要](assets/ui-refresh/release-0.14.6/web-smoke.json)、[附件摘要](assets/ui-refresh/release-0.14.6/assets-verification.json) 可直接复算。验收用浏览器与临时测试库已关闭清理；用户用于查看效果的独立 Windows Dev 程序保留。

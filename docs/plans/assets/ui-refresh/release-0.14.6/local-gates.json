@@ -1,0 +1,21 @@
+{
+  "version": "0.14.6",
+  "releaseCheckPassed": true,
+  "rustPassed": 1197,
+  "flutterPassed": 2137,
+  "markdownWireGoldPassed": 11,
+  "sqliteStorePassed": 221,
+  "standaloneFfiPassed": 47,
+  "standaloneFfiIgnored": 1,
+  "browserSuites": 11,
+  "ciE2ePassed": true,
+  "fontMirrorFiles": 725,
+  "logSha256": {
+    "gate-retry": "49842d93d0b6f9accd0c1dc8acb5b7698eec575fcc0f6f0c5970e97c4215c405",
+    "e2e": "8a1acb0585d2cab819db1a17c111c374c1613a04f0f565dce8783cb9ac29d779",
+    "browser": "73baff473b00066e4f84b82bbb986a80c688d67ffeb5e61308c2f7391ec0c6d3",
+    "store": "ffcbd6a114c9130f9b4b9c5f268ef813bed9c0f4544ec511a5c1e4a45bff384b",
+    "ffi": "86d686175e40b297002e43bbb8e3a0a14ec771b7166f38dcaaff8911fa79eeca",
+    "web": "2050c1afb5b42c3822c2489bffc18b7c41fb23996cebb4c21254730a8753e81f"
+  }
+}
