@@ -19,6 +19,60 @@ class MicaSettingsDestination {
   final Widget content;
 }
 
+/// One row of the settings navigation. Public so a shell footer can use the
+/// same type, height and icon column as the categories above it.
+class MicaSettingsNavItem extends StatelessWidget {
+  const MicaSettingsNavItem({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.selected = false,
+    this.subtitle,
+    this.trailing,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+  final bool selected;
+  final String? subtitle;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = MicaTheme.of(context);
+    return Material(
+      color: selected ? tokens.surface.hover : Colors.transparent,
+      borderRadius: BorderRadius.circular(6),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+        minLeadingWidth: 18,
+        horizontalTitleGap: 10,
+        leading: Icon(icon, size: 18),
+        title: Text(
+          title,
+          style: MicaTypography.body.copyWith(
+            fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
+            color: selected ? tokens.text.primary : tokens.text.muted,
+          ),
+        ),
+        subtitle: subtitle == null
+            ? null
+            : Text(
+                subtitle!,
+                style: MicaTypography.caption.copyWith(
+                  color: tokens.text.muted,
+                ),
+              ),
+        trailing: trailing,
+        onTap: onTap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      ),
+    );
+  }
+}
+
 /// Navigation stays reachable while only the selected settings page scrolls.
 /// Narrow windows use a category list and a detail page instead of squeezing
 /// two columns into the same space. This also works in a resized desktop window.
@@ -61,73 +115,88 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
 
   Widget _navigation(bool compact) {
     final tokens = MicaTheme.of(context);
-    return ListView(
-      key: const ValueKey('settings-navigation'),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
-      children: [
-        for (var i = 0; i < widget.destinations.length; i++) ...[
-          if (i == 0 ||
-              widget.destinations[i].group != widget.destinations[i - 1].group)
-            Padding(
-              padding: EdgeInsets.fromLTRB(10, i == 0 ? 0 : 18, 10, 6),
-              child: Text(
-                widget.destinations[i].group,
-                style: MicaTypography.caption.copyWith(
-                  fontWeight: FontWeight.w500,
-                  color: tokens.text.muted,
-                ),
-              ),
-            ),
+    final footer = widget.footer;
+    final items = [
+      for (var i = 0; i < widget.destinations.length; i++) ...[
+        if (i == 0 ||
+            widget.destinations[i].group != widget.destinations[i - 1].group)
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Material(
-              color: !compact && widget.selectedIndex == i
-                  ? tokens.surface.hover
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(6),
-              child: ListTile(
-                key: ValueKey('settings-category-$i'),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                minLeadingWidth: 18,
-                horizontalTitleGap: 10,
-                leading: Icon(widget.destinations[i].icon, size: 18),
-                title: Text(
-                  widget.destinations[i].title,
-                  style: MicaTypography.body.copyWith(
-                    fontWeight: widget.selectedIndex == i && !compact
-                        ? FontWeight.w500
-                        : FontWeight.w400,
-                    color: widget.selectedIndex == i && !compact
-                        ? tokens.text.primary
-                        : tokens.text.muted,
-                  ),
-                ),
-                subtitle: compact
-                    ? Text(
-                        widget.destinations[i].description,
-                        style: MicaTypography.caption.copyWith(
-                          color: tokens.text.muted,
-                        ),
-                      )
-                    : null,
-                trailing: compact
-                    ? const Icon(Icons.chevron_right, size: 18)
-                    : null,
-                onTap: () => _select(i, compact),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(6),
-                ),
+            padding: EdgeInsets.fromLTRB(10, i == 0 ? 0 : 18, 10, 6),
+            child: Text(
+              widget.destinations[i].group,
+              style: MicaTypography.caption.copyWith(
+                fontWeight: FontWeight.w500,
+                color: tokens.text.muted,
               ),
             ),
           ),
-        ],
-        if (widget.footer != null) ...[
-          const SizedBox(height: 28),
-          widget.footer!,
-        ],
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: MicaSettingsNavItem(
+            key: ValueKey('settings-category-$i'),
+            icon: widget.destinations[i].icon,
+            title: widget.destinations[i].title,
+            selected: !compact && widget.selectedIndex == i,
+            subtitle: compact ? widget.destinations[i].description : null,
+            trailing: compact
+                ? const Icon(Icons.chevron_right, size: 18)
+                : null,
+            onTap: () => _select(i, compact),
+          ),
+        ),
       ],
+    ];
+    if (footer == null) {
+      return ListView(
+        key: const ValueKey('settings-navigation'),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+        children: items,
+      );
+    }
+    final pinned = [
+      Divider(
+        height: 1,
+        indent: 12,
+        endIndent: 12,
+        color: tokens.border.subtle,
+      ),
+      Padding(padding: const EdgeInsets.fromLTRB(12, 6, 12, 8), child: footer),
+    ];
+    // Held at the bottom behind a rule rather than trailing the list: it is
+    // about the app, not one more page of settings. A window too short for
+    // both lets it scroll after the categories instead of covering them.
+    return LayoutBuilder(
+      builder: (context, box) {
+        if (box.maxHeight < _pinFooterMinHeight) {
+          return ListView(
+            key: const ValueKey('settings-navigation'),
+            padding: const EdgeInsets.fromLTRB(0, 12, 0, 0),
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: Column(children: items),
+              ),
+              ...pinned,
+            ],
+          );
+        }
+        return Column(
+          children: [
+            Expanded(
+              child: ListView(
+                key: const ValueKey('settings-navigation'),
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                children: items,
+              ),
+            ),
+            ...pinned,
+          ],
+        );
+      },
     );
   }
+
+  static const _pinFooterMinHeight = 320.0;
 
   Widget _detail(bool compact) {
     final destination = widget.destinations[widget.selectedIndex];

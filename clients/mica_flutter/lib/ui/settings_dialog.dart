@@ -744,11 +744,16 @@ class _SettingsDialogState extends MicaState<SettingsDialog> {
             ),
           ),
       ],
-      footer: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-        leading: const Icon(Icons.info_outline, size: 18),
-        title: Text(context.l10n.aboutTitle),
-        subtitle: Text('v${widget.updates.currentVersion}'),
+      footer: MicaSettingsNavItem(
+        key: const ValueKey('settings-about'),
+        icon: Icons.info_outline,
+        title: context.l10n.aboutTitle,
+        trailing: Text(
+          'v${widget.updates.currentVersion}',
+          style: MicaTypography.caption.copyWith(
+            color: MicaTheme.of(context).text.faint,
+          ),
+        ),
         onTap: () => _showAboutDialog(context),
       ),
     );

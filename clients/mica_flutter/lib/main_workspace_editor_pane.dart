@@ -125,280 +125,286 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
           // document column. Notion puts the same cluster here; the row exists
           // whether or not the format bar is on, because the tools do.
           Padding(
-            padding: const EdgeInsets.fromLTRB(2, 4, 8, 0),
+            padding: const EdgeInsets.fromLTRB(0, 4, 8, 0),
             child: LayoutBuilder(
-              builder: (context, header) => Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      // The path comes first and takes what it needs, inside two
-                      // bounds — see [_pathBudget]. It used to be a flat 260, which
-                      // dropped ancestors on paths that had most of the row sitting
-                      // empty beside them: an ellipsis with no visible cause.
-                      //
-                      // The pixel-based collapse in PageBreadcrumb stays as the last
-                      // resort. It is NOT a depth rule ("collapse past 3 segments") —
-                      // this repo tried that and recorded why it failed: `tools ›
-                      // 笔记软件 › mica › 单机手动部署（IP 直连，不用 Traefik）` is
-                      // three segments and still overruns. AppFlowy gets away with a
-                      // depth rule because their breadcrumb has no width cap at all
-                      // and simply scrolls, which a shared row cannot do.
-                      if (widget.selectedView != null)
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: _pathBudget(
-                              header.maxWidth,
-                              barOn:
-                                  widget.showFormatBar &&
-                                  canEdit &&
-                                  header.maxWidth >= 720,
+              builder: (context, header) {
+                final barOn = pageFormatBarInHeader(
+                  enabled: widget.showFormatBar,
+                  canEdit: canEdit,
+                  width: header.maxWidth,
+                );
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        // The path comes first and takes what it needs, inside two
+                        // bounds — see [pagePathBudget]. It used to be a flat 260, which
+                        // dropped ancestors on paths that had most of the row sitting
+                        // empty beside them: an ellipsis with no visible cause.
+                        //
+                        // The pixel-based collapse in PageBreadcrumb stays as the last
+                        // resort. It is NOT a depth rule ("collapse past 3 segments") —
+                        // this repo tried that and recorded why it failed: `tools ›
+                        // 笔记软件 › mica › 单机手动部署（IP 直连，不用 Traefik）` is
+                        // three segments and still overruns. AppFlowy gets away with a
+                        // depth rule because their breadcrumb has no width cap at all
+                        // and simply scrolls, which a shared row cannot do.
+                        //
+                        // With the bar off the path takes the whole row instead,
+                        // so its selection area reaches the blank right of the
+                        // crumbs — where a right-to-left drag naturally starts.
+                        if (widget.selectedView != null)
+                          _pathSlot(
+                            barOn: barOn,
+                            header: header.maxWidth,
+                            child: PageBreadcrumb(
+                              fill: !barOn,
+                              views: widget.views,
+                              current: widget.selectedView!,
+                              onSelect: (view) async {
+                                await _commandHook.flush();
+                                if (!mounted) return;
+                                if (view.isFolder &&
+                                    widget.onBrowseFolder != null) {
+                                  widget.onBrowseFolder!(view.id);
+                                } else {
+                                  await widget.onSelectView(view);
+                                }
+                              },
+                              onOpenWorkspace: widget.onBrowseFolder == null
+                                  ? null
+                                  : () async {
+                                      await _commandHook.flush();
+                                      if (mounted) widget.onBrowseFolder!(null);
+                                    },
+                              // Renaming from the breadcrumb tail (AppFlowy does this).
+                              // Gated on the editor role: a viewer's rename would 403,
+                              // and an edit affordance that cannot succeed is worse than
+                              // none — same rule as everywhere else here.
+                              onRename: canEdit ? widget.onRenameView : null,
+                              onCopyPath: _copyPagePath,
+                              workspaceName: widget.selectedWorkspace?.name,
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Quiet sync status (nothing when synced). It STAYS
+                                  // on the breadcrumb while the tools moved to the pane
+                                  // header: it reports on this document, not on the app
+                                  // — same reason the breadcrumb itself lives here.
+                                  if (widget.syncPhase != null)
+                                    SyncBadge(widget.syncPhase!),
+                                ],
+                              ),
                             ),
                           ),
-                          child: PageBreadcrumb(
-                            views: widget.views,
-                            current: widget.selectedView!,
-                            onSelect: (view) async {
-                              await _commandHook.flush();
-                              if (!mounted) return;
-                              if (view.isFolder &&
-                                  widget.onBrowseFolder != null) {
-                                widget.onBrowseFolder!(view.id);
-                              } else {
-                                await widget.onSelectView(view);
-                              }
-                            },
-                            onOpenWorkspace: widget.onBrowseFolder == null
-                                ? null
-                                : () async {
-                                    await _commandHook.flush();
-                                    if (mounted) widget.onBrowseFolder!(null);
-                                  },
-                            // Renaming from the breadcrumb tail (AppFlowy does this).
-                            // Gated on the editor role: a viewer's rename would 403,
-                            // and an edit affordance that cannot succeed is worse than
-                            // none — same rule as everywhere else here.
-                            onRename: canEdit ? widget.onRenameView : null,
-                            onCopyPath: _copyPagePath,
-                            workspaceName: widget.selectedWorkspace?.name,
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                // Quiet sync status (nothing when synced). It STAYS
-                                // on the breadcrumb while the tools moved to the pane
-                                // header: it reports on this document, not on the app
-                                // — same reason the breadcrumb itself lives here.
-                                if (widget.syncPhase != null)
-                                  SyncBadge(widget.syncPhase!),
-                              ],
+                        // The format bar takes whatever the path left. It is already a
+                        // horizontal SingleChildScrollView, so a narrow share does not
+                        // break it — it scrolls. [pagePathBudget] guarantees that
+                        // share never drops below [kFormatBarFloor].
+                        if (barOn)
+                          Expanded(
+                            child: ListenableBuilder(
+                              listenable: _activeBlockHook,
+                              builder: (context, _) => _formatBar(context),
                             ),
-                          ),
+                          )
+                        else if (widget.selectedView == null)
+                          const Spacer(),
+                        // The right-hand twin of the sidebar collapse button.
+                        // It used to live one row lower, on the title row, so
+                        // the "symmetric pair" the old comment claimed was
+                        // visibly off — different row, different size. Same
+                        // line, same density, same icon size as the left one.
+                        IconButton(
+                          tooltip: _toolsExpanded
+                              ? context.l10n.pageHideSidePanel
+                              : context.l10n.pageShowSidePanel,
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () =>
+                              setUi(() => _toolsExpanded = !_toolsExpanded),
+                          icon: const SidebarToggleIcon(right: true, size: 20),
                         ),
-                      // The format bar takes whatever the path left. It is already a
-                      // horizontal SingleChildScrollView, so a narrow share does not
-                      // break it — it scrolls. [_pathBudget] guarantees that share
-                      // never drops below _formatBarFloor.
-                      Expanded(
-                        child:
-                            (widget.showFormatBar &&
-                                canEdit &&
-                                header.maxWidth >= 720)
-                            ? ListenableBuilder(
-                                listenable: _activeBlockHook,
-                                builder: (context, _) => _formatBar(context),
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                      // The right-hand twin of the sidebar collapse button.
-                      // It used to live one row lower, on the title row, so
-                      // the "symmetric pair" the old comment claimed was
-                      // visibly off — different row, different size. Same
-                      // line, same density, same icon size as the left one.
-                      IconButton(
-                        tooltip: _toolsExpanded
-                            ? context.l10n.pageHideSidePanel
-                            : context.l10n.pageShowSidePanel,
-                        visualDensity: VisualDensity.compact,
-                        onPressed: () =>
-                            setUi(() => _toolsExpanded = !_toolsExpanded),
-                        icon: const SidebarToggleIcon(right: true, size: 20),
-                      ),
-                      if (widget.onAddComment != null)
-                        CommentsButton(
-                          openCount: widget.commentThreads
-                              .where((t) => !t.isResolved)
-                              .length,
-                          active:
-                              _toolsExpanded && _toolsTab == ToolsTab.comments,
-                          onTap: () {
-                            final showing =
+                        if (widget.onAddComment != null)
+                          CommentsButton(
+                            openCount: widget.commentThreads
+                                .where((t) => !t.isResolved)
+                                .length,
+                            active:
                                 _toolsExpanded &&
-                                _toolsTab == ToolsTab.comments;
-                            setUi(() {
-                              // From anywhere else this means "show me the
-                              // comments", not "toggle the sidebar" — so it
-                              // opens the sidebar AND selects the tab. Only
-                              // a second press on an already-showing comment
-                              // tab closes it.
-                              _toolsExpanded = !showing;
-                              _toolsTab = ToolsTab.comments;
-                            });
-                            // Closing drops the emphasis: it means "the
-                            // thread I am reading", and with the panel gone
-                            // there is no such thing — leaving it on would
-                            // strand a stronger wash with nothing to explain
-                            // it.
-                            if (showing) widget.onFocusCommentThread(null);
-                          },
+                                _toolsTab == ToolsTab.comments,
+                            onTap: () {
+                              final showing =
+                                  _toolsExpanded &&
+                                  _toolsTab == ToolsTab.comments;
+                              setUi(() {
+                                // From anywhere else this means "show me the
+                                // comments", not "toggle the sidebar" — so it
+                                // opens the sidebar AND selects the tab. Only
+                                // a second press on an already-showing comment
+                                // tab closes it.
+                                _toolsExpanded = !showing;
+                                _toolsTab = ToolsTab.comments;
+                              });
+                              // Closing drops the emphasis: it means "the
+                              // thread I am reading", and with the panel gone
+                              // there is no such thing — leaving it on would
+                              // strand a stronger wash with nothing to explain
+                              // it.
+                              if (showing) widget.onFocusCommentThread(null);
+                            },
+                          ),
+                        PropertiesToggle(
+                          active: _showProperties,
+                          hasProperties: bootstrap.rootFrontMatter
+                              .trim()
+                              .isNotEmpty,
+                          onTap: () =>
+                              setUi(() => _showProperties = !_showProperties),
                         ),
-                      PropertiesToggle(
-                        active: _showProperties,
-                        hasProperties: bootstrap.rootFrontMatter
-                            .trim()
-                            .isNotEmpty,
-                        onTap: () =>
-                            setUi(() => _showProperties = !_showProperties),
-                      ),
-                      PopupMenuButton<String>(
-                        tooltip: context.l10n.pageMenu,
-                        // Same density as its neighbours — it used to sit alone
-                        // on the title row at the default size.
-                        padding: EdgeInsets.zero,
-                        icon: const Icon(Icons.more_horiz, size: 20),
-                        onSelected: _onPageMenu,
-                        itemBuilder: (context) => [
-                          // Copy sits above the exports and gets its own group:
-                          // it is the cheap, frequent one (grab the text, paste
-                          // it somewhere), while everything below produces a
-                          // file. Grouping it with the exports would bury it.
-                          PopupMenuItem(
-                            height: 30,
-                            value: 'copy-md',
-                            child: ListTile(
-                              minTileHeight: 30,
-                              minVerticalPadding: 0,
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.copy_all_outlined),
-                              title: Text(context.l10n.pageCopyContent),
-                            ),
-                          ),
-                          const PopupMenuDivider(),
-                          // One export, always a ZIP. The old "Export Markdown"
-                          // handed back a lone .md whose images pointed at
-                          // `![](photo.png)` — a file that was nowhere in the
-                          // download. A zip can carry them; a .md cannot.
-                          PopupMenuItem(
-                            height: 30,
-                            value: 'export-zip',
-                            child: ListTile(
-                              minTileHeight: 30,
-                              minVerticalPadding: 0,
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.folder_zip_outlined),
-                              title: Text(context.l10n.rowExportZipImages),
-                            ),
-                          ),
-                          PopupMenuItem(
-                            height: 30,
-                            value: 'export-html',
-                            child: ListTile(
-                              minTileHeight: 30,
-                              minVerticalPadding: 0,
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.html_outlined),
-                              title: Text(context.l10n.rowExportHtml),
-                            ),
-                          ),
-                          // PDF export: desktop drives the OS WebView2 runtime's
-                          // headless print (native bytes → download); web hands
-                          // the same self-contained HTML to the browser's own
-                          // print dialog ("Save as PDF"). Available on both.
-                          PopupMenuItem(
-                            height: 30,
-                            value: 'export-pdf',
-                            child: ListTile(
-                              minTileHeight: 30,
-                              minVerticalPadding: 0,
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(
-                                Icons.picture_as_pdf_outlined,
-                              ),
-                              title: Text(context.l10n.rowExportPdf),
-                            ),
-                          ),
-                          const PopupMenuDivider(),
-                          PopupMenuItem(
-                            height: 30,
-                            value: 'import-md',
-                            child: ListTile(
-                              minTileHeight: 30,
-                              minVerticalPadding: 0,
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.upload_file_outlined),
-                              title: Text(context.l10n.pageImportMarkdown),
-                            ),
-                          ),
-                          if (widget.onShare != null) ...[
-                            const PopupMenuDivider(),
+                        PopupMenuButton<String>(
+                          tooltip: context.l10n.pageMenu,
+                          // Same density as its neighbours — it used to sit alone
+                          // on the title row at the default size.
+                          padding: EdgeInsets.zero,
+                          icon: const Icon(Icons.more_horiz, size: 20),
+                          onSelected: _onPageMenu,
+                          itemBuilder: (context) => [
+                            // Copy sits above the exports and gets its own group:
+                            // it is the cheap, frequent one (grab the text, paste
+                            // it somewhere), while everything below produces a
+                            // file. Grouping it with the exports would bury it.
                             PopupMenuItem(
                               height: 30,
-                              value: 'share',
+                              value: 'copy-md',
                               child: ListTile(
                                 minTileHeight: 30,
                                 minVerticalPadding: 0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.public),
-                                title: Text(context.l10n.shareTitle),
+                                leading: const Icon(Icons.copy_all_outlined),
+                                title: Text(context.l10n.pageCopyContent),
                               ),
                             ),
-                          ],
-                          if (widget.onVersionHistory != null) ...[
                             const PopupMenuDivider(),
+                            // One export, always a ZIP. The old "Export Markdown"
+                            // handed back a lone .md whose images pointed at
+                            // `![](photo.png)` — a file that was nowhere in the
+                            // download. A zip can carry them; a .md cannot.
                             PopupMenuItem(
                               height: 30,
-                              value: 'version-history',
+                              value: 'export-zip',
                               child: ListTile(
                                 minTileHeight: 30,
                                 minVerticalPadding: 0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.history),
-                                title: Text(context.l10n.versionHistoryTitle),
+                                leading: const Icon(Icons.folder_zip_outlined),
+                                title: Text(context.l10n.rowExportZipImages),
                               ),
                             ),
-                          ],
-                          if (widget.onRestoreCheckpoint != null) ...[
-                            const PopupMenuDivider(),
                             PopupMenuItem(
                               height: 30,
-                              value: 'restore-checkpoint',
+                              value: 'export-html',
                               child: ListTile(
                                 minTileHeight: 30,
                                 minVerticalPadding: 0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.restore_outlined),
-                                title: Text(context.l10n.pageRestoreCheckpoint),
+                                leading: const Icon(Icons.html_outlined),
+                                title: Text(context.l10n.rowExportHtml),
                               ),
                             ),
+                            // PDF export: desktop drives the OS WebView2 runtime's
+                            // headless print (native bytes → download); web hands
+                            // the same self-contained HTML to the browser's own
+                            // print dialog ("Save as PDF"). Available on both.
+                            PopupMenuItem(
+                              height: 30,
+                              value: 'export-pdf',
+                              child: ListTile(
+                                minTileHeight: 30,
+                                minVerticalPadding: 0,
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(
+                                  Icons.picture_as_pdf_outlined,
+                                ),
+                                title: Text(context.l10n.rowExportPdf),
+                              ),
+                            ),
+                            const PopupMenuDivider(),
+                            PopupMenuItem(
+                              height: 30,
+                              value: 'import-md',
+                              child: ListTile(
+                                minTileHeight: 30,
+                                minVerticalPadding: 0,
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.upload_file_outlined),
+                                title: Text(context.l10n.pageImportMarkdown),
+                              ),
+                            ),
+                            if (widget.onShare != null) ...[
+                              const PopupMenuDivider(),
+                              PopupMenuItem(
+                                height: 30,
+                                value: 'share',
+                                child: ListTile(
+                                  minTileHeight: 30,
+                                  minVerticalPadding: 0,
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.public),
+                                  title: Text(context.l10n.shareTitle),
+                                ),
+                              ),
+                            ],
+                            if (widget.onVersionHistory != null) ...[
+                              const PopupMenuDivider(),
+                              PopupMenuItem(
+                                height: 30,
+                                value: 'version-history',
+                                child: ListTile(
+                                  minTileHeight: 30,
+                                  minVerticalPadding: 0,
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.history),
+                                  title: Text(context.l10n.versionHistoryTitle),
+                                ),
+                              ),
+                            ],
+                            if (widget.onRestoreCheckpoint != null) ...[
+                              const PopupMenuDivider(),
+                              PopupMenuItem(
+                                height: 30,
+                                value: 'restore-checkpoint',
+                                child: ListTile(
+                                  minTileHeight: 30,
+                                  minVerticalPadding: 0,
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.restore_outlined),
+                                  title: Text(
+                                    context.l10n.pageRestoreCheckpoint,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
-                        ],
-                      ),
-                    ],
-                  ),
-                  if (widget.showFormatBar && canEdit && header.maxWidth < 720)
-                    ListenableBuilder(
-                      listenable: _activeBlockHook,
-                      builder: (context, _) => _formatBar(context),
+                        ),
+                      ],
                     ),
-                ],
-              ),
+                    if (widget.showFormatBar && canEdit && !barOn)
+                      ListenableBuilder(
+                        listenable: _activeBlockHook,
+                        builder: (context, _) => _formatBar(context),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
           // Width: PageWidthFrame in _editorScroll caps the column (gh#164).
@@ -447,59 +453,16 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
   /// default): one-click access to the high-frequency Markdown actions,
   /// driven through [_commandHook] so focus/selection semantics stay in the
   /// editor.
-  /// Narrowest share of the header the format bar may be squeezed to.
-  ///
-  /// MEASURED, not chosen: the full strip is 19 buttons over 606px. 360 keeps
-  /// roughly the first eleven — undo/redo, the three heading levels, bold /
-  /// italic / strike, code, link — visible without scrolling, which is the set
-  /// you reach for without looking. Past that the bar scrolls, which it has
-  /// always been able to do (it is a horizontal SingleChildScrollView).
-  static const _formatBarFloor = 360.0;
-
-  /// The right-hand cluster (side-panel toggle, comments, properties, page
-  /// menu) shares this row too, and is not flexible. Reserved alongside the
-  /// bar's floor so the floor is a floor on what the BAR gets, not on what is
-  /// left over before the icons take their cut.
-  static const _headerIconsWidth = 160.0;
-
-  /// How wide the breadcrumb may get.
-  ///
-  /// "Path first" — it takes what it needs — under two bounds, and each one is
-  /// the answer to a question that was actually asked:
-  ///
-  ///  * A ceiling at 70% of the header, so a pathological title cannot span the
-  ///    whole thing. Real names and real nesting stay well under it; the one
-  ///    that reached it was a hand-typed `asdfsadfasfdasfds…`.
-  ///  * With the bar on, a reserve for the bar: the path may not eat the last
-  ///    [_formatBarFloor] + [_headerIconsWidth] of the row. That is a bound on
-  ///    what the PATH may take — not a promise about the bar's rendered width,
-  ///    which `_formatBar` narrows again with its own `Center(maxWidth:
-  ///    pageWidth)`. Measured on a 1050-wide window the bar ends up around
-  ///    317px and shows ten buttons before it scrolls.
-  ///
-  /// The 200 floor at the end is for a genuinely narrow pane, where the two
-  /// bounds cross and something has to give; there the path keeps enough to
-  /// show the page name and the bar scrolls from the start.
-  ///
-  /// Measured, bar on, this page's path needing 221px:
-  ///
-  ///   window 1600 -> path 221, bar 606 (everything fits, no scroll)
-  ///   window 1400 -> path 221, bar 562
-  ///   window 1280 -> path 221, bar 442
-  ///   window 1050 -> path yields, bar 317
-  ///
-  /// The path holding its natural 221 rather than its whole budget is the point
-  /// of `MainAxisSize.min` on PageBreadcrumb's Row — a cap is not a demand.
-  double _pathBudget(double header, {required bool barOn}) {
-    final ceiling = header * 0.7;
-    if (!barOn) {
-      return math.max(0, math.min(ceiling, header - _headerIconsWidth));
-    }
-    return math.max(
-      math.min(ceiling, header - _formatBarFloor - _headerIconsWidth),
-      200.0,
-    );
-  }
+  Widget _pathSlot({
+    required bool barOn,
+    required double header,
+    required Widget child,
+  }) => barOn
+      ? ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: pagePathBudget(header)),
+          child: child,
+        )
+      : Expanded(child: child);
 
   Widget _formatBar(BuildContext context) {
     Widget btn(

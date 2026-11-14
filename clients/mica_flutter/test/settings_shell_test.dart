@@ -25,7 +25,11 @@ void main() {
           addTearDown(tester.view.resetDevicePixelRatio);
           var closed = false;
           await tester.pumpWidget(
-            _Host(textScale: scale, onClose: () => closed = true),
+            _Host(
+              textScale: scale,
+              onClose: () => closed = true,
+              withFooter: true,
+            ),
           );
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull);
@@ -54,6 +58,52 @@ void main() {
       );
     }
   }
+
+  // The About row used to trail the list as a stock ListTile: bigger type
+  // than the categories, an icon off their column, and it scrolled away with
+  // them. It now shares their row widget and is pinned under a rule.
+  testWidgets('the footer is pinned under a rule and matches the categories', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var opened = 0;
+    await tester.pumpWidget(
+      _Host(onClose: () {}, withFooter: true, onFooter: () => opened++),
+    );
+    await tester.pumpAndSettle();
+
+    final nav = tester.getRect(
+      find.byKey(const ValueKey('settings-navigation')),
+    );
+    final footer = tester.getRect(find.byKey(const ValueKey('settings-about')));
+    final lastCategory = tester.getRect(
+      find.byKey(const ValueKey('settings-category-1')),
+    );
+    expect(footer.top, greaterThan(nav.bottom), reason: 'outside the list');
+    expect(footer.top - lastCategory.bottom, greaterThan(200));
+    final rule = find.byWidgetPredicate((w) => w is Divider && w.indent == 12);
+    expect(rule, findsOneWidget);
+    expect(tester.getRect(rule).bottom, lessThanOrEqualTo(footer.top));
+
+    TextStyle style(String text) => tester.widget<Text>(find.text(text)).style!;
+    expect(style('About').fontSize, style('AI providers').fontSize);
+    expect(style('About').fontWeight, style('AI providers').fontWeight);
+    expect(
+      tester.getTopLeft(find.byIcon(Icons.info_outline)).dx,
+      tester.getTopLeft(find.byIcon(Icons.auto_awesome)).dx,
+      reason: 'icons share one column',
+    );
+    expect(
+      tester.getTopLeft(find.text('About')).dx,
+      tester.getTopLeft(find.text('AI providers')).dx,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('settings-about')));
+    expect(opened, 1);
+  });
 
   testWidgets(
     'only the selected settings page scrolls; header stays in place',
@@ -192,9 +242,16 @@ void main() {
 }
 
 class _Host extends StatefulWidget {
-  const _Host({required this.onClose, this.textScale = 1});
+  const _Host({
+    required this.onClose,
+    this.textScale = 1,
+    this.withFooter = false,
+    this.onFooter,
+  });
   final VoidCallback onClose;
   final double textScale;
+  final bool withFooter;
+  final VoidCallback? onFooter;
 
   @override
   State<_Host> createState() => _HostState();
@@ -219,6 +276,15 @@ class _HostState extends State<_Host> {
         onClose: widget.onClose,
         selectedIndex: selected,
         onSelected: (index) => setState(() => selected = index),
+        footer: widget.withFooter
+            ? MicaSettingsNavItem(
+                key: const ValueKey('settings-about'),
+                icon: Icons.info_outline,
+                title: 'About',
+                trailing: const Text('v1.0.0'),
+                onTap: widget.onFooter ?? () {},
+              )
+            : null,
         destinations: [
           MicaSettingsDestination(
             group: 'General',

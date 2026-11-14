@@ -71,6 +71,7 @@ import 'ui/doc_tab_strip.dart';
 import 'ui/account_menu.dart';
 import 'ui/shell_title_bar.dart';
 import 'ui/sidebar_toggle_icon.dart';
+import 'ui/page_header_layout.dart';
 import 'ui/window_chrome.dart';
 import 'ui/export_shape.dart';
 import 'doc_tab_persistence.dart';

@@ -1754,6 +1754,7 @@ class PageBreadcrumb extends StatefulWidget {
     this.onCopyPath,
     this.workspaceName,
     this.onOpenWorkspace,
+    this.fill = false,
   });
 
   final List<DocumentView> views;
@@ -1778,10 +1779,15 @@ class PageBreadcrumb extends StatefulWidget {
   final String? workspaceName;
   final Future<void> Function()? onOpenWorkspace;
 
+  /// Take the full width it is given and let the text selection cover all of
+  /// it, so a drag can start anywhere in the blank right of the crumbs. Off
+  /// when the row has another tenant (the format bar) that needs the space.
+  final bool fill;
+
   /// Horizontal slack around the path that still starts a text selection.
-  /// The header row's left padding is reduced by the same amount so the first
-  /// crumb stays where it was.
-  static const double selectionInset = 6;
+  /// The header row has no left padding of its own, so this slack begins at
+  /// the pane's left edge and the first crumb sits this far in.
+  static const double selectionInset = 8;
 
   @override
   State<PageBreadcrumb> createState() => PageBreadcrumbState();
@@ -1842,6 +1848,34 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
     }
     final full = chain.reversed.toList(); // root … current
 
+    final path = LayoutBuilder(
+      builder: (context, box) => _path(context, full, box.maxWidth),
+    );
+    final actions = <Widget>[
+      // PINNED, outside the flexible path: it is about the page, so it must
+      // not disappear because the page's name is long. Still immediately
+      // after the crumbs (the spot GitHub uses) rather than off in `trailing`
+      // with the sync badge, where it would read as another page utility
+      // instead of "copy THIS".
+      if (widget.onCopyPath case final copy?)
+        InlineCopyButton(onCopy: copy, tooltip: context.l10n.pageCopyPath),
+      widget.trailing,
+    ];
+    if (widget.fill) {
+      return _selectable(
+        Row(
+          children: [
+            Flexible(child: path),
+            // Inside the selection area only for its hit box; the badge text
+            // is not part of the path and must not be copied with it.
+            SelectionContainer.disabled(
+              child: Row(mainAxisSize: MainAxisSize.min, children: actions),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Row(
       // Shrink-wrap. The caller caps this with a maxWidth, and a cap is not a
       // demand: a two-crumb path inside a 767px budget must occupy the width of
@@ -1870,37 +1904,26 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
         // (where a right-to-left drag begins), would otherwise land outside
         // it and select nothing. Clicks elsewhere only clear the selection
         // when they move focus, so outside taps clear it explicitly.
-        Flexible(
-          child: TapRegion(
-            onTapOutside: (_) =>
-                _pathSelection.currentState?.selectableRegion.clearSelection(),
-            child: SelectionArea(
-              key: _pathSelection,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: PageBreadcrumb.selectionInset,
-                  vertical: 4,
-                ),
-                child: LayoutBuilder(
-                  builder: (context, box) =>
-                      _path(context, full, box.maxWidth),
-                ),
-              ),
-            ),
-          ),
-        ),
-        // PINNED, outside the flexible path: it is about the page, so it must
-        // not disappear because the page's name is long. Still immediately
-        // after the crumbs (the spot GitHub uses) rather than off in `trailing`
-        // with the sync badge, where it would read as another page utility
-        // instead of "copy THIS".
-        if (widget.onCopyPath case final copy?) ...[
-          InlineCopyButton(onCopy: copy, tooltip: context.l10n.pageCopyPath),
-        ],
-        widget.trailing,
+        Flexible(child: _selectable(path)),
+        ...actions,
       ],
     );
   }
+
+  Widget _selectable(Widget child) => TapRegion(
+    onTapOutside: (_) =>
+        _pathSelection.currentState?.selectableRegion.clearSelection(),
+    child: SelectionArea(
+      key: _pathSelection,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: PageBreadcrumb.selectionInset,
+          vertical: 4,
+        ),
+        child: child,
+      ),
+    ),
+  );
 
   static const _sepWidth = 20.0; // chevron 14 + 3px either side
   static const _crumbPad = 4.0; // _crumb's horizontal padding

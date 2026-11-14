@@ -184,7 +184,7 @@ void main() {
           body: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(2, 4, 8, 0),
+                padding: const EdgeInsets.fromLTRB(0, 4, 8, 0),
                 child: Row(
                   children: [
                     ConstrainedBox(
@@ -256,6 +256,115 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
     await tester.pump();
     expect(copied ?? '', isEmpty, reason: 'a click elsewhere clears it');
+  });
+
+  // Follow-up from the same desktop report: the slack of a few pixels was
+  // still too fine a target. When the path has the header row to itself it
+  // fills it, so a drag can start anywhere from the pane's left edge to the
+  // tool icons on the right.
+  testWidgets('a filling path selects from the edge and from the blank', (
+    tester,
+  ) async {
+    String? copied;
+    var copyPressed = 0;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: PageBreadcrumb(
+                      fill: true,
+                      views: _views,
+                      current: _page,
+                      workspaceName: 'greenstor',
+                      onSelect: (_) async {},
+                      onOpenWorkspace: () async {},
+                      onCopyPath: () async {
+                        copyPressed++;
+                        return true;
+                      },
+                      trailing: const Text('syncing'),
+                    ),
+                  ),
+                  const SizedBox(
+                    key: ValueKey('tools'),
+                    width: 120,
+                    height: 30,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    Future<String?> dragThenCopy(Offset from, Offset to) async {
+      copied = null;
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: from);
+      await mouse.down(from);
+      await tester.pump();
+      await mouse.moveTo(Offset.lerp(from, to, 0.5)!);
+      await tester.pump();
+      await mouse.moveTo(to);
+      await tester.pump();
+      await mouse.up();
+      await tester.pump();
+      await mouse.removePointer();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      return copied;
+    }
+
+    final first = tester.getTopLeft(find.text('greenstor'));
+    final last = tester.getTopRight(find.text('BOI'));
+    final tools = tester.getTopLeft(find.byKey(const ValueKey('tools')));
+    expect(first.dx, PageBreadcrumb.selectionInset);
+    expect(tools.dx - last.dx, greaterThan(300), reason: 'a wide blank');
+
+    final fromBlank = await dragThenCopy(
+      Offset(tools.dx - 4, last.dy + 7),
+      first + const Offset(1, 7),
+    );
+    expect(fromBlank, allOf(contains('greenstor'), contains('BOI')));
+    expect(
+      fromBlank,
+      isNot(contains('syncing')),
+      reason: 'the status beside the path is not part of it',
+    );
+
+    final fromEdge = await dragThenCopy(
+      Offset(1, first.dy + 7),
+      last + const Offset(-1, 7),
+    );
+    expect(fromEdge, allOf(contains('greenstor'), contains('BOI')));
+
+    await tester.tap(find.byType(InlineCopyButton));
+    await tester.pump();
+    expect(copyPressed, 1, reason: 'the copy button still takes clicks');
   });
 
   testWidgets('the breadcrumb reads exactly what copy path copies', (
