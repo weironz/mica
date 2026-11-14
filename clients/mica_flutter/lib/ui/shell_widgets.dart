@@ -1778,12 +1778,18 @@ class PageBreadcrumb extends StatefulWidget {
   final String? workspaceName;
   final Future<void> Function()? onOpenWorkspace;
 
+  /// Horizontal slack around the path that still starts a text selection.
+  /// The header row's left padding is reduced by the same amount so the first
+  /// crumb stays where it was.
+  static const double selectionInset = 6;
+
   @override
   State<PageBreadcrumb> createState() => PageBreadcrumbState();
 }
 
 class PageBreadcrumbState extends State<PageBreadcrumb> {
   final MenuController _renameMenu = MenuController();
+  final _pathSelection = GlobalKey<SelectionAreaState>();
   final TextEditingController _renameField = TextEditingController();
   final FocusNode _renameFocus = FocusNode();
 
@@ -1858,10 +1864,29 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
         // of the viewport entirely.
         // Flexible, not Expanded: a short path shrink-wraps so the copy button
         // hugs the last crumb instead of floating off in the leftover budget.
+        //
+        // The selection area is padded past the glyphs: a drag that starts in
+        // the gap just left of the first crumb, or just right of the last one
+        // (where a right-to-left drag begins), would otherwise land outside
+        // it and select nothing. Clicks elsewhere only clear the selection
+        // when they move focus, so outside taps clear it explicitly.
         Flexible(
-          child: LayoutBuilder(
-            builder: (context, box) =>
-                SelectionArea(child: _path(context, full, box.maxWidth)),
+          child: TapRegion(
+            onTapOutside: (_) =>
+                _pathSelection.currentState?.selectableRegion.clearSelection(),
+            child: SelectionArea(
+              key: _pathSelection,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: PageBreadcrumb.selectionInset,
+                  vertical: 4,
+                ),
+                child: LayoutBuilder(
+                  builder: (context, box) =>
+                      _path(context, full, box.maxWidth),
+                ),
+              ),
+            ),
           ),
         ),
         // PINNED, outside the flexible path: it is about the page, so it must
@@ -1870,7 +1895,6 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
         // with the sync badge, where it would read as another page utility
         // instead of "copy THIS".
         if (widget.onCopyPath case final copy?) ...[
-          const SizedBox(width: 4),
           InlineCopyButton(onCopy: copy, tooltip: context.l10n.pageCopyPath),
         ],
         widget.trailing,

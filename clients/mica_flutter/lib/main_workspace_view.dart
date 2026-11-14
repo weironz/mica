@@ -1591,8 +1591,6 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                 Row(
                   children: [
                     Expanded(child: _accountTile(context)),
-                    if (updateSupported)
-                      UpdateButton(controller: _desktopUpdates),
                     IconButton(
                       tooltip: context.l10n.settingsTitle,
                       visualDensity: VisualDensity.compact,

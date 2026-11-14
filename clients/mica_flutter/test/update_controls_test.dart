@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
+import 'package:mica_flutter/ui/account_menu.dart';
 import 'package:mica_flutter/ui/update_controls.dart';
 import 'package:mica_flutter/updater_common.dart';
 
@@ -24,17 +25,17 @@ Widget _host(DesktopUpdateController controller, {bool about = false}) =>
       supportedLocales: AppLocalizations.supportedLocales,
       home: Scaffold(
         body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Expanded(child: Text('Account')),
-                UpdateButton(controller: controller),
-                IconButton(
-                  tooltip: '回收站',
-                  onPressed: () {},
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              ],
+            SizedBox(
+              width: 240,
+              child: AccountMenu(
+                name: 'Account',
+                initial: 'A',
+                onSettings: () {},
+                onSwitchWorld: () {},
+                updates: controller,
+              ),
             ),
             if (about) UpdateChecker(controller: controller),
           ],
@@ -42,8 +43,25 @@ Widget _host(DesktopUpdateController controller, {bool about = false}) =>
       ),
     );
 
+const _dot = ValueKey('account-update-dot');
+
+/// The update entry lives in the account menu; open it and press [label].
+Future<void> _pressInMenu(WidgetTester tester, String label) async {
+  await tester.tap(find.text('Account'));
+  await tester.pumpAndSettle();
+  await tester.tap(
+    find.descendant(
+      of: find.byType(MenuItemButton),
+      matching: find.text(label),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
-  testWidgets('detects updates in the existing account row', (tester) async {
+  testWidgets('a found update marks the account row and the menu entry', (
+    tester,
+  ) async {
     var checks = 0;
     final controller = DesktopUpdateController(
       currentVersion: '0.13.68',
@@ -58,11 +76,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(checks, 1);
+    expect(find.byKey(_dot), findsOneWidget);
+    expect(find.text('立即更新'), findsNothing, reason: 'no resident button');
+    await tester.tap(find.text('Account'));
+    await tester.pumpAndSettle();
     expect(find.text('立即更新'), findsOneWidget);
-    final update = find.byIcon(Icons.system_update_alt);
-    final trash = find.byIcon(Icons.delete_outline);
-    expect(tester.getCenter(update).dy, tester.getCenter(trash).dy);
-    expect(tester.getCenter(update).dx, lessThan(tester.getCenter(trash).dx));
+    expect(find.text('v0.13.69'), findsOneWidget);
     expect(find.byType(AlertDialog), findsNothing);
   });
 
@@ -79,8 +98,7 @@ void main() {
     addTearDown(controller.dispose);
     await tester.pumpWidget(_host(controller));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.system_update_alt));
-    await tester.pumpAndSettle();
+    await _pressInMenu(tester, '立即更新');
 
     expect(find.text('更新到 v0.13.69'), findsOneWidget);
     expect(find.textContaining('自动关闭并重启 Mica'), findsOneWidget);
@@ -111,8 +129,7 @@ void main() {
     addTearDown(controller.dispose);
     await tester.pumpWidget(_host(controller, about: true));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.system_update_alt));
-    await tester.pumpAndSettle();
+    await _pressInMenu(tester, '立即更新');
     expect(find.byType(AlertDialog), findsOneWidget);
     await tester.tap(find.text('更新并重启'));
     await tester.pump();
@@ -122,8 +139,8 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
     expect(find.text('下载中 50%…'), findsOneWidget);
     expect(controller.isBusy, isTrue);
-    final progress = tester.widget<CircularProgressIndicator>(
-      find.byType(CircularProgressIndicator),
+    final progress = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
     );
     expect(progress.value, 0.5);
     await tester.pumpWidget(const SizedBox());
@@ -149,8 +166,8 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
     expect(find.byType(SnackBar), findsNothing);
     expect(controller.stage, DesktopUpdateStage.error);
-    await tester.tap(find.byIcon(Icons.system_update_alt));
-    await tester.pumpAndSettle();
+    expect(find.byKey(_dot), findsNothing);
+    await _pressInMenu(tester, '检查更新');
     expect(checks, 2);
     expect(find.text('更新并重启'), findsOneWidget);
   });
@@ -171,8 +188,7 @@ void main() {
     addTearDown(controller.dispose);
     await tester.pumpWidget(_host(controller, about: true));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.system_update_alt));
-    await tester.pumpAndSettle();
+    await _pressInMenu(tester, '立即更新');
     await tester.tap(find.text('更新并重启'));
     await tester.pumpAndSettle();
     expect(applies, 1);
@@ -199,6 +215,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(checks, 0);
     expect(find.byIcon(Icons.system_update_alt), findsNothing);
+    await tester.tap(find.text('Account'));
+    await tester.pumpAndSettle();
+    expect(find.text('检查更新'), findsNothing);
   });
 
   test(
@@ -263,15 +282,12 @@ void main() {
     await tester.pumpWidget(_host(controller));
     await tester.pumpAndSettle();
     expect(controller.stage, DesktopUpdateStage.upToDate);
-    expect(
-      find.text('立即更新'),
-      findsNothing,
-      reason: 'an idle update entry stays icon-only',
-    );
+    expect(find.byKey(_dot), findsNothing);
     await tester.pump(DesktopUpdateController.checkInterval);
     await tester.pumpAndSettle();
     expect(checks, 2);
     expect(controller.stage, DesktopUpdateStage.available);
+    expect(find.byKey(_dot), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(DesktopUpdateController.checkInterval);
     expect(checks, 2);

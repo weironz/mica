@@ -125,7 +125,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
           // document column. Notion puts the same cluster here; the row exists
           // whether or not the format bar is on, because the tools do.
           Padding(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+            padding: const EdgeInsets.fromLTRB(2, 4, 8, 0),
             child: LayoutBuilder(
               builder: (context, header) => Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -221,13 +221,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                         visualDensity: VisualDensity.compact,
                         onPressed: () =>
                             setUi(() => _toolsExpanded = !_toolsExpanded),
-                        icon: Transform.flip(
-                          flipX: true,
-                          child: const Icon(
-                            Icons.view_sidebar_outlined,
-                            size: 20,
-                          ),
-                        ),
+                        icon: const SidebarToggleIcon(right: true, size: 20),
                       ),
                       if (widget.onAddComment != null)
                         CommentsButton(

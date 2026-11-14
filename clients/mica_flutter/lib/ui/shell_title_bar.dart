@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../widgets/mica_logo.dart';
+import 'sidebar_toggle_icon.dart';
 import 'theme_tokens.dart';
 import 'window_chrome.dart';
 
@@ -47,7 +48,7 @@ class ShellTitleBar extends StatelessWidget {
                     width: 30,
                     height: 30,
                   ),
-                  icon: const Icon(Icons.view_sidebar_outlined, size: 19),
+                  icon: const SidebarToggleIcon(size: 19),
                 ),
                 const Expanded(
                   child: DesktopDragRegion(child: SizedBox.expand()),

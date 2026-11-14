@@ -1,4 +1,4 @@
-/// The compact sidebar entry and the detailed About control share one updater.
+/// The account menu entry and the detailed About control share one updater.
 library;
 
 import 'typography.dart';
@@ -41,17 +41,23 @@ Future<void> _confirmUpdate(
       true;
 });
 
-/// Rounded update action beside the account and settings controls.
-class UpdateButton extends StatefulWidget {
-  const UpdateButton({super.key, required this.controller});
+/// Keeps the shared updater checking in the background for as long as [child]
+/// is mounted. It draws nothing itself: the account menu shows the result.
+class UpdateWatcher extends StatefulWidget {
+  const UpdateWatcher({
+    super.key,
+    required this.controller,
+    required this.child,
+  });
 
   final DesktopUpdateController controller;
+  final Widget child;
 
   @override
-  State<UpdateButton> createState() => _UpdateButtonState();
+  State<UpdateWatcher> createState() => _UpdateWatcherState();
 }
 
-class _UpdateButtonState extends State<UpdateButton>
+class _UpdateWatcherState extends State<UpdateWatcher>
     with WidgetsBindingObserver {
   Timer? _timer;
 
@@ -63,7 +69,7 @@ class _UpdateButtonState extends State<UpdateButton>
   }
 
   @override
-  void didUpdateWidget(UpdateButton oldWidget) {
+  void didUpdateWidget(UpdateWatcher oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) _scheduleChecks();
   }
@@ -85,7 +91,7 @@ class _UpdateButtonState extends State<UpdateButton>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && widget.controller.supported) {
       unawaited(widget.controller.check());
     }
   }
@@ -98,91 +104,8 @@ class _UpdateButtonState extends State<UpdateButton>
   }
 
   @override
-  Widget build(BuildContext context) {
-    final controller = widget.controller;
-    if (!controller.supported) return const SizedBox.shrink();
-    return ListenableBuilder(
-      listenable: controller,
-      builder: (context, _) {
-        final l10n = context.l10n;
-        final tokens = MicaTheme.of(context);
-        final available = controller.stage == DesktopUpdateStage.available;
-        final downloading = controller.stage == DesktopUpdateStage.downloading;
-        final checking = controller.stage == DesktopUpdateStage.checking;
-        final tooltip = switch (controller.stage) {
-          DesktopUpdateStage.idle => l10n.updateCheck,
-          DesktopUpdateStage.checking => l10n.updateChecking,
-          DesktopUpdateStage.upToDate => l10n.updateUpToDate(
-            controller.currentVersion,
-          ),
-          DesktopUpdateStage.available => l10n.updateFound(
-            controller.info!.version,
-            controller.currentVersion,
-          ),
-          DesktopUpdateStage.downloading => l10n.updateDownloading(
-            (controller.progress * 100).round(),
-          ),
-          DesktopUpdateStage.error => l10n.updateFailed(
-            controller.error.toString(),
-          ),
-        };
-        final onPressed = controller.isBusy
-            ? null
-            : () => activateDesktopUpdate(context, controller);
-        final icon = checking || downloading
-            ? SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  value: downloading && controller.progress > 0
-                      ? controller.progress
-                      : null,
-                ),
-              )
-            : Icon(
-                Icons.system_update_alt,
-                size: 16,
-                color: available ? tokens.surface.base : tokens.text.muted,
-              );
-        // Idle it is a round icon so the nickname keeps the row's width; the
-        // label appears only when there is an update worth acting on.
-        return Tooltip(
-          message: tooltip,
-          child: available
-              ? TextButton.icon(
-                  style: TextButton.styleFrom(
-                    minimumSize: const Size(0, 28),
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    shape: const StadiumBorder(),
-                    foregroundColor: tokens.surface.base,
-                    backgroundColor: tokens.text.primary,
-                  ),
-                  onPressed: onPressed,
-                  label: Text(l10n.updateNow, style: MicaTypography.caption),
-                  icon: icon,
-                )
-              : IconButton(
-                  onPressed: onPressed,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 28,
-                    height: 28,
-                  ),
-                  style: IconButton.styleFrom(
-                    shape: const CircleBorder(),
-                    backgroundColor: tokens.surface.sunken,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  icon: icon,
-                ),
-        );
-      },
-    );
-  }
+  Widget build(BuildContext context) => widget.child;
 }
-
 Future<void> activateDesktopUpdate(
   BuildContext context,
   DesktopUpdateController controller,

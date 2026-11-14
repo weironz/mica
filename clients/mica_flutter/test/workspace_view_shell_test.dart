@@ -24,8 +24,7 @@ import 'package:mica_flutter/ui/narrow_tab_switcher.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart' as app;
-import 'package:mica_flutter/ui/update_controls.dart';
-import 'package:mica_flutter/updater.dart' show updateSupported;
+import 'package:mica_flutter/ui/account_menu.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 Workspace _ws(String id, String name) =>
@@ -190,10 +189,9 @@ class _SizeBox extends StatelessWidget {
 /// the app that is the editor; this harness has no document open, so any
 /// focusable button in the shell stands in.
 void _focusInsideShell(WidgetTester tester) {
-  final icon = find.descendant(
-    of: find.byType(IconButton).first,
-    matching: find.byType(Icon),
-  );
+  final icon = find
+      .descendant(of: find.byType(IconButton), matching: find.byType(Icon))
+      .first;
   Focus.of(tester.element(icon)).requestFocus();
 }
 
@@ -221,29 +219,26 @@ void main() {
     });
   }
 
-  testWidgets(
-    'account row has a direct settings shortcut and compact updates',
-    (tester) async {
-      useZh(tester);
-      await tester.pumpWidget(_Host().build());
-      await tester.pumpAndSettle();
-      expect(find.byTooltip('回收站'), findsNothing);
-      final update = find.byType(UpdateButton);
-      if (!updateSupported) {
-        expect(update, findsNothing);
-        return;
-      }
-      expect(update, findsOneWidget);
-      final accountRow = find.byWidgetPredicate(
-        (widget) =>
-            widget is Row && widget.children.any((c) => c is UpdateButton),
-      );
-      expect(accountRow, findsOneWidget);
-      expect(tester.widget<Row>(accountRow).children, hasLength(3));
-      expect(tester.getSize(update).height, lessThanOrEqualTo(40));
-      expect(tester.takeException(), isNull);
-    },
-  );
+  testWidgets('account row holds only the account and a settings button', (
+    tester,
+  ) async {
+    useZh(tester);
+    await tester.pumpWidget(_Host().build());
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('回收站'), findsNothing);
+    final accountRow = find.byWidgetPredicate(
+      (widget) =>
+          widget is Row &&
+          widget.children.any(
+            (c) => c is Expanded && c.child is AccountMenu,
+          ),
+    );
+    expect(accountRow, findsOneWidget);
+    final children = tester.widget<Row>(accountRow).children;
+    expect(children, hasLength(2));
+    expect((children.last as IconButton).tooltip, '设置');
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('tabs share the top edge with the sidebar toggle', (
     tester,

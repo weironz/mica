@@ -47,12 +47,33 @@ void main() {
       expect(find.byIcon(Icons.more_vert), findsNothing);
       await tester.tap(find.text('昵称'));
       await tester.pumpAndSettle();
+      expect(calls, ['update'], reason: 'the menu keeps background checks');
       expect(find.text('demo@example.test'), findsOneWidget);
       expect(find.text('检查更新'), findsOneWidget);
       expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
+      expect(find.text('v1.0.0'), findsOneWidget);
+      expect(find.text('退出登录'), findsOneWidget);
+      // Roomy enough to read at a glance, like other desktop account menus.
+      expect(
+        tester
+            .getSize(
+              find
+                  .ancestor(
+                    of: find.text('demo@example.test'),
+                    matching: find.byType(Container),
+                  )
+                  .first,
+            )
+            .width,
+        greaterThanOrEqualTo(260),
+      );
+      expect(
+        tester.getSize(find.widgetWithText(MenuItemButton, '设置')).height,
+        greaterThanOrEqualTo(36),
+      );
       await tester.tap(find.text('检查更新'));
       await tester.pumpAndSettle();
-      expect(calls, ['update']);
+      expect(calls, ['update', 'update']);
       expect(find.text('demo@example.test'), findsNothing);
       expect(find.textContaining('1.0.0'), findsOneWidget);
       expect(tester.takeException(), isNull);

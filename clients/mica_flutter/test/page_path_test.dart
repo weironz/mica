@@ -153,6 +153,111 @@ void main() {
     },
   );
 
+  // Reported on the desktop build: a drag had to start exactly on a glyph, so
+  // a right-to-left drag (which begins past the last character) and a
+  // left-to-right one started a few pixels early both selected nothing, and
+  // a selection survived clicks anywhere except the editor body.
+  testWidgets('drags starting just outside the crumbs select, both ways', (
+    tester,
+  ) async {
+    String? copied;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(2, 4, 8, 0),
+                child: Row(
+                  children: [
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 400),
+                      child: PageBreadcrumb(
+                        views: _views,
+                        current: _page,
+                        workspaceName: 'greenstor',
+                        onSelect: (_) async {},
+                        onOpenWorkspace: () async {},
+                        onRename: (_, _) async {},
+                        onCopyPath: () async => true,
+                        trailing: const SizedBox.shrink(),
+                      ),
+                    ),
+                    const Expanded(
+                      child: SizedBox(key: ValueKey('blank'), height: 30),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    Future<String?> dragThenCopy(Offset from, Offset to) async {
+      copied = null;
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: from);
+      await mouse.down(from);
+      await tester.pump();
+      await mouse.moveTo(Offset.lerp(from, to, 0.5)!);
+      await tester.pump();
+      await mouse.moveTo(to);
+      await tester.pump();
+      await mouse.up();
+      await tester.pump();
+      await mouse.removePointer();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      return copied;
+    }
+
+    final first = tester.getTopLeft(find.text('greenstor'));
+    final last = tester.getTopRight(find.text('BOI'));
+    expect(first.dx, 8, reason: 'the hit inset must not move the path');
+
+    final rtl = await dragThenCopy(
+      last + const Offset(4, 7),
+      first + const Offset(1, 7),
+    );
+    expect(rtl, allOf(contains('greenstor'), contains('BOI')));
+
+    final ltr = await dragThenCopy(
+      first + const Offset(-4, 7),
+      last + const Offset(-1, 7),
+    );
+    expect(ltr, allOf(contains('greenstor'), contains('BOI')));
+
+    await tester.tapAt(tester.getCenter(find.byKey(const ValueKey('blank'))));
+    await tester.pump();
+    copied = null;
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(copied ?? '', isEmpty, reason: 'a click elsewhere clears it');
+  });
+
   testWidgets('the breadcrumb reads exactly what copy path copies', (
     tester,
   ) async {
