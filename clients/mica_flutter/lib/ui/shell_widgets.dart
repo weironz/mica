@@ -1988,10 +1988,22 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
 
     Widget sep() => Padding(
       padding: const EdgeInsets.symmetric(horizontal: 3),
-      child: Icon(
-        Icons.chevron_right,
-        size: 14,
-        color: MicaTheme.of(context).text.ghost,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // An icon is not text, so a drag across the path used to copy the
+          // names run together. This invisible slash is what the selection
+          // picks up instead: `a/b/c`, the same form the copy button writes.
+          Text(
+            '/',
+            style: MicaTypography.caption.copyWith(color: Colors.transparent),
+          ),
+          Icon(
+            Icons.chevron_right,
+            size: 14,
+            color: MicaTheme.of(context).text.ghost,
+          ),
+        ],
       ),
     );
 

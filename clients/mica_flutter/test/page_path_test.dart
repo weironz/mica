@@ -61,6 +61,9 @@ List<String> _rendered(WidgetTester tester) => tester
     .widgetList<Text>(find.byType(Text))
     .map((t) => t.data)
     .whereType<String>()
+    // The separators carry an invisible '/' for selection; the chevron is
+    // what is seen.
+    .where((s) => s != '/')
     .toList();
 
 void main() {
@@ -349,7 +352,7 @@ void main() {
       Offset(tools.dx - 4, last.dy + 7),
       first + const Offset(1, 7),
     );
-    expect(fromBlank, allOf(contains('greenstor'), contains('BOI')));
+    expect(fromBlank, 'greenstor/基础信息/BOI', reason: 'separators copy as /');
     expect(
       fromBlank,
       isNot(contains('syncing')),
@@ -360,7 +363,7 @@ void main() {
       Offset(1, first.dy + 7),
       last + const Offset(-1, 7),
     );
-    expect(fromEdge, allOf(contains('greenstor'), contains('BOI')));
+    expect(fromEdge, 'greenstor/基础信息/BOI');
 
     await tester.tap(find.byType(InlineCopyButton));
     await tester.pump();
