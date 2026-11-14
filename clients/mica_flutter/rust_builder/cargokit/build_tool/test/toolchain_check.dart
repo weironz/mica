@@ -13,7 +13,7 @@ void check(bool condition, String message) {
 }
 
 Future<void> main() async {
-  const pinned = '1.98.0-x86_64-pc-windows-msvc';
+  const pinned = '1.100.0-x86_64-pc-windows-msvc';
   const manifestDir = 'fixture/project/native';
   late List<TestRunCommandArgs> calls;
   late String active;

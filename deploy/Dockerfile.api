@@ -9,7 +9,7 @@
 # The VERSION half comes from rust-toolchain.toml — this image, that file and
 # docker-compose.yml are deliberately one number, and release-check refuses when
 # they drift. (Floor for the `render` export deps: merman needs Rust ≥1.95.)
-FROM rust:1.98-slim-bookworm AS build
+FROM rust:1.100-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
@@ -19,7 +19,7 @@ RUN sh scripts/check-migration-bytes.sh
 # CI keeps the Mica builder's state across jobs; cache mounts are not exported
 # by cache-to=gha. Copy the binary out before the target mount is detached.
 RUN --mount=type=cache,id=mica-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=mica-cargo-target-1.98,target=/src/target,sharing=locked \
+    --mount=type=cache,id=mica-cargo-target-1.100,target=/src/target,sharing=locked \
     cargo build --locked --release -p mica-api-server \
  && cp target/release/mica-api-server /usr/local/bin/mica-api-server-staged
 

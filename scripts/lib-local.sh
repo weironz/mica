@@ -10,8 +10,14 @@ fail() { printf '\n  REFUSED: %s\n' "$*" >&2; exit 1; }
 note() { printf '==> %s\n' "$*"; }
 
 # Git Bash ships the coreutils these scripts use; put them first so a stray
-# Windows `find`/`sort` on PATH cannot answer instead.
-[ -d "/c/Program Files/Git/usr/bin" ] && PATH="/c/Program Files/Git/usr/bin:$PATH"
+# Windows `find`/`sort` on PATH cannot answer instead. Only when one does: an
+# unconditional prepend also shadowed the command stubs the script self-tests
+# put at the front of PATH (`uname`, `file`), so they failed on Windows hosts.
+if [ -d "/c/Program Files/Git/usr/bin" ]; then
+  case "$(command -v find) $(command -v sort)" in
+    */[Ss]ystem32/*) PATH="/c/Program Files/Git/usr/bin:$PATH" ;;
+  esac
+fi
 
 # linux | windows | macos — what this machine can build natively.
 host_os() {

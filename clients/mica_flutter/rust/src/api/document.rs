@@ -538,6 +538,35 @@ impl MicaDocument {
     }
 }
 
+/// Image blocks whose `url` resolves to a file inside the imported archive or
+/// vault get that file's local blob id (`asset_ids`: archive path -> blob id),
+/// in the `{file_id, name}` shape the cloud import produces and the local blob
+/// store expects; their other keys (width, title) stay. Shared by the Markdown
+/// import above and the native (`.mica.json`) path in `store.rs`, whose images
+/// the planner hands over as archive `url`s too.
+pub(crate) fn rewire_archive_images(
+    blocks: &mut [Block],
+    from_path: &str,
+    asset_ids: &std::collections::HashMap<String, String>,
+) {
+    let paths: std::collections::HashSet<String> = asset_ids.keys().cloned().collect();
+    for b in blocks.iter_mut() {
+        if b.kind != "image" {
+            continue;
+        }
+        let Some(url) = b.data.get("url").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(hit) = mica_interchange::resolve_ref(from_path, url, &paths) else {
+            continue;
+        };
+        if let Some(file_id) = asset_ids.get(&hit) {
+            let name = hit.rsplit('/').next().unwrap_or(&hit).to_string();
+            mica_interchange::attach_uploaded_image(&mut b.data, file_id, &name);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,31 +827,3 @@ mod tests {
     }
 }
 
-/// Image blocks whose `url` resolves to a file inside the imported archive or
-/// vault get that file's local blob id (`asset_ids`: archive path -> blob id),
-/// in the `{file_id, name}` shape the cloud import produces and the local blob
-/// store expects; their other keys (width, title) stay. Shared by the Markdown
-/// import above and the native (`.mica.json`) path in `store.rs`, whose images
-/// the planner hands over as archive `url`s too.
-pub(crate) fn rewire_archive_images(
-    blocks: &mut [Block],
-    from_path: &str,
-    asset_ids: &std::collections::HashMap<String, String>,
-) {
-    let paths: std::collections::HashSet<String> = asset_ids.keys().cloned().collect();
-    for b in blocks.iter_mut() {
-        if b.kind != "image" {
-            continue;
-        }
-        let Some(url) = b.data.get("url").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(hit) = mica_interchange::resolve_ref(from_path, url, &paths) else {
-            continue;
-        };
-        if let Some(file_id) = asset_ids.get(&hit) {
-            let name = hit.rsplit('/').next().unwrap_or(&hit).to_string();
-            mica_interchange::attach_uploaded_image(&mut b.data, file_id, &name);
-        }
-    }
-}
