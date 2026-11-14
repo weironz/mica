@@ -17,6 +17,7 @@ class EditorMarqueeHook {
   VoidCallback? _onEnd;
   VoidCallback? _onClear;
   double? Function()? _contentBottom;
+  bool Function(Offset global)? _inGutter;
 
   bool get isBound => _owner != null;
 
@@ -27,15 +28,20 @@ class EditorMarqueeHook {
   /// Global y where the last block ends, or null when unknown.
   double? contentBottom() => _contentBottom?.call();
 
+  /// Whether [global] is in the editor's handle gutter but not on a handle.
+  bool inGutter(Offset global) => _inGutter?.call(global) ?? false;
+
   void bind(
     Object owner, {
     required void Function(Rect global) onSelect,
     required VoidCallback onEnd,
     required VoidCallback onClear,
     required double? Function() contentBottom,
+    required bool Function(Offset global) inGutter,
   }) {
     _owner = owner;
     _contentBottom = contentBottom;
+    _inGutter = inGutter;
     _onSelect = onSelect;
     _onEnd = onEnd;
     _onClear = onClear;
@@ -47,6 +53,7 @@ class EditorMarqueeHook {
     if (!identical(_owner, owner)) return;
     _owner = null;
     _contentBottom = null;
+    _inGutter = null;
     _onSelect = null;
     _onEnd = null;
     _onClear = null;
@@ -117,6 +124,9 @@ class _EditorMarqueeRegionState extends State<EditorMarqueeRegion> {
 
   bool _startsMarquee(Offset p, Rect body, Rect? page) {
     if (page == null) return false;
+    // Left of the text is mostly the editor's own handle gutter: it looks like
+    // margin, so it starts a marquee too — except on a block's drag handle.
+    if (p.dy >= body.top && widget.hook.inGutter(p)) return true;
     final besidePage = p.dx < page.left || p.dx > page.right;
     final onGrip = !besidePage && (p.dx < body.left || p.dx > body.right);
     if (p.dy >= (widget.hook.contentBottom() ?? body.bottom)) return !onGrip;
@@ -302,6 +312,17 @@ class BlockMarqueeSelection extends ChangeNotifier {
       if (box != null) return r.localToGlobal(box.bottomLeft).dy;
     }
     return null;
+  }
+
+  bool inGutter(Offset global) {
+    final r = _render();
+    if (r == null || !r.attached || !r.hasSize) return false;
+    final local = r.globalToLocal(global);
+    return local.dx >= 0 &&
+        local.dx < EditorTheme.gutter &&
+        local.dy >= 0 &&
+        local.dy < r.size.height &&
+        r.dragHandleAt(local) == null;
   }
 
   @override

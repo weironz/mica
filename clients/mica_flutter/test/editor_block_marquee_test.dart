@@ -166,6 +166,52 @@ void main() {
     });
   }
 
+  // Left of the text is the editor's handle gutter; it reads as margin, so it
+  // must start a marquee too — but a press on a block's drag handle still
+  // belongs to the block drag.
+  testWidgets('a drag from the left handle gutter starts a marquee', (
+    tester,
+  ) async {
+    await _pump(tester);
+    final doc = _doc(tester);
+    final gutterX = doc.localToGlobal(Offset.zero).dx + 6;
+    final textY = _blockY(tester, 0);
+    var rectShown = false;
+    await _drag(
+      tester,
+      Offset(gutterX, textY - 6),
+      Offset(gutterX + 200, _blockY(tester, 1)),
+      whileHeld: () => rectShown = _marqueeRect.evaluate().isNotEmpty,
+    );
+    expect(rectShown, isTrue);
+    expect(_range(tester), (lo: 0, hi: 1));
+    expect(_surfaceSelection(tester), isNull);
+  });
+
+  testWidgets('a press on a drag handle does not start a marquee', (
+    tester,
+  ) async {
+    await _pump(tester);
+    final doc = _doc(tester);
+    final box = doc.blockBox(0)!;
+    final handle = doc.localToGlobal(Offset(box.left - 12, box.center.dy));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: doc.localToGlobal(box.center));
+    await mouse.moveTo(handle);
+    await tester.pump();
+    expect(doc.dragHandleAt(doc.globalToLocal(handle)), 0);
+    var rectShown = false;
+    await _drag(
+      tester,
+      handle,
+      handle + const Offset(0, 40),
+      whileHeld: () => rectShown = _marqueeRect.evaluate().isNotEmpty,
+    );
+    await mouse.removePointer();
+    expect(rectShown, isFalse);
+    expect(_range(tester), isNull);
+  });
+
   testWidgets('a marquee that touches no block selects nothing', (
     tester,
   ) async {

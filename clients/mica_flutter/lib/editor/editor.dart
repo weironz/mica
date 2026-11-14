@@ -494,7 +494,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _bindMarqueeHook(EditorMarqueeHook? hook) {
-    hook?.bind(this, onEnd: _syncImeFromSelection, onClear: _marquee.clear, contentBottom: _marquee.contentBottom, onSelect: (rect) {
+    hook?.bind(this, onEnd: _syncImeFromSelection, onClear: _marquee.clear, contentBottom: _marquee.contentBottom, inGutter: _marquee.inGutter, onSelect: (rect) {
       if (!_focus.hasFocus) _focus.requestFocus();
       _marquee.selectRect(rect);
     });
