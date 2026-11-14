@@ -869,6 +869,33 @@ class EditorController extends ChangeNotifier {
     });
   }
 
+  /// Remove blocks [lo]..[hi] (inclusive) whole, as one undo step — what a
+  /// marquee block selection's Delete means. A range delete would instead leave
+  /// the emptied first line behind.
+  void removeBlocks(int lo, int hi) {
+    if (_historyBusy || nodes.isEmpty) return;
+    final from = lo.clamp(0, nodes.length - 1);
+    final to = hi.clamp(from, nodes.length - 1);
+    _compoundEdit(() {
+      final removed = nodes.sublist(from, to + 1);
+      nodes.removeRange(from, to + 1);
+      for (final n in removed) {
+        _dirty.remove(n.id);
+      }
+      _sendNow([
+        for (final n in removed) {'type': 'delete_block', 'block_id': n.id},
+      ]);
+      if (nodes.isEmpty) {
+        ensureNotEmpty();
+        return;
+      }
+      final target = (from - 1).clamp(0, nodes.length - 1);
+      _collapseAfterEdit(
+        DocPosition(target, from > 0 ? nodes[target].text.length : 0),
+      );
+    });
+  }
+
   bool mergeBackward() {
     if (_historyBusy) return false;
     final sel = selection;

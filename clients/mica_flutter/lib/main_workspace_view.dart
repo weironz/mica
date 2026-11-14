@@ -754,8 +754,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   final EditorScrollHook _scrollHook = EditorScrollHook();
   final GlobalKey _editorSurfaceKey = GlobalKey();
   final GlobalKey _pageWidthFrameKey = GlobalKey();
-  final EditorMarginSelectionHook _marginSelectionHook =
-      EditorMarginSelectionHook();
+  final EditorMarqueeHook _marqueeHook = EditorMarqueeHook();
   final EditorCommandHook _commandHook = EditorCommandHook();
   // Bound once so initState/dispose register and clear the *same* reference in
   // the app-exit flush slot (a fresh `_commandHook.flush` tear-off each access

@@ -58,7 +58,7 @@ import 'markdown/markdown_codec.dart';
 import 'editor/clipboard_copy.dart' show copyTextToClipboard;
 import 'editor/model.dart' show headingButtonTarget, kMonoFont;
 import 'editor/editor.dart';
-import 'editor/margin_selection.dart';
+import 'editor/block_marquee.dart';
 import 'editor/image_actions.dart';
 import 'editor/pick_file.dart';
 import 'editor/property_panel.dart';

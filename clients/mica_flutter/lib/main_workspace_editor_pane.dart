@@ -689,11 +689,11 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
     bool canEdit,
     DocumentBootstrap bootstrap,
   ) {
-    return EditorMarginSelectionRegion(
+    return EditorMarqueeRegion(
       enabled: canEdit,
       editorSurfaceKey: _editorSurfaceKey,
       pageFrameKey: _pageWidthFrameKey,
-      hook: _marginSelectionHook,
+      hook: _marqueeHook,
       onOutsidePointerDown: _commandHook.resetDiagramViews,
       child: LayoutBuilder(
         builder: (context, constraints) => SingleChildScrollView(
@@ -801,7 +801,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                         '${bootstrap.document.id}#${widget.editorEpoch}',
                       ),
                       focusNode: _editorFocus,
-                      marginSelectionHook: _marginSelectionHook,
+                      marqueeHook: _marqueeHook,
                       rootBlockId: bootstrap.document.rootBlockId,
                       nodes: editorNodesFromBlocks(bootstrap.childBlocks),
                       version: bootstrap.snapshot.versionSeq,

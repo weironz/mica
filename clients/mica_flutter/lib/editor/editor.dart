@@ -39,7 +39,7 @@ import 'code_title_dialog.dart';
 import 'touch_selection.dart';
 import 'word_count.dart';
 import 'editor_host_hooks.dart';
-import 'margin_selection.dart';
+import 'block_marquee.dart';
 import '../l10n/locale_controller.dart';
 import '../ui/copy_button.dart';
 import '../ui/theme_tokens.dart';
@@ -82,7 +82,7 @@ class MicaEditor extends StatefulWidget {
     this.reHostImages = true,
     this.focusNode,
     this.scrollHook,
-    this.marginSelectionHook,
+    this.marqueeHook,
     this.commandHook,
     this.outlineHook,
     this.findHook,
@@ -178,8 +178,8 @@ class MicaEditor extends StatefulWidget {
   /// Optional hook the page outline uses to scroll a heading block into view.
   final EditorScrollHook? scrollHook;
 
-  /// Lets the page host route side-margin mouse drags into this editor.
-  final EditorMarginSelectionHook? marginSelectionHook;
+  /// Lets the page host's blank-space marquee select whole blocks here.
+  final EditorMarqueeHook? marqueeHook;
 
   /// Optional hook the host's formatting toolbar uses to run editor commands.
   final EditorCommandHook? commandHook;
@@ -334,6 +334,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   Offset? _lastDragGlobal;
   bool _pointerDragActive = false;
   bool _panCancelled = false;
+  late final _marquee = BlockMarqueeSelection(_controller, () => _render);
   ({String id, Map<String, dynamic> data, List<String> keys})?
   _dragPreviewSnapshot;
   OverlayEntry? _cellEntry; // active table cell editor
@@ -470,7 +471,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.addListener(_onControllerChanged);
     _focus.addListener(_onFocusChange);
     widget.scrollHook?.bindScroll(_scrollToBlock);
-    _bindMarginSelectionHook(widget.marginSelectionHook);
+    _bindMarqueeHook(widget.marqueeHook);
     widget.findHook?.bindOpen(_openFind);
     _registerCommandHook();
     _ensureNotEmptyDeferred();
@@ -492,21 +493,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     });
   }
 
-  void _bindMarginSelectionHook(EditorMarginSelectionHook? hook) {
-    hook?.bind(
-      onStart: (position) {
-        _downKind = PointerDeviceKind.mouse;
-        _touchMenuHidden = false;
-        _touchFormat = false;
-        _onPanDown(DragDownDetails(globalPosition: position));
-        _onPanStart(DragStartDetails(globalPosition: position));
-      },
-      onUpdate: (position, delta) => _onPanUpdate(
-        DragUpdateDetails(globalPosition: position, delta: delta),
-      ),
-      onEnd: (position) => _onPanEnd(DragEndDetails(globalPosition: position)),
-      onCancel: _onPanCancel,
-    );
+  void _bindMarqueeHook(EditorMarqueeHook? hook) {
+    hook?.bind(this, onEnd: _syncImeFromSelection, onClear: _marquee.clear, contentBottom: _marquee.contentBottom, onSelect: (rect) {
+      if (!_focus.hasFocus) _focus.requestFocus();
+      _marquee.selectRect(rect);
+    });
   }
 
   /// Push the current headings (id + text + level, document order) to the host
@@ -932,9 +923,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   @override
   void didUpdateWidget(covariant MicaEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.marginSelectionHook != widget.marginSelectionHook) {
-      oldWidget.marginSelectionHook?.unbind();
-      _bindMarginSelectionHook(widget.marginSelectionHook);
+    if (oldWidget.marqueeHook != widget.marqueeHook) {
+      oldWidget.marqueeHook?.unbind(this);
+      _bindMarqueeHook(widget.marqueeHook);
     }
     // A preview is a bitmap, so the palette it was captured with is baked into
     // it. The pipeline's setter is a no-op unless the palette actually changed.
@@ -968,7 +959,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   @override
   void dispose() {
-    widget.marginSelectionHook?.unbind();
+    widget.marqueeHook?.unbind(this);
+    _marquee.dispose();
     _slashEntry?.remove();
     _slashEntry = null;
     _pageEntry?.remove();
@@ -1942,6 +1934,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       return KeyEventResult.ignored;
     }
     if (_controller.isApplyingHistory) return _keyDuringHistory(event);
+    final marqueeKey = _marquee.handleKey(event, copy: _copySelection);
+    if (marqueeKey != null) return marqueeKey;
     final key = event.logicalKey;
     final hw = HardwareKeyboard.instance;
     final shift = hw.isShiftPressed;
@@ -3181,7 +3175,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _refreshMarkBar() {
-    if (_pointerDragActive) {
+    if (_pointerDragActive || _marquee.active) {
       _hideMarkBar();
       return;
     }
@@ -4383,7 +4377,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _onPanStart(DragStartDetails d) {
-    if (!widget.canEdit) return;
+    if (!widget.canEdit || (widget.marqueeHook?.claimed ?? false)) return;
     _pointerDragActive = true;
     _hideMarkBar();
     _taps.reset(); // a drag ends any tap sequence (no stray triple-click)
@@ -6005,7 +5999,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   key: _surfaceKey,
                   nodes: _controller.nodes,
                   contentRevision: _controller.contentRevision,
-                  selection: _controller.selection,
+                  selection: _marquee.active ? null : _controller.selection,
                   showCaret: _focus.hasFocus && widget.canEdit,
                   caretBlink: _caretBlink,
                   appearance: widget.appearance,
@@ -6021,6 +6015,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                   remoteCursors: widget.remoteCursors,
                   commentHighlights: widget.commentHighlights,
                 ),
+                Positioned.fill(child: BlockMarqueeHighlight(_marquee, () => _render, widget.appearance.tokens.editor.selection)),
                 if (_findOpen)
                   Positioned(top: 6, right: 6, child: _buildFindBar()),
               ],

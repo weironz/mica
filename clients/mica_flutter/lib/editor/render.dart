@@ -1075,14 +1075,21 @@ class RenderDocument extends RenderBox {
     );
   }
 
-  /// The block whose box contains [local], if any.
+  int get blockCount => _layouts.length;
+
+  /// Block [i]'s full box (local, from its left edge to the surface's right),
+  /// or null while it is folded away.
+  Rect? blockBox(int i) {
+    final l = _layouts[i];
+    if (l.hidden) return null;
+    return Rect.fromLTWH(l.boxLeft, l.boxTop, size.width - l.boxLeft, l.boxHeight);
+  }
+
+  /// The block whose box contains [local] vertically, if any.
   int? blockAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
-      final l = _layouts[i];
-      if (l.hidden) continue;
-      if (local.dy >= l.boxTop && local.dy < l.boxTop + l.boxHeight) {
-        return i;
-      }
+      final b = blockBox(i);
+      if (b != null && local.dy >= b.top && local.dy < b.bottom) return i;
     }
     return null;
   }
@@ -3423,18 +3430,11 @@ class RenderDocument extends RenderBox {
   /// into a whole-block caret stop, which [_paintAtomicSelection] then tints.
   int? blockSelectAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
-      final l = _layouts[i];
-      if (l.hidden) continue;
+      final box = blockBox(i);
+      if (box == null || !box.contains(local)) continue;
       final claimers =
-          _renderersByKind[l.kind] ?? const <AtomicBlockRenderer>[];
-      if (!claimers.any((r) => r.selectsWholeBlockOnClick)) continue;
-      final box = Rect.fromLTWH(
-        l.boxLeft,
-        l.boxTop,
-        size.width - l.boxLeft,
-        l.boxHeight,
-      );
-      if (box.contains(local)) return i;
+          _renderersByKind[_layouts[i].kind] ?? const <AtomicBlockRenderer>[];
+      if (claimers.any((r) => r.selectsWholeBlockOnClick)) return i;
     }
     return null;
   }
