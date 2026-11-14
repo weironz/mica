@@ -584,10 +584,10 @@ class _FakeMicaServer {
       }),
     );
     savePref('authToken:$origin', _nonExpiredToken());
-    // The prefs store is the real file-backed one on desktop, so this key
-    // survives across TEST PROCESSES too — a previous run's workspace switch
-    // would steer this boot onto the other workspace. Clear it: every test
-    // here boot scripts its world and expects to land on the first one.
+    // The prefs store is the real file-backed one on desktop, shared by every
+    // test in this process, so a previous test's workspace switch would steer
+    // this boot onto the other workspace. Clear it: every test here boot
+    // scripts its world and expects to land on the first one.
     removePref('lastWorkspaceId');
     // Same reason: a saved tab strip from an earlier test would come back.
     removePref('openTabs');

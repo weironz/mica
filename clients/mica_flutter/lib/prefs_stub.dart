@@ -11,7 +11,19 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
+
 import 'secret_store_stub.dart';
+
+/// The profile folder under the per-user app-data root. Only a release build
+/// owns `mica`: `flutter run` and profile builds otherwise share the installed
+/// app's prefs, tokens and local store, and a dev session pointed at a local
+/// server rewrites the user's server list.
+const String profileDirName = kReleaseMode ? 'mica' : 'mica-dev';
+
+/// Replaces the whole profile directory, local store included; set once per
+/// test process so tests never touch a real profile.
+String? configRootOverrideForTesting;
 
 Map<String, String>? _cache;
 
@@ -31,24 +43,27 @@ bool _isSecret(String key) =>
     key.startsWith('authToken:') ||
     key.startsWith('refreshToken:');
 
-/// The per-user config directory (`{appdata}/mica`). Public so anything that
-/// needs to sit beside the preferences — the diagnostics capture — uses this
-/// rule instead of writing a second copy of it.
+/// The per-user config directory (`{appdata}/{profileDirName}`). Public so
+/// anything that needs to sit beside the preferences — the diagnostics
+/// capture — uses this rule instead of writing a second copy of it.
 String configDir() {
+  final override = configRootOverrideForTesting;
+  if (override != null) return override;
   final env = Platform.environment;
+  const name = profileDirName;
   if (Platform.isWindows) {
     final appData = env['APPDATA'];
-    return '${(appData == null || appData.isEmpty) ? '.' : appData}/mica';
+    return '${(appData == null || appData.isEmpty) ? '.' : appData}/$name';
   }
   if (Platform.isMacOS) {
-    return '${env['HOME'] ?? '.'}/Library/Application Support/mica';
+    return '${env['HOME'] ?? '.'}/Library/Application Support/$name';
   }
   // Android: the app's private files dir, exported by MainActivity.kt.
-  if (Platform.isAndroid) return '${env['MICA_DATA_DIR'] ?? '.'}/mica';
+  if (Platform.isAndroid) return '${env['MICA_DATA_DIR'] ?? '.'}/$name';
   final xdg = env['XDG_CONFIG_HOME'];
   return (xdg != null && xdg.isNotEmpty)
-      ? '$xdg/mica'
-      : '${env['HOME'] ?? '.'}/.config/mica';
+      ? '$xdg/$name'
+      : '${env['HOME'] ?? '.'}/.config/$name';
 }
 
 File _prefsFile() => File('${configDir()}/prefs.json');

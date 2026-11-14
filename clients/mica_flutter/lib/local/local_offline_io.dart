@@ -28,6 +28,7 @@ import 'local_doc.dart';
 import 'local_offline_api.dart';
 import 'native_rust.dart';
 import '../api/models.dart';
+import '../prefs_stub.dart' show configRootOverrideForTesting, profileDirName;
 
 // The shared plain-data types (ViewData & co.) live in the contract file; keep
 // re-exporting them so `import 'local_offline.dart'` users see them as before.
@@ -639,10 +640,7 @@ class LocalOffline implements LocalOfflineApi {
       entries: [
         for (final e in visible)
           if (_isPlanFile(e.path))
-            VaultTreeEntry(
-              path: e.path,
-              bytes: Uint8List.fromList(e.bytes),
-            ),
+            VaultTreeEntry(path: e.path, bytes: Uint8List.fromList(e.bytes)),
       ],
       workspaceId: workspaceId,
       parentViewId: parentViewId,
@@ -715,25 +713,27 @@ class LocalOffline implements LocalOfflineApi {
   String _id(String prefix) =>
       '${prefix}_${DateTime.now().microsecondsSinceEpoch}_${_seq++}';
 
-  /// The per-user local data dir (`{appdata}/mica/local`). Houses the SQLite
-  /// store and the blob CAS.
+  /// The per-user local data dir (`{appdata}/{profileDirName}/local`). Houses
+  /// the SQLite store and the blob CAS.
   String _localDir() {
-    if (_rootOverride != null) return '$_rootOverride/local';
+    final root = _rootOverride ?? configRootOverrideForTesting;
+    if (root != null) return '$root/local';
     final env = Platform.environment;
+    const name = profileDirName;
     String dir;
     if (Platform.isWindows) {
       final appData = env['APPDATA'];
-      dir = '${(appData == null || appData.isEmpty) ? '.' : appData}/mica';
+      dir = '${(appData == null || appData.isEmpty) ? '.' : appData}/$name';
     } else if (Platform.isMacOS) {
-      dir = '${env['HOME'] ?? '.'}/Library/Application Support/mica';
+      dir = '${env['HOME'] ?? '.'}/Library/Application Support/$name';
     } else if (Platform.isAndroid) {
       // The app's private files dir, exported by MainActivity.kt.
-      dir = '${env['MICA_DATA_DIR'] ?? '.'}/mica';
+      dir = '${env['MICA_DATA_DIR'] ?? '.'}/$name';
     } else {
       final xdg = env['XDG_DATA_HOME'];
       dir = (xdg != null && xdg.isNotEmpty)
-          ? '$xdg/mica'
-          : '${env['HOME'] ?? '.'}/.local/share/mica';
+          ? '$xdg/$name'
+          : '${env['HOME'] ?? '.'}/.local/share/$name';
     }
     return '$dir/local';
   }
@@ -852,7 +852,10 @@ class LocalOffline implements LocalOfflineApi {
           : {for (final v in views) v.workspaceId};
       for (final id in ids) {
         final pages = views
-            .where((v) => v.workspaceId == id && v.objectType != 'folder' && !v.trashed)
+            .where(
+              (v) =>
+                  v.workspaceId == id && v.objectType != 'folder' && !v.trashed,
+            )
             .length;
         out.add((origin: origin, workspaceId: id, pages: pages));
       }
@@ -1052,7 +1055,11 @@ class LocalOffline implements LocalOfflineApi {
   ) {
     final store = _store;
     if (store == null) return null;
-    final v = store.createLocalVersion(origin: 'local', docId: docId, label: label);
+    final v = store.createLocalVersion(
+      origin: 'local',
+      docId: docId,
+      label: label,
+    );
     return v == null
         ? null
         : (id: v.id, label: v.label, createdAt: v.createdAt);

@@ -24,8 +24,8 @@ import 'support/online_only_local_offline.dart';
 ///     world instead).
 ///  3. No controller writes after unmount (the follow-up crash class).
 ///
-/// The prefs store is the real file-backed one (stub on desktop writes to
-/// APPDATA); each test seeds it through the same savePref the app uses and
+/// The prefs store is the real file-backed one (on desktop, in the per-process
+/// temp profile set up by flutter_test_config.dart); each test seeds it through the same savePref the app uses and
 /// the keys are unique per test run (uuid in origin), so tests are order-
 /// independent and never see each other's state.
 void main() {

@@ -814,6 +814,17 @@ $env:APPDATA = "<scratch>"; flutter run -d windows
 dev 版拿到干净的 prefs(自己登录本地栈),用户的会话、服务器、窗口几何一律不动。
 **代价是零**,不这么做的代价是用户以为自己的数据出了问题。
 
+**2026-11-14 复发,改成结构性隔离**:这条规矩靠人记,又漏了两次。一次是 dev 自动登录把
+`127.0.0.1:8080` 写进了共用 prefs;另一次是 `flutter test` —— shell 测试用真实的
+`savePref` 播种 `servers` / `activeOrigin` / `authToken:shell-flush-….test`,直接写进
+`%APPDATA%/mica/prefs.json`,正式版打开后服务器列表只剩一个 `shell-flush-….test`。现在:
+
+- 只有 release 构建用 `mica` 档案;debug / profile 构建一律用 `mica-dev`
+  (`prefs_stub.dart` 的 `profileDirName`,prefs、diagnostics、`local/store.db` 都跟着走)。
+- `test/flutter_test_config.dart` 给每个测试进程一个临时档案
+  (`configRootOverrideForTesting`),`test/profile_isolation_test.dart` 守着它。
+- 仍想让 dev 版用另一套数据时,照旧换 `APPDATA`。
+
 ### 只改了一个平台变体,分析器不会告诉你另一个断了
 
 - 2026-08-02:给本地世界加了 `exportDocMarkdownText`,只写进 `local_offline_io.dart`。
@@ -885,7 +896,8 @@ dev 版拿到干净的 prefs(自己登录本地栈),用户的会话、服务器�
   写的是用户的真实笔记。**
 - 规则：**跑任何带写入的验证前，先确认连的是哪个后端**；桌面端用独立 `APPDATA`
   （`local_offline_io._localDir()` 由它派生）起一个干净档案，两个实例就什么都不共享
-  ——store.db、blob、prefs 全部隔离。顺带解决单实例互斥锁那个"验证要先关掉用户的
+  ——store.db、blob、prefs 全部隔离。（2026-11-14 起非 release 构建默认就用独立的
+  `mica-dev` 档案，见上一条。）顺带解决单实例互斥锁那个"验证要先关掉用户的
   应用"的死结。
 
 ### 空字符串又一次冒充「未设置」——这次在客户端
