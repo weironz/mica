@@ -34,26 +34,41 @@ class _Page {
               child: SizedBox(
                 key: frameKey,
                 width: 520,
-                child: Padding(
-                  key: bodyKey,
-                  padding: const EdgeInsets.only(top: 4),
-                  child: MicaEditor(
-                    key: editorKey,
-                    rootBlockId: 'root',
-                    nodes: [
-                      EditorNode(id: 'first', kind: 'paragraph', text: 'first'),
-                      EditorNode(
-                        id: 'second',
-                        kind: 'paragraph',
-                        text: 'second',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Stands in for the page title rows above the body.
+                    const SizedBox(height: 48),
+                    Padding(
+                      key: bodyKey,
+                      padding: const EdgeInsets.only(top: 4),
+                      child: MicaEditor(
+                        key: editorKey,
+                        rootBlockId: 'root',
+                        nodes: [
+                          EditorNode(
+                            id: 'first',
+                            kind: 'paragraph',
+                            text: 'first',
+                          ),
+                          EditorNode(
+                            id: 'second',
+                            kind: 'paragraph',
+                            text: 'second',
+                          ),
+                          EditorNode(
+                            id: 'third',
+                            kind: 'paragraph',
+                            text: 'third',
+                          ),
+                        ],
+                        version: 0,
+                        canEdit: true,
+                        marqueeHook: hook,
+                        onApplyOperations: (ops) async => applied.addAll(ops),
                       ),
-                      EditorNode(id: 'third', kind: 'paragraph', text: 'third'),
-                    ],
-                    version: 0,
-                    canEdit: true,
-                    marqueeHook: hook,
-                    onApplyOperations: (ops) async => applied.addAll(ops),
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -186,6 +201,41 @@ void main() {
     expect(rectShown, isTrue);
     expect(_range(tester), (lo: 0, hi: 1));
     expect(_surfaceSelection(tester), isNull);
+  });
+
+  // The natural marquee starts at the page's top-left corner, beside the
+  // title rows, above where the body begins.
+  testWidgets('a drag from beside the title starts a marquee', (tester) async {
+    final page = await _pump(tester);
+    final frame = tester.getRect(find.byKey(page.frameKey));
+    final body = tester.getRect(find.byKey(page.bodyKey));
+    final from = Offset(frame.left - 60, frame.top + 10);
+    expect(from.dy < body.top, isTrue);
+    var rectShown = false;
+    await _drag(
+      tester,
+      from,
+      Offset(frame.left + 200, _blockY(tester, 1)),
+      whileHeld: () => rectShown = _marqueeRect.evaluate().isNotEmpty,
+    );
+    expect(rectShown, isTrue);
+    expect(_range(tester), (lo: 0, hi: 1));
+  });
+
+  testWidgets('a press on the scrollbar strip does not start a marquee', (
+    tester,
+  ) async {
+    await _pump(tester);
+    final pane = tester.getRect(find.byType(EditorMarqueeRegion));
+    var rectShown = false;
+    await _drag(
+      tester,
+      Offset(pane.right - 4, _blockY(tester, 0)),
+      Offset(pane.right - 300, _blockY(tester, 2)),
+      whileHeld: () => rectShown = _marqueeRect.evaluate().isNotEmpty,
+    );
+    expect(rectShown, isFalse);
+    expect(_range(tester), isNull);
   });
 
   testWidgets('a press on a drag handle does not start a marquee', (

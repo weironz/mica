@@ -94,6 +94,7 @@ class EditorMarqueeRegion extends StatefulWidget {
 
 class _EditorMarqueeRegionState extends State<EditorMarqueeRegion> {
   static const double _slop = 4;
+  static const double _scrollbarStrip = 16;
 
   int? _pointer;
   Offset? _origin;
@@ -109,8 +110,8 @@ class _EditorMarqueeRegionState extends State<EditorMarqueeRegion> {
     super.dispose();
   }
 
-  Rect? _globalRect(GlobalKey key) {
-    final object = key.currentContext?.findRenderObject();
+  Rect? _globalRect(BuildContext? context) {
+    final object = context?.findRenderObject();
     if (object is! RenderBox || !object.attached || !object.hasSize) {
       return null;
     }
@@ -123,18 +124,23 @@ class _EditorMarqueeRegionState extends State<EditorMarqueeRegion> {
   }
 
   bool _startsMarquee(Offset p, Rect body, Rect? page) {
-    if (page == null) return false;
+    final region = _globalRect(context);
+    if (page == null || region == null) return false;
+    // The page's scrollbar hugs the pane's right edge; dragging its thumb
+    // must only scroll.
+    if (p.dx > region.right - _scrollbarStrip) return false;
     // Left of the text is mostly the editor's own handle gutter: it looks like
     // margin, so it starts a marquee too — except on a block's drag handle.
     if (p.dy >= body.top && widget.hook.inGutter(p)) return true;
-    final besidePage = p.dx < page.left || p.dx > page.right;
-    final onGrip = !besidePage && (p.dx < body.left || p.dx > body.right);
-    if (p.dy >= (widget.hook.contentBottom() ?? body.bottom)) return !onGrip;
-    return p.dy >= body.top && besidePage;
+    // Beside the page at any height, the title rows included: a marquee is
+    // usually drawn from the top-left corner down.
+    if (p.dx < page.left || p.dx > page.right) return true;
+    final onGrip = p.dx < body.left || p.dx > body.right;
+    return !onGrip && p.dy >= (widget.hook.contentBottom() ?? body.bottom);
   }
 
   void _down(PointerDownEvent event) {
-    final body = _globalRect(widget.editorSurfaceKey);
+    final body = _globalRect(widget.editorSurfaceKey.currentContext);
     if (body == null) return;
     if (!body.contains(event.position)) widget.onOutsidePointerDown();
     if (!widget.enabled ||
@@ -145,7 +151,7 @@ class _EditorMarqueeRegionState extends State<EditorMarqueeRegion> {
         !_startsMarquee(
           event.position,
           body,
-          _globalRect(widget.pageFrameKey),
+          _globalRect(widget.pageFrameKey.currentContext),
         )) {
       return;
     }
