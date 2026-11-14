@@ -1397,9 +1397,8 @@ class DetailsRenderer extends AtomicBlockRenderer {
     final closer = openTag == null ? null : _closerFor(host, index);
     if (openTag != null && closer == null) return null;
 
-    // `data.collapsed` is the user's choice (tri-state, same convention as a
-    // long code block); `<details open>` only supplies the default for a block
-    // they have never touched.
+    // `data.collapsed` is the user's choice (tri-state); `<details open>` only
+    // supplies the default for a block they have never touched.
     final collapsed =
         (node.data['collapsed'] as bool?) ??
         !(shape?.openByDefault ?? openTag!.openByDefault);

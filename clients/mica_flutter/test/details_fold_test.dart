@@ -232,9 +232,9 @@ void main() {
   });
 
   group('toggleCollapsed knows the details default', () {
-    /// Reading the code-block default (line count) here would make the first
-    /// click write `collapsed: true` on a block that was already folded — a
-    /// click that visibly does nothing.
+    /// Reading any other default here would make the first click write
+    /// `collapsed: true` on a block that was already folded — a click that
+    /// visibly does nothing.
     test('the first click on a folded <details> expands it', () {
       final c = EditorController(rootBlockId: 'root', onOps: (_) async {})
         ..load([_details(_tight)]);
@@ -251,8 +251,8 @@ void main() {
     });
 
     test('the blank-line form reads its default off the opening tag too', () {
-      // Same trap as the tight form: reading the code-block default (line
-      // count) would make the first click write the state it was already in.
+      // Same trap as the tight form: reading any other default would make the
+      // first click write the state it was already in.
       final c = EditorController(rootBlockId: 'root', onOps: (_) async {})
         ..load(_blankLineForm());
       c.toggleCollapsed(1);

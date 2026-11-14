@@ -1235,8 +1235,6 @@
   "codeMenuRemoveTitle": "Remove title",
   "codeViewSource": "code",
   "codeViewPreview": "preview",
-  "codeMenuCollapse": "Collapse",
-  "codeMenuExpand": "Expand",
   "codeMenuDelete": "Delete code block",
   "codeTitleHint": "Title",
   "codeAiExplain": "Explain code",

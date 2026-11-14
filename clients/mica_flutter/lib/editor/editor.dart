@@ -2576,11 +2576,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
       return;
     }
-    final collapseNode = ro ? null : r.codeCollapseAt(local);
-    if (collapseNode != null) {
-      _controller.toggleCollapsed(collapseNode);
-      return;
-    }
     final bar = r.scrollbarAt(local);
     if (bar != null) {
       r.setCodeScrollByTrackX(bar, local.dx);
@@ -4071,7 +4066,6 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         r.codeAskAiAt(local) != null ||
         r.codeMoreAt(local) != null ||
         r.codeTitleAt(local) != null ||
-        r.codeCollapseAt(local) != null ||
         r.scrollbarAt(local) != null ||
         r.tableHandleAt(local) != null ||
         r.tableDeleteAt(local) != null ||

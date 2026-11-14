@@ -677,8 +677,6 @@
   "codeMenuRemoveTitle": "移除标题",
   "codeViewSource": "代码",
   "codeViewPreview": "预览",
-  "codeMenuCollapse": "折叠",
-  "codeMenuExpand": "展开",
   "codeMenuDelete": "删除代码块",
   "codeTitleHint": "标题",
   "codeAiExplain": "解释代码",

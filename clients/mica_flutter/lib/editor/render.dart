@@ -365,10 +365,6 @@ class NodeLayout {
   double lineNumGutter = 0; // width reserved (inside contentLeft) for line #s
   String codeTitle = ''; // code block: bottom caption, '' = none
   Rect? titleRect; // code-block title caption rect (local), if any
-  bool codeCollapsed = false; // code block: currently folded (only shows head)
-  bool codeCanCollapse = false; // long enough to offer folding at all
-  double codeClipH = 0; // painter height to clip to when folded
-  Rect? collapseButton; // fold/unfold hit target (local), if any
   String kind = 'paragraph';
   bool todoChecked = false;
   int quoteDepth = 0; // blockquote nesting (bars on the left)
@@ -427,7 +423,6 @@ class NodeLayout {
     viewCodeTab = viewCodeTab?.shift(Offset(0, dy));
     viewPreviewTab = viewPreviewTab?.shift(Offset(0, dy));
     titleRect = titleRect?.shift(Offset(0, dy));
-    collapseButton = collapseButton?.shift(Offset(0, dy));
     scrollTrack = scrollTrack?.shift(Offset(0, dy));
   }
 }
@@ -1570,18 +1565,6 @@ class RenderDocument extends RenderBox {
       // Code blocks pad symmetrically; their controls float at the top-right on
       // hover (no reserved top toolbar row). The optional title caption is added
       // AFTER the scrollbar below (so it sits under the code + scrollbar).
-      // A block past the threshold auto-folds (data.collapsed absent) to its
-      // first few lines; data.collapsed false/true is the user's override.
-      final codeLineCount = isCode ? node.text.split('\n').length : 0;
-      final canCollapse = isCode && codeLineCount > _codeCollapseThreshold;
-      final collapsed =
-          canCollapse && ((node.data['collapsed'] as bool?) ?? true);
-      final clipH = collapsed
-          ? _codeCollapsedLines * painter.preferredLineHeight
-          : painter.height;
-      layout.codeCanCollapse = canCollapse;
-      layout.codeCollapsed = collapsed;
-      layout.codeClipH = clipH;
 
       // A callout head reserves a title strip above its text (icon + label),
       // the same mechanism code uses for its top padding.
@@ -1589,9 +1572,9 @@ class RenderDocument extends RenderBox {
       final innerTop = isCode ? EditorTheme.codePadV : alertHeadPad;
       layout.boxTop = y;
       layout.textTop = y + innerTop;
-      layout.textHeight = clipH;
+      layout.textHeight = painter.height;
       layout.boxHeight =
-          clipH + (isCode ? 2 * EditorTheme.codePadV : alertHeadPad);
+          painter.height + (isCode ? 2 * EditorTheme.codePadV : alertHeadPad);
 
       // Ordinal/indent were computed once, up front (hoisted before the reuse
       // check so a stale ordinal can invalidate a reuse). The counter state was
@@ -1635,8 +1618,7 @@ class RenderDocument extends RenderBox {
         _codeScroll[node.id] = scroll.clamp(0.0, maxScroll);
 
         layout.codeVisible = visible;
-        // A folded block clips to its head — no horizontal scrollbar there.
-        if (!collapsed && maxScroll > 0) {
+        if (maxScroll > 0) {
           // Reserve space for a horizontal scrollbar at the bottom of the block.
           const barH = 8.0;
           const barGap = 5.0;
@@ -1647,18 +1629,6 @@ class RenderDocument extends RenderBox {
             visible,
             barH,
           );
-        }
-
-        // Fold/expand affordance strip (below the code + scrollbar) for any
-        // block long enough to fold.
-        if (canCollapse) {
-          layout.collapseButton = Rect.fromLTWH(
-            layout.boxLeft,
-            layout.boxTop + layout.boxHeight,
-            maxWidth - layout.boxLeft,
-            _codeFoldBarH,
-          );
-          layout.boxHeight += _codeFoldBarH;
         }
 
         // Bottom caption row, below the code (and the scrollbar, if any).
@@ -1792,17 +1762,6 @@ class RenderDocument extends RenderBox {
 
   // Height of a code block's optional bottom caption row.
   static const double _codeTitleH = 24;
-
-  // Auto-fold a code block only once it exceeds roughly one screenful; when
-  // folded it shows the first _codeCollapsedLines with a fade + expand
-  // affordance. Folding is a space/UX affordance only — the painter lays out
-  // the FULL text either way (see layout: painter.layout runs before the
-  // collapse decision), so this threshold buys screen real estate, not perf.
-  // Kept generous so ordinary pasted snippets (a few dozen lines) stay open;
-  // only genuinely page-dominating blocks fold.
-  static const int _codeCollapseThreshold = 40;
-  static const int _codeCollapsedLines = 20;
-  static const double _codeFoldBarH = 26; // fold/expand affordance strip
 
   // Image placeholder size (before the real image decodes) and vertical gap.
   static const double _imagePlaceholderH = 180;
@@ -2187,35 +2146,6 @@ class RenderDocument extends RenderBox {
     }
   }
 
-  /// The fold/expand affordance strip (centered) for a foldable code block.
-  void _paintFoldBar(Canvas canvas, Offset offset, NodeLayout l) {
-    final r = l.collapseButton!.shift(offset);
-    // `l10nNoContext`, not a string pushed in through DocumentSurface: a
-    // RenderBox has no BuildContext, and threading a strings bundle through
-    // the widget + every construction site would be a lot of plumbing for six
-    // labels. A locale change repaints via the [localeController] listener in
-    // [attach]. The arrows stay literal — they are glyphs, not words.
-    final s = l10nNoContext;
-    final label = l.codeCollapsed
-        ? '⌄  ${s.codeMenuExpand}'
-        : '⌃  ${s.codeMenuCollapse}';
-    final tp = TextPainter(
-      text: TextSpan(
-        text: label,
-        style: MicaTypography.canvasCaption.copyWith(
-          color: _appearance.tokens.text.muted,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(
-      canvas,
-      Offset(r.center.dx - tp.width / 2, r.center.dy - tp.height / 2),
-    );
-    tp.dispose();
-  }
-
   /// The code block's caption — centered in the strip just BELOW the panel
   /// (AFFiNE-style), muted.
   void _paintCodeTitle(Canvas canvas, Offset offset, NodeLayout l) {
@@ -2499,14 +2429,6 @@ class RenderDocument extends RenderBox {
     return null;
   }
 
-  /// Node index whose code-block fold/expand strip contains [local], or null.
-  int? codeCollapseAt(Offset local) {
-    for (var i = 0; i < _layouts.length; i++) {
-      if (_layouts[i].collapseButton?.contains(local) ?? false) return i;
-    }
-    return null;
-  }
-
   /// Node index whose code ⋯ overflow-menu button contains [local], or null.
   int? codeMoreAt(Offset local) {
     for (var i = 0; i < _layouts.length; i++) {
@@ -2767,32 +2689,6 @@ class RenderDocument extends RenderBox {
       canvas.restore();
       if (l.showLineNums) {
         _paintLineNumbers(canvas, origin, l);
-      }
-      if (l.codeCollapsed) {
-        // Fade the last strip of the shown code into the background — hints
-        // there's more (AFFiNE-style).
-        const fadeH = 36.0;
-        final fadeTop = origin.dy + l.textHeight - fadeH;
-        canvas.drawRect(
-          Rect.fromLTWH(
-            offset.dx + l.boxLeft,
-            fadeTop,
-            size.width - l.boxLeft,
-            fadeH,
-          ),
-          Paint()
-            ..shader = ui.Gradient.linear(
-              Offset(0, fadeTop),
-              Offset(0, fadeTop + fadeH),
-              [
-                _appearance.tokens.editor.codeBg.withAlpha(0),
-                _appearance.tokens.editor.codeBg,
-              ],
-            ),
-        );
-      }
-      if (l.collapseButton != null) {
-        _paintFoldBar(canvas, offset, l);
       }
       if (l.titleRect != null) {
         _paintCodeTitle(canvas, offset, l);
