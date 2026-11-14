@@ -76,6 +76,7 @@ String loadCloseBehavior() {
   final v = loadPref('closeBehavior');
   return (v == null || v == 'minimize') ? kCloseAsk : v;
 }
+
 void saveCloseBehavior(String v) => savePref('closeBehavior', v);
 
 /// Whether this platform can put an icon in the tray.
@@ -112,7 +113,9 @@ Future<void> initDesktopWindow() async {
     center: saved.position == null,
     minimumSize: _minSize,
     title: 'Mica',
-    titleBarStyle: TitleBarStyle.normal,
+    titleBarStyle: defaultTargetPlatform == TargetPlatform.windows
+        ? TitleBarStyle.hidden
+        : TitleBarStyle.normal,
   );
   await windowManager.waitUntilReadyToShow(options, () async {
     final pos = saved.position;
@@ -122,7 +125,8 @@ Future<void> initDesktopWindow() async {
     // display; otherwise recenter, so the window never opens where it can't be
     // reached. (Maximize below covers the screen regardless, so this only guards
     // the floating-restore case.)
-    if (pos != null && await _positionVisible(pos, saved.size ?? _defaultSize)) {
+    if (pos != null &&
+        await _positionVisible(pos, saved.size ?? _defaultSize)) {
       await windowManager.setBounds(null, position: pos);
     } else if (pos != null) {
       await windowManager.center();

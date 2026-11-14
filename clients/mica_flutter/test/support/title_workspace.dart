@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:mica_flutter/main.dart';
+import 'package:mica_flutter/doc_tab.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 
@@ -69,6 +70,11 @@ Widget titleWorkspace(
   Future<void> Function(List<WorkspaceEntry>)? onReorderWorkspaces,
   Future<void> Function(String?, List<DocumentView>)? onReorderViews,
   Future<void> Function(DocumentView)? onSelectView,
+  void Function(String?)? onBrowseFolder,
+  AuthSession? session,
+  List<DocTab> tabs = const [],
+  void Function(int)? onSelectTab,
+  void Function(int)? onCloseTab,
   Future<List<SearchResult>> Function(String)? onSearch,
   Stream<String> Function(String prompt, {String? system})? onAiStream,
   Future<void> Function(String markdown)? onAiCurrentPage,
@@ -87,9 +93,13 @@ Widget titleWorkspace(
       onSetCommentResolved: (_, _) async {},
       onDeleteCommentThread: (_) async {},
       onFocusCommentThread: (_) {},
-      session: null,
+      session: session,
+      tabs: tabs,
+      onSelectTab: onSelectTab,
+      onCloseTab: onCloseTab,
+      onBrowseFolder: onBrowseFolder,
       entries: entries,
-      activeOrigin: 'local',
+      activeOrigin: session == null ? 'local' : 'https://mica.test',
       selectedRef: null,
       onSelectEntry: (_) async {},
       onRenameEntry: (_, _) async {},

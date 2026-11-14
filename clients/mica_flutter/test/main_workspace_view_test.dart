@@ -39,6 +39,60 @@ void main() {
     (w) => w is TextField && w.focusNode?.debugLabel == 'PageTitle',
   );
 
+  testWidgets(
+    'breadcrumb ancestors browse folders instead of opening them as documents',
+    (tester) async {
+      wideViewport(tester);
+      const folder = DocumentView(
+        id: 'folder',
+        parentViewId: null,
+        objectId: 'f',
+        objectType: 'folder',
+        name: '父目录',
+        position: '0',
+      );
+      const page = DocumentView(
+        id: 'page-a',
+        parentViewId: 'folder',
+        objectId: 'page-a',
+        objectType: 'document',
+        name: '当前页面',
+        position: '0',
+      );
+      final source = titleBootstrap('当前页面');
+      final browsed = <String?>[];
+      final opened = <String>[];
+      await tester.pumpWidget(
+        titleWorkspace(
+          DocumentBootstrap(
+            document: source.document,
+            view: page,
+            snapshot: source.snapshot,
+          ),
+          (_, _) async => true,
+          views: [folder, page],
+          onBrowseFolder: browsed.add,
+          onSelectView: (v) async => opened.add(v.id),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final breadcrumb = find.byType(PageBreadcrumb);
+      await tester.tap(
+        find.descendant(of: breadcrumb, matching: find.text('父目录')),
+      );
+      await tester.pumpAndSettle();
+      expect(browsed, ['folder']);
+      expect(opened, isEmpty);
+      await tester.tap(
+        find.descendant(of: breadcrumb, matching: find.text('测试')),
+      );
+      await tester.pumpAndSettle();
+      expect(browsed, ['folder', null]);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('Enter on an empty new page lands in the only body line', (
     tester,
   ) async {

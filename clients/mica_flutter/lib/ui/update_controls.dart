@@ -41,7 +41,7 @@ Future<void> _confirmUpdate(
       true;
 });
 
-/// Lives beside the recycle bin, in the existing account row.
+/// Rounded update action beside the account and settings controls.
 class UpdateButton extends StatefulWidget {
   const UpdateButton({super.key, required this.controller});
 
@@ -97,31 +97,6 @@ class _UpdateButtonState extends State<UpdateButton>
     super.dispose();
   }
 
-  Future<void> _activate() async {
-    final controller = widget.controller;
-    if (controller.isBusy) return;
-    if (controller.info == null) {
-      await controller.check(force: true);
-      if (!mounted) return;
-    }
-    if (controller.info != null) {
-      await _confirmUpdate(context, controller);
-      if (!mounted) return;
-    }
-    if (controller.stage == DesktopUpdateStage.upToDate ||
-        controller.stage == DesktopUpdateStage.error) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            controller.error == null
-                ? context.l10n.updateUpToDate(controller.currentVersion)
-                : context.l10n.updateFailed(controller.error.toString()),
-          ),
-        ),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -151,34 +126,86 @@ class _UpdateButtonState extends State<UpdateButton>
             controller.error.toString(),
           ),
         };
-        return IconButton(
-          tooltip: tooltip,
-          visualDensity: VisualDensity.compact,
-          onPressed: controller.isBusy ? null : _activate,
-          icon: checking || downloading
-              ? SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    value: downloading && controller.progress > 0
-                        ? controller.progress
-                        : null,
+        final onPressed = controller.isBusy
+            ? null
+            : () => activateDesktopUpdate(context, controller);
+        final icon = checking || downloading
+            ? SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  value: downloading && controller.progress > 0
+                      ? controller.progress
+                      : null,
+                ),
+              )
+            : Icon(
+                Icons.system_update_alt,
+                size: 16,
+                color: available ? tokens.surface.base : tokens.text.muted,
+              );
+        // Idle it is a round icon so the nickname keeps the row's width; the
+        // label appears only when there is an update worth acting on.
+        return Tooltip(
+          message: tooltip,
+          child: available
+              ? TextButton.icon(
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 28),
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: const StadiumBorder(),
+                    foregroundColor: tokens.surface.base,
+                    backgroundColor: tokens.text.primary,
                   ),
+                  onPressed: onPressed,
+                  label: Text(l10n.updateNow, style: MicaTypography.caption),
+                  icon: icon,
                 )
-              : Badge(
-                  isLabelVisible: available,
-                  backgroundColor: tokens.text.primary,
-                  child: Icon(
-                    Icons.system_update_alt,
-                    size: 20,
-                    color: available
-                        ? tokens.text.primary
-                        : tokens.text.muted,
+              : IconButton(
+                  onPressed: onPressed,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 28,
+                    height: 28,
                   ),
+                  style: IconButton.styleFrom(
+                    shape: const CircleBorder(),
+                    backgroundColor: tokens.surface.sunken,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: icon,
                 ),
         );
       },
+    );
+  }
+}
+
+Future<void> activateDesktopUpdate(
+  BuildContext context,
+  DesktopUpdateController controller,
+) async {
+  if (controller.isBusy) return;
+  if (controller.info == null) {
+    await controller.check(force: true);
+    if (!context.mounted) return;
+  }
+  if (controller.info != null) {
+    await _confirmUpdate(context, controller);
+    if (!context.mounted) return;
+  }
+  if (controller.stage == DesktopUpdateStage.upToDate ||
+      controller.stage == DesktopUpdateStage.error) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          controller.error == null
+              ? context.l10n.updateUpToDate(controller.currentVersion)
+              : context.l10n.updateFailed(controller.error.toString()),
+        ),
+      ),
     );
   }
 }

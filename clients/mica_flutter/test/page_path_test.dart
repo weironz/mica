@@ -9,6 +9,8 @@
 // the test that matters is not "the workspace appears" but "these two agree",
 // asserted against one shared source (`pagePathSegments`).
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/main.dart';
@@ -62,6 +64,95 @@ List<String> _rendered(WidgetTester tester) => tester
     .toList();
 
 void main() {
+  test('copying the containing path omits the page, including at root', () {
+    expect(
+      pagePathSegments(
+        workspaceName: 'greenstor',
+        view: _page,
+        views: _views,
+        includePage: false,
+      ),
+      ['greenstor', '基础信息'],
+    );
+    expect(
+      pagePathSegments(
+        workspaceName: 'greenstor',
+        view: _view(id: 'root', name: '散页'),
+        views: [],
+        includePage: false,
+      ),
+      ['greenstor'],
+    );
+  });
+
+  testWidgets(
+    'ancestor and workspace clicks navigate, dragging selects across crumbs',
+    (tester) async {
+      final selected = <String>[];
+      String? copied;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: PageBreadcrumb(
+              views: _views,
+              current: _page,
+              workspaceName: 'greenstor',
+              onSelect: (v) async => selected.add(v.id),
+              onOpenWorkspace: () async => selected.add('root'),
+              trailing: const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('基础信息'));
+      await tester.pump();
+      await tester.tap(find.text('greenstor'));
+      await tester.pump();
+      expect(selected, ['f1', 'root']);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(
+        location: tester.getTopLeft(find.text('greenstor')),
+      );
+      await mouse.down(
+        tester.getTopLeft(find.text('greenstor')) + const Offset(1, 7),
+      );
+      await mouse.moveTo(
+        tester.getTopRight(find.text('BOI')) + const Offset(-1, 7),
+      );
+      await mouse.up();
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(copied, contains('greenstor'));
+      expect(copied, contains('基础信息'));
+      expect(copied, contains('BOI'));
+      expect(selected, [
+        'f1',
+        'root',
+      ], reason: 'dragging must not follow a link');
+      await mouse.removePointer();
+    },
+  );
+
   testWidgets('the breadcrumb reads exactly what copy path copies', (
     tester,
   ) async {
@@ -101,11 +192,7 @@ void main() {
     );
 
     expect(
-      pagePathSegments(
-        workspaceName: 'greenstor',
-        view: loose,
-        views: [loose],
-      ),
+      pagePathSegments(workspaceName: 'greenstor', view: loose, views: [loose]),
       ['greenstor', '散页'],
     );
     expect(_rendered(tester), ['greenstor', '散页']);
@@ -135,11 +222,7 @@ void main() {
     final deep = [
       _view(id: 'f1', name: '笔记软件', type: 'folder'),
       _view(id: 'f2', name: 'mica', parent: 'f1', type: 'folder'),
-      _view(
-        id: 'p1',
-        name: '单机手动部署（IP 直连，不用 Traefik）',
-        parent: 'f2',
-      ),
+      _view(id: 'p1', name: '单机手动部署（IP 直连，不用 Traefik）', parent: 'f2'),
     ];
 
     Future<void> pumpNarrow(WidgetTester tester) => tester.pumpWidget(
@@ -167,11 +250,13 @@ void main() {
       ),
     );
 
-    testWidgets('the copy button survives — it is about the page, not the name',
-        (tester) async {
-      await pumpNarrow(tester);
-      expect(find.byType(InlineCopyButton), findsOneWidget);
-    });
+    testWidgets(
+      'the copy button survives — it is about the page, not the name',
+      (tester) async {
+        await pumpNarrow(tester);
+        expect(find.byType(InlineCopyButton), findsOneWidget);
+      },
+    );
 
     /// What must be on screen is the page you are looking at. Ancestors are
     /// guessable from context and one click away on copy path; the title is
@@ -231,19 +316,23 @@ void main() {
   // The copy button reports where the click was, instead of throwing a black
   // bar across the bottom of the window to say the expected thing happened.
   group('the copy button confirms itself', () {
-    Future<void> pumpCopy(WidgetTester tester, Future<bool> Function() onCopy) =>
-        tester.pumpWidget(
-          MaterialApp(
-            localizationsDelegates: AppLocalizations.localizationsDelegates,
-            supportedLocales: AppLocalizations.supportedLocales,
-            locale: const Locale('zh'),
-            home: Scaffold(
-              body: InlineCopyButton(onCopy: onCopy, tooltip: 'copy'),
-            ),
-          ),
-        );
+    Future<void> pumpCopy(
+      WidgetTester tester,
+      Future<bool> Function() onCopy,
+    ) => tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('zh'),
+        home: Scaffold(
+          body: InlineCopyButton(onCopy: onCopy, tooltip: 'copy'),
+        ),
+      ),
+    );
 
-    testWidgets('a successful copy turns the icon into a check', (tester) async {
+    testWidgets('a successful copy turns the icon into a check', (
+      tester,
+    ) async {
       await pumpCopy(tester, () async => true);
 
       expect(find.byIcon(Icons.content_copy_outlined), findsOneWidget);
@@ -367,10 +456,11 @@ void main() {
     test('a cycle terminates', () {
       final a = _view(id: 'a', name: 'A', parent: 'b', type: 'folder');
       final b = _view(id: 'b', name: 'B', parent: 'a', type: 'folder');
-      expect(
-        pagePathSegments(workspaceName: 'ws', view: a, views: [a, b]),
-        ['ws', 'B', 'A'],
-      );
+      expect(pagePathSegments(workspaceName: 'ws', view: a, views: [a, b]), [
+        'ws',
+        'B',
+        'A',
+      ]);
     });
   });
 }

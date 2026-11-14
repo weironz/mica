@@ -5012,6 +5012,10 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         setState(() => _overviewFolderId = null);
         viewOps.closeOpenPage();
       },
+      onBrowseFolder: (id) {
+        viewOps.closeOpenPage();
+        setState(() => _overviewFolderId = id);
+      },
       // Only built while a folder is being browsed — otherwise home shows.
       overviewPane: _overviewFolderId == null
           ? null

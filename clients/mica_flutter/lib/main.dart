@@ -68,6 +68,9 @@ import 'ui/navigation_draggable.dart';
 import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
 import 'ui/doc_tab_strip.dart';
+import 'ui/account_menu.dart';
+import 'ui/shell_title_bar.dart';
+import 'ui/window_chrome.dart';
 import 'ui/export_shape.dart';
 import 'doc_tab_persistence.dart';
 import 'ui/tab_shortcuts.dart';
@@ -94,7 +97,6 @@ import 'ui/status_kit.dart';
 import 'ui/theme_tokens.dart';
 import 'ui/interface_text_scale.dart';
 import 'ui/font_warmup.dart';
-import 'ui/user_avatar.dart';
 import 'ui/update_controls.dart';
 import 'ui/workspace_overview.dart' show WorkspaceOverviewMode;
 import 'local/cache_stats.dart'

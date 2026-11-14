@@ -72,6 +72,7 @@ class WorkspaceView extends StatefulWidget {
     this.homePane,
     this.overviewPane,
     this.onOpenHome,
+    this.onBrowseFolder,
     required this.onDeleteView,
     required this.onDeleteViews,
     required this.onCloneView,
@@ -358,6 +359,7 @@ class WorkspaceView extends StatefulWidget {
   /// The folder-contents overview, non-null only while a folder is being browsed.
   /// Takes precedence over [homePane] — you asked to look inside something.
   final Widget? overviewPane;
+  final void Function(String? folderId)? onBrowseFolder;
 
   /// Closes the open page so home shows again. Null hides the sidebar entry.
   final VoidCallback? onOpenHome;
@@ -887,7 +889,9 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
       final tp = TextPainter(
         text: TextSpan(
           text: it.view.name,
-          style: MicaTypography.canvasBody.copyWith(fontWeight: FontWeight.w500),
+          style: MicaTypography.canvasBody.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
         ),
         textDirection: TextDirection.ltr,
         maxLines: 1,
@@ -1121,34 +1125,50 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
 
   /// Roomy: the classic three-pane split, every pane resident at once.
   Widget _wideShell(BuildContext context) {
-    return Row(
+    final navWidth = _navCollapsed ? 0.0 : _navWidth + 7;
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_navCollapsed)
-          _collapsedNavRail(context)
-        else ...[
-          SizedBox(width: _navWidth, child: _navigationPane(context)),
-          _resizeHandle(
-            onDrag: (dx) => setState(() {
-              // Dragging takes manual control — stop auto-fitting from here on.
-              _navWidthManual = true;
-              _navWidth = (_navWidth + dx).clamp(_navWidthMin, _navWidthMax);
-            }),
-            onDragEnd: () {
-              savePref('navWidth', _navWidth.toStringAsFixed(1));
-              savePref('navWidthManual', 'true');
-            },
+        ShellTitleBar(
+          navigationWidth: math.max(navWidth, 84),
+          toggleLabel: _navCollapsed
+              ? context.l10n.sidebarExpand
+              : context.l10n.sidebarCollapse,
+          onToggle: () => setState(() => _navCollapsed = !_navCollapsed),
+          tabs: _documentTabs(context),
+        ),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (!_navCollapsed) ...[
+                SizedBox(width: _navWidth, child: _navigationPane(context)),
+                _resizeHandle(
+                  onDrag: (dx) => setState(() {
+                    _navWidthManual = true;
+                    _navWidth = (_navWidth + dx).clamp(
+                      _navWidthMin,
+                      _navWidthMax,
+                    );
+                  }),
+                  onDragEnd: () {
+                    savePref('navWidth', _navWidth.toStringAsFixed(1));
+                    savePref('navWidthManual', 'true');
+                  },
+                ),
+              ],
+              Expanded(child: _editorPane(context)),
+              if (_toolsExpanded) ...[
+                _resizeHandle(
+                  onDrag: (dx) => setState(
+                    () => _toolsWidth = (_toolsWidth - dx).clamp(220.0, 480.0),
+                  ),
+                ),
+                SizedBox(width: _toolsWidth, child: _workspaceTools(context)),
+              ],
+            ],
           ),
-        ],
-        Expanded(child: _editorPane(context)),
-        if (_toolsExpanded) ...[
-          _resizeHandle(
-            onDrag: (dx) => setState(
-              () => _toolsWidth = (_toolsWidth - dx).clamp(220.0, 480.0),
-            ),
-          ),
-          SizedBox(width: _toolsWidth, child: _workspaceTools(context)),
-        ],
+        ),
       ],
     );
   }
@@ -1185,7 +1205,9 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
           Positioned.fill(
             child: GestureDetector(
               onTap: _closeNavDrawer,
-              child: ColoredBox(color: MicaTokens.dark_.surface.base.withValues(alpha: 0.4)),
+              child: ColoredBox(
+                color: MicaTokens.dark_.surface.base.withValues(alpha: 0.4),
+              ),
             ),
           ),
           Positioned(
@@ -1246,6 +1268,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                 newTabLabel: context.l10n.tabNewTooltip,
               ),
             const SizedBox(width: 8),
+            const DesktopCaption(),
           ],
         ),
       ),
@@ -1384,57 +1407,26 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Top row: HOME on the left, the collapse button on the right.
-                //
-                // No logo/wordmark — the window title bar already says "Mica" with
-                // the same icon directly above, and two of them read as two apps
-                // stacked. Removing it left the row holding nothing but a Spacer,
-                // i.e. a blank band across the most valuable strip in the sidebar;
-                // home moved up into it rather than sitting a row lower under
-                // whitespace.
-                Row(
-                  children: [
-                    if (widget.onOpenHome != null)
-                      Expanded(
-                        child: HomeNavRow(
-                          label: context.l10n.navHome,
-                          selected: widget.selectedBootstrap == null,
-                          onTap: widget.onOpenHome!,
-                        ),
-                      )
-                    else
-                      const Spacer(),
-                    if (widget.isBusy)
-                      const Padding(
-                        padding: EdgeInsets.only(right: 4),
-                        child: SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                    IconButton(
-                      tooltip: narrow
-                          ? context.l10n.sidebarCloseDrawer
-                          : context.l10n.sidebarCollapse,
-                      visualDensity: VisualDensity.compact,
-                      onPressed: narrow
-                          ? _closeNavDrawer
-                          : () => setState(() => _navCollapsed = true),
-                      icon: Icon(
-                        narrow ? Icons.close : Icons.view_sidebar_outlined,
-                        size: 20,
-                      ),
+                if (narrow)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: IconButton(
+                      tooltip: context.l10n.sidebarCloseDrawer,
+                      onPressed: _closeNavDrawer,
+                      icon: const Icon(Icons.close, size: 20),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                // Search still sits ABOVE the workspace switcher (design 03), and
-                // that order is the meaning: it spans every workspace, so putting
-                // it under a workspace picker would imply it is scoped to the one
-                // you happen to have selected. Same reason home is on the row
-                // above rather than inside the workspace section.
+                  ),
                 _searchBox(context),
+                const SizedBox(height: 6),
+                if (widget.onOpenHome != null)
+                  HomeNavRow(
+                    label: context.l10n.navHome,
+                    selected:
+                        widget.selectedBootstrap == null &&
+                        widget.overviewPane == null,
+                    onTap: widget.onOpenHome!,
+                  ),
+                if (widget.isBusy) const LinearProgressIndicator(minHeight: 2),
                 const SizedBox(height: 10),
                 Divider(height: 1, color: MicaTheme.of(context).border.subtle),
                 const SizedBox(height: 10),
@@ -1601,6 +1593,12 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                     Expanded(child: _accountTile(context)),
                     if (updateSupported)
                       UpdateButton(controller: _desktopUpdates),
+                    IconButton(
+                      tooltip: context.l10n.settingsTitle,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: _openSettings,
+                      icon: const Icon(Icons.settings_outlined, size: 18),
+                    ),
                   ],
                 ),
               ],
@@ -1649,56 +1647,15 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     );
   }
 
-  /// The sidebar collapsed to a slim rail: just an expand button.
-  ///
-  /// No logo here either. It was the same duplicate as the expanded header's —
-  /// collapsing the sidebar brought back the second Mica mark that had just been
-  /// removed, which reads as the app re-introducing itself.
-  Widget _collapsedNavRail(BuildContext context) {
-    return ColoredBox(
-      color: MicaTheme.of(context).surface.raised,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
-        child: Column(
-          children: [
-            IconButton(
-              tooltip: context.l10n.sidebarExpand,
-              visualDensity: VisualDensity.compact,
-              onPressed: () => setState(() => _navCollapsed = false),
-              icon: const Icon(Icons.view_sidebar_outlined, size: 20),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// The sidebar's content width (280 panel − 16 padding each side), so the
-  /// menu lines up with the tile that opens it.
-  static const _kAccountMenuWidth = 248.0;
-
-  final _accountMenu = MenuController();
-
-  /// Account row pinned to the bottom of the left sidebar, and the app's ONE
-  /// world switcher: which world you are in, plus the way to change it.
-  ///
-  /// It lives here because this tile is the only control in the app whose
-  /// content already IS "which world am I in" — [accountIdentity] is a pure
-  /// function of (activeOrigin, session), no fetch. It is supposed to change
-  /// when you switch. Every other home put the switcher inside a container
-  /// whose contents it changes: the workspace dropdown (which then had to list
-  /// both worlds side by side), and Settings (whose Account / API Tokens / AI
-  /// tabs belong to whichever server the switcher was pointing at).
-  /// The signed-in user's picture, or null when there is none (and in 本地模式,
-  /// which has no account at all).
   String? _myAvatarUrl() {
     final user = widget.session?.user;
-    if (user == null) return null;
-    return avatarUrl(
-      base: widget.apiBase,
-      userId: user.id,
-      version: user.avatarVersion,
-    );
+    return user == null
+        ? null
+        : avatarUrl(
+            base: widget.apiBase,
+            userId: user.id,
+            version: user.avatarVersion,
+          );
   }
 
   Widget _accountTile(BuildContext context) {
@@ -1706,133 +1663,20 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
       local: widget.activeIsLocal,
       user: widget.session?.user,
     );
-    final initial = widget.activeIsLocal
-        ? context.l10n.accountLocalInitial
-        : (id.name.isNotEmpty ? id.name.substring(0, 1).toUpperCase() : '?');
-    // Width comes from the rows (each a SizedBox of _kAccountMenuWidth), not
-    // from a MenuStyle: that is how WorkspaceSelector — the other menu in this
-    // same sidebar — does it, and a panel constrained to the same width as its
-    // children has nowhere to put its own padding.
-    return MenuAnchor(
-      controller: _accountMenu,
-      menuChildren: [
-        // Desktop only — the same gate the Settings page had. Web has no local
-        // store to switch to (_local.available is false there) and is served
-        // BY a server, so its menu stays exactly what it has always been.
-        // One entry, not a list of worlds plus an add-server row. The world
-        // picker already exists as a full screen (the sign-in route: tabs,
-        // server list, add, remove, health probes) and it was the better one —
-        // this menu had a second, smaller implementation of the same idea that
-        // could only ever drift from it.
-        //
-        // Reachable while SIGNED IN, which is the whole point: the sign-in
-        // screen is otherwise only shown when there is no session, so before
-        // this the only way into 本地模式 from a signed-in app was to sign out.
-        if (!kIsWeb) ...[
-          _menuAction(
-            Icons.swap_horiz,
-            context.l10n.accountSwitchWorld,
-            widget.onSwitchWorld,
-          ),
-          const Divider(height: 8),
-        ],
-        _menuAction(
-          Icons.settings_outlined,
-          context.l10n.settingsTitle,
-          _openSettings,
-        ),
-        // Signing in stays a top-level action, not a per-row one: you sign in
-        // to the world you are in. In 本地模式 there is neither — and now the
-        // reason is one line above it (pick a world first) instead of a comment
-        // pointing somewhere else.
-        if (id.canSignOut)
-          _menuAction(
-            Icons.logout,
-            context.l10n.commonSignOut,
-            widget.onSignOut,
-          )
-        else if (id.canSignIn && widget.onSignIn != null)
-          _menuAction(
-            Icons.login,
-            context.l10n.workspaceRowSignInCloud,
-            widget.onSignIn!,
-          ),
-      ],
-      builder: (context, controller, child) => InkWell(
-        onTap: () => controller.isOpen ? controller.close() : controller.open(),
-        child: Padding(
-          // Slimmer than it was (vertical 6, radius-16 avatar): this row is
-          // always on screen and never scrolls, so its height comes straight
-          // out of the page tree's.
-          padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-          child: Row(
-            children: [
-              UserAvatar(url: _myAvatarUrl(), fallback: initial, radius: 14),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      id.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: MicaTypography.body.copyWith(
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    if (id.email != null)
-                      Text(
-                        id.email!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: MicaTypography.caption.copyWith(
-                          color: MicaTheme.of(context).text.muted,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              Icon(
-                Icons.more_vert,
-                size: 18,
-                color: MicaTheme.of(context).text.faint,
-              ),
-            ],
-          ),
-        ),
-      ),
+    return AccountMenu(
+      name: id.name,
+      email: id.email,
+      initial: widget.activeIsLocal
+          ? context.l10n.accountLocalInitial
+          : (id.name.isNotEmpty ? id.name.substring(0, 1).toUpperCase() : '?'),
+      avatarUrl: _myAvatarUrl(),
+      onSettings: _openSettings,
+      onSwitchWorld: widget.onSwitchWorld,
+      onSignOut: id.canSignOut ? widget.onSignOut : null,
+      onSignIn: id.canSignIn ? widget.onSignIn : null,
+      updates: _desktopUpdates,
     );
   }
-
-  /// One connection: what it IS, and nothing else. Deliberately no sign-in
-  /// state — signing in does not happen here (it is the action below, in the
-  /// world you are actually in), and a server you just added is always
-  /// signed-out, so the marker could only ever state the obvious.
-  Widget _menuAction(IconData icon, String label, VoidCallback onTap) =>
-      SizedBox(
-        width: _kAccountMenuWidth,
-        child: InkWell(
-          onTap: () {
-            _accountMenu.close();
-            onTap();
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Icon(icon, size: 18, color: MicaTheme.of(context).text.muted),
-                const SizedBox(width: 10),
-                Text(
-                  label,
-                  style: TextStyle(color: MicaTheme.of(context).text.primary),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
 
   void _schedulePageTitleSave() {
     // The field is now ahead of the document. Latched BEFORE the timer, not

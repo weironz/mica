@@ -221,26 +221,46 @@ void main() {
     });
   }
 
-  testWidgets('account row keeps updates but moves recycle bin to settings', (
+  testWidgets(
+    'account row has a direct settings shortcut and compact updates',
+    (tester) async {
+      useZh(tester);
+      await tester.pumpWidget(_Host().build());
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('回收站'), findsNothing);
+      final update = find.byType(UpdateButton);
+      if (!updateSupported) {
+        expect(update, findsNothing);
+        return;
+      }
+      expect(update, findsOneWidget);
+      final accountRow = find.byWidgetPredicate(
+        (widget) =>
+            widget is Row && widget.children.any((c) => c is UpdateButton),
+      );
+      expect(accountRow, findsOneWidget);
+      expect(tester.widget<Row>(accountRow).children, hasLength(3));
+      expect(tester.getSize(update).height, lessThanOrEqualTo(40));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('tabs share the top edge with the sidebar toggle', (
     tester,
   ) async {
     useZh(tester);
+    _viewSize(tester, const Size(1280, 800));
     await tester.pumpWidget(_Host().build());
     await tester.pumpAndSettle();
-    expect(find.byTooltip('回收站'), findsNothing);
-    final update = find.byType(UpdateButton);
-    if (!updateSupported) {
-      expect(update, findsNothing);
-      return;
-    }
-    expect(update, findsOneWidget);
-    final accountRow = find.byWidgetPredicate(
-      (widget) => widget is Row && widget.children.any((c) => c is UpdateButton),
-    );
-    expect(accountRow, findsOneWidget);
-    // Only the account tile and the update entry remain in the row.
-    expect(tester.widget<Row>(accountRow).children, hasLength(2));
-    expect(tester.getSize(update).height, lessThanOrEqualTo(40));
+    final tabs = find.byType(DocTabStrip);
+    final toggle = find.byTooltip('收起左侧栏');
+    expect(tester.getTopLeft(tabs).dy, 0);
+    expect(tester.getCenter(tabs).dy, tester.getCenter(toggle).dy);
+    expect(find.byIcon(Icons.more_vert), findsNothing);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('展开左侧栏'), findsOneWidget);
+    expect(tester.getTopLeft(tabs).dy, 0);
     expect(tester.takeException(), isNull);
   });
 
@@ -260,7 +280,12 @@ void main() {
     expect(tester.takeException(), isNull);
 
     // A tab in the strip selects.
-    await tester.tap(find.text('Alpha').last);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DocTabStrip),
+        matching: find.text('Alpha'),
+      ),
+    );
     await tester.pump();
     expect(host.calls, contains('selectTab:0'));
 

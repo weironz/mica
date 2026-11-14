@@ -12,6 +12,7 @@
 
 import 'package:flutter/material.dart';
 import 'theme_tokens.dart';
+import 'window_chrome.dart';
 
 /// Below this width the brand panel is dropped instead of squeezed.
 ///
@@ -97,7 +98,7 @@ class SignInScreen extends StatelessWidget {
       ],
     );
 
-    return LayoutBuilder(
+    final content = LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < kSignInSplitMinWidth) {
           return formPane;
@@ -113,6 +114,21 @@ class SignInScreen extends StatelessWidget {
           ],
         );
       },
+    );
+    if (!hasCustomWindowChrome) return content;
+    return Column(
+      children: [
+        const SizedBox(
+          height: 34,
+          child: Row(
+            children: [
+              Expanded(child: DesktopDragRegion(child: SizedBox.expand())),
+              DesktopCaption(),
+            ],
+          ),
+        ),
+        Expanded(child: content),
+      ],
     );
   }
 }

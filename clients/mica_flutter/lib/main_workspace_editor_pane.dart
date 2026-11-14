@@ -1,42 +1,21 @@
 part of 'main.dart';
 
 extension _WorkspaceEditorPane on _WorkspaceViewState {
-  /// The editor pane, with the tab strip on top of whatever it renders.
-  ///
-  /// The strip wraps [_editorPaneBody] rather than living inside it because the
-  /// body returns early for every empty state — no workspace, no page open. A
-  /// strip nested below those returns would vanish the moment one of its tabs
-  /// held nothing, which is exactly when the user needs it to switch away.
-  ///
-  /// [narrow]: the narrow shell shows the tabs as a top-bar switcher instead
-  /// (ui/narrow_tab_switcher.dart), so no strip here.
-  Widget _editorPane(BuildContext context, {bool narrow = false}) {
-    final onSelectTab = widget.onSelectTab;
-    final onCloseTab = widget.onCloseTab;
-    final body = _editorPaneBody(context);
-    if (narrow) return body;
-    // Only the local world skips the strip now — it has no tab model at all.
-    // The "fewer than two tabs" case used to skip it too; the strip is resident
-    // since 2026-08-12 (user's call), because hiding it also hid the `+`, and
-    // that left a single-tab window with no visible way to open a second one.
-    if (onSelectTab == null || onCloseTab == null || widget.tabs.isEmpty) {
-      return body;
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        DocTabStrip(
-          tabs: widget.tabs,
-          activeIndex: widget.activeTabIndex,
-          onSelect: onSelectTab,
-          onClose: onCloseTab,
-          untitledLabel: context.l10n.untitledPage,
-          onNewTab: widget.onNewTabPage == null ? null : _showNewTabMenu,
-          newTabTooltip: context.l10n.tabNewTooltip,
-          foreignWorkspaceName: _foreignWorkspaceName,
-        ),
-        Expanded(child: body),
-      ],
+  Widget _editorPane(BuildContext context, {bool narrow = false}) =>
+      _editorPaneBody(context);
+
+  Widget? _documentTabs(BuildContext context) {
+    final select = widget.onSelectTab, close = widget.onCloseTab;
+    if (select == null || close == null || widget.tabs.isEmpty) return null;
+    return DocTabStrip(
+      tabs: widget.tabs,
+      activeIndex: widget.activeTabIndex,
+      onSelect: select,
+      onClose: close,
+      untitledLabel: context.l10n.untitledPage,
+      onNewTab: widget.onNewTabPage == null ? null : _showNewTabMenu,
+      newTabTooltip: context.l10n.tabNewTooltip,
+      foreignWorkspaceName: _foreignWorkspaceName,
     );
   }
 
@@ -85,11 +64,13 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
         0,
       ),
       items: [
-        PopupMenuItem(height:30,
+        PopupMenuItem(
+          height: 30,
           value: 'new',
           child: MenuRow(icon: Icons.add, label: context.l10n.tabNewPage),
         ),
-        PopupMenuItem(height:30,
+        PopupMenuItem(
+          height: 30,
           value: 'open',
           child: MenuRow(
             icon: Icons.search,
@@ -177,7 +158,22 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           child: PageBreadcrumb(
                             views: widget.views,
                             current: widget.selectedView!,
-                            onSelect: widget.onSelectView,
+                            onSelect: (view) async {
+                              await _commandHook.flush();
+                              if (!mounted) return;
+                              if (view.isFolder &&
+                                  widget.onBrowseFolder != null) {
+                                widget.onBrowseFolder!(view.id);
+                              } else {
+                                await widget.onSelectView(view);
+                              }
+                            },
+                            onOpenWorkspace: widget.onBrowseFolder == null
+                                ? null
+                                : () async {
+                                    await _commandHook.flush();
+                                    if (mounted) widget.onBrowseFolder!(null);
+                                  },
                             // Renaming from the breadcrumb tail (AppFlowy does this).
                             // Gated on the editor role: a viewer's rename would 403,
                             // and an edit affordance that cannot succeed is worse than
@@ -281,9 +277,12 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           // it is the cheap, frequent one (grab the text, paste
                           // it somewhere), while everything below produces a
                           // file. Grouping it with the exports would bury it.
-                          PopupMenuItem(height:30,
+                          PopupMenuItem(
+                            height: 30,
                             value: 'copy-md',
-                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
+                            child: ListTile(
+                              minTileHeight: 30,
+                              minVerticalPadding: 0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.copy_all_outlined),
@@ -295,18 +294,24 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           // handed back a lone .md whose images pointed at
                           // `![](photo.png)` — a file that was nowhere in the
                           // download. A zip can carry them; a .md cannot.
-                          PopupMenuItem(height:30,
+                          PopupMenuItem(
+                            height: 30,
                             value: 'export-zip',
-                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
+                            child: ListTile(
+                              minTileHeight: 30,
+                              minVerticalPadding: 0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.folder_zip_outlined),
                               title: Text(context.l10n.rowExportZipImages),
                             ),
                           ),
-                          PopupMenuItem(height:30,
+                          PopupMenuItem(
+                            height: 30,
                             value: 'export-html',
-                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
+                            child: ListTile(
+                              minTileHeight: 30,
+                              minVerticalPadding: 0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.html_outlined),
@@ -317,9 +322,12 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           // headless print (native bytes → download); web hands
                           // the same self-contained HTML to the browser's own
                           // print dialog ("Save as PDF"). Available on both.
-                          PopupMenuItem(height:30,
+                          PopupMenuItem(
+                            height: 30,
                             value: 'export-pdf',
-                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
+                            child: ListTile(
+                              minTileHeight: 30,
+                              minVerticalPadding: 0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(
@@ -329,9 +337,12 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                             ),
                           ),
                           const PopupMenuDivider(),
-                          PopupMenuItem(height:30,
+                          PopupMenuItem(
+                            height: 30,
                             value: 'import-md',
-                            child: ListTile(minTileHeight:30,minVerticalPadding:0,
+                            child: ListTile(
+                              minTileHeight: 30,
+                              minVerticalPadding: 0,
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.upload_file_outlined),
@@ -340,9 +351,12 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           ),
                           if (widget.onShare != null) ...[
                             const PopupMenuDivider(),
-                            PopupMenuItem(height:30,
+                            PopupMenuItem(
+                              height: 30,
                               value: 'share',
-                              child: ListTile(minTileHeight:30,minVerticalPadding:0,
+                              child: ListTile(
+                                minTileHeight: 30,
+                                minVerticalPadding: 0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.public),
@@ -352,9 +366,12 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           ],
                           if (widget.onVersionHistory != null) ...[
                             const PopupMenuDivider(),
-                            PopupMenuItem(height:30,
+                            PopupMenuItem(
+                              height: 30,
                               value: 'version-history',
-                              child: ListTile(minTileHeight:30,minVerticalPadding:0,
+                              child: ListTile(
+                                minTileHeight: 30,
+                                minVerticalPadding: 0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.history),
@@ -364,9 +381,12 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           ],
                           if (widget.onRestoreCheckpoint != null) ...[
                             const PopupMenuDivider(),
-                            PopupMenuItem(height:30,
+                            PopupMenuItem(
+                              height: 30,
                               value: 'restore-checkpoint',
-                              child: ListTile(minTileHeight:30,minVerticalPadding:0,
+                              child: ListTile(
+                                minTileHeight: 30,
+                                minVerticalPadding: 0,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.restore_outlined),
@@ -503,9 +523,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
           child: Container(
             decoration: active
                 ? BoxDecoration(
-                    color: MicaTheme.of(
-                      context,
-                    ).surface.hover,
+                    color: MicaTheme.of(context).surface.hover,
                     borderRadius: BorderRadius.circular(6),
                   )
                 : null,

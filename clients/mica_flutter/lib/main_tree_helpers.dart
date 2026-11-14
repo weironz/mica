@@ -29,6 +29,7 @@ List<String>? pagePathSegments({
   required String? workspaceName,
   required DocumentView? view,
   required List<DocumentView> views,
+  bool includePage = true,
 }) {
   if (workspaceName == null || view == null) return null;
   return [
@@ -38,7 +39,7 @@ List<String>? pagePathSegments({
       views: views,
       startedAt: view.id,
     ),
-    view.name,
+    if (includePage) view.name,
   ];
 }
 
@@ -221,9 +222,7 @@ int reparentLevelFor({
   // gesture, which is the one thing an aiming affordance must not do.
   double baseInset = 2 + kTreeExpandColumnWidth,
 }) {
-  final minLevel = nextRowDepth == null
-      ? 0
-      : math.min(nextRowDepth, rowDepth);
+  final minLevel = nextRowDepth == null ? 0 : math.min(nextRowDepth, rowDepth);
   if (minLevel >= rowDepth) return rowDepth;
   final raw = ((pointerX - baseInset) / indentUnit).round();
   return raw.clamp(minLevel, rowDepth);
@@ -247,7 +246,9 @@ List<DocumentView> rootDropOrder(
 ) {
   final moving = {for (final d in dragged) d.id};
   final roots =
-      views.where((v) => v.parentViewId == null && !moving.contains(v.id)).toList()
+      views
+          .where((v) => v.parentViewId == null && !moving.contains(v.id))
+          .toList()
         ..sort((a, b) => a.position.compareTo(b.position));
   return [...roots, ...dragged];
 }
@@ -273,4 +274,3 @@ double treeRevealOffset({
   if (maxScrollExtent <= minScrollExtent) return minScrollExtent;
   return centred.clamp(minScrollExtent, maxScrollExtent);
 }
-

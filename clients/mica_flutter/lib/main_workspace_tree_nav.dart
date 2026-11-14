@@ -374,7 +374,9 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
           padding: EdgeInsets.only(left: inset, top: inset),
           child: Opacity(
             opacity: opacity,
-            child: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+            child: Material(
+              shape: MicaTheme.of(context).menuShape,
+              animationDuration: Duration.zero,
               elevation: 0,
               child: Container(
                 padding: const EdgeInsets.symmetric(
@@ -387,7 +389,8 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: child ?? const SizedBox(height: 20),
-              ),),
+              ),
+            ),
           ),
         );
 
@@ -513,14 +516,16 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
     final transfer = widget.onTransfer;
     return [
       if (transfer != null) ...[
-        PopupMenuItem<VoidCallback>(height:30,
+        PopupMenuItem<VoidCallback>(
+          height: 30,
           value: () => transfer(rows, false),
           child: MenuRow(
             icon: Icons.drive_file_move_outlined,
             label: l10n.batchTransferMove(rows.length),
           ),
         ),
-        PopupMenuItem<VoidCallback>(height:30,
+        PopupMenuItem<VoidCallback>(
+          height: 30,
           value: () => transfer(rows, true),
           child: MenuRow(
             icon: Icons.copy_all_outlined,
@@ -529,7 +534,8 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
         ),
         const PopupMenuDivider(),
       ],
-      PopupMenuItem<VoidCallback>(height:30,
+      PopupMenuItem<VoidCallback>(
+        height: 30,
         value: () => _deleteSelection(rows),
         child: MenuRow(
           icon: Icons.delete_outline,
@@ -742,17 +748,12 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
     if (_selection.retainVisible(visible)) setUi(() {});
   }
 
-  /// `workspace/folder/.../page` for the open page — GitHub's "copy path", for
-  /// telling someone (or an agent) WHERE something is.
-  ///
-  /// The workspace leads because a path without it is ambiguous the moment
-  /// there is more than one, and whoever you paste it to cannot guess which you
-  /// meant. Segments and separator rationale live on [pagePathSegments], which
-  /// the breadcrumb reads too.
+  /// Copy the containing path, not the current page's name.
   String? _pagePath() => pagePathSegments(
     workspaceName: widget.selectedWorkspace?.name,
     view: widget.selectedView,
     views: widget.views,
+    includePage: false,
   )?.join('/');
 
   /// Put [_pagePath] on the clipboard.

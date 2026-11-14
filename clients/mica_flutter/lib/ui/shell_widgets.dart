@@ -479,7 +479,9 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
       onDragEnd: (_) => setState(() => _dragging = false),
       onDraggableCanceled: (_, _) => setState(() => _dragging = false),
       onDragCompleted: () => setState(() => _dragging = false),
-      feedback: Material(shape:MicaTheme.of(context).menuShape,animationDuration:Duration.zero,
+      feedback: Material(
+        shape: MicaTheme.of(context).menuShape,
+        animationDuration: Duration.zero,
         elevation: 0,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -505,7 +507,8 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
               ),
             ],
           ),
-        ),),
+        ),
+      ),
       childWhenDragging: Opacity(opacity: 0.4, child: row),
       child: Stack(
         children: [
@@ -1204,7 +1207,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
         // First, because it is the only entry that opens something rather than
         // changing it — the same slot browsers and AppFlowy put it in.
         if (widget.onOpenInNewTab != null)
-          PopupMenuItem(height:30,
+          PopupMenuItem(
+            height: 30,
             value: 'openInNewTab',
             child: MenuRow(
               icon: Icons.tab_outlined,
@@ -1219,14 +1223,16 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // A page is a leaf: only folders can hold children, so the two
           // "new child" entries appear on folder rows only.
           if (widget._isFolder) ...[
-            PopupMenuItem(height:30,
+            PopupMenuItem(
+              height: 30,
               value: 'child',
               child: MenuRow(
                 icon: Icons.add,
                 label: context.l10n.rowNewChildPage,
               ),
             ),
-            PopupMenuItem(height:30,
+            PopupMenuItem(
+              height: 30,
               value: 'childFolder',
               child: MenuRow(
                 icon: Icons.create_new_folder_outlined,
@@ -1234,7 +1240,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
               ),
             ),
           ],
-          PopupMenuItem(height:30,
+          PopupMenuItem(
+            height: 30,
             value: 'rename',
             child: MenuRow(
               icon: Icons.edit_outlined,
@@ -1245,7 +1252,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // kind of act — naming the thing — and the picker itself carries the
           // "remove icon" affordance, so no second menu entry is needed.
           if (widget.onSetIcon != null)
-            PopupMenuItem(height:30,
+            PopupMenuItem(
+              height: 30,
               value: 'setIcon',
               child: MenuRow(
                 icon: Icons.emoji_emotions_outlined,
@@ -1255,7 +1263,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // Duplicate in place — works for pages AND folders (a folder copies its
           // whole subtree), and in cloud AND local workspaces (unlike transfer,
           // which is cloud-only), so it's always present.
-          PopupMenuItem(height:30,
+          PopupMenuItem(
+            height: 30,
             value: 'duplicate',
             child: MenuRow(
               icon: Icons.content_copy_outlined,
@@ -1263,7 +1272,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
             ),
           ),
           if (widget.hasChildren)
-            PopupMenuItem(height:30,
+            PopupMenuItem(
+              height: 30,
               value: 'toggle',
               child: MenuRow(
                 icon: widget.isCollapsed
@@ -1277,7 +1287,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // Folder subtree -> backup or Markdown ZIP, like a workspace (N3).
           if (widget._isFolder && widget.onExportFolder != null)
             for (final f in ArchiveFormat.values)
-              PopupMenuItem(height:30,
+              PopupMenuItem(
+                height: 30,
                 value: 'export:${f.name}',
                 child: MenuRow(
                   icon: Icons.folder_zip_outlined,
@@ -1286,7 +1297,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
               ),
           // Import md / images / a nested folder UNDER this folder (both worlds).
           if (widget._isFolder && widget.onImportFilesIntoFolder != null)
-            PopupMenuItem(height:30,
+            PopupMenuItem(
+              height: 30,
               value: 'importFiles',
               child: MenuRow(
                 icon: Icons.upload_file_outlined,
@@ -1294,7 +1306,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
               ),
             ),
           if (widget._isFolder && widget.onImportFolderIntoFolder != null)
-            PopupMenuItem(height:30,
+            PopupMenuItem(
+              height: 30,
               value: 'importFolder',
               child: MenuRow(
                 icon: Icons.drive_folder_upload_outlined,
@@ -1305,14 +1318,16 @@ class _DocumentListItemState extends State<DocumentListItem> {
           // workspace. Works for pages AND folders (the folder carries its
           // subtree), matching the server endpoint's semantics.
           if (widget.onTransferMove != null) ...[
-            PopupMenuItem(height:30,
+            PopupMenuItem(
+              height: 30,
               value: 'transferMove',
               child: MenuRow(
                 icon: Icons.drive_file_move_outlined,
                 label: context.l10n.transferMoveTitle,
               ),
             ),
-            PopupMenuItem(height:30,
+            PopupMenuItem(
+              height: 30,
               value: 'transferCopy',
               child: MenuRow(
                 icon: Icons.copy_all_outlined,
@@ -1321,7 +1336,8 @@ class _DocumentListItemState extends State<DocumentListItem> {
             ),
           ],
           const PopupMenuDivider(),
-          PopupMenuItem(height:30,
+          PopupMenuItem(
+            height: 30,
             value: 'delete',
             child: MenuRow(
               icon: Icons.delete_outline,
@@ -1524,7 +1540,9 @@ class _DocumentListItemState extends State<DocumentListItem> {
                                   fontWeight: w.isSelected
                                       ? FontWeight.w500
                                       : FontWeight.w400,
-                                  color: w.isSelected ? MicaTheme.of(context).text.primary : MicaTheme.of(context).text.muted,
+                                  color: w.isSelected
+                                      ? MicaTheme.of(context).text.primary
+                                      : MicaTheme.of(context).text.muted,
                                 ),
                           ),
                   ),
@@ -1735,6 +1753,7 @@ class PageBreadcrumb extends StatefulWidget {
     this.onRename,
     this.onCopyPath,
     this.workspaceName,
+    this.onOpenWorkspace,
   });
 
   final List<DocumentView> views;
@@ -1754,13 +1773,10 @@ class PageBreadcrumb extends StatefulWidget {
   /// check only on true, so a refused clipboard cannot look like a success.
   final Future<bool> Function()? onCopyPath;
 
-  /// Shown as the FIRST crumb, so what you read matches what [onCopyPath]
-  /// copies — the copied path has always led with the workspace, and a
-  /// breadcrumb that started one level lower made the two disagree.
-  ///
-  /// Not a link: there is no "open the workspace" destination here the way
-  /// there is for a folder. Null hides it.
+  /// First crumb. The copy action includes this workspace and its folders,
+  /// but excludes the current page. Null hides it.
   final String? workspaceName;
+  final Future<void> Function()? onOpenWorkspace;
 
   @override
   State<PageBreadcrumb> createState() => PageBreadcrumbState();
@@ -1844,7 +1860,8 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
         // hugs the last crumb instead of floating off in the leftover budget.
         Flexible(
           child: LayoutBuilder(
-            builder: (context, box) => _path(context, full, box.maxWidth),
+            builder: (context, box) =>
+                SelectionArea(child: _path(context, full, box.maxWidth)),
           ),
         ),
         // PINNED, outside the flexible path: it is about the page, so it must
@@ -1940,11 +1957,15 @@ class PageBreadcrumbState extends State<PageBreadcrumb> {
         ],
         for (final i in keep) ...[
           if (i == 0 && hasWs)
-            Text(
-              ws,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: MicaTypography.caption.copyWith(color: faint),
+            InkWell(
+              onTap: widget.onOpenWorkspace,
+              borderRadius: BorderRadius.circular(6),
+              child: Text(
+                ws,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: MicaTypography.caption.copyWith(color: faint),
+              ),
             )
           else
             _crumb(full[hasWs ? i - 1 : i], isLast: false),

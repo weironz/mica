@@ -1,31 +1,12 @@
 import 'typography.dart';
-// The row of open-page tabs above the editor.
-//
-// PLACEMENT — inside the editor pane, not spanning the window.
-//
-// The two reference products differ here, and the choice is deliberate:
-// AFFiNE puts its strip in a full-width row ABOVE the sidebar
-// (`desktop/components/app-container/index.tsx`: `desktopTabsHeader` then
-// `desktopAppViewMain`, which holds sidebar + main), while AppFlowy keeps its
-// `TabsManager` INSIDE the content column with the sidebar at full height
-// (`workspace/presentation/home/home_stack.dart`).
-//
-// Mica follows AppFlowy: the full-width form would have to restructure the
-// shell's `Row` into a `Column`, and the narrow shell — where the sidebar
-// slides OVER the editor rather than sitting beside it — has no row that spans
-// both. AFFiNE can afford the full-width form because it earns the height back
-// by moving the sidebar toggle and the nav buttons INTO the strip; Mica's
-// editor pane already has those in its own top row, so there is nothing to
-// reclaim and the restructure would buy nothing.
-//
-// The strip therefore costs vertical space and nothing horizontal — it does not
-// compete with the formatting toolbar, which was the worry when this was
-// specced.
+// Open-page tabs share ShellTitleBar with the sidebar toggle and OS controls.
+// The narrow shell uses NarrowTabSwitcher instead.
 
 import 'package:flutter/material.dart';
 
 import '../doc_tab.dart';
 import 'theme_tokens.dart';
+import 'window_chrome.dart';
 
 /// Height of the strip when it is showing. Callers that need to reserve space
 /// should read this rather than repeating the number.
@@ -106,31 +87,38 @@ class DocTabStrip extends StatelessWidget {
       // stripes. Scrolling keeps every tab legible; the cost is that with
       // enough tabs open the `+` scrolls off, and reaching it means scrolling
       // right — which is what a browser does too.
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            const SizedBox(width: 4),
-            for (var i = 0; i < tabs.length; i++)
-              _withHint(
-                foreignWorkspaceName?.call(tabs[i]),
-                _Tab(
-                  // The tab's own title, NOT the active document's — every tab
-                  // renders its own `view`, which is what makes the strip
-                  // readable while a background tab is still loading.
-                  label: _labelFor(tabs[i]),
-                  active: i == activeIndex,
-                  onTap: () => onSelect(i),
-                  // No close button on the only tab: the host refuses to close
-                  // the last one (`_tabs` is invariant-non-empty), so drawing a
-                  // X there is an affordance that does nothing when clicked.
-                  onClose: tabs.length < 2 ? null : () => onClose(i),
-                ),
-              ),
-            if (onNewTab != null)
-              _NewTabButton(onTap: onNewTab!, tooltip: newTabTooltip),
-          ],
-        ),
+      child: Stack(
+        children: [
+          const Positioned.fill(
+            child: DesktopDragRegion(child: SizedBox.expand()),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                const SizedBox(width: 4),
+                for (var i = 0; i < tabs.length; i++)
+                  _withHint(
+                    foreignWorkspaceName?.call(tabs[i]),
+                    _Tab(
+                      // The tab's own title, NOT the active document's — every tab
+                      // renders its own `view`, which is what makes the strip
+                      // readable while a background tab is still loading.
+                      label: _labelFor(tabs[i]),
+                      active: i == activeIndex,
+                      onTap: () => onSelect(i),
+                      // No close button on the only tab: the host refuses to close
+                      // the last one (`_tabs` is invariant-non-empty), so drawing a
+                      // X there is an affordance that does nothing when clicked.
+                      onClose: tabs.length < 2 ? null : () => onClose(i),
+                    ),
+                  ),
+                if (onNewTab != null)
+                  _NewTabButton(onTap: onNewTab!, tooltip: newTabTooltip),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

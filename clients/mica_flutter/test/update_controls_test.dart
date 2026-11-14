@@ -43,9 +43,7 @@ Widget _host(DesktopUpdateController controller, {bool about = false}) =>
     );
 
 void main() {
-  testWidgets('detects updates in the existing recycle-bin row', (
-    tester,
-  ) async {
+  testWidgets('detects updates in the existing account row', (tester) async {
     var checks = 0;
     final controller = DesktopUpdateController(
       currentVersion: '0.13.68',
@@ -60,8 +58,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(checks, 1);
-    expect(find.byType(Badge), findsOneWidget);
-    expect(tester.widget<Badge>(find.byType(Badge)).isLabelVisible, isTrue);
+    expect(find.text('立即更新'), findsOneWidget);
     final update = find.byIcon(Icons.system_update_alt);
     final trash = find.byIcon(Icons.delete_outline);
     expect(tester.getCenter(update).dy, tester.getCenter(trash).dy);
@@ -202,7 +199,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(checks, 0);
     expect(find.byIcon(Icons.system_update_alt), findsNothing);
-    expect(find.byType(Badge), findsNothing);
   });
 
   test(
@@ -267,6 +263,11 @@ void main() {
     await tester.pumpWidget(_host(controller));
     await tester.pumpAndSettle();
     expect(controller.stage, DesktopUpdateStage.upToDate);
+    expect(
+      find.text('立即更新'),
+      findsNothing,
+      reason: 'an idle update entry stays icon-only',
+    );
     await tester.pump(DesktopUpdateController.checkInterval);
     await tester.pumpAndSettle();
     expect(checks, 2);
