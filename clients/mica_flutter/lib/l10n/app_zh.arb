@@ -264,6 +264,8 @@
   "settingsAppearance": "外观",
   "settingsResetPageWidth": "重置为默认宽度",
   "settingsPageWidth": "页面宽度",
+  "settingsPageWidthFull": "全宽",
+  "settingsPageWidthShown": "当前显示 {px} px",
   "settingsInterfaceFontSize": "界面字号",
   "settingsUiFontSmall": "小",
   "settingsUiFontStandard": "标准",

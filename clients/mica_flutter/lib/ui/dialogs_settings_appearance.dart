@@ -45,50 +45,100 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
     ),
   );
 
-  /// Page width as 11 discrete stops (AppFlowy-style), plus a reset to the
-  /// readable default. Fixed range (not window-relative) so the stops are stable
-  /// "levels"; the editor caps the render at the window, so a wide stop on a
-  /// small window just fills it. Reset → [kPageWidthDefault], NOT full width.
+  /// Page width as 11 discrete stops (AppFlowy-style), the last one "full
+  /// width", plus a reset to the readable default. Fixed pixel stops (not
+  /// window-relative) so they stay stable "levels"; the editor caps the render
+  /// at the room the sidebars leave, so the slider marks how far this window
+  /// reaches and says so when the chosen width is not what is drawn. Reset →
+  /// [kPageWidthDefault], NOT full width.
   Widget _pageWidthRow(BuildContext context) {
     final w = _pageWidth.clamp(kPageWidthMin, kPageWidthMax);
     final atDefault = w.round() == kPageWidthDefault.round();
-    return _preferenceRow(
-      context.l10n.settingsPageWidth,
-      Row(
-        children: [
-          Expanded(
-            child: Slider(
-              value: w,
-              min: kPageWidthMin,
-              max: kPageWidthMax,
-              divisions: kPageWidthDivisions,
-              onChanged: (value) {
-                setUi(() => _pageWidth = value);
-                _applyAppearance();
-              },
+    return ValueListenableBuilder<double?>(
+      valueListenable: PageWidthFrame.room,
+      builder: (context, room, _) {
+        final note = pageWidthShownNote(context, w, room);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _preferenceRow(
+              context.l10n.settingsPageWidth,
+              _pageWidthControls(context, w, room, atDefault),
             ),
-          ),
-          Text(
-            '${w.round()} px',
-            style: MicaTypography.small.copyWith(
-              color: MicaTheme.of(context).text.muted,
-            ),
-          ),
-          IconButton(
-            tooltip: context.l10n.settingsResetPageWidth,
-            visualDensity: VisualDensity.compact,
-            onPressed: atDefault
-                ? null
-                : () {
-                    setUi(() => _pageWidth = kPageWidthDefault);
-                    _applyAppearance();
-                  },
-            icon: const Icon(Icons.restart_alt, size: 18),
-          ),
-        ],
-      ),
+            // Under the track rather than beside the figure: a figure that
+            // grows and shrinks would resize the slider while it is dragged.
+            if (note != null)
+              LayoutBuilder(
+                builder: (context, box) => Padding(
+                  padding: EdgeInsets.only(
+                    left: (box.maxWidth < 440 ? 0 : 108) + 24,
+                    bottom: 4,
+                  ),
+                  child: Text(
+                    note,
+                    key: const ValueKey('settings-page-width-shown'),
+                    style: MicaTypography.caption.copyWith(
+                      color: MicaTheme.of(context).text.faint,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
+
+  Widget _pageWidthControls(
+    BuildContext context,
+    double w,
+    double? room,
+    bool atDefault,
+  ) => Row(
+    children: [
+      Expanded(
+        child: Slider(
+          key: const ValueKey('settings-page-width'),
+          value: w,
+          min: kPageWidthMin,
+          max: kPageWidthMax,
+          divisions: kPageWidthDivisions,
+          // Neutral, like the rest of the chrome: it marks a limit of
+          // this window, not a second value to pick.
+          secondaryActiveColor: MicaTheme.of(context).border.strong,
+          secondaryTrackValue: room != null && room < kPageWidthMax
+              ? room.clamp(kPageWidthMin, kPageWidthMax)
+              : null,
+          onChanged: (value) {
+            setUi(() => _pageWidth = value);
+            _applyAppearance();
+          },
+        ),
+      ),
+      ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 56),
+        child: Text(
+          pageWidthLabel(context, w),
+          key: const ValueKey('settings-page-width-label'),
+          textAlign: TextAlign.right,
+          style: MicaTypography.small.copyWith(
+            color: MicaTheme.of(context).text.muted,
+          ),
+        ),
+      ),
+      IconButton(
+        tooltip: context.l10n.settingsResetPageWidth,
+        visualDensity: VisualDensity.compact,
+        onPressed: atDefault
+            ? null
+            : () {
+                setUi(() => _pageWidth = kPageWidthDefault);
+                _applyAppearance();
+              },
+        icon: const Icon(Icons.restart_alt, size: 18),
+      ),
+    ],
+  );
 
   Widget _sliderRow({
     required String label,
@@ -261,6 +311,9 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
         fontFamily: _fontFamily,
       ),
       pageWidth: _pageWidth,
+      widthLabel: isFullPageWidth(_pageWidth)
+          ? context.l10n.settingsPageWidthFull
+          : null,
       title: context.l10n.settingsPreviewTitle,
       body: context.l10n.settingsPreviewBody,
       code: context.l10n.settingsPreviewCode,

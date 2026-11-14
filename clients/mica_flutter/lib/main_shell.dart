@@ -2169,7 +2169,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       workspace.id,
       bootstrap.document.id,
       // WYSIWYG: export as wide as the editor page the user reads.
-      width: _pageWidth.round(),
+      width: pageWidthForExport(_pageWidth).round(),
     );
   }
 
@@ -2192,7 +2192,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     final html = _local.exportDocHtml(
       bootstrap.document.id,
       name,
-      contentWidth: _pageWidth.round(),
+      contentWidth: pageWidthForExport(_pageWidth).round(),
     );
     if (html == null || html.isEmpty) {
       throw ApiException(context.l10n.exportEmptyContent);

@@ -11,6 +11,7 @@ class MicaAppearancePreview extends StatelessWidget {
   const MicaAppearancePreview({
     required this.appearance,
     required this.pageWidth,
+    this.widthLabel,
     required this.title,
     required this.body,
     required this.code,
@@ -20,6 +21,9 @@ class MicaAppearancePreview extends StatelessWidget {
 
   final EditorAppearance appearance;
   final double pageWidth;
+
+  /// Replaces the px figure, for widths that are not one (full width).
+  final String? widthLabel;
   final String title;
   final String body;
   final String code;
@@ -47,7 +51,7 @@ class MicaAppearancePreview extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            '$label · ${pageWidth.round()} px',
+            '$label · ${widthLabel ?? '${pageWidth.round()} px'}',
             style: MicaTypography.caption.copyWith(color: tokens.text.muted),
           ),
           const SizedBox(height: 18),

@@ -435,6 +435,19 @@
   "settingsAppearance": "Appearance",
   "settingsResetPageWidth": "Reset to default width",
   "settingsPageWidth": "Page width",
+  "settingsPageWidthFull": "Full width",
+  "@settingsPageWidthFull": {
+    "description": "The last page-width stop: the column fills whatever the sidebars leave, and keeps adapting as they open and close."
+  },
+  "settingsPageWidthShown": "showing {px} px",
+  "@settingsPageWidthShown": {
+    "description": "Next to the chosen page width when this window cannot draw it that wide: the width actually drawn right now.",
+    "placeholders": {
+      "px": {
+        "type": "int"
+      }
+    }
+  },
   "settingsInterfaceFontSize": "Interface text size",
   "settingsUiFontSmall": "Small",
   "settingsUiFontStandard": "Standard",

@@ -548,108 +548,107 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: Center(
             child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: widget.pageWidth),
-              child: Padding(
-                padding: EdgeInsets.zero,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      btn(Icons.undo, context.l10n.pageFormatUndo, h.undo),
-                      btn(Icons.redo, context.l10n.pageFormatRedo, h.redo),
-                      divider(),
-                      btn(
-                        Icons.notes,
-                        context.l10n.pageFormatText,
-                        () => h.setBlock('paragraph'),
-                        active: k == 'paragraph',
-                      ),
-                      headingBtn(
-                        Icons.looks_one_outlined,
-                        context.l10n.pageFormatHeading1,
-                        1,
-                      ),
-                      headingBtn(
-                        Icons.looks_two_outlined,
-                        context.l10n.pageFormatHeading2,
-                        2,
-                      ),
-                      headingBtn(
-                        Icons.looks_3_outlined,
-                        context.l10n.pageFormatHeading3,
-                        3,
-                      ),
-                      divider(),
-                      btn(
-                        Icons.format_bold,
-                        context.l10n.pageFormatBold,
-                        () => h.toggleMark('bold'),
-                      ),
-                      btn(
-                        Icons.format_italic,
-                        context.l10n.pageFormatItalic,
-                        () => h.toggleMark('italic'),
-                      ),
-                      btn(
-                        Icons.format_strikethrough,
-                        context.l10n.pageFormatStrikethrough,
-                        () => h.toggleMark('strike'),
-                      ),
-                      btn(
-                        Icons.code,
-                        context.l10n.pageFormatInlineCode,
-                        () => h.toggleMark('code'),
-                      ),
-                      btn(Icons.link, context.l10n.pageFormatLink, h.editLink),
-                      divider(),
-                      btn(
-                        Icons.format_list_bulleted,
-                        context.l10n.pageFormatBulletedList,
-                        () => h.setBlock('bulleted_list'),
-                        active: k == 'bulleted_list',
-                      ),
-                      btn(
-                        Icons.format_list_numbered,
-                        context.l10n.pageFormatNumberedList,
-                        () => h.setBlock('numbered_list'),
-                        active: k == 'numbered_list',
-                      ),
-                      btn(
-                        Icons.check_box_outlined,
-                        context.l10n.pageFormatTodoList,
-                        () => h.setBlock('todo', {'checked': false}),
-                        active: k == 'todo',
-                      ),
-                      btn(
-                        Icons.format_quote,
-                        context.l10n.pageFormatQuote,
-                        () => h.setBlock('quote'),
-                        active: k == 'quote',
-                      ),
-                      btn(
-                        Icons.terminal,
-                        context.l10n.pageFormatCodeBlock,
-                        () => h.setBlock('code_block'),
-                        active: k == 'code_block',
-                      ),
-                      divider(),
-                      btn(
-                        Icons.horizontal_rule,
-                        context.l10n.pageFormatDivider,
-                        () => h.insert('divider'),
-                      ),
-                      btn(
-                        Icons.grid_on,
-                        context.l10n.pageFormatTable,
-                        () => h.insert('table'),
-                      ),
-                      btn(
-                        Icons.image_outlined,
-                        context.l10n.pageFormatImage,
-                        () => h.insert('image'),
-                      ),
-                    ],
-                  ),
+              constraints: BoxConstraints(
+                maxWidth: pageColumnCap(widget.pageWidth),
+              ),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    btn(Icons.undo, context.l10n.pageFormatUndo, h.undo),
+                    btn(Icons.redo, context.l10n.pageFormatRedo, h.redo),
+                    divider(),
+                    btn(
+                      Icons.notes,
+                      context.l10n.pageFormatText,
+                      () => h.setBlock('paragraph'),
+                      active: k == 'paragraph',
+                    ),
+                    headingBtn(
+                      Icons.looks_one_outlined,
+                      context.l10n.pageFormatHeading1,
+                      1,
+                    ),
+                    headingBtn(
+                      Icons.looks_two_outlined,
+                      context.l10n.pageFormatHeading2,
+                      2,
+                    ),
+                    headingBtn(
+                      Icons.looks_3_outlined,
+                      context.l10n.pageFormatHeading3,
+                      3,
+                    ),
+                    divider(),
+                    btn(
+                      Icons.format_bold,
+                      context.l10n.pageFormatBold,
+                      () => h.toggleMark('bold'),
+                    ),
+                    btn(
+                      Icons.format_italic,
+                      context.l10n.pageFormatItalic,
+                      () => h.toggleMark('italic'),
+                    ),
+                    btn(
+                      Icons.format_strikethrough,
+                      context.l10n.pageFormatStrikethrough,
+                      () => h.toggleMark('strike'),
+                    ),
+                    btn(
+                      Icons.code,
+                      context.l10n.pageFormatInlineCode,
+                      () => h.toggleMark('code'),
+                    ),
+                    btn(Icons.link, context.l10n.pageFormatLink, h.editLink),
+                    divider(),
+                    btn(
+                      Icons.format_list_bulleted,
+                      context.l10n.pageFormatBulletedList,
+                      () => h.setBlock('bulleted_list'),
+                      active: k == 'bulleted_list',
+                    ),
+                    btn(
+                      Icons.format_list_numbered,
+                      context.l10n.pageFormatNumberedList,
+                      () => h.setBlock('numbered_list'),
+                      active: k == 'numbered_list',
+                    ),
+                    btn(
+                      Icons.check_box_outlined,
+                      context.l10n.pageFormatTodoList,
+                      () => h.setBlock('todo', {'checked': false}),
+                      active: k == 'todo',
+                    ),
+                    btn(
+                      Icons.format_quote,
+                      context.l10n.pageFormatQuote,
+                      () => h.setBlock('quote'),
+                      active: k == 'quote',
+                    ),
+                    btn(
+                      Icons.terminal,
+                      context.l10n.pageFormatCodeBlock,
+                      () => h.setBlock('code_block'),
+                      active: k == 'code_block',
+                    ),
+                    divider(),
+                    btn(
+                      Icons.horizontal_rule,
+                      context.l10n.pageFormatDivider,
+                      () => h.insert('divider'),
+                    ),
+                    btn(
+                      Icons.grid_on,
+                      context.l10n.pageFormatTable,
+                      () => h.insert('table'),
+                    ),
+                    btn(
+                      Icons.image_outlined,
+                      context.l10n.pageFormatImage,
+                      () => h.insert('image'),
+                    ),
+                  ],
                 ),
               ),
             ),
