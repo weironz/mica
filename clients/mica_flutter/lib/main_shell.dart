@@ -5075,6 +5075,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       // theme changed and the canvas would keep painting the old colours.
       appearance: _appearance.withTokens(MicaTheme.of(context)),
       pageWidth: _pageWidth,
+      uiFontScale: _preferences.uiFontScale,
       reHostImages: _reHostImages,
       onReHostImagesChanged: (value) {
         setState(() => _reHostImages = value);
@@ -5103,6 +5104,11 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
           _appearance = appearance;
           _pageWidth = pageWidth;
         });
+        _savePrefs();
+      },
+      onUiFontScaleChanged: (value) {
+        setState(() => _preferences.uiFontScale = value);
+        uiFontScaleController.value = value;
         _savePrefs();
       },
       // The null-both-ways polarity (web local cannot search, desktop local

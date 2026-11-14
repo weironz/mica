@@ -20,6 +20,7 @@ library;
 /// default and still resolves per device, so what syncs is only an explicit
 /// light/dark choice — the kind of choice a person means account-wide.
 const List<String> kSyncedPrefKeys = [
+  'uiFontScale',
   'fontScale',
   'fontFamily',
   'pageWidth',

@@ -106,6 +106,8 @@ class WorkspaceView extends StatefulWidget {
     required this.onRemoveServer,
     required this.appearance,
     required this.pageWidth,
+    required this.uiFontScale,
+    required this.onUiFontScaleChanged,
     required this.reHostImages,
     required this.onReHostImagesChanged,
     required this.showFormatBar,
@@ -446,6 +448,8 @@ class WorkspaceView extends StatefulWidget {
   final Future<void> Function(String origin) onRemoveServer;
   final EditorAppearance appearance;
   final double pageWidth;
+  final double uiFontScale;
+  final ValueChanged<double> onUiFontScaleChanged;
   final bool reHostImages;
   final void Function(bool value) onReHostImagesChanged;
   final bool showFormatBar;
@@ -1590,25 +1594,13 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                   ),
                   const SizedBox(height: 12),
                 ],
-                // Account + recycle bin share the bottom row. The bin is not part
-                // of the page tree — it is where pages GO when they leave it — so
-                // it sits with the other whole-app entries rather than in the
-                // tree's own action row.
+                // Whole-app account actions stay below the page tree. The recycle
+                // bin lives in Settings alongside other workspace controls.
                 Row(
                   children: [
                     Expanded(child: _accountTile(context)),
                     if (updateSupported)
                       UpdateButton(controller: _desktopUpdates),
-                    IconButton(
-                      tooltip: context.l10n.recycleBinTitle,
-                      visualDensity: VisualDensity.compact,
-                      onPressed: _openRecycleBin,
-                      icon: Icon(
-                        Icons.delete_outline,
-                        size: 20,
-                        color: MicaTheme.of(context).text.muted,
-                      ),
-                    ),
                   ],
                 ),
               ],
@@ -2415,28 +2407,6 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     await widget.onDeleteEntry(entry);
   }
 
-  void _openRecycleBin() {
-    showDialog<void>(
-      context: context,
-      builder: (context) => RecycleBinDialog(
-        onLoad: widget.onLoadTrash,
-        onRestore: widget.onRestoreView,
-        onPurge: widget.onPurgeView,
-        onPurgeAll: widget.onPurgeAllTrash,
-        canEdit: matchesEditRole(widget.selectedWorkspace?.role),
-        // The live tree, so a row can say where restoring puts it back.
-        liveViews: widget.views,
-        relativeStrings: RelativeTimeStrings(
-          justNow: context.l10n.homeJustNow,
-          minutesAgo: context.l10n.homeMinutesAgo,
-          hoursAgo: context.l10n.homeHoursAgo,
-          yesterday: context.l10n.homeYesterday,
-          daysAgo: context.l10n.homeDaysAgo,
-        ),
-      ),
-    );
-  }
-
   /// Page title menu: Markdown export/import + ZIP export.
   Future<void> _onPageMenu(String value) async {
     switch (value) {
@@ -2768,6 +2738,14 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
         onDeleteAccount: widget.onDeleteAccount,
         appearance: widget.appearance,
         pageWidth: widget.pageWidth,
+        uiFontScale: widget.uiFontScale,
+        onUiFontScaleChanged: widget.onUiFontScaleChanged,
+        onLoadTrash: widget.onLoadTrash,
+        onRestoreView: widget.onRestoreView,
+        onPurgeView: widget.onPurgeView,
+        onPurgeAllTrash: widget.onPurgeAllTrash,
+        canEditTrash: matchesEditRole(widget.selectedWorkspace?.role),
+        liveViews: widget.views,
         reHostImages: widget.reHostImages,
         onReHostImagesChanged: widget.onReHostImagesChanged,
         showFormatBar: widget.showFormatBar,

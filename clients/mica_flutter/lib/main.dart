@@ -33,7 +33,6 @@ import 'ui/transfer_dialog.dart';
 import 'ui/search_dialog.dart';
 import 'ui/graph_dialog.dart' deferred as graph_ui;
 import 'ui/ai_dialog.dart' deferred as ai_ui;
-import 'ui/recycle_bin_dialog.dart';
 import 'ui/share_dialog.dart';
 import 'ui/version_history_dialog.dart' deferred as history_ui;
 import 'ui/mica_state.dart';
@@ -78,7 +77,7 @@ import 'ui/destructive_confirm.dart';
 import 'ui/dialog_controllers.dart';
 import 'ui/emoji_picker.dart';
 import 'ui/format_bytes.dart';
-import 'ui/home_data.dart' show RelativeTimeStrings, countPages;
+import 'ui/home_data.dart' show countPages;
 import 'ui/home_screen.dart' show HomeDocEntry;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
@@ -93,6 +92,7 @@ import 'ui/sign_in_screen.dart';
 import 'ui/sign_in_pane.dart';
 import 'ui/status_kit.dart';
 import 'ui/theme_tokens.dart';
+import 'ui/interface_text_scale.dart';
 import 'ui/font_warmup.dart';
 import 'ui/user_avatar.dart';
 import 'ui/update_controls.dart';
@@ -181,6 +181,7 @@ void main() {
       // see loadPersistedThemeMode for what that looked like when it didn't.
       loadPersistedLocale();
       loadPersistedThemeMode();
+      loadPersistedUiFontScale();
       // Suppress the browser menu so the editor can show its own image actions.
       if (kIsWeb) BrowserContextMenu.disableContextMenu();
       registerWebProbes(); // browser harness hooks; no-op off web
@@ -230,10 +231,7 @@ class MicaApp extends StatelessWidget {
           // Inside the builder, `Theme.of` reports which of the two Flutter
           // actually picked — so the tokens the rest of the app reads can never
           // disagree with the Material theme around them.
-          builder: (context, child) => MicaTheme(
-            tokens: tokensForBrightness(Theme.of(context).brightness),
-            child: child ?? const SizedBox.shrink(),
-          ),
+          builder: micaAppBuilder,
           home: const WorkspaceShell(),
         ),
       ),

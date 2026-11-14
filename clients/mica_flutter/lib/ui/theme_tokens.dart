@@ -19,6 +19,7 @@
 import 'package:flutter/material.dart';
 
 import '../cjk_fonts.dart';
+import 'interface_text_scale.dart';
 import 'typography.dart';
 import 'panel_shape.dart';
 
@@ -772,3 +773,10 @@ class MicaTheme extends InheritedWidget {
   @override
   bool updateShouldNotify(MicaTheme old) => old.tokens != tokens;
 }
+
+Widget micaAppBuilder(BuildContext context, Widget? child) => MicaTheme(
+  tokens: Theme.of(context).brightness == Brightness.dark
+      ? MicaTokens.dark_
+      : MicaTokens.light,
+  child: MicaInterfaceTextScale(child: child ?? const SizedBox.shrink()),
+);

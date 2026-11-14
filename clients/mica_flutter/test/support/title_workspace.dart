@@ -162,6 +162,8 @@ Widget titleWorkspace(
       onRemoveServer: (_) async {},
       appearance: const EditorAppearance(),
       pageWidth: 800,
+      uiFontScale: 1,
+      onUiFontScaleChanged: (_) {},
       reHostImages: false,
       onReHostImagesChanged: (_) {},
       showFormatBar: false,

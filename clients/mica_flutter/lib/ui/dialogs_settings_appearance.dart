@@ -132,6 +132,15 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
     );
   }
 
+  Widget _uiFontScaleChip(String label, double scale) => MicaSegmentButton(
+    label: Text(label),
+    selected: _uiFontScale == scale,
+    onSelected: (_) {
+      setUi(() => _uiFontScale = scale);
+      widget.onUiFontScaleChanged(scale);
+    },
+  );
+
   /// Theme chip. Writes the pref and flips [themeModeController], which rebuilds
   /// MaterialApp — this open dialog included, so the switch is visible on the
   /// very surface you flipped it from.
@@ -177,6 +186,20 @@ extension _SettingsAppearanceTab on _SettingsDialogState {
           _themeChip(context.l10n.themeSystem, MicaThemeMode.system),
           _themeChip(context.l10n.themeLight, MicaThemeMode.light),
           _themeChip(context.l10n.themeDark, MicaThemeMode.dark),
+        ],
+      ),
+    ),
+    const SizedBox(height: 8),
+    _preferenceRow(
+      context.l10n.settingsInterfaceFontSize,
+      MicaSegmentGroup(
+        children: [
+          _uiFontScaleChip(context.l10n.settingsUiFontSmall, kUiFontScaleSmall),
+          _uiFontScaleChip(
+            context.l10n.settingsUiFontStandard,
+            kUiFontScaleStandard,
+          ),
+          _uiFontScaleChip(context.l10n.settingsUiFontLarge, kUiFontScaleLarge),
         ],
       ),
     ),

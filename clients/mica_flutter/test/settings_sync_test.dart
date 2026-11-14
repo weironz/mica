@@ -22,24 +22,34 @@ void main() {
     }
     // And the reported bug's key is in.
     expect(kSyncedPrefKeys, contains('showPageTitle'));
+    expect(kSyncedPrefKeys, contains('uiFontScale'));
   });
 
   test('cloudSettingsToApply takes only known string values', () {
     final apply = cloudSettingsToApply({
       'showPageTitle': 'true',
       'themeMode': 'dark',
+      'uiFontScale': '1.1',
       // A newer client's key this build doesn't know: must not leak into prefs.
       'someFutureToggle': 'on',
       // Corrupt / hand-edited values degrade to "not set", never crash.
       'fontScale': 1.2,
       'pageWidth': null,
     });
-    expect(apply, {'showPageTitle': 'true', 'themeMode': 'dark'});
+    expect(apply, {
+      'showPageTitle': 'true',
+      'themeMode': 'dark',
+      'uiFontScale': '1.1',
+    });
   });
 
   test('settingsPayload omits keys the device never set', () {
     // Absent, not empty: an empty value would overwrite another device's.
-    final local = {'showPageTitle': 'false', 'themeMode': 'system'};
+    final local = {
+      'showPageTitle': 'false',
+      'themeMode': 'system',
+      'uiFontScale': '0.9',
+    };
     expect(settingsPayload((k) => local[k]), local);
   });
 }

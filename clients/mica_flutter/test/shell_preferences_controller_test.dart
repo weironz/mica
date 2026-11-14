@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/api/models.dart';
 import 'package:mica_flutter/session/shell_preferences_controller.dart';
+import 'package:mica_flutter/ui/interface_text_scale.dart';
 
 void main() {
   const session = AuthSession(
@@ -32,7 +33,29 @@ void main() {
       onCloudApplied: () {},
     );
   });
-  tearDown(() => controller.dispose());
+  tearDown(() {
+    controller.dispose();
+    uiFontScaleController.value = kUiFontScaleStandard;
+  });
+
+  test('interface font scale is loaded, applied, and persisted', () {
+    prefs['uiFontScale'] = '1.1';
+
+    controller.loadAppearance();
+
+    expect(controller.uiFontScale, kUiFontScaleLarge);
+    expect(uiFontScaleController.value, kUiFontScaleLarge);
+    controller.save();
+    expect(prefs['uiFontScale'], '1.1');
+  });
+
+  test('invalid interface scale falls back to standard', () {
+    for (final value in ['not-a-number', 'NaN', 'Infinity']) {
+      prefs['uiFontScale'] = value;
+      controller.loadAppearance();
+      expect(controller.uiFontScale, kUiFontScaleStandard);
+    }
+  });
 
   testWidgets('debounce captures preferences when queued', (tester) async {
     controller.schedulePush();

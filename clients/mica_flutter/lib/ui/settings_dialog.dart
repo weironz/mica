@@ -1,8 +1,8 @@
-// Settings dialog: AI providers, appearance, account, tokens, data, misc.
+// Settings dialog: appearance, account, workspace, AI providers, and data.
 // Its own library since 2026-11-01 (was a part of main.dart).
 library;
-import 'segmented_choice.dart';
 
+import 'segmented_choice.dart';
 
 import 'typography.dart';
 
@@ -26,6 +26,10 @@ import '../ui/panel_kit.dart';
 import '../ui/settings_shell.dart';
 import '../ui/appearance_preview.dart';
 import '../ui/page_width_frame.dart';
+import '../ui/home_data.dart';
+import '../ui/interface_text_scale.dart'
+    show kUiFontScaleLarge, kUiFontScaleSmall, kUiFontScaleStandard;
+import '../ui/recycle_bin_section.dart';
 export '../ui/page_width_frame.dart';
 import '../ui/status_kit.dart';
 import '../ui/theme_tokens.dart';
@@ -159,8 +163,7 @@ typedef _AiProviderRow = ({
   bool active,
 });
 
-/// Settings dialog. Currently hosts the AI provider configuration; appearance and
-/// account sections will slot in alongside it.
+/// Main settings route for appearance, account, workspace, and service controls.
 class SettingsDialog extends StatefulWidget {
   const SettingsDialog({
     super.key,
@@ -185,6 +188,8 @@ class SettingsDialog extends StatefulWidget {
     required this.onDeleteAccount,
     required this.appearance,
     required this.pageWidth,
+    required this.uiFontScale,
+    required this.onUiFontScaleChanged,
     required this.reHostImages,
     required this.onReHostImagesChanged,
     required this.showFormatBar,
@@ -194,6 +199,12 @@ class SettingsDialog extends StatefulWidget {
     required this.aiEnabled,
     required this.onAiEnabledChanged,
     required this.onAppearanceChanged,
+    required this.onLoadTrash,
+    required this.onRestoreView,
+    required this.onPurgeView,
+    this.onPurgeAllTrash,
+    required this.canEditTrash,
+    required this.liveViews,
     required this.onImportWorkspace,
     this.onExportAllWorkspaces,
     this.onLoadExportStats,
@@ -286,6 +297,8 @@ class SettingsDialog extends StatefulWidget {
   final Future<void> Function(String id)? onRevokeToken;
   final EditorAppearance appearance;
   final double pageWidth;
+  final double uiFontScale;
+  final ValueChanged<double> onUiFontScaleChanged;
   final bool reHostImages;
   final void Function(bool value) onReHostImagesChanged;
   final bool showFormatBar;
@@ -296,6 +309,12 @@ class SettingsDialog extends StatefulWidget {
   final void Function(bool value) onAiEnabledChanged;
   final void Function(EditorAppearance appearance, double pageWidth)
   onAppearanceChanged;
+  final Future<List<DocumentView>> Function() onLoadTrash;
+  final Future<void> Function(DocumentView view) onRestoreView;
+  final Future<void> Function(DocumentView view) onPurgeView;
+  final Future<int> Function()? onPurgeAllTrash;
+  final bool canEditTrash;
+  final List<DocumentView> liveViews;
 
   /// Null hides the import zone. Local mode has no archive importer, and an
   /// upload target that silently does nothing is worse than no target at all.
@@ -532,6 +551,8 @@ class _SettingsDialogState extends MicaState<SettingsDialog> {
 
   late double _fontScale = widget.appearance.fontScale;
 
+  late double _uiFontScale = widget.uiFontScale;
+
   late String? _fontFamily = widget.appearance.fontFamily;
 
   late double _pageWidth = widget.pageWidth;
@@ -657,6 +678,29 @@ class _SettingsDialogState extends MicaState<SettingsDialog> {
             description: context.l10n.settingsDataDescription,
             icon: Icons.import_export,
             section: _dataSection(context),
+          ),
+          (
+            group: context.l10n.settingsGroupWorkspace,
+            title: context.l10n.recycleBinTitle,
+            description: context.l10n.settingsRecycleBinDescription,
+            icon: Icons.delete_outline,
+            section: [
+              RecycleBinSection(
+                onLoad: widget.onLoadTrash,
+                onRestore: widget.onRestoreView,
+                onPurge: widget.onPurgeView,
+                onPurgeAll: widget.onPurgeAllTrash,
+                canEdit: widget.canEditTrash,
+                liveViews: widget.liveViews,
+                relativeStrings: RelativeTimeStrings(
+                  justNow: context.l10n.homeJustNow,
+                  minutesAgo: context.l10n.homeMinutesAgo,
+                  hoursAgo: context.l10n.homeHoursAgo,
+                  yesterday: context.l10n.homeYesterday,
+                  daysAgo: context.l10n.homeDaysAgo,
+                ),
+              ),
+            ],
           ),
           // AI settings live on the server — 本地模式 has none to configure.
           if (widget.onLoadAiSettings != null)

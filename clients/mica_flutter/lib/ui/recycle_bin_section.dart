@@ -9,8 +9,8 @@ import 'status_kit.dart';
 import 'theme_tokens.dart';
 import 'trash_data.dart';
 
-class RecycleBinDialog extends StatefulWidget {
-  const RecycleBinDialog({
+class RecycleBinSection extends StatefulWidget {
+  const RecycleBinSection({
     super.key,
     required this.onLoad,
     required this.onRestore,
@@ -45,10 +45,10 @@ class RecycleBinDialog extends StatefulWidget {
   final bool canEdit;
 
   @override
-  State<RecycleBinDialog> createState() => _RecycleBinDialogState();
+  State<RecycleBinSection> createState() => _RecycleBinSectionState();
 }
 
-class _RecycleBinDialogState extends State<RecycleBinDialog> {
+class _RecycleBinSectionState extends State<RecycleBinSection> {
   bool _loading = true;
   String? _error;
   List<TrashEntry> _entries = const [];
@@ -133,7 +133,7 @@ class _RecycleBinDialogState extends State<RecycleBinDialog> {
     );
   }
 
-  /// Permanent delete is the only irreversible action in this dialog, and it
+  /// Permanent delete is the only irreversible action in this section, and it
   /// reaches far wider than the row you clicked: the server drops the whole
   /// subtree's views *and* their backing `documents` rows (`purge_view_subtree`
   /// in `routes/documents.rs`), which cascades version history and comments
@@ -179,35 +179,35 @@ class _RecycleBinDialogState extends State<RecycleBinDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Row(
-        children: [
-          const Icon(Icons.delete_outline, size: 22),
-          const SizedBox(width: 8),
-          Text(context.l10n.recycleBinTitle),
-          const Spacer(),
-          IconButton(
-            tooltip: context.l10n.recycleRefresh,
-            onPressed: _loading ? null : _refresh,
-            icon: const Icon(Icons.refresh, size: 20),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: context.l10n.recycleRefresh,
+                onPressed: _loading ? null : _refresh,
+                icon: const Icon(Icons.refresh, size: 20),
+              ),
+              // Only with something to empty, and only where a bulk purge exists.
+              if (widget.onPurgeAll != null &&
+                  widget.canEdit &&
+                  _entries.isNotEmpty)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: kDestructiveRed(context),
+                  ),
+                  onPressed: _confirmPurgeAll,
+                  child: Text(context.l10n.recycleEmptyAll),
+                ),
+            ],
           ),
-        ],
-      ),
-      content: SizedBox(width: 420, height: 360, child: _buildBody(context)),
-      actions: [
-        // Only with something to empty, and only where a bulk purge exists.
-        if (widget.onPurgeAll != null && widget.canEdit && _entries.isNotEmpty)
-          TextButton(
-            style: TextButton.styleFrom(
-              foregroundColor: kDestructiveRed(context),
-            ),
-            onPressed: _confirmPurgeAll,
-            child: Text(context.l10n.recycleEmptyAll),
-          ),
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(context.l10n.commonClose),
         ),
+        const SizedBox(height: 8),
+        SizedBox(height: 360, child: _buildBody(context)),
       ],
     );
   }

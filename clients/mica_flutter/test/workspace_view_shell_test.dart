@@ -137,6 +137,8 @@ class _Host {
         onRemoveServer: (_) async {},
         appearance: const EditorAppearance(),
         pageWidth: 800,
+        uiFontScale: 1,
+        onUiFontScaleChanged: (_) {},
         reHostImages: false,
         onReHostImagesChanged: (_) {},
         showFormatBar: true,
@@ -219,22 +221,25 @@ void main() {
     });
   }
 
-  testWidgets('desktop update entry shares the recycle-bin account row', (
+  testWidgets('account row keeps updates but moves recycle bin to settings', (
     tester,
   ) async {
     useZh(tester);
     await tester.pumpWidget(_Host().build());
     await tester.pumpAndSettle();
+    expect(find.byTooltip('回收站'), findsNothing);
     final update = find.byType(UpdateButton);
     if (!updateSupported) {
       expect(update, findsNothing);
       return;
     }
     expect(update, findsOneWidget);
-    final trash = find.byTooltip('回收站');
-    expect(trash, findsOneWidget);
-    expect(tester.getCenter(update).dy, tester.getCenter(trash).dy);
-    expect(tester.getCenter(update).dx, lessThan(tester.getCenter(trash).dx));
+    final accountRow = find.byWidgetPredicate(
+      (widget) => widget is Row && widget.children.any((c) => c is UpdateButton),
+    );
+    expect(accountRow, findsOneWidget);
+    // Only the account tile and the update entry remain in the row.
+    expect(tester.widget<Row>(accountRow).children, hasLength(2));
     expect(tester.getSize(update).height, lessThanOrEqualTo(40));
     expect(tester.takeException(), isNull);
   });
@@ -315,7 +320,10 @@ void main() {
     _viewSize(tester, const Size(1280, 800));
     final host = _Host();
     await tester.pumpWidget(
-      host.build(tabs: [DocTab(view: _view('va', 'Alpha'))], selectedView: null),
+      host.build(
+        tabs: [DocTab(view: _view('va', 'Alpha'))],
+        selectedView: null,
+      ),
     );
     await tester.pump();
     _focusInsideShell(tester);

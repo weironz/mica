@@ -6,6 +6,7 @@ import '../ui/page_width_frame.dart';
 import '../ui/settings_dialog.dart'
     show kFontPxMin, kFontPxMax, fontScaleFromPx;
 import '../ui/settings_sync.dart';
+import '../ui/interface_text_scale.dart';
 
 /// Local appearance preferences and their account-scoped cloud write-through.
 /// The shell owns theme/locale UI notifications; this controller owns the
@@ -34,6 +35,7 @@ class ShellPreferencesController {
   final VoidCallback onCloudApplied;
   EditorAppearance appearance = const EditorAppearance();
   double pageWidth = kPageWidthDefault;
+  double uiFontScale = kUiFontScaleStandard;
   bool reHostImages = true;
   bool showFormatBar = false;
   bool showPageTitle = true;
@@ -44,6 +46,8 @@ class ShellPreferencesController {
 
   void loadAppearance() {
     final fontScale = double.tryParse(readPref('fontScale') ?? '');
+    uiFontScale = uiFontScaleFromPref(readPref('uiFontScale'));
+    uiFontScaleController.value = uiFontScale;
     final fontFamily = readPref('fontFamily');
     appearance = EditorAppearance(
       // Bounds derived from the settings control's px detents (see kFontBasePx
@@ -70,6 +74,7 @@ class ShellPreferencesController {
   }
 
   void save() {
+    writePref('uiFontScale', uiFontScale.toString());
     writePref('fontScale', appearance.fontScale.toString());
     writePref('fontFamily', appearance.fontFamily ?? '');
     writePref('pageWidth', pageWidth.toString());
