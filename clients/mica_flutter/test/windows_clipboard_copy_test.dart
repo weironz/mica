@@ -11,6 +11,8 @@ import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/editor/html_to_markdown.dart';
 import 'package:mica_flutter/editor/marks.dart' show marksFromData;
 import 'package:mica_flutter/markdown/markdown_codec.dart';
+
+import 'support/system_clipboard_lock.dart';
 import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'support/markdown_codec.dart';
@@ -90,6 +92,9 @@ Future<String> readHtml() async {
 }
 
 void main() {
+  // Serializes with other suites using the real OS clipboard.
+  setUpAll(acquireSystemClipboardLock);
+  tearDownAll(releaseSystemClipboardLock);
   setUpAll(useNativeMarkdownCodec);
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
