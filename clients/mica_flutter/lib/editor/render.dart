@@ -264,6 +264,9 @@ class EditorTheme {
     if (kind == 'table' || prevKind == 'table') {
       return (12 - RenderDocument._tTopGutter).clamp(2.0, 12.0);
     }
+    // The rule sits mid-box, so half the divider box already separates it from
+    // its neighbours; a full paragraph gap on top read as a hole on each side.
+    if (kind == 'divider' || prevKind == 'divider') return 4;
     return 12; // paragraph breathing room
   }
 }
@@ -1758,7 +1761,7 @@ class RenderDocument extends RenderBox {
   static const double _tEdge = 16; // overlay handle thickness
 
   // Vertical box reserved for a divider (horizontal rule centered within it).
-  static const double _dividerHeight = 26;
+  static const double _dividerHeight = 16;
 
   // Height of a code block's optional bottom caption row.
   static const double _codeTitleH = 24;

@@ -1,7 +1,11 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
+import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/editor/model.dart';
+import 'package:mica_flutter/editor/render.dart';
+import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'support/markdown_codec.dart';
 
 EditorController _fresh(List<EditorNode> nodes) {
@@ -85,6 +89,45 @@ void main() {
 
     expect(c.nodes.map((n) => n.id).toList(), ['a', 'b']);
     expect(c.nodes.every((n) => n.kind != 'divider'), isTrue);
+  });
+
+  test('a divider sits closer to its neighbours than a paragraph break', () {
+    final paragraph = EditorTheme.gapAbove('paragraph', 'paragraph');
+    expect(EditorTheme.gapAbove('divider', 'paragraph'), lessThan(paragraph));
+    expect(EditorTheme.gapAbove('paragraph', 'divider'), lessThan(paragraph));
+    // Headings keep their section spacing even right after a rule.
+    expect(EditorTheme.gapAbove('heading', 'divider'), 28);
+  });
+
+  testWidgets('divider layout leaves a compact gap on both sides',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(
+        body: MicaEditor(
+          rootBlockId: 'root',
+          nodes: [
+            _p('a', 'above'),
+            EditorNode(id: 'd', kind: 'divider', text: ''),
+            _p('b', 'below'),
+          ],
+          version: 0,
+          canEdit: true,
+          onApplyOperations: (_) async {},
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    final render =
+        tester.renderObject<RenderDocument>(find.byType(DocumentSurface));
+    final (aboveTop, aboveHeight) = render.debugBoxAt(0);
+    final (dividerTop, dividerHeight) = render.debugBoxAt(1);
+    final (belowTop, _) = render.debugBoxAt(2);
+    expect(dividerHeight, 16);
+    final lineY = dividerTop + dividerHeight / 2;
+    expect(lineY - (aboveTop + aboveHeight), 12);
+    expect(belowTop - lineY, 12);
   });
 
   test('the codec emits a divider block', () {
