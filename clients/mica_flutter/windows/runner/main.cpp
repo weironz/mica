@@ -23,8 +23,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   //
   // Fail open: if CreateMutexW itself fails (returns null) we proceed normally
   // rather than block the only instance from launching.
-  HANDLE single_instance_mutex =
-      ::CreateMutexW(nullptr, TRUE, L"Local\\MicaSingleInstance");
+  //
+  // A debug build keeps its data in the separate mica-dev profile, so it gets
+  // its own guard and can run beside the installed app.
+#ifdef _DEBUG
+  const wchar_t *mutex_name = L"Local\\MicaSingleInstanceDev";
+#else
+  const wchar_t *mutex_name = L"Local\\MicaSingleInstance";
+#endif
+  HANDLE single_instance_mutex = ::CreateMutexW(nullptr, TRUE, mutex_name);
   if (single_instance_mutex != nullptr &&
       ::GetLastError() == ERROR_ALREADY_EXISTS) {
     // Class name must stay in sync with kWindowClassName in win32_window.cpp.
