@@ -689,20 +689,12 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
     bool canEdit,
     DocumentBootstrap bootstrap,
   ) {
-    return Listener(
-      // A press anywhere on the page that is NOT inside the editor canvas
-      // (margins beside/above the page column) resets diagram zoom/pan —
-      // clicks INSIDE the canvas are judged by the editor itself.
-      behavior: HitTestBehavior.translucent,
-      onPointerDown: (e) {
-        final box =
-            _editorSurfaceKey.currentContext?.findRenderObject() as RenderBox?;
-        if (box == null || !box.attached) return;
-        final local = box.globalToLocal(e.position);
-        if (!(Offset.zero & box.size).contains(local)) {
-          _commandHook.resetDiagramViews();
-        }
-      },
+    return EditorMarginSelectionRegion(
+      enabled: canEdit,
+      editorSurfaceKey: _editorSurfaceKey,
+      pageFrameKey: _pageWidthFrameKey,
+      hook: _marginSelectionHook,
+      onOutsidePointerDown: _commandHook.resetDiagramViews,
       child: LayoutBuilder(
         builder: (context, constraints) => SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(
@@ -713,6 +705,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
           ),
           child: Center(
             child: PageWidthFrame(
+              key: _pageWidthFrameKey,
               width: widget.pageWidth,
               enabled: constraints.maxWidth >= 600,
               onCommit: (w) => widget.onAppearanceChanged(widget.appearance, w),
@@ -808,6 +801,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                         '${bootstrap.document.id}#${widget.editorEpoch}',
                       ),
                       focusNode: _editorFocus,
+                      marginSelectionHook: _marginSelectionHook,
                       rootBlockId: bootstrap.document.rootBlockId,
                       nodes: editorNodesFromBlocks(bootstrap.childBlocks),
                       version: bootstrap.snapshot.versionSeq,

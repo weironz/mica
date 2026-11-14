@@ -1,19 +1,5 @@
 part of 'editor.dart';
 
-/// The in-house editor: one editing surface for the whole document.
-///
-/// Drop-in replacement for the old per-block `TextField` editor. It owns a
-/// single [Focus], a single OS text-input connection (so IME/Chinese input
-/// works), one document-wide selection, and renders every node itself through
-/// [DocumentSurface]. The caret travels the document as if it were one
-/// continuous page — no block chrome, Word/Typora feel (see docs/architecture/editor.md).
-/// Lets a host (e.g. the page outline) ask the editor to scroll a block into
-/// view. The editor wires its scroll implementation into [_scroll] on init.
-class EditorScrollHook {
-  void Function(String blockId)? _scroll;
-  void scrollToBlock(String blockId) => _scroll?.call(blockId);
-}
-
 /// A single heading in the live document outline (table of contents).
 class OutlineEntry {
   const OutlineEntry({
@@ -56,30 +42,6 @@ class EditorOutlineHook extends ChangeNotifier {
       if (next[i] != _headings[i]) return false;
     }
     return true;
-  }
-}
-
-/// Lets the host open the editor's in-page find bar (Ctrl+F) even when focus is
-/// outside the editor. The editor wires [_open] on init; a no-op otherwise.
-class EditorFindHook {
-  void Function()? _open;
-  void open() => _open?.call();
-}
-
-/// Publishes the focused block's kind (+ heading level) to the host, so the
-/// optional format toolbar can highlight the button for the current block type
-/// — e.g. which heading level the caret sits in. Change-detected.
-class EditorActiveBlockHook extends ChangeNotifier {
-  String? _kind;
-  int? _level;
-  String? get kind => _kind;
-  int? get level => _level;
-
-  void publish(String? kind, int? level) {
-    if (kind == _kind && level == _level) return;
-    _kind = kind;
-    _level = level;
-    notifyListeners();
   }
 }
 

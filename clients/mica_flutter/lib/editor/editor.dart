@@ -38,6 +38,8 @@ import 'language_picker.dart';
 import 'code_title_dialog.dart';
 import 'touch_selection.dart';
 import 'word_count.dart';
+import 'editor_host_hooks.dart';
+import 'margin_selection.dart';
 import '../l10n/locale_controller.dart';
 import '../ui/copy_button.dart';
 import '../ui/theme_tokens.dart';
@@ -45,6 +47,8 @@ import 'prose_input.dart';
 
 export 'controller.dart'
     show DocOp, ApplyOps, ApplyHistory, HistoryAction, EditorHistoryState;
+export 'editor_host_hooks.dart'
+    show EditorScrollHook, EditorFindHook, EditorActiveBlockHook;
 export 'ai_edits.dart';
 export '../markdown/markdown_codec.dart' show BlockSpec;
 export 'model.dart' show EditorNode;
@@ -78,6 +82,7 @@ class MicaEditor extends StatefulWidget {
     this.reHostImages = true,
     this.focusNode,
     this.scrollHook,
+    this.marginSelectionHook,
     this.commandHook,
     this.outlineHook,
     this.findHook,
@@ -172,6 +177,9 @@ class MicaEditor extends StatefulWidget {
 
   /// Optional hook the page outline uses to scroll a heading block into view.
   final EditorScrollHook? scrollHook;
+
+  /// Lets the page host route side-margin mouse drags into this editor.
+  final EditorMarginSelectionHook? marginSelectionHook;
 
   /// Optional hook the host's formatting toolbar uses to run editor commands.
   final EditorCommandHook? commandHook;
@@ -461,8 +469,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _lastContentRevision = _controller.contentRevision;
     _controller.addListener(_onControllerChanged);
     _focus.addListener(_onFocusChange);
-    widget.scrollHook?._scroll = _scrollToBlock;
-    widget.findHook?._open = _openFind;
+    widget.scrollHook?.bindScroll(_scrollToBlock);
+    _bindMarginSelectionHook(widget.marginSelectionHook);
+    widget.findHook?.bindOpen(_openFind);
     _registerCommandHook();
     _ensureNotEmptyDeferred();
     // Seed the outline once the first frame is up (publishing during init could
@@ -481,6 +490,23 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       // Best-effort + idempotent: blocks already on a file_id are skipped.
       _rehostExternalImages();
     });
+  }
+
+  void _bindMarginSelectionHook(EditorMarginSelectionHook? hook) {
+    hook?.bind(
+      onStart: (position) {
+        _downKind = PointerDeviceKind.mouse;
+        _touchMenuHidden = false;
+        _touchFormat = false;
+        _onPanDown(DragDownDetails(globalPosition: position));
+        _onPanStart(DragStartDetails(globalPosition: position));
+      },
+      onUpdate: (position, delta) => _onPanUpdate(
+        DragUpdateDetails(globalPosition: position, delta: delta),
+      ),
+      onEnd: (position) => _onPanEnd(DragEndDetails(globalPosition: position)),
+      onCancel: _onPanCancel,
+    );
   }
 
   /// Push the current headings (id + text + level, document order) to the host
@@ -906,6 +932,10 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   @override
   void didUpdateWidget(covariant MicaEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.marginSelectionHook != widget.marginSelectionHook) {
+      oldWidget.marginSelectionHook?.unbind();
+      _bindMarginSelectionHook(widget.marginSelectionHook);
+    }
     // A preview is a bitmap, so the palette it was captured with is baked into
     // it. The pipeline's setter is a no-op unless the palette actually changed.
     _previews.tokens = widget.appearance.tokens;
@@ -938,6 +968,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   @override
   void dispose() {
+    widget.marginSelectionHook?.unbind();
     _slashEntry?.remove();
     _slashEntry = null;
     _pageEntry?.remove();
@@ -980,7 +1011,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _controller.removeListener(_onControllerChanged);
     // Unwire the find hook if it still points at us, so a later Ctrl+F on a
     // view with no editor (e.g. a folder) doesn't call into a dead State.
-    if (widget.findHook?._open == _openFind) widget.findHook?._open = null;
+    widget.findHook?.unbindOpen(_openFind);
     _findCtrl.dispose();
     _findFocus.dispose();
     _replaceCtrl.dispose();
