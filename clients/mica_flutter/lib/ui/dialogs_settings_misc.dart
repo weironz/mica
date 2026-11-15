@@ -1,42 +1,8 @@
 part of 'settings_dialog.dart';
 
 // The two leaf sections that fit nowhere else — diagnostics, keyboard
-// shortcuts — plus the About popup.
+// shortcuts.
 extension _SettingsMiscTab on _SettingsDialogState {
-  /// The built-in About popup, marking the current app version. Opened from the
-  /// Settings nav's "About" item (stacks over the Settings dialog).
-  void _showAboutDialog(BuildContext context) {
-    showAboutDialog(
-      context: context,
-      applicationName: 'Mica',
-      applicationVersion: 'v${widget.updates.currentVersion}',
-      applicationIcon: const MicaLogo(size: 40),
-      applicationLegalese: context.l10n.aboutLegalese,
-      children: [
-        const SizedBox(height: 16),
-        // The link stays now that Mica is MIT/Apache-2.0 (2026-08-28) even
-        // though nothing compels it any more: it went in for AGPL §13, which
-        // required prominently offering the Corresponding Source to anyone
-        // interacting over a network. Permissive licensing removes the
-        // obligation, not the reason — the version above tells a reader which
-        // tag they are looking at, and that is worth keeping on its own.
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: () => openUrl('https://github.com/weironz/mica'),
-            icon: const Icon(Icons.code, size: 16),
-            label: Text(context.l10n.aboutSourceCode),
-          ),
-        ),
-        // Detailed status shares the sidebar updater; absent without an installer.
-        if (updateSupported) ...[
-          const SizedBox(height: 8),
-          UpdateChecker(controller: widget.updates),
-        ],
-      ],
-    );
-  }
-
   Widget _kbd(String text) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
     decoration: BoxDecoration(

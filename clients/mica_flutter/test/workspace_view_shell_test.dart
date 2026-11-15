@@ -263,6 +263,49 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('logo menu remains reachable with the sidebar collapsed', (
+    tester,
+  ) async {
+    useZh(tester);
+    _viewSize(tester, const Size(1280, 800));
+    await tester.pumpWidget(_Host().build());
+    await tester.pumpAndSettle();
+    Future<void> toggle(String label) async {
+      await tester.tap(find.byTooltip('应用菜单'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('视图'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(MenuItemButton, label));
+      await tester.pumpAndSettle();
+    }
+    await toggle('收起左侧栏');
+    expect(find.byTooltip('展开左侧栏'), findsOneWidget);
+    expect(find.byTooltip('应用菜单'), findsOneWidget);
+    await toggle('展开左侧栏');
+    expect(find.byTooltip('收起左侧栏'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('logo file menu closes the active tab through the shell', (
+    tester,
+  ) async {
+    useZh(tester);
+    _viewSize(tester, const Size(1280, 800));
+    final host = _Host();
+    await tester.pumpWidget(
+      host.build(tabs: [DocTab(), DocTab()], activeTabIndex: 1),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('应用菜单'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('文件'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('关闭当前标签页'));
+    await tester.pumpAndSettle();
+    expect(host.calls, ['closeTab:1']);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('the tab strip routes select/close/+/menu callbacks', (
     tester,
   ) async {

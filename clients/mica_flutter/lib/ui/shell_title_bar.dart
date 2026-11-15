@@ -13,12 +13,14 @@ class ShellTitleBar extends StatelessWidget {
     required this.toggleLabel,
     required this.onToggle,
     this.tabs,
+    this.applicationMenu,
   });
 
   final double navigationWidth;
   final String toggleLabel;
   final VoidCallback onToggle;
   final Widget? tabs;
+  final Widget? applicationMenu;
 
   @override
   Widget build(BuildContext context) => Material(
@@ -32,9 +34,9 @@ class ShellTitleBar extends StatelessWidget {
             width: navigationWidth,
             child: Row(
               children: [
-                const SizedBox(width: 12),
-                const DesktopDragRegion(child: MicaLogo(size: 22)),
-                const SizedBox(width: 6),
+                const SizedBox(width: 8),
+                applicationMenu ?? const MicaLogo(size: 30),
+                const SizedBox(width: 2),
                 IconButton(
                   tooltip: toggleLabel,
                   onPressed: onToggle,

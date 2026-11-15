@@ -1,5 +1,11 @@
 {
   "@@locale": "zh",
+  "appMenuTitle": "应用菜单",
+  "appMenuFile": "文件",
+  "appMenuView": "视图",
+  "appMenuHistory": "历史",
+  "appMenuHelp": "帮助",
+  "appMenuAbout": "关于 Mica",
   "aiCodeExplain": "简要解释这段代码的功能:\n\n```\n{code}\n```",
   "aiCodeImprove": "优化改进这段代码,只返回改进后的代码(放在代码块里):\n\n```\n{code}\n```",
   "aiCodeFix": "找出这段代码里的 bug 或问题并简要说明:\n\n```\n{code}\n```",

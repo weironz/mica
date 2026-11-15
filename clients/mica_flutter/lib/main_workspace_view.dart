@@ -1144,6 +1144,27 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
               : context.l10n.sidebarCollapse,
           onToggle: () => setState(() => _navCollapsed = !_navCollapsed),
           tabs: _documentTabs(context),
+          applicationMenu: ApplicationMenu(
+            onNewPage: matchesEditRole(widget.selectedWorkspace?.role)
+                ? () => _createLocated(folder: false)
+                : null,
+            onNewTab: widget.onNewTabPage == null
+                ? null
+                : () => _openSearch(inNewTab: true),
+            onCloseTab: widget.onCloseTab == null
+                ? null
+                : () => widget.onCloseTab!(widget.activeTabIndex),
+            tabs: widget.tabs,
+            activeTabIndex: widget.activeTabIndex,
+            onHistory: widget.onSelectTab == null ? null : _tabHistory,
+            onSettings: _openSettings,
+            sidebarVisible: !_navCollapsed,
+            sidePanelVisible: _toolsExpanded,
+            onToggleSidebar: () => setUi(() => _navCollapsed = !_navCollapsed),
+            onToggleSidePanel: () =>
+                setUi(() => _toolsExpanded = !_toolsExpanded),
+            updates: _desktopUpdates,
+          ),
         ),
         Expanded(
           child: Row(

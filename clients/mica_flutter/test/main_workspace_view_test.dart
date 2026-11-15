@@ -12,6 +12,7 @@ import 'package:mica_flutter/ui/page_tree_state.dart';
 import 'package:mica_flutter/editor/property_panel.dart';
 import 'package:mica_flutter/ui/sidebar_toggle_icon.dart';
 import 'package:mica_flutter/ui/page_header_actions.dart';
+import 'package:mica_flutter/doc_tab.dart';
 
 import 'support/markdown_codec.dart';
 import 'support/title_workspace.dart';
@@ -41,6 +42,58 @@ void main() {
   final titleField = find.byWidgetPredicate(
     (w) => w is TextField && w.focusNode?.debugLabel == 'PageTitle',
   );
+
+  testWidgets('application file menu creates via the existing page callback', (tester) async {
+    wideViewport(tester);
+    var creates = 0;
+    await tester.pumpWidget(
+      titleWorkspace(
+        titleBootstrap('当前页面'),
+        (_, _) async => true,
+        onCreateDocument: (_) async {
+          creates++;
+          return null;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('应用菜单'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('文件'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, '新建页面'));
+    await tester.pumpAndSettle();
+    expect(creates, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('application history menu navigates through the real tab history', (tester) async {
+    wideViewport(tester);
+    final a = titleBootstrap('之前的页面', id: 'page-a');
+    final b = titleBootstrap('当前页面', id: 'page-b');
+    final tab = DocTab(view: a.view)..show(b.view);
+    final opened = <String>[];
+    await tester.pumpWidget(
+      titleWorkspace(
+        b,
+        (_, _) async => true,
+        views: [a.view, b.view],
+        tabs: [tab],
+        onSelectTab: (_) {},
+        onSelectView: (view) async => opened.add(view.id),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('应用菜单'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('历史'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(MenuItemButton, '后退'));
+    await tester.pumpAndSettle();
+    expect(opened, ['page-a']);
+    expect(tab.history.canGoForward, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('pages group folds without hiding its create controls', (tester) async {
     wideViewport(tester);

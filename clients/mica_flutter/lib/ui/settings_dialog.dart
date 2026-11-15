@@ -17,8 +17,7 @@ import '../swallowed.dart';
 import '../editor/model.dart' show kMonoFont;
 import '../editor/editor.dart';
 import '../editor/image_actions.dart';
-import '../editor/open_url.dart';
-import '../widgets/mica_logo.dart';
+import 'about_dialog.dart';
 import '../ui/copy_button.dart';
 import '../ui/destructive_confirm.dart';
 import '../ui/format_bytes.dart';
@@ -39,7 +38,6 @@ import '../local/cache_stats.dart' show ClearMirrorResult, LocalCacheStats;
 import '../prefs.dart';
 import 'import_email_preference.dart';
 import '../theme_controller.dart';
-import '../updater.dart';
 import '../window_setup.dart';
 import '../api/client.dart';
 import '../api/models.dart';
@@ -754,7 +752,7 @@ class _SettingsDialogState extends MicaState<SettingsDialog> {
             color: MicaTheme.of(context).text.faint,
           ),
         ),
-        onTap: () => _showAboutDialog(context),
+        onTap: () => showMicaAboutDialog(context, widget.updates),
       ),
     );
   }
