@@ -22,5 +22,5 @@ void main() {
       isEmpty,
       reason: 'Full exact-input codec path must stay within the frozen budgets',
     );
-  }, timeout: const Timeout(Duration(minutes: 3)));
+  }, tags: 'perf', timeout: const Timeout(Duration(minutes: 3)));
 }

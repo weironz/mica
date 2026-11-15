@@ -17,11 +17,13 @@ Flutter SDK 由统一 action 按 `.fvmrc` 下载并缓存。
 
 `just ci` 包含结构与增长门禁、脚本自测、Rust fmt/build/Clippy、真实 Postgres 测试、
 Flutter 静态分析与全部单元/widget 测试、FFI 源码指纹验证、Web 构建、字体镜像校验、
-浏览器专用 Flutter 套件，以及 rich-preview / clipboard / ui-experience / sidebar-rename 四个浏览器回归。
+浏览器专用 Flutter 套件，以及 rich-preview / clipboard / ui-experience / sidebar-rename / deferred-modules 五个浏览器回归。
+5 个严格计时的 VM 基准带 `perf` 标签，在普通测试前串行运行，预算不变，避免并发测试 VM 干扰测量。
 可分项运行 `just ci rust`、`just ci flutter`、`just ci e2e`；共有脚本门禁在每一项前执行。
 
 浏览器回归使用 `e2e/package-lock.json` 钉死的 Playwright 及配套 Chromium。
-本机不能下载时，设置 `CHROME_EXECUTABLE` 指向已有 Chrome/Chromium；指定路径无效会失败，不会静默换浏览器。
+本机下载失败会自动回退到系统 Chrome/Edge，全部断言照常执行；也可设置 `CHROME_EXECUTABLE`
+指向已有 Chrome/Chromium。指定路径无效会失败，不会静默换浏览器；所有浏览器都无法启动同样失败。
 Linux 需安装 Chromium 的系统依赖（托管 runner 由 Playwright `--with-deps` 安装）。
 
 以下仍为独立验收：真实 API/RustFS 的 `web_e2e.mjs` 与 `upload_length_e2e.mjs`、

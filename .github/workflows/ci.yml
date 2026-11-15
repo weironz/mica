@@ -103,6 +103,9 @@ jobs:
         run: |
           bash scripts/test-release-artifacts.sh
           bash scripts/test-release-orchestration.sh
+          bash scripts/test-release-workflow.sh
+          bash scripts/test-local-e2e.sh
+          bash scripts/test-flutter-perf-gate.sh
           bash scripts/test-release-version.sh
           bash scripts/test-ci-stacks.sh
           bash scripts/test-android-signing.sh
@@ -354,7 +357,10 @@ jobs:
       - name: Dart unit tests
         run: |
           source ../../scripts/lib-local.sh && source ../../scripts/lib-receipt.sh
-          flutter_receipt 1000 test
+          # Timed benchmarks use the same budgets in a fresh, serial test VM.
+          flutter_receipt 5 --tags perf --concurrency=1 \
+            test/markdown_codec_bench_test.dart test/perf/html_paste_bench_test.dart test/perf/table_cells_bench_test.dart
+          flutter_receipt 1000 --exclude-tags perf test
       # dart2js resolves the WEB variant of every conditional import; analyze
       # and `flutter test` resolve the IO one. So an IO/web stub drift (a member
       # added to local_offline_io.dart but not mirrored in local_offline_web.dart)

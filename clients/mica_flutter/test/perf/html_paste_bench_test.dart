@@ -87,6 +87,6 @@ void main() {
           'fragment parse $parse ms, total $total ms');
       expect(md, contains('Section 1'));
       expect(total, lessThan(budgetMs));
-    });
+    }, tags: 'perf');
   }
 }

@@ -106,7 +106,9 @@ bash scripts/build-preview-wasm.sh
   && "${FLUTTER:-flutter}" gen-l10n \
   && "${FLUTTER:-flutter}" analyze --no-fatal-infos \
   && cargo build --release --manifest-path rust/Cargo.toml \
-  && flutter_receipt 1000 test)
+  && flutter_receipt 5 --tags perf --concurrency=1 \
+    test/markdown_codec_bench_test.dart test/perf/html_paste_bench_test.dart test/perf/table_cells_bench_test.dart \
+  && flutter_receipt 1000 --exclude-tags perf test)
 
 # 4. Cargo.lock must carry the version, or the release commit ships a lock that
 #    disagrees with its own manifest.

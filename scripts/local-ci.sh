@@ -49,7 +49,7 @@ bash scripts/test-font-mirror.sh
 note "structure and CI/release script regressions"
 bash scripts/test-structure-gate.sh
 bash scripts/check-structure-ci.sh
-for check in md-wasm-build web-entry-cache-check release-artifacts release-orchestration release-version ci-stacks verify-prod android-signing release-canary release-site-canary; do
+for check in md-wasm-build web-entry-cache-check release-artifacts release-orchestration release-workflow local-e2e flutter-perf-gate release-version ci-stacks verify-prod android-signing release-canary release-site-canary; do
   bash "scripts/test-$check.sh"
 done
 python3 scripts/test-compose-api-env.py
@@ -110,8 +110,11 @@ if [ "$part" = all ] || [ "$part" = flutter ]; then
     # fingerprint (test/support/native_build.dart), so build it from this tree.
     note "flutter: FFI library for the unit tests"
     cargo build --release --manifest-path rust/Cargo.toml
-    note "flutter: unit tests"
-    flutter_receipt 1000 test
+    note "flutter: timed perf suites first (same budgets, fresh test VM)"
+    flutter_receipt 5 --tags perf --concurrency=1 \
+      test/markdown_codec_bench_test.dart test/perf/html_paste_bench_test.dart test/perf/table_cells_bench_test.dart
+    note "flutter: unit tests (timed perf suites excluded)"
+    flutter_receipt 1000 --exclude-tags perf test
     note "flutter: web compiles (dart2js resolves the web stubs)"
     "$FLUTTER" build web --release --no-web-resources-cdn
     bash tool/gfonts/mirror.sh --check

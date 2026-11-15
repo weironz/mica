@@ -13,7 +13,10 @@ bash scripts/build-preview-wasm.sh
   if [ -n "${CHROME_EXECUTABLE:-}" ]; then
     [ -x "$CHROME_EXECUTABLE" ] || fail "CHROME_EXECUTABLE is not executable"
   else
-    npx playwright install chromium
+    # A blocked Chromium download must not skip the suites: browser.mjs falls
+    # back to system Chrome/Edge, and still fails if no browser can launch.
+    npx playwright install chromium \
+      || echo "note: bundled Chromium unavailable — the suites will use system Chrome/Edge"
   fi
 )
 (

@@ -692,7 +692,10 @@ jobs:
 
   canary:
     needs: [draft, publish]
-    if: ${{ needs.publish.result == 'success' }}
+    # Optional package jobs may be skipped. As with publish above, do not let
+    # GitHub's implicit success() turn a published release into a skipped
+    # artifact acceptance; a dry-run still has publish.result == 'skipped'.
+    if: ${{ !failure() && !cancelled() && needs.publish.result == 'success' }}
     permissions:
       contents: read
     uses: ./.github/workflows/release-canary.yml

@@ -163,7 +163,7 @@ void main() {
     expect(back.rows.length, 100);
 
     debugSetMarkdownCodec(real); // restore the real codec
-  });
+  }, tags: 'perf');
 
   test('the cache is bounded: 4096 entries, LRU eviction', () {
     final counting = _CountingCodec(markdownCodec); // fresh capture after restore
@@ -190,5 +190,5 @@ void main() {
     expect(counting.decodeCalls, greaterThanOrEqualTo(9));
 
     debugSetMarkdownCodec(null);
-  });
+  }, tags: 'perf');
 }

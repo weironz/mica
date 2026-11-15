@@ -47,6 +47,7 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 | DB 集成测试**真的跑了**(本地 Postgres 没起就拒绝发版) | 同上 | 2026-08-25 |
 | `cargo test` / `clippy -D warnings` / `flutter analyze` + `test`;单元测试前构建 `mica_md` 与 `mica_doc` 并验证源码指纹 | 同上 | 2026-08-25;双引擎 2026-11-01 |
 | 浏览器专用套件必须在 Chrome 真跑;结构门禁 | `bash scripts/browser-tests.sh` / `just check-structure` | 发布验收必跑 |
+| 可选安装包未构建时,产物验收仍必须运行;dry-run 不验收 | `.github/workflows/release.yml` 的 `canary` + `scripts/test-release-workflow.sh` | 2026-11-15 |
 | 固定入口缓存头、wasm MIME、缺失引擎及退役 yjs 地址 404 | `scripts/web-entry-cache-check.sh <origin>`;CI web-e2e job | 2026-11-01 |
 | **tag 必须与它所在那棵树的版本号一致** | `.github/workflows/release.yml` | 2026-08-26 |
 | **所有构建/推送 job 只消费 `draft` 校验过的版本（`needs: draft`，版本只解析一次）** | `.github/workflows/release.yml` | 2026-10-25 |
@@ -420,7 +421,12 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
    带 `DATABASE_URL`、`clippy -D warnings`、`flutter analyze` + `flutter test`,
    外加 `Cargo.lock` 的版本一致性。)发布验收还须运行 `just check-structure` 和
    `bash scripts/browser-tests.sh`(自动发现 browser suite,逐套检查回执,包括 `web_doc_replica_test`);
-   不能用 VM suite 的跳过代替 Chrome 实跑。`mica-core --features store` 与桌面 FFI crate 的测试
+   不能用 VM suite 的跳过代替 Chrome 实跑。独立浏览器 E2E 配套 Chromium 下载失败时,
+   `scripts/local-e2e.sh` 会继续由启动器回退到系统 Chrome / Edge,全部断言照常执行;
+   显式但不可执行的 `CHROME_EXECUTABLE` 仍直接拒绝,没有任何浏览器可启动也仍然失败。
+   5 个严格计时的 VM 基准带 `perf` 标签,普通测试前用 `--concurrency=1` 串行测量;
+   预算与断言不变,避免并发测试 VM 和收尾编译把调度抖动误报成性能回归。
+   `mica-core --features store` 与桌面 FFI crate 的测试
    分别运行,因为根 workspace 不会覆盖它们。只在脚本确实到达末尾成功标记后记录门禁通过。
 4. **桌面端带本地库迁移时**,先跑一次真库升级冒烟:
    `MICA_REAL_STORE=<一份真 store.db 的拷贝> cargo test -p mica-core --features store -- --ignored upgrade_real_store_smoke`。
@@ -450,6 +456,10 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
    > ```bash
    > gh release edit vX.Y.Z --draft=false --latest
    > ```
+
+   `publish` 成功后的 `canary` 会自动下载并执行已发布产物。未启用可选 `.deb` / Android
+   构建不会再让它跳过;dry-run 因没有公开 release 仍不验收。`canary` 失败时不得继续部署。
+
 8. ~~**带数据改动就先落还原点**~~ —— **2026-08-26 起 playbook 自己做,这一步不用你记了。**
 
    它拿节点 `.env` 里的 `MICA_VERSION`(当前上线的版本)和要发的 tag 比一次
