@@ -62,6 +62,7 @@ class SidebarTreeController extends ChangeNotifier {
   /// re-tap is a no-op (and triggers no rebuild) — one rule, one place; the
   /// folder path always writes, the page path only appeared to.
   void locateRow(String viewId) {
+    _dropStalePendingReveal(viewId);
     if (rootFocused || focusedNavId != viewId) {
       focusedNavId = viewId;
       rootFocused = false;
@@ -74,9 +75,23 @@ class SidebarTreeController extends ChangeNotifier {
   /// where the user is. Nullable because the open doc can go away — the
   /// highlight simply lands nowhere until something is located again.
   void focusView(String? viewId) {
+    _dropStalePendingReveal(viewId);
     focusedNavId = viewId;
     rootFocused = false;
     notifyListeners();
+  }
+
+  /// Navigating to [viewId] supersedes a pending reveal for any OTHER row.
+  /// The reveal used to outlive the navigation: create a page, press Back
+  /// before its scroll-into-view landed, and the flush re-located the
+  /// just-created row — the sidebar kept it lit while another page was open.
+  /// A reveal for the row being opened (the create-then-reveal flow itself)
+  /// is kept, or the new row would never scroll into view.
+  void _dropStalePendingReveal(String? viewId) {
+    if (pendingRevealId != null && pendingRevealId != viewId) {
+      pendingRevealId = null;
+      revealAttempts = 0;
+    }
   }
 
   /// Expand every ANCESTOR of [id] so a (possibly nested) node is revealed in

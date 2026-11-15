@@ -161,6 +161,42 @@ void main() {
     });
   });
 
+  group('navigation supersedes a stale pending reveal', () {
+    test('locating another row drops the pending reveal (Back after create)',
+        () {
+      final c = SidebarTreeController();
+      // Create-then-reveal stashes a pending id while the row is not in the
+      // tree yet; Back then locates the previously open page.
+      c.revealInTree(tree, 'brand-new-page');
+      c.locateRow('page');
+      expect(c.pendingRevealId, isNull);
+      expect(c.revealAttempts, 0);
+      expect(c.focusedNavId, 'page');
+      // A late flush has nothing left to re-locate, so the just-created row
+      // cannot light itself again after Back.
+      expect(c.bumpRevealAttempt(), isFalse);
+    });
+
+    test('the open doc changing drops a pending reveal for another row', () {
+      final c = SidebarTreeController();
+      c.revealInTree(tree, 'brand-new-page');
+      c.focusView('page');
+      expect(c.pendingRevealId, isNull);
+      expect(c.focusedNavId, 'page');
+    });
+
+    test('opening the pending row itself keeps its reveal alive', () {
+      final c = SidebarTreeController();
+      c.revealInTree(tree, 'brand-new-page');
+      // The create flow opens the new doc: its reveal must survive so the
+      // row still scrolls into view.
+      c.focusView('brand-new-page');
+      expect(c.pendingRevealId, 'brand-new-page');
+      c.locateRow('brand-new-page');
+      expect(c.pendingRevealId, 'brand-new-page');
+    });
+  });
+
   group('workspace switch', () {
     test('clearExpansion drops every expansion', () {
       final c = SidebarTreeController();
