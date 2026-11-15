@@ -111,6 +111,7 @@ jobs:
           bash scripts/test-android-signing.sh
           bash scripts/test-release-canary.sh
           bash scripts/test-release-site-canary.sh
+          bash scripts/test-smoke-installer.sh
           python3 scripts/test-release-cli-matrix.py
       - id: groups
         env:

@@ -29,6 +29,12 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
+; A smoke-test install (/MICASMOKE, see IsSmokeTest below) shares this AppId
+; with the user's real install, so it must not write the HKCU uninstall entry:
+; it would repoint "Apps & features" at the throwaway directory, and the smoke
+; test's own uninstall would then delete the real install's entry (#179).
+; unins000.exe is still written, so the test can uninstall what it installed.
+CreateUninstallRegKey=not IsSmokeTest
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -40,8 +46,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+; Same path as the real install's shortcuts: a smoke-test install would
+; repoint them at its throwaway directory and its uninstall would delete them.
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Check: not IsSmokeTest
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon; Check: not IsSmokeTest
 
 [Run]
 ; No `skipifsilent`: the in-app updater installs with /VERYSILENT and relies on
@@ -55,7 +63,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; and the app's single-instance mutex (windows/runner/main.cpp) made whichever
 ; lost the race exit 0 — a flaky "exited within 10s" failure. The updater never
 ; passes /SKIPRUN, so its relaunch is unchanged. (Pattern: ShareX's /NORUN.)
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall; Check: not CmdLineParamExists('/SKIPRUN')
+; /MICASMOKE implies /SKIPRUN.
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall; Check: not CmdLineParamExists('/SKIPRUN') and not IsSmokeTest
 
 [Code]
 { The in-app updater launches this Setup with /MICAWAITPID=<pid> and then exits
@@ -92,6 +101,14 @@ begin
       Result := True;
       Exit;
     end;
+end;
+
+{ True for the release smoke test's throwaway install (scripts/smoke-installer.ps1
+  passes /MICASMOKE): no shortcuts, no uninstall registry entry, no auto-launch,
+  so installing and uninstalling it leaves the user's real install untouched. }
+function IsSmokeTest(): Boolean;
+begin
+  Result := CmdLineParamExists('/MICASMOKE');
 end;
 
 function MicaWaitPid(): DWORD;

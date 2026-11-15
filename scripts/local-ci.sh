@@ -49,7 +49,7 @@ bash scripts/test-font-mirror.sh
 note "structure and CI/release script regressions"
 bash scripts/test-structure-gate.sh
 bash scripts/check-structure-ci.sh
-for check in md-wasm-build web-entry-cache-check release-artifacts release-orchestration release-workflow local-e2e flutter-perf-gate release-version ci-stacks verify-prod android-signing release-canary release-site-canary; do
+for check in md-wasm-build web-entry-cache-check release-artifacts release-orchestration release-workflow local-e2e flutter-perf-gate release-version ci-stacks verify-prod android-signing release-canary release-site-canary smoke-installer; do
   bash "scripts/test-$check.sh"
 done
 python3 scripts/test-compose-api-env.py
