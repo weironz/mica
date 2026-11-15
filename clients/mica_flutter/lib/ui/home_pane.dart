@@ -49,59 +49,48 @@ List<HomeDocEntry> buildWorkspaceRecents(
   );
 }
 
-/// Build the home pane for the current state.
+/// Build the start pane (what shows when no page is open) for the current state.
 ///
 /// [viewsByWorkspace] and [workspaceNames] span EVERY workspace of the active
-/// world: home is a cross-workspace entry point, which is what makes it different
-/// from the sidebar (that shows the one workspace you are in). The local and cloud
-/// worlds stay separate — the caller passes whichever is active.
+/// world, so "back to your last page" can point into another workspace. The
+/// local and cloud worlds stay separate — the caller passes whichever is active.
 Widget buildHomePane(
   BuildContext context, {
   required Map<String, List<DocumentView>> viewsByWorkspace,
   required Map<String, String> workspaceNames,
-  required VoidCallback onCreatePage,
-  required void Function(String viewId) onOpenView,
+  required VoidCallback? onCreatePage,
+  required VoidCallback? onSearch,
+  required void Function(String id) onOpenView,
   DateTime? now,
 }) {
   final l10n = context.l10n;
-  final clock = now ?? DateTime.now();
-
-  final relative = RelativeTimeStrings(
-    justNow: l10n.homeJustNow,
-    minutesAgo: l10n.homeMinutesAgo,
-    hoursAgo: l10n.homeHoursAgo,
-    yesterday: l10n.homeYesterday,
-    daysAgo: l10n.homeDaysAgo,
+  final mac = defaultTargetPlatform == TargetPlatform.macOS;
+  final recents = buildRecents(
+    viewsByWorkspace: viewsByWorkspace,
+    workspaceNames: workspaceNames,
+    strings: RelativeTimeStrings(
+      justNow: l10n.homeJustNow,
+      minutesAgo: l10n.homeMinutesAgo,
+      hoursAgo: l10n.homeHoursAgo,
+      yesterday: l10n.homeYesterday,
+      daysAgo: l10n.homeDaysAgo,
+    ),
+    limit: 1,
+    now: now,
   );
-
   return HomeScreen(
     strings: HomeStrings(
       createTitle: l10n.homeCreateTitle,
-      createSubtitle: l10n.homeCreateSubtitle,
-      // A keyboard hint, not prose: the glyph differs by platform, and a macOS
+      // Keyboard hints, not prose: the glyph differs by platform, and a macOS
       // user reads "Ctrl" as a different key entirely.
-      createHint: defaultTargetPlatform == TargetPlatform.macOS
-          ? '⌘N'
-          : 'Ctrl+N',
+      createHint: mac ? '⌘N' : 'Ctrl+N',
+      searchTitle: l10n.homeSearchTitle,
+      searchHint: mac ? '⌘⇧F' : 'Ctrl+Shift+F',
       recentLabel: l10n.homeRecentLabel,
-      directoriesLabel: l10n.homeDirectoriesLabel,
-      recentEmptyTitle: l10n.homeRecentEmptyTitle,
-      recentEmptyBody: l10n.homeRecentEmptyBody,
-      directoriesEmptyTitle: l10n.homeDirectoriesEmptyTitle,
-      directoriesEmptyBody: l10n.homeDirectoriesEmptyBody,
     ),
-    recents: buildRecents(
-      viewsByWorkspace: viewsByWorkspace,
-      workspaceNames: workspaceNames,
-      strings: relative,
-      now: clock,
-    ),
-    directories: buildDirectories(
-      viewsByWorkspace: viewsByWorkspace,
-      workspaceNames: workspaceNames,
-      formatChildCount: l10n.itemCount,
-    ),
-    onOpen: onOpenView,
+    recent: recents.isEmpty ? null : recents.first,
     onCreatePage: onCreatePage,
+    onSearch: onSearch,
+    onOpen: onOpenView,
   );
 }

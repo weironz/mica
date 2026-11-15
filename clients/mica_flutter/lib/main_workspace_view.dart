@@ -71,7 +71,6 @@ class WorkspaceView extends StatefulWidget {
     this.onSetViewIcon,
     this.homePane,
     this.overviewPane,
-    this.onOpenHome,
     this.onBrowseFolder,
     required this.onDeleteView,
     required this.onDeleteViews,
@@ -351,18 +350,22 @@ class WorkspaceView extends StatefulWidget {
   /// cannot be stored (the local world), which hides the menu entry entirely.
   final Future<void> Function(DocumentView view)? onSetViewIcon;
 
-  /// The home pane, shown whenever no page is open. Built by the host (see
-  /// `ui/home_pane.dart`) because it spans every workspace, which this view —
-  /// scoped to one workspace — does not have.
-  final Widget? homePane;
+  /// Builds the start pane, shown whenever no page is open. Built by the host
+  /// (see `ui/home_pane.dart`) because its "last page" spans every workspace,
+  /// which this view — scoped to one workspace — does not have. The view
+  /// supplies the two actions it owns: the search dialog, and creating a page
+  /// (null in a read-only workspace).
+  final Widget Function({
+    required VoidCallback onSearch,
+    required VoidCallback? onCreatePage,
+  })?
+  homePane;
 
   /// The folder-contents overview, non-null only while a folder is being browsed.
   /// Takes precedence over [homePane] — you asked to look inside something.
   final Widget? overviewPane;
   final void Function(String? folderId)? onBrowseFolder;
 
-  /// Closes the open page so home shows again. Null hides the sidebar entry.
-  final VoidCallback? onOpenHome;
   final Future<void> Function(DocumentView view) onDeleteView;
 
   /// Trash a whole selection. Separate from [onDeleteView] because the cloud
@@ -1445,20 +1448,6 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                       icon: const Icon(Icons.close, size: 20),
                     ),
                   ),
-                _searchBox(context),
-                const SizedBox(height: 6),
-                if (widget.onOpenHome != null)
-                  HomeNavRow(
-                    label: context.l10n.navHome,
-                    selected:
-                        widget.selectedBootstrap == null &&
-                        widget.overviewPane == null,
-                    onTap: widget.onOpenHome!,
-                  ),
-                if (widget.isBusy) const LinearProgressIndicator(minHeight: 2),
-                const SizedBox(height: 10),
-                Divider(height: 1, color: MicaTheme.of(context).border.subtle),
-                const SizedBox(height: 10),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
@@ -1466,20 +1455,6 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                       child: WorkspaceSelector(
                         entries: widget.entries,
                         activeIsLocal: widget.activeIsLocal,
-                        // Counts PAGES, not rows: a switcher that says "12 个页面"
-                        // while four of them are folders is lying in a way the user
-                        // can check against the tree right below it.
-                        //
-                        // The second half names the WORLD, not the host. Using
-                        // `cloudOriginLabel` here shipped "802 个页面 ·
-                        // mica.cloudcele...." — a truncated hostname that fills the
-                        // line and says nothing. The design's own meta reads
-                        // "已同步"/"云端": which world this is, not which server.
-                        activeMeta: widget.selectedWorkspace == null
-                            ? null
-                            : '${context.l10n.pageCount(countPages(widget.views))}'
-                                  ' · '
-                                  '${widget.activeIsLocal ? context.l10n.worldLocalName : context.l10n.worldCloudLabel}',
                         selectedRef: widget.selectedRef,
                         cloudEmail: widget.session?.user.email,
                         onSignIn: widget.onSignIn,
@@ -1499,10 +1474,10 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                       ),
                     ),
                     const SizedBox(width: 4),
-                    // The graph is WORKSPACE-scoped, so it belongs here rather
-                    // than next to search: search sits above the switcher because
-                    // it spans every workspace, and this one shows the links
-                    // inside the workspace you have selected.
+                    // The graph is WORKSPACE-scoped, so it belongs on the
+                    // switcher's row rather than next to search: search spans
+                    // every workspace, the graph shows the links inside the one
+                    // you have selected.
                     IconButton(
                       tooltip: context.l10n.graphTitle,
                       visualDensity: VisualDensity.compact,
@@ -1523,6 +1498,18 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                     ),
                   ],
                 ),
+                // Search sits directly under the switcher, one row each: the two
+                // things people reach for most in this pane. The home row and the
+                // divider that used to sit between them are gone (home itself was
+                // replaced by the start pane — see `ui/home_pane.dart`), and the
+                // switcher dropped its second "N pages · world" line, which
+                // repeated what the workspace menu already lists per row.
+                const SizedBox(height: 4),
+                _searchBox(context),
+                if (widget.isBusy) ...[
+                  const SizedBox(height: 4),
+                  const LinearProgressIndicator(minHeight: 2),
+                ],
                 if (widget.invitations case final invitations?)
                   ReceivedInvitationsCard(controller: invitations),
                 if (widget.message != null) ...[
@@ -1595,11 +1582,21 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                         ),
                       ),
                     ],
-                    IconButton(
-                      tooltip: context.l10n.recycleRefresh,
-                      visualDensity: VisualDensity.compact,
-                      onPressed: widget.onRefresh,
-                      icon: const Icon(Icons.refresh, size: 18),
+                    // Refresh is rarely needed (sync is live), so it only shows
+                    // while the pointer is over the sidebar. `maintainSize`
+                    // keeps the row from shifting when it appears.
+                    // A touch-only drawer never hovers, so it always shows.
+                    Visibility(
+                      visible: _navHovered || narrow,
+                      maintainSize: true,
+                      maintainAnimation: true,
+                      maintainState: true,
+                      child: IconButton(
+                        tooltip: context.l10n.recycleRefresh,
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onRefresh,
+                        icon: const Icon(Icons.refresh, size: 18),
+                      ),
                     ),
                   ],
                 ),
@@ -1645,37 +1642,44 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   }
 
   /// Search-box-shaped button: looks like an input, opens the search dialog
-  /// (Notion-style — the real query field lives in the dialog).
+  /// (Notion-style — the real query field lives in the dialog). It names its
+  /// shortcut, because a sidebar box is where people learn that one exists.
   Widget _searchBox(BuildContext context) {
     final enabled = widget.selectedWorkspace != null;
+    final tokens = MicaTheme.of(context);
+    final color = enabled ? tokens.text.muted : tokens.border.strong;
+    final shortcut = defaultTargetPlatform == TargetPlatform.macOS
+        ? '⌘⇧F'
+        : 'Ctrl+Shift+F';
     return InkWell(
       onTap: enabled ? _openSearch : null,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(6),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: MicaTheme.of(context).surface.sunken,
-          borderRadius: BorderRadius.circular(8),
+          color: tokens.surface.sunken,
+          borderRadius: BorderRadius.circular(6),
         ),
         child: Row(
           children: [
-            Icon(
-              Icons.search,
-              size: 18,
-              color: enabled
-                  ? MicaTheme.of(context).text.muted
-                  : MicaTheme.of(context).border.strong,
-            ),
+            Icon(Icons.search, size: 16, color: color),
             const SizedBox(width: 8),
-            Text(
-              context.l10n.search,
-              style: TextStyle(
-                color: enabled
-                    ? MicaTheme.of(context).text.muted
-                    : MicaTheme.of(context).border.strong,
+            Expanded(
+              child: Text(
+                context.l10n.search,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: MicaTypography.small.copyWith(color: color),
               ),
             ),
+            if (enabled)
+              Text(
+                shortcut,
+                style: MicaTypography.caption.copyWith(
+                  color: tokens.text.faint,
+                ),
+              ),
           ],
         ),
       ),

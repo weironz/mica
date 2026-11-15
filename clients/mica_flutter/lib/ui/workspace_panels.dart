@@ -220,57 +220,6 @@ class _BacklinksPanelState extends State<BacklinksPanel> {
 
 /// The comments entry in the doc header: an outline bubble, with the count of
 /// still-open threads when there are any. Quiet when the document has none.
-/// The sidebar's Home row. Its own widget so the pane's build method stays a list
-/// of parts rather than another nested block of decoration.
-class HomeNavRow extends StatelessWidget {
-  const HomeNavRow({
-    super.key,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-        decoration: BoxDecoration(
-          color: selected ? MicaTheme.of(context).surface.hover : null,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              Icons.home_outlined,
-              size: 18,
-              color: selected
-                  ? MicaTheme.of(context).text.primary
-                  : MicaTheme.of(context).text.muted,
-            ),
-            const SizedBox(width: 10),
-            Text(
-              label,
-              style: MicaTypography.body.copyWith(
-                fontWeight: FontWeight.w500,
-                color: selected
-                    ? MicaTheme.of(context).text.primary
-                    : MicaTheme.of(context).text.primary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// The muted words·chars readout. Lives in the shell now, pinned to the pane's
 /// bottom-right; it used to be drawn by the editor at the end of the CONTENT,
 /// which on a short page put it in the middle of the screen with nothing around

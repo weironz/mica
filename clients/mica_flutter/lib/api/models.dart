@@ -390,7 +390,7 @@ class Workspace {
   final String role;
 
   /// Live pages in this workspace — folders and the recycle bin excluded, the
-  /// same definition [countPages] uses on a loaded view tree.
+  /// same definition the server uses when it counts a loaded view tree.
   ///
   /// Only the workspace LIST endpoint fills this in; anything else (a local
   /// workspace, a single-workspace response, a server too old to send it) leaves

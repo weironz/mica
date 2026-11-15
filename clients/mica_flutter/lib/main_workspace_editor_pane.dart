@@ -124,12 +124,15 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
 
     final bootstrap = widget.selectedBootstrap;
     if (bootstrap == null) {
-      // Nothing open → HOME (design 03). This used to be a "pick a page" empty
-      // state, which told the user to do something instead of helping them do
-      // it; home offers the create action and the recent pages right there.
-      // Falls back to the old copy only if the host supplies no home pane.
+      // Nothing open → the start pane: new page, search, back to the last page.
+      // Falls back to the old copy only if the host supplies no builder.
       return widget.overviewPane ??
-          widget.homePane ??
+          widget.homePane?.call(
+            onSearch: _openSearch,
+            onCreatePage: matchesEditRole(workspace.role)
+                ? () => _createLocated(folder: false)
+                : null,
+          ) ??
           EmptyState(
             icon: Icons.description_outlined,
             title: context.l10n.editorSelectPageTitle,

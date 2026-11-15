@@ -4995,23 +4995,19 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       onSelectView: viewOps.select,
       onRenameView: viewOps.rename,
       onSetViewIcon: viewOps.setIcon,
-      // Home spans every workspace of the ACTIVE world (local and cloud stay
-      // separate — see the world switcher), so only the shell can build it. The
-      // local world keeps one flat view list rather than a per-workspace map,
-      // so it contributes just its selected workspace (see backends'
-      // viewsByWorkspace).
-      homePane: buildHomePane(
+      // The start pane's "last page" spans every workspace of the ACTIVE world
+      // (local and cloud stay separate — see the world switcher), so only the
+      // shell can build it. The local world keeps one flat view list rather
+      // than a per-workspace map, so it contributes just its selected workspace
+      // (see backends' viewsByWorkspace).
+      homePane: ({required onSearch, required onCreatePage}) => buildHomePane(
         context,
         viewsByWorkspace: b.viewsByWorkspace,
         workspaceNames: {for (final w in b.workspaces) w.id: w.name},
-        onCreatePage: () =>
-            unawaited(viewOps.createDocument(context.l10n.newPage)),
+        onCreatePage: onCreatePage,
+        onSearch: onSearch,
         onOpenView: viewOps.openViewFromHome,
       ),
-      onOpenHome: () {
-        setState(() => _overviewFolderId = null);
-        viewOps.closeOpenPage();
-      },
       onBrowseFolder: (id) {
         viewOps.closeOpenPage();
         setState(() => _overviewFolderId = id);

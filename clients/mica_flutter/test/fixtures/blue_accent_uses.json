@@ -7,7 +7,6 @@
   "lib/editor/render.dart#editor.caret": 2,
   "lib/main_workspace_tree_nav.dart#accent.primary": 1,
   "lib/ui/emoji_picker.dart#accent.primary": 1,
-  "lib/ui/home_screen.dart#accent.primary": 2,
   "lib/ui/shell_widgets.dart#accent.primary": 1,
   "lib/ui/sign_in_pane.dart#accent.primary": 1,
   "lib/ui/status_kit.dart#accent.primary": 1,

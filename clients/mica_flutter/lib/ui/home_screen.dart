@@ -3,108 +3,81 @@ import 'package:flutter/material.dart';
 
 import 'theme_tokens.dart';
 
-/// The home screen: one "create page" affordance, then the two lists that get a
-/// user back into work (recently edited, directories).
+/// What the editor pane shows when no page is open: a short list of the three
+/// things you came to do — write something new, find something, or go back to
+/// what you were last writing.
 ///
-/// It used to open with a date line and 「下午好,X」. Both are gone. Neither
-/// reference product has a greeting dashboard — AppFlowy lands you on the last
-/// document (sidebar spaces + favourites), AFFiNE on `all-page` / journals — and
-/// the greeting cost us a real bug on the way: in 本地模式 there is no account, so
-/// the world's name was passed as the user's and the app said 「下午好,本地模式」.
-/// What survives is the half that carries information: this is the only
-/// cross-workspace entry point (the sidebar shows the ONE workspace you are in).
+/// This replaced the home dashboard (create card + "recently edited" grid +
+/// "directories" list, reached from a 首页 row at the top of the sidebar). In
+/// use nobody opened it: a notes app is entered by writing or by searching, and
+/// startup already reopens the last page (`lastViewId`, plus the restored tab
+/// strip), so the dashboard only ever appeared when every page had been closed.
+/// Its two lists live on where they were actually used — recents in the search
+/// dialog's pre-typing list, directories in the folder overview the tree opens.
 ///
-/// Design source: `docs/design/知识库软件开发协作/03 首页+侧栏.dc.html`, the
-/// `isHome` branch of the right pane. Where the mockup's legacy half-step sizes
-/// (13.5 / 14.5 / 11.5) and off-ladder radii (13 / 9 / 6 / 5) conflict with the
-/// design rules in that folder's CLAUDE.md, the rules win and the value is
-/// snapped to the nearest ladder step — the hierarchy (hero > card title >
-/// section label > meta) is what carries the design, not the exact pixel:
-///
-/// - 18px create-card title → 20 (ladder has no 18; 20 keeps it clearly above
-///   the 14 card names and 13 section labels, which 16 would not).
-/// - 13.5 → 13, 14.5 → 14, 12.5 / 11.5 / 11 → 12 (12 is the floor of the ladder).
-/// - radii 13 / 9 → 14, 6 / 5 → 8.
-/// - slate fills (#F1F5F9) → `surface.sunken`, the app's own neutral fill; the
-///   design rules ban introducing further slate tones, and the two are visually
-///   interchangeable. Same for the #F5F7FA row rule → `border.subtle` and the
-///   #DBE3EF container border → `border.normal`.
-///
-/// Deliberately dumb: it owns no data and talks to no service. Everything
-/// arrives pre-formatted (dates, relative times, greeting) because the caller is
-/// the one holding the locale and the user — this file must never grow a second
-/// place where dates get formatted.
+/// Deliberately dumb: it owns no data and talks to no service. The recent page
+/// arrives pre-formatted because the caller holds the locale and the clock.
 class HomeScreen extends StatelessWidget {
   const HomeScreen({
     required this.strings,
-    required this.recents,
-    required this.directories,
-    required this.onOpen,
     required this.onCreatePage,
+    required this.onSearch,
+    required this.onOpen,
+    this.recent,
     super.key,
   });
 
   final HomeStrings strings;
-  final List<HomeDocEntry> recents;
-  final List<HomeDocEntry> directories;
 
-  /// Opens a document or directory by id. The screen never decides what "open"
-  /// means — a directory and a page land in different places.
+  /// Null in a read-only workspace: offering "new page" there would fail.
+  final VoidCallback? onCreatePage;
+
+  final VoidCallback? onSearch;
+
+  /// Opens the [recent] page by id.
   final void Function(String id) onOpen;
 
-  final VoidCallback onCreatePage;
+  /// The most recently edited page, if there is one.
+  final HomeDocEntry? recent;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      child: Center(
+    final recent = this.recent;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 840),
-          child: Padding(
-            // Was 72 at the top to sit under a date line that no longer exists.
-            padding: const EdgeInsets.fromLTRB(40, 48, 40, 120),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _CreateCard(strings: strings, onTap: onCreatePage),
-                const SizedBox(height: 48),
-                _SectionHeader(
-                  icon: Icons.schedule,
-                  label: strings.recentLabel,
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (onCreatePage case final create?)
+                _ActionRow(
+                  icon: Icons.note_add_outlined,
+                  label: strings.createTitle,
+                  hint: strings.createHint,
+                  onTap: create,
                 ),
-                const SizedBox(height: 16),
-                if (recents.isEmpty)
-                  _EmptyState(
-                    title: strings.recentEmptyTitle,
-                    body: strings.recentEmptyBody,
-                  )
-                else
-                  for (final doc in recents)
-                    _DirectoryRow(
-                      entry: doc,
-                      onOpen: onOpen,
-                      fallbackIcon: Icons.description_outlined,
-                    ),
-                const SizedBox(height: 44),
-                _SectionHeader(
-                  icon: Icons.folder_outlined,
-                  label: strings.directoriesLabel,
+              if (onSearch case final search?)
+                _ActionRow(
+                  icon: Icons.search,
+                  label: strings.searchTitle,
+                  hint: strings.searchHint,
+                  onTap: search,
                 ),
-                const SizedBox(height: 8),
-                if (directories.isEmpty)
-                  _EmptyState(
-                    title: strings.directoriesEmptyTitle,
-                    body: strings.directoriesEmptyBody,
-                  )
-                else
-                  for (final dir in directories)
-                    _DirectoryRow(
-                      entry: dir,
-                      onOpen: onOpen,
-                      fallbackIcon: Icons.folder_outlined,
-                    ),
+              if (recent != null) ...[
+                const SizedBox(height: 12),
+                Divider(height: 1, color: MicaTheme.of(context).border.subtle),
+                const SizedBox(height: 12),
+                _ActionRow(
+                  icon: Icons.history,
+                  label: '${strings.recentLabel}：${recent.name}',
+                  hint: recent.meta,
+                  onTap: () => onOpen(recent.id),
+                ),
               ],
-            ),
+            ],
           ),
         ),
       ),
@@ -112,9 +85,9 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-/// One document/directory row's worth of already-presentable text. A record, not
-/// an API model: the home screen must not depend on the wire format, and `meta`
-/// ("2 hours ago", "3 pages") is the caller's to phrase.
+/// One page's worth of already-presentable text. A record, not an API model:
+/// this screen must not depend on the wire format, and `meta` ("2 hours ago")
+/// is the caller's to phrase. Also the search dialog's recent-row shape.
 typedef HomeDocEntry = ({
   String id,
   String? icon,
@@ -129,385 +102,62 @@ typedef HomeDocEntry = ({
 class HomeStrings {
   const HomeStrings({
     required this.createTitle,
-    required this.createSubtitle,
     required this.createHint,
+    required this.searchTitle,
+    required this.searchHint,
     required this.recentLabel,
-    required this.directoriesLabel,
-    required this.recentEmptyTitle,
-    required this.recentEmptyBody,
-    required this.directoriesEmptyTitle,
-    required this.directoriesEmptyBody,
   });
 
   final String createTitle;
-  final String createSubtitle;
 
-  /// The keyboard-hint chip, e.g. "⌘N" / "Ctrl+N". Caller picks per platform.
+  /// The platform's shortcut glyphs, e.g. `Ctrl+N` / `⌘N`.
   final String createHint;
-
+  final String searchTitle;
+  final String searchHint;
   final String recentLabel;
-  final String directoriesLabel;
-
-  /// Empty-state copy. Per the design rules each must say what happened *and*
-  /// give one next step, and must never say "出错了" — an empty list is not a
-  /// fault.
-  final String recentEmptyTitle;
-  final String recentEmptyBody;
-  final String directoriesEmptyTitle;
-  final String directoriesEmptyBody;
 }
 
-/// The bundled Roboto Mono. `'monospace'` as a family name does not resolve on
-/// web, so mono text always names the packaged family (see CLAUDE.md). Declared
-/// here rather than imported because `editor/model.dart` is out of this file's
-/// dependency budget — one string is cheaper than a new coupling.
-const String _monoFont = 'RobotoMono';
-
-Color _cardBorder(BuildContext context) => MicaTheme.of(context).border.subtle;
-Color _containerBorder(BuildContext context) =>
-    MicaTheme.of(context).border.normal;
-
-/// Hover border: an accent tint, not a grey, so it is exempt from the
-/// three-greys rule.
-Color _hoverBorder(BuildContext context) =>
-    MicaTheme.of(context).accent.primary.withValues(alpha: 0.35);
-
-/// The near-black tile behind the "+".
-///
-/// The one surface here that does NOT invert: it is already dark, and the "+" on
-/// it is white. In dark mode #0F172A would vanish into the #0F1419 page, so there
-/// it lifts to the hover surface — still a dark tile, still visibly a tile.
-Color _createTileBg(BuildContext context) {
-  final tokens = MicaTheme.of(context);
-  return tokens.dark ? tokens.surface.hover : MicaTokens.light.text.primary;
-}
-
-/// The card's near-white vertical wash. Two surface steps, so it stays a wash
-/// rather than a grey slab when the palette flips.
-LinearGradient _createGradient(BuildContext context) => LinearGradient(
-  begin: Alignment.topCenter,
-  end: Alignment.bottomCenter,
-  colors: [
-    MicaTheme.of(context).surface.base,
-    MicaTheme.of(context).surface.raised,
-  ],
-);
-
-/// Shared card hover treatment (`.card:hover` in the mockup): accent border plus
-/// a soft accent shadow. Negative spread matches the CSS `-12px` inset.
-List<BoxShadow>? _hoverShadow(BuildContext context, bool hovered) => hovered
-    ? [
-        BoxShadow(
-          color: MicaTheme.of(context).accent.primary.withValues(alpha: 0.28),
-          blurRadius: 24,
-          spreadRadius: -12,
-          offset: const Offset(0, 8),
-        ),
-      ]
-    : null;
-
-/// Pointer-aware tap target. Plain [GestureDetector] rather than [InkWell]: the
-/// design's feedback is a border/shadow change, and a Material ripple over the
-/// gradient card would fight it.
-class _Hoverable extends StatefulWidget {
-  const _Hoverable({required this.onTap, required this.builder});
-
-  final VoidCallback onTap;
-  final Widget Function(bool hovered) builder;
-
-  @override
-  State<_Hoverable> createState() => _HoverableState();
-}
-
-class _HoverableState extends State<_Hoverable> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onTap,
-        child: widget.builder(_hovered),
-      ),
-    );
-  }
-}
-
-class _CreateCard extends StatelessWidget {
-  const _CreateCard({required this.strings, required this.onTap});
-
-  final HomeStrings strings;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return _Hoverable(
-      onTap: onTap,
-      builder: (hovered) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 22),
-        decoration: BoxDecoration(
-          gradient: _createGradient(context),
-          // 1.5px, thicker than the document cards': this is the one thing on
-          // the page a new user is meant to hit.
-          border: Border.all(
-            color: hovered ? _hoverBorder(context) : _containerBorder(context),
-            width: 1.5,
-          ),
-          borderRadius: const BorderRadius.all(Radius.circular(16)),
-          boxShadow: _hoverShadow(context, hovered),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: _createTileBg(context),
-                borderRadius: const BorderRadius.all(Radius.circular(14)),
-              ),
-              child: const Icon(Icons.add, size: 24, color: Colors.white),
-            ),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    strings.createTitle,
-                    style: MicaTypography.heading3.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: MicaTheme.of(context).text.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    strings.createSubtitle,
-                    style: MicaTypography.small.copyWith(
-                      color: MicaTheme.of(context).text.faint,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 18),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                border: Border.fromBorderSide(
-                  BorderSide(color: _containerBorder(context)),
-                ),
-                borderRadius: const BorderRadius.all(Radius.circular(8)),
-              ),
-              child: Text(
-                strings.createHint,
-                style: MicaTypography.caption.copyWith(
-                  fontFamily: _monoFont,
-                  color: MicaTheme.of(context).text.faint,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.icon, required this.label});
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({
+    required this.icon,
+    required this.label,
+    required this.hint,
+    required this.onTap,
+  });
 
   final IconData icon;
   final String label;
+  final String hint;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: MicaTheme.of(context).text.faint),
-        const SizedBox(width: 8),
-        Text(
-          label,
-          style: MicaTypography.small.copyWith(
-            fontWeight: FontWeight.w500,
-            color: MicaTheme.of(context).text.muted,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// A user-chosen emoji, or a neutral kind glyph when there is none. Never
-/// invents an emoji: a made-up icon reads as user data the user did not choose.
-class _EntryIcon extends StatelessWidget {
-  const _EntryIcon({
-    required this.icon,
-    required this.fallback,
-    required this.size,
-  });
-
-  final String? icon;
-  final IconData fallback;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final emoji = icon;
-    if (emoji == null || emoji.isEmpty) {
-      return Icon(
-        fallback,
-        size: size,
-        color: MicaTheme.of(context).text.faint,
-      );
-    }
-    return Text(emoji, style: TextStyle(fontSize: size));
-  }
-}
-
-class _WorkspaceChip extends StatelessWidget {
-  const _WorkspaceChip({required this.name});
-
-  final String name;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: MicaTheme.of(context).surface.sunken,
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
-      ),
-      child: Text(
-        name,
-        style: MicaTypography.caption.copyWith(
-          color: MicaTheme.of(context).text.muted,
-        ),
-      ),
-    );
-  }
-}
-
-/// The recents grid. Collapses 3 → 2 → 1 columns so a card never gets narrower
-/// than roughly 180px, which is where the two-line name plus the chip row starts
-/// to wrap into mush. Thresholds are on the grid's own width (content width,
-/// i.e. after the 40px page padding): 3 columns from 600px, 2 from 380px.
-class _DirectoryRow extends StatelessWidget {
-  const _DirectoryRow({
-    required this.entry,
-    required this.onOpen,
-    required this.fallbackIcon,
-  });
-
-  final HomeDocEntry entry;
-  final void Function(String id) onOpen;
-
-  /// Glyph for an entry with no emoji of its own. Passed in, because
-  /// `HomeDocEntry` carries no kind and the row cannot tell a page from a folder
-  /// — reusing this row for the recents list without it made every icon-less
-  /// PAGE look like a FOLDER. The list that owns the entries is the thing that
-  /// knows which they are.
-  final IconData fallbackIcon;
-
-  @override
-  Widget build(BuildContext context) {
-    return _Hoverable(
-      onTap: () => onOpen(entry.id),
-      builder: (hovered) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-        decoration: BoxDecoration(
-          color: hovered ? MicaTheme.of(context).surface.sunken : null,
-          borderRadius: const BorderRadius.all(Radius.circular(8)),
-          border: Border(bottom: BorderSide(color: _cardBorder(context))),
-        ),
+    final tokens = MicaTheme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      hoverColor: tokens.surface.hover,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Row(
           children: [
-            _EntryIcon(icon: entry.icon, fallback: fallbackIcon, size: 19),
+            Icon(icon, size: 18, color: tokens.text.muted),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                entry.name,
+                label,
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: MicaTypography.body.copyWith(
-                  fontWeight: FontWeight.w500,
-                  color: MicaTheme.of(context).text.primary,
-                ),
+                style: MicaTypography.body.copyWith(color: tokens.text.primary),
               ),
             ),
-            const SizedBox(width: 8),
-            _WorkspaceChip(name: entry.workspaceName),
-            const SizedBox(width: 8),
-            // Fixed min width + right alignment so the metas line up down the
-            // list rather than ragging with each name's length.
-            SizedBox(
-              width: 56,
-              child: Text(
-                entry.meta,
-                textAlign: TextAlign.right,
-                style: MicaTypography.caption.copyWith(
-                  fontFamily: _monoFont,
-                  color: MicaTheme.of(context).text.faint,
-                ),
-              ),
+            const SizedBox(width: 12),
+            Text(
+              hint,
+              style: MicaTypography.caption.copyWith(color: tokens.text.faint),
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// An empty list is not a failure, so it gets prose, not a bald grid: what the
-/// list is, plus the one thing to do about it (copy comes from [HomeStrings]).
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({required this.title, required this.body});
-
-  final String title;
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 40),
-      alignment: Alignment.center,
-      child: Column(
-        children: [
-          Container(
-            width: 46,
-            height: 46,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: MicaTheme.of(context).surface.sunken,
-              borderRadius: const BorderRadius.all(Radius.circular(14)),
-            ),
-            child: Icon(
-              Icons.article_outlined,
-              size: 22,
-              color: MicaTheme.of(context).text.faint,
-            ),
-          ),
-          const SizedBox(height: 11),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: MicaTypography.body.copyWith(
-              fontWeight: FontWeight.w500,
-              color: MicaTheme.of(context).text.primary,
-            ),
-          ),
-          const SizedBox(height: 9),
-          Text(
-            body,
-            textAlign: TextAlign.center,
-            style: MicaTypography.caption.copyWith(
-              color: MicaTheme.of(context).text.faint,
-            ),
-          ),
-        ],
       ),
     );
   }

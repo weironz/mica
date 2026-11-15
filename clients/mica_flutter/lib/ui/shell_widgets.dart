@@ -45,7 +45,6 @@ class WorkspaceSelector extends StatefulWidget {
     required this.cloudEmail,
     required this.onSignIn,
     required this.onSelect,
-    this.activeMeta,
     required this.onRename,
     required this.onDelete,
     required this.onExport,
@@ -73,10 +72,6 @@ class WorkspaceSelector extends StatefulWidget {
   final Future<void> Function(WorkspaceEntry entry) onSelect;
   final void Function(WorkspaceEntry entry) onRename;
 
-  /// The quiet second line under the workspace name — e.g. "248 个页面 · 云端".
-  /// Formatted by the host (it owns the page counts and the world labels); null
-  /// renders a single-line trigger, which is what "no workspace selected" wants.
-  final String? activeMeta;
   final void Function(WorkspaceEntry entry) onDelete;
   final void Function(WorkspaceEntry entry, ArchiveFormat format) onExport;
   final VoidCallback onCreate;
@@ -150,6 +145,12 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
     }
     return null;
   }
+
+  /// The workspaces of the world this switcher is showing.
+  List<WorkspaceEntry> _world() => [
+    for (final e in widget.entries)
+      if (e.isLocal == widget.activeIsLocal) e,
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -241,70 +242,53 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
         final label =
             _selectedEntry?.workspace.name ??
             context.l10n.workspaceRowSelectWorkspace;
-        // Two-line trigger (design 03/12): name over a quiet meta line. The old
-        // single line left the switcher saying nothing about the workspace beyond
-        // its name — not how big it is, not which world it lives in.
+        // One line: world glyph, name, chevron. It used to carry a second
+        // "N 个页面 · 云端" line; the sidebar's height goes to the page tree now,
+        // and the menu below already lists every workspace with its page count.
         //
         // The design puts a per-workspace EMOJI in the tile; `Workspace` has no
         // icon column (only views do), so the tile carries the world glyph
         // instead. Adding one is a schema change, not a paint job.
+        final tokens = MicaTheme.of(context);
         return SizedBox(
           width: double.infinity,
           child: InkWell(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(6),
             onTap: () =>
                 controller.isOpen ? controller.close() : controller.open(),
             child: Padding(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
               child: Row(
                 children: [
                   Container(
-                    width: 30,
-                    height: 30,
+                    width: 22,
+                    height: 22,
                     decoration: BoxDecoration(
-                      color: MicaTheme.of(context).surface.hover,
-                      borderRadius: BorderRadius.circular(8),
+                      color: tokens.surface.hover,
+                      borderRadius: BorderRadius.circular(6),
                     ),
                     child: Icon(
                       widget.activeIsLocal
                           ? Icons.computer_outlined
                           : Icons.cloud_outlined,
-                      size: 17,
-                      color: MicaTheme.of(context).text.primary,
+                      size: 14,
+                      color: tokens.text.primary,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          label,
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                          style: MicaTypography.body.copyWith(
-                            fontWeight: FontWeight.w500,
-                            color: MicaTheme.of(context).text.primary,
-                          ),
-                        ),
-                        if (widget.activeMeta != null)
-                          Text(
-                            widget.activeMeta!,
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                            style: MicaTypography.caption.copyWith(
-                              color: MicaTheme.of(context).text.faint,
-                            ),
-                          ),
-                      ],
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: MicaTypography.body.copyWith(
+                        fontWeight: FontWeight.w500,
+                        color: tokens.text.primary,
+                      ),
                     ),
                   ),
-                  Icon(
-                    Icons.unfold_more,
-                    size: 16,
-                    color: MicaTheme.of(context).text.faint,
-                  ),
+                  const SizedBox(width: 4),
+                  Icon(Icons.unfold_more, size: 16, color: tokens.text.faint),
                 ],
               ),
             ),
@@ -387,6 +371,15 @@ class _WorkspaceSelectorState extends State<WorkspaceSelector> {
             ),
           ),
           onChanged: (v) => setState(() => _wsQuery = v),
+          // Type a few letters, press Enter: the first match is almost always
+          // the one you were typing towards, and reaching for the mouse to
+          // click it undoes the point of filtering.
+          onSubmitted: (_) {
+            final matches = _filtered(_world());
+            if (matches.isEmpty) return;
+            _menu.close();
+            widget.onSelect(matches.first);
+          },
         ),
       ),
     );

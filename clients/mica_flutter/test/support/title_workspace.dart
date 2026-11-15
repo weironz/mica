@@ -5,6 +5,7 @@ import 'package:mica_flutter/main.dart';
 import 'package:mica_flutter/doc_tab.dart';
 import 'package:mica_flutter/editor/editor.dart';
 import 'package:mica_flutter/l10n/app_localizations.dart';
+import 'package:mica_flutter/ui/home_screen.dart' show HomeDocEntry;
 
 DocumentBootstrap titleBootstrap(String title, {String id = 'page-a'}) =>
     titleBootstrapWithBlocks(
@@ -60,7 +61,7 @@ DocumentBootstrap titleBootstrapWithBlocks(
 // Exercise the real title field and its debounce with an inert host: the
 // workspace has many unrelated callbacks, none of which this test invokes.
 Widget titleWorkspace(
-  DocumentBootstrap bootstrap,
+  DocumentBootstrap? bootstrap,
   Future<bool> Function(DocumentView, String) onRename, {
   String? message,
   List<DocumentView>? views,
@@ -80,6 +81,15 @@ Widget titleWorkspace(
   Future<void> Function(String markdown)? onAiCurrentPage,
   Future<AiEditPreview> Function(String, EditorAiSnapshot)? onAiPreviewEdits,
   Future<void> Function(List<Map<String, dynamic>>)? onApplyOperations,
+  List<Workspace>? workspaces,
+  WorkspaceRef? selectedRef,
+  void Function(String workspaceId)? onSelectWorkspaceById,
+  List<HomeDocEntry> searchRecents = const [],
+  Widget Function({
+    required VoidCallback onSearch,
+    required VoidCallback? onCreatePage,
+  })?
+  homePane,
 }) => MaterialApp(
   locale: const Locale('zh'),
   localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -100,7 +110,7 @@ Widget titleWorkspace(
       onBrowseFolder: onBrowseFolder,
       entries: entries,
       activeOrigin: session == null ? 'local' : 'https://mica.test',
-      selectedRef: null,
+      selectedRef: selectedRef,
       onSelectEntry: (_) async {},
       onRenameEntry: (_, _) async {},
       onDeleteEntry: (_) async {},
@@ -114,9 +124,19 @@ Widget titleWorkspace(
       isBusy: false,
       onRefresh: () {},
       onSignOut: () {},
-      workspaces: const [
-        Workspace(id: 'workspace', name: '测试', ownerId: 'user', role: 'owner'),
-      ],
+      workspaces:
+          workspaces ??
+          const [
+            Workspace(
+              id: 'workspace',
+              name: '测试',
+              ownerId: 'user',
+              role: 'owner',
+            ),
+          ],
+      onSelectWorkspaceById: onSelectWorkspaceById,
+      searchRecents: searchRecents,
+      homePane: homePane,
       selectedWorkspace: const Workspace(
         id: 'workspace',
         name: '测试',
@@ -124,9 +144,9 @@ Widget titleWorkspace(
         role: 'owner',
       ),
       members: const [],
-      views: views ?? [bootstrap.view],
+      views: views ?? [?bootstrap?.view],
       treePending: treePending,
-      selectedView: bootstrap.view,
+      selectedView: bootstrap?.view,
       selectedBootstrap: bootstrap,
       presence: const [],
       message: message,

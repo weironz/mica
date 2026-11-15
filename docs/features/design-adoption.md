@@ -81,6 +81,7 @@
 ## 已做
 
 - **03 首页 + 侧栏**:`home_screen.dart` / `home_data.dart` / `home_pane.dart`(21 测)
+  (2026-11-15 首页改为没有打开页面时的起始页,侧栏去掉首页行,见 [评审 §12](../reviews/redundancy-and-home-review-2026-11-10.md#12-首页去掉侧栏上半部分收敛2026-11-15))
 - **02 工作区总览**:`workspace_overview.dart` / `overview_data.dart` / `overview_pane.dart`(18 测)
 - **19 空状态与故障态**:`status_kit.dart`(11 测),`EmptyState` 全量改走 `MicaEmptyState`
 - **emoji 图标**:`emoji_picker.dart`(8 测)+ 服务端 `icon` 写入(三态)端到端

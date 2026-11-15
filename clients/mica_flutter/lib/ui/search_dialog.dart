@@ -546,11 +546,21 @@ class _SearchDialogState extends State<SearchDialog> {
       // These are the CURRENT workspace's pages, matching what the search below
       // can actually find. Offering pages from other workspaces would put rows
       // here that no query in this box could ever return.
-      if (widget.recents.isNotEmpty) return _recentsList(context);
-      return EmptyState(
-        icon: Icons.search,
-        title: context.l10n.searchEmptyTitle,
-        detail: context.l10n.searchEmptyDetail,
+      final Widget list = widget.recents.isNotEmpty
+          ? _recentsList(context)
+          : EmptyState(
+              icon: Icons.search,
+              title: context.l10n.searchEmptyTitle,
+              detail: context.l10n.searchEmptyDetail,
+            );
+      final others = _otherWorkspaces;
+      if (others.isEmpty) return list;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _workspaceChips(context, others),
+          Expanded(child: list),
+        ],
       );
     }
 
@@ -566,6 +576,76 @@ class _SearchDialogState extends State<SearchDialog> {
         _workspaceSection(context, workspaceHits),
         Expanded(child: _buildPageResults(context)),
       ],
+    );
+  }
+
+  /// The workspaces you could switch to, shown before anything is typed.
+  ///
+  /// Switching workspace is as frequent as searching, and the dialog already
+  /// switches when you type a workspace's name; this puts the same targets one
+  /// click away without typing. Capped: past a handful, a row of buttons stops
+  /// being faster than typing three letters of the name.
+  static const _maxWorkspaceChips = 8;
+
+  List<({String id, String name})> get _otherWorkspaces {
+    if (widget.onOpenWorkspace == null) return const [];
+    return [
+      for (final w in widget.workspaces)
+        if (w.id != widget.workspaceId) w,
+    ].take(_maxWorkspaceChips).toList();
+  }
+
+  Widget _workspaceChips(
+    BuildContext context,
+    List<({String id, String name})> workspaces,
+  ) {
+    final theme = MicaTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 6),
+            child: Text(
+              context.l10n.searchWorkspaceLabel,
+              style: MicaTypography.caption.copyWith(color: theme.text.faint),
+            ),
+          ),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final w in workspaces)
+                OutlinedButton.icon(
+                  onPressed: () => widget.onOpenWorkspace!(w.id),
+                  icon: Icon(
+                    Icons.workspaces_outline,
+                    size: 14,
+                    color: theme.text.muted,
+                  ),
+                  label: Text(
+                    w.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: MicaTypography.small.copyWith(
+                      color: theme.text.primary,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    side: BorderSide(color: theme.border.normal),
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

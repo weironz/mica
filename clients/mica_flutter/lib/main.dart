@@ -15,7 +15,8 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -86,7 +87,6 @@ import 'ui/destructive_confirm.dart';
 import 'ui/dialog_controllers.dart';
 import 'ui/emoji_picker.dart';
 import 'ui/format_bytes.dart';
-import 'ui/home_data.dart' show countPages;
 import 'ui/home_screen.dart' show HomeDocEntry;
 import 'ui/home_pane.dart';
 import 'ui/overview_pane.dart';
