@@ -30,6 +30,16 @@
       @media (prefers-color-scheme: dark) {
         body { background: #0F1419; }
       }
+      /* Shown from the first byte of HTML until Flutter's first frame (removed
+         by the startup script below). Fades in after a beat so a warm start
+         that paints within ~300 ms never flashes it. */
+      #mica-splash {
+        position: fixed; inset: 0; display: flex;
+        align-items: center; justify-content: center;
+        opacity: 0; animation: mica-splash-in 240ms ease-out 300ms forwards;
+      }
+      #mica-splash svg { width: 48px; height: 48px; }
+      @keyframes mica-splash-in { to { opacity: 1; } }
     </style>
     <!-- A browser reporting a POSIX locale name ("C", "POSIX") makes the Flutter
          engine throw `RangeError: Incorrect locale information provided` from
@@ -81,6 +91,134 @@
         }
       })();
     </script>
+    <!-- Cold start. Before this, the four big downloads ran one after another:
+         index.html -> the engine glue -> flutter_bootstrap.js -> canvaskit +
+         main.dart.js -> FontManifest -> fonts, each waiting for the previous
+         to arrive, while the page stayed blank white. Preload hints start every
+         file the first frame needs as soon as this HTML is parsed, so latency is
+         paid once instead of per hop.
+
+         The CanvasKit variant mirrors flutter.js's own choice (Chromium build
+         when ImageDecoder + v8BreakIterator + Segmenter exist), so Firefox and
+         Safari do not download a 2 MB file they will not use. `fetch` preloads
+         carry crossorigin because the engine fetches with CORS mode; without it
+         the browser downloads them twice.
+
+         The splash element is removed on Flutter's first frame. Inline (not a
+         file) so it costs no round trip; its hash is in nginx's CSP. -->
+    <script>
+      (function () {
+        var chromium = typeof ImageDecoder !== 'undefined' &&
+          typeof Intl.v8BreakIterator !== 'undefined' &&
+          typeof Intl.Segmenter !== 'undefined';
+        var ck = chromium ? 'canvaskit/chromium/' : 'canvaskit/';
+        var links = [
+          ['modulepreload', ck + 'canvaskit.js'],
+          ['preload', ck + 'canvaskit.wasm', 'fetch'],
+          ['preload', 'main.dart.js', 'script'],
+          ['preload', 'mica_md/mica_md_bg.wasm', 'fetch'],
+          ['preload', 'mica_doc/mica_doc_bg.wasm', 'fetch'],
+          ['preload', 'assets/FontManifest.json', 'fetch'],
+          ['preload', 'assets/fonts/fallback/Roboto-Regular.ttf', 'fetch'],
+          ['preload', 'assets/fonts/RobotoMono-Regular.ttf', 'fetch'],
+          ['preload', 'assets/fonts/MaterialIcons-Regular.otf', 'fetch']
+        ];
+        for (var i = 0; i < links.length; i++) {
+          var link = document.createElement('link');
+          link.rel = links[i][0];
+          link.href = links[i][1];
+          if (links[i][2]) link.as = links[i][2];
+          if (links[i][2] === 'fetch') link.crossOrigin = 'anonymous';
+          document.head.appendChild(link);
+        }
+        window.addEventListener('flutter-first-frame', function () {
+          var splash = document.getElementById('mica-splash');
+          if (splash) splash.remove();
+        }, { once: true });
+      })();
+    </script>
+  </head>
+  <body>
+    <!-- Inline, not <img src>: an image request would queue behind the big
+         preloads above and the splash would appear about when Flutter does.
+         The engine scripts sit BELOW it so the browser can paint the splash
+         while it waits on them. -->
+    <div id="mica-splash" aria-hidden="true"><svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 1024 1024"
+>
+  <g transform="translate(512,512) scale(1.3) translate(-512,-512)">
+  <defs>
+    <linearGradient id="mica-main" x1="180" y1="180" x2="850" y2="850" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4F7CFF"/>
+      <stop offset="0.48" stop-color="#6357E8"/>
+      <stop offset="1" stop-color="#8B4DE8"/>
+    </linearGradient>
+    <linearGradient id="mica-left" x1="190" y1="270" x2="510" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5E8CFF"/>
+      <stop offset="1" stop-color="#4656D8"/>
+    </linearGradient>
+    <linearGradient id="mica-right" x1="520" y1="280" x2="840" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7968F1"/>
+      <stop offset="1" stop-color="#9B4DDA"/>
+    </linearGradient>
+  </defs>
+  <path
+    fill="url(#mica-main)"
+    d="
+      M 178 282
+      Q 178 236 224 236
+      L 318 236
+      Q 342 236 358 257
+      L 512 462
+      L 666 257
+      Q 682 236 706 236
+      L 800 236
+      Q 846 236 846 282
+      L 846 742
+      Q 846 788 800 788
+      L 706 788
+      Q 674 788 674 756
+      L 674 494
+      L 558 650
+      Q 536 680 512 680
+      Q 488 680 466 650
+      L 350 494
+      L 350 756
+      Q 350 788 318 788
+      L 224 788
+      Q 178 788 178 742
+      Z
+    "
+  />
+  <path
+    fill="url(#mica-left)"
+    d="
+      M 242 302
+      L 312 302
+      L 512 570
+      L 466 632
+      L 342 466
+      L 342 726
+      L 242 726
+      Z
+    "
+  />
+  <path
+    fill="url(#mica-right)"
+    d="
+      M 782 302
+      L 712 302
+      L 512 570
+      L 558 632
+      L 682 466
+      L 682 726
+      L 782 726
+      Z
+    "
+  />
+  </g>
+</svg></div>
     <!-- Start the Markdown engine before Flutter; startup awaits micaMdReady.
          Catch synchronous loader failures as well so Flutter can degrade. -->
     <script src="mica_md/mica_md.js"></script>
@@ -101,8 +239,6 @@
         .then(() => { globalThis.micaDoc = mica_doc_bindgen; })
         .catch((error) => { globalThis.micaDocError = String(error); });
     </script>
-  </head>
-  <body>
     <script src="flutter_bootstrap.js" async></script>
   </body>
 </html>

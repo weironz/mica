@@ -115,6 +115,7 @@
 | [large-workspace-performance.md](performance/large-workspace-performance.md) | 大工作区目录性能 |
 | [workspace-switch-latency.md](performance/workspace-switch-latency.md) | 工作区切换延迟 |
 | [mcp-performance.md](performance/mcp-performance.md) | MCP 性能与 token 优化(权威) |
+| [web-cold-start-2026-11-16.md](performance/web-cold-start-2026-11-16.md) | 网页端首次打开白屏：不是字体；启动画面、预加载与 Brotli 预压缩，首帧约快 30% |
 
 ## reviews — 代码评审与修复
 

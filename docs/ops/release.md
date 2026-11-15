@@ -49,6 +49,7 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 | 浏览器专用套件必须在 Chrome 真跑;结构门禁 | `bash scripts/browser-tests.sh` / `just check-structure` | 发布验收必跑 |
 | 可选安装包未构建时,产物验收仍必须运行;dry-run 不验收 | `.github/workflows/release.yml` 的 `canary` + `scripts/test-release-workflow.sh` | 2026-11-15 |
 | 安装包冒烟不碰本机正式版:不建快捷方式和卸载登记(`/MICASMOKE`),应用在隔离的 `APPDATA`/`LOCALAPPDATA`/`TEMP` 下运行,单实例锁按数据目录划分,正式版开着也能跑 | `scripts/smoke-installer.ps1` + `scripts/test-smoke-installer.sh` | 2026-11-15(#179) |
+| 网页 `index.html` 内联脚本与 nginx CSP `script-src` 哈希一致 | `scripts/test-web-csp-hashes.sh` | 2026-11-16 |
 | 固定入口缓存头、wasm MIME、缺失引擎及退役 yjs 地址 404 | `scripts/web-entry-cache-check.sh <origin>`;CI web-e2e job | 2026-11-01 |
 | **tag 必须与它所在那棵树的版本号一致** | `.github/workflows/release.yml` | 2026-08-26 |
 | **所有构建/推送 job 只消费 `draft` 校验过的版本（`needs: draft`，版本只解析一次）** | `.github/workflows/release.yml` | 2026-10-25 |

@@ -10,6 +10,18 @@ FROM nginx:alpine
 # need the x bit, and an x bit on a static file is inert.
 COPY --chmod=0644 deploy/nginx.conf /etc/nginx/nginx.conf
 COPY --chmod=0755 deploy/web /usr/share/nginx/html
+# Brotli copies of every JS/wasm file, served by nginx.conf's `\.(js|wasm)$`
+# block to clients that accept `br` (about a quarter smaller than gzip on
+# canvaskit and main.dart.js, which a cold start waits on). Written here, from
+# the very files being shipped, so a `.br` can never be older than its source;
+# the stock nginx image has no Brotli module, hence files rather than on-the-fly.
+RUN apk add --no-cache brotli \
+  && find /usr/share/nginx/html -type f \( -name '*.js' -o -name '*.wasm' \) -size +1k \
+       -exec brotli --best --keep {} + \
+  && apk del brotli \
+  && test -s /usr/share/nginx/html/main.dart.js.br \
+  && test -s /usr/share/nginx/html/canvaskit/canvaskit.wasm.br \
+  && test -s /usr/share/nginx/html/canvaskit/chromium/canvaskit.wasm.br
 # Refuse incomplete engines or retired assets before they reach a deploy.
 RUN test ! -e /usr/share/nginx/html/yjs_bundle.js \
   && test ! -e /usr/share/nginx/html/mermaid.min.js \
