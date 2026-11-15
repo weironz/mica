@@ -3,7 +3,7 @@
     {
       "label": "long document caret moves keep layout",
       "ok": true,
-      "detail": "207 blocks, layouts 2 → 2"
+      "detail": "207 blocks, layouts 3 → 3"
     },
     {
       "label": "real text input updates content and layout",
@@ -39,9 +39,9 @@
       "label": "browser frame intervals during selection (observation, not an FPS guarantee)",
       "ok": true,
       "detail": {
-        "samples": 41,
+        "samples": 32,
         "medianMs": 16.699999999999818,
-        "p95Ms": 50
+        "p95Ms": 66.60800000000017
       }
     },
     {
@@ -50,7 +50,7 @@
       "detail": ""
     },
     {
-      "label": "mobile settings navigation and close work",
+      "label": "mobile settings accessible navigation and close work",
       "ok": true,
       "detail": ""
     },
@@ -73,6 +73,16 @@
       "label": "production mobile settings closes",
       "ok": true,
       "detail": ""
+    },
+    {
+      "label": "cold login keeps 登录 on one line",
+      "ok": true,
+      "detail": "[{\"lines\":1,\"clipped\":false},{\"lines\":1,\"clipped\":false}]"
+    },
+    {
+      "label": "cold login keeps 注册 on one line",
+      "ok": true,
+      "detail": "[{\"lines\":1,\"clipped\":false}]"
     },
     {
       "label": "no uncaught browser exceptions",
