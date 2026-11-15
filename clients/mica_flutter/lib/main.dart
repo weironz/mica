@@ -68,6 +68,8 @@ import 'ui/navigation_draggable.dart';
 import 'ui/avatar_url.dart';
 import 'ui/comment_panel.dart';
 import 'ui/doc_tab_strip.dart';
+import 'ui/favorites.dart';
+import 'ui/page_header_actions.dart';
 import 'ui/account_menu.dart';
 import 'ui/shell_title_bar.dart';
 import 'ui/sidebar_toggle_icon.dart';

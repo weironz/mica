@@ -16,7 +16,31 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
       onNewTab: widget.onNewTabPage == null ? null : _showNewTabMenu,
       newTabTooltip: context.l10n.tabNewTooltip,
       foreignWorkspaceName: _foreignWorkspaceName,
+      onHistory: _tabHistory,
+      backTooltip: context.l10n.tabBack,
+      forwardTooltip: context.l10n.tabForward,
     );
+  }
+
+  /// One step through the active tab's history. An entry whose page is gone
+  /// (trashed, or not in this workspace's tree) is skipped, not opened blank.
+  void _tabHistory(bool forward) {
+    if (widget.activeTabIndex >= widget.tabs.length) return;
+    final tab = widget.tabs[widget.activeTabIndex];
+    final history = tab.history;
+    var id = forward
+        ? history.forward(tab.view?.id)
+        : history.back(tab.view?.id);
+    while (id != null) {
+      for (final v in widget.views) {
+        if (v.id == id && !v.isFolder) {
+          unawaited(_navigateToView(v));
+          return;
+        }
+      }
+      id = forward ? history.forward(null) : history.back(null);
+    }
+    setUi(() {});
   }
 
   /// The workspace name to show on a tab that does not belong to the workspace
@@ -262,138 +286,24 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           onTap: () =>
                               setUi(() => _showProperties = !_showProperties),
                         ),
-                        PopupMenuButton<String>(
-                          tooltip: context.l10n.pageMenu,
-                          // Same density as its neighbours — it used to sit alone
-                          // on the title row at the default size.
-                          padding: EdgeInsets.zero,
-                          icon: const Icon(Icons.more_horiz, size: 20),
-                          onSelected: _onPageMenu,
-                          itemBuilder: (context) => [
-                            // Copy sits above the exports and gets its own group:
-                            // it is the cheap, frequent one (grab the text, paste
-                            // it somewhere), while everything below produces a
-                            // file. Grouping it with the exports would bury it.
-                            PopupMenuItem(
-                              height: 30,
-                              value: 'copy-md',
-                              child: ListTile(
-                                minTileHeight: 30,
-                                minVerticalPadding: 0,
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.copy_all_outlined),
-                                title: Text(context.l10n.pageCopyContent),
-                              ),
-                            ),
-                            const PopupMenuDivider(),
-                            // One export, always a ZIP. The old "Export Markdown"
-                            // handed back a lone .md whose images pointed at
-                            // `![](photo.png)` — a file that was nowhere in the
-                            // download. A zip can carry them; a .md cannot.
-                            PopupMenuItem(
-                              height: 30,
-                              value: 'export-zip',
-                              child: ListTile(
-                                minTileHeight: 30,
-                                minVerticalPadding: 0,
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.folder_zip_outlined),
-                                title: Text(context.l10n.rowExportZipImages),
-                              ),
-                            ),
-                            PopupMenuItem(
-                              height: 30,
-                              value: 'export-html',
-                              child: ListTile(
-                                minTileHeight: 30,
-                                minVerticalPadding: 0,
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.html_outlined),
-                                title: Text(context.l10n.rowExportHtml),
-                              ),
-                            ),
-                            // PDF export: desktop drives the OS WebView2 runtime's
-                            // headless print (native bytes → download); web hands
-                            // the same self-contained HTML to the browser's own
-                            // print dialog ("Save as PDF"). Available on both.
-                            PopupMenuItem(
-                              height: 30,
-                              value: 'export-pdf',
-                              child: ListTile(
-                                minTileHeight: 30,
-                                minVerticalPadding: 0,
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(
-                                  Icons.picture_as_pdf_outlined,
-                                ),
-                                title: Text(context.l10n.rowExportPdf),
-                              ),
-                            ),
-                            const PopupMenuDivider(),
-                            PopupMenuItem(
-                              height: 30,
-                              value: 'import-md',
-                              child: ListTile(
-                                minTileHeight: 30,
-                                minVerticalPadding: 0,
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.upload_file_outlined),
-                                title: Text(context.l10n.pageImportMarkdown),
-                              ),
-                            ),
-                            if (widget.onShare != null) ...[
-                              const PopupMenuDivider(),
-                              PopupMenuItem(
-                                height: 30,
-                                value: 'share',
-                                child: ListTile(
-                                  minTileHeight: 30,
-                                  minVerticalPadding: 0,
-                                  dense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                  leading: const Icon(Icons.public),
-                                  title: Text(context.l10n.shareTitle),
-                                ),
-                              ),
-                            ],
-                            if (widget.onVersionHistory != null) ...[
-                              const PopupMenuDivider(),
-                              PopupMenuItem(
-                                height: 30,
-                                value: 'version-history',
-                                child: ListTile(
-                                  minTileHeight: 30,
-                                  minVerticalPadding: 0,
-                                  dense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                  leading: const Icon(Icons.history),
-                                  title: Text(context.l10n.versionHistoryTitle),
-                                ),
-                              ),
-                            ],
-                            if (widget.onRestoreCheckpoint != null) ...[
-                              const PopupMenuDivider(),
-                              PopupMenuItem(
-                                height: 30,
-                                value: 'restore-checkpoint',
-                                child: ListTile(
-                                  minTileHeight: 30,
-                                  minVerticalPadding: 0,
-                                  dense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                  leading: const Icon(Icons.restore_outlined),
-                                  title: Text(
-                                    context.l10n.pageRestoreCheckpoint,
-                                  ),
-                                ),
-                              ),
-                            ],
+                        // Notion's cluster, in Notion's order: last edited,
+                        // share, copy link, favorite, then the page menu.
+                        PageHeaderActions(
+                          viewId: (widget.selectedView ?? bootstrap.view).id,
+                          workspaceId: workspace.id,
+                          favorites: _favorites,
+                          editClock: _editClock,
+                          serverStamps: [
+                            (widget.selectedView ?? bootstrap.view).updatedAt,
+                            bootstrap.document.updatedAt,
                           ],
+                          compact: header.maxWidth < 640,
+                          onShare: widget.onShare,
+                          onCopyLink: _copyPageLink,
+                          onMenu: _onPageMenu,
+                          hasVersionHistory: widget.onVersionHistory != null,
+                          hasRestoreCheckpoint:
+                              widget.onRestoreCheckpoint != null,
                         ),
                       ],
                     ),
@@ -798,7 +708,10 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                               }
                             },
                       remoteCursors: editorCursorsFromPresence(widget.presence),
-                      onApplyOperations: widget.onApplyOperations,
+                      onApplyOperations: (ops) {
+                        _editClock.mark(bootstrap.view.id);
+                        return widget.onApplyOperations(ops);
+                      },
                       onApplyHistory: widget.onApplyHistory,
                       onOpFault: widget.onEditorFault,
                       onUploadImage: widget.onUploadImage,

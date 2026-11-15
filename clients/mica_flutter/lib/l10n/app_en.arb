@@ -1593,5 +1593,46 @@
   "importEmailHelp": "Email the success and failure counts when a background import finishes.",
   "importEmailLoadError": "Could not load email notification settings",
   "importEmailSaveError": "Could not save. The previous setting is unchanged.",
-  "moduleLoadFailed": "Could not load this component. Reconnect and try again."
+  "moduleLoadFailed": "Could not load this component. Reconnect and try again.",
+  "pageLastEdited": "Edited {when}",
+  "@pageLastEdited": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "pageEditedDate": "{month}/{day}",
+  "@pageEditedDate": {
+    "placeholders": {
+      "month": {
+        "type": "int"
+      },
+      "day": {
+        "type": "int"
+      }
+    }
+  },
+  "pageEditedDateYear": "{year}/{month}/{day}",
+  "@pageEditedDateYear": {
+    "placeholders": {
+      "year": {
+        "type": "int"
+      },
+      "month": {
+        "type": "int"
+      },
+      "day": {
+        "type": "int"
+      }
+    }
+  },
+  "pageShareButton": "Share",
+  "pageCopyLink": "Copy link",
+  "pageLinkCopied": "Link copied",
+  "pageAddFavorite": "Add to favorites",
+  "pageRemoveFavorite": "Remove from favorites",
+  "sidebarFavoritesLabel": "Favorites",
+  "tabBack": "Back",
+  "tabForward": "Forward"
 }

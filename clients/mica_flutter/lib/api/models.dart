@@ -65,8 +65,9 @@ class ImportHistoryEntry {
   factory ImportHistoryEntry.fromJson(Map<String, dynamic> json) =>
       ImportHistoryEntry(
         jobId: json['job_id'] as String? ?? '',
-        startedAt:
-            DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
+        startedAt: DateTime.tryParse(
+          json['created_at'] as String? ?? '',
+        )?.toLocal(),
         job: ImportJobStatus.fromJson(json),
       );
 
@@ -1311,6 +1312,7 @@ class DocumentRecord {
     required this.id,
     required this.rootBlockId,
     required this.currentSeq,
+    this.updatedAt,
   });
 
   factory DocumentRecord.fromJson(Map<String, dynamic> json) {
@@ -1318,12 +1320,16 @@ class DocumentRecord {
       id: json['id'] as String,
       rootBlockId: json['root_block_id'] as String,
       currentSeq: json['current_seq'] as int,
+      updatedAt: DateTime.tryParse(json['updated_at'] as String? ?? ''),
     );
   }
 
   final String id;
   final String rootBlockId;
   final int currentSeq;
+
+  /// Last body write. Optional: the local world builds records without one.
+  final DateTime? updatedAt;
 }
 
 class DocumentSnapshot {

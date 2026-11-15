@@ -860,5 +860,16 @@
   "importEmailHelp": "后台导入结束后，发送包含成功和失败计数的邮件。",
   "importEmailLoadError": "无法读取邮件通知设置",
   "importEmailSaveError": "未能保存，原设置保持不变",
-  "moduleLoadFailed": "组件加载失败，请联网后重试。"
+  "moduleLoadFailed": "组件加载失败，请联网后重试。",
+  "pageLastEdited": "上次编辑 {when}",
+  "pageEditedDate": "{month}月{day}日",
+  "pageEditedDateYear": "{year}年{month}月{day}日",
+  "pageShareButton": "共享",
+  "pageCopyLink": "复制链接",
+  "pageLinkCopied": "已复制链接",
+  "pageAddFavorite": "收藏",
+  "pageRemoveFavorite": "取消收藏",
+  "sidebarFavoritesLabel": "收藏",
+  "tabBack": "后退",
+  "tabForward": "前进"
 }

@@ -438,4 +438,149 @@ void main() {
       expect(selected, -1);
     });
   });
+  group('TabHistory', () {
+    test('back and forward walk the visits like a browser', () {
+      final h = TabHistory();
+      h.visited(from: null, to: 'a');
+      h.visited(from: 'a', to: 'b');
+      h.visited(from: 'b', to: 'c');
+      expect(h.canGoForward, isFalse);
+      expect(h.back('c'), 'b');
+      h.visited(from: 'c', to: 'b');
+      expect(h.back('b'), 'a');
+      h.visited(from: 'b', to: 'a');
+      expect(h.canGoBack, isFalse);
+      expect(h.forward('a'), 'b');
+      h.visited(from: 'a', to: 'b');
+      expect(h.forward('b'), 'c');
+      h.visited(from: 'b', to: 'c');
+      expect(h.canGoForward, isFalse);
+      expect(h.canGoBack, isTrue);
+    });
+
+    test('a fresh visit after stepping back drops the forward trail', () {
+      final h = TabHistory();
+      h.visited(from: 'a', to: 'b');
+      expect(h.back('b'), 'a');
+      h.visited(from: 'b', to: 'a');
+      expect(h.canGoForward, isTrue);
+      h.visited(from: 'a', to: 'x');
+      expect(h.canGoForward, isFalse);
+      expect(h.back('x'), 'a');
+    });
+
+    test('re-opening the same page is not a visit', () {
+      final h = TabHistory();
+      h.visited(from: 'a', to: 'a');
+      expect(h.canGoBack, isFalse);
+    });
+
+    test('a null current skips an entry that could not be opened', () {
+      final h = TabHistory();
+      h.visited(from: 'a', to: 'gone');
+      h.visited(from: 'gone', to: 'c');
+      expect(h.back('c'), 'gone');
+      expect(h.back(null), 'a');
+      h.visited(from: 'c', to: 'a');
+      expect(h.forward('a'), 'c', reason: 'the skipped page is not re-entered');
+    });
+
+    test('DocTab.show records each page it replaces, created ones too', () {
+      final tab = DocTab();
+      tab.show(_view('a', 'Alpha'));
+      expect(tab.history.canGoBack, isFalse);
+      tab.show(_view('b', 'Beta'));
+      tab.show(null);
+      tab.show(_view('c', 'Gamma'));
+      expect(tab.view?.id, 'c');
+      expect(tab.history.back('c'), 'a');
+    });
+  });
+
+  group('DocTabStrip history buttons', () {
+    testWidgets('enabled only in the direction the active tab can go', (
+      tester,
+    ) async {
+      final tab = DocTab(view: _view('b', 'Beta'));
+      tab.history.visited(from: 'a', to: 'b');
+      final steps = <bool>[];
+      await tester.pumpWidget(
+        _host(
+          DocTabStrip(
+            tabs: [tab],
+            activeIndex: 0,
+            onSelect: (_) {},
+            onClose: (_) {},
+            untitledLabel: 'Untitled',
+            onHistory: steps.add,
+            backTooltip: 'Back',
+            forwardTooltip: 'Forward',
+          ),
+        ),
+      );
+      final back = tester.widget<IconButton>(
+        find.widgetWithIcon(IconButton, Icons.chevron_left),
+      );
+      final forward = tester.widget<IconButton>(
+        find.widgetWithIcon(IconButton, Icons.chevron_right),
+      );
+      expect(back.onPressed, isNotNull);
+      expect(forward.onPressed, isNull);
+      await tester.tap(find.byIcon(Icons.chevron_left));
+      expect(steps, [false]);
+    });
+
+    testWidgets('the back/forward pair stays left of the first tab', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          DocTabStrip(
+            tabs: [DocTab(view: _view('a', 'Alpha'))],
+            activeIndex: 0,
+            onSelect: (_) {},
+            onClose: (_) {},
+            untitledLabel: 'Untitled',
+            onHistory: (_) {},
+          ),
+        ),
+      );
+      expect(
+        tester.getCenter(find.byIcon(Icons.chevron_right)).dx,
+        lessThan(tester.getTopLeft(find.text('Alpha')).dx),
+      );
+    });
+
+    testWidgets('the active tab reaches the strip bottom, open to the page', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          Align(
+            alignment: Alignment.topLeft,
+            child: DocTabStrip(
+              tabs: [
+                DocTab(view: _view('a', 'Alpha')),
+                DocTab(view: _view('b', 'Beta')),
+              ],
+              activeIndex: 0,
+              onSelect: (_) {},
+              onClose: (_) {},
+              untitledLabel: 'Untitled',
+            ),
+          ),
+        ),
+      );
+      final strip = tester.getRect(find.byType(DocTabStrip));
+      final tab = tester.getRect(
+        find
+            .ancestor(
+              of: find.text('Alpha'),
+              matching: find.byType(CustomPaint),
+            )
+            .first,
+      );
+      expect(tab.bottom, strip.bottom);
+    });
+  });
 }

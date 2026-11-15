@@ -187,10 +187,14 @@ class _SizeBox extends StatelessWidget {
 
 /// Put keyboard focus on something under the shell's CallbackShortcuts. In
 /// the app that is the editor; this harness has no document open, so any
-/// focusable button in the shell stands in.
+/// focusable button in the shell stands in. Enabled only: a disabled button
+/// (the tab strip's back arrow with no history) cannot take focus.
 void _focusInsideShell(WidgetTester tester) {
   final icon = find
-      .descendant(of: find.byType(IconButton), matching: find.byType(Icon))
+      .descendant(
+        of: find.byWidgetPredicate((w) => w is IconButton && w.onPressed != null),
+        matching: find.byType(Icon),
+      )
       .first;
   Focus.of(tester.element(icon)).requestFocus();
 }

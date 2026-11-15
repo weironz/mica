@@ -756,6 +756,17 @@ extension _WorkspaceTreeNav on _WorkspaceViewState {
     includePage: false,
   )?.join('/');
 
+  /// Copy the page's link; success shows on the button, failure in words.
+  Future<bool> _copyPageLink(String link) async {
+    final ok = await copyTextToClipboard(link);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.l10n.pageCopyFailed)));
+    }
+    return ok;
+  }
+
   /// Put [_pagePath] on the clipboard.
   Future<bool> _copyPagePath() async {
     final l10n = context.l10n;

@@ -12,6 +12,15 @@ import 'window_chrome.dart';
 /// should read this rather than repeating the number.
 const double kDocTabStripHeight = 34;
 
+/// Gap above a tab. The tab runs from here to the strip's bottom edge, so the
+/// active one meets the page below it with no seam.
+const double _kTabTop = 6;
+
+/// Top-corner radius, and the radius of the outward curve where the active
+/// tab's sides meet the page — the browser-tab silhouette.
+const double _kTabRadius = 8;
+const double _kTabFlare = 6;
+
 class DocTabStrip extends StatelessWidget {
   const DocTabStrip({
     super.key,
@@ -23,6 +32,9 @@ class DocTabStrip extends StatelessWidget {
     this.onNewTab,
     this.newTabTooltip,
     this.foreignWorkspaceName,
+    this.onHistory,
+    this.backTooltip,
+    this.forwardTooltip,
   });
 
   final List<DocTab> tabs;
@@ -52,6 +64,13 @@ class DocTabStrip extends StatelessWidget {
   /// tab which will move you should say where to.
   final String? Function(DocTab tab)? foreignWorkspaceName;
 
+  /// Back (`false`) / forward (`true`) in the ACTIVE tab's history. Null hides
+  /// the `<  >` pair. Whether each is enabled is read from the active tab's
+  /// [DocTab.history], which is the strip's data already.
+  final void Function(bool forward)? onHistory;
+  final String? backTooltip;
+  final String? forwardTooltip;
+
   @override
   Widget build(BuildContext context) {
     // Always on, including for a single tab.
@@ -66,13 +85,17 @@ class DocTabStrip extends StatelessWidget {
     //
     // The cost is real and accepted: [kDocTabStripHeight] of editor height,
     // always.
+    //
+    // No bottom border: the active tab is the page's own surface colour and
+    // runs down to the strip's edge, so it reads as the top of the page it
+    // shows (a browser tab), where a line would cut it off.
     final theme = MicaTheme.of(context);
+    final history = activeIndex >= 0 && activeIndex < tabs.length
+        ? tabs[activeIndex].history
+        : null;
     return Container(
       height: kDocTabStripHeight,
-      decoration: BoxDecoration(
-        color: theme.surface.sunken,
-        border: Border(bottom: BorderSide(color: theme.border.subtle)),
-      ),
+      color: theme.surface.sunken,
       // The `+` sits immediately AFTER the last tab, inside the same scrolling
       // row — AppFlowy puts it there and the user asked for the same
       // (2026-08-12). It was pinned to the strip's right edge first, which left
@@ -92,29 +115,72 @@ class DocTabStrip extends StatelessWidget {
           const Positioned.fill(
             child: DesktopDragRegion(child: SizedBox.expand()),
           ),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
+          Positioned.fill(
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SizedBox(width: 4),
-                for (var i = 0; i < tabs.length; i++)
-                  _withHint(
-                    foreignWorkspaceName?.call(tabs[i]),
-                    _Tab(
-                      // The tab's own title, NOT the active document's — every tab
-                      // renders its own `view`, which is what makes the strip
-                      // readable while a background tab is still loading.
-                      label: _labelFor(tabs[i]),
-                      active: i == activeIndex,
-                      onTap: () => onSelect(i),
-                      // No close button on the only tab: the host refuses to close
-                      // the last one (`_tabs` is invariant-non-empty), so drawing a
-                      // X there is an affordance that does nothing when clicked.
-                      onClose: tabs.length < 2 ? null : () => onClose(i),
+                // Outside the scroll view: back/forward must stay put however
+                // many tabs are open, as in Notion and AppFlowy.
+                if (onHistory != null) ...[
+                  const SizedBox(width: 4),
+                  _HistoryButton(
+                    icon: Icons.chevron_left,
+                    tooltip: backTooltip,
+                    onTap: history?.canGoBack == true
+                        ? () => onHistory!(false)
+                        : null,
+                  ),
+                  _HistoryButton(
+                    icon: Icons.chevron_right,
+                    tooltip: forwardTooltip,
+                    onTap: history?.canGoForward == true
+                        ? () => onHistory!(true)
+                        : null,
+                  ),
+                ],
+                Flexible(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        // Room for the first tab's left flare.
+                        const SizedBox(width: _kTabFlare + 2),
+                        for (var i = 0; i < tabs.length; i++)
+                          _withHint(
+                            foreignWorkspaceName?.call(tabs[i]),
+                            _Tab(
+                              // The tab's own title, NOT the active document's —
+                              // every tab renders its own `view`, which is what
+                              // makes the strip readable while a background tab
+                              // is still loading.
+                              label: _labelFor(tabs[i]),
+                              active: i == activeIndex,
+                              // A divider only between two resting tabs; beside
+                              // the active one its silhouette already separates.
+                              divider:
+                                  i + 1 < tabs.length &&
+                                  i != activeIndex &&
+                                  i + 1 != activeIndex,
+                              onTap: () => onSelect(i),
+                              // No close button on the only tab: the host refuses
+                              // to close the last one (`_tabs` is
+                              // invariant-non-empty), so drawing a X there is an
+                              // affordance that does nothing when clicked.
+                              onClose: tabs.length < 2
+                                  ? null
+                                  : () => onClose(i),
+                            ),
+                          ),
+                        if (onNewTab != null)
+                          _NewTabButton(
+                            onTap: onNewTab!,
+                            tooltip: newTabTooltip,
+                          ),
+                      ],
                     ),
                   ),
-                if (onNewTab != null)
-                  _NewTabButton(onTap: onNewTab!, tooltip: newTabTooltip),
+                ),
               ],
             ),
           ),
@@ -143,6 +209,38 @@ String docTabLabel(DocTab tab, String untitledLabel) {
   return name.isEmpty ? untitledLabel : name;
 }
 
+class _HistoryButton extends StatelessWidget {
+  const _HistoryButton({required this.icon, required this.onTap, this.tooltip});
+
+  final IconData icon;
+  final VoidCallback? onTap;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = MicaTheme.of(context);
+    final button = IconButton(
+      onPressed: onTap,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      ),
+      color: theme.text.muted,
+      disabledColor: theme.text.faint.withValues(alpha: 0.5),
+      icon: Icon(icon, size: 20),
+    );
+    // No tooltip while disabled: "Back" over a button that cannot go back
+    // explains nothing.
+    return Center(
+      child: tooltip == null || onTap == null
+          ? button
+          : Tooltip(message: tooltip!, child: button),
+    );
+  }
+}
+
 class _NewTabButton extends StatelessWidget {
   const _NewTabButton({required this.onTap, this.tooltip});
 
@@ -159,7 +257,7 @@ class _NewTabButton extends StatelessWidget {
       child: Container(
         width: 30,
         height: 26,
-        margin: const EdgeInsets.symmetric(horizontal: 4),
+        margin: const EdgeInsets.only(left: 6, right: 4, bottom: 4),
         decoration: BoxDecoration(borderRadius: BorderRadius.circular(6)),
         child: Icon(Icons.add, size: 16, color: theme.text.muted),
       ),
@@ -172,12 +270,14 @@ class _Tab extends StatefulWidget {
   const _Tab({
     required this.label,
     required this.active,
+    required this.divider,
     required this.onTap,
     required this.onClose,
   });
 
   final String label;
   final bool active;
+  final bool divider;
   final VoidCallback onTap;
 
   /// Null on the only open tab — see the call site.
@@ -203,50 +303,105 @@ class _TabState extends State<_Tab> {
       onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
         onTap: widget.onTap,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-          padding: const EdgeInsets.only(left: 10, right: 4),
-          constraints: const BoxConstraints(maxWidth: 180),
-          decoration: BoxDecoration(
-            color: widget.active
+        child: CustomPaint(
+          painter: _TabPainter(
+            active: widget.active,
+            fill: widget.active
                 ? theme.surface.base
-                : (_hovered ? theme.surface.hover : Colors.transparent),
-            borderRadius: BorderRadius.circular(6),
+                : (_hovered ? theme.surface.hover : null),
+            divider: widget.divider && !_hovered ? theme.border.subtle : null,
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: Text(
-                  widget.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: MicaTypography.caption.copyWith(
-                    color: widget.active
-                        ? theme.text.primary
-                        : theme.text.muted,
+          child: Container(
+            height: kDocTabStripHeight - _kTabTop,
+            padding: const EdgeInsets.only(left: 12, right: 6),
+            constraints: const BoxConstraints(maxWidth: 200),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: MicaTypography.caption.copyWith(
+                      color: widget.active
+                          ? theme.text.primary
+                          : theme.text.muted,
+                    ),
                   ),
                 ),
-              ),
-              SizedBox(
-                width: 20,
-                child: showClose
-                    ? IconButton(
-                        icon: const Icon(Icons.close, size: 13),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        splashRadius: 10,
-                        color: theme.text.muted,
-                        // Tooltip omitted on purpose: it would cover the
-                        // neighbouring tab in a 34px row.
-                        onPressed: onClose,
-                      )
-                    : null,
-              ),
-            ],
+                SizedBox(
+                  width: 20,
+                  child: showClose
+                      ? IconButton(
+                          icon: const Icon(Icons.close, size: 13),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          splashRadius: 10,
+                          color: theme.text.muted,
+                          // Tooltip omitted on purpose: it would cover the
+                          // neighbouring tab in a 34px row.
+                          onPressed: onClose,
+                        )
+                      : null,
+                ),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+/// The tab's silhouette.
+///
+/// Active: rounded top corners, sides running straight down to the strip's
+/// bottom edge, and an outward curve at each foot — painted past the tab's own
+/// box, which is why this is a painter and not a BoxDecoration. Hovered: a
+/// rounded pill that stops short of the edge, so only the active tab touches
+/// the page. Resting: nothing but an optional divider on the right.
+class _TabPainter extends CustomPainter {
+  const _TabPainter({required this.active, this.fill, this.divider});
+
+  final bool active;
+  final Color? fill;
+  final Color? divider;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+    if (fill != null && active) {
+      const r = _kTabRadius, f = _kTabFlare;
+      final path = Path()
+        ..moveTo(-f, h)
+        ..quadraticBezierTo(0, h, 0, h - f)
+        ..lineTo(0, r)
+        ..quadraticBezierTo(0, 0, r, 0)
+        ..lineTo(w - r, 0)
+        ..quadraticBezierTo(w, 0, w, r)
+        ..lineTo(w, h - f)
+        ..quadraticBezierTo(w, h, w + f, h)
+        ..close();
+      canvas.drawPath(path, Paint()..color = fill!);
+    } else if (fill != null) {
+      canvas.drawRRect(
+        RRect.fromLTRBR(2, 1, w - 2, h - 4, const Radius.circular(6)),
+        Paint()..color = fill!,
+      );
+    }
+    if (divider != null) {
+      canvas.drawLine(
+        Offset(w + 0.5, h * 0.25),
+        Offset(w + 0.5, h * 0.7),
+        Paint()
+          ..color = divider!
+          ..strokeWidth = 1,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_TabPainter old) =>
+      old.active != active || old.fill != fill || old.divider != divider;
 }

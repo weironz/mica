@@ -108,7 +108,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   // the same commit that introduced the tab model — the two are independent
   // changes and reviewing them together would hide whichever one has the bug.
   DocumentView? get _selectedView => _activeTab.view;
-  set _selectedView(DocumentView? value) => _activeTab.view = value;
+  set _selectedView(DocumentView? value) => _activeTab.show(value);
 
   DocumentBootstrap? get _selectedBootstrap => _activeTab.bootstrap;
 
@@ -3060,7 +3060,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       final wsId = _selectedWorkspace?.id;
       if (wsId != null) savePref('lastViewId:$wsId', view.id);
       setState(() {
-        tab.view = view;
+        tab.show(view);
         // Never blank a page that is already on screen. `bootstrap` is null
         // when the server was unreachable AND the doc has no on-device mirror;
         // for a doc we are already rendering, keeping what we have beats

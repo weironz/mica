@@ -13,11 +13,12 @@ import 'dart:math' as math;
 /// always been able to do (it is a horizontal SingleChildScrollView).
 const double kFormatBarFloor = 360;
 
-/// The right-hand cluster (side-panel toggle, comments, properties, page
-/// menu) shares this row too, and is not flexible. Reserved alongside the
-/// bar's floor so the floor is a floor on what the BAR gets, not on what is
-/// left over before the icons take their cut.
-const double kPageHeaderIconsWidth = 160;
+/// The right-hand cluster (side-panel toggle, comments, properties, then
+/// last-edited, share, copy link, favorite and the page menu) shares this row
+/// too, and is not flexible. Reserved alongside the bar's floor so the floor is
+/// a floor on what the BAR gets, not on what is left over before the icons
+/// take their cut.
+const double kPageHeaderIconsWidth = 420;
 
 /// Whether the format bar sits in the header row. Below 720 it moves under
 /// the header instead, so the row never has to share a narrow pane.

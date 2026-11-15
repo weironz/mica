@@ -668,6 +668,11 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
   // navigating to / creating a nested page reveals its ancestors.
   Set<String> get _expandedViewIds => _tree.expandedIds;
   final PageTreeCache _pageTreeCache = PageTreeCache();
+  late final FavoritePages _favorites = FavoritePages(
+    read: loadPref,
+    write: savePref,
+  );
+  final LocalEditClock _editClock = LocalEditClock();
 
   /// The sidebar tree's expand/focus/pending-reveal state machine — see
   /// ui/sidebar_tree_controller.dart. The legacy names around it
@@ -1042,6 +1047,8 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     }
     _tree.removeListener(_syncTreeState);
     _tree.dispose();
+    _favorites.dispose();
+    _editClock.dispose();
     _inlineRename.removeListener(_syncRenameState);
     _inlineRename.dispose();
     HardwareKeyboard.instance.removeHandler(_escKeyEvent);
@@ -1516,6 +1523,14 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                       ),
                     ),
                 ],
+                if (widget.selectedWorkspace case final ws?)
+                  FavoritesSection(
+                    favorites: _favorites,
+                    workspaceId: ws.id,
+                    views: widget.views,
+                    selectedId: widget.selectedView?.id,
+                    onOpen: _navigateToView,
+                  ),
                 const SizedBox(height: 10),
                 // Section label + actions. This was a label plus ONE visible
                 // action (new page) with refresh / new folder / recycle bin
@@ -2262,8 +2277,6 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
         await _exportPagePdfFile();
       case 'import-md':
         await _importMarkdownFile();
-      case 'share':
-        await widget.onShare?.call();
       case 'version-history':
         await widget.onVersionHistory?.call();
       case 'restore-checkpoint':

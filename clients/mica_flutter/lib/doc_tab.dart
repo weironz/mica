@@ -57,8 +57,53 @@ abstract class TabSockets {
   bool get isLive => syncDocumentId != null;
 }
 
+/// One tab's back/forward trail, browser-style: pages this tab showed before
+/// the current one, and the ones stepped back over.
+///
+/// Per TAB, not per window, because that is what the `<  >` beside the tabs
+/// mean in every browser and in Notion: going back in one tab must not walk
+/// through pages that were opened in another.
+class TabHistory {
+  static const int limit = 50;
+
+  final List<String> _back = [];
+  final List<String> _forward = [];
+
+  /// The page a [back]/[forward] step is on its way to. Its arrival is that
+  /// step completing, not a fresh visit, so it must not truncate [_forward].
+  String? _stepping;
+
+  bool get canGoBack => _back.isNotEmpty;
+  bool get canGoForward => _forward.isNotEmpty;
+
+  /// [to] finished opening in this tab, replacing [from] (null: nothing).
+  void visited({required String? from, required String to}) {
+    final stepped = _stepping == to;
+    _stepping = null;
+    if (stepped || from == null || from == to) return;
+    _back.add(from);
+    if (_back.length > limit) _back.removeAt(0);
+    _forward.clear();
+  }
+
+  /// Step back from [current]; returns the page to open, or null at the start.
+  /// Pass a null [current] to skip past an entry that could not be opened.
+  String? back(String? current) => _step(_back, _forward, current);
+
+  String? forward(String? current) => _step(_forward, _back, current);
+
+  String? _step(List<String> from, List<String> to, String? current) {
+    if (from.isEmpty) return null;
+    if (current != null) to.add(current);
+    return _stepping = from.removeLast();
+  }
+}
+
 class DocTab implements TabSockets {
   DocTab({this.view, this.bootstrap});
+
+  /// Back/forward for the `<  >` beside the tab strip.
+  final TabHistory history = TabHistory();
 
   /// The page this tab points at.
   ///
@@ -66,6 +111,13 @@ class DocTab implements TabSockets {
   /// which is why these are two independently settable fields and not one
   /// `bootstrap.view`. Collapsing them would erase "this tab is opening".
   DocumentView? view;
+
+  /// Point the tab at [next], recording the visit for back/forward. Every way
+  /// a page lands in a tab (open, create, import) goes through here.
+  void show(DocumentView? next) {
+    if (next != null) history.visited(from: view?.id, to: next.id);
+    view = next;
+  }
 
   /// The loaded document, once it arrives. Also null when the page was trashed
   /// or deleted out from under an open tab.

@@ -763,11 +763,14 @@ pub async fn push_update_checked(
   // `documents.current_seq`, and only the REST/MCP write path advanced it — a
   // human's WS edits left it alone, so an agent holding a seq from before
   // those edits passed the check and overwrote them. Every write path that
-  // changes content advances it now.
-  sqlx::query("UPDATE documents SET current_seq = current_seq + 1 WHERE id = $1")
-    .bind(document_id)
-    .execute(&mut *tx)
-    .await?;
+  // changes content advances it now. `updated_at` moves with it: it is what
+  // the page header's "last edited" reads, and REST writes already stamp it.
+  sqlx::query(
+    "UPDATE documents SET current_seq = current_seq + 1, updated_at = now() WHERE id = $1",
+  )
+  .bind(document_id)
+  .execute(&mut *tx)
+  .await?;
 
   prune_stream_and_versions_tx(&mut tx, document_id, rid, tuning).await?;
   tx.commit().await?;

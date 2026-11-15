@@ -2102,6 +2102,36 @@ async fn a_websocket_edit_invalidates_a_stale_expected_seq() {
   );
 }
 
+/// The page header's "last edited" reads `documents.updated_at` from the
+/// bootstrap. Only REST writes stamped it, so a page typed into over the socket
+/// went on claiming the time of its last REST write.
+#[tokio::test]
+async fn a_websocket_edit_stamps_document_updated_at() {
+  let Some(db) = pool().await else { return };
+  let (ws, doc, user) = seed_doc(&db).await;
+  sqlx::query("UPDATE documents SET updated_at = now() - interval '1 day' WHERE id = $1")
+    .bind(doc)
+    .execute(&db)
+    .await
+    .unwrap();
+  let base = sync::bootstrap_base(&db, doc).await.unwrap();
+  let mut editing = MicaDoc::from_update(&base.state).unwrap();
+  let sv = editing.state_vector();
+  editing.text_insert("a", 5, " world");
+  let edit = editing.encode_diff(&sv).unwrap();
+  sync::push_update(&db, ws, doc, user, &edit, &tuning())
+    .await
+    .unwrap();
+  let fresh: bool = sqlx::query_scalar(
+    "SELECT updated_at > now() - interval '1 minute' FROM documents WHERE id = $1",
+  )
+  .bind(doc)
+  .fetch_one(&db)
+  .await
+  .unwrap();
+  assert!(fresh, "a WS edit moves documents.updated_at");
+}
+
 /// D1: the auto version is still taken once per window — now with a check
 /// first instead of shipping the whole state on every push.
 #[tokio::test]
