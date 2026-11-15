@@ -9,6 +9,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/main.dart';
 import 'package:mica_flutter/ui/page_tree_state.dart';
+import 'package:mica_flutter/editor/property_panel.dart';
+import 'package:mica_flutter/ui/sidebar_toggle_icon.dart';
+import 'package:mica_flutter/ui/page_header_actions.dart';
 
 import 'support/markdown_codec.dart';
 import 'support/title_workspace.dart';
@@ -38,6 +41,51 @@ void main() {
   final titleField = find.byWidgetPredicate(
     (w) => w is TextField && w.focusNode?.debugLabel == 'PageTitle',
   );
+
+  testWidgets('pages group folds without hiding its create controls', (tester) async {
+    wideViewport(tester);
+    await tester.pumpWidget(
+      titleWorkspace(titleBootstrap('当前页面'), (_, _) async => true),
+    );
+    await tester.pumpAndSettle();
+    expect(_rowOf('page-a'), findsOneWidget);
+    await tester.tap(find.text('页面'));
+    await tester.pumpAndSettle();
+    expect(_rowOf('page-a'), findsNothing);
+    expect(find.byTooltip('新建页面'), findsWidgets);
+    await tester.tap(find.text('页面'));
+    await tester.pumpAndSettle();
+    expect(_rowOf('page-a'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('real header puts edit time first and properties in menu', (tester) async {
+    wideViewport(tester);
+    await tester.pumpWidget(
+      titleWorkspace(titleBootstrap('当前页面'), (_, _) async => true),
+    );
+    await tester.pumpAndSettle();
+    final toggle = find.byWidgetPredicate(
+      (w) => w is SidebarToggleIcon && w.right,
+    );
+    expect(
+      tester.getCenter(find.byType(LastEditedLabel)).dx,
+      lessThan(tester.getCenter(toggle).dx),
+    );
+    expect(find.byType(PropertiesToggle), findsNothing);
+    expect(find.byType(PropertyPanel), findsNothing);
+    await tester.tap(find.byIcon(Icons.more_horiz).last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('属性'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PropertyPanel), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.more_horiz).last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('属性'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PropertyPanel), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'breadcrumb ancestors browse folders instead of opening them as documents',

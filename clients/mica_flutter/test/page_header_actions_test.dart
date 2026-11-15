@@ -106,6 +106,9 @@ void main() {
       Future<bool> Function(String)? onCopy,
       bool compact = false,
       LocalEditClock? clock,
+      VoidCallback? onComments,
+      VoidCallback? onProperties,
+      void Function(String)? onMenu,
     }) => _host(
       PageHeaderActions(
         viewId: 'v1',
@@ -115,7 +118,10 @@ void main() {
         serverStamps: stamps,
         onShare: onShare,
         onCopyLink: onCopy ?? (_) async => true,
-        onMenu: (_) {},
+        onMenu: onMenu ?? (_) {},
+        sidePanelToggle: const Icon(Icons.vertical_split),
+        onToggleComments: onComments,
+        onToggleProperties: onProperties,
         compact: compact,
       ),
     );
@@ -132,6 +138,7 @@ void main() {
       );
       final xs = [
         tester.getCenter(find.text('上次编辑 8 分钟前')).dx,
+        tester.getCenter(find.byIcon(Icons.vertical_split)).dx,
         tester.getCenter(find.text('共享')).dx,
         tester.getCenter(find.byIcon(Icons.link)).dx,
         tester.getCenter(find.byIcon(Icons.star_outline_rounded)).dx,
@@ -209,6 +216,36 @@ void main() {
       expect(find.textContaining('上次编辑'), findsNothing);
       expect(find.text('共享'), findsNothing);
       expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+    });
+
+    testWidgets('comments and properties are menu-only toggles', (tester) async {
+      var comments = 0;
+      var properties = 0;
+      String? action;
+      await tester.pumpWidget(
+        actions(
+          favorites: _favorites(),
+          onComments: () => comments++,
+          onProperties: () => properties++,
+          onMenu: (value) => action = value,
+        ),
+      );
+      expect(find.byIcon(Icons.chat_bubble_outline), findsNothing);
+      expect(find.byIcon(Icons.info_outline), findsNothing);
+      expect(find.text(zh.commentsTitle), findsNothing);
+      Future<void> pick(String label) async {
+        await tester.tap(find.byIcon(Icons.more_horiz));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(label));
+        await tester.pumpAndSettle();
+      }
+      await pick(zh.commentsTitle);
+      await pick(zh.properties);
+      expect(comments, 1);
+      expect(properties, 1);
+      expect(action, isNull);
+      await pick(zh.pageCopyContent);
+      expect(action, PageMenuAction.copyMarkdown);
     });
   });
 }

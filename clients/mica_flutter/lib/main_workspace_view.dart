@@ -673,6 +673,7 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
     write: savePref,
   );
   final LocalEditClock _editClock = LocalEditClock();
+  bool _pagesCollapsed = false;
 
   /// The sidebar tree's expand/focus/pending-reveal state machine — see
   /// ui/sidebar_tree_controller.dart. The legacy names around it
@@ -1546,15 +1547,11 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                 // the other "not part of the tree" entries live.
                 Row(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.only(left: 4),
-                      child: Text(
-                        context.l10n.sidebarPagesLabel,
-                        style: MicaTypography.caption.copyWith(
-                          fontWeight: FontWeight.w500,
-                          color: MicaTheme.of(context).text.faint,
-                        ),
-                      ),
+                    SidebarSectionHeader(
+                      label: context.l10n.sidebarPagesLabel,
+                      collapsed: _pagesCollapsed,
+                      onToggle: () =>
+                          setUi(() => _pagesCollapsed = !_pagesCollapsed),
                     ),
                     const Spacer(),
                     if (canEdit) ...[
@@ -1586,7 +1583,11 @@ class _WorkspaceViewState extends MicaState<WorkspaceView> {
                   ],
                 ),
                 const SizedBox(height: 2),
-                Expanded(child: _pageTree(context, canEdit)),
+                Expanded(
+                  child: _pagesCollapsed
+                      ? const SizedBox.shrink()
+                      : _pageTree(context, canEdit),
+                ),
                 const SizedBox(height: 16),
                 // AI entry points exist only when the feature is enabled in
                 // Settings AND a provider is configured.

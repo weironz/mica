@@ -235,59 +235,7 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                           )
                         else if (widget.selectedView == null)
                           const Spacer(),
-                        // The right-hand twin of the sidebar collapse button.
-                        // It used to live one row lower, on the title row, so
-                        // the "symmetric pair" the old comment claimed was
-                        // visibly off — different row, different size. Same
-                        // line, same density, same icon size as the left one.
-                        IconButton(
-                          tooltip: _toolsExpanded
-                              ? context.l10n.pageHideSidePanel
-                              : context.l10n.pageShowSidePanel,
-                          visualDensity: VisualDensity.compact,
-                          onPressed: () =>
-                              setUi(() => _toolsExpanded = !_toolsExpanded),
-                          icon: const SidebarToggleIcon(right: true, size: 20),
-                        ),
-                        if (widget.onAddComment != null)
-                          CommentsButton(
-                            openCount: widget.commentThreads
-                                .where((t) => !t.isResolved)
-                                .length,
-                            active:
-                                _toolsExpanded &&
-                                _toolsTab == ToolsTab.comments,
-                            onTap: () {
-                              final showing =
-                                  _toolsExpanded &&
-                                  _toolsTab == ToolsTab.comments;
-                              setUi(() {
-                                // From anywhere else this means "show me the
-                                // comments", not "toggle the sidebar" — so it
-                                // opens the sidebar AND selects the tab. Only
-                                // a second press on an already-showing comment
-                                // tab closes it.
-                                _toolsExpanded = !showing;
-                                _toolsTab = ToolsTab.comments;
-                              });
-                              // Closing drops the emphasis: it means "the
-                              // thread I am reading", and with the panel gone
-                              // there is no such thing — leaving it on would
-                              // strand a stronger wash with nothing to explain
-                              // it.
-                              if (showing) widget.onFocusCommentThread(null);
-                            },
-                          ),
-                        PropertiesToggle(
-                          active: _showProperties,
-                          hasProperties: bootstrap.rootFrontMatter
-                              .trim()
-                              .isNotEmpty,
-                          onTap: () =>
-                              setUi(() => _showProperties = !_showProperties),
-                        ),
-                        // Notion's cluster, in Notion's order: last edited,
-                        // share, copy link, favorite, then the page menu.
+                        // Last edited stays before the right-panel toggle.
                         PageHeaderActions(
                           viewId: (widget.selectedView ?? bootstrap.view).id,
                           workspaceId: workspace.id,
@@ -298,6 +246,31 @@ extension _WorkspaceEditorPane on _WorkspaceViewState {
                             bootstrap.document.updatedAt,
                           ],
                           compact: header.maxWidth < 640,
+                          sidePanelToggle: IconButton(
+                            tooltip: _toolsExpanded
+                                ? context.l10n.pageHideSidePanel
+                                : context.l10n.pageShowSidePanel,
+                            visualDensity: VisualDensity.compact,
+                            onPressed: () =>
+                                setUi(() => _toolsExpanded = !_toolsExpanded),
+                            icon: const SidebarToggleIcon(right: true, size: 20),
+                          ),
+                          commentsVisible:
+                              _toolsExpanded && _toolsTab == ToolsTab.comments,
+                          propertiesVisible: _showProperties,
+                          onToggleComments: widget.onAddComment == null
+                              ? null
+                              : () {
+                                  final showing = _toolsExpanded &&
+                                      _toolsTab == ToolsTab.comments;
+                                  setUi(() {
+                                    _toolsExpanded = !showing;
+                                    _toolsTab = ToolsTab.comments;
+                                  });
+                                  if (showing) widget.onFocusCommentThread(null);
+                                },
+                          onToggleProperties: () =>
+                              setUi(() => _showProperties = !_showProperties),
                           onShare: widget.onShare,
                           onCopyLink: _copyPageLink,
                           onMenu: _onPageMenu,

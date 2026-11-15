@@ -14,10 +14,11 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../l10n/locale_controller.dart';
 import 'shell_widgets.dart' show kSidebarRowHeight, MenuRow;
+import 'sidebar_section_header.dart';
 import 'theme_tokens.dart';
 import 'typography.dart';
 
-/// The star's "on" colour, shared by the header toggle and the section icon.
+/// The star's "on" colour in the page header.
 const Color kFavoriteStarColor = Color(0xFFF5B400);
 
 class FavoritePages extends ChangeNotifier {
@@ -76,7 +77,7 @@ List<DocumentView> favoriteViews(List<String> ids, List<DocumentView> views) {
   ];
 }
 
-/// 「★ 收藏 ⌄」 and its rows. Builds to nothing when the workspace has no
+/// 「收藏 ⌄」 and its rows. Builds to nothing when the workspace has no
 /// starred page that still exists, so a workspace without favorites keeps the
 /// sidebar exactly as it was.
 class FavoritesSection extends StatelessWidget {
@@ -101,7 +102,6 @@ class FavoritesSection extends StatelessWidget {
     builder: (context, _) {
       final items = favoriteViews(favorites.idsOf(workspaceId), views);
       if (items.isEmpty) return const SizedBox.shrink();
-      final theme = MicaTheme.of(context);
       final collapsed = favorites.collapsed;
       return Padding(
         padding: const EdgeInsets.only(top: 10),
@@ -109,36 +109,10 @@ class FavoritesSection extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: favorites.toggleCollapsed,
-              child: SizedBox(
-                height: 28,
-                child: Row(
-                  children: [
-                    const SizedBox(width: 4),
-                    const Icon(
-                      Icons.star_rounded,
-                      size: 16,
-                      color: kFavoriteStarColor,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      context.l10n.sidebarFavoritesLabel,
-                      style: MicaTypography.caption.copyWith(
-                        fontWeight: FontWeight.w500,
-                        color: theme.text.faint,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(
-                      collapsed ? Icons.chevron_right : Icons.expand_more,
-                      size: 16,
-                      color: theme.text.faint,
-                    ),
-                  ],
-                ),
-              ),
+            SidebarSectionHeader(
+              label: context.l10n.sidebarFavoritesLabel,
+              collapsed: collapsed,
+              onToggle: favorites.toggleCollapsed,
             ),
             if (!collapsed)
               // Capped so a long list cannot push the page tree off screen;

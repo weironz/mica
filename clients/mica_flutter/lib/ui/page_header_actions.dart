@@ -101,6 +101,11 @@ class PageHeaderActions extends StatelessWidget {
     required this.onCopyLink,
     required this.onMenu,
     this.onShare,
+    this.sidePanelToggle,
+    this.onToggleComments,
+    this.onToggleProperties,
+    this.commentsVisible = false,
+    this.propertiesVisible = false,
     this.hasVersionHistory = false,
     this.hasRestoreCheckpoint = false,
     this.compact = false,
@@ -119,6 +124,11 @@ class PageHeaderActions extends StatelessWidget {
   final Future<void> Function()? onShare;
   final Future<bool> Function(String link) onCopyLink;
   final void Function(String action) onMenu;
+  final Widget? sidePanelToggle;
+  final VoidCallback? onToggleComments;
+  final VoidCallback? onToggleProperties;
+  final bool commentsVisible;
+  final bool propertiesVisible;
   final bool hasVersionHistory;
   final bool hasRestoreCheckpoint;
 
@@ -139,6 +149,7 @@ class PageHeaderActions extends StatelessWidget {
               editedAt: latestEdit([...serverStamps, editClock.at(viewId)]),
             ),
           ),
+        if (sidePanelToggle != null) sidePanelToggle!,
         if (onShare != null && compact)
           IconButton(
             tooltip: l10n.pageShareButton,
@@ -181,8 +192,33 @@ class PageHeaderActions extends StatelessWidget {
           tooltip: l10n.pageMenu,
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.more_horiz, size: 20),
-          onSelected: onMenu,
+          onSelected: (value) {
+            switch (value) {
+              case 'comments':
+                onToggleComments?.call();
+              case 'properties':
+                onToggleProperties?.call();
+              default:
+                onMenu(value);
+            }
+          },
           itemBuilder: (context) => [
+            if (onToggleComments != null)
+              CheckedPopupMenuItem(
+                height: 30,
+                value: 'comments',
+                checked: commentsVisible,
+                child: Text(l10n.commentsTitle),
+              ),
+            if (onToggleProperties != null)
+              CheckedPopupMenuItem(
+                height: 30,
+                value: 'properties',
+                checked: propertiesVisible,
+                child: Text(l10n.properties),
+              ),
+            if (onToggleComments != null || onToggleProperties != null)
+              const PopupMenuDivider(),
             // Copy gets its own group above the exports: it is the cheap,
             // frequent one, while everything below produces a file.
             _item(

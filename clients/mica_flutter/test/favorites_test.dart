@@ -114,6 +114,8 @@ void main() {
         ),
       );
       expect(find.text('收藏'), findsOneWidget);
+      expect(find.byIcon(Icons.star_rounded), findsNothing);
+      expect(tester.getTopLeft(find.text('收藏')).dx, 4);
       expect(
         tester.getTopLeft(find.text('Beta')).dy,
         lessThan(tester.getTopLeft(find.text('Alpha')).dy),
