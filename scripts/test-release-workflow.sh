@@ -10,12 +10,19 @@ import re
 
 text = Path('.github/workflows/release.yml').read_text(encoding='utf-8')
 
-def job(name: str) -> str:
+def job(name: str, workflow: str = text) -> str:
     match = re.search(
-        rf'(?ms)^  {re.escape(name)}:\n.*?(?=^  [a-zA-Z0-9_-]+:\n|\Z)', text
+        rf'(?ms)^  {re.escape(name)}:\n.*?(?=^  [a-zA-Z0-9_-]+:\n|\Z)', workflow
     )
     assert match, f'missing {name} job'
     return match.group(0)
+
+dryrun = Path('.github/workflows/release-dryrun.yml').read_text(encoding='utf-8')
+assert 'uses: ./.github/workflows/release.yml' in job('build', dryrun)
+for call in (job('build', dryrun), job('browser')):
+    assert re.search(r'^    permissions:\n(?:^      [^\n]+\n)*^      statuses: write$', call, re.M), \
+        'both callers must allow the nested browser job to write commit statuses'
+print('PASS: dry-run and Release pass commit status permission to the browser job')
 
 canary = job('canary')
 assert re.search(r'^    needs: \[draft, publish\]$', canary, re.M), \
