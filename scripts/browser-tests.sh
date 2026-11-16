@@ -36,11 +36,14 @@ bash scripts/build-doc-wasm.sh
 bash scripts/build-preview-wasm.sh
 
 cd clients/mica_flutter
+# Clean runners do not have the generated localization files used by the suites.
+"$FLUTTER" pub get --enforce-lockfile
+"$FLUTTER" gen-l10n
 mapfile -t suites < <(grep -l -E "^@TestOn\('browser'\)|if \(dart\.library\.js_interop\) '[a-z_]+_test_web\.dart'" test/*_test.dart | sort)
 [ "${#suites[@]}" -gt 0 ] || fail "found no browser suites — the discovery markers changed?"
 for suite in "${suites[@]}"; do
   note "browser suite: $suite"
-  flutter_receipt 1 --platform chrome "$suite"
+  flutter_receipt 1 --no-pub --platform chrome "$suite"
 done
 
 if [ "$report" = 1 ]; then
