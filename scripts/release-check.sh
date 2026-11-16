@@ -23,7 +23,7 @@ export CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG:-0}
 export CARGO_PROFILE_TEST_DEBUG=${CARGO_PROFILE_TEST_DEBUG:-0}
 
 bash scripts/check-ignored-sources.sh
-bash scripts/check-migration-tracking.sh
+bash scripts/release-tree-check.sh
 bash scripts/test-migration-tracking.sh
 
 # 1. A database must be UP — not "warn and continue" the way `just test` does.
@@ -60,13 +60,7 @@ want_rust=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-
 have_rust=$(rustc --version | awk '{print $2}')
 [ "$have_rust" = "$want_rust" ] || fail \
   "local rustc is $have_rust, rust-toolchain.toml pins $want_rust — rustup honours that file automatically, so this usually means the pin was just changed and the toolchain is not installed: rustup toolchain install $want_rust"
-#     And the images that actually ship must be built with that same Rust. Three
-#     files, one number: drift here is invisible until a release.
-for f in deploy/Dockerfile.api deploy/Dockerfile.cli docker-compose.yml; do
-  grep -q "rust:${want_rust%.*}-slim-bookworm" "$f" || fail \
-    "$f does not build on rust:${want_rust%.*}-slim-bookworm, but rust-toolchain.toml pins $want_rust. Bump them together."
-done
-echo "==> Rust: $have_rust (toolchain + all three images agree)"
+echo "==> Rust: $have_rust (matches rust-toolchain.toml)"
 bash scripts/check-md-wasm-toolchain.sh
 
 # 3. Run the gates the SAME WAY CI runs them. `cargo check` does not run clippy,
@@ -110,40 +104,6 @@ bash scripts/build-preview-wasm.sh
     test/markdown_codec_bench_test.dart test/perf/html_paste_bench_test.dart test/perf/table_cells_bench_test.dart \
   && flutter_receipt 1000 --exclude-tags perf test)
 
-# 4. Cargo.lock must carry the version, or the release commit ships a lock that
-#    disagrees with its own manifest.
-#
-#    This used to be `git diff --quiet Cargo.lock`, which is a different claim —
-#    "the lock is UNMODIFIED" — and it made `just release` impossible to pass.
-#    Step 1 of that flow is release-bump.sh, whose last line is `cargo check`
-#    precisely to refresh the lock; step 3 is the commit. So at this point the
-#    lock is dirty BY DESIGN, and the gate refused the exact state it exists to
-#    require. It passed standalone (clean tree) and failed only in the flow it
-#    was written for, which is why it shipped.
-#
-#    Second time this script has carried a gate that could never pass — the
-#    other was `flutter analyze` with no flags, in a package with ~130 infos.
-#    Same shape both times: the check was written against the state the author
-#    had in front of them, not the state the caller creates. Anything added here
-#    has to be tried through `just release`, not only on its own.
-lock=$(grep -A1 -E '^name = "mica-(api-server|cli)"$' Cargo.lock \
-  | grep -E '^version = ' | sed 's/.*"\(.*\)"/\1/' | sort -u)
-[ "$lock" = "$version" ] \
-  || fail "Cargo.lock says '$lock' for the workspace binaries, Cargo.toml says '$version' — run 'cargo check' and include the lock in the release commit"
-echo "==> Cargo.lock: $lock"
-
-# ── The Windows icon exists twice, and the copies drifted ────────────────────
-# The taskbar/exe icon is windows/runner/resources/app_icon.ico; the tray icon
-# has to be a bundled Flutter ASSET (tray_manager takes an asset path), so it
-# cannot be the same file on disk. Two copies kept in step by memory is exactly
-# how the tray spent 2026-07-20 .. 2026-08-28 showing the stock FLUTTER logo:
-# the app icon was replaced, the asset copy was not, and nothing said so.
-# Byte-identical is the strongest check available and costs one cmp.
-cmp -s clients/mica_flutter/assets/tray_icon.ico \
-       clients/mica_flutter/windows/runner/resources/app_icon.ico \
-  || fail "the tray icon and the app icon differ — they are two copies of ONE mark (tray_manager needs a bundled asset, so the file cannot be shared). Regenerate both with scripts/gen-icons.py and commit them together."
-echo "==> icons: tray == app"
-
 # ── The desktop FFI crate is not in the root workspace ───────────────────────
 # `clients/mica_flutter/rust` (rust_lib_mica_flutter) is its own cargo project,
 # so `cargo test --workspace` above never compiles it. Change a shared crate —
@@ -165,70 +125,5 @@ echo "==> desktop FFI crate compiles"
   && dart pub get \
   && dart run test/toolchain_check.dart)
 echo "==> Cargokit respects the repository Rust toolchain"
-
-# ── pg_dump must not be older than the server it dumps ───────────────────────
-# `pg_dump` REFUSES a server newer than itself. The backup image pins
-# postgresql-client-N; the stack pins postgres:M. N < M means the off-site
-# database snapshot cannot be taken — and it fails inside a daily container,
-# into a log nobody reads.
-#
-# Found 2026-08-29 the hard way: postgres went 16 -> 18.6 on 08-28 and this
-# stayed at 16, so even after fixing the two OTHER reasons backups were broken,
-# pg_dump still aborted. Three same-shaped bugs in one day (MICA_TOKEN in
-# compose, MICA_API_BASE_URL in the CLI, this) is what a gate is for: the
-# Dockerfile comment already stated the invariant, and stating it did nothing.
-client=$(grep -oE 'postgresql-client-[0-9]+' deploy/Dockerfile.cli | head -1 | sed 's/.*-//')
-server=$(grep -oE 'image: postgres:[0-9]+' deploy/docker-compose.yml | head -1 | sed 's/.*://')
-[ -n "$client" ] && [ -n "$server" ] \
-  || fail "could not read the postgres versions (client='$client' server='$server') — this gate must not pass by failing to look"
-[ "$client" -ge "$server" ] \
-  || fail "deploy/Dockerfile.cli installs postgresql-client-$client but the stack runs postgres:$server — pg_dump refuses a newer server, so the off-site DB backup would silently stop. Bump the client."
-echo "==> pg_dump: client $client >= server $server"
-
-# ── The quickstart's pinned release must not lag the version being tagged ───
-# README.md and docs/ops/deploy.md tell a self-hoster to download the compose file
-# and `.env.prod.example` from a RELEASE TAG. That tag is hardcoded, so it only
-# moves when somebody edits the docs — and compose's `environment:` block is an
-# explicit ALLOWLIST, so a fresh install that pairs an old compose file with a
-# newer image silently loses any variable the image expects. The failure is a
-# setting that does nothing, which is invisible by construction.
-#
-# REFUSED, not warned. "Remember to update the docs at release time" is exactly
-# the kind of rule this file exists because nobody remembers; the tag is checked
-# at the one moment it is wrong.
-for doc in README.md docs/ops/deploy.md; do
-  pinned=$(grep -oE 'RELEASE=[0-9]+\.[0-9]+\.[0-9]+' "$doc" | head -1 | cut -d= -f2)
-  [ -n "$pinned" ] \
-    || fail "$doc no longer states a \`RELEASE=x.y.z\` for the quickstart (found nothing) — this gate must not pass by failing to look. If the quickstart changed shape, update this check."
-  [ "$pinned" = "$version" ] \
-    || fail "$doc pins the quickstart to $pinned but this release is $version. Bump \`RELEASE=\` in that doc (and any \`v\$RELEASE\` it uses) — an old compose file paired with a new image loses settings silently."
-done
-echo "==> quickstart docs pinned to $version"
-
-# ── A migration that has shipped is frozen, comments included ────────────────
-# sqlx records a checksum of every applied migration's WHOLE file and refuses to
-# start when one no longer matches ("migration 9 was previously applied but has
-# been modified"). Comments count. Every DB here and in CI is migrated from the
-# current files, so nothing but a node that applied the OLD file can notice —
-# i.e. prod, at deploy time.
-#
-# Found 2026-10-20: the docs reorganisation rewrote `docs/x.md` paths inside the
-# comments of 0009/0014/0025, the whole gate passed, and the 0.13.57 api
-# crash-looped on the node until the playbook rolled it back.
-#
-# Compared against the FIRST tag that shipped each file: that is the content
-# every node which ran that version applied. A file no tag contains yet is still
-# free to change.
-git tag --list 'v*' | grep -q . \
-  || fail "no v* tags in this clone, so shipped migrations cannot be told apart from new ones — this gate must not pass by failing to look. Fetch the tags."
-for f in migrations/*.sql; do
-  added=$(git log --diff-filter=A --format=%H -1 -- "$f")
-  [ -n "$added" ] || continue
-  first=$(git tag --contains "$added" --list 'v*' --sort=v:refname | head -1)
-  [ -n "$first" ] || continue
-  git diff --quiet "$first" -- "$f" \
-    || fail "$f differs from what $first shipped. A node that ran $first has its checksum recorded and the api will refuse to start. Restore it (git checkout $first -- $f) and put the change in a NEW migration."
-done
-echo "==> shipped migrations unchanged"
 
 printf '\n  release-check passed for %s\n' "$version"

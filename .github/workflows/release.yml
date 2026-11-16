@@ -65,6 +65,12 @@ on:
   # both `tags:` (unfiltered) and `branches:` + `paths:`.
   workflow_call:
     inputs:
+      source_sha:
+        description: 'Commit prepared by Ship'
+        type: string
+      previous_tag:
+        description: 'Latest release Ship is replacing'
+        type: string
       version:
         type: string
         required: true
@@ -112,6 +118,7 @@ jobs:
     # draft is, so dry runs still resolve and validate.
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      sha: ${{ steps.ver.outputs.sha }}
       tag: ${{ steps.ver.outputs.tag }}
       cli-matrix: ${{ steps.cli-matrix.outputs.matrix }}
     steps:
@@ -122,6 +129,8 @@ jobs:
       # check live in scripts/release-version.sh — one resolver, one validation,
       # exercised by scripts/test-release-version.sh on both trigger paths.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
 
       - name: Resolve CLI runners (macOS is opt-in)
         id: cli-matrix
@@ -139,9 +148,17 @@ jobs:
         # shell is a script-injection seam for no benefit.
         env:
           RELEASE_VERSION_INPUT: ${{ inputs.version }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           v=$(bash scripts/release-version.sh "$RELEASE_VERSION_INPUT")
           echo "version=$v" >> "$GITHUB_OUTPUT"
+          sha=$(git rev-parse HEAD)
+          if [[ "$PUBLISH" == true ]] || [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag_sha=$(git ls-remote origin "refs/tags/v$v^{}")
+            [[ -n "$tag_sha" ]] || tag_sha=$(git ls-remote --exit-code origin "refs/tags/v$v")
+            [[ "${tag_sha%%$'\t'*}" == "$sha" ]] || { echo "::error::v$v does not point at $sha"; exit 1; }
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
 
       - name: Create the draft release
@@ -166,6 +183,8 @@ jobs:
         working-directory: clients/mica_flutter
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.draft.outputs.sha }}
 
       - name: Test installer completion gate
         shell: powershell
@@ -286,6 +305,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.draft.outputs.sha }}
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -458,6 +479,8 @@ jobs:
         run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.draft.outputs.sha }}
 
       # Only the web image needs a Flutter bundle baked in.
       - uses: ./.github/actions/setup-flutter
@@ -545,19 +568,6 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.img }}
           cache-to: type=gha,mode=max,scope=${{ matrix.img }}
 
-  # Flip the draft to published, last. Everything the in-app updater looks for is
-  # attached by now: /releases/latest goes from "the previous version" straight to
-  # "this version, complete" with no window in between.
-  #
-  # Deliberately NOT `needs: images`. The GitHub release carries the installer and
-  # the cli binaries; the container images go to ACR and are consumed by
-  # `just deploy-prod`, a separate path. A registry hiccup should not hold back a
-  # desktop release that is fully built — and a failed images leg still turns the
-  # whole run red, so it cannot pass unnoticed.
-  #
-  # IF THIS JOB FAILS the release stays a draft: assets are safe and nothing is
-  # publicly broken, but users see no update until you run
-  #   gh release edit vX.Y.Z --draft=false --latest
   # Opt-in client packages (inputs build_linux_deb / build_android, or the
   # repository variables MICA_BUILD_LINUX_DEB / MICA_BUILD_ANDROID = 'true').
   # The same scripts a developer runs locally, forced onto the pinned Docker
@@ -571,6 +581,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.draft.outputs.sha }}
       - name: Build the .deb in the pinned builder
         env:
           MICA_CLIENT_BUILD: docker
@@ -603,6 +615,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.draft.outputs.sha }}
       - name: Materialize the stable Android signing key
         shell: bash
         env:
@@ -616,7 +630,7 @@ jobs:
           for name in MICA_ANDROID_KEYSTORE_BASE64 MICA_ANDROID_KEY_ALIAS MICA_ANDROID_STORE_PASSWORD MICA_ANDROID_KEY_PASSWORD; do
             [ -n "${!name}" ] || { echo "::error::Missing stable APK signing secret $name"; exit 1; }
           done
-          mkdir -m 700 -p "$RUNNER_TEMP/android-signing"
+          install -d -m 700 "$RUNNER_TEMP/android-signing"
           printf '%s' "$MICA_ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/android-signing/release.keystore"
           chmod 600 "$RUNNER_TEMP/android-signing/release.keystore"
           keytool -list -keystore "$RUNNER_TEMP/android-signing/release.keystore" -storetype "$MICA_ANDROID_STORE_TYPE" \
@@ -668,7 +682,7 @@ jobs:
       statuses: write
     uses: ./.github/workflows/browser-tests.yml
     with:
-      ref: ${{ github.sha }}
+      ref: ${{ needs.draft.outputs.sha }}
 
   publish:
     # The opt-in package jobs are waited for when they run and do not hold the
@@ -676,14 +690,27 @@ jobs:
     # condition is "nothing failed or was cancelled", not the default "every
     # need succeeded" (which a skipped job never satisfies). `browser` is not
     # optional: it always runs, so a failure there is a failure here.
-    needs: [draft, windows, cli, linux-deb, android, browser]
+    # Only advertise the version after the artifacts and registry images are ready.
+    needs: [draft, windows, cli, images, linux-deb, android, browser]
     if: ${{ !failure() && !cancelled() && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: mica-release-publish
+      cancel-in-progress: false
     steps:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          RELEASE_TAG: ${{ needs.draft.outputs.tag }}
         run: |
+          if [ -n "$PREVIOUS_TAG" ]; then
+            latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+            if [[ "$latest" != "$PREVIOUS_TAG" && "$latest" != "$RELEASE_TAG" ]]; then
+              echo "::error::Latest changed to $latest; refusing to publish $RELEASE_TAG as latest"
+              exit 1
+            fi
+          fi
           gh release edit "${{ needs.draft.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" --draft=false --latest
 

@@ -94,7 +94,9 @@ new_fixture() {
     "$repo/clients/mica_flutter/windows/runner/resources" \
     "$repo/clients/mica_flutter/rust" "$repo/clients/mica_flutter/rust_builder/cargokit/build_tool"
   cp "$source_root/scripts/release.sh" "$source_root/scripts/release-bump.sh" \
-     "$source_root/scripts/release-check.sh" "$source_root/scripts/lib-local.sh" \
+     "$source_root/scripts/release-check.sh" "$source_root/scripts/release-tree-check.sh" \
+     "$source_root/scripts/release-candidate.sh" "$source_root/scripts/release-version.sh" \
+     "$source_root/scripts/lib-local.sh" \
      "$source_root/scripts/lib-receipt.sh" "$source_root/scripts/check-ignored-sources.sh" \
      "$source_root/scripts/manifest-version.sh" "$source_root/scripts/check-migration-tracking.sh" \
      "$source_root/scripts/check-migration-bytes.sh" "$source_root/scripts/test-migration-tracking.sh" \
@@ -268,3 +270,64 @@ fi
 }
 
 echo "PASS: release N+1 bumps code + quickstart pins in one commit, and a failed gate is explained and retriable"
+
+# Exercise actual ref updates against a disposable bare remote. Preparing a
+# candidate must leave main and tags alone, even though it pushes the CI ref.
+repo="$fixture_root/repo-hosted"
+remote="$fixture_root/hosted-origin"
+new_fixture "$repo"
+git init -q --bare "$remote"
+git -C "$repo" remote add origin "$remote"
+git -C "$repo" push -q origin HEAD:refs/heads/main "v$old"
+base=$(git -C "$repo" rev-parse HEAD)
+outputs="$fixture_root/outputs"
+(
+  cd "$repo"
+  PATH="$stub_bin:$PATH" SHIP_VERSION= SHIP_DRY_RUN=true GITHUB_REF=refs/heads/main \
+    GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1 GITHUB_OUTPUT="$outputs" \
+    bash scripts/release-candidate.sh prepare
+) > "$fixture_root/prepare-log" 2>&1 || { cat "$fixture_root/prepare-log" >&2; exit 1; }
+candidate=$(git -C "$repo" rev-parse HEAD)
+[ "$(git -C "$remote" rev-parse refs/heads/main)" = "$base" ]
+[ "$(git -C "$remote" rev-parse refs/heads/ship-candidates/123-1)" = "$candidate" ]
+[ -z "$(git -C "$remote" tag --list "v$new")" ]
+grep -qx "version=$new" "$outputs"
+grep -qx "sha=$candidate" "$outputs"
+
+promote_fixture() { (cd "$repo" && bash scripts/release-candidate.sh promote "$candidate" "$base" "$new"); }
+git -C "$repo" push -q origin "$base:refs/tags/v$new"
+if promote_fixture > "$fixture_root/promote-log" 2>&1; then
+  echo 'FAIL: Ship accepted an occupied tag' >&2
+  exit 1
+fi
+[ "$(git -C "$remote" rev-parse refs/heads/main)" = "$base" ]
+[ "$(git -C "$remote" rev-parse "refs/tags/v$new")" = "$base" ]
+git -C "$repo" push -q origin ":refs/tags/v$new"
+
+promote_fixture
+promote_fixture
+[ "$(git -C "$remote" rev-parse refs/heads/main)" = "$candidate" ]
+[ "$(git -C "$remote" rev-parse "refs/tags/v$new")" = "$candidate" ]
+
+# Once main advances again, an old attempt must refuse to rewind it.
+git -C "$repo" commit --allow-empty -qm 'chore: a later commit'
+git -C "$repo" push -q origin HEAD:refs/heads/main
+advanced=$(git -C "$repo" rev-parse HEAD)
+git -C "$repo" checkout -q --detach "$candidate"
+if promote_fixture > "$fixture_root/promote-log" 2>&1; then
+  echo 'FAIL: Ship accepted a stale main' >&2
+  exit 1
+fi
+[ "$(git -C "$remote" rev-parse refs/heads/main)" = "$advanced" ]
+[ "$(git -C "$remote" rev-parse "refs/tags/v$new")" = "$candidate" ]
+echo 'PASS: Ship prepares a separate candidate, promotes it atomically, and refuses stale main or a moved tag'
+
+printf 'SELECT 2;\n' > "$repo/migrations/0002_new.sql"
+git -C "$repo" add migrations/0002_new.sql
+git -C "$repo" rm -q migrations/0001_initial.sql
+if (cd "$repo" && bash scripts/release-tree-check.sh) > "$fixture_root/tree-log" 2>&1; then
+  echo 'FAIL: release accepted deletion of a shipped migration' >&2
+  exit 1
+fi
+grep -q 'migrations/0001_initial.sql differs from' "$fixture_root/tree-log"
+echo 'PASS: shared release tree gate rejects deletion of a shipped migration'

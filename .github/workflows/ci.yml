@@ -41,6 +41,17 @@ on:
         type: string
         required: false
 
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      scope:
+        type: string
+        default: full
+      base_ref:
+        type: string
+
 # Pushing several commits in a row (five within an hour on 07-28) left four
 # superseded runs burning runners for a verdict nobody would read. The newest
 # commit's result is the one that matters; a broken commit in the middle is
@@ -55,6 +66,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
       - name: Install pinned cargo-audit
         run: cargo install cargo-audit --locked --version 0.23.0
@@ -77,6 +90,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           # An explicit baseline may cover more than the latest commit.
           fetch-depth: 0
       - name: Install the recipe runner used by script regression tests
@@ -156,6 +170,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
       - name: Test structure gate against isolated Git fixtures
         run: bash scripts/test-structure-gate.sh
@@ -192,9 +207,12 @@ jobs:
 
     env:
       DATABASE_URL: postgres://mica:mica@127.0.0.1:5432/mica
+      MICA_REQUIRE_DB: '1'
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
       # rustfmt.toml was the law on paper only — nothing ran it, and 2/4-space
       # indentation mixed inside single files (2026-10-21 review 工程链). This
@@ -273,6 +291,8 @@ jobs:
     needs: paths
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
@@ -326,9 +346,16 @@ jobs:
         working-directory: clients/mica_flutter
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
       - uses: ./.github/actions/setup-flutter
       - run: flutter pub get --enforce-lockfile
       - run: flutter gen-l10n
+      - name: Check Cargokit uses the pinned toolchain
+        working-directory: clients/mica_flutter/rust_builder/cargokit/build_tool
+        run: |
+          dart pub get
+          dart run test/toolchain_check.dart
       # Warnings ARE fatal as of 2026-08-25. This comment used to say a separate
       # cleanup pass would address the pre-existing info/warning lints; what
       # actually happened is that an `invalid_return_type_for_catch_error`
@@ -433,6 +460,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
 
       - uses: ./.github/actions/setup-rust
       # Same cache key as the `rust` job so this reuses that build rather than
@@ -693,6 +722,8 @@ jobs:
     needs: paths
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
 
       - name: Deployment smoke-gate and Compose configuration regressions
         run: |

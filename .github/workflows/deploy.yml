@@ -1,6 +1,6 @@
 name: Deploy
 
-# Manual only. There is no `on: push` here on purpose — "which version is live"
+# Manual or called by Ship. There is no `on: push` here on purpose — "which version is live"
 # stays a decision somebody makes, not a side effect of merging.
 on:
   workflow_dispatch:
@@ -12,6 +12,17 @@ on:
         # A normal run rehearses too, then deploys — see the rehearsal step.
         # This makes it STOP after the rehearsal.
         description: 'Rehearse only — stop after --check --diff, change nothing'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      check:
+        type: boolean
+        default: false
+      require_latest:
         type: boolean
         default: false
 
@@ -57,9 +68,19 @@ jobs:
           fetch-depth: 0
 
       - name: Reject anything that is not X.Y.Z
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          REQUIRE_LATEST: ${{ inputs.require_latest }}
         run: |
-          [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || { echo "version must be X.Y.Z"; exit 1; }
+          if [[ "$REQUIRE_LATEST" == true ]]; then
+            latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+            [[ "$latest" == "v$VERSION" ]] \
+              || { echo "::error::Latest is $latest; refusing to deploy v$VERSION from Ship"; exit 1; }
+          fi
 
       - name: Install ansible
         run: |
@@ -84,6 +105,8 @@ jobs:
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -o pipefail
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS" \
+            || { echo "::error::Deploy requires DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS"; exit 1; }
           # A self-hosted runner is somebody's machine: NEVER write ~/.ssh. On
           # 2026-10-20 this step wrote the prod key over the runner user's own
           # ~/.ssh/id_ed25519 (and known_hosts) on the first self-hosted run.
@@ -124,10 +147,14 @@ jobs:
       # output is the POINT, not a failure — it is the diff of what the real run
       # will do. Only an error stops the job.
       - name: Rehearse against the node — changes nothing
-        run: bash scripts/deploy-prod.sh '${{ inputs.version }}' --check --diff
+        env:
+          VERSION: ${{ inputs.version }}
+        run: bash scripts/deploy-prod.sh "$VERSION" --check --diff
 
       - name: Deploy
         if: ${{ !inputs.check }}
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           # What this replaces, and why it had to go:
           #
@@ -142,7 +169,7 @@ jobs:
           #   The playbook ships the file from the tag instead. Drift cannot
           #   exist, because the node's compose is by construction the one this
           #   version was released with. There is nothing left to compare.
-          bash scripts/deploy-prod.sh '${{ inputs.version }}'
+          bash scripts/deploy-prod.sh "$VERSION"
 
       # deploy-prod.sh already runs verify-prod on success. Nothing more to
       # assert after a rehearsal: prod still reports the PREVIOUS version, and a

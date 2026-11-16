@@ -1,11 +1,28 @@
 # 发版与构建(Release & build)
 
-GitHub Actions 使用官方 runner，**所有工作流保持手动触发**；推 main、tag 或 PR 不会自动消费额度。
-发版仍须用户明确要求；`Release dry-run` 只构建、不发布、不部署。
+GitHub Actions 使用官方 runner。发版由人手动启动一次，后续任务由工作流接续。推送 main、tag 或 PR 不会启动发布。
+发版仍须用户明确要求。
 
-**默认走托管路径**：本地 `just release` 打 tag → 推送 → 手动触发 `Release`（publish=true）→ 等全绿和自动 canary →
-触发 `Deploy`。托管 runner 每次都是一次性环境，安装包、CLI、镜像、浏览器套件并行构建，不受本机正式版、
-真实数据目录、本机工具和网络的影响；没有返工时，从打 tag 到部署完成约半小时。
+**默认走托管路径**。在 [Actions → Ship](https://github.com/weironz/mica/actions/workflows/ship.yml) 选择
+`main`，正式发布时取消勾选 `dry_run`，然后点 **Run workflow**。版本留空时自动递增补丁号，明确决定升
+minor 时填写目标版本。命令行入口等效：
+
+```bash
+gh workflow run ship.yml --repo weironz/mica --ref main -f dry_run=false
+```
+
+`Ship` 在 runner 上生成版本提交并更新锁文件、快速安装指引。完整 CI 验证这个提交，随后一次 Git 推送
+同时更新 `main` 与版本标签。如果 CI 期间 `main` 已前进，共享分支和标签都保留原样。之后 `Release`
+直接从同一提交构建安装包、CLI 和镜像，镜像推送与浏览器套件通过后公开 Release。Windows/Linux 公开产物
+验收通过后，`Deploy` 自动彩排、部署并验证线上版本和 Web 入口。迁移备份与部署失败恢复沿用现有部署脚本。
+
+`dry_run` 默认开启。它跑候选提交的 CI 和发布构建，成功后回收临时候选分支。彩排不更新 `main` 和版本标签，
+也不发布、不推镜像、不部署。`Release dry-run` 仍可单独验证已有分支的发布构建。
+
+网络或 runner 暂时失败时，在原运行点 **Re-run failed jobs**。失败的运行保留候选分支，供原运行继续。
+如果 `main` 在打标签之前已前进，重新从最新 `main` 启动。正式标签已创建时，修好外部条件后续跑原运行，
+无需重新提版。已经公开的产物若需要代码修复，按补丁版重新发布。生产入口的产品功能仍可按本版变更单独验收，
+发布流程本身会自动完成上述检查。
 
 **本地 `just ship` 只在 Actions 额度用完或故障时兜底**。0.14.8 走本地路径用了约 3 小时：
 - Inno Setup 缺失、`gh` 在后台会话里调不通 API、Linux CLI 容器里 apt 临时 DNS 失败、冒烟测试和正式版抢单实例锁（#179），
@@ -21,9 +38,9 @@ GitHub Actions 使用官方 runner，**所有工作流保持手动触发**；推
 
 两条路径遵守相同的门禁、版本一致性和"先挂齐附件再公开"的规则，**也都要求浏览器专用套件在发布提交上通过**才公开（见下表）。
 
-## 你要按的那几下
+## 分步发布或恢复
 
-整个流程里手动的部分只有这些。照抄即可,`X.Y.Z` 换成版本号(补丁位递增;minor 由用户拍板)。
+需要单独构建、重发未公开草稿或手动部署时，使用下面的分步入口。`X.Y.Z` 换成目标版本。
 
 ```bash
 # 1. bump → 门禁 → commit → tag。一条命令，门禁夹在中间，跳不过去。它不推送。
@@ -417,7 +434,7 @@ CORS、token TTL……)**此前只存在于节点上**,仓库里没有真相源,
 > 走的是 daemon 里配的 `docker.1ms.run` 加速器)。以前那套 `docker save | scp | load`
 > 经笔记本中转 90MB 的搬运,是建立在这个过时假设上的,现已删除。
 
-## 完整发版流程
+## 本地及分步发布详解
 
 > **第 1–3 步和第 6 步的一半,现在是一条命令:**
 >

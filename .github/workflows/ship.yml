@@ -1,0 +1,113 @@
+name: Ship
+run-name: Ship · ${{ inputs.dry_run && 'rehearsal' || 'production' }} · ${{ inputs.version || 'next patch' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version X.Y.Z; leave blank for the next patch'
+        type: string
+      dry_run:
+        description: 'Rehearse without publishing or deploying'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mica-ship
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.candidate.outputs.version }}
+      previous_tag: ${{ steps.candidate.outputs.previous_tag }}
+      base: ${{ steps.candidate.outputs.base }}
+      sha: ${{ steps.candidate.outputs.sha }}
+      ref: ${{ steps.candidate.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-rust
+      - name: Prepare version commit
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHIP_DRY_RUN: ${{ inputs.dry_run }}
+          SHIP_VERSION: ${{ inputs.version }}
+        run: bash scripts/release-candidate.sh prepare
+
+  ci:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      scope: full
+
+  promote:
+    if: ${{ !inputs.dry_run }}
+    needs: [prepare, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 2
+      - name: Atomically advance main and create the tag
+        env:
+          CANDIDATE: ${{ needs.prepare.outputs.sha }}
+          BASE: ${{ needs.prepare.outputs.base }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/release-candidate.sh promote "$CANDIDATE" "$BASE" "$VERSION"
+
+  release:
+    needs: [prepare, ci, promote]
+    if: ${{ !cancelled() && needs.ci.result == 'success' && (needs.promote.result == 'success' || (inputs.dry_run && needs.promote.result == 'skipped')) }}
+    permissions:
+      contents: write
+      statuses: write
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ needs.prepare.outputs.sha }}
+      previous_tag: ${{ needs.prepare.outputs.previous_tag }}
+      version: ${{ needs.prepare.outputs.version }}
+      publish: ${{ !inputs.dry_run }}
+    secrets: inherit
+
+  deploy:
+    needs: [prepare, release]
+    # Release includes optional skipped jobs. Check its explicit result.
+    if: ${{ !cancelled() && !inputs.dry_run && needs.release.result == 'success' }}
+    uses: ./.github/workflows/deploy.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      require_latest: true
+    secrets: inherit
+
+  cleanup:
+    needs: [prepare, release, deploy]
+    if: ${{ !cancelled() && needs.release.result == 'success' && (inputs.dry_run || needs.deploy.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.base }}
+      - name: Remove temporary candidate branch
+        env:
+          CANDIDATE: ${{ needs.prepare.outputs.sha }}
+          CANDIDATE_REF: ${{ needs.prepare.outputs.ref }}
+        run: |
+          remote=$(git ls-remote origin "$CANDIDATE_REF")
+          if [ -n "$remote" ]; then
+            git push --force-with-lease="$CANDIDATE_REF:$CANDIDATE" origin ":$CANDIDATE_REF"
+          fi
