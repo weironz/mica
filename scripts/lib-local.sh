@@ -98,6 +98,53 @@ require_gh() {
   gh auth status >/dev/null 2>&1 || fail "gh is not logged in — run 'gh auth login'"
 }
 
+# `gh auth status` reads a cached login. A background shell whose keyring is
+# locked still passes it and then fails the first real call — 0.14.8's release
+# stalled on exactly that, deep into the train. Ask the API itself.
+require_gh_api() {
+  command -v gh >/dev/null 2>&1 || fail "the GitHub CLI 'gh' is not installed (https://cli.github.com)"
+  gh api "repos/$GH_REPO" --jq .full_name >/dev/null 2>&1 \
+    || fail "gh cannot call the GitHub API for $GH_REPO from this shell (not logged in, keyring locked in a background session, or no network). 'gh api repos/$GH_REPO' must work."
+}
+
+# Release acceptance for the browser-only Flutter suites: the commit status
+# `mica/browser-tests` on the release commit, written by
+# `scripts/browser-tests.sh --report-status` (the Browser tests workflow, or any
+# Linux/macOS machine). Windows cannot produce it locally (#181).
+BROWSER_STATUS_CONTEXT=mica/browser-tests
+
+browser_status() { # $1 = commit sha -> success|pending|failure|error|"" (none)
+  gh api "repos/$GH_REPO/commits/$1/status" \
+    --jq ".statuses[] | select(.context == \"$BROWSER_STATUS_CONTEXT\") | .state" 2>/dev/null \
+    | head -1
+}
+
+report_browser_status() { # $1 = commit sha, $2 = description
+  gh api -X POST "repos/$GH_REPO/statuses/$1" \
+    -f state=success -f context="$BROWSER_STATUS_CONTEXT" -f description="$2" >/dev/null \
+    || fail "could not record $BROWSER_STATUS_CONTEXT on $1 (is the commit pushed? does the token have statuses:write?)"
+  note "recorded $BROWSER_STATUS_CONTEXT = success on ${1:0:12}"
+}
+
+require_browser_status() { # $1 = commit sha, $2 = version (for the hint)
+  local state
+  state=$(browser_status "$1")
+  [ "$state" = success ] || fail "the browser-only Flutter suites have not passed on ${1:0:12} (status $BROWSER_STATUS_CONTEXT: ${state:-none}).
+  They are release acceptance (docs/ops/release.md) and Windows cannot run them (#181). Either:
+    gh workflow run browser-tests.yml --repo $GH_REPO -f ref=v$2     # hosted, ~10 min
+  or, on any Linux/macOS checkout of v$2:
+    just browser-tests-report $2"
+}
+
+# Inno Setup's compiler, where release-artifacts looks for it. Empty if absent.
+find_iscc() {
+  local iscc=${ISCC:-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe"}
+  if [ -z "${ISCC:-}" ] && [ ! -x "$iscc" ] && [ -n "${LOCALAPPDATA:-}" ]; then
+    iscc="$(cygpath -u "$LOCALAPPDATA")/Programs/Inno Setup 6/ISCC.exe"
+  fi
+  [ -x "$iscc" ] && printf '%s\n' "$iscc"
+}
+
 dist_dir() { echo "dist/v$1"; }
 
 # Which checksum manifest an asset is verified against. The in-app updater

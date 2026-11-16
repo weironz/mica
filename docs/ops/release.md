@@ -1,9 +1,25 @@
 # 发版与构建(Release & build)
 
 GitHub Actions 使用官方 runner，**所有工作流保持手动触发**；推 main、tag 或 PR 不会自动消费额度。
-两条完整发版路径都保留：Actions 可用时手动运行 `CI` 和 `Release`；额度用完或 Actions 故障时使用本地
-`just ci`、`just release`、`just ship`。两边遵守相同门禁、版本一致性和先挂齐附件再公开的规则。
 发版仍须用户明确要求；`Release dry-run` 只构建、不发布、不部署。
+
+**默认走托管路径**：本地 `just release` 打 tag → 推送 → 手动触发 `Release`（publish=true）→ 等全绿和自动 canary →
+触发 `Deploy`。托管 runner 每次都是一次性环境，安装包、CLI、镜像、浏览器套件并行构建，不受本机正式版、
+真实数据目录、本机工具和网络的影响；没有返工时，从打 tag 到部署完成约半小时。
+
+**本地 `just ship` 只在 Actions 额度用完或故障时兜底**。0.14.8 走本地路径用了约 3 小时：
+- Inno Setup 缺失、`gh` 在后台会话里调不通 API、Linux CLI 容器里 apt 临时 DNS 失败、冒烟测试和正式版抢单实例锁（#179），
+  都是跑到一半才暴露；
+- 每次续跑又从头构建一遍。
+
+这些问题现在都由脚本处理：
+- `release-preflight` 在动手前一次报出全部环境问题；
+- 续跑时复用同一提交已经完成的产物构建和镜像推送；
+- musl 构建镜像每个 Rust 版本只建一次；
+- 冒烟测试与正式版、真实数据完全隔离；
+- 每个阶段计时，失败时也会打印汇总。
+
+两条路径遵守相同的门禁、版本一致性和"先挂齐附件再公开"的规则，**也都要求浏览器专用套件在发布提交上通过**才公开（见下表）。
 
 ## 你要按的那几下
 
@@ -46,7 +62,10 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 | **本机 Flutter == `.fvmrc`;本机 Rust == `rust-toolchain.toml`;三个镜像同号** | 同上 | 2026-08-27 |
 | DB 集成测试**真的跑了**(本地 Postgres 没起就拒绝发版) | 同上 | 2026-08-25 |
 | `cargo test` / `clippy -D warnings` / `flutter analyze` + `test`;单元测试前构建 `mica_md` 与 `mica_doc` 并验证源码指纹 | 同上 | 2026-08-25;双引擎 2026-11-01 |
-| 浏览器专用套件必须在 Chrome 真跑;结构门禁 | `bash scripts/browser-tests.sh` / `just check-structure` | 发布验收必跑 |
+| **浏览器专用套件在发布提交上通过才公开**(提交状态 `mica/browser-tests`):托管 `Release` 的 `browser` job 是 `publish` 的前置;本地 `release-publish` 查同一个状态。Windows 跑不了(#181),`just ship` 推送后自动交给 Actions,构建期间并行跑,公开前等结果;Linux/macOS 可用 `just browser-tests-report X.Y.Z` | `.github/workflows/browser-tests.yml`、`scripts/release-publish.sh`、`scripts/test-release-artifacts.sh` | 2026-11-16 |
+| 结构门禁 | `just check-structure` | 发布验收必跑 |
+| 本地发版前一次报出全部环境问题(gh API、Inno、Docker 与两个仓库登录、磁盘、测试库、tag 是否已占用) | `scripts/release-preflight.sh`(`just ship` 第一步) | 2026-11-16 |
+| `ship` 续跑复用同一提交已完成的产物与镜像;发布被拒时整条列车失败并标出阶段 | `scripts/ship.sh` + `scripts/test-ship.sh` | 2026-11-16 |
 | 可选安装包未构建时,产物验收仍必须运行;dry-run 不验收 | `.github/workflows/release.yml` 的 `canary` + `scripts/test-release-workflow.sh` | 2026-11-15 |
 | 安装包冒烟不碰本机正式版:不建快捷方式和卸载登记(`/MICASMOKE`),应用在隔离的 `APPDATA`/`LOCALAPPDATA`/`TEMP` 下运行,单实例锁按数据目录划分,正式版开着也能跑 | `scripts/smoke-installer.ps1` + `scripts/test-smoke-installer.sh` | 2026-11-15(#179) |
 | 网页 `index.html` 内联脚本与 nginx CSP `script-src` 哈希一致 | `scripts/test-web-csp-hashes.sh` | 2026-11-16 |
@@ -91,6 +110,16 @@ gh workflow run Deploy --repo weironz/mica -f version=X.Y.Z
 
 Actions 额度用完或故障时，**整条发布列车可以在本地机器上跑完**，Linux 与 Windows（Git Bash）通用。
 脚本和 CI 做同样的检查、产出同名产物、遵守同样的「先挂齐附件再公开」顺序。
+
+先跑 `just release-preflight X.Y.Z`（`just ship` 也会先跑），一次列出所有环境问题。
+`just ship` 中途失败后直接重跑同一条命令即可：
+- 已经为同一提交完成的产物构建（`dist/vX.Y.Z/.built-from`）和镜像推送（`.images-pushed`）会被复用；
+- `REBUILD=1` 强制重做；
+- 结束或失败时都会打印各阶段耗时。
+
+浏览器专用套件 Windows 跑不了（#181），所以要另外安排：
+- `ship` 在推送后用 `gh workflow run browser-tests.yml` 交给 Actions，公开前最多等 45 分钟（`MICA_BROWSER_WAIT_MIN`）；
+- Actions 完全不可用时，在任意 Linux/macOS（含 WSL）检出该 tag 运行 `just browser-tests-report X.Y.Z`。
 
 ```bash
 # 0. 本地 CI 门禁（ci.yml 的本地版）：结构门禁、clippy -D warnings、带 DB 的 Rust 测试、

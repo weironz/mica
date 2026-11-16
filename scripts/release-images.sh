@@ -47,6 +47,12 @@ if [ "${PUSH:-1}" = 1 ]; then
     docker push "$acr/mica-$img:v$version"
     docker push "$hub/mica-$img:v$version"
   done
+  # Read by `just ship` on a resume: these exact images are already in both
+  # registries, so a re-run after a later step failed need not rebuild and
+  # re-push them (REBUILD=1 forces it).
+  out=$(dist_dir "$version")
+  mkdir -p "$out"
+  git rev-parse HEAD > "$out/.images-pushed"
 else
   note "PUSH=0: built and tagged, not pushed"
 fi

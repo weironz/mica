@@ -656,12 +656,27 @@ jobs:
         shell: bash
         run: rm -rf "$RUNNER_TEMP/android-signing"
 
+  # The browser-only Flutter suites are release acceptance (docs/ops/release.md)
+  # and used to run in no release path at all — only in CI's web-e2e job, which
+  # a release does not wait for, and never on a Windows release machine (#181).
+  # They gate `publish` here, and record the commit status `mica/browser-tests`
+  # that the local twin (scripts/release-publish.sh) requires as well.
+  browser:
+    needs: draft
+    permissions:
+      contents: read
+      statuses: write
+    uses: ./.github/workflows/browser-tests.yml
+    with:
+      ref: ${{ github.sha }}
+
   publish:
     # The opt-in package jobs are waited for when they run and do not hold the
     # release back when they are off: a skipped need is not a failure, so the
     # condition is "nothing failed or was cancelled", not the default "every
-    # need succeeded" (which a skipped job never satisfies).
-    needs: [draft, windows, cli, linux-deb, android]
+    # need succeeded" (which a skipped job never satisfies). `browser` is not
+    # optional: it always runs, so a failure there is a failure here.
+    needs: [draft, windows, cli, linux-deb, android, browser]
     if: ${{ !failure() && !cancelled() && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
     runs-on: ubuntu-latest
     steps:

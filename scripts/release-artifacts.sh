@@ -46,7 +46,7 @@ mkdir -p "$out"
 # A failed run must not leave a stale manifest behind to claim coverage this
 # attempt never produced (the updater trusts the file's existence, not when it
 # was written). Cleared BEFORE anything builds, then rewritten at the end.
-rm -f "$out"/sha256-*.txt
+rm -f "$out"/sha256-*.txt "$out/.built-from"
 os=$(host_os)
 note "host: $os  ->  $out/"
 
@@ -68,8 +68,23 @@ build_cli_native() {
 # Linux CLI inside the SAME pinned toolchain image the api is built with, so a
 # Windows or macOS machine can produce it too. Its own target dir, so it never
 # fights the host build over target/.
+#
+# musl-tools and the musl target are baked into a local builder image ONCE per
+# Rust pin, not installed on every run. The per-run `apt-get update` put Debian's
+# mirrors on the release's critical path, and a transient DNS failure inside the
+# container stopped 0.14.8's train an hour in. Now only the first release after a
+# Rust bump touches apt; the image stays in the local Docker cache.
 build_cli_linux_docker() {
-  note "mica-cli (linux-x64, static, in rust:$rust_pin-slim-bookworm)"
+  local builder="mica-cli-musl-builder:$rust_pin"
+  if ! docker image inspect "$builder" >/dev/null 2>&1; then
+    note "builder image $builder (first use of this Rust pin; reused afterwards)"
+    printf '%s\n' \
+      "FROM rust:$rust_pin-slim-bookworm" \
+      "RUN apt-get update && apt-get install -y --no-install-recommends musl-tools \\" \
+      " && rm -rf /var/lib/apt/lists/* && rustup target add x86_64-unknown-linux-musl" \
+      | docker build -t "$builder" -
+  fi
+  note "mica-cli (linux-x64, static, in $builder)"
   local repo; repo=$(pwd)
   case "$repo" in /[a-z]/*) repo="$(echo "${repo:1:1}" | tr a-z A-Z):${repo:2}" ;; esac
   # RUSTUP_TOOLCHAIN overrides rust-toolchain.toml, whose `components`
@@ -77,10 +92,7 @@ build_cli_linux_docker() {
   # them for a build that uses neither. Same pinned version either way.
   MSYS_NO_PATHCONV=1 docker run --rm -v "$repo:/src" -w /src \
     -e CARGO_TARGET_DIR=/src/target/docker-musl -e "RUSTUP_TOOLCHAIN=$rust_pin" \
-    "rust:$rust_pin-slim-bookworm" bash -ec '
-      apt-get update -qq && apt-get install -y -qq musl-tools >/dev/null
-      rustup target add x86_64-unknown-linux-musl >/dev/null
-      cargo build --locked -p mica-cli --release --target x86_64-unknown-linux-musl'
+    "$builder" cargo build --locked -p mica-cli --release --target x86_64-unknown-linux-musl
   cp target/docker-musl/x86_64-unknown-linux-musl/release/mica-cli "$out/mica-cli-$version-linux-x64"
 }
 
@@ -99,11 +111,7 @@ case "$os" in
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-installer-wait.ps1
     note "Windows installer"
     (cd clients/mica_flutter && "$FLUTTER" build windows --release)
-    iscc=${ISCC:-"/c/Program Files (x86)/Inno Setup 6/ISCC.exe"}
-    if [ -z "${ISCC:-}" ] && [ ! -x "$iscc" ] && [ -n "${LOCALAPPDATA:-}" ]; then
-      iscc="$(cygpath -u "$LOCALAPPDATA")/Programs/Inno Setup 6/ISCC.exe"
-    fi
-    [ -x "$iscc" ] || fail "Inno Setup 6 compiler not found at $iscc — install it or set ISCC"
+    iscc=$(find_iscc) || fail "Inno Setup 6 compiler not found — install it or set ISCC"
     "$iscc" "//DAppVersion=$version" 'clients\mica_flutter\installer\mica.iss'
     setup="clients/mica_flutter/installer/Output/Mica-Setup-$version.exe"
     cp "$setup" "$out/"
@@ -165,5 +173,10 @@ for manifest in sha256-windows.txt sha256-windows-installer.txt sha256-linux.txt
   done
   [ -s "$out/$manifest" ] || rm -f "$out/$manifest"
 done
+# Which commit these files came from, written only once everything above
+# succeeded. `just ship` reads it on a resume to reuse this build instead of
+# compiling and smoke-testing the same tag again (REBUILD=1 forces a rebuild).
+# A dotfile, so release-upload's `$out/*` never attaches it.
+git rev-parse HEAD > "$out/.built-from"
 note "built:"
 ls -l "$out"

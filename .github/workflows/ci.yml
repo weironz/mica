@@ -113,6 +113,7 @@ jobs:
           bash scripts/test-release-site-canary.sh
           bash scripts/test-smoke-installer.sh
           bash scripts/test-web-csp-hashes.sh
+          bash scripts/test-ship.sh
           python3 scripts/test-release-cli-matrix.py
       - id: groups
         env:

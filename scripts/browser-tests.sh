@@ -2,6 +2,10 @@
 # Run every browser-only Flutter suite in a real browser, with a receipt.
 #
 #   bash scripts/browser-tests.sh          # needs Chrome/Chromium ($CHROME_EXECUTABLE or on PATH)
+#   bash scripts/browser-tests.sh --report-status
+#       ...and, when every suite passed on a clean checkout, record the commit
+#       status `mica/browser-tests` = success on HEAD. That status is what
+#       release-publish and the Release workflow require (docs/ops/release.md).
 #
 # A browser suite under plain `flutter test` either skips (`@TestOn('browser')`)
 # or compiles to its VM stub (the `if (dart.library.js_interop)` entry files) —
@@ -12,6 +16,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
 source scripts/lib-receipt.sh
+
+report=0
+for a in "$@"; do
+  case "$a" in
+    --report-status) report=1 ;;
+    *) fail "unknown flag $a" ;;
+  esac
+done
+if [ "$report" = 1 ]; then
+  # The status vouches for a COMMIT, so the tree must be exactly that commit.
+  git diff --quiet && git diff --cached --quiet \
+    || fail "--report-status needs a clean checkout: the status would vouch for a commit you did not test"
+  head_sha=$(git rev-parse HEAD)
+  require_gh_api
+fi
 bash scripts/build-md-wasm.sh
 bash scripts/build-doc-wasm.sh
 bash scripts/build-preview-wasm.sh
@@ -23,3 +42,7 @@ for suite in "${suites[@]}"; do
   note "browser suite: $suite"
   flutter_receipt 1 --platform chrome "$suite"
 done
+
+if [ "$report" = 1 ]; then
+  report_browser_status "$head_sha" "${#suites[@]} browser suites passed on $(host_os)"
+fi

@@ -353,7 +353,7 @@ release-check:
 release-bump version:
     bash scripts/release-bump.sh "{{version}}"
 
-# ── Local release train (GitHub Actions unavailable) ─────────────────────────
+# ── Local release train (fallback: GitHub Actions unavailable) ───────────────
 #
 # release.yml's jobs, on your machines. Each host builds what it can into
 # dist/vX.Y.Z/ and attaches it to a DRAFT release; publishing is a separate
@@ -361,9 +361,18 @@ release-bump version:
 # reads /releases/latest, so it must never see a release without its
 # installer). docs/ops/release.md「本地发布」has the full walk-through.
 
-[doc("Everything on this machine: release → push → artifacts → images → upload → publish")]
+[doc("Everything on this machine: preflight → release → push → artifacts → images → upload → publish")]
 ship version:
     bash scripts/ship.sh "{{version}}"
+
+[doc("What the local release train needs (gh API, Inno, Docker + logins, disk, DB), all reported at once")]
+release-preflight version:
+    bash scripts/release-preflight.sh "{{version}}"
+
+[doc("On a Linux/macOS checkout of vX.Y.Z: run the browser-only suites and record the release-acceptance status")]
+browser-tests-report version:
+    bash -c 'source scripts/lib-local.sh && require_tagged_tree "$1"' _ "{{version}}"
+    bash scripts/browser-tests.sh --report-status
 
 [doc("Build the release assets THIS host can build into dist/vX.Y.Z/ (Windows: installer + cli [+ linux cli via Docker])")]
 release-artifacts version *flags:

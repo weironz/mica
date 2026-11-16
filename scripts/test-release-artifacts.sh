@@ -245,6 +245,9 @@ case "$*" in
   *'release edit'*)
     printf '%s\n' "$*" >> "${GH_STUB_LOG:-/dev/null}"
     ;;
+  *'/status '*|*'/status')
+    printf '%s\n' "${GH_STUB_BROWSER_STATE-success}"
+    ;;
   *'api '*)
     printf 'v%s\n' "${GH_STUB_VERSION:?}"
     ;;
@@ -304,6 +307,16 @@ expect_publish_refusal 'sha256-windows-installer.txt'
 write_tsv "Mica-Setup-$version.exe:$h_setup" "mica-cli-$version-windows-x64.exe:$h_win" \
           "mica-cli-$version-linux-x64:$h_lin" "sha256-windows.txt:" "sha256-linux.txt:"
 expect_publish_refusal 'sha256-windows-installer.txt'
+
+# Complete assets, but the browser-only suites have not passed on the release
+# commit (pending, or never run): refuse. They are release acceptance and a
+# Windows release machine cannot run them itself (#181).
+write_tsv "Mica-Setup-$version.exe:sha256:$h_setup" \
+          "mica-cli-$version-windows-x64.exe:sha256:$h_win" \
+          "mica-cli-$version-linux-x64:sha256:$h_lin" \
+          "sha256-windows-installer.txt:" "sha256-windows.txt:" "sha256-linux.txt:"
+(export GH_STUB_BROWSER_STATE=pending; expect_publish_refusal 'browser-only Flutter suites') || exit 1
+(export GH_STUB_BROWSER_STATE=''; expect_publish_refusal 'browser-only Flutter suites') || exit 1
 
 # Complete and correct: publish. gh reports digests with the algorithm prefix
 # (`sha256:<hex>`); comparing that verbatim against a bare-hex manifest refused
