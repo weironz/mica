@@ -148,6 +148,17 @@ just release-images X.Y.Z      # 三个镜像 → 阿里云 ACR + Docker Hub（�
 
 所以**一台开着 Docker Desktop 的 Windows 机**就能产出除 macOS CLI 外的全部产物。
 
+Windows 构建 Linux CLI 时，[`release-artifacts.sh`](../../scripts/release-artifacts.sh) 按 `rust-toolchain.toml`
+中的版本使用本地镜像 `mica-cli-musl-builder:<Rust 版本>`。缺少该镜像时，脚本从对应的 Rust 基础镜像构建，
+在镜像内安装 `musl-tools` 和 `x86_64-unknown-linux-musl` 目标。后续构建直接启动已有镜像，
+继续执行 `cargo build --locked --release`，产出 Linux x86-64 静态二进制。
+
+2026-11-16 实测（`v0.14.9`，`4eaa03a1`）：在 Windows Docker Desktop 上单独运行该脚本的 Linux CLI
+构建步骤，首次成功创建 `mica-cli-musl-builder:1.100.0`。`file` 和 `readelf` 确认产物为静态链接，
+无动态解释器或共享库依赖。将二进制放入只包含该文件的 Linux `scratch` 镜像，`--version` 返回
+`mica-cli 0.14.9`，`--help` 正常退出。再次运行同一构建步骤时，脚本直接使用已有镜像，
+未重新构建镜像或安装 `musl-tools`。构建前后镜像 ID 相同，两次二进制的 SHA-256 也一致。
+
 把关点（与 release.yml 对应）：
 - 产物只能从**正好是该 tag 的干净提交**构建，且三处版本号一致（`require_tagged_tree`）——对应 CI 的「version must match the tree」。
 - `release-upload` 只往 **draft** 上挂；已发布的 release 拒绝覆盖（`FORCE=1` 才行）。
