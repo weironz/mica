@@ -1388,6 +1388,7 @@
       }
     }
   },
+  "transferSearchFolder": "Filter folders",
   "transferSearchWorkspace": "Type to filter",
   "transferMoveTitle": "Move to workspace",
   "transferCopyTitle": "Copy to workspace",

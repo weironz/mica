@@ -243,9 +243,15 @@ class _MicaSettingsShellState extends State<MicaSettingsShell> {
         clipBehavior: Clip.none,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
+          // A large modal, Notion-style (gh#180): settings are visited
+          // briefly and the page you came from stays behind the barrier, so a
+          // full-window takeover (Cursor, Factory) buys nothing a notes app
+          // needs. It was a fixed 960×720 — small on a big monitor; now it
+          // grows with the window up to 1120×840. Dialog's insets still shrink
+          // it on small windows, and under 700 px it becomes list → detail.
           child: SizedBox(
-            width: 960,
-            height: 720,
+            width: 1120,
+            height: 840,
             child: Column(
               children: [
                 Padding(

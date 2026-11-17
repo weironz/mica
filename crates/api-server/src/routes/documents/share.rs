@@ -148,22 +148,13 @@ fn render_share_shell(title: &str, body_html: &str, allow_indexing: bool) -> Str
   } else {
     "<meta name=\"robots\" content=\"noindex\">"
   };
+  // The HTML export's stylesheet, so a shared page renders callouts, diagrams
+  // and formulas exactly as the export does (#178); only the footer is ours.
+  let css = mica_markdown::static_page_css(SHARE_WIDTH_PX);
   format!(
     "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-     {robots}\n<title>{safe_title}</title>\n<style>\n\
-     body{{max-width:1160px;margin:2.5rem auto;padding:0 1.5rem;\
-     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
-     'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;}}\n\
-     img{{max-width:100%;height:auto;border-radius:6px;}}\n\
-     pre{{background:#f6f8fa;padding:1rem;border-radius:6px;overflow:auto;}}\n\
-     code{{background:#f6f8fa;padding:.15em .35em;border-radius:4px;}}\n\
-     pre code{{background:none;padding:0;}}\n\
-     blockquote{{margin:0;padding-left:1rem;border-left:3px solid #d0d7de;color:#57606a;}}\n\
-     table{{width:100%;border-collapse:collapse;}}\n\
-     td,th{{border:1px solid #d0d7de;padding:.4em .6em;}}\n\
-     hr{{border:none;border-top:1px solid #d0d7de;margin:2rem 0;}}\n\
-     h1{{margin-bottom:1.5rem;}}\n\
+     {robots}\n<title>{safe_title}</title>\n<style>\n{css}\
      .mica-footer{{margin-top:3rem;padding-top:1rem;border-top:1px solid #eaeef2;\
      color:#8c959f;font-size:.85rem;}}\n</style>\n</head>\n<body>\n\
      <h1>{safe_title}</h1>\n{body_html}\n\
@@ -171,9 +162,37 @@ fn render_share_shell(title: &str, body_html: &str, allow_indexing: bool) -> Str
   )
 }
 
+/// The share page's content column, as before the stylesheet was shared.
+const SHARE_WIDTH_PX: u32 = 1160;
+
 /// Minimal HTML-text escaping for the title (the body is escaped by export_html).
 fn escape_html_min(s: &str) -> String {
   s.replace('&', "&amp;")
     .replace('<', "&lt;")
     .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  // #178: the share page carried its own copy of the export stylesheet and
+  // never learned the callout / diagram / formula rules, so `> [!NOTE]` showed
+  // as a bare quote. It must use the export's stylesheet, not a fork of it.
+  #[test]
+  fn share_page_uses_the_export_stylesheet() {
+    let page = render_share_shell("T", "<p>x</p>", false);
+    assert!(page.contains(&mica_markdown::static_page_css(SHARE_WIDTH_PX)));
+    for rule in [".markdown-alert-note", ".mermaid svg", "div.math"] {
+      assert!(page.contains(rule), "share page lacks {rule}");
+    }
+    assert!(page.contains("noindex"));
+    assert!(!render_share_shell("T", "", true).contains("noindex"));
+  }
+
+  #[test]
+  fn share_title_is_escaped() {
+    let page = render_share_shell("<b>&", "", false);
+    assert!(page.contains("<title>&lt;b&gt;&amp;</title>"));
+  }
 }

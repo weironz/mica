@@ -207,12 +207,25 @@ pub fn export_html_document(
   let body = export_html(snapshot)?;
   let safe_title = escape_html(title.trim());
   let width = content_width_px.clamp(640, 2400);
+  let css = static_page_css(width);
   Ok(format!(
     "<!doctype html>\n<html lang=\"zh\">\n<head>\n<meta charset=\"utf-8\">\n\
      <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
      <meta http-equiv=\"Content-Security-Policy\" content=\"{SAFE_HTML_CSP}\">\n\
-     <title>{safe_title}</title>\n<style>\n\
-     body{{max-width:{width}px;margin:2.5rem auto;padding:0 1.5rem;\
+     <title>{safe_title}</title>\n<style>\n{css}</style>\n</head>\n<body>\n\
+     <h1>{safe_title}</h1>\n{body}\n</body>\n</html>\n"
+  ))
+}
+
+/// The stylesheet of every static page built from [`export_html`]: the HTML
+/// export and the public share page (`/s/{token}`). One copy on purpose — the
+/// share page used to carry its own, which never learned the callout, diagram
+/// and formula rules added here, so a shared page showed `> [!NOTE]` as a bare
+/// quote (#178). `width_px` is the content column.
+pub fn static_page_css(width_px: u32) -> String {
+  let width = width_px;
+  format!(
+    "body{{max-width:{width}px;margin:2.5rem auto;padding:0 1.5rem;\
      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',\
      'PingFang SC',sans-serif;line-height:1.7;color:#1f2328;\
      -webkit-print-color-adjust:exact;print-color-adjust:exact;}}\n\
@@ -243,9 +256,8 @@ pub fn export_html_document(
      .mermaid{{text-align:center;margin:1rem 0;}}\n\
      .mermaid svg{{max-width:100%;height:auto;}}\n\
      div.math{{margin:1rem 0;text-align:center;}}\n\
-     .math-block{{max-width:100%;}}\n</style>\n</head>\n<body>\n\
-     <h1>{safe_title}</h1>\n{body}\n</body>\n</html>\n"
-  ))
+     .math-block{{max-width:100%;}}\n"
+  )
 }
 
 fn escape_html(text: &str) -> String {

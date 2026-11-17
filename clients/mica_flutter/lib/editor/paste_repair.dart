@@ -6,6 +6,7 @@
 // language detection. docs/single-source/02-architecture.md §2.1, decision D7.
 library;
 
+import '../markdown/markdown_codec.dart';
 import 'highlight.dart' show canonicalCodeLanguage, strongLanguageSignature;
 
 /// Correct a fence whose language label the code itself contradicts.
@@ -143,4 +144,45 @@ String unwrapNestedFences(String md) {
       if (!drop.contains(k)) lines[k],
   ];
   return out.join('\n');
+}
+
+/// Whether a pasted SINGLE line of plain text should land with the marks the
+/// engine parsed out of it, rather than as literal characters.
+///
+/// Not syntax — the engine did the parsing (`markdownCodec.parseInline`); this
+/// only decides whether to trust the result for a one-line paste, where the
+/// text is as likely to be prose that happens to contain an asterisk as it is
+/// Markdown. A sentence copied from a Markdown source or an LLM answer
+/// (`路径 \`PredictedMediaLifeLeftPercent\` 的方向`, #185) arrived with its
+/// backticks showing, because one line used to insert literally, always.
+///
+/// Trusted: marks whose delimiters prose does not produce by accident — code
+/// spans, `**bold**`, `~~strike~~`, `[links](…)`, formulas. Not trusted: a lone
+/// `*…*` / `_…_` italic (`2*3*4`, `*args`-ish fragments), and anything the
+/// line would need raw HTML or a footnote definition to mean. One untrusted
+/// mark keeps the WHOLE line literal: the parsed text has already lost its
+/// delimiters, so it cannot be half-applied.
+bool singleLinePasteKeepsMarks(Iterable<String> markTypes) {
+  const trusted = {'code', 'bold', 'strike', 'link', 'math'};
+  var any = false;
+  for (final type in markTypes) {
+    if (!trusted.contains(type)) return false;
+    any = true;
+  }
+  return any;
+}
+
+/// The text and marks a single pasted line of plain text should land with, or
+/// null to paste it literally. The engine's inline parse when
+/// [singleLinePasteKeepsMarks] trusts it, else the formula-only parse (so
+/// "see $x$ here" still renders its formula inline), else null. Also null with
+/// no engine (Web without its wasm), where every paste is literal (02 §5.2).
+InlineText? singleLinePasteInline(String line) {
+  final parsed = withEngineOrNull(() => markdownCodec.parseInline(line));
+  if (parsed != null &&
+      singleLinePasteKeepsMarks(parsed.marks.map((m) => m.type))) {
+    return parsed;
+  }
+  final math = withEngineOrNull(() => markdownCodec.parseInlineMath(line));
+  return math != null && math.marks.isNotEmpty ? math : null;
 }

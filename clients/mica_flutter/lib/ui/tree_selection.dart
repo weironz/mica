@@ -214,58 +214,6 @@ bool escClearsTreeSelection({
   return hasSelection && routeIsCurrent && !renamingInline;
 }
 
-/// One row of a tree, reduced to what [flattenedFolderOptions] needs.
-typedef FolderCandidate = ({
-  String id,
-  String? parentId,
-  String name,
-  String position,
-  bool isFolder,
-});
-
-/// The FOLDERS of a workspace, depth-first in display order, each with its
-/// nesting depth — the options for "where should this land".
-///
-/// Pages are excluded because the tree's central invariant is that only a folder
-/// may hold children: offering a page as a destination produces a dropdown whose
-/// entries the server is guaranteed to refuse.
-///
-/// Children are ordered by `position`, the same key the sidebar sorts by, so the
-/// dropdown lists folders in the order the user is looking at them.
-///
-/// A folder whose parent is missing from [views] — a partially-loaded tree — is
-/// dropped rather than promoted to the root. Promoting it would offer a folder
-/// at a depth it does not have, and the indentation is the only thing telling
-/// two same-named folders apart.
-List<({String id, String name, int depth})> flattenedFolderOptions(
-  Iterable<FolderCandidate> views,
-) {
-  final byParent = <String?, List<FolderCandidate>>{};
-  for (final v in views) {
-    if (!v.isFolder) continue;
-    byParent.putIfAbsent(v.parentId, () => []).add(v);
-  }
-  for (final children in byParent.values) {
-    children.sort((a, b) => a.position.compareTo(b.position));
-  }
-  final out = <({String id, String name, int depth})>[];
-  final seen = <String>{};
-  void walk(String? parentId, int depth) {
-    for (final f in byParent[parentId] ?? const <FolderCandidate>[]) {
-      // The walk descends from the root, so a parent cycle is unreachable and
-      // needs no guard. This one is for a DUPLICATED row in the response, which
-      // would otherwise list the same folder twice — and its whole subtree
-      // under each copy.
-      if (!seen.add(f.id)) continue;
-      out.add((id: f.id, name: f.name, depth: depth));
-      walk(f.id, depth + 1);
-    }
-  }
-
-  walk(null, 0);
-  return out;
-}
-
 /// What a click on a tree row means, once its modifier keys are read.
 enum TreeClickIntent {
   /// No modifier: open the page (or expand the folder), and drop any selection.

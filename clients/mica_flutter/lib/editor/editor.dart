@@ -1225,20 +1225,16 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
     }
 
-    // Inline math ($…$ / \(…\)) anywhere in a single pasted line is woven into
-    // the text as inline-math marks at the caret — so "see $x$ here" keeps its
-    // prose and the formula renders inline instead of jumping onto its own
-    // line. Only fires when the line actually carries a formula; plain text
-    // falls through to the literal single-line paste below. Rich HTML must
-    // use its semantic formatting instead of letting the plain flavor win.
+    // One plain line weaves in at the caret with the marks [singleLinePasteInline]
+    // trusts (#185), else pastes literally below; rich HTML keeps its own.
     if (!rich &&
         node != null &&
         !node.isAtomic &&
         !node.isCode &&
         node.kind != 'table' &&
         !plain.contains('\n')) {
-      final parsed = markdownCodec.parseInlineMath(plain);
-      if (parsed.marks.isNotEmpty) {
+      final parsed = singleLinePasteInline(plain);
+      if (parsed != null) {
         final sel = _controller.selection;
         if (sel != null) {
           // A cross-block selection must be deleted by the same document-range
@@ -1426,7 +1422,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         return;
       }
     }
-    // 3) Plain text: multi-line markdown-parses, single line inserts inline.
+    // 3) Plain text: multi-line parses; one line weaves in (see below).
     if (plain.isEmpty || !live()) return;
     if (!_handleRichPaste(plain, plain, false, requireFocus: requireFocus)) {
       // insertTextAtCaret replaces the selection itself (spliceRange).
@@ -2966,51 +2962,55 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
                       horizontal: 10,
                       vertical: 9,
                     ),
-                    child: TextField(
-                      controller: controller,
-                      contextMenuBuilder: (context, state) {
-                        final items = state.contextMenuButtonItems.map((item) {
-                          if (item.type == ContextMenuButtonType.copy ||
-                              item.type == ContextMenuButtonType.cut) {
-                            return ContextMenuButtonItem(
-                              type: item.type,
-                              label: item.label,
-                              onPressed: () {
-                                copyCell(
-                                  cut: item.type == ContextMenuButtonType.cut,
-                                );
-                                state.hideToolbar();
-                              },
-                            );
-                          }
-                          return item;
-                        }).toList();
-                        return AdaptiveTextSelectionToolbar.buttonItems(
-                          anchors: state.contextMenuAnchors,
-                          buttonItems: items,
-                        );
-                      },
-                      focusNode: focus,
-                      autofocus: true,
-                      maxLines: null,
-                      // Enter inserts a newline inside the cell (the cell
-                      // grows); it does NOT commit. Commit is click-away /
-                      // Esc / Tab / arrows.
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      cursorColor: MicaTheme.of(context).editor.caret,
-                      style: _cellStyle(node, row),
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        contentPadding: EdgeInsets.zero,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
-                        errorBorder: InputBorder.none,
-                        focusedErrorBorder: InputBorder.none,
-                        filled: false,
-                        isCollapsed: true,
+                    // The cell painter ignores the UI text scale; so must the
+                    // field, or text grows and wraps over the divider (#184).
+                    child: MediaQuery.withNoTextScaling(
+                      child: TextField(
+                        controller: controller,
+                        contextMenuBuilder: (context, state) {
+                          final items = state.contextMenuButtonItems.map((item) {
+                            if (item.type == ContextMenuButtonType.copy ||
+                                item.type == ContextMenuButtonType.cut) {
+                              return ContextMenuButtonItem(
+                                type: item.type,
+                                label: item.label,
+                                onPressed: () {
+                                  copyCell(
+                                    cut: item.type == ContextMenuButtonType.cut,
+                                  );
+                                  state.hideToolbar();
+                                },
+                              );
+                            }
+                            return item;
+                          }).toList();
+                          return AdaptiveTextSelectionToolbar.buttonItems(
+                            anchors: state.contextMenuAnchors,
+                            buttonItems: items,
+                          );
+                        },
+                        focusNode: focus,
+                        autofocus: true,
+                        maxLines: null,
+                        // Enter inserts a newline inside the cell (the cell
+                        // grows); it does NOT commit. Commit is click-away /
+                        // Esc / Tab / arrows.
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        cursorColor: MicaTheme.of(context).editor.caret,
+                        style: _cellStyle(node, row),
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          contentPadding: EdgeInsets.zero,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          errorBorder: InputBorder.none,
+                          focusedErrorBorder: InputBorder.none,
+                          filled: false,
+                          isCollapsed: true,
+                        ),
                       ),
                     ),
                   ),

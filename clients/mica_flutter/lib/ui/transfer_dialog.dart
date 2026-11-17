@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../l10n/locale_controller.dart';
+import 'destination_tree_picker.dart';
 import 'theme_tokens.dart';
 
 /// Move / copy a page-or-folder subtree into another cloud workspace. Picking a
@@ -18,16 +19,17 @@ import 'theme_tokens.dart';
 /// refresh + snackbar.
 ///
 /// The destination can be a FOLDER in the target workspace, not only its root:
-/// picking a workspace loads its folders and offers them as a second dropdown.
-/// Landing everything at the root was the v1 behaviour and is still the default
-/// choice, so the extra control costs nothing to ignore.
+/// picking a workspace loads its tree and shows it the way the sidebar does,
+/// with a filter ([DestinationTreePicker], gh#183). Landing everything at the
+/// root was the v1 behaviour and is still the default choice, so the extra
+/// control costs nothing to ignore.
 class TransferDialog extends StatefulWidget {
   const TransferDialog({
     super.key,
     required this.copy,
     required this.destinations,
     required this.onTransfer,
-    required this.onLoadFolders,
+    required this.onLoadTree,
     this.itemCount = 1,
   });
 
@@ -51,15 +53,13 @@ class TransferDialog extends StatefulWidget {
   })
   onTransfer;
 
-  /// Folders of [destWorkspaceId], flattened depth-first for a dropdown.
+  /// The whole tree (folders and pages) of [destWorkspaceId], for the folder
+  /// picker.
   ///
   /// Loaded per destination rather than up front: there can be many workspaces
   /// and the user picks one, so fetching every tree to populate a control they
   /// may never open would be the expensive half of this dialog.
-  final Future<List<({String id, String name, int depth})>> Function(
-    String destWorkspaceId,
-  )
-  onLoadFolders;
+  final Future<List<DocumentView>> Function(String destWorkspaceId) onLoadTree;
 
   @override
   State<TransferDialog> createState() => _TransferDialogState();
@@ -72,8 +72,8 @@ class _TransferDialogState extends State<TransferDialog> {
   bool _submitting = false;
   String? _error;
 
-  /// Folders of the picked destination; null = not loaded (or still loading).
-  List<({String id, String name, int depth})>? _folders;
+  /// The picked destination's tree; null = not loaded (or still loading).
+  List<DocumentView>? _tree;
 
   /// Chosen destination folder; null = the destination's root.
   String? _parentViewId;
@@ -90,7 +90,7 @@ class _TransferDialogState extends State<TransferDialog> {
       _destId = id;
       _preview = null;
       _error = null;
-      _folders = null;
+      _tree = null;
       // A folder id belongs to the workspace it came from; carrying it across
       // would send the server a parent it will (correctly) refuse.
       _parentViewId = null;
@@ -98,9 +98,9 @@ class _TransferDialogState extends State<TransferDialog> {
     });
     // Folders are a convenience — failing to list them must not block the
     // transfer, which works perfectly well into the root.
-    widget.onLoadFolders(id).then((folders) {
+    widget.onLoadTree(id).then((tree) {
       if (!mounted || _destId != id) return;
-      setState(() => _folders = folders);
+      setState(() => _tree = tree);
     }, onError: (_) {});
     await _runPreview(id, null);
   }
@@ -172,6 +172,9 @@ class _TransferDialogState extends State<TransferDialog> {
     final l10n = context.l10n;
     final report = _preview;
     return AlertDialog(
+      // The folder tree makes the body tall; on a short window it must scroll
+      // rather than overflow.
+      scrollable: true,
       title: Text(
         widget.copy ? l10n.transferCopyTitle : l10n.transferMoveTitle,
       ),
@@ -204,37 +207,25 @@ class _TransferDialogState extends State<TransferDialog> {
                     onSelected: _selectDest,
                   ),
                   // Second control: WHERE in that workspace. Only once a
-                  // destination is picked and its folders arrived — an empty
-                  // dropdown offering nothing but "root" is a control that
-                  // says less than the label above it already does.
-                  if (_folders != null && _folders!.isNotEmpty) ...[
+                  // destination is picked and its tree arrived with at least one
+                  // folder — a picker offering nothing but "root" says less than
+                  // the label above it already does.
+                  if (_tree?.any((v) => v.isFolder) ?? false) ...[
                     const SizedBox(height: 12),
-                    DropdownButtonFormField<String?>(
-                      style: Theme.of(context).textTheme.bodyLarge,
-                      initialValue: _parentViewId,
-                      isExpanded: true,
-                      decoration: InputDecoration(
-                        labelText: l10n.transferPickFolder,
-                        border: const OutlineInputBorder(),
-                      ),
-                      items: [
-                        DropdownMenuItem<String?>(
-                          child: Text(l10n.transferDestinationRoot),
-                        ),
-                        for (final f in _folders!)
-                          DropdownMenuItem<String?>(
-                            value: f.id,
-                            child: Text(
-                              // Indented with spaces rather than nested widgets:
-                              // a DropdownMenuItem renders in two places (list
-                              // and closed field) and padding in the second one
-                              // pushes the selected name off-centre.
-                              '${'　' * f.depth}${f.name}',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: _submitting ? null : _selectParent,
+                    Text(
+                      l10n.transferPickFolder,
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 6),
+                    DestinationTreePicker(
+                      // A new destination starts with a fresh filter/expansion.
+                      key: ValueKey('tree-$_destId'),
+                      views: _tree!,
+                      selectedId: _parentViewId,
+                      enabled: !_submitting,
+                      rootLabel: l10n.transferDestinationRoot,
+                      filterHint: l10n.transferSearchFolder,
+                      onSelected: _selectParent,
                     ),
                   ],
                   const SizedBox(height: 16),

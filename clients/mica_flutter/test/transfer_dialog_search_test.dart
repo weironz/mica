@@ -24,7 +24,7 @@ void main() {
               for (final n in ['研发周报', '产品规划', '研发知识库', '个人笔记'])
                 (id: 'id-$n', name: n),
             ],
-            onLoadFolders: (_) async => const [],
+            onLoadTree: (_) async => const [],
             onTransfer: ({
               required destWorkspaceId,
               required parentViewId,

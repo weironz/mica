@@ -4116,21 +4116,10 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         copy: copy,
         destinations: destinations,
         itemCount: views.length,
-        // Folders of whichever destination the dialog is showing, flattened
-        // depth-first so the dropdown reads like the sidebar does.
-        onLoadFolders: (destWorkspaceId) async => flattenedFolderOptions([
-          for (final v in await _api.listViews(
-            _requireSession().accessToken,
-            destWorkspaceId,
-          ))
-            (
-              id: v.id,
-              parentId: v.parentViewId,
-              name: v.name,
-              position: v.position,
-              isFolder: v.objectType == 'folder',
-            ),
-        ]),
+        // The tree of whichever destination the dialog is showing; the picker
+        // orders it exactly as the sidebar does.
+        onLoadTree: (destWorkspaceId) =>
+            _api.listViews(_requireSession().accessToken, destWorkspaceId),
         // The dialog supplies (destWorkspaceId, parentViewId, dryRun); we bind
         // source + the selected roots + move/copy here.
         //
