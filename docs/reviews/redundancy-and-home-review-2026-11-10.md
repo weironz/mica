@@ -17,7 +17,7 @@
 | 5 | **发版两条路** | GitHub Actions 的 `release.yml`（668 行）和本地脚本（`scripts/release*.sh`、`ship.sh`）各一套，都在维护、各有测试。0.14.4 走的是本地脚本 | 定一条为主，另一条只保留到"能应急" |
 | 6 | **"本地模式"和"云端 + 离线缓存"** | 两套世界各有后端（`world/local_world_backend.dart` 966 行，`local/` 目录约 2,600 行）。云端模式已经能离线读写 | 产品决策：还要不要保留"无账号纯本地"这个用法 |
 | 7 | **部署两份 compose** | 生产版 `docker-compose.yml` 413 行，单机快速版 `docker-compose.single.yml` 215 行 | 用途不同，建议保留 |
-| 8 | **代码高亮** | 只有 Dart 一份（`editor/highlight.dart`，2,432 行）；导出的 HTML 没有高亮 | 不是双实现，是导出缺功能，另算 |
+| 8 | **代码高亮** | 只有 Dart 一份（`editor/highlight.dart`，2,432 行）；导出的 HTML 没有高亮 | 不是双实现，是导出缺功能，另算。**已处理（gh#178）**：高亮器移入 `crates/md-core/src/highlight`，编辑器、HTML 导出、分享页共用 |
 
 **消不掉的平台分叉**：17 个 `_web.dart` 文件、32 处 `kIsWeb` 判断，是 Flutter 一套代码跑网页和原生本身带来的，不迁框架就消不掉。
 

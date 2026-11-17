@@ -199,7 +199,7 @@ Mica 内部「复制 → 粘贴」走的是 **text/html**：复制时写 HTML（
 （Rust 没有 HTML 解析器，本专项不搬）。这条跨语言契约由 S3 的「Mica 内复制粘贴往返」测试守护（S3 T3.8）。
 
 **Dart 侧预处理**（在调引擎之前，由 Dart 填好块数据，引擎只照写）：代码块语言。编辑器里 `language` 为空或 `auto` 时，
-复制要输出自动识别的语言（`controller.dart _copyLanguage` → `highlight.dart detectLanguage`，Dart 独有）。
+复制要输出自动识别的语言（`controller.dart _copyLanguage` → `highlight.dart detectLanguage` → 引擎 `highlight` 入口；代码高亮与语言识别自 gh#178 起只在 `crates/md-core/src/highlight`）。
 构造 `BlockSpec` 时把识别结果写进 `data.language`（`plaintext` 则删掉该键）。Markdown 与 HTML 两种复制都适用。
 
 ### 2.2 不变量（每条都要有测试，S1 交付）

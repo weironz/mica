@@ -1,3 +1,4 @@
+import 'support/markdown_codec.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/highlight.dart';
@@ -46,12 +47,13 @@ Color? colourOf(String code, String lang, String needle) {
 }
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   // AppFlowy ships a code-block picker with no HTML and no C#. It intersects a
   // hardcoded name list against its highlighter's grammar ids, and entries whose
   // spelling differs (`HTML` vs hljs's `xml`, `C#` vs `csharp`) are dropped
   // silently — nothing checks the intersection, so the gap shipped.
   //
-  // Our list (`kCodeLanguages`) and our tokenizer configs are likewise two
+  // Our list (`codeLanguages`) and our tokenizer configs are likewise two
   // hand-maintained places. This group keeps them in step: an entry that reaches
   // the dropdown but colours nothing is worse than an absent one, because the
   // user picks it and concludes the highlighter is broken.
@@ -111,7 +113,7 @@ void main() {
     test('every entry has a sample here', () {
       // Forces this test to be updated when a language is added, instead of the
       // new entry quietly escaping coverage.
-      final expected = kCodeLanguages.where(
+      final expected = codeLanguages.where(
         (l) => l != 'auto' && l != 'plaintext',
       );
       expect(samples.keys.toSet(), expected.toSet());
@@ -130,7 +132,7 @@ void main() {
     test('every entry is its own canonical name, not an alias', () {
       // An entry that canonicalises to something else would highlight as that
       // other language while claiming to be itself.
-      for (final lang in kCodeLanguages.where((l) => l != 'auto')) {
+      for (final lang in codeLanguages.where((l) => l != 'auto')) {
         expect(canonicalCodeLanguage(lang), lang, reason: lang);
       }
     });
@@ -138,7 +140,7 @@ void main() {
 
   group('powershell', () {
     test('it is offered, and highlights', () {
-      expect(kCodeLanguages, contains('powershell'));
+      expect(codeLanguages, contains('powershell'));
       expect(
         coloured(r'if ($x -eq 1) { exit 0 }', 'powershell'),
         greaterThan(0),

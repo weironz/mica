@@ -86,6 +86,15 @@ pub fn export_markdown_with_assets(
   Ok(lines.join("\n"))
 }
 
+/// [`export_html`] with code blocks syntax-highlighted by the editor's own
+/// tokenizer (`<span class="hl-keyword">` …): the body of every static page —
+/// the HTML export and the share page — so they colour code the way the editor
+/// does (gh#178). The page stylesheet supplies the colours.
+pub fn export_html_highlighted(snapshot: &DocumentSnapshotPayload) -> Result<String, MdError> {
+  let _highlight = crate::html::html::HighlightScope::enter();
+  export_html(snapshot)
+}
+
 /// Render a document to its HTML body fragment.
 pub fn export_html(snapshot: &DocumentSnapshotPayload) -> Result<String, MdError> {
   if snapshot.schema_version != 1 {

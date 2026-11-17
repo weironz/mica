@@ -2,8 +2,9 @@
 // equal-length fence around a code block; Python labelled ```bash). They run
 // on the pasted TEXT before it reaches the engine and are deliberately not
 // part of the grammar: file import, MCP writes and the server parse strictly.
-// Kept in Dart because `retagMislabeledFences` leans on `highlight.dart`'s
-// language detection. docs/single-source/02-architecture.md §2.1, decision D7.
+// Paste heuristics, not grammar, so they stay here; the language signatures
+// `retagMislabeledFences` asks for come from the engine (via `highlight.dart`).
+// docs/single-source/02-architecture.md §2.1, decision D7.
 library;
 
 import '../markdown/markdown_codec.dart';

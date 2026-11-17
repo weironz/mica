@@ -252,6 +252,59 @@ pub fn properties_json(request_json: &str) -> Result<String, MdError> {
   out.map_err(invalid)
 }
 
+/// One code-highlighting operation, selected by `op` (gh#178). One entry point
+/// for the same reason as [`properties_json`]: one binding per platform.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+enum HighlightRequest {
+  /// Tokens of `code` as `language`.
+  Tokens { code: String, language: String },
+  /// The detected language of `code`.
+  Detect { code: String },
+  /// The structural-syntax language of `code`, or null.
+  Signature { code: String },
+  /// The canonical spelling of a fence label.
+  Canonical { name: String },
+  /// The picker's language list.
+  Languages,
+}
+
+/// Code highlighting. `tokens` answers a flat `[start, end, role, …]` array —
+/// UTF-16 offsets, role 0 keyword · 1 string · 2 comment · 3 number ·
+/// 4 function · 5 key — compact because the editor asks per code block.
+/// `detect` / `canonical` answer a JSON string, `signature` a string or null,
+/// `languages` an array of names.
+pub fn highlight_json(request_json: &str) -> Result<String, MdError> {
+  use crate::highlight::{self as hl, Role};
+  let request: HighlightRequest = serde_json::from_str(request_json).map_err(invalid)?;
+  let out = match request {
+    HighlightRequest::Tokens { code, language } => {
+      let mut flat = Vec::new();
+      for t in hl::highlight_code(&code, &language) {
+        let role = match t.role {
+          Role::Keyword => 0,
+          Role::String => 1,
+          Role::Comment => 2,
+          Role::Number => 3,
+          Role::Function => 4,
+          Role::Key => 5,
+        };
+        flat.extend([t.start, t.end, role]);
+      }
+      serde_json::to_string(&flat)
+    }
+    HighlightRequest::Detect { code } => serde_json::to_string(&hl::detect_code_language(&code)),
+    HighlightRequest::Signature { code } => {
+      serde_json::to_string(&hl::strong_language_signature(&code))
+    }
+    HighlightRequest::Canonical { name } => {
+      serde_json::to_string(&hl::canonical_code_language(&name))
+    }
+    HighlightRequest::Languages => serde_json::to_string(hl::code_languages()),
+  };
+  out.map_err(invalid)
+}
+
 /// Pasted clipboard HTML → Markdown (02 §3.3). The input is the client's
 /// parsed `<body>` as an [`HtmlNode`](crate::HtmlNode) tree; the output is
 /// Markdown for `parse_body_json(…, fragment = true)`.

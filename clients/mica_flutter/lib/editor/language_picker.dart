@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../l10n/locale_controller.dart';
 import '../ui/theme_tokens.dart';
-import 'highlight.dart' show kCodeLanguages;
+import 'highlight.dart' show codeLanguages;
 
 /// Code-block language picker: a small anchored panel with a search box —
 /// the language list is long, so filtering beats scrolling. ↑/↓ move the
@@ -37,7 +37,7 @@ class _LanguagePickerState extends State<LanguagePicker> {
     final q = _query.text.trim().toLowerCase();
     // Alphabetical so the list is scannable; `auto` (content detection) stays
     // pinned on top as the smart default.
-    final rest = kCodeLanguages.where((l) => l != 'auto').toList()..sort();
+    final rest = codeLanguages.where((l) => l != 'auto').toList()..sort();
     final all = <String>['auto', ...rest];
     if (q.isEmpty) return all;
     return [

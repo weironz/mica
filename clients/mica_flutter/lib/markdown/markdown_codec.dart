@@ -39,6 +39,11 @@ abstract interface class MarkdownCodec {
   /// answer comes back. Typed wrappers live in `editor/properties.dart`.
   Object? properties(Map<String, Object?> request);
 
+  /// Code highlighting (gh#178): `request` carries `op` — `tokens`, `detect`,
+  /// `signature`, `canonical` or `languages` — and its arguments; the decoded
+  /// wire answer comes back. The editor's wrapper is `editor/highlight.dart`.
+  Object? highlight(Map<String, Object?> request);
+
   /// Pasted clipboard HTML, already tokenized into a plain tree (see
   /// `editor/html_to_markdown.dart`), as Markdown for [parseBlocks] with
   /// `fragment: true`.
@@ -65,6 +70,10 @@ Future<void> initMarkdownCodec() async {
   final elapsed = DateTime.now().difference(started).inMilliseconds;
   debugPrint('markdown codec ready in $elapsed ms');
 }
+
+/// The installed codec, or null before [initMarkdownCodec] — for callers that
+/// degrade instead of failing (code highlighting renders plain).
+MarkdownCodec? get markdownCodecOrNull => _codec;
 
 @visibleForTesting
 void debugSetMarkdownCodec(MarkdownCodec? codec) => _codec = codec;
@@ -113,6 +122,8 @@ class UnavailableMarkdownCodec implements MarkdownCodec {
   InlineText parseInlineMath(String source) => _unavailable();
   @override
   Object? properties(Map<String, Object?> request) => _unavailable();
+  @override
+  Object? highlight(Map<String, Object?> request) => _unavailable();
   @override
   String htmlToMarkdown(Map<String, Object?> body) => _unavailable();
   @override

@@ -69,9 +69,10 @@ impl From<mica_md::MdError> for DocumentOperationError {
 /// A document operation result.
 pub type DocumentOperationResult<T> = Result<T, DocumentOperationError>;
 
-/// Render a document to its HTML body fragment.
-fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
-  mica_md::compat::export_html(snapshot).map_err(DocumentOperationError::from)
+/// The HTML body fragment of a static page (the HTML export, the share page):
+/// code blocks coloured by the editor's tokenizer, styled by [`static_page_css`].
+pub fn export_html(snapshot: &DocumentSnapshotPayload) -> DocumentOperationResult<String> {
+  mica_md::compat::export_html_highlighted(snapshot).map_err(DocumentOperationError::from)
 }
 
 /// The document's own title, if it carries one.
@@ -256,7 +257,13 @@ pub fn static_page_css(width_px: u32) -> String {
      .mermaid{{text-align:center;margin:1rem 0;}}\n\
      .mermaid svg{{max-width:100%;height:auto;}}\n\
      div.math{{margin:1rem 0;text-align:center;}}\n\
-     .math-block{{max-width:100%;}}\n"
+     .math-block{{max-width:100%;}}\n\
+     .hl-keyword{{color:#7c3aed;}}\n\
+     .hl-string{{color:#0a7d34;}}\n\
+     .hl-comment{{color:#6b7280;}}\n\
+     .hl-number{{color:#b45309;}}\n\
+     .hl-function{{color:#2563eb;}}\n\
+     .hl-key{{color:#0f766e;}}\n"
   )
 }
 
@@ -551,6 +558,62 @@ mod facade_security_tests {
         "http-equiv=\"Content-Security-Policy\" content=\"{SAFE_HTML_CSP}\""
       )),
       "the export must embed the shared policy verbatim: {doc}"
+    );
+  }
+}
+
+#[cfg(test)]
+mod code_highlight_tests {
+  use super::{export_html, export_html_document};
+  use mica_md::compat::import_markdown;
+
+  /// gh#178: static pages colour code with the editor's tokenizer — escaped
+  /// text inside role spans, and the stylesheet that colours them.
+  #[test]
+  fn static_pages_colour_code_like_the_editor() {
+    let md = "```rust\nfn main() { let s = \"<b>\"; } // done\n```\n";
+    let html = export_html(&import_markdown(md, "root")).unwrap();
+    assert!(html.contains("<code class=\"language-rust\">"), "{html}");
+    assert!(
+      html.contains("<span class=\"hl-keyword\">fn</span>"),
+      "{html}"
+    );
+    assert!(
+      html.contains("<span class=\"hl-function\">main</span>"),
+      "{html}"
+    );
+    assert!(
+      html.contains("<span class=\"hl-string\">&quot;&lt;b&gt;&quot;</span>"),
+      "{html}"
+    );
+    assert!(
+      html.contains("<span class=\"hl-comment\">// done</span>"),
+      "{html}"
+    );
+    let page = export_html_document(&import_markdown(md, "root"), "t", 800).unwrap();
+    assert!(page.contains(".hl-keyword{color:#7c3aed;}"), "{page}");
+  }
+
+  /// No label: detected, as the editor does on `auto`.
+  #[test]
+  fn an_unlabelled_block_is_detected() {
+    let md = "```\ndef f():\n    return 1\n```\n";
+    let html = export_html(&import_markdown(md, "root")).unwrap();
+    assert!(
+      html.contains("<span class=\"hl-keyword\">def</span>"),
+      "{html}"
+    );
+  }
+
+  /// The spec-facing renderer stays plain: CommonMark output is compared
+  /// byte-for-byte, and the clipboard goes to other apps.
+  #[test]
+  fn the_plain_renderer_is_untouched() {
+    let html =
+      mica_md::compat::export_html(&import_markdown("```rust\nfn x() {}\n```\n", "root")).unwrap();
+    assert!(
+      html.contains("<pre><code class=\"language-rust\">fn x() {}\n</code></pre>"),
+      "{html}"
     );
   }
 }

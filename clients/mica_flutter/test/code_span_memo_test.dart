@@ -1,6 +1,8 @@
+import 'support/markdown_codec.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/highlight.dart';
+import 'package:mica_flutter/markdown/markdown_codec.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';
 
 // buildCodeSpan is a hand-written tokenizer the editor rebuilds for every code
@@ -11,6 +13,7 @@ import 'package:mica_flutter/ui/theme_tokens.dart';
 // highlighted text is never corrupted by caching.
 
 void main() {
+  setUpAll(useNativeMarkdownCodec);
   const base = TextStyle(fontSize: 14);
 
   test(
@@ -107,5 +110,15 @@ void main() {
     ); // served from memo
     expect(first.toPlainText(), src);
     expect(second.toPlainText(), src);
+  });
+
+  test('without an engine, code renders plain instead of failing', () {
+    final engine = markdownCodecOrNull;
+    debugSetMarkdownCodec(const UnavailableMarkdownCodec());
+    addTearDown(() => debugSetMarkdownCodec(engine));
+    const src = 'fn no_engine() { let x = 1; }';
+    final span = buildCodeSpan(src, 'rust', base, MicaTokens.light.code);
+    expect(span.toPlainText(), src);
+    expect(span.children, isNull, reason: 'one plain run, no colours');
   });
 }

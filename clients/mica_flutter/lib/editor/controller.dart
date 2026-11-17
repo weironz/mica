@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'details_html.dart';
 import 'ai_edits.dart';
-import 'highlight.dart' show kCodeLanguages, detectLanguage;
+import 'highlight.dart' show codeLanguages, detectLanguage;
 import 'marks.dart';
 import 'model.dart';
 import 'operation_history.dart';
@@ -517,7 +517,7 @@ class EditorController extends ChangeNotifier {
         !before.contains('\n') &&
         node.data['language'] == null &&
         tag != 'auto' &&
-        kCodeLanguages.contains(tag)) {
+        codeLanguages.contains(tag)) {
       node.text = '';
       node.data = {...node.data, 'language': tag};
       selection = DocSelection.collapsed(DocPosition(i, 0));

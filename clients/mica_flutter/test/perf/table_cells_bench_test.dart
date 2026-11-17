@@ -60,6 +60,8 @@ class _CountingCodec implements MarkdownCodec {
   Object? properties(Map<String, Object?> request) =>
       _inner.properties(request);
   @override
+  Object? highlight(Map<String, Object?> request) => _inner.highlight(request);
+  @override
   String htmlToMarkdown(Map<String, Object?> body) =>
       _inner.htmlToMarkdown(body);
   @override

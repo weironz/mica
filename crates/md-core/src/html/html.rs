@@ -487,6 +487,66 @@ pub(crate) fn html_span(units: &[u16], lo: usize, hi: usize, marks: &[&InlineMar
 
 thread_local! {
   static STRICT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+  static HIGHLIGHT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether code blocks are syntax-highlighted in the current render: static
+/// pages (HTML export, share page) yes, so they colour code exactly like the
+/// editor (gh#178); the spec-facing `render_html` and the clipboard no — their
+/// output is compared byte-for-byte against CommonMark and pasted into other
+/// apps. Scoped for the same reason as [`strict`].
+fn highlighting() -> bool {
+  HIGHLIGHT.with(std::cell::Cell::get)
+}
+
+/// Holds the highlight flag for one render (see [`highlighting`]).
+pub(crate) struct HighlightScope(bool);
+
+impl HighlightScope {
+  pub(crate) fn enter() -> Self {
+    Self(HIGHLIGHT.with(|s| s.replace(true)))
+  }
+}
+
+impl Drop for HighlightScope {
+  fn drop(&mut self) {
+    HIGHLIGHT.with(|s| s.set(self.0));
+  }
+}
+
+/// Escaped code with `<span class="hl-ROLE">` runs from the editor's own
+/// tokenizer; an empty or `auto` language is detected the way the editor does.
+fn highlighted_code_html(code: &str, lang: &str) -> String {
+  let language = crate::highlight::resolve_code_language(code, Some(lang));
+  let tokens = crate::highlight::highlight_code(code, &language);
+  if tokens.is_empty() {
+    return escape_html(code);
+  }
+  // UTF-16 offsets → byte offsets, walking the text once.
+  let mut out = String::with_capacity(code.len() + tokens.len() * 32);
+  let mut chars = code.char_indices().peekable();
+  let mut unit = 0u32;
+  let mut byte_at = |target: u32| -> usize {
+    while unit < target {
+      let Some((_, c)) = chars.next() else { break };
+      unit += c.len_utf16() as u32;
+    }
+    chars.peek().map_or(code.len(), |&(b, _)| b)
+  };
+  let mut pos = 0;
+  for t in tokens {
+    let start = byte_at(t.start);
+    let end = byte_at(t.end);
+    out.push_str(&escape_html(&code[pos..start]));
+    out.push_str("<span class=\"hl-");
+    out.push_str(t.role.as_str());
+    out.push_str("\">");
+    out.push_str(&escape_html(&code[start..end]));
+    out.push_str("</span>");
+    pos = end;
+  }
+  out.push_str(&escape_html(&code[pos..]));
+  out
 }
 
 /// Whether the current render is [`HtmlProfile::Strict`](crate::HtmlProfile).
@@ -594,6 +654,8 @@ pub(crate) fn append_html_block(
       };
       let body = if block.text.is_empty() {
         String::new()
+      } else if highlighting() {
+        format!("{}\n", highlighted_code_html(&block.text, lang))
       } else {
         format!("{}\n", escape_html(&block.text))
       };

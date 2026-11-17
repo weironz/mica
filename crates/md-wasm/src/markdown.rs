@@ -50,6 +50,11 @@ pub fn parse_inline_math(source: &str) -> String {
   mica_md::wire::parse_inline_math_json(source)
 }
 
+#[wasm_bindgen(js_name = highlight)]
+pub fn highlight(request_json: &str) -> Result<String, JsError> {
+  mica_md::wire::highlight_json(request_json).map_err(js_error)
+}
+
 #[wasm_bindgen(js_name = properties)]
 pub fn properties(request_json: &str) -> Result<String, JsError> {
   mica_md::wire::properties_json(request_json).map_err(js_error)

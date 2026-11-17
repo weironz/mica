@@ -16,6 +16,7 @@
 
 mod api;
 pub mod compat;
+pub mod highlight;
 mod html;
 mod ids;
 mod model;

@@ -95,6 +95,10 @@ class _FfiMarkdownCodec implements MarkdownCodec {
     () => jsonDecode(ffi.mdProperties(requestJson: jsonEncode(request))),
   );
   @override
+  Object? highlight(Map<String, Object?> request) => _call(
+    () => jsonDecode(ffi.mdHighlight(requestJson: jsonEncode(request))),
+  );
+  @override
   String htmlToMarkdown(Map<String, Object?> body) =>
       _call(() => ffi.mdHtmlToMarkdown(domJson: jsonEncode(body)));
   @override

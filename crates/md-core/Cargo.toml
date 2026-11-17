@@ -40,6 +40,8 @@ render-math = ["dep:ratex-parser", "dep:ratex-layout", "dep:ratex-svg", "dep:rat
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Code-block highlighting rules (src/highlight): tiny, no Unicode tables, wasm-friendly.
+regex-lite = "0.1"
 uuid = { workspace = true, optional = true }
 merman = { version = "0.7", features = ["render"], optional = true }
 ratex-parser = { version = "0.1", optional = true }

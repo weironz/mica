@@ -27,6 +27,7 @@ extension type _MicaMd._(JSObject _) implements JSObject {
   external String mathRunSpans(String source);
   external String parseInlineMath(String source);
   external String properties(String requestJson);
+  external String highlight(String requestJson);
   external String htmlToMarkdown(String domJson);
   external String engineInfo();
 }
@@ -107,6 +108,9 @@ class _WasmMarkdownCodec implements MarkdownCodec {
   @override
   Object? properties(Map<String, Object?> request) =>
       _call(() => jsonDecode(md.properties(jsonEncode(request))));
+  @override
+  Object? highlight(Map<String, Object?> request) =>
+      _call(() => jsonDecode(md.highlight(jsonEncode(request))));
   @override
   String htmlToMarkdown(Map<String, Object?> body) =>
       _call(() => md.htmlToMarkdown(jsonEncode(body)));
