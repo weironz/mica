@@ -6,13 +6,9 @@
 //! document. Now the grammars are data ([`languages.json`]) and the scanner is
 //! here; Dart only maps a [`Role`] to a palette colour.
 //!
-//! The grammars' structural rules are JavaScript-flavoured regex sources (that is
-//! where they came from, and the parity fixture pins the behaviour they had
-//! there). [`compile`] translates the few JS-isms regex-lite lacks: `\s` is JS's
-//! Unicode whitespace set, `.` excludes JS line terminators, and a trailing
-//! `(?=…)` / `(?!…)` is checked separately at the match end — sound because in
-//! every rule the body cannot end earlier by backtracking (it is followed by a
-//! character class the tail never starts with).
+//! The grammars' structural rules are JavaScript regex sources (that is where
+//! they came from, and the parity fixture pins the behaviour they had there),
+//! run by a small JS-semantics matcher (`regex.rs`).
 //!
 //! Offsets are UTF-16 code units, the unit of the editor's text model and of
 //! every other offset the engine hands to Dart.
@@ -20,12 +16,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
-use regex_lite::Regex;
-use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+mod regex;
+use regex::Regex;
 
 /// What a highlighted token IS; the caller picks the colour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
   /// A language keyword.
   Keyword,
@@ -56,7 +53,7 @@ impl Role {
 }
 
 /// One coloured run, in UTF-16 code units; text between tokens is plain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CodeToken {
   /// Start offset (UTF-16, inclusive).
   pub start: u32,
@@ -66,41 +63,17 @@ pub struct CodeToken {
   pub role: Role,
 }
 
-#[derive(Deserialize)]
-struct RawData {
-  languages: Vec<String>,
-  aliases: HashMap<String, String>,
-  grammars: HashMap<String, RawGrammar>,
-}
-
-#[derive(Deserialize)]
-struct RawGrammar {
-  keywords: Vec<String>,
-  line_comments: Vec<String>,
-  block_comments: bool,
-  strings: Vec<String>,
-  case_insensitive: bool,
-  rules: Vec<RawRule>,
-}
-
-#[derive(Deserialize)]
-struct RawRule {
-  pattern: String,
-  role: Role,
-  lead_only: bool,
-}
-
 struct Grammar {
   keywords: HashSet<String>,
-  line_comments: Vec<String>,
+  line_comments: Vec<Vec<char>>,
   block_comments: bool,
-  strings: Vec<u8>,
+  strings: Vec<char>,
   case_insensitive: bool,
   rules: Vec<Rule>,
 }
 
 struct Rule {
-  pattern: Pattern,
+  pattern: Regex,
   role: Role,
   lead_only: bool,
 }
@@ -111,201 +84,77 @@ struct Data {
   grammars: HashMap<String, Grammar>,
 }
 
+/// Walks the parsed `Value` by hand: serde-derived loaders for these shapes
+/// cost the Web bundle ~20 KB for a one-time read of a file we ship.
 fn data() -> &'static Data {
   static DATA: OnceLock<Data> = OnceLock::new();
   DATA.get_or_init(|| {
-    let raw: RawData =
+    let raw: Value =
       serde_json::from_str(include_str!("languages.json")).expect("languages.json is valid");
-    let grammars = raw
-      .grammars
+    let strs = |v: &Value| -> Vec<String> {
+      v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+    };
+    let flag = |v: &Value| v.as_bool().unwrap_or(false);
+    let role = |name: &str| match name {
+      "keyword" => Role::Keyword,
+      "string" => Role::String,
+      "comment" => Role::Comment,
+      "number" => Role::Number,
+      "function" => Role::Function,
+      "key" => Role::Key,
+      other => panic!("unknown highlight role {other:?}"),
+    };
+    let object = |v: &Value| v.as_object().cloned().unwrap_or_default();
+    let grammars = object(&raw["grammars"])
       .into_iter()
       .map(|(name, g)| {
+        let rules = g["rules"]
+          .as_array()
+          .into_iter()
+          .flatten()
+          .map(|r| {
+            let pattern = r["pattern"].as_str().unwrap_or_default();
+            Rule {
+              pattern: Regex::new(pattern, false)
+                .unwrap_or_else(|e| panic!("bad highlight rule {pattern:?}: {e}")),
+              role: role(r["role"].as_str().unwrap_or_default()),
+              lead_only: flag(&r["lead_only"]),
+            }
+          })
+          .collect();
         let grammar = Grammar {
-          keywords: g.keywords.into_iter().collect(),
-          line_comments: g.line_comments,
-          block_comments: g.block_comments,
-          strings: g.strings.iter().filter_map(|s| s.bytes().next()).collect(),
-          case_insensitive: g.case_insensitive,
-          rules: g
-            .rules
-            .into_iter()
-            .map(|r| Rule {
-              pattern: Pattern::new(&r.pattern),
-              role: r.role,
-              lead_only: r.lead_only,
-            })
+          keywords: strs(&g["keywords"]).into_iter().collect(),
+          line_comments: strs(&g["line_comments"])
+            .iter()
+            .filter(|p| !p.is_empty())
+            .map(|p| p.chars().collect())
             .collect(),
+          block_comments: flag(&g["block_comments"]),
+          strings: strs(&g["strings"])
+            .iter()
+            .filter_map(|s| s.chars().next())
+            .collect(),
+          case_insensitive: flag(&g["case_insensitive"]),
+          rules,
         };
         (name, grammar)
       })
       .collect();
+    let aliases = object(&raw["aliases"])
+      .into_iter()
+      .filter_map(|(k, v)| Some((k, v.as_str()?.to_string())))
+      .collect();
     Data {
-      languages: raw.languages,
-      aliases: raw.aliases,
+      languages: strs(&raw["languages"]),
+      aliases,
       grammars,
     }
   })
-}
-
-// ---------------------------------------------------------------------------
-// JS regex sources → regex-lite
-// ---------------------------------------------------------------------------
-
-/// JavaScript's `\s`, as class contents.
-const JS_WS: &str =
-  r"\t\n\x0B\x0C\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}";
-
-/// Translate a JS (non-unicode-mode) regex source into regex-lite syntax.
-fn translate(src: &str) -> String {
-  let mut out = String::with_capacity(src.len() + 16);
-  let mut chars = src.chars().peekable();
-  let mut in_class = false;
-  while let Some(c) = chars.next() {
-    match c {
-      '\\' => {
-        let Some(e) = chars.next() else {
-          out.push_str(r"\\");
-          break;
-        };
-        match (e, in_class) {
-          ('s', true) => out.push_str(JS_WS),
-          ('s', false) => {
-            out.push('[');
-            out.push_str(JS_WS);
-            out.push(']');
-          }
-          ('S', false) => {
-            out.push_str("[^");
-            out.push_str(JS_WS);
-            out.push(']');
-          }
-          ('S', true) => panic!("\\S inside a class is not supported: {src}"),
-          _ => {
-            out.push('\\');
-            out.push(e);
-          }
-        }
-      }
-      '[' if !in_class => {
-        // `[\s\S]` is JS's "any character".
-        let rest: String = chars.clone().take(5).collect();
-        if rest == r"\s\S]" {
-          for _ in 0..5 {
-            chars.next();
-          }
-          out.push_str("(?s:.)");
-          continue;
-        }
-        in_class = true;
-        out.push('[');
-        if chars.peek() == Some(&'^') {
-          out.push('^');
-          chars.next();
-        }
-        // A leading `]` is a literal in neither dialect; JS treats `[]` as empty.
-      }
-      ']' if in_class => {
-        in_class = false;
-        out.push(']');
-      }
-      '.' if !in_class => out.push_str(r"[^\n\r\x{2028}\x{2029}]"),
-      _ => out.push(c),
-    }
-  }
-  out
-}
-
-/// Index of the `(` that opens a top-level group ending exactly at the end of
-/// `src`, when that group is a lookahead: returns (open index, positive).
-fn trailing_lookahead(src: &str) -> Option<(usize, bool)> {
-  let b = src.as_bytes();
-  if !src.ends_with(')') {
-    return None;
-  }
-  // Walk forward tracking depth; remember where each top-level group opens.
-  let mut depth = 0usize;
-  let mut in_class = false;
-  let mut i = 0;
-  let mut last_open = None;
-  while i < b.len() {
-    match b[i] {
-      b'\\' => {
-        i += 2;
-        continue;
-      }
-      b'[' if !in_class => in_class = true,
-      b']' if in_class => in_class = false,
-      b'(' if !in_class => {
-        if depth == 0 {
-          last_open = Some(i);
-        }
-        depth += 1;
-      }
-      b')' if !in_class => {
-        depth -= 1;
-        if depth == 0 && i == b.len() - 1 {
-          let open = last_open?;
-          let head = &src[open..];
-          if head.starts_with("(?=") {
-            return Some((open, true));
-          }
-          if head.starts_with("(?!") {
-            return Some((open, false));
-          }
-          return None;
-        }
-      }
-      _ => {}
-    }
-    i += 1;
-  }
-  None
-}
-
-/// A JS regex source, matched anchored at a position (`matchAsPrefix`).
-struct Pattern {
-  body: Regex,
-  /// `^`-anchored source: only ever matches at offset 0.
-  at_start: bool,
-  /// A trailing lookahead, checked at the body's end: (assertion, positive).
-  tail: Option<(Box<Pattern>, bool)>,
-}
-
-impl Pattern {
-  fn new(src: &str) -> Self {
-    let (body_src, tail) = match trailing_lookahead(src) {
-      Some((open, positive)) => {
-        let inner = &src[open + 3..src.len() - 1];
-        (
-          &src[..open],
-          Some((Box::new(Pattern::new(inner)), positive)),
-        )
-      }
-      None => (src, None),
-    };
-    let body = Regex::new(&format!("^(?:{})", translate(body_src)))
-      .unwrap_or_else(|e| panic!("bad highlight pattern {src:?}: {e}"));
-    Pattern {
-      body,
-      at_start: body_src.starts_with('^'),
-      tail,
-    }
-  }
-
-  /// Byte end of a match starting exactly at byte `i`, if any.
-  fn match_at(&self, code: &str, i: usize) -> Option<usize> {
-    if self.at_start && i != 0 {
-      return None;
-    }
-    let m = self.body.find(&code[i..])?;
-    let end = i + m.end();
-    if let Some((tail, positive)) = &self.tail {
-      if tail.match_at(code, end).is_some() != *positive {
-        return None;
-      }
-    }
-    Some(end)
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -364,74 +213,72 @@ pub fn highlight_code(code: &str, language: &str) -> Vec<CodeToken> {
   tokenize(code, lang)
 }
 
-fn utf16_len(s: &str) -> u32 {
-  s.chars().map(|c| c.len_utf16() as u32).sum()
+fn starts_with(c: &[char], i: usize, pat: &[char]) -> bool {
+  c.get(i..i + pat.len()) == Some(pat)
 }
 
 fn tokenize(code: &str, lang: &Grammar) -> Vec<CodeToken> {
-  let b = code.as_bytes();
-  let n = b.len();
+  let c: Vec<char> = code.chars().collect();
+  let n = c.len();
+  // UTF-16 offset of every char index (and of the end).
+  let mut u16_at = Vec::with_capacity(n + 1);
+  let mut unit = 0u32;
+  for ch in &c {
+    u16_at.push(unit);
+    unit += ch.len_utf16() as u32;
+  }
+  u16_at.push(unit);
   let mut out = Vec::new();
-  let mut i = 0usize; // byte offset
-  let mut u = 0u32; // UTF-16 offset of `i`
-  let mut line_lead = true;
-  let emit = |out: &mut Vec<CodeToken>, from: usize, to: usize, u: &mut u32, role: Role| {
-    let len = utf16_len(&code[from..to]);
+  let mut emit = |from: usize, to: usize, role: Role| {
     out.push(CodeToken {
-      start: *u,
-      end: *u + len,
+      start: u16_at[from],
+      end: u16_at[to],
       role,
     });
-    *u += len;
   };
+  let mut i = 0usize;
+  let mut line_lead = true;
 
   while i < n {
-    let ch = b[i];
+    let ch = c[i];
     let at_lead = line_lead;
-    if ch == b'\n' {
+    if ch == '\n' {
       line_lead = true;
-    } else if ch != b' ' && ch != b'\t' && ch != b'-' {
+    } else if ch != ' ' && ch != '\t' && ch != '-' {
       line_lead = false;
     }
 
     // Structural rules first: an HTML `<!-- -->` beats the string scanner on
     // the quotes inside it; a JSON key is claimed before it is just a string.
-    let mut matched = false;
-    for rule in &lang.rules {
+    let rule = lang.rules.iter().find_map(|rule| {
       if rule.lead_only && !at_lead {
-        continue;
+        return None;
       }
-      let Some(end) = rule.pattern.match_at(code, i) else {
-        continue;
-      };
-      if end == i {
-        continue;
-      }
-      emit(&mut out, i, end, &mut u, rule.role);
+      rule
+        .pattern
+        .match_at(&c, i)
+        .filter(|&end| end > i)
+        .map(|end| (end, rule.role))
+    });
+    if let Some((end, role)) = rule {
+      emit(i, end, role);
       i = end;
       line_lead = false;
-      matched = true;
-      break;
-    }
-    if matched {
       continue;
     }
 
-    let rest = &code[i..];
-    if lang.block_comments && rest.starts_with("/*") {
-      let stop = code[i + 2..].find("*/").map_or(n, |e| i + 2 + e + 2);
-      emit(&mut out, i, stop, &mut u, Role::Comment);
+    if lang.block_comments && starts_with(&c, i, &['/', '*']) {
+      let stop = (i + 2..n.saturating_sub(1))
+        .find(|&j| c[j] == '*' && c[j + 1] == '/')
+        .map_or(n, |j| j + 2);
+      emit(i, stop, Role::Comment);
       i = stop;
       continue;
     }
 
-    if lang
-      .line_comments
-      .iter()
-      .any(|p| !p.is_empty() && rest.starts_with(p.as_str()))
-    {
-      let stop = code[i..].find('\n').map_or(n, |e| i + e);
-      emit(&mut out, i, stop, &mut u, Role::Comment);
+    if lang.line_comments.iter().any(|p| starts_with(&c, i, p)) {
+      let stop = (i..n).find(|&j| c[j] == '\n').unwrap_or(n);
+      emit(i, stop, Role::Comment);
       i = stop;
       continue;
     }
@@ -439,66 +286,56 @@ fn tokenize(code: &str, lang: &Grammar) -> Vec<CodeToken> {
     if lang.strings.contains(&ch) {
       let mut j = i + 1;
       while j < n {
-        let c = b[j];
-        if c == b'\\' {
-          // Skip the escaped character, whatever its width.
-          j += 1;
-          if j < n {
-            j += code[j..].chars().next().map_or(1, char::len_utf8);
-          }
+        if c[j] == '\\' {
+          j += 2;
           continue;
         }
-        if c == ch {
+        if c[j] == ch {
           j += 1;
           break;
         }
-        if c == b'\n' {
+        if c[j] == '\n' {
           break; // unterminated: stop at the line end
         }
         j += 1;
       }
       let j = j.min(n);
-      emit(&mut out, i, j, &mut u, Role::String);
+      emit(i, j, Role::String);
       i = j;
       continue;
     }
 
     if ch.is_ascii_digit() {
       let mut j = i + 1;
-      while j < n && (b[j].is_ascii_hexdigit() || matches!(b[j], b'x' | b'X' | b'.' | b'_')) {
+      while j < n && (c[j].is_ascii_hexdigit() || matches!(c[j], 'x' | 'X' | '.' | '_')) {
         j += 1;
       }
-      emit(&mut out, i, j, &mut u, Role::Number);
+      emit(i, j, Role::Number);
       i = j;
       continue;
     }
 
-    if ch.is_ascii_alphabetic() || ch == b'_' {
+    if ch.is_ascii_alphabetic() || ch == '_' {
       let mut j = i + 1;
-      while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+      while j < n && (c[j].is_ascii_alphanumeric() || c[j] == '_') {
         j += 1;
       }
-      let word = &code[i..j];
+      let word: String = c[i..j].iter().collect();
       let keyword = if lang.case_insensitive {
         lang.keywords.contains(&word.to_ascii_lowercase())
       } else {
-        lang.keywords.contains(word)
+        lang.keywords.contains(&word)
       };
       if keyword {
-        emit(&mut out, i, j, &mut u, Role::Keyword);
-      } else if j < n && b[j] == b'(' {
-        emit(&mut out, i, j, &mut u, Role::Function);
-      } else {
-        u += (j - i) as u32;
+        emit(i, j, Role::Keyword);
+      } else if j < n && c[j] == '(' {
+        emit(i, j, Role::Function);
       }
       i = j;
       continue;
     }
 
-    // Plain: one whole character (a non-ASCII one never starts a token).
-    let c = code[i..].chars().next().expect("in bounds");
-    i += c.len_utf8();
-    u += c.len_utf16() as u32;
+    i += 1; // plain
   }
   out
 }
@@ -507,7 +344,7 @@ fn tokenize(code: &str, lang: &Grammar) -> Vec<CodeToken> {
 // Detection
 // ---------------------------------------------------------------------------
 
-/// A JS regex (source, multiline) compiled once.
+/// A detection pattern (JS source, multiline?) compiled once.
 fn re(src: &'static str, multiline: bool) -> &'static Regex {
   static CACHE: OnceLock<Mutex<HashMap<(&'static str, bool), &'static Regex>>> = OnceLock::new();
   let mut cache = CACHE
@@ -515,9 +352,8 @@ fn re(src: &'static str, multiline: bool) -> &'static Regex {
     .lock()
     .unwrap_or_else(|e| e.into_inner());
   cache.entry((src, multiline)).or_insert_with(|| {
-    let flags = if multiline { "(?m)" } else { "" };
-    let regex = Regex::new(&format!("{flags}{}", translate(src)))
-      .unwrap_or_else(|e| panic!("bad detection pattern {src:?}: {e}"));
+    let regex =
+      Regex::new(src, multiline).unwrap_or_else(|e| panic!("bad detection pattern {src:?}: {e}"));
     Box::leak(Box::new(regex))
   })
 }
@@ -530,6 +366,10 @@ fn re(src: &'static str, multiline: bool) -> &'static Regex {
 /// *pasted* fence claims about itself, so a false positive silently mislabels
 /// someone's code; `None` is always the safe answer.
 pub fn strong_language_signature(code: &str) -> Option<&'static str> {
+  signature(&code.chars().collect::<Vec<_>>())
+}
+
+fn signature(code: &[char]) -> Option<&'static str> {
   let has = |p: &'static str| re(p, true).is_match(code);
   // A shebang says what the file IS.
   if has(r"^#!.*\b(bash|sh|zsh|ksh)\b") {
@@ -571,10 +411,11 @@ fn detect(c: &str) -> &'static str {
   if c.is_empty() {
     return "plaintext";
   }
-  let has = |p: &'static str| re(p, false).is_match(c);
-  let has_line = |p: &'static str| re(p, true).is_match(c);
+  let chars: Vec<char> = c.chars().collect();
+  let has = |p: &'static str| re(p, false).is_match(&chars);
+  let has_line = |p: &'static str| re(p, true).is_match(&chars);
 
-  if let Some(strong) = strong_language_signature(c) {
+  if let Some(strong) = signature(&chars) {
     return strong;
   }
 
@@ -600,12 +441,7 @@ fn detect(c: &str) -> &'static str {
   // YAML: `key:` at the head of a line IS the language. Two of them, or a
   // document marker. Above Python's weak rules: a compose file's
   // `command: python -c "print(1)"` must not read as Python.
-  if has_line(r"^---\s*$")
-    || re(r"^[ \t]*-?[ \t]*[\w.-]+:(?:[ \t]|$)", true)
-      .find_iter(c)
-      .count()
-      >= 2
-  {
+  if has_line(r"^---\s*$") || re(r"^[ \t]*-?[ \t]*[\w.-]+:(?:[ \t]|$)", true).count(&chars) >= 2 {
     return "yaml";
   }
   if has(r"\bfn\s+\w+") && (c.contains("->") || c.contains("let mut") || c.contains("println!")) {
@@ -660,7 +496,7 @@ fn detect(c: &str) -> &'static str {
 
   let mut weak = 0;
   // `$(cmd)` (not `$((`) or a backtick run with no `$` inside (not a template).
-  if has(r"\$\((?:[^(]|$)") || has(r"`[^`\n$]+`") {
+  if has(r"\$\((?!\()") || has(r"`[^`\n$]+`") {
     weak += 1;
   }
   if has(r"\s(?:&&|\|\|)\s") {
@@ -670,7 +506,7 @@ fn detect(c: &str) -> &'static str {
     weak += 1;
   }
   // VAR=value with no spaces (Python/Ruby space it); `==` is a comparison.
-  if has_line(r"^\s*[A-Za-z_]\w*=[^=\s]") {
+  if has_line(r"^\s*[A-Za-z_]\w*=(?!=)\S") {
     weak += 1;
   }
   if has(r"\becho\s+") {
@@ -697,16 +533,6 @@ mod tests {
   #[test]
   fn every_grammar_compiles() {
     assert!(data().grammars.len() > 40);
-  }
-
-  #[test]
-  fn trailing_lookahead_is_split() {
-    let p = Pattern::new(r"[A-Za-z_][A-Za-z0-9_]*(?=\s*:)");
-    assert_eq!(p.match_at("key: 1", 0), Some(3));
-    assert_eq!(p.match_at("key = 1", 0), None);
-    let p = Pattern::new(r"\.?[A-Za-z0-9_%./\-]+(?=\s*:(?!=))");
-    assert_eq!(p.match_at("all: x", 0), Some(3));
-    assert_eq!(p.match_at("x := 1", 0), None);
   }
 
   #[test]

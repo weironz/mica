@@ -2250,7 +2250,6 @@ dependencies = [
  "ratex-parser",
  "ratex-svg",
  "ratex-types",
- "regex-lite",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

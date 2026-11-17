@@ -252,23 +252,6 @@ pub fn properties_json(request_json: &str) -> Result<String, MdError> {
   out.map_err(invalid)
 }
 
-/// One code-highlighting operation, selected by `op` (gh#178). One entry point
-/// for the same reason as [`properties_json`]: one binding per platform.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
-enum HighlightRequest {
-  /// Tokens of `code` as `language`.
-  Tokens { code: String, language: String },
-  /// The detected language of `code`.
-  Detect { code: String },
-  /// The structural-syntax language of `code`, or null.
-  Signature { code: String },
-  /// The canonical spelling of a fence label.
-  Canonical { name: String },
-  /// The picker's language list.
-  Languages,
-}
-
 /// Code highlighting. `tokens` answers a flat `[start, end, role, …]` array —
 /// UTF-16 offsets, role 0 keyword · 1 string · 2 comment · 3 number ·
 /// 4 function · 5 key — compact because the editor asks per code block.
@@ -276,11 +259,19 @@ enum HighlightRequest {
 /// `languages` an array of names.
 pub fn highlight_json(request_json: &str) -> Result<String, MdError> {
   use crate::highlight::{self as hl, Role};
-  let request: HighlightRequest = serde_json::from_str(request_json).map_err(invalid)?;
-  let out = match request {
-    HighlightRequest::Tokens { code, language } => {
+  // Walked by hand rather than a serde-tagged enum: that derive alone cost
+  // the Web bundle ~18 KB.
+  let request: Value = serde_json::from_str(request_json).map_err(invalid)?;
+  let field = |key: &str| {
+    request
+      .get(key)
+      .and_then(Value::as_str)
+      .ok_or_else(|| invalid(format!("missing `{key}`")))
+  };
+  let out = match field("op")? {
+    "tokens" => {
       let mut flat = Vec::new();
-      for t in hl::highlight_code(&code, &language) {
+      for t in hl::highlight_code(field("code")?, field("language")?) {
         let role = match t.role {
           Role::Keyword => 0,
           Role::String => 1,
@@ -291,18 +282,15 @@ pub fn highlight_json(request_json: &str) -> Result<String, MdError> {
         };
         flat.extend([t.start, t.end, role]);
       }
-      serde_json::to_string(&flat)
+      json!(flat)
     }
-    HighlightRequest::Detect { code } => serde_json::to_string(&hl::detect_code_language(&code)),
-    HighlightRequest::Signature { code } => {
-      serde_json::to_string(&hl::strong_language_signature(&code))
-    }
-    HighlightRequest::Canonical { name } => {
-      serde_json::to_string(&hl::canonical_code_language(&name))
-    }
-    HighlightRequest::Languages => serde_json::to_string(hl::code_languages()),
+    "detect" => json!(hl::detect_code_language(field("code")?)),
+    "signature" => json!(hl::strong_language_signature(field("code")?)),
+    "canonical" => json!(hl::canonical_code_language(field("name")?)),
+    "languages" => json!(hl::code_languages()),
+    other => return Err(invalid(format!("unknown highlight op `{other}`"))),
   };
-  out.map_err(invalid)
+  Ok(out.to_string())
 }
 
 /// Pasted clipboard HTML → Markdown (02 §3.3). The input is the client's
