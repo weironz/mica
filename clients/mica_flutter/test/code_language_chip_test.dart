@@ -1,3 +1,4 @@
+import 'support/markdown_codec.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/model.dart';
@@ -12,6 +13,8 @@ import 'package:mica_flutter/editor/render.dart';
 const yaml = 'services:\n  api:\n    image: mica\n    ports:\n      - "80:80"\n';
 
 void main() {
+  // Language names and detection come from the engine (gh#178).
+  setUpAll(useNativeMarkdownCodec);
   Future<String> chipOf(WidgetTester tester, Map<String, dynamic> data) async {
     await tester.pumpWidget(
       MaterialApp(

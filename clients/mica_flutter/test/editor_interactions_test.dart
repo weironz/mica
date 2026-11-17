@@ -1,3 +1,4 @@
+import 'support/markdown_codec.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/controller.dart';
 import 'package:mica_flutter/editor/model.dart';
@@ -9,6 +10,8 @@ EditorController _fresh(List<EditorNode> nodes) {
 }
 
 void main() {
+  // Language names and detection come from the engine (gh#178).
+  setUpAll(useNativeMarkdownCodec);
   test('typing `# ` on an existing heading re-levels it', () {
     final c = _fresh([
       EditorNode(id: 'h', kind: 'heading', text: 'My Title', data: {'level': 2}),
