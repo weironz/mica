@@ -498,7 +498,7 @@ void debugSetMarkdownCodec(MarkdownCodec? codec) => _codec = codec;
 | --- | --- | --- |
 | 桌面 `initMarkdownCodec()` | ≤ 30 ms（p50，Windows 发布版） | 启动日志计时 |
 | Web wasm 实例化 + `micaMdReady` | ≤ 60 ms；首帧推迟 ≤ 60 ms | Playwright `performance.now()` |
-| wasm 体积 | ≤ 256 KiB（262,144 B）gzip，wasm 与 JS 分别 `gzip -n -9` 后相加；目标 ≤ 120 KB（M2 用户决定，原 200 KB） | 构建脚本强制；以 Linux（CI 平台）构建为准 |
+| wasm 体积 | ≤ 288 KiB（294,912 B）gzip（2026-11-17 由 256 KiB 调高，见 [体积预算记录](../reviews/wasm-size-budget-2026-11-17.md)），wasm 与 JS 分别 `gzip -n -9` 后相加；目标 ≤ 120 KB（M2 用户决定，原 200 KB） | 构建脚本强制；以 Linux（CI 平台）构建为准 |
 | 粘贴 10k 字符 Markdown（解析） | ≤ S0 Dart 基线 × 1.2（桌面、Web 各自对比） | `test/perf/markdown_codec_bench_test.dart` + 浏览器版 |
 | 复制 10k 字符选区（序列化 Markdown + HTML，两者合计） | 桌面、Web 各自 ≤ 16 ms（一帧）；与 Dart 的比值只记录、不作门槛（M2 用户决定，原 ≤ S0 基线 × 1.2） | 同上 |
 | 500 单元格表格首次解码（旧字符串格式） | 桌面 ≤ 16 ms、Web ≤ 30 ms（批量接口）；之后每帧 0 次引擎调用 | S4 基准测试 |

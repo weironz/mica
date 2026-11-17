@@ -49,7 +49,7 @@
 | --- | --- | --- |
 | D1 | 桌面 `initMarkdownCodec` | ≤ 30 ms |
 | D2 | Web wasm ready / 首帧推迟 | ≤ 60 ms |
-| D3 | wasm 体积 | ≤ 256 KiB gzip（构建脚本强制，以 Linux 构建为准；M2 改） |
+| D3 | wasm 体积 | ≤ 288 KiB gzip（构建脚本强制，以 Linux 构建为准；M2 定 256 KiB，2026-11-17 因高亮器入引擎调为 288 KiB，见 [体积预算记录](../reviews/wasm-size-budget-2026-11-17.md)） |
 | D4 | 粘贴 / 复制 10k 字符 | 粘贴（解析）≤ 基线 × 1.2；复制（Markdown + HTML 合计）≤ 16 ms；桌面、Web 分别（M2 改） |
 | D5 | 500 单元格表格首次解码 | 桌面 ≤ 16 ms、Web ≤ 30 ms；重新布局 0 次引擎调用 |
 

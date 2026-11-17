@@ -65,14 +65,14 @@ refuses 'CLI mismatch' CLI_VERSION=0.2.128
 refuses 'gold verification failure' GOLD_FAIL=1
 refuses 'fewer than eleven tests' GOLD_PASSED=10
 refuses 'generation mode' GEN_GOLD=1
-# Size gate (M2 decision): the 262144 B budget must accept a Linux-scale bundle
+# Size gate (M2 decision, raised to 288 KiB 2026-11-17): the 294912 B budget must accept a Linux-scale bundle
 # (~205 KB, which the old 200 KB gate refused) and still refuse anything above it.
 STUB_WASM_BYTES=205000 run > "$fixture/output" 2>&1
 grep -q 'total=205' "$fixture/output"
-printf 'PASS: 205 KB artifact accepted under the 262144 B budget\n'
+printf 'PASS: 205 KB artifact accepted under the 294912 B budget\n'
 refuses 'oversize artifact' STUB_WASM_BYTES=300000
-grep -q 'hard budget 262144 B' "$fixture/output"
-printf 'PASS: oversize refusal names the 262144 B budget\n'
+grep -q 'hard budget 294912 B' "$fixture/output"
+printf 'PASS: oversize refusal names the 294912 B budget\n'
 rm "$fixture/crates/md-core/tests/fixtures/wire/vector.json"
 refuses 'empty gold corpus'
 printf '{}\n' > "$fixture/crates/md-core/tests/fixtures/wire/vector.json"
