@@ -439,7 +439,7 @@ jobs:
           --health-cmd "pg_isready -U mica"
           --health-interval 5s --health-timeout 5s --health-retries 10
       rustfs:
-        image: rustfs/rustfs:1.0.0-rc.3
+        image: rustfs/rustfs:1.0.6
         env:
           RUSTFS_VOLUMES: /data
           RUSTFS_ADDRESS: 0.0.0.0:9000

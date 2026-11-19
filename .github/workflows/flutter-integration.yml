@@ -180,11 +180,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $url = 'https://github.com/rustfs/rustfs/releases/download/1.0.0-rc.3/rustfs-windows-x86_64-v1.0.0-rc.3.zip'
+          $url = 'https://github.com/rustfs/rustfs/releases/download/1.0.6/rustfs-windows-x86_64-v1.0.6.zip'
           $zip = Join-Path $env:RUNNER_TEMP 'rustfs.zip'
           Invoke-WebRequest -Uri $url -OutFile $zip
           $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          $expected = '08e7a0bf8e3382614962dcc3f5769827147ef0acc463d36df78863c10d722bd2'
+          $expected = 'd718157c08ffcbc32e667176f941d6d36b37c7d73335b9f82d4d30a2d5ea5393'
           if ($actual -ne $expected) { throw "RustFS archive SHA256 mismatch: $actual" }
           Expand-Archive -Path $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'rustfs')
 
