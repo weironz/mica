@@ -324,13 +324,27 @@ services:
   #   docker compose --profile backup up -d backup
   # Talks to the API over the internal network (no token ever leaves the host).
   backup:
+    # Stable hostname across container recreations so rustic finds the parent
+    # snapshot after a deploy instead of re-reading every file under a new
+    # random container ID.
+    hostname: mica-backup
+    cgroup_parent: ${MICA_CGROUP_PARENT:-}
+    # Cap backup memory (observed cgroup peak ~322 MiB) so nightly prune/export
+    # cannot squeeze the API or Postgres on a shared host.
+    mem_limit: ${MICA_BACKUP_MEMORY_LIMIT:-768m}
+    memswap_limit: -1
     image: ${MICA_REGISTRY:-registry.cn-shenzhen.aliyuncs.com/willspace}/mica-cli:${MICA_VERSION:?set MICA_VERSION in .env — pick one from https://github.com/weironz/mica/releases}
     profiles: ["backup"]
     restart: unless-stopped
+    # Reap orphaned child processes (rustic/rclone/pg_dump/export) cleanly.
+    init: true
     logging: *default-logging
     depends_on:
       - api
     environment:
+      # Persist rustic's index/snapshot cache across container recreations so a
+      # deploy does not force a full metadata re-download from OSS.
+      RUSTIC_CACHE_DIR: /var/cache/rustic
       # `BACKUP_HOUR` is read against LOCAL time (`chrono::Local`), and a
       # container with no TZ has no local time — `Local` silently degrades to
       # UTC. So `BACKUP_HOUR=3` meant 03:00 UTC = 11:00 in Beijing: a backup
@@ -396,11 +410,18 @@ services:
       OSS_BLOB_BUCKET: ${OSS_BLOB_BUCKET:-}
       OSS_BLOB_ROOT: ${OSS_BLOB_ROOT:-mica-blobs}
       BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      # Set to "0" to skip the immediate run on container start/deploy and wait
+      # for BACKUP_HOUR (manual runs still work via `mica-cli backup run`).
+      BACKUP_ON_START: "${BACKUP_ON_START:-}"
+      # Weekly maintenance day for `rustic prune` + `rustic check` (mon..sun,
+      # daily, or off). Daily runs always apply `rustic forget` (metadata only).
+      PRUNE_WEEKDAY: "${PRUNE_WEEKDAY:-sun}"
       KEEP_DAILY: ${KEEP_DAILY:-7}
       KEEP_WEEKLY: ${KEEP_WEEKLY:-4}
       KEEP_MONTHLY: ${KEEP_MONTHLY:-6}
     volumes:
       - mica-prod-backup:/var/lib/mica/export
+      - mica-prod-backup-cache:/var/cache/rustic
       # The credentials, read-only, so the backup can include them. Until
       # v0.13.40 this instance's .env.secrets was backed up nowhere: a rebuilt
       # machine could reach a running, EMPTY stack and then stop, because
@@ -436,3 +457,4 @@ volumes:
   mica-prod-postgres:
   mica-prod-rustfs:
   mica-prod-backup:
+  mica-prod-backup-cache:

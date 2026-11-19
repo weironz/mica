@@ -104,6 +104,45 @@ def check_traefik_working_set(env: dict[str, str]) -> None:
     print("Traefik: 256 MiB cap, 128 MiB root/leaf protection, unlimited swap")
 
 
+def check_backup_service(env: dict[str, str]) -> None:
+    """Verify the backup sidecar keeps a stable hostname, persistent cache,
+    init reaper, memory cap, and explicit allow-list for schedule knobs."""
+    probe_env = env | {
+        "BACKUP_ON_START": "0",
+        "PRUNE_WEEKDAY": "sun",
+        "MICA_CGROUP_PARENT": "mica.slice",
+    }
+    result = subprocess.run(
+        [
+            "docker", "compose", "--profile", "backup",
+            "-f", str(ROOT / "deploy" / "docker-compose.yml"),
+            "config", "--format", "json",
+        ],
+        cwd=ROOT, env=probe_env, check=True, capture_output=True, text=True,
+    )
+    backup = json.loads(result.stdout)["services"]["backup"]
+    if backup.get("hostname") != "mica-backup":
+        raise AssertionError(f"backup hostname must be 'mica-backup', got {backup.get('hostname')!r}")
+    if backup.get("init") is not True:
+        raise AssertionError("backup service must set `init: true`")
+    if backup.get("cgroup_parent") != "mica.slice":
+        raise AssertionError(f"backup cgroup_parent not passed through: {backup.get('cgroup_parent')!r}")
+    mem_limit = backup.get("mem_limit")
+    if mem_limit is None or int(mem_limit) != 768 * 1024 * 1024:
+        raise AssertionError(f"backup default mem_limit must be 768 MiB, got {mem_limit!r}")
+    if int(backup.get("memswap_limit", 0)) != -1:
+        raise AssertionError(f"backup memswap_limit must be -1, got {backup.get('memswap_limit')!r}")
+    benv = backup["environment"]
+    for key, expected in (
+        ("RUSTIC_CACHE_DIR", "/var/cache/rustic"),
+        ("BACKUP_ON_START", "0"),
+        ("PRUNE_WEEKDAY", "sun"),
+    ):
+        if benv.get(key) != expected:
+            raise AssertionError(f"backup env {key}: expected {expected!r}, got {benv.get(key)!r}")
+    print("Backup sidecar: stable hostname, persistent cache, init reaper, 768 MiB cap, schedule knobs")
+
+
 def main() -> None:
     env = os.environ.copy()
     env.update(
@@ -132,6 +171,7 @@ def main() -> None:
         raise AssertionError("quickstart reset-link default must use its HTTP address")
     check_traefik_working_set(env)
     check_child_reaping(env)
+    check_backup_service(env)
     for compose in ("docker-compose.yml", "docker-compose.single.yml"):
         default_database_env = env.copy()
         default_database_env["MICA_DATABASE_HOST"] = ""

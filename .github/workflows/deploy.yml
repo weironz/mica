@@ -121,7 +121,7 @@ jobs:
           # Pinned, not ssh-keyscan'd at runtime: scanning now would trust
           # whatever answers, which is not verification.
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$d/known_hosts"
-          printf 'Host *\n  IdentityFile %s/id_ed25519\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/known_hosts\n%b' \
+          printf 'Host *\n  IdentityFile %s/id_ed25519\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/known_hosts\n  ServerAliveInterval 30\n  ServerAliveCountMax 10\n%b' \
             "$d" "$d" "${SSH_EXTRA:-}" > "$d/config"
           real_ssh=$(command -v ssh)
           printf '#!/bin/sh\nexec %s -F %s/config "$@"\n' "$real_ssh" "$d" > "$d/bin/ssh"

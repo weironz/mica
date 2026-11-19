@@ -113,7 +113,10 @@ jobs:
           # A machine that did not exist a minute ago has no host key anyone
           # could have pinned. Accepting on first sight is the only option
           # available here; it is not verification and is not pretended to be.
-          SSH_EXTRA='  StrictHostKeyChecking accept-new\n'
+          # Keep long-running Ansible tasks (apt, docker pull, pg restore, rclone)
+          # alive across NAT/firewall idle timeouts (2026-11-19 drill failed with
+          # "Shared connection closed" while pulling postgres:18.6-alpine).
+          SSH_EXTRA='  StrictHostKeyChecking accept-new\n  ServerAliveInterval 30\n  ServerAliveCountMax 10\n'
           printf 'Host *\n  IdentityFile %s/id_ed25519\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/known_hosts\n%b' \
             "$d" "$d" "${SSH_EXTRA:-}" > "$d/config"
           real_ssh=$(command -v ssh)

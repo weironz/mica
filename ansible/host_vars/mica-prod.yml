@@ -43,6 +43,11 @@ mica_env:
   OSS_REGION: "oss-cn-shenzhen"
   OSS_ROOT: "mica"
   BACKUP_HOUR: "3"
+  # Do not trigger a full backup immediately during daytime deploys; rely on
+  # the 03:00 schedule (and manual `mica-cli backup run` when needed).
+  BACKUP_ON_START: "0"
+  # Run `rustic prune` + `rustic check` weekly on Sunday; daily runs only forget.
+  PRUNE_WEEKDAY: "sun"
 
   MICA_MAIL_BACKEND: "directmail"
   MICA_MAIL_FROM: "noreply@mail.cloudcele.com"

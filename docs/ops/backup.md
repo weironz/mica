@@ -11,14 +11,17 @@ rustic owns the backup engine.
 ## Topology: one repo, one bucket, one lineage per workspace
 
 ```
-[daily + on start]
+[daily (or on start unless BACKUP_ON_START=0)]
   mica-cli export --out /export            # every workspace → Markdown + images (mirrored) + manifest.json
   pg_dump $MICA_BACKUP_PGURL > /export/_pgdump/mica.sql    # off-site DB image (if MICA_BACKUP_PGURL set)
   rclone copy rustfs:<bucket> ossblob:<bucket>/mica-blobs  # object bytes, S3→S3, NOT through rustic
   per workspace (read from manifest.json):
     rustic backup /export/<dir> --label <workspace-id> --tag ws=<name> --tag mica
   rustic backup /export/_pgdump --label _pgdump --tag pgdump --tag mica   # DB dump as its own lineage
-  rustic forget --group-by label --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
+  rustic forget --group-by label --keep-daily 7 --keep-weekly 4 --keep-monthly 6
+[weekly maintenance (PRUNE_WEEKDAY=sun by default)]
+  rustic prune --max-unused 15% --max-repack 200MiB
+  rustic check
 ```
 
 **Coverage is checked, not assumed.** Every workspace the export announces in
@@ -67,8 +70,12 @@ provides chunk deduplication for that file.
 
 每次 rclone 调用统一使用 `--transfers 2 --checkers 2`，连接超时 10 秒、无进展
 I/O 超时 60 秒；高层尝试上限 2 次、底层请求尝试上限 3 次、高层尝试之间等待 10 秒，
-并设置 `--max-duration 30m --cutoff-mode hard`。不会无限重试到第二天。失败后保留
+并设置 `--max-duration 30m --cutoff-mode hard`。copy 调用同时传 `--stats-one-line --stats 30s --stats-log-level NOTICE`，确保传输统计进入容器日志。不会无限重试到第二天。失败后保留
 已经复制的不可变对象，下次 `copy` 会继续补齐，仍不传播源端删除。
+
+每日保留策略仅执行 `rustic forget`（秒级元数据清理）；`rustic prune --max-unused 15% --max-repack 200MiB` 与 `rustic check` 改在 `PRUNE_WEEKDAY`（默认每周日 `sun`，支持 `mon..sun`、`daily`、`off`）执行，避免每天为了回收少量过期块反复从 OSS 搬运数百 MiB 重打包，同时自动周期校验仓库完整性。
+
+backup 容器在 `deploy/docker-compose.yml` 中固定 `hostname: mica-backup`、启用 `init: true`、限制内存上限 `MICA_BACKUP_MEMORY_LIMIT`（默认 `768m`），并通过命名卷 `mica-prod-backup-cache` 持久化 `RUSTIC_CACHE_DIR=/var/cache/rustic`，避免每次发版重建容器后丢缓存或找不到 parent snapshot。生产可通过 `BACKUP_ON_START=0` 避免白天发版时立即触发全量备份（日常按 `BACKUP_HOUR` 运行，必要时手工执行 `mica-cli backup run`）。
 
 数据库导出超时或失败会删除未完成的 `.tmp`，保留上一次完整 SQL，但本轮不会把
 旧 SQL 当成新备份上传。前面的内容镜像清理也保留 `_pgdump/`，避免在新 dump 成功前
@@ -116,6 +123,14 @@ I/O 超时 60 秒；高层尝试上限 2 次、底层请求尝试上限 3 次、
 
 1. **Create a bucket** (e.g. `mica-backups`), ideally in a **different region**
    than the Mica ECS for geographic isolation.
+   > **Current production boundary (2026-11-19):** Production ECS and the backup
+   > bucket `mica-backup-cloudcele` currently both live in `cn-shenzhen`
+   > (`oss-cn-shenzhen`) for low latency and zero cross-region transfer fees.
+   > To protect against a region-wide outage without touching the backup
+   > container, enable **Aliyun OSS Cross-Region Replication (CRR)** on
+   > `mica-backup-cloudcele` to a destination bucket in another region (e.g.
+   > `oss-cn-hangzhou` or `oss-cn-shanghai`, IA/Archive storage class, with
+   > delete-replication disabled).
 2. **Create a least-privilege RAM AccessKey** scoped to *only* that bucket —
    `oss:PutObject / GetObject / DeleteObject / ListObjects` + `oss:GetBucket*`.
    Do **not** reuse the app's rustfs S3 keys or an account-wide key.

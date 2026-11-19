@@ -147,6 +147,9 @@
         name: "{{ item }}"
       loop: "{{ third_party_images }}"
       register: pulled
+      retries: 2
+      delay: 10
+      until: pulled is not failed
       failed_when: pulled is failed
 
     # ── Layout ────────────────────────────────────────────────────────────────

@@ -23,6 +23,7 @@
 //! split the shell version had — see `docs/ops/backup.md`.
 
 use anyhow::{Context, Result, bail};
+use chrono::Datelike;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Proc, ExitStatus, Stdio};
@@ -119,6 +120,69 @@ impl Report {
   }
 }
 
+/// When to run repository maintenance (`rustic prune` + `rustic check`).
+///
+/// `rustic forget` runs every day to apply retention rules (seconds, metadata only).
+/// Repacking packs on every single day transfers ~200 MiB over OSS for ~25 MiB of
+/// reclaimed chunks and dominates backup wall-clock time; running prune + check
+/// once a week keeps storage bounded and verifies integrity without daily I/O churn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PruneSchedule {
+  Daily,
+  Weekly(chrono::Weekday),
+  Off,
+}
+
+impl PruneSchedule {
+  pub fn matches(self, day: chrono::Weekday) -> bool {
+    match self {
+      Self::Daily => true,
+      Self::Weekly(target) => day == target,
+      Self::Off => false,
+    }
+  }
+
+  fn describe(self) -> String {
+    match self {
+      Self::Daily => "daily".into(),
+      Self::Weekly(day) => format!("{day:?}"),
+      Self::Off => "off".into(),
+    }
+  }
+}
+
+/// Parse `PRUNE_WEEKDAY`: `mon`..`sun` (or full English names), `daily`, or `off`/`none`/`never`.
+pub fn parse_prune_schedule(raw: &str) -> Option<PruneSchedule> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "daily" | "always" => Some(PruneSchedule::Daily),
+    "off" | "none" | "never" => Some(PruneSchedule::Off),
+    "mon" | "monday" => Some(PruneSchedule::Weekly(chrono::Weekday::Mon)),
+    "tue" | "tuesday" => Some(PruneSchedule::Weekly(chrono::Weekday::Tue)),
+    "wed" | "wednesday" => Some(PruneSchedule::Weekly(chrono::Weekday::Wed)),
+    "thu" | "thursday" => Some(PruneSchedule::Weekly(chrono::Weekday::Thu)),
+    "fri" | "friday" => Some(PruneSchedule::Weekly(chrono::Weekday::Fri)),
+    "sat" | "saturday" => Some(PruneSchedule::Weekly(chrono::Weekday::Sat)),
+    "sun" | "sunday" => Some(PruneSchedule::Weekly(chrono::Weekday::Sun)),
+    _ => None,
+  }
+}
+
+/// Resolve `PRUNE_WEEKDAY` (unset or blank → Sunday; invalid → warn and fall back to Sunday).
+pub fn resolve_prune_schedule(raw: Option<&str>) -> PruneSchedule {
+  match raw.map(str::trim).filter(|s| !s.is_empty()) {
+    None => PruneSchedule::Weekly(chrono::Weekday::Sun),
+    Some(value) => match parse_prune_schedule(value) {
+      Some(schedule) => schedule,
+      None => {
+        log(&format!(
+          "PRUNE_WEEKDAY={value:?} is not recognized (want mon..sun, daily, or off) — falling back to sun"
+        ));
+        PruneSchedule::Weekly(chrono::Weekday::Sun)
+      }
+    },
+  }
+}
+
 /// Everything a run reads from the environment, resolved and validated up front
 /// so a missing value fails before `pg_dump` has written half a file.
 pub struct Settings {
@@ -131,6 +195,7 @@ pub struct Settings {
   pub keep_daily: String,
   pub keep_weekly: String,
   pub keep_monthly: String,
+  pub prune_schedule: PruneSchedule,
   /// Accept a run with skipped legs. Off by default — see the module docs.
   pub allow_partial: bool,
 }
@@ -199,6 +264,8 @@ impl Settings {
       _ => None,
     };
 
+    let prune_schedule = resolve_prune_schedule(env("PRUNE_WEEKDAY").as_deref());
+
     Ok(Settings {
       rustic: env("RUSTIC").unwrap_or_else(|| "rustic".into()),
       rclone: env("RCLONE").unwrap_or_else(|| "rclone".into()),
@@ -211,6 +278,7 @@ impl Settings {
       keep_daily: env("KEEP_DAILY").unwrap_or_else(|| "7".into()),
       keep_weekly: env("KEEP_WEEKLY").unwrap_or_else(|| "4".into()),
       keep_monthly: env("KEEP_MONTHLY").unwrap_or_else(|| "6".into()),
+      prune_schedule,
       allow_partial: matches!(
         env("MICA_BACKUP_ALLOW_PARTIAL").as_deref(),
         Some("1" | "true" | "yes" | "on")
@@ -349,6 +417,29 @@ fn rclone_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
   ];
   all.extend_from_slice(args);
   all
+}
+
+fn rclone_copy_args<'a>(src: &'a str, dst: &'a str) -> Vec<&'a str> {
+  // rclone's default log level is NOTICE while `--stats` emits at INFO, so
+  // without `--stats-log-level NOTICE` the copy leg prints zero transfer stats
+  // into the container log.
+  rclone_args(&[
+    "copy",
+    src,
+    dst,
+    "--stats-one-line",
+    "--stats",
+    "30s",
+    "--stats-log-level",
+    "NOTICE",
+  ])
+}
+
+/// Bounded `rustic prune` arguments: tolerate up to 15% unused data and cap each
+/// maintenance run's repack work at 200 MiB so one prune pass cannot saturate
+/// the shared host or exceed the 30-minute tool timeout.
+fn rustic_prune_args() -> &'static [&'static str] {
+  &["prune", "--max-unused", "15%", "--max-repack", "200MiB"]
 }
 
 fn run_tool(bin: &str, args: &[&str], what: &str) -> Result<()> {
@@ -600,7 +691,7 @@ pub fn restore_objects(settings: &Settings) -> Result<()> {
   log(&format!("restore objects {src} → {dst}"));
   run_tool(
     &settings.rclone,
-    &rclone_args(&["copy", &src, &dst, "--stats", "30s"]),
+    &rclone_copy_args(&src, &dst),
     "rclone copy (restore)",
   )?;
 
@@ -737,10 +828,10 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
   // and the dump that would still have worked never got the chance. The most
   // irreplaceable leg was being held hostage by the least.
   //
-  // Partial success is still not success: a failed leg is recorded and
-  // `run_once` returns Err at the end (see the report check below). What
-  // changed is only that every leg gets to try first — which is the opposite of
-  // the original shell sin, where a missing leg logged a WARN and exited 0.
+  // Partial success is still not success: a failed leg is recorded in `Report`
+  // so the caller logs the full leg-by-leg summary and then `verdict` fails
+  // the run. Every leg gets to try first — the opposite of the original shell
+  // sin, where a missing leg logged a WARN and exited 0.
   log(&format!(
     "export all workspaces → {}",
     settings.export_dir.display()
@@ -962,14 +1053,7 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
       log(&format!("rclone copy {src} → {dst} (objects, no rustic)"));
       match run_tool(
         &settings.rclone,
-        &rclone_args(&[
-          "copy",
-          &src,
-          &dst,
-          "--stats-one-line",
-          "--stats",
-          "30s",
-        ]),
+        &rclone_copy_args(&src, &dst),
         "rclone copy",
       ) {
         // Same rule as the content leg: record and carry on. This one is LAST,
@@ -992,9 +1076,12 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
     ),
   }
 
-  // 5) Retention PER lineage (group by label), then prune once.
+  // 5) Retention PER lineage (group by label). Daily runs drop expired snapshot
+  //    pointers only; repacking (`prune`) and repository verification (`check`)
+  //    run on `settings.prune_schedule` (Sunday by default) so normal nightly
+  //    runs do not spend ~5 minutes repacking ~200 MiB for ~25 MiB of churn.
   log(&format!(
-    "retention: keep {}d / {}w / {}m per lineage + prune",
+    "retention: keep {}d / {}w / {}m per lineage",
     settings.keep_daily, settings.keep_weekly, settings.keep_monthly
   ));
   let retention = run_tool(
@@ -1009,19 +1096,31 @@ pub fn run_once(settings: &Settings, export: impl FnOnce(&Path) -> Result<()>) -
       &settings.keep_weekly,
       "--keep-monthly",
       &settings.keep_monthly,
-      "--prune",
     ],
     "rustic forget",
   );
   record_leg(&mut report, "retention", retention.map(|()| Leg::Ran));
 
-  // Every leg got its chance; now the run owes an honest verdict. Partial
-  // success is NOT success — that was the original shell sin (a missing leg
-  // logged a WARN and exited 0, and production went months with no off-site
-  // copy). What changed here is only the ORDER: report first, fail after, so
-  // one broken leg can no longer take the healthy ones down with it.
-  verdict(&report, true)?;
+  let today = chrono::Local::now().weekday();
+  if settings.prune_schedule.matches(today) {
+    log("maintenance: rustic prune (--max-unused 15% --max-repack 200MiB)");
+    let prune = run_tool(&settings.rustic, rustic_prune_args(), "rustic prune");
+    record_leg(&mut report, "prune", prune.map(|()| Leg::Ran));
 
+    log("maintenance: rustic check");
+    let check = run_tool(&settings.rustic, &["check"], "rustic check");
+    record_leg(&mut report, "check", check.map(|()| Leg::Ran));
+  } else {
+    log(&format!(
+      "maintenance: prune + check scheduled for {} — skipping on {today:?}",
+      settings.prune_schedule.describe()
+    ));
+  }
+
+  // Return the full report (including any failed/skipped legs) so the caller
+  // always logs `report.summary()` before calling `verdict(&report, ...)`.
+  // Calling `verdict(&report, true)?` here used to abort before the summary
+  // printed, leaving only a single failure line in the container log.
   Ok(report)
 }
 
@@ -1558,5 +1657,65 @@ mod tests {
     assert_eq!(seconds_until(now, 3, 0), 21 * 3600 + 30 * 60);
     // 09:00 is still ahead → 3h30m away.
     assert_eq!(seconds_until(now, 9, 0), 3 * 3600 + 30 * 60);
+  }
+
+  #[test]
+  fn rclone_copy_emits_stats_at_notice_level() {
+    let args = rclone_copy_args("rustfs:mica", "ossblob:bucket/mica-blobs");
+    assert_eq!(&args[..2], &["--config", RCLONE_CONF]);
+    assert!(
+      args
+        .windows(2)
+        .any(|w| w == ["--stats-log-level", "NOTICE"])
+    );
+    assert!(args.contains(&"--stats-one-line"));
+  }
+
+  #[test]
+  fn prune_args_bound_repack_and_unused_ratio() {
+    let args = rustic_prune_args();
+    assert_eq!(args[0], "prune");
+    assert!(args.windows(2).any(|w| w == ["--max-unused", "15%"]));
+    assert!(args.windows(2).any(|w| w == ["--max-repack", "200MiB"]));
+  }
+
+  #[test]
+  fn prune_schedule_parses_weekdays_daily_and_off() {
+    use chrono::Weekday;
+    assert_eq!(
+      parse_prune_schedule("sun"),
+      Some(PruneSchedule::Weekly(Weekday::Sun))
+    );
+    assert_eq!(
+      parse_prune_schedule("Sunday"),
+      Some(PruneSchedule::Weekly(Weekday::Sun))
+    );
+    assert_eq!(
+      parse_prune_schedule(" MON "),
+      Some(PruneSchedule::Weekly(Weekday::Mon))
+    );
+    assert_eq!(parse_prune_schedule("daily"), Some(PruneSchedule::Daily));
+    assert_eq!(parse_prune_schedule("off"), Some(PruneSchedule::Off));
+    assert_eq!(parse_prune_schedule("never"), Some(PruneSchedule::Off));
+    for bad in ["", "  ", "funday", "7", "weekly"] {
+      assert_eq!(parse_prune_schedule(bad), None, "should reject {bad:?}");
+    }
+
+    let weekly = PruneSchedule::Weekly(Weekday::Sun);
+    assert!(weekly.matches(Weekday::Sun));
+    assert!(!weekly.matches(Weekday::Mon));
+    assert!(PruneSchedule::Daily.matches(Weekday::Wed));
+    assert!(!PruneSchedule::Off.matches(Weekday::Sun));
+
+    assert_eq!(resolve_prune_schedule(None), weekly);
+    assert_eq!(resolve_prune_schedule(Some("")), weekly);
+    assert_eq!(resolve_prune_schedule(Some("   ")), weekly);
+    assert_eq!(resolve_prune_schedule(Some("invalid")), weekly);
+    assert_eq!(
+      resolve_prune_schedule(Some("wed")),
+      PruneSchedule::Weekly(Weekday::Wed)
+    );
+    assert_eq!(resolve_prune_schedule(Some("daily")), PruneSchedule::Daily);
+    assert_eq!(resolve_prune_schedule(Some("off")), PruneSchedule::Off);
   }
 }

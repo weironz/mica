@@ -292,9 +292,15 @@ fn page_paths(manifest: &ExportManifest) -> Result<BTreeMap<Uuid, String>> {
     !manifest.tree_revision.is_empty(),
     "export manifest has no tree revision"
   );
+  let max_version = u64::from(mica_interchange::MANIFEST_VERSION);
   ensure!(
-    manifest.manifest["version"] == 2 && manifest.manifest["generator"] == "mica",
-    "invalid Mica tree manifest"
+    manifest.manifest["version"]
+      .as_u64()
+      .is_some_and(|v| (2..=max_version).contains(&v))
+      && manifest.manifest["generator"] == "mica",
+    "invalid Mica tree manifest (version={}, generator={}; expected 2..={max_version})",
+    manifest.manifest["version"],
+    manifest.manifest["generator"],
   );
   let entries = manifest.manifest["pages"]
     .as_array()
@@ -891,7 +897,7 @@ mod tests {
 
   fn inventory(tree: &str, pages: &[(Uuid, &str, &str)]) -> ExportManifest {
     serde_json::from_value(json!({"version":1,"structure_revision":tree,"tree_revision":tree,
-      "manifest":{"version":2,"generator":"mica","pages":pages.iter().map(|(id,path,_)|
+      "manifest":{"version":mica_interchange::MANIFEST_VERSION,"generator":"mica","pages":pages.iter().map(|(id,path,_)|
         json!({"id":id,"path":path,"type":"document","title":path,"position":"1"})).collect::<Vec<_>>()},
       "pages":pages.iter().map(|(id,_,rev)|json!({"view_id":id,"document_id":id,"revision":rev})).collect::<Vec<_>>(),
       "files":[{"file_id":IMAGE,"revision":"image1"}]
@@ -1305,5 +1311,52 @@ mod tests {
     assert_eq!(fs::read(outside.join("keep.md")).unwrap(), b"keep");
     fs::remove_dir_all(out).unwrap();
     fs::remove_dir_all(outside).unwrap();
+  }
+
+  #[test]
+  fn tree_manifest_accepts_interchange_current_version_and_v2_and_rejects_unknown() {
+    // Contract pin: feed the REAL interchange builder output into the CLI validator
+    // so a future MANIFEST_VERSION bump can never silently break production backups
+    // (v0.14.4 bumped MANIFEST_VERSION to 3 while export.rs still required == 2).
+    let nodes = vec![mica_interchange::TreeNode {
+      id: A.to_string(),
+      parent_id: None,
+      name: "Alpha".into(),
+      object_type: "document".into(),
+      object_id: A.to_string(),
+      position: "1".into(),
+      icon: None,
+    }];
+    let real_tree = mica_interchange::markdown_tree_manifest(&nodes);
+    let current = ExportManifest {
+      version: 1,
+      structure_revision: "s1".into(),
+      tree_revision: "t1".into(),
+      manifest: real_tree,
+      pages: vec![mica_api_types::ExportPageRevision {
+        view_id: A,
+        document_id: A,
+        revision: "r1".into(),
+      }],
+      files: vec![],
+    };
+    let parsed = page_paths(&current).expect("CLI must accept interchange's current manifest");
+    assert_eq!(parsed.get(&A).map(String::as_str), Some("Alpha.md"));
+
+    // Historical v2 manifests must remain accepted.
+    let mut v2 = current.clone();
+    v2.manifest["version"] = json!(2);
+    assert!(page_paths(&v2).is_ok());
+
+    // Unsupported versions fail loudly and include the actual version in the error.
+    for bad in [1u32, mica_interchange::MANIFEST_VERSION + 1] {
+      let mut invalid = current.clone();
+      invalid.manifest["version"] = json!(bad);
+      let err = page_paths(&invalid).unwrap_err().to_string();
+      assert!(
+        err.contains(&format!("version={bad}")),
+        "error should name received version {bad}: {err}"
+      );
+    }
   }
 }
