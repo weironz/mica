@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mica_flutter/editor/inline_code_layout.dart';
 import 'package:mica_flutter/editor/marks.dart';
 import 'package:mica_flutter/editor/model.dart' show kMonoFont;
+import 'package:mica_flutter/editor/render.dart';
 import 'package:mica_flutter/ui/theme_tokens.dart';
 
 // Inline code moved from "red mono text + tight faint-red box" to "neutral mono
@@ -76,9 +78,53 @@ void _boldTests() {
     expect(s.fontFamily, isNull, reason: 'bold must not swap the family');
   });
 
-  test('no inline mark rescales the text', () {
-    for (final type in ['bold', 'italic', 'strike', 'code']) {
+  test('prose marks do not rescale text; inline code scales slightly smaller', () {
+    for (final type in ['bold', 'italic', 'strike']) {
       expect(styleOf(type).fontSize, 16, reason: '$type changed fontSize');
     }
+    expect(
+      styleOf('code').fontSize,
+      closeTo(16 * kInlineCodeFontScale, 1e-6),
+      reason: 'inline code should be slightly smaller than body prose (gh#189)',
+    );
+  });
+
+  test('inline code spacers reserve horizontal breathing room and map offsets cleanly', () {
+    const text = '配置 INFISICAL_URL、INFISICAL_TOKEN 完成';
+    final marks = [Mark(3, 16, 'code'), Mark(17, 32, 'code')];
+    final spacers = inlineCodeSpacers(text, marks);
+    expect(spacers, hasLength(4));
+    for (final s in spacers) {
+      expect(s.width, kInlineCodePillPadH + kInlineCodeOuterGap);
+    }
+    final fold = FoldPlan(const [], spacers);
+    final folded = buildFoldedSpan(
+      text,
+      marks,
+      const TextStyle(fontSize: 16),
+      fold,
+      MicaTokens.light,
+    );
+    final painter = TextPainter(
+      text: folded.span,
+      textDirection: TextDirection.ltr,
+    )..setPlaceholderDimensions(folded.dims);
+    painter.layout();
+    // Plain text preserves every character once plus 4 U+FFFC spacers.
+    expect(painter.plainText.replaceAll('\uFFFC', ''), text);
+    expect(folded.dims, hasLength(4));
+    // Every doc offset round-trips through docToPainter → painterToDoc.
+    for (var doc = 0; doc <= text.length; doc++) {
+      final p = fold.docToPainter(doc);
+      expect(fold.painterToDoc(p), doc, reason: 'doc=$doc -> p=$p');
+    }
+    // Code range in painter space covers exact glyphs, excluding spacers.
+    final p1Start = fold.docToPainter(3);
+    final p1End = fold.docToPainter(16);
+    expect(painter.plainText.substring(p1Start, p1End), 'INFISICAL_URL');
+    final p2Start = fold.docToPainter(17);
+    final p2End = fold.docToPainter(32);
+    expect(painter.plainText.substring(p2Start, p2End), 'INFISICAL_TOKEN');
+    painter.dispose();
   });
 }

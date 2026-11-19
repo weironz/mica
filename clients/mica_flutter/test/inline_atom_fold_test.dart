@@ -187,7 +187,7 @@ void main() {
         'ab34567cd',
         [Mark(2, 7, 'math')],
         base,
-        [atom(2, 7)],
+        FoldPlan([atom(2, 7)]),
         MicaTokens.light,
       );
       final painter = TextPainter(
@@ -215,7 +215,7 @@ void main() {
         'bbMMtt',
         [Mark(0, 2, 'bold'), Mark(2, 4, 'math')],
         base,
-        [atom(2, 4)],
+        FoldPlan([atom(2, 4)]),
         MicaTokens.light,
       );
       // Walk leaves: first text leaf must be bold.
@@ -250,7 +250,7 @@ void main() {
         'xyz',
         [Mark(0, 3, 'math')],
         base,
-        [a],
+        FoldPlan([a]),
         MicaTokens.light,
       );
       expect(r.dims.single.alignment, ui.PlaceholderAlignment.middle);

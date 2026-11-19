@@ -116,3 +116,88 @@ fn rich_cell_round_trips_read_write_read() {
     "escaped pipe code span:\n{html}"
   );
 }
+
+#[test]
+fn gh188_table_multiple_inline_code_spans_with_underscores_and_cjk_punctuation() {
+  // Regression gate for gh#188: multiple underscored inline-code spans
+  // separated by Chinese enumeration commas inside GFM table cells must never
+  // lose code marks or be misparsed as emphasis across parse, export, or HTML.
+  let md = "\
+两种配置分别如下，选择与你要使用的程序相匹配的一种。
+
+| 认证方式 | 需要填写的内容 | 凭证从哪里获取 |
+| --- | --- | --- |
+| Token Auth | `INFISICAL_URL`、`INFISICAL_TOKEN` | `greenstor-ai-admin` 的 Token Auth 页面 |
+| Universal Auth | `INFISICAL_URL`、`INFISICAL_CLIENT_ID`、`INFISICAL_CLIENT_SECRET` | `greenstor-ai-admin` 的 Universal Auth 页面 |";
+
+  let snap = import_markdown(md, "root");
+  let table = snap
+    .blocks
+    .iter()
+    .find(|b| b.kind == "table")
+    .expect("table block must exist");
+  let rows = table.data.get("rows").and_then(|v| v.as_array()).unwrap();
+  assert_eq!(rows.len(), 3);
+
+  let assert_codes = |cell: &serde_json::Value, expected: &[&str]| {
+    let text = cell
+      .get("text")
+      .and_then(|v| v.as_str())
+      .expect("rich cell must have text");
+    let marks = cell
+      .get("marks")
+      .and_then(|v| v.as_array())
+      .expect("rich cell must have marks");
+    let got: Vec<String> = marks
+      .iter()
+      .map(|m| {
+        assert_eq!(
+          m.get("type").and_then(|v| v.as_str()),
+          Some("code"),
+          "unexpected non-code mark in cell {cell:?}"
+        );
+        let s = m.get("start").and_then(|v| v.as_u64()).unwrap() as usize;
+        let e = m.get("end").and_then(|v| v.as_u64()).unwrap() as usize;
+        text.encode_utf16().skip(s).take(e - s).collect::<Vec<u16>>()
+      })
+      .map(|u16s| String::from_utf16(&u16s).unwrap())
+      .collect();
+    let expected_vec: Vec<String> = expected.iter().map(|s| (*s).to_string()).collect();
+    assert_eq!(got, expected_vec, "cell={cell:?}");
+  };
+
+  assert_codes(&rows[1][1], &["INFISICAL_URL", "INFISICAL_TOKEN"]);
+  assert_codes(&rows[1][2], &["greenstor-ai-admin"]);
+  assert_codes(
+    &rows[2][1],
+    &["INFISICAL_URL", "INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET"],
+  );
+  assert_codes(&rows[2][2], &["greenstor-ai-admin"]);
+
+  let back = export_markdown(&snap).unwrap();
+  assert!(
+    back.contains("`INFISICAL_URL`、`INFISICAL_TOKEN`"),
+    "row 1 code spans lost:\n{back}"
+  );
+  assert!(
+    back.contains("`INFISICAL_URL`、`INFISICAL_CLIENT_ID`、`INFISICAL_CLIENT_SECRET`"),
+    "row 2 code spans lost:\n{back}"
+  );
+  assert!(
+    back.contains("`greenstor-ai-admin` 的 Universal Auth 页面"),
+    "col 2 code span lost:\n{back}"
+  );
+  let snap2 = import_markdown(&back, "root");
+  assert_eq!(back, export_markdown(&snap2).unwrap());
+
+  let html = export_html(&snap).unwrap();
+  for token in [
+    "<code>INFISICAL_URL</code>",
+    "<code>INFISICAL_TOKEN</code>",
+    "<code>INFISICAL_CLIENT_ID</code>",
+    "<code>INFISICAL_CLIENT_SECRET</code>",
+    "<code>greenstor-ai-admin</code>",
+  ] {
+    assert!(html.contains(token), "HTML missing {token}:\n{html}");
+  }
+}

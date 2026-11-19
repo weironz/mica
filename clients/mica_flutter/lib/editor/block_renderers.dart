@@ -692,23 +692,15 @@ class TableRenderer extends AtomicBlockRenderer {
     // Build every cell's painter first (unlaid-out) so widths can be derived
     // from content before the final fixed-width layout pass.
     final grid = <List<TextPainter>>[];
+    final cellCodeRanges = <List<List<({int start, int end})>>>[];
     for (var r = 0; r < table.rows.length; r++) {
-      final isHeader = table.header && r == 0;
-      grid.add([
+      final cellStyle = RenderDocument.tableCellStyle(host._appearance, isHeader: table.header && r == 0);
+      final built = [
         for (var c = 0; c < cols; c++)
-          TextPainter(
-            text: RenderDocument.cellDisplaySpan(
-              c < table.rows[r].length ? table.rows[r][c] : TableCell.empty,
-              RenderDocument.tableCellStyle(
-                host._appearance,
-                isHeader: isHeader,
-              ),
-              host._appearance.tokens,
-            ),
-            textAlign: alignAt(c),
-            textDirection: TextDirection.ltr,
-          ),
-      ]);
+          buildTableCellPainter(c < table.rows[r].length ? table.rows[r][c] : TableCell.empty, cellStyle, host._appearance.tokens, alignAt(c)),
+      ];
+      grid.add([for (final b in built) b.painter]);
+      cellCodeRanges.add([for (final b in built) b.codeRanges]);
     }
 
     // Column widths. All weights equal = the user never resized a column →
@@ -790,6 +782,7 @@ class TableRenderer extends AtomicBlockRenderer {
             r,
             c,
             Offset(colEdges[c] + padH, yy + padV),
+            cellCodeRanges[r][c],
           ),
         );
       }
@@ -1008,6 +1001,9 @@ class TableRenderer extends AtomicBlockRenderer {
           editing.row == cell.row &&
           editing.col == cell.col) {
         continue;
+      }
+      if (cell.codeRanges.isNotEmpty) {
+        paintInlineCodePills(canvas, cell.textAt + offset, cell.painter, cell.codeRanges, host._appearance.tokens.editor.inlineCodeBg);
       }
       cell.painter.paint(canvas, cell.textAt + offset);
     }

@@ -133,88 +133,116 @@ class InlineAtom {
   int get docLen => docEnd - docStart;
 }
 
-/// The doc↔painter offset mapping for one folded node.
-///
-/// Doc space is the node's stored text (marks, selection, IME, every offset
-/// outside render.dart). Painter space is the display text where each atom's
-/// run is one U+FFFC. Atoms are sorted and non-overlapping; everything between
-/// them maps by a running shift. Painter offsets never leave render.dart
-/// without passing back through [painterToDoc].
+class _FoldSlot {
+  _FoldSlot({
+    required this.docStart,
+    required this.docEnd,
+    required this.attachAfter,
+    this.atom,
+    this.spacer,
+  });
+  final int docStart;
+  final int docEnd;
+  final bool attachAfter;
+  final InlineAtom? atom;
+  final InlineCodeSpacer? spacer;
+  int painterIndex = -1;
+  int get docLen => docEnd - docStart;
+  int get _order => atom != null ? 1 : (attachAfter ? 2 : 0);
+}
+
+/// The doc↔painter offset mapping for one folded node (inline atoms + code
+/// boundary spacers). Painter offsets never leave render.dart without passing
+/// back through [painterToDoc].
 class FoldPlan {
-  FoldPlan(this.atoms) {
+  FoldPlan(this.atoms, [this.spacers = const []]) {
+    _slots = [
+      for (final a in atoms)
+        _FoldSlot(docStart: a.docStart, docEnd: a.docEnd, attachAfter: false, atom: a),
+      for (final s in spacers)
+        if (!atoms.any((a) => a.docStart < s.docOffset && s.docOffset < a.docEnd))
+          _FoldSlot(docStart: s.docOffset, docEnd: s.docOffset, attachAfter: s.attachAfter, spacer: s),
+    ]..sort((a, b) {
+        final c = a.docStart.compareTo(b.docStart);
+        return c != 0 ? c : a._order.compareTo(b._order);
+      });
     var shift = 0;
-    for (final a in atoms) {
-      a.painterIndex = a.docStart - shift;
-      shift += a.docLen - 1;
+    for (final slot in _slots) {
+      slot.painterIndex = slot.docStart - shift;
+      slot.atom?.painterIndex = slot.painterIndex;
+      shift += slot.docLen - 1;
     }
   }
 
-  /// Sorted by [InlineAtom.docStart], non-overlapping.
   final List<InlineAtom> atoms;
+  final List<InlineCodeSpacer> spacers;
+  late final List<_FoldSlot> _slots;
 
-  /// Doc → painter. Offsets strictly inside an atom's run collapse to the
-  /// atom's placeholder: its leading edge, or the trailing edge with
-  /// [ceilInsideAtom] — range mappers use the pair so a doc range that ends
-  /// inside a run still covers the whole placeholder.
+  int get placeholderCount => _slots.length;
+
+  bool assignBoxes(List<ui.TextBox> boxes) {
+    if (boxes.length != _slots.length) return false;
+    for (var i = 0; i < _slots.length; i++) {
+      _slots[i].atom?.rect = boxes[i].toRect();
+    }
+    return true;
+  }
+
+  /// Doc → painter. Offsets inside an atom collapse to its placeholder edges;
+  /// leading code spacers sit before [docOffset] (`doc >= docOffset` shifts),
+  /// trailing code spacers sit after (`doc > docOffset` shifts).
   int docToPainter(int doc, {bool ceilInsideAtom = false}) {
     var shift = 0;
-    for (final a in atoms) {
-      if (doc <= a.docStart) break;
-      if (doc < a.docEnd) {
-        return a.docStart - shift + (ceilInsideAtom ? 1 : 0);
+    for (final slot in _slots) {
+      if (slot.atom != null) {
+        if (doc <= slot.docStart) break;
+        if (doc < slot.docEnd) {
+          return slot.docStart - shift + (ceilInsideAtom ? 1 : 0);
+        }
+        shift += slot.docLen - 1;
+      } else {
+        if (doc < slot.docStart || (!slot.attachAfter && doc == slot.docStart)) {
+          break;
+        }
+        shift -= 1;
       }
-      shift += a.docLen - 1;
     }
     return doc - shift;
   }
 
-  /// Painter → doc. The placeholder's leading edge maps to the run's start,
-  /// its trailing edge to the run's end — a caret can land on either side of
-  /// the atom but never inside it.
+  /// Painter → doc. Either edge of an atom maps to its run boundary; either
+  /// edge of a code spacer maps back to its [docOffset].
   int painterToDoc(int painter) {
     var shift = 0;
-    for (final a in atoms) {
-      final pos = a.docStart - shift;
+    for (final slot in _slots) {
+      final pos = slot.painterIndex;
       if (painter <= pos) return painter + shift;
-      if (painter == pos + 1) return a.docEnd;
-      shift += a.docLen - 1;
+      if (painter == pos + 1) return slot.docEnd;
+      shift += slot.docLen - 1;
     }
     return painter + shift;
   }
 }
 
-/// Build the folded form of a node's text: the display TextSpan (with one
-/// WidgetSpan per atom), the placeholder dimensions to hand to
-/// [TextPainter.setPlaceholderDimensions] (same order), and the atoms.
-///
-/// Standalone from [buildMarkedSpan] on purpose: that builder is shared with
-/// real EditableTexts (the table cell editor), where a placeholder span would
-/// either assert or get its child built for real. This one is only ever
-/// consumed by RenderDocument's own TextPainter.
-({TextSpan span, List<PlaceholderDimensions> dims, List<InlineAtom> atoms})
-buildFoldedSpan(
+/// Build the display TextSpan (with WidgetSpans for atoms and code spacers)
+/// and matching [PlaceholderDimensions] for RenderDocument's own TextPainter.
+({TextSpan span, List<PlaceholderDimensions> dims}) buildFoldedSpan(
   String text,
   List<Mark> marks,
   TextStyle base,
-  List<InlineAtom> atoms,
+  FoldPlan fold,
   MicaTokens tokens,
 ) {
   final len = text.length;
   final dims = <PlaceholderDimensions>[];
   final children = <InlineSpan>[];
-
-  // Marks that survive folding: everything except the folded runs themselves.
   final styleMarks = [
     for (final m in marks)
-      if (!atoms.any((a) => a.docStart == m.start && a.docEnd == m.end)) m,
+      if (!fold.atoms.any((a) => a.docStart == m.start && a.docEnd == m.end)) m,
   ];
-
   var cursor = 0;
   void emitText(int from, int to) {
     if (to <= from) return;
-    // buildMarkedSpan styles a whole string by its marks; slice the segment's
-    // marks into segment-local coordinates and reuse it, so bold/links/code
-    // around atoms style exactly as they do unfolded.
     final localMarks = <Mark>[
       for (final m in styleMarks)
         if (m.end > from && m.start < to)
@@ -226,45 +254,25 @@ buildFoldedSpan(
             title: m.title,
           ),
     ];
-    final piece = buildMarkedSpan(
-      text.substring(from, to),
-      localMarks,
-      base,
-      tokens,
-    );
-    children.add(piece);
+    children.add(buildMarkedSpan(text.substring(from, to), localMarks, base, tokens));
   }
 
-  for (final a in atoms) {
-    emitText(cursor, a.docStart);
-    children.add(
-      WidgetSpan(
-        // Never built: TextPainter only reads the placeholder, and this span
-        // tree never enters a widget. The dimensions below carry the size.
-        alignment: a.baseline != null
-            ? ui.PlaceholderAlignment.baseline
-            : ui.PlaceholderAlignment.middle,
-        baseline: TextBaseline.alphabetic,
-        child: const SizedBox.shrink(),
-      ),
-    );
-    dims.add(
-      PlaceholderDimensions(
-        size: a.size,
-        alignment: a.baseline != null
-            ? ui.PlaceholderAlignment.baseline
-            : ui.PlaceholderAlignment.middle,
-        baseline: TextBaseline.alphabetic,
-        baselineOffset: a.baseline,
-      ),
-    );
-    cursor = a.docEnd;
+  for (final slot in fold._slots) {
+    emitText(cursor, slot.docStart);
+    final a = slot.atom;
+    if (a != null) {
+      final align = a.baseline != null
+          ? ui.PlaceholderAlignment.baseline
+          : ui.PlaceholderAlignment.middle;
+      children.add(WidgetSpan(alignment: align, baseline: TextBaseline.alphabetic, child: const SizedBox.shrink()));
+      dims.add(PlaceholderDimensions(size: a.size, alignment: align, baseline: TextBaseline.alphabetic, baselineOffset: a.baseline));
+      cursor = a.docEnd;
+    } else {
+      children.add(const WidgetSpan(alignment: ui.PlaceholderAlignment.baseline, baseline: TextBaseline.alphabetic, child: SizedBox.shrink()));
+      dims.add(PlaceholderDimensions(size: Size(slot.spacer!.width, 1), alignment: ui.PlaceholderAlignment.baseline, baseline: TextBaseline.alphabetic, baselineOffset: 1));
+      cursor = slot.docStart;
+    }
   }
   emitText(cursor, len);
-
-  return (
-    span: TextSpan(style: base, children: children),
-    dims: dims,
-    atoms: atoms,
-  );
+  return (span: TextSpan(style: base, children: children), dims: dims);
 }

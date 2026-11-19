@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'inline_code_layout.dart' show kInlineCodeFontScale;
 import 'model.dart' show kMonoFont;
 import '../ui/theme_tokens.dart';
 
@@ -81,10 +82,11 @@ TextSpan buildMarkedSpan(
         case 'italic':
           style = style.copyWith(fontStyle: FontStyle.italic);
         case 'code':
-          // The pill background is drawn in the render layer (_paintInlineCode)
-          // for rounded corners + padding; here just the mono font + calm ink.
+          // The pill background is drawn in the render layer (paintInlineCodePills)
+          // for rounded corners + padding; mono font slightly smaller than body (gh#189).
           style = style.copyWith(
             fontFamily: kMonoFont,
+            fontSize: (style.fontSize ?? 16) * kInlineCodeFontScale,
             color: tokens.editor.inlineCodeInk,
           );
         case 'strike':

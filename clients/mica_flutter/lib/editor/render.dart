@@ -12,6 +12,7 @@ import '../l10n/locale_controller.dart';
 import 'chrome_layout.dart';
 import 'details_html.dart';
 import 'highlight.dart';
+import 'inline_code_layout.dart';
 import 'marks.dart';
 import 'model.dart';
 import 'layout_caret.dart';
@@ -448,14 +449,16 @@ class _TableCell {
     this.header,
     this.row,
     this.col,
-    this.textAt,
-  );
+    this.textAt, [
+    this.codeRanges = const [],
+  ]);
   final Rect rect; // full cell rect (local)
   final TextPainter painter;
   final bool header;
   final int row;
   final int col;
   final Offset textAt; // where to paint the cell text (local)
+  final List<({int start, int end})> codeRanges;
 }
 
 /// What part of a table the pointer is over. Drives the hover-reveal of the
@@ -1451,14 +1454,18 @@ class RenderDocument extends RenderBox {
         // break that, and an overlapping pair would corrupt the offset map —
         // decline the whole fold instead.
         atoms.sort((a, b) => a.docStart.compareTo(b.docStart));
-        var disjoint = atoms.isNotEmpty;
+        var disjoint = true;
         for (var k = 1; k < atoms.length; k++) {
           if (atoms[k].docStart < atoms[k - 1].docEnd) {
             disjoint = false;
             break;
           }
         }
-        if (disjoint) fold = FoldPlan(atoms);
+        final codeSpacers = inlineCodeSpacers(node.text, marks);
+        final activeAtoms = disjoint ? atoms : const <InlineAtom>[];
+        if (activeAtoms.isNotEmpty || codeSpacers.isNotEmpty) {
+          fold = FoldPlan(activeAtoms, codeSpacers);
+        }
       }
 
       TextSpan span;
@@ -1475,7 +1482,7 @@ class RenderDocument extends RenderBox {
           node.text,
           marks,
           style,
-          fold.atoms,
+          fold,
           _appearance.tokens,
         );
         span = folded.span;
@@ -1510,11 +1517,7 @@ class RenderDocument extends RenderBox {
         painter.layout(maxWidth: layoutWidth);
         if (fold != null) {
           final boxes = painter.inlinePlaceholderBoxes ?? const <ui.TextBox>[];
-          if (boxes.length == fold.atoms.length) {
-            for (var k = 0; k < boxes.length; k++) {
-              fold.atoms[k].rect = boxes[k].toRect();
-            }
-          } else {
+          if (!fold.assignBoxes(boxes)) {
             // The engine dropped a placeholder (never observed — probed on this
             // Flutter). A folded painter without its geometry would misplace
             // every offset in the node; rebuild unfolded instead.
@@ -2721,47 +2724,33 @@ class RenderDocument extends RenderBox {
   /// Rounded pills behind inline `code` spans. Painted under the selection +
   /// text layers, so a selection still tints them and the glyphs stay on top.
   void _paintInlineCode(Canvas canvas, Offset offset) {
-    final paint = Paint()..color = _appearance.tokens.editor.inlineCodeBg;
+    final bg = _appearance.tokens.editor.inlineCodeBg;
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
-      if (!_nodeVisible(l)) continue; // viewport culling (see paint)
-      if (EditorNode.isAtomicKind(l.kind) ||
+      if (!_nodeVisible(l) ||
+          EditorNode.isAtomicKind(l.kind) ||
           l.kind == 'code_block' ||
           l.renderedBy != null) {
         continue;
       }
-      final marks = marksFromData(_nodes[i].data);
-      if (marks.isEmpty) continue;
-      final origin = offset + Offset(l.contentLeft, l.textTop);
-      final len = _nodes[i].text.length;
-      for (final m in marks) {
-        if (m.type != 'code') continue;
-        final s = m.start.clamp(0, len);
-        final e = m.end.clamp(0, len);
-        if (e <= s) continue;
-        // Code runs never overlap atom runs (the parser keeps them disjoint),
-        // so on a folded node this is a pure shift — mapped anyway, because a
-        // stale mark from a concurrent edit must misplace a pill, not corrupt.
-        final ps = l.fold?.docToPainter(s) ?? s;
-        final pe = l.fold?.docToPainter(e, ceilInsideAtom: true) ?? e;
-        final boxes = l.painter.getBoxesForSelection(
-          TextSelection(baseOffset: ps, extentOffset: pe),
-          boxHeightStyle: ui.BoxHeightStyle.tight,
-        );
-        for (final b in boxes) {
-          final r = b.toRect().shift(origin);
-          final chip = Rect.fromLTRB(
-            r.left - 3,
-            r.top - 1.5,
-            r.right + 3,
-            r.bottom + 1.5,
-          );
-          canvas.drawRRect(
-            RRect.fromRectAndRadius(chip, const Radius.circular(4)),
-            paint,
-          );
-        }
-      }
+      final ranges = mergedInlineCodeRanges(
+        _nodes[i].text.length,
+        marksFromData(_nodes[i].data),
+      );
+      if (ranges.isEmpty) continue;
+      paintInlineCodePills(
+        canvas,
+        offset + Offset(l.contentLeft, l.textTop),
+        l.painter,
+        [
+          for (final r in ranges)
+            (
+              start: l.fold?.docToPainter(r.start) ?? r.start,
+              end: l.fold?.docToPainter(r.end, ceilInsideAtom: true) ?? r.end,
+            ),
+        ],
+        bg,
+      );
     }
   }
 
