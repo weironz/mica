@@ -30,4 +30,7 @@ ignore = [
   # HTTP server Host validation is absent before rmcp 1.4.0, but no HTTP server
   # transport is compiled or exposed. RustSec explicitly excludes stdio.
   "RUSTSEC-2026-0189",
+  # chrono 0.4.44 was marked unmaintained on 2026-09-14 with no fixed upgrade.
+  # It is used across sqlx/workspace/FFI; migrating to jiff is a separate effort.
+  "RUSTSEC-2026-0543",
 ]
