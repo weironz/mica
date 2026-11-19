@@ -216,6 +216,18 @@ docs|nonempty|views|workspaces = 14882|14681|17800|32
 Destroy complete! Resources: 11 destroyed.
 ```
 
+**2026-11-19 复测（run `44500398326`，`v0.14.10`，全绿，总耗时 49 分 43 秒，恢复至 Verify 通过约 48 分 50 秒）**：
+
+```
+restored keys: 17
+source 6530 objects / 1230254653 bytes; destination 6530 / 1230254653
+{"status":"ok","service":"mica-api-server","version":"0.14.10"}
+docs|nonempty|views|workspaces = 15566|15281|18660|32
+Destroy complete! Resources: 11 destroyed.
+```
+
+与 2026-08-29 的 11 分 50 秒相比，耗时拉长主要来自两段：`Provision` 21 分 47 秒（国内 apt/Docker 镜像源拉包耗时），以及 `Restore the object bytes` 17 分 03 秒（`restore-objects` 复用了每日备份限流的 `--transfers 2 --checkers 2` 传输 6,530 对象 / 1.23 GB）。数据库恢复本身仍只需 3 分 03 秒。当日首跑（run `44494840242`）还在 `Provision` 拉镜像阶段暴露出 workflow SSH config 缺少 `ServerAliveInterval` 导致的静默断连，已同步在 `dr-drill.yml` / `deploy.yml` 补齐 `ServerAliveInterval 30` 后复测通过。
+
 **这个数字和「人照着文档走一遍」不是一回事,后者是下面这张表。** 两者都保留:出事那天
 如果 CI 也够不着,走的就是下面那条。
 
@@ -749,3 +761,10 @@ ssh root@mica.cloudcele.com 'docker logs mica-backup-1 2>&1 | grep -E "pg_dump|s
 
 ⚠️ **SSH 别猛敲**：连太密会被云上游限流（一个会话十几次后清一色 `Connection closed`，
 等 ~7 分钟自然恢复）。一次 ssh 里用 heredoc 跑完所有检查。
+
+## 11. 2026-11-19 备份体检与加固记录
+
+- **故障复盘（内容导出中断 15 天）**：commit `63fdca31`（随 `v0.14.4` 发布）将 `mica_interchange::MANIFEST_VERSION` 从 `2` 升到 `3`，而 `crates/cli/src/export.rs` 仍硬编码 `version == 2`（且单测 mock 写死 `2`），导致 `2026-11-04` 之后所有 30 个工作区的内容快照停更；所幸腿间解耦已生效，`_pgdump` / `_config` / `objects` 三条灾备腿连续正常。现已改为绑定 `2..=mica_interchange::MANIFEST_VERSION` 并补齐 `markdown_tree_manifest` 契约测试。
+- **备份链路加固**：修复 `run_once` 失败时跳过 `Report::summary` 日志的缺陷；将日常 `rustic forget` 与每周日 `rustic prune --max-unused 15% --max-repack 200MiB` + `rustic check` 拆分（`PRUNE_WEEKDAY`）；为 `rclone copy` 补充 `--stats-log-level NOTICE`；为 `backup` 容器固定 `hostname: mica-backup`、持久化 `RUSTIC_CACHE_DIR` 命名卷 `mica-prod-backup-cache`、增加 `init: true` / `cgroup_parent` / `768m` 内存上限，并在生产配置 `BACKUP_ON_START=0`。
+- **生产清理与演练**：清理 16 个已废弃/空壳旧工作区 label（139 份快照）并将 3 个无同名替代的历史旧库（`willdocs` / `NVIDIA` / `infrastructure`）各收敛为 `--keep-last 1`，仓库快照由 559 降至 401 且 `rustic check` 全过；清理 `/data/mica` 下 8 月大升级残留（~886 MB）及空孤儿卷 `mica-prod-backup`。随后完成 `v0.14.10` 全流程 `dr-drill.yml` 演练（见 §3）。
+- **地域容灾边界**：当前生产 ECS 与 OSS 备份桶 `mica-backup-cloudcele` 同在 `cn-shenzhen`（`oss-cn-shenzhen`）。如需跨地域地理隔离且不改动备份链路，可在阿里云 OSS 控制台为该桶开启跨区域复制（CRR）至异地低频/归档桶（关闭删除同步）。
