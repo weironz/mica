@@ -198,11 +198,8 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
     }
     case WM_SIZE: {
-      RECT rect = GetClientArea();
-      if (child_content_ != nullptr) {
-        // Size and position the child window.
-        MoveWindow(child_content_, rect.left, rect.top, rect.right - rect.left,
-                   rect.bottom - rect.top, TRUE);
+      if (wparam != SIZE_MINIMIZED) {
+        SyncChildContentBounds();
       }
       return 0;
     }
@@ -241,12 +238,42 @@ Win32Window* Win32Window::GetThisFromHandle(HWND const window) noexcept {
 void Win32Window::SetChildContent(HWND content) {
   child_content_ = content;
   SetParent(content, window_handle_);
-  RECT frame = GetClientArea();
-
-  MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
-             frame.bottom - frame.top, true);
+  SyncChildContentBounds();
 
   SetFocus(child_content_);
+}
+
+bool Win32Window::SyncChildContentBounds() {
+  if (window_handle_ == nullptr || child_content_ == nullptr) {
+    return false;
+  }
+  RECT frame = GetClientArea();
+  const int width = frame.right - frame.left;
+  const int height = frame.bottom - frame.top;
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+  return MoveWindow(child_content_, frame.left, frame.top, width, height,
+                    TRUE) != 0;
+}
+
+void Win32Window::NudgeChildContentSurface() {
+  if (window_handle_ == nullptr || child_content_ == nullptr ||
+      ::IsIconic(window_handle_)) {
+    return;
+  }
+  RECT frame = GetClientArea();
+  const int width = frame.right - frame.left;
+  const int height = frame.bottom - frame.top;
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+  constexpr UINT kFlags = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE |
+                          SWP_FRAMECHANGED;
+  ::SetWindowPos(child_content_, nullptr, frame.left, frame.top, width + 1,
+                 height, kFlags);
+  ::SetWindowPos(child_content_, nullptr, frame.left, frame.top, width, height,
+                 kFlags);
 }
 
 RECT Win32Window::GetClientArea() {

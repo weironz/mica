@@ -180,21 +180,19 @@ void main() {
         logCrash('PlatformError: $error\n$stack');
         return false;
       };
-      // Restore desktop window geometry before the first frame (no-op on web/mobile).
-      await initDesktopWindow();
-      // Seed the UI language and the palette from the persisted choices (prefs are
-      // file/localStorage backed and loaded synchronously) before the first frame
-      // renders. Both MUST happen here rather than from a widget's initState —
-      // see loadPersistedThemeMode for what that looked like when it didn't.
+      // Seed UI language/palette and initialize engines BEFORE showing the
+      // desktop window so we never reveal an empty white surface while codecs
+      // and fonts are still loading (gh#190).
       loadPersistedLocale();
       loadPersistedThemeMode();
       loadPersistedUiFontScale();
-      // Suppress the browser menu so the editor can show its own image actions.
       if (kIsWeb) BrowserContextMenu.disableContextMenu();
       registerWebProbes(); // browser harness hooks; no-op off web
       // index.html started both engines; sync builds replicas synchronously.
       await Future.wait([initMarkdownCodec(), initDocEngine()]);
       await warmUpFonts();
+      // Restore desktop window geometry right before the first frame (no-op on web/mobile).
+      await initDesktopWindow();
       runApp(const MicaApp());
     },
     (error, stack) {

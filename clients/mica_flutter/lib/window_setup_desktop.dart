@@ -224,7 +224,10 @@ Future<void> applyCloseBehavior(String behavior) async {
 
 class _TrayHandler with TrayListener {
   @override
-  void onTrayIconMouseDown() => windowManager.show();
+  void onTrayIconMouseDown() {
+    windowManager.show();
+    windowManager.focus();
+  }
 
   @override
   void onTrayIconRightMouseDown() => trayManager.popUpContextMenu();

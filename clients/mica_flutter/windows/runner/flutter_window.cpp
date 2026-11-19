@@ -46,7 +46,13 @@ bool FlutterWindow::OnCreate() {
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
+    first_frame_ready_ = true;
     this->Show();
+    // gh#190: window_manager may show the window and apply TitleBarStyle.hidden
+    // (SWP_NOSIZE | SWP_FRAMECHANGED) before the first Flutter frame arrives,
+    // leaving ANGLE stuck on a white surface until a manual resize. Re-sync the
+    // child HWND and force a surface refresh once the first frame is ready.
+    RefreshSurface(true);
     WriteFirstFrameReceipt();
   });
 
@@ -56,6 +62,19 @@ bool FlutterWindow::OnCreate() {
   flutter_controller_->ForceRedraw();
 
   return true;
+}
+
+void FlutterWindow::RefreshSurface(bool force_surface) {
+  if (!flutter_controller_ || GetHandle() == nullptr ||
+      ::IsIconic(GetHandle())) {
+    return;
+  }
+  if (force_surface) {
+    NudgeChildContentSurface();
+  } else {
+    SyncChildContentBounds();
+  }
+  flutter_controller_->ForceRedraw();
 }
 
 void FlutterWindow::OnDestroy() {
@@ -82,7 +101,39 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      if (flutter_controller_) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
+      break;
+    case WM_SHOWWINDOW:
+      // Refresh after un-hiding from the tray or single-instance activation.
+      if (wparam == TRUE && first_frame_ready_) {
+        const LRESULT handled =
+            Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+        RefreshSurface(true);
+        return handled;
+      }
+      break;
+    case WM_DISPLAYCHANGE:
+      // Refresh after monitor/virtual-display/RDP topology changes.
+      if (first_frame_ready_) {
+        const LRESULT handled =
+            Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+        RefreshSurface(true);
+        return handled;
+      }
+      break;
+    case WM_WINDOWPOSCHANGED:
+      // TitleBarStyle.hidden sends SWP_NOSIZE | SWP_FRAMECHANGED, which alters
+      // the client area without emitting WM_SIZE.
+      if (lparam != 0 &&
+          (reinterpret_cast<const WINDOWPOS*>(lparam)->flags &
+           SWP_FRAMECHANGED) != 0) {
+        const LRESULT handled =
+            Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+        RefreshSurface(first_frame_ready_);
+        return handled;
+      }
       break;
   }
 

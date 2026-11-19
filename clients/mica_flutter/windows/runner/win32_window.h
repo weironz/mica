@@ -71,6 +71,15 @@ class Win32Window {
   // Called when Destroy is called.
   virtual void OnDestroy();
 
+  // Synchronize the hosted child window bounds to the current client area.
+  // Returns true when the child window was resized or repositioned.
+  bool SyncChildContentBounds();
+
+  // Force the hosted child view to recreate/present its swapchain by nudging
+  // only the child HWND width by 1px and restoring it, without touching the
+  // top-level frame bounds.
+  void NudgeChildContentSurface();
+
  private:
   friend class WindowClassRegistrar;
 
