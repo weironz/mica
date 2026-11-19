@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../l10n/locale_controller.dart';
 import 'page_tree_cache.dart';
+import 'segmented_choice.dart';
 import 'theme_tokens.dart';
 import 'typography.dart';
 
@@ -194,20 +195,16 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
     if (anchorId != null) {
       final v = _cache.viewById(anchorId);
       if (v == null) return null;
-      return Wrap(
-        spacing: 6,
-        runSpacing: 6,
+      return MicaSegmentGroup(
         children: [
           if (v.isFolder)
             _modeChip(
-              context,
               key: const ValueKey('placement-inside'),
               label: l10n.transferInsertInside,
               selected: false,
               onTap: () => widget.onSelected(DestinationPick(parentViewId: v.id)),
             ),
           _modeChip(
-            context,
             key: const ValueKey('placement-before'),
             label: l10n.transferInsertBefore,
             selected: sel.beforeViewId == v.id,
@@ -219,7 +216,6 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
             ),
           ),
           _modeChip(
-            context,
             key: const ValueKey('placement-after'),
             label: l10n.transferInsertAfter,
             selected: sel.afterViewId == v.id,
@@ -236,12 +232,9 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
     if (sel.parentViewId != null) {
       final folder = _cache.viewById(sel.parentViewId!);
       if (folder == null) return null;
-      return Wrap(
-        spacing: 6,
-        runSpacing: 6,
+      return MicaSegmentGroup(
         children: [
           _modeChip(
-            context,
             key: const ValueKey('placement-inside'),
             label: l10n.transferInsertInside,
             selected: true,
@@ -249,7 +242,6 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
                 widget.onSelected(DestinationPick(parentViewId: folder.id)),
           ),
           _modeChip(
-            context,
             key: const ValueKey('placement-before'),
             label: l10n.transferInsertBefore,
             selected: false,
@@ -261,7 +253,6 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
             ),
           ),
           _modeChip(
-            context,
             key: const ValueKey('placement-after'),
             label: l10n.transferInsertAfter,
             selected: false,
@@ -277,19 +268,15 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
     }
     final firstRoot = _firstRootView();
     if (firstRoot == null) return null;
-    return Wrap(
-      spacing: 6,
-      runSpacing: 6,
+    return MicaSegmentGroup(
       children: [
         _modeChip(
-          context,
           key: const ValueKey('placement-root-end'),
           label: l10n.transferRootEnd,
           selected: true,
           onTap: () => widget.onSelected(DestinationPick.root),
         ),
         _modeChip(
-          context,
           key: const ValueKey('placement-root-top'),
           label: l10n.transferRootTop,
           selected: false,
@@ -301,20 +288,17 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
     );
   }
 
-  Widget _modeChip(
-    BuildContext context, {
+  Widget _modeChip({
     required Key key,
     required String label,
     required bool selected,
     required VoidCallback onTap,
   }) {
-    return ChoiceChip(
+    return MicaSegmentButton(
       key: key,
-      label: Text(label, style: MicaTypography.small),
+      label: Text(label),
       selected: selected,
       onSelected: widget.enabled ? (_) => onTap() : null,
-      visualDensity: VisualDensity.compact,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
   }
 
@@ -400,13 +384,13 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
     final tokens = MicaTheme.of(context);
     final enabled = widget.enabled && onTap != null;
     final indent = 4.0 + depth * 16;
-    final accent = tokens.accent.primary;
+    final indicatorColor = tokens.text.primary;
     Widget indicator() => Padding(
       padding: EdgeInsets.only(left: indent, right: 6),
       child: Container(
         height: 2,
         decoration: BoxDecoration(
-          color: accent,
+          color: indicatorColor,
           borderRadius: BorderRadius.circular(1),
         ),
       ),
@@ -468,7 +452,7 @@ class _DestinationTreePickerState extends State<DestinationTreePicker> {
                           ? Icons.vertical_align_top
                           : Icons.vertical_align_bottom,
                       size: 15,
-                      color: accent,
+                      color: indicatorColor,
                     ),
                   const SizedBox(width: 6),
                 ],
