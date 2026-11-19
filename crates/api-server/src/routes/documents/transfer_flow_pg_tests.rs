@@ -1086,3 +1086,128 @@ async fn a_transferred_blob_is_reserved_against_the_destination_quota() {
     "the blob's bytes were reserved in the destination before the copy"
   );
 }
+
+#[tokio::test]
+async fn gh186_transfer_supports_before_and_after_sibling_anchors() {
+  let Some(db) = pool().await else { return };
+  let user = seed_user(&db).await;
+  let src = seed_workspace(&db, user).await;
+  let dest = seed_workspace(&db, user).await;
+
+  let dest_folder = seed_folder(&db, dest, user, None, "Target").await;
+  let (d1, _) = seed_document(&db, dest, user, Some(dest_folder), "One", json!([])).await;
+  let (d2, _) = seed_document(&db, dest, user, Some(dest_folder), "Two", json!([])).await;
+  let (d3, _) = seed_document(&db, dest, user, Some(dest_folder), "Three", json!([])).await;
+  // Give destination siblings distinct initial order One < Two < Three.
+  for (id, pos) in [(d1, "0000000010"), (d2, "0000000020"), (d3, "0000000030")] {
+    sqlx::query("UPDATE views SET position = $1 WHERE id = $2")
+      .bind(pos)
+      .bind(id)
+      .execute(&db)
+      .await
+      .unwrap();
+  }
+
+  let (s1, _) = seed_document(&db, src, user, None, "First", json!([])).await;
+  let (s2, _) = seed_document(&db, src, user, None, "Second", json!([])).await;
+  let (s3, _) = seed_document(&db, src, user, None, "Top", json!([])).await;
+
+  // 1. Batch transfer s1, s2 immediately AFTER d1 -> One, First, Second, Two, Three.
+  let batch_req: BatchTransferRequest = serde_json::from_value(json!({
+    "dest_workspace_id": dest,
+    "parent_view_id": dest_folder,
+    "after_view_id": d1,
+    "view_ids": [s1, s2],
+    "remove_source": false,
+  }))
+  .unwrap();
+  let _ = batch_transfer_views(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path(src),
+    Json(batch_req),
+  )
+  .await
+  .unwrap();
+
+  let names_after: Vec<String> = sqlx::query_scalar(
+    "SELECT name FROM views \
+     WHERE workspace_id = $1 AND parent_view_id = $2 AND is_deleted = false \
+     ORDER BY position ASC, id ASC",
+  )
+  .bind(dest)
+  .bind(dest_folder)
+  .fetch_all(&db)
+  .await
+  .unwrap();
+  assert_eq!(names_after, vec!["One", "First", "Second", "Two", "Three"]);
+
+  // 2. Single transfer s3 immediately BEFORE d1 -> Top, One, First, Second, Two, Three.
+  let before_req: TransferRequest = serde_json::from_value(json!({
+    "dest_workspace_id": dest,
+    "parent_view_id": dest_folder,
+    "before_view_id": d1,
+    "remove_source": false,
+  }))
+  .unwrap();
+  let _ = transfer_view(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path((src, s3)),
+    Json(before_req),
+  )
+  .await
+  .unwrap();
+
+  let names_before: Vec<String> = sqlx::query_scalar(
+    "SELECT name FROM views \
+     WHERE workspace_id = $1 AND parent_view_id = $2 AND is_deleted = false \
+     ORDER BY position ASC, id ASC",
+  )
+  .bind(dest)
+  .bind(dest_folder)
+  .fetch_all(&db)
+  .await
+  .unwrap();
+  assert_eq!(
+    names_before,
+    vec!["Top", "One", "First", "Second", "Two", "Three"]
+  );
+
+  // 3. Reject both before_view_id and after_view_id together.
+  let both_req: TransferRequest = serde_json::from_value(json!({
+    "dest_workspace_id": dest,
+    "parent_view_id": dest_folder,
+    "before_view_id": d1,
+    "after_view_id": d2,
+    "dry_run": true,
+  }))
+  .unwrap();
+  let both_err = transfer_view(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path((src, s3)),
+    Json(both_req),
+  )
+  .await
+  .unwrap_err();
+  assert!(matches!(both_err, ApiError::BadRequest(_)));
+
+  // 4. Reject an anchor under a different parent (d1 is under dest_folder, not root).
+  let mismatch_req: TransferRequest = serde_json::from_value(json!({
+    "dest_workspace_id": dest,
+    "parent_view_id": null,
+    "after_view_id": d1,
+    "dry_run": true,
+  }))
+  .unwrap();
+  let mismatch_err = transfer_view(
+    State(test_state(&db)),
+    bearer_headers(user),
+    Path((src, s3)),
+    Json(mismatch_req),
+  )
+  .await
+  .unwrap_err();
+  assert!(matches!(mismatch_err, ApiError::BadRequest(_)));
+}

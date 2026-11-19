@@ -28,6 +28,8 @@ void main() {
             onTransfer: ({
               required destWorkspaceId,
               required parentViewId,
+              beforeViewId,
+              afterViewId,
               required dryRun,
             }) async {
               previewed.add(destWorkspaceId);

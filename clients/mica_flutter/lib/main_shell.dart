@@ -4120,24 +4120,17 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
         // orders it exactly as the sidebar does.
         onLoadTree: (destWorkspaceId) =>
             _api.listViews(_requireSession().accessToken, destWorkspaceId),
-        // The dialog supplies (destWorkspaceId, parentViewId, dryRun); we bind
-        // source + the selected roots + move/copy here.
-        //
-        // Always the BATCH endpoint, even for one row: it is the same server
-        // core, and keeping a second client path for the single case is how the
-        // two drift until only one of them has the fix. One row is a batch of
-        // one, and the server's own single route stays for the MCP server.
-        onTransfer:
-            ({
-              required destWorkspaceId,
-              required parentViewId,
-              required dryRun,
-            }) => _api.batchTransferViews(
+        // Always the BATCH endpoint (one row is a batch of one) so single and
+        // multi-select transfers stay on one code path.
+        onTransfer: ({required destWorkspaceId, required parentViewId, beforeViewId, afterViewId, required dryRun}) =>
+            _api.batchTransferViews(
               token: _requireSession().accessToken,
               workspaceId: source.id,
               viewIds: [for (final v in views) v.id],
               destWorkspaceId: destWorkspaceId,
               parentViewId: parentViewId,
+              beforeViewId: beforeViewId,
+              afterViewId: afterViewId,
               removeSource: !copy,
               dryRun: dryRun,
             ),

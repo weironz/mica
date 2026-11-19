@@ -49,6 +49,8 @@ class TransferDialog extends StatefulWidget {
   final Future<TransferReport> Function({
     required String destWorkspaceId,
     required String? parentViewId,
+    String? beforeViewId,
+    String? afterViewId,
     required bool dryRun,
   })
   onTransfer;
@@ -75,8 +77,8 @@ class _TransferDialogState extends State<TransferDialog> {
   /// The picked destination's tree; null = not loaded (or still loading).
   List<DocumentView>? _tree;
 
-  /// Chosen destination folder; null = the destination's root.
-  String? _parentViewId;
+  /// Chosen destination folder or exact sibling placement (default = root).
+  DestinationPick _pick = DestinationPick.root;
 
   ({String id, String name})? get _dest {
     final id = _destId;
@@ -91,41 +93,43 @@ class _TransferDialogState extends State<TransferDialog> {
       _preview = null;
       _error = null;
       _tree = null;
-      // A folder id belongs to the workspace it came from; carrying it across
-      // would send the server a parent it will (correctly) refuse.
-      _parentViewId = null;
+      // A folder/anchor id belongs to the workspace it came from; carrying it
+      // across would send the server an id it will (correctly) refuse.
+      _pick = DestinationPick.root;
       _loadingPreview = true;
     });
-    // Folders are a convenience — failing to list them must not block the
-    // transfer, which works perfectly well into the root.
+    // Folders/positions are a convenience — failing to list them must not
+    // block the transfer, which works perfectly well into the root.
     widget.onLoadTree(id).then((tree) {
       if (!mounted || _destId != id) return;
       setState(() => _tree = tree);
     }, onError: (_) {});
-    await _runPreview(id, null);
+    await _runPreview(id, DestinationPick.root);
   }
 
-  Future<void> _selectParent(String? parentViewId) async {
+  Future<void> _selectPick(DestinationPick pick) async {
     final id = _destId;
-    if (id == null || parentViewId == _parentViewId) return;
+    if (id == null || pick == _pick) return;
     setState(() {
-      _parentViewId = parentViewId;
+      _pick = pick;
       _preview = null;
       _error = null;
       _loadingPreview = true;
     });
-    await _runPreview(id, parentViewId);
+    await _runPreview(id, pick);
   }
 
-  Future<void> _runPreview(String destId, String? parentViewId) async {
+  Future<void> _runPreview(String destId, DestinationPick pick) async {
     try {
       final report = await widget.onTransfer(
         destWorkspaceId: destId,
-        parentViewId: parentViewId,
+        parentViewId: pick.parentViewId,
+        beforeViewId: pick.beforeViewId,
+        afterViewId: pick.afterViewId,
         dryRun: true,
       );
       // Superseded by a newer pick — of EITHER control.
-      if (!mounted || _destId != destId || _parentViewId != parentViewId) {
+      if (!mounted || _destId != destId || _pick != pick) {
         return;
       }
       setState(() {
@@ -133,7 +137,7 @@ class _TransferDialogState extends State<TransferDialog> {
         _loadingPreview = false;
       });
     } catch (error) {
-      if (!mounted || _destId != destId || _parentViewId != parentViewId) {
+      if (!mounted || _destId != destId || _pick != pick) {
         return;
       }
       setState(() {
@@ -153,7 +157,9 @@ class _TransferDialogState extends State<TransferDialog> {
     try {
       final report = await widget.onTransfer(
         destWorkspaceId: dest.id,
-        parentViewId: _parentViewId,
+        parentViewId: _pick.parentViewId,
+        beforeViewId: _pick.beforeViewId,
+        afterViewId: _pick.afterViewId,
         dryRun: false,
       );
       if (!mounted) return;
@@ -206,11 +212,10 @@ class _TransferDialogState extends State<TransferDialog> {
                     ],
                     onSelected: _selectDest,
                   ),
-                  // Second control: WHERE in that workspace. Only once a
-                  // destination is picked and its tree arrived with at least one
-                  // folder — a picker offering nothing but "root" says less than
-                  // the label above it already does.
-                  if (_tree?.any((v) => v.isFolder) ?? false) ...[
+                  // Second control: WHERE in that workspace (folder or exact
+                  // sibling position, gh#186). Show whenever the destination
+                  // has at least one view so root-level positioning works too.
+                  if (_tree?.isNotEmpty ?? false) ...[
                     const SizedBox(height: 12),
                     Text(
                       l10n.transferPickFolder,
@@ -221,11 +226,11 @@ class _TransferDialogState extends State<TransferDialog> {
                       // A new destination starts with a fresh filter/expansion.
                       key: ValueKey('tree-$_destId'),
                       views: _tree!,
-                      selectedId: _parentViewId,
+                      selection: _pick,
                       enabled: !_submitting,
                       rootLabel: l10n.transferDestinationRoot,
                       filterHint: l10n.transferSearchFolder,
-                      onSelected: _selectParent,
+                      onSelected: _selectPick,
                     ),
                   ],
                   const SizedBox(height: 16),

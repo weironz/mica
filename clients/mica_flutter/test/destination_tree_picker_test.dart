@@ -5,9 +5,8 @@ import 'package:mica_flutter/l10n/app_localizations.dart';
 import 'package:mica_flutter/ui/destination_tree_picker.dart';
 import 'package:mica_flutter/ui/transfer_dialog.dart';
 
-// gh#183: the move/copy folder picker was a dropdown of folder names indented
-// with spaces. It is now the sidebar's tree — same order, folders and pages,
-// pages not pickable — with a filter that keeps each hit's ancestors.
+// gh#183 + gh#186: sidebar-ordered destination picker with auto-expand on
+// folder tap and exact sibling positioning (inside / before / after / root top).
 
 DocumentView _v(
   String id,
@@ -49,37 +48,98 @@ List<String> _labels(WidgetTester t) => [
 ];
 
 void main() {
-  testWidgets('sidebar order, pages shown; expanding reveals children', (
+  testWidgets('gh#186: tapping folder name auto-expands and selects it; chevron toggles', (
     t,
   ) async {
-    final picked = <String?>[];
+    DestinationPick current = DestinationPick.root;
+    final picked = <DestinationPick>[];
     await t.pumpWidget(
       _host(
-        DestinationTreePicker(
-          views: _tree,
-          selectedId: null,
-          onSelected: picked.add,
-          rootLabel: '根目录',
-          filterHint: '筛选',
+        StatefulBuilder(
+          builder: (context, setState) => DestinationTreePicker(
+            views: _tree,
+            selection: current,
+            onSelected: (p) {
+              picked.add(p);
+              setState(() => current = p);
+            },
+            rootLabel: '根目录',
+            filterHint: '筛选',
+          ),
         ),
       ),
     );
     // Top level by position: 项目 (1), 归档 (2), then the root-level page.
     expect(_labels(t), ['根目录', '项目', '归档', '收件箱']);
+
+    // Clicking the folder name auto-expands it AND selects it.
+    await t.tap(find.text('项目'));
+    await t.pump();
+    expect(_labels(t), ['根目录', '项目', '设计', '发布清单', '归档', '收件箱']);
+    expect(picked.last, const DestinationPick(parentViewId: 'a'));
+
+    // Clicking the chevron collapses it back without changing selection.
     await t.tap(
       find.descendant(
         of: find.byKey(const ValueKey('destination-a')),
-        matching: find.byIcon(Icons.chevron_right),
+        matching: find.byIcon(Icons.expand_more),
       ),
     );
     await t.pump();
-    expect(_labels(t), ['根目录', '项目', '设计', '发布清单', '归档', '收件箱']);
+    expect(_labels(t), ['根目录', '项目', '归档', '收件箱']);
 
-    // A page is not a destination; a folder is.
-    await t.tap(find.text('发布清单'));
+    // Re-tapping folder name expands it again, then tapping nested folder name
+    // expands nested children too.
+    await t.tap(find.text('项目'));
+    await t.pump();
     await t.tap(find.text('设计'));
-    await t.tap(find.text('根目录'));
-    expect(picked, ['a1', null]);
+    await t.pump();
+    expect(_labels(t), ['根目录', '项目', '设计', '首页草图', '发布清单', '归档', '收件箱']);
+    expect(picked.last, const DestinationPick(parentViewId: 'a1'));
+  });
+
+  testWidgets('gh#186: supports exact sibling placement (before / after / root top)', (
+    t,
+  ) async {
+    DestinationPick current = DestinationPick.root;
+    await t.pumpWidget(
+      _host(
+        StatefulBuilder(
+          builder: (context, setState) => DestinationTreePicker(
+            views: _tree,
+            selection: current,
+            onSelected: (p) => setState(() => current = p),
+            rootLabel: '根目录',
+            filterHint: '筛选',
+          ),
+        ),
+      ),
+    );
+
+    // Root top chip targets before the first root view ('a').
+    await t.tap(find.byKey(const ValueKey('placement-root-top')));
+    await t.pump();
+    expect(current, const DestinationPick(parentViewId: null, beforeViewId: 'a'));
+
+    // Expand 项目 and tap page 发布清单 -> inserts AFTER 发布清单 inside 项目.
+    await t.tap(find.text('项目'));
+    await t.pump();
+    await t.tap(find.text('发布清单'));
+    await t.pump();
+    expect(current, const DestinationPick(parentViewId: 'a', afterViewId: 'ap'));
+
+    // Switch to BEFORE 发布清单.
+    await t.tap(find.byKey(const ValueKey('placement-before')));
+    await t.pump();
+    expect(current, const DestinationPick(parentViewId: 'a', beforeViewId: 'ap'));
+
+    // Select folder 归档 -> inside by default, then switch to AFTER 归档 at root.
+    await t.tap(find.text('归档'));
+    await t.pump();
+    expect(current, const DestinationPick(parentViewId: 'b'));
+    await t.tap(find.byKey(const ValueKey('placement-after')));
+    await t.pump();
+    expect(current, const DestinationPick(parentViewId: null, afterViewId: 'b'));
   });
 
   testWidgets('filtering keeps each hit with its ancestors, expanded', (
@@ -89,7 +149,7 @@ void main() {
       _host(
         DestinationTreePicker(
           views: _tree,
-          selectedId: null,
+          selection: DestinationPick.root,
           onSelected: (_) {},
           rootLabel: '根目录',
           filterHint: '筛选',
@@ -105,9 +165,9 @@ void main() {
   });
 
   testWidgets(
-    'the transfer dialog previews into the folder picked in the tree',
+    'the transfer dialog previews into the folder or sibling position picked in the tree',
     (t) async {
-      final previews = <String?>[];
+      final calls = <({String? parent, String? before, String? after, bool dryRun})>[];
       await t.pumpWidget(
         _host(
           TransferDialog(
@@ -118,9 +178,16 @@ void main() {
                 ({
                   required destWorkspaceId,
                   required parentViewId,
+                  beforeViewId,
+                  afterViewId,
                   required dryRun,
                 }) async {
-                  previews.add(parentViewId);
+                  calls.add((
+                    parent: parentViewId,
+                    before: beforeViewId,
+                    after: afterViewId,
+                    dryRun: dryRun,
+                  ));
                   return const TransferReport(
                     newRootViewId: '',
                     newRootViewIds: [],
@@ -140,9 +207,18 @@ void main() {
       await t.tap(find.widgetWithText(MenuItemButton, '工作记录'));
       await t.pumpAndSettle();
       expect(find.byType(DestinationTreePicker), findsOneWidget);
-      await t.tap(find.text('归档'));
+
+      // Tap folder 项目 (auto-expands!) then tap page 发布清单 inside it.
+      await t.tap(find.text('项目'));
       await t.pumpAndSettle();
-      expect(previews, [null, 'b']);
+      await t.tap(find.text('发布清单'));
+      await t.pumpAndSettle();
+
+      expect(calls, [
+        (parent: null, before: null, after: null, dryRun: true),
+        (parent: 'a', before: null, after: null, dryRun: true),
+        (parent: 'a', before: null, after: 'ap', dryRun: true),
+      ]);
     },
   );
 }

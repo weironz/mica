@@ -314,6 +314,14 @@ pub struct TransferRequest {
   /// Parent folder in the destination (null = destination root).
   #[serde(default)]
   parent_view_id: Option<Uuid>,
+  /// Optional sibling anchor in the destination under `parent_view_id`: insert
+  /// immediately BEFORE this view. Mutually exclusive with `after_view_id`.
+  #[serde(default)]
+  before_view_id: Option<Uuid>,
+  /// Optional sibling anchor in the destination under `parent_view_id`: insert
+  /// immediately AFTER this view. Mutually exclusive with `before_view_id`.
+  #[serde(default)]
+  after_view_id: Option<Uuid>,
   /// true = move (soft-delete the source after copying); false = copy (keep source).
   #[serde(default)]
   remove_source: bool,
@@ -336,6 +344,10 @@ pub struct BatchTransferRequest {
   #[serde(default)]
   parent_view_id: Option<Uuid>,
   #[serde(default)]
+  before_view_id: Option<Uuid>,
+  #[serde(default)]
+  after_view_id: Option<Uuid>,
+  #[serde(default)]
   remove_source: bool,
   #[serde(default)]
   dry_run: bool,
@@ -344,11 +356,41 @@ pub struct BatchTransferRequest {
   view_ids: Vec<Uuid>,
 }
 
+/// Optional exact insertion point among the destination parent's siblings (gh#186).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransferAnchor {
+  Before(Uuid),
+  After(Uuid),
+}
+
+impl TransferAnchor {
+  fn id(self) -> Uuid {
+    match self {
+      Self::Before(id) | Self::After(id) => id,
+    }
+  }
+}
+
+fn parse_transfer_anchor(
+  before_view_id: Option<Uuid>,
+  after_view_id: Option<Uuid>,
+) -> ApiResult<Option<TransferAnchor>> {
+  match (before_view_id, after_view_id) {
+    (Some(_), Some(_)) => Err(ApiError::BadRequest(
+      "before_view_id and after_view_id are mutually exclusive".to_string(),
+    )),
+    (Some(id), None) => Ok(Some(TransferAnchor::Before(id))),
+    (None, Some(id)) => Ok(Some(TransferAnchor::After(id))),
+    (None, None) => Ok(None),
+  }
+}
+
 /// What both transfer routes reduce to: N roots going to one destination.
 struct TransferPlan {
   roots: Vec<Uuid>,
   dest_workspace_id: Uuid,
   parent_view_id: Option<Uuid>,
+  anchor: Option<TransferAnchor>,
   remove_source: bool,
   dry_run: bool,
 }
@@ -627,6 +669,7 @@ pub async fn transfer_view(
   Json(request): Json<TransferRequest>,
 ) -> ApiResult<Json<TransferResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
+  let anchor = parse_transfer_anchor(request.before_view_id, request.after_view_id)?;
   transfer_roots(
     &state,
     user_id,
@@ -635,6 +678,7 @@ pub async fn transfer_view(
       roots: vec![view_id],
       dest_workspace_id: request.dest_workspace_id,
       parent_view_id: request.parent_view_id,
+      anchor,
       remove_source: request.remove_source,
       dry_run: request.dry_run,
     },
@@ -651,6 +695,7 @@ pub async fn batch_transfer_views(
   Json(request): Json<BatchTransferRequest>,
 ) -> ApiResult<Json<TransferResponse>> {
   let user_id = user_id_from_headers(&state, &headers).await?;
+  let anchor = parse_transfer_anchor(request.before_view_id, request.after_view_id)?;
   // Same ceiling as the other batch routes, and for the same reason — except
   // here it also bounds how long ONE transaction holds its locks.
   //
@@ -676,6 +721,7 @@ pub async fn batch_transfer_views(
       roots: request.view_ids,
       dest_workspace_id: request.dest_workspace_id,
       parent_view_id: request.parent_view_id,
+      anchor,
       remove_source: request.remove_source,
       dry_run: request.dry_run,
     },
@@ -715,6 +761,16 @@ async fn transfer_roots(
   // A destination parent, if given, must be a live folder in the destination.
   if let Some(parent) = request.parent_view_id {
     ensure_parent_accepts_children(&state.db, dest_workspace_id, parent).await?;
+  }
+  // An insertion anchor, if given, must be a live sibling under that parent.
+  if let Some(anchor) = request.anchor {
+    ensure_anchor_is_live_sibling(
+      &state.db,
+      dest_workspace_id,
+      request.parent_view_id,
+      anchor.id(),
+    )
+    .await?;
   }
 
   // 0. Drop roots that sit inside another root, BEFORE enumerating anything —
@@ -963,6 +1019,27 @@ async fn transfer_roots(
   let ordered = topo_order_subtree(&subtree);
 
   let mut tx = state.db.begin().await?;
+  let new_root_view_ids: Vec<Uuid> = roots.iter().map(|r| view_map[r]).collect();
+  // When an exact sibling anchor is requested, serialize against concurrent
+  // tree reorders in the destination and compute evenly-spaced positions for
+  // the destination parent's children (matching `reorder_views`).
+  let root_positions: std::collections::HashMap<Uuid, String> = if let Some(anchor) = request.anchor
+  {
+    lock_workspace_tree(&mut tx, dest_workspace_id).await?;
+    if let Some(parent) = request.parent_view_id {
+      ensure_parent_accepts_children(&mut *tx, dest_workspace_id, parent).await?;
+    }
+    plan_anchored_root_positions_tx(
+      &mut tx,
+      dest_workspace_id,
+      request.parent_view_id,
+      anchor,
+      &new_root_view_ids,
+    )
+    .await?
+  } else {
+    std::collections::HashMap::new()
+  };
   // Before anything is written: refuse a move whose documents have been edited
   // since their payloads were scanned. The view-ID guard in
   // [remove_moved_source] cannot see that — a body write locks the `documents`
@@ -978,6 +1055,10 @@ async fn transfer_roots(
     } else {
       row.parent_view_id.and_then(|p| view_map.get(&p).copied())
     };
+    let position = root_positions
+      .get(&new_view_id)
+      .map(String::as_str)
+      .unwrap_or(row.position.as_str());
     insert_subtree_tx(
       &mut tx,
       row,
@@ -987,7 +1068,7 @@ async fn transfer_roots(
         user_id,
         dest_parent,
         name: &row.name,
-        position: &row.position,
+        position,
         icon: row.icon.as_deref(),
         title: None,
       },
@@ -1006,7 +1087,6 @@ async fn transfer_roots(
 
   tx.commit().await?;
 
-  let new_root_view_ids: Vec<Uuid> = roots.iter().map(|r| view_map[r]).collect();
   Ok(TransferResponse {
     new_root_view_id: new_root_view_ids.first().copied(),
     new_root_view_ids,
@@ -1017,6 +1097,106 @@ async fn transfer_roots(
     removed_source: request.remove_source,
     dry_run: false,
   })
+}
+
+async fn ensure_anchor_is_live_sibling<'e>(
+  db: impl sqlx::PgExecutor<'e>,
+  dest_workspace_id: Uuid,
+  parent_view_id: Option<Uuid>,
+  anchor_id: Uuid,
+) -> ApiResult<()> {
+  let exists: bool = sqlx::query_scalar(
+    "SELECT EXISTS ( \
+       SELECT 1 FROM views \
+       WHERE id = $1 AND workspace_id = $2 AND is_deleted = false \
+         AND parent_view_id IS NOT DISTINCT FROM $3 \
+     )",
+  )
+  .bind(anchor_id)
+  .bind(dest_workspace_id)
+  .bind(parent_view_id)
+  .fetch_one(db)
+  .await?;
+  if !exists {
+    return Err(ApiError::BadRequest(
+      "anchor view must be a live sibling under the destination parent".to_string(),
+    ));
+  }
+  Ok(())
+}
+
+/// Splice `new_root_ids` before or after `anchor` among the destination
+/// parent's live siblings, re-numbering existing siblings in one UPDATE and
+/// returning the canonical positions to assign to each inserted root.
+async fn plan_anchored_root_positions_tx(
+  tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+  dest_workspace_id: Uuid,
+  parent_view_id: Option<Uuid>,
+  anchor: TransferAnchor,
+  new_root_ids: &[Uuid],
+) -> ApiResult<std::collections::HashMap<Uuid, String>> {
+  let siblings: Vec<Uuid> = sqlx::query_scalar(
+    "SELECT id FROM views \
+     WHERE workspace_id = $1 AND is_deleted = false \
+       AND parent_view_id IS NOT DISTINCT FROM $2 \
+     ORDER BY position ASC, id ASC",
+  )
+  .bind(dest_workspace_id)
+  .bind(parent_view_id)
+  .fetch_all(&mut **tx)
+  .await?;
+
+  let Some(anchor_idx) = siblings.iter().position(|id| *id == anchor.id()) else {
+    return Err(ApiError::Conflict(
+      "destination anchor view changed concurrently; refresh and retry".to_string(),
+    ));
+  };
+
+  let insert_at = match anchor {
+    TransferAnchor::Before(_) => anchor_idx,
+    TransferAnchor::After(_) => anchor_idx + 1,
+  };
+
+  let mut existing_ids = Vec::with_capacity(siblings.len());
+  let mut existing_positions = Vec::with_capacity(siblings.len());
+  let mut new_positions = std::collections::HashMap::with_capacity(new_root_ids.len());
+
+  let mut slot = 1usize;
+  for (idx, sibling_id) in siblings.iter().enumerate() {
+    if idx == insert_at {
+      for &root_id in new_root_ids {
+        new_positions.insert(root_id, format!("{:010}", slot * 10));
+        slot += 1;
+      }
+    }
+    existing_ids.push(*sibling_id);
+    existing_positions.push(format!("{:010}", slot * 10));
+    slot += 1;
+  }
+  if insert_at == siblings.len() {
+    for &root_id in new_root_ids {
+      new_positions.insert(root_id, format!("{:010}", slot * 10));
+      slot += 1;
+    }
+  }
+
+  if !existing_ids.is_empty() {
+    sqlx::query(
+      r#"
+        UPDATE views v
+        SET position = t.position, updated_at = now()
+        FROM unnest($1::uuid[], $2::text[]) AS t(id, position)
+        WHERE v.id = t.id AND v.workspace_id = $3 AND v.is_deleted = false
+      "#,
+    )
+    .bind(&existing_ids)
+    .bind(&existing_positions)
+    .bind(dest_workspace_id)
+    .execute(&mut **tx)
+    .await?;
+  }
+
+  Ok(new_positions)
 }
 
 type BlobCopy = (store::FileRecord, String);

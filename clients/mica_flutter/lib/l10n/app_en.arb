@@ -108,11 +108,16 @@
   "shortcutsTreeToggleSelect": "Sidebar: add a row to the selection, or take it out",
   "shortcutsTreeRangeSelect": "Sidebar: select a run of rows under the same parent",
   "shortcutsTreeClearSelect": "Sidebar: clear the multi-selection (clicking anywhere outside the sidebar clears it too)",
-  "transferPickFolder": "Folder (optional)",
+  "transferPickFolder": "Target location (optional)",
   "@transferPickFolder": {
-    "description": "Second dropdown in the transfer dialog: where inside the chosen workspace. Marked optional because the root is a perfectly good answer and is the default."
+    "description": "Tree picker heading in the transfer dialog: folder or exact sibling position inside the chosen workspace. Marked optional because the root is the default."
   },
   "transferDestinationRoot": "Workspace root",
+  "transferInsertInside": "Inside folder",
+  "transferInsertBefore": "Before item",
+  "transferInsertAfter": "After item",
+  "transferRootEnd": "End of root",
+  "transferRootTop": "Top of root",
   "batchDragLabel": "{count} items",
   "@batchDragLabel": {
     "description": "Caption on the merged drag chip while dragging a multi-selection, shown under the top row's name.",
@@ -1388,7 +1393,7 @@
       }
     }
   },
-  "transferSearchFolder": "Filter folders",
+  "transferSearchFolder": "Filter folders or pages",
   "transferSearchWorkspace": "Type to filter",
   "transferMoveTitle": "Move to workspace",
   "transferCopyTitle": "Copy to workspace",

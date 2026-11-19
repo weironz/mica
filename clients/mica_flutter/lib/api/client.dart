@@ -737,6 +737,8 @@ class ApiClient {
     required String viewId,
     required String destWorkspaceId,
     String? parentViewId,
+    String? beforeViewId,
+    String? afterViewId,
     required bool removeSource,
     required bool dryRun,
   }) async {
@@ -744,6 +746,8 @@ class ApiClient {
         await _post('/api/workspaces/$workspaceId/views/$viewId/transfer', {
           'dest_workspace_id': destWorkspaceId,
           'parent_view_id': parentViewId,
+          'before_view_id': ?beforeViewId,
+          'after_view_id': ?afterViewId,
           'remove_source': removeSource,
           'dry_run': dryRun,
         }, token: token);
@@ -765,6 +769,8 @@ class ApiClient {
     required List<String> viewIds,
     required String destWorkspaceId,
     String? parentViewId,
+    String? beforeViewId,
+    String? afterViewId,
     required bool removeSource,
     required bool dryRun,
   }) async {
@@ -774,6 +780,8 @@ class ApiClient {
         'view_ids': viewIds,
         'dest_workspace_id': destWorkspaceId,
         'parent_view_id': parentViewId,
+        'before_view_id': ?beforeViewId,
+        'after_view_id': ?afterViewId,
         'remove_source': removeSource,
         'dry_run': dryRun,
       },

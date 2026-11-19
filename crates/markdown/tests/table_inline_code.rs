@@ -158,7 +158,11 @@ fn gh188_table_multiple_inline_code_spans_with_underscores_and_cjk_punctuation()
         );
         let s = m.get("start").and_then(|v| v.as_u64()).unwrap() as usize;
         let e = m.get("end").and_then(|v| v.as_u64()).unwrap() as usize;
-        text.encode_utf16().skip(s).take(e - s).collect::<Vec<u16>>()
+        text
+          .encode_utf16()
+          .skip(s)
+          .take(e - s)
+          .collect::<Vec<u16>>()
       })
       .map(|u16s| String::from_utf16(&u16s).unwrap())
       .collect();
@@ -170,7 +174,11 @@ fn gh188_table_multiple_inline_code_spans_with_underscores_and_cjk_punctuation()
   assert_codes(&rows[1][2], &["greenstor-ai-admin"]);
   assert_codes(
     &rows[2][1],
-    &["INFISICAL_URL", "INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET"],
+    &[
+      "INFISICAL_URL",
+      "INFISICAL_CLIENT_ID",
+      "INFISICAL_CLIENT_SECRET",
+    ],
   );
   assert_codes(&rows[2][2], &["greenstor-ai-admin"]);
 
