@@ -1,6 +1,7 @@
 # 使用统计与可观测性设计方案（Issue #191）
 
 > 状态：**设计评审定稿（待实施）** · 对应需求：[#191](https://github.com/weironz/mica/issues/191)
+> 交互原型：[usage-statistics-demo.html](usage-statistics-demo.html)（零外部依赖，下载后直接用浏览器打开即可评审浅/深色、云端/本地双模式与下钻交互）
 > 更新日期：2026-11-20
 
 ## 1. 背景与目标
@@ -310,6 +311,8 @@
 - 严格遵循 Mica 视觉规范：分段切换统一使用 `MicaSegmentGroup` / `MicaSegmentButton`（满足 `segmented_choice_test.dart`），主界面保持冷静中性色阶（满足 `blue_accent_policy_test.dart`）。
 
 ### 6.2 面板布局（位于 `MicaSettingsShell` 右侧内容区，宽约 820px）
+
+> 可交互前端原型见同目录 [usage-statistics-demo.html](usage-statistics-demo.html)（支持切换云端/本地离线模式、浅/深色主题、左下角菜单入口预览、时间范围与指标切换及工作区下钻）。
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
