@@ -61,6 +61,7 @@
 | [ai-block-editing.md](features/ai-block-editing.md) | AI 当前页定向修改 |
 | [password-reset.md](features/password-reset.md) | 密码找回 |
 | [editor-virtualization-plan.md](features/editor-virtualization-plan.md) | 长文档虚拟化 |
+| [usage-statistics.md](features/usage-statistics.md) | 使用统计与 Prometheus 可观测性设计（Issue #191） |
 | [design-adoption.md](features/design-adoption.md) | 设计稿(`design/` 01–19)采纳记录 |
 
 ## plans — 规划与路线图
