@@ -571,12 +571,21 @@ pub fn run(client: &Client, args: &ExportArgs) -> Result<Stats> {
         if !names.contains(archive_path) {
           let known = known_assets
             .get(&id)
-            .filter(|a| a.state.path == archive_path && skip_assets.contains(&id))
+            .filter(|_| skip_assets.contains(&id))
             .with_context(|| format!("page archive is missing asset {id}"))?;
           let source = asset_source(&ws_root, &staging.0, known)
             .with_context(|| format!("reused asset {id} disappeared during export"))?;
-          files.insert(archive_path.to_string(), stamp(&source)?);
-          desired.insert(relative(archive_path)?);
+          let rel = relative(archive_path)?;
+          let target = if known.state.path == archive_path {
+            source
+          } else {
+            let bytes = fs::read(&source)?;
+            write_changed(&staging.0, archive_path, &bytes)?;
+            downloaded.insert(archive_path.to_string());
+            staging.0.join(&rel)
+          };
+          files.insert(archive_path.to_string(), stamp(&target)?);
+          desired.insert(rel);
           stats.assets_reused += 1;
         }
         assets.insert(
@@ -1358,5 +1367,58 @@ mod tests {
         "error should name received version {bad}: {err}"
       );
     }
+  }
+
+  #[test]
+  fn reused_asset_survives_sanitized_path_change() {
+    // Regression: when server-side safe_segment changed (e.g. stripping a
+    // trailing dot), an already-cached asset skipped via skip_assets arrives
+    // with a different sidecar archive_path while its revision & bytes are
+    // unchanged. CLI must copy the cached bytes to the new path and prune the
+    // old path instead of failing with "page archive is missing asset".
+    let server = Server::new();
+    let client = server.client();
+    let args = args("renamed-asset");
+    run(&client, &args).unwrap();
+    assert!(args.out.join("notes/assets/photo.png").exists());
+
+    // Simulate page edit + asset path rename while revision stays "image1"
+    // (server omits bytes because CLI sent IMAGE in skip_assets).
+    {
+      let mut remote = server.remote.lock().unwrap();
+      remote.inventories.insert(
+        WS,
+        inventory("t2", &[(A, "a.md", "rev2"), (B, "b.md", "b1")]),
+      );
+      let entries = vec![
+        mica_interchange::ZipEntry {
+          name: "a.md".into(),
+          data: b"updated body".to_vec(),
+        },
+        mica_interchange::ZipEntry {
+          name: "a.mica.json".into(),
+          data: serde_json::to_vec(&json!({
+            "blocks": [],
+            "assets": { IMAGE.to_string(): "assets/photo-clean.png" }
+          }))
+          .unwrap(),
+        },
+      ];
+      remote
+        .pages
+        .insert(A, ("rev2".into(), mica_interchange::build_zip(&entries)));
+    }
+
+    let stats = run(&client, &args).unwrap();
+    assert_eq!(stats.assets_reused, 1);
+    assert_eq!(
+      fs::read(args.out.join("notes/assets/photo-clean.png")).unwrap(),
+      b"image bytes"
+    );
+    assert!(
+      !args.out.join("notes/assets/photo.png").exists(),
+      "old sanitized asset path must be pruned"
+    );
+    fs::remove_dir_all(args.out).unwrap();
   }
 }
