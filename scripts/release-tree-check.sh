@@ -27,11 +27,6 @@ for image in deploy/Dockerfile.api deploy/Dockerfile.cli docker-compose.yml; do
     || fail "$image must build with the Rust pin $rust_pin"
 done
 
-client=$(sed -nE 's/.*postgresql-client-([0-9]+).*/\1/p' deploy/Dockerfile.cli | sed -n '1p')
-server=$(sed -nE 's/.*image: postgres:([0-9]+).*/\1/p' deploy/docker-compose.yml | sed -n '1p')
-[[ -n "$client" && -n "$server" && "$client" -ge "$server" ]] \
-  || fail "pg_dump client ('$client') must be at least the deployed PostgreSQL major ('$server')"
-
 # The first release containing each migration fixes its exact bytes, comments
 # included. Take the union of shipped paths so deletion is rejected too.
 shipped=$(git tag --list 'v[0-9]*')

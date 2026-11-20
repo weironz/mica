@@ -85,12 +85,8 @@ enum Command {
   /// The recycle bin: see it, restore from it, empty it.
   #[command(subcommand)]
   Trash(TrashCmd),
-  /// The scheduled backup: content + database + object bytes, off-site.
-  ///
-  /// Replaces the `mica-backup.sh` / `mica-backup-loop.sh` pair. The reason it
-  /// is code and not shell is in `backup.rs`: a shell run is an exit code, so
-  /// "backed up less than you think" and "backed up everything" looked the same
-  /// — and did, in production, for months.
+  /// Scheduled Markdown + images export mirror for external backup tools
+  /// (e.g. Zerobyte relaying to Aliyun OSS `mica-backup/mica-md`).
   #[command(subcommand)]
   Backup(BackupCmd),
   /// Serve the Mica MCP server over stdio, for any MCP client (Claude Code and
@@ -370,31 +366,13 @@ struct TrashEmptyArgs {
 
 #[derive(Subcommand)]
 enum BackupCmd {
-  /// Run one backup now and exit non-zero if it covered less than it should.
+  /// Run one incremental Markdown export pass now and verify manifest coverage.
   Run,
-  /// Run one on start, then once a day at BACKUP_HOUR. The container entrypoint.
+  /// Run one pass on start (unless BACKUP_ON_START=0), then daily at BACKUP_HOUR.
   ///
   /// A failed run is logged and pinged to the dead man's switch, never fatal —
   /// the loop has to survive a bad night to try again the next one.
   Daemon,
-  /// Put this instance's credentials back — run BEFORE the stack exists.
-  ///
-  /// The other half of the credentials leg: a rebuilt machine has this image
-  /// and nothing else, so restoring .env.secrets cannot depend on a running
-  /// stack. Needs OSS_* and RUSTIC_PASSWORD in the environment — the three
-  /// secrets that cannot themselves be in the backup (docs/ops/dr-plan.md §2.2).
-  RestoreConfig {
-    /// Restore destination. The file lands at <out>/etc/mica/env.secrets,
-    /// because rustic restores the absolute path it snapshotted.
-    #[arg(long, default_value = "/restore")]
-    out: PathBuf,
-  },
-  /// Pull the object bytes (images) back from OSS into this instance's RustFS.
-  ///
-  /// Run AFTER the stack is up — it writes into the running RustFS. Refuses
-  /// unless both sides end up with the same object count and byte total: a
-  /// `rclone copy` that copied nothing exits 0 too.
-  RestoreObjects,
 }
 
 #[derive(Args)]
@@ -454,12 +432,6 @@ fn run(cli: Cli) -> Result<()> {
     Command::Export(args) => cmd_export(&cli, &cfg, args),
     Command::Backup(BackupCmd::Run) => cmd_backup_run(&cli, &cfg),
     Command::Backup(BackupCmd::Daemon) => cmd_backup_daemon(&cli, &cfg),
-    Command::Backup(BackupCmd::RestoreConfig { out }) => {
-      backup::restore_config(&backup::Settings::from_env()?, out)
-    }
-    Command::Backup(BackupCmd::RestoreObjects) => {
-      backup::restore_objects(&backup::Settings::from_env()?)
-    }
     Command::Mcp(args) => cmd_mcp(&cli, &cfg, args),
     Command::RehostImages(args) => cmd_rehost_images(&cli, &cfg, args),
     Command::Update(args) => cmd_update(&cli, args),
@@ -1115,13 +1087,13 @@ fn cmd_ws_list(cli: &Cli, cfg: &Config) -> Result<()> {
 
 // ---------------------------------------------------------------- export
 
-/// One scheduled backup, then a verdict on what it actually covered.
+/// One scheduled Markdown export pass, then manifest coverage verification.
 ///
 /// Export runs as a child so its whole lifetime (including HTTP calls and local
 /// IO) has a deadline. Credentials travel through the environment, never argv.
 fn cmd_backup_run(cli: &Cli, cfg: &Config) -> Result<()> {
   let settings = backup::Settings::from_env()?;
-  let report = backup::run_once(&settings, |dir| {
+  let summary = backup::run_once(&settings, |dir| {
     let base = resolve_server(cli, cfg).context(no_server_hint())?;
     let token = resolve_token(cli, cfg).with_context(no_token_hint)?;
     let mut child = std::process::Command::new(std::env::current_exe()?);
@@ -1136,11 +1108,11 @@ fn cmd_backup_run(cli: &Cli, cfg: &Config) -> Result<()> {
       std::time::Duration::from_secs(2 * 60 * 60),
     )
   })?;
-  backup::log(&format!("run finished:\n{}", report.summary()));
-  // The verdict is separate from the run on purpose: everything below the
-  // failure line still happened, and the operator needs to be told what DID get
-  // backed up even when the answer is "not enough".
-  backup::verdict(&report, settings.allow_partial)
+  backup::log(&format!(
+    "run finished: {} workspace(s) mirrored",
+    summary.workspaces
+  ));
+  Ok(())
 }
 
 /// The container entrypoint: one run on start, then daily at `BACKUP_HOUR`.

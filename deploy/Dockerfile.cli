@@ -1,7 +1,8 @@
-# The Mica backup container: the mica-cli thin API client + the external `rustic`
-# CLI, packaged as a small always-on service that exports every workspace and
-# snapshots it into one rustic repo daily. mica-cli itself has NO backup engine
-# (that was retired — see docs/ops/backup.md); rustic owns encryption/dedup/retention.
+# The slim Mica backup container: pure `mica-cli` packaged as a small always-on
+# service that incrementally mirrors every workspace (Markdown + images) into
+# `/var/lib/mica/export` on schedule. Off-site encryption, dedup, retention and
+# upload to Aliyun OSS (`mica-backup/mica-md`) are owned by Zerobyte; PostgreSQL
+# and RustFS backups are owned by Databasus and Zerobyte respectively.
 #   docker build -f deploy/Dockerfile.cli -t willdockerhub/mica-cli:vX.Y .
 
 # ── mica-cli (thin API client) ───────────────────────────────────────────────
@@ -17,95 +18,16 @@ RUN --mount=type=cache,id=mica-cargo-registry,target=/usr/local/cargo/registry,s
     cargo build --locked --release -p mica-cli \
  && cp target/release/mica-cli /usr/local/bin/mica-cli-staged
 
-# ── rustic CLI (external backup engine), checksum-pinned ──────────────────────
-# The musl build is fully static → runs on the bookworm-slim runtime with no
-# glibc dependency (sidesteps the GLIBC_2.38 gotcha entirely).
-FROM debian:bookworm-slim AS rustic
-ARG RUSTIC_VERSION=v0.11.3
-ARG RUSTIC_SHA256=3298555dc3da30d1cdf6775783e7c777ac4d148708721b3aecbe630ac827b3a9
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
- && curl -fsSL -o /tmp/rustic.tar.gz \
-      "https://github.com/rustic-rs/rustic/releases/download/${RUSTIC_VERSION}/rustic-${RUSTIC_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
- && echo "${RUSTIC_SHA256}  /tmp/rustic.tar.gz" | sha256sum -c - \
- && tar -xzf /tmp/rustic.tar.gz -C /tmp \
- && install -m755 "$(find /tmp -maxdepth 2 -type f -name rustic | head -1)" /usr/local/bin/rustic \
- && /usr/local/bin/rustic --version
-
-# ── rclone CLI (object-store mirror), checksum-pinned ────────────────────────
-# Used ONLY for the blob leg: RustFS S3 → OSS, S3 to S3, never through rustic
-# (crates/cli/src/backup.rs explains why immutable content-addressed blobs want
-# a mirror, not snapshots). Same shape as the rustic stage above: static build,
-# pinned version + sha256, `--version` as a smoke test so a bad download fails
-# the image build instead of the 3am backup.
-# Checksum-pinned like the rustic stage above. The hash was taken from a build
-# that first verified the download against rclone's own published SHA256SUMS, so
-# it is a hash someone actually checked rather than a constant copied from
-# nowhere — and pinning it here means a rewritten release asset fails the build
-# instead of being trusted because the sums file next to it agrees.
-#
-# The zip is saved under the RELEASE'S OWN filename, not something shorter.
-# `sha256sum -c` reads the name out of the checksum line and opens THAT exact
-# path — downloading to `rclone.zip` made it hunt for a file that did not exist
-# and fail with "No such file or directory", which reads like a corrupt download
-# rather than a naming mistake. It broke the 0.13.7 release.
-FROM debian:bookworm-slim AS rclone
-ARG RCLONE_VERSION=v1.68.2
-ARG RCLONE_SHA256=0e6fa18051e67fc600d803a2dcb10ddedb092247fc6eee61be97f64ec080a13c
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates unzip \
- && base="https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}" \
- && zip="rclone-${RCLONE_VERSION}-linux-amd64.zip" \
- && curl -fsSL -o "/tmp/${zip}" "${base}/${zip}" \
- && echo "${RCLONE_SHA256}  /tmp/${zip}" | sha256sum -c - \
- && unzip -q "/tmp/${zip}" -d /tmp \
- && install -m755 "$(find /tmp -maxdepth 2 -type f -name rclone | head -1)" /usr/local/bin/rclone \
- # `env -u`: rclone maps RCLONE_<FLAG> environment variables onto flags, and the
- # ARG above IS one during this stage — so a bare `rclone --version` tries to set
- # the boolean --version to "v1.68.2" and dies. Not hypothetical; it broke a build.
- && env -u RCLONE_VERSION /usr/local/bin/rclone --version
-
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
-# ca-certificates: TLS to the API + OSS. curl: needed right below to fetch the
-# PGDG signing key at build time. (jq is gone — the export manifest is parsed by
-# serde_json now, and the dead man's switch pings through reqwest; both moved
-# into mica-cli when the backup scripts did.)
-# postgresql-client-18: pg_dump for the off-site DB snapshot (crates/cli/src/backup.rs).
-#
-# ⚠️ THIS VERSION IS TIED TO THE SERVER'S. `pg_dump` refuses to dump a server
-# NEWER than itself ("aborting because of server version mismatch"), so this
-# must be >= the `postgres:` tag in deploy/docker-compose.yml. It said 16 while
-# the server went to 18.6 (2026-08-28) and the off-site DB snapshot simply
-# stopped working — silently, because the run was already failing earlier for an
-# unrelated reason. `scripts/release-check.sh` now refuses a release when the two
-# disagree; that gate is the only reason this comment is not the whole defence.
-#
-# Not from bookworm's stock (15) — PGDG has the current majors.
+# ca-certificates: TLS for HTTPS API endpoints and optional HEALTHCHECK_URL.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
- && curl -fsSL -o /usr/share/keyrings/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
- && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
-      > /etc/apt/sources.list.d/pgdg.list \
- && apt-get update \
- && apt-get install -y --no-install-recommends postgresql-client-18 \
+ && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/mica-cli-staged /usr/local/bin/mica-cli
-COPY --from=rustic /usr/local/bin/rustic /usr/local/bin/rustic
-COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 ENV RUST_LOG=info MICA_EXPORT_DIR=/var/lib/mica/export
-# The backup orchestration used to be two shell scripts copied in here. It is
-# now `mica-cli backup` — the same external tools (rustic / rclone / pg_dump),
-# but the run reports which legs actually ran and refuses to exit 0 having
-# quietly covered less than a full instance. See crates/cli/src/backup.rs.
-# ENTRYPOINT is the BINARY; CMD is the default arguments. Written as one
-# ENTRYPOINT until 2026-08-29, which made every other subcommand unreachable
-# without `--entrypoint`: `docker run <image> backup restore-config` appended to
-# it and ran `backup daemon backup restore-config`. That is fine for the daemon
-# and wrong for a recovery, where this image is the ONLY thing on the machine
-# and you need `backup restore-config` from it (docs/ops/dr-plan.md §2.2).
-#
-# Behaviour of the compose service is unchanged: it sets no `command:`, so CMD
-# supplies exactly the arguments the old ENTRYPOINT had.
+# ENTRYPOINT is the binary; CMD provides the default daemon schedule so ad-hoc
+# invocations (`docker exec mica-backup-1 mica-cli backup run` or `export ...`)
+# work directly without `--entrypoint`.
 ENTRYPOINT ["/usr/local/bin/mica-cli"]
 CMD ["backup", "daemon"]

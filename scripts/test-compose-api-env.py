@@ -105,11 +105,14 @@ def check_traefik_working_set(env: dict[str, str]) -> None:
 
 
 def check_backup_service(env: dict[str, str]) -> None:
-    """Verify the backup sidecar keeps a stable hostname, persistent cache,
-    init reaper, memory cap, and explicit allow-list for schedule knobs."""
+    """Verify the slim export-only backup sidecar keeps a stable hostname,
+    init reaper, memory cap, schedule knobs, and does not inject retired
+    rustic/rclone/pg_dump credentials."""
     probe_env = env | {
+        "BACKUP_HOUR": "3",
         "BACKUP_ON_START": "0",
-        "PRUNE_WEEKDAY": "sun",
+        "MICA_BACKUP_TOKEN": "mica_pat_test",
+        "HEALTHCHECK_URL": "https://hc.example.test/ping",
         "MICA_CGROUP_PARENT": "mica.slice",
     }
     result = subprocess.run(
@@ -134,13 +137,18 @@ def check_backup_service(env: dict[str, str]) -> None:
         raise AssertionError(f"backup memswap_limit must be -1, got {backup.get('memswap_limit')!r}")
     benv = backup["environment"]
     for key, expected in (
-        ("RUSTIC_CACHE_DIR", "/var/cache/rustic"),
+        ("MICA_SERVER", "http://api:8080"),
+        ("MICA_PAT", "mica_pat_test"),
+        ("BACKUP_HOUR", "3"),
         ("BACKUP_ON_START", "0"),
-        ("PRUNE_WEEKDAY", "sun"),
+        ("HEALTHCHECK_URL", "https://hc.example.test/ping"),
     ):
         if benv.get(key) != expected:
             raise AssertionError(f"backup env {key}: expected {expected!r}, got {benv.get(key)!r}")
-    print("Backup sidecar: stable hostname, persistent cache, init reaper, 768 MiB cap, schedule knobs")
+    for retired in ("RUSTIC_PASSWORD", "RUSTIC_CACHE_DIR", "OSS_BUCKET", "MICA_BACKUP_PGURL", "PRUNE_WEEKDAY"):
+        if retired in benv:
+            raise AssertionError(f"backup env must not pass retired key {retired}")
+    print("Backup sidecar: slim export-only daemon, stable hostname, init reaper, 768 MiB cap, schedule knobs")
 
 
 def main() -> None:

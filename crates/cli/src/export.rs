@@ -356,9 +356,7 @@ fn prune(root: &Path, desired: &BTreeSet<PathBuf>, preserve_state: bool) -> Resu
   crate::collect_files(root, root, &mut existing)?;
   let mut removed = 0;
   for rel in existing {
-    // The scheduled backup stages its SQL beside the content mirror. Removing
-    // it here would destroy the previous complete dump before pg_dump succeeds.
-    if preserve_state && (rel.starts_with(STATE_DIR) || rel.starts_with("_pgdump")) {
+    if preserve_state && rel.starts_with(STATE_DIR) {
       continue;
     }
     if !desired.contains(&rel) {
@@ -965,10 +963,7 @@ mod tests {
       (0, 2, 0)
     );
     assert_eq!(server.page_requests(), 2);
-    assert_eq!(
-      fs::read(args.out.join("_pgdump/mica.sql")).unwrap(),
-      b"previous complete dump"
-    );
+    assert!(!args.out.join("_pgdump").exists());
     {
       let mut state = server.remote.lock().unwrap();
       state.inventories.insert(

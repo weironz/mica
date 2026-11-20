@@ -1,235 +1,111 @@
 # Backup & Restore
 
-**Mica does not do backups — on purpose (mechanism vs policy).** Mica's job is a
-great, consistent **`export`**; backup — encryption, dedup, retention, remote
-targets — is the job of a dedicated tool. The production stack ships a small
-container that wires the two together: `mica-cli export` (a thin API client, no
-backup engine — see [`cli.md`](../dev/cli.md)) + **`rustic`** (external, restic-format)
-snapshotting to Aliyun OSS. `mica-cli backup` orchestrates the external tools;
-rustic owns the backup engine.
+**Mica does not do off-site backup policy — on purpose (mechanism vs policy).** Mica's
+job is a consistent, incremental **`export`** (Markdown + `.mica.json` + images);
+encryption, deduplication, retention and remote OSS upload belong to dedicated backup
+services:
 
-## Topology: one repo, one bucket, one lineage per workspace
+| Data layer | Owner | Off-site target (Aliyun OSS) | Off-host recovery secret |
+| --- | --- | --- | --- |
+| **PostgreSQL**（账号、权限、CRDT、评论、分享） | **Databasus** | `mica-backup/mica_pg/` | `secret.key` |
+| **RustFS**（图片与附件字节） | **Zerobyte** (restic) | `mica-backup/mica_s3/` | `restic.pass` |
+| **Markdown 镜像导出**（脱离 Mica 可读兜底） | **`mica-backup` 容器**（`mica-cli backup daemon`）→ **Zerobyte** 接力 | `mica-backup/mica-md/` | `restic.pass` |
 
+> **2026-11-21 瘦身说明**：`deploy/Dockerfile.cli` 已移除 `rustic`、`rclone` 与
+> `postgresql-client-18`，仅保留纯 Rust `mica-cli` 与 `ca-certificates`。常驻的
+> `backup` profile 容器只负责按 `BACKUP_HOUR` 增量导出 Markdown + 图片到卷目录
+> （`/var/lib/mica/export`），校验 `manifest.json` 覆盖完整性并上报 `HEALTHCHECK_URL`，
+> 随后由 Zerobyte 只读挂载该目录增量备份到 OSS `mica-backup/mica-md/`。
+
+## Topology: export mirror → Zerobyte relay
+
+```text
+[daily at BACKUP_HOUR (or on start unless BACKUP_ON_START=0)]
+  mica-backup container (mica-cli backup daemon):
+    1. acquire exclusive OS lock (/tmp/mica-backup.lock)
+    2. mica-cli export --out /var/lib/mica/export   # incremental mirror + manifest.json
+    3. verify every workspace in manifest.json exists on disk
+    4. ping HEALTHCHECK_URL (or HEALTHCHECK_URL/fail on error)
+
+[Zerobyte scheduled job (after BACKUP_HOUR)]
+  mount export directory read-only → restic incremental backup → OSS mica-backup/mica-md/
 ```
-[daily (or on start unless BACKUP_ON_START=0)]
-  mica-cli export --out /export            # every workspace → Markdown + images (mirrored) + manifest.json
-  pg_dump $MICA_BACKUP_PGURL > /export/_pgdump/mica.sql    # off-site DB image (if MICA_BACKUP_PGURL set)
-  rclone copy rustfs:<bucket> ossblob:<bucket>/mica-blobs  # object bytes, S3→S3, NOT through rustic
-  per workspace (read from manifest.json):
-    rustic backup /export/<dir> --label <workspace-id> --tag ws=<name> --tag mica
-  rustic backup /export/_pgdump --label _pgdump --tag pgdump --tag mica   # DB dump as its own lineage
-  rustic forget --group-by label --keep-daily 7 --keep-weekly 4 --keep-monthly 6
-[weekly maintenance (PRUNE_WEEKDAY=sun by default)]
-  rustic prune --max-unused 15% --max-repack 200MiB
-  rustic check
-```
 
-**Coverage is checked, not assumed.** Every workspace the export announces in
-`manifest.json` must reach the repository; one that does not fails the run and
-names itself in the reason. This used to be a log line and nothing else — the
-run still succeeded and still pinged the healthcheck, so a workspace could stop
-being backed up while every signal you had said the backups were fine.
+**Coverage is checked, not assumed.** Every workspace announced in `manifest.json` must
+have its mirrored directory on disk; otherwise the run fails and pings
+`${HEALTHCHECK_URL}/fail`.
 
-> Note what this does NOT check: the export only ever covers **the workspaces
-> the backup token's own account can see**. That is by design, and reconciling
-> against `mica-cli ws list` would be comparing the manifest with itself. Other
-> accounts' content is captured by the `pg_dump` leg (the whole database), just
-> not as portable Markdown.
+> Note what this does NOT check: the export only ever covers **the workspaces the backup
+> token's own account can see**. Other accounts' content and full relational state
+> (accounts, memberships, CRDT history, comments, share tokens) are captured by
+> **Databasus** (`mica-backup/mica_pg/`) + **Zerobyte** (`mica-backup/mica_s3/`).
 
-The daily loop also drives a **dead man's switch**: on a successful run it pings
-`${HEALTHCHECK_URL}`, on a failed one `${HEALTHCHECK_URL}/fail`. Point it at a
-monitor (e.g. healthchecks.io) and you get paged when the *expected* success
-ping stops arriving — a wedged loop or a dead container that a stderr line
-reaches no one about. Unset → no ping; the ping itself is best-effort and never
-fails the backup.
+`mica-cli export` maintains a complete incremental Markdown/image mirror using
+read-scoped API access (`MICA_PAT`) over the internal Compose network
+(`MICA_SERVER=http://api:8080`). Unchanged pages and assets are reused from the local
+state cache; deleted pages and legacy `_pgdump/` files are pruned automatically so
+Zerobyte only uploads live Markdown content.
 
-**One rustic repo** (one bucket, one key, one dedup pool). Each workspace is its
-own **retention lineage**, keyed on the **stable workspace id** via rustic's
-`--label`, so a rename never splits history; the mutable (and possibly non-ASCII)
-name rides along as a readable `ws=<name>` tag. `forget --group-by label` applies
-the keep policy **per workspace**. Restore, list, and prune are all
-per-workspace by label.
+## 并发、超时与容器配置
 
-`mica-cli export` maintains a complete Markdown/image mirror for rustic.
-It is all read-scoped API access. Incremental export compares the server's
-revision inventory with local state; see [`cli.md`](../dev/cli.md) for the cache and
-fallback rules. The database leg still makes a complete SQL dump; rustic
-provides chunk deduplication for that file.
-
-## 并发、超时与重试
-
-备份轮次持有 `/tmp/mica-backup.lock` 的操作系统独占锁，正常退出或进程被杀时由
-系统释放。锁文件保留，里面的 PID 只用于诊断；容器重启后遗留的 `1` 不会阻止下次
-备份。**不要通过删除锁文件解除运行中备份的锁**：删除会产生新 inode，两个轮次
-就可能同时拿到不同文件的锁、写坏同一份暂存目录。
-
-外部工具均有总执行时限，包含网络重试和退避时间：仓库可达性探测 60 秒、
-`pg_dump` 10 分钟、单次 rustic/rclone 调用 30 分钟。内容导出独立运行，时限
-2 小时，以容纳首次完整导出。超时会终止工具并等待回收；Linux 上终止整个独立
-进程组，避免 shell 的子进程继续占用资源。失败明确计入本轮结果，不发成功通知。
-
-每次 rclone 调用统一使用 `--transfers 2 --checkers 2`，连接超时 10 秒、无进展
-I/O 超时 60 秒；高层尝试上限 2 次、底层请求尝试上限 3 次、高层尝试之间等待 10 秒，
-并设置 `--max-duration 30m --cutoff-mode hard`。copy 调用同时传 `--stats-one-line --stats 30s --stats-log-level NOTICE`，确保传输统计进入容器日志。不会无限重试到第二天。失败后保留
-已经复制的不可变对象，下次 `copy` 会继续补齐，仍不传播源端删除。
-
-每日保留策略仅执行 `rustic forget`（秒级元数据清理）；`rustic prune --max-unused 15% --max-repack 200MiB` 与 `rustic check` 改在 `PRUNE_WEEKDAY`（默认每周日 `sun`，支持 `mon..sun`、`daily`、`off`）执行，避免每天为了回收少量过期块反复从 OSS 搬运数百 MiB 重打包，同时自动周期校验仓库完整性。
-
-backup 容器在 `deploy/docker-compose.yml` 中固定 `hostname: mica-backup`、启用 `init: true`、限制内存上限 `MICA_BACKUP_MEMORY_LIMIT`（默认 `768m`），并通过命名卷 `mica-prod-backup-cache` 持久化 `RUSTIC_CACHE_DIR=/var/cache/rustic`，避免每次发版重建容器后丢缓存或找不到 parent snapshot。生产可通过 `BACKUP_ON_START=0` 避免白天发版时立即触发全量备份（日常按 `BACKUP_HOUR` 运行，必要时手工执行 `mica-cli backup run`）。
-
-数据库导出超时或失败会删除未完成的 `.tmp`，保留上一次完整 SQL，但本轮不会把
-旧 SQL 当成新备份上传。前面的内容镜像清理也保留 `_pgdump/`，避免在新 dump 成功前
-先删除旧 SQL。首次大对象复制或大量 prune 若超过上述时限会明确失败，
-需要安排受控的维护操作；这些限制用于约束每日自动备份的资源占用。
-
-## What this is (and isn't)
-
-- **Content backup** — Markdown source + referenced images per workspace,
-  portable and human-readable (restorable into Mica, or openable in Obsidian etc.).
-- **Full-instance DR** — the `pg_dump` step (below) captures what the content
-  export cannot: users / passwords / memberships and the fine-grained CRDT edit
-  history. The two are complementary and now ride the SAME rustic repo off-site,
-  so a single restore point covers both. The DB dump is **only taken when
-  `MICA_BACKUP_PGURL` is set** — unset, the run logs a `WARN` and produces a
-  content-only backup (it never silently drops the DB image).
-  The dump rides rustic and is stored UNCOMPRESSED on purpose, which is where
-  almost all of the storage saving comes from. Measured on production
-  2026-08-29: a **634.2 MiB** dump added **9.4 MiB** to the repository — 67x,
-  and with no parent snapshot to diff against (the container id is the rustic
-  hostname and changes every deploy; the dedup is content-defined chunking, not
-  a parent diff). Gzip it and every day costs a full copy.
-
-  The object bytes deliberately do NOT ride rustic. Images are already-compressed
-  binaries with nothing in common, so chunking finds no duplicates; they are also
-  immutable and content-addressed, so `rclone copy` skipping what is already
-  there IS the incremental. The payoff is that the mirror can be read back with
-  any S3 client — no rustic, no password — which is one less dependency on the
-  day you need it.
-
-- **The instance's own credentials** — `.env.secrets`, mounted read-only into
-  the backup container and snapshotted under its own lineage (`--label
-  _config`). Without it a rebuilt machine reaches a running, EMPTY stack and
-  stops there: putting the data back needs credentials that otherwise exist
-  only in somebody's password manager. This leg is **skipped, and a skipped leg
-  fails the run**, when the file is not mounted.
-
-  Three things it cannot do, by construction: `RUSTIC_PASSWORD` opens this
-  repository, and `OSS_ACCESS_KEY_ID` / `OSS_SECRET_ACCESS_KEY` are what reach
-  it at all — and all three are inside that file. A copy in the repository
-  cannot help you open the repository. **Those three still have to be kept
-  somewhere else**; they are the only ones that do.
-
-## Aliyun OSS setup (one-time)
-
-1. **Create a bucket** (e.g. `mica-backups`), ideally in a **different region**
-   than the Mica ECS for geographic isolation.
-   > **Current production boundary (2026-11-19):** Production ECS and the backup
-   > bucket `mica-backup-cloudcele` currently both live in `cn-shenzhen`
-   > (`oss-cn-shenzhen`) for low latency and zero cross-region transfer fees.
-   > To protect against a region-wide outage without touching the backup
-   > container, enable **Aliyun OSS Cross-Region Replication (CRR)** on
-   > `mica-backup-cloudcele` to a destination bucket in another region (e.g.
-   > `oss-cn-hangzhou` or `oss-cn-shanghai`, IA/Archive storage class, with
-   > delete-replication disabled).
-2. **Create a least-privilege RAM AccessKey** scoped to *only* that bucket —
-   `oss:PutObject / GetObject / DeleteObject / ListObjects` + `oss:GetBucket*`.
-   Do **not** reuse the app's rustfs S3 keys or an account-wide key.
-3. **Enable Object Versioning / Object-Lock** on the bucket so a buggy prune or a
-   compromised key can't erase history.
-
-> **OSS gotcha:** OSS only serves virtual-host-style addressing, so the backup
-> config forces `enable_virtual_host_style = true`. Path style fails with
-> "Path `config` does not exist".
+- 导出轮次持有 `/tmp/mica-backup.lock` 的操作系统独占锁，正常退出或进程被杀时由系统
+  释放。**不要通过删除锁文件解除运行中任务的锁**。
+- 子进程 `mica-cli export` 总执行时限为 **2 小时**；超时会终止整个 Unix 进程组并回收
+  子进程，失败上报 `${HEALTHCHECK_URL}/fail`。
+- `backup` 容器在 `deploy/docker-compose.yml` 中固定 `hostname: mica-backup`、启用
+  `init: true`、限制内存上限 `MICA_BACKUP_MEMORY_LIMIT`（默认 `768m`），通过
+  `${MICA_EXPORT_HOST_DIR:-mica-prod-backup}:/var/lib/mica/export` 暴露导出目录：
+  - 默认使用命名卷 `mica-prod-backup`（宿主机路径通常为
+    `/var/lib/docker/volumes/mica_mica-prod-backup/_data`，Zerobyte 可直接以外部卷或
+    只读 bind mount 接入）；
+  - 如希望固定宿主机目录（例如 `/data/mica/export`），在节点 `.env` 设置
+    `MICA_EXPORT_HOST_DIR=/data/mica/export` 即可。
+- 生产通过 `BACKUP_ON_START=0` 避免白天发版时立即触发导出；日常按 `BACKUP_HOUR`（默认
+  `3`，配合 `TZ=Asia/Shanghai`）运行，必要时可手工触发：
+  ```bash
+  docker exec mica-backup-1 mica-cli backup run
+  ```
 
 ## Deploy inside the Docker stack
 
-The production compose ships a `backup` service — the container above running the
-daily loop over the **internal** network (`MICA_SERVER=http://api:8080` is
-hard-wired), so the token never leaves the host. It is **opt-in** behind the
-`backup` profile; a plain `docker compose up -d` ignores it.
+The production compose ships a slim `backup` service behind the opt-in `backup` profile;
+a plain `docker compose up -d` ignores it.
 
-1. **Build & load the image** (the node can't pull from Docker Hub):
+1. **Mint a read-scoped Mica token** (PAT) — in the app (*Settings → API Tokens*), or
+   with the CLI:
    ```bash
-   docker build -f deploy/Dockerfile.cli -t willdockerhub/mica-cli:v0.3 . --provenance=false --sbom=false
-   docker save willdockerhub/mica-cli:v0.3 | gzip | ssh root@<node> 'gunzip | docker load'
-   ```
-2. **Mint a read-scoped Mica token** (PAT) — in the app (*Settings → API
-   Tokens*), or with the CLI:
-   ```bash
-   mica-cli auth login --email you@example.com          # once, to authenticate
+   mica-cli auth login --email you@example.com
    mica-cli auth token create --name backup --scope read   # secret printed ONCE
    ```
-   Add it plus the repo/OSS config to the node's `.env` (next to `MICA_VERSION`).
-   Each value stands alone so the AccessKey rotates without touching the rest:
-   ```
-   MICA_BACKUP_TOKEN=mica_pat_…
-   MICA_BACKUP_PASSWORD=…                 # SAVE THIS OFF-HOST — lose it, lose the repo
-   OSS_BUCKET=my-mica-backups
-   OSS_ENDPOINT=https://oss-cn-hangzhou.aliyuncs.com
-   OSS_REGION=oss-cn-hangzhou
-   OSS_ACCESS_KEY_ID=…
-   OSS_SECRET_ACCESS_KEY=…
-   OSS_ROOT=mica                          # object-key prefix; use a fresh one to share a bucket
-   # Off-site DB image (full-instance DR). The backup container shares the
-   # default network with postgres, so use the INTERNAL host `postgres:5432`.
-   # Reuse the same password as POSTGRES_PASSWORD. Unset → content-only backup.
-   MICA_BACKUP_PGURL=postgres://mica:<POSTGRES_PASSWORD>@postgres:5432/mica
-   # Dead man's switch (optional): pinged on success, <URL>/fail on failure.
-   HEALTHCHECK_URL=https://hc-ping.com/<uuid>
-   # optional: BACKUP_HOUR=3  KEEP_DAILY=7  KEEP_WEEKLY=4  KEEP_MONTHLY=6
-   #   BACKUP_HOUR takes `3`, `03`, `3:00` or `03:30` — a wall-clock time in the
-   #   CONTAINER's zone. Set `TZ` with it (compose defaults to Asia/Shanghai):
-   #   without a TZ the container has no local time, `chrono::Local` degrades to
-   #   UTC, and `BACKUP_HOUR=3` silently means 11:00 in Beijing. That was live
-   #   until 2026-08-29 — the config said "nightly" and it ran mid-workday.
-   #   An unreadable value logs a line and falls back to 03:00; it does not
-   #   refuse to start, because no backups is worse than backups at the default.
-   ```
-3. **Start the service, initialise the repo once, then trigger the first run.**
-   On start the container renders `/etc/rustic/rustic.toml` from the `OSS_*` env,
-   so plain `rustic` works via `docker exec` (no wrapper). `--no-deps` avoids
-   recreating the `api` container.
+2. **Configure `.env` / `.env.secrets`**:
    ```bash
-   docker compose --profile backup up -d --no-deps backup   # starts + renders the rustic config
-   docker exec mica-backup-1 rustic init                     # create the repo (once)
-   docker exec mica-backup-1 mica-cli backup run                  # first backup now (else it waits for BACKUP_HOUR)
+   # .env.secrets
+   MICA_BACKUP_TOKEN=mica_pat_…
+
+   # .env (optional overrides)
+   TZ=Asia/Shanghai
+   BACKUP_HOUR=3
+   BACKUP_ON_START=0
+   # MICA_EXPORT_HOST_DIR=/data/mica/export   # optional host bind mount for Zerobyte
+   # HEALTHCHECK_URL=https://hc-ping.com/<uuid>
+   ```
+3. **Start the export sidecar & test one pass**:
+   ```bash
+   docker compose --profile backup up -d --no-deps backup
+   docker exec mica-backup-1 mica-cli backup run
    docker logs -f mica-backup-1
    ```
-   > Sharing a bucket with an existing repo? Give this one its own prefix via
-   > `OSS_ROOT=<prefix>` in `.env` (else init fails, "config file already exists").
+4. **Configure Zerobyte relay**:
+   - 将导出的卷目录（`mica_mica-prod-backup` 或 `MICA_EXPORT_HOST_DIR`）以只读方式挂载进
+     Zerobyte；
+   - 新建备份任务，目标指向阿里云 OSS 路径 `mica-backup/mica-md/`（复用现有
+     `restic.pass` 与 OSS 凭据）；
+   - 调度时间错开在 `BACKUP_HOUR` 之后（例如 `BACKUP_HOUR=3`，Zerobyte 在 `04:00` 接力
+     增量上传）。
 
-The container runs `mica-cli backup daemon` (export → per-workspace snapshot → forget
---prune) at `BACKUP_HOUR` daily and once on (re)start; the staging tree
-lives in the `mica-prod-backup` volume.
-
-## Daily operations (init / backup / inspect / restore)
-
-Run against the **running** backup container with `docker exec` — it already has
-the repo config (rendered from env on start), so plain `rustic` works. (Don't use
-`docker compose run`; its `depends_on` would recreate the `api` container.)
-
-```bash
-# Initialize the repo (ONE time, right after first `up -d`):
-docker exec mica-backup-1 rustic init
-
-# Run a backup right now (what the daily loop calls; export → snapshot → forget):
-docker exec mica-backup-1 mica-cli backup run
-
-# List snapshots grouped by workspace (label = workspace id, tag ws=<name>):
-docker exec mica-backup-1 rustic snapshots --group-by label
-
-# Verify repository integrity (also run by `just restore-drill`, see 恢复演练 below):
-docker exec mica-backup-1 rustic check
-
-# Restore one workspace's latest snapshot. SNAPSHOT + DESTINATION are POSITIONAL
-# (not --target); --filter-label narrows "latest" to that workspace's lineage:
-docker exec mica-backup-1 rustic restore latest /tmp/restore --filter-label <workspace-id>
-docker cp mica-backup-1:/tmp/restore ./restore     # then: docker exec mica-backup-1 rm -rf /tmp/restore
-```
-
-Find a workspace's id (the `--label`/`--filter-label` value) in `rustic snapshots
---group-by label` (the `Label` column, tagged `ws=<name>`), or in the export's
-`manifest.json`.
+> **凭据备份提醒**：只恢复业务数据时，Databasus 用 `secret.key`，Zerobyte 用
+> `restic.pass`，两边均需能读取 OSS。建议将 `/data/mica/.env.secrets` 也纳入 Zerobyte
+> 备份或密码库异机保存。
 
 ### The archive's two halves (manifest v2, 2026-08-30)
 

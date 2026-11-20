@@ -131,7 +131,7 @@ LOCK
      "$repo/clients/mica_flutter/windows/runner/resources/app_icon.ico"
   printf '[package]\nname = "rust_lib_mica_flutter"\n' > "$repo/clients/mica_flutter/rust/Cargo.toml"
   printf 'FROM rust:1.90-slim-bookworm\n' > "$repo/deploy/Dockerfile.api"
-  printf 'FROM rust:1.90-slim-bookworm\nRUN apk add postgresql-client-17\n' > "$repo/deploy/Dockerfile.cli"
+  printf 'FROM rust:1.90-slim-bookworm\n' > "$repo/deploy/Dockerfile.cli"
   printf 'services:\n  dev:\n    image: rust:1.90-slim-bookworm\n' > "$repo/docker-compose.yml"
   printf 'services:\n  postgres:\n    image: postgres:16-alpine\n' > "$repo/deploy/docker-compose.yml"
   printf 'SELECT 1;\n' > "$repo/migrations/0001_initial.sql"
