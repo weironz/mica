@@ -3,6 +3,9 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/cloud/pending_uploads.dart';
 
@@ -105,6 +108,123 @@ void main() {
         toId: _uuid,
       );
       expect(ops, isEmpty);
+    });
+  });
+
+  group('reconcileDocPendingUploads', () {
+    final bytes = Uint8List.fromList([1, 2, 3, 4]);
+
+    test('uploads with inferred MIME, rewrites active doc, and removes entry', () async {
+      final q = PendingUploads([_e(_sha, name: 'photo.jpg')]);
+      final mirrored = <String, Uint8List>{};
+      final applied = <List<Map<String, dynamic>>>[];
+      String? seenMime;
+
+      final res = await reconcileDocPendingUploads(
+        pending: q,
+        workspaceId: 'ws1',
+        docId: 'doc1',
+        isSessionStillActive: () => true,
+        readBlocks: () => [_img('img1', _sha)],
+        loadBlob: (sha) => sha == _sha ? bytes : null,
+        mirrorBlob: (id, data) => mirrored[id] = data,
+        uploadImage: (data, name, mime) async {
+          seenMime = mime;
+          return _uuid;
+        },
+        applyOps: applied.add,
+      );
+
+      expect(seenMime, 'image/jpeg');
+      expect(mirrored[_uuid], bytes);
+      expect(applied, hasLength(1));
+      expect((applied.single.single['data'] as Map)['file_id'], _uuid);
+      expect(res.blocksRewritten, isTrue);
+      expect(res.queueChanged, isTrue);
+      expect(q.isEmpty, isTrue);
+    });
+
+    test('switching doc mid-upload keeps queue entry and skips stale applyOps', () async {
+      final q = PendingUploads([_e(_sha)]);
+      final uploadGate = Completer<String>();
+      var active = true;
+      final applied = <List<Map<String, dynamic>>>[];
+      final mirrored = <String, Uint8List>{};
+
+      final future = reconcileDocPendingUploads(
+        pending: q,
+        workspaceId: 'ws1',
+        docId: 'doc1',
+        isSessionStillActive: () => active,
+        readBlocks: () => [_img('img1', _sha)],
+        loadBlob: (_) => bytes,
+        mirrorBlob: (id, data) => mirrored[id] = data,
+        uploadImage: (_, _, _) => uploadGate.future,
+        applyOps: applied.add,
+      );
+
+      // User switches pages while the 6 MB image upload is still in flight.
+      active = false;
+      uploadGate.complete(_uuid);
+      final res = await future;
+
+      expect(mirrored[_uuid], bytes, reason: 'global CAS mirror is still safe');
+      expect(applied, isEmpty, reason: 'must never write ops into a stale session');
+      expect(res.blocksRewritten, isFalse);
+      expect(res.queueChanged, isFalse);
+      expect(
+        q.forDoc('ws1', 'doc1'),
+        hasLength(1),
+        reason: 'queue entry must stay until the live doc is actually rewritten',
+      );
+    });
+
+    test('self-heals orphaned 64-hex sha256 placeholder even when queue is empty', () async {
+      final q = PendingUploads();
+      final applied = <List<Map<String, dynamic>>>[];
+
+      final res = await reconcileDocPendingUploads(
+        pending: q,
+        workspaceId: 'ws1',
+        docId: 'doc1',
+        isSessionStillActive: () => true,
+        readBlocks: () => [_img('img1', _sha), _img('img2', _uuid)],
+        loadBlob: (sha) => sha == _sha ? bytes : null,
+        mirrorBlob: (_, _) {},
+        uploadImage: (_, _, _) async => _uuid,
+        applyOps: applied.add,
+      );
+
+      expect(res.blocksRewritten, isTrue);
+      expect(res.queueChanged, isFalse);
+      expect(applied, hasLength(1));
+      expect(applied.single.single['block_id'], 'img1');
+      expect((applied.single.single['data'] as Map)['file_id'], _uuid);
+    });
+
+    test('drops stale queue entry without uploading when block was deleted', () async {
+      final q = PendingUploads([_e(_sha)]);
+      var uploads = 0;
+
+      final res = await reconcileDocPendingUploads(
+        pending: q,
+        workspaceId: 'ws1',
+        docId: 'doc1',
+        isSessionStillActive: () => true,
+        readBlocks: () => [_img('img2', _uuid)],
+        loadBlob: (_) => bytes,
+        mirrorBlob: (_, _) {},
+        uploadImage: (_, _, _) async {
+          uploads++;
+          return _uuid;
+        },
+        applyOps: (_) {},
+      );
+
+      expect(uploads, 0);
+      expect(res.queueChanged, isTrue);
+      expect(res.blocksRewritten, isFalse);
+      expect(q.isEmpty, isTrue);
     });
   });
 }

@@ -14,6 +14,23 @@
 // .dart), but driven by an offline insert rather than a one-shot migration. A
 // `DocOp` here is just `Map<String, dynamic>`, kept dependency-free on purpose.
 import 'dart:convert';
+import 'dart:typed_data';
+
+final RegExp _sha256HexRe = RegExp(r'^[0-9a-f]{64}$');
+
+/// True when [value] is a 64-character lowercase hex SHA-256 placeholder id
+/// written by desktop's on-device CAS rather than a cloud `files.id` UUID.
+bool isSha256Hex(String value) => _sha256HexRe.hasMatch(value);
+
+/// Best-effort MIME type from an image filename when replaying a queued upload.
+String inferImageMimeType(String fileName) {
+  final lower = fileName.toLowerCase();
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  return 'image/png';
+}
 
 /// One queued offline image upload: the CAS [sha] holding its bytes, plus the
 /// (workspace, doc) it was inserted into so reconcile can locate the block(s).
@@ -126,4 +143,134 @@ List<Map<String, dynamic>> buildImageIdRewriteOps({
     });
   }
   return ops;
+}
+
+/// Discover any image blocks in [blocks] still carrying a 64-hex SHA-256 CAS
+/// placeholder so reconciliation can self-heal even if `pendingBlobUploads`
+/// lost its queue entry.
+List<PendingUpload> discoverSha256ImagePlaceholders({
+  required String workspaceId,
+  required String docId,
+  required List<Map<String, dynamic>> blocks,
+}) {
+  final seen = <String>{};
+  final found = <PendingUpload>[];
+  for (final b in blocks) {
+    if (b['type'] != 'image') continue;
+    final data = b['data'];
+    if (data is! Map) continue;
+    final fid = data['file_id'];
+    if (fid is! String || !isSha256Hex(fid) || !seen.add(fid)) continue;
+    final name = data['name'];
+    found.add((
+      sha: fid,
+      workspaceId: workspaceId,
+      docId: docId,
+      name: name is String && name.isNotEmpty ? name : 'pasted-image.png',
+    ));
+  }
+  return found;
+}
+
+bool _blocksReferenceFileId(List<Map<String, dynamic>> blocks, String fileId) {
+  for (final b in blocks) {
+    if (b['type'] != 'image') continue;
+    final data = b['data'];
+    if (data is Map && data['file_id'] == fileId) return true;
+  }
+  return false;
+}
+
+/// Reconcile queued (and any orphaned SHA-256) offline image placeholders for
+/// one active cloud document.
+///
+/// Async safety: re-checks [isSessionStillActive] after every `await` before
+/// mutating the live replica or removing a queue entry — switching documents or
+/// reconnecting mid-upload leaves the queue entry intact so the next active
+/// pass finishes the `sha256 → UUID` rewrite instead of stranding a SHA-256 in
+/// the cloud document.
+Future<({bool queueChanged, bool blocksRewritten})> reconcileDocPendingUploads({
+  required PendingUploads pending,
+  required String workspaceId,
+  required String docId,
+  required bool Function() isSessionStillActive,
+  required List<Map<String, dynamic>> Function() readBlocks,
+  required Uint8List? Function(String sha) loadBlob,
+  required void Function(String uuid, Uint8List bytes) mirrorBlob,
+  required Future<String> Function(
+    Uint8List bytes,
+    String fileName,
+    String mimeType,
+  )
+  uploadImage,
+  required void Function(List<Map<String, dynamic>> ops) applyOps,
+}) async {
+  if (!isSessionStillActive()) {
+    return (queueChanged: false, blocksRewritten: false);
+  }
+  final queued = pending.forDoc(workspaceId, docId);
+  final queuedShas = {for (final e in queued) e.sha};
+  final discovered = discoverSha256ImagePlaceholders(
+    workspaceId: workspaceId,
+    docId: docId,
+    blocks: readBlocks(),
+  );
+  final candidates = <({PendingUpload entry, bool fromQueue})>[
+    for (final e in queued) (entry: e, fromQueue: true),
+    for (final e in discovered)
+      if (!queuedShas.contains(e.sha)) (entry: e, fromQueue: false),
+  ];
+  if (candidates.isEmpty) {
+    return (queueChanged: false, blocksRewritten: false);
+  }
+
+  var queueChanged = false;
+  var blocksRewritten = false;
+  for (final item in candidates) {
+    if (!isSessionStillActive()) break;
+    final entry = item.entry;
+    // Skip upload if the user already deleted the placeholder block while
+    // offline, and drop its stale queue entry.
+    if (!_blocksReferenceFileId(readBlocks(), entry.sha)) {
+      if (item.fromQueue && pending.remove(workspaceId, docId, entry.sha)) {
+        queueChanged = true;
+      }
+      continue;
+    }
+    final bytes = loadBlob(entry.sha);
+    if (bytes == null) {
+      if (item.fromQueue && pending.remove(workspaceId, docId, entry.sha)) {
+        queueChanged = true;
+      }
+      continue;
+    }
+    String uuid;
+    try {
+      final name = entry.name.isNotEmpty ? entry.name : 'pasted-image.png';
+      uuid = await uploadImage(bytes, name, inferImageMimeType(name));
+    } catch (_) {
+      // Still offline or transient upload failure: keep queued, stop pass.
+      break;
+    }
+    // Mirroring into global CAS is idempotent regardless of active document.
+    mirrorBlob(uuid, bytes);
+    // Crucial post-await ownership check: if the user switched docs/workspaces
+    // or the session reset while the upload was in flight, do NOT mutate a
+    // stale replica and do NOT drop the queue entry.
+    if (!isSessionStillActive()) break;
+
+    final ops = buildImageIdRewriteOps(
+      blocks: readBlocks(),
+      fromId: entry.sha,
+      toId: uuid,
+    );
+    if (ops.isNotEmpty) {
+      applyOps(ops);
+      blocksRewritten = true;
+    }
+    if (item.fromQueue && pending.remove(workspaceId, docId, entry.sha)) {
+      queueChanged = true;
+    }
+  }
+  return (queueChanged: queueChanged, blocksRewritten: blocksRewritten);
 }

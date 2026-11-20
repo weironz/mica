@@ -206,6 +206,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   // prefs so the intent survives a restart; `_reconciling` guards re-entrancy.
   PendingUploads _pending = PendingUploads();
   bool _reconciling = false;
+  Timer? _pendingRetryTimer;
 
   // --- Cloud yrs CRDT sync (P2-M4.5c, desktop only) ---
   // When the server speaks the yrs sync protocol (M4.4+), the desktop cloud
@@ -1226,6 +1227,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     themeModeController.removeListener(_schedulePushSettings);
     localeController.removeListener(_schedulePushSettings);
     _preferences.dispose();
+    _pendingRetryTimer?.cancel();
     _syncCtrl.closeAllDocumentSync();
     _syncCtrl.dispose();
     super.dispose();
@@ -3805,12 +3807,13 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
       final docId = _selectedBootstrap?.document.id;
       if (!kIsWeb && docId != null) {
         final sha = _local.putBlob(bytes);
-        _enqueuePendingUpload(
-          sha: sha,
-          workspaceId: workspace.id,
-          docId: docId,
-          name: fileName,
-        );
+        _enqueuePendingUpload(sha: sha, workspaceId: workspace.id, docId: docId, name: fileName);
+        // If only the HTTP upload blipped while WS stayed online, retry once the
+        // editor has inserted the placeholder block instead of waiting for reconnect.
+        _pendingRetryTimer?.cancel();
+        _pendingRetryTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted) unawaited(_reconcilePendingUploads(docId));
+        });
         return (fileId: sha, name: fileName);
       }
       if (mounted) setState(() => _message = error.toString());
@@ -3825,81 +3828,49 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
     required String docId,
     required String name,
   }) {
-    if (_pending.add((
-      sha: sha,
-      workspaceId: workspaceId,
-      docId: docId,
-      name: name,
-    ))) {
+    if (_pending.add((sha: sha, workspaceId: workspaceId, docId: docId, name: name))) {
       savePref('pendingBlobUploads', _pending.toJson());
     }
   }
 
-  /// Reconcile any offline-inserted images for [documentId] (must be the active
-  /// cloud doc, with a ready session). For each queued sha256: load its CAS
-  /// bytes, upload to the cloud, mirror the bytes under the returned UUID, and
-  /// rewrite every image block still referencing the sha256 to the UUID via the
-  /// live CRDT session — then clear the queue entry. Lazy by design (§7.1): only
-  /// the active doc reconciles, so images inserted offline in another doc wait
-  /// until that doc is opened online. Best-effort and re-entrancy-guarded; a
-  /// still-offline upload leaves the entry queued for the next attempt.
+  /// Reconcile queued and orphaned sha256 image placeholders for [documentId].
   Future<void> _reconcilePendingUploads(String documentId) async {
     if (kIsWeb || _reconciling) return;
     final session = _session;
     final workspace = _selectedWorkspace;
     final cloud = _cloudSession;
-    if (session == null ||
-        workspace == null ||
-        cloud == null ||
-        !cloud.isReady) {
+    if (session == null || workspace == null || cloud == null || !cloud.isReady) {
       return;
     }
-    final entries = _pending.forDoc(workspace.id, documentId);
-    if (entries.isEmpty) return;
+    final workspaceId = workspace.id;
+    final token = session.accessToken;
     _reconciling = true;
     try {
-      var changed = false;
-      for (final entry in entries) {
-        final bytes = _local.loadBlob(entry.sha);
-        if (bytes == null) {
-          // Bytes evicted from the CAS — unrecoverable; drop so we don't retry
-          // forever.
-          if (_pending.remove(workspace.id, documentId, entry.sha)) {
-            changed = true;
-          }
-          continue;
-        }
-        String uuid;
-        try {
-          final file = await _api.uploadImage(
-            session.accessToken,
-            workspace.id,
-            fileName: entry.name,
-            mimeType: 'image/png',
-            bytes: bytes,
-          );
-          uuid = file.id;
-        } catch (_) {
-          // Still offline (or a transient failure): leave queued, stop the pass.
-          break;
-        }
-        // Mirror the bytes under the cloud id so the rewritten block still reads
-        // from the local CAS, then rewrite sha256→UUID on the live replica.
-        _local.putBlobAs(uuid, bytes);
-        final ops = buildImageIdRewriteOps(
-          blocks: cloud.allBlocks(),
-          fromId: entry.sha,
-          toId: uuid,
-        );
-        if (ops.isNotEmpty) cloud.applyLocalOps(ops);
-        if (_pending.remove(workspace.id, documentId, entry.sha)) {
-          changed = true;
-        }
-      }
-      if (changed) {
-        savePref('pendingBlobUploads', _pending.toJson());
-        // Refresh the editor from the replica so the rewritten file_ids show.
-        if (mounted) _applyCloudBlocks(documentId);
+      final result = await reconcileDocPendingUploads(
+        pending: _pending,
+        workspaceId: workspaceId,
+        docId: documentId,
+        isSessionStillActive: () =>
+            mounted &&
+            _selectedWorkspace?.id == workspaceId &&
+            _selectedBootstrap?.document.id == documentId &&
+            identical(_cloudSession, cloud) &&
+            cloud.isReady,
+        readBlocks: cloud.allBlocks,
+        loadBlob: _local.loadBlob,
+        mirrorBlob: _local.putBlobAs,
+        uploadImage: (bytes, name, mime) async => (await _api.uploadImage(
+          token,
+          workspaceId,
+          fileName: name,
+          mimeType: mime,
+          bytes: bytes,
+        )).id,
+        applyOps: cloud.applyLocalOps,
+      );
+      if (result.queueChanged) savePref('pendingBlobUploads', _pending.toJson());
+      if (result.blocksRewritten && mounted && _selectedBootstrap?.document.id == documentId) {
+        _applyCloudBlocks(documentId);
       }
     } finally {
       _reconciling = false;
@@ -4273,6 +4244,7 @@ class _WorkspaceShellState extends MicaState<WorkspaceShell> {
   /// credentials — used by sign-out (after wiping creds) and by switching
   /// cloud servers (which deliberately keeps the old origin's creds, P3c-2).
   void _disconnectCloudSession() {
+    _pendingRetryTimer?.cancel();
     _syncCtrl.closeAllDocumentSync();
     // The tree-change socket is a cloud thing too; without this it would keep
     // reconnecting with a token that logout just revoked.
