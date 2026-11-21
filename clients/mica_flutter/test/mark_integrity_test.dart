@@ -148,4 +148,89 @@ void main() {
     final second = marksFromData(c.nodes[1].data).single;
     expect(c.nodes[1].text.substring(second.start, second.end), 'text');
   });
+
+  group('gh#192: typing before a link keeps inserted text unmarked', () {
+    test('typing Chinese prefix at offset 0 before a link shifts the link right', () {
+      const url = 'https://github.com/weironz/mica';
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: url, data: {
+          'marks': marksToJson([Mark(0, url.length, 'link', href: url)]),
+        }),
+      ]);
+      c.selection = const DocSelection.collapsed(DocPosition(0, 0));
+      c.setFocusedText('项目地址：$url', 5, 5);
+
+      final node = c.nodes.single;
+      expect(node.text, '项目地址：$url');
+      final link = marksFromData(node.data).single;
+      expect(link.type, 'link');
+      expect(link.href, url);
+      expect(node.text.substring(link.start, link.end), url);
+      expect((link.start, link.end), (5, 5 + url.length));
+    });
+
+    test('typing matching first char before a link stays outside the link', () {
+      const url = 'https://example.com';
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: url, data: {
+          'marks': marksToJson([Mark(0, url.length, 'link', href: url)]),
+        }),
+      ]);
+      c.selection = const DocSelection.collapsed(DocPosition(0, 0));
+      c.setFocusedText('h$url', 1, 1);
+
+      final node = c.nodes.single;
+      final link = marksFromData(node.data).single;
+      expect(node.text.substring(link.start, link.end), url);
+      expect((link.start, link.end), (1, 1 + url.length));
+    });
+
+    test('IME preedit and commit before a link keeps committed text plain', () {
+      const url = 'https://example.com';
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: url, data: {
+          'marks': marksToJson([Mark(0, url.length, 'link', href: url)]),
+        }),
+      ]);
+      c.selection = const DocSelection.collapsed(DocPosition(0, 0));
+      c.setFocusedText('x$url', 1, 1);
+      c.setFocusedText('xm$url', 2, 2);
+      c.setFocusedText('项目地址：$url', 5, 5);
+
+      final node = c.nodes.single;
+      final link = marksFromData(node.data).single;
+      expect(node.text.substring(link.start, link.end), url);
+      expect((link.start, link.end), (5, 5 + url.length));
+    });
+
+    test('typing inside a link still extends it, and after it stays plain', () {
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: 'click here', data: {
+          'marks': marksToJson([Mark(0, 10, 'link', href: 'https://a.test')]),
+        }),
+      ]);
+      c.selection = const DocSelection.collapsed(DocPosition(0, 5));
+      c.setFocusedText('click right here', 11, 11);
+      var link = marksFromData(c.nodes.single.data).single;
+      expect(c.nodes.single.text.substring(link.start, link.end), 'click right here');
+
+      c.selection = const DocSelection.collapsed(DocPosition(0, 16));
+      c.setFocusedText('click right here now', 20, 20);
+      link = marksFromData(c.nodes.single.data).single;
+      expect(c.nodes.single.text.substring(link.start, link.end), 'click right here');
+    });
+
+    test('pasting unmarked text at a link trailing edge does not extend it', () {
+      const url = 'https://a.test';
+      final c = _doc([
+        EditorNode(id: 'a', kind: 'paragraph', text: url, data: {
+          'marks': marksToJson([Mark(0, url.length, 'link', href: url)]),
+        }),
+      ]);
+      c.selection = const DocSelection.collapsed(DocPosition(0, url.length));
+      c.insertTextAtCaret(' tail');
+      final link = marksFromData(c.nodes.single.data).single;
+      expect(c.nodes.single.text.substring(link.start, link.end), url);
+    });
+  });
 }

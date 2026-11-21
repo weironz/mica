@@ -8,7 +8,7 @@ import 'controller.dart';
 import 'table.dart';
 import '../markdown/markdown_codec.dart' show markdownCodec, MarkdownCodecException;
 import '../ui/theme_tokens.dart';
-import 'text_common.dart' show commonPrefix, commonSuffix;
+import 'text_common.dart' show diffEditRange;
 
 /// A [TextEditingController] for a table cell that renders inline MARKS live
 /// (WYSIWYG) instead of Markdown source. Its [text] is the clean cell text;
@@ -100,14 +100,21 @@ class CellEditController extends TextEditingController {
       final old = super.value.text;
       final neu = newValue.text;
       if (neu != old) {
-        // A single contiguous edit: everything between the shared prefix and
-        // suffix was replaced. Shift the marks to track it.
-        final prefix = commonPrefix(old, neu);
-        final suffix = commonSuffix(old, neu, prefix);
+        final prevSel = super.value.selection;
+        final nextSel = newValue.selection;
+        final diff = diffEditRange(
+          old,
+          neu,
+          prevStart: prevSel.isValid ? prevSel.start : null,
+          prevEnd: prevSel.isValid ? prevSel.end : null,
+          nextCaret: nextSel.isValid && nextSel.isCollapsed
+              ? nextSel.start
+              : null,
+        );
         marks = shiftMarks(
           marks,
-          prefix,
-          old.length - suffix,
+          diff.prefix,
+          diff.oldEnd,
           neu.length - old.length,
           neu.length,
         );
@@ -144,6 +151,7 @@ class CellEditController extends TextEditingController {
       marks,
       style ?? const TextStyle(),
       MicaTheme.of(context),
+      inlineCodeBackground: true,
     );
   }
 }

@@ -27,3 +27,47 @@ int commonSuffix(String a, String b, int prefix) {
   }
   return i;
 }
+
+/// Compute the replaced range `(prefix, oldEnd)` in [oldText] for an edit to
+/// [newText], biased toward the pre-edit selection `[prevStart, prevEnd]` when
+/// repeated characters make the raw prefix/suffix diff ambiguous (for example
+/// typing `h` before a link `https://...` at offset 0, or deleting a repeated
+/// character next to a mark boundary; gh#192).
+({int prefix, int oldEnd}) diffEditRange(
+  String oldText,
+  String newText, {
+  int? prevStart,
+  int? prevEnd,
+  int? nextCaret,
+}) {
+  var prefix = commonPrefix(oldText, newText);
+  var oldEnd = oldText.length - commonSuffix(oldText, newText, prefix);
+  if (prevStart != null && prevEnd != null) {
+    final s = prevStart.clamp(0, oldText.length);
+    final e = prevEnd.clamp(s, oldText.length);
+    if (s != e) {
+      if (prefix > s) prefix = s;
+      if (oldEnd < e) oldEnd = e;
+    } else {
+      final delta = newText.length - oldText.length;
+      if (delta > 0 &&
+          oldEnd == prefix &&
+          prefix > s &&
+          (nextCaret == null || nextCaret == s + delta) &&
+          oldText.substring(s) == newText.substring(s + delta)) {
+        prefix = s;
+        oldEnd = s;
+      } else if (delta < 0 &&
+          nextCaret != null &&
+          nextCaret == s + delta &&
+          nextCaret >= 0 &&
+          prefix > nextCaret &&
+          oldText.substring(0, nextCaret) == newText.substring(0, nextCaret) &&
+          oldText.substring(s) == newText.substring(nextCaret)) {
+        prefix = nextCaret;
+        oldEnd = s;
+      }
+    }
+  }
+  return (prefix: prefix, oldEnd: oldEnd);
+}

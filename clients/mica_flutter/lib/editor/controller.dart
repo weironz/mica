@@ -13,7 +13,7 @@ import 'selection_marks.dart';
 import 'table.dart';
 import '../markdown/markdown_codec.dart'
     show markdownCodec, MarkdownCodecException, BlockSpec;
-import 'text_common.dart' show commonPrefix, commonSuffix;
+import 'text_common.dart' show commonPrefix, commonSuffix, diffEditRange;
 
 export 'operation_history.dart'
     show ApplyHistory, EditorHistoryState, HistoryAction;
@@ -394,12 +394,16 @@ class EditorController extends ChangeNotifier {
       return;
     }
 
-    var prefix = commonPrefix(old, text);
-    var oldEnd = old.length - commonSuffix(old, text, prefix);
-    if (!sel.isCollapsed && sel.start.node == i && sel.end.node == i) {
-      if (prefix > sel.start.offset) prefix = sel.start.offset;
-      if (oldEnd < sel.end.offset) oldEnd = sel.end.offset;
-    }
+    final sameNodeSel = sel.start.node == i && sel.end.node == i;
+    final diff = diffEditRange(
+      old,
+      text,
+      prevStart: sameNodeSel ? sel.start.offset : null,
+      prevEnd: sameNodeSel ? sel.end.offset : null,
+      nextCaret: selStart == selEnd ? selEnd.clamp(0, text.length) : null,
+    );
+    final prefix = diff.prefix;
+    final oldEnd = diff.oldEnd;
     final insertedEnd = oldEnd + text.length - old.length;
     spliceRange(
       DocSelection(anchor: DocPosition(i, prefix), focus: DocPosition(i, oldEnd)),

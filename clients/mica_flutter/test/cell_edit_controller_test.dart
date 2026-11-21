@@ -1,9 +1,12 @@
-import 'package:flutter/widgets.dart' hide TableCell;
+import 'package:flutter/material.dart' hide TableCell;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mica_flutter/editor/cell_edit_controller.dart';
+import 'package:mica_flutter/editor/inline_code_layout.dart' show kInlineCodeFontScale;
 import 'package:mica_flutter/editor/marks.dart';
+import 'package:mica_flutter/editor/model.dart' show kMonoFont;
 import 'package:mica_flutter/editor/table.dart' show TableCell;
 import 'package:mica_flutter/markdown/markdown_codec.dart';
+import 'package:mica_flutter/ui/theme_tokens.dart';
 import 'support/markdown_codec.dart';
 
 // The WYSIWYG table-cell editor works on the cell's text + marks directly (the
@@ -129,5 +132,70 @@ void main() {
       marksEqual([Mark(0, 2, 'link', href: 'u')], [Mark(0, 2, 'link', href: 'v')]),
       isFalse,
     );
+  });
+
+  test('gh#192: typing before a link in a table cell keeps prefix plain', () {
+    final c = CellEditController(_cell('[https://a.test](https://a.test)'));
+    addTearDown(c.dispose);
+    c.selection = const TextSelection.collapsed(offset: 0);
+    c.value = const TextEditingValue(
+      text: '项目地址：https://a.test',
+      selection: TextSelection.collapsed(offset: 5),
+    );
+    expect(c.marks.single.type, 'link');
+    expect(c.text.substring(c.marks.single.start, c.marks.single.end), 'https://a.test');
+    expect((c.marks.single.start, c.marks.single.end), (5, 19));
+  });
+
+  testWidgets('gh#188: active cell editor keeps inline-code background and mono style', (
+    tester,
+  ) async {
+    for (final tokens in [MicaTokens.light, MicaTokens.dark_]) {
+      final c = CellEditController(_cell('`INFISICAL_URL`、`INFISICAL_TOKEN`'));
+      addTearDown(c.dispose);
+      late TextSpan built;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MicaTheme(
+            tokens: tokens,
+            child: Builder(
+              builder: (context) {
+                built = c.buildTextSpan(
+                  context: context,
+                  style: const TextStyle(fontSize: 14),
+                  withComposing: false,
+                );
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+        ),
+      );
+
+      final leaves = <TextSpan>[];
+      void walk(InlineSpan s) {
+        if (s is TextSpan) {
+          if (s.children == null || s.children!.isEmpty) {
+            leaves.add(s);
+          } else {
+            s.children!.forEach(walk);
+          }
+        }
+      }
+
+      walk(built);
+      final codeLeaves = leaves
+          .where((s) => s.text == 'INFISICAL_URL' || s.text == 'INFISICAL_TOKEN')
+          .toList();
+      expect(codeLeaves, hasLength(2));
+      for (final leaf in codeLeaves) {
+        expect(leaf.style?.fontFamily, kMonoFont);
+        expect(leaf.style?.color, tokens.editor.inlineCodeInk);
+        expect(leaf.style?.backgroundColor, tokens.editor.inlineCodeBg);
+        expect(leaf.style?.fontSize, closeTo(14 * kInlineCodeFontScale, 1e-6));
+      }
+      final sep = leaves.singleWhere((s) => s.text == '、');
+      expect(sep.style?.backgroundColor, isNull);
+    }
   });
 }

@@ -46,12 +46,17 @@ List<Map<String, dynamic>> marksToJson(List<Mark> marks) => [
 /// [tokens] is the palette. It has to be a parameter: this is a plain top-level
 /// function with no widget tree to read from, and its five colours all have to
 /// differ between light and dark.
+///
+/// Set [inlineCodeBackground] to true for editing surfaces that render only a
+/// [TextSpan] without a canvas pill layer (such as the inline table-cell
+/// `TextField`, gh#188) so inline code keeps its background fill while editing.
 TextSpan buildMarkedSpan(
   String text,
   List<Mark> marks,
   TextStyle base,
-  MicaTokens tokens,
-) {
+  MicaTokens tokens, {
+  bool inlineCodeBackground = false,
+}) {
   if (text.isEmpty) return TextSpan(text: '​', style: base);
   if (marks.isEmpty) return TextSpan(text: text, style: base);
 
@@ -84,10 +89,15 @@ TextSpan buildMarkedSpan(
         case 'code':
           // The pill background is drawn in the render layer (paintInlineCodePills)
           // for rounded corners + padding; mono font slightly smaller than body (gh#189).
+          // Surfaces without a pill layer (table-cell TextField, gh#188) opt into
+          // `inlineCodeBackground` so the code chip stays visible while editing.
           style = style.copyWith(
             fontFamily: kMonoFont,
             fontSize: (style.fontSize ?? 16) * kInlineCodeFontScale,
             color: tokens.editor.inlineCodeInk,
+            backgroundColor: inlineCodeBackground
+                ? tokens.editor.inlineCodeBg
+                : null,
           );
         case 'strike':
           decorations.add(TextDecoration.lineThrough);
@@ -221,13 +231,21 @@ List<Mark> applyMark(
   return _normalize(result);
 }
 
+/// Mark types that never swallow plain text inserted at their leading edge
+/// (typing before a link, inline formula, or footnote produces unmarked text;
+/// gh#192).
+bool _nonInclusiveLeadingEdge(String type) =>
+    type == 'link' || type == 'math' || type == 'footnote';
+
 /// Shift mark offsets for a text edit that replaced `[editStart, editOldEnd)`
 /// with `delta = newLen - oldLen` net characters.
 ///
-/// [pinAtStart] (the typing policy) keeps a mark's start put when text is
-/// inserted exactly at it, so typing at a mark's leading edge extends the mark.
-/// Pasting unmarked text uses `pinAtStart: false`: a mark that starts at the
-/// insertion point must move with its own characters, not swallow the paste.
+/// [pinAtStart] (the typing policy) keeps inclusive formatting marks' starts
+/// put when text is inserted at their leading edge, EXCEPT non-inclusive marks
+/// (`link`, `math`, `footnote`) which always shift right so text typed before
+/// them stays unmarked (gh#192). Pasting unmarked text uses `pinAtStart: false`:
+/// marks starting at the insertion point move right with their own characters,
+/// and marks ending at the insertion point never expand into the paste.
 List<Mark> shiftMarks(
   List<Mark> marks,
   int editStart,
@@ -236,23 +254,45 @@ List<Mark> shiftMarks(
   int newLen, {
   bool pinAtStart = true,
 }) {
-  int move(int x) {
-    if (pinAtStart) {
-      if (x <= editStart) return x;
-    } else {
-      if (x >= editOldEnd) return x + delta;
-      if (x > editStart) return editStart;
-      return x;
-    }
-    if (x >= editOldEnd) return x + delta;
-    return editStart; // endpoint inside the replaced region collapses
-  }
-
+  final pureInsert = editStart == editOldEnd && delta > 0;
   final result = <Mark>[];
   for (final m in marks) {
-    final s = move(m.start).clamp(0, newLen);
-    final e = move(m.end).clamp(0, newLen);
-    if (e > s) result.add(m.withRange(s, e));
+    final int s;
+    final int e;
+    if (pureInsert) {
+      if (m.end <= editStart) {
+        s = m.start;
+        e = m.end;
+      } else if (m.start > editStart) {
+        s = m.start + delta;
+        e = m.end + delta;
+      } else if (m.start == editStart &&
+          (!pinAtStart || _nonInclusiveLeadingEdge(m.type))) {
+        s = m.start + delta;
+        e = m.end + delta;
+      } else {
+        s = m.start;
+        e = m.end + delta;
+      }
+    } else {
+      int move(int x) {
+        if (pinAtStart) {
+          if (x <= editStart) return x;
+        } else {
+          if (x >= editOldEnd) return x + delta;
+          if (x > editStart) return editStart;
+          return x;
+        }
+        if (x >= editOldEnd) return x + delta;
+        return editStart; // endpoint inside the replaced region collapses
+      }
+
+      s = move(m.start);
+      e = move(m.end);
+    }
+    final cs = s.clamp(0, newLen);
+    final ce = e.clamp(0, newLen);
+    if (ce > cs) result.add(m.withRange(cs, ce));
   }
   return _normalize(result);
 }
