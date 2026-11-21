@@ -46,7 +46,10 @@ mica_env:
   # Do not trigger a full backup immediately during daytime deploys; rely on
   # the 03:00 schedule (and manual `mica-cli backup run` when needed).
   BACKUP_ON_START: "0"
-  # Run `rustic prune` + `rustic check` weekly on Sunday; daily runs only forget.
+  # Host directory for the Markdown export mirror so Zerobyte can mount it `:ro`
+  # and relay incrementally to Aliyun OSS `mica-backup/mica-md`.
+  MICA_EXPORT_HOST_DIR: "/data/mica/export"
+  # Legacy key kept until cleaned from /data/mica/.env (deploy.yml key-drop guard).
   PRUNE_WEEKDAY: "sun"
 
   MICA_MAIL_BACKEND: "directmail"

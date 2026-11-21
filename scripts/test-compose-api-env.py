@@ -112,6 +112,7 @@ def check_backup_service(env: dict[str, str]) -> None:
         "BACKUP_HOUR": "3",
         "BACKUP_ON_START": "0",
         "MICA_BACKUP_TOKEN": "mica_pat_test",
+        "MICA_EXPORT_HOST_DIR": "/data/mica/export",
         "HEALTHCHECK_URL": "https://hc.example.test/ping",
         "MICA_CGROUP_PARENT": "mica.slice",
     }
@@ -148,6 +149,10 @@ def check_backup_service(env: dict[str, str]) -> None:
     for retired in ("RUSTIC_PASSWORD", "RUSTIC_CACHE_DIR", "OSS_BUCKET", "MICA_BACKUP_PGURL", "PRUNE_WEEKDAY"):
         if retired in benv:
             raise AssertionError(f"backup env must not pass retired key {retired}")
+    volumes = backup.get("volumes", [])
+    export_mounts = [v for v in volumes if v.get("target") == "/var/lib/mica/export"]
+    if len(export_mounts) != 1 or export_mounts[0].get("source") != "/data/mica/export":
+        raise AssertionError(f"backup export mount must honor MICA_EXPORT_HOST_DIR, got {export_mounts!r}")
     print("Backup sidecar: slim export-only daemon, stable hostname, init reaper, 768 MiB cap, schedule knobs")
 
 
