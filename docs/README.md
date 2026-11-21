@@ -62,6 +62,7 @@
 | [password-reset.md](features/password-reset.md) | 密码找回 |
 | [editor-virtualization-plan.md](features/editor-virtualization-plan.md) | 长文档虚拟化 |
 | [mermaid.md](features/mermaid.md) | Mermaid 图表渲染（纯 Rust `merman` 引擎、三端链路、主题/CSS 内联与门禁） |
+| [whiteboard.md](features/whiteboard.md) | 无限画板与思维导图架构 RFC（方案 C：Rust `mica-board`、CRDT Schema、WS 双通道、Markdown/SVG 导出与探针结论） |
 | [usage-statistics.md](features/usage-statistics.md) | 使用统计与 Prometheus 可观测性设计（Issue #191），附交互原型 [usage-statistics-demo.html](features/usage-statistics-demo.html) |
 | [design-adoption.md](features/design-adoption.md) | 设计稿(`design/` 01–19)采纳记录 |
 
