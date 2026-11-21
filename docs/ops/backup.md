@@ -95,17 +95,24 @@ a plain `docker compose up -d` ignores it.
    docker exec mica-backup-1 mica-cli backup run
    docker logs -f mica-backup-1
    ```
-4. **Configure Zerobyte relay**:
-   - 将导出的卷目录（`mica_mica-prod-backup` 或 `MICA_EXPORT_HOST_DIR`）以只读方式挂载进
-     Zerobyte；
-   - 新建备份任务，目标指向阿里云 OSS 路径 `mica-backup/mica-md/`（复用现有
-     `restic.pass` 与 OSS 凭据）；
-   - 调度时间错开在 `BACKUP_HOUR` 之后（例如 `BACKUP_HOUR=3`，Zerobyte 在 `04:00` 接力
-     增量上传）。
+4. **Configure Zerobyte relay（生产已按以下参数配置并验证，2026-11-21）**:
+   - 在 `/data/backup-services/compose.yaml` 中为 `zerobyte` 以只读方式挂载宿主机导出目录：
+     ```yaml
+     - /data/mica/export:/data/mica-export:ro
+     ```
+   - 生产节点 `.env`（及 [ansible/host_vars/mica-prod.yml](../../ansible/host_vars/mica-prod.yml)）配置：
+     ```bash
+     MICA_EXPORT_HOST_DIR=/data/mica/export
+     ```
+   - 在 Zerobyte（`https://zerobyte.cloudcele.com`）中创建三项：
+     - **Volume**：`Mica Markdown`（Type `directory`，Path `/data/mica-export`）
+     - **Repository**：`Mica Markdown OSS`（Type `rclone`，Remote `aliyun-backups`，Path `mica-backup/mica-md`，复用 `/root/.zerobyte-recovery/restic.pass`，`compressionMode=auto`，开启 `autoCheck`）
+     - **Schedule**：`Mica Markdown daily`，Cron `0 4 * * *`（注意 Zerobyte 容器时区为 `TZ=Asia/Bangkok`（UTC+7），即曼谷 04:00 = **北京 05:00**，错开 `Mica RustFS daily` 的 03:40 且稳在 `mica-backup` 北京 03:00 导出完成之后），保留策略 `keepLast: 30`，排除 `.mica-export` 与 `_pgdump`（不上传导出增量状态锁文件）。
+   - **首跑实测（2026-11-21）**：快照 `d3b05528`，扫描 32,271 文件 / 2,662 目录，原始 1.24 GiB，经 restic 去重压缩写入 OSS `mica-backup/mica-md` 仅 740 MiB，耗时 2 分 41 秒。
 
-> **凭据备份提醒**：只恢复业务数据时，Databasus 用 `secret.key`，Zerobyte 用
-> `restic.pass`，两边均需能读取 OSS。建议将 `/data/mica/.env.secrets` 也纳入 Zerobyte
-> 备份或密码库异机保存。
+> **凭据备份提醒**：只恢复业务数据时，**Databasus 用 `secret.key`，Zerobyte 用
+> `restic.pass`**，两边均需能读取 OSS。`/data/mica/.env.secrets` 及 Databasus /
+> Zerobyte 自身配置目录需按下方「恢复与安全」章节单独留存。
 
 ### The archive's two halves (manifest v2, 2026-08-30)
 
@@ -203,176 +210,87 @@ deliberately not automated, because **recovery is the database plus the objects*
 — the path the drill covers. This leg is the fallback for when that path is gone,
 and the reason your notes do not need Mica to be readable.
 
-## Restore the instance's credentials
+## Restore overview (Databasus + Zerobyte)
 
-Do this FIRST in a rebuild — the steps below need them.
+全量恢复一台 Mica 实例分为四步，顺序固定：**先就位实例凭据 `.env.secrets`，再起栈，再分别恢复 PostgreSQL 与 RustFS**。
 
-A fresh machine has this image and nothing else, so the restore cannot depend on
-a running stack — it runs straight from the image:
+### 1. 恢复实例凭据（`.env.secrets`）
 
-```bash
-docker run --rm -v /data/mica:/restore   --entrypoint /usr/local/bin/mica-cli   -e RUSTIC_PASSWORD -e OSS_BUCKET -e OSS_ENDPOINT -e OSS_REGION -e OSS_ROOT   -e OSS_ACCESS_KEY_ID -e OSS_SECRET_ACCESS_KEY   <registry>/mica-cli:<version> backup restore-config
-install -m 600 /data/mica/etc/mica/env.secrets /data/mica/.env.secrets
-```
+**必须在首次起栈前就位**（`POSTGRES_PASSWORD` 在 Postgres `initdb` 时生效，起栈后再补凭据会导致密码不匹配）：
 
-`--entrypoint` is needed on v0.13.41, whose entrypoint is the whole
-`mica-cli backup daemon` — without it the arguments append to that and you get
-`backup daemon backup restore-config`. From the next release the entrypoint is
-just the binary and the flag is optional (harmless either way).
+- 从密码库（或 Zerobyte 配置备份）恢复 `/data/mica/.env.secrets`，权限设为 `0600`：
+  ```bash
+  install -m 600 <restored-env-secrets> /data/mica/.env.secrets
+  ```
+- 非敏感配置由 `ansible/deploy.yml` 从 [ansible/host_vars/mica-prod.yml](../../ansible/host_vars/mica-prod.yml) 自动渲染到 `/data/mica/.env`。
 
-`RUSTIC_PASSWORD` and the `OSS_*` pair are what you just used to reach and open
-the repository, so they come from wherever you keep them, not from here.
+### 2. 恢复 PostgreSQL（Databasus → `mica-backup/mica_pg/`）
 
-**Do this before starting the stack**, not after: `POSTGRES_PASSWORD` lives in
-this file and Postgres uses it at initdb. Restore it late and the database was
-created with one password while the config names another.
+- 所需异机凭据：
+  1. Databasus 解密密钥 **`secret.key`**（宿主机原路径 `/data/backup-services/databasus-data/secret.key`，系统盘副本 `/root/.databasus-recovery/secret.key`，须异机保存）；
+  2. 可读 `mica-backup/mica_pg/` 的阿里云 OSS 凭据（或通过阿里云 RAM 临时签发）。
+- **通过 Databasus 恢复**：在 Databasus Web 界面（或重建 Databasus 并加载原 `secret.key`）选择目标时间点恢复到目标库。
+- **恢复到生产库前的标准动作**（与下文回滚一致）：
+  1. 先在临时库预演验证（`just restore-drill` 或新建临时库导入后检查 `documents`、`views` 与可读页数）；
+  2. 停止 `api` 容器（`docker compose stop api`），确保无并发写入；
+  3. 恢复后确认 `.env` 中的 `MICA_VERSION` 不低于该备份对应的 schema 版本（`sqlx::migrate!` 仅支持前向迁移），再拉起 `api` 并校验 `https://mica.cloudcele.com/api/ready`。
 
-## Restore the database from a `pg_dump` (full-instance DR)
+### 3. 恢复 RustFS 对象与 Markdown 镜像（Zerobyte / restic）
 
-Use this when the Postgres volume is lost/corrupt, or to stand up a clone — it
-brings back users / memberships / CRDT history the content re-import cannot. The
-DB dump rides its own rustic lineage (`--label _pgdump`), so pull it the same way
-as a workspace.
-
-**Rehearse on a scratch DB first** — the same discipline as a migration
-(`docs/dev/lessons.md` §"迁移怎么验"): a restore you've never run is a guess, and a
-half-restored prod DB is worse than a down one.
-
-```bash
-# 1) Pull the latest DB dump out of the repo (its own label):
-docker exec mica-backup-1 rustic restore latest /tmp/pg --filter-label _pgdump
-docker cp mica-backup-1:/tmp/pg/mica.sql ./mica.sql
-# The _pgdump lineage is UNCOMPRESSED on purpose (rustic dedups plain SQL well,
-# gzip defeats it — see crates/cli/src/backup.rs). So there is no `gzip -t` here; the
-# integrity guarantee comes from rustic itself, which verifies chunk hashes on
-# restore. Sanity-check it looks like a dump instead:
-head -3 ./mica.sql && grep -c '^COPY public\.' ./mica.sql   # header + table count
-
-# 2) REHEARSE into a throwaway DB on the SAME server (no prod password leaves it).
-#    `just restore-drill <basename>` is this, with assertions — prefer it:
-just restore-points                                     # what's on the node
-just restore-drill pre-0.13.4-20260730-100443.sql.gz    # restore → assert → drop
-```
-
-### 恢复演练(`just restore-drill`)
-
-`deploy/restore-drill.sh`,一条命令跑完:恢复进一次性库 → 断言 → `DROP`(trap 兜底),
-`mica` 生产库全程不碰、不重启任何容器,输出只有计数(不打印正文/用户字段)。
-顺带跑 `rustic check`(对象存储那半的静默损坏,只能靠问才发现)。
-
-`\dt` 那种「表在不在」的断言不够 —— 一次产出空 `state` blob 的恢复能通过所有计数。
-所以它有三条**硬门槛**,不满足就非零退出:恢复错误数 = 0、`documents` > 0、
-**可读页数 > 0**(走 `views → documents → document_yrs_base` 那个每次读都要走的 join,
-且要求 `length(state) > 0 AND content_text <> ''`)。
-
-**首次实跑(2026-07-30,`pre-0.13.4-20260730-100443.sql.gz`)**:恢复错误 0、
-`_sqlx_migrations` = 15(正确的 pre-0016 世界)、被 S5 删掉的三张表都回来了、行数与备份时
-记录的一致(snapshots 3975 / updates 239 / versions 3 / docs 3736 / bases 3736 /
-views 4572 / users 9)、32 个 FK + 19 个 PK、**3331 个可读页**;`rustic check` 170 个
-snapshot 全部通过。**在这之前,这条恢复路径从未被真正走过一次。**
-
-> 为什么突然重要:S5(migration 0016)是本 schema 第一个不可逆迁移,它删掉了 op 模型
-> 三张表 —— 对早于它的数据,这个 dump 就是唯一的回头路。`gzip -t` 只证明文件没截断。
-
-**Restore over prod** (destructive — the rehearsal must have passed):
-
-```bash
-cd /data/mica
-# a) STOP the api so nothing writes mid-restore (the DB must be quiescent).
-#    Leave postgres up — you're restoring INTO it.
-docker compose up -d --no-deps --scale api=0 api || docker compose stop api
-
-# b) Drop + recreate the database, then load the dump.
-docker exec -i mica-postgres-1 psql -U mica -d postgres \
-  -c 'DROP DATABASE mica' -c 'CREATE DATABASE mica'
-docker exec -i mica-postgres-1 psql -q -U mica -d mica < ./mica.sql
-
-# c) Pin MICA_VERSION to the tag the dump's SCHEMA matches, THEN bring api up.
-#    sqlx::migrate! is forward-only: a NEWER api meeting an OLDER restored schema
-#    just re-applies the missing migrations (fine), but an OLDER api meeting a
-#    NEWER schema will not start. If unsure, roll to the tag that was live when
-#    the dump was taken:
-sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=vX.Y.Z|' .env
-docker compose up -d --no-deps api
-curl -fsS https://mica.cloudcele.com/api/ready       # DB-backed readiness = restore worked
-```
-
-**The recovery-window gap.** The dump is a point-in-time snapshot (last daily run
-+ any manual one). Writes between that instant and the outage are **not** in it
-and are lost on restore — there is no WAL archive here, this is dump-based DR, not
-PITR. Two mitigations before you drop prod: (1) if the old volume is still
-readable, take a fresh `pg_dump` off it first and restore THAT instead; (2)
-announce the restore point so users know which edits to redo. Widen the window by
-lowering `BACKUP_HOUR` cadence or adding manual `docker exec mica-backup-1
-mica-cli backup run` runs before risky changes.
+- 所需异机凭据：
+  1. Zerobyte / restic 仓库口令 **`restic.pass`**（宿主机路径 `/root/.zerobyte-recovery/restic.pass`，同一把密钥同时打开 `mica_s3/`、`mica-md/` 与 `assay_s3/`，须异机保存）；
+  2. 可读 `mica-backup/mica_s3/` 与 `mica-backup/mica-md/` 的阿里云 OSS 凭据。
+- **恢复 RustFS 图片/附件（`mica-backup/mica_s3/`）**：
+  - 通过 Zerobyte Web 界面将 `Mica RustFS OSS` 最新快照恢复到目标 RustFS 卷/桶；
+  - 或在任意装有 `restic` + `rclone` 的机器上直接凭 `restic.pass` 与 OSS 凭据执行 `restic -r rclone:aliyun-backups:mica-backup/mica_s3 restore latest --target <dir>`，再同步回 RustFS `mica` 桶。
+- **恢复脱离 Mica 可读的 Markdown 镜像（`mica-backup/mica-md/`）**：
+  - 通过 Zerobyte Web 界面（`Mica Markdown OSS`）或 `restic -r rclone:aliyun-backups:mica-backup/mica-md restore latest --target <dir>` 取出完整目录树与图片。
+- **如果要连同 Databasus / Zerobyte 管理界面、任务与历史一并恢复**：
+  - Databasus 需配套保留 `databasus-data/` + 原 `secret.key`；
+  - Zerobyte 需配套保留 `/data/backup-services/zerobyte-secrets/app-secret`、`/data/backup-services/zerobyte-data/`，继续运行备份任务时还需恢复或重建 `/data/backup-services/zerobyte-secrets/rclone.conf`。
 
 ### Roll back a bad migration (the `pre-*.sql.gz` restore point)
 
-Different trigger from the DR case above: not a lost volume, but a **deploy whose
-migration went wrong**. `just deploy-prod` runs the new api's migrations the moment
-it comes up and does **not** back up first (see the ⚠️ in [`deploy.md`](deploy.md)),
-so a data-touching migration must be preceded by a hand-taken restore point, per the
-CLAUDE.md discipline:
+与灾难恢复不同，发版包含 SQL 迁移时，`ansible/deploy.yml` 会在迁移前自动在节点本地落一份经内容校验的还原点 `/data/mica/pre-<version>-<ts>.sql.gz`（最多保留最近 5 份；手工取点命令如下）：
 
 ```bash
 # BEFORE deploying a data migration (on the node, in /data/mica):
 ts=$(date +%Y%m%d-%H%M%S)
 docker exec mica-postgres-1 pg_dump -U mica -d mica | gzip > pre-<migration>-$ts.sql.gz
-gzip -t pre-<migration>-$ts.sql.gz                                    # prove it's not truncated
-zcat pre-<migration>-$ts.sql.gz | grep -c '^COPY public.<affected-table>'   # target table present
+gzip -t pre-<migration>-$ts.sql.gz
+zcat pre-<migration>-$ts.sql.gz | grep -c '^COPY public.<affected-table>'
 ```
 
-If the migration lands and prod is wrong (api won't start, data mangled, a spot
-check fails), roll back **both** the schema and the code:
+如果迁移后线上异常，需**同时回滚数据库与镜像版本**：
 
 ```bash
 cd /data/mica
 # 1) Stop the api so nothing writes into the half-migrated schema.
-docker compose up -d --no-deps --scale api=0 api || docker compose stop api
+docker compose stop api
 
-# 2) Restore the pre-migration dump OVER prod. Same drop/create/load as
-#    "Restore over prod" above — the only difference is the source is your
-#    hand-taken pre-*.sql.gz, not the rustic _pgdump lineage.
+# 2) Restore the pre-migration dump OVER prod.
 docker exec -i mica-postgres-1 psql -U mica -d postgres \
   -c 'DROP DATABASE mica' -c 'CREATE DATABASE mica'
 zcat pre-<migration>-<ts>.sql.gz | docker exec -i mica-postgres-1 psql -q -U mica -d mica
 
-# 3) Roll the DEPLOY back to the tag that was live before this one. The restored
-#    schema matches the OLD tag; bringing the NEW api back up would just re-run
-#    the same bad migration (sqlx::migrate! is forward-only), so you MUST pin the
-#    old image, not the new one.
+# 3) Pin MICA_VERSION back to the previous tag and restart api.
 sed -i -E 's|^MICA_VERSION=.*|MICA_VERSION=v<OLD>.<Y>.<Z>|' .env
 docker compose up -d --no-deps api
-curl -fsS https://mica.cloudcele.com/api/health   # confirm it reports v<OLD>.<Y>.<Z>
-curl -fsS https://mica.cloudcele.com/api/ready    # DB-backed readiness = schema + code back in sync
+curl -fsS https://mica.cloudcele.com/api/health
+curl -fsS https://mica.cloudcele.com/api/ready
 ```
 
-**No `pre-*.sql.gz`?** You skipped the restore point. Fall back to the off-site
-`_pgdump` lineage (the section above) — it's the last daily snapshot, so you lose
-everything written since that night's run, but it's a real restore point.
-
-**Lost writes in the recovery window.** Any edit accepted between the bad deploy
-going live and the restore is **not** in `pre-*.sql.gz` and is gone on restore —
-the same point-in-time gap as the DR section. Two mitigations before you drop the
-corrupt DB: (1) if it's still readable, `pg_dump` it FIRST and diff/cherry-pick the
-rows written after the cutoff; (2) announce the restore point so users know which
-edits to redo. **Rehearse the restore into a scratch db** first
-(`docs/dev/lessons.md` §"迁移怎么验": `CREATE DATABASE mica_restest` → `zcat … | psql`
-→ assert → `DROP DATABASE`) — a restore you've never run is a guess.
+若节点无 `pre-*.sql.gz`，回退到 Databasus 异地库 `mica-backup/mica_pg/` 的最近一份全库备份。
 
 ## Restore test (do this — a backup you've never restored is a guess)
 
-Periodically restore a workspace into a throwaway target and assert the Markdown
-is there and byte-intact, then `check`. A repo you can't restore isn't a backup.
+定期验证两件事：
+1. 用异机保存的 `secret.key` + OSS 凭据验证能从 `mica-backup/mica_pg/` 还原到临时库并通过表/可读页断言；
+2. 用异机保存的 `restic.pass` + OSS 凭据验证 `mica-backup/mica_s3/` 与 `mica-backup/mica-md/` 快照可读且 `Auto Check` 通过。
 
 ## Security
 
-- The **repo password** and the **RAM AccessKey** are the only unrecoverable
-  secrets — store them **off the host** (password manager + a sealed copy). Lose
-  the password and the encrypted repo is permanently unreadable.
-- The password lives in `RUSTIC_PASSWORD` (env) and is **never** written to the
-  rendered `/etc/rustic/rustic.toml` (which holds only the OSS backend options).
-- The staging tree (`/var/lib/mica/export` in the `mica-prod-backup` volume)
-  holds plaintext content — same trust boundary as the DB. OSS is the real
-  off-site copy; rustic encrypts before upload.
-- Rotate the RAM key periodically; keep OSS Versioning/Object-Lock on.
+- **只恢复业务数据的最小异机密钥集**：Databasus `secret.key`、Zerobyte `restic.pass`、以及可访问对应 OSS 前缀的阿里云 RAM 凭据（或主账号重新签发能力）。丢失 `secret.key` 或 `restic.pass` 将导致对应加密备份永久不可读。
+- **管理面与实例凭据**：Databasus / Zerobyte 管理员密码、`/data/mica/.env.secrets` 与 `zerobyte-secrets/rclone.conf` 须加密存放于密码库，不得提交至 Git 仓库。
+- **导出目录权限边界**：`/data/mica/export` 存放明文 Markdown 与图片（与数据库同信任边界）；Zerobyte 以 `:ro` 只读挂载该目录，上传 OSS 前由 restic 完成端到端加密。
+- 定期轮换 RAM AccessKey，并在 OSS 备份桶开启版本控制 / 防误删策略。

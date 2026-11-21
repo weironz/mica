@@ -17,13 +17,13 @@
 > 那次事故的价值不在于修好了什么,而在于它证明了**这份文档里的 ✅ 会腐烂**,
 > 而且腐烂时不会有任何人被通知。读到任何一个 ✅,先问「最后一次核实是什么时候」。
 
-**当前状态**：
-- ✅ **数据库**：每日 `pg_dump` → rustic `label=_pgdump` → 阿里云 OSS
-  （**2026-08-16 ~ 08-29 中断,见第 8 节**）
-- ✅ **内容（正文+图片）**：每日导出 → 每工作区一个 label → 同一仓库
-- ✅ **对象字节**：0.13.8 起 rclone 直传 OSS（`mica-blobs` 前缀），不再只靠导出间接捞
+**当前状态（2026-11-21 更新，见 §12）**：
+- ✅ **数据库（PostgreSQL）**：**Databasus** 定时加密备份至阿里云 OSS `mica-backup/mica_pg/`，恢复密钥 `secret.key` 异机保存。
+- ✅ **对象字节（RustFS）**：**Zerobyte**（restic）每日 03:40（UTC+7）增量备份至阿里云 OSS `mica-backup/mica_s3/`，恢复密钥 `restic.pass` 异机保存。
+- ✅ **内容兜底（Markdown + 图片）**：瘦身后的 `mica-backup` 容器每日 03:00（UTC+8）增量导出至 `/data/mica/export`，由 **Zerobyte** 只读挂载并于每日 04:00（UTC+7，北京时间 05:00）接力增量备份至 `mica-backup/mica-md/`（复用同一把 `restic.pass`）。
 - ⏸️ **跨账号第二份**：**已拍板不做**（用户判断云账号级损失概率足够低）
-- ✅ **凭据**：`RUSTIC_PASSWORD` 已由用户单独留存于节点之外
+- ✅ **业务恢复最小密钥集**：**Databasus `secret.key` + Zerobyte `restic.pass` + OSS 读取凭据**（加上实例 `.env.secrets` 存密码库）。
+- ⚠️ **自动化演练待同步**：`.github/workflows/dr-drill.yml` 上次全绿实测（2026-11-19，见 §3）仍走旧 `rustic` + `rclone` 链路，后续需按 Databasus + Zerobyte 恢复链路改写并复测。
 
 **仍然没有答案的一件事**：RTO。恢复路径现在**存在**了，但端到端「换台机器把服务起回来」
 这条路**没有人走过**，所以「多久能恢复」目前只有猜测（5.5）。
@@ -768,3 +768,14 @@ ssh root@mica.cloudcele.com 'docker logs mica-backup-1 2>&1 | grep -E "pg_dump|s
 - **备份链路加固**：修复 `run_once` 失败时跳过 `Report::summary` 日志的缺陷；将日常 `rustic forget` 与每周日 `rustic prune --max-unused 15% --max-repack 200MiB` + `rustic check` 拆分（`PRUNE_WEEKDAY`）；为 `rclone copy` 补充 `--stats-log-level NOTICE`；为 `backup` 容器固定 `hostname: mica-backup`、持久化 `RUSTIC_CACHE_DIR` 命名卷 `mica-prod-backup-cache`、增加 `init: true` / `cgroup_parent` / `768m` 内存上限，并在生产配置 `BACKUP_ON_START=0`。
 - **生产清理与演练**：清理 16 个已废弃/空壳旧工作区 label（139 份快照）并将 3 个无同名替代的历史旧库（`willdocs` / `NVIDIA` / `infrastructure`）各收敛为 `--keep-last 1`，仓库快照由 559 降至 401 且 `rustic check` 全过；清理 `/data/mica` 下 8 月大升级残留（~886 MB）及空孤儿卷 `mica-prod-backup`。随后完成 `v0.14.10` 全流程 `dr-drill.yml` 演练（见 §3）。
 - **地域容灾边界**：当前生产 ECS 与 OSS 备份桶 `mica-backup-cloudcele` 同在 `cn-shenzhen`（`oss-cn-shenzhen`）。如需跨地域地理隔离且不改动备份链路，可在阿里云 OSS 控制台为该桶开启跨区域复制（CRR）至异地低频/归档桶（关闭删除同步）。
+
+## 12. 2026-11-21 统一收口至 Databasus + Zerobyte 架构
+
+宿主机已部署统一的 **Databasus**（PostgreSQL）与 **Zerobyte**（基于 restic 的对象/文件备份），Mica 不再在自有 `mica-backup` 容器内重复执行 `pg_dump`、`rclone` 与 `rustic`：
+
+- **三路异地备份分工**：
+  1. **PostgreSQL → Databasus → `mica-backup/mica_pg/`**：必须异机保存 `secret.key`（宿主机 `/data/backup-services/databasus-data/secret.key`，系统盘副本 `/root/.databasus-recovery/secret.key`；同一把密钥解密 Assay 与 Mica）。
+  2. **RustFS → Zerobyte → `mica-backup/mica_s3/`**：必须异机保存 `restic.pass`（宿主机 `/root/.zerobyte-recovery/restic.pass`；每日 03:40 UTC+7，`keepLast: 30`）。
+  3. **Markdown 镜像 → `mica-backup` 瘦身容器导出至 `/data/mica/export` → Zerobyte 只读接力 → `mica-backup/mica-md/`**：`deploy/Dockerfile.cli` 移除 `rustic` / `rclone` / `postgresql-client-18`，`mica-cli backup` 仅保留增量导出、独占锁、超时清理、`manifest.json` 覆盖校验与 `HEALTHCHECK_URL`；Zerobyte 以 `:ro` 挂载 `/data/mica/export:/data/mica-export:ro`，于每日 04:00（UTC+7 = 北京 05:00）增量备份（排除 `.mica-export` 与 `_pgdump`，`keepLast: 30`，复用同一把 `restic.pass`）。首份快照 `d3b05528` 实测 32,271 文件 / 1.24 GiB → 压后写入 OSS 740 MiB，耗时 2 分 41 秒。
+- **管理面恢复边界**：只恢复业务数据时，Databasus 用 `secret.key`，Zerobyte 用 `restic.pass`，两边均需能读 OSS；若要恢复管理界面与任务配置，还需配套保留 `databasus-data/`、`zerobyte-secrets/app-secret`、`zerobyte-data/` 与 `zerobyte-secrets/rclone.conf`。
+- **遗留待办**：`.github/workflows/dr-drill.yml` 仍面向旧 `rustic` / `rclone` 仓库，待后续按 Databasus + Zerobyte 恢复路径更新并跑通一次新链路恢复演练。详见 [`backup.md`](backup.md)。

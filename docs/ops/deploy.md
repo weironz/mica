@@ -224,11 +224,11 @@ which thing. As of 2026-08-29 the four that are OURS all read
 | Pair | What it opens | Name chosen by |
 | --- | --- | --- |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | this instance's own object store (RustFS) | us |
-| `RUSTFS_S3_ACCESS_KEY_ID` / `RUSTFS_S3_SECRET_ACCESS_KEY` | the same store, as rclone's *source* when mirroring off-site. Defaults to the pair above — there is only one RustFS and it accepts one pair | us |
-| `OSS_ACCESS_KEY_ID` / `OSS_SECRET_ACCESS_KEY` | the off-site **backup bucket** (read the rustic repo, write the object mirror) | us |
 | `MICA_MAIL_ACCESS_KEY_ID` / `MICA_MAIL_SECRET_ACCESS_KEY` | Aliyun DirectMail | us |
 | `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` | what RustFS itself is configured WITH — compose sets these from `S3_*`; you never set them | **the RustFS image** |
 | `ALICLOUD_ACCESS_KEY` / `ALICLOUD_SECRET_KEY` | creating machines/DNS with OpenTofu (`dr/aliyun/`). Never on the node — only on a laptop or in CI | **the OpenTofu provider** |
+
+> **2026-11-21 备份瘦身说明**：原 `RUSTFS_S3_ACCESS_KEY_ID` / `RUSTFS_S3_SECRET_ACCESS_KEY` 与 `OSS_ACCESS_KEY_ID` / `OSS_SECRET_ACCESS_KEY` 已从 `deploy/docker-compose.yml` 的 `backup` 服务移除——RustFS 与 OSS 的异地备份凭据现由宿主机独立的 Databasus / Zerobyte（`/data/backup-services/`）管理，Mica 侧的 `backup` 容器只需一个只读 PAT `MICA_BACKUP_TOKEN`（见 [`backup.md`](backup.md)）。
 
 The last two keep their spelling because renaming them would mean nothing reads
 them. That is the whole reason the set is not uniform, and it is worth knowing
