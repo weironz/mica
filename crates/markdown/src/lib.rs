@@ -256,6 +256,8 @@ pub fn static_page_css(width_px: u32) -> String {
      .todo input{{margin-right:.4em;}}\n\
      .mermaid{{text-align:center;margin:1rem 0;}}\n\
      .mermaid svg{{max-width:100%;height:auto;}}\n\
+     .mica-board{{text-align:center;margin:1rem 0;}}\n\
+     .mica-board svg{{max-width:100%;height:auto;border-radius:8px;}}\n\
      div.math{{margin:1rem 0;text-align:center;}}\n\
      .math-block{{max-width:100%;}}\n\
      .hl-keyword{{color:#7c3aed;}}\n\

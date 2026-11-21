@@ -3,7 +3,7 @@
 //   cd clients/mica_flutter
 //   flutter run -d windows --no-pub -t e2e/board_spike_desktop_entry.dart
 import 'package:flutter/material.dart';
-import 'package:mica_flutter/board/board_spike_canvas.dart';
+import 'board_spike_canvas.dart';
 
 void main() {
   runApp(const _BoardSpikeDesktopApp());

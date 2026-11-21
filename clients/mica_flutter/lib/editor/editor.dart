@@ -26,6 +26,8 @@ import 'image_actions.dart';
 import 'image_animator.dart';
 import 'image_decode.dart';
 import 'model.dart';
+import 'board_preview.dart';
+import 'image_edit_dialog.dart';
 import 'preview_raster.dart';
 import 'open_url.dart';
 import 'pick_image.dart';
@@ -320,6 +322,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       const MathPreviewer(display: true),
       const MathPreviewer(display: false),
       const MermaidPreviewer(),
+      const BoardPreviewer(),
     ],
     requestRebuild: (fn) {
       if (mounted) setState(fn);
@@ -2557,6 +2560,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _controller.setCodeView(viewTab.node, viewTab.view);
       return;
     }
+    final boardIdx = r.diagramAt(local);
+    if (boardIdx != null &&
+        boardIdx < _controller.nodes.length &&
+        _controller.nodes[boardIdx].data['language'] == 'mica-board') {
+      _editBoardBlock(_controller.nodes[boardIdx], readOnly: ro);
+      return;
+    }
     final moreNode = ro ? null : r.codeMoreAt(local);
     if (moreNode != null) {
       _openCodeMenu(moreNode, d.globalPosition);
@@ -4053,8 +4063,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     }
     // Rendered diagrams pan by drag (AFFiNE-style): hand cursor invites it.
     if (_diagramPan != null) return SystemMouseCursors.grabbing;
-    if (r.diagramAt(local) != null && r.viewTabAt(local) == null) {
-      return SystemMouseCursors.grab;
+    final diagHover = r.diagramAt(local);
+    if (diagHover != null && r.viewTabAt(local) == null) {
+      final isBoard =
+          diagHover < _controller.nodes.length &&
+          _controller.nodes[diagHover].data['language'] == 'mica-board';
+      return isBoard ? SystemMouseCursors.click : SystemMouseCursors.grab;
     }
     if (r.tableColBorderAt(local) != null || r.imageResizeAt(local) != null) {
       return SystemMouseCursors.resizeLeftRight;
@@ -4988,6 +5002,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       case 'quote':
         return l.slashQuote;
       case 'code_block':
+        if (o.data['language'] == 'mica-board') {
+          return switch (o.data['template']) {
+            'mindmap' => l.slashMindmap,
+            'flowchart' => l.slashFlowchart,
+            _ => l.slashBoard,
+          };
+        }
         return l.slashCode;
       case 'math_block':
         return l.slashMathFormula;
@@ -5088,15 +5109,33 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _pickAndInsertImage();
       return;
     }
+    final isBoardSlash =
+        opt.kind == 'code_block' && opt.data['language'] == 'mica-board';
     final data = opt.kind == 'table'
         ? TableData.empty().toBlockData()
-        : opt.data;
+        : (isBoardSlash ? const {'language': 'mica-board'} : opt.data);
     // The converted block's index: the caret parks on a trailing paragraph
     // when the target kind is atomic, so remember where the block itself is.
     final converted = _controller.selection?.focus.node;
     _controller.applySlashCommand(_slashStart, caret, opt.kind, data);
     _closeSlash();
     _syncImeFromSelection(force: true);
+    if (isBoardSlash && converted != null) {
+      final node = converted < _controller.nodes.length
+          ? _controller.nodes[converted]
+          : null;
+      if (node != null && node.kind == 'code_block') {
+        final tmpl = (opt.data['template'] as String?) ?? 'whiteboard';
+        final starter = starterEmbeddedBoardJson(tmpl);
+        _controller.setBlockText(node.id, starter);
+        _editBoardBlock(
+          _controller.nodes.firstWhere(
+            (n) => n.id == node.id,
+            orElse: () => node,
+          ),
+        );
+      }
+    }
     if (opt.kind == 'math_block' && converted != null) {
       // Straight into source editing — an empty formula shows nothing.
       final node = converted < _controller.nodes.length
@@ -5106,6 +5145,28 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         _editMathBlock(node);
       }
     }
+  }
+
+  /// Open the fullscreen interactive board/mind-map editor for a `mica-board` block
+  /// and semantically 3-way merge edits back so concurrent changes never corrupt JSON.
+  Future<void> _editBoardBlock(EditorNode node, {bool readOnly = false}) async {
+    final nodeId = node.id;
+    final baseJson = node.text;
+    final edited = await openEmbeddedBoardEditor(
+      context,
+      initialJson: baseJson,
+      readOnly: readOnly,
+    );
+    if (!mounted || readOnly || edited == null || edited == baseJson) return;
+    final current = _controller.nodes
+        .where((n) => n.id == nodeId)
+        .firstOrNull;
+    if (current == null) return;
+    final finalJson = current.text == baseJson
+        ? edited
+        : await mergeEmbeddedBoardJson(baseJson, edited, current.text);
+    if (!mounted) return;
+    _controller.setBlockText(nodeId, finalJson);
   }
 
   /// Edit a math block's LaTeX source in a dialog.
@@ -5491,7 +5552,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // nothing typed; null = cancelled.
     final url = await showDialog<String>(
       context: context,
-      builder: (_) => _ImageEditDialog(
+      builder: (_) => ImageEditDialog(
         link: link,
         external: external,
         reHost: widget.reHostImages,

@@ -112,5 +112,6 @@ e2e/*.png
 
 # Generated on-demand Rust preview bindings and browser test copies.
 /clients/mica_flutter/web/mica_preview/
+/clients/mica_flutter/web/mica_board/
 /clients/mica_flutter/test/support/mica_preview/
 /clients/mica_flutter/test/support/mica_preview_worker.js

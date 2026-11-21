@@ -9,15 +9,16 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-/// Capacity of each room's broadcast channel. Slow receivers that fall behind
-/// this many messages observe a lag error and rebootstrap.
+/// Capacity of each room's reliable CRDT broadcast channel. Slow receivers that
+/// fall behind this many CRDT updates observe a lag error and rebootstrap.
 const ROOM_CHANNEL_CAPACITY: usize = 256;
 
+/// Capacity of each room's lossy ephemeral presence channel (cursors, selection,
+/// live whiteboard drag previews). Separate from CRDT updates so high-frequency
+/// cursor/drag bursts can never evict durable CRDT frames or trigger resync storms.
+const PRESENCE_CHANNEL_CAPACITY: usize = 128;
+
 /// Presence broadcasts one connection may burst / sustain per second.
-///
-/// Presence shares the room channel with CRDT updates and needs no write
-/// permission, so a viewer spamming it pushed real updates out of every peer's
-/// receiver (`Lagged` → resync storms). A cursor at 20 Hz never notices this.
 const PRESENCE_BURST: f64 = 30.0;
 const PRESENCE_PER_SEC: f64 = 30.0;
 
@@ -45,6 +46,7 @@ pub struct PresenceEntry {
 pub struct Room {
   document_id: Uuid,
   sender: broadcast::Sender<RoomMessage>,
+  presence_sender: broadcast::Sender<RoomMessage>,
   presence: Mutex<HashMap<Uuid, PresenceEntry>>,
   /// Per-connection presence token bucket: (tokens, last refill).
   presence_budget: Mutex<HashMap<Uuid, (f64, Instant)>>,
@@ -82,10 +84,23 @@ impl Room {
     self.sender.subscribe()
   }
 
-  /// Fan a message out to every joined connection. Returns the number of
-  /// receivers it reached (zero is normal when the sender is alone).
+  /// Subscribe to ephemeral presence/cursor/drag-preview frames. Lagged frames
+  /// on this channel are safe to drop without resyncing the document.
+  pub fn subscribe_presence(&self) -> broadcast::Receiver<RoomMessage> {
+    self.presence_sender.subscribe()
+  }
+
+  /// Fan a reliable CRDT/sync message out to every joined connection.
   pub fn broadcast(&self, origin: Uuid, text: Arc<str>) -> usize {
     self.sender.send(RoomMessage { origin, text }).unwrap_or(0)
+  }
+
+  /// Fan an ephemeral presence message out on the dedicated lossy channel.
+  pub fn broadcast_presence(&self, origin: Uuid, text: Arc<str>) -> usize {
+    self
+      .presence_sender
+      .send(RoomMessage { origin, text })
+      .unwrap_or(0)
   }
 
   pub fn set_presence(&self, entry: PresenceEntry) {
@@ -147,9 +162,11 @@ impl DocumentHub {
     rooms.retain(|_, room| room.strong_count() > 0);
 
     let (sender, _receiver) = broadcast::channel(ROOM_CHANNEL_CAPACITY);
+    let (presence_sender, _presence_receiver) = broadcast::channel(PRESENCE_CHANNEL_CAPACITY);
     let room = Arc::new(Room {
       document_id,
       sender,
+      presence_sender,
       presence: Mutex::new(HashMap::new()),
       presence_budget: Mutex::new(HashMap::new()),
     });
@@ -303,5 +320,30 @@ mod tests {
     let message = receiver.recv().await.expect("message delivered");
     assert_eq!(message.origin, origin);
     assert_eq!(&*message.text, "{\"type\":\"pong\"}");
+  }
+
+  #[tokio::test]
+  async fn presence_flood_never_lags_crdt_channel() {
+    let hub = DocumentHub::new();
+    let room = hub.join(Uuid::nil());
+    let mut crdt_rx = room.subscribe();
+    let mut presence_rx = room.subscribe_presence();
+
+    let origin = Uuid::from_u128(7);
+    room.broadcast(origin, Arc::from("{\"type\":\"sync.update\"}"));
+    // Overflow presence ring buffer well past PRESENCE_CHANNEL_CAPACITY.
+    for i in 0..(PRESENCE_CHANNEL_CAPACITY * 3) {
+      room.broadcast_presence(origin, Arc::from(format!("{{\"seq\":{i}}}")));
+    }
+
+    // CRDT receiver MUST still receive its frame cleanly with zero lag.
+    let crdt_msg = crdt_rx.recv().await.expect("crdt frame intact");
+    assert_eq!(&*crdt_msg.text, "{\"type\":\"sync.update\"}");
+
+    // Presence receiver reports Lagged (which WS loop silently skips).
+    assert!(matches!(
+      presence_rx.recv().await,
+      Err(broadcast::error::RecvError::Lagged(_))
+    ));
   }
 }

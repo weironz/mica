@@ -1701,7 +1701,7 @@ class RenderDocument extends RenderBox {
         // Diagram blocks: the [code|preview] switch joins the bottom-right
         // toolbar, left of the language label — the top-left overlapped the
         // first line of source. Same corner on both forms.
-        if (codeLang == 'mermaid') {
+        if (codeLang == 'mermaid' || codeLang == 'mica-board') {
           final tabY = iconY + (iconBox - 20) / 2;
           final right = layout.langLabel!.left - 8;
           layout.viewCodeTab = Rect.fromLTWH(right - 44, tabY, 44, 20);

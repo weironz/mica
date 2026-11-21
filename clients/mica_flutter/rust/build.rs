@@ -24,6 +24,8 @@ const ROOTS: &[&str] = &[
   "crates/markdown/src",
   "crates/md-core/Cargo.toml",
   "crates/md-core/src",
+  "crates/mica-board/Cargo.toml",
+  "crates/mica-board/src",
   "crates/mica-core/Cargo.toml",
   "crates/mica-core/src",
 ];

@@ -3,6 +3,7 @@ members = [
   "crates/api-server",
   "crates/api-types",
   "crates/app-core",
+  "crates/board-wasm",
   "crates/cli",
   "crates/doc-wasm",
   "crates/infra",
@@ -11,6 +12,7 @@ members = [
   "crates/md-core",
   "crates/md-wasm",
   "crates/mcp-server",
+  "crates/mica-board",
   "crates/mica-core",
 ]
 resolver = "2"

@@ -1,3 +1,4 @@
+pub mod board;
 pub mod document;
 pub mod markdown;
 pub mod pdf;

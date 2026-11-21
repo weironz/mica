@@ -41,7 +41,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
   default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1132998297;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -53241169;
 
 // Section: executor
 
@@ -4086,6 +4086,70 @@ fn wire__crate__api__pdf__export_pdf_impl(
     },
   )
 }
+fn wire__crate__api__board__extract_board_plain_text_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "extract_board_plain_text",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_source = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Ok::<_, ()>(crate::api::board::extract_board_plain_text(api_source))?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
+fn wire__crate__api__board__import_drawio_to_board_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "import_drawio_to_board",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, String>((move || {
+          let output_ok = crate::api::board::import_drawio_to_board(api_bytes)?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
 fn wire__crate__api__simple__init_app_impl(
   port_: flutter_rust_bridge::for_generated::MessagePort,
   ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -4113,6 +4177,74 @@ fn wire__crate__api__simple__init_app_impl(
           let output_ok = Ok::<_, ()>({
             crate::api::simple::init_app();
           })?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
+fn wire__crate__api__board__layout_mindmap_board_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "layout_mindmap_board",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_source = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Ok::<_, ()>(crate::api::board::layout_mindmap_board(api_source))?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
+fn wire__crate__api__board__markdown_to_mindmap_board_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "markdown_to_mindmap_board",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_markdown = <String>::sse_decode(&mut deserializer);
+      let api_title = <Option<String>>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Ok::<_, ()>(crate::api::board::markdown_to_mindmap_board(
+            api_markdown,
+            api_title,
+          ))?;
           std::result::Result::Ok(output_ok)
         })())
       }
@@ -4503,6 +4635,107 @@ fn wire__crate__api__markdown__md_serialize_inline_impl(
     },
   )
 }
+fn wire__crate__api__board__merge_board_json_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "merge_board_json",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_base = <String>::sse_decode(&mut deserializer);
+      let api_local = <String>::sse_decode(&mut deserializer);
+      let api_remote = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Ok::<_, ()>(crate::api::board::merge_board_json(
+            api_base, api_local, api_remote,
+          ))?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
+fn wire__crate__api__board__mindmap_board_to_markdown_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "mindmap_board_to_markdown",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_source = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Ok::<_, ()>(crate::api::board::mindmap_board_to_markdown(api_source))?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
+fn wire__crate__api__board__render_board_svg_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "render_board_svg",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_source = <String>::sse_decode(&mut deserializer);
+      let api_theme = <Option<crate::api::board::BoardTheme>>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Ok::<_, ()>(crate::api::board::render_board_svg(api_source, api_theme))?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
 fn wire__crate__api__render__render_math_svg_impl(
   port_: flutter_rust_bridge::for_generated::MessagePort,
   ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -4570,6 +4803,70 @@ fn wire__crate__api__render__render_mermaid_svg_impl(
           let output_ok = Ok::<_, ()>(crate::api::render::render_mermaid_svg(
             api_source, api_theme,
           ))?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
+fn wire__crate__api__board__route_board_edges_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "route_board_edges",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_source = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Ok::<_, ()>(crate::api::board::route_board_edges(api_source))?;
+          std::result::Result::Ok(output_ok)
+        })())
+      }
+    },
+  )
+}
+fn wire__crate__api__board__starter_board_json_impl(
+  port_: flutter_rust_bridge::for_generated::MessagePort,
+  ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+  rust_vec_len_: i32,
+  data_len_: i32,
+) {
+  FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+    flutter_rust_bridge::for_generated::TaskInfo {
+      debug_name: "starter_board_json",
+      port: Some(port_),
+      mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+    },
+    move || {
+      let message = unsafe {
+        flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+          ptr_,
+          rust_vec_len_,
+          data_len_,
+        )
+      };
+      let mut deserializer = flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+      let api_template = <String>::sse_decode(&mut deserializer);
+      deserializer.end();
+      move |context| {
+        transform_result_sse::<_, ()>((move || {
+          let output_ok = Ok::<_, ()>(crate::api::board::starter_board_json(api_template))?;
           std::result::Result::Ok(output_ok)
         })())
       }
@@ -4673,6 +4970,28 @@ impl SseDecode for String {
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
     let mut inner = <Vec<u8>>::sse_decode(deserializer);
     return String::from_utf8(inner).unwrap();
+  }
+}
+
+impl SseDecode for crate::api::board::BoardTheme {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    let mut var_dark = <bool>::sse_decode(deserializer);
+    let mut var_canvas = <String>::sse_decode(deserializer);
+    let mut var_surface = <String>::sse_decode(deserializer);
+    let mut var_text = <String>::sse_decode(deserializer);
+    let mut var_subtleText = <String>::sse_decode(deserializer);
+    let mut var_border = <String>::sse_decode(deserializer);
+    let mut var_accent = <String>::sse_decode(deserializer);
+    return crate::api::board::BoardTheme {
+      dark: var_dark,
+      canvas: var_canvas,
+      surface: var_surface,
+      text: var_text,
+      subtle_text: var_subtleText,
+      border: var_border,
+      accent: var_accent,
+    };
   }
 }
 
@@ -5166,6 +5485,17 @@ impl SseDecode for Option<MicaStore> {
   }
 }
 
+impl SseDecode for Option<crate::api::board::BoardTheme> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+    if (<bool>::sse_decode(deserializer)) {
+      return Some(<crate::api::board::BoardTheme>::sse_decode(deserializer));
+    } else {
+      return None;
+    }
+  }
+}
+
 impl SseDecode for Option<crate::api::store::CloneViewResult> {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -5403,10 +5733,23 @@ fn pde_ffi_dispatcher_primary_impl(
     }
     77 => wire__crate__api__store__MicaStore_search_local_impl(port, ptr, rust_vec_len, data_len),
     86 => wire__crate__api__pdf__export_pdf_impl(port, ptr, rust_vec_len, data_len),
-    87 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-    101 => wire__crate__api__render__render_math_svg_impl(port, ptr, rust_vec_len, data_len),
-    102 => wire__crate__api__render__render_mermaid_svg_impl(port, ptr, rust_vec_len, data_len),
-    103 => wire__crate__api__zip__unpack_import_zip_impl(port, ptr, rust_vec_len, data_len),
+    87 => wire__crate__api__board__extract_board_plain_text_impl(port, ptr, rust_vec_len, data_len),
+    88 => wire__crate__api__board__import_drawio_to_board_impl(port, ptr, rust_vec_len, data_len),
+    89 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+    90 => wire__crate__api__board__layout_mindmap_board_impl(port, ptr, rust_vec_len, data_len),
+    91 => {
+      wire__crate__api__board__markdown_to_mindmap_board_impl(port, ptr, rust_vec_len, data_len)
+    }
+    105 => wire__crate__api__board__merge_board_json_impl(port, ptr, rust_vec_len, data_len),
+    106 => {
+      wire__crate__api__board__mindmap_board_to_markdown_impl(port, ptr, rust_vec_len, data_len)
+    }
+    107 => wire__crate__api__board__render_board_svg_impl(port, ptr, rust_vec_len, data_len),
+    108 => wire__crate__api__render__render_math_svg_impl(port, ptr, rust_vec_len, data_len),
+    109 => wire__crate__api__render__render_mermaid_svg_impl(port, ptr, rust_vec_len, data_len),
+    110 => wire__crate__api__board__route_board_edges_impl(port, ptr, rust_vec_len, data_len),
+    111 => wire__crate__api__board__starter_board_json_impl(port, ptr, rust_vec_len, data_len),
+    112 => wire__crate__api__zip__unpack_import_zip_impl(port, ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
@@ -5539,19 +5882,19 @@ fn pde_ffi_dispatcher_sync_impl(
     83 => wire__crate__api__store__MicaStore_updates_after_impl(ptr, rust_vec_len, data_len),
     84 => wire__crate__api__zip__build_store_zip_impl(ptr, rust_vec_len, data_len),
     85 => wire__crate__api__simple__core_version_impl(ptr, rust_vec_len, data_len),
-    88 => wire__crate__api__markdown__md_decode_cells_impl(ptr, rust_vec_len, data_len),
-    89 => wire__crate__api__markdown__md_encode_cells_impl(ptr, rust_vec_len, data_len),
-    90 => wire__crate__api__markdown__md_engine_info_impl(ptr, rust_vec_len, data_len),
-    91 => wire__crate__api__markdown__md_highlight_impl(ptr, rust_vec_len, data_len),
-    92 => wire__crate__api__markdown__md_html_to_markdown_impl(ptr, rust_vec_len, data_len),
-    93 => wire__crate__api__markdown__md_math_run_spans_impl(ptr, rust_vec_len, data_len),
-    94 => wire__crate__api__markdown__md_parse_body_impl(ptr, rust_vec_len, data_len),
-    95 => wire__crate__api__markdown__md_parse_inline_batch_impl(ptr, rust_vec_len, data_len),
-    96 => wire__crate__api__markdown__md_parse_inline_math_impl(ptr, rust_vec_len, data_len),
-    97 => wire__crate__api__markdown__md_properties_impl(ptr, rust_vec_len, data_len),
-    98 => wire__crate__api__markdown__md_render_html_body_impl(ptr, rust_vec_len, data_len),
-    99 => wire__crate__api__markdown__md_serialize_body_impl(ptr, rust_vec_len, data_len),
-    100 => wire__crate__api__markdown__md_serialize_inline_impl(ptr, rust_vec_len, data_len),
+    92 => wire__crate__api__markdown__md_decode_cells_impl(ptr, rust_vec_len, data_len),
+    93 => wire__crate__api__markdown__md_encode_cells_impl(ptr, rust_vec_len, data_len),
+    94 => wire__crate__api__markdown__md_engine_info_impl(ptr, rust_vec_len, data_len),
+    95 => wire__crate__api__markdown__md_highlight_impl(ptr, rust_vec_len, data_len),
+    96 => wire__crate__api__markdown__md_html_to_markdown_impl(ptr, rust_vec_len, data_len),
+    97 => wire__crate__api__markdown__md_math_run_spans_impl(ptr, rust_vec_len, data_len),
+    98 => wire__crate__api__markdown__md_parse_body_impl(ptr, rust_vec_len, data_len),
+    99 => wire__crate__api__markdown__md_parse_inline_batch_impl(ptr, rust_vec_len, data_len),
+    100 => wire__crate__api__markdown__md_parse_inline_math_impl(ptr, rust_vec_len, data_len),
+    101 => wire__crate__api__markdown__md_properties_impl(ptr, rust_vec_len, data_len),
+    102 => wire__crate__api__markdown__md_render_html_body_impl(ptr, rust_vec_len, data_len),
+    103 => wire__crate__api__markdown__md_serialize_body_impl(ptr, rust_vec_len, data_len),
+    104 => wire__crate__api__markdown__md_serialize_inline_impl(ptr, rust_vec_len, data_len),
     _ => unreachable!(),
   }
 }
@@ -5586,6 +5929,29 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<MicaStore>> for MicaStore {
   }
 }
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::board::BoardTheme {
+  fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+    [
+      self.dark.into_into_dart().into_dart(),
+      self.canvas.into_into_dart().into_dart(),
+      self.surface.into_into_dart().into_dart(),
+      self.text.into_into_dart().into_dart(),
+      self.subtle_text.into_into_dart().into_dart(),
+      self.border.into_into_dart().into_dart(),
+      self.accent.into_into_dart().into_dart(),
+    ]
+    .into_dart()
+  }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::board::BoardTheme {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::board::BoardTheme>
+  for crate::api::board::BoardTheme
+{
+  fn into_into_dart(self) -> crate::api::board::BoardTheme {
+    self
+  }
+}
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::store::CloneViewResult {
   fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
@@ -6059,6 +6425,19 @@ impl SseEncode for String {
   }
 }
 
+impl SseEncode for crate::api::board::BoardTheme {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <bool>::sse_encode(self.dark, serializer);
+    <String>::sse_encode(self.canvas, serializer);
+    <String>::sse_encode(self.surface, serializer);
+    <String>::sse_encode(self.text, serializer);
+    <String>::sse_encode(self.subtle_text, serializer);
+    <String>::sse_encode(self.border, serializer);
+    <String>::sse_encode(self.accent, serializer);
+  }
+}
+
 impl SseEncode for bool {
   // Codec=Sse (Serialization based), see doc to use other codecs
   fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -6412,6 +6791,16 @@ impl SseEncode for Option<MicaStore> {
     <bool>::sse_encode(self.is_some(), serializer);
     if let Some(value) = self {
       <MicaStore>::sse_encode(value, serializer);
+    }
+  }
+}
+
+impl SseEncode for Option<crate::api::board::BoardTheme> {
+  // Codec=Sse (Serialization based), see doc to use other codecs
+  fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+    <bool>::sse_encode(self.is_some(), serializer);
+    if let Some(value) = self {
+      <crate::api::board::BoardTheme>::sse_encode(value, serializer);
     }
   }
 }

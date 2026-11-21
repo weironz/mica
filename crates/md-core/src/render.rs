@@ -182,6 +182,18 @@ pub fn render_mermaid_svg(source: &str, theme: Option<&MermaidHostTheme>) -> Opt
   render_mermaid_svg_with_id(source, "mica-mermaid", theme)
 }
 
+/// Embedded `mica-board` JSON → self-contained inline SVG, or `None`.
+#[cfg(feature = "render-board")]
+pub fn render_board_svg(source: &str) -> Option<String> {
+  mica_board::render_board_json_svg(source, None)
+}
+
+/// Feature-off board renderer.
+#[cfg(not(feature = "render-board"))]
+pub fn render_board_svg(_source: &str) -> Option<String> {
+  None
+}
+
 /// A merman diagram id from a block id: `[A-Za-z0-9_-]`, leading with a letter.
 pub(crate) fn mermaid_id(block_id: &str) -> String {
   let mut s = String::from("m");

@@ -1173,26 +1173,30 @@ class TableRenderer extends AtomicBlockRenderer {
 // Mermaid (a code_block wearing a diagram)
 // -----------------------------------------------------------------------------
 
-/// Renders ```mermaid fenced blocks as diagrams. The node stays a plain
-/// `code_block` in the document model (round-trips through Markdown
-/// untouched) — only rendering changes, and only when ALL of: the language
-/// is mermaid, the caret is outside the block (the focused block shows its
-/// editable source, Typora-style), and the preview pipeline has produced an
-/// image (no producer on this platform, a syntax error, or a pending render
-/// all fall back to the highlighted source via null-decline).
+/// Renders ```mermaid and ```mica-board fenced blocks as vector previews.
+/// The node stays a plain `code_block` in the document model (round-trips
+/// through Markdown untouched) and falls back to source via null-decline.
 class MermaidRenderer extends AtomicBlockRenderer {
   const MermaidRenderer();
 
   @override
   String get kind => 'code_block';
 
+  static String? _previewId(EditorNode node) => switch (node.data['language']) {
+    'mermaid' => 'mermaid',
+    'mica-board' => 'board',
+    _ => null,
+  };
+
   @override
-  PreviewResourceKey? previewKey(EditorNode node) =>
-      node.data['language'] == 'mermaid' &&
-          node.data['view'] != 'code' &&
-          node.text.trim().isNotEmpty
-      ? (id: 'mermaid', source: node.text)
-      : null;
+  PreviewResourceKey? previewKey(EditorNode node) {
+    final id = _previewId(node);
+    return id != null &&
+            node.data['view'] != 'code' &&
+            node.text.trim().isNotEmpty
+        ? (id: id, source: node.text)
+        : null;
+  }
 
   @override
   double previewWidth(RenderDocument host) =>
@@ -1206,15 +1210,9 @@ class MermaidRenderer extends AtomicBlockRenderer {
     double y,
     double maxWidth,
   ) {
-    if ((node.data['language'] as String?) != 'mermaid') return null;
-    if (node.text.trim().isEmpty) return null;
-    // The form is an EXPLICIT choice via the [code|preview] tabs — clicking
-    // or selecting the rendered diagram must not flip it into source (that
-    // visual jump was terrible). data.view == 'code' shows the source;
-    // absent means preview, the default.
+    final id = _previewId(node);
+    if (id == null || node.text.trim().isEmpty) return null;
     if ((node.data['view'] as String?) == 'code') {
-      // Source form: drop any transient zoom/pan so the preview returns at
-      // its natural size (a leftover zoom read as "the diagram shrank").
       host._previewZoom.remove(node.id);
       host._previewPan.remove(node.id);
       return null;
@@ -1223,22 +1221,13 @@ class MermaidRenderer extends AtomicBlockRenderer {
       40.0,
       double.infinity,
     );
-    final pixels = host._previewSizes[(id: 'mermaid', source: node.text)];
+    final pixels = host._previewSizes[(id: id, source: node.text)];
     if (pixels == null) return null;
-    // Fill the content width: diagrams read better large, so scale UP as
-    // well as down (the producer rasterized at 2x of this width, so the
-    // upscale stays crisp). The BLOCK keeps its zoom=1 size — ctrl+wheel
-    // zoom only rescales the picture inside this fixed viewport (paint
-    // clips and centers), so zooming never reflows the page.
     final zoom = host._previewZoom[node.id] ?? 1.0;
     final w = avail;
     final h = w * (pixels.height / pixels.width.clamp(1, 1 << 30));
     final wz = w * zoom;
     final hz = h * zoom;
-    // The painter must be laid out: code_block is a TEXT kind, so pointer
-    // hit-testing runs text-position math against it (unlike the atomic
-    // kinds, whose clicks take the block path). Empty text → offset 0 →
-    // the caret lands in the block → next layout declines → source form.
     return NodeLayout(
         TextPainter(
           text: const TextSpan(text: ''),
@@ -1247,7 +1236,7 @@ class MermaidRenderer extends AtomicBlockRenderer {
       )
       ..kind = 'code_block'
       ..nodeId = node.id
-      ..langText = 'mermaid'
+      ..langText = (node.data['language'] as String?) ?? 'mermaid'
       ..boxLeft = EditorTheme.gutter
       ..contentLeft =
           EditorTheme.gutter +

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mica_flutter/board/board_spike_canvas.dart';
+import '../e2e/board_spike_canvas.dart';
 
 void main() {
   testWidgets('BoardSpikeCanvas isolates static layer during drag and auto-grows on edit', (

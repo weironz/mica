@@ -1654,6 +1654,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-board"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "percent-encoding",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "yrs",
+]
+
+[[package]]
 name = "mica-core"
 version = "0.1.0"
 dependencies = [
@@ -1689,6 +1702,7 @@ name = "mica-md"
 version = "0.1.0"
 dependencies = [
  "merman",
+ "mica-board",
  "ratex-layout",
  "ratex-parser",
  "ratex-svg",
@@ -2478,6 +2492,7 @@ name = "rust_lib_mica_flutter"
 version = "0.1.0"
 dependencies = [
  "flutter_rust_bridge",
+ "mica-board",
  "mica-core",
  "mica-interchange",
  "mica-markdown",

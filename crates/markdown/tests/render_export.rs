@@ -60,3 +60,16 @@ fn broken_mermaid_falls_back_to_code_block() {
     "invalid mermaid should keep its source:\n{html}"
   );
 }
+
+#[test]
+fn mica_board_becomes_inline_svg() {
+  let md = "```mica-board\n{\"version\":1,\"title\":\"测试画板\",\"mode\":\"whiteboard\",\"nodes\":[{\"id\":\"n1\",\"kind\":\"rounded\",\"x\":10,\"y\":10,\"w\":120,\"h\":48,\"text\":\"架构节点\"}],\"edges\":[],\"strokes\":[]}\n```\n";
+  let snap = import_markdown(md, "root");
+  let html = export_html_document(&snap, "board test", 800).unwrap();
+  assert!(
+    html.contains("<div class=\"mica-board\"><svg"),
+    "mica-board should render as inline SVG:\n{html}"
+  );
+  assert!(html.contains("架构节点"));
+  assert!(html.contains(".mica-board svg"));
+}

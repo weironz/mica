@@ -62,7 +62,7 @@ class EditorNode {
   bool get isUnitBlock =>
       isAtomic ||
       (kind == 'code_block' &&
-          data['language'] == 'mermaid' &&
+          (data['language'] == 'mermaid' || data['language'] == 'mica-board') &&
           (data['view'] as String?) != 'code');
 
   /// Nesting level for list/todo items (0 = top level), clamped for safety.

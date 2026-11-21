@@ -32,15 +32,17 @@ features = ["render"]
 [features]
 default = ["uuid"]
 uuid = ["dep:uuid"]
-render = ["render-mermaid", "render-math"]
+render = ["render-mermaid", "render-math", "render-board"]
 render-mermaid = ["dep:merman"]
 render-math = ["dep:ratex-parser", "dep:ratex-layout", "dep:ratex-svg", "dep:ratex-types"]
+render-board = ["dep:mica-board"]
 
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid = { workspace = true, optional = true }
+mica-board = { path = "../mica-board", optional = true }
 merman = { version = "0.7", features = ["render"], optional = true }
 ratex-parser = { version = "0.1", optional = true }
 ratex-layout = { version = "0.1", optional = true }

@@ -38,7 +38,7 @@ pub use ids::BlockIds;
 pub use model::{
   Block, Document, DocumentSnapshotPayload, InlineText, Mark, MdError, SCHEMA_VERSION,
 };
-pub use render::{MermaidHostTheme, render_mermaid_svg, render_mermaid_svg_with_id};
+pub use render::{MermaidHostTheme, render_board_svg, render_mermaid_svg, render_mermaid_svg_with_id};
 
 // The historical error/result names used by the moved modules. The facade maps
 // these onto its own `DocumentOperationError`.

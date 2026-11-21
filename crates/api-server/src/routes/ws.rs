@@ -431,6 +431,7 @@ async fn run_connection(
   let connection_id = Uuid::new_v4();
   let room = state.hub.join(document_id);
   let mut events = room.subscribe();
+  let mut presence_events = room.subscribe_presence();
 
   if send_bootstrap(
     &mut socket,
@@ -541,6 +542,24 @@ async fn run_connection(
           Err(RecvError::Closed) => break,
         }
       }
+      presence = presence_events.recv() => {
+        match presence {
+          Ok(message) => {
+            if message.origin != connection_id
+              && socket
+                .send(Message::Text(message.text.to_string().into()))
+                .await
+                .is_err()
+            {
+              break;
+            }
+          }
+          // Presence is ephemeral (cursors / live board drag previews): skip
+          // missed frames silently without kicking or resyncing the client.
+          Err(RecvError::Lagged(_)) => {}
+          Err(RecvError::Closed) => break,
+        }
+      }
     }
   }
 
@@ -551,7 +570,7 @@ async fn run_connection(
       "connection_id": connection_id,
       "user_id": user_id,
     });
-    room.broadcast(connection_id, Arc::from(leave.to_string()));
+    room.broadcast_presence(connection_id, Arc::from(leave.to_string()));
   }
 }
 
@@ -694,7 +713,7 @@ fn handle_presence_update(ctx: &ClientCtx<'_>, payload: Value) -> Vec<String> {
   });
   ctx
     .room
-    .broadcast(ctx.connection_id, Arc::from(event.to_string()));
+    .broadcast_presence(ctx.connection_id, Arc::from(event.to_string()));
   Vec::new()
 }
 

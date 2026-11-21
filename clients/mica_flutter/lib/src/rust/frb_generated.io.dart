@@ -3,6 +3,7 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
+import 'api/board.dart';
 import 'api/document.dart';
 import 'api/markdown.dart';
 import 'api/pdf.dart';
@@ -75,6 +76,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  BoardTheme dco_decode_board_theme(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
@@ -88,6 +92,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     dynamic raw,
   );
+
+  @protected
+  BoardTheme dco_decode_box_autoadd_board_theme(dynamic raw);
 
   @protected
   CloneViewResult dco_decode_box_autoadd_clone_view_result(dynamic raw);
@@ -225,6 +232,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  BoardTheme? dco_decode_opt_box_autoadd_board_theme(dynamic raw);
+
+  @protected
   CloneViewResult? dco_decode_opt_box_autoadd_clone_view_result(dynamic raw);
 
   @protected
@@ -329,6 +339,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  BoardTheme sse_decode_board_theme(SseDeserializer deserializer);
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
@@ -342,6 +355,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   sse_decode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     SseDeserializer deserializer,
   );
+
+  @protected
+  BoardTheme sse_decode_box_autoadd_board_theme(SseDeserializer deserializer);
 
   @protected
   CloneViewResult sse_decode_box_autoadd_clone_view_result(
@@ -511,6 +527,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  BoardTheme? sse_decode_opt_box_autoadd_board_theme(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   CloneViewResult? sse_decode_opt_box_autoadd_clone_view_result(
     SseDeserializer deserializer,
   );
@@ -639,6 +660,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_board_theme(BoardTheme self, SseSerializer serializer);
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
@@ -652,6 +676,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     MicaStore self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_board_theme(
+    BoardTheme self,
     SseSerializer serializer,
   );
 
@@ -873,6 +903,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_opt_box_autoadd_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMicaStore(
     MicaStore? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_board_theme(
+    BoardTheme? self,
     SseSerializer serializer,
   );
 

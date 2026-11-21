@@ -7,7 +7,7 @@ use crate::export_md::*;
 use crate::inline::*;
 use crate::span_walk::{SpanTies, SpanWalker};
 use crate::{Block, DocumentOperationError, DocumentOperationResult, DocumentSnapshotPayload};
-use crate::{mermaid_id, render_math, render_mermaid_svg_with_id};
+use crate::{mermaid_id, render_board_svg, render_math, render_mermaid_svg_with_id};
 
 /// `index` is the id→position map `export_safe_tree` already built for this
 /// snapshot — the recursion looks up every child by id, so threaded through
@@ -641,6 +641,15 @@ pub(crate) fn append_html_block(
       if lang == "mermaid" {
         if let Some(svg) = render_mermaid_svg_with_id(&block.text, &mermaid_id(&block.id), None) {
           out.push_str("<div class=\"mermaid\">");
+          out.push_str(&svg);
+          out.push_str("</div>\n");
+          append_html_children(snapshot, index, &block.id, out)?;
+          return Ok(());
+        }
+      }
+      if lang == "mica-board" {
+        if let Some(svg) = render_board_svg(&block.text) {
+          out.push_str("<div class=\"mica-board\">");
           out.push_str(&svg);
           out.push_str("</div>\n");
           append_html_children(snapshot, index, &block.id, out)?;

@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'dart:js_interop';
 
 import 'package:flutter/material.dart';
-import 'package:mica_flutter/board/board_spike_canvas.dart' deferred as board;
+import 'board_spike_canvas.dart' deferred as board;
 
 @JS('micaBoardSpikeState')
 external set _jsState(JSFunction value);
