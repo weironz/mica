@@ -312,9 +312,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   // Source → picture previews (math, mermaid): the pipeline owns the cache /
   // pending / off-screen-capture lifecycle, the previewers say how one source
-  // becomes a picture (docs/architecture/render-architecture.md). Mermaid only registers
-  // where its JS engine exists (web) — elsewhere ```mermaid blocks stay
-  // highlighted source via the renderer's null-decline.
+  // becomes a picture (docs/architecture/render-architecture.md,
+  // docs/features/mermaid.md). Both run on the shared Rust render engine (FFI
+  // on native, on-demand WASM worker on web) and fall back to source on error.
   late final RasterPreviewPipeline _previews = RasterPreviewPipeline(
     previewers: [
       const MathPreviewer(display: true),

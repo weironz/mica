@@ -116,8 +116,9 @@ abstract class BlockRenderer {
 
 Mermaid 和公式在网页经 Web Worker 调用 Rust wasm，在桌面和手机经 FFI 调用同一份 Rust。
 两端共用 SVG 光栅化；Mermaid 保留主程序主题角色和 CSS 内联，RaTeX 分别给行内、块级排版。
-HTML/PDF 直接使用同一 Rust 引擎。Markdown 与文档 wasm 负责启动，渲染 wasm 只在预览请求时下载，
-见[实测及预算](../reviews/redundancy-and-home-review-2026-11-10.md#前三项实施记录2026-11-11)。
+HTML/PDF 直接使用同一 Rust 引擎。Markdown 与文档 wasm 负责启动，渲染 wasm 只在预览请求时下载。
+Mermaid 完整实现、三端链路与主题/CSS 内联细节统一见 [mermaid.md](../features/mermaid.md)，
+2026-11-11 去双实现实测及体积预算见[历史实施记录](../reviews/redundancy-and-home-review-2026-11-10.md#前三项实施记录2026-11-11)。
 
 Mermaid 仍是 `language: mermaid` 的 `code_block`，公式的块型和标记也未变；只有预览路径变了。
 

@@ -122,7 +122,7 @@ GPUI 的性能分支：保留未变化的视图、布局和文字测量，滚动
 | 文字与输入法 | 框架自带；Web 走隐藏输入框。中日韩输入是全栈风险最高的一处 |
 | 中文字体（Web） | 随应用下发，和现在一样（8.1 实测不带字体会显示成方框） |
 | 公式 | 已有的 Rust `ratex-*`，不用新增 |
-| 图片 / SVG / Mermaid | 框架自带图片与 SVG；Mermaid 目前靠 JS 出图，桌面端怎么跑要单独设计 |
+| 图片 / SVG / Mermaid | 框架自带图片与 SVG；Mermaid 已统一为纯 Rust `merman`（详见 [mermaid.md](../features/mermaid.md)） |
 | 托盘、文件选择、富文本剪贴板、窗口管理、自动更新 | 逐项选 Rust crate 或自己写（nsh 自带托盘和更新器，未验证）；每个新依赖按 AGENTS.md 逐项豁免 |
 | 多语言 | 需要新选型（现在靠 Flutter 的 gen-l10n；nsh 有 `nsh-i18n`，未验证） |
 | 测试 | 框架的无头测试 + 现有浏览器套件改造；315 个 Flutter 测试文件不能直接迁移 |
