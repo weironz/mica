@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mica — Fullstack Rust Notes &amp; Whiteboard</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #ffffff; overflow: hidden; }
+  @media (prefers-color-scheme: dark) { html, body { background: #09090b; } }
+  #app { position: fixed; inset: 0; }
+  #status {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #71717a;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="status">Loading Mica (Pure Rust WebAssembly)…</div>
+<script type="module">
+  import { createPlayer } from "./nsh.js";
+
+  const status = document.getElementById("status");
+  const root = document.getElementById("app");
+  try {
+    const player = await createPlayer(root, {
+      dialogs: "viewport",
+      wasm: "./mica_rust.wasm",
+      onError: (msg) => {
+        console.error("[mica-rust]", msg);
+        status.textContent = String(msg);
+        status.style.display = "";
+      },
+    });
+    window.micaPlayer = player;
+    status.style.display = "none";
+    player.runRust();
+  } catch (err) {
+    console.error("[mica-rust] boot failed:", err);
+    status.textContent = "Failed to start Mica: " + String(err?.message ?? err);
+    status.style.display = "";
+  }
+</script>
+</body>
+</html>
