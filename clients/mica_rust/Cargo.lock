@@ -3310,6 +3310,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-interchange"
+version = "0.1.0"
+dependencies = [
+ "mica-markdown",
+ "mica-md",
+ "serde_json",
+]
+
+[[package]]
+name = "mica-markdown"
+version = "0.1.0"
+dependencies = [
+ "mica-md",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "mica-md"
 version = "0.1.0"
 dependencies = [
@@ -3335,6 +3354,7 @@ dependencies = [
  "mica-board",
  "mica-client",
  "mica-core",
+ "mica-interchange",
  "mica-md",
  "mica-sync",
  "nsh-base",

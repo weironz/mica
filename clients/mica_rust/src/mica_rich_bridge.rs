@@ -28,7 +28,8 @@ use mica_md::{
 };
 use nsh_base::rich_editor::{
   commands::{
-    BoxCommand, Dispatch, SplitAs, command, is_mark_active, split_block_as, tiptap::FOCUS_META,
+    BoxCommand, Dispatch, SplitAs, command, is_mark_active, split_block_as,
+    tiptap::{FOCUS_META, set_mark, unset_mark},
     toggle_mark,
   },
   extensions::{
@@ -44,7 +45,7 @@ use nsh_base::rich_editor::{
   },
   state::{
     EditorState, EditorStateConfig, KeyEvent, Plugin, PluginKey, PluginSpec, Selection,
-    Transaction, TransactionOrigin,
+    TextSelection, Transaction, TransactionOrigin,
   },
   tables::{
     self, TableEditingOptions, commands as table_commands, fix_tables_plugin, nodes as table_nodes,
@@ -52,7 +53,10 @@ use nsh_base::rich_editor::{
   },
   view::{EditorSession, NodeViews},
 };
-use nsh_core::prelude::{Signal, signal};
+use nsh_core::{
+  geometry::{Bounds, Points},
+  prelude::{Signal, signal},
+};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -172,7 +176,7 @@ pub fn mica_schema() -> Schema {
   );
   todo.extra.insert("render".into(), Value::String("task".into()));
 
-  let mut quote = flat_textblock("blockquote", true, vec![]);
+  let mut quote = flat_textblock("blockquote", true, vec![str_attr("alert", false)]);
   quote.parse_dom = vec![ParseRule::tag("blockquote")];
 
   let mut code_block = NodeSpec::default();
@@ -181,7 +185,13 @@ pub fn mica_schema() -> Schema {
   code_block.group = Some("block".into());
   code_block.code = true;
   code_block.defining = true;
-  code_block.attrs = vec![id_attr(), str_attr("language", true)];
+  code_block.attrs = vec![
+    id_attr(),
+    str_attr("language", true),
+    ("wrap".into(), attr_spec(Value::Bool(false), AttrType::Boolean, true)),
+    ("lineNumbers".into(), attr_spec(Value::Bool(false), AttrType::Boolean, true)),
+    str_attr("title", false),
+  ];
   code_block.to_dom = Some(DomOutputSpec::render(|src| {
     let lang = src.attr("language").and_then(Value::as_str).unwrap_or_default();
     let inner = if lang.is_empty() {
@@ -198,7 +208,15 @@ pub fn mica_schema() -> Schema {
   let mut divider = atom_block("hr", vec![]);
   divider.parse_dom = vec![ParseRule::tag("hr")];
 
-  let mut image = atom_block("img", vec![str_attr("src", false), str_attr("alt", false)]);
+  let mut image = atom_block(
+    "img",
+    vec![
+      str_attr("src", false),
+      str_attr("alt", false),
+      str_attr("align", false),
+      ("width".into(), attr_spec(Value::Null, AttrType::Any, false)),
+    ],
+  );
   image.to_dom = Some(DomOutputSpec::tag("img").attr_of("src", "src").attr_of("alt", "alt"));
   image.parse_dom = vec![ParseRule::tag("img[src]").with_get_attrs(|input| {
     let el = input.element()?;
@@ -421,7 +439,10 @@ fn pm_node_from_block(schema: &Schema, block: &Block) -> Node {
     "bulleted_list" | "bullet_list" => prose("bulleted_list", &[]),
     "numbered_list" | "number_list" => prose("numbered_list", &[]),
     "todo" => prose("todo", &[("checked", Value::Bool(block.data.get("checked").and_then(Value::as_bool).unwrap_or(false)))]),
-    "quote" => prose("quote", &[]),
+    "quote" => {
+      let alert = block.data.get("alert").and_then(Value::as_str).unwrap_or_default();
+      prose("quote", &[("alert", Value::String(alert.to_owned()))])
+    }
     "code_block" | "code" => {
       let lang = block.data.get("language").and_then(Value::as_str).unwrap_or_default();
       if lang.eq_ignore_ascii_case("mermaid") {
@@ -429,7 +450,18 @@ fn pm_node_from_block(schema: &Schema, block: &Block) -> Node {
       } else if lang.eq_ignore_ascii_case("mica-board") || lang.eq_ignore_ascii_case("board") {
         source_atom("board")
       } else {
-        let a = make_attrs(id.clone(), &[("language", Value::String(lang.to_owned()))]);
+        let wrap = block.data.get("wrap").and_then(Value::as_bool).unwrap_or(false);
+        let line_numbers = block.data.get("lineNumbers").and_then(Value::as_bool).unwrap_or(false);
+        let title = block.data.get("title").and_then(Value::as_str).unwrap_or_default();
+        let a = make_attrs(
+          id.clone(),
+          &[
+            ("language", Value::String(lang.to_owned())),
+            ("wrap", Value::Bool(wrap)),
+            ("lineNumbers", Value::Bool(line_numbers)),
+            ("title", Value::String(title.to_owned())),
+          ],
+        );
         let frag = if block.text.is_empty() { Fragment::empty() } else { Fragment::from(vec![schema.text(&block.text, Vec::new())]) };
         schema.node("code_block", Some(a), frag, Vec::new()).ok()
       }
@@ -443,7 +475,17 @@ fn pm_node_from_block(schema: &Schema, block: &Block) -> Node {
         .or_else(|| block.data.get("name").and_then(Value::as_str))
         .or_else(|| block.data.get("file_id").and_then(Value::as_str))
         .unwrap_or_default();
-      let a = make_attrs(id.clone(), &[("src", Value::String(src.to_owned())), ("alt", Value::String(block.text.clone()))]);
+      let align = block.data.get("align").and_then(Value::as_str).unwrap_or_default();
+      let width = block.data.get("width").and_then(Value::as_f64).map(Value::from).unwrap_or(Value::Null);
+      let a = make_attrs(
+        id.clone(),
+        &[
+          ("src", Value::String(src.to_owned())),
+          ("alt", Value::String(block.text.clone())),
+          ("align", Value::String(align.to_owned())),
+          ("width", width),
+        ],
+      );
       schema.node("image", Some(a), Fragment::empty(), Vec::new()).ok()
     }
     "table" => pm_table_from_block(schema, block),
@@ -509,10 +551,31 @@ fn block_from_pm_node(node: &Node, id: String) -> Block {
       d.insert("checked".into(), Value::Bool(attr_bool(attrs, "checked")));
       prose("todo", d)
     }
-    "quote" => prose("quote", Map::new()),
+    "quote" => {
+      let mut d = Map::new();
+      let alert = attr_str(attrs, "alert");
+      if !alert.is_empty() {
+        d.insert("alert".into(), Value::String(alert.to_owned()));
+      }
+      prose("quote", d)
+    }
     "code_block" => {
+      let mut d = Map::new();
       let lang = attr_str(attrs, "language");
-      let data = if lang.is_empty() { Value::Null } else { json!({ "language": lang }) };
+      if !lang.is_empty() {
+        d.insert("language".into(), Value::String(lang.to_owned()));
+      }
+      if attr_bool(attrs, "wrap") {
+        d.insert("wrap".into(), Value::Bool(true));
+      }
+      if attr_bool(attrs, "lineNumbers") {
+        d.insert("lineNumbers".into(), Value::Bool(true));
+      }
+      let title = attr_str(attrs, "title");
+      if !title.is_empty() {
+        d.insert("title".into(), Value::String(title.to_owned()));
+      }
+      let data = if d.is_empty() { Value::Null } else { Value::Object(d) };
       Block::new(id, "code_block").with_text(node.text_content()).with_data(data)
     }
     "divider" => Block::new(id, "divider"),
@@ -520,8 +583,19 @@ fn block_from_pm_node(node: &Node, id: String) -> Block {
     "mermaid" => Block::new(id, "code_block").with_text(attr_str(attrs, "source")).with_data(json!({ "language": "mermaid" })),
     "board" => Block::new(id, "code_block").with_text(attr_str(attrs, "source")).with_data(json!({ "language": "mica-board" })),
     "image" => {
+      let mut d = Map::new();
       let src = attr_str(attrs, "src");
-      let data = if src.is_empty() { Value::Null } else { json!({ "url": src }) };
+      if !src.is_empty() {
+        d.insert("url".into(), Value::String(src.to_owned()));
+      }
+      let align = attr_str(attrs, "align");
+      if !align.is_empty() {
+        d.insert("align".into(), Value::String(align.to_owned()));
+      }
+      if let Some(w) = attrs.get("width").and_then(Value::as_f64).filter(|&w| w > 0.0) {
+        d.insert("width".into(), Value::from(w));
+      }
+      let data = if d.is_empty() { Value::Null } else { Value::Object(d) };
       Block::new(id, "image").with_text(attr_str(attrs, "alt")).with_data(data)
     }
     "table" => {
@@ -647,11 +721,12 @@ fn apply_block_diff(doc: &mut MicaDoc, root_id: &str, prev: &[Block], next: &[Bl
 
 struct MicaInputRulesPlugin {
   key: PluginKey,
+  bridge: ThreadBoundWeak,
 }
 
 impl MicaInputRulesPlugin {
-  fn plugin() -> Plugin {
-    Arc::new(Self { key: PluginKey::new("micaInputRules") })
+  fn plugin(bridge: ThreadBoundWeak) -> Plugin {
+    Arc::new(Self { key: PluginKey::new("micaInputRules"), bridge })
   }
 
   fn try_convert(state: &EditorState, from: usize, to: usize, trigger: &str) -> Option<Transaction> {
@@ -756,6 +831,11 @@ impl PluginSpec for MicaInputRulesPlugin {
     event: &KeyEvent,
     dispatch: &mut dyn FnMut(Transaction),
   ) -> bool {
+    if let Some(bridge) = self.bridge.upgrade()
+      && bridge.intercept_key(event)
+    {
+      return true;
+    }
     if event.key == "Enter"
       && !event.ctrl
       && !event.meta
@@ -895,7 +975,7 @@ fn history_key_cmd(handle: ThreadBoundWeak, is_redo: bool) -> BoxCommand {
 }
 
 fn build_plugins(schema: &Schema, weak: ThreadBoundWeak) -> Vec<Plugin> {
-  let mut plugins: Vec<Plugin> = vec![MicaInputRulesPlugin::plugin()];
+  let mut plugins: Vec<Plugin> = vec![MicaInputRulesPlugin::plugin(weak.clone())];
 
   let inline_rules: Vec<_> = ["bold", "italic", "strike", "code"]
     .into_iter()
@@ -1078,6 +1158,52 @@ fn ensure_unique_block_ids(state: &EditorState) -> Option<Transaction> {
 // ── 6. MicaDocumentBridge ────────────────────────────────────────────────────
 
 type PersistCallback = Rc<dyn Fn(String, Option<Vec<u8>>)>;
+type KeyInterceptor = Rc<dyn Fn(&KeyEvent) -> bool>;
+
+fn read_root_front_matter(doc: &MicaDoc) -> String {
+  let root_id = doc.root_block_id();
+  doc
+    .to_blocks()
+    .into_iter()
+    .find(|b| b.id == root_id)
+    .and_then(|b| b.data.get("front_matter").and_then(Value::as_str).map(str::to_owned))
+    .unwrap_or_default()
+}
+
+fn find_utf16_ranges(haystack: &str, query: &str) -> Vec<(usize, usize)> {
+  let needle: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+  if needle.is_empty() || haystack.is_empty() {
+    return Vec::new();
+  }
+  let mut lower_chars: Vec<char> = Vec::with_capacity(haystack.len());
+  let mut spans: Vec<(usize, usize)> = Vec::with_capacity(haystack.len());
+  let mut u16_off = 0usize;
+  for ch in haystack.chars() {
+    let w = ch.len_utf16();
+    for lc in ch.to_lowercase() {
+      lower_chars.push(lc);
+      spans.push((u16_off, u16_off + w));
+    }
+    u16_off += w;
+  }
+  let nlen = needle.len();
+  if lower_chars.len() < nlen {
+    return Vec::new();
+  }
+  let mut out = Vec::new();
+  let mut i = 0usize;
+  while i + nlen <= lower_chars.len() {
+    if lower_chars[i..i + nlen] == needle[..] {
+      let start = spans[i].0;
+      let end = spans[i + nlen - 1].1;
+      out.push((start, end));
+      i += nlen;
+    } else {
+      i += 1;
+    }
+  }
+  out
+}
 
 /// Bridges `mica_core::MicaDoc` (yrs CRDT, sole storage & Undo/Redo truth)
 /// with `nsh_base::rich_editor::view::EditorSession` and reactive UI signals.
@@ -1088,6 +1214,7 @@ pub struct MicaDocumentBridge {
   root_id: RefCell<String>,
   prev_blocks: RefCell<Vec<Block>>,
   on_persist: RefCell<Option<PersistCallback>>,
+  key_interceptor: RefCell<Option<KeyInterceptor>>,
   word_count: Signal<String>,
   block_count: Signal<usize>,
   outline: Signal<Vec<OutlineItem>>,
@@ -1097,6 +1224,7 @@ pub struct MicaDocumentBridge {
   active_level: Signal<u64>,
   active_marks: Signal<Vec<String>>,
   last_edited: Signal<String>,
+  front_matter: Signal<String>,
   session_rev: Signal<u64>,
 }
 
@@ -1136,6 +1264,7 @@ impl MicaDocumentBridge {
       let word_count = signal(compute_word_count_label(state.doc()));
       let block_count = signal(state.doc().child_count());
       let outline = signal(compute_outline(state.doc()));
+      let front_matter = signal(read_root_front_matter(&mica_doc));
       let session = EditorSession::new(state, NodeViews::new());
 
       Self {
@@ -1145,6 +1274,7 @@ impl MicaDocumentBridge {
         root_id: RefCell::new(root_id),
         prev_blocks: RefCell::new(initial_prev),
         on_persist: RefCell::new(None),
+        key_interceptor: RefCell::new(None),
         word_count,
         block_count,
         outline,
@@ -1154,6 +1284,7 @@ impl MicaDocumentBridge {
         active_level: signal(act_level),
         active_marks: signal(act_marks),
         last_edited: signal(String::from(DEFAULT_STATUS_TEXT)),
+        front_matter,
         session_rev: signal(0u64),
       }
     });
@@ -1175,8 +1306,21 @@ impl MicaDocumentBridge {
     *self.on_persist.borrow_mut() = Some(cb);
   }
 
+  /// Registers a UI key interceptor (e.g. for an active caret-anchored slash menu)
+  /// that runs before `RichEditor` keymaps when keys are pressed inside the editor.
+  #[allow(clippy::type_complexity)]
+  pub fn set_key_interceptor(&self, cb: Option<Rc<dyn Fn(&KeyEvent) -> bool>>) {
+    *self.key_interceptor.borrow_mut() = cb;
+  }
+
+  fn intercept_key(&self, event: &KeyEvent) -> bool {
+    let cb = self.key_interceptor.borrow().clone();
+    cb.is_some_and(|f| f(event))
+  }
+
   pub fn load_markdown(&self, markdown: &str) {
     let (mica_doc, root_id, body_blocks) = parse_markdown_to_doc(markdown);
+    let fm = read_root_front_matter(&mica_doc);
     let pm_doc = pm_doc_from_blocks(&self.schema, &body_blocks);
     *self.doc.borrow_mut() = mica_doc;
     *self.root_id.borrow_mut() = root_id;
@@ -1184,15 +1328,16 @@ impl MicaDocumentBridge {
     self.replace_session_doc(pm_doc, TransactionOrigin::Remote("load".into()), None);
     let state = self.session.state();
     self.sync_signals(&state, true);
+    set_if_changed(self.front_matter, fm);
     self.last_edited.set(String::from(DEFAULT_STATUS_TEXT));
     self.session_rev.update(|r| *r += 1);
   }
 
   pub fn apply_remote_update(&self, update: &[u8]) -> Result<(), String> {
-    let body_blocks = {
+    let (body_blocks, fm) = {
       let mut doc = self.doc.borrow_mut();
       doc.apply_update(update).map_err(|e| e.to_string())?;
-      body_blocks_from_doc(&doc)
+      (body_blocks_from_doc(&doc), read_root_front_matter(&doc))
     };
     let pm_doc = pm_doc_from_blocks(&self.schema, &body_blocks);
     *self.prev_blocks.borrow_mut() = blocks_from_pm_doc(&pm_doc);
@@ -1200,6 +1345,7 @@ impl MicaDocumentBridge {
     self.replace_session_doc(pm_doc, TransactionOrigin::Remote("sync".into()), Some(prev_pos));
     let state = self.session.state();
     self.sync_signals(&state, true);
+    set_if_changed(self.front_matter, fm);
     Ok(())
   }
 
@@ -1256,7 +1402,22 @@ impl MicaDocumentBridge {
         Some(match canonical {
           "heading" => make_attrs(id, &[("level", Value::from(lvl)), ("indent", Value::from(indent))]),
           "todo" => make_attrs(id, &[("checked", Value::Bool(attr_bool(old.attrs(), "checked"))), ("indent", Value::from(indent))]),
-          "code_block" => make_attrs(id, &[("language", Value::String(attr_str(old.attrs(), "language").to_owned()))]),
+          "code_block" => make_attrs(
+            id,
+            &[
+              ("language", Value::String(attr_str(old.attrs(), "language").to_owned())),
+              ("wrap", Value::Bool(attr_bool(old.attrs(), "wrap"))),
+              ("lineNumbers", Value::Bool(attr_bool(old.attrs(), "lineNumbers"))),
+              ("title", Value::String(attr_str(old.attrs(), "title").to_owned())),
+            ],
+          ),
+          "quote" => make_attrs(
+            id,
+            &[
+              ("alert", Value::String(attr_str(old.attrs(), "alert").to_owned())),
+              ("indent", Value::from(indent)),
+            ],
+          ),
           _ => make_attrs(id, &[("indent", Value::from(indent))]),
         })
       });
@@ -1331,6 +1492,340 @@ impl MicaDocumentBridge {
     let _ = self.session.dispatch(tr);
   }
 
+  /// Reads the root block's `data["front_matter"]` YAML string from `MicaDoc`.
+  pub fn front_matter(&self) -> String {
+    read_root_front_matter(&self.doc.borrow())
+  }
+
+  /// Updates the root block's `data["front_matter"]` in `MicaDoc`, refreshes
+  /// `front_matter_signal`, and notifies persistence listeners.
+  pub fn set_front_matter(&self, yaml: &str) {
+    let (markdown, diff) = {
+      let root_id = self.root_id.borrow().clone();
+      let mut doc = self.doc.borrow_mut();
+      let before_sv = doc.state_vector();
+      let val = if yaml.is_empty() {
+        Value::Null
+      } else {
+        Value::String(yaml.to_owned())
+      };
+      doc.set_block_prop(&root_id, "front_matter", &val);
+      let diff = doc.encode_diff(&before_sv).ok().filter(|u| !u.is_empty());
+      (serialize_doc_markdown(&doc), diff)
+    };
+    set_if_changed(self.front_matter, yaml.to_owned());
+    self.last_edited.set(String::from(DEFAULT_STATUS_TEXT));
+    self.notify_persist(markdown, diff);
+  }
+
+  pub fn front_matter_signal(&self) -> Signal<String> {
+    self.front_matter
+  }
+
+  /// Returns the caret bounding box in the editor content box for caret-anchored popups.
+  pub fn caret_coords(&self) -> Option<Bounds<Points>> {
+    self.session.coords_at_pos(self.session.state().selection().head())
+  }
+
+  /// Returns `(block_index, rect)` for every laid-out top-level block.
+  pub fn top_level_block_rects(&self) -> Vec<(usize, Bounds<Points>)> {
+    let state = self.session.state();
+    let mut rects = Vec::new();
+    state.doc().for_each(&mut |_, pos, idx| {
+      if let Some(rect) = self.session.node_rect(pos) {
+        rects.push((idx, rect));
+      }
+    });
+    rects
+  }
+
+  /// Deletes top-level blocks `lo..=hi` (inclusive) as a single transaction.
+  pub fn delete_block_range(&self, lo: usize, hi: usize) {
+    let state = self.session.state();
+    let count = state.doc().child_count();
+    if count == 0 {
+      return;
+    }
+    let lo = lo.min(count - 1);
+    let hi = hi.min(count - 1);
+    if lo > hi {
+      return;
+    }
+    let mut start = None;
+    let mut end = None;
+    state.doc().for_each(&mut |node, pos, idx| {
+      if idx == lo {
+        start = Some(pos);
+      }
+      if idx == hi {
+        end = Some(pos + node.node_size());
+      }
+    });
+    let (Some(from), Some(to)) = (start, end) else {
+      return;
+    };
+    let mut tr = state.tr();
+    if lo == 0 && hi + 1 >= count {
+      if let Ok(para) = self.schema.node(
+        "paragraph",
+        Some(make_attrs(new_block_id(), &[])),
+        Fragment::empty(),
+        Vec::new(),
+      ) {
+        let _ = tr.replace_with(0, state.doc().content().size(), Fragment::from(vec![para]));
+      }
+    } else if tr.delete(from, to).is_err() {
+      return;
+    }
+    let clamped = from.min(tr.doc().content().size());
+    if let Ok(r) = tr.doc().resolve(clamped) {
+      tr.set_selection(Selection::near(&r, 1));
+    }
+    tr.scroll_into_view();
+    let _ = self.session.dispatch(tr);
+  }
+
+  /// Serializes top-level blocks `lo..=hi` (inclusive) to Markdown.
+  pub fn copy_block_range_markdown(&self, lo: usize, hi: usize) -> String {
+    let all = blocks_from_pm_doc(self.session.state().doc());
+    if all.is_empty() || lo >= all.len() {
+      return String::new();
+    }
+    let hi = hi.min(all.len() - 1);
+    if lo > hi {
+      return String::new();
+    }
+    let slice = &all[lo..=hi];
+    let mut root = Block::new(DEFAULT_ROOT_ID, "page");
+    root.children = slice.iter().map(|b| b.id.clone()).collect();
+    let mut blocks = Vec::with_capacity(slice.len() + 1);
+    blocks.push(root);
+    blocks.extend_from_slice(slice);
+    let snap = Document {
+      schema_version: SCHEMA_VERSION,
+      root_block_id: DEFAULT_ROOT_ID.to_owned(),
+      blocks,
+    };
+    serialize(&snap, &SerializeOptions::default()).unwrap_or_default()
+  }
+
+  /// Converts active textblock(s) into a `quote` block with GFM `alert` attribute
+  /// (`"note"`, `"tip"`, `"important"`, `"warning"`, `"caution"`, or `""` for plain quote).
+  pub fn set_quote_alert(&self, alert: &str) {
+    let Some(ty) = self.schema.node_type("quote") else {
+      return;
+    };
+    let state = self.session.state();
+    let mut tr = state.tr();
+    let alert_owned = alert.to_owned();
+    for range in state.selection().ranges() {
+      let _ = tr.set_block_type_with(range.from.pos, range.to.pos, &ty, &|old| {
+        let id = attr_str(old.attrs(), "id").to_owned();
+        let indent = attr_u64(old.attrs(), "indent", 0);
+        Some(make_attrs(
+          id,
+          &[
+            ("alert", Value::String(alert_owned.clone())),
+            ("indent", Value::from(indent)),
+          ],
+        ))
+      });
+    }
+    if tr.doc_changed() {
+      tr.scroll_into_view();
+      let _ = self.session.dispatch(tr);
+    }
+  }
+
+  /// Deletes ONLY the `/query` token ending at the caret (preserving any preceding
+  /// text on the same line) and applies the requested block, callout, or board template.
+  pub fn replace_slash_token_and_apply(
+    &self,
+    kind: &str,
+    level: Option<u64>,
+    alert: Option<&str>,
+    template: Option<&str>,
+  ) {
+    {
+      let state = self.session.state();
+      let sel = state.selection();
+      let head = sel.head();
+      if let Ok(r) = state.doc().resolve(head)
+        && r.parent().is_textblock()
+      {
+        let block_start = r.start(r.depth);
+        let before = r.parent().content().text_between(0, r.parent_offset, None, Some("\u{fffc}"));
+        if let Some((slash_byte, _)) = crate::editor_slash::extract_slash_query(&before) {
+          let slash_u16 = utf16_len(&before[..slash_byte]);
+          let from = block_start + slash_u16;
+          if from < head {
+            let mut tr = state.tr();
+            if tr.delete(from, head).is_ok() {
+              let _ = self.session.dispatch(tr);
+            }
+          }
+        }
+      }
+    }
+
+    match kind {
+      "__ai__" => {}
+      "paragraph" => self.set_block_type("paragraph", None),
+      "heading" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6" => {
+        let inferred = match kind {
+          "heading1" => Some(1),
+          "heading2" => Some(2),
+          "heading3" => Some(3),
+          "heading4" => Some(4),
+          "heading5" => Some(5),
+          "heading6" => Some(6),
+          _ => None,
+        };
+        self.set_block_type("heading", level.or(inferred).or(Some(1)));
+      }
+      "bulleted_list" | "numbered_list" | "todo" => self.set_block_type(kind, None),
+      "quote" => {
+        if let Some(a) = alert.filter(|a| !a.is_empty()) {
+          self.set_quote_alert(a);
+        } else {
+          self.set_quote_alert("");
+        }
+      }
+      "code_block" => self.insert_custom_block("code_block", "", Some("rust")),
+      "math" | "math_block" => self.insert_custom_block("math", r"E = mc^2", None),
+      "mermaid" => {
+        self.insert_custom_block("mermaid", "graph LR\n  A[Mica] --> B[Pure Rust]", None);
+      }
+      "board" => {
+        let starter = mica_board::starter_board_json(template.unwrap_or("whiteboard"));
+        self.insert_custom_block("board", &starter, None);
+      }
+      "table" => self.insert_table(2, 2),
+      "divider" => self.insert_divider(),
+      "image" => self.insert_custom_block("image", "", Some("")),
+      _ => self.set_block_type("paragraph", None),
+    }
+    self.session.focus();
+  }
+
+  /// Updates the source text of an embedded `board` / `mermaid` / `math` atom block
+  /// or `code_block` textblock at document position `pos` (used for 3-way merge write-back).
+  pub fn update_block_source_at(&self, pos: usize, new_source: &str) {
+    let state = self.session.state();
+    let Some(node) = state.doc().node_at(pos) else {
+      return;
+    };
+    let mut tr = state.tr();
+    match node.ty().name() {
+      "board" | "mermaid" | "math" => {
+        let _ = tr.set_node_attribute(pos, "source", Value::String(new_source.to_owned()));
+      }
+      "code_block" => {
+        let from = pos + 1;
+        let to = pos + node.node_size() - 1;
+        if new_source.is_empty() {
+          let _ = tr.delete(from, to);
+        } else {
+          tr.insert_text(new_source, Some(from), Some(to));
+        }
+      }
+      _ => return,
+    }
+    if tr.doc_changed() {
+      let _ = self.session.dispatch(tr);
+    }
+  }
+
+  /// Applies a `link` mark with `href` to the current selection (or inserts the URL
+  /// as a linked run if selection is collapsed). Empty `href` removes the link mark.
+  pub fn set_link_mark(&self, href: &str) {
+    let trimmed = href.trim();
+    if trimmed.is_empty() {
+      self.unset_link_mark();
+      return;
+    }
+    let Some(ty) = self.schema.mark_type("link") else {
+      return;
+    };
+    let mut attrs = Attrs::new();
+    attrs.insert("href".into(), Value::String(trimmed.to_owned()));
+    let state = self.session.state();
+    if state.selection().empty() {
+      if let Ok(mark) = self.schema.mark("link", Some(attrs)) {
+        let pos = state.selection().from();
+        let node = self.schema.text(trimmed, vec![mark]);
+        let mut tr = state.tr();
+        if tr.replace_with(pos, pos, Fragment::from(vec![node])).is_ok() {
+          tr.scroll_into_view();
+          let _ = self.session.dispatch(tr);
+        }
+      }
+    } else {
+      self.session.run(&set_mark(ty, attrs));
+    }
+  }
+
+  /// Removes the `link` mark across the current selection or enclosing link range.
+  pub fn unset_link_mark(&self) {
+    if let Some(ty) = self.schema.mark_type("link") {
+      self.session.run(&unset_mark(ty, true));
+    }
+  }
+
+  /// Returns the `href` of an active `link` mark at the current selection, if any.
+  pub fn current_link_href(&self) -> Option<String> {
+    let attrs = self.session.get_attributes("link");
+    attrs
+      .get("href")
+      .and_then(Value::as_str)
+      .filter(|s| !s.is_empty())
+      .map(str::to_owned)
+  }
+
+  /// Returns plain text covered by the current selection (for inline AI rewrite).
+  pub fn selected_text(&self) -> String {
+    let state = self.session.state();
+    let sel = state.selection();
+    if sel.empty() {
+      return String::new();
+    }
+    state
+      .doc()
+      .text_between(sel.from(), sel.to(), Some("\n"), None)
+  }
+
+  /// Case-insensitive search over all textblocks, returning document `(from, to)` ranges.
+  pub fn find_matches(&self, query: &str) -> Vec<(usize, usize)> {
+    if query.is_empty() {
+      return Vec::new();
+    }
+    let state = self.session.state();
+    let mut matches = Vec::new();
+    state.doc().descendants(&mut |node, pos, _, _| {
+      if node.is_textblock() {
+        let text = node.content().text_between(0, node.content().size(), None, Some("\u{fffc}"));
+        for (s, e) in find_utf16_ranges(&text, query) {
+          matches.push((pos + 1 + s, pos + 1 + e));
+        }
+        return false;
+      }
+      true
+    });
+    matches
+  }
+
+  /// Selects `[from..to]` and scrolls it into view.
+  pub fn select_range(&self, from: usize, to: usize) {
+    let state = self.session.state();
+    let max = state.doc().content().size();
+    let f = from.min(max);
+    let t = to.min(max);
+    let mut tr = state.tr();
+    tr.set_selection(TextSelection::create(state.doc(), f, Some(t)));
+    tr.scroll_into_view();
+    let _ = self.session.dispatch(tr);
+  }
+
   pub fn export_markdown(&self) -> String {
     serialize_doc_markdown(&self.doc.borrow())
   }
@@ -1374,7 +1869,7 @@ impl MicaDocumentBridge {
   // ── Internal Sync Helpers ────────────────────────────────────────────────
 
   fn apply_history_step(&self, is_redo: bool) {
-    let (body_blocks, markdown, crdt_update) = {
+    let (body_blocks, markdown, crdt_update, fm) = {
       let mut doc = self.doc.borrow_mut();
       let before_sv = doc.state_vector();
       let changed = if is_redo { doc.redo() } else { doc.undo() };
@@ -1382,7 +1877,7 @@ impl MicaDocumentBridge {
         return;
       }
       let diff = doc.encode_diff(&before_sv).ok().filter(|u| !u.is_empty());
-      (body_blocks_from_doc(&doc), serialize_doc_markdown(&doc), diff)
+      (body_blocks_from_doc(&doc), serialize_doc_markdown(&doc), diff, read_root_front_matter(&doc))
     };
     let pm_doc = pm_doc_from_blocks(&self.schema, &body_blocks);
     *self.prev_blocks.borrow_mut() = blocks_from_pm_doc(&pm_doc);
@@ -1390,6 +1885,7 @@ impl MicaDocumentBridge {
     self.replace_session_doc(pm_doc, TransactionOrigin::History, Some(prev_pos));
     let state = self.session.state();
     self.sync_signals(&state, true);
+    set_if_changed(self.front_matter, fm);
     self.last_edited.set(String::from(DEFAULT_STATUS_TEXT));
     self.notify_persist(markdown, crdt_update);
   }
@@ -1772,6 +2268,109 @@ fn hello() {}
       bridge.insert_custom_block("math", r"E = mc^2", None);
       let md = bridge.export_markdown();
       assert!(md.contains("## Title") && md.contains("- item one") && md.contains("---") && md.contains("E = mc^2"));
+    });
+  }
+
+  #[test]
+  fn code_block_quote_alert_and_image_attrs_round_trip() {
+    let schema = mica_schema();
+    let blocks = vec![
+      Block::new("b-code", "code_block").with_text("let a = 1;").with_data(json!({
+        "language": "rust",
+        "wrap": true,
+        "lineNumbers": true,
+        "title": "main.rs"
+      })),
+      Block::new("b-quote", "quote").with_text("Heads up").with_data(json!({
+        "alert": "warning"
+      })),
+      Block::new("b-img", "image").with_text("Diagram").with_data(json!({
+        "url": "https://example.com/a.png",
+        "align": "center",
+        "width": 480.0
+      })),
+    ];
+    let pm_doc = pm_doc_from_blocks(&schema, &blocks);
+    let projected = blocks_from_pm_doc(&pm_doc);
+    assert_eq!(projected.len(), 3);
+    assert_eq!(projected[0].data["language"], "rust");
+    assert_eq!(projected[0].data["wrap"], true);
+    assert_eq!(projected[0].data["lineNumbers"], true);
+    assert_eq!(projected[0].data["title"], "main.rs");
+    assert_eq!(projected[1].data["alert"], "warning");
+    assert_eq!(projected[2].data["url"], "https://example.com/a.png");
+    assert_eq!(projected[2].data["align"], "center");
+    assert_eq!(projected[2].data["width"].as_f64(), Some(480.0));
+  }
+
+  #[test]
+  fn quote_alert_front_matter_and_find_matches() {
+    with_runtime(|| {
+      let md = "---\ntags: [rust, mica]\n---\n\n> [!TIP]\n> Useful Mica tip\n\nSecond MICA line with 中文 mica.";
+      let bridge = MicaDocumentBridge::from_markdown(md);
+      assert_eq!(bridge.front_matter().trim(), "tags: [rust, mica]");
+      assert_eq!(bridge.front_matter_signal().get_untracked().trim(), "tags: [rust, mica]");
+
+      let doc = bridge.session().state().doc().clone();
+      assert_eq!(doc.child(0).ty().name(), "quote");
+      assert_eq!(attr_str(doc.child(0).attrs(), "alert"), "tip");
+
+      let hits = bridge.find_matches("mica");
+      assert_eq!(hits.len(), 3, "expected 3 case-insensitive hits: {hits:?}");
+      bridge.select_range(hits[1].0, hits[1].1);
+      assert_eq!(bridge.selected_text(), "MICA");
+
+      let persisted = Rc::new(RefCell::new(Vec::<String>::new()));
+      let p_ref = persisted.clone();
+      bridge.set_on_persist(Rc::new(move |m, _| p_ref.borrow_mut().push(m)));
+      bridge.set_front_matter("status: done");
+      assert_eq!(bridge.front_matter(), "status: done");
+      assert_eq!(bridge.front_matter_signal().get_untracked(), "status: done");
+      assert!(persisted.borrow().last().is_some_and(|s| s.contains("status: done")));
+    });
+  }
+
+  #[test]
+  fn slash_token_midline_board_template_block_range_and_links() {
+    with_runtime(|| {
+      let bridge = MicaDocumentBridge::from_markdown("Keep me /tip");
+      let session = bridge.session();
+      let end_pos = session.state().doc().content().size() - 1;
+      bridge.select_range(end_pos, end_pos);
+      bridge.replace_slash_token_and_apply("quote", None, Some("tip"), None);
+      let st0 = session.state();
+      let b0 = st0.doc().child(0);
+      assert_eq!(b0.ty().name(), "quote");
+      assert_eq!(attr_str(b0.attrs(), "alert"), "tip");
+      assert_eq!(b0.text_content(), "Keep me ");
+
+      bridge.replace_slash_token_and_apply("board", None, None, Some("flowchart"));
+      assert!(bridge.export_markdown().contains("```mica-board"));
+
+      // Update board source via update_block_source_at
+      let mut board_pos = None;
+      session.state().doc().for_each(&mut |n, pos, _| {
+        if n.ty().name() == "board" {
+          board_pos = Some(pos);
+        }
+      });
+      let bpos = board_pos.expect("board block inserted");
+      bridge.update_block_source_at(bpos, r#"{"mode":"flowchart"}"#);
+      assert!(bridge.export_markdown().contains(r#"{"mode":"flowchart"}"#));
+
+      // Copy & delete block range
+      let copied = bridge.copy_block_range_markdown(0, 0);
+      assert!(copied.contains("[!TIP]"));
+      let before_count = session.state().doc().child_count();
+      bridge.delete_block_range(1, 1);
+      assert_eq!(session.state().doc().child_count(), before_count - 1);
+
+      // Link mark set & unset
+      bridge.select_range(1, 5);
+      bridge.set_link_mark("https://mica.dev");
+      assert_eq!(bridge.current_link_href().as_deref(), Some("https://mica.dev"));
+      bridge.unset_link_mark();
+      assert_eq!(bridge.current_link_href(), None);
     });
   }
 }

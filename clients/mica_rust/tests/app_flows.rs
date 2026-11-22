@@ -27,15 +27,15 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.wait_for("反向链接").unwrap();
   app.press("id:right-sidebar-close").unwrap();
 
-  // 3. Bottom Account Menu opens popover and closes cleanly
+  // 3. Bottom Account Menu opens 1:1 stacked-card popover (`本地工作区` / `这台设备` / `切换世界…`) and closes cleanly
   app.press("id:account-menu-btn").unwrap();
-  app.wait_for("本地离线 Vault · SQLite").unwrap();
-  app.wait_for("设置与云端同步").unwrap();
+  app.wait_for("这台设备").unwrap();
+  app.wait_for("切换世界…").unwrap();
   app.press("id:account-menu-btn").unwrap();
 
-  // 4. Workspace Switcher popover opens and lists active workspace
+  // 4. 320px Workspace Switcher popover opens and lists active workspace + import submenu
   app.press("id:workspace-switcher-btn").unwrap();
-  app.wait_for("切换工作区").unwrap();
+  app.wait_for("新建工作区").unwrap();
   app.press("id:workspace-menu-close").unwrap();
 
   // 5. Create a new folder and a new page via sidebar icons
@@ -54,15 +54,15 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.press("id:ed-divider").unwrap();
   app.press("id:ed-undo").unwrap();
 
-  // 8. Open slash menu and insert a code block + table
+  // 8. Open caret-anchored 22-item slash menu and insert an original borderless code block + table
   app.press("id:ed-slash-open").unwrap();
-  app.wait_for("代码块").unwrap();
+  app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
-  app.wait_for("rust").unwrap();
+  app.wait_for("id:code-block-editor").unwrap();
   app.press("id:ed-table-quick").unwrap();
 
-  // 9. Whiteboard view (M4: BoardSession + Dot-Grid Canvas + Floating Inspector)
-  app.press("id:mode-board").unwrap();
+  // 9. Whiteboard view (Feishu 1:1 50px topbar, 10-tool vertical dock, contextual inspector)
+  app.press("id:ed-open-board").unwrap();
   app.wait_for("Auto Layout").unwrap();
   app.press("id:board-add-sticky").unwrap();
   app.press("id:board-add-node").unwrap();
@@ -83,9 +83,9 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.press("id:search-hit-0").unwrap();
   app.wait_for("未命名页面 2纯Rust架构设计").unwrap();
 
-  // 11. Two-column Settings Modal: Appearance, Cloud Account, Data Export, Shortcuts/About
+  // 11. 1120×840 Two-column Settings Modal: Appearance, Cloud Account, Data Export, Shortcuts
   app.press("id:open-settings-btn").unwrap();
-  app.wait_for("外观与语言").unwrap();
+  app.wait_for("外观").unwrap();
   app.press("id:settings-toggle-theme").unwrap();
   app.wait_for("当前：深色模式").unwrap();
   app.press("id:settings-toggle-locale").unwrap();
@@ -146,7 +146,7 @@ fn rich_editor_keyboard_enter_ctrl_a_and_editable_code_block() {
 
   // 3. Insert an editable code block, click inside it, type multi-line code + Enter!
   app.press("id:ed-slash-open").unwrap();
-  app.wait_for("代码块").unwrap();
+  app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
   app.wait_for("id:code-block-editor").unwrap();
 
@@ -169,4 +169,59 @@ fn rich_editor_keyboard_enter_ctrl_a_and_editable_code_block() {
   app.wait_for("id:restore-snapshot-0").unwrap();
   app.press("id:restore-snapshot-0").unwrap();
   app.wait_for("Replaced body").unwrap();
+}
+
+#[test]
+fn flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Top-left M-logo Application Menu (`文件` / `视图` / `历史` / `帮助`)
+  app.press("id:app-menu-btn").unwrap();
+  app.wait_for("文件").unwrap();
+  app.wait_for("视图").unwrap();
+  app.wait_for("帮助").unwrap();
+  app.press_key("escape").unwrap();
+
+  // 2. Bottom Account Menu -> `切换世界…` -> Full-window split World Switcher
+  app.press("id:account-menu-btn").unwrap();
+  app.wait_for("id:account-switch-world-btn").unwrap();
+  app.press("id:account-switch-world-btn").unwrap();
+  app.wait_for("id:world-tab-cloud").unwrap();
+  app.wait_for("id:world-tab-local").unwrap();
+  app.press("id:world-tab-local").unwrap();
+  app.wait_for("在此设备上使用").unwrap();
+  app.press("id:world-enter-local-btn").unwrap();
+
+  // 3. Sidebar top row -> Knowledge Graph (900×640) & Workspace Settings (440px)
+  app.press("id:open-graph-btn").unwrap();
+  app.wait_for("关系图").unwrap();
+  app.press_key("escape").unwrap();
+
+  app.press("id:open-ws-settings-btn").unwrap();
+  app.wait_for("工作区设置").unwrap();
+  app.press_key("escape").unwrap();
+
+  // 4. Right sidebar -> 980×640 Version History Diff modal
+  app.press("id:toggle-right-panel-btn").unwrap();
+  app.wait_for("id:open-version-history-btn").unwrap();
+  app.press("id:open-version-history-btn").unwrap();
+  app.wait_for("版本历史").unwrap();
+  app.press_key("escape").unwrap();
+  app.press("id:right-sidebar-close").unwrap();
+
+  // 5. Draggable PageWidthFrame grips are mounted on the editor canvas
+  app.wait_for("id:page-width-grip-left").unwrap();
+  app.wait_for("id:page-width-grip-right").unwrap();
+
+  // 6. 1120×840 Settings Dialog with all 8 tabs including Recycle Bin & Live Appearance Preview
+  app.press("id:open-settings-btn").unwrap();
+  app.wait_for("id:settings-appearance-preview").unwrap();
+  app.press("id:settings-tab-trash").unwrap();
+  app.wait_for("回收站").unwrap();
+  app.press("id:settings-close-btn").unwrap();
 }

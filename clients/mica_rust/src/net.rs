@@ -12,17 +12,24 @@ use mica_sync::{
   MemoryMirrorStorage, SyncConfig, SyncEffect, SyncEngine, SyncEvent, SyncPhase, SyncStorage,
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
 use mica_client::protocol::{LoginRequest, decode_auth};
+#[cfg(not(target_arch = "wasm32"))]
+use serde_json::{Value, json};
 
 #[cfg(not(target_arch = "wasm32"))]
 const HEALTH_TIMEOUT_SECS: u64 = 5;
 #[cfg(not(target_arch = "wasm32"))]
 const LOGIN_TIMEOUT_SECS: u64 = 10;
+#[cfg(not(target_arch = "wasm32"))]
+const API_TIMEOUT_SECS: u64 = 15;
+#[cfg(not(target_arch = "wasm32"))]
+const AI_TIMEOUT_SECS: u64 = 60;
 
 /// Serializable cloud connection & session configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,8 +39,156 @@ pub struct CloudConfig {
   pub email: Option<String>,
 }
 
+/// Result of probing a Mica server's `/api/ready` (or `/api/health`) endpoint.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerProbeMeta {
+  pub reachable: bool,
+  pub version: Option<String>,
+  pub registration_open: Option<bool>,
+}
+
+/// Authenticated or newly registered cloud user identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudUser {
+  pub id: Option<String>,
+  pub email: String,
+  pub display_name: String,
+  pub verified: bool,
+}
+
+/// Public share link status for a cloud document.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareState {
+  pub shared: bool,
+  pub token: Option<String>,
+  pub url: Option<String>,
+}
+
+/// Individual comment message inside a [`CommentThread`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentItem {
+  pub id: String,
+  #[serde(default)]
+  pub author_id: String,
+  #[serde(default)]
+  pub author_name: String,
+  pub body: String,
+  #[serde(default)]
+  pub created_at: String,
+  #[serde(default)]
+  pub edited_at: Option<String>,
+}
+
+/// Document comment thread with optional resolved anchor range.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentThread {
+  pub id: String,
+  #[serde(default)]
+  pub status: String,
+  #[serde(default)]
+  pub quote: String,
+  #[serde(default)]
+  pub created_by: String,
+  #[serde(default)]
+  pub created_at: String,
+  #[serde(default)]
+  pub resolved: bool,
+  #[serde(default)]
+  pub resolved_by: Option<String>,
+  #[serde(default)]
+  pub resolved_at: Option<String>,
+  #[serde(default)]
+  pub start_block: Option<String>,
+  #[serde(default)]
+  pub start_offset: Option<u32>,
+  #[serde(default)]
+  pub end_block: Option<String>,
+  #[serde(default)]
+  pub end_offset: Option<u32>,
+  #[serde(default)]
+  pub comments: Vec<CommentItem>,
+}
+
+/// Personal Access Token metadata returned by `/api/auth/tokens`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiTokenInfo {
+  pub id: String,
+  pub name: String,
+  pub can_write: bool,
+  pub created_at: String,
+  pub expires_at: Option<String>,
+  pub last_used_at: Option<String>,
+}
+
+/// Newly minted Personal Access Token including its one-time plaintext secret.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedApiToken {
+  pub info: ApiTokenInfo,
+  pub token: String,
+}
+
+/// Configured cloud AI provider entry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiProviderConfig {
+  pub id: String,
+  pub name: String,
+  pub base_url: String,
+  pub protocol: String,
+  pub has_key: bool,
+  pub key_tail: String,
+  pub model: String,
+  pub active: bool,
+}
+
+/// Workspace member metadata returned by `GET /api/workspaces/{ws}/members`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceMemberInfo {
+  pub user_id: String,
+  pub email: String,
+  pub display_name: String,
+  pub role: String,
+  pub joined_at: String,
+  pub avatar_version: Option<String>,
+}
+
+/// Workspace invitation metadata (sent or received).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceInvitationInfo {
+  pub id: String,
+  pub workspace_id: String,
+  pub workspace_name: Option<String>,
+  pub email: Option<String>,
+  pub role: String,
+  pub invited_by: Option<String>,
+  pub created_at: String,
+}
+
+/// Node in a cloud workspace's page-link graph.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudGraphNode {
+  pub view_id: String,
+  pub name: String,
+  pub degree: i64,
+}
+
+/// Directed edge (`source -> target`) in a cloud workspace's page-link graph.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudGraphEdge {
+  pub source: String,
+  pub target: String,
+}
+
+/// Payload returned by `GET /api/workspaces/{ws}/graph`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudGraphPayload {
+  pub nodes: Vec<CloudGraphNode>,
+  pub edges: Vec<CloudGraphEdge>,
+  pub unlinked: i64,
+}
+
 /// Coordinates cloud HTTP auth/health probes, [`ClaimTracker`] ownership
-/// generations, and per-document Sans-I/O [`SyncEngine`] instances.
+/// generations, cloud resource APIs, and per-document Sans-I/O [`SyncEngine`]
+/// instances.
 #[derive(Debug, Clone)]
 pub struct CloudConnector {
   config: CloudConfig,
@@ -49,39 +204,23 @@ impl CloudConnector {
     let endpoints = ApiEndpoints::new(config.server_url.trim());
     config.server_url = endpoints.base_url().to_string();
 
-    let has_token = config
-      .access_token
-      .as_deref()
-      .is_some_and(|t| !t.trim().is_empty());
+    let has_token = config.access_token.as_deref().is_some_and(|t| !t.trim().is_empty());
     let origin = if has_token && !endpoints.base_url().is_empty() {
-      WorldOrigin::Cloud {
-        server_url: endpoints.base_url().to_string(),
-      }
+      WorldOrigin::Cloud { server_url: endpoints.base_url().to_string() }
     } else {
       WorldOrigin::Local
     };
 
-    Self {
-      config,
-      endpoints,
-      claims: ClaimTracker::new(origin),
-      phase: SyncPhase::Offline,
-    }
+    Self { config, endpoints, claims: ClaimTracker::new(origin), phase: SyncPhase::Offline }
   }
 
   /// Probe `GET /api/health` on the configured server.
-  ///
-  /// Returns a concise human-readable status summary on success, or a clean
-  /// error message on network/HTTP failure or on `wasm32`.
   pub fn check_health(&self) -> Result<String, String> {
-    if self.endpoints.base_url().is_empty() {
-      return Err("server URL is empty".to_string());
-    }
+    self.require_server()?;
     #[cfg(not(target_arch = "wasm32"))]
     {
       let url = self.endpoints.health();
-      let agent = http_agent(HEALTH_TIMEOUT_SECS);
-      let mut resp = agent
+      let mut resp = http_agent(HEALTH_TIMEOUT_SECS)
         .get(&url)
         .call()
         .map_err(|e| format!("health check failed for {url}: {e}"))?;
@@ -97,12 +236,39 @@ impl CloudConnector {
     }
   }
 
-  /// Authenticate via `POST /api/auth/login`, persist the returned access token
-  /// and user email in memory, and advance [`ClaimTracker`] to the cloud origin.
-  pub fn login(&mut self, email: &str, password: &str) -> Result<String, String> {
-    if self.endpoints.base_url().is_empty() {
+  /// Probe `origin` via `GET /api/ready` (falling back to `GET /api/health`) to
+  /// discover reachability, server version, and open-registration status.
+  pub fn probe_server_meta(&self, origin: &str) -> Result<ServerProbeMeta, String> {
+    let target = {
+      let t = origin.trim().trim_end_matches('/');
+      if t.is_empty() { self.endpoints.base_url().to_string() } else { t.to_string() }
+    };
+    if target.is_empty() {
       return Err("server URL is empty".to_string());
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let agent = http_agent(HEALTH_TIMEOUT_SECS);
+      for path in ["/api/ready", "/api/health"] {
+        if let Ok(mut resp) = agent.get(&format!("{target}{path}")).call() {
+          let body = resp.body_mut().read_to_string().unwrap_or_default();
+          return Ok(parse_probe_meta(&body));
+        }
+      }
+      Ok(ServerProbeMeta::default())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = target;
+      Err("blocking HTTP probe is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Authenticate via `POST /api/auth/login`, persist token & email in memory,
+  /// and advance [`ClaimTracker`] to the cloud origin.
+  pub fn login(&mut self, email: &str, password: &str) -> Result<String, String> {
+    self.require_server()?;
     let email_trimmed = email.trim();
     if email_trimmed.is_empty() || password.is_empty() {
       return Err("email and password are required".to_string());
@@ -111,14 +277,9 @@ impl CloudConnector {
     #[cfg(not(target_arch = "wasm32"))]
     {
       let claim = self.claims.capture();
-      let url = self.endpoints.login();
-      let payload = LoginRequest {
-        email: email_trimmed.to_string(),
-        password: password.to_string(),
-      };
-      let agent = http_agent(LOGIN_TIMEOUT_SECS);
-      let mut resp = agent
-        .post(&url)
+      let payload = LoginRequest { email: email_trimmed.to_string(), password: password.to_string() };
+      let mut resp = http_agent(LOGIN_TIMEOUT_SECS)
+        .post(&self.endpoints.login())
         .send_json(&payload)
         .map_err(|e| format!("login request failed: {e}"))?;
       let body = resp
@@ -145,8 +306,522 @@ impl CloudConnector {
     }
   }
 
-  /// Clear stored credentials and advance [`ClaimTracker`] back to
-  /// [`WorldOrigin::Local`].
+  /// Register a new account via `POST /api/auth/register`.
+  pub fn register(&self, email: &str, display_name: &str, password: &str) -> Result<CloudUser, String> {
+    let base = self.require_server()?;
+    let (email_t, display_t) = (email.trim(), display_name.trim());
+    if email_t.is_empty() || password.is_empty() {
+      return Err("email and password are required".to_string());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let payload = json!({
+        "email": email_t,
+        "display_name": if display_t.is_empty() { email_t } else { display_t },
+        "password": password,
+      });
+      let mut resp = http_agent(LOGIN_TIMEOUT_SECS)
+        .post(&format!("{base}/api/auth/register"))
+        .send_json(&payload)
+        .map_err(|e| format!("registration failed: {e}"))?;
+      let body = resp.body_mut().read_to_string().unwrap_or_default();
+      Ok(parse_register_user(&body, email_t, display_t))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (base, email_t, display_t, password);
+      Err("blocking HTTP registration is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Request a password-reset email (`POST /api/auth/password/forgot`, falling
+  /// back to `POST /api/auth/forgot-password` on 404).
+  pub fn forgot_password(&self, email: &str) -> Result<(), String> {
+    let base = self.require_server()?;
+    let email_t = email.trim();
+    if email_t.is_empty() {
+      return Err("email is required".to_string());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let payload = json!({ "email": email_t });
+      let agent = http_agent(LOGIN_TIMEOUT_SECS);
+      match agent.post(&format!("{base}/api/auth/password/forgot")).send_json(&payload) {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::StatusCode(404)) => {
+          agent
+            .post(&format!("{base}/api/auth/forgot-password"))
+            .send_json(&payload)
+            .map_err(|e| format!("forgot password request failed: {e}"))?;
+          Ok(())
+        }
+        Err(e) => Err(format!("forgot password request failed: {e}")),
+      }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (base, email_t);
+      Err("blocking HTTP forgot-password is unavailable on wasm32".to_string())
+    }
+  }
+
+  // ── Document Sharing ────────────────────────────────────────────────────
+
+  /// Query current public share state for a cloud document.
+  pub fn get_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_get(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
+        API_TIMEOUT_SECS,
+      )?;
+      parse_share_state(&body, self.endpoints.base_url())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id);
+      Err("blocking HTTP share query is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Create or retrieve the active public share link for a cloud document.
+  pub fn create_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
+        &json!({}),
+        API_TIMEOUT_SECS,
+      )?;
+      parse_share_state(&body, self.endpoints.base_url())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id);
+      Err("blocking HTTP share creation is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Revoke the active public share link for a cloud document.
+  pub fn delete_share(&self, workspace_id: Uuid, document_id: Uuid) -> Result<ShareState, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_delete(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/share"),
+        API_TIMEOUT_SECS,
+      )?;
+      if body.trim().is_empty() {
+        return Ok(ShareState::default());
+      }
+      parse_share_state(&body, self.endpoints.base_url())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id);
+      Err("blocking HTTP share deletion is unavailable on wasm32".to_string())
+    }
+  }
+
+  // ── Document Comments ───────────────────────────────────────────────────
+
+  /// List comment threads for a cloud document.
+  pub fn list_comments(&self, workspace_id: Uuid, document_id: Uuid) -> Result<Vec<CommentThread>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_get(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments"),
+        API_TIMEOUT_SECS,
+      )?;
+      parse_comment_threads(&body)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id);
+      Err("blocking HTTP comments fetch is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Create a new anchored comment thread on a cloud document.
+  #[allow(clippy::too_many_arguments)]
+  pub fn create_comment(
+    &self,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    start_block: &str,
+    start_offset: u32,
+    end_block: &str,
+    end_offset: u32,
+    quote: &str,
+    body: &str,
+  ) -> Result<CommentThread, String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+      return Err("comment body cannot be empty".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let payload = json!({
+        "start_block": start_block, "start_offset": start_offset,
+        "end_block": end_block, "end_offset": end_offset,
+        "quote": quote, "body": trimmed,
+      });
+      let resp = self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments"),
+        &payload,
+        API_TIMEOUT_SECS,
+      )?;
+      let val: Value = serde_json::from_str(&resp).map_err(|e| format!("invalid create comment response: {e}"))?;
+      parse_comment_thread(val.get("thread").unwrap_or(&val))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id, start_block, start_offset, end_block, end_offset, quote, trimmed);
+      Err("blocking HTTP comment creation is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Reply to an existing comment thread.
+  pub fn reply_comment(
+    &self,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    thread_id: Uuid,
+    body: &str,
+  ) -> Result<CommentItem, String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+      return Err("reply body cannot be empty".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let resp = self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/reply"),
+        &json!({ "body": trimmed }),
+        API_TIMEOUT_SECS,
+      )?;
+      let val: Value = serde_json::from_str(&resp).map_err(|e| format!("invalid comment reply response: {e}"))?;
+      Ok(parse_comment_item(val.get("comment").unwrap_or(&val)))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id, thread_id, trimmed);
+      Err("blocking HTTP comment reply is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Mark a comment thread resolved or reopened.
+  pub fn resolve_comment(
+    &self,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    thread_id: Uuid,
+    resolved: bool,
+  ) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}/resolve"),
+        &json!({ "resolved": resolved }),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id, thread_id, resolved);
+      Err("blocking HTTP comment resolve is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Delete a comment thread.
+  pub fn delete_comment(&self, workspace_id: Uuid, document_id: Uuid, thread_id: Uuid) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_delete(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/comments/{thread_id}"),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id, thread_id);
+      Err("blocking HTTP comment delete is unavailable on wasm32".to_string())
+    }
+  }
+
+  // ── Personal Access Tokens ──────────────────────────────────────────────
+
+  /// List Personal Access Tokens for the signed-in user.
+  pub fn list_tokens(&self) -> Result<Vec<ApiTokenInfo>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      parse_token_list(&self.authed_get("/api/auth/tokens", API_TIMEOUT_SECS)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      Err("blocking HTTP token list is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Mint a new Personal Access Token (`POST /api/auth/tokens`).
+  pub fn create_token(
+    &self,
+    name: &str,
+    can_write: bool,
+    expires_in_days: Option<i64>,
+  ) -> Result<CreatedApiToken, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+      return Err("token name cannot be empty".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let scopes = if can_write { vec!["read", "write"] } else { vec!["read"] };
+      let mut payload = json!({ "name": trimmed, "scopes": scopes });
+      if let Some(days) = expires_in_days {
+        payload["expires_in_days"] = json!(days);
+      }
+      parse_created_token(&self.authed_post_json("/api/auth/tokens", &payload, API_TIMEOUT_SECS)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (trimmed, can_write, expires_in_days);
+      Err("blocking HTTP token creation is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Revoke an existing Personal Access Token (`DELETE /api/auth/tokens/{id}`).
+  pub fn revoke_token(&self, token_id: &str) -> Result<(), String> {
+    let trimmed = token_id.trim();
+    if trimmed.is_empty() {
+      return Err("token id cannot be empty".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_delete(&format!("/api/auth/tokens/{trimmed}"), API_TIMEOUT_SECS)?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = trimmed;
+      Err("blocking HTTP token revocation is unavailable on wasm32".to_string())
+    }
+  }
+
+  // ── AI Settings & Completion ────────────────────────────────────────────
+
+  /// List configured AI providers from `GET /api/ai/settings`.
+  pub fn list_ai_providers(&self) -> Result<Vec<AiProviderConfig>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      parse_ai_providers(&self.authed_get("/api/ai/settings", API_TIMEOUT_SECS)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      Err("blocking HTTP AI settings fetch is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Save or activate an AI provider via `PATCH /api/ai/settings`.
+  pub fn save_ai_provider(
+    &self,
+    config: &AiProviderConfig,
+    api_key: Option<&str>,
+  ) -> Result<Vec<AiProviderConfig>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let mut payload = json!({
+        "provider_id": config.id,
+        "provider": config.protocol,
+        "base_url": config.base_url,
+        "model": config.model,
+      });
+      if let Some(key) = api_key {
+        payload["api_key"] = json!(key);
+      }
+      parse_ai_providers(&self.authed_patch_json("/api/ai/settings", &payload, API_TIMEOUT_SECS)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (config, api_key);
+      Err("blocking HTTP AI provider save is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Delete a configured AI provider via `DELETE /api/ai/providers/{id}`.
+  pub fn delete_ai_provider(&self, provider_id: &str) -> Result<Vec<AiProviderConfig>, String> {
+    let trimmed = provider_id.trim();
+    if trimmed.is_empty() {
+      return Err("provider_id cannot be empty".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      parse_ai_providers(&self.authed_delete(&format!("/api/ai/providers/{trimmed}"), API_TIMEOUT_SECS)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = trimmed;
+      Err("blocking HTTP AI provider delete is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Fetch live available models from an AI provider via `POST /api/ai/models`.
+  pub fn fetch_ai_models(
+    &self,
+    provider_id: Option<&str>,
+    base_url: &str,
+    protocol: &str,
+    api_key: Option<&str>,
+  ) -> Result<Vec<String>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let mut payload = json!({ "base_url": base_url.trim(), "provider": protocol.trim() });
+      if let Some(pid) = provider_id.map(str::trim).filter(|s| !s.is_empty()) {
+        payload["provider_id"] = json!(pid);
+      }
+      if let Some(key) = api_key.map(str::trim).filter(|s| !s.is_empty()) {
+        payload["api_key"] = json!(key);
+      }
+      let body = self.authed_post_json("/api/ai/models", &payload, API_TIMEOUT_SECS)?;
+      let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid AI models response: {e}"))?;
+      Ok(
+        val
+          .get("models")
+          .and_then(Value::as_array)
+          .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect())
+          .unwrap_or_default(),
+      )
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (provider_id, base_url, protocol, api_key);
+      Err("blocking HTTP AI models fetch is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Execute an AI writing prompt against the cloud server (`POST /api/ai/complete`),
+  /// cleanly returning an error when offline, unauthenticated, or unconfigured.
+  pub fn stream_ai_prompt(&self, system: &str, prompt: &str) -> Result<String, String> {
+    let prompt_t = prompt.trim();
+    if prompt_t.is_empty() {
+      return Err("prompt cannot be empty".to_string());
+    }
+    if self.endpoints.base_url().is_empty() || !self.is_authenticated() {
+      return Err("AI assistant requires a signed-in cloud connection".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let mut payload = json!({ "prompt": prompt_t });
+      if !system.trim().is_empty() {
+        payload["system"] = json!(system.trim());
+      }
+      let body = self
+        .authed_post_json("/api/ai/complete", &payload, AI_TIMEOUT_SECS)
+        .map_err(|e| format!("AI request unavailable: {e}"))?;
+      let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid AI completion response: {e}"))?;
+      let text = val
+        .get("text")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "AI completion response missing text".to_string())?;
+      if text.trim().is_empty() {
+        return Err("AI returned an empty response".to_string());
+      }
+      Ok(text.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (system, prompt_t);
+      Err("blocking HTTP AI prompt is unavailable on wasm32".to_string())
+    }
+  }
+
+  // ── Workspace Members & Invitations ─────────────────────────────────────
+
+  /// List members of `workspace_id` (`GET /api/workspaces/{ws}/members`).
+  pub fn list_members(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceMemberInfo>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      parse_member_list(&self.authed_get(&format!("/api/workspaces/{workspace_id}/members"), API_TIMEOUT_SECS)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = workspace_id;
+      Err("blocking HTTP member list is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Invite a user by email into `workspace_id` (`POST /api/workspaces/{ws}/members`).
+  pub fn invite_member(&self, workspace_id: Uuid, email: &str, role: &str) -> Result<WorkspaceInvitationInfo, String> {
+    let email_t = email.trim();
+    if email_t.is_empty() {
+      return Err("email is required".to_string());
+    }
+    let role_t = if role.trim().is_empty() { "editor" } else { role.trim() };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/members"),
+        &json!({ "email": email_t, "role": role_t }),
+        API_TIMEOUT_SECS,
+      )?;
+      let val: Value = serde_json::from_str(&body).map_err(|e| format!("invalid invite response: {e}"))?;
+      Ok(parse_invitation(val.get("invitation").unwrap_or(&val)))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, email_t, role_t);
+      Err("blocking HTTP invite member is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// List pending invitations sent for `workspace_id` (`GET /api/workspaces/{ws}/invitations`).
+  pub fn list_invitations(&self, workspace_id: Uuid) -> Result<Vec<WorkspaceInvitationInfo>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      parse_invitation_list(
+        &self.authed_get(&format!("/api/workspaces/{workspace_id}/invitations"), API_TIMEOUT_SECS)?,
+      )
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = workspace_id;
+      Err("blocking HTTP invitation list is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// List pending invitations addressed to the signed-in user (`GET /api/invitations`).
+  pub fn list_received_invitations(&self) -> Result<Vec<WorkspaceInvitationInfo>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      parse_invitation_list(&self.authed_get("/api/invitations", API_TIMEOUT_SECS)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      Err("blocking HTTP received invitations is unavailable on wasm32".to_string())
+    }
+  }
+
+  // ── Knowledge Graph ─────────────────────────────────────────────────────
+
+  /// Fetch the page-link graph for `workspace_id` (`GET /api/workspaces/{ws}/graph`).
+  pub fn fetch_graph(&self, workspace_id: Uuid) -> Result<CloudGraphPayload, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      parse_graph_payload(&self.authed_get(&format!("/api/workspaces/{workspace_id}/graph"), API_TIMEOUT_SECS)?)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = workspace_id;
+      Err("blocking HTTP graph fetch is unavailable on wasm32".to_string())
+    }
+  }
+
+  // ── Session & SyncEngine Lifecycle ──────────────────────────────────────
+
+  /// Clear stored credentials and advance [`ClaimTracker`] back to [`WorldOrigin::Local`].
   pub fn logout(&mut self) {
     self.config.access_token = None;
     self.config.email = None;
@@ -154,9 +829,8 @@ impl CloudConnector {
     self.claims.switch_account(WorldOrigin::Local);
   }
 
-  /// Update the target server URL. If the URL changes while authenticated, the
-  /// previous server's token is cleared and [`ClaimTracker`] resets to local so
-  /// credentials are never sent to a different host.
+  /// Update the target server URL. Clears auth if the host changed so tokens
+  /// never leak across servers.
   pub fn set_server_url(&mut self, server_url: impl Into<String>) {
     let next_endpoints = ApiEndpoints::new(server_url.into().trim());
     let changed = next_endpoints.base_url() != self.endpoints.base_url();
@@ -184,25 +858,17 @@ impl CloudConnector {
     self.phase
   }
 
-  /// Update the connector's tracked [`SyncPhase`] (e.g. from
-  /// [`SyncEffect::SyncPhaseChanged`]).
+  /// Update the connector's tracked [`SyncPhase`].
   pub fn set_sync_phase(&mut self, phase: SyncPhase) {
     self.phase = phase;
   }
 
-  /// Construct a Sans-I/O [`SyncEngine`] for `doc_id` backed by
-  /// [`MemoryMirrorStorage`].
+  /// Construct a Sans-I/O [`SyncEngine`] for `doc_id` backed by [`MemoryMirrorStorage`].
   pub fn create_doc_sync(&self, doc_id: &str, client_id: u64, self_name: &str) -> SyncEngine {
-    self.create_doc_sync_with_storage(
-      doc_id,
-      client_id,
-      self_name,
-      Box::new(MemoryMirrorStorage::new()),
-    )
+    self.create_doc_sync_with_storage(doc_id, client_id, self_name, Box::new(MemoryMirrorStorage::new()))
   }
 
-  /// Construct a Sans-I/O [`SyncEngine`] for `doc_id` with a caller-supplied
-  /// [`SyncStorage`] backend (such as `VaultStore::create_sync_storage`).
+  /// Construct a Sans-I/O [`SyncEngine`] for `doc_id` with a caller-supplied [`SyncStorage`].
   pub fn create_doc_sync_with_storage(
     &self,
     doc_id: &str,
@@ -210,31 +876,23 @@ impl CloudConnector {
     self_name: &str,
     storage: Box<dyn SyncStorage>,
   ) -> SyncEngine {
-    let name_opt = {
-      let trimmed = self_name.trim();
-      if trimmed.is_empty() {
-        self
-          .config
-          .email
-          .as_deref()
-          .map(str::trim)
-          .filter(|s| !s.is_empty())
-          .map(String::from)
-      } else {
-        Some(trimmed.to_string())
-      }
+    let name_opt = if self_name.trim().is_empty() {
+      self.config.email.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+    } else {
+      Some(self_name.trim().to_string())
     };
-    let config = SyncConfig {
-      client_id: Some(client_id),
-      self_name: name_opt,
-      document_id: Some(doc_id.to_string()),
-      restore_unacked: Vec::new(),
-    };
-    SyncEngine::new(config, Some(storage))
+    SyncEngine::new(
+      SyncConfig {
+        client_id: Some(client_id),
+        self_name: name_opt,
+        document_id: Some(doc_id.to_string()),
+        restore_unacked: Vec::new(),
+      },
+      Some(storage),
+    )
   }
 
-  /// Feed a local CRDT update into a Sans-I/O [`SyncEngine`] and return the
-  /// resulting [`SyncEffect`]s for the host to execute.
+  /// Feed a local CRDT update into a Sans-I/O [`SyncEngine`] and return [`SyncEffect`]s.
   pub fn push_local_update(engine: &mut SyncEngine, update: Vec<u8>) -> Vec<SyncEffect> {
     engine.handle_event(SyncEvent::ApplyLocalDiff(update))
   }
@@ -246,11 +904,7 @@ impl CloudConnector {
 
   /// Whether a non-empty access token is currently held.
   pub fn is_authenticated(&self) -> bool {
-    self
-      .config
-      .access_token
-      .as_deref()
-      .is_some_and(|t| !t.trim().is_empty())
+    self.config.access_token.as_deref().is_some_and(|t| !t.trim().is_empty())
   }
 
   /// Human-readable account badge for the UI header/settings panel.
@@ -282,6 +936,71 @@ impl CloudConnector {
   pub fn endpoints(&self) -> &ApiEndpoints {
     &self.endpoints
   }
+
+  fn require_server(&self) -> Result<&str, String> {
+    let base = self.endpoints.base_url();
+    if base.is_empty() {
+      return Err("server URL is empty".to_string());
+    }
+    Ok(base)
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  fn require_auth(&self) -> Result<(&str, &str), String> {
+    let base = self.require_server()?;
+    let token = self
+      .config
+      .access_token
+      .as_deref()
+      .map(str::trim)
+      .filter(|t| !t.is_empty())
+      .ok_or_else(|| "authentication required".to_string())?;
+    Ok((base, token))
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  fn authed_get(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
+    let (base, token) = self.require_auth()?;
+    let mut resp = http_agent(timeout_secs)
+      .get(&format!("{base}{path}"))
+      .header("Authorization", &format!("Bearer {token}"))
+      .call()
+      .map_err(|e| format!("GET {path} failed: {e}"))?;
+    resp.body_mut().read_to_string().map_err(|e| format!("failed to read GET {path} response: {e}"))
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  fn authed_post_json(&self, path: &str, payload: &Value, timeout_secs: u64) -> Result<String, String> {
+    let (base, token) = self.require_auth()?;
+    let mut resp = http_agent(timeout_secs)
+      .post(&format!("{base}{path}"))
+      .header("Authorization", &format!("Bearer {token}"))
+      .send_json(payload)
+      .map_err(|e| format!("POST {path} failed: {e}"))?;
+    Ok(resp.body_mut().read_to_string().unwrap_or_default())
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  fn authed_patch_json(&self, path: &str, payload: &Value, timeout_secs: u64) -> Result<String, String> {
+    let (base, token) = self.require_auth()?;
+    let mut resp = http_agent(timeout_secs)
+      .patch(&format!("{base}{path}"))
+      .header("Authorization", &format!("Bearer {token}"))
+      .send_json(payload)
+      .map_err(|e| format!("PATCH {path} failed: {e}"))?;
+    Ok(resp.body_mut().read_to_string().unwrap_or_default())
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  fn authed_delete(&self, path: &str, timeout_secs: u64) -> Result<String, String> {
+    let (base, token) = self.require_auth()?;
+    let mut resp = http_agent(timeout_secs)
+      .delete(&format!("{base}{path}"))
+      .header("Authorization", &format!("Bearer {token}"))
+      .call()
+      .map_err(|e| format!("DELETE {path} failed: {e}"))?;
+    Ok(resp.body_mut().read_to_string().unwrap_or_default())
+  }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -293,74 +1012,391 @@ fn http_agent(timeout_secs: u64) -> ureq::Agent {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn j_str(v: &Value, key: &str) -> String {
+  v.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn j_opt_str(v: &Value, key: &str) -> Option<String> {
+  v.get(key).and_then(Value::as_str).map(String::from)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn format_health_summary(raw_body: &str) -> String {
   let trimmed = raw_body.trim();
-  if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
-    && let Some(status) = val.get("status").and_then(serde_json::Value::as_str)
+  if let Ok(val) = serde_json::from_str::<Value>(trimmed)
+    && let Some(status) = val.get("status").and_then(Value::as_str)
   {
-    if let Some(version) = val.get("version").and_then(serde_json::Value::as_str) {
-      return format!("{status} (v{version})");
-    }
-    return status.to_string();
+    return match val.get("version").and_then(Value::as_str) {
+      Some(version) => format!("{status} (v{version})"),
+      None => status.to_string(),
+    };
   }
-  if trimmed.is_empty() {
-    "ok".to_string()
-  } else {
-    trimmed.to_string()
+  if trimmed.is_empty() { "ok".to_string() } else { trimmed.to_string() }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_probe_meta(raw_body: &str) -> ServerProbeMeta {
+  let Ok(val) = serde_json::from_str::<Value>(raw_body.trim()) else {
+    return ServerProbeMeta { reachable: true, version: None, registration_open: None };
+  };
+  ServerProbeMeta {
+    reachable: true,
+    version: j_opt_str(&val, "version"),
+    registration_open: val.get("registration_open").and_then(Value::as_bool),
   }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_register_user(raw_body: &str, email: &str, display_name: &str) -> CloudUser {
+  let fallback = if display_name.is_empty() { email } else { display_name };
+  let Ok(val) = serde_json::from_str::<Value>(raw_body.trim()) else {
+    return CloudUser { id: None, email: email.into(), display_name: fallback.into(), verified: false };
+  };
+  if let Some(u) = val.get("user") {
+    return CloudUser {
+      id: j_opt_str(u, "id"),
+      email: j_opt_str(u, "email").unwrap_or_else(|| email.into()),
+      display_name: j_opt_str(u, "display_name").unwrap_or_else(|| fallback.into()),
+      verified: val.get("verified").and_then(Value::as_bool).unwrap_or(true),
+    };
+  }
+  CloudUser {
+    id: j_opt_str(&val, "id"),
+    email: j_opt_str(&val, "email").unwrap_or_else(|| email.into()),
+    display_name: j_opt_str(&val, "display_name").unwrap_or_else(|| fallback.into()),
+    verified: val.get("verified").and_then(Value::as_bool).unwrap_or(false),
+  }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_share_state(raw_body: &str, base_url: &str) -> Result<ShareState, String> {
+  let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid share response: {e}"))?;
+  let shared = val.get("shared").and_then(Value::as_bool).unwrap_or(false);
+  let token = j_opt_str(&val, "token").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+  let url = j_opt_str(&val, "url")
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .or_else(|| {
+      shared
+        .then(|| token.as_deref().map(|t| format!("{}/s/{t}", base_url.trim_end_matches('/'))))
+        .flatten()
+    });
+  Ok(ShareState { shared, token, url })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_comment_item(val: &Value) -> CommentItem {
+  CommentItem {
+    id: j_str(val, "id"),
+    author_id: j_str(val, "author_id"),
+    author_name: j_str(val, "author_name"),
+    body: j_str(val, "body"),
+    created_at: j_str(val, "created_at"),
+    edited_at: j_opt_str(val, "edited_at"),
+  }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_comment_thread(val: &Value) -> Result<CommentThread, String> {
+  let status = j_opt_str(val, "status").unwrap_or_else(|| "open".into());
+  let resolved = val
+    .get("resolved")
+    .and_then(Value::as_bool)
+    .unwrap_or_else(|| status.eq_ignore_ascii_case("resolved"));
+  let anchor = val.get("anchor");
+  let a_str = |k: &str| anchor.and_then(|a| a.get(k)).or_else(|| val.get(k)).and_then(Value::as_str).map(String::from);
+  let a_u32 = |k: &str| anchor.and_then(|a| a.get(k)).or_else(|| val.get(k)).and_then(Value::as_u64).map(|n| n as u32);
+  let comments = val
+    .get("comments")
+    .and_then(Value::as_array)
+    .map(|arr| arr.iter().map(parse_comment_item).collect())
+    .unwrap_or_default();
+
+  Ok(CommentThread {
+    id: j_str(val, "id"),
+    status,
+    quote: j_str(val, "quote"),
+    created_by: j_str(val, "created_by"),
+    created_at: j_str(val, "created_at"),
+    resolved,
+    resolved_by: j_opt_str(val, "resolved_by"),
+    resolved_at: j_opt_str(val, "resolved_at"),
+    start_block: a_str("start_block"),
+    start_offset: a_u32("start_offset"),
+    end_block: a_str("end_block"),
+    end_offset: a_u32("end_offset"),
+    comments,
+  })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_comment_threads(raw_body: &str) -> Result<Vec<CommentThread>, String> {
+  let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid comments response: {e}"))?;
+  let arr = val
+    .get("threads")
+    .and_then(Value::as_array)
+    .or_else(|| val.as_array())
+    .ok_or_else(|| "comments response missing threads array".to_string())?;
+  arr.iter().map(parse_comment_thread).collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_token_info(val: &Value) -> ApiTokenInfo {
+  let can_write = val.get("can_write").and_then(Value::as_bool).unwrap_or_else(|| {
+    val
+      .get("scopes")
+      .and_then(Value::as_array)
+      .is_some_and(|arr| arr.iter().any(|s| s.as_str() == Some("write")))
+  });
+  ApiTokenInfo {
+    id: j_str(val, "id"),
+    name: j_str(val, "name"),
+    can_write,
+    created_at: j_str(val, "created_at"),
+    expires_at: j_opt_str(val, "expires_at"),
+    last_used_at: j_opt_str(val, "last_used_at"),
+  }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_token_list(raw_body: &str) -> Result<Vec<ApiTokenInfo>, String> {
+  let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid token list: {e}"))?;
+  let arr = val
+    .get("tokens")
+    .and_then(Value::as_array)
+    .or_else(|| val.as_array())
+    .ok_or_else(|| "token list response missing tokens array".to_string())?;
+  Ok(arr.iter().map(parse_token_info).collect())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_created_token(raw_body: &str) -> Result<CreatedApiToken, String> {
+  let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid created token: {e}"))?;
+  Ok(CreatedApiToken { info: parse_token_info(&val), token: j_str(&val, "token") })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_ai_providers(raw_body: &str) -> Result<Vec<AiProviderConfig>, String> {
+  let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid AI settings response: {e}"))?;
+  let active_id = j_str(&val, "provider_id");
+  let active_hint = j_str(&val, "key_hint");
+
+  if let Some(arr) = val.get("configured_providers").and_then(Value::as_array).filter(|a| !a.is_empty()) {
+    return Ok(
+      arr
+        .iter()
+        .map(|item| {
+          let id = j_opt_str(item, "provider_id").or_else(|| j_opt_str(item, "id")).unwrap_or_default();
+          let name = j_opt_str(item, "name").filter(|s| !s.is_empty()).unwrap_or_else(|| id.clone());
+          let active = item
+            .get("active")
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| !active_id.is_empty() && id == active_id);
+          let key_tail = j_opt_str(item, "key_tail")
+            .or_else(|| j_opt_str(item, "key_hint"))
+            .unwrap_or_else(|| if active { active_hint.clone() } else { String::new() });
+          AiProviderConfig {
+            id,
+            name,
+            base_url: j_str(item, "base_url"),
+            protocol: j_opt_str(item, "protocol")
+              .or_else(|| j_opt_str(item, "provider"))
+              .unwrap_or_else(|| "openai".into()),
+            has_key: item.get("has_key").and_then(Value::as_bool).unwrap_or(false),
+            key_tail,
+            model: j_str(item, "model"),
+            active,
+          }
+        })
+        .collect(),
+    );
+  }
+
+  if val.get("configured").and_then(Value::as_bool).unwrap_or(false) && !active_id.is_empty() {
+    return Ok(vec![AiProviderConfig {
+      id: active_id.clone(),
+      name: active_id,
+      base_url: j_str(&val, "base_url"),
+      protocol: j_opt_str(&val, "provider").unwrap_or_else(|| "openai".into()),
+      has_key: val.get("has_key").and_then(Value::as_bool).unwrap_or(false),
+      key_tail: active_hint,
+      model: j_str(&val, "model"),
+      active: true,
+    }]);
+  }
+  Ok(Vec::new())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_member_list(raw_body: &str) -> Result<Vec<WorkspaceMemberInfo>, String> {
+  let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid members response: {e}"))?;
+  let arr = val
+    .get("members")
+    .and_then(Value::as_array)
+    .or_else(|| val.as_array())
+    .ok_or_else(|| "members response missing members array".to_string())?;
+  Ok(
+    arr
+      .iter()
+      .map(|m| WorkspaceMemberInfo {
+        user_id: j_str(m, "user_id"),
+        email: j_str(m, "email"),
+        display_name: j_str(m, "display_name"),
+        role: j_opt_str(m, "role").unwrap_or_else(|| "viewer".into()),
+        joined_at: j_str(m, "joined_at"),
+        avatar_version: j_opt_str(m, "avatar_version"),
+      })
+      .collect(),
+  )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_invitation(val: &Value) -> WorkspaceInvitationInfo {
+  WorkspaceInvitationInfo {
+    id: j_str(val, "id"),
+    workspace_id: j_str(val, "workspace_id"),
+    workspace_name: j_opt_str(val, "workspace_name"),
+    email: j_opt_str(val, "email"),
+    role: j_opt_str(val, "role").unwrap_or_else(|| "viewer".into()),
+    invited_by: j_opt_str(val, "invited_by_name").or_else(|| j_opt_str(val, "invited_by")),
+    created_at: j_str(val, "created_at"),
+  }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_invitation_list(raw_body: &str) -> Result<Vec<WorkspaceInvitationInfo>, String> {
+  let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid invitations response: {e}"))?;
+  let arr = val
+    .get("invitations")
+    .and_then(Value::as_array)
+    .or_else(|| val.as_array())
+    .ok_or_else(|| "invitations response missing invitations array".to_string())?;
+  Ok(arr.iter().map(parse_invitation).collect())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_graph_payload(raw_body: &str) -> Result<CloudGraphPayload, String> {
+  let val: Value = serde_json::from_str(raw_body.trim()).map_err(|e| format!("invalid graph response: {e}"))?;
+  let nodes = val
+    .get("nodes")
+    .and_then(Value::as_array)
+    .map(|arr| {
+      arr
+        .iter()
+        .map(|n| CloudGraphNode {
+          view_id: j_str(n, "view_id"),
+          name: j_str(n, "name"),
+          degree: n.get("degree").and_then(Value::as_i64).unwrap_or(0),
+        })
+        .collect()
+    })
+    .unwrap_or_default();
+  let edges = val
+    .get("edges")
+    .and_then(Value::as_array)
+    .map(|arr| {
+      arr
+        .iter()
+        .map(|e| CloudGraphEdge { source: j_str(e, "source"), target: j_str(e, "target") })
+        .collect()
+    })
+    .unwrap_or_default();
+  Ok(CloudGraphPayload {
+    nodes,
+    edges,
+    unlinked: val.get("unlinked").and_then(Value::as_i64).unwrap_or(0),
+  })
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  #[cfg(not(target_arch = "wasm32"))]
+  use std::{io::{Read, Write}, net::TcpListener, thread};
+
+  #[cfg(not(target_arch = "wasm32"))]
+  fn mock_conn(status: &'static str, body: &str, authed: bool) -> (CloudConnector, String, thread::JoinHandle<String>) {
+    let body = body.to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      let (mut raw, mut buf, mut hdr_end, mut clen) = (Vec::new(), [0u8; 4096], None, 0usize);
+      loop {
+        let n = stream.read(&mut buf).unwrap_or(0);
+        if n == 0 {
+          break;
+        }
+        raw.extend_from_slice(&buf[..n]);
+        if hdr_end.is_none()
+          && let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n")
+        {
+          hdr_end = Some(pos + 4);
+          for line in String::from_utf8_lossy(&raw[..pos + 4]).lines() {
+            if let Some((k, v)) = line.split_once(':')
+              && k.eq_ignore_ascii_case("content-length")
+            {
+              clen = v.trim().parse().unwrap_or(0);
+            }
+          }
+        }
+        if let Some(end) = hdr_end
+          && raw.len() >= end + clen
+        {
+          break;
+        }
+      }
+      let resp = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      let _ = stream.write_all(resp.as_bytes());
+      let _ = stream.flush();
+      String::from_utf8_lossy(&raw).to_string()
+    });
+    let url = format!("http://{addr}");
+    let conn = CloudConnector::new(CloudConfig {
+      server_url: url.clone(),
+      access_token: authed.then(|| "jwt".to_string()),
+      email: authed.then(|| "a@mica.dev".to_string()),
+    });
+    (conn, url, handle)
+  }
 
   #[test]
   fn local_defaults_and_phase_labels() {
     let mut conn = CloudConnector::new(CloudConfig {
-      server_url: "https://notes.example.com/".to_string(),
+      server_url: "https://notes.example.com/".into(),
       access_token: None,
       email: None,
     });
     assert_eq!(conn.server_url(), "https://notes.example.com");
     assert!(!conn.is_authenticated());
-    assert_eq!(conn.account_label(), "Local Vault");
-    assert_eq!(conn.sync_phase_label(), "Local Only");
+    assert_eq!((conn.account_label().as_str(), conn.sync_phase_label().as_str()), ("Local Vault", "Local Only"));
     assert_eq!(conn.claims().capture().origin, WorldOrigin::Local);
-
     conn.set_sync_phase(SyncPhase::Synced);
-    // Unauthenticated still shows Local Only.
     assert_eq!(conn.sync_phase_label(), "Local Only");
   }
 
   #[test]
   fn authenticated_config_and_logout_advance_claims() {
     let mut conn = CloudConnector::new(CloudConfig {
-      server_url: "https://cloud.mica.test/".to_string(),
-      access_token: Some("tok-123".to_string()),
-      email: Some("dev@mica.test".to_string()),
+      server_url: "https://cloud.mica.test/".into(),
+      access_token: Some("tok-123".into()),
+      email: Some("dev@mica.test".into()),
     });
     assert!(conn.is_authenticated());
-    assert_eq!(conn.account_label(), "dev@mica.test");
-    assert_eq!(conn.sync_phase_label(), "Offline");
-
+    assert_eq!((conn.account_label().as_str(), conn.sync_phase_label().as_str()), ("dev@mica.test", "Offline"));
     conn.set_sync_phase(SyncPhase::Syncing);
     assert_eq!(conn.sync_phase_label(), "Syncing");
     conn.set_sync_phase(SyncPhase::Synced);
     assert_eq!(conn.sync_phase_label(), "Synced");
 
     let cloud_claim = conn.claims().capture();
-    assert_eq!(
-      cloud_claim.origin,
-      WorldOrigin::Cloud {
-        server_url: "https://cloud.mica.test".to_string(),
-      }
-    );
-
+    assert_eq!(cloud_claim.origin, WorldOrigin::Cloud { server_url: "https://cloud.mica.test".into() });
     conn.logout();
-    assert!(!conn.is_authenticated());
-    assert_eq!(conn.account_label(), "Local Vault");
-    assert_eq!(conn.sync_phase_label(), "Local Only");
-    assert!(!conn.claims().matches_account(&cloud_claim));
+    assert!(!conn.is_authenticated() && !conn.claims().matches_account(&cloud_claim));
     assert_eq!(conn.claims().capture().origin, WorldOrigin::Local);
   }
 
@@ -371,13 +1407,96 @@ mod tests {
     let doc = mica_core::MicaDoc::from_blocks(
       "root",
       &[
-        mica_core::Block::new("root", "page").with_children(vec!["b1".to_string()]),
+        mica_core::Block::new("root", "page").with_children(vec!["b1".into()]),
         mica_core::Block::new("b1", "paragraph").with_text("Hello sync"),
       ],
     );
-    let update = doc.encode_state();
-    let effects = CloudConnector::push_local_update(&mut engine, update);
-    assert!(!effects.is_empty());
-    assert!(!engine.outbox_empty());
+    let effects = CloudConnector::push_local_update(&mut engine, doc.encode_state());
+    assert!(!effects.is_empty() && !engine.outbox_empty());
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn probe_register_forgot_share_comments_tokens_ai_members_graph_and_ai_prompt() {
+    let (ws, doc, tid) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+
+    // 1. probe_server_meta, register, forgot_password
+    let (_, probe_url, probe_h) = mock_conn(
+      "200 OK",
+      r#"{"status":"ready","version":"0.14.11","registration_open":true}"#,
+      false,
+    );
+    let meta = CloudConnector::new(CloudConfig::default()).probe_server_meta(&probe_url).unwrap();
+    assert!(meta.reachable && meta.version.as_deref() == Some("0.14.11") && meta.registration_open == Some(true));
+    assert!(probe_h.join().unwrap().starts_with("GET /api/ready "));
+
+    let (reg_c, _, reg_h) = mock_conn("200 OK", r#"{"verified":true}"#, false);
+    let u = reg_c.register("new@mica.dev", "New User", "secret123").unwrap();
+    assert!(u.verified && u.email == "new@mica.dev" && reg_h.join().unwrap().starts_with("POST /api/auth/register "));
+
+    let (fp_c, _, fp_h) = mock_conn("204 No Content", "", false);
+    fp_c.forgot_password("new@mica.dev").unwrap();
+    assert!(fp_h.join().unwrap().starts_with("POST /api/auth/password/forgot "));
+
+    // 2. share create / get / delete
+    let (sc, surl, sh) = mock_conn("200 OK", r#"{"shared":true,"token":"abc123"}"#, true);
+    let share = sc.create_share(ws, doc).unwrap();
+    assert!(share.shared && share.url.as_deref() == Some(format!("{surl}/s/abc123").as_str()));
+    assert!(sh.join().unwrap().to_ascii_lowercase().contains("authorization: bearer jwt"));
+    let (gsc, _, _) = mock_conn("200 OK", r#"{"shared":true,"token":"abc123"}"#, true);
+    assert!(gsc.get_share(ws, doc).unwrap().shared);
+    let (dsc, _, _) = mock_conn("200 OK", r#"{"shared":false}"#, true);
+    assert!(!dsc.delete_share(ws, doc).unwrap().shared);
+
+    // 3. comments list / create / reply / resolve / delete
+    let (lc, _, _) = mock_conn(
+      "200 OK",
+      r#"{"threads":[{"id":"t1","status":"open","quote":"hi","created_by":"u1","created_at":"2026-01-01T00:00:00Z","anchor":{"start_block":"b1","start_offset":0,"end_block":"b1","end_offset":2},"comments":[{"id":"c1","author_id":"u1","body":"Nice!","created_at":"2026-01-01T00:00:00Z"}]}]}"#,
+      true,
+    );
+    let threads = lc.list_comments(ws, doc).unwrap();
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].start_block.as_deref(), Some("b1"));
+    assert_eq!(threads[0].comments[0].body, "Nice!");
+    let (cc, _, _) = mock_conn("200 OK", r#"{"id":"t2","status":"open","comments":[]}"#, true);
+    assert_eq!(cc.create_comment(ws, doc, "b1", 0, "b1", 5, "w", "Hello").unwrap().id, "t2");
+    let (rc, _, _) = mock_conn("200 OK", r#"{"id":"c3","author_id":"u2","body":"Reply!"}"#, true);
+    assert_eq!(rc.reply_comment(ws, doc, tid, "Reply!").unwrap().body, "Reply!");
+    mock_conn("200 OK", r#"{"resolved":true}"#, true).0.resolve_comment(ws, doc, tid, true).unwrap();
+    mock_conn("200 OK", r#"{"deleted":true}"#, true).0.delete_comment(ws, doc, tid).unwrap();
+
+    // 4. tokens list / create / revoke
+    let (tc, _, _) = mock_conn("200 OK", r#"{"tokens":[{"id":"tk1","name":"CLI","scopes":["read","write"],"created_at":"2026-01-01T00:00:00Z"}]}"#, true);
+    assert!(tc.list_tokens().unwrap()[0].can_write);
+    let (ctc, _, _) = mock_conn("200 OK", r#"{"id":"tk2","name":"CI","scopes":["read"],"token":"mica_pat_secret","created_at":"2026-01-01T00:00:00Z"}"#, true);
+    assert_eq!(ctc.create_token("CI", false, Some(30)).unwrap().token, "mica_pat_secret");
+    mock_conn("204 No Content", "", true).0.revoke_token("tk2").unwrap();
+
+    // 5. AI providers list / save / delete / models / prompt
+    let ai_body = r#"{"configured":true,"provider_id":"deepseek","key_hint":"9f2a","configured_providers":[{"provider_id":"deepseek","has_key":true,"model":"deepseek-chat","base_url":"https://api.deepseek.com","protocol":"openai","active":true}]}"#;
+    let providers = mock_conn("200 OK", ai_body, true).0.list_ai_providers().unwrap();
+    assert_eq!((providers[0].id.as_str(), providers[0].key_tail.as_str()), ("deepseek", "9f2a"));
+    assert_eq!(mock_conn("200 OK", ai_body, true).0.save_ai_provider(&providers[0], Some("sk-9f2a")).unwrap().len(), 1);
+    assert!(mock_conn("200 OK", r#"{"configured":false,"configured_providers":[]}"#, true).0.delete_ai_provider("deepseek").unwrap().is_empty());
+    assert_eq!(
+      mock_conn("200 OK", r#"{"models":["deepseek-chat"],"endpoint":"https://api.deepseek.com/v1/models"}"#, true)
+        .0
+        .fetch_ai_models(Some("deepseek"), "https://api.deepseek.com", "openai", None)
+        .unwrap(),
+      vec!["deepseek-chat"]
+    );
+    assert!(CloudConnector::new(CloudConfig::default()).stream_ai_prompt("", "Summarize").is_err());
+    assert_eq!(mock_conn("200 OK", r#"{"text":"Summary"}"#, true).0.stream_ai_prompt("Brief", "Sum").unwrap(), "Summary");
+
+    // 6. workspace members, invitations & graph
+    let members = mock_conn("200 OK", r#"{"members":[{"user_id":"u1","email":"a@mica.dev","display_name":"Alice","role":"owner","joined_at":"2026-01-01T00:00:00Z"}]}"#, true).0.list_members(ws).unwrap();
+    assert_eq!(members[0].role, "owner");
+    let inv = mock_conn("200 OK", r#"{"invitation":{"id":"inv1","workspace_id":"ws1","email":"b@mica.dev","role":"editor","created_at":"2026-01-01T00:00:00Z"}}"#, true).0.invite_member(ws, "b@mica.dev", "editor").unwrap();
+    assert_eq!(inv.id, "inv1");
+    assert_eq!(mock_conn("200 OK", r#"{"invitations":[{"id":"inv1","workspace_id":"ws1","role":"editor"}]}"#, true).0.list_invitations(ws).unwrap().len(), 1);
+    assert_eq!(mock_conn("200 OK", r#"{"invitations":[{"id":"inv2","workspace_id":"ws2","workspace_name":"Team","role":"viewer"}]}"#, true).0.list_received_invitations().unwrap()[0].workspace_name.as_deref(), Some("Team"));
+
+    let graph = mock_conn("200 OK", r#"{"nodes":[{"view_id":"v1","name":"Home","degree":2}],"edges":[{"source":"v1","target":"v2"}],"unlinked":3}"#, true).0.fetch_graph(ws).unwrap();
+    assert_eq!((graph.nodes.len(), graph.edges.len(), graph.unlinked), (1, 1, 3));
   }
 }

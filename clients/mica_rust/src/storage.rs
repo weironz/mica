@@ -2,32 +2,35 @@
 //!
 //! - Native desktop (`#[cfg(not(target_arch = "wasm32"))]`) delegates to
 //!   [`mica_core::LocalStore`] (SQLite) and exposes a [`mica_sync::SqliteSyncStorage`]
-//!   factory sharing the same underlying connection.
+//!   factory sharing the same underlying connection. Client-local UI preferences
+//!   (`AppPrefs`) persist in `<vault_dir>/mica_prefs.json` without touching
+//!   SQLite schema migrations.
 //! - Web (`#[cfg(target_arch = "wasm32")]`) uses an in-memory CRDT vault plus
 //!   [`mica_sync::MemoryMirrorStorage`] while enforcing the same
-//!   [`mica_core::tree_rules`] page-tree invariants.
+//!   [`mica_core::tree_rules`] page-tree invariants and storing preferences in
+//!   memory.
 
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use chrono::DateTime;
 use mica_api_types::View;
+use mica_core::tree_rules::dedup_sibling_name;
 use mica_core::{Block, MicaDoc};
 use mica_md::{ParseMode, SerializeOptions, parse_body, serialize_body};
 use mica_sync::SyncStorage;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(not(target_arch = "wasm32"))]
-use chrono::DateTime;
-#[cfg(not(target_arch = "wasm32"))]
-use mica_core::{LocalStore, LocalView};
+use mica_core::{LocalStore, LocalView, LocalWorkspace};
 #[cfg(not(target_arch = "wasm32"))]
 use mica_sync::SqliteSyncStorage;
 
-#[cfg(target_arch = "wasm32")]
-use std::collections::{HashMap, HashSet};
 #[cfg(target_arch = "wasm32")]
 use mica_core::tree_rules::{MissingParent, ParentLookup, judge_parent};
 #[cfg(target_arch = "wasm32")]
@@ -41,20 +44,110 @@ const BOARD_BLOCK_ID: &str = "board";
 const BOARD_DOC_PREFIX: &str = "board:";
 const DEFAULT_VERSION_LABEL: &str = "Manual Snapshot";
 
+#[cfg(not(target_arch = "wasm32"))]
+const PREFS_FILENAME: &str = "mica_prefs.json";
+
+const PREF_PAGE_WIDTH: &str = "pageWidth";
+const PREF_SIDEBAR_WIDTH: &str = "sidebarWidth";
+const PREF_KNOWN_SERVERS: &str = "knownServers";
+const PREF_SERVER_CREDENTIALS: &str = "serverCredentials";
+const PREF_ACTIVE_ORIGIN: &str = "activeOrigin";
+
+const DEFAULT_PAGE_WIDTH: f32 = 800.0;
+const DEFAULT_SIDEBAR_WIDTH: f32 = 280.0;
+
+/// Lightweight client-local key-value preferences snapshot persisted to
+/// `<vault_dir>/mica_prefs.json` on desktop (or kept in memory for ephemeral /
+/// `wasm32` vaults).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppPrefs {
+  #[serde(flatten)]
+  pub entries: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default)]
+struct PrefsState {
+  entries: BTreeMap<String, String>,
+  #[cfg(not(target_arch = "wasm32"))]
+  path: Option<PathBuf>,
+}
+
+impl PrefsState {
+  fn in_memory() -> Self {
+    Self::default()
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  fn load_from(path: PathBuf) -> Self {
+    let entries = std::fs::read_to_string(&path)
+      .ok()
+      .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+      .unwrap_or_default();
+    Self { entries, path: Some(path) }
+  }
+
+  fn flush(&self) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = &self.path {
+      if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+      {
+        std::fs::create_dir_all(parent)
+          .map_err(|e| format!("failed to create prefs directory {}: {e}", parent.display()))?;
+      }
+      let body = serde_json::to_string_pretty(&self.entries)
+        .map_err(|e| format!("failed to serialize prefs: {e}"))?;
+      let tmp = path.with_extension("json.tmp");
+      if std::fs::write(&tmp, &body).is_ok() {
+        if std::fs::rename(&tmp, path).is_ok() {
+          return Ok(());
+        }
+        let _ = std::fs::remove_file(&tmp);
+      }
+      std::fs::write(path, body)
+        .map_err(|e| format!("failed to write prefs {}: {e}", path.display()))?;
+    }
+    Ok(())
+  }
+}
+
+/// One aggregated row in the recycle bin: a deleted subtree root along with its
+/// original live ancestor path and counts of deleted descendants.
+#[derive(Debug, Clone)]
+pub struct TrashEntry {
+  pub view: View,
+  pub original_path: String,
+  pub child_folders: usize,
+  pub child_pages: usize,
+  pub deleted_label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct StoredServerCredential {
+  origin: String,
+  email: String,
+  token: String,
+}
+
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 struct MemoryVault {
   views: HashMap<(String, Uuid), View>,
+  trash_batches: HashMap<(String, Uuid), u64>,
+  next_trash_batch: u64,
   docs: HashMap<(String, String), Vec<u8>>,
   versions: HashMap<(String, String), Vec<(Option<String>, Vec<u8>)>>,
+  workspaces: HashMap<(String, Uuid), (String, String)>,
 }
 
 /// Unified cross-platform local vault for views, Markdown CRDT documents,
-/// embedded whiteboards, version checkpoints, and `mica-sync` storage adapters.
+/// embedded whiteboards, version checkpoints, client preferences, and
+/// `mica-sync` storage adapters.
 #[derive(Clone)]
 pub struct VaultStore {
   origin: String,
   client_id: u64,
+  prefs: Arc<Mutex<PrefsState>>,
   #[cfg(not(target_arch = "wasm32"))]
   store: Arc<Mutex<LocalStore>>,
   #[cfg(target_arch = "wasm32")]
@@ -102,18 +195,24 @@ impl VaultStore {
       if trimmed.is_empty() {
         return Err("vault path must not be empty".to_string());
       }
-      if trimmed != ":memory:"
-        && let Some(parent) = Path::new(trimmed).parent()
-        && !parent.as_os_str().is_empty()
-      {
-        std::fs::create_dir_all(parent)
-          .map_err(|e| format!("failed to create vault directory {}: {e}", parent.display()))?;
-      }
+      let prefs = if trimmed == ":memory:" {
+        PrefsState::in_memory()
+      } else {
+        let vault_dir = Path::new(trimmed)
+          .parent()
+          .filter(|p| !p.as_os_str().is_empty())
+          .map(Path::to_path_buf)
+          .unwrap_or_else(|| PathBuf::from("."));
+        std::fs::create_dir_all(&vault_dir)
+          .map_err(|e| format!("failed to create vault directory {}: {e}", vault_dir.display()))?;
+        PrefsState::load_from(vault_dir.join(PREFS_FILENAME))
+      };
       let store = LocalStore::open(trimmed).map_err(|e| e.to_string())?;
       let client_id = store.identity().map(|id| id.client_id).unwrap_or(1);
       Ok(Self {
         origin: DEFAULT_ORIGIN.to_string(),
         client_id,
+        prefs: Arc::new(Mutex::new(prefs)),
         store: Arc::new(Mutex::new(store)),
       })
     }
@@ -134,6 +233,7 @@ impl VaultStore {
       Self {
         origin: DEFAULT_ORIGIN.to_string(),
         client_id,
+        prefs: Arc::new(Mutex::new(PrefsState::in_memory())),
         store: Arc::new(Mutex::new(store)),
       }
     }
@@ -142,6 +242,7 @@ impl VaultStore {
       Self {
         origin: DEFAULT_ORIGIN.to_string(),
         client_id: 1,
+        prefs: Arc::new(Mutex::new(PrefsState::in_memory())),
         memory: Arc::new(Mutex::new(MemoryVault::default())),
       }
     }
@@ -156,6 +257,251 @@ impl VaultStore {
   pub fn client_id(&self) -> u64 {
     self.client_id
   }
+
+  fn lock_prefs(&self) -> Result<MutexGuard<'_, PrefsState>, String> {
+    self.prefs.lock().map_err(|_| "prefs mutex poisoned".to_string())
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  fn lock_store(&self) -> Result<MutexGuard<'_, LocalStore>, String> {
+    self.store.lock().map_err(|_| "local vault mutex poisoned".to_string())
+  }
+
+  #[cfg(target_arch = "wasm32")]
+  fn lock_memory(&self) -> Result<MutexGuard<'_, MemoryVault>, String> {
+    self.memory.lock().map_err(|_| "memory vault mutex poisoned".to_string())
+  }
+
+  // ── Persistent Client Preferences (`AppPrefs`) ──────────────────────────
+
+  /// Read a raw string preference by key.
+  pub fn get_pref(&self, key: &str) -> Option<String> {
+    self.prefs.lock().ok()?.entries.get(key).cloned()
+  }
+
+  /// Persist a string preference by key.
+  pub fn set_pref(&self, key: &str, value: &str) -> Result<(), String> {
+    let mut prefs = self.lock_prefs()?;
+    prefs.entries.insert(key.to_string(), value.to_string());
+    prefs.flush()
+  }
+
+  /// Remove a stored preference key.
+  pub fn remove_pref(&self, key: &str) -> Result<(), String> {
+    let mut prefs = self.lock_prefs()?;
+    prefs.entries.remove(key);
+    prefs.flush()
+  }
+
+  /// Export a snapshot of all stored preferences.
+  pub fn snapshot_prefs(&self) -> AppPrefs {
+    self
+      .prefs
+      .lock()
+      .map(|p| AppPrefs { entries: p.entries.clone() })
+      .unwrap_or_default()
+  }
+
+  /// Persisted editor page width in logical pixels (default `800.0`).
+  pub fn page_width(&self) -> f32 {
+    self
+      .get_pref(PREF_PAGE_WIDTH)
+      .and_then(|s| s.trim().parse::<f32>().ok())
+      .filter(|w| w.is_finite() && *w > 0.0)
+      .unwrap_or(DEFAULT_PAGE_WIDTH)
+  }
+
+  /// Persist editor page width in logical pixels.
+  pub fn set_page_width(&self, w: f32) -> Result<(), String> {
+    if !w.is_finite() || w <= 0.0 {
+      return Err("page width must be a positive finite number".to_string());
+    }
+    self.set_pref(PREF_PAGE_WIDTH, &format!("{w:.1}"))
+  }
+
+  /// Persisted sidebar width in logical pixels (default `280.0`).
+  pub fn sidebar_width(&self) -> f32 {
+    self
+      .get_pref(PREF_SIDEBAR_WIDTH)
+      .and_then(|s| s.trim().parse::<f32>().ok())
+      .filter(|w| w.is_finite() && *w > 0.0)
+      .unwrap_or(DEFAULT_SIDEBAR_WIDTH)
+  }
+
+  /// Persist sidebar width in logical pixels.
+  pub fn set_sidebar_width(&self, w: f32) -> Result<(), String> {
+    if !w.is_finite() || w <= 0.0 {
+      return Err("sidebar width must be a positive finite number".to_string());
+    }
+    self.set_pref(PREF_SIDEBAR_WIDTH, &format!("{w:.1}"))
+  }
+
+  /// Starred page IDs for `ws_id` in starring order (`favoritePages:{ws_id}`).
+  pub fn favorites_for(&self, ws_id: Uuid) -> Vec<Uuid> {
+    let Some(raw) = self.get_pref(&format!("favoritePages:{ws_id}")) else {
+      return Vec::new();
+    };
+    let Ok(items) = serde_json::from_str::<Vec<String>>(&raw) else {
+      return Vec::new();
+    };
+    let mut out = Vec::with_capacity(items.len());
+    let mut seen = HashSet::new();
+    for item in items {
+      if let Ok(id) = Uuid::parse_str(item.trim())
+        && seen.insert(id)
+      {
+        out.push(id);
+      }
+    }
+    out
+  }
+
+  /// Persist starred page IDs for `ws_id` (`favoritePages:{ws_id}`).
+  pub fn set_favorites_for(&self, ws_id: Uuid, ids: &[Uuid]) -> Result<(), String> {
+    let mut deduped = Vec::with_capacity(ids.len());
+    let mut seen = HashSet::new();
+    for &id in ids {
+      if seen.insert(id) {
+        deduped.push(id.to_string());
+      }
+    }
+    let encoded = serde_json::to_string(&deduped)
+      .map_err(|e| format!("failed to encode favorites: {e}"))?;
+    self.set_pref(&format!("favoritePages:{ws_id}"), &encoded)
+  }
+
+  /// Custom emoji / icon assigned to `view_id` (`viewIcon:{view_id}`).
+  pub fn view_icon(&self, view_id: Uuid) -> Option<String> {
+    self
+      .get_pref(&format!("viewIcon:{view_id}"))
+      .map(|s| s.trim().to_string())
+      .filter(|s| !s.is_empty())
+  }
+
+  /// Set or clear the custom emoji / icon for `view_id` (`viewIcon:{view_id}`).
+  pub fn set_view_icon(&self, view_id: Uuid, icon: Option<&str>) -> Result<(), String> {
+    let key = format!("viewIcon:{view_id}");
+    match icon.map(str::trim).filter(|s| !s.is_empty()) {
+      Some(value) => self.set_pref(&key, value),
+      None => self.remove_pref(&key),
+    }
+  }
+
+  /// List of previously used cloud server base URLs.
+  pub fn known_servers(&self) -> Vec<String> {
+    let Some(raw) = self.get_pref(PREF_KNOWN_SERVERS) else {
+      return Vec::new();
+    };
+    serde_json::from_str::<Vec<String>>(&raw)
+      .unwrap_or_default()
+      .into_iter()
+      .map(|s| normalize_origin(&s))
+      .filter(|s| !s.is_empty())
+      .collect()
+  }
+
+  /// Persist list of known cloud server base URLs (deduplicated, normalized).
+  pub fn set_known_servers(&self, servers: &[String]) -> Result<(), String> {
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    for s in servers {
+      let norm = normalize_origin(s);
+      if !norm.is_empty() && seen.insert(norm.clone()) {
+        deduped.push(norm);
+      }
+    }
+    let encoded = serde_json::to_string(&deduped)
+      .map_err(|e| format!("failed to encode known servers: {e}"))?;
+    self.set_pref(PREF_KNOWN_SERVERS, &encoded)
+  }
+
+  /// Saved server sessions as `(origin, email, token)` tuples.
+  pub fn saved_server_credentials(&self) -> Vec<(String, String, String)> {
+    self
+      .get_pref(PREF_SERVER_CREDENTIALS)
+      .and_then(|raw| serde_json::from_str::<Vec<StoredServerCredential>>(&raw).ok())
+      .unwrap_or_default()
+      .into_iter()
+      .map(|c| (c.origin, c.email, c.token))
+      .collect()
+  }
+
+  /// Upsert saved credentials `(origin, email, token)` for a cloud server.
+  pub fn save_server_credential(
+    &self,
+    origin: &str,
+    email: &str,
+    token: &str,
+  ) -> Result<(), String> {
+    let norm_origin = normalize_origin(origin);
+    if norm_origin.is_empty() {
+      return Err("server origin must not be empty".to_string());
+    }
+    let mut entries: Vec<StoredServerCredential> = self
+      .get_pref(PREF_SERVER_CREDENTIALS)
+      .and_then(|raw| serde_json::from_str(&raw).ok())
+      .unwrap_or_default();
+    let updated = StoredServerCredential {
+      origin: norm_origin.clone(),
+      email: email.trim().to_string(),
+      token: token.to_string(),
+    };
+    if let Some(existing) = entries.iter_mut().find(|c| c.origin == norm_origin) {
+      *existing = updated;
+    } else {
+      entries.push(updated);
+    }
+    let encoded = serde_json::to_string(&entries)
+      .map_err(|e| format!("failed to encode server credentials: {e}"))?;
+    self.set_pref(PREF_SERVER_CREDENTIALS, &encoded)
+  }
+
+  /// Clear saved credentials for `origin`.
+  pub fn clear_server_credential(&self, origin: &str) -> Result<(), String> {
+    let norm_origin = normalize_origin(origin);
+    let mut entries: Vec<StoredServerCredential> = self
+      .get_pref(PREF_SERVER_CREDENTIALS)
+      .and_then(|raw| serde_json::from_str(&raw).ok())
+      .unwrap_or_default();
+    entries.retain(|c| c.origin != norm_origin);
+    let encoded = serde_json::to_string(&entries)
+      .map_err(|e| format!("failed to encode server credentials: {e}"))?;
+    self.set_pref(PREF_SERVER_CREDENTIALS, &encoded)
+  }
+
+  /// Last active origin (`"local"` or a cloud server URL).
+  pub fn active_origin(&self) -> String {
+    self
+      .get_pref(PREF_ACTIVE_ORIGIN)
+      .map(|s| normalize_origin(&s))
+      .filter(|s| !s.is_empty())
+      .unwrap_or_else(|| DEFAULT_ORIGIN.to_string())
+  }
+
+  /// Persist active origin (`"local"` or a cloud server URL).
+  pub fn set_active_origin(&self, origin: &str) -> Result<(), String> {
+    let norm = normalize_origin(origin);
+    self.set_pref(
+      PREF_ACTIVE_ORIGIN,
+      if norm.is_empty() { DEFAULT_ORIGIN } else { &norm },
+    )
+  }
+
+  /// Read a boolean preference with fallback `default`.
+  pub fn bool_pref(&self, key: &str, default: bool) -> bool {
+    match self.get_pref(key).as_deref().map(str::trim) {
+      Some("true" | "1" | "yes") => true,
+      Some("false" | "0" | "no") => false,
+      _ => default,
+    }
+  }
+
+  /// Persist a boolean preference.
+  pub fn set_bool_pref(&self, key: &str, val: bool) -> Result<(), String> {
+    self.set_pref(key, if val { "true" } else { "false" })
+  }
+
+  // ── Sync Storage Factories ──────────────────────────────────────────────
 
   /// Build a desktop SQLite [`SqliteSyncStorage`] sharing this vault's
   /// underlying [`LocalStore`] connection.
@@ -178,10 +524,12 @@ impl VaultStore {
     }
   }
 
+  // ── Views, Tree Reordering, Trash, Restore, Purge, Clone ────────────────
+
   /// List all views belonging to `origin`, ordered by `position`.
   pub fn list_views(&self, origin: &str) -> Vec<View> {
     #[cfg(not(target_arch = "wasm32"))]
-    {
+    let mut views: Vec<View> = {
       let Ok(store) = self.store.lock() else {
         return Vec::new();
       };
@@ -191,21 +539,27 @@ impl VaultStore {
         .into_iter()
         .filter_map(local_view_to_api_view)
         .collect()
-    }
+    };
     #[cfg(target_arch = "wasm32")]
-    {
+    let mut views: Vec<View> = {
       let Ok(mem) = self.memory.lock() else {
         return Vec::new();
       };
-      let mut views: Vec<View> = mem
+      let mut list: Vec<View> = mem
         .views
         .iter()
         .filter(|((orig, _), _)| orig == origin)
         .map(|(_, v)| v.clone())
         .collect();
-      views.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.name.cmp(&b.name)));
-      views
+      list.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.name.cmp(&b.name)));
+      list
+    };
+    for v in &mut views {
+      if v.icon.is_none() {
+        v.icon = self.view_icon(v.id);
+      }
     }
+    views
   }
 
   /// Upsert a view under `origin`. Enforces folder-only parenting and cycle
@@ -213,47 +567,547 @@ impl VaultStore {
   pub fn save_view(&self, origin: &str, view: &View) -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-      let store = self
-        .store
-        .lock()
-        .map_err(|_| "local vault mutex poisoned".to_string())?;
-      let lv = api_view_to_local_view(origin, view);
-      store.save_view(&lv).map_err(|e| e.to_string())
+      let store = self.lock_store()?;
+      store
+        .save_view(&api_view_to_local_view(origin, view))
+        .map_err(|e| e.to_string())?;
     }
     #[cfg(target_arch = "wasm32")]
     {
-      let mut mem = self
-        .memory
-        .lock()
-        .map_err(|_| "memory vault mutex poisoned".to_string())?;
+      let mut mem = self.lock_memory()?;
       validate_memory_parent(&mem.views, origin, view.id, view.parent_view_id)?;
       mem.views.insert((origin.to_string(), view.id), view.clone());
-      Ok(())
     }
+    if let Some(icon) = view.icon.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+      let _ = self.set_view_icon(view.id, Some(icon));
+    }
+    Ok(())
   }
 
   /// Permanently remove a view row under `origin`.
   pub fn purge_view(&self, origin: &str, id: Uuid) -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-      let store = self
-        .store
-        .lock()
-        .map_err(|_| "local vault mutex poisoned".to_string())?;
-      store
+      self
+        .lock_store()?
         .purge_view(origin, &id.to_string())
+        .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mut mem = self.lock_memory()?;
+      mem.views.remove(&(origin.to_string(), id));
+      mem.trash_batches.remove(&(origin.to_string(), id));
+    }
+    let _ = self.set_view_icon(id, None);
+    Ok(())
+  }
+
+  /// Reorder and/or reparent `ordered_ids` under `parent_view_id`, assigning
+  /// 10-digit zero-padded positions (`0000000010`, `0000000020`, ...). Enforces
+  /// folder-only parenting and cycle prevention via [`mica_core::tree_rules`].
+  pub fn reorder_views(
+    &self,
+    origin: &str,
+    parent_view_id: Option<Uuid>,
+    ordered_ids: &[Uuid],
+  ) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let parent_str = parent_view_id.map(|id| id.to_string());
+      let id_strs: Vec<String> = ordered_ids.iter().map(Uuid::to_string).collect();
+      self
+        .lock_store()?
+        .reorder_views(origin, parent_str.as_deref(), &id_strs)
         .map_err(|e| e.to_string())
     }
     #[cfg(target_arch = "wasm32")]
     {
-      let mut mem = self
-        .memory
-        .lock()
-        .map_err(|_| "memory vault mutex poisoned".to_string())?;
-      mem.views.remove(&(origin.to_string(), id));
+      let mut mem = self.lock_memory()?;
+      let mut staged = mem.views.clone();
+      for (i, &id) in ordered_ids.iter().enumerate() {
+        let key = (origin.to_string(), id);
+        let Some(existing) = staged.get(&key).cloned() else {
+          continue;
+        };
+        let position = format!("{:010}", (i as i64 + 1) * 10);
+        if existing.position == position && existing.parent_view_id == parent_view_id {
+          continue;
+        }
+        if existing.parent_view_id != parent_view_id {
+          validate_memory_parent(&staged, origin, id, parent_view_id)?;
+        }
+        if let Some(entry) = staged.get_mut(&key) {
+          entry.parent_view_id = parent_view_id;
+          entry.position = position;
+          entry.is_deleted = false;
+        }
+      }
+      mem.views = staged;
       Ok(())
     }
   }
+
+  /// Soft-delete `root_id` and all its descendants (`is_deleted = true`).
+  /// Returns the affected view IDs.
+  pub fn trash_view_subtree(&self, origin: &str, root_id: Uuid) -> Result<Vec<Uuid>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let ids = self
+        .lock_store()?
+        .trash_view_subtree(origin, &root_id.to_string())
+        .map_err(|e| e.to_string())?;
+      Ok(ids.into_iter().filter_map(|s| Uuid::parse_str(&s).ok()).collect())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mut mem = self.lock_memory()?;
+      let ids = collect_memory_subtree(&mem.views, origin, root_id, false);
+      if ids.is_empty() {
+        return Ok(Vec::new());
+      }
+      mem.next_trash_batch += 1;
+      let batch = mem.next_trash_batch;
+      for &id in &ids {
+        let key = (origin.to_string(), id);
+        if let Some(view) = mem.views.get_mut(&key)
+          && !view.is_deleted
+        {
+          view.is_deleted = true;
+          mem.trash_batches.insert(key, batch);
+        }
+      }
+      Ok(ids)
+    }
+  }
+
+  /// Restore `root_id` and the descendants trashed with it. If `root_id`'s
+  /// parent is missing or still deleted, promotes `root_id` to top level
+  /// (`parent_view_id = None`). Returns the restored view IDs.
+  pub fn restore_view_subtree(&self, origin: &str, root_id: Uuid) -> Result<Vec<Uuid>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let ids = self
+        .lock_store()?
+        .restore_view_subtree(origin, &root_id.to_string())
+        .map_err(|e| e.to_string())?;
+      Ok(ids.into_iter().filter_map(|s| Uuid::parse_str(&s).ok()).collect())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mut mem = self.lock_memory()?;
+      let root_key = (origin.to_string(), root_id);
+      let Some(root_view) = mem.views.get(&root_key).cloned() else {
+        return Ok(Vec::new());
+      };
+      if !root_view.is_deleted {
+        return Ok(Vec::new());
+      }
+      let root_batch = mem.trash_batches.get(&root_key).copied();
+      let subtree = collect_memory_subtree(&mem.views, origin, root_id, false);
+      let mut restored = Vec::new();
+      for &id in &subtree {
+        let key = (origin.to_string(), id);
+        let matches = root_batch.is_none_or(|b| mem.trash_batches.get(&key).copied() == Some(b));
+        if matches
+          && let Some(v) = mem.views.get_mut(&key)
+          && v.is_deleted
+        {
+          v.is_deleted = false;
+          mem.trash_batches.remove(&key);
+          restored.push(id);
+        }
+      }
+      if let Some(pid) = root_view.parent_view_id {
+        let parent_live = mem
+          .views
+          .get(&(origin.to_string(), pid))
+          .is_some_and(|p| !p.is_deleted);
+        if !parent_live
+          && let Some(root_mut) = mem.views.get_mut(&root_key)
+        {
+          root_mut.parent_view_id = None;
+        }
+      }
+      Ok(restored)
+    }
+  }
+
+  /// Permanently delete `root_id`, all of its descendants, and their documents.
+  /// Returns the number of views purged.
+  pub fn purge_view_subtree(&self, origin: &str, root_id: Uuid) -> Result<usize, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let ids = self
+        .lock_store()?
+        .purge_view_subtree(origin, &root_id.to_string())
+        .map_err(|e| e.to_string())?;
+      for id_str in &ids {
+        if let Ok(id) = Uuid::parse_str(id_str) {
+          let _ = self.set_view_icon(id, None);
+        }
+      }
+      Ok(ids.len())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mut mem = self.lock_memory()?;
+      let ids = collect_memory_subtree(&mem.views, origin, root_id, false);
+      let mut removed = 0usize;
+      for &id in &ids {
+        let key = (origin.to_string(), id);
+        if let Some(v) = mem.views.remove(&key) {
+          let doc_key = (origin.to_string(), v.object_id.to_string());
+          mem.docs.remove(&doc_key);
+          mem.versions.remove(&doc_key);
+          mem.trash_batches.remove(&key);
+          removed += 1;
+        }
+      }
+      drop(mem);
+      for id in ids {
+        let _ = self.set_view_icon(id, None);
+      }
+      Ok(removed)
+    }
+  }
+
+  /// Permanently delete every trashed view (and its documents) inside
+  /// `workspace_id`. Returns the number of purged views.
+  pub fn purge_all_trash(&self, origin: &str, workspace_id: Uuid) -> Result<usize, String> {
+    let deleted: Vec<View> = self
+      .list_views(origin)
+      .into_iter()
+      .filter(|v| v.workspace_id == workspace_id && v.is_deleted)
+      .collect();
+    if deleted.is_empty() {
+      return Ok(0);
+    }
+
+    let deleted_ids: HashSet<Uuid> = deleted.iter().map(|v| v.id).collect();
+    let roots: Vec<Uuid> = deleted
+      .iter()
+      .filter(|v| v.parent_view_id.is_none_or(|pid| !deleted_ids.contains(&pid)))
+      .map(|v| v.id)
+      .collect();
+
+    let mut total = 0usize;
+    for root_id in roots {
+      total += self.purge_view_subtree(origin, root_id)?;
+    }
+
+    // Catch any cyclic/orphan deleted views still remaining in this workspace.
+    for view in self
+      .list_views(origin)
+      .into_iter()
+      .filter(|v| v.workspace_id == workspace_id && v.is_deleted)
+    {
+      #[cfg(not(target_arch = "wasm32"))]
+      {
+        let store = self.lock_store()?;
+        let _ = store.delete_doc(origin, &view.object_id.to_string());
+        store.purge_view(origin, &view.id.to_string()).map_err(|e| e.to_string())?;
+      }
+      #[cfg(target_arch = "wasm32")]
+      {
+        let mut mem = self.lock_memory()?;
+        mem.views.remove(&(origin.to_string(), view.id));
+        mem.trash_batches.remove(&(origin.to_string(), view.id));
+        let doc_key = (origin.to_string(), view.object_id.to_string());
+        mem.docs.remove(&doc_key);
+        mem.versions.remove(&doc_key);
+      }
+      let _ = self.set_view_icon(view.id, None);
+      total += 1;
+    }
+    Ok(total)
+  }
+
+  /// Clone a live page (with its Markdown/CRDT content) or recursively clone a
+  /// live folder subtree under the same parent, deduplicating sibling names via
+  /// [`mica_core::tree_rules::dedup_sibling_name`].
+  pub fn clone_view(&self, origin: &str, view_id: Uuid, new_name: &str) -> Result<View, String> {
+    let all_views = self.list_views(origin);
+    let root = all_views
+      .iter()
+      .find(|v| v.id == view_id)
+      .cloned()
+      .ok_or_else(|| format!("view {view_id} not found"))?;
+    if root.is_deleted {
+      return Err(format!("cannot clone deleted view {view_id}"));
+    }
+
+    // Collect live subtree in parent-before-child BFS order so folders are
+    // saved before their children (preserving folder-only parent checks).
+    let mut children_of: HashMap<Uuid, Vec<View>> = HashMap::new();
+    for v in &all_views {
+      if !v.is_deleted
+        && let Some(pid) = v.parent_view_id
+      {
+        children_of.entry(pid).or_default().push(v.clone());
+      }
+    }
+    for kids in children_of.values_mut() {
+      kids.sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.name.cmp(&b.name)));
+    }
+
+    let mut subtree = Vec::new();
+    let mut queue = VecDeque::from([root.clone()]);
+    let mut seen = HashSet::from([root.id]);
+    while let Some(node) = queue.pop_front() {
+      let node_id = node.id;
+      subtree.push(node);
+      if let Some(kids) = children_of.get(&node_id) {
+        for kid in kids {
+          if seen.insert(kid.id) {
+            queue.push_back(kid.clone());
+          }
+        }
+      }
+    }
+
+    let sibling_names: Vec<String> = all_views
+      .iter()
+      .filter(|v| {
+        !v.is_deleted && v.workspace_id == root.workspace_id && v.parent_view_id == root.parent_view_id
+      })
+      .map(|v| v.name.clone())
+      .collect();
+    let desired = if new_name.trim().is_empty() {
+      format!("{} (副本)", root.name)
+    } else {
+      new_name.trim().to_string()
+    };
+    let final_root_name = dedup_sibling_name(&desired, &sibling_names);
+    let root_position = next_sibling_position(&all_views, root.workspace_id, root.parent_view_id);
+    let id_map: HashMap<Uuid, Uuid> = subtree.iter().map(|v| (v.id, Uuid::new_v4())).collect();
+    let now = chrono::Utc::now();
+    let mut cloned_root: Option<View> = None;
+
+    for orig in &subtree {
+      let new_id = id_map[&orig.id];
+      let new_doc_id = Uuid::new_v4();
+      let is_root = orig.id == root.id;
+
+      if let Some(mut doc) = self.load_raw_doc(origin, &orig.object_id.to_string()) {
+        if is_root {
+          let root_block = doc.root_block_id();
+          if !root_block.is_empty() {
+            doc.set_block_prop(&root_block, "title", &json!(final_root_name));
+          }
+        }
+        self.save_raw_doc(origin, &new_doc_id.to_string(), &doc)?;
+      } else if orig.object_type != "folder" {
+        self.save_markdown(origin, new_doc_id, "")?;
+      }
+
+      let cloned_view = View {
+        id: new_id,
+        workspace_id: orig.workspace_id,
+        parent_view_id: if is_root {
+          orig.parent_view_id
+        } else {
+          orig.parent_view_id.and_then(|pid| id_map.get(&pid).copied())
+        },
+        object_id: new_doc_id,
+        object_type: orig.object_type.clone(),
+        name: if is_root { final_root_name.clone() } else { orig.name.clone() },
+        icon: orig.icon.clone().or_else(|| self.view_icon(orig.id)),
+        position: if is_root { root_position.clone() } else { orig.position.clone() },
+        is_deleted: false,
+        created_by: orig.created_by,
+        created_at: now,
+        updated_at: now,
+        state_bytes: None,
+      };
+      self.save_view(origin, &cloned_view)?;
+      if is_root {
+        cloned_root = Some(cloned_view);
+      }
+    }
+
+    cloned_root.ok_or_else(|| "failed to clone view".to_string())
+  }
+
+  /// Aggregate deleted views into root-only [`TrashEntry`] rows showing each
+  /// deleted root's live ancestor path, descendant counts, and deletion label.
+  /// Mirrors Flutter `trash_data.dart::buildTrashEntries` 1:1.
+  pub fn build_trash_entries(&self, views: &[View]) -> Vec<TrashEntry> {
+    let deleted: Vec<&View> = views.iter().filter(|v| v.is_deleted).collect();
+    if deleted.is_empty() {
+      return Vec::new();
+    }
+
+    let deleted_ids: HashSet<Uuid> = deleted.iter().map(|v| v.id).collect();
+    let mut children_of: HashMap<Uuid, Vec<&View>> = HashMap::new();
+    for &v in &deleted {
+      if let Some(pid) = v.parent_view_id
+        && deleted_ids.contains(&pid)
+      {
+        children_of.entry(pid).or_default().push(v);
+      }
+    }
+    let live_by_id: HashMap<Uuid, &View> = views
+      .iter()
+      .filter(|v| !v.is_deleted)
+      .map(|v| (v.id, v))
+      .collect();
+
+    let mut entries = Vec::new();
+    for &root in &deleted {
+      if root.parent_view_id.is_some_and(|pid| deleted_ids.contains(&pid)) {
+        continue;
+      }
+      let (mut child_folders, mut child_pages) = (0usize, 0usize);
+      let mut seen = HashSet::from([root.id]);
+      let mut stack: Vec<&View> = children_of.get(&root.id).cloned().unwrap_or_default();
+      while let Some(node) = stack.pop() {
+        if !seen.insert(node.id) {
+          continue;
+        }
+        if node.object_type == "folder" {
+          child_folders += 1;
+        } else {
+          child_pages += 1;
+        }
+        if let Some(kids) = children_of.get(&node.id) {
+          stack.extend(kids.iter().copied());
+        }
+      }
+      entries.push(TrashEntry {
+        view: root.clone(),
+        original_path: live_ancestor_path(root, &live_by_id),
+        child_folders,
+        child_pages,
+        deleted_label: format_deleted_label(root),
+      });
+    }
+    entries
+  }
+
+  // ── Workspaces ──────────────────────────────────────────────────────────
+
+  /// Persist a workspace name under `origin` (creating or updating the
+  /// workspace record in SQLite / memory and prefs).
+  pub fn save_workspace_name(&self, origin: &str, ws_id: Uuid, name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+      return Err("workspace name must not be empty".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let store = self.lock_store()?;
+      let existing = store.list_workspaces(origin).unwrap_or_default();
+      let id_str = ws_id.to_string();
+      let (position, role) = if let Some(cur) = existing.iter().find(|w| w.id == id_str) {
+        (cur.position.clone(), cur.role.clone())
+      } else {
+        let max_pos = existing
+          .iter()
+          .filter_map(|w| w.position.parse::<i64>().ok())
+          .max()
+          .unwrap_or(0);
+        (format!("{:010}", max_pos + 10), "owner".to_string())
+      };
+      store
+        .save_workspace(&LocalWorkspace {
+          id: id_str,
+          name: trimmed.to_string(),
+          position,
+          origin: origin.to_string(),
+          role,
+        })
+        .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mut mem = self.lock_memory()?;
+      let key = (origin.to_string(), ws_id);
+      let position = mem.workspaces.get(&key).map(|(_, p)| p.clone()).unwrap_or_else(|| {
+        let max_pos = mem
+          .workspaces
+          .iter()
+          .filter(|((orig, _), _)| orig == origin)
+          .filter_map(|(_, (_, pos))| pos.parse::<i64>().ok())
+          .max()
+          .unwrap_or(0);
+        format!("{:010}", max_pos + 10)
+      });
+      mem.workspaces.insert(key, (trimmed.to_string(), position));
+    }
+    let _ = self.set_pref(&format!("workspaceName:{origin}:{ws_id}"), trimmed);
+    Ok(())
+  }
+
+  /// List persisted `(workspace_id, name)` entries for `origin`, ordered by
+  /// position.
+  pub fn list_workspaces(&self, origin: &str) -> Vec<(Uuid, String)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let Ok(store) = self.store.lock() else {
+        return Vec::new();
+      };
+      store
+        .list_workspaces(origin)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|w| Uuid::parse_str(&w.id).ok().map(|id| (id, w.name)))
+        .collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let Ok(mem) = self.memory.lock() else {
+        return Vec::new();
+      };
+      let mut rows: Vec<(Uuid, String, String)> = mem
+        .workspaces
+        .iter()
+        .filter(|((orig, _), _)| orig == origin)
+        .map(|((_, id), (name, pos))| (*id, name.clone(), pos.clone()))
+        .collect();
+      rows.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.1.cmp(&b.1)));
+      rows.into_iter().map(|(id, name, _)| (id, name)).collect()
+    }
+  }
+
+  /// Delete a workspace, its views, its documents, and its local preferences.
+  pub fn delete_workspace(&self, origin: &str, ws_id: Uuid) -> Result<(), String> {
+    let ws_views: Vec<View> = self
+      .list_views(origin)
+      .into_iter()
+      .filter(|v| v.workspace_id == ws_id)
+      .collect();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let store = self.lock_store()?;
+      for v in &ws_views {
+        let _ = store.delete_doc(origin, &v.object_id.to_string());
+      }
+      store.delete_workspace(origin, &ws_id.to_string()).map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mut mem = self.lock_memory()?;
+      for v in &ws_views {
+        mem.views.remove(&(origin.to_string(), v.id));
+        mem.trash_batches.remove(&(origin.to_string(), v.id));
+        let doc_key = (origin.to_string(), v.object_id.to_string());
+        mem.docs.remove(&doc_key);
+        mem.versions.remove(&doc_key);
+      }
+      mem.workspaces.remove(&(origin.to_string(), ws_id));
+    }
+
+    for v in &ws_views {
+      let _ = self.set_view_icon(v.id, None);
+    }
+    let _ = self.remove_pref(&format!("favoritePages:{ws_id}"));
+    let _ = self.remove_pref(&format!("workspaceName:{origin}:{ws_id}"));
+    Ok(())
+  }
+
+  // ── Documents, Boards, Version History ──────────────────────────────────
 
   /// Parse `markdown` through single-source `mica_md::parse_body`, encode into
   /// a [`MicaDoc`], and persist under `(origin, doc_id)`.
@@ -265,8 +1119,7 @@ impl VaultStore {
   /// Load `(origin, doc_id)` as a [`MicaDoc`] and serialize its body through
   /// single-source `mica_md::serialize_body`.
   pub fn load_markdown(&self, origin: &str, doc_id: Uuid) -> Option<String> {
-    let doc = self.load_raw_doc(origin, &doc_id.to_string())?;
-    Some(markdown_from_doc(&doc))
+    Some(markdown_from_doc(&self.load_raw_doc(origin, &doc_id.to_string())?))
   }
 
   /// Persist whiteboard JSON inside a dedicated [`MicaDoc`] (single `"board"`
@@ -279,9 +1132,7 @@ impl VaultStore {
 
   /// Load previously saved whiteboard JSON for `(origin, board_id)`.
   pub fn load_board_json(&self, origin: &str, board_id: &str) -> Option<String> {
-    let key = board_doc_key(board_id).ok()?;
-    let doc = self.load_raw_doc(origin, &key)?;
-    board_json_from_doc(&doc)
+    board_json_from_doc(&self.load_raw_doc(origin, &board_doc_key(board_id).ok()?)?)
   }
 
   /// Pin the document's current persisted snapshot as a named version
@@ -292,19 +1143,13 @@ impl VaultStore {
     doc_id: Uuid,
     label: Option<&str>,
   ) -> Result<(), String> {
-    let effective_label = label
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-      .unwrap_or(DEFAULT_VERSION_LABEL);
+    let effective_label = label.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(DEFAULT_VERSION_LABEL);
     let doc_key = doc_id.to_string();
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-      let store = self
-        .store
-        .lock()
-        .map_err(|_| "local vault mutex poisoned".to_string())?;
-      let created = store
+      let created = self
+        .lock_store()?
         .create_local_version(origin, &doc_key, effective_label)
         .map_err(|e| e.to_string())?;
       if created.is_none() {
@@ -314,19 +1159,12 @@ impl VaultStore {
     }
     #[cfg(target_arch = "wasm32")]
     {
-      let mut mem = self
-        .memory
-        .lock()
-        .map_err(|_| "memory vault mutex poisoned".to_string())?;
+      let mut mem = self.lock_memory()?;
       let map_key = (origin.to_string(), doc_key);
       let Some(state) = mem.docs.get(&map_key).cloned() else {
         return Err(format!("document {doc_id} has no saved snapshot yet"));
       };
-      mem
-        .versions
-        .entry(map_key)
-        .or_default()
-        .push((Some(effective_label.to_string()), state));
+      mem.versions.entry(map_key).or_default().push((Some(effective_label.to_string()), state));
       Ok(())
     }
   }
@@ -348,10 +1186,7 @@ impl VaultStore {
         .list_local_versions(origin, &doc_key)
         .unwrap_or_default()
         .into_iter()
-        .map(|v| {
-          let label = v.label.unwrap_or_else(|| "自动快照".to_string());
-          (v.id, label, v.created_at)
-        })
+        .map(|v| (v.id, v.label.unwrap_or_else(|| "自动快照".to_string()), v.created_at))
         .collect()
     }
     #[cfg(target_arch = "wasm32")]
@@ -367,16 +1202,46 @@ impl VaultStore {
             .iter()
             .enumerate()
             .rev()
-            .map(|(idx, (lbl, _))| {
-              (
-                idx.to_string(),
-                lbl.clone().unwrap_or_else(|| "自动快照".to_string()),
-                0i64,
-              )
-            })
+            .map(|(idx, (lbl, _))| (idx.to_string(), lbl.clone().unwrap_or_else(|| "自动快照".to_string()), 0i64))
             .collect()
         })
         .unwrap_or_default()
+    }
+  }
+
+  /// Load a stored version snapshot as Markdown WITHOUT mutating the live
+  /// document (used for read-only Version History diff previews).
+  pub fn load_version_markdown(
+    &self,
+    origin: &str,
+    doc_id: Uuid,
+    version_id: &str,
+  ) -> Result<String, String> {
+    let doc_key = doc_id.to_string();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let state = self
+        .lock_store()?
+        .local_version_state(origin, &doc_key, version_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("version {version_id} not found"))?;
+      let doc = std::panic::catch_unwind(|| MicaDoc::from_update(&state))
+        .map_err(|_| format!("corrupt version snapshot {version_id}"))?
+        .map_err(|e| e.to_string())?;
+      Ok(markdown_from_doc(&doc))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mem = self.lock_memory()?;
+      let idx: usize = version_id.parse().map_err(|_| format!("invalid version id {version_id}"))?;
+      let state = mem
+        .versions
+        .get(&(origin.to_string(), doc_key))
+        .and_then(|list| list.get(idx))
+        .map(|(_, bytes)| bytes.clone())
+        .ok_or_else(|| format!("version {version_id} not found"))?;
+      let doc = MicaDoc::from_update(&state).map_err(|e| e.to_string())?;
+      Ok(markdown_from_doc(&doc))
     }
   }
 
@@ -390,11 +1255,8 @@ impl VaultStore {
     let doc_key = doc_id.to_string();
     #[cfg(not(target_arch = "wasm32"))]
     {
-      let store = self
-        .store
-        .lock()
-        .map_err(|_| "local vault mutex poisoned".to_string())?;
-      let restored = store
+      let restored = self
+        .lock_store()?
         .restore_local_version(origin, &doc_key, version_id, self.client_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("version {version_id} not found"))?;
@@ -402,13 +1264,8 @@ impl VaultStore {
     }
     #[cfg(target_arch = "wasm32")]
     {
-      let mut mem = self
-        .memory
-        .lock()
-        .map_err(|_| "memory vault mutex poisoned".to_string())?;
-      let idx: usize = version_id
-        .parse()
-        .map_err(|_| format!("invalid version id {version_id}"))?;
+      let mut mem = self.lock_memory()?;
+      let idx: usize = version_id.parse().map_err(|_| format!("invalid version id {version_id}"))?;
       let map_key = (origin.to_string(), doc_key);
       let state = mem
         .versions
@@ -425,20 +1282,11 @@ impl VaultStore {
   fn save_raw_doc(&self, origin: &str, doc_key: &str, doc: &MicaDoc) -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-      let store = self
-        .store
-        .lock()
-        .map_err(|_| "local vault mutex poisoned".to_string())?;
-      store
-        .save_doc(origin, doc_key, doc)
-        .map_err(|e| e.to_string())
+      self.lock_store()?.save_doc(origin, doc_key, doc).map_err(|e| e.to_string())
     }
     #[cfg(target_arch = "wasm32")]
     {
-      let mut mem = self
-        .memory
-        .lock()
-        .map_err(|_| "memory vault mutex poisoned".to_string())?;
+      let mut mem = self.lock_memory()?;
       let state = doc.encode_state();
       let map_key = (origin.to_string(), doc_key.to_string());
       mem.docs.insert(map_key.clone(), state.clone());
@@ -453,8 +1301,7 @@ impl VaultStore {
   fn load_raw_doc(&self, origin: &str, doc_key: &str) -> Option<MicaDoc> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-      let store = self.store.lock().ok()?;
-      store.load_doc(origin, doc_key, self.client_id).ok()?
+      self.store.lock().ok()?.load_doc(origin, doc_key, self.client_id).ok()?
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -462,6 +1309,50 @@ impl VaultStore {
       let bytes = mem.docs.get(&(origin.to_string(), doc_key.to_string()))?;
       MicaDoc::from_update_with_client_id(bytes, Some(self.client_id)).ok()
     }
+  }
+}
+
+fn normalize_origin(origin: &str) -> String {
+  origin.trim().trim_end_matches('/').to_string()
+}
+
+fn next_sibling_position(
+  all_views: &[View],
+  workspace_id: Uuid,
+  parent_view_id: Option<Uuid>,
+) -> String {
+  let max = all_views
+    .iter()
+    .filter(|v| !v.is_deleted && v.workspace_id == workspace_id && v.parent_view_id == parent_view_id)
+    .filter_map(|v| v.position.parse::<i64>().ok())
+    .max()
+    .unwrap_or(0);
+  format!("{:010}", max + 10)
+}
+
+fn live_ancestor_path(view: &View, live_by_id: &HashMap<Uuid, &View>) -> String {
+  let mut names = Vec::new();
+  let mut seen = HashSet::from([view.id]);
+  let mut cursor = view.parent_view_id;
+  while let Some(pid) = cursor {
+    if !seen.insert(pid) {
+      break;
+    }
+    let Some(parent) = live_by_id.get(&pid) else {
+      break;
+    };
+    names.push(parent.name.as_str());
+    cursor = parent.parent_view_id;
+  }
+  names.reverse();
+  names.join(" / ")
+}
+
+fn format_deleted_label(view: &View) -> String {
+  if view.updated_at != DateTime::UNIX_EPOCH {
+    view.updated_at.format("%Y-%m-%d %H:%M").to_string()
+  } else {
+    "已删除".to_string()
   }
 }
 
@@ -484,8 +1375,8 @@ fn doc_from_markdown(markdown: &str, client_id: Option<u64>) -> MicaDoc {
 
 fn markdown_from_doc(doc: &MicaDoc) -> String {
   let root_id = doc.root_block_id();
-  let all = doc.to_blocks();
-  let body: Vec<Block> = all
+  let body: Vec<Block> = doc
+    .to_blocks()
     .into_iter()
     .filter(|b| !(b.id == root_id && b.kind == "page"))
     .collect();
@@ -552,6 +1443,42 @@ fn local_view_to_api_view(lv: LocalView) -> Option<View> {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn collect_memory_subtree(
+  views: &HashMap<(String, Uuid), View>,
+  origin: &str,
+  root_id: Uuid,
+  live_only: bool,
+) -> Vec<Uuid> {
+  let mut children_of: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+  for ((orig, id), v) in views {
+    if orig == origin && (!live_only || !v.is_deleted)
+      && let Some(pid) = v.parent_view_id
+    {
+      children_of.entry(pid).or_default().push(*id);
+    }
+  }
+  if live_only && views.get(&(origin.to_string(), root_id)).is_none_or(|r| r.is_deleted) {
+    return Vec::new();
+  }
+  let mut out = Vec::new();
+  let mut seen = HashSet::from([root_id]);
+  let mut queue = VecDeque::from([root_id]);
+  while let Some(curr) = queue.pop_front() {
+    if views.contains_key(&(origin.to_string(), curr)) {
+      out.push(curr);
+    }
+    if let Some(kids) = children_of.get(&curr) {
+      for &kid in kids {
+        if seen.insert(kid) {
+          queue.push_back(kid);
+        }
+      }
+    }
+  }
+  out
+}
+
+#[cfg(target_arch = "wasm32")]
 fn validate_memory_parent(
   views: &HashMap<(String, Uuid), View>,
   origin: &str,
@@ -578,9 +1505,7 @@ fn validate_memory_parent(
     if !seen.insert(curr) {
       break;
     }
-    cursor = views
-      .get(&(origin.to_string(), curr))
-      .and_then(|v| v.parent_view_id);
+    cursor = views.get(&(origin.to_string(), curr)).and_then(|v| v.parent_view_id);
   }
   Ok(())
 }
@@ -590,21 +1515,14 @@ mod tests {
   use super::*;
   use chrono::Utc;
 
-  fn make_view(
-    ws: Uuid,
-    doc: Uuid,
-    name: &str,
-    object_type: &str,
-    parent: Option<Uuid>,
-    pos: &str,
-  ) -> View {
+  fn make_view(ws: Uuid, doc: Uuid, name: &str, kind: &str, parent: Option<Uuid>, pos: &str) -> View {
     let now = Utc::now();
     View {
       id: Uuid::new_v4(),
       workspace_id: ws,
       parent_view_id: parent,
       object_id: doc,
-      object_type: object_type.to_string(),
+      object_type: kind.to_string(),
       name: name.to_string(),
       icon: None,
       position: pos.to_string(),
@@ -620,23 +1538,15 @@ mod tests {
   fn markdown_and_board_round_trip_in_memory() {
     let vault = VaultStore::in_memory();
     assert_eq!(vault.origin(), DEFAULT_ORIGIN);
-
     let doc_id = Uuid::new_v4();
     let md = "# Title\n\nParagraph with **bold** and `code`.\n\n- Item 1\n- Item 2";
     vault.save_markdown(vault.origin(), doc_id, md).unwrap();
     let loaded = vault.load_markdown(vault.origin(), doc_id).unwrap();
-    assert!(loaded.contains("# Title"));
-    assert!(loaded.contains("**bold**"));
-    assert!(loaded.contains("- Item 2"));
+    assert!(loaded.contains("# Title") && loaded.contains("**bold**") && loaded.contains("- Item 2"));
 
     let board_json = r#"{"nodes":[{"id":"n1","text":"Mica Board"}],"edges":[]}"#;
-    vault
-      .save_board_json(vault.origin(), "main-board", board_json)
-      .unwrap();
-    assert_eq!(
-      vault.load_board_json(vault.origin(), "main-board").as_deref(),
-      Some(board_json)
-    );
+    vault.save_board_json(vault.origin(), "main-board", board_json).unwrap();
+    assert_eq!(vault.load_board_json(vault.origin(), "main-board").as_deref(), Some(board_json));
   }
 
   #[test]
@@ -653,15 +1563,14 @@ mod tests {
 
     let listed = vault.list_views("local");
     assert_eq!(listed.len(), 2);
-    assert_eq!(listed[0].id, folder.id);
-    assert_eq!(listed[1].id, page.id);
+    assert_eq!((listed[0].id, listed[1].id), (folder.id, page.id));
 
     vault.purge_view("local", page.id).unwrap();
     assert_eq!(vault.list_views("local").len(), 1);
   }
 
   #[test]
-  fn version_snapshots_increment_count() {
+  fn version_snapshots_increment_count_and_load_readonly_markdown() {
     let vault = VaultStore::in_memory();
     let doc_id = Uuid::new_v4();
     assert_eq!(vault.list_version_count("local", doc_id), 0);
@@ -671,26 +1580,178 @@ mod tests {
     let after_save = vault.list_version_count("local", doc_id);
     assert!(after_save >= 1);
 
-    vault
-      .create_version_snapshot("local", doc_id, Some("Checkpoint 1"))
-      .unwrap();
+    vault.create_version_snapshot("local", doc_id, Some("Checkpoint 1")).unwrap();
     assert_eq!(vault.list_version_count("local", doc_id), after_save + 1);
 
-    let versions = vault.list_versions("local", doc_id);
-    assert!(!versions.is_empty());
-    let cp_id = versions
-      .iter()
+    let cp_id = vault
+      .list_versions("local", doc_id)
+      .into_iter()
       .find(|(_, lbl, _)| lbl == "Checkpoint 1")
-      .map(|(id, _, _)| id.clone())
+      .map(|(id, _, _)| id)
       .unwrap();
 
     vault.save_markdown("local", doc_id, "# Draft 2").unwrap();
-    let restored = vault
-      .restore_version_markdown("local", doc_id, &cp_id)
-      .unwrap();
-    assert!(restored.contains("# Draft 1"));
+    // Non-mutating version preview MUST NOT alter the live doc.
+    assert!(vault.load_version_markdown("local", doc_id, &cp_id).unwrap().contains("# Draft 1"));
+    assert!(vault.load_markdown("local", doc_id).unwrap().contains("# Draft 2"));
 
+    assert!(vault.restore_version_markdown("local", doc_id, &cp_id).unwrap().contains("# Draft 1"));
     vault.create_version_snapshot("local", doc_id, None).unwrap();
     assert!(vault.list_version_count("local", doc_id) >= after_save + 2);
+  }
+
+  #[test]
+  fn prefs_round_trip_and_persist_to_json_file() {
+    let dir = std::env::temp_dir().join(format!("mica_prefs_test_{}", Uuid::new_v4()));
+    let db_str = dir.join("vault.sqlite").to_str().unwrap().to_string();
+    let (ws_id, fav_a, fav_b, view_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+
+    {
+      let vault = VaultStore::open_at(&db_str).unwrap();
+      assert_eq!((vault.page_width(), vault.sidebar_width()), (800.0, 280.0));
+      assert_eq!(vault.active_origin(), DEFAULT_ORIGIN);
+      assert!(vault.bool_pref("showLineNumbers", true));
+      assert!(!vault.bool_pref("showLineNumbers", false));
+
+      vault.set_page_width(920.0).unwrap();
+      vault.set_sidebar_width(310.0).unwrap();
+      vault.set_favorites_for(ws_id, &[fav_a, fav_b, fav_a]).unwrap();
+      vault.set_view_icon(view_id, Some("📘")).unwrap();
+      vault
+        .set_known_servers(&[
+          "https://notes.mica.dev/".into(),
+          "https://notes.mica.dev".into(),
+          "http://localhost:8080/".into(),
+        ])
+        .unwrap();
+      vault.save_server_credential("https://notes.mica.dev/", "alice@mica.dev", "tok-abc").unwrap();
+      vault.set_active_origin("https://notes.mica.dev/").unwrap();
+      vault.set_bool_pref("focusMode", true).unwrap();
+    }
+
+    assert!(dir.join(PREFS_FILENAME).exists());
+    {
+      let reopened = VaultStore::open_at(&db_str).unwrap();
+      assert_eq!((reopened.page_width(), reopened.sidebar_width()), (920.0, 310.0));
+      assert_eq!(reopened.favorites_for(ws_id), vec![fav_a, fav_b]);
+      assert_eq!(reopened.view_icon(view_id).as_deref(), Some("📘"));
+      assert_eq!(
+        reopened.known_servers(),
+        vec!["https://notes.mica.dev".to_string(), "http://localhost:8080".to_string()]
+      );
+      assert_eq!(
+        reopened.saved_server_credentials(),
+        vec![("https://notes.mica.dev".into(), "alice@mica.dev".into(), "tok-abc".into())]
+      );
+      assert_eq!(reopened.active_origin(), "https://notes.mica.dev");
+      assert!(reopened.bool_pref("focusMode", false));
+      assert_eq!(reopened.snapshot_prefs().entries.get("focusMode").map(String::as_str), Some("true"));
+
+      reopened.clear_server_credential("https://notes.mica.dev").unwrap();
+      assert!(reopened.saved_server_credentials().is_empty());
+      reopened.set_view_icon(view_id, None).unwrap();
+      assert!(reopened.view_icon(view_id).is_none());
+      reopened.remove_pref("focusMode").unwrap();
+      assert!(!reopened.bool_pref("focusMode", false));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn reorder_views_renumbers_reparents_and_enforces_tree_rules() {
+    let vault = VaultStore::in_memory();
+    let ws = Uuid::new_v4();
+    let folder_a = make_view(ws, Uuid::new_v4(), "Folder A", "folder", None, "0000000010");
+    let folder_b = make_view(ws, Uuid::new_v4(), "Folder B", "folder", Some(folder_a.id), "0000000010");
+    let page_1 = make_view(ws, Uuid::new_v4(), "Page 1", "page", None, "0000000020");
+    let page_2 = make_view(ws, Uuid::new_v4(), "Page 2", "page", None, "0000000030");
+    for v in [&folder_a, &folder_b, &page_1, &page_2] {
+      vault.save_view(DEFAULT_ORIGIN, v).unwrap();
+    }
+
+    vault.reorder_views(DEFAULT_ORIGIN, Some(folder_a.id), &[page_2.id, page_1.id]).unwrap();
+    let views = vault.list_views(DEFAULT_ORIGIN);
+    let p2 = views.iter().find(|v| v.id == page_2.id).unwrap();
+    let p1 = views.iter().find(|v| v.id == page_1.id).unwrap();
+    assert_eq!((p2.parent_view_id, p2.position.as_str()), (Some(folder_a.id), "0000000010"));
+    assert_eq!((p1.parent_view_id, p1.position.as_str()), (Some(folder_a.id), "0000000020"));
+
+    assert!(vault.reorder_views(DEFAULT_ORIGIN, Some(page_1.id), &[page_2.id]).is_err());
+    assert!(vault.reorder_views(DEFAULT_ORIGIN, Some(folder_b.id), &[folder_a.id]).is_err());
+  }
+
+  #[test]
+  fn trash_restore_promote_purge_and_build_trash_entries() {
+    let vault = VaultStore::in_memory();
+    let ws = Uuid::new_v4();
+    let live_parent = make_view(ws, Uuid::new_v4(), "Projects", "folder", None, "0000000010");
+    let folder = make_view(ws, Uuid::new_v4(), "Archive", "folder", Some(live_parent.id), "0000000010");
+    let sub_folder = make_view(ws, Uuid::new_v4(), "Old", "folder", Some(folder.id), "0000000010");
+    let (doc_id, standalone_doc) = (Uuid::new_v4(), Uuid::new_v4());
+    let leaf_page = make_view(ws, doc_id, "Spec", "page", Some(sub_folder.id), "0000000010");
+    let standalone = make_view(ws, standalone_doc, "Scratch", "page", None, "0000000020");
+
+    for v in [&live_parent, &folder, &sub_folder, &leaf_page, &standalone] {
+      vault.save_view(DEFAULT_ORIGIN, v).unwrap();
+    }
+    vault.save_markdown(DEFAULT_ORIGIN, doc_id, "Spec body").unwrap();
+    vault.save_markdown(DEFAULT_ORIGIN, standalone_doc, "Scratch body").unwrap();
+
+    let trashed = vault.trash_view_subtree(DEFAULT_ORIGIN, folder.id).unwrap();
+    assert_eq!(trashed.len(), 3);
+
+    let entries = vault.build_trash_entries(&vault.list_views(DEFAULT_ORIGIN));
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].view.id, folder.id);
+    assert_eq!(entries[0].original_path, "Projects");
+    assert_eq!((entries[0].child_folders, entries[0].child_pages), (1, 1));
+    assert!(!entries[0].deleted_label.is_empty());
+
+    // Restoring a child whose parent is still deleted promotes child to root.
+    assert_eq!(vault.restore_view_subtree(DEFAULT_ORIGIN, leaf_page.id).unwrap(), vec![leaf_page.id]);
+    let leaf_after = vault.list_views(DEFAULT_ORIGIN).into_iter().find(|v| v.id == leaf_page.id).unwrap();
+    assert!(!leaf_after.is_deleted && leaf_after.parent_view_id.is_none());
+
+    assert_eq!(vault.restore_view_subtree(DEFAULT_ORIGIN, folder.id).unwrap().len(), 2);
+    assert!(vault.list_views(DEFAULT_ORIGIN).iter().all(|v| !v.is_deleted));
+
+    vault.trash_view_subtree(DEFAULT_ORIGIN, folder.id).unwrap();
+    vault.trash_view_subtree(DEFAULT_ORIGIN, standalone.id).unwrap();
+    assert_eq!(vault.purge_all_trash(DEFAULT_ORIGIN, ws).unwrap(), 3);
+    assert!(vault.load_markdown(DEFAULT_ORIGIN, standalone_doc).is_none());
+  }
+
+  #[test]
+  fn clone_view_copies_page_and_folder_subtrees_and_workspace_crud() {
+    let vault = VaultStore::in_memory();
+    let ws = Uuid::new_v4();
+    vault.save_workspace_name(DEFAULT_ORIGIN, ws, "Engineering").unwrap();
+    assert!(vault.list_workspaces(DEFAULT_ORIGIN).iter().any(|(id, n)| *id == ws && n == "Engineering"));
+    vault.save_workspace_name(DEFAULT_ORIGIN, ws, "Core Eng").unwrap();
+    assert!(vault.list_workspaces(DEFAULT_ORIGIN).iter().any(|(id, n)| *id == ws && n == "Core Eng"));
+
+    let folder = make_view(ws, Uuid::new_v4(), "Guides", "folder", None, "0000000010");
+    let doc_id = Uuid::new_v4();
+    let page = make_view(ws, doc_id, "Onboarding", "page", Some(folder.id), "0000000010");
+    vault.save_view(DEFAULT_ORIGIN, &folder).unwrap();
+    vault.save_view(DEFAULT_ORIGIN, &page).unwrap();
+    vault.save_markdown(DEFAULT_ORIGIN, doc_id, "# Welcome\n\nStep one.").unwrap();
+    vault.set_view_icon(page.id, Some("🧭")).unwrap();
+
+    let cloned_folder = vault.clone_view(DEFAULT_ORIGIN, folder.id, "Guides").unwrap();
+    assert_ne!(cloned_folder.id, folder.id);
+    assert_ne!(cloned_folder.name, "Guides");
+    let cloned_child = vault
+      .list_views(DEFAULT_ORIGIN)
+      .into_iter()
+      .find(|v| v.parent_view_id == Some(cloned_folder.id))
+      .expect("cloned child page");
+    assert_ne!(cloned_child.id, page.id);
+    assert_eq!(cloned_child.icon.as_deref(), Some("🧭"));
+    assert!(vault.load_markdown(DEFAULT_ORIGIN, cloned_child.object_id).unwrap().contains("Step one."));
+
+    vault.delete_workspace(DEFAULT_ORIGIN, ws).unwrap();
+    assert!(vault.list_views(DEFAULT_ORIGIN).into_iter().all(|v| v.workspace_id != ws));
+    assert!(vault.load_markdown(DEFAULT_ORIGIN, doc_id).is_none());
   }
 }

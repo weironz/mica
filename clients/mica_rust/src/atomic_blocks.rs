@@ -36,7 +36,7 @@ pub fn render_atomic_block(input: &AtomicBlockInput, dark_mode: bool) -> AnyElem
     "code_block" => render_code_block(input, dark_mode),
     "math" => render_math_block(input, dark_mode).into_element(),
     "mermaid" => render_mermaid_block(input, dark_mode).into_element(),
-    "board" => render_embedded_board_block(input).into_element(),
+    "board" => render_embedded_board_block(input, dark_mode).into_element(),
     "image" => render_image_block(input).into_element(),
     _ => view()
       .px_3()
@@ -47,6 +47,38 @@ pub fn render_atomic_block(input: &AtomicBlockInput, dark_mode: bool) -> AnyElem
           .text_color(move || theme().muted_foreground),
       )
       .into_element(),
+  }
+}
+
+/// 3-way semantic merge for embedded whiteboard JSON blocks (preserves concurrent
+/// independent edits across local and remote snapshots).
+pub fn merge_embedded_board_json(base: &str, local: &str, remote: &str) -> String {
+  mica_board::merge_board_json(base, local, remote)
+}
+
+/// Build a host-theme-aware `BoardSvgTheme` matching Mica's Feishu-inspired
+/// light/dark whiteboard palette.
+pub fn board_svg_theme(dark_mode: bool) -> mica_board::BoardSvgTheme {
+  if dark_mode {
+    mica_board::BoardSvgTheme {
+      dark: true,
+      canvas: "#16191E".into(),
+      surface: "#252830".into(),
+      text: "#E6E9EF".into(),
+      subtle_text: "#9CA3AF".into(),
+      border: "#343944".into(),
+      accent: "#3370FF".into(),
+    }
+  } else {
+    mica_board::BoardSvgTheme {
+      dark: false,
+      canvas: "#F7F8FA".into(),
+      surface: "#FFFFFF".into(),
+      text: "#1F2329".into(),
+      subtle_text: "#646A73".into(),
+      border: "#8C959F".into(),
+      accent: "#3370FF".into(),
+    }
   }
 }
 
@@ -74,7 +106,7 @@ fn render_code_block(input: &AtomicBlockInput, dark_mode: bool) -> AnyElement {
     return render_mermaid_card(&input.text, dark_mode).into_element();
   }
   if lang.eq_ignore_ascii_case("mica-board") {
-    return render_board_card(&input.text).into_element();
+    return render_board_card(&input.text, dark_mode).into_element();
   }
 
   let body = if input.text.is_empty() {
@@ -105,39 +137,41 @@ fn render_code_block(input: &AtomicBlockInput, dark_mode: bool) -> AnyElement {
 }
 
 fn render_math_block(input: &AtomicBlockInput, dark_mode: bool) -> impl IntoElement {
-  let latex = if input.text.trim().is_empty() {
+  render_math_card(&input.text, dark_mode)
+}
+
+fn render_math_card(source: &str, dark_mode: bool) -> impl IntoElement {
+  let latex = if source.trim().is_empty() {
     r"E = mc^2"
   } else {
-    input.text.trim()
+    source.trim()
   };
   let fg_hex = if dark_mode { "#f4f4f5" } else { "#18181b" };
   let rendered = mica_md::render::render_math_svg(latex, true, Some(fg_hex));
-  let label = format!("Math: {latex}");
 
-  let mut card = view()
+  if let Some(math_svg) = rendered {
+    let h = ((math_svg.height * 22.0).clamp(28.0, 140.0)) as f32;
+    let w = ((math_svg.width * 22.0).clamp(60.0, 520.0)) as f32;
+    return view()
+      .w_full()
+      .py_2()
+      .items_center()
+      .justify_center()
+      .child(svg(ImageSrc::svg_markup(&math_svg.svg)).w(px(w)).h(px(h)));
+  }
+
+  view()
     .w_full()
     .p_3()
-    .gap_2()
     .border_1()
     .border_color(move || theme().border)
     .rounded(move || theme().radius)
     .bg(move || theme().card)
     .child(
-      text(label)
-        .text_xs()
+      text(latex.to_string())
+        .text_sm()
         .text_color(move || theme().muted_foreground),
-    );
-
-  if let Some(math_svg) = rendered {
-    let h = ((math_svg.height * 22.0).clamp(28.0, 140.0)) as f32;
-    let w = ((math_svg.width * 22.0).clamp(60.0, 520.0)) as f32;
-    card = card.child(
-      svg(ImageSrc::svg_markup(&math_svg.svg))
-        .w(px(w))
-        .h(px(h)),
-    );
-  }
-  card
+    )
 }
 
 fn render_mermaid_block(input: &AtomicBlockInput, dark_mode: bool) -> impl IntoElement {
@@ -195,17 +229,18 @@ fn render_mermaid_card(source: &str, dark_mode: bool) -> impl IntoElement {
   card
 }
 
-fn render_embedded_board_block(input: &AtomicBlockInput) -> impl IntoElement {
-  render_board_card(&input.text)
+fn render_embedded_board_block(input: &AtomicBlockInput, dark_mode: bool) -> impl IntoElement {
+  render_board_card(&input.text, dark_mode)
 }
 
-fn render_board_card(json_src: &str) -> impl IntoElement {
+fn render_board_card(json_src: &str, dark_mode: bool) -> impl IntoElement {
   let payload = if json_src.trim().is_empty() {
     mica_board::starter_board_json("mindmap")
   } else {
     json_src.to_string()
   };
-  let rendered = mica_md::render_board_svg(&payload);
+  let svg_theme = board_svg_theme(dark_mode);
+  let rendered = mica_board::render_board_json_svg(&payload, Some(&svg_theme));
 
   let mut card = view()
     .w_full()
@@ -263,4 +298,38 @@ fn render_image_block(input: &AtomicBlockInput) -> impl IntoElement {
         .text_xs()
         .text_color(move || theme().muted_foreground),
     )
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn board_svg_theme_renders_light_and_dark_canvas() {
+    let json = mica_board::starter_board_json("mindmap");
+    let light_svg =
+      mica_board::render_board_json_svg(&json, Some(&board_svg_theme(false))).expect("light svg");
+    let dark_svg =
+      mica_board::render_board_json_svg(&json, Some(&board_svg_theme(true))).expect("dark svg");
+    assert!(light_svg.contains("#F7F8FA"));
+    assert!(dark_svg.contains("#16191E"));
+  }
+
+  #[test]
+  fn merge_embedded_board_json_preserves_concurrent_edits() {
+    let base = mica_board::BoardSnapshot::template_whiteboard();
+    let mut local = base.clone();
+    let mut remote = base.clone();
+    local.nodes[0].x = 320.0;
+    remote.nodes[0].text = "远端标题".into();
+    let merged_json = merge_embedded_board_json(
+      &base.to_compact_json(),
+      &local.to_compact_json(),
+      &remote.to_compact_json(),
+    );
+    let merged = mica_board::BoardSnapshot::parse_json(&merged_json).expect("merged json");
+    let n0 = merged.nodes.iter().find(|n| n.id == base.nodes[0].id).unwrap();
+    assert!((n0.x - 320.0).abs() < 1e-6);
+    assert_eq!(n0.text, "远端标题");
+  }
 }

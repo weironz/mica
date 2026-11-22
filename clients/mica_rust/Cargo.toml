@@ -22,6 +22,7 @@ mica-api-types = { path = "../../crates/api-types" }
 mica-board = { path = "../../crates/mica-board" }
 mica-client = { path = "../../crates/mica-client" }
 mica-core = { path = "../../crates/mica-core" }
+mica-interchange = { path = "../../crates/interchange" }
 mica-md = { path = "../../crates/md-core", features = ["render"] }
 mica-sync = { path = "../../crates/mica-sync" }
 

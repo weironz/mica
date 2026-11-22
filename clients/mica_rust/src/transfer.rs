@@ -1,14 +1,22 @@
 //! Pure-Rust document & workspace import/export utilities.
 //!
 //! Compiles cleanly on both desktop (`#[cfg(not(target_arch = "wasm32"))]`,
-//! writing directly to `<Downloads | Desktop | temp>/mica-exports/`) and
+//! supporting native OS open/save dialogs via `nsh_core::prelude::{pick_paths, pick_save_path}`
+//! with fallback to `<Downloads | Desktop | temp>/mica-exports/`) and
 //! WebAssembly (`#[cfg(target_arch = "wasm32")]`, returning structured summaries).
 
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-
-#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use chrono::Utc;
+use mica_api_types::View;
+use mica_interchange::{
+  ImportMode, ImportPlan, TreeNode, ZipFileEntry, build_markdown_only_tree_zip,
+  build_markdown_tree_zip, build_zip, normalize_archive, plan_import, plan_vault_import, read_zip,
+};
+use mica_md::{DocumentSnapshotPayload, ParseOptions, parse as parse_markdown};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Schema identifier embedded in exported `.mica.json` workspace bundles.
 pub const WORKSPACE_BUNDLE_FORMAT: &str = "mica-workspace-bundle-v1";
@@ -32,6 +40,23 @@ pub struct WorkspaceBundle {
   pub exported_at: String,
   pub page_count: usize,
   pub pages: Vec<WorkspaceBundlePage>,
+}
+
+/// ZIP export archive layout produced by `mica-interchange`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveExportFormat {
+  /// Full Mica backup (`.mica.zip`) with `manifest.json` + `.mica.json` sidecars + `.md`.
+  BackupMicaZip,
+  /// Portable Markdown-only ZIP (`.zip`) without `.mica.json` sidecars.
+  MarkdownZip,
+}
+
+/// Normalized page specification produced by ZIP archive or local folder import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedPageSpec {
+  pub title: String,
+  pub markdown: String,
+  pub folder_path: Vec<String>,
 }
 
 /// Sanitize a document or workspace title into a cross-platform safe filename
@@ -225,6 +250,11 @@ pub fn wrap_standalone_html(title: &str, html_body: &str) -> String {
   )
 }
 
+/// Alias for [`wrap_standalone_html`].
+pub fn build_standalone_html(title: &str, html_body: &str) -> String {
+  wrap_standalone_html(title, html_body)
+}
+
 /// Build a structured [`WorkspaceBundle`] payload for export or testing.
 pub fn build_workspace_bundle(workspace_name: &str, pages: &[(String, String)]) -> WorkspaceBundle {
   let ws_name = if workspace_name.trim().is_empty() {
@@ -259,8 +289,406 @@ pub fn serialize_workspace_bundle(
     .map_err(|e| format!("failed to serialize workspace bundle: {e}"))
 }
 
+// ── Real `mica-interchange` ZIP Export & Import ──────────────────────────────
+
+fn views_to_tree_nodes(views: &[View]) -> Vec<TreeNode> {
+  views
+    .iter()
+    .filter(|v| !v.is_deleted)
+    .map(|v| TreeNode {
+      id: v.id.to_string(),
+      parent_id: v.parent_view_id.map(|p| p.to_string()),
+      position: v.position.clone(),
+      name: v.name.clone(),
+      object_type: if v.object_type == "folder" {
+        "folder".to_string()
+      } else {
+        "document".to_string()
+      },
+      object_id: v.object_id.to_string(),
+      icon: v.icon.clone(),
+    })
+    .collect()
+}
+
+fn docs_to_payloads(
+  views: &[View],
+  docs: &HashMap<Uuid, String>,
+) -> HashMap<String, DocumentSnapshotPayload> {
+  let opts = ParseOptions::default();
+  let mut payloads = HashMap::new();
+  for v in views {
+    if v.is_deleted || v.object_type == "folder" {
+      continue;
+    }
+    let key = v.object_id.to_string();
+    if payloads.contains_key(&key) {
+      continue;
+    }
+    let md = docs.get(&v.object_id).map(String::as_str).unwrap_or("");
+    payloads.insert(key, parse_markdown(md, &opts));
+  }
+  payloads
+}
+
+/// Build an in-memory ZIP archive for the entire workspace using `mica-interchange`.
+///
+/// - [`ArchiveExportFormat::BackupMicaZip`] writes `manifest.json` + `.mica.json` sidecars + `.md`.
+/// - [`ArchiveExportFormat::MarkdownZip`] writes `manifest.json` + `.md` (portable Markdown export).
+pub fn build_workspace_zip_bytes(
+  _ws_name: &str,
+  views: &[View],
+  docs: &HashMap<Uuid, String>,
+  format: ArchiveExportFormat,
+) -> Result<Vec<u8>, String> {
+  let nodes = views_to_tree_nodes(views);
+  let payloads = docs_to_payloads(views, docs);
+  let images = HashMap::new();
+  let entries = match format {
+    ArchiveExportFormat::BackupMicaZip => build_markdown_tree_zip(&nodes, None, &payloads, &images),
+    ArchiveExportFormat::MarkdownZip => {
+      build_markdown_only_tree_zip(&nodes, None, &payloads, &images)
+    }
+  };
+  Ok(build_zip(&entries))
+}
+
+/// Build an in-memory ZIP archive for a single folder subtree or single document view.
+pub fn build_subtree_zip_bytes(
+  root_id: Uuid,
+  views: &[View],
+  docs: &HashMap<Uuid, String>,
+  format: ArchiveExportFormat,
+) -> Result<Vec<u8>, String> {
+  let target = views
+    .iter()
+    .find(|v| !v.is_deleted && v.id == root_id)
+    .ok_or_else(|| format!("未找到要导出的节点：{root_id}"))?;
+
+  let payloads = docs_to_payloads(views, docs);
+  let images = HashMap::new();
+
+  let entries = if target.object_type == "folder" {
+    let nodes = views_to_tree_nodes(views);
+    let root_str = root_id.to_string();
+    match format {
+      ArchiveExportFormat::BackupMicaZip => {
+        build_markdown_tree_zip(&nodes, Some(&root_str), &payloads, &images)
+      }
+      ArchiveExportFormat::MarkdownZip => {
+        build_markdown_only_tree_zip(&nodes, Some(&root_str), &payloads, &images)
+      }
+    }
+  } else {
+    let single = vec![TreeNode {
+      id: target.id.to_string(),
+      parent_id: None,
+      position: target.position.clone(),
+      name: target.name.clone(),
+      object_type: "document".to_string(),
+      object_id: target.object_id.to_string(),
+      icon: target.icon.clone(),
+    }];
+    match format {
+      ArchiveExportFormat::BackupMicaZip => {
+        build_markdown_tree_zip(&single, None, &payloads, &images)
+      }
+      ArchiveExportFormat::MarkdownZip => {
+        build_markdown_only_tree_zip(&single, None, &payloads, &images)
+      }
+    }
+  };
+
+  Ok(build_zip(&entries))
+}
+
+fn plan_to_imported_pages(plan: &ImportPlan) -> Vec<ImportedPageSpec> {
+  let mut out = Vec::new();
+  for page in &plan.pages {
+    if page.is_folder {
+      continue;
+    }
+    let mut folder_path = Vec::new();
+    let mut cursor = page.parent;
+    let mut depth_guard = 0usize;
+    while let Some(pidx) = cursor {
+      if depth_guard >= plan.pages.len() {
+        break;
+      }
+      depth_guard += 1;
+      let Some(parent) = plan.pages.get(pidx) else {
+        break;
+      };
+      if !parent.title.trim().is_empty() {
+        folder_path.push(parent.title.clone());
+      }
+      cursor = parent.parent;
+    }
+    folder_path.reverse();
+    out.push(ImportedPageSpec {
+      title: page.title.clone(),
+      markdown: page.markdown.clone(),
+      folder_path,
+    });
+  }
+  out
+}
+
+/// Parse a `.mica.zip`, Markdown `.zip`, or Notion "Markdown & CSV" `.zip`
+/// archive into normalized [`ImportedPageSpec`] records using `mica-interchange`.
+pub fn parse_zip_archive_to_pages(
+  bytes: &[u8],
+  notion_mode: bool,
+) -> Result<Vec<ImportedPageSpec>, String> {
+  let raw = read_zip(bytes).map_err(|e| format!("读取 ZIP 归档失败：{e}"))?;
+  if notion_mode {
+    let plan = plan_import(raw, true, ImportMode::AsIs)
+      .map_err(|e| format!("解析 Notion 归档失败：{e}"))?;
+    let pages = plan_to_imported_pages(&plan);
+    if pages.is_empty() {
+      return Err(
+        "导入失败：压缩包里没有 Markdown 文件。如果是从 Notion 导出的，请选「Markdown & CSV」而不是「HTML」。"
+          .to_string(),
+      );
+    }
+    return Ok(pages);
+  }
+
+  let archive = normalize_archive(raw).map_err(|e| format!("解析 ZIP 归档失败：{e}"))?;
+  if archive.markdown_count() == 0 {
+    return Err(
+      "导入失败：压缩包里没有 Markdown 文件。如果是从 Notion 导出的，请选「Markdown & CSV」而不是「HTML」。"
+        .to_string(),
+    );
+  }
+  let plan = plan_vault_import(archive.entries);
+  let pages = plan_to_imported_pages(&plan);
+  if pages.is_empty() {
+    return Err("归档中没有可导入的页面".to_string());
+  }
+  Ok(pages)
+}
+
+/// Recursively walk a local directory for `.md` / `.markdown` files and plan them
+/// via `mica-interchange::plan_vault_import`.
+///
+/// When `wrap_root_folder` is `true`, the picked directory's own name is prepended
+/// as the outer folder segment in each [`ImportedPageSpec::folder_path`].
+pub fn import_folder_from_disk(
+  dir: &Path,
+  wrap_root_folder: bool,
+) -> Result<Vec<ImportedPageSpec>, String> {
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    if !dir.exists() {
+      return Err(format!("目录不存在：{}", dir.display()));
+    }
+    if !dir.is_dir() {
+      return Err(format!("目标不是文件夹：{}", dir.display()));
+    }
+
+    let mut entries: Vec<ZipFileEntry> = Vec::new();
+    walk_markdown_dir(dir, dir, &mut entries)?;
+    if entries.is_empty() {
+      return Err(format!("文件夹中没有找到 Markdown 文件：{}", dir.display()));
+    }
+
+    let plan = plan_vault_import(entries);
+    let mut pages = plan_to_imported_pages(&plan);
+    if pages.is_empty() {
+      return Err("文件夹中没有可导入的页面".to_string());
+    }
+
+    if wrap_root_folder {
+      let root_name = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("导入文件夹")
+        .to_string();
+      for page in &mut pages {
+        page.folder_path.insert(0, root_name.clone());
+      }
+    }
+
+    Ok(pages)
+  }
+  #[cfg(target_arch = "wasm32")]
+  {
+    let _ = (dir, wrap_root_folder);
+    Err("Web 端暂不支持直接读取本地文件夹".to_string())
+  }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn default_export_dir() -> PathBuf {
+fn walk_markdown_dir(
+  root: &Path,
+  current: &Path,
+  out: &mut Vec<ZipFileEntry>,
+) -> Result<(), String> {
+  let read = std::fs::read_dir(current)
+    .map_err(|e| format!("读取目录失败 {}：{e}", current.display()))?;
+  let mut children: Vec<PathBuf> = Vec::new();
+  for entry in read {
+    let entry = entry.map_err(|e| format!("遍历目录失败 {}：{e}", current.display()))?;
+    let path = entry.path();
+    let name = entry.file_name();
+    let name_str = name.to_string_lossy();
+    // Skip hidden/dot files and directories (`.git`, `.obsidian`, `.DS_Store`, etc.).
+    if name_str.starts_with('.') {
+      continue;
+    }
+    children.push(path);
+  }
+  children.sort();
+
+  for path in children {
+    if path.is_dir() {
+      walk_markdown_dir(root, &path, out)?;
+    } else if path.is_file() {
+      let is_md = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
+      if !is_md {
+        continue;
+      }
+      let rel = path
+        .strip_prefix(root)
+        .map_err(|e| format!("计算相对路径失败 {}：{e}", path.display()))?;
+      let mut archive_name = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
+      if archive_name.to_ascii_lowercase().ends_with(".markdown") {
+        let trim_len = archive_name.len() - ".markdown".len();
+        archive_name.truncate(trim_len);
+        archive_name.push_str(".md");
+      }
+      let bytes = std::fs::read(&path)
+        .map_err(|e| format!("读取文件失败 {}：{e}", path.display()))?;
+      out.push(ZipFileEntry {
+        name: archive_name,
+        bytes,
+      });
+    }
+  }
+  Ok(())
+}
+
+// ── Native OS File Dialog Wrappers (nsh-core 0.6.1) ─────────────────────────
+
+/// Show a native OS Save-As dialog and write `bytes` to the chosen destination.
+///
+/// - Returns `Ok(Some(path))` when written.
+/// - Returns `Ok(None)` when the user cancels the dialog.
+/// - On headless / unsupported desktop environments where the OS dialog is
+///   unavailable, gracefully falls back to writing into `default_export_dir()`.
+pub async fn save_bytes_with_dialog(
+  suggested_name: &str,
+  filter_name: &str,
+  exts: &[&str],
+  bytes: &[u8],
+) -> Result<Option<PathBuf>, String> {
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    use nsh_core::file_dialog::{FileFilter, SaveDialog};
+    use nsh_core::prelude::pick_save_path;
+
+    let mut dialog = SaveDialog::new().file_name(suggested_name);
+    if !exts.is_empty() {
+      dialog = dialog.filter(FileFilter::new(filter_name, exts.iter().copied()));
+    }
+
+    match pick_save_path(dialog).await {
+      Ok(Some(path)) => {
+        if let Some(parent) = path.parent()
+          && !parent.as_os_str().is_empty()
+        {
+          std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败 {}：{e}", parent.display()))?;
+        }
+        std::fs::write(&path, bytes)
+          .map_err(|e| format!("写入文件失败 {}：{e}", path.display()))?;
+        Ok(Some(path))
+      }
+      Ok(None) => Ok(None),
+      Err(_unavailable) => {
+        let dir = default_export_dir();
+        std::fs::create_dir_all(&dir)
+          .map_err(|e| format!("创建导出目录失败 {}：{e}", dir.display()))?;
+        let target = dir.join(suggested_name);
+        std::fs::write(&target, bytes)
+          .map_err(|e| format!("写入导出文件失败 {}：{e}", target.display()))?;
+        Ok(Some(target))
+      }
+    }
+  }
+  #[cfg(target_arch = "wasm32")]
+  {
+    let _ = (suggested_name, filter_name, exts, bytes);
+    Err("Web 端暂不支持原生保存对话框".to_string())
+  }
+}
+
+/// Show a native OS file picker for importing `.md` / `.zip` files.
+///
+/// Returns `Ok(Vec::new())` if the user cancels.
+pub async fn pick_import_files(
+  filter_name: &str,
+  exts: &[&str],
+  multiple: bool,
+) -> Result<Vec<PathBuf>, String> {
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    use nsh_core::file_dialog::{FileFilter, OpenDialog};
+    use nsh_core::prelude::pick_paths;
+
+    let mut dialog = OpenDialog::files().multiple(multiple);
+    if !exts.is_empty() {
+      dialog = dialog.filter(FileFilter::new(filter_name, exts.iter().copied()));
+    }
+    match pick_paths(dialog).await {
+      Ok(Some(paths)) => Ok(paths),
+      Ok(None) => Ok(Vec::new()),
+      Err(err) => Err(format!("打开文件选择器失败：{err}")),
+    }
+  }
+  #[cfg(target_arch = "wasm32")]
+  {
+    let _ = (filter_name, exts, multiple);
+    Err("Web 端暂不支持原生文件选择器".to_string())
+  }
+}
+
+/// Show a native OS folder picker for importing a Markdown vault directory.
+///
+/// Returns `Ok(None)` if the user cancels.
+pub async fn pick_import_folder() -> Result<Option<PathBuf>, String> {
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    use nsh_core::file_dialog::OpenDialog;
+    use nsh_core::prelude::pick_paths;
+
+    let dialog = OpenDialog::folders().multiple(false);
+    match pick_paths(dialog).await {
+      Ok(Some(mut paths)) => Ok(paths.drain(..).next()),
+      Ok(None) => Ok(None),
+      Err(err) => Err(format!("打开文件夹选择器失败：{err}")),
+    }
+  }
+  #[cfg(target_arch = "wasm32")]
+  {
+    Err("Web 端暂不支持原生文件夹选择器".to_string())
+  }
+}
+
+// ── Legacy / Direct Disk Export & Import Helpers ─────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn default_export_dir() -> PathBuf {
   dirs_next::download_dir()
     .or_else(dirs_next::desktop_dir)
     .unwrap_or_else(std::env::temp_dir)
@@ -315,6 +743,11 @@ pub fn export_markdown_file(title: &str, markdown: &str) -> Result<String, Strin
   }
 }
 
+/// Alias for [`export_markdown_file`].
+pub fn export_markdown_to_disk(title: &str, markdown: &str) -> Result<String, String> {
+  export_markdown_file(title, markdown)
+}
+
 /// Wrap `html_body` in a standalone warm-paper HTML5 document (`#FFFFFF` /
 /// `#37352F`), write it to `<export_dir>/<safe_title>.html` on desktop, and
 /// return the written path (or a summary string on `wasm32`).
@@ -329,6 +762,11 @@ pub fn export_html_file(title: &str, html_body: &str) -> Result<String, String> 
     let doc = wrap_standalone_html(title, html_body);
     Ok(format!("{stem}.html（{} 字节，Web 端预览导出）", doc.len()))
   }
+}
+
+/// Alias for [`export_html_file`].
+pub fn export_html_to_disk(title: &str, html_body: &str) -> Result<String, String> {
+  export_html_file(title, html_body)
 }
 
 /// Export all workspace pages as a `mica-workspace-bundle-v1` JSON file to
@@ -352,6 +790,14 @@ pub fn export_workspace_bundle(
       json.len()
     ))
   }
+}
+
+/// Alias for [`export_workspace_bundle`].
+pub fn export_workspace_bundle_to_disk(
+  workspace_name: &str,
+  pages: &[(String, String)],
+) -> Result<String, String> {
+  export_workspace_bundle(workspace_name, pages)
 }
 
 /// Read a UTF-8 `.md` file from disk on desktop and return
@@ -392,6 +838,11 @@ pub fn import_markdown_from_path(path: &str) -> Result<(String, String), String>
   }
 }
 
+/// Alias for [`import_markdown_from_path`].
+pub fn import_markdown_from_disk(path: &str) -> Result<(String, String), String> {
+  import_markdown_from_path(path)
+}
+
 fn strip_surrounding_quotes(s: &str) -> &str {
   if s.len() >= 2
     && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
@@ -409,6 +860,33 @@ mod tests {
   #[cfg(not(target_arch = "wasm32"))]
   fn temp_test_dir(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("mica-transfer-{tag}-{}", uuid::Uuid::new_v4()))
+  }
+
+  fn sample_view(
+    ws_id: Uuid,
+    id: Uuid,
+    object_id: Uuid,
+    parent: Option<Uuid>,
+    object_type: &str,
+    name: &str,
+    position: &str,
+  ) -> View {
+    let now = Utc::now();
+    View {
+      id,
+      workspace_id: ws_id,
+      parent_view_id: parent,
+      object_id,
+      object_type: object_type.to_string(),
+      name: name.to_string(),
+      icon: None,
+      position: position.to_string(),
+      is_deleted: false,
+      created_by: Uuid::new_v4(),
+      created_at: now,
+      updated_at: now,
+      state_bytes: None,
+    }
   }
 
   #[test]
@@ -488,6 +966,108 @@ mod tests {
     assert_eq!(parsed.pages.len(), 2);
     assert_eq!(parsed.pages[0].title, "首页");
     assert_eq!(parsed.pages[1].markdown, "- M3 完成");
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn mica_zip_backup_and_markdown_zip_round_trip() {
+    let ws_id = Uuid::new_v4();
+    let folder_id = Uuid::new_v4();
+    let doc1_view_id = Uuid::new_v4();
+    let doc1_obj_id = Uuid::new_v4();
+    let doc2_view_id = Uuid::new_v4();
+    let doc2_obj_id = Uuid::new_v4();
+
+    let views = vec![
+      sample_view(ws_id, folder_id, folder_id, None, "folder", "产品设计", "a0"),
+      sample_view(
+        ws_id,
+        doc1_view_id,
+        doc1_obj_id,
+        Some(folder_id),
+        "page",
+        "架构规范",
+        "a0",
+      ),
+      sample_view(ws_id, doc2_view_id, doc2_obj_id, None, "page", "首页", "a1"),
+    ];
+    let mut docs = HashMap::new();
+    docs.insert(doc1_obj_id, "第一段正文。\n\n- 要点 A\n- 要点 B".to_string());
+    docs.insert(doc2_obj_id, "欢迎使用 Mica 纯 Rust 客户端。".to_string());
+
+    // 1. Full `.mica.zip` backup includes sidecar `.mica.json` + manifest.json + `.md`
+    let backup_bytes =
+      build_workspace_zip_bytes("研发工作区", &views, &docs, ArchiveExportFormat::BackupMicaZip)
+        .expect("build backup zip");
+    let raw_entries = read_zip(&backup_bytes).expect("read backup zip");
+    assert!(raw_entries.iter().any(|e| e.name == "manifest.json"));
+    assert!(raw_entries.iter().any(|e| e.name.ends_with(".mica.json")));
+
+    let imported_backup =
+      parse_zip_archive_to_pages(&backup_bytes, false).expect("import backup zip");
+    assert_eq!(imported_backup.len(), 2);
+    let nested = imported_backup
+      .iter()
+      .find(|p| p.title == "架构规范")
+      .expect("nested doc");
+    assert_eq!(nested.folder_path, vec!["产品设计".to_string()]);
+    assert!(nested.markdown.contains("第一段正文"));
+    assert!(nested.markdown.contains("要点 A"));
+    let root_doc = imported_backup
+      .iter()
+      .find(|p| p.title == "首页")
+      .expect("root doc");
+    assert!(root_doc.folder_path.is_empty());
+    assert!(root_doc.markdown.contains("欢迎使用 Mica"));
+
+    // 2. Portable Markdown `.zip` omits `.mica.json` sidecars and still round-trips!
+    let md_zip_bytes =
+      build_workspace_zip_bytes("研发工作区", &views, &docs, ArchiveExportFormat::MarkdownZip)
+        .expect("build md zip");
+    let md_entries = read_zip(&md_zip_bytes).expect("read md zip");
+    assert!(!md_entries.iter().any(|e| e.name.ends_with(".mica.json")));
+    let imported_md = parse_zip_archive_to_pages(&md_zip_bytes, false).expect("import md zip");
+    assert_eq!(imported_md.len(), 2);
+
+    // 3. Subtree ZIP export for folder contains only its descendants
+    let sub_bytes = build_subtree_zip_bytes(
+      folder_id,
+      &views,
+      &docs,
+      ArchiveExportFormat::MarkdownZip,
+    )
+    .expect("build subtree zip");
+    let imported_sub = parse_zip_archive_to_pages(&sub_bytes, false).expect("import subtree zip");
+    assert_eq!(imported_sub.len(), 1);
+    assert_eq!(imported_sub[0].title, "架构规范");
+    assert!(imported_sub[0].folder_path.is_empty());
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn import_folder_walks_nested_markdown_and_wraps_root() {
+    let dir = temp_test_dir("vault");
+    let sub = dir.join("项目文档");
+    std::fs::create_dir_all(&sub).expect("create sub");
+    std::fs::create_dir_all(dir.join(".hidden")).expect("create hidden");
+    std::fs::write(dir.join("概览.md"), "总览内容").expect("write root md");
+    std::fs::write(sub.join("接口.markdown"), "接口定义").expect("write nested md");
+    std::fs::write(dir.join(".hidden").join("secret.md"), "ignored").expect("write hidden md");
+
+    let unwrapped = import_folder_from_disk(&dir, false).expect("import folder unwrapped");
+    assert_eq!(unwrapped.len(), 2);
+    let nested = unwrapped.iter().find(|p| p.title == "接口").expect("nested");
+    assert_eq!(nested.folder_path, vec!["项目文档".to_string()]);
+
+    let wrapped = import_folder_from_disk(&dir, true).expect("import folder wrapped");
+    assert_eq!(wrapped.len(), 2);
+    let root_folder = dir.file_name().unwrap().to_string_lossy().to_string();
+    let wrapped_nested = wrapped.iter().find(|p| p.title == "接口").expect("wrapped nested");
+    assert_eq!(
+      wrapped_nested.folder_path,
+      vec![root_folder, "项目文档".to_string()]
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
   }
