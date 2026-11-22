@@ -92,3 +92,64 @@ Future<String?> boardMindmapToMarkdown(String source) async {
   );
   return res?.toDart;
 }
+
+class _WebBoardSessionBridge implements BoardSessionBridge {
+  _WebBoardSessionBridge(this._handle);
+
+  final JSObject _handle;
+
+  @override
+  String currentStatePatchJson() =>
+      _handle.callMethod<JSString>('currentStatePatchJson'.toJS).toDart;
+
+  @override
+  String dispatchJson(String cmdJson) =>
+      _handle.callMethodVarArgs<JSString>('dispatchJson'.toJS, [cmdJson.toJS]).toDart;
+
+  @override
+  String pointerMoveJson(
+    double worldX,
+    double worldY,
+    double screenX,
+    double screenY, {
+    bool altPressed = false,
+  }) => _handle
+      .callMethodVarArgs<JSString>('pointerMoveJson'.toJS, [
+        worldX.toJS,
+        worldY.toJS,
+        screenX.toJS,
+        screenY.toJS,
+        altPressed.toJS,
+      ])
+      .toDart;
+
+  @override
+  String exportCompactJson() =>
+      _handle.callMethod<JSString>('exportCompactJson'.toJS).toDart;
+
+  @override
+  String renderSvg({BoardThemeInput? theme}) {
+    final themeArg = theme == null ? null : jsonEncode(theme.toJson()).toJS;
+    return _handle
+        .callMethodVarArgs<JSString>('renderSvg'.toJS, [themeArg])
+        .toDart;
+  }
+
+  @override
+  void dispose() {
+    _handle.callMethod<JSAny?>('free'.toJS);
+  }
+}
+
+Future<BoardSessionBridge?> openBoardSession(String snapshotJson) async {
+  final mod = await _ensureModule();
+  if (mod == null) return null;
+  try {
+    final ctor = mod.getProperty<JSFunction?>('WasmBoardSession'.toJS);
+    if (ctor == null) return null;
+    final handle = ctor.callAsConstructor<JSObject>(snapshotJson.toJS);
+    return _WebBoardSessionBridge(handle);
+  } catch (_) {
+    return null;
+  }
+}

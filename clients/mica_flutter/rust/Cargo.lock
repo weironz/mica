@@ -1679,6 +1679,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-editor"
+version = "0.1.0"
+dependencies = [
+ "mica-core",
+ "mica-md",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "mica-interchange"
 version = "0.1.0"
 dependencies = [
@@ -1711,6 +1723,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "uuid",
+]
+
+[[package]]
+name = "mica-sync"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "mica-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+ "yrs",
 ]
 
 [[package]]
@@ -2494,9 +2519,11 @@ dependencies = [
  "flutter_rust_bridge",
  "mica-board",
  "mica-core",
+ "mica-editor",
  "mica-interchange",
  "mica-markdown",
  "mica-md",
+ "mica-sync",
  "serde_json",
  "uuid",
  "webview2-com",

@@ -1,6 +1,11 @@
 //! flutter_rust_bridge surface for `mica-board`: headless SVG rendering,
 //! mind map auto-layout, orthogonal obstacle-avoiding connector routing,
-//! draw.io import, Markdown outline conversion, and 3-way semantic merge.
+//! draw.io import, Markdown outline conversion, 3-way semantic merge, and
+//! stateful `BoardSession` interaction engine.
+
+use std::sync::Mutex;
+
+use flutter_rust_bridge::frb;
 
 pub struct BoardTheme {
     pub dark: bool,
@@ -74,4 +79,58 @@ pub fn starter_board_json(template: String) -> String {
 /// Extract searchable plain text from a board JSON string.
 pub fn extract_board_plain_text(source: String) -> String {
     mica_board::extract_board_text_json(&source)
+}
+
+/// Stateful headless board interaction session (desktop synchronous FFI handle).
+#[frb(opaque)]
+pub struct BoardSessionHandle {
+    inner: Mutex<mica_board::BoardSession>,
+}
+
+impl BoardSessionHandle {
+    #[frb(sync)]
+    pub fn from_json(snapshot_json: String) -> Self {
+        Self {
+            inner: Mutex::new(mica_board::BoardSession::from_json(&snapshot_json)),
+        }
+    }
+
+    #[frb(sync)]
+    pub fn current_state_patch_json(&self) -> String {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        serde_json::to_string(&guard.current_state_patch()).unwrap_or_else(|_| "{}".into())
+    }
+
+    #[frb(sync)]
+    pub fn dispatch_json(&self, cmd_json: String) -> Result<String, String> {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.dispatch_json(&cmd_json)
+    }
+
+    #[frb(sync)]
+    pub fn pointer_move_json(
+        &self,
+        world_x: f64,
+        world_y: f64,
+        screen_x: f64,
+        screen_y: f64,
+        alt_pressed: bool,
+    ) -> String {
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let patch = guard.pointer_move(world_x, world_y, screen_x, screen_y, alt_pressed);
+        serde_json::to_string(&patch).unwrap_or_else(|_| "{}".into())
+    }
+
+    #[frb(sync)]
+    pub fn export_compact_json(&self) -> String {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.export_compact_json()
+    }
+
+    #[frb(sync)]
+    pub fn render_svg(&self, theme: Option<BoardTheme>) -> String {
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let host = theme.as_ref().map(mica_board::BoardSvgTheme::from);
+        guard.render_svg(host.as_ref())
+    }
 }

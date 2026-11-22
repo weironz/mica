@@ -28,6 +28,10 @@ const ROOTS: &[&str] = &[
   "crates/mica-board/src",
   "crates/mica-core/Cargo.toml",
   "crates/mica-core/src",
+  "crates/mica-editor/Cargo.toml",
+  "crates/mica-editor/src",
+  "crates/mica-sync/Cargo.toml",
+  "crates/mica-sync/src",
 ];
 
 fn collect(repo: &Path, rel: &str, out: &mut Vec<String>) {

@@ -1,8 +1,10 @@
 pub mod board;
 pub mod document;
+pub mod editor;
 pub mod markdown;
 pub mod pdf;
 pub mod render;
 pub mod simple;
 pub mod store;
+pub mod sync;
 pub mod zip;

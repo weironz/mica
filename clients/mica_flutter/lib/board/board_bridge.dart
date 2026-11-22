@@ -52,3 +52,23 @@ Future<String?> boardMarkdownToMindmap(String markdown, {String? title}) =>
 
 Future<String?> boardMindmapToMarkdown(String source) =>
     impl.boardMindmapToMarkdown(source);
+
+/// Cross-platform stateful handle over Rust `crates/mica-board::BoardSession`
+/// (synchronous FFI on desktop, lazy on-demand WASM on Web).
+abstract class BoardSessionBridge {
+  String currentStatePatchJson();
+  String dispatchJson(String cmdJson);
+  String pointerMoveJson(
+    double worldX,
+    double worldY,
+    double screenX,
+    double screenY, {
+    bool altPressed = false,
+  });
+  String exportCompactJson();
+  String renderSvg({BoardThemeInput? theme});
+  void dispose();
+}
+
+Future<BoardSessionBridge?> openBoardSession(String snapshotJson) =>
+    impl.openBoardSession(snapshotJson);

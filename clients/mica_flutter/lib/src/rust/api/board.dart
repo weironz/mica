@@ -60,6 +60,30 @@ Future<String> starterBoardJson({required String template}) =>
 Future<String> extractBoardPlainText({required String source}) =>
     RustLib.instance.api.crateApiBoardExtractBoardPlainText(source: source);
 
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<BoardSessionHandle>>
+abstract class BoardSessionHandle implements RustOpaqueInterface {
+  String currentStatePatchJson();
+
+  String dispatchJson({required String cmdJson});
+
+  String exportCompactJson();
+
+  static BoardSessionHandle fromJson({required String snapshotJson}) => RustLib
+      .instance
+      .api
+      .crateApiBoardBoardSessionHandleFromJson(snapshotJson: snapshotJson);
+
+  String pointerMoveJson({
+    required double worldX,
+    required double worldY,
+    required double screenX,
+    required double screenY,
+    required bool altPressed,
+  });
+
+  String renderSvg({BoardTheme? theme});
+}
+
 class BoardTheme {
   final bool dark;
   final String canvas;

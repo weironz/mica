@@ -68,3 +68,64 @@ Future<String?> boardMindmapToMarkdown(String source) async {
     return null;
   }
 }
+
+class _IoBoardSessionBridge implements BoardSessionBridge {
+  _IoBoardSessionBridge(this._handle);
+
+  final rust.BoardSessionHandle _handle;
+
+  @override
+  String currentStatePatchJson() => _handle.currentStatePatchJson();
+
+  @override
+  String dispatchJson(String cmdJson) => _handle.dispatchJson(cmdJson: cmdJson);
+
+  @override
+  String pointerMoveJson(
+    double worldX,
+    double worldY,
+    double screenX,
+    double screenY, {
+    bool altPressed = false,
+  }) => _handle.pointerMoveJson(
+    worldX: worldX,
+    worldY: worldY,
+    screenX: screenX,
+    screenY: screenY,
+    altPressed: altPressed,
+  );
+
+  @override
+  String exportCompactJson() => _handle.exportCompactJson();
+
+  @override
+  String renderSvg({BoardThemeInput? theme}) => _handle.renderSvg(
+    theme: theme == null
+        ? null
+        : rust.BoardTheme(
+            dark: theme.dark,
+            canvas: theme.canvas,
+            surface: theme.surface,
+            text: theme.text,
+            subtleText: theme.subtleText,
+            border: theme.border,
+            accent: theme.accent,
+          ),
+  );
+
+  @override
+  void dispose() {
+    _handle.dispose();
+  }
+}
+
+Future<BoardSessionBridge?> openBoardSession(String snapshotJson) async {
+  if (!_rustReady) return null;
+  try {
+    return _IoBoardSessionBridge(
+      rust.BoardSessionHandle.fromJson(snapshotJson: snapshotJson),
+    );
+  } catch (_) {
+    return null;
+  }
+}

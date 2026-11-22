@@ -23,6 +23,8 @@ mica-markdown = { path = "../../../crates/markdown" }
 # Desktop codec forwards directly to the same wire API as the Web binding.
 mica-md = { path = "../../../crates/md-core", features = ["render"] }
 mica-board = { path = "../../../crates/mica-board", features = ["crdt"] }
+mica-sync = { path = "../../../crates/mica-sync", features = ["sqlite"] }
+mica-editor = { path = "../../../crates/mica-editor" }
 # Blocks cross the FFI boundary as JSON strings (Dart already speaks that shape).
 serde_json = "1"
 # Same in-house store-ZIP writer the server uses (only serde_json underneath), so
