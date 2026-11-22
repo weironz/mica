@@ -100,6 +100,7 @@ done < <(
   {
     find crates -path '*/src/*' -name '*.rs' -not -path '*/target/*' 2>/dev/null
     find clients/mica_flutter/rust/src -name '*.rs' -not -path '*/target/*' 2>/dev/null
+    find clients/mica_rust/src -name '*.rs' -not -path '*/target/*' 2>/dev/null
     find clients/mica_flutter/lib -name '*.dart' 2>/dev/null
   } | sort
 )

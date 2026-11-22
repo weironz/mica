@@ -10,13 +10,13 @@
 
 ## 平台
 
-- 🚀 **全栈 Rust 三层标杆架构重构** [#172](https://github.com/weironz/mica/issues/172)（2026-11-22 定稿，分支 `feat/fullstack-rust-architecture`）。
-  确立「L1 数据引擎 + L2 无头纯 Rust 客户端内核 + L3 路线二-B（自有 `mica-editor` + NSH 原生壳）」四阶段演进路线：
-  - Phase 0（就绪）：Windows 本机真人中文 IME、NSH 纯 Rust Web 体积与路线二-B 虚拟化探针；
-  - Phase 1：`crates/mica-board` 交互态 `BoardSession` 收口 + `crates/mica-sync` 统一离线存储；
-  - Phase 2：`crates/mica-editor` 无头编辑器内核 + `crates/mica-client`；
-  - Phase 3（过冻结/真机硬闸门后启动）：`clients/mica_rust` 纯 Rust UI 壳落地并退役 Flutter。
-  详见 [设计方案与分阶段开发计划](../architecture/fullstack-rust-architecture.md) 与 [前序调研](../architecture/ui-gpui-evaluation.md)。
+- 🚀 **全栈 Rust 三层标杆架构重构** [#172](https://github.com/weironz/mica/issues/172)（2026-11-22 核实，分支 `feat/fullstack-rust-architecture`）。
+  确立「L1 数据引擎 + L2 无头纯 Rust 客户端内核 + L3 路线二-B（自有 `mica-editor` + NSH 原生壳）」四阶段演进路线，分支已完成核心架构落地，待外部闸门与合入 `main`：
+  - Phase 0（本机探针完成；待 `[等用户]` 真人 IME/真机抽检）：纯 Rust Web WASM 1.39 MiB Brotli-11、2,000 块路线二-B 挂载 15.27 ms / 单块更新 17 µs、500 节点 Canvas 1.12 ms；
+  - Phase 1（L2 内核 + FFI/WASM 桥接已完成）：`crates/mica-board::session`（100 测试，`board-wasm` 195.1 KiB gzip-9）与 `crates/mica-sync`（66 测试，含 SQLite + 内存快照镜像）；
+  - Phase 2（L2 内核 + FFI 句柄已完成；Flutter 旧控制器瘦身与棘轮收紧待续）：`crates/mica-editor`（26 套件含 proptest）与 `crates/mica-client`（7 测试），`clients/mica_flutter` 新增 FFI 句柄与跨平台 `BoardSessionBridge`（`l2_rust_ffi_test.dart` 及核心回归 27/27 通过）；
+  - Phase 3（`clients/mica_rust` 原生壳原型与 `app_flows.rs` E2E 全绿，Windows 二进制可编译运行；Flutter 退役等待上游 `nsh-compat` 冻结与物理 Android/Safari/真人 IME 硬闸门签收）。
+  详见 [设计方案与分阶段开发计划](../architecture/fullstack-rust-architecture.md)、[P0 实证报告](../reviews/fullstack-rust-p0-spike-2026-11-22.md) 与 [前序调研](../architecture/ui-gpui-evaluation.md)。
 
 ## SDK 与代码结构
 
