@@ -24,8 +24,8 @@ use nsh_core::{
 use uuid::Uuid;
 
 use crate::{
+  editor_bridge::OutlineItem,
   mica_icons,
-  mica_rich_bridge::OutlineItem,
   mica_theme::{MicaPalette, palette},
 };
 

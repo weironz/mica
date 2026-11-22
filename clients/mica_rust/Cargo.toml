@@ -22,15 +22,16 @@ mica-api-types = { path = "../../crates/api-types" }
 mica-board = { path = "../../crates/mica-board" }
 mica-client = { path = "../../crates/mica-client" }
 mica-core = { path = "../../crates/mica-core" }
+mica-editor = { path = "../../crates/mica-editor" }
 mica-interchange = { path = "../../crates/interchange" }
 mica-md = { path = "../../crates/md-core", features = ["render"] }
 mica-sync = { path = "../../crates/mica-sync" }
 
-# L3 Native Shell presentation primitives: enable `rich-editor` (ProseMirror/Tiptap
-# native view, zero extra deps) and `editor` (pure-Rust code editor via ropey) while
-# keeping `default-features = false` to avoid duplicate math/syntect/zstd-sys.
+# L3 Native Shell presentation primitives: enable only `editor` (pure-Rust code
+# editor via ropey for code blocks); document editing runs on Mica's own
+# `crates/mica-editor` + NSH native `virtual_list` (Route 2-B, zero `rich-editor`).
 nsh-core = "0.6.1"
-nsh-base = { version = "0.6.1", default-features = false, features = ["rich-editor", "editor"] }
+nsh-base = { version = "0.6.1", default-features = false, features = ["editor"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

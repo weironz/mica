@@ -21,17 +21,17 @@ pub mod ai_dialog;
 pub mod app_menu;
 pub mod atomic_blocks;
 pub mod block_marquee;
+pub mod block_views;
 pub mod board_view;
 pub mod comment_panel;
+pub mod editor_bridge;
 pub mod editor_slash;
 pub mod editor_view;
 pub mod emoji_picker;
 pub mod graph_dialog;
 pub mod mica_icons;
-pub mod mica_rich_bridge;
 pub mod mica_theme;
 pub mod net;
-pub mod node_views;
 pub mod page_width;
 pub mod property_panel;
 pub mod right_sidebar;
@@ -40,6 +40,7 @@ pub mod settings_view;
 pub mod share_dialog;
 pub mod sidebar;
 pub mod storage;
+pub mod text_geometry;
 pub mod transfer;
 pub mod transfer_dialog;
 pub mod tree_dnd;
@@ -79,12 +80,12 @@ use uuid::Uuid;
 use crate::{
   ai_dialog::{AiTarget, GlobalAiState, InlineAiPhase, InlineAiState},
   app_menu::{AccountMenuState, AppMenuCallbacks},
+  block_views::{CodeAiAction, CodeAiCallback, OpenBoardCallback, OpenBoardWithBlockCallback},
+  editor_bridge::MicaDocumentBridge,
   editor_view::EditorHeaderProps,
   graph_dialog::PageGraphData,
-  mica_rich_bridge::MicaDocumentBridge,
   mica_theme::{install_mica_theme, palette},
   net::{CloudConfig, CloudConnector},
-  node_views::{CodeAiAction, CodeAiCallback, OpenBoardCallback, OpenBoardWithBlockCallback},
   right_sidebar::{BacklinkEntry, RightSidebarExtras, RightSidebarProps, SnapshotEntry, ToolsTab},
   search_view::{SearchRecentItem, SearchViewProps, SearchWorkspaceChip},
   settings_view::{SettingsCallbacks, SettingsViewProps},
@@ -604,10 +605,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let inline_ai_phase = signal(InlineAiPhase::Idle);
   let inline_ai_error: Signal<Option<String>> = signal(None);
 
-  // RichEditor <-> MicaDoc CRDT Bridge
+  // Virtualized `mica-editor` <-> `MicaDoc` CRDT Bridge
   let initial_md = docs_store.borrow().get(&initial_doc_id).cloned().unwrap_or_default();
   let bridge = MicaDocumentBridge::from_markdown(&initial_md);
-  node_views::register_mica_node_views(&bridge.session(), dark_mode);
 
   // Backlinks signal below editor
   let backlinks_sig: Signal<Vec<BacklinkEntry>> = signal(compute_backlinks_for(

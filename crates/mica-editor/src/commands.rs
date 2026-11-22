@@ -248,6 +248,10 @@ pub enum EditorCommand {
     #[serde(default)]
     align: Option<String>,
   },
+  /// Replace the raw text/source of block `block_index` (e.g. code block,
+  /// Mermaid diagram, math LaTeX, or embedded whiteboard JSON) without running
+  /// prose input rules, preserving marks/data and recording a CRDT undo step.
+  SetBlockText { block_index: usize, text: String },
   /// Explicitly close any open typing-coalescing history batch (e.g. on 400ms timer).
   FlushHistoryBatch,
 }

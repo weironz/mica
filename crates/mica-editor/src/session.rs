@@ -379,6 +379,16 @@ impl EditorSession {
         alt,
         align,
       } => self.cmd_insert_image(file_id, url, name, &alt, align, &mut ctx),
+      EditorCommand::SetBlockText { block_index, text } => {
+        if let Some(b) = self.blocks.get_mut(block_index)
+          && b.text != text
+        {
+          let id = b.id.clone();
+          b.text = text;
+          ctx.ops.push(Self::update_text_data_op(b));
+          ctx.typing_block = Some(id);
+        }
+      }
       EditorCommand::FlushHistoryBatch => {
         self.history.flush_typing_batch(&mut self.doc);
       }

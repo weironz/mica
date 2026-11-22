@@ -279,3 +279,43 @@ fn regression_recycle_bin_hidden_copy_path_appearance_and_board_click_edit() {
   app.wait_for("id:embedded-board-modal").unwrap();
   app.press("id:board-done-btn").unwrap();
 }
+
+#[test]
+fn virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Switch to a brand-new page and verify zero stale blocks leak from previous page.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+  app.type_text("id:mica-rich-editor", "Single layer quote text").unwrap();
+  app.wait_for("Single layer quote text").unwrap();
+  app.press("id:ed-quote").unwrap();
+
+  // 2. Insert a code block, type Mermaid syntax, switch language via top-level `overlay()`
+  //    picker (`code-lang-btn` -> `code-lang-picker` -> `code-lang-mermaid`), then click
+  //    the rendered Mermaid diagram to open the fullscreen zoom Lightbox modal!
+  app.press("id:ed-slash-open").unwrap();
+  app.wait_for("id:slash-code").unwrap();
+  app.press("id:slash-code").unwrap();
+  app.wait_for("id:code-block-editor").unwrap();
+  app.press("id:code-block-editor").unwrap();
+  app.type_text("id:code-block-editor", "graph LR\n  A[Start] --> B[End]").unwrap();
+  app.wait_for("id:code-lang-btn").unwrap();
+  app.press("id:code-lang-btn").unwrap();
+  app.wait_for("id:code-lang-picker").unwrap();
+  app.type_text("id:code-lang-search", "mermaid").unwrap();
+  app.wait_for("id:code-lang-mermaid").unwrap();
+  app.press("id:code-lang-mermaid").unwrap();
+
+  // Mermaid preview renders and clicking it opens fullscreen zoom Lightbox modal
+  app.wait_for("id:mermaid-preview-btn").unwrap();
+  app.press("id:mermaid-preview-btn").unwrap();
+  app.wait_for("id:lightbox-close-btn").unwrap();
+  app.wait_for("100%").unwrap();
+  app.press("id:lightbox-close-btn").unwrap();
+}

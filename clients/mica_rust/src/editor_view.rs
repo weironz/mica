@@ -1,48 +1,65 @@
-//! Pure-Rust document editor view built on `nsh_base::rich_editor::view::RichEditor`,
-//! `MicaDocumentBridge`, and Mica's custom `NodeView`s (`node_views.rs`):
-//! - Strict single-row 40px page header: breadcrumb + copy-link (left) · toggleable
-//!   single-row formatting toolbar with live active states (center) · last-edited,
-//!   right-sidebar toggle, whiteboard, share (cloud), copy-link (green check flash),
+//! Pure-Rust virtualized document editor view built on `crates/mica-editor` +
+//! NSH native `virtual_list` (`AGENTS.md` Route 2-B):
+//! - Responsive page header: selectable breadcrumb + real path copy (left) ·
+//!   toggleable formatting toolbar with live active states (center/2nd row) ·
+//!   last-edited, right-sidebar toggle, whiteboard, share (cloud), copy-link,
 //!   favorite star, trash, and full `⋯` page menu (right).
-//! - Centered resizable page column (`page_width`, default 740px) with borderless
-//!   30px SemiBold page title, `PropertyPanel` slot, single-mount native `RichEditor`,
-//!   `BacklinksPanel` slot below the editor, caret-anchored 22-item `/` slash menu,
-//!   expanded floating selection bubble menu (marks + inline link editor + block
-//!   transforms + AI rewrite), floating `Ctrl+F` in-page find bar, and floating
-//!   bottom-right word count badge.
+//! - Full-width `virtual_list` whose scrollbar sits cleanly on the right edge
+//!   of the window, with `.header(...)` (scrolling 30px SemiBold page title +
+//!   `PropertyPanel`), per-block virtualized rows subscribed ONLY to per-block
+//!   `Signal<u64>` (NEVER rebuilding siblings or `virtual_list` keys on typing),
+//!   `.footer(...)` (`BacklinksPanel` + bottom click-to-focus breathing room),
+//!   single hidden native IME proxy `input()`, top-level `overlay()` code-block
+//!   popovers, fullscreen Mermaid/Image zoom lightbox modal, caret-anchored
+//!   22-item `/` slash menu, floating selection bubble menu, `Ctrl+F` find bar,
+//!   and floating bottom-right word count badge.
 
-use std::{collections::BTreeMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use nsh_base::{
-  button, input,
-  rich_editor::{
-    state::KeyEvent as PmKeyEvent,
-    view::{
-      PartStyles, RichEditorChange, RichEditorSelection, RichEditorStyles, rich_editor,
-    },
-  },
-  text_view::PartStyle,
+use mica_editor::{
+  DocPosition, DocSelection, EditorCommand, FindMatch,
+  utf16::{utf16_len, utf16_next_boundary, utf16_prev_boundary, utf16_slice},
 };
+use nsh_base::{button, input};
 use nsh_core::{
-  Color, LineHeight, PropertyValue, StyleDecl, StyleKey, StyleValue, SubmitBehavior,
-  element::{ImageSrc, KeyOptions, Style, Svg, on_key_with, set_clipboard, svg},
+  SubmitBehavior,
+  color::Rgba,
+  element::{
+    ClipboardItem, ImageSrc, KeyOptions, Svg, element_ref, on_key_with, set_clipboard,
+    set_clipboard_item, svg, text_measurer, virtual_list,
+  },
   geometry::{Bounds, Points, px},
   keymap::When,
   prelude::*,
 };
 
 use crate::{
+  block_views::{
+    BlockRenderEnv, LightboxContent, OpenBoardCallback, render_lightbox_modal,
+    render_virtual_block_row,
+  },
+  editor_bridge::MicaDocumentBridge,
   editor_slash::{SlashItem, extract_slash_query, filter_slash_items},
   mica_icons,
-  mica_rich_bridge::MicaDocumentBridge,
   mica_theme::palette,
-  node_views::{OpenBoardCallback, register_mica_node_views},
+  text_geometry::{VisibleLayoutCache, vertical_move_offset},
 };
 
-pub use crate::mica_rich_bridge::OutlineItem;
+pub use crate::editor_bridge::OutlineItem;
 
 const SLASH_MENU_WIDTH: f32 = 248.0;
 const SLASH_MENU_MAX_H: f32 = 288.0;
+const SINK_LIMIT: usize = 64;
+const TRANSPARENT_RGBA: Rgba = Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
+
+/// Hidden native IME sink buffer tracker (mirrors NSH's battle-tested sink state).
+#[derive(Default)]
+struct ImeSinkState {
+  text: String,
+  emptied: Option<String>,
+  composing: bool,
+  held: Option<String>,
+}
 
 pub struct EditorHeaderProps {
   pub workspace_name: Signal<String>,
@@ -96,7 +113,7 @@ pub fn editor_view(
   header: Rc<EditorHeaderProps>,
   dark_mode: Signal<bool>,
 ) -> impl IntoElement {
-  // Allow embedded `board` NodeViews inside `RichEditor` to open the full whiteboard.
+  // Allow embedded `board` views to open the full whiteboard.
   provide_context(OpenBoardCallback(header.on_open_board.clone()));
 
   let page_menu_open = signal(false);
@@ -122,53 +139,172 @@ pub fn editor_view(
   // In-page find bar (`Ctrl+F`) state
   let find_open = signal(false);
   let find_query = signal(String::new());
-  let find_matches: Signal<Vec<(usize, usize)>> = signal(Vec::new());
+  let find_matches: Signal<Vec<FindMatch>> = signal(Vec::new());
   let find_index = signal(0usize);
+
+  // Virtualized block environment + native IME sink state
+  let layouts = Rc::new(RefCell::new(VisibleLayoutCache::default()));
+  let drag_anchor: Signal<Option<DocPosition>> = signal(None);
+  let lightbox: Signal<Option<LightboxContent>> = signal(None);
+  let focused_code_block: Signal<Option<String>> = signal(None);
+  let focused_table_cell: Signal<Option<(String, usize, usize)>> = signal(None);
+  let last_click: Signal<(usize, u32, f64, u8)> = signal((0, 0, 0.0, 0));
+
+  let list_ref = element_ref();
+  let sink_ref = element_ref();
+  let editor_focused = signal(false);
+  let sink_value = signal(String::new());
+  let sink_state = Rc::new(RefCell::new(ImeSinkState::default()));
 
   let ai_enabled = header.ai_enabled;
   let on_inline_ai_key = header.on_inline_ai.clone();
   let on_insert_image_key = header.on_insert_image.clone();
 
-  // Wire editor-local key interception so ArrowUp / ArrowDown / Enter / Escape
-  // drive the caret-anchored slash menu without stealing editor focus or
-  // interfering with normal typing when the slash menu is closed.
+  // Sync `has_text_selection` & slash menu closure reactively when selection changes.
   {
-    let b_key = bridge.clone();
-    bridge.set_key_interceptor(Some(Rc::new(move |ev: &PmKeyEvent| {
-      if !slash.open.get_untracked() {
-        return false;
+    let sel_sig = bridge.selection_signal();
+    let st_sel = sink_state.clone();
+    effect(move || {
+      let sel = sel_sig.get();
+      let is_range = sel.as_ref().is_some_and(|s| !s.is_collapsed());
+      has_text_selection.set(is_range);
+      if copied_link.get_untracked() {
+        copied_link.set(false);
       }
-      let items = filter_slash_items(&slash.query.get_untracked(), ai_enabled.get_untracked());
-      if items.is_empty() {
+      if is_range && slash.open.get_untracked() {
         close_slash(slash);
-        return false;
       }
-      match ev.key.as_str() {
-        "ArrowDown" => {
-          let next = (slash.index.get_untracked() + 1) % items.len();
-          slash.index.set(next);
-          true
-        }
-        "ArrowUp" => {
-          let cur = slash.index.get_untracked().min(items.len() - 1);
-          let next = (cur + items.len() - 1) % items.len();
-          slash.index.set(next);
-          true
-        }
-        "Enter" if !ev.ctrl && !ev.meta && !ev.alt => {
-          let idx = slash.index.get_untracked().min(items.len() - 1);
-          let item = *items[idx];
-          close_slash(slash);
-          execute_slash_item(&b_key, item, &on_inline_ai_key, &on_insert_image_key);
-          true
-        }
-        "Escape" => {
-          close_slash(slash);
-          true
-        }
-        _ => false,
+      // Clear IME sink buffer cleanly whenever selection moves while not composing.
+      let mut st = st_sel.borrow_mut();
+      if !st.composing && !st.text.is_empty() {
+        st.emptied = Some(std::mem::take(&mut st.text));
+        drop(st);
+        sink_value.set(String::new());
       }
-    })));
+    });
+  }
+
+  // Focus native IME sink whenever `bridge.request_focus()` increments `focus_sink_rev`.
+  {
+    let focus_rev = bridge.focus_sink_rev_signal();
+    let sref = sink_ref;
+    effect(move || {
+      let rev = focus_rev.get();
+      if rev > 0 {
+        focused_code_block.set(None);
+        focused_table_cell.set(None);
+        sref.focus();
+      }
+    });
+  }
+
+  // Scroll `virtual_list` to requested block index (outline jump, find match, caret navigation).
+  // Block 0 (page switch / top) scrolls to offset 0 so the `.header(...)` page title stays visible!
+  {
+    let scroll_req = bridge.scroll_request_signal();
+    let lref = list_ref;
+    effect(move || {
+      if let Some((idx, _seq)) = scroll_req.get() {
+        if idx == 0 {
+          lref.scroll_to_offset(px(0.0), false);
+        } else {
+          lref.scroll_to_index(idx as u32, Percentage(0.2), px(0.0), false);
+        }
+      }
+    });
+  }
+
+  // Focused editor keyboard bindings (automatically unregistered when focus moves to
+  // title input, code block editor, table cell, find bar, search, or whiteboard!).
+  {
+    let b_keys = bridge.clone();
+    let l_keys = layouts.clone();
+    let st_keys = sink_state.clone();
+    let on_ai_k = on_inline_ai_key.clone();
+    let on_img_k = on_insert_image_key.clone();
+    effect(move || {
+      if !editor_focused.get() {
+        return;
+      }
+      let bindings: &[(&str, bool, EditorKeyAction)] = &[
+        ("enter", true, EditorKeyAction::Enter),
+        ("shift+enter", true, EditorKeyAction::SoftBreak),
+        ("backspace", true, EditorKeyAction::Backspace),
+        ("delete", true, EditorKeyAction::Delete),
+        ("tab", false, EditorKeyAction::Indent(1)),
+        ("shift+tab", false, EditorKeyAction::Indent(-1)),
+        ("left", true, EditorKeyAction::ArrowLeft { shift: false, word: false }),
+        ("shift+left", true, EditorKeyAction::ArrowLeft { shift: true, word: false }),
+        ("mod+left", true, EditorKeyAction::ArrowLeft { shift: false, word: true }),
+        ("mod+shift+left", true, EditorKeyAction::ArrowLeft { shift: true, word: true }),
+        ("right", true, EditorKeyAction::ArrowRight { shift: false, word: false }),
+        ("shift+right", true, EditorKeyAction::ArrowRight { shift: true, word: false }),
+        ("mod+right", true, EditorKeyAction::ArrowRight { shift: false, word: true }),
+        ("mod+shift+right", true, EditorKeyAction::ArrowRight { shift: true, word: true }),
+        ("up", true, EditorKeyAction::ArrowUp { shift: false }),
+        ("shift+up", true, EditorKeyAction::ArrowUp { shift: true }),
+        ("down", true, EditorKeyAction::ArrowDown { shift: false }),
+        ("shift+down", true, EditorKeyAction::ArrowDown { shift: true }),
+        ("home", false, EditorKeyAction::Home { shift: false }),
+        ("shift+home", false, EditorKeyAction::Home { shift: true }),
+        ("end", false, EditorKeyAction::End { shift: false }),
+        ("shift+end", false, EditorKeyAction::End { shift: true }),
+        ("mod+a", false, EditorKeyAction::SelectAll),
+        ("mod+c", false, EditorKeyAction::Copy),
+        ("mod+x", false, EditorKeyAction::Cut),
+        ("mod+z", true, EditorKeyAction::Undo),
+        ("mod+y", true, EditorKeyAction::Redo),
+        ("mod+shift+z", true, EditorKeyAction::Redo),
+        ("mod+b", false, EditorKeyAction::ToggleMark("bold")),
+        ("mod+i", false, EditorKeyAction::ToggleMark("italic")),
+        ("mod+e", false, EditorKeyAction::ToggleMark("code")),
+        ("mod+shift+s", false, EditorKeyAction::ToggleMark("strike")),
+        ("mod+k", false, EditorKeyAction::OpenLink),
+        ("escape", false, EditorKeyAction::Escape),
+      ];
+      for &(stroke, repeat, action) in bindings {
+        let br = b_keys.clone();
+        let lay = l_keys.clone();
+        let st = st_keys.clone();
+        let ai_cb = on_ai_k.clone();
+        let img_cb = on_img_k.clone();
+        on_key_with(
+          stroke,
+          KeyOptions {
+            when: When::Always,
+            repeat,
+            for_focus: true,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if st.borrow().composing {
+              return;
+            }
+            // Empty IME sink before structural/navigation commands so the next
+            // typed character diffs cleanly against an empty buffer.
+            {
+              let mut guard = st.borrow_mut();
+              if !guard.text.is_empty() {
+                guard.emptied = Some(std::mem::take(&mut guard.text));
+                drop(guard);
+                sink_value.set(String::new());
+              }
+            }
+            handle_editor_key(
+              action,
+              &br,
+              &lay,
+              slash,
+              ai_enabled,
+              link_prompt_open,
+              link_draft,
+              &ai_cb,
+              &img_cb,
+            );
+          },
+        );
+      }
+    });
   }
 
   // `Ctrl+F` opens in-page find bar.
@@ -206,9 +342,9 @@ pub fn editor_view(
   let marquee = crate::block_marquee::BlockMarqueeState::new();
   let marquee_origin: Signal<Option<(f32, f32)>> = signal(None);
   let paper_bounds: Signal<(f32, f32)> = signal((960.0, 720.0));
-  let rich_origin: Signal<(f32, f32)> = signal((0.0, 0.0));
 
   let m_esc = marquee.clone();
+  let b_esc_find = bridge.clone();
   on_key_with(
     "escape",
     KeyOptions {
@@ -217,11 +353,17 @@ pub fn editor_view(
       ..KeyOptions::default()
     },
     move |_| {
+      if lightbox.get_untracked().is_some() {
+        lightbox.set(None);
+        return;
+      }
       close_slash(slash);
       page_menu_open.set(false);
       link_prompt_open.set(false);
-      find_open.set(false);
-      has_text_selection.set(false);
+      if find_open.get_untracked() {
+        find_open.set(false);
+        b_esc_find.clear_find_highlights();
+      }
       m_esc.clear();
       marquee_origin.set(None);
     },
@@ -296,11 +438,7 @@ pub fn editor_view(
   let can_redo = bridge.can_redo_signal();
   let last_edited = bridge.last_edited_signal();
   let word_count = bridge.word_count_signal();
-
-  let rich_session = bridge.session();
-  if rich_session.node_views().is_empty() {
-    register_mica_node_views(&rich_session, dark_mode);
-  }
+  let structure_rev = bridge.structure_rev_signal();
 
   let is_fav = header.is_favorite;
   let right_open = header.right_panel_open;
@@ -309,6 +447,18 @@ pub fn editor_view(
   let show_properties = header.show_properties;
   let is_cloud = header.is_cloud_signed_in;
   let page_width = header.page_width;
+
+  let block_env = BlockRenderEnv {
+    bridge: bridge.clone(),
+    dark_mode,
+    layouts: layouts.clone(),
+    drag_anchor,
+    lightbox,
+    focused_code_block,
+    focused_table_cell,
+    last_click,
+    page_width,
+  };
 
   let b_copy_path = bridge.clone();
   let b_copy_link = bridge.clone();
@@ -334,9 +484,10 @@ pub fn editor_view(
   let b_slash_menu = bridge.clone();
   let b_copy_md = bridge.clone();
   let b_title_enter = bridge.clone();
-  let b_rich = bridge.clone();
+  let b_body = bridge.clone();
   let b_link_pop = bridge.clone();
   let b_find = bridge.clone();
+  let b_lightbox = bridge.clone();
 
   let h_title_val = header.clone();
   let h_title_chg = header.clone();
@@ -900,14 +1051,40 @@ pub fn editor_view(
       find_bar_view(b_find.clone(), find_open, find_query, find_matches, find_index, dark_mode)
     }))
     .child({
-      // 2. Centered resizable paper canvas (`PageWidthFrame`) + BlockMarquee + floating word count
-      let m_down = marquee.clone();
-      let m_move = marquee.clone();
+      // 2. Full-width `virtual_list` editor canvas (scrollbar sits cleanly on the
+      //    RIGHT EDGE of the window!) + hidden native IME proxy sink + centered
+      //    header (page title + properties) / per-block virtualized rows / footer
+      //    (backlinks + bottom click-to-focus) + non-blocking page-width grips +
+      //    floating selection bubble menu + slash menu + word count badge.
       let m_up = marquee.clone();
       let m_overlay = marquee.clone();
-      let b_marq = bridge.clone();
       let on_commit_width = header.on_commit_page_width.clone();
+
+      let br_count = b_body.clone();
+      let br_keys = b_body.clone();
+      let br_footer = b_body.clone();
+      let br_bubble = b_body.clone();
+      let h_bub = h_bubble.clone();
+
+      // Hidden native IME proxy sink closures
+      let br_chg = b_body.clone();
+      let st_chg = sink_state.clone();
+      let br_comp = b_body.clone();
+      let st_comp = sink_state.clone();
+      let br_key_press = b_body.clone();
+      let st_key_press = sink_state.clone();
+      let br_paste = b_body.clone();
+      let st_paste = sink_state.clone();
+
+      let env_row = block_env.clone();
+      let h_title_v = h_title_val.clone();
+      let h_title_c = h_title_chg.clone();
+      let b_title_e = b_title_enter.clone();
+      let prop_slot_hdr = prop_slot.clone();
+      let backlinks_slot_ftr = backlinks_slot.clone();
+
       view()
+        .test_id("mica-rich-editor")
         .flex_1()
         .w_full()
         .min_h(px(0.0))
@@ -916,188 +1093,253 @@ pub fn editor_view(
         .bg(move || palette(dark_mode.get()).surface_base)
         .on_layout(move |b: &Bounds<Points>| {
           paper_bounds.set((b.size.width.0, b.size.height.0));
-        })
-        .on(EventKind::PressDown, move |p: &EventPayload| {
-          if let EventPayload::Press(e) = p {
-            let (cw, _) = paper_bounds.get_untracked();
-            let cap = crate::page_width::rendered_column_width(page_width.get_untracked(), cw);
-            let content_left = ((cw - cap) * 0.5).max(0.0);
-            let content_right = (content_left + cap).min(cw);
-            let (_, ry) = rich_origin.get_untracked();
-            let content_bottom = ry + slash.box_size.get_untracked().1;
-            if crate::block_marquee::starts_marquee_in_margin(
-              e.position.x.0,
-              e.position.y.0,
-              cw,
-              content_left,
-              content_right,
-              content_bottom,
-            ) {
-              marquee_origin.set(Some((e.position.x.0, e.position.y.0)));
-              m_down.clear();
-            } else {
-              marquee_origin.set(None);
-              if m_down.is_active_untracked() {
-                m_down.clear();
-              }
-            }
-          }
-        })
-        .on_mouse_move(move |e: &MouseEvent| {
-          if e.pressed_button != Some(MouseButton::Left) {
-            return;
-          }
-          let Some((ox, oy)) = marquee_origin.get_untracked() else {
-            return;
-          };
-          let (cx, cy) = (e.position.x.0, e.position.y.0);
-          if (cx - ox).hypot(cy - oy) < 4.0 {
-            return;
-          }
-          let (rx, ry) = rich_origin.get_untracked();
-          let block_rects: Vec<(usize, crate::block_marquee::RectF)> = b_marq
-            .top_level_block_rects()
-            .into_iter()
-            .map(|(idx, b)| {
-              (
-                idx,
-                crate::block_marquee::RectF::new(
-                  rx + b.origin.x.0,
-                  ry + b.origin.y.0,
-                  rx + b.origin.x.0 + b.size.width.0,
-                  ry + b.origin.y.0 + b.size.height.0,
-                ),
-              )
-            })
-            .collect();
-          m_move.update_drag(
-            crate::block_marquee::RectF::from_points(ox, oy, cx, cy),
-            &block_rects,
-          );
+          slash.box_size.set((b.size.width.0, b.size.height.0));
         })
         .on_mouse_up(move |_: &MouseEvent| {
+          if drag_anchor.get_untracked().is_some() {
+            drag_anchor.set(None);
+          }
           if marquee_origin.get_untracked().is_some() {
             marquee_origin.set(None);
             m_up.end_drag();
           }
         })
-        .child(crate::page_width::page_width_frame(
-          page_width,
-          dark_mode,
-          on_commit_width,
-          view()
-            .flex_1()
-            .w_full()
-            .min_h(px(0.0))
-            .overflow_hidden()
-            .px_6()
-            .pt_8()
-            .pb_6()
-            .child(when(move || show_page_title.get(), move || {
-              let h_val = h_title_val.clone();
-              let h_chg = h_title_chg.clone();
-              let b_enter = b_title_enter.clone();
-              // Borderless 30px SemiBold editable document title
-              input()
-                .test_id("page-title-input")
-                .placeholder("无标题")
-                .submit_behavior(SubmitBehavior::Submit)
-                .w_full()
-                .pb_4()
-                .text_size(px(30.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(move || palette(dark_mode.get()).text_primary)
-                .bg(move || palette(dark_mode.get()).surface_base)
-                .value(move || h_val.page_title.get())
-                .on_change(move |v: &str| (h_chg.on_rename_title)(v.to_owned()))
-                .on_submit(move |_: &str| {
-                  b_enter.focus_pos(1);
-                  b_enter.session().focus();
-                })
-            }))
-            .child(when(move || show_properties.get(), {
-              let slot = prop_slot.clone();
-              move || match &slot {
-                Some(render_fn) => render_fn(),
-                None => view().into_element(),
+        .child(
+          // Single hidden native IME proxy `input()` (first descendant input so
+          // native OS IME, `PasteBehavior::Report`, and test `type_text` hit it cleanly).
+          input()
+            .element_ref(&sink_ref)
+            .test_id("mica-editor-ime-sink")
+            .label("文档正文输入代理")
+            .absolute()
+            .left(px(0.0))
+            .top(px(0.0))
+            .w(px(1.0))
+            .h(px(18.0))
+            .pointer_events(PointerEvents::None)
+            .p_0()
+            .border(px(0.0))
+            .bg(TRANSPARENT_RGBA)
+            .text_color(TRANSPARENT_RGBA)
+            .caret(false)
+            .multiline(true)
+            .scrollbar(false)
+            .auto_correct(false)
+            .auto_capitalize(AutoCapitalize::None)
+            .paste_behavior(PasteBehavior::Report)
+            .value(move || sink_value.get())
+            .on_focus(move || {
+              editor_focused.set(true);
+            })
+            .on_blur(move || {
+              editor_focused.set(false);
+            })
+            .on_change(move |text: &str| {
+              if copied_link.get_untracked() {
+                copied_link.set(false);
               }
-            }))
-            .child(
-              // Relative container hosting single-mount RichEditor + caret-anchored slash menu
-              view()
-                .flex_1()
-                .w_full()
-                .min_h(px(0.0))
-                .overflow_hidden()
-                .relative()
-                .on_layout(move |bounds: &Bounds<Points>| {
-                  rich_origin.set((bounds.origin.x.0, bounds.origin.y.0));
-                  slash.box_size.set((bounds.size.width.0, bounds.size.height.0));
-                })
-                .child({
-                  // Mount native `RichEditor` once against the stable `EditorSession`
-                  // so keystrokes, selections, and embedded NodeViews never lose focus.
-                  let b_chg = b_rich.clone();
-                  let b_bubble = b_rich.clone();
-                  let h_bub = h_bubble.clone();
-                  rich_editor()
-                    .test_id("mica-rich-editor")
-                    .accessibility_label("文档正文编辑器")
-                    .flex_1()
-                    .w_full()
-                    .min_h(px(0.0))
-                    .h_full()
-                    .editor(Some(rich_session))
-                    .placeholder("输入正文，或输入 / 唤出命令...")
-                    .styles(move || {
-                      let (font_px, font_family) = use_context::<crate::mica_theme::UiAppearance>()
-                        .map(|a| (a.editor_font_px.get() as f32, a.editor_font_family.get()))
-                        .unwrap_or((16.0, ""));
-                      mica_rich_editor_styles(dark_mode.get(), font_px, font_family)
-                    })
-                    .bubble_menu_placement(Placement::Top)
-                    .bubble_menu_offset(px(8.0))
-                    .bubble_menu(bubble_menu_view(
-                      b_bubble,
-                      h_bub,
-                      has_text_selection,
-                      link_prompt_open,
-                      link_draft,
-                      dark_mode,
-                    ))
-                    .on_selection_change(move |sel: &RichEditorSelection| {
-                      has_text_selection.set(!sel.empty && sel.kind == "text");
-                      if copied_link.get_untracked() {
-                        copied_link.set(false);
-                      }
-                      if !sel.empty && slash.open.get_untracked() {
-                        close_slash(slash);
-                      }
-                    })
-                    .on_change(move |_: &RichEditorChange| {
-                      if copied_link.get_untracked() {
-                        copied_link.set(false);
-                      }
-                      sync_slash_palette_from_caret(&b_chg, slash, ai_enabled);
-                    })
-                })
-                .child(when(move || slash.open.get(), move || {
-                  caret_slash_menu_view(
-                    b_slash_menu.clone(),
-                    h_slash.clone(),
-                    slash,
-                    dark_mode,
-                  )
-                })),
-            )
-            .child({
-              // BacklinksPanel slot rendered below RichEditor (slot hides itself when empty)
-              match backlinks_slot {
-                Some(render_fn) => render_fn(),
-                None => view().into_element(),
+              if st_chg.borrow().composing {
+                st_chg.borrow_mut().held = Some(text.to_owned());
+                sink_value.set(text.to_owned());
+                return;
+              }
+              apply_sink_text_diff(
+                text,
+                &st_chg,
+                sink_value,
+                &br_chg,
+                slash,
+                ai_enabled,
+              );
+            })
+            .on_composition_change(move |c: &Composition| {
+              let held = {
+                let mut st = st_comp.borrow_mut();
+                st.composing = c.composing;
+                if c.composing { None } else { st.held.take() }
+              };
+              if c.composing && !c.text.is_empty() {
+                if let Some(sel) = br_comp.selection() {
+                  let fp = sel.focus_pos();
+                  br_comp.set_ime_preedit(Some((fp.node, fp.offset, c.text.clone())));
+                }
+              } else {
+                br_comp.set_ime_preedit(None);
+              }
+              if let Some(committed) = held {
+                apply_sink_text_diff(
+                  &committed,
+                  &st_comp,
+                  sink_value,
+                  &br_comp,
+                  slash,
+                  ai_enabled,
+                );
+              }
+            })
+            .on_key_press(move |k: &str| {
+              if k == "Backspace" && !st_key_press.borrow().composing && st_key_press.borrow().text.is_empty() {
+                br_key_press.dispatch(EditorCommand::DeleteBackward);
+                sync_slash_palette_from_caret(&br_key_press, slash, ai_enabled);
+              }
+            })
+            .on_paste(move |p: &PasteEvent| {
+              if copied_link.get_untracked() {
+                copied_link.set(false);
+              }
+              {
+                let mut st = st_paste.borrow_mut();
+                if !st.text.is_empty() {
+                  st.emptied = Some(std::mem::take(&mut st.text));
+                  drop(st);
+                  sink_value.set(String::new());
+                }
+              }
+              if !p.text.is_empty() || !p.html.is_empty() {
+                br_paste.paste_clipboard(&p.text, &p.html, false);
+                sync_slash_palette_from_caret(&br_paste, slash, ai_enabled);
               }
             }),
+        )
+        .child(
+          // Full-width virtualized block list: `count` & `keys` subscribe ONLY to
+          // `structure_rev`, NEVER to body typing signals!
+          virtual_list(
+            move || {
+              structure_rev.get();
+              br_count.block_len()
+            },
+            move |at| render_virtual_block_row(env_row.clone(), at),
+          )
+          .keys(move || {
+            structure_rev.get();
+            br_keys.block_ids()
+          })
+          .element_ref(&list_ref)
+          .flex_1()
+          .w_full()
+          .min_h(px(0.0))
+          .h_full()
+          .header(
+            // Centered scrolling document header: 30px SemiBold page title + PropertyPanel
+            view()
+              .w_full()
+              .items_center()
+              .child(
+                view()
+                  .w_full()
+                  .max_w(move || {
+                    let eff = page_width.get();
+                    if crate::page_width::is_full_width(eff) {
+                      px(100_000.0)
+                    } else {
+                      px(eff)
+                    }
+                  })
+                  .px_6()
+                  .pt_8()
+                  .pb_2()
+                  .child(when(move || show_page_title.get(), move || {
+                    let h_val = h_title_v.clone();
+                    let h_chg = h_title_c.clone();
+                    let b_enter = b_title_e.clone();
+                    input()
+                      .test_id("page-title-input")
+                      .placeholder("无标题")
+                      .submit_behavior(SubmitBehavior::Submit)
+                      .w_full()
+                      .pb_4()
+                      .text_size(px(30.0))
+                      .font_weight(FontWeight::SEMIBOLD)
+                      .text_color(move || palette(dark_mode.get()).text_primary)
+                      .bg(move || palette(dark_mode.get()).surface_base)
+                      .value(move || h_val.page_title.get())
+                      .on_change(move |v: &str| (h_chg.on_rename_title)(v.to_owned()))
+                      .on_submit(move |_: &str| {
+                        b_enter.focus_block(0, 0);
+                      })
+                  }))
+                  .child(when(move || show_properties.get(), {
+                    let slot = prop_slot_hdr.clone();
+                    move || match &slot {
+                      Some(render_fn) => render_fn(),
+                      None => view().into_element(),
+                    }
+                  })),
+              ),
+          )
+          .footer(
+            // Centered scrolling footer: BacklinksPanel + bottom click-to-focus breathing room
+            view()
+              .w_full()
+              .items_center()
+              .child(
+                view()
+                  .w_full()
+                  .max_w(move || {
+                    let eff = page_width.get();
+                    if crate::page_width::is_full_width(eff) {
+                      px(100_000.0)
+                    } else {
+                      px(eff)
+                    }
+                  })
+                  .px_6()
+                  .pt_4()
+                  .pb_6()
+                  .child(match backlinks_slot_ftr {
+                    Some(render_fn) => render_fn(),
+                    None => view().into_element(),
+                  })
+                  .child(
+                    view()
+                      .w_full()
+                      .h(px(180.0))
+                      .cursor(Cursor::Text)
+                      .on(EventKind::PressDown, move |_: &EventPayload| {
+                        let last = br_footer.block_len().saturating_sub(1);
+                        let end_off = br_footer
+                          .block_at(last)
+                          .map(|b| utf16_len(&b.text))
+                          .unwrap_or(0);
+                        br_footer.focus_block(last, end_off);
+                      }),
+                  ),
+              ),
+          ),
+        )
+        .child(page_width_edge_grips(
+          page_width,
+          paper_bounds,
+          dark_mode,
+          on_commit_width,
         ))
+        .child(when(move || has_text_selection.get(), move || {
+          view()
+            .absolute()
+            .top(px(8.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .items_center()
+            .pointer_events(PointerEvents::BoxNone)
+            .z_index(34)
+            .child(bubble_menu_view(
+              br_bubble.clone(),
+              h_bub.clone(),
+              has_text_selection,
+              link_prompt_open,
+              link_draft,
+              dark_mode,
+            ))
+        }))
+        .child(when(move || slash.open.get(), move || {
+          caret_slash_menu_view(
+            b_slash_menu.clone(),
+            h_slash.clone(),
+            slash,
+            dark_mode,
+          )
+        }))
         .child(crate::block_marquee::marquee_overlay_layer(
           m_overlay,
           dark_mode,
@@ -1105,12 +1347,12 @@ pub fn editor_view(
         .child(when(
           move || !word_count.get().starts_with("0 词 · 0 字"),
           move || {
-            // 3. Floating bottom-right word count badge (replaces dedicated bottom bar)
+            // 3. Floating bottom-right word count badge (leaves clear room for window-edge scrollbar)
             view()
               .test_id("editor-word-count")
               .absolute()
-              .right(px(12.0))
-              .bottom(px(8.0))
+              .right(px(18.0))
+              .bottom(px(10.0))
               .z_index(12)
               .px_2()
               .py_1()
@@ -1126,6 +1368,513 @@ pub fn editor_view(
           },
         ))
     })
+    .child(render_lightbox_modal(lightbox, b_lightbox, dark_mode))
+}
+
+#[derive(Clone, Copy)]
+enum EditorKeyAction {
+  Enter,
+  SoftBreak,
+  Backspace,
+  Delete,
+  Indent(i32),
+  ArrowLeft { shift: bool, word: bool },
+  ArrowRight { shift: bool, word: bool },
+  ArrowUp { shift: bool },
+  ArrowDown { shift: bool },
+  Home { shift: bool },
+  End { shift: bool },
+  SelectAll,
+  Copy,
+  Cut,
+  Undo,
+  Redo,
+  ToggleMark(&'static str),
+  OpenLink,
+  Escape,
+}
+
+fn common_prefix_bytes(a: &str, b: &str) -> usize {
+  a.char_indices()
+    .zip(b.chars())
+    .take_while(|((_, ca), cb)| ca == cb)
+    .map(|((i, c), _)| i + c.len_utf8())
+    .last()
+    .unwrap_or(0)
+}
+
+fn apply_sink_text_diff(
+  text: &str,
+  sink_state: &Rc<RefCell<ImeSinkState>>,
+  sink_value: Signal<String>,
+  bridge: &MicaDocumentBridge,
+  slash: SlashMenuSignals,
+  ai_enabled: Signal<bool>,
+) {
+  let (deleted, inserted) = {
+    let mut st = sink_state.borrow_mut();
+    let base = match st.emptied.take() {
+      Some(old) if text != old && text.starts_with(old.as_str()) => old,
+      Some(_) => String::new(),
+      None => std::mem::take(&mut st.text),
+    };
+    let prefix = common_prefix_bytes(&base, text);
+    let deleted = base[prefix..].chars().count();
+    let inserted = text[prefix..].to_owned();
+    st.text = text.to_owned();
+    (deleted, inserted)
+  };
+  sink_value.set(text.to_owned());
+
+  for _ in 0..deleted {
+    bridge.dispatch(EditorCommand::DeleteBackward);
+  }
+  if !inserted.is_empty() {
+    let mut parts = inserted.split('\n').peekable();
+    while let Some(part) = parts.next() {
+      if !part.is_empty() {
+        bridge.dispatch(EditorCommand::InsertText {
+          text: part.to_owned(),
+        });
+      }
+      if parts.peek().is_some() {
+        bridge.dispatch(EditorCommand::SplitBlock);
+      }
+    }
+  }
+  if sink_state.borrow().text.len() > SINK_LIMIT {
+    let mut st = sink_state.borrow_mut();
+    if !st.composing && !st.text.is_empty() {
+      st.emptied = Some(std::mem::take(&mut st.text));
+      drop(st);
+      sink_value.set(String::new());
+    }
+  }
+  sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_editor_key(
+  action: EditorKeyAction,
+  bridge: &MicaDocumentBridge,
+  layouts: &Rc<RefCell<VisibleLayoutCache>>,
+  slash: SlashMenuSignals,
+  ai_enabled: Signal<bool>,
+  link_prompt_open: Signal<bool>,
+  link_draft: Signal<String>,
+  on_inline_ai: &Rc<dyn Fn(String)>,
+  on_insert_image: &Rc<dyn Fn()>,
+) {
+  // 1. Intercept ArrowUp / ArrowDown / Enter / Escape when slash menu is open.
+  if slash.open.get_untracked() {
+    let items = filter_slash_items(&slash.query.get_untracked(), ai_enabled.get_untracked());
+    if items.is_empty() {
+      close_slash(slash);
+    } else {
+      match action {
+        EditorKeyAction::ArrowDown { shift: false } => {
+          let next = (slash.index.get_untracked() + 1) % items.len();
+          slash.index.set(next);
+          return;
+        }
+        EditorKeyAction::ArrowUp { shift: false } => {
+          let cur = slash.index.get_untracked().min(items.len() - 1);
+          let next = (cur + items.len() - 1) % items.len();
+          slash.index.set(next);
+          return;
+        }
+        EditorKeyAction::Enter => {
+          let idx = slash.index.get_untracked().min(items.len() - 1);
+          let item = *items[idx];
+          close_slash(slash);
+          execute_slash_item(bridge, item, on_inline_ai, on_insert_image);
+          return;
+        }
+        EditorKeyAction::Escape => {
+          close_slash(slash);
+          return;
+        }
+        _ => {}
+      }
+    }
+  }
+
+  match action {
+    EditorKeyAction::Enter => {
+      bridge.dispatch(EditorCommand::SplitBlock);
+      sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+    }
+    EditorKeyAction::SoftBreak => {
+      bridge.dispatch(EditorCommand::InsertText {
+        text: "\\\n".to_owned(),
+      });
+    }
+    EditorKeyAction::Backspace => {
+      bridge.dispatch(EditorCommand::DeleteBackward);
+      sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+    }
+    EditorKeyAction::Delete => {
+      bridge.dispatch(EditorCommand::DeleteForward);
+      sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+    }
+    EditorKeyAction::Indent(delta) => {
+      bridge.dispatch(EditorCommand::Indent { delta });
+    }
+    EditorKeyAction::SelectAll => {
+      bridge.select_all();
+    }
+    EditorKeyAction::Copy => {
+      if let Some(payload) = bridge.copy_selection() {
+        let mut item = ClipboardItem::default();
+        item.text = payload.plain;
+        item.html = Some(payload.html);
+        set_clipboard_item(item);
+      }
+    }
+    EditorKeyAction::Cut => {
+      if let Some(payload) = bridge.cut_selection() {
+        let mut item = ClipboardItem::default();
+        item.text = payload.plain;
+        item.html = Some(payload.html);
+        set_clipboard_item(item);
+      }
+    }
+    EditorKeyAction::Undo => bridge.undo(),
+    EditorKeyAction::Redo => bridge.redo(),
+    EditorKeyAction::ToggleMark(m) => bridge.toggle_mark(m),
+    EditorKeyAction::OpenLink => {
+      link_draft.set(bridge.current_link_href().unwrap_or_default());
+      link_prompt_open.set(true);
+    }
+    EditorKeyAction::Escape => {
+      if let Some(sel) = bridge.selection()
+        && !sel.is_collapsed()
+      {
+        let focus = sel.focus_pos();
+        bridge.set_selection(DocSelection::caret(focus.node, focus.offset));
+      }
+    }
+    EditorKeyAction::ArrowLeft { shift, word } => {
+      move_caret_horizontal(bridge, -1, shift, word);
+    }
+    EditorKeyAction::ArrowRight { shift, word } => {
+      move_caret_horizontal(bridge, 1, shift, word);
+    }
+    EditorKeyAction::ArrowUp { shift } => {
+      move_caret_vertical(bridge, layouts, -1, shift);
+    }
+    EditorKeyAction::ArrowDown { shift } => {
+      move_caret_vertical(bridge, layouts, 1, shift);
+    }
+    EditorKeyAction::Home { shift } => {
+      if let Some(sel) = bridge.selection() {
+        let focus = sel.focus_pos();
+        let next = DocPosition::new(focus.node, 0);
+        let anchor = if shift { sel.anchor_pos() } else { next };
+        bridge.set_selection(DocSelection::from_positions(anchor, next));
+      }
+    }
+    EditorKeyAction::End { shift } => {
+      if let Some(sel) = bridge.selection() {
+        let focus = sel.focus_pos();
+        let end_off = bridge
+          .block_at(focus.node)
+          .map(|b| utf16_len(&b.text))
+          .unwrap_or(0);
+        let next = DocPosition::new(focus.node, end_off);
+        let anchor = if shift { sel.anchor_pos() } else { next };
+        bridge.set_selection(DocSelection::from_positions(anchor, next));
+      }
+    }
+  }
+}
+
+fn move_caret_horizontal(bridge: &MicaDocumentBridge, dir: i32, shift: bool, word: bool) {
+  let Some(sel) = bridge.selection() else {
+    return;
+  };
+  if !shift && !sel.is_collapsed() {
+    let target = if dir < 0 { sel.start_pos() } else { sel.end_pos() };
+    bridge.set_selection(DocSelection::caret(target.node, target.offset));
+    return;
+  }
+  let focus = sel.focus_pos();
+  let bi = focus.node;
+  let off = focus.offset;
+  let count = bridge.block_len();
+  let Some(block) = bridge.block_at(bi) else {
+    return;
+  };
+  let len_u16 = utf16_len(&block.text);
+  let next_pos = if dir < 0 {
+    if off > 0 {
+      let target_off = if word {
+        prev_word_boundary(&block.text, off)
+      } else {
+        utf16_prev_boundary(&block.text, off)
+      };
+      DocPosition::new(bi, target_off)
+    } else if bi > 0 {
+      let prev_len = bridge
+        .block_at(bi - 1)
+        .map(|b| utf16_len(&b.text))
+        .unwrap_or(0);
+      DocPosition::new(bi - 1, prev_len)
+    } else {
+      focus
+    }
+  } else if off < len_u16 {
+    let target_off = if word {
+      next_word_boundary(&block.text, off)
+    } else {
+      utf16_next_boundary(&block.text, off)
+    };
+    DocPosition::new(bi, target_off)
+  } else if bi + 1 < count {
+    DocPosition::new(bi + 1, 0)
+  } else {
+    focus
+  };
+  let anchor = if shift { sel.anchor_pos() } else { next_pos };
+  bridge.set_selection(DocSelection::from_positions(anchor, next_pos));
+  if next_pos.node != bi {
+    bridge.request_scroll_to_block(next_pos.node);
+  }
+}
+
+fn move_caret_vertical(
+  bridge: &MicaDocumentBridge,
+  layouts: &Rc<RefCell<VisibleLayoutCache>>,
+  dir: i32,
+  shift: bool,
+) {
+  let Some(sel) = bridge.selection() else {
+    return;
+  };
+  let focus = sel.focus_pos();
+  let bi = focus.node;
+  let count = bridge.block_len();
+  let Some(block) = bridge.block_at(bi) else {
+    return;
+  };
+  // Try moving within wrapped lines of the current block first.
+  let measure = text_measurer();
+  if let Some(layout) = layouts.borrow().get(&block.id)
+    && let Some(next_off) =
+      vertical_move_offset(&layout.lines, focus.offset, dir, None, &layout.font, &measure)
+  {
+    let next = DocPosition::new(bi, next_off);
+    let anchor = if shift { sel.anchor_pos() } else { next };
+    bridge.set_selection(DocSelection::from_positions(anchor, next));
+    return;
+  }
+  // Otherwise step to previous / next block.
+  let target_bi = if dir < 0 {
+    bi.saturating_sub(1)
+  } else {
+    (bi + 1).min(count.saturating_sub(1))
+  };
+  if target_bi == bi {
+    return;
+  }
+  let target_len = bridge
+    .block_at(target_bi)
+    .map(|b| utf16_len(&b.text))
+    .unwrap_or(0);
+  let target_off = focus.offset.min(target_len);
+  let next = DocPosition::new(target_bi, target_off);
+  let anchor = if shift { sel.anchor_pos() } else { next };
+  bridge.set_selection(DocSelection::from_positions(anchor, next));
+  bridge.request_scroll_to_block(target_bi);
+}
+
+fn prev_word_boundary(text: &str, u16_off: u32) -> u32 {
+  let prefix = utf16_slice(text, 0, u16_off);
+  let chars: Vec<(usize, char)> = prefix.char_indices().collect();
+  let mut i = chars.len();
+  while i > 0 && chars[i - 1].1.is_whitespace() {
+    i -= 1;
+  }
+  while i > 0 && !chars[i - 1].1.is_whitespace() {
+    i -= 1;
+  }
+  let byte_idx = if i < chars.len() { chars[i].0 } else { prefix.len() };
+  utf16_len(&prefix[..byte_idx])
+}
+
+fn next_word_boundary(text: &str, u16_off: u32) -> u32 {
+  let total = utf16_len(text);
+  let suffix = utf16_slice(text, u16_off, total);
+  let chars: Vec<(usize, char)> = suffix.char_indices().collect();
+  let mut i = 0;
+  while i < chars.len() && !chars[i].1.is_whitespace() {
+    i += 1;
+  }
+  while i < chars.len() && chars[i].1.is_whitespace() {
+    i += 1;
+  }
+  let byte_idx = if i < chars.len() { chars[i].0 } else { suffix.len() };
+  u16_off + utf16_len(&suffix[..byte_idx])
+}
+
+/// Non-blocking side resize grips overlaid along the left & right edges of the
+/// centered page column so dragging width works without shrinking `virtual_list`
+/// (keeping the scrollbar permanently on the RIGHT EDGE of the window!).
+fn page_width_edge_grips(
+  width: Signal<f32>,
+  paper_bounds: Signal<(f32, f32)>,
+  dark_mode: Signal<bool>,
+  on_commit: Rc<dyn Fn(f32)>,
+) -> impl IntoElement {
+  let live_width: Signal<Option<f32>> = signal(None);
+  let hovered_side = signal(0_i8);
+  let drag_start_x = signal(0.0_f32);
+  let drag_start_rendered = signal(crate::page_width::PAGE_WIDTH_DEFAULT);
+  let last_click_ms = signal(0.0_f64);
+
+  let build_edge = move |side: f32, commit_cb: Rc<dyn Fn(f32)>| {
+    let side_i8: i8 = if side < 0.0 { -1 } else { 1 };
+    let tid = if side < 0.0 {
+      "page-width-grip-left"
+    } else {
+      "page-width-grip-right"
+    };
+    view()
+      .test_id(tid)
+      .absolute()
+      .top_0()
+      .bottom_0()
+      .left(move || {
+        let outer = paper_bounds.get().0;
+        let eff = live_width.get().unwrap_or_else(|| width.get());
+        let room = (outer - 24.0).max(0.0);
+        let col = crate::page_width::rendered_column_width(eff, room);
+        let left_edge = ((outer - col) * 0.5).max(0.0);
+        if side < 0.0 {
+          px((left_edge - 12.0).max(0.0))
+        } else {
+          px((left_edge + col).min((outer - 22.0).max(0.0)))
+        }
+      })
+      .w(move || {
+        if paper_bounds.get().0 >= crate::page_width::PAGE_WIDTH_MIN_ROOM_FOR_GRIPS {
+          px(12.0)
+        } else {
+          px(0.0)
+        }
+      })
+      .z_index(10)
+      .items_center()
+      .justify_center()
+      .cursor(Cursor::ColResize)
+      .on_mouse_enter(move |_: &MouseEvent| hovered_side.set(side_i8))
+      .on_mouse_leave(move |_: &MouseEvent| {
+        if hovered_side.get_untracked() == side_i8 {
+          hovered_side.set(0);
+        }
+      })
+      .claim_touches(TouchClaim::on_start())
+      .keep_touches(true)
+      .on_responder_grant(move |e: &ResponderEvent| {
+        let outer = paper_bounds.get_untracked().0;
+        if outer < crate::page_width::PAGE_WIDTH_MIN_ROOM_FOR_GRIPS {
+          return;
+        }
+        let stored = width.get_untracked();
+        let avail = (outer - 24.0).max(1.0);
+        drag_start_x.set(f32::from(e.page.x));
+        drag_start_rendered.set(crate::page_width::rendered_column_width(stored, avail));
+        live_width.set(Some(stored));
+      })
+      .on_responder_move(move |e: &ResponderEvent| {
+        if live_width.get_untracked().is_none() {
+          return;
+        }
+        let dx = f32::from(e.page.x) - drag_start_x.get_untracked();
+        let stored = width.get_untracked();
+        let start_r = drag_start_rendered.get_untracked();
+        let avail = (paper_bounds.get_untracked().0 - 24.0).max(1.0);
+        let next = crate::page_width::compute_drag_width(stored, start_r, avail, side, dx);
+        live_width.set(Some(next));
+      })
+      .on_responder_release(move |e: &ResponderEvent| {
+        let moved = (f32::from(e.page.x) - drag_start_x.get_untracked()).abs();
+        let finished = live_width.get_untracked();
+        live_width.set(None);
+        if moved < 4.0 {
+          let now = e.timestamp;
+          let prev = last_click_ms.get_untracked();
+          if prev > 0.0 && now >= prev && (now - prev) <= 350.0 {
+            last_click_ms.set(0.0);
+            if (width.get_untracked() - crate::page_width::PAGE_WIDTH_DEFAULT).abs() > 0.5 {
+              (commit_cb)(crate::page_width::PAGE_WIDTH_DEFAULT);
+            }
+          } else {
+            last_click_ms.set(now);
+          }
+          return;
+        }
+        last_click_ms.set(0.0);
+        if let Some(target) = finished
+          && (target - width.get_untracked()).abs() > 0.5
+        {
+          (commit_cb)(target);
+        }
+      })
+      .child(
+        view()
+          .w(px(2.0))
+          .h(px(48.0))
+          .rounded(px(2.0))
+          .bg(move || {
+            let active = live_width.get().is_some() || hovered_side.get() == side_i8;
+            if active {
+              palette(dark_mode.get()).accent
+            } else {
+              TRANSPARENT_RGBA
+            }
+          }),
+      )
+  };
+
+  view()
+    .absolute()
+    .top_0()
+    .bottom_0()
+    .left_0()
+    .right_0()
+    .pointer_events(PointerEvents::BoxNone)
+    .child(build_edge(-1.0, on_commit.clone()))
+    .child(build_edge(1.0, on_commit))
+    .child(when(move || live_width.get().is_some(), move || {
+      view()
+        .absolute()
+        .top(px(12.0))
+        .left_0()
+        .right_0()
+        .items_center()
+        .pointer_events(PointerEvents::None)
+        .z_index(25)
+        .child(
+          view()
+            .px_2()
+            .py_1()
+            .rounded(px(6.0))
+            .bg(move || palette(dark_mode.get()).surface_overlay)
+            .border_1()
+            .border_color(move || palette(dark_mode.get()).border_normal)
+            .child(
+              text(move || {
+                let lw = live_width.get().unwrap_or_else(|| width.get());
+                let avail = (paper_bounds.get().0 - 24.0).max(0.0);
+                let rw = crate::page_width::rendered_column_width(lw, avail);
+                crate::page_width::width_readout_label(lw, rw)
+              })
+              .text_size(px(12.0))
+              .text_color(move || palette(dark_mode.get()).text_primary),
+            ),
+        )
+    }))
 }
 
 fn close_slash(slash: SlashMenuSignals) {
@@ -1135,22 +1884,11 @@ fn close_slash(slash: SlashMenuSignals) {
   slash.opened_by_btn.set(false);
 }
 
-fn update_slash_anchor(bridge: &MicaDocumentBridge, slash: SlashMenuSignals) {
-  let (box_w, box_h) = slash.box_size.get_untracked();
-  let max_w = box_w.max(SLASH_MENU_WIDTH + 16.0);
-  let max_h = box_h.max(SLASH_MENU_MAX_H + 16.0);
-  if let Some(rect) = bridge.caret_coords() {
-    let left = rect.origin.x.0.clamp(8.0, (max_w - SLASH_MENU_WIDTH - 8.0).max(8.0));
-    let below = rect.origin.y.0 + rect.size.height.0 + 6.0;
-    let top = if below + SLASH_MENU_MAX_H > max_h && rect.origin.y.0 > SLASH_MENU_MAX_H + 6.0 {
-      (rect.origin.y.0 - SLASH_MENU_MAX_H - 6.0).max(8.0)
-    } else {
-      below.clamp(8.0, (max_h - SLASH_MENU_MAX_H - 8.0).max(8.0))
-    };
-    slash.anchor.set((left, top));
-  } else {
-    slash.anchor.set((12.0, 8.0));
-  }
+fn update_slash_anchor(_bridge: &MicaDocumentBridge, slash: SlashMenuSignals) {
+  let (box_w, _box_h) = slash.box_size.get_untracked();
+  let left = ((box_w - SLASH_MENU_WIDTH) * 0.5)
+    .clamp(16.0, (box_w - SLASH_MENU_WIDTH - 16.0).max(16.0));
+  slash.anchor.set((left, 64.0));
 }
 
 fn toggle_block_type(bridge: &MicaDocumentBridge, kind: &str, level: Option<u64>) {
@@ -1169,6 +1907,7 @@ fn toggle_block_type(bridge: &MicaDocumentBridge, kind: &str, level: Option<u64>
   } else {
     bridge.set_block_type(kind, level);
   }
+  bridge.request_focus();
 }
 
 fn sync_slash_palette_from_caret(
@@ -1176,21 +1915,24 @@ fn sync_slash_palette_from_caret(
   slash: SlashMenuSignals,
   ai_enabled: Signal<bool>,
 ) {
-  let state = bridge.session().state();
-  let sel = state.selection();
-  if !sel.empty() {
+  let Some(sel) = bridge.selection() else {
+    if slash.open.get_untracked() && !slash.opened_by_btn.get_untracked() {
+      close_slash(slash);
+    }
+    return;
+  };
+  if !sel.is_collapsed() {
     if slash.open.get_untracked() && !slash.opened_by_btn.get_untracked() {
       close_slash(slash);
     }
     return;
   }
-  let rfrom = sel.resolved_from();
-  let parent = rfrom.parent();
-  if parent.is_textblock() && parent.ty().name() != "code_block" {
-    let before = parent
-      .content()
-      .text_between(0, rfrom.parent_offset, None, Some("\u{fffc}"));
-    if let Some((_, query)) = extract_slash_query(&before) {
+  let focus = sel.focus_pos();
+  if let Some(block) = bridge.block_at(focus.node)
+    && !matches!(block.kind.as_str(), "code_block" | "table" | "image" | "divider" | "math_block")
+  {
+    let before = utf16_slice(&block.text, 0, focus.offset);
+    if let Some((_, query)) = extract_slash_query(before) {
       let items = filter_slash_items(query, ai_enabled.get_untracked());
       if items.is_empty() {
         close_slash(slash);
@@ -1484,7 +2226,7 @@ fn link_editor_popover(
         .on_submit(move |v: &str| {
           b_submit.set_link_mark(v);
           link_prompt_open.set(false);
-          b_submit.session().focus();
+          b_submit.request_focus();
         }),
     )
     .child(
@@ -1498,7 +2240,7 @@ fn link_editor_popover(
         .on_press(move || {
           b_apply.set_link_mark(&link_draft.get_untracked());
           link_prompt_open.set(false);
-          b_apply.session().focus();
+          b_apply.request_focus();
         })
         .child(
           text("应用")
@@ -1517,7 +2259,7 @@ fn link_editor_popover(
         .on_press(move || {
           b_remove.unset_link_mark();
           link_prompt_open.set(false);
-          b_remove.session().focus();
+          b_remove.request_focus();
         })
         .child(
           text("移除")
@@ -1544,7 +2286,7 @@ fn link_editor_popover(
 
 fn step_find_match(
   bridge: &MicaDocumentBridge,
-  find_matches: Signal<Vec<(usize, usize)>>,
+  find_matches: Signal<Vec<FindMatch>>,
   find_index: Signal<usize>,
   delta: isize,
 ) {
@@ -1556,8 +2298,7 @@ fn step_find_match(
   let cur = (find_index.get_untracked() as isize).clamp(0, len - 1);
   let next = ((cur + delta).rem_euclid(len)) as usize;
   find_index.set(next);
-  let (from, to) = hits[next];
-  bridge.select_range(from, to);
+  bridge.select_find_match(&hits[next], next);
 }
 
 /// Floating top-right in-page find bar (`Ctrl+F`), 1:1 with Flutter `_buildFindBar`.
@@ -1565,7 +2306,7 @@ fn find_bar_view(
   bridge: Rc<MicaDocumentBridge>,
   find_open: Signal<bool>,
   find_query: Signal<String>,
-  find_matches: Signal<Vec<(usize, usize)>>,
+  find_matches: Signal<Vec<FindMatch>>,
   find_index: Signal<usize>,
   dark_mode: Signal<bool>,
 ) -> impl IntoElement {
@@ -1611,8 +2352,8 @@ fn find_bar_view(
           find_query.set(q.to_owned());
           let hits = b_chg.find_matches(q);
           find_index.set(0);
-          if let Some(&(from, to)) = hits.first() {
-            b_chg.select_range(from, to);
+          if let Some(first) = hits.first() {
+            b_chg.select_find_match(first, 0);
           }
           find_matches.set(hits);
         })
@@ -1622,7 +2363,8 @@ fn find_bar_view(
         .on_key_press(move |k: &str| {
           if k == "Escape" {
             find_open.set(false);
-            b_close_key.session().focus();
+            b_close_key.clear_find_highlights();
+            b_close_key.request_focus();
           }
         }),
     )
@@ -1691,7 +2433,8 @@ fn find_bar_view(
         .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
         .on_press(move || {
           find_open.set(false);
-          b_close_btn.session().focus();
+          b_close_btn.clear_find_highlights();
+          b_close_btn.request_focus();
         })
         .child(dynamic(move || {
           mica_icons::close_sm(palette(dark_mode.get()).text_muted_hex)
@@ -1932,286 +2675,6 @@ where
         p.text_muted_hex
       })
     }))
-}
-
-fn decl_style(decls: impl IntoIterator<Item = (StyleKey, PropertyValue)>) -> Style {
-  Style::from_decls(decls.into_iter().map(|(k, v)| StyleDecl::Set(k, v)))
-}
-
-fn num_prop(key: StyleKey, n: f32) -> (StyleKey, PropertyValue) {
-  (key, key.number_value(n).unwrap_or(PropertyValue::Default))
-}
-
-fn str_prop(key: StyleKey, s: &str) -> (StyleKey, PropertyValue) {
-  (
-    key,
-    key
-      .parse_value(StyleValue::Str(s))
-      .unwrap_or(PropertyValue::Default),
-  )
-}
-
-fn color_prop(key: StyleKey, c: impl Into<Color>) -> (StyleKey, PropertyValue) {
-  (key, PropertyValue::Color(Some(c.into())))
-}
-
-/// Builds declaration-backed `RichEditorStyles` matching Mica's warm-gray Notion
-/// typography scale and surface tokens (using `Style::from_decls` so `parts::merge`
-/// preserves every node & mark style).
-fn mica_rich_editor_styles(dark_mode: bool, base_font_px: f32, font_family: &str) -> RichEditorStyles {
-  let p = palette(dark_mode);
-  let base_px = base_font_px.clamp(13.0, 22.0);
-  let scale = base_px / 16.0;
-  let mut styles = RichEditorStyles::default();
-
-  let mut root_props = vec![
-    color_prop(StyleKey::BackgroundColor, p.surface_base),
-    color_prop(StyleKey::Color, p.text_primary),
-    num_prop(StyleKey::FontSize, base_px),
-  ];
-  if !font_family.is_empty() {
-    root_props.push(str_prop(StyleKey::FontFamily, font_family));
-  }
-  styles.root = Some(PartStyle(decl_style(root_props)));
-  styles.content = Some(PartStyle(decl_style([
-    num_prop(StyleKey::PaddingBottom, 160.0),
-  ])));
-  styles.caret = Some(PartStyle(decl_style([color_prop(
-    StyleKey::BackgroundColor,
-    p.accent,
-  )])));
-  styles.selection = Some(PartStyle(decl_style([color_prop(
-    StyleKey::BackgroundColor,
-    p.selection_bg,
-  )])));
-  styles.placeholder = Some(PartStyle(decl_style([color_prop(
-    StyleKey::Color,
-    p.text_ghost,
-  )])));
-  styles.list_marker = Some(PartStyle(decl_style([
-    color_prop(StyleKey::Color, p.text_muted),
-    num_prop(StyleKey::FontSize, 15.0),
-  ])));
-  styles.task_checkbox = Some(PartStyle(decl_style([
-    num_prop(StyleKey::Width, 18.0),
-    num_prop(StyleKey::Height, 18.0),
-    num_prop(StyleKey::MarginRight, 8.0),
-    num_prop(StyleKey::MarginTop, 4.0),
-  ])));
-  styles.selected_node = Some(PartStyle(decl_style([
-    num_prop(StyleKey::BorderRadius, 6.0),
-    num_prop(StyleKey::OutlineWidth, 2.0),
-    str_prop(StyleKey::OutlineStyle, "solid"),
-    color_prop(StyleKey::OutlineColor, p.accent),
-  ])));
-  styles.selected_cell = Some(PartStyle(decl_style([color_prop(
-    StyleKey::BackgroundColor,
-    p.selection_bg,
-  )])));
-
-  let mut nodes = BTreeMap::new();
-  nodes.insert(
-    "paragraph".to_string(),
-    decl_style([
-      num_prop(StyleKey::FontSize, base_px),
-      (
-        StyleKey::LineHeight,
-        PropertyValue::LineHeight(LineHeight::Multiple(1.65)),
-      ),
-      num_prop(StyleKey::MarginTop, 3.0),
-      num_prop(StyleKey::MarginBottom, 3.0),
-      color_prop(StyleKey::Color, p.text_primary),
-    ]),
-  );
-  nodes.insert(
-    "heading".to_string(),
-    decl_style([
-      (StyleKey::FontWeight, PropertyValue::FontWeight(Some(600))),
-      (
-        StyleKey::LineHeight,
-        PropertyValue::LineHeight(LineHeight::Multiple(1.35)),
-      ),
-      color_prop(StyleKey::Color, p.text_primary),
-    ]),
-  );
-  nodes.insert(
-    "heading[level=1]".to_string(),
-    decl_style([
-      num_prop(StyleKey::FontSize, (30.0 * scale).round()),
-      num_prop(StyleKey::MarginTop, 18.0),
-      num_prop(StyleKey::MarginBottom, 6.0),
-    ]),
-  );
-  nodes.insert(
-    "heading[level=2]".to_string(),
-    decl_style([
-      num_prop(StyleKey::FontSize, (24.0 * scale).round()),
-      num_prop(StyleKey::MarginTop, 14.0),
-      num_prop(StyleKey::MarginBottom, 4.0),
-    ]),
-  );
-  nodes.insert(
-    "heading[level=3]".to_string(),
-    decl_style([
-      num_prop(StyleKey::FontSize, (20.0 * scale).round()),
-      num_prop(StyleKey::MarginTop, 10.0),
-      num_prop(StyleKey::MarginBottom, 4.0),
-    ]),
-  );
-  nodes.insert(
-    "heading[level=4]".to_string(),
-    decl_style([
-      num_prop(StyleKey::FontSize, (18.0 * scale).round()),
-      num_prop(StyleKey::MarginTop, 8.0),
-      num_prop(StyleKey::MarginBottom, 2.0),
-    ]),
-  );
-  nodes.insert(
-    "heading[level=5]".to_string(),
-    decl_style([
-      num_prop(StyleKey::FontSize, (16.0 * scale).round()),
-      num_prop(StyleKey::MarginTop, 6.0),
-      num_prop(StyleKey::MarginBottom, 2.0),
-    ]),
-  );
-  nodes.insert(
-    "heading[level=6]".to_string(),
-    decl_style([
-      num_prop(StyleKey::FontSize, (14.0 * scale).round()),
-      (StyleKey::FontWeight, PropertyValue::FontWeight(Some(500))),
-      num_prop(StyleKey::MarginTop, 6.0),
-      num_prop(StyleKey::MarginBottom, 2.0),
-      color_prop(StyleKey::Color, p.text_muted),
-    ]),
-  );
-
-  let quote_style = decl_style([
-    num_prop(StyleKey::BorderLeftWidth, 3.0),
-    color_prop(StyleKey::BorderLeftColor, p.quote_bar),
-    num_prop(StyleKey::PaddingLeft, 14.0),
-    num_prop(StyleKey::PaddingTop, 2.0),
-    num_prop(StyleKey::PaddingBottom, 2.0),
-    num_prop(StyleKey::MarginTop, 6.0),
-    num_prop(StyleKey::MarginBottom, 6.0),
-    color_prop(StyleKey::Color, p.text_muted),
-  ]);
-  nodes.insert("blockquote".to_string(), quote_style.clone());
-  nodes.insert("quote".to_string(), quote_style);
-
-  // GFM Callout variants (`quote[alert=...]`)
-  for (kind, border_col) in [
-    ("note", p.alert_note),
-    ("tip", p.alert_tip),
-    ("important", p.alert_important),
-    ("warning", p.alert_warning),
-    ("caution", p.alert_caution),
-  ] {
-    nodes.insert(
-      format!("quote[alert={kind}]"),
-      decl_style([
-        num_prop(StyleKey::BorderLeftWidth, 3.0),
-        color_prop(StyleKey::BorderLeftColor, border_col),
-        color_prop(StyleKey::BackgroundColor, p.surface_raised),
-        num_prop(StyleKey::BorderRadius, 6.0),
-        num_prop(StyleKey::PaddingLeft, 14.0),
-        num_prop(StyleKey::PaddingRight, 12.0),
-        num_prop(StyleKey::PaddingTop, 8.0),
-        num_prop(StyleKey::PaddingBottom, 8.0),
-        color_prop(StyleKey::Color, p.text_primary),
-      ]),
-    );
-  }
-
-  let list_style = decl_style([
-    num_prop(StyleKey::MarginTop, 2.0),
-    num_prop(StyleKey::MarginBottom, 2.0),
-    num_prop(StyleKey::FontSize, base_px),
-    (
-      StyleKey::LineHeight,
-      PropertyValue::LineHeight(LineHeight::Multiple(1.65)),
-    ),
-  ]);
-  for list_name in ["bulletList", "bulleted_list", "orderedList", "numbered_list"] {
-    nodes.insert(list_name.to_string(), list_style.clone());
-  }
-
-  let item_style = decl_style([
-    num_prop(StyleKey::MarginTop, 2.0),
-    num_prop(StyleKey::MarginBottom, 2.0),
-  ]);
-  for item_name in ["listItem", "list_item", "taskItem", "todo"] {
-    nodes.insert(item_name.to_string(), item_style.clone());
-  }
-
-  nodes.insert(
-    "table".to_string(),
-    decl_style([
-      num_prop(StyleKey::MarginTop, 8.0),
-      num_prop(StyleKey::MarginBottom, 8.0),
-      num_prop(StyleKey::BorderWidth, 1.0),
-      color_prop(StyleKey::BorderColor, p.border_normal),
-      num_prop(StyleKey::BorderRadius, 6.0),
-    ]),
-  );
-  let header_cell_style = decl_style([
-    color_prop(StyleKey::BackgroundColor, p.surface_raised),
-    (StyleKey::FontWeight, PropertyValue::FontWeight(Some(600))),
-    num_prop(StyleKey::PaddingHorizontal, 10.0),
-    num_prop(StyleKey::PaddingVertical, 6.0),
-    num_prop(StyleKey::BorderWidth, 1.0),
-    color_prop(StyleKey::BorderColor, p.border_normal),
-  ]);
-  nodes.insert("tableHeader".to_string(), header_cell_style.clone());
-  nodes.insert("table_header".to_string(), header_cell_style);
-
-  let body_cell_style = decl_style([
-    num_prop(StyleKey::PaddingHorizontal, 10.0),
-    num_prop(StyleKey::PaddingVertical, 6.0),
-    num_prop(StyleKey::BorderWidth, 1.0),
-    color_prop(StyleKey::BorderColor, p.border_normal),
-  ]);
-  nodes.insert("tableCell".to_string(), body_cell_style.clone());
-  nodes.insert("table_cell".to_string(), body_cell_style);
-
-  let mut marks = BTreeMap::new();
-  let bold_style = decl_style([(StyleKey::FontWeight, PropertyValue::FontWeight(Some(700)))]);
-  marks.insert("bold".to_string(), bold_style.clone());
-  marks.insert("strong".to_string(), bold_style);
-
-  let italic_style = decl_style([str_prop(StyleKey::FontStyle, "italic")]);
-  marks.insert("italic".to_string(), italic_style.clone());
-  marks.insert("em".to_string(), italic_style);
-
-  marks.insert(
-    "strike".to_string(),
-    decl_style([str_prop(StyleKey::TextDecorationLine, "line-through")]),
-  );
-  marks.insert(
-    "underline".to_string(),
-    decl_style([str_prop(StyleKey::TextDecorationLine, "underline")]),
-  );
-  marks.insert(
-    "code".to_string(),
-    decl_style([
-      str_prop(StyleKey::FontFamily, "monospace"),
-      num_prop(StyleKey::FontSize, 14.0),
-      color_prop(StyleKey::BackgroundColor, p.inline_code_bg),
-      color_prop(StyleKey::Color, p.inline_code_ink),
-      num_prop(StyleKey::BorderRadius, 4.0),
-      num_prop(StyleKey::PaddingHorizontal, 4.0),
-    ]),
-  );
-  marks.insert(
-    "link".to_string(),
-    decl_style([
-      color_prop(StyleKey::Color, p.accent),
-      str_prop(StyleKey::TextDecorationLine, "underline"),
-    ]),
-  );
-
-  styles.nodes = Some(PartStyles(nodes));
-  styles.marks = Some(PartStyles(marks));
-  styles
 }
 
 fn local_stroked(size_px: f32, color: &str, inner: &str) -> Svg {
