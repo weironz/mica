@@ -1313,9 +1313,57 @@ fn build_shortcut_hint_pill(dm: Signal<bool>) -> impl IntoElement {
 // Infinite Canvas 2D Painter (1:1 Parity with `board_painter.dart`)
 // ============================================================================
 
-/// Paint a read-only embedded board preview fitted to `viewport` (`(w, h)`)
+fn visible_content_bounds(session: &BoardSession) -> Option<(f64, f64, f64, f64)> {
+  let snap = session.snapshot();
+  let hidden = session.collapsed_descendants();
+  let mut min_x = f64::INFINITY;
+  let mut min_y = f64::INFINITY;
+  let mut max_x = f64::NEG_INFINITY;
+  let mut max_y = f64::NEG_INFINITY;
+  for n in &snap.nodes {
+    if hidden.contains(&n.id) {
+      continue;
+    }
+    min_x = min_x.min(n.x);
+    min_y = min_y.min(n.y);
+    max_x = max_x.max(n.x + n.w);
+    max_y = max_y.max(n.y + n.h);
+  }
+  for s in &snap.strokes {
+    for pt in &s.points {
+      min_x = min_x.min(pt[0]);
+      min_y = min_y.min(pt[1]);
+      max_x = max_x.max(pt[0]);
+      max_y = max_y.max(pt[1]);
+    }
+  }
+  if min_x.is_finite() && min_y.is_finite() && max_x.is_finite() && max_y.is_finite() {
+    Some((min_x, min_y, max_x, max_y))
+  } else {
+    None
+  }
+}
+
+/// Natural height/width aspect ratio of an embedded board's content (including snug margins),
+/// used to size inline board cards cleanly without clipping or excessive empty whitespace.
+pub fn board_natural_aspect(json_src: &str) -> f32 {
+  let payload = if json_src.trim().is_empty() {
+    mica_board::starter_board_json("mindmap")
+  } else {
+    json_src.to_string()
+  };
+  let session = BoardSession::from_json(&payload);
+  let Some((min_x, min_y, max_x, max_y)) = visible_content_bounds(&session) else {
+    return 0.52;
+  };
+  let cw = (max_x - min_x).max(160.0) + 48.0;
+  let ch = (max_y - min_y).max(120.0) + 48.0;
+  ((ch / cw) as f32).clamp(0.36, 0.85)
+}
+
+/// Paint a read-only embedded board preview snugly fitted to `viewport` (`(w, h)`)
 /// using the exact same native 2D canvas painter as the full whiteboard editor
-/// (crisp text labels, icons, routed edges, and dot grid).
+/// (tight 20px margins instead of fullscreen-toolbar margins, crisp text, icons, and dot grid).
 pub fn paint_board_preview(json_src: &str, dark: bool, viewport: (f32, f32)) -> Painter {
   let payload = if json_src.trim().is_empty() {
     mica_board::starter_board_json("mindmap")
@@ -1323,11 +1371,22 @@ pub fn paint_board_preview(json_src: &str, dark: bool, viewport: (f32, f32)) -> 
     json_src.to_string()
   };
   let mut session = BoardSession::from_json(&payload);
-  let (vw, vh) = (viewport.0.max(240.0), viewport.1.max(180.0));
-  let _ = session.dispatch(BoardCommand::FitToContent {
-    viewport: Some([vw as f64, vh as f64]),
-  });
-  paint_board(&session, dark, (vw, vh))
+  let (vw, vh) = (viewport.0.max(200.0) as f64, viewport.1.max(140.0) as f64);
+  if let Some((min_x, min_y, max_x, max_y)) = visible_content_bounds(&session) {
+    let content_w = (max_x - min_x).max(120.0);
+    let content_h = (max_y - min_y).max(80.0);
+    let pad = 20.0_f64;
+    let avail_w = (vw - pad * 2.0).max(80.0);
+    let avail_h = (vh - pad * 2.0).max(80.0);
+    let zoom = (avail_w / content_w).min(avail_h / content_h).clamp(0.15, 1.8);
+    let cx = (min_x + max_x) * 0.5;
+    let cy = (min_y + max_y) * 0.5;
+    let pan = [vw * 0.5 - cx * zoom, vh * 0.5 - cy * zoom];
+    session.set_viewport(zoom, pan);
+  } else {
+    session.set_viewport(1.0, [vw * 0.15, vh * 0.15]);
+  }
+  paint_board(&session, dark, (vw as f32, vh as f32))
 }
 
 fn paint_board(s: &BoardSession, dark: bool, viewport: (f32, f32)) -> Painter {

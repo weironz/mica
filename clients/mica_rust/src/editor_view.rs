@@ -589,6 +589,9 @@ pub fn editor_view(
   view()
     .flex_1()
     .min_w(px(0.0))
+    .min_h(px(0.0))
+    .h_full()
+    .overflow_hidden()
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
     .on_layout(move |b: &Bounds<Points>| {
@@ -907,6 +910,8 @@ pub fn editor_view(
       view()
         .flex_1()
         .w_full()
+        .min_h(px(0.0))
+        .overflow_hidden()
         .relative()
         .bg(move || palette(dark_mode.get()).surface_base)
         .on_layout(move |b: &Bounds<Points>| {
@@ -983,6 +988,8 @@ pub fn editor_view(
           view()
             .flex_1()
             .w_full()
+            .min_h(px(0.0))
+            .overflow_hidden()
             .px_6()
             .pt_8()
             .pb_6()
@@ -1020,6 +1027,8 @@ pub fn editor_view(
               view()
                 .flex_1()
                 .w_full()
+                .min_h(px(0.0))
+                .overflow_hidden()
                 .relative()
                 .on_layout(move |bounds: &Bounds<Points>| {
                   rich_origin.set((bounds.origin.x.0, bounds.origin.y.0));
@@ -1036,7 +1045,8 @@ pub fn editor_view(
                     .accessibility_label("文档正文编辑器")
                     .flex_1()
                     .w_full()
-                    .min_h(px(360.0))
+                    .min_h(px(0.0))
+                    .h_full()
                     .editor(Some(rich_session))
                     .placeholder("输入正文，或输入 / 唤出命令...")
                     .styles(move || {

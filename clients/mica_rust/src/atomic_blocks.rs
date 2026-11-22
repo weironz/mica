@@ -228,15 +228,16 @@ fn render_embedded_board_block(input: &AtomicBlockInput, dark_mode: bool) -> imp
 
 fn render_board_card(json_src: &str, dark_mode: bool) -> impl IntoElement {
   let payload = json_src.to_string();
-  let preview_size = signal((680.0_f32, 240.0_f32));
+  let preview_size = signal((720.0_f32, 360.0_f32));
 
   view()
     .w_full()
-    .h(px(240.0))
+    .h_full()
+    .min_h(px(180.0))
     .overflow_hidden()
     .on_layout(move |b: &Bounds<Points>| {
-      let w = b.size.width.0.max(240.0);
-      let h = b.size.height.0.max(180.0);
+      let w = b.size.width.0.max(200.0);
+      let h = b.size.height.0.max(140.0);
       let (pw, ph) = preview_size.get_untracked();
       if (pw - w).abs() > 2.0 || (ph - h).abs() > 2.0 {
         preview_size.set((w, h));

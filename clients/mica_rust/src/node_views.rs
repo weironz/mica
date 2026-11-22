@@ -133,6 +133,10 @@ fn read_str_attr(node: &Node, key: &str) -> String {
   node.attrs().get(key).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
+fn read_f32_attr(node: &Node, key: &str) -> Option<f32> {
+  node.attrs().get(key).and_then(Value::as_f64).filter(|&v| v > 0.0).map(|v| v as f32)
+}
+
 fn read_node_source(node: &Node) -> String {
   if !node.is_leaf() {
     let tc = node.text_content();
@@ -899,7 +903,7 @@ impl NodeView for CodeBlockNodeView {
                 .folding(false)
                 .auto_indent(true).auto_close(true)
                 .font_size(px(14.0)).line_height(px(22.0))
-                .min_rows(Some(2u32)).max_rows(Some(32u32))
+                .min_rows(Some(1u32)).max_rows(Some(32u32))
                 .scroll_beyond_last_line(EditorScrollBeyond::None)
                 .styles(move || code_editor_styles(dark_mode.get()))
                 .on_change(move |val: &SharedString| {
@@ -1523,13 +1527,56 @@ struct BoardNodeView {
 }
 
 impl NodeView for BoardNodeView {
-  fn create(&self, cx: &NodeViewCx, _node: &Node) -> AnyElement {
+  fn create(&self, cx: &NodeViewCx, initial_node: &Node) -> AnyElement {
     let dark_mode = self.dark_mode;
     let node_sig = cx.node();
     let selected_sig = cx.selected();
     let open_board = use_context::<OpenBoardCallback>();
     let open_board_block = use_context::<OpenBoardWithBlockCallback>();
     let get_pos = cx.get_pos();
+    let session = cx.session.clone();
+
+    let hovered = signal(false);
+    let container_w = signal(720.0_f32);
+    let local_width = signal(read_f32_attr(initial_node, "width"));
+    let local_height = signal(read_f32_attr(initial_node, "height"));
+    let resizing_size: Signal<Option<(f32, f32)>> = signal(None);
+    let drag_start = signal((0.0_f32, 0.0_f32, 720.0_f32, 360.0_f32));
+    let last_handle_click_ms = signal(0.0_f64);
+
+    let effective_width = computed(move || {
+      let node = node_sig.get();
+      let max_w = container_w.get().max(240.0);
+      if let Some((w, _)) = resizing_size.get() {
+        return w.clamp(220.0, max_w);
+      }
+      local_width
+        .get()
+        .or_else(|| read_f32_attr(&node, "width"))
+        .map(|w| w.clamp(220.0, max_w))
+        .unwrap_or(max_w)
+    });
+
+    let effective_height = computed(move || {
+      let node = node_sig.get();
+      if let Some((_, h)) = resizing_size.get() {
+        return h.clamp(180.0, 960.0);
+      }
+      if let Some(h) = local_height.get().or_else(|| read_f32_attr(&node, "height")) {
+        return h.clamp(180.0, 960.0);
+      }
+      let w = effective_width.get();
+      let aspect = crate::board_view::board_natural_aspect(&read_node_source(&node));
+      (w * aspect).clamp(320.0, 540.0)
+    });
+
+    let has_custom_size = computed(move || {
+      let node = node_sig.get();
+      local_width.get().is_some()
+        || local_height.get().is_some()
+        || read_f32_attr(&node, "width").is_some()
+        || read_f32_attr(&node, "height").is_some()
+    });
 
     let open_board_click: Rc<dyn Fn()> = {
       let open_board_block = open_board_block.clone();
@@ -1545,53 +1592,389 @@ impl NodeView for BoardNodeView {
     };
     let open_board_btn = open_board_click.clone();
 
+    let commit_size: Rc<dyn Fn(Option<f32>, Option<f32>)> = {
+      let s = session.clone();
+      let gp = get_pos.clone();
+      Rc::new(move |w_opt, h_opt| {
+        local_width.set(w_opt);
+        local_height.set(h_opt);
+        dispatch_node_attr(
+          &s,
+          &gp,
+          "width",
+          w_opt.map(|v| Value::from(v.round() as i64)).unwrap_or(Value::Null),
+        );
+        dispatch_node_attr(
+          &s,
+          &gp,
+          "height",
+          h_opt.map(|v| Value::from(v.round() as i64)).unwrap_or(Value::Null),
+        );
+      })
+    };
+    let commit_reset = commit_size.clone();
+    let commit_bottom = commit_size.clone();
+    let commit_right = commit_size.clone();
+    let commit_corner = commit_size;
+
     view()
       .test_id("node-view-board")
-      .w_full().my_2().rounded(px(8.0)).border_1()
-      .border_color(move || { let p = palette(dark_mode.get()); if selected_sig.get() { p.accent } else { p.border_normal } })
-      .bg(move || palette(dark_mode.get()).surface_raised)
-      .overflow_hidden()
+      .w_full()
+      .my_2()
+      .on_layout(move |b: &Bounds<Points>| {
+        let w = b.size.width.0;
+        if w > 120.0 && (container_w.get_untracked() - w).abs() > 2.0 {
+          container_w.set(w);
+        }
+      })
       .child(
+        // Single borderless-header card sized to `effective_width × effective_height`
+        // (no permanent gray header strip; hover-only edit pill + draggable resize handles).
         view()
-          .w_full().h(px(34.0)).px_3()
-          .flex_row().items_center().justify_between()
-          .border_b_1().border_color(move || palette(dark_mode.get()).border_subtle)
-          .child(
-            view().flex_row().items_center().gap_2()
-              .child(dynamic(move || mica_icons::whiteboard(palette(dark_mode.get()).text_muted_hex)))
-              .child(text("内嵌白板").text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dark_mode.get()).text_muted)),
-          )
-          .child(
-            button()
-              .test_id("board-open-full-btn").accessibility_label("编辑内嵌白板")
-              .px_2().py_1().rounded(px(5.0))
-              .bg(move || palette(dark_mode.get()).surface_base)
-              .border_1().border_color(move || palette(dark_mode.get()).border_normal)
-              .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-              .on_press(move || open_board_btn())
-              .child(text("编辑白板").text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dark_mode.get()).text_primary)),
-          ),
-      )
-      .child(
-        // Clicking anywhere on the board preview opens the interactive whiteboard directly.
-        // Edge-to-edge canvas inside the single outer card (no double-nested card border).
-        button()
-          .test_id("board-preview-open-btn")
-          .accessibility_label("点击画板进入编辑")
-          .w_full()
+          .relative()
+          .w(move || {
+            let max_w = container_w.get().max(240.0);
+            let ew = effective_width.get();
+            if (max_w - ew).abs() <= 2.0 {
+              Length::from(relative(1.0))
+            } else {
+              Length::from(px(ew))
+            }
+          })
+          .h(move || Length::from(px(effective_height.get())))
+          .rounded(px(8.0))
+          .border_1()
+          .border_color(move || {
+            let p = palette(dark_mode.get());
+            if selected_sig.get() || resizing_size.get().is_some() {
+              p.accent
+            } else {
+              p.border_normal
+            }
+          })
           .bg(move || palette(dark_mode.get()).surface_base)
-          .on_press(move || open_board_click())
-          .child(dynamic(move || {
-            render_atomic_block(
-              &AtomicBlockInput {
-                id: "board-node".into(),
-                kind: "board".into(),
-                text: read_node_source(&node_sig.get()),
-                data: serde_json::json!({}),
-              },
-              dark_mode.get(),
-            )
-          })),
+          .overflow_hidden()
+          .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
+          .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
+          .child(
+            // Edge-to-edge clickable canvas preview (no top gray strip, no double border).
+            button()
+              .test_id("board-preview-open-btn")
+              .accessibility_label("点击画板进入编辑")
+              .w_full()
+              .h_full()
+              .on_press(move || open_board_click())
+              .child(dynamic(move || {
+                render_atomic_block(
+                  &AtomicBlockInput {
+                    id: "board-node".into(),
+                    kind: "board".into(),
+                    text: read_node_source(&node_sig.get()),
+                    data: serde_json::json!({}),
+                  },
+                  dark_mode.get(),
+                )
+              })),
+          )
+          // Hover-only top-right floating controls (`编辑白板` + optional `重置尺寸`)
+          .child(when(
+            move || hovered.get() || selected_sig.get(),
+            move || {
+              let open_btn = open_board_btn.clone();
+              let reset_cb = commit_reset.clone();
+              view()
+                .absolute()
+                .top(px(8.0))
+                .right(px(8.0))
+                .z_index(20)
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .child(when(move || has_custom_size.get(), {
+                  let rcb = reset_cb.clone();
+                  move || {
+                    let rcb = rcb.clone();
+                    button()
+                      .test_id("board-reset-size-btn")
+                      .accessibility_label("重置画板尺寸为自动适配")
+                      .px_2()
+                      .py_1()
+                      .rounded(px(6.0))
+                      .bg(move || palette(dark_mode.get()).surface_overlay)
+                      .border_1()
+                      .border_color(move || palette(dark_mode.get()).border_normal)
+                      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                      .on_press(move || rcb(None, None))
+                      .child(
+                        text("自适应")
+                          .text_size(px(12.0))
+                          .text_color(move || palette(dark_mode.get()).text_muted),
+                      )
+                  }
+                }))
+                .child(
+                  button()
+                    .test_id("board-open-full-btn")
+                    .accessibility_label("编辑内嵌白板")
+                    .px_2()
+                    .py_1()
+                    .rounded(px(6.0))
+                    .flex_row()
+                    .items_center()
+                    .gap(px(5.0))
+                    .bg(move || palette(dark_mode.get()).surface_overlay)
+                    .border_1()
+                    .border_color(move || palette(dark_mode.get()).border_normal)
+                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                    .on_press(move || open_btn())
+                    .child(dynamic(move || {
+                      mica_icons::whiteboard(palette(dark_mode.get()).text_muted_hex)
+                    }))
+                    .child(
+                      text("编辑白板")
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(move || palette(dark_mode.get()).text_primary),
+                    ),
+                )
+            },
+          ))
+          // Bottom edge resize handle (drag up/down to stretch/shrink height; double-click resets)
+          .child({
+            let cb_b = commit_bottom.clone();
+            view()
+              .test_id("board-resize-bottom")
+              .absolute()
+              .left(px(16.0))
+              .right(px(16.0))
+              .bottom(px(0.0))
+              .h(px(10.0))
+              .z_index(25)
+              .items_center()
+              .justify_center()
+              .cursor(Cursor::RowResize)
+              .claim_touches(TouchClaim::on_start())
+              .keep_touches(true)
+              .on_responder_grant(move |e: &ResponderEvent| {
+                let w = effective_width.get_untracked();
+                let h = effective_height.get_untracked();
+                drag_start.set((f32::from(e.page.x), f32::from(e.page.y), w, h));
+                resizing_size.set(Some((w, h)));
+              })
+              .on_responder_move(move |e: &ResponderEvent| {
+                let (_, sy, sw, sh) = drag_start.get_untracked();
+                let dy = f32::from(e.page.y) - sy;
+                resizing_size.set(Some((sw, (sh + dy).clamp(180.0, 960.0))));
+              })
+              .on_responder_release(move |e: &ResponderEvent| {
+                let (_, sy, _, sh) = drag_start.get_untracked();
+                let moved = (f32::from(e.page.y) - sy).abs();
+                let fin = resizing_size.get_untracked();
+                resizing_size.set(None);
+                if moved < 4.0 {
+                  let now = e.timestamp;
+                  let prev = last_handle_click_ms.get_untracked();
+                  if prev > 0.0 && now >= prev && (now - prev) <= 350.0 {
+                    last_handle_click_ms.set(0.0);
+                    cb_b(None, None);
+                  } else {
+                    last_handle_click_ms.set(now);
+                  }
+                  return;
+                }
+                if let Some((_, nh)) = fin && (nh - sh).abs() > 1.0 {
+                  cb_b(local_width.get_untracked(), Some(nh));
+                }
+              })
+              .on_responder_terminate(move |_: &ResponderEvent| resizing_size.set(None))
+              .child(
+                view()
+                  .w(px(40.0))
+                  .h(px(4.0))
+                  .rounded(px(2.0))
+                  .bg(move || {
+                    let p = palette(dark_mode.get());
+                    if resizing_size.get().is_some() {
+                      p.accent
+                    } else if hovered.get() {
+                      p.border_strong
+                    } else {
+                      TRANSPARENT_RGBA
+                    }
+                  }),
+              )
+          })
+          // Right edge resize handle (drag left/right to scale width & height proportionally)
+          .child({
+            let cb_r = commit_right.clone();
+            view()
+              .test_id("board-resize-right")
+              .absolute()
+              .top(px(16.0))
+              .bottom(px(16.0))
+              .right(px(0.0))
+              .w(px(10.0))
+              .z_index(25)
+              .items_center()
+              .justify_center()
+              .cursor(Cursor::ColResize)
+              .claim_touches(TouchClaim::on_start())
+              .keep_touches(true)
+              .on_responder_grant(move |e: &ResponderEvent| {
+                let w = effective_width.get_untracked();
+                let h = effective_height.get_untracked();
+                drag_start.set((f32::from(e.page.x), f32::from(e.page.y), w, h));
+                resizing_size.set(Some((w, h)));
+              })
+              .on_responder_move(move |e: &ResponderEvent| {
+                let (sx, _, sw, sh) = drag_start.get_untracked();
+                let dx = f32::from(e.page.x) - sx;
+                let max_w = container_w.get_untracked().max(240.0);
+                let nw = (sw + dx).clamp(220.0, max_w);
+                let aspect = (sh / sw.max(1.0)).clamp(0.25, 2.5);
+                let nh = (nw * aspect).clamp(180.0, 960.0);
+                resizing_size.set(Some((nw, nh)));
+              })
+              .on_responder_release(move |e: &ResponderEvent| {
+                let (sx, _, sw, _) = drag_start.get_untracked();
+                let moved = (f32::from(e.page.x) - sx).abs();
+                let fin = resizing_size.get_untracked();
+                resizing_size.set(None);
+                if moved < 4.0 {
+                  let now = e.timestamp;
+                  let prev = last_handle_click_ms.get_untracked();
+                  if prev > 0.0 && now >= prev && (now - prev) <= 350.0 {
+                    last_handle_click_ms.set(0.0);
+                    cb_r(None, None);
+                  } else {
+                    last_handle_click_ms.set(now);
+                  }
+                  return;
+                }
+                if let Some((nw, nh)) = fin && (nw - sw).abs() > 1.0 {
+                  let max_w = container_w.get_untracked().max(240.0);
+                  let persisted_w = if (max_w - nw).abs() <= 4.0 { None } else { Some(nw) };
+                  cb_r(persisted_w, Some(nh));
+                }
+              })
+              .on_responder_terminate(move |_: &ResponderEvent| resizing_size.set(None))
+              .child(
+                view()
+                  .w(px(4.0))
+                  .h(px(36.0))
+                  .rounded(px(2.0))
+                  .bg(move || {
+                    let p = palette(dark_mode.get());
+                    if resizing_size.get().is_some() {
+                      p.accent
+                    } else if hovered.get() {
+                      p.border_strong
+                    } else {
+                      TRANSPARENT_RGBA
+                    }
+                  }),
+              )
+          })
+          // Bottom-right corner resize handle (free width & height drag)
+          .child({
+            let cb_c = commit_corner.clone();
+            view()
+              .test_id("board-resize-corner")
+              .absolute()
+              .right(px(0.0))
+              .bottom(px(0.0))
+              .w(px(16.0))
+              .h(px(16.0))
+              .z_index(28)
+              .items_center()
+              .justify_center()
+              .cursor(Cursor::NwseResize)
+              .claim_touches(TouchClaim::on_start())
+              .keep_touches(true)
+              .on_responder_grant(move |e: &ResponderEvent| {
+                let w = effective_width.get_untracked();
+                let h = effective_height.get_untracked();
+                drag_start.set((f32::from(e.page.x), f32::from(e.page.y), w, h));
+                resizing_size.set(Some((w, h)));
+              })
+              .on_responder_move(move |e: &ResponderEvent| {
+                let (sx, sy, sw, sh) = drag_start.get_untracked();
+                let max_w = container_w.get_untracked().max(240.0);
+                let nw = (sw + (f32::from(e.page.x) - sx)).clamp(220.0, max_w);
+                let nh = (sh + (f32::from(e.page.y) - sy)).clamp(180.0, 960.0);
+                resizing_size.set(Some((nw, nh)));
+              })
+              .on_responder_release(move |e: &ResponderEvent| {
+                let (sx, sy, _, _) = drag_start.get_untracked();
+                let moved = (f32::from(e.page.x) - sx).hypot(f32::from(e.page.y) - sy);
+                let fin = resizing_size.get_untracked();
+                resizing_size.set(None);
+                if moved < 4.0 {
+                  let now = e.timestamp;
+                  let prev = last_handle_click_ms.get_untracked();
+                  if prev > 0.0 && now >= prev && (now - prev) <= 350.0 {
+                    last_handle_click_ms.set(0.0);
+                    cb_c(None, None);
+                  } else {
+                    last_handle_click_ms.set(now);
+                  }
+                  return;
+                }
+                if let Some((nw, nh)) = fin {
+                  let max_w = container_w.get_untracked().max(240.0);
+                  let persisted_w = if (max_w - nw).abs() <= 4.0 { None } else { Some(nw) };
+                  cb_c(persisted_w, Some(nh));
+                }
+              })
+              .on_responder_terminate(move |_: &ResponderEvent| resizing_size.set(None))
+              .child(
+                view()
+                  .w(px(8.0))
+                  .h(px(8.0))
+                  .rounded(px(4.0))
+                  .border_1()
+                  .border_color(move || {
+                    let p = palette(dark_mode.get());
+                    if hovered.get() || resizing_size.get().is_some() { p.accent } else { TRANSPARENT_RGBA }
+                  })
+                  .bg(move || {
+                    let p = palette(dark_mode.get());
+                    if resizing_size.get().is_some() {
+                      p.accent
+                    } else if hovered.get() {
+                      p.surface_base
+                    } else {
+                      TRANSPARENT_RGBA
+                    }
+                  }),
+              )
+          })
+          // Live `W × H` pill badge shown while actively dragging resize handles
+          .child(when(
+            move || resizing_size.get().is_some(),
+            move || {
+              view()
+                .test_id("board-resize-readout")
+                .absolute()
+                .right(px(16.0))
+                .bottom(px(16.0))
+                .z_index(30)
+                .px_2()
+                .py_1()
+                .rounded(px(5.0))
+                .bg(move || palette(dark_mode.get()).text_primary)
+                .pointer_events(PointerEvents::None)
+                .child(
+                  text(move || {
+                    let (w, h) = resizing_size.get().unwrap_or((0.0, 0.0));
+                    format!("{} × {}", w.round() as i32, h.round() as i32)
+                  })
+                  .text_size(px(11.5))
+                  .font_weight(FontWeight::MEDIUM)
+                  .text_color(move || palette(dark_mode.get()).surface_base),
+                )
+            },
+          )),
       )
       .into_element()
   }

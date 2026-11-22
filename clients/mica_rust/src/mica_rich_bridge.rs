@@ -41,7 +41,7 @@ use nsh_base::rich_editor::{
   },
   model::{
     AttrSpec, AttrType, Attrs, DomOutputSpec, Fragment, Mark as PmMark, MarkSpec, Node, NodeSpec,
-    ParseRule, Schema, SchemaSpec, Whitespace, utf16_len, utf16_to_byte,
+    ParseRule, ResolvedPos, Schema, SchemaSpec, Slice, Whitespace, utf16_len, utf16_to_byte,
   },
   state::{
     EditorState, EditorStateConfig, KeyEvent, Plugin, PluginKey, PluginSpec, Selection,
@@ -175,6 +175,30 @@ pub fn mica_schema() -> Schema {
     vec![("checked".into(), attr_spec(Value::Bool(false), AttrType::Boolean, false))],
   );
   todo.extra.insert("render".into(), Value::String("task".into()));
+  todo.parse_dom = vec![
+    ParseRule::tag("li[data-type='taskItem']").with_get_attrs(|input| {
+      let el = input.element()?;
+      let mut a = Attrs::new();
+      a.insert("checked".into(), Value::Bool(el.attr("data-checked") == Some("true")));
+      Some(a)
+    }),
+  ];
+
+  let mut bulleted_list = flat_textblock("div", true, vec![]);
+  bulleted_list.parse_dom = vec![ParseRule::tag("ul > li"), ParseRule::tag("li")];
+
+  let mut numbered_list = flat_textblock("div", true, vec![]);
+  numbered_list.parse_dom = vec![ParseRule::tag("ol > li")];
+
+  let mut board = atom_block(
+    "div",
+    vec![
+      str_attr("source", false),
+      ("width".into(), attr_spec(Value::Null, AttrType::Any, false)),
+      ("height".into(), attr_spec(Value::Null, AttrType::Any, false)),
+    ],
+  );
+  board.parse_dom = vec![];
 
   let mut quote = flat_textblock("blockquote", true, vec![str_attr("alert", false)]);
   quote.parse_dom = vec![ParseRule::tag("blockquote")];
@@ -258,15 +282,15 @@ pub fn mica_schema() -> Schema {
     ("doc".into(), doc_spec),
     ("paragraph".into(), paragraph),
     ("heading".into(), heading),
-    ("bulleted_list".into(), flat_textblock("div", true, vec![])),
-    ("numbered_list".into(), flat_textblock("div", true, vec![])),
+    ("bulleted_list".into(), bulleted_list),
+    ("numbered_list".into(), numbered_list),
     ("todo".into(), todo),
     ("quote".into(), quote),
     ("code_block".into(), code_block),
     ("divider".into(), divider),
     ("math".into(), atom_block("div", vec![str_attr("source", false)])),
     ("mermaid".into(), atom_block("div", vec![str_attr("source", false)])),
-    ("board".into(), atom_block("div", vec![str_attr("source", false)])),
+    ("board".into(), board),
     ("image".into(), image),
     (table_name, table_spec),
     table_nodes::table_row(),
@@ -448,7 +472,17 @@ fn pm_node_from_block(schema: &Schema, block: &Block) -> Node {
       if lang.eq_ignore_ascii_case("mermaid") {
         source_atom("mermaid")
       } else if lang.eq_ignore_ascii_case("mica-board") || lang.eq_ignore_ascii_case("board") {
-        source_atom("board")
+        let width = block.data.get("width").and_then(Value::as_f64).map(Value::from).unwrap_or(Value::Null);
+        let height = block.data.get("height").and_then(Value::as_f64).map(Value::from).unwrap_or(Value::Null);
+        let a = make_attrs(
+          id.clone(),
+          &[
+            ("source", Value::String(block.text.clone())),
+            ("width", width),
+            ("height", height),
+          ],
+        );
+        schema.node("board", Some(a), Fragment::empty(), Vec::new()).ok()
       } else {
         let wrap = block.data.get("wrap").and_then(Value::as_bool).unwrap_or(false);
         let line_numbers = block.data.get("lineNumbers").and_then(Value::as_bool).unwrap_or(false);
@@ -581,7 +615,17 @@ fn block_from_pm_node(node: &Node, id: String) -> Block {
     "divider" => Block::new(id, "divider"),
     "math" => Block::new(id, "math_block").with_text(attr_str(attrs, "source")),
     "mermaid" => Block::new(id, "code_block").with_text(attr_str(attrs, "source")).with_data(json!({ "language": "mermaid" })),
-    "board" => Block::new(id, "code_block").with_text(attr_str(attrs, "source")).with_data(json!({ "language": "mica-board" })),
+    "board" => {
+      let mut d = Map::new();
+      d.insert("language".into(), Value::String("mica-board".into()));
+      if let Some(w) = attrs.get("width").and_then(Value::as_f64).filter(|&w| w > 0.0) {
+        d.insert("width".into(), Value::from(w));
+      }
+      if let Some(h) = attrs.get("height").and_then(Value::as_f64).filter(|&h| h > 0.0) {
+        d.insert("height".into(), Value::from(h));
+      }
+      Block::new(id, "code_block").with_text(attr_str(attrs, "source")).with_data(Value::Object(d))
+    }
     "image" => {
       let mut d = Map::new();
       let src = attr_str(attrs, "src");
@@ -849,6 +893,192 @@ impl PluginSpec for MicaInputRulesPlugin {
     }
     false
   }
+  fn transform_pasted_html(&self, _state: &EditorState, html: String) -> String {
+    // If clipboard HTML carries no semantic formatting tags (e.g. a plain `<p>` / `<div>` / `<span>`
+    // wrapper around raw Markdown from an editor or terminal), drop the HTML wrapper so `parse_paste`
+    // falls through to `clipboard_text_parser` and parses the Markdown richly via `crates/md-core`.
+    let lower = html.to_ascii_lowercase();
+    let has_semantic_html = [
+      "<h1", "<h2", "<h3", "<h4", "<h5", "<h6", "<ul", "<ol", "<li", "<blockquote",
+      "<table", "<strong", "<b>", "<b ", "<em", "<i>", "<i ", "<pre", "<code",
+      "<img", "<a ", "<hr", "<del", "<s>", "<s ",
+    ]
+    .iter()
+    .any(|tag| lower.contains(tag));
+    if has_semantic_html { html } else { String::new() }
+  }
+  fn clipboard_text_parser(
+    &self,
+    state: &EditorState,
+    text: &str,
+    context: &ResolvedPos,
+    plain: bool,
+  ) -> Option<Slice> {
+    if plain || context.parent().ty().spec().code {
+      return None;
+    }
+    if !looks_like_mica_markdown(text) {
+      return None;
+    }
+    parse_pasted_markdown_slice(state.schema(), text)
+  }
+  fn clipboard_text_serializer(&self, _state: &EditorState, slice: &Slice) -> Option<String> {
+    if slice.content.child_count() == 0 {
+      return None;
+    }
+    // Single inline text/paragraph fragment: let plain text copy stay clean without trailing newline.
+    if slice.content.child_count() == 1
+      && slice.content.child(0).ty().name() == "paragraph"
+      && slice.open_start > 0
+      && slice.open_end > 0
+    {
+      return None;
+    }
+    let slice_blocks: Vec<Block> = slice.content.iter().map(|n| block_from_pm_node(n, new_block_id())).collect();
+    let mut root = Block::new(DEFAULT_ROOT_ID, "page");
+    root.children = slice_blocks.iter().map(|b| b.id.clone()).collect();
+    let mut blocks = Vec::with_capacity(slice_blocks.len() + 1);
+    blocks.push(root);
+    blocks.extend(slice_blocks);
+    let snap = Document {
+      schema_version: SCHEMA_VERSION,
+      root_block_id: DEFAULT_ROOT_ID.to_owned(),
+      blocks,
+    };
+    let md = serialize(&snap, &SerializeOptions::default()).unwrap_or_default();
+    let trimmed = md.trim_end_matches('\n');
+    if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
+  }
+}
+
+fn is_bare_image_url(line: &str) -> bool {
+  let trimmed = line.trim();
+  if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) || trimmed.contains(char::is_whitespace) {
+    return false;
+  }
+  let without_query = trimmed.split(&['?', '#'][..]).next().unwrap_or(trimmed).to_ascii_lowercase();
+  [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif"]
+    .iter()
+    .any(|ext| without_query.ends_with(ext))
+}
+
+fn looks_like_mica_markdown(raw: &str) -> bool {
+  let text = raw.replace("\r\n", "\n");
+  for line in text.lines() {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+      return true;
+    }
+    if trimmed.starts_with('#') {
+      let hashes = trimmed.bytes().take_while(|&b| b == b'#').count();
+      if (1..=6).contains(&hashes) && trimmed.as_bytes().get(hashes) == Some(&b' ') {
+        return true;
+      }
+    }
+    if trimmed == ">" || trimmed.starts_with("> ") {
+      return true;
+    }
+    if trimmed.starts_with("- ")
+      || trimmed.starts_with("* ")
+      || trimmed.starts_with("+ ")
+      || trimmed.starts_with("• ")
+    {
+      return true;
+    }
+    let digits = trimmed.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits > 0
+      && matches!(trimmed.as_bytes().get(digits), Some(b'.' | b')'))
+      && trimmed.as_bytes().get(digits + 1) == Some(&b' ')
+    {
+      return true;
+    }
+    let t = trimmed.trim_end();
+    if t.len() >= 3 && (t.bytes().all(|b| b == b'-') || t.bytes().all(|b| b == b'*') || t.bytes().all(|b| b == b'_')) {
+      return true;
+    }
+    if t.contains('|') && t.contains("---") {
+      let is_table_sep = t
+        .bytes()
+        .all(|b| matches!(b, b'|' | b'-' | b':' | b' ' | b'\t'));
+      if is_table_sep {
+        return true;
+      }
+    }
+    if is_bare_image_url(t) {
+      return true;
+    }
+  }
+  // Inline Markdown checks (bold, strike, inline code, links, images)
+  let has_pair = |delim: &str| -> bool {
+    if let Some(i) = text.find(delim) {
+      let rest = &text[i + delim.len()..];
+      if let Some(j) = rest.find(delim) {
+        return j > 0 && !rest[..j].contains('\n');
+      }
+    }
+    false
+  };
+  if has_pair("**") || has_pair("__") || has_pair("~~") || has_pair("`") {
+    return true;
+  }
+  if let Some(i) = text.find("](") {
+    let before = &text[..i];
+    let after = &text[i + 2..];
+    if before.rfind('[').is_some_and(|b| !before[b..].contains('\n'))
+      && after.find(')').is_some_and(|e| e > 0 && !after[..e].contains('\n'))
+    {
+      return true;
+    }
+  }
+  false
+}
+
+fn normalize_pasted_markdown(raw: &str) -> String {
+  let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+  let mut out = Vec::new();
+  let mut in_fence = false;
+  for line in normalized.lines() {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+      in_fence = !in_fence;
+      out.push(line.to_owned());
+      continue;
+    }
+    if !in_fence {
+      if let Some(rest) = trimmed.strip_prefix("• ") {
+        let indent = &line[..line.len() - trimmed.len()];
+        out.push(format!("{indent}- {rest}"));
+        continue;
+      }
+      if is_bare_image_url(line) {
+        out.push(format!("![]({})", line.trim()));
+        continue;
+      }
+    }
+    out.push(line.to_owned());
+  }
+  out.join("\n")
+}
+
+fn parse_pasted_markdown_slice(schema: &Schema, raw: &str) -> Option<Slice> {
+  let normalized = normalize_pasted_markdown(raw);
+  let (_, _, body_blocks) = parse_markdown_to_doc(&normalized);
+  if body_blocks.is_empty() {
+    return None;
+  }
+  let pm_doc = pm_doc_from_blocks(schema, &body_blocks);
+  let content = pm_doc.content().clone();
+  if content.child_count() == 0 {
+    return None;
+  }
+  // Single paragraph paste (e.g. `**bold**` mid-line): open depth 1 so it merges inline.
+  // Multi-block or structured block paste (heading/list/table/quote/code/image): depth 0.
+  let open = if content.child_count() == 1 && content.child(0).ty().name() == "paragraph" {
+    1
+  } else {
+    0
+  };
+  Some(Slice::new(content, open, open))
 }
 
 fn reset_to_paragraph(state: &EditorState, pos: usize, id: String) -> Option<Transaction> {
@@ -2371,6 +2601,53 @@ fn hello() {}
       assert_eq!(bridge.current_link_href().as_deref(), Some("https://mica.dev"));
       bridge.unset_link_mark();
       assert_eq!(bridge.current_link_href(), None);
+    });
+  }
+
+  #[test]
+  fn markdown_and_html_paste_preserves_headings_quotes_lists_tables_dividers_and_images() {
+    with_runtime(|| {
+      let bridge = MicaDocumentBridge::from_markdown("");
+      let session = bridge.session();
+      let md_paste = concat!(
+        "# HGX B300 清单\n\n",
+        "> 用途：**对外待确认事项**\n\n",
+        "## 0. 优先级总览\n\n",
+        "| P0 阻塞项 | 收件方 |\n",
+        "| --- | --- |\n",
+        "| 单柜功率 | IDC |\n\n",
+        "---\n\n",
+        "• 日期：2026-11-04\n\n",
+        "https://mica.cloudcele.com/api/workspaces/w1/files/f1/blob/pasted-image.png"
+      );
+      let state = session.state();
+      let from = state.selection().resolved_from().clone();
+      let slice = state
+        .some_prop(|p| p.clipboard_text_parser(&state, md_paste, &from, false))
+        .expect("markdown clipboard_text_parser must return a rich Slice");
+      let mut tr = state.tr();
+      tr.replace_selection(slice);
+      session.dispatch(tr).unwrap();
+
+      let doc = session.state().doc().clone();
+      let kinds: Vec<&str> = doc.content().iter().map(|n| n.ty().name()).collect();
+      assert!(kinds.contains(&"heading"), "expected heading in {kinds:?}");
+      assert!(kinds.contains(&"quote"), "expected quote in {kinds:?}");
+      assert!(kinds.contains(&"table"), "expected table in {kinds:?}");
+      assert!(kinds.contains(&"divider"), "expected divider in {kinds:?}");
+      assert!(kinds.contains(&"bulleted_list"), "expected bulleted_list in {kinds:?}");
+      assert!(kinds.contains(&"image"), "expected image in {kinds:?}");
+
+      // HTML paste from Flutter/browser preserves list, bold, heading, and image
+      let bridge2 = MicaDocumentBridge::from_markdown("");
+      let session2 = bridge2.session();
+      let html = r#"<ul><li><strong>日期：</strong>2026-11-04</li></ul><h2>现象</h2><img src="https://example.com/a.png" alt="图1">"#;
+      assert!(session2.paste_html(html));
+      let doc2 = session2.state().doc().clone();
+      let kinds2: Vec<&str> = doc2.content().iter().map(|n| n.ty().name()).collect();
+      assert!(kinds2.contains(&"bulleted_list"), "expected bulleted_list in {kinds2:?}");
+      assert!(kinds2.contains(&"heading"), "expected heading in {kinds2:?}");
+      assert!(kinds2.contains(&"image"), "expected image in {kinds2:?}");
     });
   }
 }

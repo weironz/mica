@@ -227,7 +227,10 @@ pub fn page_width_frame<C: IntoElement + 'static>(
   view()
     .test_id("page-width-frame")
     .relative()
+    .flex_1()
     .w_full()
+    .min_h(px(0.0))
+    .overflow_hidden()
     .items_center()
     .on_layout(move |b: &Bounds<Points>| {
       let w = f32::from(b.size.width).max(0.0);
@@ -238,7 +241,10 @@ pub fn page_width_frame<C: IntoElement + 'static>(
     .child(
       view()
         .relative()
+        .flex_1()
         .w_full()
+        .min_h(px(0.0))
+        .overflow_hidden()
         .max_w(move || {
           let eff = live_width.get().unwrap_or_else(|| width.get());
           if is_full_width(eff) {
@@ -255,7 +261,7 @@ pub fn page_width_frame<C: IntoElement + 'static>(
         .flex_row()
         .items_stretch()
         .child(left_grip)
-        .child(view().flex_1().min_w(px(0.0)).child(child))
+        .child(view().flex_1().min_w(px(0.0)).min_h(px(0.0)).overflow_hidden().child(child))
         .child(right_grip)
         .child(when(
           move || live_width.get().is_some(),

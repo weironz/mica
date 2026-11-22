@@ -3078,7 +3078,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           view()
             .flex_1()
             .min_w(px(0.0))
+            .min_h(px(0.0))
             .h_full()
+            .overflow_hidden()
             .bg(move || palette(dark_mode.get()).surface_base)
             .child(when(move || active_mode.get() == MODE_DOC, {
               let br = bridge.clone();
