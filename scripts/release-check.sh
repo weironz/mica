@@ -95,6 +95,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/build-md-wasm.sh
 bash scripts/build-doc-wasm.sh
 bash scripts/build-preview-wasm.sh
+bash scripts/build-board-wasm.sh
 (cd clients/mica_flutter \
   && "${FLUTTER:-flutter}" pub get --enforce-lockfile \
   && "${FLUTTER:-flutter}" gen-l10n \

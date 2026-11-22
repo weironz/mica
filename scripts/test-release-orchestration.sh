@@ -33,7 +33,7 @@ cat > "$stub_bin/flutter" <<'EOF'
 case "$1" in
   --version) echo 'Flutter 3.35.0 • channel stable • https://github.com/flutter/flutter.git' ;;
   test)
-    [ -f ../../target/wasm-ready ] && [ -f ../../target/doc-wasm-ready ] && [ -f ../../target/preview-wasm-ready ] \
+    [ -f ../../target/wasm-ready ] && [ -f ../../target/doc-wasm-ready ] && [ -f ../../target/preview-wasm-ready ] && [ -f ../../target/board-wasm-ready ] \
       || { echo 'all wasm engines must be built before Flutter tests' >&2; exit 1; }
     # The gate counts passed tests from the JSON file reporter (lib-receipt.sh).
     for arg in "$@"; do
@@ -107,6 +107,7 @@ new_fixture() {
   printf '#!/usr/bin/env bash\nmkdir -p target\nprintf "wasm built\\n" > target/wasm-ready\n' > "$repo/scripts/build-md-wasm.sh"
   printf '#!/usr/bin/env bash\nmkdir -p target\nprintf "wasm built\\n" > target/doc-wasm-ready\n' > "$repo/scripts/build-doc-wasm.sh"
   printf '#!/usr/bin/env bash\nmkdir -p target\nprintf "wasm built\\n" > target/preview-wasm-ready\n' > "$repo/scripts/build-preview-wasm.sh"
+  printf '#!/usr/bin/env bash\nmkdir -p target\nprintf "wasm built\\n" > target/board-wasm-ready\n' > "$repo/scripts/build-board-wasm.sh"
 
   printf '[package]\nname = "mica-cli"\nversion = "%s"\n' "$old" > "$repo/Cargo.toml"
   cat > "$repo/Cargo.lock" <<LOCK

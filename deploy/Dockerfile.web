@@ -32,6 +32,8 @@ RUN test ! -e /usr/share/nginx/html/yjs_bundle.js \
   && test -s /usr/share/nginx/html/mica_preview/math_bg.wasm \
   && test -s /usr/share/nginx/html/mica_preview/mermaid.js \
   && test -s /usr/share/nginx/html/mica_preview/mermaid_bg.wasm \
+  && test -s /usr/share/nginx/html/mica_board/board.js \
+  && test -s /usr/share/nginx/html/mica_board/board_bg.wasm \
   && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets' \
   || { echo "web bundle is incomplete, contains retired assets, or is unreadable by nginx" >&2; exit 1; }
 EXPOSE 80

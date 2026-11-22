@@ -7,7 +7,7 @@ bash scripts/check-md-wasm-toolchain.sh
 
 CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
   CARGO_PROFILE_RELEASE_PANIC=abort CARGO_PROFILE_RELEASE_OPT_LEVEL=z \
-  cargo build -p mica-board-wasm --target wasm32-unknown-unknown --release
+  cargo build -p mica-board-wasm --target wasm32-unknown-unknown --release --locked
 
 target_dir=$(cargo metadata --format-version 1 --no-deps | jq -er .target_directory)
 out=clients/mica_flutter/web/mica_board

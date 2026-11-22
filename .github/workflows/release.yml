@@ -503,6 +503,7 @@ jobs:
         run: |
           bash scripts/build-doc-wasm.sh
           bash scripts/build-preview-wasm.sh
+          bash scripts/build-board-wasm.sh
 
       - name: Build + stage the web bundle
         if: ${{ matrix.flutter }}

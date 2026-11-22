@@ -99,6 +99,7 @@ if [ "$part" = all ] || [ "$part" = flutter ]; then
   bash scripts/build-md-wasm.sh
   bash scripts/build-doc-wasm.sh
   bash scripts/build-preview-wasm.sh
+  bash scripts/build-board-wasm.sh
   rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
   (
     cd clients/mica_flutter

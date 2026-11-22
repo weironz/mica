@@ -7,6 +7,7 @@ require_flutter_pin "browser regressions test the pin"
 bash scripts/build-md-wasm.sh
 bash scripts/build-doc-wasm.sh
 bash scripts/build-preview-wasm.sh
+bash scripts/build-board-wasm.sh
 (
   cd e2e
   npm ci --no-audit --no-fund

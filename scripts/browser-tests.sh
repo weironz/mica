@@ -34,6 +34,7 @@ fi
 bash scripts/build-md-wasm.sh
 bash scripts/build-doc-wasm.sh
 bash scripts/build-preview-wasm.sh
+bash scripts/build-board-wasm.sh
 
 cd clients/mica_flutter
 # Clean runners do not have the generated localization files used by the suites.
