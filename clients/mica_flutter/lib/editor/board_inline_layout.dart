@@ -1,3 +1,6 @@
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
 import '../l10n/locale_controller.dart';
@@ -167,6 +170,27 @@ double computeResizedBoardWidth({
   return (raw * 10).round() / 10.0;
 }
 
+/// Paint the embedded board viewport (rounded clip + canvas fill + image + border).
+void paintBoardViewport(
+  Canvas canvas,
+  Rect viewport,
+  Rect dst,
+  ui.Image img,
+  MicaTokens tokens,
+) {
+  canvas.save();
+  canvas.clipRRect(RRect.fromRectAndRadius(viewport, const Radius.circular(6)));
+  canvas.drawRect(viewport, Paint()..color = tokens.surface.base);
+  canvas.drawImageRect(
+    img,
+    Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
+    dst,
+    Paint()..filterQuality = FilterQuality.medium,
+  );
+  canvas.restore();
+  paintBoardFrame(canvas, viewport, tokens);
+}
+
 /// Subtle resting card border around an embedded board.
 void paintBoardFrame(Canvas canvas, Rect rect, MicaTokens tokens) {
   canvas.drawRRect(
@@ -176,6 +200,14 @@ void paintBoardFrame(Canvas canvas, Rect rect, MicaTokens tokens) {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0,
   );
+}
+
+/// Keep inline board pan within a generous bound so content never vanishes
+/// irretrievably outside the frame.
+Offset clampBoardPan(Offset pan, Rect boardRect, Size contentSize) {
+  final maxX = math.max(boardRect.width, contentSize.width) * 0.85;
+  final maxY = math.max(boardRect.height, contentSize.height) * 0.85;
+  return Offset(pan.dx.clamp(-maxX, maxX), pan.dy.clamp(-maxY, maxY));
 }
 
 /// Hover / active-resize chrome: crisp blue border + 8 circular handles +

@@ -186,4 +186,11 @@ void main() {
       rec.endRecording().dispose();
     }
   });
+
+  test('clampBoardPan allows free inline panning while keeping content reachable', () {
+    const rect = Rect.fromLTWH(28, 16, 400, 200);
+    const content = Size(400, 200);
+    expect(clampBoardPan(const Offset(120, -60), rect, content), const Offset(120, -60));
+    expect(clampBoardPan(const Offset(999, -999), rect, content), const Offset(340, -170));
+  });
 }

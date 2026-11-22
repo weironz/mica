@@ -4073,14 +4073,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (boardHandle != null) {
       return boardResizeCursor(boardHandle.handle);
     }
-    // Rendered diagrams pan by drag (AFFiNE-style): hand cursor invites it.
-    if (_diagramPan != null) return SystemMouseCursors.grabbing;
+    // Rendered diagrams & embedded boards pan by drag: hand cursor invites it.
+    if (_diagramPan != null || _panDownDiagram != null) {
+      return SystemMouseCursors.grabbing;
+    }
     final diagHover = r.diagramAt(local);
     if (diagHover != null && r.viewTabAt(local) == null) {
-      final isBoard =
-          diagHover < _controller.nodes.length &&
-          _controller.nodes[diagHover].data['language'] == 'mica-board';
-      return isBoard ? SystemMouseCursors.click : SystemMouseCursors.grab;
+      return SystemMouseCursors.grab;
     }
     if (r.tableColBorderAt(local) != null || r.imageResizeAt(local) != null) {
       return SystemMouseCursors.resizeLeftRight;
@@ -4397,18 +4396,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     final bh = widget.canEdit && local != null ? r?.boardResizeAt(local) : null;
     _panDownBoardResize = bh == null
         ? null
-        : BoardResizeSession(
-            node: bh.node,
-            handle: bh.handle,
-            startLocal: local!,
-            rect: bh.rect,
-          );
-    final diag = local == null ? null : r?.diagramAt(local);
-    final isBoard =
-        diag != null &&
-        diag < _controller.nodes.length &&
-        _controller.nodes[diag].data['language'] == 'mica-board';
-    _panDownDiagram = isBoard ? null : diag;
+        : BoardResizeSession(node: bh.node, handle: bh.handle, startLocal: local!, rect: bh.rect);
+    final diag = bh == null && local != null && r?.viewTabAt(local) == null
+        ? r?.diagramAt(local)
+        : null;
+    _panDownDiagram = diag;
+    if (diag != null && _cursor != SystemMouseCursors.grabbing) {
+      setState(() => _cursor = SystemMouseCursors.grabbing);
+    }
   }
 
   void _onPanStart(DragStartDetails d) {
@@ -4461,21 +4456,12 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     if (boardSession == null) {
       final bh = r.boardResizeAt(local);
       if (bh != null) {
-        boardSession = BoardResizeSession(
-          node: bh.node,
-          handle: bh.handle,
-          startLocal: local,
-          rect: bh.rect,
-        );
+        boardSession = BoardResizeSession(node: bh.node, handle: bh.handle, startLocal: local, rect: bh.rect);
       }
     }
     if (boardSession != null && boardSession.node < _controller.nodes.length) {
       final node = _controller.nodes[boardSession.node];
-      _dragPreviewSnapshot = (
-        id: node.id,
-        data: {...node.data},
-        keys: const ['width'],
-      );
+      _dragPreviewSnapshot = (id: node.id, data: {...node.data}, keys: const ['width']);
       _boardResize = boardSession;
       r.setResizingBoard(boardSession.node, boardSession.handle);
       return;
@@ -4683,8 +4669,15 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   }
 
   void _finishPan(DragEndDetails d) {
+    final wasDiagram = _diagramPan != null || _panDownDiagram != null;
     _diagramPan = null;
     _panDownDiagram = null;
+    if (wasDiagram) {
+      if (_cursor == SystemMouseCursors.grabbing) {
+        setState(() => _cursor = SystemMouseCursors.grab);
+      }
+      return;
+    }
     _cellDrag = null; // end any in-cell text drag-selection
     _areaDrag = null; // the area SELECTION stays; only the drag ends
     if (_blockDrag != null) {
@@ -4755,6 +4748,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _blockDrag = null;
     _diagramPan = null;
     _panDownDiagram = null;
+    if (_cursor == SystemMouseCursors.grabbing) {
+      setState(() => _cursor = SystemMouseCursors.grab);
+    }
     _cellDrag = null;
     _areaDrag = null;
     _colResize = null;

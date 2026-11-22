@@ -1225,14 +1225,12 @@ class MermaidRenderer extends AtomicBlockRenderer {
       width: l.mathSize.width,
       height: l.mathSize.height,
     );
-    canvas.save();
     if (l.boardRect != null) {
-      canvas.clipRRect(
-        RRect.fromRectAndRadius(viewport, const Radius.circular(6)),
-      );
-    } else {
-      canvas.clipRect(viewport);
+      paintBoardViewport(canvas, viewport, dst, img, host._appearance.tokens);
+      return;
     }
+    canvas.save();
+    canvas.clipRect(viewport);
     canvas.drawImageRect(
       img,
       Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
@@ -1240,9 +1238,6 @@ class MermaidRenderer extends AtomicBlockRenderer {
       Paint()..filterQuality = FilterQuality.medium,
     );
     canvas.restore();
-    if (l.boardRect != null) {
-      paintBoardFrame(canvas, viewport, host._appearance.tokens);
-    }
   }
 
   @override

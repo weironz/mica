@@ -735,14 +735,15 @@ class RenderDocument extends RenderBox {
   /// Drag a diagram by [delta] inside its fixed viewport.
   void panPreviewBy(int node, Offset delta) {
     if (node < 0 || node >= _layouts.length) return;
-    final id = _layouts[node].nodeId;
-    _previewPan[id] = (_previewPan[id] ?? Offset.zero) + delta;
+    final l = _layouts[node];
+    final raw = (_previewPan[l.nodeId] ?? Offset.zero) + delta;
+    _previewPan[l.nodeId] = l.boardRect == null
+        ? raw
+        : clampBoardPan(raw, l.boardRect!, l.mathSize);
     markNeedsPaint();
   }
 
-  /// Restore every diagram to its natural view (zoom and pan) — the page
-  /// host calls this when a click lands outside the editor canvas entirely
-  /// (the page margins), extending the click-outside reset below.
+  /// Restore every diagram to its natural view (zoom and pan).
   void resetAllPreviewViews() {
     if (_previewZoom.isEmpty && _previewPan.isEmpty) return;
     _previewZoom.clear();
@@ -750,13 +751,12 @@ class RenderDocument extends RenderBox {
     markNeedsLayout();
   }
 
-  /// A click anywhere OUTSIDE the diagram blocks restores their natural
-  /// view (zoom and pan). Walking the pointer away no longer resets — a
-  /// zoomed/panned diagram stays put until the user clicks elsewhere.
+  /// Restore non-board diagrams when clicking outside them; embedded boards
+  /// keep their panned view so users can freely reposition content in-doc.
   void resetPreviewViewsOutside(Offset local) {
     var changed = false;
     for (final l in _layouts) {
-      if (l.renderedBy is! MermaidRenderer) continue;
+      if (l.renderedBy is! MermaidRenderer || l.boardRect != null) continue;
       if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) continue;
       if (_previewZoom.remove(l.nodeId) != null) changed = true;
       if (_previewPan.remove(l.nodeId) != null) changed = true;
@@ -765,11 +765,12 @@ class RenderDocument extends RenderBox {
   }
 
   /// Ctrl+wheel / pinch over a rendered diagram: zoom it by [factor].
-  /// Returns true when consumed.
   bool zoomPreviewBy(Offset local, double factor) {
     for (final l in _layouts) {
       if (l.renderedBy is! MermaidRenderer) continue;
-      if (local.dy < l.boxTop || local.dy > l.boxTop + l.boxHeight) continue;
+      final hit = l.boardRect?.contains(local) ??
+          (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight);
+      if (!hit) continue;
       final cur = _previewZoom[l.nodeId] ?? 1.0;
       _previewZoom[l.nodeId] = (cur * factor).clamp(0.3, 3.0);
       markNeedsLayout();
