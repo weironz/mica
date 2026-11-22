@@ -199,34 +199,27 @@ fn render_mermaid_card(source: &str, dark_mode: bool) -> impl IntoElement {
   };
   let rendered = mica_md::render_mermaid_svg(src, Some(&host_theme));
 
-  let mut card = view()
-    .w_full()
-    .p_3()
-    .gap_2()
-    .border_1()
-    .border_color(move || theme().border)
-    .rounded(move || theme().radius)
-    .bg(move || theme().card)
-    .child(
-      text("Mermaid Diagram")
-        .text_xs()
-        .text_color(move || theme().muted_foreground),
-    );
-
   if let Some(svg_markup) = rendered {
-    card = card.child(
-      svg(ImageSrc::svg_markup(&svg_markup))
-        .w(px(460.0))
-        .h(px(180.0)),
-    );
-  } else {
-    card = card.child(
+    return view()
+      .w_full()
+      .py_2()
+      .items_center()
+      .justify_center()
+      .child(
+        svg(ImageSrc::svg_markup(&svg_markup))
+          .w(px(520.0))
+          .h(px(200.0)),
+      );
+  }
+
+  view()
+    .w_full()
+    .py_2()
+    .child(
       text(src.to_string())
         .text_xs()
         .text_color(move || theme().foreground),
-    );
-  }
-  card
+    )
 }
 
 fn render_embedded_board_block(input: &AtomicBlockInput, dark_mode: bool) -> impl IntoElement {
@@ -234,36 +227,29 @@ fn render_embedded_board_block(input: &AtomicBlockInput, dark_mode: bool) -> imp
 }
 
 fn render_board_card(json_src: &str, dark_mode: bool) -> impl IntoElement {
-  let payload = if json_src.trim().is_empty() {
-    mica_board::starter_board_json("mindmap")
-  } else {
-    json_src.to_string()
-  };
-  let svg_theme = board_svg_theme(dark_mode);
-  let rendered = mica_board::render_board_json_svg(&payload, Some(&svg_theme));
+  let payload = json_src.to_string();
+  let preview_size = signal((680.0_f32, 240.0_f32));
 
-  let mut card = view()
+  view()
     .w_full()
-    .p_3()
-    .gap_2()
-    .border_1()
-    .border_color(move || theme().border)
-    .rounded(move || theme().radius)
-    .bg(move || theme().card)
+    .h(px(240.0))
+    .overflow_hidden()
+    .on_layout(move |b: &Bounds<Points>| {
+      let w = b.size.width.0.max(240.0);
+      let h = b.size.height.0.max(180.0);
+      let (pw, ph) = preview_size.get_untracked();
+      if (pw - w).abs() > 2.0 || (ph - h).abs() > 2.0 {
+        preview_size.set((w, h));
+      }
+    })
     .child(
-      text("Embedded Whiteboard")
-        .text_xs()
-        .text_color(move || theme().muted_foreground),
-    );
-
-  if let Some(svg_markup) = rendered {
-    card = card.child(
-      svg(ImageSrc::svg_markup(&svg_markup))
-        .w(px(460.0))
-        .h(px(180.0)),
-    );
-  }
-  card
+      canvas(move || {
+        let sz = preview_size.get();
+        crate::board_view::paint_board_preview(&payload, dark_mode, sz)
+      })
+      .w_full()
+      .h_full(),
+    )
 }
 
 fn render_image_block(input: &AtomicBlockInput) -> impl IntoElement {

@@ -1574,13 +1574,12 @@ impl NodeView for BoardNodeView {
       )
       .child(
         // Clicking anywhere on the board preview opens the interactive whiteboard directly.
+        // Edge-to-edge canvas inside the single outer card (no double-nested card border).
         button()
           .test_id("board-preview-open-btn")
           .accessibility_label("点击画板进入编辑")
           .w_full()
-          .p_3()
           .bg(move || palette(dark_mode.get()).surface_base)
-          .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_raised))
           .on_press(move || open_board_click())
           .child(dynamic(move || {
             render_atomic_block(

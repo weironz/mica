@@ -1313,6 +1313,23 @@ fn build_shortcut_hint_pill(dm: Signal<bool>) -> impl IntoElement {
 // Infinite Canvas 2D Painter (1:1 Parity with `board_painter.dart`)
 // ============================================================================
 
+/// Paint a read-only embedded board preview fitted to `viewport` (`(w, h)`)
+/// using the exact same native 2D canvas painter as the full whiteboard editor
+/// (crisp text labels, icons, routed edges, and dot grid).
+pub fn paint_board_preview(json_src: &str, dark: bool, viewport: (f32, f32)) -> Painter {
+  let payload = if json_src.trim().is_empty() {
+    mica_board::starter_board_json("mindmap")
+  } else {
+    json_src.to_string()
+  };
+  let mut session = BoardSession::from_json(&payload);
+  let (vw, vh) = (viewport.0.max(240.0), viewport.1.max(180.0));
+  let _ = session.dispatch(BoardCommand::FitToContent {
+    viewport: Some([vw as f64, vh as f64]),
+  });
+  paint_board(&session, dark, (vw, vh))
+}
+
 fn paint_board(s: &BoardSession, dark: bool, viewport: (f32, f32)) -> Painter {
   let snap = s.snapshot();
   let [pan_x, pan_y] = s.pan();
