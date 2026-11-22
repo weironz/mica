@@ -1,5 +1,10 @@
 //! Minimal Notion-inspired warm-gray workspace sidebar matching Mica's original
-//! visual specification (`docs/plans/ui-visual-refresh.md`).
+//! visual & interaction spec (`docs/plans/ui-visual-refresh.md` + `account_menu.dart`):
+//! - Clickable workspace switcher (`Mica 本地工作区 ↕`) -> opens workspace dropdown popover.
+//! - Recessed search pill (`搜索...  Ctrl+Shift+F`) -> opens modal search dialog.
+//! - Collapsible `页面 ⌄` tree + lightweight `+` / `folder+` icon buttons.
+//! - Quiet collapsible Recycle Bin (`回收站 (N)`).
+//! - Clickable bottom account row (`L local`) -> opens account menu popover + `⚙` Settings modal.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -18,6 +23,8 @@ pub struct SidebarCallbacks {
   pub on_restore_view: Rc<dyn Fn(Uuid)>,
   pub on_open_search: Rc<dyn Fn()>,
   pub on_open_settings: Rc<dyn Fn()>,
+  pub on_toggle_workspace_menu: Rc<dyn Fn()>,
+  pub on_toggle_account_menu: Rc<dyn Fn()>,
 }
 
 pub fn sidebar_view(
@@ -33,6 +40,7 @@ pub fn sidebar_view(
   let tree_keys = tree.clone();
   let tree_row = tree.clone();
   let tree_trash = tree.clone();
+  let show_pages = signal(true);
   let show_trash = signal(false);
 
   let cb_new_page = cb.clone();
@@ -42,6 +50,8 @@ pub fn sidebar_view(
   let cb_settings = cb.clone();
   let cb_restore = cb.clone();
   let cb_select = cb.clone();
+  let cb_ws_menu = cb.clone();
+  let cb_acct_menu = cb.clone();
 
   view()
     .w(px(244.0))
@@ -51,26 +61,37 @@ pub fn sidebar_view(
     .border_color(move || palette(dark_mode.get()).border_subtle)
     .bg(move || palette(dark_mode.get()).surface_raised)
     .child(
-      // 1. Workspace switcher row (cloud icon + workspace name + switcher + board shortcut)
+      // 1. Clickable Workspace Switcher row + Graph/Whiteboard shortcuts
       view()
         .h(px(40.0))
-        .px_3()
+        .px_2()
         .flex_row()
         .items_center()
         .justify_between()
+        .gap_1()
         .child(
-          view()
+          button()
+            .test_id("workspace-switcher-btn")
+            .accessibility_label("切换或新建工作区")
+            .flex_1()
+            .min_w(px(0.0))
+            .h(px(30.0))
+            .px_2()
             .flex_row()
             .items_center()
             .gap_2()
+            .rounded(px(6.0))
+            .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+            .on_press(move || (cb_ws_menu.on_toggle_workspace_menu)())
             .child(dynamic(move || {
               mica_icons::cloud(palette(dark_mode.get()).text_muted_hex)
             }))
             .child(
               text(move || workspace_name.get())
-                .text_size(px(14.0))
+                .text_size(px(13.5))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(move || palette(dark_mode.get()).text_primary),
+                .text_color(move || palette(dark_mode.get()).text_primary)
+                .truncate(),
             )
             .child(dynamic(move || {
               mica_icons::chevrons_up_down(palette(dark_mode.get()).text_faint_hex)
@@ -81,9 +102,11 @@ pub fn sidebar_view(
             .flex_row()
             .items_center()
             .gap_1()
+            .flex_shrink_0()
             .child(
               button()
                 .test_id("mode-board")
+                .accessibility_label("打开无限白板与思维导图")
                 .w(px(26.0))
                 .h(px(26.0))
                 .items_center()
@@ -98,10 +121,11 @@ pub fn sidebar_view(
         ),
     )
     .child(
-      // 2. Quiet recessed search pill ("搜索...  Ctrl+Shift+F")
+      // 2. Quiet recessed search pill ("搜索...  Ctrl+Shift+F") -> modal search
       view().px_3().pb_2().child(
         button()
           .test_id("open-search-btn")
+          .accessibility_label("搜索工作区")
           .w_full()
           .h(px(30.0))
           .px_2()
@@ -134,7 +158,7 @@ pub fn sidebar_view(
       ),
     )
     .child(
-      // 3. Section header ("页面 ⌄" + lightweight `+` & `folder+` icon buttons)
+      // 3. Collapsible Section header ("页面 ⌄" + lightweight `+` & `folder+` icons)
       view()
         .h(px(28.0))
         .px_3()
@@ -142,10 +166,17 @@ pub fn sidebar_view(
         .items_center()
         .justify_between()
         .child(
-          view()
+          button()
+            .test_id("toggle-pages-section")
+            .accessibility_label("展开或收起页面列表")
             .flex_row()
             .items_center()
             .gap_1()
+            .px_1()
+            .py_1()
+            .rounded(px(4.0))
+            .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+            .on_press(move || show_pages.set(!show_pages.get_untracked()))
             .child(
               text("页面")
                 .text_size(px(12.0))
@@ -153,7 +184,12 @@ pub fn sidebar_view(
                 .text_color(move || palette(dark_mode.get()).text_faint),
             )
             .child(dynamic(move || {
-              mica_icons::chevron_down(palette(dark_mode.get()).text_faint_hex)
+              let hex = palette(dark_mode.get()).text_faint_hex;
+              if show_pages.get() {
+                mica_icons::chevron_down(hex)
+              } else {
+                mica_icons::chevron_right(hex)
+              }
             })),
         )
         .child(
@@ -164,6 +200,7 @@ pub fn sidebar_view(
             .child(
               button()
                 .test_id("new-page-btn")
+                .accessibility_label("新建页面")
                 .w(px(24.0))
                 .h(px(24.0))
                 .items_center()
@@ -172,12 +209,13 @@ pub fn sidebar_view(
                 .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                 .on_press(move || (cb_new_page.on_new_page)())
                 .child(dynamic(move || {
-                  mica_icons::plus(palette(dark_mode.get()).text_muted_hex)
+                  mica_icons::plus(palette(dark_mode.get()).text_faint_hex)
                 })),
             )
             .child(
               button()
                 .test_id("new-folder-btn")
+                .accessibility_label("新建文件夹")
                 .w(px(24.0))
                 .h(px(24.0))
                 .items_center()
@@ -186,118 +224,142 @@ pub fn sidebar_view(
                 .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                 .on_press(move || (cb_new_folder.on_new_folder)())
                 .child(dynamic(move || {
-                  mica_icons::folder_plus(palette(dark_mode.get()).text_muted_hex)
+                  mica_icons::folder_plus(palette(dark_mode.get()).text_faint_hex)
                 })),
             ),
         ),
     )
     .child(
-      // 4. Compact 30px virtualized page & folder tree
-      view().flex_1().px_2().py_1().child(
-        virtual_list(
-          move || {
-            tree_rev.get();
-            tree_count.borrow().visible_rows().len()
-          },
-          move |at: Position| {
-            let t = tree_row.clone();
-            let sel = cb_select.clone();
-            let row_sig = computed(move || {
+      // 4. Virtualized compact page & folder tree
+      view().flex_1().px_2().py_1().child(when(
+        move || show_pages.get(),
+        move || {
+          let tc = tree_count.clone();
+          let tk = tree_keys.clone();
+          let tr = tree_row.clone();
+          let cbs = cb_select.clone();
+          virtual_list(
+            move || {
               tree_rev.get();
-              t.borrow().visible_rows().get(at.index()).cloned()
-            });
-            let t_press = tree_row.clone();
+              tc.borrow().visible_rows().len()
+            },
+            move |at: Position| {
+              let t_read = tr.clone();
+              let t_press = tr.clone();
+              let cb_sel = cbs.clone();
 
-            button()
-              .w_full()
-              .h(px(30.0))
-              .px_2()
-              .flex_row()
-              .items_center()
-              .gap_2()
-              .rounded(px(6.0))
-              .bg(move || {
-                let p = palette(dark_mode.get());
-                let is_active = row_sig
+              let row_info = computed(move || {
+                tree_rev.get();
+                t_read.borrow().visible_rows().get(at.index()).cloned()
+              });
+
+              let is_active = computed(move || {
+                let curr = active_doc.get();
+                row_info
                   .get()
-                  .is_some_and(|r| !r.is_folder && active_doc.get() == Some(r.object_id));
-                if is_active {
-                  p.surface_hover
-                } else {
-                  p.surface_raised
-                }
-              })
-              .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-              .on_press(move || {
-                let row = { t_press.borrow().visible_rows().get(at.index()).cloned() };
-                if let Some(row) = row {
-                  if row.is_folder {
-                    t_press.borrow_mut().toggle_expanded(row.view_id);
-                    tree_rev.set(tree_rev.get_untracked() + 1);
-                  } else {
-                    (sel.on_select_doc)(row.object_id, row.name);
-                  }
-                }
-              })
-              .child(dynamic(move || {
-                let p = palette(dark_mode.get());
-                match row_sig.get() {
-                  Some(r) => {
-                    let is_active = !r.is_folder && active_doc.get() == Some(r.object_id);
-                    let pad = (r.depth as f32) * 14.0;
-                    let icon_hex = if is_active {
-                      p.text_primary_hex
+                  .is_some_and(|r| !r.is_folder && Some(r.object_id) == curr)
+              });
+
+              let row_label = computed(move || {
+                row_info
+                  .get()
+                  .map(|r| {
+                    if r.name.trim().is_empty() {
+                      "无标题".to_string()
                     } else {
-                      p.text_muted_hex
-                    };
-                    let mut line = view().flex_row().items_center().gap_2().pl(px(pad));
-                    if r.is_folder {
-                      line = line.child(mica_icons::folder(icon_hex));
-                    } else {
-                      line = line.child(mica_icons::file_doc(icon_hex));
+                      r.name
                     }
-                    line.child(
-                      text(r.name)
-                        .text_size(px(14.0))
-                        .font_weight(if is_active {
-                          FontWeight::MEDIUM
-                        } else {
-                          FontWeight::NORMAL
-                        })
-                        .text_color(if is_active {
-                          p.text_primary
-                        } else {
-                          p.text_muted
-                        })
-                        .truncate(),
-                    )
+                  })
+                  .unwrap_or_default()
+              });
+
+              let indent_px = computed(move || {
+                row_info
+                  .get()
+                  .map(|r| (r.depth as f32) * 14.0)
+                  .unwrap_or(0.0)
+              });
+
+              button()
+                .w_full()
+                .h(px(30.0))
+                .pl(move || px(8.0 + indent_px.get()))
+                .pr_2()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .rounded(px(6.0))
+                .bg(move || {
+                  let p = palette(dark_mode.get());
+                  if is_active.get() {
+                    p.surface_hover
+                  } else {
+                    p.surface_raised
                   }
-                  None => view(),
-                }
-              }))
-          },
-        )
-        .keys(move || {
-          tree_rev.get();
-          tree_keys
-            .borrow()
-            .visible_rows()
-            .into_iter()
-            .map(|r| r.view_id.to_string())
-            .collect::<Vec<_>>()
-        })
-        .estimated_item_size(px(30.0))
-        .flex_1(),
-      ),
+                })
+                .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                .on_press(move || {
+                  if let Some(row) = row_info.get_untracked() {
+                    if row.is_folder {
+                      t_press.borrow_mut().toggle_expanded(row.view_id);
+                      tree_rev.set(tree_rev.get_untracked() + 1);
+                    } else {
+                      (cb_sel.on_select_doc)(row.object_id, row.name);
+                    }
+                  }
+                })
+                .child(dynamic(move || {
+                  let p = palette(dark_mode.get());
+                  let is_folder = row_info.get().is_some_and(|r| r.is_folder);
+                  let icon_hex = if is_active.get() {
+                    p.text_primary_hex
+                  } else {
+                    p.text_muted_hex
+                  };
+                  if is_folder {
+                    mica_icons::folder(icon_hex)
+                  } else {
+                    mica_icons::file_doc(icon_hex)
+                  }
+                }))
+                .child(
+                  text(move || row_label.get())
+                    .flex_1()
+                    .text_size(px(13.5))
+                    .text_color(move || {
+                      let p = palette(dark_mode.get());
+                      if is_active.get() {
+                        p.text_primary
+                      } else {
+                        p.text_muted
+                      }
+                    })
+                    .truncate(),
+                )
+            },
+          )
+          .keys(move || {
+            tree_rev.get();
+            tk.borrow()
+              .visible_rows()
+              .into_iter()
+              .map(|r| r.view_id.to_string())
+              .collect::<Vec<_>>()
+          })
+          .estimated_item_size(px(30.0))
+          .flex_1()
+        },
+      )),
     )
     .child(
-      // 5. Collapsible Recycle Bin strip (stays quiet when empty)
+      // 5. Quiet collapsible Recycle Bin
       view()
         .px_2()
         .py_1()
         .child(
           button()
             .test_id("toggle-recycle-bin")
+            .accessibility_label("展开或收起回收站")
             .w_full()
             .h(px(28.0))
             .px_2()
@@ -311,32 +373,47 @@ pub fn sidebar_view(
               mica_icons::trash_icon(palette(dark_mode.get()).text_faint_hex)
             }))
             .child(
-              text(move || {
-                tree_rev.get();
-                let n = tree_trash.borrow().trashed_views().len();
-                format!("回收站 ({n})")
+              text({
+                let t_tr = tree_trash.clone();
+                move || {
+                  tree_rev.get();
+                  let count = t_tr.borrow().trashed_views().len();
+                  format!("回收站 ({count})")
+                }
               })
               .text_size(px(12.0))
               .text_color(move || palette(dark_mode.get()).text_faint),
             ),
         )
         .child(when(move || show_trash.get(), {
-          let t_list = tree.clone();
-          let cb_res = cb_restore.clone();
+          let t_tr = tree_trash.clone();
+          let restore_cb = cb_restore.clone();
           move || {
-            let t_dyn = t_list.clone();
-            let cb_dyn = cb_res.clone();
+            let t_inner = t_tr.clone();
+            let r_inner = restore_cb.clone();
             dynamic(move || {
               tree_rev.get();
-              let items: Vec<(Uuid, String)> = t_dyn
+              let items: Vec<(Uuid, String)> = t_inner
                 .borrow()
                 .trashed_views()
                 .into_iter()
                 .map(|v| (v.id, v.name.clone()))
                 .collect();
-              let mut box_el = view().w_full().gap_1().py_1();
-              for (idx, (vid, name)) in items.into_iter().enumerate() {
-                let restore = cb_dyn.clone();
+              let mut box_el = view().w_full().pl_2().py_1().gap_1();
+              if items.is_empty() {
+                return box_el.child(
+                  text("回收站为空")
+                    .text_size(px(12.0))
+                    .text_color(move || palette(dark_mode.get()).text_ghost),
+                );
+              }
+              for (idx, (vid, raw_name)) in items.into_iter().enumerate() {
+                let restore = r_inner.clone();
+                let name = if raw_name.trim().is_empty() {
+                  "无标题".to_string()
+                } else {
+                  raw_name
+                };
                 box_el = box_el.child(
                   view()
                     .flex_row()
@@ -345,7 +422,7 @@ pub fn sidebar_view(
                     .px_2()
                     .py_1()
                     .child(
-                      text(name)
+                      text(name.clone())
                         .text_size(px(12.0))
                         .text_color(move || palette(dark_mode.get()).text_muted)
                         .truncate(),
@@ -353,6 +430,7 @@ pub fn sidebar_view(
                     .child(
                       button()
                         .test_id(&format!("restore-trash-{idx}"))
+                        .accessibility_label(format!("恢复页面 {name}"))
                         .px_2()
                         .py_1()
                         .rounded(px(6.0))
@@ -373,20 +451,29 @@ pub fn sidebar_view(
         })),
     )
     .child(
-      // 6. Bottom pinned account bar + settings gear (exact match to original screenshot)
+      // 6. Bottom pinned clickable Account menu trigger + Settings gear modal trigger
       view()
         .h(px(44.0))
-        .px_3()
+        .px_2()
         .flex_row()
         .items_center()
         .justify_between()
+        .gap_1()
         .border_t_1()
         .border_color(move || palette(dark_mode.get()).border_subtle)
         .child(
-          view()
+          button()
+            .test_id("account-menu-btn")
+            .accessibility_label("打开账号菜单")
+            .flex_1()
+            .h(px(32.0))
+            .px_2()
             .flex_row()
             .items_center()
             .gap_2()
+            .rounded(px(6.0))
+            .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+            .on_press(move || (cb_acct_menu.on_toggle_account_menu)())
             .child(
               view()
                 .w(px(24.0))
@@ -412,12 +499,14 @@ pub fn sidebar_view(
             .child(
               text(move || account_name.get())
                 .text_size(px(13.0))
-                .text_color(move || palette(dark_mode.get()).text_primary),
+                .text_color(move || palette(dark_mode.get()).text_primary)
+                .truncate(),
             ),
         )
         .child(
           button()
             .test_id("open-settings-btn")
+            .accessibility_label("打开设置")
             .w(px(28.0))
             .h(px(28.0))
             .items_center()
