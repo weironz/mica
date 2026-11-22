@@ -35,13 +35,22 @@ void main() {
     ctrl.duplicateSelection();
     expect(ctrl.snapshot.nodes.length, beforeDup + 1);
 
-    // Drag with smart alignment snapping.
-    final added = ctrl.addNodeAt(const Offset(100, 100), kind: 'diamond');
-    final neighbor = ctrl.addNodeAt(const Offset(300, 103), kind: 'cylinder');
+    // Drag with smart alignment snapping: slow 2px steps MUST smoothly snap
+    // near the guide and then break free without getting stuck in quicksand.
+    final added = ctrl.addNodeAt(const Offset(100, 900), kind: 'diamond');
+    final neighbor = ctrl.addNodeAt(const Offset(400, 903), kind: 'cylinder');
+    final startY = added.y;
     ctrl.beginNodeDrag(added.id);
     ctrl.updateNodeDrag(const Offset(0, 1));
     // Within +-6 px of neighbor's center Y -> snaps & emits horizontal guide.
     expect(ctrl.activeGuides.isNotEmpty, isTrue);
+    // Continue moving slowly (+2 px per frame x 20 frames = +40 px total).
+    // Must escape the alignment line cleanly instead of staying trapped!
+    for (var i = 0; i < 20; i++) {
+      ctrl.updateNodeDrag(const Offset(0, 2));
+    }
+    expect(added.y, closeTo(startY + 41, 0.5));
+    expect(ctrl.activeGuides, isEmpty);
     ctrl.endNodeDrag();
 
     // Connector drag creates edge between added & neighbor.

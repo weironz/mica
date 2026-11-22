@@ -342,7 +342,10 @@ class _BoardEditorScreenState extends State<BoardEditorScreen> {
       return;
     }
     if (_ctrl.isDraggingNodes) {
-      _ctrl.updateNodeDrag(delta / _ctrl.zoom);
+      _ctrl.updateNodeDrag(
+        delta / _ctrl.zoom,
+        snap: !HardwareKeyboard.instance.isAltPressed,
+      );
       return;
     }
     if (_marqueeStartWorld != null) {
@@ -1012,8 +1015,12 @@ class _BoardEditorScreenState extends State<BoardEditorScreen> {
                           ),
                         ),
 
-                      // Top-center contextual floating inspector
-                      if (!widget.readOnly && _ctrl.editingNodeId == null)
+                      // Top-center contextual floating inspector (hidden while dragging)
+                      if (!widget.readOnly &&
+                          _ctrl.editingNodeId == null &&
+                          !_ctrl.isDraggingNodes &&
+                          _ctrl.resizingNodeId == null &&
+                          _ctrl.pendingConnector == null)
                         Positioned(
                           top: 14,
                           left: 72,

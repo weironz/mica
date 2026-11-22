@@ -18,7 +18,7 @@ class StaticBoardPainter extends CustomPainter {
     required this.graphRev,
     required this.viewportRev,
     required this.dark,
-  });
+  }) : super(repaint: controller.staticPaintSignal);
 
   final BoardController controller;
   final ui.Picture Function() pictureProvider;
@@ -50,7 +50,7 @@ class ActiveBoardPainter extends CustomPainter {
     required this.controller,
     required this.activeRev,
     required this.dark,
-  });
+  }) : super(repaint: controller.activePaintSignal);
 
   final BoardController controller;
   final int activeRev;
@@ -155,18 +155,26 @@ class ActiveBoardPainter extends CustomPainter {
       );
     }
 
-    // 6. Smart alignment guides.
+    // 6. Smart alignment guides (subtle soft blue dashed hairline).
     if (controller.activeGuides.isNotEmpty) {
       final gp = Paint()
-        ..color = BoardColors.guide
+        ..color = BoardColors.brand.withValues(alpha: 0.65)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2 / controller.zoom;
+        ..strokeWidth = 1.0 / controller.zoom;
+      final dash = 4.5 / controller.zoom;
+      final gap = 3.5 / controller.zoom;
       for (final g in controller.activeGuides) {
+        final path = Path();
         if (g.vertical) {
-          canvas.drawLine(Offset(g.coord, g.start), Offset(g.coord, g.end), gp);
+          path
+            ..moveTo(g.coord, g.start)
+            ..lineTo(g.coord, g.end);
         } else {
-          canvas.drawLine(Offset(g.start, g.coord), Offset(g.end, g.coord), gp);
+          path
+            ..moveTo(g.start, g.coord)
+            ..lineTo(g.end, g.coord);
         }
+        _drawDashedPath(canvas, path, gp, dash, gap);
       }
     }
 

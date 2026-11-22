@@ -103,12 +103,39 @@ class BoardController extends ChangeNotifier {
   List<AlignmentGuide> activeGuides = const [];
 
   BoardSnapshot? _gestureBeforeSnapshot;
+  final Map<String, Offset> _dragStartPositions = {};
+  Offset _dragTotalDelta = Offset.zero;
   int _idCounter = 1000;
 
-  // Two-layer RepaintBoundary monotonic versions.
+  // Two-layer RepaintBoundary monotonic versions + direct paint signals so
+  // high-frequency mouse moves repaint ONLY the CustomPaint RenderObject
+  // without triggering full widget-tree setState() rebuilds.
+  final _PaintSignal _staticPaintSignal = _PaintSignal();
+  final _PaintSignal _activePaintSignal = _PaintSignal();
+  Listenable get staticPaintSignal => _staticPaintSignal;
+  Listenable get activePaintSignal => _activePaintSignal;
   int graphRevision = 0;
   int viewportRevision = 0;
   int activeRevision = 0;
+
+  @override
+  void dispose() {
+    _staticPaintSignal.dispose();
+    _activePaintSignal.dispose();
+    super.dispose();
+  }
+
+  void _emitActiveOnly() {
+    activeRevision++;
+    _activePaintSignal.bump();
+  }
+
+  void _emitCanvas({bool staticDirty = true, bool rebuildChrome = false}) {
+    if (staticDirty) _staticPaintSignal.bump();
+    activeRevision++;
+    _activePaintSignal.bump();
+    if (rebuildChrome) notifyListeners();
+  }
 
   // Counters for tests & telemetry.
   int staticPaintCount = 0;
@@ -215,11 +242,16 @@ class BoardController extends ChangeNotifier {
   void setViewport(double nextZoom, Offset nextPan) {
     final clamped = nextZoom.clamp(0.2, 3.0);
     if (clamped == zoom && nextPan == pan) return;
+    final zoomChanged = (clamped - zoom).abs() > 1e-4;
     zoom = clamped;
     pan = nextPan;
     viewportRevision++;
-    activeRevision++;
-    notifyListeners();
+    // Pure panning repaints canvas directly with 0 widget rebuilds unless
+    // zoom % badge or zoomed inline editor overlay needs repositioning.
+    _emitCanvas(
+      staticDirty: true,
+      rebuildChrome: zoomChanged || editingNodeId != null,
+    );
   }
 
   void zoomAround(double factor, Offset focalScreen) {
@@ -574,8 +606,7 @@ class BoardController extends ChangeNotifier {
   void setHoveredNode(String? id) {
     if (hoveredNodeId == id) return;
     hoveredNodeId = id;
-    activeRevision++;
-    notifyListeners();
+    _emitActiveOnly();
   }
 
   void beginNodeDrag(String hitId, {bool additive = false}) {
@@ -583,25 +614,33 @@ class BoardController extends ChangeNotifier {
       selectNode(hitId, additive: additive);
     }
     _gestureBeforeSnapshot = _snapshot.deepCopy();
+    _dragStartPositions.clear();
+    for (final id in selectedNodeIds) {
+      final n = nodeById[id];
+      if (n != null) _dragStartPositions[id] = Offset(n.x, n.y);
+    }
+    _dragTotalDelta = Offset.zero;
     isDraggingNodes = true;
     activeGuides = const [];
     // Exclude dragged nodes from static picture ONCE at drag start.
     graphRevision++;
-    activeRevision++;
-    notifyListeners();
+    _emitCanvas(staticDirty: true, rebuildChrome: true);
   }
 
-  void updateNodeDrag(Offset worldDelta) {
+  void updateNodeDrag(Offset worldDelta, {bool snap = true}) {
     if (!isDraggingNodes || selectedNodeIds.isEmpty) return;
+    _dragTotalDelta += worldDelta;
     for (final id in selectedNodeIds) {
       final n = nodeById[id];
-      if (n != null) {
-        n.x += worldDelta.dx;
-        n.y += worldDelta.dy;
+      final origin = _dragStartPositions[id];
+      if (n != null && origin != null) {
+        n.x = origin.dx + _dragTotalDelta.dx;
+        n.y = origin.dy + _dragTotalDelta.dy;
       }
     }
-    // Smart alignment snapping when dragging a single node.
-    if (selectedNodeIds.length == 1) {
+    // Smart alignment snapping on raw unsnapped coordinates so slow mouse
+    // movement never gets trapped on an alignment guide.
+    if (snap && selectedNodeIds.length == 1) {
       _applySmartSnap(nodeById[selectedNodeIds.first]!);
     } else {
       activeGuides = const [];
@@ -612,18 +651,18 @@ class BoardController extends ChangeNotifier {
         routedEdgeCache.remove(e.id);
       }
     }
-    // ONLY bump activeRevision: static RepaintBoundary does NOT repaint!
-    activeRevision++;
-    notifyListeners();
+    // ONLY repaint active overlay RenderObject: 0 static repaints, 0 widget rebuilds!
+    _emitActiveOnly();
   }
 
   void _applySmartSnap(BoardNode moving) {
     final guides = <AlignmentGuide>[];
     final hidden = collapsedDescendants(_snapshot);
+    final threshold = (_snapThreshold / zoom).clamp(2.5, _snapThreshold);
     double? snapDx;
     double? snapDy;
-    var bestDx = _snapThreshold;
-    var bestDy = _snapThreshold;
+    var bestDx = threshold;
+    var bestDy = threshold;
     AlignmentGuide? vGuide;
     AlignmentGuide? hGuide;
 
@@ -632,36 +671,34 @@ class BoardController extends ChangeNotifier {
 
     for (final other in _snapshot.nodes) {
       if (other.id == moving.id || hidden.contains(other.id)) continue;
+      // Match corresponding edges only (left↔left, center↔center, right↔right;
+      // top↔top, center↔center, bottom↔bottom) to avoid bumpy false snaps.
       final oXs = [other.x, other.x + other.w / 2, other.x + other.w];
-      for (final mx in mXs) {
-        for (final ox in oXs) {
-          final d = (ox - mx).abs();
-          if (d < bestDx) {
-            bestDx = d;
-            snapDx = ox - mx;
-            vGuide = AlignmentGuide(
-              vertical: true,
-              coord: ox,
-              start: math.min(moving.y, other.y) - 16,
-              end: math.max(moving.y + moving.h, other.y + other.h) + 16,
-            );
-          }
+      for (var i = 0; i < 3; i++) {
+        final d = (oXs[i] - mXs[i]).abs();
+        if (d < bestDx) {
+          bestDx = d;
+          snapDx = oXs[i] - mXs[i];
+          vGuide = AlignmentGuide(
+            vertical: true,
+            coord: oXs[i],
+            start: math.min(moving.y, other.y) - 16,
+            end: math.max(moving.y + moving.h, other.y + other.h) + 16,
+          );
         }
       }
       final oYs = [other.y, other.y + other.h / 2, other.y + other.h];
-      for (final my in mYs) {
-        for (final oy in oYs) {
-          final d = (oy - my).abs();
-          if (d < bestDy) {
-            bestDy = d;
-            snapDy = oy - my;
-            hGuide = AlignmentGuide(
-              vertical: false,
-              coord: oy,
-              start: math.min(moving.x, other.x) - 16,
-              end: math.max(moving.x + moving.w, other.x + other.w) + 16,
-            );
-          }
+      for (var i = 0; i < 3; i++) {
+        final d = (oYs[i] - mYs[i]).abs();
+        if (d < bestDy) {
+          bestDy = d;
+          snapDy = oYs[i] - mYs[i];
+          hGuide = AlignmentGuide(
+            vertical: false,
+            coord: oYs[i],
+            start: math.min(moving.x, other.x) - 16,
+            end: math.max(moving.x + moving.w, other.x + other.w) + 16,
+          );
         }
       }
     }
@@ -681,13 +718,15 @@ class BoardController extends ChangeNotifier {
     if (!isDraggingNodes) return;
     isDraggingNodes = false;
     activeGuides = const [];
+    final moved = _dragTotalDelta.distance > 0.5;
+    _dragStartPositions.clear();
+    _dragTotalDelta = Offset.zero;
     if (_gestureBeforeSnapshot != null) {
-      _pushUndo(_gestureBeforeSnapshot);
+      if (moved) _pushUndo(_gestureBeforeSnapshot);
       _gestureBeforeSnapshot = null;
     }
     graphRevision++;
-    activeRevision++;
-    notifyListeners();
+    _emitCanvas(staticDirty: true, rebuildChrome: true);
   }
 
   void beginResize(String nodeId, ResizeHandle handle) {
@@ -745,8 +784,7 @@ class BoardController extends ChangeNotifier {
     for (final e in edgesByNode[id] ?? const <BoardEdge>[]) {
       routedEdgeCache.remove(e.id);
     }
-    activeRevision++;
-    notifyListeners();
+    _emitActiveOnly();
   }
 
   void endResize() {
@@ -773,15 +811,13 @@ class BoardController extends ChangeNotifier {
         selectedNodeIds.add(n.id);
       }
     }
-    activeRevision++;
-    notifyListeners();
+    _emitActiveOnly();
   }
 
   void endMarquee() {
     if (marqueeWorldRect == null) return;
     marqueeWorldRect = null;
-    activeRevision++;
-    notifyListeners();
+    _emitCanvas(staticDirty: false, rebuildChrome: true);
   }
 
   void beginConnectorDrag(String fromId, String fromAnchor, Offset worldPt) {
@@ -793,8 +829,7 @@ class BoardController extends ChangeNotifier {
       fromWorld: nodeAnchorOffset(from, fromAnchor),
       currentWorld: worldPt,
     );
-    activeRevision++;
-    notifyListeners();
+    _emitCanvas(staticDirty: false, rebuildChrome: true);
   }
 
   void updateConnectorDrag(Offset worldPt) {
@@ -820,8 +855,7 @@ class BoardController extends ChangeNotifier {
       pc.targetNodeId = null;
       pc.targetAnchor = null;
     }
-    activeRevision++;
-    notifyListeners();
+    _emitActiveOnly();
   }
 
   void endConnectorDrag() {
@@ -865,8 +899,7 @@ class BoardController extends ChangeNotifier {
     if (st == null) return;
     if (st.points.isEmpty || (st.points.last - worldPt).distance >= 3.0) {
       st.points.add(worldPt);
-      activeRevision++;
-      notifyListeners();
+      _emitActiveOnly();
     }
   }
 
@@ -1267,6 +1300,10 @@ class BoardController extends ChangeNotifier {
     activeRevision++;
     notifyListeners();
   }
+}
+
+class _PaintSignal extends ChangeNotifier {
+  void bump() => notifyListeners();
 }
 
 class _CachedText {
