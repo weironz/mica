@@ -148,6 +148,13 @@ mod tests {
     manual_edge.waypoints = vec![[120.0, 125.0]];
     let manual_pts = route_edge(&manual_edge, &snap.nodes, &node_map);
     assert!(manual_pts.iter().any(|p| (p[0] - 120.0).abs() < 1.0));
+
+    // Orthogonal SVG bends must emit rounded quadratic corners (` Q`).
+    let svg = render_board_svg(&snap, None);
+    assert!(
+      svg.contains(" Q"),
+      "expected rounded orthogonal corners in SVG"
+    );
   }
 
   #[test]

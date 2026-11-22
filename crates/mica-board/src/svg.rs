@@ -456,11 +456,16 @@ fn draw_edge(
     let ed = [pts[3][0] - pts[2][0], pts[3][1] - pts[2][1]];
     (d, mid, sd, ed)
   } else {
-    let mut d = String::new();
-    let _ = write!(d, "M{:.1},{:.1}", pts[0][0], pts[0][1]);
-    for p in &pts[1..] {
-      let _ = write!(d, " L{:.1},{:.1}", p[0], p[1]);
-    }
+    let d = if edge.routing == "orthogonal" && pts.len() >= 3 {
+      build_rounded_orthogonal_svg_path(&pts, 10.0)
+    } else {
+      let mut s = String::new();
+      let _ = write!(s, "M{:.1},{:.1}", pts[0][0], pts[0][1]);
+      for p in &pts[1..] {
+        let _ = write!(s, " L{:.1},{:.1}", p[0], p[1]);
+      }
+      s
+    };
     let mid = polyline_midpoint(&pts);
     let sd = [pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]];
     let n = pts.len();
@@ -504,6 +509,34 @@ fn draw_edge(
       esc(lbl)
     );
   }
+}
+
+fn build_rounded_orthogonal_svg_path(pts: &[[f64; 2]], radius: f64) -> String {
+  let mut d = String::new();
+  let _ = write!(d, "M{:.1},{:.1}", pts[0][0], pts[0][1]);
+  for i in 1..pts.len() - 1 {
+    let prev = pts[i - 1];
+    let curr = pts[i];
+    let next = pts[i + 1];
+    let v1 = [prev[0] - curr[0], prev[1] - curr[1]];
+    let v2 = [next[0] - curr[0], next[1] - curr[1]];
+    let d1 = v1[0].hypot(v1[1]);
+    let d2 = v2[0].hypot(v2[1]);
+    if d1 < 1e-3 || d2 < 1e-3 {
+      continue;
+    }
+    let r = radius.min(d1 / 2.0).min(d2 / 2.0);
+    let before = [curr[0] + (v1[0] / d1) * r, curr[1] + (v1[1] / d1) * r];
+    let after = [curr[0] + (v2[0] / d2) * r, curr[1] + (v2[1] / d2) * r];
+    let _ = write!(
+      d,
+      " L{:.1},{:.1} Q{:.1},{:.1} {:.1},{:.1}",
+      before[0], before[1], curr[0], curr[1], after[0], after[1]
+    );
+  }
+  let last = pts[pts.len() - 1];
+  let _ = write!(d, " L{:.1},{:.1}", last[0], last[1]);
+  d
 }
 
 fn draw_arrow(out: &mut String, tip: [f64; 2], dir: [f64; 2], color: &str) {

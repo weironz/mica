@@ -522,11 +522,19 @@ void paintBoardEdge(
     endDir = end - c2;
     startDir = start - c1;
   } else {
-    final pts = controller.edgeDisplayPoints(e);
+    final rawPts = controller.edgeDisplayPoints(e);
+    if (rawPts.length < 2) return;
+    final pts = e.routing == 'orthogonal'
+        ? _simplifyCollinear(rawPts)
+        : rawPts;
     if (pts.length < 2) return;
-    path.moveTo(pts.first.dx, pts.first.dy);
-    for (var i = 1; i < pts.length; i++) {
-      path.lineTo(pts[i].dx, pts[i].dy);
+    if (e.routing == 'orthogonal' && pts.length >= 3) {
+      _buildRoundedPolylinePath(path, pts, cornerRadius: 10.0);
+    } else {
+      path.moveTo(pts.first.dx, pts.first.dy);
+      for (var i = 1; i < pts.length; i++) {
+        path.lineTo(pts[i].dx, pts[i].dy);
+      }
     }
     mid = _polylineMidpoint(pts);
     endDir = pts.last - pts[pts.length - 2];
@@ -681,6 +689,49 @@ void _paintAnchorPorts(Canvas canvas, BoardNode n, double zoom) {
     canvas.drawCircle(pt, rad, fill);
     canvas.drawCircle(pt, rad, ring);
   }
+}
+
+List<Offset> _simplifyCollinear(List<Offset> pts) {
+  final out = <Offset>[];
+  for (final p in pts) {
+    if (out.isNotEmpty && (out.last - p).distance < 0.5) continue;
+    if (out.length >= 2) {
+      final a = out[out.length - 2];
+      final b = out[out.length - 1];
+      final sameX = (a.dx - b.dx).abs() < 0.5 && (b.dx - p.dx).abs() < 0.5;
+      final sameY = (a.dy - b.dy).abs() < 0.5 && (b.dy - p.dy).abs() < 0.5;
+      if (sameX || sameY) {
+        out.removeLast();
+      }
+    }
+    out.add(p);
+  }
+  return out;
+}
+
+void _buildRoundedPolylinePath(
+  Path path,
+  List<Offset> pts, {
+  required double cornerRadius,
+}) {
+  path.moveTo(pts.first.dx, pts.first.dy);
+  for (var i = 1; i < pts.length - 1; i++) {
+    final prev = pts[i - 1];
+    final curr = pts[i];
+    final next = pts[i + 1];
+    final v1 = prev - curr;
+    final v2 = next - curr;
+    final d1 = v1.distance;
+    final d2 = v2.distance;
+    if (d1 < 1e-3 || d2 < 1e-3) continue;
+    final r = math.min(cornerRadius, math.min(d1 / 2, d2 / 2));
+    final before = curr + (v1 / d1) * r;
+    final after = curr + (v2 / d2) * r;
+    path
+      ..lineTo(before.dx, before.dy)
+      ..quadraticBezierTo(curr.dx, curr.dy, after.dx, after.dy);
+  }
+  path.lineTo(pts.last.dx, pts.last.dy);
 }
 
 void _paintArrowhead(Canvas canvas, Offset tip, Offset dir, Color color) {
