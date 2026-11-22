@@ -573,8 +573,8 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
                 .gap_2()
                 .child(dynamic(move || mica_icons::settings_gear(palette(dm.get()).text_muted_hex)))
                 .child(
-                  text("设置")
-                    .text_size(px(16.0))
+                  text(move || crate::mica_theme::tr("设置", "Settings"))
+                    .text_size(move || px((16.0 * crate::mica_theme::ui_scale_factor()).round()))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(move || palette(dm.get()).text_primary),
                 ),
@@ -720,18 +720,18 @@ fn left_nav_rail(
         view()
           .w_full()
           .gap_1()
-          .child(nav_group("通用", true, dm))
-          .child(nav_item("settings-tab-appearance", "外观", TAB_APPEARANCE, active_tab, dm, mica_icons::sun_icon))
-          .child(nav_item("settings-tab-about", "快捷键", TAB_SHORTCUTS, active_tab, dm, mica_icons::keyboard_icon))
-          .child(nav_group("账户", false, dm))
-          .child(nav_item("settings-tab-account", "账户", TAB_ACCOUNT, active_tab, dm, mica_icons::cloud))
-          .child(nav_item("settings-tab-tokens", "API 令牌", TAB_TOKENS, active_tab, dm, mica_icons::link_icon))
-          .child(nav_group("工作区", false, dm))
-          .child(nav_item("settings-tab-data", "数据", TAB_DATA, active_tab, dm, mica_icons::database_icon))
-          .child(nav_item("settings-tab-trash", "回收站", TAB_TRASH, active_tab, dm, mica_icons::trash_icon))
-          .child(nav_group("其他", false, dm))
-          .child(nav_item("settings-tab-ai", "AI 服务商", TAB_AI, active_tab, dm, mica_icons::sparkles_icon))
-          .child(nav_item("settings-tab-diagnostics", "诊断", TAB_DIAGNOSTICS, active_tab, dm, mica_icons::outline_icon)),
+          .child(nav_group("通用", "General", true, dm))
+          .child(nav_item("settings-tab-appearance", "外观", "Appearance", TAB_APPEARANCE, active_tab, dm, mica_icons::sun_icon))
+          .child(nav_item("settings-tab-about", "快捷键", "Shortcuts", TAB_SHORTCUTS, active_tab, dm, mica_icons::keyboard_icon))
+          .child(nav_group("账户", "Account", false, dm))
+          .child(nav_item("settings-tab-account", "账户", "Account", TAB_ACCOUNT, active_tab, dm, mica_icons::cloud))
+          .child(nav_item("settings-tab-tokens", "API 令牌", "API Tokens", TAB_TOKENS, active_tab, dm, mica_icons::link_icon))
+          .child(nav_group("工作区", "Workspace", false, dm))
+          .child(nav_item("settings-tab-data", "数据", "Data", TAB_DATA, active_tab, dm, mica_icons::database_icon))
+          .child(nav_item("settings-tab-trash", "回收站", "Recycle Bin", TAB_TRASH, active_tab, dm, mica_icons::trash_icon))
+          .child(nav_group("其他", "Other", false, dm))
+          .child(nav_item("settings-tab-ai", "AI 服务商", "AI Providers", TAB_AI, active_tab, dm, mica_icons::sparkles_icon))
+          .child(nav_item("settings-tab-diagnostics", "诊断", "Diagnostics", TAB_DIAGNOSTICS, active_tab, dm, mica_icons::outline_icon)),
       ),
     )
     .child(
@@ -766,7 +766,11 @@ fn left_nav_rail(
                 .items_center()
                 .gap_2()
                 .child(dynamic(move || mica_icons::info_icon(palette(dm.get()).text_faint_hex)))
-                .child(text("关于").text_size(px(13.0)).text_color(move || palette(dm.get()).text_muted)),
+                .child(
+                  text(move || crate::mica_theme::tr("关于", "About"))
+                    .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
+                    .text_color(move || palette(dm.get()).text_muted),
+                ),
             )
             .child(
               text(format!("v{}", env!("CARGO_PKG_VERSION")))
@@ -778,41 +782,60 @@ fn left_nav_rail(
 }
 
 fn tab_title(tab: u8) -> &'static str {
-  match tab {
-    TAB_APPEARANCE => "外观",
-    TAB_SHORTCUTS => "快捷键",
-    TAB_ACCOUNT => "账户",
-    TAB_TOKENS => "API 令牌",
-    TAB_DATA => "数据",
-    TAB_TRASH => "回收站",
-    TAB_AI => "AI 服务商",
-    TAB_DIAGNOSTICS => "诊断",
-    _ => "外观",
+  let zh = crate::mica_theme::is_locale_zh();
+  match (tab, zh) {
+    (TAB_APPEARANCE, true) => "外观",
+    (TAB_APPEARANCE, false) => "Appearance",
+    (TAB_SHORTCUTS, true) => "快捷键",
+    (TAB_SHORTCUTS, false) => "Shortcuts",
+    (TAB_ACCOUNT, true) => "账户",
+    (TAB_ACCOUNT, false) => "Account",
+    (TAB_TOKENS, true) => "API 令牌",
+    (TAB_TOKENS, false) => "API Tokens",
+    (TAB_DATA, true) => "数据",
+    (TAB_DATA, false) => "Data",
+    (TAB_TRASH, true) => "回收站",
+    (TAB_TRASH, false) => "Recycle Bin",
+    (TAB_AI, true) => "AI 服务商",
+    (TAB_AI, false) => "AI Providers",
+    (TAB_DIAGNOSTICS, true) => "诊断",
+    (TAB_DIAGNOSTICS, false) => "Diagnostics",
+    (_, true) => "外观",
+    (_, false) => "Appearance",
   }
 }
 
 fn tab_description(tab: u8) -> &'static str {
-  match tab {
-    TAB_APPEARANCE => "调整外观与语言、界面与正文阅读体验，修改会立即生效。",
-    TAB_SHORTCUTS => "查看编辑、导航和格式操作的快捷键。",
-    TAB_ACCOUNT => "管理你的云端账户、头像与登录信息。",
-    TAB_TOKENS => "管理脚本与外部工具访问当前账户的 API 令牌。",
-    TAB_DATA => "导入、导出与管理本机缓存。可用操作取决于当前模式。",
-    TAB_TRASH => "查看已删除的页面，并在需要时恢复或永久删除。",
-    TAB_AI => "个人 AI 开关与当前服务器的服务商配置。服务商配置仅管理员可修改。",
-    TAB_DIAGNOSTICS => "本机诊断选项，用于定位问题与收集排查信息。",
+  let zh = crate::mica_theme::is_locale_zh();
+  match (tab, zh) {
+    (TAB_APPEARANCE, true) => "调整外观与语言、界面与正文阅读体验，修改会立即生效。",
+    (TAB_APPEARANCE, false) => "Customize theme, language, UI scale, and editor typography. Changes apply immediately.",
+    (TAB_SHORTCUTS, true) => "查看编辑、导航和格式操作的快捷键。",
+    (TAB_SHORTCUTS, false) => "Keyboard shortcuts for editing, navigation, and formatting.",
+    (TAB_ACCOUNT, true) => "管理你的云端账户、头像与登录信息。",
+    (TAB_ACCOUNT, false) => "Manage your cloud account, avatar, and credentials.",
+    (TAB_TOKENS, true) => "管理脚本与外部工具访问当前账户的 API 令牌。",
+    (TAB_TOKENS, false) => "Manage Personal Access Tokens for CLI, MCP, and scripts.",
+    (TAB_DATA, true) => "导入、导出与管理本机缓存。可用操作取决于当前模式。",
+    (TAB_DATA, false) => "Import, export, and manage local workspace storage.",
+    (TAB_TRASH, true) => "查看已删除的页面，并在需要时恢复或永久删除。",
+    (TAB_TRASH, false) => "Review deleted items, restore them, or purge permanently.",
+    (TAB_AI, true) => "个人 AI 开关与当前服务器的服务商配置。服务商配置仅管理员可修改。",
+    (TAB_AI, false) => "Personal AI toggle and server AI provider settings.",
+    (TAB_DIAGNOSTICS, true) => "本机诊断选项，用于定位问题与收集排查信息。",
+    (TAB_DIAGNOSTICS, false) => "Local diagnostics and log directory tools.",
     _ => "",
   }
 }
 
-fn nav_group(label: &'static str, first: bool, dm: Signal<bool>) -> impl IntoElement {
+fn nav_group(zh: &'static str, en: &'static str, first: bool, dm: Signal<bool>) -> impl IntoElement {
   view()
     .pt(px(if first { 2.0 } else { 14.0 }))
     .pb_1()
     .px_2()
     .child(
-      text(label)
-        .text_size(px(12.0))
+      text(move || crate::mica_theme::tr(zh, en))
+        .text_size(move || px((12.0 * crate::mica_theme::ui_scale_factor()).round()))
         .font_weight(FontWeight::MEDIUM)
         .text_color(move || palette(dm.get()).text_muted),
     )
@@ -820,7 +843,8 @@ fn nav_group(label: &'static str, first: bool, dm: Signal<bool>) -> impl IntoEle
 
 fn nav_item<F, I>(
   tid: &'static str,
-  label: &'static str,
+  zh: &'static str,
+  en: &'static str,
   tab: u8,
   active_tab: Signal<u8>,
   dm: Signal<bool>,
@@ -832,7 +856,7 @@ where
 {
   button()
     .test_id(tid)
-    .accessibility_label(label)
+    .accessibility_label(zh)
     .w_full()
     .h(px(34.0))
     .px_2()
@@ -851,8 +875,8 @@ where
       icon_fn(if active_tab.get() == tab { p.text_primary_hex } else { p.text_faint_hex })
     }))
     .child(
-      text(label)
-        .text_size(px(13.0))
+      text(move || crate::mica_theme::tr(zh, en))
+        .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
         .font_weight(FontWeight::MEDIUM)
         .text_color(move || {
           let p = palette(dm.get());
@@ -919,6 +943,7 @@ fn appearance_tab(
     props.on_set_locale_zh.clone(),
   );
 
+  #[allow(unused_mut)]
   let mut col = view()
     .w_full()
     .gap_4()
@@ -2207,7 +2232,8 @@ fn ai_tab(
               let cur = selected_id.get();
               let is_add = adding.get();
               let p = palette(dm.get());
-              let mut col = view().w_full().gap_1();
+              #[allow(unused_mut)]
+  let mut col = view().w_full().gap_1();
               if list.is_empty() {
                 col = col.child(text("还没有配置任何一家。").text_size(px(12.0)).text_color(p.text_muted));
               }
@@ -2517,6 +2543,7 @@ fn diagnostics_tab(props: Rc<SettingsViewProps>) -> impl IntoElement {
     props.diagnostics_dir.clone(),
     props.on_open_diagnostics_folder.clone(),
   );
+  #[allow(unused_mut)]
   let mut col = view()
     .w_full()
     .gap_4()
@@ -2550,19 +2577,63 @@ fn diagnostics_tab(props: Rc<SettingsViewProps>) -> impl IntoElement {
 
 // ── Shared Controls & Primitives ─────────────────────────────────────────────
 
+fn tr_setting(zh: &'static str) -> &'static str {
+  if crate::mica_theme::is_locale_zh() {
+    return zh;
+  }
+  match zh {
+    "界面" => "Interface",
+    "语言" => "Language",
+    "跟随系统" => "System",
+    "主题" => "Theme",
+    "浅色" => "Light",
+    "深色" => "Dark",
+    "界面字号" => "UI Size",
+    "小" => "Small",
+    "标准" => "Standard",
+    "大" => "Large",
+    "正文编辑" => "Editor",
+    "页宽" => "Page Width",
+    "字号" => "Font Size",
+    "字体" => "Font",
+    "系统" => "System",
+    "格式工具栏" => "Format Toolbar",
+    "页面标题" => "Page Title",
+    "粘贴与图片" => "Paste & Images",
+    "转存网络图片" => "Rehost Remote Images",
+    "关闭窗口时" => "When Closing Window",
+    _ => zh,
+  }
+}
+
 fn pref_group_heading(label: &'static str, dm: Signal<bool>) -> impl IntoElement {
-  view().pt_2().child(text(label).text_size(px(14.0)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_primary))
+  view().pt_2().child(
+    text(move || tr_setting(label))
+      .text_size(move || px((14.0 * crate::mica_theme::ui_scale_factor()).round()))
+      .font_weight(FontWeight::MEDIUM)
+      .text_color(move || palette(dm.get()).text_primary),
+  )
 }
 
 fn pref_row(label: &'static str, dm: Signal<bool>, control: impl IntoElement) -> impl IntoElement {
   view().w_full().py_1().flex_row().items_center().gap_4()
-    .child(view().w(px(108.0)).flex_shrink_0().child(text(label).text_size(px(13.0)).text_color(move || palette(dm.get()).text_primary)))
+    .child(
+      view().w(px(112.0)).flex_shrink_0().child(
+        text(move || tr_setting(label))
+          .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
+          .text_color(move || palette(dm.get()).text_primary),
+      ),
+    )
     .child(view().flex_1().child(control))
 }
 
 fn labeled_box(label: &'static str, dm: Signal<bool>, child: impl IntoElement) -> impl IntoElement {
   view().w_full().gap_1()
-    .child(text(label).text_size(px(12.0)).text_color(move || palette(dm.get()).text_muted))
+    .child(
+      text(move || tr_setting(label))
+        .text_size(move || px((12.0 * crate::mica_theme::ui_scale_factor()).round()))
+        .text_color(move || palette(dm.get()).text_muted),
+    )
     .child(child)
 }
 
@@ -2586,7 +2657,9 @@ fn segment_btn(
     .bg(move || { let p = palette(dm.get()); if selected() { p.surface_base } else { p.surface_sunken } })
     .on_press(on_press)
     .child(
-      text(label).text_size(px(12.5)).font_weight(FontWeight::MEDIUM)
+      text(move || tr_setting(label))
+        .text_size(move || px((12.5 * crate::mica_theme::ui_scale_factor()).round()))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(move || { let p = palette(dm.get()); if selected() { p.text_primary } else { p.text_muted } }),
     )
 }
@@ -2632,8 +2705,17 @@ fn switch_row(
     .on_press(move || value.set(!value.get_untracked()))
     .child(
       view().flex_1().gap_1()
-        .child(text(title).text_size(px(13.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dm.get()).text_primary))
-        .child(text(subtitle).text_size(px(12.0)).text_color(move || palette(dm.get()).text_muted)),
+        .child(
+          text(move || tr_setting(title))
+            .text_size(move || px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(move || palette(dm.get()).text_primary),
+        )
+        .child(
+          text(subtitle)
+            .text_size(move || px((12.0 * crate::mica_theme::ui_scale_factor()).round()))
+            .text_color(move || palette(dm.get()).text_muted),
+        ),
     )
     .child(
       view().w(px(40.0)).h(px(22.0)).p(px(2.0)).rounded(px(11.0)).flex_row().items_center().justify_between()

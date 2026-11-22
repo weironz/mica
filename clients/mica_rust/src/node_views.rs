@@ -1531,6 +1531,20 @@ impl NodeView for BoardNodeView {
     let open_board_block = use_context::<OpenBoardWithBlockCallback>();
     let get_pos = cx.get_pos();
 
+    let open_board_click: Rc<dyn Fn()> = {
+      let open_board_block = open_board_block.clone();
+      let open_board = open_board.clone();
+      let get_pos = get_pos.clone();
+      Rc::new(move || {
+        if let (Some(cb), Some(pos)) = (&open_board_block, get_pos()) {
+          (cb.0)(pos, read_node_source(&node_sig.get_untracked()));
+        } else if let Some(cb) = &open_board {
+          (cb.0)();
+        }
+      })
+    };
+    let open_board_btn = open_board_click.clone();
+
     view()
       .test_id("node-view-board")
       .w_full().my_2().rounded(px(8.0)).border_1()
@@ -1545,7 +1559,7 @@ impl NodeView for BoardNodeView {
           .child(
             view().flex_row().items_center().gap_2()
               .child(dynamic(move || mica_icons::whiteboard(palette(dark_mode.get()).text_muted_hex)))
-              .child(text("内嵌白板").text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dark_mode.get()).text_muted)),
+              .child(text("内嵌白板").text_size(px(12.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dark_mode.get()).text_muted)),
           )
           .child(
             button()
@@ -1554,28 +1568,31 @@ impl NodeView for BoardNodeView {
               .bg(move || palette(dark_mode.get()).surface_base)
               .border_1().border_color(move || palette(dark_mode.get()).border_normal)
               .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-              .on_press(move || {
-                if let (Some(cb), Some(pos)) = (&open_board_block, get_pos()) {
-                  (cb.0)(pos, read_node_source(&node_sig.get_untracked()));
-                } else if let Some(cb) = &open_board {
-                  (cb.0)();
-                }
-              })
-              .child(text("编辑白板").text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dark_mode.get()).text_primary)),
+              .on_press(move || open_board_btn())
+              .child(text("编辑白板").text_size(px(12.0)).font_weight(FontWeight::MEDIUM).text_color(move || palette(dark_mode.get()).text_primary)),
           ),
       )
       .child(
-        view().w_full().p_3().bg(move || palette(dark_mode.get()).surface_base).child(dynamic(move || {
-          render_atomic_block(
-            &AtomicBlockInput {
-              id: "board-node".into(),
-              kind: "board".into(),
-              text: read_node_source(&node_sig.get()),
-              data: serde_json::json!({}),
-            },
-            dark_mode.get(),
-          )
-        })),
+        // Clicking anywhere on the board preview opens the interactive whiteboard directly.
+        button()
+          .test_id("board-preview-open-btn")
+          .accessibility_label("点击画板进入编辑")
+          .w_full()
+          .p_3()
+          .bg(move || palette(dark_mode.get()).surface_base)
+          .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_raised))
+          .on_press(move || open_board_click())
+          .child(dynamic(move || {
+            render_atomic_block(
+              &AtomicBlockInput {
+                id: "board-node".into(),
+                kind: "board".into(),
+                text: read_node_source(&node_sig.get()),
+                data: serde_json::json!({}),
+              },
+              dark_mode.get(),
+            )
+          })),
       )
       .into_element()
   }

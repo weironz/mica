@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use mica_api_types::View;
+#[cfg(not(target_arch = "wasm32"))]
+use mica_interchange::ZipFileEntry;
 use mica_interchange::{
-  ImportMode, ImportPlan, TreeNode, ZipFileEntry, build_markdown_only_tree_zip,
+  ImportMode, ImportPlan, TreeNode, build_markdown_only_tree_zip,
   build_markdown_tree_zip, build_zip, normalize_archive, plan_import, plan_vault_import, read_zip,
 };
 use mica_md::{DocumentSnapshotPayload, ParseOptions, parse as parse_markdown};

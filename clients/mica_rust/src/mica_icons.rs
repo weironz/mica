@@ -19,7 +19,7 @@ fn icon_svg(size_px: f32, body: String) -> Svg {
 
 fn stroked(size_px: f32, color: &str, inner: &str) -> Svg {
   let doc = format!(
-    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="{color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">{inner}</svg>"##
+    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="{color}" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">{inner}</svg>"##
   );
   icon_svg(size_px, doc)
 }
@@ -131,22 +131,22 @@ pub fn graph_nodes(color: &str) -> Svg {
 
 pub fn whiteboard(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<rect x="3" y="4" width="14" height="10" rx="1.5"/><path d="M6.5 10.5L9 8L11 10L13.5 7.5M10 14V17M7 17H13"/>"##,
   )
 }
 
 pub fn undo(color: &str) -> Svg {
-  stroked(15.0, color, r##"<path d="M7 6L3.5 9.5L7 13"/><path d="M4 9.5H12.5A3.5 3.5 0 0 1 16 13A3.5 3.5 0 0 1 12.5 16.5H10"/>"##)
+  stroked(17.0, color, r##"<path d="M7 6L3.5 9.5L7 13"/><path d="M4 9.5H12.5A3.5 3.5 0 0 1 16 13A3.5 3.5 0 0 1 12.5 16.5H10"/>"##)
 }
 
 pub fn redo(color: &str) -> Svg {
-  stroked(15.0, color, r##"<path d="M13 6L16.5 9.5L13 13"/><path d="M16 9.5H7.5A3.5 3.5 0 0 0 4 13A3.5 3.5 0 0 0 7.5 16.5H10"/>"##)
+  stroked(17.0, color, r##"<path d="M13 6L16.5 9.5L13 13"/><path d="M16 9.5H7.5A3.5 3.5 0 0 0 4 13A3.5 3.5 0 0 0 7.5 16.5H10"/>"##)
 }
 
 pub fn align_text(color: &str) -> Svg {
-  stroked(15.0, color, r##"<path d="M3.5 5.5H16.5M3.5 10H16.5M3.5 14.5H11.5"/>"##)
+  stroked(17.0, color, r##"<path d="M3.5 5.5H16.5M3.5 10H16.5M3.5 14.5H11.5"/>"##)
 }
 
 /// Pure-vector rounded box with crisp `<path>` digits `1`, `2`, `3` (zero `<text>` dependency).
@@ -157,7 +157,7 @@ pub fn heading_box(level: &str, color: &str) -> Svg {
     _ => r##"<path d="M7.9 7.5C8.2 6.7 9.0 6.2 10.1 6.2C11.4 6.2 12.2 6.9 12.2 7.9C12.2 8.9 11.4 9.6 10.2 9.8C11.5 10.0 12.4 10.8 12.4 11.9C12.4 13.0 11.4 13.8 10.0 13.8C8.9 13.8 8.1 13.3 7.7 12.5"/>"##,
   };
   stroked(
-    15.0,
+    17.0,
     color,
     &format!(r##"<rect x="3.2" y="3.2" width="13.6" height="13.6" rx="2.4"/>{glyph}"##),
   )
@@ -165,31 +165,31 @@ pub fn heading_box(level: &str, color: &str) -> Svg {
 
 pub fn bold_icon(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<path stroke-width="2" d="M6.5 4.5H11A2.7 2.7 0 0 1 11 10H6.5ZM6.5 10H11.8A2.8 2.8 0 0 1 11.8 15.5H6.5Z"/>"##,
   )
 }
 
 pub fn italic_icon(color: &str) -> Svg {
-  stroked(15.0, color, r##"<path d="M8.5 4.5H14.5M5.5 15.5H11.5M11.8 4.5L8.2 15.5"/>"##)
+  stroked(17.0, color, r##"<path d="M8.5 4.5H14.5M5.5 15.5H11.5M11.8 4.5L8.2 15.5"/>"##)
 }
 
 pub fn strikethrough_icon(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<path d="M3.5 10H16.5M13.5 6.8C13.1 5.4 11.8 4.6 10 4.6C8.1 4.6 6.8 5.6 6.8 7.0C6.8 8.2 7.8 8.9 9.5 9.3M10.8 10.7C12.4 11.2 13.4 11.9 13.4 13.2C13.4 14.6 12.0 15.6 10.0 15.6C8.1 15.6 6.8 14.7 6.4 13.4"/>"##,
   )
 }
 
 pub fn code_icon(color: &str) -> Svg {
-  stroked(15.0, color, r##"<path d="M7.5 6.5L4 10L7.5 13.5M12.5 6.5L16 10L12.5 13.5"/>"##)
+  stroked(17.0, color, r##"<path d="M7.5 6.5L4 10L7.5 13.5M12.5 6.5L16 10L12.5 13.5"/>"##)
 }
 
 pub fn list_bullet(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<path d="M8 6H16.5M8 10H16.5M8 14H16.5"/><circle cx="4.5" cy="6" r="0.9" fill="currentColor"/><circle cx="4.5" cy="10" r="0.9" fill="currentColor"/><circle cx="4.5" cy="14" r="0.9" fill="currentColor"/>"##,
   )
@@ -197,7 +197,7 @@ pub fn list_bullet(color: &str) -> Svg {
 
 pub fn list_ordered(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<path d="M8.5 6H16.5M8.5 10H16.5M8.5 14H16.5M4.5 5V7.5M3.8 10H5.4L3.8 11.5H5.4M3.8 13.5H5.4"/>"##,
   )
@@ -205,7 +205,7 @@ pub fn list_ordered(color: &str) -> Svg {
 
 pub fn todo_box(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<rect x="3.5" y="3.5" width="13" height="13" rx="2.5"/><path d="M7 10.2L9.2 12.4L13.5 7.8"/>"##,
   )
@@ -213,19 +213,19 @@ pub fn todo_box(color: &str) -> Svg {
 
 pub fn quote_icon(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<path d="M4.5 9.5H8V13.5H4.5ZM12 9.5H15.5V13.5H12ZM8 9.5C8 7.5 6.8 6.2 5.2 5.8M15.5 9.5C15.5 7.5 14.3 6.2 12.7 5.8"/>"##,
   )
 }
 
 pub fn divider_icon(color: &str) -> Svg {
-  stroked(15.0, color, r##"<path d="M3.5 10H16.5"/>"##)
+  stroked(17.0, color, r##"<path d="M3.5 10H16.5"/>"##)
 }
 
 pub fn table_icon(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<rect x="3.5" y="4" width="13" height="12" rx="1.8"/><path d="M3.5 8.5H16.5M9.5 4V16"/>"##,
   )
@@ -233,7 +233,7 @@ pub fn table_icon(color: &str) -> Svg {
 
 pub fn copy_icon(color: &str) -> Svg {
   stroked(
-    14.0,
+    16.0,
     color,
     r##"<rect x="7" y="7" width="9" height="9" rx="1.5"/><path d="M13 7V5.5A1.5 1.5 0 0 0 11.5 4H5.5A1.5 1.5 0 0 0 4 5.5V11.5A1.5 1.5 0 0 0 5.5 13H7"/>"##,
   )
@@ -241,7 +241,7 @@ pub fn copy_icon(color: &str) -> Svg {
 
 pub fn link_icon(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<path d="M8.5 11.5L11.5 8.5M7 13.5L5.5 15A2.8 2.8 0 0 1 1.5 11L4.5 8A2.8 2.8 0 0 1 8.5 8M13 6.5L14.5 5A2.8 2.8 0 0 1 18.5 9L15.5 12A2.8 2.8 0 0 1 11.5 12"/>"##,
   )
@@ -249,7 +249,7 @@ pub fn link_icon(color: &str) -> Svg {
 
 pub fn trash_icon(color: &str) -> Svg {
   stroked(
-    14.0,
+    16.0,
     color,
     r##"<path d="M4.5 6H15.5M7.5 6V4.5H12.5V6M6 6L6.7 15.5H13.3L14 6"/>"##,
   )
@@ -257,7 +257,7 @@ pub fn trash_icon(color: &str) -> Svg {
 
 pub fn star_icon(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
     r##"<path d="M10 3.2L12.1 7.4L16.7 8.1L13.3 11.4L14.1 16L10 13.8L5.9 16L6.7 11.4L3.3 8.1L7.9 7.4Z"/>"##,
   )
@@ -267,14 +267,14 @@ pub fn star_filled(color: &str) -> Svg {
   let doc = format!(
     r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="{color}" stroke="{color}" stroke-width="1.2" stroke-linejoin="round"><path d="M10 3.2L12.1 7.4L16.7 8.1L13.3 11.4L14.1 16L10 13.8L5.9 16L6.7 11.4L3.3 8.1L7.9 7.4Z"/></svg>"##
   );
-  icon_svg(15.0, doc)
+  icon_svg(17.0, doc)
 }
 
 pub fn more_dots(color: &str) -> Svg {
   stroked(
-    15.0,
+    17.0,
     color,
-    r##"<circle cx="5" cy="10" r="1.1" fill="currentColor"/><circle cx="10" cy="10" r="1.1" fill="currentColor"/><circle cx="15" cy="10" r="1.1" fill="currentColor"/>"##,
+    r##"<circle cx="5" cy="10" r="1.2" fill="currentColor"/><circle cx="10" cy="10" r="1.2" fill="currentColor"/><circle cx="15" cy="10" r="1.2" fill="currentColor"/>"##,
   )
 }
 

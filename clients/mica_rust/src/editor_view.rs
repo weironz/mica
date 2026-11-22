@@ -101,6 +101,8 @@ pub fn editor_view(
 
   let page_menu_open = signal(false);
   let has_text_selection = signal(false);
+  let copied_path = signal(false);
+  let copied_path_gen = signal(0u64);
   let copied_link = signal(false);
 
   // Caret-anchored slash menu state
@@ -351,27 +353,272 @@ pub fn editor_view(
   let h_bubble = header.clone();
   let prop_slot = header.property_panel_slot.clone();
   let backlinks_slot = header.backlinks_panel_slot.clone();
+  let header_width = signal(1000.0_f32);
+  let header_single_row = computed(move || header_width.get() >= 1180.0);
+
+  let render_format_bar: Rc<dyn Fn() -> AnyElement> = {
+    let b_undo = b_undo.clone();
+    let b_redo = b_redo.clone();
+    let b_para = b_para.clone();
+    let b_h1 = b_h1.clone();
+    let b_h2 = b_h2.clone();
+    let b_h3 = b_h3.clone();
+    let b_bold = b_bold.clone();
+    let b_italic = b_italic.clone();
+    let b_strike = b_strike.clone();
+    let b_code = b_code.clone();
+    let b_link_btn = b_link_btn.clone();
+    let b_list = b_list.clone();
+    let b_ordered = b_ordered.clone();
+    let b_todo = b_todo.clone();
+    let b_quote = b_quote.clone();
+    let b_code_blk = b_code_blk.clone();
+    let b_div = b_div.clone();
+    let b_tbl = b_tbl.clone();
+    let b_slash_btn = b_slash_btn.clone();
+    let h_img = h_img_bar.clone();
+    Rc::new(move || {
+      let b_undo = b_undo.clone();
+      let b_redo = b_redo.clone();
+      let b_para = b_para.clone();
+      let b_h1 = b_h1.clone();
+      let b_h2 = b_h2.clone();
+      let b_h3 = b_h3.clone();
+      let b_bold = b_bold.clone();
+      let b_italic = b_italic.clone();
+      let b_strike = b_strike.clone();
+      let b_code = b_code.clone();
+      let b_link_btn = b_link_btn.clone();
+      let b_list = b_list.clone();
+      let b_ordered = b_ordered.clone();
+      let b_todo = b_todo.clone();
+      let b_quote = b_quote.clone();
+      let b_code_blk = b_code_blk.clone();
+      let b_div = b_div.clone();
+      let b_tbl = b_tbl.clone();
+      let b_slash_btn = b_slash_btn.clone();
+      let h_img = h_img.clone();
+      view()
+        .flex_shrink_0()
+        .flex_row()
+        .items_center()
+        .gap(px(1.0))
+        .child(toolbar_btn_dim(
+          "ed-undo",
+          "撤销 (Ctrl+Z)",
+          dark_mode,
+          computed(move || can_undo.get()),
+          move || b_undo.undo(),
+          mica_icons::undo,
+        ))
+        .child(toolbar_btn_dim(
+          "ed-redo",
+          "重做 (Ctrl+Y)",
+          dark_mode,
+          computed(move || can_redo.get()),
+          move || b_redo.redo(),
+          mica_icons::redo,
+        ))
+        .child(toolbar_sep(dark_mode))
+        .child(toolbar_btn_active(
+          "ed-para",
+          "正文段落",
+          dark_mode,
+          computed(move || active_kind.get() == "paragraph"),
+          move || b_para.set_block_type("paragraph", None),
+          mica_icons::align_text,
+        ))
+        .child(toolbar_btn_active(
+          "ed-h1",
+          "一级标题",
+          dark_mode,
+          computed(move || active_kind.get() == "heading" && active_level.get() == 1),
+          move || toggle_block_type(&b_h1, "heading", Some(1)),
+          |c| mica_icons::heading_box("1", c),
+        ))
+        .child(toolbar_btn_active(
+          "ed-h2",
+          "二级标题",
+          dark_mode,
+          computed(move || active_kind.get() == "heading" && active_level.get() == 2),
+          move || toggle_block_type(&b_h2, "heading", Some(2)),
+          |c| mica_icons::heading_box("2", c),
+        ))
+        .child(toolbar_btn_active(
+          "ed-h3",
+          "三级标题",
+          dark_mode,
+          computed(move || active_kind.get() == "heading" && active_level.get() == 3),
+          move || toggle_block_type(&b_h3, "heading", Some(3)),
+          |c| mica_icons::heading_box("3", c),
+        ))
+        .child(toolbar_sep(dark_mode))
+        .child(toolbar_btn_active(
+          "ed-bold",
+          "加粗 (Ctrl+B)",
+          dark_mode,
+          computed(move || active_marks.get().iter().any(|m| m == "bold" || m == "strong")),
+          move || b_bold.toggle_mark("bold"),
+          mica_icons::bold_icon,
+        ))
+        .child(toolbar_btn_active(
+          "ed-italic",
+          "斜体 (Ctrl+I)",
+          dark_mode,
+          computed(move || active_marks.get().iter().any(|m| m == "italic" || m == "em")),
+          move || b_italic.toggle_mark("italic"),
+          mica_icons::italic_icon,
+        ))
+        .child(toolbar_btn_active(
+          "ed-strike",
+          "删除线",
+          dark_mode,
+          computed(move || active_marks.get().iter().any(|m| m == "strike")),
+          move || b_strike.toggle_mark("strike"),
+          mica_icons::strikethrough_icon,
+        ))
+        .child(toolbar_btn_active(
+          "ed-code",
+          "行内代码",
+          dark_mode,
+          computed(move || active_marks.get().iter().any(|m| m == "code")),
+          move || b_code.toggle_mark("code"),
+          mica_icons::code_icon,
+        ))
+        .child(toolbar_btn_active(
+          "ed-link",
+          "链接 (Ctrl+K)",
+          dark_mode,
+          computed(move || active_marks.get().iter().any(|m| m == "link")),
+          move || {
+            link_draft.set(b_link_btn.current_link_href().unwrap_or_default());
+            link_prompt_open.set(!link_prompt_open.get_untracked());
+          },
+          mica_icons::link_icon,
+        ))
+        .child(toolbar_sep(dark_mode))
+        .child(toolbar_btn_active(
+          "ed-list",
+          "无序列表",
+          dark_mode,
+          computed(move || matches!(active_kind.get().as_str(), "bulleted_list" | "bulletList")),
+          move || toggle_block_type(&b_list, "bulleted_list", None),
+          mica_icons::list_bullet,
+        ))
+        .child(toolbar_btn_active(
+          "ed-ordered",
+          "有序列表",
+          dark_mode,
+          computed(move || matches!(active_kind.get().as_str(), "numbered_list" | "orderedList")),
+          move || toggle_block_type(&b_ordered, "numbered_list", None),
+          mica_icons::list_ordered,
+        ))
+        .child(toolbar_btn_active(
+          "ed-todo",
+          "待办清单",
+          dark_mode,
+          computed(move || matches!(active_kind.get().as_str(), "todo" | "taskItem")),
+          move || toggle_block_type(&b_todo, "todo", None),
+          mica_icons::todo_box,
+        ))
+        .child(toolbar_btn_active(
+          "ed-quote",
+          "引用块",
+          dark_mode,
+          computed(move || matches!(active_kind.get().as_str(), "quote" | "blockquote")),
+          move || toggle_block_type(&b_quote, "quote", None),
+          mica_icons::quote_icon,
+        ))
+        .child(toolbar_btn_active(
+          "ed-code-block",
+          "代码块",
+          dark_mode,
+          computed(move || active_kind.get() == "code_block"),
+          move || b_code_blk.insert_custom_block("code_block", "", Some("rust")),
+          terminal_icon,
+        ))
+        .child(toolbar_sep(dark_mode))
+        .child(toolbar_btn(
+          "ed-divider",
+          "插入分割线",
+          dark_mode,
+          signal(false),
+          move || b_div.insert_divider(),
+          mica_icons::divider_icon,
+        ))
+        .child(toolbar_btn(
+          "ed-table-quick",
+          "插入表格",
+          dark_mode,
+          signal(false),
+          move || b_tbl.insert_table(2, 2),
+          mica_icons::table_icon,
+        ))
+        .child(toolbar_btn(
+          "ed-image",
+          "插入图片",
+          dark_mode,
+          signal(false),
+          move || (h_img.on_insert_image)(),
+          image_icon,
+        ))
+        .child(toolbar_btn(
+          "ed-slash-open",
+          "插入块菜单 (/)",
+          dark_mode,
+          slash.open,
+          move || {
+            if slash.open.get_untracked() {
+              close_slash(slash);
+            } else {
+              slash.query.set(String::new());
+              slash.index.set(0);
+              slash.opened_by_btn.set(true);
+              update_slash_anchor(&b_slash_btn, slash);
+              slash.open.set(true);
+            }
+          },
+          mica_icons::plus,
+        ))
+        .into_element()
+    })
+  };
+  let fmt_bar_inline = render_format_bar.clone();
+  let fmt_bar_second = render_format_bar;
 
   view()
     .flex_1()
     .min_w(px(0.0))
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
+    .on_layout(move |b: &Bounds<Points>| {
+      let w = b.size.width.0;
+      if w > 0.0 && (header_width.get_untracked() - w).abs() > 2.0 {
+        spawn(async move {
+          if (header_width.get_untracked() - w).abs() > 2.0 {
+            header_width.set(w);
+          }
+        });
+      }
+    })
     .child(
-      // 1. Strict single-row 40px page header (NO wrapping!)
+      // 1. Responsive page header (single 44px row on wide viewports; drops format bar to a clean 36px 2nd row when narrower so breadcrumb + copy-path never gets squeezed)
       view()
         .w_full()
-        .h(px(40.0))
-        .px_3()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .gap_1()
         .border_b_1()
         .border_color(move || palette(dark_mode.get()).border_subtle)
         .bg(move || palette(dark_mode.get()).surface_base)
         .child(
-          // Left breadcrumb path + copy-link icon (truncates smoothly on narrow screens)
+          view()
+            .w_full()
+            .h(px(44.0))
+            .px_3()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap_2()
+        .child(
+          // Left breadcrumb path (left-click draggable text selection!) + copy-path button
           view()
             .flex_1()
             .min_w(px(0.0))
@@ -379,271 +626,134 @@ pub fn editor_view(
             .flex_row()
             .items_center()
             .gap_1()
-            .child(when(move || !right_open.get(), {
-              let hb = header.clone();
-              move || {
-                let hb1 = hb.clone();
-                let hb2 = hb.clone();
-                view()
-                  .flex_row()
-                  .items_center()
-                  .gap_1()
-                  .child(
-                    text(move || hb1.workspace_name.get())
-                      .text_size(px(12.5))
-                      .text_color(move || palette(dark_mode.get()).text_muted)
-                      .truncate(),
-                  )
-                  .child(
-                    text(">")
-                      .text_size(px(11.5))
-                      .text_color(move || palette(dark_mode.get()).text_ghost),
-                  )
-                  .child(
-                    text(move || hb2.folder_name.get())
-                      .text_size(px(12.5))
-                      .text_color(move || palette(dark_mode.get()).text_muted)
-                      .truncate(),
-                  )
-                  .child(
-                    text(">")
-                      .text_size(px(11.5))
-                      .text_color(move || palette(dark_mode.get()).text_ghost),
-                  )
-              }
-            }))
-            .child({
-              let hb = header.clone();
-              text(move || {
-                let t = hb.page_title.get();
-                if t.trim().is_empty() {
-                  "无标题".to_string()
-                } else {
-                  t
-                }
-              })
-              .text_size(px(12.5))
-              .font_weight(FontWeight::MEDIUM)
-              .text_color(move || palette(dark_mode.get()).text_primary)
-              .truncate()
-            })
-            .child(toolbar_btn(
-              "ed-copy-path",
-              "复制页面链接",
-              dark_mode,
-              signal(false),
-              move || {
-                let id = h_copy_id.page_id_str.get_untracked();
-                set_clipboard(format!("mica://page/{id}"));
-                copied_link.set(true);
-                b_copy_path.set_status_flash("已复制页面链接");
-              },
-              mica_icons::copy_icon,
-            )),
+            .child(
+              view()
+                .test_id("ed-breadcrumb-selectable")
+                .selectable(true)
+                .min_w(px(0.0))
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(when(move || !right_open.get(), {
+                  let hb = header.clone();
+                  move || {
+                    let hb1 = hb.clone();
+                    let hb2 = hb.clone();
+                    view()
+                      .flex_row()
+                      .items_center()
+                      .gap_1()
+                      .child(
+                        text(move || hb1.workspace_name.get())
+                          .text_size(move || px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
+                          .text_color(move || palette(dark_mode.get()).text_muted)
+                          .truncate(),
+                      )
+                      .child(when(
+                        {
+                          let hb_chk = hb2.clone();
+                          move || !hb_chk.folder_name.get().trim().is_empty()
+                        },
+                        {
+                          let hb_f = hb2.clone();
+                          move || {
+                            let hb_f2 = hb_f.clone();
+                            view()
+                              .flex_row()
+                              .items_center()
+                              .gap_1()
+                              .child(
+                                text(">")
+                                  .text_size(move || px((12.5 * crate::mica_theme::ui_scale_factor()).round()))
+                                  .text_color(move || palette(dark_mode.get()).text_ghost),
+                              )
+                              .child(
+                                text(move || hb_f2.folder_name.get())
+                                  .text_size(move || px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
+                                  .text_color(move || palette(dark_mode.get()).text_muted)
+                                  .truncate(),
+                              )
+                          }
+                        },
+                      ))
+                      .child(
+                        text(">")
+                          .text_size(move || px((12.5 * crate::mica_theme::ui_scale_factor()).round()))
+                          .text_color(move || palette(dark_mode.get()).text_ghost),
+                      )
+                  }
+                }))
+                .child({
+                  let hb = header.clone();
+                  text(move || {
+                    let t = hb.page_title.get();
+                    if t.trim().is_empty() {
+                      crate::mica_theme::tr("无标题", "Untitled").to_string()
+                    } else {
+                      t
+                    }
+                  })
+                  .text_size(move || px((13.5 * crate::mica_theme::ui_scale_factor()).round()))
+                  .font_weight(FontWeight::MEDIUM)
+                  .text_color(move || palette(dark_mode.get()).text_primary)
+                  .truncate()
+                }),
+            )
+            .child(
+              button()
+                .test_id("ed-copy-path")
+                .accessibility_label("复制页面路径")
+                .w(px(28.0))
+                .h(px(28.0))
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.0))
+                .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                .on_press(move || {
+                  // Match Flutter `_pagePath()`: copy human-readable containing path
+                  // (`Workspace/Folder/...`, or full path segments joined with `/`),
+                  // NOT `mica://page/<uuid>` (which belongs to the right-side copy-link button).
+                  let ws = h_copy_id.workspace_name.get_untracked();
+                  let folder = h_copy_id.folder_name.get_untracked();
+                  let mut segs: Vec<String> = Vec::new();
+                  if !ws.trim().is_empty() {
+                    segs.push(ws.trim().to_string());
+                  }
+                  for part in folder.split(" > ") {
+                    let p = part.trim();
+                    if !p.is_empty() {
+                      segs.push(p.to_string());
+                    }
+                  }
+                  let path = segs.join("/");
+                  if !path.is_empty() {
+                    set_clipboard(path);
+                    copied_path.set(true);
+                    let next_gen = copied_path_gen.get_untracked().wrapping_add(1);
+                    copied_path_gen.set(next_gen);
+                    spawn(async move {
+                      timer(std::time::Duration::from_millis(1600)).await;
+                      if copied_path_gen.get_untracked() == next_gen {
+                        copied_path.set(false);
+                      }
+                    });
+                    b_copy_path.set_status_flash("已复制页面路径");
+                  }
+                })
+                .child(dynamic(move || {
+                  let p = palette(dark_mode.get());
+                  if copied_path.get() {
+                    mica_icons::check_icon("#16A34A")
+                  } else {
+                    mica_icons::copy_icon(p.text_muted_hex)
+                  }
+                })),
+            ),
         )
-        .child(when(move || show_format_bar.get(), move || {
-          let b_undo = b_undo.clone();
-          let b_redo = b_redo.clone();
-          let b_para = b_para.clone();
-          let b_h1 = b_h1.clone();
-          let b_h2 = b_h2.clone();
-          let b_h3 = b_h3.clone();
-          let b_bold = b_bold.clone();
-          let b_italic = b_italic.clone();
-          let b_strike = b_strike.clone();
-          let b_code = b_code.clone();
-          let b_link_btn = b_link_btn.clone();
-          let b_list = b_list.clone();
-          let b_ordered = b_ordered.clone();
-          let b_todo = b_todo.clone();
-          let b_quote = b_quote.clone();
-          let b_code_blk = b_code_blk.clone();
-          let b_div = b_div.clone();
-          let b_tbl = b_tbl.clone();
-          let b_slash_btn = b_slash_btn.clone();
-          let h_img = h_img_bar.clone();
-          // Center compact single-row icon formatting toolbar (exact Flutter/Notion order)
-          view()
-            .flex_shrink_0()
-            .flex_row()
-            .items_center()
-            .child(toolbar_btn_dim(
-              "ed-undo",
-              "撤销 (Ctrl+Z)",
-              dark_mode,
-              computed(move || can_undo.get()),
-              move || b_undo.undo(),
-              mica_icons::undo,
-            ))
-            .child(toolbar_btn_dim(
-              "ed-redo",
-              "重做 (Ctrl+Y)",
-              dark_mode,
-              computed(move || can_redo.get()),
-              move || b_redo.redo(),
-              mica_icons::redo,
-            ))
-            .child(toolbar_sep(dark_mode))
-            .child(toolbar_btn_active(
-              "ed-para",
-              "正文段落",
-              dark_mode,
-              computed(move || active_kind.get() == "paragraph"),
-              move || b_para.set_block_type("paragraph", None),
-              mica_icons::align_text,
-            ))
-            .child(toolbar_btn_active(
-              "ed-h1",
-              "一级标题",
-              dark_mode,
-              computed(move || active_kind.get() == "heading" && active_level.get() == 1),
-              move || toggle_block_type(&b_h1, "heading", Some(1)),
-              |c| mica_icons::heading_box("1", c),
-            ))
-            .child(toolbar_btn_active(
-              "ed-h2",
-              "二级标题",
-              dark_mode,
-              computed(move || active_kind.get() == "heading" && active_level.get() == 2),
-              move || toggle_block_type(&b_h2, "heading", Some(2)),
-              |c| mica_icons::heading_box("2", c),
-            ))
-            .child(toolbar_btn_active(
-              "ed-h3",
-              "三级标题",
-              dark_mode,
-              computed(move || active_kind.get() == "heading" && active_level.get() == 3),
-              move || toggle_block_type(&b_h3, "heading", Some(3)),
-              |c| mica_icons::heading_box("3", c),
-            ))
-            .child(toolbar_sep(dark_mode))
-            .child(toolbar_btn_active(
-              "ed-bold",
-              "粗体 (Ctrl+B)",
-              dark_mode,
-              computed(move || active_marks.get().iter().any(|m| m == "bold" || m == "strong")),
-              move || b_bold.toggle_mark("bold"),
-              mica_icons::bold_icon,
-            ))
-            .child(toolbar_btn_active(
-              "ed-italic",
-              "斜体 (Ctrl+I)",
-              dark_mode,
-              computed(move || active_marks.get().iter().any(|m| m == "italic" || m == "em")),
-              move || b_italic.toggle_mark("italic"),
-              mica_icons::italic_icon,
-            ))
-            .child(toolbar_btn_active(
-              "ed-strike",
-              "删除线",
-              dark_mode,
-              computed(move || active_marks.get().iter().any(|m| m == "strike")),
-              move || b_strike.toggle_mark("strike"),
-              mica_icons::strikethrough_icon,
-            ))
-            .child(toolbar_btn_active(
-              "ed-code",
-              "行内代码 (Ctrl+E)",
-              dark_mode,
-              computed(move || active_marks.get().iter().any(|m| m == "code")),
-              move || b_code.toggle_mark("code"),
-              mica_icons::code_icon,
-            ))
-            .child(toolbar_btn_active(
-              "ed-link",
-              "链接 (Ctrl+K)",
-              dark_mode,
-              computed(move || active_marks.get().iter().any(|m| m == "link")),
-              move || {
-                link_draft.set(b_link_btn.current_link_href().unwrap_or_default());
-                link_prompt_open.set(!link_prompt_open.get_untracked());
-              },
-              mica_icons::link_icon,
-            ))
-            .child(toolbar_sep(dark_mode))
-            .child(toolbar_btn_active(
-              "ed-list",
-              "无序列表",
-              dark_mode,
-              computed(move || matches!(active_kind.get().as_str(), "bulleted_list" | "bulletList")),
-              move || toggle_block_type(&b_list, "bulleted_list", None),
-              mica_icons::list_bullet,
-            ))
-            .child(toolbar_btn_active(
-              "ed-ordered",
-              "有序列表",
-              dark_mode,
-              computed(move || matches!(active_kind.get().as_str(), "numbered_list" | "orderedList")),
-              move || toggle_block_type(&b_ordered, "numbered_list", None),
-              mica_icons::list_ordered,
-            ))
-            .child(toolbar_btn_active(
-              "ed-todo",
-              "待办清单",
-              dark_mode,
-              computed(move || matches!(active_kind.get().as_str(), "todo" | "taskItem")),
-              move || toggle_block_type(&b_todo, "todo", None),
-              mica_icons::todo_box,
-            ))
-            .child(toolbar_btn_active(
-              "ed-quote",
-              "引用块",
-              dark_mode,
-              computed(move || matches!(active_kind.get().as_str(), "quote" | "blockquote")),
-              move || toggle_block_type(&b_quote, "quote", None),
-              mica_icons::quote_icon,
-            ))
-            .child(toolbar_btn_active(
-              "ed-code-block",
-              "代码块",
-              dark_mode,
-              computed(move || active_kind.get() == "code_block"),
-              move || b_code_blk.insert_custom_block("code_block", "", Some("rust")),
-              terminal_icon,
-            ))
-            .child(toolbar_sep(dark_mode))
-            .child(toolbar_btn(
-              "ed-divider",
-              "插入分割线",
-              dark_mode,
-              signal(false),
-              move || b_div.insert_divider(),
-              mica_icons::divider_icon,
-            ))
-            .child(toolbar_btn(
-              "ed-table-quick",
-              "插入表格",
-              dark_mode,
-              signal(false),
-              move || b_tbl.insert_table(2, 2),
-              mica_icons::table_icon,
-            ))
-            .child(toolbar_btn(
-              "ed-image",
-              "插入图片",
-              dark_mode,
-              signal(false),
-              move || (h_img.on_insert_image)(),
-              image_icon,
-            ))
-            .child(toolbar_btn(
-              "ed-slash-open",
-              "插入块菜单 (/)",
-              dark_mode,
-              slash.open,
-              move || {
-                if slash.open.get_untracked() {
-                  close_slash(slash);
-                } else {
-                  slash.query.set(String::new());
-                  slash.index.set(0);
-                  slash.opened_by_btn.set(true);
-                  update_slash_anchor(&b_slash_btn, slash);
-                  slash.open.set(true);
-                }
-              },
-              mica_icons::plus,
-            ))
+        .child(when(move || show_format_bar.get() && header_single_row.get(), {
+          let fb = fmt_bar_inline.clone();
+          move || fb()
         }))
         .child(
           // Right cluster: last-edited + right-sidebar toggle + whiteboard + share (cloud) + copy link + favorite + trash + more
@@ -654,7 +764,7 @@ pub fn editor_view(
             .gap(px(2.0))
             .child(when(move || !right_open.get(), move || {
               text(move || last_edited.get())
-                .text_size(px(11.5))
+                .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
                 .text_color(move || palette(dark_mode.get()).text_faint)
             }))
             .child(toolbar_btn(
@@ -702,8 +812,8 @@ pub fn editor_view(
               button()
                 .test_id("ed-copy-link")
                 .accessibility_label("复制链接")
-                .w(px(23.0))
-                .h(px(26.0))
+                .w(px(28.0))
+                .h(px(28.0))
                 .items_center()
                 .justify_center()
                 .rounded(px(5.0))
@@ -727,8 +837,8 @@ pub fn editor_view(
               button()
                 .test_id("ed-star")
                 .accessibility_label("收藏或取消收藏当前页面")
-                .w(px(23.0))
-                .h(px(26.0))
+                .w(px(28.0))
+                .h(px(28.0))
                 .items_center()
                 .justify_center()
                 .rounded(px(5.0))
@@ -760,6 +870,22 @@ pub fn editor_view(
               mica_icons::more_dots,
             )),
         ),
+        )
+        .child(when(move || show_format_bar.get() && !header_single_row.get(), {
+          let fb = fmt_bar_second.clone();
+          move || {
+            view()
+              .w_full()
+              .h(px(36.0))
+              .px_3()
+              .flex_row()
+              .items_center()
+              .justify_center()
+              .border_t_1()
+              .border_color(move || palette(dark_mode.get()).border_subtle)
+              .child(fb())
+          }
+        })),
     )
     .child(when(move || page_menu_open.get(), move || {
       page_more_menu_view(h_menu.clone(), b_copy_md.clone(), page_menu_open, dark_mode)
@@ -913,7 +1039,12 @@ pub fn editor_view(
                     .min_h(px(360.0))
                     .editor(Some(rich_session))
                     .placeholder("输入正文，或输入 / 唤出命令...")
-                    .styles(move || mica_rich_editor_styles(dark_mode.get()))
+                    .styles(move || {
+                      let (font_px, font_family) = use_context::<crate::mica_theme::UiAppearance>()
+                        .map(|a| (a.editor_font_px.get() as f32, a.editor_font_family.get()))
+                        .unwrap_or((16.0, ""));
+                      mica_rich_editor_styles(dark_mode.get(), font_px, font_family)
+                    })
                     .bubble_menu_placement(Placement::Top)
                     .bubble_menu_offset(px(8.0))
                     .bubble_menu(bubble_menu_view(
@@ -1768,8 +1899,8 @@ where
   button()
     .test_id(tid)
     .accessibility_label(a11y)
-    .w(px(23.0))
-    .h(px(26.0))
+    .w(px(28.0))
+    .h(px(28.0))
     .items_center()
     .justify_center()
     .rounded(px(5.0))
@@ -1817,14 +1948,21 @@ fn color_prop(key: StyleKey, c: impl Into<Color>) -> (StyleKey, PropertyValue) {
 /// Builds declaration-backed `RichEditorStyles` matching Mica's warm-gray Notion
 /// typography scale and surface tokens (using `Style::from_decls` so `parts::merge`
 /// preserves every node & mark style).
-fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
+fn mica_rich_editor_styles(dark_mode: bool, base_font_px: f32, font_family: &str) -> RichEditorStyles {
   let p = palette(dark_mode);
+  let base_px = base_font_px.clamp(13.0, 22.0);
+  let scale = base_px / 16.0;
   let mut styles = RichEditorStyles::default();
 
-  styles.root = Some(PartStyle(decl_style([
+  let mut root_props = vec![
     color_prop(StyleKey::BackgroundColor, p.surface_base),
     color_prop(StyleKey::Color, p.text_primary),
-  ])));
+    num_prop(StyleKey::FontSize, base_px),
+  ];
+  if !font_family.is_empty() {
+    root_props.push(str_prop(StyleKey::FontFamily, font_family));
+  }
+  styles.root = Some(PartStyle(decl_style(root_props)));
   styles.content = Some(PartStyle(decl_style([
     num_prop(StyleKey::PaddingBottom, 160.0),
   ])));
@@ -1865,7 +2003,7 @@ fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
   nodes.insert(
     "paragraph".to_string(),
     decl_style([
-      num_prop(StyleKey::FontSize, 16.0),
+      num_prop(StyleKey::FontSize, base_px),
       (
         StyleKey::LineHeight,
         PropertyValue::LineHeight(LineHeight::Multiple(1.65)),
@@ -1889,7 +2027,7 @@ fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
   nodes.insert(
     "heading[level=1]".to_string(),
     decl_style([
-      num_prop(StyleKey::FontSize, 30.0),
+      num_prop(StyleKey::FontSize, (30.0 * scale).round()),
       num_prop(StyleKey::MarginTop, 18.0),
       num_prop(StyleKey::MarginBottom, 6.0),
     ]),
@@ -1897,7 +2035,7 @@ fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
   nodes.insert(
     "heading[level=2]".to_string(),
     decl_style([
-      num_prop(StyleKey::FontSize, 24.0),
+      num_prop(StyleKey::FontSize, (24.0 * scale).round()),
       num_prop(StyleKey::MarginTop, 14.0),
       num_prop(StyleKey::MarginBottom, 4.0),
     ]),
@@ -1905,7 +2043,7 @@ fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
   nodes.insert(
     "heading[level=3]".to_string(),
     decl_style([
-      num_prop(StyleKey::FontSize, 20.0),
+      num_prop(StyleKey::FontSize, (20.0 * scale).round()),
       num_prop(StyleKey::MarginTop, 10.0),
       num_prop(StyleKey::MarginBottom, 4.0),
     ]),
@@ -1913,7 +2051,7 @@ fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
   nodes.insert(
     "heading[level=4]".to_string(),
     decl_style([
-      num_prop(StyleKey::FontSize, 18.0),
+      num_prop(StyleKey::FontSize, (18.0 * scale).round()),
       num_prop(StyleKey::MarginTop, 8.0),
       num_prop(StyleKey::MarginBottom, 2.0),
     ]),
@@ -1921,7 +2059,7 @@ fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
   nodes.insert(
     "heading[level=5]".to_string(),
     decl_style([
-      num_prop(StyleKey::FontSize, 16.0),
+      num_prop(StyleKey::FontSize, (16.0 * scale).round()),
       num_prop(StyleKey::MarginTop, 6.0),
       num_prop(StyleKey::MarginBottom, 2.0),
     ]),
@@ -1929,7 +2067,7 @@ fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
   nodes.insert(
     "heading[level=6]".to_string(),
     decl_style([
-      num_prop(StyleKey::FontSize, 14.0),
+      num_prop(StyleKey::FontSize, (14.0 * scale).round()),
       (StyleKey::FontWeight, PropertyValue::FontWeight(Some(500))),
       num_prop(StyleKey::MarginTop, 6.0),
       num_prop(StyleKey::MarginBottom, 2.0),
@@ -1977,7 +2115,7 @@ fn mica_rich_editor_styles(dark_mode: bool) -> RichEditorStyles {
   let list_style = decl_style([
     num_prop(StyleKey::MarginTop, 2.0),
     num_prop(StyleKey::MarginBottom, 2.0),
-    num_prop(StyleKey::FontSize, 16.0),
+    num_prop(StyleKey::FontSize, base_px),
     (
       StyleKey::LineHeight,
       PropertyValue::LineHeight(LineHeight::Multiple(1.65)),
@@ -2075,7 +2213,7 @@ fn local_stroked(size_px: f32, color: &str, inner: &str) -> Svg {
 
 fn terminal_icon(color: &str) -> Svg {
   local_stroked(
-    15.0,
+    17.0,
     color,
     r##"<rect x="2.8" y="4" width="14.4" height="12" rx="2"/><path d="M6.2 8.2L8.6 10.2L6.2 12.2M10.5 12.2H13.8"/>"##,
   )
@@ -2083,7 +2221,7 @@ fn terminal_icon(color: &str) -> Svg {
 
 fn image_icon(color: &str) -> Svg {
   local_stroked(
-    15.0,
+    17.0,
     color,
     r##"<rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8" r="1.2"/><path d="M3.8 14L7.8 10.2L10.8 13L13.2 10.8L16.4 14"/>"##,
   )
@@ -2124,8 +2262,8 @@ where
   button()
     .test_id(tid)
     .accessibility_label(a11y)
-    .w(px(23.0))
-    .h(px(26.0))
+    .w(px(28.0))
+    .h(px(28.0))
     .items_center()
     .justify_center()
     .rounded(px(5.0))
@@ -2164,8 +2302,8 @@ where
   button()
     .test_id(tid)
     .accessibility_label(a11y)
-    .w(px(22.0))
-    .h(px(26.0))
+    .w(px(28.0))
+    .h(px(28.0))
     .items_center()
     .justify_center()
     .rounded(px(5.0))
@@ -2204,8 +2342,8 @@ where
   button()
     .test_id(tid)
     .accessibility_label(a11y)
-    .w(px(22.0))
-    .h(px(26.0))
+    .w(px(28.0))
+    .h(px(28.0))
     .items_center()
     .justify_center()
     .rounded(px(5.0))

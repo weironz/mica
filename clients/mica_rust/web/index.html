@@ -26,7 +26,8 @@
   try {
     const player = await createPlayer(root, {
       dialogs: "viewport",
-      wasm: "./mica_rust.wasm",
+      wasm: "./mica_rust_bg.wasm",
+      glue: "./mica_rust.js",
       onError: (msg) => {
         console.error("[mica-rust]", msg);
         status.textContent = String(msg);

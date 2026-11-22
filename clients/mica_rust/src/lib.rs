@@ -60,11 +60,14 @@ use mica_api_types::View;
 use mica_board::BoardSession;
 use mica_client::PageTreeModel;
 use nsh_base::button;
+#[cfg(not(target_arch = "wasm32"))]
+use nsh_core::desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes};
+#[cfg(not(target_arch = "wasm32"))]
+use nsh_core::element::desktop::current_window;
 use nsh_core::{
-  desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes},
   element::{
     KeyOptions,
-    desktop::{current_window, title_bar},
+    desktop::title_bar,
     on_key_with,
   },
   geometry::px,
@@ -424,6 +427,73 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let ai_enabled = signal(true);
   let dark_mode = signal(init_dark);
   let locale_zh = signal(init_locale_zh);
+  let init_ui_scale = match vault.get_pref("uiFontScale").as_deref() {
+    Some("small") => settings_view::UiFontScale::Small,
+    Some("large") => settings_view::UiFontScale::Large,
+    _ => settings_view::UiFontScale::Standard,
+  };
+  let init_editor_font_px = vault
+    .get_pref("editorFontPx")
+    .and_then(|s| s.parse::<u32>().ok())
+    .unwrap_or(16)
+    .clamp(13, 22);
+  let init_editor_font_family = match vault.get_pref("editorFontFamily").as_deref() {
+    Some("serif") => settings_view::EditorFontFamily::Serif,
+    Some("mono") => settings_view::EditorFontFamily::Mono,
+    _ => settings_view::EditorFontFamily::System,
+  };
+  let ui_font_scale_sig = signal(init_ui_scale);
+  let ui_scale_f32_sig = signal(match init_ui_scale {
+    settings_view::UiFontScale::Small => 0.90_f32,
+    settings_view::UiFontScale::Standard => 1.0_f32,
+    settings_view::UiFontScale::Large => 1.15_f32,
+  });
+  let editor_font_px_sig = signal(init_editor_font_px);
+  let editor_font_family_sig = signal(init_editor_font_family);
+  let editor_font_css_sig: Signal<&'static str> = signal(match init_editor_font_family {
+    settings_view::EditorFontFamily::System => "",
+    settings_view::EditorFontFamily::Serif => "Georgia, serif",
+    settings_view::EditorFontFamily::Mono => "monospace",
+  });
+  provide_context(mica_theme::UiAppearance {
+    ui_scale: ui_scale_f32_sig,
+    editor_font_px: editor_font_px_sig,
+    editor_font_family: editor_font_css_sig,
+    locale_zh,
+  });
+  {
+    let v_ui = vault.clone();
+    effect(move || {
+      let sc = ui_font_scale_sig.get();
+      let (f, key) = match sc {
+        settings_view::UiFontScale::Small => (0.90_f32, "small"),
+        settings_view::UiFontScale::Standard => (1.0_f32, "standard"),
+        settings_view::UiFontScale::Large => (1.15_f32, "large"),
+      };
+      ui_scale_f32_sig.set(f);
+      let _ = v_ui.set_pref("uiFontScale", key);
+    });
+  }
+  {
+    let v_fp = vault.clone();
+    effect(move || {
+      let px_v = editor_font_px_sig.get().clamp(13, 22);
+      let _ = v_fp.set_pref("editorFontPx", &px_v.to_string());
+    });
+  }
+  {
+    let v_ff = vault.clone();
+    effect(move || {
+      let fam = editor_font_family_sig.get();
+      let (css, key) = match fam {
+        settings_view::EditorFontFamily::System => ("", "system"),
+        settings_view::EditorFontFamily::Serif => ("Georgia, serif", "serif"),
+        settings_view::EditorFontFamily::Mono => ("monospace", "mono"),
+      };
+      editor_font_css_sig.set(css);
+      let _ = v_ff.set_pref("editorFontFamily", key);
+    });
+  }
   let live_views_sig = signal(init_live);
   let trashed_views_sig = signal(init_trashed);
 
@@ -2148,6 +2218,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   });
   let mut settings_props_val = SettingsViewProps::from_legacy(settings_legacy);
   settings_props_val.page_width_px = page_width_px_sig;
+  settings_props_val.ui_font_scale = ui_font_scale_sig;
+  settings_props_val.editor_font_px = editor_font_px_sig;
+  settings_props_val.editor_font_family = editor_font_family_sig;
   settings_props_val.show_format_bar = show_format_bar;
   settings_props_val.show_page_title = show_page_title;
   settings_props_val.account_name = account_name;
@@ -3289,7 +3362,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let sp = settings_props.clone();
       move || settings_view::settings_modal_view_with_props(sp.clone())
     }))
-    // 11. Embedded Document Board Fullscreen Modal with 3-Way Semantic Merge on Complete
+    // 11. Embedded Document Board Fullscreen Modal (mounted below 34px titlebar so
+    // window min/max/close buttons never overlap; continuously auto-saves every edit
+    // back into the document block via 3-way semantic merge).
     .child(when(move || embedded_board_edit.get().is_some(), {
       let br_m = br_embed.clone();
       move || {
@@ -3298,24 +3373,40 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         };
         let bs = ed.session.clone();
         let bs_close = ed.session.clone();
-        let base_json = ed.base_json.clone();
+        let base_json_persist = ed.base_json.clone();
+        let base_json_close = ed.base_json.clone();
         let pos = ed.block_pos;
-        let br_c = br_m.clone();
+        let br_persist = br_m.clone();
+        let br_close = br_m.clone();
         view()
           .test_id("embedded-board-modal")
           .absolute()
-          .inset_0()
+          .top(px(34.0))
+          .left(px(0.0))
+          .right(px(0.0))
+          .bottom(px(0.0))
           .z_index(60)
           .bg(move || palette(dark_mode.get()).surface_base)
           .child(board_view::board_view_with_rev_and_close(
             bs,
             ed.rev,
             dark_mode,
-            Rc::new(|_| {}),
+            Rc::new(move |local_json: String| {
+              let merged = atomic_blocks::merge_embedded_board_json(
+                &base_json_persist,
+                &local_json,
+                &base_json_persist,
+              );
+              br_persist.update_block_source_at(pos, &merged);
+            }),
             Some(Rc::new(move || {
               let local_json = bs_close.borrow().export_compact_json();
-              let merged = atomic_blocks::merge_embedded_board_json(&base_json, &local_json, &base_json);
-              br_c.update_block_source_at(pos, &merged);
+              let merged = atomic_blocks::merge_embedded_board_json(
+                &base_json_close,
+                &local_json,
+                &base_json_close,
+              );
+              br_close.update_block_source_at(pos, &merged);
               embedded_board_edit.set(None);
             })),
           ))
@@ -3327,8 +3418,27 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 fn resolve_parent_folder_name(tree: &PageTreeModel, doc_id: Uuid) -> Option<String> {
   let rows = tree.visible_rows();
   let page = rows.iter().find(|r| !r.is_folder && r.object_id == doc_id)?;
-  let pid = page.parent_view_id?;
-  tree.get(pid).map(|v| v.name.clone())
+  let mut ancestors = Vec::new();
+  let mut cursor = page.parent_view_id;
+  let mut seen = std::collections::HashSet::new();
+  while let Some(pid) = cursor {
+    if !seen.insert(pid) {
+      break;
+    }
+    let Some(folder) = tree.get(pid) else {
+      break;
+    };
+    if !folder.name.trim().is_empty() {
+      ancestors.push(folder.name.trim().to_string());
+    }
+    cursor = folder.parent_view_id;
+  }
+  if ancestors.is_empty() {
+    None
+  } else {
+    ancestors.reverse();
+    Some(ancestors.join(" > "))
+  }
 }
 
 fn make_view(

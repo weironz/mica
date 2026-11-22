@@ -231,7 +231,7 @@ pub fn sidebar_view(
   dark_mode: Signal<bool>,
   cb: Rc<SidebarCallbacks>,
 ) -> impl IntoElement {
-  let (show_favorites, show_pages, show_trash, sidebar_hovered) = (signal(true), signal(true), signal(false), signal(false));
+  let (show_favorites, show_pages, sidebar_hovered) = (signal(true), signal(true), signal(false));
   let selection: Signal<TreeSelection> = signal(TreeSelection::new());
   let context_menu: Signal<Option<ContextMenuState>> = signal(None);
   let page_to_local: Signal<(f32, f32)> = signal((0.0_f32, 36.0_f32));
@@ -331,7 +331,7 @@ pub fn sidebar_view(
       let ctx = tree_ctx.clone();
       move || page_tree_area(ctx.clone())
     })))
-    .child(recycle_bin_section(tree, tree_rev, show_trash, dark_mode, cb.clone()))
+    // Recycle Bin lives exclusively in `设置 → 回收站` (matching Flutter 1:1, hidden from sidebar footer).
     .child(account_footer(account_name, dark_mode, cb))
     .child(sidebar_resize_handle(sidebar_width, dark_mode))
     .child(context_menu_overlay(ctx_menu_overlay))
@@ -430,9 +430,17 @@ fn search_pill(dark_mode: Signal<bool>, cb: Rc<SidebarCallbacks>) -> impl IntoEl
       .child(
         view().flex_row().items_center().gap_2()
           .child(dynamic(move || mica_icons::search(palette(dark_mode.get()).text_ghost_hex)))
-          .child(text("搜索...").text_size(px(13.0)).text_color(move || palette(dark_mode.get()).text_ghost)),
+          .child(
+            text(move || crate::mica_theme::tr("搜索...", "Search..."))
+              .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
+              .text_color(move || palette(dark_mode.get()).text_ghost),
+          ),
       )
-      .child(text("Ctrl+Shift+F").text_size(px(11.0)).text_color(move || palette(dark_mode.get()).text_faint)),
+      .child(
+        text("Ctrl+Shift+F")
+          .text_size(move || px((11.0 * crate::mica_theme::ui_scale_factor()).round()))
+          .text_color(move || palette(dark_mode.get()).text_faint),
+      ),
   )
 }
 
@@ -573,7 +581,9 @@ fn pages_section_header(
         .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
         .on_press(move || show_pages.set(!show_pages.get_untracked()))
         .child(
-          text("页面").text_size(px(12.0)).font_weight(FontWeight::MEDIUM)
+          text(move || crate::mica_theme::tr("页面", "Pages"))
+            .text_size(move || px((12.5 * crate::mica_theme::ui_scale_factor()).round()))
+            .font_weight(FontWeight::MEDIUM)
             .text_color(move || palette(dark_mode.get()).text_faint),
         )
         .child(dynamic(move || {
@@ -952,7 +962,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                 let p = palette(dark_mode.get());
                 let active = is_active.get();
                 text(row_label.get())
-                  .text_size(px(14.0))
+                  .text_size(px((14.0 * crate::mica_theme::ui_scale_factor()).round()))
                   .font_weight(if active { FontWeight::MEDIUM } else { FontWeight::NORMAL })
                   .text_color(if active { p.text_primary } else { p.text_muted })
                   .truncate()
@@ -1389,70 +1399,6 @@ fn menu_item_row(
 
 fn menu_divider(dark_mode: Signal<bool>) -> impl IntoElement {
   view().w_full().py_1().child(view().w_full().h(px(1.0)).bg(move || palette(dark_mode.get()).border_subtle))
-}
-
-// ── Recycle Bin ───────────────────────────────────────────────────────────────
-
-fn recycle_bin_section(
-  tree: Rc<RefCell<PageTreeModel>>,
-  tree_rev: Signal<u64>,
-  show_trash: Signal<bool>,
-  dark_mode: Signal<bool>,
-  cb: Rc<SidebarCallbacks>,
-) -> impl IntoElement {
-  let tree_count = tree.clone();
-  let tree_list = tree;
-  view().px_2().py_1()
-    .child(
-      button()
-        .test_id("toggle-recycle-bin").accessibility_label("展开或收起回收站")
-        .w_full().h(px(28.0)).px_2().flex_row().items_center().gap_2().rounded(px(6.0))
-        .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-        .on_press(move || show_trash.set(!show_trash.get_untracked()))
-        .child(dynamic(move || mica_icons::trash_icon(palette(dark_mode.get()).text_faint_hex)))
-        .child(
-          text(move || {
-            tree_rev.get();
-            format!("回收站 ({})", tree_count.borrow().trashed_views().len())
-          })
-          .text_size(px(12.0))
-          .text_color(move || palette(dark_mode.get()).text_faint),
-        ),
-    )
-    .child(when(move || show_trash.get(), {
-      let t_tr = tree_list.clone();
-      let restore_cb = cb.clone();
-      move || {
-        let t_in = t_tr.clone();
-        let r_in = restore_cb.clone();
-        dynamic(move || {
-          tree_rev.get();
-          let items: Vec<(Uuid, String)> = t_in.borrow().trashed_views().into_iter().map(|v| (v.id, v.name.clone())).collect();
-          let mut box_el = view().w_full().pl_2().py_1().gap_1();
-          if items.is_empty() {
-            return box_el.child(text("回收站为空").text_size(px(12.0)).text_color(move || palette(dark_mode.get()).text_ghost));
-          }
-          for (idx, (vid, raw_name)) in items.into_iter().enumerate() {
-            let restore = r_in.clone();
-            let name = if raw_name.trim().is_empty() { "无标题".to_string() } else { raw_name };
-            box_el = box_el.child(
-              view().flex_row().items_center().justify_between().px_2().py_1()
-                .child(text(name.clone()).text_size(px(12.0)).text_color(move || palette(dark_mode.get()).text_muted).truncate())
-                .child(
-                  button()
-                    .test_id(&format!("restore-trash-{idx}")).accessibility_label(format!("恢复页面 {name}"))
-                    .px_2().py_1().rounded(px(6.0))
-                    .bg(move || palette(dark_mode.get()).surface_sunken)
-                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                    .on_press(move || (restore.on_restore_view)(vid))
-                    .child(text("恢复").text_size(px(11.0)).text_color(move || palette(dark_mode.get()).text_primary)),
-                ),
-            );
-          }
-          box_el
-        })
-      }
-    }))
 }
 
 // ── Account Footer (`28×28` avatar `本` + `本地工作区` + gear button) ─────────

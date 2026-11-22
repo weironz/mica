@@ -53,11 +53,31 @@ rm -rf "$out"
 mkdir -p "$out"
 cp clients/mica_rust/web/index.html "$out/index.html"
 cp "$nsh_js" "$out/nsh.js"
-cp "$wasm_path" "$out/mica_rust.wasm"
+
+# Generate wasm-bindgen glue for transitive crates (chrono/uuid/getrandom/merman/ratex)
+# and adapt it to NSH's `__nsh_imports` / `__nsh_finalize` glue hook contract.
+if ! command -v wasm-bindgen >/dev/null 2>&1; then
+  echo "FAIL: wasm-bindgen CLI not found on PATH (install wasm-bindgen-cli matching clients/mica_rust/Cargo.lock)" >&2
+  exit 1
+fi
+wasm-bindgen --target web --out-dir "$out" --out-name mica_rust "$wasm_path"
+python3 - "$out/mica_rust.js" <<'PY'
+import re, sys
+path = sys.argv[1]
+src = open(path, "r", encoding="utf-8").read()
+src = re.sub(r'^import \* as import\d+ from "(?:nsh|env)";?\r?\n', '', src, flags=re.M)
+src = re.sub(r'^\s*"(?:nsh|env)": import\d+,?\r?\n', '', src, flags=re.M)
+if '__nsh_imports' not in src:
+    src += (
+        "\nexport function __nsh_imports() { return __wbg_get_imports(); }\n"
+        "export function __nsh_finalize(instance, module) { return __wbg_finalize_init(instance, module); }\n"
+    )
+open(path, "w", encoding="utf-8", newline="\n").write(src)
+PY
 chmod -R a+rX "$out"
 
-raw_bytes=$(wc -c < "$out/mica_rust.wasm")
-gz_bytes=$(gzip -n -9 -c "$out/mica_rust.wasm" | wc -c)
+raw_bytes=$(wc -c < "$out/mica_rust_bg.wasm")
+gz_bytes=$(gzip -n -9 -c "$out/mica_rust_bg.wasm" | wc -c)
 echo "==> deploy/web staged (pure-Rust Web client)"
-echo "    mica_rust.wasm raw:    ${raw_bytes} B"
-echo "    mica_rust.wasm gzip-9: ${gz_bytes} B"
+echo "    mica_rust_bg.wasm raw:    ${raw_bytes} B"
+echo "    mica_rust_bg.wasm gzip-9: ${gz_bytes} B"

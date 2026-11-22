@@ -101,12 +101,14 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.wait_for("常用快捷键").unwrap();
   app.press("id:settings-close-btn").unwrap();
 
-  // 12. Trash active page and restore from Recycle Bin
+  // 12. Trash active page and restore from Settings -> 回收站 (sidebar footer hides Recycle Bin 1:1 with Flutter)
   app.press("id:trash-page-btn").unwrap();
-  app.wait_for("回收站 (1)").unwrap();
-  app.press("id:toggle-recycle-bin").unwrap();
-  app.press("id:restore-trash-0").unwrap();
-  app.wait_for("回收站 (0)").unwrap();
+  app.press("id:open-settings-btn").unwrap();
+  app.press("id:settings-tab-trash").unwrap();
+  app.wait_for("id:trash-restore-btn").unwrap();
+  app.press("id:trash-restore-btn").unwrap();
+  app.wait_for("回收站是空的").unwrap();
+  app.press("id:settings-close-btn").unwrap();
 }
 
 #[test]
@@ -232,4 +234,48 @@ fn flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips() {
   app.press("id:settings-tab-trash").unwrap();
   app.wait_for("回收站").unwrap();
   app.press("id:settings-close-btn").unwrap();
+}
+
+#[test]
+fn regression_recycle_bin_hidden_copy_path_appearance_and_board_click_edit() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Recycle Bin must NOT be rendered in the sidebar footer (lives in Settings -> 回收站 only).
+  assert!(
+    app.press("id:toggle-recycle-bin").is_err(),
+    "sidebar footer must not display Recycle Bin"
+  );
+
+  // 2. Breadcrumb is wrapped in a selectable view and copy-path button copies human path.
+  app.wait_for("id:ed-breadcrumb-selectable").unwrap();
+  app.wait_for("id:ed-copy-path").unwrap();
+  app.press("id:ed-copy-path").unwrap();
+  app.wait_for("已复制页面路径").unwrap();
+
+  // 3. Settings Appearance: Language & UI Size take effect immediately across Settings & Sidebar.
+  app.press("id:open-settings-btn").unwrap();
+  app.wait_for("id:lang-en").unwrap();
+  app.press("id:lang-en").unwrap();
+  app.press("id:ui-font-large").unwrap();
+  app.wait_for("Appearance").unwrap();
+  app.wait_for("UI Size").unwrap();
+  app.wait_for("Pages").unwrap();
+  app.press("id:lang-zh").unwrap();
+  app.press("id:ui-font-standard").unwrap();
+  app.wait_for("外观").unwrap();
+  app.press("id:settings-close-btn").unwrap();
+
+  // 4. Embedded whiteboard opens directly by clicking the board preview card.
+  app.press("id:ed-slash-open").unwrap();
+  app.wait_for("id:slash-whiteboard").unwrap();
+  app.press("id:slash-whiteboard").unwrap();
+  app.wait_for("id:board-preview-open-btn").unwrap();
+  app.press("id:board-preview-open-btn").unwrap();
+  app.wait_for("id:embedded-board-modal").unwrap();
+  app.press("id:board-done-btn").unwrap();
 }

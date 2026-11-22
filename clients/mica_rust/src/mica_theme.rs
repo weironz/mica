@@ -14,6 +14,53 @@ use nsh_core::{
   prelude::*,
 };
 
+/// Ambient UI appearance signals shared across shell, sidebar, editor, and settings.
+/// Changing any of these in Settings updates the live UI immediately.
+#[derive(Clone, Copy)]
+pub struct UiAppearance {
+  /// UI chrome scale multiplier (`0.90` Small / `1.0` Standard / `1.15` Large).
+  pub ui_scale: Signal<f32>,
+  /// Editor body base font size in px (`13..=22`, default `16`).
+  pub editor_font_px: Signal<u32>,
+  /// Editor font family (`""` System, `"Georgia, serif"` Serif, `"monospace"` Mono).
+  pub editor_font_family: Signal<&'static str>,
+  /// `true` = 简体中文, `false` = English.
+  pub locale_zh: Signal<bool>,
+}
+
+impl UiAppearance {
+  pub fn scale(&self) -> f32 {
+    self.ui_scale.get().clamp(0.85, 1.3)
+  }
+
+  pub fn scaled(&self, base_px: f32) -> f32 {
+    (base_px * self.scale()).round()
+  }
+
+  pub fn is_zh(&self) -> bool {
+    self.locale_zh.get()
+  }
+}
+
+/// Read ambient UI scale factor (`1.0` fallback when no context is mounted).
+pub fn ui_scale_factor() -> f32 {
+  use_context::<UiAppearance>()
+    .map(|a| a.scale())
+    .unwrap_or(1.0)
+}
+
+/// Read ambient `locale_zh` (`true` = Chinese fallback when no context is mounted).
+pub fn is_locale_zh() -> bool {
+  use_context::<UiAppearance>()
+    .map(|a| a.is_zh())
+    .unwrap_or(true)
+}
+
+/// Convenience bilingual selector (`zh` when Chinese, `en` when English).
+pub fn tr(zh: &'static str, en: &'static str) -> &'static str {
+  if is_locale_zh() { zh } else { en }
+}
+
 #[derive(Clone, Copy)]
 pub struct MicaPalette {
   pub surface_base: Rgba,
