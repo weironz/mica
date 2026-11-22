@@ -59,6 +59,16 @@ flowchart TB
   Wasm --> MdCore
 ```
 
+### 技术栈与框架角色对照
+
+| 角色 | 常见技术栈类比 | Mica 当前纯 Rust 方案 | 所在位置 |
+| --- | --- | --- | --- |
+| **前端 UI 框架** | Flutter / React / Vue | **`nsh`**（`nsh-core` + `nsh-base` `default-features=false` + `nsh-platform-{windows,macos,linux,web}`）：仅管窗口、布局、控件、响应式 `Signal`、原生中文 IME、原生文件弹窗与 2D `Canvas`，不持有业务与数据模型 | `clients/mica_rust/` |
+| **后端 Web 框架** | Spring Boot / FastAPI / Express / Gin | **`Axum`**（`0.8`）+ **`Tokio`** 异步运行时：负责 HTTP REST 路由、鉴权中间件与 WebSocket 实时协作房间 | `crates/api-server/` |
+| **数据库 / 持久化层** | Prisma / MyBatis / GORM | 云端 **`SQLx`**（异步 PostgreSQL + 内嵌自动迁移）；本机离线模式 **`SQLite`**（`mica-core::LocalStore` + `mica-sync`） | `crates/infra/`、`crates/mica-core/`、`clients/mica_rust/src/storage.rs` |
+| **对象存储** | OSS / MinIO / S3 | S3 兼容协议（默认自托管 **RustFS**），存放附件与导出归档 | `crates/api-server/`、`deploy/` |
+| **前后端共享核心** | （传统异构栈往往两头重复写） | **`mica-core`**（`yrs` CRDT + 树规则）、**`md-core`**（Markdown + `ratex-*` 公式 + `merman` 图表）、**`interchange`**、**`api-types`**（编译期直接共用） | `crates/` |
+
 ---
 
 ## 2. 全仓库 Crate 与目录地图
