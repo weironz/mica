@@ -187,8 +187,6 @@ struct ActiveDrag {
   lead_name: String,
   lead_icon: Option<String>,
   lead_is_folder: bool,
-  pointer_local_x: f32,
-  pointer_local_y: f32,
   target: Option<DragTarget>,
 }
 
@@ -208,6 +206,7 @@ struct TreeRowContext {
   context_menu: Signal<Option<ContextMenuState>>,
   page_to_local: Signal<(f32, f32)>,
   drag_state: Signal<DragState>,
+  drag_pointer: Signal<(f32, f32)>,
   just_dragged: Signal<bool>,
   rename_modal_open: Signal<bool>,
   rename_modal_view: Signal<Option<Uuid>>,
@@ -237,6 +236,7 @@ pub fn sidebar_view(
   let context_menu: Signal<Option<ContextMenuState>> = signal(None);
   let page_to_local: Signal<(f32, f32)> = signal((0.0_f32, 36.0_f32));
   let drag_state: Signal<DragState> = signal(DragState::default());
+  let drag_pointer: Signal<(f32, f32)> = signal((0.0_f32, 0.0_f32));
   let just_dragged = signal(false);
   let (rename_modal_open, rename_modal_view, rename_modal_initial) =
     (signal(false), signal(None::<Uuid>), signal(String::new()));
@@ -277,7 +277,7 @@ pub fn sidebar_view(
 
   let tree_ctx = Rc::new(TreeRowContext {
     tree: tree.clone(), tree_rev, active_doc, dark_mode, sidebar_hovered, selection,
-    context_menu, page_to_local, drag_state, just_dragged,
+    context_menu, page_to_local, drag_state, drag_pointer, just_dragged,
     rename_modal_open, rename_modal_view, rename_modal_initial,
     emoji_modal_open, emoji_modal_view, emoji_modal_current, cb: cb.clone(),
   });
@@ -294,22 +294,16 @@ pub fn sidebar_view(
     .on_mouse_leave(move |_: &MouseEvent| sidebar_hovered.set(false))
     .on_mouse_move(move |e: &MouseEvent| {
       ctx_move.page_to_local.set((e.page_position.x.0 - e.position.x.0, e.page_position.y.0 - e.position.y.0));
-      let mut st = ctx_move.drag_state.get_untracked();
+      let st = ctx_move.drag_state.get_untracked();
       if st.active.is_none() && st.pending.is_none() { return; }
       if e.pressed_button != Some(MouseButton::Left) {
-        if let Some(active) = st.active.take() {
-          ctx_move.drag_state.set(DragState::default());
-          ctx_move.just_dragged.set(true);
-          commit_tree_drop(&ctx_move, active);
-        } else {
-          ctx_move.drag_state.set(DragState::default());
-        }
+        // Mouse was released outside the sidebar (so `on_mouse_up` here did not fire):
+        // cancel any dangling drag cleanly rather than committing a stale drop.
+        ctx_move.drag_state.set(DragState::default());
         return;
       }
-      if let Some(active) = st.active.as_mut() {
-        active.pointer_local_x = e.position.x.0;
-        active.pointer_local_y = e.position.y.0;
-        ctx_move.drag_state.set(st);
+      if st.active.is_some() {
+        ctx_move.drag_pointer.set((e.position.x.0, e.position.y.0));
       } else if let Some(pending) = st.pending.clone() {
         let dx = e.page_position.x.0 - pending.start_page_x;
         let dy = e.page_position.y.0 - pending.start_page_y;
@@ -341,7 +335,7 @@ pub fn sidebar_view(
     .child(account_footer(account_name, dark_mode, cb))
     .child(sidebar_resize_handle(sidebar_width, dark_mode))
     .child(context_menu_overlay(ctx_menu_overlay))
-    .child(drag_ghost_overlay(drag_state, dark_mode))
+    .child(drag_ghost_overlay(drag_state, drag_pointer, dark_mode))
     .child(rename_dialog_modal(
       rename_modal_open, rename_modal_initial, "重命名", dark_mode,
       Rc::new(move |new_name: String| {
@@ -739,6 +733,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
 
   let ctx_press = ctx.clone();
   let ctx_down = ctx.clone();
+  let ctx_row_down = ctx.clone();
   let ctx_move = ctx.clone();
   let ctx_context = ctx.clone();
   let ctx_chevron = ctx.clone();
@@ -753,6 +748,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
     .on_mouse_enter(move |_: &MouseEvent| row_hovered.set(true))
     .on_mouse_leave(move |_: &MouseEvent| row_hovered.set(false))
     .on_press_down(move |e: &PressEvent| {
+      ctx_down.just_dragged.set(false);
       if let Some(row) = row_info.get_untracked() {
         ctx_down.drag_state.set(DragState {
           pending: Some(PendingDrag {
@@ -878,6 +874,23 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
               }
             })
             .flex_1().min_w(px(0.0)).h_full().flex_row().items_center()
+            // `nsh` dispatches press events only to the innermost pressable view,
+            // so `on_press_down` MUST live right beside `on_press`.
+            // Note: do NOT cancel drag in `on_press_up` because `nsh` fires
+            // `cancel_press` -> `on_press_up` as soon as pointer movement exceeds `PRESS_SLOP`.
+            .on_press_down(move |e: &PressEvent| {
+              ctx_row_down.just_dragged.set(false);
+              if let Some(row) = row_info.get_untracked() {
+                ctx_row_down.drag_state.set(DragState {
+                  pending: Some(PendingDrag {
+                    source_view_id: row.view_id,
+                    start_page_x: e.page_position.x.0,
+                    start_page_y: e.page_position.y.0,
+                  }),
+                  active: None,
+                });
+              }
+            })
             .on_press(move |e: &PressEvent| {
               if ctx_press.just_dragged.get_untracked() {
                 ctx_press.just_dragged.set(false);
@@ -1054,6 +1067,7 @@ fn start_active_drag(ctx: &TreeRowContext, source_view_id: Uuid, local_x: f32, l
     .unwrap_or_default();
 
   ctx.context_menu.set(None);
+  ctx.drag_pointer.set((local_x, local_y));
   ctx.drag_state.set(DragState {
     pending: None,
     active: Some(ActiveDrag {
@@ -1061,8 +1075,6 @@ fn start_active_drag(ctx: &TreeRowContext, source_view_id: Uuid, local_x: f32, l
       lead_name,
       lead_icon: lead.and_then(|r| r.icon.clone()),
       lead_is_folder: lead.is_some_and(|r| r.is_folder),
-      pointer_local_x: local_x,
-      pointer_local_y: local_y,
       target: None,
     }),
   });
@@ -1141,56 +1153,70 @@ fn drop_indicator(inset: f32, state: DropIndicatorState, dark_mode: Signal<bool>
 }
 
 /// Floating drag ghost card (single card or 3-layer stacked deck + `{N} 项` badge).
-fn drag_ghost_overlay(drag_state: Signal<DragState>, dark_mode: Signal<bool>) -> impl IntoElement {
-  dynamic(move || {
-    let Some(active) = drag_state.get().active else { return view(); };
-    let p = palette(dark_mode.get());
-    let count = active.dragged_ids.len();
-    let gx = (active.pointer_local_x + 12.0).max(4.0);
-    let gy = (active.pointer_local_y + 10.0).max(4.0);
-
-    let lead_card = view()
-      .min_w(px(132.0)).max_w(px(240.0)).px_3().py_2().flex_row().items_center().gap_2()
-      .rounded(px(6.0)).border_1().border_color(p.border_normal).bg(p.surface_overlay)
-      .child(
-        view().w(px(18.0)).h(px(18.0)).flex_shrink_0().items_center().justify_center()
-          .child(if let Some(emoji) = active.lead_icon.filter(|s| !s.trim().is_empty()) {
-            view().child(text(emoji).text_size(px(15.0)))
-          } else if active.lead_is_folder {
-            view().child(mica_icons::folder(p.text_muted_hex))
-          } else {
-            view().child(mica_icons::file_doc(p.text_muted_hex))
-          }),
-      )
-      .child(text(active.lead_name).flex_1().text_size(px(13.0)).text_color(p.text_primary).truncate());
-
-    if count <= 1 {
-      return view()
-        .test_id("tree-drag-ghost").absolute().left(px(gx)).top(px(gy)).z_index(70)
-        .pointer_events(PointerEvents::None).child(lead_card);
-    }
-
+fn drag_ghost_overlay(
+  drag_state: Signal<DragState>,
+  drag_pointer: Signal<(f32, f32)>,
+  dark_mode: Signal<bool>,
+) -> impl IntoElement {
+  when(move || drag_state.get().active.is_some(), move || {
     view()
-      .test_id("tree-drag-ghost-deck").absolute().left(px(gx)).top(px(gy)).z_index(70)
-      .pointer_events(PointerEvents::None).gap_1()
+      .absolute()
+      .inset_0()
+      .z_index(70)
+      .pointer_events(PointerEvents::None)
       .child(
-        view().relative()
-          .child(
-            view().absolute().top(px(0.0)).left(px(0.0)).w(px(180.0)).h(px(34.0))
-              .rounded(px(6.0)).border_1().border_color(p.border_normal).bg(p.surface_overlay).opacity(0.65),
-          )
-          .child(
-            view().absolute().top(px(4.0)).left(px(4.0)).w(px(180.0)).h(px(34.0))
-              .rounded(px(6.0)).border_1().border_color(p.border_normal).bg(p.surface_overlay).opacity(0.82),
-          )
-          .child(view().pl(px(8.0)).pt(px(8.0)).child(lead_card)),
-      )
-      .child(
-        view().pl(px(8.0)).child(
-          view().px_2().py(px(2.0)).rounded(px(10.0)).bg(p.text_primary).child(
-            text(format!("{count} 项")).text_size(px(11.0)).font_weight(FontWeight::MEDIUM).text_color(p.on_primary),
-          ),
-        ),
+        view()
+          .absolute()
+          .left(move || px((drag_pointer.get().0 + 12.0).max(4.0)))
+          .top(move || px((drag_pointer.get().1 + 10.0).max(4.0)))
+          .pointer_events(PointerEvents::None)
+          .child(dynamic(move || {
+            let Some(active) = drag_state.get().active else { return view(); };
+            let p = palette(dark_mode.get());
+            let count = active.dragged_ids.len();
+
+            let lead_card = view()
+              .min_w(px(132.0)).max_w(px(240.0)).px_3().py_2().flex_row().items_center().gap_2()
+              .rounded(px(6.0)).border_1().border_color(p.border_normal).bg(p.surface_overlay)
+              .shadow_md()
+              .child(
+                view().w(px(18.0)).h(px(18.0)).flex_shrink_0().items_center().justify_center()
+                  .child(if let Some(emoji) = active.lead_icon.filter(|s| !s.trim().is_empty()) {
+                    view().child(text(emoji).text_size(px(15.0)))
+                  } else if active.lead_is_folder {
+                    view().child(mica_icons::folder(p.text_muted_hex))
+                  } else {
+                    view().child(mica_icons::file_doc(p.text_muted_hex))
+                  }),
+              )
+              .child(text(active.lead_name).flex_1().text_size(px(13.0)).text_color(p.text_primary).truncate());
+
+            if count <= 1 {
+              return view().test_id("tree-drag-ghost").child(lead_card);
+            }
+
+            view()
+              .test_id("tree-drag-ghost-deck").gap_1()
+              .child(
+                view().relative()
+                  .child(
+                    view().absolute().top(px(0.0)).left(px(0.0)).w(px(180.0)).h(px(34.0))
+                      .rounded(px(6.0)).border_1().border_color(p.border_normal).bg(p.surface_overlay).opacity(0.65),
+                  )
+                  .child(
+                    view().absolute().top(px(4.0)).left(px(4.0)).w(px(180.0)).h(px(34.0))
+                      .rounded(px(6.0)).border_1().border_color(p.border_normal).bg(p.surface_overlay).opacity(0.82),
+                  )
+                  .child(view().pl(px(8.0)).pt(px(8.0)).child(lead_card)),
+              )
+              .child(
+                view().pl(px(8.0)).child(
+                  view().px_2().py(px(2.0)).rounded(px(10.0)).bg(p.text_primary).child(
+                    text(format!("{count} 项")).text_size(px(11.0)).font_weight(FontWeight::MEDIUM).text_color(p.on_primary),
+                  ),
+                ),
+              )
+          })),
       )
   })
 }
