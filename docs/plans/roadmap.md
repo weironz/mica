@@ -10,10 +10,13 @@
 
 ## 平台
 
-- 🔭 GPUI UI 转型候选 [#172](https://github.com/weironz/mica/issues/172)，未立项，当前不迁。
-  2026-11-10 部分验证的 Web 中文输入、桌面中文输入、性能和移动四关均未完整通过；
-  Windows 真实输入法、Android 真机、Safari/Firefox 仍待验证。
-  见 [调研与决策](../architecture/ui-gpui-evaluation.md)。
+- 🚀 **全栈 Rust 三层标杆架构重构** [#172](https://github.com/weironz/mica/issues/172)（2026-11-22 定稿，分支 `feat/fullstack-rust-architecture`）。
+  确立「L1 数据引擎 + L2 无头纯 Rust 客户端内核 + L3 路线二-B（自有 `mica-editor` + NSH 原生壳）」四阶段演进路线：
+  - Phase 0（就绪）：Windows 本机真人中文 IME、NSH 纯 Rust Web 体积与路线二-B 虚拟化探针；
+  - Phase 1：`crates/mica-board` 交互态 `BoardSession` 收口 + `crates/mica-sync` 统一离线存储；
+  - Phase 2：`crates/mica-editor` 无头编辑器内核 + `crates/mica-client`；
+  - Phase 3（过冻结/真机硬闸门后启动）：`clients/mica_rust` 纯 Rust UI 壳落地并退役 Flutter。
+  详见 [设计方案与分阶段开发计划](../architecture/fullstack-rust-architecture.md) 与 [前序调研](../architecture/ui-gpui-evaluation.md)。
 
 ## SDK 与代码结构
 

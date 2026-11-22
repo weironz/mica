@@ -1,10 +1,10 @@
 # 架构转型方向：UI 层从 Flutter 迁到 GPUI 生态，成为全平台全栈 Rust —— 调研、验证与决策记录
 
-> **状态：候选方向，未立项。当前决策：不迁，维持 Flutter UI + Rust 数据面。**
+> **状态（2026-11-22 更新）：架构路线已拍板——采用「三层全栈 Rust 分层（L1/L2/L3）+ 路线二-B（主权在我）」渐进重构；L3 纯 Rust UI 壳仍须过门禁后再切换，现阶段先推进 Phase 0 本机实证与 Phase 1–2 纯 Rust 无头内核（L2）建设。**
+> **权威设计与分阶段开发计划**：[fullstack-rust-architecture.md](fullstack-rust-architecture.md)（分支 `feat/fullstack-rust-architecture`）。
 > 跟踪 issue：[#172](https://github.com/weironz/mica/issues/172)。
 >
-> 本文合并了两次调研（2026-11-01 只看桌面 + Web；2026-11-10 把手机算进来）和一次部分验证（2026-11-10）。
-> 重新评估时从这里开始：先复核第 2 节的事实是否仍然成立，再看第 7 节的进入条件。
+> 本文保留 2026-11-01 / 11-10 / 11-11 的前期调研与 Linux 无头验证记录，作为决策历史依据。
 >
 > **一句话结论**：四道进入关卡没有一道完整通过。如果将来迁，有两条路线（第 3 节），
 > 其中"全平台都用 Native Shell 自带的富文本编辑器"比"手写 GPUI 编辑器"更现实，但它自己还没有稳定。
@@ -283,6 +283,8 @@ NativeShell当日RichEditor在同版Firefox于加载前报nsh:rt动态模块错�
 | 2026-11-01 | 第一次调研：gpui-kit、社区 Markdown 编辑器；只看桌面 + Web | 不迁；定了 Web / Windows / 性能三道关卡 |
 | 2026-11-10 | 第二次调研：加入 Native Shell、gpui-fast 和其他 Rust UI 方案；Linux 与 Android 已成为现役平台 | 不迁；新增移动关卡 |
 | 2026-11-10 | 部分验证（第 8 节）；读 Native Shell 源码，更正了"它没有自绘接口和富文本编辑器"的错误判断 | 不迁；方案 B 否定，路线二成为候选 |
+| 2026-11-11 | Firefox 复验（8.5）：`gpui-kit v0.9.1` 候选窗仍固定 `(0,0)`；NSH 官网 `nsh:rt` import map 加载失败 | 不迁；四关仍未完整通过 |
+| 2026-11-22 | 复核 `gpui-kit v0.10.0`、`nsh v0.6.1`（`#2276`/`#2768` 性能大幅提升、支持纯 Rust `rust_app!`、但 API 未冻结且 `#2376` 未虚拟化）与 `mica-board` 合并后现状 | **定稿全栈 Rust 标杆路线**：三层架构（L1/L2/L3）+ 路线二-B（自有 `mica-editor` + NSH 原生虚拟 `List`/`Canvas`，拒绝第二套文档表示），详见 [fullstack-rust-architecture.md](fullstack-rust-architecture.md) |
 
 ## 参考
 
