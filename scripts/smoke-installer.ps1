@@ -56,7 +56,7 @@ try {
   $inst = Start-Process -FilePath $Setup `
     -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SKIPRUN', '/MICASMOKE', "/DIR=$installDir" `
     -WindowStyle Hidden -PassThru
-  $exe = Join-Path $installDir 'mica_flutter.exe'
+  $exe = Join-Path $installDir 'mica-rust.exe'
   Wait-MicaInstaller -Installer $inst -Executable $exe
   Write-Host "Installed OK: $exe"
   if ($ExpectedVersion) {
@@ -104,7 +104,7 @@ try {
     Start-Sleep -Milliseconds 250
   }
   if (-not (Test-Path -LiteralPath $probe)) {
-    throw "Mica did not produce its first Flutter frame within 30s"
+    throw "Mica did not produce its first native frame within 30s"
   }
   Start-Sleep -Seconds 10
   $app.Refresh()

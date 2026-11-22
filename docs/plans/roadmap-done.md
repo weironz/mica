@@ -9,6 +9,12 @@
 >
 > 2026-08-03 建档,当时搬进 68 条。
 
+## 2026-11-22 全栈纯 Rust 切换（`feat/fullstack-rust-architecture`）
+
+- 🚀 **全栈 Rust 三层标杆架构重构与 Flutter 彻底退役** [#172](https://github.com/weironz/mica/issues/172)（2026-11-22 核实完成）。
+  完整建成 L1 数据引擎 + L2 四个无头纯 Rust 客户端内核（`crates/mica-board::session`、`crates/mica-sync`、`crates/mica-editor`、`crates/mica-client`）+ L3 纯 Rust 原生客户端（`clients/mica_rust`，路线二-B：自有 `mica-editor` + NSH 原生 `virtual_list` / IME 代理 / `Canvas` / `AtomicBlockRenderer` 注册表 / `/` 斜杠菜单 / 表格编辑 / SQLite 本地持久化 `VaultStore` / 云端 `CloudConnector` / 桌面与 WebAssembly 双目标）。
+  彻底删除 `clients/mica_flutter/`、`crates/doc-wasm/`、`crates/board-wasm/`、`.fvmrc`、`flutter_rust_bridge`、Cargokit 与全部 Dart/Flutter 脚本、CI/Release 流程与棘轮巨石债务，CI / Release / Docker / nginx / Inno Setup / `.deb` 全部切换至 100% 纯 Rust。详见 [设计方案](../architecture/fullstack-rust-architecture.md) 与 [P0 实证报告](../reviews/fullstack-rust-p0-spike-2026-11-22.md)。
+
 ## 0.14.7
 
 - 编辑器从页面空白处、左侧把手栏和标题旁拖出框选，选中整块（`b31e5eb2` 等）；长代码块默认完整显示（#174）；分割线上下间距收紧。

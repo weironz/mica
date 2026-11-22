@@ -11,7 +11,7 @@ $fakeScript = Join-Path $fixture 'fake-installer.ps1'
 $fakeSource = @'
 param([string]$Directory, [int]$DelayMilliseconds, [int]$Code, [switch]$NoExecutable)
 New-Item -ItemType Directory -Path $Directory -Force | Out-Null
-if (-not $NoExecutable) { Set-Content -LiteralPath (Join-Path $Directory 'mica_flutter.exe') -Value 'fixture only' }
+if (-not $NoExecutable) { Set-Content -LiteralPath (Join-Path $Directory 'mica-rust.exe') -Value 'fixture only' }
 Start-Sleep -Milliseconds $DelayMilliseconds
 Set-Content -LiteralPath (Join-Path $Directory 'dependency.dll') -Value 'fixture only'
 exit $Code
@@ -27,7 +27,7 @@ function Start-InstallerFixture {
   if ($NoExecutable) { $processArgs += '-NoExecutable' }
   $process = Start-Process -FilePath powershell.exe -ArgumentList $processArgs -WindowStyle Hidden -PassThru
   $processes.Add($process)
-  return @{ Process = $process; Directory = $directory; Executable = (Join-Path $directory 'mica_flutter.exe') }
+  return @{ Process = $process; Directory = $directory; Executable = (Join-Path $directory 'mica-rust.exe') }
 }
 
 try {

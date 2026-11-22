@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared pre-tag checks for the local and hosted release paths.
+# Shared pre-tag checks for the local and hosted release paths (100% pure Rust).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
@@ -12,13 +12,13 @@ for package in mica-api-server mica-cli; do
   [ "$lock" = "$version" ] || fail "Cargo.lock: $package is '$lock', expected '$version'"
 done
 
+client_lock=$(sed -n "/^name = \"mica-rust\"$/{n;s/^version = \"\(.*\)\"$/\1/p;}" clients/mica_rust/Cargo.lock)
+[ "$client_lock" = "$version" ] || fail "clients/mica_rust/Cargo.lock: mica-rust is '$client_lock', expected '$version'"
+
 for doc in README.md docs/ops/deploy.md; do
   pinned=$(sed -nE 's/.*RELEASE=([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' "$doc" | sed -n '1p')
   [ "$pinned" = "$version" ] || fail "$doc pins the quickstart to '$pinned', expected '$version'"
 done
-
-cmp -s clients/mica_flutter/assets/tray_icon.ico clients/mica_flutter/windows/runner/resources/app_icon.ico \
-  || fail "tray icon and Windows app icon must be byte-identical"
 
 rust_pin=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
 [ -n "$rust_pin" ] || fail "could not read rust-toolchain.toml"
@@ -27,8 +27,6 @@ for image in deploy/Dockerfile.api deploy/Dockerfile.cli docker-compose.yml; do
     || fail "$image must build with the Rust pin $rust_pin"
 done
 
-# The first release containing each migration fixes its exact bytes, comments
-# included. Take the union of shipped paths so deletion is rejected too.
 shipped=$(git tag --list 'v[0-9]*')
 [ -n "$shipped" ] || fail "no release tags; fetch the full history and tags before checking migrations"
 shipped_paths=$(git log --tags='v[0-9]*' --format= --name-only --diff-filter=A -- migrations/ | sed '/^$/d' | sort -u)

@@ -70,20 +70,6 @@ sha=$(git rev-parse HEAD)
 
 stage push git push origin "HEAD:main" "$tag"
 
-# Browser-only suites: release acceptance, and the one gate this host may not
-# be able to run itself. Started NOW so it runs while the installer builds.
-browser_state=$(browser_status "$sha")
-if [ "$browser_state" = success ]; then
-  note "browser suites already passed on ${sha:0:12}"
-elif [ "$os" != windows ] && [ -z "${MICA_BROWSER_HOSTED:-}" ]; then
-  stage browser-tests bash scripts/browser-tests.sh --report-status
-elif [ "$browser_state" = pending ]; then
-  note "browser suites already running for ${sha:0:12}"
-else
-  note "dispatching the browser suites to GitHub Actions for $tag (Windows cannot run them, #181)"
-  gh workflow run browser-tests.yml --repo "$GH_REPO" --ref main -f ref="$tag"
-fi
-
 if [ "${REBUILD:-}" != 1 ] && [ "$(cat "$out/.built-from" 2>/dev/null)" = "$sha" ]; then
   skip artifacts "$out already built from ${sha:0:12}"
 else
@@ -99,22 +85,6 @@ else
 fi
 
 stage upload bash scripts/release-upload.sh "$version"
-
-# Wait for the browser status before publishing (release-publish requires it).
-wait_browser() {
-  local deadline=$((SECONDS + ${MICA_BROWSER_WAIT_MIN:-45} * 60)) state
-  while :; do
-    state=$(browser_status "$sha")
-    case "$state" in
-      success) note "browser suites passed on ${sha:0:12}"; return 0 ;;
-      failure|error) fail "the browser suites FAILED on ${sha:0:12} — see the Browser tests run in Actions" ;;
-    esac
-    [ $SECONDS -lt $deadline ] || return 0 # release-publish refuses with the how-to
-    note "waiting for the browser suites (status: ${state:-not started})…"
-    sleep 30
-  done
-}
-stage browser-wait wait_browser
 
 # Not under `if`: errexit is off inside an `if` condition, so a refused publish
 # would count as a passed stage. A refusal exits here and the summary says so;

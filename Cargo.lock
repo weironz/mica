@@ -2151,15 +2151,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mica-board-wasm"
-version = "0.1.0"
-dependencies = [
- "mica-board",
- "serde_json",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "mica-cli"
 version = "0.14.11"
 dependencies = [
@@ -2207,17 +2198,6 @@ dependencies = [
  "thiserror 2.0.18",
  "uuid",
  "yrs",
-]
-
-[[package]]
-name = "mica-doc-wasm"
-version = "0.1.0"
-dependencies = [
- "getrandom 0.3.4",
- "mica-core",
- "serde_json",
- "uuid",
- "wasm-bindgen",
 ]
 
 [[package]]

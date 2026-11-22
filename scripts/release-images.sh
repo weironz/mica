@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# Build mica-api / mica-web / mica-cli images for vX.Y.Z and push them to BOTH
-# registries prod and its off-site copy read from — the `images` job of
-# release.yml, on this machine.
-#
-#   just release-images 0.13.57
-#   PUSH=0 just release-images 0.13.57     # build + tag only
-#
-# Needs Docker (Linux, or Docker Desktop on Windows) and, to push,
-#   docker login registry.cn-shenzhen.aliyuncs.com
-#   docker login                                   (Docker Hub)
+# Build mica-api / mica-web / mica-cli images for vX.Y.Z and push them to ACR + Docker Hub.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib-local.sh
@@ -22,22 +13,11 @@ docker info >/dev/null 2>&1 || fail "Docker is not running"
 acr=registry.cn-shenzhen.aliyuncs.com/willspace
 hub=willdockerhub
 
-bash scripts/build-md-wasm.sh
-bash scripts/build-doc-wasm.sh
-bash scripts/build-preview-wasm.sh
-bash scripts/build-board-wasm.sh
-note "web bundle (flutter build web)"
-# Flutter does not remove retired inputs from an incremental output directory.
-rm -rf clients/mica_flutter/build/web/{*,.[!.]*,..?*}
-(cd clients/mica_flutter && "$FLUTTER" pub get >/dev/null && "$FLUTTER" test test/web_engine_fresh_test.dart && "$FLUTTER" build web --release --no-web-resources-cdn)
-bash clients/mica_flutter/tool/gfonts/mirror.sh --check
-rm -rf deploy/web && mkdir -p deploy/web
-cp -r clients/mica_flutter/build/web/. deploy/web/
+note "pure-Rust WebAssembly bundle (clients/mica_rust -> deploy/web)"
+bash scripts/build-web-rust.sh
 
 for img in api web cli; do
   note "build mica-$img:v$version"
-  # --provenance/--sbom off: the attestation manifest turns the image into a
-  # multi-manifest index some registries / `docker save | load` cannot resolve.
   docker build --provenance=false --sbom=false -f "deploy/Dockerfile.$img" \
     -t "$acr/mica-$img:v$version" -t "$hub/mica-$img:v$version" .
 done
@@ -48,9 +28,6 @@ if [ "${PUSH:-1}" = 1 ]; then
     docker push "$acr/mica-$img:v$version"
     docker push "$hub/mica-$img:v$version"
   done
-  # Read by `just ship` on a resume: these exact images are already in both
-  # registries, so a re-run after a later step failed need not rebuild and
-  # re-push them (REBUILD=1 forces it).
   out=$(dist_dir "$version")
   mkdir -p "$out"
   git rev-parse HEAD > "$out/.images-pushed"

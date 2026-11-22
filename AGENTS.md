@@ -15,48 +15,42 @@
 - 本机 Git/编辑 hooks 可增量刷新图谱；查询前检查新鲜度，必要时运行 `code-review-graph update`，未建图时运行 `code-review-graph build`。
 - MCP 未接入时可用 CLI；图谱不可用或覆盖不足，以及查字符串、配置、脚本等非代码内容时，回退到 `rg` / 文件读取。
 
-## 架构与数据不变量
+## 全栈纯 Rust 三层架构与数据不变量
 
-- **Rust-first 数据面**：核心文档模型、CRDT、同步与数据处理放在 Rust；Dart 负责 UI 与编辑器热路径。CRDT 文档核心只有一份（mica-core `MicaDoc`）：服务端原生、桌面经 FFI、Web 经 wasm（`crates/doc-wasm`），两端 Dart 共用 `SyncDocReplica` 与 `BlockOpMirror`，**禁止在 Dart 里重写编辑/合并规则**。
-- **Markdown 只有一份实现**：解析、序列化、HTML 都在 Rust `crates/md-core`；服务端 / CLI / MCP 原生调用，桌面经 FFI、Web 经 wasm。Dart 只通过 `lib/markdown/markdown_codec.dart` 的 `MarkdownCodec` 调用，**禁止在 Dart 里新增 Markdown 语法逻辑**（粘贴启发式放 `lib/editor/paste_repair.dart`，并写明为什么不是语法）。`scripts/check-dart-markdown.sh` 按语法特征拦截，必须留在 Dart 的键盘输入规则逐行标 `md-syntax-ok: 理由`（成段的用 `md-syntax-ok-begin/end` 圈出，不整文件豁免）。见 [单一实现专项](docs/single-source/README.md)。
-- **渲染扩展走机制**：通过 `AtomicBlockRenderer` 注册表扩展，避免继续向 `render.dart` 堆分支。见 [渲染架构](docs/architecture/render-architecture.md)。
+- **100% 全栈纯 Rust（L1 + L2 + L3，零 Dart / Flutter / FFI 桥接）**：
+  - **L1 数据与渲染引擎**（`crates/mica-core`, `crates/md-core`, `crates/mica-board`, `crates/api-types`, `crates/interchange`, `crates/api-server`, `crates/cli`, `crates/mcp-server`, `crates/md-wasm` SDK）：CRDT 文档核心只有一份（`mica-core::MicaDoc`），Markdown 解析/序列化/HTML/公式(`ratex-*`)/图表(`merman`) 只有一份（`crates/md-core`）。
+  - **L2 无头客户端内核**（`crates/mica-board::session`, `crates/mica-sync`, `crates/mica-editor`, `crates/mica-client`）：纯 Rust 零 UI 依赖，双目标支持原生与 `wasm32`。
+  - **L3 原生 UI 壳（`clients/mica_rust`）**：路线二-B（自有 `mica-editor` + `nsh-core` / `nsh-base default-features=false` 原生 `virtual_list` + 原生 IME 代理 + `nsh::Canvas`），直接调用 L1 + L2 Rust API，覆盖桌面与 WebAssembly。
+- **渲染扩展走机制**：编辑器原子块通过 [atomic_blocks.rs](clients/mica_rust/src/atomic_blocks.rs) 注册表扩展（公式 `ratex`、Mermaid `merman`、内嵌白板 `mica-board`、代码块、图片），避免向 `editor_view.rs` 堆分支；`virtual_list` 的 `count` 和 `keys` 严禁订阅正文编辑信号，只订阅 `structure_rev`，块内更新走 per-block 细粒度 `Signal`。
 - **Markdown round-trip 是不变量**：保持 CommonMark / GFM 与现有方言兼容，写侧输出规范化子集；改解析或导出时检查 [规范记分牌](docs/architecture/commonmark-scoreboard.md) 及对应回归测试。
-- **folder 是唯一容器，page 是叶子**：服务端写 `parent_view_id` 必须经过 `documents::ensure_parent_accepts_children`；父节点须为同工作区、未删除的 folder，保留 `views_parent_must_be_folder` DB 触发器兜底。本地库由 mica-core `ensure_valid_parent` 判定（含防环），不在 FFI 包装层。
-- **业务规则只有一个权威判定点**：唯一替换、上传配额、父节点合法性等，由持有写锁或事务的数据层最终判定；UI 和调用方的预检只改善交互。删除、回收、改密等操作在同一个事务边界内完成全部必要的状态更新，不靠调用方记得补步骤。服务端与本地库各有一份的规则（恢复、页树）：判定放 `mica_core::tree_rules`，SQL 规则改动须让 `contracts/tree-rules.json` 两侧回放都通过。适用于关系型状态；CRDT 文档正文只能在写入入口的锁里判定。见 [开发教训 §2](docs/dev/lessons.md)。
-- 编辑器使用 marks-over-plain-text；硬换行按现有反斜杠加换行约定存储。块级嵌套保持扁平模型：`data.indent` 为列表层级，`data.quote` / `qbreak` 为引用深度/分组，`data.li` 为 item 容器子块；HTML 导出重建嵌套。代码字体使用 `kMonoFont`。
-- 快捷键变更同步编辑器/应用级处理、设置面板和 [快捷键清单](docs/features/shortcuts.md)；按当前符号定位实现，不照搬旧文件位置。
+- **folder 是唯一容器，page 是叶子**：服务端写 `parent_view_id` 必须经过 `documents::ensure_parent_accepts_children`；父节点须为同工作区、未删除的 folder，保留 `views_parent_must_be_folder` DB 触发器兜底。本地库由 `mica-core` `ensure_valid_parent` 与 `mica_core::tree_rules` 判定（含防环）。
+- **业务规则只有一个权威判定点**：唯一替换、上传配额、父节点合法性等，由持有写锁或事务的数据层最终判定；UI 预检只改善交互。服务端与本地库共用的树规则放 `mica_core::tree_rules`，SQL 规则改动须让 `contracts/tree-rules.json` 两侧回放都通过。见 [开发教训 §2](docs/dev/lessons.md)。
+- 编辑器使用 marks-over-plain-text（UTF-16 偏移）；硬换行按反斜杠加换行约定存储；块级嵌套保持扁平模型（`data.indent` / `data.quote` / `qbreak` / `data.li`），HTML 导出重建嵌套。
+- 快捷键变更同步编辑器/应用级处理、设置面板和 [快捷键清单](docs/features/shortcuts.md)。
 
 ## 代码结构与大小门禁
 
-- API 路由放入 `crates/api-server/src/routes/<域>/`，共享 helper / DTO 在对应 `mod.rs` 再导出；Markdown 引擎（`crates/md-core`）按 `parse/`（block / inline / entities）、`serialize/`（export_md）、`html/` 管线归位，公开 API 在 `api.rs` 并由 `lib.rs` 再导出；`crates/markdown` 只做门面，不放语法逻辑。
-- Flutter 的 `part` 可整理同库代码，但不减少库耦合或库行数；需要真正拆分时建立独立 library。
-- 门禁以 [scripts/check-file-size.sh](scripts/check-file-size.sh) 和 [预算表](scripts/file-size-budget.txt) 为准：Dart 按 library（root + 全部 part），Rust 按文件，包含桌面 FFI crate。
-- 普通单元硬上限 8,000 行、软上限 4,000 行；预算登记的存量单元跳过硬限，但**只许减不许增**，修改前先看预算。
-- 增量检查 `--diff <base>` 还限制：超过 2,000 行的存量单元净增不得超过 300 行；同库各 part 合并计量。
-- 生成代码等豁免须在 `EXEMPT_RE` 或预算表显式登记并说明理由。提交前运行 `just check-structure`；背景见 [拆分计划](docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md)。
+- API 路由放入 `crates/api-server/src/routes/<域>/`，共享 helper / DTO 在对应 `mod.rs` 再导出；Markdown 引擎（`crates/md-core`）按 `parse/`、`serialize/`、`html/` 管线归位，公开 API 在 `api.rs` 并由 `lib.rs` 再导出；`crates/markdown` 只做门面，不放语法逻辑。
+- 门禁以 [scripts/check-file-size.sh](scripts/check-file-size.sh) 和 [预算表](scripts/file-size-budget.txt) 为准：按 Rust 单文件扫描 `crates/*/src` 与 `clients/mica_rust/src`。
+- 普通单元硬上限 8,000 行、软上限 4,000 行；预算登记的存量单元只许减不许增；增量检查 `--diff <base>` 限制超过 2,000 行的存量文件净增不得超过 300 行。提交前运行 `just check-structure`。
 
 ## 依赖与平台边界
 
-- 核心数据面优先自研、最小化第三方依赖；平台粘合层和复杂领域渲染可用成熟库。新增依赖须有明确豁免并说明理由，不能因已有依赖而无限扩展。
-- 已批准的依赖及用途：
-  - 传输与解析：`http`、`web_socket_channel`、`xml`、`html`；数学渲染：Rust `ratex-*`。
-  - 桌面集成：`window_manager`、`screen_retriever`、`tray_manager`、`file_picker`、`pasteboard`。
-  - 图形与导出：Rust `merman`、`webview2-com`，Dart `flutter_svg`。
-  - Web 引擎绑定：Rust `wasm-bindgen`（仅 `crates/md-wasm` Markdown 引擎及其按需渲染器、`crates/doc-wasm` 文档/CRDT 核心）+ 构建工具 `wasm-bindgen-cli`（同号钉死，`scripts/check-md-wasm-toolchain.sh` 校验）；`doc-wasm` 只为 wasm 目标打开已有依赖 `getrandom`（`wasm_js`）/ `uuid`（`js`）的浏览器后端。
-- 平台专用依赖用条件导入 / `cfg` 隔离，禁止进入不支持的平台 bundle；`webview2-com` 只用于 Windows。
-- 托盘仅 Windows 支持；注册失败时降级 `minimize()`，不可 `hide()` 导致窗口无法找回。Mermaid 配色沿用 host theme profile，保留 SVG CSS 属性展开的兼容处理。
+- 核心数据面优先自研、最小化第三方依赖；复杂领域渲染与原生 UI 壳复用成熟 Rust crate。
+- 已批准的关键依赖：`ratex-*`（数学渲染）、`merman`（Mermaid 渲染）、`yrs`（CRDT）、`nsh-core` / `nsh-base`（`default-features = false`）/ `nsh-platform-{windows,macos,linux,web}`（L3 原生 UI 壳）、`wasm-bindgen` + `wasm-bindgen-cli`（仅 `crates/md-wasm` 对外 `mica-md-js` SDK，`scripts/check-md-wasm-toolchain.sh` 校验）。
+- 平台专用依赖用 `cfg` / target 依赖隔离，禁止进入不支持的平台。Mermaid 配色沿用 host theme profile，保留 SVG CSS 属性展开的兼容处理。
 
 ## 验证、构建与发布
 
-- 跨 await 写共享状态、或持有锁/连接/临时文件的改动，按 [异步评审清单](docs/dev/async-review-checklist.md) 逐条过：结果绑定账号/服务器/会话代际（写入绑定文档版本），提交前检查归属，延迟闭包入队时捕获数据，资源走 finally / RAII。
-- Bug 修复配回归测试，并通过真实运行路径验证；Web UI 用 Playwright 检查并截图，桌面问题须在桌面验证。提交说明写根因。
-- 工具链以 `.fvmrc` / `rust-toolchain.toml` 为准；升级时同步构建镜像与 CI，验证桌面 Cargokit 实际使用的工具链。不要写死本机安装路径或对正常构建额外限流。
-- Windows 的 `just` recipe 使用 Git Bash；网络受限时按环境配置 Flutter / Pub 镜像。Windows runner C++ 按 warning-as-error 处理，注释保持 ASCII，环境变量读取用 `GetEnvironmentVariableW`。
-- 按改动范围运行测试；共享 Rust crate 变更还需检查 `clients/mica_flutter/rust`，它不属于根 workspace。DB 测试必须连接可用 Postgres；静默跳过不算通过。
-- 门禁要证明测试**真的跑了**：指定测试用 `scripts/lib-receipt.sh` 的回执（通过数低于下限即失败），DB 测试走 `mica_infra::test_database_url()`，浏览器套件走 `scripts/browser-tests.sh`，FFI 测试用 `initCheckedNativeRust` 校验库的源码指纹；被 `.gitignore` 藏起的源码文件由 `scripts/check-ignored-sources.sh` 拒绝。见 [开发教训 §3](docs/dev/lessons.md)。
-- 改动完成后自动推送 `main`，无需逐步请示；**发版须等用户明确要求**。用户要求发版后，版本 bump → 门禁 → tag / 构建 → 部署 → 验证连续做完。
-- 默认递增补丁号，minor 由用户决定；版本一致性与锁文件由现有脚本校验。发布步骤以 [发布文档](docs/ops/release.md) 为准，命令见 `just --list`，不得绕过发布门禁。
-- **GitHub Actions 使用官方 runner，保持手动入口**：正式发布从 `main` 手动启动一次 `Ship`，后续 CI、打标签、发布、部署和验证由工作流接续。`Ship` 默认彩排；`CI` 默认 `scope=full`。额度用完或 Actions 不可用时走本地流程（`just ci`、`just release`、`just ship` 等）。常规推送 `main` 前运行本地 CI；`just ci` 包含四个独立浏览器端到端脚本，也可用 `just ci rust` / `just ci flutter` / `just ci e2e` 分项验证；真实服务栈和 Windows 集成测试仍须按改动范围另跑。
+- 跨 await 写共享状态、或持有锁/连接/临时文件的改动，按 [异步评审清单](docs/dev/async-review-checklist.md) 逐条过：结果绑定账号/服务器/会话代际，提交前检查归属，资源走 RAII。
+- Bug 修复配回归测试，并通过真实运行路径验证；提交说明写根因。
+- 工具链以 `rust-toolchain.toml` 为准；升级时同步构建镜像与 CI。不要写死本机安装路径或对正常构建额外限流。
+- Windows 的 `just` recipe 使用 Git Bash。
+- 按改动范围运行测试；共享 Rust crate 变更须同时验证 `clients/mica_rust`（独立 workspace）。DB 测试必须连接可用 Postgres；静默跳过不算通过。
+- 门禁要证明测试**真的跑了**：指定测试用 `scripts/lib-receipt.sh` 的 `cargo_receipt`（通过数低于下限即失败），DB 测试走 `mica_infra::test_database_url()`，被 `.gitignore` 藏起的源码文件由 `scripts/check-ignored-sources.sh` 拒绝。见 [开发教训 §3](docs/dev/lessons.md)。
+- 改动完成后自动推送 `main`，无需逐步请示（特性分支开发除外）；**发版须等用户明确要求**。用户要求发版后，版本 bump → 门禁 → tag / 构建 → 部署 → 验证连续做完。
+- 默认递增补丁号，minor 由用户决定；版本一致性与两份锁文件（`Cargo.lock` + `clients/mica_rust/Cargo.lock`）由 `scripts/manifest-version.sh` 和 `scripts/release-tree-check.sh` 校验。发布步骤以 [发布文档](docs/ops/release.md) 为准，命令见 `just --list`，不得绕过发布门禁。
+- **GitHub Actions 使用官方 runner，保持手动入口**：正式发布从 `main` 手动启动一次 `Ship`，后续 CI、打标签、发布、部署和验证由工作流接续。额度用完或 Actions 不可用时走本地流程（`just ci`、`just release`、`just ship` 等）。常规推送 `main` 前运行本地 CI（`just ci` / `just ci rust` / `just ci client`）。
 - 部署后验证 `/api/health` 版本，并冒烟测试本版实际改动。
 - 发版时同步路线图：未完成项留在 [roadmap.md](docs/plans/roadmap.md)，完成项移入 [roadmap-done.md](docs/plans/roadmap-done.md)；明确不做的条目删除，理由写入提交信息。
 

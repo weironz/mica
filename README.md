@@ -38,21 +38,9 @@ server, syncs in real time, and can be shared. You switch between them
 explicitly, and the app shows one at a time, so where a page lives is always
 unambiguous.
 
-**The editor is drawn, not composed.** It's a single Flutter `RenderBox` that
-paints text, carets, selections and blocks itself, over a
-marks-over-plain-text model — not a widget tree, not a `WebView`, not a wrapped
-third-party editor. Caret and selection behave identically on every platform,
-IME composition (Chinese, Japanese, Korean) works natively, and long documents
-stay responsive because painting is clipped to the viewport.
+**100% Fullstack Rust (L1 Data & Engines + L2 Headless Client Cores + L3 Native Shell).** The server, CLI, MCP proxy, Markdown/math/Mermaid/board engines, CRDT sync engine, headless block editor (`mica-editor`), and cross-platform UI client (`clients/mica_rust`, built on NSH native primitives for desktop and WebAssembly) are all written in Rust — zero Dart/Flutter, zero FFI/JSON bridge overhead.
 
-**One CRDT engine everywhere.** Sync runs on `yrs`, the Rust port of Yjs, and it is
-the same Rust document core on every platform: natively on the server, over FFI on
-the desktop, and compiled to WebAssembly in the browser. Every edit rule has exactly
-one implementation, and every platform speaks one authoritative format.
-
-**A Rust data plane.** Everything that parses files, walks archives, hashes bytes
-or talks to storage runs in Rust. Dart owns painting, caret and selection,
-hit-testing, and the editor's latency-critical paths.
+**One CRDT engine everywhere.** Sync runs on `yrs` (`mica-core::MicaDoc`), shared directly in Rust across the API server, local SQLite vault (`mica-sync`), desktop client, and WebAssembly build. Every edit rule has exactly one implementation, and every platform speaks one authoritative format.
 
 ### Editing
 

@@ -1,16 +1,5 @@
-# 巨石单元棘轮预算 —— 登记单元只许减不许增（docs/reviews/code-optimization/OPTIMIZATION_PLAN_ROUND2.md 第 5 项）。
+# 单元行数棘轮基线表（供 scripts/check-file-size.sh 读取）。
+# 格式：<基线行数> <仓库相对路径>
 #
-# 规则：CI（scripts/check-file-size.sh）逐行核对，当前行数超过登记值即失败；
-# 低于登记值则通过并提示可收紧基线。目的：让 4,000 行警告清单成为只收敛
-# 不扩张的目标——拆掉一个单元（或降到软上限以下）就删除对应行。
-#
-# 2026-10-23（#87）起计量单位改为「库」：Dart 条目 = library root + 其全部
-# part 的合计（拆 part 不再绕过棘轮）；Rust 仍按文件。登记过棘轮的单元跳过
-# 8,000 硬限——棘轮本身更紧（涨一行即失败）。原按文件分立的 part 条目
-# （dialogs / main_shell / main_workspace_view / editor）随之并为库条目。
-#
-# 格式：<基线行数> <library root 相对路径>（# 开头为注释）。新增条目 = 承认该单元
-# 当前已超软上限 4,000 行，需要一句为什么留着的理由（写在行内注释里）。
-11675 clients/mica_flutter/lib/main.dart               # 外壳一整库（main_shell/workspace_view/dialogs 等 part 合计；设置对话框、跨工作区移动/复制对话框已拆为独立库 ui/settings_dialog.dart、ui/transfer_dialog.dart）；#81 接线后 tree_nav/editor_pane/world×2 四个新 part 并入本库口径（此前为未登记的独立文件，全库净行数仍降），字体预热库已拆出，views/auth/sync 域已控制器化；自更新 UI 与状态、对话框、偏好同步、侧栏/页行/面包屑、外壳面板和启动配置已拆为独立库
-6594 clients/mica_flutter/lib/editor/editor.dart       # 编辑器 State 主体 + hooks/ai/dialogs/resources/history_ui 五个 part 的合计；行内AI流式对话框、图片编辑对话框、公式编辑对话框已独立成库
-5501 clients/mica_flutter/lib/editor/render.dart      # 自绘渲染管线与三个 part 合计；布局循环前解析光标标量，保留 #63 的代码块复用快路径；2026-11-01 评估未拆：block_renderers 读渲染对象 26 个私有字段，独立成库须先设计渲染器上下文接口（只超软上限，不值得为此公开渲染内部）
+# 全栈纯 Rust 切换完成（2026-11-22）：原 Flutter 巨石（main.dart / editor.dart /
+# render.dart）已随 clients/mica_flutter 一同退役，当前无超硬上限存量豁免项。

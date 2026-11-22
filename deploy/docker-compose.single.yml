@@ -6,12 +6,9 @@
 # Then open http://<SERVER_IP>/. Migrations are embedded in the API binary and
 # run at startup, so there is no separate migrate step.
 #
-# NOTHING IS BUILT HERE — every image is pulled. This used to build the API from
-# source and stage a Flutter bundle into ./deploy/web with a shell script, which
-# meant a machine needed the Rust and Flutter toolchains just to run a notes app,
-# and the build path silently drifted from the real one because nobody ran it.
-# The published `mica-web` image already carries nginx, its config and the
-# bundle; `mica-api` is the same binary the maintainer's own server runs.
+# NOTHING IS BUILT HERE — every image is pulled. The published `mica-web` image
+# already carries nginx, its config and the pure-Rust WebAssembly bundle;
+# `mica-api` is the same binary the maintainer's own server runs.
 #
 # The only difference from deploy/docker-compose.yml (that server's stack) is the
 # front door: it publishes no host ports and is routed by an existing Traefik

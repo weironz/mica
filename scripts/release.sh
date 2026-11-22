@@ -41,7 +41,7 @@ bash scripts/check-migration-tracking.sh
 # The two quickstart docs are on it because release-bump moves their `RELEASE=`
 # pin: the gate requires those docs to name the version being released, so a bump
 # that skipped them could never pass its own gate (#125).
-bump_files=(Cargo.toml Cargo.lock clients/mica_flutter/pubspec.yaml clients/mica_flutter/lib/main.dart README.md docs/ops/deploy.md)
+bump_files=(Cargo.toml Cargo.lock clients/mica_rust/Cargo.toml clients/mica_rust/Cargo.lock clients/mica_rust/installer/mica.iss README.md docs/ops/deploy.md)
 
 # Refuse on a dirty tree BEFORE touching anything: the bump edits six files, and
 # once it has, "what did I have uncommitted?" is no longer answerable.

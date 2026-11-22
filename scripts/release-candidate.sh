@@ -40,7 +40,7 @@ prepare() {
   git -c user.name='github-actions[bot]' \
       -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
       commit -m "chore(release): $version" -- Cargo.toml Cargo.lock README.md \
-      clients/mica_flutter/lib/main.dart clients/mica_flutter/pubspec.yaml docs/ops/deploy.md
+      clients/mica_rust/Cargo.toml clients/mica_rust/Cargo.lock clients/mica_rust/installer/mica.iss docs/ops/deploy.md
   [ -z "$(git status --porcelain)" ] || fail "version bump left other changes"
   candidate=$(git rev-parse HEAD)
   local ref="refs/heads/ship-candidates/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"

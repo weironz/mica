@@ -1,39 +1,23 @@
-# Self-contained web image: nginx + the prebuilt Flutter bundle + routing.
-# Build context is the repo root AFTER `just web-build` staged the bundle:
+# Self-contained web image: nginx + the prebuilt pure-Rust WebAssembly bundle.
+# Build context is the repo root AFTER `just build-web` staged deploy/web:
 #   docker build -f deploy/Dockerfile.web -t willdockerhub/mica-web:vX.Y .
 FROM nginx:alpine
-# Modes set HERE, not inherited from whatever machine staged the bundle. COPY
-# keeps the build context's modes, and nginx's workers read as the `nginx` user:
-# v0.13.60 was the first image built on a self-hosted runner whose umask made
-# the bundle 0600/0700, and production answered every page with 403. 0755 on the
-# bundle because one --chmod covers files and directories alike — directories
-# need the x bit, and an x bit on a static file is inert.
 COPY --chmod=0644 deploy/nginx.conf /etc/nginx/nginx.conf
 COPY --chmod=0755 deploy/web /usr/share/nginx/html
-# Brotli copies of every JS/wasm file, served by nginx.conf's `\.(js|wasm)$`
-# block to clients that accept `br` (about a quarter smaller than gzip on
-# canvaskit and main.dart.js, which a cold start waits on). Written here, from
-# the very files being shipped, so a `.br` can never be older than its source;
-# the stock nginx image has no Brotli module, hence files rather than on-the-fly.
+# Precompress JS/WASM assets with Brotli so nginx serves `.br` directly.
 RUN apk add --no-cache brotli \
   && find /usr/share/nginx/html -type f \( -name '*.js' -o -name '*.wasm' \) -size +1k \
        -exec brotli --best --keep {} + \
   && apk del brotli \
-  && test -s /usr/share/nginx/html/main.dart.js.br \
-  && test -s /usr/share/nginx/html/canvaskit/canvaskit.wasm.br \
-  && test -s /usr/share/nginx/html/canvaskit/chromium/canvaskit.wasm.br
-# Refuse incomplete engines or retired assets before they reach a deploy.
-RUN test ! -e /usr/share/nginx/html/yjs_bundle.js \
+  && test -s /usr/share/nginx/html/mica_rust.wasm.br \
+  && test -s /usr/share/nginx/html/nsh.js.br
+# Refuse incomplete pure-Rust bundles or retired Flutter/JS assets.
+RUN test ! -e /usr/share/nginx/html/main.dart.js \
+  && test ! -e /usr/share/nginx/html/yjs_bundle.js \
   && test ! -e /usr/share/nginx/html/mermaid.min.js \
-  && test -s /usr/share/nginx/html/mica_doc/mica_doc_bg.wasm \
-  && test -s /usr/share/nginx/html/mica_md/mica_md_bg.wasm \
-  && test -s /usr/share/nginx/html/mica_preview_worker.js \
-  && test -s /usr/share/nginx/html/mica_preview/math.js \
-  && test -s /usr/share/nginx/html/mica_preview/math_bg.wasm \
-  && test -s /usr/share/nginx/html/mica_preview/mermaid.js \
-  && test -s /usr/share/nginx/html/mica_preview/mermaid_bg.wasm \
-  && test -s /usr/share/nginx/html/mica_board/board.js \
-  && test -s /usr/share/nginx/html/mica_board/board_bg.wasm \
-  && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -x /usr/share/nginx/html/assets' \
-  || { echo "web bundle is incomplete, contains retired assets, or is unreadable by nginx" >&2; exit 1; }
+  && test -s /usr/share/nginx/html/index.html \
+  && test -s /usr/share/nginx/html/nsh.js \
+  && test -s /usr/share/nginx/html/mica_rust.wasm \
+  && su -s /bin/sh nginx -c 'test -r /usr/share/nginx/html/index.html && test -r /usr/share/nginx/html/mica_rust.wasm' \
+  || { echo "pure-Rust web bundle is incomplete, contains retired assets, or is unreadable by nginx" >&2; exit 1; }
 EXPOSE 80
