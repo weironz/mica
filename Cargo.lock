@@ -2179,6 +2179,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mica-client"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "mica-api-types",
+ "mica-board",
+ "mica-core",
+ "mica-editor",
+ "mica-md",
+ "mica-sync",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "mica-core"
 version = "0.1.0"
 dependencies = [
@@ -2201,6 +2218,19 @@ dependencies = [
  "serde_json",
  "uuid",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "mica-editor"
+version = "0.1.0"
+dependencies = [
+ "mica-core",
+ "mica-md",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -2286,6 +2316,19 @@ dependencies = [
  "mica-md",
  "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "mica-sync"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "mica-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+ "yrs",
 ]
 
 [[package]]

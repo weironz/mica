@@ -13,7 +13,10 @@ members = [
   "crates/md-wasm",
   "crates/mcp-server",
   "crates/mica-board",
+  "crates/mica-client",
   "crates/mica-core",
+  "crates/mica-editor",
+  "crates/mica-sync",
 ]
 resolver = "2"
 

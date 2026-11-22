@@ -13,6 +13,7 @@ pub mod layout;
 pub mod merge;
 pub mod model;
 pub mod routing;
+pub mod session;
 pub mod svg;
 
 use std::collections::HashMap;
@@ -25,6 +26,10 @@ pub use model::{
   NodeStyle, tech_icon_svg_inner,
 };
 pub use routing::route_edge;
+pub use session::{
+  ActiveOverlay, BoardCommand, BoardPatch, BoardSession, BoardTool, PendingConnector, Rect,
+  ResizeHandle, SnapGuide, SnapshotDelta, UiEffect,
+};
 pub use svg::render_board_svg;
 
 /// Parse a `mica-board` JSON payload and render it to a standalone SVG string.
