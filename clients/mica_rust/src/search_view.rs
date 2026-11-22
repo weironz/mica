@@ -1,13 +1,14 @@
 //! Floating modal workspace search (`Ctrl+Shift+F`) matching Mica's original
 //! `search_dialog.dart` — opens over the active document without replacing it,
-//! supports auto-focus, live title/body/board search, and Esc/backdrop dismiss.
+//! supports auto-focus, live title/body/board search, ArrowUp/ArrowDown/Enter/Esc
+//! keyboard navigation, and backdrop dismiss.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use mica_client::{PageTreeModel, SearchHit, search_cached_documents};
 use mica_md::{ParseMode, parse_body};
 use nsh_base::{button, input};
-use nsh_core::{geometry::px, prelude::*};
+use nsh_core::{SubmitBehavior, color::rgba, geometry::px, prelude::*};
 use uuid::Uuid;
 
 use crate::{mica_icons, mica_theme::palette};
@@ -21,11 +22,15 @@ pub fn search_modal_view(
 ) -> impl IntoElement {
   let query = signal(String::new());
   let hits: Signal<Vec<SearchHit>> = signal(Vec::new());
+  let selected_idx: Signal<usize> = signal(0);
 
   let tree_q = tree.clone();
   let docs_q = docs.clone();
   let close_bg = on_close.clone();
   let close_btn = on_close.clone();
+  let close_key = on_close.clone();
+  let open_submit = on_open_doc.clone();
+  let close_submit = on_close.clone();
 
   view()
     .test_id("search-modal-backdrop")
@@ -73,6 +78,7 @@ pub fn search_modal_view(
               input()
                 .test_id("search-query-input")
                 .auto_focus(true)
+                .submit_behavior(SubmitBehavior::Submit)
                 .placeholder("搜索工作区中的页面标题、正文与内嵌白板...")
                 .flex_1()
                 .text_size(px(14.0))
@@ -82,7 +88,41 @@ pub fn search_modal_view(
                 .on_change(move |q: &str| {
                   query.set(q.to_owned());
                   let results = run_workspace_search(&tree_q.borrow(), &docs_q.borrow(), q);
+                  selected_idx.set(0);
                   hits.set(results);
+                })
+                .on_key_press(move |k: &str| match k {
+                  "ArrowDown" => {
+                    let count = hits.get_untracked().len();
+                    if count > 0 {
+                      let max_idx = count.saturating_sub(1);
+                      let cur = selected_idx.get_untracked().min(max_idx);
+                      selected_idx.set(cur.saturating_add(1).min(max_idx));
+                    }
+                  }
+                  "ArrowUp" => {
+                    let count = hits.get_untracked().len();
+                    if count > 0 {
+                      let max_idx = count.saturating_sub(1);
+                      let cur = selected_idx.get_untracked().min(max_idx);
+                      selected_idx.set(cur.saturating_sub(1));
+                    }
+                  }
+                  "Escape" => close_key(),
+                  _ => {}
+                })
+                .on_submit(move |_: &str| {
+                  let current = hits.get_untracked();
+                  if current.is_empty() {
+                    return;
+                  }
+                  let idx = selected_idx
+                    .get_untracked()
+                    .min(current.len().saturating_sub(1));
+                  if let Some(hit) = current.get(idx) {
+                    open_submit(hit.document_id, hit.title.clone());
+                    close_submit();
+                  }
                 }),
             )
             .child(
@@ -123,7 +163,14 @@ pub fn search_modal_view(
               .text_color(move || palette(dark_mode.get()).text_faint),
             ),
         )
-        .child(render_results_list(hits, dark_mode, on_open_doc, on_close))
+        .child(render_results_list(
+          query,
+          hits,
+          selected_idx,
+          dark_mode,
+          on_open_doc,
+          on_close,
+        ))
         .child(
           // Footer keyboard hints (matches original _KeyCap chips)
           view()
@@ -139,8 +186,9 @@ pub fn search_modal_view(
               view()
                 .flex_row()
                 .items_center()
-                .gap_3()
-                .child(key_hint("点击打开", dark_mode))
+                .gap_2()
+                .child(key_hint("↑↓ 选择", dark_mode))
+                .child(key_hint("Enter 打开", dark_mode))
                 .child(key_hint("Esc 关闭", dark_mode)),
             )
             .child(
@@ -166,7 +214,9 @@ fn key_hint(label: &'static str, dark_mode: Signal<bool>) -> impl IntoElement {
 }
 
 fn render_results_list(
+  query: Signal<String>,
   hits: Signal<Vec<SearchHit>>,
+  selected_idx: Signal<usize>,
   dark_mode: Signal<bool>,
   on_open_doc: Rc<dyn Fn(Uuid, String)>,
   on_close: Rc<dyn Fn()>,
@@ -178,33 +228,57 @@ fn render_results_list(
     .p_2()
     .child(dynamic(move || {
       let current_hits = hits.get();
+      let active_idx = selected_idx
+        .get()
+        .min(current_hits.len().saturating_sub(1));
       let p = palette(dark_mode.get());
       let mut list = view().w_full().gap_1();
       if current_hits.is_empty() {
+        let empty_msg = if query.get().trim().is_empty() {
+          "输入标题或正文关键词开始搜索"
+        } else {
+          "未找到匹配页面，请尝试其他关键词"
+        };
         return list.child(
           view().py_8().items_center().justify_center().child(
-            text("输入标题或正文关键词开始搜索")
+            text(empty_msg)
               .text_size(px(13.0))
               .text_color(p.text_ghost),
           ),
         );
       }
+      let transparent = rgba(0x0000_0000);
       for (i, hit) in current_hits.into_iter().enumerate() {
+        let is_selected = i == active_idx;
         let open = on_open_doc.clone();
         let close = on_close.clone();
         let doc_id = hit.document_id;
         let title = hit.title.clone();
         let snippet = hit.snippet.clone();
+        let row_bg = if is_selected {
+          p.surface_hover
+        } else {
+          p.surface_overlay
+        };
+        let accent_bar_bg = if is_selected { p.accent } else { transparent };
+        let icon_hex = if is_selected {
+          p.accent_hex
+        } else {
+          p.text_faint_hex
+        };
+
         list = list.child(
           button()
             .test_id(&format!("search-hit-{i}"))
-            .accessibility_label(format!("打开搜索结果 {}", title))
+            .accessibility_label(format!("打开搜索结果 {title}"))
             .w_full()
-            .px_3()
+            .px_2()
             .py_2()
             .rounded(px(8.0))
+            .bg(row_bg)
             .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
             .on_press(move || {
+              selected_idx.set(i);
               open(doc_id, title.clone());
               close();
             })
@@ -214,7 +288,15 @@ fn render_results_list(
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(mica_icons::file_doc(p.text_faint_hex))
+                .child(
+                  // Subtle left accent indicator bar for keyboard-selected row
+                  view()
+                    .w(px(3.0))
+                    .h(px(26.0))
+                    .rounded(px(2.0))
+                    .bg(accent_bar_bg),
+                )
+                .child(mica_icons::file_doc(icon_hex))
                 .child(
                   view()
                     .flex_1()

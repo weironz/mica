@@ -1,30 +1,35 @@
 //! Mica L3 pure-Rust cross-platform client (`clients/mica_rust`).
 //!
-//! 1:1 visual & interaction parity with Mica's warm-gray Notion-style shell:
-//! - Official blue-purple Mica brand mark (`assets/mica-logo.svg`).
-//! - 36px top bar: continuous 244px warm-gray sidebar top + `< >` real history navigation +
-//!   seamless browser-style multi-document tabs (`DocTabStrip`) + `+`.
-//! - Collapsible 244px left sidebar with interactive Workspace Switcher popover, recessed
-//!   Search pill (opening floating modal), collapsible page tree, Recycle Bin, interactive
-//!   bottom Account Menu popover, and Settings gear (opening two-column Settings modal).
-//! - Centered 740px paper editor with strict single-row breadcrumb + icon toolbar, native
-//!   cross-block mouse drag selection, rich inline spans, Enter/Backspace/↑↓/Ctrl+A/Z/Y/B/I/E,
-//!   and collapsible 248px right sidebar (Page Outline, Properties, Version Snapshots, Backlinks).
-//! - Direct L1 + L2 Rust core calls (zero Dart, zero Flutter, zero FFI/JSON bridge).
+//! Full M1~M4 pure-Rust architecture:
+//! - Frameless hidden system title bar (`TitleBarStyle::Hidden`) fused seamlessly into
+//!   the 36px Mica top tab strip with native Windows 11 Snap Layout caption buttons and
+//!   `window_drag` support (macOS native traffic lights).
+//! - Isomorphic flat-block `nsh-base::RichEditor` projected directly against `mica-core::MicaDoc`
+//!   (single yrs CRDT storage & UndoManager truth, zero duplicate editor engine), with
+//!   `nsh-base::Editor` real editable code blocks and RaTeX/Mermaid/Board `NodeView`s.
+//! - Resizable collapsible left sidebar (`200..=380px`) with Workspace Switcher, Favorites,
+//!   inline page/folder rename/reorder/delete, Recycle Bin, and bottom Account Menu.
+//! - Collapsible 248px right sidebar with live Page Outline jump, Document Properties,
+//!   real Version History list with one-click Restore, and Backlinks.
+//! - Floating keyboard-navigable Search modal (`Ctrl+Shift+F`), two-column Settings modal
+//!   (`Ctrl+,`) with Cloud Login/Sync & real disk Markdown/HTML/Bundle Import/Export,
+//!   and full-featured Dot-Grid Infinite Whiteboard & Mindmap with floating Inspector.
 
 pub mod atomic_blocks;
 pub mod board_view;
 pub mod editor_slash;
-pub mod editor_table;
 pub mod editor_view;
 pub mod mica_icons;
+pub mod mica_rich_bridge;
 pub mod mica_theme;
 pub mod net;
+pub mod node_views;
 pub mod right_sidebar;
 pub mod search_view;
 pub mod settings_view;
 pub mod sidebar;
 pub mod storage;
+pub mod transfer;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
@@ -34,14 +39,18 @@ use std::{
   rc::Rc,
 };
 
-use chrono::Utc;
+use chrono::{DateTime, Local, Utc};
 use mica_api_types::View;
 use mica_board::BoardSession;
 use mica_client::PageTreeModel;
-use mica_editor::{EditorBlock, EditorSession};
 use nsh_base::button;
 use nsh_core::{
-  element::{KeyOptions, on_key_with},
+  desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes},
+  element::{
+    KeyOptions,
+    desktop::{current_window, title_bar},
+    on_key_with,
+  },
   geometry::px,
   keymap::When,
   prelude::*,
@@ -49,10 +58,11 @@ use nsh_core::{
 use uuid::Uuid;
 
 use crate::{
-  editor_view::{EditorHeaderProps, EditorViewState},
+  editor_view::EditorHeaderProps,
+  mica_rich_bridge::MicaDocumentBridge,
   mica_theme::{install_mica_theme, palette},
   net::{CloudConfig, CloudConnector},
-  right_sidebar::RightSidebarProps,
+  right_sidebar::{RightSidebarProps, SnapshotEntry},
   settings_view::SettingsCallbacks,
   sidebar::SidebarCallbacks,
   storage::{DEFAULT_ORIGIN, VaultStore},
@@ -85,6 +95,7 @@ impl Component for MicaApp {
 
   fn view(_props: Self::Props, _scope: Scope<Self::Event>) -> impl IntoElement {
     install_mica_theme();
+    configure_hidden_title_bar();
     render_mica_app(VaultStore::open_default())
   }
 }
@@ -100,6 +111,41 @@ impl Component for MicaAppInMemory {
     install_mica_theme();
     render_mica_app(VaultStore::in_memory())
   }
+}
+
+fn configure_hidden_title_bar() {
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    let window = current_window();
+    let mut tb = TitleBarOptions::default();
+    tb.style = TitleBarStyle::Hidden;
+    tb.height = Some(px(36.0));
+    let mut attrs = WindowAttributes::default();
+    attrs.title_bar = Some(tb);
+    window.set(attrs);
+  }
+}
+
+fn format_version_entries(vault: &VaultStore, origin: &str, doc_id: Uuid) -> (Vec<SnapshotEntry>, Vec<String>) {
+  let raw = vault.list_versions(origin, doc_id);
+  let mut entries = Vec::with_capacity(raw.len());
+  let mut ids = Vec::with_capacity(raw.len());
+  for (idx, (ver_id, label, ts_ms)) in raw.into_iter().enumerate() {
+    let created_at = if ts_ms > 0 {
+      DateTime::from_timestamp_millis(ts_ms)
+        .map(|dt| dt.with_timezone(&Local).format("%m/%d %H:%M").to_string())
+        .unwrap_or_else(|| "刚刚".to_string())
+    } else {
+      "刚刚".to_string()
+    };
+    entries.push(SnapshotEntry {
+      id: idx as i64,
+      label,
+      created_at,
+    });
+    ids.push(ver_id);
+  }
+  (entries, ids)
 }
 
 fn render_mica_app(vault: VaultStore) -> impl IntoElement {
@@ -180,8 +226,11 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let active_folder_name = signal(initial_folder_name);
   let workspace_name = signal("Mica 本地工作区".to_string());
   let account_name = signal("local".to_string());
+  let account_email = signal(String::new());
+  let is_cloud_signed_in = signal(false);
   let active_mode = signal(MODE_DOC);
   let sidebar_open = signal(true);
+  let sidebar_width = signal(244.0f32);
   let right_panel_open = signal(false);
   let search_modal_open = signal(false);
   let settings_modal_open = signal(false);
@@ -194,36 +243,43 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     title: initial_title,
   }]);
 
-  // Real back/forward navigation history stack
   let nav_history: Rc<RefCell<Vec<(Uuid, String)>>> =
     Rc::new(RefCell::new(vec![(initial_doc_id, active_title.get_untracked())]));
   let nav_cursor = signal(0usize);
   let nav_len = signal(1usize);
 
-  // Favorites set
   let favorites: Rc<RefCell<HashSet<Uuid>>> = Rc::new(RefCell::new(HashSet::new()));
+  let favorite_pages: Signal<Vec<(Uuid, String)>> = signal(Vec::new());
   let active_is_favorite = signal(false);
 
-  // Snapshot count for active doc
-  let snapshot_count = signal(vault.list_version_count(&initial_origin, initial_doc_id));
+  let (init_snaps, init_snap_ids) = format_version_entries(&vault, &initial_origin, initial_doc_id);
+  let snapshot_count = signal(init_snaps.len());
+  let snapshots_sig = signal(init_snaps);
+  let snapshot_id_map: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(init_snap_ids));
 
   let dark_mode = signal(false);
   let locale_zh = signal(true);
   let server_url = signal("http://127.0.0.1:8080".to_string());
   let cloud_status = signal("模式：本地离线 SQLite Vault".to_string());
   let export_preview = signal(String::new());
+  let cloud_connector = Rc::new(RefCell::new(CloudConnector::new(CloudConfig {
+    server_url: server_url.get_untracked(),
+    access_token: None,
+    email: None,
+  })));
 
   let initial_md = docs_store
     .borrow()
     .get(&initial_doc_id)
     .cloned()
     .unwrap_or_default();
-  let editor_state = EditorViewState::new(session_for_markdown(&initial_md));
+  let bridge = MicaDocumentBridge::from_markdown(&initial_md);
+  node_views::register_mica_node_views(&bridge.session(), dark_mode);
 
   {
     let vault_p = vault.clone();
     let docs_p = docs_store.clone();
-    editor_state.set_on_persist(Rc::new(move |md: String, _crdt: Option<Vec<u8>>| {
+    bridge.set_on_persist(Rc::new(move |md: String, _crdt: Option<Vec<u8>>| {
       if let Some(doc_id) = active_doc.get_untracked() {
         let orig = active_origin.get_untracked();
         docs_p.borrow_mut().insert(doc_id, md.clone());
@@ -231,6 +287,34 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       }
     }));
   }
+
+  let refresh_snapshots: Rc<dyn Fn(Uuid)> = {
+    let v = vault.clone();
+    let id_map = snapshot_id_map.clone();
+    Rc::new(move |doc_id: Uuid| {
+      let orig = active_origin.get_untracked();
+      let (entries, ids) = format_version_entries(&v, &orig, doc_id);
+      snapshot_count.set(entries.len());
+      snapshots_sig.set(entries);
+      *id_map.borrow_mut() = ids;
+    })
+  };
+
+  let refresh_favorite_pages: Rc<dyn Fn()> = {
+    let favs = favorites.clone();
+    let tree_ref = tree.clone();
+    Rc::new(move || {
+      let set = favs.borrow();
+      let list: Vec<(Uuid, String)> = tree_ref
+        .borrow()
+        .visible_rows()
+        .into_iter()
+        .filter(|r| !r.is_folder && set.contains(&r.object_id))
+        .map(|r| (r.object_id, r.name))
+        .collect();
+      favorite_pages.set(list);
+    })
+  };
 
   let initial_board_json = vault
     .load_board_json(&initial_origin, DEFAULT_BOARD_ID)
@@ -246,7 +330,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
-  // Global window keyboard shortcuts (Ctrl+Shift+F Search, Ctrl+, Settings, Esc dismiss modals)
+  // Global window keyboard shortcuts
   on_key_with(
     "shift+mod+f",
     KeyOptions {
@@ -288,14 +372,14 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     },
   );
 
-  // Core document selection helper (with optional history push)
   let open_doc_internal: Rc<dyn Fn(Uuid, String, bool)> = {
     let docs = docs_store.clone();
-    let ed = editor_state.clone();
+    let br = bridge.clone();
     let tree_ref = tree.clone();
     let v = vault.clone();
     let favs = favorites.clone();
     let hist = nav_history.clone();
+    let ref_snaps = refresh_snapshots.clone();
     Rc::new(move |doc_id: Uuid, title: String, record_history: bool| {
       let orig = active_origin.get_untracked();
       let md = docs
@@ -305,12 +389,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .or_else(|| v.load_markdown(&orig, doc_id))
         .unwrap_or_default();
       docs.borrow_mut().insert(doc_id, md.clone());
-      ed.load_session(session_for_markdown(&md));
+      br.load_markdown(&md);
       active_doc.set(Some(doc_id));
       active_doc_id_str.set(doc_id.to_string());
       active_title.set(title.clone());
       active_is_favorite.set(favs.borrow().contains(&doc_id));
-      snapshot_count.set(v.list_version_count(&orig, doc_id));
+      ref_snaps(doc_id);
 
       if let Some(parent_name) = resolve_parent_folder_name(&tree_ref.borrow(), doc_id) {
         active_folder_name.set(parent_name);
@@ -376,12 +460,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
-  let on_new_page: Rc<dyn Fn()> = {
+  let create_page_with_content: Rc<dyn Fn(String, String)> = {
     let tree_ref = tree.clone();
     let docs = docs_store.clone();
     let v = vault.clone();
     let select = on_select_doc.clone();
-    Rc::new(move || {
+    Rc::new(move |name: String, markdown: String| {
       let orig = active_origin.get_untracked();
       let cur_ws = active_workspace_id.get_untracked();
       let cur_folder = active_folder_id.get_untracked();
@@ -393,7 +477,6 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .filter(|r| !r.is_folder)
         .count()
         + 1;
-      let name = format!("未命名页面 {idx}");
       let view_row = make_view(
         cur_ws,
         new_doc_id,
@@ -403,15 +486,30 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         &format!("z{idx:04}"),
       );
       let _ = v.save_view(&orig, &view_row);
-      let _ = v.save_markdown(&orig, new_doc_id, "");
+      let _ = v.save_markdown(&orig, new_doc_id, &markdown);
       {
         let mut t = tree_ref.borrow_mut();
         t.upsert_view(view_row);
         t.set_expanded(cur_folder, true);
       }
-      docs.borrow_mut().insert(new_doc_id, String::new());
+      docs.borrow_mut().insert(new_doc_id, markdown);
       tree_rev.set(tree_rev.get_untracked() + 1);
       select(new_doc_id, name);
+    })
+  };
+
+  let on_new_page: Rc<dyn Fn()> = {
+    let tree_ref = tree.clone();
+    let create = create_page_with_content.clone();
+    Rc::new(move || {
+      let idx = tree_ref
+        .borrow()
+        .visible_rows()
+        .iter()
+        .filter(|r| !r.is_folder)
+        .count()
+        + 1;
+      create(format!("未命名页面 {idx}"), String::new());
     })
   };
 
@@ -435,12 +533,117 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
+  let on_rename_view: Rc<dyn Fn(Uuid, String)> = {
+    let tree_ref = tree.clone();
+    let v = vault.clone();
+    let ref_favs = refresh_favorite_pages.clone();
+    Rc::new(move |vid: Uuid, next_name: String| {
+      let orig = active_origin.get_untracked();
+      let updated = {
+        let mut t = tree_ref.borrow_mut();
+        t.get(vid).cloned().map(|mut row| {
+          row.name = next_name.clone();
+          row.updated_at = Utc::now();
+          t.upsert_view(row.clone());
+          row
+        })
+      };
+      if let Some(row) = updated {
+        let _ = v.save_view(&orig, &row);
+        if active_doc.get_untracked() == Some(row.object_id) {
+          active_title.set(next_name.clone());
+        }
+        let mut tabs = open_tabs.get_untracked();
+        for tab in &mut tabs {
+          if tab.doc_id == row.object_id {
+            tab.title = next_name.clone();
+          }
+        }
+        open_tabs.set(tabs);
+        ref_favs();
+        tree_rev.set(tree_rev.get_untracked() + 1);
+      }
+    })
+  };
+
+  let on_trash_view: Rc<dyn Fn(Uuid)> = {
+    let tree_ref = tree.clone();
+    let v = vault.clone();
+    let ref_favs = refresh_favorite_pages.clone();
+    Rc::new(move |vid: Uuid| {
+      let orig = active_origin.get_untracked();
+      let updated = {
+        let mut t = tree_ref.borrow_mut();
+        t.get(vid).cloned().map(|mut row| {
+          row.is_deleted = true;
+          t.upsert_view(row.clone());
+          row
+        })
+      };
+      if let Some(row) = updated {
+        let _ = v.save_view(&orig, &row);
+        ref_favs();
+        tree_rev.set(tree_rev.get_untracked() + 1);
+      }
+    })
+  };
+
+  let on_move_view: Rc<dyn Fn(Uuid, i32)> = {
+    let tree_ref = tree.clone();
+    let v = vault.clone();
+    Rc::new(move |vid: Uuid, delta: i32| {
+      let orig = active_origin.get_untracked();
+      let swapped = {
+        let mut t = tree_ref.borrow_mut();
+        let rows = t.visible_rows();
+        let Some(pos_idx) = rows.iter().position(|r| r.view_id == vid) else {
+          return;
+        };
+        let target_parent = rows[pos_idx].parent_view_id;
+        let siblings: Vec<Uuid> = rows
+          .iter()
+          .filter(|r| r.parent_view_id == target_parent)
+          .map(|r| r.view_id)
+          .collect();
+        let Some(sib_idx) = siblings.iter().position(|&id| id == vid) else {
+          return;
+        };
+        let next_idx = (sib_idx as isize + delta as isize)
+          .clamp(0, siblings.len().saturating_sub(1) as isize) as usize;
+        if next_idx == sib_idx {
+          return;
+        }
+        let other_id = siblings[next_idx];
+        match (t.get(vid).cloned(), t.get(other_id).cloned()) {
+          (Some(mut a), Some(mut b)) => {
+            std::mem::swap(&mut a.position, &mut b.position);
+            if a.position == b.position {
+              a.position = format!("m{next_idx:04}");
+              b.position = format!("m{sib_idx:04}");
+            }
+            t.upsert_view(a.clone());
+            t.upsert_view(b.clone());
+            Some((a, b))
+          }
+          _ => None,
+        }
+      };
+      if let Some((a, b)) = swapped {
+        let _ = v.save_view(&orig, &a);
+        let _ = v.save_view(&orig, &b);
+        tree_rev.set(tree_rev.get_untracked() + 1);
+      }
+    })
+  };
+
   let on_switch_workspace: Rc<dyn Fn(WorkspaceEntry)> = {
     let tree_ref = tree.clone();
     let docs = docs_store.clone();
     let v = vault.clone();
-    let ed = editor_state.clone();
+    let br = bridge.clone();
     let hist = nav_history.clone();
+    let ref_snaps = refresh_snapshots.clone();
+    let ref_favs = refresh_favorite_pages.clone();
     Rc::new(move |entry: WorkspaceEntry| {
       workspace_menu_open.set(false);
       active_workspace_id.set(entry.id);
@@ -501,8 +704,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       active_doc.set(Some(doc_id));
       active_doc_id_str.set(doc_id.to_string());
       active_title.set(title.clone());
-      snapshot_count.set(v.list_version_count(&entry.origin, doc_id));
-      ed.load_session(session_for_markdown(&active_md));
+      ref_snaps(doc_id);
+      ref_favs();
+      br.load_markdown(&active_md);
       open_tabs.set(vec![OpenTab {
         doc_id,
         title: title.clone(),
@@ -517,67 +721,39 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
   let on_rename_active: Rc<dyn Fn(String)> = {
     let tree_ref = tree.clone();
-    let v = vault.clone();
+    let rename_v = on_rename_view.clone();
     Rc::new(move |next_name: String| {
       active_title.set(next_name.clone());
       let Some(doc_id) = active_doc.get_untracked() else {
         return;
       };
-      let orig = active_origin.get_untracked();
-      let updated = {
-        let mut t = tree_ref.borrow_mut();
-        let target_id = t
-          .visible_rows()
-          .into_iter()
-          .find(|r| !r.is_folder && r.object_id == doc_id)
-          .map(|r| r.view_id);
-        target_id.and_then(|vid| {
-          let mut row = t.get(vid)?.clone();
-          row.name = next_name.clone();
-          row.updated_at = Utc::now();
-          t.upsert_view(row.clone());
-          Some(row)
-        })
-      };
-      if let Some(row) = updated {
-        let _ = v.save_view(&orig, &row);
-        let mut tabs = open_tabs.get_untracked();
-        for tab in &mut tabs {
-          if tab.doc_id == doc_id {
-            tab.title = next_name.clone();
-          }
-        }
-        open_tabs.set(tabs);
-        tree_rev.set(tree_rev.get_untracked() + 1);
+      let target_id = tree_ref
+        .borrow()
+        .visible_rows()
+        .into_iter()
+        .find(|r| !r.is_folder && r.object_id == doc_id)
+        .map(|r| r.view_id);
+      if let Some(vid) = target_id {
+        rename_v(vid, next_name);
       }
     })
   };
 
   let on_trash_active: Rc<dyn Fn()> = {
     let tree_ref = tree.clone();
-    let v = vault.clone();
+    let trash_v = on_trash_view.clone();
     Rc::new(move || {
       let Some(doc_id) = active_doc.get_untracked() else {
         return;
       };
-      let orig = active_origin.get_untracked();
-      let updated = {
-        let mut t = tree_ref.borrow_mut();
-        let target_id = t
-          .visible_rows()
-          .into_iter()
-          .find(|r| !r.is_folder && r.object_id == doc_id)
-          .map(|r| r.view_id);
-        target_id.and_then(|vid| {
-          let mut row = t.get(vid)?.clone();
-          row.is_deleted = true;
-          t.upsert_view(row.clone());
-          Some(row)
-        })
-      };
-      if let Some(row) = updated {
-        let _ = v.save_view(&orig, &row);
-        tree_rev.set(tree_rev.get_untracked() + 1);
+      let target_id = tree_ref
+        .borrow()
+        .visible_rows()
+        .into_iter()
+        .find(|r| !r.is_folder && r.object_id == doc_id)
+        .map(|r| r.view_id);
+      if let Some(vid) = target_id {
+        trash_v(vid);
       }
     })
   };
@@ -585,6 +761,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let on_restore_view: Rc<dyn Fn(Uuid)> = {
     let tree_ref = tree.clone();
     let v = vault.clone();
+    let ref_favs = refresh_favorite_pages.clone();
     Rc::new(move |vid: Uuid| {
       let orig = active_origin.get_untracked();
       let updated = {
@@ -597,6 +774,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       };
       if let Some(row) = updated {
         let _ = v.save_view(&orig, &row);
+        ref_favs();
         tree_rev.set(tree_rev.get_untracked() + 1);
       }
     })
@@ -604,7 +782,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
   let on_toggle_favorite: Rc<dyn Fn()> = {
     let favs = favorites.clone();
-    let ed = editor_state.clone();
+    let br = bridge.clone();
+    let ref_favs = refresh_favorite_pages.clone();
     Rc::new(move || {
       if let Some(doc_id) = active_doc.get_untracked() {
         let mut set = favs.borrow_mut();
@@ -615,50 +794,127 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           set.insert(doc_id);
           true
         };
+        drop(set);
         active_is_favorite.set(now_fav);
-        ed.set_status_flash(if now_fav { "已加入收藏" } else { "已取消收藏" });
+        ref_favs();
+        br.set_status_flash(if now_fav { "已加入收藏" } else { "已取消收藏" });
       }
     })
   };
 
   let on_export_markdown: Rc<dyn Fn()> = {
-    let ed = editor_state.clone();
+    let br = bridge.clone();
     Rc::new(move || {
-      let md = ed.export_markdown();
-      let msg = if md.is_empty() {
-        "已导出 Markdown（空文档）".to_string()
-      } else {
-        format!("已导出 Markdown（{} 字节）：{}", md.len(), preview_head(&md))
-      };
-      export_preview.set(msg);
-      ed.set_status_flash("已导出 Markdown");
+      let md = br.export_markdown();
+      let title = active_title.get_untracked();
+      match transfer::export_markdown_file(&title, &md) {
+        Ok(path) => {
+          export_preview.set(format!("已导出 Markdown：{}（{} 字节）", path, md.len()));
+          br.set_status_flash("已导出 Markdown");
+        }
+        Err(err) => export_preview.set(format!("导出 Markdown 失败：{err}")),
+      }
     })
   };
 
   let on_export_html: Rc<dyn Fn()> = {
-    let ed = editor_state.clone();
+    let br = bridge.clone();
     Rc::new(move || {
-      let html = ed.export_html();
-      export_preview.set(format!("已导出 HTML（{} 字节）", html.len()));
-      ed.set_status_flash("已导出 HTML");
+      let html = br.export_html();
+      let title = active_title.get_untracked();
+      match transfer::export_html_file(&title, &html) {
+        Ok(path) => {
+          export_preview.set(format!("已导出 HTML：{}（{} 字节）", path, html.len()));
+          br.set_status_flash("已导出 HTML");
+        }
+        Err(err) => export_preview.set(format!("导出 HTML 失败：{err}")),
+      }
+    })
+  };
+
+  let on_export_bundle: Rc<dyn Fn()> = {
+    let tree_ref = tree.clone();
+    let docs = docs_store.clone();
+    let br = bridge.clone();
+    Rc::new(move || {
+      let ws_name = workspace_name.get_untracked();
+      let pages: Vec<(String, String)> = tree_ref
+        .borrow()
+        .visible_rows()
+        .into_iter()
+        .filter(|r| !r.is_folder)
+        .map(|r| {
+          let md = docs.borrow().get(&r.object_id).cloned().unwrap_or_default();
+          (r.name, md)
+        })
+        .collect();
+      match transfer::export_workspace_bundle(&ws_name, &pages) {
+        Ok(path) => {
+          export_preview.set(format!(
+            "已导出工作区备份：{}（共 {} 页）",
+            path,
+            pages.len()
+          ));
+          br.set_status_flash("已导出工作区备份");
+        }
+        Err(err) => export_preview.set(format!("导出备份失败：{err}")),
+      }
+    })
+  };
+
+  let on_import_markdown: Rc<dyn Fn(String)> = {
+    let create_page = create_page_with_content.clone();
+    Rc::new(move |path: String| match transfer::import_markdown_from_path(&path) {
+      Ok((title, md)) => {
+        export_preview.set(format!("已导入页面「{}」（{} 字节）", title, md.len()));
+        create_page(title, md);
+      }
+      Err(err) => export_preview.set(format!("导入失败：{err}")),
     })
   };
 
   let on_save_snapshot: Rc<dyn Fn()> = {
     let v = vault.clone();
-    let ed = editor_state.clone();
+    let br = bridge.clone();
+    let ref_snaps = refresh_snapshots.clone();
     Rc::new(move || {
       if let Some(doc_id) = active_doc.get_untracked() {
         let orig = active_origin.get_untracked();
         match v.create_version_snapshot(&orig, doc_id, Some("手动快照")) {
           Ok(()) => {
-            let count = v.list_version_count(&orig, doc_id);
-            snapshot_count.set(count);
+            ref_snaps(doc_id);
+            let count = snapshot_count.get_untracked();
             export_preview.set(format!("版本快照已保存（共 {count} 个）"));
-            ed.set_status_flash(format!("已保存快照 #{count}"));
+            br.set_status_flash(format!("已保存快照 #{count}"));
           }
           Err(e) => export_preview.set(format!("保存快照失败：{e}")),
         }
+      }
+    })
+  };
+
+  let on_restore_snapshot: Rc<dyn Fn(i64)> = {
+    let v = vault.clone();
+    let br = bridge.clone();
+    let docs = docs_store.clone();
+    let id_map = snapshot_id_map.clone();
+    let ref_snaps = refresh_snapshots.clone();
+    Rc::new(move |idx: i64| {
+      let Some(doc_id) = active_doc.get_untracked() else {
+        return;
+      };
+      let Some(ver_id) = id_map.borrow().get(idx as usize).cloned() else {
+        return;
+      };
+      let orig = active_origin.get_untracked();
+      match v.restore_version_markdown(&orig, doc_id, &ver_id) {
+        Ok(md) => {
+          docs.borrow_mut().insert(doc_id, md.clone());
+          br.load_markdown(&md);
+          ref_snaps(doc_id);
+          br.set_status_flash("已恢复历史版本");
+        }
+        Err(e) => br.set_status_flash(format!("恢复失败：{e}")),
       }
     })
   };
@@ -691,6 +947,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_select_doc: on_select_doc.clone(),
     on_new_page: on_new_page.clone(),
     on_new_folder,
+    on_rename_view,
+    on_trash_view,
+    on_move_view,
     on_open_board: Rc::new(move || {
       let next = if active_mode.get_untracked() == MODE_BOARD {
         MODE_DOC
@@ -735,22 +994,24 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     dark_mode,
     page_title: active_title,
     active_doc,
-    outline_items: editor_state.outline_signal(),
-    word_count_text: editor_state.word_count_signal(),
-    block_count: editor_state.block_count_signal(),
+    outline_items: bridge.outline_signal(),
+    word_count_text: bridge.word_count_signal(),
+    block_count: bridge.block_count_signal(),
     snapshot_count,
+    snapshots: snapshots_sig,
     tree: tree.clone(),
     docs: docs_store.clone(),
     tree_rev,
-    on_jump_block: {
-      let ed = editor_state.clone();
-      Rc::new(move |idx: usize| {
+    on_jump_pos: {
+      let br = bridge.clone();
+      Rc::new(move |pos: usize| {
         active_mode.set(MODE_DOC);
-        ed.select_block(idx);
+        br.focus_pos(pos);
       })
     },
     on_open_doc: on_select_doc.clone(),
     on_save_snapshot: on_save_snapshot.clone(),
+    on_restore_snapshot,
     on_close: Rc::new(move || right_panel_open.set(false)),
   });
 
@@ -760,6 +1021,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     server_url,
     cloud_status,
     export_preview,
+    account_email,
+    is_cloud_signed_in,
     on_toggle_theme: on_toggle_theme.clone(),
     on_toggle_locale: Rc::new(move || locale_zh.set(!locale_zh.get_untracked())),
     on_check_server: Rc::new(move |url: String| {
@@ -773,8 +1036,55 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         Err(err) => cloud_status.set(format!("离线 / 无法连接：{err}")),
       }
     }),
+    on_cloud_login: {
+      let cc = cloud_connector.clone();
+      Rc::new(move |url: String, email: String, password: String| {
+        let mut conn = CloudConnector::new(CloudConfig {
+          server_url: url.clone(),
+          access_token: None,
+          email: Some(email.clone()),
+        });
+        match conn.login(&email, &password) {
+          Ok(msg) => {
+            *cc.borrow_mut() = conn;
+            server_url.set(url);
+            account_email.set(email.clone());
+            account_name.set(email);
+            is_cloud_signed_in.set(true);
+            cloud_status.set(format!("已登录云端：{msg}"));
+          }
+          Err(err) => cloud_status.set(format!("登录失败：{err}")),
+        }
+      })
+    },
+    on_cloud_logout: {
+      let cc = cloud_connector.clone();
+      Rc::new(move || {
+        *cc.borrow_mut() = CloudConnector::new(CloudConfig {
+          server_url: server_url.get_untracked(),
+          access_token: None,
+          email: None,
+        });
+        is_cloud_signed_in.set(false);
+        account_email.set(String::new());
+        account_name.set("local".to_string());
+        cloud_status.set("已切换回本地离线 SQLite Vault".to_string());
+      })
+    },
+    on_sync_now: {
+      let cc = cloud_connector.clone();
+      Rc::new(move || {
+        let phase = cc.borrow().sync_phase_label();
+        match cc.borrow().check_health() {
+          Ok(ver) => cloud_status.set(format!("同步就绪（{phase} · 服务器 {ver}）")),
+          Err(err) => cloud_status.set(format!("同步检查失败：{err}")),
+        }
+      })
+    },
     on_export_markdown,
     on_export_html,
+    on_export_bundle,
+    on_import_markdown,
     on_save_snapshot,
     on_close: Rc::new(move || settings_modal_open.set(false)),
   });
@@ -791,28 +1101,35 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
     .child(
-      // 1. Original 36px top bar: Official Mica Logo + Sidebar Toggle | `< >` + Tabs + `+`
+      // 1. Frameless 36px fused top bar (`TitleBarStyle::Hidden` + `window_drag`)
       view()
         .h(px(36.0))
         .w_full()
         .flex_row()
         .items_end()
+        .window_drag(true)
         .bg(move || palette(dark_mode.get()).surface_sunken)
         .child(
           view()
             .w(move || {
               if sidebar_open.get() {
-                px(244.0)
+                px(sidebar_width.get())
               } else {
                 px(72.0)
               }
             })
             .h_full()
-            .px_3()
+            .pl(move || {
+              // Reserve space on macOS for traffic lights when hidden titlebar is active.
+              let inset = title_bar().left.0;
+              px(if inset > 0.0 { inset + 8.0 } else { 12.0 })
+            })
+            .pr_3()
             .flex_row()
             .items_center()
             .gap_2()
             .flex_shrink_0()
+            .window_drag(true)
             .bg(move || {
               let p = palette(dark_mode.get());
               if sidebar_open.get() {
@@ -831,30 +1148,37 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             .border_r_color(move || palette(dark_mode.get()).border_subtle)
             .child(mica_icons::mica_logo())
             .child(
-              button()
-                .test_id("toggle-sidebar-btn")
-                .accessibility_label("折叠或展开左侧边栏")
-                .w(px(26.0))
-                .h(px(26.0))
-                .items_center()
-                .justify_center()
-                .rounded(px(6.0))
-                .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                .on_press(move || sidebar_open.set(!sidebar_open.get_untracked()))
-                .child(dynamic(move || {
-                  mica_icons::sidebar_toggle(palette(dark_mode.get()).text_muted_hex)
-                })),
+              view().window_drag(false).child(
+                button()
+                  .test_id("toggle-sidebar-btn")
+                  .accessibility_label("折叠或展开左侧边栏")
+                  .w(px(26.0))
+                  .h(px(26.0))
+                  .items_center()
+                  .justify_center()
+                  .rounded(px(6.0))
+                  .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                  .on_press(move || sidebar_open.set(!sidebar_open.get_untracked()))
+                  .child(dynamic(move || {
+                    mica_icons::sidebar_toggle(palette(dark_mode.get()).text_muted_hex)
+                  })),
+              ),
             ),
         )
         .child(
-          // DocTabStrip: `<` `>` real history + open document tabs + `+`
+          // DocTabStrip: `<` `>` real history + open tabs + `+` + right caption button safe inset
           view()
             .flex_1()
             .h_full()
-            .px_2()
+            .pl_2()
+            .pr(move || {
+              let inset = title_bar().right.0;
+              px(if inset > 0.0 { inset + 8.0 } else { 8.0 })
+            })
             .flex_row()
             .items_end()
             .gap_1()
+            .window_drag(true)
             .child(
               view()
                 .h_full()
@@ -862,6 +1186,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                 .items_center()
                 .gap_1()
                 .pr_1()
+                .window_drag(false)
                 .child(
                   button()
                     .test_id("nav-back-btn")
@@ -909,7 +1234,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               let curr = active_doc.get();
               let mode = active_mode.get();
               let p = palette(dark_mode.get());
-              let mut strip = view().flex_row().items_end().gap_1();
+              let mut strip = view().flex_row().items_end().gap_1().window_drag(false);
               for (idx, tab) in tabs.iter().enumerate() {
                 let is_active = mode == MODE_DOC && curr == Some(tab.doc_id);
                 let sel_cb = sel_for_tabs.clone();
@@ -992,26 +1317,32 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               strip
             }))
             .child(
-              view().h_full().items_center().justify_center().pl_1().child(
-                button()
-                  .test_id("tab-new-page-btn")
-                  .accessibility_label("新建页面")
-                  .w(px(24.0))
-                  .h(px(24.0))
-                  .items_center()
-                  .justify_center()
-                  .rounded(px(6.0))
-                  .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
-                  .on_press(move || new_for_tabs())
-                  .child(dynamic(move || {
-                    mica_icons::plus(palette(dark_mode.get()).text_muted_hex)
-                  })),
-              ),
+              view()
+                .h_full()
+                .items_center()
+                .justify_center()
+                .pl_1()
+                .window_drag(false)
+                .child(
+                  button()
+                    .test_id("tab-new-page-btn")
+                    .accessibility_label("新建页面")
+                    .w(px(24.0))
+                    .h(px(24.0))
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                    .on_press(move || new_for_tabs())
+                    .child(dynamic(move || {
+                      mica_icons::plus(palette(dark_mode.get()).text_muted_hex)
+                    })),
+                ),
             ),
         ),
     )
     .child(
-      // 2. Main workspace body: Collapsible Left Sidebar + Editor/Board + Collapsible Right Sidebar
+      // 2. Main workspace body: Resizable Left Sidebar + RichEditor/Board + Collapsible Right Sidebar
       view()
         .flex_1()
         .w_full()
@@ -1025,6 +1356,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               t.clone(),
               tree_rev,
               active_doc,
+              favorite_pages,
+              sidebar_width,
               workspace_name,
               account_name,
               dark_mode,
@@ -1039,9 +1372,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             .h_full()
             .bg(move || palette(dark_mode.get()).surface_base)
             .child(when(move || active_mode.get() == MODE_DOC, {
-              let ed = editor_state.clone();
+              let br = bridge.clone();
               let hdr = editor_header.clone();
-              move || editor_view::editor_view(ed.clone(), hdr.clone(), dark_mode)
+              move || editor_view::editor_view(br.clone(), hdr.clone(), dark_mode)
             }))
             .child(when(move || active_mode.get() == MODE_BOARD, {
               let bs = board_session.clone();
@@ -1081,7 +1414,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                           ),
                       ),
                   )
-                  .child(board_view::board_view(bs.clone(), board_rev, pb.clone()))
+                  .child(board_view::board_view(bs.clone(), board_rev, dark_mode, pb.clone()))
               }
             })),
         )
@@ -1291,10 +1624,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                   .justify_center()
                   .bg(move || palette(dark_mode.get()).surface_hover)
                   .child(
-                    text("L")
-                      .text_size(px(13.0))
-                      .font_weight(FontWeight::SEMIBOLD)
-                      .text_color(move || palette(dark_mode.get()).text_primary),
+                    text(move || {
+                      account_name
+                        .get()
+                        .chars()
+                        .next()
+                        .map(|c| c.to_uppercase().to_string())
+                        .unwrap_or_else(|| "L".to_string())
+                    })
+                    .text_size(px(13.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(move || palette(dark_mode.get()).text_primary),
                   ),
               )
               .child(
@@ -1307,9 +1647,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                       .text_color(move || palette(dark_mode.get()).text_primary),
                   )
                   .child(
-                    text("本地离线 Vault · SQLite")
-                      .text_size(px(11.5))
-                      .text_color(move || palette(dark_mode.get()).text_faint),
+                    text(move || {
+                      if is_cloud_signed_in.get() {
+                        "已连接 Mica 云端同步".to_string()
+                      } else {
+                        "本地离线 Vault · SQLite".to_string()
+                      }
+                    })
+                    .text_size(px(11.5))
+                    .text_color(move || palette(dark_mode.get()).text_faint),
                   ),
               ),
           )
@@ -1456,31 +1802,6 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     }))
 }
 
-fn session_for_markdown(markdown: &str) -> EditorSession {
-  let session = EditorSession::from_markdown(markdown);
-  if session.blocks().is_empty() {
-    EditorSession::from_blocks(
-      "root",
-      vec![EditorBlock::new(
-        Uuid::new_v4().to_string(),
-        "paragraph",
-        "",
-      )],
-    )
-  } else {
-    session
-  }
-}
-
-fn preview_head(s: &str) -> String {
-  let single = s.replace('\n', " ");
-  let mut out: String = single.chars().take(60).collect();
-  if single.chars().count() > 60 {
-    out.push('…');
-  }
-  out
-}
-
 fn resolve_parent_folder_name(tree: &PageTreeModel, doc_id: Uuid) -> Option<String> {
   let rows = tree.visible_rows();
   let page = rows.iter().find(|r| !r.is_folder && r.object_id == doc_id)?;
@@ -1521,11 +1842,17 @@ fn make_view(
 const STARTER_MARKDOWN: &str = "\
 # 欢迎使用 Mica
 
-这是一个纯 Rust 原生知识库与无限白板工作区，支持本地离线 SQLite 存储与云端 CRDT 同步。
+这是一个 100% 全栈纯 Rust 知识库与无限白板工作区，支持本地离线 SQLite 存储与云端 CRDT 同步。
 
-## 核心特性
+## 核心能力
 
-- 块级 Markdown 编辑：支持回车分块、行首退格合并、上下键跨块移动与原位中文 IME
-- 鼠标拖动跨块选区与 Ctrl+A 两段式全选
-- 无限白板、思维导图、表格、公式与 Mermaid 图表
+- 原生富文本块编辑：跨块鼠标拖选、回车分块、行首退格合并、`Ctrl+A` 全选与原位中文 IME
+- 真实多行代码编辑器、表格、RaTeX 公式、Mermaid 流程图与内嵌无限白板
+- 无边框融合标题栏、可拖拽调宽侧栏、实时页面大纲与版本快照一键恢复
+
+```rust
+fn main() {
+    println!(\"Hello from Mica Pure Rust!\");
+}
+```
 ";

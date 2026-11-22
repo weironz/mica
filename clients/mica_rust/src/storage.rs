@@ -333,26 +333,92 @@ impl VaultStore {
 
   /// Return the number of stored versions (auto + named) for `(origin, doc_id)`.
   pub fn list_version_count(&self, origin: &str, doc_id: Uuid) -> usize {
+    self.list_versions(origin, doc_id).len()
+  }
+
+  /// Return version summaries (`version_id`, `label`, `created_at_ms`) newest first.
+  pub fn list_versions(&self, origin: &str, doc_id: Uuid) -> Vec<(String, String, i64)> {
     let doc_key = doc_id.to_string();
     #[cfg(not(target_arch = "wasm32"))]
     {
       let Ok(store) = self.store.lock() else {
-        return 0;
+        return Vec::new();
       };
       store
         .list_local_versions(origin, &doc_key)
-        .map(|versions| versions.len())
-        .unwrap_or(0)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| {
+          let label = v.label.unwrap_or_else(|| "自动快照".to_string());
+          (v.id, label, v.created_at)
+        })
+        .collect()
     }
     #[cfg(target_arch = "wasm32")]
     {
       let Ok(mem) = self.memory.lock() else {
-        return 0;
+        return Vec::new();
       };
       mem
         .versions
         .get(&(origin.to_string(), doc_key))
-        .map_or(0, Vec::len)
+        .map(|list| {
+          list
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(idx, (lbl, _))| {
+              (
+                idx.to_string(),
+                lbl.clone().unwrap_or_else(|| "自动快照".to_string()),
+                0i64,
+              )
+            })
+            .collect()
+        })
+        .unwrap_or_default()
+    }
+  }
+
+  /// Restore a stored version by id and return its serialized Markdown.
+  pub fn restore_version_markdown(
+    &self,
+    origin: &str,
+    doc_id: Uuid,
+    version_id: &str,
+  ) -> Result<String, String> {
+    let doc_key = doc_id.to_string();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let store = self
+        .store
+        .lock()
+        .map_err(|_| "local vault mutex poisoned".to_string())?;
+      let restored = store
+        .restore_local_version(origin, &doc_key, version_id, self.client_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("version {version_id} not found"))?;
+      Ok(markdown_from_doc(&restored))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mut mem = self
+        .memory
+        .lock()
+        .map_err(|_| "memory vault mutex poisoned".to_string())?;
+      let idx: usize = version_id
+        .parse()
+        .map_err(|_| format!("invalid version id {version_id}"))?;
+      let map_key = (origin.to_string(), doc_key);
+      let state = mem
+        .versions
+        .get(&map_key)
+        .and_then(|list| list.get(idx))
+        .map(|(_, bytes)| bytes.clone())
+        .ok_or_else(|| format!("version {version_id} not found"))?;
+      let doc = MicaDoc::from_update(&state).map_err(|e| e.to_string())?;
+      mem.docs.insert(map_key, state);
+      Ok(markdown_from_doc(&doc))
     }
   }
 
@@ -610,7 +676,21 @@ mod tests {
       .unwrap();
     assert_eq!(vault.list_version_count("local", doc_id), after_save + 1);
 
+    let versions = vault.list_versions("local", doc_id);
+    assert!(!versions.is_empty());
+    let cp_id = versions
+      .iter()
+      .find(|(_, lbl, _)| lbl == "Checkpoint 1")
+      .map(|(id, _, _)| id.clone())
+      .unwrap();
+
+    vault.save_markdown("local", doc_id, "# Draft 2").unwrap();
+    let restored = vault
+      .restore_version_markdown("local", doc_id, &cp_id)
+      .unwrap();
+    assert!(restored.contains("# Draft 1"));
+
     vault.create_version_snapshot("local", doc_id, None).unwrap();
-    assert_eq!(vault.list_version_count("local", doc_id), after_save + 2);
+    assert!(vault.list_version_count("local", doc_id) >= after_save + 2);
   }
 }

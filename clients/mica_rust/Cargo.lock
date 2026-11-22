@@ -3335,7 +3335,6 @@ dependencies = [
  "mica-board",
  "mica-client",
  "mica-core",
- "mica-editor",
  "mica-md",
  "mica-sync",
  "nsh-base",
