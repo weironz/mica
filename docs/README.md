@@ -31,7 +31,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [architecture.md](architecture/architecture.md) | 系统现状架构:crate 地图、存储/同步/搜索、本地优先与部署 |
+| [architecture.md](architecture/architecture.md) | **系统现状架构（100% 全栈纯 Rust）**：前后端进程边界、L1/L2/L3 crate 地图、存储/同步/搜索与部署 |
 | [editor.md](architecture/editor.md) | 编辑器设计原则 |
 | [editor-engine.md](architecture/editor-engine.md) | 编辑器引擎设计(自绘画布、marks 模型) |
 | [render-architecture.md](architecture/render-architecture.md) | 块渲染架构(`AtomicBlockRenderer` 注册表,渲染红线) |
@@ -73,6 +73,7 @@
 | --- | --- |
 | [roadmap.md](plans/roadmap.md) | **路线图:剩余功能与优化点(权威)** |
 | [roadmap-done.md](plans/roadmap-done.md) | 已完成条目存档(只进不出) |
+| [rust-parity-checklist.md](plans/rust-parity-checklist.md) | 纯 Rust 客户端（`clients/mica_rust`）1:1 功能对齐与验收清单 |
 | [notion-gap-analysis.md](plans/notion-gap-analysis.md) | Notion 对标分析 |
 | [ui-visual-refresh.md](plans/ui-visual-refresh.md) | 界面与字体观感改造施工说明(Windows 桌面优先,待实施) |
 | [desktop-plan.md](plans/desktop-plan.md) | 桌面端技术方案与开发计划 |

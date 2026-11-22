@@ -150,59 +150,64 @@ docker compose --env-file .env.prod -f docker-compose.single.yml up -d
 
 ## 🧩 仓库结构
 
+全栈均为 Rust，按**运行进程边界**划分为前端客户端、共享引擎与云端后端（详见[系统架构总览](docs/architecture/architecture.md)）：
+
 ```
+clients/mica_rust/   [前端 · L3 UI 壳] 纯 Rust 桌面与 WebAssembly 客户端
+                     (基于 nsh-core / nsh-base，直接调用 L1 + L2，零 FFI)
 crates/
-  api-server     Axum HTTP + WebSocket;迁移;唯一和 Postgres/S3 打交道的地方
-  api-types      REST 载荷类型,api-server 与 cli 共用一份定义
-  app-core       文档操作、同步、snapshot↔yrs 桥接
-  mica-core      CRDT 文档(yrs)—— from_blocks / to_blocks
-  md-core        Markdown 引擎(crate 名 `mica-md`):解析、序列化、HTML —— 唯一一份实现,按 SDK 形态交付
-  md-wasm        md-core 的 wasm-bindgen 绑定,供 Web 客户端使用
-  markdown       md-core 之上的薄门面,服务端各 crate 通过它调用
-  interchange    压缩包级别的导入导出规划 —— 纯逻辑,无 I/O
-  mcp-server     架在 REST API 上的 MCP 工具面
-  cli            mica-cli
-  infra          共享基础设施
-clients/mica_flutter/
-  lib/editor     自绘编辑器(render.dart 是那块画布)
-  lib/markdown   MarkdownCodec —— 编辑器调用引擎的唯一入口(桌面走 FFI,Web 走 wasm)
-  lib/local      本地 vault 存储(经 flutter_rust_bridge 调 Rust)
-  rust           客户端侧 Rust 核心(FFI)
+  # 前端 · L2 客户端无头内核（零 UI 依赖）
+  mica-sync          本地离线 SQLite 镜像 + 增量同步状态机
+  mica-client        云端 API 路由与账号/会话代际守卫
+  mica-board         无限白板/思维导图交互会话、自动布局、A* 路由与三路合并
+  mica-editor        无头块编辑器状态与命令内核
+
+  # 前后端共享 · L1 数据与渲染引擎（客户端与服务端编译期直接共用）
+  mica-core          唯一 CRDT 文档核心（yrs `MicaDoc`）、树规则与本地 SQLite Store
+  md-core            唯一 Markdown 引擎（crate `mica-md`）：解析、序列化、HTML、高亮、RaTeX 公式、Merman 图表
+  markdown           md-core 之上的薄门面，供服务端 crate 调用
+  interchange        归档级导入导出（.mica.zip、Markdown ZIP、Notion）
+  api-types          前后端共享 REST DTO（crate `mica-api-types`）
+
+  # 后端 · 云端服务进程
+  api-server         Axum HTTP + WebSocket；内嵌迁移；对接 Postgres 与 S3/RustFS
+  app-core           文档同步领域服务 + 进程内 BodyIndex 全文搜索
+  infra              配置、连接池、错误与邮件基础设施
+
+  # 独立工具 / 对外 SDK
+  cli                mica-cli（备份/导出/管理及宿主 `mica-cli mcp`）
+  mcp-server         架在 REST API 上的 MCP 工具面
+  md-wasm            md-core 的 wasm-bindgen 绑定，供 packages/mica-md-js 使用
 packages/
-  mica-md-js     wasm 引擎的 npm 包装(SDK,尚未发布)
-docs/            设计文档
-migrations/      Postgres schema,API 启动时自动应用
+  mica-md-js         wasm Markdown 引擎的 npm 包装（对外 SDK）
+docs/                架构与设计文档
+migrations/          Postgres schema，API 启动时自动应用
 ```
 
 ## 🛠 开发
 
-需要 Rust(stable,见 `rust-toolchain.toml`)、Flutter、Docker。
-一切都走 [`just`](https://github.com/casey/just),`just --list` 看全部 recipe。
+需要 Rust（stable，见 `rust-toolchain.toml`）；仅运行云端后端时需要 Docker。
+一切都走 [`just`](https://github.com/casey/just)，`just --list` 查看全部 recipe。
 
 ```sh
 cp .env.example .env
-just dev             # 整套后端进 Docker 并灌好种子(首次要编译)
-just app             # Flutter 桌面客户端
-just app chrome      # Flutter web 客户端 —— 自动连 :8080 的后端
-just dev-down        # 全停
-just test            # cargo test + flutter test
-just check           # fmt + clippy + analyze
+just dev             # 整套后端进 Docker 并灌好种子（首次要编译）
+cargo run --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust
+                     # 启动纯 Rust 桌面客户端（本地离线模式无需后端）
+just dev-down        # 停止后端栈
+just ci              # 格式、clippy、结构门禁与测试
 ```
 
-不配 `S3_*` 时文件相关端点返回 `503`,其余功能正常;`ANTHROPIC_API_KEY` 同理。
+不配 `S3_*` 时文件相关端点返回 `503`，其余功能正常；`ANTHROPIC_API_KEY` 同理。
 
-**动任何结构性的东西之前,先读 [`AGENTS.md`](AGENTS.md)**(项目原则、不变量、发版流程)
+**动任何结构性的东西之前，先读 [`AGENTS.md`](AGENTS.md)**（项目原则、不变量、发版流程）
 和 [`docs/dev/lessons.md`](docs/dev/lessons.md)——后者记录了那些不变量被破坏时的实际代价。
 
-三条不看就会被咬的规则:
+三条不看就会被咬的规则：
 
-1. **Markdown 只有一份实现**,在 Rust(`crates/md-core`)。服务端、CLI、MCP 原生调用,
-   桌面客户端经 FFI,Web 客户端经 wasm。Dart 只通过 `MarkdownCodec` 调用,不要在 Dart 里写
-   Markdown 语法。构建 Web 需要与 `Cargo.lock` 同版本的 `wasm-bindgen-cli`
-   (`scripts/check-md-wasm-toolchain.sh` 会给出版本号)。
-2. **每个 bug 修复都配回归测试**,提交信息写根因,不写流水账。
-3. **新渲染能力先抽机制**,不许往 `render.dart` 堆 `if` 分支。
-   见[渲染架构](docs/architecture/render-architecture.md)。
+1. **Markdown 只有一份实现**，在 Rust（`crates/md-core`）。服务端、纯 Rust 客户端、CLI、MCP 均直接链接调用；仅对外 JS SDK（`crates/md-wasm`）需要与 `Cargo.lock` 同版本的 `wasm-bindgen-cli`（`scripts/check-md-wasm-toolchain.sh` 会给出版本号）。
+2. **每个 bug 修复都配回归测试**，提交信息写根因，不写流水账。
+3. **新渲染能力先抽机制**，通过 `clients/mica_rust/src/atomic_blocks.rs` 与 `node_views.rs` 注册扩展，不许往 `editor_view.rs` 堆分支。见[渲染架构](docs/architecture/render-architecture.md)。
 
 ## 📚 文档
 
