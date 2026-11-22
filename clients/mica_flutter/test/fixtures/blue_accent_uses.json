@@ -1,6 +1,7 @@
 {
   "lib/editor/block_renderers.dart#accent.primary": 1,
   "lib/editor/block_renderers.dart#editor.caret": 3,
+  "lib/editor/board_inline_layout.dart#editor.caret": 1,
   "lib/editor/editor.dart#editor.caret": 2,
   "lib/editor/marks.dart#accent.primary": 2,
   "lib/editor/render.dart#accent.primary": 1,

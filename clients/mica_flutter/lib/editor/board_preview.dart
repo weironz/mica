@@ -8,9 +8,12 @@ import '../board/board_editor_screen.dart' deferred as board_ui;
 import '../board/board_models.dart';
 import '../ui/deferred_load.dart';
 import '../ui/theme_tokens.dart';
+import 'board_inline_layout.dart';
 import 'mermaid_theme.dart' show cssHex;
 import 'preview_raster.dart';
 import 'svg_raster.dart';
+
+final _svgWidthAttr = RegExp(r'\bwidth="(\d+(?:\.\d+)?)"');
 
 class BoardPreviewer extends RasterPreviewer {
   const BoardPreviewer();
@@ -38,6 +41,11 @@ class BoardPreviewer extends RasterPreviewer {
         ),
       );
       if (raw == null || raw.trim().isEmpty) return null;
+      final wm = _svgWidthAttr.firstMatch(raw);
+      if (wm != null) {
+        final nw = double.tryParse(wm.group(1)!);
+        if (nw != null) rememberBoardNaturalWidth(source, nw);
+      }
       final image = await rasterizeSvg(raw, targetWidth * 2);
       return image == null ? null : (image: image, baseline: null);
     } catch (_) {

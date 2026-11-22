@@ -26,7 +26,9 @@ import 'image_actions.dart';
 import 'image_animator.dart';
 import 'image_decode.dart';
 import 'model.dart';
+import 'board_inline_layout.dart';
 import 'board_preview.dart';
+import 'math_edit_dialog.dart';
 import 'image_edit_dialog.dart';
 import 'preview_raster.dart';
 import 'open_url.dart';
@@ -331,6 +333,8 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   );
   int? _imageResize; // image node index whose width is being dragged
   double? _imageResizeWidth; // last previewed width during an image resize
+  BoardResizeSession? _panDownBoardResize;
+  BoardResizeSession? _boardResize;
   // Auto-scroll the surrounding page while drag-selecting near the viewport edge.
   int? _autoScrollFrame;
   Duration? _lastAutoScrollTime;
@@ -2560,6 +2564,7 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _controller.setCodeView(viewTab.node, viewTab.view);
       return;
     }
+    if (!ro && r.boardResizeAt(local) != null) return;
     final boardIdx = r.diagramAt(local);
     if (boardIdx != null &&
         boardIdx < _controller.nodes.length &&
@@ -4061,6 +4066,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
           ? SystemMouseCursors.grabbing
           : SystemMouseCursors.grab;
     }
+    if (_boardResize != null) {
+      return boardResizeCursor(_boardResize!.handle);
+    }
+    final boardHandle = widget.canEdit ? r.boardResizeAt(local) : null;
+    if (boardHandle != null) {
+      return boardResizeCursor(boardHandle.handle);
+    }
     // Rendered diagrams pan by drag (AFFiNE-style): hand cursor invites it.
     if (_diagramPan != null) return SystemMouseCursors.grabbing;
     final diagHover = r.diagramAt(local);
@@ -4381,7 +4393,22 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     // hijacking the text selection into a pan and yanking the picture out
     // of its viewport.
     final r = _render;
-    _panDownDiagram = r?.diagramAt(r.globalToLocal(d.globalPosition));
+    final local = r?.globalToLocal(d.globalPosition);
+    final bh = widget.canEdit && local != null ? r?.boardResizeAt(local) : null;
+    _panDownBoardResize = bh == null
+        ? null
+        : BoardResizeSession(
+            node: bh.node,
+            handle: bh.handle,
+            startLocal: local!,
+            rect: bh.rect,
+          );
+    final diag = local == null ? null : r?.diagramAt(local);
+    final isBoard =
+        diag != null &&
+        diag < _controller.nodes.length &&
+        _controller.nodes[diag].data['language'] == 'mica-board';
+    _panDownDiagram = isBoard ? null : diag;
   }
 
   void _onPanStart(DragStartDetails d) {
@@ -4426,6 +4453,31 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
         avail: r.tableAvailWidth(),
         frac: r.tableWidthFraction(colBorder.node),
       );
+      return;
+    }
+    // Dragging an embedded mica-board resize handle scales the board frame.
+    var boardSession = _panDownBoardResize;
+    _panDownBoardResize = null;
+    if (boardSession == null) {
+      final bh = r.boardResizeAt(local);
+      if (bh != null) {
+        boardSession = BoardResizeSession(
+          node: bh.node,
+          handle: bh.handle,
+          startLocal: local,
+          rect: bh.rect,
+        );
+      }
+    }
+    if (boardSession != null && boardSession.node < _controller.nodes.length) {
+      final node = _controller.nodes[boardSession.node];
+      _dragPreviewSnapshot = (
+        id: node.id,
+        data: {...node.data},
+        keys: const ['width'],
+      );
+      _boardResize = boardSession;
+      r.setResizingBoard(boardSession.node, boardSession.handle);
       return;
     }
     // Dragging a rendered diagram pans it inside its fixed viewport — only
@@ -4579,6 +4631,11 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       _controller.previewTableColumnWidths(resize.node, weights);
       return;
     }
+    final br = _boardResize;
+    if (br != null) {
+      _controller.previewBoardWidth(br.node, br.update(local, r.boardMaxWidth()));
+      return;
+    }
     if (_imageResize != null) {
       final w = r.imageWidthFor(_imageResize!, local.dx);
       _imageResizeWidth = w;
@@ -4641,6 +4698,14 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
       }
       return;
     }
+    final br = _boardResize;
+    if (br != null) {
+      _controller.setBoardWidth(br.node, br.width);
+      _boardResize = null;
+      _panDownBoardResize = null;
+      _render?.setResizingBoard(null, null);
+      return;
+    }
     if (_imageResize != null) {
       if (_imageResizeWidth != null) {
         _controller.setImageWidth(_imageResize!, _imageResizeWidth!);
@@ -4695,6 +4760,9 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
     _colResize = null;
     _imageResize = null;
     _imageResizeWidth = null;
+    _boardResize = null;
+    _panDownBoardResize = null;
+    _render?.setResizingBoard(null, null);
     _render?.setDropIndicator(null);
     // Resize previews mutate the live node without sending an op. Cancellation
     // must restore that local geometry rather than silently keeping an unsaved
@@ -5171,40 +5239,13 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
 
   /// Edit a math block's LaTeX source in a dialog.
   Future<void> _editMathBlock(EditorNode node) async {
-    final controller = TextEditingController(text: node.text);
-    final source = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(context.l10n.slashMathFormula, style: MicaTypography.large),
-        content: SizedBox(
-          width: 420,
-          child: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLines: 4,
-            minLines: 1,
-            style: MicaTypography.body.copyWith(fontFamily: kMonoFont),
-            decoration: const InputDecoration(
-              // A LaTeX example (language-neutral) — deliberately not localized.
-              hintText: r'E = mc^2',
-              isDense: true,
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(context.l10n.commonCancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: Text(context.l10n.commonOk),
-          ),
-        ],
-      ),
+    final source = await showMathEditDialog(
+      context,
+      initial: node.text,
+      hint: r'E = mc^2',
     );
     if (source != null) {
-      _controller.setBlockText(node.id, _stripMathDelimiters(source));
+      _controller.setBlockText(node.id, stripMathDelimiters(source));
     }
   }
 
@@ -5213,77 +5254,24 @@ class _MicaEditorState extends State<MicaEditor> implements TextInputClient {
   /// deletes the formula.
   Future<void> _editInlineMath(int i, int start, int end, String source) async {
     if (i < 0 || i >= _controller.nodes.length) return;
-    // Capture the id: the dialog awaits, and a remote op could reorder nodes
-    // while it's open, leaving the index pointing at a different block.
     final nodeId = _controller.nodes[i].id;
-    final controller = TextEditingController(text: source);
-    final edited = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(context.l10n.slashMathFormula, style: MicaTypography.large),
-        content: SizedBox(
-          width: 420,
-          child: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLines: 4,
-            minLines: 1,
-            style: MicaTypography.body.copyWith(fontFamily: kMonoFont),
-            decoration: const InputDecoration(
-              // A LaTeX example (language-neutral) — deliberately not localized.
-              hintText: r'\eta = 2 \times \frac{N-1}{N}',
-              isDense: true,
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(context.l10n.commonCancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: Text(context.l10n.commonOk),
-          ),
-        ],
-      ),
+    final edited = await showMathEditDialog(
+      context,
+      initial: source,
+      hint: r'\eta = 2 \times \frac{N-1}{N}',
     );
-    controller.dispose();
     if (edited == null) return;
-    // Resolve the node by id, not the stale index (see capture above). Bail if
-    // it's gone, or if the run no longer covers [start, end) — a concurrent
-    // edit could have shifted the source out from under us.
     final j = _controller.nodes.indexWhere((n) => n.id == nodeId);
     if (j < 0) return;
     _controller.setInlineMathSource(
       j,
       start,
       end,
-      _stripMathDelimiters(edited).trim(),
+      stripMathDelimiters(edited).trim(),
     );
-    // Sync IME on the NEXT frame, not here: when showDialog's future resolves,
-    // the popped dialog route is still deactivating, and pushing editing state
-    // into the input connection synchronously trips framework.dart's
-    // `_dependents.isEmpty` assert (a debug-only crash — release swallows it,
-    // which is why the web build never showed it). The block-math editor dodges
-    // this only because its node is atomic and never syncs IME; every other
-    // caret-moving call site is safe because none runs mid-route-teardown.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _syncImeFromSelection(force: true);
     });
-  }
-
-  /// LaTeX sources are stored bare; users habitually paste `$$…$$`-wrapped
-  /// formulas (the app's own convention) which the typesetter can't parse.
-  static String _stripMathDelimiters(String source) {
-    var src = source.trim();
-    final m =
-        RegExp(r'^\$\$(.*)\$\$$', dotAll: true).firstMatch(src) ??
-        RegExp(r'^\\\[(.*)\\\]$', dotAll: true).firstMatch(src) ??
-        RegExp(r'^\\\((.*)\\\)$', dotAll: true).firstMatch(src) ??
-        RegExp(r'^\$([^$]+)\$$', dotAll: true).firstMatch(src);
-    if (m != null) src = m.group(1)!.trim();
-    return src;
   }
 
   /// Right-click on an image → context menu (copy / download / delete).

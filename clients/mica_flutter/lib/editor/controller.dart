@@ -2895,6 +2895,34 @@ class EditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Live preview of an embedded `mica-board` block's display width during a
+  /// drag (no op sent, does not touch `node.text` so the SVG raster stays hot).
+  void previewBoardWidth(int index, double width) {
+    if (_historyBusy) return;
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'code_block' || node.data['language'] != 'mica-board') {
+      return;
+    }
+    node.data = {...node.data, 'width': width};
+    notifyListeners();
+  }
+
+  /// Commit an embedded `mica-board` block's display width.
+  void setBoardWidth(int index, double width) {
+    if (_historyBusy) return;
+    if (index < 0 || index >= nodes.length) return;
+    final node = nodes[index];
+    if (node.kind != 'code_block' || node.data['language'] != 'mica-board') {
+      return;
+    }
+    node.data = {...node.data, 'width': width};
+    _sendNow([
+      {'type': 'update_block', 'block_id': node.id, 'data': node.data},
+    ]);
+    notifyListeners();
+  }
+
   /// Append an empty paragraph after the last node and move the caret into it.
   /// Used as the downward escape from a trailing code block.
   void addParagraphAfterLast() {

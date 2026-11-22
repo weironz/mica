@@ -9,6 +9,7 @@ import '../ui/typography.dart';
 import '../ui/copy_button.dart' show kCopyDoneColor;
 import '../ui/theme_tokens.dart';
 import '../l10n/locale_controller.dart';
+import 'board_inline_layout.dart';
 import 'chrome_layout.dart';
 import 'details_html.dart';
 import 'highlight.dart';
@@ -327,6 +328,7 @@ class NodeLayout {
   Rect? moreButton; // code-block ⋯ overflow-menu rect (local), if any
   Rect? viewCodeTab; // mermaid view switch: source tab (local), if any
   Rect? viewPreviewTab; // mermaid view switch: preview tab (local), if any
+  Rect? boardRect; // embedded mica-board frame rect (local), if any
 
   /// The `<details>` fold header (triangle + summary) — clicking it toggles.
   /// Null on every other block, including a `<details>` shown as raw source.
@@ -695,10 +697,40 @@ class RenderDocument extends RenderBox {
     for (var i = 0; i < _layouts.length; i++) {
       final l = _layouts[i];
       if (l.renderedBy is! MermaidRenderer) continue;
+      if (l.boardRect != null) {
+        if (l.boardRect!.contains(local)) return i;
+        continue;
+      }
       if (local.dy >= l.boxTop && local.dy <= l.boxTop + l.boxHeight) return i;
     }
     return null;
   }
+
+  int? _resizingBoard;
+  BoardResizeHandle? _resizingBoardHandle;
+
+  void setResizingBoard(int? node, BoardResizeHandle? handle) {
+    if (_resizingBoard == node && _resizingBoardHandle == handle) return;
+    _resizingBoard = node;
+    _resizingBoardHandle = handle;
+    markNeedsPaint();
+  }
+
+  /// Embedded `mica-board` resize handle under [local] (hover/drag gated).
+  ({int node, BoardResizeHandle handle, Rect rect})? boardResizeAt(
+    Offset local,
+  ) {
+    for (final i in {_resizingBoard, _hoverCode}) {
+      if (i == null || i < 0 || i >= _layouts.length) continue;
+      final rect = _layouts[i].boardRect;
+      if (rect == null) continue;
+      final handle = hitTestBoardHandle(rect, local);
+      if (handle != null) return (node: i, handle: handle, rect: rect);
+    }
+    return null;
+  }
+
+  double boardMaxWidth() => boardMaxWidthFor(size.width, EditorTheme.gutter);
 
   /// Drag a diagram by [delta] inside its fixed viewport.
   void panPreviewBy(int node, Offset delta) {
@@ -2255,44 +2287,19 @@ class RenderDocument extends RenderBox {
     NodeLayout l, {
     required String active,
   }) {
-    void tab(Rect? r0, String text, _CodeIcon icon, bool isActive) {
-      if (r0 == null) return;
-      final r = r0.shift(offset);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(r, const Radius.circular(6)),
-        Paint()
-          ..color = isActive
-              ? _appearance.tokens.surface.hover
-              : (_hoverIcon == icon
-                    ? _appearance.tokens.surface.hover
-                    : _appearance.tokens.border.normal),
-      );
-      final tp = TextPainter(
-        text: TextSpan(
-          text: text,
-          style: MicaTypography.canvasMicro.copyWith(
-            color: isActive
-                ? _appearance.tokens.text.primary
-                : _appearance.tokens.text.muted,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, r.center - Offset(tp.width / 2, tp.height / 2));
-      tp.dispose();
-    }
-
-    // The second argument is the DRAWN label; the fourth compares the internal
-    // view key. They used to be the same literal ('code'/'preview'), which is why
-    // localizing this needed care — the keys must stay English.
     final s = l10nNoContext;
-    tab(
-      l.viewPreviewTab,
-      s.codeViewPreview,
-      _CodeIcon.viewPreview,
-      active == 'preview',
+    paintDiagramViewTabs(
+      canvas: canvas,
+      offset: offset,
+      tokens: _appearance.tokens,
+      previewRect: l.viewPreviewTab,
+      codeRect: l.viewCodeTab,
+      previewLabel: s.codeViewPreview,
+      codeLabel: s.codeViewSource,
+      active: active,
+      hoverPreview: _hoverIcon == _CodeIcon.viewPreview,
+      hoverCode: _hoverIcon == _CodeIcon.viewCode,
     );
-    tab(l.viewCodeTab, s.codeViewSource, _CodeIcon.viewCode, active == 'code');
   }
 
   /// Alert accent/tint from the live palette.

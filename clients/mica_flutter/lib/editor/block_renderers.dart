@@ -406,96 +406,18 @@ class ImageRenderer extends AtomicBlockRenderer {
         filterQuality: FilterQuality.medium,
       );
       canvas.restore();
-      if (external) _paintExternalBadge(canvas, r);
+      if (external) paintExternalImageBadge(canvas, r);
       return;
     }
-    // Placeholder: rounded fill + centered icon (broken on error, else image).
-    canvas.drawRRect(
-      rr,
-      Paint()..color = host._appearance.tokens.editor.codeBg,
-    );
-    final isError = key != null && host._imageErrors.contains(key);
-    final icon = isError ? Icons.broken_image_outlined : Icons.image_outlined;
-    final glyph = TextPainter(
-      text: TextSpan(
-        text: String.fromCharCode(icon.codePoint),
-        style: TextStyle(
-          fontFamily: icon.fontFamily,
-          package: icon.fontPackage,
-          fontSize: 30,
-          color: host._appearance.tokens.text.faint,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    // A broken image used to be a mute grey box: no source, no reason, no way
-    // out — indistinguishable from a bug. Name the host we failed to reach, so
-    // the state explains itself (the url is still in the block, so the content
-    // and its Markdown export are intact either way).
-    final caption = isError && external
-        ? _hostOf(node.data['url'] as String? ?? '')
-        : null;
-    final capPainter = caption == null
-        ? null
-        : (TextPainter(
-            text: TextSpan(
-              text: l10nNoContext.imageBrokenCaption(caption),
-              style: MicaTypography.canvasMicro.copyWith(
-                  color: host._appearance.tokens.text.faint,
-                ),
-            ),
-            textDirection: TextDirection.ltr,
-            maxLines: 1,
-            ellipsis: '…',
-          )..layout(maxWidth: r.width - 16));
-    final blockH =
-        glyph.height + (capPainter == null ? 0 : capPainter.height + 4);
-    final top = r.center.dy - blockH / 2;
-    glyph.paint(canvas, Offset(r.center.dx - glyph.width / 2, top));
-    capPainter?.paint(
+    paintImagePlaceholder(
       canvas,
-      Offset(r.center.dx - capPainter.width / 2, top + glyph.height + 4),
+      r,
+      rr,
+      host._appearance.tokens,
+      isError: key != null && host._imageErrors.contains(key),
+      external: external,
+      url: node.data['url'] as String?,
     );
-    glyph.dispose();
-    capPainter?.dispose();
-    if (external) _paintExternalBadge(canvas, r);
-  }
-
-  static String _hostOf(String url) {
-    final h = Uri.tryParse(url)?.host ?? '';
-    return h.isEmpty ? url : h;
-  }
-
-  /// A small "外链" chip in the image's top-left corner.
-  static void _paintExternalBadge(Canvas canvas, Rect r) {
-    final label = TextPainter(
-      text: TextSpan(
-        text: l10nNoContext.imageExternalBadge,
-        style: MicaTypography.canvasMicro.copyWith(
-            color: MicaTokens.light.accent.onPrimary,
-          ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    const padH = 5.0, padV = 2.0;
-    final chip = Rect.fromLTWH(
-      r.left + 6,
-      r.top + 6,
-      label.width + padH * 2,
-      label.height + padV * 2,
-    );
-    // Skip it on a thumbnail too small to carry the chip without covering the
-    // picture.
-    if (chip.width > r.width - 12 || chip.height > r.height - 12) {
-      label.dispose();
-      return;
-    }
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(chip, const Radius.circular(4)),
-      Paint()..color = MicaTokens.dark_.surface.hover.withValues(alpha: 0.7),
-    );
-    label.paint(canvas, Offset(chip.left + padH, chip.top + padV));
-    label.dispose();
   }
 
   @override
@@ -1224,16 +1146,37 @@ class MermaidRenderer extends AtomicBlockRenderer {
     final pixels = host._previewSizes[(id: id, source: node.text)];
     if (pixels == null) return null;
     final zoom = host._previewZoom[node.id] ?? 1.0;
+    final emptyPainter = TextPainter(
+      text: const TextSpan(text: ''),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    if (id == 'board') {
+      final f = computeBoardFrame(
+        maxWidth: maxWidth,
+        gutter: EditorTheme.gutter,
+        pixels: pixels,
+        y: y,
+        requestedWidth: (node.data['width'] as num?)?.toDouble(),
+        naturalWidth: boardNaturalWidthFor(node.text),
+      );
+      return NodeLayout(emptyPainter)
+        ..kind = 'code_block'
+        ..nodeId = node.id
+        ..langText = 'mica-board'
+        ..boxLeft = EditorTheme.gutter
+        ..contentLeft = f.rect.left
+        ..boardRect = f.rect
+        ..mathSize = Size(f.rect.width * zoom, f.rect.height * zoom)
+        ..boxTop = y
+        ..textTop = f.rect.top
+        ..textHeight = f.rect.height
+        ..boxHeight = f.boxHeight
+        ..viewCodeTab = f.viewCodeTab
+        ..viewPreviewTab = f.viewPreviewTab;
+    }
     final w = avail;
     final h = w * (pixels.height / pixels.width.clamp(1, 1 << 30));
-    final wz = w * zoom;
-    final hz = h * zoom;
-    return NodeLayout(
-        TextPainter(
-          text: const TextSpan(text: ''),
-          textDirection: TextDirection.ltr,
-        )..layout(),
-      )
+    return NodeLayout(emptyPainter)
       ..kind = 'code_block'
       ..nodeId = node.id
       ..langText = (node.data['language'] as String?) ?? 'mermaid'
@@ -1241,15 +1184,11 @@ class MermaidRenderer extends AtomicBlockRenderer {
       ..contentLeft =
           EditorTheme.gutter +
           ((maxWidth - EditorTheme.gutter - w) / 2).clamp(0.0, double.infinity)
-      ..mathSize = Size(wz, hz)
+      ..mathSize = Size(w * zoom, h * zoom)
       ..boxTop = y
-      // Visually it IS the picture: no card, near-zero block padding.
       ..textTop = y + 2
       ..textHeight = h
       ..boxHeight = h + 4
-      // Bottom-right, mirroring the source form's toolbar corner: diagram
-      // content usually anchors top-left, so this corner overlaps least.
-      // Preview (the default) leads, code follows.
       ..viewCodeTab = Rect.fromLTWH(maxWidth - 8 - 44, y + h + 4 - 26, 44, 20)
       ..viewPreviewTab = Rect.fromLTWH(
         maxWidth - 8 - 44 - 2 - 56,
@@ -1272,16 +1211,14 @@ class MermaidRenderer extends AtomicBlockRenderer {
     final img = host._previewImages[id]?[source];
     if (img == null) return;
     host.onPreviewPainted?.call(id, source);
-    // No backdrop, no card: the user is here for the diagram, so the block
-    // chrome disappears and the picture sits directly on the page. The block
-    // rect is a fixed viewport — the (possibly zoomed) picture centers in it
-    // and clips to it, so zoom never moves surrounding content.
-    final viewport = Rect.fromLTWH(
-      offset.dx + l.boxLeft,
-      offset.dy + l.boxTop,
-      host.size.width - l.boxLeft,
-      l.boxHeight,
-    );
+    final viewport =
+        l.boardRect?.shift(offset) ??
+        Rect.fromLTWH(
+          offset.dx + l.boxLeft,
+          offset.dy + l.boxTop,
+          host.size.width - l.boxLeft,
+          l.boxHeight,
+        );
     final pan = host._previewPan[l.nodeId] ?? Offset.zero;
     final dst = Rect.fromCenter(
       center: viewport.center + pan,
@@ -1289,7 +1226,13 @@ class MermaidRenderer extends AtomicBlockRenderer {
       height: l.mathSize.height,
     );
     canvas.save();
-    canvas.clipRect(viewport);
+    if (l.boardRect != null) {
+      canvas.clipRRect(
+        RRect.fromRectAndRadius(viewport, const Radius.circular(6)),
+      );
+    } else {
+      canvas.clipRect(viewport);
+    }
     canvas.drawImageRect(
       img,
       Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble()),
@@ -1297,6 +1240,9 @@ class MermaidRenderer extends AtomicBlockRenderer {
       Paint()..filterQuality = FilterQuality.medium,
     );
     canvas.restore();
+    if (l.boardRect != null) {
+      paintBoardFrame(canvas, viewport, host._appearance.tokens);
+    }
   }
 
   @override
@@ -1307,8 +1253,20 @@ class MermaidRenderer extends AtomicBlockRenderer {
     NodeLayout l,
     int index,
   ) {
-    // The [code|preview] switch only surfaces on hover, so at rest the
-    // block reads as a plain picture.
+    final boardRect = l.boardRect;
+    if (boardRect != null) {
+      final resizing = host._resizingBoard == index;
+      if (!resizing && host._hoverCode != index) return;
+      paintBoardResizeChrome(
+        canvas,
+        boardRect.shift(offset),
+        host._appearance.tokens,
+        resizing: resizing,
+        activeHandle: host._resizingBoardHandle,
+      );
+      if (!resizing) host._paintViewTabs(canvas, offset, l, active: 'preview');
+      return;
+    }
     if (host._hoverCode != index) return;
     host._paintViewTabs(canvas, offset, l, active: 'preview');
   }
