@@ -1882,6 +1882,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     },
     on_share: {
       let cc = cloud_connector.clone();
+      let share_fetch_gen = signal(0u64);
       Rc::new(move || {
         share_error.set(None);
         share_modal_open.set(true);
@@ -1889,10 +1890,23 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           && is_cloud_signed_in.get_untracked()
         {
           let ws_id = active_workspace_id.get_untracked();
-          if let Ok(st) = cc.borrow().get_share(ws_id, doc_id) {
-            share_enabled.set(st.shared);
-            share_token.set(st.token);
-          }
+          let conn = cc.borrow().clone();
+          let epoch = share_fetch_gen.get_untracked().wrapping_add(1);
+          share_fetch_gen.set(epoch);
+          share_loading.set(true);
+          spawn(async move {
+            let res = net::run_blocking(move || conn.get_share(ws_id, doc_id)).await;
+            if share_fetch_gen.get_untracked() != epoch
+              || active_doc.get_untracked() != Some(doc_id)
+            {
+              return;
+            }
+            share_loading.set(false);
+            if let Ok(st) = res {
+              share_enabled.set(st.shared);
+              share_token.set(st.token);
+            }
+          });
         }
       })
     },
@@ -1984,47 +1998,70 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     ..RightSidebarExtras::default()
   });
 
+  // Cloud auth & probe generation tokens (per async-review-checklist: guard all cross-await writes)
+  let auth_gen = signal(0u64);
+  let probe_gen = signal(0u64);
+  let check_gen = signal(0u64);
+
   // Cloud auth handlers shared between Settings and World Switcher
   let do_cloud_login: Rc<dyn Fn(String, String, String)> = {
     let cc = cloud_connector.clone();
     let v = vault.clone();
     Rc::new(move |url: String, email: String, password: String| {
+      let epoch = auth_gen.get_untracked().wrapping_add(1);
+      auth_gen.set(epoch);
       world_busy.set(true);
       world_error.set(String::new());
-      let mut conn = CloudConnector::new(CloudConfig {
-        server_url: url.clone(),
-        access_token: None,
-        email: Some(email.clone()),
+      cloud_status.set("正在登录云端…".to_string());
+      let cc_async = cc.clone();
+      let v_async = v.clone();
+      let url_req = url.clone();
+      let email_req = email.clone();
+      spawn(async move {
+        let outcome = net::run_blocking(move || {
+          let mut conn = CloudConnector::new(CloudConfig {
+            server_url: url_req,
+            access_token: None,
+            email: Some(email_req.clone()),
+          });
+          conn.login(&email_req, &password).map(|msg| (conn, msg))
+        })
+        .await;
+        if auth_gen.get_untracked() != epoch {
+          return;
+        }
+        match outcome {
+          Ok((conn, msg)) => {
+            *cc_async.borrow_mut() = conn;
+            server_url.set(url.clone());
+            selected_cloud_origin.set(url.clone());
+            world_active_origin.set(url.clone());
+            account_email.set(email.clone());
+            account_name.set(email.clone());
+            is_cloud_signed_in.set(true);
+            cloud_status.set(format!("已登录云端：{msg}"));
+            let _ = v_async.save_server_credential(&url, &email, "");
+            let mut creds = signed_in_origins_sig.get_untracked();
+            creds.retain(|(o, _)| o != &url);
+            creds.push((url, email));
+            signed_in_origins_sig.set(creds);
+            world_switcher_open.set(false);
+          }
+          Err(err) => {
+            cloud_status.set(format!("登录失败：{err}"));
+            world_error.set(err);
+          }
+        }
+        world_busy.set(false);
       });
-      match conn.login(&email, &password) {
-        Ok(msg) => {
-          *cc.borrow_mut() = conn;
-          server_url.set(url.clone());
-          selected_cloud_origin.set(url.clone());
-          world_active_origin.set(url.clone());
-          account_email.set(email.clone());
-          account_name.set(email.clone());
-          is_cloud_signed_in.set(true);
-          cloud_status.set(format!("已登录云端：{msg}"));
-          let _ = v.save_server_credential(&url, &email, "");
-          let mut creds = signed_in_origins_sig.get_untracked();
-          creds.retain(|(o, _)| o != &url);
-          creds.push((url, email));
-          signed_in_origins_sig.set(creds);
-          world_switcher_open.set(false);
-        }
-        Err(err) => {
-          cloud_status.set(format!("登录失败：{err}"));
-          world_error.set(err);
-        }
-      }
-      world_busy.set(false);
     })
   };
 
   let do_cloud_logout: Rc<dyn Fn()> = {
     let cc = cloud_connector.clone();
     Rc::new(move || {
+      auth_gen.set(auth_gen.get_untracked().wrapping_add(1));
+      world_busy.set(false);
       *cc.borrow_mut() = CloudConnector::new(CloudConfig {
         server_url: server_url.get_untracked(),
         access_token: None,
@@ -2057,26 +2094,49 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       })
     },
     on_check_server: Rc::new(move |url: String| {
-      let connector = CloudConnector::new(CloudConfig {
-        server_url: url.clone(),
-        access_token: None,
-        email: None,
+      let epoch = check_gen.get_untracked().wrapping_add(1);
+      check_gen.set(epoch);
+      cloud_status.set(format!("正在检测服务器：{url}…"));
+      let url_req = url.clone();
+      spawn(async move {
+        let res = net::run_blocking(move || {
+          let connector = CloudConnector::new(CloudConfig {
+            server_url: url_req,
+            access_token: None,
+            email: None,
+          });
+          connector.check_health()
+        })
+        .await;
+        if check_gen.get_untracked() != epoch {
+          return;
+        }
+        match res {
+          Ok(ver) => cloud_status.set(format!("连接正常：{url}（{ver}）")),
+          Err(err) => cloud_status.set(format!("离线 / 无法连接：{err}")),
+        }
       });
-      match connector.check_health() {
-        Ok(ver) => cloud_status.set(format!("连接正常：{url}（{ver}）")),
-        Err(err) => cloud_status.set(format!("离线 / 无法连接：{err}")),
-      }
     }),
     on_cloud_login: do_cloud_login.clone(),
     on_cloud_logout: do_cloud_logout.clone(),
     on_sync_now: {
       let cc = cloud_connector.clone();
       Rc::new(move || {
-        let phase = cc.borrow().sync_phase_label();
-        match cc.borrow().check_health() {
-          Ok(ver) => cloud_status.set(format!("同步就绪（{phase} · 服务器 {ver}）")),
-          Err(err) => cloud_status.set(format!("同步检查失败：{err}")),
-        }
+        let epoch = check_gen.get_untracked().wrapping_add(1);
+        check_gen.set(epoch);
+        let conn = cc.borrow().clone();
+        let phase = conn.sync_phase_label();
+        cloud_status.set("正在检查同步连接…".to_string());
+        spawn(async move {
+          let res = net::run_blocking(move || conn.check_health()).await;
+          if check_gen.get_untracked() != epoch {
+            return;
+          }
+          match res {
+            Ok(ver) => cloud_status.set(format!("同步就绪（{phase} · 服务器 {ver}）")),
+            Err(err) => cloud_status.set(format!("同步检查失败：{err}")),
+          }
+        });
       })
     },
     on_export_markdown,
@@ -2209,16 +2269,25 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       server_url.set(origin);
     }),
     on_probe_server: Rc::new(move |origin: String| {
+      let epoch = probe_gen.get_untracked().wrapping_add(1);
+      probe_gen.set(epoch);
       world_health_status.set("checking".to_string());
-      let conn = CloudConnector::new(CloudConfig {
-        server_url: origin,
-        access_token: None,
-        email: None,
+      let origin_req = origin.clone();
+      spawn(async move {
+        let ok = net::run_blocking(move || {
+          let conn = CloudConnector::new(CloudConfig {
+            server_url: origin_req,
+            access_token: None,
+            email: None,
+          });
+          conn.check_health().is_ok()
+        })
+        .await;
+        if probe_gen.get_untracked() != epoch {
+          return;
+        }
+        world_health_status.set(if ok { "reachable" } else { "unreachable" }.to_string());
       });
-      match conn.check_health() {
-        Ok(_) => world_health_status.set("reachable".to_string()),
-        Err(_) => world_health_status.set("unreachable".to_string()),
-      }
     }),
     on_add_server: {
       let v = vault.clone();
@@ -2256,37 +2325,65 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_register: {
       let cc = cloud_connector.clone();
       Rc::new(move |url: String, email: String, display_name: String, password: String| {
+        let epoch = auth_gen.get_untracked().wrapping_add(1);
+        auth_gen.set(epoch);
         world_busy.set(true);
         world_error.set(String::new());
-        let conn = CloudConnector::new(CloudConfig {
-          server_url: url.clone(),
-          access_token: None,
-          email: Some(email.clone()),
-        });
-        match conn.register(&email, &display_name, &password) {
-          Ok(u) => {
-            *cc.borrow_mut() = conn;
-            account_email.set(u.email);
-            account_name.set(u.display_name);
-            is_cloud_signed_in.set(true);
-            world_active_origin.set(url);
-            world_switcher_open.set(false);
+        let cc_async = cc.clone();
+        let url_req = url.clone();
+        spawn(async move {
+          let outcome = net::run_blocking(move || {
+            let conn = CloudConnector::new(CloudConfig {
+              server_url: url_req,
+              access_token: None,
+              email: Some(email.clone()),
+            });
+            conn.register(&email, &display_name, &password).map(|u| (conn, u))
+          })
+          .await;
+          if auth_gen.get_untracked() != epoch {
+            return;
           }
-          Err(e) => world_error.set(e),
-        }
-        world_busy.set(false);
+          match outcome {
+            Ok((conn, u)) => {
+              *cc_async.borrow_mut() = conn;
+              account_email.set(u.email);
+              account_name.set(u.display_name);
+              is_cloud_signed_in.set(true);
+              world_active_origin.set(url);
+              world_switcher_open.set(false);
+            }
+            Err(e) => world_error.set(e),
+          }
+          world_busy.set(false);
+        });
       })
     },
     on_forgot_password: Rc::new(move |url: String, email: String| {
-      let conn = CloudConnector::new(CloudConfig {
-        server_url: url,
-        access_token: None,
-        email: None,
+      let epoch = auth_gen.get_untracked().wrapping_add(1);
+      auth_gen.set(epoch);
+      world_busy.set(true);
+      world_error.set(String::new());
+      world_info.set(String::new());
+      spawn(async move {
+        let outcome = net::run_blocking(move || {
+          let conn = CloudConnector::new(CloudConfig {
+            server_url: url,
+            access_token: None,
+            email: None,
+          });
+          conn.forgot_password(&email)
+        })
+        .await;
+        if auth_gen.get_untracked() != epoch {
+          return;
+        }
+        match outcome {
+          Ok(()) => world_info.set("重置密码邮件已发送，请检查收件箱。".to_string()),
+          Err(e) => world_error.set(e),
+        }
+        world_busy.set(false);
       });
-      match conn.forgot_password(&email) {
-        Ok(()) => world_info.set("重置密码邮件已发送，请检查收件箱。".to_string()),
-        Err(e) => world_error.set(e),
-      }
     }),
   };
 
@@ -2329,30 +2426,42 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     error: share_error,
     on_toggle_public: {
       let cc = cloud_connector.clone();
+      let toggle_gen = signal(0u64);
       Rc::new(move |enable: bool| {
         let Some(doc_id) = active_doc.get_untracked() else {
           return;
         };
         let ws = active_workspace_id.get_untracked();
+        let epoch = toggle_gen.get_untracked().wrapping_add(1);
+        toggle_gen.set(epoch);
         share_busy.set(true);
-        let res = if enable {
-          cc.borrow().create_share(ws, doc_id)
-        } else {
-          cc.borrow().delete_share(ws, doc_id).map(|_| net::ShareState {
-            shared: false,
-            token: None,
-            url: None,
+        let conn = cc.borrow().clone();
+        spawn(async move {
+          let res = net::run_blocking(move || {
+            if enable {
+              conn.create_share(ws, doc_id)
+            } else {
+              conn.delete_share(ws, doc_id).map(|_| net::ShareState {
+                shared: false,
+                token: None,
+                url: None,
+              })
+            }
           })
-        };
-        match res {
-          Ok(st) => {
-            share_enabled.set(st.shared);
-            share_token.set(st.token);
-            share_error.set(None);
+          .await;
+          if toggle_gen.get_untracked() != epoch || active_doc.get_untracked() != Some(doc_id) {
+            return;
           }
-          Err(e) => share_error.set(Some(e)),
-        }
-        share_busy.set(false);
+          match res {
+            Ok(st) => {
+              share_enabled.set(st.shared);
+              share_token.set(st.token);
+              share_error.set(None);
+            }
+            Err(e) => share_error.set(Some(e)),
+          }
+          share_busy.set(false);
+        });
       })
     },
     on_close: Rc::new(move || share_modal_open.set(false)),
@@ -2374,17 +2483,30 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     error: global_ai_error,
     on_generate: {
       let cc = cloud_connector.clone();
+      let ai_gen = signal(0u64);
       Rc::new(move |prompt: String, _target: AiTarget| {
+        let epoch = ai_gen.get_untracked().wrapping_add(1);
+        ai_gen.set(epoch);
         global_ai_streaming.set(true);
         global_ai_error.set(None);
-        match cc.borrow().stream_ai_prompt("你是 Mica 知识库写作助手，请直接输出干净的 Markdown。", &prompt) {
-          Ok(out) => {
-            global_ai_output.set(out);
-            global_ai_done.set(true);
+        let conn = cc.borrow().clone();
+        spawn(async move {
+          let res = net::run_blocking(move || {
+            conn.stream_ai_prompt("你是 Mica 知识库写作助手，请直接输出干净的 Markdown。", &prompt)
+          })
+          .await;
+          if ai_gen.get_untracked() != epoch {
+            return;
           }
-          Err(e) => global_ai_error.set(Some(e)),
-        }
-        global_ai_streaming.set(false);
+          match res {
+            Ok(out) => {
+              global_ai_output.set(out);
+              global_ai_done.set(true);
+            }
+            Err(e) => global_ai_error.set(Some(e)),
+          }
+          global_ai_streaming.set(false);
+        });
       })
     },
     on_apply: {
@@ -2414,20 +2536,33 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     error: inline_ai_error,
     on_generate: {
       let cc = cloud_connector.clone();
+      let ai_gen = signal(0u64);
       Rc::new(move |prompt: String, ctx: String| {
+        let epoch = ai_gen.get_untracked().wrapping_add(1);
+        ai_gen.set(epoch);
         inline_ai_phase.set(InlineAiPhase::Running);
         inline_ai_error.set(None);
         let full = if ctx.is_empty() { prompt } else { format!("{prompt}\n\n原文：\n{ctx}") };
-        match cc.borrow().stream_ai_prompt(ai_dialog::K_AI_REWRITE_SYSTEM, &full) {
-          Ok(out) => {
-            inline_ai_output.set(out);
-            inline_ai_phase.set(InlineAiPhase::Succeeded);
+        let conn = cc.borrow().clone();
+        spawn(async move {
+          let res = net::run_blocking(move || {
+            conn.stream_ai_prompt(ai_dialog::K_AI_REWRITE_SYSTEM, &full)
+          })
+          .await;
+          if ai_gen.get_untracked() != epoch {
+            return;
           }
-          Err(e) => {
-            inline_ai_error.set(Some(e));
-            inline_ai_phase.set(InlineAiPhase::Failed);
+          match res {
+            Ok(out) => {
+              inline_ai_output.set(out);
+              inline_ai_phase.set(InlineAiPhase::Succeeded);
+            }
+            Err(e) => {
+              inline_ai_error.set(Some(e));
+              inline_ai_phase.set(InlineAiPhase::Failed);
+            }
           }
-        }
+        });
       })
     },
     on_insert_below: {

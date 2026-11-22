@@ -1309,6 +1309,62 @@ fn parse_graph_payload(raw_body: &str) -> Result<CloudGraphPayload, String> {
   })
 }
 
+/// Run a blocking HTTP / I/O closure on a dedicated OS thread without stalling
+/// the UI event loop, waking the awaiting `nsh` task immediately on completion.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+  use std::future::Future;
+  use std::pin::Pin;
+  use std::sync::{Arc, Mutex};
+  use std::task::{Context, Poll, Waker};
+
+  struct Slot<T> {
+    result: Option<T>,
+    waker: Option<Waker>,
+  }
+
+  struct BlockingFuture<T> {
+    slot: Arc<Mutex<Slot<T>>>,
+  }
+
+  impl<T> Future for BlockingFuture<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+      let mut guard = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+      if let Some(value) = guard.result.take() {
+        Poll::Ready(value)
+      } else {
+        guard.waker = Some(cx.waker().clone());
+        Poll::Pending
+      }
+    }
+  }
+
+  let slot = Arc::new(Mutex::new(Slot { result: None, waker: None }));
+  let worker_slot = Arc::clone(&slot);
+  let _ = std::thread::Builder::new().name("mica-net".into()).spawn(move || {
+    let value = f();
+    let waker = {
+      let mut guard = worker_slot.lock().unwrap_or_else(|e| e.into_inner());
+      guard.result = Some(value);
+      guard.waker.take()
+    };
+    if let Some(w) = waker {
+      w.wake();
+    }
+  });
+
+  BlockingFuture { slot }.await
+}
+
+/// WebAssembly fallback: cloud blocking calls already return immediate errors
+/// on `wasm32`, so run inline without spawning a thread.
+#[cfg(target_arch = "wasm32")]
+pub async fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+  f()
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1498,5 +1554,44 @@ mod tests {
 
     let graph = mock_conn("200 OK", r#"{"nodes":[{"view_id":"v1","name":"Home","degree":2}],"edges":[{"source":"v1","target":"v2"}],"unlinked":3}"#, true).0.fetch_graph(ws).unwrap();
     assert_eq!((graph.nodes.len(), graph.edges.len(), graph.unlinked), (1, 1, 3));
+  }
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn run_blocking_executes_off_calling_thread_and_wakes() {
+    use std::future::Future;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::task::{Context, Poll, Wake, Waker};
+
+    struct CondWaker {
+      ready: Mutex<bool>,
+      cv: Condvar,
+    }
+    impl Wake for CondWaker {
+      fn wake(self: Arc<Self>) {
+        *self.ready.lock().unwrap() = true;
+        self.cv.notify_all();
+      }
+    }
+
+    let caller = thread::current().id();
+    let mut fut = Box::pin(run_blocking(move || thread::current().id()));
+    let wake = Arc::new(CondWaker { ready: Mutex::new(false), cv: Condvar::new() });
+    let waker = Waker::from(Arc::clone(&wake));
+    let mut cx = Context::from_waker(&waker);
+
+    let worker_id = loop {
+      match fut.as_mut().poll(&mut cx) {
+        Poll::Ready(id) => break id,
+        Poll::Pending => {
+          let mut g = wake.ready.lock().unwrap();
+          while !*g {
+            g = wake.cv.wait(g).unwrap();
+          }
+          *g = false;
+        }
+      }
+    };
+    assert_ne!(worker_id, caller, "HTTP work must execute off the UI thread");
   }
 }

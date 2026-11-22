@@ -193,6 +193,14 @@ fn flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips() {
   app.press("id:account-switch-world-btn").unwrap();
   app.wait_for("id:world-tab-cloud").unwrap();
   app.wait_for("id:world-tab-local").unwrap();
+  let t0 = std::time::Instant::now();
+  app.press("id:world-tab-cloud").unwrap();
+  app.wait_for("登录到 Mica").unwrap();
+  assert!(
+    t0.elapsed() < std::time::Duration::from_millis(1500),
+    "switching to 云端账户 must not block the UI thread on HTTP health probe (took {:?})",
+    t0.elapsed()
+  );
   app.press("id:world-tab-local").unwrap();
   app.wait_for("在此设备上使用").unwrap();
   app.press("id:world-enter-local-btn").unwrap();
