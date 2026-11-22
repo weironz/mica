@@ -1,36 +1,35 @@
 //! Headless end-to-end integration tests for Mica's pure-Rust client (`clients/mica_rust`).
 
+use nsh_core::geometry::{px, size};
 use nsh_engine::{EngineConfig, Root};
 use nsh_testing::Headless;
 
 #[test]
 fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
-  let mut app =
-    Headless::start(EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>())).unwrap();
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  let mut app = Headless::start(config).unwrap();
 
-  // 1. Initial workspace tree and Markdown document render cleanly
-  app.wait_for("Mica Workspace").unwrap();
-  app.wait_for("[H1] Mica Fullstack Rust").unwrap();
+  // 1. Initial warm-gray workspace shell & starter document render cleanly
+  app.wait_for("Mica 本地工作区").unwrap();
+  app.wait_for("欢迎使用 Mica").unwrap();
 
-  // 2. Create a new folder and a new page via sidebar
+  // 2. Create a new folder and a new page via sidebar icons
   app.press("id:new-folder-btn").unwrap();
   app.press("id:new-page-btn").unwrap();
-  app.wait_for("Untitled Page 2").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
 
-  // 3. Rename the active page via inline sidebar rename
-  app.press("id:rename-page-btn").unwrap();
-  app.type_text("id:rename-page-input", "纯Rust架构设计").unwrap();
-  app.press("id:rename-confirm-btn").unwrap();
-  app.wait_for("Untitled Page 2纯Rust架构设计").unwrap();
+  // 3. Rename the active page directly via the borderless large document title
+  app.type_text("id:page-title-input", "纯Rust架构设计").unwrap();
+  app.wait_for("未命名页面 2纯Rust架构设计").unwrap();
 
-  // 4. Type Markdown shortcut + CJK text through native IME proxy
+  // 4. Type Markdown shortcut + CJK text in-place through native IME proxy
   app.type_text("id:editor-ime-input", "## ").unwrap();
   app.type_text("id:editor-ime-input", "全栈Rust架构").unwrap();
-  app.wait_for("[H2] 全栈Rust架构").unwrap();
 
   // 5. Apply Bold inline mark, insert divider, undo divider
   app.press("id:ed-bold").unwrap();
-  app.wait_for("[H2] 全栈Rust架构  [B]").unwrap();
+  app.wait_for("5 词 · 8 字").unwrap();
   app.press("id:ed-divider").unwrap();
   app.wait_for("────────────────────────").unwrap();
   app.press("id:ed-undo").unwrap();
@@ -43,7 +42,7 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   app.press("id:table-add-row").unwrap();
   app.wait_for("Table (3×2)").unwrap();
 
-  // 7. Switch to Whiteboard tab (BoardSession + Canvas): sticky, node, mindmap, inline label, SVG export
+  // 7. Switch to Whiteboard view (BoardSession + Canvas): sticky, node, mindmap, inline label, SVG export
   app.press("id:mode-board").unwrap();
   app.wait_for("Auto Layout").unwrap();
   app.press("id:board-add-sticky").unwrap();
@@ -80,8 +79,8 @@ fn fullstack_rust_end_to_end_workspace_editor_and_board_flows() {
   // 10. Trash active page and restore from Recycle Bin
   app.press("id:settings-close-btn").unwrap();
   app.press("id:trash-page-btn").unwrap();
-  app.wait_for("Recycle Bin (1)").unwrap();
+  app.wait_for("回收站 (1)").unwrap();
   app.press("id:toggle-recycle-bin").unwrap();
   app.press("id:restore-trash-0").unwrap();
-  app.wait_for("Recycle Bin (0)").unwrap();
+  app.wait_for("回收站 (0)").unwrap();
 }

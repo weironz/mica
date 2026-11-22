@@ -1,13 +1,10 @@
-//! Route 2-B pure-Rust block editor view backed directly by `mica_editor::EditorSession`.
-//!
-//! Architecture invariants:
-//! - Single document authority: edits go straight to `EditorSession` (`MicaDoc`).
-//! - `virtual_list` `count` and `keys` subscribe ONLY to `structure_rev`, while
-//!   per-block text/kind/marks updates flow through per-block fine-grained signals.
-//! - OS-native Chinese IME runs through a native `input()` proxy with
-//!   `on_composition_change` preedit tracking and caret-accurate submission.
-//! - Specialized blocks dispatch to `atomic_blocks` (`AtomicBlockRenderer` registry)
-//!   and `editor_table` (`TableModel` + `TableOp`), with `/` slash palette support.
+//! Route 2-B pure-Rust block editor view styled 1:1 to Mica's warm-paper Notion aesthetic:
+//! - Clean 40px page header row: breadcrumb path (left) · borderless minimal icon formatting
+//!   toolbar (center) · last-edited timestamp & page actions (right).
+//! - Centered 720px reading column with generous whitespace, large borderless editable title,
+//!   true typographic scale (H1 30px / H2 24px / H3 20px / Body 16px), and seamless in-place
+//!   OS-native IME editing right on the focused block (zero debug bar, zero `[H1]` tags).
+//! - Quiet bottom-right word & character count pill (`N 词 · M 字`).
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -15,13 +12,15 @@ use mica_editor::{
   DocPosition, DocSelection, EditorBlock, EditorCommand, EditorMark, EditorSession,
   NormalizedSelection, utf16_len,
 };
-use nsh_base::{button, input, theme};
+use nsh_base::{button, input};
 use nsh_core::{element::Position, geometry::px, prelude::*};
 
 use crate::{
   atomic_blocks::{AtomicBlockInput, is_atomic_or_rich_block, render_atomic_block},
   editor_slash::{command_for_slash, slash_menu_view},
   editor_table::table_block_view,
+  mica_icons,
+  mica_theme::palette,
 };
 
 #[derive(Clone, PartialEq)]
@@ -63,7 +62,8 @@ pub struct EditorViewState {
   focused_idx: Signal<usize>,
   focused_text: Signal<String>,
   composing_text: Signal<String>,
-  status_text: Signal<String>,
+  word_count_text: Signal<String>,
+  last_edited_text: Signal<String>,
   slash_open: Signal<bool>,
   slash_query: Signal<String>,
   can_undo: Signal<bool>,
@@ -82,6 +82,7 @@ impl EditorViewState {
       .first()
       .map(|b| b.text.clone())
       .unwrap_or_default();
+    let counts = compute_word_count_label(session.blocks());
     let can_u = session.can_undo();
     let can_r = session.can_redo();
     Rc::new(Self {
@@ -93,7 +94,8 @@ impl EditorViewState {
       focused_idx: signal(0),
       focused_text: signal(first_text),
       composing_text: signal(String::new()),
-      status_text: signal(String::from("Ready · Single-source MicaDoc CRDT")),
+      word_count_text: signal(counts),
+      last_edited_text: signal(String::from("上次编辑 刚刚")),
       slash_open: signal(false),
       slash_query: signal(String::new()),
       can_undo: signal(can_u),
@@ -121,15 +123,9 @@ impl EditorViewState {
       .first()
       .map(|b| b.text.clone())
       .unwrap_or_default();
+    let counts = compute_word_count_label(next.blocks());
     let can_u = next.can_undo();
     let can_r = next.can_redo();
-    let status = format!(
-      "Blocks: {} | Rev: {} | Undo: {} | Redo: {}",
-      next.blocks().len(),
-      next.content_revision(),
-      can_u,
-      can_r
-    );
     *self.session.borrow_mut() = next;
     *self.block_ids.borrow_mut() = ids;
     *self.block_signals.borrow_mut() = map;
@@ -139,13 +135,10 @@ impl EditorViewState {
     self.can_redo.set(can_r);
     self.focused_idx.set(0);
     self.focused_text.set(first_text);
-    self.status_text.set(status);
+    self.word_count_text.set(counts);
     self.structure_rev.set(self.structure_rev.get_untracked() + 1);
   }
 
-  /// Re-creates per-block signals inside the currently mounting `editor_view`
-  /// reactive owner so switching away and back via `when(...)` never reads a
-  /// disposed signal.
   fn rebuild_block_signals(&self) {
     let displays: Vec<(String, BlockDisplay)> = {
       let session = self.session.borrow();
@@ -171,6 +164,7 @@ impl EditorViewState {
     };
     self.sync_from_session(content_changed);
     if content_changed {
+      self.last_edited_text.set(String::from("上次编辑 刚刚"));
       let persist_cb = self.on_persist.borrow().clone();
       if let Some(cb) = persist_cb {
         cb(self.export_markdown(), crdt_update);
@@ -179,7 +173,7 @@ impl EditorViewState {
   }
 
   fn sync_from_session(&self, content_changed: bool) {
-    let (displays, next_idx, next_text, can_u, can_r, status) = {
+    let (displays, next_idx, next_text, can_u, can_r, counts) = {
       let session = self.session.borrow();
       let blocks = session.blocks();
       let displays: Vec<(String, BlockDisplay)> = blocks
@@ -201,14 +195,8 @@ impl EditorViewState {
         .unwrap_or_default();
       let can_u = session.can_undo();
       let can_r = session.can_redo();
-      let status = format!(
-        "Blocks: {} | Rev: {} | Undo: {} | Redo: {}",
-        blocks.len(),
-        session.content_revision(),
-        can_u,
-        can_r
-      );
-      (displays, next_idx, next_text, can_u, can_r, status)
+      let counts = compute_word_count_label(blocks);
+      (displays, next_idx, next_text, can_u, can_r, counts)
     };
 
     let new_ids: Vec<String> = displays.iter().map(|(id, _)| id.clone()).collect();
@@ -256,7 +244,7 @@ impl EditorViewState {
     }
     self.can_undo.set(can_u);
     self.can_redo.set(can_r);
-    self.status_text.set(status);
+    self.word_count_text.set(counts);
   }
 
   pub fn select_block(&self, idx: usize) {
@@ -309,10 +297,23 @@ impl EditorViewState {
   }
 }
 
-pub fn editor_view(state: Rc<EditorViewState>, dark_mode: Signal<bool>) -> impl IntoElement {
+pub struct EditorHeaderProps {
+  pub workspace_name: Signal<String>,
+  pub folder_name: Signal<String>,
+  pub page_title: Signal<String>,
+  pub on_rename_title: Rc<dyn Fn(String)>,
+  pub on_open_board: Rc<dyn Fn()>,
+  pub on_trash_page: Rc<dyn Fn()>,
+}
+
+pub fn editor_view(
+  state: Rc<EditorViewState>,
+  dark_mode: Signal<bool>,
+  header: Rc<EditorHeaderProps>,
+) -> impl IntoElement {
   state.rebuild_block_signals();
 
-  // Global keyboard shortcuts for the active editor
+  // Global undo/redo keyboard shortcuts
   {
     let st_u = state.clone();
     on_key("ctrl+z", move |_| st_u.dispatch(EditorCommand::Undo));
@@ -324,396 +325,767 @@ pub fn editor_view(state: Rc<EditorViewState>, dark_mode: Signal<bool>) -> impl 
     on_key("cmd+shift+z", move |_| st_r_mac.dispatch(EditorCommand::Redo));
   }
 
+  let st_undo = state.clone();
+  let st_redo = state.clone();
+  let st_para = state.clone();
   let st_h1 = state.clone();
   let st_h2 = state.clone();
+  let st_h3 = state.clone();
   let st_bold = state.clone();
   let st_italic = state.clone();
   let st_code = state.clone();
   let st_list = state.clone();
   let st_todo = state.clone();
   let st_quote = state.clone();
-  let st_indent = state.clone();
-  let st_outdent = state.clone();
-  let st_slash_btn = state.clone();
   let st_div = state.clone();
-  let st_undo = state.clone();
-  let st_redo = state.clone();
-  let st_status = state.clone();
-  let st_ime = state.clone();
-  let st_comp = state.clone();
-  let st_submit = state.clone();
-  let st_focus_val = state.clone();
+  let st_tbl_btn = state.clone();
+  let st_slash_btn = state.clone();
   let st_slash_vis = state.clone();
   let st_slash_pick = state.clone();
   let st_count = state.clone();
   let st_keys = state.clone();
   let st_row = state.clone();
+  let st_edited = state.clone();
+  let st_words = state.clone();
+
+  let h_bread = header.clone();
+  let h_title_val = header.clone();
+  let h_title_chg = header.clone();
+  let h_board = header.clone();
+  let h_trash = header.clone();
 
   view()
     .flex_1()
-    .bg(move || theme().background)
+    .bg(move || palette(dark_mode.get()).surface_base)
     .child(
-      // Formatting & structure toolbar
+      // 1. Original 40px page header row: breadcrumb (left) · borderless icon toolbar (center) · meta/actions (right)
       view()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .gap_1()
-        .px_3()
-        .py_2()
-        .border_b_1()
-        .border_color(move || theme().border)
-        .child(cmd_btn("H1", "ed-h1", move || {
-          st_h1.dispatch(EditorCommand::TransformBlock {
-            kind: "heading".into(),
-            data: Some(serde_json::json!({ "level": 1 })),
-          });
-        }))
-        .child(cmd_btn("H2", "ed-h2", move || {
-          st_h2.dispatch(EditorCommand::TransformBlock {
-            kind: "heading".into(),
-            data: Some(serde_json::json!({ "level": 2 })),
-          });
-        }))
-        .child(cmd_btn("Bold", "ed-bold", move || {
-          st_bold.toggle_mark_on_focused("bold");
-        }))
-        .child(cmd_btn("Italic", "ed-italic", move || {
-          st_italic.toggle_mark_on_focused("italic");
-        }))
-        .child(cmd_btn("Code", "ed-code", move || {
-          st_code.toggle_mark_on_focused("code");
-        }))
-        .child(cmd_btn("List", "ed-list", move || {
-          st_list.dispatch(EditorCommand::TransformBlock {
-            kind: "bulleted_list".into(),
-            data: None,
-          });
-        }))
-        .child(cmd_btn("Todo", "ed-todo", move || {
-          st_todo.dispatch(EditorCommand::TransformBlock {
-            kind: "todo".into(),
-            data: Some(serde_json::json!({ "checked": false })),
-          });
-        }))
-        .child(cmd_btn("Quote", "ed-quote", move || {
-          st_quote.dispatch(EditorCommand::TransformBlock {
-            kind: "quote".into(),
-            data: None,
-          });
-        }))
-        .child(cmd_btn("→", "ed-indent", move || {
-          st_indent.dispatch(EditorCommand::Indent { delta: 1 });
-        }))
-        .child(cmd_btn("←", "ed-outdent", move || {
-          st_outdent.dispatch(EditorCommand::Indent { delta: -1 });
-        }))
-        .child(cmd_btn("+ /", "ed-slash-open", move || {
-          st_slash_btn.slash_query.set(String::new());
-          st_slash_btn.slash_open.set(!st_slash_btn.slash_open.get_untracked());
-        }))
-        .child(cmd_btn("Divider", "ed-divider", move || {
-          st_div.dispatch(EditorCommand::InsertDivider);
-        }))
-        .child(cmd_btn("Undo", "ed-undo", move || {
-          st_undo.dispatch(EditorCommand::Undo);
-        }))
-        .child(cmd_btn("Redo", "ed-redo", move || {
-          st_redo.dispatch(EditorCommand::Redo);
-        }))
-        .child(
-          text(move || {
-            let comp = st_status.composing_text.get();
-            if comp.is_empty() {
-              st_status.status_text.get()
-            } else {
-              format!("IME 组字: [{comp}]")
-            }
-          })
-          .text_xs()
-          .text_color(move || theme().muted_foreground),
-        ),
-    )
-    .child(
-      // Focused block OS-native IME input proxy
-      view()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .gap_2()
+        .w_full()
+        .min_h(px(40.0))
         .px_4()
-        .py_2()
+        .py_1()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .justify_between()
+        .gap_2()
         .border_b_1()
-        .border_color(move || theme().border)
-        .child({
-          let st_idx = st_focus_val.clone();
-          text(move || format!("Block #{}", st_idx.focused_idx.get() + 1))
-            .text_xs()
-            .text_color(move || theme().muted_foreground)
-        })
+        .border_color(move || palette(dark_mode.get()).border_subtle)
+        .bg(move || palette(dark_mode.get()).surface_base)
         .child(
-          input()
-            .test_id("editor-ime-input")
-            .placeholder("输入正文、Markdown 快捷键（## / - / ---）或 / 打开斜杠命令...")
-            .flex_1()
-            .px_3()
-            .py_2()
-            .border_1()
-            .border_color(move || theme().primary)
-            .rounded(move || theme().radius)
-            .text_color(move || theme().foreground)
-            .value(move || st_focus_val.focused_text.get())
-            .on_change(move |v: &str| {
-              let composing = !st_ime.composing_text.get_untracked().is_empty();
-              if !composing && v.starts_with('/') {
-                st_ime.slash_open.set(true);
-                st_ime.slash_query.set(v.to_owned());
-              } else if st_ime.slash_open.get_untracked() && !v.starts_with('/') {
-                st_ime.slash_open.set(false);
-              }
-              let end = utf16_len(v);
-              st_ime.dispatch(EditorCommand::ImeUpdate {
-                text: v.to_owned(),
-                base: end,
-                extent: end,
-                composing_valid: composing,
-                composing_collapsed: !composing,
-                shift_pressed: false,
-              });
+          // Breadcrumb: workspace > folder > page
+          view()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .child(
+              text(move || h_bread.workspace_name.get())
+                .text_size(px(13.0))
+                .text_color(move || palette(dark_mode.get()).text_muted),
+            )
+            .child(
+              text(">")
+                .text_size(px(12.0))
+                .text_color(move || palette(dark_mode.get()).text_ghost),
+            )
+            .child({
+              let hb = header.clone();
+              text(move || hb.folder_name.get())
+                .text_size(px(13.0))
+                .text_color(move || palette(dark_mode.get()).text_muted)
             })
-            .on_composition_change(move |c: &Composition| {
-              if c.composing {
-                st_comp.composing_text.set(c.text.clone());
-              } else {
-                st_comp.composing_text.set(String::new());
-                st_comp.dispatch(EditorCommand::CommitComposition);
-              }
+            .child(
+              text(">")
+                .text_size(px(12.0))
+                .text_color(move || palette(dark_mode.get()).text_ghost),
+            )
+            .child({
+              let hb = header.clone();
+              text(move || hb.page_title.get())
+                .text_size(px(13.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(move || palette(dark_mode.get()).text_primary)
             })
-            .on_submit(move |_: &str| {
-              st_submit.dispatch(EditorCommand::SplitBlock);
-            }),
+            .child(icon_btn("ed-copy-path", dark_mode, || {}, mica_icons::copy_icon)),
+        )
+        .child(
+          // Minimal borderless icon formatting toolbar (exact Notion/Mica order)
+          view()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_1()
+            .child(icon_btn(
+              "ed-undo",
+              dark_mode,
+              move || st_undo.dispatch(EditorCommand::Undo),
+              mica_icons::undo,
+            ))
+            .child(icon_btn(
+              "ed-redo",
+              dark_mode,
+              move || st_redo.dispatch(EditorCommand::Redo),
+              mica_icons::redo,
+            ))
+            .child(toolbar_sep(dark_mode))
+            .child(icon_btn(
+              "ed-para",
+              dark_mode,
+              move || {
+                st_para.dispatch(EditorCommand::TransformBlock {
+                  kind: "paragraph".into(),
+                  data: None,
+                });
+              },
+              mica_icons::align_text,
+            ))
+            .child(icon_btn(
+              "ed-h1",
+              dark_mode,
+              move || {
+                st_h1.dispatch(EditorCommand::TransformBlock {
+                  kind: "heading".into(),
+                  data: Some(serde_json::json!({ "level": 1 })),
+                });
+              },
+              |c| mica_icons::heading_box("1", c),
+            ))
+            .child(icon_btn(
+              "ed-h2",
+              dark_mode,
+              move || {
+                st_h2.dispatch(EditorCommand::TransformBlock {
+                  kind: "heading".into(),
+                  data: Some(serde_json::json!({ "level": 2 })),
+                });
+              },
+              |c| mica_icons::heading_box("2", c),
+            ))
+            .child(icon_btn(
+              "ed-h3",
+              dark_mode,
+              move || {
+                st_h3.dispatch(EditorCommand::TransformBlock {
+                  kind: "heading".into(),
+                  data: Some(serde_json::json!({ "level": 3 })),
+                });
+              },
+              |c| mica_icons::heading_box("3", c),
+            ))
+            .child(toolbar_sep(dark_mode))
+            .child(icon_btn(
+              "ed-bold",
+              dark_mode,
+              move || st_bold.toggle_mark_on_focused("bold"),
+              mica_icons::bold_icon,
+            ))
+            .child(icon_btn(
+              "ed-italic",
+              dark_mode,
+              move || st_italic.toggle_mark_on_focused("italic"),
+              mica_icons::italic_icon,
+            ))
+            .child(icon_btn(
+              "ed-code",
+              dark_mode,
+              move || st_code.toggle_mark_on_focused("code"),
+              mica_icons::code_icon,
+            ))
+            .child(toolbar_sep(dark_mode))
+            .child(icon_btn(
+              "ed-list",
+              dark_mode,
+              move || {
+                st_list.dispatch(EditorCommand::TransformBlock {
+                  kind: "bulleted_list".into(),
+                  data: None,
+                });
+              },
+              mica_icons::list_bullet,
+            ))
+            .child(icon_btn(
+              "ed-todo",
+              dark_mode,
+              move || {
+                st_todo.dispatch(EditorCommand::TransformBlock {
+                  kind: "todo".into(),
+                  data: Some(serde_json::json!({ "checked": false })),
+                });
+              },
+              mica_icons::todo_box,
+            ))
+            .child(icon_btn(
+              "ed-quote",
+              dark_mode,
+              move || {
+                st_quote.dispatch(EditorCommand::TransformBlock {
+                  kind: "quote".into(),
+                  data: None,
+                });
+              },
+              mica_icons::quote_icon,
+            ))
+            .child(toolbar_sep(dark_mode))
+            .child(icon_btn(
+              "ed-divider",
+              dark_mode,
+              move || st_div.dispatch(EditorCommand::InsertDivider),
+              mica_icons::divider_icon,
+            ))
+            .child(icon_btn(
+              "ed-table-quick",
+              dark_mode,
+              move || st_tbl_btn.dispatch(command_for_slash("table")),
+              mica_icons::table_icon,
+            ))
+            .child(icon_btn(
+              "ed-slash-open",
+              dark_mode,
+              move || {
+                st_slash_btn.slash_query.set(String::new());
+                st_slash_btn
+                  .slash_open
+                  .set(!st_slash_btn.slash_open.get_untracked());
+              },
+              mica_icons::plus,
+            )),
+        )
+        .child(
+          // Right cluster: last-edited + whiteboard + favorite + trash + more
+          view()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .child(
+              text(move || st_edited.last_edited_text.get())
+                .text_size(px(12.0))
+                .text_color(move || palette(dark_mode.get()).text_faint),
+            )
+            .child(icon_btn(
+              "ed-open-board",
+              dark_mode,
+              move || (h_board.on_open_board)(),
+              mica_icons::whiteboard,
+            ))
+            .child(icon_btn("ed-star", dark_mode, || {}, mica_icons::star_icon))
+            .child(icon_btn(
+              "trash-page-btn",
+              dark_mode,
+              move || (h_trash.on_trash_page)(),
+              mica_icons::trash_icon,
+            ))
+            .child(icon_btn("ed-more", dark_mode, || {}, mica_icons::more_dots)),
         ),
     )
     .child(when(move || st_slash_vis.slash_open.get(), move || {
       let q = st_slash_pick.slash_query.get();
       let st_p = st_slash_pick.clone();
       let st_c = st_slash_pick.clone();
-      slash_menu_view(
-        q,
-        Rc::new(move |kind: &'static str| {
-          // Clear leading `/query` text before applying block transform.
-          if st_p.focused_text.get_untracked().starts_with('/') {
-            st_p.dispatch(EditorCommand::ImeUpdate {
-              text: String::new(),
-              base: 0,
-              extent: 0,
-              composing_valid: false,
-              composing_collapsed: true,
-              shift_pressed: false,
-            });
-          }
-          st_p.dispatch(command_for_slash(kind));
-          st_p.slash_open.set(false);
-          st_p.slash_query.set(String::new());
-        }),
-        Rc::new(move || {
-          st_c.slash_open.set(false);
-          st_c.slash_query.set(String::new());
-        }),
-      )
-    }))
-    .child(
-      // Route 2-B virtualized block list: `count` & `keys` track ONLY `structure_rev`
-      virtual_list(
-        move || {
-          st_count.structure_rev.get();
-          st_count.block_ids.borrow().len()
-        },
-        move |at: Position| {
-          let st_cell = st_row.clone();
-          let st_press = st_row.clone();
-          let st_sel = st_row.clone();
-          let st_todo_click = st_row.clone();
-          let st_tbl = st_row.clone();
-
-          let is_focused = computed(move || st_sel.focused_idx.get() == at.index());
-          let block_disp = computed(move || {
-            let idx = at.index();
-            let id = st_cell.block_ids.borrow().get(idx).cloned();
-            id.and_then(|bid| st_cell.block_signals.borrow().get(&bid).copied())
-              .map(|sig| sig.get())
-          });
-
-          let is_table = computed(move || {
-            block_disp
-              .get()
-              .is_some_and(|b| b.kind == "table")
-          });
-          let is_atomic = computed(move || {
-            block_disp
-              .get()
-              .is_some_and(|b| b.kind != "table" && is_atomic_or_rich_block(&b.kind))
-          });
-
+      view()
+        .w_full()
+        .items_center()
+        .py_1()
+        .child(
           view()
             .w_full()
-            .px_4()
-            .py_1()
-            .bg(move || {
-              if is_focused.get() {
-                theme().accent
-              } else {
-                theme().background
-              }
-            })
-            .child(when(move || is_table.get(), move || {
-              let st_d = st_tbl.clone();
-              dynamic(move || {
-                let disp = block_disp.get().unwrap_or(BlockDisplay {
-                  id: String::new(),
-                  kind: "table".into(),
-                  text: String::new(),
-                  marks: Vec::new(),
-                  data: serde_json::json!({}),
-                  indent: 0,
-                  checked: false,
-                  level: 1,
-                });
-                let st_inner = st_d.clone();
-                table_block_view(
-                  at.index(),
-                  &disp.data,
-                  Rc::new(move |cmd| st_inner.dispatch(cmd)),
-                )
-              })
-            }))
-            .child(when(move || is_atomic.get(), {
-              let st_ap_outer = st_press.clone();
-              move || {
-                let st_ap_dyn = st_ap_outer.clone();
-                dynamic(move || {
-                  let disp = block_disp.get().unwrap_or(BlockDisplay {
-                    id: String::new(),
-                    kind: "divider".into(),
+            .max_w(px(740.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(move || palette(dark_mode.get()).border_normal)
+            .bg(move || palette(dark_mode.get()).surface_overlay)
+            .child(slash_menu_view(
+              q,
+              Rc::new(move |kind: &'static str| {
+                if st_p.focused_text.get_untracked().starts_with('/') {
+                  st_p.dispatch(EditorCommand::ImeUpdate {
                     text: String::new(),
-                    marks: Vec::new(),
-                    data: serde_json::json!({}),
-                    indent: 0,
-                    checked: false,
-                    level: 1,
+                    base: 0,
+                    extent: 0,
+                    composing_valid: false,
+                    composing_collapsed: true,
+                    shift_pressed: false,
                   });
-                  let dm = dark_mode.get();
-                  let st_ap = st_ap_dyn.clone();
-                  button()
-                    .w_full()
-                    .on_press(move || st_ap.select_block(at.index()))
-                    .child(render_atomic_block(
-                      &AtomicBlockInput {
-                        id: disp.id,
-                        kind: disp.kind,
-                        text: disp.text,
-                        data: disp.data,
-                      },
-                      dm,
-                    ))
-                })
-              }
-            }))
-            .child(when(move || !is_table.get() && !is_atomic.get(), move || {
-              let st_p = st_press.clone();
-              let st_td = st_todo_click.clone();
-              button()
-                .flex_row()
-                .items_center()
-                .gap_2()
+                }
+                st_p.dispatch(command_for_slash(kind));
+                st_p.slash_open.set(false);
+                st_p.slash_query.set(String::new());
+              }),
+              Rc::new(move || {
+                st_c.slash_open.set(false);
+                st_c.slash_query.set(String::new());
+              }),
+            )),
+        )
+    }))
+    .child(
+      // 2. Centered 740px paper canvas: large borderless title + seamless in-place block list
+      view()
+        .flex_1()
+        .w_full()
+        .items_center()
+        .bg(move || palette(dark_mode.get()).surface_base)
+        .child(
+          view()
+            .flex_1()
+            .w_full()
+            .max_w(px(740.0))
+            .px_8()
+            .pt_8()
+            .pb_4()
+            .child(
+              // Large borderless editable document title (30px SemiBold, exact match to screenshot 2)
+              input()
+                .test_id("page-title-input")
+                .placeholder("无标题")
                 .w_full()
-                .py_1()
-                .on_press(move || {
-                  let is_todo_blk = block_disp
-                    .get()
-                    .is_some_and(|b| b.kind == "todo");
-                  if is_todo_blk && st_p.focused_idx.get_untracked() == at.index() {
-                    st_td.dispatch(EditorCommand::ToggleTodo {
-                      block_index: at.index(),
-                    });
-                  } else {
-                    st_p.select_block(at.index());
-                  }
-                })
-                .child(
-                  text(move || {
+                .pb_4()
+                .text_size(px(30.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(move || palette(dark_mode.get()).text_primary)
+                .bg(move || palette(dark_mode.get()).surface_base)
+                .value(move || h_title_val.page_title.get())
+                .on_change(move |v: &str| (h_title_chg.on_rename_title)(v.to_owned())),
+            )
+            .child(
+              // Route 2-B virtualized block list: `count` & `keys` track ONLY `structure_rev`
+              virtual_list(
+                move || {
+                  st_count.structure_rev.get();
+                  st_count.block_ids.borrow().len()
+                },
+                move |at: Position| {
+                  let st_cell = st_row.clone();
+                  let st_press = st_row.clone();
+                  let st_sel = st_row.clone();
+                  let st_tbl = st_row.clone();
+                  let st_edit = st_row.clone();
+
+                  let is_focused = computed(move || st_sel.focused_idx.get() == at.index());
+                  let block_disp = computed(move || {
+                    // Track `structure_rev` so recycled `virtual_list` slots re-bind to the new
+                    // block ID's signal on page switch / insert / delete / undo without waking
+                    // siblings during ordinary in-block typing.
+                    st_cell.structure_rev.get();
+                    let idx = at.index();
+                    let id = st_cell.block_ids.borrow().get(idx).cloned();
+                    id.and_then(|bid| st_cell.block_signals.borrow().get(&bid).copied())
+                      .map(|sig| sig.get())
+                  });
+
+                  let is_table = computed(move || {
+                    block_disp.get().is_some_and(|b| b.kind == "table")
+                  });
+                  let is_atomic = computed(move || {
                     block_disp
                       .get()
-                      .map(|b| format_block_line(&b))
-                      .unwrap_or_default()
-                  })
-                  .flex_1()
-                  .text_color(move || theme().foreground),
-                )
-            }))
-        },
-      )
-      .keys(move || {
-        st_keys.structure_rev.get();
-        st_keys.block_ids.borrow().clone()
-      })
-      .estimated_item_size(px(38.0))
-      .flex_1(),
+                      .is_some_and(|b| b.kind != "table" && is_atomic_or_rich_block(&b.kind))
+                  });
+
+                  view()
+                    .w_full()
+                    .py_1()
+                    .child(when(move || is_table.get(), move || {
+                      let st_d = st_tbl.clone();
+                      dynamic(move || {
+                        let disp = block_disp.get().unwrap_or_else(empty_table_disp);
+                        let st_inner = st_d.clone();
+                        table_block_view(
+                          at.index(),
+                          &disp.data,
+                          Rc::new(move |cmd| st_inner.dispatch(cmd)),
+                        )
+                      })
+                    }))
+                    .child(when(move || is_atomic.get(), {
+                      let st_ap_outer = st_press.clone();
+                      move || {
+                        let st_ap_dyn = st_ap_outer.clone();
+                        dynamic(move || {
+                          let disp = block_disp.get().unwrap_or_else(empty_divider_disp);
+                          let dm = dark_mode.get();
+                          let st_ap = st_ap_dyn.clone();
+                          button()
+                            .w_full()
+                            .on_press(move || st_ap.select_block(at.index()))
+                            .child(render_atomic_block(
+                              &AtomicBlockInput {
+                                id: disp.id,
+                                kind: disp.kind,
+                                text: disp.text,
+                                data: disp.data,
+                              },
+                              dm,
+                            ))
+                        })
+                      }
+                    }))
+                    .child(when(move || !is_table.get() && !is_atomic.get(), {
+                      let st_p_outer = st_press.clone();
+                      let st_e_outer = st_edit.clone();
+                      move || {
+                        let st_p_f = st_p_outer.clone();
+                        let st_e_f = st_e_outer.clone();
+                        let st_p_nf = st_p_outer.clone();
+                        // Separate structural typography signature from text so typing / CJK IME
+                        // never tears down or recreates the focused native `input()`.
+                        let block_style_sig = computed(move || {
+                          block_disp
+                            .get()
+                            .map(|b| (b.kind, b.level, b.indent, b.checked))
+                            .unwrap_or_else(|| ("paragraph".into(), 1, 0, false))
+                        });
+
+                        view()
+                          .w_full()
+                          .child(when(move || is_focused.get(), move || {
+                            let st_ime = st_e_f.clone();
+                            let st_comp = st_e_f.clone();
+                            let st_sub = st_e_f.clone();
+                            let st_val = st_e_f.clone();
+                            let st_td = st_p_f.clone();
+                            let is_quote = computed(move || block_style_sig.get().0 == "quote");
+                            let left_pad = computed(move || {
+                              let (kind, _, indent, _) = block_style_sig.get();
+                              let base = (indent as f32) * 20.0;
+                              px(if kind == "quote" { base + 12.0 } else { base })
+                            });
+                            let fsize = computed(move || {
+                              let (kind, level, _, _) = block_style_sig.get();
+                              px(heading_font_size(&kind, level))
+                            });
+                            let is_heading_or_bold = computed(move || {
+                              block_disp.get().is_some_and(|b| {
+                                b.kind == "heading" || b.marks.iter().any(|m| m.kind == "bold")
+                              })
+                            });
+
+                            view()
+                              .w_full()
+                              .flex_row()
+                              .items_center()
+                              .gap_2()
+                              .py_1()
+                              .pl(move || left_pad.get())
+                              .border_l(move || {
+                                if is_quote.get() { px(3.0) } else { px(0.0) }
+                              })
+                              .border_l_color(move || palette(dark_mode.get()).quote_bar)
+                              .child(dynamic(move || {
+                                let (kind, _, _, checked) = block_style_sig.get();
+                                let p = palette(dark_mode.get());
+                                let st_td_c = st_td.clone();
+                                match kind.as_str() {
+                                  "bulleted_list" => view().child(
+                                    text("•").text_size(px(16.0)).text_color(p.text_muted),
+                                  ),
+                                  "numbered_list" => view().child(
+                                    text("1.").text_size(px(15.0)).text_color(p.text_muted),
+                                  ),
+                                  "todo" => view().child(
+                                    button()
+                                      .on_press(move || {
+                                        st_td_c.dispatch(EditorCommand::ToggleTodo {
+                                          block_index: at.index(),
+                                        });
+                                      })
+                                      .child(
+                                        text(if checked { "☑" } else { "☐" })
+                                          .text_size(px(16.0))
+                                          .text_color(p.text_muted),
+                                      ),
+                                  ),
+                                  _ => view(),
+                                }
+                              }))
+                              .child(
+                                input()
+                                  .test_id("editor-ime-input")
+                                  .placeholder("输入正文，或输入 / 唤出命令...")
+                                  .flex_1()
+                                  .text_size(move || fsize.get())
+                                  .font_weight(if is_heading_or_bold.get_untracked() {
+                                    FontWeight::SEMIBOLD
+                                  } else {
+                                    FontWeight::NORMAL
+                                  })
+                                  .text_color(move || palette(dark_mode.get()).text_primary)
+                                  .bg(move || palette(dark_mode.get()).surface_base)
+                                  .value(move || st_val.focused_text.get())
+                                  .on_change(move |v: &str| {
+                                    let composing =
+                                      !st_ime.composing_text.get_untracked().is_empty();
+                                    if !composing && v.starts_with('/') {
+                                      st_ime.slash_open.set(true);
+                                      st_ime.slash_query.set(v.to_owned());
+                                    } else if st_ime.slash_open.get_untracked()
+                                      && !v.starts_with('/')
+                                    {
+                                      st_ime.slash_open.set(false);
+                                    }
+                                    let end = utf16_len(v);
+                                    st_ime.dispatch(EditorCommand::ImeUpdate {
+                                      text: v.to_owned(),
+                                      base: end,
+                                      extent: end,
+                                      composing_valid: composing,
+                                      composing_collapsed: !composing,
+                                      shift_pressed: false,
+                                    });
+                                  })
+                                  .on_composition_change(move |c: &Composition| {
+                                    if c.composing {
+                                      st_comp.composing_text.set(c.text.clone());
+                                    } else {
+                                      st_comp.composing_text.set(String::new());
+                                      st_comp.dispatch(EditorCommand::CommitComposition);
+                                    }
+                                  })
+                                  .on_submit(move |_: &str| {
+                                    st_sub.dispatch(EditorCommand::SplitBlock);
+                                  }),
+                              )
+                          }))
+                          .child(when(move || !is_focused.get(), move || {
+                            let st_click_outer = st_p_nf.clone();
+                            dynamic(move || {
+                              let disp = block_disp.get().unwrap_or_else(empty_para_disp);
+                              let p = palette(dark_mode.get());
+                              let (fsize, fweight, top_pad) = block_typography(&disp);
+                              let left_indent = (disp.indent as f32) * 20.0;
+                              let st_click = st_click_outer.clone();
+                              let st_td = st_click_outer.clone();
+
+                              let mut row = view()
+                                .w_full()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .pt(px(top_pad))
+                                .pl(px(left_indent));
+
+                              if disp.kind == "quote" {
+                                row = row
+                                  .pl(px(left_indent + 12.0))
+                                  .border_l(px(3.0))
+                                  .border_l_color(p.quote_bar);
+                              }
+                              if disp.kind == "bulleted_list" {
+                                row = row.child(
+                                  text("•").text_size(px(16.0)).text_color(p.text_muted),
+                                );
+                              } else if disp.kind == "numbered_list" {
+                                row = row.child(
+                                  text("1.").text_size(px(15.0)).text_color(p.text_muted),
+                                );
+                              } else if disp.kind == "todo" {
+                                let glyph = if disp.checked { "☑" } else { "☐" };
+                                row = row.child(
+                                  button()
+                                    .on_press(move || {
+                                      st_td.dispatch(EditorCommand::ToggleTodo {
+                                        block_index: at.index(),
+                                      });
+                                    })
+                                    .child(
+                                      text(glyph).text_size(px(16.0)).text_color(p.text_muted),
+                                    ),
+                                );
+                              }
+
+                              let display_str = if disp.text.is_empty() {
+                                "/".to_string()
+                              } else {
+                                disp.text.clone()
+                              };
+                              let text_col = if disp.text.is_empty() {
+                                p.text_ghost
+                              } else if disp.kind == "quote" {
+                                p.text_muted
+                              } else {
+                                p.text_primary
+                              };
+
+                              row.child(
+                                button()
+                                  .flex_1()
+                                  .flex_row()
+                                  .items_center()
+                                  .on_press(move || st_click.select_block(at.index()))
+                                  .child(
+                                    text(display_str)
+                                      .flex_1()
+                                      .text_size(px(fsize))
+                                      .font_weight(fweight)
+                                      .text_color(text_col),
+                                  ),
+                              )
+                            })
+                          }))
+                      }
+                    }))
+                },
+              )
+              .keys(move || {
+                st_keys.structure_rev.get();
+                st_keys.block_ids.borrow().clone()
+              })
+              .estimated_item_size(px(34.0))
+              .flex_1(),
+            ),
+        ),
+    )
+    .child(
+      // 3. Quiet bottom status bar with right-aligned word/char count pill ("9 词 · 14 字")
+      view()
+        .h(px(32.0))
+        .px_4()
+        .flex_row()
+        .items_center()
+        .justify_end()
+        .bg(move || palette(dark_mode.get()).surface_base)
+        .child(
+          view()
+            .px_2()
+            .py_1()
+            .rounded(px(6.0))
+            .bg(move || palette(dark_mode.get()).surface_sunken)
+            .child(
+              text(move || st_words.word_count_text.get())
+                .text_size(px(12.0))
+                .text_color(move || palette(dark_mode.get()).text_faint),
+            ),
+        ),
     )
 }
 
-fn format_block_line(b: &BlockDisplay) -> String {
-  let pad = "  ".repeat(b.indent as usize);
-  let body = format_marked_text(&b.text, &b.marks);
+fn heading_font_size(kind: &str, level: u64) -> f32 {
+  if kind == "heading" {
+    match level {
+      1 => 30.0,
+      2 => 24.0,
+      3 => 20.0,
+      4 => 18.0,
+      _ => 16.0,
+    }
+  } else {
+    16.0
+  }
+}
+
+fn block_typography(b: &BlockDisplay) -> (f32, FontWeight, f32) {
+  let has_bold = b.marks.iter().any(|m| m.kind == "bold");
   match b.kind.as_str() {
-    "heading" => format!("{pad}[H{}] {body}", b.level),
-    "bulleted_list" => format!("{pad}• {body}"),
-    "numbered_list" => format!("{pad}1. {body}"),
-    "todo" => {
-      let box_ch = if b.checked { "☑" } else { "☐" };
-      format!("{pad}{box_ch} {body}")
-    }
-    "quote" => format!("{pad}▎ {body}"),
-    _ => format!("{pad}{body}"),
+    "heading" => match b.level {
+      1 => (30.0, FontWeight::SEMIBOLD, 14.0),
+      2 => (24.0, FontWeight::SEMIBOLD, 10.0),
+      3 => (20.0, FontWeight::SEMIBOLD, 8.0),
+      4 => (18.0, FontWeight::SEMIBOLD, 6.0),
+      _ => (16.0, FontWeight::SEMIBOLD, 4.0),
+    },
+    _ => (
+      16.0,
+      if has_bold {
+        FontWeight::BOLD
+      } else {
+        FontWeight::NORMAL
+      },
+      2.0,
+    ),
   }
 }
 
-/// Renders UTF-16 inline marks clearly in block line summaries while preserving
-/// exact plain text when no marks are active.
-fn format_marked_text(text: &str, marks: &[EditorMark]) -> String {
-  if marks.is_empty() || text.is_empty() {
-    return text.to_string();
-  }
-  let mut badges = Vec::new();
-  for m in marks {
-    let tag = match m.kind.as_str() {
-      "bold" => "B",
-      "italic" => "I",
-      "code" => "`code`",
-      "strike" => "S",
-      "link" => "link",
-      other => other,
-    };
-    if !badges.contains(&tag) {
-      badges.push(tag);
+fn compute_word_count_label(blocks: &[EditorBlock]) -> String {
+  let mut chars = 0usize;
+  let mut words = 0usize;
+  for b in blocks {
+    let t = b.text.trim();
+    if t.is_empty() {
+      continue;
+    }
+    chars += t.chars().filter(|c| !c.is_whitespace()).count();
+    let mut in_ascii_word = false;
+    for ch in t.chars() {
+      if ch.is_ascii_alphanumeric() {
+        if !in_ascii_word {
+          words += 1;
+          in_ascii_word = true;
+        }
+      } else {
+        in_ascii_word = false;
+        if !ch.is_whitespace() && !ch.is_ascii_punctuation() {
+          words += 1;
+        }
+      }
     }
   }
-  format!("{text}  [{}]", badges.join("·"))
+  format!("{words} 词 · {chars} 字")
 }
 
-fn cmd_btn(label: &'static str, tid: &'static str, on_click: impl Fn() + 'static) -> impl IntoElement {
+fn icon_btn<F, I>(
+  tid: &'static str,
+  dark_mode: Signal<bool>,
+  on_click: impl Fn() + 'static,
+  icon_fn: F,
+) -> impl IntoElement
+where
+  F: Fn(&'static str) -> I + 'static,
+  I: IntoElement + 'static,
+{
   button()
     .test_id(tid)
-    .px_2()
-    .py_1()
-    .border_1()
-    .border_color(move || theme().border)
-    .rounded(move || theme().radius)
-    .bg(move || theme().secondary)
+    .w(px(28.0))
+    .h(px(28.0))
+    .items_center()
+    .justify_center()
+    .rounded(px(6.0))
+    .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
     .on_press(on_click)
-    .child(
-      text(label)
-        .text_xs()
-        .text_color(move || theme().secondary_foreground),
-    )
+    .child(dynamic(move || icon_fn(palette(dark_mode.get()).text_muted_hex)))
+}
+
+fn toolbar_sep(dark_mode: Signal<bool>) -> impl IntoElement {
+  view()
+    .w(px(1.0))
+    .h(px(16.0))
+    .mx_1()
+    .bg(move || palette(dark_mode.get()).border_normal)
+}
+
+fn empty_para_disp() -> BlockDisplay {
+  BlockDisplay {
+    id: String::new(),
+    kind: "paragraph".into(),
+    text: String::new(),
+    marks: Vec::new(),
+    data: serde_json::json!({}),
+    indent: 0,
+    checked: false,
+    level: 1,
+  }
+}
+
+fn empty_table_disp() -> BlockDisplay {
+  BlockDisplay {
+    id: String::new(),
+    kind: "table".into(),
+    text: String::new(),
+    marks: Vec::new(),
+    data: serde_json::json!({}),
+    indent: 0,
+    checked: false,
+    level: 1,
+  }
+}
+
+fn empty_divider_disp() -> BlockDisplay {
+  BlockDisplay {
+    id: String::new(),
+    kind: "divider".into(),
+    text: String::new(),
+    marks: Vec::new(),
+    data: serde_json::json!({}),
+    indent: 0,
+    checked: false,
+    level: 1,
+  }
 }

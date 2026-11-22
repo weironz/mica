@@ -14,10 +14,10 @@ fn main() -> impl std::process::Termination {
   platform::run_app(
     platform::AppSource::Rust(platform::Root::of::<mica_rust::MicaApp>()),
     platform::AppOptions {
-      title: "Mica (Fullstack Rust — Route 2-B)".to_owned(),
+      title: "Mica".to_owned(),
       #[cfg(any(target_os = "linux", target_os = "windows"))]
       app_id: "com.mica.rust.client".to_owned(),
-      size: (1200, 800),
+      size: (1280, 820),
       ..Default::default()
     },
   )
