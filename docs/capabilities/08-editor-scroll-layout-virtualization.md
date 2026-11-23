@@ -23,9 +23,9 @@
 
 ### 页面版式与宽度调节
 - **`CAP-08-04` 标题与正文紧凑视觉节奏**：页面标题（`30px SemiBold`）与正文第 0 块之间保持清爽紧凑间距（首块不叠加 H1 的大顶边距），避免出现 40–50px 的断层大空隙。
-- **`CAP-08-05` 11 档对称拖拽页宽调节**：
-  - 正文栏居中排版，支持 11 档离散步进：`680px` 到 `1880px`（步长 `120px`，默认 `800px`，`1880px` 代表全宽）。
-  - 在正文栏左右边界悬停显现 `2px` 引导线与 `ColResize` 光标；拖任一侧对称 `2×Δx` 实时吸附并在顶部居中浮现当前像素读数（`{px} px` / `全宽`）；双击边界抓手一键恢复默认 `800px`；页宽抓手绝不缩小虚拟列表宽度（滚动条始终留在窗口最右边缘）；修改后持久化并与设置页滑块双向联动。
+- **`CAP-08-05` 11 档页面宽度调节（设置页统一配置）**：
+  - 正文栏居中排版，支持 11 档离散步进：`680px` 到 `1880px`（步长 `120px`，默认 `800px`，`1880px` 代表全宽），统一在「设置 → 外观 → 页面宽度」中调节并持久化，同时不缩小虚拟列表宽度（滚动条始终留在窗口最右边缘）。
+  - 正文左右空白边缘不再挂载拖拽页宽抓手，避免与正文边缘空白框选冲突或误触发调宽。
 - **`CAP-08-06` 右下角悬浮字数徽章**：在视口右下角（为右侧滚动条留出间距）悬浮展示 `{words} 词 · {chars} 字`，0 字空页自动隐藏。
 
 ---
@@ -47,7 +47,7 @@
 | `CAP-08-02` `Jump` vs `KeepVisible` 编辑零跳滚 | P0 | 全端 | ✅ | `editor_bridge.rs::ScrollMode` + `editor_view.rs`（待长文档真机复测） |
 | `CAP-08-03` 窗口最右侧自适应比例滚动条 | P0 | 桌面/Web | ✅ | `app_flows::regression_fifteen_editor_ux_fixes`（`id:editor-vertical-scrollbar`） |
 | `CAP-08-04` 标题与正文紧凑间距 | P1 | 全端 | ✅ | `editor_view.rs` + `block_views.rs`（`idx == 0 => mt 2px`） |
-| `CAP-08-05` 11 档对称拖拽页宽调节 | P1 | 桌面/Web | ✅ | `page_width::tests` + `app_flows::flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips` |
+| `CAP-08-05` 11 档页面宽度调节（设置页统一配置） | P1 | 全端 | ✅ | `settings_view::tests::page_width_stops_match_flutter_11_stops` + `app_flows::flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips`（验证正文不再挂载拖拽抓手） |
 | `CAP-08-06` 右下角字数徽章 | P2 | 全端 | ✅ | `editor_view.rs::editor-word-count` |
 
 ---
@@ -55,3 +55,4 @@
 ## 演进记录
 
 - **2026-11-23**：确立全宽 `virtual_list` 虚拟化架构、`Jump`/`KeepVisible` 分离、自适应比例滚动条与首块紧凑间距规格（对应 `3f033c30` / `ff104b87`）。
+- **2026-11-24**：移除编辑器左右边缘拖拽调整正文宽度的抓手，正文宽度统一由设置页 11 档滑块调节，左右空白区无缝支持块级框选。

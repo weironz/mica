@@ -227,9 +227,14 @@ fn flutter_parity_app_menu_world_switcher_graph_version_diff_and_width_grips() {
   app.press_key("escape").unwrap();
   app.press("id:right-sidebar-close").unwrap();
 
-  // 5. Draggable PageWidthFrame grips are mounted on the editor canvas
-  app.wait_for("id:page-width-grip-left").unwrap();
-  app.wait_for("id:page-width-grip-right").unwrap();
+  // 5. Editor body drag-to-resize width grips have been removed (page width is configured in Settings).
+  assert!(
+    app.screen().layout_nodes().iter().all(|n| {
+      n.test_id.as_deref() != Some("page-width-grip-left")
+        && n.test_id.as_deref() != Some("page-width-grip-right")
+    }),
+    "page-width drag grips must not be mounted on the editor canvas"
+  );
 
   // 6. 1120×840 Settings Dialog with all 8 tabs including Recycle Bin & Live Appearance Preview
   app.press("id:open-settings-btn").unwrap();

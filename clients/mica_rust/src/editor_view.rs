@@ -89,7 +89,6 @@ pub struct EditorHeaderProps {
   pub comments_visible: Signal<bool>,
   pub page_width: Signal<f32>,
   pub ai_enabled: Signal<bool>,
-  pub on_commit_page_width: Rc<dyn Fn(f32)>,
   pub on_share: Rc<dyn Fn()>,
   pub on_toggle_comments: Rc<dyn Fn()>,
   pub on_toggle_properties: Rc<dyn Fn()>,
@@ -1623,14 +1622,12 @@ pub fn editor_view(
       // 2. Full-width `virtual_list` editor canvas (scrollbar sits cleanly on the
       //    RIGHT EDGE of the window!) + hidden native IME proxy sink + centered
       //    header (page title + properties) / per-block virtualized rows / footer
-      //    (backlinks + bottom click-to-focus) + non-blocking page-width grips +
-      //    margin block-marquee selection + floating selection bubble menu +
-      //    slash menu + word count badge.
+      //    (backlinks + bottom click-to-focus) + margin block-marquee selection +
+      //    floating selection bubble menu + slash menu + word count badge.
       let m_down = marquee.clone();
       let m_move = marquee.clone();
       let m_up = marquee.clone();
       let m_overlay = marquee.clone();
-      let on_commit_width = header.on_commit_page_width.clone();
 
       let br_count = b_body.clone();
       let br_keys = b_body.clone();
@@ -2187,12 +2184,6 @@ pub fn editor_view(
             .py(px(4.0))
             .z_index(16),
         )
-        .child(page_width_edge_grips(
-          page_width,
-          paper_bounds,
-          dark_mode,
-          on_commit_width,
-        ))
         .child(when(
           move || has_text_selection.get() && drag_anchor.get().is_none(),
           {
@@ -2750,166 +2741,6 @@ fn next_word_boundary(text: &str, u16_off: u32) -> u32 {
   }
   let byte_idx = if i < chars.len() { chars[i].0 } else { suffix.len() };
   u16_off + utf16_len(&suffix[..byte_idx])
-}
-
-/// Non-blocking side resize grips overlaid along the left & right edges of the
-/// centered page column so dragging width works without shrinking `virtual_list`
-/// (keeping the scrollbar permanently on the RIGHT EDGE of the window!).
-fn page_width_edge_grips(
-  width: Signal<f32>,
-  paper_bounds: Signal<(f32, f32)>,
-  dark_mode: Signal<bool>,
-  on_commit: Rc<dyn Fn(f32)>,
-) -> impl IntoElement {
-  let live_width: Signal<Option<f32>> = signal(None);
-  let hovered_side = signal(0_i8);
-  let drag_start_x = signal(0.0_f32);
-  let drag_start_rendered = signal(crate::page_width::PAGE_WIDTH_DEFAULT);
-  let last_click_ms = signal(0.0_f64);
-
-  let build_edge = move |side: f32, commit_cb: Rc<dyn Fn(f32)>| {
-    let side_i8: i8 = if side < 0.0 { -1 } else { 1 };
-    let tid = if side < 0.0 {
-      "page-width-grip-left"
-    } else {
-      "page-width-grip-right"
-    };
-    view()
-      .test_id(tid)
-      .absolute()
-      .top_0()
-      .bottom_0()
-      .left(move || {
-        let outer = paper_bounds.get().0;
-        let eff = live_width.get().unwrap_or_else(|| width.get());
-        let room = (outer - 24.0).max(0.0);
-        let col = crate::page_width::rendered_column_width(eff, room);
-        let left_edge = ((outer - col) * 0.5).max(0.0);
-        if side < 0.0 {
-          px((left_edge - 12.0).max(0.0))
-        } else {
-          px((left_edge + col).min((outer - 22.0).max(0.0)))
-        }
-      })
-      .w(move || {
-        if paper_bounds.get().0 >= crate::responsive_shell::NARROW_BREAKPOINT {
-          px(12.0)
-        } else {
-          px(0.0)
-        }
-      })
-      .z_index(10)
-      .items_center()
-      .justify_center()
-      .cursor(Cursor::ColResize)
-      .on_mouse_enter(move |_: &MouseEvent| hovered_side.set(side_i8))
-      .on_mouse_leave(move |_: &MouseEvent| {
-        if hovered_side.get_untracked() == side_i8 {
-          hovered_side.set(0);
-        }
-      })
-      .claim_touches(TouchClaim::on_start())
-      .keep_touches(true)
-      .on_responder_grant(move |e: &ResponderEvent| {
-        let outer = paper_bounds.get_untracked().0;
-        if outer < crate::responsive_shell::NARROW_BREAKPOINT {
-          return;
-        }
-        let stored = width.get_untracked();
-        let avail = (outer - 24.0).max(1.0);
-        drag_start_x.set(f32::from(e.page.x));
-        drag_start_rendered.set(crate::page_width::rendered_column_width(stored, avail));
-        live_width.set(Some(stored));
-      })
-      .on_responder_move(move |e: &ResponderEvent| {
-        if live_width.get_untracked().is_none() {
-          return;
-        }
-        let dx = f32::from(e.page.x) - drag_start_x.get_untracked();
-        let stored = width.get_untracked();
-        let start_r = drag_start_rendered.get_untracked();
-        let avail = (paper_bounds.get_untracked().0 - 24.0).max(1.0);
-        let next = crate::page_width::compute_drag_width(stored, start_r, avail, side, dx);
-        live_width.set(Some(next));
-      })
-      .on_responder_release(move |e: &ResponderEvent| {
-        let moved = (f32::from(e.page.x) - drag_start_x.get_untracked()).abs();
-        let finished = live_width.get_untracked();
-        live_width.set(None);
-        if moved < 4.0 {
-          let now = e.timestamp;
-          let prev = last_click_ms.get_untracked();
-          if prev > 0.0 && now >= prev && (now - prev) <= 350.0 {
-            last_click_ms.set(0.0);
-            if (width.get_untracked() - crate::page_width::PAGE_WIDTH_DEFAULT).abs() > 0.5 {
-              (commit_cb)(crate::page_width::PAGE_WIDTH_DEFAULT);
-            }
-          } else {
-            last_click_ms.set(now);
-          }
-          return;
-        }
-        last_click_ms.set(0.0);
-        if let Some(target) = finished
-          && (target - width.get_untracked()).abs() > 0.5
-        {
-          (commit_cb)(target);
-        }
-      })
-      .child(
-        view()
-          .w(px(2.0))
-          .h(px(48.0))
-          .rounded(px(2.0))
-          .bg(move || {
-            let active = live_width.get().is_some() || hovered_side.get() == side_i8;
-            if active {
-              palette(dark_mode.get()).accent
-            } else {
-              TRANSPARENT_RGBA
-            }
-          }),
-      )
-  };
-
-  view()
-    .absolute()
-    .top_0()
-    .bottom_0()
-    .left_0()
-    .right_0()
-    .pointer_events(PointerEvents::BoxNone)
-    .child(build_edge(-1.0, on_commit.clone()))
-    .child(build_edge(1.0, on_commit))
-    .child(when(move || live_width.get().is_some(), move || {
-      view()
-        .absolute()
-        .top(px(12.0))
-        .left_0()
-        .right_0()
-        .items_center()
-        .pointer_events(PointerEvents::None)
-        .z_index(25)
-        .child(
-          view()
-            .px_2()
-            .py_1()
-            .rounded(px(6.0))
-            .bg(move || palette(dark_mode.get()).surface_overlay)
-            .border_1()
-            .border_color(move || palette(dark_mode.get()).border_normal)
-            .child(
-              text(move || {
-                let lw = live_width.get().unwrap_or_else(|| width.get());
-                let avail = (paper_bounds.get().0 - 24.0).max(0.0);
-                let rw = crate::page_width::rendered_column_width(lw, avail);
-                crate::page_width::width_readout_label(lw, rw)
-              })
-              .text_size(px(12.0))
-              .text_color(move || palette(dark_mode.get()).text_primary),
-            ),
-        )
-    }))
 }
 
 fn close_slash(slash: SlashMenuSignals) {

@@ -11,9 +11,7 @@ use crate::mica_theme::palette;
 
 /// Width of the right-edge scrollbar strip excluded from starting a marquee.
 pub const MARQUEE_SCROLLBAR_STRIP: f32 = 16.0;
-/// Width of each `PageWidthFrame` side resize grip excluded from marquee starts.
-pub const MARQUEE_GRIP_WIDTH: f32 = 12.0;
-/// Width of the left block-handle gutter inside the content column.
+/// Width of the left/right block-handle gutters inside the content column.
 pub const MARQUEE_GUTTER_WIDTH: f32 = 24.0;
 /// Minimum pointer travel (px) before a press upgrades into a live marquee drag.
 pub const MARQUEE_DRAG_SLOP: f32 = 4.0;
@@ -119,18 +117,11 @@ pub fn starts_marquee_in_margin(
   if local_x > container_w - MARQUEE_SCROLLBAR_STRIP {
     return false;
   }
-  // 2. Blank margins outside the page-width frame (which extends 12px on each side).
-  let page_left = content_left - MARQUEE_GRIP_WIDTH;
-  let page_right = content_right + MARQUEE_GRIP_WIDTH;
-  if local_x < page_left || local_x > page_right {
+  // 2. Blank margins outside the centered content column start a marquee.
+  if local_x < content_left || local_x > content_right {
     return true;
   }
-  // 3. The 12px page-width resize grips belong exclusively to `PageWidthFrame`.
-  let on_grip = local_x < content_left || local_x > content_right;
-  if on_grip {
-    return false;
-  }
-  // 4. Inside the content column: left & right 24px padding gutters start a marquee
+  // 3. Inside the content column: left & right 24px padding gutters start a marquee
   //    (so left/right blank strips work even in full-width mode), while the inner
   //    prose text area always performs normal text/line selection.
   if local_x < content_left + MARQUEE_GUTTER_WIDTH
@@ -138,7 +129,7 @@ pub fn starts_marquee_in_margin(
   {
     return true;
   }
-  // 5. Blank space below the last block starts a marquee.
+  // 4. Blank space below the last block starts a marquee.
   local_y >= content_bottom
 }
 
@@ -329,16 +320,14 @@ mod tests {
     let c_right = 1000.0;
     let c_bottom = 450.0;
 
-    // Blank left and right margins
+    // Blank left and right margins (seamless all the way up to content_left / content_right)
     assert!(starts_marquee_in_margin(50.0, 100.0, w, c_left, c_right, c_bottom));
+    assert!(starts_marquee_in_margin(192.0, 100.0, w, c_left, c_right, c_bottom));
+    assert!(starts_marquee_in_margin(1006.0, 100.0, w, c_left, c_right, c_bottom));
     assert!(starts_marquee_in_margin(1050.0, 100.0, w, c_left, c_right, c_bottom));
 
     // Right 16px scrollbar strip excluded (> 1184)
     assert!(!starts_marquee_in_margin(1190.0, 100.0, w, c_left, c_right, c_bottom));
-
-    // 12px page-width resize grips excluded
-    assert!(!starts_marquee_in_margin(192.0, 100.0, w, c_left, c_right, c_bottom));
-    assert!(!starts_marquee_in_margin(1006.0, 100.0, w, c_left, c_right, c_bottom));
 
     // Left & right 24px gutters inside content column start marquee
     assert!(starts_marquee_in_margin(210.0, 100.0, w, c_left, c_right, c_bottom));

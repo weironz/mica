@@ -2421,14 +2421,6 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_export_markdown: on_export_markdown.clone(),
     on_export_html: on_export_html.clone(),
     on_save_snapshot: on_save_snapshot.clone(),
-    on_commit_page_width: {
-      let v = vault.clone();
-      Rc::new(move |w: f32| {
-        page_width_sig.set(w);
-        page_width_px_sig.set(w.round() as u32);
-        let _ = v.set_page_width(w);
-      })
-    },
     on_share: {
       let cc = cloud_connector.clone();
       let share_fetch_gen = signal(0u64);
