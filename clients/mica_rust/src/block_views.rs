@@ -2183,7 +2183,7 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
   let rendered_svg = render_mermaid_svg_for_theme(&source, dark_mode.get_untracked());
   let (svg_w, svg_h) = rendered_svg
     .as_deref()
-    .map(|s| parse_svg_aspect_size(s, 680.0, 320.0))
+    .map(|s| parse_svg_aspect_size(s, 860.0, 460.0))
     .unwrap_or((640.0, 220.0));
 
   view()
@@ -2200,6 +2200,8 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
     .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
     .child(
       // Clicking the Mermaid diagram opens the fullscreen pan/zoom Lightbox Modal!
+      // Render via `image(ImageSrc::svg_markup(...))` (resvg + system fonts) rather
+      // than `svg(...)`, because NSH's vector `svg()` drawing path drops `<text>` nodes.
       button()
         .test_id("mermaid-preview-btn")
         .accessibility_label("点击放大查看 Mermaid 图表")
@@ -2216,7 +2218,7 @@ fn render_mermaid_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBloc
         })
         .child(dynamic(move || {
           if let Some(svg_markup) = render_mermaid_svg_for_theme(&source, dark_mode.get()) {
-            svg(ImageSrc::svg_markup(&svg_markup))
+            image(ImageSrc::svg_markup(&svg_markup))
               .w(px(svg_w))
               .h(px(svg_h))
               .into_element()
@@ -2383,8 +2385,9 @@ pub fn parse_svg_aspect_size(svg_markup: &str, max_w: f32, max_h: f32) -> (f32, 
         .collect();
       if nums.len() == 4 && nums[2] > 1.0 && nums[3] > 1.0 {
         let (vw, vh) = (nums[2], nums[3]);
+        // Preserve exact aspect ratio so rasterized SVG text is never stretched.
         let scale = (max_w / vw).min(max_h / vh).min(1.5);
-        return ((vw * scale).clamp(220.0, max_w), (vh * scale).clamp(110.0, max_h));
+        return ((vw * scale).max(60.0), (vh * scale).max(36.0));
       }
     }
   }
@@ -3209,8 +3212,8 @@ pub fn render_lightbox_modal(
                       .child(dynamic(move || {
                         let z = zoom.get();
                         if let Some(svg_markup) = render_mermaid_svg_for_theme(&src_svg, dark_mode.get()) {
-                          let (bw, bh) = parse_svg_aspect_size(&svg_markup, 980.0, 560.0);
-                          svg(ImageSrc::svg_markup(&svg_markup))
+                          let (bw, bh) = parse_svg_aspect_size(&svg_markup, 1120.0, 640.0);
+                          image(ImageSrc::svg_markup(&svg_markup))
                             .w(px(bw * z))
                             .h(px(bh * z))
                             .into_element()
@@ -3424,5 +3427,29 @@ mod tests {
       shares
     );
     assert!((shares[0] + shares[1] - 1.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn mermaid_cjk_svg_rasterizes_dark_text_pixels() {
+    let src = "flowchart LR\n  P0[阶段0 准备与到货验收] --> P1[阶段1 上架与布线]";
+    let svg = render_mermaid_svg_for_theme(src, false).expect("merman should render flowchart");
+    assert!(svg.contains("阶段0"), "SVG should contain Chinese label text");
+    assert!(svg.contains("<text"), "resvg-safe Mermaid SVG should contain <text> nodes");
+    let raster = nsh_core::svg::rasterize(svg.as_bytes(), 900)
+      .expect("nsh_core::svg::rasterize should rasterize Mermaid SVG");
+    let dark_pixels = raster
+      .pixels
+      .as_chunks::<4>()
+      .0
+      .iter()
+      .filter(|px| px[3] > 200 && px[0] < 80 && px[1] < 80 && px[2] < 80)
+      .count();
+    assert!(
+      dark_pixels > 150,
+      "Chinese Mermaid labels must render visible dark glyph pixels (got {dark_pixels} dark pixels on {}x{}, svg snippet: {})",
+      raster.width,
+      raster.height,
+      &svg[..svg.len().min(600)]
+    );
   }
 }

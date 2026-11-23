@@ -200,15 +200,16 @@ fn render_mermaid_card(source: &str, dark_mode: bool) -> impl IntoElement {
   let rendered = mica_md::render_mermaid_svg(src, Some(&host_theme));
 
   if let Some(svg_markup) = rendered {
+    let (w, h) = crate::block_views::parse_svg_aspect_size(&svg_markup, 640.0, 320.0);
     return view()
       .w_full()
       .py_2()
       .items_center()
       .justify_center()
       .child(
-        svg(ImageSrc::svg_markup(&svg_markup))
-          .w(px(520.0))
-          .h(px(200.0)),
+        image(ImageSrc::svg_markup(&svg_markup))
+          .w(px(w))
+          .h(px(h)),
       );
   }
 
