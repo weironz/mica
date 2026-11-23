@@ -53,7 +53,7 @@
 | `CAP-03-04` Windows `CF_HTML` 字节偏移切片 | P0 | Windows | ✅ | `clipboard_platform::tests::extract_cf_html_fragment_slices_exact_utf8_byte_offsets` |
 | `CAP-03-05` v0.14.11 / 浏览器富文本粘贴 | P0 | 桌面/Web | ✅ | `app_flows::regression_fifteen_editor_ux_fixes` |
 | `CAP-03-06` 表格 vs 图片剪贴板仲裁 | P1 | 桌面/Web | ✅ | `clipboard_platform::tests::clipboard_html_table_vs_image_discrimination` |
-| `CAP-03-07` `Mod+Shift+V` 纯文本粘贴 | P1 | 桌面/Web | 🟡 | `editor_bridge::paste_clipboard(..., plain_literal=true)` 已就绪，快捷键绑定待补 |
+| `CAP-03-07` `Mod+Shift+V` 纯文本粘贴 | P1 | 桌面/Web | ✅ | `editor_view.rs::EditorKeyAction::PastePlain`（`mod+shift+v` 绑定 `paste_clipboard(..., true)`） |
 | `CAP-03-08` 剪贴板截图与图片文件粘贴 | P0 | 桌面/Web | ✅ | `app_flows::regression_fifteen_editor_ux_fixes` + `clipboard_platform::tests` |
 | `CAP-03-09` 裸 URL / 图片 URL / 公式粘贴 | P1 | 全端 | ✅ | `mica-editor::paste_heuristics_detect_urls_formulas_and_fence_repairs` |
 | `CAP-03-10` LLM 双围栏与语言修复 | P2 | 全端 | ✅ | `mica-editor::paste_heuristics_detect_urls_formulas_and_fence_repairs` |
@@ -63,3 +63,4 @@
 ## 演进记录
 
 - **2026-11-23**：完整沉淀剪贴板双通道、`CF_HTML` 字节偏移切片、v0.14.11 互操作、截图/文件图片粘贴与表格/图片仲裁规则（对应 `ff104b87`）。
+- **2026-11-23（补齐迭代）**：在 `editor_view.rs` 补齐 `Mod+Shift+V` 纯文本字面粘贴快捷键绑定（`CAP-03-07`）。

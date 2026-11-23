@@ -46,13 +46,14 @@
 | `CAP-06-02` `min_rows(1)` 零底部死行 | P1 | 全端 | ✅ | `block_views.rs::render_code_block_view` |
 | `CAP-06-03` 懒挂载编辑态与 `` ``` `` 自动聚焦 | P0 | 全端 | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` |
 | `CAP-06-04` / `05` 悬停工具条与顶层防遮挡语言选择 | P0 | 桌面/Web | ✅ | `app_flows::virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch` |
-| `CAP-06-06` / `07` 换行/行号/标题/AI/删除 | P1 | 桌面/Web | 🟡 | 换行/行号/AI/删除已通，底部标题编辑弹窗待补 |
+| `CAP-06-06` / `07` 换行/行号/标题/AI/删除 | P1 | 桌面/Web | ✅ | `app_flows::regression_capability_gaps_closed`（换行/行号/AI/删除 + `code-menu-title` 底部内联标题编辑并持久化 `code-block-caption`） |
 | `CAP-06-08` 代码块内输入与 Backspace/Delete | P0 | 全端 | ✅ | `app_flows::regression_typing_backtick_caret_focus_and_code_block_backspace` |
 | `CAP-06-09` 光标在 `(0,0)` 按 Backspace 删除代码块 | P0 | 桌面/Web | ✅ | `app_flows::regression_fifteen_editor_ux_fixes` |
-| `CAP-06-10` 语法高亮主题适配 | P1 | 全端 | 🟡 | 非聚焦预览态基于 `md-core` 语法高亮着色待补强 |
+| `CAP-06-10` 语法高亮主题适配 | P1 | 全端 | ✅ | `block_views::render_highlighted_code_preview`（L1 `mica_md::highlight::highlight_code` 6 色主题 token 渲染，>12KB 自动降级保 60fps）+ `app_flows::regression_capability_gaps_closed` |
 
 ---
 
 ## 演进记录
 
 - **2026-11-23**：沉淀顶层 `overlay()` 防遮挡、非受控编辑器修复 Backspace、懒挂载与 `(0,0)` 按 Backspace 删除代码块规则（对应 `3f033c30` / `72d84877` / `ff104b87`）。
+- **2026-11-23（补齐迭代）**：补齐非聚焦预览态基于 L1 `md-core` 的 6 色语法高亮与底部居中标题内联编辑（`CAP-06-06` / `10`）。

@@ -26,6 +26,7 @@ pub mod board_view;
 pub mod clipboard_platform;
 pub mod comment_panel;
 pub mod editor_bridge;
+pub mod editor_positioning;
 pub mod editor_slash;
 pub mod editor_view;
 pub mod emoji_picker;
@@ -35,6 +36,7 @@ pub mod mica_theme;
 pub mod net;
 pub mod page_width;
 pub mod property_panel;
+pub mod responsive_shell;
 pub mod right_sidebar;
 pub mod search_view;
 pub mod settings_view;
@@ -42,6 +44,7 @@ pub mod share_dialog;
 pub mod sidebar;
 pub mod storage;
 pub mod text_geometry;
+pub mod touch_selection;
 pub mod transfer;
 pub mod transfer_dialog;
 pub mod tree_dnd;
@@ -72,7 +75,7 @@ use nsh_core::{
     desktop::title_bar,
     on_key_with,
   },
-  geometry::px,
+  geometry::{Bounds, Points, px},
   keymap::When,
   prelude::*,
 };
@@ -397,6 +400,20 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let right_panel_open = signal(false);
   let right_panel_width = signal(right_sidebar::RIGHT_SIDEBAR_DEFAULT_WIDTH);
   let right_panel_tab = signal(ToolsTab::Outline);
+  let viewport_width = signal(1280.0_f32);
+  let is_narrow = computed(move || viewport_width.get() < responsive_shell::NARROW_BREAKPOINT);
+  let narrow_tabs_open = signal(false);
+  {
+    let prev_narrow = signal(false);
+    effect(move || {
+      let now_narrow = is_narrow.get();
+      if now_narrow && !prev_narrow.get_untracked() {
+        sidebar_open.set(false);
+        right_panel_open.set(false);
+      }
+      prev_narrow.set(now_narrow);
+    });
+  }
 
   // Overlays & modals
   let app_menu_open = signal(false);
@@ -801,6 +818,9 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       }
       open_tabs.set(tabs);
       active_mode.set(MODE_DOC);
+      if is_narrow.get_untracked() {
+        sidebar_open.set(false);
+      }
     })
   };
 
@@ -2830,11 +2850,40 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let br_embed = bridge.clone();
   let v_transfer = vault.clone();
   let reload_transfer = reload_tree_from_vault.clone();
+  let narrow_tab_count = signal(open_tabs.get_untracked().len().max(1));
+  let narrow_tab_entries: Signal<Vec<responsive_shell::NarrowTabEntry>> = signal(Vec::new());
+  effect(move || {
+    let tabs = open_tabs.get();
+    let active_idx = active_tab_idx.get();
+    narrow_tab_count.set(tabs.len().max(1));
+    narrow_tab_entries.set(
+      tabs
+        .into_iter()
+        .enumerate()
+        .map(|(idx, t)| responsive_shell::NarrowTabEntry {
+          idx,
+          doc_id: t.doc_id,
+          title: t.title,
+          active: idx == active_idx,
+        })
+        .collect(),
+    );
+  });
 
   view()
     .flex_1()
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
+    .on_layout(move |b: &Bounds<Points>| {
+      let w = b.size.width.0;
+      if w > 0.0 && (viewport_width.get_untracked() - w).abs() > 2.0 {
+        spawn(async move {
+          if (viewport_width.get_untracked() - w).abs() > 2.0 {
+            viewport_width.set(w);
+          }
+        });
+      }
+    })
     .child(
       // 1. Unified 34px frameless top bar (`TitleBarStyle::Hidden` + `window_drag`)
       view()
@@ -2847,7 +2896,11 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .child(
           view()
             .w(move || {
-              let raw = if sidebar_open.get() { sidebar_width.get() + 7.0 } else { 0.0 };
+              let raw = if !is_narrow.get() && sidebar_open.get() {
+                sidebar_width.get() + 7.0
+              } else {
+                0.0
+              };
               px(raw.max(84.0))
             })
             .h_full()
@@ -2963,6 +3016,20 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                 ),
             )
             .child(dynamic(move || {
+              if is_narrow.get() {
+                return view()
+                  .h_full()
+                  .items_center()
+                  .justify_center()
+                  .window_drag(false)
+                  .child(responsive_shell::narrow_tab_switcher_button(
+                    active_title,
+                    narrow_tab_count,
+                    narrow_tabs_open,
+                    dark_mode,
+                  ))
+                  .into_element();
+              }
               let tabs = open_tabs.get();
               let active_idx = active_tab_idx.get();
               let mode = active_mode.get();
@@ -3024,7 +3091,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                 }
                 strip = strip.child(tab_el);
               }
-              strip
+              strip.into_element()
             }))
             .child(
               view()
@@ -3053,12 +3120,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     )
     .child(
       // 2. Main workspace body: Resizable Left Sidebar + Editor/Board + Resizable Right Sidebar
+      //    On narrow viewports (< 768px), sidebars float as overlay drawers so the editor keeps full width.
       view()
         .flex_1()
         .w_full()
         .min_h(px(0.0))
         .flex_row()
-        .child(when(move || sidebar_open.get(), {
+        .child(when(move || !is_narrow.get() && sidebar_open.get(), {
           let t = tree.clone();
           let cb = sidebar_cb.clone();
           move || {
@@ -3102,12 +3170,63 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               }
             })),
         )
-        .child(when(move || right_panel_open.get(), {
+        .child(when(move || !is_narrow.get() && right_panel_open.get(), {
           let rp = right_props.clone();
           let re = right_extras.clone();
           move || right_sidebar::right_sidebar_view_with_extras(rp.clone(), re.clone())
         })),
     )
+    // 2b. Narrow-viewport (< 768px) overlay drawers & compact tab dropdown
+    .child(when(move || is_narrow.get() && sidebar_open.get(), {
+      let t = tree.clone();
+      let cb = sidebar_cb.clone();
+      move || {
+        responsive_shell::mobile_drawer_overlay(
+          "mobile-left-drawer",
+          false,
+          sidebar_open,
+          dark_mode,
+          sidebar::sidebar_view(
+            t.clone(),
+            tree_rev,
+            active_doc,
+            favorite_pages,
+            sidebar_width,
+            workspace_name,
+            account_name,
+            dark_mode,
+            cb.clone(),
+          ),
+        )
+      }
+    }))
+    .child(when(move || is_narrow.get() && right_panel_open.get(), {
+      let rp = right_props.clone();
+      let re = right_extras.clone();
+      move || {
+        responsive_shell::mobile_drawer_overlay(
+          "mobile-right-drawer",
+          true,
+          right_panel_open,
+          dark_mode,
+          right_sidebar::right_sidebar_view_with_extras(rp.clone(), re.clone()),
+        )
+      }
+    }))
+    .child(responsive_shell::narrow_tab_popover_view(
+      narrow_tabs_open,
+      narrow_tab_entries,
+      dark_mode,
+      {
+        let sel = on_select_doc.clone();
+        Rc::new(move |idx: usize, doc_id: Uuid, title: String| {
+          active_tab_idx.set(idx);
+          sel(doc_id, title);
+        })
+      },
+      on_close_tab_at.clone(),
+      on_new_page.clone(),
+    ))
     // 3. New-Tab `+` 2-item popup menu
     .child(when(move || new_tab_menu_open.get(), {
       let np = new_page_tab.clone();

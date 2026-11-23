@@ -48,11 +48,12 @@
 | `CAP-05-03` 单元格行内 marks 渲染 | P1 | 全端 | ✅ | `block_views.rs::render_table_block_view`（单格编辑态所见即所得 marks 待进一步对齐 `cell_edit_controller.dart`） |
 | `CAP-05-04` 自由上下左右拖选多单元格 | P0 | 桌面/Web | ✅ | `block_views.rs::render_table_block_view`（待桌面真机多方向实测） |
 | `CAP-05-05` 多格复制/剪切/清空 | P0 | 桌面/Web | ✅ | `mica-editor::table_model_crud_alignment_navigation_and_area_copy` + `editor_view.rs` |
-| `CAP-05-06` 单元格编辑与 Tab/Enter 导航 | P0 | 全端 | 🟡 | `mica-editor::table_ops_through_editor_session_and_undo`（`Tab`/`Shift+Tab`/方向键跨格导航 L3 快捷键待补全） |
-| `CAP-05-07` 行列增删与列对齐菜单 | P1 | 全端 | 🟡 | 基础 `+ 行`/`+ 列`/`删除` 已就绪，指定行列右键菜单与拖拽调列宽待补 |
+| `CAP-05-06` 单元格编辑与 Tab/Enter 导航 | P0 | 全端 | ✅ | `mica-editor::table_ops_through_editor_session_and_undo` + `app_flows::regression_capability_gaps_closed`（`Tab`/`Shift+Tab`/`Up`/`Down`/`Escape` 跨格导航与末格追加行） |
+| `CAP-05-07` 行列增删与列对齐菜单 | P1 | 全端 | ✅ | `block_views.rs::render_table_block_view`（悬停条 `+ 行`/`+ 列`/`− 行`/`− 列`/`对齐` 循环切换 + 表头列分隔线拖拽持久化 `SetColumnWidths`） |
 
 ---
 
 ## 演进记录
 
 - **2026-11-23**：沉淀内容自适应列宽、自由上下左右多单元格拖选与批量复制/清空规格（对应 `ff104b87`）。
+- **2026-11-23（补齐迭代）**：补齐单元格键盘导航（`Tab`/`Shift+Tab`/`Up`/`Down`/`Escape` 走 `TableModel::navigate`）、悬停条 `− 行`/`− 列`/`对齐` 切换与表头列分隔线拖拽调宽（`CAP-05-06` / `07`）。

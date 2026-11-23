@@ -21,7 +21,6 @@ use mica_editor::{
   DocPosition, DocSelection, EditorBlock, TableCell, TableModel, TableNavDirection, TableOp,
   marks::EditorMark,
   utf16::{utf16_len, utf16_slice},
-  word_range_at,
 };
 use nsh_base::{EditorScrollBeyond, EditorStyles, button, editor, input, text_view::PartStyle};
 use nsh_core::{
@@ -111,6 +110,7 @@ pub struct BlockRenderEnv {
   pub caret_blink_on: Signal<bool>,
   pub sink_clear_rev: Signal<u64>,
   pub marquee_selected: Signal<Option<(usize, usize)>>,
+  pub inline_math_edit: Signal<Option<crate::editor_positioning::InlineMathEdit>>,
 }
 
 fn is_non_prose_block(block: &EditorBlock) -> bool {
@@ -388,6 +388,8 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     let editor_focused = env.editor_focused;
     let caret_blink_on = env.caret_blink_on;
     let sink_clear_rev = env.sink_clear_rev;
+    let inline_math_edit = env.inline_math_edit;
+    let marks_click = marks.clone();
     let layout_rev = signal(0u64);
     let kind_color = kind.clone();
     let measure: TextMeasureFn = Rc::new(text_measurer());
@@ -458,16 +460,32 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
         let _ = last_click;
 
         if click_count == 3 {
+          inline_math_edit.set(None);
           let end_u16 = utf16_len(&text_click);
           let sel = DocSelection::from_positions(DocPosition::new(idx, 0), DocPosition::new(idx, end_u16));
           drag_anchor_d.set(Some(sel.anchor_pos()));
           br_click.set_selection(sel);
         } else if click_count == 2 {
-          let (ws, we) = word_range_at(&text_click, off);
+          inline_math_edit.set(None);
+          let (ws, we) = crate::touch_selection::touch_word_bounds(&text_click, off);
           let sel = DocSelection::from_positions(DocPosition::new(idx, ws), DocPosition::new(idx, we));
           drag_anchor_d.set(Some(sel.anchor_pos()));
           br_click.set_selection(sel);
         } else {
+          if let Some(m) = marks_click.iter().find(|m| {
+            m.kind == "math"
+              && m.end > m.start
+              && ((off > m.start && off < m.end) || (m.end - m.start == 1 && off == m.start))
+          }) {
+            inline_math_edit.set(Some(crate::editor_positioning::InlineMathEdit {
+              block_index: idx,
+              start: m.start,
+              end: m.end,
+              draft: utf16_slice(&text_click, m.start, m.end).to_owned(),
+            }));
+          } else {
+            inline_math_edit.set(None);
+          }
           let pos = DocPosition::new(idx, off);
           drag_anchor_d.set(Some(pos));
           br_click.set_selection(DocSelection::caret(idx, off));
@@ -1018,6 +1036,8 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
     .and_then(Value::as_str)
     .unwrap_or("")
     .to_string();
+  let title_editing = signal(false);
+  let title_draft = signal(title.clone());
   let source = block.text.clone();
   let live_src = signal(source.clone());
   let src_ai = source.clone();
@@ -1030,8 +1050,10 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
   let br_lang = bridge.clone();
   let br_wrap = bridge.clone();
   let br_ln = bridge.clone();
+  let br_title = bridge.clone();
   let br_del = bridge.clone();
   let lang_for_ed = editor_language_for(&raw_lang).to_string();
+  let lang_for_hl = raw_lang.clone();
   let lang_for_picker = lang_label.clone();
 
   view()
@@ -1049,36 +1071,30 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
         .py(px(12.0))
         .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
         .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
-        // Lazy mount: lightweight text when unfocused (instant on 141KB docs),
-        // full `nsh_base::editor()` (`min_rows(1)`, ZERO dead blank bottom row) on click!
+        // Lazy mount: lightweight `md-core` syntax-highlighted text when unfocused
+        // (instant on 141KB docs, CAP-06-10), full `nsh_base::editor()` on click!
         .child(when(
           move || !is_editing.get(),
-          move || {
-            let bid_c = bid_focus_click.clone();
-            button()
-              .test_id("code-block-editor")
-              .accessibility_label("点击编辑代码块")
-              .w_full()
-              .items_start()
-              .cursor(Cursor::Text)
-              .on_press(move || {
-                code_at_start.set(live_src.get_untracked().is_empty());
-                focused_code.set(Some(bid_c.clone()));
-              })
-              .child(
-                text(move || {
-                  let cur = live_src.get();
-                  if cur.is_empty() { "输入代码...".to_string() } else { cur }
-                })
+          {
+            let lang_hl = lang_for_hl.clone();
+            move || {
+              let bid_c = bid_focus_click.clone();
+              let lang_hl2 = lang_hl.clone();
+              button()
+                .test_id("code-block-editor")
+                .accessibility_label("点击编辑代码块")
                 .w_full()
-                .text_size(px(14.0))
-                .line_height(px(22.0))
-                .font_family("monospace")
-                .text_color(move || {
-                  let p = palette(dark_mode.get());
-                  if live_src.get().is_empty() { p.text_ghost } else { p.text_primary }
-                }),
-              )
+                .items_start()
+                .cursor(Cursor::Text)
+                .on_press(move || {
+                  code_at_start.set(live_src.get_untracked().is_empty());
+                  focused_code.set(Some(bid_c.clone()));
+                })
+                .child(dynamic(move || {
+                  let cur = live_src.get();
+                  render_highlighted_code_preview(&cur, &lang_hl2, dark_mode)
+                }))
+            }
           },
         ))
         .child(when(
@@ -1454,6 +1470,30 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                   )
                   .child(
                     button()
+                      .test_id("code-menu-title")
+                      .w_full()
+                      .h(px(30.0))
+                      .px_2()
+                      .rounded(px(5.0))
+                      .flex_row()
+                      .items_center()
+                      .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
+                      .on_press(move || {
+                        more_open.set(false);
+                        title_editing.set(true);
+                      })
+                      .child(
+                        text(if title_draft.get_untracked().trim().is_empty() {
+                          "添加标题"
+                        } else {
+                          "编辑标题"
+                        })
+                        .text_size(px(12.5))
+                        .text_color(move || palette(dark_mode.get()).text_primary),
+                      ),
+                  )
+                  .child(
+                    button()
                       .test_id("code-menu-delete")
                       .w_full()
                       .h(px(30.0))
@@ -1490,21 +1530,140 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
             )
         })),
     )
-    .child(when({ let has_t = !title.trim().is_empty(); move || has_t }, {
-      let t_cap = title.clone();
+    .child(when(move || title_editing.get(), {
+      let br_t = br_title.clone();
       move || {
+        let br_save = br_t.clone();
+        let br_sub = br_t.clone();
+        let br_rm = br_t.clone();
         view()
           .w_full()
-          .h(px(22.0))
+          .pt_1()
+          .flex_row()
           .items_center()
           .justify_center()
+          .gap_2()
           .child(
-            text(t_cap.clone())
-              .text_size(px(12.0))
-              .text_color(move || palette(dark_mode.get()).text_muted),
+            input()
+              .test_id("code-title-input")
+              .auto_focus(true)
+              .submit_behavior(SubmitBehavior::Submit)
+              .placeholder("输入代码块标题...")
+              .w(px(260.0))
+              .h(px(28.0))
+              .px_2()
+              .rounded(px(5.0))
+              .border_1()
+              .border_color(move || palette(dark_mode.get()).border_normal)
+              .bg(move || palette(dark_mode.get()).surface_base)
+              .text_size(px(12.5))
+              .text_color(move || palette(dark_mode.get()).text_primary)
+              .value(move || title_draft.get())
+              .on_change(move |v: &str| title_draft.set(v.to_owned()))
+              .on_submit(move |v: &str| {
+                let clean = v.trim();
+                let val = if clean.is_empty() { Value::Null } else { Value::String(clean.to_owned()) };
+                br_sub.update_block_data_attr_at(idx, "title", val);
+                title_editing.set(false);
+              }),
           )
+          .child(mini_chip("保存", dark_mode, move || {
+            let cur = title_draft.get_untracked();
+            let clean = cur.trim();
+            let val = if clean.is_empty() { Value::Null } else { Value::String(clean.to_owned()) };
+            br_save.update_block_data_attr_at(idx, "title", val);
+            title_editing.set(false);
+          }))
+          .child(mini_chip("移除", dark_mode, move || {
+            title_draft.set(String::new());
+            br_rm.update_block_data_attr_at(idx, "title", Value::Null);
+            title_editing.set(false);
+          }))
       }
     }))
+    .child(when(
+      {
+        let has_t = !title.trim().is_empty();
+        move || has_t && !title_editing.get()
+      },
+      {
+        let t_cap = title.clone();
+        move || {
+          view()
+            .test_id("code-block-caption")
+            .w_full()
+            .h(px(22.0))
+            .items_center()
+            .justify_center()
+            .child(
+              text(t_cap.clone())
+                .text_size(px(12.0))
+                .text_color(move || palette(dark_mode.get()).text_muted),
+            )
+        }
+      },
+    ))
+}
+
+fn render_highlighted_code_preview(code: &str, lang: &str, dark_mode: Signal<bool>) -> AnyElement {
+  let p = palette(dark_mode.get());
+  if code.is_empty() {
+    return text("输入代码...")
+      .w_full()
+      .text_size(px(14.0))
+      .line_height(px(22.0))
+      .font_family("monospace")
+      .text_color(p.text_ghost)
+      .into_element();
+  }
+  let mut root = text("")
+    .w_full()
+    .text_size(px(14.0))
+    .line_height(px(22.0))
+    .font_family("monospace")
+    .text_color(p.text_primary);
+  // Skip tokenizing gigantic snippets (>12KB) in preview to keep 60fps virtual scrolling.
+  if code.len() > 12_000 {
+    return root.child(text(code.to_owned())).into_element();
+  }
+  let tokens = mica_md::highlight::highlight_code(code, lang);
+  if tokens.is_empty() {
+    return root.child(text(code.to_owned())).into_element();
+  }
+  let total_u16 = utf16_len(code);
+  let mut cursor = 0u32;
+  for tok in tokens {
+    let s = tok.start.min(total_u16);
+    let e = tok.end.min(total_u16);
+    if s > cursor {
+      let plain = utf16_slice(code, cursor, s);
+      if !plain.is_empty() {
+        root = root.child(text(plain.to_owned()));
+      }
+    }
+    if e > s {
+      let seg = utf16_slice(code, s, e);
+      if !seg.is_empty() {
+        let color = match tok.role {
+          mica_md::highlight::Role::Keyword => p.code_keyword,
+          mica_md::highlight::Role::String => p.code_string,
+          mica_md::highlight::Role::Comment => p.code_comment,
+          mica_md::highlight::Role::Number => p.code_number,
+          mica_md::highlight::Role::Function => p.code_function,
+          mica_md::highlight::Role::Key => p.code_key,
+        };
+        root = root.child(text(seg.to_owned()).text_color(color));
+      }
+    }
+    cursor = cursor.max(e);
+  }
+  if cursor < total_u16 {
+    let tail = utf16_slice(code, cursor, total_u16);
+    if !tail.is_empty() {
+      root = root.child(text(tail.to_owned()));
+    }
+  }
+  root.into_element()
 }
 
 // ── 3. Embedded Board (Single-Layer, Snug Auto-Fit, Draggable Resize Handles) ─
@@ -2430,13 +2589,27 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
 
   let br_add_row = bridge.clone();
   let br_add_col = bridge.clone();
+  let br_del_row = bridge.clone();
+  let br_del_col = bridge.clone();
+  let br_align = bridge.clone();
   let br_del = bridge.clone();
+  let br_col_resize = bridge.clone();
+  let table_width_px = signal(720.0_f32);
+  let col_drag_start = signal(0.0_f32);
+  let col_shares_base = col_shares.clone();
+  let model_aligns: Vec<String> = (0..col_count).map(|c| model.align_for(c).to_owned()).collect();
+  let bid_toolbar = block_id.clone();
 
   let mut table_col = if wide_table {
     view().w(px(total_wide_px)).min_w(relative(1.0))
   } else {
     view().w_full()
   }
+  .on_layout(move |b: &Bounds<Points>| {
+    if b.size.width.0 > 60.0 {
+      table_width_px.set(b.size.width.0);
+    }
+  })
   .rounded(px(6.0))
   .border_1()
   .border_color(move || palette(dark_mode.get()).border_normal)
@@ -2553,14 +2726,60 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
         if was_same_cell && table_selection.get_untracked().is_none() {
           focused_cell.set(Some((bid_up.clone(), r, c)));
         }
+      })
+      .on_press({
+        let bid_p = block_id.clone();
+        move || {
+          if table_selection.get_untracked().is_none() {
+            focused_cell.set(Some((bid_p.clone(), r, c)));
+          }
+        }
       });
 
       if c > 0 {
         cell_box = cell_box
+          .relative()
           .border_l_1()
           .border_color(move || palette(dark_mode.get()).border_subtle);
+        // Draggable column resize divider on header row (`CAP-05-07`)
+        if is_header && !wide_table {
+          let shares_r = col_shares_base.clone();
+          let br_r = br_col_resize.clone();
+          cell_box = cell_box.child(
+            view()
+              .test_id(&format!("table-col-resize-{idx}-{c}"))
+              .absolute()
+              .top_0()
+              .bottom_0()
+              .left(px(-4.0))
+              .w(px(8.0))
+              .z_index(12)
+              .cursor(Cursor::ColResize)
+              .claim_touches(TouchClaim::on_start())
+              .keep_touches(true)
+              .on_responder_grant(move |e: &ResponderEvent| {
+                col_drag_start.set(f32::from(e.page.x));
+              })
+              .on_responder_release(move |e: &ResponderEvent| {
+                let dx = f32::from(e.page.x) - col_drag_start.get_untracked();
+                if dx.abs() < 4.0 {
+                  return;
+                }
+                let tw = table_width_px.get_untracked().max(120.0);
+                let delta_frac = dx / tw;
+                let mut next: Vec<f64> = shares_r.iter().map(|&w| w as f64).collect();
+                let min_w = 0.08_f64;
+                let pair = next[c - 1] + next[c];
+                let left_w = (next[c - 1] + delta_frac as f64).clamp(min_w, (pair - min_w).max(min_w));
+                next[c - 1] = left_w;
+                next[c] = (pair - left_w).max(min_w);
+                br_r.table_op(idx, TableOp::SetColumnWidths { widths: next });
+              }),
+          );
+        }
       }
 
+      let col_align = model_aligns[c].clone();
       let cell_display = cell_text.clone();
       let cell_edit_init = cell_text;
       let bid_nav = block_id.clone();
@@ -2568,6 +2787,7 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
         .child(when(move || !is_active.get(), {
           let disp = cell_display.clone();
           let marks_c = cell_marks.clone();
+          let align_c = col_align.clone();
           move || {
             let mut t = text("")
               .w_full()
@@ -2576,6 +2796,11 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
               .line_height(px(21.0))
               .font_weight(if is_header { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
               .text_color(move || palette(dark_mode.get()).text_primary);
+            t = match align_c.as_str() {
+              "center" => t.text_center(),
+              "right" => t.text_right(),
+              _ => t,
+            };
             let runs = build_inline_runs(&disp, &marks_c, None);
             if runs.is_empty() {
               t = t.child(text(" "));
@@ -2658,28 +2883,85 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
     .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
     .child(table_body)
-    .child(when(move || hovered.get(), move || {
-      let (br1, br2, br3) = (br_add_row.clone(), br_add_col.clone(), br_del.clone());
-      view()
-        .absolute()
-        .top(px(4.0))
-        .right(px(6.0))
-        .z_index(20)
-        .flex_row()
-        .items_center()
-        .gap(px(4.0))
-        .p_1()
-        .rounded(px(6.0))
-        .bg(move || palette(dark_mode.get()).surface_overlay)
-        .border_1()
-        .border_color(move || palette(dark_mode.get()).border_normal)
-        .child(mini_chip("+ 行", dark_mode, move || {
-          br1.table_op(idx, TableOp::InsertRow { at: row_count });
-        }))
-        .child(mini_chip("+ 列", dark_mode, move || {
-          br2.table_op(idx, TableOp::InsertColumn { at: col_count });
-        }))
-        .child(mini_chip("删除", dark_mode, move || br3.delete_block_at(idx)))
+    .child(when(move || hovered.get(), {
+      let bid_t = bid_toolbar.clone();
+      let aligns_t = model_aligns.clone();
+      move || {
+        let (br1, br2, br3, br4, br5, br6) = (
+          br_add_row.clone(),
+          br_add_col.clone(),
+          br_del_row.clone(),
+          br_del_col.clone(),
+          br_align.clone(),
+          br_del.clone(),
+        );
+        let active_rc = focused_cell
+          .get_untracked()
+          .filter(|(id, _, _)| id == &bid_t)
+          .map(|(_, r, c)| (r, c))
+          .or_else(|| {
+            table_selection
+              .get_untracked()
+              .filter(|(id, _, _)| id == &bid_t)
+              .map(|(_, a, _)| a)
+          })
+          .unwrap_or((row_count.saturating_sub(1), col_count.saturating_sub(1)));
+        let cur_align = aligns_t
+          .get(active_rc.1)
+          .map(String::as_str)
+          .unwrap_or("left");
+        let next_align = match cur_align {
+          "center" => "right",
+          "right" => "left",
+          _ => "center",
+        };
+        let next_align_str = next_align.to_owned();
+        let align_label = match cur_align {
+          "center" => "居中",
+          "right" => "右对齐",
+          _ => "左对齐",
+        };
+        let mut bar = view()
+          .test_id("table-hover-toolbar")
+          .absolute()
+          .top(px(4.0))
+          .right(px(6.0))
+          .z_index(20)
+          .flex_row()
+          .items_center()
+          .gap(px(4.0))
+          .p_1()
+          .rounded(px(6.0))
+          .bg(move || palette(dark_mode.get()).surface_overlay)
+          .border_1()
+          .border_color(move || palette(dark_mode.get()).border_normal)
+          .child(mini_chip("+ 行", dark_mode, move || {
+            br1.table_op(idx, TableOp::InsertRow { at: row_count });
+          }))
+          .child(mini_chip("+ 列", dark_mode, move || {
+            br2.table_op(idx, TableOp::InsertColumn { at: col_count });
+          }))
+          .child(mini_chip(align_label, dark_mode, move || {
+            br5.table_op(
+              idx,
+              TableOp::SetColumnAlign {
+                col: active_rc.1,
+                align: next_align_str.clone(),
+              },
+            );
+          }));
+        if row_count > 2 {
+          bar = bar.child(mini_chip("− 行", dark_mode, move || {
+            br3.table_op(idx, TableOp::DeleteRow { at: active_rc.0.max(1).min(row_count - 1) });
+          }));
+        }
+        if col_count > 2 {
+          bar = bar.child(mini_chip("− 列", dark_mode, move || {
+            br4.table_op(idx, TableOp::DeleteColumn { at: active_rc.1.min(col_count - 1) });
+          }));
+        }
+        bar.child(mini_chip("删除", dark_mode, move || br6.delete_block_at(idx)))
+      }
     }))
 }
 

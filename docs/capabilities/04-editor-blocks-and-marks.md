@@ -46,7 +46,7 @@
 | `CAP-04-01` 全量文本块与 5 种 Callout | P0 | 全端 | ✅ | `block_views::tests::callout_kind_and_svg_viewbox_parsing` + `app_flows` |
 | `CAP-04-02` 列表缩进与容器附着 | P0 | 全端 | ✅ | `mica-editor::list_indent_outdent_and_todo_toggle` |
 | `CAP-04-03` 行内 marks 与链接编辑 | P0 | 全端 | ✅ | `mica-editor::mark_apply_toggle_remove_and_normalize_merge_adjacent` |
-| `CAP-04-04` 22 项斜杠菜单与过滤 | P0 | 全端 | 🟡 | `editor_slash::tests`（光标精确坐标锚定待同步改为 `measure()` 动态跟随） |
+| `CAP-04-04` 22 项斜杠菜单与过滤 | P0 | 全端 | ✅ | `editor_slash::tests` + `editor_positioning::schedule_slash_anchor_update`（`measure()` 实时锚定光标下方/上方） |
 | `CAP-04-05` 贴近选区的浮动气泡菜单 | P0 | 桌面/Web | ✅ | `editor_view.rs::schedule_bubble_anchor_update`（待桌面真机复测各种滚动位置） |
 | `CAP-04-06` 响应式顶栏格式条 | P1 | 桌面/Web | ✅ | `editor_view.rs` |
 | `CAP-04-07` `Mod+F` 页内查找高亮 | P1 | 桌面/Web | ✅ | `mica-editor::find_replace_and_replace_all_in_one_undo_batch` |
@@ -56,3 +56,4 @@
 ## 演进记录
 
 - **2026-11-23**：沉淀单层引用、22 项斜杠菜单、贴近选区动态定位浮动气泡栏及响应式格式条规格（对应 `3f033c30` / `ff104b87`）。
+- **2026-11-23（补齐迭代）**：将 `/` 斜杠菜单锚点升级为 `editor_positioning::schedule_slash_anchor_update` 动态测量光标屏幕位置并自动上下避让（`CAP-04-04`）。

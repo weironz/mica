@@ -17,7 +17,7 @@
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use mica_editor::{
-  DocPosition, DocSelection, EditorCommand, FindMatch, TableOp,
+  DocPosition, DocSelection, EditorCommand, FindMatch, TableNavDirection, TableOp,
   utf16::{utf16_len, utf16_next_boundary, utf16_prev_boundary, utf16_slice},
 };
 use nsh_base::{ScrollbarMode, button, input, scrollbar};
@@ -25,8 +25,8 @@ use nsh_core::{
   SubmitBehavior,
   color::Rgba,
   element::{
-    ClipboardItem, ElementRef, ImageSrc, KeyOptions, Spawned, Svg, element_ref, on_key_with,
-    set_clipboard, set_clipboard_item, set_interval, svg, text_measurer, virtual_list,
+    ClipboardItem, ElementRef, ImageSrc, KeyOptions, Spawned, Svg, clipboard_string, element_ref,
+    on_key_with, set_clipboard, set_clipboard_item, set_interval, svg, virtual_list,
   },
   geometry::{Bounds, Points, px},
   keymap::When,
@@ -40,10 +40,14 @@ use crate::{
     render_virtual_block_row,
   },
   editor_bridge::{MicaDocumentBridge, ScrollMode},
+  editor_positioning::{
+    move_caret_vertical_preserving_x, schedule_bubble_anchor_update, schedule_ime_sink_pos_update,
+    schedule_slash_anchor_update,
+  },
   editor_slash::{SlashItem, extract_slash_query, filter_slash_items},
   mica_icons,
   mica_theme::palette,
-  text_geometry::{VisibleLayoutCache, selection_rects_for_range, vertical_move_offset},
+  text_geometry::VisibleLayoutCache,
 };
 
 pub use crate::editor_bridge::OutlineItem;
@@ -169,13 +173,15 @@ pub fn editor_view(
   let autoscroll_cooldown = signal(false);
   let bubble_anchor: Signal<(f32, f32)> = signal((120.0, 48.0));
   let bubble_recalc_rev = signal(0u64);
+  let ime_sink_pos: Signal<(f32, f32)> = signal((0.0, 0.0));
+  let preferred_caret_x: Signal<Option<f32>> = signal(None);
 
   let ai_enabled = header.ai_enabled;
   let on_inline_ai_key = header.on_inline_ai.clone();
   let on_insert_image_key = header.on_insert_image.clone();
 
-  // Sync `has_text_selection`, slash menu closure, and bubble menu coordinates
-  // reactively when selection changes.
+  // Sync `has_text_selection`, slash menu anchor, IME sink coordinates, and
+  // bubble menu coordinates reactively when selection changes.
   // IMPORTANT: NEVER clear `sink_value` here! Clearing the native Win32/macOS Edit
   // sink on every typed character races with `WM_CHAR`/`EN_CHANGE`, producing doubled
   // characters (`ttest`) and dropped symbols (like backtick `` ` ``).
@@ -196,18 +202,45 @@ pub fn editor_view(
       if is_range && slash.open.get_untracked() {
         close_slash(slash);
       }
-      if let Some(s) = sel
-        && !s.is_collapsed()
-      {
-        schedule_bubble_anchor_update(
-          &b_bub,
-          &l_bub,
-          pref_bub,
-          pw_bub.get_untracked(),
-          s,
-          bubble_anchor,
-        );
+      if let Some(s) = sel {
+        if !s.is_collapsed() {
+          schedule_bubble_anchor_update(
+            &b_bub,
+            &l_bub,
+            pref_bub,
+            pw_bub.get_untracked(),
+            s,
+            bubble_anchor,
+          );
+        } else {
+          // Keep hidden native IME proxy pinned beside the active caret so OS
+          // CJK candidate windows open right next to where the user is typing.
+          schedule_ime_sink_pos_update(&b_bub, &l_bub, pref_bub, s.focus_pos(), ime_sink_pos);
+        }
       }
+    });
+  }
+
+  // Anchor `/` slash menu directly below/above the active caret via live measure()
+  // whenever the slash menu opens or the caret moves while it is open (CAP-04-04).
+  {
+    let b_sl = bridge.clone();
+    let l_sl = layouts.clone();
+    let pref_sl = paper_ref;
+    let sel_sl = bridge.selection_signal();
+    effect(move || {
+      if !slash.open.get() {
+        return;
+      }
+      let _ = sel_sl.get();
+      schedule_slash_anchor_update(
+        &b_sl,
+        &l_sl,
+        pref_sl,
+        SLASH_MENU_WIDTH,
+        SLASH_MENU_MAX_H,
+        slash.anchor,
+      );
     });
   }
 
@@ -387,6 +420,100 @@ pub fn editor_view(
     });
   }
 
+  // Focused table cell keyboard navigation (`Tab`, `Shift+Tab`, `Up`, `Down`, `Escape`)
+  // implementing `CAP-05-06`: moves smoothly across cells, inserts a trailing row on
+  // bottom-right `Tab`, and exits to neighboring prose blocks at table boundaries.
+  {
+    let b_tcell = bridge.clone();
+    effect(move || {
+      if focused_table_cell.get().is_none() {
+        return;
+      }
+      let nav_keys: &[(&str, TableNavDirection)] = &[
+        ("tab", TableNavDirection::Tab),
+        ("shift+tab", TableNavDirection::ShiftTab),
+        ("up", TableNavDirection::Up),
+        ("down", TableNavDirection::Down),
+      ];
+      for &(stroke, dir) in nav_keys {
+        let b_nav = b_tcell.clone();
+        on_key_with(
+          stroke,
+          KeyOptions {
+            when: When::Always,
+            for_focus: true,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            let Some((bid, r, c)) = focused_table_cell.get_untracked() else {
+              return;
+            };
+            let Some(idx) = b_nav.index_of_block_id(&bid) else {
+              focused_table_cell.set(None);
+              return;
+            };
+            let Some(blk) = b_nav.block_at(idx) else {
+              focused_table_cell.set(None);
+              return;
+            };
+            let model = mica_editor::TableModel::from_block_data(&blk.data);
+            match model.navigate(r, c, dir) {
+              mica_editor::TableNavResult::Cell { row, col } => {
+                focused_table_cell.set(Some((bid, row, col)));
+              }
+              mica_editor::TableNavResult::InsertRowAndFocus { row, col } => {
+                b_nav.table_op(
+                  idx,
+                  TableOp::Navigate {
+                    row: r,
+                    col: c,
+                    direction: dir,
+                  },
+                );
+                focused_table_cell.set(Some((bid, row, col)));
+              }
+              mica_editor::TableNavResult::ExitBefore => {
+                focused_table_cell.set(None);
+                if idx > 0 {
+                  let prev_len = b_nav
+                    .block_at(idx - 1)
+                    .map(|b| utf16_len(&b.text))
+                    .unwrap_or(0);
+                  b_nav.focus_block(idx - 1, prev_len);
+                } else {
+                  b_nav.focus_block(0, 0);
+                }
+              }
+              mica_editor::TableNavResult::ExitAfter => {
+                focused_table_cell.set(None);
+                if idx + 1 < b_nav.block_len() {
+                  b_nav.focus_block(idx + 1, 0);
+                } else {
+                  b_nav.append_empty_paragraph_and_focus();
+                }
+              }
+            }
+          },
+        );
+      }
+      {
+        let b_esc = b_tcell.clone();
+        on_key_with(
+          "escape",
+          KeyOptions {
+            when: When::Always,
+            for_focus: true,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            focused_table_cell.set(None);
+            b_esc.request_focus();
+          },
+        );
+      }
+    });
+  }
+
   // Release hidden prose IME sink whenever focus enters a code block or table cell,
   // so `Backspace` / `Delete` / arrows belong exclusively to the nested editor!
   {
@@ -519,6 +646,7 @@ pub fn editor_view(
         ("mod+a", false, EditorKeyAction::SelectAll),
         ("mod+c", false, EditorKeyAction::Copy),
         ("mod+x", false, EditorKeyAction::Cut),
+        ("mod+shift+v", false, EditorKeyAction::PastePlain),
         ("mod+z", true, EditorKeyAction::Undo),
         ("mod+y", true, EditorKeyAction::Redo),
         ("mod+shift+z", true, EditorKeyAction::Redo),
@@ -554,6 +682,7 @@ pub fn editor_view(
               action,
               &br,
               &lay,
+              preferred_caret_x,
               slash,
               ai_enabled,
               link_prompt_open,
@@ -720,6 +849,7 @@ pub fn editor_view(
   let is_cloud = header.is_cloud_signed_in;
   let page_width = header.page_width;
 
+  let inline_math_edit: Signal<Option<crate::editor_positioning::InlineMathEdit>> = signal(None);
   let block_env = BlockRenderEnv {
     bridge: bridge.clone(),
     dark_mode,
@@ -738,6 +868,7 @@ pub fn editor_view(
     caret_blink_on,
     sink_clear_rev,
     marquee_selected: marquee.selected_range,
+    inline_math_edit,
   };
 
   let b_copy_path = bridge.clone();
@@ -1437,6 +1568,7 @@ pub fn editor_view(
             // Clicking outside prose immediately releases any text, block, or table selection!
             m_down.clear();
             br_down.clear_selection();
+            inline_math_edit.set(None);
             table_selection.set(None);
             table_drag_anchor.set(None);
             drag_anchor.set(None);
@@ -1550,15 +1682,16 @@ pub fn editor_view(
           table_drag_anchor.set(None);
         })
         .child(
-          // Single hidden native IME proxy `input()` (first descendant input so
-          // native OS IME, `PasteBehavior::Report`, and test `type_text` hit it cleanly).
+          // Single hidden native IME proxy `input()` positioned beside the active
+          // caret (`ime_sink_pos`) so Windows/macOS CJK candidate windows open right
+          // under the user's typing position rather than at `(0, 0)` (CAP-01-05).
           input()
             .element_ref(&sink_ref)
             .test_id("mica-editor-ime-sink")
             .label("文档正文输入代理")
             .absolute()
-            .left(px(0.0))
-            .top(px(0.0))
+            .left(move || px(ime_sink_pos.get().0))
+            .top(move || px(ime_sink_pos.get().1))
             .w(px(1.0))
             .h(px(18.0))
             .pointer_events(PointerEvents::None)
@@ -1849,21 +1982,42 @@ pub fn editor_view(
           dark_mode,
           on_commit_width,
         ))
-        .child(when(move || has_text_selection.get(), move || {
-          view()
-            .absolute()
-            .left(move || px(bubble_anchor.get().0))
-            .top(move || px(bubble_anchor.get().1))
-            .z_index(34)
-            .child(bubble_menu_view(
-              br_bubble.clone(),
-              h_bub.clone(),
-              has_text_selection,
-              link_prompt_open,
-              link_draft,
-              dark_mode,
-            ))
+        .child(when(move || has_text_selection.get(), {
+          let br_b = br_bubble.clone();
+          let h_b = h_bub.clone();
+          move || {
+            let br_c = br_b.clone();
+            let h_c = h_b.clone();
+            let narrow_sel = {
+              let pw = paper_bounds.get().0;
+              pw > 0.0 && pw < 640.0
+            };
+            view()
+              .absolute()
+              .left(move || px(bubble_anchor.get().0))
+              .top(move || px(bubble_anchor.get().1))
+              .z_index(34)
+              .child(if narrow_sel {
+                crate::touch_selection::touch_selection_bar_view(br_c, dark_mode).into_element()
+              } else {
+                bubble_menu_view(
+                  br_c,
+                  h_c,
+                  has_text_selection,
+                  link_prompt_open,
+                  link_draft,
+                  dark_mode,
+                )
+                .into_element()
+              })
+          }
         }))
+        .child(crate::editor_positioning::inline_math_popover_view(
+          inline_math_edit,
+          ime_sink_pos,
+          br_bubble.clone(),
+          dark_mode,
+        ))
         .child(when(move || slash.open.get(), move || {
           caret_slash_menu_view(
             b_slash_menu.clone(),
@@ -1919,6 +2073,7 @@ enum EditorKeyAction {
   SelectAll,
   Copy,
   Cut,
+  PastePlain,
   Undo,
   Redo,
   ToggleMark(&'static str),
@@ -2131,113 +2286,12 @@ fn handle_clipboard_paste(
   }
 }
 
-/// Computes floating selection bubble menu `(left, top)` relative to `paper_ref`
-/// so the toolbar appears directly ABOVE (or below, when near top edge) the
-/// selected content rather than pinned at the top of the viewport.
-fn schedule_bubble_anchor_update(
-  bridge: &MicaDocumentBridge,
-  layouts: &Rc<RefCell<VisibleLayoutCache>>,
-  paper_ref: ElementRef,
-  page_width: f32,
-  sel: DocSelection,
-  bubble_anchor: Signal<(f32, f32)>,
-) {
-  let start_p = sel.start_pos();
-  let end_p = sel.end_pos();
-  let focus_p = sel.focus_pos();
-
-  // Prefer the start block if mounted; otherwise fall back to the focus block.
-  let pick_block = |idx: usize| -> Option<(usize, String, ElementRef, Option<ElementRef>)> {
-    let bid = bridge.block_id_at(idx)?;
-    let cache = layouts.borrow();
-    let (_, row_ref) = *cache.row_refs.get(&bid)?;
-    let text_ref = cache.text_refs.get(&bid).copied();
-    Some((idx, bid, row_ref, text_ref))
-  };
-
-  let Some((target_idx, bid, row_ref, text_ref)) =
-    pick_block(start_p.node).or_else(|| pick_block(focus_p.node))
-  else {
-    return;
-  };
-
-  let (local_rect_opt, block_len_u16) = {
-    let b_len = bridge
-      .block_at(target_idx)
-      .map(|b| utf16_len(&b.text))
-      .unwrap_or(0);
-    let s_u16 = if target_idx == start_p.node { start_p.offset } else { 0 };
-    let e_u16 = if target_idx == end_p.node { end_p.offset } else { b_len.max(1) };
-    let cache = layouts.borrow();
-    let measure = text_measurer();
-    let rect = cache.blocks.get(&bid).and_then(|info| {
-      let rects = selection_rects_for_range(
-        &info.lines,
-        s_u16,
-        e_u16,
-        &info.font,
-        info.line_height,
-        &measure,
-      );
-      rects.first().copied()
-    });
-    (rect, b_len)
-  };
-  let _ = block_len_u16;
-
-  spawn(async move {
-    let Some(pm) = paper_ref.measure().await else {
-      return;
-    };
-    let vw = pm.frame.size.width.0.max(360.0);
-    let vh = pm.frame.size.height.0.max(200.0);
-    const BUBBLE_W: f32 = 468.0;
-    const BUBBLE_H: f32 = 40.0;
-
-    let anchor_m = if let Some(tref) = text_ref {
-      tref.measure().await
-    } else {
-      None
-    };
-    let (sel_center_x, sel_top, sel_bottom) = if let Some(tm) = anchor_m {
-      let base_x = tm.page.x.0 - pm.page.x.0;
-      let base_y = tm.page.y.0 - pm.page.y.0;
-      if let Some((rx, ry, rw, rh)) = local_rect_opt {
-        (base_x + rx + rw * 0.5, base_y + ry, base_y + ry + rh)
-      } else {
-        (
-          base_x + tm.frame.size.width.0 * 0.5,
-          base_y,
-          base_y + tm.frame.size.height.0.min(36.0),
-        )
-      }
-    } else if let Some(rm) = row_ref.measure().await {
-      let base_y = rm.page.y.0 - pm.page.y.0;
-      let col = crate::page_width::rendered_column_width(page_width, (vw - 24.0).max(0.0));
-      let center_x = vw * 0.5;
-      let _ = col;
-      (center_x, base_y, base_y + rm.frame.size.height.0.min(48.0))
-    } else {
-      return;
-    };
-
-    let left = (sel_center_x - BUBBLE_W * 0.5).clamp(12.0, (vw - BUBBLE_W - 12.0).max(12.0));
-    let above_top = sel_top - BUBBLE_H - 8.0;
-    let below_top = sel_bottom + 8.0;
-    let top = if above_top >= 8.0 {
-      above_top.min((vh - BUBBLE_H - 8.0).max(8.0))
-    } else {
-      below_top.clamp(8.0, (vh - BUBBLE_H - 8.0).max(8.0))
-    };
-    bubble_anchor.set((left, top));
-  });
-}
-
 #[allow(clippy::too_many_arguments)]
 fn handle_editor_key(
   action: EditorKeyAction,
-  bridge: &MicaDocumentBridge,
+  bridge: &Rc<MicaDocumentBridge>,
   layouts: &Rc<RefCell<VisibleLayoutCache>>,
+  preferred_caret_x: Signal<Option<f32>>,
   slash: SlashMenuSignals,
   ai_enabled: Signal<bool>,
   link_prompt_open: Signal<bool>,
@@ -2249,6 +2303,15 @@ fn handle_editor_key(
   sink_ref: ElementRef,
   editor_focused: Signal<bool>,
 ) {
+  // Any action other than Up/Down clears the remembered vertical visual column.
+  if !matches!(
+    action,
+    EditorKeyAction::ArrowUp { .. } | EditorKeyAction::ArrowDown { .. }
+  ) && preferred_caret_x.get_untracked().is_some()
+  {
+    preferred_caret_x.set(None);
+  }
+
   // 1. Intercept ArrowUp / ArrowDown / Enter / Escape when slash menu is open.
   if slash.open.get_untracked() {
     let items = filter_slash_items(&slash.query.get_untracked(), ai_enabled.get_untracked());
@@ -2320,6 +2383,16 @@ fn handle_editor_key(
         write_rich_clipboard(payload);
       }
     }
+    EditorKeyAction::PastePlain => {
+      let br_plain = bridge.clone();
+      spawn(async move {
+        let plain = clipboard_string().await;
+        if !plain.is_empty() {
+          br_plain.paste_clipboard(&plain, "", true);
+          sync_slash_palette_from_caret(&br_plain, slash, ai_enabled);
+        }
+      });
+    }
     EditorKeyAction::Undo => bridge.undo(),
     EditorKeyAction::Redo => bridge.redo(),
     EditorKeyAction::ToggleMark(m) => bridge.toggle_mark(m),
@@ -2342,10 +2415,10 @@ fn handle_editor_key(
       move_caret_horizontal(bridge, 1, shift, word);
     }
     EditorKeyAction::ArrowUp { shift } => {
-      move_caret_vertical(bridge, layouts, -1, shift);
+      move_caret_vertical_preserving_x(bridge, layouts, preferred_caret_x, -1, shift);
     }
     EditorKeyAction::ArrowDown { shift } => {
-      move_caret_vertical(bridge, layouts, 1, shift);
+      move_caret_vertical_preserving_x(bridge, layouts, preferred_caret_x, 1, shift);
     }
     EditorKeyAction::Home { shift } => {
       if let Some(sel) = bridge.selection() {
@@ -2423,52 +2496,6 @@ fn move_caret_horizontal(bridge: &MicaDocumentBridge, dir: i32, shift: bool, wor
   }
 }
 
-fn move_caret_vertical(
-  bridge: &MicaDocumentBridge,
-  layouts: &Rc<RefCell<VisibleLayoutCache>>,
-  dir: i32,
-  shift: bool,
-) {
-  let Some(sel) = bridge.selection() else {
-    return;
-  };
-  let focus = sel.focus_pos();
-  let bi = focus.node;
-  let count = bridge.block_len();
-  let Some(block) = bridge.block_at(bi) else {
-    return;
-  };
-  // Try moving within wrapped lines of the current block first.
-  let measure = text_measurer();
-  if let Some(layout) = layouts.borrow().get(&block.id)
-    && let Some(next_off) =
-      vertical_move_offset(&layout.lines, focus.offset, dir, None, &layout.font, &measure)
-  {
-    let next = DocPosition::new(bi, next_off);
-    let anchor = if shift { sel.anchor_pos() } else { next };
-    bridge.set_selection(DocSelection::from_positions(anchor, next));
-    return;
-  }
-  // Otherwise step to previous / next block.
-  let target_bi = if dir < 0 {
-    bi.saturating_sub(1)
-  } else {
-    (bi + 1).min(count.saturating_sub(1))
-  };
-  if target_bi == bi {
-    return;
-  }
-  let target_len = bridge
-    .block_at(target_bi)
-    .map(|b| utf16_len(&b.text))
-    .unwrap_or(0);
-  let target_off = focus.offset.min(target_len);
-  let next = DocPosition::new(target_bi, target_off);
-  let anchor = if shift { sel.anchor_pos() } else { next };
-  bridge.set_selection(DocSelection::from_positions(anchor, next));
-  bridge.request_keep_block_visible(target_bi);
-}
-
 fn prev_word_boundary(text: &str, u16_off: u32) -> u32 {
   let prefix = utf16_slice(text, 0, u16_off);
   let chars: Vec<(usize, char)> = prefix.char_indices().collect();
@@ -2538,7 +2565,7 @@ fn page_width_edge_grips(
         }
       })
       .w(move || {
-        if paper_bounds.get().0 >= crate::page_width::PAGE_WIDTH_MIN_ROOM_FOR_GRIPS {
+        if paper_bounds.get().0 >= crate::responsive_shell::NARROW_BREAKPOINT {
           px(12.0)
         } else {
           px(0.0)
@@ -2558,7 +2585,7 @@ fn page_width_edge_grips(
       .keep_touches(true)
       .on_responder_grant(move |e: &ResponderEvent| {
         let outer = paper_bounds.get_untracked().0;
-        if outer < crate::page_width::PAGE_WIDTH_MIN_ROOM_FOR_GRIPS {
+        if outer < crate::responsive_shell::NARROW_BREAKPOINT {
           return;
         }
         let stored = width.get_untracked();

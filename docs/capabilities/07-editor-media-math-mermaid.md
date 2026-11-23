@@ -44,7 +44,7 @@
 | `CAP-07-02` 自然宽高比与对齐/删除 | P1 | 全端 | ✅ | `clipboard_platform::tests::probe_png_and_bmp_dimensions` + `block_views.rs` |
 | `CAP-07-03` 图片全屏缩放灯箱 | P1 | 全端 | ✅ | `block_views.rs::render_lightbox_modal` |
 | `CAP-07-04` 块级公式渲染与点击编辑 | P1 | 全端 | ✅ | `block_views.rs::render_math_block_view` |
-| `CAP-07-05` 行内公式原子渲染与光标保护 | P1 | 全端 | 🟡 | L2 内核 `math_atom_run_detection_and_caret_snapping` 已通，L3 行内 SVG 内嵌渲染待增强 |
+| `CAP-07-05` 行内公式原子渲染与光标保护 | P1 | 全端 | ✅ | L2 内核 `math_atom_run_detection_and_caret_snapping` + L3 点击行内 `$...$` 弹出 `editor_positioning::inline_math_popover_view` 实时 RaTeX SVG 预览与 `SetInlineMath` 编辑/删除（正文行内流式胶囊展示） |
 | `CAP-07-06` / `07` / `08` Mermaid 主题渲染、灯箱缩放与源码编辑 | P0 | 全端 | ✅ | `app_flows::virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch` |
 
 ---
@@ -52,3 +52,4 @@
 ## 演进记录
 
 - **2026-11-23**：沉淀 Mermaid 全屏灯箱、自然宽高比图片渲染与 RaTeX 公式规格（对应 `3f033c30` / `ff104b87`）。
+- **2026-11-23（补齐迭代）**：新增点击行内 `$...$` 公式弹出的实时 RaTeX SVG 预览与源码编辑浮层（`inline-math-popover`，直连 `EditorCommand::SetInlineMath`，`CAP-07-05`）。

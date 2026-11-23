@@ -480,3 +480,78 @@ fn regression_fifteen_editor_ux_fixes() {
     .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
     .unwrap();
 }
+
+#[test]
+fn regression_capability_gaps_closed() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  // 1. Starter page's unfocused Rust code block renders syntax-highlighted preview cleanly (CAP-06-10).
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.wait_for("id:node-view-code-block").unwrap();
+  app.wait_for("fn main() {\n    println!(\"Hello from Mica Pure Rust!\");\n}").unwrap();
+
+  // 2. Focus code block -> `⋯` menu -> `编辑标题` -> inline bottom title input -> persists `code-block-caption` (CAP-06-06).
+  app.press("id:code-block-editor").unwrap();
+  app.wait_for("id:code-more-btn").unwrap();
+  app.press("id:code-more-btn").unwrap();
+  app.wait_for("id:code-menu-title").unwrap();
+  app.press("id:code-menu-title").unwrap();
+  app.wait_for("id:code-title-input").unwrap();
+  app.type_text("id:code-title-input", "main.rs 示例").unwrap();
+  app.press("保存").unwrap();
+  app.wait_for("id:code-block-caption").unwrap();
+  app.wait_for("main.rs 示例").unwrap();
+
+  // 3. Table cell focus, Tab navigation to next cell, and Escape back to document (CAP-05-06, CAP-05-07).
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+  let mut tbl_paste = nsh_core::PasteEvent::default();
+  tbl_paste.text = "| 字段 | 数值 |\n| --- | --- |\n| GPU | 8x B300 |\n| IB | 800G |".into();
+  app.paste("id:mica-editor-ime-sink", &tbl_paste).unwrap();
+  app.wait_for("id:node-view-table").unwrap();
+  app.wait_for("8x B300").unwrap();
+  app.press("id:table-cell-0-0-0").unwrap();
+  app.wait_for("id:table-cell-input-0-0-0").unwrap();
+  app.press_key("tab").unwrap();
+  app.wait_for("id:table-cell-input-0-0-1").unwrap();
+  app.press_key("escape").unwrap();
+  app
+    .wait_for_gone("id:table-cell-input-0-0-1", std::time::Duration::from_millis(600))
+    .unwrap();
+}
+
+#[test]
+fn regression_narrow_viewport_drawers_and_touch_bar() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(420.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Narrow viewport (<768px) renders compact tab switcher and hides desktop inline sidebar (CAP-16-05).
+  app.wait_for("id:narrow-tab-switcher").unwrap();
+  app.press("id:narrow-tab-switcher").unwrap();
+  app.wait_for("id:narrow-tab-popover").unwrap();
+  app.press("id:narrow-tab-switcher").unwrap();
+  app
+    .wait_for_gone("id:narrow-tab-popover", std::time::Duration::from_millis(600))
+    .unwrap();
+
+  // 2. Opening sidebar on narrow viewport mounts overlay drawer + dismissible backdrop (CAP-16-05).
+  app.press("id:toggle-sidebar-btn").unwrap();
+  app.wait_for("id:mobile-left-drawer").unwrap();
+  app.press("id:mobile-left-drawer-backdrop").unwrap();
+  app
+    .wait_for_gone("id:mobile-left-drawer", std::time::Duration::from_millis(600))
+    .unwrap();
+
+  // 3. Selecting text on narrow viewport mounts compact touch selection action bar (CAP-16-06).
+  app.press("id:editor-bottom-append-zone").unwrap();
+  app.press_key("mod+a").unwrap();
+  app.wait_for("id:touch-selection-bar").unwrap();
+  app.wait_for("id:touch-sel-copy").unwrap();
+}
