@@ -810,8 +810,11 @@ pub fn editor_view(
     let lref_auto = list_ref;
     let pref_auto = paper_ref;
     let rects_auto = marquee_row_rects.clone();
+    // Gate the interval ONLY on a boolean memo so continuous speed changes
+    // during mouse movement NEVER cancel and restart the 16ms timer!
+    let autoscroll_active = computed(move || autoscroll_speed.get().abs() >= 0.1);
     effect(move || {
-      if autoscroll_speed.get().abs() < 0.1 {
+      if !autoscroll_active.get() {
         return;
       }
       let br_t = br_auto.clone();
@@ -1343,6 +1346,7 @@ pub fn editor_view(
   let fmt_bar_second = render_format_bar;
 
   let m_root_up = marquee.clone();
+  let m_root_move = marquee.clone();
   view()
     .flex_1()
     .min_w(px(0.0))
@@ -1351,6 +1355,22 @@ pub fn editor_view(
     .overflow_hidden()
     .relative()
     .bg(move || palette(dark_mode.get()).surface_base)
+    .on_mouse_move(move |e: &MouseEvent| {
+      let active_drag = drag_anchor.get_untracked().is_some() || m_root_move.is_active_untracked();
+      if !active_drag {
+        return;
+      }
+      if e.pressed_button != Some(MouseButton::Left) {
+        autoscroll_speed.set(0.0);
+        drag_anchor.set(None);
+        return;
+      }
+      // When pointer drags UP into the 44px page header/toolbar above `mica-rich-editor`,
+      // keep scrolling upward continuously!
+      if e.position.y.0 < 48.0 {
+        autoscroll_speed.set(-28.0);
+      }
+    })
     .on_mouse_up(move |_: &MouseEvent| {
       autoscroll_speed.set(0.0);
       if drag_anchor.get_untracked().is_some() {
@@ -2258,7 +2278,9 @@ pub fn editor_view(
           dark_mode,
           on_commit_width,
         ))
-        .child(when(move || has_text_selection.get(), {
+        .child(when(
+          move || has_text_selection.get() && drag_anchor.get().is_none(),
+          {
           let br_b = br_bubble.clone();
           let h_b = h_bub.clone();
           move || {
