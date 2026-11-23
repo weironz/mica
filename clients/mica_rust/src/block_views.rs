@@ -338,9 +338,9 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
             .absolute()
             .left(px(20.0))
             .right(px(20.0))
-            .top(px(1.0))
-            .bottom(px(1.0))
-            .rounded(px(6.0))
+            .top(px(2.5))
+            .bottom(px(2.5))
+            .rounded(px(4.0))
             .bg(move || palette(dark_mode.get()).selection_bg)
             .pointer_events(PointerEvents::None)
         })),
@@ -570,30 +570,40 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
       .child({
         let br_ov_sel = br_sel.clone();
         let br_ov_find = br_find.clone();
+        let marquee_sel_ov = env.marquee_selected;
         let local_overlay = computed(move || {
           let idx = at.index();
-          let sel_relevant = br_ov_sel.selection_signal().get().and_then(|sel| {
-            let start_p = sel.start_pos();
-            let end_p = sel.end_pos();
-            let focus_p = sel.focus_pos();
-            let has_range = !sel.is_collapsed() && idx >= start_p.node && idx <= end_p.node;
-            let has_caret = sel.is_collapsed() && focus_p.node == idx;
-            if has_range || has_caret {
-              let focused = if has_caret { editor_focused.get() } else { false };
-              let preedit = if has_caret && focused {
-                preedit_overlay_sig.get().filter(|(bi, _, comp)| *bi == idx && !comp.is_empty())
-              } else {
-                None
-              };
-              if has_range || focused {
-                Some((sel, focused, preedit))
+          let in_marquee = marquee_sel_ov
+            .get()
+            .is_some_and(|(lo, hi)| idx >= lo && idx <= hi);
+          let sel_relevant = if in_marquee {
+            // Suppress inline text highlight when the row's full-width block
+            // selection pill is active so the two layers never double-paint.
+            None
+          } else {
+            br_ov_sel.selection_signal().get().and_then(|sel| {
+              let start_p = sel.start_pos();
+              let end_p = sel.end_pos();
+              let focus_p = sel.focus_pos();
+              let has_range = !sel.is_collapsed() && idx >= start_p.node && idx <= end_p.node;
+              let has_caret = sel.is_collapsed() && focus_p.node == idx;
+              if has_range || has_caret {
+                let focused = if has_caret { editor_focused.get() } else { false };
+                let preedit = if has_caret && focused {
+                  preedit_overlay_sig.get().filter(|(bi, _, comp)| *bi == idx && !comp.is_empty())
+                } else {
+                  None
+                };
+                if has_range || focused {
+                  Some((sel, focused, preedit))
+                } else {
+                  None
+                }
               } else {
                 None
               }
-            } else {
-              None
-            }
-          });
+            })
+          };
           let find_all = br_ov_find.find_matches_signal().get();
           let has_find = find_all.iter().any(|fm| fm.block_index == idx);
           let find_active = if has_find { br_ov_find.find_active_idx_signal().get() } else { 0 };
@@ -684,10 +694,10 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
                   view()
                     .absolute()
                     .left(px(rx))
-                    .top(px(ry))
+                    .top(px(ry + 1.5))
                     .w(px(rw))
-                    .h(px(rh))
-                    .rounded(px(2.0))
+                    .h(px((rh - 3.0).max(14.0)))
+                    .rounded(px(3.0))
                     .bg(p.selection_bg),
                 );
               }
@@ -3598,6 +3608,9 @@ fn code_editor_styles(dark: bool) -> EditorStyles {
   styles.gutter = Some(PartStyle(Style::from_decls([
     StyleDecl::Set(StyleKey::BackgroundColor, PropertyValue::Color(Some(Color::from(p.code_bg)))),
     StyleDecl::Set(StyleKey::Color, PropertyValue::Color(Some(Color::from(p.text_faint)))),
+  ])));
+  styles.selection = Some(PartStyle(Style::from_decls([
+    StyleDecl::Set(StyleKey::BackgroundColor, PropertyValue::Color(Some(Color::from(p.selection_bg)))),
   ])));
   styles
 }

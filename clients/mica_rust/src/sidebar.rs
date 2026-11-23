@@ -848,13 +848,17 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
     // Main row body
     .child(
       view()
-        .w_full().h(px(TREE_ROW_HEIGHT)).pl(move || px(indent_px.get())).pr(px(4.0))
-        .flex_row().items_center().rounded(px(6.0))
-        .border(move || if is_multi_selected.get() { px(1.0) } else { px(0.0) })
-        .border_color(move || palette(dark_mode.get()).text_primary)
+        .w_full().h(px(TREE_ROW_HEIGHT)).my(px(1.0)).pl(move || px(indent_px.get())).pr(px(4.0))
+        .flex_row().items_center().rounded(px(5.0))
         .bg(move || {
           let p = palette(dark_mode.get());
-          if is_multi_selected.get() || is_active.get() || is_menu_open.get() { p.surface_hover } else { p.surface_raised }
+          if is_multi_selected.get() {
+            p.selection_bg
+          } else if is_active.get() || is_menu_open.get() {
+            p.surface_hover
+          } else {
+            p.surface_raised
+          }
         })
         .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
         // Fixed 18px chevron slot (clicking chevron preserves multi-select)

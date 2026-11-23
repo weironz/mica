@@ -49,9 +49,9 @@ mod bc {
   use super::{Rgba, rgb_const, rgba_const};
 
   pub const BRAND: Rgba = rgb_const(0x3370FF);
-  pub const BRAND_WASH_LIGHT: Rgba = rgba_const(0x3370FF, 0.12);
-  pub const BRAND_WASH_DARK: Rgba = rgba_const(0x3370FF, 0.28);
-  pub const BRAND_MARQUEE: Rgba = rgba_const(0x3370FF, 0.12);
+  pub const BRAND_WASH_LIGHT: Rgba = rgba_const(0x2383E2, 0.14);
+  pub const BRAND_WASH_DARK: Rgba = rgba_const(0x3B82F6, 0.22);
+  pub const BRAND_MARQUEE: Rgba = rgba_const(0x2383E2, 0.10);
   pub const GUIDE: Rgba = rgba_const(0x3370FF, 0.65);
   pub const DANGER: Rgba = rgb_const(0xCF222E);
   pub const INK_LIGHT: Rgba = rgb_const(0x1F2329);

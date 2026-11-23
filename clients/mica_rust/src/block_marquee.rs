@@ -217,16 +217,15 @@ impl Default for BlockMarqueeState {
   }
 }
 
-/// Non-interactive overlay painting:
-/// 1. `6px`-rounded `selection_bg` overlays over every highlighted block box,
-/// 2. The live marquee rectangle (`0.5x` `selection_bg` fill + `0.7x` `accent`
-///    1px border).
+/// Non-interactive overlay painting the live Notion-style marquee drag rectangle.
+/// Per-block selection pills are rendered authoritatively inside each virtual
+/// list row (`block-selection-overlay`) so they scroll in lockstep and never
+/// double-paint with misaligned ghost rims.
 pub fn marquee_overlay_layer(
   state: BlockMarqueeState,
   dark_mode: Signal<bool>,
 ) -> impl IntoElement {
   let active_rect = state.active_rect;
-  let highlighted_rects = state.highlighted_rects;
 
   view()
     .test_id("block-marquee-overlay")
@@ -237,7 +236,6 @@ pub fn marquee_overlay_layer(
     .bottom(px(0.0))
     .pointer_events(PointerEvents::None)
     .child(dynamic(move || {
-      let rects = highlighted_rects.get();
       let live = active_rect.get();
       let p = palette(dark_mode.get());
 
@@ -249,28 +247,10 @@ pub fn marquee_overlay_layer(
         .bottom(px(0.0))
         .pointer_events(PointerEvents::None);
 
-      for rect in rects {
-        layer = layer.child(
-          view()
-            .absolute()
-            .left(px(rect.left))
-            .top(px(rect.top))
-            .w(px(rect.width()))
-            .h(px(rect.height()))
-            .rounded(px(6.0))
-            .bg(p.selection_bg)
-            .pointer_events(PointerEvents::None),
-        );
-      }
-
       if let Some(r) = live {
         let fill = Rgba {
-          a: (p.selection_bg.a * 0.5).clamp(0.0, 1.0),
+          a: (p.selection_bg.a * 0.72).clamp(0.0, 1.0),
           ..p.selection_bg
-        };
-        let stroke = Rgba {
-          a: 0.7,
-          ..p.accent
         };
         layer = layer.child(
           view()
@@ -280,9 +260,8 @@ pub fn marquee_overlay_layer(
             .top(px(r.top))
             .w(px(r.width()))
             .h(px(r.height()))
+            .rounded(px(2.0))
             .bg(fill)
-            .border_1()
-            .border_color(stroke)
             .pointer_events(PointerEvents::None),
         );
       }
