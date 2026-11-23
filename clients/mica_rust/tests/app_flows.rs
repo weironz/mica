@@ -759,4 +759,43 @@ fn regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll() {
   app.wait_for("id:table-row-handle-4").unwrap();
   app.press("id:table-add-col-bar").unwrap();
   app.wait_for("id:table-col-handle-3").unwrap();
+
+  // 4. Verify the table grid's left edge (`table-cell-0-0-0`) aligns flush with the
+  //    page title's left edge (`page-title-input`) within 2.5px (the left row-handle
+  //    gutter sits cleanly in the negative left margin).
+  let nodes = app.screen().layout_nodes();
+  let title_box = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("page-title-input"))
+    .expect("title input present")
+    .bounds;
+  let cell_box = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("table-cell-0-0-0"))
+    .expect("first table cell present")
+    .bounds;
+  assert!(
+    (cell_box.origin.x.0 - title_box.origin.x.0).abs() <= 2.5,
+    "table left edge ({}) must align flush with page left edge ({})",
+    cell_box.origin.x.0,
+    title_box.origin.x.0
+  );
+
+  // 5. Code block language picker closes cleanly on Escape AND on outside click.
+  app.press("id:ed-slash-open").unwrap();
+  app.wait_for("id:slash-code").unwrap();
+  app.press("id:slash-code").unwrap();
+  app.wait_for("id:code-lang-btn").unwrap();
+  app.press("id:code-lang-btn").unwrap();
+  app.wait_for("id:code-lang-picker").unwrap();
+  app.press_key("escape").unwrap();
+  app
+    .wait_for_gone("id:code-lang-picker", std::time::Duration::from_millis(800))
+    .unwrap();
+  app.press("id:code-lang-btn").unwrap();
+  app.wait_for("id:code-lang-picker").unwrap();
+  app.press("id:table-cell-0-0-0").unwrap();
+  app
+    .wait_for_gone("id:code-lang-picker", std::time::Duration::from_millis(800))
+    .unwrap();
 }

@@ -31,7 +31,7 @@ use nsh_core::{
     Align, Composition, ElementRef, EventKind, EventPayload, Placement, PointerEvents, Selection,
     element_ref, input, overlay, scroll, set_clipboard, text, text_measurer, view,
   },
-  geometry::{Axis, Bounds, Points, px},
+  geometry::{Axis, Bounds, Point, Points, px},
   keymap::When,
   prelude::*,
 };
@@ -913,6 +913,8 @@ pub(crate) fn render_table_block_view(
           s.bg(color).rounded(px(4.0))
         })
         .w_full()
+        .pl(px(LEFT_GUTTER_PX))
+        .pr(px(RIGHT_ADD_W_PX))
         .h(px(10.0))
         .py(px(2.0)),
     );
@@ -925,7 +927,9 @@ pub(crate) fn render_table_block_view(
   view()
     .test_id("node-view-table")
     .relative()
-    .w_full()
+    .self_stretch()
+    .ml(px(-LEFT_GUTTER_PX))
+    .mr(px(-RIGHT_ADD_W_PX))
     .my_2()
     .on_layout(move |b: &Bounds<Points>| {
       if b.size.width.0 > 120.0 && (viewport_w.get_untracked() - b.size.width.0).abs() > 1.0 {
@@ -1005,6 +1009,8 @@ pub(crate) fn render_table_block_view(
             .placement(Placement::Bottom)
             .align(Align::Start)
             .offset(px(4.0))
+            .on_press_outside(move |_: &Point<Points>| open_menu.set(None))
+            .on_cancel(move || open_menu.set(None))
             .child(menu)
         }
         TableMenuKind::Row(r) => {
@@ -1076,6 +1082,8 @@ pub(crate) fn render_table_block_view(
             .placement(Placement::Right)
             .align(Align::Start)
             .offset(px(4.0))
+            .on_press_outside(move |_: &Point<Points>| open_menu.set(None))
+            .on_cancel(move || open_menu.set(None))
             .child(menu)
         }
         TableMenuKind::Col(c) => {
@@ -1172,6 +1180,8 @@ pub(crate) fn render_table_block_view(
             .placement(Placement::Bottom)
             .align(Align::Center)
             .offset(px(4.0))
+            .on_press_outside(move |_: &Point<Points>| open_menu.set(None))
+            .on_cancel(move || open_menu.set(None))
             .child(menu)
         }
       }

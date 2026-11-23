@@ -30,7 +30,7 @@ use nsh_core::{
     Align, ElementRef, ImageSrc, Placement, Style, Svg, element_ref, overlay,
     set_clipboard, svg, text_measurer,
   },
-  geometry::{Bounds, Points, px},
+  geometry::{Bounds, Point, Points, px},
   prelude::*,
 };
 use serde_json::Value;
@@ -1702,6 +1702,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
               .placement(Placement::Bottom)
               .align(Align::End)
               .offset(px(4.0))
+              .on_press_outside(move |_: &Point<Points>| lang_open.set(false))
+              .on_cancel(move || lang_open.set(false))
               .child(
                 view()
                   .test_id("code-lang-picker")
@@ -1754,13 +1756,13 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
                           .gap_2()
                           .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_hover))
                           .on_press(move || {
+                            lang_open.set(false);
                             let val = if lang_owned == "auto" {
                               Value::Null
                             } else {
                               Value::String(lang_owned.clone())
                             };
                             br_item.update_block_data_attr_at(live_index(at), "language", val);
-                            lang_open.set(false);
                           })
                           .child(
                             view()
@@ -1850,6 +1852,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
               .placement(Placement::Bottom)
               .align(Align::End)
               .offset(px(4.0))
+              .on_press_outside(move |_: &Point<Points>| ai_open.set(false))
+              .on_cancel(move || ai_open.set(false))
               .child(menu)
           }
         }))
@@ -1867,6 +1871,8 @@ fn render_code_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock
               .placement(Placement::Bottom)
               .align(Align::End)
               .offset(px(4.0))
+              .on_press_outside(move |_: &Point<Points>| more_open.set(false))
+              .on_cancel(move || more_open.set(false))
               .child(
                 view()
                   .test_id("code-more-menu")
