@@ -16,8 +16,8 @@
 - **`CAP-05-01` 内容自适应列宽**：
   - 未手动拖拽列宽时，根据整张表每列内容的视觉宽度（区分 CJK 宽字符与 ASCII 窄字符，表头略加权）自动分配各列占比：内容少的短列（如「项」「编号」「优先级」）保持紧凑，内容多的长列自动占据更多宽度（例如 2 列键值表自动约 18%/82%），严禁无脑均分导致大面积空白。
   - 若用户在 `model.widths` 中保存了自定义列宽比例，优先尊重用户调整值。
-- **`CAP-05-02` 宽表横向滚动**：列数较多或总自然宽度超出正文列宽时，按各列自然像素宽度排列并启用独立横向滚动，防止单元格被挤成单字竖条。
-- **`CAP-05-03` 单元格内行内格式渲染**：展示态完整渲染单元格中的加粗、斜体、行内代码、删除线、链接等行内 marks，表头行加粗并使用微灰背景与数据行区分。
+- **`CAP-05-02` 宽表横向滚动**：列数较多或总自然宽度（或用户向右拖宽外边界后）超出正文列宽时，启用独立横向滚动并在表格下方展示比例自适应横向滚动条，防止单元格被挤成单字竖条；未超出时自动隐藏滚动条。
+- **`CAP-05-03` 单元格所见即所得无跳变编辑**：展示态与点击聚焦编辑态共享同一套自动换行富文本渲染（含加粗、斜体、行内代码、删除线、链接、表头加粗与灰底色），仅叠加闪烁光标、浅蓝选区高亮与透明光标锚定 IME 代理；点击多行或表头单元格绝不塌陷为单行、绝不截断、绝不出现白底框或丢粗体，编辑文本时自动偏移保留已有行内 marks。
 
 ### 单元格编辑与多格选择
 - **`CAP-05-04` 自由上下左右拖动选择多个单元格**：
@@ -28,7 +28,10 @@
 - **`CAP-05-06` 单元格键盘导航与实时编辑**：
   - 编辑单个单元格时输入实时同步到 CRDT，不触发整表卸载重建丢焦。
   - 支持 `Enter` / `Tab` / `Shift+Tab` 在单元格间顺序切换，末行末格按 `Tab` 自动追加新行并聚焦首列；到达边界可顺滑退出到上下相邻正文块。
-- **`CAP-05-07` 表格结构操作**：悬停表格显示浮动操作条（`+ 行`、`+ 列`、`删除`），并支持按列设置左/中/右对齐（GFM `:---` / `:---:` / `---:`）、增删移动指定行列。
+- **`CAP-05-07` 表格结构操作与全高列宽拖拽**：
+  - 表格左上角提供整表锚点菜单（整表左/中/右对齐、自适应列宽、复制表格、删除表格）；每列顶部与每行左侧紧贴外沿提供行/列锚点胶囊，点击整行/整列高亮并弹出顶层 `overlay()` 菜单（上/下/左/右移动、前/后插入、列对齐、清空、删除）。
+  - 表格右侧与底部紧贴网格外沿提供 `+` 扩展列/扩展行横竖条，不遮挡表头文字。
+  - 所有列分隔线及表格最右外边界在**整张表全高（覆盖全部数据行而非仅首行）**均可悬停高亮并左右拖拽调整列宽/表宽（持久化 `SetColumnWidths` / `SetTableWidth`）。
 
 ---
 
@@ -38,19 +41,22 @@
 - **反例 2（单元格彼此孤立无法框选）**：每个单元格仅放一个独立 `button()` + `input()`，拖动鼠标被困在单个单元格内，无法向上下左右框选多个单元格。
 - **反例 3（跨格拖动与跨块拖动冲突 / 卡死表格边界）**：外层 `virtual_list` 行上的跨块文本拖选若直接忽略 `table_drag_anchor`，会劫持表内跨格拖拽；反之若一刀切 `return`，则从表格中间向上拖到顶部或向下拖到底部时会卡死在表格边界无法继续选到周围正文。正确判定为：指针仍在同一表格块内时放行表内多格选择；一旦指针越出表格进入不同块（或页头/页尾），立即将 `table_drag_anchor` 升级为锚定在表格块的 `drag_anchor` 跨块选区。
 
+- **反例 4（点击单元格切换成单行白底 `input()`）**：聚焦单元格时把换行富文本替换成单行不透明输入框，导致多行文字瞬间塌陷截断、表头出现白底且丢失粗体与行内格式。必须保持单一富文本展示层，仅叠加光标/选区与透明 IME 代理。
+- **反例 5（列宽拖拽条仅挂在首行表头）**：把 `ColResize` 句柄只放在 `r == 0` 的单元格内，用户在第 2..N 行悬停竖线时既无箭头提示也不能拖动调宽。列分隔线拖拽层必须覆盖表格网格全高（`top_0..bottom_0`）。
+
 ---
 
 ## 验收清单
 
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
-| `CAP-05-01` 内容自适应列宽 | P0 | 全端 | ✅ | `block_views::tests::adaptive_table_column_widths_give_long_content_more_space` |
-| `CAP-05-02` 宽表横向滚动 | P0 | 全端 | ✅ | `block_views.rs::render_table_block_view` |
-| `CAP-05-03` 单元格行内 marks 渲染 | P1 | 全端 | ✅ | `block_views.rs::render_table_block_view`（单格编辑态所见即所得 marks 待进一步对齐 `cell_edit_controller.dart`） |
-| `CAP-05-04` 自由上下左右拖选多单元格 | P0 | 桌面/Web | ✅ | `block_views.rs::render_table_block_view`（待桌面真机多方向实测） |
+| `CAP-05-01` 内容自适应列宽 | P0 | 全端 | ✅ | `table_view::tests::adaptive_table_column_widths_give_long_content_more_space` |
+| `CAP-05-02` 宽表横向滚动与横向滚动条 | P0 | 全端 | ✅ | `table_view.rs::render_table_block_view` + `app_flows::regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll` |
+| `CAP-05-03` 单元格所见即所得无跳变编辑与 marks 保留 | P0 | 全端 | ✅ | `table_view::tests::splice_cell_marks_preserves_and_shifts_bold_marks_across_edits` + `app_flows::regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll` |
+| `CAP-05-04` 自由上下左右拖选多单元格 | P0 | 桌面/Web | ✅ | `table_view.rs::render_table_cell` |
 | `CAP-05-05` 多格复制/剪切/清空 | P0 | 桌面/Web | ✅ | `mica-editor::table_model_crud_alignment_navigation_and_area_copy` + `editor_view.rs` |
-| `CAP-05-06` 单元格编辑与 Tab/Enter 导航 | P0 | 全端 | ✅ | `mica-editor::table_ops_through_editor_session_and_undo` + `app_flows::regression_capability_gaps_closed`（`Tab`/`Shift+Tab`/`Up`/`Down`/`Escape` 跨格导航与末格追加行） |
-| `CAP-05-07` 行列增删与列对齐菜单 | P1 | 全端 | ✅ | `block_views.rs::render_table_block_view`（悬停条 `+ 行`/`+ 列`/`− 行`/`− 列`/`对齐` 循环切换 + 表头列分隔线拖拽持久化 `SetColumnWidths`） |
+| `CAP-05-06` 单元格编辑与 Tab/Enter 导航 | P0 | 全端 | ✅ | `mica-editor::table_ops_through_editor_session_and_undo` + `app_flows::regression_capability_gaps_closed` |
+| `CAP-05-07` 全高列宽拖拽与左上锚点/右下扩展条 | P1 | 全端 | ✅ | `table_view::tests::apply_column_divider_drag_redistributes_adjacent_columns_cleanly` + `app_flows::regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll` |
 
 ---
 
@@ -58,3 +64,4 @@
 
 - **2026-11-23**：沉淀内容自适应列宽、自由上下左右多单元格拖选与批量复制/清空规格（对应 `ff104b87`）。
 - **2026-11-23（补齐迭代）**：补齐单元格键盘导航（`Tab`/`Shift+Tab`/`Up`/`Down`/`Escape` 走 `TableModel::navigate`）、悬停条 `− 行`/`− 列`/`对齐` 切换与表头列分隔线拖拽调宽（`CAP-05-06` / `07`）。
+- **2026-11-24（全面对齐）**：独立拆出 `clients/mica_rust/src/table_view.rs`，统一所见即所得无跳变单元格编辑与行内 marks 保留、整表全高列宽/表宽拖拽、自适应横向滚动条，以及对齐旧版 Mica 的左上整表/行/列锚点菜单与右/底 `+` 扩展条。

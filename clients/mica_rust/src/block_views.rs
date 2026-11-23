@@ -18,7 +18,7 @@
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use mica_editor::{
-  DocPosition, DocSelection, EditorBlock, TableCell, TableModel, TableNavDirection, TableOp,
+  DocPosition, DocSelection, EditorBlock,
   marks::EditorMark,
   utf16::{utf16_len, utf16_slice},
 };
@@ -45,9 +45,11 @@ use crate::{
   },
 };
 
+pub use crate::table_view::compute_adaptive_table_layout;
+
 type TextMeasureFn = Rc<dyn Fn(&str, &str) -> Points>;
 
-const TRANSPARENT_RGBA: Rgba = Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
+pub(crate) const TRANSPARENT_RGBA: Rgba = Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
 const MATH_LIGHT_BG: Rgba = Rgba {
   r: 0xF5 as f32 / 255.0,
   g: 0xF3 as f32 / 255.0,
@@ -121,7 +123,7 @@ fn is_non_prose_block(block: &EditorBlock) -> bool {
 }
 
 #[inline]
-fn live_index(at: Position) -> usize {
+pub(crate) fn live_index(at: Position) -> usize {
   nsh_core::element::untracked(|| at.index())
 }
 
@@ -371,7 +373,7 @@ fn render_block_body(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> 
     "mermaid" => render_mermaid_block_view(env, at, block).into_element(),
     "math" | "math_block" => render_math_block_view(env, at, block).into_element(),
     "image" => render_image_block_view(env, at, block).into_element(),
-    "table" => render_table_block_view(env, at, block).into_element(),
+    "table" => crate::table_view::render_table_block_view(env, at, block).into_element(),
     "divider" => render_divider_block_view(env, at).into_element(),
     _ => render_prose_block_view(env, at, block).into_element(),
   }
@@ -961,7 +963,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
 }
 
 #[derive(Clone)]
-struct InlineRun {
+pub(crate) struct InlineRun {
   text: String,
   bold: bool,
   italic: bool,
@@ -973,7 +975,7 @@ struct InlineRun {
   preedit: bool,
 }
 
-fn build_inline_runs(
+pub(crate) fn build_inline_runs(
   text: &str,
   marks: &[EditorMark],
   preedit: Option<&(usize, u32, String)>,
@@ -1069,7 +1071,7 @@ fn build_inline_runs(
   runs
 }
 
-fn render_inline_span(run: InlineRun, font_px: f32, dark_mode: Signal<bool>) -> impl IntoElement {
+pub(crate) fn render_inline_span(run: InlineRun, font_px: f32, dark_mode: Signal<bool>) -> impl IntoElement {
   let mut t = text(run.text);
   if run.bold {
     t = t.font_weight(FontWeight::BOLD);
@@ -2956,489 +2958,6 @@ fn compute_image_display_size(url: &str, explicit_w: Option<f32>) -> (f32, f32) 
   (explicit_w.unwrap_or(560.0), 300.0)
 }
 
-fn visual_cell_units(text: &str) -> f32 {
-  text
-    .lines()
-    .map(|line| {
-      line
-        .chars()
-        .map(|c| {
-          if c.is_ascii() {
-            1.0_f32
-          } else {
-            1.85_f32
-          }
-        })
-        .sum::<f32>()
-    })
-    .fold(0.0_f32, f32::max)
-}
-
-/// Computes content-adaptive column layout for a GFM table:
-/// - Respects non-uniform user-adjusted `model.widths` when present.
-/// - Otherwise measures every column's visual width (CJK-aware) so narrow key
-///   columns (`项`, `编号`, `优先级`) stay compact while long content columns
-///   automatically receive proportional space.
-/// - Returns `(use_horizontal_scroll, col_shares, col_pixels)`.
-pub fn compute_adaptive_table_layout(model: &TableModel) -> (bool, Vec<f32>, Vec<f32>) {
-  let col_count = model.rows.first().map_or(0, Vec::len).max(1);
-  let has_custom_widths = model.widths.len() == col_count && {
-    let min_w = model.widths.iter().copied().fold(f64::INFINITY, f64::min);
-    let max_w = model.widths.iter().copied().fold(0.0_f64, f64::max);
-    (max_w - min_w) > 0.05
-  };
-
-  let mut raw_units = vec![4.5_f32; col_count];
-  for (r_idx, row) in model.rows.iter().enumerate() {
-    for (c_idx, cell) in row.iter().enumerate().take(col_count) {
-      let u = visual_cell_units(cell.text.trim());
-      let weighted = if r_idx == 0 { u * 1.08 } else { u };
-      if weighted > raw_units[c_idx] {
-        raw_units[c_idx] = weighted;
-      }
-    }
-  }
-
-  // Pixel estimates for deciding whether horizontal scroll is needed.
-  let col_pixels: Vec<f32> = raw_units
-    .iter()
-    .map(|&u| (u * 8.2 + 28.0).clamp(72.0, 320.0))
-    .collect();
-  let total_natural_px: f32 = col_pixels.iter().sum();
-  let wide_table = col_count > 5 || (col_count > 4 && total_natural_px > 820.0);
-
-  let mut weights: Vec<f32> = if has_custom_widths {
-    model
-      .widths
-      .iter()
-      .map(|&w| (w as f32).max(0.05))
-      .collect()
-  } else {
-    raw_units
-      .iter()
-      .map(|&u| {
-        // Compress extreme long paragraphs slightly with gentle sublinear curve
-        // so short columns stay readable while long columns take 75-85%.
-        let clamped = u.clamp(4.0, 64.0);
-        if clamped <= 16.0 {
-          clamped
-        } else {
-          16.0 + (clamped - 16.0).powf(0.85) * 1.35
-        }
-      })
-      .collect()
-  };
-
-  let sum: f32 = weights.iter().sum::<f32>().max(0.001);
-  let min_share = (0.09_f32).min(0.65 / col_count as f32);
-  let max_share = (0.86_f32).max(1.0 / col_count as f32);
-  for w in &mut weights {
-    *w = (*w / sum).clamp(min_share, max_share);
-  }
-  let norm: f32 = weights.iter().sum::<f32>().max(0.001);
-  let shares: Vec<f32> = weights.into_iter().map(|w| w / norm).collect();
-
-  (wide_table, shares, col_pixels)
-}
-
-fn render_table_block_view(env: &BlockRenderEnv, at: Position, block: EditorBlock) -> impl IntoElement {
-  let init_idx = live_index(at);
-  let dark_mode = env.dark_mode;
-  let bridge = env.bridge.clone();
-  let focused_cell = env.focused_table_cell;
-  let table_selection = env.table_selection;
-  let table_drag_anchor = env.table_drag_anchor;
-  let marquee_selected = env.marquee_selected;
-  let drag_anchor = env.drag_anchor;
-  let editor_focused = env.editor_focused;
-  let block_id = block.id.clone();
-  let hovered = signal(false);
-
-  let model = TableModel::from_block_data(&block.data);
-  let row_count = model.rows.len().max(1);
-  let col_count = model.rows.first().map_or(0, Vec::len).max(1);
-  let (wide_table, col_shares, col_pixels) = compute_adaptive_table_layout(&model);
-  let total_wide_px: f32 = col_pixels.iter().sum();
-
-  let br_add_row = bridge.clone();
-  let br_add_col = bridge.clone();
-  let br_del_row = bridge.clone();
-  let br_del_col = bridge.clone();
-  let br_align = bridge.clone();
-  let br_del = bridge.clone();
-  let br_col_resize = bridge.clone();
-  let table_width_px = signal(720.0_f32);
-  let col_drag_start = signal(0.0_f32);
-  let col_shares_base = col_shares.clone();
-  let model_aligns: Vec<String> = (0..col_count).map(|c| model.align_for(c).to_owned()).collect();
-  let bid_toolbar = block_id.clone();
-
-  let mut table_col = if wide_table {
-    view().w(px(total_wide_px)).min_w(relative(1.0))
-  } else {
-    view().w_full()
-  }
-  .on_layout(move |b: &Bounds<Points>| {
-    if b.size.width.0 > 60.0 {
-      table_width_px.set(b.size.width.0);
-    }
-  })
-  .rounded(px(6.0))
-  .border_1()
-  .border_color(move || palette(dark_mode.get()).border_normal)
-  .overflow_hidden();
-
-  for r in 0..row_count {
-    let is_header = r == 0;
-    let mut row_el = view()
-      .w_full()
-      .flex_row()
-      .items_stretch()
-      .bg(move || {
-        let p = palette(dark_mode.get());
-        if is_header { p.surface_raised } else { p.surface_base }
-      });
-    if r > 0 {
-      row_el = row_el
-        .border_t_1()
-        .border_color(move || palette(dark_mode.get()).border_subtle);
-    }
-
-    for c in 0..col_count {
-      let cell_obj = model
-        .rows
-        .get(r)
-        .and_then(|row| row.get(c))
-        .cloned()
-        .unwrap_or_default();
-      let cell_text = cell_obj.text.clone();
-      let cell_marks = cell_obj.marks.clone();
-
-      let bid_chk = block_id.clone();
-      let bid_sel_chk = block_id.clone();
-      let bid_down = block_id.clone();
-      let bid_move = block_id.clone();
-      let bid_up = block_id.clone();
-      let br_cell = bridge.clone();
-      let br_tab = bridge.clone();
-      let br_down = bridge.clone();
-      let is_active = computed(move || {
-        focused_cell
-          .get()
-          .as_ref()
-          .is_some_and(|(id, fr, fc)| id == &bid_chk && *fr == r && *fc == c)
-      });
-      let is_in_multi_sel = computed(move || {
-        table_selection.get().as_ref().is_some_and(|(id, a, f)| {
-          if id != &bid_sel_chk {
-            return false;
-          }
-          let (r0, r1) = (a.0.min(f.0), a.0.max(f.0));
-          let (c0, c1) = (a.1.min(f.1), a.1.max(f.1));
-          r >= r0 && r <= r1 && c >= c0 && c <= c1
-        })
-      });
-
-      let mut cell_box = if wide_table {
-        view()
-          .w(px(col_pixels[c]))
-          .flex_shrink_0()
-          .overflow_hidden()
-          .px_3()
-          .py_2()
-      } else {
-        view()
-          .w(relative(col_shares[c]))
-          .flex_shrink_0()
-          .min_w(px(0.0))
-          .overflow_hidden()
-          .px_3()
-          .py_2()
-      }
-      .test_id(&format!("table-cell-{init_idx}-{r}-{c}"))
-      .cursor(Cursor::Text)
-      .bg(move || {
-        if is_in_multi_sel.get() {
-          palette(dark_mode.get()).selection_bg
-        } else {
-          TRANSPARENT_RGBA
-        }
-      })
-      .on_press_down(move |_: &PressEvent| {
-        drag_anchor.set(None);
-        marquee_selected.set(None);
-        br_down.clear_selection();
-        editor_focused.set(false);
-        table_selection.set(None);
-        table_drag_anchor.set(Some((bid_down.clone(), r, c)));
-      })
-      .on_mouse_move(move |e: &MouseEvent| {
-        if e.pressed_button != Some(MouseButton::Left) {
-          return;
-        }
-        let Some((ref anchor_bid, ar, ac)) = table_drag_anchor.get_untracked() else {
-          return;
-        };
-        if anchor_bid != &bid_move {
-          return;
-        }
-        if ar != r || ac != c || table_selection.get_untracked().is_some() {
-          if focused_cell.get_untracked().is_some() {
-            focused_cell.set(None);
-          }
-          let next = Some((bid_move.clone(), (ar, ac), (r, c)));
-          if table_selection.get_untracked() != next {
-            table_selection.set(next);
-          }
-        }
-      })
-      .on_mouse_up(move |_: &MouseEvent| {
-        let was_same_cell = table_drag_anchor
-          .get_untracked()
-          .is_some_and(|(ref abid, ar, ac)| abid == &bid_up && ar == r && ac == c);
-        table_drag_anchor.set(None);
-        if was_same_cell && table_selection.get_untracked().is_none() {
-          focused_cell.set(Some((bid_up.clone(), r, c)));
-        }
-      })
-      .on_press({
-        let bid_p = block_id.clone();
-        move || {
-          if table_selection.get_untracked().is_none() {
-            focused_cell.set(Some((bid_p.clone(), r, c)));
-          }
-        }
-      });
-
-      if c > 0 {
-        cell_box = cell_box
-          .relative()
-          .border_l_1()
-          .border_color(move || palette(dark_mode.get()).border_subtle);
-        // Draggable column resize divider on header row (`CAP-05-07`)
-        if is_header && !wide_table {
-          let shares_r = col_shares_base.clone();
-          let br_r = br_col_resize.clone();
-          cell_box = cell_box.child(
-            view()
-              .test_id(&format!("table-col-resize-{init_idx}-{c}"))
-              .absolute()
-              .top_0()
-              .bottom_0()
-              .left(px(-4.0))
-              .w(px(8.0))
-              .z_index(12)
-              .cursor(Cursor::ColResize)
-              .claim_touches(TouchClaim::on_start())
-              .keep_touches(true)
-              .on_responder_grant(move |e: &ResponderEvent| {
-                col_drag_start.set(f32::from(e.page.x));
-              })
-              .on_responder_release(move |e: &ResponderEvent| {
-                let dx = f32::from(e.page.x) - col_drag_start.get_untracked();
-                if dx.abs() < 4.0 {
-                  return;
-                }
-                let tw = table_width_px.get_untracked().max(120.0);
-                let delta_frac = dx / tw;
-                let mut next: Vec<f64> = shares_r.iter().map(|&w| w as f64).collect();
-                let min_w = 0.08_f64;
-                let pair = next[c - 1] + next[c];
-                let left_w = (next[c - 1] + delta_frac as f64).clamp(min_w, (pair - min_w).max(min_w));
-                next[c - 1] = left_w;
-                next[c] = (pair - left_w).max(min_w);
-                br_r.table_op(live_index(at), TableOp::SetColumnWidths { widths: next });
-              }),
-          );
-        }
-      }
-
-      let col_align = model_aligns[c].clone();
-      let cell_display = cell_text.clone();
-      let cell_edit_init = cell_text;
-      let bid_nav = block_id.clone();
-      cell_box = cell_box
-        .child(when(move || !is_active.get(), {
-          let disp = cell_display.clone();
-          let marks_c = cell_marks.clone();
-          let align_c = col_align.clone();
-          move || {
-            let mut t = text("")
-              .w_full()
-              .min_h(px(22.0))
-              .text_size(px(13.5))
-              .line_height(px(21.0))
-              .font_weight(if is_header { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-              .text_color(move || palette(dark_mode.get()).text_primary);
-            t = match align_c.as_str() {
-              "center" => t.text_center(),
-              "right" => t.text_right(),
-              _ => t,
-            };
-            let runs = build_inline_runs(&disp, &marks_c, None);
-            if runs.is_empty() {
-              t = t.child(text(" "));
-            } else {
-              for run in runs {
-                t = t.child(render_inline_span(run, 13.5, dark_mode));
-              }
-            }
-            t
-          }
-        }))
-        .child(when(move || is_active.get(), {
-          let br_c = br_cell.clone();
-          let br_t = br_tab.clone();
-          let init_val = cell_edit_init.clone();
-          let bid_n = bid_nav.clone();
-          move || {
-            let br_c2 = br_c.clone();
-            let br_t2 = br_t.clone();
-            let draft = signal(init_val.clone());
-            let bid_n2 = bid_n.clone();
-            input()
-              .test_id(&format!("table-cell-input-{init_idx}-{r}-{c}"))
-              .auto_focus(true)
-              .submit_behavior(SubmitBehavior::Submit)
-              .w_full()
-              .min_h(px(22.0))
-              .text_size(px(13.5))
-              .font_weight(if is_header { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-              .text_color(move || palette(dark_mode.get()).text_primary)
-              .bg(move || palette(dark_mode.get()).surface_base)
-              .value(move || draft.get())
-              .on_change(move |v: &str| {
-                draft.set(v.to_owned());
-                br_c2.table_op_live(
-                  live_index(at),
-                  TableOp::SetCell {
-                    row: r,
-                    col: c,
-                    cell: TableCell::plain(v),
-                  },
-                );
-              })
-              .on_submit(move |_: &str| {
-                // Move down one row or add a row when at bottom
-                let next_r = r + 1;
-                if next_r < row_count {
-                  focused_cell.set(Some((bid_n2.clone(), next_r, c)));
-                } else {
-                  br_t2.table_op(
-                    live_index(at),
-                    TableOp::Navigate {
-                      row: r,
-                      col: c,
-                      direction: TableNavDirection::Tab,
-                    },
-                  );
-                  focused_cell.set(Some((bid_n2.clone(), next_r, 0)));
-                }
-              })
-          }
-        }));
-
-      row_el = row_el.child(cell_box);
-    }
-    table_col = table_col.child(row_el);
-  }
-
-  let table_body: AnyElement = if wide_table {
-    scroll().horizontal().w_full().child(table_col).into_element()
-  } else {
-    table_col.into_element()
-  };
-
-  view()
-    .test_id("node-view-table")
-    .relative()
-    .w_full()
-    .my_3()
-    .on_mouse_enter(move |_: &MouseEvent| hovered.set(true))
-    .on_mouse_leave(move |_: &MouseEvent| hovered.set(false))
-    .child(table_body)
-    .child(when(move || hovered.get(), {
-      let bid_t = bid_toolbar.clone();
-      let aligns_t = model_aligns.clone();
-      move || {
-        let (br1, br2, br3, br4, br5, br6) = (
-          br_add_row.clone(),
-          br_add_col.clone(),
-          br_del_row.clone(),
-          br_del_col.clone(),
-          br_align.clone(),
-          br_del.clone(),
-        );
-        let active_rc = focused_cell
-          .get_untracked()
-          .filter(|(id, _, _)| id == &bid_t)
-          .map(|(_, r, c)| (r, c))
-          .or_else(|| {
-            table_selection
-              .get_untracked()
-              .filter(|(id, _, _)| id == &bid_t)
-              .map(|(_, a, _)| a)
-          })
-          .unwrap_or((row_count.saturating_sub(1), col_count.saturating_sub(1)));
-        let cur_align = aligns_t
-          .get(active_rc.1)
-          .map(String::as_str)
-          .unwrap_or("left");
-        let next_align = match cur_align {
-          "center" => "right",
-          "right" => "left",
-          _ => "center",
-        };
-        let next_align_str = next_align.to_owned();
-        let align_label = match cur_align {
-          "center" => "居中",
-          "right" => "右对齐",
-          _ => "左对齐",
-        };
-        let mut bar = view()
-          .test_id("table-hover-toolbar")
-          .absolute()
-          .top(px(4.0))
-          .right(px(6.0))
-          .z_index(20)
-          .flex_row()
-          .items_center()
-          .gap(px(4.0))
-          .p_1()
-          .rounded(px(6.0))
-          .bg(move || palette(dark_mode.get()).surface_overlay)
-          .border_1()
-          .border_color(move || palette(dark_mode.get()).border_normal)
-          .child(mini_chip("+ 行", dark_mode, move || {
-            br1.table_op(live_index(at), TableOp::InsertRow { at: row_count });
-          }))
-          .child(mini_chip("+ 列", dark_mode, move || {
-            br2.table_op(live_index(at), TableOp::InsertColumn { at: col_count });
-          }))
-          .child(mini_chip(align_label, dark_mode, move || {
-            br5.table_op(
-              live_index(at),
-              TableOp::SetColumnAlign {
-                col: active_rc.1,
-                align: next_align_str.clone(),
-              },
-            );
-          }));
-        if row_count > 2 {
-          bar = bar.child(mini_chip("− 行", dark_mode, move || {
-            br3.table_op(live_index(at), TableOp::DeleteRow { at: active_rc.0.max(1).min(row_count - 1) });
-          }));
-        }
-        if col_count > 2 {
-          bar = bar.child(mini_chip("− 列", dark_mode, move || {
-            br4.table_op(live_index(at), TableOp::DeleteColumn { at: active_rc.1.min(col_count - 1) });
-          }));
-        }
-        bar.child(mini_chip("删除", dark_mode, move || br6.delete_block_at(live_index(at))))
-      }
-    }))
-}
-
 // ── 8. Divider Block ─────────────────────────────────────────────────────────
 
 fn render_divider_block_view(env: &BlockRenderEnv, at: Position) -> impl IntoElement {
@@ -3918,27 +3437,6 @@ mod tests {
     let (w, h) = parse_svg_aspect_size(r#"<svg viewBox="0 0 800 200"></svg>"#, 680.0, 320.0);
     assert!((w - 680.0).abs() < 1.0);
     assert!((h - 170.0).abs() < 1.0);
-  }
-
-  #[test]
-  fn adaptive_table_column_widths_give_long_content_more_space() {
-    let data = serde_json::json!({
-      "rows": [
-        ["项", "值"],
-        ["版本", "v1.0(占位,以实际发布为准)"],
-        ["软件基线", "Ubuntu 24.04 / kernel 6.8.0-124 / driver 580.126.09-open / CUDA 13.0 / NCCL 2.28.9"]
-      ]
-    });
-    let model = TableModel::from_block_data(&data);
-    let (wide, shares, _pixels) = compute_adaptive_table_layout(&model);
-    assert!(!wide, "2-column table must fit without horizontal scrolling");
-    assert_eq!(shares.len(), 2);
-    assert!(
-      shares[0] < 0.28 && shares[1] > 0.72,
-      "short key column should stay compact (<28%) while long value column gets >72%, got {:?}",
-      shares
-    );
-    assert!((shares[0] + shares[1] - 1.0).abs() < 0.001);
   }
 
   #[test]

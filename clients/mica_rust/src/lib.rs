@@ -44,6 +44,7 @@ pub mod settings_view;
 pub mod share_dialog;
 pub mod sidebar;
 pub mod storage;
+pub mod table_view;
 pub mod text_geometry;
 pub mod tooltip;
 pub mod touch_selection;

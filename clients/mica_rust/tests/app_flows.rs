@@ -705,3 +705,58 @@ fn regression_code_block_progressive_ctrl_a_expands_to_page() {
     "Backspace after Ctrl+AA whole-page selection must delete outer prose as well"
   );
 }
+
+#[test]
+fn regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+
+  let mut paste = nsh_core::PasteEvent::default();
+  paste.text = "| 编号 | **待确认事项** | 责任方 |\n| --- | --- | --- |\n| IDC-01 | **单机柜可用功率** (kW/柜) | IDC |\n| NET-02 | Q3400-RA / 200G / 接入交换机准确型号与端口 | 网络供应商 |".into();
+  app.paste("id:mica-editor-ime-sink", &paste).unwrap();
+  app.wait_for("id:node-view-table").unwrap();
+  app.wait_for("IDC-01").unwrap();
+  app.wait_for("单机柜可用功率 (kW/柜)").unwrap();
+
+  // 1. Clicking a header or body cell mounts the transparent WYSIWYG caret + IME proxy
+  //    WITHOUT hiding/replacing the cell's rich rendered text!
+  app.press("id:table-cell-0-0-1").unwrap();
+  app.wait_for("id:table-cell-input-0-0-1").unwrap();
+  app.wait_for("id:mica-table-active-caret").unwrap();
+  app.wait_for("待确认事项").unwrap();
+
+  // 2. Full-height column resize handles exist for inner borders AND right edge,
+  //    and the horizontal scrollbar element is mounted.
+  app.wait_for("id:table-col-resize-0-1").unwrap();
+  app.wait_for("id:table-col-resize-0-2").unwrap();
+  app.wait_for("id:table-col-resize-0-3").unwrap();
+  app.wait_for("id:table-horizontal-scrollbar").unwrap();
+
+  // 3. Legacy chrome: top-left corner menu, top column anchor menu, left row anchor menu,
+  //    and right/bottom `+` expand bars all work!
+  app.press("id:table-corner-handle").unwrap();
+  app.wait_for("id:table-corner-menu").unwrap();
+  app.press("id:table-autofit").unwrap();
+
+  app.press("id:table-col-handle-1").unwrap();
+  app.wait_for("id:table-col-menu").unwrap();
+  app.press("id:table-col-align-center").unwrap();
+
+  app.press("id:table-row-handle-1").unwrap();
+  app.wait_for("id:table-row-menu").unwrap();
+  app.press("id:table-row-insert-below").unwrap();
+  // Original 3 rows -> 4 rows (`table-row-handle-3` now exists!)
+  app.wait_for("id:table-row-handle-3").unwrap();
+
+  // Bottom `+` bar appends a 5th row (`table-row-handle-4`), right `+` bar appends a 4th column (`table-col-handle-3`).
+  app.press("id:table-add-row-bar").unwrap();
+  app.wait_for("id:table-row-handle-4").unwrap();
+  app.press("id:table-add-col-bar").unwrap();
+  app.wait_for("id:table-col-handle-3").unwrap();
+}
