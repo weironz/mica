@@ -100,6 +100,8 @@ pub struct BlockRenderEnv {
   pub lightbox: Signal<Option<LightboxContent>>,
   pub focused_code_block: Signal<Option<String>>,
   pub code_caret_at_start: Signal<bool>,
+  pub code_is_empty: Signal<bool>,
+  pub code_key_rev: Signal<u64>,
   pub focused_table_cell: Signal<Option<(String, usize, usize)>>,
   pub table_selection: Signal<Option<TableCellSelection>>,
   pub table_drag_anchor: Signal<Option<(String, usize, usize)>>,
@@ -1003,6 +1005,8 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
   let bridge = env.bridge.clone();
   let focused_code = env.focused_code_block;
   let code_at_start = env.code_caret_at_start;
+  let code_is_empty = env.code_is_empty;
+  let code_key_rev = env.code_key_rev;
   let block_id = block.id.clone();
   let ai_cb = use_context::<CodeAiCallback>();
 
@@ -1087,8 +1091,11 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                 .items_start()
                 .cursor(Cursor::Text)
                 .on_press(move || {
-                  code_at_start.set(live_src.get_untracked().is_empty());
+                  let empty = live_src.get_untracked().is_empty();
+                  code_is_empty.set(empty);
+                  code_at_start.set(empty);
                   focused_code.set(Some(bid_c.clone()));
+                  code_key_rev.update(|v| *v = v.wrapping_add(1));
                 })
                 .child(dynamic(move || {
                   let cur = live_src.get();
@@ -1122,11 +1129,36 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
               .max_rows(Some(32u32))
               .scroll_beyond_last_line(EditorScrollBeyond::None)
               .styles(move || code_editor_styles(dark_mode.get()))
+              .on_focus({
+                let bid_f = block_id.clone();
+                move || {
+                  let empty = live_src.get_untracked().is_empty();
+                  focused_code.set(Some(bid_f.clone()));
+                  code_is_empty.set(empty);
+                  if empty {
+                    code_at_start.set(true);
+                  }
+                  // Bump `code_key_rev` synchronously AND on the next microtask so
+                  // our Backspace/Delete boundary bindings ALWAYS register AFTER
+                  // `nsh_base::editor()`'s own `focused` keymap effect (LIFO wins!).
+                  code_key_rev.update(|v| *v = v.wrapping_add(1));
+                  spawn(async move {
+                    code_key_rev.update(|v| *v = v.wrapping_add(1));
+                  });
+                }
+              })
+              .on_blur(move || {
+                code_at_start.set(false);
+                code_is_empty.set(false);
+              })
               .on_change(move |val: &SharedString| {
                 copied.set(false);
                 live_src.set(val.to_string());
-                if val.is_empty() {
+                let empty = val.is_empty();
+                code_is_empty.set(empty);
+                if empty {
                   code_at_start.set(true);
+                  code_key_rev.update(|v| *v = v.wrapping_add(1));
                 }
                 br_c.update_block_source_live(idx, val.as_ref());
               })
@@ -1138,6 +1170,9 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                     && s.head.column == 0
                 });
                 code_at_start.set(at_start);
+                if at_start {
+                  code_key_rev.update(|v| *v = v.wrapping_add(1));
+                }
               })
           },
         ))

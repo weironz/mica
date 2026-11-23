@@ -555,3 +555,67 @@ fn regression_narrow_viewport_drawers_and_touch_bar() {
   app.wait_for("id:touch-selection-bar").unwrap();
   app.wait_for("id:touch-sel-copy").unwrap();
 }
+
+#[test]
+fn regression_code_block_backspace_and_delete_after_live_focus() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // Case 1: Empty code block created via toolbar (`ed-code-block`), genuinely focused
+  // inside `nsh_base::editor()` (so its own LIFO `backspace`/`delete` bindings are active!)
+  // -> type "ab", Backspace x2 deletes text inside editor, 3rd Backspace deletes the block!
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+  app.press("id:ed-code-block").unwrap();
+  app.wait_for("输入代码...").unwrap();
+  app.type_text("id:code-block-editor", "xy").unwrap();
+  app.wait_for("xy").unwrap();
+  // First 2 Backspaces delete 'y' and 'x' inside `nsh_base::editor()` -> placeholder returns!
+  app.press_key("backspace").unwrap();
+  app.press_key("backspace").unwrap();
+  app.wait_for("输入代码...").unwrap();
+  // 3rd Backspace on the now-empty focused code block MUST delete the code block itself!
+  app.press_key("backspace").unwrap();
+  app
+    .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // Case 2: Empty code block focused inside `nsh_base::editor()` -> pressing `Delete`
+  // MUST ALSO delete the code block!
+  app.press("id:ed-code-block").unwrap();
+  app.wait_for("输入代码...").unwrap();
+  app.type_text("id:code-block-editor", "q").unwrap();
+  app.wait_for("q").unwrap();
+  app.press_key("backspace").unwrap();
+  app.wait_for("输入代码...").unwrap();
+  app.press_key("delete").unwrap();
+  app
+    .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // Case 3: Brand-new empty code block (never typed into — exact user screenshot scenario!)
+  // created via toolbar (`ed-code-block`) -> `Delete` immediately removes the code block!
+  app.press("id:ed-code-block").unwrap();
+  app.wait_for("输入代码...").unwrap();
+  app.press_key("delete").unwrap();
+  app
+    .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // Case 4: Unfocused code block (inserted via slash menu) clicked to mount+focus `nsh_base::editor()`
+  // -> `Backspace` immediately removes the code block!
+  app.press("id:ed-slash-open").unwrap();
+  app.wait_for("id:slash-code").unwrap();
+  app.press("id:slash-code").unwrap();
+  app.wait_for("id:code-block-editor").unwrap();
+  app.press("id:code-block-editor").unwrap();
+  app.wait_for("输入代码...").unwrap();
+  app.press_key("backspace").unwrap();
+  app
+    .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
+    .unwrap();
+}

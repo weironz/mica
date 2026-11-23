@@ -153,6 +153,8 @@ pub fn editor_view(
   let lightbox: Signal<Option<LightboxContent>> = signal(None);
   let focused_code_block: Signal<Option<String>> = signal(None);
   let code_caret_at_start = signal(false);
+  let code_is_empty = signal(false);
+  let code_key_rev = signal(0u64);
   let focused_table_cell: Signal<Option<(String, usize, usize)>> = signal(None);
   let table_selection: Signal<Option<TableCellSelection>> = signal(None);
   let table_drag_anchor: Signal<Option<(String, usize, usize)>> = signal(None);
@@ -295,6 +297,7 @@ pub fn editor_view(
       {
         focused_code_block.set(None);
         code_caret_at_start.set(false);
+        code_is_empty.set(false);
       }
       if let Some((tid, _, _)) = focused_table_cell.get_untracked()
         && !live.contains(tid.as_str())
@@ -314,33 +317,61 @@ pub fn editor_view(
     });
   }
 
-  // Code block Backspace-at-offset-0 handler: when the caret sits at line 0, col 0
-  // of a focused code block, pressing Backspace removes the code block cleanly
-  // (undoable via Ctrl+Z) and places focus back on the neighboring block.
+  // Code block boundary deletion handler:
+  // - `Backspace` when caret sits at (0, 0) OR the code block is empty
+  // - `Delete` when the code block is empty
+  // Subscribes to `code_key_rev` (bumped inside `nsh_base::editor().on_focus` + next microtask)
+  // so these bindings ALWAYS register AFTER `nsh_base::editor()`'s own LIFO `backspace`/`delete`
+  // bindings and are never shadowed on desktop!
   {
     let b_code_del = bridge.clone();
     effect(move || {
+      let _rev = code_key_rev.get();
       let Some(code_bid) = focused_code_block.get() else {
         return;
       };
-      if !code_caret_at_start.get() {
-        return;
+      let at_start = code_caret_at_start.get();
+      let is_empty = code_is_empty.get();
+      if at_start || is_empty {
+        let b_del = b_code_del.clone();
+        let bid_bs = code_bid.clone();
+        on_key_with(
+          "backspace",
+          KeyOptions {
+            when: When::Always,
+            for_focus: true,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if let Some(idx) = b_del.index_of_block_id(&bid_bs) {
+              focused_code_block.set(None);
+              code_caret_at_start.set(false);
+              code_is_empty.set(false);
+              b_del.delete_block_and_focus_neighbor(idx);
+            }
+          },
+        );
       }
-      let b_del = b_code_del.clone();
-      on_key_with(
-        "backspace",
-        KeyOptions {
-          when: When::Always,
-          ..KeyOptions::default()
-        },
-        move |_| {
-          if let Some(idx) = b_del.index_of_block_id(&code_bid) {
-            focused_code_block.set(None);
-            code_caret_at_start.set(false);
-            b_del.delete_block_and_focus_neighbor(idx);
-          }
-        },
-      );
+      if is_empty {
+        let b_del = b_code_del.clone();
+        let bid_del = code_bid;
+        on_key_with(
+          "delete",
+          KeyOptions {
+            when: When::Always,
+            for_focus: true,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if let Some(idx) = b_del.index_of_block_id(&bid_del) {
+              focused_code_block.set(None);
+              code_caret_at_start.set(false);
+              code_is_empty.set(false);
+              b_del.delete_block_and_focus_neighbor(idx);
+            }
+          },
+        );
+      }
     });
   }
 
@@ -858,6 +889,8 @@ pub fn editor_view(
     lightbox,
     focused_code_block,
     code_caret_at_start,
+    code_is_empty,
+    code_key_rev,
     focused_table_cell,
     table_selection,
     table_drag_anchor,
@@ -1096,7 +1129,18 @@ pub fn editor_view(
           "代码块",
           dark_mode,
           computed(move || active_kind.get() == "code_block"),
-          move || b_code_blk.insert_custom_block("code_block", "", Some("rust")),
+          move || {
+            b_code_blk.insert_custom_block("code_block", "", Some("rust"));
+            if let Some(sel) = b_code_blk.selection()
+              && let Some(blk) = b_code_blk.block_at(sel.focus_pos().node)
+              && blk.kind == "code_block"
+            {
+              let empty = blk.text.is_empty();
+              code_is_empty.set(empty);
+              code_caret_at_start.set(empty);
+              focused_code_block.set(Some(blk.id));
+            }
+          },
           terminal_icon,
         ))
         .child(toolbar_sep(dark_mode))
@@ -1574,6 +1618,7 @@ pub fn editor_view(
             drag_anchor.set(None);
             focused_code_block.set(None);
             code_caret_at_start.set(false);
+            code_is_empty.set(false);
             focused_table_cell.set(None);
             sink_ref.blur();
             editor_focused.set(false);
@@ -1730,6 +1775,7 @@ pub fn editor_view(
                 ai_enabled,
                 focused_code_block,
                 code_caret_at_start,
+                code_is_empty,
               );
             })
             .on_composition_change(move |c: &Composition| {
@@ -1756,6 +1802,7 @@ pub fn editor_view(
                   ai_enabled,
                   focused_code_block,
                   code_caret_at_start,
+                  code_is_empty,
                 );
               }
             })
@@ -2110,6 +2157,7 @@ fn apply_sink_text_diff(
   ai_enabled: Signal<bool>,
   focused_code_block: Signal<Option<String>>,
   code_caret_at_start: Signal<bool>,
+  code_is_empty: Signal<bool>,
 ) {
   let (deleted, inserted) = {
     let mut st = sink_state.borrow_mut();
@@ -2169,7 +2217,9 @@ fn apply_sink_text_diff(
     && blk.kind == "code_block"
   {
     empty_ime_sink(sink_state, sink_value);
-    code_caret_at_start.set(blk.text.is_empty());
+    let empty = blk.text.is_empty();
+    code_is_empty.set(empty);
+    code_caret_at_start.set(empty);
     focused_code_block.set(Some(blk.id));
   }
 
