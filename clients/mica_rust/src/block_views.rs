@@ -88,6 +88,9 @@ pub enum LightboxContent {
   Image { url: String, alt: String },
 }
 
+/// Rectangular multi-cell selection inside a table block: `(block_id, anchor, focus)`.
+pub type TableCellSelection = (String, (usize, usize), (usize, usize));
+
 /// Shared reactive environment passed into every recycled `virtual_list` block cell.
 #[derive(Clone)]
 pub struct BlockRenderEnv {
@@ -97,7 +100,11 @@ pub struct BlockRenderEnv {
   pub drag_anchor: Signal<Option<DocPosition>>,
   pub lightbox: Signal<Option<LightboxContent>>,
   pub focused_code_block: Signal<Option<String>>,
+  pub code_caret_at_start: Signal<bool>,
   pub focused_table_cell: Signal<Option<(String, usize, usize)>>,
+  pub table_selection: Signal<Option<TableCellSelection>>,
+  pub table_drag_anchor: Signal<Option<(String, usize, usize)>>,
+  pub body_blank_marquee_ready: Signal<bool>,
   pub last_click: Signal<(usize, u32, f64, u8)>,
   pub page_width: Signal<f32>,
   pub editor_focused: Signal<bool>,
@@ -126,6 +133,7 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
   let layouts_reg = env.layouts.clone();
   let layouts_drag = env.layouts.clone();
   let drag_anchor = env.drag_anchor;
+  let table_drag_guard = env.table_drag_anchor;
   let page_width = env.page_width;
   let dark_mode = env.dark_mode;
   let marquee_selected = env.marquee_selected;
@@ -156,6 +164,9 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
     // Mermaid, math) so upward/downward drag selection NEVER stalls!
     .on_mouse_move(move |e: &MouseEvent| {
       if e.pressed_button != Some(MouseButton::Left) {
+        return;
+      }
+      if table_drag_guard.get_untracked().is_some() {
         return;
       }
       let Some(anchor) = drag_anchor.get_untracked() else {
@@ -324,7 +335,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     _ => FontWeight::NORMAL,
   };
 
-  let (mt, mb) = match kind.as_str() {
+  let (raw_mt, mb) = match kind.as_str() {
     "heading" => match heading_level {
       1 => (18.0, 6.0),
       2 => (14.0, 4.0),
@@ -335,10 +346,13 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     "bulleted_list" | "numbered_list" | "todo" => (2.0, 2.0),
     _ => (3.0, 4.0),
   };
+  // Keep block 0 snug directly beneath the page title without an extra heading gap.
+  let mt = if idx == 0 { 2.0 } else { raw_mt };
 
   let marks = block_marks(&block);
   let text_str = block.text.clone();
-  let is_empty_doc_placeholder = idx == 0 && text_str.is_empty() && kind == "paragraph" && bridge.block_len() == 1;
+  let text_ref = element_ref();
+  layouts.borrow_mut().register_text_ref(&block_id, text_ref);
 
   // Text container with exact `EventKind::TextLayout` + scoped selection/caret overlay
   let text_box = {
@@ -368,6 +382,9 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     let last_click = env.last_click;
     let focused_code = env.focused_code_block;
     let focused_cell = env.focused_table_cell;
+    let table_sel = env.table_selection;
+    let table_drag = env.table_drag_anchor;
+    let blank_marquee_ready = env.body_blank_marquee_ready;
     let editor_focused = env.editor_focused;
     let caret_blink_on = env.caret_blink_on;
     let sink_clear_rev = env.sink_clear_rev;
@@ -394,6 +411,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     };
 
     view()
+      .element_ref(&text_ref)
       .flex_1()
       .min_w(px(0.0))
       .min_h(px(line_h))
@@ -405,7 +423,36 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
       .on_press_down(move |e: &PressEvent| {
         focused_code.set(None);
         focused_cell.set(None);
+        table_sel.set(None);
+        table_drag.set(None);
         sink_clear_rev.update(|v| *v = v.wrapping_add(1));
+
+        // Detect whether the click landed in blank whitespace past the right end
+        // of the hit visual line (or on an empty paragraph): a plain click places
+        // the caret at line end, while dragging > 4px upgrades smoothly into a
+        // body-area block marquee box!
+        let in_blank_tail = {
+          let cache = layouts_click.borrow();
+          if text_click.is_empty() {
+            true
+          } else if let Some(info) = cache.blocks.get(&bid_click) {
+            if info.lines.is_empty() {
+              true
+            } else {
+              let ly = e.position.y.0;
+              let hit_line = info
+                .lines
+                .iter()
+                .find(|l| ly < l.y.0 + l.height.0.max(1.0))
+                .unwrap_or_else(|| info.lines.last().unwrap());
+              e.position.x.0 > hit_line.x.0 + hit_line.width.0 + 18.0
+            }
+          } else {
+            false
+          }
+        };
+        blank_marquee_ready.set(in_blank_tail && e.clicks <= 1);
+
         let off = hit_offset(&layouts_click, &bid_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
         let click_count = e.clicks.clamp(1, 3);
         let _ = last_click;
@@ -612,20 +659,13 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
             }
           });
 
-        if is_empty_doc_placeholder {
-          t = t.child(
-            text("输入正文，或输入 / 唤出命令...")
-              .text_color(move || palette(dark_mode.get()).text_ghost),
-          );
+        let runs = build_inline_runs(&text_spans, &marks, None);
+        if runs.is_empty() {
+          // Keep 1 line height even on blank paragraphs (no placeholder hint text)
+          t = t.child(text("\u{200B}"));
         } else {
-          let runs = build_inline_runs(&text_spans, &marks, None);
-          if runs.is_empty() {
-            // Keep 1 line height even on blank paragraphs
-            t = t.child(text("\u{200B}"));
-          } else {
-            for run in runs {
-              t = t.child(render_inline_span(run, font_px, dark_mode));
-            }
+          for run in runs {
+            t = t.child(render_inline_span(run, font_px, dark_mode));
           }
         }
         t
@@ -944,6 +984,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let focused_code = env.focused_code_block;
+  let code_at_start = env.code_caret_at_start;
   let block_id = block.id.clone();
   let ai_cb = use_context::<CodeAiCallback>();
 
@@ -1020,7 +1061,10 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
               .w_full()
               .items_start()
               .cursor(Cursor::Text)
-              .on_press(move || focused_code.set(Some(bid_c.clone())))
+              .on_press(move || {
+                code_at_start.set(live_src.get_untracked().is_empty());
+                focused_code.set(Some(bid_c.clone()));
+              })
               .child(
                 text(move || {
                   let cur = live_src.get();
@@ -1065,7 +1109,19 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
               .on_change(move |val: &SharedString| {
                 copied.set(false);
                 live_src.set(val.to_string());
+                if val.is_empty() {
+                  code_at_start.set(true);
+                }
                 br_c.update_block_source_live(idx, val.as_ref());
+              })
+              .on_selection_change(move |sels: &Vec<nsh_base::EditorSelection>| {
+                let at_start = sels.last().is_some_and(|s| {
+                  s.anchor.line == 0
+                    && s.anchor.column == 0
+                    && s.head.line == 0
+                    && s.head.column == 0
+                });
+                code_at_start.set(at_start);
               })
           },
         ))
@@ -2187,6 +2243,7 @@ fn render_image_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
       .child(text("图片地址为空").text_size(px(13.0)).text_color(move || palette(dark_mode.get()).text_muted))
       .into_element()
   } else {
+    let (disp_w, disp_h) = compute_image_display_size(&url, width_px);
     button()
       .test_id("image-preview-btn")
       .accessibility_label("点击放大查看图片")
@@ -2199,8 +2256,8 @@ fn render_image_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
       })
       .child(
         image(ImageSrc::from(url.clone()))
-          .w(px(width_px.unwrap_or(560.0)))
-          .h(px(300.0)),
+          .w(px(disp_w))
+          .h(px(disp_h)),
       )
       .into_element()
   };
@@ -2251,26 +2308,132 @@ fn mini_chip(label: &'static str, dark_mode: Signal<bool>, on_press: impl Fn() +
     .child(text(label).text_size(px(11.5)).text_color(move || palette(dark_mode.get()).text_primary))
 }
 
-// ── 7. Table Block (Horizontally Scrollable GFM Table + Editable Cells) ──────
+// ── 7. Table Block (Content-Adaptive Columns + Free Multi-Cell Drag Select) ──
+
+fn compute_image_display_size(url: &str, explicit_w: Option<f32>) -> (f32, f32) {
+  let max_w = explicit_w.unwrap_or(680.0).clamp(120.0, 960.0);
+  let max_h = 480.0_f32;
+  if let Some((nw, nh)) = crate::clipboard_platform::probe_local_image_dimensions(url) {
+    let fw = nw as f32;
+    let fh = nh as f32;
+    if let Some(w) = explicit_w {
+      let h = (w * fh / fw.max(1.0)).clamp(64.0, 960.0);
+      return (w, h);
+    }
+    let scale = (max_w / fw).min(max_h / fh).min(1.0);
+    return ((fw * scale).clamp(80.0, max_w), (fh * scale).clamp(60.0, max_h));
+  }
+  (explicit_w.unwrap_or(560.0), 300.0)
+}
+
+fn visual_cell_units(text: &str) -> f32 {
+  text
+    .lines()
+    .map(|line| {
+      line
+        .chars()
+        .map(|c| {
+          if c.is_ascii() {
+            1.0_f32
+          } else {
+            1.85_f32
+          }
+        })
+        .sum::<f32>()
+    })
+    .fold(0.0_f32, f32::max)
+}
+
+/// Computes content-adaptive column layout for a GFM table:
+/// - Respects non-uniform user-adjusted `model.widths` when present.
+/// - Otherwise measures every column's visual width (CJK-aware) so narrow key
+///   columns (`项`, `编号`, `优先级`) stay compact while long content columns
+///   automatically receive proportional space.
+/// - Returns `(use_horizontal_scroll, col_shares, col_pixels)`.
+pub fn compute_adaptive_table_layout(model: &TableModel) -> (bool, Vec<f32>, Vec<f32>) {
+  let col_count = model.rows.first().map_or(0, Vec::len).max(1);
+  let has_custom_widths = model.widths.len() == col_count && {
+    let min_w = model.widths.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_w = model.widths.iter().copied().fold(0.0_f64, f64::max);
+    (max_w - min_w) > 0.05
+  };
+
+  let mut raw_units = vec![4.5_f32; col_count];
+  for (r_idx, row) in model.rows.iter().enumerate() {
+    for (c_idx, cell) in row.iter().enumerate().take(col_count) {
+      let u = visual_cell_units(cell.text.trim());
+      let weighted = if r_idx == 0 { u * 1.08 } else { u };
+      if weighted > raw_units[c_idx] {
+        raw_units[c_idx] = weighted;
+      }
+    }
+  }
+
+  // Pixel estimates for deciding whether horizontal scroll is needed.
+  let col_pixels: Vec<f32> = raw_units
+    .iter()
+    .map(|&u| (u * 8.2 + 28.0).clamp(72.0, 320.0))
+    .collect();
+  let total_natural_px: f32 = col_pixels.iter().sum();
+  let wide_table = col_count > 5 || (col_count > 4 && total_natural_px > 820.0);
+
+  let mut weights: Vec<f32> = if has_custom_widths {
+    model
+      .widths
+      .iter()
+      .map(|&w| (w as f32).max(0.05))
+      .collect()
+  } else {
+    raw_units
+      .iter()
+      .map(|&u| {
+        // Compress extreme long paragraphs slightly with gentle sublinear curve
+        // so short columns stay readable while long columns take 75-85%.
+        let clamped = u.clamp(4.0, 64.0);
+        if clamped <= 16.0 {
+          clamped
+        } else {
+          16.0 + (clamped - 16.0).powf(0.85) * 1.35
+        }
+      })
+      .collect()
+  };
+
+  let sum: f32 = weights.iter().sum::<f32>().max(0.001);
+  let min_share = (0.09_f32).min(0.65 / col_count as f32);
+  let max_share = (0.86_f32).max(1.0 / col_count as f32);
+  for w in &mut weights {
+    *w = (*w / sum).clamp(min_share, max_share);
+  }
+  let norm: f32 = weights.iter().sum::<f32>().max(0.001);
+  let shares: Vec<f32> = weights.into_iter().map(|w| w / norm).collect();
+
+  (wide_table, shares, col_pixels)
+}
 
 fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) -> impl IntoElement {
   let dark_mode = env.dark_mode;
   let bridge = env.bridge.clone();
   let focused_cell = env.focused_table_cell;
+  let table_selection = env.table_selection;
+  let table_drag_anchor = env.table_drag_anchor;
+  let drag_anchor = env.drag_anchor;
+  let editor_focused = env.editor_focused;
   let block_id = block.id.clone();
   let hovered = signal(false);
 
   let model = TableModel::from_block_data(&block.data);
   let row_count = model.rows.len().max(1);
   let col_count = model.rows.first().map_or(0, Vec::len).max(1);
+  let (wide_table, col_shares, col_pixels) = compute_adaptive_table_layout(&model);
+  let total_wide_px: f32 = col_pixels.iter().sum();
 
   let br_add_row = bridge.clone();
   let br_add_col = bridge.clone();
   let br_del = bridge.clone();
 
-  let wide_table = col_count > 4;
   let mut table_col = if wide_table {
-    view().min_w(px(col_count as f32 * 165.0))
+    view().w(px(total_wide_px)).min_w(relative(1.0))
   } else {
     view().w_full()
   }
@@ -2296,29 +2459,102 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     }
 
     for c in 0..col_count {
-      let cell_text = model
+      let cell_obj = model
         .rows
         .get(r)
         .and_then(|row| row.get(c))
-        .map(|cell| cell.text.clone())
+        .cloned()
         .unwrap_or_default();
+      let cell_text = cell_obj.text.clone();
+      let cell_marks = cell_obj.marks.clone();
+
       let bid_chk = block_id.clone();
-      let bid_set = block_id.clone();
+      let bid_sel_chk = block_id.clone();
+      let bid_down = block_id.clone();
+      let bid_move = block_id.clone();
+      let bid_up = block_id.clone();
       let br_cell = bridge.clone();
       let br_tab = bridge.clone();
+      let br_down = bridge.clone();
       let is_active = computed(move || {
         focused_cell
           .get()
           .as_ref()
           .is_some_and(|(id, fr, fc)| id == &bid_chk && *fr == r && *fc == c)
       });
+      let is_in_multi_sel = computed(move || {
+        table_selection.get().as_ref().is_some_and(|(id, a, f)| {
+          if id != &bid_sel_chk {
+            return false;
+          }
+          let (r0, r1) = (a.0.min(f.0), a.0.max(f.0));
+          let (c0, c1) = (a.1.min(f.1), a.1.max(f.1));
+          r >= r0 && r <= r1 && c >= c0 && c <= c1
+        })
+      });
 
-      let mut cell_box = view()
-        .flex_1()
-        .min_w(px(0.0))
-        .overflow_hidden()
-        .px_3()
-        .py_2();
+      let mut cell_box = if wide_table {
+        view()
+          .w(px(col_pixels[c]))
+          .flex_shrink_0()
+          .overflow_hidden()
+          .px_3()
+          .py_2()
+      } else {
+        view()
+          .w(relative(col_shares[c]))
+          .flex_shrink_0()
+          .min_w(px(0.0))
+          .overflow_hidden()
+          .px_3()
+          .py_2()
+      }
+      .test_id(&format!("table-cell-{idx}-{r}-{c}"))
+      .cursor(Cursor::Text)
+      .bg(move || {
+        if is_in_multi_sel.get() {
+          palette(dark_mode.get()).selection_bg
+        } else {
+          TRANSPARENT_RGBA
+        }
+      })
+      .on_press_down(move |_: &PressEvent| {
+        drag_anchor.set(None);
+        br_down.clear_selection();
+        editor_focused.set(false);
+        table_selection.set(None);
+        table_drag_anchor.set(Some((bid_down.clone(), r, c)));
+      })
+      .on_mouse_move(move |e: &MouseEvent| {
+        if e.pressed_button != Some(MouseButton::Left) {
+          return;
+        }
+        let Some((ref anchor_bid, ar, ac)) = table_drag_anchor.get_untracked() else {
+          return;
+        };
+        if anchor_bid != &bid_move {
+          return;
+        }
+        if ar != r || ac != c || table_selection.get_untracked().is_some() {
+          if focused_cell.get_untracked().is_some() {
+            focused_cell.set(None);
+          }
+          let next = Some((bid_move.clone(), (ar, ac), (r, c)));
+          if table_selection.get_untracked() != next {
+            table_selection.set(next);
+          }
+        }
+      })
+      .on_mouse_up(move |_: &MouseEvent| {
+        let was_same_cell = table_drag_anchor
+          .get_untracked()
+          .is_some_and(|(ref abid, ar, ac)| abid == &bid_up && ar == r && ac == c);
+        table_drag_anchor.set(None);
+        if was_same_cell && table_selection.get_untracked().is_none() {
+          focused_cell.set(Some((bid_up.clone(), r, c)));
+        }
+      });
+
       if c > 0 {
         cell_box = cell_box
           .border_l_1()
@@ -2330,24 +2566,25 @@ fn render_table_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
       let bid_nav = block_id.clone();
       cell_box = cell_box
         .child(when(move || !is_active.get(), {
-          let bid_click = bid_set.clone();
           let disp = cell_display.clone();
+          let marks_c = cell_marks.clone();
           move || {
-            let bid_c = bid_click.clone();
-            let d = disp.clone();
-            button()
+            let mut t = text("")
               .w_full()
               .min_h(px(22.0))
-              .items_start()
-              .cursor(Cursor::Text)
-              .on_press(move || focused_cell.set(Some((bid_c.clone(), r, c))))
-              .child(
-                text(if d.is_empty() { " ".to_string() } else { d })
-                  .w_full()
-                  .text_size(px(13.5))
-                  .font_weight(if is_header { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
-                  .text_color(move || palette(dark_mode.get()).text_primary),
-              )
+              .text_size(px(13.5))
+              .line_height(px(21.0))
+              .font_weight(if is_header { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+              .text_color(move || palette(dark_mode.get()).text_primary);
+            let runs = build_inline_runs(&disp, &marks_c, None);
+            if runs.is_empty() {
+              t = t.child(text(" "));
+            } else {
+              for run in runs {
+                t = t.child(render_inline_span(run, 13.5, dark_mode));
+              }
+            }
+            t
           }
         }))
         .child(when(move || is_active.get(), {
@@ -2763,5 +3000,26 @@ mod tests {
     let (w, h) = parse_svg_aspect_size(r#"<svg viewBox="0 0 800 200"></svg>"#, 680.0, 320.0);
     assert!((w - 680.0).abs() < 1.0);
     assert!((h - 170.0).abs() < 1.0);
+  }
+
+  #[test]
+  fn adaptive_table_column_widths_give_long_content_more_space() {
+    let data = serde_json::json!({
+      "rows": [
+        ["项", "值"],
+        ["版本", "v1.0(占位,以实际发布为准)"],
+        ["软件基线", "Ubuntu 24.04 / kernel 6.8.0-124 / driver 580.126.09-open / CUDA 13.0 / NCCL 2.28.9"]
+      ]
+    });
+    let model = TableModel::from_block_data(&data);
+    let (wide, shares, _pixels) = compute_adaptive_table_layout(&model);
+    assert!(!wide, "2-column table must fit without horizontal scrolling");
+    assert_eq!(shares.len(), 2);
+    assert!(
+      shares[0] < 0.28 && shares[1] > 0.72,
+      "short key column should stay compact (<28%) while long value column gets >72%, got {:?}",
+      shares
+    );
+    assert!((shares[0] + shares[1] - 1.0).abs() < 0.001);
   }
 }

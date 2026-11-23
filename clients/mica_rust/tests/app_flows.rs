@@ -402,3 +402,81 @@ fn regression_typing_backtick_caret_focus_and_code_block_backspace() {
   app.press_key("mod+a").unwrap();
   app.wait_for("id:block-selection-overlay").unwrap();
 }
+
+#[test]
+fn regression_fifteen_editor_ux_fixes() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Fresh empty page must NOT show the removed "输入正文，或输入 / 唤出命令..." placeholder.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+  assert!(
+    !app.shows("输入正文，或输入 / 唤出命令..."),
+    "empty document must not display the removed placeholder prompt"
+  );
+
+  // 2. Adaptive proportional vertical scrollbar is mounted on the right edge.
+  app.wait_for("id:editor-vertical-scrollbar").unwrap();
+
+  // 3. Pasting v0.14.11 Flutter Windows CF_HTML preserves headings, bold, quotes, and tables!
+  let v14_frag = "<h1>泰国算力交付</h1><blockquote><p><strong>核心原则</strong>：按表执行</p></blockquote><table><thead><tr><th>项</th><th>值</th></tr></thead><tbody><tr><td>版本</td><td>Ubuntu 24.04 / CUDA 13.0</td></tr></tbody></table>";
+  let v14_cf_html = nsh_core::platform::clipboard::cf_html(v14_frag);
+  let mut v14_paste = nsh_core::PasteEvent::default();
+  v14_paste.text = "泰国算力交付\n核心原则：按表执行\n项 值\n版本 Ubuntu 24.04 / CUDA 13.0".into();
+  v14_paste.html = v14_cf_html;
+  app.paste("id:mica-editor-ime-sink", &v14_paste).unwrap();
+  app.wait_for("泰国算力交付").unwrap();
+  app.wait_for("id:node-view-quote").unwrap();
+  app.wait_for("id:node-view-table").unwrap();
+  app.wait_for("Ubuntu 24.04 / CUDA 13.0").unwrap();
+
+  // 4. Pasting a clipboard PNG image inserts an image block cleanly.
+  // Minimal valid 1x1 PNG bytes.
+  let png_1x1: Vec<u8> = vec![
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
+    0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+    0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+    0x42, 0x60, 0x82,
+  ];
+  let mut img_paste = nsh_core::PasteEvent::default();
+  img_paste.files.push(nsh_core::PastedFile::image(png_1x1));
+  app.paste("id:mica-editor-ime-sink", &img_paste).unwrap();
+  app.wait_for("id:node-view-image").unwrap();
+
+  // 5. Same-page copy/paste round-trip via Markdown keeps headings, quotes, and code blocks.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 3").unwrap();
+  let mut md_paste = nsh_core::PasteEvent::default();
+  md_paste.text = "# 主标题\n\n> 引用段落\n\n```rust\nfn ok() {}\n```".into();
+  app.paste("id:mica-editor-ime-sink", &md_paste).unwrap();
+  app.wait_for("主标题").unwrap();
+  app.wait_for("id:node-view-quote").unwrap();
+  app.wait_for("id:node-view-code-block").unwrap();
+
+  // 6. Clicking the bottom empty zone appends a new trailing line and focuses prose.
+  app.press("id:editor-bottom-append-zone").unwrap();
+  app.type_text("id:mica-editor-ime-sink", "appended_bottom_line").unwrap();
+  app.wait_for("appended_bottom_line").unwrap();
+
+  // 7. Code block at caret (0, 0): pressing Backspace removes the code block cleanly!
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 4").unwrap();
+  for ch in ["`", "`", "`"] {
+    app.type_text("id:mica-editor-ime-sink", ch).unwrap();
+  }
+  app.wait_for("id:node-view-code-block").unwrap();
+  app.press_key("backspace").unwrap();
+  app
+    .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
+    .unwrap();
+}

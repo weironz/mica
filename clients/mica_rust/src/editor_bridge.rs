@@ -31,6 +31,16 @@ use serde_json::{Map, Value, json};
 
 const DEFAULT_STATUS_TEXT: &str = "上次编辑 刚刚";
 
+/// How `virtual_list` should react to a scroll request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollMode {
+  /// Explicit navigation (page switch, outline jump, find match): align target into view.
+  Jump,
+  /// Editing/caret movement (Enter, Backspace, typing, arrows): keep target visible
+  /// ONLY if it actually scrolled outside the viewport; NEVER jump when already visible!
+  KeepVisible,
+}
+
 /// One heading entry in the live page outline (consumed by `right_sidebar.rs`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutlineItem {
@@ -61,8 +71,8 @@ pub struct MicaDocumentBridge {
   selection_sig: Signal<Option<DocSelection>>,
   /// Monotonic counter bumped when the editor body IME sink should focus & sync.
   focus_sink_rev: Signal<u64>,
-  /// Scroll-to-block request `(block_index, seq)` consumed by `virtual_list`.
-  scroll_request: Signal<Option<(usize, u64)>>,
+  /// Scroll-to-block request `(block_index, mode, seq)` consumed by `virtual_list`.
+  scroll_request: Signal<Option<(usize, ScrollMode, u64)>>,
   /// Active CJK IME composition preedit `(block_index, start_u16, preedit_text)`.
   ime_preedit: Signal<Option<(usize, u32, String)>>,
   /// Active in-page find matches for inline highlighting.
@@ -209,7 +219,7 @@ impl MicaDocumentBridge {
     self.focus_sink_rev.set(self.focus_sink_rev.get_untracked().wrapping_add(1));
   }
 
-  pub fn scroll_request_signal(&self) -> Signal<Option<(usize, u64)>> {
+  pub fn scroll_request_signal(&self) -> Signal<Option<(usize, ScrollMode, u64)>> {
     self.scroll_request
   }
 
@@ -217,9 +227,18 @@ impl MicaDocumentBridge {
     let seq = self
       .scroll_request
       .get_untracked()
-      .map(|(_, n)| n.wrapping_add(1))
+      .map(|(_, _, n)| n.wrapping_add(1))
       .unwrap_or(1);
-    self.scroll_request.set(Some((block_index, seq)));
+    self.scroll_request.set(Some((block_index, ScrollMode::Jump, seq)));
+  }
+
+  pub fn request_keep_block_visible(&self, block_index: usize) {
+    let seq = self
+      .scroll_request
+      .get_untracked()
+      .map(|(_, _, n)| n.wrapping_add(1))
+      .unwrap_or(1);
+    self.scroll_request.set(Some((block_index, ScrollMode::KeepVisible, seq)));
   }
 
   pub fn ime_preedit_signal(&self) -> Signal<Option<(usize, u32, String)>> {
@@ -290,7 +309,7 @@ impl MicaDocumentBridge {
     let patch = self.dispatch_inner(
       EditorCommand::ApplyRemoteUpdate { update: update.to_vec() },
       false,
-      false,
+      None,
     );
     if let Some(err) = patch.error {
       Err(err)
@@ -305,7 +324,7 @@ impl MicaDocumentBridge {
   /// minimal reactive updates (`structure_rev` ONLY on structural changes,
   /// `block_revs[id]` ONLY for dirty blocks), and triggers persistence.
   pub fn dispatch(&self, cmd: EditorCommand) -> EditorPatch {
-    let should_scroll = matches!(
+    let scroll_mode = if matches!(
       cmd,
       EditorCommand::SplitBlock
         | EditorCommand::InsertText { .. }
@@ -318,24 +337,29 @@ impl MicaDocumentBridge {
         | EditorCommand::InsertDivider
         | EditorCommand::InsertImage { .. }
         | EditorCommand::ApplySlashCommand { .. }
-    );
-    self.dispatch_inner_opts(cmd, true, should_scroll, false)
+        | EditorCommand::AppendEmptyParagraph
+    ) {
+      Some(ScrollMode::KeepVisible)
+    } else {
+      None
+    };
+    self.dispatch_inner_opts(cmd, true, scroll_mode, false)
   }
 
   fn dispatch_inner(
     &self,
     cmd: EditorCommand,
     emit_persist: bool,
-    scroll_caret_into_view: bool,
+    scroll_mode: Option<ScrollMode>,
   ) -> EditorPatch {
-    self.dispatch_inner_opts(cmd, emit_persist, scroll_caret_into_view, false)
+    self.dispatch_inner_opts(cmd, emit_persist, scroll_mode, false)
   }
 
   fn dispatch_inner_opts(
     &self,
     cmd: EditorCommand,
     emit_persist: bool,
-    scroll_caret_into_view: bool,
+    scroll_mode: Option<ScrollMode>,
     suppress_block_revs: bool,
   ) -> EditorPatch {
     let patch = {
@@ -443,8 +467,13 @@ impl MicaDocumentBridge {
       set_if_changed(self.front_matter, fm_str);
     }
 
-    if scroll_caret_into_view && let Some(ref s) = sel {
-      self.request_scroll_to_block(s.focus_node());
+    if let Some(mode) = scroll_mode
+      && let Some(ref s) = sel
+    {
+      match mode {
+        ScrollMode::Jump => self.request_scroll_to_block(s.focus_node()),
+        ScrollMode::KeepVisible => self.request_keep_block_visible(s.focus_node()),
+      }
     }
 
     if patch.content_changed {
@@ -737,7 +766,7 @@ impl MicaDocumentBridge {
         text: new_source.to_owned(),
       },
       true,
-      false,
+      None,
       false,
     );
   }
@@ -752,7 +781,7 @@ impl MicaDocumentBridge {
         text: new_source.to_owned(),
       },
       true,
-      false,
+      None,
       true,
     );
   }
@@ -788,7 +817,7 @@ impl MicaDocumentBridge {
         selection: Some(DocSelection::caret(block_index, 0)),
       },
       false,
-      false,
+      None,
     );
     self.dispatch_inner(
       EditorCommand::TransformBlock {
@@ -796,19 +825,54 @@ impl MicaDocumentBridge {
         data: Some(next_data),
       },
       true,
-      false,
+      None,
     );
     if let Some(sel) = prev_sel {
       let _ = self.dispatch_inner(
         EditorCommand::SetSelection { selection: Some(sel) },
         false,
-        false,
+        None,
       );
     }
   }
 
   pub fn delete_block_at(&self, block_index: usize) {
     self.delete_block_range(block_index, block_index);
+  }
+
+  /// Deletes the block at `block_index` (e.g. pressing Backspace at offset 0 of
+  /// a code block) and places the caret cleanly on the neighboring block.
+  pub fn delete_block_and_focus_neighbor(&self, block_index: usize) {
+    let count = self.block_len();
+    if count == 0 || block_index >= count {
+      return;
+    }
+    self.delete_block_at(block_index);
+    let new_count = self.block_len();
+    if new_count == 0 {
+      return;
+    }
+    let target_idx = if block_index > 0 {
+      (block_index - 1).min(new_count - 1)
+    } else {
+      0
+    };
+    let target_off = if block_index > 0 {
+      self
+        .block_at(target_idx)
+        .map(|b| utf16_len(&b.text))
+        .unwrap_or(0)
+    } else {
+      0
+    };
+    self.dispatch_inner(
+      EditorCommand::SetSelection {
+        selection: Some(DocSelection::caret(target_idx, target_off)),
+      },
+      false,
+      Some(ScrollMode::KeepVisible),
+    );
+    self.request_focus();
   }
 
   pub fn toggle_todo_at(&self, block_index: usize) {
@@ -824,9 +888,31 @@ impl MicaDocumentBridge {
     self.dispatch_inner_opts(
       EditorCommand::TableOp { block_index, op },
       true,
-      false,
+      None,
       true,
     )
+  }
+
+  /// Copies a rectangular sub-grid `(r0..=r1, c0..=c1)` of table block `block_index`.
+  pub fn copy_table_area(
+    &self,
+    block_index: usize,
+    r0: usize,
+    c0: usize,
+    r1: usize,
+    c1: usize,
+  ) -> Option<ClipboardPayload> {
+    let block = self.block_at(block_index)?;
+    if block.kind != "table" {
+      return None;
+    }
+    let model = mica_editor::TableModel::from_block_data(&block.data);
+    let payload = model.copy_area(r0, c0, r1, c1);
+    if payload.plain.is_empty() && payload.markdown.is_empty() && payload.html.is_empty() {
+      None
+    } else {
+      Some(payload)
+    }
   }
 
   /// Sets selection to `block_index` at UTF-16 `offset` and scrolls it into view.
@@ -841,8 +927,15 @@ impl MicaDocumentBridge {
         selection: Some(DocSelection::caret(clamped_idx, offset.min(max_off))),
       },
       false,
-      true,
+      Some(ScrollMode::Jump),
     );
+    self.request_focus();
+  }
+
+  /// Ensures the document ends with an editable empty paragraph (appending one
+  /// if the last block has content or is non-paragraph) and focuses it.
+  pub fn append_empty_paragraph_and_focus(&self) {
+    self.dispatch(EditorCommand::AppendEmptyParagraph);
     self.request_focus();
   }
 
@@ -855,8 +948,19 @@ impl MicaDocumentBridge {
     self.dispatch_inner(
       EditorCommand::SetSelection { selection: Some(sel) },
       false,
-      false,
+      None,
     );
+  }
+
+  /// Clears any active document selection / caret (e.g. clicking outside prose).
+  pub fn clear_selection(&self) {
+    if self.selection().is_some() {
+      self.dispatch_inner(
+        EditorCommand::SetSelection { selection: None },
+        false,
+        None,
+      );
+    }
   }
 
   pub fn select_all(&self) {
@@ -890,10 +994,35 @@ impl MicaDocumentBridge {
       return patch.content_changed;
     }
 
-    // 1. If semantic HTML is present (e.g. copied from Flutter Mica or browser),
-    // convert via `crates/md-core::html_to_markdown` so headings/lists/bold/quotes/images stay intact.
-    if !html.trim().is_empty() && has_semantic_html_tags(html) {
-      let body = parse_html_fragment_to_node(html);
+    let normalized = normalize_pasted_text(text);
+    let text_is_md = looks_like_mica_markdown(&normalized);
+    let html_frag = crate::clipboard_platform::extract_cf_html_fragment(html)
+      .unwrap_or_default();
+    let html_has_semantics = !html_frag.trim().is_empty() && has_semantic_html_tags(&html_frag);
+    let html_is_table = crate::clipboard_platform::clipboard_html_is_data_table(&html_frag);
+
+    // 1. Prefer canonical Markdown text directly when the plain clipboard flavor
+    // already carries explicit Markdown syntax (e.g. copied from Mica itself,
+    // VS Code, Typora, or Obsidian) unless HTML has a richer data <table> that
+    // plain text lacks. This guarantees 100% lossless round-trip for code
+    // languages, Mermaid, boards, callouts, todos, marks, and tables.
+    if text_is_md && !(html_is_table && !normalized.contains("---")) {
+      let patch = self.dispatch(EditorCommand::Paste {
+        input: PasteInput::Markdown {
+          markdown: normalized.clone(),
+          plain: text.to_owned(),
+          rich: true,
+        },
+      });
+      if patch.content_changed {
+        return true;
+      }
+    }
+
+    // 2. Convert semantic HTML (e.g. Windows CF_HTML copied from v0.14.11
+    // Flutter Mica, browsers, Word, Feishu, Excel) through `crates/md-core`.
+    if html_has_semantics {
+      let body = parse_html_fragment_to_node(&html_frag);
       let md = html_to_markdown(&body);
       let trimmed = md.trim();
       if !trimmed.is_empty() {
@@ -910,10 +1039,8 @@ impl MicaDocumentBridge {
       }
     }
 
-    // 2. Otherwise normalize Unicode bullets (`• `) and bare image URLs, then route
-    // through `PasteInput::Markdown` (if Markdown syntax detected) or `PasteInput::Plain`.
-    let normalized = normalize_pasted_text(text);
-    let input = if looks_like_mica_markdown(&normalized) {
+    // 3. Fallback: Markdown-normalized plain text or plain paste.
+    let input = if text_is_md {
       PasteInput::Markdown {
         markdown: normalized,
         plain: text.to_owned(),
@@ -930,7 +1057,7 @@ impl MicaDocumentBridge {
     let patch = self.dispatch_inner(
       EditorCommand::CopySelection { image_urls: BTreeMap::new() },
       false,
-      false,
+      None,
     );
     patch.clipboard_out
   }
@@ -962,15 +1089,15 @@ impl MicaDocumentBridge {
         )),
       },
       false,
-      false,
+      None,
     );
     self.dispatch(EditorCommand::DeleteSelectedBlocks);
   }
 
-  pub fn copy_block_range_markdown(&self, lo: usize, hi: usize) -> String {
+  pub fn copy_block_range_payload(&self, lo: usize, hi: usize) -> Option<ClipboardPayload> {
     let count = self.block_len();
     if count == 0 || lo >= count {
-      return String::new();
+      return None;
     }
     let hi = hi.min(count - 1);
     let end_off = self
@@ -986,16 +1113,20 @@ impl MicaDocumentBridge {
         )),
       },
       false,
-      false,
+      None,
     );
-    let md = self
-      .copy_selection()
-      .map(|c| c.markdown)
-      .unwrap_or_default();
+    let payload = self.copy_selection();
     if let Some(p) = prev {
       self.set_selection(p);
     }
-    md
+    payload
+  }
+
+  pub fn copy_block_range_markdown(&self, lo: usize, hi: usize) -> String {
+    self
+      .copy_block_range_payload(lo, hi)
+      .map(|c| c.markdown)
+      .unwrap_or_default()
   }
 
   pub fn set_link_mark(&self, href: &str) {
@@ -1076,7 +1207,7 @@ impl MicaDocumentBridge {
         },
       },
       false,
-      false,
+      None,
     );
     let matches = patch.find_matches.unwrap_or_default();
     self.set_find_highlights(matches.clone(), 0);
@@ -1093,7 +1224,7 @@ impl MicaDocumentBridge {
         )),
       },
       false,
-      true,
+      Some(ScrollMode::Jump),
     );
   }
 
@@ -1471,15 +1602,8 @@ fn looks_like_mica_markdown(text: &str) -> bool {
 /// Lightweight zero-dependency HTML fragment parser into `mica_md::HtmlNode`
 /// (handles Windows `CF_HTML` fragment markers, common semantic tags, attributes, and entities).
 fn parse_html_fragment_to_node(raw: &str) -> HtmlNode {
-  let fragment = if let (Some(s), Some(e)) = (
-    raw.find("<!--StartFragment-->"),
-    raw.find("<!--EndFragment-->"),
-  ) && e > s + 20
-  {
-    &raw[s + 20..e]
-  } else {
-    raw
-  };
+  let extracted = crate::clipboard_platform::extract_cf_html_fragment(raw);
+  let fragment = extracted.as_deref().unwrap_or(raw);
 
   let mut stack: Vec<(String, BTreeMap<String, String>, Vec<HtmlNode>)> =
     vec![("body".into(), BTreeMap::new(), Vec::new())];

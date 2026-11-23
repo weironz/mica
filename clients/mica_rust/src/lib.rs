@@ -23,6 +23,7 @@ pub mod atomic_blocks;
 pub mod block_marquee;
 pub mod block_views;
 pub mod board_view;
+pub mod clipboard_platform;
 pub mod comment_panel;
 pub mod editor_bridge;
 pub mod editor_slash;

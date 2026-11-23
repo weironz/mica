@@ -252,6 +252,10 @@ pub enum EditorCommand {
   /// Mermaid diagram, math LaTeX, or embedded whiteboard JSON) without running
   /// prose input rules, preserving marks/data and recording a CRDT undo step.
   SetBlockText { block_index: usize, text: String },
+  /// Ensure the document ends with an editable empty paragraph (inserting one
+  /// if the final block is non-empty or non-paragraph, e.g. table/code/image)
+  /// and collapse the caret onto it.
+  AppendEmptyParagraph,
   /// Explicitly close any open typing-coalescing history batch (e.g. on 400ms timer).
   FlushHistoryBatch,
 }

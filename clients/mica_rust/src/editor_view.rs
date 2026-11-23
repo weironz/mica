@@ -17,16 +17,16 @@
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use mica_editor::{
-  DocPosition, DocSelection, EditorCommand, FindMatch,
+  DocPosition, DocSelection, EditorCommand, FindMatch, TableOp,
   utf16::{utf16_len, utf16_next_boundary, utf16_prev_boundary, utf16_slice},
 };
-use nsh_base::{button, input};
+use nsh_base::{ScrollbarMode, button, input, scrollbar};
 use nsh_core::{
   SubmitBehavior,
   color::Rgba,
   element::{
-    ClipboardItem, ImageSrc, KeyOptions, Spawned, Svg, element_ref, on_key_with, set_clipboard,
-    set_clipboard_item, set_interval, svg, text_measurer, virtual_list,
+    ClipboardItem, ElementRef, ImageSrc, KeyOptions, Spawned, Svg, element_ref, on_key_with,
+    set_clipboard, set_clipboard_item, set_interval, svg, text_measurer, virtual_list,
   },
   geometry::{Bounds, Points, px},
   keymap::When,
@@ -36,14 +36,14 @@ use nsh_core::{
 use crate::{
   block_marquee::{MARQUEE_DRAG_SLOP, RectF, starts_marquee_in_margin},
   block_views::{
-    BlockRenderEnv, LightboxContent, OpenBoardCallback, render_lightbox_modal,
+    BlockRenderEnv, LightboxContent, OpenBoardCallback, TableCellSelection, render_lightbox_modal,
     render_virtual_block_row,
   },
-  editor_bridge::MicaDocumentBridge,
+  editor_bridge::{MicaDocumentBridge, ScrollMode},
   editor_slash::{SlashItem, extract_slash_query, filter_slash_items},
   mica_icons,
   mica_theme::palette,
-  text_geometry::{VisibleLayoutCache, vertical_move_offset},
+  text_geometry::{VisibleLayoutCache, selection_rects_for_range, vertical_move_offset},
 };
 
 pub use crate::editor_bridge::OutlineItem;
@@ -148,12 +148,17 @@ pub fn editor_view(
   let drag_anchor: Signal<Option<DocPosition>> = signal(None);
   let lightbox: Signal<Option<LightboxContent>> = signal(None);
   let focused_code_block: Signal<Option<String>> = signal(None);
+  let code_caret_at_start = signal(false);
   let focused_table_cell: Signal<Option<(String, usize, usize)>> = signal(None);
+  let table_selection: Signal<Option<TableCellSelection>> = signal(None);
+  let table_drag_anchor: Signal<Option<(String, usize, usize)>> = signal(None);
+  let body_blank_marquee_ready = signal(false);
   let last_click: Signal<(usize, u32, f64, u8)> = signal((0, 0, 0.0, 0));
 
   let list_ref = element_ref();
   let sink_ref = element_ref();
   let paper_ref = element_ref();
+  let title_ref = element_ref();
   let editor_focused = signal(false);
   let caret_blink_on = signal(true);
   let blink_task: Rc<RefCell<Option<Spawned<()>>>> = Rc::new(RefCell::new(None));
@@ -162,18 +167,26 @@ pub fn editor_view(
   let sink_state = Rc::new(RefCell::new(ImeSinkState::default()));
   let marquee_row_rects: Rc<RefCell<Vec<(usize, RectF)>>> = Rc::new(RefCell::new(Vec::new()));
   let autoscroll_cooldown = signal(false);
+  let bubble_anchor: Signal<(f32, f32)> = signal((120.0, 48.0));
+  let bubble_recalc_rev = signal(0u64);
 
   let ai_enabled = header.ai_enabled;
   let on_inline_ai_key = header.on_inline_ai.clone();
   let on_insert_image_key = header.on_insert_image.clone();
 
-  // Sync `has_text_selection` & slash menu closure reactively when selection changes.
+  // Sync `has_text_selection`, slash menu closure, and bubble menu coordinates
+  // reactively when selection changes.
   // IMPORTANT: NEVER clear `sink_value` here! Clearing the native Win32/macOS Edit
   // sink on every typed character races with `WM_CHAR`/`EN_CHANGE`, producing doubled
   // characters (`ttest`) and dropped symbols (like backtick `` ` ``).
   {
     let sel_sig = bridge.selection_signal();
+    let b_bub = bridge.clone();
+    let l_bub = layouts.clone();
+    let pw_bub = header.page_width;
+    let pref_bub = paper_ref;
     effect(move || {
+      let _ = bubble_recalc_rev.get();
       let sel = sel_sig.get();
       let is_range = sel.as_ref().is_some_and(|s| !s.is_collapsed());
       has_text_selection.set(is_range);
@@ -182,6 +195,18 @@ pub fn editor_view(
       }
       if is_range && slash.open.get_untracked() {
         close_slash(slash);
+      }
+      if let Some(s) = sel
+        && !s.is_collapsed()
+      {
+        schedule_bubble_anchor_update(
+          &b_bub,
+          &l_bub,
+          pref_bub,
+          pw_bub.get_untracked(),
+          s,
+          bubble_anchor,
+        );
       }
     });
   }
@@ -236,11 +261,128 @@ pub fn editor_view(
         && !live.contains(fid.as_str())
       {
         focused_code_block.set(None);
+        code_caret_at_start.set(false);
       }
       if let Some((tid, _, _)) = focused_table_cell.get_untracked()
         && !live.contains(tid.as_str())
       {
         focused_table_cell.set(None);
+      }
+      if let Some((tid, _, _)) = table_selection.get_untracked()
+        && !live.contains(tid.as_str())
+      {
+        table_selection.set(None);
+      }
+      if let Some((tid, _, _)) = table_drag_anchor.get_untracked()
+        && !live.contains(tid.as_str())
+      {
+        table_drag_anchor.set(None);
+      }
+    });
+  }
+
+  // Code block Backspace-at-offset-0 handler: when the caret sits at line 0, col 0
+  // of a focused code block, pressing Backspace removes the code block cleanly
+  // (undoable via Ctrl+Z) and places focus back on the neighboring block.
+  {
+    let b_code_del = bridge.clone();
+    effect(move || {
+      let Some(code_bid) = focused_code_block.get() else {
+        return;
+      };
+      if !code_caret_at_start.get() {
+        return;
+      }
+      let b_del = b_code_del.clone();
+      on_key_with(
+        "backspace",
+        KeyOptions {
+          when: When::Always,
+          ..KeyOptions::default()
+        },
+        move |_| {
+          if let Some(idx) = b_del.index_of_block_id(&code_bid) {
+            focused_code_block.set(None);
+            code_caret_at_start.set(false);
+            b_del.delete_block_and_focus_neighbor(idx);
+          }
+        },
+      );
+    });
+  }
+
+  // Table multi-cell selection shortcuts (registered ONLY while a rectangular
+  // table selection is active so they never interfere with single-cell editing).
+  {
+    let b_tbl = bridge.clone();
+    effect(move || {
+      if table_selection.get().is_none() {
+        return;
+      }
+      {
+        let b_copy = b_tbl.clone();
+        on_key_with(
+          "mod+c",
+          KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if let Some((bid, a, f)) = table_selection.get_untracked()
+              && let Some(idx) = b_copy.index_of_block_id(&bid)
+              && let Some(payload) = b_copy.copy_table_area(
+                idx,
+                a.0.min(f.0),
+                a.1.min(f.1),
+                a.0.max(f.0),
+                a.1.max(f.1),
+              )
+            {
+              write_rich_clipboard(payload);
+            }
+          },
+        );
+      }
+      {
+        let b_cut = b_tbl.clone();
+        on_key_with(
+          "mod+x",
+          KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if let Some((bid, a, f)) = table_selection.get_untracked()
+              && let Some(idx) = b_cut.index_of_block_id(&bid)
+            {
+              let (r0, r1) = (a.0.min(f.0), a.0.max(f.0));
+              let (c0, c1) = (a.1.min(f.1), a.1.max(f.1));
+              if let Some(payload) = b_cut.copy_table_area(idx, r0, c0, r1, c1) {
+                write_rich_clipboard(payload);
+              }
+              b_cut.table_op(idx, TableOp::ClearCells { r0, c0, r1, c1 });
+            }
+          },
+        );
+      }
+      for key in ["delete", "backspace"] {
+        let b_clr = b_tbl.clone();
+        on_key_with(
+          key,
+          KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+          },
+          move |_| {
+            if let Some((bid, a, f)) = table_selection.get_untracked()
+              && let Some(idx) = b_clr.index_of_block_id(&bid)
+            {
+              let (r0, r1) = (a.0.min(f.0), a.0.max(f.0));
+              let (c0, c1) = (a.1.min(f.1), a.1.max(f.1));
+              b_clr.table_op(idx, TableOp::ClearCells { r0, c0, r1, c1 });
+            }
+          },
+        );
       }
     });
   }
@@ -275,17 +417,61 @@ pub fn editor_view(
     });
   }
 
-  // Scroll `virtual_list` to requested block index (outline jump, find match, caret navigation).
-  // Block 0 (page switch / top) scrolls to offset 0 so the `.header(...)` page title stays visible!
+  // Scroll `virtual_list` according to ScrollMode:
+  // - `Jump` (page switch, outline jump, find match): align target cleanly into view.
+  // - `KeepVisible` (Enter, Backspace, typing, arrows): measure target row against
+  //   the viewport and scroll ONLY when it actually leaves the visible bounds, so
+  //   normal editing NEVER jumps or scrolls content upward!
   {
     let scroll_req = bridge.scroll_request_signal();
+    let b_scroll = bridge.clone();
+    let l_scroll = layouts.clone();
     let lref = list_ref;
+    let pref = paper_ref;
     effect(move || {
-      if let Some((idx, _seq)) = scroll_req.get() {
-        if idx == 0 {
-          lref.scroll_to_offset(px(0.0), false);
-        } else {
-          lref.scroll_to_index(idx as u32, Percentage(0.2), px(0.0), false);
+      if let Some((idx, mode, _seq)) = scroll_req.get() {
+        match mode {
+          ScrollMode::Jump => {
+            if idx == 0 {
+              lref.scroll_to_offset(px(0.0), false);
+            } else {
+              lref.scroll_to_index(idx as u32, Percentage(0.2), px(0.0), false);
+            }
+          }
+          ScrollMode::KeepVisible => {
+            let row_ref_opt = b_scroll
+              .block_id_at(idx)
+              .and_then(|bid| l_scroll.borrow().row_refs.get(&bid).map(|(_, r)| *r));
+            let Some(rref) = row_ref_opt else {
+              // Target row is outside the mounted virtual window -> bring it in.
+              if idx == 0 {
+                lref.scroll_to_offset(px(0.0), false);
+              } else {
+                lref.scroll_to_index(idx as u32, Percentage(0.5), px(0.0), false);
+              }
+              return;
+            };
+            spawn(async move {
+              let (Some(pm), Some(rm)) = (pref.measure().await, rref.measure().await) else {
+                return;
+              };
+              let vh = pm.frame.size.height.0;
+              if vh <= 1.0 {
+                return;
+              }
+              let rel_top = rm.page.y.0 - pm.page.y.0;
+              let rel_bottom = rel_top + rm.frame.size.height.0;
+              if rel_top < 12.0 {
+                if idx == 0 {
+                  lref.scroll_to_offset(px(0.0), false);
+                } else {
+                  lref.scroll_to_index(idx as u32, Percentage(0.1), px(0.0), false);
+                }
+              } else if rel_bottom > vh - 16.0 {
+                lref.scroll_to_index(idx as u32, Percentage(0.85), px(0.0), false);
+              }
+            });
+          }
         }
       }
     });
@@ -293,6 +479,7 @@ pub fn editor_view(
 
   // Focused editor keyboard bindings (automatically unregistered when focus moves to
   // title input, code block editor, table cell, find bar, search, or whiteboard!).
+  let show_page_title_key = header.show_page_title;
   {
     let b_keys = bridge.clone();
     let l_keys = layouts.clone();
@@ -373,6 +560,10 @@ pub fn editor_view(
               link_draft,
               &ai_cb,
               &img_cb,
+              show_page_title_key,
+              title_ref,
+              sink_ref,
+              editor_focused,
             );
           },
         );
@@ -439,6 +630,9 @@ pub fn editor_view(
       }
       m_esc.clear();
       marquee_origin.set(None);
+      body_blank_marquee_ready.set(false);
+      table_selection.set(None);
+      table_drag_anchor.set(None);
     },
   );
 
@@ -478,11 +672,10 @@ pub fn editor_view(
             ..KeyOptions::default()
           },
           move |_| {
-            if let Some((lo, hi)) = m_copy.selected_range.get_untracked() {
-              let md = b_copy.copy_block_range_markdown(lo, hi);
-              if !md.is_empty() {
-                set_clipboard(md);
-              }
+            if let Some((lo, hi)) = m_copy.selected_range.get_untracked()
+              && let Some(payload) = b_copy.copy_block_range_payload(lo, hi)
+            {
+              write_rich_clipboard(payload);
             }
           },
         );
@@ -498,9 +691,8 @@ pub fn editor_view(
           },
           move |_| {
             if let Some((lo, hi)) = m_cut.selected_range.get_untracked() {
-              let md = b_cut.copy_block_range_markdown(lo, hi);
-              if !md.is_empty() {
-                set_clipboard(md);
+              if let Some(payload) = b_cut.copy_block_range_payload(lo, hi) {
+                write_rich_clipboard(payload);
               }
               b_cut.delete_block_range(lo, hi);
               m_cut.clear();
@@ -535,7 +727,11 @@ pub fn editor_view(
     drag_anchor,
     lightbox,
     focused_code_block,
+    code_caret_at_start,
     focused_table_cell,
+    table_selection,
+    table_drag_anchor,
+    body_blank_marquee_ready,
     last_click,
     page_width,
     editor_focused,
@@ -1149,12 +1345,17 @@ pub fn editor_view(
 
       let br_count = b_body.clone();
       let br_keys = b_body.clone();
+      let br_down = b_body.clone();
+      let br_move_clear = b_body.clone();
+      let br_title_focus = b_body.clone();
       let br_footer = b_body.clone();
       let br_hdr_drag = b_body.clone();
       let br_ftr_drag = b_body.clone();
       let br_edge_drag = b_body.clone();
       let br_bubble = b_body.clone();
       let h_bub = h_bubble.clone();
+      let m_title_clear = marquee.clone();
+      let m_footer_chk = marquee.clone();
       let layouts_marquee = layouts.clone();
       let rects_down = marquee_row_rects.clone();
       let rects_move = marquee_row_rects.clone();
@@ -1175,6 +1376,7 @@ pub fn editor_view(
       let b_title_e = b_title_enter.clone();
       let prop_slot_hdr = prop_slot.clone();
       let backlinks_slot_ftr = backlinks_slot.clone();
+      let in_margin_press = signal(false);
 
       view()
         .element_ref(&paper_ref)
@@ -1188,6 +1390,9 @@ pub fn editor_view(
         .on_layout(move |b: &Bounds<Points>| {
           paper_bounds.set((b.size.width.0, b.size.height.0));
           slash.box_size.set((b.size.width.0, b.size.height.0));
+          if has_text_selection.get_untracked() {
+            bubble_recalc_rev.update(|v| *v = v.wrapping_add(1));
+          }
         })
         .on_press_down(move |e: &PressEvent| {
           let lx = e.position.x.0;
@@ -1199,51 +1404,78 @@ pub fn editor_view(
           let col_left = ((vw - col) * 0.5).max(0.0);
           let col_right = col_left + col;
 
-          if starts_marquee_in_margin(lx, ly, vw, col_left, col_right, vh) {
+          let margin_hit = starts_marquee_in_margin(lx, ly, vw, col_left, col_right, vh);
+          in_margin_press.set(margin_hit);
+
+          // Always snapshot visible block row rects on pointer down so BOTH margin
+          // drags AND body blank-space drags can upgrade seamlessly into a live
+          // marquee box once movement exceeds MARQUEE_DRAG_SLOP.
+          let pref = paper_ref;
+          let row_refs = layouts_marquee.borrow().snapshot_row_refs();
+          let rects_slot = rects_down.clone();
+          let content_l = col_left + 20.0;
+          let content_r = (col_right - 20.0).max(content_l + 1.0);
+          spawn(async move {
+            let Some(pm) = pref.measure().await else {
+              return;
+            };
+            let mut measured = Vec::with_capacity(row_refs.len());
+            for (_bid, idx, rref) in row_refs {
+              if let Some(rm) = rref.measure().await {
+                let top = rm.page.y.0 - pm.page.y.0;
+                let bottom = top + rm.frame.size.height.0;
+                if bottom > top {
+                  measured.push((idx, RectF::new(content_l, top, content_r, bottom)));
+                }
+              }
+            }
+            measured.sort_by_key(|(idx, _)| *idx);
+            *rects_slot.borrow_mut() = measured;
+          });
+
+          if margin_hit {
+            // Clicking outside prose immediately releases any text, block, or table selection!
             m_down.clear();
-            marquee_origin.set(Some((lx, ly)));
+            br_down.clear_selection();
+            table_selection.set(None);
+            table_drag_anchor.set(None);
             drag_anchor.set(None);
             focused_code_block.set(None);
+            code_caret_at_start.set(false);
             focused_table_cell.set(None);
             sink_ref.blur();
             editor_focused.set(false);
-
-            let pref = paper_ref;
-            let row_refs = layouts_marquee.borrow().snapshot_row_refs();
-            let rects_slot = rects_down.clone();
-            let content_l = col_left + 20.0;
-            let content_r = (col_right - 20.0).max(content_l + 1.0);
-            spawn(async move {
-              let Some(pm) = pref.measure().await else {
-                return;
-              };
-              let mut measured = Vec::with_capacity(row_refs.len());
-              for (_bid, idx, rref) in row_refs {
-                if let Some(rm) = rref.measure().await {
-                  let top = rm.page.y.0 - pm.page.y.0;
-                  let bottom = top + rm.frame.size.height.0;
-                  if bottom > top {
-                    measured.push((idx, RectF::new(content_l, top, content_r, bottom)));
-                  }
-                }
-              }
-              measured.sort_by_key(|(idx, _)| *idx);
-              *rects_slot.borrow_mut() = measured;
-            });
-          } else if m_down.is_active_untracked() {
-            m_down.clear();
-            marquee_origin.set(None);
+            marquee_origin.set(Some((lx, ly)));
+          } else {
+            if m_down.is_active_untracked() {
+              m_down.clear();
+            }
+            marquee_origin.set(Some((lx, ly)));
           }
         })
         .on_mouse_move(move |e: &MouseEvent| {
           if e.pressed_button != Some(MouseButton::Left) {
             return;
           }
-          // 1. Live margin marquee rectangle drag
-          if let Some((ox, oy)) = marquee_origin.get_untracked() {
+          // Skip prose/marquee drag while user is dragging across table cells.
+          if table_drag_anchor.get_untracked().is_some() {
+            return;
+          }
+          // 1. Live marquee rectangle drag (works BOTH from outside margins AND from
+          //    blank whitespace inside the body column such as empty lines, right of
+          //    short lines, or below the last block!)
+          let allow_marquee =
+            in_margin_press.get_untracked() || body_blank_marquee_ready.get_untracked();
+          if allow_marquee
+            && let Some((ox, oy)) = marquee_origin.get_untracked()
+          {
             let cx = e.position.x.0;
             let cy = e.position.y.0;
             if (cx - ox).abs() >= MARQUEE_DRAG_SLOP || (cy - oy).abs() >= MARQUEE_DRAG_SLOP {
+              if drag_anchor.get_untracked().is_some() {
+                drag_anchor.set(None);
+                br_move_clear.clear_selection();
+              }
               let rect = RectF::from_points(ox, oy, cx, cy);
               let rects = rects_move.borrow();
               m_move.update_drag(rect, &rects);
@@ -1305,11 +1537,17 @@ pub fn editor_view(
         .on_mouse_up(move |_: &MouseEvent| {
           if drag_anchor.get_untracked().is_some() {
             drag_anchor.set(None);
+            if has_text_selection.get_untracked() {
+              bubble_recalc_rev.update(|v| *v = v.wrapping_add(1));
+            }
           }
           if marquee_origin.get_untracked().is_some() {
             marquee_origin.set(None);
             m_up.end_drag();
           }
+          in_margin_press.set(false);
+          body_blank_marquee_ready.set(false);
+          table_drag_anchor.set(None);
         })
         .child(
           // Single hidden native IME proxy `input()` (first descendant input so
@@ -1358,6 +1596,7 @@ pub fn editor_view(
                 slash,
                 ai_enabled,
                 focused_code_block,
+                code_caret_at_start,
               );
             })
             .on_composition_change(move |c: &Composition| {
@@ -1383,6 +1622,7 @@ pub fn editor_view(
                   slash,
                   ai_enabled,
                   focused_code_block,
+                  code_caret_at_start,
                 );
               }
             })
@@ -1391,6 +1631,15 @@ pub fn editor_view(
                 && !st_key_press.borrow().composing
                 && st_key_press.borrow().text.is_empty()
               {
+                if try_backspace_to_title(
+                  &br_key_press,
+                  show_page_title,
+                  title_ref,
+                  sink_ref,
+                  editor_focused,
+                ) {
+                  return;
+                }
                 br_key_press.dispatch(EditorCommand::DeleteBackward);
                 sync_slash_palette_from_caret(&br_key_press, slash, ai_enabled);
               }
@@ -1400,18 +1649,19 @@ pub fn editor_view(
                 copied_link.set(false);
               }
               focused_code_block.set(None);
+              code_caret_at_start.set(false);
               focused_table_cell.set(None);
+              table_selection.set(None);
               empty_ime_sink(&st_paste, sink_value);
-              if !p.text.is_empty() || !p.html.is_empty() {
-                br_paste.paste_clipboard(&p.text, &p.html, false);
-                sync_slash_palette_from_caret(&br_paste, slash, ai_enabled);
-              }
+              handle_clipboard_paste(p, &br_paste, slash, ai_enabled);
               br_paste.request_focus();
             }),
         )
         .child(
           // Full-width virtualized block list: `count` & `keys` subscribe ONLY to
           // `structure_rev`, NEVER to body typing signals!
+          // Platform tiny 3px indicator is disabled in favor of NSH's proportional
+          // adaptive `nsh_base::scrollbar()` mounted on the right window edge.
           virtual_list(
             move || {
               structure_rev.get();
@@ -1424,12 +1674,19 @@ pub fn editor_view(
             br_keys.block_ids()
           })
           .element_ref(&list_ref)
+          .estimated_item_size(px(36.0))
+          .scrollbar(false)
+          .on_scroll(move |_: &ScrollEvent| {
+            if has_text_selection.get_untracked() {
+              bubble_recalc_rev.update(|v| *v = v.wrapping_add(1));
+            }
+          })
           .flex_1()
           .w_full()
           .min_h(px(0.0))
           .h_full()
           .header(
-            // Centered scrolling document header: 30px SemiBold page title + PropertyPanel
+            // Centered scrolling document header: snug 30px SemiBold page title + PropertyPanel
             view()
               .w_full()
               .items_center()
@@ -1455,23 +1712,34 @@ pub fn editor_view(
                     }
                   })
                   .px_6()
-                  .pt_8()
-                  .pb_2()
+                  .pt_6()
+                  .pb_1()
                   .child(when(move || show_page_title.get(), move || {
                     let h_val = h_title_v.clone();
                     let h_chg = h_title_c.clone();
                     let b_enter = b_title_e.clone();
+                    let b_tf = br_title_focus.clone();
+                    let m_tc = m_title_clear.clone();
                     input()
+                      .element_ref(&title_ref)
                       .test_id("page-title-input")
                       .placeholder("无标题")
                       .submit_behavior(SubmitBehavior::Submit)
                       .w_full()
-                      .pb_4()
+                      .pb_1()
                       .text_size(px(30.0))
                       .font_weight(FontWeight::SEMIBOLD)
                       .text_color(move || palette(dark_mode.get()).text_primary)
                       .bg(move || palette(dark_mode.get()).surface_base)
                       .value(move || h_val.page_title.get())
+                      .on_focus(move || {
+                        b_tf.clear_selection();
+                        m_tc.clear();
+                        table_selection.set(None);
+                        focused_code_block.set(None);
+                        focused_table_cell.set(None);
+                        editor_focused.set(false);
+                      })
                       .on_change(move |v: &str| (h_chg.on_rename_title)(v.to_owned()))
                       .on_submit(move |_: &str| {
                         b_enter.focus_block(0, 0);
@@ -1487,7 +1755,7 @@ pub fn editor_view(
               ),
           )
           .footer(
-            // Centered scrolling footer: BacklinksPanel + bottom click-to-focus breathing room
+            // Centered scrolling footer: BacklinksPanel + bottom click-to-append-line breathing room
             view()
               .w_full()
               .items_center()
@@ -1526,20 +1794,54 @@ pub fn editor_view(
                   })
                   .child(
                     view()
+                      .test_id("editor-bottom-append-zone")
                       .w_full()
                       .h(px(180.0))
                       .cursor(Cursor::Text)
-                      .on(EventKind::PressDown, move |_: &EventPayload| {
-                        let last = br_footer.block_len().saturating_sub(1);
-                        let end_off = br_footer
-                          .block_at(last)
-                          .map(|b| utf16_len(&b.text))
-                          .unwrap_or(0);
-                        br_footer.focus_block(last, end_off);
+                      .on_press_down(move |_: &PressEvent| {
+                        body_blank_marquee_ready.set(true);
+                      })
+                      .on_press({
+                        let br_click = br_footer.clone();
+                        let m_chk = m_footer_chk.clone();
+                        move || {
+                          if !m_chk.is_active_untracked() {
+                            focused_code_block.set(None);
+                            code_caret_at_start.set(false);
+                            focused_table_cell.set(None);
+                            table_selection.set(None);
+                            br_click.append_empty_paragraph_and_focus();
+                          }
+                        }
                       }),
                   ),
               ),
           ),
+        )
+        // Adaptive proportional vertical scrollbar anchored to the right window edge
+        .child(
+          scrollbar()
+            .test_id("editor-vertical-scrollbar")
+            .scroll(list_ref)
+            .mode(ScrollbarMode::Always)
+            .min_thumb_length(px(56.0))
+            .thumb_style(move |s| {
+              let dark = dark_mode.get();
+              let color = if dark {
+                Rgba { r: 1.0, g: 1.0, b: 1.0, a: 0.28 }
+              } else {
+                Rgba { r: 0.09, g: 0.11, b: 0.15, a: 0.28 }
+              };
+              s.bg(color).rounded(px(4.0))
+            })
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(px(14.0))
+            .px(px(3.0))
+            .py(px(4.0))
+            .z_index(16),
         )
         .child(page_width_edge_grips(
           page_width,
@@ -1550,11 +1852,8 @@ pub fn editor_view(
         .child(when(move || has_text_selection.get(), move || {
           view()
             .absolute()
-            .top(px(8.0))
-            .left(px(0.0))
-            .right(px(0.0))
-            .items_center()
-            .pointer_events(PointerEvents::BoxNone)
+            .left(move || px(bubble_anchor.get().0))
+            .top(move || px(bubble_anchor.get().1))
             .z_index(34)
             .child(bubble_menu_view(
               br_bubble.clone(),
@@ -1646,6 +1945,7 @@ fn empty_ime_sink(sink_state: &Rc<RefCell<ImeSinkState>>, sink_value: Signal<Str
   sink_value.set(String::new());
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_sink_text_diff(
   text: &str,
   sink_state: &Rc<RefCell<ImeSinkState>>,
@@ -1654,6 +1954,7 @@ fn apply_sink_text_diff(
   slash: SlashMenuSignals,
   ai_enabled: Signal<bool>,
   focused_code_block: Signal<Option<String>>,
+  code_caret_at_start: Signal<bool>,
 ) {
   let (deleted, inserted) = {
     let mut st = sink_state.borrow_mut();
@@ -1713,10 +2014,223 @@ fn apply_sink_text_diff(
     && blk.kind == "code_block"
   {
     empty_ime_sink(sink_state, sink_value);
+    code_caret_at_start.set(blk.text.is_empty());
     focused_code_block.set(Some(blk.id));
   }
 
   sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+}
+
+fn write_rich_clipboard(payload: mica_editor::ClipboardPayload) {
+  let mut item = ClipboardItem::default();
+  item.text = if !payload.markdown.is_empty() {
+    payload.markdown
+  } else {
+    payload.plain
+  };
+  if !payload.html.is_empty() {
+    item.html = Some(payload.html);
+  }
+  set_clipboard_item(item);
+}
+
+/// If the caret is collapsed at `(block 0, offset 0)` of a plain paragraph and
+/// the page title input is visible, moves focus cleanly back onto the title.
+fn try_backspace_to_title(
+  bridge: &MicaDocumentBridge,
+  show_page_title: Signal<bool>,
+  title_ref: ElementRef,
+  sink_ref: ElementRef,
+  editor_focused: Signal<bool>,
+) -> bool {
+  if !show_page_title.get_untracked() {
+    return false;
+  }
+  let Some(sel) = bridge.selection() else {
+    return false;
+  };
+  if !sel.is_collapsed() {
+    return false;
+  }
+  let pos = sel.focus_pos();
+  if pos.node != 0 || pos.offset != 0 {
+    return false;
+  }
+  let Some(blk) = bridge.block_at(0) else {
+    return false;
+  };
+  if blk.kind != "paragraph" {
+    return false;
+  }
+  sink_ref.blur();
+  editor_focused.set(false);
+  bridge.clear_selection();
+  title_ref.focus();
+  true
+}
+
+/// Unified clipboard paste handler:
+/// 1. Pulls Windows `CF_HTML` when NSH's Windows backend leaves `p.html` empty.
+/// 2. Prefers data `<table>` HTML over companion preview bitmaps (Excel/Sheets).
+/// 3. Pastes clipboard image bytes (`p.files`) or copied image files (`p.uris`).
+/// 4. Falls through to Markdown / rich HTML paste (`bridge.paste_clipboard`).
+fn handle_clipboard_paste(
+  p: &PasteEvent,
+  bridge: &MicaDocumentBridge,
+  slash: SlashMenuSignals,
+  ai_enabled: Signal<bool>,
+) {
+  let html = if p.html.is_empty() {
+    crate::clipboard_platform::read_windows_cf_html().unwrap_or_default()
+  } else {
+    p.html.clone()
+  };
+
+  let is_data_table_html = !html.is_empty()
+    && crate::clipboard_platform::clipboard_html_is_data_table(&html);
+
+  // 1. Pasted image bytes (screenshot / copy image from browser or app)
+  if !is_data_table_html && !p.files.is_empty() {
+    let mut inserted_any = false;
+    for f in &p.files {
+      if let Some(uri) = crate::clipboard_platform::persist_pasted_image(&f.data, &f.mime, &f.name) {
+        let alt = std::path::Path::new(&f.name)
+          .file_stem()
+          .and_then(|s| s.to_str())
+          .filter(|s| !s.is_empty() && *s != "image")
+          .unwrap_or("");
+        bridge.insert_custom_block("image", alt, Some(&uri));
+        inserted_any = true;
+      }
+    }
+    if inserted_any {
+      sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+      return;
+    }
+  }
+
+  // 2. Pasted local image file URIs (copied from Explorer / Finder)
+  if !is_data_table_html && !p.uris.is_empty() {
+    let mut inserted_any = false;
+    for u in &p.uris {
+      if let Some((uri, alt)) = crate::clipboard_platform::image_uri_from_pasted_file_uri(u) {
+        bridge.insert_custom_block("image", &alt, Some(&uri));
+        inserted_any = true;
+      }
+    }
+    if inserted_any {
+      sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+      return;
+    }
+  }
+
+  // 3. Markdown / rich HTML / plain text paste
+  if !p.text.is_empty() || !html.is_empty() {
+    bridge.paste_clipboard(&p.text, &html, false);
+    sync_slash_palette_from_caret(bridge, slash, ai_enabled);
+  }
+}
+
+/// Computes floating selection bubble menu `(left, top)` relative to `paper_ref`
+/// so the toolbar appears directly ABOVE (or below, when near top edge) the
+/// selected content rather than pinned at the top of the viewport.
+fn schedule_bubble_anchor_update(
+  bridge: &MicaDocumentBridge,
+  layouts: &Rc<RefCell<VisibleLayoutCache>>,
+  paper_ref: ElementRef,
+  page_width: f32,
+  sel: DocSelection,
+  bubble_anchor: Signal<(f32, f32)>,
+) {
+  let start_p = sel.start_pos();
+  let end_p = sel.end_pos();
+  let focus_p = sel.focus_pos();
+
+  // Prefer the start block if mounted; otherwise fall back to the focus block.
+  let pick_block = |idx: usize| -> Option<(usize, String, ElementRef, Option<ElementRef>)> {
+    let bid = bridge.block_id_at(idx)?;
+    let cache = layouts.borrow();
+    let (_, row_ref) = *cache.row_refs.get(&bid)?;
+    let text_ref = cache.text_refs.get(&bid).copied();
+    Some((idx, bid, row_ref, text_ref))
+  };
+
+  let Some((target_idx, bid, row_ref, text_ref)) =
+    pick_block(start_p.node).or_else(|| pick_block(focus_p.node))
+  else {
+    return;
+  };
+
+  let (local_rect_opt, block_len_u16) = {
+    let b_len = bridge
+      .block_at(target_idx)
+      .map(|b| utf16_len(&b.text))
+      .unwrap_or(0);
+    let s_u16 = if target_idx == start_p.node { start_p.offset } else { 0 };
+    let e_u16 = if target_idx == end_p.node { end_p.offset } else { b_len.max(1) };
+    let cache = layouts.borrow();
+    let measure = text_measurer();
+    let rect = cache.blocks.get(&bid).and_then(|info| {
+      let rects = selection_rects_for_range(
+        &info.lines,
+        s_u16,
+        e_u16,
+        &info.font,
+        info.line_height,
+        &measure,
+      );
+      rects.first().copied()
+    });
+    (rect, b_len)
+  };
+  let _ = block_len_u16;
+
+  spawn(async move {
+    let Some(pm) = paper_ref.measure().await else {
+      return;
+    };
+    let vw = pm.frame.size.width.0.max(360.0);
+    let vh = pm.frame.size.height.0.max(200.0);
+    const BUBBLE_W: f32 = 468.0;
+    const BUBBLE_H: f32 = 40.0;
+
+    let anchor_m = if let Some(tref) = text_ref {
+      tref.measure().await
+    } else {
+      None
+    };
+    let (sel_center_x, sel_top, sel_bottom) = if let Some(tm) = anchor_m {
+      let base_x = tm.page.x.0 - pm.page.x.0;
+      let base_y = tm.page.y.0 - pm.page.y.0;
+      if let Some((rx, ry, rw, rh)) = local_rect_opt {
+        (base_x + rx + rw * 0.5, base_y + ry, base_y + ry + rh)
+      } else {
+        (
+          base_x + tm.frame.size.width.0 * 0.5,
+          base_y,
+          base_y + tm.frame.size.height.0.min(36.0),
+        )
+      }
+    } else if let Some(rm) = row_ref.measure().await {
+      let base_y = rm.page.y.0 - pm.page.y.0;
+      let col = crate::page_width::rendered_column_width(page_width, (vw - 24.0).max(0.0));
+      let center_x = vw * 0.5;
+      let _ = col;
+      (center_x, base_y, base_y + rm.frame.size.height.0.min(48.0))
+    } else {
+      return;
+    };
+
+    let left = (sel_center_x - BUBBLE_W * 0.5).clamp(12.0, (vw - BUBBLE_W - 12.0).max(12.0));
+    let above_top = sel_top - BUBBLE_H - 8.0;
+    let below_top = sel_bottom + 8.0;
+    let top = if above_top >= 8.0 {
+      above_top.min((vh - BUBBLE_H - 8.0).max(8.0))
+    } else {
+      below_top.clamp(8.0, (vh - BUBBLE_H - 8.0).max(8.0))
+    };
+    bubble_anchor.set((left, top));
+  });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1730,6 +2244,10 @@ fn handle_editor_key(
   link_draft: Signal<String>,
   on_inline_ai: &Rc<dyn Fn(String)>,
   on_insert_image: &Rc<dyn Fn()>,
+  show_page_title: Signal<bool>,
+  title_ref: ElementRef,
+  sink_ref: ElementRef,
+  editor_focused: Signal<bool>,
 ) {
   // 1. Intercept ArrowUp / ArrowDown / Enter / Escape when slash menu is open.
   if slash.open.get_untracked() {
@@ -1776,6 +2294,9 @@ fn handle_editor_key(
       });
     }
     EditorKeyAction::Backspace => {
+      if try_backspace_to_title(bridge, show_page_title, title_ref, sink_ref, editor_focused) {
+        return;
+      }
       bridge.dispatch(EditorCommand::DeleteBackward);
       sync_slash_palette_from_caret(bridge, slash, ai_enabled);
     }
@@ -1791,18 +2312,12 @@ fn handle_editor_key(
     }
     EditorKeyAction::Copy => {
       if let Some(payload) = bridge.copy_selection() {
-        let mut item = ClipboardItem::default();
-        item.text = payload.plain;
-        item.html = Some(payload.html);
-        set_clipboard_item(item);
+        write_rich_clipboard(payload);
       }
     }
     EditorKeyAction::Cut => {
       if let Some(payload) = bridge.cut_selection() {
-        let mut item = ClipboardItem::default();
-        item.text = payload.plain;
-        item.html = Some(payload.html);
-        set_clipboard_item(item);
+        write_rich_clipboard(payload);
       }
     }
     EditorKeyAction::Undo => bridge.undo(),
@@ -1904,7 +2419,7 @@ fn move_caret_horizontal(bridge: &MicaDocumentBridge, dir: i32, shift: bool, wor
   let anchor = if shift { sel.anchor_pos() } else { next_pos };
   bridge.set_selection(DocSelection::from_positions(anchor, next_pos));
   if next_pos.node != bi {
-    bridge.request_scroll_to_block(next_pos.node);
+    bridge.request_keep_block_visible(next_pos.node);
   }
 }
 
@@ -1951,7 +2466,7 @@ fn move_caret_vertical(
   let next = DocPosition::new(target_bi, target_off);
   let anchor = if shift { sel.anchor_pos() } else { next };
   bridge.set_selection(DocSelection::from_positions(anchor, next));
-  bridge.request_scroll_to_block(target_bi);
+  bridge.request_keep_block_visible(target_bi);
 }
 
 fn prev_word_boundary(text: &str, u16_off: u32) -> u32 {
