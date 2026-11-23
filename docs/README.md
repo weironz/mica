@@ -3,6 +3,7 @@
 按用途分文件夹;每个文件夹里按主题列出。**先读哪几份**:
 
 - 想知道还要做什么 → [`plans/roadmap.md`](plans/roadmap.md)(权威待办,只放还要做的)
+- 查产品功能与交互验收基线（跨技术栈）→ [`capabilities/README.md`](capabilities/README.md)（16 份独立产品能力规格，含编辑器核心编辑验收清单）
 - 改代码前 → [`dev/lessons.md`](dev/lessons.md)(踩过的坑)与仓库根 [`AGENTS.md`](../AGENTS.md)
 - 发版 / 上线 → [`ops/release.md`](ops/release.md)、[`ops/deploy.md`](ops/deploy.md)
 - 代码评审与修复记录 → [`reviews/`](#reviews--代码评审与修复)
@@ -10,6 +11,7 @@
 
 | 文件夹 | 放什么 |
 | --- | --- |
+| [`capabilities/`](#capabilities--产品功能与交互能力权威清单) | **技术栈无关的产品能力与交互验收规格**（总索引 + 16 份独立特性文档，覆盖编辑器 9 大核心模块及白板/外壳/搜索/同步/导入导出/移动端；每次新增特性、优化体验或跨栈重构同步落地） |
 | [`architecture/`](#architecture--架构与核心机制) | 整体架构、编辑器与渲染、同步、Markdown 引擎、local-first 系列 |
 | [`features/`](#features--功能设计) | 单个功能的设计与决策(评论、版本历史、分享、导入导出、快捷键……) |
 | [`plans/`](#plans--规划与路线图) | 路线图与存档、阶段计划、迁移评估、同类产品对标 |
@@ -26,6 +28,30 @@
 不随代码更新,结论以后续文档或代码为准。
 
 项目规则已统一到根 `AGENTS.md`；历史文档中的根 `CLAUDE.md` 及旧条款编号仅作追溯，当前规则以上述入口为准。设计目录内的独立 `CLAUDE.md` 不属于此次合并范围。
+
+## capabilities — 产品功能与交互能力权威清单
+
+与技术栈解耦的产品行为契约与验收清单，入口见 [`capabilities/README.md`](capabilities/README.md)。每次新增特性、交互优化、关键边界修复或未来切换 UI 技术栈时，均以本目录为验收基线并持续更新。
+
+| 文档 | 内容 |
+| --- | --- |
+| [README.md](capabilities/README.md) | **能力库总索引**：维护纪律、编号规则（`CAP-XX-YY`）、优先级、三端状态总表 |
+| [01-editor-caret-ime-typing.md](capabilities/01-editor-caret-ime-typing.md) | 编辑器：光标闪烁与命中、CJK IME、连续打字、Markdown 输入规则、首行回退标题、底部新建行 |
+| [02-editor-selection-marquee.md](capabilities/02-editor-selection-marquee.md) | 编辑器：文本选区、跨块自由拖选、页边距与正文内空白框选（Marquee）、点击外区释放选区 |
+| [03-editor-clipboard-paste.md](capabilities/03-editor-clipboard-paste.md) | 编辑器：双通道无损复制粘贴、Windows `CF_HTML` 与 v0.14.11 互操作、截图/文件图片粘贴 |
+| [04-editor-blocks-and-marks.md](capabilities/04-editor-blocks-and-marks.md) | 编辑器：全量块类型与 5 种 Callout、行内 marks、22 项斜杠菜单、贴近选区的浮动气泡栏、`Ctrl+F` 查找 |
+| [05-editor-tables.md](capabilities/05-editor-tables.md) | 编辑器：GFM 表格自适应列宽、上下左右多单元格拖选与批量复制/清空、单格编辑与导航 |
+| [06-editor-code-blocks.md](capabilities/06-editor-code-blocks.md) | 编辑器：无框暖灰代码块、顶层 `overlay()` 语言选择器、`min_rows(1)`、`(0,0)` 按 Backspace 删除代码块 |
+| [07-editor-media-math-mermaid.md](capabilities/07-editor-media-math-mermaid.md) | 编辑器：图片自然比例与灯箱、RaTeX 公式与原子选区保护、Mermaid 主题渲染与全屏缩放 |
+| [08-editor-scroll-layout-virtualization.md](capabilities/08-editor-scroll-layout-virtualization.md) | 编辑器：长文档虚拟化与信号隔离、`Jump`/`KeepVisible` 零跳滚、窗口右缘自适应滚动条、11 档页宽 |
+| [09-editor-undo-crdt-collab.md](capabilities/09-editor-undo-crdt-collab.md) | 编辑器：单栈 CRDT 撤销/重做、远端合并本地脏块保护与 `SelectionReconcile`、离线容错 |
+| [10-whiteboard-and-embedded-board.md](capabilities/10-whiteboard-and-embedded-board.md) | 无限白板（飞书式工具坞/图形与架构图标库/检查器/导图）与内嵌单层画板三路合并 |
+| [11-sidebar-tree-tabs-shell.md](capabilities/11-sidebar-tree-tabs-shell.md) | 无边框顶栏、应用菜单、多标签历史、目录树 `folder` 唯一容器与 30/40/30 拖拽、多选、收藏、Emoji、子树回收站 |
+| [12-page-chrome-outline-properties-backlinks.md](capabilities/12-page-chrome-outline-properties-backlinks.md) | 面包屑与路径复制、标题联动、Front-Matter 属性面板、右侧大纲/评论、反链、双栏块级 Diff 版本历史 |
+| [13-search-graph-and-ai.md](capabilities/13-search-graph-and-ai.md) | 全局搜索（工作区/文件夹/页面 + 高亮）、力导向知识关系图谱、多入口 AI 助手与服务商配置 |
+| [14-workspace-cloud-sync-sharing.md](capabilities/14-workspace-cloud-sync-sharing.md) | 本地离线 Vault 与多云端世界切换、工作区管理与成员邀请、公开分享 `/s/{token}`、API 令牌 |
+| [15-import-export-and-vault.md](capabilities/15-import-export-and-vault.md) | `.mica.zip` 备份、Markdown ZIP、Notion/文件夹导入、HTML/PDF 导出、CommonMark/GFM Round-Trip |
+| [16-settings-shortcuts-accessibility-mobile.md](capabilities/16-settings-shortcuts-accessibility-mobile.md) | 8 标签设置中心与外观预览、快捷键体系、主题色板、移动端阅读优先与触摸选区适配 |
 
 ## architecture — 架构与核心机制
 
