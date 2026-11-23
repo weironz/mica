@@ -316,6 +316,11 @@ pub fn transfer_dialog_modal(
     })
   };
 
+  // Auto-select the sole destination workspace so the tree & preview render immediately.
+  if state.destinations.len() == 1 {
+    select_workspace(state.destinations[0].id);
+  }
+
   let select_pick: Rc<dyn Fn(DestinationPick)> = {
     let run_p = run_preview.clone();
     Rc::new(move |pick: DestinationPick| {
@@ -417,16 +422,19 @@ pub fn transfer_dialog_modal(
             ),
         )
         .child(
-          // Scrollable content body
+          // Scrollable content body (explicit `max_h` instead of `flex_1()` so
+          // Taffy never collapses the scroll region to 0px inside an auto-height modal!)
           scroll()
-            .flex_1()
+            .w_full()
+            .max_h(px(460.0))
             .px_5()
             .py_4()
             .child(if destinations.is_empty() {
               view()
+                .w_full()
                 .py_4()
                 .child(
-                  text("没有可转移到的其他工作区，请先新建一个云端工作区。")
+                  text("当前没有其他目标工作区，请先在左上角工作区切换器中新建一个工作区。")
                     .text_size(px(13.5))
                     .text_color(move || palette(dark_mode.get()).text_muted),
                 )

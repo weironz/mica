@@ -21,7 +21,12 @@ use mica_client::{PageTreeModel, TreeRow};
 use nsh_base::{HandleEdge, ResizeHandleState, button, input, resize_handle};
 use nsh_core::{
   AccessibilityRole, ContextMenuEvent, MouseButton, MouseEvent, PointerEvents, PressEvent,
-  SubmitBehavior, color::Rgba, geometry::Axis, keymap::When, prelude::*,
+  SubmitBehavior,
+  color::Rgba,
+  element::{Align, Placement, overlay},
+  geometry::{Axis, Point, Points, point},
+  keymap::When,
+  prelude::*,
 };
 use uuid::Uuid;
 
@@ -41,6 +46,9 @@ pub const SIDEBAR_DEFAULT_WIDTH: f32 = 280.0;
 
 const DRAG_THRESHOLD_PX: f32 = 4.0;
 const WS_FILTER_THRESHOLD: usize = 8;
+
+pub type OpenRenameModalCallback = Rc<dyn Fn(Uuid, String)>;
+pub type OpenEmojiModalCallback = Rc<dyn Fn(Uuid, Option<String>)>;
 
 /// Callbacks bridging sidebar user interactions back to the application shell.
 ///
@@ -70,8 +78,12 @@ pub struct SidebarCallbacks {
   pub on_duplicate_view: Rc<dyn Fn(Uuid)>,
   pub on_export_folder_backup: Rc<dyn Fn(Uuid)>,
   pub on_export_folder_markdown: Rc<dyn Fn(Uuid)>,
+  pub on_export_page_markdown: Rc<dyn Fn(Uuid)>,
+  pub on_export_page_html: Rc<dyn Fn(Uuid)>,
   pub on_import_files_into_folder: Rc<dyn Fn(Uuid)>,
   pub on_import_folder_into_folder: Rc<dyn Fn(Uuid)>,
+  pub on_open_rename_modal: Option<OpenRenameModalCallback>,
+  pub on_open_emoji_modal: Option<OpenEmojiModalCallback>,
   pub on_transfer_move: Rc<dyn Fn(Vec<Uuid>)>,
   pub on_transfer_copy: Rc<dyn Fn(Vec<Uuid>)>,
   pub on_batch_trash: Rc<dyn Fn(Vec<Uuid>)>,
@@ -95,7 +107,9 @@ impl Default for SidebarCallbacks {
       on_new_child_page: noop_u(), on_new_child_folder: noop_u(),
       on_set_icon: Rc::new(|_, _| {}), on_duplicate_view: noop_u(),
       on_export_folder_backup: noop_u(), on_export_folder_markdown: noop_u(),
+      on_export_page_markdown: noop_u(), on_export_page_html: noop_u(),
       on_import_files_into_folder: noop_u(), on_import_folder_into_folder: noop_u(),
+      on_open_rename_modal: None, on_open_emoji_modal: None,
       on_transfer_move: noop_v(), on_transfer_copy: noop_v(), on_batch_trash: noop_v(),
       on_reorder_views: Rc::new(|_, _| {}),
     }
@@ -517,11 +531,11 @@ fn favorites_section(
                       (select_cb.on_select_doc)(doc_id, open_name.clone());
                     })
                     .on_context_menu(move |e: &ContextMenuEvent| {
-                      let (ox, oy) = page_to_local.get_untracked();
+                      let _ = page_to_local.get_untracked();
                       context_menu.set(Some(ContextMenuState {
                         target: ContextMenuTarget::Favorite { doc_id },
-                        x: (e.page_position.x.0 - ox).max(8.0),
-                        y: (e.page_position.y.0 - oy).max(8.0),
+                        x: e.page_position.x.0.max(8.0),
+                        y: e.page_position.y.0.max(8.0),
                       }));
                     })
                     .child(
@@ -833,8 +847,7 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
     })
     .on_context_menu(move |e: &ContextMenuEvent| {
       if let Some(row) = row_info.get_untracked() {
-        let (ox, oy) = ctx_context.page_to_local.get_untracked();
-        open_tree_context_menu(&ctx_context, row, (e.page_position.x.0 - ox).max(8.0), (e.page_position.y.0 - oy).max(8.0));
+        open_tree_context_menu(&ctx_context, row, e.page_position.x.0.max(8.0), e.page_position.y.0.max(8.0));
       }
     })
     // Before indicator
@@ -946,9 +959,13 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                     ctx_press.selection.set(sel);
                   }
                   if !row.is_folder && e.clicks >= 2 {
-                    ctx_press.rename_modal_view.set(Some(row.view_id));
-                    ctx_press.rename_modal_initial.set(row.name);
-                    ctx_press.rename_modal_open.set(true);
+                    if let Some(open_r) = &ctx_press.cb.on_open_rename_modal {
+                      open_r(row.view_id, row.name);
+                    } else {
+                      ctx_press.rename_modal_view.set(Some(row.view_id));
+                      ctx_press.rename_modal_initial.set(row.name);
+                      ctx_press.rename_modal_open.set(true);
+                    }
                     return;
                   }
                   if row.is_folder {
@@ -1008,12 +1025,11 @@ fn render_tree_row(ctx: Rc<TreeRowContext>, at: Position) -> impl IntoElement {
                   .hover(move |s| s.bg(palette(dark_mode.get_untracked()).surface_sunken))
                   .on_press(move |e: &PressEvent| {
                     if let Some(row) = row_info.get_untracked() {
-                      let (ox, oy) = ctx_m2.page_to_local.get_untracked();
                       open_tree_context_menu(
                         &ctx_m2,
                         row,
-                        (e.page_position.x.0 - ox).max(8.0),
-                        (e.page_position.y.0 - oy + 14.0).max(8.0),
+                        e.page_position.x.0.max(8.0),
+                        (e.page_position.y.0 + 14.0).max(8.0),
                       );
                     }
                   })
@@ -1279,117 +1295,161 @@ fn context_menu_overlay(ctx: Rc<TreeRowContext>) -> impl IntoElement {
     let ctx_outer = ctx.clone();
     move || {
       let ctx_in = ctx_outer.clone();
-      view()
-        .test_id("sidebar-context-menu-backdrop").absolute().inset_0().z_index(50)
-        .child(
-          button()
-            .test_id("sidebar-context-menu-dismiss").accessibility_label("关闭菜单")
-            .absolute().inset_0().on_press(move || context_menu.set(None)),
-        )
-        .child(dynamic(move || {
-          let Some(menu) = context_menu.get() else { return view(); };
-          let p = palette(dark_mode.get());
-          let mut panel = view()
-            .test_id("sidebar-context-menu")
-            .absolute().left(px(menu.x.clamp(8.0, 120.0))).top(px(menu.y.clamp(8.0, 420.0)))
-            .w(px(216.0)).py_1().rounded(px(8.0)).border_1().border_color(p.border_normal)
-            .bg(p.surface_overlay).z_index(51);
+      let Some(menu) = context_menu.get_untracked() else {
+        return view().into_element();
+      };
+      let p = palette(dark_mode.get());
+      let mut panel = view()
+        .test_id("sidebar-context-menu")
+        .w(px(220.0))
+        .py_1()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(p.border_normal)
+        .bg(p.surface_overlay);
 
-          match menu.target {
-            ContextMenuTarget::Favorite { doc_id } => {
-              let cb = ctx_in.cb.clone();
-              panel = panel.child(menu_item_row("ctx-favorite-remove", "取消收藏", dark_mode, false, move || {
-                context_menu.set(None); (cb.on_remove_favorite)(doc_id);
+      match menu.target {
+        ContextMenuTarget::Favorite { doc_id } => {
+          let cb_rm = ctx_in.cb.clone();
+          let cb_tab = ctx_in.cb.clone();
+          let fav_title = ctx_in
+            .tree
+            .borrow()
+            .visible_rows()
+            .into_iter()
+            .find(|r| !r.is_folder && (r.object_id == doc_id || r.view_id == doc_id))
+            .map(|r| r.name)
+            .unwrap_or_else(|| "未命名页面".to_string());
+          panel = panel
+            .child(menu_item_row("ctx-favorite-open-new-tab", "在新标签页打开", dark_mode, false, move || {
+              context_menu.set(None); (cb_tab.on_open_in_new_tab)(doc_id, fav_title.clone());
+            }))
+            .child(menu_divider(dark_mode))
+            .child(menu_item_row("ctx-favorite-remove", "取消收藏", dark_mode, false, move || {
+              context_menu.set(None); (cb_rm.on_remove_favorite)(doc_id);
+            }));
+        }
+        ContextMenuTarget::Batch { ids } => {
+          let n = ids.len();
+          let (cb_mv, cb_cp, cb_del) = (ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone());
+          let (ids_mv, ids_cp, ids_del) = (ids.clone(), ids.clone(), ids);
+          let sel_sig = ctx_in.selection;
+          panel = panel
+            .child(menu_item_row("ctx-batch-move", format!("移动 {n} 项到工作区…"), dark_mode, false, move || {
+              context_menu.set(None); (cb_mv.on_transfer_move)(ids_mv.clone());
+            }))
+            .child(menu_item_row("ctx-batch-copy", format!("复制 {n} 项到工作区…"), dark_mode, false, move || {
+              context_menu.set(None); (cb_cp.on_transfer_copy)(ids_cp.clone());
+            }))
+            .child(menu_divider(dark_mode))
+            .child(menu_item_row("ctx-batch-delete", format!("删除 {n} 项"), dark_mode, true, move || {
+              context_menu.set(None); (cb_del.on_batch_trash)(ids_del.clone());
+              let mut s = sel_sig.get_untracked();
+              if s.clear() { sel_sig.set(s); }
+            }));
+        }
+        ContextMenuTarget::TreeRow { view_id, object_id, name, icon, is_folder, expanded } => {
+          let (r_open, r_view, r_init) = (ctx_in.rename_modal_open, ctx_in.rename_modal_view, ctx_in.rename_modal_initial);
+          let (e_open, e_view, e_cur) = (ctx_in.emoji_modal_open, ctx_in.emoji_modal_view, ctx_in.emoji_modal_current);
+          let rename_name = name.clone();
+          let cb_rename_host = ctx_in.cb.on_open_rename_modal.clone();
+          let cb_emoji_host = ctx_in.cb.on_open_emoji_modal.clone();
+          let (cb_dup, cb_mv, cb_cp, cb_del) = (ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone());
+
+          if !is_folder {
+            let cb_tab = ctx_in.cb.clone();
+            panel = panel.child(menu_item_row("ctx-open-new-tab", "在新标签页打开", dark_mode, false, move || {
+              context_menu.set(None); (cb_tab.on_open_in_new_tab)(object_id, name.clone());
+            }));
+          } else {
+            let (cb_np, cb_nf) = (ctx_in.cb.clone(), ctx_in.cb.clone());
+            panel = panel
+              .child(menu_item_row("ctx-new-child-page", "新建子页面", dark_mode, false, move || {
+                context_menu.set(None); (cb_np.on_new_child_page)(view_id);
+              }))
+              .child(menu_item_row("ctx-new-child-folder", "新建子文件夹", dark_mode, false, move || {
+                context_menu.set(None); (cb_nf.on_new_child_folder)(view_id);
               }));
-            }
-            ContextMenuTarget::Batch { ids } => {
-              let n = ids.len();
-              let (cb_mv, cb_cp, cb_del) = (ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone());
-              let (ids_mv, ids_cp, ids_del) = (ids.clone(), ids.clone(), ids);
-              let sel_sig = ctx_in.selection;
-              panel = panel
-                .child(menu_item_row("ctx-batch-move", format!("移动 {n} 项到工作区…"), dark_mode, false, move || {
-                  context_menu.set(None); (cb_mv.on_transfer_move)(ids_mv.clone());
-                }))
-                .child(menu_item_row("ctx-batch-copy", format!("复制 {n} 项到工作区…"), dark_mode, false, move || {
-                  context_menu.set(None); (cb_cp.on_transfer_copy)(ids_cp.clone());
-                }))
-                .child(menu_divider(dark_mode))
-                .child(menu_item_row("ctx-batch-delete", format!("删除 {n} 项"), dark_mode, true, move || {
-                  context_menu.set(None); (cb_del.on_batch_trash)(ids_del.clone());
-                  let mut s = sel_sig.get_untracked();
-                  if s.clear() { sel_sig.set(s); }
-                }));
-            }
-            ContextMenuTarget::TreeRow { view_id, object_id, name, icon, is_folder, expanded } => {
-              let (r_open, r_view, r_init) = (ctx_in.rename_modal_open, ctx_in.rename_modal_view, ctx_in.rename_modal_initial);
-              let (e_open, e_view, e_cur) = (ctx_in.emoji_modal_open, ctx_in.emoji_modal_view, ctx_in.emoji_modal_current);
-              let rename_name = name.clone();
-              let (cb_dup, cb_mv, cb_cp, cb_del) = (ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone());
-
-              if !is_folder {
-                let cb_tab = ctx_in.cb.clone();
-                panel = panel.child(menu_item_row("ctx-open-new-tab", "在新标签页打开", dark_mode, false, move || {
-                  context_menu.set(None); (cb_tab.on_open_in_new_tab)(object_id, name.clone());
-                }));
-              } else {
-                let (cb_np, cb_nf) = (ctx_in.cb.clone(), ctx_in.cb.clone());
-                panel = panel
-                  .child(menu_item_row("ctx-new-child-page", "新建子页面", dark_mode, false, move || {
-                    context_menu.set(None); (cb_np.on_new_child_page)(view_id);
-                  }))
-                  .child(menu_item_row("ctx-new-child-folder", "新建子文件夹", dark_mode, false, move || {
-                    context_menu.set(None); (cb_nf.on_new_child_folder)(view_id);
-                  }));
-              }
-
-              panel = panel
-                .child(menu_item_row("ctx-rename", "重命名", dark_mode, false, move || {
-                  context_menu.set(None); r_view.set(Some(view_id)); r_init.set(rename_name.clone()); r_open.set(true);
-                }))
-                .child(menu_item_row("ctx-set-icon", "设置图标", dark_mode, false, move || {
-                  context_menu.set(None); e_view.set(Some(view_id)); e_cur.set(icon.clone()); e_open.set(true);
-                }))
-                .child(menu_item_row("ctx-duplicate", "创建副本", dark_mode, false, move || {
-                  context_menu.set(None); (cb_dup.on_duplicate_view)(view_id);
-                }));
-
-              if is_folder {
-                let (tree_tog, rev_tog) = (ctx_in.tree.clone(), ctx_in.tree_rev);
-                let (cb_bk, cb_md, cb_if, cb_id) = (ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone());
-                panel = panel
-                  .child(menu_item_row("ctx-toggle-children", if expanded { "收起子项" } else { "展开子项" }, dark_mode, false, move || {
-                    context_menu.set(None); tree_tog.borrow_mut().toggle_expanded(view_id); rev_tog.set(rev_tog.get_untracked() + 1);
-                  }))
-                  .child(menu_item_row("ctx-export-backup", "备份(Mica 格式)", dark_mode, false, move || {
-                    context_menu.set(None); (cb_bk.on_export_folder_backup)(view_id);
-                  }))
-                  .child(menu_item_row("ctx-export-markdown", "导出为 Markdown", dark_mode, false, move || {
-                    context_menu.set(None); (cb_md.on_export_folder_markdown)(view_id);
-                  }))
-                  .child(menu_item_row("ctx-import-files", "导入文件(.md/.zip)", dark_mode, false, move || {
-                    context_menu.set(None); (cb_if.on_import_files_into_folder)(view_id);
-                  }))
-                  .child(menu_item_row("ctx-import-folder", "导入文件夹", dark_mode, false, move || {
-                    context_menu.set(None); (cb_id.on_import_folder_into_folder)(view_id);
-                  }));
-              }
-
-              panel = panel
-                .child(menu_item_row("ctx-transfer-move", "移动到工作区", dark_mode, false, move || {
-                  context_menu.set(None); (cb_mv.on_transfer_move)(vec![view_id]);
-                }))
-                .child(menu_item_row("ctx-transfer-copy", "复制到工作区", dark_mode, false, move || {
-                  context_menu.set(None); (cb_cp.on_transfer_copy)(vec![view_id]);
-                }))
-                .child(menu_divider(dark_mode))
-                .child(menu_item_row("ctx-delete", "删除", dark_mode, true, move || {
-                  context_menu.set(None); (cb_del.on_trash_view)(view_id);
-                }));
-            }
           }
-          panel
-        }))
+
+          panel = panel
+            .child(menu_item_row("ctx-rename", "重命名", dark_mode, false, move || {
+              context_menu.set(None);
+              if let Some(open_r) = &cb_rename_host {
+                open_r(view_id, rename_name.clone());
+              } else {
+                r_view.set(Some(view_id)); r_init.set(rename_name.clone()); r_open.set(true);
+              }
+            }))
+            .child(menu_item_row("ctx-set-icon", "设置图标", dark_mode, false, move || {
+              context_menu.set(None);
+              if let Some(open_e) = &cb_emoji_host {
+                open_e(view_id, icon.clone());
+              } else {
+                e_view.set(Some(view_id)); e_cur.set(icon.clone()); e_open.set(true);
+              }
+            }))
+            .child(menu_item_row("ctx-duplicate", "创建副本", dark_mode, false, move || {
+              context_menu.set(None); (cb_dup.on_duplicate_view)(view_id);
+            }));
+
+          if is_folder {
+            let (tree_tog, rev_tog) = (ctx_in.tree.clone(), ctx_in.tree_rev);
+            let (cb_bk, cb_md, cb_if, cb_id) = (ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone(), ctx_in.cb.clone());
+            panel = panel
+              .child(menu_item_row("ctx-toggle-children", if expanded { "收起子项" } else { "展开子项" }, dark_mode, false, move || {
+                context_menu.set(None); tree_tog.borrow_mut().toggle_expanded(view_id); rev_tog.set(rev_tog.get_untracked() + 1);
+              }))
+              .child(menu_divider(dark_mode))
+              .child(menu_item_row("ctx-export-backup", "备份(Mica 格式)", dark_mode, false, move || {
+                context_menu.set(None); (cb_bk.on_export_folder_backup)(view_id);
+              }))
+              .child(menu_item_row("ctx-export-markdown", "导出为 Markdown", dark_mode, false, move || {
+                context_menu.set(None); (cb_md.on_export_folder_markdown)(view_id);
+              }))
+              .child(menu_item_row("ctx-import-files", "导入文件(.md/.zip)", dark_mode, false, move || {
+                context_menu.set(None); (cb_if.on_import_files_into_folder)(view_id);
+              }))
+              .child(menu_item_row("ctx-import-folder", "导入文件夹", dark_mode, false, move || {
+                context_menu.set(None); (cb_id.on_import_folder_into_folder)(view_id);
+              }));
+          } else {
+            let (cb_pmd, cb_phtml) = (ctx_in.cb.clone(), ctx_in.cb.clone());
+            panel = panel
+              .child(menu_divider(dark_mode))
+              .child(menu_item_row("ctx-export-page-md", "导出为 Markdown", dark_mode, false, move || {
+                context_menu.set(None); (cb_pmd.on_export_page_markdown)(object_id);
+              }))
+              .child(menu_item_row("ctx-export-page-html", "导出为 HTML", dark_mode, false, move || {
+                context_menu.set(None); (cb_phtml.on_export_page_html)(object_id);
+              }));
+          }
+
+          panel = panel
+            .child(menu_divider(dark_mode))
+            .child(menu_item_row("ctx-transfer-move", "移动到工作区", dark_mode, false, move || {
+              context_menu.set(None); (cb_mv.on_transfer_move)(vec![view_id]);
+            }))
+            .child(menu_item_row("ctx-transfer-copy", "复制到工作区", dark_mode, false, move || {
+              context_menu.set(None); (cb_cp.on_transfer_copy)(vec![view_id]);
+            }))
+            .child(menu_divider(dark_mode))
+            .child(menu_item_row("ctx-delete", "删除", dark_mode, true, move || {
+              context_menu.set(None); (cb_del.on_trash_view)(view_id);
+            }));
+        }
+      }
+
+      overlay()
+        .anchor_point(move || point(px(menu.x), px(menu.y)))
+        .placement(Placement::Bottom)
+        .align(Align::Start)
+        .offset(px(2.0))
+        .margin(px(8.0))
+        .on_press_outside(move |_: &Point<Points>| context_menu.set(None))
+        .on_cancel(move || context_menu.set(None))
+        .child(panel)
+        .into_element()
     }
   })
 }

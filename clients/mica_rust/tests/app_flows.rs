@@ -799,3 +799,79 @@ fn regression_table_wysiwyg_chrome_handles_expand_bars_and_hscroll() {
     .wait_for_gone("id:code-lang-picker", std::time::Duration::from_millis(800))
     .unwrap();
 }
+
+#[test]
+fn regression_sidebar_context_menu_new_tab_unclipped_modals_transfer_and_exports() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Right-click on the currently active page -> "在新标签页打开"
+  //    MUST open a fresh 2nd tab (`doc-tab-1`) instead of silently no-oping!
+  app.right_click("id:sidebar-row-1").unwrap();
+  app.wait_for("id:sidebar-context-menu").unwrap();
+  app.wait_for("id:ctx-open-new-tab").unwrap();
+  app.wait_for("id:ctx-export-page-md").unwrap();
+  app.wait_for("id:ctx-export-page-html").unwrap();
+  app.press("id:ctx-open-new-tab").unwrap();
+  app.wait_for("id:doc-tab-1").unwrap();
+
+  // 2. "设置图标" MUST open `emoji-picker-modal` centered across the full 1280px window
+  //    (NOT clipped inside the 280px sidebar!).
+  app.right_click("id:sidebar-row-1").unwrap();
+  app.wait_for("id:ctx-set-icon").unwrap();
+  app.press("id:ctx-set-icon").unwrap();
+  app.wait_for("id:emoji-picker-modal").unwrap();
+  let nodes = app.screen().layout_nodes();
+  let emoji_box = nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("emoji-picker-modal"))
+    .expect("emoji picker modal laid out")
+    .bounds;
+  assert!(
+    emoji_box.origin.x.0 > 350.0 && emoji_box.size.width.0 >= 350.0,
+    "emoji picker must be centered over full window, not clipped in 280px sidebar: {:?}",
+    emoji_box
+  );
+  app.press("id:emoji-picker-dismiss").unwrap();
+  app
+    .wait_for_gone("id:emoji-picker-modal", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // 3. "移动到工作区" dialog MUST NOT be blank/collapsed (body renders visible copy with real height).
+  app.right_click("id:sidebar-row-1").unwrap();
+  app.wait_for("id:ctx-transfer-move").unwrap();
+  app.press("id:ctx-transfer-move").unwrap();
+  app.wait_for("id:transfer-dialog-panel").unwrap();
+  app.wait_for("当前没有其他目标工作区，请先在左上角工作区切换器中新建一个工作区。").unwrap();
+  let t_nodes = app.screen().layout_nodes();
+  let t_panel = t_nodes
+    .iter()
+    .find(|n| n.test_id.as_deref() == Some("transfer-dialog-panel"))
+    .expect("transfer panel laid out")
+    .bounds;
+  assert!(
+    t_panel.size.height.0 >= 150.0,
+    "transfer dialog body must not collapse to 0px height: {:?}",
+    t_panel
+  );
+  app.press("id:transfer-close-btn").unwrap();
+  app
+    .wait_for_gone("id:transfer-dialog-panel", std::time::Duration::from_millis(800))
+    .unwrap();
+
+  // 4. Folder backup (`ctx-export-backup`) & page Markdown export (`ctx-export-page-md`)
+  //    MUST survive menu dismissal (`app_owner`) and complete instead of silently cancelling!
+  app.right_click("id:sidebar-row-0").unwrap();
+  app.wait_for("id:ctx-export-backup").unwrap();
+  app.press("id:ctx-export-backup").unwrap();
+  app.wait_for("已导出 ZIP").unwrap();
+
+  app.right_click("id:sidebar-row-1").unwrap();
+  app.wait_for("id:ctx-export-page-md").unwrap();
+  app.press("id:ctx-export-page-md").unwrap();
+  app.wait_for("已导出 Markdown").unwrap();
+}

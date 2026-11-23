@@ -556,6 +556,18 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     });
   }
 
+  // Root owner for long-lived async tasks (native OS file dialogs, exports, imports,
+  // backups, cloud sync) so closing a context menu or popover NEVER cancels them.
+  let app_owner = Owner::current();
+
+  // Root-mounted sidebar rename & emoji picker modal state (avoids 280px sidebar clipping)
+  let sidebar_rename_open = signal(false);
+  let sidebar_rename_view: Signal<Option<Uuid>> = signal(None);
+  let sidebar_rename_initial = signal(String::new());
+  let sidebar_emoji_open = signal(false);
+  let sidebar_emoji_view: Signal<Option<Uuid>> = signal(None);
+  let sidebar_emoji_current: Signal<Option<String>> = signal(None);
+
   // Tabs (with per-tab history)
   let open_tabs = signal(vec![OpenTab::single(initial_doc_id, initial_title.clone())]);
   let active_tab_idx = signal(0usize);
@@ -971,28 +983,28 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
       let mut tabs = open_tabs.get_untracked();
       if force_new_tab {
-        if let Some(pos) = tabs.iter().position(|t| t.doc_id == doc_id) {
+        // Always open a fresh tab so right-clicking any page (including the active one)
+        // and choosing "在新标签页打开" visibly creates and switches to a new tab.
+        tabs.push(OpenTab::single(doc_id, title.clone()));
+        active_tab_idx.set(tabs.len() - 1);
+      } else {
+        let cur = active_tab_idx.get_untracked().min(tabs.len().saturating_sub(1));
+        if tabs.get(cur).is_some_and(|t| t.doc_id == doc_id) {
+          tabs[cur].title = title.clone();
+        } else if let Some(pos) = tabs.iter().position(|t| t.doc_id == doc_id) {
           tabs[pos].title = title.clone();
           active_tab_idx.set(pos);
-        } else {
-          tabs.push(OpenTab::single(doc_id, title.clone()));
-          active_tab_idx.set(tabs.len() - 1);
+        } else if record_history {
+          if tabs.is_empty() {
+            tabs.push(OpenTab::single(doc_id, title.clone()));
+            active_tab_idx.set(0);
+          } else {
+            tabs[cur].navigate(doc_id, title.clone());
+          }
+        } else if !tabs.is_empty() {
+          tabs[cur].doc_id = doc_id;
+          tabs[cur].title = title.clone();
         }
-      } else if let Some(pos) = tabs.iter().position(|t| t.doc_id == doc_id) {
-        tabs[pos].title = title.clone();
-        active_tab_idx.set(pos);
-      } else if record_history {
-        if tabs.is_empty() {
-          tabs.push(OpenTab::single(doc_id, title.clone()));
-          active_tab_idx.set(0);
-        } else {
-          let cur = active_tab_idx.get_untracked().min(tabs.len() - 1);
-          tabs[cur].navigate(doc_id, title.clone());
-        }
-      } else if !tabs.is_empty() {
-        let cur = active_tab_idx.get_untracked().min(tabs.len() - 1);
-        tabs[cur].doc_id = doc_id;
-        tabs[cur].title = title.clone();
       }
       open_tabs.set(tabs);
       active_mode.set(MODE_DOC);
@@ -1645,33 +1657,129 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
-  // Real Export & Import callbacks (using `transfer.rs` + `mica-interchange` + native OS dialogs)
+  // Real Export & Import callbacks (using `transfer.rs` + `mica-interchange` + native OS dialogs).
+  // Every async dialog task is spawned under `app_owner` so closing a context menu,
+  // workspace switcher, or app menu NEVER cancels the native OS Save/Open dialog!
+  let spawn_save_dialog = move |suggested: String,
+                                filter_name: &'static str,
+                                exts: &'static [&'static str],
+                                bytes: Vec<u8>,
+                                label: &'static str,
+                                br_c: Rc<MicaDocumentBridge>| {
+    app_owner.run(move || {
+      spawn(async move {
+        match transfer::save_bytes_with_dialog(&suggested, filter_name, exts, &bytes).await {
+          Ok(Some(path)) => {
+            export_preview.set(format!("已导出 {label}：{}（{} 字节）", path.display(), bytes.len()));
+            br_c.set_status_flash(format!("已导出 {label}"));
+          }
+          Ok(None) => {}
+          Err(err) => {
+            export_preview.set(format!("导出 {label} 失败：{err}"));
+            br_c.set_status_flash(format!("导出失败：{err}"));
+          }
+        }
+      });
+    });
+  };
+
+  let on_export_page_markdown: Rc<dyn Fn(Uuid)> = {
+    let br = bridge.clone();
+    let docs = docs_store.clone();
+    let tree_ref = tree.clone();
+    let v = vault.clone();
+    Rc::new(move |doc_id: Uuid| {
+      br.flush_pending_persist();
+      let is_active = active_doc.get_untracked() == Some(doc_id);
+      let orig = active_origin.get_untracked();
+      let md = if is_active {
+        br.export_markdown()
+      } else {
+        docs
+          .borrow()
+          .get(&doc_id)
+          .cloned()
+          .or_else(|| v.load_markdown(&orig, doc_id))
+          .unwrap_or_default()
+      };
+      let title = if is_active {
+        active_title.get_untracked()
+      } else {
+        tree_ref
+          .borrow()
+          .visible_rows()
+          .into_iter()
+          .find(|r| !r.is_folder && (r.object_id == doc_id || r.view_id == doc_id))
+          .map(|r| r.name)
+          .unwrap_or_else(|| "untitled".to_string())
+      };
+      let suggested = format!("{}.md", transfer::sanitize_filename(&title, "untitled"));
+      spawn_save_dialog(suggested, "Markdown", &["md"], md.into_bytes(), "Markdown", br.clone());
+    })
+  };
+
+  let on_export_page_html: Rc<dyn Fn(Uuid)> = {
+    let br = bridge.clone();
+    let docs = docs_store.clone();
+    let tree_ref = tree.clone();
+    let v = vault.clone();
+    Rc::new(move |doc_id: Uuid| {
+      br.flush_pending_persist();
+      let is_active = active_doc.get_untracked() == Some(doc_id);
+      let orig = active_origin.get_untracked();
+      let title = if is_active {
+        active_title.get_untracked()
+      } else {
+        tree_ref
+          .borrow()
+          .visible_rows()
+          .into_iter()
+          .find(|r| !r.is_folder && (r.object_id == doc_id || r.view_id == doc_id))
+          .map(|r| r.name)
+          .unwrap_or_else(|| "untitled".to_string())
+      };
+      let html_body = if is_active {
+        br.export_html()
+      } else {
+        let md = docs
+          .borrow()
+          .get(&doc_id)
+          .cloned()
+          .or_else(|| v.load_markdown(&orig, doc_id))
+          .unwrap_or_default();
+        let blocks = mica_md::parse_body(&md, mica_md::ParseMode::Document);
+        mica_md::render_html_body(&blocks, &mica_md::HtmlOptions::default())
+      };
+      let full_html = transfer::wrap_standalone_html(&title, &html_body);
+      let suggested = format!("{}.html", transfer::sanitize_filename(&title, "untitled"));
+      spawn_save_dialog(suggested, "HTML Document", &["html"], full_html.into_bytes(), "HTML", br.clone());
+    })
+  };
+
   let on_export_markdown: Rc<dyn Fn()> = {
+    let exp = on_export_page_markdown.clone();
     let br = bridge.clone();
     Rc::new(move || {
-      let md = br.export_markdown();
-      let title = active_title.get_untracked();
-      match transfer::export_markdown_file(&title, &md) {
-        Ok(path) => {
-          export_preview.set(format!("已导出 Markdown：{}（{} 字节）", path, md.len()));
-          br.set_status_flash("已导出 Markdown");
-        }
-        Err(err) => export_preview.set(format!("导出 Markdown 失败：{err}")),
+      if let Some(doc_id) = active_doc.get_untracked() {
+        exp(doc_id);
+      } else {
+        let suggested = format!("{}.md", transfer::sanitize_filename(&active_title.get_untracked(), "untitled"));
+        spawn_save_dialog(suggested, "Markdown", &["md"], br.export_markdown().into_bytes(), "Markdown", br.clone());
       }
     })
   };
 
   let on_export_html: Rc<dyn Fn()> = {
+    let exp = on_export_page_html.clone();
     let br = bridge.clone();
     Rc::new(move || {
-      let html = br.export_html();
-      let title = active_title.get_untracked();
-      match transfer::export_html_file(&title, &html) {
-        Ok(path) => {
-          export_preview.set(format!("已导出 HTML：{}（{} 字节）", path, html.len()));
-          br.set_status_flash("已导出 HTML");
-        }
-        Err(err) => export_preview.set(format!("导出 HTML 失败：{err}")),
+      if let Some(doc_id) = active_doc.get_untracked() {
+        exp(doc_id);
+      } else {
+        let title = active_title.get_untracked();
+        let full = transfer::wrap_standalone_html(&title, &br.export_html());
+        let suggested = format!("{}.html", transfer::sanitize_filename(&title, "untitled"));
+        spawn_save_dialog(suggested, "HTML Document", &["html"], full.into_bytes(), "HTML", br.clone());
       }
     })
   };
@@ -1681,53 +1789,77 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let docs = docs_store.clone();
     let br = bridge.clone();
     Rc::new(move || {
+      br.flush_pending_persist();
+      if let Some(aid) = active_doc.get_untracked() {
+        docs.borrow_mut().insert(aid, br.export_markdown());
+      }
       let ws_name = workspace_name.get_untracked();
-      let pages: Vec<(String, String)> = tree_ref
-        .borrow()
-        .visible_rows()
+      let (live, _) = collect_all_views(&tree_ref.borrow());
+      let docs_snap = docs.borrow().clone();
+      let pages: Vec<(String, String)> = live
         .into_iter()
-        .filter(|r| !r.is_folder)
-        .map(|r| (r.name, docs.borrow().get(&r.object_id).cloned().unwrap_or_default()))
+        .filter(cloud_sync::is_page_view)
+        .map(|v| (v.name, docs_snap.get(&v.object_id).cloned().unwrap_or_default()))
         .collect();
-      match transfer::export_workspace_bundle(&ws_name, &pages) {
-        Ok(path) => {
-          export_preview.set(format!("已导出工作区备份：{}（共 {} 页）", path, pages.len()));
-          br.set_status_flash("已导出工作区备份");
+      match transfer::serialize_workspace_bundle(&ws_name, &pages) {
+        Ok(json) => {
+          let suggested = format!("{}.mica.json", transfer::sanitize_filename(&ws_name, "mica-workspace"));
+          spawn_save_dialog(suggested, "Mica Backup JSON", &["json"], json.into_bytes(), "工作区备份", br.clone());
         }
-        Err(err) => export_preview.set(format!("导出备份失败：{err}")),
+        Err(err) => {
+          export_preview.set(format!("导出备份失败：{err}"));
+          br.set_status_flash(format!("导出失败：{err}"));
+        }
       }
     })
   };
 
-  let export_workspace_zip: Rc<dyn Fn(ArchiveExportFormat)> = {
+  let export_workspace_zip: Rc<dyn Fn(Option<Uuid>, ArchiveExportFormat)> = {
     let tree_ref = tree.clone();
     let docs = docs_store.clone();
+    let v = vault.clone();
     let br = bridge.clone();
-    Rc::new(move |fmt: ArchiveExportFormat| {
-      let ws_name = workspace_name.get_untracked();
-      let (live, _) = collect_all_views(&tree_ref.borrow());
-      let docs_map = docs.borrow().clone();
-      let br_c = br.clone();
-      spawn(async move {
-        match transfer::build_workspace_zip_bytes(&ws_name, &live, &docs_map, fmt) {
-          Ok(bytes) => {
-            let ext = match fmt {
-              ArchiveExportFormat::BackupMicaZip => "mica.zip",
-              ArchiveExportFormat::MarkdownZip => "zip",
-            };
-            let suggested = format!("{}.{ext}", transfer::sanitize_filename(&ws_name, "workspace"));
-            match transfer::save_bytes_with_dialog(&suggested, "ZIP Archive", &["zip"], &bytes).await {
-              Ok(Some(path)) => {
-                export_preview.set(format!("已导出 ZIP：{}（{} 字节）", path.display(), bytes.len()));
-                br_c.set_status_flash("已导出 ZIP");
-              }
-              Ok(None) => {}
-              Err(e) => export_preview.set(format!("保存 ZIP 失败：{e}")),
-            }
+    Rc::new(move |target_ws: Option<Uuid>, fmt: ArchiveExportFormat| {
+      br.flush_pending_persist();
+      if let Some(aid) = active_doc.get_untracked() {
+        docs.borrow_mut().insert(aid, br.export_markdown());
+      }
+      let cur_ws = active_workspace_id.get_untracked();
+      let want_ws = target_ws.unwrap_or(cur_ws);
+      let (ws_name, live, docs_map) = if want_ws == cur_ws {
+        let (live, _) = collect_all_views(&tree_ref.borrow());
+        (workspace_name.get_untracked(), live, docs.borrow().clone())
+      } else {
+        let ws_info = workspaces.get_untracked().into_iter().find(|w| w.id == want_ws);
+        let (name, orig) = ws_info
+          .map(|w| (w.name, w.origin))
+          .unwrap_or_else(|| ("workspace".to_string(), DEFAULT_ORIGIN.to_string()));
+        let live: Vec<mica_api_types::View> = v
+          .list_views(&orig)
+          .into_iter()
+          .filter(|row| !row.is_deleted && row.workspace_id == want_ws)
+          .collect();
+        let mut map = HashMap::new();
+        for row in &live {
+          if cloud_sync::is_page_view(row)
+            && let Some(md) = v.load_markdown(&orig, row.object_id)
+          {
+            map.insert(row.object_id, md);
           }
-          Err(e) => export_preview.set(format!("打包 ZIP 失败：{e}")),
         }
-      });
+        (name, live, map)
+      };
+      match transfer::build_workspace_zip_bytes(&ws_name, &live, &docs_map, fmt) {
+        Ok(bytes) => {
+          let ext = if fmt == ArchiveExportFormat::BackupMicaZip { "mica.zip" } else { "zip" };
+          let suggested = format!("{}.{ext}", transfer::sanitize_filename(&ws_name, "workspace"));
+          spawn_save_dialog(suggested, "ZIP Archive", &["zip"], bytes, "ZIP", br.clone());
+        }
+        Err(e) => {
+          export_preview.set(format!("打包 ZIP 失败：{e}"));
+          br.set_status_flash(format!("打包失败：{e}"));
+        }
+      }
     })
   };
 
@@ -1736,6 +1868,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let docs = docs_store.clone();
     let br = bridge.clone();
     Rc::new(move |root_id: Uuid, fmt: ArchiveExportFormat| {
+      br.flush_pending_persist();
+      if let Some(aid) = active_doc.get_untracked() {
+        docs.borrow_mut().insert(aid, br.export_markdown());
+      }
       let (live, _) = collect_all_views(&tree_ref.borrow());
       let folder_name = live
         .iter()
@@ -1743,27 +1879,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .map(|v| v.name.clone())
         .unwrap_or_else(|| "export".to_string());
       let docs_map = docs.borrow().clone();
-      let br_c = br.clone();
-      spawn(async move {
-        match transfer::build_subtree_zip_bytes(root_id, &live, &docs_map, fmt) {
-          Ok(bytes) => {
-            let ext = match fmt {
-              ArchiveExportFormat::BackupMicaZip => "mica.zip",
-              ArchiveExportFormat::MarkdownZip => "zip",
-            };
-            let suggested = format!("{}.{ext}", transfer::sanitize_filename(&folder_name, "export"));
-            match transfer::save_bytes_with_dialog(&suggested, "ZIP Archive", &["zip"], &bytes).await {
-              Ok(Some(path)) => {
-                export_preview.set(format!("已导出：{}（{} 字节）", path.display(), bytes.len()));
-                br_c.set_status_flash("导出完成");
-              }
-              Ok(None) => {}
-              Err(e) => export_preview.set(format!("导出失败：{e}")),
-            }
-          }
-          Err(e) => export_preview.set(format!("打包失败：{e}")),
+      match transfer::build_subtree_zip_bytes(root_id, &live, &docs_map, fmt) {
+        Ok(bytes) => {
+          let ext = if fmt == ArchiveExportFormat::BackupMicaZip { "mica.zip" } else { "zip" };
+          let suggested = format!("{}.{ext}", transfer::sanitize_filename(&folder_name, "export"));
+          spawn_save_dialog(suggested, "ZIP Archive", &["zip"], bytes, "ZIP", br.clone());
         }
-      });
+        Err(e) => {
+          export_preview.set(format!("打包失败：{e}"));
+          br.set_status_flash(format!("打包失败：{e}"));
+        }
+      }
     })
   };
 
@@ -1784,23 +1910,35 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     Rc::new(move |parent: Option<Uuid>, notion: bool| {
       let imp_c = imp.clone();
       let br_c = br.clone();
-      spawn(async move {
-        match transfer::pick_import_files("ZIP Archive", &["zip"], false).await {
-          Ok(paths) if !paths.is_empty() => {
-            if let Ok(bytes) = std::fs::read(&paths[0]) {
-              match transfer::parse_zip_archive_to_pages(&bytes, notion) {
-                Ok(specs) => {
-                  let n = imp_c(parent, specs);
-                  export_preview.set(format!("已从 ZIP 导入 {n} 篇页面"));
-                  br_c.set_status_flash(format!("已导入 {n} 篇页面"));
+      app_owner.run(move || {
+        spawn(async move {
+          match transfer::pick_import_files("ZIP Archive", &["zip"], false).await {
+            Ok(paths) if !paths.is_empty() => {
+              match std::fs::read(&paths[0]) {
+                Ok(bytes) => match transfer::parse_zip_archive_to_pages(&bytes, notion) {
+                  Ok(specs) => {
+                    let n = imp_c(parent, specs);
+                    export_preview.set(format!("已从 ZIP 导入 {n} 篇页面"));
+                    br_c.set_status_flash(format!("已导入 {n} 篇页面"));
+                  }
+                  Err(e) => {
+                    export_preview.set(format!("解析 ZIP 失败：{e}"));
+                    br_c.set_status_flash(format!("导入失败：{e}"));
+                  }
+                },
+                Err(e) => {
+                  export_preview.set(format!("读取 ZIP 失败：{e}"));
+                  br_c.set_status_flash(format!("读取失败：{e}"));
                 }
-                Err(e) => export_preview.set(format!("解析 ZIP 失败：{e}")),
               }
             }
+            Ok(_) => {}
+            Err(e) => {
+              export_preview.set(format!("选择文件失败：{e}"));
+              br_c.set_status_flash(format!("选择文件失败：{e}"));
+            }
           }
-          Ok(_) => {}
-          Err(e) => export_preview.set(format!("选择文件失败：{e}")),
-        }
+        });
       });
     })
   };
@@ -1811,29 +1949,34 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     Rc::new(move |parent: Option<Uuid>| {
       let imp_c = imp.clone();
       let br_c = br.clone();
-      spawn(async move {
-        match transfer::pick_import_files("Markdown / ZIP", &["md", "markdown", "txt", "zip"], true).await {
-          Ok(paths) if !paths.is_empty() => {
-            let mut all_specs = Vec::new();
-            for p in paths {
-              let ext = p.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
-              if ext == "zip" {
-                if let Ok(bytes) = std::fs::read(&p)
-                  && let Ok(specs) = transfer::parse_zip_archive_to_pages(&bytes, false)
-                {
-                  all_specs.extend(specs);
+      app_owner.run(move || {
+        spawn(async move {
+          match transfer::pick_import_files("Markdown / ZIP", &["md", "markdown", "txt", "zip"], true).await {
+            Ok(paths) if !paths.is_empty() => {
+              let mut all_specs = Vec::new();
+              for p in paths {
+                let ext = p.extension().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
+                if ext == "zip" {
+                  if let Ok(bytes) = std::fs::read(&p)
+                    && let Ok(specs) = transfer::parse_zip_archive_to_pages(&bytes, false)
+                  {
+                    all_specs.extend(specs);
+                  }
+                } else if let Ok((title, md)) = transfer::import_markdown_from_path(&p.to_string_lossy()) {
+                  all_specs.push(ImportedPageSpec { title, markdown: md, folder_path: Vec::new() });
                 }
-              } else if let Ok((title, md)) = transfer::import_markdown_from_path(&p.to_string_lossy()) {
-                all_specs.push(ImportedPageSpec { title, markdown: md, folder_path: Vec::new() });
               }
+              let n = imp_c(parent, all_specs);
+              export_preview.set(format!("已导入 {n} 篇页面"));
+              br_c.set_status_flash(format!("已导入 {n} 篇页面"));
             }
-            let n = imp_c(parent, all_specs);
-            export_preview.set(format!("已导入 {n} 篇页面"));
-            br_c.set_status_flash(format!("已导入 {n} 篇页面"));
+            Ok(_) => {}
+            Err(e) => {
+              export_preview.set(format!("选择文件失败：{e}"));
+              br_c.set_status_flash(format!("选择文件失败：{e}"));
+            }
           }
-          Ok(_) => {}
-          Err(e) => export_preview.set(format!("选择文件失败：{e}")),
-        }
+        });
       });
     })
   };
@@ -1844,19 +1987,27 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     Rc::new(move |parent: Option<Uuid>| {
       let imp_c = imp.clone();
       let br_c = br.clone();
-      spawn(async move {
-        match transfer::pick_import_folder().await {
-          Ok(Some(dir)) => match transfer::import_folder_from_disk(&dir, true) {
-            Ok(specs) => {
-              let n = imp_c(parent, specs);
-              export_preview.set(format!("已从文件夹导入 {n} 篇页面"));
-              br_c.set_status_flash(format!("已导入 {n} 篇页面"));
+      app_owner.run(move || {
+        spawn(async move {
+          match transfer::pick_import_folder().await {
+            Ok(Some(dir)) => match transfer::import_folder_from_disk(&dir, true) {
+              Ok(specs) => {
+                let n = imp_c(parent, specs);
+                export_preview.set(format!("已从文件夹导入 {n} 篇页面"));
+                br_c.set_status_flash(format!("已导入 {n} 篇页面"));
+              }
+              Err(e) => {
+                export_preview.set(format!("导入文件夹失败：{e}"));
+                br_c.set_status_flash(format!("导入失败：{e}"));
+              }
+            },
+            Ok(None) => {}
+            Err(e) => {
+              export_preview.set(format!("选择文件夹失败：{e}"));
+              br_c.set_status_flash(format!("选择文件夹失败：{e}"));
             }
-            Err(e) => export_preview.set(format!("导入文件夹失败：{e}")),
-          },
-          Ok(None) => {}
-          Err(e) => export_preview.set(format!("选择文件夹失败：{e}")),
-        }
+          }
+        });
       });
     })
   };
@@ -2092,7 +2243,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_select_doc: on_select_doc.clone(),
     on_new_page: on_new_page.clone(),
     on_new_folder,
-    on_rename_view,
+    on_rename_view: on_rename_view.clone(),
     on_trash_view: on_trash_view.clone(),
     on_move_view,
     on_open_board: Rc::new(move || {
@@ -2129,7 +2280,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let _ = create_f(Some(folder_id), None);
       })
     },
-    on_set_icon,
+    on_set_icon: on_set_icon.clone(),
     on_duplicate_view,
     on_export_folder_backup: {
       let exp = export_folder_zip.clone();
@@ -2139,6 +2290,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let exp = export_folder_zip.clone();
       Rc::new(move |fid: Uuid| exp(fid, ArchiveExportFormat::MarkdownZip))
     },
+    on_export_page_markdown: on_export_page_markdown.clone(),
+    on_export_page_html: on_export_page_html.clone(),
     on_import_files_into_folder: {
       let imp = on_import_files_picker.clone();
       Rc::new(move |fid: Uuid| imp(Some(fid)))
@@ -2147,6 +2300,16 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let imp = on_import_folder_picker.clone();
       Rc::new(move |fid: Uuid| imp(Some(fid)))
     },
+    on_open_rename_modal: Some(Rc::new(move |vid: Uuid, cur_name: String| {
+      sidebar_rename_view.set(Some(vid));
+      sidebar_rename_initial.set(cur_name);
+      sidebar_rename_open.set(true);
+    })),
+    on_open_emoji_modal: Some(Rc::new(move |vid: Uuid, cur_icon: Option<String>| {
+      sidebar_emoji_view.set(Some(vid));
+      sidebar_emoji_current.set(cur_icon);
+      sidebar_emoji_open.set(true);
+    })),
     on_transfer_move: Rc::new(move |ids: Vec<Uuid>| {
       transfer_source_ids.set(ids);
       transfer_copy_mode.set(false);
@@ -2314,14 +2477,16 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let br = bridge.clone();
       Rc::new(move || {
         let br_c = br.clone();
-        spawn(async move {
-          if let Ok(paths) = transfer::pick_import_files("Images", &["png", "jpg", "jpeg", "gif", "webp", "svg"], false).await
-            && let Some(p) = paths.first()
-          {
-            let uri = format!("file:///{}", p.to_string_lossy().replace('\\', "/"));
-            let alt = p.file_stem().and_then(|s| s.to_str()).unwrap_or("图片");
-            br_c.insert_custom_block("image", alt, Some(&uri));
-          }
+        app_owner.run(move || {
+          spawn(async move {
+            if let Ok(paths) = transfer::pick_import_files("Images", &["png", "jpg", "jpeg", "gif", "webp", "svg"], false).await
+              && let Some(p) = paths.first()
+            {
+              let uri = format!("file:///{}", p.to_string_lossy().replace('\\', "/"));
+              let alt = p.file_stem().and_then(|s| s.to_str()).unwrap_or("图片");
+              br_c.insert_custom_block("image", alt, Some(&uri));
+            }
+          });
         });
       })
     },
@@ -2462,11 +2627,11 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   settings_props_val.live_views = live_views_sig;
   settings_props_val.on_export_mica_zip = Some({
     let exp = export_workspace_zip.clone();
-    Rc::new(move || exp(ArchiveExportFormat::BackupMicaZip))
+    Rc::new(move || exp(None, ArchiveExportFormat::BackupMicaZip))
   });
   settings_props_val.on_export_markdown_zip = Some({
     let exp = export_workspace_zip.clone();
-    Rc::new(move || exp(ArchiveExportFormat::MarkdownZip))
+    Rc::new(move || exp(None, ArchiveExportFormat::MarkdownZip))
   });
   settings_props_val.on_import_zip = Some({
     let imp = on_import_zip_picker.clone();
@@ -3070,11 +3235,11 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     },
     on_export_backup: {
       let exp = export_workspace_zip.clone();
-      Rc::new(move |_| exp(ArchiveExportFormat::BackupMicaZip))
+      Rc::new(move |ws_id: Uuid| exp(Some(ws_id), ArchiveExportFormat::BackupMicaZip))
     },
     on_export_markdown: {
       let exp = export_workspace_zip.clone();
-      Rc::new(move |_| exp(ArchiveExportFormat::MarkdownZip))
+      Rc::new(move |ws_id: Uuid| exp(Some(ws_id), ArchiveExportFormat::MarkdownZip))
     },
     on_import_files: {
       let imp = on_import_files_picker.clone();
@@ -3687,21 +3852,36 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
               .map(|w| w.origin)
               .ok_or_else(|| "未找到目标工作区".to_string())?;
             let src_views = vt2.list_views(&src_orig);
+            fn clone_subtree_to_dest(
+              vt: &VaultStore,
+              src_orig: &str,
+              dest_orig: &str,
+              dest_ws: Uuid,
+              src_views: &[mica_api_types::View],
+              vrow: &mica_api_types::View,
+              parent_id: Option<Uuid>,
+            ) {
+              let mut cloned = vrow.clone();
+              cloned.id = Uuid::new_v4();
+              cloned.workspace_id = dest_ws;
+              cloned.parent_view_id = parent_id;
+              if cloud_sync::is_page_view(&cloned) {
+                let new_obj = Uuid::new_v4();
+                let md = vt.load_markdown(src_orig, vrow.object_id).unwrap_or_default();
+                cloned.object_id = new_obj;
+                let _ = vt.save_markdown(dest_orig, new_obj, &md);
+                let _ = vt.save_view(dest_orig, &cloned);
+              } else {
+                cloned.object_id = cloned.id;
+                let _ = vt.save_view(dest_orig, &cloned);
+                for child in src_views.iter().filter(|c| !c.is_deleted && c.parent_view_id == Some(vrow.id)) {
+                  clone_subtree_to_dest(vt, src_orig, dest_orig, dest_ws, src_views, child, Some(cloned.id));
+                }
+              }
+            }
             for sid in transfer_source_ids.get_untracked() {
               if let Some(vrow) = src_views.iter().find(|r| r.id == sid || r.object_id == sid) {
-                let mut cloned = vrow.clone();
-                cloned.id = Uuid::new_v4();
-                cloned.workspace_id = dest_ws;
-                cloned.parent_view_id = pick.parent_view_id;
-                if cloud_sync::is_page_view(&cloned) {
-                  let new_obj = Uuid::new_v4();
-                  let md = vt2.load_markdown(&src_orig, vrow.object_id).unwrap_or_default();
-                  cloned.object_id = new_obj;
-                  let _ = vt2.save_markdown(&dest_orig, new_obj, &md);
-                } else {
-                  cloned.object_id = cloned.id;
-                }
-                let _ = vt2.save_view(&dest_orig, &cloned);
+                clone_subtree_to_dest(&vt2, &src_orig, &dest_orig, dest_ws, &src_views, vrow, pick.parent_view_id);
                 if !copy_mode {
                   let _ = vt2.trash_view_subtree(&src_orig, vrow.id);
                 }
@@ -3716,6 +3896,46 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         transfer_dialog::transfer_dialog_modal(state, dark_mode)
       }
     }))
+    // 9b. Root-mounted Sidebar Rename & Emoji Picker modals (centered over full window, never clipped by 280px sidebar)
+    .child(sidebar::rename_dialog_modal(
+      sidebar_rename_open,
+      sidebar_rename_initial,
+      "重命名",
+      dark_mode,
+      {
+        let on_ren = on_rename_view.clone();
+        Rc::new(move |new_name: String| {
+          if let Some(vid) = sidebar_rename_view.get_untracked() {
+            on_ren(vid, new_name);
+          }
+          sidebar_rename_open.set(false);
+          sidebar_rename_view.set(None);
+        })
+      },
+      Rc::new(move || {
+        sidebar_rename_open.set(false);
+        sidebar_rename_view.set(None);
+      }),
+    ))
+    .child(emoji_picker::emoji_picker_modal(
+      sidebar_emoji_open,
+      sidebar_emoji_current,
+      dark_mode,
+      {
+        let on_ic = on_set_icon;
+        Rc::new(move |picked: Option<String>| {
+          if let Some(vid) = sidebar_emoji_view.get_untracked() {
+            on_ic(vid, picked);
+          }
+          sidebar_emoji_open.set(false);
+          sidebar_emoji_view.set(None);
+        })
+      },
+      Rc::new(move || {
+        sidebar_emoji_open.set(false);
+        sidebar_emoji_view.set(None);
+      }),
+    ))
     // 10. Search Modal (600×440) & Settings Modal (1120×840)
     .child(when(move || search_modal_open.get(), {
       let ts = tree_search.clone();
