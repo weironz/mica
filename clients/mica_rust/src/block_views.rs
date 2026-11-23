@@ -209,9 +209,9 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
         row_width.set(b.size.width.0);
       }
     })
-    // Pressing anywhere on a row outside interactive text/controls (left/right
-    // margins, 24px body padding, vertical block gaps, bullet gutters, indent
-    // space, or around media/diagram cards) arms body-area block marquee drag!
+    // Pressing in the left/right blank margins (outside the prose text area)
+    // arms block marquee drag; presses inside the prose column itself always
+    // stay in normal text/line selection mode.
     .on_press_down(move |e: &PressEvent| {
       br_row_clear.clear_selection();
       drag_anchor.set(None);
@@ -219,8 +219,27 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
       focused_cell_row.set(None);
       table_sel_row.set(None);
       table_drag_guard.set(None);
-      blank_marquee_guard.set(true);
-      marquee_origin_page_row.set(Some((e.page_position.x.0, e.page_position.y.0)));
+      let rw = row_width.get_untracked();
+      let eff = page_width.get_untracked();
+      let col_w = if crate::page_width::is_full_width(eff) {
+        rw
+      } else {
+        rw.min(eff)
+      };
+      let col_left = ((rw - col_w) * 0.5).max(0.0);
+      let col_right = col_left + col_w;
+      let in_side_margin = crate::block_marquee::starts_marquee_in_margin(
+        e.position.x.0,
+        0.0,
+        rw,
+        col_left,
+        col_right,
+        f32::INFINITY,
+      );
+      blank_marquee_guard.set(in_side_margin);
+      marquee_origin_page_row.set(
+        in_side_margin.then_some((e.page_position.x.0, e.page_position.y.0)),
+      );
     })
     // Unified full-width cross-block drag handler: covers left/right margins AND
     // every block kind (prose, tables, dividers, code blocks, images, boards,
@@ -486,33 +505,11 @@ fn render_prose_block_view(env: &BlockRenderEnv, at: Position, block: EditorBloc
         table_drag.set(None);
         sink_clear_rev.update(|v| *v = v.wrapping_add(1));
 
-        // Detect whether the click landed in blank whitespace past the right end
-        // of the hit visual line (or on an empty paragraph): a plain click places
-        // the caret at line end, while dragging > 4px upgrades smoothly into a
-        // body-area block marquee box!
-        let in_blank_tail = {
-          let cache = layouts_click.borrow();
-          if text_click.is_empty() {
-            true
-          } else if let Some(info) = cache.blocks.get(&bid_click) {
-            if info.lines.is_empty() {
-              true
-            } else {
-              let ly = e.position.y.0;
-              let hit_line = info
-                .lines
-                .iter()
-                .find(|l| ly < l.y.0 + l.height.0.max(1.0))
-                .unwrap_or_else(|| info.lines.last().unwrap());
-              e.position.x.0 > hit_line.x.0 + hit_line.width.0 + 8.0
-            }
-          } else {
-            false
-          }
-        };
-        let arm_marquee = in_blank_tail && e.clicks <= 1;
-        blank_marquee_ready.set(arm_marquee);
-        marquee_origin_page.set(arm_marquee.then_some((e.page_position.x.0, e.page_position.y.0)));
+        // Pressing inside any prose row always performs normal text/line
+        // selection (never hijacked into a block marquee box — marquee is
+        // reserved for the left/right margins and bottom blank area).
+        blank_marquee_ready.set(false);
+        marquee_origin_page.set(None);
 
         let off = hit_offset(&layouts_click, &bid_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
         let click_count = e.clicks.clamp(1, 3);

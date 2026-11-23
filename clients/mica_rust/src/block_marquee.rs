@@ -130,8 +130,12 @@ pub fn starts_marquee_in_margin(
   if on_grip {
     return false;
   }
-  // 4. Inside the content column: left 24px block-handle gutter starts a marquee.
-  if local_x < content_left + MARQUEE_GUTTER_WIDTH {
+  // 4. Inside the content column: left & right 24px padding gutters start a marquee
+  //    (so left/right blank strips work even in full-width mode), while the inner
+  //    prose text area always performs normal text/line selection.
+  if local_x < content_left + MARQUEE_GUTTER_WIDTH
+    || local_x > content_right - MARQUEE_GUTTER_WIDTH
+  {
     return true;
   }
   // 5. Blank space below the last block starts a marquee.
@@ -336,11 +340,13 @@ mod tests {
     assert!(!starts_marquee_in_margin(192.0, 100.0, w, c_left, c_right, c_bottom));
     assert!(!starts_marquee_in_margin(1006.0, 100.0, w, c_left, c_right, c_bottom));
 
-    // Left 24px gutter inside content column starts marquee
+    // Left & right 24px gutters inside content column start marquee
     assert!(starts_marquee_in_margin(210.0, 100.0, w, c_left, c_right, c_bottom));
+    assert!(starts_marquee_in_margin(990.0, 100.0, w, c_left, c_right, c_bottom));
 
     // Inside prose text body -> normal text selection (false)
     assert!(!starts_marquee_in_margin(350.0, 100.0, w, c_left, c_right, c_bottom));
+    assert!(!starts_marquee_in_margin(950.0, 100.0, w, c_left, c_right, c_bottom));
 
     // Below content_bottom inside content column -> starts marquee (true)
     assert!(starts_marquee_in_margin(350.0, 480.0, w, c_left, c_right, c_bottom));

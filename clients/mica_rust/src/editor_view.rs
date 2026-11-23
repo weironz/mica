@@ -1909,7 +1909,7 @@ pub fn editor_view(
             if m_down.is_active_untracked() {
               m_down.clear();
             }
-            marquee_origin.set(Some((lx, ly)));
+            marquee_origin.set(None);
           }
         })
         .on_mouse_move(move |e: &MouseEvent| {
