@@ -159,6 +159,7 @@ pub fn editor_view(
   let table_selection: Signal<Option<TableCellSelection>> = signal(None);
   let table_drag_anchor: Signal<Option<(String, usize, usize)>> = signal(None);
   let body_blank_marquee_ready = signal(false);
+  let marquee_origin_page: Signal<Option<(f32, f32)>> = signal(None);
   let last_click: Signal<(usize, u32, f64, u8)> = signal((0, 0, 0.0, 0));
 
   let list_ref = element_ref();
@@ -895,6 +896,7 @@ pub fn editor_view(
     table_selection,
     table_drag_anchor,
     body_blank_marquee_ready,
+    marquee_origin_page,
     last_click,
     page_width,
     editor_focused,
@@ -1553,6 +1555,52 @@ pub fn editor_view(
       let backlinks_slot_ftr = backlinks_slot.clone();
       let in_margin_press = signal(false);
 
+      // Snapshot visible block row rects whenever a child inside the body column
+      // (blank tail of a short line, empty paragraph, block gap/gutter, or bottom
+      // append zone) arms `marquee_origin_page`, because `PressDown` does not bubble
+      // up to `mica-rich-editor` in `nsh-core`.
+      {
+        let layouts_child_m = layouts_marquee.clone();
+        let rects_child_m = rects_down.clone();
+        let m_child_clear = marquee.clone();
+        let pref_child = paper_ref;
+        effect(move || {
+          if marquee_origin_page.get().is_none() {
+            return;
+          }
+          if m_child_clear.is_active_untracked() {
+            m_child_clear.clear();
+          }
+          let (vw, _) = paper_bounds.get_untracked();
+          let eff = page_width.get_untracked();
+          let room = (vw - 24.0).max(0.0);
+          let col = crate::page_width::rendered_column_width(eff, room);
+          let col_left = ((vw - col) * 0.5).max(0.0);
+          let col_right = col_left + col;
+          let content_l = col_left + 20.0;
+          let content_r = (col_right - 20.0).max(content_l + 1.0);
+          let row_refs = layouts_child_m.borrow().snapshot_row_refs();
+          let rects_slot = rects_child_m.clone();
+          spawn(async move {
+            let Some(pm) = pref_child.measure().await else {
+              return;
+            };
+            let mut measured = Vec::with_capacity(row_refs.len());
+            for (_bid, idx, rref) in row_refs {
+              if let Some(rm) = rref.measure().await {
+                let top = rm.page.y.0 - pm.page.y.0;
+                let bottom = top + rm.frame.size.height.0;
+                if bottom > top {
+                  measured.push((idx, RectF::new(content_l, top, content_r, bottom)));
+                }
+              }
+            }
+            measured.sort_by_key(|(idx, _)| *idx);
+            *rects_slot.borrow_mut() = measured;
+          });
+        });
+      }
+
       view()
         .element_ref(&paper_ref)
         .test_id("mica-rich-editor")
@@ -1640,11 +1688,19 @@ pub fn editor_view(
           }
           // 1. Live marquee rectangle drag (works BOTH from outside margins AND from
           //    blank whitespace inside the body column such as empty lines, right of
-          //    short lines, or below the last block!)
+          //    short lines, block gaps/padding, bullet gutters, or below the last block!)
           let allow_marquee =
             in_margin_press.get_untracked() || body_blank_marquee_ready.get_untracked();
+          let origin_local = marquee_origin.get_untracked().or_else(|| {
+            marquee_origin_page.get_untracked().map(|(px0, py0)| {
+              (
+                e.position.x.0 - (e.page_position.x.0 - px0),
+                e.position.y.0 - (e.page_position.y.0 - py0),
+              )
+            })
+          });
           if allow_marquee
-            && let Some((ox, oy)) = marquee_origin.get_untracked()
+            && let Some((ox, oy)) = origin_local
           {
             let cx = e.position.x.0;
             let cy = e.position.y.0;
@@ -1718,8 +1774,11 @@ pub fn editor_view(
               bubble_recalc_rev.update(|v| *v = v.wrapping_add(1));
             }
           }
-          if marquee_origin.get_untracked().is_some() {
+          if marquee_origin.get_untracked().is_some()
+            || marquee_origin_page.get_untracked().is_some()
+          {
             marquee_origin.set(None);
+            marquee_origin_page.set(None);
             m_up.end_drag();
           }
           in_margin_press.set(false);
@@ -1978,8 +2037,9 @@ pub fn editor_view(
                       .w_full()
                       .h(px(180.0))
                       .cursor(Cursor::Text)
-                      .on_press_down(move |_: &PressEvent| {
+                      .on_press_down(move |e: &PressEvent| {
                         body_blank_marquee_ready.set(true);
+                        marquee_origin_page.set(Some((e.page_position.x.0, e.page_position.y.0)));
                       })
                       .on_press({
                         let br_click = br_footer.clone();

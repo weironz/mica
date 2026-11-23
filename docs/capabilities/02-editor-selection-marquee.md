@@ -40,6 +40,7 @@
 - **反例 1（向上拖选卡在表格/分割线/页边距）**：仅在正文 `text_box` 内绑定 `on_mouse_move`，鼠标移到表格、分割线或左右留白时事件链断裂导致拖选卡死。必须将跨块 `on_mouse_move` 提升到整行全宽外层容器及 header/footer。
 - **反例 2（正文内框选失效）**：`starts_marquee_in_margin` 仅允许页边距且把 `content_bottom` 误传为整个视口高度 `vh`，导致底部和正文内空白处全部无法起框选。
 - **反例 3（点击空白处选中不释放）**：页边距 `on_press_down` 只清了 marquee 没调 `bridge.clear_selection()`，导致蓝色文本高亮和顶部菜单一直挂在屏幕上。
+- **反例 4（`nsh-core` 中 `PressDown` 不向父级冒泡导致正文内无法起框选）**：虽然子元素（短行右侧留白、空行、底部空白区）设置了 `body_blank_marquee_ready = true`，但 `PressDown` 不会冒泡到外层 `mica-rich-editor`，导致外层的 `marquee_origin` 始终为 `None`、行矩形也未快照，只能在正文外边缘起框选。根治方案：子元素及行外层容器统一写入 `marquee_origin_page = Some(e.page_position)`，外层通过 `effect` 自动快照可见块矩形，并在 `on_mouse_move` 中用 `e.position - (e.page_position - origin_page)` 零误差还原局部起点。
 
 ---
 
@@ -60,3 +61,4 @@
 ## 演进记录
 
 - **2026-11-23**：沉淀跨块全宽拖选、正文内空白区左键框选升级、点击外区即时释放选区等契约（对应 `72d84877` / `ff104b87`）。
+- **2026-11-23（根因修复）**：修复 `nsh-core` 中 `PressDown` 不向父级冒泡导致正文范围内空白区、行间隙、列表前缀槽与底部区域均无法启动框选的根因，改为通过 `marquee_origin_page` 统一透传起点并自动快照块矩形。

@@ -106,6 +106,7 @@ pub struct BlockRenderEnv {
   pub table_selection: Signal<Option<TableCellSelection>>,
   pub table_drag_anchor: Signal<Option<(String, usize, usize)>>,
   pub body_blank_marquee_ready: Signal<bool>,
+  pub marquee_origin_page: Signal<Option<(f32, f32)>>,
   pub last_click: Signal<(usize, u32, f64, u8)>,
   pub page_width: Signal<f32>,
   pub editor_focused: Signal<bool>,
@@ -136,6 +137,12 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
   let layouts_drag = env.layouts.clone();
   let drag_anchor = env.drag_anchor;
   let table_drag_guard = env.table_drag_anchor;
+  let blank_marquee_guard = env.body_blank_marquee_ready;
+  let marquee_origin_page_row = env.marquee_origin_page;
+  let br_row_clear = env.bridge.clone();
+  let focused_code_row = env.focused_code_block;
+  let focused_cell_row = env.focused_table_cell;
+  let table_sel_row = env.table_selection;
   let page_width = env.page_width;
   let dark_mode = env.dark_mode;
   let marquee_selected = env.marquee_selected;
@@ -161,6 +168,19 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
         row_width.set(b.size.width.0);
       }
     })
+    // Pressing anywhere on a row outside interactive text/controls (left/right
+    // margins, 24px body padding, vertical block gaps, bullet gutters, indent
+    // space, or around media/diagram cards) arms body-area block marquee drag!
+    .on_press_down(move |e: &PressEvent| {
+      br_row_clear.clear_selection();
+      drag_anchor.set(None);
+      focused_code_row.set(None);
+      focused_cell_row.set(None);
+      table_sel_row.set(None);
+      table_drag_guard.set(None);
+      blank_marquee_guard.set(true);
+      marquee_origin_page_row.set(Some((e.page_position.x.0, e.page_position.y.0)));
+    })
     // Unified full-width cross-block drag handler: covers left/right margins AND
     // every block kind (prose, tables, dividers, code blocks, images, boards,
     // Mermaid, math) so upward/downward drag selection NEVER stalls!
@@ -168,7 +188,7 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
       if e.pressed_button != Some(MouseButton::Left) {
         return;
       }
-      if table_drag_guard.get_untracked().is_some() {
+      if table_drag_guard.get_untracked().is_some() || blank_marquee_guard.get_untracked() {
         return;
       }
       let Some(anchor) = drag_anchor.get_untracked() else {
@@ -387,6 +407,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
     let table_sel = env.table_selection;
     let table_drag = env.table_drag_anchor;
     let blank_marquee_ready = env.body_blank_marquee_ready;
+    let marquee_origin_page = env.marquee_origin_page;
     let editor_focused = env.editor_focused;
     let caret_blink_on = env.caret_blink_on;
     let sink_clear_rev = env.sink_clear_rev;
@@ -449,13 +470,15 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
                 .iter()
                 .find(|l| ly < l.y.0 + l.height.0.max(1.0))
                 .unwrap_or_else(|| info.lines.last().unwrap());
-              e.position.x.0 > hit_line.x.0 + hit_line.width.0 + 18.0
+              e.position.x.0 > hit_line.x.0 + hit_line.width.0 + 8.0
             }
           } else {
             false
           }
         };
-        blank_marquee_ready.set(in_blank_tail && e.clicks <= 1);
+        let arm_marquee = in_blank_tail && e.clicks <= 1;
+        blank_marquee_ready.set(arm_marquee);
+        marquee_origin_page.set(arm_marquee.then_some((e.page_position.x.0, e.page_position.y.0)));
 
         let off = hit_offset(&layouts_click, &bid_click, &font_click, &measure_click, e.position.x.0, e.position.y.0);
         let click_count = e.clicks.clamp(1, 3);
@@ -495,7 +518,7 @@ fn render_prose_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock)
         br_click.request_focus();
       })
       .on_mouse_move(move |e: &MouseEvent| {
-        if e.pressed_button != Some(MouseButton::Left) {
+        if e.pressed_button != Some(MouseButton::Left) || blank_marquee_ready.get_untracked() {
           return;
         }
         let Some(anchor) = drag_anchor_m.get_untracked() else {
