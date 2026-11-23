@@ -127,6 +127,8 @@ struct StoredServerCredential {
   origin: String,
   email: String,
   token: String,
+  #[serde(default)]
+  refresh_token: String,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -426,12 +428,35 @@ impl VaultStore {
       .collect()
   }
 
+  /// Look up the full saved credential `(email, access_token, refresh_token)` for `origin`.
+  pub fn saved_server_credential_full(&self, origin: &str) -> Option<(String, String, String)> {
+    let norm_origin = normalize_origin(origin);
+    self
+      .get_pref(PREF_SERVER_CREDENTIALS)
+      .and_then(|raw| serde_json::from_str::<Vec<StoredServerCredential>>(&raw).ok())
+      .unwrap_or_default()
+      .into_iter()
+      .find(|c| c.origin == norm_origin)
+      .map(|c| (c.email, c.token, c.refresh_token))
+  }
+
   /// Upsert saved credentials `(origin, email, token)` for a cloud server.
   pub fn save_server_credential(
     &self,
     origin: &str,
     email: &str,
     token: &str,
+  ) -> Result<(), String> {
+    self.save_server_credential_with_refresh(origin, email, token, "")
+  }
+
+  /// Upsert saved credentials `(origin, email, access_token, refresh_token)` for a cloud server.
+  pub fn save_server_credential_with_refresh(
+    &self,
+    origin: &str,
+    email: &str,
+    token: &str,
+    refresh_token: &str,
   ) -> Result<(), String> {
     let norm_origin = normalize_origin(origin);
     if norm_origin.is_empty() {
@@ -445,6 +470,7 @@ impl VaultStore {
       origin: norm_origin.clone(),
       email: email.trim().to_string(),
       token: token.to_string(),
+      refresh_token: refresh_token.to_string(),
     };
     if let Some(existing) = entries.iter_mut().find(|c| c.origin == norm_origin) {
       *existing = updated;
@@ -560,6 +586,81 @@ impl VaultStore {
       }
     }
     views
+  }
+
+  /// List all views belonging to a single `(origin, ws_id)`, ordered by `position`.
+  pub fn list_workspace_views(&self, origin: &str, ws_id: Uuid) -> Vec<View> {
+    self
+      .list_views(origin)
+      .into_iter()
+      .filter(|v| v.workspace_id == ws_id)
+      .collect()
+  }
+
+  /// Mirror an authoritative cloud view list for `(origin, ws_id)` into the local
+  /// vault: removes stale rows belonging to `(origin, ws_id)` that are absent from
+  /// `views`, then upserts folders before pages so parent references stay valid.
+  pub fn replace_workspace_views(
+    &self,
+    origin: &str,
+    ws_id: Uuid,
+    views: &[View],
+  ) -> Result<(), String> {
+    let keep_ids: HashSet<Uuid> = views.iter().map(|v| v.id).collect();
+    let existing = self.list_workspace_views(origin, ws_id);
+    for old in existing {
+      if !keep_ids.contains(&old.id) {
+        let _ = self.purge_view(origin, old.id);
+      }
+    }
+
+    // Save folders before pages so `validate_memory_parent` / `ensure_valid_parent`
+    // always observe folder parents first.
+    let mut folders: Vec<View> = Vec::new();
+    let mut pages: Vec<View> = Vec::new();
+    for raw in views {
+      let mut row = raw.clone();
+      if row.workspace_id.is_nil() {
+        row.workspace_id = ws_id;
+      }
+      if row.object_type == "folder" {
+        folders.push(row);
+      } else {
+        pages.push(row);
+      }
+    }
+
+    // Topologically insert folders (parents before children).
+    let mut remaining = folders;
+    let mut saved_ids: HashSet<Uuid> = HashSet::new();
+    while !remaining.is_empty() {
+      let before = remaining.len();
+      let mut next_round = Vec::new();
+      for folder in remaining {
+        let parent_ready = folder
+          .parent_view_id
+          .is_none_or(|pid| saved_ids.contains(&pid) || !keep_ids.contains(&pid));
+        if parent_ready {
+          let _ = self.save_view(origin, &folder);
+          saved_ids.insert(folder.id);
+        } else {
+          next_round.push(folder);
+        }
+      }
+      if next_round.len() == before {
+        // Fallback if there's an unexpected cycle in remote metadata: save as-is.
+        for folder in next_round {
+          let _ = self.save_view(origin, &folder);
+        }
+        break;
+      }
+      remaining = next_round;
+    }
+
+    for page in &pages {
+      let _ = self.save_view(origin, page);
+    }
+    Ok(())
   }
 
   /// Upsert a view under `origin`. Enforces folder-only parenting and cycle
@@ -1036,6 +1137,50 @@ impl VaultStore {
       mem.workspaces.insert(key, (trimmed.to_string(), position));
     }
     let _ = self.set_pref(&format!("workspaceName:{origin}:{ws_id}"), trimmed);
+    Ok(())
+  }
+
+  /// Mirror an authoritative list of `(workspace_id, name)` entries for `origin`,
+  /// preserving their remote order and pruning workspaces removed on the server.
+  pub fn replace_origin_workspaces(
+    &self,
+    origin: &str,
+    entries: &[(Uuid, String)],
+  ) -> Result<(), String> {
+    let keep: HashSet<Uuid> = entries.iter().map(|(id, _)| *id).collect();
+    for (existing_id, _) in self.list_workspaces(origin) {
+      if !keep.contains(&existing_id) {
+        let _ = self.delete_workspace(origin, existing_id);
+      }
+    }
+    for (idx, (ws_id, name)) in entries.iter().enumerate() {
+      let trimmed = name.trim();
+      if trimmed.is_empty() {
+        continue;
+      }
+      let pos = format!("{:010}", (idx as i64 + 1) * 10);
+      #[cfg(not(target_arch = "wasm32"))]
+      {
+        let store = self.lock_store()?;
+        store
+          .save_workspace(&LocalWorkspace {
+            id: ws_id.to_string(),
+            name: trimmed.to_string(),
+            position: pos,
+            origin: origin.to_string(),
+            role: "member".to_string(),
+          })
+          .map_err(|e| e.to_string())?;
+      }
+      #[cfg(target_arch = "wasm32")]
+      {
+        let mut mem = self.lock_memory()?;
+        mem
+          .workspaces
+          .insert((origin.to_string(), *ws_id), (trimmed.to_string(), pos));
+      }
+      let _ = self.set_pref(&format!("workspaceName:{origin}:{ws_id}"), trimmed);
+    }
     Ok(())
   }
 

@@ -24,6 +24,7 @@ pub mod block_marquee;
 pub mod block_views;
 pub mod board_view;
 pub mod clipboard_platform;
+pub mod cloud_sync;
 pub mod comment_panel;
 pub mod editor_bridge;
 pub mod editor_positioning;
@@ -106,21 +107,21 @@ use crate::{
   world_switcher::{LOCAL_ORIGIN, WorldSwitcherState},
 };
 
-const MODE_DOC: u8 = 0;
+pub(crate) const MODE_DOC: u8 = 0;
 const MODE_BOARD: u8 = 1;
 const DEFAULT_BOARD_ID: &str = "workspace-default-board";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, PartialEq, Eq)]
-struct OpenTab {
-  doc_id: Uuid,
-  title: String,
+pub(crate) struct OpenTab {
+  pub(crate) doc_id: Uuid,
+  pub(crate) title: String,
   history: Vec<(Uuid, String)>,
   cursor: usize,
 }
 
 impl OpenTab {
-  fn single(doc_id: Uuid, title: String) -> Self {
+  pub(crate) fn single(doc_id: Uuid, title: String) -> Self {
     Self {
       doc_id,
       title: title.clone(),
@@ -145,10 +146,11 @@ impl OpenTab {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct WorkspaceEntry {
-  id: Uuid,
-  name: String,
-  origin: String,
+pub(crate) struct WorkspaceEntry {
+  pub(crate) id: Uuid,
+  pub(crate) name: String,
+  pub(crate) origin: String,
+  pub(crate) page_count: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -333,7 +335,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     initial_folder_name = folder
       .map(|v| v.name.clone())
       .unwrap_or_else(|| "工作区".to_string());
-    if let Some(page) = views.iter().find(|v| v.object_type == "page" && !v.is_deleted) {
+    if let Some(page) = views.iter().find(|v| cloud_sync::is_page_view(v) && !v.is_deleted) {
       initial_doc_id = page.object_id;
       initial_title = page.name.clone();
     } else {
@@ -349,7 +351,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
 
   let mut docs_map: HashMap<Uuid, String> = HashMap::new();
   for v in &views {
-    if v.object_type == "page" {
+    if cloud_sync::is_page_view(v) {
       let md = vault.load_markdown(&initial_origin, v.object_id).unwrap_or_default();
       docs_map.insert(v.object_id, md);
     }
@@ -361,17 +363,33 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let (init_live, init_trashed) = collect_all_views(&tree_model);
   let tree = Rc::new(RefCell::new(tree_model));
 
-  let initial_ws_name = vault
-    .list_workspaces(&initial_origin)
-    .into_iter()
+  let saved_local_ws = vault.list_workspaces(&initial_origin);
+  let initial_ws_name = saved_local_ws
+    .iter()
     .find(|(id, _)| *id == ws_id)
-    .map(|(_, n)| n)
+    .map(|(_, n)| n.clone())
     .unwrap_or_else(|| "Mica 本地工作区".to_string());
-  let workspaces = signal(vec![WorkspaceEntry {
-    id: ws_id,
-    name: initial_ws_name.clone(),
-    origin: initial_origin.clone(),
-  }]);
+  let mut initial_ws_entries: Vec<WorkspaceEntry> = saved_local_ws
+    .into_iter()
+    .map(|(id, name)| WorkspaceEntry {
+      id,
+      name,
+      origin: initial_origin.clone(),
+      page_count: None,
+    })
+    .collect();
+  if !initial_ws_entries.iter().any(|w| w.id == ws_id) {
+    initial_ws_entries.insert(
+      0,
+      WorkspaceEntry {
+        id: ws_id,
+        name: initial_ws_name.clone(),
+        origin: initial_origin.clone(),
+        page_count: None,
+      },
+    );
+  }
+  let workspaces = signal(initial_ws_entries);
   let active_workspace_id = signal(ws_id);
   let active_folder_id = signal(default_folder_id);
 
@@ -582,6 +600,12 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let saved_creds: Vec<(String, String)> = vault
     .saved_server_credentials()
     .into_iter()
+    .filter(|(orig, _, tok)| {
+      !tok.trim().is_empty()
+        || vault
+          .saved_server_credential_full(orig)
+          .is_some_and(|(_, _, rt)| !rt.trim().is_empty())
+    })
     .map(|(orig, email, _)| (orig, email))
     .collect();
   let signed_in_origins_sig = signal(saved_creds);
@@ -598,6 +622,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     access_token: None,
     email: None,
   })));
+  let auth_gen = signal(0u64);
+  let probe_gen = signal(0u64);
+  let check_gen = signal(0u64);
+  let cloud_load_gen = signal(0u64);
+  let doc_fetch_gen = signal(0u64);
+  let doc_save_gen = signal(0u64);
+  let doc_dirty_gen = signal(0u64);
 
   // Share dialog state
   let share_loading = signal(false);
@@ -669,14 +700,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     inline_ai_open.set(true);
   })));
 
-  // Persist editor changes -> docs_store + SQLite Vault
+  // Persist editor changes -> docs_store + SQLite Vault (+ debounced cloud PATCH)
   {
     let vault_p = vault.clone();
     let docs_p = docs_store.clone();
     let tree_p = tree.clone();
+    let cc_p = cloud_connector.clone();
     bridge.set_on_persist(Rc::new(move |md: String, _crdt: Option<Vec<u8>>| {
+      doc_dirty_gen.set(doc_dirty_gen.get_untracked().wrapping_add(1));
       if let Some(doc_id) = active_doc.get_untracked() {
         let orig = active_origin.get_untracked();
+        let ws_id = active_workspace_id.get_untracked();
         docs_p.borrow_mut().insert(doc_id, md.clone());
         let _ = vault_p.save_markdown(&orig, doc_id, &md);
         backlinks_sig.set(compute_backlinks_for(
@@ -685,6 +719,39 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           Some(doc_id),
           &active_title.get_untracked(),
         ));
+        if cloud_sync::is_cloud_origin(&orig)
+          && is_cloud_signed_in.get_untracked()
+          && !md.trim().is_empty()
+        {
+          let epoch = doc_save_gen.get_untracked().wrapping_add(1);
+          doc_save_gen.set(epoch);
+          let (cc_a, v_a, email_req) = (cc_p.clone(), vault_p.clone(), account_email.get_untracked());
+          spawn(async move {
+            timer(std::time::Duration::from_millis(600)).await;
+            if doc_save_gen.get_untracked() != epoch
+              || active_origin.get_untracked() != orig
+              || active_workspace_id.get_untracked() != ws_id
+            {
+              return;
+            }
+            let mut conn = cc_a.borrow().clone();
+            let res = net::run_blocking(move || {
+              cloud_sync::push_cloud_document(&mut conn, ws_id, doc_id, &md).map(|r| (conn, r))
+            })
+            .await;
+            if active_origin.get_untracked() != orig {
+              return;
+            }
+            match res {
+              Ok((conn, rot)) if rot.is_some() => {
+                *cc_a.borrow_mut() = conn;
+                cloud_sync::persist_refreshed_tokens(&v_a, &orig, &email_req, rot);
+              }
+              Ok(_) => {}
+              Err(err) => cloud_status.set(format!("云端保存失败：{err}")),
+            }
+          });
+        }
       }
     }));
   }
@@ -765,8 +832,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let v = vault.clone();
     let favs = favorites.clone();
     let ref_snaps = refresh_snapshots.clone();
+    let cc = cloud_connector.clone();
     Rc::new(move |doc_id: Uuid, title: String, record_history: bool, force_new_tab: bool| {
       let orig = active_origin.get_untracked();
+      let ws_id = active_workspace_id.get_untracked();
       let md = docs
         .borrow()
         .get(&doc_id)
@@ -794,32 +863,72 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let mut tabs = open_tabs.get_untracked();
       if force_new_tab {
         if let Some(pos) = tabs.iter().position(|t| t.doc_id == doc_id) {
-          tabs[pos].title = title;
+          tabs[pos].title = title.clone();
           active_tab_idx.set(pos);
         } else {
-          tabs.push(OpenTab::single(doc_id, title));
+          tabs.push(OpenTab::single(doc_id, title.clone()));
           active_tab_idx.set(tabs.len() - 1);
         }
       } else if let Some(pos) = tabs.iter().position(|t| t.doc_id == doc_id) {
-        tabs[pos].title = title;
+        tabs[pos].title = title.clone();
         active_tab_idx.set(pos);
       } else if record_history {
         if tabs.is_empty() {
-          tabs.push(OpenTab::single(doc_id, title));
+          tabs.push(OpenTab::single(doc_id, title.clone()));
           active_tab_idx.set(0);
         } else {
           let cur = active_tab_idx.get_untracked().min(tabs.len() - 1);
-          tabs[cur].navigate(doc_id, title);
+          tabs[cur].navigate(doc_id, title.clone());
         }
       } else if !tabs.is_empty() {
         let cur = active_tab_idx.get_untracked().min(tabs.len() - 1);
         tabs[cur].doc_id = doc_id;
-        tabs[cur].title = title;
+        tabs[cur].title = title.clone();
       }
       open_tabs.set(tabs);
       active_mode.set(MODE_DOC);
       if is_narrow.get_untracked() {
         sidebar_open.set(false);
+      }
+
+      if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() {
+        let fetch_epoch = doc_fetch_gen.get_untracked().wrapping_add(1);
+        doc_fetch_gen.set(fetch_epoch);
+        let dirty_snap = doc_dirty_gen.get_untracked();
+        let (cc_a, docs_a, v_a, br_a, tree_a) =
+          (cc.clone(), docs.clone(), v.clone(), br.clone(), tree_ref.clone());
+        let email_req = account_email.get_untracked();
+        spawn(async move {
+          let mut conn = cc_a.borrow().clone();
+          let res = net::run_blocking(move || {
+            cloud_sync::fetch_cloud_document(&mut conn, ws_id, doc_id).map(|(m, r)| (conn, m, r))
+          })
+          .await;
+          if doc_fetch_gen.get_untracked() != fetch_epoch
+            || active_origin.get_untracked() != orig
+            || active_workspace_id.get_untracked() != ws_id
+            || active_doc.get_untracked() != Some(doc_id)
+          {
+            return;
+          }
+          if let Ok((conn, remote_md, rot)) = res {
+            if rot.is_some() {
+              *cc_a.borrow_mut() = conn;
+              cloud_sync::persist_refreshed_tokens(&v_a, &orig, &email_req, rot);
+            }
+            let _ = v_a.save_markdown(&orig, doc_id, &remote_md);
+            docs_a.borrow_mut().insert(doc_id, remote_md.clone());
+            if doc_dirty_gen.get_untracked() == dirty_snap && remote_md != md {
+              br_a.load_markdown(&remote_md);
+            }
+            backlinks_sig.set(compute_backlinks_for(
+              &tree_a.borrow(),
+              &docs_a.borrow(),
+              Some(doc_id),
+              &title,
+            ));
+          }
+        });
       }
     })
   };
@@ -890,25 +999,79 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     })
   };
 
+  let cloud_session = cloud_sync::CloudSessionHandles {
+    vault: vault.clone(),
+    tree: tree.clone(),
+    docs_store: docs_store.clone(),
+    favorites: favorites.clone(),
+    bridge: bridge.clone(),
+    cloud_connector: cloud_connector.clone(),
+    active_origin,
+    active_workspace_id,
+    active_folder_id,
+    active_folder_name,
+    workspace_name,
+    workspaces,
+    active_doc,
+    active_doc_id_str,
+    active_title,
+    active_is_favorite,
+    open_tabs,
+    active_tab_idx,
+    active_mode,
+    server_url,
+    known_servers_sig,
+    signed_in_origins_sig,
+    selected_cloud_origin,
+    world_active_origin,
+    world_switcher_open,
+    world_busy,
+    world_error,
+    world_info,
+    account_name,
+    account_email,
+    is_cloud_signed_in,
+    cloud_status,
+    auth_gen,
+    cloud_load_gen,
+    doc_fetch_gen,
+    doc_save_gen,
+    refresh_snapshots: refresh_snapshots.clone(),
+    refresh_favorite_pages: refresh_favorite_pages.clone(),
+    sync_tree_snapshots: sync_tree_snapshots.clone(),
+    open_doc_internal: open_doc_internal.clone(),
+  };
+
   let create_page_in_parent: Rc<dyn Fn(Option<Uuid>, String, String, bool)> = {
     let tree_ref = tree.clone();
     let docs = docs_store.clone();
     let v = vault.clone();
     let inner = open_doc_internal.clone();
     let sync_t = sync_tree_snapshots.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |parent: Option<Uuid>, name: String, markdown: String, in_new_tab: bool| {
       let orig = active_origin.get_untracked();
       let cur_ws = active_workspace_id.get_untracked();
+      let valid_parent = parent.filter(|&pid| {
+        tree_ref
+          .borrow()
+          .get(pid)
+          .is_some_and(|row| row.object_type == "folder" && !row.is_deleted)
+      });
+      if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !cur_ws.is_nil() {
+        cs.create_cloud_page(orig, cur_ws, valid_parent, name, markdown, in_new_tab);
+        return;
+      }
       let new_doc_id = Uuid::new_v4();
       let count = tree_ref.borrow().visible_rows().len() + 1;
       let pos = format!("{:010}", count * 10);
-      let view_row = make_view(cur_ws, new_doc_id, &name, "page", parent, &pos);
+      let view_row = make_view(cur_ws, new_doc_id, &name, "page", valid_parent, &pos);
       let _ = v.save_view(&orig, &view_row);
       let _ = v.save_markdown(&orig, new_doc_id, &markdown);
       {
         let mut t = tree_ref.borrow_mut();
         t.upsert_view(view_row);
-        if let Some(pid) = parent {
+        if let Some(pid) = valid_parent {
           t.set_expanded(pid, true);
         }
       }
@@ -921,7 +1084,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let create_page_with_content: Rc<dyn Fn(String, String)> = {
     let create = create_page_in_parent.clone();
     Rc::new(move |name: String, markdown: String| {
-      create(Some(active_folder_id.get_untracked()), name, markdown, false);
+      let fid = active_folder_id.get_untracked();
+      create((!fid.is_nil()).then_some(fid), name, markdown, false);
     })
   };
 
@@ -944,19 +1108,30 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let tree_ref = tree.clone();
     let v = vault.clone();
     let sync_t = sync_tree_snapshots.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |parent: Option<Uuid>, custom_name: Option<String>| {
       let orig = active_origin.get_untracked();
       let cur_ws = active_workspace_id.get_untracked();
-      let fid = Uuid::new_v4();
       let count = tree_ref.borrow().visible_rows().len() + 1;
       let name = custom_name.unwrap_or_else(|| format!("文件夹 {count}"));
-      let folder = make_view(cur_ws, fid, &name, "folder", parent, &format!("{:010}", count * 10));
+      let valid_parent = parent.filter(|&pid| {
+        tree_ref
+          .borrow()
+          .get(pid)
+          .is_some_and(|row| row.object_type == "folder" && !row.is_deleted)
+      });
+      if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() && !cur_ws.is_nil() {
+        cs.create_cloud_folder(orig, cur_ws, valid_parent, name);
+        return Uuid::nil();
+      }
+      let fid = Uuid::new_v4();
+      let folder = make_view(cur_ws, fid, &name, "folder", valid_parent, &format!("{:010}", count * 10));
       let _ = v.save_view(&orig, &folder);
       {
         let mut t = tree_ref.borrow_mut();
         t.upsert_view(folder.clone());
         t.set_expanded(folder.id, true);
-        if let Some(pid) = parent {
+        if let Some(pid) = valid_parent {
           t.set_expanded(pid, true);
         }
       }
@@ -1045,10 +1220,11 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let sync_t = sync_tree_snapshots.clone();
     Rc::new(move || {
       let orig = active_origin.get_untracked();
-      let views = v.list_views(&orig);
+      let cur_ws = active_workspace_id.get_untracked();
+      let views = v.list_workspace_views(&orig, cur_ws);
       let mut next_docs = docs.borrow().clone();
       for row in &views {
-        if row.object_type == "page"
+        if cloud_sync::is_page_view(row)
           && !next_docs.contains_key(&row.object_id)
           && let Some(md) = v.load_markdown(&orig, row.object_id)
         {
@@ -1078,8 +1254,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     let v = vault.clone();
     let ref_favs = refresh_favorite_pages.clone();
     let sync_t = sync_tree_snapshots.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |vid: Uuid, next_name: String| {
       let orig = active_origin.get_untracked();
+      let cur_ws = active_workspace_id.get_untracked();
       let updated = {
         let mut t = tree_ref.borrow_mut();
         t.get(vid).cloned().map(|mut row| {
@@ -1091,6 +1269,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       };
       if let Some(row) = updated {
         let _ = v.save_view(&orig, &row);
+        let rename_req = next_name.clone();
+        cs.spawn_cloud_op("云端重命名", move |c| c.update_view(cur_ws, vid, &rename_req, None).map(|_| ()));
         if active_doc.get_untracked() == Some(row.object_id) {
           active_title.set(next_name.clone());
         }
@@ -1110,30 +1290,39 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let on_trash_view: Rc<dyn Fn(Uuid)> = {
     let v = vault.clone();
     let reload = reload_tree_from_vault.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |vid: Uuid| {
       let orig = active_origin.get_untracked();
+      let cur_ws = active_workspace_id.get_untracked();
       let _ = v.trash_view_subtree(&orig, vid);
       reload();
+      cs.spawn_cloud_op("云端移入回收站", move |c| c.delete_view(cur_ws, vid));
     })
   };
 
   let on_restore_view: Rc<dyn Fn(Uuid)> = {
     let v = vault.clone();
     let reload = reload_tree_from_vault.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |vid: Uuid| {
       let orig = active_origin.get_untracked();
+      let cur_ws = active_workspace_id.get_untracked();
       let _ = v.restore_view_subtree(&orig, vid);
       reload();
+      cs.spawn_cloud_op("云端恢复页面", move |c| c.restore_view(cur_ws, vid));
     })
   };
 
   let on_purge_view: Rc<dyn Fn(Uuid)> = {
     let v = vault.clone();
     let reload = reload_tree_from_vault.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |vid: Uuid| {
       let orig = active_origin.get_untracked();
+      let cur_ws = active_workspace_id.get_untracked();
       let _ = v.purge_view_subtree(&orig, vid);
       reload();
+      cs.spawn_cloud_op("云端永久删除", move |c| c.purge_view(cur_ws, vid));
     })
   };
 
@@ -1152,10 +1341,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   let on_reorder_views: Rc<dyn Fn(Option<Uuid>, Vec<Uuid>)> = {
     let v = vault.clone();
     let reload = reload_tree_from_vault.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |parent_id: Option<Uuid>, ordered_ids: Vec<Uuid>| {
       let orig = active_origin.get_untracked();
+      let cur_ws = active_workspace_id.get_untracked();
       if v.reorder_views(&orig, parent_id, &ordered_ids).is_ok() {
         reload();
+        cs.spawn_cloud_op("云端排序同步", move |c| {
+          c.reorder_views(cur_ws, parent_id, &ordered_ids)
+        });
       }
     })
   };
@@ -1222,22 +1416,25 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   };
 
   let on_switch_workspace: Rc<dyn Fn(WorkspaceEntry)> = {
-    let tree_ref = tree.clone();
-    let docs = docs_store.clone();
     let v = vault.clone();
-    let br = bridge.clone();
-    let favs = favorites.clone();
-    let ref_snaps = refresh_snapshots.clone();
-    let ref_favs = refresh_favorite_pages.clone();
-    let sync_t = sync_tree_snapshots.clone();
+    let cs = cloud_session.clone();
     Rc::new(move |entry: WorkspaceEntry| {
       workspace_menu_open.set(false);
-      active_workspace_id.set(entry.id);
-      active_origin.set(entry.origin.clone());
-      workspace_name.set(entry.name.clone());
+      let mut ws_views = v.list_workspace_views(&entry.origin, entry.id);
+      if cloud_sync::is_cloud_origin(&entry.origin) {
+        cs.apply_workspace_views(
+          entry.origin.clone(),
+          entry.id,
+          entry.name.clone(),
+          ws_views,
+          None,
+          false,
+        );
+        cs.refresh_workspace(entry.origin, entry.id, entry.name, None);
+        return;
+      }
 
-      let mut ws_views = v.list_views(&entry.origin);
-      let (fid, fname, doc_id, title) = if ws_views.is_empty() {
+      if ws_views.is_empty() {
         let fid = Uuid::new_v4();
         let did = Uuid::new_v4();
         let f = make_view(entry.id, fid, "知识库", "folder", None, "0000000010");
@@ -1246,53 +1443,18 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let _ = v.save_view(&entry.origin, &p);
         let _ = v.save_markdown(&entry.origin, did, "# 工作区首页\n\n在此开始记录。");
         ws_views = vec![f, p];
-        (fid, "知识库".to_string(), did, "工作区首页".to_string())
-      } else {
-        let f = ws_views.iter().find(|r| r.object_type == "folder" && !r.is_deleted);
-        let fid = f.map(|r| r.id).unwrap_or_else(Uuid::new_v4);
-        let fname = f.map(|r| r.name.clone()).unwrap_or_else(|| "工作区".into());
-        if let Some(p) = ws_views.iter().find(|r| r.object_type == "page" && !r.is_deleted) {
-          (fid, fname, p.object_id, p.name.clone())
-        } else {
-          let did = Uuid::new_v4();
-          let p = make_view(entry.id, did, "未命名页面", "page", Some(fid), "0000000010");
-          let _ = v.save_view(&entry.origin, &p);
-          let _ = v.save_markdown(&entry.origin, did, "");
-          ws_views.push(p);
-          (fid, fname, did, "未命名页面".to_string())
-        }
-      };
-
-      let mut next_docs = HashMap::new();
-      for row in &ws_views {
-        if row.object_type == "page" {
-          next_docs.insert(
-            row.object_id,
-            v.load_markdown(&entry.origin, row.object_id).unwrap_or_default(),
-          );
-        }
+      } else if !ws_views.iter().any(|r| cloud_sync::is_page_view(r) && !r.is_deleted) {
+        let fid = ws_views
+          .iter()
+          .find(|r| r.object_type == "folder" && !r.is_deleted)
+          .map(|r| r.id);
+        let did = Uuid::new_v4();
+        let p = make_view(entry.id, did, "未命名页面", "page", fid, "0000000010");
+        let _ = v.save_view(&entry.origin, &p);
+        let _ = v.save_markdown(&entry.origin, did, "");
+        ws_views.push(p);
       }
-      let active_md = next_docs.get(&doc_id).cloned().unwrap_or_default();
-      *docs.borrow_mut() = next_docs;
-      {
-        let mut next_tree = PageTreeModel::new(ws_views);
-        next_tree.set_expanded(fid, true);
-        *tree_ref.borrow_mut() = next_tree;
-      }
-      *favs.borrow_mut() = v.favorites_for(entry.id);
-      active_folder_id.set(fid);
-      active_folder_name.set(fname);
-      active_doc.set(Some(doc_id));
-      active_doc_id_str.set(doc_id.to_string());
-      active_title.set(title.clone());
-      active_is_favorite.set(favs.borrow().contains(&doc_id));
-      ref_snaps(doc_id);
-      ref_favs();
-      br.load_markdown(&active_md);
-      open_tabs.set(vec![OpenTab::single(doc_id, title)]);
-      active_tab_idx.set(0);
-      active_mode.set(MODE_DOC);
-      sync_t();
+      cs.apply_workspace_views(entry.origin, entry.id, entry.name, ws_views, None, false);
     })
   };
 
@@ -2089,81 +2251,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     ..RightSidebarExtras::default()
   });
 
-  // Cloud auth & probe generation tokens (per async-review-checklist: guard all cross-await writes)
-  let auth_gen = signal(0u64);
-  let probe_gen = signal(0u64);
-  let check_gen = signal(0u64);
-
   // Cloud auth handlers shared between Settings and World Switcher
   let do_cloud_login: Rc<dyn Fn(String, String, String)> = {
-    let cc = cloud_connector.clone();
-    let v = vault.clone();
-    Rc::new(move |url: String, email: String, password: String| {
-      let epoch = auth_gen.get_untracked().wrapping_add(1);
-      auth_gen.set(epoch);
-      world_busy.set(true);
-      world_error.set(String::new());
-      cloud_status.set("正在登录云端…".to_string());
-      let cc_async = cc.clone();
-      let v_async = v.clone();
-      let url_req = url.clone();
-      let email_req = email.clone();
-      spawn(async move {
-        let outcome = net::run_blocking(move || {
-          let mut conn = CloudConnector::new(CloudConfig {
-            server_url: url_req,
-            access_token: None,
-            email: Some(email_req.clone()),
-          });
-          conn.login(&email_req, &password).map(|msg| (conn, msg))
-        })
-        .await;
-        if auth_gen.get_untracked() != epoch {
-          return;
-        }
-        match outcome {
-          Ok((conn, msg)) => {
-            *cc_async.borrow_mut() = conn;
-            server_url.set(url.clone());
-            selected_cloud_origin.set(url.clone());
-            world_active_origin.set(url.clone());
-            account_email.set(email.clone());
-            account_name.set(email.clone());
-            is_cloud_signed_in.set(true);
-            cloud_status.set(format!("已登录云端：{msg}"));
-            let _ = v_async.save_server_credential(&url, &email, "");
-            let mut creds = signed_in_origins_sig.get_untracked();
-            creds.retain(|(o, _)| o != &url);
-            creds.push((url, email));
-            signed_in_origins_sig.set(creds);
-            world_switcher_open.set(false);
-          }
-          Err(err) => {
-            cloud_status.set(format!("登录失败：{err}"));
-            world_error.set(err);
-          }
-        }
-        world_busy.set(false);
-      });
-    })
+    let cs = cloud_session.clone();
+    Rc::new(move |url: String, email: String, password: String| cs.login(url, email, password))
   };
 
   let do_cloud_logout: Rc<dyn Fn()> = {
-    let cc = cloud_connector.clone();
-    Rc::new(move || {
-      auth_gen.set(auth_gen.get_untracked().wrapping_add(1));
-      world_busy.set(false);
-      *cc.borrow_mut() = CloudConnector::new(CloudConfig {
-        server_url: server_url.get_untracked(),
-        access_token: None,
-        email: None,
-      });
-      is_cloud_signed_in.set(false);
-      world_active_origin.set(LOCAL_ORIGIN.to_string());
-      account_email.set("这台设备".to_string());
-      account_name.set("本地工作区".to_string());
-      cloud_status.set("已切换回本地离线 SQLite Vault".to_string());
-    })
+    let cs = cloud_session.clone();
+    Rc::new(move || cs.logout_to_local())
   };
 
   // Settings 1120×840 Props
@@ -2212,7 +2308,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_cloud_logout: do_cloud_logout.clone(),
     on_sync_now: {
       let cc = cloud_connector.clone();
+      let cs = cloud_session.clone();
       Rc::new(move || {
+        let orig = active_origin.get_untracked();
+        if cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked() {
+          cs.enter_origin(orig, false);
+          return;
+        }
         let epoch = check_gen.get_untracked().wrapping_add(1);
         check_gen.set(epoch);
         let conn = cc.borrow().clone();
@@ -2409,48 +2511,15 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         signed_in_origins_sig.set(creds);
       })
     },
-    on_enter_signed_in: Rc::new(move |origin: String| {
-      world_active_origin.set(origin.clone());
-      server_url.set(origin);
-      is_cloud_signed_in.set(true);
-      world_switcher_open.set(false);
-    }),
+    on_enter_signed_in: {
+      let cs = cloud_session.clone();
+      Rc::new(move |origin: String| cs.enter_origin(origin, true))
+    },
     on_login: do_cloud_login,
     on_register: {
-      let cc = cloud_connector.clone();
+      let cs = cloud_session.clone();
       Rc::new(move |url: String, email: String, display_name: String, password: String| {
-        let epoch = auth_gen.get_untracked().wrapping_add(1);
-        auth_gen.set(epoch);
-        world_busy.set(true);
-        world_error.set(String::new());
-        let cc_async = cc.clone();
-        let url_req = url.clone();
-        spawn(async move {
-          let outcome = net::run_blocking(move || {
-            let conn = CloudConnector::new(CloudConfig {
-              server_url: url_req,
-              access_token: None,
-              email: Some(email.clone()),
-            });
-            conn.register(&email, &display_name, &password).map(|u| (conn, u))
-          })
-          .await;
-          if auth_gen.get_untracked() != epoch {
-            return;
-          }
-          match outcome {
-            Ok((conn, u)) => {
-              *cc_async.borrow_mut() = conn;
-              account_email.set(u.email);
-              account_name.set(u.display_name);
-              is_cloud_signed_in.set(true);
-              world_active_origin.set(url);
-              world_switcher_open.set(false);
-            }
-            Err(e) => world_error.set(e),
-          }
-          world_busy.set(false);
-        });
+        cs.register(url, email, display_name, password);
       })
     },
     on_forgot_password: Rc::new(move |url: String, email: String| {
@@ -2693,10 +2762,13 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     invite_status: signal(None),
     on_rename: {
       let v = vault.clone();
+      let cs = cloud_session.clone();
       Rc::new(move |next_name: String| {
         let cur_ws = active_workspace_id.get_untracked();
         let orig = active_origin.get_untracked();
         let _ = v.save_workspace_name(&orig, cur_ws, &next_name);
+        let name_req = next_name.clone();
+        cs.spawn_cloud_op("云端重命名工作区", move |c| c.update_workspace(cur_ws, &name_req));
         workspace_name.set(next_name.clone());
         let mut all = workspaces.get_untracked();
         for w in &mut all {
@@ -2714,6 +2786,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_delete_workspace: {
       let v = vault.clone();
       let sw = on_switch_workspace.clone();
+      let cs = cloud_session.clone();
       Rc::new(move || {
         let cur = active_workspace_id.get_untracked();
         let mut all = workspaces.get_untracked();
@@ -2722,6 +2795,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         }
         let orig = active_origin.get_untracked();
         let _ = v.delete_workspace(&orig, cur);
+        cs.spawn_cloud_op("云端删除工作区", move |c| c.delete_workspace(cur));
         all.retain(|w| w.id != cur);
         let next = all[0].clone();
         workspaces.set(all);
@@ -2747,8 +2821,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           .map(|w| WorkspaceSwitcherItem {
             id: w.id,
             name: w.name,
-            is_local: w.origin.starts_with("local"),
-            page_count: if w.id == cur_id { cur_pages } else { 0 },
+            is_local: !cloud_sync::is_cloud_origin(&w.origin),
+            page_count: if w.id == cur_id { cur_pages } else { w.page_count.unwrap_or(0) },
           })
           .collect(),
       );
@@ -2766,11 +2840,18 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_create: {
       let sw = on_switch_workspace.clone();
       let v = vault.clone();
+      let cs = cloud_session.clone();
       Rc::new(move |name: String| {
+        let cur_orig = active_origin.get_untracked();
+        if cloud_sync::is_cloud_origin(&cur_orig) && is_cloud_signed_in.get_untracked() {
+          workspace_menu_open.set(false);
+          cs.create_cloud_workspace(cur_orig, name);
+          return;
+        }
         let id = Uuid::new_v4();
-        let origin = format!("local://{id}");
+        let origin = DEFAULT_ORIGIN.to_string();
         let _ = v.save_workspace_name(&origin, id, &name);
-        let entry = WorkspaceEntry { id, name, origin };
+        let entry = WorkspaceEntry { id, name, origin, page_count: None };
         let mut all = workspaces.get_untracked();
         all.push(entry.clone());
         workspaces.set(all);
@@ -2779,6 +2860,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     },
     on_rename: {
       let v = vault.clone();
+      let cs = cloud_session.clone();
       Rc::new(move |id: Uuid, next_name: String| {
         let mut all = workspaces.get_untracked();
         for w in &mut all {
@@ -2788,6 +2870,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
           }
         }
         workspaces.set(all);
+        let name_req = next_name.clone();
+        cs.spawn_cloud_op("云端重命名工作区", move |c| c.update_workspace(id, &name_req));
         if active_workspace_id.get_untracked() == id {
           workspace_name.set(next_name);
         }
@@ -2812,6 +2896,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     on_delete: {
       let sw = on_switch_workspace.clone();
       let v = vault.clone();
+      let cs = cloud_session.clone();
       Rc::new(move |id: Uuid| {
         let mut all = workspaces.get_untracked();
         if all.len() <= 1 {
@@ -2820,6 +2905,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         if let Some(target) = all.iter().find(|w| w.id == id) {
           let _ = v.delete_workspace(&target.origin, id);
         }
+        cs.spawn_cloud_op("云端删除工作区", move |c| c.delete_workspace(id));
         all.retain(|w| w.id != id);
         let next = all[0].clone();
         workspaces.set(all);
@@ -2869,6 +2955,8 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         .collect(),
     );
   });
+
+  cloud_session.restore_startup_session();
 
   view()
     .flex_1()
@@ -3396,7 +3484,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                 cloned.id = Uuid::new_v4();
                 cloned.workspace_id = dest_ws;
                 cloned.parent_view_id = pick.parent_view_id;
-                if cloned.object_type == "page" {
+                if cloud_sync::is_page_view(&cloned) {
                   let new_obj = Uuid::new_v4();
                   let md = vt2.load_markdown(&src_orig, vrow.object_id).unwrap_or_default();
                   cloned.object_id = new_obj;

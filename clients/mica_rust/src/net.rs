@@ -7,6 +7,7 @@
 //! Blocking HTTP calls (`ureq`) are isolated behind `#[cfg(not(target_arch = "wasm32"))]`
 //! so the module compiles cleanly for both desktop and Web (`wasm32`) targets.
 
+use mica_api_types::{View, Workspace};
 use mica_client::{ApiEndpoints, ClaimTracker, WorldOrigin};
 use mica_sync::{
   MemoryMirrorStorage, SyncConfig, SyncEffect, SyncEngine, SyncEvent, SyncPhase, SyncStorage,
@@ -18,7 +19,7 @@ use uuid::Uuid;
 use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
-use mica_client::protocol::{LoginRequest, decode_auth};
+use mica_client::protocol::{LoginRequest, RefreshRequest, decode_auth, decode_views, decode_workspaces};
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::{Value, json};
 
@@ -192,6 +193,7 @@ pub struct CloudGraphPayload {
 #[derive(Debug, Clone)]
 pub struct CloudConnector {
   config: CloudConfig,
+  refresh_token: Option<String>,
   endpoints: ApiEndpoints,
   claims: ClaimTracker,
   phase: SyncPhase,
@@ -211,7 +213,49 @@ impl CloudConnector {
       WorldOrigin::Local
     };
 
-    Self { config, endpoints, claims: ClaimTracker::new(origin), phase: SyncPhase::Offline }
+    Self {
+      config,
+      refresh_token: None,
+      endpoints,
+      claims: ClaimTracker::new(origin),
+      phase: SyncPhase::Offline,
+    }
+  }
+
+  /// Attach a persisted refresh token so expired access tokens can be rotated
+  /// via `POST /api/auth/refresh`.
+  pub fn with_refresh_token(mut self, refresh_token: Option<String>) -> Self {
+    self.refresh_token = refresh_token
+      .map(|t| t.trim().to_string())
+      .filter(|t| !t.is_empty());
+    self
+  }
+
+  /// Active JWT access token, if authenticated.
+  pub fn access_token(&self) -> Option<&str> {
+    self
+      .config
+      .access_token
+      .as_deref()
+      .map(str::trim)
+      .filter(|t| !t.is_empty())
+  }
+
+  /// Active refresh token, if one was issued at login/refresh.
+  pub fn refresh_token(&self) -> Option<&str> {
+    self
+      .refresh_token
+      .as_deref()
+      .map(str::trim)
+      .filter(|t| !t.is_empty())
+  }
+
+  /// Return `true` when an error string indicates an HTTP 401 / missing auth
+  /// condition where session refresh or re-authentication is required.
+  pub fn is_unauthorized_error(err: &str) -> bool {
+    err.contains("401")
+      || err.contains("Unauthorized")
+      || err.contains("authentication required")
   }
 
   /// Probe `GET /api/health` on the configured server.
@@ -293,6 +337,7 @@ impl CloudConnector {
       }
 
       self.config.access_token = Some(auth.access_token);
+      self.refresh_token = (!auth.refresh_token.trim().is_empty()).then_some(auth.refresh_token);
       self.config.email = Some(auth.user.email.clone());
       self.claims.switch_account(WorldOrigin::Cloud {
         server_url: self.endpoints.base_url().to_string(),
@@ -303,6 +348,361 @@ impl CloudConnector {
     {
       let _ = (email_trimmed, password);
       Err("blocking HTTP login is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Rotate an expired JWT access token via `POST /api/auth/refresh`.
+  pub fn refresh_session(&mut self) -> Result<(), String> {
+    self.require_server()?;
+    let refresh_tok = self
+      .refresh_token()
+      .map(str::to_string)
+      .ok_or_else(|| "refresh token is unavailable".to_string())?;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let payload = RefreshRequest { refresh_token: refresh_tok };
+      let mut resp = http_agent(LOGIN_TIMEOUT_SECS)
+        .post(&self.endpoints.refresh())
+        .send_json(&payload)
+        .map_err(|e| format!("token refresh failed: {e}"))?;
+      let body = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| format!("failed to read refresh response: {e}"))?;
+      let auth = decode_auth(&body).map_err(|e| format!("invalid refresh response: {e}"))?;
+      self.config.access_token = Some(auth.access_token);
+      if !auth.refresh_token.trim().is_empty() {
+        self.refresh_token = Some(auth.refresh_token);
+      }
+      self.config.email = Some(auth.user.email);
+      self.claims.switch_account(WorldOrigin::Cloud {
+        server_url: self.endpoints.base_url().to_string(),
+      });
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = refresh_tok;
+      Err("blocking HTTP token refresh is unavailable on wasm32".to_string())
+    }
+  }
+
+  // ── Cloud Workspaces, Views & Documents ─────────────────────────────────
+
+  /// Fetch all cloud workspaces the signed-in account belongs to (`GET /api/workspaces`).
+  pub fn list_workspaces(&self) -> Result<Vec<Workspace>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_get("/api/workspaces", API_TIMEOUT_SECS)?;
+      decode_workspaces(&body).map_err(|e| format!("invalid workspaces response: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      Err("blocking HTTP workspace list is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Create a new cloud workspace (`POST /api/workspaces`).
+  pub fn create_workspace(&self, name: &str) -> Result<Workspace, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+      return Err("workspace name must not be empty".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_post_json("/api/workspaces", &json!({ "name": trimmed }), API_TIMEOUT_SECS)?;
+      let val: Value = serde_json::from_str(body.trim())
+        .map_err(|e| format!("invalid create workspace response: {e}"))?;
+      let ws_val = val.get("workspace").cloned().unwrap_or(val);
+      serde_json::from_value(ws_val).map_err(|e| format!("invalid workspace payload: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = trimmed;
+      Err("blocking HTTP workspace creation is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Rename a cloud workspace (`PATCH /api/workspaces/{ws}`).
+  pub fn update_workspace(&self, workspace_id: Uuid, name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+      return Err("workspace name must not be empty".to_string());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_patch_json(
+        &format!("/api/workspaces/{workspace_id}"),
+        &json!({ "name": trimmed }),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, trimmed);
+      Err("blocking HTTP workspace rename is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Delete a cloud workspace (`DELETE /api/workspaces/{ws}`).
+  pub fn delete_workspace(&self, workspace_id: Uuid) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_delete(&format!("/api/workspaces/{workspace_id}"), API_TIMEOUT_SECS)?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = workspace_id;
+      Err("blocking HTTP workspace deletion is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Fetch all live views in a cloud workspace (`GET /api/workspaces/{ws}/views`).
+  pub fn list_views(&self, workspace_id: Uuid) -> Result<Vec<View>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/views"), API_TIMEOUT_SECS)?;
+      decode_views(&body).map_err(|e| format!("invalid views response: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = workspace_id;
+      Err("blocking HTTP views list is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Fetch trashed views in a cloud workspace (`GET /api/workspaces/{ws}/trash`).
+  pub fn list_trash(&self, workspace_id: Uuid) -> Result<Vec<View>, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/trash"), API_TIMEOUT_SECS)?;
+      decode_views(&body).map_err(|e| format!("invalid trash views response: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = workspace_id;
+      Err("blocking HTTP trash list is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Read a cloud document's Markdown (`GET /api/workspaces/{ws}/documents/{doc}/markdown`,
+  /// falling back to `/export/markdown` for older servers).
+  pub fn fetch_document_markdown(&self, workspace_id: Uuid, document_id: Uuid) -> Result<String, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let primary = format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown");
+      let body = match self.authed_get(&primary, API_TIMEOUT_SECS) {
+        Ok(b) => b,
+        Err(err) if err.contains("404") => self.authed_get(
+          &format!("/api/workspaces/{workspace_id}/documents/{document_id}/export/markdown"),
+          API_TIMEOUT_SECS,
+        )?,
+        Err(err) => return Err(err),
+      };
+      let val: Value = serde_json::from_str(body.trim())
+        .map_err(|e| format!("invalid document markdown response: {e}"))?;
+      Ok(j_str(&val, "markdown"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id);
+      Err("blocking HTTP markdown read is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Persist a cloud document's Markdown via `PATCH /api/workspaces/{ws}/documents/{doc}/markdown`
+  /// (`mode: "replace_all"`).
+  pub fn save_document_markdown(
+    &self,
+    workspace_id: Uuid,
+    document_id: Uuid,
+    markdown: &str,
+  ) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_patch_json(
+        &format!("/api/workspaces/{workspace_id}/documents/{document_id}/markdown"),
+        &json!({ "mode": "replace_all", "markdown": markdown }),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, document_id, markdown);
+      Err("blocking HTTP markdown save is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Create a new page in a cloud workspace (`POST /api/workspaces/{ws}/documents`).
+  pub fn create_document(
+    &self,
+    workspace_id: Uuid,
+    name: &str,
+    parent_view_id: Option<Uuid>,
+  ) -> Result<View, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let mut payload = json!({ "name": name });
+      if let Some(pid) = parent_view_id {
+        payload["parent_view_id"] = json!(pid);
+      }
+      let body = self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/documents"),
+        &payload,
+        API_TIMEOUT_SECS,
+      )?;
+      let val: Value = serde_json::from_str(body.trim())
+        .map_err(|e| format!("invalid create document response: {e}"))?;
+      let view_val = val.get("view").cloned().unwrap_or(val);
+      serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, name, parent_view_id);
+      Err("blocking HTTP document creation is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Create a new folder in a cloud workspace (`POST /api/workspaces/{ws}/folders`).
+  pub fn create_folder(
+    &self,
+    workspace_id: Uuid,
+    name: &str,
+    parent_view_id: Option<Uuid>,
+  ) -> Result<View, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let mut payload = json!({ "name": name });
+      if let Some(pid) = parent_view_id {
+        payload["parent_view_id"] = json!(pid);
+      }
+      let body = self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/folders"),
+        &payload,
+        API_TIMEOUT_SECS,
+      )?;
+      let val: Value = serde_json::from_str(body.trim())
+        .map_err(|e| format!("invalid create folder response: {e}"))?;
+      let view_val = val.get("view").cloned().unwrap_or(val);
+      serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, name, parent_view_id);
+      Err("blocking HTTP folder creation is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Rename or update the icon of a cloud view (`PATCH /api/workspaces/{ws}/views/{view}`).
+  pub fn update_view(
+    &self,
+    workspace_id: Uuid,
+    view_id: Uuid,
+    name: &str,
+    icon: Option<&str>,
+  ) -> Result<View, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let mut payload = json!({ "name": name });
+      if let Some(ic) = icon {
+        payload["icon"] = json!(ic);
+      }
+      let body = self.authed_patch_json(
+        &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
+        &payload,
+        API_TIMEOUT_SECS,
+      )?;
+      let val: Value = serde_json::from_str(body.trim())
+        .map_err(|e| format!("invalid update view response: {e}"))?;
+      let view_val = val.get("view").cloned().unwrap_or(val);
+      serde_json::from_value(view_val).map_err(|e| format!("invalid view payload: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, view_id, name, icon);
+      Err("blocking HTTP view update is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Move a cloud view (and its subtree) into the recycle bin (`DELETE /api/workspaces/{ws}/views/{view}`).
+  pub fn delete_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_delete(
+        &format!("/api/workspaces/{workspace_id}/views/{view_id}"),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, view_id);
+      Err("blocking HTTP view delete is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Restore a trashed cloud view (`POST /api/workspaces/{ws}/views/{view}/restore`).
+  pub fn restore_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/views/{view_id}/restore"),
+        &json!({}),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, view_id);
+      Err("blocking HTTP view restore is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Permanently purge a trashed cloud view (`DELETE /api/workspaces/{ws}/trash/{view}`).
+  pub fn purge_view(&self, workspace_id: Uuid, view_id: Uuid) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_delete(
+        &format!("/api/workspaces/{workspace_id}/trash/{view_id}"),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, view_id);
+      Err("blocking HTTP view purge is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Reorder / reparent views in a cloud workspace (`POST /api/workspaces/{ws}/views/reorder`).
+  pub fn reorder_views(
+    &self,
+    workspace_id: Uuid,
+    parent_view_id: Option<Uuid>,
+    ordered_view_ids: &[Uuid],
+  ) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_post_json(
+        &format!("/api/workspaces/{workspace_id}/views/reorder"),
+        &json!({
+          "parent_view_id": parent_view_id,
+          "ordered_view_ids": ordered_view_ids,
+        }),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, parent_view_id, ordered_view_ids);
+      Err("blocking HTTP view reorder is unavailable on wasm32".to_string())
     }
   }
 
@@ -824,6 +1224,7 @@ impl CloudConnector {
   /// Clear stored credentials and advance [`ClaimTracker`] back to [`WorldOrigin::Local`].
   pub fn logout(&mut self) {
     self.config.access_token = None;
+    self.refresh_token = None;
     self.config.email = None;
     self.phase = SyncPhase::Offline;
     self.claims.switch_account(WorldOrigin::Local);
@@ -836,7 +1237,7 @@ impl CloudConnector {
     let changed = next_endpoints.base_url() != self.endpoints.base_url();
     self.endpoints = next_endpoints;
     self.config.server_url = self.endpoints.base_url().to_string();
-    if changed && self.is_authenticated() {
+    if changed && (self.is_authenticated() || self.refresh_token.is_some()) {
       self.logout();
     }
   }

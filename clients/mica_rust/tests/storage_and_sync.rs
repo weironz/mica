@@ -370,3 +370,394 @@ fn cloud_connector_validation_serde_and_memory_sync_engine() {
   assert!(!effects.is_empty());
   assert!(!engine.outbox_empty());
 }
+
+fn read_full_http_request(stream: &mut std::net::TcpStream) -> String {
+  let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+  let mut data = Vec::new();
+  let mut buf = [0u8; 4096];
+  let mut header_end: Option<usize> = None;
+  let mut content_len: usize = 0;
+  let mut is_chunked = false;
+  loop {
+    let n = match stream.read(&mut buf) {
+      Ok(0) | Err(_) => break,
+      Ok(n) => n,
+    };
+    data.extend_from_slice(&buf[..n]);
+    if header_end.is_none()
+      && let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n")
+    {
+      let end = pos + 4;
+      header_end = Some(end);
+      let head = String::from_utf8_lossy(&data[..end]);
+      for line in head.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+          if k.trim().eq_ignore_ascii_case("content-length") {
+            content_len = v.trim().parse::<usize>().unwrap_or(0);
+          } else if k.trim().eq_ignore_ascii_case("transfer-encoding")
+            && v.to_ascii_lowercase().contains("chunked")
+          {
+            is_chunked = true;
+          }
+        }
+      }
+    }
+    if let Some(end) = header_end {
+      if is_chunked {
+        if data[end..].windows(5).any(|w| w == b"0\r\n\r\n") {
+          break;
+        }
+      } else if data.len() >= end + content_len {
+        break;
+      }
+    }
+  }
+  String::from_utf8_lossy(&data).to_string()
+}
+
+fn spawn_multi_step_http_server(
+  responses: Vec<(&'static str, String)>,
+) -> (String, thread::JoinHandle<Vec<String>>) {
+  let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+  let addr = listener.local_addr().unwrap();
+  let handle = thread::spawn(move || {
+    let mut requests = Vec::with_capacity(responses.len());
+    for (status, body) in responses {
+      let (mut stream, _) = listener.accept().expect("accept client");
+      requests.push(read_full_http_request(&mut stream));
+      let reply = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+      );
+      let _ = stream.write_all(reply.as_bytes());
+      let _ = stream.flush();
+      let _ = stream.shutdown(std::net::Shutdown::Both);
+    }
+    requests
+  });
+  (format!("http://{addr}"), handle)
+}
+
+#[test]
+fn cloud_workspaces_views_documents_and_vault_mirror_end_to_end() {
+  let now = Utc::now();
+  let owner_id = Uuid::new_v4();
+  let ws1_id = Uuid::new_v4();
+  let ws2_id = Uuid::new_v4();
+  let folder_id = Uuid::new_v4();
+  let doc_id = Uuid::new_v4();
+  let page_view_id = Uuid::new_v4();
+  let ws2_doc_id = Uuid::new_v4();
+  let ws2_view_id = Uuid::new_v4();
+
+  let login_resp = serde_json::json!({
+    "access_token": "jwt-access-1",
+    "token_type": "Bearer",
+    "expires_at": now,
+    "refresh_token": "jwt-refresh-1",
+    "user": {
+      "id": owner_id,
+      "email": "will@cloudcele.com",
+      "display_name": "Will",
+      "created_at": now
+    }
+  });
+  let workspaces_resp = serde_json::json!({
+    "workspaces": [
+      {
+        "id": ws1_id,
+        "name": "云端研发工作区",
+        "owner_id": owner_id,
+        "role": "owner",
+        "created_at": now,
+        "updated_at": now,
+        "page_count": 3
+      },
+      {
+        "id": ws2_id,
+        "name": "云端个人笔记",
+        "owner_id": owner_id,
+        "role": "editor",
+        "created_at": now,
+        "updated_at": now,
+        "page_count": 1
+      }
+    ]
+  });
+  // Intentionally return child page BEFORE parent folder + server's `object_type: "document"`.
+  let ws1_views_resp = serde_json::json!({
+    "views": [
+      {
+        "id": page_view_id,
+        "workspace_id": ws1_id,
+        "parent_view_id": folder_id,
+        "object_id": doc_id,
+        "object_type": "document",
+        "name": "架构总览",
+        "position": "0000000020",
+        "is_deleted": false,
+        "created_by": owner_id,
+        "created_at": now,
+        "updated_at": now
+      },
+      {
+        "id": folder_id,
+        "workspace_id": ws1_id,
+        "parent_view_id": null,
+        "object_id": Uuid::new_v4(),
+        "object_type": "folder",
+        "name": "核心文档",
+        "position": "0000000010",
+        "is_deleted": false,
+        "created_by": owner_id,
+        "created_at": now,
+        "updated_at": now
+      }
+    ]
+  });
+  let ws2_views_resp = serde_json::json!({
+    "views": [
+      {
+        "id": ws2_view_id,
+        "workspace_id": ws2_id,
+        "parent_view_id": null,
+        "object_id": ws2_doc_id,
+        "object_type": "document",
+        "name": "灵感随记",
+        "position": "0000000010",
+        "is_deleted": false,
+        "created_by": owner_id,
+        "created_at": now,
+        "updated_at": now
+      }
+    ]
+  });
+  let doc_md_resp = serde_json::json!({ "markdown": "# 架构总览\n\n来自 mica.cloudcele.com 的正文" });
+  let patch_ok = serde_json::json!({ "ok": true });
+  let refresh_resp = serde_json::json!({
+    "access_token": "jwt-access-2",
+    "token_type": "Bearer",
+    "expires_at": now,
+    "refresh_token": "jwt-refresh-2",
+    "user": {
+      "id": owner_id,
+      "email": "will@cloudcele.com",
+      "display_name": "Will",
+      "created_at": now
+    }
+  });
+
+  let (base_url, handle) = spawn_multi_step_http_server(vec![
+    ("200 OK", login_resp.to_string()),
+    ("200 OK", workspaces_resp.to_string()),
+    ("200 OK", ws1_views_resp.to_string()),
+    ("200 OK", ws2_views_resp.to_string()),
+    ("200 OK", doc_md_resp.to_string()),
+    ("200 OK", patch_ok.to_string()),
+    ("200 OK", refresh_resp.to_string()),
+  ]);
+
+  let mut conn = CloudConnector::new(CloudConfig {
+    server_url: base_url.clone(),
+    access_token: None,
+    email: None,
+  });
+  assert_eq!(conn.login("will@cloudcele.com", "pw").unwrap(), "will@cloudcele.com");
+  assert_eq!(conn.access_token(), Some("jwt-access-1"));
+  assert_eq!(conn.refresh_token(), Some("jwt-refresh-1"));
+
+  let workspaces = conn.list_workspaces().unwrap();
+  assert_eq!(workspaces.len(), 2);
+  assert_eq!(workspaces[0].name, "云端研发工作区");
+  assert_eq!(workspaces[0].page_count, 3);
+  assert_eq!(workspaces[1].name, "云端个人笔记");
+
+  let ws1_views = conn.list_views(ws1_id).unwrap();
+  let ws2_views = conn.list_views(ws2_id).unwrap();
+  assert_eq!(ws1_views.len(), 2);
+  assert_eq!(ws2_views.len(), 1);
+
+  let md = conn.fetch_document_markdown(ws1_id, doc_id).unwrap();
+  assert!(md.contains("来自 mica.cloudcele.com 的正文"));
+
+  conn
+    .save_document_markdown(ws1_id, doc_id, "# 架构总览\n\n已更新")
+    .unwrap();
+
+  conn.refresh_session().unwrap();
+  assert_eq!(conn.access_token(), Some("jwt-access-2"));
+  assert_eq!(conn.refresh_token(), Some("jwt-refresh-2"));
+
+  // Mirror into VaultStore and verify credential persistence + per-workspace isolation.
+  let vault = VaultStore::in_memory();
+  vault
+    .save_server_credential_with_refresh(
+      &base_url,
+      "will@cloudcele.com",
+      conn.access_token().unwrap(),
+      conn.refresh_token().unwrap(),
+    )
+    .unwrap();
+  let (saved_email, saved_tok, saved_rt) = vault.saved_server_credential_full(&base_url).unwrap();
+  assert_eq!(saved_email, "will@cloudcele.com");
+  assert_eq!(saved_tok, "jwt-access-2");
+  assert_eq!(saved_rt, "jwt-refresh-2");
+
+  let ws_pairs: Vec<(Uuid, String)> = workspaces.iter().map(|w| (w.id, w.name.clone())).collect();
+  vault.replace_origin_workspaces(&base_url, &ws_pairs).unwrap();
+  assert_eq!(vault.list_workspaces(&base_url).len(), 2);
+
+  vault.replace_workspace_views(&base_url, ws1_id, &ws1_views).unwrap();
+  vault.replace_workspace_views(&base_url, ws2_id, &ws2_views).unwrap();
+
+  // Multi-workspace isolation: ws1 and ws2 under the same cloud origin never mix.
+  let stored_ws1 = vault.list_workspace_views(&base_url, ws1_id);
+  let stored_ws2 = vault.list_workspace_views(&base_url, ws2_id);
+  assert_eq!(stored_ws1.len(), 2);
+  assert_eq!(stored_ws2.len(), 1);
+  assert_eq!(stored_ws2[0].name, "灵感随记");
+  assert!(vault.list_views(DEFAULT_ORIGIN).is_empty());
+
+  let reqs = handle.join().unwrap();
+  assert!(reqs[1].starts_with("GET /api/workspaces "));
+  assert!(reqs[1].to_ascii_lowercase().contains("authorization: bearer jwt-access-1"));
+  assert!(reqs[4].starts_with(&format!("GET /api/workspaces/{ws1_id}/documents/{doc_id}/markdown ")));
+  assert!(reqs[5].starts_with(&format!("PATCH /api/workspaces/{ws1_id}/documents/{doc_id}/markdown ")));
+  assert!(
+    reqs[5].contains("\"replace_all\""),
+    "unexpected PATCH request: {}",
+    reqs[5]
+  );
+  assert!(reqs[6].starts_with("POST /api/auth/refresh "));
+}
+
+#[test]
+fn cloud_crud_mutations_and_unauthorized_detection() {
+  assert!(CloudConnector::is_unauthorized_error("GET /api/workspaces failed: http status: 401"));
+  assert!(CloudConnector::is_unauthorized_error("authentication required"));
+  assert!(!CloudConnector::is_unauthorized_error("GET /api/workspaces failed: http status: 500"));
+
+  let now = Utc::now();
+  let owner_id = Uuid::new_v4();
+  let ws_id = Uuid::new_v4();
+  let folder_id = Uuid::new_v4();
+  let page_view_id = Uuid::new_v4();
+  let doc_id = Uuid::new_v4();
+
+  let ws_json = serde_json::json!({
+    "workspace": {
+      "id": ws_id,
+      "name": "新云端工作区",
+      "owner_id": owner_id,
+      "role": "owner",
+      "created_at": now,
+      "updated_at": now,
+      "page_count": 0
+    }
+  });
+  let folder_json = serde_json::json!({
+    "view": {
+      "id": folder_id,
+      "workspace_id": ws_id,
+      "parent_view_id": null,
+      "object_id": Uuid::new_v4(),
+      "object_type": "folder",
+      "name": "目录 A",
+      "position": "0000000010",
+      "is_deleted": false,
+      "created_by": owner_id,
+      "created_at": now,
+      "updated_at": now
+    }
+  });
+  let doc_json = serde_json::json!({
+    "view": {
+      "id": page_view_id,
+      "workspace_id": ws_id,
+      "parent_view_id": folder_id,
+      "object_id": doc_id,
+      "object_type": "document",
+      "name": "页面 1",
+      "position": "0000000020",
+      "is_deleted": false,
+      "created_by": owner_id,
+      "created_at": now,
+      "updated_at": now
+    }
+  });
+  let renamed_json = serde_json::json!({
+    "view": {
+      "id": page_view_id,
+      "workspace_id": ws_id,
+      "parent_view_id": folder_id,
+      "object_id": doc_id,
+      "object_type": "document",
+      "name": "页面 1（改名）",
+      "icon": "📄",
+      "position": "0000000020",
+      "is_deleted": false,
+      "created_by": owner_id,
+      "created_at": now,
+      "updated_at": now
+    }
+  });
+  let trash_json = serde_json::json!({ "views": [] });
+  let ok_json = serde_json::json!({ "ok": true }).to_string();
+
+  let (base_url, handle) = spawn_multi_step_http_server(vec![
+    ("200 OK", ws_json.to_string()),
+    ("200 OK", ok_json.clone()),
+    ("200 OK", folder_json.to_string()),
+    ("200 OK", doc_json.to_string()),
+    ("200 OK", renamed_json.to_string()),
+    ("200 OK", ok_json.clone()),
+    ("200 OK", ok_json.clone()),
+    ("200 OK", trash_json.to_string()),
+    ("200 OK", ok_json.clone()),
+    ("200 OK", ok_json.clone()),
+    ("200 OK", ok_json),
+  ]);
+
+  let conn = CloudConnector::new(CloudConfig {
+    server_url: base_url,
+    access_token: Some("tok-live".to_string()),
+    email: Some("will@cloudcele.com".to_string()),
+  })
+  .with_refresh_token(Some("rt-live".to_string()));
+  assert_eq!(conn.refresh_token(), Some("rt-live"));
+
+  let created_ws = conn.create_workspace("新云端工作区").unwrap();
+  assert_eq!(created_ws.id, ws_id);
+  conn.update_workspace(ws_id, "改名后的工作区").unwrap();
+
+  let created_folder = conn.create_folder(ws_id, "目录 A", None).unwrap();
+  assert_eq!(created_folder.id, folder_id);
+  let created_doc = conn.create_document(ws_id, "页面 1", Some(folder_id)).unwrap();
+  assert_eq!(created_doc.object_id, doc_id);
+
+  let renamed = conn
+    .update_view(ws_id, page_view_id, "页面 1（改名）", Some("📄"))
+    .unwrap();
+  assert_eq!(renamed.name, "页面 1（改名）");
+
+  conn.reorder_views(ws_id, Some(folder_id), &[page_view_id]).unwrap();
+  conn.delete_view(ws_id, page_view_id).unwrap();
+  assert!(conn.list_trash(ws_id).unwrap().is_empty());
+  conn.restore_view(ws_id, page_view_id).unwrap();
+  conn.purge_view(ws_id, page_view_id).unwrap();
+  conn.delete_workspace(ws_id).unwrap();
+
+  let reqs = handle.join().unwrap();
+  assert!(reqs[0].starts_with("POST /api/workspaces "));
+  assert!(reqs[1].starts_with(&format!("PATCH /api/workspaces/{ws_id} ")));
+  assert!(reqs[2].starts_with(&format!("POST /api/workspaces/{ws_id}/folders ")));
+  assert!(reqs[3].starts_with(&format!("POST /api/workspaces/{ws_id}/documents ")));
+  assert!(reqs[4].starts_with(&format!("PATCH /api/workspaces/{ws_id}/views/{page_view_id} ")));
+  assert!(reqs[5].starts_with(&format!("POST /api/workspaces/{ws_id}/views/reorder ")));
+  assert!(reqs[5].contains("\"ordered_view_ids\""));
+  assert!(reqs[6].starts_with(&format!("DELETE /api/workspaces/{ws_id}/views/{page_view_id} ")));
+  assert!(reqs[7].starts_with(&format!("GET /api/workspaces/{ws_id}/trash ")));
+  assert!(reqs[8].starts_with(&format!("POST /api/workspaces/{ws_id}/views/{page_view_id}/restore ")));
+  assert!(reqs[9].starts_with(&format!("DELETE /api/workspaces/{ws_id}/trash/{page_view_id} ")));
+  assert!(reqs[10].starts_with(&format!("DELETE /api/workspaces/{ws_id} ")));
+}

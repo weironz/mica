@@ -41,3 +41,4 @@
 ## 演进记录
 
 - **2026-11-23**：沉淀本地/云端按源隔离、世界切换、工作区治理与公开分享规格。
+- **2026-11-23**：在纯 Rust 客户端补齐云端登录后的工作区列表拉取（`GET /api/workspaces`）、按工作区隔离的视图树镜像（`GET /api/workspaces/{ws}/views`，兼容服务端 `object_type="document"`）、文档 Markdown 读写与 401 自动 refresh token 轮换，以及启动自动恢复与登出回切本地。

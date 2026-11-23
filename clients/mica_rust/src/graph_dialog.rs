@@ -72,7 +72,7 @@ pub fn build_local_page_graph(
 ) -> PageGraphData {
   let mut pages: Vec<&View> = views
     .iter()
-    .filter(|v| v.object_type == "page" && !v.is_deleted)
+    .filter(|v| v.object_type != "folder" && !v.is_deleted)
     .collect();
   // Deterministic input ordering so duplicate titles / seed order are stable.
   pages.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.object_id.cmp(&b.object_id)));
