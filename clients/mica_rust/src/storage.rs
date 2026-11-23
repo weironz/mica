@@ -1348,7 +1348,7 @@ impl VaultStore {
     #[cfg(target_arch = "wasm32")]
     {
       if let Ok(mut mem) = self.lock_memory() {
-        let now_secs = Utc::now().timestamp();
+        let now_secs = chrono::Utc::now().timestamp();
         let bucket_hour = now_secs - now_secs.rem_euclid(3_600);
         if let Some((_, _, existing)) = mem.activity.iter_mut().find(|(o, w, r)| {
           o == origin
@@ -1496,7 +1496,7 @@ impl VaultStore {
         });
       }
       Ok(mica_core::UsageStatsOverview {
-        generated_at: mica_core::usage_stats::format_unix_rfc3339(Utc::now().timestamp()),
+        generated_at: mica_core::usage_stats::format_unix_rfc3339(chrono::Utc::now().timestamp()),
         summary,
         health,
         workspaces,
@@ -1543,7 +1543,7 @@ impl VaultStore {
         tz_offset_minutes,
         workspace_id.map(str::to_string),
         include_imports,
-        Utc::now().timestamp(),
+        chrono::Utc::now().timestamp(),
       ))
     }
   }
