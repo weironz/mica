@@ -1945,12 +1945,24 @@ pub fn editor_view(
               .w_full()
               .items_center()
               .on_mouse_move(move |e: &MouseEvent| {
-                if e.pressed_button == Some(MouseButton::Left)
-                  && let Some(anchor) = drag_anchor.get_untracked()
-                {
-                  let next = DocSelection::from_positions(anchor, DocPosition::new(0, 0));
-                  if br_hdr_drag.selection().as_ref() != Some(&next) {
-                    br_hdr_drag.set_selection(next);
+                if e.pressed_button == Some(MouseButton::Left) {
+                  if let Some((ref t_bid, _, _)) = table_drag_anchor.get_untracked()
+                    && let Some(t_idx) = br_hdr_drag.index_of_block_id(t_bid)
+                  {
+                    let t_end = br_hdr_drag
+                      .block_at(t_idx)
+                      .map(|b| utf16_len(&b.text))
+                      .unwrap_or(0);
+                    table_drag_anchor.set(None);
+                    table_selection.set(None);
+                    focused_table_cell.set(None);
+                    drag_anchor.set(Some(DocPosition::new(t_idx, t_end)));
+                  }
+                  if let Some(anchor) = drag_anchor.get_untracked() {
+                    let next = DocSelection::from_positions(anchor, DocPosition::new(0, 0));
+                    if br_hdr_drag.selection().as_ref() != Some(&next) {
+                      br_hdr_drag.set_selection(next);
+                    }
                   }
                 }
               })
@@ -2014,17 +2026,25 @@ pub fn editor_view(
               .w_full()
               .items_center()
               .on_mouse_move(move |e: &MouseEvent| {
-                if e.pressed_button == Some(MouseButton::Left)
-                  && let Some(anchor) = drag_anchor.get_untracked()
-                {
-                  let last = br_ftr_drag.block_len().saturating_sub(1);
-                  let end_off = br_ftr_drag
-                    .block_at(last)
-                    .map(|b| utf16_len(&b.text))
-                    .unwrap_or(0);
-                  let next = DocSelection::from_positions(anchor, DocPosition::new(last, end_off));
-                  if br_ftr_drag.selection().as_ref() != Some(&next) {
-                    br_ftr_drag.set_selection(next);
+                if e.pressed_button == Some(MouseButton::Left) {
+                  if let Some((ref t_bid, _, _)) = table_drag_anchor.get_untracked()
+                    && let Some(t_idx) = br_ftr_drag.index_of_block_id(t_bid)
+                  {
+                    table_drag_anchor.set(None);
+                    table_selection.set(None);
+                    focused_table_cell.set(None);
+                    drag_anchor.set(Some(DocPosition::new(t_idx, 0)));
+                  }
+                  if let Some(anchor) = drag_anchor.get_untracked() {
+                    let last = br_ftr_drag.block_len().saturating_sub(1);
+                    let end_off = br_ftr_drag
+                      .block_at(last)
+                      .map(|b| utf16_len(&b.text))
+                      .unwrap_or(0);
+                    let next = DocSelection::from_positions(anchor, DocPosition::new(last, end_off));
+                    if br_ftr_drag.selection().as_ref() != Some(&next) {
+                      br_ftr_drag.set_selection(next);
+                    }
                   }
                 }
               })

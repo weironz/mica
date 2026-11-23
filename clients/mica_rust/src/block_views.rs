@@ -185,17 +185,40 @@ pub fn render_virtual_block_row(env: BlockRenderEnv, at: Position) -> impl IntoE
     // every block kind (prose, tables, dividers, code blocks, images, boards,
     // Mermaid, math) so upward/downward drag selection NEVER stalls!
     .on_mouse_move(move |e: &MouseEvent| {
-      if e.pressed_button != Some(MouseButton::Left) {
+      if e.pressed_button != Some(MouseButton::Left) || blank_marquee_guard.get_untracked() {
         return;
       }
-      if table_drag_guard.get_untracked().is_some() || blank_marquee_guard.get_untracked() {
-        return;
-      }
-      let Some(anchor) = drag_anchor.get_untracked() else {
-        return;
-      };
       let idx = at.index();
       let Some(block) = bridge_drag.block_at(idx) else {
+        return;
+      };
+      // Seamless table-to-document drag upgrade: when dragging started inside a
+      // table cell and the pointer leaves the table upward or downward into a
+      // neighboring block, smoothly upgrade to cross-block document selection
+      // anchored on the table so selection NEVER stalls at the table boundary!
+      if let Some((ref t_bid, _, _)) = table_drag_guard.get_untracked() {
+        if t_bid == &block.id {
+          return;
+        }
+        let Some(table_idx) = bridge_drag.index_of_block_id(t_bid) else {
+          table_drag_guard.set(None);
+          return;
+        };
+        let table_end = bridge_drag
+          .block_at(table_idx)
+          .map(|b| utf16_len(&b.text))
+          .unwrap_or(0);
+        let upgraded_anchor = if idx < table_idx {
+          DocPosition::new(table_idx, table_end)
+        } else {
+          DocPosition::new(table_idx, 0)
+        };
+        table_drag_guard.set(None);
+        table_sel_row.set(None);
+        focused_cell_row.set(None);
+        drag_anchor.set(Some(upgraded_anchor));
+      }
+      let Some(anchor) = drag_anchor.get_untracked() else {
         return;
       };
       let focus_pos = if is_non_prose_block(&block) {
