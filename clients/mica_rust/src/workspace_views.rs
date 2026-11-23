@@ -103,6 +103,7 @@ pub fn workspace_settings_modal(
       let confirm_delete = signal(false);
 
       let st_bg = state.clone();
+      let st_size = state.clone();
       let st_close_top = state.clone();
       let st_close_bottom = state.clone();
       let st_details = state.clone();
@@ -129,8 +130,9 @@ pub fn workspace_settings_modal(
         .child(
           view()
             .test_id("workspace-settings-modal")
-            .w(px(440.0))
+            .w(px(460.0))
             .max_w(relative(0.92))
+            .h(move || px(if st_size.is_cloud.get() { 560.0 } else { 440.0 }))
             .max_h(relative(0.86))
             .rounded(px(12.0))
             .border_1()
@@ -143,6 +145,7 @@ pub fn workspace_settings_modal(
               // Header
               view()
                 .h(px(50.0))
+                .flex_shrink_0()
                 .px(px(20.0))
                 .flex_row()
                 .items_center()
@@ -173,7 +176,7 @@ pub fn workspace_settings_modal(
             )
             .child(
               // Scrollable settings body
-              scroll().flex_1().min_h(px(0.0)).child(
+              scroll().w_full().flex_1().min_h(px(0.0)).child(
                 view()
                   .w_full()
                   .px(px(20.0))
@@ -195,6 +198,7 @@ pub fn workspace_settings_modal(
             .child(
               // Footer
               view()
+                .flex_shrink_0()
                 .px(px(20.0))
                 .py(px(12.0))
                 .flex_row()

@@ -1192,6 +1192,76 @@ impl CloudConnector {
     }
   }
 
+  /// Fetch workspace storage usage `(bytes_used, quota_bytes)` (`GET /api/workspaces/{ws}/usage`).
+  pub fn workspace_usage(&self, workspace_id: Uuid) -> Result<(u64, u64), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_get(&format!("/api/workspaces/{workspace_id}/usage"), API_TIMEOUT_SECS)?;
+      let val: Value = serde_json::from_str(body.trim())
+        .map_err(|e| format!("invalid usage response: {e}"))?;
+      let used = val.get("bytes_used").and_then(Value::as_u64).unwrap_or(0);
+      let quota = val.get("quota_bytes").and_then(Value::as_u64).unwrap_or(0);
+      Ok((used, quota))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = workspace_id;
+      Err("blocking HTTP workspace usage is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Revoke a pending workspace invitation (`DELETE /api/workspaces/{ws}/invitations/{id}`).
+  pub fn revoke_invitation(&self, workspace_id: Uuid, invitation_id: &str) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_delete(
+        &format!("/api/workspaces/{workspace_id}/invitations/{invitation_id}"),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, invitation_id);
+      Err("blocking HTTP revoke invitation is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Change a workspace member's role (`PATCH /api/workspaces/{ws}/members/{user_id}`).
+  pub fn update_member_role(&self, workspace_id: Uuid, user_id: &str, role: &str) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_patch_json(
+        &format!("/api/workspaces/{workspace_id}/members/{user_id}"),
+        &json!({ "role": role }),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, user_id, role);
+      Err("blocking HTTP update member role is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Remove a member from a workspace (`DELETE /api/workspaces/{ws}/members/{user_id}`).
+  pub fn remove_member(&self, workspace_id: Uuid, user_id: &str) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      self.authed_delete(
+        &format!("/api/workspaces/{workspace_id}/members/{user_id}"),
+        API_TIMEOUT_SECS,
+      )?;
+      Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (workspace_id, user_id);
+      Err("blocking HTTP remove member is unavailable on wasm32".to_string())
+    }
+  }
+
   /// List pending invitations addressed to the signed-in user (`GET /api/invitations`).
   pub fn list_received_invitations(&self) -> Result<Vec<WorkspaceInvitationInfo>, String> {
     #[cfg(not(target_arch = "wasm32"))]

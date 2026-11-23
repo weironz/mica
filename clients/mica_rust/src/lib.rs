@@ -2746,9 +2746,27 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   };
 
   let ws_settings_id_sig = signal(ws_id.to_string());
-  effect(move || {
-    ws_settings_id_sig.set(active_workspace_id.get().to_string());
-  });
+  let ws_settings_gen = signal(0u64);
+  let ws_storage_usage = signal(None);
+  let ws_members = signal(Vec::new());
+  let ws_pending_invitations = signal(Vec::new());
+  let ws_invite_status: Signal<Option<(String, bool)>> = signal(None);
+  {
+    let cs = cloud_session.clone();
+    effect(move || {
+      let cur = active_workspace_id.get();
+      ws_settings_id_sig.set(cur.to_string());
+      if workspace_settings_open.get() {
+        ws_invite_status.set(None);
+        cs.load_workspace_settings(
+          ws_settings_gen,
+          ws_storage_usage,
+          ws_members,
+          ws_pending_invitations,
+        );
+      }
+    });
+  }
   let ws_settings_state = WorkspaceSettingsState {
     open: workspace_settings_open,
     workspace_id: ws_settings_id_sig,
@@ -2756,10 +2774,10 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     role: signal("owner".to_string()),
     is_cloud: is_cloud_signed_in,
     can_manage: signal(true),
-    storage_usage: signal(None),
-    members: signal(Vec::new()),
-    pending_invitations: signal(Vec::new()),
-    invite_status: signal(None),
+    storage_usage: ws_storage_usage,
+    members: ws_members,
+    pending_invitations: ws_pending_invitations,
+    invite_status: ws_invite_status,
     on_rename: {
       let v = vault.clone();
       let cs = cloud_session.clone();
@@ -2779,10 +2797,72 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         workspaces.set(all);
       })
     },
-    on_invite: Rc::new(|_, _| {}),
-    on_revoke_invitation: Rc::new(|_| {}),
-    on_change_member_role: Rc::new(|_, _| {}),
-    on_remove_member: Rc::new(|_| {}),
+    on_invite: {
+      let cs = cloud_session.clone();
+      Rc::new(move |email: String, role: String| {
+        let cur_ws = active_workspace_id.get_untracked();
+        let orig = active_origin.get_untracked();
+        if !cloud_sync::is_cloud_origin(&orig) || !is_cloud_signed_in.get_untracked() {
+          return;
+        }
+        let mut conn = cs.cloud_connector.borrow().clone();
+        let cs_done = cs.clone();
+        spawn(async move {
+          let res = net::run_blocking(move || {
+            cloud_sync::with_auto_refresh(&mut conn, |c| c.invite_member(cur_ws, &email, &role))
+          })
+          .await;
+          if active_origin.get_untracked() != orig || active_workspace_id.get_untracked() != cur_ws {
+            return;
+          }
+          match res {
+            Ok(_) => {
+              ws_invite_status.set(Some(("邀请已发送".to_string(), false)));
+              cs_done.load_workspace_settings(
+                ws_settings_gen,
+                ws_storage_usage,
+                ws_members,
+                ws_pending_invitations,
+              );
+            }
+            Err(e) => ws_invite_status.set(Some((format!("邀请失败：{e}"), true))),
+          }
+        });
+      })
+    },
+    on_revoke_invitation: {
+      let cs = cloud_session.clone();
+      Rc::new(move |inv_id: String| {
+        let cur_ws = active_workspace_id.get_untracked();
+        let inv_req = inv_id.clone();
+        cs.spawn_cloud_op("撤回邀请", move |c| c.revoke_invitation(cur_ws, &inv_req));
+        ws_pending_invitations.update(|list| list.retain(|i| i.id != inv_id));
+      })
+    },
+    on_change_member_role: {
+      let cs = cloud_session.clone();
+      Rc::new(move |uid: String, role: String| {
+        let cur_ws = active_workspace_id.get_untracked();
+        let (uid_req, role_req) = (uid.clone(), role.clone());
+        cs.spawn_cloud_op("修改成员角色", move |c| c.update_member_role(cur_ws, &uid_req, &role_req));
+        ws_members.update(|list| {
+          for m in list.iter_mut() {
+            if m.user_id == uid {
+              m.role = role.clone();
+            }
+          }
+        });
+      })
+    },
+    on_remove_member: {
+      let cs = cloud_session.clone();
+      Rc::new(move |uid: String| {
+        let cur_ws = active_workspace_id.get_untracked();
+        let uid_req = uid.clone();
+        cs.spawn_cloud_op("移除成员", move |c| c.remove_member(cur_ws, &uid_req));
+        ws_members.update(|list| list.retain(|m| m.user_id != uid));
+      })
+    },
     on_delete_workspace: {
       let v = vault.clone();
       let sw = on_switch_workspace.clone();

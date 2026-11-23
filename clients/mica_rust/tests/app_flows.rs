@@ -623,3 +623,24 @@ fn regression_code_block_backspace_and_delete_after_live_focus() {
     .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
     .unwrap();
 }
+
+#[test]
+fn regression_workspace_settings_modal_body_is_visible() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+  app.press("id:open-ws-settings-btn").unwrap();
+  app.wait_for("id:workspace-settings-modal").unwrap();
+  app.wait_for("id:ws-settings-rename-input").unwrap();
+  app.wait_for("id:ws-members-local-empty").unwrap();
+  app.wait_for("id:ws-settings-delete-btn").unwrap();
+  // Verify the rename button inside the scroll body is laid out with real hit-testable bounds.
+  app.press("id:ws-settings-rename-save").unwrap();
+  app.press("id:ws-settings-close").unwrap();
+  app
+    .wait_for_gone("id:workspace-settings-modal", std::time::Duration::from_millis(800))
+    .unwrap();
+}

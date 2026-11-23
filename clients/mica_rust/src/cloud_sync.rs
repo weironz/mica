@@ -16,6 +16,9 @@ use uuid::Uuid;
 use crate::editor_bridge::MicaDocumentBridge;
 use crate::net::{self, CloudConfig, CloudConnector};
 use crate::storage::{DEFAULT_ORIGIN, VaultStore};
+use crate::workspace_views::{
+  PendingInvitationEntry, WorkspaceMemberEntry, WorkspaceStorageUsage,
+};
 use crate::world_switcher::{self, LOCAL_ORIGIN};
 use crate::{MODE_DOC, OpenTab, WorkspaceEntry};
 
@@ -979,6 +982,94 @@ impl CloudSessionHandles {
     {
       self.enter_origin(saved_origin, false);
     }
+  }
+
+  /// Fetch cloud workspace storage usage, members, and pending invitations into
+  /// the Workspace Settings modal signals (guarded by `gen` + origin/ws ownership).
+  pub(crate) fn load_workspace_settings(
+    &self,
+    gen_sig: Signal<u64>,
+    storage_usage: Signal<Option<WorkspaceStorageUsage>>,
+    members_sig: Signal<Vec<WorkspaceMemberEntry>>,
+    invitations_sig: Signal<Vec<PendingInvitationEntry>>,
+  ) {
+    let orig = self.active_origin.get_untracked();
+    let ws_id = self.active_workspace_id.get_untracked();
+    if !is_cloud_origin(&orig) || !self.is_cloud_signed_in.get_untracked() || ws_id.is_nil() {
+      storage_usage.set(None);
+      members_sig.set(Vec::new());
+      invitations_sig.set(Vec::new());
+      return;
+    }
+    let epoch = gen_sig.get_untracked().wrapping_add(1);
+    gen_sig.set(epoch);
+    let email = self.account_email.get_untracked();
+    let mut conn = self.cloud_connector.borrow().clone();
+    let h = self.clone();
+    spawn(async move {
+      let res = net::run_blocking(move || {
+        let (usage, mut rot) = match with_auto_refresh(&mut conn, |c| c.workspace_usage(ws_id)) {
+          Ok((u, r)) => (Some(u), r),
+          Err(_) => (None, None),
+        };
+        let members = match with_auto_refresh(&mut conn, |c| c.list_members(ws_id)) {
+          Ok((m, r)) => {
+            if r.is_some() {
+              rot = r;
+            }
+            m
+          }
+          Err(_) => Vec::new(),
+        };
+        let invs = match with_auto_refresh(&mut conn, |c| c.list_invitations(ws_id)) {
+          Ok((i, r)) => {
+            if r.is_some() {
+              rot = r;
+            }
+            i
+          }
+          Err(_) => Vec::new(),
+        };
+        (conn, usage, members, invs, rot)
+      })
+      .await;
+      if gen_sig.get_untracked() != epoch
+        || h.active_origin.get_untracked() != orig
+        || h.active_workspace_id.get_untracked() != ws_id
+      {
+        return;
+      }
+      let (conn, usage, members, invs, rot) = res;
+      if rot.is_some() {
+        *h.cloud_connector.borrow_mut() = conn;
+        persist_refreshed_tokens(&h.vault, &orig, &email, rot);
+      }
+      storage_usage.set(usage.map(|(used_bytes, quota_bytes)| WorkspaceStorageUsage {
+        used_bytes,
+        quota_bytes,
+      }));
+      members_sig.set(
+        members
+          .into_iter()
+          .map(|m| WorkspaceMemberEntry {
+            user_id: m.user_id,
+            display_name: m.display_name,
+            email: m.email,
+            role: m.role,
+          })
+          .collect(),
+      );
+      invitations_sig.set(
+        invs
+          .into_iter()
+          .map(|i| PendingInvitationEntry {
+            id: i.id,
+            email: i.email.unwrap_or_default(),
+            role: i.role,
+          })
+          .collect(),
+      );
+    });
   }
 }
 

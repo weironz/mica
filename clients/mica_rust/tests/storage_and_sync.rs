@@ -702,6 +702,7 @@ fn cloud_crud_mutations_and_unauthorized_detection() {
     }
   });
   let trash_json = serde_json::json!({ "views": [] });
+  let usage_json = serde_json::json!({ "bytes_used": 2048, "quota_bytes": 1048576 });
   let ok_json = serde_json::json!({ "ok": true }).to_string();
 
   let (base_url, handle) = spawn_multi_step_http_server(vec![
@@ -713,6 +714,10 @@ fn cloud_crud_mutations_and_unauthorized_detection() {
     ("200 OK", ok_json.clone()),
     ("200 OK", ok_json.clone()),
     ("200 OK", trash_json.to_string()),
+    ("200 OK", ok_json.clone()),
+    ("200 OK", ok_json.clone()),
+    ("200 OK", usage_json.to_string()),
+    ("200 OK", ok_json.clone()),
     ("200 OK", ok_json.clone()),
     ("200 OK", ok_json.clone()),
     ("200 OK", ok_json),
@@ -745,6 +750,10 @@ fn cloud_crud_mutations_and_unauthorized_detection() {
   assert!(conn.list_trash(ws_id).unwrap().is_empty());
   conn.restore_view(ws_id, page_view_id).unwrap();
   conn.purge_view(ws_id, page_view_id).unwrap();
+  assert_eq!(conn.workspace_usage(ws_id).unwrap(), (2048, 1048576));
+  conn.revoke_invitation(ws_id, "inv-1").unwrap();
+  conn.update_member_role(ws_id, "usr-1", "admin").unwrap();
+  conn.remove_member(ws_id, "usr-1").unwrap();
   conn.delete_workspace(ws_id).unwrap();
 
   let reqs = handle.join().unwrap();
@@ -759,5 +768,9 @@ fn cloud_crud_mutations_and_unauthorized_detection() {
   assert!(reqs[7].starts_with(&format!("GET /api/workspaces/{ws_id}/trash ")));
   assert!(reqs[8].starts_with(&format!("POST /api/workspaces/{ws_id}/views/{page_view_id}/restore ")));
   assert!(reqs[9].starts_with(&format!("DELETE /api/workspaces/{ws_id}/trash/{page_view_id} ")));
-  assert!(reqs[10].starts_with(&format!("DELETE /api/workspaces/{ws_id} ")));
+  assert!(reqs[10].starts_with(&format!("GET /api/workspaces/{ws_id}/usage ")));
+  assert!(reqs[11].starts_with(&format!("DELETE /api/workspaces/{ws_id}/invitations/inv-1 ")));
+  assert!(reqs[12].starts_with(&format!("PATCH /api/workspaces/{ws_id}/members/usr-1 ")));
+  assert!(reqs[13].starts_with(&format!("DELETE /api/workspaces/{ws_id}/members/usr-1 ")));
+  assert!(reqs[14].starts_with(&format!("DELETE /api/workspaces/{ws_id} ")));
 }
