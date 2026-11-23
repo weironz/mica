@@ -1,8 +1,9 @@
 # 使用统计与可观测性设计方案（Issue #191）
 
-> 状态：**设计评审定稿（待实施）** · 对应需求：[#191](https://github.com/weironz/mica/issues/191)
+> 状态：**已实现（全栈纯 Rust L1 + L2 + L3 架构落地）** · 对应需求：[#191](https://github.com/weironz/mica/issues/191)
 > 交互原型：[usage-statistics-demo.html](usage-statistics-demo.html)（零外部依赖，下载后直接用浏览器打开即可评审浅/深色、云端/本地双模式与下钻交互）
-> 更新日期：2026-11-20
+> 运维指标字典：[docs/ops/metrics.md](../ops/metrics.md)
+> 更新日期：2026-11-24
 
 ## 1. 背景与目标
 
@@ -25,17 +26,17 @@
 
 ### 2.1 入口与展示形态
 
-- 复用现有宽幅设置弹窗 **`MicaSettingsShell`**（最大 `1120 × 840`，`< 700px` 自动切换为列表→详情两步布局）。
-- 在设置侧栏增加独立导航项 **「使用统计」**（`MicaSettingsDestination`），归入「工作区 / 数据」分组，云端模式与桌面本地离线模式均可见。
-- 在左下角 **`AccountMenu`** 增加 **「使用统计」** 快捷入口；点击后直接打开 `SettingsDialog(initialSection: SettingsSection.usageStats)` 定位到该页签，避免再维护一套独立弹窗壳。
+- 复用现有纯 Rust 宽幅设置弹窗 **`settings_view.rs`**（默认 `1120 × 840`，`max_w 94% / max_h 92%`）。
+- 在设置侧栏增加独立导航项 **「使用统计」**（`TAB_USAGE_STATS`），归入「工作区」分组，云端模式与本地离线模式均可见。
+- 在左下角 **`AccountMenu`**（`app_menu.rs`）增加 **「使用统计」** 快捷入口；点击后直接打开设置弹窗并定位到 `TAB_USAGE_STATS` 页签，同时刷新统计数据，避免再维护一套独立弹窗壳。
 
-### 2.2 云端与本地离线同构（Rust-first 单一真相源）
+### 2.2 云端与本地离线同构（全栈纯 Rust L1 + L2 + L3 单一真相源）
 
-遵循项目 Rust-first 数据面不变量：
+遵循项目全栈纯 Rust 架构不变量（零 Dart / FFI 桥接）：
 
-- **字数统计单一实现**：将当前仅存在于 Dart 的中英文混排计数规则（[word_count.dart](../../clients/mica_flutter/lib/editor/word_count.dart)）在 `crates/mica-core/src/word_count.rs` 提供权威 Rust 实现，保证云端 Postgres、桌面本地 SQLite 与编辑器状态栏口径完全一致（CJK 汉字/假名/韩文每字计 1 词，连续拉丁/数字串计 1 词；`chars` 计全部非空白字符）。
-- **统计模型与聚合复用**：云端（`crates/app-core` + `crates/api-server`）与本地离线（`crates/mica-core/src/store.rs` + 桌面 FFI）共享同一套指标定义、小时桶折叠函数和 DTO 结构。
-- **前端面板 100% 复用**：新建独立 UI 库 `clients/mica_flutter/lib/ui/usage_stats_panel.dart`，只依赖统一的 `UsageStatsOverview` / `UsageStatsActivity` 数据模型与加载回调，不区分云端/本地写两套 UI（仅在本地模式将「配额进度条」显示为「无配额上限」）。
+- **字数统计单一实现**：权威实现位于 `crates/mica-core/src/word_count.rs`（`count_text` / `count_blocks` / `count_doc`），保证云端 Postgres（`document_yrs_base.word_count` / `char_count`）、本地 SQLite（`doc_snapshot.word_count` / `char_count`）与纯 Rust 编辑器状态栏（`clients/mica_rust/src/editor_bridge.rs`）口径完全一致（CJK 汉字/假名/韩文每字计 1 词，连续非 CJK 字母数字串计 1 词，包含表格单元格文本；`chars` 计全部非空白字符）。
+- **统计模型与聚合复用**：共享 DTO 与 UTC 小时桶折叠函数 `fold_hourly_to_daily` 位于 `crates/mica-core/src/usage_stats.rs`；云端（`crates/app-core` + `crates/api-server/src/routes/stats.rs`）与本地离线（`crates/mica-core/src/store_stats.rs` + `clients/mica_rust/src/storage.rs`）共用同一套模型与口径。
+- **前端面板 100% 复用**：独立模块 `clients/mica_rust/src/usage_stats_view.rs` 直接消费统一的 `UsageStatsOverview` / `UsageStatsActivity` 数据模型与加载回调，覆盖桌面原生与 WebAssembly，不区分云端/本地写两套 UI（本地模式将存储配额说明切换为「本地存储 · 无配额上限」）。
 
 ### 2.3 每日统计的「天边界」：业界实践与选型
 

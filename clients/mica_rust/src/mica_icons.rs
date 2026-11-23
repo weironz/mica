@@ -318,6 +318,22 @@ pub fn sparkles_icon(color: &str) -> Svg {
   )
 }
 
+pub fn bar_chart_icon(color: &str) -> Svg {
+  stroked(
+    15.0,
+    color,
+    r##"<path d="M4 16H16M6.2 16V10.5M10 16V5.5M13.8 16V8.5"/>"##,
+  )
+}
+
+pub fn refresh_icon(color: &str) -> Svg {
+  stroked(
+    14.0,
+    color,
+    r##"<path d="M15.5 10A5.5 5.5 0 1 1 13.9 6.1L16 8.2M16 4.8V8.2H12.6"/>"##,
+  )
+}
+
 pub fn keyboard_icon(color: &str) -> Svg {
   stroked(
     15.0,

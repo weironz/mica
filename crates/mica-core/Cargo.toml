@@ -13,6 +13,7 @@ rust-version = "1.89"
 
 [dependencies]
 yrs = { version = "0.28.0", features = ["sync"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 # Local persistence (desktop client only), behind the `store` feature so the

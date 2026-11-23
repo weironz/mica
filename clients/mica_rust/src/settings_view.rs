@@ -18,9 +18,9 @@ use uuid::Uuid;
 
 use crate::{mica_icons, mica_theme::palette, transfer};
 
-// ── Tab IDs (8 tabs across 4 groups) ─────────────────────────────────────────
+// ── Tab IDs (9 tabs across 4 groups) ─────────────────────────────────────────
 
-const TAB_APPEARANCE: u8 = 0;
+pub const TAB_APPEARANCE: u8 = 0;
 const TAB_SHORTCUTS: u8 = 1;
 const TAB_ACCOUNT: u8 = 2;
 const TAB_TOKENS: u8 = 3;
@@ -28,6 +28,7 @@ const TAB_DATA: u8 = 4;
 const TAB_TRASH: u8 = 5;
 const TAB_AI: u8 = 6;
 const TAB_DIAGNOSTICS: u8 = 7;
+pub const TAB_USAGE_STATS: u8 = 8;
 
 /// 11 discrete page-width stops (680..=1880 px, step 120; last stop = 全宽).
 pub const PAGE_WIDTH_STOPS: [u32; 11] = [
@@ -209,6 +210,8 @@ pub struct SettingsViewProps {
   pub diagnostics_dropped: Option<String>,
   pub on_open_diagnostics_folder: Option<Rc<dyn Fn()>>,
   pub on_open_about: Option<Rc<dyn Fn()>>,
+  pub active_tab: Option<Signal<u8>>,
+  pub usage_stats: Option<crate::usage_stats_view::UsageStatsProps>,
   pub on_close: Rc<dyn Fn()>,
 }
 
@@ -306,6 +309,8 @@ impl SettingsViewProps {
       diagnostics_dropped: None,
       on_open_diagnostics_folder: None,
       on_open_about: None,
+      active_tab: None,
+      usage_stats: None,
       on_close: cb.on_close.clone(),
     }
   }
@@ -462,7 +467,7 @@ pub fn settings_modal_view(cb: Rc<SettingsCallbacks>) -> impl IntoElement {
 
 /// Full 1:1 `1120×840` Settings modal dialog with all 8 tabs and pinned About footer.
 pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl IntoElement {
-  let active_tab = signal(TAB_APPEARANCE);
+  let active_tab = props.active_tab.unwrap_or_else(|| signal(TAB_APPEARANCE));
   let about_open = signal(false);
   let theme_choice = signal(if props.dark_mode.get_untracked() {
     ThemeChoice::Dark
@@ -600,7 +605,13 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
             .w_full()
             .flex_row()
             .overflow_hidden()
-            .child(left_nav_rail(active_tab, about_open, dm, on_about))
+            .child(left_nav_rail(
+              active_tab,
+              about_open,
+              dm,
+              on_about,
+              props.usage_stats.as_ref().map(|u| u.on_refresh.clone()),
+            ))
             .child(
               scroll()
                 .flex_1()
@@ -695,6 +706,16 @@ pub fn settings_modal_view_with_props(props: Rc<SettingsViewProps>) -> impl Into
                     .child(when(move || active_tab.get() == TAB_DIAGNOSTICS, {
                       let p = p_body.clone();
                       move || diagnostics_tab(p.clone())
+                    }))
+                    .child(when(move || active_tab.get() == TAB_USAGE_STATS, {
+                      let p = p_body.clone();
+                      move || {
+                        let stats_props = p
+                          .usage_stats
+                          .clone()
+                          .unwrap_or_else(|| crate::usage_stats_view::UsageStatsProps::empty(p.dark_mode));
+                        crate::usage_stats_view::usage_stats_panel(stats_props)
+                      }
                     })),
                 ),
             ),
@@ -707,6 +728,7 @@ fn left_nav_rail(
   about_open: Signal<bool>,
   dm: Signal<bool>,
   on_about: Option<Rc<dyn Fn()>>,
+  on_refresh_stats: Option<Rc<dyn Fn()>>,
 ) -> impl IntoElement {
   view()
     .w(px(200.0))
@@ -728,6 +750,53 @@ fn left_nav_rail(
           .child(nav_item("settings-tab-tokens", "API 令牌", "API Tokens", TAB_TOKENS, active_tab, dm, mica_icons::link_icon))
           .child(nav_group("工作区", "Workspace", false, dm))
           .child(nav_item("settings-tab-data", "数据", "Data", TAB_DATA, active_tab, dm, mica_icons::database_icon))
+          .child({
+            let on_ref = on_refresh_stats.clone();
+            button()
+              .test_id("settings-tab-usage-stats")
+              .accessibility_label("使用统计")
+              .w_full()
+              .h(px(34.0))
+              .px_2()
+              .flex_row()
+              .items_center()
+              .gap_2()
+              .rounded(px(6.0))
+              .bg(move || {
+                if active_tab.get() == TAB_USAGE_STATS {
+                  palette(dm.get()).surface_hover
+                } else {
+                  nsh_core::color::rgba(0x0000_0000)
+                }
+              })
+              .hover(move |s| s.bg(palette(dm.get_untracked()).surface_hover))
+              .on_press(move || {
+                active_tab.set(TAB_USAGE_STATS);
+                if let Some(ref cb) = on_ref {
+                  cb();
+                }
+              })
+              .child(dynamic(move || {
+                let color = if active_tab.get() == TAB_USAGE_STATS {
+                  palette(dm.get()).text_primary_hex
+                } else {
+                  palette(dm.get()).text_muted_hex
+                };
+                mica_icons::bar_chart_icon(color)
+              }))
+              .child(
+                text(move || crate::mica_theme::tr("使用统计", "Usage Statistics"))
+                  .text_size(move || px((13.0 * crate::mica_theme::ui_scale_factor()).round()))
+                  .font_weight(FontWeight::MEDIUM)
+                  .text_color(move || {
+                    if active_tab.get() == TAB_USAGE_STATS {
+                      palette(dm.get()).text_primary
+                    } else {
+                      palette(dm.get()).text_muted
+                    }
+                  }),
+              )
+          })
           .child(nav_item("settings-tab-trash", "回收站", "Recycle Bin", TAB_TRASH, active_tab, dm, mica_icons::trash_icon))
           .child(nav_group("其他", "Other", false, dm))
           .child(nav_item("settings-tab-ai", "AI 服务商", "AI Providers", TAB_AI, active_tab, dm, mica_icons::sparkles_icon))
@@ -800,6 +869,8 @@ fn tab_title(tab: u8) -> &'static str {
     (TAB_AI, false) => "AI Providers",
     (TAB_DIAGNOSTICS, true) => "诊断",
     (TAB_DIAGNOSTICS, false) => "Diagnostics",
+    (TAB_USAGE_STATS, true) => "使用统计",
+    (TAB_USAGE_STATS, false) => "Usage Statistics",
     (_, true) => "外观",
     (_, false) => "Appearance",
   }
@@ -824,6 +895,8 @@ fn tab_description(tab: u8) -> &'static str {
     (TAB_AI, false) => "Personal AI toggle and server AI provider settings.",
     (TAB_DIAGNOSTICS, true) => "本机诊断选项，用于定位问题与收集排查信息。",
     (TAB_DIAGNOSTICS, false) => "Local diagnostics and log directory tools.",
+    (TAB_USAGE_STATS, true) => "查看工作区、页面、字数、存储与写作活跃趋势，支持本地与云端统计。",
+    (TAB_USAGE_STATS, false) => "Workspace scale, word counts, storage, knowledge health, and writing trends.",
     _ => "",
   }
 }

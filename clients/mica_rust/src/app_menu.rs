@@ -661,6 +661,7 @@ pub struct AccountMenuState {
   pub app_version: &'static str,
   pub update_status: Signal<String>,
   pub on_open_settings: Rc<dyn Fn()>,
+  pub on_open_usage_stats: Option<Rc<dyn Fn()>>,
   pub on_switch_world: Rc<dyn Fn()>,
   pub on_check_update: Rc<dyn Fn()>,
   pub on_sign_out: Rc<dyn Fn()>,
@@ -745,6 +746,7 @@ pub fn account_menu_popover(
       let app_version = st.app_version;
       let update_status = st.update_status;
       let on_open_settings = st.on_open_settings.clone();
+      let on_open_usage_stats = st.on_open_usage_stats.clone();
       let on_switch_world = st.on_switch_world.clone();
       let on_check_update = st.on_check_update.clone();
       let on_sign_out = st.on_sign_out.clone();
@@ -868,6 +870,27 @@ pub fn account_menu_popover(
                   open,
                   dark_mode,
                   on_open_settings,
+                ))
+                .child(when(
+                  {
+                    let has_stats = on_open_usage_stats.is_some();
+                    move || has_stats
+                  },
+                  {
+                    let on_stats = on_open_usage_stats.clone();
+                    move || {
+                      let cb = on_stats.clone().unwrap_or_else(|| Rc::new(|| {}));
+                      account_action_row(
+                        "account-menu-usage-stats-btn",
+                        "使用统计",
+                        String::new,
+                        mica_icons::bar_chart_icon,
+                        open,
+                        dark_mode,
+                        cb,
+                      )
+                    }
+                  },
                 ))
                 .child(account_action_row(
                   "account-switch-world-btn",

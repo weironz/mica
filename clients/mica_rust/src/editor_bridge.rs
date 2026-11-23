@@ -1477,37 +1477,29 @@ fn compute_outline(blocks: &[EditorBlock]) -> Vec<OutlineItem> {
 }
 
 fn compute_word_count_label(blocks: &[EditorBlock]) -> String {
-  let (mut chars, mut words) = (0usize, 0usize);
+  let mut total = mica_core::WordCount::default();
   for b in blocks {
     let raw = b.text.trim();
-    if raw.is_empty() {
-      continue;
+    if !raw.is_empty() {
+      total = total.saturating_add(mica_core::word_count::count_text(raw));
     }
-    let mut in_ascii = false;
-    for ch in raw.chars() {
-      if ch.is_whitespace() {
-        in_ascii = false;
-        continue;
-      }
-      chars += 1;
-      if ch.is_ascii_alphanumeric() {
-        if !in_ascii {
-          words += 1;
-          in_ascii = true;
-        }
-      } else {
-        in_ascii = false;
-        if ('\u{4E00}'..='\u{9FFF}').contains(&ch)
-          || ('\u{3400}'..='\u{4DBF}').contains(&ch)
-          || ('\u{3040}'..='\u{30FF}').contains(&ch)
-          || ('\u{AC00}'..='\u{D7AF}').contains(&ch)
-        {
-          words += 1;
+    if b.kind == "table"
+      && let Some(rows) = b.data.get("rows").and_then(Value::as_array)
+    {
+      for row in rows {
+        if let Some(cells) = row.as_array() {
+          for cell in cells {
+            if let Some(s) = cell.as_str()
+              && !s.is_empty()
+            {
+              total = total.saturating_add(mica_core::word_count::count_text(s));
+            }
+          }
         }
       }
     }
   }
-  format!("{words} 词 · {chars} 字")
+  format!("{} 词 · {} 字", total.words, total.chars)
 }
 
 fn compute_active_state(session: &EditorSession) -> (String, u64, Vec<String>) {

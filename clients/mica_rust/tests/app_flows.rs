@@ -875,3 +875,49 @@ fn regression_sidebar_context_menu_new_tab_unclipped_modals_transfer_and_exports
   app.press("id:ctx-export-page-md").unwrap();
   app.wait_for("已导出 Markdown").unwrap();
 }
+
+#[test]
+fn regression_usage_statistics_dashboard_and_live_updates() {
+  let mut config = EngineConfig::new(Root::of::<mica_rust::MicaAppInMemory>());
+  config.viewport = size(px(1280.0), px(820.0));
+  config.environment.os = nsh_core::platform::Os::Windows;
+  let mut app = Headless::start(config).unwrap();
+
+  app.wait_for("欢迎使用 Mica").unwrap();
+
+  // 1. Create a fresh page so local activity records at least 1 creation today.
+  app.press("id:new-page-btn").unwrap();
+  app.wait_for("未命名页面 2").unwrap();
+
+  // 2. Open AccountMenu -> click "使用统计" shortcut to jump straight to Settings -> 使用统计.
+  app.press("id:account-menu-btn").unwrap();
+  app.wait_for("id:account-menu-usage-stats-btn").unwrap();
+  app.press("id:account-menu-usage-stats-btn").unwrap();
+
+  // 3. Verify all dashboard sections render with live local data (2 live pages: starter + new page,
+  //    exact word count from unified `mica_core::word_count`, and 1 creation recorded today).
+  app.wait_for("id:usage-stats-panel").unwrap();
+  app.wait_for("id:usage-stats-kpis").unwrap();
+  app.wait_for("id:usage-stats-trend").unwrap();
+  app.wait_for("id:usage-stats-heatmap").unwrap();
+  app.wait_for("id:usage-stats-health").unwrap();
+  app.wait_for("id:usage-stats-table").unwrap();
+  app.wait_for("本地存储 · 无配额上限").unwrap();
+  app.wait_for("新建 1 篇 · 编辑 0 篇 · 新增 +0 词 · 净增 0 词 · 活跃 1 天").unwrap();
+  app.wait_for("活跃 1 天 · 当前连续 1 天 · 最长连续 1 天").unwrap();
+  app.wait_for("156").unwrap();
+
+  // 4. Switch time range, metric selector, include-imports toggle, and table sort.
+  app.press("id:usage-stats-range-7d").unwrap();
+  app.press("id:usage-stats-metric-created").unwrap();
+  app.press("id:usage-stats-include-imports").unwrap();
+  app.wait_for("☑ 含导入/转移").unwrap();
+  app.press("id:usage-stats-sort-words").unwrap();
+  app.press("id:usage-stats-refresh-btn").unwrap();
+
+  // 5. Close settings cleanly.
+  app.press("id:settings-close-btn").unwrap();
+  app
+    .wait_for_gone("id:usage-stats-panel", std::time::Duration::from_millis(800))
+    .unwrap();
+}

@@ -51,6 +51,7 @@ pub mod touch_selection;
 pub mod transfer;
 pub mod transfer_dialog;
 pub mod tree_dnd;
+pub mod usage_stats_view;
 pub mod version_history;
 pub mod workspace_views;
 pub mod world_switcher;
@@ -786,7 +787,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
             let entry = map.entry((orig.clone(), doc_id)).or_insert(0);
             *entry = entry.wrapping_add(1);
           }
-          let _ = vault_s.save_markdown(&orig, doc_id, &md);
+          if cloud_sync::is_cloud_origin(&orig) {
+            let _ = vault_s.save_markdown(&orig, doc_id, &md);
+          } else {
+            let _ = vault_s.save_markdown_tracked(
+              &orig,
+              ws_id,
+              doc_id,
+              &md,
+              mica_core::ActivitySource::Manual,
+            );
+          }
           let next_bl = compute_backlinks_for(
             &tree_s.borrow(),
             &docs_s.borrow(),
@@ -865,7 +876,17 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                 .and_then(|map| map.get(&(orig_bg.clone(), doc_id)).copied())
                 .is_none_or(|cur| cur == write_seq);
               if still_latest {
-                let _ = v_bg.save_markdown(&orig_bg, doc_id, &md_bg);
+                if cloud_sync::is_cloud_origin(&orig_bg) {
+                  let _ = v_bg.save_markdown(&orig_bg, doc_id, &md_bg);
+                } else {
+                  let _ = v_bg.save_markdown_tracked(
+                    &orig_bg,
+                    ws_id,
+                    doc_id,
+                    &md_bg,
+                    mica_core::ActivitySource::Manual,
+                  );
+                }
               }
             })
             .await;
@@ -1189,6 +1210,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
       let view_row = make_view(cur_ws, new_doc_id, &name, "page", valid_parent, &pos);
       let _ = v.save_view(&orig, &view_row);
       let _ = v.save_markdown(&orig, new_doc_id, &markdown);
+      v.record_doc_created(&orig, cur_ws, new_doc_id, mica_core::ActivitySource::Manual, &markdown);
       {
         let mut t = tree_ref.borrow_mut();
         t.upsert_view(view_row);
@@ -1314,6 +1336,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
         let page = make_view(cur_ws, doc_id, &spec.title, "page", parent, &pos);
         let _ = v.save_view(&orig, &page);
         let _ = v.save_markdown(&orig, doc_id, &spec.markdown);
+        v.record_doc_created(&orig, cur_ws, doc_id, mica_core::ActivitySource::Import, &spec.markdown);
         {
           let mut t = tree_ref.borrow_mut();
           t.upsert_view(page);
@@ -2645,10 +2668,126 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
   settings_props_val.on_purge_view = Some(on_purge_view);
   settings_props_val.on_purge_all_trash = Some(on_purge_all_trash);
   settings_props_val.on_refresh_trash = Some(reload_tree_from_vault.clone());
+  let settings_active_tab = signal(settings_view::TAB_APPEARANCE);
+  let stats_loading = signal(false);
+  let stats_error: Signal<Option<String>> = signal(None);
+  let stats_overview: Signal<Option<mica_core::UsageStatsOverview>> = signal(None);
+  let stats_activity: Signal<Option<mica_core::UsageStatsActivity>> = signal(None);
+  let stats_ws_filter: Signal<Option<String>> = signal(None);
+  let stats_range = signal("30d".to_string());
+  let stats_include_imports = signal(false);
+  let stats_fetch_gen = signal(0u64);
+  let stats_is_cloud = signal(false);
+
+  let refresh_usage_stats: Rc<dyn Fn()> = {
+    let v = vault.clone();
+    let cc = cloud_connector.clone();
+    Rc::new(move || {
+      let orig = active_origin.get_untracked();
+      let range = stats_range.get_untracked();
+      let ws_filter = stats_ws_filter.get_untracked();
+      let inc_imp = stats_include_imports.get_untracked();
+      let tz_offset = Local::now().offset().local_minus_utc() / 60;
+      let epoch = stats_fetch_gen.get_untracked().wrapping_add(1);
+      stats_fetch_gen.set(epoch);
+      let is_cloud = cloud_sync::is_cloud_origin(&orig) && is_cloud_signed_in.get_untracked();
+      stats_is_cloud.set(is_cloud);
+      stats_error.set(None);
+
+      if !is_cloud {
+        stats_loading.set(false);
+        match (
+          v.usage_overview(&orig),
+          v.usage_activity(&orig, &range, tz_offset, ws_filter.as_deref(), inc_imp),
+        ) {
+          (Ok(ov), Ok(act)) => {
+            stats_overview.set(Some(ov));
+            stats_activity.set(Some(act));
+          }
+          (Err(e), _) | (_, Err(e)) => stats_error.set(Some(e)),
+        }
+        return;
+      }
+
+      stats_loading.set(true);
+      let conn = cc.borrow().clone();
+      let orig_expect = orig.clone();
+      app_owner.run(move || {
+        spawn(async move {
+          let res = net::run_blocking(move || {
+            let ov = conn.get_usage_overview()?;
+            let act = conn.get_usage_activity(&range, tz_offset, ws_filter.as_deref(), inc_imp)?;
+            Ok::<_, String>((ov, act))
+          })
+          .await;
+          if stats_fetch_gen.get_untracked() != epoch
+            || active_origin.get_untracked() != orig_expect
+          {
+            return;
+          }
+          stats_loading.set(false);
+          match res {
+            Ok((ov, act)) => {
+              stats_overview.set(Some(ov));
+              stats_activity.set(Some(act));
+            }
+            Err(e) => stats_error.set(Some(e)),
+          }
+        });
+      });
+    })
+  };
+
+  let usage_stats_props = usage_stats_view::UsageStatsProps {
+    dark_mode,
+    is_cloud: stats_is_cloud,
+    loading: stats_loading,
+    error: stats_error,
+    overview: stats_overview,
+    activity: stats_activity,
+    selected_workspace_id: stats_ws_filter,
+    selected_range: stats_range,
+    include_imports: stats_include_imports,
+    on_refresh: refresh_usage_stats.clone(),
+    on_select_workspace: {
+      let r = refresh_usage_stats.clone();
+      Rc::new(move |ws_id| {
+        stats_ws_filter.set(ws_id);
+        r();
+      })
+    },
+    on_select_range: {
+      let r = refresh_usage_stats.clone();
+      Rc::new(move |range| {
+        stats_range.set(range);
+        r();
+      })
+    },
+    on_toggle_imports: {
+      let r = refresh_usage_stats.clone();
+      Rc::new(move |inc| {
+        stats_include_imports.set(inc);
+        r();
+      })
+    },
+  };
+
+  let on_open_usage_stats: Rc<dyn Fn()> = {
+    let r = refresh_usage_stats.clone();
+    Rc::new(move || {
+      account_menu_open.set(false);
+      settings_active_tab.set(settings_view::TAB_USAGE_STATS);
+      settings_modal_open.set(true);
+      r();
+    })
+  };
+
   settings_props_val.on_open_about = Some(Rc::new(move || {
     settings_modal_open.set(false);
     about_modal_open.set(true);
   }));
+  settings_props_val.active_tab = Some(settings_active_tab);
+  settings_props_val.usage_stats = Some(usage_stats_props);
   let settings_props = Rc::new(settings_props_val);
 
   // App Menu, Account Menu, World Switcher, Version History, Share, AI & Workspace Settings states
@@ -2693,6 +2832,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
     app_version: APP_VERSION,
     update_status,
     on_open_settings: on_open_settings.clone(),
+    on_open_usage_stats: Some(on_open_usage_stats.clone()),
     on_switch_world: Rc::new(move || {
       account_menu_open.set(false);
       world_switcher_open.set(true);
@@ -3870,6 +4010,7 @@ fn render_mica_app(vault: VaultStore) -> impl IntoElement {
                 let md = vt.load_markdown(src_orig, vrow.object_id).unwrap_or_default();
                 cloned.object_id = new_obj;
                 let _ = vt.save_markdown(dest_orig, new_obj, &md);
+                vt.record_doc_created(dest_orig, dest_ws, new_obj, mica_core::ActivitySource::Transfer, &md);
                 let _ = vt.save_view(dest_orig, &cloned);
               } else {
                 cloned.object_id = cloned.id;

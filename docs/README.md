@@ -114,6 +114,7 @@
 | [release-0.14.3-validation.md](ops/release-0.14.3-validation.md) | 0.14.3 发行物、生产与隔离栈验收;入口 404 缺口及修复边界 |
 | [traefik-working-set.md](ops/traefik-working-set.md) | 共享入口最终配置、缺页 I/O 根因、部署保留方式与空闲 TLS / 目录验收 |
 | [deploy.md](ops/deploy.md) | 部署、凭据、管理员、删账号 |
+| [metrics.md](ops/metrics.md) | **Prometheus `/metrics` 指标字典、网络隔离边界、PromQL 配方与告警参考** |
 | [backup.md](ops/backup.md) | 备份与恢复 |
 | [dr-plan.md](ops/dr-plan.md) | 容灾方案 |
 | [dr-drill.md](ops/dr-drill.md) | 容灾恢复演练工作表 |

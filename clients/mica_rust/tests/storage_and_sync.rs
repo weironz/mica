@@ -774,3 +774,84 @@ fn cloud_crud_mutations_and_unauthorized_detection() {
   assert!(reqs[13].starts_with(&format!("DELETE /api/workspaces/{ws_id}/members/usr-1 ")));
   assert!(reqs[14].starts_with(&format!("DELETE /api/workspaces/{ws_id} ")));
 }
+
+#[test]
+fn usage_stats_vault_and_cloud_connector_endpoints() {
+  // 1. Local VaultStore tracking + overview + activity folding.
+  let vault = VaultStore::in_memory();
+  let ws_id = Uuid::new_v4();
+  let doc_id = Uuid::new_v4();
+  vault
+    .save_workspace_name(DEFAULT_ORIGIN, ws_id, "技术笔记")
+    .unwrap();
+  let view = View {
+    id: doc_id,
+    workspace_id: ws_id,
+    parent_view_id: None,
+    object_id: doc_id,
+    object_type: "page".to_string(),
+    name: "首页".to_string(),
+    icon: None,
+    position: "0000000010".to_string(),
+    is_deleted: false,
+    created_by: Uuid::nil(),
+    created_at: Utc::now(),
+    updated_at: Utc::now(),
+    state_bytes: None,
+  };
+  vault.save_view(DEFAULT_ORIGIN, &view).unwrap();
+  vault
+    .save_markdown(DEFAULT_ORIGIN, doc_id, "你好 world")
+    .unwrap();
+  vault.record_doc_created(
+    DEFAULT_ORIGIN,
+    ws_id,
+    doc_id,
+    mica_core::ActivitySource::Manual,
+    "你好 world",
+  );
+  vault
+    .save_markdown_tracked(
+      DEFAULT_ORIGIN,
+      ws_id,
+      doc_id,
+      "你好 world Rust 统计",
+      mica_core::ActivitySource::Manual,
+    )
+    .unwrap();
+
+  let overview = vault.usage_overview(DEFAULT_ORIGIN).unwrap();
+  assert_eq!(overview.summary.workspace_count, 1);
+  assert_eq!(overview.summary.live_page_count, 1);
+  assert_eq!(overview.summary.total_words, 6);
+  let act = vault
+    .usage_activity(DEFAULT_ORIGIN, "7d", 480, Some(&ws_id.to_string()), false)
+    .unwrap();
+  assert_eq!(act.totals.pages_created, 1);
+  assert_eq!(act.totals.pages_edited, 1);
+  assert_eq!(act.totals.words_added, 6);
+
+  // 2. CloudConnector GET /api/stats/overview + GET /api/stats/activity.
+  let ov_json = serde_json::to_string(&overview).unwrap();
+  let act_json = serde_json::to_string(&act).unwrap();
+  let (url, handle) = spawn_multi_step_http_server(vec![
+    ("200 OK", ov_json),
+    ("200 OK", act_json),
+  ]);
+  let conn = CloudConnector::new(CloudConfig {
+    server_url: url,
+    access_token: Some("tok-stats".to_string()),
+    email: Some("stats@mica.test".to_string()),
+  });
+  let remote_ov = conn.get_usage_overview().unwrap();
+  assert_eq!(remote_ov.summary.total_words, 6);
+  let remote_act = conn
+    .get_usage_activity("7d", 480, Some(&ws_id.to_string()), false)
+    .unwrap();
+  assert_eq!(remote_act.totals.pages_created, 1);
+  let reqs = handle.join().unwrap();
+  assert!(reqs[0].starts_with("GET /api/stats/overview "));
+  assert!(reqs[1].starts_with(&format!(
+    "GET /api/stats/activity?range=7d&tz_offset=480&include_imports=false&workspace_id={ws_id} "
+  )));
+}

@@ -40,6 +40,7 @@ pub async fn create_document(
       name: &name,
       icon: None,
       seed: mica_app_core::sync::empty_payload(&root_block_id),
+      source: mica_core::ActivitySource::Manual,
     },
   )
   .await?;
@@ -141,6 +142,7 @@ pub async fn import_document_markdown(
       name: &name,
       icon: None,
       seed: imported,
+      source: mica_core::ActivitySource::Import,
     },
   )
   .await?;

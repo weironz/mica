@@ -13,10 +13,10 @@
 ## 能力与交互规格
 
 ### 设置中心与主题外观
-- **`CAP-16-01` 8 标签设置中心**：大尺寸对话框（桌面默认 `1120×840`，窄视口自适应 `max_w 94% / max_h 92%`），左侧分组导航覆盖 8 个标签页：
+- **`CAP-16-01` 9 标签设置中心**：大尺寸对话框（桌面默认 `1120×840`，窄视口自适应 `max_w 94% / max_h 92%`），左侧分组导航覆盖 9 个标签页：
   - 通用：**外观**、**快捷键**
   - 账户：**账户**、**API 令牌**
-  - 工作区：**数据**（导入导出与本机存储统计）、**回收站**
+  - 工作区：**数据**（导入导出与本机存储统计）、**使用统计**（工作区/页面/字数/存储/知识健康度/写作趋势与 180 天热力图，云端与本地双模式同构；亦支持从左下角账号菜单一键直达）、**回收站**
   - 其他：**AI 服务商**、**诊断**
   - 底部固定「关于 v<ver>」弹窗入口。
 - **`CAP-16-02` 外观设置与实时预览**：
@@ -40,7 +40,7 @@
 
 | 编号 | 优先级 | 适用端 | 纯 Rust 状态 | 验证入口 |
 | --- | --- | --- | --- | --- |
-| `CAP-16-01` / `02` / `03` 8 标签设置中心、外观持久化与色板 | P0 | 桌面/Web | ✅ | `settings_view::tests` + `storage::tests::prefs_round_trip_and_persist_to_json_file` |
+| `CAP-16-01` / `02` / `03` 9 标签设置中心（含使用统计）、外观持久化与色板 | P0 | 桌面/Web | ✅ | `settings_view::tests` + `usage_stats_view::tests` + `app_flows::regression_usage_statistics_dashboard_and_live_updates` + `storage::tests::prefs_round_trip_and_persist_to_json_file` |
 | `CAP-16-04` 快捷键体系与设置页清单 | P0 | 桌面/Web | ✅ | [docs/features/shortcuts.md](../features/shortcuts.md) + `editor_view.rs` + `lib.rs` |
 | `CAP-16-05` 移动端 `<768px` 抽屉与窄屏标签切换 | P1 | 移动端/窄屏 | ✅ | `responsive_shell.rs`（`<768px` 覆盖抽屉 + 遮罩 + `narrow-tab-switcher` + 自动隐藏页宽手柄）+ `app_flows::regression_narrow_viewport_drawers_and_touch_bar` |
 | `CAP-16-06` 触摸选区（CJK 1–2 字规则）与操作栏 | P1 | 移动端 | ✅ | `touch_selection::tests::touch_word_bounds_handles_cjk_latin_punctuation_and_emoji` + `app_flows::regression_narrow_viewport_drawers_and_touch_bar`（CJK 1–2 字/标点/代理对安全选词 + 窄屏紧凑触摸操作栏；原生水滴拖拽手柄随 iOS/Android 真机壳补齐） |
@@ -52,3 +52,4 @@
 
 - **2026-11-23**：沉淀设置中心、快捷键体系、主题外观与移动端（含 `touchWordBounds` 触摸选区）规格。
 - **2026-11-23（补齐迭代）**：新增 `responsive_shell.rs` 与 `touch_selection.rs`，补齐 `<768px` 响应式左右覆盖抽屉、窄屏标签切换器、CJK 1–2 字触摸选词算法与窄屏紧凑触摸选区操作条（`CAP-16-05` / `06`）。
+- **2026-11-24（使用统计与可观测性 #191）**：设置中心扩展为 9 标签新增「使用统计」（同步在左下角账号菜单提供直达入口），接入 L1 统一 `mica_core::word_count` / `usage_stats`、本地 SQLite 小时桶活跃表与云端 `/api/stats/overview` `/api/stats/activity` + Prometheus `/metrics` 业务指标。

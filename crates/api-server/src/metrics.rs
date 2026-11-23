@@ -179,12 +179,17 @@ struct BlobGcStats {
 /// Ordered by usage, so the rows that get dropped are the empty ones.
 const MAX_WORKSPACE_SERIES: i64 = 1000;
 
-/// One workspace's storage, for the per-workspace gauges.
+/// One workspace's usage snapshot, for the per-workspace gauges.
 #[derive(Clone)]
 struct WorkspaceUsage {
   id: String,
   name: String,
   bytes: i64,
+  live_pages: i64,
+  folders: i64,
+  words: i64,
+  image_files: i64,
+  attachment_files: i64,
 }
 
 /// Counts derived from the database. Kept behind [`DB_SNAPSHOT_TTL`].
@@ -193,6 +198,15 @@ struct DbSnapshot {
   users: i64,
   workspaces: i64,
   documents: i64,
+  live_pages: i64,
+  folders: i64,
+  trashed_pages: i64,
+  words_total: i64,
+  chars_total: i64,
+  image_files: i64,
+  attachment_files: i64,
+  orphan_pages: i64,
+  public_shares: i64,
   /// Total bytes across every workspace.
   ///
   /// Computed with the SAME expression the quota enforces (registered files
@@ -250,11 +264,46 @@ pub struct Metrics {
 
   blob_gc: Mutex<BlobGcStats>,
   db_snapshot: Mutex<Option<(Instant, DbSnapshot)>>,
+
+  pages_created_manual: AtomicU64,
+  pages_created_import: AtomicU64,
+  pages_created_transfer: AtomicU64,
+  page_edits: AtomicU64,
+  words_written: AtomicU64,
+  words_deleted: AtomicU64,
 }
 
 impl Metrics {
   pub fn new() -> Self {
     Self::default()
+  }
+
+  /// Record a newly created page by source (`manual`, `import`, `transfer`).
+  pub fn record_page_created(&self, source: mica_core::ActivitySource) {
+    match source {
+      mica_core::ActivitySource::Manual => {
+        self.pages_created_manual.fetch_add(1, Ordering::Relaxed);
+      }
+      mica_core::ActivitySource::Import => {
+        self.pages_created_import.fetch_add(1, Ordering::Relaxed);
+      }
+      mica_core::ActivitySource::Transfer => {
+        self.pages_created_transfer.fetch_add(1, Ordering::Relaxed);
+      }
+    }
+  }
+
+  /// Record an accepted document edit and its positive word additions/deletions.
+  pub fn record_page_edit(&self, words_added: u64, words_deleted: u64) {
+    self.page_edits.fetch_add(1, Ordering::Relaxed);
+    if words_added > 0 {
+      self.words_written.fetch_add(words_added, Ordering::Relaxed);
+    }
+    if words_deleted > 0 {
+      self
+        .words_deleted
+        .fetch_add(words_deleted, Ordering::Relaxed);
+    }
   }
 
   fn record_http(&self, method: &str, route: &str, status: u16, seconds: f64) {
@@ -388,7 +437,8 @@ fn process_open_fds() -> Option<u64> {
 async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
   // Counts first. Cheap at this scale, and the byte aggregate rides
   // `idx_files_workspace_bytes` (an index-only scan).
-  let row: (i64, i64, i64, i64) = sqlx::query_as(
+  #[allow(clippy::type_complexity)]
+  let row: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
     r#"
     SELECT
       (SELECT count(*) FROM users WHERE deleted_at IS NULL)::bigint,
@@ -397,7 +447,57 @@ async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
       (coalesce((SELECT sum(byte_size) FROM files), 0)
        + coalesce((SELECT sum(p.byte_size) FROM pending_file_uploads p
           WHERE p.workspace_id IN (SELECT id FROM workspaces)
-            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key)), 0))::bigint
+            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key)), 0))::bigint,
+      (SELECT count(*) FROM views WHERE is_deleted = false AND object_type::text = 'document')::bigint,
+      (SELECT count(*) FROM views WHERE is_deleted = false AND object_type::text = 'folder')::bigint,
+      (SELECT count(*) FROM views WHERE is_deleted = true  AND object_type::text = 'document')::bigint,
+      coalesce((
+        SELECT sum(coalesce(b.word_count, 0))
+        FROM views v
+        JOIN document_yrs_base b ON b.document_id = v.object_id
+        WHERE v.is_deleted = false AND v.object_type::text = 'document'
+      ), 0)::bigint,
+      coalesce((
+        SELECT sum(coalesce(b.char_count, 0))
+        FROM views v
+        JOIN document_yrs_base b ON b.document_id = v.object_id
+        WHERE v.is_deleted = false AND v.object_type::text = 'document'
+      ), 0)::bigint,
+      (SELECT count(*) FROM files WHERE mime_type LIKE 'image/%')::bigint,
+      (SELECT count(*) FROM files WHERE mime_type NOT LIKE 'image/%')::bigint,
+      (
+        SELECT count(*)
+        FROM views v
+        WHERE v.is_deleted = false
+          AND v.object_type::text = 'document'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM document_yrs_base b
+            CROSS JOIN LATERAL unnest(coalesce(b.link_targets, ARRAY[]::uuid[])) AS t
+            JOIN views tgt ON tgt.id = t AND tgt.workspace_id = v.workspace_id
+              AND tgt.is_deleted = false AND tgt.object_type::text = 'document'
+            WHERE b.document_id = v.object_id AND tgt.id <> v.id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM views src
+            JOIN document_yrs_base sb ON sb.document_id = src.object_id
+            WHERE src.workspace_id = v.workspace_id
+              AND src.is_deleted = false
+              AND src.object_type::text = 'document'
+              AND src.id <> v.id
+              AND v.id = ANY(coalesce(sb.link_targets, ARRAY[]::uuid[]))
+          )
+      )::bigint,
+      (
+        SELECT count(*)
+        FROM document_shares ds
+        JOIN views v ON v.workspace_id = ds.workspace_id
+          AND v.object_id = ds.document_id
+          AND v.object_type::text = 'document'
+          AND v.is_deleted = false
+        WHERE ds.revoked_at IS NULL
+      )::bigint
     "#,
   )
   .fetch_one(db)
@@ -407,13 +507,24 @@ async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
   // LEFT JOIN, so a workspace with no blobs still reports 0 rather than
   // vanishing: "this one is empty" and "this one is not being measured" have to
   // look different, and a missing series reads as the latter.
-  let rows: Vec<(uuid::Uuid, String, i64)> = sqlx::query_as(
+  #[allow(clippy::type_complexity)]
+  let rows: Vec<(uuid::Uuid, String, i64, i64, i64, i64, i64, i64)> = sqlx::query_as(
     r#"
     SELECT w.id, w.name,
       (coalesce((SELECT sum(f.byte_size) FROM files f WHERE f.workspace_id = w.id), 0)
        + coalesce((SELECT sum(p.byte_size) FROM pending_file_uploads p
           WHERE p.workspace_id = w.id
-            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key)), 0))::bigint AS used
+            AND NOT EXISTS (SELECT 1 FROM files f WHERE f.object_key = p.object_key)), 0))::bigint AS used,
+      (SELECT count(*) FROM views v WHERE v.workspace_id = w.id AND v.is_deleted = false AND v.object_type::text = 'document')::bigint,
+      (SELECT count(*) FROM views v WHERE v.workspace_id = w.id AND v.is_deleted = false AND v.object_type::text = 'folder')::bigint,
+      coalesce((
+        SELECT sum(coalesce(b.word_count, 0))
+        FROM views v
+        JOIN document_yrs_base b ON b.document_id = v.object_id
+        WHERE v.workspace_id = w.id AND v.is_deleted = false AND v.object_type::text = 'document'
+      ), 0)::bigint,
+      (SELECT count(*) FROM files f WHERE f.workspace_id = w.id AND f.mime_type LIKE 'image/%')::bigint,
+      (SELECT count(*) FROM files f WHERE f.workspace_id = w.id AND f.mime_type NOT LIKE 'image/%')::bigint
     FROM workspaces w
     ORDER BY used DESC, w.id
     LIMIT $1
@@ -429,14 +540,32 @@ async fn load_db_snapshot(db: &PgPool) -> Option<DbSnapshot> {
     workspaces: row.1,
     documents: row.2,
     bytes_total: row.3,
+    live_pages: row.4,
+    folders: row.5,
+    trashed_pages: row.6,
+    words_total: row.7,
+    chars_total: row.8,
+    image_files: row.9,
+    attachment_files: row.10,
+    orphan_pages: row.11,
+    public_shares: row.12,
     workspaces_truncated: (row.1 - rows.len() as i64).max(0),
     workspace_usage: rows
       .into_iter()
-      .map(|(id, name, bytes)| WorkspaceUsage {
-        id: id.to_string(),
-        name,
-        bytes,
-      })
+      .map(
+        |(id, name, bytes, live_pages, folders, words, image_files, attachment_files)| {
+          WorkspaceUsage {
+            id: id.to_string(),
+            name,
+            bytes,
+            live_pages,
+            folders,
+            words,
+            image_files,
+            attachment_files,
+          }
+        },
+      )
       .collect(),
   })
 }
@@ -673,83 +802,185 @@ fn render(state: &AppState, snapshot: Option<&DbSnapshot>) -> String {
     let _ = writeln!(out, "mica_process_open_fds {fds}");
   }
 
+  // ── writing activity counters (monotonic since process start) ──
+  render_activity_counters(&mut out, &METRICS);
+
   // ── capacity / business ──
   if let Some(s) = snapshot {
-    out.push_str("# HELP mica_users_total Registered users.\n");
-    out.push_str("# TYPE mica_users_total gauge\n");
-    let _ = writeln!(out, "mica_users_total {}", s.users);
-    out.push_str("# HELP mica_workspaces_total Workspaces.\n");
-    out.push_str("# TYPE mica_workspaces_total gauge\n");
-    let _ = writeln!(out, "mica_workspaces_total {}", s.workspaces);
-    out.push_str("# HELP mica_documents_total Documents (including trashed).\n");
-    out.push_str("# TYPE mica_documents_total gauge\n");
-    let _ = writeln!(out, "mica_documents_total {}", s.documents);
-    out.push_str("# HELP mica_storage_bytes Stored bytes across the instance.\n");
-    out.push_str("# TYPE mica_storage_bytes gauge\n");
-    let _ = writeln!(
-      out,
-      "mica_storage_bytes{{scope=\"total\"}} {}",
-      s.bytes_total
-    );
-
-    // Per workspace, shaped like node_exporter's per-filesystem series: expose
-    // the fact for EVERY workspace and let the alert rule own the threshold.
-    //
-    //   mica_workspace_bytes_used / on() group_left() mica_workspace_quota_bytes > 0.8
-    //
-    // An earlier draft emitted only workspaces already past a hard-coded 50%.
-    // That bakes policy into the binary (redeploy to retune), and worse, it
-    // destroys the history: a workspace appears only once it is already in
-    // trouble, so there is no earlier data to compute a growth rate from — and
-    // the growth rate is the only thing that warns you EARLY.
-    //
-    // `largest_workspace` used to be a separate series; it is `max()` of this
-    // one now, and two ways to say the same number is how they drift.
-    out.push_str("# HELP mica_workspace_bytes_used Stored bytes, per workspace.\n");
-    out.push_str("# TYPE mica_workspace_bytes_used gauge\n");
-    for w in &s.workspace_usage {
-      let _ = writeln!(
-        out,
-        "mica_workspace_bytes_used{{workspace_id=\"{}\"}} {}",
-        esc(&w.id),
-        w.bytes
-      );
-    }
-    // The name rides an info metric rather than every sample: a rename would
-    // otherwise fork the whole series and break its history, and the standard
-    // join (`* on(workspace_id) group_left(name)`) puts it back on the graph.
-    out.push_str("# HELP mica_workspace_info Workspace id → name, for joins.\n");
-    out.push_str("# TYPE mica_workspace_info gauge\n");
-    for w in &s.workspace_usage {
-      let _ = writeln!(
-        out,
-        "mica_workspace_info{{workspace_id=\"{}\",name=\"{}\"}} 1",
-        esc(&w.id),
-        esc(&w.name)
-      );
-    }
-    out.push_str("# HELP mica_workspace_series_truncated Workspaces left out of the scrape.\n");
-    out.push_str("# TYPE mica_workspace_series_truncated gauge\n");
-    let _ = writeln!(
-      out,
-      "mica_workspace_series_truncated {}",
-      s.workspaces_truncated
-    );
-
-    // Unlabelled on purpose: the quota is ONE config value today, so copying it
-    // onto every workspace series would be N copies of a constant pretending to
-    // be per-workspace data. If per-workspace overrides ever land, this gains
-    // the label then — and the rule above already reads that way.
-    out.push_str("# HELP mica_workspace_quota_bytes The per-workspace limit in force.\n");
-    out.push_str("# TYPE mica_workspace_quota_bytes gauge\n");
-    let _ = writeln!(
-      out,
-      "mica_workspace_quota_bytes {}",
-      state.config.workspace_quota_bytes
-    );
+    render_snapshot_gauges(&mut out, s, state.config.workspace_quota_bytes);
   }
 
   out
+}
+
+fn render_activity_counters(out: &mut String, m: &Metrics) {
+  out.push_str("# HELP mica_pages_created_total Pages created since process start, by source.\n");
+  out.push_str("# TYPE mica_pages_created_total counter\n");
+  let _ = writeln!(
+    out,
+    "mica_pages_created_total{{source=\"manual\"}} {}",
+    m.pages_created_manual.load(Ordering::Relaxed)
+  );
+  let _ = writeln!(
+    out,
+    "mica_pages_created_total{{source=\"import\"}} {}",
+    m.pages_created_import.load(Ordering::Relaxed)
+  );
+  let _ = writeln!(
+    out,
+    "mica_pages_created_total{{source=\"transfer\"}} {}",
+    m.pages_created_transfer.load(Ordering::Relaxed)
+  );
+  out.push_str("# HELP mica_page_edits_total Accepted document edits since process start.\n");
+  out.push_str("# TYPE mica_page_edits_total counter\n");
+  let _ = writeln!(
+    out,
+    "mica_page_edits_total {}",
+    m.page_edits.load(Ordering::Relaxed)
+  );
+  out.push_str("# HELP mica_words_written_total Positive word additions since process start.\n");
+  out.push_str("# TYPE mica_words_written_total counter\n");
+  let _ = writeln!(
+    out,
+    "mica_words_written_total {}",
+    m.words_written.load(Ordering::Relaxed)
+  );
+  out.push_str("# HELP mica_words_deleted_total Words deleted since process start.\n");
+  out.push_str("# TYPE mica_words_deleted_total counter\n");
+  let _ = writeln!(
+    out,
+    "mica_words_deleted_total {}",
+    m.words_deleted.load(Ordering::Relaxed)
+  );
+}
+
+fn render_snapshot_gauges(out: &mut String, s: &DbSnapshot, workspace_quota_bytes: i64) {
+  out.push_str("# HELP mica_users_total Registered users.\n");
+  out.push_str("# TYPE mica_users_total gauge\n");
+  let _ = writeln!(out, "mica_users_total {}", s.users);
+  out.push_str("# HELP mica_workspaces_total Workspaces.\n");
+  out.push_str("# TYPE mica_workspaces_total gauge\n");
+  let _ = writeln!(out, "mica_workspaces_total {}", s.workspaces);
+  out.push_str("# HELP mica_documents_total Documents (including trashed).\n");
+  out.push_str("# TYPE mica_documents_total gauge\n");
+  let _ = writeln!(out, "mica_documents_total {}", s.documents);
+  out.push_str("# HELP mica_live_pages_total Non-deleted document pages across the instance.\n");
+  out.push_str("# TYPE mica_live_pages_total gauge\n");
+  let _ = writeln!(out, "mica_live_pages_total {}", s.live_pages);
+  out.push_str("# HELP mica_folders_total Non-deleted folders across the instance.\n");
+  out.push_str("# TYPE mica_folders_total gauge\n");
+  let _ = writeln!(out, "mica_folders_total {}", s.folders);
+  out.push_str("# HELP mica_trashed_pages_total Soft-deleted pages in trash.\n");
+  out.push_str("# TYPE mica_trashed_pages_total gauge\n");
+  let _ = writeln!(out, "mica_trashed_pages_total {}", s.trashed_pages);
+  out.push_str("# HELP mica_words_total Total words across live pages.\n");
+  out.push_str("# TYPE mica_words_total gauge\n");
+  let _ = writeln!(out, "mica_words_total {}", s.words_total);
+  out.push_str("# HELP mica_chars_total Total non-whitespace characters across live pages.\n");
+  out.push_str("# TYPE mica_chars_total gauge\n");
+  let _ = writeln!(out, "mica_chars_total {}", s.chars_total);
+  out.push_str("# HELP mica_files_total Uploaded files across the instance by kind.\n");
+  out.push_str("# TYPE mica_files_total gauge\n");
+  let _ = writeln!(out, "mica_files_total{{kind=\"image\"}} {}", s.image_files);
+  let _ = writeln!(
+    out,
+    "mica_files_total{{kind=\"attachment\"}} {}",
+    s.attachment_files
+  );
+  out.push_str("# HELP mica_orphan_pages_total Live pages with zero incoming or outgoing page links.\n");
+  out.push_str("# TYPE mica_orphan_pages_total gauge\n");
+  let _ = writeln!(out, "mica_orphan_pages_total {}", s.orphan_pages);
+  out.push_str("# HELP mica_public_shares_total Active unrevoked public page shares.\n");
+  out.push_str("# TYPE mica_public_shares_total gauge\n");
+  let _ = writeln!(out, "mica_public_shares_total {}", s.public_shares);
+  out.push_str("# HELP mica_storage_bytes Stored bytes across the instance.\n");
+  out.push_str("# TYPE mica_storage_bytes gauge\n");
+  let _ = writeln!(
+    out,
+    "mica_storage_bytes{{scope=\"total\"}} {}",
+    s.bytes_total
+  );
+
+  // Per workspace, shaped like node_exporter's per-filesystem series.
+  out.push_str("# HELP mica_workspace_bytes_used Stored bytes, per workspace.\n");
+  out.push_str("# TYPE mica_workspace_bytes_used gauge\n");
+  for w in &s.workspace_usage {
+    let _ = writeln!(
+      out,
+      "mica_workspace_bytes_used{{workspace_id=\"{}\"}} {}",
+      esc(&w.id),
+      w.bytes
+    );
+  }
+  out.push_str("# HELP mica_workspace_pages Live pages, per workspace.\n");
+  out.push_str("# TYPE mica_workspace_pages gauge\n");
+  for w in &s.workspace_usage {
+    let _ = writeln!(
+      out,
+      "mica_workspace_pages{{workspace_id=\"{}\"}} {}",
+      esc(&w.id),
+      w.live_pages
+    );
+  }
+  out.push_str("# HELP mica_workspace_folders Live folders, per workspace.\n");
+  out.push_str("# TYPE mica_workspace_folders gauge\n");
+  for w in &s.workspace_usage {
+    let _ = writeln!(
+      out,
+      "mica_workspace_folders{{workspace_id=\"{}\"}} {}",
+      esc(&w.id),
+      w.folders
+    );
+  }
+  out.push_str("# HELP mica_workspace_words Live words, per workspace.\n");
+  out.push_str("# TYPE mica_workspace_words gauge\n");
+  for w in &s.workspace_usage {
+    let _ = writeln!(
+      out,
+      "mica_workspace_words{{workspace_id=\"{}\"}} {}",
+      esc(&w.id),
+      w.words
+    );
+  }
+  out.push_str("# HELP mica_workspace_files Uploaded files, per workspace and kind.\n");
+  out.push_str("# TYPE mica_workspace_files gauge\n");
+  for w in &s.workspace_usage {
+    let id = esc(&w.id);
+    let _ = writeln!(
+      out,
+      "mica_workspace_files{{workspace_id=\"{id}\",kind=\"image\"}} {}",
+      w.image_files
+    );
+    let _ = writeln!(
+      out,
+      "mica_workspace_files{{workspace_id=\"{id}\",kind=\"attachment\"}} {}",
+      w.attachment_files
+    );
+  }
+  // The name rides an info metric rather than every sample: a rename would
+  // otherwise fork the whole series and break its history, and the standard
+  // join (`* on(workspace_id) group_left(name)`) puts it back on the graph.
+  out.push_str("# HELP mica_workspace_info Workspace id → name, for joins.\n");
+  out.push_str("# TYPE mica_workspace_info gauge\n");
+  for w in &s.workspace_usage {
+    let _ = writeln!(
+      out,
+      "mica_workspace_info{{workspace_id=\"{}\",name=\"{}\"}} 1",
+      esc(&w.id),
+      esc(&w.name)
+    );
+  }
+  out.push_str("# HELP mica_workspace_series_truncated Workspaces left out of the scrape.\n");
+  out.push_str("# TYPE mica_workspace_series_truncated gauge\n");
+  let _ = writeln!(
+    out,
+    "mica_workspace_series_truncated {}",
+    s.workspaces_truncated
+  );
+
+  out.push_str("# HELP mica_workspace_quota_bytes The per-workspace limit in force.\n");
+  out.push_str("# TYPE mica_workspace_quota_bytes gauge\n");
+  let _ = writeln!(out, "mica_workspace_quota_bytes {workspace_quota_bytes}");
 }
 
 /// `GET /metrics`.
@@ -928,5 +1159,63 @@ mod tests {
     assert_eq!(m.push.lock().unwrap().rejected, 1);
     assert_eq!(m.push.lock().unwrap().bytes, 128);
     assert_eq!(m.integrity_failures.lock().unwrap()[&"push"], 1);
+  }
+
+  #[test]
+  fn usage_metrics_render_activity_counters_and_snapshot_gauges() {
+    let m = Metrics::new();
+    m.record_page_created(mica_core::ActivitySource::Manual);
+    m.record_page_created(mica_core::ActivitySource::Import);
+    m.record_page_edit(120, 15);
+
+    let mut out = String::new();
+    render_activity_counters(&mut out, &m);
+    assert!(out.contains("mica_pages_created_total{source=\"manual\"} 1"));
+    assert!(out.contains("mica_pages_created_total{source=\"import\"} 1"));
+    assert!(out.contains("mica_pages_created_total{source=\"transfer\"} 0"));
+    assert!(out.contains("mica_page_edits_total 1"));
+    assert!(out.contains("mica_words_written_total 120"));
+    assert!(out.contains("mica_words_deleted_total 15"));
+
+    let snap = DbSnapshot {
+      users: 3,
+      workspaces: 1,
+      documents: 12,
+      live_pages: 10,
+      folders: 2,
+      trashed_pages: 2,
+      words_total: 4200,
+      chars_total: 18_500,
+      image_files: 5,
+      attachment_files: 3,
+      orphan_pages: 4,
+      public_shares: 1,
+      bytes_total: 1_048_576,
+      workspace_usage: vec![WorkspaceUsage {
+        id: "ws-1".into(),
+        name: "Notes".into(),
+        bytes: 1_048_576,
+        live_pages: 10,
+        folders: 2,
+        words: 4200,
+        image_files: 5,
+        attachment_files: 3,
+      }],
+      workspaces_truncated: 0,
+    };
+    let mut gauges = String::new();
+    render_snapshot_gauges(&mut gauges, &snap, 5_368_709_120);
+    assert!(gauges.contains("mica_live_pages_total 10"));
+    assert!(gauges.contains("mica_folders_total 2"));
+    assert!(gauges.contains("mica_trashed_pages_total 2"));
+    assert!(gauges.contains("mica_words_total 4200"));
+    assert!(gauges.contains("mica_chars_total 18500"));
+    assert!(gauges.contains("mica_files_total{kind=\"image\"} 5"));
+    assert!(gauges.contains("mica_files_total{kind=\"attachment\"} 3"));
+    assert!(gauges.contains("mica_orphan_pages_total 4"));
+    assert!(gauges.contains("mica_public_shares_total 1"));
+    assert!(gauges.contains("mica_workspace_pages{workspace_id=\"ws-1\"} 10"));
+    assert!(gauges.contains("mica_workspace_words{workspace_id=\"ws-1\"} 4200"));
+    assert!(gauges.contains("mica_workspace_files{workspace_id=\"ws-1\",kind=\"image\"} 5"));
   }
 }

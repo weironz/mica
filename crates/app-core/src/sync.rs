@@ -254,6 +254,8 @@ pub(crate) struct FlatBase {
   pub content_text: String,
   pub link_targets: Vec<Uuid>,
   pub file_ids: Vec<String>,
+  pub word_count: i32,
+  pub char_count: i32,
 }
 
 impl FlatBase {
@@ -265,6 +267,7 @@ impl FlatBase {
     let content_text = content_text_from_blocks(&blocks, &root_id);
     let link_targets = link_targets_from_blocks(&blocks);
     let file_ids = file_ids_from_blocks(&blocks);
+    let counts = mica_core::word_count::count_blocks(&blocks);
     Self {
       state,
       state_vector,
@@ -273,6 +276,8 @@ impl FlatBase {
       content_text,
       link_targets,
       file_ids,
+      word_count: counts.words.min(i32::MAX as u64) as i32,
+      char_count: counts.chars.min(i32::MAX as u64) as i32,
     }
   }
 }
@@ -296,12 +301,13 @@ pub(crate) async fn write_base_tx(
   base: &FlatBase,
 ) -> ApiResult<()> {
   sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, clock_timestamp())
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, word_count, char_count, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp())
          ON CONFLICT (document_id) DO UPDATE SET
              state = excluded.state, state_vector = excluded.state_vector,
              base_rid = excluded.base_rid, content_text = excluded.content_text,
              link_targets = excluded.link_targets, file_ids = excluded.file_ids,
+             word_count = excluded.word_count, char_count = excluded.char_count,
              updated_at = clock_timestamp()",
     )
     .bind(document_id)
@@ -311,8 +317,55 @@ pub(crate) async fn write_base_tx(
     .bind(&base.content_text)
     .bind(&base.link_targets)
     .bind(&base.file_ids)
+    .bind(base.word_count)
+    .bind(base.char_count)
     .execute(&mut **tx)
     .await?;
+  Ok(())
+}
+
+/// Record a document creation or edit event into `writing_activity_doc_hourly`
+/// inside the caller's write transaction so activity buckets move atomically
+/// with the document write (issue #191).
+#[allow(clippy::too_many_arguments)]
+pub async fn record_writing_activity_tx(
+  tx: &mut Transaction<'_, Postgres>,
+  user_id: Uuid,
+  workspace_id: Uuid,
+  document_id: Uuid,
+  source: mica_core::ActivitySource,
+  is_created: bool,
+  edit_events: i32,
+  words_added: i32,
+  words_deleted: i32,
+) -> ApiResult<()> {
+  sqlx::query(
+    r#"
+    INSERT INTO writing_activity_doc_hourly(
+      user_id, workspace_id, bucket_hour, document_id, source,
+      is_created, edit_events, words_added, words_deleted
+    )
+    VALUES (
+      $1, $2, date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+      $3, $4, $5, $6, $7, $8
+    )
+    ON CONFLICT (user_id, workspace_id, bucket_hour, document_id, source) DO UPDATE SET
+      is_created    = writing_activity_doc_hourly.is_created OR excluded.is_created,
+      edit_events   = writing_activity_doc_hourly.edit_events + excluded.edit_events,
+      words_added   = writing_activity_doc_hourly.words_added + excluded.words_added,
+      words_deleted = writing_activity_doc_hourly.words_deleted + excluded.words_deleted
+    "#,
+  )
+  .bind(user_id)
+  .bind(workspace_id)
+  .bind(document_id)
+  .bind(source.as_str())
+  .bind(is_created)
+  .bind(edit_events.max(0))
+  .bind(words_added.max(0))
+  .bind(words_deleted.max(0))
+  .execute(&mut **tx)
+  .await?;
   Ok(())
 }
 
@@ -431,7 +484,7 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
   loop {
     let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
       "SELECT document_id, state FROM document_yrs_base
-             WHERE (content_text = '' OR link_targets IS NULL OR file_ids IS NULL)
+             WHERE (content_text = '' OR link_targets IS NULL OR file_ids IS NULL OR word_count IS NULL OR char_count IS NULL)
                AND document_id > $1
              ORDER BY document_id
              LIMIT $2",
@@ -468,6 +521,9 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
       let text = content_text_from_blocks(&blocks, &doc.root_block_id());
       let targets = link_targets_from_blocks(&blocks);
       let files = file_ids_from_blocks(&blocks);
+      let counts = mica_core::word_count::count_blocks(&blocks);
+      let word_count = counts.words.min(i32::MAX as u64) as i32;
+      let char_count = counts.chars.min(i32::MAX as u64) as i32;
       // `link_targets` is written unconditionally — writing `'{}'` is the
       // whole point of the NULL sentinel, and skipping it here would leave
       // the row NULL and re-decoded forever. `content_text` keeps its own
@@ -491,6 +547,8 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
                  SET content_text = CASE WHEN $2 = '' THEN content_text ELSE $2 END,
                      link_targets = $3,
                      file_ids = $4,
+                     word_count = $6,
+                     char_count = $7,
                      updated_at = CASE WHEN $2 = '' OR content_text = $2
                                        THEN updated_at ELSE clock_timestamp() END
                  WHERE document_id = $1 AND state = $5",
@@ -500,6 +558,8 @@ pub async fn backfill_derived_columns(db: &PgPool) -> ApiResult<usize> {
       .bind(&targets)
       .bind(&files)
       .bind(state)
+      .bind(word_count)
+      .bind(char_count)
       .execute(&mut *tx)
       .await?;
       filled += 1;
@@ -590,8 +650,8 @@ pub async fn seed_base_tx(
   // Insert-only, unlike [write_base_tx]: a seed must never overwrite an
   // existing base — the conflict branch below re-reads the stored winner.
   let inserted = sqlx::query(
-        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, updated_at)
-         VALUES ($1, $2, $3, 0, $4, $5, $6, clock_timestamp())
+        "INSERT INTO document_yrs_base(document_id, state, state_vector, base_rid, content_text, link_targets, file_ids, word_count, char_count, updated_at)
+         VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, clock_timestamp())
          ON CONFLICT (document_id) DO NOTHING",
     )
     .bind(document_id)
@@ -600,6 +660,8 @@ pub async fn seed_base_tx(
     .bind(&flat.content_text)
     .bind(&flat.link_targets)
     .bind(&flat.file_ids)
+    .bind(flat.word_count)
+    .bind(flat.char_count)
     .execute(&mut **tx)
     .await?;
   if inserted.rows_affected() == 0 {
@@ -687,6 +749,10 @@ pub struct Pushed {
   /// the gap by sending its diff against this vector — the y-protocols
   /// SyncStep1/2 exchange, initiated by the server.
   pub missing_sv: Option<Vec<u8>>,
+  /// Positive word delta written by this push (for Prometheus activity counters).
+  pub words_added: u64,
+  /// Positive word count deleted by this push (for Prometheus activity counters).
+  pub words_deleted: u64,
 }
 
 /// Append a client's yrs `update` to the workspace stream and fold it into the
@@ -719,10 +785,21 @@ pub async fn push_update_checked(
     .ok_or(ApiError::NotFound)?;
 
   let base = ensure_base_tx(&mut tx, document_id).await?;
+  let prev_word_count: Option<i32> = sqlx::query_scalar(
+    "SELECT word_count FROM document_yrs_base WHERE document_id = $1",
+  )
+  .bind(document_id)
+  .fetch_optional(&mut *tx)
+  .await?
+  .flatten();
 
   // Validate + fold: reconstruct the base, merge the update.
   let mut doc = guarded_from_update(&base.state)
     .map_err(|e| ApiError::Internal(format!("corrupt base state: {e}")))?;
+  let prev_words = match prev_word_count {
+    Some(w) => w,
+    None => mica_core::word_count::count_doc(&doc).words.min(i32::MAX as u64) as i32,
+  };
   guarded_apply(&mut doc, update).map_err(|_| ApiError::BadRequest("invalid yrs update".into()))?;
   // An update whose dependencies the base lacks is parked by yrs as PENDING
   // and `apply` still says Ok: the content is stored but invisible until the
@@ -755,7 +832,21 @@ pub async fn push_update_checked(
   // the version archive are now the shared `*_tx` helpers, so every write
   // path writes the base the same way.
   let flat = FlatBase::from_doc(&doc);
+  let words_added = (flat.word_count - prev_words).max(0);
+  let words_deleted = (prev_words - flat.word_count).max(0);
   write_base_tx(&mut tx, document_id, rid, &flat).await?;
+  record_writing_activity_tx(
+    &mut tx,
+    actor_id,
+    workspace_id,
+    document_id,
+    mica_core::ActivitySource::Manual,
+    false,
+    1,
+    words_added,
+    words_deleted,
+  )
+  .await?;
   sync_view_name_tx(&mut tx, document_id, &flat).await?;
   archive_auto_version_tx(&mut tx, document_id, rid, &flat.state).await?;
 
@@ -777,6 +868,8 @@ pub async fn push_update_checked(
   Ok(Pushed {
     rid,
     missing_sv: missing.then_some(flat.state_vector),
+    words_added: words_added as u64,
+    words_deleted: words_deleted as u64,
   })
 }
 

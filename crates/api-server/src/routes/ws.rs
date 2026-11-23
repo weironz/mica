@@ -894,7 +894,13 @@ async fn handle_sync_push(
     crate::metrics::METRICS.integrity_failure("push");
   }
   match push_result {
-    Ok(sync::Pushed { rid, missing_sv }) => {
+    Ok(sync::Pushed {
+      rid,
+      missing_sv,
+      words_added,
+      words_deleted,
+    }) => {
+      crate::metrics::METRICS.record_page_edit(words_added, words_deleted);
       // Fan the update out to the rest of the room (already-have-it sender
       // gets only the rid in its ack, below).
       let event = json!({
@@ -931,6 +937,7 @@ pub fn broadcast_applied_update(
   origin: Uuid,
   ack_id: Option<&str>,
 ) {
+  crate::metrics::METRICS.record_page_edit(applied.words_added, applied.words_deleted);
   let text: Arc<str> = Arc::from(accepted_event(applied, ack_id).to_string());
   hub.broadcast_if_active(applied.document.id, origin, text);
   // The same change on the yrs channel: an editor open on this document speaks
@@ -1203,6 +1210,8 @@ mod tests {
       // These tests cover the op-model `accepted_event` shape only; the yrs
       // half is exercised against a real database in app-core's sync_pg.
       yrs: None,
+      words_added: 0,
+      words_deleted: 0,
     }
   }
 

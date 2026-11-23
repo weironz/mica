@@ -70,6 +70,10 @@ pub struct AppliedUpdate {
   /// base and appended to the workspace stream (see [`apply_derived_operations`]).
   /// Callers broadcast it so live editors converge without a rebootstrap.
   pub yrs: Option<AppliedYrs>,
+  /// Positive word delta written by this edit (for Prometheus activity counters).
+  pub words_added: u64,
+  /// Positive word count deleted by this edit (for Prometheus activity counters).
+  pub words_deleted: u64,
 }
 
 /// The content a write produced, in the JSON shape REST clients already parse
@@ -204,6 +208,9 @@ where
   if operations.is_empty() {
     return Err(ApiError::BadRequest("no operations to apply".to_string()));
   }
+  let prev_words = mica_core::word_count::count_blocks(&current_payload.blocks)
+    .words
+    .min(i32::MAX as u64) as i32;
   let next_payload = apply_operations(current_payload, &operations)
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
@@ -239,7 +246,21 @@ where
   // flattened three more times (one per projection) and shipped the whole
   // state to Postgres on every write for its version-window check.
   let flat = crate::sync::FlatBase::from_doc(&doc);
+  let words_added = (flat.word_count - prev_words).max(0);
+  let words_deleted = (prev_words - flat.word_count).max(0);
   crate::sync::write_base_tx(&mut tx, document_id, yrs_rid, &flat).await?;
+  crate::sync::record_writing_activity_tx(
+    &mut tx,
+    actor_id,
+    workspace_id,
+    document_id,
+    mica_core::ActivitySource::Manual,
+    false,
+    1,
+    words_added,
+    words_deleted,
+  )
+  .await?;
   // `views.name` rides every base write, or the sidebar name drifts from the
   // title — this path used to skip it, the push path did not.
   crate::sync::sync_view_name_tx(&mut tx, document_id, &flat).await?;
@@ -307,6 +328,8 @@ where
       rid: yrs_rid,
       update: yrs_update,
     }),
+    words_added: words_added as u64,
+    words_deleted: words_deleted as u64,
   })
 }
 

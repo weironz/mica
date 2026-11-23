@@ -22,6 +22,7 @@ mod invitations;
 mod legal;
 mod names;
 mod password_reset;
+mod stats;
 mod tokens;
 mod workspaces;
 pub mod ws;
@@ -192,6 +193,8 @@ pub fn api_router() -> Router<AppState> {
       get(tokens::list_tokens).post(tokens::create_token),
     )
     .route("/auth/tokens/{id}", delete(tokens::revoke_token))
+    .route("/stats/overview", get(stats::overview))
+    .route("/stats/activity", get(stats::activity))
     .route("/export/markdown", get(documents::export_all_markdown))
     .route(
       "/workspaces/{workspace_id}/views/{view_id}/export.zip",

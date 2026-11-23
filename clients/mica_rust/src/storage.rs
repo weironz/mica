@@ -140,6 +140,7 @@ struct MemoryVault {
   docs: HashMap<(String, String), Vec<u8>>,
   versions: HashMap<(String, String), Vec<(Option<String>, Vec<u8>)>>,
   workspaces: HashMap<(String, Uuid), (String, String)>,
+  activity: Vec<(String, String, mica_core::HourlyActivityRow)>,
 }
 
 /// Unified cross-platform local vault for views, Markdown CRDT documents,
@@ -1259,6 +1260,292 @@ impl VaultStore {
   pub fn save_markdown(&self, origin: &str, doc_id: Uuid, markdown: &str) -> Result<(), String> {
     let doc = doc_from_markdown(markdown, Some(self.client_id));
     self.save_raw_doc(origin, &doc_id.to_string(), &doc)
+  }
+
+  /// Record a document creation event into the local usage activity ledger.
+  pub fn record_doc_created(
+    &self,
+    origin: &str,
+    workspace_id: Uuid,
+    doc_id: Uuid,
+    source: mica_core::ActivitySource,
+    markdown: &str,
+  ) {
+    let doc = doc_from_markdown(markdown, Some(self.client_id));
+    let initial_words = mica_core::word_count::count_doc(&doc).words;
+    self.record_activity(origin, workspace_id, doc_id, source, true, 0, initial_words, 0);
+  }
+
+  /// Persist `markdown` AND record the edit's word delta into the local usage
+  /// activity ledger (`local_writing_activity_hourly` on desktop, `MemoryVault`
+  /// on `wasm32`).
+  pub fn save_markdown_tracked(
+    &self,
+    origin: &str,
+    workspace_id: Uuid,
+    doc_id: Uuid,
+    markdown: &str,
+    source: mica_core::ActivitySource,
+  ) -> Result<(), String> {
+    let doc_key = doc_id.to_string();
+    let prev_words: u64 = {
+      #[cfg(not(target_arch = "wasm32"))]
+      {
+        self
+          .lock_store()
+          .ok()
+          .and_then(|s| s.doc_word_count(origin, &doc_key).ok().flatten())
+          .map(|w| w.max(0) as u64)
+          .unwrap_or(0)
+      }
+      #[cfg(target_arch = "wasm32")]
+      {
+        self
+          .load_raw_doc(origin, &doc_key)
+          .map(|d| mica_core::word_count::count_doc(&d).words)
+          .unwrap_or(0)
+      }
+    };
+    let doc = doc_from_markdown(markdown, Some(self.client_id));
+    let next_words = mica_core::word_count::count_doc(&doc).words;
+    self.save_raw_doc(origin, &doc_key, &doc)?;
+
+    let added = next_words.saturating_sub(prev_words);
+    let deleted = prev_words.saturating_sub(next_words);
+    self.record_activity(origin, workspace_id, doc_id, source, false, 1, added, deleted);
+    Ok(())
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  fn record_activity(
+    &self,
+    origin: &str,
+    workspace_id: Uuid,
+    doc_id: Uuid,
+    source: mica_core::ActivitySource,
+    is_created: bool,
+    edit_events: u64,
+    words_added: u64,
+    words_deleted: u64,
+  ) {
+    let ws_str = workspace_id.to_string();
+    let doc_str = doc_id.to_string();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      if let Ok(store) = self.lock_store() {
+        let _ = store.record_writing_activity(
+          origin,
+          &ws_str,
+          &doc_str,
+          source,
+          is_created,
+          edit_events,
+          words_added,
+          words_deleted,
+        );
+      }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      if let Ok(mut mem) = self.lock_memory() {
+        let now_secs = Utc::now().timestamp();
+        let bucket_hour = now_secs - now_secs.rem_euclid(3_600);
+        if let Some((_, _, existing)) = mem.activity.iter_mut().find(|(o, w, r)| {
+          o == origin
+            && w == &ws_str
+            && r.bucket_hour_secs == bucket_hour
+            && r.document_id == doc_str
+            && r.source == source
+        }) {
+          existing.is_created |= is_created;
+          existing.edit_events = existing.edit_events.saturating_add(edit_events);
+          existing.words_added = existing.words_added.saturating_add(words_added);
+          existing.words_deleted = existing.words_deleted.saturating_add(words_deleted);
+        } else {
+          mem.activity.push((
+            origin.to_string(),
+            ws_str,
+            mica_core::HourlyActivityRow {
+              bucket_hour_secs: bucket_hour,
+              document_id: doc_str,
+              source,
+              is_created,
+              edit_events,
+              words_added,
+              words_deleted,
+            },
+          ));
+        }
+      }
+    }
+  }
+
+  /// Compute the full [`mica_core::UsageStatsOverview`] for `origin` (local mode).
+  pub fn usage_overview(&self, origin: &str) -> Result<mica_core::UsageStatsOverview, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let mut overview = {
+        let store = self.lock_store()?;
+        store.usage_overview(origin, &HashMap::new()).map_err(|e| e.to_string())?
+      };
+      // `LocalStore::open` seeds an unused `"local"` placeholder workspace; drop it
+      // whenever real UUID workspaces exist (matching `VaultStore::list_workspaces`)
+      // so the UI never displays a duplicate empty workspace row.
+      let has_uuid_ws = overview
+        .workspaces
+        .iter()
+        .any(|w| Uuid::parse_str(&w.workspace_id).is_ok());
+      if has_uuid_ws {
+        overview.workspaces.retain(|w| {
+          Uuid::parse_str(&w.workspace_id).is_ok()
+            || w.live_pages > 0
+            || w.folders > 0
+            || w.trashed_pages > 0
+        });
+        overview.summary.workspace_count = overview.workspaces.len() as u64;
+      }
+      // Prefer user-renamed workspace display names persisted in prefs.
+      for ws in &mut overview.workspaces {
+        if let Ok(ws_uuid) = Uuid::parse_str(&ws.workspace_id)
+          && let Some(custom) = self.get_pref(&format!("workspaceName:{origin}:{ws_uuid}"))
+          && !custom.trim().is_empty()
+        {
+          ws.name = custom;
+        }
+      }
+      Ok(overview)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mem = self.lock_memory()?;
+      let mut summary = mica_core::UsageSummary::default();
+      let mut health = mica_core::UsageHealth::default();
+      let mut workspaces = Vec::new();
+      let mut ws_ids: Vec<(Uuid, String)> = mem
+        .workspaces
+        .iter()
+        .filter(|((o, _), _)| o == origin)
+        .map(|((_, id), (name, _))| (*id, name.clone()))
+        .collect();
+      ws_ids.sort_by(|a, b| a.1.cmp(&b.1));
+      for (ws_id, ws_name) in ws_ids {
+        let mut live_pages = 0u64;
+        let mut folders = 0u64;
+        let mut trashed_pages = 0u64;
+        let mut words = 0u64;
+        let mut chars = 0u64;
+        let mut empty_pages = 0u64;
+        let mut storage_bytes = 0u64;
+        for ((o, _), v) in &mem.views {
+          if o != origin || v.workspace_id != ws_id {
+            continue;
+          }
+          if v.is_deleted {
+            if v.object_type != "folder" {
+              trashed_pages += 1;
+            }
+          } else if v.object_type == "folder" {
+            folders += 1;
+          } else {
+            live_pages += 1;
+            let key = (origin.to_string(), v.object_id.to_string());
+            let wc = mem
+              .docs
+              .get(&key)
+              .and_then(|bytes| {
+                storage_bytes = storage_bytes.saturating_add(bytes.len() as u64);
+                MicaDoc::from_update(bytes).ok()
+              })
+              .map(|d| mica_core::word_count::count_doc(&d))
+              .unwrap_or_default();
+            words = words.saturating_add(wc.words);
+            chars = chars.saturating_add(wc.chars);
+            if wc.words == 0 {
+              empty_pages += 1;
+            }
+          }
+        }
+        summary.workspace_count += 1;
+        summary.folder_count += folders;
+        summary.live_page_count += live_pages;
+        summary.trashed_page_count += trashed_pages;
+        summary.total_words += words;
+        summary.total_chars += chars;
+        summary.storage_bytes = summary.storage_bytes.saturating_add(storage_bytes);
+        health.empty_pages += empty_pages;
+        health.orphan_pages += live_pages;
+        workspaces.push(mica_core::WorkspaceUsageItem {
+          workspace_id: ws_id.to_string(),
+          name: ws_name,
+          role: "owner".to_string(),
+          live_pages,
+          folders,
+          trashed_pages,
+          words,
+          chars,
+          image_count: 0,
+          attachment_count: 0,
+          storage_bytes,
+          quota_bytes: 0,
+          link_edges: 0,
+          orphan_pages: live_pages,
+          empty_pages,
+          public_shares: 0,
+          unresolved_comments: 0,
+          updated_at: None,
+        });
+      }
+      Ok(mica_core::UsageStatsOverview {
+        generated_at: mica_core::usage_stats::format_unix_rfc3339(Utc::now().timestamp()),
+        summary,
+        health,
+        workspaces,
+      })
+    }
+  }
+
+  /// Compute [`mica_core::UsageStatsActivity`] for `origin` folded into the
+  /// user's local timezone offset (`tz_offset_minutes`).
+  pub fn usage_activity(
+    &self,
+    origin: &str,
+    range_label: &str,
+    tz_offset_minutes: i32,
+    workspace_id: Option<&str>,
+    include_imports: bool,
+  ) -> Result<mica_core::UsageStatsActivity, String> {
+    let (canonical, range_days) =
+      mica_core::usage_stats::parse_activity_range(Some(range_label)).unwrap_or(("30d", 30));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let store = self.lock_store()?;
+      store
+        .usage_activity(origin, canonical, range_days, tz_offset_minutes, workspace_id, include_imports)
+        .map_err(|e| e.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let mem = self.lock_memory()?;
+      let rows: Vec<mica_core::HourlyActivityRow> = mem
+        .activity
+        .iter()
+        .filter(|(o, w, _)| o == origin && workspace_id.is_none_or(|ws| ws == w))
+        .map(|(_, _, r)| r.clone())
+        .collect();
+      let tracking_since = rows.iter().map(|r| r.bucket_hour_secs).min();
+      Ok(mica_core::usage_stats::fold_hourly_to_daily(
+        &rows,
+        &[],
+        tracking_since,
+        canonical,
+        range_days,
+        180,
+        tz_offset_minutes,
+        workspace_id.map(str::to_string),
+        include_imports,
+        Utc::now().timestamp(),
+      ))
+    }
   }
 
   /// Load `(origin, doc_id)` as a [`MicaDoc`] and serialize its body through

@@ -1138,6 +1138,50 @@ impl CloudConnector {
     }
   }
 
+  // ── Usage Statistics ─────────────────────────────────────────────────────
+
+  /// Fetch global & per-workspace usage statistics (`GET /api/stats/overview`).
+  pub fn get_usage_overview(&self) -> Result<mica_core::UsageStatsOverview, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let body = self.authed_get("/api/stats/overview", API_TIMEOUT_SECS)?;
+      serde_json::from_str(&body)
+        .map_err(|e| format!("invalid usage stats overview response: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      Err("blocking HTTP usage stats overview is unavailable on wasm32".to_string())
+    }
+  }
+
+  /// Fetch writing activity trend & 180-day heatmap (`GET /api/stats/activity`).
+  pub fn get_usage_activity(
+    &self,
+    range: &str,
+    tz_offset_minutes: i32,
+    workspace_id: Option<&str>,
+    include_imports: bool,
+  ) -> Result<mica_core::UsageStatsActivity, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+      let mut path = format!(
+        "/api/stats/activity?range={range}&tz_offset={tz_offset_minutes}&include_imports={include_imports}"
+      );
+      if let Some(ws_id) = workspace_id.filter(|s| !s.trim().is_empty()) {
+        path.push_str("&workspace_id=");
+        path.push_str(ws_id.trim());
+      }
+      let body = self.authed_get(&path, API_TIMEOUT_SECS)?;
+      serde_json::from_str(&body)
+        .map_err(|e| format!("invalid usage stats activity response: {e}"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+      let _ = (range, tz_offset_minutes, workspace_id, include_imports);
+      Err("blocking HTTP usage stats activity is unavailable on wasm32".to_string())
+    }
+  }
+
   // ── Workspace Members & Invitations ─────────────────────────────────────
 
   /// List members of `workspace_id` (`GET /api/workspaces/{ws}/members`).
