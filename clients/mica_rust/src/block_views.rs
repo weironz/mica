@@ -1134,7 +1134,27 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
             let init_val = live_src.get_untracked();
             let prev_lines = signal(init_val.bytes().filter(|&b| b == b'\n').count() + 1);
             let ed_ref = component_ref::<nsh_base::editor::Editor>();
+            let ed_has_os_focus = signal(false);
             let lang_ed = lang_for_ed.clone();
+            // Post-mount OS focus guarantee: `nsh_base::editor()` runs its own
+            // `auto_focus` effect inside `Ed::new` before `view::render` mounts
+            // the native input, and toolbar/slash button clicks can briefly hold
+            // focus one frame later. Re-focusing via `EditorApi::focus()` right
+            // after mount ensures the blinking cursor appears immediately!
+            {
+              let ed_ref_f = ed_ref;
+              spawn(async move {
+                if let Some(api) = ed_ref_f.api::<nsh_base::editor::EditorApi>() {
+                  api.focus();
+                }
+                timer(Duration::from_millis(24)).await;
+                if !ed_has_os_focus.get_untracked()
+                  && let Some(api) = ed_ref_f.api::<nsh_base::editor::EditorApi>()
+                {
+                  api.focus();
+                }
+              });
+            }
             editor()
               .component_ref(&ed_ref)
               .test_id("code-block-editor")
@@ -1159,6 +1179,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
               .on_focus({
                 let bid_f = block_id.clone();
                 move || {
+                  ed_has_os_focus.set(true);
                   let empty = live_src.get_untracked().is_empty();
                   focused_code.set(Some(bid_f.clone()));
                   code_is_empty.set(empty);
@@ -1175,6 +1196,7 @@ fn render_code_block_view(env: &BlockRenderEnv, idx: usize, block: EditorBlock) 
                 }
               })
               .on_blur(move || {
+                ed_has_os_focus.set(false);
                 code_at_start.set(false);
                 code_is_empty.set(false);
               })

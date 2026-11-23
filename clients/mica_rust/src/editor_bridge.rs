@@ -71,6 +71,8 @@ pub struct MicaDocumentBridge {
   selection_sig: Signal<Option<DocSelection>>,
   /// Monotonic counter bumped when the editor body IME sink should focus & sync.
   focus_sink_rev: Signal<u64>,
+  /// Request `(block_id, seq)` to immediately mount & focus a live code block editor.
+  code_focus_request: Signal<Option<(String, u64)>>,
   /// Scroll-to-block request `(block_index, mode, seq)` consumed by `virtual_list`.
   scroll_request: Signal<Option<(usize, ScrollMode, u64)>>,
   /// Active CJK IME composition preedit `(block_index, start_u16, preedit_text)`.
@@ -125,6 +127,7 @@ impl MicaDocumentBridge {
       structure_rev: signal(0u64),
       selection_sig: signal(sel),
       focus_sink_rev: signal(0u64),
+      code_focus_request: signal(None),
       scroll_request: signal(None),
       ime_preedit: signal(None),
       find_matches_sig: signal(Vec::new()),
@@ -152,6 +155,19 @@ impl MicaDocumentBridge {
   /// Signal bumped ONLY on structural block changes (`virtual_list` `count` & `keys`).
   pub fn structure_rev_signal(&self) -> Signal<u64> {
     self.structure_rev
+  }
+
+  pub fn code_focus_request_signal(&self) -> Signal<Option<(String, u64)>> {
+    self.code_focus_request
+  }
+
+  pub fn request_focus_code_block(&self, block_id: String) {
+    let seq = self
+      .code_focus_request
+      .get_untracked()
+      .map(|(_, s)| s.wrapping_add(1))
+      .unwrap_or(1);
+    self.code_focus_request.set(Some((block_id, seq)));
   }
 
   /// Fine-grained per-block revision signal (`Signal<u64>`) bumped ONLY when
@@ -551,6 +567,13 @@ impl MicaDocumentBridge {
         data,
       });
     }
+    if canonical == "code_block"
+      && let Some(sel) = self.selection()
+      && let Some(blk) = self.block_at(sel.focus_pos().node)
+      && effective_block_kind(&blk) == "code_block"
+    {
+      self.request_focus_code_block(blk.id);
+    }
   }
 
   pub fn insert_divider(&self) {
@@ -608,6 +631,12 @@ impl MicaDocumentBridge {
       "code_block" | "code" => {
         let lang = language.unwrap_or_default();
         self.insert_block_after_caret("code_block", text, json!({ "language": lang }));
+        if let Some(sel) = self.selection()
+          && let Some(blk) = self.block_at(sel.focus_pos().node)
+          && effective_block_kind(&blk) == "code_block"
+        {
+          self.request_focus_code_block(blk.id);
+        }
       }
       other => {
         self.insert_block_after_caret(other, text, Value::Null);
@@ -616,7 +645,22 @@ impl MicaDocumentBridge {
   }
 
   fn insert_block_after_caret(&self, kind: &str, text: &str, data: Value) {
-    let sel = self.selection().unwrap_or_else(|| DocSelection::caret(0, 0));
+    let sel = match self.selection() {
+      Some(s) => s,
+      None => {
+        let last = self.block_len().saturating_sub(1);
+        let end_off = self.block_at(last).map(|b| utf16_len(&b.text)).unwrap_or(0);
+        let fallback = DocSelection::caret(last, end_off);
+        self.dispatch_inner(
+          EditorCommand::SetSelection {
+            selection: Some(fallback.clone()),
+          },
+          false,
+          None,
+        );
+        fallback
+      }
+    };
     let cur_idx = sel.focus_node();
     let cur_empty = self
       .block_at(cur_idx)
@@ -723,6 +767,9 @@ impl MicaDocumentBridge {
       "code_block" => {
         delete_slash();
         self.insert_custom_block("code_block", "", Some("rust"));
+        // `insert_custom_block("code_block", ...)` already requested focus on
+        // the live code block editor — do NOT steal focus back to the prose sink!
+        return;
       }
       "math" | "math_block" => {
         delete_slash();

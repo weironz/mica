@@ -146,14 +146,12 @@ fn rich_editor_keyboard_enter_ctrl_a_and_editable_code_block() {
     app.screen().texts()
   );
 
-  // 3. Insert an editable code block, click inside it, type multi-line code + Enter!
+  // 3. Insert an editable code block: it immediately mounts & focuses `nsh_base::editor()`
+  //    so typing multi-line code + Enter works with zero extra click!
   app.press("id:ed-slash-open").unwrap();
   app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
-  app.wait_for("id:code-block-editor").unwrap();
-
-  // Press inside the code block editor first (verifies RichEditor doesn't steal focus!)
-  app.press("id:code-block-editor").unwrap();
+  app.wait_for("输入代码...").unwrap();
   app.type_text("id:code-block-editor", "let x = 42;").unwrap();
   app.wait_for("let x = 42;").unwrap();
   app.press_key("enter").unwrap();
@@ -302,8 +300,7 @@ fn virtualized_editor_code_overlay_mermaid_lightbox_and_page_switch() {
   app.press("id:ed-slash-open").unwrap();
   app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
-  app.wait_for("id:code-block-editor").unwrap();
-  app.press("id:code-block-editor").unwrap();
+  app.wait_for("输入代码...").unwrap();
   app.type_text("id:code-block-editor", "graph LR\n  A[Start] --> B[End]").unwrap();
   app.wait_for("id:code-lang-btn").unwrap();
   app.press("id:code-lang-btn").unwrap();
@@ -353,8 +350,7 @@ fn regression_typing_backtick_caret_focus_and_code_block_backspace() {
   app.press("id:ed-slash-open").unwrap();
   app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
-  app.wait_for("id:code-block-editor").unwrap();
-  app.press("id:code-block-editor").unwrap();
+  app.wait_for("输入代码...").unwrap();
   app.type_text("id:code-block-editor", "hello_world").unwrap();
   app.wait_for("hello_world").unwrap();
   app
@@ -606,13 +602,11 @@ fn regression_code_block_backspace_and_delete_after_live_focus() {
     .wait_for_gone("id:node-view-code-block", std::time::Duration::from_millis(800))
     .unwrap();
 
-  // Case 4: Unfocused code block (inserted via slash menu) clicked to mount+focus `nsh_base::editor()`
-  // -> `Backspace` immediately removes the code block!
+  // Case 4: Code block inserted via slash menu IMMEDIATELY mounts & focuses `nsh_base::editor()`
+  // (no extra click required!) -> Enter grows cleanly, Ctrl+A + Backspace clears, next Backspace deletes block!
   app.press("id:ed-slash-open").unwrap();
   app.wait_for("id:slash-code").unwrap();
   app.press("id:slash-code").unwrap();
-  app.wait_for("id:code-block-editor").unwrap();
-  app.press("id:code-block-editor").unwrap();
   app.wait_for("输入代码...").unwrap();
   // Case 5: Pressing Enter inside the code block grows cleanly without scrolling line 0 out of view.
   app.type_text("id:code-block-editor", "line1").unwrap();

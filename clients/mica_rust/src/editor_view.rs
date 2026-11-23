@@ -576,6 +576,32 @@ pub fn editor_view(
     });
   }
 
+  // Immediately mount & focus the live code editor whenever ANY path creates a
+  // new code block (toolbar `>_`, slash `/code`, `+` menu, bubble toolbar, or ```` ``` ````).
+  {
+    let code_req = bridge.code_focus_request_signal();
+    let b_cf = bridge.clone();
+    let sref = sink_ref;
+    let st_cf = sink_state.clone();
+    effect(move || {
+      if let Some((bid, _seq)) = code_req.get() {
+        empty_ime_sink(&st_cf, sink_value);
+        sref.blur();
+        editor_focused.set(false);
+        focused_table_cell.set(None);
+        table_selection.set(None);
+        let empty = b_cf
+          .index_of_block_id(&bid)
+          .and_then(|i| b_cf.block_at(i))
+          .is_none_or(|b| b.text.is_empty());
+        code_is_empty.set(empty);
+        code_caret_at_start.set(empty);
+        focused_code_block.set(Some(bid));
+        code_key_rev.update(|v| *v = v.wrapping_add(1));
+      }
+    });
+  }
+
   // Scroll `virtual_list` according to ScrollMode:
   // - `Jump` (page switch, outline jump, find match): align target cleanly into view.
   // - `KeepVisible` (Enter, Backspace, typing, arrows): measure target row against
@@ -1131,18 +1157,7 @@ pub fn editor_view(
           "代码块",
           dark_mode,
           computed(move || active_kind.get() == "code_block"),
-          move || {
-            b_code_blk.insert_custom_block("code_block", "", Some("rust"));
-            if let Some(sel) = b_code_blk.selection()
-              && let Some(blk) = b_code_blk.block_at(sel.focus_pos().node)
-              && blk.kind == "code_block"
-            {
-              let empty = blk.text.is_empty();
-              code_is_empty.set(empty);
-              code_caret_at_start.set(empty);
-              focused_code_block.set(Some(blk.id));
-            }
-          },
+          move || b_code_blk.insert_custom_block("code_block", "", Some("rust")),
           terminal_icon,
         ))
         .child(toolbar_sep(dark_mode))
