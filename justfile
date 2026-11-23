@@ -44,6 +44,11 @@ dev-web:
 app:
     cargo run --manifest-path clients/mica_rust/Cargo.toml --bin mica-rust
 
+[doc("Prune old Cargo build artifacts across this repo, keeping only the newest builds (needs cargo-sweep)")]
+sweep maxsize="6GB":
+    @command -v cargo-sweep >/dev/null 2>&1 || (echo "cargo-sweep not installed: run 'cargo install cargo-sweep'" && exit 1)
+    cargo sweep --maxsize {{maxsize}} -r .
+
 # ---------------------------------------------------------------- tests & gates
 
 [doc("Run all Rust tests (root workspace + gated SQLite store + clients/mica_rust)")]
